@@ -1615,12 +1615,13 @@ body,
   color: #5a5a5f;
 }
 
-/* Status avatar (AgentAvatar.tsx): the baby hand playing with the agent's
-   coin. Hand keeps brand colors; only the coin tints and moves per phase. */
+/* Status avatar (AgentAvatar.tsx): a baby hand acting out each phase with
+   the agent's coin. Hand keeps brand colors and strikes a pose per status;
+   only the coin tints and moves. */
 
 .vi-avatar {
-  width: calc(50px * var(--z, 1));
-  height: calc(32px * var(--z, 1));
+  width: calc(52px * var(--z, 1));
+  height: calc(34px * var(--z, 1));
   flex: 0 0 auto;
   display: block;
 }
@@ -1649,96 +1650,119 @@ body,
   color: var(--vi-wait);
 }
 
-/* idle: coin parked beside the resting hand, dim */
+/* idle: hand naps flat, coin parked beside the fingertips */
 .vi-avatar.idle .ava-coin {
-  transform: translate(31px, 12px) scale(0.62);
+  transform: translate(34px, 15px) scale(0.5);
   opacity: 0.55;
 }
 
-/* thinking: knuckle-roll — the coin travels the fingertip line, flipping
-   edge-on twice per traverse like a magician rolling a coin */
+/* thinking: fist pumps, coin tossed off the thumb — spins in the air */
 .vi-avatar.thinking .ava-coin {
-  transform: translate(2.5px, 0.5px) scale(0.62);
+  transform: translate(6px, 0px) scale(0.6);
 }
 
 .vi-avatar.thinking .ava-roll {
-  animation: ava-roll 1.15s ease-in-out infinite;
+  animation: ava-toss 0.8s cubic-bezier(0.5, 0, 0.5, 1) infinite;
 }
 
 .vi-avatar.thinking .ava-flip {
-  animation: ava-flip 1.15s linear infinite;
+  animation: ava-spin 0.8s linear infinite;
   transform-box: fill-box;
   transform-origin: center;
 }
 
 .vi-avatar.thinking .ava-hand {
-  animation: ava-bat 1.15s ease-in-out infinite;
+  animation: ava-pump 0.8s cubic-bezier(0.5, 0, 0.5, 1) infinite;
   transform-box: fill-box;
-  transform-origin: 60% 90%;
+  transform-origin: 50% 80%;
 }
 
-/* waiting: hand waves for attention, coin blinks */
+/* waiting: open palm waves hey-hey then rests a beat, coin dropped flat */
 .vi-avatar.waiting .ava-coin {
-  transform: translate(31px, 12px) scale(0.62);
+  transform: translate(35px, 18px) scale(0.5);
   animation: ava-blink 0.7s steps(2) infinite;
 }
 
 .vi-avatar.waiting .ava-hand {
-  animation: ava-wave 0.8s ease-in-out infinite;
+  animation: ava-wave 1.6s ease-in-out infinite;
   transform-box: fill-box;
-  transform-origin: 50% 95%;
+  transform-origin: 50% 96%;
 }
 
-/* replied: coin held resting on the fingertips */
+/* replied: the V "yes!" holds the coin on its fingertips */
 .vi-avatar.replied .ava-coin {
-  transform: translate(6px, 6.5px) scale(0.62);
+  animation: ava-settle 3s ease-in-out infinite;
 }
 
-@keyframes ava-roll {
+@keyframes ava-toss {
   0%,
   100% {
-    transform: translate(0, 1.5px);
+    transform: translate(0, 4px);
   }
   50% {
-    transform: translate(9px, -2px);
+    transform: translate(0, -4.5px);
   }
 }
 
-@keyframes ava-flip {
+@keyframes ava-spin {
   0% {
-    transform: scaleX(1);
+    transform: rotate(0) scaleX(1);
   }
   25% {
-    transform: scaleX(0.12);
+    transform: rotate(90deg) scaleX(0.15);
   }
   50% {
-    transform: scaleX(1);
+    transform: rotate(180deg) scaleX(1);
   }
   75% {
-    transform: scaleX(0.12);
+    transform: rotate(270deg) scaleX(0.15);
   }
   100% {
-    transform: scaleX(1);
+    transform: rotate(360deg) scaleX(1);
   }
 }
 
-@keyframes ava-bat {
+@keyframes ava-pump {
   0%,
   100% {
-    transform: rotate(-2.5deg);
+    transform: rotate(2deg) translateY(0.6px);
   }
   50% {
-    transform: rotate(3deg) translateY(-0.5px);
+    transform: rotate(-3.5deg) translateY(-1.2px);
   }
 }
 
 @keyframes ava-wave {
+  0% {
+    transform: rotate(0);
+  }
+  10% {
+    transform: rotate(-15deg);
+  }
+  22% {
+    transform: rotate(13deg);
+  }
+  34% {
+    transform: rotate(-15deg);
+  }
+  46% {
+    transform: rotate(11deg);
+  }
+  58% {
+    transform: rotate(0);
+  }
+  100% {
+    transform: rotate(0);
+  }
+}
+
+@keyframes ava-settle {
   0%,
   100% {
-    transform: rotate(-11deg);
+    transform: translate(6px, 7.5px) scale(0.6);
   }
   50% {
-    transform: rotate(11deg);
+    transform: translate(6px, 6.6px) scale(0.6);
   }
 }
 
