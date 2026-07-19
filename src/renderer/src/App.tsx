@@ -28,6 +28,11 @@ import { BrowserLayer } from './BrowserLayer'
 import { CanvasUiContext, ToolId } from './canvas-ui'
 import { useBrowserEngine } from './browser-engine'
 import { ErrorBoundary } from './ErrorBoundary'
+import { snapCardChanges, MOUSE_SNAP_PX, TOUCH_SNAP_PX, SnapGuide } from './card-snap'
+import { SnapGuides } from './SnapGuides'
+
+/** Phone companion parity: widen the snap magnet for finger-driven gestures. */
+const snapRadiusPx = window.matchMedia('(pointer: coarse)').matches ? TOUCH_SNAP_PX : MOUSE_SNAP_PX
 
 const nodeTypes = { terminal: TerminalNode, note: NoteNode, browser: BrowserNode }
 const edgeTypes = { cable: CableEdge }
@@ -62,6 +67,8 @@ function Canvas(): React.JSX.Element {
   const [presets, setPresets] = useState<string[]>(['Shell'])
   const [activities, setActivities] = useState<Record<string, TerminalActivity>>({})
   const [thumbs, setThumbs] = useState<Record<string, string>>({})
+  /** Alignment guides while a card resize is snapped to a neighbour edge. */
+  const [guides, setGuides] = useState<SnapGuide[]>([])
 
   useEffect(() => {
     void cookrew()
@@ -212,17 +219,60 @@ function Canvas(): React.JSX.Element {
     [tool, activities, thumbs, zoomToNode, zoomBack]
   )
 
-  const onNodesChange = useCallback((changes: NodeChange[]) => {
-    setNodes((prev) => applyNodeChanges(changes, prev))
-  }, [])
+  // Every change batch routes through the edge snapper: while a card is
+  // resized or dragged, its moving edges snap flush to neighbouring cards
+  // (card-snap.ts); gesture-end batches persist the snapped geometry.
+  const nodesRef = useRef(nodes)
+  nodesRef.current = nodes
+  /** Ids of the in-flight drag gesture — tells drag-end from keyboard moves. */
+  const dragIdsRef = useRef<ReadonlySet<string>>(new Set())
+  const onNodesChange = useCallback(
+    (changes: NodeChange[]) => {
+      const result = snapCardChanges(
+        changes,
+        nodesRef.current,
+        reactFlow.getZoom(),
+        dragIdsRef.current,
+        snapRadiusPx
+      )
+      if (result.active) draggingRef.current = true
+      if (result.dragIds.length > 0) dragIdsRef.current = new Set(result.dragIds)
+      if (result.dragEnded) dragIdsRef.current = new Set()
+      setGuides((prev) => (prev.length === 0 && result.guides.length === 0 ? prev : result.guides))
+      setNodes((prev) => applyNodeChanges(result.changes, prev))
+      if (result.resizeEndedId) {
+        draggingRef.current = false
+        const node = nodesRef.current.find((n) => n.id === result.resizeEndedId)
+        const end = result.changes.find(
+          (c): c is Extract<NodeChange, { type: 'dimensions' }> =>
+            c.type === 'dimensions' && c.id === result.resizeEndedId
+        )
+        if (node && end?.dimensions) {
+          void cookrew().updateNode(node.id, {
+            position: node.position,
+            size: { width: end.dimensions.width, height: end.dimensions.height }
+          })
+        }
+      }
+    },
+    [reactFlow]
+  )
 
   const onNodeDragStart = useCallback(() => {
     draggingRef.current = true
   }, [])
 
-  const onNodeDragStop = useCallback((_e: unknown, node: Node) => {
+  // Persist from the store, not the handler args: XYDrag reports its own
+  // internal positions, which don't carry an engaged edge snap. Iterating
+  // the third argument also persists every card of a multi-selection drag.
+  const onNodeDragStop = useCallback((_e: unknown, _node: Node, dragged: Node[]) => {
     draggingRef.current = false
-    void cookrew().updateNode(node.id, { position: node.position })
+    for (const draggedNode of dragged) {
+      const current = nodesRef.current.find((n) => n.id === draggedNode.id)
+      void cookrew().updateNode(draggedNode.id, {
+        position: current?.position ?? draggedNode.position
+      })
+    }
   }, [])
 
   const onNodeClick = useCallback(
@@ -365,6 +415,7 @@ function Canvas(): React.JSX.Element {
             fitView
           >
             <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="#D9D3C5" />
+            <SnapGuides guides={guides} />
             <MiniMap pannable zoomable className="cookrew-minimap" />
             <Controls position="bottom-right" />
           </ReactFlow>

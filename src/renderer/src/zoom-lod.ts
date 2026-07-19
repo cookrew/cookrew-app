@@ -68,6 +68,7 @@ export function useLodLayout(nodes: LodNode[]): {
 
   const rects: Record<string, ScreenRect> = {}
   const activeIds = new Set<string>()
+  const coverages: Record<string, number> = {}
 
   for (const node of nodes) {
     const sx = node.position.x * zoom + vx
@@ -83,18 +84,28 @@ export function useLodLayout(nodes: LodNode[]): {
     rects[node.id] = { x: bounds.left + left, y: bounds.top + top, width, height }
 
     const coverage = Math.max(Math.min(1, sw / paneWidth), Math.min(1, sh / paneHeight))
+    coverages[node.id] = coverage
     const wasActive = prevActive.current.has(node.id)
     const threshold = wasActive ? EXIT_COVERAGE : ENTER_COVERAGE
     if (coverage >= threshold && (settled || wasActive)) activeIds.add(node.id)
   }
 
-  // Phone (remote) mode: a zoomed-in card's full view takes the WHOLE stage.
-  // Small screens can't afford the card-aspect letterbox; the overlay's
-  // ResizeObserver then refits the terminal (PTY resize) to the phone size.
-  if (isRemoteMode()) {
-    for (const id of activeIds) {
-      rects[id] = { x: bounds.left, y: bounds.top, width: paneWidth, height: paneHeight }
-    }
+  // Phone (remote) mode: exactly ONE full view, taking the WHOLE stage.
+  // Small screens can't afford the card-aspect letterbox, and on a phone
+  // several cards can cross the coverage threshold at once — mounting every
+  // one would stack fullscreen overlays (the topmost, not the intended card,
+  // gets the touches) while each stacked xterm holds a PTY stream, exhausting
+  // the browser's 6-per-origin connection pool and hanging all other fetches.
+  // Only the best-covered card mounts; the overlay's ResizeObserver then
+  // refits the terminal (PTY resize) to the phone size.
+  if (isRemoteMode() && activeIds.size > 0) {
+    const selected = [...activeIds].reduce((best, id) =>
+      (coverages[id] ?? 0) > (coverages[best] ?? 0) ? id : best
+    )
+    const only = new Set([selected])
+    rects[selected] = { x: bounds.left, y: bounds.top, width: paneWidth, height: paneHeight }
+    prevActive.current = only
+    return { activeIds: only, rects }
   }
 
   prevActive.current = activeIds
