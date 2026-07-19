@@ -1164,6 +1164,34 @@ body,
   height: 8px;
 }
 
+/* Phone companion parity: resize must be as workable by finger as by
+   mouse. Corner handles grow to a graspable square and the 1px edge lines
+   get an invisible ~14px grab zone (lines have no visible fill, so only
+   the hit area widens). */
+@media (pointer: coarse) {
+  .react-flow__resize-control.handle {
+    width: 18px;
+    height: 18px;
+  }
+
+  .react-flow__resize-control.line.left,
+  .react-flow__resize-control.line.right {
+    width: 14px;
+  }
+
+  .react-flow__resize-control.line.top,
+  .react-flow__resize-control.line.bottom {
+    height: 14px;
+  }
+
+  /* Keep the browser from hijacking drag gestures into page scroll /
+     rubber-banding — only the pane gets this from the xyflow stylesheet. */
+  .react-flow__resize-control,
+  .node-header {
+    touch-action: none;
+  }
+}
+
 /* ---- animations ---- */
 
 @keyframes cr-blink {
@@ -1872,4 +1900,139 @@ body.cookrew-mobile .cookrew-minimap {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--ink-dim, #6a6353);
+}
+
+/* Alignment guide shown while a card resize snaps flush to a neighbour
+   edge (SnapGuides.tsx). Sized in flow units; thickness is pre-divided by
+   zoom so it stays hairline on screen. */
+.cr-snap-guide {
+  position: absolute;
+  background: var(--amber-deep);
+  box-shadow: 0 0 0 0.5px var(--amber-soft);
+  pointer-events: none;
+  z-index: 1000;
+}
+
+/* ---- phone companion (narrow viewports) ----
+   The remote (mobile-server) UI shares this stylesheet; below ~700px the
+   zoomed terminal overlay compacts so the terminal itself gets the screen:
+   one-line horizontally-scrollable header, 44px tap targets, touch-scrolling
+   scrollback and turn panel. Desktop layout is untouched. */
+
+@media (max-width: 700px) {
+  /* One compact control row that scrolls horizontally when crowded. Without
+     the nowrap/ellipsis below, the recap title (overflow-wrap: anywhere)
+     gets squeezed by the nowrap flex row to a sliver and renders one
+     character per line, wasting a full column. */
+  .popout-header {
+    gap: 6px;
+    padding: 4px 8px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .popout-header::-webkit-scrollbar {
+    display: none;
+  }
+
+  .popout-header > * {
+    flex: 0 0 auto;
+  }
+
+  .popout-title,
+  .popout-title.recap {
+    flex: 0 1 auto;
+    min-width: 40vw;
+    max-width: 55vw;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.3;
+  }
+
+  .popout-header .cr-btn {
+    min-height: 44px;
+    min-width: 44px;
+    justify-content: center;
+    padding: 8px 10px;
+  }
+
+  /* The terminal viewport owns the vertical space (flex: 1 + min-height: 0
+     come from the base rules) and must scroll scrollback smoothly by touch. */
+  .popout-terminal {
+    padding: 4px 0 4px 6px;
+  }
+
+  .popout-terminal .xterm-viewport {
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .voice-bar .cr-btn {
+    min-height: 44px;
+  }
+
+  /* 16px stops iOS Safari from auto-zooming the page on input focus. */
+  .voice-input {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  /* Turn history panel becomes a full-width sheet under the (taller
+     phone) header; the hint prose is dropped to give rows the space. */
+  .turn-panel {
+    top: 62px;
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-height: calc(100% - 130px);
+  }
+
+  .turn-panel-hint {
+    display: none;
+  }
+
+  .turn-panel-list {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .turn-panel-row {
+    padding: 4px 10px;
+  }
+
+  .turn-panel-head .cr-btn,
+  .turn-panel-row .cr-btn {
+    min-height: 44px;
+    min-width: 44px;
+    justify-content: center;
+  }
+
+  .turn-panel-prompt {
+    font-size: 13px;
+  }
+
+  /* Turn pager on canvas cards: bigger type (screen-constant via --z) and
+     generous flow-unit tap minimums; the row scrolls sideways if crowded. */
+  .vi-pager {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .vi-pager::-webkit-scrollbar {
+    display: none;
+  }
+
+  .vi-pager-btn {
+    flex: 0 0 auto;
+    min-width: 44px;
+    min-height: 32px;
+    font-size: calc(11px * var(--z, 1));
+  }
+
+  .vi-pager-label {
+    flex: 0 0 auto;
+    font-size: calc(11px * var(--z, 1));
+  }
 }
