@@ -1,0 +1,289 @@
+<title>Agent Canvas Showdown — AgentGrid vs Maestri vs Cookrew</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #f4f5f8; --panel: #ffffff; --panel2: #f0f1f5; --ink: #1f2229;
+    --dim: #63697a; --line: #dde0e8; --hair: #e8eaf0;
+    --ag: #7c5cff; --ma: #c68a1e; --cv: #159e5c;
+    --good: #159e5c; --warn: #c07d10; --none: #9aa0ae;
+    --dot: #d6d9e2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161b; --panel: #1c1f26; --panel2: #23262e; --ink: #d9dbe2;
+      --dim: #8a8f9c; --line: #2c303a; --hair: #242832;
+      --ag: #a78bfa; --ma: #e8c468; --cv: #58d68d;
+      --good: #58d68d; --warn: #e0a94a; --none: #6b7180;
+      --dot: #23262e;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14161b; --panel: #1c1f26; --panel2: #23262e; --ink: #d9dbe2;
+    --dim: #8a8f9c; --line: #2c303a; --hair: #242832;
+    --ag: #a78bfa; --ma: #e8c468; --cv: #58d68d;
+    --good: #58d68d; --warn: #e0a94a; --none: #6b7180; --dot: #23262e;
+  }
+  :root[data-theme="light"] {
+    --bg: #f4f5f8; --panel: #ffffff; --panel2: #f0f1f5; --ink: #1f2229;
+    --dim: #63697a; --line: #dde0e8; --hair: #e8eaf0;
+    --ag: #7c5cff; --ma: #c68a1e; --cv: #159e5c;
+    --good: #159e5c; --warn: #c07d10; --none: #9aa0ae; --dot: #d6d9e2;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg);
+    background-image: radial-gradient(var(--dot) 1px, transparent 1px);
+    background-size: 24px 24px;
+    color: var(--ink);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1000px; margin: 0 auto; padding: 44px 20px 90px; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+  h1 { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 30px; line-height: 1.15; margin: 6px 0 8px; letter-spacing: -0.02em; text-wrap: balance; }
+  h2 { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 19px; margin: 46px 0 14px; padding-top: 22px; border-top: 1px solid var(--line); }
+  h3 { font-size: 14px; margin: 20px 0 8px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim); }
+  p { margin: 10px 0; max-width: 74ch; }
+  a { color: var(--cv); }
+  .eyebrow { font-family: ui-monospace, monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em; color: var(--dim); }
+  .lede { font-size: 16.5px; color: var(--dim); max-width: 70ch; }
+
+  /* positioning cards */
+  .trio { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 24px 0; }
+  @media (max-width: 720px) { .trio { grid-template-columns: 1fr; } }
+  .prod { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; border-top: 3px solid var(--edge); }
+  .prod.ag { --edge: var(--ag); } .prod.ma { --edge: var(--ma); } .prod.cv { --edge: var(--cv); }
+  .prod .name { font-family: ui-monospace, monospace; font-weight: 700; font-size: 16px; }
+  .prod .name b { color: var(--edge); }
+  .prod .ver { font-size: 11px; color: var(--dim); margin-left: 6px; }
+  .prod .tag { font-size: 12.5px; color: var(--dim); margin: 6px 0 10px; min-height: 3em; }
+  .prod .stack { font-size: 11.5px; color: var(--ink); line-height: 1.5; }
+  .prod .stack span { color: var(--dim); }
+  .prod .verdict { margin-top: 10px; font-size: 12px; font-weight: 600; color: var(--edge); }
+
+  .tablewrap { overflow-x: auto; margin: 16px 0; border: 1px solid var(--line); border-radius: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; background: var(--panel); }
+  th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--hair); vertical-align: top; }
+  thead th { font-family: ui-monospace, monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--dim); background: var(--panel2); position: sticky; top: 0; }
+  tr:last-child td { border-bottom: none; }
+  td.dim { color: var(--dim); }
+  .axis { font-weight: 600; white-space: nowrap; }
+  th.col-ag { color: var(--ag); } th.col-ma { color: var(--ma); } th.col-cv { color: var(--cv); }
+  .cell { font-size: 12.5px; }
+  .mk { font-weight: 700; margin-right: 4px; }
+  .full .mk { color: var(--good); } .part .mk { color: var(--warn); } .no .mk { color: var(--none); }
+  .no { color: var(--dim); }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--dim); margin: 8px 2px 0; }
+  .legend b { font-weight: 700; }
+
+  /* gap severity tables */
+  .sev { display: inline-block; font-family: ui-monospace, monospace; font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 5px; white-space: nowrap; }
+  .hi { background: color-mix(in srgb, #e5484d 20%, transparent); color: #e5484d; }
+  .me { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+  .lo { background: color-mix(in srgb, var(--none) 22%, transparent); color: var(--none); }
+
+  .moats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 16px 0; }
+  @media (max-width: 720px) { .moats { grid-template-columns: 1fr; } }
+  .moat { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .moat h4 { margin: 0 0 8px; font-family: ui-monospace, monospace; font-size: 13.5px; }
+  .moat.ag h4 { color: var(--ag); } .moat.ma h4 { color: var(--ma); } .moat.cv h4 { color: var(--cv); }
+  .moat ul { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--ink); }
+  .moat li { margin: 5px 0; }
+  .moat li span { color: var(--dim); }
+
+  .callout { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid #e5484d; border-radius: 10px; padding: 13px 16px; margin: 16px 0; font-size: 13.5px; }
+  .callout b { color: #e5484d; }
+
+  .steps { counter-reset: s; list-style: none; padding: 0; margin: 14px 0; }
+  .steps li { counter-increment: s; position: relative; padding: 10px 0 10px 40px; border-bottom: 1px solid var(--hair); font-size: 13.5px; }
+  .steps li:last-child { border-bottom: none; }
+  .steps li::before { content: counter(s); position: absolute; left: 0; top: 8px; width: 26px; height: 26px; border-radius: 7px; background: var(--cv); color: #fff; font-family: ui-monospace, monospace; font-weight: 700; font-size: 12px; display: grid; place-items: center; }
+  .steps b { font-family: ui-monospace, monospace; }
+
+  footer { margin-top: 54px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 12px; color: var(--dim); }
+  code { background: var(--panel2); border-radius: 4px; padding: 1px 5px; font-family: ui-monospace, monospace; font-size: 12px; }
+</style>
+
+<main>
+  <div class="eyebrow">Competitive gap analysis · computer-use · 2026-07-19</div>
+  <h1>Agent Canvas Showdown</h1>
+  <p class="lede">
+    Three spatial "canvas of AI agents" apps, evaluated hands-on by three parallel Opus scouts —
+    each one deeply using its target through its real UI, CLI, docs, and app bundle. Here's what
+    each does, and exactly where the open-source clone (Cookrew) stands against the two commercial products.
+  </p>
+
+  <div class="trio">
+    <div class="prod ag">
+      <div class="name"><b>AgentGrid</b><span class="ver">2.7.9</span></div>
+      <div class="tag">The most <em>product</em>-complete: multi-provider orchestration with voice, mobile, cloud sync and billing.</div>
+      <div class="stack"><span>stack:</span> Electron · React · TipTap · Monaco · xterm/node-pty · <b>Claude Agent SDK + MCP</b> · express/ws · Better Auth</div>
+      <div class="verdict">▸ Broadest surface, cross-platform + iOS</div>
+    </div>
+    <div class="prod ma">
+      <div class="name"><b>Maestri</b><span class="ver">0.34.3</span></div>
+      <div class="tag">The most <em>elegant &amp; deep</em>: a native, on-device, Apple-platform craft object.</div>
+      <div class="stack"><span>stack:</span> <b>Native Swift/SwiftUI/AppKit</b> · SwiftTerm+Metal · WebKit portals · Apple FoundationModels · APFS floors · Sparkle</div>
+      <div class="verdict">▸ Deepest isolation &amp; privacy — macOS only</div>
+    </div>
+    <div class="prod cv">
+      <div class="name"><b>Cookrew</b><span class="ver">0.1.0</span></div>
+      <div class="tag">The <em>open-source clone</em>: faithful core loop, cross-platform, MVP-grade.</div>
+      <div class="stack"><span>stack:</span> Electron · React Flow · xterm/node-pty · <b>unix-socket CLI</b> (no SDK/MCP) · webview portals · MIT</div>
+      <div class="verdict">▸ Real &amp; working, ~60% of the way there</div>
+    </div>
+  </div>
+
+  <p>
+    All three share the same thesis — <b>terminals, notes and browsers as free-floating panes on an
+    infinite canvas, with AI agents orchestrated across them</b> — but they diverge sharply on
+    architecture, isolation, remoteness, and how agents are wired together.
+  </p>
+
+  <h2>Architecture &amp; philosophy</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Axis</th><th class="col-ag">AgentGrid</th><th class="col-ma">Maestri</th><th class="col-cv">Cookrew</th></tr></thead>
+    <tbody>
+      <tr><td class="axis">Shell</td><td class="dim">Electron (cross-platform)</td><td class="dim">Native Swift/AppKit (macOS)</td><td class="dim">Electron (cross-platform)</td></tr>
+      <tr><td class="axis">Terminal</td><td class="dim">xterm.js + node-pty</td><td class="dim">SwiftTerm + Metal GPU + CoreText</td><td class="dim">xterm.js + node-pty</td></tr>
+      <tr><td class="axis">Agent tool surface</td><td class="dim">MCP server (<code>spawn_worker</code>, <code>associate_pane</code>, <code>read_pane</code>)</td><td class="dim"><code>maestri</code> CLI over unix socket + auto-loaded skill (no MCP)</td><td class="dim"><code>cookrew</code> CLI over unix socket (no MCP)</td></tr>
+      <tr><td class="axis">Multi-agent comms</td><td class="dim">Canvas-blind masters opt-in per pane</td><td class="dim">Any-CLI ↔ any-CLI; wiring = permission graph</td><td class="dim">Any-CLI ↔ any-CLI; connectivity = authorization</td></tr>
+      <tr><td class="axis">Worker model</td><td class="dim"><b>SDK</b> (no Max quota) or <b>PTY</b> backend; 8 built-in roles</td><td class="dim">Real PTY recruits + role.json presets</td><td class="dim">Real PTY recruits (roles modeled but inert)</td></tr>
+      <tr><td class="axis">Persistence</td><td class="dim">Chromium IndexedDB + JSON; encrypted secrets; cloud account</td><td class="dim">Local files; notes = plain <code>.md</code>; no cloud</td><td class="dim">Local JSON + <code>.md</code> files under <code>~/.cookrew</code></td></tr>
+      <tr><td class="axis">On-device AI</td><td class="no">—</td><td class="dim"><b>Ombro</b> — Apple FoundationModels supervisor</td><td class="no">—</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Capability matrix</h2>
+  <div class="legend">
+    <span class="full"><span class="mk">●</span> full</span>
+    <span class="part"><span class="mk">◐</span> partial / by-proxy</span>
+    <span class="no"><span class="mk">○</span> absent</span>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Capability</th><th class="col-ag">AgentGrid</th><th class="col-ma">Maestri</th><th class="col-cv">Cookrew</th></tr></thead>
+    <tbody>
+      <tr><td class="axis">Infinite canvas · pan/zoom · minimap</td><td class="cell full"><span class="mk">●</span></td><td class="cell full"><span class="mk">●</span></td><td class="cell full"><span class="mk">●</span></td></tr>
+      <tr><td class="axis">Real PTY terminals</td><td class="cell full"><span class="mk">●</span></td><td class="cell full"><span class="mk">●</span> GPU</td><td class="cell full"><span class="mk">●</span></td></tr>
+      <tr><td class="axis">Notes (markdown, agent-readable)</td><td class="cell full"><span class="mk">●</span> TipTap</td><td class="cell full"><span class="mk">●</span> <code>.md</code></td><td class="cell full"><span class="mk">●</span> <code>.md</code></td></tr>
+      <tr><td class="axis">Browser portals + automation</td><td class="cell full"><span class="mk">●</span> Chromium + browser_qa</td><td class="cell full"><span class="mk">●</span> WebKit isolated</td><td class="cell full"><span class="mk">●</span> webview + refs</td></tr>
+      <tr><td class="axis">Agent-to-agent messaging</td><td class="cell full"><span class="mk">●</span></td><td class="cell full"><span class="mk">●</span></td><td class="cell full"><span class="mk">●</span></td></tr>
+      <tr><td class="axis">Orchestration (recruit / spawn workers)</td><td class="cell full"><span class="mk">●</span> spawn_role</td><td class="cell full"><span class="mk">●</span> Maestro</td><td class="cell full"><span class="mk">●</span> Maestro</td></tr>
+      <tr><td class="axis">Roles (injected agent personas)</td><td class="cell full"><span class="mk">●</span> 8 + roles.json</td><td class="cell full"><span class="mk">●</span> role.json</td><td class="cell part"><span class="mk">◐</span> field exists, unused</td></tr>
+      <tr><td class="axis">Isolation (per-branch worktrees)</td><td class="cell part"><span class="mk">◐</span> per-space folder</td><td class="cell full"><span class="mk">●</span> APFS floors + git branch</td><td class="cell no"><span class="mk">○</span> flat, cwd only</td></tr>
+      <tr><td class="axis">Remote / container envs (SSH/Docker)</td><td class="cell no"><span class="mk">○</span></td><td class="cell full"><span class="mk">●</span> SSH/Docker/Sandbox/Custom</td><td class="cell no"><span class="mk">○</span> local socket only</td></tr>
+      <tr><td class="axis">Scheduling / routines</td><td class="cell part"><span class="mk">◐</span> notes-inbox polling</td><td class="cell full"><span class="mk">●</span> cron + pre-run</td><td class="cell full"><span class="mk">●</span> cron-lite</td></tr>
+      <tr><td class="axis">Command palette / global search</td><td class="cell part"><span class="mk">◐</span> pane search</td><td class="cell full"><span class="mk">●</span> Batuta (all workspaces)</td><td class="cell no"><span class="mk">○</span></td></tr>
+      <tr><td class="axis">Code editor · git diff/graph pane</td><td class="cell full"><span class="mk">●</span> Monaco + Source Control</td><td class="cell full"><span class="mk">●</span> file-tree + editor</td><td class="cell no"><span class="mk">○</span></td></tr>
+      <tr><td class="axis">Prompt composer (@mentions, media)</td><td class="cell part"><span class="mk">◐</span></td><td class="cell full"><span class="mk">●</span> native pixels</td><td class="cell no"><span class="mk">○</span> raw strings</td></tr>
+      <tr><td class="axis">Voice — spoken replies</td><td class="cell full"><span class="mk">●</span> OpenAI Realtime + call history</td><td class="cell no"><span class="mk">○</span></td><td class="cell part"><span class="mk">◐</span> macOS <code>say</code></td></tr>
+      <tr><td class="axis">Voice — dictation in</td><td class="cell full"><span class="mk">●</span> Whisper/Deepgram</td><td class="cell part"><span class="mk">◐</span> mic dictation</td><td class="cell part"><span class="mk">◐</span> phone Web Speech</td></tr>
+      <tr><td class="axis">Mobile client</td><td class="cell full"><span class="mk">●</span> native iOS (TestFlight)</td><td class="cell no"><span class="mk">○</span></td><td class="cell part"><span class="mk">◐</span> LAN web client</td></tr>
+      <tr><td class="axis">Cross-device sync</td><td class="cell full"><span class="mk">●</span> two-way, live</td><td class="cell no"><span class="mk">○</span></td><td class="cell no"><span class="mk">○</span> LAN remote only</td></tr>
+      <tr><td class="axis">Background daemon (survives GUI)</td><td class="cell full"><span class="mk">●</span> opt-in</td><td class="cell part"><span class="mk">◐</span> Unload/hibernate</td><td class="cell no"><span class="mk">○</span></td></tr>
+      <tr><td class="axis">On-device supervisor AI</td><td class="cell no"><span class="mk">○</span></td><td class="cell full"><span class="mk">●</span> Ombro</td><td class="cell no"><span class="mk">○</span></td></tr>
+      <tr><td class="axis">Cost lever (avoid subscription quota)</td><td class="cell full"><span class="mk">●</span> SDK vs PTY</td><td class="cell no"><span class="mk">○</span></td><td class="cell no"><span class="mk">○</span></td></tr>
+      <tr><td class="axis">Account / auth / billing</td><td class="cell full"><span class="mk">●</span> Better Auth + Google</td><td class="cell no"><span class="mk">○</span> local only</td><td class="cell no"><span class="mk">○</span> none</td></tr>
+      <tr><td class="axis">Platform reach</td><td class="cell full"><span class="mk">●</span> mac/win/linux + iOS</td><td class="cell part"><span class="mk">◐</span> macOS only</td><td class="cell full"><span class="mk">●</span> mac/win/linux</td></tr>
+      <tr><td class="axis">Open source</td><td class="cell no"><span class="mk">○</span></td><td class="cell no"><span class="mk">○</span></td><td class="cell full"><span class="mk">●</span> MIT</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Where Cookrew falls short — ranked gaps</h2>
+  <h3>Cookrew vs Maestri</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Missing</th><th>Severity</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td class="axis">Floors (isolation)</td><td><span class="sev hi">HIGH</span></td><td class="dim">Maestri gives each agent an APFS copy-on-write clone on its own git branch, mirrored back to origin. Cookrew is a single flat workspace — <code>recruit --dir</code> only sets a cwd. No parallel-agent isolation. Cross-platform path: git worktrees (README-endorsed, unbuilt).</td></tr>
+      <tr><td class="axis">Environments (remote)</td><td><span class="sev hi">HIGH</span></td><td class="dim">Maestri bridges to SSH / Docker / Sandbox / custom runtimes over a Bridge Port with per-terminal tokens. Cookrew is local-unix-socket only — no remote or containerized terminals.</td></tr>
+      <tr><td class="axis">Roles</td><td><span class="sev me">MED</span></td><td class="dim">The data model has a <code>role</code> field and <code>recruit --role</code> accepts it, but nothing consumes it — no role library, no prompt injection, no <code>--replace</code> hot-swap. A cheap win: the plumbing is already there.</td></tr>
+      <tr><td class="axis">Batuta (command palette)</td><td><span class="sev me">MED</span></td><td class="dim">No fuzzy palette, no cross-node search, no keyboard-driven navigation across the canvas.</td></tr>
+      <tr><td class="axis">File-tree / editor / git pane</td><td><span class="sev me">MED</span></td><td class="dim">No filesystem browser, no in-canvas code editor, no git diff/graph view.</td></tr>
+      <tr><td class="axis">Prompt composer</td><td><span class="sev me">MED</span></td><td class="dim">No @mention composer, no image-as-native-pixels; prompts are raw strings via <code>ask</code> or the mobile textbox.</td></tr>
+      <tr><td class="axis">Ombro (local AI supervisor)</td><td><span class="sev me">MED</span></td><td class="dim">No passive on-device companion watching agents and summarizing.</td></tr>
+      <tr><td class="axis">Groups / tidy / native polish</td><td><span class="sev lo">LOW</span></td><td class="dim">No node grouping or auto-arrange; xterm.js vs SwiftTerm+Metal; no Sparkle auto-update.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Cookrew vs AgentGrid</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Missing</th><th>Severity</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td class="axis">Cross-device / cloud sync</td><td><span class="sev hi">HIGH</span></td><td class="dim">AgentGrid mirrors panes/terminals/notes/layout two-way across paired machines + a native iOS app. Cookrew's mobile piece is a thin LAN remote into one running desktop — no account, no cloud state, nothing if the Mac is off.</td></tr>
+      <tr><td class="axis">Background daemon</td><td><span class="sev hi">HIGH</span></td><td class="dim">AgentGrid can own PTYs/workers independently of the window — close or crash the GUI without losing agents. Cookrew's agents die with the app.</td></tr>
+      <tr><td class="axis">MCP orchestration + spawn_role</td><td><span class="sev me">MED</span></td><td class="dim">AgentGrid's permissioned canvas-blind master/worker model over MCP with a project-committed <code>.agent-grid/roles.json</code> contract. Cookrew has recruit but no role contract or SDK workers.</td></tr>
+      <tr><td class="axis">SDK/PTY cost lever</td><td><span class="sev me">MED</span></td><td class="dim">AgentGrid's SDK backend runs workers without consuming the Max subscription quota — a real cost dial Cookrew lacks.</td></tr>
+      <tr><td class="axis">Account / billing / iOS app</td><td><span class="sev me">MED</span></td><td class="dim">Encrypted secrets, Better Auth + Google sign-in, in-app usage/limits, native iOS TestFlight client.</td></tr>
+      <tr><td class="axis">Voice on non-macOS</td><td><span class="sev me">MED</span></td><td class="dim">AgentGrid's voice is cloud realtime (any OS). Cookrew's spoken output is hardcoded to macOS <code>say</code>.</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="callout">
+    <b>⚠ Security finding (Cookrew, flagged by the scout):</b> the mobile server has <b>no authentication</b> and
+    <code>CORS: *</code> — any device on the LAN can POST to <code>/api/terminal/:id/input</code> and inject shell
+    commands into any PTY. It ships a self-signed cert but <b>no per-terminal tokens</b> (the exact mechanism
+    Maestri's environment bridge uses). This is a real remote-code-execution surface on an untrusted network and
+    should gate any multi-user or public-Wi-Fi use.
+  </div>
+
+  <h2>What each does best — the real moats</h2>
+  <div class="moats">
+    <div class="moat ag">
+      <h4>AgentGrid</h4>
+      <ul>
+        <li><b>Realtime voice + call history</b> <span>— telephony-style agent channel, multilingual</span></li>
+        <li><b>Two-way cross-device sync</b> <span>+ native iOS client</span></li>
+        <li><b>Background daemon</b> <span>— work survives GUI crash</span></li>
+        <li><b>SDK vs PTY cost lever</b> <span>— skip Max quota</span></li>
+        <li><b>Config-as-contract</b> <span>— committable <code>.agent-grid/</code>, notes-inbox polling</span></li>
+      </ul>
+    </div>
+    <div class="moat ma">
+      <h4>Maestri</h4>
+      <ul>
+        <li><b>APFS floors</b> <span>— instant, cheap, git-branch isolation, IDE-visible</span></li>
+        <li><b>Ombro</b> <span>— on-device Apple FM supervisor, fully private</span></li>
+        <li><b>Environments</b> <span>— SSH/Docker/Sandbox parity with token auth</span></li>
+        <li><b>Batuta</b> <span>— deterministic cross-workspace command palette</span></li>
+        <li><b>Native craft</b> <span>— Metal SwiftTerm, WebKit, connection physics</span></li>
+      </ul>
+    </div>
+    <div class="moat cv">
+      <h4>Cookrew</h4>
+      <ul>
+        <li><b>Open source (MIT)</b> <span>— the only inspectable/forkable one</span></li>
+        <li><b>Cross-platform</b> <span>— Electron reaches win/linux; Maestri can't</span></li>
+        <li><b>Faithful core loop</b> <span>— quiescence <code>ask</code>, connectivity=auth, Maestro-gating all real</span></li>
+        <li><b>Voice + mobile</b> <span>— reaches past Maestri toward AgentGrid</span></li>
+        <li><b>Tiny, readable</b> <span>— ~10 modules, easy to extend</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>The verdict — and Cookrew's path forward</h2>
+  <p>
+    Cookrew is a <b>genuinely working MVP (~6/10 maturity)</b> that faithfully clones Maestri's
+    <em>single-machine core loop</em> and even overshoots it on voice + mobile (borrowed from AgentGrid).
+    The hard parts — real PTYs, a headless mirror, quiescence-based <code>ask</code>, socket CLI, verified
+    portal automation — are <b>done and driven end-to-end by a real Claude agent on the canvas</b>. What
+    separates a "canvas of terminals" from a <em>product</em> is the remaining, differentiating ~40%:
+    <b>isolation, remote environments, roles, and sync</b>.
+  </p>
+  <p>The scouts' shared recommendation, in priority order:</p>
+  <ol class="steps">
+    <li><b>Floors via git worktrees</b> — the biggest Maestri gap, cross-platform, already README-endorsed. Turns Cookrew from single-flat into real parallel-agent isolation.</li>
+    <li><b>Wire up roles</b> — the model and <code>--role</code> flag already exist; add a role library + prompt injection + <code>--replace</code>. Cheapest high-value win.</li>
+    <li><b>Auth on the mobile/socket surface</b> — per-terminal tokens (Maestri's own design) close the RCE hole and unblock everything remote/multi-user.</li>
+    <li><b>Environments bridge</b> — the remote-TCP + token architecture is already documented from the reverse-engineering; build SSH/Docker terminals on it.</li>
+  </ol>
+
+  <footer>
+    Method: three Claude <b>Opus 4.8</b> scouts recruited onto the Maestri canvas via <code>maestri recruit</code>,
+    each deeply using one product hands-on (live CLI, app-bundle teardown with <code>otool</code>/asar strings,
+    <code>screencapture</code> of running UIs, live portal driving) and writing a structured report. This page
+    synthesizes <code>scout-agentgrid.md</code> · <code>scout-maestri.md</code> · <code>scout-cookrew.md</code>.
+    Versions observed: AgentGrid 2.7.9 · Maestri 0.34.3 (129) · Cookrew 0.1.0.
+  </footer>
+</main>

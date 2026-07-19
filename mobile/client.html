@@ -1,0 +1,1219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<title>Cookrew Mobile</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=VT323&family=Silkscreen:wght@400;700&family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600;700&display=swap"
+  rel="stylesheet"
+/>
+<style>
+  /* Same cookrew-beta arcade theme as the desktop renderer (styles.css):
+     cream chrome, hard bevel shadows, phosphor CRT screens, and the
+     vibe-island dark cards for agent terminals. */
+  :root {
+    --cream: #faf8f4;
+    --cream-hi: #fffef5;
+    --cream-md: #f5f0e8;
+    --cream-lo: #ece6da;
+    --ink: #2d2a20;
+    --ink-soft: #5c4a1f;
+    --muted: #78716c;
+    --dim: #a8a29e;
+    --line: #2d2a20;
+    --line-soft: #d9d3c5;
+    --amber: #ffd600;
+    --amber-soft: #fff3ad;
+    --amber-deep: #d97706;
+    --phos: #e9b949;
+    --phos-dim: #8a6d1c;
+    --phos-glow: #ffd77a;
+    --phos-bg: #14110a;
+    --hp: #6bbe58;
+    --rose: #dc2626;
+    --violet: #9b8acb;
+    --note-bg: #fff3ad;
+    --note-text: #3a3625;
+
+    --vi-bg: #121214;
+    --vi-panel: #1c1c1f;
+    --vi-line: #2c2c30;
+    --vi-text: #f5f5f7;
+    --vi-dim: #98989d;
+    --vi-working: #ff9f0a;
+    --vi-wait: #ff453a;
+    --vi-done: #32d74b;
+
+    --font-pixel: 'Silkscreen', 'Courier New', monospace;
+    --font-screen: 'VT323', 'Courier New', monospace;
+    --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+    --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    margin: 0;
+    height: 100dvh;
+    overflow: hidden;
+    background: var(--cream);
+    color: var(--ink);
+    font-family: var(--font-body);
+    overscroll-behavior: none;
+  }
+
+  /* ---- app shell ---- */
+
+  #app { height: 100dvh; display: flex; flex-direction: column; }
+
+  header {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: max(10px, env(safe-area-inset-top)) 14px 10px;
+    background: var(--cream-hi);
+    border-bottom: 2px solid var(--line);
+    z-index: 5;
+  }
+
+  .cr-logo {
+    font-family: var(--font-pixel);
+    font-weight: 700;
+    font-size: 16px;
+    letter-spacing: 0.08em;
+    text-shadow: 2px 2px 0 var(--amber);
+  }
+
+  .cr-kicker {
+    font-family: var(--font-pixel);
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .cr-chip {
+    font-family: var(--font-pixel);
+    font-size: 8.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink);
+    background: var(--cream-md);
+    border: 1.5px solid var(--line);
+    padding: 2px 6px;
+    white-space: nowrap;
+  }
+
+  .cr-chip.amber { background: var(--amber); }
+  .cr-chip.violet { background: var(--violet); color: var(--cream-hi); }
+  .cr-chip.attention { background: var(--rose); color: var(--cream-hi); animation: cr-blink 1.1s steps(2) infinite; }
+
+  .cr-led {
+    width: 10px; height: 10px; border-radius: 50%;
+    border: 1.5px solid var(--line);
+    background: var(--hp);
+    box-shadow: 0 0 6px rgba(107, 190, 88, 0.8);
+    flex: 0 0 auto;
+  }
+  .cr-led.busy { background: var(--amber); box-shadow: 0 0 8px rgba(255, 214, 0, 0.9); animation: cr-blink 0.9s steps(2) infinite; }
+  .cr-led.off { background: var(--dim); box-shadow: none; }
+
+  .cr-btn {
+    font-family: var(--font-pixel);
+    font-size: 9.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink);
+    background: var(--cream-hi);
+    border: 2px solid var(--line);
+    box-shadow: 2px 2px 0 var(--line);
+    padding: 6px 10px;
+    cursor: pointer;
+  }
+  .cr-btn:active { transform: translate(2px, 2px); box-shadow: none; }
+  .cr-btn.primary { background: var(--amber); }
+
+  #wsName { margin-left: auto; max-width: 40vw; }
+
+  /* ---- stage / world (the canvas) ---- */
+
+  #stage {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+    touch-action: none;
+    background: var(--cream);
+    /* Faint dot grid so panning reads as movement, like a canvas app. */
+    background-image: radial-gradient(var(--line-soft) 1px, transparent 1px);
+    background-size: 26px 26px;
+  }
+
+  #world {
+    position: absolute;
+    top: 0; left: 0;
+    transform-origin: 0 0;
+    will-change: transform;
+  }
+
+  #stageEmpty {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-family: var(--font-pixel);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+  }
+
+  #fitBtn {
+    position: absolute;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    z-index: 4;
+  }
+
+  /* ---- cards (canvas nodes) ---- */
+
+  .card {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--cream-hi);
+    border: 2px solid var(--line);
+    box-shadow: 3px 3px 0 var(--line);
+    cursor: pointer;
+  }
+
+  .node-header {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 10px;
+    background: var(--cream-md);
+    border-bottom: 2px solid var(--line);
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+
+  .node-title {
+    font-family: var(--font-pixel);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* phosphor CRT screen (shell tails, fullscreen terminal) */
+
+  .cr-phos {
+    background: var(--phos-bg);
+    color: var(--phos);
+    font-family: var(--font-screen);
+    font-size: 15px;
+    line-height: 1.25;
+    position: relative;
+  }
+
+  .cr-crt::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.03) 0,
+      rgba(255, 255, 255, 0.03) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+  }
+
+  .card-screen {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+
+  .phos-line { white-space: pre-wrap; word-break: break-word; overflow: hidden; }
+  .phos-dim { color: var(--phos-dim); letter-spacing: 0.1em; }
+  .phos-cursor { color: var(--phos-glow); animation: cr-blink 1s steps(2) infinite; }
+
+  /* vibe-island agent card — typography inverse-scaled via --z (set on
+     #world from 1/zoom) so cards stay readable at overview zoom, exactly
+     like the desktop's semantic zoom. */
+
+  .card.vi-card {
+    background: #161618;
+    border: 1px solid #2c2c30;
+    border-radius: 12px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  }
+  .card.vi-card.working {
+    border-color: rgba(255, 159, 10, 0.65);
+    box-shadow: 0 0 0 2px rgba(255, 159, 10, 0.28), 0 10px 28px rgba(0, 0, 0, 0.45);
+  }
+  .card.vi-card.attention {
+    border-color: rgba(255, 69, 58, 0.75);
+    box-shadow: 0 0 0 2px rgba(255, 69, 58, 0.3), 0 10px 28px rgba(0, 0, 0, 0.45);
+  }
+  .card.offline { opacity: 0.55; }
+
+  .vi-head {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    background: transparent;
+    border-bottom: 1px solid #232327;
+    gap: calc(8px * var(--z, 1));
+    padding: calc(7px * var(--z, 1)) calc(11px * var(--z, 1));
+    flex: 0 0 auto;
+  }
+
+  .vi-title {
+    flex: 1;
+    min-width: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
+    font-size: calc(13px * var(--z, 1));
+    font-weight: 700;
+    color: var(--vi-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .vi-title-snip { color: var(--vi-dim); font-weight: 500; }
+
+  .vi-chip {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
+    font-size: calc(9.5px * var(--z, 1));
+    font-weight: 600;
+    color: #c8c8cd;
+    background: #2a2a2e;
+    border-radius: calc(5px * var(--z, 1));
+    padding: calc(2px * var(--z, 1)) calc(7px * var(--z, 1));
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+  .vi-chip.tan { background: #4a3b2a; color: #e8c9a0; }
+  .vi-chip.dim { color: #98989d; }
+
+  .vi-led { width: calc(9px * var(--z, 1)); height: calc(9px * var(--z, 1)); border-radius: 50%; flex: 0 0 auto; }
+  .vi-led.thinking { background: var(--vi-working); box-shadow: 0 0 calc(8px * var(--z, 1)) var(--vi-working); animation: vi-pulse 1.2s ease-in-out infinite; }
+  .vi-led.waiting { background: var(--vi-wait); box-shadow: 0 0 calc(8px * var(--z, 1)) var(--vi-wait); animation: cr-blink 0.7s steps(2) infinite; }
+  .vi-led.replied, .vi-led.idle { background: var(--vi-done); box-shadow: 0 0 calc(6px * var(--z, 1)) rgba(50, 215, 75, 0.7); }
+  .vi-led.off { background: #5a5a5f; box-shadow: none; }
+
+  .vi-card-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: calc(6px * var(--z, 1));
+    padding: calc(9px * var(--z, 1)) calc(11px * var(--z, 1));
+    overflow: hidden;
+    color: var(--vi-text);
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
+  }
+
+  .vi-ready { font-size: calc(14px * var(--z, 1)); font-weight: 600; color: var(--vi-done); }
+
+  .vi-you {
+    flex: 0 0 auto;
+    font-family: var(--font-mono);
+    font-size: calc(12px * var(--z, 1));
+    color: var(--vi-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .vi-you-label { color: #64d2ff; font-weight: 600; }
+
+  .vi-latest {
+    display: flex;
+    align-items: center;
+    gap: calc(7px * var(--z, 1));
+    font-size: calc(13.5px * var(--z, 1));
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+  .vi-latest.working { color: var(--vi-working); }
+  .vi-latest.waiting { color: var(--vi-wait); animation: cr-blink 1.1s steps(2) infinite; }
+  .vi-latest.done { color: var(--vi-text); font-weight: 500; }
+  .vi-latest-snip { color: var(--vi-dim); font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+
+  .vi-dot {
+    width: calc(7px * var(--z, 1));
+    height: calc(7px * var(--z, 1));
+    border-radius: 50%;
+    background: currentColor;
+    flex: 0 0 auto;
+    box-shadow: 0 0 6px currentColor;
+  }
+  .vi-dot.pulse { animation: vi-pulse 1.2s ease-in-out infinite; }
+
+  /* pixel invader avatar + signal bars (copied from desktop) */
+
+  .vi-avatar {
+    position: relative;
+    width: calc(48px * var(--z, 1));
+    height: calc(24px * var(--z, 1));
+    flex: 0 0 auto;
+    color: #32d74b;
+  }
+  .vi-avatar.waiting { color: #ff453a; }
+
+  .vi-invader {
+    position: absolute;
+    left: 0; top: 0;
+    width: 33px; height: 24px;
+    transform: scale(var(--z, 1));
+    transform-origin: top left;
+  }
+  .vi-invader::before {
+    content: '';
+    position: absolute;
+    width: 3px; height: 3px;
+    background: transparent;
+    box-shadow:
+      6px 0 currentColor, 24px 0 currentColor,
+      9px 3px currentColor, 21px 3px currentColor,
+      6px 6px currentColor, 9px 6px currentColor, 12px 6px currentColor,
+      15px 6px currentColor, 18px 6px currentColor, 21px 6px currentColor, 24px 6px currentColor,
+      3px 9px currentColor, 6px 9px currentColor, 12px 9px currentColor, 15px 9px currentColor,
+      18px 9px currentColor, 24px 9px currentColor, 27px 9px currentColor,
+      0 12px currentColor, 3px 12px currentColor, 6px 12px currentColor, 9px 12px currentColor,
+      12px 12px currentColor, 15px 12px currentColor, 18px 12px currentColor, 21px 12px currentColor,
+      24px 12px currentColor, 27px 12px currentColor, 30px 12px currentColor,
+      0 15px currentColor, 6px 15px currentColor, 9px 15px currentColor, 12px 15px currentColor,
+      15px 15px currentColor, 18px 15px currentColor, 21px 15px currentColor, 24px 15px currentColor,
+      30px 15px currentColor,
+      0 18px currentColor, 6px 18px currentColor, 24px 18px currentColor, 30px 18px currentColor,
+      9px 21px currentColor, 12px 21px currentColor, 18px 21px currentColor, 21px 21px currentColor;
+  }
+
+  .vi-bars {
+    position: absolute;
+    left: calc(38px * var(--z, 1));
+    top: 0;
+    height: calc(24px * var(--z, 1));
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: calc(3px * var(--z, 1));
+  }
+  .vi-bars i { width: calc(8px * var(--z, 1)); height: calc(4px * var(--z, 1)); background: currentColor; border-radius: 1px; opacity: 0.85; }
+  .vi-avatar.idle .vi-bars i, .vi-avatar.replied .vi-bars i { opacity: 0.35; }
+  .vi-avatar.thinking .vi-bars i { animation: vi-bar 1s ease-in-out infinite; }
+  .vi-avatar.thinking .vi-bars i:nth-child(2) { animation-delay: 0.18s; }
+  .vi-avatar.thinking .vi-bars i:nth-child(3) { animation-delay: 0.36s; }
+
+  /* mini mode (far-out zoom): terminal cards degrade to led + name,
+     matching the desktop's MINI_ZOOM tile. Toggled by #world[data-mode]. */
+
+  .mini-row {
+    display: none;
+    flex: 1;
+    min-height: 0;
+    align-items: center;
+    gap: calc(8px * var(--z, 1));
+    padding: 0 calc(12px * var(--z, 1));
+  }
+  .mini-name {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
+    font-size: calc(13px * var(--z, 1));
+    font-weight: 700;
+    color: var(--vi-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .card.shell-card .mini-name { color: var(--ink); font-family: var(--font-pixel); }
+  .mini-row .vi-led { width: calc(11px * var(--z, 1)); height: calc(11px * var(--z, 1)); animation: none; }
+
+  #world[data-mode='mini'] .tcard > :not(.mini-row) { display: none; }
+  #world[data-mode='mini'] .tcard .mini-row { display: flex; }
+
+  /* note card */
+
+  .card.note-card { background: var(--note-bg); }
+  .note-card .node-header { background: var(--amber); }
+  .note-card .node-title { color: var(--note-text); }
+  .note-body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    padding: 10px 12px;
+    color: var(--note-text);
+    font-size: 12.5px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  /* browser card */
+
+  .browser-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    border: 1.5px solid var(--line);
+    background: var(--violet);
+    flex: 0 0 auto;
+  }
+  .browser-body-wrap {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    display: flex;
+    overflow: hidden;
+  }
+  .browser-thumb {
+    display: none;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top;
+    background: #fff;
+  }
+  .browser-thumb.ok { display: block; }
+  .browser-thumb.ok + .browser-thumb-empty { display: none; }
+  .browser-thumb-empty {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    background: var(--cream-md);
+    color: var(--muted);
+    overflow: hidden;
+  }
+  .browser-thumb-glyph { font-size: 34px; color: var(--violet); }
+  .browser-url {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    max-width: 90%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ---- fullscreen popout (tap a card) ---- */
+
+  #popout {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: none;
+    flex-direction: column;
+    background: var(--cream-hi);
+    animation: cr-fadein 160ms ease-out;
+  }
+  #popout.open { display: flex; }
+
+  .popout-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: max(8px, env(safe-area-inset-top)) 12px 8px;
+    background: var(--cream-md);
+    border-bottom: 2px solid var(--line);
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+
+  .popout-title {
+    font-family: var(--font-pixel);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+
+  #popClose { margin-left: auto; flex: 0 0 auto; }
+
+  #popBody {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Full terminal view: no soft-wrapping — lines are at most `cols` chars
+     (the desktop PTY's width) and the font-size is computed so a full line
+     exactly spans the phone screen. TUI box-drawing stays intact. */
+  #popTerm {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    margin: 0;
+    padding: 10px 12px;
+    font-family: var(--font-screen);
+    font-size: 14px;
+    line-height: 1.22;
+    white-space: pre;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .popout-note {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    background: var(--note-bg);
+    color: var(--note-text);
+    padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .popout-browser {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--cream-md);
+    color: var(--muted);
+  }
+  .popout-browser .browser-body-wrap { border-bottom: 2px solid var(--line); }
+  .popout-browser .browser-thumb { object-fit: contain; background: #fff; }
+  .popout-browser .browser-thumb-glyph { font-size: 56px; }
+  .popout-browser a { color: inherit; text-decoration: none; }
+  .browser-actions {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px max(10px, env(safe-area-inset-bottom));
+    background: var(--cream-hi);
+    min-width: 0;
+  }
+  .browser-actions .browser-url { flex: 1; text-align: left; color: var(--muted); }
+
+  .attention-banner {
+    font-family: var(--font-pixel);
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    color: var(--cream-hi);
+    background: var(--rose);
+    padding: 4px 10px;
+    animation: cr-blink 1.1s steps(2) infinite;
+    flex: 0 0 auto;
+  }
+
+  /* composer (terminal popout only) */
+
+  #composer {
+    display: none;
+    gap: 8px;
+    padding: 10px 12px max(10px, env(safe-area-inset-bottom));
+    background: var(--cream-hi);
+    border-top: 2px solid var(--line);
+    flex: 0 0 auto;
+    align-items: center;
+  }
+  #composer.on { display: flex; }
+
+  #prompt {
+    flex: 1;
+    min-width: 0;
+    background: var(--cream);
+    border: 2px solid var(--line);
+    color: var(--ink);
+    padding: 10px 12px;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    outline: none;
+    border-radius: 0;
+    -webkit-appearance: none;
+  }
+  #prompt:focus { border-color: var(--amber-deep); }
+
+  button.round {
+    width: 42px; height: 42px;
+    border: 2px solid var(--line);
+    box-shadow: 2px 2px 0 var(--line);
+    background: var(--cream-hi);
+    color: var(--ink);
+    font-size: 16px;
+    flex: 0 0 auto;
+    padding: 0;
+    cursor: pointer;
+  }
+  button.round:active { transform: translate(2px, 2px); box-shadow: none; }
+  #send { background: var(--amber); }
+  #mic.listening { background: var(--rose); color: var(--cream-hi); animation: cr-blink 1s steps(2) infinite; }
+  #speakToggle.on { background: var(--amber); }
+
+  .card-status {
+    font-family: var(--font-pixel);
+    font-size: 8px;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .card-status.thinking { color: var(--amber-deep); animation: cr-blink 1.1s steps(2) infinite; }
+  .card-status.replied { color: var(--hp); }
+  .card-status.waiting { color: var(--rose); animation: cr-blink 1.1s steps(2) infinite; }
+
+  @keyframes cr-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0.15; } }
+  @keyframes cr-fadein { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes vi-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.8); } }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <span class="cr-logo">COOKREW</span>
+    <span class="cr-kicker">Mobile</span>
+    <span id="wsName" class="cr-chip amber">…</span>
+  </header>
+  <div id="stage">
+    <div id="world" data-mode="compact"></div>
+    <div id="stageEmpty">NO CARDS YET</div>
+    <button id="fitBtn" class="cr-btn">FIT ⤢</button>
+  </div>
+</div>
+
+<div id="popout">
+  <div class="popout-header">
+    <span id="popLed" class="cr-led"></span>
+    <span id="popTitle" class="popout-title">—</span>
+    <span id="popStatus" class="card-status"></span>
+    <button id="popClose" class="cr-btn">✕ CLOSE</button>
+  </div>
+  <div id="popAttention" class="attention-banner" style="display:none">⚠ NEEDS ATTENTION</div>
+  <div id="popBody"></div>
+  <div id="composer">
+    <button class="round" id="mic" title="Voice dictation">🎙️</button>
+    <input id="prompt" placeholder="Message this agent…" autocomplete="off" />
+    <button class="round" id="speakToggle" title="Speak replies">🔊</button>
+    <button class="round" id="send" title="Send">➤</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  'use strict'
+  const world = document.getElementById('world')
+  const stage = document.getElementById('stage')
+  const stageEmpty = document.getElementById('stageEmpty')
+  const popout = document.getElementById('popout')
+  const popBody = document.getElementById('popBody')
+  const popTitle = document.getElementById('popTitle')
+  const popLed = document.getElementById('popLed')
+  const popStatus = document.getElementById('popStatus')
+  const popAttention = document.getElementById('popAttention')
+  const composer = document.getElementById('composer')
+  const promptEl = document.getElementById('prompt')
+  const micBtn = document.getElementById('mic')
+  const sendBtn = document.getElementById('send')
+  const speakToggle = document.getElementById('speakToggle')
+
+  const STATUS_LABEL = { idle: 'READY', thinking: 'WORKING', waiting: 'NEEDS ATTENTION', replied: 'TURN COMPLETE' }
+  const MINI_ZOOM = 0.22
+
+  let nodes = []
+  let activities = {}
+  let openId = null
+  let speakReplies = false
+  let pinnedToBottom = true
+  let lastRenderKey = ''
+
+  /* ---------- api ---------- */
+
+  async function api(path, options) {
+    const response = await fetch(path, options)
+    if (!response.ok) throw new Error((await response.json()).error || response.status)
+    return response.json()
+  }
+
+  function postJson(text) {
+    return { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) }
+  }
+
+  /* ---------- helpers ---------- */
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+
+  function firstLine(text, max) {
+    const line = String(text).split('\n').find((l) => l.trim() !== '') || ''
+    return line.length > max ? line.slice(0, max - 1) + '…' : line
+  }
+
+  function stripStatus(status) {
+    if (!status) return null
+    const cleaned = status.replace(/\s*\((?:[^)]*esc to interrupt[^)]*)\)\s*$/i, '').trim()
+    return cleaned.length > 0 ? cleaned : null
+  }
+
+  function agoLabel(since) {
+    const mins = Math.max(0, Math.floor((Date.now() - since) / 60000))
+    if (mins < 1) return 'now'
+    if (mins < 60) return mins + 'm'
+    const hours = Math.floor(mins / 60)
+    return hours < 24 ? hours + 'h' : Math.floor(hours / 24) + 'd'
+  }
+
+  /* ---------- card markup (mirrors desktop TerminalNode views) ---------- */
+
+  function agentCardHtml(node, activity) {
+    const phase = activity ? activity.phase : 'idle'
+    const off = !node.running
+    const led = off ? 'off' : phase
+    const promptSnip = activity && activity.prompt ? ` <span class="vi-title-snip">· ${esc(firstLine(activity.prompt, 60))}</span>` : ''
+    let latest = '<div class="vi-ready">Ready</div>'
+    if (off) {
+      latest = '<div class="vi-latest done"><span class="vi-latest-snip">Not running</span></div>'
+    } else if (activity && activity.prompt !== null) {
+      const glance = activity.glance
+      const msg = glance && glance.message ? firstLine(glance.message, 90) : null
+      if (phase === 'thinking') {
+        latest = `<div class="vi-latest working"><span class="vi-dot pulse"></span> ${esc(stripStatus(glance && glance.status) || 'Working…')}${msg ? `<span class="vi-latest-snip"> — ${esc(msg)}</span>` : ''}</div>`
+      } else if (phase === 'waiting') {
+        latest = `<div class="vi-latest waiting">⚠ ${esc(msg || 'Needs your input')}</div>`
+      } else if (phase === 'replied') {
+        latest = `<div class="vi-latest done">✅ ${esc(activity.reply ? firstLine(activity.reply, 90) : 'Turn complete')}</div>`
+      }
+    }
+    const you = activity && activity.prompt
+      ? `<div class="vi-you"><span class="vi-you-label">You:</span> ${esc(firstLine(activity.prompt, 90))}</div>`
+      : ''
+    const timeChip = phase === 'idle' && activity && node.running
+      ? `<span class="vi-chip dim">${agoLabel(activity.updatedAt)}</span>`
+      : `<span class="vi-led ${led}"></span>`
+    return `
+      <div class="vi-head">
+        <div class="vi-avatar ${off ? 'idle' : phase}"><span class="vi-invader"></span><span class="vi-bars"><i></i><i></i><i></i></span></div>
+        <div class="vi-title">${esc(node.name)}${promptSnip}</div>
+        <span class="vi-chip tan">${esc(node.preset)}</span>
+        ${node.orch ? '<span class="vi-chip">Maestri</span>' : ''}
+        ${timeChip}
+      </div>
+      <div class="vi-card-body">${you}${latest}</div>
+      <div class="mini-row"><span class="vi-led ${led}"></span><span class="mini-name">${esc(node.name)}</span></div>`
+  }
+
+  function shellCardHtml(node, activity) {
+    const lines = activity ? activity.lines : []
+    const body = lines.length === 0
+      ? '<span class="phos-dim">NO OUTPUT YET</span>'
+      : lines.map((l) => `<div class="phos-line">${esc(l || ' ')}</div>`).join('')
+    return `
+      <div class="node-header">
+        <span class="cr-led${node.running ? '' : ' off'}"></span>
+        <span class="node-title">${esc(node.name)}</span>
+        ${node.orch ? '<span class="cr-chip amber">ORCH</span>' : ''}
+        <span class="cr-chip" style="margin-left:auto">${esc(node.preset)}</span>
+      </div>
+      <div class="cr-phos cr-crt card-screen">${body}<span class="phos-cursor">▮</span></div>
+      <div class="mini-row"><span class="vi-led ${node.running ? 'idle' : 'off'}"></span><span class="mini-name">${esc(node.name)}</span></div>`
+  }
+
+  function noteCardHtml(node) {
+    return `
+      <div class="node-header">
+        <span class="node-title">${esc(node.name)}</span>
+        ${node.locked ? '<span class="cr-chip" style="margin-left:auto">🔒</span>' : ''}
+      </div>
+      <div class="note-body">${esc(node.content)}</div>`
+  }
+
+  function browserThumbHtml(node) {
+    return `
+      <div class="browser-body-wrap">
+        <img class="browser-thumb" data-src="/api/browser/${esc(node.id)}/thumb" alt=""
+             onload="this.classList.add('ok')" onerror="this.classList.remove('ok')" />
+        <div class="browser-thumb-empty">
+          <span class="browser-thumb-glyph">◍</span>
+          <span class="browser-url">${esc(node.url)}</span>
+        </div>
+      </div>`
+  }
+
+  function browserCardHtml(node) {
+    return `
+      <div class="node-header">
+        <span class="browser-dot"></span>
+        <span class="node-title">${esc(node.name)}</span>
+        <span class="cr-chip violet" style="margin-left:auto">BROWSER</span>
+      </div>
+      ${browserThumbHtml(node)}`
+  }
+
+  // Thumbnails come from the desktop's capturePage() loop (~5s cadence);
+  // re-fetch on the same cadence. Covers canvas cards and the open popout.
+  function refreshThumbs() {
+    for (const img of document.querySelectorAll('img.browser-thumb')) {
+      img.src = img.dataset.src + '?v=' + Date.now()
+    }
+  }
+  setInterval(refreshThumbs, 5000)
+
+  function renderWorld() {
+    stageEmpty.style.display = nodes.length === 0 ? 'flex' : 'none'
+    const html = nodes
+      .map((node) => {
+        const activity = activities[node.id]
+        const pos = `left:${node.position.x}px;top:${node.position.y}px;width:${node.size.width}px;height:${node.size.height}px`
+        if (node.kind === 'terminal') {
+          const agent = activity ? activity.agent : node.preset !== 'Shell'
+          const phase = activity ? activity.phase : 'idle'
+          const cls = agent
+            ? `card tcard vi-card${phase === 'thinking' ? ' working' : ''}${phase === 'waiting' ? ' attention' : ''}${node.running ? '' : ' offline'}`
+            : `card tcard shell-card${node.running ? '' : ' offline'}`
+          return `<div class="${cls}" data-id="${esc(node.id)}" style="${pos}">${agent ? agentCardHtml(node, activity) : shellCardHtml(node, activity)}</div>`
+        }
+        if (node.kind === 'note') {
+          return `<div class="card note-card" data-id="${esc(node.id)}" style="${pos}">${noteCardHtml(node)}</div>`
+        }
+        return `<div class="card browser-card" data-id="${esc(node.id)}" style="${pos}">${browserCardHtml(node)}</div>`
+      })
+      .join('')
+    // Only touch the DOM when the markup actually changed — keeps thumbnail
+    // <img> elements (and their loaded frames) stable across polls.
+    if (html === lastRenderKey) return
+    lastRenderKey = html
+    world.innerHTML = html
+    refreshThumbs()
+  }
+
+  /* ---------- viewport: pan / pinch / fit, desktop semantic zoom ---------- */
+
+  const view = { x: 0, y: 0, scale: 0.3 }
+  let fitted = false
+
+  function applyView() {
+    world.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`
+    // Inverse type scale, quantized to 1/8 steps (matches desktop quantInvZoom).
+    const inv = view.scale >= 0.95 ? 1 : Math.round((1 / Math.max(view.scale, 0.12)) * 8) / 8
+    world.style.setProperty('--z', String(inv))
+    world.dataset.mode = view.scale < MINI_ZOOM ? 'mini' : 'compact'
+  }
+
+  function fitView() {
+    if (nodes.length === 0) return
+    const pad = 40
+    const minX = Math.min(...nodes.map((n) => n.position.x)) - pad
+    const minY = Math.min(...nodes.map((n) => n.position.y)) - pad
+    const maxX = Math.max(...nodes.map((n) => n.position.x + n.size.width)) + pad
+    const maxY = Math.max(...nodes.map((n) => n.position.y + n.size.height)) + pad
+    const rect = stage.getBoundingClientRect()
+    const scale = Math.min(rect.width / (maxX - minX), rect.height / (maxY - minY), 1.2)
+    view.scale = Math.max(scale, 0.05)
+    view.x = (rect.width - (maxX - minX) * view.scale) / 2 - minX * view.scale
+    view.y = (rect.height - (maxY - minY) * view.scale) / 2 - minY * view.scale
+    applyView()
+  }
+
+  const pointers = new Map()
+  let gestureMoved = false
+  let pinchStart = null
+
+  stage.addEventListener('pointerdown', (e) => {
+    stage.setPointerCapture(e.pointerId)
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    gestureMoved = false
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()]
+      pinchStart = {
+        dist: Math.hypot(a.x - b.x, a.y - b.y),
+        scale: view.scale,
+        mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
+        world: {
+          x: ((a.x + b.x) / 2 - view.x) / view.scale,
+          y: ((a.y + b.y) / 2 - view.y) / view.scale
+        }
+      }
+    }
+  })
+
+  stage.addEventListener('pointermove', (e) => {
+    const prev = pointers.get(e.pointerId)
+    if (!prev) return
+    const dx = e.clientX - prev.x
+    const dy = e.clientY - prev.y
+    if (Math.hypot(dx, dy) > 3) gestureMoved = true
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    if (pointers.size === 1 && !pinchStart) {
+      view.x += dx
+      view.y += dy
+      applyView()
+    } else if (pointers.size === 2 && pinchStart) {
+      const [a, b] = [...pointers.values()]
+      const dist = Math.hypot(a.x - b.x, a.y - b.y)
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+      const scale = Math.min(Math.max(pinchStart.scale * (dist / pinchStart.dist), 0.04), 2.5)
+      view.scale = scale
+      view.x = mid.x - pinchStart.world.x * scale
+      view.y = mid.y - pinchStart.world.y * scale
+      applyView()
+    }
+  })
+
+  const endPointer = (e) => {
+    pointers.delete(e.pointerId)
+    if (pointers.size < 2) pinchStart = null
+  }
+  stage.addEventListener('pointerup', endPointer)
+  stage.addEventListener('pointercancel', endPointer)
+
+  // Tap (no drag) on a card opens it fullscreen — the mobile analogue of the
+  // desktop's click-to-zoom + LOD overlay.
+  stage.addEventListener('click', (e) => {
+    if (gestureMoved) return
+    const card = e.target.closest('.card')
+    if (card) openNode(card.dataset.id)
+  })
+
+  document.getElementById('fitBtn').addEventListener('click', fitView)
+
+  /* ---------- fullscreen popout ---------- */
+
+  let outputTimer = null
+
+  function openNode(id) {
+    const node = nodes.find((n) => n.id === id)
+    if (!node) return
+    openId = id
+    popTitle.textContent = node.name
+    popAttention.style.display = 'none'
+    composer.classList.remove('on')
+    popBody.innerHTML = ''
+    if (node.kind === 'terminal') {
+      popBody.innerHTML = '<pre id="popTerm" class="cr-phos cr-crt">Loading…</pre>'
+      composer.classList.add('on')
+      pinnedToBottom = true
+      termCols = 0 // fresh element — force a re-fit on the first output poll
+      const term = document.getElementById('popTerm')
+      term.addEventListener('scroll', () => {
+        pinnedToBottom = term.scrollTop + term.clientHeight >= term.scrollHeight - 30
+      })
+      pollOutput(true)
+      outputTimer = setInterval(() => pollOutput(false), 1500)
+    } else if (node.kind === 'note') {
+      popBody.innerHTML = `<div class="popout-note">${esc(node.content)}</div>`
+    } else {
+      popBody.innerHTML = `
+        <div class="popout-browser">
+          ${browserThumbHtml(node)}
+          <div class="browser-actions">
+            <span class="browser-url">${esc(node.url)}</span>
+            <a class="cr-btn primary" href="${esc(node.url)}" target="_blank" rel="noopener">OPEN ↗</a>
+          </div>
+        </div>`
+      refreshThumbs()
+    }
+    syncPopoutChrome()
+    popout.classList.add('open')
+    history.pushState({ cookrew: id }, '')
+  }
+
+  function closePopout() {
+    if (!openId) return
+    openId = null
+    popout.classList.remove('open')
+    if (outputTimer) { clearInterval(outputTimer); outputTimer = null }
+    popBody.innerHTML = ''
+  }
+
+  document.getElementById('popClose').addEventListener('click', () => history.back())
+  window.addEventListener('popstate', closePopout)
+
+  /** Header LED + pixel status chip follow the live turn phase. */
+  function syncPopoutChrome() {
+    const node = nodes.find((n) => n.id === openId)
+    if (!node) return
+    if (node.kind !== 'terminal') {
+      popLed.className = 'cr-led'
+      popStatus.textContent = node.kind.toUpperCase()
+      popStatus.className = 'card-status'
+      return
+    }
+    const activity = activities[node.id]
+    const phase = activity ? activity.phase : 'idle'
+    popLed.className = 'cr-led' + (phase === 'thinking' ? ' busy' : node.running ? '' : ' off')
+    popStatus.textContent = node.running ? STATUS_LABEL[phase] : 'OFFLINE'
+    popStatus.className = 'card-status ' + phase
+    popAttention.style.display = phase === 'waiting' ? 'block' : 'none'
+  }
+
+  /* Fit-to-screen: the PTY renders at the desktop's width (`cols`), so pick
+     the font-size that makes a full line exactly span the phone screen —
+     the TUI then scales down instead of soft-wrapping into broken frames. */
+
+  let charRatio = 0.5 // VT323 advance width per px of font-size, measured live
+  let termCols = 0
+
+  function measureCharRatio() {
+    const probe = document.createElement('span')
+    probe.style.cssText =
+      'position:absolute;visibility:hidden;white-space:pre;line-height:1;' +
+      "font-family:'VT323','Courier New',monospace;font-size:100px"
+    probe.textContent = '0'.repeat(20)
+    document.body.appendChild(probe)
+    const width = probe.getBoundingClientRect().width
+    probe.remove()
+    if (width > 0) charRatio = width / (20 * 100)
+  }
+
+  function fitTerm() {
+    const term = document.getElementById('popTerm')
+    if (!term || !termCols) return
+    const pad = 24 // 12px left + right
+    const avail = term.clientWidth - pad
+    const size = Math.min(22, Math.max(4.5, avail / (termCols * charRatio)))
+    term.style.fontSize = size.toFixed(2) + 'px'
+  }
+
+  document.fonts.ready.then(() => {
+    measureCharRatio()
+    fitTerm()
+  })
+  window.addEventListener('resize', fitTerm)
+
+  async function pollOutput(force) {
+    const term = document.getElementById('popTerm')
+    if (!openId || !term) return
+    try {
+      const data = await api(`/api/terminal/${openId}/output`)
+      if (data.cols && data.cols !== termCols) {
+        termCols = data.cols
+        fitTerm()
+      }
+      if (force || term.dataset.last !== data.output) {
+        term.dataset.last = data.output
+        term.textContent = data.output || '(no output yet)'
+        if (pinnedToBottom) term.scrollTop = term.scrollHeight
+      }
+    } catch (error) {
+      term.textContent = '⚠ ' + error.message
+    }
+  }
+
+  /* ---------- composer: send / ask / voice ---------- */
+
+  async function send() {
+    const text = promptEl.value.trim()
+    if (!text || !openId) return
+    promptEl.value = ''
+    if (speakReplies) {
+      sendBtn.disabled = true
+      try {
+        const { reply } = await api(`/api/terminal/${openId}/ask`, postJson(text))
+        speak(reply)
+      } catch (error) {
+        speak('Request failed: ' + error.message)
+      }
+      sendBtn.disabled = false
+    } else {
+      await api(`/api/terminal/${openId}/input`, postJson(text)).catch(() => undefined)
+    }
+    pollOutput(true)
+  }
+
+  function speak(text) {
+    const gist = (text || 'done').replace(/\s+/g, ' ').trim().slice(0, 300)
+    const utterance = new SpeechSynthesisUtterance(gist)
+    speechSynthesis.cancel()
+    speechSynthesis.speak(utterance)
+  }
+
+  sendBtn.onclick = send
+  promptEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') send() })
+  speakToggle.onclick = () => {
+    speakReplies = !speakReplies
+    speakToggle.classList.toggle('on', speakReplies)
+    if (speakReplies) speak('Spoken replies on')
+  }
+
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition
+  if (Recognition) {
+    let recognizing = false
+    const recognizer = new Recognition()
+    recognizer.interimResults = true
+    recognizer.onresult = (event) => {
+      promptEl.value = Array.from(event.results).map((r) => r[0].transcript).join('')
+    }
+    recognizer.onend = () => {
+      recognizing = false
+      micBtn.classList.remove('listening')
+      if (promptEl.value.trim()) send()
+    }
+    micBtn.onclick = () => {
+      if (recognizing) { recognizer.stop(); return }
+      recognizing = true
+      micBtn.classList.add('listening')
+      promptEl.value = ''
+      recognizer.start()
+    }
+  } else {
+    micBtn.style.opacity = '0.35'
+    micBtn.onclick = () => {
+      const insecure = location.protocol !== 'https:' && location.hostname !== 'localhost'
+      alert(
+        insecure
+          ? 'Voice dictation is blocked because this page is plain HTTP.\n\n' +
+            'Browsers only allow the microphone over HTTPS (or localhost). ' +
+            'Reopen Cookrew Mobile at the https:// address that `cookrew mobile` prints, ' +
+            'accept the one-time certificate warning, and the mic will work.\n\n' +
+            'Current URL: ' + location.href
+          : 'Voice dictation needs a browser with the Web Speech API ' +
+            '(Safari on iOS, Chrome on Android/desktop).'
+      )
+    }
+  }
+
+  /* ---------- state polling ---------- */
+
+  async function refreshState() {
+    try {
+      const state = await api('/api/state')
+      document.getElementById('wsName').textContent = state.workspace
+      nodes = state.nodes
+      activities = state.activities
+      renderWorld()
+      syncPopoutChrome()
+      if (!fitted && nodes.length > 0) {
+        fitted = true
+        fitView()
+      }
+    } catch (error) {
+      stageEmpty.textContent = 'CANNOT REACH COOKREW: ' + error.message
+      stageEmpty.style.display = 'flex'
+    }
+  }
+
+  applyView()
+  refreshState()
+  setInterval(refreshState, 2000)
+})()
+</script>
+</body>
+</html>
