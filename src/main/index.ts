@@ -479,6 +479,13 @@ function registerIpc(): void {
   ipcMain.on('pty:resize', (_e, terminalId: string, cols: number, rows: number) => {
     ptys.get(terminalId)?.resize(cols, rows)
   })
+  // Turn navigation: scroll the tmux view to a past ask (null returns live).
+  ipcMain.on('pty:jump', (_e, terminalId: string, text: string | null) => {
+    const session = ptys.get(terminalId)
+    if (!session) return
+    if (text) session.jumpToText(text)
+    else session.exitCopyMode()
+  })
   // One forwarder per terminal: React StrictMode double-mounts (and HMR
   // remounts) call attach repeatedly, and stacked listeners would duplicate
   // every byte of output in the renderer.

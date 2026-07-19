@@ -31,6 +31,8 @@ export interface CookrewApi {
   pickFiles: () => Promise<string[]>
   ptyInput: (terminalId: string, data: string) => void
   ptyResize: (terminalId: string, cols: number, rows: number) => void
+  /** Scroll the terminal view to a past ask's line; null returns to live. */
+  ptyJump: (terminalId: string, text: string | null) => void
   ptyAttach: (terminalId: string, onData: (data: string) => void) => () => void
   listActivity: () => Promise<TerminalActivity[]>
   onTerminalActivity: (cb: (activity: TerminalActivity) => void) => () => void

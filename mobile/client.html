@@ -145,6 +145,10 @@
     box-shadow: 2px 2px 0 var(--line);
     padding: 6px 10px;
     cursor: pointer;
+    /* Keep the label on one line: as a flex item next to a long URL/title
+       the button would otherwise be squeezed until its words wrap. */
+    white-space: nowrap;
+    flex: 0 0 auto;
   }
   .cr-btn:active { transform: translate(2px, 2px); box-shadow: none; }
   .cr-btn.primary { background: var(--amber); }
@@ -621,7 +625,12 @@
     background: var(--cream-hi);
     min-width: 0;
   }
-  .browser-actions .browser-url { flex: 1; text-align: left; color: var(--muted); }
+  .browser-actions .browser-url {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    color: var(--muted);
+  }
 
   .attention-banner {
     font-family: var(--font-pixel);
@@ -674,6 +683,16 @@
     cursor: pointer;
   }
   button.round:active { transform: translate(2px, 2px); box-shadow: none; }
+
+  /* Cookrew icon set (inline sprite): sized per context, tinted by color. */
+  .cr-icon {
+    width: 12px;
+    height: 12px;
+    display: inline-block;
+    vertical-align: -2px;
+    flex: 0 0 auto;
+  }
+  button.round .cr-icon { width: 18px; height: 18px; vertical-align: middle; }
   #send { background: var(--amber); }
   #mic.listening { background: var(--rose); color: var(--cream-hi); animation: cr-blink 1s steps(2) infinite; }
   #speakToggle.on { background: var(--amber); }
@@ -695,6 +714,17 @@
 </style>
 </head>
 <body>
+<!-- Cookrew icon sprite: chunky 16-grid glyphs, drawn in currentColor. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <g id="mi-expand" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="square"><path d="M9.6 2.4 H13.6 V6.4 M13.4 2.6 L9.2 6.8"/><path d="M6.4 13.6 H2.4 V9.6 M2.6 13.4 L6.8 9.2"/></g>
+    <g id="mi-close" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="square"><path d="M3.6 3.6 L12.4 12.4 M12.4 3.6 L3.6 12.4"/></g>
+    <g id="mi-attach" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M11.9 6.9 L7 11.8 a3.1 3.1 0 0 1 -4.4 -4.4 L8.5 1.5 a2.2 2.2 0 0 1 3.1 3.1 L6.2 10 a1.1 1.1 0 0 1 -1.6 -1.6 L9.2 3.8"/></g>
+    <g id="mi-mic" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="6" y="1.9" width="4" height="7" rx="2"/><path d="M3.7 7.6 a4.3 4.3 0 0 0 8.6 0"/><path d="M8 11.9 V13.9" stroke-linecap="square"/></g>
+    <g id="mi-speaker"><path d="M2.2 5.8 H5 L8.8 2.6 V13.4 L5 10.2 H2.2 Z" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/><path d="M10.8 5.4 C 12 6.6 12 9.4 10.8 10.6 M12.9 3.6 C 14.8 5.6 14.8 10.4 12.9 12.4" fill="none" stroke="currentColor" stroke-width="1.6"/></g>
+    <g id="mi-send" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><path d="M2.4 8 H12.2"/><path d="M8.6 3.6 L13 8 L8.6 12.4"/></g>
+  </defs>
+</svg>
 <div id="app">
   <header>
     <svg class="cr-logo-mark" viewBox="0 0 32 32" role="img" aria-label="Cookrew logo: baby hand saying yes">
@@ -714,7 +744,7 @@
   <div id="stage">
     <div id="world" data-mode="compact"></div>
     <div id="stageEmpty">NO CARDS YET</div>
-    <button id="fitBtn" class="cr-btn">FIT ⤢</button>
+    <button id="fitBtn" class="cr-btn">FIT <svg class="cr-icon" viewBox="0 0 16 16"><use href="#mi-expand"/></svg></button>
   </div>
 </div>
 
@@ -723,17 +753,17 @@
     <span id="popLed" class="cr-led"></span>
     <span id="popTitle" class="popout-title">—</span>
     <span id="popStatus" class="card-status"></span>
-    <button id="popClose" class="cr-btn">✕ CLOSE</button>
+    <button id="popClose" class="cr-btn"><svg class="cr-icon" viewBox="0 0 16 16"><use href="#mi-close"/></svg> CLOSE</button>
   </div>
   <div id="popAttention" class="attention-banner" style="display:none">⚠ NEEDS ATTENTION</div>
   <div id="popBody"></div>
   <div id="composer">
-    <button class="round" id="attach" title="Attach file">📎</button>
+    <button class="round" id="attach" title="Attach file"><svg class="cr-icon" viewBox="0 0 16 16"><use href="#mi-attach"/></svg></button>
     <input id="attachFile" type="file" multiple style="display:none" />
-    <button class="round" id="mic" title="Voice dictation">🎙️</button>
+    <button class="round" id="mic" title="Voice dictation"><svg class="cr-icon" viewBox="0 0 16 16"><use href="#mi-mic"/></svg></button>
     <input id="prompt" placeholder="Message this agent…" autocomplete="off" />
-    <button class="round" id="speakToggle" title="Speak replies">🔊</button>
-    <button class="round" id="send" title="Send">➤</button>
+    <button class="round" id="speakToggle" title="Speak replies"><svg class="cr-icon" viewBox="0 0 16 16"><use href="#mi-speaker"/></svg></button>
+    <button class="round" id="send" title="Send"><svg class="cr-icon" viewBox="0 0 16 16"><use href="#mi-send"/></svg></button>
   </div>
 </div>
 

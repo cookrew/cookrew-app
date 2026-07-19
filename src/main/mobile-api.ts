@@ -166,7 +166,7 @@ export async function handleMobileApi(
     return true
   }
 
-  const ptyMatch = p.match(/^\/api\/terminal\/([^/]+)\/(raw|resize|stream)$/)
+  const ptyMatch = p.match(/^\/api\/terminal\/([^/]+)\/(raw|resize|stream|jump)$/)
   if (ptyMatch) {
     const session = ptys.get(ptyMatch[1])
     if (!session) {
@@ -182,6 +182,13 @@ export async function handleMobileApi(
     if (method === 'POST' && ptyMatch[2] === 'resize') {
       const body = await readJson<{ cols?: number; rows?: number }>(request)
       if (body.cols && body.rows) session.resize(body.cols, body.rows)
+      respondJson(response, 200, { ok: true })
+      return true
+    }
+    if (method === 'POST' && ptyMatch[2] === 'jump') {
+      const body = await readJson<{ text?: string | null }>(request)
+      if (typeof body.text === 'string' && body.text.length > 0) session.jumpToText(body.text)
+      else session.exitCopyMode()
       respondJson(response, 200, { ok: true })
       return true
     }

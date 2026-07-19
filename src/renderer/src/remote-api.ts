@@ -96,6 +96,7 @@ export function createRemoteApi(): CookrewApi {
     pickFiles: () => Promise.resolve([]),
 
     ptyInput: (terminalId, data) => post(`/api/terminal/${terminalId}/raw`, { data }),
+    ptyJump: (terminalId, text) => post(`/api/terminal/${terminalId}/jump`, { text }),
     ptyResize: (terminalId, cols, rows) =>
       post(`/api/terminal/${terminalId}/resize`, { cols, rows }),
     ptyAttach: (terminalId, onData) => {

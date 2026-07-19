@@ -312,13 +312,37 @@ export function detectAgentActivity(chunk: string): boolean {
 }
 
 /**
- * Agent TUIs paint "esc to interrupt" only while a turn is actively running,
- * so it identifies a live turn even when the tracker never saw the prompt
- * (e.g. a tmux reattach mid-turn) — unlike finished-turn status lines or
- * transcript redraws, which never carry it.
+ * Completed-turn status body: "Brewed for 4m 15s" — past-tense verb plus
+ * elapsed time. Checked before the live hints because completed lines can
+ * also carry counters ("Baked for 1m 6s · ↓ 2.1k tokens").
  */
-const LIVE_WORK_RE = /esc to interrupt/i
+const COMPLETED_STATUS_RE = /^\w+ed for\s+\d/i
+/**
+ * In-flight markers on a spinner body: streaming ellipsis, parenthesised
+ * progress, token counters, or the (older-TUI) interrupt hint.
+ */
+const LIVE_HINT_RE = /…|\(|esc to interrupt|tokens/i
 
+/**
+ * True when a spinner status body reads as an in-flight turn, e.g.
+ * "Honking… (23m 20s · ↓ 24.5k tokens)" — as opposed to a completed one
+ * like "Brewed for 4m 15s".
+ */
+export function isLiveStatus(status: string): boolean {
+  return !COMPLETED_STATUS_RE.test(status) && LIVE_HINT_RE.test(status)
+}
+
+/**
+ * Agent TUIs paint a live spinner line only while a turn is actively
+ * running, so it identifies a live turn even when the tracker never saw the
+ * prompt (e.g. a tmux reattach mid-turn) — unlike finished-turn status lines
+ * or transcript redraws.
+ */
 export function detectLiveWork(chunk: string): boolean {
-  return LIVE_WORK_RE.test(stripTermNoise(chunk).replace(CSI_RE, ''))
+  const plain = stripTermNoise(chunk).replace(CSI_RE, '')
+  if (/esc to interrupt/i.test(plain)) return true
+  return plain.split('\n').some((line) => {
+    const spinner = SPINNER_LINE_RE.exec(line)
+    return spinner !== null && isLiveStatus(spinner[1])
+  })
 }

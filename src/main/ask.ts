@@ -9,13 +9,21 @@ export interface AskOptions {
   graceMs?: number
 }
 
+const SUBMIT_DELAY_BASE_MS = 150
+const SUBMIT_DELAY_PER_KB_MS = 100
+const SUBMIT_DELAY_MAX_MS = 1500
+
 /**
  * Pause between the prompt text and the submitting Enter. Agent TUIs treat a
  * burst of input as a paste; a carriage return inside that burst becomes a
- * literal newline in their input box instead of a submit. Writing the Enter
- * after a beat guarantees it is read as a keypress.
+ * literal newline in their input box instead of a submit. The pause scales
+ * with prompt size because the TUI ingests large pastes over time — an Enter
+ * arriving before ingestion finishes gets swallowed into the paste.
  */
-const SUBMIT_DELAY_MS = 150
+export function submitDelayMs(promptLength: number): number {
+  const scaled = SUBMIT_DELAY_BASE_MS + Math.round((promptLength / 1024) * SUBMIT_DELAY_PER_KB_MS)
+  return Math.min(scaled, SUBMIT_DELAY_MAX_MS)
+}
 
 /**
  * Send a prompt to a terminal and wait until its output goes quiet, then
@@ -33,7 +41,7 @@ export async function askTerminal(
 
   const before = session.fullText()
   session.write(prompt)
-  await new Promise((resolve) => setTimeout(resolve, SUBMIT_DELAY_MS))
+  await new Promise((resolve) => setTimeout(resolve, submitDelayMs(prompt.length)))
   session.write('\r')
 
   const startedAt = Date.now()

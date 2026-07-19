@@ -13,6 +13,7 @@ import {
   detectAttention,
   detectLiveWork,
   feedPromptBuffer,
+  isLiveStatus,
   parseAgentGlance,
   tailLines
 } from '../shared/turn'
@@ -320,6 +321,12 @@ export class TurnTracker extends EventEmitter {
     const elapsed = Date.now() - t.turnStartedAt
     if (elapsed < GRACE_MS || t.session.idleFor() < QUIESCENCE_MS) return
     const delta = diffOutput(t.snapshot, t.session.fullText())
+    // Agents pause well past quiescence mid-turn (long tool calls, slow
+    // output). While the tail still shows an in-flight spinner the turn is
+    // NOT over — hold it open. Completed-style status ("✻ Brewed for
+    // 4m 15s") and spinner-less output fall through to the quiescence rule.
+    const status = parseAgentGlance(delta).status
+    if (status !== null && isLiveStatus(status)) return
     const lines = cleanTurnLines(delta).filter((l) => !this.isPromptEcho(l, t.prompt))
     if (detectAttention(lines)) {
       // Blocked on the human — keep the poll alive; handleData resumes

@@ -221,6 +221,33 @@ export class PtySession extends EventEmitter {
       // session already gone — nothing to do
     }
   }
+
+  /**
+   * Scroll the pane's view to the most recent occurrence of `text` (tmux
+   * copy-mode literal search). Always restarts from the live tail so
+   * successive jumps land deterministically regardless of the current
+   * scroll position. Best-effort no-op without tmux.
+   */
+  jumpToText(text: string): void {
+    if (!this.usesTmux || this.disposed) return
+    this.tmuxBestEffort(['send-keys', '-t', this.sessionName, '-X', 'cancel'])
+    this.tmuxBestEffort(['copy-mode', '-t', this.sessionName])
+    this.tmuxBestEffort(['send-keys', '-t', this.sessionName, '-X', 'search-backward', text])
+  }
+
+  /** Leave copy-mode and return the pane to the live tail. */
+  exitCopyMode(): void {
+    if (!this.usesTmux || this.disposed) return
+    this.tmuxBestEffort(['send-keys', '-t', this.sessionName, '-X', 'cancel'])
+  }
+
+  private tmuxBestEffort(args: string[]): void {
+    try {
+      execFileSync('tmux', ['-L', TMUX_LABEL, ...args], { stdio: 'ignore' })
+    } catch {
+      // pane not in the expected mode (e.g. cancel outside copy-mode)
+    }
+  }
 }
 
 // Terminals are visibly tmux: the status bar is ON so window/pane management

@@ -10,6 +10,7 @@ import type { ScreenRect } from './zoom-lod'
 import { useLodLayout } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
 import { cookrew } from './api'
+import { useTurnPaging } from './nodes/TurnPager'
 import { TurnHistoryPanel } from './TurnHistoryPanel'
 import { attachFilesToTerminal } from './AttachButton'
 import { CrIcon } from './icons'
@@ -91,6 +92,37 @@ function TerminalOverlay({
   // per node) always sees the latest agent detection from activity events.
   const agentRef = useRef(false)
   agentRef.current = activity?.agent ?? node.preset !== 'Shell'
+
+  // Turn switching: ◀ ▶ page through past asks; picking one scrolls the
+  // terminal to that ask's line (tmux copy-mode search), and returning to
+  // live exits copy-mode so the tail streams again.
+  const paging = useTurnPaging(node.id, activity?.turnCount ?? 0)
+  const viewingIndex = paging.viewing?.index ?? null
+  const viewingPrompt = paging.viewing?.prompt ?? null
+  const jumpedRef = useRef(false)
+  useEffect(() => {
+    if (viewingIndex !== null) {
+      const line = (viewingPrompt ?? '').split('\n').find((l) => l.trim() !== '')?.trim() ?? ''
+      if (line) {
+        jumpedRef.current = true
+        // Short literal chunk: long asks wrap across pane lines, which a
+        // full-length literal search would never match.
+        cookrew().ptyJump(node.id, line.slice(0, 30))
+      }
+    } else if (jumpedRef.current) {
+      jumpedRef.current = false
+      cookrew().ptyJump(node.id, null)
+    }
+  }, [viewingIndex, viewingPrompt, node.id])
+  // Never leave the pane stranded in copy-mode when the overlay unmounts.
+  useEffect(
+    () => () => {
+      if (jumpedRef.current) cookrew().ptyJump(node.id, null)
+    },
+    [node.id]
+  )
+
+  const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
 
   useEffect(() => {
     const container = containerRef.current
@@ -415,6 +447,26 @@ function TerminalOverlay({
         {node.orch && <span className="cr-chip amber">ORCH</span>}
         <span className={`cr-chip${PHASE_CHIP[phase].cls}`}>{PHASE_CHIP[phase].label}</span>
         <div className="popout-actions">
+          <button
+            className="cr-btn sm icon"
+            title="Previous turn"
+            aria-label="Previous turn"
+            disabled={paging.count === 0 || (paging.position !== null && paging.position <= 1)}
+            onMouseDown={keepFocus}
+            onClick={paging.back}
+          >
+            <CrIcon name="prev" />
+          </button>
+          <button
+            className="cr-btn sm icon"
+            title="Next turn"
+            aria-label="Next turn"
+            disabled={paging.viewing === null}
+            onMouseDown={keepFocus}
+            onClick={paging.forward}
+          >
+            <CrIcon name="next" />
+          </button>
           {(activity?.turnCount ?? 0) > 0 && (
             <button
               className={`cr-btn sm icon${showTurns ? ' active' : ''}`}
@@ -448,10 +500,24 @@ function TerminalOverlay({
         </div>
       </div>
       {showTurns && <TurnHistoryPanel terminalId={node.id} onClose={() => setShowTurns(false)} />}
-      {activity?.prompt && (
-        <div className="popout-ask" title={activity.prompt}>
-          <span className="popout-ask-label">YOU ❯</span>
-          <span className="popout-ask-text">{clip(activity.prompt, 300)}</span>
+      {(paging.viewing !== null || activity?.prompt) && (
+        <div className="popout-ask" title={paging.viewing?.prompt ?? activity?.prompt ?? ''}>
+          <span className="popout-ask-label">
+            {paging.viewing ? `TURN ${paging.viewing.index}/${paging.count} ❯` : 'YOU ❯'}
+          </span>
+          <span className="popout-ask-text">
+            {clip(paging.viewing?.prompt ?? activity?.prompt ?? '', 300)}
+          </span>
+          {paging.viewing !== null && (
+            <button
+              className="cr-btn sm popout-ask-live"
+              title="Back to the live turn"
+              onMouseDown={keepFocus}
+              onClick={paging.live}
+            >
+              LIVE
+            </button>
+          )}
         </div>
       )}
       <div ref={containerRef} className="popout-terminal" />
