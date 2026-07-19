@@ -1,10 +1,17 @@
-// Fork an agent from one of its recorded turns: a NEW terminal card seeded
-// with the source's transcript up to that turn. The original agent is never
-// touched — this is the non-destructive sibling of an in-place rewind.
+// Fork an agent from one of its recorded turns: a NEW terminal card that
+// continues from that turn. The original agent is never touched — this is
+// the non-destructive sibling of an in-place rewind.
+//
+// Two mechanisms, best first:
+//  1. Native session fork (Claude Code): resume a truncated COPY of the
+//     source's real session file — full-fidelity context, origin read-only.
+//  2. Prompt preamble (any agent, or when the session can't be found): a
+//     fresh agent seeded with a plain-text transcript replay.
 
 import { randomUUID } from 'node:crypto'
 import { DEFAULT_TERMINAL_SIZE, TerminalNodeData, uniqueName } from '../shared/model'
-import { buildForkPreamble } from '../shared/fork'
+import { buildForkPreamble, buildResumeForkNotice } from '../shared/fork'
+import { forkClaudeSession } from './claude-fork'
 import type { WorkspaceStore } from './store'
 import type { PtyManager, PtySession } from './pty'
 import type { TurnTracker } from './turn-tracker'
@@ -52,6 +59,15 @@ export function forkTerminal(
     throw new Error(`Agent '${source.name}' has no recorded turn ${index}`)
   }
 
+  // Prefer a native session fork (truncated session copy + --resume); null
+  // means not Claude / no matching session file, so replay a text preamble.
+  const native = forkClaudeSession({
+    command: source.command,
+    cwd: source.cwd,
+    turns: history,
+    turnIndex: index
+  })
+
   const name = uniqueName(
     `${source.name} ⑂T${index}`,
     deps.store.state.nodes.map((n) => n.name)
@@ -61,7 +77,7 @@ export function forkTerminal(
     id: randomUUID(),
     name,
     preset: source.preset,
-    command: source.command,
+    command: native ? native.command : source.command,
     cwd: source.cwd,
     orch: false,
     role: source.role,
@@ -77,15 +93,17 @@ export function forkTerminal(
   deps.store.connect(source.id, added.id)
   deps.spawnTerminal(added)
 
-  const preamble = buildForkPreamble({
-    forkName: added.name,
-    sourceName: source.name,
-    turns: history,
-    turnIndex: index
-  })
+  const firstMessage = native
+    ? buildResumeForkNotice({ forkName: added.name, sourceName: source.name, turnIndex: index })
+    : buildForkPreamble({
+        forkName: added.name,
+        sourceName: source.name,
+        turns: history,
+        turnIndex: index
+      })
   const session = deps.ptys.get(added.id)
   if (session) {
-    injectWhenReady(session, preamble).catch((error) => {
+    injectWhenReady(session, firstMessage).catch((error) => {
       console.error('Fork context injection failed:', error)
     })
   }
