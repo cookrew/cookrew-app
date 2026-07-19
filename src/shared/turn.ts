@@ -112,16 +112,37 @@ export interface PromptFeed {
   buffer: string
   /** Lines submitted with Enter during this feed, in order. */
   submitted: string[]
+  /** True while a bracketed paste is open (ESC[200~ seen, no ESC[201~ yet). */
+  inPaste: boolean
 }
 
+/** Bracketed-paste markers, matched BEFORE the CSI strip would eat them. */
+const PASTE_OPEN = '\x1b[200~'
+const PASTE_CLOSE = '\x1b[201~'
+
 /**
- * Accumulate typed input into a prompt line, best effort. Handles Enter
- * (submit), backspace, ctrl-c/ctrl-u (clear) and strips escape sequences.
+ * Bytes inside a bracketed paste are literal prompt text, exactly as agent
+ * TUIs treat them: CR/LF become newlines in the buffer — never submits —
+ * and other control bytes are dropped.
  */
-export function feedPromptBuffer(buffer: string, data: string): PromptFeed {
+function appendPastedText(buffer: string, segment: string): string {
+  const text = stripTermNoise(segment)
+    .replace(CSI_RE, '')
+    .replace(/\r\n?/g, '\n')
+    .split('')
+    .filter((char) => char === '\n' || char === '\t' || (char >= ' ' && char !== '\x7f'))
+    .join('')
+  return (buffer + text).slice(0, MAX_PROMPT_BUFFER)
+}
+
+/** Keystrokes outside a paste: Enter submits, backspace edits, ctrl-c/u clears. */
+function feedTypedSegment(
+  buffer: string,
+  segment: string
+): { line: string; submitted: string[] } {
   const submitted: string[] = []
   let line = buffer
-  const plain = stripTermNoise(data).replace(CSI_RE, '')
+  const plain = stripTermNoise(segment).replace(CSI_RE, '')
   for (const char of plain) {
     if (char === '\r' || char === '\n') {
       submitted.push(line.trim())
@@ -134,7 +155,36 @@ export function feedPromptBuffer(buffer: string, data: string): PromptFeed {
       line = line.length < MAX_PROMPT_BUFFER ? line + char : line
     }
   }
-  return { buffer: line, submitted }
+  return { line, submitted }
+}
+
+/**
+ * Accumulate typed input into a prompt line, best effort. Handles Enter
+ * (submit), backspace, ctrl-c/ctrl-u (clear) and strips escape sequences.
+ * Bracketed pastes buffer their content verbatim without ever submitting;
+ * `inPaste` carries the open-paste state across chunks, since the close
+ * marker may arrive in a different chunk than the pasted content.
+ */
+export function feedPromptBuffer(buffer: string, data: string, inPaste = false): PromptFeed {
+  const submitted: string[] = []
+  let line = buffer
+  let pasting = inPaste
+  let rest = data
+  while (rest.length > 0) {
+    const marker = pasting ? PASTE_CLOSE : PASTE_OPEN
+    const at = rest.indexOf(marker)
+    const segment = at === -1 ? rest : rest.slice(0, at)
+    rest = at === -1 ? '' : rest.slice(at + marker.length)
+    if (pasting) {
+      line = appendPastedText(line, segment)
+    } else {
+      const fed = feedTypedSegment(line, segment)
+      line = fed.line
+      submitted.push(...fed.submitted)
+    }
+    if (at !== -1) pasting = !pasting
+  }
+  return { buffer: line, submitted, inPaste: pasting }
 }
 
 /** Lines that are pure TUI chrome: box drawing, rules, empty input boxes. */
@@ -243,4 +293,32 @@ export function parseAgentGlance(text: string): AgentGlance {
   }
 
   return { status, tools, message }
+}
+
+/**
+ * True when a raw output chunk contains agent-transcript activity: a
+ * spinner/status line or a ⏺ entry. The tracker's self-healing uses this to
+ * decide that output arriving during 'replied'/'idle' is the agent working,
+ * not typed-echo or shell noise.
+ */
+export function detectAgentActivity(chunk: string): boolean {
+  const lines = stripTermNoise(chunk).replace(CSI_RE, '').split('\n')
+  return lines.some((line) => {
+    const spinner = SPINNER_LINE_RE.exec(line)
+    if (spinner && STATUS_HINT_RE.test(spinner[1])) return true
+    const entry = ENTRY_RE.exec(line)
+    return entry !== null && entry[1].trim().length > 0
+  })
+}
+
+/**
+ * Agent TUIs paint "esc to interrupt" only while a turn is actively running,
+ * so it identifies a live turn even when the tracker never saw the prompt
+ * (e.g. a tmux reattach mid-turn) — unlike finished-turn status lines or
+ * transcript redraws, which never carry it.
+ */
+const LIVE_WORK_RE = /esc to interrupt/i
+
+export function detectLiveWork(chunk: string): boolean {
+  return LIVE_WORK_RE.test(stripTermNoise(chunk).replace(CSI_RE, ''))
 }

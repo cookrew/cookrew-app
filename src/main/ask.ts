@@ -10,6 +10,14 @@ export interface AskOptions {
 }
 
 /**
+ * Pause between the prompt text and the submitting Enter. Agent TUIs treat a
+ * burst of input as a paste; a carriage return inside that burst becomes a
+ * literal newline in their input box instead of a submit. Writing the Enter
+ * after a beat guarantees it is read as a keypress.
+ */
+const SUBMIT_DELAY_MS = 150
+
+/**
  * Send a prompt to a terminal and wait until its output goes quiet, then
  * return the new text produced since the prompt was sent. This mirrors how
  * `cookrew ask` blocks until the target agent finishes responding.
@@ -24,8 +32,8 @@ export async function askTerminal(
   const graceMs = options.graceMs ?? 1500
 
   const before = session.fullText()
-  // Bracketed-paste style write, then a carriage return to submit.
   session.write(prompt)
+  await new Promise((resolve) => setTimeout(resolve, SUBMIT_DELAY_MS))
   session.write('\r')
 
   const startedAt = Date.now()
