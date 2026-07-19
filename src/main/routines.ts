@@ -17,7 +17,7 @@ interface RoutineRuntime {
 
 /**
  * Cron-lite scheduler: fires routine commands into terminal PTYs.
- * Mirrors `maestri routine` with `--every` and `--daily` schedules.
+ * Cron-lite routines with `--every` and `--daily` schedules.
  */
 export class RoutineScheduler {
   private routines: RoutineRuntime[] = []

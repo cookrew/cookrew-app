@@ -12,6 +12,13 @@ export interface CanvasSize {
   height: number
 }
 
+/** Lineage of a terminal forked from another agent's turn. */
+export interface ForkOrigin {
+  sourceId: string
+  sourceName: string
+  turnIndex: number
+}
+
 export interface TerminalNodeData {
   kind: 'terminal'
   id: string
@@ -21,6 +28,8 @@ export interface TerminalNodeData {
   cwd: string
   orch: boolean
   role: string | null
+  /** Set when this agent was forked from another agent's turn. */
+  forkOf?: ForkOrigin | null
   position: CanvasPosition
   size: CanvasSize
 }
@@ -129,7 +138,7 @@ export function activeBrowserTab(node: BrowserNodeData): BrowserTab {
   return tabs.find((t) => t.id === node.activeTabId) ?? tabs[0]
 }
 
-/** Derive a Maestri-style note name from its first content line. */
+/** Derive a note name from its first content line. */
 export function noteNameFromContent(content: string): string {
   const firstLine = content.split('\n')[0] ?? ''
   const slug = firstLine

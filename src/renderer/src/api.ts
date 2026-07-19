@@ -1,5 +1,5 @@
 import type { CanvasNode, Connection, WorkspaceList, WorkspaceMeta, WorkspaceState } from '../../shared/model'
-import type { TerminalActivity } from '../../shared/turn'
+import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 
 export interface CookrewApi {
   getWorkspace: () => Promise<WorkspaceState>
@@ -21,11 +21,23 @@ export interface CookrewApi {
     position: { x: number; y: number }
     orch: boolean
   }) => Promise<CanvasNode>
+  /**
+   * Resolve dropped/picked File objects to absolute paths on the machine
+   * running the agents: the Electron bridge reads the local path, the remote
+   * (phone) api uploads the bytes first. Callers paste the returned paths.
+   */
+  attachFiles: (files: File[]) => Promise<string[]>
+  /** Native multi-file picker (desktop only; returns [] elsewhere). */
+  pickFiles: () => Promise<string[]>
   ptyInput: (terminalId: string, data: string) => void
   ptyResize: (terminalId: string, cols: number, rows: number) => void
   ptyAttach: (terminalId: string, onData: (data: string) => void) => () => void
   listActivity: () => Promise<TerminalActivity[]>
   onTerminalActivity: (cb: (activity: TerminalActivity) => void) => () => void
+  /** Completed turns of a terminal (oldest first) for the card pager. */
+  listTurns: (terminalId: string) => Promise<TurnRecord[]>
+  /** Fork a NEW agent card from a past turn; omit turnIndex for the latest. */
+  forkTerminal: (sourceId: string, turnIndex?: number) => Promise<CanvasNode>
   onBrowserCommand: (cb: (req: { id: string; args: string[]; terminalId: string }) => void) => () => void
   browserResult: (id: string, ok: boolean, output: string) => void
   /** Forward a browser thumbnail frame to main (served to the mobile client). */
@@ -50,7 +62,7 @@ function bridge(): CookrewApi | undefined {
  * Returns the Electron preload bridge when present. Outside Electron there
  * are two fallbacks: the remote HTTP/SSE api when served by the mobile
  * server (window.COOKREW_MOBILE marker), else the in-memory demo (plain
- * browser tab, Maestri browser).
+ * browser tab, embedded browser node).
  */
 export function cookrew(): CookrewApi {
   const ipc = bridge()

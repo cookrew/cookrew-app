@@ -1,21 +1,20 @@
 # Cookrew
 
-An open-source spatial workspace for AI agents, inspired by [Maestri](https://www.themaestri.app).
-Terminals, sticky notes, and live browser browsers live together on an infinite canvas,
-wired with rope cables — and every connected agent gets a `cookrew` CLI to talk to its
+An open-source spatial workspace for AI agents — the desktop half of Cookrew, the multiplayer kitchen for humans & agents.
+Terminals, sticky notes, and live browsers live together on an infinite canvas,
+wired with cables — and every connected agent gets a `cookrew` CLI to talk to its
 neighbors, read/write notes, drive browsers, recruit teammates, and schedule routines.
 
-Built with Electron + React, so it runs beyond macOS (the original Maestri is a native
-Swift app and macOS-only).
+Built with Electron + React, so it runs on macOS, Linux, and Windows.
 
 ## Features
 
 - **Infinite canvas** — dark dotted grid, pan/zoom, minimap, drag/resize nodes
 - **Terminal nodes** — real PTYs (node-pty) rendered with xterm.js; agent presets
   (Claude Code, Codex, OpenCode, plain shell); Orch flag for orchestrator terminals
-- **Notes** — markdown sticky notes, auto-named from their first line (rename-on-edit,
-  Maestri-style), persisted as real `.md` files under `~/.cookrew/notes`
-- **Connections** — dashed rope cables between any nodes; connectivity defines what an
+- **Notes** — markdown sticky notes, auto-named from their first line (rename-on-edit),
+  persisted as real `.md` files under `~/.cookrew/notes`
+- **Connections** — dashed cables between any nodes; connectivity defines what an
   agent can see and touch through the CLI
 - **Browsers** — embedded browser nodes with per-browser isolated sessions and a full
   automation surface (snapshot with `@e1` refs, click, fill, type, key, navigate,
@@ -38,7 +37,7 @@ Swift app and macOS-only).
   - `cookrew notify "message"` — desktop notification
 - **ask engine** — prompts are written into the target PTY; a headless xterm mirrors
   every terminal in the main process, detects output quiescence, and returns the newly
-  produced text (same blocking semantics as `maestri ask`)
+  produced text, blocking until the reply is complete
 - **Workspace persistence** — the whole canvas (nodes, connections) is restored on
   launch from `~/.cookrew/workspace.json`
 
@@ -73,14 +72,14 @@ npx electron-rebuild -f -w node-pty
 ┌──────▼──────────────────────────────▼─────────────────────────────┐
 │  Renderer: React + React Flow canvas                              │
 │  TerminalNode (xterm.js) · NoteNode (marked) · BrowserNode         │
-│  (webview + snapshot/refs engine) · RopeEdge · Toolbar · MiniMap  │
+│  (webview + snapshot/refs engine) · CableEdge · Toolbar · MiniMap  │
 └───────────────────────────────────────────────────────────────────┘
        ▲
        │ Unix socket (COOKREW_SOCKET)
   cookrew CLI (cli/cookrew.mjs, copied next to the socket, on every PTY's PATH)
 ```
 
-Design choices mirroring Maestri:
+Design choices:
 
 - The CLI is the entire agent API — agents need zero SDKs, just a binary on PATH.
 - Connectivity is authorization: `cookrew` only reaches nodes wired to your terminal.
@@ -90,11 +89,11 @@ Design choices mirroring Maestri:
 
 ## Roadmap (not yet implemented)
 
-- Floors (git-isolated per-branch working trees; use worktrees for cross-platform)
+- Stations (git-isolated per-branch working trees via worktrees; one station per branch)
 - Roles (`role.json` presets injected as recruit context) and `--replace` swaps
-- Batuta-style command palette, prompt composer, file-tree nodes, groups/tidy
+- Menu — command palette, prompt composer, file-tree nodes, groups/tidy
 - Remote environments (SSH/Docker bridge over TCP with per-terminal tokens)
-- Ombro-style local-model companion
+- Sous — local-model sous-chef companion
 
 ## License
 

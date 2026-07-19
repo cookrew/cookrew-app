@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { activeBrowserTab, noteNameFromContent, browserTabs, uniqueName } from '../src/shared/model'
 
 describe('noteNameFromContent', () => {
-  it('slugifies the first line like Maestri', () => {
+  it('slugifies the first line', () => {
     expect(noteNameFromContent('Cookrew spec scratchpad — testing note API')).toBe(
       'cookrew-spec-scratchpad-test'
     )

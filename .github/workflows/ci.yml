@@ -39,3 +39,9 @@ jobs:
             echo "::error::Found leftover pre-rename 'cava' references (see above)"
             exit 1
           fi
+          if grep -rn --exclude-dir=node_modules --exclude-dir=out --exclude-dir=.git \
+              --exclude=package-lock.json \
+              -i "maestri" src cli mobile tests docs README.md package.json; then
+            echo "::error::Found 'maestri' references — product copy must stand on its own (see above)"
+            exit 1
+          fi

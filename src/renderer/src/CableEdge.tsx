@@ -1,10 +1,10 @@
 import { EdgeProps } from '@xyflow/react'
 
 /**
- * Maestri-style "rope" cable: a dashed bezier with a slack sag between
+ * Cable edge: a dashed bezier with a slack sag between
  * the two nodes, drawn beneath the node layer.
  */
-export function RopeEdge({
+export function CableEdge({
   id,
   sourceX,
   sourceY,
@@ -18,7 +18,7 @@ export function RopeEdge({
   const path = `M ${sourceX} ${sourceY} Q ${midX} ${midY} ${targetX} ${targetY}`
 
   return (
-    <g className="rope-edge">
+    <g className="cable-edge">
       <path
         id={id}
         d={path}

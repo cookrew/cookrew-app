@@ -10,7 +10,7 @@ import type { CookrewApi } from './api'
 
 /**
  * Browser demo backend: when the renderer runs outside Electron (plain
- * browser tab, or embedded in a Maestri browser) there is no preload bridge,
+ * browser tab, or an embedded browser node) there is no preload bridge,
  * no PTYs and no socket. This mock keeps the whole canvas interactive with
  * an in-memory workspace and a simulated shell.
  */
@@ -36,7 +36,7 @@ function demoWorkspace(): WorkspaceState {
     name: 'welcome-to-cookrew',
     customName: null,
     content:
-      '# Welcome to Cookrew\n\nThis is the **browser demo** of the open-source Maestri clone.\n\n- drag nodes by their headers\n- double-click me to edit\n- type in the terminal\n- use the toolbar to add nodes\n\nThe real app runs on Electron with live PTYs, a Unix-socket `cookrew` CLI, browsers and routines.',
+      '# Welcome to Cookrew\n\nThis is the **browser demo** of Cookrew Desktop.\n\n- drag nodes by their headers\n- double-click me to edit\n- type in the terminal\n- use the toolbar to add nodes\n\nThe real app runs on Electron with live PTYs, a Unix-socket `cookrew` CLI, browsers and routines.',
     locked: false,
     position: { x: 40, y: 150 },
     size: { width: 260, height: 260 }
@@ -63,7 +63,7 @@ function demoWorkspace(): WorkspaceState {
 const DEMO_RESPONSES: Record<string, string> = {
   help: 'cookrew demo shell — try: help, list, about, clear',
   list: 'You:\r\n  - name: "Conductor", orch: true\r\n\r\nConnected notes:\r\n  - name: "welcome-to-cookrew"\r\nConnected browsers:\r\n  - name: "Browser"',
-  about: 'Cookrew — open-source Maestri clone. Electron + React Flow + xterm.js + node-pty.\r\nThis browser demo simulates the shell; the desktop app runs real PTYs.'
+  about: 'Cookrew — open-source spatial workspace for AI agents. Electron + React Flow + xterm.js + node-pty.\r\nThis browser demo simulates the shell; the desktop app runs real PTYs.'
 }
 
 export function createDemoApi(): CookrewApi {
@@ -202,6 +202,10 @@ export function createDemoApi(): CookrewApi {
       return Promise.resolve(terminal)
     },
 
+    // No filesystem in the demo tab — attachments are a no-op.
+    attachFiles: () => Promise.resolve([]),
+    pickFiles: () => Promise.resolve([]),
+
     ptyInput: (terminalId, data) => {
       const out = ptyListeners.get(terminalId)
       if (!out) return
@@ -241,6 +245,34 @@ export function createDemoApi(): CookrewApi {
 
     listActivity: () => Promise.resolve([]),
     onTerminalActivity: () => () => undefined,
+
+    // The demo shell has no turn tracking; forking degrades to a plain clone
+    // so the canvas interaction still demonstrates the lineage edge.
+    listTurns: () => Promise.resolve([]),
+    forkTerminal: (sourceId) => {
+      const source = state.nodes.find((n) => n.id === sourceId)
+      if (!source || source.kind !== 'terminal') {
+        return Promise.reject(new Error('Fork source is not a terminal node'))
+      }
+      const fork: CanvasNode = {
+        ...source,
+        id: `demo-fork-${Date.now()}`,
+        name: uniqueName(`${source.name} ⑂`, state.nodes.map((n) => n.name)),
+        orch: false,
+        forkOf: { sourceId: source.id, sourceName: source.name, turnIndex: 1 },
+        position: {
+          x: source.position.x + source.size.width + 80,
+          y: source.position.y + 80
+        }
+      }
+      const conn: Connection = { id: `demo-fork-conn-${Date.now()}`, a: source.id, b: fork.id }
+      broadcast({
+        ...state,
+        nodes: [...state.nodes, fork],
+        connections: [...state.connections, conn]
+      })
+      return Promise.resolve(fork)
+    },
 
     onBrowserCommand: () => () => undefined,
     browserResult: () => undefined,

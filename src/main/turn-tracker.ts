@@ -1,9 +1,13 @@
 import { EventEmitter } from 'node:events'
 import type { PtySession } from './pty'
 import { diffOutput } from './ask'
+import { summarizeTurn, TurnSummarizer } from './sous'
+import type { TurnStore } from './turn-store'
 import {
   TerminalActivity,
   TurnPhase,
+  TurnRecord,
+  appendTurnRecord,
   cleanTurnLines,
   detectAttention,
   feedPromptBuffer,
@@ -19,6 +23,13 @@ const POLL_MS = 400
 const PUSH_THROTTLE_MS = 250
 const SUMMARY_TAIL = 14
 const REPLY_TAIL = 60
+/**
+ * First Sous title request fires almost immediately — the prompt alone is
+ * enough for a first title, and many real turns finish within seconds.
+ */
+const TITLE_FIRST_MS = 800
+/** While the turn keeps running, refresh the Sous title at this cadence. */
+const TITLE_REFRESH_MS = 15_000
 
 interface TrackedTerminal {
   session: PtySession
@@ -28,9 +39,14 @@ interface TrackedTerminal {
   prompt: string | null
   snapshot: string
   reply: string | null
+  /** Latest Sous (local model) summary of the current turn. */
+  title: string | null
+  /** Bumped on every turn start so stale summaries are dropped. */
+  titleGen: number
   turnStartedAt: number
   pushTimer: NodeJS.Timeout | null
   pollTimer: NodeJS.Timeout | null
+  titleTimer: NodeJS.Timeout | null
   onInput: (data: string) => void
   onData: () => void
   onExit: () => void
@@ -45,6 +61,43 @@ interface TrackedTerminal {
 export class TurnTracker extends EventEmitter {
   private tracked = new Map<string, TrackedTerminal>()
 
+  /** Both injectable for tests; store null = in-memory only. */
+  constructor(
+    private summarize: TurnSummarizer = summarizeTurn,
+    private store: TurnStore | null = null
+  ) {
+    super()
+  }
+
+  /**
+   * Completed turns per terminal. Kept OUTSIDE `tracked` so history survives
+   * untrack/re-track cycles (workspace switches reattach the same tmux
+   * session); it is only dropped via clearHistory when a node is removed.
+   * Backed by TurnStore files (~/.cookrew/turns) so restarts keep it too —
+   * terminal ids are stable across runs.
+   */
+  private histories = new Map<string, TurnRecord[]>()
+
+  /** Completed turns for a terminal, oldest first (lazy-loaded from disk). */
+  history(terminalId: string): TurnRecord[] {
+    const cached = this.histories.get(terminalId)
+    if (cached) return cached
+    const loaded = this.store?.load(terminalId) ?? []
+    this.histories.set(terminalId, loaded)
+    return loaded
+  }
+
+  /** Forget a removed terminal's turns (node deletion, not detach). */
+  clearHistory(terminalId: string): void {
+    this.histories.delete(terminalId)
+    this.store?.remove(terminalId)
+  }
+
+  /** Write out pending history saves now (app quit). */
+  flushHistories(): void {
+    this.store?.flushAll()
+  }
+
   track(session: PtySession, agent: boolean): void {
     if (this.tracked.has(session.terminalId)) return
     const t: TrackedTerminal = {
@@ -55,9 +108,12 @@ export class TurnTracker extends EventEmitter {
       prompt: null,
       snapshot: '',
       reply: null,
+      title: null,
+      titleGen: 0,
       turnStartedAt: 0,
       pushTimer: null,
       pollTimer: null,
+      titleTimer: null,
       onInput: (data) => this.handleInput(session.terminalId, data),
       onData: () => this.handleData(session.terminalId),
       onExit: () => this.handleExit(session.terminalId)
@@ -83,6 +139,8 @@ export class TurnTracker extends EventEmitter {
         lines: ['— process exited —'],
         reply: t.reply,
         glance: null,
+        title: t.title,
+        turnCount: this.history(terminalId).length,
         turnStartedAt: null,
         updatedAt: Date.now()
       } satisfies TerminalActivity)
@@ -95,6 +153,7 @@ export class TurnTracker extends EventEmitter {
     if (!t) return
     if (t.pushTimer) clearTimeout(t.pushTimer)
     if (t.pollTimer) clearInterval(t.pollTimer)
+    if (t.titleTimer) clearTimeout(t.titleTimer)
     t.session.removeListener('input', t.onInput)
     t.session.removeListener('data', t.onData)
     t.session.removeListener('exit', t.onExit)
@@ -133,11 +192,46 @@ export class TurnTracker extends EventEmitter {
     t.phase = 'thinking'
     t.prompt = prompt
     t.reply = null
+    t.title = null
+    t.titleGen += 1
     t.turnStartedAt = Date.now()
     if (!t.pollTimer) {
       t.pollTimer = setInterval(() => this.poll(t), POLL_MS)
     }
+    this.scheduleTitle(t, TITLE_FIRST_MS)
     this.push(t)
+  }
+
+  private scheduleTitle(t: TrackedTerminal, delay: number): void {
+    if (t.titleTimer) clearTimeout(t.titleTimer)
+    t.titleTimer = setTimeout(() => {
+      t.titleTimer = null
+      void this.refreshTitle(t)
+    }, delay)
+  }
+
+  /**
+   * Ask the local model (Sous) what the running turn is doing and surface it
+   * as the card title. Best effort: a summarizer returning null (no Ollama,
+   * timeout) leaves the title untouched, and a generation bump — a new turn
+   * started while the request was in flight — discards the stale result.
+   */
+  private async refreshTitle(t: TrackedTerminal): Promise<void> {
+    if (t.phase !== 'thinking' && t.phase !== 'waiting') return
+    const gen = t.titleGen
+    const delta = diffOutput(t.snapshot, t.session.fullText())
+    const title = await this.summarize({
+      prompt: t.prompt ?? '',
+      tools: parseAgentGlance(delta).tools,
+      lines: cleanTurnLines(delta)
+    })
+    if (this.tracked.get(t.session.terminalId) !== t || t.titleGen !== gen) return
+    if (t.phase !== 'thinking' && t.phase !== 'waiting') return
+    if (title !== null && title !== t.title) {
+      t.title = title
+      this.push(t)
+    }
+    this.scheduleTitle(t, TITLE_REFRESH_MS)
   }
 
   /**
@@ -170,11 +264,53 @@ export class TurnTracker extends EventEmitter {
     const finalMessage = parseAgentGlance(delta).message
     t.reply = finalMessage ?? tailLines(lines, REPLY_TAIL).join('\n').trim()
     t.phase = 'replied'
+    const id = t.session.terminalId
+    const appended = appendTurnRecord(this.history(id), {
+      prompt: t.prompt ?? '',
+      reply: t.reply,
+      ...(t.title !== null ? { title: t.title } : {}),
+      startedAt: t.turnStartedAt,
+      endedAt: Date.now()
+    })
+    this.histories.set(id, appended)
+    this.store?.scheduleSave(id, appended)
     if (t.pollTimer) {
       clearInterval(t.pollTimer)
       t.pollTimer = null
     }
+    if (t.titleTimer) {
+      clearTimeout(t.titleTimer)
+      t.titleTimer = null
+    }
     this.push(t)
+    void this.finalizeTitle(t, appended[appended.length - 1].index)
+  }
+
+  /**
+   * Final Sous pass once a turn completed: summarize prompt + full reply and
+   * back-fill the freshly appended TurnRecord. This is what gives short
+   * turns (which end before any mid-turn refresh fires) their title.
+   */
+  private async finalizeTitle(t: TrackedTerminal, recordIndex: number): Promise<void> {
+    const gen = t.titleGen
+    const title = await this.summarize({
+      prompt: t.prompt ?? '',
+      tools: [],
+      lines: (t.reply ?? '').split('\n')
+    })
+    if (title === null) return
+    const id = t.session.terminalId
+    const history = this.histories.get(id)
+    if (history?.some((r) => r.index === recordIndex)) {
+      const updated = history.map((r) => (r.index === recordIndex ? { ...r, title } : r))
+      this.histories.set(id, updated)
+      this.store?.scheduleSave(id, updated)
+    }
+    // Only retitle the live card if no new turn started while summarizing.
+    if (this.tracked.get(id) === t && t.titleGen === gen && t.phase === 'replied') {
+      t.title = title
+      this.push(t)
+    }
   }
 
   private isPromptEcho(line: string, prompt: string | null): boolean {
@@ -218,6 +354,8 @@ export class TurnTracker extends EventEmitter {
       lines,
       reply: t.reply,
       glance: t.agent && inTurn ? parseAgentGlance(rawDelta) : null,
+      title: t.title,
+      turnCount: this.history(terminalId).length,
       turnStartedAt: inTurn ? t.turnStartedAt : null,
       updatedAt: Date.now()
     }

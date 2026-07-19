@@ -17,12 +17,17 @@ import { askRaw, askTerminal, decodeRawEscapes } from './ask'
 import { PRESETS } from './presets'
 import { RoutineScheduler, parseInterval } from './routines'
 import type { VoiceEngine } from './voice'
+import type { TurnTracker } from './turn-tracker'
 
 export interface SocketServerDeps {
   store: WorkspaceStore
   ptys: PtyManager
   /** Spawn a terminal's PTY with turn tracking (same path as IPC creation). */
   spawnTerminal: (t: { id: string; command: string; cwd: string }) => void
+  /** Turn history source for `cookrew fork` validation/output. */
+  turns: TurnTracker
+  /** Fork an agent from one of its turns (same path as IPC forking). */
+  forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData
   routines: RoutineScheduler
   /** Ask the renderer to run a browser command; resolves with its output. */
   browserCommand: (args: string[], terminalId: string) => Promise<string>
@@ -42,7 +47,7 @@ export interface SocketServerDeps {
 
 /**
  * Newline-delimited JSON server on a Unix socket. This is the `cookrew` CLI's
- * backend — the equivalent of Maestri's local bridge socket.
+ * backend over the local bridge socket.
  */
 export function startSocketServer(deps: SocketServerDeps): net.Server {
   const { ptys } = deps
@@ -118,6 +123,8 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
       return cmdRecruit(request, deps)
     case 'dismiss':
       return cmdDismiss(request, deps)
+    case 'fork':
+      return cmdFork(request, deps)
     case 'preset':
       return cmdPreset()
     case 'notify':
@@ -333,6 +340,21 @@ function cmdRecruit(request: CliRequest, deps: SocketServerDeps): string {
   return `Recruited "${added.name}" (${preset.name})`
 }
 
+function cmdFork(request: CliRequest, deps: SocketServerDeps): string {
+  requireOrch(request, deps)
+  const [name] = request.args
+  if (!name) throw new Error('Usage: cookrew fork "Agent" [--turn N]')
+  const target = findConnected(request, deps, name, 'terminal') as TerminalNodeData
+  const turnIndex = request.flags.turn ? parseInt(String(request.flags.turn), 10) : undefined
+  if (request.flags.turn !== undefined && Number.isNaN(turnIndex)) {
+    throw new Error('--turn must be a turn number (see the card pager or omit for the latest turn)')
+  }
+  const fork = deps.forkTerminal(target.id, turnIndex)
+  const me = self(request, deps)
+  deps.store.connect(me.id, fork.id)
+  return `Forked "${target.name}" at turn ${fork.forkOf?.turnIndex} → "${fork.name}" (context is being replayed to it now)`
+}
+
 function cmdDismiss(request: CliRequest, deps: SocketServerDeps): string {
   requireOrch(request, deps)
   const target = findConnected(request, deps, request.args[0], 'terminal')
@@ -497,6 +519,7 @@ Usage:
   cookrew connect "From" "To"                   (Orch) Wire two nodes together
   cookrew recruit "Name" [--preset P] [--role R] [--dir PATH]   (Orch) Spawn a teammate
   cookrew dismiss "Name"                        (Orch) Remove a teammate
+  cookrew fork "Agent" [--turn N]               (Orch) Fork a NEW agent from a past turn (original untouched)
   cookrew preset list                           List agent presets
   cookrew voice on|off|status                   Spoken replies when an ask completes (macOS say)
   cookrew voice list | set "Name" | rate 200    Pick the voice that talks back, set speed

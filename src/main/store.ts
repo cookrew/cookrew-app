@@ -16,6 +16,7 @@ import {
   noteNameFromContent,
   uniqueName
 } from '../shared/model'
+import { upgradeNode } from './node-upgrades'
 
 const DATA_DIR = path.join(homedir(), '.cookrew')
 const LEGACY_DATA_DIR = path.join(homedir(), '.cava')
@@ -254,7 +255,7 @@ export class WorkspaceStore extends EventEmitter {
     return this.addNode(note) as NoteNodeData
   }
 
-  /** Write note content; renames the note when it has no custom name (Maestri behavior). */
+  /** Write note content; renames the note when it has no custom name. */
   writeNote(id: string, content: string): NoteNodeData | undefined {
     const note = this.node(id)
     if (!note || note.kind !== 'note') return undefined
@@ -337,19 +338,6 @@ function loadWorkspaceState(id: string): WorkspaceState {
     console.error('Failed to load workspace state:', error)
   }
   return { name: 'Workspace', dir: homedir(), nodes: [], connections: [] }
-}
-
-// Workspaces saved before the portal → browser and maestro → orch renames
-// carry kind: 'portal' and terminal field 'maestro'.
-function upgradeNode(node: CanvasNode): CanvasNode {
-  if ((node.kind as string) === 'portal') {
-    return { ...(node as unknown as BrowserNodeData), kind: 'browser' }
-  }
-  if (node.kind === 'terminal' && 'maestro' in node) {
-    const { maestro, ...rest } = node as TerminalNodeData & { maestro: boolean }
-    return { ...rest, orch: rest.orch ?? maestro }
-  }
-  return node
 }
 
 function saveWorkspaceState(id: string, state: WorkspaceState): void {

@@ -2,7 +2,13 @@ import type http from 'node:http'
 import type { WorkspaceStore } from './store'
 import type { PtyManager } from './pty'
 import type { TurnTracker } from './turn-tracker'
-import type { CanvasNode, WorkspaceList, WorkspaceMeta, WorkspaceState } from '../shared/model'
+import type {
+  CanvasNode,
+  TerminalNodeData,
+  WorkspaceList,
+  WorkspaceMeta,
+  WorkspaceState
+} from '../shared/model'
 import { readJson, respondJson, startSse } from './mobile-http'
 
 /**
@@ -20,6 +26,7 @@ export interface MobileOps {
     position: { x: number; y: number }
     orch: boolean
   }) => CanvasNode
+  forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData
   listWorkspaces: () => WorkspaceList
   createWorkspace: (name: string, dir: string) => WorkspaceMeta
   switchWorkspace: (id: string) => WorkspaceMeta
@@ -32,7 +39,12 @@ export interface MobileApiDeps {
   turns: TurnTracker
   ops: MobileOps
   presets: readonly { name: string; command: string }[]
+  /** Persist a phone-uploaded attachment; returns its absolute path. */
+  saveAttachment: (name: string, data: Buffer) => string
 }
+
+/** Base64 inflates ~4/3, so this admits attachments up to the 20MB save cap. */
+const ATTACH_BODY_LIMIT = 30_000_000
 
 /**
  * HTTP/SSE analogue of the renderer's IPC bridge, consumed by the desktop
@@ -120,6 +132,37 @@ export async function handleMobileApi(
       orch: boolean
     }>(request)
     respondJson(response, 200, ops.createTerminal(opts))
+    return true
+  }
+
+  if (method === 'POST' && p === '/api/attachments') {
+    const body = await readJson<{ name?: string; data?: string }>(request, ATTACH_BODY_LIMIT)
+    if (typeof body.data !== 'string' || body.data.length === 0) {
+      respondJson(response, 400, { error: 'Missing data' })
+      return true
+    }
+    try {
+      const saved = deps.saveAttachment(body.name ?? 'file', Buffer.from(body.data, 'base64'))
+      respondJson(response, 200, { path: saved })
+    } catch (error) {
+      respondJson(response, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return true
+  }
+
+  const turnsMatch = p.match(/^\/api\/terminal\/([^/]+)\/turns$/)
+  if (turnsMatch && method === 'GET') {
+    respondJson(response, 200, turns.history(turnsMatch[1]))
+    return true
+  }
+  const forkMatch = p.match(/^\/api\/terminal\/([^/]+)\/fork$/)
+  if (forkMatch && method === 'POST') {
+    const body = await readJson<{ turnIndex?: number }>(request)
+    try {
+      respondJson(response, 200, ops.forkTerminal(forkMatch[1], body.turnIndex))
+    } catch (error) {
+      respondJson(response, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
     return true
   }
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { NodeProps, NodeResizer, useStore } from '@xyflow/react'
 import { NodeHandles } from './NodeHandles'
 import { CardClose } from './CardClose'
+import { PastTurnView, TurnPagerBar, useTurnPaging } from './TurnPager'
 import type { TerminalNodeData } from '../../../shared/model'
 import type { TerminalActivity, TurnPhase } from '../../../shared/turn'
 import { useCanvasUi } from '../canvas-ui'
@@ -59,6 +60,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
   const activity = activities[node.id]
   const agent = activity?.agent ?? node.preset !== 'Shell'
   const phase = activity?.phase ?? 'idle'
+  const paging = useTurnPaging(node.id, activity?.turnCount ?? 0)
 
   const open = (): void => {
     if (tool === 'select') zoomToNode(node.id)
@@ -116,12 +118,26 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
       <NodeHandles />
       <div className="node-header vi-head">
         <PixelAvatar phase={phase} />
-        <div className="vi-title" title={activity?.prompt ?? node.name}>
-          {node.name}
-          {activity?.prompt && <span className="vi-title-snip"> · {firstLine(activity.prompt, 60)}</span>}
+        {/* The title carries the recap — Sous turn summary, else the prompt
+            echo — matching the full view; the preset chip still names the
+            agent, and the node name lives in the tooltip. */}
+        <div className="vi-title" title={node.name}>
+          {activity?.title ?? activity?.prompt ? (
+            firstLine(activity.title ?? activity.prompt ?? '', 200)
+          ) : (
+            node.name
+          )}
         </div>
         <span className="vi-chip tan">{node.preset}</span>
-        {node.orch && <span className="vi-chip">Maestri</span>}
+        {node.orch && <span className="vi-chip">Orch</span>}
+        {node.forkOf && (
+          <span
+            className="vi-chip fork"
+            title={`Forked from "${node.forkOf.sourceName}" at turn ${node.forkOf.turnIndex}`}
+          >
+            ⑂ T{node.forkOf.turnIndex}
+          </span>
+        )}
         {phase === 'idle' && activity ? (
           <span className="vi-chip dim">{agoLabel(activity.updatedAt)}</span>
         ) : (
@@ -130,8 +146,15 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
         <CardClose nodeId={node.id} dark />
       </div>
       <div className="card-body vi-card-body nodrag nowheel" onClick={open}>
-        {full ? <FullTurnView activity={activity} /> : <CompactTurnView activity={activity} />}
+        {paging.viewing ? (
+          <PastTurnView record={paging.viewing} />
+        ) : full ? (
+          <FullTurnView activity={activity} />
+        ) : (
+          <CompactTurnView activity={activity} />
+        )}
       </div>
+      {(paging.count > 0 || paging.viewing !== null) && <TurnPagerBar paging={paging} />}
       {full && (
         <div className="card-foot vi-foot">
           <span className={`card-status ${phase}`}>
@@ -176,6 +199,7 @@ function CompactTurnView({ activity }: { activity: TerminalActivity | undefined 
   const msgSnippet = glance?.message ? firstLine(glance.message, 220) : null
   return (
     <>
+      {activity.title && <div className="vi-turn-title">{firstLine(activity.title, 90)}</div>}
       <div className="vi-you">
         <span className="vi-you-label">You:</span> {firstLine(activity.prompt, 160)}
       </div>
@@ -232,6 +256,7 @@ function FullTurnView({ activity }: { activity: TerminalActivity | undefined }):
 
   return (
     <>
+      {activity.title && <div className="vi-turn-title">{firstLine(activity.title, 90)}</div>}
       <div className="vi-you">
         <span className="vi-you-label">You:</span> {firstLine(activity.prompt, 120)}
       </div>

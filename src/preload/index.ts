@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 const api = {
   getWorkspace: () => ipcRenderer.invoke('workspace:get'),
@@ -41,7 +41,15 @@ const api = {
     }
   },
 
+  // 📎 attach: dropped File objects resolve to their on-disk paths right in
+  // the preload (File.path is gone since Electron 32); no upload involved.
+  attachFiles: (files: File[]) => Promise.resolve(files.map((f) => webUtils.getPathForFile(f))),
+  pickFiles: () => ipcRenderer.invoke('attach:pick'),
+
   listActivity: () => ipcRenderer.invoke('activity:list'),
+  listTurns: (terminalId: string) => ipcRenderer.invoke('turn:history', terminalId),
+  forkTerminal: (sourceId: string, turnIndex?: number) =>
+    ipcRenderer.invoke('terminal:fork', sourceId, turnIndex),
   onTerminalActivity: (cb: (activity: unknown) => void) => {
     const listener = (_e: unknown, activity: unknown): void => cb(activity)
     ipcRenderer.on('terminal:activity', listener)

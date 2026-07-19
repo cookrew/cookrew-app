@@ -1,7 +1,7 @@
 {
   "name": "cookrew",
   "version": "0.1.0",
-  "description": "Cookrew — an open-source spatial canvas for AI agents, inspired by Maestri. Terminals, notes, portals and physics cables on an infinite canvas, orchestrated through a Unix-socket CLI.",
+  "description": "Cookrew — an open-source spatial canvas for AI agents. Terminals, notes, browsers and physics cables on an infinite canvas, orchestrated through a Unix-socket CLI.",
   "main": "out/main/index.js",
   "type": "module",
   "license": "MIT",
@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json"
   },
   "dependencies": {
+    "@xterm/addon-clipboard": "^0.2.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-webgl": "^0.18.0",
     "@xterm/headless": "^5.5.0",

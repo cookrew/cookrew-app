@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // cookrew — CLI bridge into the Cookrew app over its Unix socket.
-// Mirrors the maestri CLI surface: list, ask, check, note, browser,
+// Verbs: list, ask, check, note, browser,
 // connect, recruit, dismiss, preset, notify, help.
 import net from 'node:net'
 import { randomUUID } from 'node:crypto'

@@ -24,6 +24,8 @@ export interface MobileServerDeps {
   turns: TurnTracker
   ops: MobileOps
   presets: readonly { name: string; command: string }[]
+  /** Persist a phone-uploaded attachment; returns its absolute path. */
+  saveAttachment: (name: string, data: Buffer) => string
   /** Latest capturePage() frame for a browser, pushed from the renderer. */
   browserThumb: (browserId: string) => Buffer | undefined
   /** Legacy lightweight client (kept at /lite for voice-first use). */
@@ -204,7 +206,9 @@ async function handle(
       return
     }
     respondJson(response, 200, {
-      output: session.viewportText(),
+      // Full scrollback, not just the viewport — the phone's fullscreen view
+      // is scrollable, so history has to travel with the payload.
+      output: session.fullText(),
       busy: session.idleFor() < 2000,
       // Screen geometry so the phone can scale the full view to fit: lines
       // are at most `cols` chars, so font-size = screenWidth / cols.

@@ -12,7 +12,7 @@ export interface AskOptions {
 /**
  * Send a prompt to a terminal and wait until its output goes quiet, then
  * return the new text produced since the prompt was sent. This mirrors how
- * `maestri ask` blocks until the target agent finishes responding.
+ * `cookrew ask` blocks until the target agent finishes responding.
  */
 export async function askTerminal(
   session: PtySession,

@@ -711,6 +711,8 @@
   <div id="popAttention" class="attention-banner" style="display:none">⚠ NEEDS ATTENTION</div>
   <div id="popBody"></div>
   <div id="composer">
+    <button class="round" id="attach" title="Attach file">📎</button>
+    <input id="attachFile" type="file" multiple style="display:none" />
     <button class="round" id="mic" title="Voice dictation">🎙️</button>
     <input id="prompt" placeholder="Message this agent…" autocomplete="off" />
     <button class="round" id="speakToggle" title="Speak replies">🔊</button>
@@ -787,7 +789,8 @@
     const phase = activity ? activity.phase : 'idle'
     const off = !node.running
     const led = off ? 'off' : phase
-    const promptSnip = activity && activity.prompt ? ` <span class="vi-title-snip">· ${esc(firstLine(activity.prompt, 60))}</span>` : ''
+    const snipSource = activity ? activity.title || activity.prompt : null
+    const promptSnip = snipSource ? ` <span class="vi-title-snip">· ${esc(firstLine(snipSource, 60))}</span>` : ''
     let latest = '<div class="vi-ready">Ready</div>'
     if (off) {
       latest = '<div class="vi-latest done"><span class="vi-latest-snip">Not running</span></div>'
@@ -813,7 +816,7 @@
         <div class="vi-avatar ${off ? 'idle' : phase}"><span class="vi-invader"></span><span class="vi-bars"><i></i><i></i><i></i></span></div>
         <div class="vi-title">${esc(node.name)}${promptSnip}</div>
         <span class="vi-chip tan">${esc(node.preset)}</span>
-        ${node.orch ? '<span class="vi-chip">Maestri</span>' : ''}
+        ${node.orch ? '<span class="vi-chip">Orch</span>' : ''}
         ${timeChip}
       </div>
       <div class="vi-card-body">${you}${latest}</div>
@@ -1011,6 +1014,7 @@
       composer.classList.add('on')
       pinnedToBottom = true
       termCols = 0 // fresh element — force a re-fit on the first output poll
+      lastOutput = null
       const term = document.getElementById('popTerm')
       term.addEventListener('scroll', () => {
         pinnedToBottom = term.scrollTop + term.clientHeight >= term.scrollHeight - 30
@@ -1070,6 +1074,7 @@
 
   let charRatio = 0.5 // VT323 advance width per px of font-size, measured live
   let termCols = 0
+  let lastOutput = null // last painted output (plain var — too big for dataset)
 
   function measureCharRatio() {
     const probe = document.createElement('span')
@@ -1107,8 +1112,8 @@
         termCols = data.cols
         fitTerm()
       }
-      if (force || term.dataset.last !== data.output) {
-        term.dataset.last = data.output
+      if (force || lastOutput !== data.output) {
+        lastOutput = data.output
         term.textContent = data.output || '(no output yet)'
         if (pinnedToBottom) term.scrollTop = term.scrollHeight
       }
@@ -1147,6 +1152,42 @@
 
   sendBtn.onclick = send
   promptEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') send() })
+
+  /* ---------- 📎 attachments: upload to the desktop, path joins the message ---------- */
+
+  const attachBtn = document.getElementById('attach')
+  const attachInput = document.getElementById('attachFile')
+
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => { const url = String(reader.result); resolve(url.slice(url.indexOf(',') + 1)) }
+      reader.onerror = () => reject(reader.error || new Error('Read failed'))
+      reader.readAsDataURL(file)
+    })
+  }
+
+  attachBtn.onclick = () => { if (openId) attachInput.click() }
+  attachInput.onchange = async () => {
+    const files = Array.from(attachInput.files || [])
+    attachInput.value = ''
+    if (files.length === 0 || !openId) return
+    attachBtn.disabled = true
+    try {
+      for (const file of files) {
+        const body = JSON.stringify({ name: file.name, data: await fileToBase64(file) })
+        const saved = await api('/api/attachments', { method: 'POST', headers: { 'content-type': 'application/json' }, body })
+        // The saved path joins the draft message so the user sees exactly
+        // what the agent will receive (uploads get shell-safe names).
+        promptEl.value = (promptEl.value.trim() ? promptEl.value.trim() + ' ' : '') + saved.path + ' '
+      }
+      promptEl.focus()
+    } catch (error) {
+      promptEl.placeholder = '⚠ ' + (error && error.message ? error.message : 'Attach failed')
+      setTimeout(() => { promptEl.placeholder = 'Message this agent…' }, 4000)
+    }
+    attachBtn.disabled = false
+  }
   speakToggle.onclick = () => {
     speakReplies = !speakReplies
     speakToggle.classList.toggle('on', speakReplies)

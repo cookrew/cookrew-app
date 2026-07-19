@@ -986,8 +986,29 @@ body,
   text-transform: uppercase;
 }
 
+/* Recap variant: the title carries the Sous summary / prompt of the turn —
+   prose, not a label. Readable font, wraps to show the whole thing. */
+.popout-title.recap {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
 .popout-close {
   margin-left: auto;
+}
+
+/* ✕ next to ⤢ CANVAS: closes the card and kills its session (⌘W twin). */
+.popout-kill:hover {
+  background: var(--rose);
+  color: var(--cream-hi);
 }
 
 .popout-terminal {
@@ -1040,6 +1061,34 @@ body,
 
 .voice-speak.on {
   background: var(--amber);
+}
+
+.voice-attach.busy {
+  animation: cr-blink 1s steps(2) infinite;
+}
+
+/* Full-view drop target while a file drag hovers the terminal overlay. */
+.attach-drop-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--amber) 24%, transparent);
+  border: 3px dashed var(--amber-deep);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.attach-drop-hint span {
+  font-family: var(--font-pixel);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  color: var(--ink);
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 3px 3px 0 var(--line);
+  padding: 10px 16px;
 }
 
 .popout-terminal .xterm {
@@ -1177,9 +1226,14 @@ body,
   font-size: calc(13px * var(--z, 1));
   font-weight: 700;
   color: var(--vi-text);
-  white-space: nowrap;
+  line-height: 1.3;
+  /* recap prose wraps instead of truncating; clamp so a long summary
+     can't swallow the card body below the header */
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .vi-title-snip {
@@ -1252,6 +1306,19 @@ body,
   font-size: calc(14px * var(--z, 1));
   font-weight: 600;
   color: var(--vi-done);
+}
+
+/* Sous turn title — the local-model summary shown as the card's headline. */
+.vi-turn-title {
+  flex: 0 0 auto;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: calc(14px * var(--z, 1));
+  line-height: 1.3;
+  color: var(--vi-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .vi-you {
@@ -1599,6 +1666,32 @@ body.cookrew-mobile .cr-header {
 
 body.cookrew-mobile .cr-dock {
   padding-bottom: max(10px, env(safe-area-inset-bottom));
+  gap: 8px 14px;
+}
+
+/* The tool row and the preset row are wider than a phone — without a
+   scroll container their tail buttons land off-screen and can't be
+   tapped. Each row becomes an independent swipeable strip. */
+body.cookrew-mobile .cr-dock-tools,
+body.cookrew-mobile .cr-dock-presets {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  /* breathing room so the buttons' hard drop shadow survives the clip */
+  padding: 2px 2px 4px 0;
+}
+
+body.cookrew-mobile .cr-dock-tools::-webkit-scrollbar,
+body.cookrew-mobile .cr-dock-presets::-webkit-scrollbar {
+  display: none;
+}
+
+body.cookrew-mobile .cr-dock-tools > *,
+body.cookrew-mobile .cr-dock-presets > * {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 body.cookrew-mobile .cr-dim {
@@ -1608,4 +1701,168 @@ body.cookrew-mobile .cr-dim {
 body.cookrew-mobile .cookrew-minimap {
   transform: scale(0.55);
   transform-origin: bottom right;
+}
+
+/* ---- turn pager + fork (agent cards & zoomed overlay) ---- */
+
+.vi-chip.fork {
+  background: #2a3a4a;
+  color: #9fd0ff;
+}
+
+.vi-pager {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: calc(5px * var(--z, 1));
+  padding: calc(4px * var(--z, 1)) calc(9px * var(--z, 1));
+  background: #141416;
+  border-top: 1px solid #232327;
+}
+
+.vi-pager-btn {
+  font-family: var(--font-mono);
+  font-size: calc(9.5px * var(--z, 1));
+  font-weight: 700;
+  color: #c8c8cd;
+  background: #2a2a2e;
+  border: none;
+  border-radius: calc(4px * var(--z, 1));
+  padding: calc(2px * var(--z, 1)) calc(6px * var(--z, 1));
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.vi-pager-btn:hover:not(:disabled) {
+  background: #3a3a3f;
+  color: #ffffff;
+}
+
+.vi-pager-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.vi-pager-btn.wide {
+  letter-spacing: 0.04em;
+}
+
+.vi-pager-btn.fork {
+  margin-left: auto;
+  background: #2a3a4a;
+  color: #9fd0ff;
+}
+
+.vi-pager-btn.fork:hover:not(:disabled) {
+  background: #35485c;
+  color: #cde6ff;
+}
+
+.vi-pager-label {
+  font-family: var(--font-mono);
+  font-size: calc(9.5px * var(--z, 1));
+  font-weight: 600;
+  color: #98989d;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.vi-past-reply {
+  opacity: 0.92;
+}
+
+.vi-past-meta {
+  font-family: var(--font-mono);
+  font-size: calc(10px * var(--z, 1));
+  color: #6a6a6f;
+  margin-top: auto;
+}
+
+.cr-btn.active {
+  background: var(--amber, #e9b949);
+  color: #14110a;
+}
+
+.turn-panel {
+  position: absolute;
+  top: 44px;
+  right: 12px;
+  z-index: 30;
+  width: min(480px, calc(100% - 24px));
+  max-height: 60%;
+  display: flex;
+  flex-direction: column;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
+.turn-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--cream-md);
+  border-bottom: 2px solid var(--line);
+}
+
+.turn-panel-title {
+  font-family: var(--font-pixel);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.turn-panel-hint {
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-dim, #6a6353);
+  border-bottom: 1px solid var(--line);
+}
+
+.turn-panel-list {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.turn-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.turn-panel-row:last-child {
+  border-bottom: none;
+}
+
+.turn-panel-index {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+
+.turn-panel-prompt {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.turn-panel-fork {
+  flex: 0 0 auto;
+}
+
+.turn-panel-empty {
+  padding: 14px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-dim, #6a6353);
 }

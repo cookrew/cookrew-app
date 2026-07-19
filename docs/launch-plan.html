@@ -168,7 +168,7 @@
         <li>无限画布：终端、便签、浏览器节点用绳缆连线，连线即授权</li>
         <li><code>cookrew</code> CLI 是完整 agent API（ask / note / browser / recruit / routine）</li>
         <li>语音模式 + 手机伴侣（扫码即用，免安装）</li>
-        <li>对标 Maestri（原生 Swift、仅 macOS）——差异化是<strong>开源 + 跨平台</strong></li>
+        <li>差异化三件套：<strong>开源 + 跨平台 + 本地优先</strong>，与 Cloud 同一套 agent 协议</li>
       </ul>
     </div>
     <div class="card cook">
@@ -243,7 +243,7 @@
 
   <h2><span class="idx">03</span>发布前另外两件必办事</h2>
   <ul>
-    <li><strong>Maestri 关系措辞</strong>：全部物料统一 "inspired by Maestri"，不用 clone/replica；不使用对方商标截图；发布前给 Maestri 作者发一封友好邮件打招呼——HN 帖子里原作者现身是常事，善意关系是加分项，敌意是公关事故。</li>
+    <li><strong>叙事口径</strong>：所有物料只讲 Cookrew 自己的故事（Cookrew 立项在先，Desktop 是它的本地形态）；不引用、不对比任何竞品的名称或截图，评论区被问到同类产品时也只答自己的设计取舍。</li>
     <li><strong>可安装性</strong>：宣发日必须有开箱即用产物——GitHub Releases 三平台安装包（electron-builder：dmg / AppImage / exe）+ CI 自动构建。"clone 下来自己 build" 会损失 80% 的尝鲜用户。</li>
   </ul>
 
@@ -264,7 +264,7 @@
     <span class="when">PHASE 1 · 2026-08-04 那一周 · 发布周</span>
     <h3>集中引爆</h3>
     <ul>
-      <li><strong>Show HN</strong>（周二或周三，太平洋时间早 7–9 点）："Show HN: Cookrew – open-source, cross-platform spatial workspace for AI agents"。首评自己写：为什么做、为什么选 Electron（跨平台，正面回应必然质疑）、与 Maestri 的关系（致敬 + 开源补位）、Cloud 在路上（顺手收 waitlist）</li>
+      <li><strong>Show HN</strong>（周二或周三，太平洋时间早 7–9 点）："Show HN: Cookrew – open-source, cross-platform spatial workspace for AI agents"。首评自己写：为什么做、为什么选 Electron（跨平台，正面回应必然质疑）、产品从 Cookrew Web 一路演进到 Desktop 的故事、Cloud 在路上（顺手收 waitlist）</li>
       <li><strong>X/Twitter</strong> 长 thread：GIF 开头，一条讲一个能力，@ 相关社区账号</li>
       <li><strong>中文渠道</strong>（同周错峰）：V2EX（分享创造）、linux.do、即刻（AI 圈子）、掘金/少数派投稿。中文物料复用既有厨房文案，不是英文直译</li>
       <li><strong>Reddit</strong>：r/ClaudeAI、r/LocalLLaMA、r/commandline（各自定制角度，忌复制粘贴）</li>
@@ -279,11 +279,11 @@
     <div class="tablewrap"><table>
       <tr><th>时间</th><th>Drop</th><th>传播角度</th></tr>
       <tr><td class="num">08 月中</td><td>Roles + <code>--replace</code></td><td>"给你的队伍发岗位说明书"</td></tr>
-      <tr><td class="num">08 月底</td><td>Floors（git worktree 隔离）</td><td>"每层楼一个分支，agent 互不踩脚"——技术人群最买账的一集</td></tr>
+      <tr><td class="num">08 月底</td><td>Stations（git worktree 隔离）</td><td>"每个工位一个分支，agent 互不踩脚"——技术人群最买账的一集</td></tr>
       <tr><td class="num">09 月中</td><td>命令面板 + 编队/整理</td><td>效率向短视频素材</td></tr>
       <tr><td class="num">09 月底</td><td>SSH/Docker 远程终端</td><td>"画布指挥远程机群"，直接衔接 Cloud 叙事</td></tr>
     </table></div>
-    <p><strong>Product Hunt 放在这个阶段</strong>（而不是首发日）：等 Floors 或远程终端这种有视觉爆点的 drop，带着已有 stars 和用户好评再上，命中率远高于裸发。</p>
+    <p><strong>Product Hunt 放在这个阶段</strong>（而不是首发日）：等 Stations 或远程终端这种有视觉爆点的 drop，带着已有 stars 和用户好评再上，命中率远高于裸发。</p>
   </div>
 
   <div class="phase p3">
@@ -300,7 +300,7 @@
   <h2><span class="idx">05</span>渠道矩阵速查</h2>
   <div class="tablewrap"><table>
     <tr><th>渠道</th><th>时机</th><th>角度</th><th>备注</th></tr>
-    <tr><td>Show HN</td><td class="num">发布周</td><td>开源 + 跨平台补位 Maestri</td><td>首评预写好；值守全天</td></tr>
+    <tr><td>Show HN</td><td class="num">发布周</td><td>开源 + 跨平台的 agent 空间工作台</td><td>首评预写好；值守全天</td></tr>
     <tr><td>X thread</td><td class="num">发布周起，每 drop 一条</td><td>GIF 驱动</td><td>固定话题标签，逐步积累</td></tr>
     <tr><td>V2EX / linux.do / 即刻</td><td class="num">发布周错峰</td><td>中文原生文案</td><td>V2EX 忌营销味，写成开发手记</td></tr>
     <tr><td>Reddit 三板块</td><td class="num">发布周 + 大 drop</td><td>每板块定制</td><td>r/ClaudeAI 讲 agent 编排实战</td></tr>
@@ -322,8 +322,8 @@
   <ul>
     <li><strong class="done">命名撞车</strong>：已随品牌合并消解（cookrew 无同名知名项目；<code>crew</code> 别名暂缓，避开 chromebrew）。</li>
     <li><strong>改名残留</strong>：合并后代码/文档/提示词里残存 "cava" 字样会显得半成品。公开前全局 grep 清零，CI 加一条防回归检查。</li>
-    <li><strong>Electron 质疑</strong>：HN 必然出现。对策：README/FAQ 预埋回答（跨平台是产品前提，Maestri 已占 macOS 原生位），首评主动提及，不辩解、给理由。</li>
-    <li><strong>Maestri 作者反应</strong>：提前打招呼 + 措辞规范（第 3 节）；若对方公开不满，回应基调是致敬与感谢，绝不对线。</li>
+    <li><strong>Electron 质疑</strong>：HN 必然出现。对策：README/FAQ 预埋回答（跨平台与开源是产品前提），首评主动提及，不辩解、给理由。</li>
+    <li><strong>同类产品对比帖</strong>：社区一定会拿 Cookrew 与其他 agent 画布产品对比。回应基调：只讲自己的取舍与路线，不评价对方，绝不对线。</li>
     <li><strong>Desktop/Cloud 预期管理</strong>：单品牌意味着用户会从 day 1 问 "Cloud 呢"。waitlist + 公开 roadmap 管理预期，别承诺具体日期。</li>
     <li><strong>安全面暴露</strong>：browser evaluate / recruit / socket 是攻击面，开源后会被人盯。发布前跑一轮安全审计，写 SECURITY.md，出问题快速响应。</li>
   </ul>

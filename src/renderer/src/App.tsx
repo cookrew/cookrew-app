@@ -20,7 +20,7 @@ import { cookrew, isRemoteMode } from './api'
 import { TerminalNode } from './nodes/TerminalNode'
 import { NoteNode } from './nodes/NoteNode'
 import { BrowserNode } from './nodes/BrowserNode'
-import { RopeEdge } from './RopeEdge'
+import { CableEdge } from './CableEdge'
 import { Header } from './Header'
 import { Dock } from './Dock'
 import { TerminalOverlayLayer } from './TerminalOverlay'
@@ -30,7 +30,7 @@ import { useBrowserEngine } from './browser-engine'
 import { ErrorBoundary } from './ErrorBoundary'
 
 const nodeTypes = { terminal: TerminalNode, note: NoteNode, browser: BrowserNode }
-const edgeTypes = { rope: RopeEdge }
+const edgeTypes = { cable: CableEdge }
 
 function toFlowNodes(state: WorkspaceState): Node[] {
   return state.nodes.map((n) => ({
@@ -48,7 +48,7 @@ function toFlowEdges(state: WorkspaceState): Edge[] {
     id: c.id,
     source: c.a,
     target: c.b,
-    type: 'rope'
+    type: 'cable'
   }))
 }
 
@@ -112,19 +112,39 @@ function Canvas(): React.JSX.Element {
   // ⌘W from the main process, resolved against the latest layer state.
   useEffect(() => cookrew().onCmdW(() => cmdWRef.current()), [])
 
+  // A file dropped outside a terminal overlay would make Chromium navigate
+  // to it, killing the app — swallow drags at the window level so only the
+  // overlays' own drop handlers (which run first) see them.
+  useEffect(() => {
+    const swallow = (e: DragEvent): void => e.preventDefault()
+    window.addEventListener('dragover', swallow)
+    window.addEventListener('drop', swallow)
+    return () => {
+      window.removeEventListener('dragover', swallow)
+      window.removeEventListener('drop', swallow)
+    }
+  }, [])
+
   const edges = useMemo(() => (workspace ? toFlowEdges(workspace) : []), [workspace])
 
   // Semantic zoom: clicking a card animates the viewport until the card
   // fills the stage; crossing the coverage threshold swaps its thumbnail
   // for the full renderer (see zoom-lod.ts).
   const zoomToNode = useCallback(
-    (id: string) => {
+    (id: string, rect?: { x: number; y: number; width: number; height: number }) => {
       // Save the return point only when not already mid-zoom: a second click
       // during the animation (or on another card) must not clobber the
       // original overview viewport that ⤢ CANVAS goes back to.
       if (!prevViewportRef.current) prevViewportRef.current = reactFlow.getViewport()
       zoomedNodeIdRef.current = id
-      void reactFlow.fitView({ nodes: [{ id }], duration: 500, padding: 0.02 })
+      // A just-created node may not be in the React Flow store yet (its
+      // workspace broadcast is still in flight) — fitView can't find it, so
+      // callers that know the node's rect pass it for a fitBounds instead.
+      if (rect) {
+        void reactFlow.fitBounds(rect, { duration: 500, padding: 0.02 })
+      } else {
+        void reactFlow.fitView({ nodes: [{ id }], duration: 500, padding: 0.02 })
+      }
     },
     [reactFlow]
   )
@@ -225,8 +245,14 @@ function Canvas(): React.JSX.Element {
       if (tool === 'terminal') {
         // window.prompt is unsupported in Electron — creation uses the
         // preset chips in the dock; names come from the preset.
-        await cookrew().createTerminal({ name: preset, preset, position, orch })
+        const created = await cookrew().createTerminal({ name: preset, preset, position, orch })
         setTool('select')
+        // A new code agent zooms straight into its live terminal so the
+        // first prompt can be typed immediately; plain shells stay as
+        // overview cards.
+        if (created.kind === 'terminal' && created.preset !== 'Shell') {
+          zoomToNode(created.id, { ...created.position, ...created.size })
+        }
       } else if (tool === 'note') {
         const note: CanvasNode = {
           kind: 'note',
@@ -255,7 +281,7 @@ function Canvas(): React.JSX.Element {
         setConnectFrom(null)
       }
     },
-    [tool, preset, orch, screenToFlowPosition]
+    [tool, preset, orch, screenToFlowPosition, zoomToNode]
   )
 
   const onNodesDelete = useCallback((deleted: Node[]) => {

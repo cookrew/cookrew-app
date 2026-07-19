@@ -114,13 +114,27 @@ export class PtySession extends EventEmitter {
       })
     }
 
+    // A JS exception escaping these callbacks crosses back into node-pty's
+    // NAPI thread-safe function, becomes a C++ exception and ABORTS the whole
+    // app (SIGABRT) — nothing here may throw. Late chunks routinely arrive
+    // after dispose() (node-pty drains its queue), when the headless screen
+    // is already disposed and would throw on write.
     this.proc.onData((data) => {
-      this.lastOutputAt = Date.now()
-      this.screen.write(data)
-      this.emit('data', data)
+      if (this.disposed) return
+      try {
+        this.lastOutputAt = Date.now()
+        this.screen.write(data)
+        this.emit('data', data)
+      } catch (error) {
+        console.error('PTY data handling failed:', error)
+      }
     })
     this.proc.onExit(({ exitCode }) => {
-      this.emit('exit', exitCode)
+      try {
+        this.emit('exit', exitCode)
+      } catch (error) {
+        console.error('PTY exit handling failed:', error)
+      }
     })
   }
 
@@ -155,8 +169,9 @@ export class PtySession extends EventEmitter {
     return this.lastOutputAt === 0 ? Number.POSITIVE_INFINITY : Date.now() - this.lastOutputAt
   }
 
-  /** Plain-text rendering of the current viewport (like `maestri check`). */
+  /** Plain-text rendering of the current viewport (what `cookrew check` returns). */
   viewportText(): string {
+    if (this.disposed) return ''
     const buffer = this.screen.buffer.active
     const lines: string[] = []
     const start = Math.max(0, buffer.length - this.screen.rows)
@@ -169,6 +184,7 @@ export class PtySession extends EventEmitter {
 
   /** Full scrollback + viewport text, used to diff before/after an `ask`. */
   fullText(): string {
+    if (this.disposed) return ''
     const buffer = this.screen.buffer.active
     const lines: string[] = []
     for (let i = 0; i < buffer.length; i += 1) {
@@ -221,6 +237,11 @@ const TMUX_CONF = [
   'set -g window-status-current-style "bg=#ffd600,fg=#2d2a20,bold"',
   'set -g window-status-style "fg=#a8a29e"',
   'set -g mouse on',
+  // Mouse-drag copies must land on the system clipboard, not just tmux's
+  // buffer: emit OSC 52 to the attached client (xterm's clipboard addon
+  // applies it). The Ms override declares the capability for xterm-256color.
+  'set -g set-clipboard on',
+  "set -ga terminal-overrides ',xterm-256color:Ms=\\E]52;%p1%s;%p2%s\\007'",
   'set -g history-limit 50000',
   'set -sg escape-time 0',
   'set -g base-index 1',
