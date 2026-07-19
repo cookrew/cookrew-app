@@ -1640,7 +1640,7 @@ body,
   color: #5a5a5f;
 }
 
-/* pixel invader avatar + signal bars */
+/* per-agent pixel sprite avatar (AgentSprite.tsx) + signal bars */
 
 .vi-avatar {
   position: relative;
@@ -1654,37 +1654,35 @@ body,
   color: #ff453a;
 }
 
-.vi-invader {
+.vi-avatar .vi-sprite {
   position: absolute;
   left: 0;
   top: 0;
-  width: 33px;
-  height: 24px;
-  transform: scale(var(--z, 1));
-  transform-origin: top left;
+  width: calc(33px * var(--z, 1));
+  height: calc(24px * var(--z, 1));
 }
 
-.vi-invader::before {
-  content: '';
-  position: absolute;
-  width: 3px;
-  height: 3px;
-  background: transparent;
-  box-shadow:
-    6px 0 currentColor, 24px 0 currentColor,
-    9px 3px currentColor, 21px 3px currentColor,
-    6px 6px currentColor, 9px 6px currentColor, 12px 6px currentColor,
-    15px 6px currentColor, 18px 6px currentColor, 21px 6px currentColor, 24px 6px currentColor,
-    3px 9px currentColor, 6px 9px currentColor, 12px 9px currentColor, 15px 9px currentColor,
-    18px 9px currentColor, 24px 9px currentColor, 27px 9px currentColor,
-    0 12px currentColor, 3px 12px currentColor, 6px 12px currentColor, 9px 12px currentColor,
-    12px 12px currentColor, 15px 12px currentColor, 18px 12px currentColor, 21px 12px currentColor,
-    24px 12px currentColor, 27px 12px currentColor, 30px 12px currentColor,
-    0 15px currentColor, 6px 15px currentColor, 9px 15px currentColor, 12px 15px currentColor,
-    15px 15px currentColor, 18px 15px currentColor, 21px 15px currentColor, 24px 15px currentColor,
-    30px 15px currentColor,
-    0 18px currentColor, 6px 18px currentColor, 24px 18px currentColor, 30px 18px currentColor,
-    9px 21px currentColor, 12px 21px currentColor, 18px 21px currentColor, 21px 21px currentColor;
+/* Identity sprite outside cards: dock preset chips + zoomed-in header. */
+.vi-sprite {
+  display: inline-block;
+}
+
+.cr-chip .vi-sprite {
+  width: 16.5px;
+  height: 12px;
+  vertical-align: -2.5px;
+}
+
+.popout-agent {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+
+.popout-agent .vi-sprite {
+  width: 22px;
+  height: 16px;
+  color: var(--ink);
 }
 
 .vi-bars {

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { NodeProps, NodeResizer, useStore } from '@xyflow/react'
 import { NodeHandles } from './NodeHandles'
 import { CardClose } from './CardClose'
+import { AgentSprite } from './AgentSprite'
 import { CrIcon, type CrIconName } from '../icons'
 import { PastTurnView, TurnPagerBar, useTurnPaging } from './TurnPager'
 import type { TerminalNodeData } from '../../../shared/model'
@@ -120,7 +121,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
       <NodeResizer isVisible={selected} minWidth={240} minHeight={140} />
       <NodeHandles />
       <div className="node-header vi-head">
-        <PixelAvatar phase={phase} />
+        <PixelAvatar phase={phase} preset={node.preset} />
         {/* The title carries the recap — Sous turn summary, else the prompt
             echo — matching the full view; the preset chip still names the
             agent, and the node name lives in the tooltip. */}
@@ -173,11 +174,11 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
   )
 }
 
-/** Green pixel invader + signal bars, animated while the agent works. */
-function PixelAvatar({ phase }: { phase: TurnPhase }): React.JSX.Element {
+/** Per-agent pixel sprite + signal bars, animated while the agent works. */
+function PixelAvatar({ phase, preset }: { phase: TurnPhase; preset: string }): React.JSX.Element {
   return (
     <div className={`vi-avatar ${phase}`}>
-      <span className="vi-invader" />
+      <AgentSprite preset={preset} />
       <span className="vi-bars">
         <i />
         <i />
