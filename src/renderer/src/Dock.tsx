@@ -43,11 +43,12 @@ export function Dock({
         {TOOLS.map((t) => (
           <button
             key={t.id}
-            className={`cr-btn tool${tool === t.id ? ' primary' : ''}`}
+            className={`cr-btn tool icon${tool === t.id ? ' primary' : ''}`}
+            title={t.label}
+            aria-label={t.label}
             onClick={() => onSelect(t.id)}
           >
             <span className="tool-icon">{t.icon}</span>
-            {t.label}
           </button>
         ))}
       </div>

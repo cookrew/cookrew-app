@@ -251,6 +251,37 @@ body,
   box-shadow: none;
 }
 
+/* Icon-only buttons: same bevel chrome, glyph instead of label. */
+.cr-btn.icon {
+  padding: 6px 9px;
+  font-size: 14px;
+  line-height: 1;
+  gap: 2px;
+}
+
+.cr-btn.sm.icon {
+  padding: 4px 7px;
+  font-size: 12px;
+}
+
+.cr-btn.tool.icon .tool-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* Turn count riding along the ⑂ fork icon. */
+.popout-count {
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+}
+
+/* Thin mode chips in the header (▦ canvas / ▯ mobile / ◇ demo). */
+.cr-chip.icon {
+  padding: 2px 4px;
+  font-size: 11px;
+  line-height: 1;
+}
+
 .cr-bevel {
   background: var(--cream-hi);
   border: 2px solid var(--line);
@@ -1583,14 +1614,17 @@ body,
   font-size: 8px;
   color: var(--muted);
 }
-.cr-ws-dir {
-  max-width: 300px;
+.cr-ws-name {
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .cr-ws-menu {
   position: absolute;
   top: calc(100% + 6px);
-  left: 0;
-  min-width: 260px;
+  right: 0;
+  min-width: 280px;
   background: var(--cream-hi);
   border: 2px solid var(--line);
   border-radius: 4px;
@@ -1627,11 +1661,26 @@ body,
 .cr-ws-item.add {
   color: var(--amber-deep);
 }
+.cr-ws-item-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
 .cr-ws-item-name {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--ink);
-  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Workspace path — surfaced here (on open) instead of crowding the bar. */
+.cr-ws-item-dir {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1695,8 +1744,28 @@ body.cookrew-mobile .cr-header {
   padding-left: max(14px, env(safe-area-inset-left));
   padding-top: max(10px, env(safe-area-inset-top));
   -webkit-app-region: no-drag;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 10px;
+}
+
+/* One-line header on phones: everything shrinks except the LEDs; the
+   workspace name ellipsizes and the wordmark yields on tiny screens. */
+body.cookrew-mobile .cr-header .cr-kicker {
+  white-space: nowrap;
+}
+
+body.cookrew-mobile .cr-ws-name {
+  max-width: 90px;
+}
+
+body.cookrew-mobile .cr-ws-menu {
+  max-width: calc(100vw - 24px);
+}
+
+@media (max-width: 480px) {
+  body.cookrew-mobile .cr-logo {
+    display: none;
+  }
 }
 
 body.cookrew-mobile .cr-dock {

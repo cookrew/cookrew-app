@@ -10,7 +10,11 @@ interface HeaderProps {
   attentionCount: number
 }
 
-/** Cookrew-style top bar: pixel logo, workspace id, agent LED count. */
+/**
+ * Cookrew-style top bar, one line: pixel logo + thin mode icons on the
+ * left, agent LED count, and the workspace switcher pinned to the right.
+ * The working directory lives in the switcher's dropdown, not the bar.
+ */
 export function Header({
   workspaceName,
   dir,
@@ -23,12 +27,19 @@ export function Header({
       <div className="cr-header-brand">
         <CrLogoMark />
         <span className="cr-logo">COOKREW</span>
-        <span className="cr-chip amber">CANVAS</span>
-        {isDemoMode() && <span className="cr-chip violet">DEMO</span>}
-        {isRemoteMode() && <span className="cr-chip violet">MOBILE</span>}
-      </div>
-      <div className="cr-header-meta">
-        <WorkspaceSwitcher fallbackName={workspaceName} fallbackDir={dir} />
+        <span className="cr-chip amber icon" title="Canvas">
+          ▦
+        </span>
+        {isDemoMode() && (
+          <span className="cr-chip violet icon" title="Demo data">
+            ◇
+          </span>
+        )}
+        {isRemoteMode() && (
+          <span className="cr-chip violet icon" title="Mobile companion">
+            ▯
+          </span>
+        )}
       </div>
       <div className="cr-header-status">
         {attentionCount > 0 && (
@@ -42,6 +53,7 @@ export function Header({
           {busyCount}/{terminalCount} WORKING
         </span>
       </div>
+      <WorkspaceSwitcher fallbackName={workspaceName} fallbackDir={dir} />
     </header>
   )
 }
