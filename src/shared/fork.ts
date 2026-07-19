@@ -25,6 +25,27 @@ export interface ForkPreambleOptions {
   turnIndex: number
 }
 
+export interface ForkNoticeOptions {
+  forkName: string
+  sourceName: string
+  turnIndex: number
+}
+
+/**
+ * First message for a NATIVELY forked agent (resumed from a truncated copy
+ * of the source's real session). It already has full context, so no
+ * transcript replay — just who it is and that the branch is now its own.
+ */
+export function buildResumeForkNotice(options: ForkNoticeOptions): string {
+  return (
+    `[Cookrew fork] You are "${options.forkName}", a fork of the agent ` +
+    `"${options.sourceName}" branched after its turn ${options.turnIndex}. ` +
+    `This resumed session is your own copy — the original agent continues ` +
+    `separately and is unaffected by anything you do. ` +
+    `Acknowledge briefly, then continue from this point or await instructions.`
+  )
+}
+
 function excerpt(text: string, max: number): string {
   const trimmed = text.trim()
   return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed
