@@ -328,17 +328,16 @@
   .vi-chip.tan { background: #4a3b2a; color: #e8c9a0; }
   .vi-chip.dim { color: #98989d; }
 
-  /* Baby-hand status LED: replaces the old colored dots. */
-  .vi-hand-led { width: calc(12px * var(--z, 1)); height: calc(13px * var(--z, 1)); flex: 0 0 auto; }
-  .vi-hand-led.idle, .vi-hand-led.replied { color: var(--vi-done); }
-  .vi-hand-led.thinking { color: var(--vi-working); animation: ava-blink 1s steps(2) infinite; }
-  .vi-hand-led.waiting { color: var(--vi-wait); animation: ava-blink 0.55s steps(2) infinite; }
-  .vi-hand-led.off { color: #5a5a5f; }
-  .popout-header .vi-hand-led { width: 13px; height: 14px; }
-  .popout-header .vi-hand-led use { stroke: var(--ink); stroke-width: 1.4; }
-  .popout-header .vi-hand-led.idle, .popout-header .vi-hand-led.replied { color: var(--hp); }
-  .popout-header .vi-hand-led.thinking { color: var(--amber); }
-  .popout-header .vi-hand-led.waiting { color: var(--rose); }
+  /* Mini status coin: replaces the old LED dots; ink rim keeps contrast. */
+  .vi-coin-led { width: calc(13px * var(--z, 1)); height: calc(13px * var(--z, 1)); flex: 0 0 auto; }
+  .vi-coin-led.idle, .vi-coin-led.replied { color: var(--vi-done); }
+  .vi-coin-led.thinking { color: var(--vi-working); animation: ava-blink 1s steps(2) infinite; }
+  .vi-coin-led.waiting { color: var(--vi-wait); animation: ava-blink 0.55s steps(2) infinite; }
+  .vi-coin-led.off { color: #5a5a5f; }
+  .popout-header .vi-coin-led { width: 14px; height: 14px; }
+  .popout-header .vi-coin-led.idle, .popout-header .vi-coin-led.replied { color: var(--hp); }
+  .popout-header .vi-coin-led.thinking { color: var(--amber); }
+  .popout-header .vi-coin-led.waiting { color: var(--rose); }
 
   .vi-card-body {
     flex: 1;
@@ -392,32 +391,35 @@
   .vi-dot.pulse { animation: vi-pulse 1.2s ease-in-out infinite; }
 
   /* Status avatar (copied from desktop AgentAvatar.tsx): the baby hand
-     acting out the turn phase with the agent's pixel icon. */
+     playing with the agent's coin. Hand keeps brand colors; only the coin
+     tints and moves per phase. */
 
   .vi-avatar {
-    width: calc(48px * var(--z, 1));
-    height: calc(30px * var(--z, 1));
+    width: calc(50px * var(--z, 1));
+    height: calc(32px * var(--z, 1));
     flex: 0 0 auto;
     display: block;
   }
   .vi-avatar > svg { width: 100%; height: 100%; display: block; overflow: visible; }
-  .vi-avatar .ava-icon, .vi-avatar .ava-hand { transition: transform 0.35s ease; }
-  .vi-avatar.idle .ava-tint, .vi-avatar.replied .ava-tint { color: var(--vi-done); }
-  .vi-avatar.thinking .ava-tint { color: var(--vi-working); }
-  .vi-avatar.waiting .ava-tint { color: var(--vi-wait); }
-  .vi-avatar.off .ava-tint { color: #5a5a5f; }
-  .vi-avatar.idle .ava-icon, .vi-avatar.off .ava-icon { transform: translate(28px, 10px) scale(0.58); opacity: 0.55; }
-  .vi-avatar.thinking .ava-icon { transform: translate(3px, 0.5px) scale(0.44); }
-  .vi-avatar.thinking .ava-spin { animation: ava-juggle 0.9s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
-  .vi-avatar.thinking .ava-hand { animation: ava-bat 0.9s ease-in-out infinite; transform-box: fill-box; transform-origin: 60% 90%; }
-  .vi-avatar.waiting .ava-icon { transform: translate(28px, 10px) scale(0.58); animation: ava-blink 0.7s steps(2) infinite; }
+  .vi-avatar .ava-coin { transition: transform 0.35s ease; }
+  .vi-avatar.idle .ava-coin-tint, .vi-avatar.replied .ava-coin-tint { color: var(--vi-done); }
+  .vi-avatar.thinking .ava-coin-tint { color: var(--vi-working); }
+  .vi-avatar.waiting .ava-coin-tint { color: var(--vi-wait); }
+  .vi-avatar.off .ava-coin-tint { color: #5a5a5f; }
+  .vi-avatar.idle .ava-coin, .vi-avatar.off .ava-coin { transform: translate(31px, 12px) scale(0.62); opacity: 0.55; }
+  .vi-avatar.thinking .ava-coin { transform: translate(2.5px, 0.5px) scale(0.62); }
+  .vi-avatar.thinking .ava-roll { animation: ava-roll 1.15s ease-in-out infinite; }
+  .vi-avatar.thinking .ava-flip { animation: ava-flip 1.15s linear infinite; transform-box: fill-box; transform-origin: center; }
+  .vi-avatar.thinking .ava-hand { animation: ava-bat 1.15s ease-in-out infinite; transform-box: fill-box; transform-origin: 60% 90%; }
+  .vi-avatar.waiting .ava-coin { transform: translate(31px, 12px) scale(0.62); animation: ava-blink 0.7s steps(2) infinite; }
   .vi-avatar.waiting .ava-hand { animation: ava-wave 0.8s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 95%; }
-  .vi-avatar.replied .ava-icon { transform: translate(4.6px, 6px) scale(0.44); }
+  .vi-avatar.replied .ava-coin { transform: translate(6px, 6.5px) scale(0.62); }
 
-  @keyframes ava-juggle { 0%, 100% { transform: translateY(0) rotate(-9deg); } 50% { transform: translateY(-3px) rotate(9deg); } }
-  @keyframes ava-bat { 0%, 100% { transform: rotate(-3deg); } 50% { transform: rotate(4deg) translateY(-0.6px); } }
+  @keyframes ava-roll { 0%, 100% { transform: translate(0, 1.5px); } 50% { transform: translate(9px, -2px); } }
+  @keyframes ava-flip { 0% { transform: scaleX(1); } 25% { transform: scaleX(0.12); } 50% { transform: scaleX(1); } 75% { transform: scaleX(0.12); } 100% { transform: scaleX(1); } }
+  @keyframes ava-bat { 0%, 100% { transform: rotate(-2.5deg); } 50% { transform: rotate(3deg) translateY(-0.5px); } }
   @keyframes ava-wave { 0%, 100% { transform: rotate(-11deg); } 50% { transform: rotate(11deg); } }
-  @keyframes ava-blink { 50% { opacity: 0.25; } }
+  @keyframes ava-blink { 50% { opacity: 0.3; } }
 
   /* mini mode (far-out zoom): terminal cards degrade to led + name,
      matching the desktop's MINI_ZOOM tile. Toggled by #world[data-mode]. */
@@ -440,7 +442,7 @@
     text-overflow: ellipsis;
   }
   .card.shell-card .mini-name { color: var(--ink); font-family: var(--font-pixel); }
-  .mini-row .vi-hand-led { width: calc(13px * var(--z, 1)); height: calc(14px * var(--z, 1)); animation: none; }
+  .mini-row .vi-coin-led { width: calc(14px * var(--z, 1)); height: calc(14px * var(--z, 1)); animation: none; }
 
   #world[data-mode='mini'] .tcard > :not(.mini-row) { display: none; }
   #world[data-mode='mini'] .tcard .mini-row { display: flex; }
@@ -728,7 +730,7 @@
 
 <div id="popout">
   <div class="popout-header">
-    <svg id="popLed" class="vi-hand-led idle" viewBox="0 0 32 34" aria-hidden="true"><use href="#cr-logo-hand" fill="currentColor"/></svg>
+    <svg id="popLed" class="vi-coin-led idle" viewBox="0 0 26 26" aria-hidden="true"><circle cx="13" cy="13" r="11.5" fill="currentColor" stroke="var(--ink)" stroke-width="2"/><circle cx="13" cy="13" r="8.9" fill="none" stroke="#1c1408" stroke-width="1.2" opacity="0.35"/></svg>
     <span id="popTitle" class="popout-title">—</span>
     <span id="popStatus" class="card-status"></span>
     <button id="popClose" class="cr-btn"><svg class="cr-icon" viewBox="0 0 16 16"><use href="#mi-close"/></svg> CLOSE</button>
@@ -802,34 +804,44 @@
 
   /* Per-agent pixel sprites, same 11×8 grids as the desktop AgentSprite.tsx:
      Claude Code starburst, Codex ring, OpenCode terminal block, invader fallback. */
-  const AGENT_GRIDS = {
-    claude: ['.....X.....', '.X...X...X.', '..X.XXX.X..', 'XXXXX.XXXXX', '..X.XXX.X..', '.X...X...X.', '.....X.....'],
-    codex: ['....XXX....', '..XX...XX..', '.X.......X.', '.X...X...X.', '.X.......X.', '..XX...XX..', '....XXX....'],
-    opencode: ['XXXXXXXXXXX', 'X.........X', 'X.X.......X', 'X..X......X', 'X.X...XXX.X', 'X.........X', 'XXXXXXXXXXX'],
-    shell: ['..X.....X..', '...X...X...', '..XXXXXXX..', '.XX.XXX.XX.', 'XXXXXXXXXXX', 'X.XXXXXXX.X', 'X.X.....X.X', '...XX.XX...']
+  const COIN_GLYPHS = {
+    claude: ['...X...', '.X.X.X.', '..XXX..', 'XXX.XXX', '..XXX..', '.X.X.X.', '...X...'],
+    codex: ['..XXX..', '.X...X.', 'X.....X', 'X..X..X', 'X.....X', '.X...X.', '..XXX..'],
+    opencode: ['.......', 'X......', '.X.....', '..X....', '.X.....', 'X...XXX', '.......'],
+    shell: ['.X...X.', '..X.X..', '.XXXXX.', 'XX.X.XX', 'XXXXXXX', '.X...X.']
   }
 
-  function agentIconCells(preset) {
-    const kind = /claude/i.test(preset) ? 'claude'
+  /* Agent coin face: mark stamped on a disc; disc tints via currentColor. */
+  function coinFace(preset) {
+    const kind = preset === null ? null
+      : /claude/i.test(preset) ? 'claude'
       : /codex/i.test(preset) ? 'codex'
       : /opencode/i.test(preset) ? 'opencode'
       : 'shell'
-    const cells = []
-    AGENT_GRIDS[kind].forEach((row, y) => {
-      Array.from(row).forEach((cell, x) => {
-        if (cell === 'X') cells.push(`<rect x="${x * 3}" y="${y * 3}" width="3" height="3" fill="currentColor"/>`)
+    const grid = kind ? COIN_GLYPHS[kind] : []
+    const cell = 2.4
+    const ox = 13 - (7 * cell) / 2
+    const oy = 13 - (grid.length * cell) / 2
+    const stamps = []
+    grid.forEach((row, y) => {
+      Array.from(row).forEach((c, x) => {
+        if (c === 'X') stamps.push(`<rect x="${(ox + x * cell).toFixed(2)}" y="${(oy + y * cell).toFixed(2)}" width="${cell}" height="${cell}" fill="#1c1408"/>`)
       })
     })
-    return cells.join('')
+    return `<g class="ava-coin-tint">
+      <circle cx="13" cy="13" r="11.5" fill="currentColor" stroke="var(--ink)" stroke-width="2"/>
+      <circle cx="13" cy="13" r="8.9" fill="none" stroke="#1c1408" stroke-width="1.2" opacity="0.35"/>
+      ${stamps.join('')}
+    </g>`
   }
 
   /* Status avatar: the baby hand (reusing the header logo's #cr-logo-hand
-     path) acting out the phase with the agent's pixel icon — parked when
-     idle, juggled while thinking, held when replied, waving when waiting. */
+     path) playing with the agent's coin — parked when idle, knuckle-rolled
+     while thinking, held when replied, waved at when waiting. */
   function agentAvatar(preset, phase) {
-    return `<div class="vi-avatar ${phase}"><svg viewBox="0 0 48 30" aria-hidden="true">
-      <g class="ava-icon"><g class="ava-tint"><g class="ava-spin">${agentIconCells(preset)}</g></g></g>
-      <g class="ava-hand"><svg x="1" y="8" width="21" height="21" viewBox="0 0 32 32">
+    return `<div class="vi-avatar ${phase}"><svg viewBox="0 0 50 32" aria-hidden="true">
+      <g class="ava-coin"><g class="ava-roll"><g class="ava-flip">${coinFace(preset)}</g></g></g>
+      <g class="ava-hand"><svg x="1" y="10" width="22" height="22" viewBox="0 0 32 32">
         <use href="#cr-logo-hand" transform="translate(1.6 1.6)" fill="var(--amber)" stroke="var(--amber)" stroke-width="3" stroke-linejoin="round"/>
         <use href="#cr-logo-hand" fill="var(--ink)" stroke="var(--ink)" stroke-width="3" stroke-linejoin="round"/>
         <use href="#cr-logo-hand" fill="var(--cream-hi)"/>
@@ -837,9 +849,9 @@
     </svg></div>`
   }
 
-  /* Baby-hand silhouette standing in for the old status LED dots. */
-  function handLed(phase) {
-    return `<svg class="vi-hand-led ${phase}" viewBox="0 0 32 34" aria-hidden="true"><use href="#cr-logo-hand" fill="currentColor"/></svg>`
+  /* Mini status coin standing in for the old LED dots. */
+  function coinLed(phase, preset) {
+    return `<svg class="vi-coin-led ${phase}" viewBox="0 0 26 26" aria-hidden="true">${coinFace(preset === undefined ? null : preset)}</svg>`
   }
 
   function agoLabel(since) {
@@ -877,7 +889,7 @@
       : ''
     const timeChip = phase === 'idle' && activity && node.running
       ? `<span class="vi-chip dim">${agoLabel(activity.updatedAt)}</span>`
-      : handLed(led)
+      : coinLed(led, node.preset)
     return `
       <div class="vi-head">
         ${agentAvatar(node.preset, off ? 'off' : phase)}
@@ -887,7 +899,7 @@
         ${timeChip}
       </div>
       <div class="vi-card-body">${you}${latest}</div>
-      <div class="mini-row">${handLed(led)}<span class="mini-name">${esc(node.name)}</span></div>`
+      <div class="mini-row">${coinLed(led, node.preset)}<span class="mini-name">${esc(node.name)}</span></div>`
   }
 
   function shellCardHtml(node, activity) {
@@ -903,7 +915,7 @@
         <span class="cr-chip" style="margin-left:auto">${esc(node.preset)}</span>
       </div>
       <div class="cr-phos cr-crt card-screen">${body}<span class="phos-cursor">▮</span></div>
-      <div class="mini-row">${handLed(node.running ? 'idle' : 'off')}<span class="mini-name">${esc(node.name)}</span></div>`
+      <div class="mini-row">${coinLed(node.running ? 'idle' : 'off', node.preset)}<span class="mini-name">${esc(node.name)}</span></div>`
   }
 
   function noteCardHtml(node) {
@@ -1122,14 +1134,14 @@
     const node = nodes.find((n) => n.id === openId)
     if (!node) return
     if (node.kind !== 'terminal') {
-      popLed.setAttribute('class', 'vi-hand-led idle')
+      popLed.setAttribute('class', 'vi-coin-led idle')
       popStatus.textContent = node.kind.toUpperCase()
       popStatus.className = 'card-status'
       return
     }
     const activity = activities[node.id]
     const phase = activity ? activity.phase : 'idle'
-    popLed.setAttribute('class', 'vi-hand-led ' + (node.running ? phase : 'off'))
+    popLed.setAttribute('class', 'vi-coin-led ' + (node.running ? phase : 'off'))
     popStatus.textContent = node.running ? STATUS_LABEL[phase] : 'OFFLINE'
     popStatus.className = 'card-status ' + phase
     popAttention.style.display = phase === 'waiting' ? 'block' : 'none'

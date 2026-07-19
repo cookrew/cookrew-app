@@ -1615,12 +1615,12 @@ body,
   color: #5a5a5f;
 }
 
-/* Status avatar (AgentAvatar.tsx): the baby hand acting out the turn phase
-   with the agent's pixel icon. Layout per phase, motion while it matters. */
+/* Status avatar (AgentAvatar.tsx): the baby hand playing with the agent's
+   coin. Hand keeps brand colors; only the coin tints and moves per phase. */
 
 .vi-avatar {
-  width: calc(48px * var(--z, 1));
-  height: calc(30px * var(--z, 1));
+  width: calc(50px * var(--z, 1));
+  height: calc(32px * var(--z, 1));
   flex: 0 0 auto;
   display: block;
 }
@@ -1632,50 +1632,54 @@ body,
   overflow: visible;
 }
 
-.vi-avatar .ava-icon,
-.vi-avatar .ava-hand {
+.vi-avatar .ava-coin {
   transition: transform 0.35s ease;
 }
 
-.vi-avatar.idle .ava-tint,
-.vi-avatar.replied .ava-tint {
+.vi-avatar.idle .ava-coin-tint,
+.vi-avatar.replied .ava-coin-tint {
   color: var(--vi-done);
 }
 
-.vi-avatar.thinking .ava-tint {
+.vi-avatar.thinking .ava-coin-tint {
   color: var(--vi-working);
 }
 
-.vi-avatar.waiting .ava-tint {
+.vi-avatar.waiting .ava-coin-tint {
   color: var(--vi-wait);
 }
 
-/* idle: hand at rest, icon parked beside it */
-.vi-avatar.idle .ava-icon {
-  transform: translate(28px, 10px) scale(0.58);
+/* idle: coin parked beside the resting hand, dim */
+.vi-avatar.idle .ava-coin {
+  transform: translate(31px, 12px) scale(0.62);
   opacity: 0.55;
 }
 
-/* thinking: fingers juggle the icon above the fingertips */
-.vi-avatar.thinking .ava-icon {
-  transform: translate(3px, 0.5px) scale(0.44);
+/* thinking: knuckle-roll — the coin travels the fingertip line, flipping
+   edge-on twice per traverse like a magician rolling a coin */
+.vi-avatar.thinking .ava-coin {
+  transform: translate(2.5px, 0.5px) scale(0.62);
 }
 
-.vi-avatar.thinking .ava-spin {
-  animation: ava-juggle 0.9s ease-in-out infinite;
+.vi-avatar.thinking .ava-roll {
+  animation: ava-roll 1.15s ease-in-out infinite;
+}
+
+.vi-avatar.thinking .ava-flip {
+  animation: ava-flip 1.15s linear infinite;
   transform-box: fill-box;
   transform-origin: center;
 }
 
 .vi-avatar.thinking .ava-hand {
-  animation: ava-bat 0.9s ease-in-out infinite;
+  animation: ava-bat 1.15s ease-in-out infinite;
   transform-box: fill-box;
   transform-origin: 60% 90%;
 }
 
-/* waiting: hand waves for attention, icon blinks */
-.vi-avatar.waiting .ava-icon {
-  transform: translate(28px, 10px) scale(0.58);
+/* waiting: hand waves for attention, coin blinks */
+.vi-avatar.waiting .ava-coin {
+  transform: translate(31px, 12px) scale(0.62);
   animation: ava-blink 0.7s steps(2) infinite;
 }
 
@@ -1685,28 +1689,46 @@ body,
   transform-origin: 50% 95%;
 }
 
-/* replied: icon rests held on the fingertips */
-.vi-avatar.replied .ava-icon {
-  transform: translate(4.6px, 6px) scale(0.44);
+/* replied: coin held resting on the fingertips */
+.vi-avatar.replied .ava-coin {
+  transform: translate(6px, 6.5px) scale(0.62);
 }
 
-@keyframes ava-juggle {
+@keyframes ava-roll {
   0%,
   100% {
-    transform: translateY(0) rotate(-9deg);
+    transform: translate(0, 1.5px);
   }
   50% {
-    transform: translateY(-3px) rotate(9deg);
+    transform: translate(9px, -2px);
+  }
+}
+
+@keyframes ava-flip {
+  0% {
+    transform: scaleX(1);
+  }
+  25% {
+    transform: scaleX(0.12);
+  }
+  50% {
+    transform: scaleX(1);
+  }
+  75% {
+    transform: scaleX(0.12);
+  }
+  100% {
+    transform: scaleX(1);
   }
 }
 
 @keyframes ava-bat {
   0%,
   100% {
-    transform: rotate(-3deg);
+    transform: rotate(-2.5deg);
   }
   50% {
-    transform: rotate(4deg) translateY(-0.6px);
+    transform: rotate(3deg) translateY(-0.5px);
   }
 }
 
@@ -1722,63 +1744,57 @@ body,
 
 @keyframes ava-blink {
   50% {
-    opacity: 0.25;
+    opacity: 0.3;
   }
 }
 
-/* Baby-hand status LED (HandLed): replaces the old colored dots. */
-.vi-hand-led {
-  width: calc(12px * var(--z, 1));
+/* Mini status coin (StatusCoin): replaces the old LED dots. The coin's ink
+   rim gives it contrast on cream, so only the tint changes per context. */
+.vi-coin-led {
+  width: calc(13px * var(--z, 1));
   height: calc(13px * var(--z, 1));
   flex: 0 0 auto;
 }
 
-.vi-hand-led.idle,
-.vi-hand-led.replied {
+.vi-coin-led.idle,
+.vi-coin-led.replied {
   color: var(--vi-done);
 }
 
-.vi-hand-led.thinking {
+.vi-coin-led.thinking {
   color: var(--vi-working);
   animation: ava-blink 1s steps(2) infinite;
 }
 
-.vi-hand-led.waiting {
+.vi-coin-led.waiting {
   color: var(--vi-wait);
   animation: ava-blink 0.55s steps(2) infinite;
 }
 
-.vi-hand-led.off {
+.vi-coin-led.off {
   color: #5a5a5f;
 }
 
-/* Cream chrome contexts: token colors + ink outline for contrast. */
-.cr-header .vi-hand-led,
-.popout-header .vi-hand-led {
-  width: 13px;
+.cr-header .vi-coin-led,
+.popout-header .vi-coin-led {
+  width: 14px;
   height: 14px;
 }
 
-.cr-header .vi-hand-led path,
-.popout-header .vi-hand-led path {
-  stroke: var(--ink);
-  stroke-width: 1.4;
-}
-
-.cr-header .vi-hand-led.idle,
-.cr-header .vi-hand-led.replied,
-.popout-header .vi-hand-led.idle,
-.popout-header .vi-hand-led.replied {
+.cr-header .vi-coin-led.idle,
+.cr-header .vi-coin-led.replied,
+.popout-header .vi-coin-led.idle,
+.popout-header .vi-coin-led.replied {
   color: var(--hp);
 }
 
-.cr-header .vi-hand-led.thinking,
-.popout-header .vi-hand-led.thinking {
+.cr-header .vi-coin-led.thinking,
+.popout-header .vi-coin-led.thinking {
   color: var(--amber);
 }
 
-.cr-header .vi-hand-led.waiting,
-.popout-header .vi-hand-led.waiting {
+.cr-header .vi-coin-led.waiting,
+.popout-header .vi-coin-led.waiting {
   color: var(--rose);
 }
 
@@ -1824,8 +1840,8 @@ body,
   border-bottom: none;
 }
 
-.vi-mini .vi-hand-led {
-  width: calc(13px * var(--z, 1));
+.vi-mini .vi-coin-led {
+  width: calc(14px * var(--z, 1));
   height: calc(14px * var(--z, 1));
   /* no animations at this size — keep the paint cheap */
   animation: none;
