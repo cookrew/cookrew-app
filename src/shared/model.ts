@@ -30,6 +30,13 @@ export interface TerminalNodeData {
   role: string | null
   /** Set when this agent was forked from another agent's turn. */
   forkOf?: ForkOrigin | null
+  /**
+   * Claude Code session id this terminal is bound to at spawn
+   * (--session-id / --resume), so session-file features (native fork)
+   * locate the exact session on disk without guessing. Absent for
+   * non-Claude presets and terminals from before ids were stored.
+   */
+  claudeSessionId?: string | null
   position: CanvasPosition
   size: CanvasSize
 }

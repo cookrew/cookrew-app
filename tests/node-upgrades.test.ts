@@ -63,4 +63,14 @@ describe('upgradeNode', () => {
     const custom = terminal({ name: 'Conductor', orch: true, preset: 'Codex', command: 'codex' })
     expect(upgradeNode(custom)).toEqual(custom)
   })
+
+  it('preserves the claude session binding through the load-time upgrade', () => {
+    const bound = terminal({
+      preset: 'Claude Code',
+      command: 'claude --permission-mode bypassPermissions',
+      claudeSessionId: '4188d6fa-41a0-4618-8e66-ea2af33e42b1'
+    })
+    const upgraded = upgradeNode(bound) as TerminalNodeData
+    expect(upgraded.claudeSessionId).toBe('4188d6fa-41a0-4618-8e66-ea2af33e42b1')
+  })
 })

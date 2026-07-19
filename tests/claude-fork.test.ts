@@ -6,14 +6,17 @@ import type { TurnRecord } from '../src/shared/turn'
 import {
   buildForkedSessionLines,
   buildResumeCommand,
+  buildSessionIdCommand,
   claudeProjectSlug,
+  extractSessionFlag,
   forkCutoffMs,
   isClaudeCommand,
   scoreSessionMatch,
-  sessionPrompts
+  sessionPrompts,
+  stripSessionFlags
 } from '../src/shared/claude-fork'
 import { buildResumeForkNotice } from '../src/shared/fork'
-import { forkClaudeSession } from '../src/main/claude-fork'
+import { claudeSpawnCommand, forkClaudeSession } from '../src/main/claude-fork'
 
 const T0 = Date.parse('2026-07-19T10:00:00.000Z')
 
@@ -84,6 +87,12 @@ describe('isClaudeCommand / buildResumeCommand', () => {
     )
   })
 
+  it('appends --session-id for fresh conversations', () => {
+    expect(buildSessionIdCommand('claude --verbose', 'abc')).toBe(
+      'claude --verbose --session-id abc'
+    )
+  })
+
   it('strips a previous --resume/--session-id (fork of a fork)', () => {
     expect(buildResumeCommand('claude --resume old-id --verbose', 'new-id')).toBe(
       'claude --verbose --resume new-id'
@@ -91,6 +100,24 @@ describe('isClaudeCommand / buildResumeCommand', () => {
     expect(buildResumeCommand('claude --session-id=old-id', 'new-id')).toBe(
       'claude --resume new-id'
     )
+    expect(stripSessionFlags('claude --resume old-id --verbose')).toBe('claude --verbose')
+    expect(stripSessionFlags('codex')).toBe('codex')
+  })
+})
+
+describe('extractSessionFlag', () => {
+  it('recovers an id baked into an older fork command', () => {
+    expect(extractSessionFlag('claude --resume 4188d6fa-41a0-4618-8e66-ea2af33e42b1')).toBe(
+      '4188d6fa-41a0-4618-8e66-ea2af33e42b1'
+    )
+    expect(extractSessionFlag('claude --session-id=00fec4a9-217d-49b0')).toBe(
+      '00fec4a9-217d-49b0'
+    )
+  })
+
+  it('returns null when no session flag is present', () => {
+    expect(extractSessionFlag('claude --permission-mode bypassPermissions')).toBeNull()
+    expect(extractSessionFlag('codex')).toBeNull()
   })
 })
 
@@ -193,7 +220,7 @@ describe('forkClaudeSession', () => {
 
   const command = 'claude --permission-mode bypassPermissions'
 
-  it('writes a truncated copy and returns a --resume command', () => {
+  it('writes a truncated copy under a fresh session id', () => {
     const { projectsDir, dir } = setup()
     const origin = sessionLines(3).join('\n') + '\n'
     writeFileSync(path.join(dir, 'origin-id.jsonl'), origin)
@@ -202,12 +229,57 @@ describe('forkClaudeSession', () => {
     const result = forkClaudeSession({ command, cwd: '/work/repo', turns, turnIndex: 2, projectsDir })
 
     expect(result).not.toBeNull()
-    expect(result!.command).toBe(`${command} --resume ${result!.sessionId}`)
     const forkFile = path.join(dir, `${result!.sessionId}.jsonl`)
     const forked = readFileSync(forkFile, 'utf8')
     expect(forked).toContain('prompt 2')
     expect(forked).not.toContain('prompt 3')
     expect(forked).not.toContain('origin-id')
+  })
+
+  it('uses the stored session id directly, ignoring better-scoring files', () => {
+    const { projectsDir, dir } = setup()
+    // A decoy that would win prompt-matching: same prompts, more of them.
+    writeFileSync(path.join(dir, 'decoy.jsonl'), sessionLines(3, 'decoy').join('\n') + '\n')
+    const bound = [
+      JSON.stringify({
+        type: 'user',
+        sessionId: 'bound-id',
+        timestamp: new Date(T0 + 60_000).toISOString(),
+        message: { content: 'offset text the scraper never saw' }
+      })
+    ]
+    writeFileSync(path.join(dir, 'bound-id.jsonl'), bound.join('\n') + '\n')
+
+    const result = forkClaudeSession({
+      command,
+      cwd: '/work/repo',
+      sessionId: 'bound-id',
+      turns: [turn(1), turn(2), turn(3)],
+      turnIndex: 3,
+      projectsDir
+    })
+    expect(result).not.toBeNull()
+    const forked = readFileSync(path.join(dir, `${result!.sessionId}.jsonl`), 'utf8')
+    expect(forked).toContain('offset text the scraper never saw')
+    expect(forked).not.toContain('decoy')
+  })
+
+  it('falls back to prompt matching when the stored id has no file', () => {
+    const { projectsDir, dir } = setup()
+    writeFileSync(path.join(dir, 'origin-id.jsonl'), sessionLines(2).join('\n') + '\n')
+
+    const result = forkClaudeSession({
+      command,
+      cwd: '/work/repo',
+      sessionId: 'gone-id',
+      turns: [turn(1), turn(2)],
+      turnIndex: 2,
+      projectsDir
+    })
+    expect(result).not.toBeNull()
+    expect(readFileSync(path.join(dir, `${result!.sessionId}.jsonl`), 'utf8')).toContain(
+      'prompt 1'
+    )
   })
 
   it('never modifies the origin session file', () => {
@@ -287,6 +359,25 @@ describe('forkClaudeSession', () => {
       projectsDir
     })
     expect(result).toBeNull()
+  })
+})
+
+describe('claudeSpawnCommand', () => {
+  it('starts fresh conversations with --session-id', () => {
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'cookrew-claude-spawn-'))
+    expect(claudeSpawnCommand('claude --verbose', '/work/repo', 'new-id', projectsDir)).toBe(
+      'claude --verbose --session-id new-id'
+    )
+  })
+
+  it('resumes when the bound session file already exists', () => {
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'cookrew-claude-spawn-'))
+    const dir = path.join(projectsDir, claudeProjectSlug('/work/repo'))
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, 'live-id.jsonl'), sessionLines(1, 'live-id').join('\n') + '\n')
+    expect(claudeSpawnCommand('claude --verbose', '/work/repo', 'live-id', projectsDir)).toBe(
+      'claude --verbose --resume live-id'
+    )
   })
 })
 

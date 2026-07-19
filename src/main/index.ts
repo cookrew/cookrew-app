@@ -14,6 +14,8 @@ import { startMobileServer, mobileUrls } from './mobile-server'
 import { CanvasNode, DEFAULT_TERMINAL_SIZE, TerminalNodeData, WorkspaceMeta } from '../shared/model'
 import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
 import { forkTerminal as forkTerminalOp } from './fork'
+import { extractSessionFlag, isClaudeCommand } from '../shared/claude-fork'
+import { claudeSpawnCommand } from './claude-fork'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -35,11 +37,27 @@ const LEGACY_COMMANDS: Record<string, string> = {
 }
 
 /** Spawn (or reuse) a PTY for a terminal node and register turn tracking. */
-function spawnTracked(t: { id: string; command: string; cwd: string }): void {
+function spawnTracked(t: {
+  id: string
+  command: string
+  cwd: string
+  claudeSessionId?: string | null
+}): void {
   const upgraded = LEGACY_COMMANDS[t.command.trim()]
   const command = upgraded ?? t.command
   if (upgraded) store.updateNode(t.id, { command })
-  const session = ptys.spawn({ terminalId: t.id, command, cwd: t.cwd })
+  let effective = command
+  if (isClaudeCommand(command)) {
+    // Bind every Claude terminal to a known session id (adopting one already
+    // baked into an older fork command) so session-file features — native
+    // fork, resume after a dead tmux session — never guess which session
+    // file is this terminal's. tmux reuses live sessions, so the effective
+    // command only matters when the terminal actually (re)boots.
+    const sessionId = t.claudeSessionId ?? extractSessionFlag(command) ?? randomUUID()
+    if (t.claudeSessionId !== sessionId) store.updateNode(t.id, { claudeSessionId: sessionId })
+    effective = claudeSpawnCommand(command, t.cwd, sessionId)
+  }
+  const session = ptys.spawn({ terminalId: t.id, command: effective, cwd: t.cwd })
   turns.track(session, command.trim().length > 0)
 }
 

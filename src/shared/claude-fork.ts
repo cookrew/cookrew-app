@@ -135,14 +135,29 @@ export function isClaudeCommand(command: string): boolean {
   return /^\s*claude\b/.test(command)
 }
 
+const SESSION_FLAG_RE = /\s--(?:resume|session-id)(?:[= ]\S+)?/g
+
+/** The command without any --resume/--session-id binding. */
+export function stripSessionFlags(command: string): string {
+  return command.replace(SESSION_FLAG_RE, '').trim()
+}
+
 /**
- * The fork terminal's launch command: the source's command with any previous
- * --resume/--session-id stripped (fork of a fork) and the forked session's
- * id appended, so respawns after an app restart also land in the fork.
+ * Session id already baked into a launch command (fork nodes persisted
+ * before ids were stored on the node), so respawns can adopt it instead of
+ * abandoning that session under a fresh id.
  */
+export function extractSessionFlag(command: string): string | null {
+  const match = /--(?:resume|session-id)[= ]([0-9a-fA-F][0-9a-fA-F-]{7,})/.exec(command)
+  return match ? match[1] : null
+}
+
+/** Launch command resuming an EXISTING session file under this id. */
 export function buildResumeCommand(sourceCommand: string, sessionId: string): string {
-  const base = sourceCommand
-    .replace(/\s--(?:resume|session-id)(?:[= ]\S+)?/g, '')
-    .trim()
-  return `${base} --resume ${sessionId}`
+  return `${stripSessionFlags(sourceCommand)} --resume ${sessionId}`
+}
+
+/** Launch command starting a NEW conversation recorded under this id. */
+export function buildSessionIdCommand(sourceCommand: string, sessionId: string): string {
+  return `${stripSessionFlags(sourceCommand)} --session-id ${sessionId}`
 }
