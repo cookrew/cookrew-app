@@ -1,6 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { askTerminal, decodeRawEscapes, diffOutput } from '../src/main/ask'
+import { askTerminal, decodeRawEscapes, diffOutput, submitDelayMs } from '../src/main/ask'
 import type { PtySession } from '../src/main/pty'
+
+describe('submitDelayMs', () => {
+  it('starts at the base delay for short prompts', () => {
+    expect(submitDelayMs(0)).toBe(150)
+    expect(submitDelayMs(20)).toBeLessThan(200)
+  })
+
+  it('scales up with prompt size', () => {
+    expect(submitDelayMs(10 * 1024)).toBe(1150)
+  })
+
+  it('caps at 1.5s for huge prompts', () => {
+    expect(submitDelayMs(1_000_000)).toBe(1500)
+  })
+})
 
 describe('askTerminal', () => {
   afterEach(() => {
@@ -25,6 +40,28 @@ describe('askTerminal', () => {
     await vi.advanceTimersByTimeAsync(1000)
     expect(writes.map((w) => w.data)).toEqual(['fix the bug', '\r'])
     expect(writes[1].at - writes[0].at).toBeGreaterThan(0)
+    await promise
+  })
+
+  it('holds the Enter longer for long prompts still being ingested', async () => {
+    vi.useFakeTimers()
+    const writes: string[] = []
+    const session = {
+      fullText: () => '',
+      idleFor: () => 99_999,
+      write: (data: string) => {
+        writes.push(data)
+      }
+    } as unknown as PtySession
+    const prompt = 'x'.repeat(10 * 1024)
+
+    const promise = askTerminal(session, prompt, { quiescenceMs: 0, graceMs: 0 })
+    // The base delay alone is not enough for a 10KB paste — the Enter must
+    // not have been sent yet.
+    await vi.advanceTimersByTimeAsync(500)
+    expect(writes).toEqual([prompt])
+    await vi.advanceTimersByTimeAsync(1200)
+    expect(writes).toEqual([prompt, '\r'])
     await promise
   })
 })

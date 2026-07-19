@@ -5,6 +5,7 @@ import {
   detectAttention,
   detectLiveWork,
   feedPromptBuffer,
+  isLiveStatus,
   parseAgentGlance,
   tailLines
 } from '../src/shared/turn'
@@ -121,14 +122,39 @@ describe('detectAgentActivity', () => {
   })
 })
 
+describe('isLiveStatus', () => {
+  it('recognises in-flight spinner bodies', () => {
+    expect(isLiveStatus('Honking… (23m 20s · ↓ 24.5k tokens)')).toBe(true)
+    expect(isLiveStatus('Cerebrating… (esc to interrupt · 34s)')).toBe(true)
+    expect(isLiveStatus('Baking…')).toBe(true)
+  })
+
+  it('rejects completed-turn status bodies', () => {
+    expect(isLiveStatus('Brewed for 4m 15s')).toBe(false)
+    expect(isLiveStatus('Baked for 1m 6s')).toBe(false)
+    // Even when a completed line carries a token counter, the past-tense
+    // "<verb>ed for <time>" prefix marks it as finished.
+    expect(isLiveStatus('Baked for 1m 6s · ↓ 2.1k tokens')).toBe(false)
+  })
+
+  it('rejects plain non-status text', () => {
+    expect(isLiveStatus('all tests pass')).toBe(false)
+  })
+})
+
 describe('detectLiveWork', () => {
   it('flags the mid-turn "esc to interrupt" spinner, even across escapes', () => {
     expect(detectLiveWork('✻ Cerebrating… (esc to interrupt · 34s · ↓ 2.1k tokens)')).toBe(true)
     expect(detectLiveWork('\x1b[2K\x1b[38;5;205m✻ Baking… (esc to interrupt)\x1b[0m')).toBe(true)
   })
 
+  it('flags current-style live spinners without "esc to interrupt"', () => {
+    expect(detectLiveWork('✶ Honking… (23m 20s · ↓ 24.5k tokens)')).toBe(true)
+  })
+
   it('does not flag finished-turn status or plain transcript redraws', () => {
     expect(detectLiveWork('✳ Baked for 1m 6s')).toBe(false)
+    expect(detectLiveWork('✻ Brewed for 4m 15s')).toBe(false)
     expect(detectLiveWork('⏺ I finished the refactor earlier.')).toBe(false)
     expect(detectLiveWork('$ ls')).toBe(false)
   })

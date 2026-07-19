@@ -233,6 +233,7 @@ export function createDemoApi(): CookrewApi {
       lineBuffers.set(terminalId, buffer)
     },
     ptyResize: () => undefined,
+    ptyJump: () => undefined,
     ptyAttach: (terminalId, onData) => {
       ptyListeners.set(terminalId, onData)
       setTimeout(() => {

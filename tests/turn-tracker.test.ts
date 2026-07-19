@@ -137,4 +137,53 @@ describe('TurnTracker self-healing', () => {
     expect(phaseOf(tracker)).toBe('idle')
     tracker.disposeAll()
   })
+
+  it('re-enters thinking from replied when a current-style live spinner reappears', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    await completeTurn(tracker, session)
+
+    // BUG 4: premature quiescence marked the turn replied; the agent resumes
+    // streaming with the modern spinner (no "esc to interrupt" in it).
+    session.emit('data', '✶ Honking… (2s · ↓ 0.3k tokens)')
+    expect(phaseOf(tracker)).toBe('thinking')
+    tracker.disposeAll()
+  })
+})
+
+describe('TurnTracker quiescence vs live spinner (BUG 4)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('holds the turn open through a >2.5s pause while the tail shows a live spinner', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    session.emit('input', 'do the migration\r')
+    expect(phaseOf(tracker)).toBe('thinking')
+
+    // Long tool call: output stalls well past quiescence, but the viewport
+    // tail still shows the in-flight spinner.
+    session.full = '⏺ Bash(npm run migrate)\n✶ Honking… (23m 20s · ↓ 24.5k tokens)'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(phaseOf(tracker)).toBe('thinking')
+
+    // Turn actually finishes: completed status replaces the spinner.
+    session.full = '⏺ Migration complete, 12 tables moved.\n✻ Brewed for 4m 15s'
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(phaseOf(tracker)).toBe('replied')
+    tracker.disposeAll()
+  })
+
+  it('still ends spinner-less turns on plain quiescence (shell-style agents)', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    session.emit('input', 'run the report\r')
+    session.full = 'report written to out/report.csv'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(phaseOf(tracker)).toBe('replied')
+    tracker.disposeAll()
+  })
 })

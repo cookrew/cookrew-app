@@ -30,6 +30,8 @@ const api = {
   ptyInput: (terminalId: string, data: string) => ipcRenderer.send('pty:input', terminalId, data),
   ptyResize: (terminalId: string, cols: number, rows: number) =>
     ipcRenderer.send('pty:resize', terminalId, cols, rows),
+  ptyJump: (terminalId: string, text: string | null) =>
+    ipcRenderer.send('pty:jump', terminalId, text),
   ptyAttach: (terminalId: string, onData: (data: string) => void) => {
     const channel = `pty:data:${terminalId}`
     const listener = (_e: unknown, data: string): void => onData(data)
