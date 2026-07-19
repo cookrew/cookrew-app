@@ -1,0 +1,1611 @@
+/* Cookrew-beta inspired arcade theme: cream chrome, hard bevel shadows,
+   square corners, phosphor CRT screens for terminal summaries. */
+
+:root {
+  --cream: #faf8f4;
+  --cream-hi: #fffef5;
+  --cream-md: #f5f0e8;
+  --cream-lo: #ece6da;
+  --ink: #2d2a20;
+  --ink-soft: #5c4a1f;
+  --muted: #78716c;
+  --dim: #a8a29e;
+  --line: #2d2a20;
+  --line-soft: #d9d3c5;
+  --amber: #ffd600;
+  --amber-soft: #fff3ad;
+  --amber-deep: #d97706;
+  --phos: #e9b949;
+  --phos-dim: #8a6d1c;
+  --phos-glow: #ffd77a;
+  --phos-bg: #14110a;
+  --hp: #6bbe58;
+  --rose: #dc2626;
+  --violet: #9b8acb;
+  --note-bg: #fff3ad;
+  --note-text: #3a3625;
+
+  /* vibe-island palette: macOS notch dark + SF system font + state accents */
+  --vi-bg: #121214;
+  --vi-panel: #1c1c1f;
+  --vi-line: #2c2c30;
+  --vi-text: #f5f5f7;
+  --vi-dim: #98989d;
+  --vi-working: #ff9f0a;
+  --vi-wait: #ff453a;
+  --vi-done: #32d74b;
+
+  --font-pixel: 'Silkscreen', 'Courier New', monospace;
+  --font-screen: 'VT323', 'Courier New', monospace;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: var(--cream);
+  color: var(--ink);
+  font-family: var(--font-body);
+  overflow: hidden;
+}
+
+/* ---- app shell: header / stage / dock ---- */
+
+.cr-app {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+}
+
+.cr-stage {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.react-flow {
+  background: var(--cream);
+}
+
+/* ---- header ---- */
+
+.cr-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 10px 16px 10px 88px; /* room for macOS traffic lights */
+  background: var(--cream-hi);
+  border-bottom: 2px solid var(--line);
+  -webkit-app-region: drag;
+  z-index: 50;
+}
+
+.cr-header button,
+.cr-header input {
+  -webkit-app-region: no-drag;
+}
+
+.cr-header-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cr-logo {
+  font-family: var(--font-pixel);
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: 0.08em;
+  text-shadow: 2px 2px 0 var(--amber);
+}
+
+.cr-header-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cr-header-status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cr-kicker {
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.cr-dim {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+
+/* ---- atoms ---- */
+
+.cr-chip {
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--cream-md);
+  border: 1.5px solid var(--line);
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+.cr-chip.amber {
+  background: var(--amber);
+}
+
+.cr-chip.violet {
+  background: var(--violet);
+  color: var(--cream-hi);
+}
+
+.cr-chip.busy {
+  background: var(--amber-soft);
+  animation: cr-blink 1.1s steps(2) infinite;
+}
+
+.cr-chip.clickable {
+  cursor: pointer;
+}
+
+.cr-chip.clickable:hover {
+  background: var(--amber-soft);
+}
+
+.cr-led {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  background: var(--hp);
+  box-shadow: 0 0 6px rgba(107, 190, 88, 0.8);
+  flex: 0 0 auto;
+}
+
+.cr-led.busy {
+  background: var(--amber);
+  box-shadow: 0 0 8px rgba(255, 214, 0, 0.9);
+  animation: cr-blink 0.9s steps(2) infinite;
+}
+
+.cr-led.red {
+  background: var(--rose);
+  box-shadow: 0 0 8px rgba(220, 38, 38, 0.9);
+  animation: cr-blink 0.6s steps(2) infinite;
+}
+
+.cr-chip.attention {
+  background: var(--rose);
+  color: var(--cream-hi);
+  animation: cr-blink 1.1s steps(2) infinite;
+}
+
+.cr-kicker.attention {
+  color: var(--rose);
+}
+
+.cr-btn {
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  padding: 6px 10px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cr-btn:hover {
+  background: var(--amber-soft);
+}
+
+.cr-btn:active {
+  transform: translate(2px, 2px);
+  box-shadow: none;
+}
+
+.cr-btn.primary {
+  background: var(--amber);
+}
+
+.cr-btn.sm {
+  padding: 3px 8px;
+  font-size: 8.5px;
+  box-shadow: none;
+}
+
+.cr-bevel {
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 6px 6px 0 var(--amber-deep);
+}
+
+/* ---- dock (bottom bar) ---- */
+
+.cr-dock {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  background: var(--cream-hi);
+  border-top: 2px solid var(--line);
+  z-index: 50;
+  flex-wrap: wrap;
+}
+
+.cr-dock-tools {
+  display: flex;
+  gap: 8px;
+}
+
+.tool-icon {
+  font-size: 11px;
+}
+
+.cr-dock-presets {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cr-check {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+  margin-left: 6px;
+}
+
+.cr-dock-hint {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+  background: var(--amber-soft);
+  border: 1.5px dashed var(--line);
+  padding: 4px 10px;
+  animation: cr-fadein 160ms ease-out;
+}
+
+/* ---- nodes (cards) ---- */
+
+.node {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 3px 3px 0 var(--line);
+  overflow: hidden;
+}
+
+.node.selected {
+  box-shadow: 4px 4px 0 var(--amber-deep);
+  outline: 2px dashed var(--amber-deep);
+  outline-offset: 3px;
+}
+
+.node.working {
+  box-shadow: 4px 4px 0 var(--amber);
+}
+
+.node.attention {
+  box-shadow: 4px 4px 0 var(--rose);
+  outline: 2px solid var(--rose);
+  outline-offset: 2px;
+}
+
+.node-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  background: var(--cream-md);
+  border-bottom: 2px solid var(--line);
+  cursor: grab;
+  user-select: none;
+  flex: 0 0 auto;
+}
+
+.node-title {
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preset-chip {
+  margin-left: auto;
+}
+
+/* ---- terminal summary card ---- */
+
+.card-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  cursor: zoom-in;
+}
+
+.card-screen {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.cr-phos {
+  background: var(--phos-bg);
+  color: var(--phos);
+  font-family: var(--font-screen);
+  font-size: 15px;
+  line-height: 1.25;
+  position: relative;
+}
+
+.cr-crt::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.03) 0,
+    rgba(255, 255, 255, 0.03) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+.phos-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: hidden;
+}
+
+.phos-line.thinking {
+  color: var(--phos-dim);
+  font-style: italic;
+  text-shadow: 0 0 6px rgba(233, 185, 73, 0.35);
+}
+
+.phos-dim {
+  color: var(--phos-dim);
+  letter-spacing: 0.1em;
+}
+
+.phos-cursor {
+  color: var(--phos-glow);
+  animation: cr-blink 1s steps(2) infinite;
+}
+
+.turn {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.turn-prompt {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--amber-soft);
+  border-bottom: 2px solid var(--line);
+  padding: 6px 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.turn-marker {
+  color: var(--amber-deep);
+}
+
+.turn-reply {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink);
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  -webkit-mask-image: linear-gradient(to bottom, black 82%, transparent 100%);
+}
+
+/* ---- vibe-island agent glance ---- */
+
+.vi-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--vi-bg);
+  color: var(--vi-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
+  overflow: hidden;
+}
+
+.vi-status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vi-status.working {
+  color: var(--vi-working);
+}
+
+.vi-status.waiting {
+  color: var(--vi-wait);
+}
+
+.vi-status.done {
+  color: var(--vi-done);
+}
+
+.vi-status.idle {
+  color: var(--vi-dim);
+  font-weight: 500;
+}
+
+.vi-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.vi-dot.pulse {
+  animation: vi-pulse 1.2s ease-in-out infinite;
+}
+
+.vi-tools {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.vi-tool {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--vi-dim);
+  background: var(--vi-panel);
+  border: 1px solid var(--vi-line);
+  border-radius: 5px;
+  padding: 3px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vi-tool.older {
+  opacity: 0.55;
+  font-size: 9.5px;
+  padding: 1px 8px;
+  border-color: transparent;
+}
+
+.vi-tool.latest {
+  color: var(--vi-text);
+}
+
+.vi-tool-glyph {
+  color: var(--vi-working);
+  display: inline-block;
+  min-width: 11px;
+}
+
+.vi-msg {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--vi-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+}
+
+.vi-caret {
+  color: var(--vi-working);
+  animation: cr-blink 1s steps(2) infinite;
+}
+
+@keyframes vi-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
+}
+
+.card-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--cream-md);
+  border-top: 2px solid var(--line);
+}
+
+.card-status {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.card-status.thinking {
+  color: var(--amber-deep);
+  animation: cr-blink 1.1s steps(2) infinite;
+}
+
+.card-status.replied {
+  color: var(--hp);
+}
+
+.card-status.waiting {
+  color: var(--rose);
+  animation: cr-blink 1.1s steps(2) infinite;
+}
+
+.card-spinner {
+  display: inline-block;
+  color: var(--amber-deep);
+}
+
+.card-clock {
+  color: var(--muted);
+  margin-left: 2px;
+}
+
+.card-screen.waiting {
+  box-shadow: inset 0 0 0 2px var(--rose);
+}
+
+.attention-banner {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: var(--cream-hi);
+  background: var(--rose);
+  padding: 2px 6px;
+  margin-bottom: 4px;
+  align-self: flex-start;
+  animation: cr-blink 1.1s steps(2) infinite;
+}
+
+.card-open-hint {
+  font-family: var(--font-pixel);
+  font-size: 7.5px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+/* ---- card close button (all node headers) ---- */
+
+.card-close {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  margin-left: 2px;
+}
+
+.card-close:hover {
+  color: var(--rose);
+}
+
+/* vi (dark) cards inverse-scale their type via --z — the close button
+   follows so it stays a constant, tappable size at overview zoom. */
+.card-close.dark {
+  color: var(--vi-dim);
+  font-size: calc(13px * var(--z, 1));
+  padding: calc(2px * var(--z, 1)) calc(4px * var(--z, 1));
+}
+
+.card-close.dark:hover {
+  color: var(--vi-wait);
+}
+
+/* Without a right-aligned badge the note header has nothing pushing the
+   close button right — let the title take the slack. */
+.note-header .node-title {
+  flex: 1;
+}
+
+/* ---- note node ---- */
+
+.note-node {
+  background: var(--note-bg);
+}
+
+.note-header {
+  background: var(--amber);
+}
+
+.note-header .node-title {
+  color: var(--note-text);
+}
+
+.lock-badge {
+  margin-left: auto;
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  color: var(--note-text);
+  opacity: 0.6;
+}
+
+.note-body,
+.note-editor {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  color: var(--note-text);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.note-body h1,
+.note-body h2,
+.note-body h3 {
+  margin: 0.4em 0 0.25em;
+  font-size: 1.15em;
+}
+
+.note-body p {
+  margin: 0.3em 0;
+}
+
+.note-body code {
+  background: rgba(0, 0, 0, 0.08);
+  padding: 0 3px;
+}
+
+.note-editor {
+  border: none;
+  outline: none;
+  resize: none;
+  background: var(--note-bg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* ---- browser node ---- */
+
+.browser-dot,
+.node-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  background: var(--violet);
+  flex: 0 0 auto;
+}
+
+.browser-address {
+  flex: 1;
+  margin-left: 6px;
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 3px 8px;
+  outline: none;
+}
+
+.browser-address:focus {
+  color: var(--ink);
+  border-color: var(--amber-deep);
+}
+
+.browser-body {
+  flex: 1;
+  min-height: 0;
+  background: #fff;
+  border: none;
+}
+
+/* Inactive tabs stay mounted (session + automation keep working) but take no
+   space. visibility instead of display:none — hiding a <webview> with
+   display:none is a known Electron footgun (guest page glitches/reloads). */
+.browser-body-hidden {
+  flex: 0 0 0;
+  height: 0;
+  min-height: 0;
+  visibility: hidden;
+}
+
+/* ---- browser tab strip (agent-browser style tab group) ---- */
+
+.browser-tabstrip {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  padding: 5px 8px 0;
+  background: var(--cream-md);
+  border-bottom: 1.5px solid var(--line);
+  overflow-x: auto;
+  flex: 0 0 auto;
+}
+
+.browser-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 200px;
+  padding: 3px 9px 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  border: 1.5px solid var(--line);
+  border-bottom: none;
+  background: var(--cream-hi);
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.browser-tab.active {
+  background: #fff;
+  color: var(--ink);
+}
+
+.browser-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+.browser-tab-close,
+.browser-tab-add {
+  border: none;
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 1px 3px;
+}
+
+.browser-tab-close:hover,
+.browser-tab-add:hover {
+  color: var(--ink);
+}
+
+.browser-tab-add {
+  margin-bottom: 3px;
+  border: 1.5px solid var(--line);
+  background: var(--cream-hi);
+  padding: 1px 7px 3px;
+}
+
+/* Browser card thumbnail */
+
+.browser-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+  display: block;
+  image-rendering: auto;
+  background: #fff;
+}
+
+.browser-thumb-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--cream-md);
+  color: var(--muted);
+}
+
+.browser-thumb-glyph {
+  font-size: 34px;
+  color: var(--violet);
+}
+
+.browser-url-chip {
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: none;
+}
+
+/* Collapsed browsers stay mounted UNDER the canvas (z-index 0, inside the
+   viewport) — moving them offscreen or display:none stops compositing and
+   capturePage() thumbnails come back empty. The stage/header/dock are
+   opaque and stack above, so these are never visible. */
+.browser-offscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1100px;
+  height: 780px;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.cr-header,
+.cr-stage,
+.cr-dock {
+  position: relative;
+  z-index: 1;
+}
+
+.cr-stage {
+  background: var(--cream);
+}
+
+.browser-offscreen .popout {
+  width: 100%;
+  height: 100%;
+}
+
+.browser-popout .browser-address {
+  margin-left: 4px;
+}
+
+/* ---- semantic-zoom full views (LOD overlays) ----
+   A card's full renderer mounts in a fixed overlay aligned to the card's
+   projected screen rect once it covers >=80% of the stage; it fades in over
+   the thumbnail and unmounts when the user zooms back out. */
+
+.lod-overlay,
+.browser-lod {
+  position: fixed;
+  z-index: 30;
+  animation: lod-fadein 180ms ease-out;
+}
+
+.lod-overlay {
+  display: flex;
+  flex-direction: column;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  overflow: hidden;
+}
+
+.browser-lod .popout {
+  width: 100%;
+  height: 100%;
+  border: 2px solid var(--line);
+}
+
+@keyframes lod-fadein {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.popout {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--cream-hi);
+}
+
+.popout-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--cream-md);
+  border-bottom: 2px solid var(--line);
+  flex: 0 0 auto;
+}
+
+.popout-title {
+  font-family: var(--font-pixel);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.popout-close {
+  margin-left: auto;
+}
+
+.popout-terminal {
+  flex: 1;
+  min-height: 0;
+  background: var(--phos-bg);
+  padding: 8px 0 8px 10px;
+}
+
+/* ---- voice composer (terminal full view, desktop + phone) ---- */
+
+.voice-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px max(8px, env(safe-area-inset-bottom));
+  background: var(--cream-md);
+  border-top: 2px solid var(--line);
+}
+
+.voice-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  border-radius: 0;
+  padding: 7px 10px;
+  outline: none;
+  -webkit-appearance: none;
+}
+
+.voice-input:focus {
+  border-color: var(--amber-deep);
+}
+
+.voice-bar .cr-btn {
+  font-size: 12px;
+  padding: 6px 9px;
+}
+
+.voice-mic.listening {
+  background: var(--rose);
+  color: var(--cream-hi);
+  animation: cr-blink 1s steps(2) infinite;
+}
+
+.voice-speak.on {
+  background: var(--amber);
+}
+
+.popout-terminal .xterm {
+  height: 100%;
+}
+
+/* ---- react flow chrome ---- */
+
+.react-flow__controls {
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 3px 3px 0 var(--line);
+  border-radius: 0;
+  overflow: hidden;
+}
+
+.react-flow__controls-button {
+  background: var(--cream-hi);
+  border-bottom: 1.5px solid var(--line-soft);
+  fill: var(--ink);
+}
+
+.react-flow__controls-button:hover {
+  background: var(--amber-soft);
+}
+
+.cookrew-minimap {
+  background: var(--cream-md) !important;
+  border: 2px solid var(--line);
+  border-radius: 0;
+}
+
+.cookrew-minimap .react-flow__minimap-mask {
+  fill: rgba(217, 119, 6, 0.1);
+}
+
+.cookrew-minimap .react-flow__minimap-node {
+  fill: var(--line-soft);
+}
+
+.ghost-handle {
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  min-width: 0;
+  min-height: 0;
+  border: none;
+  pointer-events: none;
+}
+
+.crash-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--ink);
+}
+
+.react-flow__resize-control.handle {
+  background: var(--amber-deep);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  width: 8px;
+  height: 8px;
+}
+
+/* ---- animations ---- */
+
+@keyframes cr-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0.15;
+  }
+}
+
+@keyframes cr-fadein {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ---- vibe-island agent card (semantic-zoom thumbnail) ----
+   Compact typography is inverse-scaled via --z (set from 1/zoom by
+   TerminalNode) so status and summary stay screen-readable when the whole
+   canvas is in view. In .full (zoom >= ~1) --z is 1 (natural sizes). */
+
+.node.vi-card {
+  background: #161618;
+  border: 1px solid #2c2c30;
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+.node.vi-card.selected {
+  outline: 2px dashed var(--amber-deep);
+  outline-offset: 3px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+.node.vi-card.working {
+  border-color: rgba(255, 159, 10, 0.65);
+  box-shadow:
+    0 0 0 2px rgba(255, 159, 10, 0.28),
+    0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+.node.vi-card.attention {
+  border-color: rgba(255, 69, 58, 0.75);
+  outline: none;
+  box-shadow:
+    0 0 0 2px rgba(255, 69, 58, 0.3),
+    0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+.vi-head {
+  background: transparent;
+  border-bottom: 1px solid #232327;
+  gap: calc(8px * var(--z, 1));
+  padding: calc(7px * var(--z, 1)) calc(11px * var(--z, 1));
+}
+
+.vi-title {
+  flex: 1;
+  min-width: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
+  font-size: calc(13px * var(--z, 1));
+  font-weight: 700;
+  color: var(--vi-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vi-title-snip {
+  color: var(--vi-dim);
+  font-weight: 500;
+}
+
+.vi-chip {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
+  font-size: calc(9.5px * var(--z, 1));
+  font-weight: 600;
+  color: #c8c8cd;
+  background: #2a2a2e;
+  border-radius: calc(5px * var(--z, 1));
+  padding: calc(2px * var(--z, 1)) calc(7px * var(--z, 1));
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.vi-chip.tan {
+  background: #4a3b2a;
+  color: #e8c9a0;
+}
+
+.vi-chip.dim {
+  color: #98989d;
+}
+
+.vi-led {
+  width: calc(9px * var(--z, 1));
+  height: calc(9px * var(--z, 1));
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.vi-led.thinking {
+  background: var(--vi-working);
+  box-shadow: 0 0 calc(8px * var(--z, 1)) var(--vi-working);
+  animation: vi-pulse 1.2s ease-in-out infinite;
+}
+
+.vi-led.waiting {
+  background: var(--vi-wait);
+  box-shadow: 0 0 calc(8px * var(--z, 1)) var(--vi-wait);
+  animation: cr-blink 0.7s steps(2) infinite;
+}
+
+.vi-led.replied,
+.vi-led.idle {
+  background: var(--vi-done);
+  box-shadow: 0 0 calc(6px * var(--z, 1)) rgba(50, 215, 75, 0.7);
+}
+
+.vi-card-body {
+  background: transparent;
+  padding: calc(9px * var(--z, 1)) calc(11px * var(--z, 1));
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--z, 1));
+  overflow: hidden;
+}
+
+.vi-card.full .vi-card-body {
+  padding: 10px 12px;
+  gap: 6px;
+}
+
+.vi-ready {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
+  font-size: calc(14px * var(--z, 1));
+  font-weight: 600;
+  color: var(--vi-done);
+}
+
+.vi-you {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--z, 1));
+  line-height: 1.45;
+  color: var(--vi-dim);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.vi-you-label {
+  color: #64d2ff;
+  font-weight: 600;
+}
+
+.vi-latest {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
+  font-size: calc(13.5px * var(--z, 1));
+  font-weight: 600;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  word-break: break-word;
+  min-width: 0;
+}
+
+.vi-latest .vi-dot {
+  display: inline-block;
+  width: calc(7px * var(--z, 1));
+  height: calc(7px * var(--z, 1));
+  margin-right: calc(7px * var(--z, 1));
+  vertical-align: baseline;
+}
+
+.vi-latest.working {
+  color: var(--vi-working);
+}
+
+.vi-latest.waiting {
+  color: var(--vi-wait);
+  animation: cr-blink 1.1s steps(2) infinite;
+}
+
+.vi-latest.done {
+  color: var(--vi-text);
+  font-weight: 500;
+}
+
+.vi-latest-snip {
+  color: var(--vi-dim);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vi-foot {
+  background: #141416;
+  border-top: 1px solid #232327;
+}
+
+.vi-hint {
+  color: #5a5a5f;
+}
+
+/* pixel invader avatar + signal bars */
+
+.vi-avatar {
+  position: relative;
+  width: calc(48px * var(--z, 1));
+  height: calc(24px * var(--z, 1));
+  flex: 0 0 auto;
+  color: #32d74b;
+}
+
+.vi-avatar.waiting {
+  color: #ff453a;
+}
+
+.vi-invader {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 33px;
+  height: 24px;
+  transform: scale(var(--z, 1));
+  transform-origin: top left;
+}
+
+.vi-invader::before {
+  content: '';
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  background: transparent;
+  box-shadow:
+    6px 0 currentColor, 24px 0 currentColor,
+    9px 3px currentColor, 21px 3px currentColor,
+    6px 6px currentColor, 9px 6px currentColor, 12px 6px currentColor,
+    15px 6px currentColor, 18px 6px currentColor, 21px 6px currentColor, 24px 6px currentColor,
+    3px 9px currentColor, 6px 9px currentColor, 12px 9px currentColor, 15px 9px currentColor,
+    18px 9px currentColor, 24px 9px currentColor, 27px 9px currentColor,
+    0 12px currentColor, 3px 12px currentColor, 6px 12px currentColor, 9px 12px currentColor,
+    12px 12px currentColor, 15px 12px currentColor, 18px 12px currentColor, 21px 12px currentColor,
+    24px 12px currentColor, 27px 12px currentColor, 30px 12px currentColor,
+    0 15px currentColor, 6px 15px currentColor, 9px 15px currentColor, 12px 15px currentColor,
+    15px 15px currentColor, 18px 15px currentColor, 21px 15px currentColor, 24px 15px currentColor,
+    30px 15px currentColor,
+    0 18px currentColor, 6px 18px currentColor, 24px 18px currentColor, 30px 18px currentColor,
+    9px 21px currentColor, 12px 21px currentColor, 18px 21px currentColor, 21px 21px currentColor;
+}
+
+.vi-bars {
+  position: absolute;
+  left: calc(38px * var(--z, 1));
+  top: 0;
+  height: calc(24px * var(--z, 1));
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: calc(3px * var(--z, 1));
+}
+
+.vi-bars i {
+  width: calc(8px * var(--z, 1));
+  height: calc(4px * var(--z, 1));
+  background: currentColor;
+  border-radius: 1px;
+  opacity: 0.85;
+}
+
+.vi-avatar.idle .vi-bars i,
+.vi-avatar.replied .vi-bars i {
+  opacity: 0.35;
+}
+
+.vi-avatar.thinking .vi-bars i {
+  animation: vi-bar 1s ease-in-out infinite;
+}
+
+.vi-avatar.thinking .vi-bars i:nth-child(2) {
+  animation-delay: 0.18s;
+}
+
+.vi-avatar.thinking .vi-bars i:nth-child(3) {
+  animation-delay: 0.36s;
+}
+
+@keyframes vi-bar {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ---- mini tile (below visual range) ---- */
+
+.vi-card.mini {
+  cursor: zoom-in;
+}
+
+.vi-mini {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: calc(8px * var(--z, 1));
+  padding: 0 calc(12px * var(--z, 1));
+  background: transparent;
+  border-bottom: none;
+}
+
+.vi-mini .vi-led {
+  width: calc(11px * var(--z, 1));
+  height: calc(11px * var(--z, 1));
+  /* no animations at this size — keep the paint cheap */
+  animation: none;
+}
+
+.vi-mini-name {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
+  font-size: calc(13px * var(--z, 1));
+  font-weight: 700;
+  color: var(--vi-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- workspace switcher (header) ---- */
+.cr-ws {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.cr-ws-current {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--cream-md);
+  border: 1.5px solid var(--line);
+  border-radius: 3px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.cr-ws-current:hover {
+  background: var(--amber-soft);
+}
+.cr-ws-icon {
+  font-size: 12px;
+  line-height: 1;
+}
+.cr-ws-caret {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  color: var(--muted);
+}
+.cr-ws-dir {
+  max-width: 300px;
+}
+.cr-ws-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 260px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  border-radius: 4px;
+  box-shadow: 4px 4px 0 rgba(45, 42, 32, 0.18);
+  padding: 6px;
+  z-index: 200;
+  -webkit-app-region: no-drag;
+}
+.cr-ws-menu-head {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  padding: 4px 6px 6px;
+}
+.cr-ws-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  text-align: left;
+}
+.cr-ws-item:hover {
+  background: var(--cream-lo);
+}
+.cr-ws-item.active {
+  background: var(--amber-soft);
+}
+.cr-ws-item.add {
+  color: var(--amber-deep);
+}
+.cr-ws-item-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cr-ws-check {
+  color: var(--hp);
+  font-size: 9px;
+}
+.cr-ws-sep {
+  height: 1.5px;
+  background: var(--line-soft);
+  margin: 6px 4px;
+}
+.cr-ws-new {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 4px 2px;
+}
+.cr-ws-input {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--cream);
+  border: 1.5px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 6px 8px;
+  outline: none;
+}
+.cr-ws-input:focus {
+  border-color: var(--amber-deep);
+}
+.cr-ws-create {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+  background: var(--amber);
+  border: 1.5px solid var(--line);
+  border-radius: 3px;
+  padding: 6px;
+  cursor: pointer;
+}
+.cr-ws-create:hover {
+  background: var(--amber-deep);
+  color: var(--cream-hi);
+}
+
+/* The header owns the workspace dropdown, which overflows downward past the
+   header into the stage's band. Header and stage both sit at z-index:1, and
+   the stage is later in the DOM, so it would cover the dropdown. Lift the
+   whole header stacking context above the stage. */
+.cr-header {
+  z-index: 60;
+}
+
+/* ---- remote (phone) mode tweaks ----
+   Served by the mobile server: no macOS traffic lights, no drag regions,
+   tighter chrome for small screens. */
+body.cookrew-mobile .cr-header {
+  padding-left: max(14px, env(safe-area-inset-left));
+  padding-top: max(10px, env(safe-area-inset-top));
+  -webkit-app-region: no-drag;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+body.cookrew-mobile .cr-dock {
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
+}
+
+body.cookrew-mobile .cr-dim {
+  max-width: 130px;
+}
+
+body.cookrew-mobile .cookrew-minimap {
+  transform: scale(0.55);
+  transform-origin: bottom right;
+}

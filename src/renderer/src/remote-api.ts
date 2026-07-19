@@ -1,0 +1,91 @@
+import type { CookrewApi } from './api'
+import type { WorkspaceList, WorkspaceState } from '../../shared/model'
+import type { TerminalActivity } from '../../shared/turn'
+
+/**
+ * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
+ * served to a phone browser by the mobile server (window.COOKREW_MOBILE marker).
+ * Same UI, no Electron: IPC invokes become fetches, IPC pushes become SSE.
+ *
+ * Browser commands stay silent here on purpose — the desktop renderer remains
+ * the single browser automation engine; phones render browsers as iframes.
+ */
+
+async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  const options: RequestInit = { method }
+  if (body !== undefined) {
+    options.headers = { 'content-type': 'application/json' }
+    options.body = JSON.stringify(body)
+  }
+  const response = await fetch(path, options)
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({ error: String(response.status) }))
+    throw new Error((detail as { error?: string }).error ?? `HTTP ${response.status}`)
+  }
+  const text = await response.text()
+  return (text ? JSON.parse(text) : undefined) as T
+}
+
+/** Fire-and-forget POST for streams of small events (keystrokes, resizes). */
+function post(path: string, body: unknown): void {
+  void req(path, 'POST', body).catch(() => undefined)
+}
+
+/**
+ * One shared /api/events stream for workspace state, workspace list and
+ * terminal activity. EventSource reconnects on its own after network blips.
+ */
+let events: EventSource | null = null
+
+function sharedEvents(): EventSource {
+  if (!events) events = new EventSource('/api/events')
+  return events
+}
+
+function subscribe<T>(event: string, cb: (data: T) => void): () => void {
+  const source = sharedEvents()
+  const listener = (e: MessageEvent): void => cb(JSON.parse(e.data) as T)
+  source.addEventListener(event, listener)
+  return () => source.removeEventListener(event, listener)
+}
+
+export function createRemoteApi(): CookrewApi {
+  return {
+    getWorkspace: () => req<WorkspaceState>('/api/workspace'),
+    onWorkspaceState: (cb) => subscribe<WorkspaceState>('workspace', cb),
+    listWorkspaces: () => req<WorkspaceList>('/api/workspaces'),
+    createWorkspace: (name, dir) => req('/api/workspaces', 'POST', { name, dir }),
+    switchWorkspace: (id) => req<WorkspaceList>('/api/workspaces/switch', 'POST', { id }),
+    renameWorkspace: (id, name) => req<WorkspaceList>('/api/workspaces/rename', 'POST', { id, name }),
+    onWorkspaceList: (cb) => subscribe<WorkspaceList>('workspaces', cb),
+
+    addNode: (node) => req('/api/nodes', 'POST', node),
+    updateNode: (id, patch) => req(`/api/nodes/${id}`, 'POST', patch),
+    removeNode: (id) => req(`/api/nodes/${id}`, 'DELETE'),
+    connectNodes: (a, b) => req('/api/connections', 'POST', { a, b }),
+    disconnect: (connId) => req(`/api/connections/${connId}`, 'DELETE'),
+    listPresets: () => req('/api/presets'),
+    createTerminal: (opts) => req('/api/terminals', 'POST', opts),
+
+    ptyInput: (terminalId, data) => post(`/api/terminal/${terminalId}/raw`, { data }),
+    ptyResize: (terminalId, cols, rows) =>
+      post(`/api/terminal/${terminalId}/resize`, { cols, rows }),
+    ptyAttach: (terminalId, onData) => {
+      const stream = new EventSource(`/api/terminal/${terminalId}/stream`)
+      const listener = (e: MessageEvent): void => onData(JSON.parse(e.data) as string)
+      stream.addEventListener('data', listener)
+      return () => stream.close()
+    },
+
+    listActivity: () => req<TerminalActivity[]>('/api/activity'),
+    onTerminalActivity: (cb) => subscribe<TerminalActivity>('activity', cb),
+
+    // Desktop-only surfaces: browser automation, thumbnail push, app chrome.
+    onBrowserCommand: () => () => undefined,
+    browserResult: () => undefined,
+    browserThumb: () => undefined,
+    onBrowserOpenTab: () => () => undefined,
+    onCmdW: () => () => undefined,
+    quitApp: () => undefined
+  }
+}
