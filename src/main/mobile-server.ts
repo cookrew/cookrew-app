@@ -80,8 +80,15 @@ export function startMobileServer(deps: MobileServerDeps): void {
 function listenWithRetry(server: http.Server | https.Server, port: number): void {
   let retries = 0
   server.on('error', (error: NodeJS.ErrnoException) => {
-    if (error.code === 'EADDRINUSE' && retries < 10) {
+    if (error.code === 'EADDRINUSE') {
+      // Another (usually outgoing) app instance still holds the port — keep
+      // trying so this instance takes over whenever it frees up. A capped
+      // retry left the mobile server permanently dead after 30s of overlap,
+      // with phones unable to connect until the app was relaunched.
       retries += 1
+      if (retries % 10 === 1) {
+        console.error(`Mobile port :${port} in use — retrying every 3s (attempt ${retries})`)
+      }
       setTimeout(() => server.listen(port, '0.0.0.0'), 3000)
     } else {
       console.error(`Mobile server error on :${port}:`, error)

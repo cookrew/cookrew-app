@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { askTerminal, decodeRawEscapes, diffOutput, submitDelayMs } from '../src/main/ask'
+import { askRaw, askTerminal, decodeRawEscapes, diffOutput, submitDelayMs } from '../src/main/ask'
 import type { PtySession } from '../src/main/pty'
 
 describe('submitDelayMs', () => {
@@ -85,6 +85,49 @@ describe('diffOutput', () => {
 
   it('returns empty string when nothing changed', () => {
     expect(diffOutput('same', 'same')).toBe('')
+  })
+})
+
+describe('askRaw', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const fakeSession = (writes: { data: string; at: number }[]): PtySession =>
+    ({
+      viewportText: () => '',
+      write: (data: string) => {
+        writes.push({ data, at: Date.now() })
+      }
+    }) as unknown as PtySession
+
+  it('splits a trailing Enter off a text payload so the TUI cannot fold it into the paste', async () => {
+    vi.useFakeTimers()
+    const writes: { data: string; at: number }[] = []
+    const promise = askRaw(fakeSession(writes), 'OPS RULE: do not run npm run dev\r')
+    expect(writes.map((w) => w.data)).toEqual(['OPS RULE: do not run npm run dev'])
+    await vi.advanceTimersByTimeAsync(2500)
+    await promise
+    expect(writes.map((w) => w.data)).toEqual(['OPS RULE: do not run npm run dev', '\r'])
+    expect(writes[1].at - writes[0].at).toBeGreaterThanOrEqual(submitDelayMs(32))
+  })
+
+  it('passes a bare Enter through unchanged', async () => {
+    vi.useFakeTimers()
+    const writes: { data: string; at: number }[] = []
+    const promise = askRaw(fakeSession(writes), '\r')
+    expect(writes.map((w) => w.data)).toEqual(['\r'])
+    await vi.advanceTimersByTimeAsync(1000)
+    await promise
+  })
+
+  it('passes control sequences through unchanged', async () => {
+    vi.useFakeTimers()
+    const writes: { data: string; at: number }[] = []
+    const promise = askRaw(fakeSession(writes), '\x1b[A')
+    expect(writes.map((w) => w.data)).toEqual(['\x1b[A'])
+    await vi.advanceTimersByTimeAsync(1000)
+    await promise
   })
 })
 

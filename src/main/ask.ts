@@ -61,7 +61,18 @@ export async function askTerminal(
 
 /** Send raw bytes (with escapes already decoded) and return the viewport. */
 export async function askRaw(session: PtySession, rawInput: string): Promise<string> {
-  session.write(rawInput)
+  const trailingEnter = /[\r\n]+$/.exec(rawInput)
+  const body = trailingEnter ? rawInput.slice(0, trailingEnter.index) : rawInput
+  if (trailingEnter && body.length > 0) {
+    // Text followed by Enter: the same paste-swallow hazard askTerminal
+    // guards against — a TUI mid-ingest folds an immediate Enter into the
+    // paste and never submits. Send the Enter as its own later keystroke.
+    session.write(body)
+    await new Promise((resolve) => setTimeout(resolve, submitDelayMs(body.length)))
+    session.write('\r')
+  } else {
+    session.write(rawInput)
+  }
   await new Promise((resolve) => setTimeout(resolve, 800))
   return session.viewportText()
 }
