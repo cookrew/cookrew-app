@@ -286,6 +286,18 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  // Dock icon must be set at runtime in dev; packaged builds also bundle
+  // resources/icon.icns via the packager config when one is added.
+  if (process.platform === 'darwin' && app.dock) {
+    const iconPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'icon.png')
+      : path.join(dirname, '../../resources/icon.png')
+    try {
+      app.dock.setIcon(iconPath)
+    } catch (error) {
+      console.error('Dock icon failed to load:', error)
+    }
+  }
   // Ship the CLI next to the socket so PTYs get it on PATH.
   const cliSource = app.isPackaged
     ? path.join(process.resourcesPath, 'cli', 'cookrew.mjs')

@@ -1,4 +1,5 @@
 import { isDemoMode, isRemoteMode } from './api'
+import { CrLogoMark } from './CrLogoMark'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 
 interface HeaderProps {
@@ -20,6 +21,7 @@ export function Header({
   return (
     <header className="cr-header">
       <div className="cr-header-brand">
+        <CrLogoMark />
         <span className="cr-logo">COOKREW</span>
         <span className="cr-chip amber">CANVAS</span>
         {isDemoMode() && <span className="cr-chip violet">DEMO</span>}
