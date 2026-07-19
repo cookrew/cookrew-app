@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
+import { ClipboardAddon } from '@xterm/addon-clipboard'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
@@ -10,6 +11,8 @@ import { useLodLayout } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
 import { cookrew } from './api'
 import { VoiceBar } from './VoiceBar'
+import { TurnHistoryPanel } from './TurnHistoryPanel'
+import { attachFilesToTerminal } from './AttachButton'
 
 const PHOSPHOR_THEME = {
   background: '#14110A',
@@ -49,6 +52,11 @@ export function TerminalOverlayLayer({
   )
 }
 
+function clip(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
+}
+
 function TerminalOverlay({
   node,
   activity,
@@ -60,6 +68,15 @@ function TerminalOverlay({
 }): React.JSX.Element {
   const { zoomBack } = useCanvasUi()
   const containerRef = useRef<HTMLDivElement>(null)
+  const [showTurns, setShowTurns] = useState(false)
+  // Drag-in attachments: dragenter/leave bubble from every child of the
+  // overlay, so a plain boolean would flicker — count enters vs leaves.
+  const [dropReady, setDropReady] = useState(false)
+  const dragDepth = useRef(0)
+  // Read by the key handler below through a ref so the xterm (created once
+  // per node) always sees the latest agent detection from activity events.
+  const agentRef = useRef(false)
+  agentRef.current = activity?.agent ?? node.preset !== 'Shell'
 
   useEffect(() => {
     const container = containerRef.current
@@ -75,8 +92,72 @@ function TerminalOverlay({
     const fit = new FitAddon()
     term.loadAddon(fit)
 
+    // OSC 52 support: tmux (set-clipboard on) forwards its mouse-drag copies
+    // as OSC 52, and this addon applies them to the system clipboard — so
+    // selecting in a terminal IS copying. Clipboard API may be missing in
+    // insecure remote contexts (phone over plain http); the addon then no-ops.
+    try {
+      term.loadAddon(new ClipboardAddon())
+    } catch {
+      // clipboard unavailable — selection still works inside tmux
+    }
+
+    // Local selections (⌥+drag bypasses tmux's mouse capture) copy on
+    // release too, matching the tmux-side behavior above.
+    let copyTimer: ReturnType<typeof setTimeout> | null = null
+    const selectionSub = term.onSelectionChange(() => {
+      if (copyTimer) clearTimeout(copyTimer)
+      copyTimer = setTimeout(() => {
+        const text = term.getSelection()
+        if (text) void navigator.clipboard?.writeText(text).catch(() => undefined)
+      }, 150)
+    })
+
+    term.attachCustomKeyEventHandler((event) => {
+      // Shift+Enter inserts a newline in agent TUIs instead of submitting
+      // the prompt: send ESC+CR (the "insert newline" binding of Claude Code
+      // and friends) and swallow the plain CR xterm would otherwise emit.
+      // Plain shells keep the default Enter behavior.
+      if (event.key === 'Enter' && event.shiftKey && agentRef.current) {
+        if (event.type === 'keydown') cookrew().ptyInput(node.id, '\x1b\r')
+        return false
+      }
+      const key = event.key.toLowerCase()
+      // ⌘C (mac) / Ctrl+Shift+C: copy the xterm selection ourselves — the
+      // menu's copy role only sees DOM selections, not xterm's internal one.
+      // Ctrl+C alone stays SIGINT.
+      const wantsCopy =
+        (event.metaKey && !event.ctrlKey && key === 'c') ||
+        (event.ctrlKey && event.shiftKey && key === 'c')
+      if (wantsCopy && term.hasSelection()) {
+        if (event.type === 'keydown') {
+          void navigator.clipboard?.writeText(term.getSelection()).catch(() => undefined)
+        }
+        return false
+      }
+      // ⌘V / Ctrl+Shift+V: bracketed paste from the system clipboard, for
+      // contexts where no Electron menu handles the accelerator (remote mode).
+      const wantsPaste =
+        (event.metaKey && !event.ctrlKey && key === 'v') ||
+        (event.ctrlKey && event.shiftKey && key === 'v')
+      if (wantsPaste) {
+        if (event.type === 'keydown') {
+          void navigator.clipboard
+            ?.readText()
+            .then((text) => text && term.paste(text))
+            .catch(() => undefined)
+        }
+        return false
+      }
+      return true
+    })
+
     let disposed = false
     const cleanups: Array<() => void> = [() => term.dispose()]
+    cleanups.push(() => {
+      if (copyTimer) clearTimeout(copyTimer)
+      selectionSub.dispose()
+    })
 
     // xterm measures cell width once at open(). If the webfont swaps in
     // afterwards, rendered glyph width no longer matches the measured cell
@@ -168,23 +249,85 @@ function TerminalOverlay({
 
   const phase = activity?.phase ?? 'idle'
 
+  // Header title shows what the agent is DOING (Sous recap, else the turn's
+  // prompt), not just the preset name — that's already on the chip. Prompts
+  // can be pasted walls of text, so cap them; recaps are short by design.
+  const recap = activity?.title ?? (activity?.prompt ? clip(activity.prompt, 220) : null)
+
+  const hasFiles = (e: React.DragEvent): boolean =>
+    Array.from(e.dataTransfer.types).includes('Files')
+
+  const onDrop = (e: React.DragEvent): void => {
+    if (!hasFiles(e)) return
+    e.preventDefault()
+    dragDepth.current = 0
+    setDropReady(false)
+    void attachFilesToTerminal(node.id, Array.from(e.dataTransfer.files)).catch((error) =>
+      console.error('Attachment drop failed:', error)
+    )
+  }
+
   return (
     <div
       className="lod-overlay"
       style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }}
+      onDragEnter={(e) => {
+        if (!hasFiles(e)) return
+        e.preventDefault()
+        dragDepth.current += 1
+        setDropReady(true)
+      }}
+      onDragOver={(e) => {
+        if (!hasFiles(e)) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'copy'
+      }}
+      onDragLeave={(e) => {
+        if (!hasFiles(e)) return
+        dragDepth.current = Math.max(0, dragDepth.current - 1)
+        if (dragDepth.current === 0) setDropReady(false)
+      }}
+      onDrop={onDrop}
     >
       <div className="popout-header">
         <span className={`cr-led ${phase === 'thinking' ? 'busy' : phase === 'waiting' ? 'red' : 'on'}`} />
-        <span className="popout-title">{node.name}</span>
+        <span className={`popout-title${recap ? ' recap' : ''}`} title={node.name}>
+          {recap ?? node.name}
+        </span>
         {node.orch && <span className="cr-chip amber">ORCH</span>}
         <span className="cr-chip">{node.preset}</span>
         {phase === 'thinking' && <span className="cr-chip busy">TURN IN PROGRESS</span>}
         {phase === 'waiting' && <span className="cr-chip attention">NEEDS ATTENTION</span>}
+        {(activity?.turnCount ?? 0) > 0 && (
+          <button
+            className={`cr-btn sm${showTurns ? ' active' : ''}`}
+            title="Fork a new agent from a past turn"
+            onClick={() => setShowTurns((s) => !s)}
+          >
+            ⑂ FORK ({activity?.turnCount})
+          </button>
+        )}
         <button className="cr-btn sm popout-close" onClick={zoomBack}>
           ⤢ CANVAS
         </button>
+        <button
+          className="cr-btn sm popout-kill"
+          title="Close card & kill session (⌘W)"
+          onClick={() => {
+            zoomBack()
+            void cookrew().removeNode(node.id)
+          }}
+        >
+          ✕
+        </button>
       </div>
+      {showTurns && <TurnHistoryPanel terminalId={node.id} onClose={() => setShowTurns(false)} />}
       <div ref={containerRef} className="popout-terminal" />
+      {dropReady && (
+        <div className="attach-drop-hint">
+          <span>📎 DROP TO ATTACH</span>
+        </div>
+      )}
       <VoiceBar terminalId={node.id} activity={activity} />
     </div>
   )

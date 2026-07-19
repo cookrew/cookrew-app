@@ -14,3 +14,10 @@ export const PRESETS: AgentPreset[] = [
   { name: 'OpenCode', command: 'opencode' },
   { name: 'Shell', command: '' }
 ]
+
+/**
+ * Preset the seeded orch terminal ("Conductor") opens with. Bypass-permission
+ * Claude Code for now; meant to become a user setting once Cookrew grows a
+ * settings surface.
+ */
+export const DEFAULT_ORCH_PRESET: AgentPreset = PRESETS[0]

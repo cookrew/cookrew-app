@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { TerminalActivity } from '../../shared/turn'
 import { cookrew } from './api'
+import { AttachButton } from './AttachButton'
 
 /**
  * Voice composer for the terminal full view (desktop overlay AND phone):
@@ -101,6 +102,7 @@ export function VoiceBar({
 
   return (
     <div className="voice-bar nodrag">
+      <AttachButton terminalId={terminalId} />
       {hasRecognition && (
         <button
           className={`cr-btn sm voice-mic${listening ? ' listening' : ''}`}

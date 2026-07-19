@@ -28,9 +28,46 @@ export interface TerminalActivity {
   reply: string | null
   /** Structured at-a-glance view of the turn, parsed from the agent TUI. */
   glance: AgentGlance | null
+  /**
+   * Short local-model summary of what the current turn is doing (Sous).
+   * Null until the first summary lands or when no local model is running.
+   */
+  title: string | null
+  /** Completed turns recorded for this terminal (drives the card pager). */
+  turnCount: number
   /** Epoch ms when the current turn started; null outside a turn. */
   turnStartedAt: number | null
   updatedAt: number
+}
+
+/**
+ * One completed prompt→reply exchange, kept per terminal so cards can page
+ * back through past turns and fork new agents from any of them. `index` is
+ * 1-based and monotonic — it stays stable even after old records are capped
+ * away, so "turn 7" always means the same exchange.
+ */
+export interface TurnRecord {
+  index: number
+  prompt: string
+  reply: string
+  /** Sous title captured when the turn completed, if one was generated. */
+  title?: string
+  startedAt: number
+  endedAt: number
+}
+
+/** Cap on retained turn records per terminal (oldest dropped first). */
+export const MAX_TURN_HISTORY = 100
+
+/** Append a completed turn immutably, assigning the next index and capping. */
+export function appendTurnRecord(
+  history: TurnRecord[],
+  turn: Omit<TurnRecord, 'index'>,
+  max = MAX_TURN_HISTORY
+): TurnRecord[] {
+  const index = (history[history.length - 1]?.index ?? 0) + 1
+  const next = [...history, { ...turn, index }]
+  return next.length > max ? next.slice(next.length - max) : next
 }
 
 /** Vibe-island style glance: status verb, recent tools, latest message. */

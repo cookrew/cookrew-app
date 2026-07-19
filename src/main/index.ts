@@ -1,22 +1,26 @@
-import { app, BrowserWindow, ipcMain, Notification } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './store'
 import { PtyManager } from './pty'
 import { TurnTracker } from './turn-tracker'
+import { TurnStore } from './turn-store'
+import { summarizeTurn } from './sous'
 import { startSocketServer } from './socket-server'
 import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
 import { startMobileServer, mobileUrls } from './mobile-server'
 import { CanvasNode, DEFAULT_TERMINAL_SIZE, TerminalNodeData, WorkspaceMeta } from '../shared/model'
-import { PRESETS } from './presets'
+import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
+import { forkTerminal as forkTerminalOp } from './fork'
+import { defaultAttachmentsDir, saveAttachment } from './attachments'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const store = new WorkspaceStore()
 const ptys = new PtyManager()
-const turns = new TurnTracker()
+const turns = new TurnTracker(summarizeTurn, new TurnStore())
 const routines = new RoutineScheduler(store, ptys)
 const voice = new VoiceEngine()
 let mainWindow: BrowserWindow | null = null
@@ -39,15 +43,19 @@ function spawnTracked(t: { id: string; command: string; cwd: string }): void {
   turns.track(session, command.trim().length > 0)
 }
 
-/** Give the active workspace a Orch shell terminal when it has none. */
+/**
+ * Give the active workspace an orch terminal when it has none. It opens the
+ * default orch preset — Claude with bypassed permissions — so the conductor
+ * can act without stalling on approvals.
+ */
 function seedConductorIfEmpty(): void {
   if (store.terminals().length > 0) return
   store.addNode({
     kind: 'terminal',
     id: randomUUID(),
     name: 'Conductor',
-    preset: 'Shell',
-    command: '',
+    preset: DEFAULT_ORCH_PRESET.name,
+    command: DEFAULT_ORCH_PRESET.command,
     cwd: store.state.dir,
     orch: true,
     role: null,
@@ -98,9 +106,15 @@ function updateNode(id: string, patch: Partial<CanvasNode>): CanvasNode | undefi
 
 function removeNode(id: string): void {
   turns.untrack(id)
+  turns.clearHistory(id)
   ptys.kill(id)
   browserThumbs.delete(id)
   store.removeNode(id)
+}
+
+/** Fork an agent from one of its turns — shared by IPC, CLI and mobile. */
+function forkTerminal(sourceId: string, turnIndex?: number): TerminalNodeData {
+  return forkTerminalOp({ store, ptys, turns, spawnTerminal: spawnTracked }, sourceId, turnIndex)
 }
 
 interface CreateTerminalOpts {
@@ -289,6 +303,8 @@ app.whenReady().then(() => {
     store,
     ptys,
     spawnTerminal: spawnTracked,
+    turns,
+    forkTerminal,
     routines,
     browserCommand,
     notify: showNotification,
@@ -316,6 +332,7 @@ app.whenReady().then(() => {
       updateNode,
       removeNode,
       createTerminal,
+      forkTerminal,
       listWorkspaces,
       createWorkspace,
       switchWorkspace,
@@ -324,6 +341,7 @@ app.whenReady().then(() => {
         return store.list()
       }
     },
+    saveAttachment: (name, data) => saveAttachment(defaultAttachmentsDir(), name, data),
     browserThumb: (id) => browserThumbs.get(id),
     clientHtmlPath: mobileClientPath,
     // Built renderer bundle — served to phones so mobile gets the full
@@ -333,7 +351,7 @@ app.whenReady().then(() => {
   registerIpc()
   createWindow()
 
-  // First launch: seed the active workspace with a Orch shell terminal.
+  // First launch: seed the active workspace with a bypass-permission orch.
   seedConductorIfEmpty()
 
   // Boot PTYs for terminals restored from the saved workspace.
@@ -351,6 +369,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  turns.flushHistories()
   turns.disposeAll()
   ptys.disposeAll()
 })
@@ -409,6 +428,12 @@ function registerIpc(): void {
   })
   ipcMain.handle('activity:list', () => turns.list())
 
+  // Turn history + fork-from-turn for the canvas cards.
+  ipcMain.handle('turn:history', (_e, terminalId: string) => turns.history(terminalId))
+  ipcMain.handle('terminal:fork', (_e, sourceId: string, turnIndex?: number) =>
+    forkTerminal(sourceId, turnIndex)
+  )
+
   ipcMain.handle('workspace:get', () => store.state)
 
   ipcMain.handle('node:add', (_e, node: CanvasNode) => addNode(node))
@@ -423,6 +448,17 @@ function registerIpc(): void {
   ipcMain.handle('preset:list', () => PRESETS)
 
   ipcMain.handle('terminal:create', (_e, opts: CreateTerminalOpts) => createTerminal(opts))
+
+  // 📎 attach: native multi-file picker for the desktop renderer. Dropped
+  // files never come through here — the preload resolves their paths locally.
+  ipcMain.handle('attach:pick', async () => {
+    if (!mainWindow) return []
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Attach files',
+      properties: ['openFile', 'multiSelections']
+    })
+    return result.canceled ? [] : result.filePaths
+  })
 
   // Terminal stream bridging renderer xterm <-> PTY
   ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {

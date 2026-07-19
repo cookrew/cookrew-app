@@ -14,20 +14,20 @@ export function respondJson(
   response.end(JSON.stringify(body ?? null))
 }
 
-export function readBody(request: http.IncomingMessage): Promise<string> {
+export function readBody(request: http.IncomingMessage, limit = 1_000_000): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = ''
     request.on('data', (chunk) => {
       data += chunk
-      if (data.length > 1_000_000) reject(new Error('Body too large'))
+      if (data.length > limit) reject(new Error('Body too large'))
     })
     request.on('end', () => resolve(data))
     request.on('error', reject)
   })
 }
 
-export async function readJson<T>(request: http.IncomingMessage): Promise<T> {
-  const raw = await readBody(request)
+export async function readJson<T>(request: http.IncomingMessage, limit?: number): Promise<T> {
+  const raw = await readBody(request, limit)
   return JSON.parse(raw || '{}') as T
 }
 

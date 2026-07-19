@@ -1,6 +1,6 @@
 import type { CookrewApi } from './api'
 import type { WorkspaceList, WorkspaceState } from '../../shared/model'
-import type { TerminalActivity } from '../../shared/turn'
+import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -49,6 +49,19 @@ function subscribe<T>(event: string, cb: (data: T) => void): () => void {
   return () => source.removeEventListener(event, listener)
 }
 
+/** data-URL detour: base64 without blowing the call stack on big files. */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const url = String(reader.result)
+      resolve(url.slice(url.indexOf(',') + 1))
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('Read failed'))
+    reader.readAsDataURL(file)
+  })
+}
+
 export function createRemoteApi(): CookrewApi {
   return {
     getWorkspace: () => req<WorkspaceState>('/api/workspace'),
@@ -67,6 +80,21 @@ export function createRemoteApi(): CookrewApi {
     listPresets: () => req('/api/presets'),
     createTerminal: (opts) => req('/api/terminals', 'POST', opts),
 
+    // Phones can't hand the desktop a local path — upload the bytes and let
+    // the server persist them; the returned path is what gets pasted.
+    attachFiles: async (files) => {
+      const paths: string[] = []
+      for (const file of files) {
+        const uploaded = await req<{ path: string }>('/api/attachments', 'POST', {
+          name: file.name,
+          data: await fileToBase64(file)
+        })
+        paths.push(uploaded.path)
+      }
+      return paths
+    },
+    pickFiles: () => Promise.resolve([]),
+
     ptyInput: (terminalId, data) => post(`/api/terminal/${terminalId}/raw`, { data }),
     ptyResize: (terminalId, cols, rows) =>
       post(`/api/terminal/${terminalId}/resize`, { cols, rows }),
@@ -79,6 +107,9 @@ export function createRemoteApi(): CookrewApi {
 
     listActivity: () => req<TerminalActivity[]>('/api/activity'),
     onTerminalActivity: (cb) => subscribe<TerminalActivity>('activity', cb),
+    listTurns: (terminalId) => req<TurnRecord[]>(`/api/terminal/${terminalId}/turns`),
+    forkTerminal: (sourceId, turnIndex) =>
+      req(`/api/terminal/${sourceId}/fork`, 'POST', { turnIndex }),
 
     // Desktop-only surfaces: browser automation, thumbnail push, app chrome.
     onBrowserCommand: () => () => undefined,

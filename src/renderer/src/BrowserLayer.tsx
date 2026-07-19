@@ -178,6 +178,16 @@ function BrowserHost({
           <button className="cr-btn sm popout-close" onClick={zoomBack}>
             ⤢ CANVAS
           </button>
+          <button
+            className="cr-btn sm popout-kill"
+            title="Close browser card (⌘W)"
+            onClick={() => {
+              zoomBack()
+              void cookrew().removeNode(node.id)
+            }}
+          >
+            ✕
+          </button>
         </div>
         <div className="browser-tabstrip">
           {tabs.map((tab) => (
