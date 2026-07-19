@@ -59,6 +59,13 @@ export interface TurnRecord {
 /** Cap on retained turn records per terminal (oldest dropped first). */
 export const MAX_TURN_HISTORY = 100
 
+/**
+ * Synthetic prompt for turns the tracker's self-healing opened without ever
+ * seeing a typed prompt (tmux reattach, missed turn start). History rows
+ * then read "(recovered turn)" instead of an impossible empty prompt.
+ */
+export const RECOVERED_PROMPT_LABEL = '(recovered turn)'
+
 /** Append a completed turn immutably, assigning the next index and capping. */
 export function appendTurnRecord(
   history: TurnRecord[],
