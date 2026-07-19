@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { NodeProps, NodeResizer, useStore } from '@xyflow/react'
 import { NodeHandles } from './NodeHandles'
 import { CardClose } from './CardClose'
-import { AgentAvatar, HandLed } from './AgentAvatar'
+import { AgentAvatar, StatusCoin } from './AgentAvatar'
 import { CrIcon, type CrIconName } from '../icons'
 import { PastTurnView, TurnPagerBar, useTurnPaging } from './TurnPager'
 import type { TerminalNodeData } from '../../../shared/model'
@@ -79,7 +79,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
       >
         <NodeHandles />
         <div className="vi-mini node-header">
-          <HandLed phase={phase} />
+          <StatusCoin phase={phase} preset={node.preset} />
           <span className="vi-mini-name">{node.name}</span>
         </div>
       </div>
@@ -145,7 +145,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
         {phase === 'idle' && activity ? (
           <span className="vi-chip dim">{agoLabel(activity.updatedAt)}</span>
         ) : (
-          <HandLed phase={phase} />
+          <StatusCoin phase={phase} preset={node.preset} />
         )}
         <CardClose nodeId={node.id} dark />
       </div>
