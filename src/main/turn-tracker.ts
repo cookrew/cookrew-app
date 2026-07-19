@@ -9,7 +9,9 @@ import {
   TurnRecord,
   appendTurnRecord,
   cleanTurnLines,
+  detectAgentActivity,
   detectAttention,
+  detectLiveWork,
   feedPromptBuffer,
   parseAgentGlance,
   tailLines
@@ -17,6 +19,11 @@ import {
 
 /** Output silence that counts as "the agent finished its turn". */
 const QUIESCENCE_MS = 2500
+/**
+ * An Enter that started no turn counts as "pending input" for this long —
+ * agent output arriving within the window re-enters 'thinking' (self-heal).
+ */
+const RESUME_WINDOW_MS = 30_000
 /** Minimum turn duration before quiescence may end it (agent spin-up). */
 const GRACE_MS = 1500
 const POLL_MS = 400
@@ -36,6 +43,10 @@ interface TrackedTerminal {
   agent: boolean
   phase: TurnPhase
   promptBuffer: string
+  /** Open bracketed paste spanning input chunks (feedPromptBuffer state). */
+  inPaste: boolean
+  /** Epoch ms of the last Enter that did NOT start or answer a turn; 0 when consumed. */
+  lastSubmitAt: number
   prompt: string | null
   snapshot: string
   reply: string | null
@@ -48,7 +59,7 @@ interface TrackedTerminal {
   pollTimer: NodeJS.Timeout | null
   titleTimer: NodeJS.Timeout | null
   onInput: (data: string) => void
-  onData: () => void
+  onData: (data: string) => void
   onExit: () => void
 }
 
@@ -105,6 +116,8 @@ export class TurnTracker extends EventEmitter {
       agent,
       phase: 'idle',
       promptBuffer: '',
+      inPaste: false,
+      lastSubmitAt: 0,
       prompt: null,
       snapshot: '',
       reply: null,
@@ -115,7 +128,7 @@ export class TurnTracker extends EventEmitter {
       pollTimer: null,
       titleTimer: null,
       onInput: (data) => this.handleInput(session.terminalId, data),
-      onData: () => this.handleData(session.terminalId),
+      onData: (data) => this.handleData(session.terminalId, data),
       onExit: () => this.handleExit(session.terminalId)
     }
     session.on('input', t.onInput)
@@ -173,13 +186,16 @@ export class TurnTracker extends EventEmitter {
   private handleInput(terminalId: string, data: string): void {
     const t = this.tracked.get(terminalId)
     if (!t) return
-    const fed = feedPromptBuffer(t.promptBuffer, data)
+    const fed = feedPromptBuffer(t.promptBuffer, data, t.inPaste)
     t.promptBuffer = fed.buffer
+    t.inPaste = fed.inPaste
     if (!t.agent) return
+    if (fed.submitted.length > 0) t.lastSubmitAt = Date.now()
     if (t.phase === 'waiting' && fed.submitted.length > 0) {
       // Enter on an approval/question menu answers the SAME turn — resume
       // thinking with the original prompt and snapshot intact.
       t.phase = 'thinking'
+      t.lastSubmitAt = 0
       this.push(t)
       return
     }
@@ -190,6 +206,7 @@ export class TurnTracker extends EventEmitter {
   private startTurn(t: TrackedTerminal, prompt: string): void {
     t.snapshot = t.session.fullText()
     t.phase = 'thinking'
+    t.lastSubmitAt = 0
     t.prompt = prompt
     t.reply = null
     t.title = null
@@ -239,11 +256,63 @@ export class TurnTracker extends EventEmitter {
    * on) — resume 'thinking' so quiescence re-evaluates. Menu redraws flip
    * back and forth harmlessly: quiet + question tail lands on 'waiting'
    * again.
+   *
+   * Agent output while 'replied'/'idle' is a tracker desync (missed turn
+   * start, premature quiescence, tmux reattach mid-turn) — self-heal so a
+   * working agent can never stay stuck on a green or idle card.
    */
-  private handleData(terminalId: string): void {
+  private handleData(terminalId: string, data: string): void {
     const t = this.tracked.get(terminalId)
-    if (t?.phase === 'waiting') t.phase = 'thinking'
+    if (!t) return
+    if (t.phase === 'waiting') {
+      t.phase = 'thinking'
+    } else if (
+      t.agent &&
+      (t.phase === 'replied' || t.phase === 'idle') &&
+      this.shouldSelfHeal(t, data)
+    ) {
+      this.resumeThinking(t)
+    }
     this.schedulePush(terminalId)
+  }
+
+  /**
+   * Two independent desync signals:
+   * - input the tracker saw but never turned into a turn (buffered/pasted
+   *   text, or a recent Enter that started nothing) followed by any
+   *   agent-transcript output, or
+   * - a live "esc to interrupt" spinner — painted only mid-turn — which
+   *   covers reattach cases where this tracker never saw the prompt at all.
+   */
+  private shouldSelfHeal(t: TrackedTerminal, chunk: string): boolean {
+    if (this.hasPendingInput(t) && detectAgentActivity(chunk)) return true
+    return detectLiveWork(chunk)
+  }
+
+  private hasPendingInput(t: TrackedTerminal): boolean {
+    if (t.promptBuffer.trim().length > 0) return true
+    return t.lastSubmitAt !== 0 && Date.now() - t.lastSubmitAt < RESUME_WINDOW_MS
+  }
+
+  /**
+   * Re-enter 'thinking'. From 'replied' this resumes the existing turn
+   * context (prompt, snapshot, start time) so the eventual re-completion
+   * records the full exchange; from a cold 'idle' (no prior turn) it opens
+   * an unlabeled turn anchored at the current buffer state.
+   */
+  private resumeThinking(t: TrackedTerminal): void {
+    if (t.turnStartedAt === 0) {
+      t.snapshot = t.session.fullText()
+      t.turnStartedAt = Date.now()
+    }
+    t.phase = 'thinking'
+    t.reply = null
+    t.lastSubmitAt = 0
+    if (!t.pollTimer) {
+      t.pollTimer = setInterval(() => this.poll(t), POLL_MS)
+    }
+    this.scheduleTitle(t, TITLE_FIRST_MS)
+    this.push(t)
   }
 
   private poll(t: TrackedTerminal): void {

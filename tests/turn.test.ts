@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   cleanTurnLines,
+  detectAgentActivity,
   detectAttention,
+  detectLiveWork,
   feedPromptBuffer,
   parseAgentGlance,
   tailLines
@@ -61,6 +63,74 @@ describe('feedPromptBuffer', () => {
   it('strips bare OSC color remnants (leading ESC split off)', () => {
     const fed = feedPromptBuffer('', 'name]10;rgb:e9e9/b9b9/4949\\ here')
     expect(fed.buffer).toBe('name here')
+  })
+
+  it('never submits on carriage returns inside a bracketed paste', () => {
+    const fed = feedPromptBuffer('', '\x1b[200~step one\rstep two\r\nstep three\x1b[201~')
+    expect(fed.submitted).toEqual([])
+    expect(fed.buffer).toBe('step one\nstep two\nstep three')
+    expect(fed.inPaste).toBe(false)
+  })
+
+  it('keeps the paste open across chunks until the close marker arrives', () => {
+    const a = feedPromptBuffer('', '\x1b[200~')
+    expect(a.inPaste).toBe(true)
+    const b = feedPromptBuffer(a.buffer, 'do the thing\r', a.inPaste)
+    expect(b.submitted).toEqual([])
+    expect(b.buffer).toBe('do the thing\n')
+    expect(b.inPaste).toBe(true)
+    const c = feedPromptBuffer(b.buffer, 'now\x1b[201~', b.inPaste)
+    expect(c.inPaste).toBe(false)
+    expect(c.buffer).toBe('do the thing\nnow')
+    const d = feedPromptBuffer(c.buffer, '\r', c.inPaste)
+    expect(d.submitted).toEqual(['do the thing\nnow'])
+    expect(d.buffer).toBe('')
+  })
+
+  it('submits typed Enter after a paste with the pasted text included', () => {
+    const pasted = feedPromptBuffer('', '\x1b[200~fix src/a.ts\x1b[201~ please')
+    expect(pasted.submitted).toEqual([])
+    const fed = feedPromptBuffer(pasted.buffer, '\r', pasted.inPaste)
+    expect(fed.submitted).toEqual(['fix src/a.ts please'])
+  })
+
+  it('still handles typed Enter outside any paste', () => {
+    const fed = feedPromptBuffer('fix the bug', '\r', false)
+    expect(fed.submitted).toEqual(['fix the bug'])
+    expect(fed.inPaste).toBe(false)
+  })
+})
+
+describe('detectAgentActivity', () => {
+  it('flags live spinner status lines', () => {
+    expect(detectAgentActivity('✻ Cerebrating… (esc to interrupt · 4s · ↓ 1.2k tokens)')).toBe(true)
+  })
+
+  it('flags transcript tool/message entries', () => {
+    expect(detectAgentActivity('⏺ Bash(npm test)')).toBe(true)
+  })
+
+  it('sees through interleaved escape sequences', () => {
+    expect(detectAgentActivity('\x1b[2K\x1b[G✻ Baking… (esc to interrupt)')).toBe(true)
+  })
+
+  it('ignores plain output and typed-echo redraws', () => {
+    expect(detectAgentActivity('$ ls\nfile-a  file-b')).toBe(false)
+    expect(detectAgentActivity('│ > fix the bug   │')).toBe(false)
+    expect(detectAgentActivity('')).toBe(false)
+  })
+})
+
+describe('detectLiveWork', () => {
+  it('flags the mid-turn "esc to interrupt" spinner, even across escapes', () => {
+    expect(detectLiveWork('✻ Cerebrating… (esc to interrupt · 34s · ↓ 2.1k tokens)')).toBe(true)
+    expect(detectLiveWork('\x1b[2K\x1b[38;5;205m✻ Baking… (esc to interrupt)\x1b[0m')).toBe(true)
+  })
+
+  it('does not flag finished-turn status or plain transcript redraws', () => {
+    expect(detectLiveWork('✳ Baked for 1m 6s')).toBe(false)
+    expect(detectLiveWork('⏺ I finished the refactor earlier.')).toBe(false)
+    expect(detectLiveWork('$ ls')).toBe(false)
   })
 })
 

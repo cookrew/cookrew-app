@@ -1,5 +1,33 @@
-import { describe, expect, it } from 'vitest'
-import { decodeRawEscapes, diffOutput } from '../src/main/ask'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { askTerminal, decodeRawEscapes, diffOutput } from '../src/main/ask'
+import type { PtySession } from '../src/main/pty'
+
+describe('askTerminal', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('writes the prompt and the submitting Enter separately, with a delay', async () => {
+    vi.useFakeTimers()
+    const writes: { data: string; at: number }[] = []
+    const session = {
+      fullText: () => '',
+      idleFor: () => 99_999,
+      write: (data: string) => {
+        writes.push({ data, at: Date.now() })
+      }
+    } as unknown as PtySession
+
+    const promise = askTerminal(session, 'fix the bug', { quiescenceMs: 0, graceMs: 0 })
+    // The prompt must land alone first — the Enter goes in a later write so
+    // the agent TUI cannot fold it into a paste.
+    expect(writes.map((w) => w.data)).toEqual(['fix the bug'])
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(writes.map((w) => w.data)).toEqual(['fix the bug', '\r'])
+    expect(writes[1].at - writes[0].at).toBeGreaterThan(0)
+    await promise
+  })
+})
 
 describe('diffOutput', () => {
   it('returns appended text when after extends before', () => {
