@@ -1,6 +1,7 @@
 import { NodeProps, NodeResizer } from '@xyflow/react'
 import { NodeHandles } from './NodeHandles'
 import { CardClose } from './CardClose'
+import { CrIcon } from '../icons'
 import type { BrowserNodeData } from '../../../shared/model'
 import { browserTabs } from '../../../shared/model'
 import { useCanvasUi } from '../canvas-ui'
@@ -36,7 +37,9 @@ export function BrowserNode({ data, selected }: NodeProps): React.JSX.Element {
           <img className="browser-thumb" src={thumb} alt={node.name} draggable={false} />
         ) : (
           <div className="browser-thumb-empty">
-            <span className="browser-thumb-glyph">◍</span>
+            <span className="browser-thumb-glyph">
+              <CrIcon name="browser" />
+            </span>
             <span className="cr-kicker">{shortUrl(node.url)}</span>
           </div>
         )}
@@ -45,7 +48,9 @@ export function BrowserNode({ data, selected }: NodeProps): React.JSX.Element {
         <span className="card-status idle">
           BROWSER{browserTabs(node).length > 1 ? ` · ${browserTabs(node).length} TABS` : ''}
         </span>
-        <span className="card-open-hint">CLICK TO ZOOM ⤢</span>
+        <span className="card-open-hint">
+          CLICK TO ZOOM <CrIcon name="expand" />
+        </span>
       </div>
     </div>
   )

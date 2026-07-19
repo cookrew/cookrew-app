@@ -51,6 +51,8 @@ function useViewportSettled(): boolean {
 export function useLodLayout(nodes: LodNode[]): {
   activeIds: Set<string>
   rects: Record<string, ScreenRect>
+  /** Most-covered active node — the one a single shared composer targets. */
+  primaryId: string | null
 } {
   const { x: vx, y: vy, zoom } = useViewport()
   const paneWidth = useStore((s) => s.width)
@@ -105,9 +107,15 @@ export function useLodLayout(nodes: LodNode[]): {
     const only = new Set([selected])
     rects[selected] = { x: bounds.left, y: bounds.top, width: paneWidth, height: paneHeight }
     prevActive.current = only
-    return { activeIds: only, rects }
+    return { activeIds: only, rects, primaryId: selected }
   }
 
   prevActive.current = activeIds
-  return { activeIds, rects }
+  const primaryId =
+    activeIds.size > 0
+      ? [...activeIds].reduce((best, id) =>
+          (coverages[id] ?? 0) > (coverages[best] ?? 0) ? id : best
+        )
+      : null
+  return { activeIds, rects, primaryId }
 }

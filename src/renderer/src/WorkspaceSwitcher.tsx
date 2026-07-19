@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { WorkspaceList } from '../../shared/model'
 import { cookrew } from './api'
+import { CrIcon } from './icons'
 
 interface WorkspaceSwitcherProps {
   fallbackName: string
@@ -70,7 +71,9 @@ export function WorkspaceSwitcher({
       <button className="cr-ws-current" onClick={() => setOpen((v) => !v)} title={dir}>
         <span className="cr-ws-icon">{icon}</span>
         <span className="cr-kicker cr-ws-name">{name}</span>
-        <span className="cr-ws-caret">{open ? '▾' : '▸'}</span>
+        <span className="cr-ws-caret">
+          <CrIcon name={open ? 'caret-down' : 'caret-right'} />
+        </span>
       </button>
 
       {open && (
@@ -89,7 +92,11 @@ export function WorkspaceSwitcher({
                   {w.dir}
                 </span>
               </span>
-              {w.id === list?.activeId && <span className="cr-ws-check">●</span>}
+              {w.id === list?.activeId && (
+                <span className="cr-ws-check">
+                  <CrIcon name="check" />
+                </span>
+              )}
             </button>
           ))}
 
@@ -123,7 +130,9 @@ export function WorkspaceSwitcher({
             </div>
           ) : (
             <button className="cr-ws-item add" onClick={startCreate}>
-              <span className="cr-ws-icon">＋</span>
+              <span className="cr-ws-icon">
+                <CrIcon name="plus" />
+              </span>
               <span className="cr-ws-item-name">New workspace</span>
             </button>
           )}

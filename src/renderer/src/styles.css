@@ -251,16 +251,22 @@ body,
   box-shadow: none;
 }
 
-/* Icon-only buttons: same bevel chrome, glyph instead of label. */
-.cr-btn.icon {
-  padding: 6px 9px;
+/* Icon-only buttons: same bevel chrome, glyph instead of label — and one
+   shared 30px frame everywhere (dock tools, popout actions, send group),
+   so no button breaks the line's rhythm. Fork may widen slightly for its
+   turn count; height stays identical. */
+.cr-btn.icon,
+.voice-bar .cr-btn {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 5px;
+  justify-content: center;
   font-size: 14px;
   line-height: 1;
   gap: 2px;
 }
 
 .cr-btn.sm.icon {
-  padding: 4px 7px;
   font-size: 12px;
 }
 
@@ -275,11 +281,98 @@ body,
   font-size: 8.5px;
 }
 
-/* Thin mode chips in the header (▦ canvas / ▯ mobile / ◇ demo). */
+/* Thin mode chips in the header (canvas / mobile / demo). */
 .cr-chip.icon {
   padding: 2px 4px;
   font-size: 11px;
   line-height: 1;
+}
+
+/* ---- icon set (icons.tsx): chunky 16-grid glyphs in currentColor ---- */
+
+.cr-icon {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  vertical-align: -3px;
+  flex: 0 0 auto;
+}
+
+.cr-btn.sm.icon .cr-icon,
+.cr-btn.sm .cr-icon {
+  width: 12px;
+  height: 12px;
+  vertical-align: -2px;
+}
+
+.cr-btn.tool.icon .cr-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.cr-chip.icon .cr-icon {
+  width: 11px;
+  height: 11px;
+  vertical-align: -2px;
+}
+
+.voice-bar .cr-btn .cr-icon {
+  width: 13px;
+  height: 13px;
+}
+
+.vi-chip .cr-icon {
+  width: 10px;
+  height: 10px;
+  vertical-align: -2px;
+}
+
+.vi-tool-glyph .cr-icon {
+  width: 11px;
+  height: 11px;
+  vertical-align: -2px;
+}
+
+.card-open-hint .cr-icon {
+  width: 9px;
+  height: 9px;
+  vertical-align: -1.5px;
+}
+
+.turn-panel-title .cr-icon {
+  width: 11px;
+  height: 11px;
+  vertical-align: -2px;
+}
+
+.cr-ws-caret .cr-icon {
+  width: 9px;
+  height: 9px;
+  vertical-align: -1px;
+}
+
+.cr-ws-check .cr-icon {
+  width: 11px;
+  height: 11px;
+  vertical-align: -2px;
+}
+
+.cr-ws-icon .cr-icon {
+  width: 12px;
+  height: 12px;
+  vertical-align: -2px;
+}
+
+.vi-pager-btn .cr-icon {
+  width: calc(10px * var(--z, 1));
+  height: calc(10px * var(--z, 1));
+  vertical-align: middle;
+}
+
+.attach-drop-hint .cr-icon {
+  width: 14px;
+  height: 14px;
+  vertical-align: -2.5px;
 }
 
 .cr-bevel {
@@ -300,6 +393,55 @@ body,
   border-top: 2px solid var(--line);
   z-index: 50;
   flex-wrap: wrap;
+  overflow: hidden;
+}
+
+/* Sliding dock panes: zooming into a terminal glides the tool group out
+   to the left while the send group glides in from the right; zooming back
+   reverses it. The send pane is absolutely positioned so the bar keeps
+   one height throughout. */
+.dock-canvas {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+  transition:
+    transform 220ms ease,
+    opacity 220ms ease;
+}
+
+.cr-dock.zoomed .dock-canvas {
+  transform: translateX(-32px);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dock-send {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  max-width: calc(100% - 32px);
+  transform: translate(48px, -50%);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 220ms ease,
+    opacity 220ms ease;
+}
+
+.cr-dock.zoomed .dock-send {
+  transform: translate(0, -50%);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dock-canvas,
+  .dock-send {
+    transition: none;
+  }
 }
 
 .cr-dock-tools {
@@ -924,6 +1066,11 @@ body,
   color: var(--violet);
 }
 
+.browser-thumb-glyph .cr-icon {
+  width: 34px;
+  height: 34px;
+}
+
 .browser-url-chip {
   max-width: 55%;
   overflow: hidden;
@@ -1017,36 +1164,48 @@ body,
   flex: 0 0 auto;
 }
 
-.popout-title {
-  font-family: var(--font-pixel);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-/* Recap variant: the title carries the Sous summary / prompt of the turn —
-   prose, not a label. Readable font, wraps to show the whole thing. */
-.popout-title.recap {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0;
-  text-transform: none;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  line-height: 1.4;
-}
-
-.popout-close {
+/* Fork / back-to-canvas / close, pinned to the right edge as one group. */
+.popout-actions {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* ✕ next to ⤢ CANVAS: closes the card and kills its session (⌘W twin). */
 .popout-kill:hover {
   background: var(--rose);
   color: var(--cream-hi);
+}
+
+/* Latest user ask, pinned above the terminal as the turn's anchor. */
+.popout-ask {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--phos-bg);
+  border-bottom: 1.5px solid var(--phos-dim);
+  min-width: 0;
+}
+
+.popout-ask-label {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  color: var(--phos-dim);
+  flex: 0 0 auto;
+}
+
+.popout-ask-text {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--phos-glow);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .popout-terminal {
@@ -1068,27 +1227,37 @@ body,
   border-top: 2px solid var(--line);
 }
 
-.voice-input {
-  flex: 1;
+/* Inside the dock the bar sheds its overlay chrome and sits as the send
+   group on the right — the dock swaps it in for the tool group while a
+   terminal overlay owns the stage. */
+.cr-dock .voice-bar {
   min-width: 0;
+  padding: 0;
+  background: transparent;
+  border-top: none;
+}
+
+/* Live dictation transcript — read-only caption, not an input box. */
+.voice-ghost {
   font-family: var(--font-mono);
-  font-size: 13px;
-  color: var(--ink);
-  background: var(--cream-hi);
-  border: 1.5px solid var(--line);
-  border-radius: 0;
-  padding: 7px 10px;
-  outline: none;
-  -webkit-appearance: none;
+  font-size: 11px;
+  color: var(--muted);
+  max-width: 240px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.voice-input:focus {
-  border-color: var(--amber-deep);
+/* Frameless mode marker in the header (mobile companion). */
+.cr-mode-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--violet);
 }
 
-.voice-bar .cr-btn {
-  font-size: 12px;
-  padding: 6px 9px;
+.cr-chip.done {
+  background: var(--hp);
+  color: var(--cream-hi);
 }
 
 .voice-mic.listening {
@@ -2009,22 +2178,16 @@ body.cookrew-mobile .cookrew-minimap {
     flex: 0 0 auto;
   }
 
-  .popout-title,
-  .popout-title.recap {
-    flex: 0 1 auto;
-    min-width: 40vw;
-    max-width: 55vw;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    line-height: 1.3;
-  }
-
-  .popout-header .cr-btn {
-    min-height: 44px;
+  /* One shared 44px frame for every icon button on the phone — popout
+     actions, send group, and dock tools all sit on the same grid. */
+  .popout-header .cr-btn,
+  .voice-bar .cr-btn,
+  .cr-dock-tools .cr-btn {
+    width: 44px;
+    height: 44px;
     min-width: 44px;
+    padding: 0;
     justify-content: center;
-    padding: 8px 10px;
   }
 
   /* The terminal viewport owns the vertical space (flex: 1 + min-height: 0
@@ -2038,15 +2201,7 @@ body.cookrew-mobile .cookrew-minimap {
     -webkit-overflow-scrolling: touch;
   }
 
-  .voice-bar .cr-btn {
-    min-height: 44px;
-  }
 
-  /* 16px stops iOS Safari from auto-zooming the page on input focus. */
-  .voice-input {
-    min-height: 44px;
-    font-size: 16px;
-  }
 
   /* Turn history panel becomes a full-width sheet under the (taller
      phone) header; the hint prose is dropped to give rows the space. */

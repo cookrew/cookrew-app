@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { buildAttachmentPaste } from '../../shared/attach'
 import { cookrew, hasNativeWebview } from './api'
+import { CrIcon } from './icons'
 
 /**
  * 📎 attachments: resolve files to absolute paths on the agents' machine
@@ -61,7 +62,7 @@ export function AttachButton({ terminalId }: { terminalId: string }): React.JSX.
         onClick={pick}
         disabled={busy}
       >
-        📎
+        <CrIcon name="attach" />
       </button>
       <input
         ref={inputRef}

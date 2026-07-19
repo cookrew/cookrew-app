@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { TerminalActivity } from '../../shared/turn'
 import { cookrew } from './api'
 import { AttachButton } from './AttachButton'
+import { CrIcon } from './icons'
 
 /**
  * Voice composer for the terminal full view (desktop overlay AND phone):
@@ -50,11 +51,13 @@ export function VoiceBar({
   textRef.current = text
   const hasRecognition = useRef(makeRecognizer() !== null).current
 
+  // No composer input of its own — the zoomed terminal IS the input. A
+  // dictated transcript is typed into the PTY and submitted; with nothing
+  // dictated, send is a bare Enter that submits what's typed in the TUI.
   const send = (value?: string): void => {
     const message = (value ?? textRef.current).trim()
-    if (!message) return
     setText('')
-    cookrew().ptyInput(terminalId, message)
+    if (message) cookrew().ptyInput(terminalId, message)
     cookrew().ptyInput(terminalId, '\r')
   }
 
@@ -100,6 +103,10 @@ export function VoiceBar({
 
   useEffect(() => () => recognizerRef.current?.stop(), [])
 
+  // mousedown-preventDefault keeps focus in the zoomed xterm — clicking a
+  // dock button must not stop the user's typing mid-prompt.
+  const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
+
   return (
     <div className="voice-bar nodrag">
       <AttachButton terminalId={terminalId} />
@@ -107,30 +114,30 @@ export function VoiceBar({
         <button
           className={`cr-btn sm voice-mic${listening ? ' listening' : ''}`}
           title="Voice dictation"
+          onMouseDown={keepFocus}
           onClick={toggleMic}
         >
-          🎙
+          <CrIcon name="mic" />
         </button>
       )}
-      <input
-        className="voice-input"
-        placeholder={listening ? 'Listening…' : 'Message this agent…'}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          e.stopPropagation()
-          if (e.key === 'Enter') send()
-        }}
-      />
+      {listening && (
+        <span className="voice-ghost">{text.trim() ? text : 'Listening…'}</span>
+      )}
       <button
         className={`cr-btn sm voice-speak${speakReplies ? ' on' : ''}`}
         title="Speak replies aloud"
+        onMouseDown={keepFocus}
         onClick={toggleSpeak}
       >
-        🔊
+        <CrIcon name="speaker" />
       </button>
-      <button className="cr-btn sm primary" title="Send" onClick={() => send()}>
-        ➤
+      <button
+        className="cr-btn sm primary"
+        title="Send (Enter)"
+        onMouseDown={keepFocus}
+        onClick={() => send()}
+      >
+        <CrIcon name="send" />
       </button>
     </div>
   )
