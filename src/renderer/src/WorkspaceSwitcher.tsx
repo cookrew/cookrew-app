@@ -69,12 +69,9 @@ export function WorkspaceSwitcher({
     <div className="cr-ws" ref={rootRef}>
       <button className="cr-ws-current" onClick={() => setOpen((v) => !v)} title={dir}>
         <span className="cr-ws-icon">{icon}</span>
-        <span className="cr-kicker">{name}</span>
+        <span className="cr-kicker cr-ws-name">{name}</span>
         <span className="cr-ws-caret">{open ? '▾' : '▸'}</span>
       </button>
-      <span className="cr-dim cr-ws-dir" title={dir}>
-        {dir}
-      </span>
 
       {open && (
         <div className="cr-ws-menu">
@@ -86,7 +83,12 @@ export function WorkspaceSwitcher({
               onClick={() => switchTo(w.id)}
             >
               <span className="cr-ws-icon">{w.icon}</span>
-              <span className="cr-ws-item-name">{w.name}</span>
+              <span className="cr-ws-item-text">
+                <span className="cr-ws-item-name">{w.name}</span>
+                <span className="cr-ws-item-dir" title={w.dir}>
+                  {w.dir}
+                </span>
+              </span>
               {w.id === list?.activeId && <span className="cr-ws-check">●</span>}
             </button>
           ))}

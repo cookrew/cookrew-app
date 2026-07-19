@@ -215,6 +215,114 @@ function TerminalOverlay({
       }, 200)
       cleanups.push(() => clearTimeout(kickTimer))
 
+      // Touch scrolling: tmux runs with `mouse on`, so xterm sits in
+      // mouse-tracking mode and its built-in touch scrolling is disabled
+      // (the handlers bail while mouse events are active — xterm marks that
+      // state with the enable-mouse-events class). Bridge touch drags into
+      // synthetic wheel events aimed at xterm's own wheel handler, which
+      // forwards them to tmux as scroll reports — one per row of finger
+      // travel, so a phone swipe scrolls like a desktop wheel. When mouse
+      // tracking is off, xterm's native touch path works and the bridge
+      // stands down.
+      let touchY: number | null = null
+      let lastTouch: { x: number; y: number } | null = null
+      /** Recent samples (~last 120ms) — velocity source for the fling. */
+      let history: Array<{ t: number; y: number }> = []
+      /** Sub-row remainder so slow drags and glide frames still accumulate. */
+      let carry = 0
+      let glideRaf = 0
+      let glideV = 0
+
+      const trackingEl = (): Element | null =>
+        container.querySelector('.xterm.enable-mouse-events')
+
+      const emitScroll = (px: number): void => {
+        const target = trackingEl()
+        if (!target || !lastTouch) return
+        const rowPx = Math.max(12, container.clientHeight / Math.max(term.rows, 1))
+        carry += px
+        while (Math.abs(carry) >= rowPx) {
+          const sign = carry > 0 ? 1 : -1
+          target.dispatchEvent(
+            new WheelEvent('wheel', {
+              bubbles: true,
+              cancelable: true,
+              clientX: lastTouch.x,
+              clientY: lastTouch.y,
+              deltaY: sign * rowPx,
+              deltaMode: WheelEvent.DOM_DELTA_PIXEL
+            })
+          )
+          carry -= sign * rowPx
+        }
+      }
+
+      const stopGlide = (): void => {
+        if (glideRaf) cancelAnimationFrame(glideRaf)
+        glideRaf = 0
+      }
+
+      const onTouchStart = (e: TouchEvent): void => {
+        stopGlide()
+        carry = 0
+        if (e.touches.length === 1) {
+          touchY = e.touches[0].clientY
+          history = [{ t: performance.now(), y: touchY }]
+        } else {
+          touchY = null
+        }
+      }
+      const onTouchMove = (e: TouchEvent): void => {
+        if (touchY === null || e.touches.length !== 1 || !trackingEl()) return
+        const touch = e.touches[0]
+        lastTouch = { x: touch.clientX, y: touch.clientY }
+        const now = performance.now()
+        history = [...history.filter((h) => now - h.t < 120), { t: now, y: touch.clientY }]
+        emitScroll(touchY - touch.clientY)
+        touchY = touch.clientY
+        e.preventDefault()
+      }
+      // Fling: on release, keep scrolling with the finger's exit velocity,
+      // decaying exponentially (~0.9s from a hard flick) — iOS-style
+      // momentum the browser can't provide because the bridge preventDefaults
+      // the native gesture.
+      const onTouchEnd = (): void => {
+        const wasTracking = touchY !== null
+        touchY = null
+        if (!wasTracking || history.length < 2) return
+        const newest = history[history.length - 1]
+        const oldest = history[0]
+        const span = newest.t - oldest.t
+        if (span <= 0) return
+        const velocity = (oldest.y - newest.y) / span
+        if (Math.abs(velocity) < 0.25) return
+        glideV = Math.max(-3, Math.min(3, velocity))
+        let lastFrame = performance.now()
+        const frame = (now: number): void => {
+          const dt = now - lastFrame
+          lastFrame = now
+          emitScroll(glideV * dt)
+          glideV *= Math.pow(0.92, dt / 16.7)
+          glideRaf = Math.abs(glideV) > 0.04 ? requestAnimationFrame(frame) : 0
+        }
+        glideRaf = requestAnimationFrame(frame)
+      }
+      const onTouchCancel = (): void => {
+        touchY = null
+        history = []
+      }
+      container.addEventListener('touchstart', onTouchStart, { passive: true })
+      container.addEventListener('touchmove', onTouchMove, { passive: false })
+      container.addEventListener('touchend', onTouchEnd, { passive: true })
+      container.addEventListener('touchcancel', onTouchCancel, { passive: true })
+      cleanups.push(() => {
+        stopGlide()
+        container.removeEventListener('touchstart', onTouchStart)
+        container.removeEventListener('touchmove', onTouchMove)
+        container.removeEventListener('touchend', onTouchEnd)
+        container.removeEventListener('touchcancel', onTouchCancel)
+      })
+
       // The overlay rect keeps tracking the viewport while the user zooms
       // or pans, so resizes stream in — debounce the refit to avoid
       // hammering the TUI with SIGWINCH every frame.
@@ -300,19 +408,26 @@ function TerminalOverlay({
         {phase === 'waiting' && <span className="cr-chip attention">NEEDS ATTENTION</span>}
         {(activity?.turnCount ?? 0) > 0 && (
           <button
-            className={`cr-btn sm${showTurns ? ' active' : ''}`}
-            title="Fork a new agent from a past turn"
+            className={`cr-btn sm icon${showTurns ? ' active' : ''}`}
+            title={`Fork a new agent from a past turn (${activity?.turnCount})`}
+            aria-label="Fork from a past turn"
             onClick={() => setShowTurns((s) => !s)}
           >
-            ⑂ FORK ({activity?.turnCount})
+            ⑂<span className="popout-count">{activity?.turnCount}</span>
           </button>
         )}
-        <button className="cr-btn sm popout-close" onClick={zoomBack}>
-          ⤢ CANVAS
+        <button
+          className="cr-btn sm icon popout-close"
+          title="Back to canvas (Esc)"
+          aria-label="Back to canvas"
+          onClick={zoomBack}
+        >
+          ⤢
         </button>
         <button
-          className="cr-btn sm popout-kill"
+          className="cr-btn sm icon popout-kill"
           title="Close card & kill session (⌘W)"
+          aria-label="Close card & kill session"
           onClick={() => {
             zoomBack()
             void cookrew().removeNode(node.id)
