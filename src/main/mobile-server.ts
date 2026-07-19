@@ -3,6 +3,7 @@ import https from 'node:https'
 import path from 'node:path'
 import { networkInterfaces } from 'node:os'
 import { existsSync, readFileSync } from 'node:fs'
+import { powerSaveBlocker } from 'electron'
 import type { WorkspaceStore } from './store'
 import type { PtyManager } from './pty'
 import type { VoiceEngine } from './voice'
@@ -16,6 +17,9 @@ export const MOBILE_PORT = 8639
 export const MOBILE_HTTPS_PORT = 8643
 
 let httpsReady = false
+
+/** Active power-save-blocker id, boxed so tests can reset it. */
+const powerBlockerId: { current: number | null } = { current: null }
 
 export interface MobileServerDeps {
   store: WorkspaceStore
@@ -43,6 +47,14 @@ export interface MobileServerDeps {
  * stays available at /lite.
  */
 export function startMobileServer(deps: MobileServerDeps): void {
+  // Phones poll this server while the Mac's display is off; without a power
+  // assertion macOS App-Naps the process and idle-sleeps the system, killing
+  // every mobile session. Held for the app's lifetime (the server has no stop
+  // path) and cleared by process exit.
+  if (!powerBlockerId.current) {
+    powerBlockerId.current = powerSaveBlocker.start('prevent-app-suspension')
+  }
+
   const requestHandler = (request: http.IncomingMessage, response: http.ServerResponse): void => {
     void handle(request, response, deps).catch((error: Error) => {
       respondJson(response, 500, { error: error.message })
