@@ -4,6 +4,7 @@ import { diffOutput } from './ask'
 import { summarizeTurn, TurnSummarizer } from './sous'
 import type { TurnStore } from './turn-store'
 import {
+  RECOVERED_PROMPT_LABEL,
   TerminalActivity,
   TurnPhase,
   TurnRecord,
@@ -25,6 +26,8 @@ const QUIESCENCE_MS = 2500
  * agent output arriving within the window re-enters 'thinking' (self-heal).
  */
 const RESUME_WINDOW_MS = 30_000
+/** Min gap between rendered-screen scans in the self-heal path. */
+const HEAL_SCAN_MS = 1000
 /** Minimum turn duration before quiescence may end it (agent spin-up). */
 const GRACE_MS = 1500
 const POLL_MS = 400
@@ -48,6 +51,8 @@ interface TrackedTerminal {
   inPaste: boolean
   /** Epoch ms of the last Enter that did NOT start or answer a turn; 0 when consumed. */
   lastSubmitAt: number
+  /** Epoch ms of the last self-heal viewport scan (throttle). */
+  lastHealScanAt: number
   prompt: string | null
   snapshot: string
   reply: string | null
@@ -119,6 +124,7 @@ export class TurnTracker extends EventEmitter {
       promptBuffer: '',
       inPaste: false,
       lastSubmitAt: 0,
+      lastHealScanAt: 0,
       prompt: null,
       snapshot: '',
       reply: null,
@@ -278,16 +284,24 @@ export class TurnTracker extends EventEmitter {
   }
 
   /**
-   * Two independent desync signals:
+   * Desync signals, in order:
    * - input the tracker saw but never turned into a turn (buffered/pasted
    *   text, or a recent Enter that started nothing) followed by any
    *   agent-transcript output, or
-   * - a live "esc to interrupt" spinner — painted only mid-turn — which
-   *   covers reattach cases where this tracker never saw the prompt at all.
+   * - a live spinner in the chunk itself — covers reattach cases where this
+   *   tracker never saw the prompt at all, or
+   * - a live spinner on the RENDERED screen. tmux repaints changed cells
+   *   with cursor addressing, so the spinner line almost never arrives
+   *   intact in one chunk; the screen is the reliable source. Throttled —
+   *   serializing the viewport on every chunk would be wasteful.
    */
   private shouldSelfHeal(t: TrackedTerminal, chunk: string): boolean {
     if (this.hasPendingInput(t) && detectAgentActivity(chunk)) return true
-    return detectLiveWork(chunk)
+    if (detectLiveWork(chunk)) return true
+    const now = Date.now()
+    if (now - t.lastHealScanAt < HEAL_SCAN_MS) return false
+    t.lastHealScanAt = now
+    return detectLiveWork(t.session.viewportText())
   }
 
   private hasPendingInput(t: TrackedTerminal): boolean {
@@ -341,8 +355,17 @@ export class TurnTracker extends EventEmitter {
     t.reply = finalMessage ?? tailLines(lines, REPLY_TAIL).join('\n').trim()
     t.phase = 'replied'
     const id = t.session.terminalId
+    this.stopTurnTimers(t)
+    // Self-healed turns (opened without ever seeing a prompt) that also
+    // produced no visible reply are tracker noise, not exchanges — end the
+    // phase but record nothing. Recovered turns WITH real output are kept
+    // under a synthetic label so history never shows an empty prompt.
+    if (t.prompt === null && t.reply.length === 0) {
+      this.push(t)
+      return
+    }
     const appended = appendTurnRecord(this.history(id), {
-      prompt: t.prompt ?? '',
+      prompt: t.prompt ?? RECOVERED_PROMPT_LABEL,
       reply: t.reply,
       ...(t.title !== null ? { title: t.title } : {}),
       startedAt: t.turnStartedAt,
@@ -350,6 +373,11 @@ export class TurnTracker extends EventEmitter {
     })
     this.histories.set(id, appended)
     this.store?.scheduleSave(id, appended)
+    this.push(t)
+    void this.finalizeTitle(t, appended[appended.length - 1].index)
+  }
+
+  private stopTurnTimers(t: TrackedTerminal): void {
     if (t.pollTimer) {
       clearInterval(t.pollTimer)
       t.pollTimer = null
@@ -358,8 +386,6 @@ export class TurnTracker extends EventEmitter {
       clearTimeout(t.titleTimer)
       t.titleTimer = null
     }
-    this.push(t)
-    void this.finalizeTitle(t, appended[appended.length - 1].index)
   }
 
   /**

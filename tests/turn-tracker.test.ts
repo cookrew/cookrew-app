@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TurnTracker } from '../src/main/turn-tracker'
+import { RECOVERED_PROMPT_LABEL } from '../src/shared/turn'
 import type { PtySession } from '../src/main/pty'
 
 /** Minimal PtySession stand-in: emits input/data, serves controllable text. */
@@ -151,6 +152,60 @@ describe('TurnTracker self-healing', () => {
   })
 })
 
+describe('TurnTracker recovered turns (empty-prompt history bug)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('labels a self-healed turn with real output instead of an empty prompt', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    // Reattach: a live spinner with no input history opens an unlabeled turn.
+    session.emit('data', '✻ Cerebrating… (esc to interrupt · 34s · ↓ 2.1k tokens)')
+    expect(phaseOf(tracker)).toBe('thinking')
+
+    session.full = '⏺ finished the refactor'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(phaseOf(tracker)).toBe('replied')
+
+    const history = tracker.history('term-1')
+    expect(history).toHaveLength(1)
+    expect(history[0].prompt).toBe(RECOVERED_PROMPT_LABEL)
+    expect(history[0].reply).toContain('finished the refactor')
+    tracker.disposeAll()
+  })
+
+  it('records nothing for a promptless turn that produced no visible reply', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    session.full = '✻ Cerebrating… (esc to interrupt · 34s)'
+    session.emit('data', '✻ Cerebrating… (esc to interrupt · 34s)')
+    expect(phaseOf(tracker)).toBe('thinking')
+
+    // The "turn" ends with no output beyond the snapshot — tracker noise.
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(phaseOf(tracker)).toBe('replied')
+    expect(tracker.history('term-1')).toHaveLength(0)
+    tracker.disposeAll()
+  })
+
+  it('still records typed turns whose reply is empty', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    session.emit('input', 'do the thing\r')
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(phaseOf(tracker)).toBe('replied')
+
+    const history = tracker.history('term-1')
+    expect(history).toHaveLength(1)
+    expect(history[0].prompt).toBe('do the thing')
+    tracker.disposeAll()
+  })
+})
+
 describe('TurnTracker quiescence vs live spinner (BUG 4)', () => {
   afterEach(() => {
     vi.useRealTimers()
@@ -184,6 +239,43 @@ describe('TurnTracker quiescence vs live spinner (BUG 4)', () => {
     session.idle = 99_999
     await vi.advanceTimersByTimeAsync(3000)
     expect(phaseOf(tracker)).toBe('replied')
+    tracker.disposeAll()
+  })
+})
+
+// tmux repaints changed cells with cursor addressing, so a live spinner
+// almost never arrives intact inside one data chunk — the self-heal must
+// fall back to scanning the rendered screen (stuck-idle Conductor bug).
+describe('TurnTracker self-heal under tmux cell repaints', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('heals from idle when the screen shows a live spinner but chunks are partial', () => {
+    const { tracker, session } = makeTracker()
+    session.full = '⏺ Bash(npm run migrate)\n✻ Marinating… (2m 45s · ↓ 774 tokens)'
+    // A tmux cell repaint: cursor move plus the new spinner glyph only.
+    session.emit('data', '\x1b[24;3H✽')
+    expect(phaseOf(tracker)).toBe('thinking')
+    tracker.disposeAll()
+  })
+
+  it('heals from replied the same way after premature quiescence', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    await completeTurn(tracker, session)
+
+    session.full = '⏺ Bash(long job)\n✶ Honking… (12s · ↓ 1.1k tokens)'
+    session.emit('data', '\x1b[24;3H✶')
+    expect(phaseOf(tracker)).toBe('thinking')
+    tracker.disposeAll()
+  })
+
+  it('stays idle on partial repaints when the screen shows no live spinner', () => {
+    const { tracker, session } = makeTracker()
+    session.full = '⏺ done\n✻ Brewed for 4m 15s\n❯ '
+    session.emit('data', '\x1b[24;3H❯')
+    expect(phaseOf(tracker)).toBe('idle')
     tracker.disposeAll()
   })
 })
