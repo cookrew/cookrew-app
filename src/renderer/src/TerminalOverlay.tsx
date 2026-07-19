@@ -15,6 +15,7 @@ import { TurnHistoryPanel } from './TurnHistoryPanel'
 import { attachFilesToTerminal } from './AttachButton'
 import { CrIcon } from './icons'
 import { AgentSprite } from './nodes/AgentSprite'
+import { HandLed } from './nodes/AgentAvatar'
 
 const PHOSPHOR_THEME = {
   background: '#14110A',
@@ -441,10 +442,7 @@ function TerminalOverlay({
       onDrop={onDrop}
     >
       <div className="popout-header">
-        <span
-          className={`cr-led ${phase === 'thinking' ? 'busy' : phase === 'waiting' ? 'red' : 'on'}`}
-          title={`${node.name} · ${node.preset}`}
-        />
+        <HandLed phase={phase} title={`${node.name} · ${node.preset}`} />
         <span className="popout-agent" title={node.preset}>
           <AgentSprite preset={node.preset} />
         </span>

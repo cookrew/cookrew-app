@@ -146,7 +146,9 @@ function serveRendererIndex(response: http.ServerResponse, deps: MobileServerDep
   const indexPath = path.join(deps.rendererDir, 'index.html')
   if (!existsSync(indexPath)) return false
   const html = readFileSync(indexPath, 'utf8').replace('<head>', `<head>${REMOTE_BOOT}`)
-  response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+  // no-cache: assets are hash-named, but a cached index.html would keep
+  // phones pinned to a stale bundle across app updates.
+  response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' })
   response.end(html)
   return true
 }

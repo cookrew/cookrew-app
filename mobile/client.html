@@ -328,11 +328,17 @@
   .vi-chip.tan { background: #4a3b2a; color: #e8c9a0; }
   .vi-chip.dim { color: #98989d; }
 
-  .vi-led { width: calc(9px * var(--z, 1)); height: calc(9px * var(--z, 1)); border-radius: 50%; flex: 0 0 auto; }
-  .vi-led.thinking { background: var(--vi-working); box-shadow: 0 0 calc(8px * var(--z, 1)) var(--vi-working); animation: vi-pulse 1.2s ease-in-out infinite; }
-  .vi-led.waiting { background: var(--vi-wait); box-shadow: 0 0 calc(8px * var(--z, 1)) var(--vi-wait); animation: cr-blink 0.7s steps(2) infinite; }
-  .vi-led.replied, .vi-led.idle { background: var(--vi-done); box-shadow: 0 0 calc(6px * var(--z, 1)) rgba(50, 215, 75, 0.7); }
-  .vi-led.off { background: #5a5a5f; box-shadow: none; }
+  /* Baby-hand status LED: replaces the old colored dots. */
+  .vi-hand-led { width: calc(12px * var(--z, 1)); height: calc(13px * var(--z, 1)); flex: 0 0 auto; }
+  .vi-hand-led.idle, .vi-hand-led.replied { color: var(--vi-done); }
+  .vi-hand-led.thinking { color: var(--vi-working); animation: ava-blink 1s steps(2) infinite; }
+  .vi-hand-led.waiting { color: var(--vi-wait); animation: ava-blink 0.55s steps(2) infinite; }
+  .vi-hand-led.off { color: #5a5a5f; }
+  .popout-header .vi-hand-led { width: 13px; height: 14px; }
+  .popout-header .vi-hand-led use { stroke: var(--ink); stroke-width: 1.4; }
+  .popout-header .vi-hand-led.idle, .popout-header .vi-hand-led.replied { color: var(--hp); }
+  .popout-header .vi-hand-led.thinking { color: var(--amber); }
+  .popout-header .vi-hand-led.waiting { color: var(--rose); }
 
   .vi-card-body {
     flex: 1;
@@ -385,40 +391,33 @@
   }
   .vi-dot.pulse { animation: vi-pulse 1.2s ease-in-out infinite; }
 
-  /* pixel invader avatar + signal bars (copied from desktop) */
+  /* Status avatar (copied from desktop AgentAvatar.tsx): the baby hand
+     acting out the turn phase with the agent's pixel icon. */
 
   .vi-avatar {
-    position: relative;
     width: calc(48px * var(--z, 1));
-    height: calc(24px * var(--z, 1));
+    height: calc(30px * var(--z, 1));
     flex: 0 0 auto;
-    color: #32d74b;
+    display: block;
   }
-  .vi-avatar.waiting { color: #ff453a; }
+  .vi-avatar > svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  .vi-avatar .ava-icon, .vi-avatar .ava-hand { transition: transform 0.35s ease; }
+  .vi-avatar.idle .ava-tint, .vi-avatar.replied .ava-tint { color: var(--vi-done); }
+  .vi-avatar.thinking .ava-tint { color: var(--vi-working); }
+  .vi-avatar.waiting .ava-tint { color: var(--vi-wait); }
+  .vi-avatar.off .ava-tint { color: #5a5a5f; }
+  .vi-avatar.idle .ava-icon, .vi-avatar.off .ava-icon { transform: translate(28px, 10px) scale(0.58); opacity: 0.55; }
+  .vi-avatar.thinking .ava-icon { transform: translate(3px, 0.5px) scale(0.44); }
+  .vi-avatar.thinking .ava-spin { animation: ava-juggle 0.9s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+  .vi-avatar.thinking .ava-hand { animation: ava-bat 0.9s ease-in-out infinite; transform-box: fill-box; transform-origin: 60% 90%; }
+  .vi-avatar.waiting .ava-icon { transform: translate(28px, 10px) scale(0.58); animation: ava-blink 0.7s steps(2) infinite; }
+  .vi-avatar.waiting .ava-hand { animation: ava-wave 0.8s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 95%; }
+  .vi-avatar.replied .ava-icon { transform: translate(4.6px, 6px) scale(0.44); }
 
-  /* Per-agent pixel sprite (same grids as the desktop's AgentSprite.tsx). */
-  .vi-sprite {
-    position: absolute;
-    left: 0; top: 0;
-    width: calc(33px * var(--z, 1));
-    height: calc(24px * var(--z, 1));
-  }
-
-  .vi-bars {
-    position: absolute;
-    left: calc(38px * var(--z, 1));
-    top: 0;
-    height: calc(24px * var(--z, 1));
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: calc(3px * var(--z, 1));
-  }
-  .vi-bars i { width: calc(8px * var(--z, 1)); height: calc(4px * var(--z, 1)); background: currentColor; border-radius: 1px; opacity: 0.85; }
-  .vi-avatar.idle .vi-bars i, .vi-avatar.replied .vi-bars i { opacity: 0.35; }
-  .vi-avatar.thinking .vi-bars i { animation: vi-bar 1s ease-in-out infinite; }
-  .vi-avatar.thinking .vi-bars i:nth-child(2) { animation-delay: 0.18s; }
-  .vi-avatar.thinking .vi-bars i:nth-child(3) { animation-delay: 0.36s; }
+  @keyframes ava-juggle { 0%, 100% { transform: translateY(0) rotate(-9deg); } 50% { transform: translateY(-3px) rotate(9deg); } }
+  @keyframes ava-bat { 0%, 100% { transform: rotate(-3deg); } 50% { transform: rotate(4deg) translateY(-0.6px); } }
+  @keyframes ava-wave { 0%, 100% { transform: rotate(-11deg); } 50% { transform: rotate(11deg); } }
+  @keyframes ava-blink { 50% { opacity: 0.25; } }
 
   /* mini mode (far-out zoom): terminal cards degrade to led + name,
      matching the desktop's MINI_ZOOM tile. Toggled by #world[data-mode]. */
@@ -441,7 +440,7 @@
     text-overflow: ellipsis;
   }
   .card.shell-card .mini-name { color: var(--ink); font-family: var(--font-pixel); }
-  .mini-row .vi-led { width: calc(11px * var(--z, 1)); height: calc(11px * var(--z, 1)); animation: none; }
+  .mini-row .vi-hand-led { width: calc(13px * var(--z, 1)); height: calc(14px * var(--z, 1)); animation: none; }
 
   #world[data-mode='mini'] .tcard > :not(.mini-row) { display: none; }
   #world[data-mode='mini'] .tcard .mini-row { display: flex; }
@@ -729,7 +728,7 @@
 
 <div id="popout">
   <div class="popout-header">
-    <span id="popLed" class="cr-led"></span>
+    <svg id="popLed" class="vi-hand-led idle" viewBox="0 0 32 34" aria-hidden="true"><use href="#cr-logo-hand" fill="currentColor"/></svg>
     <span id="popTitle" class="popout-title">—</span>
     <span id="popStatus" class="card-status"></span>
     <button id="popClose" class="cr-btn"><svg class="cr-icon" viewBox="0 0 16 16"><use href="#mi-close"/></svg> CLOSE</button>
@@ -810,7 +809,7 @@
     shell: ['..X.....X..', '...X...X...', '..XXXXXXX..', '.XX.XXX.XX.', 'XXXXXXXXXXX', 'X.XXXXXXX.X', 'X.X.....X.X', '...XX.XX...']
   }
 
-  function agentSprite(preset) {
+  function agentIconCells(preset) {
     const kind = /claude/i.test(preset) ? 'claude'
       : /codex/i.test(preset) ? 'codex'
       : /opencode/i.test(preset) ? 'opencode'
@@ -821,7 +820,26 @@
         if (cell === 'X') cells.push(`<rect x="${x * 3}" y="${y * 3}" width="3" height="3" fill="currentColor"/>`)
       })
     })
-    return `<svg class="vi-sprite" viewBox="0 0 33 24" aria-hidden="true">${cells.join('')}</svg>`
+    return cells.join('')
+  }
+
+  /* Status avatar: the baby hand (reusing the header logo's #cr-logo-hand
+     path) acting out the phase with the agent's pixel icon — parked when
+     idle, juggled while thinking, held when replied, waving when waiting. */
+  function agentAvatar(preset, phase) {
+    return `<div class="vi-avatar ${phase}"><svg viewBox="0 0 48 30" aria-hidden="true">
+      <g class="ava-icon"><g class="ava-tint"><g class="ava-spin">${agentIconCells(preset)}</g></g></g>
+      <g class="ava-hand"><svg x="1" y="8" width="21" height="21" viewBox="0 0 32 32">
+        <use href="#cr-logo-hand" transform="translate(1.6 1.6)" fill="var(--amber)" stroke="var(--amber)" stroke-width="3" stroke-linejoin="round"/>
+        <use href="#cr-logo-hand" fill="var(--ink)" stroke="var(--ink)" stroke-width="3" stroke-linejoin="round"/>
+        <use href="#cr-logo-hand" fill="var(--cream-hi)"/>
+      </svg></g>
+    </svg></div>`
+  }
+
+  /* Baby-hand silhouette standing in for the old status LED dots. */
+  function handLed(phase) {
+    return `<svg class="vi-hand-led ${phase}" viewBox="0 0 32 34" aria-hidden="true"><use href="#cr-logo-hand" fill="currentColor"/></svg>`
   }
 
   function agoLabel(since) {
@@ -859,17 +877,17 @@
       : ''
     const timeChip = phase === 'idle' && activity && node.running
       ? `<span class="vi-chip dim">${agoLabel(activity.updatedAt)}</span>`
-      : `<span class="vi-led ${led}"></span>`
+      : handLed(led)
     return `
       <div class="vi-head">
-        <div class="vi-avatar ${off ? 'idle' : phase}">${agentSprite(node.preset)}<span class="vi-bars"><i></i><i></i><i></i></span></div>
+        ${agentAvatar(node.preset, off ? 'off' : phase)}
         <div class="vi-title">${esc(node.name)}${promptSnip}</div>
         <span class="vi-chip tan">${esc(node.preset)}</span>
         ${node.orch ? '<span class="vi-chip">Orch</span>' : ''}
         ${timeChip}
       </div>
       <div class="vi-card-body">${you}${latest}</div>
-      <div class="mini-row"><span class="vi-led ${led}"></span><span class="mini-name">${esc(node.name)}</span></div>`
+      <div class="mini-row">${handLed(led)}<span class="mini-name">${esc(node.name)}</span></div>`
   }
 
   function shellCardHtml(node, activity) {
@@ -885,7 +903,7 @@
         <span class="cr-chip" style="margin-left:auto">${esc(node.preset)}</span>
       </div>
       <div class="cr-phos cr-crt card-screen">${body}<span class="phos-cursor">▮</span></div>
-      <div class="mini-row"><span class="vi-led ${node.running ? 'idle' : 'off'}"></span><span class="mini-name">${esc(node.name)}</span></div>`
+      <div class="mini-row">${handLed(node.running ? 'idle' : 'off')}<span class="mini-name">${esc(node.name)}</span></div>`
   }
 
   function noteCardHtml(node) {
@@ -1104,14 +1122,14 @@
     const node = nodes.find((n) => n.id === openId)
     if (!node) return
     if (node.kind !== 'terminal') {
-      popLed.className = 'cr-led'
+      popLed.setAttribute('class', 'vi-hand-led idle')
       popStatus.textContent = node.kind.toUpperCase()
       popStatus.className = 'card-status'
       return
     }
     const activity = activities[node.id]
     const phase = activity ? activity.phase : 'idle'
-    popLed.className = 'cr-led' + (phase === 'thinking' ? ' busy' : node.running ? '' : ' off')
+    popLed.setAttribute('class', 'vi-hand-led ' + (node.running ? phase : 'off'))
     popStatus.textContent = node.running ? STATUS_LABEL[phase] : 'OFFLINE'
     popStatus.className = 'card-status ' + phase
     popAttention.style.display = phase === 'waiting' ? 'block' : 'none'

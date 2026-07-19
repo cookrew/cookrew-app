@@ -1,6 +1,7 @@
 import { isDemoMode, isRemoteMode } from './api'
 import { CrLogoMark } from './CrLogoMark'
 import { CrIcon } from './icons'
+import { HandLed } from './nodes/AgentAvatar'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 
 interface HeaderProps {
@@ -42,11 +43,11 @@ export function Header({
       <div className="cr-header-status">
         {attentionCount > 0 && (
           <>
-            <span className="cr-led red" />
+            <HandLed phase="waiting" />
             <span className="cr-kicker attention">{attentionCount} NEED YOU</span>
           </>
         )}
-        <span className={`cr-led ${busyCount > 0 ? 'busy' : 'on'}`} />
+        <HandLed phase={busyCount > 0 ? 'thinking' : 'idle'} />
         <span className="cr-kicker">
           {busyCount}/{terminalCount} WORKING
         </span>
