@@ -396,33 +396,12 @@
   }
   .vi-avatar.waiting { color: #ff453a; }
 
-  .vi-invader {
+  /* Per-agent pixel sprite (same grids as the desktop's AgentSprite.tsx). */
+  .vi-sprite {
     position: absolute;
     left: 0; top: 0;
-    width: 33px; height: 24px;
-    transform: scale(var(--z, 1));
-    transform-origin: top left;
-  }
-  .vi-invader::before {
-    content: '';
-    position: absolute;
-    width: 3px; height: 3px;
-    background: transparent;
-    box-shadow:
-      6px 0 currentColor, 24px 0 currentColor,
-      9px 3px currentColor, 21px 3px currentColor,
-      6px 6px currentColor, 9px 6px currentColor, 12px 6px currentColor,
-      15px 6px currentColor, 18px 6px currentColor, 21px 6px currentColor, 24px 6px currentColor,
-      3px 9px currentColor, 6px 9px currentColor, 12px 9px currentColor, 15px 9px currentColor,
-      18px 9px currentColor, 24px 9px currentColor, 27px 9px currentColor,
-      0 12px currentColor, 3px 12px currentColor, 6px 12px currentColor, 9px 12px currentColor,
-      12px 12px currentColor, 15px 12px currentColor, 18px 12px currentColor, 21px 12px currentColor,
-      24px 12px currentColor, 27px 12px currentColor, 30px 12px currentColor,
-      0 15px currentColor, 6px 15px currentColor, 9px 15px currentColor, 12px 15px currentColor,
-      15px 15px currentColor, 18px 15px currentColor, 21px 15px currentColor, 24px 15px currentColor,
-      30px 15px currentColor,
-      0 18px currentColor, 6px 18px currentColor, 24px 18px currentColor, 30px 18px currentColor,
-      9px 21px currentColor, 12px 21px currentColor, 18px 21px currentColor, 21px 21px currentColor;
+    width: calc(33px * var(--z, 1));
+    height: calc(24px * var(--z, 1));
   }
 
   .vi-bars {
@@ -822,6 +801,29 @@
     return cleaned.length > 0 ? cleaned : null
   }
 
+  /* Per-agent pixel sprites, same 11×8 grids as the desktop AgentSprite.tsx:
+     Claude Code starburst, Codex ring, OpenCode terminal block, invader fallback. */
+  const AGENT_GRIDS = {
+    claude: ['.....X.....', '.X...X...X.', '..X.XXX.X..', 'XXXXX.XXXXX', '..X.XXX.X..', '.X...X...X.', '.....X.....'],
+    codex: ['....XXX....', '..XX...XX..', '.X.......X.', '.X...X...X.', '.X.......X.', '..XX...XX..', '....XXX....'],
+    opencode: ['XXXXXXXXXXX', 'X.........X', 'X.X.......X', 'X..X......X', 'X.X...XXX.X', 'X.........X', 'XXXXXXXXXXX'],
+    shell: ['..X.....X..', '...X...X...', '..XXXXXXX..', '.XX.XXX.XX.', 'XXXXXXXXXXX', 'X.XXXXXXX.X', 'X.X.....X.X', '...XX.XX...']
+  }
+
+  function agentSprite(preset) {
+    const kind = /claude/i.test(preset) ? 'claude'
+      : /codex/i.test(preset) ? 'codex'
+      : /opencode/i.test(preset) ? 'opencode'
+      : 'shell'
+    const cells = []
+    AGENT_GRIDS[kind].forEach((row, y) => {
+      Array.from(row).forEach((cell, x) => {
+        if (cell === 'X') cells.push(`<rect x="${x * 3}" y="${y * 3}" width="3" height="3" fill="currentColor"/>`)
+      })
+    })
+    return `<svg class="vi-sprite" viewBox="0 0 33 24" aria-hidden="true">${cells.join('')}</svg>`
+  }
+
   function agoLabel(since) {
     const mins = Math.max(0, Math.floor((Date.now() - since) / 60000))
     if (mins < 1) return 'now'
@@ -860,7 +862,7 @@
       : `<span class="vi-led ${led}"></span>`
     return `
       <div class="vi-head">
-        <div class="vi-avatar ${off ? 'idle' : phase}"><span class="vi-invader"></span><span class="vi-bars"><i></i><i></i><i></i></span></div>
+        <div class="vi-avatar ${off ? 'idle' : phase}">${agentSprite(node.preset)}<span class="vi-bars"><i></i><i></i><i></i></span></div>
         <div class="vi-title">${esc(node.name)}${promptSnip}</div>
         <span class="vi-chip tan">${esc(node.preset)}</span>
         ${node.orch ? '<span class="vi-chip">Orch</span>' : ''}

@@ -2,6 +2,7 @@ import type { ToolId } from './canvas-ui'
 import type { TerminalActivity } from '../../shared/turn'
 import { VoiceBar } from './VoiceBar'
 import { CrIcon, type CrIconName } from './icons'
+import { AgentSprite } from './nodes/AgentSprite'
 
 const TOOLS: { id: ToolId; label: string; icon: CrIconName }[] = [
   { id: 'select', label: 'SELECT', icon: 'select' },
@@ -74,7 +75,7 @@ export function Dock({
                 className={`cr-chip clickable${preset === name ? ' amber' : ''}`}
                 onClick={() => onPreset(name)}
               >
-                {name}
+                <AgentSprite preset={name} /> {name}
               </button>
             ))}
             <label className="cr-check">
