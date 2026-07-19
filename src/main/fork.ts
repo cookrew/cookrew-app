@@ -11,6 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import { DEFAULT_TERMINAL_SIZE, TerminalNodeData, uniqueName } from '../shared/model'
 import { buildForkPreamble, buildResumeForkNotice } from '../shared/fork'
+import { stripSessionFlags } from '../shared/claude-fork'
 import { forkClaudeSession } from './claude-fork'
 import type { WorkspaceStore } from './store'
 import type { PtyManager, PtySession } from './pty'
@@ -21,7 +22,12 @@ export interface ForkDeps {
   ptys: PtyManager
   turns: TurnTracker
   /** Same spawn path as IPC/CLI terminal creation (PTY + turn tracking). */
-  spawnTerminal: (t: { id: string; command: string; cwd: string }) => void
+  spawnTerminal: (t: {
+    id: string
+    command: string
+    cwd: string
+    claudeSessionId?: string | null
+  }) => void
 }
 
 /** Poll cadence while waiting for the forked agent's TUI to finish booting. */
@@ -59,11 +65,13 @@ export function forkTerminal(
     throw new Error(`Agent '${source.name}' has no recorded turn ${index}`)
   }
 
-  // Prefer a native session fork (truncated session copy + --resume); null
-  // means not Claude / no matching session file, so replay a text preamble.
+  // Prefer a native session fork (truncated session copy under a fresh id);
+  // null means not Claude / session file not found, so replay a preamble.
+  // The source's stored session id resolves its file deterministically.
   const native = forkClaudeSession({
     command: source.command,
     cwd: source.cwd,
+    sessionId: source.claudeSessionId,
     turns: history,
     turnIndex: index
   })
@@ -77,11 +85,14 @@ export function forkTerminal(
     id: randomUUID(),
     name,
     preset: source.preset,
-    command: native ? native.command : source.command,
+    // Session binding lives on claudeSessionId, not in the command — the
+    // spawn path appends --resume/--session-id for the bound id itself.
+    command: stripSessionFlags(source.command),
     cwd: source.cwd,
     orch: false,
     role: source.role,
     forkOf: { sourceId: source.id, sourceName: source.name, turnIndex: index },
+    claudeSessionId: native ? native.sessionId : null,
     position: {
       x: source.position.x + source.size.width + 80,
       y: source.position.y + 80
