@@ -1512,31 +1512,6 @@ body,
   color: #98989d;
 }
 
-.vi-led {
-  width: calc(9px * var(--z, 1));
-  height: calc(9px * var(--z, 1));
-  border-radius: 50%;
-  flex: 0 0 auto;
-}
-
-.vi-led.thinking {
-  background: var(--vi-working);
-  box-shadow: 0 0 calc(8px * var(--z, 1)) var(--vi-working);
-  animation: vi-pulse 1.2s ease-in-out infinite;
-}
-
-.vi-led.waiting {
-  background: var(--vi-wait);
-  box-shadow: 0 0 calc(8px * var(--z, 1)) var(--vi-wait);
-  animation: cr-blink 0.7s steps(2) infinite;
-}
-
-.vi-led.replied,
-.vi-led.idle {
-  background: var(--vi-done);
-  box-shadow: 0 0 calc(6px * var(--z, 1)) rgba(50, 215, 75, 0.7);
-}
-
 .vi-card-body {
   background: transparent;
   padding: calc(9px * var(--z, 1)) calc(11px * var(--z, 1));
@@ -1640,26 +1615,171 @@ body,
   color: #5a5a5f;
 }
 
-/* per-agent pixel sprite avatar (AgentSprite.tsx) + signal bars */
+/* Status avatar (AgentAvatar.tsx): the baby hand acting out the turn phase
+   with the agent's pixel icon. Layout per phase, motion while it matters. */
 
 .vi-avatar {
-  position: relative;
   width: calc(48px * var(--z, 1));
-  height: calc(24px * var(--z, 1));
+  height: calc(30px * var(--z, 1));
   flex: 0 0 auto;
-  color: #32d74b;
+  display: block;
 }
 
-.vi-avatar.waiting {
-  color: #ff453a;
+.vi-avatar > svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
 }
 
-.vi-avatar .vi-sprite {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: calc(33px * var(--z, 1));
-  height: calc(24px * var(--z, 1));
+.vi-avatar .ava-icon,
+.vi-avatar .ava-hand {
+  transition: transform 0.35s ease;
+}
+
+.vi-avatar.idle .ava-tint,
+.vi-avatar.replied .ava-tint {
+  color: var(--vi-done);
+}
+
+.vi-avatar.thinking .ava-tint {
+  color: var(--vi-working);
+}
+
+.vi-avatar.waiting .ava-tint {
+  color: var(--vi-wait);
+}
+
+/* idle: hand at rest, icon parked beside it */
+.vi-avatar.idle .ava-icon {
+  transform: translate(28px, 10px) scale(0.58);
+  opacity: 0.55;
+}
+
+/* thinking: fingers juggle the icon above the fingertips */
+.vi-avatar.thinking .ava-icon {
+  transform: translate(3px, 0.5px) scale(0.44);
+}
+
+.vi-avatar.thinking .ava-spin {
+  animation: ava-juggle 0.9s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.vi-avatar.thinking .ava-hand {
+  animation: ava-bat 0.9s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: 60% 90%;
+}
+
+/* waiting: hand waves for attention, icon blinks */
+.vi-avatar.waiting .ava-icon {
+  transform: translate(28px, 10px) scale(0.58);
+  animation: ava-blink 0.7s steps(2) infinite;
+}
+
+.vi-avatar.waiting .ava-hand {
+  animation: ava-wave 0.8s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: 50% 95%;
+}
+
+/* replied: icon rests held on the fingertips */
+.vi-avatar.replied .ava-icon {
+  transform: translate(4.6px, 6px) scale(0.44);
+}
+
+@keyframes ava-juggle {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-9deg);
+  }
+  50% {
+    transform: translateY(-3px) rotate(9deg);
+  }
+}
+
+@keyframes ava-bat {
+  0%,
+  100% {
+    transform: rotate(-3deg);
+  }
+  50% {
+    transform: rotate(4deg) translateY(-0.6px);
+  }
+}
+
+@keyframes ava-wave {
+  0%,
+  100% {
+    transform: rotate(-11deg);
+  }
+  50% {
+    transform: rotate(11deg);
+  }
+}
+
+@keyframes ava-blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* Baby-hand status LED (HandLed): replaces the old colored dots. */
+.vi-hand-led {
+  width: calc(12px * var(--z, 1));
+  height: calc(13px * var(--z, 1));
+  flex: 0 0 auto;
+}
+
+.vi-hand-led.idle,
+.vi-hand-led.replied {
+  color: var(--vi-done);
+}
+
+.vi-hand-led.thinking {
+  color: var(--vi-working);
+  animation: ava-blink 1s steps(2) infinite;
+}
+
+.vi-hand-led.waiting {
+  color: var(--vi-wait);
+  animation: ava-blink 0.55s steps(2) infinite;
+}
+
+.vi-hand-led.off {
+  color: #5a5a5f;
+}
+
+/* Cream chrome contexts: token colors + ink outline for contrast. */
+.cr-header .vi-hand-led,
+.popout-header .vi-hand-led {
+  width: 13px;
+  height: 14px;
+}
+
+.cr-header .vi-hand-led path,
+.popout-header .vi-hand-led path {
+  stroke: var(--ink);
+  stroke-width: 1.4;
+}
+
+.cr-header .vi-hand-led.idle,
+.cr-header .vi-hand-led.replied,
+.popout-header .vi-hand-led.idle,
+.popout-header .vi-hand-led.replied {
+  color: var(--hp);
+}
+
+.cr-header .vi-hand-led.thinking,
+.popout-header .vi-hand-led.thinking {
+  color: var(--amber);
+}
+
+.cr-header .vi-hand-led.waiting,
+.popout-header .vi-hand-led.waiting {
+  color: var(--rose);
 }
 
 /* Identity sprite outside cards: dock preset chips + zoomed-in header. */
@@ -1685,51 +1805,6 @@ body,
   color: var(--ink);
 }
 
-.vi-bars {
-  position: absolute;
-  left: calc(38px * var(--z, 1));
-  top: 0;
-  height: calc(24px * var(--z, 1));
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: calc(3px * var(--z, 1));
-}
-
-.vi-bars i {
-  width: calc(8px * var(--z, 1));
-  height: calc(4px * var(--z, 1));
-  background: currentColor;
-  border-radius: 1px;
-  opacity: 0.85;
-}
-
-.vi-avatar.idle .vi-bars i,
-.vi-avatar.replied .vi-bars i {
-  opacity: 0.35;
-}
-
-.vi-avatar.thinking .vi-bars i {
-  animation: vi-bar 1s ease-in-out infinite;
-}
-
-.vi-avatar.thinking .vi-bars i:nth-child(2) {
-  animation-delay: 0.18s;
-}
-
-.vi-avatar.thinking .vi-bars i:nth-child(3) {
-  animation-delay: 0.36s;
-}
-
-@keyframes vi-bar {
-  0%,
-  100% {
-    opacity: 0.25;
-  }
-  50% {
-    opacity: 1;
-  }
-}
 
 /* ---- mini tile (below visual range) ---- */
 
@@ -1749,9 +1824,9 @@ body,
   border-bottom: none;
 }
 
-.vi-mini .vi-led {
-  width: calc(11px * var(--z, 1));
-  height: calc(11px * var(--z, 1));
+.vi-mini .vi-hand-led {
+  width: calc(13px * var(--z, 1));
+  height: calc(14px * var(--z, 1));
   /* no animations at this size — keep the paint cheap */
   animation: none;
 }
@@ -2162,6 +2237,68 @@ body.cookrew-mobile .cookrew-minimap {
   box-shadow: 0 0 0 0.5px var(--amber-soft);
   pointer-events: none;
   z-index: 1000;
+}
+
+/* ---- terminal control keys (phone companion) ----
+   Keys the touch keyboard cannot send — arrows and Esc — folded into the
+   dock's send group as a compact cluster beside the send button. Hidden on
+   desktop (hardware keyboard); agent TUI menus (approval dialogs, /model
+   pickers, message history) need these to be drivable from a phone. */
+
+.voice-keys {
+  display: none;
+  align-items: center;
+  gap: 4px;
+}
+
+@media (pointer: coarse), (max-width: 700px) {
+  .voice-keys {
+    display: flex;
+  }
+}
+
+.voice-keys .cr-btn.term-key {
+  min-width: 44px;
+  min-height: 44px;
+  justify-content: center;
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* Mobile zoomed dock: the send group owns the whole bar in static flow so
+   the key cluster can wrap onto its own line — the default absolute,
+   height-centered sliding pane would clip a second line against the dock's
+   overflow:hidden. */
+body.cookrew-mobile .cr-dock.zoomed .dock-canvas {
+  display: none;
+}
+
+body.cookrew-mobile .cr-dock.zoomed .dock-send {
+  position: static;
+  width: 100%;
+  max-width: 100%;
+  transform: none;
+}
+
+body.cookrew-mobile .cr-dock .voice-bar {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 6px;
+}
+
+/* On the phone the cluster gets its own full-width row ABOVE the action
+   row — five evenly stretched keys read as a deliberate key row, instead
+   of a ragged wrap that strands send beside ESC. */
+body.cookrew-mobile .cr-dock .voice-keys {
+  order: -1;
+  flex: 1 1 100%;
+  gap: 6px;
+}
+
+body.cookrew-mobile .cr-dock .voice-keys .cr-btn.term-key {
+  flex: 1;
 }
 
 /* ---- phone companion (narrow viewports) ----

@@ -176,8 +176,13 @@ function BrowserHost({
               if (e.key === 'Enter') commitAddress()
             }}
           />
-          <button className="cr-btn sm popout-close" onClick={zoomBack}>
-            <CrIcon name="collapse" /> CANVAS
+          <button
+            className="cr-btn sm popout-close"
+            title="Back to canvas"
+            aria-label="Back to canvas"
+            onClick={zoomBack}
+          >
+            <CrIcon name="collapse" />
           </button>
           <button
             className="cr-btn sm popout-kill"

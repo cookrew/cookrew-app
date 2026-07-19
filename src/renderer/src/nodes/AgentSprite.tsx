@@ -52,7 +52,7 @@ export function spriteForPreset(preset: string): AgentSpriteKind {
   return 'shell'
 }
 
-const CELLS: Record<AgentSpriteKind, React.JSX.Element[]> = Object.fromEntries(
+export const SPRITE_CELLS: Record<AgentSpriteKind, React.JSX.Element[]> = Object.fromEntries(
   (Object.entries(GRIDS) as [AgentSpriteKind, string[]][]).map(([kind, grid]) => [
     kind,
     grid.flatMap((row, y) =>
@@ -81,7 +81,7 @@ export function AgentSprite({
       aria-hidden="true"
       focusable="false"
     >
-      {CELLS[spriteForPreset(preset)]}
+      {SPRITE_CELLS[spriteForPreset(preset)]}
     </svg>
   )
 }

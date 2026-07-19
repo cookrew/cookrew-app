@@ -34,6 +34,42 @@ function speak(text: string): void {
 
 const SPEAK_PREF_KEY = 'cookrew-speak-replies'
 
+/** Control keys the touch keyboard cannot send, as raw PTY sequences. */
+const TERM_KEYS: Array<{ label: string; seq: string; title: string }> = [
+  { label: '←', seq: '\x1b[D', title: 'Arrow left' },
+  { label: '↓', seq: '\x1b[B', title: 'Arrow down' },
+  { label: '↑', seq: '\x1b[A', title: 'Arrow up' },
+  { label: '→', seq: '\x1b[C', title: 'Arrow right' },
+  { label: 'ESC', seq: '\x1b', title: 'Escape' }
+]
+
+/**
+ * Arrow cluster + Esc beside the send button, phone companion only (coarse
+ * pointer / narrow viewport via CSS): agent TUI menus (approval dialogs,
+ * /model pickers, message history) are undrivable from a touch keyboard
+ * without them. pointerdown is swallowed and the buttons are unfocusable,
+ * so a tap never dismisses the software keyboard or steals focus.
+ */
+function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
+  return (
+    <div className="voice-keys">
+      {TERM_KEYS.map((key) => (
+        <button
+          key={key.label}
+          className="cr-btn sm term-key"
+          tabIndex={-1}
+          title={key.title}
+          onPointerDown={(e) => e.preventDefault()}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => cookrew().ptyInput(terminalId, key.seq)}
+        >
+          {key.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 export function VoiceBar({
   terminalId,
   activity
@@ -131,6 +167,7 @@ export function VoiceBar({
       >
         <CrIcon name="speaker" />
       </button>
+      <TermKeys terminalId={terminalId} />
       <button
         className="cr-btn sm primary"
         title="Send (Enter)"

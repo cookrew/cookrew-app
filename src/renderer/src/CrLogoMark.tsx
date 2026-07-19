@@ -2,7 +2,7 @@
     from the original photo — index raking up-left, tall middle finger, curled
     ring + tucked thumb on the right, chubby forearm exiting the frame.
     Same language as the wordmark: ink outline, cream body, hard amber shadow. */
-const HAND_PATH =
+export const HAND_PATH =
   'M 16.7 1.2 C 17.8 1.2 18.4 1.8 18.5 2.7 C 18.9 5.3 19.0 8.5 19.2 10.6 ' +
   'C 19.3 11.0 19.5 11.0 19.7 10.7 C 20.0 10.1 20.5 9.5 21.1 9.6 C 21.7 9.7 22.0 10.3 22.2 10.7 ' +
   'C 22.9 10.1 24.0 9.7 25.0 10.2 C 26.3 11.0 27.3 12.4 27.4 13.8 C 27.5 14.9 27.3 15.8 27.0 16.6 ' +
