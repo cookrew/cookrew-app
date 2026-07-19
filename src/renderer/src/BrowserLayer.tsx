@@ -11,6 +11,7 @@ import { cookrew, hasNativeWebview } from './api'
 import type { ScreenRect } from './zoom-lod'
 import { useLodLayout } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
+import { CrIcon } from './icons'
 
 const THUMB_INTERVAL_MS = 5000
 const THUMB_WIDTH = 512
@@ -176,7 +177,7 @@ function BrowserHost({
             }}
           />
           <button className="cr-btn sm popout-close" onClick={zoomBack}>
-            ⤢ CANVAS
+            <CrIcon name="collapse" /> CANVAS
           </button>
           <button
             className="cr-btn sm popout-kill"
@@ -186,7 +187,7 @@ function BrowserHost({
               void cookrew().removeNode(node.id)
             }}
           >
-            ✕
+            <CrIcon name="close" />
           </button>
         </div>
         <div className="browser-tabstrip">

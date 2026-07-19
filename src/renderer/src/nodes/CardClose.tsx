@@ -1,4 +1,5 @@
 import { cookrew } from '../api'
+import { CrIcon } from '../icons'
 
 /**
  * ✕ in a card header: removes the node from the canvas — for terminals that
@@ -14,7 +15,7 @@ export function CardClose({ nodeId, dark }: { nodeId: string; dark?: boolean }):
         void cookrew().removeNode(nodeId)
       }}
     >
-      ✕
+      <CrIcon name="close" />
     </button>
   )
 }

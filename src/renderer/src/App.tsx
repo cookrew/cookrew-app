@@ -69,6 +69,8 @@ function Canvas(): React.JSX.Element {
   const [thumbs, setThumbs] = useState<Record<string, string>>({})
   /** Alignment guides while a card resize is snapped to a neighbour edge. */
   const [guides, setGuides] = useState<SnapGuide[]>([])
+  /** Terminal whose overlay owns the stage — the dock shows its composer. */
+  const [zoomedTerminalId, setZoomedTerminalId] = useState<string | null>(null)
 
   useEffect(() => {
     void cookrew()
@@ -428,6 +430,11 @@ function Canvas(): React.JSX.Element {
           onPreset={setPreset}
           orch={orch}
           onOrch={setOrch}
+          voiceFor={
+            zoomedTerminalId && terminals.some((t) => t.id === zoomedTerminalId)
+              ? { id: zoomedTerminalId, activity: activities[zoomedTerminalId] }
+              : null
+          }
           connectHint={
             tool === 'connect'
               ? connectFrom
@@ -436,7 +443,11 @@ function Canvas(): React.JSX.Element {
               : null
           }
         />
-        <TerminalOverlayLayer terminals={terminals} activities={activities} />
+        <TerminalOverlayLayer
+          terminals={terminals}
+          activities={activities}
+          onPrimaryChange={setZoomedTerminalId}
+        />
         <BrowserLayer browsers={browsers} onThumb={onThumb} />
       </div>
     </CanvasUiContext.Provider>

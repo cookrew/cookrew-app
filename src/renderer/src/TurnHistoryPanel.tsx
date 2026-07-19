@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { TurnRecord } from '../../shared/turn'
 import { cookrew } from './api'
+import { CrIcon } from './icons'
 
 /**
  * Dropdown panel in the zoomed-in terminal overlay: lists the agent's
@@ -40,9 +41,11 @@ export function TurnHistoryPanel({
   return (
     <div className="turn-panel">
       <div className="turn-panel-head">
-        <span className="turn-panel-title">⑂ FORK FROM A TURN</span>
-        <button className="cr-btn sm" onClick={onClose}>
-          ✕
+        <span className="turn-panel-title">
+          <CrIcon name="fork" /> FORK FROM A TURN
+        </span>
+        <button className="cr-btn sm icon" title="Close" aria-label="Close" onClick={onClose}>
+          <CrIcon name="close" />
         </button>
       </div>
       <div className="turn-panel-hint">
@@ -65,7 +68,7 @@ export function TurnHistoryPanel({
               disabled={forkingIndex !== null}
               onClick={() => fork(record.index)}
             >
-              {forkingIndex === record.index ? '⑂ …' : '⑂ FORK'}
+              <CrIcon name="fork" /> {forkingIndex === record.index ? '…' : 'FORK'}
             </button>
           </div>
         ))}

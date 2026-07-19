@@ -5,14 +5,14 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import type { TerminalNodeData } from '../../shared/model'
-import type { TerminalActivity } from '../../shared/turn'
+import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 import type { ScreenRect } from './zoom-lod'
 import { useLodLayout } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
 import { cookrew } from './api'
-import { VoiceBar } from './VoiceBar'
 import { TurnHistoryPanel } from './TurnHistoryPanel'
 import { attachFilesToTerminal } from './AttachButton'
+import { CrIcon } from './icons'
 
 const PHOSPHOR_THEME = {
   background: '#14110A',
@@ -35,12 +35,18 @@ const PHOSPHOR_THEME = {
  */
 export function TerminalOverlayLayer({
   terminals,
-  activities
+  activities,
+  onPrimaryChange
 }: {
   terminals: TerminalNodeData[]
   activities: Record<string, TerminalActivity>
+  /** Reports the zoomed-in terminal (most-covered active) — null on canvas. */
+  onPrimaryChange?: (id: string | null) => void
 }): React.JSX.Element {
-  const { activeIds, rects } = useLodLayout(terminals)
+  const { activeIds, rects, primaryId } = useLodLayout(terminals)
+  useEffect(() => {
+    onPrimaryChange?.(primaryId)
+  }, [primaryId, onPrimaryChange])
   return (
     <>
       {terminals
@@ -55,6 +61,14 @@ export function TerminalOverlayLayer({
 function clip(text: string, max: number): string {
   const flat = text.replace(/\s+/g, ' ').trim()
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
+}
+
+/** The header line carries the agent's live status, not its name. */
+const PHASE_CHIP: Record<TurnPhase, { label: string; cls: string }> = {
+  idle: { label: 'READY', cls: '' },
+  thinking: { label: 'TURN IN PROGRESS', cls: ' busy' },
+  waiting: { label: 'NEEDS ATTENTION', cls: ' attention' },
+  replied: { label: 'TURN COMPLETE', cls: ' done' }
 }
 
 function TerminalOverlay({
@@ -357,10 +371,6 @@ function TerminalOverlay({
 
   const phase = activity?.phase ?? 'idle'
 
-  // Header title shows what the agent is DOING (Sous recap, else the turn's
-  // prompt), not just the preset name — that's already on the chip. Prompts
-  // can be pasted walls of text, so cap them; recaps are short by design.
-  const recap = activity?.title ?? (activity?.prompt ? clip(activity.prompt, 220) : null)
 
   const hasFiles = (e: React.DragEvent): boolean =>
     Array.from(e.dataTransfer.types).includes('Files')
@@ -398,52 +408,60 @@ function TerminalOverlay({
       onDrop={onDrop}
     >
       <div className="popout-header">
-        <span className={`cr-led ${phase === 'thinking' ? 'busy' : phase === 'waiting' ? 'red' : 'on'}`} />
-        <span className={`popout-title${recap ? ' recap' : ''}`} title={node.name}>
-          {recap ?? node.name}
-        </span>
+        <span
+          className={`cr-led ${phase === 'thinking' ? 'busy' : phase === 'waiting' ? 'red' : 'on'}`}
+          title={`${node.name} · ${node.preset}`}
+        />
         {node.orch && <span className="cr-chip amber">ORCH</span>}
-        <span className="cr-chip">{node.preset}</span>
-        {phase === 'thinking' && <span className="cr-chip busy">TURN IN PROGRESS</span>}
-        {phase === 'waiting' && <span className="cr-chip attention">NEEDS ATTENTION</span>}
-        {(activity?.turnCount ?? 0) > 0 && (
+        <span className={`cr-chip${PHASE_CHIP[phase].cls}`}>{PHASE_CHIP[phase].label}</span>
+        <div className="popout-actions">
+          {(activity?.turnCount ?? 0) > 0 && (
+            <button
+              className={`cr-btn sm icon${showTurns ? ' active' : ''}`}
+              title={`Fork a new agent from a past turn (${activity?.turnCount})`}
+              aria-label="Fork from a past turn"
+              onClick={() => setShowTurns((s) => !s)}
+            >
+              <CrIcon name="fork" />
+              <span className="popout-count">{activity?.turnCount}</span>
+            </button>
+          )}
           <button
-            className={`cr-btn sm icon${showTurns ? ' active' : ''}`}
-            title={`Fork a new agent from a past turn (${activity?.turnCount})`}
-            aria-label="Fork from a past turn"
-            onClick={() => setShowTurns((s) => !s)}
+            className="cr-btn sm icon popout-close"
+            title="Back to canvas (Esc)"
+            aria-label="Back to canvas"
+            onClick={zoomBack}
           >
-            ⑂<span className="popout-count">{activity?.turnCount}</span>
+            <CrIcon name="collapse" />
           </button>
-        )}
-        <button
-          className="cr-btn sm icon popout-close"
-          title="Back to canvas (Esc)"
-          aria-label="Back to canvas"
-          onClick={zoomBack}
-        >
-          ⤢
-        </button>
-        <button
-          className="cr-btn sm icon popout-kill"
-          title="Close card & kill session (⌘W)"
-          aria-label="Close card & kill session"
-          onClick={() => {
-            zoomBack()
-            void cookrew().removeNode(node.id)
-          }}
-        >
-          ✕
-        </button>
+          <button
+            className="cr-btn sm icon popout-kill"
+            title="Close card & kill session (⌘W)"
+            aria-label="Close card & kill session"
+            onClick={() => {
+              zoomBack()
+              void cookrew().removeNode(node.id)
+            }}
+          >
+            <CrIcon name="close" />
+          </button>
+        </div>
       </div>
       {showTurns && <TurnHistoryPanel terminalId={node.id} onClose={() => setShowTurns(false)} />}
+      {activity?.prompt && (
+        <div className="popout-ask" title={activity.prompt}>
+          <span className="popout-ask-label">YOU ❯</span>
+          <span className="popout-ask-text">{clip(activity.prompt, 300)}</span>
+        </div>
+      )}
       <div ref={containerRef} className="popout-terminal" />
       {dropReady && (
         <div className="attach-drop-hint">
-          <span>📎 DROP TO ATTACH</span>
+          <span>
+            <CrIcon name="attach" /> DROP TO ATTACH
+          </span>
         </div>
       )}
-      <VoiceBar terminalId={node.id} activity={activity} />
     </div>
   )
 }

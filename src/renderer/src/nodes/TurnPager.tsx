@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TurnRecord } from '../../../shared/turn'
 import { cookrew } from '../api'
+import { CrIcon } from '../icons'
 
 /**
  * Turn paging state for an agent card: `viewing === null` shows the live
@@ -103,7 +104,7 @@ export function TurnPagerBar({ paging }: { paging: TurnPaging }): React.JSX.Elem
         disabled={paging.count === 0 || atOldest}
         onClick={paging.back}
       >
-        ◀
+        <CrIcon name="prev" />
       </button>
       <span className="vi-pager-label">
         {paging.viewing ? `TURN ${paging.viewing.index}` : `LIVE · ${paging.count} TURNS`}
@@ -114,7 +115,7 @@ export function TurnPagerBar({ paging }: { paging: TurnPaging }): React.JSX.Elem
         disabled={paging.viewing === null}
         onClick={paging.forward}
       >
-        ▶
+        <CrIcon name="next" />
       </button>
       {paging.viewing !== null && (
         <button className="vi-pager-btn wide" title="Back to live view" onClick={paging.live}>
@@ -131,7 +132,7 @@ export function TurnPagerBar({ paging }: { paging: TurnPaging }): React.JSX.Elem
         disabled={paging.count === 0 || paging.forking}
         onClick={paging.fork}
       >
-        {paging.forking ? '⑂ …' : '⑂ FORK'}
+        <CrIcon name="fork" /> {paging.forking ? '…' : 'FORK'}
       </button>
     </div>
   )

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { NodeProps, NodeResizer, useStore } from '@xyflow/react'
 import { NodeHandles } from './NodeHandles'
 import { CardClose } from './CardClose'
+import { CrIcon, type CrIconName } from '../icons'
 import { PastTurnView, TurnPagerBar, useTurnPaging } from './TurnPager'
 import type { TerminalNodeData } from '../../../shared/model'
 import type { TerminalActivity, TurnPhase } from '../../../shared/turn'
@@ -101,7 +102,9 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
         </div>
         <div className="card-foot">
           <span className="card-status idle">SHELL</span>
-          <span className="card-open-hint">CLICK TO ZOOM ⤢</span>
+          <span className="card-open-hint">
+            CLICK TO ZOOM <CrIcon name="expand" />
+          </span>
         </div>
       </div>
     )
@@ -135,7 +138,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
             className="vi-chip fork"
             title={`Forked from "${node.forkOf.sourceName}" at turn ${node.forkOf.turnIndex}`}
           >
-            ⑂ T{node.forkOf.turnIndex}
+            <CrIcon name="fork" /> T{node.forkOf.turnIndex}
           </span>
         )}
         {phase === 'idle' && activity ? (
@@ -161,7 +164,9 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
             {phase === 'thinking' && <Spinner />} {STATUS_LABEL[phase]}
             {activity?.turnStartedAt != null && <TurnClock startedAt={activity.turnStartedAt} />}
           </span>
-          <span className="card-open-hint vi-hint">CLICK TO ZOOM ⤢</span>
+          <span className="card-open-hint vi-hint">
+            CLICK TO ZOOM <CrIcon name="expand" />
+          </span>
         </div>
       )}
     </div>
@@ -283,7 +288,10 @@ function FullTurnView({ activity }: { activity: TerminalActivity | undefined }):
               className={`vi-tool ${i === glance.tools.length - 1 ? 'latest' : 'older'}`}
               title={toolCall}
             >
-              <span className="vi-tool-glyph">{toolGlyph(toolCall)}</span> {toolCall}
+              <span className="vi-tool-glyph">
+                <CrIcon name={toolGlyph(toolCall)} />
+              </span>{' '}
+              {toolCall}
             </div>
           ))}
         </div>
@@ -322,16 +330,16 @@ function TurnClock({ startedAt }: { startedAt: number }): React.JSX.Element {
 }
 
 /** Vibe-island shows a per-tool view; the card gets a per-tool glyph. */
-const TOOL_GLYPHS: [RegExp, string][] = [
-  [/^Bash/i, '❯'],
-  [/^(Read|Write|Edit|Update|Create|NotebookEdit)/i, '✎'],
-  [/^(Grep|Glob|Search|Find)/i, '⌕'],
-  [/^Web/i, '◍'],
-  [/^(Task|Agent)/i, '◇']
+const TOOL_GLYPHS: [RegExp, CrIconName][] = [
+  [/^Bash/i, 'bash'],
+  [/^(Read|Write|Edit|Update|Create|NotebookEdit)/i, 'note'],
+  [/^(Grep|Glob|Search|Find)/i, 'search'],
+  [/^Web/i, 'browser'],
+  [/^(Task|Agent)/i, 'agent']
 ]
 
-function toolGlyph(toolCall: string): string {
-  return TOOL_GLYPHS.find(([re]) => re.test(toolCall))?.[1] ?? '⏺'
+function toolGlyph(toolCall: string): CrIconName {
+  return TOOL_GLYPHS.find(([re]) => re.test(toolCall))?.[1] ?? 'dot'
 }
 
 /** Drop the "(esc to interrupt · …)" chrome — the card has its own clock. */
