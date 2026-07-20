@@ -191,6 +191,25 @@ describe('TurnTracker recovered turns (empty-prompt history bug)', () => {
     tracker.disposeAll()
   })
 
+  it('recovers the real prompt from the transcript echo on self-heal', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    // Reattach mid-turn: the screen already shows the prompt echo the old
+    // tracker instance saw typed, plus the live spinner.
+    session.full = '> make it the app icon too\n\n✻ Cerebrating… (esc to interrupt · 3s)'
+    session.emit('data', '✻ Cerebrating… (esc to interrupt · 3s)')
+    expect(phaseOf(tracker)).toBe('thinking')
+    expect(tracker.list()[0].prompt).toBe('make it the app icon too')
+
+    session.full += '\n⏺ done, icon updated'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+    const history = tracker.history('term-1')
+    expect(history).toHaveLength(1)
+    expect(history[0].prompt).toBe('make it the app icon too')
+    tracker.disposeAll()
+  })
+
   it('still records typed turns whose reply is empty', async () => {
     vi.useFakeTimers()
     const { tracker, session } = makeTracker()

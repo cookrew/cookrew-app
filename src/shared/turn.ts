@@ -66,6 +66,26 @@ export const MAX_TURN_HISTORY = 100
  */
 export const RECOVERED_PROMPT_LABEL = '(recovered turn)'
 
+/**
+ * Prompt echo painted by agent TUIs at turn start ("> fix the bug"). Menu
+ * rows ("❯ 1. Yes") are excluded so approval menus never read as prompts.
+ */
+const PROMPT_ECHO_RE = /^\s*[>❯]\s+(\S.*)$/
+const MENU_ROW_RE = /^\d+\.\s/
+
+/**
+ * Best-effort prompt recovery for a turn the tracker never saw typed (tmux
+ * reattach, missed capture): the most recent prompt echo in the rendered
+ * transcript. Null when nothing plausible is on screen.
+ */
+export function extractPromptEcho(lines: string[]): string | null {
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const m = PROMPT_ECHO_RE.exec(lines[i])
+    if (m && !MENU_ROW_RE.test(m[1])) return m[1].trim()
+  }
+  return null
+}
+
 /** Append a completed turn immutably, assigning the next index and capping. */
 export function appendTurnRecord(
   history: TurnRecord[],
