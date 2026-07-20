@@ -1,4 +1,13 @@
-import type { CanvasNode, Connection, WorkspaceList, WorkspaceMeta, WorkspaceState } from '../../shared/model'
+import type {
+  AgentRole,
+  CanvasNode,
+  Connection,
+  TeamForkSpec,
+  TeamMeta,
+  WorkspaceList,
+  WorkspaceMeta,
+  WorkspaceState
+} from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 
 export interface CookrewApi {
@@ -40,6 +49,12 @@ export interface CookrewApi {
   listTurns: (terminalId: string) => Promise<TurnRecord[]>
   /** Fork a NEW agent card from a past turn; omit turnIndex for the latest. */
   forkTerminal: (sourceId: string, turnIndex?: number) => Promise<CanvasNode>
+  /** Fork a team into a NEW workspace per the spec (switches to it). */
+  teamFork: (spec: TeamForkSpec) => Promise<WorkspaceMeta>
+  /** Snapshot the live canvas + turn histories to ~/.cookrew/teams. */
+  teamSave: (name?: string) => Promise<TeamMeta>
+  teamList: () => Promise<TeamMeta[]>
+  roleList: () => Promise<AgentRole[]>
   onBrowserCommand: (cb: (req: { id: string; args: string[]; terminalId: string }) => void) => () => void
   browserResult: (id: string, ok: boolean, output: string) => void
   /** Forward a browser thumbnail frame to main (served to the mobile client). */

@@ -96,6 +96,40 @@ export class WorkspaceStore extends EventEmitter {
   }
 
   /**
+   * Create a workspace pre-seeded with nodes and connections (team fork).
+   * Note bodies are mirrored as real .md files like persistNoteFile does for
+   * the active workspace. Does NOT switch — callers switch when ready.
+   */
+  createWorkspaceWithState(
+    name: string,
+    dir: string,
+    nodes: CanvasNode[],
+    connections: Connection[],
+    icon = '⑂'
+  ): WorkspaceMeta {
+    const finalName = uniqueName(
+      name.trim() || 'Workspace',
+      this.registry.workspaces.map((w) => w.name)
+    )
+    const meta: WorkspaceMeta = { id: randomUUID(), name: finalName, dir, icon }
+    this.registry = { ...this.registry, workspaces: [...this.registry.workspaces, meta] }
+    saveWorkspaceState(meta.id, { name: finalName, dir, nodes, connections })
+    try {
+      const notesDir = path.join(WORKSPACES_DIR, meta.id, 'notes')
+      const notes = nodes.filter((n): n is NoteNodeData => n.kind === 'note')
+      if (notes.length > 0) mkdirSync(notesDir, { recursive: true })
+      for (const note of notes) {
+        writeFileSync(path.join(notesDir, `${note.id}.md`), note.content, 'utf8')
+      }
+    } catch (error) {
+      console.error('Failed to mirror forked note files:', error)
+    }
+    saveRegistry(this.registry)
+    this.emit('workspaces', this.list())
+    return meta
+  }
+
+  /**
    * Persist the current workspace, load the target, and emit 'switch' with the
    * outgoing terminal ids so the caller can tear down their PTYs. Returns the
    * target meta, or throws if the id is unknown.

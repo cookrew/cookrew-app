@@ -114,6 +114,50 @@ export interface RoutineSpec {
   fireCount: number
 }
 
+/** Per-node choice inside a team fork (terminals pick a turn strategy). */
+export interface TeamForkChoice {
+  nodeId: string
+  /**
+   * latest/first: single-turn fork (native Claude truncation when possible).
+   * assembled: replay turnIndexes as a preamble. role: fresh boot from a
+   * saved role, no history.
+   */
+  mode: 'latest' | 'first' | 'assembled' | 'role'
+  /** 1-based TurnRecord.index values from the source history (assembled). */
+  turnIndexes?: number[]
+  /** Saved role to boot from (mode 'role'). */
+  roleName?: string
+}
+
+export interface TeamForkSpec {
+  /** Name for the forked workspace; defaults to '<source> fork'. */
+  name?: string
+  /** Ids of ALL nodes to include (terminals, notes, browsers). */
+  nodeIds: string[]
+  /** Turn strategy per included terminal; terminals without one get 'latest'. */
+  choices: TeamForkChoice[]
+  /** Fork the SAVED snapshot of this team instead of the live canvas. */
+  fromSavedTeam?: string
+}
+
+/** Listing entry for a saved team snapshot (~/.cookrew/teams). */
+export interface TeamMeta {
+  name: string
+  savedAt: number
+  nodeCount: number
+  terminalCount: number
+}
+
+/** A reusable agent persona saved from a terminal node. */
+export interface AgentRole {
+  name: string
+  preset: string
+  command: string
+  /** First message injected when an agent boots from this role. */
+  rolePrompt: string
+  savedAt: number
+}
+
 /** A single request over the cookrew Unix socket (newline-delimited JSON). */
 export interface CliRequest {
   id: string

@@ -111,6 +111,10 @@ export function createRemoteApi(): CookrewApi {
     listTurns: (terminalId) => req<TurnRecord[]>(`/api/terminal/${terminalId}/turns`),
     forkTerminal: (sourceId, turnIndex) =>
       req(`/api/terminal/${sourceId}/fork`, 'POST', { turnIndex }),
+    teamFork: (spec) => req('/api/team/fork', 'POST', { spec }),
+    teamSave: (name) => req('/api/team/save', 'POST', { name }),
+    teamList: () => req('/api/teams'),
+    roleList: () => req('/api/roles'),
 
     // Desktop-only surfaces: browser automation, thumbnail push, app chrome.
     onBrowserCommand: () => () => undefined,
