@@ -14,6 +14,7 @@ import path from 'node:path'
 import type { TurnRecord } from '../shared/turn'
 import {
   buildForkedSessionLines,
+  buildForkedSessionLinesAtTurn,
   buildResumeCommand,
   buildSessionIdCommand,
   claudeProjectSlug,
@@ -89,21 +90,25 @@ function readCandidates(dir: string, turns: TurnRecord[]): Candidate[] {
 
 /**
  * The source session's lines. A stored session id resolves the file
- * directly; only terminals from before ids existed fall back to scoring
- * candidate files against the scraped turn history (which can be offset —
- * hence the deterministic path is preferred).
+ * directly — its turn records are session-derived (SessionTurnSync), so
+ * `exact` truncation by real message boundaries applies. Terminals from
+ * before ids existed fall back to scoring candidate files against scraped
+ * turn history, whose indexes can be offset — those keep timestamp cutoffs.
  */
-function readSourceLines(dir: string, options: ClaudeForkOptions): string[] | null {
+function readSourceLines(
+  dir: string,
+  options: ClaudeForkOptions
+): { lines: string[]; exact: boolean } | null {
   if (options.sessionId) {
     const file = path.join(dir, `${options.sessionId}.jsonl`)
-    if (existsSync(file)) return readFileSync(file, 'utf8').split('\n')
+    if (existsSync(file)) return { lines: readFileSync(file, 'utf8').split('\n'), exact: true }
   }
   // Newest-first order breaks score ties in favor of the most recent file.
   const best = readCandidates(dir, options.turns).reduce<Candidate | null>(
     (acc, c) => (acc === null || c.score > acc.score ? c : acc),
     null
   )
-  return best !== null && best.score >= 1 ? best.lines : null
+  return best !== null && best.score >= 1 ? { lines: best.lines, exact: false } : null
 }
 
 /**
@@ -117,14 +122,19 @@ export function forkClaudeSession(options: ClaudeForkOptions): ClaudeForkResult 
     const dir = claudeProjectDir(options.cwd, options.projectsDir)
     if (!existsSync(dir)) return null
 
-    const lines = readSourceLines(dir, options)
-    if (lines === null) return null
+    const source = readSourceLines(dir, options)
+    if (source === null) return null
 
     const sessionId = randomUUID()
-    const forked = buildForkedSessionLines(lines, {
-      newSessionId: sessionId,
-      cutoffMs: forkCutoffMs(options.turns, options.turnIndex)
-    })
+    const forked = source.exact
+      ? buildForkedSessionLinesAtTurn(source.lines, {
+          newSessionId: sessionId,
+          keepPrompts: options.turnIndex
+        })
+      : buildForkedSessionLines(source.lines, {
+          newSessionId: sessionId,
+          cutoffMs: forkCutoffMs(options.turns, options.turnIndex)
+        })
     if (forked.length === 0) return null
 
     writeFileSync(path.join(dir, `${sessionId}.jsonl`), `${forked.join('\n')}\n`, 'utf8')

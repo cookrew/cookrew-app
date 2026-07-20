@@ -4,6 +4,7 @@ import { diffOutput } from './ask'
 import { summarizeTurn, TurnSummarizer } from './sous'
 import type { TurnStore } from './turn-store'
 import {
+  MAX_TURN_HISTORY,
   RECOVERED_PROMPT_LABEL,
   TerminalActivity,
   TurnPhase,
@@ -13,6 +14,7 @@ import {
   detectAgentActivity,
   detectAttention,
   detectLiveWork,
+  extractPromptEcho,
   feedPromptBuffer,
   isLiveStatus,
   parseAgentGlance,
@@ -41,6 +43,16 @@ const REPLY_TAIL = 60
 const TITLE_FIRST_MS = 800
 /** While the turn keeps running, refresh the Sous title at this cadence. */
 const TITLE_REFRESH_MS = 15_000
+
+/** Normalized-prefix prompt equality for carrying titles across reconciles. */
+const PROMPT_MATCH_CHARS = 48
+
+function promptsMatch(scraped: string, exact: string): boolean {
+  if (scraped.length === 0 || scraped === RECOVERED_PROMPT_LABEL) return true
+  const key = (s: string): string =>
+    s.trim().replace(/\s+/g, ' ').toLowerCase().slice(0, PROMPT_MATCH_CHARS)
+  return key(scraped) === key(exact)
+}
 
 interface TrackedTerminal {
   session: PtySession
@@ -102,6 +114,30 @@ export class TurnTracker extends EventEmitter {
     const loaded = this.store?.load(terminalId) ?? []
     this.histories.set(terminalId, loaded)
     return loaded
+  }
+
+  /**
+   * Session-file reconcile (SessionTurnSync): replace a terminal's history
+   * with records derived from its Claude session JSONL — the source of truth
+   * for session-bound terminals. Sous titles carry over where the turn at an
+   * index is still the same exchange (or the scraped prompt was a
+   * placeholder). Shrinking is expected: after /rewind the rewound turns
+   * disappear so counts match the real conversation.
+   */
+  replaceHistory(terminalId: string, records: TurnRecord[]): void {
+    const byIndex = new Map(this.history(terminalId).map((r) => [r.index, r]))
+    const merged = records.map((record) => {
+      const prior = byIndex.get(record.index)
+      return prior?.title !== undefined && promptsMatch(prior.prompt, record.prompt)
+        ? { ...record, title: prior.title }
+        : record
+    })
+    const capped =
+      merged.length > MAX_TURN_HISTORY ? merged.slice(merged.length - MAX_TURN_HISTORY) : merged
+    this.histories.set(terminalId, capped)
+    this.store?.scheduleSave(terminalId, capped)
+    const t = this.tracked.get(terminalId)
+    if (t) this.push(t)
   }
 
   /** Forget a removed terminal's turns (node deletion, not detach). */
@@ -319,6 +355,10 @@ export class TurnTracker extends EventEmitter {
     if (t.turnStartedAt === 0) {
       t.snapshot = t.session.fullText()
       t.turnStartedAt = Date.now()
+      // The prompt was typed before this tracker existed (reattach) — the
+      // TUI's own echo of it is still on screen. Recover it so the card and
+      // the eventual TurnRecord show the real prompt, not a synthetic label.
+      t.prompt = extractPromptEcho(cleanTurnLines(t.snapshot))
     }
     t.phase = 'thinking'
     t.reply = null

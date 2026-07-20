@@ -4,6 +4,7 @@ import {
   detectAgentActivity,
   detectAttention,
   detectLiveWork,
+  extractPromptEcho,
   feedPromptBuffer,
   isLiveStatus,
   parseAgentGlance,
@@ -139,6 +140,23 @@ describe('isLiveStatus', () => {
 
   it('rejects plain non-status text', () => {
     expect(isLiveStatus('all tests pass')).toBe(false)
+  })
+})
+
+describe('extractPromptEcho', () => {
+  it('returns the most recent prompt echo line', () => {
+    const lines = ['> old prompt', '⏺ old reply', '> make it the app icon too', '⏺ working…']
+    expect(extractPromptEcho(lines)).toBe('make it the app icon too')
+  })
+
+  it('ignores numbered menu rows and empty input boxes', () => {
+    expect(extractPromptEcho(['❯ 1. Yes', '  2. No'])).toBe(null)
+    expect(extractPromptEcho(['❯', '> '])).toBe(null)
+  })
+
+  it('returns null when no echo is present', () => {
+    expect(extractPromptEcho(['⏺ some reply', '✻ Brewed for 4m 15s'])).toBe(null)
+    expect(extractPromptEcho([])).toBe(null)
   })
 })
 

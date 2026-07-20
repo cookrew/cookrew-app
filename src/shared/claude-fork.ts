@@ -8,6 +8,7 @@
 // file is only ever read, never modified.
 
 import type { TurnRecord } from './turn'
+import { isNoisePrompt } from './session-turns'
 
 /**
  * Slack subtracted from the cutoff when matching session records against
@@ -121,6 +122,44 @@ export function buildForkedSessionLines(lines: string[], options: ForkedLinesOpt
       isPromptRecord(record) &&
       recordTimeMs(record) >= options.cutoffMs - CUTOFF_SLACK_MS
     if (pastCutoff) break
+    kept.push(
+      typeof record.sessionId === 'string'
+        ? JSON.stringify({ ...record, sessionId: options.newSessionId })
+        : line
+    )
+  }
+  return kept
+}
+
+export interface ExactForkOptions {
+  newSessionId: string
+  /** Number of real user turns the fork keeps (turn index == prompt position). */
+  keepPrompts: number
+}
+
+/**
+ * Exact fork truncation for session-bound terminals: TurnRecord indexes
+ * mirror the session's real user prompts (session-turns reconcile), so
+ * forking after turn N keeps everything before prompt N+1 — real message
+ * boundaries, no timestamp guessing. Command-noise user records don't count.
+ */
+export function buildForkedSessionLinesAtTurn(
+  lines: string[],
+  options: ExactForkOptions
+): string[] {
+  const kept: string[] = []
+  let prompts = 0
+  for (const line of lines) {
+    if (line.trim().length === 0) continue
+    const record = parseRecord(line)
+    if (record === null) {
+      kept.push(line)
+      continue
+    }
+    if (isPromptRecord(record) && !isNoisePrompt(record.message?.content as string)) {
+      prompts += 1
+      if (prompts > options.keepPrompts) break
+    }
     kept.push(
       typeof record.sessionId === 'string'
         ? JSON.stringify({ ...record, sessionId: options.newSessionId })
