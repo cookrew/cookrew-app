@@ -969,6 +969,21 @@ body,
   border: none;
 }
 
+/* Self-embedding tab (Cookrew URL inside Cookrew): blocked with a notice —
+   see self-embed.ts for why recursion is never allowed to mount. */
+.browser-blocked {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--cream-md);
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
 /* Inactive tabs stay mounted (session + automation keep working) but take no
    space. visibility instead of display:none — hiding a <webview> with
    display:none is a known Electron footgun (guest page glitches/reloads). */
@@ -1689,9 +1704,10 @@ body,
   transform-origin: 50% 96%;
 }
 
-/* replied: the V "yes!" holds the coin on its fingertips */
+/* replied: the V "yes!" holds the coin on its fingertips — static pose;
+   only thinking/waiting animate (perf: 11 idle cards must not composite) */
 .vi-avatar.replied .ava-coin {
-  animation: ava-settle 3s ease-in-out infinite;
+  transform: translate(6px, 7.5px) scale(0.6);
 }
 
 @keyframes ava-toss {
@@ -1756,16 +1772,6 @@ body,
   }
 }
 
-@keyframes ava-settle {
-  0%,
-  100% {
-    transform: translate(6px, 7.5px) scale(0.6);
-  }
-  50% {
-    transform: translate(6px, 6.6px) scale(0.6);
-  }
-}
-
 @keyframes ava-blink {
   50% {
     opacity: 0.3;
@@ -1820,6 +1826,39 @@ body,
 .cr-header .vi-coin-led.waiting,
 .popout-header .vi-coin-led.waiting {
   color: var(--rose);
+}
+
+/* ---- saved-role avatars (RoleAvatar.tsx) + role chips ---- */
+
+/* Role coins tint violet — the "persona" accent, never a status color. */
+.role-avatar {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  display: inline-block;
+  vertical-align: -3px;
+  color: var(--violet);
+}
+
+/* Terminal-creation option chip for a saved role, beside preset chips. */
+.cr-chip.role {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-color: var(--violet);
+  box-shadow: 1.5px 1.5px 0 var(--violet);
+}
+
+.cr-chip.role .role-avatar {
+  width: 14px;
+  height: 14px;
+  vertical-align: -2.5px;
+}
+
+.cr-chip.role.amber {
+  background: var(--amber);
+  border-color: var(--line);
+  box-shadow: 1.5px 1.5px 0 var(--line);
 }
 
 /* Identity sprite outside cards: dock preset chips + zoomed-in header. */

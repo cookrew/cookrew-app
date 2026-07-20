@@ -30,6 +30,7 @@ import { useBrowserEngine } from './browser-engine'
 import { ErrorBoundary } from './ErrorBoundary'
 import { snapCardChanges, MOUSE_SNAP_PX, TOUCH_SNAP_PX, SnapGuide } from './card-snap'
 import { SnapGuides } from './SnapGuides'
+import { TeamForkPicker } from './TeamForkPicker'
 
 /** Phone companion parity: widen the snap magnet for finger-driven gestures. */
 const snapRadiusPx = window.matchMedia('(pointer: coarse)').matches ? TOUCH_SNAP_PX : MOUSE_SNAP_PX
@@ -71,6 +72,8 @@ function Canvas(): React.JSX.Element {
   const [guides, setGuides] = useState<SnapGuide[]>([])
   /** Terminal whose overlay owns the stage — the dock shows its composer. */
   const [zoomedTerminalId, setZoomedTerminalId] = useState<string | null>(null)
+  /** Team-fork picker overlay (opened from the header's ⑂ button). */
+  const [teamPickerOpen, setTeamPickerOpen] = useState(false)
 
   useEffect(() => {
     void cookrew()
@@ -394,6 +397,7 @@ function Canvas(): React.JSX.Element {
           terminalCount={terminals.length}
           busyCount={busyCount}
           attentionCount={attentionCount}
+          onTeamFork={() => setTeamPickerOpen(true)}
         />
         <div className="cr-stage">
           <ReactFlow
@@ -448,6 +452,9 @@ function Canvas(): React.JSX.Element {
           activities={activities}
           onPrimaryChange={setZoomedTerminalId}
         />
+        {teamPickerOpen && workspace && (
+          <TeamForkPicker workspace={workspace} onClose={() => setTeamPickerOpen(false)} />
+        )}
         <BrowserLayer browsers={browsers} onThumb={onThumb} />
       </div>
     </CanvasUiContext.Provider>

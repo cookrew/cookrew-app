@@ -10,6 +10,8 @@ interface HeaderProps {
   terminalCount: number
   busyCount: number
   attentionCount: number
+  /** Opens the team-fork picker overlay (fork / save the whole canvas). */
+  onTeamFork: () => void
 }
 
 /**
@@ -22,7 +24,8 @@ export function Header({
   dir,
   terminalCount,
   busyCount,
-  attentionCount
+  attentionCount,
+  onTeamFork
 }: HeaderProps): React.JSX.Element {
   return (
     <header className="cr-header">
@@ -52,6 +55,14 @@ export function Header({
           {busyCount}/{terminalCount} WORKING
         </span>
       </div>
+      <button
+        className="cr-btn sm icon"
+        title="Fork or save this team"
+        aria-label="Fork or save this team"
+        onClick={onTeamFork}
+      >
+        <CrIcon name="fork" />
+      </button>
       <WorkspaceSwitcher fallbackName={workspaceName} fallbackDir={dir} />
     </header>
   )

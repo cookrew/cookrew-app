@@ -1,0 +1,365 @@
+/* Team-fork picker overlay (TeamForkPicker.tsx). Owned by the picker-UX
+   lane; visual polish welcome from Fresco — tokens all come from the
+   arcade theme in styles.css. */
+
+.tf-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(45, 42, 32, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 90;
+  animation: cr-fadein 140ms ease-out;
+}
+
+.tf-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(82vh, 760px);
+  padding: 14px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 6px 6px 0 var(--amber-deep);
+}
+
+.tf-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tf-title {
+  font-family: var(--font-pixel);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  flex: 1;
+}
+
+.tf-banner {
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  padding: 5px 8px;
+  background: var(--amber-soft);
+  border: 1.5px dashed var(--line);
+}
+
+.tf-label {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.tf-source,
+.tf-save {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tf-list {
+  flex: 1;
+  min-height: 80px;
+  overflow-y: auto;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream);
+}
+
+.tf-row {
+  border-bottom: 1.5px solid var(--line-soft);
+}
+
+.tf-row.excluded .tf-name,
+.tf-row.excluded .tf-kind {
+  opacity: 0.4;
+}
+
+.tf-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  min-height: 36px;
+}
+
+.tf-include {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  cursor: pointer;
+  padding: 0;
+  color: var(--ink);
+}
+
+.tf-include.on {
+  background: var(--amber);
+}
+
+.tf-kind {
+  display: inline-flex;
+  color: var(--ink-soft);
+}
+
+.tf-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tf-mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tf-chooser {
+  padding: 4px 10px 10px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tf-modes {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.tf-role-note {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.tf-turns {
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream-hi);
+}
+
+.tf-turn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.tf-turn.readonly {
+  cursor: default;
+}
+
+.tf-turn.selected {
+  background: var(--amber-soft);
+}
+
+.tf-turn:disabled {
+  opacity: 0.75;
+}
+
+.tf-turn-mark {
+  width: 14px;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.tf-turn-box {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--line-soft);
+  display: inline-block;
+}
+
+.tf-turn-index {
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  color: var(--amber-deep);
+  flex: 0 0 auto;
+}
+
+.tf-turn-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tf-saved-summary {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 10px;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream);
+}
+
+.tf-input {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  padding: 5px 8px;
+  outline: none;
+  min-width: 0;
+  flex: 1;
+}
+
+.tf-input:focus {
+  border-color: var(--amber-deep);
+}
+
+.tf-saved-flash {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--hp);
+}
+
+.tf-error {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--rose);
+  border: 1.5px dashed var(--rose);
+  padding: 5px 8px;
+}
+
+.tf-hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--amber-deep);
+}
+
+.tf-preview summary {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tf-preview pre {
+  max-height: 140px;
+  overflow: auto;
+  font-size: 10px;
+  background: var(--cream);
+  border: 1.5px solid var(--line-soft);
+  padding: 6px;
+  margin: 4px 0 0;
+}
+
+.tf-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Phone: full-screen sheet, 44px touch targets. */
+@media (max-width: 700px) {
+  .tf-scrim {
+    align-items: stretch;
+    justify-content: stretch;
+  }
+
+  .tf-panel {
+    width: 100vw;
+    max-height: none;
+    border: none;
+    box-shadow: none;
+    padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+  }
+
+  .tf-row-main {
+    min-height: 44px;
+  }
+
+  .tf-turn {
+    min-height: 40px;
+  }
+
+  .tf-include {
+    width: 24px;
+    height: 24px;
+  }
+
+  .tf-foot {
+    flex-wrap: wrap;
+  }
+
+  .tf-foot .tf-fork-name {
+    flex-basis: 100%;
+  }
+}
+
+/* ---- Fresco polish: role accent, hover/press affordances ---- */
+
+/* FROM ROLE mode chip: persona accent — violet frame, violet fill when
+   active, RoleAvatar riding inside. Never a status color. */
+.tf-mode-chip.role {
+  border-color: var(--violet);
+}
+
+.tf-mode-chip.role.amber {
+  background: var(--violet);
+  color: var(--cream-hi);
+}
+
+.tf-mode-chip .role-avatar {
+  width: 12px;
+  height: 12px;
+  vertical-align: -2px;
+}
+
+.tf-mode-chip.role.amber .role-avatar {
+  color: var(--cream-hi);
+}
+
+/* Row + turn hover affordances (skip readonly/excluded). */
+.tf-row:not(.excluded) .tf-row-main:hover {
+  background: var(--amber-soft);
+}
+
+.tf-turn:not(.readonly):not(:disabled):hover {
+  background: var(--amber-soft);
+}
+
+/* Include checkbox presses like every other bevel control. */
+.tf-include:hover {
+  background: var(--amber-soft);
+}
+
+.tf-include.on:hover {
+  background: var(--amber);
+}
+
+.tf-include:active {
+  transform: translate(1px, 1px);
+}
+
+/* Assembled-turn checks read amber-deep like the turn indexes. */
+.tf-turn .cr-icon {
+  color: var(--amber-deep);
+}

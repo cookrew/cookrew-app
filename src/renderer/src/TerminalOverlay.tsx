@@ -508,7 +508,9 @@ function TerminalOverlay({
             {paging.viewing ? `TURN ${paging.viewing.index}/${paging.count} ❯` : 'YOU ❯'}
           </span>
           <span className="popout-ask-text">
-            {clip(paging.viewing?.prompt ?? activity?.prompt ?? '', 300)}
+            {paging.viewing
+              ? clip(paging.viewing.title || paging.viewing.prompt, 300)
+              : clip(activity?.prompt ?? '', 300)}
           </span>
           {paging.viewing !== null && (
             <button
