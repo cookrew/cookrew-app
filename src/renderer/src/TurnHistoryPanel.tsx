@@ -61,7 +61,7 @@ export function TurnHistoryPanel({
           <div key={record.index} className="turn-panel-row">
             <span className="turn-panel-index">T{record.index}</span>
             <span className="turn-panel-prompt" title={record.prompt}>
-              {firstLine(record.prompt, 80) || '(empty prompt)'}
+              {record.title || firstLine(record.prompt, 80) || '(empty prompt)'}
             </span>
             <button
               className="cr-btn sm turn-panel-fork"

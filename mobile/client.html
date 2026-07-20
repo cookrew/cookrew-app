@@ -413,13 +413,12 @@
   .vi-avatar.thinking .ava-hand { animation: ava-pump 0.8s cubic-bezier(0.5, 0, 0.5, 1) infinite; transform-box: fill-box; transform-origin: 50% 80%; }
   .vi-avatar.waiting .ava-coin { transform: translate(35px, 18px) scale(0.5); animation: ava-blink 0.7s steps(2) infinite; }
   .vi-avatar.waiting .ava-hand { animation: ava-wave 1.6s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 96%; }
-  .vi-avatar.replied .ava-coin { animation: ava-settle 3s ease-in-out infinite; }
+  .vi-avatar.replied .ava-coin { transform: translate(6px, 7.5px) scale(0.6); }
 
   @keyframes ava-toss { 0%, 100% { transform: translate(0, 4px); } 50% { transform: translate(0, -4.5px); } }
   @keyframes ava-spin { 0% { transform: rotate(0) scaleX(1); } 25% { transform: rotate(90deg) scaleX(0.15); } 50% { transform: rotate(180deg) scaleX(1); } 75% { transform: rotate(270deg) scaleX(0.15); } 100% { transform: rotate(360deg) scaleX(1); } }
   @keyframes ava-pump { 0%, 100% { transform: rotate(2deg) translateY(0.6px); } 50% { transform: rotate(-3.5deg) translateY(-1.2px); } }
   @keyframes ava-wave { 0% { transform: rotate(0); } 10% { transform: rotate(-15deg); } 22% { transform: rotate(13deg); } 34% { transform: rotate(-15deg); } 46% { transform: rotate(11deg); } 58% { transform: rotate(0); } 100% { transform: rotate(0); } }
-  @keyframes ava-settle { 0%, 100% { transform: translate(6px, 7.5px) scale(0.6); } 50% { transform: translate(6px, 6.6px) scale(0.6); } }
   @keyframes ava-blink { 50% { opacity: 0.3; } }
 
   /* mini mode (far-out zoom): terminal cards degrade to led + name,
@@ -910,6 +909,9 @@
         latest = `<div class="vi-latest waiting">⚠ ${esc(msg || 'Needs your input')}</div>`
       } else if (phase === 'replied') {
         latest = `<div class="vi-latest done">✅ ${esc(activity.reply ? firstLine(activity.reply, 90) : 'Turn complete')}</div>`
+      } else if (phase === 'idle' && activity.reply) {
+        // Ready keeps the latest turn on screen, same as turn-complete.
+        latest = `<div class="vi-latest done">${esc(firstLine(activity.reply, 90))}</div>`
       }
     }
     const you = activity && activity.prompt

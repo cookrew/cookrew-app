@@ -209,7 +209,14 @@ function CompactTurnView({ activity }: { activity: TerminalActivity | undefined 
           ✅ {activity.reply ? firstLine(activity.reply, 220) : 'Turn complete'}
         </div>
       )}
-      {phase === 'idle' && <div className="vi-ready">Ready</div>}
+      {/* Ready keeps the latest turn on screen, same as turn-complete —
+          the ask stays above, the reply stays here. */}
+      {phase === 'idle' &&
+        (activity.reply ? (
+          <div className="vi-latest done">{firstLine(activity.reply, 220)}</div>
+        ) : (
+          <div className="vi-ready">Ready</div>
+        ))}
     </>
   )
 }
@@ -219,7 +226,9 @@ function CompactTurnView({ activity }: { activity: TerminalActivity | undefined 
  * status row, tool trail with per-tool glyphs, streaming latest message.
  */
 function FullTurnView({ activity }: { activity: TerminalActivity | undefined }): React.JSX.Element {
-  if (!activity || activity.phase === 'idle' || activity.prompt === null) {
+  // Ready with a tracked turn renders like turn-complete below (ask + reply
+  // stay up); only a truly untracked terminal falls back to the screen tail.
+  if (!activity || activity.prompt === null || (activity.phase === 'idle' && !activity.reply)) {
     // Reattached / idle-with-screen: show the agent's current screen tail so
     // the card reflects the latest turn recovered from tmux, not a blank slate.
     const tail = (activity?.lines ?? []).filter((l) => l.trim().length > 0)
@@ -265,6 +274,11 @@ function FullTurnView({ activity }: { activity: TerminalActivity | undefined }):
       {phase === 'replied' && (
         <div className="vi-status done">
           <span className="vi-dot" /> Turn complete
+        </div>
+      )}
+      {phase === 'idle' && (
+        <div className="vi-status idle">
+          <span className="vi-dot" /> Ready
         </div>
       )}
       {inTurn && glance !== null && glance.tools.length > 0 && (
