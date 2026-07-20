@@ -8,6 +8,8 @@ import {
   unregisterBrowserTab
 } from './browser-engine'
 import { cookrew, hasNativeWebview } from './api'
+import { canCapture, initialBackoff, recordFailure, recordSuccess } from './capture-backoff'
+import { isSelfEmbedding } from './self-embed'
 import type { ScreenRect } from './zoom-lod'
 import { useLodLayout } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
@@ -298,19 +300,27 @@ function BrowserTabView({
 
   // Thumbnail loop for the active tab: after loads and on a slow interval.
   // capturePage() only exists on real <webview>s (Electron renderer).
+  // GPU protection: nothing captures while the window is hidden/occluded
+  // (Electron marks the document hidden in both cases), and a rejected
+  // capture backs off exponentially instead of hot-retrying a wedged GPU
+  // process. did-stop-loading captures pass through the same gate.
   useEffect(() => {
     if (!hasNativeWebview() || !visible) return
     const webview = webviewRef.current
     if (!webview) return
     let disposed = false
     let reported = false
+    let backoff = initialBackoff
     const capture = (): void => {
+      if (document.hidden || !canCapture(backoff, Date.now())) return
       void webview
         .capturePage()
         .then((image) => {
+          backoff = recordSuccess()
           if (!disposed) onThumb(browserId, image.resize({ width: THUMB_WIDTH }).toDataURL())
         })
         .catch((error: unknown) => {
+          backoff = recordFailure(backoff, Date.now())
           if (!reported) {
             reported = true
             console.error(`browser thumbnail capture failed (${browserId}):`, error)
@@ -318,14 +328,34 @@ function BrowserTabView({
         })
     }
     const onStop = (): void => capture()
+    const onVisibility = (): void => {
+      // Back from hidden/occluded: refresh the thumb immediately rather than
+      // waiting out the interval.
+      if (!document.hidden) capture()
+    }
     webview.addEventListener('did-stop-loading', onStop)
+    document.addEventListener('visibilitychange', onVisibility)
     const timer = setInterval(capture, THUMB_INTERVAL_MS)
     return () => {
       disposed = true
       clearInterval(timer)
       webview.removeEventListener('did-stop-loading', onStop)
+      document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [browserId, tab.id, visible, onThumb])
+
+  // Never load Cookrew inside Cookrew: recursive embedding renders the whole
+  // canvas (and its browsers, recursively) per layer and pegs the GPU.
+  if (isSelfEmbedding(tab.url, window.location.origin)) {
+    return visible ? (
+      <div className="browser-body browser-blocked">
+        <span>
+          ⛔ This tab points Cookrew at itself ({shortUrl(tab.url)}) — recursive embedding is
+          blocked because it melts the GPU. Open it in a real browser instead.
+        </span>
+      </div>
+    ) : null
+  }
 
   // Demo tabs and phone browsers get an iframe — only the Electron desktop
   // renderer has full-Chromium <webview>s.
