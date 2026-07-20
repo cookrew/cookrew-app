@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { askRaw, askTerminal, decodeRawEscapes, diffOutput, submitDelayMs } from '../src/main/ask'
 import type { PtySession } from '../src/main/pty'
 
+/** Wrap text the way the ask layer delivers it: one bracketed-paste unit. */
+const paste = (body: string): string => `\x1b[200~${body}\x1b[201~`
+
 describe('submitDelayMs', () => {
   it('starts at the base delay for short prompts', () => {
     expect(submitDelayMs(0)).toBe(150)
@@ -34,12 +37,35 @@ describe('askTerminal', () => {
     } as unknown as PtySession
 
     const promise = askTerminal(session, 'fix the bug', { quiescenceMs: 0, graceMs: 0 })
-    // The prompt must land alone first — the Enter goes in a later write so
-    // the agent TUI cannot fold it into a paste.
-    expect(writes.map((w) => w.data)).toEqual(['fix the bug'])
+    // The prompt lands first as one bracketed-paste unit; the Enter goes in a
+    // later write so the agent TUI finalizes the paste and cannot fold it in.
+    expect(writes.map((w) => w.data)).toEqual([paste('fix the bug')])
     await vi.advanceTimersByTimeAsync(1000)
-    expect(writes.map((w) => w.data)).toEqual(['fix the bug', '\r'])
+    expect(writes.map((w) => w.data)).toEqual([paste('fix the bug'), '\r'])
     expect(writes[1].at - writes[0].at).toBeGreaterThan(0)
+    await promise
+  })
+
+  it('sends a multi-line prompt as ONE bracketed paste, not split on newlines', async () => {
+    vi.useFakeTimers()
+    const writes: string[] = []
+    const session = {
+      fullText: () => '',
+      idleFor: () => 99_999,
+      write: (data: string) => {
+        writes.push(data)
+      }
+    } as unknown as PtySession
+    const prompt = 'line one\nline two\nline three'
+
+    const promise = askTerminal(session, prompt, { quiescenceMs: 0, graceMs: 0 })
+    // The whole prompt is a single write bounded by paste markers — no
+    // interior \r that a TUI could treat as a premature submit.
+    expect(writes).toEqual([paste(prompt)])
+    expect(writes[0].startsWith('\x1b[200~')).toBe(true)
+    expect(writes[0].endsWith('\x1b[201~')).toBe(true)
+    await vi.advanceTimersByTimeAsync(1200)
+    expect(writes).toEqual([paste(prompt), '\r'])
     await promise
   })
 
@@ -59,9 +85,9 @@ describe('askTerminal', () => {
     // The base delay alone is not enough for a 10KB paste — the Enter must
     // not have been sent yet.
     await vi.advanceTimersByTimeAsync(500)
-    expect(writes).toEqual([prompt])
+    expect(writes).toEqual([paste(prompt)])
     await vi.advanceTimersByTimeAsync(1200)
-    expect(writes).toEqual([prompt, '\r'])
+    expect(writes).toEqual([paste(prompt), '\r'])
     await promise
   })
 })
@@ -105,10 +131,10 @@ describe('askRaw', () => {
     vi.useFakeTimers()
     const writes: { data: string; at: number }[] = []
     const promise = askRaw(fakeSession(writes), 'OPS RULE: do not run npm run dev\r')
-    expect(writes.map((w) => w.data)).toEqual(['OPS RULE: do not run npm run dev'])
+    expect(writes.map((w) => w.data)).toEqual([paste('OPS RULE: do not run npm run dev')])
     await vi.advanceTimersByTimeAsync(2500)
     await promise
-    expect(writes.map((w) => w.data)).toEqual(['OPS RULE: do not run npm run dev', '\r'])
+    expect(writes.map((w) => w.data)).toEqual([paste('OPS RULE: do not run npm run dev'), '\r'])
     expect(writes[1].at - writes[0].at).toBeGreaterThanOrEqual(submitDelayMs(32))
   })
 
