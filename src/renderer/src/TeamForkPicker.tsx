@@ -5,10 +5,11 @@ import type {
   TeamMeta,
   WorkspaceState
 } from '../../shared/model'
-import { cookrew } from './api'
+import { cookrew, isRemoteMode } from './api'
 import { CrIcon, type CrIconName } from './icons'
 import { RoleAvatar } from './nodes/RoleAvatar'
 import { DEFAULT_CHOICE, TeamTurnChooser, type TerminalChoice } from './TeamTurnChooser'
+import { dirLabel, hasNativeDirPicker, pickDirectory, stateDirs } from './workspace-v2'
 import './team-fork.css'
 
 const KIND_ICON: Record<string, CrIconName> = {
@@ -57,6 +58,30 @@ export function TeamForkPicker({
   const [savedFlash, setSavedFlash] = useState<string | null>(null)
   const [busy, setBusy] = useState<'fork' | 'save' | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // GOAL 3/5: dirs the forked workspace gets, per-terminal cwd, worktree mode.
+  const [forkDirs, setForkDirs] = useState<string[]>(() => stateDirs(workspace))
+  const [targetDirs, setTargetDirs] = useState<Record<string, string>>({})
+  const [useWorktree, setUseWorktree] = useState(true)
+  const [dirDraft, setDirDraft] = useState('')
+
+  const targetDirOf = (nodeId: string, cwd: string): string => {
+    const chosen = targetDirs[nodeId] ?? cwd
+    return forkDirs.includes(chosen) ? chosen : (forkDirs[0] ?? chosen)
+  }
+
+  const addForkDir = (path: string): void => {
+    const clean = path.trim().replace(/\/+$/, '')
+    if (clean && !forkDirs.includes(clean)) setForkDirs((prev) => [...prev, clean])
+    setDirDraft('')
+  }
+
+  const removeForkDir = (path: string): void => {
+    setForkDirs((prev) => (prev.length > 1 ? prev.filter((d) => d !== path) : prev))
+  }
+
+  const setPrimaryForkDir = (path: string): void => {
+    setForkDirs((prev) => (prev.includes(path) ? [path, ...prev.filter((d) => d !== path)] : prev))
+  }
 
   useEffect(() => {
     void cookrew()
@@ -110,17 +135,28 @@ export function TeamForkPicker({
 
   const spec: TeamForkSpec = useMemo(() => {
     if (source !== 'live') {
-      return { name: forkName.trim() || undefined, nodeIds: [], choices: [], fromSavedTeam: source }
+      return {
+        name: forkName.trim() || undefined,
+        nodeIds: [],
+        choices: [],
+        fromSavedTeam: source,
+        dirs: forkDirs,
+        worktree: useWorktree
+      }
     }
     const terminals = nodes.filter((n) => n.kind === 'terminal' && included.has(n.id))
     return {
       name: forkName.trim() || undefined,
       nodeIds: nodes.filter((n) => included.has(n.id)).map((n) => n.id),
+      dirs: forkDirs,
+      worktree: useWorktree,
       choices: terminals.map((t) => {
         const choice = choiceOf(t.id)
+        const cwd = (t as { cwd?: string }).cwd ?? forkDirs[0] ?? ''
         return {
           nodeId: t.id,
           mode: choice.mode,
+          targetDir: targetDirOf(t.id, cwd),
           ...(choice.mode === 'assembled' ? { turnIndexes: choice.turnIndexes } : {}),
           ...(choice.mode === 'role'
             ? { roleName: (t as { role?: string | null }).role ?? undefined }
@@ -128,7 +164,8 @@ export function TeamForkPicker({
         }
       })
     }
-  }, [source, forkName, nodes, included, choices])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source, forkName, nodes, included, choices, forkDirs, targetDirs, useWorktree])
 
   const incompleteAssembly =
     source === 'live'
@@ -255,6 +292,23 @@ export function TeamForkPicker({
                         <CrIcon name={isOpen ? 'caret-down' : 'caret-right'} />
                       </button>
                     )}
+                    {isTerminal && forkDirs.length > 1 && (
+                      <select
+                        className="dm-cwd-select tf-target-dir"
+                        title="Working directory for the forked agent"
+                        value={targetDirOf(node.id, (node as { cwd?: string }).cwd ?? forkDirs[0])}
+                        disabled={!isIncluded}
+                        onChange={(e) =>
+                          setTargetDirs((prev) => ({ ...prev, [node.id]: e.target.value }))
+                        }
+                      >
+                        {forkDirs.map((dir) => (
+                          <option key={dir} value={dir}>
+                            {dirLabel(dir)}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                   </div>
                   {isTerminal && isIncluded && isOpen && (
                     <TeamTurnChooser
@@ -283,6 +337,74 @@ export function TeamForkPicker({
             </p>
           </div>
         )}
+
+        <div className="tf-dirs">
+          <div className="tf-dirs-head">
+            <span className="tf-label">FORK DIRECTORIES</span>
+            <label className="cr-check tf-worktree" title="Create a git worktree per repo dir">
+              <input
+                type="checkbox"
+                checked={useWorktree}
+                onChange={(e) => setUseWorktree(e.target.checked)}
+              />
+              GIT WORKTREE
+            </label>
+          </div>
+          <div className="tf-dirs-list">
+            {forkDirs.map((dir, i) => (
+              <span key={dir} className={`tf-dir-chip${i === 0 ? ' primary' : ''}`}>
+                <button
+                  className="tf-dir-star"
+                  title={i === 0 ? 'Primary' : 'Set as primary'}
+                  disabled={i === 0}
+                  onClick={() => setPrimaryForkDir(dir)}
+                >
+                  {i === 0 ? '★' : '☆'}
+                </button>
+                <span className="tf-dir-label" title={dir}>
+                  {dirLabel(dir)}
+                </span>
+                {forkDirs.length > 1 && (
+                  <button
+                    className="tf-dir-x"
+                    title="Remove from fork"
+                    onClick={() => removeForkDir(dir)}
+                  >
+                    <CrIcon name="close" />
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+          <div className="tf-dirs-add">
+            {hasNativeDirPicker() ? (
+              <button
+                className="cr-btn sm"
+                onClick={() => void pickDirectory().then((p) => p && addForkDir(p))}
+              >
+                <CrIcon name="plus" /> ADD DIR…
+              </button>
+            ) : (
+              <>
+                <input
+                  className="tf-input"
+                  placeholder={isRemoteMode() ? '/absolute/path/on/host' : '/absolute/path'}
+                  value={dirDraft}
+                  onChange={(e) => setDirDraft(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addForkDir(dirDraft)}
+                />
+                <button className="cr-btn sm" disabled={!dirDraft.trim()} onClick={() => addForkDir(dirDraft)}>
+                  ADD
+                </button>
+              </>
+            )}
+            <span className="tf-dirs-note">
+              {useWorktree
+                ? 'Repo dirs fork to a new git worktree + branch; non-repos copy in place.'
+                : 'Agents fork in place — no worktree created.'}
+            </span>
+          </div>
+        </div>
 
         {source === 'live' && (
           <div className="tf-save">

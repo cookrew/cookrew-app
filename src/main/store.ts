@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { promises as fs } from 'node:fs'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -14,8 +14,10 @@ import {
   WorkspaceMeta,
   WorkspaceState,
   noteNameFromContent,
+  normalizeDirs,
   uniqueName
 } from '../shared/model'
+import { addDir, removeDir, setPrimary } from '../shared/workspace-dirs'
 import { upgradeNode } from './node-upgrades'
 
 const DATA_DIR = path.join(homedir(), '.cookrew')
@@ -86,10 +88,10 @@ export class WorkspaceStore extends EventEmitter {
       name.trim() || 'Workspace',
       this.registry.workspaces.map((w) => w.name)
     )
-    const meta: WorkspaceMeta = { id: randomUUID(), name: finalName, dir, icon }
+    const meta: WorkspaceMeta = { id: randomUUID(), name: finalName, dir, dirs: [dir], icon }
     this.registry = { ...this.registry, workspaces: [...this.registry.workspaces, meta] }
     // Seed an empty canvas file so the switch loads cleanly.
-    saveWorkspaceState(meta.id, { name: meta.name, dir, nodes: [], connections: [] })
+    saveWorkspaceState(meta.id, { name: meta.name, dir, dirs: [dir], nodes: [], connections: [] })
     saveRegistry(this.registry)
     this.emit('workspaces', this.list())
     return meta
@@ -105,15 +107,18 @@ export class WorkspaceStore extends EventEmitter {
     dir: string,
     nodes: CanvasNode[],
     connections: Connection[],
-    icon = '⑂'
+    icon = '⑂',
+    dirs?: string[]
   ): WorkspaceMeta {
     const finalName = uniqueName(
       name.trim() || 'Workspace',
       this.registry.workspaces.map((w) => w.name)
     )
-    const meta: WorkspaceMeta = { id: randomUUID(), name: finalName, dir, icon }
+    const finalDirs = normalizeDirs({ dir, dirs })
+    const primary = finalDirs[0] ?? dir
+    const meta: WorkspaceMeta = { id: randomUUID(), name: finalName, dir: primary, dirs: finalDirs, icon }
     this.registry = { ...this.registry, workspaces: [...this.registry.workspaces, meta] }
-    saveWorkspaceState(meta.id, { name: finalName, dir, nodes, connections })
+    saveWorkspaceState(meta.id, { name: finalName, dir: primary, dirs: finalDirs, nodes, connections })
     try {
       const notesDir = path.join(WORKSPACES_DIR, meta.id, 'notes')
       const notes = nodes.filter((n): n is NoteNodeData => n.kind === 'note')
@@ -161,6 +166,101 @@ export class WorkspaceStore extends EventEmitter {
     saveRegistry(this.registry)
     this.emit('workspaces', this.list())
     if (id === this.registry.activeId) this.emit('change', this.state)
+  }
+
+  /**
+   * Delete a workspace and its on-disk state/notes. Never removes the last
+   * workspace; if the removed one is active, switches to another first (the
+   * caller's 'switch' handler rebuilds PTYs). Returns the switch target id
+   * when a switch happened, else null.
+   */
+  removeWorkspace(id: string): string | null {
+    if (this.registry.workspaces.length <= 1) {
+      throw new Error('Cannot remove the last workspace')
+    }
+    if (!this.registry.workspaces.some((w) => w.id === id)) {
+      throw new Error(`Workspace '${id}' not found`)
+    }
+    let switchedTo: string | null = null
+    if (id === this.registry.activeId) {
+      const other = this.registry.workspaces.find((w) => w.id !== id)
+      if (other) {
+        this.switchWorkspace(other.id) // saves current, boots the target
+        switchedTo = other.id
+      }
+    }
+    this.registry = {
+      ...this.registry,
+      workspaces: this.registry.workspaces.filter((w) => w.id !== id)
+    }
+    saveRegistry(this.registry)
+    try {
+      rmSync(path.join(WORKSPACES_DIR, id), { recursive: true, force: true })
+    } catch (error) {
+      console.error('Failed to delete workspace files:', error)
+    }
+    this.emit('workspaces', this.list())
+    return switchedTo
+  }
+
+  // ---- workspace directories (multi-dir model) ----
+
+  /** Working directories of the active workspace, primary first. */
+  dirs(): string[] {
+    return this.state.dirs
+  }
+
+  private applyDirs(id: string, nextDirs: string[]): WorkspaceList {
+    const dirs = normalizeDirs({ dirs: nextDirs })
+    if (dirs.length === 0) throw new Error('A workspace must keep at least one directory')
+    const primary = dirs[0]
+    this.registry = {
+      ...this.registry,
+      workspaces: this.registry.workspaces.map((w) =>
+        w.id === id ? { ...w, dir: primary, dirs } : w
+      )
+    }
+    if (id === this.registry.activeId) {
+      this.state = { ...this.state, dir: primary, dirs }
+      this.scheduleSave()
+      this.emit('change', this.state)
+    } else {
+      // Inactive workspace: patch its on-disk state directly.
+      const state = loadWorkspaceState(id)
+      saveWorkspaceState(id, { ...state, dir: primary, dirs })
+    }
+    saveRegistry(this.registry)
+    this.emit('workspaces', this.list())
+    return this.list()
+  }
+
+  private workspaceDirs(id: string): string[] {
+    const meta = this.registry.workspaces.find((w) => w.id === id)
+    if (!meta) throw new Error(`Workspace '${id}' not found`)
+    return id === this.registry.activeId ? this.state.dirs : meta.dirs
+  }
+
+  addWorkspaceDir(id: string, dir: string): WorkspaceList {
+    return this.applyDirs(id, addDir(this.workspaceDirs(id), dir))
+  }
+
+  removeWorkspaceDir(id: string, dir: string): WorkspaceList {
+    const inUse = id === this.registry.activeId && this.terminals().some((t) => t.cwd === dir)
+    return this.applyDirs(id, removeDir(this.workspaceDirs(id), dir, inUse))
+  }
+
+  setPrimaryDir(id: string, dir: string): WorkspaceList {
+    return this.applyDirs(id, setPrimary(this.workspaceDirs(id), dir))
+  }
+
+  /** Repoint a terminal's cwd to one of the workspace's directories. */
+  setTerminalCwd(nodeId: string, dir: string): TerminalNodeData {
+    const node = this.node(nodeId)
+    if (!node || node.kind !== 'terminal') throw new Error('Not a terminal node')
+    if (!this.state.dirs.includes(dir)) {
+      throw new Error(`'${dir}' is not a directory of this workspace`)
+    }
+    return this.updateNode(nodeId, { cwd: dir }) as TerminalNodeData
   }
 
   // ---- active-workspace state ----
@@ -323,7 +423,15 @@ function loadRegistry(): Registry {
   try {
     if (existsSync(REGISTRY_FILE)) {
       const raw = JSON.parse(readFileSync(REGISTRY_FILE, 'utf8')) as Registry
-      if (raw.workspaces?.length > 0) return raw
+      if (raw.workspaces?.length > 0) {
+        // Normalize legacy metas (no dirs) to the multi-dir shape.
+        const workspaces = raw.workspaces.map((w) => {
+          const dirs = normalizeDirs({ dir: w.dir, dirs: w.dirs })
+          const finalDirs = dirs.length > 0 ? dirs : [homedir()]
+          return { ...w, dir: finalDirs[0], dirs: finalDirs }
+        })
+        return { ...raw, workspaces }
+      }
     }
   } catch (error) {
     console.error('Failed to load registry:', error)
@@ -345,7 +453,9 @@ function migrateOrSeed(): Registry {
         renameSync(LEGACY_NOTES, path.join(WORKSPACES_DIR, id, 'notes'))
       }
       renameSync(LEGACY_WORKSPACE, `${LEGACY_WORKSPACE}.migrated`)
-      const meta: WorkspaceMeta = { id, name: legacy.name || 'My Workspace', dir: legacy.dir || homedir(), icon: '🗂' }
+      const dir = legacy.dir || homedir()
+      const dirs = normalizeDirs({ dir, dirs: legacy.dirs })
+      const meta: WorkspaceMeta = { id, name: legacy.name || 'My Workspace', dir, dirs, icon: '🗂' }
       const registry: Registry = { workspaces: [meta], activeId: id }
       saveRegistry(registry)
       return registry
@@ -354,11 +464,27 @@ function migrateOrSeed(): Registry {
     }
   }
 
-  const meta: WorkspaceMeta = { id, name: 'My Workspace', dir: homedir(), icon: '🗂' }
-  saveWorkspaceState(id, { name: meta.name, dir: meta.dir, nodes: [], connections: [] })
+  const dir = homedir()
+  const meta: WorkspaceMeta = { id, name: 'My Workspace', dir, dirs: [dir], icon: '🗂' }
+  saveWorkspaceState(id, { name: meta.name, dir, dirs: [dir], nodes: [], connections: [] })
   const registry: Registry = { workspaces: [meta], activeId: id }
   saveRegistry(registry)
   return registry
+}
+
+/**
+ * Normalize a persisted (possibly legacy) workspace state to the multi-dir
+ * shape: dirs[] is filled from dir/dirs, dir === dirs[0], and every terminal
+ * cwd is pinned to a workspace dir (stray cwds snap to primary).
+ */
+function normalizeState(state: WorkspaceState): WorkspaceState {
+  const dirs = normalizeDirs({ dir: state.dir, dirs: state.dirs })
+  const finalDirs = dirs.length > 0 ? dirs : [homedir()]
+  const primary = finalDirs[0]
+  const nodes = state.nodes.map(upgradeNode).map((n) =>
+    n.kind === 'terminal' && !finalDirs.includes(n.cwd) ? { ...n, cwd: primary } : n
+  )
+  return { ...state, dir: primary, dirs: finalDirs, nodes }
 }
 
 function loadWorkspaceState(id: string): WorkspaceState {
@@ -366,12 +492,13 @@ function loadWorkspaceState(id: string): WorkspaceState {
     const file = workspaceFile(id)
     if (existsSync(file)) {
       const state = JSON.parse(readFileSync(file, 'utf8')) as WorkspaceState
-      return { ...state, nodes: state.nodes.map(upgradeNode) }
+      return normalizeState(state)
     }
   } catch (error) {
     console.error('Failed to load workspace state:', error)
   }
-  return { name: 'Workspace', dir: homedir(), nodes: [], connections: [] }
+  const dir = homedir()
+  return { name: 'Workspace', dir, dirs: [dir], nodes: [], connections: [] }
 }
 
 function saveWorkspaceState(id: string, state: WorkspaceState): void {

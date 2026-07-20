@@ -2,6 +2,7 @@ import type {
   AgentRole,
   CanvasNode,
   Connection,
+  GitInfo,
   TeamForkSpec,
   TeamMeta,
   WorkspaceList,
@@ -17,6 +18,16 @@ export interface CookrewApi {
   createWorkspace: (name: string, dir: string) => Promise<WorkspaceMeta>
   switchWorkspace: (id: string) => Promise<WorkspaceList>
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>
+  /** Workspace v2: remove workspace, multi-directory, per-terminal cwd, git. */
+  removeWorkspace: (id: string) => Promise<WorkspaceList>
+  addWorkspaceDir: (id: string, dir: string) => Promise<WorkspaceList>
+  removeWorkspaceDir: (id: string, dir: string) => Promise<WorkspaceList>
+  setPrimaryDir: (id: string, dir: string) => Promise<WorkspaceList>
+  setTerminalCwd: (nodeId: string, dir: string) => Promise<CanvasNode>
+  /** Native directory picker (desktop only; null elsewhere/cancelled). */
+  pickDir: () => Promise<string | null>
+  /** Git state of a directory; null when unavailable (demo). */
+  gitInfo: (dir: string) => Promise<GitInfo | null>
   onWorkspaceList: (cb: (list: WorkspaceList) => void) => () => void
   addNode: (node: CanvasNode) => Promise<CanvasNode>
   updateNode: (id: string, patch: Partial<CanvasNode>) => Promise<CanvasNode | undefined>
@@ -36,12 +47,15 @@ export interface CookrewApi {
    * (phone) api uploads the bytes first. Callers paste the returned paths.
    */
   attachFiles: (files: File[]) => Promise<string[]>
+  saveAttachmentBytes: (name: string, bytes: Uint8Array) => Promise<string>
   /** Native multi-file picker (desktop only; returns [] elsewhere). */
   pickFiles: () => Promise<string[]>
   ptyInput: (terminalId: string, data: string) => void
   ptyResize: (terminalId: string, cols: number, rows: number) => void
   /** Scroll the terminal view to a past ask's line; null returns to live. */
   ptyJump: (terminalId: string, text: string | null) => void
+  /** Acknowledge-on-view: user is looking at this terminal's result. */
+  turnSeen: (terminalId: string) => void
   ptyAttach: (terminalId: string, onData: (data: string) => void) => () => void
   listActivity: () => Promise<TerminalActivity[]>
   onTerminalActivity: (cb: (activity: TerminalActivity) => void) => () => void

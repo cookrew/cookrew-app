@@ -1,5 +1,5 @@
 import type { CookrewApi } from './api'
-import type { WorkspaceList, WorkspaceState } from '../../shared/model'
+import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 
 /**
@@ -62,6 +62,13 @@ function fileToBase64(file: File): Promise<string> {
   })
 }
 
+/** Base64-encode raw bytes (pasted clipboard image) for the upload endpoint. */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary)
+}
+
 export function createRemoteApi(): CookrewApi {
   return {
     getWorkspace: () => req<WorkspaceState>('/api/workspace'),
@@ -70,6 +77,16 @@ export function createRemoteApi(): CookrewApi {
     createWorkspace: (name, dir) => req('/api/workspaces', 'POST', { name, dir }),
     switchWorkspace: (id) => req<WorkspaceList>('/api/workspaces/switch', 'POST', { id }),
     renameWorkspace: (id, name) => req<WorkspaceList>('/api/workspaces/rename', 'POST', { id, name }),
+    removeWorkspace: (id) => req<WorkspaceList>(`/api/workspaces/${id}`, 'DELETE'),
+    addWorkspaceDir: (id, dir) => req<WorkspaceList>(`/api/workspaces/${id}/dirs`, 'POST', { path: dir }),
+    removeWorkspaceDir: (id, dir) =>
+      req<WorkspaceList>(`/api/workspaces/${id}/dirs`, 'DELETE', { path: dir }),
+    setPrimaryDir: (id, dir) =>
+      req<WorkspaceList>(`/api/workspaces/${id}/primary`, 'POST', { path: dir }),
+    setTerminalCwd: (nodeId, dir) => req<CanvasNode>(`/api/terminal/${nodeId}/cwd`, 'POST', { dir }),
+    // No native picker on the phone — the UI collects a path via text input.
+    pickDir: () => Promise.resolve(null),
+    gitInfo: (dir) => req<GitInfo>(`/api/git?dir=${encodeURIComponent(dir)}`, 'GET'),
     onWorkspaceList: (cb) => subscribe<WorkspaceList>('workspaces', cb),
 
     addNode: (node) => req('/api/nodes', 'POST', node),
@@ -93,10 +110,18 @@ export function createRemoteApi(): CookrewApi {
       }
       return paths
     },
+    saveAttachmentBytes: async (name, bytes) => {
+      const uploaded = await req<{ path: string }>('/api/attachments', 'POST', {
+        name,
+        data: bytesToBase64(bytes)
+      })
+      return uploaded.path
+    },
     pickFiles: () => Promise.resolve([]),
 
     ptyInput: (terminalId, data) => post(`/api/terminal/${terminalId}/raw`, { data }),
     ptyJump: (terminalId, text) => post(`/api/terminal/${terminalId}/jump`, { text }),
+    turnSeen: (terminalId) => post(`/api/terminal/${terminalId}/seen`, {}),
     ptyResize: (terminalId, cols, rows) =>
       post(`/api/terminal/${terminalId}/resize`, { cols, rows }),
     ptyAttach: (terminalId, onData) => {

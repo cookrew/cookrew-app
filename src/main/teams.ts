@@ -18,6 +18,7 @@ import type {
   AgentRole,
   CanvasNode,
   Connection,
+  GitInfo,
   TeamForkChoice,
   TeamForkSpec,
   TeamMeta,
@@ -25,6 +26,7 @@ import type {
   WorkspaceMeta,
   WorkspaceState
 } from '../shared/model'
+import { normalizeDirs } from '../shared/model'
 import type { TurnRecord } from '../shared/turn'
 import {
   buildAssembledPreamble,
@@ -47,6 +49,8 @@ export interface TeamSnapshot {
   name: string
   savedAt: number
   dir: string
+  /** Working directories captured at save time (primary first). */
+  dirs?: string[]
   nodes: CanvasNode[]
   connections: Connection[]
   /** Turn histories captured at save time, keyed by ORIGINAL terminal id. */
@@ -90,6 +94,7 @@ export class TeamStore {
       name: teamName,
       savedAt: Date.now(),
       dir: state.dir,
+      dirs: state.dirs,
       nodes: state.nodes,
       connections: state.connections,
       turns: Object.fromEntries(
@@ -141,6 +146,8 @@ export class TeamStore {
 export interface TeamForkSource {
   name: string
   dir: string
+  /** Working directories of the source workspace, primary first. */
+  dirs: string[]
   nodes: CanvasNode[]
   connections: Connection[]
   turnsOf: (terminalId: string) => TurnRecord[]
@@ -157,10 +164,14 @@ export interface TerminalForkPlan {
   turns: TurnRecord[]
   turnIndexes: number[]
   role: AgentRole | null
+  /** Directory the forked terminal starts in (may be repointed to a worktree). */
+  targetDir: string
 }
 
 export interface TeamForkPlan {
   name: string
+  /** Directory set for the forked workspace. */
+  dirs: string[]
   nodes: CanvasNode[]
   connections: Connection[]
   terminals: TerminalForkPlan[]
@@ -171,14 +182,31 @@ interface PlanDeps {
   roleOf: (name: string) => AgentRole | undefined
 }
 
+/**
+ * Resolve which workspace dir a forked terminal lands in: the explicit
+ * choice when it's a valid target, else the source cwd if still present,
+ * else the primary.
+ */
+function resolveTargetDir(
+  sourceCwd: string,
+  choiceDir: string | undefined,
+  dirs: string[]
+): string {
+  if (choiceDir && dirs.includes(choiceDir)) return choiceDir
+  if (dirs.includes(sourceCwd)) return sourceCwd
+  return dirs[0]
+}
+
 function planTerminal(
   node: TerminalNodeData,
   newId: string,
   choice: TeamForkChoice | undefined,
   history: TurnRecord[],
+  dirs: string[],
   deps: PlanDeps
 ): { forked: TerminalNodeData; plan: TerminalForkPlan } {
   const mode = choice?.mode ?? 'latest'
+  const targetDir = resolveTargetDir(node.cwd, choice?.targetDir, dirs)
 
   let role: AgentRole | null = null
   if (mode === 'role') {
@@ -205,6 +233,7 @@ function planTerminal(
   const forked: TerminalNodeData = {
     ...node,
     id: newId,
+    cwd: targetDir,
     preset: role ? role.preset : node.preset,
     // Session binding never carries over — the fork engine assigns its own.
     command: stripSessionFlags(role ? role.command : node.command),
@@ -215,7 +244,10 @@ function planTerminal(
         ? null
         : { sourceId: node.id, sourceName: node.name, turnIndex }
   }
-  return { forked, plan: { newId, source: node, mode, turnIndex, turns: history, turnIndexes, role } }
+  return {
+    forked,
+    plan: { newId, source: node, mode, turnIndex, turns: history, turnIndexes, role, targetDir }
+  }
 }
 
 /**
@@ -232,6 +264,8 @@ export function planTeamFork(
   const idMap = new Map<string, string>()
   const nodes: CanvasNode[] = []
   const terminals: TerminalForkPlan[] = []
+  const dirs = normalizeDirs({ dirs: spec.dirs ?? source.dirs })
+  const finalDirs = dirs.length > 0 ? dirs : [source.dir]
 
   for (const node of source.nodes) {
     if (!included.has(node.id)) continue
@@ -246,6 +280,7 @@ export function planTeamFork(
       newId,
       choiceFor.get(node.id),
       source.turnsOf(node.id),
+      finalDirs,
       deps
     )
     nodes.push(forked)
@@ -263,6 +298,7 @@ export function planTeamFork(
 
   return {
     name: spec.name?.trim() || `${source.name} fork`,
+    dirs: finalDirs,
     nodes,
     connections,
     terminals
@@ -329,6 +365,85 @@ export function resolveTerminalContext(
   }
 }
 
+// ---- worktree resolution (GOAL 5) ----
+
+/** A repo directory a fork will get its own `git worktree add` copy of. */
+export interface WorktreeCandidate {
+  repoDir: string
+  worktreePath: string
+  branch: string
+}
+
+/**
+ * Pure: which of a fork's dirs become worktrees, and where. A dir is a
+ * candidate when worktrees are enabled and it's a git repo; each maps to a
+ * path under `worktreeRoot` named by its basename. The actual `git worktree
+ * add` (and its fallback) happens in the async executor.
+ */
+export function planWorktrees(
+  dirs: string[],
+  isRepo: (dir: string) => boolean,
+  opts: { enabled: boolean; worktreeRoot: string; branch: string }
+): WorktreeCandidate[] {
+  if (!opts.enabled) return []
+  return dirs
+    .filter((dir) => isRepo(dir))
+    .map((repoDir) => ({
+      repoDir,
+      worktreePath: path.join(opts.worktreeRoot, path.basename(repoDir) || 'repo'),
+      branch: opts.branch
+    }))
+}
+
+export interface WorktreeApi {
+  gitInfo: (dir: string) => Promise<GitInfo>
+  addWorktree: (
+    repoDir: string,
+    worktreePath: string,
+    branch: string
+  ) => Promise<{ ok: true; path: string } | { ok: false; error: string }>
+}
+
+/**
+ * Execute worktree creation for a plan's dirs. Returns a remap from original
+ * repo dir → worktree path for every SUCCESSFUL add; failures are omitted
+ * (fork-in-place fallback) and their errors collected. Never throws.
+ */
+export async function resolveWorktrees(
+  api: WorktreeApi,
+  dirs: string[],
+  opts: { enabled: boolean; worktreeRoot: string; branch: string }
+): Promise<{ remap: Map<string, string>; errors: string[] }> {
+  const remap = new Map<string, string>()
+  const errors: string[] = []
+  if (!opts.enabled) return { remap, errors }
+
+  const repoFlags = await Promise.all(
+    dirs.map((dir) => api.gitInfo(dir).then((g) => g.isRepo).catch(() => false))
+  )
+  const candidates = planWorktrees(dirs, (dir) => repoFlags[dirs.indexOf(dir)], opts)
+  for (const c of candidates) {
+    const result = await api.addWorktree(c.repoDir, c.worktreePath, c.branch)
+    if (result.ok) remap.set(c.repoDir, result.path)
+    else errors.push(`${c.repoDir}: ${result.error}`)
+  }
+  return { remap, errors }
+}
+
+/** Apply a repo-dir → worktree-path remap to dirs and terminal cwds. */
+export function applyWorktreeRemap(plan: TeamForkPlan, remap: Map<string, string>): TeamForkPlan {
+  if (remap.size === 0) return plan
+  const dirs = plan.dirs.map((d) => remap.get(d) ?? d)
+  const nodes = plan.nodes.map((n) =>
+    n.kind === 'terminal' && remap.has(n.cwd) ? { ...n, cwd: remap.get(n.cwd) as string } : n
+  )
+  const terminals = plan.terminals.map((t) => ({
+    ...t,
+    targetDir: remap.get(t.targetDir) ?? t.targetDir
+  }))
+  return { ...plan, dirs, nodes, terminals }
+}
+
 // ---- orchestrator ----
 
 export interface TeamForkDeps {
@@ -339,6 +454,10 @@ export interface TeamForkDeps {
   ptys: PtyManager
   /** index.ts switch wrapper — the switch boots the forked terminals. */
   switchWorkspace: (id: string) => void
+  /** Git worktree operations (injectable for tests). */
+  git: WorktreeApi
+  /** Root under which fork worktrees are created (default ~/.cookrew/worktrees). */
+  worktreeRoot: string
   /** Test override for ~/.claude/projects (native session forks). */
   projectsDir?: string
 }
@@ -350,6 +469,7 @@ function resolveSource(deps: TeamForkDeps, spec: TeamForkSpec): TeamForkSource {
     return {
       name: snap.name,
       dir: snap.dir,
+      dirs: normalizeDirs({ dir: snap.dir, dirs: snap.dirs }),
       nodes: snap.nodes,
       connections: snap.connections,
       turnsOf: (id) => snap.turns[id] ?? [],
@@ -360,6 +480,7 @@ function resolveSource(deps: TeamForkDeps, spec: TeamForkSpec): TeamForkSource {
   return {
     name: state.name,
     dir: state.dir,
+    dirs: state.dirs,
     nodes: state.nodes,
     connections: state.connections,
     turnsOf: (id) => deps.turns.history(id),
@@ -372,12 +493,24 @@ function resolveSource(deps: TeamForkDeps, spec: TeamForkSpec): TeamForkSource {
  * workspace pre-seeded with the forked nodes, switch to it (which boots the
  * terminals), then inject each terminal's context once its TUI is quiet.
  */
-export function forkTeam(deps: TeamForkDeps, spec: TeamForkSpec): WorkspaceMeta {
+export async function forkTeam(deps: TeamForkDeps, spec: TeamForkSpec): Promise<WorkspaceMeta> {
   const source = resolveSource(deps, spec)
-  const plan = planTeamFork(source, spec, {
+  const planned = planTeamFork(source, spec, {
     newId: randomUUID,
     roleOf: (name) => deps.roles.get(name)
   })
+
+  // GOAL 5: repo dirs get their own worktree (default on); failures fall
+  // back to in-place and are logged, never aborting the fork.
+  const branch = `cookrew/${roleSlug(planned.name)}`
+  const worktreeRoot = path.join(deps.worktreeRoot, `${roleSlug(planned.name)}-${randomUUID().slice(0, 8)}`)
+  const { remap, errors } = await resolveWorktrees(deps.git, planned.dirs, {
+    enabled: spec.worktree !== false,
+    worktreeRoot,
+    branch
+  })
+  for (const error of errors) console.error('Team fork worktree fell back to in-place:', error)
+  const plan = applyWorktreeRemap(planned, remap)
 
   const contexts = new Map(
     plan.terminals.map((t) => [
@@ -392,7 +525,14 @@ export function forkTeam(deps: TeamForkDeps, spec: TeamForkSpec): WorkspaceMeta 
       : n
   })
 
-  const meta = deps.store.createWorkspaceWithState(plan.name, source.dir, nodes, plan.connections)
+  const meta = deps.store.createWorkspaceWithState(
+    plan.name,
+    plan.dirs[0],
+    nodes,
+    plan.connections,
+    undefined,
+    plan.dirs
+  )
   deps.switchWorkspace(meta.id)
 
   for (const t of plan.terminals) {

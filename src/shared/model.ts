@@ -84,7 +84,10 @@ export interface Connection {
 
 export interface WorkspaceState {
   name: string
+  /** Primary directory; kept === dirs[0] for back-compat. */
   dir: string
+  /** Ordered working directories; dirs[0] is primary. */
+  dirs: string[]
   nodes: CanvasNode[]
   connections: Connection[]
 }
@@ -93,9 +96,46 @@ export interface WorkspaceState {
 export interface WorkspaceMeta {
   id: string
   name: string
+  /** Primary directory; kept === dirs[0] for back-compat. */
   dir: string
+  /** Ordered working directories; dirs[0] is primary. */
+  dirs: string[]
   /** One emoji shown in the switcher. */
   icon: string
+}
+
+/** Git state of a workspace directory (main/git.ts). */
+export interface GitInfo {
+  isRepo: boolean
+  root: string | null
+  branch: string | null
+  dirty: boolean
+  ahead: number
+  behind: number
+  /** Set when the git query itself failed (not "not a repo"). */
+  error?: string
+}
+
+/**
+ * Normalize a workspace's directory list from either shape: a legacy
+ * single `dir`, a `dirs` array, or both. Result is deduped, non-empty, and
+ * its first entry is the primary. `primary` (when still present) is moved to
+ * the front. Returns [] only when nothing usable is given.
+ */
+export function normalizeDirs(input: {
+  dir?: string
+  dirs?: string[]
+  primary?: string
+}): string[] {
+  const raw = [
+    ...(input.dirs ?? []),
+    ...(input.dir !== undefined ? [input.dir] : [])
+  ].map((d) => d.trim()).filter((d) => d.length > 0)
+  const deduped = [...new Set(raw)]
+  if (input.primary && deduped.includes(input.primary)) {
+    return [input.primary, ...deduped.filter((d) => d !== input.primary)]
+  }
+  return deduped
 }
 
 /** What the renderer needs to render the workspace switcher. */
@@ -127,6 +167,13 @@ export interface TeamForkChoice {
   turnIndexes?: number[]
   /** Saved role to boot from (mode 'role'). */
   roleName?: string
+  /**
+   * Which forked-workspace directory this terminal lands in. Defaults to its
+   * source cwd when still present, else the primary. When the chosen dir is a
+   * repo and the fork uses worktrees, the terminal is repointed to the
+   * worktree path instead.
+   */
+  targetDir?: string
 }
 
 export interface TeamForkSpec {
@@ -138,6 +185,13 @@ export interface TeamForkSpec {
   choices: TeamForkChoice[]
   /** Fork the SAVED snapshot of this team instead of the live canvas. */
   fromSavedTeam?: string
+  /** Directory set for the forked workspace; defaults to the source dirs. */
+  dirs?: string[]
+  /**
+   * When a target dir is a git repo, `git worktree add` a fresh branch and
+   * point the forked terminal there (default true). False forks in place.
+   */
+  worktree?: boolean
 }
 
 /** Listing entry for a saved team snapshot (~/.cookrew/teams). */

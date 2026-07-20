@@ -21,6 +21,16 @@ const api = {
   switchWorkspace: (id: string) => ipcRenderer.invoke('workspace:switch', id),
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),
+  removeWorkspace: (id: string) => ipcRenderer.invoke('workspace:remove', id),
+  addWorkspaceDir: (id: string, dir: string) => ipcRenderer.invoke('workspace:dir:add', id, dir),
+  removeWorkspaceDir: (id: string, dir: string) =>
+    ipcRenderer.invoke('workspace:dir:remove', id, dir),
+  setPrimaryDir: (id: string, dir: string) =>
+    ipcRenderer.invoke('workspace:dir:setPrimary', id, dir),
+  setTerminalCwd: (nodeId: string, dir: string) =>
+    ipcRenderer.invoke('terminal:setCwd', nodeId, dir),
+  pickDir: () => ipcRenderer.invoke('dir:pick'),
+  gitInfo: (dir: string) => ipcRenderer.invoke('git:info', dir),
   onWorkspaceList: (cb: (list: unknown) => void) => {
     const listener = (_e: unknown, list: unknown): void => cb(list)
     ipcRenderer.on('workspace:list', listener)
@@ -32,6 +42,7 @@ const api = {
     ipcRenderer.send('pty:resize', terminalId, cols, rows),
   ptyJump: (terminalId: string, text: string | null) =>
     ipcRenderer.send('pty:jump', terminalId, text),
+  turnSeen: (terminalId: string) => ipcRenderer.send('turn:seen', terminalId),
   ptyAttach: (terminalId: string, onData: (data: string) => void) => {
     const channel = `pty:data:${terminalId}`
     const listener = (_e: unknown, data: string): void => onData(data)
@@ -47,6 +58,11 @@ const api = {
   // the preload (File.path is gone since Electron 32); no upload involved.
   attachFiles: (files: File[]) => Promise.resolve(files.map((f) => webUtils.getPathForFile(f))),
   pickFiles: () => ipcRenderer.invoke('attach:pick'),
+  // Pasted clipboard images have no on-disk path — ship their bytes to main,
+  // which saves them via the same saveAttachment flow as phone uploads and
+  // returns the absolute path to paste into the terminal.
+  saveAttachmentBytes: (name: string, bytes: Uint8Array) =>
+    ipcRenderer.invoke('attach:save', name, bytes),
 
   listActivity: () => ipcRenderer.invoke('activity:list'),
   listTurns: (terminalId: string) => ipcRenderer.invoke('turn:history', terminalId),
