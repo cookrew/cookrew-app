@@ -13,6 +13,10 @@ const SUBMIT_DELAY_BASE_MS = 150
 const SUBMIT_DELAY_PER_KB_MS = 100
 const SUBMIT_DELAY_MAX_MS = 1500
 
+/** Bracketed-paste markers (DECSET 2004): a paste's explicit start/end. */
+const BRACKETED_PASTE_START = '\x1b[200~'
+const BRACKETED_PASTE_END = '\x1b[201~'
+
 /**
  * Pause between the prompt text and the submitting Enter. Agent TUIs treat a
  * burst of input as a paste; a carriage return inside that burst becomes a
@@ -23,6 +27,20 @@ const SUBMIT_DELAY_MAX_MS = 1500
 export function submitDelayMs(promptLength: number): number {
   const scaled = SUBMIT_DELAY_BASE_MS + Math.round((promptLength / 1024) * SUBMIT_DELAY_PER_KB_MS)
   return Math.min(scaled, SUBMIT_DELAY_MAX_MS)
+}
+
+/**
+ * Deliver `body` as one bracketed-paste unit, then submit it with a delayed
+ * Enter. The explicit \x1b[200~…\x1b[201~ markers make the TUI finalize the
+ * paste at a known boundary, so the trailing Enter is seen as a submit rather
+ * than folded into a still-ingesting paste — the "[Pasted text] never sent"
+ * bug that a bare raw write hits when the TUI's own paste heuristic collapses
+ * the burst. Same mechanism the fork engine uses (injectWhenReady).
+ */
+async function pasteAndSubmit(session: PtySession, body: string): Promise<void> {
+  session.write(`${BRACKETED_PASTE_START}${body}${BRACKETED_PASTE_END}`)
+  await new Promise((resolve) => setTimeout(resolve, submitDelayMs(body.length)))
+  session.write('\r')
 }
 
 /**
@@ -40,9 +58,7 @@ export async function askTerminal(
   const graceMs = options.graceMs ?? 1500
 
   const before = session.fullText()
-  session.write(prompt)
-  await new Promise((resolve) => setTimeout(resolve, submitDelayMs(prompt.length)))
-  session.write('\r')
+  await pasteAndSubmit(session, prompt)
 
   const startedAt = Date.now()
   await new Promise<void>((resolve) => {
@@ -66,10 +82,8 @@ export async function askRaw(session: PtySession, rawInput: string): Promise<str
   if (trailingEnter && body.length > 0) {
     // Text followed by Enter: the same paste-swallow hazard askTerminal
     // guards against — a TUI mid-ingest folds an immediate Enter into the
-    // paste and never submits. Send the Enter as its own later keystroke.
-    session.write(body)
-    await new Promise((resolve) => setTimeout(resolve, submitDelayMs(body.length)))
-    session.write('\r')
+    // paste and never submits. Deliver as a bracketed paste, then Enter.
+    await pasteAndSubmit(session, body)
   } else {
     session.write(rawInput)
   }
