@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { buildAttachmentPaste } from '../../shared/attach'
 import { cookrew, hasNativeWebview } from './api'
+import { imageAttachmentName } from './clipboard-image'
 import { CrIcon } from './icons'
 
 /**
@@ -17,6 +18,26 @@ export async function attachFilesToTerminal(terminalId: string, files: File[]): 
 function pastePaths(terminalId: string, paths: string[]): void {
   const paste = buildAttachmentPaste(paths)
   if (paste) cookrew().ptyInput(terminalId, paste)
+}
+
+/**
+ * Save pasted clipboard images (raw bytes, no file path) through the attach
+ * store and paste their resulting paths — the paste-event counterpart to
+ * attachFilesToTerminal. Desktop-only: the phone companion is an insecure
+ * context with no clipboard-image API.
+ */
+export async function pasteClipboardImages(
+  terminalId: string,
+  images: Array<{ type: string; arrayBuffer: () => Promise<ArrayBuffer> }>
+): Promise<void> {
+  const stamp = String(Date.now())
+  const paths: string[] = []
+  for (const [i, image] of images.entries()) {
+    const bytes = new Uint8Array(await image.arrayBuffer())
+    const name = imageAttachmentName(image.type, images.length > 1 ? `${stamp}-${i + 1}` : stamp)
+    paths.push(await cookrew().saveAttachmentBytes(name, bytes))
+  }
+  pastePaths(terminalId, paths)
 }
 
 /**

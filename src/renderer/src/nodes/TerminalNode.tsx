@@ -3,6 +3,7 @@ import { NodeProps, NodeResizer, useStore } from '@xyflow/react'
 import { NodeHandles } from './NodeHandles'
 import { CardClose } from './CardClose'
 import { AgentAvatar, StatusCoin } from './AgentAvatar'
+import { GitChip } from '../GitChip'
 import { CrIcon, type CrIconName } from '../icons'
 import { PastTurnView, TurnPagerBar, useTurnPaging } from './TurnPager'
 import type { TerminalNodeData } from '../../../shared/model'
@@ -112,6 +113,11 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
   }
 
   const full = mode === 'full'
+  // Latest-turn conclusion for the full-view header line: Sous recap first,
+  // else the ask itself.
+  const conclusion = activity
+    ? (activity.title ?? (activity.prompt ? firstLine(activity.prompt, 160) : null))
+    : null
 
   return (
     <div
@@ -120,32 +126,39 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
     >
       <NodeResizer isVisible={selected} minWidth={240} minHeight={140} />
       <NodeHandles />
-      <div className="node-header vi-head">
+      {/* Header always names the agent (vibe-island session-card scheme).
+          The coin avatar IS the status indicator — no second status coin.
+          Full view runs one continuous line: coin · name · [STATUS] ·
+          latest-turn conclusion; compact keeps the chips instead. */}
+      <div className={`node-header vi-head${full ? ' full' : ''}`}>
         <AgentAvatar phase={phase} preset={node.preset} />
-        {/* The title carries the recap — Sous turn summary, else the prompt
-            echo — matching the full view; the preset chip still names the
-            agent, and the node name lives in the tooltip. */}
         <div className="vi-title" title={node.name}>
-          {activity?.title ?? activity?.prompt ? (
-            firstLine(activity.title ?? activity.prompt ?? '', 200)
-          ) : (
-            node.name
-          )}
+          {node.name}
         </div>
-        <span className="vi-chip tan">{node.preset}</span>
-        {node.orch && <span className="vi-chip">Orch</span>}
-        {node.forkOf && (
-          <span
-            className="vi-chip fork"
-            title={`Forked from "${node.forkOf.sourceName}" at turn ${node.forkOf.turnIndex}`}
-          >
-            <CrIcon name="fork" /> T{node.forkOf.turnIndex}
-          </span>
-        )}
-        {phase === 'idle' && activity ? (
-          <span className="vi-chip dim">{agoLabel(activity.updatedAt)}</span>
+        {full ? (
+          <>
+            <span className={`vi-status-name ${phase}`}>[{STATUS_LABEL[phase]}]</span>
+            <span className="vi-conclusion" title={conclusion ?? undefined}>
+              {conclusion}
+            </span>
+          </>
         ) : (
-          <StatusCoin phase={phase} preset={node.preset} />
+          <>
+            <span className="vi-chip tan">{node.preset}</span>
+            {node.orch && <span className="vi-chip">Orch</span>}
+            {node.forkOf && (
+              <span
+                className="vi-chip fork"
+                title={`Forked from "${node.forkOf.sourceName}" at turn ${node.forkOf.turnIndex}`}
+              >
+                <CrIcon name="fork" /> T{node.forkOf.turnIndex}
+              </span>
+            )}
+            <GitChip dir={node.cwd} />
+            {phase === 'idle' && activity && (
+              <span className="vi-chip dim">{agoLabel(activity.updatedAt)}</span>
+            )}
+          </>
         )}
         <CardClose nodeId={node.id} dark />
       </div>
@@ -162,7 +175,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
       {full && (
         <div className="card-foot vi-foot">
           <span className={`card-status ${phase}`}>
-            {phase === 'thinking' && <Spinner />} {STATUS_LABEL[phase]}
+            {phase === 'thinking' && <Spinner />}
             {activity?.turnStartedAt != null && <TurnClock startedAt={activity.turnStartedAt} />}
           </span>
           <span className="card-open-hint vi-hint">
@@ -217,7 +230,20 @@ function CompactTurnView({ activity }: { activity: TerminalActivity | undefined 
         ) : (
           <div className="vi-ready">Ready</div>
         ))}
+      <PendingInputLine activity={activity} />
     </>
+  )
+}
+
+/** Typed-but-unsent input box content: visibly IN the inputbox, never
+    masquerading as an ask (DEFECT 2, renderer half). */
+function PendingInputLine({ activity }: { activity: TerminalActivity }): React.JSX.Element | null {
+  if (!activity.pendingInput) return null
+  return (
+    <div className="vi-pending">
+      <span className="vi-pending-label">typing:</span> {firstLine(activity.pendingInput, 120)}
+      <span className="vi-caret">▍</span>
+    </div>
   )
 }
 
@@ -257,28 +283,15 @@ function FullTurnView({ activity }: { activity: TerminalActivity | undefined }):
 
   return (
     <>
-      {activity.title && <div className="vi-turn-title">{firstLine(activity.title, 90)}</div>}
+      {/* Status name + conclusion live in the header line now; the body keeps
+          only detail the header can't carry — the ask, the live status verb
+          while working, the tool trail, and the reply/stream. */}
       <div className="vi-you">
         <span className="vi-you-label">You:</span> {firstLine(activity.prompt, 120)}
       </div>
       {phase === 'thinking' && (
         <div className="vi-status working">
           <span className="vi-dot pulse" /> {stripStatus(glance?.status) ?? 'Working…'}
-        </div>
-      )}
-      {phase === 'waiting' && (
-        <div className="vi-status waiting">
-          <span className="vi-dot pulse" /> Waiting for your input
-        </div>
-      )}
-      {phase === 'replied' && (
-        <div className="vi-status done">
-          <span className="vi-dot" /> Turn complete
-        </div>
-      )}
-      {phase === 'idle' && (
-        <div className="vi-status idle">
-          <span className="vi-dot" /> Ready
         </div>
       )}
       {inTurn && glance !== null && glance.tools.length > 0 && (
@@ -305,6 +318,7 @@ function FullTurnView({ activity }: { activity: TerminalActivity | undefined }):
       ) : (
         <div className="vi-msg">{activity.reply || '(no visible output this turn)'}</div>
       )}
+      <PendingInputLine activity={activity} />
     </>
   )
 }

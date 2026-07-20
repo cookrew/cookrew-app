@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
+import type { IClipboardProvider } from '@xterm/addon-clipboard'
+import { readClipboardText, writeClipboardText } from './clipboard'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
@@ -12,9 +14,9 @@ import { useCanvasUi } from './canvas-ui'
 import { cookrew } from './api'
 import { useTurnPaging } from './nodes/TurnPager'
 import { TurnHistoryPanel } from './TurnHistoryPanel'
-import { attachFilesToTerminal } from './AttachButton'
+import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
+import { imageFilesFromClipboardItems } from './clipboard-image'
 import { CrIcon } from './icons'
-import { AgentSprite } from './nodes/AgentSprite'
 import { StatusCoin } from './nodes/AgentAvatar'
 
 const PHOSPHOR_THEME = {
@@ -142,10 +144,18 @@ function TerminalOverlay({
 
     // OSC 52 support: tmux (set-clipboard on) forwards its mouse-drag copies
     // as OSC 52, and this addon applies them to the system clipboard — so
-    // selecting in a terminal IS copying. Clipboard API may be missing in
-    // insecure remote contexts (phone over plain http); the addon then no-ops.
+    // selecting in a terminal IS copying. Writes route through
+    // writeClipboardText, whose execCommand fallback keeps copies working in
+    // insecure remote contexts (phone over plain http) where
+    // navigator.clipboard is undefined.
     try {
-      term.loadAddon(new ClipboardAddon())
+      const provider: IClipboardProvider = {
+        readText: async () => (await readClipboardText()) ?? '',
+        writeText: async (_selection, text) => {
+          await writeClipboardText(text)
+        }
+      }
+      term.loadAddon(new ClipboardAddon(undefined, provider))
     } catch {
       // clipboard unavailable — selection still works inside tmux
     }
@@ -157,7 +167,7 @@ function TerminalOverlay({
       if (copyTimer) clearTimeout(copyTimer)
       copyTimer = setTimeout(() => {
         const text = term.getSelection()
-        if (text) void navigator.clipboard?.writeText(text).catch(() => undefined)
+        if (text) void writeClipboardText(text)
       }, 150)
     })
 
@@ -179,7 +189,7 @@ function TerminalOverlay({
         (event.ctrlKey && event.shiftKey && key === 'c')
       if (wantsCopy && term.hasSelection()) {
         if (event.type === 'keydown') {
-          void navigator.clipboard?.writeText(term.getSelection()).catch(() => undefined)
+          void writeClipboardText(term.getSelection())
         }
         return false
       }
@@ -190,21 +200,40 @@ function TerminalOverlay({
         (event.ctrlKey && event.shiftKey && key === 'v')
       if (wantsPaste) {
         if (event.type === 'keydown') {
-          void navigator.clipboard
-            ?.readText()
-            .then((text) => text && term.paste(text))
-            .catch(() => undefined)
+          // No insecure-context fallback exists for reading the clipboard —
+          // on the plain-HTTP phone this stays a no-op (paste via composer).
+          void readClipboardText().then((text) => {
+            if (text) term.paste(text)
+          })
         }
         return false
       }
       return true
     })
 
+    // Image paste (⌘V of a screenshot / copied picture): the clipboard holds
+    // raw bytes with no file path, so the text paste path above no-ops. Pull
+    // the image bytes off the paste event, save them via the attach flow, and
+    // paste the resulting path — same as a drag-in. Captured before xterm so
+    // it can suppress the empty text paste for image-only clipboards.
+    const onPaste = (event: ClipboardEvent): void => {
+      const items = event.clipboardData ? Array.from(event.clipboardData.items) : []
+      const images = imageFilesFromClipboardItems(items)
+      if (images.length === 0) return
+      event.preventDefault()
+      event.stopPropagation()
+      void pasteClipboardImages(node.id, images).catch((error) =>
+        console.error('Image paste failed:', error)
+      )
+    }
+    container.addEventListener('paste', onPaste, true)
+
     let disposed = false
     const cleanups: Array<() => void> = [() => term.dispose()]
     cleanups.push(() => {
       if (copyTimer) clearTimeout(copyTimer)
       selectionSub.dispose()
+      container.removeEventListener('paste', onPaste, true)
     })
 
     // xterm measures cell width once at open(). If the webfont swaps in
@@ -405,6 +434,15 @@ function TerminalOverlay({
 
   const phase = activity?.phase ?? 'idle'
 
+  // Acknowledge-on-view: a mounted overlay means the user is LOOKING at this
+  // terminal (desktop zoom / phone popout), so a completed turn is read the
+  // moment it is — or becomes — visible here. The tracker demotes replied →
+  // idle and keeps prompt/reply/title; every other phase ignores the signal,
+  // so this can never end a live or waiting turn. Compact-card glances don't
+  // count: no overlay, no signal.
+  useEffect(() => {
+    if (phase === 'replied') cookrew().turnSeen(node.id)
+  }, [phase, node.id])
 
   const hasFiles = (e: React.DragEvent): boolean =>
     Array.from(e.dataTransfer.types).includes('Files')
@@ -442,9 +480,11 @@ function TerminalOverlay({
       onDrop={onDrop}
     >
       <div className="popout-header">
+        {/* One coin only: it carries both identity (brand mark) and status.
+            Header line mirrors the full card: coin · name · [STATUS]. */}
         <StatusCoin phase={phase} preset={node.preset} title={`${node.name} · ${node.preset}`} />
-        <span className="popout-agent" title={node.preset}>
-          <AgentSprite preset={node.preset} />
+        <span className="popout-name" title={`${node.name} · ${node.preset}`}>
+          {node.name}
         </span>
         {node.orch && <span className="cr-chip amber">ORCH</span>}
         <span className={`cr-chip${PHASE_CHIP[phase].cls}`}>{PHASE_CHIP[phase].label}</span>

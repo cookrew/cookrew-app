@@ -1185,6 +1185,19 @@ body,
   flex: 0 0 auto;
 }
 
+/* Agent name in the zoomed-in header — coin · NAME · [STATUS]. */
+.popout-name {
+  font-family: var(--font-pixel);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+  flex: 0 1 auto;
+}
+
 /* Fork / back-to-canvas / close, pinned to the right edge as one group. */
 .popout-actions {
   margin-left: auto;
@@ -1501,10 +1514,6 @@ body,
   overflow: hidden;
 }
 
-.vi-title-snip {
-  color: var(--vi-dim);
-  font-weight: 500;
-}
 
 .vi-chip {
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
@@ -1579,6 +1588,26 @@ body,
   font-weight: 600;
 }
 
+/* Typed-but-unsent input box content (DEFECT 2): dim, italic, clearly the
+   inputbox — never confusable with the You: ask above it. */
+.vi-pending {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-style: italic;
+  font-size: calc(11px * var(--z, 1));
+  color: var(--vi-dim);
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vi-pending-label {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--vi-working);
+}
+
 .vi-latest {
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
   font-size: calc(13.5px * var(--z, 1));
@@ -1630,13 +1659,15 @@ body,
   color: #5a5a5f;
 }
 
-/* Status avatar (AgentAvatar.tsx): a baby hand acting out each phase with
-   the agent's coin. Hand keeps brand colors and strikes a pose per status;
-   only the coin tints and moves. */
+/* Status avatar (AgentAvatar.tsx), Suite B minimal coin: the agent's brand
+   coin IS the avatar. Only the coin carries status — green rest, orange
+   spin while thinking, red rock+blink when waiting, unread dot on replied.
+   Idle/replied stay static (perf rule). */
 
 .vi-avatar {
-  width: calc(52px * var(--z, 1));
-  height: calc(34px * var(--z, 1));
+  position: relative;
+  width: calc(24px * var(--z, 1));
+  height: calc(24px * var(--z, 1));
   flex: 0 0 auto;
   display: block;
 }
@@ -1646,10 +1677,6 @@ body,
   height: 100%;
   display: block;
   overflow: visible;
-}
-
-.vi-avatar .ava-coin {
-  transition: transform 0.35s ease;
 }
 
 .vi-avatar.idle .ava-coin-tint,
@@ -1665,59 +1692,64 @@ body,
   color: var(--vi-wait);
 }
 
-/* idle: hand naps flat, coin parked beside the fingertips */
-.vi-avatar.idle .ava-coin {
-  transform: translate(34px, 15px) scale(0.5);
-  opacity: 0.55;
-}
-
-/* thinking: fist pumps, coin tossed off the thumb — spins in the air */
-.vi-avatar.thinking .ava-coin {
-  transform: translate(6px, 0px) scale(0.6);
-}
-
-.vi-avatar.thinking .ava-roll {
-  animation: ava-toss 0.8s cubic-bezier(0.5, 0, 0.5, 1) infinite;
-}
-
-.vi-avatar.thinking .ava-flip {
-  animation: ava-spin 0.8s linear infinite;
+.vi-avatar.thinking .ava-spin {
+  animation: ava-spin 0.9s linear infinite;
   transform-box: fill-box;
   transform-origin: center;
 }
 
-.vi-avatar.thinking .ava-hand {
-  animation: ava-pump 0.8s cubic-bezier(0.5, 0, 0.5, 1) infinite;
-  transform-box: fill-box;
-  transform-origin: 50% 80%;
+.vi-avatar.waiting > svg {
+  animation:
+    ava-rock 0.8s ease-in-out infinite,
+    ava-blink 0.8s steps(2) infinite;
 }
 
-/* waiting: open palm waves hey-hey then rests a beat, coin dropped flat */
-.vi-avatar.waiting .ava-coin {
-  transform: translate(35px, 18px) scale(0.5);
-  animation: ava-blink 0.7s steps(2) infinite;
+/* Unread badge on TURN COMPLETE — cleared by acknowledge-on-view. */
+.vi-unread {
+  position: absolute;
+  top: calc(-2px * var(--z, 1));
+  right: calc(-2px * var(--z, 1));
+  width: calc(8px * var(--z, 1));
+  height: calc(8px * var(--z, 1));
+  border-radius: 50%;
+  background: var(--vi-wait);
+  border: 1.5px solid var(--ink);
 }
 
-.vi-avatar.waiting .ava-hand {
-  animation: ava-wave 1.6s ease-in-out infinite;
-  transform-box: fill-box;
-  transform-origin: 50% 96%;
+/* Full-view header line: coin · name · [STATUS] · latest-turn conclusion. */
+.vi-status-name {
+  flex: 0 0 auto;
+  font-family: var(--font-pixel);
+  font-size: calc(9px * var(--z, 1));
+  letter-spacing: 0.06em;
 }
 
-/* replied: the V "yes!" holds the coin on its fingertips — static pose;
-   only thinking/waiting animate (perf: 11 idle cards must not composite) */
-.vi-avatar.replied .ava-coin {
-  transform: translate(6px, 7.5px) scale(0.6);
+.vi-status-name.idle,
+.vi-status-name.replied {
+  color: var(--vi-done);
 }
 
-@keyframes ava-toss {
-  0%,
-  100% {
-    transform: translate(0, 4px);
-  }
-  50% {
-    transform: translate(0, -4.5px);
-  }
+.vi-status-name.thinking {
+  color: var(--vi-working);
+}
+
+.vi-status-name.waiting {
+  color: var(--vi-wait);
+}
+
+.vi-head.full .vi-title {
+  flex: 0 0 auto;
+}
+
+.vi-conclusion {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--z, 1));
+  color: var(--vi-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 @keyframes ava-spin {
@@ -1738,37 +1770,13 @@ body,
   }
 }
 
-@keyframes ava-pump {
+@keyframes ava-rock {
   0%,
   100% {
-    transform: rotate(2deg) translateY(0.6px);
+    transform: rotate(-11deg);
   }
   50% {
-    transform: rotate(-3.5deg) translateY(-1.2px);
-  }
-}
-
-@keyframes ava-wave {
-  0% {
-    transform: rotate(0);
-  }
-  10% {
-    transform: rotate(-15deg);
-  }
-  22% {
-    transform: rotate(13deg);
-  }
-  34% {
-    transform: rotate(-15deg);
-  }
-  46% {
     transform: rotate(11deg);
-  }
-  58% {
-    transform: rotate(0);
-  }
-  100% {
-    transform: rotate(0);
   }
 }
 
@@ -1871,19 +1879,6 @@ body,
   height: 12px;
   vertical-align: -2.5px;
 }
-
-.popout-agent {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-}
-
-.popout-agent .vi-sprite {
-  width: 22px;
-  height: 16px;
-  color: var(--ink);
-}
-
 
 /* ---- mini tile (below visual range) ---- */
 
@@ -2148,6 +2143,147 @@ body.cookrew-mobile .cookrew-minimap {
 .vi-chip.fork {
   background: #2a3a4a;
   color: #9fd0ff;
+}
+
+/* ---- git visuals (Forge gitInfo shape) ----
+   One structural unit — .cr-git — reused on dark agent cards AND cream
+   workspace-dir rows; theme-aware via the tokens below. Fresco owns the CSS;
+   Velvet mounts the markup (see workspace-v2-spec note). Structure:
+     <span class="cr-git">                            wrapper (hidden when !isRepo)
+       <span class="cr-git-branch"><CrIcon name="fork"/> main</span>
+       <span class="cr-git-dirty" />                     shown only when dirty
+       <span class="cr-git-track">                       omit when ahead==0 && behind==0
+         <span class="cr-git-ahead">2</span>             omit when ahead==0
+         <span class="cr-git-behind">1</span>            omit when behind==0
+       </span>
+     </span>
+   The ahead/behind arrows are CSS-drawn (::before triangles) so no icon
+   dependency — the span holds only the number. */
+
+.cr-git {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(5px * var(--z, 1));
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+/* Branch name pill — git branch icon + name, on the vi-chip base. */
+.cr-git-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(3px * var(--z, 1));
+  font-family: var(--font-mono);
+  font-size: calc(9.5px * var(--z, 1));
+  font-weight: 600;
+  color: #b9e6a8;
+  background: #24331f;
+  border-radius: calc(5px * var(--z, 1));
+  padding: calc(2px * var(--z, 1)) calc(7px * var(--z, 1));
+  max-width: calc(140px * var(--z, 1));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+}
+
+.cr-git-branch .cr-icon {
+  width: calc(10px * var(--z, 1));
+  height: calc(10px * var(--z, 1));
+  flex: 0 0 auto;
+  opacity: 0.85;
+}
+
+/* Uncommitted-changes dot — amber, ink-rimmed so it reads on either theme. */
+.cr-git-dirty {
+  width: calc(7px * var(--z, 1));
+  height: calc(7px * var(--z, 1));
+  border-radius: 50%;
+  background: var(--amber);
+  border: 1px solid var(--ink);
+  flex: 0 0 auto;
+}
+
+/* Ahead/behind badge — ↑ahead ↓behind, muted mono. */
+.cr-git-track {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(4px * var(--z, 1));
+  font-family: var(--font-mono);
+  font-size: calc(9px * var(--z, 1));
+  font-weight: 600;
+  color: #98989d;
+  flex: 0 0 auto;
+}
+
+.cr-git-ahead,
+.cr-git-behind {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(2px * var(--z, 1));
+}
+
+.cr-git-ahead::before,
+.cr-git-behind::before {
+  content: '';
+  width: 0;
+  height: 0;
+  border-left: calc(3px * var(--z, 1)) solid transparent;
+  border-right: calc(3px * var(--z, 1)) solid transparent;
+}
+
+/* ▲ ahead — commits to push */
+.cr-git-ahead {
+  color: #6bbe58;
+}
+
+.cr-git-ahead::before {
+  border-bottom: calc(5px * var(--z, 1)) solid currentColor;
+}
+
+/* ▼ behind — commits to pull */
+.cr-git-behind {
+  color: #e0975a;
+}
+
+.cr-git-behind::before {
+  border-top: calc(5px * var(--z, 1)) solid currentColor;
+}
+
+/* Cream chrome (workspace directory rows in the switcher): swap the dark
+   pill for ink-on-cream, --z is 1 here so sizes are static. */
+.cr-ws-item .cr-git-branch,
+.cr-git.on-cream .cr-git-branch {
+  color: var(--ink-soft);
+  background: var(--cream-md);
+  border: 1.5px solid var(--line-soft);
+  font-size: 9px;
+  padding: 1px 5px;
+}
+
+.cr-ws-item .cr-git-branch .cr-icon,
+.cr-git.on-cream .cr-git-branch .cr-icon {
+  width: 9px;
+  height: 9px;
+}
+
+.cr-ws-item .cr-git-dirty,
+.cr-git.on-cream .cr-git-dirty {
+  width: 6px;
+  height: 6px;
+  background: var(--amber-deep);
+}
+
+.cr-ws-item .cr-git-track,
+.cr-git.on-cream .cr-git-track {
+  color: var(--muted);
+  font-size: 8.5px;
+}
+
+.cr-ws-item .cr-git-track .cr-icon,
+.cr-git.on-cream .cr-git-track .cr-icon {
+  width: 8px;
+  height: 8px;
 }
 
 .vi-pager {

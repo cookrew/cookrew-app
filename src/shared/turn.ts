@@ -20,6 +20,11 @@ export interface TerminalActivity {
   /** Prompt that started the current turn, best-effort echo of typed input. */
   prompt: string | null
   /**
+   * Typed-or-pasted input sitting UNSENT in the agent's input box (cleared
+   * on submit) — lets cards render a dim "typing:" line. Null when empty.
+   */
+  pendingInput: string | null
+  /**
    * Summary lines: the live thinking tail while phase is 'thinking' (or the
    * pending question while 'waiting'), otherwise a cleaned viewport tail.
    */
@@ -54,6 +59,12 @@ export interface TurnRecord {
   title?: string
   startedAt: number
   endedAt: number
+  /**
+   * Epoch ms when the user viewed this result (acknowledge-on-view). Absent
+   * = unread: a restart restores the LAST record's unread state as
+   * TURN COMPLETE instead of silently dropping it to READY.
+   */
+  seenAt?: number
 }
 
 /** Cap on retained turn records per terminal (oldest dropped first). */
@@ -141,11 +152,30 @@ export interface PromptFeed {
   submitted: string[]
   /** True while a bracketed paste is open (ESC[200~ seen, no ESC[201~ yet). */
   inPaste: boolean
+  /**
+   * Trailing bytes withheld because they might be the START of a paste
+   * marker split across chunks — prepend to the next feed. Without this, a
+   * split ESC[200~ degrades pasted text to "typed" and a CR inside it
+   * submits a phantom prompt (attachment-path mispair defect).
+   */
+  held: string
 }
 
 /** Bracketed-paste markers, matched BEFORE the CSI strip would eat them. */
 const PASTE_OPEN = '\x1b[200~'
 const PASTE_CLOSE = '\x1b[201~'
+
+/**
+ * Length of the longest PROPER prefix of a paste marker that `data` ends
+ * with (both markers share '\x1b[20'). 0 when the tail can't be a marker.
+ */
+function trailingMarkerPrefixLen(data: string): number {
+  for (let len = Math.min(5, data.length); len >= 1; len -= 1) {
+    const tail = data.slice(data.length - len)
+    if (PASTE_OPEN.startsWith(tail) || PASTE_CLOSE.startsWith(tail)) return len
+  }
+  return 0
+}
 
 /**
  * Bytes inside a bracketed paste are literal prompt text, exactly as agent
@@ -192,11 +222,20 @@ function feedTypedSegment(
  * `inPaste` carries the open-paste state across chunks, since the close
  * marker may arrive in a different chunk than the pasted content.
  */
-export function feedPromptBuffer(buffer: string, data: string, inPaste = false): PromptFeed {
+export function feedPromptBuffer(
+  buffer: string,
+  data: string,
+  inPaste = false,
+  held = ''
+): PromptFeed {
   const submitted: string[] = []
   let line = buffer
   let pasting = inPaste
-  let rest = data
+  let rest = held + data
+  // Withhold a trailing partial marker until the next chunk completes it.
+  const partial = trailingMarkerPrefixLen(rest)
+  const heldOut = partial > 0 ? rest.slice(rest.length - partial) : ''
+  if (partial > 0) rest = rest.slice(0, rest.length - partial)
   while (rest.length > 0) {
     const marker = pasting ? PASTE_CLOSE : PASTE_OPEN
     const at = rest.indexOf(marker)
@@ -211,7 +250,7 @@ export function feedPromptBuffer(buffer: string, data: string, inPaste = false):
     }
     if (at !== -1) pasting = !pasting
   }
-  return { buffer: line, submitted, inPaste: pasting }
+  return { buffer: line, submitted, inPaste: pasting, held: heldOut }
 }
 
 /** Lines that are pure TUI chrome: box drawing, rules, empty input boxes. */
