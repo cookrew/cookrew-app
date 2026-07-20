@@ -13,8 +13,11 @@ import type { TurnRecord } from '../src/shared/turn'
 import { claudeProjectSlug } from '../src/shared/claude-fork'
 import {
   TeamStore,
+  applyWorktreeRemap,
   planTeamFork,
+  planWorktrees,
   resolveTerminalContext,
+  resolveWorktrees,
   type TeamForkSource
 } from '../src/main/teams'
 
@@ -68,10 +71,15 @@ const ROLE: AgentRole = {
   savedAt: T0
 }
 
-function source(nodes: CanvasNode[], turnsById: Record<string, TurnRecord[]> = {}): TeamForkSource {
+function source(
+  nodes: CanvasNode[],
+  turnsById: Record<string, TurnRecord[]> = {},
+  dirs: string[] = ['/work/repo']
+): TeamForkSource {
   return {
     name: 'Cookrew Dev',
-    dir: '/work/repo',
+    dir: dirs[0],
+    dirs,
     nodes,
     connections: [],
     turnsOf: (id) => turnsById[id] ?? [],
@@ -96,6 +104,7 @@ describe('TeamStore', () => {
     return {
       name: 'Cookrew Dev',
       dir: '/work/repo',
+      dirs: ['/work/repo'],
       nodes: [terminal('a'), note('n1')],
       connections: [{ id: 'c1', a: 'a', b: 'n1' }]
     }
@@ -266,5 +275,87 @@ describe('resolveTerminalContext', () => {
     expect(ctx.claudeSessionId).not.toBeNull()
     expect(ctx.inject).toContain('branched after its turn 1')
     expect(ctx.inject).not.toContain('── Turn 1 ──')
+  })
+})
+
+describe('team fork by directory + worktree (GOAL 3/5)', () => {
+  it('lands a forked terminal in its chosen targetDir', () => {
+    const src = source([terminal('a', { cwd: '/work/repo' })], { a: [turn(1)] }, ['/work/repo', '/work/api'])
+    const plan = planTeamFork(
+      src,
+      { nodeIds: ['a'], choices: [{ nodeId: 'a', mode: 'latest', targetDir: '/work/api' }] },
+      planDeps()
+    )
+    expect(plan.terminals[0].targetDir).toBe('/work/api')
+    expect((plan.nodes[0] as TerminalNodeData).cwd).toBe('/work/api')
+    expect(plan.dirs).toEqual(['/work/repo', '/work/api'])
+  })
+
+  it('defaults a terminal to its source cwd, else the primary', () => {
+    const src = source([terminal('a', { cwd: '/work/api' })], {}, ['/work/repo', '/work/api'])
+    const keep = planTeamFork(src, { nodeIds: ['a'], choices: [] }, planDeps())
+    expect(keep.terminals[0].targetDir).toBe('/work/api')
+
+    const src2 = source([terminal('b', { cwd: '/gone' })], {}, ['/work/repo'])
+    const snap = planTeamFork(src2, { nodeIds: ['b'], choices: [] }, planDeps())
+    expect(snap.terminals[0].targetDir).toBe('/work/repo')
+  })
+
+  it('overrides the forked workspace dir set from spec.dirs', () => {
+    const src = source([terminal('a')], {}, ['/work/repo'])
+    const plan = planTeamFork(
+      src,
+      { nodeIds: ['a'], choices: [], dirs: ['/work/repo', '/extra'] },
+      planDeps()
+    )
+    expect(plan.dirs).toEqual(['/work/repo', '/extra'])
+  })
+
+  it('planWorktrees only targets repo dirs when enabled', () => {
+    const isRepo = (d: string): boolean => d === '/work/repo'
+    const on = planWorktrees(['/work/repo', '/work/docs'], isRepo, {
+      enabled: true,
+      worktreeRoot: '/wt',
+      branch: 'cookrew/fork'
+    })
+    expect(on).toHaveLength(1)
+    expect(on[0].repoDir).toBe('/work/repo')
+    expect(on[0].worktreePath).toBe('/wt/repo')
+    expect(planWorktrees(['/work/repo'], isRepo, { enabled: false, worktreeRoot: '/wt', branch: 'b' })).toEqual([])
+  })
+
+  it('resolveWorktrees remaps successful adds and keeps failures in place', async () => {
+    const api = {
+      gitInfo: async (dir: string) => ({
+        isRepo: dir !== '/plain',
+        root: dir,
+        branch: 'main',
+        dirty: false,
+        ahead: 0,
+        behind: 0
+      }),
+      addWorktree: async (repoDir: string, worktreePath: string) =>
+        repoDir === '/work/bad'
+          ? ({ ok: false as const, error: 'boom' })
+          : ({ ok: true as const, path: worktreePath })
+    }
+    const { remap, errors } = await resolveWorktrees(api, ['/work/repo', '/work/bad', '/plain'], {
+      enabled: true,
+      worktreeRoot: '/wt',
+      branch: 'cookrew/fork'
+    })
+    expect(remap.get('/work/repo')).toBe('/wt/repo')
+    expect(remap.has('/work/bad')).toBe(false)
+    expect(remap.has('/plain')).toBe(false)
+    expect(errors[0]).toContain('/work/bad')
+  })
+
+  it('applyWorktreeRemap repoints dirs and terminal cwds', () => {
+    const src = source([terminal('a', { cwd: '/work/repo' })], { a: [turn(1)] }, ['/work/repo'])
+    const plan = planTeamFork(src, { nodeIds: ['a'], choices: [] }, planDeps())
+    const remapped = applyWorktreeRemap(plan, new Map([['/work/repo', '/wt/repo']]))
+    expect(remapped.dirs).toEqual(['/wt/repo'])
+    expect((remapped.nodes[0] as TerminalNodeData).cwd).toBe('/wt/repo')
+    expect(remapped.terminals[0].targetDir).toBe('/wt/repo')
   })
 })

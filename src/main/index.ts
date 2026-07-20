@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
 import path from 'node:path'
+import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './store'
@@ -27,6 +28,7 @@ import { claudeSessionFile, claudeSpawnCommand } from './claude-fork'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
 import { TeamStore, forkTeam } from './teams'
+import { GitInfoCache, addWorktree } from './git'
 import { buildRoleBootMessage } from '../shared/fork'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
 
@@ -43,6 +45,7 @@ const routines = new RoutineScheduler(store, ptys)
 const voice = new VoiceEngine()
 const roles = new RoleStore()
 const teams = new TeamStore()
+const gitCache = new GitInfoCache()
 let mainWindow: BrowserWindow | null = null
 
 /**
@@ -134,6 +137,42 @@ function switchWorkspace(nameOrId: string): WorkspaceMeta {
   return store.switchWorkspace(meta.id)
 }
 
+function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
+  const meta =
+    store.list().workspaces.find((w) => w.id === nameOrId) ?? store.metaByName(nameOrId)
+  if (!meta) throw new Error(`Workspace '${nameOrId}' not found`)
+  store.removeWorkspace(meta.id) // switches away first if active (fires 'switch')
+  return store.list()
+}
+
+// ---- workspace directories + per-terminal cwd (workspace v2) ----
+
+function addWorkspaceDir(id: string, dir: string): ReturnType<WorkspaceStore['list']> {
+  return store.addWorkspaceDir(id, dir)
+}
+
+function removeWorkspaceDir(id: string, dir: string): ReturnType<WorkspaceStore['list']> {
+  return store.removeWorkspaceDir(id, dir)
+}
+
+function setPrimaryDir(id: string, dir: string): ReturnType<WorkspaceStore['list']> {
+  return store.setPrimaryDir(id, dir)
+}
+
+/**
+ * Repoint a terminal to another workspace directory and respawn its PTY
+ * there — a running process can't change cwd, so the tmux session is killed
+ * and recreated in the new dir (turn history survives; it's keyed by id).
+ */
+function setTerminalCwd(nodeId: string, dir: string): CanvasNode {
+  const node = store.setTerminalCwd(nodeId, dir)
+  sessionSync.unwatch(nodeId)
+  turns.untrack(nodeId)
+  ptys.kill(nodeId)
+  spawnTracked(node)
+  return node
+}
+
 // ---- node operations (shared by renderer IPC and the mobile HTTP API) ----
 
 function addNode(node: CanvasNode): CanvasNode {
@@ -206,9 +245,18 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
 
 // ---- team fork / save + roles (spec: team-fork-roles v1, Forge lane) ----
 
-function teamFork(spec: TeamForkSpec): WorkspaceMeta {
+function teamFork(spec: TeamForkSpec): Promise<WorkspaceMeta> {
   return forkTeam(
-    { store, turns, roles, teams, ptys, switchWorkspace: (id) => void switchWorkspace(id) },
+    {
+      store,
+      turns,
+      roles,
+      teams,
+      ptys,
+      switchWorkspace: (id) => void switchWorkspace(id),
+      git: { gitInfo: (dir) => gitCache.info(dir), addWorktree },
+      worktreeRoot: path.join(homedir(), '.cookrew', 'worktrees')
+    },
     spec
   )
 }
@@ -407,6 +455,12 @@ app.whenReady().then(() => {
     listWorkspaces,
     createWorkspace,
     switchWorkspace,
+    removeWorkspace,
+    addWorkspaceDir,
+    removeWorkspaceDir,
+    setPrimaryDir,
+    setTerminalCwd,
+    gitInfo: (dir: string) => gitCache.info(dir),
     teamFork,
     teamSave,
     teamList: () => teams.list(),
@@ -438,6 +492,12 @@ app.whenReady().then(() => {
         store.renameWorkspace(id, name)
         return store.list()
       },
+      removeWorkspace,
+      addWorkspaceDir,
+      removeWorkspaceDir,
+      setPrimaryDir,
+      setTerminalCwd,
+      gitInfo: (dir: string) => gitCache.info(dir),
       teamFork,
       teamSave,
       teamList: () => teams.list(),
@@ -525,6 +585,22 @@ function registerIpc(): void {
     store.renameWorkspace(id, name)
     return store.list()
   })
+  // Workspace v2: remove + multi-directory + per-terminal cwd + git.
+  ipcMain.handle('workspace:remove', (_e, id: string) => removeWorkspace(id))
+  ipcMain.handle('workspace:dir:add', (_e, id: string, dir: string) => addWorkspaceDir(id, dir))
+  ipcMain.handle('workspace:dir:remove', (_e, id: string, dir: string) =>
+    removeWorkspaceDir(id, dir)
+  )
+  ipcMain.handle('workspace:dir:setPrimary', (_e, id: string, dir: string) =>
+    setPrimaryDir(id, dir)
+  )
+  ipcMain.handle('terminal:setCwd', (_e, nodeId: string, dir: string) => setTerminalCwd(nodeId, dir))
+  ipcMain.handle('git:info', (_e, dir: string) => gitCache.info(dir))
+  ipcMain.handle('dir:pick', async () => {
+    if (!mainWindow) return null
+    const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
+    return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
+  })
 
   // Turn/summary activity for the canvas cards.
   turns.on('activity', (activity) => {
@@ -533,6 +609,10 @@ function registerIpc(): void {
     }
   })
   ipcMain.handle('activity:list', () => turns.list())
+
+  // Acknowledge-on-view: the renderer reports "user is viewing this
+  // terminal's result" (overlay mount / phone popout) — fire-and-forget.
+  ipcMain.on('turn:seen', (_e, terminalId: string) => turns.seen(terminalId))
 
   // Turn history + fork-from-turn for the canvas cards.
   ipcMain.handle('turn:history', (_e, terminalId: string) => turns.history(terminalId))
@@ -575,6 +655,12 @@ function registerIpc(): void {
     })
     return result.canceled ? [] : result.filePaths
   })
+
+  // 📎 attach: save raw bytes (a pasted clipboard image) and return its path.
+  // Same store + 20MB cap + name sanitize as phone uploads.
+  ipcMain.handle('attach:save', (_e, name: string, bytes: Uint8Array) =>
+    saveAttachment(defaultAttachmentsDir(), name, Buffer.from(bytes))
+  )
 
   // Terminal stream bridging renderer xterm <-> PTY
   ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {

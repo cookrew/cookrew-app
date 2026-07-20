@@ -3,10 +3,12 @@ import { existsSync, unlinkSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import {
   AgentRole,
+  CanvasNode,
   CliRequest,
   CliResponse,
   DEFAULT_NOTE_SIZE,
   DEFAULT_TERMINAL_SIZE,
+  GitInfo,
   NoteNodeData,
   TeamForkSpec,
   TeamMeta,
@@ -46,8 +48,15 @@ export interface SocketServerDeps {
   listWorkspaces: () => WorkspaceList
   createWorkspace: (name: string, dir: string) => WorkspaceMeta
   switchWorkspace: (nameOrId: string) => WorkspaceMeta
+  /** Workspace v2: remove + multi-directory + per-terminal cwd + git. */
+  removeWorkspace: (nameOrId: string) => WorkspaceList
+  addWorkspaceDir: (id: string, dir: string) => WorkspaceList
+  removeWorkspaceDir: (id: string, dir: string) => WorkspaceList
+  setPrimaryDir: (id: string, dir: string) => WorkspaceList
+  setTerminalCwd: (nodeId: string, dir: string) => CanvasNode
+  gitInfo: (dir: string) => Promise<GitInfo>
   /** Team fork/save + roles (spec note team-fork-roles-v1). */
-  teamFork: (spec: TeamForkSpec) => WorkspaceMeta
+  teamFork: (spec: TeamForkSpec) => Promise<WorkspaceMeta>
   teamSave: (name?: string) => TeamMeta
   teamList: () => TeamMeta[]
   roleSave: (input: { nodeId: string; name: string; rolePrompt: string }) => AgentRole
@@ -155,6 +164,10 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
       return cmdTeam(request, deps)
     case 'role':
       return cmdRole(request, deps)
+    case 'terminal':
+      return cmdTerminalCwd(request, deps)
+    case 'git':
+      return cmdGit(request, deps)
     case 'app-shot':
       return deps.captureWindow()
     case 'ui':
@@ -415,10 +428,14 @@ function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): string {
   if (sub === 'list' || sub === undefined) {
     const { workspaces, activeId } = deps.listWorkspaces()
     return workspaces
-      .map((w) => `${w.id === activeId ? '* ' : '  '}${w.icon} ${w.name}  —  ${w.dir}`)
+      .map((w) => {
+        const extra = w.dirs.length > 1 ? ` (+${w.dirs.length - 1} more)` : ''
+        return `${w.id === activeId ? '* ' : '  '}${w.icon} ${w.name}  —  ${w.dir}${extra}`
+      })
       .join('\n')
   }
-  // create/switch restructure the canvas, so gate them behind Orch.
+  if (sub === 'dir') return cmdWorkspaceDir(request, deps)
+  // create/switch/remove restructure the canvas, so gate them behind Orch.
   requireOrch(request, deps)
   switch (sub) {
     case 'create': {
@@ -432,9 +449,65 @@ function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): string {
       const meta = deps.switchWorkspace(name)
       return `Switched to workspace "${meta.name}"`
     }
+    case 'remove': {
+      if (!name) throw new Error('Usage: cookrew workspace remove "Name"')
+      deps.removeWorkspace(name)
+      return `Removed workspace "${name}"`
+    }
     default:
-      throw new Error('Usage: cookrew workspace list|create|switch ...')
+      throw new Error('Usage: cookrew workspace list|create|switch|remove|dir ...')
   }
+}
+
+/** Directory subcommands operate on the ACTIVE workspace. */
+function cmdWorkspaceDir(request: CliRequest, deps: SocketServerDeps): string {
+  const [, action, dirPath] = request.args
+  const { activeId } = deps.listWorkspaces()
+  if (action === 'list' || action === undefined) {
+    const ws = deps.listWorkspaces().workspaces.find((w) => w.id === activeId)
+    return (ws?.dirs ?? [])
+      .map((d, i) => `${i === 0 ? '* ' : '  '}${d}`)
+      .join('\n')
+  }
+  requireOrch(request, deps)
+  switch (action) {
+    case 'add':
+      if (!dirPath) throw new Error('Usage: cookrew workspace dir add PATH')
+      deps.addWorkspaceDir(activeId, dirPath)
+      return `Added directory ${dirPath}`
+    case 'remove':
+      if (!dirPath) throw new Error('Usage: cookrew workspace dir remove PATH')
+      deps.removeWorkspaceDir(activeId, dirPath)
+      return `Removed directory ${dirPath}`
+    case 'primary':
+      if (!dirPath) throw new Error('Usage: cookrew workspace dir primary PATH')
+      deps.setPrimaryDir(activeId, dirPath)
+      return `Primary directory is now ${dirPath}`
+    default:
+      throw new Error('Usage: cookrew workspace dir list|add|remove|primary ...')
+  }
+}
+
+function cmdTerminalCwd(request: CliRequest, deps: SocketServerDeps): string {
+  const dir = request.args[1]
+  if (!dir) throw new Error('Usage: cookrew terminal cwd PATH')
+  const me = self(request, deps)
+  deps.setTerminalCwd(me.id, dir)
+  return `Terminal cwd set to ${dir} (respawned)`
+}
+
+async function cmdGit(request: CliRequest, deps: SocketServerDeps): Promise<string> {
+  const me = self(request, deps)
+  const info = await deps.gitInfo(me.cwd)
+  if (!info.isRepo) return `${me.cwd} is not a git repository`
+  const state = [
+    info.dirty ? 'dirty' : 'clean',
+    info.ahead ? `↑${info.ahead}` : '',
+    info.behind ? `↓${info.behind}` : ''
+  ]
+    .filter(Boolean)
+    .join(' ')
+  return `${info.branch ?? 'detached'} — ${state}  (${info.root})`
 }
 
 function cmdMobile(deps: SocketServerDeps): string {
@@ -506,7 +579,7 @@ function cmdRoutine(request: CliRequest, deps: SocketServerDeps): string {
   }
 }
 
-function cmdTeam(request: CliRequest, deps: SocketServerDeps): string {
+async function cmdTeam(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const [sub, name] = request.args
   switch (sub) {
     case 'list': {
@@ -534,7 +607,7 @@ function cmdTeam(request: CliRequest, deps: SocketServerDeps): string {
         choices: [],
         fromSavedTeam: request.flags.from ? String(request.flags.from) : undefined
       }
-      const meta = deps.teamFork(spec)
+      const meta = await deps.teamFork(spec)
       return `Forked team into workspace "${meta.name}" and switched to it`
     }
     default:

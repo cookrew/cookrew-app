@@ -52,6 +52,7 @@ function demoWorkspace(): WorkspaceState {
   return {
     name: 'Cookrew Demo',
     dir: '~',
+    dirs: ['~'],
     nodes: [conductor, note, browser],
     connections: [
       { id: 'demo-c1', a: 'demo-conductor', b: 'demo-note' },
@@ -68,7 +69,9 @@ const DEMO_RESPONSES: Record<string, string> = {
 
 export function createDemoApi(): CookrewApi {
   // In-memory workspace registry so the demo can switch canvases too.
-  const metas: WorkspaceMeta[] = [{ id: 'demo-ws', name: 'Cookrew Demo', dir: '~', icon: '🗂' }]
+  const metas: WorkspaceMeta[] = [
+    { id: 'demo-ws', name: 'Cookrew Demo', dir: '~', dirs: ['~'], icon: '🗂' }
+  ]
   const states = new Map<string, WorkspaceState>([['demo-ws', demoWorkspace()]])
   let activeId = 'demo-ws'
   let state = states.get(activeId)!
@@ -96,14 +99,22 @@ export function createDemoApi(): CookrewApi {
     },
     listWorkspaces: () => Promise.resolve({ workspaces: metas, activeId }),
     createWorkspace: (name, dir) => {
+      const wsDir = dir.trim() || '~'
       const meta: WorkspaceMeta = {
         id: `demo-ws-${Date.now()}`,
         name: uniqueName(name.trim() || 'Workspace', metas.map((m) => m.name)),
-        dir: dir.trim() || '~',
+        dir: wsDir,
+        dirs: [wsDir],
         icon: '🗂'
       }
       metas.push(meta)
-      states.set(meta.id, { name: meta.name, dir: meta.dir, nodes: [], connections: [] })
+      states.set(meta.id, {
+        name: meta.name,
+        dir: meta.dir,
+        dirs: [wsDir],
+        nodes: [],
+        connections: []
+      })
       states.set(activeId, state)
       activeId = meta.id
       broadcast(states.get(activeId)!)
@@ -128,6 +139,15 @@ export function createDemoApi(): CookrewApi {
       }
       return Promise.resolve({ workspaces: metas, activeId })
     },
+    // Workspace v2 stubs: the demo has one in-memory dir, no git, no picker.
+    removeWorkspace: () => Promise.resolve({ workspaces: metas, activeId }),
+    addWorkspaceDir: () => Promise.resolve({ workspaces: metas, activeId }),
+    removeWorkspaceDir: () => Promise.resolve({ workspaces: metas, activeId }),
+    setPrimaryDir: () => Promise.resolve({ workspaces: metas, activeId }),
+    setTerminalCwd: (nodeId) =>
+      Promise.resolve(state.nodes.find((n) => n.id === nodeId) as CanvasNode),
+    pickDir: () => Promise.resolve(null),
+    gitInfo: () => Promise.resolve(null),
     onWorkspaceList: (cb) => {
       wsListeners.add(cb)
       return () => wsListeners.delete(cb)
@@ -204,6 +224,7 @@ export function createDemoApi(): CookrewApi {
 
     // No filesystem in the demo tab — attachments are a no-op.
     attachFiles: () => Promise.resolve([]),
+    saveAttachmentBytes: () => Promise.resolve(''),
     pickFiles: () => Promise.resolve([]),
 
     ptyInput: (terminalId, data) => {
@@ -234,6 +255,7 @@ export function createDemoApi(): CookrewApi {
     },
     ptyResize: () => undefined,
     ptyJump: () => undefined,
+    turnSeen: () => undefined,
     ptyAttach: (terminalId, onData) => {
       ptyListeners.set(terminalId, onData)
       setTimeout(() => {

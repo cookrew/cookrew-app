@@ -5,6 +5,7 @@ import type { TurnTracker } from './turn-tracker'
 import type {
   AgentRole,
   CanvasNode,
+  GitInfo,
   TeamForkSpec,
   TeamMeta,
   TerminalNodeData,
@@ -28,14 +29,22 @@ export interface MobileOps {
     preset: string
     position: { x: number; y: number }
     orch: boolean
+    roleName?: string
   }) => CanvasNode
   forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData
   listWorkspaces: () => WorkspaceList
   createWorkspace: (name: string, dir: string) => WorkspaceMeta
   switchWorkspace: (id: string) => WorkspaceMeta
   renameWorkspace: (id: string, name: string) => WorkspaceList
+  /** Workspace v2: remove workspace + multi-dir + per-terminal cwd + git. */
+  removeWorkspace: (id: string) => WorkspaceList
+  addWorkspaceDir: (id: string, dir: string) => WorkspaceList
+  removeWorkspaceDir: (id: string, dir: string) => WorkspaceList
+  setPrimaryDir: (id: string, dir: string) => WorkspaceList
+  setTerminalCwd: (nodeId: string, dir: string) => CanvasNode
+  gitInfo: (dir: string) => Promise<GitInfo>
   /** Team fork/save + roles (spec note team-fork-roles-v1). */
-  teamFork: (spec: TeamForkSpec) => WorkspaceMeta
+  teamFork: (spec: TeamForkSpec) => Promise<WorkspaceMeta>
   teamSave: (name?: string) => TeamMeta
   teamList: () => TeamMeta[]
   roleSave: (input: { nodeId: string; name: string; rolePrompt: string }) => AgentRole
@@ -57,6 +66,31 @@ export interface MobileApiDeps {
 const ATTACH_BODY_LIMIT = 30_000_000
 
 /**
+ * Enrich a workspace state with git info for the phone: every terminal node
+ * gains `git` (its cwd's GitInfo) and the payload gains `dirsGit` (per
+ * workspace dir). All dirs are looked up once through the cache, so the
+ * added round-trips are coalesced and cheap.
+ */
+async function enrichStateWithGit(
+  state: WorkspaceState,
+  gitInfo: (dir: string) => Promise<GitInfo>
+): Promise<WorkspaceState & { dirsGit: Record<string, GitInfo> }> {
+  const dirs = new Set<string>(state.dirs)
+  for (const n of state.nodes) if (n.kind === 'terminal') dirs.add(n.cwd)
+  const entries = await Promise.all(
+    [...dirs].map(async (dir) => [dir, await gitInfo(dir)] as const)
+  )
+  const byDir = new Map(entries)
+  const nodes = state.nodes.map((n) =>
+    n.kind === 'terminal' ? { ...n, git: byDir.get(n.cwd) ?? null } : n
+  )
+  const dirsGit = Object.fromEntries(
+    state.dirs.map((d) => [d, byDir.get(d) as GitInfo] as const)
+  )
+  return { ...state, nodes, dirsGit }
+}
+
+/**
  * HTTP/SSE analogue of the renderer's IPC bridge, consumed by the desktop
  * renderer bundle running in a phone browser (remote-api.ts). Returns true
  * when the request was handled.
@@ -72,7 +106,9 @@ export async function handleMobileApi(
   const p = url.pathname
 
   if (method === 'GET' && p === '/api/workspace') {
-    respondJson(response, 200, store.state)
+    // Embed git per terminal (node.git) and per workspace dir (dirsGit) so
+    // phone cards show branch/dirty without a round-trip (Fresco GitChip).
+    respondJson(response, 200, await enrichStateWithGit(store.state, ops.gitInfo))
     return true
   }
   if (method === 'GET' && p === '/api/presets') {
@@ -102,6 +138,44 @@ export async function handleMobileApi(
   if (method === 'POST' && p === '/api/workspaces/rename') {
     const body = await readJson<{ id?: string; name?: string }>(request)
     respondJson(response, 200, ops.renameWorkspace(body.id ?? '', body.name ?? ''))
+    return true
+  }
+  // Workspace v2: remove + directory management + git (mobile = text input).
+  const wsMatch = p.match(/^\/api\/workspaces\/([^/]+)$/)
+  if (wsMatch && method === 'DELETE') {
+    try {
+      respondJson(response, 200, ops.removeWorkspace(wsMatch[1]))
+    } catch (error) {
+      respondJson(response, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return true
+  }
+  const wsDirMatch = p.match(/^\/api\/workspaces\/([^/]+)\/dirs$/)
+  if (wsDirMatch && (method === 'POST' || method === 'DELETE')) {
+    const body = await readJson<{ path?: string }>(request)
+    try {
+      const list =
+        method === 'POST'
+          ? ops.addWorkspaceDir(wsDirMatch[1], body.path ?? '')
+          : ops.removeWorkspaceDir(wsDirMatch[1], body.path ?? '')
+      respondJson(response, 200, list)
+    } catch (error) {
+      respondJson(response, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return true
+  }
+  const wsPrimaryMatch = p.match(/^\/api\/workspaces\/([^/]+)\/primary$/)
+  if (wsPrimaryMatch && method === 'POST') {
+    const body = await readJson<{ path?: string }>(request)
+    try {
+      respondJson(response, 200, ops.setPrimaryDir(wsPrimaryMatch[1], body.path ?? ''))
+    } catch (error) {
+      respondJson(response, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return true
+  }
+  if (method === 'GET' && p === '/api/git') {
+    respondJson(response, 200, await ops.gitInfo(url.searchParams.get('dir') ?? ''))
     return true
   }
 
@@ -155,7 +229,7 @@ export async function handleMobileApi(
     const body = await readJson<{ spec?: TeamForkSpec }>(request)
     try {
       if (!body.spec) throw new Error('Missing spec')
-      respondJson(response, 200, ops.teamFork(body.spec))
+      respondJson(response, 200, await ops.teamFork(body.spec))
     } catch (error) {
       respondJson(response, 400, { error: error instanceof Error ? error.message : String(error) })
     }
@@ -218,6 +292,24 @@ export async function handleMobileApi(
   const turnsMatch = p.match(/^\/api\/terminal\/([^/]+)\/turns$/)
   if (turnsMatch && method === 'GET') {
     respondJson(response, 200, turns.history(turnsMatch[1]))
+    return true
+  }
+  // Workspace v2: repoint a terminal's cwd (respawns the pty).
+  const cwdMatch = p.match(/^\/api\/terminal\/([^/]+)\/cwd$/)
+  if (cwdMatch && method === 'POST') {
+    const body = await readJson<{ dir?: string }>(request)
+    try {
+      respondJson(response, 200, ops.setTerminalCwd(cwdMatch[1], body.dir ?? ''))
+    } catch (error) {
+      respondJson(response, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return true
+  }
+  // Acknowledge-on-view: the phone popout counts as viewing the result.
+  const seenMatch = p.match(/^\/api\/terminal\/([^/]+)\/seen$/)
+  if (seenMatch && method === 'POST') {
+    turns.seen(seenMatch[1])
+    respondJson(response, 200, { ok: true })
     return true
   }
   const forkMatch = p.match(/^\/api\/terminal\/([^/]+)\/fork$/)
