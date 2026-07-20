@@ -250,6 +250,10 @@ export function createDemoApi(): CookrewApi {
     // The demo shell has no turn tracking; forking degrades to a plain clone
     // so the canvas interaction still demonstrates the lineage edge.
     listTurns: () => Promise.resolve([]),
+    teamFork: () => Promise.reject(new Error('Team fork needs the desktop app')),
+    teamSave: () => Promise.reject(new Error('Team save needs the desktop app')),
+    teamList: () => Promise.resolve([]),
+    roleList: () => Promise.resolve([]),
     forkTerminal: (sourceId) => {
       const source = state.nodes.find((n) => n.id === sourceId)
       if (!source || source.kind !== 'terminal') {

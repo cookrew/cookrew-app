@@ -2,11 +2,14 @@ import net from 'node:net'
 import { existsSync, unlinkSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import {
+  AgentRole,
   CliRequest,
   CliResponse,
   DEFAULT_NOTE_SIZE,
   DEFAULT_TERMINAL_SIZE,
   NoteNodeData,
+  TeamForkSpec,
+  TeamMeta,
   TerminalNodeData,
   WorkspaceList,
   WorkspaceMeta
@@ -43,6 +46,13 @@ export interface SocketServerDeps {
   listWorkspaces: () => WorkspaceList
   createWorkspace: (name: string, dir: string) => WorkspaceMeta
   switchWorkspace: (nameOrId: string) => WorkspaceMeta
+  /** Team fork/save + roles (spec note team-fork-roles-v1). */
+  teamFork: (spec: TeamForkSpec) => WorkspaceMeta
+  teamSave: (name?: string) => TeamMeta
+  teamList: () => TeamMeta[]
+  roleSave: (input: { nodeId: string; name: string; rolePrompt: string }) => AgentRole
+  roleList: () => AgentRole[]
+  roleDelete: (name: string) => boolean
 }
 
 /**
@@ -141,6 +151,10 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
       return cmdMobile(deps)
     case 'workspace':
       return cmdWorkspace(request, deps)
+    case 'team':
+      return cmdTeam(request, deps)
+    case 'role':
+      return cmdRole(request, deps)
     case 'app-shot':
       return deps.captureWindow()
     case 'ui':
@@ -492,6 +506,79 @@ function cmdRoutine(request: CliRequest, deps: SocketServerDeps): string {
   }
 }
 
+function cmdTeam(request: CliRequest, deps: SocketServerDeps): string {
+  const [sub, name] = request.args
+  switch (sub) {
+    case 'list': {
+      const all = deps.teamList()
+      if (all.length === 0) return "No saved teams yet. Save one with 'cookrew team save [\"Name\"]'."
+      return all
+        .map(
+          (t) =>
+            `  - "${t.name}" — ${t.terminalCount} agents / ${t.nodeCount} nodes, saved ${new Date(t.savedAt).toLocaleString()}`
+        )
+        .join('\n')
+    }
+    case 'save': {
+      requireOrch(request, deps)
+      const meta = deps.teamSave(name)
+      return `Saved team "${meta.name}" (${meta.terminalCount} agents, ${meta.nodeCount} nodes)`
+    }
+    case 'fork': {
+      // CLI forks the whole live canvas at latest turns; fine-grained
+      // selection (per-turn, assembled, roles) lives in the picker UI.
+      requireOrch(request, deps)
+      const spec: TeamForkSpec = {
+        name: request.flags.name ? String(request.flags.name) : undefined,
+        nodeIds: deps.store.state.nodes.map((n) => n.id),
+        choices: [],
+        fromSavedTeam: request.flags.from ? String(request.flags.from) : undefined
+      }
+      const meta = deps.teamFork(spec)
+      return `Forked team into workspace "${meta.name}" and switched to it`
+    }
+    default:
+      throw new Error('Usage: cookrew team save ["Name"] | team list | team fork [--name N] [--from "Saved Team"]')
+  }
+}
+
+function cmdRole(request: CliRequest, deps: SocketServerDeps): string {
+  const [sub, agentName, roleName] = request.args
+  switch (sub) {
+    case 'list': {
+      const all = deps.roleList()
+      if (all.length === 0) return "No saved roles yet. Save one with 'cookrew role save \"Agent\" \"RoleName\" --prompt \"...\"'."
+      return all
+        .map((r) => `  - "${r.name}" (${r.preset}) — ${r.rolePrompt.slice(0, 80)}`)
+        .join('\n')
+    }
+    case 'save': {
+      if (!agentName || !roleName) {
+        throw new Error('Usage: cookrew role save "Agent" "RoleName" --prompt "role instructions"')
+      }
+      const node = deps.store.nodeByName(agentName, 'terminal')
+      if (!node) throw new Error(`No terminal named '${agentName}' on the canvas`)
+      const prompt = request.flags.prompt
+        ? String(request.flags.prompt)
+        : ((node as TerminalNodeData).role ?? '')
+      if (!prompt.trim()) {
+        throw new Error(`Pass --prompt "..." (agent '${agentName}' has no stored role text)`)
+      }
+      const role = deps.roleSave({ nodeId: node.id, name: roleName, rolePrompt: prompt })
+      return `Saved role "${role.name}" (${role.preset})`
+    }
+    case 'delete': {
+      requireOrch(request, deps)
+      if (!agentName) throw new Error('Usage: cookrew role delete "RoleName"')
+      return deps.roleDelete(agentName)
+        ? `Deleted role "${agentName}"`
+        : `No saved role '${agentName}'`
+    }
+    default:
+      throw new Error('Usage: cookrew role save "Agent" "RoleName" --prompt "..." | role list | role delete "RoleName"')
+  }
+}
+
 function cmdPreset(): string {
   return [
     'Available agent presets (use as `--preset "Name"` for `cookrew recruit`):',
@@ -528,4 +615,10 @@ Usage:
   cookrew workspace list                        List workspaces (* = active)
   cookrew workspace create "Name" --dir PATH    (Orch) New workspace + switch to it
   cookrew workspace switch "Name"               (Orch) Switch workspace — stops the current one's terminals
+  cookrew team save ["Name"]                    (Orch) Snapshot the team (nodes, layout, turn histories)
+  cookrew team list                             List saved teams
+  cookrew team fork [--name N] [--from "Team"]  (Orch) Fork the whole canvas (or a saved team) into a new workspace
+  cookrew role save "Agent" "RoleName" --prompt "..."   Save an agent as a reusable role
+  cookrew role list                             List saved roles
+  cookrew role delete "RoleName"                (Orch) Remove a saved role
   cookrew notify "message"                      (Orch) Desktop notification`

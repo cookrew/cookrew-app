@@ -124,9 +124,11 @@ export function forkTerminal(
 /**
  * Wait for the agent TUI to boot (first output, then quiescence), then paste
  * the preamble via bracketed paste — multi-line text must arrive as ONE
- * message, not one submit per newline — and press Enter.
+ * message, not one submit per newline — and press Enter. Shared with the
+ * team-fork engine (teams.ts), which injects per-terminal context the same
+ * way after a workspace switch boots the forked agents.
  */
-async function injectWhenReady(session: PtySession, preamble: string): Promise<void> {
+export async function injectWhenReady(session: PtySession, preamble: string): Promise<void> {
   const startedAt = Date.now()
   await new Promise<void>((resolve) => {
     const timer = setInterval(() => {

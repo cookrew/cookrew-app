@@ -52,6 +52,10 @@ const api = {
   listTurns: (terminalId: string) => ipcRenderer.invoke('turn:history', terminalId),
   forkTerminal: (sourceId: string, turnIndex?: number) =>
     ipcRenderer.invoke('terminal:fork', sourceId, turnIndex),
+  teamFork: (spec: unknown) => ipcRenderer.invoke('team:fork', spec),
+  teamSave: (name?: string) => ipcRenderer.invoke('team:save', name),
+  teamList: () => ipcRenderer.invoke('team:list'),
+  roleList: () => ipcRenderer.invoke('role:list'),
   onTerminalActivity: (cb: (activity: unknown) => void) => {
     const listener = (_e: unknown, activity: unknown): void => cb(activity)
     ipcRenderer.on('terminal:activity', listener)

@@ -11,20 +11,38 @@ import { startSocketServer } from './socket-server'
 import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
 import { startMobileServer, mobileUrls } from './mobile-server'
-import { CanvasNode, DEFAULT_TERMINAL_SIZE, TerminalNodeData, WorkspaceMeta } from '../shared/model'
+import {
+  AgentRole,
+  CanvasNode,
+  DEFAULT_TERMINAL_SIZE,
+  TeamForkSpec,
+  TeamMeta,
+  TerminalNodeData,
+  WorkspaceMeta
+} from '../shared/model'
 import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
-import { forkTerminal as forkTerminalOp } from './fork'
+import { forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
 import { extractSessionFlag, isClaudeCommand } from '../shared/claude-fork'
-import { claudeSpawnCommand } from './claude-fork'
+import { claudeSessionFile, claudeSpawnCommand } from './claude-fork'
+import { SessionTurnSync } from './session-sync'
+import { RoleStore } from './roles'
+import { TeamStore, forkTeam } from './teams'
+import { buildRoleBootMessage } from '../shared/fork'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 
+/** Stored claude session ids must be UUID-shaped before use in paths/commands. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 const store = new WorkspaceStore()
 const ptys = new PtyManager()
 const turns = new TurnTracker(summarizeTurn, new TurnStore())
+const sessionSync = new SessionTurnSync(turns)
 const routines = new RoutineScheduler(store, ptys)
 const voice = new VoiceEngine()
+const roles = new RoleStore()
+const teams = new TeamStore()
 let mainWindow: BrowserWindow | null = null
 
 /**
@@ -47,18 +65,30 @@ function spawnTracked(t: {
   const command = upgraded ?? t.command
   if (upgraded) store.updateNode(t.id, { command })
   let effective = command
+  let boundSessionId: string | null = null
   if (isClaudeCommand(command)) {
     // Bind every Claude terminal to a known session id (adopting one already
     // baked into an older fork command) so session-file features — native
     // fork, resume after a dead tmux session — never guess which session
     // file is this terminal's. tmux reuses live sessions, so the effective
     // command only matters when the terminal actually (re)boots.
-    const sessionId = t.claudeSessionId ?? extractSessionFlag(command) ?? randomUUID()
+    // Stored ids are validated as UUIDs: a non-UUID value (e.g. planted via
+    // the unauthenticated node-update endpoint) would otherwise reach both
+    // the spawn command and session-file paths.
+    const stored = t.claudeSessionId && UUID_RE.test(t.claudeSessionId) ? t.claudeSessionId : null
+    const sessionId = stored ?? extractSessionFlag(command) ?? randomUUID()
     if (t.claudeSessionId !== sessionId) store.updateNode(t.id, { claudeSessionId: sessionId })
     effective = claudeSpawnCommand(command, t.cwd, sessionId)
+    boundSessionId = sessionId
   }
   const session = ptys.spawn({ terminalId: t.id, command: effective, cwd: t.cwd })
   turns.track(session, command.trim().length > 0)
+  // Session-bound terminals: the Claude session JSONL is the source of truth
+  // for turn records — reconcile now (rebuilds legacy scraped records) and
+  // keep reconciling so /rewind truncation and exact prompts flow through.
+  if (boundSessionId !== null) {
+    sessionSync.watch(t.id, claudeSessionFile(t.cwd, boundSessionId))
+  }
 }
 
 /**
@@ -123,6 +153,7 @@ function updateNode(id: string, patch: Partial<CanvasNode>): CanvasNode | undefi
 }
 
 function removeNode(id: string): void {
+  sessionSync.unwatch(id)
   turns.untrack(id)
   turns.clearHistory(id)
   ptys.kill(id)
@@ -140,25 +171,56 @@ interface CreateTerminalOpts {
   preset: string
   position: { x: number; y: number }
   orch: boolean
+  /** Boot a fresh agent from a saved role instead of a bare preset. */
+  roleName?: string
 }
 
 function createTerminal(opts: CreateTerminalOpts): CanvasNode {
+  const role = opts.roleName ? roles.get(opts.roleName) : undefined
+  if (opts.roleName && !role) throw new Error(`No saved role '${opts.roleName}'`)
   const preset = PRESETS.find((p) => p.name === opts.preset) ?? PRESETS[PRESETS.length - 1]
   const terminal: TerminalNodeData = {
     kind: 'terminal',
     id: randomUUID(),
-    name: opts.name || preset.name,
-    preset: preset.name,
-    command: preset.command,
+    name: opts.name || role?.name || preset.name,
+    preset: role ? role.preset : preset.name,
+    command: role ? role.command : preset.command,
     cwd: store.state.dir,
     orch: opts.orch,
-    role: null,
+    role: role ? role.name : null,
     position: opts.position,
     size: DEFAULT_TERMINAL_SIZE
   }
   const added = store.addNode(terminal)
   spawnTracked(added as TerminalNodeData)
+  if (role) {
+    const session = ptys.get(added.id)
+    if (session) {
+      injectWhenReady(session, buildRoleBootMessage(role.name, role.rolePrompt)).catch((error) =>
+        console.error('Role boot injection failed:', error)
+      )
+    }
+  }
   return added
+}
+
+// ---- team fork / save + roles (spec: team-fork-roles v1, Forge lane) ----
+
+function teamFork(spec: TeamForkSpec): WorkspaceMeta {
+  return forkTeam(
+    { store, turns, roles, teams, ptys, switchWorkspace: (id) => void switchWorkspace(id) },
+    spec
+  )
+}
+
+function teamSave(name?: string): TeamMeta {
+  return teams.save(store.state, (id) => turns.history(id), name)
+}
+
+function roleSave(input: { nodeId: string; name: string; rolePrompt: string }): AgentRole {
+  const node = store.node(input.nodeId)
+  if (!node || node.kind !== 'terminal') throw new Error('Role source is not a terminal node')
+  return roles.save(node, input.name, input.rolePrompt)
 }
 
 /**
@@ -344,7 +406,13 @@ app.whenReady().then(() => {
     mobileUrls,
     listWorkspaces,
     createWorkspace,
-    switchWorkspace
+    switchWorkspace,
+    teamFork,
+    teamSave,
+    teamList: () => teams.list(),
+    roleSave,
+    roleList: () => roles.list(),
+    roleDelete: (name: string) => roles.delete(name)
   })
   routines.start()
 
@@ -369,7 +437,13 @@ app.whenReady().then(() => {
       renameWorkspace: (id, name) => {
         store.renameWorkspace(id, name)
         return store.list()
-      }
+      },
+      teamFork,
+      teamSave,
+      teamList: () => teams.list(),
+      roleSave,
+      roleList: () => roles.list(),
+      roleDelete: (name: string) => roles.delete(name)
     },
     saveAttachment: (name, data) => saveAttachment(defaultAttachmentsDir(), name, data),
     browserThumb: (id) => browserThumbs.get(id),
@@ -399,6 +473,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  sessionSync.dispose()
   turns.flushHistories()
   turns.disposeAll()
   ptys.disposeAll()
@@ -423,6 +498,7 @@ function registerIpc(): void {
     // Detach (not kill): the outgoing workspace's tmux sessions stay alive so
     // switching back reattaches them with their agents and scrollback intact.
     for (const tid of previousTerminalIds) {
+      sessionSync.unwatch(tid)
       turns.untrack(tid)
       ptys.detach(tid)
     }
@@ -478,6 +554,16 @@ function registerIpc(): void {
   ipcMain.handle('preset:list', () => PRESETS)
 
   ipcMain.handle('terminal:create', (_e, opts: CreateTerminalOpts) => createTerminal(opts))
+
+  // Team fork / team save / roles (contract in note team-fork-roles-spec-v1).
+  ipcMain.handle('team:fork', (_e, spec: TeamForkSpec) => teamFork(spec))
+  ipcMain.handle('team:save', (_e, name?: string) => teamSave(name))
+  ipcMain.handle('team:list', () => teams.list())
+  ipcMain.handle('role:save', (_e, input: { nodeId: string; name: string; rolePrompt: string }) =>
+    roleSave(input)
+  )
+  ipcMain.handle('role:list', () => roles.list())
+  ipcMain.handle('role:delete', (_e, name: string) => roles.delete(name))
 
   // 📎 attach: native multi-file picker for the desktop renderer. Dropped
   // files never come through here — the preload resolves their paths locally.

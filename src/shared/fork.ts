@@ -95,3 +95,56 @@ export function buildForkPreamble(options: ForkPreambleOptions): string {
 
   return [header, ...transcript, footer].join('\n\n')
 }
+
+export interface AssembledPreambleOptions {
+  forkName: string
+  sourceName: string
+  /** Full source history; only listed indexes are replayed, in given order. */
+  turns: TurnRecord[]
+  turnIndexes: number[]
+}
+
+/**
+ * Team-fork "assembled" mode: replay a hand-picked subset of turns as the
+ * fork's context, in the order the user chose them. Unknown indexes are
+ * skipped; the newest picks win the budget like buildForkPreamble.
+ */
+export function buildAssembledPreamble(options: AssembledPreambleOptions): string {
+  const byIndex = new Map(options.turns.map((t) => [t.index, t]))
+  const picked = options.turnIndexes
+    .map((i) => byIndex.get(i))
+    .filter((t): t is TurnRecord => t !== undefined)
+  if (picked.length === 0) {
+    throw new Error(`None of the requested turns exist to assemble a fork from`)
+  }
+
+  const header =
+    `[Cookrew fork] You are "${options.forkName}", a fork of the agent ` +
+    `"${options.sourceName}" assembled from ${picked.length} selected ` +
+    `turn${picked.length === 1 ? '' : 's'} of its conversation. Adopt the ` +
+    `exchanges below as your own context — work described as done is ` +
+    `already done; do not redo it.`
+
+  const rendered = picked.map(renderTurn)
+  const budget = MAX_PREAMBLE_CHARS - header.length
+  const kept: string[] = []
+  let used = 0
+  for (let i = rendered.length - 1; i >= 0; i -= 1) {
+    if (used + rendered[i].length > budget && kept.length > 0) break
+    kept.unshift(rendered[i])
+    used += rendered[i].length + 2
+  }
+  const omitted = picked.length - kept.length
+  const transcript =
+    omitted > 0 ? [`[… ${omitted} earlier selected turns omitted …]`, ...kept] : kept
+
+  const footer =
+    `Continue from the state these exchanges describe, or await instructions.`
+
+  return [header, ...transcript, footer].join('\n\n')
+}
+
+/** First message for an agent booted fresh from a saved role. */
+export function buildRoleBootMessage(roleName: string, rolePrompt: string): string {
+  return `[Cookrew role: ${roleName}] ${rolePrompt.trim()}`
+}

@@ -3,7 +3,10 @@ import type { WorkspaceStore } from './store'
 import type { PtyManager } from './pty'
 import type { TurnTracker } from './turn-tracker'
 import type {
+  AgentRole,
   CanvasNode,
+  TeamForkSpec,
+  TeamMeta,
   TerminalNodeData,
   WorkspaceList,
   WorkspaceMeta,
@@ -31,6 +34,13 @@ export interface MobileOps {
   createWorkspace: (name: string, dir: string) => WorkspaceMeta
   switchWorkspace: (id: string) => WorkspaceMeta
   renameWorkspace: (id: string, name: string) => WorkspaceList
+  /** Team fork/save + roles (spec note team-fork-roles-v1). */
+  teamFork: (spec: TeamForkSpec) => WorkspaceMeta
+  teamSave: (name?: string) => TeamMeta
+  teamList: () => TeamMeta[]
+  roleSave: (input: { nodeId: string; name: string; rolePrompt: string }) => AgentRole
+  roleList: () => AgentRole[]
+  roleDelete: (name: string) => boolean
 }
 
 export interface MobileApiDeps {
@@ -130,8 +140,63 @@ export async function handleMobileApi(
       preset: string
       position: { x: number; y: number }
       orch: boolean
+      roleName?: string
     }>(request)
-    respondJson(response, 200, ops.createTerminal(opts))
+    try {
+      respondJson(response, 200, ops.createTerminal(opts))
+    } catch (error) {
+      respondJson(response, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return true
+  }
+
+  // Team fork / save + roles (contract in note team-fork-roles-spec-v1).
+  if (method === 'POST' && p === '/api/team/fork') {
+    const body = await readJson<{ spec?: TeamForkSpec }>(request)
+    try {
+      if (!body.spec) throw new Error('Missing spec')
+      respondJson(response, 200, ops.teamFork(body.spec))
+    } catch (error) {
+      respondJson(response, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return true
+  }
+  if (method === 'POST' && p === '/api/team/save') {
+    const body = await readJson<{ name?: string }>(request)
+    try {
+      respondJson(response, 200, ops.teamSave(body.name))
+    } catch (error) {
+      respondJson(response, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return true
+  }
+  if (method === 'GET' && p === '/api/teams') {
+    respondJson(response, 200, ops.teamList())
+    return true
+  }
+  if (method === 'GET' && p === '/api/roles') {
+    respondJson(response, 200, ops.roleList())
+    return true
+  }
+  if (method === 'POST' && p === '/api/role/save') {
+    const body = await readJson<{ nodeId?: string; name?: string; rolePrompt?: string }>(request)
+    try {
+      if (!body.nodeId || !body.name || !body.rolePrompt) {
+        throw new Error('Missing nodeId/name/rolePrompt')
+      }
+      respondJson(
+        response,
+        200,
+        ops.roleSave({ nodeId: body.nodeId, name: body.name, rolePrompt: body.rolePrompt })
+      )
+    } catch (error) {
+      respondJson(response, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return true
+  }
+  if (method === 'POST' && p === '/api/role/delete') {
+    const body = await readJson<{ name?: string }>(request)
+    respondJson(response, 200, { deleted: ops.roleDelete(body.name ?? '') })
     return true
   }
 

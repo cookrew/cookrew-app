@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { appendTurnRecord, TurnRecord } from '../src/shared/turn'
-import { buildForkPreamble } from '../src/shared/fork'
+import {
+  buildAssembledPreamble,
+  buildForkPreamble,
+  buildRoleBootMessage
+} from '../src/shared/fork'
 
 function turn(index: number, overrides: Partial<TurnRecord> = {}): TurnRecord {
   return {
@@ -98,5 +102,57 @@ describe('buildForkPreamble', () => {
     })
     expect(preamble).toContain('…')
     expect(preamble.length).toBeLessThan(4000)
+  })
+})
+
+describe('buildAssembledPreamble', () => {
+  it('replays only the picked turns, in the picked order', () => {
+    const preamble = buildAssembledPreamble({
+      forkName: 'Coder ⑂',
+      sourceName: 'Coder',
+      turns: [turn(1), turn(2), turn(3)],
+      turnIndexes: [3, 1]
+    })
+    expect(preamble).toContain('── Turn 3 ──')
+    expect(preamble).toContain('── Turn 1 ──')
+    expect(preamble).not.toContain('── Turn 2 ──')
+    expect(preamble.indexOf('── Turn 3 ──')).toBeLessThan(preamble.indexOf('── Turn 1 ──'))
+    expect(preamble).toContain('assembled from 2 selected turns')
+  })
+
+  it('skips unknown indexes and throws when none exist', () => {
+    const preamble = buildAssembledPreamble({
+      forkName: 'f',
+      sourceName: 's',
+      turns: [turn(1)],
+      turnIndexes: [1, 99]
+    })
+    expect(preamble).toContain('── Turn 1 ──')
+    expect(preamble).toContain('assembled from 1 selected turn')
+    expect(() =>
+      buildAssembledPreamble({ forkName: 'f', sourceName: 's', turns: [turn(1)], turnIndexes: [7] })
+    ).toThrow(/None of the requested turns/)
+  })
+
+  it('elides oldest picks beyond the budget with a marker', () => {
+    const big = 'x'.repeat(1500)
+    const turns = Array.from({ length: 40 }, (_, i) => turn(i + 1, { reply: big }))
+    const preamble = buildAssembledPreamble({
+      forkName: 'f',
+      sourceName: 's',
+      turns,
+      turnIndexes: turns.map((t) => t.index)
+    })
+    expect(preamble.length).toBeLessThan(25000)
+    expect(preamble).toMatch(/\[… \d+ earlier selected turns omitted …\]/)
+    expect(preamble).toContain('── Turn 40 ──')
+  })
+})
+
+describe('buildRoleBootMessage', () => {
+  it('prefixes the role name and trims the prompt', () => {
+    expect(buildRoleBootMessage('Backend Dev', '  Build APIs.  ')).toBe(
+      '[Cookrew role: Backend Dev] Build APIs.'
+    )
   })
 })
