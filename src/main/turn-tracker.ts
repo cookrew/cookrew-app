@@ -61,6 +61,8 @@ interface TrackedTerminal {
   promptBuffer: string
   /** Open bracketed paste spanning input chunks (feedPromptBuffer state). */
   inPaste: boolean
+  /** Partial paste marker withheld between input chunks (feedPromptBuffer). */
+  heldInput: string
   /** Epoch ms of the last Enter that did NOT start or answer a turn; 0 when consumed. */
   lastSubmitAt: number
   /** Epoch ms of the last self-heal viewport scan (throttle). */
@@ -128,9 +130,14 @@ export class TurnTracker extends EventEmitter {
     const byIndex = new Map(this.history(terminalId).map((r) => [r.index, r]))
     const merged = records.map((record) => {
       const prior = byIndex.get(record.index)
-      return prior?.title !== undefined && promptsMatch(prior.prompt, record.prompt)
-        ? { ...record, title: prior.title }
-        : record
+      if (!prior || !promptsMatch(prior.prompt, record.prompt)) return record
+      // Same exchange: carry over what the reconcile source can't know —
+      // the Sous title and the acknowledge-on-view read marker.
+      return {
+        ...record,
+        ...(prior.title !== undefined ? { title: prior.title } : {}),
+        ...(prior.seenAt !== undefined ? { seenAt: prior.seenAt } : {})
+      }
     })
     const capped =
       merged.length > MAX_TURN_HISTORY ? merged.slice(merged.length - MAX_TURN_HISTORY) : merged
@@ -138,6 +145,33 @@ export class TurnTracker extends EventEmitter {
     this.store?.scheduleSave(terminalId, capped)
     const t = this.tracked.get(terminalId)
     if (t) this.push(t)
+  }
+
+  /**
+   * Acknowledge-on-view: 'replied' (TURN COMPLETE) means UNREAD, and it
+   * demotes to 'idle' exactly when the user views the result — the terminal
+   * overlay mounts (desktop zoom / phone popout) or the next prompt starts a
+   * new turn. Prompt, reply and title stay untouched so READY keeps showing
+   * the exchange; only the fresh-result emphasis drops. Never a TTL — unread
+   * results must not silently expire — and never from any other phase (a
+   * glance must not end a live or waiting turn).
+   */
+  seen(terminalId: string): void {
+    const t = this.tracked.get(terminalId)
+    if (!t || t.phase !== 'replied') return
+    t.phase = 'idle'
+    this.markLastRecordSeen(terminalId)
+    this.push(t)
+  }
+
+  /** Persist the read marker so unread state survives restarts/switches. */
+  private markLastRecordSeen(terminalId: string): void {
+    const history = this.history(terminalId)
+    const last = history[history.length - 1]
+    if (!last || last.seenAt !== undefined) return
+    const updated = [...history.slice(0, -1), { ...last, seenAt: Date.now() }]
+    this.histories.set(terminalId, updated)
+    this.store?.scheduleSave(terminalId, updated)
   }
 
   /** Forget a removed terminal's turns (node deletion, not detach). */
@@ -159,6 +193,7 @@ export class TurnTracker extends EventEmitter {
       phase: 'idle',
       promptBuffer: '',
       inPaste: false,
+      heldInput: '',
       lastSubmitAt: 0,
       lastHealScanAt: 0,
       prompt: null,
@@ -173,6 +208,22 @@ export class TurnTracker extends EventEmitter {
       onInput: (data) => this.handleInput(session.terminalId, data),
       onData: (data) => this.handleData(session.terminalId, data),
       onExit: () => this.handleExit(session.terminalId)
+    }
+    // Restore the last exchange across restarts and workspace switches:
+    // cards render ask+reply from tracker state, which would otherwise come
+    // back blank-idle even though history survived on disk. An unread last
+    // turn returns as 'replied' (TURN COMPLETE) — a restart must not count
+    // as acknowledgement. A mid-turn agent self-heals to 'thinking' from its
+    // live spinner output moments later.
+    if (agent) {
+      const history = this.history(session.terminalId)
+      const last = history[history.length - 1]
+      if (last) {
+        t.prompt = last.prompt
+        t.reply = last.reply
+        t.title = last.title ?? null
+        t.phase = last.seenAt === undefined ? 'replied' : 'idle'
+      }
     }
     session.on('input', t.onInput)
     session.on('data', t.onData)
@@ -192,6 +243,7 @@ export class TurnTracker extends EventEmitter {
         agent: t.agent,
         phase: 'idle',
         prompt: t.prompt,
+        pendingInput: null,
         lines: ['— process exited —'],
         reply: t.reply,
         glance: null,
@@ -229,9 +281,10 @@ export class TurnTracker extends EventEmitter {
   private handleInput(terminalId: string, data: string): void {
     const t = this.tracked.get(terminalId)
     if (!t) return
-    const fed = feedPromptBuffer(t.promptBuffer, data, t.inPaste)
+    const fed = feedPromptBuffer(t.promptBuffer, data, t.inPaste, t.heldInput)
     t.promptBuffer = fed.buffer
     t.inPaste = fed.inPaste
+    t.heldInput = fed.held
     if (!t.agent) return
     if (fed.submitted.length > 0) t.lastSubmitAt = Date.now()
     if (t.phase === 'waiting' && fed.submitted.length > 0) {
@@ -243,7 +296,13 @@ export class TurnTracker extends EventEmitter {
       return
     }
     const prompt = fed.submitted.filter((s) => s.length > 0).pop()
-    if (prompt !== undefined) this.startTurn(t, prompt)
+    if (prompt !== undefined) {
+      this.startTurn(t, prompt)
+      return
+    }
+    // No submit: the input box content changed (typing, paste) — surface it
+    // as pendingInput on the next throttled push.
+    this.schedulePush(terminalId)
   }
 
   private startTurn(t: TrackedTerminal, prompt: string): void {
@@ -488,11 +547,13 @@ export class TurnTracker extends EventEmitter {
           SUMMARY_TAIL
         )
       : tailLines(cleanTurnLines(t.session.viewportText()), SUMMARY_TAIL)
+    const pending = t.promptBuffer.trim()
     return {
       terminalId,
       agent: t.agent,
       phase: t.phase,
       prompt: t.prompt,
+      pendingInput: pending.length > 0 ? pending : null,
       lines,
       reply: t.reply,
       glance: t.agent && inTurn ? parseAgentGlance(rawDelta) : null,

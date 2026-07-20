@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { activeBrowserTab, noteNameFromContent, browserTabs, uniqueName } from '../src/shared/model'
+import { activeBrowserTab, noteNameFromContent, browserTabs, normalizeDirs, uniqueName } from '../src/shared/model'
 
 describe('noteNameFromContent', () => {
   it('slugifies the first line', () => {
@@ -71,5 +71,31 @@ describe('browserTabs / activeBrowserTab', () => {
       activeTabId: 'gone'
     }
     expect(activeBrowserTab(node).id).toBe('t1')
+  })
+})
+
+describe('normalizeDirs', () => {
+  it('wraps a legacy single dir into a one-element list', () => {
+    expect(normalizeDirs({ dir: '/a' })).toEqual(['/a'])
+  })
+
+  it('keeps an explicit dirs array, deduping and dropping the legacy dup', () => {
+    expect(normalizeDirs({ dir: '/a', dirs: ['/a', '/b'] })).toEqual(['/a', '/b'])
+  })
+
+  it('appends the legacy dir when not already in dirs', () => {
+    expect(normalizeDirs({ dir: '/c', dirs: ['/a', '/b'] })).toEqual(['/a', '/b', '/c'])
+  })
+
+  it('moves primary to the front when present', () => {
+    expect(normalizeDirs({ dirs: ['/a', '/b', '/c'], primary: '/b' })).toEqual(['/b', '/a', '/c'])
+  })
+
+  it('ignores a primary that is not in the set', () => {
+    expect(normalizeDirs({ dirs: ['/a', '/b'], primary: '/z' })).toEqual(['/a', '/b'])
+  })
+
+  it('trims blanks and returns empty when nothing usable', () => {
+    expect(normalizeDirs({ dir: '  ', dirs: ['', '  '] })).toEqual([])
   })
 })

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import type { WorkspaceList } from '../../shared/model'
+import type { WorkspaceList, WorkspaceMeta } from '../../shared/model'
 import { cookrew } from './api'
 import { CrIcon } from './icons'
+import { DirectoryManager } from './DirectoryManager'
+import { removeWorkspace } from './workspace-v2'
 
 interface WorkspaceSwitcherProps {
   fallbackName: string
@@ -22,6 +24,8 @@ export function WorkspaceSwitcher({
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const [newDir, setNewDir] = useState('')
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
+  const [managingDirs, setManagingDirs] = useState<WorkspaceMeta | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -36,6 +40,7 @@ export function WorkspaceSwitcher({
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
         setOpen(false)
         setCreating(false)
+        setConfirmRemove(null)
       }
     }
     document.addEventListener('mousedown', onDown)
@@ -66,6 +71,23 @@ export function WorkspaceSwitcher({
     setOpen(false)
   }
 
+  // Removing the active workspace switches away first (backend also guards);
+  // the last workspace can never be removed.
+  const removeWs = (id: string): void => {
+    if (!list || list.workspaces.length <= 1) return
+    if (id === list.activeId) {
+      const other = list.workspaces.find((w) => w.id !== id)
+      if (other) void cookrew().switchWorkspace(other.id)
+    }
+    void removeWorkspace(id)
+    setConfirmRemove(null)
+  }
+
+  const openDirManager = (meta: WorkspaceMeta): void => {
+    setManagingDirs(meta)
+    setOpen(false)
+  }
+
   return (
     <div className="cr-ws" ref={rootRef}>
       <button className="cr-ws-current" onClick={() => setOpen((v) => !v)} title={dir}>
@@ -79,26 +101,53 @@ export function WorkspaceSwitcher({
       {open && (
         <div className="cr-ws-menu">
           <div className="cr-ws-menu-head">WORKSPACES</div>
-          {(list?.workspaces ?? []).map((w) => (
-            <button
-              key={w.id}
-              className={`cr-ws-item${w.id === list?.activeId ? ' active' : ''}`}
-              onClick={() => switchTo(w.id)}
-            >
-              <span className="cr-ws-icon">{w.icon}</span>
-              <span className="cr-ws-item-text">
-                <span className="cr-ws-item-name">{w.name}</span>
-                <span className="cr-ws-item-dir" title={w.dir}>
-                  {w.dir}
-                </span>
-              </span>
-              {w.id === list?.activeId && (
-                <span className="cr-ws-check">
-                  <CrIcon name="check" />
-                </span>
-              )}
-            </button>
-          ))}
+          {(list?.workspaces ?? []).map((w) => {
+            const isActive = w.id === list?.activeId
+            const canRemove = (list?.workspaces.length ?? 0) > 1
+            return (
+              <div key={w.id} className={`cr-ws-row${isActive ? ' active' : ''}`}>
+                <button className="cr-ws-item" onClick={() => switchTo(w.id)}>
+                  <span className="cr-ws-icon">{w.icon}</span>
+                  <span className="cr-ws-item-text">
+                    <span className="cr-ws-item-name">{w.name}</span>
+                    <span className="cr-ws-item-dir" title={w.dir}>
+                      {w.dir}
+                    </span>
+                  </span>
+                  {isActive && (
+                    <span className="cr-ws-check">
+                      <CrIcon name="check" />
+                    </span>
+                  )}
+                </button>
+                <button
+                  className="cr-ws-mini"
+                  title="Manage directories"
+                  onClick={() => openDirManager(w)}
+                >
+                  <CrIcon name="terminal" />
+                </button>
+                {confirmRemove === w.id ? (
+                  <button
+                    className="cr-ws-mini danger"
+                    title="Confirm remove"
+                    onClick={() => removeWs(w.id)}
+                  >
+                    <CrIcon name="check" />
+                  </button>
+                ) : (
+                  <button
+                    className="cr-ws-mini"
+                    title={canRemove ? 'Remove workspace' : 'Cannot remove the last workspace'}
+                    disabled={!canRemove}
+                    onClick={() => setConfirmRemove(w.id)}
+                  >
+                    <CrIcon name="close" />
+                  </button>
+                )}
+              </div>
+            )
+          })}
 
           <div className="cr-ws-sep" />
           {creating ? (
@@ -137,6 +186,10 @@ export function WorkspaceSwitcher({
             </button>
           )}
         </div>
+      )}
+
+      {managingDirs && (
+        <DirectoryManager meta={managingDirs} onClose={() => setManagingDirs(null)} />
       )}
     </div>
   )

@@ -363,3 +363,290 @@
 .tf-turn .cr-icon {
   color: var(--amber-deep);
 }
+
+/* ==== workspace v2: directory manager + fork dir chooser (Velvet lane) ==== */
+
+/* --- workspace switcher add/remove row (styles bundled globally) --- */
+.cr-ws-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.cr-ws-row.active {
+  background: var(--amber-soft);
+}
+
+.cr-ws-row .cr-ws-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.cr-ws-mini {
+  flex: 0 0 auto;
+  width: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.cr-ws-mini:hover:not(:disabled) {
+  background: var(--cream-lo);
+  color: var(--ink);
+}
+
+.cr-ws-mini.danger:hover {
+  background: var(--rose);
+  color: var(--cream-hi);
+}
+
+.cr-ws-mini:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+/* --- directory manager panel --- */
+.dm-panel {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.dm-section-label {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.dm-list {
+  display: flex;
+  flex-direction: column;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream);
+}
+
+.dm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1.5px solid var(--line-soft);
+  min-height: 36px;
+}
+
+.dm-row:last-child {
+  border-bottom: none;
+}
+
+.dm-star {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: none;
+  color: var(--amber-deep);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dm-star:disabled {
+  cursor: default;
+}
+
+.dm-star:not(.on):hover {
+  color: var(--amber);
+}
+
+.dm-dir-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.dm-dir-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dm-dir-path {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Fresco fills this per-dir git-chip slot; reserve inline space. */
+.dm-git-slot {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+}
+
+.dm-primary-chip {
+  flex: 0 0 auto;
+}
+
+.dm-remove {
+  flex: 0 0 auto;
+}
+
+.dm-term-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--ink-soft);
+}
+
+.dm-cwd-select {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  padding: 3px 6px;
+  max-width: 45%;
+}
+
+.dm-cwd-select:disabled {
+  opacity: 0.5;
+}
+
+.dm-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dm-foot-note {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* --- team-fork directory chooser + worktree toggle --- */
+.tf-target-dir {
+  flex: 0 0 auto;
+  max-width: 130px;
+}
+
+.tf-dirs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream);
+}
+
+.tf-dirs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tf-worktree {
+  margin-left: 0;
+}
+
+.tf-dirs-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tf-dir-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 2px;
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+}
+
+.tf-dir-chip.primary {
+  border-color: var(--amber-deep);
+}
+
+.tf-dir-star {
+  background: transparent;
+  border: none;
+  color: var(--amber-deep);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.tf-dir-star:disabled {
+  cursor: default;
+}
+
+.tf-dir-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+  max-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tf-dir-x {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.tf-dir-x:hover {
+  color: var(--rose);
+}
+
+.tf-dirs-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tf-dirs-note {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  flex: 1 1 100%;
+}
+
+@media (max-width: 700px) {
+  .dm-row {
+    min-height: 44px;
+  }
+
+  .dm-cwd-select,
+  .tf-target-dir {
+    min-height: 36px;
+    max-width: 42%;
+  }
+
+  .cr-ws-mini {
+    width: 40px;
+  }
+}

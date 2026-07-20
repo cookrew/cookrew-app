@@ -275,3 +275,40 @@ describe('tailLines', () => {
     expect(tailLines(['a', 'b'], 5)).toEqual(['a', 'b'])
   })
 })
+
+describe('feedPromptBuffer split paste markers (DEFECT 2a)', () => {
+  it('holds back a chunk-split open marker — CR in pasted text never submits', () => {
+    const a = feedPromptBuffer('', '\x1b[200')
+    expect(a.submitted).toEqual([])
+    expect(a.buffer).toBe('')
+    expect(a.held).toBe('\x1b[200')
+
+    const b = feedPromptBuffer(a.buffer, '~step one\rstep two', a.inPaste, a.held)
+    expect(b.inPaste).toBe(true)
+    expect(b.submitted).toEqual([])
+    expect(b.buffer).toBe('step one\nstep two')
+
+    const c = feedPromptBuffer(b.buffer, '\x1b[201~', b.inPaste, b.held)
+    expect(c.inPaste).toBe(false)
+    expect(c.buffer).toBe('step one\nstep two')
+    expect(c.held).toBe('')
+  })
+
+  it('holds back a chunk-split close marker without leaking it into the buffer', () => {
+    const a = feedPromptBuffer('', '\x1b[200~pasted\x1b[201')
+    expect(a.inPaste).toBe(true)
+    expect(a.buffer).toBe('pasted')
+    expect(a.held).toBe('\x1b[201')
+
+    const b = feedPromptBuffer(a.buffer, '~', a.inPaste, a.held)
+    expect(b.inPaste).toBe(false)
+    expect(b.buffer).toBe('pasted')
+  })
+
+  it('keeps single-chunk behavior identical when nothing is split', () => {
+    const fed = feedPromptBuffer('', '\x1b[200~hello\x1b[201~world\r')
+    expect(fed.buffer).toBe('')
+    expect(fed.submitted).toEqual(['helloworld'])
+    expect(fed.held).toBe('')
+  })
+})

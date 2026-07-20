@@ -1,6 +1,10 @@
 import { EventEmitter } from 'node:events'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TurnTracker } from '../src/main/turn-tracker'
+import { TurnStore } from '../src/main/turn-store'
 import { RECOVERED_PROMPT_LABEL } from '../src/shared/turn'
 import type { PtySession } from '../src/main/pty'
 
@@ -295,6 +299,183 @@ describe('TurnTracker self-heal under tmux cell repaints', () => {
     session.full = '⏺ done\n✻ Brewed for 4m 15s\n❯ '
     session.emit('data', '\x1b[24;3H❯')
     expect(phaseOf(tracker)).toBe('idle')
+    tracker.disposeAll()
+  })
+})
+
+describe('TurnTracker acknowledge-on-view (seen)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('demotes replied to idle on seen, keeping prompt, reply and title', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    await completeTurn(tracker, session)
+
+    tracker.seen('term-1')
+    const activity = tracker.list()[0]
+    expect(activity.phase).toBe('idle')
+    expect(activity.prompt).toBe('fix it')
+    expect(activity.reply).toContain('all tests pass')
+    tracker.disposeAll()
+  })
+
+  it('emits an activity push when the demotion happens', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    await completeTurn(tracker, session)
+
+    let pushed: string | null = null
+    tracker.on('activity', (a: { phase: string }) => {
+      pushed = a.phase
+    })
+    tracker.seen('term-1')
+    expect(pushed).toBe('idle')
+    tracker.disposeAll()
+  })
+
+  it('is a no-op while thinking or waiting — a view must not end a live turn', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    session.emit('input', 'do the thing\r')
+    expect(phaseOf(tracker)).toBe('thinking')
+    tracker.seen('term-1')
+    expect(phaseOf(tracker)).toBe('thinking')
+
+    // Park the turn on 'waiting' (question menu) — seen must not answer it.
+    session.full = 'Do you want to proceed? (y/n)'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(phaseOf(tracker)).toBe('waiting')
+    tracker.seen('term-1')
+    expect(phaseOf(tracker)).toBe('waiting')
+    tracker.disposeAll()
+  })
+
+  it('is a no-op on idle terminals and unknown ids', () => {
+    const { tracker } = makeTracker()
+    tracker.seen('term-1')
+    expect(phaseOf(tracker)).toBe('idle')
+    expect(() => tracker.seen('no-such-terminal')).not.toThrow()
+    tracker.disposeAll()
+  })
+})
+
+describe('TurnTracker restart restore (last exchange + unread state)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function makePersistentPair(): {
+    dir: string
+    boot: () => { tracker: TurnTracker; session: FakeSession }
+  } {
+    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-turns-'))
+    return {
+      dir,
+      boot: () => {
+        const tracker = new TurnTracker(async () => null, new TurnStore(dir))
+        const session = new FakeSession()
+        tracker.track(session as unknown as PtySession, true)
+        return { tracker, session }
+      }
+    }
+  }
+
+  it('restores the last exchange as unread TURN COMPLETE after a restart', async () => {
+    vi.useFakeTimers()
+    const { boot } = makePersistentPair()
+    const first = boot()
+    await completeTurn(first.tracker, first.session)
+    first.tracker.flushHistories()
+    first.tracker.disposeAll()
+
+    vi.useRealTimers()
+    const second = boot()
+    const activity = second.tracker.list()[0]
+    expect(activity.phase).toBe('replied')
+    expect(activity.prompt).toBe('fix it')
+    expect(activity.reply).toContain('all tests pass')
+    second.tracker.disposeAll()
+  })
+
+  it('restores as READY (idle) when the turn was seen before the restart', async () => {
+    vi.useFakeTimers()
+    const { boot } = makePersistentPair()
+    const first = boot()
+    await completeTurn(first.tracker, first.session)
+    first.tracker.seen('term-1')
+    first.tracker.flushHistories()
+    first.tracker.disposeAll()
+
+    vi.useRealTimers()
+    const second = boot()
+    const activity = second.tracker.list()[0]
+    expect(activity.phase).toBe('idle')
+    expect(activity.prompt).toBe('fix it')
+    expect(activity.reply).toContain('all tests pass')
+    second.tracker.disposeAll()
+  })
+
+  it('leaves terminals with no history blank and idle', () => {
+    const { boot } = makePersistentPair()
+    const { tracker } = boot()
+    const activity = tracker.list()[0]
+    expect(activity.phase).toBe('idle')
+    expect(activity.prompt).toBeNull()
+    tracker.disposeAll()
+  })
+})
+
+describe('TurnTracker pending input + paste binding (DEFECT 2)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('never starts a turn from pasted-but-unsubmitted text, even chunk-split', () => {
+    const { tracker, session } = makeTracker()
+    session.emit('input', '\x1b[200')
+    session.emit('input', '~/tmp/screenshot.png \x1b[201')
+    session.emit('input', '~')
+    expect(phaseOf(tracker)).toBe('idle')
+    expect(tracker.list()[0].pendingInput).toContain('/tmp/screenshot.png')
+    tracker.disposeAll()
+  })
+
+  it('binds the prompt on the REAL submit, pairing paste with the typed ask', () => {
+    const { tracker, session } = makeTracker()
+    session.emit('input', '\x1b[200')
+    session.emit('input', '~/tmp/screenshot.png \x1b[201~')
+    session.emit('input', 'describe this\r')
+    const activity = tracker.list()[0]
+    expect(activity.phase).toBe('thinking')
+    expect(activity.prompt).toBe('/tmp/screenshot.png describe this')
+    expect(activity.pendingInput).toBeNull()
+    tracker.disposeAll()
+  })
+
+  it('exposes typed-but-unsent input as pendingInput, cleared on submit', () => {
+    const { tracker, session } = makeTracker()
+    session.emit('input', 'hello wor')
+    expect(tracker.list()[0].pendingInput).toBe('hello wor')
+    session.emit('input', 'ld\r')
+    const activity = tracker.list()[0]
+    expect(activity.pendingInput).toBeNull()
+    expect(activity.prompt).toBe('hello world')
+    tracker.disposeAll()
+  })
+
+  it('pushes a throttled activity update while typing (no submit)', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    let pending: string | null = null
+    tracker.on('activity', (a: { pendingInput: string | null }) => {
+      pending = a.pendingInput
+    })
+    session.emit('input', 'draft…')
+    await vi.advanceTimersByTimeAsync(400)
+    expect(pending).toBe('draft…')
     tracker.disposeAll()
   })
 })
