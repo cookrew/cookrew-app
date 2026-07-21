@@ -27,7 +27,14 @@ import { forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
 import { AgentRegistry } from './agent-registry'
 import { EventLog } from './event-log'
 import { isClaudeCommand } from '../shared/claude-fork'
-import { claudeSessionFile, claudeSpawnCommand, resolveClaudeSessionId } from './claude-fork'
+import {
+  claudeSessionFile,
+  claudeSpawnCommand,
+  resolveClaudeSessionId,
+  resumeRoleSession,
+  roleSessionDir,
+  saveRoleSessionCopy
+} from './claude-fork'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
 import { TeamStore, forkTeam } from './teams'
@@ -262,6 +269,18 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
   const role = opts.roleName ? roles.get(opts.roleName) : undefined
   if (opts.roleName && !role) throw new Error(`No saved role '${opts.roleName}'`)
   const preset = PRESETS.find((p) => p.name === opts.preset) ?? PRESETS[PRESETS.length - 1]
+  // Native restore: a role saved from a checkpoint carries a truncated session
+  // copy — materialize it under a fresh id so the booted Claude agent resumes
+  // the checkpoint conversation. Codex/absent copy → boot fresh (rolePrompt
+  // injection below is unchanged either way).
+  const restoredSessionId =
+    role?.sessionCopyRef && isClaudeCommand(role.command)
+      ? resumeRoleSession({
+          sessionCopyRef: role.sessionCopyRef,
+          copyDir: roleSessionDir(),
+          cwd: store.state.dir
+        })
+      : null
   const terminal: TerminalNodeData = {
     kind: 'terminal',
     id: randomUUID(),
@@ -271,6 +290,7 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     cwd: store.state.dir,
     orch: opts.orch,
     role: role ? role.name : null,
+    ...(restoredSessionId ? { claudeSessionId: restoredSessionId } : {}),
     position: opts.position,
     size: DEFAULT_TERMINAL_SIZE
   }
@@ -340,10 +360,24 @@ function roleSaveTracked(input: RoleSaveInput): AgentRole {
 function roleSaveInner(input: RoleSaveInput): AgentRole {
   const node = store.node(input.nodeId)
   if (!node || node.kind !== 'terminal') throw new Error('Role source is not a terminal node')
+  // Produce the native restore point: a truncated copy of the source Claude
+  // session at the checkpoint uuid. sessionCopyRef was dead plumbing — nothing
+  // wrote it — so a role recovered only the prompt, not the conversation.
+  let sessionCopyRef = input.sessionCopyRef
+  if (!sessionCopyRef && input.sourceTurnUuid) {
+    sessionCopyRef =
+      saveRoleSessionCopy({
+        command: node.command,
+        cwd: node.cwd,
+        sessionId: node.claudeSessionId,
+        sourceTurnUuid: input.sourceTurnUuid,
+        destDir: roleSessionDir()
+      }) ?? undefined
+  }
   return roles.save(node, input.name, input.rolePrompt, {
     sourceTurnUuid: input.sourceTurnUuid,
     sourceTurnPrompt: input.sourceTurnPrompt,
-    sessionCopyRef: input.sessionCopyRef
+    sessionCopyRef
   })
 }
 
