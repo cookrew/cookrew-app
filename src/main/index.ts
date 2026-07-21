@@ -37,7 +37,7 @@ import {
 } from './claude-fork'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
-import { TeamStore, forkTeam } from './teams'
+import { TeamStore, forkTeam, workspaceFromTemplate } from './teams'
 import { GitInfoCache, addWorktree } from './git'
 import { buildRoleBootMessage } from '../shared/fork'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
@@ -315,20 +315,34 @@ async function teamFork(spec: TeamForkSpec): Promise<WorkspaceMeta> {
   return meta
 }
 
+function teamForkDeps(): Parameters<typeof forkTeam>[0] {
+  return {
+    store,
+    turns,
+    roles,
+    teams,
+    ptys,
+    switchWorkspace: (id) => void switchWorkspace(id),
+    git: { gitInfo: (dir) => gitCache.info(dir), addWorktree },
+    worktreeRoot: path.join(homedir(), '.cookrew', 'worktrees')
+  }
+}
+
 function teamForkInner(spec: TeamForkSpec): Promise<WorkspaceMeta> {
-  return forkTeam(
-    {
-      store,
-      turns,
-      roles,
-      teams,
-      ptys,
-      switchWorkspace: (id) => void switchWorkspace(id),
-      git: { gitInfo: (dir) => gitCache.info(dir), addWorktree },
-      worktreeRoot: path.join(homedir(), '.cookrew', 'worktrees')
-    },
-    spec
-  )
+  return forkTeam(teamForkDeps(), spec)
+}
+
+/**
+ * FEATURE 1: workspace pre-populated from a saved team template. Routes
+ * through the team-fork engine (native session restore included), so the
+ * workspace.created event carries the 'team fork' detail.
+ */
+async function createWorkspaceFromTeam(
+  name: string,
+  dir: string,
+  team: string
+): Promise<WorkspaceMeta> {
+  return workspaceFromTemplate(teamForkDeps(), { name, dir: dir || store.state.dir, team })
 }
 
 function teamSaveTracked(name?: string): TeamMeta {
@@ -565,6 +579,7 @@ app.whenReady().then(() => {
     mobileUrls,
     listWorkspaces,
     createWorkspace,
+    createWorkspaceFromTeam,
     switchWorkspace,
     removeWorkspace,
     addWorkspaceDir,
@@ -599,7 +614,8 @@ app.whenReady().then(() => {
       createTerminal,
       forkTerminal,
       listWorkspaces,
-      createWorkspace,
+      createWorkspace: (name: string, dir: string, team?: string) =>
+        team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir),
       switchWorkspace,
       renameWorkspace: (id, name) => {
         store.renameWorkspace(id, name)
@@ -691,7 +707,9 @@ function registerIpc(): void {
   ipcMain.on('app:quit', () => app.quit())
 
   ipcMain.handle('workspace:list', () => store.list())
-  ipcMain.handle('workspace:create', (_e, name: string, dir: string) => createWorkspace(name, dir))
+  ipcMain.handle('workspace:create', (_e, name: string, dir: string, team?: string) =>
+    team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir)
+  )
   ipcMain.handle('workspace:switch', (_e, id: string) => {
     switchWorkspace(id)
     return store.list()

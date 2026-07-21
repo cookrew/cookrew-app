@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cookrew Dev — Session Progress Report</title>
+<style>
+:root {
+  --bg: #f4f6f3; --panel: #fdfdfb; --ink: #1d231e; --muted: #5c675e;
+  --line: #d9e0d8; --accent: #1f8a4c; --accent-ink: #14663a;
+  --amber: #b0862b; --violet: #7a5da8; --red: #c04a37;
+  --pass-bg: #e3f2e7; --pass-ink: #17663a;
+  --part-bg: #f4ecdc; --part-ink: #7a5d1c;
+  --code-bg: #edf1ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #10140f; --panel: #171c16; --ink: #dde5da; --muted: #8b978a;
+    --line: #2a322a; --accent: #4cc07a; --accent-ink: #6fd695;
+    --amber: #d0a145; --violet: #a98fd8; --red: #e06a52;
+    --pass-bg: #16301f; --pass-ink: #7fd8a1;
+    --part-bg: #33290f; --part-ink: #d9b45e;
+    --code-bg: #1e241d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10140f; --panel: #171c16; --ink: #dde5da; --muted: #8b978a;
+  --line: #2a322a; --accent: #4cc07a; --accent-ink: #6fd695;
+  --amber: #d0a145; --violet: #a98fd8; --red: #e06a52;
+  --pass-bg: #16301f; --pass-ink: #7fd8a1;
+  --part-bg: #33290f; --part-ink: #d9b45e;
+  --code-bg: #1e241d;
+}
+:root[data-theme="light"] {
+  --bg: #f4f6f3; --panel: #fdfdfb; --ink: #1d231e; --muted: #5c675e;
+  --line: #d9e0d8; --accent: #1f8a4c; --accent-ink: #14663a;
+  --amber: #b0862b; --violet: #7a5da8; --red: #c04a37;
+  --pass-bg: #e3f2e7; --pass-ink: #17663a;
+  --part-bg: #f4ecdc; --part-ink: #7a5d1c;
+  --code-bg: #edf1ec;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width: 920px; margin: 0 auto; padding: 40px 20px 64px; }
+header.rpt { border: 1px solid var(--line); border-left: 4px solid var(--accent); background: var(--panel); padding: 24px 26px; margin-bottom: 24px; }
+.eyebrow { font-family: ui-monospace, Menlo, monospace; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent-ink); margin: 0 0 6px; }
+h1 { font-family: ui-monospace, Menlo, monospace; font-size: 26px; line-height: 1.2; margin: 0 0 10px; text-wrap: balance; }
+.meta { color: var(--muted); font-size: 13px; margin: 0; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin: 24px 0 32px; }
+.stat { border: 1px solid var(--line); background: var(--panel); padding: 14px 16px; }
+.stat .n { font-family: ui-monospace, Menlo, monospace; font-size: 26px; font-weight: 700; color: var(--accent-ink); font-variant-numeric: tabular-nums; }
+.stat .l { font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-top: 2px; }
+h2 { font-family: ui-monospace, Menlo, monospace; font-size: 15px; letter-spacing: .06em; text-transform: uppercase; margin: 36px 0 14px; color: var(--accent-ink); }
+.phase { border: 1px solid var(--line); background: var(--panel); margin-bottom: 14px; padding: 16px 20px 12px; border-left: 4px solid var(--accent); }
+.phase.amber { border-left-color: var(--amber); }
+.phase.violet { border-left-color: var(--violet); }
+.phase h3 { margin: 0 0 6px; font-size: 15.5px; }
+.phase h3 .tag { font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; letter-spacing: .1em; padding: 2px 7px; border-radius: 3px; background: var(--code-bg); color: var(--muted); margin-left: 8px; position: relative; top: -1px; }
+.phase p, .phase li { margin: 5px 0; font-size: 13.5px; }
+.phase ul { padding-left: 20px; margin: 6px 0 8px; }
+code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); background: var(--panel); }
+table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 13.5px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-family: ui-monospace, Menlo, monospace; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+tr:last-child td { border-bottom: none; }
+.v { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; padding: 2px 8px; border-radius: 3px; white-space: nowrap; }
+.v.pass { background: var(--pass-bg); color: var(--pass-ink); }
+.v.part { background: var(--part-bg); color: var(--part-ink); }
+footer { margin-top: 44px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+a { color: var(--accent-ink); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="rpt">
+  <p class="eyebrow">Cookrew Dev · Conductor session</p>
+  <h1>Session Progress Report</h1>
+  <p class="meta">2026-07-19 → 2026-07-21 · Conductor + 8-agent crew on the Cookrew canvas · repo <code>anvztor/cookrew-dev</code> (private) · everything below reviewed, tested, committed, and pushed</p>
+</header>
+
+<div class="stats">
+  <div class="stat"><div class="n">30</div><div class="l">commits on main</div></div>
+  <div class="stat"><div class="n">+19,195</div><div class="l">lines added (131 files)</div></div>
+  <div class="stat"><div class="n">82→393</div><div class="l">tests, all green</div></div>
+  <div class="stat"><div class="n">8</div><div class="l">agents on the crew</div></div>
+  <div class="stat"><div class="n">10+</div><div class="l">review gates run</div></div>
+  <div class="stat"><div class="n">3</div><div class="l">published reports</div></div>
+</div>
+
+<h2>Phase timeline</h2>
+
+<div class="phase">
+  <h3>1 · Foundation <span class="tag">Jul 19</span></h3>
+  <p>Created the private GitHub repo, established the review-before-commit discipline (security + quality agents on every landing), and shipped the base feature set: attachments, turn history, session forking, the Sous local-model title helper.</p>
+</div>
+
+<div class="phase">
+  <h3>2 · Crew assembly <span class="tag">Jul 19</span></h3>
+  <p>Recruited the six-worker crew — <strong>Velvet</strong> (UX), <strong>Magpie</strong> (QA + browsers), <strong>Beacon</strong> (marketing), <strong>Fresco</strong> (UI), <strong>Forge</strong> (dev), <strong>Tinker</strong> (bugfix) — plus <strong>Lantern</strong> (Codex/gpt-5.6-luna keep-alive watchdog) and browser views on the phone companion.</p>
+</div>
+
+<div class="phase amber">
+  <h3>3 · Mobile companion hardening <span class="tag">Jul 19–20</span></h3>
+  <ul>
+    <li>Magpie's first QA pass found 3 HIGH defects (dead note/browser placement over HTTP, stacked zoom overlays typing into the <em>wrong agent</em>, connection-pool starvation) — all fixed.</li>
+    <li>Narrow-viewport UX: full-height scrollable terminal, 44px controls, ↑↓←→ ESC key cluster in the send row, turn history usable on a phone.</li>
+    <li>Sleep-proofing: in-app power assertion + system keep-awake, so closing the screen no longer kills mobile or remote control.</li>
+  </ul>
+</div>
+
+<div class="phase amber">
+  <h3>4 · The turn-tracking reliability arc <span class="tag">Jul 20–21</span></h3>
+  <p>A chain of user-reported status bugs, each root-caused and regression-tested:</p>
+  <ul>
+    <li>Pasted prompts fake-started turns → bracketed-paste-aware tracking + split prompt/Enter delivery.</li>
+    <li>"First reply = mission complete" → live-spinner detection holds turns open.</li>
+    <li>Stuck idle/green cards → self-healing phase recovery.</li>
+    <li><strong>The endgame:</strong> turn records bound exactly to Claude session histories by message UUID — rewinds reconcile away, numbering is exact, phantom split-echoes dedupe. Verified 8/8 agents position-and-text exact.</li>
+    <li>Sous titles: outage-immune paced backfill; historical blanks fill to 100%.</li>
+  </ul>
+</div>
+
+<div class="phase violet">
+  <h3>5 · Team fork, teams &amp; roles <span class="tag">Jul 20–21</span></h3>
+  <ul>
+    <li><strong>Team fork</strong>: pick canvas elements, per-terminal turn choice (latest / first / assembled), per-terminal target dirs, git-worktree toggle → a new workspace with connections and layout preserved.</li>
+    <li><strong>Teams</strong>: named snapshots (<code>~/.cookrew/teams/</code>); forks from a saved team use the frozen snapshot. 4 teams saved, including the "Cookrew Core Team v2" baseline.</li>
+    <li><strong>Roles</strong>: save any agent as a reusable role with a generated avatar, selectable at terminal creation like the built-in presets; team fork offers fork-from-role.</li>
+    <li>Cross-workspace orchestration fixed along the way (the orphaned-orch bug): global identity resolution, dir-routed recruit, switch-race retries.</li>
+  </ul>
+</div>
+
+<div class="phase violet">
+  <h3>6 · Full-sight observability <span class="tag">Jul 21</span></h3>
+  <ul>
+    <li>Append-only cross-workspace <strong>event log</strong> (<code>~/.cookrew/events.jsonl</code>) fed by a single store choke-point — metadata only, batched writes, rotation.</li>
+    <li><strong>Reminder toasts</strong> for every lifecycle event with burst coalescing (a team fork of 11 = one card), "in &lt;workspace&gt;" labels for non-active workspaces.</li>
+    <li><strong>Metrics/history panel</strong> + <strong>cross-workspace agent roster</strong> — teammates survive switches and reboots.</li>
+  </ul>
+</div>
+
+<div class="phase violet">
+  <h3>7 · The checkpoint program <span class="tag">Jul 21</span></h3>
+  <p>The user's five first-principle criteria, delivered and gate-verified:</p>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Criterion</th><th>Gate verdict</th></tr></thead>
+    <tbody>
+      <tr><td>1 · Every checkpoint matches the user input exactly</td><td><span class="v pass">PASS 8/8 agents</span></td></tr>
+      <tr><td>2 · Assembled forks carry real context</td><td><span class="v pass">PASS (native uuid-ranges)</span></td></tr>
+      <tr><td>3 · Copy / edit / rewind original session records</td><td><span class="v pass">PASS (uuid-exact)</span></td></tr>
+      <tr><td>4 · Role = recovery point of a checkpoint</td><td><span class="v part">Fixed post-gate · re-verify running</span></td></tr>
+      <tr><td>5 · Teams reusable cross-project</td><td><span class="v pass">PASS (fresh-dir native rewind)</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p style="margin-top:8px;">Product rename to <strong>CHECKPOINT</strong> across all user-facing surfaces (Codex-safe wording), amber save-point badges, role-from-checkpoint chips. The Codex first-turn capture edge was root-caused and fixed in the same cycle (re-verify running).</p>
+</div>
+
+<div class="phase">
+  <h3>8 · QA infrastructure &amp; ops lessons</h3>
+  <ul>
+    <li><code>mobile/client.html</code> invariant guard — after three stale-rewrite regressions, the suite now fails on any duplicate CSS block, missing kit, or stale wording.</li>
+    <li>Ops singleton rule (never <code>npm run dev</code> beside a live instance) + orphaned-Electron sweep protocol — the "restarts that didn't restart" mystery, solved.</li>
+    <li>Three published reports: <a href="https://claude.ai/code/artifact/dbfc52e3-792e-4ba5-9cf7-f268f1a8cd28">Phone Companion QA</a>, <a href="https://claude.ai/code/artifact/d9eaf7c2-a02d-4e97-8d09-c0dac41c7b1b">Observability Spec</a>, <a href="https://claude.ai/code/artifact/c93fc7b4-9755-4f74-8939-fff2432da627">Checkpoint Final Gate</a>.</li>
+  </ul>
+</div>
+
+<h2>Current state</h2>
+<div class="phase">
+  <ul>
+    <li><code>main</code> @ <code>0ddc9ea</code>, local == origin, working tree clean at report time.</li>
+    <li>393 tests green · typecheck clean · single app instance verified · mobile serving on HTTP + HTTPS.</li>
+    <li>Magpie's delta re-verification of the two gate fixes is in flight; crew idle otherwise.</li>
+    <li>Logged follow-ups: query-endpoint shared read (perf), team-delete sidecar pruning, two assembly boundary tests, <code>--resume</code> flag validation.</li>
+  </ul>
+</div>
+
+<footer>
+  Compiled by the Conductor from live git history, test runs, agent reports, and QA gates · 2026-07-21 ·
+  Repo: anvztor/cookrew-dev · Session: Cookrew canvas, workspace "Cookrew Dev"
+</footer>
+
+</div>
+</body>
+</html>

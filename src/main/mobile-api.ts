@@ -35,7 +35,7 @@ export interface MobileOps {
   }) => CanvasNode
   forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData
   listWorkspaces: () => WorkspaceList
-  createWorkspace: (name: string, dir: string) => WorkspaceMeta
+  createWorkspace: (name: string, dir: string, team?: string) => WorkspaceMeta | Promise<WorkspaceMeta>
   switchWorkspace: (id: string) => WorkspaceMeta
   renameWorkspace: (id: string, name: string) => WorkspaceList
   /** Workspace v2: remove workspace + multi-dir + per-terminal cwd + git. */
@@ -138,8 +138,12 @@ export async function handleMobileApi(
     return true
   }
   if (method === 'POST' && p === '/api/workspaces') {
-    const body = await readJson<{ name?: string; dir?: string }>(request)
-    respondJson(response, 200, ops.createWorkspace(body.name ?? 'workspace', body.dir ?? ''))
+    const body = await readJson<{ name?: string; dir?: string; team?: string }>(request)
+    respondJson(
+      response,
+      200,
+      await ops.createWorkspace(body.name ?? 'workspace', body.dir ?? '', body.team)
+    )
     return true
   }
   if (method === 'POST' && p === '/api/workspaces/switch') {

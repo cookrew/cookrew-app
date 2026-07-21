@@ -319,7 +319,13 @@ export function planTeamFork(
   spec: TeamForkSpec,
   deps: PlanDeps
 ): TeamForkPlan {
-  const included = new Set(spec.nodeIds)
+  // Saved-team semantics (BUG 1, note workspace-from-template-role): the
+  // picker sends nodeIds: [] for a snapshot source to mean "the whole saved
+  // team" — snapshot node ids aren't known to the live canvas, so per-node
+  // selection only applies to live forks. An empty LIVE selection stays an
+  // error (below).
+  const includeAll = source.fromSnapshot && spec.nodeIds.length === 0
+  const included = new Set(includeAll ? source.nodes.map((n) => n.id) : spec.nodeIds)
   const choiceFor = new Map(spec.choices.map((c) => [c.nodeId, c]))
   const idMap = new Map<string, string>()
   const nodes: CanvasNode[] = []
@@ -346,7 +352,20 @@ export function planTeamFork(
     nodes.push(forked)
     terminals.push(plan)
   }
-  if (nodes.length === 0) throw new Error('Team fork needs at least one selected node')
+  if (nodes.length === 0) {
+    // Echo the received spec shape — this rejection has historically hidden
+    // payload mismatches (stale live ids against a snapshot, empty include
+    // sets), and the shape makes the next repro immediate.
+    const idsPreview = spec.nodeIds.slice(0, 5).map((id) => `"${id}"`).join(', ')
+    const truncated = spec.nodeIds.length > 5 ? `, … +${spec.nodeIds.length - 5}` : ''
+    throw new Error(
+      'Team fork needs at least one selected node — ' +
+        `received nodeIds=[${idsPreview}${truncated}] (${spec.nodeIds.length}), ` +
+        `choices=${spec.choices.length}, ` +
+        `fromSavedTeam=${spec.fromSavedTeam ? `"${spec.fromSavedTeam}"` : 'none'}; ` +
+        `source has ${source.nodes.length} node${source.nodes.length === 1 ? '' : 's'}`
+    )
+  }
 
   const connections = source.connections
     .filter((c) => idMap.has(c.a) && idMap.has(c.b))
@@ -591,6 +610,31 @@ function resolveSource(deps: TeamForkDeps, spec: TeamForkSpec): TeamForkSource {
  * workspace pre-seeded with the forked nodes, switch to it (which boots the
  * terminals), then inject each terminal's context once its TUI is quiet.
  */
+/**
+ * FEATURE 1 (note workspace-from-template-role): create a workspace from a
+ * saved team TEMPLATE — the fromSavedTeam fork machinery over the whole
+ * snapshot, retargeted to one directory. Session sidecars native-restore in
+ * the fresh project dir; worktrees stay off — the target dir IS the
+ * requested workspace location, not a scratch copy.
+ */
+export async function workspaceFromTemplate(
+  deps: TeamForkDeps,
+  input: { name: string; dir: string; team: string }
+): Promise<WorkspaceMeta> {
+  if (!deps.teams.load(input.team)) {
+    throw new Error(`No saved team '${input.team}' to use as a template`)
+  }
+  const dir = input.dir.trim()
+  return forkTeam(deps, {
+    name: input.name,
+    nodeIds: [], // snapshot semantic: the whole saved team
+    choices: [],
+    fromSavedTeam: input.team,
+    dirs: dir.length > 0 ? [dir] : undefined,
+    worktree: false
+  })
+}
+
 export async function forkTeam(deps: TeamForkDeps, spec: TeamForkSpec): Promise<WorkspaceMeta> {
   const source = resolveSource(deps, spec)
   const planned = planTeamFork(source, spec, {

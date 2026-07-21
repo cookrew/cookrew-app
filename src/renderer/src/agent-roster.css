@@ -633,3 +633,80 @@
 .turn-panel-role {
   flex: 0 0 auto;
 }
+
+/* ==== role terminal chips + workspace template picker (Velvet structural) ==== */
+
+/* Saved-role chip in the TERMINAL placement row — persona violet accent,
+   deterministic RoleAvatar riding inside (Fresco polishes the visual). */
+.cr-dock-presets .role-chip {
+  border-color: var(--violet);
+}
+
+.cr-dock-presets .role-chip.amber {
+  background: var(--violet);
+  color: var(--cream-hi);
+}
+
+.role-chip-avatar {
+  width: 12px;
+  height: 12px;
+  vertical-align: -2px;
+}
+
+/* From-team-template list inside the workspace-create form. */
+.cr-ws-template {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream);
+  padding: 3px;
+}
+
+.cr-ws-template-head {
+  font-family: var(--font-pixel);
+  font-size: 7.5px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  padding: 2px 4px;
+}
+
+.cr-ws-template-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--ink);
+}
+
+.cr-ws-template-item:hover {
+  background: var(--cream-lo);
+}
+
+.cr-ws-template-item.active {
+  background: var(--amber-soft);
+}
+
+.cr-ws-template-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cr-ws-template-meta {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--muted);
+  flex: 0 0 auto;
+}

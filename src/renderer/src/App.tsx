@@ -13,7 +13,7 @@ import {
   ReactFlowProvider
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import type { CanvasNode, BrowserNodeData, TerminalNodeData, WorkspaceState } from '../../shared/model'
+import type { AgentRole, CanvasNode, BrowserNodeData, TerminalNodeData, WorkspaceState } from '../../shared/model'
 import { activeBrowserTab, browserTabs } from '../../shared/model'
 import type { TerminalActivity } from '../../shared/turn'
 import { cookrew, isRemoteMode } from './api'
@@ -69,6 +69,9 @@ function Canvas(): React.JSX.Element {
   const [preset, setPreset] = useState('Shell')
   const [orch, setOrch] = useState(false)
   const [presets, setPresets] = useState<string[]>(['Shell'])
+  const [roles, setRoles] = useState<AgentRole[]>([])
+  /** Selected saved role for TERMINAL placement, or null for a plain preset. */
+  const [role, setRole] = useState<string | null>(null)
   const [activities, setActivities] = useState<Record<string, TerminalActivity>>({})
   const [thumbs, setThumbs] = useState<Record<string, string>>({})
   /** Alignment guides while a card resize is snapped to a neighbour edge. */
@@ -86,6 +89,8 @@ function Canvas(): React.JSX.Element {
     void cookrew()
       .listPresets()
       .then((list) => setPresets(list.map((p) => p.name)))
+    // Saved roles ride alongside presets as terminal-creation options.
+    void cookrew().roleList().then(setRoles).catch(() => undefined)
   }, [])
   const reactFlow = useReactFlow()
   const { screenToFlowPosition } = reactFlow
@@ -306,8 +311,14 @@ function Canvas(): React.JSX.Element {
       const position = screenToFlowPosition({ x: event.clientX, y: event.clientY })
       if (tool === 'terminal') {
         // window.prompt is unsupported in Electron — creation uses the
-        // preset chips in the dock; names come from the preset.
-        const created = await cookrew().createTerminal({ name: preset, preset, position, orch })
+        // preset (or saved-role) chips in the dock; a role boots its preset
+        // with the role prompt injected once the TUI is quiet (roleName path).
+        const selectedRole = role ? roles.find((r) => r.name === role) : undefined
+        const created = await cookrew().createTerminal(
+          selectedRole
+            ? { name: selectedRole.name, preset: selectedRole.preset, roleName: selectedRole.name, position, orch }
+            : { name: preset, preset, position, orch }
+        )
         setTool('select')
         // A new code agent zooms straight into its live terminal so the
         // first prompt can be typed immediately; plain shells stay as
@@ -343,7 +354,7 @@ function Canvas(): React.JSX.Element {
         setConnectFrom(null)
       }
     },
-    [tool, preset, orch, screenToFlowPosition, zoomToNode]
+    [tool, preset, role, roles, orch, screenToFlowPosition, zoomToNode]
   )
 
   const onNodesDelete = useCallback((deleted: Node[]) => {
@@ -440,7 +451,13 @@ function Canvas(): React.JSX.Element {
           onSelect={setTool}
           presets={presets}
           preset={preset}
-          onPreset={setPreset}
+          onPreset={(name) => {
+            setPreset(name)
+            setRole(null)
+          }}
+          roles={roles}
+          role={role}
+          onRole={setRole}
           orch={orch}
           onOrch={setOrch}
           voiceFor={
