@@ -30,6 +30,13 @@ const QUIESCENCE_MS = 2500
 const RESUME_WINDOW_MS = 30_000
 /** Min gap between rendered-screen scans in the self-heal path. */
 const HEAL_SCAN_MS = 1000
+/**
+ * Paced Sous title-backfill: one record per tick so a burst never trips the
+ * summarizer's down-cooldown (which would null out a whole sequential pass).
+ */
+const BACKFILL_TICK_MS = 2000
+/** Cooldown before retrying the SAME record — lets a bad/slow one not starve the rest. */
+const BACKFILL_RETRY_MS = 60_000
 /** Minimum turn duration before quiescence may end it (agent spin-up). */
 const GRACE_MS = 1500
 const POLL_MS = 400
@@ -52,6 +59,27 @@ function promptsMatch(scraped: string, exact: string): boolean {
   const key = (s: string): string =>
     s.trim().replace(/\s+/g, ' ').toLowerCase().slice(0, PROMPT_MATCH_CHARS)
   return key(scraped) === key(exact)
+}
+
+/**
+ * Find the prior record that is the SAME exchange as `record`, for carrying
+ * over the Sous title / read marker on reconcile:
+ * - exact message-uuid match wins (survives an index shift from a rewind);
+ * - otherwise fall back to same index + matching prompt, which MIGRATES a
+ *   legacy titled record (persisted before uuid-stamping, so it has no uuid)
+ *   onto its now-uuid-bearing successor — but NOT across a genuine rewind,
+ *   where the prior at that index carries a different uuid.
+ */
+function matchPrior(
+  record: TurnRecord,
+  byUuid: Map<string | undefined, TurnRecord>,
+  byIndex: Map<number, TurnRecord>
+): TurnRecord | undefined {
+  if (record.uuid && byUuid.has(record.uuid)) return byUuid.get(record.uuid)
+  const at = byIndex.get(record.index)
+  if (!at) return undefined
+  if (record.uuid && at.uuid && at.uuid !== record.uuid) return undefined
+  return promptsMatch(at.prompt, record.prompt) ? at : undefined
 }
 
 interface TrackedTerminal {
@@ -109,6 +137,12 @@ export class TurnTracker extends EventEmitter {
    */
   private histories = new Map<string, TurnRecord[]>()
 
+  /** Paced Sous title-backfill pump for historical untitled records. */
+  private backfillTimer: NodeJS.Timeout | null = null
+  private backfillInFlight = false
+  /** Last backfill attempt per record ("terminalId:index" → epoch ms). */
+  private backfillAttempt = new Map<string, number>()
+
   /** Completed turns for a terminal, oldest first (lazy-loaded from disk). */
   history(terminalId: string): TurnRecord[] {
     const cached = this.histories.get(terminalId)
@@ -133,12 +167,7 @@ export class TurnTracker extends EventEmitter {
     const byUuid = new Map(previous.filter((r) => r.uuid).map((r) => [r.uuid, r]))
     const byIndex = new Map(previous.map((r) => [r.index, r]))
     const merged = records.map((record) => {
-      const prior = record.uuid
-        ? byUuid.get(record.uuid)
-        : (() => {
-            const at = byIndex.get(record.index)
-            return at && promptsMatch(at.prompt, record.prompt) ? at : undefined
-          })()
+      const prior = matchPrior(record, byUuid, byIndex)
       if (!prior) return record
       // Same exchange: carry over what the reconcile source can't know —
       // the Sous title and the acknowledge-on-view read marker.
@@ -154,6 +183,89 @@ export class TurnTracker extends EventEmitter {
     this.store?.scheduleSave(terminalId, capped)
     const t = this.tracked.get(terminalId)
     if (t) this.push(t)
+    this.ensureBackfillPump()
+  }
+
+  /**
+   * Regenerate Sous titles for records that reconciled in without one — the
+   * historical turns whose title was lost from disk before carryover existed,
+   * and any turn Sous never got to title. Carryover keeps the records that DID
+   * hold a title; this fills only genuine gaps.
+   *
+   * PACED, not burst: one record per tick, single-flight. A tight sequential
+   * loop over dozens of records trips the summarizer's down-cooldown on the
+   * first slow/failed call and nulls out the whole rest of the pass — this
+   * pump instead attempts one record every BACKFILL_TICK_MS, so a cooldown
+   * only costs the next tick. Oldest untitled first (Conductor T1 before its
+   * later turns); a per-record retry cooldown keeps one unfittable or
+   * down-Sous record from starving the others. Independent of reconcile, so
+   * idle agents' histories backfill too. Stops itself when nothing is left.
+   */
+  private ensureBackfillPump(): void {
+    if (this.backfillTimer || !this.hasUntitled()) return
+    this.backfillTimer = setInterval(() => void this.backfillTick(), BACKFILL_TICK_MS)
+    this.backfillTimer.unref?.()
+  }
+
+  private stopBackfillPump(): void {
+    if (this.backfillTimer) clearInterval(this.backfillTimer)
+    this.backfillTimer = null
+  }
+
+  private hasUntitled(): boolean {
+    for (const records of this.histories.values()) {
+      if (records.some((r) => r.title === undefined && (r.reply.length > 0 || r.prompt.length > 0))) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /** Oldest untitled record not attempted within the retry cooldown. */
+  private nextBackfill(): { terminalId: string; record: TurnRecord; key: string } | null {
+    const now = Date.now()
+    for (const [terminalId, records] of this.histories) {
+      for (const record of records) {
+        if (record.title !== undefined) continue
+        if (record.reply.length === 0 && record.prompt.length === 0) continue
+        const key = `${terminalId}:${record.index}`
+        if (now - (this.backfillAttempt.get(key) ?? 0) < BACKFILL_RETRY_MS) continue
+        return { terminalId, record, key }
+      }
+    }
+    return null
+  }
+
+  private async backfillTick(): Promise<void> {
+    if (this.backfillInFlight) return
+    if (!this.hasUntitled()) {
+      this.stopBackfillPump()
+      return
+    }
+    const next = this.nextBackfill()
+    if (!next) return // all untitled are in cooldown — a later tick retries
+    this.backfillInFlight = true
+    this.backfillAttempt.set(next.key, Date.now())
+    try {
+      const title = await this.summarize({
+        prompt: next.record.prompt,
+        tools: [],
+        lines: next.record.reply.split('\n')
+      })
+      if (title === null) return // Sous down / cooldown; retried after BACKFILL_RETRY_MS
+      const current = this.histories.get(next.terminalId)
+      const live = current?.find((r) => r.index === next.record.index)
+      // Skip if the turn was rewound / already titled while we summarized.
+      if (!current || !live || live.title !== undefined) return
+      if (live.uuid !== next.record.uuid || live.prompt !== next.record.prompt) return
+      const updated = current.map((r) => (r.index === next.record.index ? { ...r, title } : r))
+      this.histories.set(next.terminalId, updated)
+      this.store?.scheduleSave(next.terminalId, updated)
+      const t = this.tracked.get(next.terminalId)
+      if (t) this.push(t)
+    } finally {
+      this.backfillInFlight = false
+    }
   }
 
   /**
@@ -284,6 +396,7 @@ export class TurnTracker extends EventEmitter {
   }
 
   disposeAll(): void {
+    this.stopBackfillPump()
     for (const id of [...this.tracked.keys()]) this.untrack(id)
   }
 

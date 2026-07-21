@@ -1,0 +1,321 @@
+<title>Cookrew Market Plan — First Principles</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #f5f6f4; --surface: #ffffff; --ink: #1c2321; --ink-soft: #55605c;
+    --line: #dde2de; --teal: #0e8f7e; --teal-soft: #e2f3f0;
+    --ember: #d4622a; --ember-soft: #fbeadf; --violet: #6b5bd2; --violet-soft: #ebe8fa;
+    --warn-bg: #fdf3e2; --warn-line: #e0b25c; --code-bg: #eef1ef;
+    --bad: #b03a3a; --bad-soft: #f9e7e7; --good: #2e7d4f; --good-soft: #e5f3ea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101615; --surface: #17201e; --ink: #e6ebe9; --ink-soft: #94a29d;
+      --line: #26332f; --teal: #34c4ae; --teal-soft: #12312c;
+      --ember: #ee8148; --ember-soft: #37231a; --violet: #9d8ff0; --violet-soft: #262040;
+      --warn-bg: #2c2416; --warn-line: #a67c2e; --code-bg: #1e2926;
+      --bad: #e07070; --bad-soft: #3a1f1f; --good: #5fc48a; --good-soft: #1c3327;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #101615; --surface: #17201e; --ink: #e6ebe9; --ink-soft: #94a29d;
+    --line: #26332f; --teal: #34c4ae; --teal-soft: #12312c;
+    --ember: #ee8148; --ember-soft: #37231a; --violet: #9d8ff0; --violet-soft: #262040;
+    --warn-bg: #2c2416; --warn-line: #a67c2e; --code-bg: #1e2926;
+    --bad: #e07070; --bad-soft: #3a1f1f; --good: #5fc48a; --good-soft: #1c3327;
+  }
+  :root[data-theme="light"] {
+    --bg: #f5f6f4; --surface: #ffffff; --ink: #1c2321; --ink-soft: #55605c;
+    --line: #dde2de; --teal: #0e8f7e; --teal-soft: #e2f3f0;
+    --ember: #d4622a; --ember-soft: #fbeadf; --violet: #6b5bd2; --violet-soft: #ebe8fa;
+    --warn-bg: #fdf3e2; --warn-line: #e0b25c; --code-bg: #eef1ef;
+    --bad: #b03a3a; --bad-soft: #f9e7e7; --good: #2e7d4f; --good-soft: #e5f3ea;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    background-image: radial-gradient(color-mix(in srgb, var(--ink) 7%, transparent) 1px, transparent 1px);
+    background-size: 26px 26px;
+    font: 16px/1.7 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  }
+  main { max-width: 920px; margin: 0 auto; padding: 56px 24px 80px; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .eyebrow { font-family: ui-monospace, Menlo, monospace; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-soft); margin: 0 0 10px; }
+  h1 { font-size: 34px; line-height: 1.25; margin: 0 0 8px; text-wrap: balance; }
+  .sub { color: var(--ink-soft); margin: 0 0 12px; max-width: 66ch; }
+  h2 { font-size: 22px; margin: 60px 0 16px; padding-top: 24px; border-top: 1px solid var(--line); }
+  h2 .idx { font-family: ui-monospace, Menlo, monospace; font-size: 13px; color: var(--ink-soft); margin-right: 10px; letter-spacing: .1em; }
+  h3 { font-size: 17px; margin: 26px 0 10px; }
+  p { max-width: 70ch; }
+  li { margin: 6px 0; max-width: 68ch; }
+  code { font-family: ui-monospace, Menlo, monospace; font-size: .88em; background: var(--code-bg); padding: 2px 6px; border-radius: 4px; }
+  a { color: var(--teal); }
+  .tag { display: inline-block; font-family: ui-monospace, Menlo, monospace; font-size: 11px; letter-spacing: .08em; padding: 2px 9px; border-radius: 999px; vertical-align: 2px; }
+  .tag.teal { background: var(--teal-soft); color: var(--teal); }
+  .tag.ember { background: var(--ember-soft); color: var(--ember); }
+  .tag.violet { background: var(--violet-soft); color: var(--violet); }
+  .tag.bad { background: var(--bad-soft); color: var(--bad); }
+  .tag.good { background: var(--good-soft); color: var(--good); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0; }
+  @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
+  .card.teal { border-top: 3px solid var(--teal); }
+  .card.ember { border-top: 3px solid var(--ember); }
+  .card.violet { border-top: 3px solid var(--violet); }
+  .card.bad { border-top: 3px solid var(--bad); }
+  .card.good { border-top: 3px solid var(--good); }
+  .card h3 { margin-top: 0; }
+  .card ul { padding-left: 18px; margin: 8px 0 0; }
+  .card .meta { font-size: 13px; color: var(--ink-soft); }
+  .tablewrap { overflow-x: auto; margin: 18px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { padding: 9px 13px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: ui-monospace, Menlo, monospace; font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-soft); white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .y { color: var(--good); font-weight: 600; }
+  .n { color: var(--ink-soft); opacity: .7; }
+  .half { color: var(--warn-line); font-weight: 600; }
+  .callout { background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 10px; padding: 14px 18px; margin: 20px 0; }
+  .rec { background: var(--violet-soft); border: 1px solid var(--violet); border-radius: 10px; padding: 16px 20px; margin: 20px 0; }
+  .phase { border-left: 3px solid var(--line); padding: 2px 0 8px 22px; margin: 26px 0; position: relative; }
+  .phase::before { content: ""; position: absolute; left: -8px; top: 8px; width: 13px; height: 13px; border-radius: 50%; background: var(--bg); border: 3px solid var(--teal); }
+  .phase.cook::before { border-color: var(--ember); }
+  .phase .when { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; color: var(--ink-soft); letter-spacing: .06em; }
+  .phase h3 { margin: 4px 0 8px; }
+  figure { margin: 24px 0; }
+  figcaption { font-size: 13px; color: var(--ink-soft); text-align: center; margin-top: 8px; }
+  .diagram { width: 100%; height: auto; display: block; }
+  details { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 18px; margin: 12px 0; }
+  summary { cursor: pointer; font-weight: 600; }
+  footer { margin-top: 72px; padding-top: 20px; border-top: 1px solid var(--line); font-size: 13px; color: var(--ink-soft); }
+  footer a { color: var(--ink-soft); }
+</style>
+
+<main>
+  <p class="eyebrow">Market Plan · v1 · 2026-07-20 · Beacon (Marketing)</p>
+  <h1>Cookrew Market Plan, from First Principles</h1>
+  <p class="sub">
+    Product + competitor research done fresh today (15 competitors mapped, live sites fetched).
+    Core finding: <strong>"infinite canvas for agents" is no longer a differentiator — it's a category.</strong>
+    At least five shipping products have it. What nobody else has: cables that mean <em>permission</em>,
+    a symmetric agent-society CLI, and multiplayer. This plan repositions Cookrew around those three,
+    and supersedes the channel/messaging sections of launch-plan v2 (the phase timeline there still stands).
+  </p>
+
+  <h2><span class="idx">01</span>First principles: what problem is actually being solved?</h2>
+  <p>Strip away features. A developer running multiple AI coding agents has exactly three scarce resources:</p>
+  <div class="grid2">
+    <div class="card teal">
+      <h3>1 · Attention</h3>
+      <p class="meta">You can watch one terminal at a time. N agents ⇒ N−1 are unwatched.</p>
+      <p>Whoever best converts "many agents" into "one glanceable surface" wins the workflow.
+      Space is the oldest attention technology humans have — hence canvas. But canvas alone is now table stakes.</p>
+    </div>
+    <div class="card ember">
+      <h3>2 · Trust</h3>
+      <p class="meta">An unwatched agent with unbounded reach is a liability, not leverage.</p>
+      <p>The unsolved problem is <strong>scoped authority</strong>: what may this agent see and touch?
+      Every competitor either gives agents ambient access to everything (AgentGrid) or no inter-agent access at all.
+      Cookrew's answer — <em>the wiring is the permission model</em> — is structurally unique.</p>
+    </div>
+    <div class="card violet">
+      <h3>3 · Coordination</h3>
+      <p class="meta">Agents that can't talk to each other push all integration work back onto the human.</p>
+      <p>Competitors do hierarchy (lead/coordinator dispatch) or raw plumbing (stdout→stdin pipes).
+      Cookrew ships a <strong>symmetric peer protocol</strong>: any agent can <code>ask</code>, share notes,
+      drive browsers, recruit, schedule — with zero SDK, just a binary on PATH.</p>
+    </div>
+    <div class="card good">
+      <h3>⇒ The physics of Cookrew</h3>
+      <ul>
+        <li><strong>Space = organization</strong> (attention)</li>
+        <li><strong>Cables = authorization</strong> (trust)</li>
+        <li><strong>CLI = protocol</strong> (coordination)</li>
+        <li><strong>Canvas = shared memory</strong> (notes/browsers all agents can use)</li>
+      </ul>
+      <p class="meta">Everything we say publicly should reduce to these four equations.</p>
+    </div>
+  </div>
+
+  <h2><span class="idx">02</span>Market map — 15 competitors, July 2026</h2>
+  <p>Three buckets: worktree-manager GUIs, spatial canvases (our arena), terminal platforms. The canvas arena got crowded in the last two quarters — and the category is already shaking out (Terragon dead 01/2026, Vibe Kanban cloud dead 04/2026, Crystal deprecated 02/2026).</p>
+  <div class="tablewrap"><table>
+    <tr><th>Product</th><th>Model</th><th>Canvas</th><th>Cables</th><th>Agent CLI/protocol</th><th>Browsers</th><th>Multi&#8209;player</th><th>Mobile</th><th>Traction signal</th></tr>
+    <tr><td><strong>Maestri</strong> <span class="tag bad">closest</span></td><td>Closed · Mac-only · $18 once</td><td class="y">✓</td><td class="half">◐ raw stdout→stdin pipes</td><td class="n">—</td><td class="y">✓ portals</td><td class="n">—</td><td class="n">—</td><td>PH featured</td></tr>
+    <tr><td><strong>Cate</strong> <span class="tag bad">OSS incumbent</span></td><td>MIT · Electron · cross-platform</td><td class="y">✓</td><td class="n">—</td><td class="half">◐ panel/browser control only</td><td class="y">✓ drivable</td><td class="n">—</td><td class="n">—</td><td>1.9k ★ · 75 releases · HN launch</td></tr>
+    <tr><td><strong>AgentGrid</strong></td><td>Closed · cross-platform</td><td class="y">✓</td><td class="n">— (ambient access, no scoping)</td><td class="half">◐ MCP coordinator (hierarchical)</td><td class="y">✓ +DevTools</td><td class="n">—</td><td class="half">◐ beta</td><td>5k+ community claim</td></tr>
+    <tr><td><strong>TermCanvas</strong></td><td>MIT · cross-platform</td><td class="y">✓</td><td class="n">—</td><td class="half">◐ lead-driven "Hydra"</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td>low</td></tr>
+    <tr><td><strong>Conductor</strong> (Melty)</td><td>Closed · Mac-only · free</td><td class="n">list</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td>$22M Series A</td></tr>
+    <tr><td><strong>Sculptor</strong> (Imbue)</td><td>Closed · Mac/Linux</td><td class="n">list</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td>research preview</td></tr>
+    <tr><td><strong>Nimbalyst</strong> (ex-Crystal)</td><td>MIT claimed · 4 platforms</td><td class="n">kanban</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="y">✓ iOS</td><td>Crystal successor</td></tr>
+    <tr><td><strong>claude-squad</strong></td><td>AGPL · TUI</td><td class="n">tmux</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td>7.9k ★</td></tr>
+    <tr><td><strong>Omnara</strong> (YC S25)</td><td>OSS · $9/mo</td><td class="n">feed</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="y">✓ +Watch</td><td>20k builders claim</td></tr>
+    <tr><td><strong>Warp + Oz</strong></td><td>ADE now OSS · credits $18/mo+</td><td class="n">tabs</td><td class="n">—</td><td class="half">◐ cloud control plane</td><td class="n">—</td><td class="half">◐ cloud</td><td class="n">—</td><td>large installed base</td></tr>
+    <tr><td><strong>Claude Code Agent Teams</strong></td><td>Native · Claude-only</td><td class="n">tmux panes</td><td class="n">—</td><td class="half">◐ mailbox (Claude-only)</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td>ships with Claude Code</td></tr>
+    <tr><td><strong>Cookrew</strong> <span class="tag good">us</span></td><td>MIT · Electron · cross-platform + Cloud</td><td class="y">✓</td><td class="y">✓ <strong>= permission</strong></td><td class="y">✓ symmetric peer CLI</td><td class="y">✓ drivable</td><td class="y">✓ Cloud</td><td class="y">✓ QR, no install</td><td>launching 08/2026</td></tr>
+  </table></div>
+  <details>
+    <summary>Long tail (tracked, not battled)</summary>
+    <p>Vibe Kanban (Apache-2.0, vendor-abandoned 04/2026) · Terragon (dead 01/2026) · Superset · Paneflow · Mux · parallel-code · Orca · Proliferate · Gas Town / Multiclaude · opcode (dormant) · agent-deck · QuantaCanvas · Flowith (1M+ users, consumer — different market) · tldraw.computer (starter kit, not product). Index worth being listed in: <span class="mono">awesome-agent-orchestrators</span> (1.1k ★).</p>
+  </details>
+
+  <figure>
+    <svg class="diagram" viewBox="0 0 760 420" role="img" aria-label="Positioning map: spatial vs list workflow, plumbing vs protocol coordination">
+      <line x1="380" y1="30" x2="380" y2="390" stroke="var(--line)" stroke-width="1.5"/>
+      <line x1="40" y1="210" x2="720" y2="210" stroke="var(--line)" stroke-width="1.5"/>
+      <text x="380" y="20" text-anchor="middle" fill="var(--ink-soft)" font-size="12" font-family="ui-monospace, Menlo, monospace">SPATIAL CANVAS ↑</text>
+      <text x="380" y="410" text-anchor="middle" fill="var(--ink-soft)" font-size="12" font-family="ui-monospace, Menlo, monospace">↓ LISTS / TABS / TUI</text>
+      <text x="46" y="204" fill="var(--ink-soft)" font-size="12" font-family="ui-monospace, Menlo, monospace">← ISOLATED AGENTS</text>
+      <text x="714" y="204" text-anchor="end" fill="var(--ink-soft)" font-size="12" font-family="ui-monospace, Menlo, monospace">AGENTS COORDINATE →</text>
+      <g font-size="13">
+        <text x="150" y="90" fill="var(--ink)">Cate <tspan fill="var(--ink-soft)" font-size="11">MIT · 1.9k★</tspan></text>
+        <text x="150" y="120" fill="var(--ink)">TermCanvas</text>
+        <text x="430" y="75" fill="var(--ink)">Maestri <tspan fill="var(--ink-soft)" font-size="11">pipes</tspan></text>
+        <text x="430" y="105" fill="var(--ink)">AgentGrid <tspan fill="var(--ink-soft)" font-size="11">ambient</tspan></text>
+        <text x="110" y="280" fill="var(--ink)">Conductor · Sculptor</text>
+        <text x="110" y="308" fill="var(--ink)">Nimbalyst · claude-squad</text>
+        <text x="110" y="336" fill="var(--ink)">Omnara</text>
+        <text x="430" y="290" fill="var(--ink)">Warp Oz <tspan fill="var(--ink-soft)" font-size="11">cloud plane</tspan></text>
+        <text x="430" y="320" fill="var(--ink)">Agent Teams <tspan fill="var(--ink-soft)" font-size="11">Claude-only</tspan></text>
+      </g>
+      <rect x="560" y="42" width="180" height="84" rx="10" fill="var(--teal-soft)" stroke="var(--teal)" stroke-width="2"/>
+      <text x="650" y="72" text-anchor="middle" fill="var(--teal)" font-weight="700" font-size="14" font-family="ui-monospace, Menlo, monospace">COOKREW</text>
+      <text x="650" y="93" text-anchor="middle" fill="var(--ink)" font-size="11.5">cables = permission</text>
+      <text x="650" y="110" text-anchor="middle" fill="var(--ink)" font-size="11.5">peer CLI + multiplayer</text>
+    </svg>
+    <figcaption>Top-right is nearly empty: spatial <em>and</em> truly coordinating. Maestri/AgentGrid coordinate crudely (pipes / ambient reads) — no permission semantics, no peer protocol, no multiplayer.</figcaption>
+  </figure>
+
+  <h2><span class="idx">03</span>Positioning: what we say — and what we stop saying</h2>
+  <div class="rec">
+    <strong>One-liner (external, everywhere):</strong><br>
+    <em>"Cookrew — the multiplayer kitchen for humans &amp; AI agents. Wire your crew together on one open-source canvas: the cables are the permissions, and every agent speaks one CLI."</em>
+  </div>
+  <div class="grid2">
+    <div class="card good">
+      <h3>Lead with (defensible)</h3>
+      <ul>
+        <li><strong>"The graph is the ACL"</strong> — connectivity-as-authorization. Unclaimed by anyone. Security-conscious devs' first question answered by the UI itself.</li>
+        <li><strong>Agent society, not agent hierarchy</strong> — symmetric peer CLI: <code>ask</code> / notes / browsers / <code>recruit</code> / routines. Zero SDK.</li>
+        <li><strong>Multiplayer</strong> — humans + agents in one live canvas (Cloud). Zero competitors have it.</li>
+        <li><strong>Local-first + open source (MIT) + cross-platform</strong> — as a <em>combo</em> with the above; alone each is matched.</li>
+      </ul>
+    </div>
+    <div class="card bad">
+      <h3>Stop leading with (commoditized)</h3>
+      <ul>
+        <li>"Infinite canvas for agents" — ≥5 shipping products. It's the category name now, not the pitch.</li>
+        <li>Embedded browsers, notes-on-canvas, voice, mobile companion, multi-harness support, persistence — all matched somewhere. Mention as proof of completeness, never as the headline.</li>
+        <li>"Cables between terminals" — Maestri shipped visible cables. Our angle is <em>what cables mean</em>, never that they exist.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout">
+    <strong>Threat handling (rehearsed, never improvised):</strong>
+    <ul>
+      <li><strong>Claude Code Agent Teams</strong> commoditizes orchestration primitives → position Cookrew as the best <em>surface</em> to run Agent Teams on (terminal nodes host it), never as an alternative. "Bring your own orchestrator; Cookrew is where you watch it work."</li>
+      <li><strong>Cate</strong> (MIT, 1.9k★, fast releases) → out-position on meaning (permission/protocol/multiplayer), out-execute on release cadence. Per launch-plan v2 discipline: never name competitors in our materials; answer comparison threads with our design choices only.</li>
+      <li><strong>Electron objection</strong> (HN-inevitable) → pre-seeded FAQ + first comment: cross-platform and open source are product prerequisites, native perf work cited.</li>
+    </ul>
+  </div>
+
+  <h2><span class="idx">04</span>Beachhead & audience</h2>
+  <p><strong>Beachhead:</strong> developers already running 2+ CLI coding agents daily (Claude Code / Codex / OpenCode) who have felt the pain of alt-tabbing between blind terminals. They exist in exactly countable places (r/ClaudeAI, HN, agent-tooling X, Discords) and they churn tools fast — which is an advantage for a new entrant with a real differentiator.</p>
+  <p><strong>Explicitly not yet:</strong> teams (until Cloud), no-code agent builders, consumer canvas users (Flowith's market). Saying no to these keeps the message sharp.</p>
+
+  <h2><span class="idx">05</span>Channels & launch playbook</h2>
+  <div class="callout">
+    <strong>The single most important channel finding:</strong> in 2025–26 HN data, <em>every</em> "canvas + AI agents"
+    Show HN flopped (NodePad 5 pts, Magic Canvas 4, Canvo 2, AgentCanvas 1; Crystal tried 6 times, best 8 pts) —
+    while outcome-framed, open-source-in-title launches won big (Omnara <strong>310</strong> pts, Emdash <strong>206</strong>,
+    Vibe Kanban <strong>195</strong>, Superset relaunch 24→<strong>96</strong>). We sell the <em>outcome</em>
+    (agents that talk, drive browsers, recruit help), never the medium ("spatial canvas").
+    HN→GitHub conversion runs ~1.4 stars per upvote (arXiv 2511.04453); one flop is not a verdict — relaunch with sharper framing works.
+  </div>
+  <h3>Launch mechanics (one 48-hour window)</h3>
+  <p>Stack everything into 48h to cross GitHub daily-trending (~50–300 stars/day): Show HN Tue–Thu 9am–12pm ET with GitHub URL as the link + pre-written "I built this because…" first comment; Reddit posts same window; X launch video; awesome-list PRs same week.</p>
+  <div class="tablewrap"><table>
+    <tr><th>Channel</th><th>Size / signal</th><th>Play</th></tr>
+    <tr><td><strong>Show HN</strong></td><td class="num">~1.4 ★/upvote; 5–50k visits/48h</td><td>Outcome title (see §06); founder answers comments all day; pre-empt the 4 stock objections: "why not tmux?", "review is the bottleneck", tool fatigue, Electron perf</td></tr>
+    <tr><td><strong>r/ClaudeCode + r/ClaudeAI</strong></td><td class="num">355k + 1.01M members</td><td>Workflow-story posts with video ("my agents QA each other via a shared browser node"), not link-drops; highest-intent surface we have</td></tr>
+    <tr><td><strong>X launch video</strong></td><td class="num">a swyx RT > a PH launch</td><td>60–90s capture of what a terminal can't show: cables cut = access revoked, agents messaging, browser driven. Conductor won via X alone — the polished-app route is open to us</td></tr>
+    <tr><td><strong>Awesome-list PRs</strong></td><td class="num">awesome-claude-code 40k★ · e2b awesome-ai-agents 29k★</td><td>PR into both + rohitg00/awesome-claude-code-toolkit in launch week; compounds trending</td></tr>
+    <tr><td><strong>Creators</strong></td><td class="num">IndyDevDan 127k (≈45k views/video) · Cole Medin 204k</td><td>Personal note + repo; IndyDevDan is the single best fit (channel = agentic coding with Claude Code). Also Simon Willison — a blog mention is an HN launch by proxy</td></tr>
+    <tr><td><strong>Newsletters</strong></td><td class="num">TLDR AI 1.1M · Latent Space 200k+</td><td>Free curation submissions in launch week; Latent Space is the culture fit</td></tr>
+    <tr><td><strong>Anthropic ecosystem</strong></td><td class="num">Discord 115k · plugin marketplace</td><td>Ship a <code>cookrew</code> Claude Code plugin/skill (superpowers precedent, 94k★); be present in Claude Code channels answering, not advertising</td></tr>
+    <tr><td><strong>CN channels</strong></td><td class="num">V2EX · linux.do · 即刻</td><td>Unchanged from v2: native copy, dev-diary tone, staggered within launch week</td></tr>
+  </table></div>
+  <h3>Vocabulary (July 2026)</h3>
+  <ul>
+    <li><strong>Use:</strong> "agent teams" (Anthropic-blessed, searched), "background agents", "agentic engineering" (Karpathy), "vibe engineering" (Willison). Our cross-agent messaging maps exactly onto "agent teams" — ride the term, then differentiate on what Claude Code does NOT do: cross-vendor (Claude+Codex), spatial topology, browser nodes, cables-as-permissions.</li>
+    <li><strong>Avoid:</strong> "swarm", "100 agents", "vibe coding" (now connotes irresponsibility), orchestration-as-promise. The winning register is sober + concrete numbers + "real work" + open source.</li>
+    <li><strong>Sherlock hedge:</strong> Anthropic keeps absorbing the "manage sessions" layer (Agent View, May 2026, killed pure dashboards). Everything we lead with must be a thing Claude Code itself won't do.</li>
+  </ul>
+
+  <h2><span class="idx">06</span>Roadmap fit (inherits launch-plan v2 phases)</h2>
+  <div class="phase">
+    <span class="when">PHASE 0 · now → 08-02 · prep</span>
+    <h3>Unchanged from v2, plus two research-driven edits</h3>
+    <ul>
+      <li>All v2 items stand: rename completion, CI + 3-platform installers, 90s demo + 3 GIFs, site refresh + Cloud waitlist, security review.</li>
+      <li><strong>Edit 1 — GIF #1 changes:</strong> the hero GIF must show <em>cutting a cable and watching an agent lose access</em> (permission model made visible), not just two agents chatting. That's the shot no competitor can screenshot-copy.</li>
+      <li><strong>Edit 2 — Agent Teams demo:</strong> record Claude Code Agent Teams running <em>inside</em> Cookrew terminal nodes. Neutralizes the "native tooling killed this" comment pre-emptively.</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <span class="when">PHASE 1 · week of 08-04 · launch week</span>
+    <h3>Show HN framing updated by research</h3>
+    <ul>
+      <li>Title (rewritten after channel research — outcome-first, "open-source" in title, no canvas-as-headline):
+        <em>"Show HN: Cookrew – Open-source workspace where AI agents talk, drive browsers, and recruit help"</em>.
+        First comment leads with the review-bottleneck answer: agents QA each other before you look — that's the #1 HN objection ("humans can't review 10 agents") turned into our pitch.</li>
+      <li>Rest of v2 launch-week plan stands (first comment pre-written, X thread, CN channels V2EX/linux.do/即刻, Reddit×3 custom angles, same-day patch releases).</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <span class="when">PHASE 2 · 08 → 09 · cadence</span>
+    <h3>Feature drops re-ordered by defensibility</h3>
+    <ul>
+      <li>Stations (worktree isolation) moves <strong>up</strong> — it extends the trust story ("every agent in its own branch, wired only to what it needs") and the OSS incumbent ships territories already.</li>
+      <li>Product Hunt rides the Stations or SSH/remote drop, with stars in hand (unchanged from v2).</li>
+    </ul>
+  </div>
+  <div class="phase cook">
+    <span class="when">PHASE 3 · Q4 · Cloud</span>
+    <h3>Multiplayer is the moat — say it early, ship it Q4</h3>
+    <ul>
+      <li>Research confirms zero competitors have humans+agents co-editing one live canvas; category deaths (Terragon, Vibe Kanban cloud) say cloud-<em>only</em> is the wrong wedge. Local-first desktop + Cloud multiplayer is the hedge. v2 Phase 3 plan stands; waitlist collects from day 1.</li>
+    </ul>
+  </div>
+
+  <h2><span class="idx">07</span>Metrics (unchanged from v2, one addition)</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Checkpoint</th><th>Metric</th><th>Target</th></tr>
+    <tr><td class="num">Launch weekend</td><td>GitHub stars / HN</td><td class="num">500+ / front page</td></tr>
+    <tr><td class="num">09-01</td><td>Stars / external contributors / Discord</td><td class="num">1,500+ / 5+ / 200+</td></tr>
+    <tr><td class="num">10-01</td><td>Weekly active installs / Cloud waitlist</td><td class="num">300+ / 300+</td></tr>
+    <tr><td class="num">NEW · monthly</td><td>Share-of-voice check: mentions alongside canvas-agent tools in HN/Reddit comparison threads</td><td class="num">present in ≥50% of threads by 10-01</td></tr>
+    <tr><td class="num">Q4 end</td><td>Cloud beta active rooms</td><td class="num">50+</td></tr>
+  </table></div>
+
+  <h2><span class="idx">08</span>Executed today (real cookrew browser-use & computer-use)</h2>
+  <p>Executed on the Cookrew canvas itself via <code>cookrew browser</code> / <code>cookrew note</code> — the product doing its own go-to-market:</p>
+  <div class="tablewrap"><table>
+    <tr><th>Action</th><th>Tool</th><th>Result</th></tr>
+    <tr><td>Verify <span class="mono">github.com/cookrew</span> org availability</td><td><code>browser create + text</code> ("Beacon Recon" node)</td><td><span class="y">✓ AVAILABLE</span> (GitHub 404 confirmed live) — claim this week, before launch assets reference it</td></tr>
+    <tr><td>Verify awesome-list PR target</td><td><code>browser navigate + text</code></td><td><span class="y">✓ CONFIRMED</span> — awesome-claude-code (40k★) has a "Multi-Agent Orchestration" section; PR belongs there</td></tr>
+    <tr><td>Show HN launch asset drafted</td><td><code>note create</code></td><td>Canvas note <span class="mono">show-hn-draft-beacon-2026-07</span>: final title, pre-written first comment, timing, relaunch rule</td></tr>
+    <tr><td>48-hour launch-window checklist</td><td><code>note create</code></td><td>Canvas note <span class="mono">launch-48h-window-checklist</span>: full channel stack, recon results, vocabulary rules, hero-GIF spec</td></tr>
+    <tr><td>Plan shown on canvas + desktop browser</td><td><code>browser create</code> + <code>open</code></td><td>This document, live as a canvas browser node and in the desktop browser</td></tr>
+  </table></div>
+  <p><strong>Held for explicit go-ahead (outward-facing):</strong> claiming the GitHub org, posting to HN/Reddit/X, awesome-list PRs, creator outreach. All assets are drafted and staged on the canvas; nothing public has been posted.</p>
+
+  <footer>
+    Sources: live fetches of cookrew.dev, conductor.build, imbue.com/sculptor, nimbalyst.com, themaestri.app,
+    github.com/0-AI-UG/cate, termcanvas.com, agentgrid.sh, warp.dev, code.claude.com/docs/en/agent-teams,
+    github.com/smtg-ai/claude-squad, github.com/omnara-ai/omnara, awesome-agent-orchestrators ·
+    Baseline: <span class="mono">docs/launch-plan.html</span> v2 (2026-07-19) ·
+    Produced by Beacon (Marketing) · 2026-07-20
+  </footer>
+</main>
