@@ -142,4 +142,30 @@ describe('TurnTracker.replaceHistory', () => {
     ])
     expect(tracker.history('term-1')[0].title).toBeUndefined()
   })
+
+  it('carries titles by uuid even when the index shifts (a mid-history turn dropped)', () => {
+    const tracker = new TurnTracker(async () => null, null)
+    tracker.replaceHistory('term-1', [
+      { index: 1, prompt: 'a', reply: 'r', uuid: 'u-a', title: 'Title A', startedAt: 1, endedAt: 2 },
+      { index: 2, prompt: 'b', reply: 'r', uuid: 'u-b', title: 'Title B', startedAt: 3, endedAt: 4 }
+    ])
+    // Turn 'a' was rewound away; 'b' is now index 1 but same uuid.
+    tracker.replaceHistory('term-1', [
+      { index: 1, prompt: 'b', reply: 'r', uuid: 'u-b', startedAt: 3, endedAt: 4 }
+    ])
+    const history = tracker.history('term-1')
+    expect(history).toHaveLength(1)
+    expect(history[0].title).toBe('Title B')
+  })
+
+  it('drops the title when the uuid at a reused index changed (rewind + new prompt)', () => {
+    const tracker = new TurnTracker(async () => null, null)
+    tracker.replaceHistory('term-1', [
+      { index: 1, prompt: 'a', reply: 'r', uuid: 'u-a', title: 'Title A', startedAt: 1, endedAt: 2 }
+    ])
+    tracker.replaceHistory('term-1', [
+      { index: 1, prompt: 'a', reply: 'r', uuid: 'u-x', startedAt: 1, endedAt: 2 }
+    ])
+    expect(tracker.history('term-1')[0].title).toBeUndefined()
+  })
 })

@@ -1,0 +1,260 @@
+<title>Cookrew — the reboot that forgot the agents</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --roast: #2d2a20; --roast-2: #38342a; --amber: #c98a12; --amber-hi: #e9b949;
+    --honey: #b8860b; --paper: #faf7f0; --paper-2: #f2ece0; --ink: #241f16;
+    --ink-soft: #5c5344; --line: #e0d7c6; --card: #ffffff;
+    --bad: #b3341f; --bad-bg: #f7e4df; --good: #2f7d47; --good-bg: #e2f0e4;
+    --warn: #9a6a00; --warn-bg: #f6ecd4;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #1b1813; --paper-2: #211d16; --ink: #ede4d2; --ink-soft: #a99e88;
+      --line: #38322726; --line: #3a3327; --card: #24201829; --card: #242018;
+      --amber: #e9b949; --honey: #e9b949;
+      --bad: #f0806c; --bad-bg: #3a2019; --good: #7fce97; --good-bg: #1d2f22;
+      --warn: #e5b53f; --warn-bg: #33290f;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper: #faf7f0; --paper-2: #f2ece0; --ink: #241f16; --ink-soft: #5c5344;
+    --line: #e0d7c6; --card: #ffffff; --amber: #c98a12; --honey: #b8860b;
+    --bad: #b3341f; --bad-bg: #f7e4df; --good: #2f7d47; --good-bg: #e2f0e4;
+    --warn: #9a6a00; --warn-bg: #f6ecd4;
+  }
+  :root[data-theme="dark"] {
+    --paper: #1b1813; --paper-2: #211d16; --ink: #ede4d2; --ink-soft: #a99e88;
+    --line: #3a3327; --card: #242018; --amber: #e9b949; --honey: #e9b949;
+    --bad: #f0806c; --bad-bg: #3a2019; --good: #7fce97; --good-bg: #1d2f22;
+    --warn: #e5b53f; --warn-bg: #33290f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 0 24px 96px; }
+  code, .mono { font-family: var(--mono); font-variant-ligatures: none; }
+
+  /* Hero — a tmux status bar, because that's where the agents live */
+  header.hero {
+    background: linear-gradient(180deg, var(--roast) 0%, var(--roast-2) 100%);
+    color: #f4ead2; padding: 0; margin-bottom: 40px;
+    border-bottom: 3px solid var(--amber-hi);
+  }
+  .statusbar {
+    background: var(--amber-hi); color: var(--roast);
+    font-family: var(--mono); font-size: 13px; font-weight: 700;
+    padding: 6px 24px; display: flex; gap: 10px; align-items: center;
+  }
+  .statusbar .win { background: var(--roast); color: var(--amber-hi); padding: 1px 10px; border-radius: 3px; }
+  .hero-inner { max-width: 940px; margin: 0 auto; padding: 40px 24px 44px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--amber-hi); margin: 0 0 14px;
+  }
+  h1 {
+    font-size: clamp(30px, 5.2vw, 46px); line-height: 1.08; margin: 0 0 16px;
+    font-weight: 800; letter-spacing: -.02em; text-wrap: balance;
+  }
+  .lede { font-size: 18px; color: #d9cdb4; max-width: 60ch; margin: 0; }
+  .verdict {
+    margin-top: 26px; display: inline-flex; gap: 10px; align-items: center;
+    background: #ffffff14; border: 1px solid #ffffff2e; border-radius: 999px;
+    padding: 7px 16px 7px 12px; font-size: 14px; font-family: var(--mono);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 4px #7fce9733; }
+
+  h2 {
+    font-size: 13px; letter-spacing: .14em; text-transform: uppercase;
+    font-family: var(--mono); color: var(--honey); margin: 52px 0 4px;
+    display: flex; align-items: baseline; gap: 12px;
+  }
+  h2::before { content: ""; flex: 0 0 22px; height: 2px; background: var(--amber); transform: translateY(-4px); }
+  h3 { font-size: 21px; margin: 8px 0 10px; letter-spacing: -.01em; }
+  p { max-width: 68ch; }
+  a { color: var(--amber); }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 22px 24px; margin: 18px 0;
+  }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 680px) { .grid2 { grid-template-columns: 1fr; } }
+
+  .chip {
+    font-family: var(--mono); font-size: 12px; font-weight: 600;
+    padding: 2px 8px; border-radius: 5px; white-space: nowrap;
+  }
+  .chip.bad { background: var(--bad-bg); color: var(--bad); }
+  .chip.good { background: var(--good-bg); color: var(--good); }
+  .chip.warn { background: var(--warn-bg); color: var(--warn); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-soft); background: var(--paper-2); }
+  tr:last-child td { border-bottom: none; }
+  td.mono, td .mono { font-size: 13px; }
+  .arrow { color: var(--ink-soft); }
+
+  pre {
+    background: var(--roast); color: #efe3c8; border-radius: 10px;
+    padding: 18px 20px; overflow-x: auto; font-family: var(--mono);
+    font-size: 13px; line-height: 1.55; border: 1px solid #00000030;
+  }
+  pre .add { color: #9fdcaf; } pre .del { color: #f0a08e; } pre .dim { color: #b6a88a; } pre .k { color: var(--amber-hi); }
+
+  ol.steps { counter-reset: s; list-style: none; padding: 0; margin: 0; }
+  ol.steps > li {
+    counter-increment: s; position: relative; padding: 4px 0 20px 46px; margin: 0;
+    border-left: 2px solid var(--line); margin-left: 15px;
+  }
+  ol.steps > li::before {
+    content: counter(s); position: absolute; left: -16px; top: 0;
+    width: 30px; height: 30px; border-radius: 50%; background: var(--amber);
+    color: #fff; font-family: var(--mono); font-weight: 700; font-size: 14px;
+    display: grid; place-items: center;
+  }
+  ol.steps > li:last-child { border-left-color: transparent; }
+  ol.steps h4 { margin: 2px 0 4px; font-size: 16px; }
+  ol.steps p { margin: 0; color: var(--ink-soft); font-size: 14.5px; }
+
+  .callout { border-left: 3px solid var(--amber); padding: 4px 0 4px 18px; margin: 18px 0; color: var(--ink-soft); }
+  .kbd { font-family: var(--mono); background: var(--paper-2); border: 1px solid var(--line); border-radius: 5px; padding: 1px 7px; font-size: 13px; }
+  footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--ink-soft); font-size: 13px; font-family: var(--mono); }
+  .swatch-flow text { font-family: var(--mono); }
+</style>
+
+<header class="hero">
+  <div class="statusbar"><span class="win">&nbsp;cookrew · post-mortem&nbsp;</span><span>7 agents · 1 root cause · 0 data lost</span></div>
+  <div class="hero-inner">
+    <p class="eyebrow">Incident · session recovery · 2026-07-21</p>
+    <h1>The reboot that forgot the agents</h1>
+    <p class="lede">After a system reboot, every Cookrew&nbsp;Dev agent came back with a blank memory. Their real conversations were never lost — Cookrew was resuming a session id that had quietly diverged from the one Claude actually writes.</p>
+    <span class="verdict"><span class="dot"></span> Fixed in source · 287 tests green · recovery armed</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <h2>What you saw</h2>
+  <p>Seven terminals in the active workspace rebooted into a <strong>fresh Claude Code banner</strong> with an empty prompt, instead of resuming their work. The GOAT&nbsp;Team sessions — in a workspace that wasn't reopened — kept full context. The tell was in the launch commands:</p>
+  <div class="grid2">
+    <div class="card">
+      <span class="chip good">RECOVERED · GOAT</span>
+      <h3>Conductor (goat)</h3>
+      <p style="color:var(--ink-soft);font-size:14px;margin:0 0 10px">tmux session survived, command was:</p>
+      <code class="mono" style="font-size:12.5px">claude … <span style="color:var(--good)">--resume</span> ca205777…</code>
+    </div>
+    <div class="card">
+      <span class="chip bad">BLANK · COOKREW DEV</span>
+      <h3>Forge, Velvet, Magpie…</h3>
+      <p style="color:var(--ink-soft);font-size:14px;margin:0 0 10px">cold-booted after the reboot, command was:</p>
+      <code class="mono" style="font-size:12.5px">claude … <span style="color:var(--bad)">--session-id</span> a9eb7848…</code>
+    </div>
+  </div>
+  <p><code>--session-id</code> starts a <em>new</em> conversation; <code>--resume</code> continues an existing one. The blank agents were told to start new — under an id whose file didn't exist.</p>
+
+  <h2>Root cause · the phantom id</h2>
+  <p>Cookrew binds every Claude terminal to a session id so it can find that terminal's transcript on disk. The chosen id is decided at spawn in <code>spawnTracked()</code>:</p>
+  <pre><span class="dim">// src/main/index.ts — before</span>
+const stored = t.claudeSessionId && UUID_RE.test(t.claudeSessionId) ? t.claudeSessionId : null
+const sessionId = stored ?? extractSessionFlag(command) ?? <span class="k">randomUUID()</span>   <span class="dim">// ← mints a fresh id</span>
+effective = claudeSpawnCommand(command, t.cwd, sessionId)</pre>
+
+  <p>That fresh id is only ever <em>honored</em> if Claude actually boots with it. But Cookrew runs each terminal inside a persistent tmux session, and tmux's <code class="mono">new-session -A</code> <strong>reattaches a live session and ignores the boot command</strong>. So when the id was minted for a terminal whose Claude was already running under its own self-generated id, the new id never reached Claude — it was written to <code>workspace.json</code> and diverged silently.</p>
+
+  <figure class="scroll" style="margin:22px 0;padding:26px 10px;background:var(--card)">
+    <svg class="swatch-flow" viewBox="0 0 860 250" width="860" style="max-width:100%;height:auto" role="img" aria-label="Divergence flow diagram">
+      <defs>
+        <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="currentColor"/></marker>
+      </defs>
+      <style>
+        .box{fill:var(--paper-2);stroke:var(--line);stroke-width:1.5;rx:9}
+        .lbl{fill:var(--ink);font-size:13px;font-weight:600}
+        .sub{fill:var(--ink-soft);font-size:11px}
+        .flow-l{stroke:var(--ink-soft);stroke-width:1.5;fill:none;color:var(--ink-soft)}
+        .real{fill:var(--good);font-size:12px;font-weight:700}
+        .phantom{fill:var(--bad);font-size:12px;font-weight:700}
+      </style>
+      <!-- lane 1: reality -->
+      <text x="20" y="34" class="sub" style="letter-spacing:.1em">CLAUDE WRITES</text>
+      <rect class="box" x="20" y="46" width="200" height="52" rx="9"/>
+      <text x="34" y="70" class="lbl">plain `claude` boot</text>
+      <text x="34" y="88" class="real mono">→ 4188d6fa.jsonl ✓ real</text>
+
+      <rect class="box" x="330" y="46" width="220" height="52" rx="9"/>
+      <text x="344" y="70" class="lbl">tmux reattach (-A)</text>
+      <text x="344" y="88" class="sub">keeps writing 4188d6fa</text>
+
+      <rect class="box" x="640" y="46" width="200" height="52" rx="9"/>
+      <text x="654" y="70" class="lbl">reboot · cold boot</text>
+      <text x="654" y="88" class="real mono">4188d6fa still on disk ✓</text>
+
+      <line class="flow-l" x1="220" y1="72" x2="326" y2="72" marker-end="url(#ah)"/>
+      <line class="flow-l" x1="550" y1="72" x2="636" y2="72" marker-end="url(#ah)"/>
+
+      <!-- lane 2: cookrew's belief -->
+      <text x="20" y="164" class="sub" style="letter-spacing:.1em">COOKREW STORES</text>
+      <rect class="box" x="330" y="176" width="220" height="52" rx="9"/>
+      <text x="344" y="200" class="lbl">spawnTracked mints id</text>
+      <text x="344" y="218" class="phantom mono">claudeSessionId = a9eb7848</text>
+
+      <rect class="box" x="640" y="176" width="200" height="52" rx="9"/>
+      <text x="654" y="200" class="lbl">resume phantom</text>
+      <text x="654" y="218" class="phantom mono">a9eb7848 → no file → blank</text>
+
+      <line class="flow-l" x1="440" y1="98" x2="440" y2="172" marker-end="url(#ah)" stroke-dasharray="4 3"/>
+      <text x="452" y="140" class="sub" style="fill:var(--bad)">id never reaches Claude</text>
+      <line class="flow-l" x1="550" y1="202" x2="636" y2="202" marker-end="url(#ah)"/>
+    </svg>
+  </figure>
+
+  <p>A second bug compounded it: <code>SessionTurnSync</code> was watching <code class="mono">&lt;phantom-id&gt;.jsonl</code> — a file that never existed — so each terminal's turn history <strong>froze</strong> at the pre-divergence scrape. That's why matching turn history alone can't reliably find the real session.</p>
+
+  <h2>The agents &amp; their real sessions</h2>
+  <p>Every orphaned conversation is intact on disk under Claude's own id. Verified by each transcript's role preamble (<code>"You are Forge…"</code>) and the 04:42 reboot freeze:</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Agent</th><th>Node</th><th>Stored (phantom)</th><th></th><th>Real session</th><th>Frozen</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Forge</strong> · Dev</td><td class="mono">2fe477dd</td><td class="mono" style="color:var(--bad)">a9eb7848</td><td class="arrow">→</td><td class="mono" style="color:var(--good)">4188d6fa</td><td class="mono">04:42</td><td><span class="chip good">armed</span></td></tr>
+        <tr><td><strong>Velvet</strong> · UX</td><td class="mono">3805d7fd</td><td class="mono" style="color:var(--bad)">e7600ae0</td><td class="arrow">→</td><td class="mono" style="color:var(--good)">3971375d</td><td class="mono">04:26</td><td><span class="chip good">armed</span></td></tr>
+        <tr><td><strong>Magpie</strong> · QA</td><td class="mono">6aaaca9d</td><td class="mono" style="color:var(--bad)">446d5b96</td><td class="arrow">→</td><td class="mono" style="color:var(--good)">0e3f412a</td><td class="mono">04:42</td><td><span class="chip good">armed</span></td></tr>
+        <tr><td><strong>Fresco</strong> · UI</td><td class="mono">b7f8cfd9</td><td class="mono" style="color:var(--bad)">c07f3d72</td><td class="arrow">→</td><td class="mono" style="color:var(--good)">0fa12ea4</td><td class="mono">04:42</td><td><span class="chip good">armed</span></td></tr>
+        <tr><td><strong>Beacon</strong> · Marketing</td><td class="mono">aacfb398</td><td class="mono" style="color:var(--bad)">a3dc7059</td><td class="arrow">→</td><td class="mono" style="color:var(--good)">6049e908</td><td class="mono">04:42</td><td><span class="chip good">armed</span></td></tr>
+        <tr><td><strong>Tinker</strong> · Bugfix</td><td class="mono">0db18764</td><td class="mono" style="color:var(--bad)">ccb9e087</td><td class="arrow">→</td><td class="mono" style="color:var(--good)">b25d2d75</td><td class="mono">04:42</td><td><span class="chip good">armed</span></td></tr>
+        <tr><td><strong>Conductor</strong> · Orch</td><td class="mono">1faa6a88</td><td class="mono" style="color:var(--bad)">b8cdb0af</td><td class="arrow">→</td><td class="mono" style="color:var(--good)">00fec4a9</td><td class="mono">04:12</td><td><span class="chip warn">best-match</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="font-size:14px;color:var(--ink-soft)">Conductor has no role preamble (it was driven directly), so its target is the newest session that matches its turn history — high confidence, flagged for a glance before resuming.</p>
+
+  <h2>The fix</h2>
+  <p>A new <code>resolveClaudeSessionId()</code> replaces the blind <code>randomUUID()</code>. When a stored id has no session file, it recovers the terminal's real session from turn history — newest on ties — instead of booting blank. Because <code>scoreSessionMatch</code> only credits <em>this</em> terminal's own prompts, a match is always this agent's own conversation, never a neighbour's.</p>
+  <pre><span class="dim">// src/main/claude-fork.ts — resolution order</span>
+<span class="add">1.</span> stored id whose <span class="k">session file exists</span>      → resume it            <span class="dim">(normal path)</span>
+<span class="add">2.</span> id baked into the command whose file exists → adopt it            <span class="dim">(legacy forks)</span>
+<span class="add">3.</span> <span class="k">match turn history</span> against real files    → recover real session  <span class="dim">(the fix)</span>
+<span class="add">4.</span> no signal                                   → keep valid id / mint  <span class="dim">(new terminal)</span></pre>
+  <div class="callout">Prevention, not just cure: with resolution grounded in what's actually on disk, a minted id can no longer diverge into a phantom — the next reboot resumes correctly on its own.</div>
+
+  <h2>Recover the seven · runbook</h2>
+  <p>The code fix stops this recurring. These seven agents diverged <em>before</em> the fix and their turn history is frozen, so they're recovered explicitly — safe to run only while the app is down (a live app would flush the phantom ids back over the edit):</p>
+  <ol class="steps">
+    <li><h4>Rebuild &amp; hand off to Forge/Conductor</h4><p>The running app is the old bundle. Forge rebuilds <code>out/</code> and coordinates the relaunch — per the ops rule, restarts aren't done from an orch node.</p></li>
+    <li><h4>Quit Cookrew</h4><p>A clean quit flushes in-memory state to <code>workspace.json</code>; the recovery must happen after that, with the app down.</p></li>
+    <li><h4>Arm the bindings</h4><p><span class="kbd">node recover-sessions.mjs --apply</span> — rewrites the seven <code>claudeSessionId</code> values to their real sessions, backs up <code>workspace.json</code>, and refuses to run if the app is still up.</p></li>
+    <li><h4>Relaunch</h4><p><code>claudeSpawnCommand</code> now sees each real file and boots <code>claude --resume &lt;id&gt;</code>. Every agent picks up exactly where the reboot cut it off.</p></li>
+  </ol>
+
+  <footer>
+    cookrew-dev · src/main/{claude-fork,index}.ts · tests/claude-fork.test.ts (+7) · 287/287 green<br/>
+    Recovery script: scratchpad/recover-sessions.mjs (dry-run by default) · No conversation data was lost.
+  </footer>
+</div>

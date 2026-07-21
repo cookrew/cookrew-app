@@ -13,12 +13,12 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import type { TurnRecord } from '../shared/turn'
 import {
-  buildForkedSessionLines,
   buildForkedSessionLinesAtTurn,
+  buildForkedSessionLinesAtUuid,
   buildResumeCommand,
   buildSessionIdCommand,
   claudeProjectSlug,
-  forkCutoffMs,
+  extractSessionFlag,
   isClaudeCommand,
   scoreSessionMatch,
   sessionPrompts
@@ -52,6 +52,71 @@ export function claudeSpawnCommand(
   return existsSync(claudeSessionFile(cwd, sessionId, projectsDir))
     ? buildResumeCommand(command, sessionId)
     : buildSessionIdCommand(command, sessionId)
+}
+
+/** Session ids must be UUID-shaped before use in file paths / launch commands. */
+const SESSION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export interface ResolveSessionOptions {
+  command: string
+  cwd: string
+  /** Session id currently persisted on the terminal node (may be stale/phantom). */
+  storedId?: string | null
+  /** The terminal's persisted turn history, used to recover a diverged id. */
+  turns: TurnRecord[]
+  /** Override for tests; defaults to ~/.claude/projects. */
+  projectsDir?: string
+}
+
+/**
+ * The session id a Claude terminal should bind to at (re)spawn.
+ *
+ * A terminal whose tmux session is still alive keeps whatever session claude
+ * is really running: `new-session -A` REATTACHES and ignores our boot command,
+ * so any session id minted here never reaches claude and silently diverges
+ * from the file claude actually writes. That divergence is invisible until a
+ * COLD boot (system reboot / tmux server death), when the phantom id has no
+ * session file and naively resuming it starts the agent from an EMPTY
+ * conversation — the "agent didn't recover after reboot" bug.
+ *
+ * Resolution order:
+ *  1. A stored id whose session file exists — the normal resume path.
+ *  2. A session id baked into the launch command whose file exists (legacy forks).
+ *  3. Recovery: match the terminal's turn history against the real session files
+ *     under its cwd and adopt the best (newest on ties). scoreSessionMatch only
+ *     credits THIS terminal's own prompts, so a match is always one of this
+ *     agent's own sessions — its real conversation, never a neighbour's.
+ *  4. No signal → keep a valid stored id (idempotent) or mint a fresh one that
+ *     claude adopts on a genuinely new terminal's first boot.
+ */
+export function resolveClaudeSessionId(options: ResolveSessionOptions): string {
+  const { command, cwd, storedId, turns, projectsDir } = options
+  try {
+    if (
+      storedId &&
+      SESSION_UUID_RE.test(storedId) &&
+      existsSync(claudeSessionFile(cwd, storedId, projectsDir))
+    ) {
+      return storedId
+    }
+    const flagged = extractSessionFlag(command)
+    if (flagged && existsSync(claudeSessionFile(cwd, flagged, projectsDir))) {
+      return flagged
+    }
+    const dir = claudeProjectDir(cwd, projectsDir)
+    if (turns.length > 0 && existsSync(dir)) {
+      // readCandidates sorts newest-first; the strict-greater reduce keeps the
+      // newest file on score ties — the live conversation over a stale sibling.
+      const best = readCandidates(dir, turns).reduce<Candidate | null>(
+        (acc, c) => (acc === null || c.score > acc.score ? c : acc),
+        null
+      )
+      if (best !== null && best.score >= 1) return path.basename(best.file, '.jsonl')
+    }
+  } catch (error) {
+    console.error('Claude session id resolution failed, keeping stored/fresh id:', error)
+  }
+  return storedId && SESSION_UUID_RE.test(storedId) ? storedId : randomUUID()
 }
 
 export interface ClaudeForkOptions {
@@ -91,9 +156,9 @@ function readCandidates(dir: string, turns: TurnRecord[]): Candidate[] {
 /**
  * The source session's lines. A stored session id resolves the file
  * directly — its turn records are session-derived (SessionTurnSync), so
- * `exact` truncation by real message boundaries applies. Terminals from
- * before ids existed fall back to scoring candidate files against scraped
- * turn history, whose indexes can be offset — those keep timestamp cutoffs.
+ * `exact` truncation (uuid, else position) by real message boundaries
+ * applies. Terminals from before ids existed fall back to scoring candidate
+ * files against scraped turn history and cut by prompt position.
  */
 function readSourceLines(
   dir: string,
@@ -125,16 +190,23 @@ export function forkClaudeSession(options: ClaudeForkOptions): ClaudeForkResult 
     const source = readSourceLines(dir, options)
     if (source === null) return null
 
+    // Cutoff per the session-binding contract (team-fork-roles-spec-v1):
+    // the fork turn's message uuid binds the cut to the precise session
+    // entry whenever the record carries one AND the file was resolved
+    // exactly by sessionId; otherwise cut by prompt position. Never by
+    // timestamp — scrape timing drifts from session write times.
+    const cutRecord = options.turns.find((t) => t.index === options.turnIndex)
     const sessionId = randomUUID()
-    const forked = source.exact
-      ? buildForkedSessionLinesAtTurn(source.lines, {
-          newSessionId: sessionId,
-          keepPrompts: options.turnIndex
-        })
-      : buildForkedSessionLines(source.lines, {
-          newSessionId: sessionId,
-          cutoffMs: forkCutoffMs(options.turns, options.turnIndex)
-        })
+    const forked =
+      source.exact && cutRecord?.uuid
+        ? buildForkedSessionLinesAtUuid(source.lines, {
+            newSessionId: sessionId,
+            cutoffUuid: cutRecord.uuid
+          })
+        : buildForkedSessionLinesAtTurn(source.lines, {
+            newSessionId: sessionId,
+            keepPrompts: options.turnIndex
+          })
     if (forked.length === 0) return null
 
     writeFileSync(path.join(dir, `${sessionId}.jsonl`), `${forked.join('\n')}\n`, 'utf8')

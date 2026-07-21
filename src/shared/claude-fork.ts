@@ -33,6 +33,7 @@ interface SessionRecord {
   isMeta?: boolean
   timestamp?: string
   sessionId?: string
+  uuid?: string
   message?: { content?: unknown }
 }
 
@@ -160,6 +161,45 @@ export function buildForkedSessionLinesAtTurn(
       prompts += 1
       if (prompts > options.keepPrompts) break
     }
+    kept.push(
+      typeof record.sessionId === 'string'
+        ? JSON.stringify({ ...record, sessionId: options.newSessionId })
+        : line
+    )
+  }
+  return kept
+}
+
+export interface ExactUuidForkOptions {
+  newSessionId: string
+  /** Session message uuid of the prompt entry that started the fork turn. */
+  cutoffUuid: string
+}
+
+/**
+ * Exact fork truncation by message uuid (TurnRecord.uuid). Keeps the cutoff
+ * turn — its prompt entry plus every reply/tool record — and everything
+ * before it, then breaks at the first real user prompt AFTER the cutoff. No
+ * position counting or timestamps: the uuid binds the cut to the precise
+ * session message. An unmatched cutoff (or the latest turn) keeps the whole
+ * session. Handoff helper for the Forge fork lane.
+ */
+export function buildForkedSessionLinesAtUuid(
+  lines: string[],
+  options: ExactUuidForkOptions
+): string[] {
+  const kept: string[] = []
+  let seenCutoff = false
+  for (const line of lines) {
+    if (line.trim().length === 0) continue
+    const record = parseRecord(line)
+    if (record === null) {
+      kept.push(line)
+      continue
+    }
+    const isPrompt = isPromptRecord(record) && !isNoisePrompt(record.message?.content as string)
+    if (isPrompt && seenCutoff) break
+    if (isPrompt && record.uuid === options.cutoffUuid) seenCutoff = true
     kept.push(
       typeof record.sessionId === 'string'
         ? JSON.stringify({ ...record, sessionId: options.newSessionId })

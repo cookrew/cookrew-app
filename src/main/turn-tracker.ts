@@ -121,16 +121,25 @@ export class TurnTracker extends EventEmitter {
   /**
    * Session-file reconcile (SessionTurnSync): replace a terminal's history
    * with records derived from its Claude session JSONL — the source of truth
-   * for session-bound terminals. Sous titles carry over where the turn at an
-   * index is still the same exchange (or the scraped prompt was a
-   * placeholder). Shrinking is expected: after /rewind the rewound turns
-   * disappear so counts match the real conversation.
+   * for session-bound terminals. Sous titles and the acknowledge-on-view
+   * marker carry over per the EXACT SAME EXCHANGE: by message uuid when the
+   * record has one (survives an index shift when a mid-history turn is
+   * rewound; a reused index with a new uuid does NOT inherit), else by
+   * index + prompt for legacy records without a uuid. Shrinking is expected:
+   * after /rewind the rewound turns disappear so counts match reality.
    */
   replaceHistory(terminalId: string, records: TurnRecord[]): void {
-    const byIndex = new Map(this.history(terminalId).map((r) => [r.index, r]))
+    const previous = this.history(terminalId)
+    const byUuid = new Map(previous.filter((r) => r.uuid).map((r) => [r.uuid, r]))
+    const byIndex = new Map(previous.map((r) => [r.index, r]))
     const merged = records.map((record) => {
-      const prior = byIndex.get(record.index)
-      if (!prior || !promptsMatch(prior.prompt, record.prompt)) return record
+      const prior = record.uuid
+        ? byUuid.get(record.uuid)
+        : (() => {
+            const at = byIndex.get(record.index)
+            return at && promptsMatch(at.prompt, record.prompt) ? at : undefined
+          })()
+      if (!prior) return record
       // Same exchange: carry over what the reconcile source can't know —
       // the Sous title and the acknowledge-on-view read marker.
       return {

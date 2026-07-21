@@ -1,4 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  utimesSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -16,7 +23,11 @@ import {
   stripSessionFlags
 } from '../src/shared/claude-fork'
 import { buildResumeForkNotice } from '../src/shared/fork'
-import { claudeSpawnCommand, forkClaudeSession } from '../src/main/claude-fork'
+import {
+  claudeSpawnCommand,
+  forkClaudeSession,
+  resolveClaudeSessionId
+} from '../src/main/claude-fork'
 
 const T0 = Date.parse('2026-07-19T10:00:00.000Z')
 
@@ -264,6 +275,33 @@ describe('forkClaudeSession', () => {
     expect(forked).not.toContain('decoy')
   })
 
+  it('cuts by the fork turn record uuid, not by index position', () => {
+    const { projectsDir, dir } = setup()
+    // Session has 3 real prompts (uuids u1..u3); the terminal's records
+    // carry OFFSET indexes (capped history renumbering) — position math
+    // (keepPrompts: 12) would keep the whole file. The uuid must drive the
+    // cut: fork after the u2 exchange drops prompt 3.
+    writeFileSync(path.join(dir, 'origin-id.jsonl'), sessionLines(3).join('\n') + '\n')
+
+    const result = forkClaudeSession({
+      command,
+      cwd: '/work/repo',
+      sessionId: 'origin-id',
+      turns: [
+        turn(11, { uuid: 'u1' }),
+        turn(12, { uuid: 'u2' }),
+        turn(13, { uuid: 'u3' })
+      ],
+      turnIndex: 12,
+      projectsDir
+    })
+    expect(result).not.toBeNull()
+    const forked = readFileSync(path.join(dir, `${result!.sessionId}.jsonl`), 'utf8')
+    expect(forked).toContain('prompt 2')
+    expect(forked).toContain('reply 2')
+    expect(forked).not.toContain('prompt 3')
+  })
+
   it('falls back to prompt matching when the stored id has no file', () => {
     const { projectsDir, dir } = setup()
     writeFileSync(path.join(dir, 'origin-id.jsonl'), sessionLines(2).join('\n') + '\n')
@@ -378,6 +416,121 @@ describe('claudeSpawnCommand', () => {
     expect(claudeSpawnCommand('claude --verbose', '/work/repo', 'live-id', projectsDir)).toBe(
       'claude --verbose --resume live-id'
     )
+  })
+})
+
+describe('resolveClaudeSessionId', () => {
+  const CWD = '/work/repo'
+  const STORED = 'a9eb7848-ab0a-4366-8c43-f57708d6e162'
+
+  function projectDir(): { projectsDir: string; dir: string } {
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'cookrew-resolve-'))
+    const dir = path.join(projectsDir, claudeProjectSlug(CWD))
+    mkdirSync(dir, { recursive: true })
+    return { projectsDir, dir }
+  }
+
+  function writeSession(dir: string, id: string, turnCount: number, mtime?: number): void {
+    writeFileSync(path.join(dir, `${id}.jsonl`), sessionLines(turnCount, id).join('\n') + '\n')
+    if (mtime !== undefined) utimesSync(path.join(dir, `${id}.jsonl`), mtime, mtime)
+  }
+
+  it('resumes a stored id whose session file exists', () => {
+    const { projectsDir, dir } = projectDir()
+    writeSession(dir, STORED, 2)
+    expect(
+      resolveClaudeSessionId({
+        command: 'claude',
+        cwd: CWD,
+        storedId: STORED,
+        turns: [turn(1)],
+        projectsDir
+      })
+    ).toBe(STORED)
+  })
+
+  it('recovers the real session from turn history when the stored id is phantom', () => {
+    // The bug: a stored id minted for an already-live session (tmux reattach
+    // ignored our boot command) never named a file. On a cold reboot the phantom
+    // id must not boot an empty conversation — the agent's real session, matched
+    // by its own turn history, is adopted instead.
+    const { projectsDir, dir } = projectDir()
+    writeSession(dir, '4188d6fa-real-session', 3)
+    expect(
+      resolveClaudeSessionId({
+        command: 'claude',
+        cwd: CWD,
+        storedId: STORED, // valid UUID, but no file on disk
+        turns: [turn(1), turn(2), turn(3)],
+        projectsDir
+      })
+    ).toBe('4188d6fa-real-session')
+  })
+
+  it('prefers the newest matching session on score ties', () => {
+    const { projectsDir, dir } = projectDir()
+    writeSession(dir, 'older-session', 3, 1_000)
+    writeSession(dir, 'newer-session', 3, 9_000)
+    expect(
+      resolveClaudeSessionId({
+        command: 'claude',
+        cwd: CWD,
+        storedId: null,
+        turns: [turn(1), turn(2), turn(3)],
+        projectsDir
+      })
+    ).toBe('newer-session')
+  })
+
+  it('adopts a session id baked into the launch command when its file exists', () => {
+    const { projectsDir, dir } = projectDir()
+    writeSession(dir, 'deadbeef-cafe-babe', 1)
+    expect(
+      resolveClaudeSessionId({
+        command: 'claude --resume deadbeef-cafe-babe',
+        cwd: CWD,
+        storedId: null,
+        turns: [],
+        projectsDir
+      })
+    ).toBe('deadbeef-cafe-babe')
+  })
+
+  it('keeps a valid stored id when nothing matches (idempotent, no churn)', () => {
+    const { projectsDir } = projectDir()
+    expect(
+      resolveClaudeSessionId({
+        command: 'claude',
+        cwd: CWD,
+        storedId: STORED,
+        turns: [turn(99)], // no session files to match
+        projectsDir
+      })
+    ).toBe(STORED)
+  })
+
+  it('mints a fresh UUID for a genuinely new terminal', () => {
+    const { projectsDir } = projectDir()
+    const id = resolveClaudeSessionId({
+      command: 'claude',
+      cwd: CWD,
+      storedId: null,
+      turns: [],
+      projectsDir
+    })
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+  })
+
+  it('drops a non-UUID stored id instead of using it in a path', () => {
+    const { projectsDir } = projectDir()
+    const id = resolveClaudeSessionId({
+      command: 'claude',
+      cwd: CWD,
+      storedId: '../../etc/passwd',
+      turns: [],
+      projectsDir
+    })
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
   })
 })
 
