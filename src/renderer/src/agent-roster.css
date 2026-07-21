@@ -598,3 +598,38 @@
 .metrics-seg .cr-chip.amber {
   border-color: var(--line);
 }
+
+/* ==== save-role-from-checkpoint row (Velvet structural; Fresco visual) ==== */
+.turn-panel-saverole {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-top: 1.5px solid var(--line-soft);
+  background: var(--cream-md);
+  flex-wrap: wrap;
+}
+
+.turn-panel-saverole-label {
+  font-family: var(--font-pixel);
+  font-size: 7.5px;
+  letter-spacing: 0.06em;
+  color: var(--amber-deep);
+  flex: 0 0 auto;
+}
+
+.turn-panel-saverole .tf-input {
+  flex: 1;
+  min-width: 90px;
+}
+
+.turn-panel-saverole-err {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--rose);
+  flex-basis: 100%;
+}
+
+.turn-panel-role {
+  flex: 0 0 auto;
+}

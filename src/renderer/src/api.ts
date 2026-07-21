@@ -78,6 +78,19 @@ export interface CookrewApi {
   teamSave: (name?: string) => Promise<TeamMeta>
   teamList: () => Promise<TeamMeta[]>
   roleList: () => Promise<AgentRole[]>
+  /**
+   * Save a reusable role, optionally with checkpoint provenance
+   * (checkpoint-program-spec). Optional — demo mode lacks it; the roles UI
+   * feature-detects via role-checkpoint.ts.
+   */
+  saveRole?: (input: {
+    nodeId: string
+    name: string
+    rolePrompt: string
+    sourceTurnUuid?: string
+    sourceTurnPrompt?: string
+    sessionCopyRef?: string
+  }) => Promise<AgentRole>
   onBrowserCommand: (cb: (req: { id: string; args: string[]; terminalId: string }) => void) => () => void
   browserResult: (id: string, ok: boolean, output: string) => void
   /** Forward a browser thumbnail frame to main (served to the mobile client). */

@@ -8,13 +8,14 @@
 // fall back to matching their scraped turn history against candidate files.
 
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import type { TurnRecord } from '../shared/turn'
 import {
   buildForkedSessionLinesAtTurn,
   buildForkedSessionLinesAtUuid,
+  buildForkedSessionLinesForUuids,
   buildResumeCommand,
   buildSessionIdCommand,
   claudeProjectSlug,
@@ -126,6 +127,18 @@ export interface ClaudeForkOptions {
   sessionId?: string | null
   turns: TurnRecord[]
   turnIndex: number
+  /**
+   * Directory the FORK will run in; the copy is written into ITS project
+   * dir (worktree / fresh team dir) so `--resume` finds it there. Defaults
+   * to `cwd`.
+   */
+  targetCwd?: string
+  /**
+   * Snapshot session lines to fork from instead of the live file on disk
+   * (team-save snapshots, checkpoint-program-spec item 2b). Treated as an
+   * exact (uuid-capable) source.
+   */
+  sourceLines?: string[]
   /** Override for tests; defaults to ~/.claude/projects. */
   projectsDir?: string
 }
@@ -164,6 +177,7 @@ function readSourceLines(
   dir: string,
   options: ClaudeForkOptions
 ): { lines: string[]; exact: boolean } | null {
+  if (options.sourceLines) return { lines: options.sourceLines, exact: true }
   if (options.sessionId) {
     const file = path.join(dir, `${options.sessionId}.jsonl`)
     if (existsSync(file)) return { lines: readFileSync(file, 'utf8').split('\n'), exact: true }
@@ -185,7 +199,7 @@ export function forkClaudeSession(options: ClaudeForkOptions): ClaudeForkResult 
   try {
     if (!isClaudeCommand(options.command)) return null
     const dir = claudeProjectDir(options.cwd, options.projectsDir)
-    if (!existsSync(dir)) return null
+    if (!options.sourceLines && !existsSync(dir)) return null
 
     const source = readSourceLines(dir, options)
     if (source === null) return null
@@ -209,10 +223,79 @@ export function forkClaudeSession(options: ClaudeForkOptions): ClaudeForkResult 
           })
     if (forked.length === 0) return null
 
-    writeFileSync(path.join(dir, `${sessionId}.jsonl`), `${forked.join('\n')}\n`, 'utf8')
+    writeForkedSession(options, sessionId, forked)
     return { sessionId }
   } catch (error) {
     console.error('Native Claude session fork failed, falling back to preamble:', error)
+    return null
+  }
+}
+
+/** The copy lands in the project dir of the dir the FORK runs in. */
+function writeForkedSession(
+  options: Pick<ClaudeForkOptions, 'cwd' | 'targetCwd' | 'projectsDir'>,
+  sessionId: string,
+  lines: string[]
+): void {
+  const targetDir = claudeProjectDir(options.targetCwd ?? options.cwd, options.projectsDir)
+  mkdirSync(targetDir, { recursive: true })
+  writeFileSync(path.join(targetDir, `${sessionId}.jsonl`), `${lines.join('\n')}\n`, 'utf8')
+}
+
+export interface ClaudeAssembledForkOptions extends Omit<ClaudeForkOptions, 'turnIndex'> {
+  /** Checkpoint (turn) indexes whose uuid ranges the fork keeps. */
+  turnIndexes: number[]
+}
+
+/**
+ * Assembled native fork (checkpoint-program-spec item 2a): copy the session
+ * keeping ONLY the selected checkpoints' uuid ranges. Requires an exact
+ * source (stored session id or snapshot lines) and uuid-bearing records for
+ * EVERY selected checkpoint — anything less returns null and the caller
+ * falls back to the preamble replay (Codex/legacy).
+ */
+export function forkClaudeSessionAssembled(
+  options: ClaudeAssembledForkOptions
+): ClaudeForkResult | null {
+  try {
+    if (!isClaudeCommand(options.command)) return null
+    const dir = claudeProjectDir(options.cwd, options.projectsDir)
+    if (!options.sourceLines && !existsSync(dir)) return null
+
+    const source = readSourceLines(dir, { ...options, turnIndex: 0 })
+    if (source === null || !source.exact) return null
+
+    const byIndex = new Map(options.turns.map((t) => [t.index, t]))
+    const keepUuids = options.turnIndexes.map((i) => byIndex.get(i)?.uuid)
+    if (keepUuids.length === 0 || keepUuids.some((u) => u === undefined)) return null
+
+    const sessionId = randomUUID()
+    const forked = buildForkedSessionLinesForUuids(source.lines, {
+      newSessionId: sessionId,
+      keepUuids: keepUuids as string[]
+    })
+    if (forked.length === 0) return null
+
+    // A /rewind between reconcile and a live assembled fork can leave a
+    // selected checkpoint's uuid absent from the source lines — the builder
+    // then returns header-only/partial content while the fork notice still
+    // claims every checkpoint. Verify coverage; fall back to preamble if any
+    // selected checkpoint didn't actually make it into the fork.
+    const forkedUuids = new Set(
+      forked.map((line) => {
+        try {
+          return (JSON.parse(line) as { uuid?: string }).uuid
+        } catch {
+          return undefined
+        }
+      })
+    )
+    if ((keepUuids as string[]).some((u) => !forkedUuids.has(u))) return null
+
+    writeForkedSession(options, sessionId, forked)
+    return { sessionId }
+  } catch (error) {
+    console.error('Assembled native fork failed, falling back to preamble:', error)
     return null
   }
 }

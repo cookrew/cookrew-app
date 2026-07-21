@@ -159,6 +159,17 @@ describe('TurnTracker.replaceHistory', () => {
     expect(history[0].title).toBe('Title B')
   })
 
+  it('drops a uuid-less phantom echo adjacent to its uuid original on reconcile', () => {
+    const tracker = new TurnTracker(async () => null, null)
+    tracker.replaceHistory('term-1', [
+      { index: 71, prompt: 'push', reply: 'done', uuid: 'u71', startedAt: 1, endedAt: 2 },
+      { index: 72, prompt: 'push', reply: 'done', startedAt: 3, endedAt: 4 }
+    ])
+    const history = tracker.history('term-1')
+    expect(history.map((r) => r.index)).toEqual([71])
+    expect(history[0].uuid).toBe('u71')
+  })
+
   it('drops the title when the uuid at a reused index changed (rewind + new prompt)', () => {
     const tracker = new TurnTracker(async () => null, null)
     tracker.replaceHistory('term-1', [

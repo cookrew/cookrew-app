@@ -70,3 +70,27 @@ describe('RoleStore', () => {
     expect(() => store.save(terminal({ command: '' }), 'Dev', 'p')).toThrow(/shell/)
   })
 })
+
+describe('role-from-checkpoint provenance (checkpoint-program-spec)', () => {
+  it('persists sourceTurn uuid/prompt and session-copy ref through a reload', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-roles-ckpt-'))
+    const store = new RoleStore(dir)
+    store.save(terminal(), 'Reviewer', 'review all diffs', {
+      sourceTurnUuid: 'u42',
+      sourceTurnPrompt: 'review the phone companion diff',
+      sessionCopyRef: 'reviewer-session.jsonl'
+    })
+    const loaded = new RoleStore(dir).get('Reviewer')
+    expect(loaded?.sourceTurnUuid).toBe('u42')
+    expect(loaded?.sourceTurnPrompt).toBe('review the phone companion diff')
+    expect(loaded?.sessionCopyRef).toBe('reviewer-session.jsonl')
+  })
+
+  it('omits provenance fields entirely when saved without a checkpoint', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-roles-plain-'))
+    const store = new RoleStore(dir)
+    const role = store.save(terminal(), 'Plain', 'do things')
+    expect('sourceTurnUuid' in role).toBe(false)
+    expect('sessionCopyRef' in role).toBe(false)
+  })
+})

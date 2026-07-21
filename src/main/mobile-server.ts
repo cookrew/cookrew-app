@@ -12,7 +12,7 @@ import type { EventLog } from './event-log'
 import type { AgentRegistry } from './agent-registry'
 import { askTerminal } from './ask'
 import { ensureCert } from './cert'
-import { handleMobileApi, MobileApiDeps, MobileOps } from './mobile-api'
+import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps } from './mobile-api'
 import { readJson, respondJson } from './mobile-http'
 
 export const MOBILE_PORT = 8639
@@ -211,13 +211,17 @@ async function handle(
     const activities = Object.fromEntries(
       deps.turns.list().map((activity) => [activity.terminalId, activity])
     )
+    // Git-enriched like /api/workspace (same coalescing cache), so the lite
+    // client's git chips light up too — terminals carry node.git.
+    const enriched = await enrichStateWithGit(deps.store.state, deps.ops.gitInfo)
     respondJson(response, 200, {
-      workspace: deps.store.state.name,
+      workspace: enriched.name,
       // The full canvas — the mobile client mirrors the desktop layout, so
       // every node ships with its position/size, not just terminals.
-      nodes: deps.store.state.nodes.map((node) =>
+      nodes: enriched.nodes.map((node) =>
         node.kind === 'terminal' ? { ...node, running: deps.ptys.get(node.id) !== undefined } : node
       ),
+      dirsGit: enriched.dirsGit,
       activities,
       voiceEnabled: deps.voice.enabled
     })

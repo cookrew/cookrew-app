@@ -14,7 +14,7 @@ const STATUS_LABEL: Record<TurnPhase, string> = {
   idle: 'READY',
   thinking: 'WORKING',
   waiting: 'NEEDS ATTENTION',
-  replied: 'TURN COMPLETE'
+  replied: 'CHECKPOINT SAVED'
 }
 
 /** Canvas zoom at which the card switches from compact row to full view. */
@@ -219,7 +219,7 @@ function CompactTurnView({ activity }: { activity: TerminalActivity | undefined 
       )}
       {phase === 'replied' && (
         <div className="vi-latest done">
-          ✅ {activity.reply ? firstLine(activity.reply, 220) : 'Turn complete'}
+          ✅ {activity.reply ? firstLine(activity.reply, 220) : 'Checkpoint saved'}
         </div>
       )}
       {/* Ready keeps the latest turn on screen, same as turn-complete —

@@ -328,6 +328,32 @@
   .vi-chip.tan { background: #4a3b2a; color: #e8c9a0; }
   .vi-chip.dim { color: #98989d; }
 
+  /* Git visuals (Forge GitInfo shape {isRepo,root,branch,dirty,ahead,behind,error?})
+     — mirror of styles.css .cr-git; .cr-git-branch pill + amber dirty dot +
+     CSS-triangle ahead/behind. Reads node.git from the state payload; inert
+     when absent. Dark card default; .on-cream for cream rows. */
+  .cr-git { display: inline-flex; align-items: center; gap: calc(5px * var(--z, 1)); min-width: 0; flex: 0 1 auto; }
+  .cr-git-branch {
+    display: inline-flex; align-items: center; gap: calc(3px * var(--z, 1));
+    font-family: var(--font-mono); font-size: calc(9.5px * var(--z, 1)); font-weight: 600;
+    color: #b9e6a8; background: #24331f; border-radius: calc(5px * var(--z, 1));
+    padding: calc(2px * var(--z, 1)) calc(7px * var(--z, 1));
+    max-width: calc(120px * var(--z, 1)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto;
+  }
+  .cr-git-branch .cr-icon { width: calc(10px * var(--z, 1)); height: calc(10px * var(--z, 1)); flex: 0 0 auto; opacity: 0.85; }
+  .cr-git-dirty { width: calc(7px * var(--z, 1)); height: calc(7px * var(--z, 1)); border-radius: 50%; background: var(--amber); border: 1px solid var(--ink); flex: 0 0 auto; }
+  .cr-git-track { display: inline-flex; align-items: center; gap: calc(4px * var(--z, 1)); font-family: var(--font-mono); font-size: calc(9px * var(--z, 1)); font-weight: 600; flex: 0 0 auto; }
+  .cr-git-ahead, .cr-git-behind { display: inline-flex; align-items: center; gap: calc(2px * var(--z, 1)); }
+  .cr-git-ahead::before, .cr-git-behind::before { content: ''; width: 0; height: 0; border-left: calc(3px * var(--z, 1)) solid transparent; border-right: calc(3px * var(--z, 1)) solid transparent; }
+  .cr-git-ahead { color: #6bbe58; }
+  .cr-git-ahead::before { border-bottom: calc(5px * var(--z, 1)) solid currentColor; }
+  .cr-git-behind { color: #e0975a; }
+  .cr-git-behind::before { border-top: calc(5px * var(--z, 1)) solid currentColor; }
+  .cr-git.on-cream .cr-git-branch { color: var(--ink-soft); background: var(--cream-md); border: 1.5px solid var(--line-soft); font-size: 9px; padding: 1px 5px; }
+  .cr-git.on-cream .cr-git-branch .cr-icon { width: 9px; height: 9px; }
+  .cr-git.on-cream .cr-git-dirty { width: 6px; height: 6px; background: var(--amber-deep); }
+  .cr-git.on-cream .cr-git-track { font-size: 8.5px; }
+
   /* Mini status coin: replaces the old LED dots; ink rim keeps contrast. */
   .vi-coin-led { width: calc(13px * var(--z, 1)); height: calc(13px * var(--z, 1)); flex: 0 0 auto; }
   .vi-coin-led.idle, .vi-coin-led.replied { color: var(--vi-done); }
@@ -768,7 +794,7 @@
   const sendBtn = document.getElementById('send')
   const speakToggle = document.getElementById('speakToggle')
 
-  const STATUS_LABEL = { idle: 'READY', thinking: 'WORKING', waiting: 'NEEDS ATTENTION', replied: 'TURN COMPLETE' }
+  const STATUS_LABEL = { idle: 'READY', thinking: 'WORKING', waiting: 'NEEDS ATTENTION', replied: 'CHECKPOINT SAVED' }
   const MINI_ZOOM = 0.22
 
   let nodes = []
@@ -868,6 +894,23 @@
     return `<svg class="vi-coin-led ${phase}" viewBox="0 0 26 26" aria-hidden="true">${coinFace(preset === undefined ? null : preset)}</svg>`
   }
 
+  /* Git visuals (Forge GitInfo shape): branch chip · dirty dot · ahead/behind
+     badge. `git` is a GitInfo the state payload carries per terminal
+     (node.git); renders nothing until present. Mirrors the desktop GitChip
+     markup + .cr-git CSS above. */
+  function gitChipHtml(git, onCream) {
+    if (!git || !git.isRepo || git.error) return ''
+    const branchIcon = '<svg class="cr-icon" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="4.4" cy="3.4" r="1.7"/><circle cx="11.6" cy="3.4" r="1.7"/><circle cx="8" cy="12.6" r="1.7"/><path d="M4.4 5.1 C 4.4 8.2 8 7.6 8 10.9 M11.6 5.1 C 11.6 8.2 8 7.6 8 10.9"/></g></svg>'
+    const branch = git.branch
+      ? `<span class="cr-git-branch" title="${esc(git.branch)}${git.dirty ? ' · uncommitted changes' : ''}">${branchIcon}${esc(git.branch)}</span>`
+      : ''
+    const dirty = git.dirty ? '<span class="cr-git-dirty" title="Uncommitted changes"></span>' : ''
+    const track = (git.ahead > 0 || git.behind > 0)
+      ? `<span class="cr-git-track" title="${git.ahead} ahead · ${git.behind} behind">${git.ahead > 0 ? `<span class="cr-git-ahead">${git.ahead}</span>` : ''}${git.behind > 0 ? `<span class="cr-git-behind">${git.behind}</span>` : ''}</span>`
+      : ''
+    return `<span class="cr-git${onCream ? ' on-cream' : ''}">${branch}${dirty}${track}</span>`
+  }
+
   function agoLabel(since) {
     const mins = Math.max(0, Math.floor((Date.now() - since) / 60000))
     if (mins < 1) return 'now'
@@ -882,7 +925,10 @@
     const phase = activity ? activity.phase : 'idle'
     const off = !node.running
     const led = off ? 'off' : phase
-    const snipSource = activity ? activity.title || activity.prompt : null
+    // DEFECT-1 title dedup: the header snippet shows the Sous title ONLY,
+    // never the prompt — the prompt already IS the You: line in the body, so
+    // falling back to it here duplicated it on the card.
+    const snipSource = activity ? activity.title : null
     const promptSnip = snipSource ? ` <span class="vi-title-snip">· ${esc(firstLine(snipSource, 60))}</span>` : ''
     let latest = '<div class="vi-ready">Ready</div>'
     if (off) {
@@ -895,21 +941,24 @@
       } else if (phase === 'waiting') {
         latest = `<div class="vi-latest waiting">⚠ ${esc(msg || 'Needs your input')}</div>`
       } else if (phase === 'replied') {
-        latest = `<div class="vi-latest done">✅ ${esc(activity.reply ? firstLine(activity.reply, 90) : 'Turn complete')}</div>`
+        latest = `<div class="vi-latest done">✅ ${esc(activity.reply ? firstLine(activity.reply, 90) : 'Checkpoint saved')}</div>`
       }
     }
     const you = activity && activity.prompt
       ? `<div class="vi-you"><span class="vi-you-label">You:</span> ${esc(firstLine(activity.prompt, 90))}</div>`
       : ''
+    // SUITE-B coin fix: the coin avatar IS the status — no second status coin
+    // in the header. Only the idle "time ago" chip renders here.
     const timeChip = phase === 'idle' && activity && node.running
       ? `<span class="vi-chip dim">${agoLabel(activity.updatedAt)}</span>`
-      : coinLed(led, node.preset)
+      : ''
     return `
       <div class="vi-head">
         ${agentAvatar(node.preset, off ? 'off' : phase)}
         <div class="vi-title">${esc(node.name)}${promptSnip}</div>
         <span class="vi-chip tan">${esc(node.preset)}</span>
         ${node.orch ? '<span class="vi-chip">Orch</span>' : ''}
+        ${gitChipHtml(node.git)}
         ${timeChip}
       </div>
       <div class="vi-card-body">${you}${latest}</div>

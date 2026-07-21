@@ -274,7 +274,7 @@ export function TeamForkPicker({
                     {isTerminal && (
                       <button
                         className={`cr-chip clickable tf-mode-chip${choice.mode === 'role' ? ' role amber' : ''}`}
-                        title="Choose the turn context this agent forks from"
+                        title="Choose the checkpoint this agent forks from"
                         disabled={!isIncluded}
                         onClick={() => toggleExpanded(node.id)}
                       >
@@ -330,7 +330,7 @@ export function TeamForkPicker({
                   {dateLabel(sourceTeam.savedAt)})
                 </>
               ) : null}
-              — every agent at its saved latest turn. The live canvas stays untouched.
+              — every agent at its saved latest checkpoint. The live canvas stays untouched.
             </p>
           </div>
         )}

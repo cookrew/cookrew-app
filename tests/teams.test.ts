@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -226,7 +226,7 @@ describe('resolveTerminalContext', () => {
     const plan = planFor(source([terminal('a')]), [
       { nodeId: 'a', mode: 'role', roleName: 'Backend Dev' }
     ])
-    const ctx = resolveTerminalContext(plan, false)
+    const ctx = resolveTerminalContext(plan, { fromSnapshot: false })
     expect(ctx.claudeSessionId).toBeNull()
     expect(ctx.inject).toContain('[Cookrew role: Backend Dev]')
     expect(ctx.inject).toContain('backend developer')
@@ -236,7 +236,7 @@ describe('resolveTerminalContext', () => {
     const plan = planFor(source([terminal('a')], { a: [turn(1), turn(2), turn(3)] }), [
       { nodeId: 'a', mode: 'assembled', turnIndexes: [3, 1] }
     ])
-    const ctx = resolveTerminalContext(plan, false)
+    const ctx = resolveTerminalContext(plan, { fromSnapshot: false })
     expect(ctx.inject).toContain('prompt 3')
     expect(ctx.inject).toContain('prompt 1')
     expect(ctx.inject).not.toContain('prompt 2')
@@ -245,12 +245,12 @@ describe('resolveTerminalContext', () => {
 
   it('injects nothing for a terminal with no turns yet', () => {
     const plan = planFor(source([terminal('a')]), [])
-    expect(resolveTerminalContext(plan, false)).toEqual({ inject: null, claudeSessionId: null })
+    expect(resolveTerminalContext(plan, { fromSnapshot: false })).toEqual({ inject: null, claudeSessionId: null })
   })
 
   it('falls back to preamble replay when forking a saved snapshot', () => {
     const plan = planFor(source([terminal('a')], { a: [turn(1), turn(2)] }), [])
-    const ctx = resolveTerminalContext(plan, true)
+    const ctx = resolveTerminalContext(plan, { fromSnapshot: true })
     expect(ctx.claudeSessionId).toBeNull()
     expect(ctx.inject).toContain('── Turn 2 ──')
   })
@@ -271,7 +271,7 @@ describe('resolveTerminalContext', () => {
       source([terminal('a', { claudeSessionId: 'bound-id' })], { a: [turn(1)] }),
       []
     )
-    const ctx = resolveTerminalContext(plan, false, projectsDir)
+    const ctx = resolveTerminalContext(plan, { fromSnapshot: false }, projectsDir)
     expect(ctx.claudeSessionId).not.toBeNull()
     expect(ctx.inject).toContain('branched after its turn 1')
     expect(ctx.inject).not.toContain('── Turn 1 ──')
@@ -357,5 +357,165 @@ describe('team fork by directory + worktree (GOAL 3/5)', () => {
     expect(remapped.dirs).toEqual(['/wt/repo'])
     expect((remapped.nodes[0] as TerminalNodeData).cwd).toBe('/wt/repo')
     expect(remapped.terminals[0].targetDir).toBe('/wt/repo')
+  })
+})
+
+describe('resolveTerminalContext — native checkpoint assembly (item 2a)', () => {
+  function planFor(
+    src: TeamForkSource,
+    choices: Parameters<typeof planTeamFork>[1]['choices']
+  ): ReturnType<typeof planTeamFork>['terminals'][0] {
+    return planTeamFork(src, { nodeIds: src.nodes.map((n) => n.id), choices }, planDeps())
+      .terminals[0]
+  }
+
+  function sessionLine(i: number, sessionId = 'bound-id'): string {
+    return JSON.stringify({
+      type: 'user',
+      uuid: `u${i}`,
+      sessionId,
+      timestamp: new Date(T0 + i * 60_000).toISOString(),
+      message: { role: 'user', content: `prompt ${i}` }
+    })
+  }
+
+  function replyLine(i: number, sessionId = 'bound-id'): string {
+    return JSON.stringify({
+      type: 'assistant',
+      uuid: `a${i}`,
+      sessionId,
+      timestamp: new Date(T0 + i * 60_000 + 20_000).toISOString(),
+      message: { role: 'assistant', content: [{ type: 'text', text: `reply ${i}` }] }
+    })
+  }
+
+  it('assembles NATIVELY from uuid ranges when the session is bound', () => {
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'cookrew-asm-'))
+    const dir = path.join(projectsDir, claudeProjectSlug('/work/repo'))
+    mkdirSync(dir, { recursive: true })
+    const lines = [1, 2, 3].flatMap((i) => [sessionLine(i), replyLine(i)])
+    writeFileSync(path.join(dir, 'bound-id.jsonl'), lines.join('\n') + '\n')
+
+    const history = [
+      turn(1, { uuid: 'u1' }),
+      turn(2, { uuid: 'u2' }),
+      turn(3, { uuid: 'u3' })
+    ]
+    const plan = planFor(source([terminal('a', { claudeSessionId: 'bound-id' })], { a: history }), [
+      { nodeId: 'a', mode: 'assembled', turnIndexes: [1, 3] }
+    ])
+    const ctx = resolveTerminalContext(plan, { fromSnapshot: false }, projectsDir)
+
+    expect(ctx.claudeSessionId).not.toBeNull()
+    // Native: short assembled notice, NOT a transcript replay.
+    expect(ctx.inject).toContain('checkpoints T1, T3')
+    expect(ctx.inject).not.toContain('── Turn 1 ──')
+    // The forked session file holds exactly the selected ranges, in the
+    // TARGET dir's project folder.
+    const forkFile = path.join(
+      projectsDir,
+      claudeProjectSlug(plan.targetDir),
+      `${ctx.claudeSessionId}.jsonl`
+    )
+    const forked = readFileSync(forkFile, 'utf8')
+    expect(forked).toContain('prompt 1')
+    expect(forked).toContain('prompt 3')
+    expect(forked).not.toContain('prompt 2')
+  })
+
+  it('falls back to assembled preamble when records lack uuids (Codex/legacy)', () => {
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'cookrew-asm-'))
+    const plan = planFor(source([terminal('a')], { a: [turn(1), turn(2)] }), [
+      { nodeId: 'a', mode: 'assembled', turnIndexes: [2] }
+    ])
+    const ctx = resolveTerminalContext(plan, { fromSnapshot: false }, projectsDir)
+    expect(ctx.claudeSessionId).toBeNull()
+    expect(ctx.inject).toContain('── Turn 2 ──')
+  })
+})
+
+describe('resolveTerminalContext — snapshot native rewind (item 2b)', () => {
+  function planFor(
+    src: TeamForkSource,
+    choices: Parameters<typeof planTeamFork>[1]['choices']
+  ): ReturnType<typeof planTeamFork>['terminals'][0] {
+    return planTeamFork(src, { nodeIds: src.nodes.map((n) => n.id), choices }, planDeps())
+      .terminals[0]
+  }
+
+  const snapLines = [
+    JSON.stringify({
+      type: 'user',
+      uuid: 'u1',
+      sessionId: 'old-id',
+      timestamp: new Date(T0 + 60_000).toISOString(),
+      message: { role: 'user', content: 'prompt 1' }
+    }),
+    JSON.stringify({
+      type: 'user',
+      uuid: 'u2',
+      sessionId: 'old-id',
+      timestamp: new Date(T0 + 120_000).toISOString(),
+      message: { role: 'user', content: 'prompt 2' }
+    })
+  ]
+
+  it('native-rewinds a saved team from its session sidecar in a fresh dir', () => {
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'cookrew-snapnative-'))
+    const history = [turn(1, { uuid: 'u1' }), turn(2, { uuid: 'u2' })]
+    const plan = planFor(source([terminal('a')], { a: history }), [
+      { nodeId: 'a', mode: 'first' }
+    ])
+    const ctx = resolveTerminalContext(
+      plan,
+      { fromSnapshot: true, sessionLinesOf: () => snapLines },
+      projectsDir
+    )
+    expect(ctx.claudeSessionId).not.toBeNull()
+    expect(ctx.inject).toContain('branched after its turn 1')
+    const forkFile = path.join(
+      projectsDir,
+      claudeProjectSlug(plan.targetDir),
+      `${ctx.claudeSessionId}.jsonl`
+    )
+    const forked = readFileSync(forkFile, 'utf8')
+    expect(forked).toContain('prompt 1')
+    expect(forked).not.toContain('prompt 2')
+    expect(forked).not.toContain('old-id')
+  })
+
+  it('keeps the preamble fallback for snapshots without sidecars', () => {
+    const plan = planFor(source([terminal('a')], { a: [turn(1)] }), [])
+    const ctx = resolveTerminalContext(plan, { fromSnapshot: true, sessionLinesOf: () => null })
+    expect(ctx.claudeSessionId).toBeNull()
+    expect(ctx.inject).toContain('── Turn 1 ──')
+  })
+})
+
+describe('TeamStore session snapshots (item 2b save path)', () => {
+  it('copies bound session files into the sidecar and serves their lines', () => {
+    const teamsDir = mkdtempSync(path.join(tmpdir(), 'cookrew-teams-'))
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'cookrew-teamsproj-'))
+    const dir = path.join(projectsDir, claudeProjectSlug('/work/repo'))
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, 'bound-id.jsonl'), '{"type":"mode","sessionId":"bound-id"}\n')
+
+    const store = new TeamStore(teamsDir, projectsDir)
+    const node = terminal('a', { claudeSessionId: 'bound-id' })
+    const state = {
+      name: 'Core',
+      dir: '/work/repo',
+      dirs: ['/work/repo'],
+      nodes: [node],
+      connections: []
+    }
+    store.save(state, () => [turn(1)], 'Core')
+
+    const snap = store.load('Core')
+    expect(snap?.sessions?.a).toBe('a.jsonl')
+    const lines = store.sessionLines(snap!, 'a')
+    expect(lines?.join('\n')).toContain('bound-id')
+    // Terminals without a bound session simply have no sidecar entry.
+    expect(store.sessionLines(snap!, 'missing')).toBeNull()
   })
 })

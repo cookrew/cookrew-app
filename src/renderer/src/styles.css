@@ -2145,6 +2145,125 @@ body.cookrew-mobile .cookrew-minimap {
   color: #9fd0ff;
 }
 
+/* ---- checkpoint visual language (checkpoint-program-spec item 3) ----
+   The fork/rewind surface reads as CHECKPOINT everywhere user-facing. A
+   checkpoint is a SAVED POINT in an agent's history — marked with a save-
+   point diamond (CSS-drawn, no icon dep); LIVE is the running head, a green
+   pulsing dot. Fresco owns the glyph/badge treatment; Velvet swaps wording +
+   applies these classes across picker/pager/overlay/roster/toasts. Text is
+   caller-supplied ("T12", "12 checkpoints") so these are label-agnostic.
+   Theme-aware: dark default (agent cards, pager) + .on-cream (picker rows,
+   role chips). REPLACES the blue .vi-chip.fork identity for fork badges —
+   Velvet: swap `vi-chip fork` → `cr-ckpt-badge`. */
+
+.cr-ckpt-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(4px * var(--z, 1));
+  font-family: var(--font-mono);
+  font-size: calc(9.5px * var(--z, 1));
+  font-weight: 600;
+  color: #e7bd63;
+  background: #33290f;
+  border-radius: calc(5px * var(--z, 1));
+  padding: calc(2px * var(--z, 1)) calc(7px * var(--z, 1));
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* The save-point diamond — a rotated square, the checkpoint marker. */
+.cr-ckpt-badge::before {
+  content: '';
+  width: calc(6px * var(--z, 1));
+  height: calc(6px * var(--z, 1));
+  background: currentColor;
+  transform: rotate(45deg);
+  flex: 0 0 auto;
+}
+
+/* LIVE head: green with a gently pulsing dot — the running conversation, the
+   opposite of a frozen checkpoint. */
+.cr-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(5px * var(--z, 1));
+  font-family: var(--font-pixel);
+  font-size: calc(8.5px * var(--z, 1));
+  letter-spacing: 0.06em;
+  color: var(--vi-done);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.cr-live-badge::before {
+  content: '';
+  width: calc(6px * var(--z, 1));
+  height: calc(6px * var(--z, 1));
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+  animation: cr-live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes cr-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(50, 215, 75, 0.5);
+  }
+  50% {
+    opacity: 0.7;
+    box-shadow: 0 0 0 calc(3px * var(--z, 1)) rgba(50, 215, 75, 0);
+  }
+}
+
+/* Role saved-from-checkpoint chip (roles carry {sourceTurn uuid, ...}). The
+   persona-violet role accent + the checkpoint diamond: "saved from T12". */
+.cr-ckpt-from {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(4px * var(--z, 1));
+  font-family: var(--font-mono);
+  font-size: calc(9px * var(--z, 1));
+  font-weight: 600;
+  color: #c9bce8;
+  background: #241f33;
+  border-radius: calc(5px * var(--z, 1));
+  padding: calc(2px * var(--z, 1)) calc(7px * var(--z, 1));
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.cr-ckpt-from::before {
+  content: '';
+  width: calc(5.5px * var(--z, 1));
+  height: calc(5.5px * var(--z, 1));
+  background: currentColor;
+  transform: rotate(45deg);
+  flex: 0 0 auto;
+}
+
+/* Cream chrome (picker rows, role option chips, roster): ink-on-cream. */
+.cr-ckpt-badge.on-cream {
+  color: var(--ink-soft);
+  background: var(--amber-soft);
+  border: 1.5px solid var(--amber-deep);
+  font-size: 9px;
+  padding: 1px 6px;
+}
+
+.cr-live-badge.on-cream {
+  color: var(--hp);
+}
+
+.cr-ckpt-from.on-cream {
+  color: var(--violet);
+  background: var(--cream-md);
+  border: 1.5px solid var(--violet);
+  font-size: 9px;
+  padding: 1px 6px;
+}
+
 /* ---- git visuals (Forge gitInfo shape) ----
    One structural unit — .cr-git — reused on dark agent cards AND cream
    workspace-dir rows; theme-aware via the tokens below. Fresco owns the CSS;

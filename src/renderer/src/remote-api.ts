@@ -165,6 +165,7 @@ export function createRemoteApi(): CookrewApi {
     teamSave: (name) => req('/api/team/save', 'POST', { name }),
     teamList: () => req('/api/teams'),
     roleList: () => req('/api/roles'),
+    saveRole: (input) => req('/api/role/save', 'POST', input),
 
     // Desktop-only surfaces: browser automation, thumbnail push, app chrome.
     onBrowserCommand: () => () => undefined,
