@@ -8,6 +8,7 @@ import type {
 import { cookrew, isRemoteMode } from './api'
 import { CrIcon, type CrIconName } from './icons'
 import { RoleAvatar } from './nodes/RoleAvatar'
+import { resolveRoleOption } from './role-option'
 import { DEFAULT_CHOICE, TeamTurnChooser, type TerminalChoice } from './TeamTurnChooser'
 import { dirLabel, hasNativeDirPicker, pickDirectory, stateDirs } from './workspace-v2'
 import './team-fork.css'
@@ -106,12 +107,8 @@ export function TeamForkPicker({
     return () => window.removeEventListener('keydown', onKey, { capture: true })
   }, [onClose])
 
-  const roleFor = (nodeRole: string | null | undefined): string | null => {
-    if (!nodeRole) return null
-    // Gate on the saved role actually existing when the list is available.
-    if (roles.length > 0) return roles.some((r) => r.name === nodeRole) ? nodeRole : null
-    return nodeRole
-  }
+  const roleFor = (nodeRole: string | null | undefined): string | null =>
+    resolveRoleOption(nodeRole, roles)
 
   const toggleIncluded = (id: string): void => {
     setIncluded((prev) => {
