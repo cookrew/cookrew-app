@@ -242,6 +242,99 @@ function writeForkedSession(
   writeFileSync(path.join(targetDir, `${sessionId}.jsonl`), `${lines.join('\n')}\n`, 'utf8')
 }
 
+/** Stable, role-owned store for checkpoint session copies. */
+export function roleSessionDir(baseDir?: string): string {
+  return path.join(baseDir ?? path.join(homedir(), '.cookrew'), 'roles', 'sessions')
+}
+
+export interface RoleSessionCopyOptions {
+  command: string
+  cwd: string
+  /** The source terminal's bound session id. */
+  sessionId?: string | null
+  /** Checkpoint message uuid to truncate the copy at (inclusive). */
+  sourceTurnUuid: string
+  /** Where to write the copy (roleSessionDir). */
+  destDir: string
+  projectsDir?: string
+}
+
+/**
+ * Save-role-from-checkpoint (checkpoint-program-spec item 4): write a
+ * TRUNCATED copy of the source Claude session — up to and including the
+ * checkpoint's uuid — into destDir under a fresh id, returned as the role's
+ * sessionCopyRef. Null when the source is not Claude or its session file
+ * can't be found (Codex/legacy → no native restore; caller boots fresh).
+ * Uses the same uuid-cut machinery as the fork engine.
+ */
+export function saveRoleSessionCopy(options: RoleSessionCopyOptions): string | null {
+  try {
+    if (!isClaudeCommand(options.command) || !options.sessionId) return null
+    const file = claudeSessionFile(options.cwd, options.sessionId, options.projectsDir)
+    if (!existsSync(file)) return null
+    const refId = randomUUID()
+    const truncated = buildForkedSessionLinesAtUuid(readFileSync(file, 'utf8').split('\n'), {
+      newSessionId: refId,
+      cutoffUuid: options.sourceTurnUuid
+    })
+    if (truncated.length === 0) return null
+    mkdirSync(options.destDir, { recursive: true })
+    writeFileSync(path.join(options.destDir, `${refId}.jsonl`), `${truncated.join('\n')}\n`, 'utf8')
+    return refId
+  } catch (error) {
+    console.error('Role session copy failed, role will boot fresh:', error)
+    return null
+  }
+}
+
+export interface RoleSessionResumeOptions {
+  sessionCopyRef: string
+  /** Where the copy was stored (roleSessionDir). */
+  copyDir: string
+  /** The booting terminal's cwd (its Claude project dir receives the copy). */
+  cwd: string
+  projectsDir?: string
+}
+
+/**
+ * Role-boot native restore: copy the stored checkpoint session under a FRESH
+ * id into the booting terminal's Claude project dir so the agent can
+ * --resume the checkpoint context. Returns the fresh id to bind, or null when
+ * the stored copy is missing (caller boots fresh). Each boot gets its own id
+ * so one role can seed many terminals without sharing a session file.
+ */
+export function resumeRoleSession(options: RoleSessionResumeOptions): string | null {
+  try {
+    // Refs are always app-minted UUIDs; validate anyway so a future caller
+    // forwarding a user-supplied ref can never traverse out of copyDir.
+    if (!SESSION_UUID_RE.test(options.sessionCopyRef)) return null
+    const src = path.join(options.copyDir, `${options.sessionCopyRef}.jsonl`)
+    if (!existsSync(src)) return null
+    const freshId = randomUUID()
+    const restamped = readFileSync(src, 'utf8')
+      .split('\n')
+      .map((line) => {
+        if (line.trim().length === 0) return line
+        try {
+          const rec = JSON.parse(line) as { sessionId?: string }
+          return typeof rec.sessionId === 'string'
+            ? JSON.stringify({ ...rec, sessionId: freshId })
+            : line
+        } catch {
+          return line
+        }
+      })
+      .join('\n')
+    const destDir = claudeProjectDir(options.cwd, options.projectsDir)
+    mkdirSync(destDir, { recursive: true })
+    writeFileSync(path.join(destDir, `${freshId}.jsonl`), restamped, 'utf8')
+    return freshId
+  } catch (error) {
+    console.error('Role session resume failed, booting fresh:', error)
+    return null
+  }
+}
+
 export interface ClaudeAssembledForkOptions extends Omit<ClaudeForkOptions, 'turnIndex'> {
   /** Checkpoint (turn) indexes whose uuid ranges the fork keeps. */
   turnIndexes: number[]

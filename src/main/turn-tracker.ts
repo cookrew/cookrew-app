@@ -411,9 +411,12 @@ export class TurnTracker extends EventEmitter {
     t.heldInput = fed.held
     if (!t.agent) return
     if (fed.submitted.length > 0) t.lastSubmitAt = Date.now()
-    if (t.phase === 'waiting' && fed.submitted.length > 0) {
-      // Enter on an approval/question menu answers the SAME turn — resume
-      // thinking with the original prompt and snapshot intact.
+    if (t.phase === 'waiting' && fed.submitted.length > 0 && t.prompt !== null) {
+      // Enter on an approval/question menu answers the SAME real turn — resume
+      // thinking with the original prompt and snapshot intact. A PROMPTLESS
+      // 'waiting' turn is a self-heal boot phantom (e.g. a fresh Codex whose
+      // boot screen tripped attention detection), NOT a menu to answer — the
+      // submitted text is the real first prompt, so fall through to startTurn.
       t.phase = 'thinking'
       t.lastSubmitAt = 0
       this.push(t)
@@ -541,7 +544,11 @@ export class TurnTracker extends EventEmitter {
       // The prompt was typed before this tracker existed (reattach) — the
       // TUI's own echo of it is still on screen. Recover it so the card and
       // the eventual TurnRecord show the real prompt, not a synthetic label.
-      t.prompt = extractPromptEcho(cleanTurnLines(t.snapshot))
+      // Fall back to the still-buffered input: a fresh Codex terminal whose
+      // ask pasted the prompt (Enter not yet submitted) has no "> prompt"
+      // echo on its boot screen, so recover the prompt we actually captured
+      // instead of labelling the first turn '(recovered turn)'.
+      t.prompt = extractPromptEcho(cleanTurnLines(t.snapshot)) ?? (t.promptBuffer.trim() || null)
     }
     t.phase = 'thinking'
     t.reply = null

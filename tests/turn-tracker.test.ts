@@ -136,6 +136,50 @@ describe('TurnTracker self-healing', () => {
     tracker.disposeAll()
   })
 
+  // Codex first-turn: the ask has buffered the prompt (pasted, not yet
+  // submitted) and Codex's boot screen has no "> prompt" echo, so the screen
+  // recovery fails — fall back to the buffered input instead of recording
+  // '(recovered turn)' with a boot-hallucinated title.
+  it('recovers a first-turn prompt from the input buffer when no screen echo exists (Codex)', () => {
+    const { tracker, session } = makeTracker()
+    // The ask pastes the prompt; the submitting Enter has not arrived yet.
+    session.emit('input', '\x1b[200~Reply with exactly: CODEX-QA-ALPHA\x1b[201~')
+    // Codex boot output (agent activity) self-heals before the Enter lands.
+    session.full = 'OpenAI Codex v0.144.6\n⏺ booting'
+    session.emit('data', '⏺ booting')
+    const activity = tracker.list()[0]
+    expect(activity.phase).toBe('thinking')
+    expect(activity.prompt).toBe('Reply with exactly: CODEX-QA-ALPHA')
+    tracker.disposeAll()
+  })
+
+  // Codex first-turn, the deterministic repro: a boot phantom whose boot
+  // screen trips attention detection sits in 'waiting', so the real first ask
+  // Enter was swallowed as a menu-answer (resume, no startTurn) → T1 stayed
+  // promptless and recorded '(recovered turn)'. A promptless waiting phantom
+  // must instead let the real prompt start the turn.
+  it('starts the real first turn when a prompt is submitted onto a promptless waiting phantom (Codex)', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    // Boot output with a live spinner self-heals into a promptless phantom.
+    session.full = '✻ Cerebrating… (esc to interrupt · 3s)'
+    session.emit('data', '✻ Cerebrating… (esc to interrupt · 3s)')
+    expect(phaseOf(tracker)).toBe('thinking')
+    expect(tracker.list()[0].prompt).toBe(null)
+    // The spinner clears and a boot menu line remains; quiescence → 'waiting'.
+    session.full = 'OpenAI Codex v0.144.6\nDo you want to proceed?'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(phaseOf(tracker)).toBe('waiting')
+    // The real ask arrives (paste + submitting Enter).
+    session.emit('input', '\x1b[200~Reply with exactly: CODEX-QA-ALPHA\x1b[201~')
+    session.emit('input', '\r')
+    const activity = tracker.list()[0]
+    expect(activity.phase).toBe('thinking')
+    expect(activity.prompt).toBe('Reply with exactly: CODEX-QA-ALPHA')
+    tracker.disposeAll()
+  })
+
   it('stays idle on a transcript redraw without a live spinner', () => {
     const { tracker, session } = makeTracker()
     session.emit('data', '⏺ I finished the refactor earlier.\n✳ Baked for 1m 6s')

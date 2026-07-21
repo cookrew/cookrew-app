@@ -48,9 +48,13 @@ describe('mobile/client.html kit inventory', () => {
     expect(HTML).not.toContain('activity.title || activity.prompt')
   })
 
-  it('carries neither stale fork nor premature checkpoint-elsewhere wording', () => {
-    // Mobile is checkpoint-free surface today; must not regress to fork wording.
+  it('uses the CHECKPOINT rename and carries no stale fork wording', () => {
+    // The checkpoint-program rename made "checkpoint" the user-facing term on
+    // every surface INCLUDING mobile (835ce9a added "CHECKPOINT SAVED" /
+    // "Checkpoint saved"), so checkpoint wording is expected here. The stale
+    // "fork" term must never regress back onto the mobile surface.
     expect(countRe(/fork/gi)).toBe(0)
+    expect(countRe(/checkpoint/gi)).toBeGreaterThanOrEqual(2)
   })
 
   it('has no exact-duplicate top-level CSS class/id selector block', () => {
