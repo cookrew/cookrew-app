@@ -18,6 +18,7 @@ import {
   uniqueName
 } from '../shared/model'
 import { addDir, removeDir, setPrimary } from '../shared/workspace-dirs'
+import type { CookrewEvent, EventActor } from './event-log'
 import { upgradeNode } from './node-upgrades'
 
 const DATA_DIR = path.join(homedir(), '.cookrew')
@@ -33,14 +34,22 @@ if (!existsSync(DATA_DIR) && existsSync(LEGACY_DATA_DIR)) {
     console.error('Failed to migrate legacy data dir ~/.cava:', error)
   }
 }
-const REGISTRY_FILE = path.join(DATA_DIR, 'registry.json')
-const WORKSPACES_DIR = path.join(DATA_DIR, 'workspaces')
-const LEGACY_WORKSPACE = path.join(DATA_DIR, 'workspace.json')
-const LEGACY_NOTES = path.join(DATA_DIR, 'notes')
+// All persistence paths derive from a base dir so tests can run a store
+// against a temp directory instead of the real ~/.cookrew.
+const registryFile = (base: string): string => path.join(base, 'registry.json')
+const workspacesDir = (base: string): string => path.join(base, 'workspaces')
+const legacyWorkspaceFile = (base: string): string => path.join(base, 'workspace.json')
+const legacyNotesDir = (base: string): string => path.join(base, 'notes')
 
 interface Registry {
   workspaces: WorkspaceMeta[]
   activeId: string
+}
+
+/** A node found by a cross-workspace lookup, with its owning workspace. */
+export interface WorkspaceNodeHit {
+  node: CanvasNode
+  workspaceId: string
 }
 
 /**
@@ -56,10 +65,10 @@ export class WorkspaceStore extends EventEmitter {
   private registry: Registry
   private saveTimer: NodeJS.Timeout | null = null
 
-  constructor() {
+  constructor(private baseDir = DATA_DIR) {
     super()
-    this.registry = loadRegistry()
-    this.state = loadWorkspaceState(this.activeId)
+    this.registry = loadRegistry(this.baseDir)
+    this.state = loadWorkspaceState(this.baseDir, this.activeId)
   }
 
   // ---- workspace registry ----
@@ -91,9 +100,10 @@ export class WorkspaceStore extends EventEmitter {
     const meta: WorkspaceMeta = { id: randomUUID(), name: finalName, dir, dirs: [dir], icon }
     this.registry = { ...this.registry, workspaces: [...this.registry.workspaces, meta] }
     // Seed an empty canvas file so the switch loads cleanly.
-    saveWorkspaceState(meta.id, { name: meta.name, dir, dirs: [dir], nodes: [], connections: [] })
-    saveRegistry(this.registry)
+    saveWorkspaceState(this.baseDir, meta.id, { name: meta.name, dir, dirs: [dir], nodes: [], connections: [] })
+    saveRegistry(this.baseDir, this.registry)
     this.emit('workspaces', this.list())
+    this.emitOp('workspace.created', meta.id, meta.name, meta.id)
     return meta
   }
 
@@ -118,9 +128,9 @@ export class WorkspaceStore extends EventEmitter {
     const primary = finalDirs[0] ?? dir
     const meta: WorkspaceMeta = { id: randomUUID(), name: finalName, dir: primary, dirs: finalDirs, icon }
     this.registry = { ...this.registry, workspaces: [...this.registry.workspaces, meta] }
-    saveWorkspaceState(meta.id, { name: finalName, dir: primary, dirs: finalDirs, nodes, connections })
+    saveWorkspaceState(this.baseDir, meta.id, { name: finalName, dir: primary, dirs: finalDirs, nodes, connections })
     try {
-      const notesDir = path.join(WORKSPACES_DIR, meta.id, 'notes')
+      const notesDir = path.join(workspacesDir(this.baseDir), meta.id, 'notes')
       const notes = nodes.filter((n): n is NoteNodeData => n.kind === 'note')
       if (notes.length > 0) mkdirSync(notesDir, { recursive: true })
       for (const note of notes) {
@@ -129,8 +139,9 @@ export class WorkspaceStore extends EventEmitter {
     } catch (error) {
       console.error('Failed to mirror forked note files:', error)
     }
-    saveRegistry(this.registry)
+    saveRegistry(this.baseDir, this.registry)
     this.emit('workspaces', this.list())
+    this.emitOp('workspace.created', meta.id, meta.name, meta.id, 'team fork')
     return meta
   }
 
@@ -148,12 +159,13 @@ export class WorkspaceStore extends EventEmitter {
     this.flushSave()
 
     this.registry = { ...this.registry, activeId: id }
-    saveRegistry(this.registry)
-    this.state = loadWorkspaceState(id)
+    saveRegistry(this.baseDir, this.registry)
+    this.state = loadWorkspaceState(this.baseDir, id)
 
     this.emit('switch', { previousTerminalIds })
     this.emit('workspaces', this.list())
     this.emit('change', this.state)
+    this.emitOp('workspace.switched', target.id, target.name, target.id)
     return target
   }
 
@@ -163,9 +175,10 @@ export class WorkspaceStore extends EventEmitter {
       workspaces: this.registry.workspaces.map((w) => (w.id === id ? { ...w, name } : w))
     }
     if (id === this.registry.activeId) this.state = { ...this.state, name }
-    saveRegistry(this.registry)
+    saveRegistry(this.baseDir, this.registry)
     this.emit('workspaces', this.list())
     if (id === this.registry.activeId) this.emit('change', this.state)
+    this.emitOp('workspace.renamed', id, name, id)
   }
 
   /**
@@ -189,13 +202,15 @@ export class WorkspaceStore extends EventEmitter {
         switchedTo = other.id
       }
     }
+    const removedMeta = this.registry.workspaces.find((w) => w.id === id)
     this.registry = {
       ...this.registry,
       workspaces: this.registry.workspaces.filter((w) => w.id !== id)
     }
-    saveRegistry(this.registry)
+    saveRegistry(this.baseDir, this.registry)
+    this.emitOp('workspace.deleted', id, removedMeta?.name ?? id, id)
     try {
-      rmSync(path.join(WORKSPACES_DIR, id), { recursive: true, force: true })
+      rmSync(path.join(workspacesDir(this.baseDir), id), { recursive: true, force: true })
     } catch (error) {
       console.error('Failed to delete workspace files:', error)
     }
@@ -226,10 +241,10 @@ export class WorkspaceStore extends EventEmitter {
       this.emit('change', this.state)
     } else {
       // Inactive workspace: patch its on-disk state directly.
-      const state = loadWorkspaceState(id)
-      saveWorkspaceState(id, { ...state, dir: primary, dirs })
+      const state = loadWorkspaceState(this.baseDir, id)
+      saveWorkspaceState(this.baseDir, id, { ...state, dir: primary, dirs })
     }
-    saveRegistry(this.registry)
+    saveRegistry(this.baseDir, this.registry)
     this.emit('workspaces', this.list())
     return this.list()
   }
@@ -274,7 +289,7 @@ export class WorkspaceStore extends EventEmitter {
   private scheduleSave(): void {
     if (this.saveTimer) clearTimeout(this.saveTimer)
     this.saveTimer = setTimeout(() => {
-      saveWorkspaceState(this.registry.activeId, this.state)
+      saveWorkspaceState(this.baseDir, this.registry.activeId, this.state)
     }, 300)
   }
 
@@ -283,11 +298,17 @@ export class WorkspaceStore extends EventEmitter {
       clearTimeout(this.saveTimer)
       this.saveTimer = null
     }
-    saveWorkspaceState(this.registry.activeId, this.state)
+    saveWorkspaceState(this.baseDir, this.registry.activeId, this.state)
+  }
+
+  /** Write any debounced canvas state now (app quit) — a node change within
+   *  the 300ms save window would otherwise be lost. */
+  flush(): void {
+    this.flushSave()
   }
 
   private notesDir(): string {
-    return path.join(WORKSPACES_DIR, this.registry.activeId, 'notes')
+    return path.join(workspacesDir(this.baseDir), this.registry.activeId, 'notes')
   }
 
   // ---- lookups ----
@@ -300,6 +321,29 @@ export class WorkspaceStore extends EventEmitter {
     return this.state.nodes.find(
       (n) => n.name.toLowerCase() === name.toLowerCase() && (!kind || n.kind === kind)
     )
+  }
+
+  /**
+   * The workspace a node id lives in, across ALL workspaces — the active one
+   * first, then each inactive workspace's persisted state. Error paths use it
+   * to tell a user their terminal lives in workspace A while B is active
+   * (node()/terminals() are active-scoped and can't see across the switch).
+   * Returns undefined when no workspace contains the node.
+   */
+  workspaceOfNode(id: string): WorkspaceMeta | undefined {
+    if (this.state.nodes.some((n) => n.id === id)) return this.activeMeta()
+    for (const meta of this.registry.workspaces) {
+      if (meta.id === this.activeId) continue
+      try {
+        const raw = JSON.parse(
+          readFileSync(workspaceFile(this.baseDir, meta.id), 'utf8')
+        ) as WorkspaceState
+        if (raw.nodes?.some((n) => n.id === id)) return meta
+      } catch {
+        // Unreadable/missing workspace file — skip it.
+      }
+    }
+    return undefined
   }
 
   terminals(): TerminalNodeData[] {
@@ -328,6 +372,213 @@ export class WorkspaceStore extends EventEmitter {
     )
   }
 
+  // ---- observability choke-point (note observability-event-log-spec) ----
+  //
+  // EVERY mutating op below funnels through emitOp, so the 'op' event stream
+  // can never diverge from state. index.ts appends the stream to the durable
+  // EventLog and broadcasts it (renderer + mobile SSE). Metadata only.
+
+  private opContext: { actor: EventActor; via: string | null } = { actor: 'user', via: null }
+
+  /**
+   * Scope actor/via labels around SYNCHRONOUS store calls (all mutations are
+   * sync): the CLI wraps orch verbs (recruit/dismiss/fork) so their events
+   * carry the acting party and a semantic type refinement.
+   */
+  withOpContext<T>(ctx: { actor?: EventActor; via?: string | null }, fn: () => T): T {
+    const previous = this.opContext
+    this.opContext = { ...previous, ...ctx }
+    try {
+      return fn()
+    } finally {
+      this.opContext = previous
+    }
+  }
+
+  private emitOp(
+    type: string,
+    entityId: string,
+    entityName: string,
+    workspaceId: string,
+    details?: string
+  ): void {
+    const ws = this.registry.workspaces.find((w) => w.id === workspaceId)
+    const event: CookrewEvent = {
+      type,
+      entityId,
+      entityName,
+      workspaceId,
+      workspaceName: ws?.name ?? workspaceId,
+      actor: this.opContext.actor,
+      timestamp: Date.now(),
+      ...(details !== undefined ? { details } : {})
+    }
+    this.emit('op', event)
+  }
+
+  /** Ops living outside the store (role/team saves) still go through here. */
+  recordEvent(type: string, entityId: string, entityName: string, details?: string): void {
+    this.emitOp(type, entityId, entityName, this.registry.activeId, details)
+  }
+
+  private createdType(kind: CanvasNode['kind']): string {
+    if (kind === 'terminal') {
+      if (this.opContext.via === 'recruit') return 'terminal.recruited'
+      if (this.opContext.via === 'fork') return 'terminal.forked'
+      return 'terminal.created'
+    }
+    return kind === 'note' ? 'note.created' : 'browser.created'
+  }
+
+  private removedType(kind: CanvasNode['kind']): string {
+    if (kind === 'terminal') {
+      return this.opContext.via === 'dismiss' ? 'terminal.dismissed' : 'terminal.killed'
+    }
+    return kind === 'note' ? 'note.deleted' : 'browser.closed'
+  }
+
+  // ---- cross-workspace lookups & edges (orchestration spans canvases) ----
+  //
+  // Edges between nodes of different workspaces are MIRRORED: the same
+  // Connection {id,a,b} lives in BOTH endpoint workspaces' lists (decision
+  // in note cross-workspace-orch-fix-dec). Renderers drop edges whose far
+  // endpoint is not on the local canvas; the store resolves them here.
+
+  /** Active workspace state from memory (fresh), inactive from disk. */
+  private stateOf(id: string): WorkspaceState {
+    return id === this.registry.activeId ? this.state : loadWorkspaceState(this.baseDir, id)
+  }
+
+  /** Apply a transform to any workspace: active mutates, inactive patches disk. */
+  private patchWorkspace(id: string, fn: (s: WorkspaceState) => WorkspaceState): void {
+    if (id === this.registry.activeId) {
+      this.mutate(fn(this.state))
+      return
+    }
+    saveWorkspaceState(this.baseDir, id, fn(this.stateOf(id)))
+  }
+
+  /** Workspace metas with the active one first (cheapest, freshest lookup). */
+  private metasActiveFirst(): WorkspaceMeta[] {
+    return [...this.registry.workspaces].sort((a, b) =>
+      a.id === this.registry.activeId ? -1 : b.id === this.registry.activeId ? 1 : 0
+    )
+  }
+
+  /** Node lookup across EVERY workspace, not just the active canvas. */
+  nodeAcrossWorkspaces(id: string): WorkspaceNodeHit | undefined {
+    for (const meta of this.metasActiveFirst()) {
+      const node = this.stateOf(meta.id).nodes.find((n) => n.id === id)
+      if (node) return { node, workspaceId: meta.id }
+    }
+    return undefined
+  }
+
+  workspaceOf(nodeId: string): WorkspaceMeta | undefined {
+    const hit = this.nodeAcrossWorkspaces(nodeId)
+    return hit ? this.registry.workspaces.find((w) => w.id === hit.workspaceId) : undefined
+  }
+
+  /**
+   * connectedTo across every workspace: unions edges mentioning the id from
+   * all workspace states and resolves endpoints globally. Mirror edges left
+   * dangling by a deletion in the other workspace are filtered at read time.
+   */
+  connectedToAcross(id: string): WorkspaceNodeHit[] {
+    const states = this.metasActiveFirst().map((m) => ({ id: m.id, state: this.stateOf(m.id) }))
+    const resolve = (nid: string): WorkspaceNodeHit | undefined => {
+      for (const s of states) {
+        const node = s.state.nodes.find((n) => n.id === nid)
+        if (node) return { node, workspaceId: s.id }
+      }
+      return undefined
+    }
+    const seen = new Set<string>()
+    const hits: WorkspaceNodeHit[] = []
+    for (const s of states) {
+      for (const c of s.state.connections) {
+        if (c.a !== id && c.b !== id) continue
+        const otherId = c.a === id ? c.b : c.a
+        if (seen.has(otherId)) continue
+        seen.add(otherId)
+        const hit = resolve(otherId)
+        if (hit) hits.push(hit)
+      }
+    }
+    return hits
+  }
+
+  /** Connect two nodes wherever they live; cross-workspace edges get mirrored. */
+  connectAcross(aId: string, bId: string): Connection {
+    const a = this.nodeAcrossWorkspaces(aId)
+    const b = this.nodeAcrossWorkspaces(bId)
+    if (!a || !b) throw new Error('Cannot connect: node not found in any workspace')
+    if (a.workspaceId === this.registry.activeId && b.workspaceId === this.registry.activeId) {
+      return this.connect(aId, bId)
+    }
+    const matches = (c: Connection): boolean =>
+      (c.a === aId && c.b === bId) || (c.a === bId && c.b === aId)
+    const existing =
+      this.stateOf(a.workspaceId).connections.find(matches) ??
+      this.stateOf(b.workspaceId).connections.find(matches)
+    const conn = existing ?? { id: randomUUID(), a: aId, b: bId }
+    for (const wsId of new Set([a.workspaceId, b.workspaceId])) {
+      this.patchWorkspace(wsId, (s) =>
+        s.connections.some(matches) ? s : { ...s, connections: [...s.connections, conn] }
+      )
+    }
+    // ONE event per logical edge — the mirror write is the same connection.
+    if (!existing) {
+      this.emitOp(
+        'connection.made',
+        conn.id,
+        `${a.node.name} ↔ ${b.node.name}`,
+        a.workspaceId
+      )
+    }
+    return conn
+  }
+
+  /** addNode into any workspace; unique-named within THAT workspace. */
+  addNodeToWorkspace(workspaceId: string, node: CanvasNode): CanvasNode {
+    if (workspaceId === this.registry.activeId) return this.addNode(node)
+    if (!this.registry.workspaces.some((w) => w.id === workspaceId)) {
+      throw new Error(`Workspace '${workspaceId}' not found`)
+    }
+    const state = this.stateOf(workspaceId)
+    const named: CanvasNode = {
+      ...node,
+      name: uniqueName(node.name, state.nodes.map((n) => n.name))
+    }
+    saveWorkspaceState(this.baseDir, workspaceId, { ...state, nodes: [...state.nodes, named] })
+    this.emitOp(
+      this.createdType(named.kind),
+      named.id,
+      named.name,
+      workspaceId,
+      named.kind === 'terminal' ? (named as TerminalNodeData).preset : undefined
+    )
+    return named
+  }
+
+  /** Remove a node (and its local edges) from its OWNING workspace. */
+  removeNodeAcross(id: string): void {
+    const hit = this.nodeAcrossWorkspaces(id)
+    if (!hit) return
+    // Active-workspace removals route through removeNode so the op event
+    // (and any kind-specific cleanup) is emitted exactly once.
+    if (hit.workspaceId === this.registry.activeId) {
+      this.removeNode(id)
+      return
+    }
+    this.patchWorkspace(hit.workspaceId, (s) => ({
+      ...s,
+      nodes: s.nodes.filter((n) => n.id !== id),
+      connections: s.connections.filter((c) => c.a !== id && c.b !== id)
+    }))
+    this.emitOp(this.removedType(hit.node.kind), hit.node.id, hit.node.name, hit.workspaceId)
+  }
+
   // ---- mutations ----
 
   addNode(node: CanvasNode): CanvasNode {
@@ -337,6 +588,13 @@ export class WorkspaceStore extends EventEmitter {
     }
     this.mutate({ ...this.state, nodes: [...this.state.nodes, named] })
     if (named.kind === 'note') void this.persistNoteFile(named)
+    this.emitOp(
+      this.createdType(named.kind),
+      named.id,
+      named.name,
+      this.registry.activeId,
+      named.kind === 'terminal' ? (named as TerminalNodeData).preset : undefined
+    )
     return named
   }
 
@@ -354,11 +612,13 @@ export class WorkspaceStore extends EventEmitter {
   }
 
   removeNode(id: string): void {
+    const node = this.node(id)
     this.mutate({
       ...this.state,
       nodes: this.state.nodes.filter((n) => n.id !== id),
       connections: this.state.connections.filter((c) => c.a !== id && c.b !== id)
     })
+    if (node) this.emitOp(this.removedType(node.kind), node.id, node.name, this.registry.activeId)
   }
 
   connect(aId: string, bId: string): Connection {
@@ -368,6 +628,12 @@ export class WorkspaceStore extends EventEmitter {
     if (existing) return existing
     const conn: Connection = { id: randomUUID(), a: aId, b: bId }
     this.mutate({ ...this.state, connections: [...this.state.connections, conn] })
+    this.emitOp(
+      'connection.made',
+      conn.id,
+      `${this.node(aId)?.name ?? aId} ↔ ${this.node(bId)?.name ?? bId}`,
+      this.registry.activeId
+    )
     return conn
   }
 
@@ -376,6 +642,7 @@ export class WorkspaceStore extends EventEmitter {
       ...this.state,
       connections: this.state.connections.filter((c) => c.id !== connectionId)
     })
+    this.emitOp('connection.removed', connectionId, '', this.registry.activeId)
   }
 
   // ---- notes ----
@@ -415,14 +682,14 @@ export class WorkspaceStore extends EventEmitter {
 
 // ---- persistence ----
 
-function workspaceFile(id: string): string {
-  return path.join(WORKSPACES_DIR, id, 'workspace.json')
+function workspaceFile(base: string, id: string): string {
+  return path.join(workspacesDir(base), id, 'workspace.json')
 }
 
-function loadRegistry(): Registry {
+function loadRegistry(base: string): Registry {
   try {
-    if (existsSync(REGISTRY_FILE)) {
-      const raw = JSON.parse(readFileSync(REGISTRY_FILE, 'utf8')) as Registry
+    if (existsSync(registryFile(base))) {
+      const raw = JSON.parse(readFileSync(registryFile(base), 'utf8')) as Registry
       if (raw.workspaces?.length > 0) {
         // Normalize legacy metas (no dirs) to the multi-dir shape.
         const workspaces = raw.workspaces.map((w) => {
@@ -436,28 +703,28 @@ function loadRegistry(): Registry {
   } catch (error) {
     console.error('Failed to load registry:', error)
   }
-  return migrateOrSeed()
+  return migrateOrSeed(base)
 }
 
 /** Build the first registry: adopt a legacy single-workspace, or start fresh. */
-function migrateOrSeed(): Registry {
+function migrateOrSeed(base: string): Registry {
   const id = randomUUID()
-  mkdirSync(path.join(WORKSPACES_DIR, id), { recursive: true })
+  mkdirSync(path.join(workspacesDir(base), id), { recursive: true })
 
-  if (existsSync(LEGACY_WORKSPACE)) {
+  if (existsSync(legacyWorkspaceFile(base))) {
     try {
-      const legacy = JSON.parse(readFileSync(LEGACY_WORKSPACE, 'utf8')) as WorkspaceState
-      saveWorkspaceState(id, legacy)
+      const legacy = JSON.parse(readFileSync(legacyWorkspaceFile(base), 'utf8')) as WorkspaceState
+      saveWorkspaceState(base, id, legacy)
       // Move the old flat notes dir into the workspace so note files resolve.
-      if (existsSync(LEGACY_NOTES) && !existsSync(path.join(WORKSPACES_DIR, id, 'notes'))) {
-        renameSync(LEGACY_NOTES, path.join(WORKSPACES_DIR, id, 'notes'))
+      if (existsSync(legacyNotesDir(base)) && !existsSync(path.join(workspacesDir(base), id, 'notes'))) {
+        renameSync(legacyNotesDir(base), path.join(workspacesDir(base), id, 'notes'))
       }
-      renameSync(LEGACY_WORKSPACE, `${LEGACY_WORKSPACE}.migrated`)
+      renameSync(legacyWorkspaceFile(base), `${legacyWorkspaceFile(base)}.migrated`)
       const dir = legacy.dir || homedir()
       const dirs = normalizeDirs({ dir, dirs: legacy.dirs })
       const meta: WorkspaceMeta = { id, name: legacy.name || 'My Workspace', dir, dirs, icon: '🗂' }
       const registry: Registry = { workspaces: [meta], activeId: id }
-      saveRegistry(registry)
+      saveRegistry(base, registry)
       return registry
     } catch (error) {
       console.error('Legacy migration failed, seeding fresh:', error)
@@ -466,9 +733,9 @@ function migrateOrSeed(): Registry {
 
   const dir = homedir()
   const meta: WorkspaceMeta = { id, name: 'My Workspace', dir, dirs: [dir], icon: '🗂' }
-  saveWorkspaceState(id, { name: meta.name, dir, dirs: [dir], nodes: [], connections: [] })
+  saveWorkspaceState(base, id, { name: meta.name, dir, dirs: [dir], nodes: [], connections: [] })
   const registry: Registry = { workspaces: [meta], activeId: id }
-  saveRegistry(registry)
+  saveRegistry(base, registry)
   return registry
 }
 
@@ -487,9 +754,9 @@ function normalizeState(state: WorkspaceState): WorkspaceState {
   return { ...state, dir: primary, dirs: finalDirs, nodes }
 }
 
-function loadWorkspaceState(id: string): WorkspaceState {
+function loadWorkspaceState(base: string, id: string): WorkspaceState {
   try {
-    const file = workspaceFile(id)
+    const file = workspaceFile(base, id)
     if (existsSync(file)) {
       const state = JSON.parse(readFileSync(file, 'utf8')) as WorkspaceState
       return normalizeState(state)
@@ -501,19 +768,19 @@ function loadWorkspaceState(id: string): WorkspaceState {
   return { name: 'Workspace', dir, dirs: [dir], nodes: [], connections: [] }
 }
 
-function saveWorkspaceState(id: string, state: WorkspaceState): void {
+function saveWorkspaceState(base: string, id: string, state: WorkspaceState): void {
   try {
-    mkdirSync(path.join(WORKSPACES_DIR, id), { recursive: true })
-    writeFileSync(workspaceFile(id), JSON.stringify(state, null, 2), 'utf8')
+    mkdirSync(path.join(workspacesDir(base), id), { recursive: true })
+    writeFileSync(workspaceFile(base, id), JSON.stringify(state, null, 2), 'utf8')
   } catch (error) {
     console.error('Failed to save workspace state:', error)
   }
 }
 
-function saveRegistry(registry: Registry): void {
+function saveRegistry(base: string, registry: Registry): void {
   try {
-    mkdirSync(DATA_DIR, { recursive: true })
-    writeFileSync(REGISTRY_FILE, JSON.stringify(registry, null, 2), 'utf8')
+    mkdirSync(base, { recursive: true })
+    writeFileSync(registryFile(base), JSON.stringify(registry, null, 2), 'utf8')
   } catch (error) {
     console.error('Failed to save registry:', error)
   }

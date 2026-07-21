@@ -2,6 +2,8 @@ import type http from 'node:http'
 import type { WorkspaceStore } from './store'
 import type { PtyManager } from './pty'
 import type { TurnTracker } from './turn-tracker'
+import type { EventLog, CookrewEvent, EventQuery } from './event-log'
+import type { AgentRegistry } from './agent-registry'
 import type {
   AgentRole,
   CanvasNode,
@@ -56,6 +58,10 @@ export interface MobileApiDeps {
   store: WorkspaceStore
   ptys: PtyManager
   turns: TurnTracker
+  /** Observability event log (query/count) — spec observability-event-log-spec. */
+  events: EventLog
+  /** Durable agent roster cache (~/.cookrew/agents.json). */
+  agents: AgentRegistry
   ops: MobileOps
   presets: readonly { name: string; command: string }[]
   /** Persist a phone-uploaded attachment; returns its absolute path. */
@@ -376,18 +382,49 @@ export async function handleMobileApi(
     const onChange = (state: WorkspaceState): void => send('workspace', state)
     const onWorkspaces = (list: WorkspaceList): void => send('workspaces', list)
     const onActivity = (activity: unknown): void => send('activity', activity)
+    // Observability stream: every store mutation, cross-workspace (toasts).
+    const onOp = (event: CookrewEvent): void => send('event', event)
     store.on('change', onChange)
     store.on('workspaces', onWorkspaces)
     turns.on('activity', onActivity)
+    store.on('op', onOp)
     const heartbeat = setInterval(() => response.write(':hb\n\n'), 25000)
     request.on('close', () => {
       clearInterval(heartbeat)
       store.removeListener('change', onChange)
       store.removeListener('workspaces', onWorkspaces)
       turns.removeListener('activity', onActivity)
+      store.removeListener('op', onOp)
     })
     return true
   }
 
+  // Observability queries (metrics/history panel) + global agent roster.
+  if (method === 'GET' && p === '/api/events/query') {
+    const q = parseEventQuery(url.searchParams)
+    respondJson(response, 200, { events: deps.events.query(q), counts: deps.events.count(q) })
+    return true
+  }
+  if (method === 'GET' && p === '/api/agents') {
+    respondJson(response, 200, { agents: deps.agents.list() })
+    return true
+  }
+
   return false
+}
+
+/** ?workspaceId=&type=&since=&until=&limit= — all optional. */
+function parseEventQuery(params: URLSearchParams): EventQuery {
+  const num = (key: string): number | undefined => {
+    const raw = params.get(key)
+    const parsed = raw === null ? NaN : Number(raw)
+    return Number.isFinite(parsed) ? parsed : undefined
+  }
+  return {
+    workspaceId: params.get('workspaceId') ?? undefined,
+    type: params.get('type') ?? undefined,
+    since: num('since'),
+    until: num('until'),
+    limit: num('limit')
+  }
 }

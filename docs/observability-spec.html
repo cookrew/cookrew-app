@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cookrew Observability — Event Log &amp; Reminder Cards</title>
+<style>
+  :root {
+    --ground:#f4efe2; --surface:#fbf8f0; --surface-2:#efe8d7;
+    --ink:#2a2620; --muted:#7c7360; --line:#e2dac6;
+    --accent:#a1751a; --accent-bright:#c8941f; --violet:#6d4bb0;
+    --emit:#2f8f4e; --warn:#a86b16; --crit:#bf443e;
+    --font-sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --font-mono:ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace;
+    --maxw:themed;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground:#191710; --surface:#221f16; --surface-2:#2b2718;
+      --ink:#f0ead8; --muted:#a89e86; --line:#39331f;
+      --accent:#e9b949; --accent-bright:#f2c95a; --violet:#b18cf0;
+      --emit:#6fcf7f; --warn:#e0a94a; --crit:#e5646e;
+    }
+  }
+  :root[data-theme="light"] {
+    --ground:#f4efe2; --surface:#fbf8f0; --surface-2:#efe8d7;
+    --ink:#2a2620; --muted:#7c7360; --line:#e2dac6;
+    --accent:#a1751a; --accent-bright:#c8941f; --violet:#6d4bb0;
+    --emit:#2f8f4e; --warn:#a86b16; --crit:#bf443e;
+  }
+  :root[data-theme="dark"] {
+    --ground:#191710; --surface:#221f16; --surface-2:#2b2718;
+    --ink:#f0ead8; --muted:#a89e86; --line:#39331f;
+    --accent:#e9b949; --accent-bright:#f2c95a; --violet:#b18cf0;
+    --emit:#6fcf7f; --warn:#e0a94a; --crit:#e5646e;
+  }
+
+  * { box-sizing:border-box; }
+  html { -webkit-text-size-adjust:100%; }
+  body {
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:var(--font-sans); font-size:16px; line-height:1.62;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap { max-width:900px; margin:0 auto; padding:0 20px 96px; }
+
+  /* masthead */
+  header.mast { padding:46px 0 26px; border-bottom:1px solid var(--line); }
+  .eyebrow { font-family:var(--font-mono); font-size:11.5px; letter-spacing:.16em;
+    text-transform:uppercase; color:var(--accent); display:flex; align-items:center; gap:8px; }
+  .eyebrow::before { content:""; width:7px; height:7px; border-radius:50%;
+    background:var(--emit); box-shadow:0 0 0 3px color-mix(in srgb, var(--emit) 22%, transparent); }
+  h1 { font-size:clamp(28px,5vw,42px); line-height:1.08; letter-spacing:-.02em;
+    text-wrap:balance; margin:.36em 0 .28em; font-weight:680; }
+  .lede { color:var(--muted); font-size:17px; max-width:64ch; margin:0; }
+  .meta { display:flex; flex-wrap:wrap; gap:8px; margin-top:20px; font-family:var(--font-mono); font-size:12px; }
+  .tag { border:1px solid var(--line); border-radius:6px; padding:4px 9px; color:var(--muted); background:var(--surface); }
+  .tag b { color:var(--ink); font-weight:600; }
+
+  /* at-a-glance */
+  .glance { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin:30px 0 8px; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:11px; padding:16px 16px 15px; }
+  .card .k { font-family:var(--font-mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--accent); }
+  .card .v { font-weight:640; margin-top:5px; font-size:15px; }
+  .card .d { color:var(--muted); font-size:13px; margin-top:4px; }
+
+  section { padding:38px 0 4px; border-bottom:1px solid var(--line); }
+  section:last-of-type { border-bottom:0; }
+  h2 { font-size:22px; letter-spacing:-.01em; margin:0 0 4px; font-weight:670; display:flex; align-items:baseline; gap:11px; }
+  h2 .num { font-family:var(--font-mono); font-size:13px; color:var(--accent); font-weight:600; }
+  h3 { font-size:15px; margin:26px 0 8px; font-weight:640; }
+  p { max-width:68ch; }
+  .sub { color:var(--muted); max-width:66ch; margin-top:2px; }
+  a { color:var(--accent); text-decoration:underline; text-underline-offset:2px; text-decoration-thickness:1px; }
+  code { font-family:var(--font-mono); font-size:.86em; background:var(--surface-2);
+    border:1px solid var(--line); border-radius:5px; padding:1px 5px; color:var(--ink); }
+
+  /* diagram */
+  .figure { margin:22px 0 6px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:20px 14px; overflow-x:auto; }
+  .figcap { font-family:var(--font-mono); font-size:11.5px; color:var(--muted); text-align:center; margin-top:10px; letter-spacing:.04em; }
+  svg text { font-family:var(--font-mono); fill:var(--ink); }
+
+  /* tables */
+  .tablewrap { overflow-x:auto; margin:14px 0 6px; border:1px solid var(--line); border-radius:11px; }
+  table { border-collapse:collapse; width:100%; font-size:14px; min-width:520px; }
+  th,td { text-align:left; padding:10px 13px; border-bottom:1px solid var(--line); vertical-align:top; }
+  thead th { font-family:var(--font-mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--muted); background:var(--surface-2); position:sticky; top:0; }
+  tbody tr:last-child td { border-bottom:0; }
+  td code, .mono { font-family:var(--font-mono); }
+  td.mono { font-size:12.5px; white-space:nowrap; color:var(--accent); }
+  .field { font-family:var(--font-mono); font-size:12.5px; color:var(--violet); white-space:nowrap; }
+
+  /* chips */
+  .chip { font-family:var(--font-mono); font-size:11px; letter-spacing:.04em; padding:2px 7px; border-radius:999px;
+    border:1px solid; display:inline-block; white-space:nowrap; }
+  .chip.forge { color:var(--accent); border-color:color-mix(in srgb,var(--accent) 45%,transparent); }
+  .chip.ui { color:var(--violet); border-color:color-mix(in srgb,var(--violet) 45%,transparent); }
+  .chip.qa { color:var(--emit); border-color:color-mix(in srgb,var(--emit) 45%,transparent); }
+  .chip.tinker { color:var(--warn); border-color:color-mix(in srgb,var(--warn) 45%,transparent); }
+  .sev { font-family:var(--font-mono); font-size:11px; padding:2px 8px; border-radius:5px; font-weight:600; }
+  .sev.must { color:#fff; background:var(--crit); }
+  .sev.should { color:var(--ground); background:var(--warn); }
+
+  /* toast demo */
+  .demo { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:18px; margin:16px 0 6px; }
+  .demo-row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  button.btn { font-family:var(--font-mono); font-size:12.5px; cursor:pointer; color:var(--ink);
+    background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:8px 13px; transition:border-color .15s,transform .05s; }
+  button.btn:hover { border-color:var(--accent); }
+  button.btn:active { transform:translateY(1px); }
+  button.btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .demo-note { font-size:13px; color:var(--muted); margin-top:12px; }
+  #stage { position:relative; min-height:70px; margin-top:16px; display:flex; flex-direction:column; gap:8px; align-items:flex-end; }
+
+  /* the tiny reminder card — the actual spec'd component */
+  .toast { width:min(340px,100%); background:var(--surface-2); border:1px solid var(--line);
+    border-left:3px solid var(--accent); border-radius:9px; padding:9px 11px;
+    display:flex; gap:10px; align-items:flex-start; box-shadow:0 6px 20px -12px rgba(0,0,0,.45); }
+  .toast .dot { width:8px; height:8px; border-radius:50%; margin-top:5px; flex:none; background:var(--emit);
+    box-shadow:0 0 0 3px color-mix(in srgb,var(--emit) 20%,transparent); }
+  .toast .body { min-width:0; }
+  .toast .t-title { font-size:13.5px; font-weight:620; line-height:1.3; }
+  .toast .t-meta { font-family:var(--font-mono); font-size:11px; color:var(--muted); margin-top:2px;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .toast .t-count { font-family:var(--font-mono); font-size:11px; color:var(--accent); font-weight:600; }
+  @keyframes tin { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+  @keyframes tout { to { opacity:0; transform:translateX(12px); } }
+  .toast { animation:tin .22s ease-out; }
+  .toast.leaving { animation:tout .3s ease-in forwards; }
+  @media (prefers-reduced-motion:reduce) { .toast,.toast.leaving { animation:none; } }
+
+  ul.tight { padding-left:20px; max-width:68ch; }
+  ul.tight li { margin:5px 0; }
+  .foot { margin-top:40px; padding-top:20px; border-top:1px solid var(--line);
+    font-family:var(--font-mono); font-size:12px; color:var(--muted); display:flex; flex-wrap:wrap; gap:6px 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="mast">
+    <div class="eyebrow">Cookrew · engineering spec · v1</div>
+    <h1>Observability: the event log &amp; reminder cards</h1>
+    <p class="lede">One durable, cross-workspace record of everything that happens on the canvas — surfaced as a tiny reminder card the moment it happens, and queryable forever after.</p>
+    <div class="meta">
+      <span class="tag">source: <b>observability-event-log-spec</b></span>
+      <span class="tag">substrate: <b>Forge</b></span>
+      <span class="tag">projections: <b>Velvet · Fresco</b></span>
+      <span class="tag">hardening: <b>Tinker</b></span>
+      <span class="tag">QA: <b>Magpie</b></span>
+    </div>
+  </header>
+
+  <div class="glance">
+    <div class="card"><div class="k">Substrate</div><div class="v">Append-only event log</div><div class="d">One emit choke-point → <code>~/.cookrew/events.jsonl</code>, cross-workspace, survives reboot.</div></div>
+    <div class="card"><div class="k">Projection A</div><div class="v">Reminder card feed</div><div class="d">Tiny top-view card, auto-dismiss ~5s, bursts coalesce.</div></div>
+    <div class="card"><div class="k">Projection B</div><div class="v">Metrics &amp; history</div><div class="d">Timeline + counts, filter by workspace / type / time.</div></div>
+    <div class="card"><div class="k">Projection C</div><div class="v">Agent roster</div><div class="d">Derived query: terminals created − dismissed. The reboot fix.</div></div>
+  </div>
+
+  <section>
+    <h2><span class="num">01</span> Why this exists</h2>
+    <p>Today a teammate, note, or browser lives only inside its workspace's state. Identity resolution (<code>store.node</code>, <code>connectedTo</code>) reads the <em>active</em> workspace only — so switching workspaces or rebooting the app silently loses sight of everything elsewhere. The user can't tell what happened in a workspace they aren't looking at, and the orchestrator can't find teammates it spawned somewhere else.</p>
+    <p>The fix and the feature are the same object: <strong>a single append-only log of canvas events, written cross-workspace and read three ways.</strong> Every projection — the reminder card, the metrics panel, the agent roster — is a view over that one log. Build the log first; the rest fall out of it.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">02</span> Architecture</h2>
+    <p class="sub">Every mutating store operation emits through one place. Events are batched to disk and fanned out to live consumers. Nothing writes the log except the choke-point; nothing bypasses it.</p>
+    <div class="figure">
+      <svg viewBox="0 0 860 300" width="860" height="300" role="img" aria-label="Event flows from store mutations through a single emit choke-point into a batched append-only log, then fans out to a live stream and a query API, feeding the reminder-card feed, the metrics panel, and the agent roster.">
+        <defs>
+          <marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+            <path d="M0,0 L9,4.5 L0,9 z" fill="var(--muted)"/>
+          </marker>
+          <style>
+            .bx{fill:var(--surface-2);stroke:var(--line);}
+            .bx-a{fill:var(--surface-2);stroke:var(--accent);}
+            .lab{font-size:12px;fill:var(--ink);}
+            .sm{font-size:10.5px;fill:var(--muted);}
+            .fl{stroke:var(--muted);stroke-width:1.4;fill:none;marker-end:url(#arw);}
+          </style>
+        </defs>
+        <!-- store ops -->
+        <rect class="bx" x="8" y="30" width="150" height="240" rx="9"/>
+        <text class="lab" x="83" y="52" text-anchor="middle">store mutations</text>
+        <text class="sm" x="83" y="86" text-anchor="middle">addNode · removeNode</text>
+        <text class="sm" x="83" y="104" text-anchor="middle">connect · fork</text>
+        <text class="sm" x="83" y="122" text-anchor="middle">teamFork · dismiss</text>
+        <text class="sm" x="83" y="140" text-anchor="middle">workspace switch</text>
+        <text class="sm" x="83" y="158" text-anchor="middle">role/team saved</text>
+        <!-- choke -->
+        <rect class="bx-a" x="196" y="110" width="128" height="80" rx="9"/>
+        <text class="lab" x="260" y="145" text-anchor="middle" style="fill:var(--accent);font-weight:600">emit()</text>
+        <text class="sm" x="260" y="163" text-anchor="middle">single choke-point</text>
+        <!-- log -->
+        <rect class="bx-a" x="360" y="110" width="150" height="80" rx="9"/>
+        <text class="lab" x="435" y="140" text-anchor="middle">events.jsonl</text>
+        <text class="sm" x="435" y="158" text-anchor="middle">append · batched · rolled</text>
+        <!-- fanout -->
+        <rect class="bx" x="548" y="66" width="132" height="60" rx="9"/>
+        <text class="lab" x="614" y="92" text-anchor="middle">live stream</text>
+        <text class="sm" x="614" y="109" text-anchor="middle">renderer + SSE</text>
+        <rect class="bx" x="548" y="174" width="132" height="60" rx="9"/>
+        <text class="lab" x="614" y="200" text-anchor="middle">query API</text>
+        <text class="sm" x="614" y="217" text-anchor="middle">filter · counts</text>
+        <!-- consumers -->
+        <rect class="bx" x="716" y="20" width="132" height="52" rx="9"/>
+        <text class="lab" x="782" y="42" text-anchor="middle">reminder cards</text>
+        <text class="sm" x="782" y="58" text-anchor="middle">Velvet · Fresco</text>
+        <rect class="bx" x="716" y="124" width="132" height="52" rx="9"/>
+        <text class="lab" x="782" y="146" text-anchor="middle">metrics panel</text>
+        <text class="sm" x="782" y="162" text-anchor="middle">Velvet · Fresco</text>
+        <rect class="bx" x="716" y="222" width="132" height="52" rx="9"/>
+        <text class="lab" x="782" y="244" text-anchor="middle">agent roster</text>
+        <text class="sm" x="782" y="260" text-anchor="middle">Forge query</text>
+        <!-- flows -->
+        <path class="fl" d="M158,150 L192,150"/>
+        <path class="fl" d="M324,150 L356,150"/>
+        <path class="fl" d="M510,140 L544,100"/>
+        <path class="fl" d="M510,160 L544,200"/>
+        <path class="fl" d="M680,92 L712,50"/>
+        <path class="fl" d="M680,150 L712,150"/>
+        <path class="fl" d="M680,208 L712,246"/>
+      </svg>
+      <div class="figcap">emit → append (batched, rolled) → fan out to live stream + query API → three read-only projections</div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">03</span> Substrate — the event log <span class="chip forge" style="align-self:center">Forge</span></h2>
+    <p>An append-only JSONL file at <code>~/.cookrew/events.jsonl</code>. A <strong>single store-level emitter</strong> is the only writer: every mutating operation emits through it, so the log can never diverge from state. One event, one line.</p>
+    <h3>Event schema</h3>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="field">type</td><td>enum</td><td>See taxonomy below.</td></tr>
+          <tr><td class="field">entityId</td><td>uuid</td><td>The node / connection / workspace acted on.</td></tr>
+          <tr><td class="field">entityName</td><td>string</td><td>Human label at emit time (e.g. <code>researcher</code>).</td></tr>
+          <tr><td class="field">workspaceId</td><td>uuid</td><td>Always present — lets consumers label non-active workspaces.</td></tr>
+          <tr><td class="field">workspaceName</td><td>string</td><td>Snapshot of the workspace name at emit time.</td></tr>
+          <tr><td class="field">actor</td><td>enum</td><td><code>orch</code> · <code>agent</code> · <code>user</code>.</td></tr>
+          <tr><td class="field">timestamp</td><td>epoch ms</td><td>Emit time (host clock).</td></tr>
+          <tr><td class="field">details</td><td>object</td><td>Brief, metadata only — e.g. <code>{ preset, role, cwd }</code>. Never prompt/reply text.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3>APIs to expose</h3>
+    <ul class="tight">
+      <li><strong>Live stream</strong> — renderer subscription (in-process) + an <code>SSE</code> endpoint so the phone companion sees the same feed.</li>
+      <li><strong>Query</strong> — filter by <code>workspaceId</code> / <code>type</code> / time-range, plus rolled-up counts for the metrics projection.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">04</span> Event taxonomy</h2>
+    <p class="sub">Every canvas mutation is an event. Grouped by entity; the reminder card shows a friendly phrasing per row.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Entity</th><th>Types</th><th>Reads as</th></tr></thead>
+        <tbody>
+          <tr><td>Terminal</td><td class="mono">recruited · created · dismissed · killed</td><td>“researcher recruited in GOAT Team”</td></tr>
+          <tr><td>Fork</td><td class="mono">agent-fork · team-fork</td><td>“Beacon ⑂T2 forked” · “11 agents forked into QA Fork”</td></tr>
+          <tr><td>Note</td><td class="mono">created · deleted</td><td>“note created in Cookrew Dev”</td></tr>
+          <tr><td>Browser</td><td class="mono">created · closed</td><td>“browser opened in Cookrew Dev”</td></tr>
+          <tr><td>Connection</td><td class="mono">made · removed</td><td>“Conductor → researcher wired”</td></tr>
+          <tr><td>Workspace</td><td class="mono">created · switched · renamed · deleted</td><td>“switched to GOAT Team”</td></tr>
+          <tr><td>Library</td><td class="mono">role-saved · team-saved</td><td>“role ‘QA Probe’ saved”</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">05</span> Projection A — reminder cards <span class="chip ui" style="align-self:center">Velvet · Fresco</span></h2>
+    <p>A <strong>tiny reminder card</strong> pops at the top-level Cookrew view the instant an event arrives, then vanishes (~5s). Small and unobtrusive — a status-tinted dot, one line of title, one mono line of context. Events in a workspace you aren't looking at read <em>“in &lt;workspace&gt;”</em> — that's the whole point.</p>
+    <h3>Live preview — this is the component, not a picture</h3>
+    <div class="demo">
+      <div class="demo-row">
+        <button class="btn" id="b-single">emit single event</button>
+        <button class="btn" id="b-note">emit note created</button>
+        <button class="btn" id="b-burst">team-fork burst (11)</button>
+        <button class="btn" id="b-switch">workspace switch</button>
+      </div>
+      <div id="stage" aria-live="polite"></div>
+      <p class="demo-note"><strong>Burst coalescing:</strong> events of the same <code>type</code>+<code>workspace</code> within a ~2&nbsp;s window collapse into <em>one</em> card with a count — fire the burst button to see 11 recruits become a single card. Prevents the stacked-overlay / stream-starvation pain we hit before.</p>
+    </div>
+    <h3>Rules</h3>
+    <ul class="tight">
+      <li>Auto-dismiss ~5s; newest at the bottom of a short stack; cap the stack (e.g. 4) and drop oldest.</li>
+      <li>Coalesce same <code>type</code>+<code>workspaceId</code> within ~2s → one card, count badge.</li>
+      <li>Status-tinted dot reuses the existing phase palette (idle/working/attention) where relevant.</li>
+      <li>Honor <code>prefers-reduced-motion</code> — fade, no slide.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">06</span> Projection B — metrics &amp; history <span class="chip ui" style="align-self:center">Velvet · Fresco</span></h2>
+    <p>A panel over the query API: a scrollable timeline of events plus rolled-up counts (agents spawned, cards created, forks, switches) filterable by workspace, type, and time-range. Phone-friendly. This is the “full-sight” view — the durable record the reminder card only glimpses.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">07</span> Projection C — agent roster <span class="chip forge" style="align-self:center">Forge query</span> <span class="chip ui" style="align-self:center">Velvet panel</span></h2>
+    <p>Not a new store — a <strong>query</strong>: terminals <code>created/recruited</code> minus <code>dismissed/killed</code>, over the whole log, across all workspaces. This is the durable cross-workspace directory that fixes reboot / lose-teammates: identity resolution falls back to it when the active workspace can't answer. If an <code>agents.json</code> was already built, keep it only as a materialized cache of this same query.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">08</span> Guardrails</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Rule</th><th>Level</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td>Single emit choke-point in the store</td><td><span class="sev must">MUST</span></td><td>Events can't diverge from state; nothing is missed.</td></tr>
+          <tr><td>Async, batched writes</td><td><span class="sev must">MUST</span></td><td>Never block PTY streams or the render loop (recall the 6-per-origin starvation).</td></tr>
+          <tr><td>Metadata only in the log</td><td><span class="sev must">MUST</span></td><td>Never persist prompt/reply content — privacy.</td></tr>
+          <tr><td>Every event carries <code>workspaceId</code></td><td><span class="sev must">MUST</span></td><td>Consumers must label non-active workspaces.</td></tr>
+          <tr><td>Size-based log rotation, keep N files</td><td><span class="sev should">SHOULD</span></td><td>Append-only can't grow unbounded.</td></tr>
+          <tr><td>Burst coalescing in the toast feed</td><td><span class="sev should">SHOULD</span></td><td>A team-fork of 11 is one card, not eleven.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">09</span> QA matrix <span class="chip qa" style="align-self:center">Magpie</span></h2>
+    <p class="sub">What I'll verify as each piece lands. TDD, green suite, no commits, OPS singleton rule in force.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Check</th><th>Method</th><th>Pass criteria</th></tr></thead>
+        <tbody>
+          <tr><td>Toast from any workspace</td><td>Recruit / add a card in a <em>non-active</em> workspace via API; watch the stream.</td><td>Card fires and reads “in &lt;that workspace&gt;”, not the active one.</td></tr>
+          <tr><td>Reboot survival</td><td>Emit events, restart the app, query the log.</td><td>Every pre-restart event still present; roster query reconstructs teammates.</td></tr>
+          <tr><td>Burst coalescing</td><td>Team-fork of 11 terminals in one op.</td><td>Exactly one coalesced card (“11 …”), not eleven; timeline still logs all 11.</td></tr>
+          <tr><td>No stream starvation</td><td>Zoom multiple cards + drive the feed while PTYs stream.</td><td>PTY output and API calls never stall; writes stay off the hot path.</td></tr>
+          <tr><td>Rotation caps growth</td><td>Drive the log past the roll threshold.</td><td>File rolls, oldest pruned to N; query still spans retained window.</td></tr>
+          <tr><td>No content leakage</td><td>Grep the on-disk log after busy turns.</td><td>Zero prompt/reply text; only whitelisted metadata fields.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">10</span> Lanes</h2>
+    <ul class="tight">
+      <li><span class="chip forge">Forge</span> — emit choke-point, batched append + rotation, live stream + SSE, query API, roster query.</li>
+      <li><span class="chip ui">Velvet</span> — reminder-card feed + coalescing logic, metrics/history panel, roster panel.</li>
+      <li><span class="chip ui">Fresco</span> — card visuals (status dot, tiny type scale), panel visuals, phone layout.</li>
+      <li><span class="chip tinker">Tinker</span> — <code>self()</code> / switch-race hardening: clear “your terminal is in workspace A, B is active” error + retry/queue during a switch.</li>
+      <li><span class="chip qa">Magpie</span> — the QA matrix above, per piece as it lands.</li>
+    </ul>
+  </section>
+
+  <div class="foot">
+    <span>Cookrew · observability spec v1</span>
+    <span>source note: observability-event-log-spec</span>
+    <span>supersedes registry-as-substrate</span>
+  </div>
+</div>
+
+<script>
+  (function () {
+    var stage = document.getElementById('stage');
+    var recent = []; // {key, el, count, ts}
+    var COALESCE_MS = 2000, DISMISS_MS = 5000, CAP = 4;
+
+    function now() { return performance.now(); }
+
+    function build(title, meta) {
+      var el = document.createElement('div');
+      el.className = 'toast';
+      el.innerHTML = '<span class="dot"></span><div class="body">' +
+        '<div class="t-title"></div><div class="t-meta"></div></div>';
+      el.querySelector('.t-title').textContent = title;
+      el.querySelector('.t-meta').textContent = meta;
+      return el;
+    }
+
+    function dismiss(item) {
+      if (!item.el.isConnected) return;
+      item.el.classList.add('leaving');
+      setTimeout(function () { if (item.el.isConnected) item.el.remove(); }, 300);
+    }
+
+    function emit(type, title, meta, wsKey) {
+      var key = type + '|' + wsKey, t = now();
+      var hit = recent.find(function (r) { return r.key === key && (t - r.ts) < COALESCE_MS && r.el.isConnected; });
+      if (hit) {
+        hit.count++; hit.ts = t;
+        var base = title.replace(/^\d+\s+/, '');
+        hit.el.querySelector('.t-title').innerHTML =
+          '<span class="t-count">' + hit.count + '×</span> ' + base;
+        clearTimeout(hit.timer);
+        hit.timer = setTimeout(function () { dismiss(hit); }, DISMISS_MS);
+        return;
+      }
+      var el = build(title, meta);
+      stage.appendChild(el);
+      var item = { key: key, el: el, count: 1, ts: t };
+      item.timer = setTimeout(function () { dismiss(item); }, DISMISS_MS);
+      recent.push(item);
+      while (stage.children.length > CAP) stage.firstChild.remove();
+      recent = recent.filter(function (r) { return r.el.isConnected; });
+    }
+
+    document.getElementById('b-single').onclick = function () {
+      emit('terminal.recruited', 'researcher recruited', 'GOAT Team · Claude Code · ~/workspace/goat-dev', 'goat');
+    };
+    document.getElementById('b-note').onclick = function () {
+      emit('note.created', 'note created', 'Cookrew Dev · by user', 'ckd');
+    };
+    document.getElementById('b-switch').onclick = function () {
+      emit('workspace.switched', 'switched to GOAT Team', 'was: Cookrew Dev', 'ws');
+    };
+    document.getElementById('b-burst').onclick = function () {
+      var n = 0, iv = setInterval(function () {
+        emit('team.fork', (n + 1) + ' agents forked', 'QA Fork · from Software Team', 'qafork');
+        if (++n >= 11) clearInterval(iv);
+      }, 120);
+    };
+  })();
+</script>
+</body>
+</html>

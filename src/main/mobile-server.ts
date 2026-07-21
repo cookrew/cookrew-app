@@ -8,6 +8,8 @@ import type { WorkspaceStore } from './store'
 import type { PtyManager } from './pty'
 import type { VoiceEngine } from './voice'
 import type { TurnTracker } from './turn-tracker'
+import type { EventLog } from './event-log'
+import type { AgentRegistry } from './agent-registry'
 import { askTerminal } from './ask'
 import { ensureCert } from './cert'
 import { handleMobileApi, MobileApiDeps, MobileOps } from './mobile-api'
@@ -26,6 +28,9 @@ export interface MobileServerDeps {
   ptys: PtyManager
   voice: VoiceEngine
   turns: TurnTracker
+  /** Observability event log + agent roster (mobile query endpoints). */
+  events: EventLog
+  agents: AgentRegistry
   ops: MobileOps
   presets: readonly { name: string; command: string }[]
   /** Persist a phone-uploaded attachment; returns its absolute path. */

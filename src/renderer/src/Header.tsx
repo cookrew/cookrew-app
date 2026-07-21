@@ -12,6 +12,10 @@ interface HeaderProps {
   attentionCount: number
   /** Opens the team-fork picker overlay (fork / save the whole canvas). */
   onTeamFork: () => void
+  /** Opens the global agent roster panel (all workspaces). */
+  onRoster: () => void
+  /** Opens the activity metrics / history panel. */
+  onMetrics: () => void
 }
 
 /**
@@ -25,7 +29,9 @@ export function Header({
   terminalCount,
   busyCount,
   attentionCount,
-  onTeamFork
+  onTeamFork,
+  onRoster,
+  onMetrics
 }: HeaderProps): React.JSX.Element {
   return (
     <header className="cr-header">
@@ -55,6 +61,22 @@ export function Header({
           {busyCount}/{terminalCount} WORKING
         </span>
       </div>
+      <button
+        className="cr-btn sm icon"
+        title="Activity & history"
+        aria-label="Activity and history"
+        onClick={onMetrics}
+      >
+        <CrIcon name="search" />
+      </button>
+      <button
+        className="cr-btn sm icon"
+        title="All agents (every workspace)"
+        aria-label="All agents"
+        onClick={onRoster}
+      >
+        <CrIcon name="agent" />
+      </button>
       <button
         className="cr-btn sm icon"
         title="Fork or save this team"

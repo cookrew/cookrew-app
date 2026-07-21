@@ -133,6 +133,31 @@ export function createRemoteApi(): CookrewApi {
 
     listActivity: () => req<TerminalActivity[]>('/api/activity'),
     onTerminalActivity: (cb) => subscribe<TerminalActivity>('activity', cb),
+    // Observability event log (observability-event-log-spec): the shared SSE
+    // stream carries 'event'; queries/roster are plain GETs.
+    onEvent: (cb) => subscribe('event', cb),
+    queryEvents: async (query) => {
+      const params = new URLSearchParams()
+      const q = (query ?? {}) as Record<string, unknown>
+      for (const key of ['workspaceId', 'type', 'since', 'until', 'limit']) {
+        if (q[key] !== undefined) params.set(key, String(q[key]))
+      }
+      const result = await req<{ events: unknown[] }>(`/api/events/query?${params}`)
+      return result.events
+    },
+    countEvents: async (query) => {
+      const params = new URLSearchParams()
+      const q = (query ?? {}) as Record<string, unknown>
+      for (const key of ['workspaceId', 'type', 'since', 'until']) {
+        if (q[key] !== undefined) params.set(key, String(q[key]))
+      }
+      const result = await req<{ counts: Record<string, number> }>(`/api/events/query?${params}`)
+      return result.counts
+    },
+    listAgents: async () => {
+      const result = await req<{ agents: unknown[] }>('/api/agents')
+      return result.agents
+    },
     listTurns: (terminalId) => req<TurnRecord[]>(`/api/terminal/${terminalId}/turns`),
     forkTerminal: (sourceId, turnIndex) =>
       req(`/api/terminal/${sourceId}/fork`, 'POST', { turnIndex }),

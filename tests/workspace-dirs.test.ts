@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addDir, removeDir, setPrimary } from '../src/shared/workspace-dirs'
+import { addDir, planRecruitTarget, removeDir, resolveDirOwner, setPrimary } from '../src/shared/workspace-dirs'
 
 describe('addDir', () => {
   it('appends a new directory, preserving order', () => {
@@ -45,5 +45,55 @@ describe('setPrimary', () => {
 
   it('rejects a non-member directory', () => {
     expect(() => setPrimary(['/a'], '/z')).toThrow(/not a directory/)
+  })
+})
+
+describe('resolveDirOwner / planRecruitTarget (recruit --dir routing)', () => {
+  const candidates = [
+    { id: 'home', dirs: ['/work/alpha'] },
+    { id: 'beta', dirs: ['/work/beta', '/work/beta-tools'] },
+    { id: 'deep', dirs: ['/work/beta/packages/core'] }
+  ]
+
+  it('routes an exact dir match to its owner', () => {
+    expect(resolveDirOwner(candidates, '/work/beta')).toBe('beta')
+  })
+
+  it('routes a subdirectory to the owning workspace', () => {
+    expect(resolveDirOwner(candidates, '/work/beta/src/ui')).toBe('beta')
+  })
+
+  it('prefers the LONGEST matching prefix over a shallower owner', () => {
+    expect(resolveDirOwner(candidates, '/work/beta/packages/core/lib')).toBe('deep')
+  })
+
+  it('does not treat sibling prefixes as parents', () => {
+    expect(resolveDirOwner(candidates, '/work/beta-extras')).toBeNull()
+  })
+
+  it('ignores trailing slashes on both sides', () => {
+    expect(resolveDirOwner(candidates, '/work/beta/')).toBe('beta')
+    expect(resolveDirOwner([{ id: 'x', dirs: ['/work/x/'] }], '/work/x/sub')).toBe('x')
+  })
+
+  it('plans: owned dir -> owner workspace, no auto-add', () => {
+    expect(planRecruitTarget(candidates, 'home', '/work/beta/src')).toEqual({
+      workspaceId: 'beta',
+      autoAddDir: null
+    })
+  })
+
+  it('plans: unowned dir -> orch home with auto-add', () => {
+    expect(planRecruitTarget(candidates, 'home', '/elsewhere/repo')).toEqual({
+      workspaceId: 'home',
+      autoAddDir: '/elsewhere/repo'
+    })
+  })
+
+  it('plans: no --dir -> orch home, no auto-add', () => {
+    expect(planRecruitTarget(candidates, 'home', null)).toEqual({
+      workspaceId: 'home',
+      autoAddDir: null
+    })
   })
 })
