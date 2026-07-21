@@ -51,6 +51,8 @@ export interface SocketServerDeps {
   /** Workspace registry + switching (switching rebuilds PTYs). */
   listWorkspaces: () => WorkspaceList
   createWorkspace: (name: string, dir: string) => WorkspaceMeta
+  /** FEATURE 1: workspace pre-populated from a saved team template. */
+  createWorkspaceFromTeam: (name: string, dir: string, team: string) => Promise<WorkspaceMeta>
   switchWorkspace: (nameOrId: string) => WorkspaceMeta
   /** Workspace v2: remove + multi-directory + per-terminal cwd + git. */
   removeWorkspace: (nameOrId: string) => WorkspaceList
@@ -611,7 +613,7 @@ async function cmdVoice(request: CliRequest, deps: SocketServerDeps): Promise<st
   }
 }
 
-function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): string {
+async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const [sub, name] = request.args
   if (sub === 'list' || sub === undefined) {
     const { workspaces, activeId } = deps.listWorkspaces()
@@ -627,8 +629,14 @@ function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): string {
   requireOrch(request, deps)
   switch (sub) {
     case 'create': {
-      if (!name) throw new Error('Usage: cookrew workspace create "Name" --dir PATH')
+      if (!name) {
+        throw new Error('Usage: cookrew workspace create "Name" --dir PATH [--team "Template"]')
+      }
       const dir = request.flags.dir ? String(request.flags.dir) : ''
+      if (request.flags.team) {
+        const meta = await deps.createWorkspaceFromTeam(name, dir, String(request.flags.team))
+        return `Created workspace "${meta.name}" from team template "${String(request.flags.team)}" (${meta.dir}) and switched to it`
+      }
       const meta = deps.createWorkspace(name, dir)
       return `Created and switched to workspace "${meta.name}" (${meta.dir})`
     }
@@ -788,12 +796,15 @@ async function cmdTeam(request: CliRequest, deps: SocketServerDeps): Promise<str
     case 'fork': {
       // CLI forks the whole live canvas at latest turns; fine-grained
       // selection (per-turn, assembled, roles) lives in the picker UI.
+      // A saved team gets nodeIds: [] — "the whole snapshot" — since live
+      // canvas ids never match snapshot node ids (BUG 1).
       requireOrch(request, deps)
+      const fromSavedTeam = request.flags.from ? String(request.flags.from) : undefined
       const spec: TeamForkSpec = {
         name: request.flags.name ? String(request.flags.name) : undefined,
-        nodeIds: deps.store.state.nodes.map((n) => n.id),
+        nodeIds: fromSavedTeam ? [] : deps.store.state.nodes.map((n) => n.id),
         choices: [],
-        fromSavedTeam: request.flags.from ? String(request.flags.from) : undefined
+        fromSavedTeam
       }
       const meta = await deps.teamFork(spec)
       return `Forked team into workspace "${meta.name}" and switched to it`
@@ -874,10 +885,10 @@ Usage:
   cookrew voice say "text"                      Speak now
   cookrew mobile                                Print (and QR) the phone companion URL — dictation + spoken replies
   cookrew workspace list                        List workspaces (* = active)
-  cookrew workspace create "Name" --dir PATH    (Orch) New workspace + switch to it
+  cookrew workspace create "Name" --dir PATH [--team "Template"]   (Orch) New workspace (optionally from a saved team template) + switch
+  cookrew team list                             List saved team templates (name, agents, saved date)
   cookrew workspace switch "Name"               (Orch) Switch workspace — stops the current one's terminals
   cookrew team save ["Name"]                    (Orch) Snapshot the team (nodes, layout, turn histories)
-  cookrew team list                             List saved teams
   cookrew team fork [--name N] [--from "Team"]  (Orch) Fork the whole canvas (or a saved team) into a new workspace
   cookrew role save "Agent" "RoleName" --prompt "..."   Save an agent as a reusable role
   cookrew role list                             List saved roles

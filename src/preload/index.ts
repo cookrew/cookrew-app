@@ -16,8 +16,8 @@ const api = {
   createTerminal: (opts: unknown) => ipcRenderer.invoke('terminal:create', opts),
 
   listWorkspaces: () => ipcRenderer.invoke('workspace:list'),
-  createWorkspace: (name: string, dir: string) =>
-    ipcRenderer.invoke('workspace:create', name, dir),
+  createWorkspace: (name: string, dir: string, team?: string) =>
+    ipcRenderer.invoke('workspace:create', name, dir, team),
   switchWorkspace: (id: string) => ipcRenderer.invoke('workspace:switch', id),
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),

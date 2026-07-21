@@ -15,7 +15,7 @@ import { cookrew } from './api'
 import { useTurnPaging } from './nodes/TurnPager'
 import { TurnHistoryPanel } from './TurnHistoryPanel'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
-import { imageFilesFromClipboardItems } from './clipboard-image'
+import { handleTerminalPaste } from './terminal-paste'
 import { CrIcon } from './icons'
 import { StatusCoin } from './nodes/AgentAvatar'
 
@@ -193,38 +193,29 @@ function TerminalOverlay({
         }
         return false
       }
-      // ⌘V / Ctrl+Shift+V: bracketed paste from the system clipboard, for
-      // contexts where no Electron menu handles the accelerator (remote mode).
+      // ⌘V / Ctrl+Shift+V: swallow the accelerator so it isn't sent to the
+      // PTY as raw bytes, but do NOT paste here — the container's single
+      // 'paste' listener below owns paste. Pasting in this key handler too is
+      // exactly what inserted the text twice.
       const wantsPaste =
         (event.metaKey && !event.ctrlKey && key === 'v') ||
         (event.ctrlKey && event.shiftKey && key === 'v')
-      if (wantsPaste) {
-        if (event.type === 'keydown') {
-          // No insecure-context fallback exists for reading the clipboard —
-          // on the plain-HTTP phone this stays a no-op (paste via composer).
-          void readClipboardText().then((text) => {
-            if (text) term.paste(text)
-          })
-        }
-        return false
-      }
+      if (wantsPaste) return false
       return true
     })
 
-    // Image paste (⌘V of a screenshot / copied picture): the clipboard holds
-    // raw bytes with no file path, so the text paste path above no-ops. Pull
-    // the image bytes off the paste event, save them via the attach flow, and
-    // paste the resulting path — same as a drag-in. Captured before xterm so
-    // it can suppress the empty text paste for image-only clipboards.
+    // Single paste path (text AND images): reading the text off the event
+    // works in insecure contexts (phone) too, and preventDefault + capture
+    // suppress xterm's own native paste so nothing is inserted twice. Image
+    // bytes have no file path, so they save via the attach flow like a drag-in.
     const onPaste = (event: ClipboardEvent): void => {
-      const items = event.clipboardData ? Array.from(event.clipboardData.items) : []
-      const images = imageFilesFromClipboardItems(items)
-      if (images.length === 0) return
-      event.preventDefault()
-      event.stopPropagation()
-      void pasteClipboardImages(node.id, images).catch((error) =>
-        console.error('Image paste failed:', error)
-      )
+      handleTerminalPaste(event, {
+        pasteText: (text) => term.paste(text),
+        pasteImages: (images) =>
+          void pasteClipboardImages(node.id, images).catch((error) =>
+            console.error('Image paste failed:', error)
+          )
+      })
     }
     container.addEventListener('paste', onPaste, true)
 

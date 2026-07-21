@@ -10,6 +10,7 @@ import type {
   WorkspaceState
 } from '../src/shared/model'
 import type { TurnRecord } from '../src/shared/turn'
+import { WorkspaceStore } from '../src/main/store'
 import { claudeProjectSlug } from '../src/shared/claude-fork'
 import {
   TeamStore,
@@ -18,6 +19,7 @@ import {
   planWorktrees,
   resolveTerminalContext,
   resolveWorktrees,
+  workspaceFromTemplate,
   type TeamForkSource
 } from '../src/main/teams'
 
@@ -517,5 +519,92 @@ describe('TeamStore session snapshots (item 2b save path)', () => {
     expect(lines?.join('\n')).toContain('bound-id')
     // Terminals without a bound session simply have no sidecar entry.
     expect(store.sessionLines(snap!, 'missing')).toBeNull()
+  })
+})
+
+describe('planTeamFork selection semantics (BUG 1: picker saved-team payload)', () => {
+  it('empty nodeIds on a SNAPSHOT source means the whole saved team', () => {
+    const snap = { ...source([terminal('a'), terminal('b')], { a: [turn(1)] }), fromSnapshot: true }
+    const plan = planTeamFork(snap, { nodeIds: [], choices: [], fromSavedTeam: 'Core' }, planDeps())
+    expect(plan.nodes).toHaveLength(2)
+    expect(plan.terminals).toHaveLength(2)
+  })
+
+  it('still rejects an empty LIVE selection, echoing the received spec shape', () => {
+    const live = source([terminal('a')])
+    expect(() => planTeamFork(live, { nodeIds: [], choices: [] }, planDeps())).toThrow(
+      /received nodeIds=\[\].*source has 1 node/
+    )
+  })
+
+  it('echoes stale ids that match nothing in the snapshot', () => {
+    const snap = { ...source([terminal('a')]), fromSnapshot: true }
+    expect(() =>
+      planTeamFork(
+        snap,
+        { nodeIds: ['live-1', 'live-2'], choices: [], fromSavedTeam: 'Core' },
+        planDeps()
+      )
+    ).toThrow(/live-1.*fromSavedTeam="Core".*source has 1 node/)
+  })
+})
+
+describe('workspaceFromTemplate (FEATURE 1: workspace from team template)', () => {
+  function templateDeps(): {
+    deps: Parameters<typeof workspaceFromTemplate>[0]
+    store: WorkspaceStore
+    teams: TeamStore
+  } {
+    const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'cookrew-tmpl-store-')))
+    const teams = new TeamStore(mkdtempSync(path.join(tmpdir(), 'cookrew-tmpl-teams-')))
+    const deps = {
+      store,
+      turns: { history: () => [] } as unknown as Parameters<typeof workspaceFromTemplate>[0]['turns'],
+      roles: { get: () => undefined } as unknown as Parameters<typeof workspaceFromTemplate>[0]['roles'],
+      teams,
+      ptys: { get: () => undefined } as unknown as Parameters<typeof workspaceFromTemplate>[0]['ptys'],
+      switchWorkspace: (id: string) => void store.switchWorkspace(id),
+      git: {
+        gitInfo: async () => ({ isRepo: false, root: null, branch: null, dirty: false, ahead: 0, behind: 0 }),
+        addWorktree: async () => ({ ok: false as const, error: 'off' })
+      },
+      worktreeRoot: mkdtempSync(path.join(tmpdir(), 'cookrew-tmpl-wt-'))
+    }
+    return { deps, store, teams }
+  }
+
+  it('boots a new workspace pre-populated from the whole saved template', async () => {
+    const { deps, store, teams } = templateDeps()
+    teams.save(
+      {
+        name: 'Core Team',
+        dir: '/work/old',
+        dirs: ['/work/old'],
+        nodes: [terminal('a'), terminal('b', { name: 'Sous' })],
+        connections: [{ id: 'c1', a: 'a', b: 'b' }]
+      },
+      () => [turn(1)],
+      'Core Team'
+    )
+
+    const meta = await workspaceFromTemplate(deps, {
+      name: 'Sprint 9',
+      dir: '/work/fresh',
+      team: 'Core Team'
+    })
+    expect(meta.name).toBe('Sprint 9')
+    // Switched into the new workspace: full team, retargeted dir, edges kept.
+    expect(store.activeId).toBe(meta.id)
+    const terminals = store.terminals()
+    expect(terminals).toHaveLength(2)
+    expect(terminals.every((t) => t.cwd === '/work/fresh')).toBe(true)
+    expect(store.state.connections).toHaveLength(1)
+  })
+
+  it('rejects an unknown template by name', async () => {
+    const { deps } = templateDeps()
+    await expect(
+      workspaceFromTemplate(deps, { name: 'X', dir: '/work/fresh', team: 'Nope' })
+    ).rejects.toThrow(/No saved team 'Nope'/)
   })
 })

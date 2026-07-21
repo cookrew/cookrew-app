@@ -1,8 +1,10 @@
 import type { ToolId } from './canvas-ui'
 import type { TerminalActivity } from '../../shared/turn'
+import type { AgentRole } from '../../shared/model'
 import { VoiceBar } from './VoiceBar'
 import { CrIcon, type CrIconName } from './icons'
 import { AgentSprite } from './nodes/AgentSprite'
+import { RoleAvatar } from './nodes/RoleAvatar'
 
 const TOOLS: { id: ToolId; label: string; icon: CrIconName }[] = [
   { id: 'select', label: 'SELECT', icon: 'select' },
@@ -24,6 +26,11 @@ interface DockProps {
   presets: string[]
   preset: string
   onPreset: (name: string) => void
+  /** Saved roles offered alongside presets for TERMINAL placement. */
+  roles: AgentRole[]
+  /** Selected role name, or null when a plain preset is selected. */
+  role: string | null
+  onRole: (name: string) => void
   orch: boolean
   onOrch: (on: boolean) => void
   connectHint: string | null
@@ -44,6 +51,9 @@ export function Dock({
   presets,
   preset,
   onPreset,
+  roles,
+  role,
+  onRole,
   orch,
   onOrch,
   connectHint,
@@ -72,10 +82,20 @@ export function Dock({
             {presets.map((name) => (
               <button
                 key={name}
-                className={`cr-chip clickable${preset === name ? ' amber' : ''}`}
+                className={`cr-chip clickable${role === null && preset === name ? ' amber' : ''}`}
                 onClick={() => onPreset(name)}
               >
                 <AgentSprite preset={name} /> {name}
+              </button>
+            ))}
+            {roles.map((r) => (
+              <button
+                key={r.name}
+                className={`cr-chip clickable role-chip${role === r.name ? ' amber' : ''}`}
+                title={`Role · boots ${r.preset} with the “${r.name}” prompt`}
+                onClick={() => onRole(r.name)}
+              >
+                <RoleAvatar name={r.name} className="role-chip-avatar" /> {r.name}
               </button>
             ))}
             <label className="cr-check">

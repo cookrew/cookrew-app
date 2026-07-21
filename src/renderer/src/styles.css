@@ -1863,10 +1863,12 @@ body,
   vertical-align: -2.5px;
 }
 
+/* Selected role: amber fill, but KEEP the violet frame so a chosen role
+   still reads as a persona (not a default preset). */
 .cr-chip.role.amber {
   background: var(--amber);
-  border-color: var(--line);
-  box-shadow: 1.5px 1.5px 0 var(--line);
+  border-color: var(--violet);
+  box-shadow: 1.5px 1.5px 0 var(--violet);
 }
 
 /* Identity sprite outside cards: dock preset chips + zoomed-in header. */

@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import type { WorkspaceList, WorkspaceMeta } from '../../shared/model'
+import type { TeamMeta, WorkspaceList, WorkspaceMeta } from '../../shared/model'
 import { cookrew } from './api'
 import { CrIcon } from './icons'
 import { DirectoryManager } from './DirectoryManager'
 import { removeWorkspace } from './workspace-v2'
+
+function templateLabel(team: TeamMeta): string {
+  const when = new Date(team.savedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })
+  return `${team.terminalCount} agent${team.terminalCount === 1 ? '' : 's'} · ${when}`
+}
 
 interface WorkspaceSwitcherProps {
   fallbackName: string
@@ -26,11 +31,18 @@ export function WorkspaceSwitcher({
   const [newDir, setNewDir] = useState('')
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const [managingDirs, setManagingDirs] = useState<WorkspaceMeta | null>(null)
+  const [teams, setTeams] = useState<TeamMeta[]>([])
+  /** Saved team template the new workspace boots from, or null for empty. */
+  const [template, setTemplate] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     void cookrew().listWorkspaces().then(setList)
     return cookrew().onWorkspaceList(setList)
+  }, [])
+
+  useEffect(() => {
+    void cookrew().teamList().then(setTeams).catch(() => undefined)
   }, [])
 
   // Close on outside click.
@@ -61,12 +73,22 @@ export function WorkspaceSwitcher({
     setCreating(true)
     setNewName('')
     setNewDir(dir)
+    setTemplate(null)
+  }
+
+  // Picking a template pre-fills the name from the team so the workspace reads
+  // as an instance of it; the user can still edit before creating.
+  const pickTemplate = (teamName: string | null): void => {
+    setTemplate(teamName)
+    if (teamName && !newName.trim()) setNewName(teamName)
   }
 
   const submitCreate = (): void => {
     const trimmed = newName.trim()
     if (!trimmed) return
-    void cookrew().createWorkspace(trimmed, newDir.trim())
+    // From a template: the backend reuses the fork-from-saved machinery to
+    // boot the new workspace pre-populated (nodes, roles, session snapshots).
+    void cookrew().createWorkspace(trimmed, newDir.trim(), template ?? undefined)
     setCreating(false)
     setOpen(false)
   }
@@ -173,8 +195,30 @@ export function WorkspaceSwitcher({
                   if (e.key === 'Escape') setCreating(false)
                 }}
               />
+              {teams.length > 0 && (
+                <div className="cr-ws-template">
+                  <div className="cr-ws-template-head">FROM TEMPLATE</div>
+                  <button
+                    className={`cr-ws-template-item${template === null ? ' active' : ''}`}
+                    onClick={() => pickTemplate(null)}
+                  >
+                    <span className="cr-ws-template-name">Empty workspace</span>
+                  </button>
+                  {teams.map((team) => (
+                    <button
+                      key={team.name}
+                      className={`cr-ws-template-item${template === team.name ? ' active' : ''}`}
+                      onClick={() => pickTemplate(team.name)}
+                    >
+                      <CrIcon name="fork" />
+                      <span className="cr-ws-template-name">{team.name}</span>
+                      <span className="cr-ws-template-meta">{templateLabel(team)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               <button className="cr-ws-create" onClick={submitCreate}>
-                CREATE
+                {template ? `CREATE FROM ${template.toUpperCase()}` : 'CREATE'}
               </button>
             </div>
           ) : (

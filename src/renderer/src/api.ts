@@ -15,7 +15,8 @@ export interface CookrewApi {
   getWorkspace: () => Promise<WorkspaceState>
   onWorkspaceState: (cb: (state: WorkspaceState) => void) => () => void
   listWorkspaces: () => Promise<WorkspaceList>
-  createWorkspace: (name: string, dir: string) => Promise<WorkspaceMeta>
+  /** team: create pre-populated from a saved team template (FEATURE 1). */
+  createWorkspace: (name: string, dir: string, team?: string) => Promise<WorkspaceMeta>
   switchWorkspace: (id: string) => Promise<WorkspaceList>
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>
   /** Workspace v2: remove workspace, multi-directory, per-terminal cwd, git. */
@@ -40,6 +41,8 @@ export interface CookrewApi {
     preset: string
     position: { x: number; y: number }
     orch: boolean
+    /** Boot from a saved role (rolePrompt injected once the TUI is quiet). */
+    roleName?: string
   }) => Promise<CanvasNode>
   /**
    * Resolve dropped/picked File objects to absolute paths on the machine
