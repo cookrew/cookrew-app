@@ -16,7 +16,9 @@ import {
   WorkspaceList,
   WorkspaceMeta
 } from '../shared/model'
-import { WorkspaceStore } from './store'
+import { WorkspaceStore, WorkspaceNodeHit } from './store'
+import { AgentRegistry, AgentRegistryEntry } from './agent-registry'
+import { planRecruitTarget } from '../shared/workspace-dirs'
 import { PtyManager } from './pty'
 import { askRaw, askTerminal, decodeRawEscapes } from './ask'
 import { PRESETS } from './presets'
@@ -31,6 +33,8 @@ export interface SocketServerDeps {
   spawnTerminal: (t: { id: string; command: string; cwd: string }) => void
   /** Turn history source for `cookrew fork` validation/output. */
   turns: TurnTracker
+  /** Durable global agent directory (~/.cookrew/agents.json). */
+  agents: AgentRegistry
   /** Fork an agent from one of its turns (same path as IPC forking). */
   forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData
   routines: RoutineScheduler
@@ -104,7 +108,7 @@ async function handleLine(
     return
   }
   try {
-    const output = await dispatch(request, deps)
+    const output = await retryTransient(() => dispatch(request, deps))
     respond(socket, { id: request.id, ok: true, output })
   } catch (error) {
     respond(socket, {
@@ -112,6 +116,39 @@ async function handleLine(
       ok: false,
       error: error instanceof Error ? error.message : String(error)
     })
+  }
+}
+
+/**
+ * A dispatch failure that a brief wait may resolve: the target terminal's
+ * PTY is momentarily unreachable during a workspace switch (teardown →
+ * rebuild). Retried once; a persistent condition (wrong workspace, not the
+ * orch, unknown command) is a plain Error and never retried.
+ */
+export class RetryableDispatchError extends Error {}
+
+/** How long to wait before the single retry across a workspace switch. */
+const SWITCH_RETRY_MS = 500
+
+const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * Run a dispatch, retrying ONCE after a short delay if it fails with a
+ * transient not-attached error — so a command that races a workspace switch
+ * succeeds once the PTYs finish rebuilding instead of spuriously failing.
+ * The retryable throws happen before any side effect (session lookup fails
+ * before a prompt is sent), so a retry never double-acts.
+ */
+export async function retryTransient<T>(
+  fn: () => Promise<T>,
+  sleep: (ms: number) => Promise<void> = defaultSleep
+): Promise<T> {
+  try {
+    return await fn()
+  } catch (error) {
+    if (!(error instanceof RetryableDispatchError)) throw error
+    await sleep(SWITCH_RETRY_MS)
+    return fn()
   }
 }
 
@@ -180,11 +217,70 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
 }
 
 function self(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
-  const node = deps.store.node(request.terminalId)
-  if (!node || node.kind !== 'terminal') {
-    throw new Error('This shell is not attached to a Cookrew terminal node')
+  return resolveSelf(request.terminalId, deps.store, deps.agents)
+}
+
+/** Minimal terminal node synthesized from a registry entry (reboot fallback). */
+function terminalFromRegistry(entry: AgentRegistryEntry): TerminalNodeData {
+  return {
+    kind: 'terminal',
+    id: entry.id,
+    name: entry.name,
+    preset: entry.preset,
+    command: entry.command,
+    cwd: entry.cwd,
+    orch: entry.orch,
+    role: entry.role,
+    position: { x: 0, y: 0 },
+    size: DEFAULT_TERMINAL_SIZE
   }
-  return node
+}
+
+/**
+ * Neighbors of a node with their owning workspaces: cross-workspace when the
+ * store supports it (mirrored edges resolve globally), else active-scoped.
+ */
+function connectedOf(store: WorkspaceStore, id: string): WorkspaceNodeHit[] {
+  return (
+    store.connectedToAcross?.(id) ??
+    store.connectedTo(id).map((node) => ({ node, workspaceId: store.activeId }))
+  )
+}
+
+/**
+ * Resolve the terminal a CLI request came from. When the node isn't in the
+ * active workspace, name BOTH workspaces explicitly — the home one it lives
+ * in and the active one — so an orch command run from a switched-away
+ * workspace says what to do instead of a bare "not attached". Split from
+ * `self` so it is unit-testable without a full deps object.
+ */
+export function resolveSelf(
+  terminalId: string,
+  store: WorkspaceStore,
+  agents?: AgentRegistry
+): TerminalNodeData {
+  const node = store.node(terminalId)
+  if (node && node.kind === 'terminal') return node
+  // Layer 1 (cross-workspace-orch-fix-dec): the orch keeps working after a
+  // switch — resolve across ALL workspaces before touching error paths.
+  // Optional-call: fake stores in tests may not implement the global lookup.
+  const hit = store.nodeAcrossWorkspaces?.(terminalId)
+  if (hit && hit.node.kind === 'terminal') return hit.node
+  // Reboot-safe fallback: the durable agent registry still knows who this is
+  // even when no workspace file does.
+  const entry = agents?.lookup(terminalId)
+  if (entry) return terminalFromRegistry(entry)
+  if (!node) {
+    const home = store.workspaceOfNode(terminalId)
+    const active = store.activeMeta()
+    if (home && home.id !== active.id) {
+      throw new Error(
+        `Your terminal lives in workspace "${home.name}", but "${active.name}" is active. ` +
+          `Switch back with: cookrew workspace switch "${home.name}"`
+      )
+    }
+  }
+  throw new Error('This shell is not attached to a Cookrew terminal node')
 }
 
 function requireOrch(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
@@ -200,25 +296,39 @@ function findConnected(
   kind: 'terminal' | 'note' | 'browser'
 ) {
   const me = self(request, deps)
-  const target = deps.store
-    .connectedTo(me.id)
-    .find((n) => n.kind === kind && n.name.toLowerCase() === name.toLowerCase())
-  if (!target) throw new Error(`${kind === 'terminal' ? 'Agent' : kind} '${name}' not found among your connections. Run 'cookrew list'.`)
-  return target
+  const hit = connectedOf(deps.store, me.id).find(
+    (h) => h.node.kind === kind && h.node.name.toLowerCase() === name.toLowerCase()
+  )
+  if (hit) return hit.node
+  // Reboot fallback: a teammate the workspace files lost but the durable
+  // registry still tracks as active (agent-registry-spawn-broadca).
+  if (kind === 'terminal') {
+    const entry = deps.agents
+      .list()
+      .find((e) => e.active && e.name.toLowerCase() === name.toLowerCase())
+    if (entry) return terminalFromRegistry(entry)
+  }
+  throw new Error(`${kind === 'terminal' ? 'Agent' : kind} '${name}' not found among your connections. Run 'cookrew list'.`)
 }
 
 function cmdList(request: CliRequest, deps: SocketServerDeps): string {
+  if (request.flags.all) return cmdListAll(deps)
   const me = self(request, deps)
-  const connected = deps.store.connectedTo(me.id)
-  const agents = connected.filter((n) => n.kind === 'terminal') as TerminalNodeData[]
-  const notes = connected.filter((n) => n.kind === 'note') as NoteNodeData[]
-  const browsers = connected.filter((n) => n.kind === 'browser')
+  const activeId = deps.store.activeId
+  const wsName = (id: string): string =>
+    deps.listWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id
+  const connected = connectedOf(deps.store, me.id)
+  const agents = connected.filter((h) => h.node.kind === 'terminal')
+  const notes = connected.map((h) => h.node).filter((n) => n.kind === 'note') as NoteNodeData[]
+  const browsers = connected.map((h) => h.node).filter((n) => n.kind === 'browser')
 
   const lines: string[] = ['You:', `  - name: "${me.name}", orch: ${me.orch}`]
   if (agents.length > 0) {
     lines.push('', 'Connected agents (use `cookrew ask/check`):')
-    for (const a of agents) {
-      lines.push(`  - name: "${a.name}"${a.role ? `, role: "${a.role}"` : ''}`)
+    for (const h of agents) {
+      const a = h.node as TerminalNodeData
+      const ws = h.workspaceId !== activeId ? ` [workspace: ${wsName(h.workspaceId)}]` : ''
+      lines.push(`  - name: "${a.name}"${a.role ? `, role: "${a.role}"` : ''}${ws}`)
     }
   }
   if (browsers.length > 0) {
@@ -235,12 +345,45 @@ function cmdList(request: CliRequest, deps: SocketServerDeps): string {
   return lines.join('\n')
 }
 
+/** Global roster from the durable agent registry, grouped by workspace. */
+function cmdListAll(deps: SocketServerDeps): string {
+  const entries = deps.agents.list()
+  if (entries.length === 0) return 'No agents recorded yet (the registry fills as agents spawn).'
+  const activeId = deps.store.activeId
+  const byWorkspace = new Map<string, AgentRegistryEntry[]>()
+  for (const e of entries) {
+    byWorkspace.set(e.workspaceId, [...(byWorkspace.get(e.workspaceId) ?? []), e])
+  }
+  const lines: string[] = ['Global agent roster (all workspaces):']
+  for (const [wsId, group] of byWorkspace) {
+    const active = wsId === activeId ? ' (active workspace)' : ''
+    lines.push('', `Workspace "${group[0].workspaceName}"${active}:`)
+    for (const e of group) {
+      const bits = [e.preset, e.orch ? 'orch' : '', e.role ?? ''].filter(Boolean).join(', ')
+      lines.push(`  - "${e.name}" (${bits}) — ${e.active ? 'active' : 'inactive'} — ${e.cwd}`)
+    }
+  }
+  return lines.join('\n')
+}
+
 async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const [name, prompt] = request.args
   if (!name) throw new Error('Usage: cookrew ask "Agent Name" "prompt" | cookrew ask "Agent" --raw "bytes"')
   const target = findConnected(request, deps, name, 'terminal') as TerminalNodeData
-  const session = deps.ptys.get(target.id)
-  if (!session) throw new Error(`Agent '${target.name}' has no running terminal`)
+  let session = deps.ptys.get(target.id)
+  if (!session) {
+    // Cross-workspace / after reboot: the tmux session may be alive with its
+    // PTY detached (workspace switch drops clients). Reattach through the
+    // normal spawn path — tmux new-session -A rejoins, never restarts.
+    try {
+      deps.spawnTerminal(target)
+    } catch (error) {
+      console.error('Reattach failed:', error)
+    }
+    session = deps.ptys.get(target.id)
+  }
+  // Still transient during a workspace switch (PTYs rebuilding) — retried once.
+  if (!session) throw new RetryableDispatchError(`Agent '${target.name}' has no running terminal`)
   if (request.flags.raw) {
     return askRaw(session, decodeRawEscapes(String(request.flags.raw)))
   }
@@ -258,8 +401,20 @@ function cmdCheck(request: CliRequest, deps: SocketServerDeps): string {
   const [name] = request.args
   if (!name) throw new Error('Usage: cookrew check "Agent Name"')
   const target = findConnected(request, deps, name, 'terminal') as TerminalNodeData
-  const session = deps.ptys.get(target.id)
-  if (!session) throw new Error(`Agent '${target.name}' has no running terminal`)
+  let session = deps.ptys.get(target.id)
+  if (!session) {
+    // Cross-workspace / after reboot: the tmux session may be alive with its
+    // PTY detached (workspace switch drops clients). Reattach through the
+    // normal spawn path — tmux new-session -A rejoins, never restarts.
+    try {
+      deps.spawnTerminal(target)
+    } catch (error) {
+      console.error('Reattach failed:', error)
+    }
+    session = deps.ptys.get(target.id)
+  }
+  // Still transient during a workspace switch (PTYs rebuilding) — retried once.
+  if (!session) throw new RetryableDispatchError(`Agent '${target.name}' has no running terminal`)
   return session.viewportText()
 }
 
@@ -276,7 +431,7 @@ function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
         position: { x: me.position.x - DEFAULT_NOTE_SIZE.width - 60, y: me.position.y },
         size: DEFAULT_NOTE_SIZE
       })
-      deps.store.connect(me.id, note.id)
+      deps.store.connectAcross(me.id, note.id)
       return `Created note "${note.name}"`
     }
     case 'read': {
@@ -322,16 +477,17 @@ function cmdConnect(request: CliRequest, deps: SocketServerDeps): string {
   const [fromName, toName] = request.args
   if (!fromName || !toName) throw new Error('Usage: cookrew connect "From" "To"')
   const me = self(request, deps)
-  const reach = [deps.store.node(me.id)!, ...deps.store.connectedTo(me.id)]
-  const resolve = (name: string) => {
-    const found = reach.find((n) => n.name.toLowerCase() === name.toLowerCase())
-      ?? deps.store.nodeByName(name)
+  const reach = [me as CanvasNode, ...connectedOf(deps.store, me.id).map((h) => h.node)]
+  const resolve = (name: string): CanvasNode => {
+    const found =
+      reach.find((n) => n.name.toLowerCase() === name.toLowerCase()) ??
+      deps.store.nodeByName(name)
     if (!found) throw new Error(`'${name}' not found`)
     return found
   }
   const a = resolve(fromName)
   const b = resolve(toName)
-  deps.store.connect(a.id, b.id)
+  deps.store.connectAcross(a.id, b.id)
   return `Connected "${a.name}" and "${b.name}"`
 }
 
@@ -344,8 +500,19 @@ function cmdRecruit(request: CliRequest, deps: SocketServerDeps): string {
     throw new Error(`Unknown preset '${presetName}'. Run 'cookrew preset list'.`)
   }
   const command = request.flags.command ? String(request.flags.command) : preset.command
-  const cwd = request.flags.dir ? String(request.flags.dir) : me.cwd
-  const siblings = deps.store.connectedTo(me.id).filter((n) => n.kind === 'terminal').length
+  const dirFlag = request.flags.dir ? String(request.flags.dir) : null
+  const cwd = dirFlag ?? me.cwd
+  // Layer 2 (cross-workspace-orch-fix-dec): --dir routes to the workspace
+  // OWNING that directory; an unowned dir is auto-added to the orch home.
+  // Never silently spawn with a cwd outside the owning workspace.
+  const home = deps.store.workspaceOfNode(me.id) ?? deps.store.activeMeta()
+  const plan = planRecruitTarget(
+    deps.listWorkspaces().workspaces.map((w) => ({ id: w.id, dirs: w.dirs })),
+    home.id,
+    dirFlag
+  )
+  if (plan.autoAddDir) deps.addWorkspaceDir(home.id, plan.autoAddDir)
+  const siblings = connectedOf(deps.store, me.id).filter((h) => h.node.kind === 'terminal').length
   const terminal: TerminalNodeData = {
     kind: 'terminal',
     id: randomUUID(),
@@ -361,10 +528,25 @@ function cmdRecruit(request: CliRequest, deps: SocketServerDeps): string {
     },
     size: DEFAULT_TERMINAL_SIZE
   }
-  const added = deps.store.addNode(terminal) as TerminalNodeData
-  deps.store.connect(me.id, added.id)
+  const added = deps.store.withOpContext({ actor: 'orch', via: 'recruit' }, () => {
+    const node = deps.store.addNodeToWorkspace(plan.workspaceId, terminal) as TerminalNodeData
+    deps.store.connectAcross(me.id, node.id)
+    return node
+  })
   deps.spawnTerminal(added)
-  return `Recruited "${added.name}" (${preset.name})`
+  const wsName = (id: string): string =>
+    deps.listWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id
+  const lines = [`Recruited "${added.name}" (${preset.name}) into workspace "${wsName(plan.workspaceId)}"`]
+  if (plan.autoAddDir) {
+    lines.push(`Added ${plan.autoAddDir} to workspace "${home.name}" (no workspace owned it)`)
+  }
+  // Layer 4 guard: never let a recruit land somewhere else silently.
+  if (plan.workspaceId !== deps.store.activeId) {
+    lines.push(
+      `⚠ "${added.name}" lives in workspace "${wsName(plan.workspaceId)}", not the active one — switch with: cookrew workspace switch "${wsName(plan.workspaceId)}"`
+    )
+  }
+  return lines.join('\n')
 }
 
 function cmdFork(request: CliRequest, deps: SocketServerDeps): string {
@@ -376,9 +558,12 @@ function cmdFork(request: CliRequest, deps: SocketServerDeps): string {
   if (request.flags.turn !== undefined && Number.isNaN(turnIndex)) {
     throw new Error('--turn must be a turn number (see the card pager or omit for the latest turn)')
   }
-  const fork = deps.forkTerminal(target.id, turnIndex)
   const me = self(request, deps)
-  deps.store.connect(me.id, fork.id)
+  const fork = deps.store.withOpContext({ actor: 'orch', via: 'fork' }, () => {
+    const forked = deps.forkTerminal(target.id, turnIndex)
+    deps.store.connectAcross(me.id, forked.id)
+    return forked
+  })
   return `Forked "${target.name}" at turn ${fork.forkOf?.turnIndex} → "${fork.name}" (context is being replayed to it now)`
 }
 
@@ -386,7 +571,10 @@ function cmdDismiss(request: CliRequest, deps: SocketServerDeps): string {
   requireOrch(request, deps)
   const target = findConnected(request, deps, request.args[0], 'terminal')
   deps.ptys.kill(target.id)
-  deps.store.removeNode(target.id)
+  deps.store.withOpContext({ actor: 'orch', via: 'dismiss' }, () =>
+    deps.store.removeNodeAcross(target.id)
+  )
+  deps.agents.deactivate(target.id)
   return `Dismissed "${target.name}"`
 }
 

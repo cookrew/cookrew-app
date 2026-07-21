@@ -31,6 +31,9 @@ import { ErrorBoundary } from './ErrorBoundary'
 import { snapCardChanges, MOUSE_SNAP_PX, TOUCH_SNAP_PX, SnapGuide } from './card-snap'
 import { SnapGuides } from './SnapGuides'
 import { TeamForkPicker } from './TeamForkPicker'
+import { EventToastLayer } from './EventToast'
+import { RosterPanel } from './RosterPanel'
+import { MetricsPanel } from './MetricsPanel'
 
 /** Phone companion parity: widen the snap magnet for finger-driven gestures. */
 const snapRadiusPx = window.matchMedia('(pointer: coarse)').matches ? TOUCH_SNAP_PX : MOUSE_SNAP_PX
@@ -74,6 +77,10 @@ function Canvas(): React.JSX.Element {
   const [zoomedTerminalId, setZoomedTerminalId] = useState<string | null>(null)
   /** Team-fork picker overlay (opened from the header's ⑂ button). */
   const [teamPickerOpen, setTeamPickerOpen] = useState(false)
+  /** Global agent roster panel (opened from the header). */
+  const [rosterOpen, setRosterOpen] = useState(false)
+  /** Activity metrics / history panel (opened from the header). */
+  const [metricsOpen, setMetricsOpen] = useState(false)
 
   useEffect(() => {
     void cookrew()
@@ -398,6 +405,8 @@ function Canvas(): React.JSX.Element {
           busyCount={busyCount}
           attentionCount={attentionCount}
           onTeamFork={() => setTeamPickerOpen(true)}
+          onRoster={() => setRosterOpen(true)}
+          onMetrics={() => setMetricsOpen(true)}
         />
         <div className="cr-stage">
           <ReactFlow
@@ -455,7 +464,10 @@ function Canvas(): React.JSX.Element {
         {teamPickerOpen && workspace && (
           <TeamForkPicker workspace={workspace} onClose={() => setTeamPickerOpen(false)} />
         )}
+        {rosterOpen && <RosterPanel onClose={() => setRosterOpen(false)} />}
+        {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
         <BrowserLayer browsers={browsers} onThumb={onThumb} />
+        <EventToastLayer />
       </div>
     </CanvasUiContext.Provider>
   )

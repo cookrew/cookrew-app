@@ -210,6 +210,15 @@ export class PtySession extends EventEmitter {
     this.screen.dispose()
   }
 
+  /**
+   * True when dispose() (detach) initiated the client exit — a workspace
+   * switch or app quit, NOT the agent dying. Exit listeners use this to
+   * ignore detaches (e.g. the agent registry only deactivates real exits).
+   */
+  get wasDisposed(): boolean {
+    return this.disposed
+  }
+
   /** Terminate the tmux session for good (explicit close: ⌘W / dismiss). */
   killSession(): void {
     if (!this.usesTmux) return

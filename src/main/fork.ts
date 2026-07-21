@@ -49,7 +49,11 @@ export function forkTerminal(
   sourceId: string,
   turnIndex?: number
 ): TerminalNodeData {
-  const source = deps.store.node(sourceId)
+  // Cross-workspace: the source may live outside the active canvas (orch
+  // forking a teammate after a switch). The fork lands in the SOURCE's
+  // workspace, beside it.
+  const sourceHit = deps.store.nodeAcrossWorkspaces(sourceId)
+  const source = sourceHit?.node
   if (!source || source.kind !== 'terminal') {
     throw new Error('Fork source is not a terminal node')
   }
@@ -76,14 +80,11 @@ export function forkTerminal(
     turnIndex: index
   })
 
-  const name = uniqueName(
-    `${source.name} ⑂T${index}`,
-    deps.store.state.nodes.map((n) => n.name)
-  )
   const fork: TerminalNodeData = {
     kind: 'terminal',
     id: randomUUID(),
-    name,
+    // addNodeToWorkspace unique-names within the source's workspace.
+    name: `${source.name} ⑂T${index}`,
     preset: source.preset,
     // Session binding lives on claudeSessionId, not in the command — the
     // spawn path appends --resume/--session-id for the bound id itself.
@@ -100,8 +101,8 @@ export function forkTerminal(
     size: DEFAULT_TERMINAL_SIZE
   }
 
-  const added = deps.store.addNode(fork) as TerminalNodeData
-  deps.store.connect(source.id, added.id)
+  const added = deps.store.addNodeToWorkspace(sourceHit.workspaceId, fork) as TerminalNodeData
+  deps.store.connectAcross(source.id, added.id)
   deps.spawnTerminal(added)
 
   const firstMessage = native

@@ -1,0 +1,600 @@
+/* Spawn toast + global roster (Velvet lane, note item 2). Structural /
+   layout only — Fresco owns the visual treatment. Tokens from styles.css. */
+
+/* ---- spawn toast stack (top-level, transient) ---- */
+.spawn-toasts {
+  position: fixed;
+  top: 60px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 120;
+  pointer-events: none;
+}
+
+.spawn-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 12px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 4px 4px 0 var(--amber-deep);
+  cursor: pointer;
+  animation: spawn-toast-in 220ms ease-out;
+}
+
+.spawn-toast.leaving {
+  animation: spawn-toast-out 240ms ease-in forwards;
+}
+
+@keyframes spawn-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+
+@keyframes spawn-toast-out {
+  to {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spawn-toast,
+  .spawn-toast.leaving,
+  .spawn-toast-hatch::before,
+  .spawn-toast-hatch .vi-avatar,
+  .spawn-toast-avatar {
+    animation: none;
+  }
+}
+
+/* The hatching moment (Fresco visual treatment): the agent's coin/role
+   avatar bursts out of a cracking amber shell. Reuses the status-avatar
+   language — a fresh spawn is idle-green, same coin the cards show. */
+.spawn-toast-hatch {
+  flex: 0 0 auto;
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+}
+
+/* Cracking shell — a one-shot ring that expands and fades behind the coin. */
+.spawn-toast-hatch::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px solid var(--amber);
+  animation: spawn-hatch-ring 540ms ease-out forwards;
+}
+
+.spawn-toast-hatch .vi-avatar,
+.spawn-toast-avatar {
+  width: 26px;
+  height: 26px;
+  animation: spawn-hatch-pop 480ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes spawn-hatch-pop {
+  0% {
+    transform: scale(0.2) rotate(-24deg);
+    opacity: 0;
+  }
+  55% {
+    transform: scale(1.18) rotate(6deg);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) rotate(0);
+  }
+}
+
+@keyframes spawn-hatch-ring {
+  0% {
+    transform: scale(0.5);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+.spawn-toast-body {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.spawn-toast-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.spawn-toast-hatchword {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--amber-deep);
+  flex: 0 0 auto;
+}
+
+.spawn-toast-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.spawn-toast-chip {
+  flex: 0 0 auto;
+}
+
+.spawn-toast-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.spawn-toast-preset {
+  color: var(--ink-soft);
+}
+
+.spawn-toast-cwd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- global roster panel (reuses tf-scrim/tf-panel from team-fork.css) ---- */
+.roster-panel {
+  width: min(460px, calc(100vw - 32px));
+}
+
+.roster-count {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+  margin-right: 4px;
+}
+
+.roster-list {
+  flex: 1;
+  min-height: 80px;
+  overflow-y: auto;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream);
+}
+
+.roster-group-head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--cream-lo);
+  border-bottom: 1.5px solid var(--line-soft);
+}
+
+.roster-ws-name {
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.roster-ws-count {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.roster-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  /* Active teammates get a green rail on the left; inactive fade + no rail,
+     so the crew's live members read at a glance in a long roster. */
+  border-left: 3px solid var(--hp);
+  border-bottom: 1px solid var(--line-soft);
+  min-height: 40px;
+  transition: background 120ms ease;
+}
+
+.roster-row:hover {
+  background: var(--amber-soft);
+}
+
+.roster-row.inactive {
+  opacity: 0.5;
+  border-left-color: transparent;
+}
+
+.roster-avatar {
+  flex: 0 0 auto;
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+}
+
+.roster-role-avatar {
+  width: 24px;
+  height: 24px;
+}
+
+.roster-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.roster-name-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.roster-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.roster-chip {
+  flex: 0 0 auto;
+}
+
+.roster-off {
+  background: var(--cream-lo);
+  color: var(--muted);
+}
+
+.roster-meta {
+  display: flex;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.roster-preset {
+  color: var(--ink-soft);
+  flex: 0 0 auto;
+}
+
+.roster-cwd {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.roster-ago {
+  flex: 0 0 auto;
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  color: var(--muted);
+}
+
+/* ---- phone ---- */
+@media (max-width: 700px) {
+  .spawn-toasts {
+    top: env(safe-area-inset-top, 8px);
+    left: 8px;
+    right: 8px;
+    align-items: stretch;
+  }
+
+  .spawn-toast {
+    width: auto;
+  }
+
+  .roster-row {
+    min-height: 48px;
+  }
+}
+
+/* ==== event feed (generalized toast) + metrics panel (Velvet lane) ==== */
+
+/* Non-creation events show a type glyph in a plain disc (no hatch ring). */
+.event-toast-glyph {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+  background: var(--cream-md);
+  color: var(--ink-soft);
+}
+
+.event-toast-glyph .cr-icon {
+  width: 13px;
+  height: 13px;
+}
+
+.event-toast-detail {
+  color: var(--muted);
+}
+
+.event-toast-ws {
+  color: var(--amber-deep);
+  font-weight: 600;
+}
+
+/* ---- metrics / history panel (reuses tf-scrim/tf-panel) ---- */
+.metrics-panel {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.metrics-counts {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+
+.metrics-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 4px;
+  background: var(--cream);
+  border: 1.5px solid var(--line-soft);
+}
+
+.metrics-stat-n {
+  font-family: var(--font-pixel);
+  font-size: 16px;
+  color: var(--ink);
+}
+
+.metrics-stat-l {
+  font-family: var(--font-pixel);
+  font-size: 6.5px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.metrics-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.metrics-seg {
+  display: flex;
+  gap: 4px;
+}
+
+.metrics-timeline {
+  flex: 1;
+  min-height: 100px;
+  overflow-y: auto;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream);
+}
+
+.metrics-day {
+  position: sticky;
+  top: 0;
+  padding: 3px 10px;
+  background: var(--cream-lo);
+  border-bottom: 1.5px solid var(--line-soft);
+  font-family: var(--font-pixel);
+  font-size: 7.5px;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+}
+
+.metrics-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  min-height: 32px;
+}
+
+.metrics-time {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  width: 44px;
+}
+
+.metrics-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--ink-soft);
+}
+
+.metrics-icon .cr-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.metrics-text {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.metrics-name {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.metrics-verb {
+  color: var(--ink-soft);
+}
+
+.metrics-detail {
+  color: var(--muted);
+}
+
+.metrics-ws {
+  flex: 0 0 auto;
+  max-width: 30%;
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 700px) {
+  .metrics-counts {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .metrics-row {
+    min-height: 40px;
+  }
+}
+
+/* ==== Fresco visual treatment: event categories + grouping + metrics ==== */
+
+/* Per-type glyphs read faster with a semantic tint. Keyed on data-kind
+   (create | remove | fork | switch | neutral) which Velvet sets on the glyph
+   disc + timeline icon from eventMeta; absent = the neutral base above, so
+   this is purely additive and inert until the hook lands. */
+.event-toast-glyph[data-kind='create'] {
+  color: var(--hp);
+  border-color: var(--hp);
+  background: #eef7ea;
+}
+
+.event-toast-glyph[data-kind='remove'] {
+  color: var(--rose);
+  border-color: var(--rose);
+  background: #fbecec;
+}
+
+.event-toast-glyph[data-kind='fork'] {
+  color: var(--violet);
+  border-color: var(--violet);
+  background: #f2eff8;
+}
+
+.event-toast-glyph[data-kind='switch'] {
+  color: var(--amber-deep);
+  border-color: var(--amber-deep);
+  background: var(--amber-soft);
+}
+
+/* Timeline icons take the same category color (no disc, just the glyph). */
+.metrics-icon[data-kind='create'] {
+  color: var(--hp);
+}
+.metrics-icon[data-kind='remove'] {
+  color: var(--rose);
+}
+.metrics-icon[data-kind='fork'] {
+  color: var(--violet);
+}
+.metrics-icon[data-kind='switch'] {
+  color: var(--amber-deep);
+}
+
+/* Grouped / coalesced toast (burst: "11 agents recruited in <ws>"). Velvet
+   adds .grouped + <span class="event-toast-count">{n}</span> when count > 1.
+   Visual: a stacked-card shadow suggesting "many", plus a pixel count badge. */
+.event-toast.grouped {
+  box-shadow:
+    4px 4px 0 var(--amber-deep),
+    9px 9px 0 var(--cream-md),
+    11px 11px 0 var(--line);
+}
+
+.event-toast-count {
+  flex: 0 0 auto;
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+  background: var(--amber);
+  border: 1.5px solid var(--line);
+  border-radius: 9px;
+  padding: 1px 7px;
+}
+
+/* --- metrics polish (lights up now on existing structure) --- */
+.metrics-stat {
+  transition: border-color 120ms ease;
+}
+
+/* Non-zero tiles pop; zero tiles stay quiet — the eye lands on what happened. */
+.metrics-stat:hover {
+  border-color: var(--line);
+}
+
+.metrics-stat-n {
+  color: var(--amber-deep);
+}
+
+.metrics-row {
+  transition: background 120ms ease;
+}
+
+.metrics-row:hover {
+  background: var(--amber-soft);
+}
+
+/* The active-workspace filter chip in the segmented control reads amber. */
+.metrics-seg .cr-chip.amber {
+  border-color: var(--line);
+}

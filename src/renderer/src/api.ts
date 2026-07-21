@@ -59,6 +59,15 @@ export interface CookrewApi {
   ptyAttach: (terminalId: string, onData: (data: string) => void) => () => void
   listActivity: () => Promise<TerminalActivity[]>
   onTerminalActivity: (cb: (activity: TerminalActivity) => void) => () => void
+  /**
+   * Observability event log (observability-event-log-spec): global mutation
+   * stream, filtered history/count queries, and the durable agent roster.
+   * Optional — the demo api lacks them; consumers feature-detect (EventToast).
+   */
+  onEvent?: (cb: (event: unknown) => void) => () => void
+  queryEvents?: (query?: unknown) => Promise<unknown[]>
+  countEvents?: (query?: unknown) => Promise<Record<string, number>>
+  listAgents?: () => Promise<unknown[]>
   /** Completed turns of a terminal (oldest first) for the card pager. */
   listTurns: (terminalId: string) => Promise<TurnRecord[]>
   /** Fork a NEW agent card from a past turn; omit turnIndex for the latest. */

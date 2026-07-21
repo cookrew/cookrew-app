@@ -72,6 +72,16 @@ const api = {
   teamSave: (name?: string) => ipcRenderer.invoke('team:save', name),
   teamList: () => ipcRenderer.invoke('team:list'),
   roleList: () => ipcRenderer.invoke('role:list'),
+  // Observability event log (observability-event-log-spec): global stream +
+  // filtered queries + the durable agent roster.
+  onEvent: (cb: (event: unknown) => void) => {
+    const listener = (_e: unknown, event: unknown): void => cb(event)
+    ipcRenderer.on('event:new', listener)
+    return () => ipcRenderer.removeListener('event:new', listener)
+  },
+  queryEvents: (query: unknown) => ipcRenderer.invoke('events:query', query),
+  countEvents: (query: unknown) => ipcRenderer.invoke('events:count', query),
+  listAgents: () => ipcRenderer.invoke('agents:list'),
   onTerminalActivity: (cb: (activity: unknown) => void) => {
     const listener = (_e: unknown, activity: unknown): void => cb(activity)
     ipcRenderer.on('terminal:activity', listener)

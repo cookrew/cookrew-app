@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './store'
 import { PtyManager } from './pty'
+import type { PtySession } from './pty'
 import { TurnTracker } from './turn-tracker'
 import { TurnStore } from './turn-store'
 import { summarizeTurn } from './sous'
@@ -23,6 +24,8 @@ import {
 } from '../shared/model'
 import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
 import { forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
+import { AgentRegistry } from './agent-registry'
+import { EventLog } from './event-log'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { claudeSessionFile, claudeSpawnCommand, resolveClaudeSessionId } from './claude-fork'
 import { SessionTurnSync } from './session-sync'
@@ -43,6 +46,13 @@ const voice = new VoiceEngine()
 const roles = new RoleStore()
 const teams = new TeamStore()
 const gitCache = new GitInfoCache()
+const agents = new AgentRegistry()
+const events = new EventLog()
+// Observability: the store's op choke-point feeds the durable event log;
+// the log's live stream broadcasts to the renderer (mobile gets the same
+// stream over the /api/events SSE, subscribed in mobile-api).
+store.on('op', (e) => events.append(e))
+events.on('event', (e) => mainWindow?.webContents.send('event:new', e))
 let mainWindow: BrowserWindow | null = null
 
 /**
@@ -52,6 +62,31 @@ let mainWindow: BrowserWindow | null = null
  */
 const LEGACY_COMMANDS: Record<string, string> = {
   claude: 'claude --permission-mode bypassPermissions'
+}
+
+/**
+ * Record a spawn in the durable agent registry (~/.cookrew/agents.json) and
+ * arm exit-deactivation. Detaches (workspace switch, app quit) are NOT exits:
+ * the tmux session keeps running, so wasDisposed exits leave the entry active.
+ */
+function recordSpawn(terminalId: string, session: PtySession): void {
+  const hit = store.nodeAcrossWorkspaces(terminalId)
+  if (!hit || hit.node.kind !== 'terminal') return
+  const meta = store.list().workspaces.find((w) => w.id === hit.workspaceId)
+  agents.upsert({
+    id: hit.node.id,
+    name: hit.node.name,
+    preset: hit.node.preset,
+    command: hit.node.command,
+    role: hit.node.role,
+    cwd: hit.node.cwd,
+    workspaceId: hit.workspaceId,
+    workspaceName: meta?.name ?? hit.workspaceId,
+    orch: hit.node.orch
+  })
+  session.once('exit', () => {
+    if (!session.wasDisposed) agents.deactivate(terminalId)
+  })
 }
 
 /** Spawn (or reuse) a PTY for a terminal node and register turn tracking. */
@@ -93,6 +128,7 @@ function spawnTracked(t: {
   }
   const session = ptys.spawn({ terminalId: t.id, command: effective, cwd: t.cwd })
   turns.track(session, command.trim().length > 0)
+  recordSpawn(t.id, session)
   // Session-bound terminals: the Claude session JSONL is the source of truth
   // for turn records — reconcile now (rebuilds legacy scraped records) and
   // keep reconciling so /rewind truncation and exact prompts flow through.
@@ -205,6 +241,7 @@ function removeNode(id: string): void {
   ptys.kill(id)
   browserThumbs.delete(id)
   store.removeNode(id)
+  agents.deactivate(id)
 }
 
 /** Fork an agent from one of its turns — shared by IPC, CLI and mobile. */
@@ -252,7 +289,13 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
 
 // ---- team fork / save + roles (spec: team-fork-roles v1, Forge lane) ----
 
-function teamFork(spec: TeamForkSpec): Promise<WorkspaceMeta> {
+async function teamFork(spec: TeamForkSpec): Promise<WorkspaceMeta> {
+  const meta = await teamForkInner(spec)
+  store.recordEvent('team.forked', meta.id, meta.name)
+  return meta
+}
+
+function teamForkInner(spec: TeamForkSpec): Promise<WorkspaceMeta> {
   return forkTeam(
     {
       store,
@@ -268,11 +311,23 @@ function teamFork(spec: TeamForkSpec): Promise<WorkspaceMeta> {
   )
 }
 
-function teamSave(name?: string): TeamMeta {
+function teamSaveTracked(name?: string): TeamMeta {
+  const meta = teamSaveInner(name)
+  store.recordEvent('team.saved', meta.name, meta.name, `${meta.terminalCount} agents`)
+  return meta
+}
+
+function teamSaveInner(name?: string): TeamMeta {
   return teams.save(store.state, (id) => turns.history(id), name)
 }
 
-function roleSave(input: { nodeId: string; name: string; rolePrompt: string }): AgentRole {
+function roleSaveTracked(input: { nodeId: string; name: string; rolePrompt: string }): AgentRole {
+  const role = roleSaveInner(input)
+  store.recordEvent('role.saved', role.name, role.name, role.preset)
+  return role
+}
+
+function roleSaveInner(input: { nodeId: string; name: string; rolePrompt: string }): AgentRole {
   const node = store.node(input.nodeId)
   if (!node || node.kind !== 'terminal') throw new Error('Role source is not a terminal node')
   return roles.save(node, input.name, input.rolePrompt)
@@ -450,6 +505,7 @@ app.whenReady().then(() => {
     store,
     ptys,
     spawnTerminal: spawnTracked,
+    agents,
     turns,
     forkTerminal,
     routines,
@@ -469,9 +525,9 @@ app.whenReady().then(() => {
     setTerminalCwd,
     gitInfo: (dir: string) => gitCache.info(dir),
     teamFork,
-    teamSave,
+    teamSave: teamSaveTracked,
     teamList: () => teams.list(),
-    roleSave,
+    roleSave: roleSaveTracked,
     roleList: () => roles.list(),
     roleDelete: (name: string) => roles.delete(name)
   })
@@ -482,6 +538,8 @@ app.whenReady().then(() => {
     : path.join(dirname, '../../mobile/client.html')
   startMobileServer({
     store,
+    events,
+    agents,
     ptys,
     voice,
     turns,
@@ -506,9 +564,9 @@ app.whenReady().then(() => {
       setTerminalCwd,
       gitInfo: (dir: string) => gitCache.info(dir),
       teamFork,
-      teamSave,
+      teamSave: teamSaveTracked,
       teamList: () => teams.list(),
-      roleSave,
+      roleSave: roleSaveTracked,
       roleList: () => roles.list(),
       roleDelete: (name: string) => roles.delete(name)
     },
@@ -540,6 +598,8 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  store.flush()
+  events.flush()
   sessionSync.dispose()
   turns.flushHistories()
   turns.disposeAll()
@@ -623,6 +683,10 @@ function registerIpc(): void {
 
   // Turn history + fork-from-turn for the canvas cards.
   ipcMain.handle('turn:history', (_e, terminalId: string) => turns.history(terminalId))
+  // Observability event log: filtered history + counts + agent roster.
+  ipcMain.handle('events:query', (_e, query) => events.query(query ?? {}))
+  ipcMain.handle('events:count', (_e, query) => events.count(query ?? {}))
+  ipcMain.handle('agents:list', () => agents.list())
   ipcMain.handle('terminal:fork', (_e, sourceId: string, turnIndex?: number) =>
     forkTerminal(sourceId, turnIndex)
   )
@@ -644,10 +708,10 @@ function registerIpc(): void {
 
   // Team fork / team save / roles (contract in note team-fork-roles-spec-v1).
   ipcMain.handle('team:fork', (_e, spec: TeamForkSpec) => teamFork(spec))
-  ipcMain.handle('team:save', (_e, name?: string) => teamSave(name))
+  ipcMain.handle('team:save', (_e, name?: string) => teamSaveTracked(name))
   ipcMain.handle('team:list', () => teams.list())
   ipcMain.handle('role:save', (_e, input: { nodeId: string; name: string; rolePrompt: string }) =>
-    roleSave(input)
+    roleSaveTracked(input)
   )
   ipcMain.handle('role:list', () => roles.list())
   ipcMain.handle('role:delete', (_e, name: string) => roles.delete(name))
