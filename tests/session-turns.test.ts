@@ -97,6 +97,31 @@ describe('parseSessionTurns', () => {
     expect(rewound).toHaveLength(1)
     expect(rewound[0].prompt).toBe('fix the bug')
   })
+
+  it('binds each turn to its prompt entry uuid', () => {
+    const turns = parseSessionTurns([
+      user('first', T('00:00'), { uuid: 'uuid-a' }),
+      assistant([text('r1')], T('00:05')),
+      user('second', T('01:00'), { uuid: 'uuid-b' })
+    ])
+    expect(turns.map((t) => t.uuid)).toEqual(['uuid-a', 'uuid-b'])
+  })
+
+  it('binds to the PROMPT uuid, never a tool-result or assistant uuid', () => {
+    const turns = parseSessionTurns([
+      user('do it', T('00:00'), { uuid: 'prompt-uuid' }),
+      assistant([toolUse()], T('00:05')),
+      user(toolResult(), T('00:06')),
+      assistant([text('done')], T('00:10'))
+    ])
+    expect(turns).toHaveLength(1)
+    expect(turns[0].uuid).toBe('prompt-uuid')
+  })
+
+  it('omits uuid when the prompt entry has none (legacy session file)', () => {
+    const turns = parseSessionTurns([user('no uuid here', T('00:00'))])
+    expect(turns[0].uuid).toBeUndefined()
+  })
 })
 
 describe('isNoisePrompt', () => {

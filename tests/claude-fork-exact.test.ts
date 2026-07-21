@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { buildForkedSessionLinesAtTurn } from '../src/shared/claude-fork'
+import {
+  buildForkedSessionLinesAtTurn,
+  buildForkedSessionLinesAtUuid
+} from '../src/shared/claude-fork'
 
-function user(content: unknown, ts: string): string {
+function user(content: unknown, ts: string, uuid?: string): string {
   return JSON.stringify({
     type: 'user',
     message: { role: 'user', content },
     timestamp: ts,
-    sessionId: 'src-session'
+    sessionId: 'src-session',
+    ...(uuid ? { uuid } : {})
   })
 }
 
@@ -58,5 +62,55 @@ describe('buildForkedSessionLinesAtTurn', () => {
   it('keeps the whole session when forking from the latest turn', () => {
     const kept = buildForkedSessionLinesAtTurn(LINES, { newSessionId: 'fork', keepPrompts: 3 })
     expect(kept).toHaveLength(LINES.length)
+  })
+})
+
+const UUID_LINES = [
+  user('turn one', '2026-07-20T10:00:00Z', 'uuid-1'),
+  assistant('reply one', '2026-07-20T10:00:10Z'),
+  user('<command-name>/clear</command-name>', '2026-07-20T10:00:20Z', 'uuid-noise'),
+  user('turn two', '2026-07-20T10:01:00Z', 'uuid-2'),
+  assistant('reply two', '2026-07-20T10:01:10Z'),
+  user('turn three', '2026-07-20T10:02:00Z', 'uuid-3'),
+  assistant('reply three', '2026-07-20T10:02:10Z')
+]
+
+describe('buildForkedSessionLinesAtUuid', () => {
+  it('keeps the cutoff turn and everything prior, breaking at the next real prompt', () => {
+    const kept = buildForkedSessionLinesAtUuid(UUID_LINES, {
+      newSessionId: 'fork',
+      cutoffUuid: 'uuid-2'
+    })
+    expect(kept.some((l) => l.includes('turn one'))).toBe(true)
+    expect(kept.some((l) => l.includes('turn two'))).toBe(true)
+    expect(kept.some((l) => l.includes('reply two'))).toBe(true)
+    expect(kept.some((l) => l.includes('turn three'))).toBe(false)
+    expect(kept.some((l) => l.includes('reply three'))).toBe(false)
+  })
+
+  it('keeps the whole session when the cutoff is the latest turn', () => {
+    const kept = buildForkedSessionLinesAtUuid(UUID_LINES, {
+      newSessionId: 'fork',
+      cutoffUuid: 'uuid-3'
+    })
+    expect(kept).toHaveLength(UUID_LINES.length)
+  })
+
+  it('keeps the whole session when the cutoff uuid is not found (safe fallback)', () => {
+    const kept = buildForkedSessionLinesAtUuid(UUID_LINES, {
+      newSessionId: 'fork',
+      cutoffUuid: 'nope'
+    })
+    expect(kept).toHaveLength(UUID_LINES.length)
+  })
+
+  it('restamps every kept record with the fork session id', () => {
+    const kept = buildForkedSessionLinesAtUuid(UUID_LINES, {
+      newSessionId: 'fork-id',
+      cutoffUuid: 'uuid-1'
+    })
+    const ids = kept.map((l) => (JSON.parse(l) as { sessionId?: string }).sessionId)
+    expect(ids.every((id) => id === 'fork-id')).toBe(true)
+    expect(kept.some((l) => l.includes('turn two'))).toBe(false)
   })
 })

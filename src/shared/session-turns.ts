@@ -28,6 +28,7 @@ interface SessionEntry {
   type?: string
   isMeta?: boolean
   timestamp?: string
+  uuid?: string
   message?: { content?: unknown }
 }
 
@@ -84,6 +85,7 @@ export function parseSessionTurns(lines: string[]): TurnRecord[] {
         index: turns.length + 1,
         prompt: (entry.message?.content as string).trim(),
         reply: '',
+        ...(typeof entry.uuid === 'string' ? { uuid: entry.uuid } : {}),
         startedAt,
         endedAt: startedAt
       })

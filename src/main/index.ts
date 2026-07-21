@@ -23,8 +23,8 @@ import {
 } from '../shared/model'
 import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
 import { forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
-import { extractSessionFlag, isClaudeCommand } from '../shared/claude-fork'
-import { claudeSessionFile, claudeSpawnCommand } from './claude-fork'
+import { isClaudeCommand } from '../shared/claude-fork'
+import { claudeSessionFile, claudeSpawnCommand, resolveClaudeSessionId } from './claude-fork'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
 import { TeamStore, forkTeam } from './teams'
@@ -33,9 +33,6 @@ import { buildRoleBootMessage } from '../shared/fork'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
-
-/** Stored claude session ids must be UUID-shaped before use in paths/commands. */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const store = new WorkspaceStore()
 const ptys = new PtyManager()
@@ -75,11 +72,21 @@ function spawnTracked(t: {
     // fork, resume after a dead tmux session — never guess which session
     // file is this terminal's. tmux reuses live sessions, so the effective
     // command only matters when the terminal actually (re)boots.
-    // Stored ids are validated as UUIDs: a non-UUID value (e.g. planted via
-    // the unauthenticated node-update endpoint) would otherwise reach both
-    // the spawn command and session-file paths.
-    const stored = t.claudeSessionId && UUID_RE.test(t.claudeSessionId) ? t.claudeSessionId : null
-    const sessionId = stored ?? extractSessionFlag(command) ?? randomUUID()
+    // Resolve against what claude is REALLY running: a stored id whose file is
+    // gone (minted for an already-live session tmux reattach never rebooted,
+    // or orphaned by a cold reboot) is recovered from turn history rather than
+    // resumed blind — otherwise the agent boots an empty conversation. Invalid
+    // stored ids (e.g. planted via the unauthenticated node-update endpoint)
+    // are dropped inside the resolver before reaching any path/command.
+    // NOTE: a still-live tmux session is reattached by `new-session -A`, which
+    // ignores this command — so resume only takes on a session that was killed
+    // and recreated, never on one that merely detached.
+    const sessionId = resolveClaudeSessionId({
+      command,
+      cwd: t.cwd,
+      storedId: t.claudeSessionId,
+      turns: turns.history(t.id)
+    })
     if (t.claudeSessionId !== sessionId) store.updateNode(t.id, { claudeSessionId: sessionId })
     effective = claudeSpawnCommand(command, t.cwd, sessionId)
     boundSessionId = sessionId

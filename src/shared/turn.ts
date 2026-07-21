@@ -57,6 +57,14 @@ export interface TurnRecord {
   reply: string
   /** Sous title captured when the turn completed, if one was generated. */
   title?: string
+  /**
+   * Session message uuid of the prompt entry that started this turn — the
+   * exact binding to the Claude session file. Present only for
+   * session-derived records; absent for scrape-based turns (non-Claude
+   * agents, or before a session file exists). Fork cutoff and title
+   * carryover key on this when set.
+   */
+  uuid?: string
   startedAt: number
   endedAt: number
   /**
