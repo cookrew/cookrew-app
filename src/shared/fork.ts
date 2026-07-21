@@ -25,6 +25,28 @@ export interface ForkPreambleOptions {
   turnIndex: number
 }
 
+export interface AssembledNoticeOptions {
+  forkName: string
+  sourceName: string
+  /** Checkpoint (turn) indexes assembled into this fork, ascending. */
+  turnIndexes: number[]
+}
+
+/**
+ * First message for a NATIVELY assembled fork: its resumed session contains
+ * exactly the selected checkpoints, so no transcript replay — just which
+ * checkpoints it woke up with.
+ */
+export function buildAssembledForkNotice(options: AssembledNoticeOptions): string {
+  const list = options.turnIndexes.map((i) => `T${i}`).join(', ')
+  return (
+    `[Cookrew fork] You are "${options.forkName}", assembled from agent ` +
+    `"${options.sourceName}" checkpoints ${list}. Your session contains exactly ` +
+    `those exchanges — treat them as your own history; the original agent ` +
+    `continues separately. Acknowledge briefly, then await instructions.`
+  )
+}
+
 export interface ForkNoticeOptions {
   forkName: string
   sourceName: string

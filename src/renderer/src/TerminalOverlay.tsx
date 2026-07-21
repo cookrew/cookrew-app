@@ -71,9 +71,9 @@ function clip(text: string, max: number): string {
 /** The header line carries the agent's live status, not its name. */
 const PHASE_CHIP: Record<TurnPhase, { label: string; cls: string }> = {
   idle: { label: 'READY', cls: '' },
-  thinking: { label: 'TURN IN PROGRESS', cls: ' busy' },
+  thinking: { label: 'WORKING', cls: ' busy' },
   waiting: { label: 'NEEDS ATTENTION', cls: ' attention' },
-  replied: { label: 'TURN COMPLETE', cls: ' done' }
+  replied: { label: 'CHECKPOINT SAVED', cls: ' done' }
 }
 
 function TerminalOverlay({
@@ -491,8 +491,8 @@ function TerminalOverlay({
         <div className="popout-actions">
           <button
             className="cr-btn sm icon"
-            title="Previous turn"
-            aria-label="Previous turn"
+            title="Previous checkpoint"
+            aria-label="Previous checkpoint"
             disabled={paging.count === 0 || (paging.position !== null && paging.position <= 1)}
             onMouseDown={keepFocus}
             onClick={paging.back}
@@ -501,8 +501,8 @@ function TerminalOverlay({
           </button>
           <button
             className="cr-btn sm icon"
-            title="Next turn"
-            aria-label="Next turn"
+            title="Next checkpoint"
+            aria-label="Next checkpoint"
             disabled={paging.viewing === null}
             onMouseDown={keepFocus}
             onClick={paging.forward}
@@ -512,8 +512,8 @@ function TerminalOverlay({
           {(activity?.turnCount ?? 0) > 0 && (
             <button
               className={`cr-btn sm icon${showTurns ? ' active' : ''}`}
-              title={`Fork a new agent from a past turn (${activity?.turnCount})`}
-              aria-label="Fork from a past turn"
+              title={`Fork a new agent from a past checkpoint (${activity?.turnCount})`}
+              aria-label="Fork from a past checkpoint"
               onClick={() => setShowTurns((s) => !s)}
             >
               <CrIcon name="fork" />
@@ -545,7 +545,7 @@ function TerminalOverlay({
       {(paging.viewing !== null || activity?.prompt) && (
         <div className="popout-ask" title={paging.viewing?.prompt ?? activity?.prompt ?? ''}>
           <span className="popout-ask-label">
-            {paging.viewing ? `TURN ${paging.viewing.index}/${paging.count} ❯` : 'YOU ❯'}
+            {paging.viewing ? `CHECKPOINT ${paging.viewing.index}/${paging.count} ❯` : 'YOU ❯'}
           </span>
           <span className="popout-ask-text">
             {paging.viewing
@@ -555,7 +555,7 @@ function TerminalOverlay({
           {paging.viewing !== null && (
             <button
               className="cr-btn sm popout-ask-live"
-              title="Back to the live turn"
+              title="Back to live"
               onMouseDown={keepFocus}
               onClick={paging.live}
             >

@@ -85,6 +85,51 @@ export const MAX_TURN_HISTORY = 100
  */
 export const RECOVERED_PROMPT_LABEL = '(recovered turn)'
 
+/** Normalized prompt key for phantom-echo matching (mirrors the fork matcher). */
+function phantomPromptKey(prompt: string): string {
+  return prompt.trim().replace(/\s+/g, ' ').toLowerCase().slice(0, 48)
+}
+
+/**
+ * Remove PTY split-echo phantoms: a record with NO uuid whose prompt matches
+ * an ADJACENT uuid-carrying record is a scrape duplicate of a real turn. Only
+ * a session-backed record carries a uuid, and the session file holds each
+ * real prompt once, so a uuid-less twin sitting next to its uuid original is
+ * an echo — drop it, carrying its title/seenAt onto the surviving uuid record
+ * where that one lacks them. Genuine repeated prompts are spared (each real
+ * repeat has its own session uuid), and an all-uuid-less history (Codex / no
+ * session file) is returned untouched — no uuid anchor, nothing to dedupe.
+ */
+export function dedupePhantomEchoes(records: TurnRecord[]): TurnRecord[] {
+  const drop = new Set<number>()
+  const enrich = new Map<number, { title?: string; seenAt?: number }>()
+  records.forEach((r, i) => {
+    if (r.uuid) return
+    const key = phantomPromptKey(r.prompt)
+    for (const j of [i - 1, i + 1]) {
+      const neighbor = records[j]
+      if (!neighbor || !neighbor.uuid || phantomPromptKey(neighbor.prompt) !== key) continue
+      drop.add(i)
+      const e = enrich.get(j) ?? {}
+      if (neighbor.title === undefined && r.title !== undefined && e.title === undefined) {
+        e.title = r.title
+      }
+      if (neighbor.seenAt === undefined && r.seenAt !== undefined && e.seenAt === undefined) {
+        e.seenAt = r.seenAt
+      }
+      enrich.set(j, e)
+      break
+    }
+  })
+  if (drop.size === 0) return records
+  return records
+    .map((r, i) => {
+      const e = enrich.get(i)
+      return e && (e.title !== undefined || e.seenAt !== undefined) ? { ...r, ...e } : r
+    })
+    .filter((_, i) => !drop.has(i))
+}
+
 /**
  * Prompt echo painted by agent TUIs at turn start ("> fix the bug"). Menu
  * rows ("❯ 1. Yes") are excluded so approval menus never read as prompts.

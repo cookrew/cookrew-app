@@ -209,6 +209,47 @@ export function buildForkedSessionLinesAtUuid(
   return kept
 }
 
+export interface AssembledForkOptions {
+  newSessionId: string
+  /** Prompt-entry uuids of the SELECTED checkpoints (any order). */
+  keepUuids: string[]
+}
+
+/**
+ * Assembled fork truncation (checkpoint-program-spec item 2a): keep ONLY the
+ * records inside the selected checkpoints' uuid ranges. A range is a real
+ * user prompt entry plus everything up to the next real prompt (its replies
+ * and tool records). Header records before the first prompt are always kept;
+ * every kept record is restamped with the new session id. Unselected ranges
+ * vanish — the fork's context is exactly the chosen checkpoints.
+ */
+export function buildForkedSessionLinesForUuids(
+  lines: string[],
+  options: AssembledForkOptions
+): string[] {
+  const wanted = new Set(options.keepUuids)
+  const kept: string[] = []
+  let keeping = true // header region before the first prompt
+  for (const line of lines) {
+    if (line.trim().length === 0) continue
+    const record = parseRecord(line)
+    if (record === null) {
+      if (keeping) kept.push(line)
+      continue
+    }
+    if (isPromptRecord(record) && !isNoisePrompt(record.message?.content as string)) {
+      keeping = record.uuid !== undefined && wanted.has(record.uuid)
+    }
+    if (!keeping) continue
+    kept.push(
+      typeof record.sessionId === 'string'
+        ? JSON.stringify({ ...record, sessionId: options.newSessionId })
+        : line
+    )
+  }
+  return kept
+}
+
 /** True when a terminal runs Claude Code (the only agent we can session-fork). */
 export function isClaudeCommand(command: string): boolean {
   return /^\s*claude\b/.test(command)

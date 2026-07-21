@@ -49,7 +49,14 @@ export interface MobileOps {
   teamFork: (spec: TeamForkSpec) => Promise<WorkspaceMeta>
   teamSave: (name?: string) => TeamMeta
   teamList: () => TeamMeta[]
-  roleSave: (input: { nodeId: string; name: string; rolePrompt: string }) => AgentRole
+  roleSave: (input: {
+    nodeId: string
+    name: string
+    rolePrompt: string
+    sourceTurnUuid?: string
+    sourceTurnPrompt?: string
+    sessionCopyRef?: string
+  }) => AgentRole
   roleList: () => AgentRole[]
   roleDelete: (name: string) => boolean
 }
@@ -77,7 +84,7 @@ const ATTACH_BODY_LIMIT = 30_000_000
  * workspace dir). All dirs are looked up once through the cache, so the
  * added round-trips are coalesced and cheap.
  */
-async function enrichStateWithGit(
+export async function enrichStateWithGit(
   state: WorkspaceState,
   gitInfo: (dir: string) => Promise<GitInfo>
 ): Promise<WorkspaceState & { dirsGit: Record<string, GitInfo> }> {
@@ -259,7 +266,13 @@ export async function handleMobileApi(
     return true
   }
   if (method === 'POST' && p === '/api/role/save') {
-    const body = await readJson<{ nodeId?: string; name?: string; rolePrompt?: string }>(request)
+    const body = await readJson<{
+      nodeId?: string
+      name?: string
+      rolePrompt?: string
+      sourceTurnUuid?: string
+      sourceTurnPrompt?: string
+    }>(request)
     try {
       if (!body.nodeId || !body.name || !body.rolePrompt) {
         throw new Error('Missing nodeId/name/rolePrompt')
@@ -267,7 +280,13 @@ export async function handleMobileApi(
       respondJson(
         response,
         200,
-        ops.roleSave({ nodeId: body.nodeId, name: body.name, rolePrompt: body.rolePrompt })
+        ops.roleSave({
+          nodeId: body.nodeId,
+          name: body.name,
+          rolePrompt: body.rolePrompt,
+          sourceTurnUuid: body.sourceTurnUuid,
+          sourceTurnPrompt: body.sourceTurnPrompt
+        })
       )
     } catch (error) {
       respondJson(response, 400, { error: error instanceof Error ? error.message : String(error) })

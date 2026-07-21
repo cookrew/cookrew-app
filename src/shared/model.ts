@@ -210,6 +210,16 @@ export interface AgentRole {
   /** First message injected when an agent boots from this role. */
   rolePrompt: string
   savedAt: number
+  /**
+   * Checkpoint provenance (checkpoint-program-spec, save role from this
+   * checkpoint): the session prompt-entry uuid and prompt text of the turn
+   * the role was distilled from, plus an optional session-copy file name
+   * (a snapshot the restore path can native-boot from). All absent for
+   * roles saved without a checkpoint.
+   */
+  sourceTurnUuid?: string
+  sourceTurnPrompt?: string
+  sessionCopyRef?: string
 }
 
 /** A single request over the cookrew Unix socket (newline-delimited JSON). */

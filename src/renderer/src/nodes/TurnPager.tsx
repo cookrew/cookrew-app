@@ -100,18 +100,20 @@ export function TurnPagerBar({ paging }: { paging: TurnPaging }): React.JSX.Elem
     <div className="vi-pager nodrag nowheel" onClick={stop}>
       <button
         className="vi-pager-btn"
-        title="Previous turn"
+        title="Previous checkpoint"
         disabled={paging.count === 0 || atOldest}
         onClick={paging.back}
       >
         <CrIcon name="prev" />
       </button>
       <span className="vi-pager-label">
-        {paging.viewing ? `TURN ${paging.viewing.index}` : `LIVE · ${paging.count} TURNS`}
+        {paging.viewing
+          ? `CHECKPOINT ${paging.viewing.index}`
+          : `LIVE · ${paging.count} CHECKPOINT${paging.count === 1 ? '' : 'S'}`}
       </span>
       <button
         className="vi-pager-btn"
-        title="Next turn"
+        title="Next checkpoint"
         disabled={paging.viewing === null}
         onClick={paging.forward}
       >
@@ -126,8 +128,8 @@ export function TurnPagerBar({ paging }: { paging: TurnPaging }): React.JSX.Elem
         className="vi-pager-btn wide fork"
         title={
           paging.viewing
-            ? `Fork a new agent from turn ${paging.viewing.index}`
-            : 'Fork a new agent from the latest turn'
+            ? `Fork a new agent from checkpoint ${paging.viewing.index}`
+            : 'Fork a new agent from the latest checkpoint'
         }
         disabled={paging.count === 0 || paging.forking}
         onClick={paging.fork}
@@ -147,7 +149,7 @@ export function PastTurnView({ record }: { record: TurnRecord }): React.JSX.Elem
       </div>
       <div className="vi-msg vi-past-reply">{record.reply || '(no visible output this turn)'}</div>
       <div className="vi-past-meta">
-        turn {record.index}
+        checkpoint {record.index}
         {record.title ? ` · ${record.title}` : ''} · {timeLabel(record.endedAt)} ·{' '}
         {durationLabel(record.endedAt - record.startedAt)}
       </div>

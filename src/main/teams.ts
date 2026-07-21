@@ -29,13 +29,14 @@ import type {
 import { normalizeDirs } from '../shared/model'
 import type { TurnRecord } from '../shared/turn'
 import {
+  buildAssembledForkNotice,
   buildAssembledPreamble,
   buildForkPreamble,
   buildResumeForkNotice,
   buildRoleBootMessage
 } from '../shared/fork'
 import { stripSessionFlags } from '../shared/claude-fork'
-import { forkClaudeSession } from './claude-fork'
+import { claudeSessionFile, forkClaudeSession, forkClaudeSessionAssembled } from './claude-fork'
 import { injectWhenReady } from './fork'
 import { roleSlug } from './roles'
 import type { RoleStore } from './roles'
@@ -55,6 +56,13 @@ export interface TeamSnapshot {
   connections: Connection[]
   /** Turn histories captured at save time, keyed by ORIGINAL terminal id. */
   turns: Record<string, TurnRecord[]>
+  /**
+   * Claude session files snapshotted at save time (checkpoint-program-spec
+   * item 2b): ORIGINAL terminal id → sidecar file name under
+   * ~/.cookrew/teams/<slug>-sessions/. Lets fork-from-saved native-rewind in
+   * a fresh project dir instead of falling back to preamble replay.
+   */
+  sessions?: Record<string, string>
 }
 
 function isSnapshot(value: unknown): value is TeamSnapshot {
@@ -80,16 +88,30 @@ function metaOf(snapshot: TeamSnapshot): TeamMeta {
 }
 
 export class TeamStore {
-  constructor(private dir = path.join(homedir(), '.cookrew', 'teams')) {}
+  constructor(
+    private dir = path.join(homedir(), '.cookrew', 'teams'),
+    /** Override for tests; defaults to ~/.claude/projects. */
+    private projectsDir?: string
+  ) {}
 
   private fileFor(name: string): string {
     return path.join(this.dir, `${roleSlug(name)}.json`)
   }
 
-  /** Snapshot the given canvas under a name. Same name overwrites. */
+  private sessionsDirFor(name: string): string {
+    return path.join(this.dir, `${roleSlug(name)}-sessions`)
+  }
+
+  /**
+   * Snapshot the given canvas under a name. Same name overwrites. Claude
+   * terminals with a live session file get that file COPIED into the team's
+   * sessions sidecar, so a later fork-from-saved can native-rewind even in a
+   * fresh directory (item 2b) — the canvas may be long gone by then.
+   */
   save(state: WorkspaceState, turnsOf: (terminalId: string) => TurnRecord[], name?: string): TeamMeta {
     const teamName = (name ?? state.name).trim()
     if (teamName.length === 0) throw new Error('Team name must not be empty')
+    const sessions = this.snapshotSessions(teamName, state)
     const snapshot: TeamSnapshot = {
       name: teamName,
       savedAt: Date.now(),
@@ -99,11 +121,44 @@ export class TeamStore {
       connections: state.connections,
       turns: Object.fromEntries(
         state.nodes.filter((n) => n.kind === 'terminal').map((t) => [t.id, turnsOf(t.id)])
-      )
+      ),
+      ...(Object.keys(sessions).length > 0 ? { sessions } : {})
     }
     mkdirSync(this.dir, { recursive: true })
     writeFileSync(this.fileFor(teamName), JSON.stringify(snapshot, null, 2), 'utf8')
     return metaOf(snapshot)
+  }
+
+  private snapshotSessions(teamName: string, state: WorkspaceState): Record<string, string> {
+    const sessions: Record<string, string> = {}
+    for (const node of state.nodes) {
+      if (node.kind !== 'terminal' || !node.claudeSessionId) continue
+      try {
+        const source = claudeSessionFile(node.cwd, node.claudeSessionId, this.projectsDir)
+        if (!existsSync(source)) continue
+        const sidecar = this.sessionsDirFor(teamName)
+        mkdirSync(sidecar, { recursive: true })
+        const fileName = `${node.id}.jsonl`
+        writeFileSync(path.join(sidecar, fileName), readFileSync(source, 'utf8'), 'utf8')
+        sessions[node.id] = fileName
+      } catch (error) {
+        console.error('Team save session snapshot failed (preamble fallback):', error)
+      }
+    }
+    return sessions
+  }
+
+  /** Snapshot session lines for a saved team's terminal, or null. */
+  sessionLines(snapshot: TeamSnapshot, terminalId: string): string[] | null {
+    const fileName = snapshot.sessions?.[terminalId]
+    if (!fileName) return null
+    try {
+      const file = path.join(this.sessionsDirFor(snapshot.name), fileName)
+      return existsSync(file) ? readFileSync(file, 'utf8').split('\n') : null
+    } catch (error) {
+      console.error('Team session snapshot read failed:', error)
+      return null
+    }
   }
 
   list(): TeamMeta[] {
@@ -151,8 +206,13 @@ export interface TeamForkSource {
   nodes: CanvasNode[]
   connections: Connection[]
   turnsOf: (terminalId: string) => TurnRecord[]
-  /** Saved snapshots can't be natively session-forked — preamble only. */
   fromSnapshot: boolean
+  /**
+   * Snapshot session lines for a terminal (saved teams with session
+   * sidecars). Null → live-disk resolution (fromSnapshot false) or preamble
+   * fallback (fromSnapshot true, pre-sidecar snapshots / Codex agents).
+   */
+  sessionLinesOf?: (terminalId: string) => string[] | null
 }
 
 export interface TerminalForkPlan {
@@ -310,9 +370,15 @@ export function planTeamFork(
  * (claudeSessionId + short notice) when possible, else a preamble/role
  * message to inject — or nothing for a source with no history.
  */
+export interface TerminalContextSource {
+  fromSnapshot: boolean
+  /** Snapshot session lines for a terminal (saved-team sidecars), if any. */
+  sessionLinesOf?: (terminalId: string) => string[] | null
+}
+
 export function resolveTerminalContext(
   plan: TerminalForkPlan,
-  fromSnapshot: boolean,
+  source: TerminalContextSource,
   projectsDir?: string
 ): { inject: string | null; claudeSessionId: string | null } {
   const forkName = plan.source.name
@@ -322,7 +388,36 @@ export function resolveTerminalContext(
       claudeSessionId: null
     }
   }
+  // Snapshot sidecar lines (saved teams) let both native paths run without
+  // the live ~/.claude files; live forks read the disk as before.
+  const snapshotLines = source.sessionLinesOf?.(plan.source.id) ?? null
+  const nativeEligible = !source.fromSnapshot || snapshotLines !== null
   if (plan.mode === 'assembled') {
+    // Item 2a: native assembly — the fork's session contains exactly the
+    // selected checkpoints' uuid ranges. Preamble stays the Codex/legacy
+    // fallback (no session file or uuid-less records).
+    if (nativeEligible) {
+      const native = forkClaudeSessionAssembled({
+        command: plan.source.command,
+        cwd: plan.source.cwd,
+        sessionId: plan.source.claudeSessionId,
+        turns: plan.turns,
+        turnIndexes: plan.turnIndexes,
+        targetCwd: plan.targetDir,
+        sourceLines: snapshotLines ?? undefined,
+        projectsDir
+      })
+      if (native) {
+        return {
+          inject: buildAssembledForkNotice({
+            forkName,
+            sourceName: plan.source.name,
+            turnIndexes: [...plan.turnIndexes].sort((a, b) => a - b)
+          }),
+          claudeSessionId: native.sessionId
+        }
+      }
+    }
     return {
       inject: buildAssembledPreamble({
         forkName,
@@ -334,13 +429,15 @@ export function resolveTerminalContext(
     }
   }
   if (plan.turnIndex === null) return { inject: null, claudeSessionId: null }
-  if (!fromSnapshot) {
+  if (nativeEligible) {
     const native = forkClaudeSession({
       command: plan.source.command,
       cwd: plan.source.cwd,
       sessionId: plan.source.claudeSessionId,
       turns: plan.turns,
       turnIndex: plan.turnIndex,
+      targetCwd: plan.targetDir,
+      sourceLines: snapshotLines ?? undefined,
       projectsDir
     })
     if (native) {
@@ -473,7 +570,8 @@ function resolveSource(deps: TeamForkDeps, spec: TeamForkSpec): TeamForkSource {
       nodes: snap.nodes,
       connections: snap.connections,
       turnsOf: (id) => snap.turns[id] ?? [],
-      fromSnapshot: true
+      fromSnapshot: true,
+      sessionLinesOf: (id) => deps.teams.sessionLines(snap, id)
     }
   }
   const state = deps.store.state
@@ -515,7 +613,7 @@ export async function forkTeam(deps: TeamForkDeps, spec: TeamForkSpec): Promise<
   const contexts = new Map(
     plan.terminals.map((t) => [
       t.newId,
-      resolveTerminalContext(t, source.fromSnapshot, deps.projectsDir)
+      resolveTerminalContext(t, source, deps.projectsDir)
     ])
   )
   const nodes = plan.nodes.map((n) => {

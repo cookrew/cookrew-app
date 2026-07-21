@@ -11,6 +11,7 @@ import {
   TurnRecord,
   appendTurnRecord,
   cleanTurnLines,
+  dedupePhantomEchoes,
   detectAgentActivity,
   detectAttention,
   detectLiveWork,
@@ -177,8 +178,9 @@ export class TurnTracker extends EventEmitter {
         ...(prior.seenAt !== undefined ? { seenAt: prior.seenAt } : {})
       }
     })
+    const deduped = dedupePhantomEchoes(merged)
     const capped =
-      merged.length > MAX_TURN_HISTORY ? merged.slice(merged.length - MAX_TURN_HISTORY) : merged
+      deduped.length > MAX_TURN_HISTORY ? deduped.slice(deduped.length - MAX_TURN_HISTORY) : deduped
     this.histories.set(terminalId, capped)
     this.store?.scheduleSave(terminalId, capped)
     const t = this.tracked.get(terminalId)
@@ -592,10 +594,18 @@ export class TurnTracker extends EventEmitter {
       startedAt: t.turnStartedAt,
       endedAt: Date.now()
     })
-    this.histories.set(id, appended)
-    this.store?.scheduleSave(id, appended)
+    // A split-echo double-submit lands a uuid-less scrape record next to the
+    // reconciled uuid original — drop it here so it never persists or shows,
+    // instead of waiting for the next reconcile to full-replace it away.
+    const newRecord = appended[appended.length - 1]
+    const deduped = dedupePhantomEchoes(appended)
+    this.histories.set(id, deduped)
+    this.store?.scheduleSave(id, deduped)
     this.push(t)
-    void this.finalizeTitle(t, appended[appended.length - 1].index)
+    // Skip the title pass when the just-appended turn was itself the phantom.
+    if (deduped.some((r) => r.index === newRecord.index)) {
+      void this.finalizeTitle(t, newRecord.index)
+    }
   }
 
   private stopTurnTimers(t: TrackedTerminal): void {

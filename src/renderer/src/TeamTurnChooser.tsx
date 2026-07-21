@@ -14,8 +14,8 @@ export interface TerminalChoice {
 export const DEFAULT_CHOICE: TerminalChoice = { mode: 'latest', turnIndexes: [] }
 
 const MODE_LABEL: Record<TerminalChoice['mode'], string> = {
-  latest: 'LATEST TURN',
-  first: 'FIRST TURN',
+  latest: 'LATEST CHECKPOINT',
+  first: 'FIRST CHECKPOINT',
   assembled: 'ASSEMBLE',
   role: 'FROM ROLE'
 }
@@ -104,12 +104,12 @@ export function TeamTurnChooser({
 
       {choice.mode === 'role' ? (
         <div className="tf-role-note">
-          Boots fresh with the role prompt — no turn history carries over.
+          Boots fresh with the role prompt — no checkpoint history carries over.
         </div>
       ) : records === null ? (
-        <div className="tf-role-note">Loading turns…</div>
+        <div className="tf-role-note">Loading checkpoints…</div>
       ) : records.length === 0 ? (
-        <div className="tf-role-note">No completed turns yet — the fork boots fresh.</div>
+        <div className="tf-role-note">No checkpoints yet — the fork boots fresh.</div>
       ) : (
         <div className="tf-turns">
           {records.map((record) => {

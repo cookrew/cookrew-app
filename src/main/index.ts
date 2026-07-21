@@ -321,16 +321,30 @@ function teamSaveInner(name?: string): TeamMeta {
   return teams.save(store.state, (id) => turns.history(id), name)
 }
 
-function roleSaveTracked(input: { nodeId: string; name: string; rolePrompt: string }): AgentRole {
+interface RoleSaveInput {
+  nodeId: string
+  name: string
+  rolePrompt: string
+  /** Checkpoint provenance (save role from this checkpoint), optional. */
+  sourceTurnUuid?: string
+  sourceTurnPrompt?: string
+  sessionCopyRef?: string
+}
+
+function roleSaveTracked(input: RoleSaveInput): AgentRole {
   const role = roleSaveInner(input)
   store.recordEvent('role.saved', role.name, role.name, role.preset)
   return role
 }
 
-function roleSaveInner(input: { nodeId: string; name: string; rolePrompt: string }): AgentRole {
+function roleSaveInner(input: RoleSaveInput): AgentRole {
   const node = store.node(input.nodeId)
   if (!node || node.kind !== 'terminal') throw new Error('Role source is not a terminal node')
-  return roles.save(node, input.name, input.rolePrompt)
+  return roles.save(node, input.name, input.rolePrompt, {
+    sourceTurnUuid: input.sourceTurnUuid,
+    sourceTurnPrompt: input.sourceTurnPrompt,
+    sessionCopyRef: input.sessionCopyRef
+  })
 }
 
 /**
@@ -710,7 +724,7 @@ function registerIpc(): void {
   ipcMain.handle('team:fork', (_e, spec: TeamForkSpec) => teamFork(spec))
   ipcMain.handle('team:save', (_e, name?: string) => teamSaveTracked(name))
   ipcMain.handle('team:list', () => teams.list())
-  ipcMain.handle('role:save', (_e, input: { nodeId: string; name: string; rolePrompt: string }) =>
+  ipcMain.handle('role:save', (_e, input: RoleSaveInput) =>
     roleSaveTracked(input)
   )
   ipcMain.handle('role:list', () => roles.list())

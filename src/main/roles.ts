@@ -39,7 +39,13 @@ export class RoleStore {
   }
 
   /** Snapshot a terminal node as a role. Same name overwrites (update). */
-  save(node: TerminalNodeData, name: string, rolePrompt: string): AgentRole {
+  save(
+    node: TerminalNodeData,
+    name: string,
+    rolePrompt: string,
+    /** Checkpoint provenance (save role from this checkpoint), optional. */
+    checkpoint?: { sourceTurnUuid?: string; sourceTurnPrompt?: string; sessionCopyRef?: string }
+  ): AgentRole {
     const trimmedName = name.trim()
     if (trimmedName.length === 0) throw new Error('Role name must not be empty')
     if (rolePrompt.trim().length === 0) throw new Error('Role prompt must not be empty')
@@ -51,7 +57,10 @@ export class RoleStore {
       preset: node.preset,
       command: node.command,
       rolePrompt: rolePrompt.trim(),
-      savedAt: Date.now()
+      savedAt: Date.now(),
+      ...(checkpoint?.sourceTurnUuid ? { sourceTurnUuid: checkpoint.sourceTurnUuid } : {}),
+      ...(checkpoint?.sourceTurnPrompt ? { sourceTurnPrompt: checkpoint.sourceTurnPrompt } : {}),
+      ...(checkpoint?.sessionCopyRef ? { sessionCopyRef: checkpoint.sessionCopyRef } : {})
     }
     mkdirSync(this.dir, { recursive: true })
     writeFileSync(this.fileFor(trimmedName), JSON.stringify(role, null, 2), 'utf8')

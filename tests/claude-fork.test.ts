@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest'
 import type { TurnRecord } from '../src/shared/turn'
 import {
   buildForkedSessionLines,
+  buildForkedSessionLinesForUuids,
   buildResumeCommand,
   buildSessionIdCommand,
   claudeProjectSlug,
@@ -545,5 +546,42 @@ describe('buildResumeForkNotice', () => {
     expect(notice).toContain('"Coder"')
     expect(notice).toContain('turn 2')
     expect(notice).toContain('unaffected')
+  })
+})
+
+describe('buildForkedSessionLinesForUuids (assembled checkpoints)', () => {
+  it('keeps only the selected checkpoint ranges, restamped', () => {
+    const lines = sessionLines(4)
+    const forked = buildForkedSessionLinesForUuids(lines, {
+      newSessionId: 'asm-id',
+      keepUuids: ['u1', 'u3']
+    })
+    const text = forked.join('\n')
+    expect(text).toContain('prompt 1')
+    expect(text).toContain('reply 1')
+    expect(text).not.toContain('prompt 2')
+    expect(text).not.toContain('reply 2')
+    expect(text).toContain('prompt 3')
+    expect(text).toContain('reply 3')
+    expect(text).not.toContain('prompt 4')
+    expect(text).not.toContain('origin-id')
+  })
+
+  it('keeps header records before the first prompt', () => {
+    const forked = buildForkedSessionLinesForUuids(sessionLines(2), {
+      newSessionId: 'asm-id',
+      keepUuids: ['u2']
+    })
+    expect(forked.join('\n')).toContain('file-history-snapshot')
+    expect(forked.join('\n')).not.toContain('prompt 1')
+  })
+
+  it('selects nothing but headers when no uuid matches', () => {
+    const forked = buildForkedSessionLinesForUuids(sessionLines(2), {
+      newSessionId: 'asm-id',
+      keepUuids: ['nope']
+    })
+    expect(forked.join('\n')).not.toContain('prompt 1')
+    expect(forked.join('\n')).not.toContain('prompt 2')
   })
 })
