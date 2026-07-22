@@ -2266,6 +2266,205 @@ body.cookrew-mobile .cookrew-minimap {
   padding: 1px 6px;
 }
 
+/* ---- checkpoint timeline scrollbar (checkpoint-ux-program-spec item 4) ----
+   Replaces the arrow pager: a vertical rail of checkpoint diamonds down the
+   context view. Diamond = a saved checkpoint (same badge language as
+   .cr-ckpt-badge); round pulsing dot = the LIVE head (matches .cr-live-badge).
+   PRESS a node → context jumps + its span highlights; HOVER (desktop) /
+   LONG-PRESS (phone, .acting) → inline SAVE ROLE + FORK AGENT.
+   Fresco owns the visual; Velvet mounts the component + press/scroll sync.
+   Structure:
+     <div class="cr-ckpt-timeline">
+       <button class="cr-ckpt-node live"><span class="cr-ckpt-node-mark"/></button>
+       <button class="cr-ckpt-node [active]" aria-label="Checkpoint 12">
+         <span class="cr-ckpt-node-mark"/>
+         <span class="cr-ckpt-node-actions">
+           <button class="cr-ckpt-action"><CrIcon name="agent"/> ROLE</button>
+           <button class="cr-ckpt-action"><CrIcon name="fork"/> FORK</button>
+         </span>
+       </button>
+     </div>
+   Vertical dark rail on the agent card / overlay; on-cream variant for light. */
+
+.cr-ckpt-timeline {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(9px * var(--z, 1));
+  padding: calc(8px * var(--z, 1)) calc(7px * var(--z, 1));
+  overflow-y: auto;
+  overflow-x: visible;
+}
+
+/* The rail line behind the nodes. */
+.cr-ckpt-timeline::before {
+  content: '';
+  position: absolute;
+  top: calc(8px * var(--z, 1));
+  bottom: calc(8px * var(--z, 1));
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  background: var(--vi-line);
+}
+
+/* One checkpoint node — the hit target (44px on phone). */
+.cr-ckpt-node {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: calc(18px * var(--z, 1));
+  height: calc(18px * var(--z, 1));
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+/* Diamond marker — a saved checkpoint (rotated square, same as the badge). */
+.cr-ckpt-node-mark {
+  width: calc(8px * var(--z, 1));
+  height: calc(8px * var(--z, 1));
+  background: var(--vi-panel);
+  border: 1.5px solid #e7bd63;
+  transform: rotate(45deg);
+  transition:
+    transform 120ms ease,
+    background 120ms ease;
+}
+
+.cr-ckpt-node:hover .cr-ckpt-node-mark {
+  background: var(--amber-soft);
+}
+
+/* Active checkpoint (the one the context is scrolled to): filled + enlarged. */
+.cr-ckpt-node.active .cr-ckpt-node-mark {
+  background: var(--amber);
+  border-color: var(--amber);
+  transform: rotate(45deg) scale(1.4);
+  box-shadow: 0 0 0 calc(3px * var(--z, 1)) rgba(255, 214, 0, 0.22);
+}
+
+/* LIVE head: a round pulsing dot — the running conversation, not a saved
+   point (mirrors the .cr-live-badge dot). */
+.cr-ckpt-node.live .cr-ckpt-node-mark {
+  border-radius: 50%;
+  background: var(--vi-done);
+  border-color: var(--vi-done);
+  transform: none;
+  animation: cr-live-pulse 1.6s ease-in-out infinite;
+}
+
+/* Inline actions — hover (desktop) or long-press (phone → .acting). Popped to
+   the side of the rail so they never cover neighbouring nodes. */
+.cr-ckpt-node-actions {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: calc(4px * var(--z, 1));
+  display: flex;
+  gap: calc(4px * var(--z, 1));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  white-space: nowrap;
+}
+
+.cr-ckpt-node:hover .cr-ckpt-node-actions,
+.cr-ckpt-node:focus-within .cr-ckpt-node-actions,
+.cr-ckpt-node.acting .cr-ckpt-node-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.cr-ckpt-action {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(3px * var(--z, 1));
+  font-family: var(--font-pixel);
+  font-size: calc(7.5px * var(--z, 1));
+  letter-spacing: 0.04em;
+  color: var(--vi-text);
+  background: var(--vi-panel);
+  border: 1px solid var(--vi-line);
+  border-radius: calc(4px * var(--z, 1));
+  padding: calc(3px * var(--z, 1)) calc(6px * var(--z, 1));
+  cursor: pointer;
+}
+
+.cr-ckpt-action:hover {
+  background: #2a2a2e;
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.cr-ckpt-action .cr-icon {
+  width: calc(10px * var(--z, 1));
+  height: calc(10px * var(--z, 1));
+}
+
+/* Active-span highlight in the context view — the text belonging to the
+   selected checkpoint gets an amber band + left rail. Velvet wraps each
+   checkpoint's span; toggles .active as the context scrolls / a node is
+   pressed. */
+.cr-ckpt-span {
+  transition: background 140ms ease;
+}
+
+.cr-ckpt-span.active {
+  background: rgba(255, 214, 0, 0.08);
+  box-shadow: inset 3px 0 0 var(--amber);
+}
+
+/* Cream chrome (picker/mobile-light context): swap dark tokens. */
+.cr-ckpt-timeline.on-cream::before {
+  background: var(--line-soft);
+}
+
+.cr-ckpt-timeline.on-cream .cr-ckpt-node-mark {
+  background: var(--cream-hi);
+  border-color: var(--amber-deep);
+}
+
+.cr-ckpt-timeline.on-cream .cr-ckpt-node.active .cr-ckpt-node-mark {
+  background: var(--amber);
+  border-color: var(--amber-deep);
+}
+
+.cr-ckpt-timeline.on-cream .cr-ckpt-node.live .cr-ckpt-node-mark {
+  background: var(--hp);
+  border-color: var(--hp);
+}
+
+.cr-ckpt-timeline.on-cream .cr-ckpt-action {
+  color: var(--ink);
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+}
+
+.cr-ckpt-timeline.on-cream .cr-ckpt-action:hover {
+  background: var(--amber-soft);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+/* Phone: 44px node hit targets + comfortably tappable inline actions. */
+body.cookrew-mobile .cr-ckpt-node {
+  width: 44px;
+  height: 44px;
+}
+
+body.cookrew-mobile .cr-ckpt-action {
+  font-size: 9px;
+  padding: 8px 10px;
+  min-height: 44px;
+}
+
 /* ---- git visuals (Forge gitInfo shape) ----
    One structural unit — .cr-git — reused on dark agent cards AND cream
    workspace-dir rows; theme-aware via the tokens below. Fresco owns the CSS;

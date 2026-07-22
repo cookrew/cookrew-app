@@ -250,6 +250,30 @@ export class PtySession extends EventEmitter {
     this.tmuxBestEffort(['send-keys', '-t', this.sessionName, '-X', 'cancel'])
   }
 
+  /**
+   * The pane's live scroll position (checkpoint-ux item 2, scroll→step):
+   * tmux scroll_position = lines scrolled UP from the live bottom while in
+   * copy-mode (0 = pinned to bottom but still in copy-mode). Null when the
+   * pane is live (not in copy-mode) or tmux is unavailable.
+   */
+  scrollRow(): number | null {
+    if (!this.usesTmux || this.disposed) return null
+    try {
+      const out = execFileSync(
+        'tmux',
+        ['-L', TMUX_LABEL, 'display-message', '-p', '-t', this.sessionName, '#{scroll_position}'],
+        { stdio: ['ignore', 'pipe', 'ignore'] }
+      )
+        .toString('utf8')
+        .trim()
+      if (out.length === 0) return null // empty outside copy-mode
+      const parsed = parseInt(out, 10)
+      return Number.isNaN(parsed) ? null : parsed
+    } catch {
+      return null
+    }
+  }
+
   private tmuxBestEffort(args: string[]): void {
     try {
       execFileSync('tmux', ['-L', TMUX_LABEL, ...args], { stdio: 'ignore' })

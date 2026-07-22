@@ -45,6 +45,13 @@ export interface TerminalActivity {
    * outside a running turn. Same coordinate space as TurnRecord.scrollLine.
    */
   turnStartLine: number | null
+  /**
+   * The pane's CURRENT scroll position (scroll→step sync): tmux
+   * scroll_position — lines scrolled UP from the live bottom while in
+   * copy-mode (0 = at bottom but still browsing) — null when live/at tail.
+   * Refreshed on the normal activity push cadence, no dedicated channel.
+   */
+  scrollRow: number | null
   /** Epoch ms when the current turn started; null outside a turn. */
   turnStartedAt: number | null
   updatedAt: number

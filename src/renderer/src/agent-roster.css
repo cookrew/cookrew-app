@@ -710,3 +710,31 @@
   color: var(--muted);
   flex: 0 0 auto;
 }
+
+/* ==== checkpoint timeline scrollbar (Velvet structural; Fresco visuals) ==== */
+.popout-terminal-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  position: relative;
+}
+
+.popout-terminal-wrap .popout-terminal {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The checkpoint rail itself is Fresco's .cr-ckpt-timeline kit in styles.css;
+   this only lays out the terminal + rail side by side inside the overlay. */
+
+/* Inline save-role input inside a checkpoint node's action panel. */
+.cr-ckpt-saverole {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cr-ckpt-saverole .tf-input {
+  width: 110px;
+  flex: 0 0 auto;
+}
