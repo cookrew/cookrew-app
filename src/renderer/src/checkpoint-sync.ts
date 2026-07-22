@@ -5,11 +5,13 @@ import type { TurnRecord } from '../../shared/turn'
  * Checkpoint UX adapter (checkpoint-ux-program-spec items 2-3). Two concerns:
  *  - Dual title mode (item 3): conclusion (Sous title) vs precise prompt,
  *    a persisted user preference.
- *  - Context↔checkpoint mapping (item 2): Forge exposes each checkpoint's
- *    first scrollback row as TurnRecord.scrollLine, so the per-checkpoint
- *    spans derive straight from the records the timeline already fetches.
- *    activeIndexForScroll maps a scroll row → checkpoint for the scroll→step
- *    direction (the select→step direction runs via the overlay's ptyJump).
+ *  - Context↔checkpoint mapping (item 2): each checkpoint's monotonic scrollback
+ *    anchor (TurnRecord.scrollLine) plus the live activity.scrollBase give its
+ *    depth in "lines above the live bottom" — the same units as scrollRow.
+ *    activeCheckpointIndex maps a scroll position → checkpoint for scroll→step;
+ *    markerFraction / checkpointProgress drive the you-are-here marker and the
+ *    intra-checkpoint bar. The select→step direction runs via the overlay's
+ *    ptyJump.
  */
 
 // ---- item 3: dual title mode (persisted) ----
@@ -68,44 +70,92 @@ export function gotoCursor(
 
 // ---- item 2: context ↔ checkpoint scroll mapping ----
 
-export interface CheckpointSpan {
-  index: number
-  /** First scrollback row of this checkpoint (0 = oldest). */
-  top: number
-  /** Row span of the checkpoint (to the next checkpoint's top). */
-  height: number
+/**
+ * Coordinates (Forge monotonic contract): everything is in "lines above the
+ * live bottom" — the same units as activity.scrollRow (tmux copy-mode
+ * position). A checkpoint's DEPTH is `scrollBase − scrollLine`, where
+ * scrollBase is the current tmux history_size and scrollLine was history_size
+ * at the checkpoint's turn start. Older checkpoints have larger depth; the
+ * newest sits just above the bottom, its content running down to the next-
+ * newer prompt (or the live bottom).
+ */
+export type Depthed = { index: number; scrollLine?: number }
+
+function depthOf(scrollLine: number, scrollBase: number): number {
+  return Math.max(0, scrollBase - scrollLine)
 }
 
 /**
- * Build per-checkpoint scrollback spans from records carrying Forge's
- * `scrollLine`. Records without an offset are skipped (best-effort — the
- * tracker may not have seen a turn's start); spans are ascending by `top`,
- * each running to the next checkpoint's top.
+ * The checkpoint whose content contains a scroll position (lines above the
+ * bottom): the smallest depth still greater than `scrollRow` (its prompt is
+ * the nearest boundary above you); when scrolled past the oldest, the oldest.
+ * Null without mapping data. Pure — unit-tested.
  */
-export function spansFromRecords(
-  records: readonly { index: number; scrollLine?: number }[]
-): CheckpointSpan[] {
-  const withOffset = records
-    .filter((r): r is { index: number; scrollLine: number } => typeof r.scrollLine === 'number')
-    .sort((a, b) => a.scrollLine - b.scrollLine)
-  return withOffset.map((r, i) => ({
-    index: r.index,
-    top: r.scrollLine,
-    height: (withOffset[i + 1]?.scrollLine ?? r.scrollLine + 1) - r.scrollLine
-  }))
-}
-
-/**
- * Which checkpoint index owns a given scrollback row — the last span whose
- * `top` is at or above the row (spans are ascending by `top`). Returns null
- * when the map is empty. Pure so the scroll→checkpoint stepping is unit-tested.
- */
-export function activeIndexForScroll(spans: CheckpointSpan[], row: number): number | null {
-  if (spans.length === 0) return null
-  let active = spans[0].index
-  for (const span of spans) {
-    if (span.top <= row) active = span.index
-    else break
+export function activeCheckpointIndex(
+  records: readonly Depthed[],
+  scrollBase: number | null,
+  scrollRow: number
+): number | null {
+  if (scrollBase === null) return null
+  let chosen: number | null = null
+  let chosenDepth = Number.POSITIVE_INFINITY
+  let oldest: number | null = null
+  let oldestDepth = -1
+  for (const r of records) {
+    if (r.scrollLine === undefined) continue
+    const d = depthOf(r.scrollLine, scrollBase)
+    if (d > scrollRow && d < chosenDepth) {
+      chosenDepth = d
+      chosen = r.index
+    }
+    if (d > oldestDepth) {
+      oldestDepth = d
+      oldest = r.index
+    }
   }
-  return active
+  return chosen ?? oldest
+}
+
+/**
+ * Marker fraction over the rail (0 = oldest/top, 1 = live bottom). scrollRow=0
+ * → 1; fully scrolled up (scrollRow ≈ scrollBase) → 0.
+ */
+export function markerFraction(scrollRow: number | null, scrollBase: number | null): number {
+  if (scrollRow === null || scrollBase === null || scrollBase <= 0) return 1
+  return Math.max(0, Math.min(1, 1 - scrollRow / scrollBase))
+}
+
+/**
+ * Progress (0..1) scrolled through a checkpoint's content — from its own depth
+ * down to the next-newer checkpoint's prompt (or the bottom).
+ */
+export function checkpointProgress(
+  records: readonly Depthed[],
+  index: number,
+  scrollBase: number | null,
+  scrollRow: number | null
+): number {
+  if (scrollBase === null || scrollRow === null) return 0
+  const target = records.find((r) => r.index === index)
+  if (!target || target.scrollLine === undefined) return 0
+  const dN = depthOf(target.scrollLine, scrollBase)
+  let floor = 0
+  for (const r of records) {
+    if (r.scrollLine === undefined) continue
+    const d = depthOf(r.scrollLine, scrollBase)
+    if (d < dN && d > floor) floor = d
+  }
+  if (dN <= floor) return 0
+  return Math.max(0, Math.min(1, (scrollRow - floor) / (dN - floor)))
+}
+
+/** scrollRow a jump to a checkpoint is expected to echo = the checkpoint depth. */
+export function checkpointDepth(
+  records: readonly Depthed[],
+  index: number,
+  scrollBase: number | null
+): number | null {
+  if (scrollBase === null) return null
+  const r = records.find((x) => x.index === index)
+  return r && r.scrollLine !== undefined ? depthOf(r.scrollLine, scrollBase) : null
 }

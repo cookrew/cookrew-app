@@ -724,7 +724,7 @@
   min-width: 0;
 }
 
-/* The checkpoint rail itself is Fresco's .cr-ckpt-timeline kit in styles.css;
+/* The checkpoint rail itself is Fresco's .cr-ckpt-rail (v5) kit in styles.css;
    this only lays out the terminal + rail side by side inside the overlay. */
 
 /* Inline save-role input inside a checkpoint node's action panel. */

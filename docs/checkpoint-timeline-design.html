@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Checkpoint Timeline — design v3 (offset minimap)</title>
+<title>Checkpoint Timeline — design v5 (line + count)</title>
 <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=JetBrains+Mono:wght@400;600&family=VT323&display=swap" rel="stylesheet" />
 <style>
   :root {
@@ -15,7 +15,7 @@
   * { box-sizing:border-box; }
   body { margin:0; background:#0c0c0e; color:#f5f5f7; font-family:var(--font-mono);
          min-height:100vh; display:flex; flex-direction:column; align-items:center; gap:14px; padding:24px 20px 56px; }
-  .lede { max-width:760px; text-align:center; }
+  .lede { max-width:780px; text-align:center; }
   h1 { font-family:var(--font-pixel); font-size:15px; letter-spacing:.1em; color:var(--amber); margin:0 0 6px; }
   .sub { font-size:12.5px; line-height:1.6; color:var(--vi-dim); margin:0; }
   .hint { font-size:11px; color:var(--muted); margin:2px 0 0; }
@@ -23,7 +23,7 @@
   /* ---- terminal / context window ---- */
   .overlay { position:relative; width:min(760px, 96vw); height:480px; background:var(--phos-bg);
              border:2px solid var(--ink); overflow:hidden; box-shadow:6px 6px 0 var(--amber-deep); }
-  .term { position:absolute; inset:0; padding:16px 46px 16px 20px; overflow-y:auto;
+  .term { position:absolute; inset:0; padding:16px 40px 16px 20px; overflow-y:auto;
           font-family:var(--font-screen); font-size:17px; line-height:1.28; color:var(--phos); }
   .term::-webkit-scrollbar { width:0; }
   .term .you { color:#ffd77a; } .term .dim { color:var(--phos-dim); }
@@ -33,47 +33,51 @@
     background:repeating-linear-gradient(to bottom, rgba(255,255,255,.025) 0 1px, transparent 1px 3px); }
 
   /* ---- hover zone on the right edge ---- */
-  .zone { position:absolute; top:0; right:0; bottom:0; width:44px; z-index:3; }
+  .zone { position:absolute; top:0; right:0; bottom:0; width:30px; z-index:3; transition:width 160ms ease; }
   .zone:hover, .overlay.open .zone { width:360px; max-width:84%; }
 
-  /* COLLAPSED = a minimap: a vertical line with dots placed by each
-     checkpoint's REAL scroll position, plus a viewport band tracking what's
-     on screen. LIVE dot at the bottom. */
-  .mini { position:absolute; top:0; right:0; bottom:0; width:44px; overflow:hidden;
-          transition:opacity 130ms ease; }
-  .mini::before { content:''; position:absolute; top:12px; bottom:12px; right:9px; width:2px;
-                  background:linear-gradient(var(--vi-line), #3a3a40); border-radius:2px; }
+  /* COLLAPSED = ONE clean vertical line + the checkpoint count. A single
+     amber "you are here" marker rides the line at the active fraction; a
+     green LIVE dot sits at the bottom. No per-checkpoint dots — nothing to
+     distort, and it stays calm until you reach for it. */
+  .mini { position:absolute; top:0; right:0; bottom:0; width:30px; transition:opacity 130ms ease; }
+  .mini .line { position:absolute; top:16px; bottom:16px; right:14px; width:2px; border-radius:2px;
+                background:linear-gradient(var(--vi-line), #3a3a40); }
+  .mini .count { position:absolute; top:14px; right:7px; display:flex; flex-direction:column; align-items:center; gap:1px;
+                 font-family:var(--font-pixel); color:var(--amber-deep); }
+  .mini .count .n { font-size:12px; color:var(--amber); text-shadow:0 0 6px rgba(255,214,0,.4); }
+  .mini .count .l { font-size:5.5px; letter-spacing:.06em; }
+  .mini .here { position:absolute; right:9px; width:12px; height:12px; transform:translateY(-50%);
+                border-radius:50%; background:var(--amber); border:2px solid var(--phos-bg);
+                box-shadow:0 0 0 3px rgba(255,214,0,.20); transition:top 160ms ease; }
+  .mini .live { position:absolute; right:10px; bottom:14px; width:9px; height:9px; border-radius:50%;
+                background:var(--vi-done); animation:pulse 1.6s ease-in-out infinite; }
   .zone:hover .mini, .overlay.open .mini { opacity:0; pointer-events:none; }
-  /* the visible-range band (real scroll offset → height/position) */
-  .viewport { position:absolute; right:4px; width:12px; border-radius:6px;
-              background:rgba(255,214,0,.10); border:1px solid rgba(255,214,0,.30); pointer-events:none; }
-  .tick { position:absolute; right:2px; width:16px; height:16px; transform:translateY(-50%);
-          display:grid; place-items:center; }
-  .tick i { width:6px; height:6px; border-radius:50%; background:#3f3a2c; border:1.5px solid #7a6a3a; }
-  .tick.active i { width:11px; height:11px; background:var(--amber); border-color:var(--amber);
-                   box-shadow:0 0 0 3px rgba(255,214,0,.20); }
-  .tick.live i { width:9px; height:9px; background:var(--vi-done); border-color:var(--vi-done);
-                 animation:pulse 1.6s ease-in-out infinite; }
   @keyframes pulse { 0%,100%{box-shadow:0 0 0 0 rgba(50,215,75,.5)} 50%{box-shadow:0 0 0 5px rgba(50,215,75,0)} }
 
-  /* EXPANDED fan: dots stay right, titles fan left, LIVE bottom. Rows sit at
-     the same proportional positions as the minimap (real offset), so opening
-     the fan preserves where each checkpoint lives. */
+  /* EXPANDED fan (on approach): even chapter list — dots right, titles left,
+     LIVE bottom, active row shows intra-checkpoint progress. */
   .full { position:absolute; top:0; right:0; bottom:0; width:360px; max-width:100%;
           background:linear-gradient(to left, rgba(20,20,23,.985), rgba(20,20,23,.9) 82%, rgba(20,20,23,.5));
-          opacity:0; pointer-events:none; transition:opacity 130ms ease; overflow:hidden; }
+          display:flex; flex-direction:column; opacity:0; pointer-events:none; transition:opacity 130ms ease; }
   .zone:hover .full, .overlay.open .full { opacity:1; pointer-events:auto; }
-  .full-scroll { position:absolute; inset:0; overflow-y:auto; }
-  .full-scroll::-webkit-scrollbar { width:0; }
-  .full-inner { position:relative; }
-  .full .viewport { right:4px; }
+  .full-head { display:flex; align-items:center; gap:8px; padding:9px 14px; flex:0 0 auto;
+               background:var(--vi-panel); border-bottom:1.5px solid var(--vi-line); }
+  .full-head .t { font-family:var(--font-pixel); font-size:10px; letter-spacing:.08em; color:var(--vi-text); }
+  .full-head .c { margin-left:auto; font-family:var(--font-mono); font-size:10px; color:var(--vi-dim); }
+  .full-list { flex:1; overflow-y:auto; display:flex; flex-direction:column; padding:6px 0; }
+  .full-list::-webkit-scrollbar { width:0; }
 
-  .row { position:absolute; right:0; transform:translateY(-50%);
-         display:flex; align-items:center; justify-content:flex-end; gap:10px;
-         padding:4px 14px 4px 12px; cursor:pointer; max-width:100%; }
-  .row:hover { background:rgba(255,255,255,.05); border-radius:4px 0 0 4px; }
-  .row.active .dot i { width:12px; height:12px; background:var(--amber); border-color:var(--amber);
-                       box-shadow:0 0 0 3px rgba(255,214,0,.22); }
+  .row { display:flex; align-items:center; justify-content:flex-end; gap:10px;
+         padding:7px 14px 7px 12px; cursor:pointer; position:relative; }
+  .row:hover { background:rgba(255,255,255,.05); }
+  .row.active { background:rgba(255,214,0,.07); }
+  .row.active::after { content:''; position:absolute; right:0; top:0; bottom:0; width:3px; background:var(--amber); }
+  .r-prog { position:absolute; left:12px; right:38px; bottom:3px; height:2px; background:rgba(255,255,255,.08);
+            border-radius:2px; display:none; }
+  .row.active .r-prog { display:block; }
+  .r-prog::before { content:''; position:absolute; left:0; top:0; bottom:0; width:calc(var(--p,0)*1%);
+                    background:var(--amber); border-radius:2px; }
   .r-actions { display:flex; gap:5px; opacity:0; transition:opacity 110ms ease; }
   .row:hover .r-actions, .row:focus-within .r-actions { opacity:1; }
   .r-label { display:flex; align-items:baseline; gap:7px; min-width:0; }
@@ -82,8 +86,10 @@
              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:right; }
   .row.active .r-title { color:#fff; font-weight:600; }
   .row.live .r-idx { color:var(--vi-done); } .row.live .r-title { color:var(--vi-dim); }
+  /* clean fixed-size dots — display:block so they can never stretch */
   .dot { flex:0 0 auto; width:16px; height:16px; display:grid; place-items:center; }
-  .dot i { width:7px; height:7px; border-radius:50%; background:var(--vi-panel); border:2px solid #b78e2e; }
+  .dot i { display:block; width:7px; height:7px; border-radius:50%; background:var(--vi-panel); border:2px solid #b78e2e; }
+  .row.active .dot i { width:12px; height:12px; background:var(--amber); border-color:var(--amber); box-shadow:0 0 0 3px rgba(255,214,0,.22); }
   .row.live .dot i { background:var(--vi-done); border-color:var(--vi-done); animation:pulse 1.6s ease-in-out infinite; }
   .act { display:inline-flex; align-items:center; gap:4px; font-family:var(--font-pixel); font-size:7.5px;
          letter-spacing:.03em; color:var(--vi-text); background:var(--vi-panel); border:1px solid var(--vi-line);
@@ -97,16 +103,16 @@
   .toggle { font-family:var(--font-pixel); font-size:9px; letter-spacing:.08em; color:var(--ink); background:var(--amber);
             border:2px solid var(--ink); box-shadow:2px 2px 0 var(--ink); padding:7px 12px; cursor:pointer; }
   footer { font-size:10.5px; color:var(--muted); text-align:center; }
-  @media (max-width:700px){ .zone{width:52px;} .act{padding:9px 11px;min-height:44px;} }
+  @media (max-width:700px){ .zone{width:40px;} .act{padding:9px 11px;min-height:44px;} }
 </style>
 </head>
 <body>
   <div class="lede">
-    <h1>Checkpoint Timeline — design v3 · offset minimap</h1>
-    <p class="sub">The rail is now a <b>true minimap</b>: each dot sits at the checkpoint's <b>real position in the scrollable
-      context</b>, and the amber band shows what's on screen. <b>Scroll the terminal</b> — the band + active dot move with it.
-      Slide to the right edge to fan open (dots right, titles left, LIVE bottom); hover a row → ROLE / FORK.</p>
-    <p class="hint">Scroll the black window ↕ · slide to the right edge → fans open · click a dot/row → jumps + highlights.</p>
+    <h1>Checkpoint Timeline — design v5 · line + count</h1>
+    <p class="sub">At rest it's <b>one clean vertical line + the checkpoint count</b> — a single amber marker rides the line
+      at where you are, green LIVE at the bottom. No per-checkpoint dots (nothing to distort). <b>Approach the right edge</b>
+      and it fans into the full list — dots right, titles left, LIVE bottom, active row shows how far through it you are.</p>
+    <p class="hint">Scroll the black window ↕ — the amber marker + count follow · slide to the right edge → fans open · click a row → jumps.</p>
   </div>
 
   <button class="toggle" id="toggle">TOGGLE FANNED (static preview)</button>
@@ -115,102 +121,90 @@
     <div class="term" id="term"></div>
     <div class="scanline"></div>
     <div class="zone">
-      <div class="mini" id="mini"><div class="viewport" id="vpMini"></div></div>
-      <div class="full"><div class="full-scroll" id="fullScroll"><div class="full-inner" id="fullInner">
-        <div class="viewport" id="vpFull"></div>
-      </div></div></div>
+      <div class="mini">
+        <div class="line"></div>
+        <div class="count"><span class="n" id="cnum">12</span><span class="l">CP</span></div>
+        <div class="here" id="here"></div>
+        <div class="live"></div>
+      </div>
+      <div class="full">
+        <div class="full-head"><span class="t">CHECKPOINTS</span><span class="c" id="ccount"></span></div>
+        <div class="full-list" id="list"></div>
+      </div>
     </div>
   </div>
 
   <div class="legend">
-    <span><b>● amber</b> = saved checkpoint</span>
-    <span><b>▮ band</b> = on-screen range (live)</span>
-    <span><b>◉ big amber</b> = active</span>
-    <span><b>● green</b> = LIVE (bottom)</span>
+    <span><b>| line + N</b> = the timeline at rest (count only)</span>
+    <span><b>● amber</b> = you are here</span>
+    <span><b>● green</b> = LIVE</span>
   </div>
-  <footer>Cookrew · checkpoint-ux item 4 · Fresco visual v3 — real-offset minimap (mocked from live DOM). Tell me what to adjust.</footer>
+  <footer>Cookrew · checkpoint-ux item 4 · Fresco visual v5 — line + count at rest, fan on approach. Tell me what to adjust.</footer>
 
 <script>
   const ICON = {
     agent:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="2.9" y="5.2" width="10.2" height="8" rx="1.4"/><rect x="5.5" y="8" width="1.7" height="1.7" fill="currentColor" stroke="none"/><rect x="8.8" y="8" width="1.7" height="1.7" fill="currentColor" stroke="none"/><path d="M8 5.2 V3.2"/><circle cx="8" cy="2.4" r="1" fill="currentColor" stroke="none"/></svg>',
     fork:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="4.4" cy="3.4" r="1.7"/><circle cx="11.6" cy="3.4" r="1.7"/><circle cx="8" cy="12.6" r="1.7"/><path d="M4.4 5.1 C 4.4 8.2 8 7.6 8 10.9 M11.6 5.1 C 11.6 8.2 8 7.6 8 10.9"/></svg>'
   };
-  // [title, replyLineCount] — varying heights so the minimap spacing is uneven (real offsets)
   const CHECKPOINTS = [
-    ['Logo component implementation',2],['Set app icon to two-finger yes',5],['Update geometry for hand rendering',3],
-    ['Baby hand shape adjustments',6],['Committing changes with notes',2],['Icon design complete; ready for merge',4],
-    ['Design status icons for coding agents',7],['Agent avatar — replaced grid',3],['Agent avatar — baby fingers play coin',8],
-    ['Re-designing Claude/Codex/OpenCode',4],['Rule: no dev server, phones need build',3],['Checkpoint timeline scrollbar',6]
+    ['Logo component implementation',2],['Set app icon to two-finger yes',4],['Update geometry for hand rendering',3],
+    ['Baby hand shape adjustments',5],['Committing changes with notes',2],['Icon design complete; ready for merge',3],
+    ['Design status icons for coding agents',4],['Agent avatar — replaced grid',3],['Agent avatar — baby fingers play coin',26],
+    ['Re-designing Claude/Codex/OpenCode',4],['Rule: no dev server, phones need build',3],['Checkpoint timeline scrollbar',5]
   ];
-  let active = 8;
+  let active = -1;
 
-  // ---- render the scrollable context with varying-height blocks ----
   const term = document.getElementById('term');
   function block(t,i,n){
-    let s = `<span class="cp-span${i===active?' active':''}" data-i="${i}"><span class="you">you@cookrew ~ $</span> ${t}\n`;
-    for (let k=0;k<n;k++) s += `<span class="dim">  &#8985; …working… line ${k+1} of turn ${i+1}</span>\n`;
+    let s = `<span class="cp-span" data-i="${i}"><span class="you">you@cookrew ~ $</span> ${t}\n`;
+    for (let k=0;k<n;k++) s += `<span class="dim">  &#8985; …working… line ${k+1} / ${n} of turn ${i+1}</span>\n`;
     s += `<span class="dim">  &#8985; checkpoint T${i+1} recorded</span></span>`;
     return s;
   }
   term.innerHTML = CHECKPOINTS.map(([t,n],i)=>block(t,i,n)).join('\n') + `\n<span class="cp-span" id="liveSpan"><span class="dim">● live — running now, awaiting next prompt</span></span>`;
-
-  const mini = document.getElementById('mini'), vpMini = document.getElementById('vpMini');
-  const fullInner = document.getElementById('fullInner'), fullScroll = document.getElementById('fullScroll'), vpFull = document.getElementById('vpFull');
   const spans = [...term.querySelectorAll('.cp-span[data-i]')];
-  const liveSpan = document.getElementById('liveSpan');
 
-  // ---- lay dots + fanned rows out by REAL offsetTop within the context ----
-  function frac(el){ return (el.offsetTop + el.offsetHeight*0.28) / term.scrollHeight; } // point near each block's start
-  function layout(){
-    const railTop=12, railBot=12, H=mini.clientHeight-railTop-railBot;
-    mini.querySelectorAll('.tick').forEach(t=>t.remove());
-    // fanned rows: absolute, positioned by the same fraction over a tall inner
-    fullInner.style.height = term.scrollHeight + 'px';
-    fullInner.querySelectorAll('.row').forEach(r=>r.remove());
+  document.getElementById('cnum').textContent = CHECKPOINTS.length;
+  document.getElementById('ccount').textContent = 'LIVE · ' + CHECKPOINTS.length;
+  const here = document.getElementById('here'), mini = document.querySelector('.mini');
 
-    const add=(f,cls,idx,title,live)=>{
-      const y = railTop + f*H;
-      const tick=document.createElement('span'); tick.className='tick '+cls; tick.style.top=y+'px';
-      if(idx!=null) tick.dataset.i=idx; tick.innerHTML='<i></i>'; mini.appendChild(tick);
+  // fanned rows
+  const list = document.getElementById('list');
+  let lh='';
+  CHECKPOINTS.forEach(([t],i)=>{
+    lh += `<div class="row" data-i="${i}" role="button" tabindex="0">
+      <span class="r-actions"><button class="act">${ICON.agent} ROLE</button><button class="act">${ICON.fork} FORK</button></span>
+      <span class="r-label"><span class="r-idx">T${i+1}</span><span class="r-title">${t}</span></span>
+      <span class="dot"><i></i></span><span class="r-prog"></span></div>`;
+  });
+  lh += `<div class="row live"><span class="r-label"><span class="r-idx">LIVE</span><span class="r-title">running now</span></span><span class="dot"><i></i></span></div>`;
+  list.innerHTML = lh;
+  const rows = [...list.querySelectorAll('.row[data-i]')];
 
-      const row=document.createElement('div'); row.className='row '+cls; row.style.top=(f*term.scrollHeight)+'px';
-      if(idx!=null){ row.dataset.i=idx; row.setAttribute('role','button'); row.tabIndex=0; }
-      row.innerHTML = (live?'':`<span class="r-actions"><button class="act">${ICON.agent} ROLE</button><button class="act">${ICON.fork} FORK</button></span>`)
-        + `<span class="r-label"><span class="r-idx">${live?'LIVE':'T'+(idx+1)}</span><span class="r-title">${title}</span></span><span class="dot"><i></i></span>`;
-      fullInner.appendChild(row);
-    };
-    spans.forEach((s,i)=> add(frac(s), i===active?'active':'', i, CHECKPOINTS[i][0], false));
-    add(0.999,'live',null,'running now',true);
-    updateViewport();
-  }
-
-  function updateViewport(){
-    const H=term.scrollHeight, vh=term.clientHeight, st=term.scrollTop;
-    const railTop=12, railH=mini.clientHeight-24;
-    vpMini.style.top=(railTop+ st/H*railH)+'px'; vpMini.style.height=Math.max(14, vh/H*railH)+'px';
-    vpFull.style.top=(st/H*term.scrollHeight)+'px'; vpFull.style.height=vh+'px';
-    // active = the checkpoint whose block contains the viewport centre
-    const centre = st + vh*0.35;
-    let best=0; spans.forEach((s,i)=>{ if(s.offsetTop<=centre) best=i; });
-    if(best!==active){ active=best;
-      document.querySelectorAll('.tick,.row').forEach(el=>el.classList.toggle('active', el.dataset.i!==undefined && +el.dataset.i===active));
-      spans.forEach((s,i)=>s.classList.toggle('active', i===active));
+  function sync(){
+    const st = term.scrollTop, vh = term.clientHeight;
+    const probe = st + vh*0.30;
+    let idx = 0; spans.forEach((s,i)=>{ if (s.offsetTop <= probe) idx = i; });
+    const s = spans[idx];
+    const p = Math.max(0, Math.min(100, ((probe - s.offsetTop) / s.offsetHeight) * 100));
+    // collapsed marker: position by (checkpoint index + intra progress) / total
+    const railTop=16, railH=mini.clientHeight-32;
+    const frac = (idx + p/100) / CHECKPOINTS.length;
+    here.style.top = (railTop + frac*railH) + 'px';
+    if (idx !== active) {
+      active = idx;
+      rows.forEach((r,i)=>r.classList.toggle('active', i===idx));
+      spans.forEach((sp,i)=>sp.classList.toggle('active', i===idx));
     }
+    rows[idx]?.querySelector('.r-prog')?.style.setProperty('--p', p.toFixed(1));
   }
 
-  layout();
-  window.addEventListener('resize', layout);
-  term.addEventListener('scroll', updateViewport);
-  fullScroll.addEventListener('scroll', ()=>{ term.scrollTop = fullScroll.scrollTop; }); // fan scroll drives context
-  // keep the fan scroll roughly synced when the context scrolls
-  term.addEventListener('scroll', ()=>{ if(document.getElementById('overlay').matches(':hover,.open')) fullScroll.scrollTop=term.scrollTop; });
-
-  function jump(i){ spans[i]?.scrollIntoView({behavior:'smooth', block:'center'}); }
-  mini.addEventListener('click', e=>{ const t=e.target.closest('.tick[data-i]'); if(t) jump(+t.dataset.i); });
-  fullInner.addEventListener('click', e=>{ if(e.target.closest('.act'))return; const r=e.target.closest('.row[data-i]'); if(r) jump(+r.dataset.i); });
+  function jump(i){ spans[i]?.scrollIntoView({behavior:'smooth', block:'start'}); }
+  list.addEventListener('click', e=>{ if(e.target.closest('.act'))return; const r=e.target.closest('.row[data-i]'); if(r) jump(+r.dataset.i); });
+  term.addEventListener('scroll', sync);
+  window.addEventListener('resize', sync);
   document.getElementById('toggle').addEventListener('click', ()=>document.getElementById('overlay').classList.toggle('open'));
-  // start scrolled to the active checkpoint
-  requestAnimationFrame(()=>{ spans[active]?.scrollIntoView({block:'center'}); });
+  requestAnimationFrame(()=>{ term.scrollTop = spans[8].offsetTop + spans[8].offsetHeight*0.45 - term.clientHeight*0.30; sync(); });
 </script>
 </body>
 </html>

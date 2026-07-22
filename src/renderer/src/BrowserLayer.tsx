@@ -11,7 +11,7 @@ import { cookrew, hasNativeWebview } from './api'
 import { canCapture, initialBackoff, recordFailure, recordSuccess } from './capture-backoff'
 import { isSelfEmbedding } from './self-embed'
 import type { ScreenRect } from './zoom-lod'
-import { useLodLayout } from './zoom-lod'
+import type { LodLayout } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
 import { CrIcon } from './icons'
 
@@ -31,6 +31,8 @@ type WebviewElement = HTMLElement & {
 }
 
 interface BrowserLayerProps {
+  /** SHARED overlay arbitration (App-owned, spans terminals + browsers). */
+  lod: LodLayout
   browsers: BrowserNodeData[]
   onThumb: (id: string, dataUrl: string) => void
 }
@@ -45,9 +47,11 @@ interface BrowserLayerProps {
  * session partition. Thumbnails come from periodic capturePage() snapshots
  * of the active tab.
  */
-export function BrowserLayer({ browsers, onThumb }: BrowserLayerProps): React.JSX.Element {
+export function BrowserLayer({ browsers, lod, onThumb }: BrowserLayerProps): React.JSX.Element {
   usePopupTabOpener(browsers)
-  const { activeIds, rects } = useLodLayout(browsers)
+  // SHARED arbitration with terminal overlays (Magpie E2: a per-kind hook
+  // let a browser view stack over the zoomed terminal and steal every tap).
+  const { activeIds, rects } = lod
   return (
     <>
       {browsers.map((p) => (

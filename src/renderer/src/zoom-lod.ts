@@ -23,6 +23,23 @@ interface LodNode {
   size: CanvasSize
 }
 
+/** The id with the highest recorded coverage; first wins ties (stable). */
+export function mostCovered(
+  ids: Iterable<string>,
+  coverages: Record<string, number>
+): string | null {
+  let best: string | null = null
+  let bestCoverage = -1
+  for (const id of ids) {
+    const coverage = coverages[id] ?? 0
+    if (coverage > bestCoverage) {
+      best = id
+      bestCoverage = coverage
+    }
+  }
+  return best
+}
+
 /** Enter/exit hysteresis so the full view doesn't flicker at the boundary. */
 const ENTER_COVERAGE = 0.8
 const EXIT_COVERAGE = 0.72
@@ -48,12 +65,20 @@ function useViewportSettled(): boolean {
  * entering waits for the viewport to settle, so the zoom animation plays on
  * the thumbnail and the full view fades in at the end.
  */
-export function useLodLayout(nodes: LodNode[]): {
+export interface LodLayout {
   activeIds: Set<string>
   rects: Record<string, ScreenRect>
   /** Most-covered active node — the one a single shared composer targets. */
   primaryId: string | null
-} {
+}
+
+/**
+ * ONE instance arbitrates ALL full-view overlays (terminals AND browsers —
+ * Magpie E2: two per-kind instances each picked their own remote winner, so
+ * a browser view stacked over the terminal overlay and stole every tap).
+ * App owns the single call over the combined node list; layers consume it.
+ */
+export function useLodLayout(nodes: LodNode[]): LodLayout {
   const { x: vx, y: vy, zoom } = useViewport()
   const paneWidth = useStore((s) => s.width)
   const paneHeight = useStore((s) => s.height)
@@ -101,9 +126,7 @@ export function useLodLayout(nodes: LodNode[]): {
   // Only the best-covered card mounts; the overlay's ResizeObserver then
   // refits the terminal (PTY resize) to the phone size.
   if (isRemoteMode() && activeIds.size > 0) {
-    const selected = [...activeIds].reduce((best, id) =>
-      (coverages[id] ?? 0) > (coverages[best] ?? 0) ? id : best
-    )
+    const selected = mostCovered(activeIds, coverages) as string
     const only = new Set([selected])
     rects[selected] = { x: bounds.left, y: bounds.top, width: paneWidth, height: paneHeight }
     prevActive.current = only
@@ -111,11 +134,6 @@ export function useLodLayout(nodes: LodNode[]): {
   }
 
   prevActive.current = activeIds
-  const primaryId =
-    activeIds.size > 0
-      ? [...activeIds].reduce((best, id) =>
-          (coverages[id] ?? 0) > (coverages[best] ?? 0) ? id : best
-        )
-      : null
+  const primaryId = mostCovered(activeIds, coverages)
   return { activeIds, rects, primaryId }
 }

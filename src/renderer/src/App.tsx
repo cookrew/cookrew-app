@@ -24,6 +24,7 @@ import { CableEdge } from './CableEdge'
 import { Header } from './Header'
 import { Dock } from './Dock'
 import { TerminalOverlayLayer } from './TerminalOverlay'
+import { useLodLayout } from './zoom-lod'
 import { BrowserLayer } from './BrowserLayer'
 import { CanvasUiContext, ToolId } from './canvas-ui'
 import { useBrowserEngine } from './browser-engine'
@@ -37,6 +38,14 @@ import { MetricsPanel } from './MetricsPanel'
 
 /** Phone companion parity: widen the snap magnet for finger-driven gestures. */
 const snapRadiusPx = window.matchMedia('(pointer: coarse)').matches ? TOUCH_SNAP_PX : MOUSE_SNAP_PX
+
+/** Two viewports are "the same" when restoring one wouldn't move the canvas. */
+function sameViewport(
+  a: { x: number; y: number; zoom: number },
+  b: { x: number; y: number; zoom: number }
+): boolean {
+  return Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) < 1 && Math.abs(a.zoom - b.zoom) < 0.01
+}
 
 const nodeTypes = { terminal: TerminalNode, note: NoteNode, browser: BrowserNode }
 const edgeTypes = { cable: CableEdge }
@@ -99,6 +108,9 @@ function Canvas(): React.JSX.Element {
   const prevViewportRef = useRef<{ x: number; y: number; zoom: number } | null>(null)
   /** Node currently zoomed into full view — drives layered ⌘W. */
   const zoomedNodeIdRef = useRef<string | null>(null)
+  /** Mirror of zoomedTerminalId so callbacks/handlers can read it fresh. */
+  const zoomedTerminalIdRef = useRef<string | null>(null)
+  zoomedTerminalIdRef.current = zoomedTerminalId
   /** Latest ⌘W handler; a stable subscription calls through this ref. */
   const cmdWRef = useRef<() => void>(() => undefined)
 
@@ -157,9 +169,14 @@ function Canvas(): React.JSX.Element {
   const zoomToNode = useCallback(
     (id: string, rect?: { x: number; y: number; width: number; height: number }) => {
       // Save the return point only when not already mid-zoom: a second click
-      // during the animation (or on another card) must not clobber the
-      // original overview viewport that ⤢ CANVAS goes back to.
-      if (!prevViewportRef.current) prevViewportRef.current = reactFlow.getViewport()
+      // (or a click after a reload that landed already zoomed, with a terminal
+      // overlay covering the stage) must NOT persist a zoomed viewport as the
+      // "back" target — that makes ⤢/ESC restore another zoomed state, an
+      // inescapable loop (Magpie E2). Leaving it null falls Back back to
+      // fitView instead.
+      if (!prevViewportRef.current && !zoomedTerminalIdRef.current) {
+        prevViewportRef.current = reactFlow.getViewport()
+      }
       zoomedNodeIdRef.current = id
       // A just-created node may not be in the React Flow store yet (its
       // workspace broadcast is still in flight) — fitView can't find it, so
@@ -177,7 +194,10 @@ function Canvas(): React.JSX.Element {
     const previous = prevViewportRef.current
     prevViewportRef.current = null
     zoomedNodeIdRef.current = null
-    if (previous) {
+    // Restoring a saved viewport that equals the current one wouldn't move the
+    // canvas — we'd stay zoomed (the loop). Fall back to fitView so Back always
+    // escapes to the overview.
+    if (previous && !sameViewport(previous, reactFlow.getViewport())) {
       void reactFlow.setViewport(previous, { duration: 450 })
     } else {
       void reactFlow.fitView({ duration: 450, padding: 0.1 })
@@ -219,10 +239,15 @@ function Canvas(): React.JSX.Element {
     return () => clearInterval(timer)
   }, [])
 
-  // ESC leaves a zoomed-in card back to the canvas overview.
+  // ESC dismisses the top overlay: modal panels (team fork / roster / metrics /
+  // directory manager) self-handle it in the capture phase; this bubble-phase
+  // handler is the last resort that leaves a zoomed-in card back to the canvas
+  // overview. Fires whenever anything is covering the stage — a zoomed node OR
+  // a live terminal overlay (which can outlast zoomedNodeIdRef after a reload)
+  // — so ESC always escapes, even from the mid-zoom loop above.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' && zoomedNodeIdRef.current) {
+      if (e.key === 'Escape' && (zoomedNodeIdRef.current || zoomedTerminalIdRef.current)) {
         e.preventDefault()
         zoomBack()
       }
@@ -372,6 +397,11 @@ function Canvas(): React.JSX.Element {
   const terminals = (workspace?.nodes.filter((n) => n.kind === 'terminal') ??
     []) as TerminalNodeData[]
   const browsers = (workspace?.nodes.filter((n) => n.kind === 'browser') ?? []) as BrowserNodeData[]
+  // ONE shared overlay arbitration across terminals AND browsers — per-kind
+  // instances each picked their own remote fullscreen winner, stacking a
+  // browser view over the zoomed terminal (Magpie E2 HIGH 2).
+  const overlayNodes = useMemo(() => [...terminals, ...browsers], [terminals, browsers])
+  const lod = useLodLayout(overlayNodes)
   const busyCount = terminals.filter((t) => activities[t.id]?.phase === 'thinking').length
   const attentionCount = terminals.filter((t) => activities[t.id]?.phase === 'waiting').length
 
@@ -476,6 +506,7 @@ function Canvas(): React.JSX.Element {
         <TerminalOverlayLayer
           terminals={terminals}
           activities={activities}
+          lod={lod}
           onPrimaryChange={setZoomedTerminalId}
         />
         {teamPickerOpen && workspace && (
@@ -483,7 +514,7 @@ function Canvas(): React.JSX.Element {
         )}
         {rosterOpen && <RosterPanel onClose={() => setRosterOpen(false)} />}
         {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
-        <BrowserLayer browsers={browsers} onThumb={onThumb} />
+        <BrowserLayer browsers={browsers} lod={lod} onThumb={onThumb} />
         <EventToastLayer />
       </div>
     </CanvasUiContext.Provider>

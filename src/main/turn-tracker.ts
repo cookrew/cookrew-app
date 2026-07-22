@@ -420,6 +420,7 @@ export class TurnTracker extends EventEmitter {
         turnStartedAt: null,
         turnStartLine: null,
         scrollRow: null,
+        scrollBase: null,
         updatedAt: Date.now()
       } satisfies TerminalActivity)
     }
@@ -482,7 +483,9 @@ export class TurnTracker extends EventEmitter {
 
   private startTurn(t: TrackedTerminal, prompt: string): void {
     t.snapshot = t.session.fullText()
-    t.turnStartLine = scrollLineOf(t.snapshot)
+    // Monotonic tmux anchor when available; the screen-derived count is the
+    // non-tmux fallback only (under tmux it saturates at pane rows).
+    t.turnStartLine = t.session.scrollAnchor?.() ?? scrollLineOf(t.snapshot)
     t.phase = 'thinking'
     t.lastSubmitAt = 0
     t.sawInputThisTurn = true
@@ -590,7 +593,7 @@ export class TurnTracker extends EventEmitter {
   private resumeThinking(t: TrackedTerminal): void {
     if (t.turnStartedAt === 0) {
       t.snapshot = t.session.fullText()
-      t.turnStartLine = scrollLineOf(t.snapshot)
+      t.turnStartLine = t.session.scrollAnchor?.() ?? scrollLineOf(t.snapshot)
       t.turnStartedAt = Date.now()
       // The prompt was typed before this tracker existed (reattach) — the
       // TUI's own echo of it is still on screen. Recover it so the card and
@@ -757,6 +760,7 @@ export class TurnTracker extends EventEmitter {
         )
       : tailLines(cleanTurnLines(t.session.viewportText()), SUMMARY_TAIL)
     const pending = t.promptBuffer.trim()
+    const pane = t.session.paneScrollState?.() ?? { scrollRow: null, historySize: null }
     return {
       terminalId,
       agent: t.agent,
@@ -770,11 +774,13 @@ export class TurnTracker extends EventEmitter {
       turnCount: this.history(terminalId).length,
       turnStartedAt: inTurn ? t.turnStartedAt : null,
       turnStartLine: inTurn ? t.turnStartLine : null,
-      // Optional-called: fake sessions in tests may not implement it. Gated
-      // off during a turn: the pane is live (not copy-mode) so tmux reports
-      // no scroll position anyway — skipping the subprocess spawn on the hot
-      // streaming path (every ~250-400ms push per busy agent otherwise).
-      scrollRow: inTurn ? null : (t.session.scrollRow?.() ?? null),
+      // ONE combined tmux round-trip for both fields (optional-called; fakes
+      // may not implement it). Deliberately NOT gated off during a turn: the
+      // user can be in copy-mode WHILE the agent streams (scroll→step's main
+      // case), and scrollBase must convert anchors at any time. Cost is one
+      // ~2ms display-message per throttled push (≥250ms apart per terminal).
+      scrollRow: pane.scrollRow,
+      scrollBase: pane.historySize,
       updatedAt: Date.now()
     }
   }

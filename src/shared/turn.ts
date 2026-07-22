@@ -52,6 +52,13 @@ export interface TerminalActivity {
    * Refreshed on the normal activity push cadence, no dedicated channel.
    */
   scrollRow: number | null
+  /**
+   * The pane's CURRENT monotonic scroll base (tmux history_size). Converts
+   * checkpoint anchors to live coordinates: a checkpoint sits
+   * (scrollBase - record.scrollLine) lines above the live bottom — the same
+   * units as scrollRow. Null without tmux.
+   */
+  scrollBase: number | null
   /** Epoch ms when the current turn started; null outside a turn. */
   turnStartedAt: number | null
   updatedAt: number
@@ -86,11 +93,17 @@ export interface TurnRecord {
    */
   seenAt?: number
   /**
-   * 0-based scrollback line where this checkpoint's prompt echo begins,
-   * derived from the tracker snapshot at turn start (checkpoint-ux item 2).
-   * Best-effort: absent when the tracker never saw the turn start; indexes
-   * are pane-width-wrapped lines as the PTY attach replay serves them; a
-   * screen clear invalidates older offsets (consumers clamp).
+   * Scrollback anchor where this checkpoint began (checkpoint-ux item 2,
+   * re-stamped after the Magpie degenerate-offset finding): tmux history_size
+   * at turn start — lines scrolled into scrollback so far. Rises with each
+   * turn while the session's history grows, so it orders checkpoints reliably;
+   * it is NOT unbounded, though — history_size saturates at the tmux
+   * history-limit (50k lines), after which the oldest lines are trimmed and
+   * anchors older than the window become stale (they map above the top).
+   * Convert with activity.scrollBase: the checkpoint sits (scrollBase -
+   * scrollLine) lines above the live bottom (same units as scrollRow /
+   * copy-mode positions), clamped at 0. Non-tmux fallback: headless screen
+   * line count. Absent when the tracker never saw the turn start.
    */
   scrollLine?: number
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import type { IClipboardProvider } from '@xterm/addon-clipboard'
@@ -8,16 +8,15 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import type { TerminalNodeData } from '../../shared/model'
 import type { TerminalActivity, TurnPhase } from '../../shared/turn'
-import type { ScreenRect } from './zoom-lod'
-import { useLodLayout } from './zoom-lod'
+import type { LodLayout, ScreenRect } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
 import { cookrew } from './api'
 import { useTurnPaging } from './nodes/TurnPager'
 import { CheckpointTimeline } from './CheckpointTimeline'
 import {
-  activeIndexForScroll,
+  activeCheckpointIndex,
+  checkpointDepth,
   checkpointTitle,
-  spansFromRecords,
   useTitleMode
 } from './checkpoint-sync'
 import { TurnHistoryPanel } from './TurnHistoryPanel'
@@ -48,17 +47,24 @@ const PHOSPHOR_THEME = {
 export function TerminalOverlayLayer({
   terminals,
   activities,
+  lod,
   onPrimaryChange
 }: {
   terminals: TerminalNodeData[]
   activities: Record<string, TerminalActivity>
+  /** SHARED overlay arbitration (App-owned, spans terminals + browsers). */
+  lod: LodLayout
   /** Reports the zoomed-in terminal (most-covered active) — null on canvas. */
   onPrimaryChange?: (id: string | null) => void
 }): React.JSX.Element {
-  const { activeIds, rects, primaryId } = useLodLayout(terminals)
+  const { activeIds, rects, primaryId } = lod
+  // The dock composer only follows TERMINALS: when a browser wins the
+  // shared arbitration, there is no composer target.
+  const primaryTerminal =
+    primaryId !== null && terminals.some((t) => t.id === primaryId) ? primaryId : null
   useEffect(() => {
-    onPrimaryChange?.(primaryId)
-  }, [primaryId, onPrimaryChange])
+    onPrimaryChange?.(primaryTerminal)
+  }, [primaryTerminal, onPrimaryChange])
   return (
     <>
       {terminals
@@ -112,10 +118,13 @@ function TerminalOverlay({
   const viewingIndex = paging.viewing?.index ?? null
   const viewingPrompt = paging.viewing?.prompt ?? null
   const jumpedRef = useRef(false)
-  /** The live xterm, for converting tmux scrollRow → absolute buffer line. */
-  const termRef = useRef<Terminal | null>(null)
+  // Everything is in "lines above the live bottom" units (Forge monotonic
+  // contract): scrollRow is the current copy-mode position, scrollBase the tmux
+  // history_size, and a checkpoint's depth is scrollBase − scrollLine. No xterm
+  // buffer conversion needed. records feed the checkpoint depths.
   const scrollRow = activity?.scrollRow ?? null
-  const spans = useMemo(() => spansFromRecords(paging.records ?? []), [paging.records])
+  const scrollBase = activity?.scrollBase ?? null
+  const records = paging.records ?? []
 
   // Value-specific feedback guards (not a time window — a time window can
   // strand a user scroll that settles inside it, since the effect never
@@ -143,26 +152,22 @@ function TerminalOverlay({
         // Short literal chunk: long asks wrap across pane lines, which a
         // full-length literal search would never match.
         cookrew().ptyJump(node.id, line.slice(0, 30))
-        // Predict the scrollRow this jump echoes (pane sits at the checkpoint's
-        // start line): scrollRow = bufferLen − rows − top. Best-effort — if the
-        // echo differs, the reverse effect's idx-vs-current check still absorbs
-        // an echo that maps back to the same checkpoint.
-        const term = termRef.current
-        const top = spans.find((s) => s.index === viewingIndex)?.top
-        expectedEchoRow.current =
-          term && top !== undefined ? Math.max(0, term.buffer.active.length - term.rows - top) : null
+        // The pane will settle at the checkpoint's depth (its prompt's lines-
+        // above-bottom). Record that exact scrollRow so the reverse effect
+        // ignores only this echo; a genuinely different settle always applies.
+        expectedEchoRow.current = checkpointDepth(records, viewingIndex, scrollBase)
       }
     } else if (jumpedRef.current) {
       jumpedRef.current = false
       expectedEchoRow.current = null
       cookrew().ptyJump(node.id, null)
     }
-  }, [viewingIndex, viewingPrompt, node.id, spans])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewingIndex, viewingPrompt, node.id, scrollBase])
 
   // REVERSE (scroll → step): tmux's copy-mode scroll position steps the active
-  // checkpoint. `scrollRow` is lines scrolled UP from the live bottom (null at
-  // the tail); spans are absolute buffer offsets (TurnRecord.scrollLine), so
-  // convert through the xterm buffer: viewportTop = bufferLen − rows − scrollRow.
+  // checkpoint. Compare scrollRow directly against each checkpoint's depth
+  // (scrollBase − scrollLine) — same units, no buffer conversion.
   useEffect(() => {
     // Exactly the echo our own forward jump produced — ignore this one value.
     if (scrollRow !== null && scrollRow === expectedEchoRow.current) {
@@ -177,16 +182,13 @@ function TerminalOverlay({
       }
       return
     }
-    const term = termRef.current
-    if (!term || spans.length === 0) return
-    const viewportTop = Math.max(0, term.buffer.active.length - term.rows - scrollRow)
-    const idx = activeIndexForScroll(spans, viewportTop)
+    const idx = activeCheckpointIndex(records, scrollBase, scrollRow)
     if (idx !== null && idx !== (paging.viewing?.index ?? null)) {
       reverseSelectedIndex.current = idx
       paging.goto(idx)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scrollRow, spans])
+  }, [scrollRow, scrollBase, records])
   // Never leave the pane stranded in copy-mode when the overlay unmounts.
   useEffect(
     () => () => {
@@ -289,13 +291,7 @@ function TerminalOverlay({
     container.addEventListener('paste', onPaste, true)
 
     let disposed = false
-    termRef.current = term
-    const cleanups: Array<() => void> = [
-      () => {
-        termRef.current = null
-        term.dispose()
-      }
-    ]
+    const cleanups: Array<() => void> = [() => term.dispose()]
     cleanups.push(() => {
       if (copyTimer) clearTimeout(copyTimer)
       selectionSub.dispose()
@@ -604,10 +600,7 @@ function TerminalOverlay({
       </div>
       {showTurns && <TurnHistoryPanel terminalId={node.id} onClose={() => setShowTurns(false)} />}
       {(paging.viewing !== null || activity?.prompt) && (
-        <div
-          className={`popout-ask cr-ckpt-span${paging.viewing !== null ? ' active' : ''}`}
-          title={paging.viewing?.prompt ?? activity?.prompt ?? ''}
-        >
+        <div className="popout-ask" title={paging.viewing?.prompt ?? activity?.prompt ?? ''}>
           <span className="popout-ask-label">
             {paging.viewing ? `CHECKPOINT ${paging.viewing.index}/${paging.count} ❯` : 'YOU ❯'}
           </span>
@@ -630,7 +623,13 @@ function TerminalOverlay({
       )}
       <div className="popout-terminal-wrap">
         <div ref={containerRef} className="popout-terminal" />
-        <CheckpointTimeline terminalId={node.id} paging={paging} titleMode={titleMode} />
+        <CheckpointTimeline
+          terminalId={node.id}
+          paging={paging}
+          titleMode={titleMode}
+          scrollRow={scrollRow}
+          scrollBase={scrollBase}
+        />
       </div>
       {dropReady && (
         <div className="attach-drop-hint">
