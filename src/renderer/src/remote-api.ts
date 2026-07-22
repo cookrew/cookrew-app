@@ -159,6 +159,7 @@ export function createRemoteApi(): CookrewApi {
       return result.agents
     },
     listTurns: (terminalId) => req<TurnRecord[]>(`/api/terminal/${terminalId}/turns`),
+    listTraceIndex: (terminalId) => req(`/api/terminal/${terminalId}/trace/index`),
     listTrace: async (terminalId, request) => {
       const params = new URLSearchParams()
       const r = (request ?? {}) as Record<string, unknown>

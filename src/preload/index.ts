@@ -70,6 +70,7 @@ const api = {
     ipcRenderer.invoke('turn:page', terminalId, request),
   listTrace: (terminalId: string, request?: unknown) =>
     ipcRenderer.invoke('trace:page', terminalId, request),
+  listTraceIndex: (terminalId: string) => ipcRenderer.invoke('trace:index', terminalId),
   forkTerminal: (sourceId: string, turnIndex?: number) =>
     ipcRenderer.invoke('terminal:fork', sourceId, turnIndex),
   teamFork: (spec: unknown) => ipcRenderer.invoke('team:fork', spec),

@@ -306,6 +306,29 @@ function codexOutputText(output: unknown): string {
   return ''
 }
 
+// ---- cheap identity+title listing (fan / timeline full range) ----
+
+/** A lightweight trace listing entry — identity + a display title/snippet. */
+export interface TraceIndexEntry {
+  index: number
+  title: string
+}
+
+/** Snippet length for index titles (one row in the fan). */
+const INDEX_TITLE_CHARS = 80
+
+/**
+ * Identity + title listing over parsed blocks: the fan/timeline spans the
+ * WHOLE trace (T1..N incl. identities below the record cap) without paying
+ * for full bodies. Title = first non-empty prompt line, head-capped.
+ */
+export function traceIndexOf(blocks: readonly TraceBlock[]): TraceIndexEntry[] {
+  return blocks.map((block) => {
+    const line = block.prompt.split('\n').find((l) => l.trim().length > 0)?.trim() ?? ''
+    return { index: block.index, title: line.length > 0 ? head(line, INDEX_TITLE_CHARS) : '(empty prompt)' }
+  })
+}
+
 // ---- identity-keyed paging (review BLOCK 2: never array positions) ----
 
 export interface TracePageRequest {

@@ -810,6 +810,7 @@ function registerIpc(): void {
     pageTurns(turns.history(terminalId), request ?? {})
   )
   // Trace-sourced context: identity-keyed windows straight from agent files.
+  ipcMain.handle('trace:index', (_e, terminalId: string) => traces.index(terminalId))
   ipcMain.handle('trace:page', (_e, terminalId: string, request?: unknown) =>
     traces.page(terminalId, (request ?? {}) as Parameters<TraceReader['page']>[1])
   )

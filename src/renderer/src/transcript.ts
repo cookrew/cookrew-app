@@ -29,6 +29,24 @@ interface TraceBridge {
   listTrace?: (terminalId: string, request?: TraceAnchor) => Promise<TracePage>
 }
 
+/**
+ * LOUD ABSENT-BRIDGE RULE (warnMock convention): a feature-detected bridge
+ * method that is missing at CALL time silently degrades a real build — an empty
+ * transcript / no checkpoints that looks like "no history" rather than "not
+ * wired". Log ONCE per method with its name (this is the third silent-absent
+ * incident) so it's visible in the console instead of vanishing. Exported so the
+ * once-guard is unit-tested.
+ */
+const warnedAbsentBridges = new Set<string>()
+export function warnAbsentBridge(method: string): void {
+  if (warnedAbsentBridges.has(method)) return
+  warnedAbsentBridges.add(method)
+  console.error(
+    `[cookrew] bridge method \`${method}\` is absent — feature-detected call degraded ` +
+      'to empty. Not wired in this build (or running in demo).'
+  )
+}
+
 /** True once the trace API is present (absent in the demo). */
 export function hasTraceApi(): boolean {
   return typeof (cookrew() as unknown as TraceBridge).listTrace === 'function'
@@ -37,14 +55,17 @@ export function hasTraceApi(): boolean {
 /**
  * Fetch a trace window. listTrace is the ONLY path (review BLOCK 1 — no
  * fetch-all fallback); anchors are block identities (review BLOCK 2). Empty
- * when the API is absent (demo).
+ * when the API is absent — and LOUD about it (absent-bridge rule).
  */
 export async function fetchTracePage(
   terminalId: string,
   request: TraceAnchor
 ): Promise<TracePage> {
   const fn = (cookrew() as unknown as TraceBridge).listTrace
-  if (!fn) return { blocks: [], total: 0, source: null }
+  if (!fn) {
+    warnAbsentBridge('listTrace')
+    return { blocks: [], total: 0, source: null }
+  }
   return fn(terminalId, request)
 }
 
@@ -167,8 +188,36 @@ export function hasTraceIndexApi(): boolean {
  */
 export async function fetchTraceIndex(terminalId: string): Promise<TraceIndexEntry[]> {
   const fn = (cookrew() as unknown as TraceIndexBridge).listTraceIndex
-  if (!fn) return []
+  if (!fn) {
+    warnAbsentBridge('listTraceIndex')
+    return []
+  }
   return fn(terminalId)
+}
+
+/**
+ * scrollIntoView behavior for a checkpoint jump (item 2b): a coarse pointer or
+ * an in-flight touch CANCELS a smooth scroll mid-animation (the finger's own
+ * gesture interrupts it), leaving the jump half-done and feeling stuck — so snap
+ * instantly there. A just-landed far fetch also snaps (smooth-from-far reads as
+ * dead). Smooth is kept only for a nearby, mouse-driven target. Pure —
+ * unit-tested.
+ */
+export function jumpScrollBehavior(opts: {
+  landed: boolean
+  coarsePointer: boolean
+  touchActive: boolean
+}): 'auto' | 'smooth' {
+  return opts.landed || opts.coarsePointer || opts.touchActive ? 'auto' : 'smooth'
+}
+
+/**
+ * Display label for a trace-only checkpoint row (item 2c): its trace title when
+ * present, else the T<n> identity — NEVER blank, even before Forge's index (or
+ * its titles) lands. Pure — unit-tested.
+ */
+export function traceRowLabel(index: number, traceTitle: string): string {
+  return traceTitle.trim() || `T${index}`
 }
 
 /** A selectable checkpoint row: full record when in the cap, else trace-only. */
