@@ -608,6 +608,211 @@ body,
   animation: cr-blink 1s steps(2) infinite;
 }
 
+/* ---- transcript context (trace-sourced-context-final) ----
+   SINGLE definition of the ctx-* vocabulary (was duplicated in agent-roster.css
+   — that block is deleted; layout + visual are unified here).
+
+   The zoomed context is a lazy transcript traced from the agent's own jsonl
+   (durable, exact) that seams into the LIVE terminal at the bottom. It reads
+   as ONE terminal stream — JetBrains Mono (matching the live xterm) on the
+   phosphor surface with scanlines — NOT a chat app: no bubbles, no avatars,
+   no sides, no times. Each checkpoint is one block (head + exact prompt + dim
+   tool lines + reply); the active checkpoint is the highlight span; a seam
+   marks record↔live. Fresco owns the block visual language; Velvet owns the
+   virtualized/lazy component, seam focus/autoscroll, and the block-identity
+   timeline remap. Structure (in .popout-terminal-wrap):
+     <div class="ctx-transcript">                         (flex-column scroll surface)
+       <div class="ctx-older">Loading earlier checkpoints…</div>   (top sentinel; :empty collapses)
+       <div class="ctx-block [active]" data-checkpoint="N">  (one checkpoint turn)
+         <div class="ctx-block-head"><span class="ctx-block-idx">TN</span><span class="ctx-block-title">…</span></div>
+         <div class="ctx-block-prompt">EXACT prompt (pre-wrap: real newlines)</div>
+         <div class="ctx-block-tool"><span class="ctx-tool-glyph"><CrIcon…/></span> Bash: npm test</div>  (0..n, dim, from trace)
+         <div class="ctx-block-reply">recorded reply</div>
+       </div>
+       …
+       <div class="ctx-live"><…popout-terminal xterm…></div>  (seam auto-drawn via ::before; grows to hold the live tail)
+     </div> */
+
+.ctx-transcript {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--phos-bg);
+  /* faint CRT scanlines baked into the surface, so transcript + live match */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.03) 0,
+    rgba(255, 255, 255, 0.03) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  color: var(--phos);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.4;
+  padding: 6px 12px 0;
+}
+
+/* lazy-load sentinel (oldest checkpoints stream in on scroll-up) */
+.ctx-older {
+  flex: 0 0 auto;
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  color: var(--phos-dim);
+  text-align: center;
+  padding: 6px 0 8px;
+}
+
+.ctx-older::before {
+  content: '↑ ';
+}
+
+.ctx-older:empty {
+  padding: 0;
+}
+
+/* one checkpoint = one turn block. A faint rule keeps blocks legible without
+   cards/gaps — it stays a single stream. */
+.ctx-block {
+  flex: 0 0 auto;
+  padding: 7px 6px 8px;
+  border-top: 1px solid rgba(233, 185, 73, 0.12);
+}
+
+.ctx-block:first-of-type {
+  border-top: none;
+}
+
+/* dim header line — reads like a TUI section marker, not a chat header. */
+.ctx-block-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 2px;
+  user-select: none;
+}
+
+.ctx-block-idx {
+  font-family: var(--font-pixel);
+  font-size: 7.5px;
+  letter-spacing: 0.04em;
+  color: var(--phos-dim);
+  flex: 0 0 auto;
+}
+
+.ctx-block-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--phos-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* the exact traced prompt on a shell-prompt line. pre-wrap keeps the user's
+   real newlines (the point of tracing the record, not the TUI echo). */
+.ctx-block-prompt {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--phos-glow);
+  text-shadow: 0 0 5px rgba(255, 215, 122, 0.25);
+}
+
+.ctx-block-prompt::before {
+  content: '❯ ';
+  color: var(--amber);
+}
+
+/* dim tool-activity lines between prompt and reply — so the trace reads like
+   the TUI (Bash/Read/Grep/… calls), still one stream, never a chat frame. */
+.ctx-block-tool {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--phos-dim);
+  font-size: 11.5px;
+  margin-top: 2px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ctx-block-tool::before {
+  content: '⎿';
+  flex: 0 0 auto;
+  opacity: 0.7;
+}
+
+.ctx-tool-glyph {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--phos-dim);
+}
+
+.ctx-tool-glyph .cr-icon {
+  width: 11px;
+  height: 11px;
+  vertical-align: -1px;
+}
+
+/* the traced reply, flowing beneath — dim phosphor, no chat framing. */
+.ctx-block-reply {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--phos);
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+/* ACTIVE checkpoint = the highlight span (same amber language as the timeline
+   active row + collapsed here-marker, so timeline↔transcript stay linked). */
+.ctx-block.active {
+  background: rgba(255, 214, 0, 0.07);
+  box-shadow: inset 3px 0 0 var(--amber);
+}
+
+.ctx-block.active .ctx-block-idx,
+.ctx-block.active .ctx-block-title {
+  color: var(--phos-glow);
+}
+
+/* SEAM + LIVE tail: where the durable trace meets the live terminal. A dashed
+   phosphor rule with a centered LIVE badge — one stream, legible transition.
+   The .ctx-live grows to hold the real xterm (.popout-terminal) at the bottom. */
+.ctx-live {
+  flex: 0 0 auto;
+  min-height: 55%;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(50, 215, 75, 0.4);
+}
+
+.ctx-live::before {
+  content: '● LIVE';
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0 8px;
+  background: var(--phos-bg);
+  color: var(--vi-done);
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.12em;
+}
+
+.ctx-live .popout-terminal {
+  flex: 1;
+  min-height: 0;
+}
+
 .turn {
   flex: 1;
   min-height: 0;

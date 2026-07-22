@@ -275,7 +275,7 @@ export class WorkspaceStore extends EventEmitter {
     if (!this.state.dirs.includes(dir)) {
       throw new Error(`'${dir}' is not a directory of this workspace`)
     }
-    return this.updateNode(nodeId, { cwd: dir }) as TerminalNodeData
+    return this.updateNodeUnsafe(nodeId, { cwd: dir }) as TerminalNodeData
   }
 
   // ---- active-workspace state ----
@@ -465,6 +465,13 @@ export class WorkspaceStore extends EventEmitter {
     )
   }
 
+  /** Every terminal across ALL workspaces (codex bind exclusion scans). */
+  terminalsAcross(): TerminalNodeData[] {
+    return this.metasActiveFirst().flatMap((m) =>
+      this.stateOf(m.id).nodes.filter((n): n is TerminalNodeData => n.kind === 'terminal')
+    )
+  }
+
   /** Node lookup across EVERY workspace, not just the active canvas. */
   nodeAcrossWorkspaces(id: string): WorkspaceNodeHit | undefined {
     for (const meta of this.metasActiveFirst()) {
@@ -598,7 +605,31 @@ export class WorkspaceStore extends EventEmitter {
     return named
   }
 
+  /**
+   * Externally-patchable fields per node kind (SECURITY: the renderer IPC
+   * and the UNAUTHENTICATED mobile node-update endpoint route through
+   * updateNode — session bindings, commands and orch flags must never be
+   * plantable from there; internal main-process code uses updateNodeUnsafe).
+   */
+  private static readonly PATCHABLE: Record<CanvasNode['kind'], ReadonlySet<string>> = {
+    terminal: new Set(['name', 'position', 'size', 'role']),
+    note: new Set(['name', 'customName', 'content', 'locked', 'position', 'size']),
+    browser: new Set(['name', 'url', 'tabs', 'activeTabId', 'position', 'size'])
+  }
+
+  /** Allow-listed update — the only mutation surface exposed to IPC/mobile. */
   updateNode(id: string, patch: Partial<CanvasNode>): CanvasNode | undefined {
+    const node = this.node(id)
+    if (!node) return undefined
+    const allowed = WorkspaceStore.PATCHABLE[node.kind]
+    const safe = Object.fromEntries(
+      Object.entries(patch).filter(([key]) => allowed.has(key))
+    ) as Partial<CanvasNode>
+    return this.updateNodeUnsafe(id, safe)
+  }
+
+  /** Full-field update for MAIN-PROCESS internals (spawn binds, cwd moves). */
+  updateNodeUnsafe(id: string, patch: Partial<CanvasNode>): CanvasNode | undefined {
     let updated: CanvasNode | undefined
     const nodes = this.state.nodes.map((n) => {
       if (n.id !== id) return n

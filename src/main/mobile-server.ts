@@ -10,6 +10,7 @@ import type { VoiceEngine } from './voice'
 import type { TurnTracker } from './turn-tracker'
 import type { EventLog } from './event-log'
 import type { AgentRegistry } from './agent-registry'
+import type { TraceReader } from './trace'
 import { askTerminal } from './ask'
 import { ensureCert } from './cert'
 import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps } from './mobile-api'
@@ -31,6 +32,7 @@ export interface MobileServerDeps {
   /** Observability event log + agent roster (mobile query endpoints). */
   events: EventLog
   agents: AgentRegistry
+  traces: TraceReader
   ops: MobileOps
   presets: readonly { name: string; command: string }[]
   /** Persist a phone-uploaded attachment; returns its absolute path. */

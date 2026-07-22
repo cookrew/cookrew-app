@@ -37,6 +37,12 @@ export interface TerminalNodeData {
    * non-Claude presets and terminals from before ids were stored.
    */
   claudeSessionId?: string | null
+  /**
+   * Codex rollout file this terminal is bound to (~/.codex/sessions/...,
+   * absolute path) — the Codex analogue of claudeSessionId, matched by
+   * session_meta cwd + spawn-time window (note trace-sourced-context-final).
+   */
+  codexSessionRef?: string | null
   position: CanvasPosition
   size: CanvasSize
 }

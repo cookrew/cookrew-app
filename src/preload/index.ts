@@ -66,6 +66,10 @@ const api = {
 
   listActivity: () => ipcRenderer.invoke('activity:list'),
   listTurns: (terminalId: string) => ipcRenderer.invoke('turn:history', terminalId),
+  listTurnsPage: (terminalId: string, request?: unknown) =>
+    ipcRenderer.invoke('turn:page', terminalId, request),
+  listTrace: (terminalId: string, request?: unknown) =>
+    ipcRenderer.invoke('trace:page', terminalId, request),
   forkTerminal: (sourceId: string, turnIndex?: number) =>
     ipcRenderer.invoke('terminal:fork', sourceId, turnIndex),
   teamFork: (spec: unknown) => ipcRenderer.invoke('team:fork', spec),

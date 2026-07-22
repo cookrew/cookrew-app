@@ -159,6 +159,24 @@ export function createRemoteApi(): CookrewApi {
       return result.agents
     },
     listTurns: (terminalId) => req<TurnRecord[]>(`/api/terminal/${terminalId}/turns`),
+    listTrace: async (terminalId, request) => {
+      const params = new URLSearchParams()
+      const r = (request ?? {}) as Record<string, unknown>
+      for (const key of ['beforeIndex', 'afterIndex', 'aroundIndex', 'limit']) {
+        if (r[key] !== undefined) params.set(key, String(r[key]))
+      }
+      return req(`/api/terminal/${terminalId}/trace?${params}`)
+    },
+    listTurnsPage: async (terminalId, request) => {
+      const params = new URLSearchParams()
+      const r = (request ?? {}) as Record<string, unknown>
+      for (const key of ['offset', 'limit', 'aroundIndex']) {
+        if (r[key] !== undefined) params.set(key, String(r[key]))
+      }
+      // At least one param forces the paged shape server-side.
+      if ([...params.keys()].length === 0) params.set('limit', '20')
+      return req(`/api/terminal/${terminalId}/turns?${params}`)
+    },
     forkTerminal: (sourceId, turnIndex) =>
       req(`/api/terminal/${sourceId}/fork`, 'POST', { turnIndex }),
     teamFork: (spec) => req('/api/team/fork', 'POST', { spec }),
