@@ -3163,8 +3163,8 @@ body.cookrew-mobile .cr-ckpt-action {
   min-height: 44px;
 }
 
-/* the scrub thumb needs a finger-sized grab target on touch (the .cr-ckpt-scrub
-   preview label rides it while dragging) */
+/* the scrub thumb needs a finger-sized grab target on touch (the
+   .cr-ckpt-scrub-preview label rides it while dragging) */
 body.cookrew-mobile .cr-ckpt-here::after {
   content: '';
   position: absolute;

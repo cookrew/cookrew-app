@@ -747,6 +747,41 @@
   opacity: 0.6;
 }
 
+/* ---- mobile checkpoint rail (Velvet logic; Fresco visual parity) ----
+   Touch has no real hover, so the desktop hover-fan STICKS open after a tap —
+   the always-visible from-T1 dots column the user saw. On mobile: neutralize
+   hover so the REST state is the single-line desktop mini, and reveal the fan
+   transiently ON SCROLL via the JS `.revealing` class (+ tap `.open`), folding
+   back to the line after. Fresco: reconcile the exact desktop mini/fan visuals
+   (these rules only carry the functional show/hide). */
+body.cookrew-mobile .cr-ckpt-rail:hover {
+  width: 40px;
+}
+body.cookrew-mobile .cr-ckpt-rail:hover .cr-ckpt-mini {
+  opacity: 1;
+  pointer-events: auto;
+}
+body.cookrew-mobile .cr-ckpt-rail:hover .cr-ckpt-full {
+  opacity: 0;
+  pointer-events: none;
+}
+/* scroll-reveal (.revealing) + tap (.open) share the fan visual on mobile */
+body.cookrew-mobile .cr-ckpt-rail.revealing,
+body.cookrew-mobile .cr-ckpt-rail.open {
+  width: 360px;
+  max-width: 84%;
+}
+body.cookrew-mobile .cr-ckpt-rail.revealing .cr-ckpt-mini,
+body.cookrew-mobile .cr-ckpt-rail.open .cr-ckpt-mini {
+  opacity: 0;
+  pointer-events: none;
+}
+body.cookrew-mobile .cr-ckpt-rail.revealing .cr-ckpt-full,
+body.cookrew-mobile .cr-ckpt-rail.open .cr-ckpt-full {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 /* Floating scrub-preview label (Velvet structural; Fresco visuals): the current
    checkpoint title surfaced at the thumb while scrubbing / just-scrolled, so
    mobile has the title-reveal desktop gets on hover. Positioned to the LEFT of

@@ -339,6 +339,58 @@ export function scrubPreviewRow(
 }
 
 /**
+ * Whether a transcript scroll should transiently fan the checkpoint list open —
+ * the MOBILE equivalent of the desktop hover-fan. Only on a coarse pointer
+ * (touch has no real hover), only when not mid-scrub (the scrub owns the rail
+ * then), and only once a checkpoint is actually in view. Pure — unit-tested.
+ */
+export function shouldRevealOnScroll(opts: {
+  coarsePointer: boolean
+  scrubbing: boolean
+  activeIndex: number | null
+}): boolean {
+  return opts.coarsePointer && !opts.scrubbing && opts.activeIndex !== null
+}
+
+export interface ScrollReveal {
+  /** A scroll happened: reveal now and (re)arm the trailing collapse. */
+  bump: () => void
+  /** Cancel a pending collapse and fold back immediately (e.g. a scrub/tap). */
+  cancel: () => void
+}
+
+/**
+ * Transient scroll-reveal controller: fans the list open on the first scroll and
+ * collapses it after `quietMs` of no further scroll (a trailing debounce), so the
+ * list appears WHILE scrolling and folds back to the single-line rest state — no
+ * pinned-open, no from-T1 column. Uses the global timer (fake-timer testable).
+ * Pure control-flow — unit-tested.
+ */
+export function createScrollReveal(onChange: (revealed: boolean) => void, quietMs: number): ScrollReveal {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const stop = (): void => {
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+    }
+  }
+  return {
+    bump: (): void => {
+      onChange(true)
+      stop()
+      timer = setTimeout(() => {
+        timer = null
+        onChange(false)
+      }, quietMs)
+    },
+    cancel: (): void => {
+      stop()
+      onChange(false)
+    }
+  }
+}
+
+/**
  * The block whose top has scrolled past the position — the last block whose
  * `top` is at or above `scrollTop` (ascending by `top`). Null when nothing
  * has scrolled in yet. Pure so scroll→checkpoint is tested.

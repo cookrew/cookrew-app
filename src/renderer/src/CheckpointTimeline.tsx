@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { TurnRecord } from '../../shared/turn'
 import { cookrew } from './api'
 import { CrIcon } from './icons'
@@ -6,8 +6,10 @@ import { type TitleMode } from './checkpoint-sync'
 import { hasRoleFromCheckpoint, saveRoleFromCheckpoint } from './role-checkpoint'
 import {
   checkpointRowTitle,
+  createScrollReveal,
   railPointerFraction,
   scrubPreviewRow,
+  shouldRevealOnScroll,
   type CheckpointRow
 } from './transcript'
 
@@ -16,6 +18,14 @@ const LONG_PRESS_MS = 450
 const RAIL_INSET = 16
 /** Px of pointer travel before a press on the rail becomes a scrub, not a tap. */
 const SCRUB_THRESHOLD = 4
+/** How long the scroll-revealed fan lingers after the last scroll before it
+ *  folds back to the single-line rest state (mobile). */
+const REVEAL_QUIET_MS = 1400
+/** Coarse pointer (touch) — reveal-on-scroll replaces the unreliable hover-fan. */
+const COARSE_POINTER =
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(pointer: coarse)').matches
 
 /**
  * Checkpoint timeline on the terminal context view (checkpoint-ux item 4, v5)
@@ -70,9 +80,15 @@ export function CheckpointTimeline({
   /** True while a rail scrub drag is active — drives the .dragging affordance. */
   const [scrubbing, setScrubbing] = useState(false)
   /**
+   * Transiently true while scrolling the transcript on mobile — fans the list
+   * open like the desktop hover-fan, then collapses back to the single line
+   * (rest = desktop mini). Distinct from `open` (tap-persistent).
+   */
+  const [revealed, setRevealed] = useState(false)
+  /**
    * Floating scrub-preview: the CURRENT checkpoint title at the thumb while
-   * dragging (bug 1 redo — the touch equivalent of desktop hover-reveal; the fan
-   * only shows dot/index otherwise). `frac` positions the label at the thumb.
+   * dragging — the touch equivalent of desktop hover-reveal (the fan only shows
+   * dot/index otherwise). `frac` positions the label at the thumb.
    */
   const [preview, setPreview] = useState<{ frac: number; label: string } | null>(null)
   /** Checkpoint index whose actions are revealed via phone long-press. */
@@ -85,6 +101,10 @@ export function CheckpointTimeline({
   // Rail scrub gesture: a press that travels past SCRUB_THRESHOLD becomes a
   // scrollbar drag; a press that stays put is a tap that opens the fan.
   const scrub = useRef<{ startY: number; moved: boolean }>({ startY: 0, moved: false })
+  // Scroll-reveal controller: bump on each scroll to fan open, auto-collapse
+  // after the quiet window. Created once — setRevealed is stable.
+  const reveal = useMemo(() => createScrollReveal(setRevealed, REVEAL_QUIET_MS), [])
+  useEffect(() => () => reveal.cancel(), [reveal])
 
   useEffect(() => {
     return () => {
@@ -108,16 +128,15 @@ export function CheckpointTimeline({
     return () => document.removeEventListener('pointerdown', onDown)
   }, [open])
 
-  // Also reflect the active title while SCROLLING the transcript (activeIndex
-  // moves): surface the same label at the marker for a moment, then fade. Scrub
-  // owns the preview while dragging, so stand down then.
+  // REVEAL ON SCROLL (mobile equivalent of the desktop hover-fan): scrolling the
+  // transcript moves activeIndex/markerFrac — fan the full list open transiently
+  // so you see WHERE you are (active row highlighted, with its title), then it
+  // collapses back to the single-line rest state. Coarse pointers only; the
+  // desktop keeps its real hover-fan.
   useEffect(() => {
-    if (scrubbing || activeIndex == null) return
-    const row = rows.find((r) => r.index === activeIndex)
-    if (!row) return
-    setPreview({ frac: markerFrac ?? 1, label: `T${row.index} · ${checkpointRowTitle(row, titleMode)}` })
-    const t = setTimeout(() => setPreview(null), 1100)
-    return () => clearTimeout(t)
+    if (shouldRevealOnScroll({ coarsePointer: COARSE_POINTER, scrubbing, activeIndex: activeIndex ?? null })) {
+      reveal.bump()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeIndex, markerFrac, scrubbing])
 
@@ -156,6 +175,7 @@ export function CheckpointTimeline({
   // combined trace+tail scroll space. Pointer capture keeps the drag alive past
   // the rail edges; a press that never travels stays a tap (opens the fan).
   const onRailPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
+    reveal.cancel() // a deliberate scrub takes over from any transient reveal
     if (!onScrub || open) return
     scrub.current = { startY: e.clientY, moved: false }
     setScrubbing(true)
@@ -207,9 +227,9 @@ export function CheckpointTimeline({
   return (
     <div
       ref={railRef}
-      className={`cr-ckpt-rail${open ? ' open' : ''}${scrubbing ? ' dragging' : ''}${
-        loadingIndex != null ? ' loading' : ''
-      }`}
+      className={`cr-ckpt-rail${open ? ' open' : ''}${revealed ? ' revealing' : ''}${
+        scrubbing ? ' dragging' : ''
+      }${loadingIndex != null ? ' loading' : ''}`}
       onMouseLeave={() => {
         clearPress()
         closeActions()
