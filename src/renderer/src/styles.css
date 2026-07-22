@@ -2839,7 +2839,9 @@ body.cookrew-mobile .cookrew-minimap {
 
 /* while dragging, the thumb follows the pointer with no easing lag. */
 .cr-ckpt-rail.dragging .cr-ckpt-here {
-  transition: width 120ms ease, height 120ms ease;
+  transition:
+    width 120ms ease,
+    height 120ms ease;
 }
 
 .cr-ckpt-livedot {
@@ -3150,8 +3152,24 @@ body.cookrew-mobile .cookrew-minimap {
   color: var(--ink);
 }
 
-/* Phone rail styling lives in the @media (max-width: 700px) block below
-   (thin scrollbar at rest + full-width bottom-sheet list on tap). */
+/* --- phone: wider catch-strip + 44px tappable actions --- */
+body.cookrew-mobile .cr-ckpt-rail {
+  width: 40px;
+}
+
+body.cookrew-mobile .cr-ckpt-action {
+  font-size: 9px;
+  padding: 9px 11px;
+  min-height: 44px;
+}
+
+/* the scrub thumb needs a finger-sized grab target on touch (the .cr-ckpt-scrub
+   preview label rides it while dragging) */
+body.cookrew-mobile .cr-ckpt-here::after {
+  content: '';
+  position: absolute;
+  inset: -16px;
+}
 
 /* ---- git visuals (Forge gitInfo shape) ----
    One structural unit — .cr-git — reused on dark agent cards AND cream
@@ -3531,142 +3549,6 @@ body.cookrew-mobile .cr-dock .voice-keys .cr-btn.term-key {
    scrollback and turn panel. Desktop layout is untouched. */
 
 @media (max-width: 700px) {
-  /* ---- checkpoint rail on phone (Magpie defect 1) ----
-     The desktop right-side fan (360px) cramps/overlaps on a narrow phone. On
-     mobile the rail stays a THIN non-overlapping scrollbar at rest, and the
-     checkpoint fan becomes a FULL-WIDTH BOTTOM SHEET on tap (44px rows).
-     Velvet adds the structure/interaction; these are the visuals. */
-
-  /* rail + resting scrollbar: thin, doesn't overlap content */
-  .cr-ckpt-rail,
-  .cr-ckpt-rail:hover,
-  .cr-ckpt-rail.open {
-    width: 24px;
-    max-width: 24px;
-  }
-
-  /* (Velvet layout) the transcript RESERVES the rail's width so the thin
-     scrollbar never overlaps content — the rail is absolute right:0, so without
-     this the trace/placeholders would run under it. */
-  .popout-terminal-wrap .ctx-transcript {
-    padding-right: 24px;
-  }
-
-  .cr-ckpt-line {
-    right: 11px;
-  }
-
-  .cr-ckpt-count {
-    right: 5px;
-  }
-
-  .cr-ckpt-count .n {
-    font-size: 10px;
-  }
-
-  /* small diamond scrub thumb + a 44px invisible touch target around it */
-  .cr-ckpt-here {
-    right: 5px;
-    width: 13px;
-    height: 13px;
-  }
-
-  .cr-ckpt-here::after {
-    content: '';
-    position: absolute;
-    inset: -16px;
-  }
-
-  .cr-ckpt-livedot {
-    right: 7px;
-  }
-
-  /* the mini scrollbar stays visible while the sheet is open (it IS the
-     scrollbar — the sheet is a separate surface at the bottom) */
-  .cr-ckpt-rail.open .cr-ckpt-mini {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  /* tap → the fan becomes a full-width bottom sheet that slides up. bottom
-     rides the keyboard inset (Velvet, Defect 2) so it isn't hidden behind the
-     on-screen keyboard; --kb-inset is 0 when no keyboard is up. */
-  .cr-ckpt-full {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: var(--kb-inset, 0px);
-    top: auto;
-    width: 100%;
-    max-width: 100%;
-    max-height: 68vh;
-    background: var(--vi-panel);
-    border-left: none;
-    border-top: 2px solid var(--ink);
-    box-shadow: 0 -5px 0 var(--amber-deep);
-    padding-bottom: env(safe-area-inset-bottom, 0);
-    opacity: 1;
-    transform: translateY(100%);
-    pointer-events: none;
-    transition: transform 220ms ease;
-  }
-
-  .cr-ckpt-rail.open .cr-ckpt-full {
-    transform: translateY(0);
-    pointer-events: auto;
-  }
-
-  .cr-ckpt-head {
-    padding: 11px 14px;
-  }
-
-  .cr-ckpt-list {
-    padding: 4px 0 6px;
-  }
-
-  /* rows: full-width tappable list — [dot · idx · title … actions], 44px */
-  .cr-ckpt-row {
-    justify-content: flex-start;
-    min-height: 44px;
-    padding: 8px 14px;
-    gap: 12px;
-  }
-
-  .cr-ckpt-dot {
-    order: -2;
-  }
-
-  .cr-ckpt-row-label {
-    order: -1;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .cr-ckpt-row-title {
-    text-align: left;
-  }
-
-  .cr-ckpt-row-actions {
-    order: 1;
-  }
-
-  /* active rail moves to the left edge of the row on the sheet */
-  .cr-ckpt-row.active::after {
-    left: 0;
-    right: auto;
-  }
-
-  .cr-ckpt-prog {
-    left: 14px;
-    right: 14px;
-  }
-
-  .cr-ckpt-action {
-    font-size: 9px;
-    padding: 10px 12px;
-    min-height: 44px;
-  }
-
   /* One compact control row that scrolls horizontally when crowded. Without
      the nowrap/ellipsis below, the recap title (overflow-wrap: anywhere)
      gets squeezed by the nowrap flex row to a sliver and renders one
