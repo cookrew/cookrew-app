@@ -344,13 +344,6 @@ body,
   height: 9px;
   vertical-align: -1.5px;
 }
-
-.turn-panel-title .cr-icon {
-  width: 11px;
-  height: 11px;
-  vertical-align: -2px;
-}
-
 .cr-ws-caret .cr-icon {
   width: 9px;
   height: 9px;
@@ -3395,91 +3388,6 @@ body.cookrew-mobile .cr-ckpt-here::after {
   background: var(--amber, #e9b949);
   color: #14110a;
 }
-
-.turn-panel {
-  position: absolute;
-  top: 44px;
-  right: 12px;
-  z-index: 30;
-  width: min(480px, calc(100% - 24px));
-  max-height: 60%;
-  display: flex;
-  flex-direction: column;
-  background: var(--cream-hi);
-  border: 2px solid var(--line);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
-}
-
-.turn-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--cream-md);
-  border-bottom: 2px solid var(--line);
-}
-
-.turn-panel-title {
-  font-family: var(--font-pixel);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-}
-
-.turn-panel-hint {
-  padding: 8px 12px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--ink-dim, #6a6353);
-  border-bottom: 1px solid var(--line);
-}
-
-.turn-panel-list {
-  overflow-y: auto;
-  min-height: 0;
-}
-
-.turn-panel-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--line);
-}
-
-.turn-panel-row:last-child {
-  border-bottom: none;
-}
-
-.turn-panel-index {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 700;
-  flex: 0 0 auto;
-}
-
-.turn-panel-prompt {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.turn-panel-fork {
-  flex: 0 0 auto;
-}
-
-.turn-panel-empty {
-  padding: 14px 12px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--ink-dim, #6a6353);
-}
-
 /* Alignment guide shown while a card resize snaps flush to a neighbour
    edge (SnapGuides.tsx). Sized in flow units; thickness is pre-divided by
    zoom so it stays hairline on screen. */
@@ -3605,38 +3513,6 @@ body.cookrew-mobile .cr-dock .voice-keys .cr-btn.term-key {
 
 
 
-  /* Turn history panel becomes a full-width sheet under the (taller
-     phone) header; the hint prose is dropped to give rows the space. */
-  .turn-panel {
-    top: 62px;
-    left: 8px;
-    right: 8px;
-    width: auto;
-    max-height: calc(100% - 130px);
-  }
-
-  .turn-panel-hint {
-    display: none;
-  }
-
-  .turn-panel-list {
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .turn-panel-row {
-    padding: 4px 10px;
-  }
-
-  .turn-panel-head .cr-btn,
-  .turn-panel-row .cr-btn {
-    min-height: 44px;
-    min-width: 44px;
-    justify-content: center;
-  }
-
-  .turn-panel-prompt {
-    font-size: 13px;
-  }
 
   /* Turn pager on canvas cards: bigger type (screen-constant via --z) and
      generous flow-unit tap minimums; the row scrolls sideways if crowded. */

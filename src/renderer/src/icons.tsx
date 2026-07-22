@@ -28,6 +28,7 @@ export type CrIconName =
   | 'search'
   | 'agent'
   | 'dot'
+  | 'summary'
 
 const STROKE = {
   fill: 'none',
@@ -170,7 +171,17 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
       <circle cx="8" cy="2.4" r="1" fill="currentColor" stroke="none" />
     </g>
   ),
-  dot: <circle cx="8" cy="8" r="2.7" fill="currentColor" />
+  dot: <circle cx="8" cy="8" r="2.7" fill="currentColor" />,
+  // Summary/conclusion: full text lines condensing to a short bottom line —
+  // "the long version distilled to its point". Used for the conclusion title mode.
+  summary: (
+    <g {...STROKE} strokeWidth={1.8} strokeLinecap="square">
+      <path d="M2.7 3.4 H13.3" />
+      <path d="M2.7 6.5 H11" />
+      <path d="M2.7 9.6 H8.4" />
+      <path d="M2.7 12.7 H6" />
+    </g>
+  )
 }
 
 interface CrIconProps {

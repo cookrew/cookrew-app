@@ -22,7 +22,6 @@ import {
   type TraceIndexEntry
 } from './transcript'
 import { checkpointTitle, useTitleMode } from './checkpoint-sync'
-import { TurnHistoryPanel } from './TurnHistoryPanel'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
 import { handleTerminalPaste } from './terminal-paste'
 import { CrIcon } from './icons'
@@ -103,7 +102,6 @@ function TerminalOverlay({
 }): React.JSX.Element {
   const { zoomBack } = useCanvasUi()
   const containerRef = useRef<HTMLDivElement>(null)
-  const [showTurns, setShowTurns] = useState(false)
   // Drag-in attachments: dragenter/leave bubble from every child of the
   // overlay, so a plain boolean would flicker — count enters vs leaves.
   const [dropReady, setDropReady] = useState(false)
@@ -556,19 +554,11 @@ function TerminalOverlay({
             onMouseDown={keepFocus}
             onClick={toggleTitleMode}
           >
-            <CrIcon name={titleMode === 'conclusion' ? 'note' : 'terminal'} />
+            <CrIcon name={titleMode === 'conclusion' ? 'summary' : 'terminal'} />
           </button>
-          {(activity?.turnCount ?? 0) > 0 && (
-            <button
-              className={`cr-btn sm icon${showTurns ? ' active' : ''}`}
-              title={`Fork a new agent from a past checkpoint (${activity?.turnCount})`}
-              aria-label="Fork from a past checkpoint"
-              onClick={() => setShowTurns((s) => !s)}
-            >
-              <CrIcon name="fork" />
-              <span className="popout-count">{activity?.turnCount}</span>
-            </button>
-          )}
+          {/* The "fork from a past checkpoint" button is deprecated — fork is now
+              available per-checkpoint in the timeline (State A hold + State B
+              rows), so the standalone header button is redundant. */}
           <button
             className="cr-btn sm icon popout-close"
             title="Back to canvas (Esc)"
@@ -590,7 +580,6 @@ function TerminalOverlay({
           </button>
         </div>
       </div>
-      {showTurns && <TurnHistoryPanel terminalId={node.id} onClose={() => setShowTurns(false)} />}
       {(selectedIndex !== null || activity?.prompt) && (
         <div className="popout-ask" title={selectedRow?.record?.prompt ?? selectedTitle ?? activity?.prompt ?? ''}>
           <span className="popout-ask-label">

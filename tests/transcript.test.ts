@@ -9,12 +9,12 @@ import {
   identityAtFraction,
   jumpScrollBehavior,
   checkpointRowTitle,
-  createScrollReveal,
+  createHoldReveal,
+  focusedCheckpoint,
   mergeCheckpointRows,
   mergeTrace,
-  railRowTap,
+  railDrive,
   scrubPreviewRow,
-  shouldRevealOnScroll,
   pruneToTotal,
   railPointerFraction,
   refineEstimate,
@@ -411,59 +411,79 @@ describe('coalescingSingleFlight (HIGH: rapid second far-jump not starved)', () 
   })
 })
 
-describe('reveal-on-scroll (mobile: fan on scroll, collapse to single line)', () => {
-  describe('shouldRevealOnScroll (trigger)', () => {
-    it('reveals only on a coarse pointer, not mid-scrub, with a checkpoint in view', () => {
-      expect(shouldRevealOnScroll({ coarsePointer: true, scrubbing: false, activeIndex: 57 })).toBe(true)
-    })
-    it('does not reveal on a fine pointer (desktop hover handles it)', () => {
-      expect(shouldRevealOnScroll({ coarsePointer: false, scrubbing: false, activeIndex: 57 })).toBe(false)
-    })
-    it('does not reveal while scrubbing (the scrub owns the rail)', () => {
-      expect(shouldRevealOnScroll({ coarsePointer: true, scrubbing: true, activeIndex: 57 })).toBe(false)
-    })
-    it('does not reveal with no checkpoint in view (pinned live)', () => {
-      expect(shouldRevealOnScroll({ coarsePointer: true, scrubbing: false, activeIndex: null })).toBe(false)
-    })
+describe('focusedCheckpoint (v3 State A: single-tab tracks the focused chapter)', () => {
+  const rows = mergeCheckpointRows(
+    [],
+    [
+      { index: 7, title: 'seven' },
+      { index: 8, title: 'eight' },
+      { index: 9, title: 'nine' }
+    ]
+  )
+  it('returns the row for the active identity in view', () => {
+    expect(focusedCheckpoint(rows, 8)?.index).toBe(8)
   })
-
-  describe('createScrollReveal (transient reveal + trailing collapse)', () => {
-    afterEach(() => vi.useRealTimers())
-
-    it('reveals on bump and collapses after the quiet window', () => {
-      vi.useFakeTimers()
-      const states: boolean[] = []
-      const rc = createScrollReveal((v) => states.push(v), 1000)
-      rc.bump()
-      expect(states).toEqual([true])
-      vi.advanceTimersByTime(600)
-      rc.bump() // still scrolling → re-arm, no collapse yet
-      expect(states).toEqual([true, true])
-      vi.advanceTimersByTime(600) // 600ms since last bump (< 1000)
-      expect(states).toEqual([true, true])
-      vi.advanceTimersByTime(400) // now 1000ms of quiet
-      expect(states).toEqual([true, true, false]) // collapsed back to the line
-    })
-
-    it('cancel folds back immediately and kills a pending collapse', () => {
-      vi.useFakeTimers()
-      const states: boolean[] = []
-      const rc = createScrollReveal((v) => states.push(v), 1000)
-      rc.bump()
-      rc.cancel()
-      expect(states).toEqual([true, false])
-      vi.advanceTimersByTime(2000)
-      expect(states).toEqual([true, false]) // no late/duplicate collapse
-    })
+  it('is null at the live tail (no checkpoint focused)', () => {
+    expect(focusedCheckpoint(rows, null)).toBeNull()
+  })
+  it('is null for an identity not among the rows', () => {
+    expect(focusedCheckpoint(rows, 999)).toBeNull()
   })
 })
 
-describe('railRowTap (mobile touch action model)', () => {
-  it('coarse pointer: keeps the fan open and selects the row for inline actions', () => {
-    // one deliberate selection — never floating tabs over other rows
-    expect(railRowTap(42, true)).toEqual({ open: true, acting: 42 })
+describe('createHoldReveal (v3: hold a tab/row to reveal its actions)', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('reveals the index after the hold duration', () => {
+    vi.useFakeTimers()
+    const revealed: number[] = []
+    const hr = createHoldReveal((i) => revealed.push(i), 1500)
+    hr.start(42)
+    vi.advanceTimersByTime(1499)
+    expect(revealed).toEqual([]) // not yet
+    vi.advanceTimersByTime(1)
+    expect(revealed).toEqual([42]) // held long enough
   })
-  it('fine pointer: collapses the fan (desktop reveals row actions on hover)', () => {
-    expect(railRowTap(42, false)).toEqual({ open: false, acting: null })
+  it('a release BEFORE the hold (a plain tap) reveals nothing', () => {
+    vi.useFakeTimers()
+    const revealed: number[] = []
+    const hr = createHoldReveal((i) => revealed.push(i), 1500)
+    hr.start(42)
+    vi.advanceTimersByTime(600)
+    hr.cancel() // tap released early
+    vi.advanceTimersByTime(2000)
+    expect(revealed).toEqual([])
+  })
+  it('a new press supersedes the previous pending hold', () => {
+    vi.useFakeTimers()
+    const revealed: number[] = []
+    const hr = createHoldReveal((i) => revealed.push(i), 1500)
+    hr.start(1)
+    vi.advanceTimersByTime(1000)
+    hr.start(2) // moved to another row before the first fired
+    vi.advanceTimersByTime(1500)
+    expect(revealed).toEqual([2]) // only the latest hold reveals
+  })
+})
+
+describe('railDrive (v3 two-zone routing: rail-drag opens+drives the full list)', () => {
+  const rows = mergeCheckpointRows(
+    [],
+    [
+      { index: 1, title: 'a' },
+      { index: 2, title: 'b' },
+      { index: 3, title: 'c' }
+    ]
+  )
+  it('a rail DRAG opens the list and anchors on the checkpoint under the drag', () => {
+    expect(railDrive(rows, 0, true)).toEqual({ openList: true, anchorIndex: 1 })
+    expect(railDrive(rows, 0.5, true)).toEqual({ openList: true, anchorIndex: 2 })
+    expect(railDrive(rows, 1, true)).toEqual({ openList: true, anchorIndex: 3 })
+  })
+  it('a non-drag (tap / no travel) does NOT open the list (that is the tap-opener)', () => {
+    expect(railDrive(rows, 0.5, false)).toEqual({ openList: false, anchorIndex: null })
+  })
+  it('opens with a null anchor on an empty list', () => {
+    expect(railDrive([], 0.5, true)).toEqual({ openList: true, anchorIndex: null })
   })
 })
