@@ -24,6 +24,28 @@ describe('feedPromptBuffer', () => {
     expect(fed.buffer).toBe('')
   })
 
+  // Shift+Enter (ESC+CR, the TUI insert-newline binding) must NEVER count as
+  // a submit — one real Enter = one checkpoint (checkpoint 1:1 spec).
+  it('treats Shift+Enter as a literal newline, not a submit', () => {
+    const fed = feedPromptBuffer('', 'line1\x1b\r')
+    expect(fed.submitted).toEqual([])
+    expect(fed.buffer).toBe('line1\n')
+  })
+
+  it('submits a multiline composition as ONE prompt on the real Enter', () => {
+    const fed = feedPromptBuffer('', 'line1\x1b\rline2\r')
+    expect(fed.submitted).toEqual(['line1\nline2'])
+    expect(fed.buffer).toBe('')
+  })
+
+  it('handles Shift+Enter split across input chunks (held trailing ESC)', () => {
+    const a = feedPromptBuffer('', 'line1\x1b')
+    expect(a.submitted).toEqual([])
+    const b = feedPromptBuffer(a.buffer, '\rline2\r', a.inPaste, a.held)
+    expect(b.submitted).toEqual(['line1\nline2'])
+    expect(b.buffer).toBe('')
+  })
+
   it('handles backspace', () => {
     const fed = feedPromptBuffer('abc', '\x7f\x7fd')
     expect(fed.buffer).toBe('ad')

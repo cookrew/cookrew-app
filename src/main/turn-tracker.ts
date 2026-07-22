@@ -586,11 +586,15 @@ export class TurnTracker extends EventEmitter {
     t.phase = 'replied'
     const id = t.session.terminalId
     this.stopTurnTimers(t)
-    // Self-healed turns (opened without ever seeing a prompt) that also
-    // produced no visible reply are tracker noise, not exchanges — end the
-    // phase but record nothing. Recovered turns WITH real output are kept
-    // under a synthetic label so history never shows an empty prompt.
-    if (t.prompt === null && t.reply.length === 0) {
+    // A promptless self-heal turn that ALSO never saw user input is boot
+    // noise — a fresh agent's boot screen (e.g. Codex) tripping self-heal,
+    // not an exchange. Recording it as '(recovered turn)' would mint a
+    // phantom checkpoint and shift every later index, so discard it (boot
+    // output in the reply is not a real turn). A promptless turn that DID see
+    // input keeps the synthetic label; session-bound agents additionally get
+    // the real turn from the session-file reconcile.
+    const sawInput = t.promptBuffer.trim().length > 0 || t.lastSubmitAt !== 0
+    if (t.prompt === null && !sawInput) {
       this.push(t)
       return
     }
