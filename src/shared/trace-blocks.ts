@@ -5,7 +5,7 @@
 // construction. Pure parsers + the identity-keyed pager live here; file IO
 // and caching are main-process (main/trace.ts).
 
-import { isNoisePrompt } from './session-turns'
+import { CheckpointAssigner } from './session-turns'
 
 /** One tool invocation inside a block, TUI-faithful (unified-scroll TODO). */
 export interface TraceToolCall {
@@ -64,6 +64,7 @@ interface ClaudeEntry {
   type?: string
   isMeta?: boolean
   uuid?: string
+  parentUuid?: string
   timestamp?: string
   message?: { content?: unknown }
 }
@@ -111,30 +112,39 @@ function claudeResultText(content: unknown): string {
 }
 
 /**
- * Full-trace blocks from a Claude session file: one block per real user
- * prompt (uuid-keyed), reply joined from assistant text, tool_use calls as
- * activity lines. Corrupt lines and noise prompts are skipped.
+ * Full-trace blocks from a Claude session file: one block per real checkpoint,
+ * reply joined from assistant text, tool_use calls as structured activity.
+ *
+ * CHECKPOINT IDENTITY comes from the SHARED CheckpointAssigner — the SAME
+ * image-aware, noise-skipping, sibling-collapsing rule parseSessionTurns
+ * uses — so trace-block.index === TurnRecord.index by construction (the
+ * two are no longer independent positional counters). block.id stays the
+ * bound message uuid so records-union-trace pairs by real identity.
  */
 export function parseClaudeTrace(lines: string[]): TraceBlock[] {
   const blocks: TraceBlock[] = []
   let current: TraceBlock | null = null
+  const assigner = new CheckpointAssigner()
   // tool_use id → its call object, for filling results (tool_use_id match).
   const pendingCalls = new Map<string, TraceToolCall>()
   for (const line of lines) {
     const entry = parseLine(line) as ClaudeEntry | null
     if (entry === null || typeof entry.type !== 'string') continue
     const content = entry.message?.content
-    const isPrompt =
-      entry.type === 'user' &&
-      entry.isMeta !== true &&
-      typeof content === 'string' &&
-      !isNoisePrompt(content)
-    if (isPrompt) {
+    const step = assigner.feed(entry)
+    if (step !== null) {
+      if (step.sibling && current !== null) {
+        // Same submission — collapse: adopt the continuation identity/prompt,
+        // keep the accumulated reply/activity (siblings precede any reply).
+        current.id = step.id.uuid ?? current.id
+        current.prompt = step.id.prompt
+        continue
+      }
       const startedAt = timeMs(entry.timestamp, current?.endedAt ?? 0)
       current = {
-        id: entry.uuid ?? `claude-${blocks.length + 1}`,
-        index: blocks.length + 1,
-        prompt: content as string,
+        id: step.id.uuid ?? `claude-${step.id.index}`,
+        index: step.id.index,
+        prompt: step.id.prompt,
         reply: '',
         activity: [],
         startedAt,
@@ -356,9 +366,13 @@ const TRACE_PAGE_DEFAULT_LIMIT = 20
  * back SHORT rather than shifted, so virtualizers never get duplicates.
  */
 export function pageTraceBlocks(blocks: TraceBlock[], request: TracePageRequest = {}): TracePage {
-  const total = blocks.length
+  const count = blocks.length
+  // total is the CEILING IDENTITY (last block's index), not the array length:
+  // the fan/timeline spans floor..ceiling by real identity so Conductor's
+  // past-cap span works without clamping to the record count.
+  const total = count === 0 ? 0 : blocks[count - 1].index
   const limit = Math.max(1, request.limit ?? TRACE_PAGE_DEFAULT_LIMIT)
-  if (total === 0) return { blocks: [], total: 0 }
+  if (count === 0) return { blocks: [], total: 0 }
 
   if (request.beforeIndex !== undefined) {
     const older = blocks.filter((b) => b.index < (request.beforeIndex as number))
@@ -371,10 +385,10 @@ export function pageTraceBlocks(blocks: TraceBlock[], request: TracePageRequest 
   if (request.aroundIndex !== undefined) {
     const at = blocks.findIndex((b) => b.index === request.aroundIndex)
     if (at >= 0) {
-      const start = Math.max(0, Math.min(at - Math.floor((limit - 1) / 2), total - limit))
+      const start = Math.max(0, Math.min(at - Math.floor((limit - 1) / 2), count - limit))
       return { blocks: blocks.slice(start, start + limit), total }
     }
     // Unknown checkpoint → tail fallback.
   }
-  return { blocks: blocks.slice(Math.max(0, total - limit)), total }
+  return { blocks: blocks.slice(Math.max(0, count - limit)), total }
 }

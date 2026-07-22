@@ -112,57 +112,6 @@ export function pruneToTotal(blocks: readonly TraceBlock[], total: number): Trac
   return blocks.filter((b) => b.index <= total)
 }
 
-/**
- * The IDENTITY of the newest loaded block (blocks[last].index), or null when
- * none are loaded. The trace list is ascending by identity, so the last entry
- * is the newest. NEVER `total` (a count) — under a capped history the identities
- * outrun the count (e.g. T6..T105 with total 100), so total-as-newest-index is
- * off by the trimmed span. Pure — unit-tested.
- */
-export function newestIndex(blocks: readonly TraceBlock[]): number | null {
-  return blocks.length > 0 ? blocks[blocks.length - 1].index : null
-}
-
-/**
- * Whether older blocks remain to lazy-load: true until we've discovered the
- * trace floor (`traceMin`, the smallest identity, learned when a scroll-up
- * fetch returns nothing older). Keyed on IDENTITIES — never a hardcoded T1, so
- * a cap-trimmed history whose oldest is T6 stops cleanly instead of looping on
- * phantom T1..T5. Pure — unit-tested.
- */
-export function hasOlderBlocks(oldestIndex: number | null, traceMin: number | null): boolean {
-  if (oldestIndex === null) return false
-  return traceMin === null || oldestIndex > traceMin
-}
-
-/**
- * Whether newer blocks remain to lazy-load (symmetric to hasOlderBlocks): true
- * until the trace ceiling (`traceMax`) is discovered. Drives the fill-forward
- * when returning toward live after eviction dropped the newest window — so the
- * latest reachable checkpoint is the true newest identity, not the newest that
- * survived the cap. Pure — unit-tested.
- */
-export function hasNewerBlocks(newest: number | null, traceMax: number | null): boolean {
-  if (newest === null) return false
-  return traceMax === null || newest < traceMax
-}
-
-/**
- * Whether a boundary fetch PROVES there is nothing beyond `start` (review
- * WARNING: the empty-page latch). A NON-EMPTY page that contains nothing past
- * `start` is the real floor/ceiling; a truly EMPTY page is a transient miss and
- * stays retryable — latching on it would falsely seal the range. Pure —
- * unit-tested.
- */
-export function boundaryReached(
-  blocks: readonly TraceBlock[],
-  start: number,
-  dir: 'older' | 'newer'
-): boolean {
-  if (blocks.length === 0) return false
-  return dir === 'older' ? !blocks.some((b) => b.index < start) : !blocks.some((b) => b.index > start)
-}
-
 // ---- full-range checkpoint rows (item 3: every traced checkpoint selectable) ----
 
 /** A lightweight trace listing entry — identity + a display title/snippet. */
@@ -220,6 +169,100 @@ export function traceRowLabel(index: number, traceTitle: string): string {
   return traceTitle.trim() || `T${index}`
 }
 
+// ---- identity-space virtualization (scroll-model rebuild) ----
+//
+// The transcript scroll extent spans the FULL checkpoint identity list
+// (floor..ceiling): loaded blocks at their measured height, unloaded identities
+// as estimated-height placeholders. This makes the geometry CONTINUOUS — no
+// zero-height gaps between sparse windows, which were the single root of the
+// four symptoms (snap-to-live on scroll-down, fractions resolving to loaded-group
+// edges, jumps stranding at neighborhood boundaries). Fractions map linearly to
+// the identity LIST (its positions), so they're robust to non-contiguous
+// identities (sibling collapse leaves gaps like [1,2,5,6,100]).
+
+/**
+ * The identity nearest a scroll FRACTION (0..1) over the identity list — used to
+ * turn a rail scrub into a target checkpoint. Linear in list position, so a
+ * mid-drag lands on the middle identity even across huge unloaded gaps. Null for
+ * an empty list. Pure — unit-tested.
+ */
+export function identityAtFraction(identities: readonly number[], fraction: number): number | null {
+  if (identities.length === 0) return null
+  const clamped = Math.max(0, Math.min(1, fraction))
+  return identities[Math.round(clamped * (identities.length - 1))]
+}
+
+/**
+ * A FRACTION (0..1) for an identity's position in the list (0 = oldest/top,
+ * 1 = newest) — drives the here-marker linearly in identity space. Absent id or
+ * a degenerate list → 1 (pinned live). Pure — unit-tested.
+ */
+export function fractionOfIdentity(identities: readonly number[], id: number | null): number {
+  if (id === null || identities.length <= 1) return 1
+  const i = identities.indexOf(id)
+  return i < 0 ? 1 : i / (identities.length - 1)
+}
+
+/**
+ * The first identity in view that has no loaded block — the window to lazily
+ * fetch as placeholders scroll into the viewport. Null when everything visible
+ * is already loaded. Pure — unit-tested.
+ */
+export function firstUnloadedInView(
+  visibleIds: readonly number[],
+  loaded: ReadonlySet<number>
+): number | null {
+  for (const id of visibleIds) if (!loaded.has(id)) return id
+  return null
+}
+
+export interface SingleFlight {
+  /** Request a fetch for `id`; coalesced so only the latest runs next. */
+  request: (id: number) => void
+}
+
+/**
+ * Coalescing single-flight (HIGH fetch-starvation fix): at most one `run` is in
+ * flight; a request made while busy remembers the LATEST id and re-fires it when
+ * the in-flight run settles — so a rapid SECOND far-jump is served, never
+ * dropped and left spinning forever. Intermediate requests are skipped (only the
+ * first + the latest run). Pure control-flow — unit-tested with mock async.
+ */
+export function coalescingSingleFlight(run: (id: number) => Promise<void>): SingleFlight {
+  let inFlight = false
+  let wanted: number | null = null
+  const fire = (): void => {
+    if (wanted === null) return
+    const id = wanted
+    inFlight = true
+    void run(id).finally(() => {
+      inFlight = false
+      // Re-fire for the LATEST wanted id if it changed while this ran (the second
+      // far-jump), otherwise the run is done.
+      if (wanted !== id) fire()
+      else wanted = null
+    })
+  }
+  return {
+    request: (id: number): void => {
+      wanted = id
+      if (!inFlight) fire()
+    }
+  }
+}
+
+/**
+ * Refine the placeholder height estimate from measured loaded-block heights: the
+ * mean of what's been measured, ignoring a degenerate (zero) measurement so a
+ * layout-less environment keeps the prior estimate. Returns `prev` when nothing
+ * usable was measured. Pure — unit-tested.
+ */
+export function refineEstimate(prev: number, measured: readonly number[]): number {
+  const usable = measured.filter((h) => h > 0)
+  if (usable.length === 0) return prev
+  return usable.reduce((a, b) => a + b, 0) / usable.length
+}
+
 /** A selectable checkpoint row: full record when in the cap, else trace-only. */
 export interface CheckpointRow {
   index: number
@@ -234,17 +277,31 @@ export interface CheckpointRow {
  * checkpoint is a selectable row (item 3): records supply full data (title,
  * fork, role-save) where present; identities below the record cap (e.g. T1..T7
  * when the store starts at T8) render trace-only from the listing. Union by
- * IDENTITY, ascending; records win. Pure — unit-tested.
+ * IDENTITY, ascending; records win.
+ *
+ * ROOT DEPENDENCY (Forge unified-identity, note trace-sourced-context-final):
+ * trace-block.index and TurnRecord.index are currently DIFFERENT coordinate
+ * systems, so a record can number BEYOND the trace ceiling (record-40 vs
+ * trace-38) — producing phantom rail rows that map to no trace block (mispaired
+ * titles, dead clicks). Clamp the rail to the TRACE CEILING: drop record-only
+ * rows past it, so the rail spans exactly the trace. When the listing is absent
+ * we can't know the ceiling, so records are kept as-is. Once Forge's unified
+ * contract lands the two coincide and this clamp is a no-op. Pure — unit-tested.
  */
 export function mergeCheckpointRows(
   records: readonly TurnRecord[],
   traceIndex: readonly TraceIndexEntry[]
 ): CheckpointRow[] {
   const byIndex = new Map<number, CheckpointRow>()
+  const ceiling =
+    traceIndex.length > 0
+      ? traceIndex.reduce((max, e) => Math.max(max, e.index), -Infinity)
+      : Infinity
   for (const entry of traceIndex) {
     byIndex.set(entry.index, { index: entry.index, record: null, traceTitle: entry.title })
   }
   for (const record of records) {
+    if (record.index > ceiling) continue // phantom record beyond the trace ceiling
     const prior = byIndex.get(record.index)
     byIndex.set(record.index, { index: record.index, record, traceTitle: prior?.traceTitle ?? '' })
   }
@@ -274,21 +331,6 @@ export function isAtBottom(scrollTop: number, scrollHeight: number, clientHeight
 }
 
 /**
- * Rail-as-scrollbar scrub (unified-scroll item 4): map a rail drag fraction
- * (0 = top of the oldest trace, 1 = live bottom) to a scrollTop over the ONE
- * combined trace+tail extent. Inverse of scrollTopToFraction; the fraction is
- * clamped so an over-drag pins to an end. Pure — the scrub math is unit-tested.
- */
-export function railToScrollTop(
-  fraction: number,
-  scrollHeight: number,
-  clientHeight: number
-): number {
-  const max = Math.max(0, scrollHeight - clientHeight)
-  return Math.max(0, Math.min(1, fraction)) * max
-}
-
-/**
  * Rail drag → fraction (unified-scroll item 4): where a pointer sits along the
  * rail track as a fraction (0 top → 1 bottom). The track is the rail height
  * minus an equal inset top and bottom (the marker's own padding), so a drag to
@@ -304,23 +346,6 @@ export function railPointerFraction(
   const track = rectHeight - inset * 2
   if (track <= 0) return 0
   return Math.max(0, Math.min(1, (clientY - rectTop - inset) / track))
-}
-
-/**
- * The current scroll position as a fraction of the combined extent (0 = top of
- * the oldest trace block, 1 = live bottom). Drives the here-marker so it tracks
- * the true unified position — not just which block is in view — making the rail
- * read as one scrollbar for the whole space. A pane with no overflow (nothing
- * to scroll) reports 1 (pinned live). Pure — unit-tested.
- */
-export function scrollTopToFraction(
-  scrollTop: number,
-  scrollHeight: number,
-  clientHeight: number
-): number {
-  const max = scrollHeight - clientHeight
-  if (max <= 0) return 1
-  return Math.max(0, Math.min(1, scrollTop / max))
 }
 
 /**

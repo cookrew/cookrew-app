@@ -24,13 +24,21 @@ export function isNoisePrompt(text: string): boolean {
   )
 }
 
-interface SessionEntry {
+/**
+ * Minimal shape of a session prompt-bearing entry — shared so the trace-block
+ * parser and this turn parser assign checkpoint identity from the SAME rule
+ * (see CheckpointAssigner). Any record carrying these fields qualifies.
+ */
+export interface PromptEntryLike {
   type?: string
   isMeta?: boolean
-  timestamp?: string
   uuid?: string
   parentUuid?: string
   message?: { content?: unknown }
+}
+
+interface SessionEntry extends PromptEntryLike {
+  timestamp?: string
 }
 
 interface ContentBlock {
@@ -45,7 +53,7 @@ interface ContentBlock {
  * checkpoint. Tool-result arrays (which carry a tool_result block, no text)
  * and noise wrappers return null.
  */
-function promptText(entry: SessionEntry): string | null {
+export function promptText(entry: PromptEntryLike): string | null {
   if (entry.type !== 'user' || entry.isMeta === true) return null
   const content = entry.message?.content
   if (typeof content === 'string') {
@@ -78,6 +86,69 @@ function entryTimeMs(entry: SessionEntry, fallback: number): number {
   return Number.isNaN(parsed) ? fallback : parsed
 }
 
+/**
+ * One assigned checkpoint identity: the reconciled 1-based ordinal (after
+ * sibling collapse + noise/image handling) plus the continuation uuid and
+ * prompt text. This IS TurnRecord.index by construction.
+ */
+export interface CheckpointId {
+  index: number
+  uuid?: string
+  prompt: string
+}
+
+export interface CheckpointStep {
+  id: CheckpointId
+  /** True when this prompt collapses into the current checkpoint (same submission). */
+  sibling: boolean
+}
+
+/**
+ * Single-pass checkpoint identity assigner, SHARED by parseSessionTurns and
+ * the trace-block parser so the two coordinate systems cannot diverge (the
+ * phantom-offset bug: a positional trace counter vs the reconciled turn
+ * count). Feed EVERY session entry in order; a prompt entry returns its
+ * CheckpointStep (new checkpoint, or a sibling collapse into the current one),
+ * a non-prompt returns null without touching state. Identity assignment —
+ * image-aware prompt detection, noise/command skipping, and same-parentUuid
+ * sibling collapse — lives here ONCE.
+ */
+export class CheckpointAssigner {
+  private count = 0
+  /** parentUuid of the current checkpoint's FIRST sibling (collapse anchor). */
+  private currentParent: string | undefined
+  /** uuid the current checkpoint is bound to (its continuation sibling). */
+  private boundUuid: string | undefined
+
+  feed(entry: PromptEntryLike): CheckpointStep | null {
+    const prompt = promptText(entry)
+    if (prompt === null) return null
+    // Same submission as the current checkpoint (Claude's string mirror +
+    // text/image record, or an edit/resend chain) — collapse, re-bind to
+    // this later sibling; the ordinal does NOT advance.
+    if (
+      this.count > 0 &&
+      typeof entry.parentUuid === 'string' &&
+      entry.parentUuid === this.currentParent
+    ) {
+      if (typeof entry.uuid === 'string') this.boundUuid = entry.uuid
+      return { id: this.idOf(prompt), sibling: true }
+    }
+    this.count += 1
+    this.currentParent = entry.parentUuid
+    this.boundUuid = typeof entry.uuid === 'string' ? entry.uuid : undefined
+    return { id: this.idOf(prompt), sibling: false }
+  }
+
+  private idOf(prompt: string): CheckpointId {
+    return {
+      index: this.count,
+      ...(this.boundUuid !== undefined ? { uuid: this.boundUuid } : {}),
+      prompt
+    }
+  }
+}
+
 /** Joined text blocks of an assistant entry, or null when it has none. */
 function assistantText(entry: SessionEntry): string | null {
   if (entry.type !== 'assistant' || !Array.isArray(entry.message?.content)) return null
@@ -97,43 +168,35 @@ function assistantText(entry: SessionEntry): string | null {
  */
 export function parseSessionTurns(lines: string[]): TurnRecord[] {
   const turns: TurnRecord[] = []
-  // parentUuid of the current turn's prompt entry. Sibling user records of ONE
-  // submission (e.g. Claude's plain-string mirror + the text+image record)
-  // share a parentUuid; they must collapse to ONE checkpoint, bound to the
-  // sibling the thread continues from — in file order the LAST one — so fork
-  // cutoffs stay exact.
-  let currentParent: string | undefined
+  // Identity (index + sibling collapse + uuid binding) comes from the SHARED
+  // assigner so trace-block.index === TurnRecord.index by construction.
+  const assigner = new CheckpointAssigner()
   for (const line of lines) {
     if (line.trim().length === 0) continue
     const entry = parseEntry(line)
     if (entry === null) continue
-    const prompt = promptText(entry)
-    if (prompt !== null) {
+    const step = assigner.feed(entry)
+    if (step !== null) {
       const last = turns[turns.length - 1]
-      if (
-        last !== undefined &&
-        typeof entry.parentUuid === 'string' &&
-        entry.parentUuid === currentParent
-      ) {
-        // Same submission as the current turn — collapse. Re-bind to this
-        // later sibling's uuid (the continuation); text is identical.
+      if (step.sibling && last !== undefined) {
+        // Same submission — collapse: adopt the continuation prompt/uuid,
+        // keep the accumulated reply and timestamps.
         turns[turns.length - 1] = {
           ...last,
-          prompt,
-          ...(typeof entry.uuid === 'string' ? { uuid: entry.uuid } : {})
+          prompt: step.id.prompt,
+          ...(step.id.uuid !== undefined ? { uuid: step.id.uuid } : {})
         }
         continue
       }
       const startedAt = entryTimeMs(entry, last?.endedAt ?? 0)
       turns.push({
-        index: turns.length + 1,
-        prompt,
+        index: step.id.index,
+        prompt: step.id.prompt,
         reply: '',
-        ...(typeof entry.uuid === 'string' ? { uuid: entry.uuid } : {}),
+        ...(step.id.uuid !== undefined ? { uuid: step.id.uuid } : {}),
         startedAt,
         endedAt: startedAt
       })
-      currentParent = entry.parentUuid
       continue
     }
     const current = turns[turns.length - 1]
