@@ -6,10 +6,46 @@ import {
   detectLiveWork,
   extractPromptEcho,
   feedPromptBuffer,
+  isCommandPrompt,
   isLiveStatus,
   parseAgentGlance,
   tailLines
 } from '../src/shared/turn'
+
+describe('isCommandPrompt', () => {
+  it('flags raw typed slash commands (UI actions, not conversation)', () => {
+    expect(isCommandPrompt('/rewind')).toBe(true)
+    expect(isCommandPrompt('/clear')).toBe(true)
+    expect(isCommandPrompt('/model opus')).toBe(true)
+    expect(isCommandPrompt('  /compact  ')).toBe(true)
+  })
+
+  it('does NOT flag paths or ordinary prompts that merely contain a slash', () => {
+    expect(isCommandPrompt('/tmp/x.ts fix the bug')).toBe(false) // 2nd slash
+    expect(isCommandPrompt('/Users/foo')).toBe(false) // uppercase root
+    expect(isCommandPrompt('fix the bug')).toBe(false)
+    expect(isCommandPrompt('run /review later')).toBe(false) // slash mid-line
+  })
+})
+
+describe('parseAgentGlance — Codex glyphs', () => {
+  it('reads the • reply and ignores a trailing › suggestion row', () => {
+    // Codex echoes with › and replies with •; the last › is a UI suggestion.
+    const codex = [
+      '› Now reply with exactly: CODEX-QA-BRAVO',
+      '',
+      '• CODEX-QA-BRAVO',
+      '',
+      '› Run /review on my current changes'
+    ].join('\n')
+    expect(parseAgentGlance(codex).message).toBe('CODEX-QA-BRAVO')
+  })
+
+  it('does not treat an indented Claude bullet list as a Codex reply glyph', () => {
+    const claude = ['⏺ Here are the options:', '  • first', '  • second'].join('\n')
+    expect(parseAgentGlance(claude).message).toBe('Here are the options:\n• first\n• second')
+  })
+})
 
 describe('feedPromptBuffer', () => {
   it('accumulates typed characters', () => {

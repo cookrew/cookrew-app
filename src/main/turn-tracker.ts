@@ -13,12 +13,14 @@ import {
   cleanTurnLines,
   dedupePhantomEchoes,
   detectAgentActivity,
+  isCommandPrompt,
   detectAttention,
   detectLiveWork,
   extractPromptEcho,
   feedPromptBuffer,
   isLiveStatus,
   parseAgentGlance,
+  scrollLineOf,
   tailLines
 } from '../shared/turn'
 
@@ -98,6 +100,8 @@ interface TrackedTerminal {
   lastHealScanAt: number
   prompt: string | null
   snapshot: string
+  /** Scrollback line where the current turn began (checkpoint mapping). */
+  turnStartLine: number | null
   reply: string | null
   /** Latest Sous (local model) summary of the current turn. */
   title: string | null
@@ -175,7 +179,10 @@ export class TurnTracker extends EventEmitter {
       return {
         ...record,
         ...(prior.title !== undefined ? { title: prior.title } : {}),
-        ...(prior.seenAt !== undefined ? { seenAt: prior.seenAt } : {})
+        ...(prior.seenAt !== undefined ? { seenAt: prior.seenAt } : {}),
+        // Screen offsets exist only on live-scraped records — the session
+        // file has no screen coordinates, so the reconcile must keep them.
+        ...(prior.scrollLine !== undefined ? { scrollLine: prior.scrollLine } : {})
       }
     })
     const deduped = dedupePhantomEchoes(merged)
@@ -321,6 +328,7 @@ export class TurnTracker extends EventEmitter {
       lastHealScanAt: 0,
       prompt: null,
       snapshot: '',
+      turnStartLine: null,
       reply: null,
       title: null,
       titleGen: 0,
@@ -373,6 +381,7 @@ export class TurnTracker extends EventEmitter {
         title: t.title,
         turnCount: this.history(terminalId).length,
         turnStartedAt: null,
+        turnStartLine: null,
         updatedAt: Date.now()
       } satisfies TerminalActivity)
     }
@@ -434,6 +443,7 @@ export class TurnTracker extends EventEmitter {
 
   private startTurn(t: TrackedTerminal, prompt: string): void {
     t.snapshot = t.session.fullText()
+    t.turnStartLine = scrollLineOf(t.snapshot)
     t.phase = 'thinking'
     t.lastSubmitAt = 0
     t.prompt = prompt
@@ -540,6 +550,7 @@ export class TurnTracker extends EventEmitter {
   private resumeThinking(t: TrackedTerminal): void {
     if (t.turnStartedAt === 0) {
       t.snapshot = t.session.fullText()
+      t.turnStartLine = scrollLineOf(t.snapshot)
       t.turnStartedAt = Date.now()
       // The prompt was typed before this tracker existed (reattach) — the
       // TUI's own echo of it is still on screen. Recover it so the card and
@@ -598,10 +609,19 @@ export class TurnTracker extends EventEmitter {
       this.push(t)
       return
     }
+    // A typed slash command (/rewind, /clear …) is a UI action, not an
+    // exchange — the session file records it as a command, not a user
+    // message, so a scrape checkpoint here would break the 1:1 with the
+    // session list. Discard it; a real '/…' prompt is re-added on reconcile.
+    if (t.prompt !== null && isCommandPrompt(t.prompt)) {
+      this.push(t)
+      return
+    }
     const appended = appendTurnRecord(this.history(id), {
       prompt: t.prompt ?? RECOVERED_PROMPT_LABEL,
       reply: t.reply,
       ...(t.title !== null ? { title: t.title } : {}),
+      ...(t.turnStartLine !== null ? { scrollLine: t.turnStartLine } : {}),
       startedAt: t.turnStartedAt,
       endedAt: Date.now()
     })
@@ -703,6 +723,7 @@ export class TurnTracker extends EventEmitter {
       title: t.title,
       turnCount: this.history(terminalId).length,
       turnStartedAt: inTurn ? t.turnStartedAt : null,
+      turnStartLine: inTurn ? t.turnStartLine : null,
       updatedAt: Date.now()
     }
   }

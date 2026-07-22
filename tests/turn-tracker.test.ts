@@ -187,6 +187,34 @@ describe('TurnTracker self-healing', () => {
     tracker.disposeAll()
   })
 
+  // Slash commands (/rewind …) are UI actions the session file filters out, so
+  // a scrape checkpoint here would break the 1:1 with the session list.
+  it('does not mint a checkpoint for a typed slash command', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    session.emit('input', '/rewind\r')
+    expect(phaseOf(tracker)).toBe('thinking')
+    session.full = 'Rewind to which checkpoint?' // the /rewind dialog output
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(phaseOf(tracker)).toBe('replied')
+    expect(tracker.history('term-1')).toHaveLength(0)
+    tracker.disposeAll()
+  })
+
+  it('still records a real prompt that merely contains a slash path', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    session.emit('input', '/tmp/x.ts fix the bug\r')
+    session.full = '⏺ fixed'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+    const history = tracker.history('term-1')
+    expect(history).toHaveLength(1)
+    expect(history[0].prompt).toBe('/tmp/x.ts fix the bug')
+    tracker.disposeAll()
+  })
+
   it('re-enters thinking from replied when a current-style live spinner reappears', async () => {
     vi.useFakeTimers()
     const { tracker, session } = makeTracker()
@@ -542,6 +570,66 @@ describe('TurnTracker pending input + paste binding (DEFECT 2)', () => {
     session.emit('input', 'draft…')
     await vi.advanceTimersByTimeAsync(400)
     expect(pending).toBe('draft…')
+    tracker.disposeAll()
+  })
+})
+
+describe('checkpoint scrollback mapping (scrollLine, checkpoint-ux item 2)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('records each checkpoint start line from the snapshot at startTurn', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    // First checkpoint starts on an empty buffer → line 0.
+    session.emit('input', 'first ask\r')
+    expect(tracker.list()[0].turnStartLine).toBe(0)
+    session.full = '> first ask\n⏺ done one\n'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(phaseOf(tracker)).toBe('replied')
+
+    // Second checkpoint starts below the two existing scrollback lines.
+    session.idle = 0
+    session.emit('input', 'second ask\r')
+    expect(tracker.list()[0].turnStartLine).toBe(2)
+    session.full = '> first ask\n⏺ done one\n> second ask\n⏺ done two'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+
+    const history = tracker.history('term-1')
+    expect(history[0].scrollLine).toBe(0)
+    expect(history[1].scrollLine).toBe(2)
+    tracker.disposeAll()
+  })
+
+  it('exposes turnStartLine only while a turn is live', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    expect(tracker.list()[0].turnStartLine).toBeNull() // idle
+    await completeTurn(tracker, session)
+    expect(tracker.list()[0].turnStartLine).toBeNull() // replied → not live
+    tracker.disposeAll()
+  })
+
+  it('carries scrollLine across a session reconcile by matching prompt', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    await completeTurn(tracker, session) // prompt 'fix it', scrollLine 0
+    tracker.replaceHistory('term-1', [
+      {
+        index: 1,
+        prompt: 'fix it',
+        reply: 'done, all tests pass',
+        uuid: 'u1',
+        startedAt: 1,
+        endedAt: 2
+      }
+    ])
+    const history = tracker.history('term-1')
+    expect(history[0].uuid).toBe('u1')
+    expect(history[0].scrollLine).toBe(0)
     tracker.disposeAll()
   })
 })
