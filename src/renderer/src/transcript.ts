@@ -339,71 +339,66 @@ export function scrubPreviewRow(
 }
 
 /**
- * Whether a transcript scroll should transiently fan the checkpoint list open —
- * the MOBILE equivalent of the desktop hover-fan. Only on a coarse pointer
- * (touch has no real hover), only when not mid-scrub (the scrub owns the rail
- * then), and only once a checkpoint is actually in view. Pure — unit-tested.
+ * Two-zone scroll routing (v3 refinement): a DRAG on the vertical rail bar
+ * (traveled past the tap threshold) OPENS and drives the full list (State B),
+ * anchored on the checkpoint under the drag fraction; a plain rail tap / no
+ * travel does NOT open it (that's a tap-opener), and scrolling the TRANSCRIPT
+ * stays on the single tab (State A). Pure — unit-tested.
  */
-export function shouldRevealOnScroll(opts: {
-  coarsePointer: boolean
-  scrubbing: boolean
-  activeIndex: number | null
-}): boolean {
-  return opts.coarsePointer && !opts.scrubbing && opts.activeIndex !== null
+export function railDrive(
+  rows: readonly CheckpointRow[],
+  fraction: number,
+  moved: boolean
+): { openList: boolean; anchorIndex: number | null } {
+  if (!moved) return { openList: false, anchorIndex: null }
+  return { openList: true, anchorIndex: scrubPreviewRow(rows, fraction)?.index ?? null }
 }
 
-export interface ScrollReveal {
-  /** A scroll happened: reveal now and (re)arm the trailing collapse. */
-  bump: () => void
-  /** Cancel a pending collapse and fold back immediately (e.g. a scrub/tap). */
+/**
+ * The checkpoint currently in FOCUS (mobile v3 State A): the row for the active
+ * identity in view, or null when at the live tail / no match. Drives the
+ * single-checkpoint tab that tracks the focused chapter as you scroll (the tab
+ * shows this row; the mini here-marker rides its fraction). Pure — unit-tested.
+ */
+export function focusedCheckpoint(
+  rows: readonly CheckpointRow[],
+  activeIndex: number | null
+): CheckpointRow | null {
+  if (activeIndex === null) return null
+  return rows.find((r) => r.index === activeIndex) ?? null
+}
+
+export interface HoldReveal {
+  /** Begin a press on `index`; fires onReveal(index) once it's held for `ms`. */
+  start: (index: number) => void
+  /** Release/move/leave before `ms` — no reveal. */
   cancel: () => void
 }
 
 /**
- * Transient scroll-reveal controller: fans the list open on the first scroll and
- * collapses it after `quietMs` of no further scroll (a trailing debounce), so the
- * list appears WHILE scrolling and folds back to the single-line rest state — no
- * pinned-open, no from-T1 column. Uses the global timer (fake-timer testable).
- * Pure control-flow — unit-tested.
+ * Hold-to-reveal controller (mobile v3): press and HOLD a tab/row for `ms` (the
+ * touch equivalent of the desktop row-hover) to reveal its SAVE ROLE / FORK
+ * actions; a release before `ms` is a plain tap and reveals nothing. Uses the
+ * global timer (fake-timer testable). Pure control-flow — unit-tested.
  */
-export function createScrollReveal(onChange: (revealed: boolean) => void, quietMs: number): ScrollReveal {
+export function createHoldReveal(onReveal: (index: number) => void, ms: number): HoldReveal {
   let timer: ReturnType<typeof setTimeout> | null = null
-  const stop = (): void => {
+  const cancel = (): void => {
     if (timer) {
       clearTimeout(timer)
       timer = null
     }
   }
   return {
-    bump: (): void => {
-      onChange(true)
-      stop()
+    start: (index: number): void => {
+      cancel()
       timer = setTimeout(() => {
         timer = null
-        onChange(false)
-      }, quietMs)
+        onReveal(index)
+      }, ms)
     },
-    cancel: (): void => {
-      stop()
-      onChange(false)
-    }
+    cancel
   }
-}
-
-/**
- * Row-tap outcome for the checkpoint rail's mobile touch model. Tapping a row
- * ALWAYS jumps to that checkpoint (the caller does that); this returns the rail
- * state. On a COARSE pointer keep the fan OPEN and SELECT that row (`acting`) so
- * its inline SAVE ROLE / FORK bar shows — one row at a time, in flow, never the
- * floating overlapping tabs (touch has no hover to reveal them). On a fine
- * pointer collapse the fan (desktop reveals row actions on hover). Pure —
- * unit-tested.
- */
-export function railRowTap(
-  rowIndex: number,
-  coarse: boolean
-): { open: boolean; acting: number | null } {
-  return coarse ? { open: true, acting: rowIndex } : { open: false, acting: null }
 }
 
 /**

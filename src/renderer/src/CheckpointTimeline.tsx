@@ -6,11 +6,11 @@ import { type TitleMode } from './checkpoint-sync'
 import { hasRoleFromCheckpoint, saveRoleFromCheckpoint } from './role-checkpoint'
 import {
   checkpointRowTitle,
-  createScrollReveal,
+  createHoldReveal,
+  focusedCheckpoint,
+  railDrive,
   railPointerFraction,
-  railRowTap,
   scrubPreviewRow,
-  shouldRevealOnScroll,
   type CheckpointRow
 } from './transcript'
 
@@ -18,32 +18,33 @@ import {
 const RAIL_INSET = 16
 /** Px of pointer travel before a press on the rail becomes a scrub, not a tap. */
 const SCRUB_THRESHOLD = 4
-/** How long the scroll-revealed fan lingers after the last scroll before it
- *  folds back to the single-line rest state (mobile). */
-const REVEAL_QUIET_MS = 1400
-/** Coarse pointer (touch) — reveal-on-scroll replaces the unreliable hover-fan. */
+/** Hold a tab/row this long (~2s) to reveal its SAVE ROLE / FORK actions
+ *  (the touch equivalent of the desktop row-hover reveal). */
+const HOLD_REVEAL_MS = 1500
+/** Coarse pointer (touch): the two-state mobile model; desktop keeps real hover. */
 const COARSE_POINTER =
   typeof window !== 'undefined' &&
   typeof window.matchMedia === 'function' &&
   window.matchMedia('(pointer: coarse)').matches
 
 /**
- * Checkpoint timeline on the terminal context view (checkpoint-ux item 4, v5)
- * — replaces BOTH the arrow pager and the "fork from a checkpoint" modal.
+ * Checkpoint timeline on the terminal context view.
  *
- * At rest it's a thin line + the checkpoint count + a "you are here" marker +
- * a LIVE dot (`.cr-ckpt-mini`). Hovering the rail (desktop, CSS) or tapping it
- * (phone → `.open`) fans it into the full list (`.cr-ckpt-full`): oldest on
- * top, LIVE at the bottom, dots pinned right, titles fanning left. PRESS a row
- * → onGoto scrolls the context there; hover a row (desktop) / tap a row
- * (phone → `.acting`) reveals inline SAVE ROLE + FORK AGENT.
+ * DESKTOP: a thin rail (line + count + here-marker + live dot) that fans into the
+ * full list on hover; hover a row to reveal its SAVE ROLE / FORK, click to jump.
+ *
+ * MOBILE (v3), two states off the SAME mini rail:
+ *  - STATE A (default + scrolling/scrubbing): a single-checkpoint TAB that tracks
+ *    the FOCUSED chapter (T<index> + title) at the here-marker; HOLD it (~2s) to
+ *    reveal SAVE ROLE / FORK for that checkpoint. The mini here-marker moves with
+ *    the focus. Scrolling does NOT open the list.
+ *  - STATE B (explicit TAP of the mini): the full list opens ANCHORED on the
+ *    focused checkpoint (scrolled into view, neighbors above + below). Tap a row
+ *    → jump; hold a row → its actions.
  *
  * Rows span the WHOLE trace (unified-scroll item 3): identities below the record
- * cap render trace-only (no record → select + fork, but no role-save). A row
- * whose trace block is still fetching for a jump shows loading (item 4).
- *
- * Markup follows Fresco's `.cr-ckpt-*` contract; Fresco owns the visuals, this
- * owns the press / tap / save / fork logic + the active mapping.
+ * cap render trace-only (fork works, role-save needs the record). Fresco owns the
+ * `.cr-ckpt-*` visuals (incl. the tab-as-row look); this owns the interaction.
  */
 export function CheckpointTimeline({
   terminalId,
@@ -76,40 +77,48 @@ export function CheckpointTimeline({
    */
   onScrub?: (fraction: number) => void
 }): React.JSX.Element | null {
+  /** STATE B: the full list is open (only via an explicit mini tap). */
   const [open, setOpen] = useState(false)
   /** True while a rail scrub drag is active — drives the .dragging affordance. */
   const [scrubbing, setScrubbing] = useState(false)
-  /**
-   * Transiently true while scrolling the transcript on mobile — fans the list
-   * open like the desktop hover-fan, then collapses back to the single line
-   * (rest = desktop mini). Distinct from `open` (tap-persistent).
-   */
-  const [revealed, setRevealed] = useState(false)
-  /**
-   * Floating scrub-preview: the CURRENT checkpoint title at the thumb while
-   * dragging — the touch equivalent of desktop hover-reveal (the fan only shows
-   * dot/index otherwise). `frac` positions the label at the thumb.
-   */
-  const [preview, setPreview] = useState<{ frac: number; label: string } | null>(null)
-  /** The one row whose inline SAVE ROLE / FORK bar is shown (tap-selected). */
+  /** STATE A: the checkpoint the single tab tracks (focused chapter) + its frac. */
+  const [focused, setFocused] = useState<{ index: number; frac: number } | null>(null)
+  /** The tab/row whose SAVE ROLE / FORK actions are revealed (held ~2s). */
   const [acting, setActing] = useState<number | null>(null)
   const [savingIndex, setSavingIndex] = useState<number | null>(null)
   const [forkingIndex, setForkingIndex] = useState<number | null>(null)
   const railRef = useRef<HTMLDivElement>(null)
   const miniRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
   // Rail scrub gesture: a press that travels past SCRUB_THRESHOLD becomes a
   // scrollbar drag; a press that stays put is a tap that opens the fan.
   const scrub = useRef<{ startY: number; moved: boolean }>({ startY: 0, moved: false })
-  // Scroll-reveal controller: bump on each scroll to fan open, auto-collapse
-  // after the quiet window. Created once — setRevealed is stable.
-  const reveal = useMemo(() => createScrollReveal(setRevealed, REVEAL_QUIET_MS), [])
-  useEffect(() => () => reveal.cancel(), [reveal])
+  // Set when a HOLD fires (reveals actions) so the following click is swallowed.
+  const held = useRef(false)
+  const hold = useMemo(
+    () =>
+      createHoldReveal((index) => {
+        setActing(index)
+        held.current = true
+      }, HOLD_REVEAL_MS),
+    []
+  )
+  useEffect(() => () => hold.cancel(), [hold])
 
-  // Touch collapse: onMouseLeave never fires on a touch device, so a fanned
-  // list opened by tap has no other way to close (the mini goes pointer-events:
-  // none while open). A pointerdown outside the rail collapses it.
+  // STATE A: track the focused checkpoint for the tab (not while scrubbing — the
+  // scrub sets it directly). Null at the live tail → no tab.
   useEffect(() => {
-    if (!open) return
+    if (scrubbing) return
+    const row = focusedCheckpoint(rows, activeIndex ?? null)
+    setFocused(row ? { index: row.index, frac: markerFrac ?? 1 } : null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIndex, markerFrac, scrubbing])
+
+  // Collapse State B, or the tab's revealed actions, on a pointerdown OUTSIDE the
+  // rail (touch has no mouseleave). The tab lives inside the rail, so tapping it
+  // never self-closes.
+  useEffect(() => {
+    if (!open && acting === null) return
     const onDown = (e: PointerEvent): void => {
       if (railRef.current && !railRef.current.contains(e.target as Node)) {
         setOpen(false)
@@ -119,19 +128,23 @@ export function CheckpointTimeline({
     }
     document.addEventListener('pointerdown', onDown)
     return () => document.removeEventListener('pointerdown', onDown)
-  }, [open])
+  }, [open, acting])
 
-  // REVEAL ON SCROLL (mobile equivalent of the desktop hover-fan): scrolling the
-  // transcript moves activeIndex/markerFrac — fan the full list open transiently
-  // so you see WHERE you are (active row highlighted, with its title), then it
-  // collapses back to the single-line rest state. Coarse pointers only; the
-  // desktop keeps its real hover-fan.
+  // STATE B opens ANCHORED on the focus: scroll the active row to the middle so
+  // its neighbors fill above and below — it IS the same full list, just
+  // positioned at the focused checkpoint (not reset to T1).
+  // Anchor on `focused` (the drag/scroll focus) so a rail-drag DRIVES the list —
+  // it re-centres on the checkpoint under the drag — falling back to activeIndex.
   useEffect(() => {
-    if (shouldRevealOnScroll({ coarsePointer: COARSE_POINTER, scrubbing, activeIndex: activeIndex ?? null })) {
-      reveal.bump()
-    }
+    if (!open) return
+    const anchor = focused?.index ?? activeIndex ?? null
+    const node =
+      anchor != null
+        ? listRef.current?.querySelector<HTMLElement>(`[data-checkpoint="${anchor}"]`)
+        : null
+    node?.scrollIntoView({ block: 'center' })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIndex, markerFrac, scrubbing])
+  }, [open, focused?.index, activeIndex])
 
   if (rows.length === 0) return null
 
@@ -139,15 +152,20 @@ export function CheckpointTimeline({
     setActing(null)
     setSavingIndex(null)
   }
-  // Tap a row: jump to that chapter, then (touch) keep the fan open and select
-  // this ONE row so its inline SAVE ROLE / FORK bar shows — never floating tabs.
-  const tapRow = (index: number): void => {
-    onGoto(index)
-    const next = railRowTap(index, COARSE_POINTER)
-    if (next.open) reveal.cancel() // promote a transient scroll-reveal to persistent
-    setOpen(next.open)
-    setActing(next.acting)
-    setSavingIndex(null)
+  // HOLD to reveal actions (mobile only — desktop uses hover). A short release is
+  // a plain tap; `held` swallows the click that fires after a completed hold.
+  const startHold = (index: number): void => {
+    if (!COARSE_POINTER) return
+    held.current = false
+    hold.start(index)
+  }
+  const endHold = (): void => hold.cancel()
+  const onTap = (tap: () => void): void => {
+    if (held.current) {
+      held.current = false
+      return
+    }
+    tap()
   }
 
   const fork = (index: number): void => {
@@ -164,11 +182,9 @@ export function CheckpointTimeline({
 
   const stop = (e: React.MouseEvent): void => e.stopPropagation()
 
-  // Rail-as-scrollbar drag (item 4): press-and-drag the mini rail to scrub the
-  // combined trace+tail scroll space. Pointer capture keeps the drag alive past
-  // the rail edges; a press that never travels stays a tap (opens the fan).
+  // Rail-as-scrollbar drag: press-and-drag the mini to scrub; a press that never
+  // travels stays a tap (opens State B). While dragging, the tab tracks the drag.
   const onRailPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
-    reveal.cancel() // a deliberate scrub takes over from any transient reveal
     if (!onScrub || open) return
     scrub.current = { startY: e.clientY, moved: false }
     setScrubbing(true)
@@ -181,19 +197,23 @@ export function CheckpointTimeline({
     scrub.current.moved = true
     const rect = miniRef.current.getBoundingClientRect()
     const frac = railPointerFraction(e.clientY, rect.top, rect.height, RAIL_INSET)
-    onScrub(frac)
-    // Surface the checkpoint the drag is over, at the thumb (bug 1 redo).
-    const row = scrubPreviewRow(rows, frac)
-    setPreview(row ? { frac, label: `T${row.index} · ${checkpointRowTitle(row, titleMode)}` } : null)
+    onScrub(frac) // drive the transcript scroll too
+    // TWO-ZONE ROUTING (v3 refinement): a DRAG on the rail bar opens + drives the
+    // FULL LIST (State B), anchored on the checkpoint under the drag — distinct
+    // from a transcript scroll (which stays on the single tab, State A).
+    const drive = railDrive(rows, frac, true)
+    if (drive.openList) setOpen(true)
+    setFocused(drive.anchorIndex !== null ? { index: drive.anchorIndex, frac } : null)
   }
   const onRailPointerUp = (e: React.PointerEvent<HTMLDivElement>): void => {
     setScrubbing(false)
-    setPreview(null)
+    // A rail drag leaves the full list OPEN (persistent) so you can act on a row;
+    // an outside tap closes it. A plain tap (no travel) is handled by onRailClick.
     if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId)
     }
   }
-  // Swallow the click that follows a scrub drag so it doesn't toggle the fan.
+  // Tap the mini → open the full list (State B). A drag is swallowed here.
   const onRailClick = (): void => {
     if (scrub.current.moved) {
       scrub.current.moved = false
@@ -202,11 +222,6 @@ export function CheckpointTimeline({
     setOpen((v) => !v)
   }
 
-  // "You are here" marker (item 4): the transcript reports the TRUE position
-  // over the combined trace+tail extent (scrollTop / scrollable height), so the
-  // marker tracks the one scroll space continuously. Fall back to the selected
-  // checkpoint's position among the rows only when no live fraction has been
-  // reported yet. 0 = oldest block (rail top), 1 = live bottom.
   const here = activeIndex ?? null
   const hereFrac =
     markerFrac !== undefined
@@ -216,17 +231,41 @@ export function CheckpointTimeline({
         : 1
 
   const rowLabel = (row: CheckpointRow): string => checkpointRowTitle(row, titleMode)
+  const focusedRow = focused ? (rows.find((r) => r.index === focused.index) ?? null) : null
+
+  const rowActions = (row: CheckpointRow, index: number): React.JSX.Element => (
+    <span className="cr-ckpt-row-actions" onMouseDown={stop} onClick={stop}>
+      {savingIndex === index && row.record ? (
+        <SaveRoleInline terminalId={terminalId} record={row.record} onDone={closeActions} />
+      ) : (
+        <>
+          {row.record !== null && hasRoleFromCheckpoint() && (
+            <button className="cr-ckpt-action" onClick={() => setSavingIndex(index)}>
+              <CrIcon name="agent" /> ROLE
+            </button>
+          )}
+          <button
+            className="cr-ckpt-action"
+            disabled={forkingIndex !== null}
+            onClick={() => fork(index)}
+          >
+            <CrIcon name="fork" /> {forkingIndex === index ? '…' : 'FORK'}
+          </button>
+        </>
+      )}
+    </span>
+  )
 
   return (
     <div
       ref={railRef}
-      className={`cr-ckpt-rail${open ? ' open' : ''}${revealed ? ' revealing' : ''}${
-        scrubbing ? ' dragging' : ''
-      }${loadingIndex != null ? ' loading' : ''}`}
+      className={`cr-ckpt-rail${open ? ' open' : ''}${scrubbing ? ' dragging' : ''}${
+        loadingIndex != null ? ' loading' : ''
+      }`}
       onMouseLeave={closeActions}
     >
-      {/* resting: line + count + you-are-here + live. Drag scrubs the combined
-          scroll space (item 4); a plain tap opens the fan (phone). */}
+      {/* resting: line + count + you-are-here + live. Drag scrubs; a plain tap
+          opens the full list (State B). */}
       <div
         ref={miniRef}
         className="cr-ckpt-mini"
@@ -241,74 +280,70 @@ export function CheckpointTimeline({
           <span className="n">{rows.length}</span>
           <span className="l">CP</span>
         </div>
-        <div
-          className="cr-ckpt-here"
-          style={{ top: `calc(16px + ${hereFrac} * (100% - 32px))` }}
-        />
+        <div className="cr-ckpt-here" style={{ top: `calc(16px + ${hereFrac} * (100% - 32px))` }} />
         <div className="cr-ckpt-livedot" />
       </div>
 
-      {/* floating scrub-preview: the CURRENT checkpoint title at the thumb while
-          scrubbing / just-scrolled (bug 1 redo). Fresco styles the label. */}
-      {preview && (
+      {/* STATE A: single-checkpoint tab tracking the focused chapter. Fresco's
+          contract — a REAL desktop `.cr-ckpt-row` lifted onto a floating panel
+          (`.cr-ckpt-scrub-preview`), so it inherits the exact row look. Hold →
+          `.acting` reveals SAVE ROLE / FORK; tap → open State B. */}
+      {COARSE_POINTER && !open && focused && focusedRow && (
         <div
           className="cr-ckpt-scrub-preview"
-          style={{ top: `calc(16px + ${preview.frac} * (100% - 32px))` }}
-          aria-hidden
+          style={{ top: `calc(16px + ${focused.frac} * (100% - 32px))` }}
+          onPointerDown={() => startHold(focused.index)}
+          onPointerUp={endHold}
+          onPointerLeave={endHold}
+          onPointerCancel={endHold}
+          onClick={() => onTap(() => setOpen(true))}
         >
-          {preview.label}
+          <div className={`cr-ckpt-row active${acting === focused.index ? ' acting' : ''}`}>
+            {rowActions(focusedRow, focused.index)}
+            <span className="cr-ckpt-row-label">
+              <span className="cr-ckpt-row-idx">T{focused.index}</span>
+              <span className="cr-ckpt-row-title">{rowLabel(focusedRow)}</span>
+            </span>
+            <span className="cr-ckpt-dot">
+              <i />
+            </span>
+          </div>
         </div>
       )}
 
-      {/* fanned: the full checkpoint list, oldest → newest, LIVE last */}
+      {/* STATE B: the full checkpoint list (same as desktop), opened anchored on
+          the focused checkpoint. Tap a row → jump; hold → its actions. */}
       <div className="cr-ckpt-full">
         <div className="cr-ckpt-head">
           <span className="cr-ckpt-head-t">CHECKPOINTS</span>
           <span className="cr-ckpt-head-c">LIVE · {rows.length}</span>
         </div>
-        <div className="cr-ckpt-list" role="list" aria-label="Checkpoints">
+        <div ref={listRef} className="cr-ckpt-list" role="list" aria-label="Checkpoints">
           {rows.map((row) => {
             const isActive = row.index === here
             const isActing = acting === row.index
             const isLoading = loadingIndex === row.index
-            const canSaveRole = row.record !== null && hasRoleFromCheckpoint()
             return (
               <div
                 key={row.index}
                 role="listitem"
+                data-checkpoint={row.index}
                 className={`cr-ckpt-row${isActive ? ' active' : ''}${isActing ? ' acting' : ''}${
                   isLoading ? ' loading' : ''
                 }`}
                 aria-label={`Checkpoint ${row.index}`}
                 aria-busy={isLoading || undefined}
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() => tapRow(row.index)}
+                onPointerDown={() => startHold(row.index)}
+                onPointerUp={endHold}
+                onPointerLeave={endHold}
+                onPointerCancel={endHold}
+                onClick={() => onTap(() => onGoto(row.index))}
               >
-                <span className="cr-ckpt-row-actions" onMouseDown={stop} onClick={stop}>
-                  {savingIndex === row.index && row.record ? (
-                    <SaveRoleInline terminalId={terminalId} record={row.record} onDone={closeActions} />
-                  ) : (
-                    <>
-                      {canSaveRole && (
-                        <button className="cr-ckpt-action" onClick={() => setSavingIndex(row.index)}>
-                          <CrIcon name="agent" /> ROLE
-                        </button>
-                      )}
-                      <button
-                        className="cr-ckpt-action"
-                        disabled={forkingIndex !== null}
-                        onClick={() => fork(row.index)}
-                      >
-                        <CrIcon name="fork" /> {forkingIndex === row.index ? '…' : 'FORK'}
-                      </button>
-                    </>
-                  )}
-                </span>
+                {rowActions(row, row.index)}
                 <span className="cr-ckpt-row-label">
                   <span className="cr-ckpt-row-idx">T{row.index}</span>
-                  <span className="cr-ckpt-row-title">
-                    {isLoading ? 'loading…' : rowLabel(row)}
-                  </span>
+                  <span className="cr-ckpt-row-title">{isLoading ? 'loading…' : rowLabel(row)}</span>
                 </span>
                 <span className="cr-ckpt-dot">
                   <i />
@@ -325,10 +360,12 @@ export function CheckpointTimeline({
             role="listitem"
             aria-label="Live"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              onLive()
-              setOpen(false)
-            }}
+            onClick={() =>
+              onTap(() => {
+                onLive()
+                setOpen(false)
+              })
+            }
           >
             <span className="cr-ckpt-row-label">
               <span className="cr-ckpt-row-idx">LIVE</span>

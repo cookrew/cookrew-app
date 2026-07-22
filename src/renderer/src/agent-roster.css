@@ -598,42 +598,6 @@
 .metrics-seg .cr-chip.amber {
   border-color: var(--line);
 }
-
-/* ==== save-role-from-checkpoint row (Velvet structural; Fresco visual) ==== */
-.turn-panel-saverole {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border-top: 1.5px solid var(--line-soft);
-  background: var(--cream-md);
-  flex-wrap: wrap;
-}
-
-.turn-panel-saverole-label {
-  font-family: var(--font-pixel);
-  font-size: 7.5px;
-  letter-spacing: 0.06em;
-  color: var(--amber-deep);
-  flex: 0 0 auto;
-}
-
-.turn-panel-saverole .tf-input {
-  flex: 1;
-  min-width: 90px;
-}
-
-.turn-panel-saverole-err {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--rose);
-  flex-basis: 100%;
-}
-
-.turn-panel-role {
-  flex: 0 0 auto;
-}
-
 /* ==== role terminal chips + workspace template picker (Velvet structural) ==== */
 
 /* Saved-role chip in the TERMINAL placement row — persona violet accent,
@@ -748,12 +712,11 @@
 }
 
 /* ---- mobile checkpoint rail (Velvet logic; Fresco visual parity) ----
-   Touch has no real hover, so the desktop hover-fan STICKS open after a tap —
-   the always-visible from-T1 dots column the user saw. On mobile: neutralize
-   hover so the REST state is the single-line desktop mini, and reveal the fan
-   transiently ON SCROLL via the JS `.revealing` class (+ tap `.open`), folding
-   back to the line after. Fresco: reconcile the exact desktop mini/fan visuals
-   (these rules only carry the functional show/hide). */
+   Touch has no real hover, so the desktop hover-fan STICKS open after a tap. On
+   mobile (v3) the REST state is the single-line desktop mini; STATE B (the full
+   list) opens ONLY on an explicit tap (`.open`) — scrolling no longer fans it.
+   Neutralize hover so a stuck :hover never opens the list; Fresco reconciles the
+   exact mini/fan visuals (these rules only carry the functional show/hide). */
 body.cookrew-mobile .cr-ckpt-rail:hover {
   width: 40px;
 }
@@ -765,21 +728,52 @@ body.cookrew-mobile .cr-ckpt-rail:hover .cr-ckpt-full {
   opacity: 0;
   pointer-events: none;
 }
-/* scroll-reveal (.revealing) + tap (.open) share the fan visual on mobile */
-body.cookrew-mobile .cr-ckpt-rail.revealing,
+/* STATE B: an explicit mini tap (`.open`) reveals the full list. It is now a
+   COMPACT floating panel (below), so the rail itself stays a slim scroll zone —
+   no wide 360px catch-strip sitting invisibly over the transcript. */
 body.cookrew-mobile .cr-ckpt-rail.open {
-  width: 360px;
-  max-width: 84%;
+  width: 40px;
+  max-width: 40px;
 }
-body.cookrew-mobile .cr-ckpt-rail.revealing .cr-ckpt-mini,
 body.cookrew-mobile .cr-ckpt-rail.open .cr-ckpt-mini {
   opacity: 0;
   pointer-events: none;
 }
-body.cookrew-mobile .cr-ckpt-rail.revealing .cr-ckpt-full,
 body.cookrew-mobile .cr-ckpt-rail.open .cr-ckpt-full {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* v3 STATE B footprint: on phone the full list is a COMPACT floating panel sized
+   near the single-checkpoint tab — NOT the 360px desktop sidebar. Same full-list
+   style (head, rows, idx + title, active highlight), just snug and lifted left of
+   the rail like the tab, so State A → B reads as the same object growing. Velvet
+   scrolls it to the focused checkpoint (centre; neighbours above + below are the
+   rest of the list). Desktop is untouched. */
+body.cookrew-mobile .cr-ckpt-full {
+  top: 50%;
+  right: 48px;
+  bottom: auto;
+  transform: translateY(-50%);
+  width: min(76vw, 290px);
+  max-width: 76vw;
+  max-height: min(60vh, 320px);
+  background: linear-gradient(to left, rgba(20, 20, 23, 0.985), rgba(20, 20, 23, 0.94));
+  border: 1px solid var(--vi-line);
+  border-radius: 6px;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+/* the compact panel gives titles the full width: hidden actions COLLAPSE rather
+   than reserve inline space (Velvet's touch model reveals them on their own
+   full-width line when .acting, so they never sit inline — no reservation
+   needed). Her .acting order/flex-basis bar is untouched. */
+body.cookrew-mobile .cr-ckpt-full .cr-ckpt-row-actions {
+  display: none;
+}
+body.cookrew-mobile .cr-ckpt-full .cr-ckpt-row.acting .cr-ckpt-row-actions {
+  display: flex;
 }
 
 /* ONE list style, no floating tabs (Velvet touch model): touch has no real
@@ -804,27 +798,51 @@ body.cookrew-mobile .cr-ckpt-row.acting .cr-ckpt-row-actions {
   padding-top: 6px;
 }
 
-/* Floating scrub-preview label (Velvet structural; Fresco visuals): the current
-   checkpoint title surfaced at the thumb while scrubbing / just-scrolled, so
-   mobile has the title-reveal desktop gets on hover. Positioned to the LEFT of
-   the rail at the thumb's row; Fresco owns the chip look + truncation. */
+/* ---- v3 State A: single-checkpoint floating TAB (Velvet logic; Fresco visual)
+   The tab IS one row of the desktop full-list, lifted onto a floating panel at
+   the thumb — SAME row style (idx + title + reveal-on-hold ROLE/FORK), NOT a
+   bespoke label. Velvet renders a real .cr-ckpt-row inside so it inherits the
+   exact desktop row visuals; this wrapper is only the floating panel + position.
+   Structure:
+     <div class="cr-ckpt-scrub-preview" style="top:<thumbY>">
+       <div class="cr-ckpt-row active">              (a desktop row, verbatim)
+         <span class="cr-ckpt-row-actions">…ROLE …FORK</span>   (reveal on .acting)
+         <span class="cr-ckpt-row-label"><span class="cr-ckpt-row-idx">T9</span>
+           <span class="cr-ckpt-row-title">…</span></span>
+         <span class="cr-ckpt-dot"><i></i></span>
+       </div>
+     </div>  */
 .cr-ckpt-scrub-preview {
   position: absolute;
-  right: calc(100% + 8px);
+  /* fixed from the screen edge (rail is pinned right:0, 40px on touch / 30px
+     desktop while scrubbing) so the tab sits just left of the thumb either way */
+  right: 48px;
+  top: 0; /* Velvet sets the thumb Y inline */
   transform: translateY(-50%);
-  max-width: 62vw;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  pointer-events: none;
+  max-width: 76vw;
   z-index: 6;
-  font-family: var(--font-mono, monospace);
-  font-size: 11px;
-  padding: 3px 8px;
-  background: var(--vi-panel, #14110a);
-  color: var(--phos, #e9b949);
+  /* the desktop full-list panel language, as one lifted row */
+  background: linear-gradient(to left, rgba(20, 20, 23, 0.985), rgba(20, 20, 23, 0.94));
   border: 1px solid var(--vi-line, #5c4a1f);
-  border-radius: 3px;
+  border-radius: 6px;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.55);
+  overflow: hidden; /* clip the row's active rail + tint to the radius */
+}
+
+/* the inner row fills the tab and keeps its exact desktop styling */
+.cr-ckpt-scrub-preview .cr-ckpt-row {
+  width: 100%;
+}
+
+/* compact at rest — a lone floating row shouldn't reserve the in-column action
+   space the desktop list does; the desktop ROLE/FORK chips reveal on hold
+   (.acting), unchanged look. */
+.cr-ckpt-scrub-preview .cr-ckpt-row-actions {
+  display: none;
+}
+
+.cr-ckpt-scrub-preview .cr-ckpt-row.acting .cr-ckpt-row-actions {
+  display: flex;
 }
 
 /* Inline save-role input inside a checkpoint node's action panel. */
