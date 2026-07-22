@@ -663,12 +663,15 @@ describe('checkpoint scrollback mapping (scrollLine, checkpoint-ux item 2)', () 
   })
 })
 
-describe('activity.scrollRow (scroll→step, checkpoint-ux item 2 gap)', () => {
-  it('reflects the pane scroll position when the session reports one', () => {
+describe('activity.scrollRow/scrollBase (scroll→step, checkpoint-ux item 2)', () => {
+  type PaneStub = { paneScrollState: () => { scrollRow: number | null; historySize: number | null } }
+
+  it('reflects the pane scroll state when the session reports one', () => {
     const { tracker, session } = makeTracker()
-    ;(session as unknown as { scrollRow: () => number | null }).scrollRow = () => 42
+    ;(session as unknown as PaneStub).paneScrollState = () => ({ scrollRow: 42, historySize: 900 })
     expect(tracker.list()[0].scrollRow).toBe(42)
-    ;(session as unknown as { scrollRow: () => number | null }).scrollRow = () => null
+    expect(tracker.list()[0].scrollBase).toBe(900)
+    ;(session as unknown as PaneStub).paneScrollState = () => ({ scrollRow: null, historySize: 900 })
     expect(tracker.list()[0].scrollRow).toBeNull()
     tracker.disposeAll()
   })
@@ -676,6 +679,38 @@ describe('activity.scrollRow (scroll→step, checkpoint-ux item 2 gap)', () => {
   it('is null for sessions without scroll reporting (fakes, no tmux)', () => {
     const { tracker } = makeTracker()
     expect(tracker.list()[0].scrollRow).toBeNull()
+    expect(tracker.list()[0].scrollBase).toBeNull()
+    tracker.disposeAll()
+  })
+})
+
+describe('monotonic checkpoint anchor (Magpie E2 HIGH 1: degenerate scrollLine)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('records tmux history_size as scrollLine when available (not the visible screen)', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    // Under tmux the headless screen saturates at pane rows — the anchor
+    // must come from the session's monotonic scroll anchor instead.
+    let history = 120
+    ;(session as unknown as { scrollAnchor: () => number | null }).scrollAnchor = () => history
+    session.emit('input', 'first ask\r')
+    session.full = 'screen'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+
+    history = 155
+    session.idle = 0
+    session.emit('input', 'second ask\r')
+    session.full = 'screen more'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+
+    const records = tracker.history('term-1')
+    expect(records[0].scrollLine).toBe(120)
+    expect(records[1].scrollLine).toBe(155) // monotonic, not clamped to rows
     tracker.disposeAll()
   })
 })

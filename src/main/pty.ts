@@ -251,27 +251,57 @@ export class PtySession extends EventEmitter {
   }
 
   /**
-   * The pane's live scroll position (checkpoint-ux item 2, scroll→step):
-   * tmux scroll_position = lines scrolled UP from the live bottom while in
-   * copy-mode (0 = pinned to bottom but still in copy-mode). Null when the
-   * pane is live (not in copy-mode) or tmux is unavailable.
+   * Pane scroll state in ONE tmux round-trip (checkpoint-ux item 2):
+   * - scrollRow: tmux scroll_position — lines scrolled UP from the live
+   *   bottom while in copy-mode (0 = pinned to bottom but browsing); null
+   *   when the pane is live or tmux is unavailable.
+   * - historySize: tmux history_size — lines scrolled into scrollback since
+   *   the tmux session started. Rises with the session (survives our
+   *   reattaches) and so orders checkpoints reliably, UNLIKE the in-pane
+   *   screen buffer: TUIs repaint in place, so screen-derived counts saturate
+   *   at pane rows (the Magpie E2 degenerate-scrollLine bug). It is not
+   *   unbounded, though — history_size caps at the 50k history-limit, past
+   *   which the oldest lines trim and pre-window anchors go stale (clamp).
    */
-  scrollRow(): number | null {
-    if (!this.usesTmux || this.disposed) return null
+  paneScrollState(): { scrollRow: number | null; historySize: number | null } {
+    if (!this.usesTmux || this.disposed) return { scrollRow: null, historySize: null }
     try {
       const out = execFileSync(
         'tmux',
-        ['-L', TMUX_LABEL, 'display-message', '-p', '-t', this.sessionName, '#{scroll_position}'],
+        [
+          '-L',
+          TMUX_LABEL,
+          'display-message',
+          '-p',
+          '-t',
+          this.sessionName,
+          '#{scroll_position}:#{history_size}'
+        ],
         { stdio: ['ignore', 'pipe', 'ignore'] }
       )
         .toString('utf8')
         .trim()
-      if (out.length === 0) return null // empty outside copy-mode
-      const parsed = parseInt(out, 10)
-      return Number.isNaN(parsed) ? null : parsed
+      const [rowRaw = '', historyRaw = ''] = out.split(':')
+      const row = rowRaw.length === 0 ? NaN : parseInt(rowRaw, 10)
+      const history = parseInt(historyRaw, 10)
+      return {
+        scrollRow: Number.isNaN(row) ? null : row,
+        historySize: Number.isNaN(history) ? null : history
+      }
     } catch {
-      return null
+      return { scrollRow: null, historySize: null }
     }
+  }
+
+  /** Live scroll position only (see paneScrollState). */
+  scrollRow(): number | null {
+    return this.paneScrollState().scrollRow
+  }
+
+  /** Checkpoint anchor: history_size now — rises with the session, caps at the
+   *  50k history-limit (null without tmux). */
+  scrollAnchor(): number | null {
+    return this.paneScrollState().historySize
   }
 
   private tmuxBestEffort(args: string[]): void {

@@ -2266,202 +2266,438 @@ body.cookrew-mobile .cookrew-minimap {
   padding: 1px 6px;
 }
 
-/* ---- checkpoint timeline scrollbar (checkpoint-ux-program-spec item 4) ----
-   Replaces the arrow pager: a vertical rail of checkpoint diamonds down the
-   context view. Diamond = a saved checkpoint (same badge language as
-   .cr-ckpt-badge); round pulsing dot = the LIVE head (matches .cr-live-badge).
-   PRESS a node → context jumps + its span highlights; HOVER (desktop) /
-   LONG-PRESS (phone, .acting) → inline SAVE ROLE + FORK AGENT.
-   Fresco owns the visual; Velvet mounts the component + press/scroll sync.
-   Structure:
-     <div class="cr-ckpt-timeline">
-       <button class="cr-ckpt-node live"><span class="cr-ckpt-node-mark"/></button>
-       <button class="cr-ckpt-node [active]" aria-label="Checkpoint 12">
-         <span class="cr-ckpt-node-mark"/>
-         <span class="cr-ckpt-node-actions">
-           <button class="cr-ckpt-action"><CrIcon name="agent"/> ROLE</button>
-           <button class="cr-ckpt-action"><CrIcon name="fork"/> FORK</button>
-         </span>
-       </button>
-     </div>
-   Vertical dark rail on the agent card / overlay; on-cream variant for light. */
+/* ---- checkpoint timeline (checkpoint-ux-program-spec item 4, v5) ----
+   Replaces BOTH the arrow pager AND the "fork from a checkpoint" modal. Lives
+   pinned to the right edge of the terminal context/overlay.
 
-.cr-ckpt-timeline {
-  position: relative;
-  flex: 0 0 auto;
+   AT REST: one clean vertical line + the checkpoint count + a single amber
+   "you are here" marker (Velvet sets its `top` from scroll) + a green LIVE dot.
+   No per-checkpoint dots — nothing to distort, calm until reached for.
+
+   ON APPROACH (.cr-ckpt-rail:hover, or .open pinned): fans into the full list —
+   dots pinned right, titles fan left, LIVE at the bottom; the active row shows
+   a progress bar = how far through that (maybe multi-screen) checkpoint you are.
+
+   Fresco owns the visual; Velvet mounts the structure + the scroll↔active↔
+   progress sync (item 2 logic) and sets --p (0..100) on the active row's
+   .cr-ckpt-prog and the collapsed .cr-ckpt-here `top`. Structure:
+     <div class="cr-ckpt-rail">                          (right-edge zone; widens on hover/.open)
+       <div class="cr-ckpt-mini">                        (resting: line + count)
+         <div class="cr-ckpt-line"></div>
+         <div class="cr-ckpt-count"><span class="n">12</span><span class="l">CP</span></div>
+         <div class="cr-ckpt-here" style="top:…"></div>   (you-are-here marker)
+         <div class="cr-ckpt-livedot"></div>
+       </div>
+       <div class="cr-ckpt-full">                         (fanned: full list)
+         <div class="cr-ckpt-head"><span class="cr-ckpt-head-t">CHECKPOINTS</span><span class="cr-ckpt-head-c">LIVE · 12</span></div>
+         <div class="cr-ckpt-list">
+           <div class="cr-ckpt-row [active]" role="button" tabindex="0">
+             <span class="cr-ckpt-row-actions">
+               <button class="cr-ckpt-action"><CrIcon name="agent"/> ROLE</button>
+               <button class="cr-ckpt-action"><CrIcon name="fork"/> FORK</button>
+             </span>
+             <span class="cr-ckpt-row-label"><span class="cr-ckpt-row-idx">T9</span><span class="cr-ckpt-row-title">…</span></span>
+             <span class="cr-ckpt-dot"><i></i></span>
+             <span class="cr-ckpt-prog" style="--p:45"></span>       (active row only)
+           </div>
+           …  <div class="cr-ckpt-row live"> … running now … </div>   (LAST = LIVE, bottom)
+         </div>
+       </div>
+     </div>
+   Add .on-cream on .cr-ckpt-rail for light contexts. */
+
+.cr-ckpt-rail {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 30px;
+  z-index: 4;
+  transition: width 160ms ease;
+}
+
+.cr-ckpt-rail:hover,
+.cr-ckpt-rail.open {
+  width: 360px;
+  max-width: 84%;
+}
+
+/* --- resting: line + count + you-are-here + live --- */
+.cr-ckpt-mini {
+  position: absolute;
+  inset: 0;
+  transition: opacity 130ms ease;
+}
+
+.cr-ckpt-rail:hover .cr-ckpt-mini,
+.cr-ckpt-rail.open .cr-ckpt-mini {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.cr-ckpt-line {
+  position: absolute;
+  top: 16px;
+  bottom: 16px;
+  right: 14px;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(var(--vi-line), #3a3a40);
+}
+
+.cr-ckpt-count {
+  position: absolute;
+  top: 14px;
+  right: 7px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: calc(9px * var(--z, 1));
-  padding: calc(8px * var(--z, 1)) calc(7px * var(--z, 1));
-  overflow-y: auto;
-  overflow-x: visible;
+  gap: 1px;
+  font-family: var(--font-pixel);
+  color: var(--amber-deep);
 }
 
-/* The rail line behind the nodes. */
-.cr-ckpt-timeline::before {
-  content: '';
+.cr-ckpt-count .n {
+  font-size: 12px;
+  color: var(--amber);
+  text-shadow: 0 0 6px rgba(255, 214, 0, 0.4);
+}
+
+.cr-ckpt-count .l {
+  font-size: 5.5px;
+  letter-spacing: 0.06em;
+}
+
+/* single amber marker riding the line — Velvet sets `top` from scroll */
+.cr-ckpt-here {
   position: absolute;
-  top: calc(8px * var(--z, 1));
-  bottom: calc(8px * var(--z, 1));
-  left: 50%;
-  transform: translateX(-50%);
-  width: 2px;
-  background: var(--vi-line);
+  right: 9px;
+  width: 12px;
+  height: 12px;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background: var(--amber);
+  border: 2px solid var(--phos-bg);
+  box-shadow: 0 0 0 3px rgba(255, 214, 0, 0.2);
+  transition: top 160ms ease;
 }
 
-/* One checkpoint node — the hit target (44px on phone). */
-.cr-ckpt-node {
+.cr-ckpt-livedot {
+  position: absolute;
+  right: 10px;
+  bottom: 14px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--vi-done);
+  animation: cr-ckpt-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes cr-ckpt-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(50, 215, 75, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(50, 215, 75, 0);
+  }
+}
+
+/* --- fanned: the full checkpoint list --- */
+.cr-ckpt-full {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 360px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(
+    to left,
+    rgba(20, 20, 23, 0.985),
+    rgba(20, 20, 23, 0.9) 82%,
+    rgba(20, 20, 23, 0.5)
+  );
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 130ms ease;
+}
+
+.cr-ckpt-rail:hover .cr-ckpt-full,
+.cr-ckpt-rail.open .cr-ckpt-full {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.cr-ckpt-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  flex: 0 0 auto;
+  background: var(--vi-panel);
+  border-bottom: 1.5px solid var(--vi-line);
+}
+
+.cr-ckpt-head-t {
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--vi-text);
+}
+
+.cr-ckpt-head-c {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--vi-dim);
+}
+
+.cr-ckpt-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 0;
+}
+
+.cr-ckpt-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 7px 14px 7px 12px;
+  cursor: pointer;
   position: relative;
-  z-index: 1;
-  display: grid;
-  place-items: center;
-  width: calc(18px * var(--z, 1));
-  height: calc(18px * var(--z, 1));
-  padding: 0;
   background: none;
   border: none;
-  cursor: pointer;
+  text-align: left;
+}
+
+.cr-ckpt-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.cr-ckpt-row.active {
+  background: rgba(255, 214, 0, 0.07);
+}
+
+.cr-ckpt-row.active::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--amber);
+}
+
+/* intra-checkpoint progress bar (active row) — Velvet sets --p (0..100) */
+.cr-ckpt-prog {
+  position: absolute;
+  left: 12px;
+  right: 38px;
+  bottom: 3px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  display: none;
+}
+
+.cr-ckpt-row.active .cr-ckpt-prog {
+  display: block;
+}
+
+.cr-ckpt-prog::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: calc(var(--p, 0) * 1%);
+  background: var(--amber);
+  border-radius: 2px;
+}
+
+.cr-ckpt-row-actions {
+  display: flex;
+  gap: 5px;
+  opacity: 0;
+  transition: opacity 110ms ease;
+}
+
+.cr-ckpt-row:hover .cr-ckpt-row-actions,
+.cr-ckpt-row:focus-within .cr-ckpt-row-actions,
+.cr-ckpt-row.acting .cr-ckpt-row-actions {
+  opacity: 1;
+}
+
+.cr-ckpt-row.live .cr-ckpt-row-actions {
+  display: none;
+}
+
+/* Inline "save as role" input, shown in place of the row actions. */
+.cr-ckpt-saverole {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cr-ckpt-saverole .tf-input {
+  width: 120px;
+  font-size: 11px;
+  padding: 3px 6px;
+}
+
+.cr-ckpt-row-label {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.cr-ckpt-row-idx {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  color: var(--amber-deep);
   flex: 0 0 auto;
 }
 
-/* Diamond marker — a saved checkpoint (rotated square, same as the badge). */
-.cr-ckpt-node-mark {
-  width: calc(8px * var(--z, 1));
-  height: calc(8px * var(--z, 1));
+.cr-ckpt-row.live .cr-ckpt-row-idx {
+  color: var(--vi-done);
+}
+
+.cr-ckpt-row-title {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--vi-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+.cr-ckpt-row.active .cr-ckpt-row-title {
+  color: #fff;
+  font-weight: 600;
+}
+
+.cr-ckpt-row.live .cr-ckpt-row-title {
+  color: var(--vi-dim);
+}
+
+/* clean fixed-size dots — display:block so they can never stretch */
+.cr-ckpt-dot {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+}
+
+.cr-ckpt-dot i {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
   background: var(--vi-panel);
-  border: 1.5px solid #e7bd63;
-  transform: rotate(45deg);
-  transition:
-    transform 120ms ease,
-    background 120ms ease;
+  border: 2px solid #b78e2e;
 }
 
-.cr-ckpt-node:hover .cr-ckpt-node-mark {
-  background: var(--amber-soft);
-}
-
-/* Active checkpoint (the one the context is scrolled to): filled + enlarged. */
-.cr-ckpt-node.active .cr-ckpt-node-mark {
+.cr-ckpt-row.active .cr-ckpt-dot i {
+  width: 12px;
+  height: 12px;
   background: var(--amber);
   border-color: var(--amber);
-  transform: rotate(45deg) scale(1.4);
-  box-shadow: 0 0 0 calc(3px * var(--z, 1)) rgba(255, 214, 0, 0.22);
+  box-shadow: 0 0 0 3px rgba(255, 214, 0, 0.22);
 }
 
-/* LIVE head: a round pulsing dot — the running conversation, not a saved
-   point (mirrors the .cr-live-badge dot). */
-.cr-ckpt-node.live .cr-ckpt-node-mark {
-  border-radius: 50%;
+.cr-ckpt-row.live .cr-ckpt-dot i {
   background: var(--vi-done);
   border-color: var(--vi-done);
-  transform: none;
-  animation: cr-live-pulse 1.6s ease-in-out infinite;
-}
-
-/* Inline actions — hover (desktop) or long-press (phone → .acting). Popped to
-   the side of the rail so they never cover neighbouring nodes. */
-.cr-ckpt-node-actions {
-  position: absolute;
-  left: 100%;
-  top: 50%;
-  transform: translateY(-50%);
-  margin-left: calc(4px * var(--z, 1));
-  display: flex;
-  gap: calc(4px * var(--z, 1));
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease;
-  white-space: nowrap;
-}
-
-.cr-ckpt-node:hover .cr-ckpt-node-actions,
-.cr-ckpt-node:focus-within .cr-ckpt-node-actions,
-.cr-ckpt-node.acting .cr-ckpt-node-actions {
-  opacity: 1;
-  pointer-events: auto;
+  animation: cr-ckpt-pulse 1.6s ease-in-out infinite;
 }
 
 .cr-ckpt-action {
   display: inline-flex;
   align-items: center;
-  gap: calc(3px * var(--z, 1));
+  gap: 4px;
   font-family: var(--font-pixel);
-  font-size: calc(7.5px * var(--z, 1));
-  letter-spacing: 0.04em;
+  font-size: 7.5px;
+  letter-spacing: 0.03em;
   color: var(--vi-text);
   background: var(--vi-panel);
   border: 1px solid var(--vi-line);
-  border-radius: calc(4px * var(--z, 1));
-  padding: calc(3px * var(--z, 1)) calc(6px * var(--z, 1));
+  border-radius: 4px;
+  padding: 5px 8px;
   cursor: pointer;
 }
 
 .cr-ckpt-action:hover {
-  background: #2a2a2e;
   border-color: var(--amber);
   color: var(--amber);
 }
 
 .cr-ckpt-action .cr-icon {
-  width: calc(10px * var(--z, 1));
-  height: calc(10px * var(--z, 1));
+  width: 11px;
+  height: 11px;
 }
 
-/* Active-span highlight in the context view — the text belonging to the
-   selected checkpoint gets an amber band + left rail. Velvet wraps each
-   checkpoint's span; toggles .active as the context scrolls / a node is
-   pressed. */
-.cr-ckpt-span {
-  transition: background 140ms ease;
+/* --- cream chrome (light contexts) --- */
+.cr-ckpt-rail.on-cream .cr-ckpt-line {
+  background: linear-gradient(var(--line-soft), var(--dim));
 }
 
-.cr-ckpt-span.active {
-  background: rgba(255, 214, 0, 0.08);
-  box-shadow: inset 3px 0 0 var(--amber);
+.cr-ckpt-rail.on-cream .cr-ckpt-count .n {
+  color: var(--amber-deep);
+  text-shadow: none;
 }
 
-/* Cream chrome (picker/mobile-light context): swap dark tokens. */
-.cr-ckpt-timeline.on-cream::before {
-  background: var(--line-soft);
+.cr-ckpt-rail.on-cream .cr-ckpt-here {
+  border-color: var(--cream-hi);
 }
 
-.cr-ckpt-timeline.on-cream .cr-ckpt-node-mark {
-  background: var(--cream-hi);
-  border-color: var(--amber-deep);
+.cr-ckpt-rail.on-cream .cr-ckpt-full {
+  background: linear-gradient(to left, var(--cream-hi) 82%, rgba(255, 254, 245, 0.6));
+  border-left: 2px solid var(--line);
 }
 
-.cr-ckpt-timeline.on-cream .cr-ckpt-node.active .cr-ckpt-node-mark {
-  background: var(--amber);
-  border-color: var(--amber-deep);
+.cr-ckpt-rail.on-cream .cr-ckpt-head {
+  background: var(--cream-md);
+  border-bottom: 1.5px solid var(--line);
 }
 
-.cr-ckpt-timeline.on-cream .cr-ckpt-node.live .cr-ckpt-node-mark {
-  background: var(--hp);
-  border-color: var(--hp);
+.cr-ckpt-rail.on-cream .cr-ckpt-head-t,
+.cr-ckpt-rail.on-cream .cr-ckpt-row-title {
+  color: var(--ink);
 }
 
-.cr-ckpt-timeline.on-cream .cr-ckpt-action {
+.cr-ckpt-rail.on-cream .cr-ckpt-row:hover {
+  background: var(--amber-soft);
+}
+
+.cr-ckpt-rail.on-cream .cr-ckpt-action {
   color: var(--ink);
   background: var(--cream-hi);
   border: 1.5px solid var(--line);
 }
 
-.cr-ckpt-timeline.on-cream .cr-ckpt-action:hover {
+.cr-ckpt-rail.on-cream .cr-ckpt-action:hover {
   background: var(--amber-soft);
   border-color: var(--line);
   color: var(--ink);
 }
 
-/* Phone: 44px node hit targets + comfortably tappable inline actions. */
-body.cookrew-mobile .cr-ckpt-node {
-  width: 44px;
-  height: 44px;
+/* --- phone: wider catch-strip + 44px tappable actions --- */
+body.cookrew-mobile .cr-ckpt-rail {
+  width: 40px;
 }
 
 body.cookrew-mobile .cr-ckpt-action {
   font-size: 9px;
-  padding: 8px 10px;
+  padding: 9px 11px;
   min-height: 44px;
 }
 
