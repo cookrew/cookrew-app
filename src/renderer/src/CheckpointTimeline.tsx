@@ -2,12 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { TurnRecord } from '../../shared/turn'
 import { cookrew } from './api'
 import { CrIcon } from './icons'
-import {
-  checkpointProgress,
-  checkpointTitle,
-  markerFraction,
-  type TitleMode
-} from './checkpoint-sync'
+import { checkpointTitle, type TitleMode } from './checkpoint-sync'
 import { hasRoleFromCheckpoint, saveRoleFromCheckpoint } from './role-checkpoint'
 import type { TurnPaging } from './nodes/TurnPager'
 
@@ -34,16 +29,16 @@ export function CheckpointTimeline({
   terminalId,
   paging,
   titleMode,
-  scrollRow,
-  scrollBase
+  activeBlock,
+  markerFrac
 }: {
   terminalId: string
   paging: TurnPaging
   titleMode: TitleMode
-  /** tmux copy-mode position (lines above the live bottom); null at the tail. */
-  scrollRow?: number | null
-  /** tmux history_size, for converting checkpoint scrollLine → depth. */
-  scrollBase?: number | null
+  /** Checkpoint index of the transcript block in view; null at the live tail. */
+  activeBlock?: number | null
+  /** Exact marker fraction (block pos / trace total) from the transcript. */
+  markerFrac?: number
 }): React.JSX.Element | null {
   const records = paging.records ?? []
   const [open, setOpen] = useState(false)
@@ -107,24 +102,21 @@ export function CheckpointTimeline({
 
   const stop = (e: React.MouseEvent): void => e.stopPropagation()
 
-  // "You are here" marker: driven by the REAL scroll position (activity.scrollRow
-  // via the overlay) — scrolling the context moves it continuously. 0 = oldest
-  // (rail top), 1 = live bottom (rail bottom). Falls back to the selected
-  // checkpoint's index only when there's no live scroll signal.
-  const viewingPos = paging.viewing
-    ? records.findIndex((r) => r.index === paging.viewing?.index)
-    : records.length // LIVE sits just past the last checkpoint
+  // "You are here" marker (trace-sourced): the transcript reports the exact
+  // fraction (block global position / trace total). Fall back to the selected
+  // checkpoint's position among loaded records only when no live fraction has
+  // been reported yet. 0 = oldest block (rail top), 1 = live bottom.
+  const here = activeBlock ?? paging.viewing?.index ?? null
   const hereFrac =
-    scrollRow !== null && scrollRow !== undefined && scrollBase
-      ? markerFraction(scrollRow, scrollBase)
-      : records.length > 0
-        ? viewingPos / records.length
+    markerFrac !== undefined
+      ? markerFrac
+      : here !== null && records.length > 0
+        ? Math.max(0, records.findIndex((r) => r.index === here)) / records.length
         : 1
 
-  // Intra-checkpoint progress (--p, 0..100) for the active row: how far the
-  // scroll has moved through that checkpoint's line-range.
-  const progressFor = (record: TurnRecord): number =>
-    checkpointProgress(records, record.index, scrollBase ?? null, scrollRow ?? null) * 100
+  // The active row fills its progress bar (you are at this block). Intra-block
+  // scroll fraction is a future refinement (TranscriptView would report it).
+  const progressFor = (record: TurnRecord): number => (record.index === here ? 100 : 0)
 
   return (
     <div
@@ -157,7 +149,7 @@ export function CheckpointTimeline({
         </div>
         <div className="cr-ckpt-list" role="list" aria-label="Checkpoints">
           {records.map((record) => {
-            const isActive = paging.viewing?.index === record.index
+            const isActive = record.index === here
             const isActing = acting === record.index
             return (
               <div

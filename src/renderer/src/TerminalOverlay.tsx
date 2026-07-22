@@ -13,12 +13,8 @@ import { useCanvasUi } from './canvas-ui'
 import { cookrew } from './api'
 import { useTurnPaging } from './nodes/TurnPager'
 import { CheckpointTimeline } from './CheckpointTimeline'
-import {
-  activeCheckpointIndex,
-  checkpointDepth,
-  checkpointTitle,
-  useTitleMode
-} from './checkpoint-sync'
+import { TranscriptView, type ActiveBlock } from './TranscriptView'
+import { checkpointTitle, useTitleMode } from './checkpoint-sync'
 import { TurnHistoryPanel } from './TurnHistoryPanel'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
 import { handleTerminalPaste } from './terminal-paste'
@@ -118,27 +114,14 @@ function TerminalOverlay({
   const viewingIndex = paging.viewing?.index ?? null
   const viewingPrompt = paging.viewing?.prompt ?? null
   const jumpedRef = useRef(false)
-  // Everything is in "lines above the live bottom" units (Forge monotonic
-  // contract): scrollRow is the current copy-mode position, scrollBase the tmux
-  // history_size, and a checkpoint's depth is scrollBase − scrollLine. No xterm
-  // buffer conversion needed. records feed the checkpoint depths.
-  const scrollRow = activity?.scrollRow ?? null
-  const scrollBase = activity?.scrollBase ?? null
-  const records = paging.records ?? []
-
-  // Value-specific feedback guards (not a time window — a time window can
-  // strand a user scroll that settles inside it, since the effect never
-  // re-fires after expiry). A forward jump records the exact scrollRow it is
-  // expected to echo; the reverse effect ignores only that one value, so a
-  // genuinely different settled position always applies. The reverse step
-  // records the index it selected so the forward effect skips re-jumping to a
-  // position the user already scrolled to.
-  const expectedEchoRow = useRef<number | null>(null)
+  // Guard so the reverse step (transcript scroll → goto) doesn't bounce the
+  // forward secondary jump back at it.
   const reverseSelectedIndex = useRef<number | null>(null)
 
-  // FORWARD (select → scroll): a chosen checkpoint scrolls the tmux context to
-  // its ask line — unless the selection came from a reverse scroll step, where
-  // the context is already there.
+  // FORWARD, DEMOTED SECONDARY (context-view-v2: tmux anchors are nice-to-have):
+  // selecting a checkpoint ALSO scrolls the real terminal to its ask line when
+  // the turn is still within tmux history — the transcript block scroll is the
+  // primary. Skipped when the selection came from a reverse scroll step.
   useEffect(() => {
     if (viewingIndex !== null) {
       if (reverseSelectedIndex.current === viewingIndex) {
@@ -152,43 +135,30 @@ function TerminalOverlay({
         // Short literal chunk: long asks wrap across pane lines, which a
         // full-length literal search would never match.
         cookrew().ptyJump(node.id, line.slice(0, 30))
-        // The pane will settle at the checkpoint's depth (its prompt's lines-
-        // above-bottom). Record that exact scrollRow so the reverse effect
-        // ignores only this echo; a genuinely different settle always applies.
-        expectedEchoRow.current = checkpointDepth(records, viewingIndex, scrollBase)
       }
     } else if (jumpedRef.current) {
       jumpedRef.current = false
-      expectedEchoRow.current = null
       cookrew().ptyJump(node.id, null)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewingIndex, viewingPrompt, node.id, scrollBase])
+  }, [viewingIndex, viewingPrompt, node.id])
 
-  // REVERSE (scroll → step): tmux's copy-mode scroll position steps the active
-  // checkpoint. Compare scrollRow directly against each checkpoint's depth
-  // (scrollBase − scrollLine) — same units, no buffer conversion.
-  useEffect(() => {
-    // Exactly the echo our own forward jump produced — ignore this one value.
-    if (scrollRow !== null && scrollRow === expectedEchoRow.current) {
-      expectedEchoRow.current = null
-      return
+  // REVERSE (context-view-v2): scrolling the TRANSCRIPT steps the active
+  // checkpoint. The transcript reports the block in view (onActiveBlockChange);
+  // guarded so the forward selection's own scroll doesn't bounce back. tmux
+  // copy-mode scrolling is demoted to the secondary ptyJump above.
+  const [activeBlock, setActiveBlock] = useState<ActiveBlock>({ index: null, frac: 1 })
+  const onActiveBlockChange = (active: ActiveBlock): void => {
+    setActiveBlock(active)
+    const current = paging.viewing?.index ?? null
+    if (active.index === current) return
+    if (active.index === null) {
+      reverseSelectedIndex.current = null
+      paging.live()
+    } else {
+      reverseSelectedIndex.current = active.index
+      paging.goto(active.index)
     }
-    // At the live tail: drop back to the live view.
-    if (scrollRow === null) {
-      if (paging.viewing !== null) {
-        reverseSelectedIndex.current = null
-        paging.live()
-      }
-      return
-    }
-    const idx = activeCheckpointIndex(records, scrollBase, scrollRow)
-    if (idx !== null && idx !== (paging.viewing?.index ?? null)) {
-      reverseSelectedIndex.current = idx
-      paging.goto(idx)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scrollRow, scrollBase, records])
+  }
   // Never leave the pane stranded in copy-mode when the overlay unmounts.
   useEffect(
     () => () => {
@@ -622,13 +592,21 @@ function TerminalOverlay({
         </div>
       )}
       <div className="popout-terminal-wrap">
-        <div ref={containerRef} className="popout-terminal" />
+        <TranscriptView
+          terminalId={node.id}
+          total={activity?.turnCount ?? 0}
+          titleMode={titleMode}
+          selectedIndex={viewingIndex}
+          onActiveBlockChange={onActiveBlockChange}
+        >
+          <div ref={containerRef} className="popout-terminal" />
+        </TranscriptView>
         <CheckpointTimeline
           terminalId={node.id}
           paging={paging}
           titleMode={titleMode}
-          scrollRow={scrollRow}
-          scrollBase={scrollBase}
+          activeBlock={activeBlock.index}
+          markerFrac={activeBlock.frac}
         />
       </div>
       {dropReady && (

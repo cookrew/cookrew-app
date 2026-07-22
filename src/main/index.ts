@@ -35,11 +35,15 @@ import {
   roleSessionDir,
   saveRoleSessionCopy
 } from './claude-fork'
+import { isCodexCommand, resolveCodexRollout } from './codex-bind'
+import { TraceReader } from './trace'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
 import { TeamStore, forkTeam, workspaceFromTemplate } from './teams'
 import { GitInfoCache, addWorktree } from './git'
 import { buildRoleBootMessage } from '../shared/fork'
+import { pageTurns } from '../shared/turn'
+import type { TurnPageRequest } from '../shared/turn'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -55,6 +59,7 @@ const teams = new TeamStore()
 const gitCache = new GitInfoCache()
 const agents = new AgentRegistry()
 const events = new EventLog()
+const traces = new TraceReader(store)
 // Observability: the store's op choke-point feeds the durable event log;
 // the log's live stream broadcasts to the renderer (mobile gets the same
 // stream over the /api/events SSE, subscribed in mobile-api).
@@ -102,10 +107,11 @@ function spawnTracked(t: {
   command: string
   cwd: string
   claudeSessionId?: string | null
+  codexSessionRef?: string | null
 }): void {
   const upgraded = LEGACY_COMMANDS[t.command.trim()]
   const command = upgraded ?? t.command
-  if (upgraded) store.updateNode(t.id, { command })
+  if (upgraded) store.updateNodeUnsafe(t.id, { command })
   let effective = command
   let boundSessionId: string | null = null
   if (isClaudeCommand(command)) {
@@ -129,13 +135,35 @@ function spawnTracked(t: {
       storedId: t.claudeSessionId,
       turns: turns.history(t.id)
     })
-    if (t.claudeSessionId !== sessionId) store.updateNode(t.id, { claudeSessionId: sessionId })
+    if (t.claudeSessionId !== sessionId) store.updateNodeUnsafe(t.id, { claudeSessionId: sessionId })
     effective = claudeSpawnCommand(command, t.cwd, sessionId)
     boundSessionId = sessionId
   }
   const session = ptys.spawn({ terminalId: t.id, command: effective, cwd: t.cwd })
   turns.track(session, command.trim().length > 0)
   recordSpawn(t.id, session)
+  // Codex rollout bind (trace-sourced-context-final): the rollout file
+  // appears seconds AFTER boot, so try once after a grace delay; the trace
+  // reader lazily re-binds on first fetch if this attempt is too early.
+  if (isCodexCommand(command) && !t.codexSessionRef) {
+    const spawnedAt = Date.now()
+    setTimeout(() => {
+      try {
+        // Same-cwd siblings must never share a rollout (disambiguation):
+        // exclude refs other terminals already claimed.
+        const claimed = new Set(
+          store
+            .terminalsAcross()
+            .filter((n) => n.id !== t.id && typeof n.codexSessionRef === 'string')
+            .map((n) => path.resolve(n.codexSessionRef as string))
+        )
+        const ref = resolveCodexRollout({ cwd: t.cwd, spawnedAt, exclude: claimed })
+        if (ref && store.node(t.id)) store.updateNodeUnsafe(t.id, { codexSessionRef: ref })
+      } catch (error) {
+        console.error('Codex rollout bind failed (lazy retry remains):', error)
+      }
+    }, 8000)
+  }
   // Session-bound terminals: the Claude session JSONL is the source of truth
   // for turn records — reconcile now (rebuilds legacy scraped records) and
   // keep reconciling so /rewind truncation and exact prompts flow through.
@@ -603,6 +631,7 @@ app.whenReady().then(() => {
     store,
     events,
     agents,
+    traces,
     ptys,
     voice,
     turns,
@@ -749,6 +778,14 @@ function registerIpc(): void {
 
   // Turn history + fork-from-turn for the canvas cards.
   ipcMain.handle('turn:history', (_e, terminalId: string) => turns.history(terminalId))
+  // Context-view v2: paged transcript windows with full prompt+reply bodies.
+  ipcMain.handle('turn:page', (_e, terminalId: string, request?: TurnPageRequest) =>
+    pageTurns(turns.history(terminalId), request ?? {})
+  )
+  // Trace-sourced context: identity-keyed windows straight from agent files.
+  ipcMain.handle('trace:page', (_e, terminalId: string, request?: unknown) =>
+    traces.page(terminalId, (request ?? {}) as Parameters<TraceReader['page']>[1])
+  )
   // Observability event log: filtered history + counts + agent roster.
   ipcMain.handle('events:query', (_e, query) => events.query(query ?? {}))
   ipcMain.handle('events:count', (_e, query) => events.count(query ?? {}))

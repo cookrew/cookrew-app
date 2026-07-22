@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  pageTurns,
   cleanTurnLines,
   detectAgentActivity,
   detectAttention,
@@ -368,5 +369,52 @@ describe('feedPromptBuffer split paste markers (DEFECT 2a)', () => {
     expect(fed.buffer).toBe('')
     expect(fed.submitted).toEqual(['helloworld'])
     expect(fed.held).toBe('')
+  })
+})
+
+describe('pageTurns (context-view v2 paged windows)', () => {
+  const history = Array.from({ length: 10 }, (_, i) => ({
+    index: i + 1,
+    prompt: `prompt ${i + 1}`,
+    reply: `reply ${i + 1}`,
+    startedAt: i,
+    endedAt: i + 1
+  }))
+
+  it('defaults to the TAIL window (initial mount load)', () => {
+    const page = pageTurns(history, { limit: 3 })
+    expect(page.total).toBe(10)
+    expect(page.offset).toBe(7)
+    expect(page.turns.map((t) => t.index)).toEqual([8, 9, 10])
+  })
+
+  it('serves an offset window in oldest-first block order', () => {
+    const page = pageTurns(history, { offset: 2, limit: 3 })
+    expect(page.offset).toBe(2)
+    expect(page.turns.map((t) => t.index)).toEqual([3, 4, 5])
+  })
+
+  it('clamps windows that run past either end', () => {
+    expect(pageTurns(history, { offset: 8, limit: 5 }).turns.map((t) => t.index)).toEqual([9, 10])
+    const head = pageTurns(history, { offset: -2, limit: 3 })
+    expect(head.offset).toBe(0)
+    expect(head.turns.map((t) => t.index)).toEqual([1, 2, 3])
+  })
+
+  it('centers on aroundIndex for checkpoint-click fetches', () => {
+    const page = pageTurns(history, { aroundIndex: 5, limit: 3 })
+    expect(page.turns.map((t) => t.index)).toEqual([4, 5, 6])
+    expect(page.offset).toBe(3) // blockIndex of record index 4
+  })
+
+  it('falls back to the tail when aroundIndex is unknown', () => {
+    const page = pageTurns(history, { aroundIndex: 99, limit: 2 })
+    expect(page.turns.map((t) => t.index)).toEqual([9, 10])
+  })
+
+  it('handles empty history and caps the limit', () => {
+    expect(pageTurns([], { limit: 5 })).toEqual({ turns: [], total: 0, offset: 0 })
+    const capped = pageTurns(history, { limit: 5000 })
+    expect(capped.turns).toHaveLength(10)
   })
 })

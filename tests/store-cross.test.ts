@@ -112,3 +112,31 @@ describe('WorkspaceStore mirrored cross-workspace edges', () => {
     expect(store.connectedToAcross(orch.id).map((h) => h.node.id)).not.toContain(coder.id)
   })
 })
+
+describe('updateNode allow-list (unauth patches cannot plant refs)', () => {
+  it('drops session bindings, command and orch from external patches', () => {
+    const { store, orch } = makeStore()
+    const updated = store.updateNode(orch.id, {
+      name: 'Renamed',
+      claudeSessionId: 'planted',
+      codexSessionRef: '/tmp/evil.jsonl',
+      command: 'evil',
+      orch: false,
+      cwd: '/elsewhere'
+    } as never) as TerminalNodeData
+    expect(updated.name).toBe('Renamed')
+    expect(updated.claudeSessionId ?? null).toBeNull()
+    expect(updated.codexSessionRef ?? null).toBeNull()
+    expect(updated.command).not.toBe('evil')
+    expect(updated.orch).toBe(true)
+    expect(updated.cwd).not.toBe('/elsewhere')
+  })
+
+  it('updateNodeUnsafe keeps full-field access for main internals', () => {
+    const { store, orch } = makeStore()
+    const updated = store.updateNodeUnsafe(orch.id, {
+      claudeSessionId: 'real-bind'
+    }) as TerminalNodeData
+    expect(updated.claudeSessionId).toBe('real-bind')
+  })
+})

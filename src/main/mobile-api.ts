@@ -3,7 +3,9 @@ import type { WorkspaceStore } from './store'
 import type { PtyManager } from './pty'
 import type { TurnTracker } from './turn-tracker'
 import type { EventLog, CookrewEvent, EventQuery } from './event-log'
+import { pageTurns } from '../shared/turn'
 import type { AgentRegistry } from './agent-registry'
+import type { TraceReader } from './trace'
 import type {
   AgentRole,
   CanvasNode,
@@ -69,6 +71,8 @@ export interface MobileApiDeps {
   events: EventLog
   /** Durable agent roster cache (~/.cookrew/agents.json). */
   agents: AgentRegistry
+  /** Trace-sourced context reader (identity-keyed windows over agent files). */
+  traces: TraceReader
   ops: MobileOps
   presets: readonly { name: string; command: string }[]
   /** Persist a phone-uploaded attachment; returns its absolute path. */
@@ -318,9 +322,47 @@ export async function handleMobileApi(
     return true
   }
 
+  const traceMatch = p.match(/^\/api\/terminal\/([^/]+)\/trace$/)
+  if (traceMatch && method === 'GET') {
+    const num = (key: string): number | undefined => {
+      const raw = url.searchParams.get(key)
+      const parsed = raw === null ? NaN : Number(raw)
+      return Number.isFinite(parsed) ? parsed : undefined
+    }
+    respondJson(
+      response,
+      200,
+      await deps.traces.page(traceMatch[1], {
+        beforeIndex: num('beforeIndex'),
+        afterIndex: num('afterIndex'),
+        aroundIndex: num('aroundIndex'),
+        limit: num('limit')
+      })
+    )
+    return true
+  }
+
   const turnsMatch = p.match(/^\/api\/terminal\/([^/]+)\/turns$/)
   if (turnsMatch && method === 'GET') {
-    respondJson(response, 200, turns.history(turnsMatch[1]))
+    // Context-view v2: any page param present → TurnPage window; bare call
+    // keeps returning the legacy full array (lite client unaffected).
+    const num = (key: string): number | undefined => {
+      const raw = url.searchParams.get(key)
+      const parsed = raw === null ? NaN : Number(raw)
+      return Number.isFinite(parsed) ? parsed : undefined
+    }
+    const request = {
+      offset: num('offset'),
+      limit: num('limit'),
+      aroundIndex: num('aroundIndex')
+    }
+    const paged =
+      request.offset !== undefined || request.limit !== undefined || request.aroundIndex !== undefined
+    respondJson(
+      response,
+      200,
+      paged ? pageTurns(turns.history(turnsMatch[1]), request) : turns.history(turnsMatch[1])
+    )
     return true
   }
   // Workspace v2: repoint a terminal's cwd (respawns the pty).

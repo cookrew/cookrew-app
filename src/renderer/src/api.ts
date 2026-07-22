@@ -73,6 +73,24 @@ export interface CookrewApi {
   listAgents?: () => Promise<unknown[]>
   /** Completed turns of a terminal (oldest first) for the card pager. */
   listTurns: (terminalId: string) => Promise<TurnRecord[]>
+  /**
+   * Context-view v2 transcript windows: paged turns with FULL prompt+reply
+   * bodies. Optional — demo lacks it; the transcript feature-detects.
+   * blockIndex of turns[i] = response.offset + i (see the contract note).
+   */
+  listTurnsPage?: (
+    terminalId: string,
+    request?: { offset?: number; limit?: number; aroundIndex?: number; beforeIndex?: number }
+  ) => Promise<{ turns: TurnRecord[]; total: number; offset: number }>
+  /**
+   * Trace-sourced context (trace-sourced-context-final): identity-keyed
+   * TraceBlock windows read directly from the agent's own session file
+   * (Claude jsonl / Codex rollout). Optional — feature-detect.
+   */
+  listTrace?: (
+    terminalId: string,
+    request?: { beforeIndex?: number; afterIndex?: number; aroundIndex?: number; limit?: number }
+  ) => Promise<{ blocks: unknown[]; total: number; source: 'claude' | 'codex' | null }>
   /** Fork a NEW agent card from a past turn; omit turnIndex for the latest. */
   forkTerminal: (sourceId: string, turnIndex?: number) => Promise<CanvasNode>
   /** Fork a team into a NEW workspace per the spec (switches to it). */

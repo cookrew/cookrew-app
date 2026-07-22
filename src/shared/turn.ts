@@ -207,6 +207,64 @@ export function scrollLineOf(snapshot: string): number {
   return trimmed.length === 0 ? 0 : trimmed.split('\n').length
 }
 
+/** Paged window over a turn history (context-view v2 transcript layer). */
+export interface TurnPageRequest {
+  /** Start BLOCK INDEX (0-based, oldest-first). Omitted → tail window. */
+  offset?: number
+  /** Window size; defaults to 20, capped at MAX_TURN_HISTORY. */
+  limit?: number
+  /** Center the window on the record with this TurnRecord.index (wins over
+   *  offset — the checkpoint-click fetch). Unknown index → tail window. */
+  aroundIndex?: number
+  /**
+   * IDENTITY-keyed scroll-up cursor (review BLOCK 2): the `limit` records
+   * whose TurnRecord.index is OLDER than this. Wins over offset; survives
+   * caps and renumbering where array offsets do not.
+   */
+  beforeIndex?: number
+}
+
+export interface TurnPage {
+  turns: TurnRecord[]
+  /** Full history length — sizes the transcript virtualizer. */
+  total: number
+  /** Actual start block index of `turns` (blockIndex of turns[i] = offset+i). */
+  offset: number
+}
+
+const TURN_PAGE_DEFAULT_LIMIT = 20
+
+/**
+ * Slice a paged window out of a history. Pure: the transcript layer's only
+ * fetch primitive — records carry FULL prompt/reply bodies, no excerpting.
+ */
+export function pageTurns(history: TurnRecord[], request: TurnPageRequest = {}): TurnPage {
+  const total = history.length
+  const limit = Math.max(1, Math.min(request.limit ?? TURN_PAGE_DEFAULT_LIMIT, MAX_TURN_HISTORY))
+  if (total === 0) return { turns: [], total: 0, offset: 0 }
+
+  if (request.beforeIndex !== undefined) {
+    const older = history.filter((t) => t.index < (request.beforeIndex as number))
+    const start = Math.max(0, older.length - limit)
+    return { turns: older.slice(start), total, offset: start }
+  }
+  const anchor =
+    request.aroundIndex !== undefined
+      ? history.findIndex((t) => t.index === request.aroundIndex)
+      : -1
+  if (anchor < 0 && request.aroundIndex === undefined && request.offset !== undefined) {
+    // Explicit range: honor the requested offset exactly — a window past the
+    // end comes back SHORT rather than shifted, so a virtualizer never
+    // receives duplicate blocks it already holds.
+    const start = Math.max(0, Math.min(request.offset, total))
+    return { turns: history.slice(start, start + limit), total, offset: start }
+  }
+  // Tail / centered windows back-shift to fill the limit.
+  const start = anchor >= 0 ? anchor - Math.floor((limit - 1) / 2) : total - limit
+  const clamped = Math.max(0, Math.min(start, Math.max(0, total - limit)))
+  return { turns: history.slice(clamped, clamped + limit), total, offset: clamped }
+}
+
 /** Append a completed turn immutably, assigning the next index and capping. */
 export function appendTurnRecord(
   history: TurnRecord[],
