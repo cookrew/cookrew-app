@@ -1,19 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   activeBlockForScroll,
+  coalescingSingleFlight,
   evictTrace,
   isAtBottom,
-  boundaryReached,
-  hasNewerBlocks,
-  hasOlderBlocks,
+  firstUnloadedInView,
+  fractionOfIdentity,
+  identityAtFraction,
   jumpScrollBehavior,
   mergeCheckpointRows,
   mergeTrace,
-  newestIndex,
   pruneToTotal,
   railPointerFraction,
-  railToScrollTop,
-  scrollTopToFraction,
+  refineEstimate,
   tailClipRows,
   traceRowLabel,
   warnAbsentBridge,
@@ -82,6 +81,18 @@ describe('evictTrace (BLOCK 3 real windowing)', () => {
     expect(kept).toHaveLength(60)
     expect(kept[0]).toBe(46) // newest 60: T46..T105
   })
+
+  it('cap-full jump: ingesting a far window keeps length at the cap yet loads the target', () => {
+    // The effect-dep trap: with the cap FULL, merging the aroundIndex window
+    // then evicting back leaves blocks.length UNCHANGED (60 → 60), so a
+    // length-keyed effect never re-fires — but the target IS present, so the
+    // jump must scroll imperatively rather than wait on a length change.
+    const loaded = Array.from({ length: 60 }, (_, i) => block(i + 54)) // T54..T113
+    const jumpWindow = Array.from({ length: 20 }, (_, i) => block(i + 1)) // T1..T20
+    const kept = evictTrace(mergeTrace(loaded, jumpWindow), 1, 60) // anchor on target T1
+    expect(kept).toHaveLength(60) // length did NOT change
+    expect(kept.some((b) => b.index === 1)).toBe(true) // …yet T1 is now loaded
+  })
 })
 
 describe('pruneToTotal (MEDIUM 4 rewind shrink)', () => {
@@ -93,62 +104,6 @@ describe('pruneToTotal (MEDIUM 4 rewind shrink)', () => {
   it('keeps everything when total covers all loaded blocks', () => {
     const blocks = [block(1), block(2)]
     expect(pruneToTotal(blocks, 5)).toEqual(blocks)
-  })
-})
-
-// Capped-history fixture (defect: identity ≠ count): 100 records whose
-// identities span T6..T105 (cap trim + sibling collapse), total 100.
-const cappedBlocks = Array.from({ length: 100 }, (_, i) => block(i + 6))
-
-describe('newestIndex (latest = blocks[last].index, never total)', () => {
-  it('returns the newest loaded IDENTITY, which outruns the count', () => {
-    // 100 blocks, but the newest identity is T105 — NOT the total (100).
-    expect(newestIndex(cappedBlocks)).toBe(105)
-    expect(cappedBlocks.length).toBe(100)
-  })
-  it('is null when nothing is loaded', () => {
-    expect(newestIndex([])).toBeNull()
-  })
-})
-
-describe('hasOlderBlocks (identity floor, never a hardcoded T1)', () => {
-  it('stops at the discovered trace floor even when it is above T1', () => {
-    // oldest loaded T6, floor discovered as T6 → nothing older (no phantom T1..T5)
-    expect(hasOlderBlocks(6, 6)).toBe(false)
-    expect(hasOlderBlocks(6, null)).toBe(true) // floor unknown → older may exist
-    expect(hasOlderBlocks(50, 6)).toBe(true)
-  })
-  it('is false with nothing loaded', () => {
-    expect(hasOlderBlocks(null, null)).toBe(false)
-  })
-})
-
-describe('hasNewerBlocks (fill-forward to the true newest after eviction)', () => {
-  it('keeps loading newer until the trace ceiling (T105), not the count', () => {
-    // newest loaded stuck at T60 after eviction; ceiling T105 → more to load
-    expect(hasNewerBlocks(60, 105)).toBe(true)
-    expect(hasNewerBlocks(105, 105)).toBe(false)
-    expect(hasNewerBlocks(60, null)).toBe(true) // ceiling unknown → newer may exist
-  })
-  it('is false with nothing loaded', () => {
-    expect(hasNewerBlocks(null, null)).toBe(false)
-  })
-})
-
-describe('boundaryReached (empty-page latch guard)', () => {
-  it('latches only when a NON-EMPTY page has nothing beyond start', () => {
-    // scroll-up from T8: page came back but all >= 8 → T8 is the floor
-    expect(boundaryReached([block(8), block(9)], 8, 'older')).toBe(true)
-    // page has something older than 8 → not the floor yet
-    expect(boundaryReached([block(6), block(7), block(8)], 8, 'older')).toBe(false)
-  })
-  it('does NOT latch on a truly empty (retryable) page', () => {
-    expect(boundaryReached([], 8, 'older')).toBe(false)
-    expect(boundaryReached([], 105, 'newer')).toBe(false)
-  })
-  it('handles the newer direction (ceiling)', () => {
-    expect(boundaryReached([block(104), block(105)], 105, 'newer')).toBe(true)
-    expect(boundaryReached([block(105), block(106)], 105, 'newer')).toBe(false)
   })
 })
 
@@ -183,6 +138,16 @@ describe('mergeCheckpointRows (item 3: full trace range selectable)', () => {
     expect(rows).toHaveLength(98)
     expect(rows.every((r) => r.record !== null)).toBe(true)
   })
+  it('clamps phantom record rows beyond the trace ceiling (root dependency)', () => {
+    // Interim coordinate mismatch: records number to T40 while the trace ceils
+    // at T38 → the two extra record rows are phantoms that map to no block.
+    const recs = Array.from({ length: 40 }, (_, i) => record(i + 1)) // T1..T40
+    const idx = Array.from({ length: 38 }, (_, i) => ({ index: i + 1, title: `t${i + 1}` })) // T1..T38
+    const rows = mergeCheckpointRows(recs, idx)
+    expect(rows[rows.length - 1].index).toBe(38) // rail ceiling == trace ceiling
+    expect(rows.find((r) => r.index === 39)).toBeUndefined()
+    expect(rows.find((r) => r.index === 40)).toBeUndefined()
+  })
 })
 
 describe('activeBlockForScroll (scroll → checkpoint block)', () => {
@@ -211,26 +176,6 @@ describe('isAtBottom (autoscroll pin)', () => {
   })
 })
 
-describe('railToScrollTop (item 4 rail scrub)', () => {
-  it('maps a fraction to a scrollTop over the scrollable extent', () => {
-    // extent = scrollHeight(1000) - clientHeight(200) = 800
-    expect(railToScrollTop(0, 1000, 200)).toBe(0)
-    expect(railToScrollTop(1, 1000, 200)).toBe(800)
-    expect(railToScrollTop(0.5, 1000, 200)).toBe(400)
-  })
-  it('clamps an over-drag to the ends', () => {
-    expect(railToScrollTop(-0.3, 1000, 200)).toBe(0)
-    expect(railToScrollTop(1.4, 1000, 200)).toBe(800)
-  })
-  it('is 0 when there is nothing to scroll', () => {
-    expect(railToScrollTop(0.5, 200, 200)).toBe(0)
-  })
-  it('round-trips with scrollTopToFraction', () => {
-    const top = railToScrollTop(0.375, 1000, 200)
-    expect(scrollTopToFraction(top, 1000, 200)).toBeCloseTo(0.375)
-  })
-})
-
 describe('railPointerFraction (item 4 rail drag → fraction)', () => {
   // rail rect top=100, height=300, inset=16 → track = 300 - 32 = 268
   it('maps a pointer inside the track to a fraction', () => {
@@ -244,22 +189,6 @@ describe('railPointerFraction (item 4 rail drag → fraction)', () => {
   })
   it('is 0 when the track has collapsed', () => {
     expect(railPointerFraction(150, 100, 20, 16)).toBe(0)
-  })
-})
-
-describe('scrollTopToFraction (item 4 here-marker over combined extent)', () => {
-  it('maps a scroll position to a fraction (top 0 → live 1)', () => {
-    expect(scrollTopToFraction(0, 1000, 200)).toBe(0)
-    expect(scrollTopToFraction(800, 1000, 200)).toBe(1)
-    expect(scrollTopToFraction(400, 1000, 200)).toBeCloseTo(0.5)
-  })
-  it('pins to live (1) when there is no overflow to scroll', () => {
-    expect(scrollTopToFraction(0, 200, 200)).toBe(1)
-    expect(scrollTopToFraction(0, 150, 200)).toBe(1)
-  })
-  it('clamps a rubber-band overscroll', () => {
-    expect(scrollTopToFraction(-40, 1000, 200)).toBe(0)
-    expect(scrollTopToFraction(900, 1000, 200)).toBe(1)
   })
 })
 
@@ -315,5 +244,116 @@ describe('warnAbsentBridge (LOUD absent-bridge rule)', () => {
     warnAbsentBridge('bridgeTestBeta')
     warnAbsentBridge('bridgeTestGamma')
     expect(spy).toHaveBeenCalledTimes(2)
+  })
+})
+
+// ---- identity-space virtualization (scroll-model rebuild) ----
+// SPARSE fixture: 113 identities, only the T1 group + the tail loaded, the whole
+// middle (T2..T99) unloaded — the exact geometry that broke the old model.
+describe('identity-space virtualization (sparse fixtures)', () => {
+  const identities = Array.from({ length: 113 }, (_, i) => i + 1) // T1..T113 (contiguous)
+  const loaded = new Set<number>([1, ...Array.from({ length: 14 }, (_, i) => i + 100)]) // T1 + T100..T113
+
+  describe('identityAtFraction (scrub → target identity)', () => {
+    it('maps the ends and the MIDDLE of a huge unloaded gap', () => {
+      expect(identityAtFraction(identities, 0)).toBe(1)
+      expect(identityAtFraction(identities, 1)).toBe(113)
+      // scrub-to-middle lands on a MIDDLE identity (a placeholder) — not a
+      // loaded-group edge (T1 or T100) as the old pixel model did.
+      expect(identityAtFraction(identities, 0.5)).toBe(57)
+    })
+    it('clamps out-of-range fractions', () => {
+      expect(identityAtFraction(identities, -1)).toBe(1)
+      expect(identityAtFraction(identities, 2)).toBe(113)
+    })
+    it('works on NON-contiguous identities (sibling-collapse gaps)', () => {
+      const sparse = [1, 2, 5, 6, 100]
+      expect(identityAtFraction(sparse, 0.5)).toBe(5) // list position, not value
+      expect(identityAtFraction([], 0.5)).toBeNull()
+    })
+  })
+
+  describe('fractionOfIdentity (here-marker, linear in identity)', () => {
+    it('is linear over the list position, spanning the full range', () => {
+      expect(fractionOfIdentity(identities, 1)).toBe(0)
+      expect(fractionOfIdentity(identities, 113)).toBe(1)
+      expect(fractionOfIdentity(identities, 57)).toBeCloseTo(0.5)
+    })
+    it('round-trips with identityAtFraction at the middle', () => {
+      const mid = identityAtFraction(identities, 0.5)!
+      expect(fractionOfIdentity(identities, mid)).toBeCloseTo(0.5, 1)
+    })
+    it('pins to live (1) for an unknown id or a degenerate list', () => {
+      expect(fractionOfIdentity(identities, 9999)).toBe(1)
+      expect(fractionOfIdentity([1], 1)).toBe(1)
+    })
+  })
+
+  describe('firstUnloadedInView (scroll into a placeholder → fetch it)', () => {
+    it('returns the first placeholder identity scrolled into', () => {
+      // scrolling down out of the T1 group into the gap → next visible is T2..
+      expect(firstUnloadedInView([1, 2, 3], loaded)).toBe(2)
+      // scrubbed to the middle → the middle identities are placeholders
+      expect(firstUnloadedInView([56, 57, 58], loaded)).toBe(56)
+    })
+    it('is null when every visible identity is already loaded', () => {
+      expect(firstUnloadedInView([100, 101, 102], loaded)).toBeNull()
+      expect(firstUnloadedInView([1], loaded)).toBeNull()
+    })
+  })
+
+  describe('refineEstimate (placeholder height refines as blocks measure)', () => {
+    it('averages usable measurements', () => {
+      expect(refineEstimate(90, [100, 140])).toBe(120)
+    })
+    it('keeps the prior estimate when nothing usable was measured (no layout)', () => {
+      expect(refineEstimate(90, [])).toBe(90)
+      expect(refineEstimate(90, [0, 0])).toBe(90) // jsdom-style zero heights
+    })
+  })
+})
+
+describe('coalescingSingleFlight (HIGH: rapid second far-jump not starved)', () => {
+  it('runs the first, skips the intermediate, serves the LATEST', async () => {
+    const calls: number[] = []
+    const resolvers: Record<number, () => void> = {}
+    const run = (id: number): Promise<void> => {
+      calls.push(id)
+      return new Promise<void>((res) => {
+        resolvers[id] = res
+      })
+    }
+    const sf = coalescingSingleFlight(run)
+    sf.request(1) // fires immediately (A in flight)
+    sf.request(2) // deferred
+    sf.request(3) // deferred, latest wanted = 3
+    expect(calls).toEqual([1]) // single-flight: only A running
+
+    resolvers[1]() // A settles
+    await Promise.resolve()
+    await Promise.resolve()
+    // The intermediate (2) is skipped; the LATEST (3) is served — never starved.
+    expect(calls).toEqual([1, 3])
+
+    resolvers[3]()
+    await Promise.resolve()
+    await Promise.resolve()
+    // Nothing pending → no further runs.
+    sf.request(3)
+    // already the last-run id but flight is idle → it re-runs on explicit request
+    expect(calls).toEqual([1, 3, 3])
+  })
+
+  it('runs a lone request immediately and settles clean', async () => {
+    const calls: number[] = []
+    const run = (id: number): Promise<void> => {
+      calls.push(id)
+      return Promise.resolve()
+    }
+    const sf = coalescingSingleFlight(run)
+    sf.request(7)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(calls).toEqual([7])
   })
 })

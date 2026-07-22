@@ -624,6 +624,7 @@ function TerminalOverlay({
           terminalId={node.id}
           total={activity?.turnCount ?? 0}
           titleMode={titleMode}
+          identities={rows.map((r) => r.index)}
           selectedIndex={selectedIndex}
           jumpToken={jumpToken}
           clipRows={clipRows}

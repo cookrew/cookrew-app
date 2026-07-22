@@ -727,6 +727,26 @@
 /* The checkpoint rail itself is Fresco's .cr-ckpt-rail (v5) kit in styles.css;
    this only lays out the terminal + rail side by side inside the overlay. */
 
+/* Identity-space virtualization placeholder (Velvet structural; Fresco polish):
+   an unloaded checkpoint identity holds its slot at the estimated height (inline
+   style) so the scroll space is continuous. Dim, faint idx, clipped — reads as
+   "not yet loaded", fills with the real block when its window is fetched. */
+.ctx-placeholder {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  overflow: hidden;
+  color: var(--phos-dim, #8a6d1c);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  opacity: 0.35;
+  border-bottom: 1px dashed rgba(233, 185, 73, 0.08);
+}
+
+.ctx-placeholder.active {
+  opacity: 0.6;
+}
+
 /* Inline save-role input inside a checkpoint node's action panel. */
 .cr-ckpt-saverole {
   display: flex;
