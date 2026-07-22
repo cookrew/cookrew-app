@@ -14,7 +14,13 @@ import { cookrew } from './api'
 import { useTurnPaging } from './nodes/TurnPager'
 import { CheckpointTimeline } from './CheckpointTimeline'
 import { TranscriptView, type ActiveBlock, type TranscriptHandle } from './TranscriptView'
-import { tailClipRows } from './transcript'
+import {
+  fetchTraceIndex,
+  mergeCheckpointRows,
+  tailClipRows,
+  type CheckpointRow,
+  type TraceIndexEntry
+} from './transcript'
 import { checkpointTitle, useTitleMode } from './checkpoint-sync'
 import { TurnHistoryPanel } from './TurnHistoryPanel'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
@@ -112,25 +118,60 @@ function TerminalOverlay({
   // live exits copy-mode so the tail streams again.
   const paging = useTurnPaging(node.id, activity?.turnCount ?? 0, { eager: true })
   const [titleMode, toggleTitleMode] = useTitleMode()
-  const viewingIndex = paging.viewing?.index ?? null
 
-  // TRACE IS THE ONLY TARGET (unified-scroll item 3): clicking a checkpoint
-  // scrolls its canonical trace block into view (via TranscriptView's
-  // selectedIndex) and NEVER moves the live tmux pane. The former forward
-  // ptyJump into tmux copy-mode is gone — tmux positions are ephemeral and
-  // width-wrapped, the trace record is exact and truncation-immune. Scrolling
-  // the transcript reports the block in view (onActiveBlockChange), which steps
-  // the active checkpoint; the two directions stay in sync without any tmux
-  // round-trip, so no anti-bounce guard is needed.
+  // FULL-TRACE SELECTION (item 3): the fan/timeline spans the WHOLE trace range
+  // — Forge's cheap identity listing merged with the capped record store — so
+  // every traced checkpoint, INCLUDING identities below the record cap (e.g.
+  // T1..T7 when the store starts at T8), is a selectable row. Selection is an
+  // explicit identity, decoupled from the record cursor (which can't represent
+  // sub-cap identities); the trace is the only target (no tmux copy-mode), and
+  // the record-based pager is kept in sync best-effort for the header/fork.
+  const [traceIndex, setTraceIndex] = useState<TraceIndexEntry[]>([])
+  useEffect(() => {
+    let alive = true
+    void fetchTraceIndex(node.id)
+      .then((list) => {
+        if (alive) setTraceIndex(list)
+      })
+      .catch(() => {
+        // No listing (API absent / transient) → rows fall back to records alone.
+      })
+    return () => {
+      alive = false
+    }
+  }, [node.id, activity?.turnCount])
+  const rows = mergeCheckpointRows(paging.records ?? [], traceIndex)
+
   const transcriptRef = useRef<TranscriptHandle>(null)
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
   const [activeBlock, setActiveBlock] = useState<ActiveBlock>({ index: null, frac: 1 })
+  // A checkpoint whose trace block is still fetching for a jump — the rail/fan
+  // shows it loading so a far click gives instant feedback (item 4).
+  const [pendingIndex, setPendingIndex] = useState<number | null>(null)
+
+  const gotoCheckpoint = (index: number): void => {
+    setSelectedIndex(index)
+    paging.goto(index) // best-effort: syncs the record-backed header/fork
+  }
+  const goLive = (): void => {
+    setSelectedIndex(null)
+    paging.live()
+  }
+  // Scrolling the transcript reports the block in view (onActiveBlockChange),
+  // which steps the active checkpoint; the click/scrub → selectedIndex direction
+  // and this scroll → selectedIndex direction stay in sync, and TranscriptView's
+  // echo-skip keeps them from fighting, so no anti-bounce guard is needed.
   const onActiveBlockChange = (active: ActiveBlock): void => {
     setActiveBlock(active)
-    const current = paging.viewing?.index ?? null
-    if (active.index === current) return
+    if (active.index === selectedIndex) return
+    setSelectedIndex(active.index)
     if (active.index === null) paging.live()
     else paging.goto(active.index)
   }
+  const selectedRow = selectedIndex !== null ? (rows.find((r) => r.index === selectedIndex) ?? null) : null
+  const selectedTitle = selectedRow?.record
+    ? checkpointTitle(selectedRow.record, titleMode)
+    : selectedRow?.traceTitle || (selectedIndex !== null ? `T${selectedIndex}` : '')
 
   const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
 
@@ -539,22 +580,27 @@ function TerminalOverlay({
         </div>
       </div>
       {showTurns && <TurnHistoryPanel terminalId={node.id} onClose={() => setShowTurns(false)} />}
-      {(paging.viewing !== null || activity?.prompt) && (
-        <div className="popout-ask" title={paging.viewing?.prompt ?? activity?.prompt ?? ''}>
+      {(selectedIndex !== null || activity?.prompt) && (
+        <div className="popout-ask" title={selectedRow?.record?.prompt ?? selectedTitle ?? activity?.prompt ?? ''}>
           <span className="popout-ask-label">
-            {paging.viewing ? `CHECKPOINT ${paging.viewing.index}/${paging.count} ❯` : 'YOU ❯'}
+            {/* Identity, not position: T-number matches the transcript + rail
+                labels. A record-backed pick adds its "of N"; a sub-cap trace-only
+                pick shows the identity alone (it has no record position). */}
+            {selectedIndex === null
+              ? 'YOU ❯'
+              : selectedRow?.record
+                ? `CHECKPOINT T${selectedIndex} · ${paging.position} of ${paging.count} ❯`
+                : `CHECKPOINT T${selectedIndex} ❯`}
           </span>
           <span className="popout-ask-text">
-            {paging.viewing
-              ? clip(checkpointTitle(paging.viewing, titleMode), 300)
-              : clip(activity?.prompt ?? '', 300)}
+            {selectedIndex !== null ? clip(selectedTitle, 300) : clip(activity?.prompt ?? '', 300)}
           </span>
-          {paging.viewing !== null && (
+          {selectedIndex !== null && (
             <button
               className="cr-btn sm popout-ask-live"
               title="Back to live"
               onMouseDown={keepFocus}
-              onClick={paging.live}
+              onClick={goLive}
             >
               LIVE
             </button>
@@ -567,18 +613,22 @@ function TerminalOverlay({
           terminalId={node.id}
           total={activity?.turnCount ?? 0}
           titleMode={titleMode}
-          selectedIndex={viewingIndex}
+          selectedIndex={selectedIndex}
           clipRows={clipRows}
           onActiveBlockChange={onActiveBlockChange}
+          onPending={setPendingIndex}
         >
           <div ref={containerRef} className="popout-terminal" />
         </TranscriptView>
         <CheckpointTimeline
           terminalId={node.id}
-          paging={paging}
+          rows={rows}
           titleMode={titleMode}
-          activeBlock={activeBlock.index}
+          activeIndex={activeBlock.index}
+          loadingIndex={pendingIndex}
           markerFrac={activeBlock.frac}
+          onGoto={gotoCheckpoint}
+          onLive={goLive}
           onScrub={(fraction) => transcriptRef.current?.scrubTo(fraction)}
         />
       </div>

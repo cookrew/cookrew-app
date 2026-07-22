@@ -449,6 +449,46 @@ export class WorkspaceStore extends EventEmitter {
     return id === this.registry.activeId ? this.state : loadWorkspaceState(this.baseDir, id)
   }
 
+  /** Terminal node ids of ONE workspace (active from memory, inactive from disk). */
+  terminalIdsOf(workspaceId: string): string[] {
+    return this.stateOf(workspaceId)
+      .nodes.filter((n) => n.kind === 'terminal')
+      .map((n) => n.id)
+  }
+
+  /** Terminal node ids across ALL workspaces — the sessions the app owns. */
+  allTerminalIds(): string[] {
+    const ids: string[] = []
+    for (const w of this.registry.workspaces) {
+      for (const n of this.stateOf(w.id).nodes) {
+        if (n.kind === 'terminal') ids.push(n.id)
+      }
+    }
+    return ids
+  }
+
+  /**
+   * Strict variant for the orphan reaper: a workspace file that exists but
+   * fails to load THROWS instead of contributing an empty node list. The
+   * lenient loader is right for rendering (a corrupt file shouldn't crash the
+   * UI), but the reaper must fail SAFE — treating a parked team's terminals
+   * as unowned because its JSON was momentarily corrupt would kill them.
+   * A legitimately-absent file still counts as an empty workspace.
+   */
+  allTerminalIdsStrict(): string[] {
+    const ids: string[] = []
+    for (const w of this.registry.workspaces) {
+      const state =
+        w.id === this.registry.activeId
+          ? this.state
+          : loadWorkspaceStateStrict(this.baseDir, w.id)
+      for (const n of state.nodes) {
+        if (n.kind === 'terminal') ids.push(n.id)
+      }
+    }
+    return ids
+  }
+
   /** Apply a transform to any workspace: active mutates, inactive patches disk. */
   private patchWorkspace(id: string, fn: (s: WorkspaceState) => WorkspaceState): void {
     if (id === this.registry.activeId) {
@@ -797,6 +837,16 @@ function loadWorkspaceState(base: string, id: string): WorkspaceState {
   }
   const dir = homedir()
   return { name: 'Workspace', dir, dirs: [dir], nodes: [], connections: [] }
+}
+
+/** Like loadWorkspaceState but PROPAGATES load failures (orphan reaper). */
+function loadWorkspaceStateStrict(base: string, id: string): WorkspaceState {
+  const file = workspaceFile(base, id)
+  if (!existsSync(file)) {
+    const dir = homedir()
+    return { name: 'Workspace', dir, dirs: [dir], nodes: [], connections: [] }
+  }
+  return normalizeState(JSON.parse(readFileSync(file, 'utf8')) as WorkspaceState)
 }
 
 function saveWorkspaceState(base: string, id: string, state: WorkspaceState): void {

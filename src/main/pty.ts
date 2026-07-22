@@ -31,8 +31,49 @@ function detectTmux(): boolean {
 }
 
 /** tmux session name for a terminal id (names can't contain '.' or ':'). */
-function sessionNameFor(terminalId: string): string {
+export function sessionNameFor(terminalId: string): string {
   return `cookrew_${terminalId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`
+}
+
+/** Our tmux session naming, so the reaper never touches foreign sessions. */
+const COOKREW_SESSION_RE = /^cookrew_[A-Za-z0-9]+$/
+
+/**
+ * tmux session names that belong to NO terminal node — leaked agents from a
+ * crash or (until now) a workspace delete that never killed its terminals.
+ * Pure: only sessions matching our naming AND not owned by a live node are
+ * returned, so a foreign tmux session on the same server is never reaped.
+ */
+export function orphanSessionNames(
+  tmuxNames: string[],
+  ownedTerminalIds: Iterable<string>
+): string[] {
+  const owned = new Set<string>()
+  for (const id of ownedTerminalIds) owned.add(sessionNameFor(id))
+  return tmuxNames.filter((name) => COOKREW_SESSION_RE.test(name) && !owned.has(name))
+}
+
+/** Kill a cookrew tmux session by NAME (best effort) — no live PTY needed. */
+function killTmuxSessionByName(name: string): void {
+  if (!TMUX_AVAILABLE) return
+  try {
+    execFileSync('tmux', ['-L', TMUX_LABEL, 'kill-session', '-t', name], { stdio: 'ignore' })
+  } catch {
+    // already gone
+  }
+}
+
+/** Live cookrew tmux session names, or [] when no server / tmux is absent. */
+function listTmuxSessionNames(): string[] {
+  if (!TMUX_AVAILABLE) return []
+  try {
+    const out = execFileSync('tmux', ['-L', TMUX_LABEL, 'list-sessions', '-F', '#{session_name}'], {
+      encoding: 'utf8'
+    })
+    return out.split('\n').map((s) => s.trim()).filter((s) => s.length > 0)
+  } catch {
+    return [] // no running server (no sessions)
+  }
 }
 
 export interface PtySessionOptions {
@@ -419,6 +460,34 @@ export class PtyManager {
       session.dispose()
       this.sessions.delete(terminalId)
     }
+  }
+
+  /**
+   * Kill a terminal for good even when it has NO live PTY — a detached,
+   * parked-workspace terminal whose tmux session is still running. Workspace
+   * DELETE uses this: `kill` alone would no-op for inactive terminals and
+   * strand their tmux sessions (claude CLIs) forever.
+   */
+  killDetached(terminalId: string): void {
+    const session = this.sessions.get(terminalId)
+    if (session) {
+      session.killSession()
+      session.dispose()
+      this.sessions.delete(terminalId)
+      return
+    }
+    killTmuxSessionByName(sessionNameFor(terminalId))
+  }
+
+  /**
+   * Startup reaper: kill every cookrew tmux session not owned by a terminal
+   * node (past workspace-delete leaks, crash-stranded agents). Returns the
+   * reaped names. Foreign tmux sessions are never touched (naming guard).
+   */
+  reapOrphanSessions(ownedTerminalIds: Iterable<string>): string[] {
+    const orphans = orphanSessionNames(listTmuxSessionNames(), ownedTerminalIds)
+    for (const name of orphans) killTmuxSessionByName(name)
+    return orphans
   }
 
   /** App quit: detach everything so sessions survive for the next launch. */
