@@ -245,7 +245,11 @@ function appendPastedText(buffer: string, segment: string): string {
   return (buffer + text).slice(0, MAX_PROMPT_BUFFER)
 }
 
-/** Keystrokes outside a paste: Enter submits, backspace edits, ctrl-c/u clears. */
+/**
+ * Keystrokes outside a paste: Enter submits, backspace edits, ctrl-c/u clears.
+ * Shift+Enter arrives as ESC+CR (the TUI insert-newline binding) and appends a
+ * literal newline — one REAL Enter = one submit = one checkpoint (1:1 spec).
+ */
 function feedTypedSegment(
   buffer: string,
   segment: string
@@ -253,8 +257,12 @@ function feedTypedSegment(
   const submitted: string[] = []
   let line = buffer
   const plain = stripTermNoise(segment).replace(CSI_RE, '')
-  for (const char of plain) {
-    if (char === '\r' || char === '\n') {
+  for (let i = 0; i < plain.length; i += 1) {
+    const char = plain[i]
+    if (char === '\x1b' && (plain[i + 1] === '\r' || plain[i + 1] === '\n')) {
+      line = line.length < MAX_PROMPT_BUFFER ? line + '\n' : line
+      i += 1
+    } else if (char === '\r' || char === '\n') {
       submitted.push(line.trim())
       line = ''
     } else if (char === '\x7f' || char === '\b') {

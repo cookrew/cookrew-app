@@ -205,18 +205,40 @@ describe('TurnTracker recovered turns (empty-prompt history bug)', () => {
     vi.useRealTimers()
   })
 
-  it('labels a self-healed turn with real output instead of an empty prompt', async () => {
+  // Codex boot phantom: a fresh terminal's boot screen self-heals into a
+  // promptless turn that finalizes BEFORE any ask (they arrive seconds later).
+  // With no prompt AND no user input ever captured, it is boot noise — it must
+  // be DISCARDED, not minted as a '(recovered turn)' checkpoint that shifts
+  // every later index.
+  it('discards a promptless boot phantom at finalize (no prompt, no input)', async () => {
     vi.useFakeTimers()
     const { tracker, session } = makeTracker()
-    // Reattach: a live spinner with no input history opens an unlabeled turn.
+    session.full = '✻ Cerebrating… (esc to interrupt · 34s · ↓ 2.1k tokens)'
     session.emit('data', '✻ Cerebrating… (esc to interrupt · 34s · ↓ 2.1k tokens)')
     expect(phaseOf(tracker)).toBe('thinking')
+    expect(tracker.list()[0].prompt).toBe(null)
+
+    // Spinner clears to boot output; quiescence finalizes — but no ask came.
+    session.full = 'OpenAI Codex v0.144.6\nWelcome'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(phaseOf(tracker)).toBe('replied')
+    expect(tracker.history('term-1')).toHaveLength(0)
+    tracker.disposeAll()
+  })
+
+  it('keeps the synthetic label for a promptless turn that DID see input', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    session.emit('data', '✻ Cerebrating… (esc to interrupt · 34s · ↓ 2.1k tokens)')
+    expect(phaseOf(tracker)).toBe('thinking')
+    // A bare Enter (no capturable prompt text) still counts as user input, so
+    // the turn is a real exchange recorded under the recovered label.
+    session.emit('input', '\r')
 
     session.full = '⏺ finished the refactor'
     session.idle = 99_999
     await vi.advanceTimersByTimeAsync(3000)
-    expect(phaseOf(tracker)).toBe('replied')
-
     const history = tracker.history('term-1')
     expect(history).toHaveLength(1)
     expect(history[0].prompt).toBe(RECOVERED_PROMPT_LABEL)
