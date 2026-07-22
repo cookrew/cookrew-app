@@ -40,6 +40,11 @@ export interface TerminalActivity {
   title: string | null
   /** Completed turns recorded for this terminal (drives the card pager). */
   turnCount: number
+  /**
+   * Scrollback line where the LIVE turn began (checkpoint-ux item 2); null
+   * outside a running turn. Same coordinate space as TurnRecord.scrollLine.
+   */
+  turnStartLine: number | null
   /** Epoch ms when the current turn started; null outside a turn. */
   turnStartedAt: number | null
   updatedAt: number
@@ -73,6 +78,14 @@ export interface TurnRecord {
    * TURN COMPLETE instead of silently dropping it to READY.
    */
   seenAt?: number
+  /**
+   * 0-based scrollback line where this checkpoint's prompt echo begins,
+   * derived from the tracker snapshot at turn start (checkpoint-ux item 2).
+   * Best-effort: absent when the tracker never saw the turn start; indexes
+   * are pane-width-wrapped lines as the PTY attach replay serves them; a
+   * screen clear invalidates older offsets (consumers clamp).
+   */
+  scrollLine?: number
 }
 
 /** Cap on retained turn records per terminal (oldest dropped first). */
@@ -84,6 +97,20 @@ export const MAX_TURN_HISTORY = 100
  * then read "(recovered turn)" instead of an impossible empty prompt.
  */
 export const RECOVERED_PROMPT_LABEL = '(recovered turn)'
+
+/**
+ * A raw typed slash command (`/rewind`, `/clear`, `/model opus`) — a UI
+ * action, not a conversational prompt. The session file records these as
+ * commands (isNoisePrompt filters them), so a scrape turn must not mint a
+ * checkpoint for one either, or the checkpoint list drifts from the session
+ * 1:1. Excludes filesystem paths (`/tmp/x` has a second slash), uppercase
+ * roots (`/Users`) and mid-line slashes. A false positive on a real prompt
+ * that opens `/word …` is self-corrected on reconcile — the session keeps it
+ * (with a uuid) and it is re-added.
+ */
+export function isCommandPrompt(text: string): boolean {
+  return /^\/[a-z][a-z0-9-]*(\s|$)/.test(text.trim())
+}
 
 /** Normalized prompt key for phantom-echo matching (mirrors the fork matcher). */
 function phantomPromptKey(prompt: string): string {
@@ -148,6 +175,16 @@ export function extractPromptEcho(lines: string[]): string | null {
     if (m && !MENU_ROW_RE.test(m[1])) return m[1].trim()
   }
   return null
+}
+
+/**
+ * 0-based scrollback line where a turn beginning at this snapshot starts:
+ * the snapshot's line count, ignoring one trailing newline (fresh output
+ * lands on the line AFTER a newline-terminated buffer, ON a partial line).
+ */
+export function scrollLineOf(snapshot: string): number {
+  const trimmed = snapshot.endsWith('\n') ? snapshot.slice(0, -1) : snapshot
+  return trimmed.length === 0 ? 0 : trimmed.split('\n').length
 }
 
 /** Append a completed turn immutably, assigning the next index and capping. */
@@ -378,8 +415,14 @@ const SPINNER_LINE_RE = /^\s*[✻✽✳✢✶✦✺✹✸✷·∗*+]\s+(\S.*)$/
 const STATUS_HINT_RE = /…|\(|esc to interrupt|tokens|\b\d+m?\s?\d*s\b/i
 /** ⏺ entry: either Tool(args…) or a plain assistant message. */
 const ENTRY_RE = /^\s*[⏺●○]\s+(.*)$/
+/**
+ * Codex reply glyph: a bullet at COLUMN 0 (`• CODEX-QA-BRAVO`). Column-0 only
+ * so an INDENTED Claude bullet list ("  • item") is never mistaken for a
+ * reply. Codex echoes prompts with `›` (handled as a marker, never content).
+ */
+const CODEX_REPLY_RE = /^•\s+(.*)$/
 const TOOL_RE = /^([A-Z][\w-]*)\((.*)$/
-const MARKER_RE = /^\s*([⏺●○⎿✻✽✳✢✶✦✺✹✸✷>│┃╭╰]|[·∗*+]\s)/
+const MARKER_RE = /^\s*([⏺●○⎿✻✽✳✢✶✦✺✹✸✷>›│┃╭╰]|[·∗*+]\s)/
 
 /**
  * Parse an agent TUI transcript slice (the raw current-turn delta) into the
@@ -401,7 +444,7 @@ export function parseAgentGlance(text: string): AgentGlance {
   const tools: string[] = []
   let message: string | null = null
   for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const entry = ENTRY_RE.exec(lines[i])
+    const entry = ENTRY_RE.exec(lines[i]) ?? CODEX_REPLY_RE.exec(lines[i])
     if (!entry) continue
     const body = entry[1].trim()
     if (TOOL_RE.test(body)) {
