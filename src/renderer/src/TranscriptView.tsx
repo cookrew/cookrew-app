@@ -1,13 +1,23 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  useState
+} from 'react'
 import { checkpointTitle, type TitleMode } from './checkpoint-sync'
+import { MarkdownText } from './MarkdownText'
 import {
   activeBlockForScroll,
-  blockMarkerFraction,
   evictTrace,
   fetchTracePage,
   isAtBottom,
   mergeTrace,
   pruneToTotal,
+  railToScrollTop,
+  scrollTopToFraction,
   type TraceBlock
 } from './transcript'
 
@@ -18,8 +28,14 @@ const MAX_BLOCKS = 60
 export interface ActiveBlock {
   /** Checkpoint identity (TurnRecord.index) of the block in view, or null (live). */
   index: number | null
-  /** Marker fraction over the rail (0 oldest → 1 live). */
+  /** Marker fraction over the COMBINED trace+tail extent (0 top → 1 live bottom). */
   frac: number
+}
+
+/** Imperative handle so the checkpoint rail can scrub this one scroll space. */
+export interface TranscriptHandle {
+  /** Scrub to a rail fraction (0 = oldest trace top, 1 = live bottom). */
+  scrubTo: (fraction: number) => void
 }
 
 /**
@@ -32,38 +48,68 @@ export interface ActiveBlock {
  * stream. A checkpoint click scrolls to that block (fetching a window around it
  * if unloaded); scrolling reports the block in view for the timeline marker.
  */
-export function TranscriptView({
-  terminalId,
-  total,
-  titleMode,
-  selectedIndex,
-  onActiveBlockChange,
-  children
-}: {
-  terminalId: string
-  /** Total completed checkpoints (activity.turnCount) — grows/shrinks on rewind. */
-  total: number
-  titleMode: TitleMode
-  /** Checkpoint the user selected (paging.viewing) — scroll its block into view. */
-  selectedIndex: number | null
-  /** Reports the block in view (identity + marker fraction) for the timeline. */
-  onActiveBlockChange?: (active: ActiveBlock) => void
-  /** The live terminal layer, seamed at the bottom of the transcript. */
-  children: React.ReactNode
-}): React.JSX.Element {
+export const TranscriptView = forwardRef<
+  TranscriptHandle,
+  {
+    terminalId: string
+    /** Total completed checkpoints (activity.turnCount) — grows/shrinks on rewind. */
+    total: number
+    titleMode: TitleMode
+    /** Checkpoint the user selected (paging.viewing) — scroll its block into view. */
+    selectedIndex: number | null
+    /**
+     * Live-tail clip (unified-scroll item 1): rows of the idle TUI tail to keep
+     * in the live layer, or null for no clip. Drives the clip signal on the
+     * seam so scrollback above the tail stops competing with the trace.
+     */
+    clipRows: number | null
+    /** Reports the block in view (identity + marker fraction) for the timeline. */
+    onActiveBlockChange?: (active: ActiveBlock) => void
+    /** The live terminal layer, seamed at the bottom of the transcript. */
+    children: React.ReactNode
+  }
+>(function TranscriptView(
+  { terminalId, total, titleMode, selectedIndex, clipRows, onActiveBlockChange, children },
+  ref
+): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const liveRef = useRef<HTMLDivElement>(null)
   const blockRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   const [blocks, setBlocks] = useState<TraceBlock[]>([])
-  const [traceTotal, setTraceTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const pinnedRef = useRef(true)
+  // Latest clip state read by the imperatively-attached wheel handler (which is
+  // bound once) — a ref so the handler always sees the current phase.
+  const clipRef = useRef(clipRows)
+  clipRef.current = clipRows
   const anchorIndexRef = useRef<number>(Number.MAX_SAFE_INTEGER)
   const oldestIndex = blocks[0]?.index ?? null
   const hasOlder = oldestIndex !== null && oldestIndex > 1
 
+  // Seamless handoff (unified-scroll item 2): while the live tail is CLIPPED
+  // (turn at rest), a wheel UP over the live layer scrolls the ONE combined
+  // trace+tail space into the trace instead of driving tmux copy-mode into the
+  // TUI's own (duplicate) scrollback. Capture phase so it runs BEFORE xterm's
+  // viewport handler, upward-only and only until the trace above is exhausted;
+  // downward and a running turn (clip null) keep xterm's native/tmux scrolling.
+  useEffect(() => {
+    const live = liveRef.current
+    const scroller = scrollRef.current
+    if (!live || !scroller) return
+    const onWheel = (e: WheelEvent): void => {
+      if (clipRef.current === null) return
+      if (e.deltaY < 0 && scroller.scrollTop > 0) {
+        e.preventDefault()
+        e.stopPropagation()
+        scroller.scrollTop += e.deltaY
+      }
+    }
+    live.addEventListener('wheel', onWheel, { capture: true, passive: false })
+    return () => live.removeEventListener('wheel', onWheel, { capture: true } as EventListenerOptions)
+  }, [])
+
   // Merge a page in, then evict to the cap around the block currently in view.
   const ingest = useCallback((page: { blocks: TraceBlock[]; total: number }): void => {
-    setTraceTotal(page.total)
     setBlocks((prev) => {
       const merged = mergeTrace(pruneToTotal(prev, page.total), page.blocks)
       return evictTrace(merged, anchorIndexRef.current, MAX_BLOCKS)
@@ -87,7 +133,6 @@ export function TranscriptView({
   useEffect(() => {
     if (total <= 0) {
       setBlocks([])
-      setTraceTotal(0)
       return
     }
     anchorIndexRef.current = Number.MAX_SAFE_INTEGER
@@ -131,12 +176,29 @@ export function TranscriptView({
     const activeIndex = pinnedRef.current ? null : activeBlockForScroll(tops, el.scrollTop + 8)
     anchorIndexRef.current = activeIndex ?? Number.MAX_SAFE_INTEGER
     if (onActiveBlockChange) {
+      // The here-marker rides the TRUE position over the combined trace+tail
+      // extent (item 4: the rail is one scrollbar), not just block identity —
+      // so it moves continuously as the seam is crossed (item 2).
       onActiveBlockChange({
         index: activeIndex,
-        frac: blockMarkerFraction(activeIndex, traceTotal)
+        frac: scrollTopToFraction(el.scrollTop, el.scrollHeight, el.clientHeight)
       })
     }
-  }, [loadOlder, blockTops, onActiveBlockChange, traceTotal])
+  }, [loadOlder, blockTops, onActiveBlockChange])
+
+  // Rail scrub (item 4): map a rail fraction to this ONE scroll space. Setting
+  // scrollTop fires onScroll, so the marker + active checkpoint follow for free.
+  useImperativeHandle(
+    ref,
+    () => ({
+      scrubTo: (fraction: number): void => {
+        const el = scrollRef.current
+        if (!el) return
+        el.scrollTop = railToScrollTop(fraction, el.scrollHeight, el.clientHeight)
+      }
+    }),
+    []
+  )
 
   // Checkpoint click → scroll that block into view, fetching a window around it
   // when it is not loaded (truncation-immune: the record always exists in the
@@ -185,22 +247,47 @@ export function TranscriptView({
             <span className="ctx-block-idx">T{block.index}</span>
             <span className="ctx-block-title">{checkpointTitle(block, titleMode)}</span>
           </div>
+          {/* Prompt stays VERBATIM (pre-wrap) — the human's exact words. */}
           <div className="ctx-block-prompt">{block.prompt || '(empty prompt)'}</div>
           {block.activity.length > 0 && (
             <div>
-              {block.activity.map((line, i) => (
+              {block.activity.map((call, i) => (
                 <div key={i} className="ctx-block-tool">
-                  {line}
+                  {/* TUI-faithful (unified-scroll TODO): ⏺ Name(args), then
+                      the ⎿ connector + result snippet, dim phosphor. */}
+                  <div className="ctx-tool-call">
+                    <span className="ctx-tool-name">{call.tool}</span>
+                    {call.args && <span className="ctx-tool-args">{call.args}</span>}
+                  </div>
+                  {call.result && <div className="ctx-tool-result">{call.result}</div>}
                 </div>
               ))}
             </div>
           )}
-          {block.reply && <div className="ctx-block-reply">{block.reply}</div>}
+          {/* Reply renders MARKDOWN as React elements (addendum) — bold/italics,
+              lists, inline + fenced code, headings; never raw HTML. The .md flag
+              is Fresco's contract: it flips the container off pre-wrap so the
+              block elements own their spacing. */}
+          {block.reply && (
+            <div className="ctx-block-reply md">
+              <MarkdownText source={block.reply} />
+            </div>
+          )}
         </div>
       ))}
-      {/* live seam: the real xterm/tmux tail — one continuous stream. */}
-      <div className="ctx-live">{children}</div>
+      {/* live seam: the real xterm/tmux tail — one continuous stream. When the
+          turn is at rest, the seam clips to the tail (item 1): data-clip drives
+          Fresco's clip mask, and --tail-rows carries the boundary so scrollback
+          above the tail no longer competes with the trace above. */}
+      <div
+        ref={liveRef}
+        className="ctx-live"
+        data-clip={clipRows !== null ? '' : undefined}
+        style={clipRows !== null ? ({ ['--tail-rows']: clipRows } as React.CSSProperties) : undefined}
+      >
+        {children}
+      </div>
     </div>
   )
-}
+})
 

@@ -13,7 +13,8 @@ import { useCanvasUi } from './canvas-ui'
 import { cookrew } from './api'
 import { useTurnPaging } from './nodes/TurnPager'
 import { CheckpointTimeline } from './CheckpointTimeline'
-import { TranscriptView, type ActiveBlock } from './TranscriptView'
+import { TranscriptView, type ActiveBlock, type TranscriptHandle } from './TranscriptView'
+import { tailClipRows } from './transcript'
 import { checkpointTitle, useTitleMode } from './checkpoint-sync'
 import { TurnHistoryPanel } from './TurnHistoryPanel'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
@@ -112,60 +113,24 @@ function TerminalOverlay({
   const paging = useTurnPaging(node.id, activity?.turnCount ?? 0, { eager: true })
   const [titleMode, toggleTitleMode] = useTitleMode()
   const viewingIndex = paging.viewing?.index ?? null
-  const viewingPrompt = paging.viewing?.prompt ?? null
-  const jumpedRef = useRef(false)
-  // Guard so the reverse step (transcript scroll → goto) doesn't bounce the
-  // forward secondary jump back at it.
-  const reverseSelectedIndex = useRef<number | null>(null)
 
-  // FORWARD, DEMOTED SECONDARY (context-view-v2: tmux anchors are nice-to-have):
-  // selecting a checkpoint ALSO scrolls the real terminal to its ask line when
-  // the turn is still within tmux history — the transcript block scroll is the
-  // primary. Skipped when the selection came from a reverse scroll step.
-  useEffect(() => {
-    if (viewingIndex !== null) {
-      if (reverseSelectedIndex.current === viewingIndex) {
-        reverseSelectedIndex.current = null
-        jumpedRef.current = true
-        return
-      }
-      const line = (viewingPrompt ?? '').split('\n').find((l) => l.trim() !== '')?.trim() ?? ''
-      if (line) {
-        jumpedRef.current = true
-        // Short literal chunk: long asks wrap across pane lines, which a
-        // full-length literal search would never match.
-        cookrew().ptyJump(node.id, line.slice(0, 30))
-      }
-    } else if (jumpedRef.current) {
-      jumpedRef.current = false
-      cookrew().ptyJump(node.id, null)
-    }
-  }, [viewingIndex, viewingPrompt, node.id])
-
-  // REVERSE (context-view-v2): scrolling the TRANSCRIPT steps the active
-  // checkpoint. The transcript reports the block in view (onActiveBlockChange);
-  // guarded so the forward selection's own scroll doesn't bounce back. tmux
-  // copy-mode scrolling is demoted to the secondary ptyJump above.
+  // TRACE IS THE ONLY TARGET (unified-scroll item 3): clicking a checkpoint
+  // scrolls its canonical trace block into view (via TranscriptView's
+  // selectedIndex) and NEVER moves the live tmux pane. The former forward
+  // ptyJump into tmux copy-mode is gone — tmux positions are ephemeral and
+  // width-wrapped, the trace record is exact and truncation-immune. Scrolling
+  // the transcript reports the block in view (onActiveBlockChange), which steps
+  // the active checkpoint; the two directions stay in sync without any tmux
+  // round-trip, so no anti-bounce guard is needed.
+  const transcriptRef = useRef<TranscriptHandle>(null)
   const [activeBlock, setActiveBlock] = useState<ActiveBlock>({ index: null, frac: 1 })
   const onActiveBlockChange = (active: ActiveBlock): void => {
     setActiveBlock(active)
     const current = paging.viewing?.index ?? null
     if (active.index === current) return
-    if (active.index === null) {
-      reverseSelectedIndex.current = null
-      paging.live()
-    } else {
-      reverseSelectedIndex.current = active.index
-      paging.goto(active.index)
-    }
+    if (active.index === null) paging.live()
+    else paging.goto(active.index)
   }
-  // Never leave the pane stranded in copy-mode when the overlay unmounts.
-  useEffect(
-    () => () => {
-      if (jumpedRef.current) cookrew().ptyJump(node.id, null)
-    },
-    [node.id]
-  )
 
   const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
 
@@ -466,6 +431,11 @@ function TerminalOverlay({
 
   const phase = activity?.phase ?? 'idle'
 
+  // Live-tail-only clip (unified-scroll item 1): when the turn is at rest, keep
+  // only Forge's tail boundary in the live layer; the trace owns older
+  // scrollback. Null (no clip) while a turn runs or when no boundary was found.
+  const clipRows = tailClipRows(phase, activity?.tailLines ?? null)
+
   // Acknowledge-on-view: a mounted overlay means the user is LOOKING at this
   // terminal (desktop zoom / phone popout), so a completed turn is read the
   // moment it is — or becomes — visible here. The tracker demotes replied →
@@ -593,10 +563,12 @@ function TerminalOverlay({
       )}
       <div className="popout-terminal-wrap">
         <TranscriptView
+          ref={transcriptRef}
           terminalId={node.id}
           total={activity?.turnCount ?? 0}
           titleMode={titleMode}
           selectedIndex={viewingIndex}
+          clipRows={clipRows}
           onActiveBlockChange={onActiveBlockChange}
         >
           <div ref={containerRef} className="popout-terminal" />
@@ -607,6 +579,7 @@ function TerminalOverlay({
           titleMode={titleMode}
           activeBlock={activeBlock.index}
           markerFrac={activeBlock.frac}
+          onScrub={(fraction) => transcriptRef.current?.scrubTo(fraction)}
         />
       </div>
       {dropReady && (

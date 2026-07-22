@@ -4,9 +4,14 @@ import { cookrew } from './api'
 import { CrIcon } from './icons'
 import { checkpointTitle, type TitleMode } from './checkpoint-sync'
 import { hasRoleFromCheckpoint, saveRoleFromCheckpoint } from './role-checkpoint'
+import { railPointerFraction } from './transcript'
 import type { TurnPaging } from './nodes/TurnPager'
 
 const LONG_PRESS_MS = 450
+/** Marker inset (matches .cr-ckpt-here top: calc(16px + …)) for scrub mapping. */
+const RAIL_INSET = 16
+/** Px of pointer travel before a press on the rail becomes a scrub, not a tap. */
+const SCRUB_THRESHOLD = 4
 
 /**
  * Checkpoint timeline on the terminal context view (checkpoint-ux item 4, v5)
@@ -30,24 +35,36 @@ export function CheckpointTimeline({
   paging,
   titleMode,
   activeBlock,
-  markerFrac
+  markerFrac,
+  onScrub
 }: {
   terminalId: string
   paging: TurnPaging
   titleMode: TitleMode
   /** Checkpoint index of the transcript block in view; null at the live tail. */
   activeBlock?: number | null
-  /** Exact marker fraction (block pos / trace total) from the transcript. */
+  /** Exact marker fraction (true position over the combined trace+tail extent). */
   markerFrac?: number
+  /**
+   * Rail-as-scrollbar scrub (item 4): dragging the mini rail scrubs the ONE
+   * combined scroll space to this fraction (0 = oldest trace, 1 = live bottom).
+   */
+  onScrub?: (fraction: number) => void
 }): React.JSX.Element | null {
   const records = paging.records ?? []
   const [open, setOpen] = useState(false)
+  /** True while a rail scrub drag is active — drives the .dragging affordance. */
+  const [scrubbing, setScrubbing] = useState(false)
   /** Checkpoint index whose actions are revealed via phone long-press. */
   const [acting, setActing] = useState<number | null>(null)
   const [savingIndex, setSavingIndex] = useState<number | null>(null)
   const [forkingIndex, setForkingIndex] = useState<number | null>(null)
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const railRef = useRef<HTMLDivElement>(null)
+  const miniRef = useRef<HTMLDivElement>(null)
+  // Rail scrub gesture: a press that travels past SCRUB_THRESHOLD becomes a
+  // scrollbar drag; a press that stays put is a tap that opens the fan.
+  const scrub = useRef<{ startY: number; moved: boolean }>({ startY: 0, moved: false })
 
   useEffect(() => {
     return () => {
@@ -102,8 +119,41 @@ export function CheckpointTimeline({
 
   const stop = (e: React.MouseEvent): void => e.stopPropagation()
 
-  // "You are here" marker (trace-sourced): the transcript reports the exact
-  // fraction (block global position / trace total). Fall back to the selected
+  // Rail-as-scrollbar drag (item 4): press-and-drag the mini rail to scrub the
+  // combined trace+tail scroll space. Pointer capture keeps the drag alive past
+  // the rail edges; a press that never travels stays a tap (opens the fan).
+  const onRailPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
+    if (!onScrub || open) return
+    scrub.current = { startY: e.clientY, moved: false }
+    setScrubbing(true)
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+  const onRailPointerMove = (e: React.PointerEvent<HTMLDivElement>): void => {
+    if (!onScrub || !miniRef.current) return
+    if (!e.currentTarget.hasPointerCapture?.(e.pointerId)) return
+    if (!scrub.current.moved && Math.abs(e.clientY - scrub.current.startY) < SCRUB_THRESHOLD) return
+    scrub.current.moved = true
+    const rect = miniRef.current.getBoundingClientRect()
+    onScrub(railPointerFraction(e.clientY, rect.top, rect.height, RAIL_INSET))
+  }
+  const onRailPointerUp = (e: React.PointerEvent<HTMLDivElement>): void => {
+    setScrubbing(false)
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
+  }
+  // Swallow the click that follows a scrub drag so it doesn't toggle the fan.
+  const onRailClick = (): void => {
+    if (scrub.current.moved) {
+      scrub.current.moved = false
+      return
+    }
+    setOpen((v) => !v)
+  }
+
+  // "You are here" marker (item 4): the transcript reports the TRUE position
+  // over the combined trace+tail extent (scrollTop / scrollable height), so the
+  // marker tracks the one scroll space continuously. Fall back to the selected
   // checkpoint's position among loaded records only when no live fraction has
   // been reported yet. 0 = oldest block (rail top), 1 = live bottom.
   const here = activeBlock ?? paging.viewing?.index ?? null
@@ -121,14 +171,22 @@ export function CheckpointTimeline({
   return (
     <div
       ref={railRef}
-      className={`cr-ckpt-rail${open ? ' open' : ''}`}
+      className={`cr-ckpt-rail${open ? ' open' : ''}${scrubbing ? ' dragging' : ''}`}
       onMouseLeave={() => {
         clearPress()
         closeActions()
       }}
     >
-      {/* resting: line + count + you-are-here + live. Tapping opens on phone. */}
-      <div className="cr-ckpt-mini" onClick={() => setOpen((v) => !v)}>
+      {/* resting: line + count + you-are-here + live. Drag scrubs the combined
+          scroll space (item 4); a plain tap opens the fan (phone). */}
+      <div
+        ref={miniRef}
+        className="cr-ckpt-mini"
+        onPointerDown={onRailPointerDown}
+        onPointerMove={onRailPointerMove}
+        onPointerUp={onRailPointerUp}
+        onClick={onRailClick}
+      >
         <div className="cr-ckpt-line" />
         <div className="cr-ckpt-count">
           <span className="n">{records.length}</span>

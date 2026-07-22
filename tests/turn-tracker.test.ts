@@ -765,3 +765,31 @@ describe('scrollLine on session-derived records (Magpie E2 gap: reconcile race)'
     tracker.disposeAll()
   })
 })
+
+describe('activity.tailLines (live-tail clip signal, unified-scroll item 1)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('reports the tail boundary once a turn settles, null mid-turn', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    session.emit('input', 'do it\r')
+    session.full = '⏺ working…'
+    expect(tracker.list()[0].tailLines).toBeNull() // thinking → no clip
+
+    session.full = '⏺ done, all tests pass\n✻ Worked for 12s\n> '
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(phaseOf(tracker)).toBe('replied')
+    expect(tracker.list()[0].tailLines).toBe(2) // completion line + input line
+    tracker.disposeAll()
+  })
+
+  it('is null when the idle buffer has no completion line', () => {
+    const { tracker, session } = makeTracker()
+    session.full = 'plain boot output'
+    expect(tracker.list()[0].tailLines).toBeNull()
+    tracker.disposeAll()
+  })
+})

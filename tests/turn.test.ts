@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  latestTailLines,
   pageTurns,
   cleanTurnLines,
   detectAgentActivity,
@@ -416,5 +417,32 @@ describe('pageTurns (context-view v2 paged windows)', () => {
     expect(pageTurns([], { limit: 5 })).toEqual({ turns: [], total: 0, offset: 0 })
     const capped = pageTurns(history, { limit: 5000 })
     expect(capped.turns).toHaveLength(10)
+  })
+})
+
+describe('latestTailLines (live-tail boundary, unified-scroll item 1)', () => {
+  it('counts lines from the bottom through the last COMPLETED status line', () => {
+    const buffer = [
+      '⏺ older reply',
+      '✻ Brewed for 4m 15s', // older completion
+      '⏺ latest reply body',
+      '✻ Worked for 12s', // ← the boundary
+      '',
+      '╭──────╮',
+      '│ >    │',
+      '╰──────╯'
+    ].join('\n')
+    // 5 lines: completion line + everything below it.
+    expect(latestTailLines(buffer)).toBe(5)
+  })
+
+  it('ignores LIVE spinner lines (esc to interrupt) as boundaries', () => {
+    const buffer = ['⏺ reply', '✻ Cerebrating… (esc to interrupt · 3s)'].join('\n')
+    expect(latestTailLines(buffer)).toBeNull()
+  })
+
+  it('returns null when no completion line exists (show everything)', () => {
+    expect(latestTailLines('plain shell output\nmore output')).toBeNull()
+    expect(latestTailLines('')).toBeNull()
   })
 })

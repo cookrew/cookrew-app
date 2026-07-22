@@ -16,7 +16,7 @@ function traceBlock(index: number): TraceBlock {
     index,
     prompt: `ask ${index}`,
     reply: `reply ${index}`,
-    activity: [`Bash(step ${index})`],
+    activity: [{ tool: 'Bash', args: `step ${index}`, result: 'ok' }],
     startedAt: index,
     endedAt: index + 1
   }
@@ -38,7 +38,7 @@ describe('fetchTracePage guard (review BLOCK 1 + 2, trace-sourced)', () => {
     const page = await fetchTracePage('t1', { beforeIndex: 6, limit: 2 })
     expect(listTrace).toHaveBeenCalledWith('t1', { beforeIndex: 6, limit: 2 })
     expect(page.blocks.map((b) => b.index)).toEqual([4, 5])
-    expect(page.blocks[0].activity).toEqual(['Bash(step 4)']) // view renders these
+    expect(page.blocks[0].activity).toEqual([{ tool: 'Bash', args: 'step 4', result: 'ok' }]) // view renders these
     expect(page.source).toBe('claude')
 
     await fetchTracePage('t1', { aroundIndex: 5, limit: 3 })

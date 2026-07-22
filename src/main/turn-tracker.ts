@@ -19,6 +19,7 @@ import {
   extractPromptEcho,
   feedPromptBuffer,
   isLiveStatus,
+  latestTailLines,
   parseAgentGlance,
   scrollLineOf,
   tailLines
@@ -421,6 +422,7 @@ export class TurnTracker extends EventEmitter {
         turnStartLine: null,
         scrollRow: null,
         scrollBase: null,
+        tailLines: null,
         updatedAt: Date.now()
       } satisfies TerminalActivity)
     }
@@ -781,6 +783,9 @@ export class TurnTracker extends EventEmitter {
       // ~2ms display-message per throttled push (≥250ms apart per terminal).
       scrollRow: pane.scrollRow,
       scrollBase: pane.historySize,
+      // Clip signal only when the tail is settled — mid-turn the renderer
+      // shows the whole live stream anyway.
+      tailLines: inTurn || !t.agent ? null : latestTailLines(t.session.fullText()),
       updatedAt: Date.now()
     }
   }

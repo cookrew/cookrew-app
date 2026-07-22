@@ -7,6 +7,15 @@
 
 import { isNoisePrompt } from './session-turns'
 
+/** One tool invocation inside a block, TUI-faithful (unified-scroll TODO). */
+export interface TraceToolCall {
+  tool: string
+  /** Brief rendered args (head-capped). */
+  args: string
+  /** Result snippet (head-capped); '' when no output was captured. */
+  result: string
+}
+
 export interface TraceBlock {
   /**
    * Stable identity: Claude prompt-entry uuid; Codex 'p<ordinal>' (1-based
@@ -19,14 +28,19 @@ export interface TraceBlock {
   prompt: string
   /** Joined assistant text for the block. */
   reply: string
-  /** Dim tool-activity lines in TUI order (e.g. 'Bash(npm test)'). */
-  activity: string[]
+  /** Tool invocations in TUI order, with matched results. */
+  activity: TraceToolCall[]
   startedAt: number
   endedAt: number
 }
 
 /** Head of a tool input rendered into an activity line. */
 const ACTIVITY_ARG_CHARS = 80
+/** Head of a tool result snippet. */
+const ACTIVITY_RESULT_CHARS = 160
+
+const head = (text: string, max: number): string =>
+  text.length > max ? `${text.slice(0, max - 1)}…` : text
 
 function timeMs(value: unknown, fallback: number): number {
   const parsed = typeof value === 'string' ? Date.parse(value) : NaN
@@ -58,16 +72,42 @@ interface ClaudeContentBlock {
   type?: string
   text?: string
   name?: string
+  id?: string
   input?: unknown
+  tool_use_id?: string
+  content?: unknown
 }
 
-function claudeActivityLine(block: ClaudeContentBlock): string {
-  const head = block.input === undefined ? '' : JSON.stringify(block.input)
-  const brief =
-    head.length > ACTIVITY_ARG_CHARS ? `${head.slice(0, ACTIVITY_ARG_CHARS - 1)}…` : head
-  // {"command":"npm test"} → npm test for the common single-arg case.
-  const single = /^\{"[a-zA-Z_]+":"(.*)"\}$/.exec(brief)
-  return `${block.name ?? 'tool'}(${single ? single[1] : brief})`
+/**
+ * Short HUMAN summary of a tool_use input (bare-parens fix): prefer the
+ * input.description Claude Code writes for most calls, else the first
+ * string value (command, file_path, pattern, …), head-capped. Never JSON.
+ */
+function claudeToolArgs(input: unknown): string {
+  if (typeof input !== 'object' || input === null) return ''
+  const record = input as Record<string, unknown>
+  const description = record.description
+  if (typeof description === 'string' && description.trim().length > 0) {
+    return head(description.trim(), ACTIVITY_ARG_CHARS)
+  }
+  for (const value of Object.values(record)) {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return head(value.trim(), ACTIVITY_ARG_CHARS)
+    }
+  }
+  return ''
+}
+
+/** Text head of a tool_result content (string, or [{type:'text',text}]). */
+function claudeResultText(content: unknown): string {
+  if (typeof content === 'string') return head(content, ACTIVITY_RESULT_CHARS)
+  if (Array.isArray(content)) {
+    const texts = (content as Array<{ type?: string; text?: string }>)
+      .filter((c) => typeof c.text === 'string')
+      .map((c) => c.text as string)
+    return head(texts.join('\n'), ACTIVITY_RESULT_CHARS)
+  }
+  return ''
 }
 
 /**
@@ -78,6 +118,8 @@ function claudeActivityLine(block: ClaudeContentBlock): string {
 export function parseClaudeTrace(lines: string[]): TraceBlock[] {
   const blocks: TraceBlock[] = []
   let current: TraceBlock | null = null
+  // tool_use id → its call object, for filling results (tool_use_id match).
+  const pendingCalls = new Map<string, TraceToolCall>()
   for (const line of lines) {
     const entry = parseLine(line) as ClaudeEntry | null
     if (entry === null || typeof entry.type !== 'string') continue
@@ -98,16 +140,40 @@ export function parseClaudeTrace(lines: string[]): TraceBlock[] {
         startedAt,
         endedAt: startedAt
       }
+      pendingCalls.clear()
       blocks.push(current)
       continue
     }
-    if (!current || entry.type !== 'assistant' || !Array.isArray(content)) continue
+    if (!current) continue
+    // tool_result entries arrive as user records with array content.
+    if (entry.type === 'user' && Array.isArray(content)) {
+      for (const raw of content as ClaudeContentBlock[]) {
+        if (raw.type !== 'tool_result' || typeof raw.tool_use_id !== 'string') continue
+        const call = pendingCalls.get(raw.tool_use_id)
+        if (call && call.result === '') call.result = claudeResultText(raw.content)
+      }
+      current.endedAt = timeMs(entry.timestamp, current.endedAt)
+      continue
+    }
+    if (entry.type !== 'assistant' || !Array.isArray(content)) continue
     const texts: string[] = []
     for (const raw of content as ClaudeContentBlock[]) {
       if (raw.type === 'text' && typeof raw.text === 'string' && raw.text.trim().length > 0) {
         texts.push(raw.text)
-      } else if (raw.type === 'tool_use') {
-        current.activity.push(claudeActivityLine(raw))
+      } else if (
+        raw.type === 'tool_use' &&
+        typeof raw.name === 'string' &&
+        raw.name.trim().length > 0
+      ) {
+        // Empty-name blocks are SKIPPED — a bare "()" line is worse than
+        // nothing (user screenshot evidence).
+        const call: TraceToolCall = {
+          tool: raw.name.trim(),
+          args: claudeToolArgs(raw.input),
+          result: ''
+        }
+        current.activity.push(call)
+        if (typeof raw.id === 'string') pendingCalls.set(raw.id, call)
       }
     }
     if (texts.length > 0) {
@@ -132,6 +198,10 @@ interface CodexRecord {
     session_id?: string
     cwd?: string
     timestamp?: string
+    call_id?: string
+    arguments?: string
+    input?: string
+    output?: unknown
   }
 }
 
@@ -169,6 +239,7 @@ export function parseCodexTrace(lines: string[]): TraceBlock[] {
   const blocks: TraceBlock[] = []
   let current: TraceBlock | null = null
   let sawFinal = false
+  const codexPending = new Map<string, TraceToolCall>()
   for (const line of lines) {
     const record = parseLine(line) as CodexRecord | null
     if (!record || !record.payload) continue
@@ -199,11 +270,40 @@ export function parseCodexTrace(lines: string[]): TraceBlock[] {
       continue
     }
     if (record.type === 'response_item' && payload.type && !CODEX_SILENT_ITEMS.has(payload.type)) {
-      current.activity.push(payload.name ? `${payload.type}(${payload.name})` : payload.type)
+      // Tool call open: function_call {name, arguments} / custom_tool_call
+      // {name, input}; outputs match back by call_id.
+      if (payload.type === 'function_call' || payload.type === 'custom_tool_call') {
+        const tool = (payload.name ?? '').trim() || payload.type
+        const args = head(payload.arguments ?? payload.input ?? '', ACTIVITY_ARG_CHARS)
+        const call: TraceToolCall = { tool, args, result: '' }
+        current.activity.push(call)
+        if (typeof payload.call_id === 'string') codexPending.set(payload.call_id, call)
+      } else if (
+        payload.type === 'function_call_output' ||
+        payload.type === 'custom_tool_call_output'
+      ) {
+        const call =
+          typeof payload.call_id === 'string' ? codexPending.get(payload.call_id) : undefined
+        if (call && call.result === '') call.result = codexOutputText(payload.output)
+      } else {
+        current.activity.push({ tool: payload.type, args: payload.name ?? '', result: '' })
+      }
       current.endedAt = at
     }
   }
   return blocks
+}
+
+/** Text head of a codex output (string, or [{type:'input_text', text}]). */
+function codexOutputText(output: unknown): string {
+  if (typeof output === 'string') return head(output, ACTIVITY_RESULT_CHARS)
+  if (Array.isArray(output)) {
+    const texts = (output as Array<{ text?: string }>)
+      .filter((c) => typeof c.text === 'string')
+      .map((c) => c.text as string)
+    return head(texts.join(''), ACTIVITY_RESULT_CHARS)
+  }
+  return ''
 }
 
 // ---- identity-keyed paging (review BLOCK 2: never array positions) ----

@@ -20,12 +20,15 @@ function claudeLines(): string[] {
       type: 'assistant', uuid: 'a1', timestamp: iso(T0 + 1000),
       message: { role: 'assistant', content: [
         { type: 'text', text: 'working on it' },
-        { type: 'tool_use', name: 'Bash', input: { command: 'npm test' } }
+        { type: 'tool_use', id: 'tu1', name: 'Bash', input: { command: 'npm test' } }
       ] }
     }),
     JSON.stringify({
       type: 'user', uuid: 'tr1', timestamp: iso(T0 + 2000),
-      message: { role: 'user', content: [{ type: 'tool_result', content: 'ok' }] }
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tu1', content: '160 tests passed' }]
+      }
     }),
     JSON.stringify({
       type: 'assistant', uuid: 'a2', timestamp: iso(T0 + 3000),
@@ -52,7 +55,9 @@ describe('parseClaudeTrace (full-trace blocks)', () => {
       prompt: 'first ask\nwith a second line',
       reply: 'working on it\nall green'
     })
-    expect(blocks[0].activity).toEqual(['Bash(npm test)'])
+    expect(blocks[0].activity).toEqual([
+      { tool: 'Bash', args: 'npm test', result: '160 tests passed' }
+    ])
     expect(blocks[0].startedAt).toBe(T0)
     expect(blocks[0].endedAt).toBe(T0 + 3000)
     expect(blocks[1]).toMatchObject({ id: 'u2', index: 2, reply: 'done two' })
@@ -87,7 +92,11 @@ function codexLines(): string[] {
     }),
     JSON.stringify({
       timestamp: iso(T0 + 300), type: 'response_item',
-      payload: { type: 'function_call', name: 'shell' }
+      payload: { type: 'function_call', name: 'shell', call_id: 'c1', arguments: '{"cmd":"ls"}' }
+    }),
+    JSON.stringify({
+      timestamp: iso(T0 + 400), type: 'response_item',
+      payload: { type: 'function_call_output', call_id: 'c1', output: 'README.md\nsrc' }
     }),
     JSON.stringify({
       timestamp: iso(T0 + 900), type: 'event_msg',
@@ -114,7 +123,9 @@ describe('parseCodexTrace (rollout blocks)', () => {
       prompt: 'Reply with exactly: PROBE-ONE',
       reply: 'PROBE-ONE'
     })
-    expect(blocks[0].activity).toEqual(['function_call(shell)'])
+    expect(blocks[0].activity).toEqual([
+      { tool: 'shell', args: '{"cmd":"ls"}', result: 'README.md\nsrc' }
+    ])
     expect(blocks[1]).toMatchObject({ id: 'p2', index: 2, prompt: 'and again', reply: 'again done' })
   })
 
@@ -157,5 +168,61 @@ describe('pageTraceBlocks (identity-keyed windows, review BLOCK 2)', () => {
   it('identity survives non-contiguous indexes (capped histories)', () => {
     const gappy = [5, 6, 9, 12].map((n) => ({ ...blocks[0], id: `u${n}`, index: n }))
     expect(pageTraceBlocks(gappy, { beforeIndex: 9, limit: 2 }).blocks.map((b) => b.index)).toEqual([5, 6])
+  })
+})
+
+
+describe('claude tool_use args summary (bare-parens bug)', () => {
+  const entry = (blocks: unknown[]): string[] => [
+    JSON.stringify({
+      type: 'user', uuid: 'u1', timestamp: iso(T0),
+      message: { role: 'user', content: 'ask' }
+    }),
+    JSON.stringify({
+      type: 'assistant', timestamp: iso(T0 + 1000),
+      message: { role: 'assistant', content: blocks }
+    })
+  ]
+
+  it('prefers input.description as the human args summary (verified shape)', () => {
+    const blocks = parseClaudeTrace(
+      entry([
+        {
+          type: 'tool_use', id: 'tu1', name: 'Bash',
+          input: { command: 'npm test 2>&1 | tail -3', description: 'Run the test suite' }
+        }
+      ])
+    )
+    expect(blocks[0].activity).toEqual([
+      { tool: 'Bash', args: 'Run the test suite', result: '' }
+    ])
+  })
+
+  it('falls back to the first string value, truncated ~80 chars', () => {
+    const long = 'x'.repeat(200)
+    const blocks = parseClaudeTrace(
+      entry([{ type: 'tool_use', id: 'tu1', name: 'Read', input: { file_path: long } }])
+    )
+    expect(blocks[0].activity[0].tool).toBe('Read')
+    expect(blocks[0].activity[0].args.length).toBeLessThanOrEqual(80)
+    expect(blocks[0].activity[0].args.startsWith('xxx')).toBe(true)
+  })
+
+  it('SKIPS empty-name blocks — never a bare () line', () => {
+    const blocks = parseClaudeTrace(
+      entry([
+        { type: 'tool_use', id: 'tu1', name: '', input: {} },
+        { type: 'tool_use', id: 'tu2', input: { q: 'no name at all' } },
+        { type: 'tool_use', id: 'tu3', name: 'Grep', input: { pattern: 'foo' } }
+      ])
+    )
+    expect(blocks[0].activity).toEqual([{ tool: 'Grep', args: 'foo', result: '' }])
+  })
+
+  it('handles non-object and empty inputs without noise', () => {
+    const blocks = parseClaudeTrace(
+      entry([{ type: 'tool_use', id: 'tu1', name: 'NoteRead', input: {} }])
+    )
+    expect(blocks[0].activity).toEqual([{ tool: 'NoteRead', args: '', result: '' }])
   })
 })

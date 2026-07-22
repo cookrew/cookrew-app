@@ -6,6 +6,10 @@ import {
   isAtBottom,
   mergeTrace,
   pruneToTotal,
+  railPointerFraction,
+  railToScrollTop,
+  scrollTopToFraction,
+  tailClipRows,
   type TraceBlock
 } from '../src/renderer/src/transcript'
 // Identity-keyed blocks (integration round 2): pos is GONE — TraceBlock.index
@@ -110,5 +114,72 @@ describe('isAtBottom (autoscroll pin)', () => {
   })
   it('false when scrolled up past the slack', () => {
     expect(isAtBottom(500, 1000, 120)).toBe(false)
+  })
+})
+
+describe('railToScrollTop (item 4 rail scrub)', () => {
+  it('maps a fraction to a scrollTop over the scrollable extent', () => {
+    // extent = scrollHeight(1000) - clientHeight(200) = 800
+    expect(railToScrollTop(0, 1000, 200)).toBe(0)
+    expect(railToScrollTop(1, 1000, 200)).toBe(800)
+    expect(railToScrollTop(0.5, 1000, 200)).toBe(400)
+  })
+  it('clamps an over-drag to the ends', () => {
+    expect(railToScrollTop(-0.3, 1000, 200)).toBe(0)
+    expect(railToScrollTop(1.4, 1000, 200)).toBe(800)
+  })
+  it('is 0 when there is nothing to scroll', () => {
+    expect(railToScrollTop(0.5, 200, 200)).toBe(0)
+  })
+  it('round-trips with scrollTopToFraction', () => {
+    const top = railToScrollTop(0.375, 1000, 200)
+    expect(scrollTopToFraction(top, 1000, 200)).toBeCloseTo(0.375)
+  })
+})
+
+describe('railPointerFraction (item 4 rail drag → fraction)', () => {
+  // rail rect top=100, height=300, inset=16 → track = 300 - 32 = 268
+  it('maps a pointer inside the track to a fraction', () => {
+    expect(railPointerFraction(116, 100, 300, 16)).toBe(0)
+    expect(railPointerFraction(384, 100, 300, 16)).toBe(1)
+    expect(railPointerFraction(250, 100, 300, 16)).toBeCloseTo(0.5)
+  })
+  it('clamps a drag past either inset', () => {
+    expect(railPointerFraction(90, 100, 300, 16)).toBe(0)
+    expect(railPointerFraction(500, 100, 300, 16)).toBe(1)
+  })
+  it('is 0 when the track has collapsed', () => {
+    expect(railPointerFraction(150, 100, 20, 16)).toBe(0)
+  })
+})
+
+describe('scrollTopToFraction (item 4 here-marker over combined extent)', () => {
+  it('maps a scroll position to a fraction (top 0 → live 1)', () => {
+    expect(scrollTopToFraction(0, 1000, 200)).toBe(0)
+    expect(scrollTopToFraction(800, 1000, 200)).toBe(1)
+    expect(scrollTopToFraction(400, 1000, 200)).toBeCloseTo(0.5)
+  })
+  it('pins to live (1) when there is no overflow to scroll', () => {
+    expect(scrollTopToFraction(0, 200, 200)).toBe(1)
+    expect(scrollTopToFraction(0, 150, 200)).toBe(1)
+  })
+  it('clamps a rubber-band overscroll', () => {
+    expect(scrollTopToFraction(-40, 1000, 200)).toBe(0)
+    expect(scrollTopToFraction(900, 1000, 200)).toBe(1)
+  })
+})
+
+describe('tailClipRows (item 1 live-tail-only clip)', () => {
+  it('clips to the tail boundary when the turn is at rest', () => {
+    expect(tailClipRows('idle', 12)).toBe(12)
+    expect(tailClipRows('replied', 8)).toBe(8)
+  })
+  it('never clips while a turn is running (nothing hidden mid-task)', () => {
+    expect(tailClipRows('thinking', 12)).toBeNull()
+    expect(tailClipRows('waiting', 12)).toBeNull()
+  })
+  it('shows everything when Forge found no boundary', () => {
+    expect(tailClipRows('idle', null)).toBeNull()
+    expect(tailClipRows('replied', 0)).toBeNull()
   })
 })

@@ -639,6 +639,10 @@ body,
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  /* ONE scrollbar total: the checkpoint rail scrubs this — hide the native
+     bar on the trace surface (the redundant gray bar in the screenshot). */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   display: flex;
   flex-direction: column;
   background-color: var(--phos-bg);
@@ -728,35 +732,79 @@ body,
   color: var(--amber);
 }
 
-/* dim tool-activity lines between prompt and reply — so the trace reads like
-   the TUI (Bash/Read/Grep/… calls), still one stream, never a chat frame. */
+/* tool_call lines between prompt and reply — rendered like the real TUI
+   transcript, not flattened text: a marker + name(args) CALL line, then a
+   connector + dim result snippet. Mounted from Forge's structured
+   {tool, args, result}. Still phosphor, still one stream, never a chat frame.
+     <div class="ctx-block-tool">
+       <div class="ctx-tool-call">
+         <span class="ctx-tool-glyph"><CrIcon name="bash"/></span>
+         <span class="ctx-tool-name">Bash</span><span class="ctx-tool-args">(npm test)</span>
+       </div>
+       <div class="ctx-tool-result">42 passed, 0 failed</div>   (0..1, truncated by Velvet)
+     </div> */
 .ctx-block-tool {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  color: var(--phos-dim);
+  margin-top: 3px;
   font-size: 11.5px;
-  margin-top: 2px;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 
-.ctx-block-tool::before {
-  content: '⎿';
-  flex: 0 0 auto;
-  opacity: 0.7;
+/* the CALL line: tool marker + Name(args), like ⏺ Bash(npm test) */
+.ctx-tool-call {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--phos);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .ctx-tool-glyph {
   flex: 0 0 auto;
   display: inline-flex;
-  color: var(--phos-dim);
+  align-self: center;
+  color: var(--phos);
 }
 
 .ctx-tool-glyph .cr-icon {
   width: 11px;
   height: 11px;
-  vertical-align: -1px;
+}
+
+.ctx-tool-name {
+  color: var(--phos);
+  font-weight: 600;
+}
+
+/* the short descriptor after the name (Forge's args, head-capped 80). Parens
+   are drawn by CSS, so Velvet renders the raw text and simply OMITS this span
+   when args is empty — no bare "()" ever (covers the empty-parens parser bug).
+   Reads as tool name + short description, TUI-style: Bash(npm test). */
+.ctx-tool-args {
+  color: var(--phos-dim);
+}
+
+.ctx-tool-args::before {
+  content: '(';
+}
+
+.ctx-tool-args::after {
+  content: ')';
+}
+
+/* the RESULT line: connector glyph + dim snippet, indented under the call */
+.ctx-tool-result {
+  display: flex;
+  gap: 6px;
+  margin-left: 5px;
+  color: var(--phos-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ctx-tool-result::before {
+  content: '⎿';
+  flex: 0 0 auto;
+  opacity: 0.75;
 }
 
 /* the traced reply, flowing beneath — dim phosphor, no chat framing. */
@@ -766,6 +814,163 @@ body,
   color: var(--phos);
   font-size: 12px;
   margin-top: 3px;
+}
+
+/* Markdown in trace replies (Velvet renders md → standard tags inside the
+   reply). Phosphor terminal language: emphasis/lists/code WITHOUT becoming a
+   document — tight spacing, terminal bullets, code reads as terminal output.
+   Velvet: add .md on .ctx-block-reply when markdown-rendered (blocks manage
+   their own spacing); plain-text replies keep the pre-wrap above. */
+.ctx-block-reply.md {
+  white-space: normal;
+}
+
+.ctx-block-reply.md > :first-child {
+  margin-top: 0;
+}
+
+.ctx-block-reply.md > :last-child {
+  margin-bottom: 0;
+}
+
+.ctx-block-reply p {
+  margin: 0 0 0.4em;
+}
+
+.ctx-block-reply strong,
+.ctx-block-reply b {
+  color: var(--phos-glow);
+  font-weight: 600;
+}
+
+.ctx-block-reply em,
+.ctx-block-reply i {
+  font-style: italic;
+}
+
+.ctx-block-reply a {
+  color: var(--amber);
+  text-decoration: underline;
+}
+
+/* headings: NOT document headings — brief brighter terminal-section lines
+   with a dim #-prefix so they read as headers in the stream. */
+.ctx-block-reply h1,
+.ctx-block-reply h2,
+.ctx-block-reply h3,
+.ctx-block-reply h4,
+.ctx-block-reply h5,
+.ctx-block-reply h6 {
+  color: var(--phos-glow);
+  font-weight: 600;
+  font-size: 1em;
+  line-height: 1.3;
+  margin: 0.55em 0 0.25em;
+}
+
+.ctx-block-reply h1 {
+  font-size: 1.15em;
+}
+
+.ctx-block-reply h2 {
+  font-size: 1.07em;
+}
+
+.ctx-block-reply h1::before {
+  content: '# ';
+  color: var(--phos-dim);
+}
+
+.ctx-block-reply h2::before {
+  content: '## ';
+  color: var(--phos-dim);
+}
+
+.ctx-block-reply h3::before,
+.ctx-block-reply h4::before,
+.ctx-block-reply h5::before,
+.ctx-block-reply h6::before {
+  content: '### ';
+  color: var(--phos-dim);
+}
+
+/* lists: compact, dim terminal markers */
+.ctx-block-reply ul,
+.ctx-block-reply ol {
+  margin: 0.2em 0 0.4em;
+  padding-left: 1.5em;
+}
+
+.ctx-block-reply li {
+  margin: 0.1em 0;
+}
+
+.ctx-block-reply li::marker {
+  color: var(--phos-dim);
+}
+
+.ctx-block-reply ul {
+  list-style: none;
+  padding-left: 1.2em;
+}
+
+.ctx-block-reply ul > li {
+  position: relative;
+}
+
+.ctx-block-reply ul > li::before {
+  content: '▸';
+  position: absolute;
+  left: -1.1em;
+  color: var(--phos-dim);
+}
+
+/* inline code: subtle amber-tinted chip, brighter phosphor, mono */
+.ctx-block-reply code {
+  font-family: var(--font-mono);
+  font-size: 0.94em;
+  background: rgba(233, 185, 73, 0.1);
+  color: var(--phos-glow);
+  padding: 0 3px;
+  border-radius: 2px;
+}
+
+/* fenced code blocks: read like TERMINAL OUTPUT — an inset darker panel with a
+   phosphor left rail, mono, horizontal scroll if wide (no native bar per the
+   one-scrollbar rule); NOT a rounded document code card. */
+.ctx-block-reply pre {
+  margin: 0.4em 0;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.28);
+  border-left: 2px solid var(--phos-dim);
+  overflow-x: auto;
+  white-space: pre;
+  scrollbar-width: none;
+}
+
+.ctx-block-reply pre::-webkit-scrollbar {
+  height: 0;
+  display: none;
+}
+
+.ctx-block-reply pre code {
+  background: none;
+  color: var(--phos);
+  padding: 0;
+  font-size: inherit;
+}
+
+.ctx-block-reply blockquote {
+  margin: 0.3em 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--phos-dim);
+  color: var(--phos-dim);
+}
+
+.ctx-block-reply hr {
+  border: none;
+  border-top: 1px dashed rgba(233, 185, 73, 0.25);
+  margin: 0.5em 0;
 }
 
 /* ACTIVE checkpoint = the highlight span (same amber language as the timeline
@@ -1548,6 +1753,23 @@ body,
 
 .popout-terminal .xterm {
   height: 100%;
+}
+
+/* ONE scrollbar total (unified-scroll-ux): the checkpoint rail is the single
+   scrollbar for the trace+tail space, so hide the native bars on BOTH the
+   trace surface (.ctx-transcript, above) and the live xterm viewport (here) —
+   the redundant gray bars the user flagged. Content still scrolls; only the
+   native affordance is removed. */
+.ctx-transcript::-webkit-scrollbar,
+.popout-terminal .xterm-viewport::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.popout-terminal .xterm-viewport {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 /* ---- react flow chrome ---- */
@@ -2540,14 +2762,21 @@ body.cookrew-mobile .cookrew-minimap {
   pointer-events: none;
 }
 
+/* the rail line doubles as the scrollbar TRACK — a thin groove the diamond
+   thumb scrubs. Brightens on rail hover so the scrollbar affordance reads. */
 .cr-ckpt-line {
   position: absolute;
   top: 16px;
   bottom: 16px;
-  right: 14px;
-  width: 2px;
-  border-radius: 2px;
+  right: 13px;
+  width: 3px;
+  border-radius: 3px;
   background: linear-gradient(var(--vi-line), #3a3a40);
+  transition: background 140ms ease;
+}
+
+.cr-ckpt-rail:hover .cr-ckpt-line {
+  background: linear-gradient(#3a3a40, #4a4a52);
 }
 
 .cr-ckpt-count {
@@ -2574,17 +2803,43 @@ body.cookrew-mobile .cookrew-minimap {
 }
 
 /* single amber marker riding the line — Velvet sets `top` from scroll */
+/* the "you are here" marker IS the scrollbar THUMB — a DIAMOND (keeps the
+   checkpoint diamond language) that also reads as a grabbable scrub handle.
+   Velvet wires the drag: rail position ↔ the unified trace+tail scroll extent;
+   add .dragging on the rail to drop the follow-transition while scrubbing. */
 .cr-ckpt-here {
   position: absolute;
-  right: 9px;
-  width: 12px;
-  height: 12px;
-  transform: translateY(-50%);
-  border-radius: 50%;
+  right: 7.5px;
+  width: 14px;
+  height: 14px;
+  transform: translateY(-50%) rotate(45deg);
+  border-radius: 2px;
   background: var(--amber);
   border: 2px solid var(--phos-bg);
   box-shadow: 0 0 0 3px rgba(255, 214, 0, 0.2);
-  transition: top 160ms ease;
+  cursor: grab;
+  transition:
+    top 160ms ease,
+    width 120ms ease,
+    height 120ms ease;
+}
+
+.cr-ckpt-here:hover {
+  width: 16px;
+  height: 16px;
+}
+
+.cr-ckpt-here:active,
+.cr-ckpt-rail.dragging .cr-ckpt-here {
+  cursor: grabbing;
+  width: 16px;
+  height: 16px;
+  box-shadow: 0 0 0 4px rgba(255, 214, 0, 0.28);
+}
+
+/* while dragging, the thumb follows the pointer with no easing lag. */
+.cr-ckpt-rail.dragging .cr-ckpt-here {
+  transition: width 120ms ease, height 120ms ease;
 }
 
 .cr-ckpt-livedot {
