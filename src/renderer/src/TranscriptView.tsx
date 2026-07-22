@@ -11,13 +11,18 @@ import { checkpointTitle, type TitleMode } from './checkpoint-sync'
 import { MarkdownText } from './MarkdownText'
 import {
   activeBlockForScroll,
+  boundaryReached,
   evictTrace,
   fetchTracePage,
+  hasNewerBlocks,
+  hasOlderBlocks,
   isAtBottom,
   mergeTrace,
+  newestIndex,
   pruneToTotal,
   railToScrollTop,
   scrollTopToFraction,
+  type TracePage,
   type TraceBlock
 } from './transcript'
 
@@ -65,11 +70,17 @@ export const TranscriptView = forwardRef<
     clipRows: number | null
     /** Reports the block in view (identity + marker fraction) for the timeline. */
     onActiveBlockChange?: (active: ActiveBlock) => void
+    /**
+     * Reports a checkpoint identity whose block is being FETCHED for a jump
+     * (item 4), null once it lands — drives the rail/fan loading affordance so
+     * a far click gives instant feedback instead of feeling stuck.
+     */
+    onPending?: (index: number | null) => void
     /** The live terminal layer, seamed at the bottom of the transcript. */
     children: React.ReactNode
   }
 >(function TranscriptView(
-  { terminalId, total, titleMode, selectedIndex, clipRows, onActiveBlockChange, children },
+  { terminalId, total, titleMode, selectedIndex, clipRows, onActiveBlockChange, onPending, children },
   ref
 ): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -83,8 +94,20 @@ export const TranscriptView = forwardRef<
   const clipRef = useRef(clipRows)
   clipRef.current = clipRows
   const anchorIndexRef = useRef<number>(Number.MAX_SAFE_INTEGER)
+  // The block currently in view (from onScroll) — lets the selectedIndex effect
+  // tell a genuine external jump (click/scrub) from a reverse-sync echo of the
+  // block you already scrolled to, so the two never fight (defect 1).
+  const activeInViewRef = useRef<number | null>(null)
+  // Discovered trace floor/ceiling identities: the smallest / largest block
+  // identity that exists, learned when a scroll-up / scroll-down fetch comes
+  // back empty. null = not yet discovered (more may exist). Reset on a fresh
+  // tail load. NEVER derived from `total` (a count) — identities outrun it.
+  const traceMinRef = useRef<number | null>(null)
+  const traceMaxRef = useRef<number | null>(null)
   const oldestIndex = blocks[0]?.index ?? null
-  const hasOlder = oldestIndex !== null && oldestIndex > 1
+  const newestLoaded = newestIndex(blocks)
+  const hasOlder = hasOlderBlocks(oldestIndex, traceMinRef.current)
+  const hasNewer = hasNewerBlocks(newestLoaded, traceMaxRef.current)
 
   // Seamless handoff (unified-scroll item 2): while the live tail is CLIPPED
   // (turn at rest), a wheel UP over the live layer scrolls the ONE combined
@@ -110,6 +133,13 @@ export const TranscriptView = forwardRef<
 
   // Merge a page in, then evict to the cap around the block currently in view.
   const ingest = useCallback((page: { blocks: TraceBlock[]; total: number }): void => {
+    // Clear a latched boundary the moment a merge reveals a block beyond it
+    // (review WARNING): an aroundIndex fetch can undercut a floor/ceiling that a
+    // short end-window falsely set, so the range re-opens instead of sealing.
+    for (const b of page.blocks) {
+      if (traceMinRef.current !== null && b.index < traceMinRef.current) traceMinRef.current = null
+      if (traceMaxRef.current !== null && b.index > traceMaxRef.current) traceMaxRef.current = null
+    }
     setBlocks((prev) => {
       const merged = mergeTrace(pruneToTotal(prev, page.total), page.blocks)
       return evictTrace(merged, anchorIndexRef.current, MAX_BLOCKS)
@@ -117,41 +147,64 @@ export const TranscriptView = forwardRef<
   }, [])
 
   const loadWindow = useCallback(
-    async (anchor: 'tail' | { beforeIndex: number }): Promise<void> => {
+    async (anchor: 'tail' | { beforeIndex: number } | { afterIndex: number }): Promise<TracePage> => {
       // IDENTITY anchors (review BLOCK 2): the tail window on mount/growth,
-      // blocks older than the oldest LOADED identity on scroll-up — never
-      // array offsets, which renumber under rewinds and caps.
+      // blocks older/newer than the oldest/newest LOADED identity on scroll —
+      // never array offsets or `total`, which renumber under rewinds and caps.
       const request = anchor === 'tail' ? { limit: WINDOW } : { ...anchor, limit: WINDOW }
       const page = await fetchTracePage(terminalId, request)
       ingest(page)
+      return page
     },
     [terminalId, ingest]
   )
 
   // Newest window on mount and on any total change; a rewind (total shrink) is
   // handled by pruneToTotal inside ingest, so stale blocks drop automatically.
+  // A fresh tail also re-opens the floor/ceiling: a growth adds a newer identity
+  // (ceiling moved), and a new terminal has an unknown floor.
   useEffect(() => {
     if (total <= 0) {
       setBlocks([])
       return
     }
     anchorIndexRef.current = Number.MAX_SAFE_INTEGER
+    traceMinRef.current = null
+    traceMaxRef.current = null
     void loadWindow('tail')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terminalId, total])
 
   // Lazy scroll-up: prepend the previous window, preserving the scroll offset.
+  // When the fetch brings nothing older than where we started, we've reached the
+  // trace floor — record the identity so hasOlder stops (no phantom T1..T5).
   const loadOlder = useCallback(async () => {
-    if (loading || !hasOlder) return
+    if (loading || !hasOlder || oldestIndex === null) return
     setLoading(true)
     const el = scrollRef.current
     const before = el?.scrollHeight ?? 0
-    await loadWindow(oldestIndex === null ? 'tail' : { beforeIndex: oldestIndex })
+    const start = oldestIndex
+    const page = await loadWindow({ beforeIndex: start })
+    if (boundaryReached(page.blocks, start, 'older')) traceMinRef.current = start
     requestAnimationFrame(() => {
       if (el) el.scrollTop += el.scrollHeight - before
       setLoading(false)
     })
   }, [loading, hasOlder, oldestIndex, loadWindow])
+
+  // Lazy scroll-DOWN (defect 2): eviction drops the newest window when you climb
+  // into history, so returning toward live would otherwise stall at the newest
+  // SURVIVING block (~T60) instead of the true latest (T105). Fill forward from
+  // blocks[last].index — never `total`. Appending below the view doesn't shift
+  // the current scroll, so no offset correction. Empty result → trace ceiling.
+  const loadNewer = useCallback(async () => {
+    if (loading || !hasNewer || newestLoaded === null) return
+    setLoading(true)
+    const start = newestLoaded
+    const page = await loadWindow({ afterIndex: start })
+    if (boundaryReached(page.blocks, start, 'newer')) traceMaxRef.current = start
+    setLoading(false)
+  }, [loading, hasNewer, newestLoaded, loadWindow])
 
   // offsetParent-safe block tops: relative to the scroll container via rects,
   // not node.offsetTop (whose offsetParent may not be the scroller — MEDIUM 6).
@@ -172,9 +225,18 @@ export const TranscriptView = forwardRef<
     if (!el) return
     pinnedRef.current = isAtBottom(el.scrollTop, el.scrollHeight, el.clientHeight)
     if (el.scrollTop < 80) void loadOlder()
+    // Approaching the live seam from above with newer blocks still unloaded
+    // (an eviction gap): fill forward so the true latest checkpoint is reachable.
+    const live = liveRef.current
+    if (!pinnedRef.current && hasNewer && live) {
+      const base = el.getBoundingClientRect().top - el.scrollTop
+      const seamTop = live.getBoundingClientRect().top - base
+      if (seamTop - (el.scrollTop + el.clientHeight) < 160) void loadNewer()
+    }
     const tops = blockTops()
     const activeIndex = pinnedRef.current ? null : activeBlockForScroll(tops, el.scrollTop + 8)
     anchorIndexRef.current = activeIndex ?? Number.MAX_SAFE_INTEGER
+    activeInViewRef.current = activeIndex
     if (onActiveBlockChange) {
       // The here-marker rides the TRUE position over the combined trace+tail
       // extent (item 4: the rail is one scrollbar), not just block identity —
@@ -184,7 +246,7 @@ export const TranscriptView = forwardRef<
         frac: scrollTopToFraction(el.scrollTop, el.scrollHeight, el.clientHeight)
       })
     }
-  }, [loadOlder, blockTops, onActiveBlockChange])
+  }, [loadOlder, loadNewer, hasNewer, blockTops, onActiveBlockChange])
 
   // Rail scrub (item 4): map a rail fraction to this ONE scroll space. Setting
   // scrollTop fires onScroll, so the marker + active checkpoint follow for free.
@@ -202,9 +264,25 @@ export const TranscriptView = forwardRef<
 
   // Checkpoint click → scroll that block into view, fetching a window around it
   // when it is not loaded (truncation-immune: the record always exists in the
-  // trace, even far past TUI erasure).
+  // trace, even far past TUI erasure). Reaching the last selection lets us tell a
+  // reverse-sync echo from a genuine jump (defect 1).
+  const lastSelectedRef = useRef<number | null>(null)
+  // The identity whose block is being fetched for a far jump — distinguishes a
+  // just-landed far target (snap instantly, item 4) from a nearby loaded one.
+  const pendingJumpRef = useRef<number | null>(null)
   useEffect(() => {
+    const enteringLive = selectedIndex === null && lastSelectedRef.current !== null
+    lastSelectedRef.current = selectedIndex
     if (selectedIndex === null) {
+      // Returning to live after eviction may have dropped the newest window —
+      // pull the tail back so "latest" is the true newest, not a survivor.
+      // Re-arm the pin + newest-anchored eviction FIRST, or the tail merge is
+      // evicted around the stale deep-history anchor and never survives (HIGH).
+      if (enteringLive) {
+        anchorIndexRef.current = Number.MAX_SAFE_INTEGER
+        pinnedRef.current = true
+        void loadWindow('tail')
+      }
       if (pinnedRef.current && scrollRef.current) {
         scrollRef.current.scrollTop = scrollRef.current.scrollHeight
       }
@@ -212,9 +290,24 @@ export const TranscriptView = forwardRef<
     }
     const node = blockRefs.current.get(selectedIndex)
     if (node) {
-      node.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      const landed = pendingJumpRef.current === selectedIndex
+      // Skip when this is just the reverse-sync echo of the block already in
+      // view — else the scroll-driven goto fights the user's own scroll and it
+      // creeps one checkpoint at a time (defect 1). A just-landed far jump is
+      // never an echo, so it always scrolls.
+      if (!landed && selectedIndex === activeInViewRef.current) return
+      // Instant snap for a far target that just loaded (smooth-from-far reads as
+      // "stuck"); smooth only for a nearby, already-loaded target (item 4).
+      node.scrollIntoView({ block: 'start', behavior: landed ? 'auto' : 'smooth' })
+      pendingJumpRef.current = null
+      onPending?.(null)
     } else if (!loading) {
+      // Far target: flag it pending (rail/fan shows loading), anchor eviction on
+      // it so the fetched window survives the cap (defect 1), then fetch.
+      pendingJumpRef.current = selectedIndex
+      onPending?.(selectedIndex)
       setLoading(true)
+      anchorIndexRef.current = selectedIndex
       void fetchTracePage(terminalId, { aroundIndex: selectedIndex, limit: WINDOW })
         .then(ingest)
         .finally(() => setLoading(false))

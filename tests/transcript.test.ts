@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   activeBlockForScroll,
-  blockMarkerFraction,
   evictTrace,
   isAtBottom,
+  boundaryReached,
+  hasNewerBlocks,
+  hasOlderBlocks,
+  mergeCheckpointRows,
   mergeTrace,
+  newestIndex,
   pruneToTotal,
   railPointerFraction,
   railToScrollTop,
@@ -12,6 +16,7 @@ import {
   tailClipRows,
   type TraceBlock
 } from '../src/renderer/src/transcript'
+import type { TurnRecord } from '../src/shared/turn'
 // Identity-keyed blocks (integration round 2): pos is GONE — TraceBlock.index
 // (1-based, from the trace parsers) is both identity and layout ordinal.
 const block = (index: number, over: Partial<TraceBlock> = {}): TraceBlock => ({
@@ -64,6 +69,16 @@ describe('evictTrace (BLOCK 3 real windowing)', () => {
     expect(tail).toEqual([6, 7, 8, 9])
     expect(tail).toContain(9)
   })
+
+  it('item 1: a MAX_SAFE anchor keeps the freshest tail through the cap', () => {
+    // Returning to live re-anchors eviction at MAX_SAFE so the just-fetched
+    // tail survives — never trimmed around a stale deep-history anchor.
+    const deep = Array.from({ length: 105 }, (_, i) => block(i + 1)) // T1..T105
+    const kept = evictTrace(deep, Number.MAX_SAFE_INTEGER, 60).map((b) => b.index)
+    expect(kept[kept.length - 1]).toBe(105) // true newest survives
+    expect(kept).toHaveLength(60)
+    expect(kept[0]).toBe(46) // newest 60: T46..T105
+  })
 })
 
 describe('pruneToTotal (MEDIUM 4 rewind shrink)', () => {
@@ -78,16 +93,92 @@ describe('pruneToTotal (MEDIUM 4 rewind shrink)', () => {
   })
 })
 
-describe('blockMarkerFraction (here-marker → block identity)', () => {
-  it('pins to the live tail (1) when no block is active', () => {
-    expect(blockMarkerFraction(null, 10)).toBe(1)
+// Capped-history fixture (defect: identity ≠ count): 100 records whose
+// identities span T6..T105 (cap trim + sibling collapse), total 100.
+const cappedBlocks = Array.from({ length: 100 }, (_, i) => block(i + 6))
+
+describe('newestIndex (latest = blocks[last].index, never total)', () => {
+  it('returns the newest loaded IDENTITY, which outruns the count', () => {
+    // 100 blocks, but the newest identity is T105 — NOT the total (100).
+    expect(newestIndex(cappedBlocks)).toBe(105)
+    expect(cappedBlocks.length).toBe(100)
   })
-  it('maps a global position to a fraction (oldest 0 → live 1)', () => {
-    expect(blockMarkerFraction(0, 10)).toBe(0)
-    expect(blockMarkerFraction(5, 10)).toBeCloseTo(0.5)
+  it('is null when nothing is loaded', () => {
+    expect(newestIndex([])).toBeNull()
   })
-  it('degrades gracefully with no blocks', () => {
-    expect(blockMarkerFraction(0, 0)).toBe(1)
+})
+
+describe('hasOlderBlocks (identity floor, never a hardcoded T1)', () => {
+  it('stops at the discovered trace floor even when it is above T1', () => {
+    // oldest loaded T6, floor discovered as T6 → nothing older (no phantom T1..T5)
+    expect(hasOlderBlocks(6, 6)).toBe(false)
+    expect(hasOlderBlocks(6, null)).toBe(true) // floor unknown → older may exist
+    expect(hasOlderBlocks(50, 6)).toBe(true)
+  })
+  it('is false with nothing loaded', () => {
+    expect(hasOlderBlocks(null, null)).toBe(false)
+  })
+})
+
+describe('hasNewerBlocks (fill-forward to the true newest after eviction)', () => {
+  it('keeps loading newer until the trace ceiling (T105), not the count', () => {
+    // newest loaded stuck at T60 after eviction; ceiling T105 → more to load
+    expect(hasNewerBlocks(60, 105)).toBe(true)
+    expect(hasNewerBlocks(105, 105)).toBe(false)
+    expect(hasNewerBlocks(60, null)).toBe(true) // ceiling unknown → newer may exist
+  })
+  it('is false with nothing loaded', () => {
+    expect(hasNewerBlocks(null, null)).toBe(false)
+  })
+})
+
+describe('boundaryReached (empty-page latch guard)', () => {
+  it('latches only when a NON-EMPTY page has nothing beyond start', () => {
+    // scroll-up from T8: page came back but all >= 8 → T8 is the floor
+    expect(boundaryReached([block(8), block(9)], 8, 'older')).toBe(true)
+    // page has something older than 8 → not the floor yet
+    expect(boundaryReached([block(6), block(7), block(8)], 8, 'older')).toBe(false)
+  })
+  it('does NOT latch on a truly empty (retryable) page', () => {
+    expect(boundaryReached([], 8, 'older')).toBe(false)
+    expect(boundaryReached([], 105, 'newer')).toBe(false)
+  })
+  it('handles the newer direction (ceiling)', () => {
+    expect(boundaryReached([block(104), block(105)], 105, 'newer')).toBe(true)
+    expect(boundaryReached([block(105), block(106)], 105, 'newer')).toBe(false)
+  })
+})
+
+describe('mergeCheckpointRows (item 3: full trace range selectable)', () => {
+  // Deep-history fixture: record store capped to T8..T105; the trace reaches T1.
+  const record = (index: number): TurnRecord => ({
+    index,
+    prompt: `prompt ${index}`,
+    reply: `reply ${index}`,
+    startedAt: 0,
+    endedAt: 1
+  })
+  const records = Array.from({ length: 98 }, (_, i) => record(i + 8)) // T8..T105
+  const traceIndex = Array.from({ length: 105 }, (_, i) => ({ index: i + 1, title: `t${i + 1}` }))
+
+  it('spans the WHOLE trace range, not just the capped records', () => {
+    const rows = mergeCheckpointRows(records, traceIndex)
+    expect(rows[0].index).toBe(1) // T1 present though the record store starts at T8
+    expect(rows[rows.length - 1].index).toBe(105)
+    expect(rows).toHaveLength(105)
+  })
+  it('marks sub-cap identities trace-only, cap identities record-backed', () => {
+    const rows = mergeCheckpointRows(records, traceIndex)
+    const t1 = rows.find((r) => r.index === 1)!
+    const t60 = rows.find((r) => r.index === 60)!
+    expect(t1.record).toBeNull()
+    expect(t1.traceTitle).toBe('t1')
+    expect(t60.record).not.toBeNull()
+  })
+  it('falls back to records alone when the trace listing is absent', () => {
+    const rows = mergeCheckpointRows(records, [])
+    expect(rows).toHaveLength(98)
+    expect(rows.every((r) => r.record !== null)).toBe(true)
   })
 })
 

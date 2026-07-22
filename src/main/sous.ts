@@ -20,8 +20,13 @@ const REQUEST_TIMEOUT_MS = 8000
  * generate (~10s for a 1.5b model), so the cold call gets a longer leash.
  */
 const COLD_TIMEOUT_MS = 30_000
-/** Keep the model resident between turns so refreshes stay ~1-2s. */
-const KEEP_ALIVE = '30m'
+/**
+ * How long Ollama keeps the model resident after a title request. Default 5m
+ * so a ~1.25GB model doesn't sit resident all day for occasional titles — it
+ * unloads after 5 idle minutes and pays the ~10s cold start on the next
+ * title (covered by COLD_TIMEOUT_MS). Override with COOKREW_SOUS_KEEPALIVE.
+ */
+const KEEP_ALIVE = process.env.COOKREW_SOUS_KEEPALIVE ?? '5m'
 /** After a failed request, stop trying for this long (server likely down). */
 const DOWN_COOLDOWN_MS = 60_000
 

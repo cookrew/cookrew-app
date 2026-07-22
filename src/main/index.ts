@@ -219,6 +219,19 @@ function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
   const meta =
     store.list().workspaces.find((w) => w.id === nameOrId) ?? store.metaByName(nameOrId)
   if (!meta) throw new Error(`Workspace '${nameOrId}' not found`)
+  // Kill this workspace's terminals BEFORE deleting it — store.removeWorkspace
+  // only switches away (detach) and rm's the state dir, so without this each
+  // terminal's tmux session (a claude CLI, bypassPermissions) would leak
+  // forever with no node left to reach it. Done before the switch-away so the
+  // active workspace's terminals are killed, not merely detached. Kills are
+  // by tmux session name, so parked (detached) terminals are reached too.
+  for (const id of store.terminalIdsOf(meta.id)) {
+    sessionSync.unwatch(id)
+    ptys.killDetached(id)
+    turns.untrack(id)
+    turns.clearHistory(id)
+    agents.deactivate(id)
+  }
   store.removeWorkspace(meta.id) // switches away first if active (fires 'switch')
   return store.list()
 }
@@ -675,6 +688,20 @@ app.whenReady().then(() => {
 
   // First launch: seed the active workspace with a bypass-permission orch.
   seedConductorIfEmpty()
+
+  // Reap orphaned tmux sessions before booting: leaks from past
+  // workspace-deletes (pre-fix) or crashes, whose ids match no terminal node
+  // anywhere. Runs before spawn so the active workspace's own sessions (which
+  // ARE owned) are never touched — spawn reattaches them via `new-session -A`.
+  // Fail SAFE: if any workspace's terminals can't be enumerated (corrupt
+  // workspace.json), reap NOTHING rather than mistake owned sessions for
+  // orphans.
+  try {
+    const reaped = ptys.reapOrphanSessions(store.allTerminalIdsStrict())
+    if (reaped.length > 0) console.error(`Reaped ${reaped.length} orphaned agent session(s)`)
+  } catch (error) {
+    console.error('Skipping orphan reap: could not enumerate all workspace terminals', error)
+  }
 
   // Boot PTYs for terminals restored from the saved workspace.
   for (const t of store.terminals()) {

@@ -1,6 +1,6 @@
 import { cookrew } from './api'
 import type { TraceBlock } from '../../shared/trace-blocks'
-import type { TurnPhase } from '../../shared/turn'
+import type { TurnPhase, TurnRecord } from '../../shared/turn'
 
 export type { TraceBlock } from '../../shared/trace-blocks'
 
@@ -92,12 +92,114 @@ export function pruneToTotal(blocks: readonly TraceBlock[], total: number): Trac
 }
 
 /**
- * Marker fraction over the rail from a block identity: 0 = oldest (T1),
- * 1 = live tail. `index` null → live. Pure — unit-tested.
+ * The IDENTITY of the newest loaded block (blocks[last].index), or null when
+ * none are loaded. The trace list is ascending by identity, so the last entry
+ * is the newest. NEVER `total` (a count) — under a capped history the identities
+ * outrun the count (e.g. T6..T105 with total 100), so total-as-newest-index is
+ * off by the trimmed span. Pure — unit-tested.
  */
-export function blockMarkerFraction(index: number | null, total: number): number {
-  if (index === null || total <= 0) return 1
-  return Math.max(0, Math.min(1, index / total))
+export function newestIndex(blocks: readonly TraceBlock[]): number | null {
+  return blocks.length > 0 ? blocks[blocks.length - 1].index : null
+}
+
+/**
+ * Whether older blocks remain to lazy-load: true until we've discovered the
+ * trace floor (`traceMin`, the smallest identity, learned when a scroll-up
+ * fetch returns nothing older). Keyed on IDENTITIES — never a hardcoded T1, so
+ * a cap-trimmed history whose oldest is T6 stops cleanly instead of looping on
+ * phantom T1..T5. Pure — unit-tested.
+ */
+export function hasOlderBlocks(oldestIndex: number | null, traceMin: number | null): boolean {
+  if (oldestIndex === null) return false
+  return traceMin === null || oldestIndex > traceMin
+}
+
+/**
+ * Whether newer blocks remain to lazy-load (symmetric to hasOlderBlocks): true
+ * until the trace ceiling (`traceMax`) is discovered. Drives the fill-forward
+ * when returning toward live after eviction dropped the newest window — so the
+ * latest reachable checkpoint is the true newest identity, not the newest that
+ * survived the cap. Pure — unit-tested.
+ */
+export function hasNewerBlocks(newest: number | null, traceMax: number | null): boolean {
+  if (newest === null) return false
+  return traceMax === null || newest < traceMax
+}
+
+/**
+ * Whether a boundary fetch PROVES there is nothing beyond `start` (review
+ * WARNING: the empty-page latch). A NON-EMPTY page that contains nothing past
+ * `start` is the real floor/ceiling; a truly EMPTY page is a transient miss and
+ * stays retryable — latching on it would falsely seal the range. Pure —
+ * unit-tested.
+ */
+export function boundaryReached(
+  blocks: readonly TraceBlock[],
+  start: number,
+  dir: 'older' | 'newer'
+): boolean {
+  if (blocks.length === 0) return false
+  return dir === 'older' ? !blocks.some((b) => b.index < start) : !blocks.some((b) => b.index > start)
+}
+
+// ---- full-range checkpoint rows (item 3: every traced checkpoint selectable) ----
+
+/** A lightweight trace listing entry — identity + a display title/snippet. */
+export interface TraceIndexEntry {
+  index: number
+  title: string
+}
+
+interface TraceIndexBridge {
+  listTraceIndex?: (terminalId: string) => Promise<TraceIndexEntry[]>
+}
+
+/** True once Forge's cheap identity-range/title listing is present. */
+export function hasTraceIndexApi(): boolean {
+  return typeof (cookrew() as unknown as TraceIndexBridge).listTraceIndex === 'function'
+}
+
+/**
+ * The full trace's checkpoint identities + titles (item 3). Cheap listing so
+ * the timeline can span the WHOLE trace (floor..ceiling), not just the capped
+ * record store. Empty when the API is absent — the timeline then falls back to
+ * the records alone (today's behavior). Coordinated with Forge as listTraceIndex.
+ */
+export async function fetchTraceIndex(terminalId: string): Promise<TraceIndexEntry[]> {
+  const fn = (cookrew() as unknown as TraceIndexBridge).listTraceIndex
+  if (!fn) return []
+  return fn(terminalId)
+}
+
+/** A selectable checkpoint row: full record when in the cap, else trace-only. */
+export interface CheckpointRow {
+  index: number
+  /** Full record when within the (capped) record store; null for trace-only. */
+  record: TurnRecord | null
+  /** Fallback label for trace-only rows (a trace prompt snippet / title). */
+  traceTitle: string
+}
+
+/**
+ * Merge the capped record store with the full trace listing so EVERY traced
+ * checkpoint is a selectable row (item 3): records supply full data (title,
+ * fork, role-save) where present; identities below the record cap (e.g. T1..T7
+ * when the store starts at T8) render trace-only from the listing. Union by
+ * IDENTITY, ascending; records win. Pure — unit-tested.
+ */
+export function mergeCheckpointRows(
+  records: readonly TurnRecord[],
+  traceIndex: readonly TraceIndexEntry[]
+): CheckpointRow[] {
+  const byIndex = new Map<number, CheckpointRow>()
+  for (const entry of traceIndex) {
+    byIndex.set(entry.index, { index: entry.index, record: null, traceTitle: entry.title })
+  }
+  for (const record of records) {
+    const prior = byIndex.get(record.index)
+    byIndex.set(record.index, { index: record.index, record, traceTitle: prior?.traceTitle ?? '' })
+  }
+  return [...byIndex.values()].sort((a, b) => a.index - b.index)
 }
 
 /**

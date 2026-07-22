@@ -91,6 +91,15 @@ export interface CookrewApi {
     terminalId: string,
     request?: { beforeIndex?: number; afterIndex?: number; aroundIndex?: number; limit?: number }
   ) => Promise<{ blocks: unknown[]; total: number; source: 'claude' | 'codex' | null }>
+  /**
+   * Cheap identity+title listing of the FULL trace (unified-scroll item 3): one
+   * lightweight entry per traced checkpoint (identity + a short title/prompt
+   * snippet), so the checkpoint timeline can span every traced checkpoint —
+   * including identities below the capped record store (e.g. T1..T7 when the
+   * record store starts at T8). Optional — feature-detected via
+   * hasTraceIndexApi(); the timeline falls back to records alone when absent.
+   */
+  listTraceIndex?: (terminalId: string) => Promise<{ index: number; title: string }[]>
   /** Fork a NEW agent card from a past turn; omit turnIndex for the latest. */
   forkTerminal: (sourceId: string, turnIndex?: number) => Promise<CanvasNode>
   /** Fork a team into a NEW workspace per the spec (switches to it). */

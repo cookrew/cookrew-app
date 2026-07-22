@@ -4,8 +4,7 @@ import { cookrew } from './api'
 import { CrIcon } from './icons'
 import { checkpointTitle, type TitleMode } from './checkpoint-sync'
 import { hasRoleFromCheckpoint, saveRoleFromCheckpoint } from './role-checkpoint'
-import { railPointerFraction } from './transcript'
-import type { TurnPaging } from './nodes/TurnPager'
+import { railPointerFraction, type CheckpointRow } from './transcript'
 
 const LONG_PRESS_MS = 450
 /** Marker inset (matches .cr-ckpt-here top: calc(16px + …)) for scrub mapping. */
@@ -21,37 +20,47 @@ const SCRUB_THRESHOLD = 4
  * a LIVE dot (`.cr-ckpt-mini`). Hovering the rail (desktop, CSS) or tapping it
  * (phone → `.open`) fans it into the full list (`.cr-ckpt-full`): oldest on
  * top, LIVE at the bottom, dots pinned right, titles fanning left. PRESS a row
- * → paging.goto scrolls the context there; hover a row (desktop) / long-press
- * (phone → `.acting`) reveals inline SAVE ROLE + FORK AGENT — the primary
- * role-save + fork entry point.
+ * → onGoto scrolls the context there; hover a row (desktop) / long-press
+ * (phone → `.acting`) reveals inline SAVE ROLE + FORK AGENT.
+ *
+ * Rows span the WHOLE trace (unified-scroll item 3): identities below the record
+ * cap render trace-only (no record → select + fork, but no role-save). A row
+ * whose trace block is still fetching for a jump shows loading (item 4).
  *
  * Markup follows Fresco's `.cr-ckpt-*` contract; Fresco owns the visuals, this
  * owns the press / long-press / save / fork logic + the active mapping.
- * The `here` marker rides the live scroll fraction (activity.scrollRow) and
- * the active row's progress bar (--p) fills through that checkpoint's span.
  */
 export function CheckpointTimeline({
   terminalId,
-  paging,
+  rows,
   titleMode,
-  activeBlock,
+  activeIndex,
+  loadingIndex,
   markerFrac,
+  onGoto,
+  onLive,
   onScrub
 }: {
   terminalId: string
-  paging: TurnPaging
+  /** Full-range selectable checkpoints (records ∪ trace listing), ascending. */
+  rows: CheckpointRow[]
   titleMode: TitleMode
-  /** Checkpoint index of the transcript block in view; null at the live tail. */
-  activeBlock?: number | null
+  /** Checkpoint identity in view; null at the live tail. */
+  activeIndex?: number | null
+  /** Checkpoint whose trace block is fetching for a jump — shows loading. */
+  loadingIndex?: number | null
   /** Exact marker fraction (true position over the combined trace+tail extent). */
   markerFrac?: number
+  /** Select a checkpoint by IDENTITY (works for trace-only sub-cap rows too). */
+  onGoto: (index: number) => void
+  /** Return to the live tail. */
+  onLive: () => void
   /**
    * Rail-as-scrollbar scrub (item 4): dragging the mini rail scrubs the ONE
    * combined scroll space to this fraction (0 = oldest trace, 1 = live bottom).
    */
   onScrub?: (fraction: number) => void
 }): React.JSX.Element | null {
-  const records = paging.records ?? []
   const [open, setOpen] = useState(false)
   /** True while a rail scrub drag is active — drives the .dragging affordance. */
   const [scrubbing, setScrubbing] = useState(false)
@@ -88,7 +97,7 @@ export function CheckpointTimeline({
     return () => document.removeEventListener('pointerdown', onDown)
   }, [open])
 
-  if (records.length === 0) return null
+  if (rows.length === 0) return null
 
   const clearPress = (): void => {
     if (pressTimer.current) {
@@ -105,11 +114,11 @@ export function CheckpointTimeline({
     setSavingIndex(null)
   }
 
-  const fork = (record: TurnRecord): void => {
+  const fork = (index: number): void => {
     if (forkingIndex !== null) return
-    setForkingIndex(record.index)
+    setForkingIndex(index)
     void cookrew()
-      .forkTerminal(terminalId, record.index)
+      .forkTerminal(terminalId, index)
       .catch((error) => console.error('Fork failed:', error))
       .finally(() => {
         setForkingIndex(null)
@@ -154,24 +163,25 @@ export function CheckpointTimeline({
   // "You are here" marker (item 4): the transcript reports the TRUE position
   // over the combined trace+tail extent (scrollTop / scrollable height), so the
   // marker tracks the one scroll space continuously. Fall back to the selected
-  // checkpoint's position among loaded records only when no live fraction has
-  // been reported yet. 0 = oldest block (rail top), 1 = live bottom.
-  const here = activeBlock ?? paging.viewing?.index ?? null
+  // checkpoint's position among the rows only when no live fraction has been
+  // reported yet. 0 = oldest block (rail top), 1 = live bottom.
+  const here = activeIndex ?? null
   const hereFrac =
     markerFrac !== undefined
       ? markerFrac
-      : here !== null && records.length > 0
-        ? Math.max(0, records.findIndex((r) => r.index === here)) / records.length
+      : here !== null && rows.length > 0
+        ? Math.max(0, rows.findIndex((r) => r.index === here)) / rows.length
         : 1
 
-  // The active row fills its progress bar (you are at this block). Intra-block
-  // scroll fraction is a future refinement (TranscriptView would report it).
-  const progressFor = (record: TurnRecord): number => (record.index === here ? 100 : 0)
+  const rowLabel = (row: CheckpointRow): string =>
+    row.record ? checkpointTitle(row.record, titleMode) : row.traceTitle || `T${row.index}`
 
   return (
     <div
       ref={railRef}
-      className={`cr-ckpt-rail${open ? ' open' : ''}${scrubbing ? ' dragging' : ''}`}
+      className={`cr-ckpt-rail${open ? ' open' : ''}${scrubbing ? ' dragging' : ''}${
+        loadingIndex != null ? ' loading' : ''
+      }`}
       onMouseLeave={() => {
         clearPress()
         closeActions()
@@ -189,7 +199,7 @@ export function CheckpointTimeline({
       >
         <div className="cr-ckpt-line" />
         <div className="cr-ckpt-count">
-          <span className="n">{records.length}</span>
+          <span className="n">{rows.length}</span>
           <span className="l">CP</span>
         </div>
         <div
@@ -203,72 +213,76 @@ export function CheckpointTimeline({
       <div className="cr-ckpt-full">
         <div className="cr-ckpt-head">
           <span className="cr-ckpt-head-t">CHECKPOINTS</span>
-          <span className="cr-ckpt-head-c">LIVE · {records.length}</span>
+          <span className="cr-ckpt-head-c">LIVE · {rows.length}</span>
         </div>
         <div className="cr-ckpt-list" role="list" aria-label="Checkpoints">
-          {records.map((record) => {
-            const isActive = record.index === here
-            const isActing = acting === record.index
+          {rows.map((row) => {
+            const isActive = row.index === here
+            const isActing = acting === row.index
+            const isLoading = loadingIndex === row.index
+            const canSaveRole = row.record !== null && hasRoleFromCheckpoint()
             return (
               <div
-                key={record.index}
+                key={row.index}
                 role="listitem"
-                className={`cr-ckpt-row${isActive ? ' active' : ''}${isActing ? ' acting' : ''}`}
-                aria-label={`Checkpoint ${record.index}`}
+                className={`cr-ckpt-row${isActive ? ' active' : ''}${isActing ? ' acting' : ''}${
+                  isLoading ? ' loading' : ''
+                }`}
+                aria-label={`Checkpoint ${row.index}`}
+                aria-busy={isLoading || undefined}
                 onMouseDown={(e) => e.preventDefault()}
-                onPointerDown={() => onPointerDown(record.index)}
+                onPointerDown={() => onPointerDown(row.index)}
                 onPointerUp={clearPress}
                 onClick={() => {
                   if (isActing) return
-                  paging.goto(record.index)
+                  onGoto(row.index)
                   // Collapse the fan after a touch tap (no mouseleave fires).
                   setOpen(false)
                 }}
               >
                 <span className="cr-ckpt-row-actions" onMouseDown={stop} onClick={stop}>
-                  {savingIndex === record.index ? (
-                    <SaveRoleInline terminalId={terminalId} record={record} onDone={closeActions} />
+                  {savingIndex === row.index && row.record ? (
+                    <SaveRoleInline terminalId={terminalId} record={row.record} onDone={closeActions} />
                   ) : (
                     <>
-                      {hasRoleFromCheckpoint() && (
-                        <button
-                          className="cr-ckpt-action"
-                          onClick={() => setSavingIndex(record.index)}
-                        >
+                      {canSaveRole && (
+                        <button className="cr-ckpt-action" onClick={() => setSavingIndex(row.index)}>
                           <CrIcon name="agent" /> ROLE
                         </button>
                       )}
                       <button
                         className="cr-ckpt-action"
                         disabled={forkingIndex !== null}
-                        onClick={() => fork(record)}
+                        onClick={() => fork(row.index)}
                       >
-                        <CrIcon name="fork" /> {forkingIndex === record.index ? '…' : 'FORK'}
+                        <CrIcon name="fork" /> {forkingIndex === row.index ? '…' : 'FORK'}
                       </button>
                     </>
                   )}
                 </span>
                 <span className="cr-ckpt-row-label">
-                  <span className="cr-ckpt-row-idx">T{record.index}</span>
-                  <span className="cr-ckpt-row-title">{checkpointTitle(record, titleMode)}</span>
+                  <span className="cr-ckpt-row-idx">T{row.index}</span>
+                  <span className="cr-ckpt-row-title">
+                    {isLoading ? 'loading…' : rowLabel(row)}
+                  </span>
                 </span>
                 <span className="cr-ckpt-dot">
                   <i />
                 </span>
                 <span
                   className="cr-ckpt-prog"
-                  style={isActive ? ({ ['--p']: progressFor(record) } as React.CSSProperties) : undefined}
+                  style={isActive ? ({ ['--p']: 100 } as React.CSSProperties) : undefined}
                 />
               </div>
             )
           })}
           <div
-            className={`cr-ckpt-row live${paging.viewing === null ? ' active' : ''}`}
+            className={`cr-ckpt-row live${here === null ? ' active' : ''}`}
             role="listitem"
             aria-label="Live"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
-              paging.live()
+              onLive()
               setOpen(false)
             }}
           >
