@@ -8,7 +8,7 @@ import {
   checkpointRowTitle,
   createHoldReveal,
   focusedCheckpoint,
-  railDrive,
+  railGesture,
   railPointerFraction,
   scrubPreviewRow,
   type CheckpointRow
@@ -18,33 +18,30 @@ import {
 const RAIL_INSET = 16
 /** Px of pointer travel before a press on the rail becomes a scrub, not a tap. */
 const SCRUB_THRESHOLD = 4
-/** Hold a tab/row this long (~2s) to reveal its SAVE ROLE / FORK actions
- *  (the touch equivalent of the desktop row-hover reveal). */
+/** Press-and-hold a tab/row this long (~2s) to reveal its SAVE ROLE / FORK
+ *  actions. Same gesture for mouse and touch — desktop == mobile. */
 const HOLD_REVEAL_MS = 1500
-/** Coarse pointer (touch): the two-state mobile model; desktop keeps real hover. */
-const COARSE_POINTER =
-  typeof window !== 'undefined' &&
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia('(pointer: coarse)').matches
 
 /**
  * Checkpoint timeline on the terminal context view.
  *
- * DESKTOP: a thin rail (line + count + here-marker + live dot) that fans into the
- * full list on hover; hover a row to reveal its SAVE ROLE / FORK, click to jump.
- *
- * MOBILE (v3), two states off the SAME mini rail:
- *  - STATE A (default + scrolling/scrubbing): a single-checkpoint TAB that tracks
- *    the FOCUSED chapter (T<index> + title) at the here-marker; HOLD it (~2s) to
- *    reveal SAVE ROLE / FORK for that checkpoint. The mini here-marker moves with
- *    the focus. Scrolling does NOT open the list.
- *  - STATE B (explicit TAP of the mini): the full list opens ANCHORED on the
- *    focused checkpoint (scrolled into view, neighbors above + below). Tap a row
- *    → jump; hold a row → its actions.
+ * ONE unified model — desktop == mobile, only the input device differs (mouse
+ * click vs single touch):
+ *  - REST: a thin rail — line + here-marker (stuck at the current position) +
+ *    count + live dot.
+ *  - SCROLL the transcript → the here-marker moves along the line to the focused
+ *    checkpoint and the context follows; DRAG the line/marker → scrubs the
+ *    transcript to that checkpoint. A single-checkpoint TAB shows the focused
+ *    title while scrolling/scrubbing.
+ *  - CLICK / TAP the rail → the full select list opens and STICKS (persistent —
+ *    not a hover-fan); dismiss by a click/tap OUTSIDE. It opens anchored on the
+ *    focused checkpoint (scrolled to centre; neighbors above + below).
+ *  - In the list: tap/click a row → jump; press-and-HOLD a row/tab (~2s) → its
+ *    SAVE ROLE / FORK actions.
  *
  * Rows span the WHOLE trace (unified-scroll item 3): identities below the record
  * cap render trace-only (fork works, role-save needs the record). Fresco owns the
- * `.cr-ckpt-*` visuals (incl. the tab-as-row look); this owns the interaction.
+ * `.cr-ckpt-*` visuals and makes them IDENTICAL for both interaction modes.
  */
 export function CheckpointTimeline({
   terminalId,
@@ -152,10 +149,9 @@ export function CheckpointTimeline({
     setActing(null)
     setSavingIndex(null)
   }
-  // HOLD to reveal actions (mobile only — desktop uses hover). A short release is
+  // HOLD to reveal actions — same gesture for mouse and touch. A short release is
   // a plain tap; `held` swallows the click that fires after a completed hold.
   const startHold = (index: number): void => {
-    if (!COARSE_POINTER) return
     held.current = false
     hold.start(index)
   }
@@ -182,8 +178,9 @@ export function CheckpointTimeline({
 
   const stop = (e: React.MouseEvent): void => e.stopPropagation()
 
-  // Rail-as-scrollbar drag: press-and-drag the mini to scrub; a press that never
-  // travels stays a tap (opens State B). While dragging, the tab tracks the drag.
+  // Unified rail gesture: press-and-DRAG the line/marker → scrub the transcript;
+  // a press that never travels is a plain click/tap → open the stick list. Same
+  // for mouse and touch.
   const onRailPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
     if (!onScrub || open) return
     scrub.current = { startY: e.clientY, moved: false }
@@ -197,29 +194,23 @@ export function CheckpointTimeline({
     scrub.current.moved = true
     const rect = miniRef.current.getBoundingClientRect()
     const frac = railPointerFraction(e.clientY, rect.top, rect.height, RAIL_INSET)
-    onScrub(frac) // drive the transcript scroll too
-    // TWO-ZONE ROUTING (v3 refinement): a DRAG on the rail bar opens + drives the
-    // FULL LIST (State B), anchored on the checkpoint under the drag — distinct
-    // from a transcript scroll (which stays on the single tab, State A).
-    const drive = railDrive(rows, frac, true)
-    if (drive.openList) setOpen(true)
-    setFocused(drive.anchorIndex !== null ? { index: drive.anchorIndex, frac } : null)
+    // DRAG scrubs the transcript to the dragged checkpoint (marker + context
+    // follow); the tab tracks the focus. A drag does NOT open the list.
+    onScrub(frac)
+    const row = scrubPreviewRow(rows, frac)
+    setFocused(row ? { index: row.index, frac } : null)
   }
   const onRailPointerUp = (e: React.PointerEvent<HTMLDivElement>): void => {
     setScrubbing(false)
-    // A rail drag leaves the full list OPEN (persistent) so you can act on a row;
-    // an outside tap closes it. A plain tap (no travel) is handled by onRailClick.
     if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId)
     }
   }
-  // Tap the mini → open the full list (State B). A drag is swallowed here.
+  // A plain click/tap (no travel) opens the stick list; a drag is swallowed.
   const onRailClick = (): void => {
-    if (scrub.current.moved) {
-      scrub.current.moved = false
-      return
-    }
-    setOpen((v) => !v)
+    const moved = scrub.current.moved
+    scrub.current.moved = false
+    if (railGesture(moved) === 'open') setOpen(true)
   }
 
   const here = activeIndex ?? null
@@ -262,7 +253,6 @@ export function CheckpointTimeline({
       className={`cr-ckpt-rail${open ? ' open' : ''}${scrubbing ? ' dragging' : ''}${
         loadingIndex != null ? ' loading' : ''
       }`}
-      onMouseLeave={closeActions}
     >
       {/* resting: line + count + you-are-here + live. Drag scrubs; a plain tap
           opens the full list (State B). */}
@@ -284,11 +274,11 @@ export function CheckpointTimeline({
         <div className="cr-ckpt-livedot" />
       </div>
 
-      {/* STATE A: single-checkpoint tab tracking the focused chapter. Fresco's
-          contract — a REAL desktop `.cr-ckpt-row` lifted onto a floating panel
-          (`.cr-ckpt-scrub-preview`), so it inherits the exact row look. Hold →
-          `.acting` reveals SAVE ROLE / FORK; tap → open State B. */}
-      {COARSE_POINTER && !open && focused && focusedRow && (
+      {/* single-checkpoint tab tracking the focused chapter (both platforms).
+          Fresco's contract — a REAL `.cr-ckpt-row` lifted onto a floating panel
+          (`.cr-ckpt-scrub-preview`), inheriting the exact row look. Hold →
+          `.acting` reveals SAVE ROLE / FORK; click/tap → open the stick list. */}
+      {!open && focused && focusedRow && (
         <div
           className="cr-ckpt-scrub-preview"
           style={{ top: `calc(16px + ${focused.frac} * (100% - 32px))` }}

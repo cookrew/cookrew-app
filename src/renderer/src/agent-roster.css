@@ -711,92 +711,13 @@
   opacity: 0.6;
 }
 
-/* ---- mobile checkpoint rail (Velvet logic; Fresco visual parity) ----
-   Touch has no real hover, so the desktop hover-fan STICKS open after a tap. On
-   mobile (v3) the REST state is the single-line desktop mini; STATE B (the full
-   list) opens ONLY on an explicit tap (`.open`) — scrolling no longer fans it.
-   Neutralize hover so a stuck :hover never opens the list; Fresco reconciles the
-   exact mini/fan visuals (these rules only carry the functional show/hide). */
-body.cookrew-mobile .cr-ckpt-rail:hover {
-  width: 40px;
-}
-body.cookrew-mobile .cr-ckpt-rail:hover .cr-ckpt-mini {
-  opacity: 1;
-  pointer-events: auto;
-}
-body.cookrew-mobile .cr-ckpt-rail:hover .cr-ckpt-full {
-  opacity: 0;
-  pointer-events: none;
-}
-/* STATE B: an explicit mini tap (`.open`) reveals the full list. It is now a
-   COMPACT floating panel (below), so the rail itself stays a slim scroll zone —
-   no wide 360px catch-strip sitting invisibly over the transcript. */
-body.cookrew-mobile .cr-ckpt-rail.open {
-  width: 40px;
-  max-width: 40px;
-}
-body.cookrew-mobile .cr-ckpt-rail.open .cr-ckpt-mini {
-  opacity: 0;
-  pointer-events: none;
-}
-body.cookrew-mobile .cr-ckpt-rail.open .cr-ckpt-full {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-/* v3 STATE B footprint: on phone the full list is a COMPACT floating panel sized
-   near the single-checkpoint tab — NOT the 360px desktop sidebar. Same full-list
-   style (head, rows, idx + title, active highlight), just snug and lifted left of
-   the rail like the tab, so State A → B reads as the same object growing. Velvet
-   scrolls it to the focused checkpoint (centre; neighbours above + below are the
-   rest of the list). Desktop is untouched. */
-body.cookrew-mobile .cr-ckpt-full {
-  top: 50%;
-  right: 48px;
-  bottom: auto;
-  transform: translateY(-50%);
-  width: min(76vw, 290px);
-  max-width: 76vw;
-  max-height: min(60vh, 320px);
-  background: linear-gradient(to left, rgba(20, 20, 23, 0.985), rgba(20, 20, 23, 0.94));
-  border: 1px solid var(--vi-line);
-  border-radius: 6px;
-  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.55);
-  overflow: hidden;
-}
-
-/* the compact panel gives titles the full width: hidden actions COLLAPSE rather
-   than reserve inline space (Velvet's touch model reveals them on their own
-   full-width line when .acting, so they never sit inline — no reservation
-   needed). Her .acting order/flex-basis bar is untouched. */
-body.cookrew-mobile .cr-ckpt-full .cr-ckpt-row-actions {
-  display: none;
-}
-body.cookrew-mobile .cr-ckpt-full .cr-ckpt-row.acting .cr-ckpt-row-actions {
-  display: flex;
-}
-
-/* ONE list style, no floating tabs (Velvet touch model): touch has no real
-   hover, so the desktop :hover reveal leaves FORK/ROLE tabs floating over rows
-   (the collision the user saw). On mobile ONLY the tap-SELECTED (.acting) row
-   reveals its actions — one row at a time — and it EXPANDS so the action bar
-   gets its own full-width line beneath the label, in flow (never overlapping the
-   next row). Fresco: polish the expanded-bar look; this carries the layout. */
-body.cookrew-mobile .cr-ckpt-row .cr-ckpt-row-actions {
-  opacity: 0;
-  pointer-events: none;
-}
-body.cookrew-mobile .cr-ckpt-row.acting {
-  flex-wrap: wrap;
-}
-body.cookrew-mobile .cr-ckpt-row.acting .cr-ckpt-row-actions {
-  opacity: 1;
-  pointer-events: auto;
-  order: 3;
-  flex-basis: 100%;
-  justify-content: flex-end;
-  padding-top: 6px;
-}
+/* ---- checkpoint rail: UNIFIED to ONE style (desktop == mobile) ----
+   All the former body.cookrew-mobile checkpoint forks are GONE — the rail line +
+   here-marker, the stuck-open compact select list, and the per-row action bar
+   now live as the single shared kit in styles.css (.cr-ckpt-* base, keyed on
+   .open / .acting). Only the TRIGGER differs (click vs single-touch), which
+   Velvet wires; the appearance is identical on both platforms. The scrub-preview
+   tab below is the one remaining checkpoint-specific style here. */
 
 /* ---- v3 State A: single-checkpoint floating TAB (Velvet logic; Fresco visual)
    The tab IS one row of the desktop full-list, lifted onto a floating panel at

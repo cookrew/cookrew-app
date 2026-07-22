@@ -13,7 +13,7 @@ import {
   focusedCheckpoint,
   mergeCheckpointRows,
   mergeTrace,
-  railDrive,
+  railGesture,
   scrubPreviewRow,
   pruneToTotal,
   railPointerFraction,
@@ -466,24 +466,11 @@ describe('createHoldReveal (v3: hold a tab/row to reveal its actions)', () => {
   })
 })
 
-describe('railDrive (v3 two-zone routing: rail-drag opens+drives the full list)', () => {
-  const rows = mergeCheckpointRows(
-    [],
-    [
-      { index: 1, title: 'a' },
-      { index: 2, title: 'b' },
-      { index: 3, title: 'c' }
-    ]
-  )
-  it('a rail DRAG opens the list and anchors on the checkpoint under the drag', () => {
-    expect(railDrive(rows, 0, true)).toEqual({ openList: true, anchorIndex: 1 })
-    expect(railDrive(rows, 0.5, true)).toEqual({ openList: true, anchorIndex: 2 })
-    expect(railDrive(rows, 1, true)).toEqual({ openList: true, anchorIndex: 3 })
+describe('railGesture (unified: drag scrubs the transcript, tap opens the list)', () => {
+  it('a drag (traveled past the tap threshold) scrubs the transcript', () => {
+    expect(railGesture(true)).toBe('scrub')
   })
-  it('a non-drag (tap / no travel) does NOT open the list (that is the tap-opener)', () => {
-    expect(railDrive(rows, 0.5, false)).toEqual({ openList: false, anchorIndex: null })
-  })
-  it('opens with a null anchor on an empty list', () => {
-    expect(railDrive([], 0.5, true)).toEqual({ openList: true, anchorIndex: null })
+  it('a plain click/tap (no travel) opens the stick-open list', () => {
+    expect(railGesture(false)).toBe('open')
   })
 })
