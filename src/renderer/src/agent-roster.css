@@ -747,6 +747,29 @@
   opacity: 0.6;
 }
 
+/* Floating scrub-preview label (Velvet structural; Fresco visuals): the current
+   checkpoint title surfaced at the thumb while scrubbing / just-scrolled, so
+   mobile has the title-reveal desktop gets on hover. Positioned to the LEFT of
+   the rail at the thumb's row; Fresco owns the chip look + truncation. */
+.cr-ckpt-scrub-preview {
+  position: absolute;
+  right: calc(100% + 8px);
+  transform: translateY(-50%);
+  max-width: 62vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  z-index: 6;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  padding: 3px 8px;
+  background: var(--vi-panel, #14110a);
+  color: var(--phos, #e9b949);
+  border: 1px solid var(--vi-line, #5c4a1f);
+  border-radius: 3px;
+}
+
 /* Inline save-role input inside a checkpoint node's action panel. */
 .cr-ckpt-saverole {
   display: flex;

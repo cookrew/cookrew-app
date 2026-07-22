@@ -2,9 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import type { TurnRecord } from '../../shared/turn'
 import { cookrew } from './api'
 import { CrIcon } from './icons'
-import { checkpointTitle, type TitleMode } from './checkpoint-sync'
+import { type TitleMode } from './checkpoint-sync'
 import { hasRoleFromCheckpoint, saveRoleFromCheckpoint } from './role-checkpoint'
-import { railPointerFraction, traceRowLabel, type CheckpointRow } from './transcript'
+import {
+  checkpointRowTitle,
+  railPointerFraction,
+  scrubPreviewRow,
+  type CheckpointRow
+} from './transcript'
 
 const LONG_PRESS_MS = 450
 /** Marker inset (matches .cr-ckpt-here top: calc(16px + …)) for scrub mapping. */
@@ -64,6 +69,12 @@ export function CheckpointTimeline({
   const [open, setOpen] = useState(false)
   /** True while a rail scrub drag is active — drives the .dragging affordance. */
   const [scrubbing, setScrubbing] = useState(false)
+  /**
+   * Floating scrub-preview: the CURRENT checkpoint title at the thumb while
+   * dragging (bug 1 redo — the touch equivalent of desktop hover-reveal; the fan
+   * only shows dot/index otherwise). `frac` positions the label at the thumb.
+   */
+  const [preview, setPreview] = useState<{ frac: number; label: string } | null>(null)
   /** Checkpoint index whose actions are revealed via phone long-press. */
   const [acting, setActing] = useState<number | null>(null)
   const [savingIndex, setSavingIndex] = useState<number | null>(null)
@@ -96,6 +107,19 @@ export function CheckpointTimeline({
     document.addEventListener('pointerdown', onDown)
     return () => document.removeEventListener('pointerdown', onDown)
   }, [open])
+
+  // Also reflect the active title while SCROLLING the transcript (activeIndex
+  // moves): surface the same label at the marker for a moment, then fade. Scrub
+  // owns the preview while dragging, so stand down then.
+  useEffect(() => {
+    if (scrubbing || activeIndex == null) return
+    const row = rows.find((r) => r.index === activeIndex)
+    if (!row) return
+    setPreview({ frac: markerFrac ?? 1, label: `T${row.index} · ${checkpointRowTitle(row, titleMode)}` })
+    const t = setTimeout(() => setPreview(null), 1100)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIndex, markerFrac, scrubbing])
 
   if (rows.length === 0) return null
 
@@ -143,10 +167,15 @@ export function CheckpointTimeline({
     if (!scrub.current.moved && Math.abs(e.clientY - scrub.current.startY) < SCRUB_THRESHOLD) return
     scrub.current.moved = true
     const rect = miniRef.current.getBoundingClientRect()
-    onScrub(railPointerFraction(e.clientY, rect.top, rect.height, RAIL_INSET))
+    const frac = railPointerFraction(e.clientY, rect.top, rect.height, RAIL_INSET)
+    onScrub(frac)
+    // Surface the checkpoint the drag is over, at the thumb (bug 1 redo).
+    const row = scrubPreviewRow(rows, frac)
+    setPreview(row ? { frac, label: `T${row.index} · ${checkpointRowTitle(row, titleMode)}` } : null)
   }
   const onRailPointerUp = (e: React.PointerEvent<HTMLDivElement>): void => {
     setScrubbing(false)
+    setPreview(null)
     if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId)
     }
@@ -173,8 +202,7 @@ export function CheckpointTimeline({
         ? Math.max(0, rows.findIndex((r) => r.index === here)) / rows.length
         : 1
 
-  const rowLabel = (row: CheckpointRow): string =>
-    row.record ? checkpointTitle(row.record, titleMode) : traceRowLabel(row.index, row.traceTitle)
+  const rowLabel = (row: CheckpointRow): string => checkpointRowTitle(row, titleMode)
 
   return (
     <div
@@ -195,6 +223,7 @@ export function CheckpointTimeline({
         onPointerDown={onRailPointerDown}
         onPointerMove={onRailPointerMove}
         onPointerUp={onRailPointerUp}
+        onPointerCancel={onRailPointerUp}
         onClick={onRailClick}
       >
         <div className="cr-ckpt-line" />
@@ -208,6 +237,18 @@ export function CheckpointTimeline({
         />
         <div className="cr-ckpt-livedot" />
       </div>
+
+      {/* floating scrub-preview: the CURRENT checkpoint title at the thumb while
+          scrubbing / just-scrolled (bug 1 redo). Fresco styles the label. */}
+      {preview && (
+        <div
+          className="cr-ckpt-scrub-preview"
+          style={{ top: `calc(16px + ${preview.frac} * (100% - 32px))` }}
+          aria-hidden
+        >
+          {preview.label}
+        </div>
+      )}
 
       {/* fanned: the full checkpoint list, oldest → newest, LIVE last */}
       <div className="cr-ckpt-full">

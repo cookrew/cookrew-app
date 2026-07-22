@@ -1,4 +1,5 @@
 import { cookrew } from './api'
+import { checkpointTitle, type TitleMode } from './checkpoint-sync'
 import type { TraceBlock } from '../../shared/trace-blocks'
 import type { TurnPhase, TurnRecord } from '../../shared/turn'
 
@@ -306,6 +307,35 @@ export function mergeCheckpointRows(
     byIndex.set(record.index, { index: record.index, record, traceTitle: prior?.traceTitle ?? '' })
   }
   return [...byIndex.values()].sort((a, b) => a.index - b.index)
+}
+
+/**
+ * The display title for a checkpoint row: the record's mode-aware title
+ * (conclusion / precise prompt) when loaded, else the trace snippet, else the
+ * T<n> identity — never blank. The single source the fan rows AND the mobile
+ * scrub-preview label share. Pure — unit-tested.
+ */
+export function checkpointRowTitle(row: CheckpointRow, titleMode: TitleMode): string {
+  return row.record ? checkpointTitle(row.record, titleMode) : traceRowLabel(row.index, row.traceTitle)
+}
+
+/**
+ * The checkpoint row a scrub fraction (0..1) points at — mapped LINEARLY over
+ * the row identities so a mid-drag resolves to the middle checkpoint, not a
+ * loaded-group edge. Drives the mobile scrub-preview so the CURRENT title shows
+ * at the thumb while dragging (the touch equivalent of desktop hover-reveal).
+ * Null for an empty list. Pure — unit-tested.
+ */
+export function scrubPreviewRow(
+  rows: readonly CheckpointRow[],
+  fraction: number
+): CheckpointRow | null {
+  const id = identityAtFraction(
+    rows.map((r) => r.index),
+    fraction
+  )
+  if (id === null) return null
+  return rows.find((r) => r.index === id) ?? null
 }
 
 /**

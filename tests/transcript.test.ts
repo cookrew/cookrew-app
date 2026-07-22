@@ -8,8 +8,10 @@ import {
   fractionOfIdentity,
   identityAtFraction,
   jumpScrollBehavior,
+  checkpointRowTitle,
   mergeCheckpointRows,
   mergeTrace,
+  scrubPreviewRow,
   pruneToTotal,
   railPointerFraction,
   refineEstimate,
@@ -147,6 +149,54 @@ describe('mergeCheckpointRows (item 3: full trace range selectable)', () => {
     expect(rows[rows.length - 1].index).toBe(38) // rail ceiling == trace ceiling
     expect(rows.find((r) => r.index === 39)).toBeUndefined()
     expect(rows.find((r) => r.index === 40)).toBeUndefined()
+  })
+})
+
+describe('scrub-preview title (bug 1 redo: titles visible while scrubbing)', () => {
+  const record = (index: number, title?: string): TurnRecord => ({
+    index,
+    prompt: `prompt ${index}`,
+    reply: `reply ${index}`,
+    ...(title ? { title } : {}),
+    startedAt: 0,
+    endedAt: 1
+  })
+  // Sparse rows: T1 trace-only (no record), T2..T4 record-backed with titles.
+  const rows = mergeCheckpointRows(
+    [record(2, 'wired the parser'), record(3, 'fixed the seam'), record(4, 'shipped it')],
+    [
+      { index: 1, title: 't1 snippet' },
+      { index: 2, title: '' },
+      { index: 3, title: '' },
+      { index: 4, title: '' }
+    ]
+  )
+
+  describe('scrubPreviewRow (fraction/position → row)', () => {
+    it('maps the ends and the middle of the drag to a row', () => {
+      expect(scrubPreviewRow(rows, 0)?.index).toBe(1)
+      expect(scrubPreviewRow(rows, 1)?.index).toBe(4)
+      expect(scrubPreviewRow(rows, 0.5)?.index).toBe(3) // rounds to list middle
+    })
+    it('clamps an over-drag and is null for no rows', () => {
+      expect(scrubPreviewRow(rows, 1.5)?.index).toBe(4)
+      expect(scrubPreviewRow([], 0.5)).toBeNull()
+    })
+  })
+
+  describe('checkpointRowTitle (row → title)', () => {
+    it('uses the record title in conclusion mode', () => {
+      const t3 = scrubPreviewRow(rows, 0.5)! // T3
+      expect(checkpointRowTitle(t3, 'conclusion')).toBe('fixed the seam')
+    })
+    it('uses the precise prompt in precise mode', () => {
+      const t3 = scrubPreviewRow(rows, 0.5)!
+      expect(checkpointRowTitle(t3, 'precise')).toBe('prompt 3')
+    })
+    it('falls back to the trace snippet / T<n> for a trace-only row', () => {
+      const t1 = scrubPreviewRow(rows, 0)! // trace-only
+      expect(checkpointRowTitle(t1, 'conclusion')).toBe('t1 snippet')
+    })
   })
 })
 
