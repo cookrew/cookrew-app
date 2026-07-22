@@ -40,6 +40,26 @@ export function mostCovered(
   return best
 }
 
+/**
+ * The single node whose full overlay should mount. Only one may mount at a
+ * time — several cards cross the coverage threshold when a neighbor is
+ * adjacent, and mounting all of them stacks fullscreen overlays so the
+ * neighbor sliver steals interaction (Magpie desktop stacking bug). Prefer
+ * the card already open (prevPrimary) while it is still covered, so a
+ * deliberate zoom stays put over an incidentally-covered neighbor; otherwise
+ * the most-covered card wins. Null when nothing crosses the threshold.
+ */
+export function pickOverlayWinner(
+  activeIds: Iterable<string>,
+  coverages: Record<string, number>,
+  prevPrimary: string | null
+): string | null {
+  const ids = new Set(activeIds)
+  if (ids.size === 0) return null
+  if (prevPrimary !== null && ids.has(prevPrimary)) return prevPrimary
+  return mostCovered(ids, coverages)
+}
+
 /** Enter/exit hysteresis so the full view doesn't flicker at the boundary. */
 const ENTER_COVERAGE = 0.8
 const EXIT_COVERAGE = 0.72
@@ -85,6 +105,7 @@ export function useLodLayout(nodes: LodNode[]): LodLayout {
   const domNode = useStore((s) => s.domNode)
   const settled = useViewportSettled()
   const prevActive = useRef<Set<string>>(new Set())
+  const prevPrimary = useRef<string | null>(null)
 
   // The stage doesn't move during pan/zoom — only re-measure when its size
   // changes, not on every viewport frame.
@@ -117,23 +138,26 @@ export function useLodLayout(nodes: LodNode[]): LodLayout {
     if (coverage >= threshold && (settled || wasActive)) activeIds.add(node.id)
   }
 
-  // Phone (remote) mode: exactly ONE full view, taking the WHOLE stage.
-  // Small screens can't afford the card-aspect letterbox, and on a phone
-  // several cards can cross the coverage threshold at once — mounting every
-  // one would stack fullscreen overlays (the topmost, not the intended card,
-  // gets the touches) while each stacked xterm holds a PTY stream, exhausting
-  // the browser's 6-per-origin connection pool and hanging all other fetches.
-  // Only the best-covered card mounts; the overlay's ResizeObserver then
-  // refits the terminal (PTY resize) to the phone size.
-  if (isRemoteMode() && activeIds.size > 0) {
-    const selected = mostCovered(activeIds, coverages) as string
-    const only = new Set([selected])
-    rects[selected] = { x: bounds.left, y: bounds.top, width: paneWidth, height: paneHeight }
-    prevActive.current = only
-    return { activeIds: only, rects, primaryId: selected }
+  // Exactly ONE full overlay mounts at a time — BOTH desktop and phone. Several
+  // cards cross the coverage threshold when a neighbor is adjacent; mounting
+  // every one stacks fullscreen overlays so the neighbor sliver steals the
+  // interaction (rail clicks land on the wrong overlay — Magpie desktop
+  // stacking bug). The winner sticks to the card already open so a deliberate
+  // zoom wins over an incidentally-covered neighbor. On phone the winner also
+  // takes the WHOLE stage (no card-aspect letterbox; each stacked xterm would
+  // also hold a PTY stream, exhausting the 6-per-origin pool) — desktop keeps
+  // the card-aspect rect. The overlay's ResizeObserver refits the PTY.
+  const winner = pickOverlayWinner(activeIds, coverages, prevPrimary.current)
+  if (winner === null) {
+    prevActive.current = new Set()
+    prevPrimary.current = null
+    return { activeIds: new Set(), rects, primaryId: null }
   }
-
-  prevActive.current = activeIds
-  const primaryId = mostCovered(activeIds, coverages)
-  return { activeIds, rects, primaryId }
+  const only = new Set([winner])
+  if (isRemoteMode()) {
+    rects[winner] = { x: bounds.left, y: bounds.top, width: paneWidth, height: paneHeight }
+  }
+  prevActive.current = only
+  prevPrimary.current = winner
+  return { activeIds: only, rects, primaryId: winner }
 }

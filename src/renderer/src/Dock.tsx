@@ -2,6 +2,7 @@ import type { ToolId } from './canvas-ui'
 import type { TerminalActivity } from '../../shared/turn'
 import type { AgentRole } from '../../shared/model'
 import { VoiceBar } from './VoiceBar'
+import { useKeyboardInset } from './keyboard-inset'
 import { CrIcon, type CrIconName } from './icons'
 import { AgentSprite } from './nodes/AgentSprite'
 import { RoleAvatar } from './nodes/RoleAvatar'
@@ -60,8 +61,15 @@ export function Dock({
   voiceFor
 }: DockProps): React.JSX.Element {
   const hint = tool === 'connect' ? connectHint : (HINTS[tool] ?? null)
+  // Ride above the on-screen keyboard (Defect 2): the dock is position:relative
+  // in normal flow, so a `bottom` offset lifts it by the keyboard inset. 0 (and
+  // no offset) on desktop / when no keyboard is up.
+  const kbInset = useKeyboardInset()
   return (
-    <footer className={`cr-dock${voiceFor ? ' zoomed' : ''}`}>
+    <footer
+      className={`cr-dock${voiceFor ? ' zoomed' : ''}`}
+      style={kbInset ? { bottom: kbInset } : undefined}
+    >
       <div className="dock-pane dock-canvas" aria-hidden={voiceFor !== null}>
         <div className="cr-dock-tools">
           {TOOLS.map((t) => (
