@@ -391,6 +391,22 @@ export function createScrollReveal(onChange: (revealed: boolean) => void, quietM
 }
 
 /**
+ * Row-tap outcome for the checkpoint rail's mobile touch model. Tapping a row
+ * ALWAYS jumps to that checkpoint (the caller does that); this returns the rail
+ * state. On a COARSE pointer keep the fan OPEN and SELECT that row (`acting`) so
+ * its inline SAVE ROLE / FORK bar shows — one row at a time, in flow, never the
+ * floating overlapping tabs (touch has no hover to reveal them). On a fine
+ * pointer collapse the fan (desktop reveals row actions on hover). Pure —
+ * unit-tested.
+ */
+export function railRowTap(
+  rowIndex: number,
+  coarse: boolean
+): { open: boolean; acting: number | null } {
+  return coarse ? { open: true, acting: rowIndex } : { open: false, acting: null }
+}
+
+/**
  * The block whose top has scrolled past the position — the last block whose
  * `top` is at or above `scrollTop` (ascending by `top`). Null when nothing
  * has scrolled in yet. Pure so scroll→checkpoint is tested.

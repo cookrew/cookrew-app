@@ -782,6 +782,28 @@ body.cookrew-mobile .cr-ckpt-rail.open .cr-ckpt-full {
   pointer-events: auto;
 }
 
+/* ONE list style, no floating tabs (Velvet touch model): touch has no real
+   hover, so the desktop :hover reveal leaves FORK/ROLE tabs floating over rows
+   (the collision the user saw). On mobile ONLY the tap-SELECTED (.acting) row
+   reveals its actions — one row at a time — and it EXPANDS so the action bar
+   gets its own full-width line beneath the label, in flow (never overlapping the
+   next row). Fresco: polish the expanded-bar look; this carries the layout. */
+body.cookrew-mobile .cr-ckpt-row .cr-ckpt-row-actions {
+  opacity: 0;
+  pointer-events: none;
+}
+body.cookrew-mobile .cr-ckpt-row.acting {
+  flex-wrap: wrap;
+}
+body.cookrew-mobile .cr-ckpt-row.acting .cr-ckpt-row-actions {
+  opacity: 1;
+  pointer-events: auto;
+  order: 3;
+  flex-basis: 100%;
+  justify-content: flex-end;
+  padding-top: 6px;
+}
+
 /* Floating scrub-preview label (Velvet structural; Fresco visuals): the current
    checkpoint title surfaced at the thumb while scrubbing / just-scrolled, so
    mobile has the title-reveal desktop gets on hover. Positioned to the LEFT of
