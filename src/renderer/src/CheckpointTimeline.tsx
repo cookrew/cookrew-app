@@ -8,12 +8,12 @@ import {
   checkpointRowTitle,
   createScrollReveal,
   railPointerFraction,
+  railRowTap,
   scrubPreviewRow,
   shouldRevealOnScroll,
   type CheckpointRow
 } from './transcript'
 
-const LONG_PRESS_MS = 450
 /** Marker inset (matches .cr-ckpt-here top: calc(16px + …)) for scrub mapping. */
 const RAIL_INSET = 16
 /** Px of pointer travel before a press on the rail becomes a scrub, not a tap. */
@@ -35,7 +35,7 @@ const COARSE_POINTER =
  * a LIVE dot (`.cr-ckpt-mini`). Hovering the rail (desktop, CSS) or tapping it
  * (phone → `.open`) fans it into the full list (`.cr-ckpt-full`): oldest on
  * top, LIVE at the bottom, dots pinned right, titles fanning left. PRESS a row
- * → onGoto scrolls the context there; hover a row (desktop) / long-press
+ * → onGoto scrolls the context there; hover a row (desktop) / tap a row
  * (phone → `.acting`) reveals inline SAVE ROLE + FORK AGENT.
  *
  * Rows span the WHOLE trace (unified-scroll item 3): identities below the record
@@ -43,7 +43,7 @@ const COARSE_POINTER =
  * whose trace block is still fetching for a jump shows loading (item 4).
  *
  * Markup follows Fresco's `.cr-ckpt-*` contract; Fresco owns the visuals, this
- * owns the press / long-press / save / fork logic + the active mapping.
+ * owns the press / tap / save / fork logic + the active mapping.
  */
 export function CheckpointTimeline({
   terminalId,
@@ -91,11 +91,10 @@ export function CheckpointTimeline({
    * dot/index otherwise). `frac` positions the label at the thumb.
    */
   const [preview, setPreview] = useState<{ frac: number; label: string } | null>(null)
-  /** Checkpoint index whose actions are revealed via phone long-press. */
+  /** The one row whose inline SAVE ROLE / FORK bar is shown (tap-selected). */
   const [acting, setActing] = useState<number | null>(null)
   const [savingIndex, setSavingIndex] = useState<number | null>(null)
   const [forkingIndex, setForkingIndex] = useState<number | null>(null)
-  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const railRef = useRef<HTMLDivElement>(null)
   const miniRef = useRef<HTMLDivElement>(null)
   // Rail scrub gesture: a press that travels past SCRUB_THRESHOLD becomes a
@@ -105,12 +104,6 @@ export function CheckpointTimeline({
   // after the quiet window. Created once — setRevealed is stable.
   const reveal = useMemo(() => createScrollReveal(setRevealed, REVEAL_QUIET_MS), [])
   useEffect(() => () => reveal.cancel(), [reveal])
-
-  useEffect(() => {
-    return () => {
-      if (pressTimer.current) clearTimeout(pressTimer.current)
-    }
-  }, [])
 
   // Touch collapse: onMouseLeave never fires on a touch device, so a fanned
   // list opened by tap has no other way to close (the mini goes pointer-events:
@@ -142,18 +135,18 @@ export function CheckpointTimeline({
 
   if (rows.length === 0) return null
 
-  const clearPress = (): void => {
-    if (pressTimer.current) {
-      clearTimeout(pressTimer.current)
-      pressTimer.current = null
-    }
-  }
-  const onPointerDown = (index: number): void => {
-    clearPress()
-    pressTimer.current = setTimeout(() => setActing(index), LONG_PRESS_MS)
-  }
   const closeActions = (): void => {
     setActing(null)
+    setSavingIndex(null)
+  }
+  // Tap a row: jump to that chapter, then (touch) keep the fan open and select
+  // this ONE row so its inline SAVE ROLE / FORK bar shows — never floating tabs.
+  const tapRow = (index: number): void => {
+    onGoto(index)
+    const next = railRowTap(index, COARSE_POINTER)
+    if (next.open) reveal.cancel() // promote a transient scroll-reveal to persistent
+    setOpen(next.open)
+    setActing(next.acting)
     setSavingIndex(null)
   }
 
@@ -230,10 +223,7 @@ export function CheckpointTimeline({
       className={`cr-ckpt-rail${open ? ' open' : ''}${revealed ? ' revealing' : ''}${
         scrubbing ? ' dragging' : ''
       }${loadingIndex != null ? ' loading' : ''}`}
-      onMouseLeave={() => {
-        clearPress()
-        closeActions()
-      }}
+      onMouseLeave={closeActions}
     >
       {/* resting: line + count + you-are-here + live. Drag scrubs the combined
           scroll space (item 4); a plain tap opens the fan (phone). */}
@@ -292,14 +282,7 @@ export function CheckpointTimeline({
                 aria-label={`Checkpoint ${row.index}`}
                 aria-busy={isLoading || undefined}
                 onMouseDown={(e) => e.preventDefault()}
-                onPointerDown={() => onPointerDown(row.index)}
-                onPointerUp={clearPress}
-                onClick={() => {
-                  if (isActing) return
-                  onGoto(row.index)
-                  // Collapse the fan after a touch tap (no mouseleave fires).
-                  setOpen(false)
-                }}
+                onClick={() => tapRow(row.index)}
               >
                 <span className="cr-ckpt-row-actions" onMouseDown={stop} onClick={stop}>
                   {savingIndex === row.index && row.record ? (

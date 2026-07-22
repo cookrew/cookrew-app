@@ -3152,15 +3152,26 @@ body.cookrew-mobile .cookrew-minimap {
   color: var(--ink);
 }
 
-/* --- phone: wider catch-strip + 44px tappable actions --- */
+/* --- phone: wider invisible catch-strip; fanned list + chips read EXACTLY as
+   desktop (one style). The rail is 40px only to give the thumb a bigger touch
+   catch-area — the visible line/count/marker sit at the same offsets, so it
+   looks identical. --- */
 body.cookrew-mobile .cr-ckpt-rail {
   width: 40px;
 }
 
+/* Action chips KEEP the desktop look (compact pixel chip). Tappability comes
+   from an invisible 44px hit-area, NOT a bigger box — the enlarged mobile boxes
+   read as floating tabs over the transcript. Velvet owns the reveal affordance;
+   this only guarantees the desktop-language chip stays finger-tappable. */
 body.cookrew-mobile .cr-ckpt-action {
-  font-size: 9px;
-  padding: 9px 11px;
-  min-height: 44px;
+  position: relative;
+}
+
+body.cookrew-mobile .cr-ckpt-action::after {
+  content: '';
+  position: absolute;
+  inset: -12px 0;
 }
 
 /* the scrub thumb needs a finger-sized grab target on touch (the

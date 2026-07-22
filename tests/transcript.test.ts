@@ -12,6 +12,7 @@ import {
   createScrollReveal,
   mergeCheckpointRows,
   mergeTrace,
+  railRowTap,
   scrubPreviewRow,
   shouldRevealOnScroll,
   pruneToTotal,
@@ -454,5 +455,15 @@ describe('reveal-on-scroll (mobile: fan on scroll, collapse to single line)', ()
       vi.advanceTimersByTime(2000)
       expect(states).toEqual([true, false]) // no late/duplicate collapse
     })
+  })
+})
+
+describe('railRowTap (mobile touch action model)', () => {
+  it('coarse pointer: keeps the fan open and selects the row for inline actions', () => {
+    // one deliberate selection — never floating tabs over other rows
+    expect(railRowTap(42, true)).toEqual({ open: true, acting: 42 })
+  })
+  it('fine pointer: collapses the fan (desktop reveals row actions on hover)', () => {
+    expect(railRowTap(42, false)).toEqual({ open: false, acting: null })
   })
 })
