@@ -205,3 +205,38 @@ describe('TraceReader security + disambiguation (integration takeover)', () => {
     expect((await reader.page(node.id, {})).total).toBe(1)
   })
 })
+
+describe('TraceReader.index (fan listing — the missing producer)', () => {
+  it('returns the FULL identity range with prompt snippets (T1..N incl. below-cap)', async () => {
+    const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-idx-')))
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'trace-idx-proj-'))
+    const dir = path.join(projectsDir, claudeProjectSlug('/work/repo'))
+    mkdirSync(dir, { recursive: true })
+    const entry = (i: number): string =>
+      JSON.stringify({
+        type: 'user', uuid: `u${i}`, timestamp: iso(T0 + i * 1000),
+        message: { role: 'user', content: `ask number ${i}` }
+      })
+    const file = path.join(dir, 'sess.jsonl')
+    writeFileSync(file, [1, 2, 3, 4, 5, 6, 7].map(entry).join('\n') + '\n')
+    const node = store.addNode(terminal({ claudeSessionId: 'sess' })) as TerminalNodeData
+
+    const reader = new TraceReader(store, { projectsDir })
+    const index = await reader.index(node.id)
+    expect(index.map((e) => e.index)).toEqual([1, 2, 3, 4, 5, 6, 7])
+    expect(index[0]).toEqual({ index: 1, title: 'ask number 1' })
+
+    // Cached: same listing object while the trace is unchanged…
+    expect(await reader.index(node.id)).toBe(index)
+    // …and invalidated by growth.
+    writeFileSync(file, [1, 2, 3, 4, 5, 6, 7, 8].map(entry).join('\n') + '\n')
+    const grown = await reader.index(node.id)
+    expect(grown.map((e) => e.index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+  })
+
+  it('is empty for unbound terminals', async () => {
+    const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-idx-')))
+    const node = store.addNode(terminal({ claudeSessionId: null }))
+    expect(await new TraceReader(store, {}).index(node.id)).toEqual([])
+  })
+})

@@ -4,7 +4,7 @@ import { cookrew } from './api'
 import { CrIcon } from './icons'
 import { checkpointTitle, type TitleMode } from './checkpoint-sync'
 import { hasRoleFromCheckpoint, saveRoleFromCheckpoint } from './role-checkpoint'
-import { railPointerFraction, type CheckpointRow } from './transcript'
+import { railPointerFraction, traceRowLabel, type CheckpointRow } from './transcript'
 
 const LONG_PRESS_MS = 450
 /** Marker inset (matches .cr-ckpt-here top: calc(16px + …)) for scrub mapping. */
@@ -174,7 +174,7 @@ export function CheckpointTimeline({
         : 1
 
   const rowLabel = (row: CheckpointRow): string =>
-    row.record ? checkpointTitle(row.record, titleMode) : row.traceTitle || `T${row.index}`
+    row.record ? checkpointTitle(row.record, titleMode) : traceRowLabel(row.index, row.traceTitle)
 
   return (
     <div

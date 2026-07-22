@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   activeBlockForScroll,
   evictTrace,
@@ -6,6 +6,7 @@ import {
   boundaryReached,
   hasNewerBlocks,
   hasOlderBlocks,
+  jumpScrollBehavior,
   mergeCheckpointRows,
   mergeTrace,
   newestIndex,
@@ -14,6 +15,8 @@ import {
   railToScrollTop,
   scrollTopToFraction,
   tailClipRows,
+  traceRowLabel,
+  warnAbsentBridge,
   type TraceBlock
 } from '../src/renderer/src/transcript'
 import type { TurnRecord } from '../src/shared/turn'
@@ -272,5 +275,45 @@ describe('tailClipRows (item 1 live-tail-only clip)', () => {
   it('shows everything when Forge found no boundary', () => {
     expect(tailClipRows('idle', null)).toBeNull()
     expect(tailClipRows('replied', 0)).toBeNull()
+  })
+})
+
+describe('jumpScrollBehavior (item 2b: touch cancels smooth mid-flight)', () => {
+  it('snaps instantly on a coarse pointer or an active touch', () => {
+    expect(jumpScrollBehavior({ landed: false, coarsePointer: true, touchActive: false })).toBe('auto')
+    expect(jumpScrollBehavior({ landed: false, coarsePointer: false, touchActive: true })).toBe('auto')
+  })
+  it('snaps instantly for a just-landed far fetch', () => {
+    expect(jumpScrollBehavior({ landed: true, coarsePointer: false, touchActive: false })).toBe('auto')
+  })
+  it('is smooth only for a nearby mouse-driven target', () => {
+    expect(jumpScrollBehavior({ landed: false, coarsePointer: false, touchActive: false })).toBe('smooth')
+  })
+})
+
+describe('traceRowLabel (item 2c: never blank before the index lands)', () => {
+  it('falls back to the T<n> identity when the trace title is empty', () => {
+    expect(traceRowLabel(5, '')).toBe('T5')
+    expect(traceRowLabel(5, '   ')).toBe('T5')
+  })
+  it('uses the trace title when present', () => {
+    expect(traceRowLabel(5, 'wired the parser')).toBe('wired the parser')
+  })
+})
+
+describe('warnAbsentBridge (LOUD absent-bridge rule)', () => {
+  afterEach(() => vi.restoreAllMocks())
+  it('logs once per method name, then stays quiet', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    warnAbsentBridge('bridgeTestAlpha')
+    warnAbsentBridge('bridgeTestAlpha')
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy.mock.calls[0][0]).toContain('bridgeTestAlpha')
+  })
+  it('logs each distinct method the first time', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    warnAbsentBridge('bridgeTestBeta')
+    warnAbsentBridge('bridgeTestGamma')
+    expect(spy).toHaveBeenCalledTimes(2)
   })
 })

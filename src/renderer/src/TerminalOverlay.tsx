@@ -18,7 +18,7 @@ import {
   fetchTraceIndex,
   mergeCheckpointRows,
   tailClipRows,
-  type CheckpointRow,
+  traceRowLabel,
   type TraceIndexEntry
 } from './transcript'
 import { checkpointTitle, useTitleMode } from './checkpoint-sync'
@@ -133,8 +133,10 @@ function TerminalOverlay({
       .then((list) => {
         if (alive) setTraceIndex(list)
       })
-      .catch(() => {
-        // No listing (API absent / transient) → rows fall back to records alone.
+      .catch((error) => {
+        // Absent bridge already warned once inside fetchTraceIndex; a present
+        // bridge that REJECTS is a different failure — surface it, don't swallow.
+        console.error('listTraceIndex failed:', error)
       })
     return () => {
       alive = false
@@ -148,13 +150,19 @@ function TerminalOverlay({
   // A checkpoint whose trace block is still fetching for a jump — the rail/fan
   // shows it loading so a far click gives instant feedback (item 4).
   const [pendingIndex, setPendingIndex] = useState<number | null>(null)
+  // Bumped on every explicit click/LIVE so a re-click of the row already in view
+  // still re-scrolls (item 2a) — a same-value setSelectedIndex alone wouldn't
+  // re-run the jump.
+  const [jumpToken, setJumpToken] = useState(0)
 
   const gotoCheckpoint = (index: number): void => {
     setSelectedIndex(index)
+    setJumpToken((t) => t + 1)
     paging.goto(index) // best-effort: syncs the record-backed header/fork
   }
   const goLive = (): void => {
     setSelectedIndex(null)
+    setJumpToken((t) => t + 1)
     paging.live()
   }
   // Scrolling the transcript reports the block in view (onActiveBlockChange),
@@ -169,9 +177,12 @@ function TerminalOverlay({
     else paging.goto(active.index)
   }
   const selectedRow = selectedIndex !== null ? (rows.find((r) => r.index === selectedIndex) ?? null) : null
-  const selectedTitle = selectedRow?.record
-    ? checkpointTitle(selectedRow.record, titleMode)
-    : selectedRow?.traceTitle || (selectedIndex !== null ? `T${selectedIndex}` : '')
+  const selectedTitle =
+    selectedIndex === null
+      ? ''
+      : selectedRow?.record
+        ? checkpointTitle(selectedRow.record, titleMode)
+        : traceRowLabel(selectedIndex, selectedRow?.traceTitle ?? '')
 
   const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
 
@@ -614,6 +625,7 @@ function TerminalOverlay({
           total={activity?.turnCount ?? 0}
           titleMode={titleMode}
           selectedIndex={selectedIndex}
+          jumpToken={jumpToken}
           clipRows={clipRows}
           onActiveBlockChange={onActiveBlockChange}
           onPending={setPendingIndex}

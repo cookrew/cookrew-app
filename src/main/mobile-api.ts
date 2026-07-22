@@ -322,6 +322,12 @@ export async function handleMobileApi(
     return true
   }
 
+  const traceIndexMatch = p.match(/^\/api\/terminal\/([^/]+)\/trace\/index$/)
+  if (traceIndexMatch && method === 'GET') {
+    respondJson(response, 200, await deps.traces.index(traceIndexMatch[1]))
+    return true
+  }
+
   const traceMatch = p.match(/^\/api\/terminal\/([^/]+)\/trace$/)
   if (traceMatch && method === 'GET') {
     const num = (key: string): number | undefined => {

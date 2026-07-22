@@ -17,6 +17,7 @@ import {
   hasNewerBlocks,
   hasOlderBlocks,
   isAtBottom,
+  jumpScrollBehavior,
   mergeTrace,
   newestIndex,
   pruneToTotal,
@@ -60,8 +61,15 @@ export const TranscriptView = forwardRef<
     /** Total completed checkpoints (activity.turnCount) — grows/shrinks on rewind. */
     total: number
     titleMode: TitleMode
-    /** Checkpoint the user selected (paging.viewing) — scroll its block into view. */
+    /** Checkpoint the user selected — scroll its block into view. */
     selectedIndex: number | null
+    /**
+     * Bumped on every EXPLICIT navigation (click/scrub/LIVE), even to the same
+     * identity (item 2a): forces a re-scroll so re-clicking the row already in
+     * view doesn't feel dead, and marks the change as a deliberate jump (not a
+     * reverse-sync echo) so it bypasses the echo-skip.
+     */
+    jumpToken: number
     /**
      * Live-tail clip (unified-scroll item 1): rows of the idle TUI tail to keep
      * in the live layer, or null for no clip. Drives the clip signal on the
@@ -80,7 +88,17 @@ export const TranscriptView = forwardRef<
     children: React.ReactNode
   }
 >(function TranscriptView(
-  { terminalId, total, titleMode, selectedIndex, clipRows, onActiveBlockChange, onPending, children },
+  {
+    terminalId,
+    total,
+    titleMode,
+    selectedIndex,
+    jumpToken,
+    clipRows,
+    onActiveBlockChange,
+    onPending,
+    children
+  },
   ref
 ): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -98,6 +116,25 @@ export const TranscriptView = forwardRef<
   // tell a genuine external jump (click/scrub) from a reverse-sync echo of the
   // block you already scrolled to, so the two never fight (defect 1).
   const activeInViewRef = useRef<number | null>(null)
+  // True while a finger is down (item 2b): a smooth scrollIntoView is canceled
+  // by the touch gesture mid-flight, so jumps snap instantly while touching.
+  const touchActiveRef = useRef(false)
+  useEffect(() => {
+    const down = (): void => {
+      touchActiveRef.current = true
+    }
+    const up = (): void => {
+      touchActiveRef.current = false
+    }
+    document.addEventListener('touchstart', down, { passive: true })
+    document.addEventListener('touchend', up, { passive: true })
+    document.addEventListener('touchcancel', up, { passive: true })
+    return () => {
+      document.removeEventListener('touchstart', down)
+      document.removeEventListener('touchend', up)
+      document.removeEventListener('touchcancel', up)
+    }
+  }, [])
   // Discovered trace floor/ceiling identities: the smallest / largest block
   // identity that exists, learned when a scroll-up / scroll-down fetch comes
   // back empty. null = not yet discovered (more may exist). Reset on a fresh
@@ -270,7 +307,11 @@ export const TranscriptView = forwardRef<
   // The identity whose block is being fetched for a far jump — distinguishes a
   // just-landed far target (snap instantly, item 4) from a nearby loaded one.
   const pendingJumpRef = useRef<number | null>(null)
+  // Last jumpToken acted on — a change means an EXPLICIT navigation (item 2a).
+  const jumpTokenRef = useRef(jumpToken)
   useEffect(() => {
+    const explicit = jumpTokenRef.current !== jumpToken
+    jumpTokenRef.current = jumpToken
     const enteringLive = selectedIndex === null && lastSelectedRef.current !== null
     lastSelectedRef.current = selectedIndex
     if (selectedIndex === null) {
@@ -278,7 +319,7 @@ export const TranscriptView = forwardRef<
       // pull the tail back so "latest" is the true newest, not a survivor.
       // Re-arm the pin + newest-anchored eviction FIRST, or the tail merge is
       // evicted around the stale deep-history anchor and never survives (HIGH).
-      if (enteringLive) {
+      if (enteringLive || explicit) {
         anchorIndexRef.current = Number.MAX_SAFE_INTEGER
         pinnedRef.current = true
         void loadWindow('tail')
@@ -291,14 +332,25 @@ export const TranscriptView = forwardRef<
     const node = blockRefs.current.get(selectedIndex)
     if (node) {
       const landed = pendingJumpRef.current === selectedIndex
-      // Skip when this is just the reverse-sync echo of the block already in
-      // view — else the scroll-driven goto fights the user's own scroll and it
-      // creeps one checkpoint at a time (defect 1). A just-landed far jump is
-      // never an echo, so it always scrolls.
-      if (!landed && selectedIndex === activeInViewRef.current) return
-      // Instant snap for a far target that just loaded (smooth-from-far reads as
-      // "stuck"); smooth only for a nearby, already-loaded target (item 4).
-      node.scrollIntoView({ block: 'start', behavior: landed ? 'auto' : 'smooth' })
+      // Skip ONLY a reverse-sync echo (scroll set this selection) of the block
+      // already in view — else the scroll-driven goto fights the user's own
+      // scroll and it creeps one checkpoint at a time (defect 1). An explicit
+      // click/scrub (jumpToken bumped, item 2a) or a just-landed far jump always
+      // (re-)scrolls, so re-clicking the current row never feels dead.
+      if (!landed && !explicit && selectedIndex === activeInViewRef.current) return
+      node.scrollIntoView({
+        block: 'start',
+        // Snap instantly on touch/coarse (a finger cancels smooth mid-flight,
+        // item 2b) or for a just-landed far target; smooth only for a nearby
+        // mouse-driven target (item 4).
+        behavior: jumpScrollBehavior({
+          landed,
+          coarsePointer:
+            typeof window.matchMedia === 'function' &&
+            window.matchMedia('(pointer: coarse)').matches,
+          touchActive: touchActiveRef.current
+        })
+      })
       pendingJumpRef.current = null
       onPending?.(null)
     } else if (!loading) {
@@ -313,7 +365,7 @@ export const TranscriptView = forwardRef<
         .finally(() => setLoading(false))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedIndex, blocks.length])
+  }, [selectedIndex, blocks.length, jumpToken])
 
   // Autoscroll pin: while pinned to the bottom, keep the live tail in view as
   // it grows (a fresh block / live output).

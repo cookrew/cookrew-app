@@ -3,7 +3,8 @@ import {
   pageTraceBlocks,
   parseClaudeTrace,
   parseCodexSessionMeta,
-  parseCodexTrace
+  parseCodexTrace,
+  traceIndexOf
 } from '../src/shared/trace-blocks'
 
 const T0 = Date.parse('2026-07-22T10:00:00.000Z')
@@ -224,5 +225,28 @@ describe('claude tool_use args summary (bare-parens bug)', () => {
       entry([{ type: 'tool_use', id: 'tu1', name: 'NoteRead', input: {} }])
     )
     expect(blocks[0].activity).toEqual([{ tool: 'NoteRead', args: '', result: '' }])
+  })
+})
+
+describe('traceIndexOf (cheap identity+title listing for the fan)', () => {
+  const block = (index: number, prompt: string): Parameters<typeof traceIndexOf>[0][0] => ({
+    id: `u${index}`, index, prompt, reply: '', activity: [], startedAt: 0, endedAt: 0
+  })
+
+  it('lists every identity with a first-line prompt snippet', () => {
+    const entries = traceIndexOf([
+      block(1, 'fix the phone layout\nwith details below'),
+      block(2, '   \n  second ask after blank line')
+    ])
+    expect(entries).toEqual([
+      { index: 1, title: 'fix the phone layout' },
+      { index: 2, title: 'second ask after blank line' }
+    ])
+  })
+
+  it('caps long titles and labels empty prompts', () => {
+    const entries = traceIndexOf([block(1, 'y'.repeat(200)), block(2, '   ')])
+    expect(entries[0].title.length).toBeLessThanOrEqual(80)
+    expect(entries[1].title).toBe('(empty prompt)')
   })
 })

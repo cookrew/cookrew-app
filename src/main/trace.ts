@@ -10,11 +10,13 @@ import path from 'node:path'
 import type { TerminalNodeData } from '../shared/model'
 import {
   TraceBlock,
+  TraceIndexEntry,
   TracePage,
   TracePageRequest,
   pageTraceBlocks,
   parseClaudeTrace,
-  parseCodexTrace
+  parseCodexTrace,
+  traceIndexOf
 } from '../shared/trace-blocks'
 import { claudeSessionFile } from './claude-fork'
 import { isClaudeCommand } from '../shared/claude-fork'
@@ -70,11 +72,35 @@ interface CacheEntry {
 
 export class TraceReader {
   private cache = new Map<string, CacheEntry>()
+  /** Derived index memo, keyed by the blocks ARRAY IDENTITY — trace growth
+   *  produces a fresh array (blocksOf re-ingests), invalidating for free. */
+  private indexCache = new Map<string, { blocks: TraceBlock[]; entries: TraceIndexEntry[] }>()
 
   constructor(
     private store: WorkspaceStore,
     private options: TraceReaderOptions = {}
   ) {}
+
+  /**
+   * Cheap identity+title listing over the WHOLE trace (fan/timeline full
+   * range — T1..N including identities below the record cap). Derived from
+   * the same cached block index the pager uses; lazy and re-derived only
+   * when the trace grows.
+   */
+  async index(terminalId: string): Promise<TraceIndexEntry[]> {
+    const hit = this.store.nodeAcrossWorkspaces(terminalId)
+    if (!hit || hit.node.kind !== 'terminal') return []
+    const node = hit.node
+    const claude = this.claudeFile(node)
+    const file = claude ?? this.codexFile(node)
+    if (!file) return []
+    const blocks = await this.blocksOf(terminalId, file, claude ? 'claude' : 'codex')
+    const memo = this.indexCache.get(terminalId)
+    if (memo && memo.blocks === blocks) return memo.entries
+    const entries = traceIndexOf(blocks)
+    this.indexCache.set(terminalId, { blocks, entries })
+    return entries
+  }
 
   /** Identity-keyed trace window for a terminal (see the contract note). */
   async page(
