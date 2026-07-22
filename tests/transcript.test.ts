@@ -9,9 +9,11 @@ import {
   identityAtFraction,
   jumpScrollBehavior,
   checkpointRowTitle,
+  createScrollReveal,
   mergeCheckpointRows,
   mergeTrace,
   scrubPreviewRow,
+  shouldRevealOnScroll,
   pruneToTotal,
   railPointerFraction,
   refineEstimate,
@@ -405,5 +407,52 @@ describe('coalescingSingleFlight (HIGH: rapid second far-jump not starved)', () 
     await Promise.resolve()
     await Promise.resolve()
     expect(calls).toEqual([7])
+  })
+})
+
+describe('reveal-on-scroll (mobile: fan on scroll, collapse to single line)', () => {
+  describe('shouldRevealOnScroll (trigger)', () => {
+    it('reveals only on a coarse pointer, not mid-scrub, with a checkpoint in view', () => {
+      expect(shouldRevealOnScroll({ coarsePointer: true, scrubbing: false, activeIndex: 57 })).toBe(true)
+    })
+    it('does not reveal on a fine pointer (desktop hover handles it)', () => {
+      expect(shouldRevealOnScroll({ coarsePointer: false, scrubbing: false, activeIndex: 57 })).toBe(false)
+    })
+    it('does not reveal while scrubbing (the scrub owns the rail)', () => {
+      expect(shouldRevealOnScroll({ coarsePointer: true, scrubbing: true, activeIndex: 57 })).toBe(false)
+    })
+    it('does not reveal with no checkpoint in view (pinned live)', () => {
+      expect(shouldRevealOnScroll({ coarsePointer: true, scrubbing: false, activeIndex: null })).toBe(false)
+    })
+  })
+
+  describe('createScrollReveal (transient reveal + trailing collapse)', () => {
+    afterEach(() => vi.useRealTimers())
+
+    it('reveals on bump and collapses after the quiet window', () => {
+      vi.useFakeTimers()
+      const states: boolean[] = []
+      const rc = createScrollReveal((v) => states.push(v), 1000)
+      rc.bump()
+      expect(states).toEqual([true])
+      vi.advanceTimersByTime(600)
+      rc.bump() // still scrolling → re-arm, no collapse yet
+      expect(states).toEqual([true, true])
+      vi.advanceTimersByTime(600) // 600ms since last bump (< 1000)
+      expect(states).toEqual([true, true])
+      vi.advanceTimersByTime(400) // now 1000ms of quiet
+      expect(states).toEqual([true, true, false]) // collapsed back to the line
+    })
+
+    it('cancel folds back immediately and kills a pending collapse', () => {
+      vi.useFakeTimers()
+      const states: boolean[] = []
+      const rc = createScrollReveal((v) => states.push(v), 1000)
+      rc.bump()
+      rc.cancel()
+      expect(states).toEqual([true, false])
+      vi.advanceTimersByTime(2000)
+      expect(states).toEqual([true, false]) // no late/duplicate collapse
+    })
   })
 })
