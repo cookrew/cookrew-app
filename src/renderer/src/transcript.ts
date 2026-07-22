@@ -339,19 +339,13 @@ export function scrubPreviewRow(
 }
 
 /**
- * Two-zone scroll routing (v3 refinement): a DRAG on the vertical rail bar
- * (traveled past the tap threshold) OPENS and drives the full list (State B),
- * anchored on the checkpoint under the drag fraction; a plain rail tap / no
- * travel does NOT open it (that's a tap-opener), and scrolling the TRANSCRIPT
- * stays on the single tab (State A). Pure — unit-tested.
+ * Unified rail gesture routing (desktop == mobile — only the input device
+ * differs): a press that TRAVELED past the tap threshold is a DRAG → it scrubs
+ * the transcript to the dragged checkpoint; a press with NO travel is a plain
+ * click/tap → it opens the stick-open select list. Pure — unit-tested.
  */
-export function railDrive(
-  rows: readonly CheckpointRow[],
-  fraction: number,
-  moved: boolean
-): { openList: boolean; anchorIndex: number | null } {
-  if (!moved) return { openList: false, anchorIndex: null }
-  return { openList: true, anchorIndex: scrubPreviewRow(rows, fraction)?.index ?? null }
+export function railGesture(moved: boolean): 'scrub' | 'open' {
+  return moved ? 'scrub' : 'open'
 }
 
 /**
