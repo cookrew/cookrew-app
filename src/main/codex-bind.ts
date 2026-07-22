@@ -12,8 +12,15 @@ import { CodexSessionMeta, parseCodexSessionMeta } from '../shared/trace-blocks'
 /** |session_meta.timestamp - spawnedAt| tolerance for the spawn-time bind. */
 export const CODEX_SPAWN_WINDOW_MS = 180_000
 
-/** session_meta always fits well within the first lines of a rollout. */
-const HEAD_BYTES = 8192
+/** Bytes read per chunk while scanning for the first-line terminator. */
+const READ_CHUNK_BYTES = 16 * 1024
+/**
+ * Upper bound on the first line's length. Codex v0.145's session_meta embeds
+ * the full system prompt in payload.base_instructions, so the first line runs
+ * to tens of KB (18KB+ on live probes) — a fixed 8KB head truncated it into
+ * invalid JSON and the binder matched NOTHING. Cap generously to bound work.
+ */
+const FIRST_LINE_CAP_BYTES = 256 * 1024
 
 export function isCodexCommand(command: string): boolean {
   return /^\s*codex\b/.test(command)
@@ -23,16 +30,34 @@ export function defaultCodexSessionsDir(): string {
   return path.join(homedir(), '.codex', 'sessions')
 }
 
-/** First line of a (possibly large) rollout, without reading the file. */
+/**
+ * First line of a (possibly large) rollout, read incrementally until the
+ * newline instead of a fixed head — session_meta lines exceed 8KB. Scans at
+ * the BYTE level (newline 0x0A is never part of a multibyte UTF-8 sequence)
+ * and decodes the accumulated bytes once, so a codepoint straddling a chunk
+ * boundary is never corrupted. Returns null on I/O error; caps the scan so a
+ * pathological newline-less file can't be slurped whole.
+ */
 function readFirstLine(file: string): string | null {
   try {
     const fd = openSync(file, 'r')
     try {
-      const buffer = Buffer.alloc(HEAD_BYTES)
-      const bytes = readSync(fd, buffer, 0, HEAD_BYTES, 0)
-      const head = buffer.toString('utf8', 0, bytes)
-      const newline = head.indexOf('\n')
-      return newline === -1 ? head : head.slice(0, newline)
+      const chunks: Buffer[] = []
+      let total = 0
+      const buffer = Buffer.alloc(READ_CHUNK_BYTES)
+      while (total < FIRST_LINE_CAP_BYTES) {
+        const bytes = readSync(fd, buffer, 0, READ_CHUNK_BYTES, total)
+        if (bytes === 0) break // EOF before any newline
+        const region = buffer.subarray(0, bytes)
+        const newline = region.indexOf(0x0a)
+        if (newline !== -1) {
+          chunks.push(Buffer.from(region.subarray(0, newline)))
+          return Buffer.concat(chunks).toString('utf8')
+        }
+        chunks.push(Buffer.from(region))
+        total += bytes
+      }
+      return chunks.length > 0 ? Buffer.concat(chunks).toString('utf8') : null
     } finally {
       closeSync(fd)
     }

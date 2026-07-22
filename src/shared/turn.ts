@@ -53,6 +53,13 @@ export interface TerminalActivity {
    */
   scrollRow: number | null
   /**
+   * Live-tail boundary (unified-scroll item 1): buffer lines FROM THE
+   * BOTTOM making up the latest task tail. The renderer clips the idle TUI
+   * to the last `tailLines` lines when phase is replied/idle; null = no
+   * clipping (turn running, or no completion line found).
+   */
+  tailLines: number | null
+  /**
    * The pane's CURRENT monotonic scroll base (tmux history_size). Converts
    * checkpoint anchors to live coordinates: a checkpoint sits
    * (scrollBase - record.scrollLine) lines above the live bottom — the same
@@ -586,6 +593,27 @@ export function isLiveStatus(status: string): boolean {
  * prompt (e.g. a tmux reattach mid-turn) — unlike finished-turn status lines
  * or transcript redraws.
  */
+/**
+ * Live-tail boundary (unified-scroll item 1): the number of buffer lines,
+ * counted FROM THE BOTTOM, that make up the latest task tail — the last
+ * COMPLETED status line ("Worked for 12s" family; live spinners excluded)
+ * through the input box below it. Null when no completion line exists (the
+ * renderer then shows everything). Bottom-relative so main's headless screen
+ * and the renderer xterm need no coordinate translation.
+ */
+export function latestTailLines(text: string): number | null {
+  const lines = text.split('\n')
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = stripTermNoise(lines[i])
+    const spinner = SPINNER_LINE_RE.exec(line)
+    if (!spinner) continue
+    if (STATUS_HINT_RE.test(spinner[1]) && !isLiveStatus(spinner[1])) {
+      return lines.length - i
+    }
+  }
+  return null
+}
+
 export function detectLiveWork(chunk: string): boolean {
   const plain = stripTermNoise(chunk).replace(CSI_RE, '')
   if (/esc to interrupt/i.test(plain)) return true

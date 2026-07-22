@@ -1,5 +1,6 @@
 import { cookrew } from './api'
 import type { TraceBlock } from '../../shared/trace-blocks'
+import type { TurnPhase } from '../../shared/turn'
 
 export type { TraceBlock } from '../../shared/trace-blocks'
 
@@ -119,4 +120,68 @@ export function activeBlockForScroll(
 /** At-bottom detection for autoscroll pinning (px slack for sub-pixel scroll). */
 export function isAtBottom(scrollTop: number, scrollHeight: number, clientHeight: number): boolean {
   return scrollHeight - (scrollTop + clientHeight) <= 24
+}
+
+/**
+ * Rail-as-scrollbar scrub (unified-scroll item 4): map a rail drag fraction
+ * (0 = top of the oldest trace, 1 = live bottom) to a scrollTop over the ONE
+ * combined trace+tail extent. Inverse of scrollTopToFraction; the fraction is
+ * clamped so an over-drag pins to an end. Pure — the scrub math is unit-tested.
+ */
+export function railToScrollTop(
+  fraction: number,
+  scrollHeight: number,
+  clientHeight: number
+): number {
+  const max = Math.max(0, scrollHeight - clientHeight)
+  return Math.max(0, Math.min(1, fraction)) * max
+}
+
+/**
+ * Rail drag → fraction (unified-scroll item 4): where a pointer sits along the
+ * rail track as a fraction (0 top → 1 bottom). The track is the rail height
+ * minus an equal inset top and bottom (the marker's own padding), so a drag to
+ * the very top scrubs to 0 and to the very bottom to 1. Clamped for over-drag;
+ * a degenerate (zero-height) track reports 0. Pure — unit-tested.
+ */
+export function railPointerFraction(
+  clientY: number,
+  rectTop: number,
+  rectHeight: number,
+  inset: number
+): number {
+  const track = rectHeight - inset * 2
+  if (track <= 0) return 0
+  return Math.max(0, Math.min(1, (clientY - rectTop - inset) / track))
+}
+
+/**
+ * The current scroll position as a fraction of the combined extent (0 = top of
+ * the oldest trace block, 1 = live bottom). Drives the here-marker so it tracks
+ * the true unified position — not just which block is in view — making the rail
+ * read as one scrollbar for the whole space. A pane with no overflow (nothing
+ * to scroll) reports 1 (pinned live). Pure — unit-tested.
+ */
+export function scrollTopToFraction(
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number
+): number {
+  const max = scrollHeight - clientHeight
+  if (max <= 0) return 1
+  return Math.max(0, Math.min(1, scrollTop / max))
+}
+
+/**
+ * Live-tail clip decision (unified-scroll item 1): the count of buffer rows the
+ * idle TUI should show (from the last completion / 'Worked for' line through the
+ * input box), or null for no clipping. Clip ONLY when the turn is at rest
+ * (replied/idle) AND Forge reported a tail boundary (activity.tailLines) — a
+ * running turn (thinking / waiting) or an absent boundary shows everything, so
+ * the live layer never hides an in-progress task. The trace owns the older
+ * scrollback. Pure — unit-tested.
+ */
+export function tailClipRows(phase: TurnPhase, tailLines: number | null): number | null {
+  if (tailLines === null || tailLines <= 0) return null
+  return phase === 'idle' || phase === 'replied' ? tailLines : null
 }

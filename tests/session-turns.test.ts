@@ -25,6 +25,87 @@ function assistant(blocks: unknown[], ts: string): string {
 const text = (t: string): { type: string; text: string } => ({ type: 'text', text: t })
 const toolUse = (): { type: string; name: string } => ({ type: 'tool_use', name: 'Bash' })
 const toolResult = (): unknown[] => [{ type: 'tool_result', content: 'ok' }]
+const image = (): { type: string } => ({ type: 'image' })
+
+describe('parseSessionTurns — image prompts & sibling collapse', () => {
+  it('collapses same-parentUuid siblings (string + text+image) into ONE checkpoint bound to the continuing sibling', () => {
+    // One submission Claude wrote as two user records sharing a parentUuid:
+    // a plain-string mirror, then the richer text+image record the thread
+    // continues from. Must mint ONE turn bound to the LAST/richer sibling.
+    const turns = parseSessionTurns([
+      user('well-done, check-points show full history', T('00:00'), {
+        uuid: 'a8a2344e',
+        parentUuid: 'eec433aa'
+      }),
+      user([text('well-done, check-points show full history'), image()], T('00:01'), {
+        uuid: 'be7453eb',
+        parentUuid: 'eec433aa'
+      }),
+      assistant([text('yep')], T('00:05'))
+    ])
+    expect(turns).toHaveLength(1)
+    expect(turns[0].uuid).toBe('be7453eb')
+    expect(turns[0].prompt).toBe('well-done, check-points show full history')
+    expect(turns[0].reply).toBe('yep')
+  })
+
+  it('mints a checkpoint for an image-only submission (text+image array, no string sibling)', () => {
+    const turns = parseSessionTurns([
+      user([text('describe this screenshot'), image()], T('00:00'), {
+        uuid: 'u-img',
+        parentUuid: 'p1'
+      }),
+      assistant([text('a cat')], T('00:02'))
+    ])
+    expect(turns).toHaveLength(1)
+    expect(turns[0].prompt).toBe('describe this screenshot')
+    expect(turns[0].uuid).toBe('u-img')
+  })
+
+  it('collapses a 3-sibling branch group to the live continuation (edits/resends)', () => {
+    // Same parentUuid, DIFFERENT texts: a correction/refine sequence where
+    // only the last is on the live thread (verified against real sessions —
+    // the last sibling is the one downstream records descend from). The
+    // superseded branches are not separate checkpoints.
+    const turns = parseSessionTurns([
+      user('report to Constructor', T('00:00'), { uuid: 'ua', parentUuid: 'p' }),
+      user('report to Conductor', T('00:01'), { uuid: 'ub', parentUuid: 'p' }),
+      user('report to Conductor to analyze', T('00:02'), { uuid: 'uc', parentUuid: 'p' }),
+      assistant([text('on it')], T('00:05'))
+    ])
+    expect(turns).toHaveLength(1)
+    expect(turns[0].uuid).toBe('uc')
+    expect(turns[0].prompt).toBe('report to Conductor to analyze')
+  })
+
+  it('does NOT collapse two distinct submissions with different parentUuids', () => {
+    const turns = parseSessionTurns([
+      user('first', T('00:00'), { uuid: 'u1', parentUuid: 'pa' }),
+      assistant([text('r1')], T('00:05')),
+      user('second', T('01:00'), { uuid: 'u2', parentUuid: 'pb' })
+    ])
+    expect(turns.map((t) => t.prompt)).toEqual(['first', 'second'])
+  })
+
+  it('does NOT collapse legitimate rapid duplicates (same text, different parentUuids)', () => {
+    const turns = parseSessionTurns([
+      user('push', T('00:00'), { uuid: 'u1', parentUuid: 'pa' }),
+      assistant([text('done')], T('00:05')),
+      user('push', T('01:00'), { uuid: 'u2', parentUuid: 'pb' })
+    ])
+    expect(turns).toHaveLength(2)
+  })
+
+  it('still skips a tool-result array (no text block) as a non-prompt', () => {
+    const turns = parseSessionTurns([
+      user('do it', T('00:00'), { uuid: 'u1', parentUuid: 'pa' }),
+      user(toolResult(), T('00:02'), { uuid: 'tr', parentUuid: 'u1' }),
+      assistant([text('done')], T('00:05'))
+    ])
+    expect(turns).toHaveLength(1)
+    expect(turns[0].prompt).toBe('do it')
+  })
+})
 
 const T = (s: string): string => `2026-07-20T10:${s}.000Z`
 const ms = (s: string): number => Date.parse(T(s))

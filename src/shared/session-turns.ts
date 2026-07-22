@@ -29,7 +29,39 @@ interface SessionEntry {
   isMeta?: boolean
   timestamp?: string
   uuid?: string
+  parentUuid?: string
   message?: { content?: unknown }
+}
+
+interface ContentBlock {
+  type?: string
+  text?: string
+}
+
+/**
+ * The conversational prompt text of a user entry, or null when it is not a
+ * prompt. Handles BOTH plain-string content and the [text, image] block array
+ * an image-bearing prompt carries — so an image prompt still mints a
+ * checkpoint. Tool-result arrays (which carry a tool_result block, no text)
+ * and noise wrappers return null.
+ */
+function promptText(entry: SessionEntry): string | null {
+  if (entry.type !== 'user' || entry.isMeta === true) return null
+  const content = entry.message?.content
+  if (typeof content === 'string') {
+    return isNoisePrompt(content) ? null : content.trim()
+  }
+  if (Array.isArray(content)) {
+    const blocks = content as ContentBlock[]
+    if (blocks.some((b) => b?.type === 'tool_result')) return null
+    const joined = blocks
+      .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text as string)
+      .join('\n')
+      .trim()
+    return joined.length > 0 && !isNoisePrompt(joined) ? joined : null
+  }
+  return null
 }
 
 function parseEntry(line: string): SessionEntry | null {
@@ -39,16 +71,6 @@ function parseEntry(line: string): SessionEntry | null {
   } catch {
     return null
   }
-}
-
-/** True for entries that start a real conversation turn. */
-function isTurnPrompt(entry: SessionEntry): boolean {
-  return (
-    entry.type === 'user' &&
-    entry.isMeta !== true &&
-    typeof entry.message?.content === 'string' &&
-    !isNoisePrompt(entry.message.content)
-  )
 }
 
 function entryTimeMs(entry: SessionEntry, fallback: number): number {
@@ -75,20 +97,43 @@ function assistantText(entry: SessionEntry): string | null {
  */
 export function parseSessionTurns(lines: string[]): TurnRecord[] {
   const turns: TurnRecord[] = []
+  // parentUuid of the current turn's prompt entry. Sibling user records of ONE
+  // submission (e.g. Claude's plain-string mirror + the text+image record)
+  // share a parentUuid; they must collapse to ONE checkpoint, bound to the
+  // sibling the thread continues from — in file order the LAST one — so fork
+  // cutoffs stay exact.
+  let currentParent: string | undefined
   for (const line of lines) {
     if (line.trim().length === 0) continue
     const entry = parseEntry(line)
     if (entry === null) continue
-    if (isTurnPrompt(entry)) {
-      const startedAt = entryTimeMs(entry, turns[turns.length - 1]?.endedAt ?? 0)
+    const prompt = promptText(entry)
+    if (prompt !== null) {
+      const last = turns[turns.length - 1]
+      if (
+        last !== undefined &&
+        typeof entry.parentUuid === 'string' &&
+        entry.parentUuid === currentParent
+      ) {
+        // Same submission as the current turn — collapse. Re-bind to this
+        // later sibling's uuid (the continuation); text is identical.
+        turns[turns.length - 1] = {
+          ...last,
+          prompt,
+          ...(typeof entry.uuid === 'string' ? { uuid: entry.uuid } : {})
+        }
+        continue
+      }
+      const startedAt = entryTimeMs(entry, last?.endedAt ?? 0)
       turns.push({
         index: turns.length + 1,
-        prompt: (entry.message?.content as string).trim(),
+        prompt,
         reply: '',
         ...(typeof entry.uuid === 'string' ? { uuid: entry.uuid } : {}),
         startedAt,
         endedAt: startedAt
       })
+      currentParent = entry.parentUuid
       continue
     }
     const current = turns[turns.length - 1]
