@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import type { IClipboardProvider } from '@xterm/addon-clipboard'
@@ -13,6 +13,13 @@ import { useLodLayout } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
 import { cookrew } from './api'
 import { useTurnPaging } from './nodes/TurnPager'
+import { CheckpointTimeline } from './CheckpointTimeline'
+import {
+  activeIndexForScroll,
+  checkpointTitle,
+  spansFromRecords,
+  useTitleMode
+} from './checkpoint-sync'
 import { TurnHistoryPanel } from './TurnHistoryPanel'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
 import { handleTerminalPaste } from './terminal-paste'
@@ -100,24 +107,86 @@ function TerminalOverlay({
   // Turn switching: ◀ ▶ page through past asks; picking one scrolls the
   // terminal to that ask's line (tmux copy-mode search), and returning to
   // live exits copy-mode so the tail streams again.
-  const paging = useTurnPaging(node.id, activity?.turnCount ?? 0)
+  const paging = useTurnPaging(node.id, activity?.turnCount ?? 0, { eager: true })
+  const [titleMode, toggleTitleMode] = useTitleMode()
   const viewingIndex = paging.viewing?.index ?? null
   const viewingPrompt = paging.viewing?.prompt ?? null
   const jumpedRef = useRef(false)
+  /** The live xterm, for converting tmux scrollRow → absolute buffer line. */
+  const termRef = useRef<Terminal | null>(null)
+  const scrollRow = activity?.scrollRow ?? null
+  const spans = useMemo(() => spansFromRecords(paging.records ?? []), [paging.records])
+
+  // Value-specific feedback guards (not a time window — a time window can
+  // strand a user scroll that settles inside it, since the effect never
+  // re-fires after expiry). A forward jump records the exact scrollRow it is
+  // expected to echo; the reverse effect ignores only that one value, so a
+  // genuinely different settled position always applies. The reverse step
+  // records the index it selected so the forward effect skips re-jumping to a
+  // position the user already scrolled to.
+  const expectedEchoRow = useRef<number | null>(null)
+  const reverseSelectedIndex = useRef<number | null>(null)
+
+  // FORWARD (select → scroll): a chosen checkpoint scrolls the tmux context to
+  // its ask line — unless the selection came from a reverse scroll step, where
+  // the context is already there.
   useEffect(() => {
     if (viewingIndex !== null) {
+      if (reverseSelectedIndex.current === viewingIndex) {
+        reverseSelectedIndex.current = null
+        jumpedRef.current = true
+        return
+      }
       const line = (viewingPrompt ?? '').split('\n').find((l) => l.trim() !== '')?.trim() ?? ''
       if (line) {
         jumpedRef.current = true
         // Short literal chunk: long asks wrap across pane lines, which a
         // full-length literal search would never match.
         cookrew().ptyJump(node.id, line.slice(0, 30))
+        // Predict the scrollRow this jump echoes (pane sits at the checkpoint's
+        // start line): scrollRow = bufferLen − rows − top. Best-effort — if the
+        // echo differs, the reverse effect's idx-vs-current check still absorbs
+        // an echo that maps back to the same checkpoint.
+        const term = termRef.current
+        const top = spans.find((s) => s.index === viewingIndex)?.top
+        expectedEchoRow.current =
+          term && top !== undefined ? Math.max(0, term.buffer.active.length - term.rows - top) : null
       }
     } else if (jumpedRef.current) {
       jumpedRef.current = false
+      expectedEchoRow.current = null
       cookrew().ptyJump(node.id, null)
     }
-  }, [viewingIndex, viewingPrompt, node.id])
+  }, [viewingIndex, viewingPrompt, node.id, spans])
+
+  // REVERSE (scroll → step): tmux's copy-mode scroll position steps the active
+  // checkpoint. `scrollRow` is lines scrolled UP from the live bottom (null at
+  // the tail); spans are absolute buffer offsets (TurnRecord.scrollLine), so
+  // convert through the xterm buffer: viewportTop = bufferLen − rows − scrollRow.
+  useEffect(() => {
+    // Exactly the echo our own forward jump produced — ignore this one value.
+    if (scrollRow !== null && scrollRow === expectedEchoRow.current) {
+      expectedEchoRow.current = null
+      return
+    }
+    // At the live tail: drop back to the live view.
+    if (scrollRow === null) {
+      if (paging.viewing !== null) {
+        reverseSelectedIndex.current = null
+        paging.live()
+      }
+      return
+    }
+    const term = termRef.current
+    if (!term || spans.length === 0) return
+    const viewportTop = Math.max(0, term.buffer.active.length - term.rows - scrollRow)
+    const idx = activeIndexForScroll(spans, viewportTop)
+    if (idx !== null && idx !== (paging.viewing?.index ?? null)) {
+      reverseSelectedIndex.current = idx
+      paging.goto(idx)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollRow, spans])
   // Never leave the pane stranded in copy-mode when the overlay unmounts.
   useEffect(
     () => () => {
@@ -220,7 +289,13 @@ function TerminalOverlay({
     container.addEventListener('paste', onPaste, true)
 
     let disposed = false
-    const cleanups: Array<() => void> = [() => term.dispose()]
+    termRef.current = term
+    const cleanups: Array<() => void> = [
+      () => {
+        termRef.current = null
+        term.dispose()
+      }
+    ]
     cleanups.push(() => {
       if (copyTimer) clearTimeout(copyTimer)
       selectionSub.dispose()
@@ -482,23 +557,18 @@ function TerminalOverlay({
         <div className="popout-actions">
           <button
             className="cr-btn sm icon"
-            title="Previous checkpoint"
-            aria-label="Previous checkpoint"
-            disabled={paging.count === 0 || (paging.position !== null && paging.position <= 1)}
+            aria-label={
+              titleMode === 'conclusion' ? 'Titles: conclusions' : 'Titles: precise prompts'
+            }
+            title={
+              titleMode === 'conclusion'
+                ? 'Checkpoint titles: conclusions — click for precise prompts'
+                : 'Checkpoint titles: precise prompts — click for conclusions'
+            }
             onMouseDown={keepFocus}
-            onClick={paging.back}
+            onClick={toggleTitleMode}
           >
-            <CrIcon name="prev" />
-          </button>
-          <button
-            className="cr-btn sm icon"
-            title="Next checkpoint"
-            aria-label="Next checkpoint"
-            disabled={paging.viewing === null}
-            onMouseDown={keepFocus}
-            onClick={paging.forward}
-          >
-            <CrIcon name="next" />
+            <CrIcon name={titleMode === 'conclusion' ? 'note' : 'terminal'} />
           </button>
           {(activity?.turnCount ?? 0) > 0 && (
             <button
@@ -534,13 +604,16 @@ function TerminalOverlay({
       </div>
       {showTurns && <TurnHistoryPanel terminalId={node.id} onClose={() => setShowTurns(false)} />}
       {(paging.viewing !== null || activity?.prompt) && (
-        <div className="popout-ask" title={paging.viewing?.prompt ?? activity?.prompt ?? ''}>
+        <div
+          className={`popout-ask cr-ckpt-span${paging.viewing !== null ? ' active' : ''}`}
+          title={paging.viewing?.prompt ?? activity?.prompt ?? ''}
+        >
           <span className="popout-ask-label">
             {paging.viewing ? `CHECKPOINT ${paging.viewing.index}/${paging.count} ❯` : 'YOU ❯'}
           </span>
           <span className="popout-ask-text">
             {paging.viewing
-              ? clip(paging.viewing.title || paging.viewing.prompt, 300)
+              ? clip(checkpointTitle(paging.viewing, titleMode), 300)
               : clip(activity?.prompt ?? '', 300)}
           </span>
           {paging.viewing !== null && (
@@ -555,7 +628,10 @@ function TerminalOverlay({
           )}
         </div>
       )}
-      <div ref={containerRef} className="popout-terminal" />
+      <div className="popout-terminal-wrap">
+        <div ref={containerRef} className="popout-terminal" />
+        <CheckpointTimeline terminalId={node.id} paging={paging} titleMode={titleMode} />
+      </div>
       {dropReady && (
         <div className="attach-drop-hint">
           <span>

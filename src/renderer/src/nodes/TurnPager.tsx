@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TurnRecord } from '../../../shared/turn'
 import { cookrew } from '../api'
 import { CrIcon } from '../icons'
+import { gotoCursor } from '../checkpoint-sync'
 
 /**
  * Turn paging state for an agent card: `viewing === null` shows the live
@@ -15,29 +16,51 @@ export interface TurnPaging {
   /** 1-based position of the viewed turn within the fetched history. */
   position: number | null
   count: number
+  /** Fetched checkpoint records (eager mode only; null otherwise). */
+  records: TurnRecord[] | null
   back: () => void
   forward: () => void
   live: () => void
+  /** Jump straight to a checkpoint by its TurnRecord.index (timeline press). */
+  goto: (turnIndex: number) => void
   /** Fork from the viewed turn (or the latest turn when live). */
   fork: () => void
   forking: boolean
 }
 
-export function useTurnPaging(terminalId: string, turnCount: number): TurnPaging {
+/**
+ * Paging state for an agent's checkpoints. Cards use the lazy default (records
+ * fetch only on first page-back); the timeline passes `{ eager: true }` so the
+ * full checkpoint list is available up front to render diamonds and jump.
+ */
+export function useTurnPaging(
+  terminalId: string,
+  turnCount: number,
+  opts?: { eager?: boolean }
+): TurnPaging {
+  const eager = opts?.eager ?? false
   const [records, setRecords] = useState<TurnRecord[] | null>(null)
   const [cursor, setCursor] = useState<number | null>(null)
   const [forking, setForking] = useState(false)
   const fetching = useRef(false)
 
-  // A new completed turn while paging: refresh so ▶ can reach it. When live,
-  // drop the stale cache instead — it re-fetches on the next page-back.
+  // Eager: keep the list loaded + fresh as checkpoints land. Lazy: refresh
+  // only while paging, and drop the cache on live so the next ◀ re-fetches.
   useEffect(() => {
+    if (eager) {
+      if (turnCount === 0) {
+        setRecords(null)
+        return
+      }
+      void cookrew().listTurns(terminalId).then(setRecords)
+      return
+    }
     if (cursor === null) {
       setRecords(null)
       return
     }
     void cookrew().listTurns(terminalId).then(setRecords)
-  }, [terminalId, turnCount, cursor !== null])
+  }, [terminalId, turnCount, cursor !== null, eager])
 
   const back = useCallback(() => {
     if (records === null) {
@@ -65,6 +88,15 @@ export function useTurnPaging(terminalId: string, turnCount: number): TurnPaging
 
   const live = useCallback(() => setCursor(null), [])
 
+  const goto = useCallback(
+    (turnIndex: number) => {
+      if (records === null) return
+      const cursor = gotoCursor(records, turnIndex)
+      if (cursor !== null) setCursor(cursor)
+    },
+    [records]
+  )
+
   const fork = useCallback(() => {
     if (forking) return
     const index = cursor !== null && records ? records[cursor]?.index : undefined
@@ -80,9 +112,11 @@ export function useTurnPaging(terminalId: string, turnCount: number): TurnPaging
     viewing,
     position: cursor === null ? null : cursor + 1,
     count: records?.length ?? turnCount,
+    records,
     back,
     forward,
     live,
+    goto,
     fork,
     forking
   }

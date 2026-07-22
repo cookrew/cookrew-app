@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Checkpoint UX — Timeline, Sync &amp; Titles</title>
+<style>
+  :root {
+    --ground:#f4efe2; --surface:#fbf8f0; --surface-2:#efe8d7;
+    --ink:#2a2620; --muted:#7c7360; --line:#e2dac6;
+    --accent:#a1751a; --accent-bright:#c8941f; --violet:#6d4bb0;
+    --live:#2f8f4e; --term-bg:#171512; --term-ink:#d8cfae; --term-dim:#8d8468;
+    --hl:#e9b94926;
+    --font-sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --font-mono:ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground:#191710; --surface:#221f16; --surface-2:#2b2718;
+      --ink:#f0ead8; --muted:#a89e86; --line:#39331f;
+      --accent:#e9b949; --accent-bright:#f2c95a; --violet:#b18cf0;
+      --live:#6fcf7f; --term-bg:#12100c; --term-ink:#d8cfae; --term-dim:#7a7258;
+      --hl:#e9b9491f;
+    }
+  }
+  :root[data-theme="light"] {
+    --ground:#f4efe2; --surface:#fbf8f0; --surface-2:#efe8d7;
+    --ink:#2a2620; --muted:#7c7360; --line:#e2dac6;
+    --accent:#a1751a; --accent-bright:#c8941f; --violet:#6d4bb0;
+    --live:#2f8f4e; --term-bg:#171512; --term-ink:#d8cfae; --term-dim:#8d8468;
+    --hl:#e9b94926;
+  }
+  :root[data-theme="dark"] {
+    --ground:#191710; --surface:#221f16; --surface-2:#2b2718;
+    --ink:#f0ead8; --muted:#a89e86; --line:#39331f;
+    --accent:#e9b949; --accent-bright:#f2c95a; --violet:#b18cf0;
+    --live:#6fcf7f; --term-bg:#12100c; --term-ink:#d8cfae; --term-dim:#7a7258;
+    --hl:#e9b9491f;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--ground); color:var(--ink);
+    font-family:var(--font-sans); font-size:16px; line-height:1.62; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:920px; margin:0 auto; padding:0 20px 90px; }
+  header.mast { padding:44px 0 24px; border-bottom:1px solid var(--line); }
+  .eyebrow { font-family:var(--font-mono); font-size:11.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--accent); }
+  h1 { font-size:clamp(27px,5vw,40px); line-height:1.08; letter-spacing:-.02em; text-wrap:balance; margin:.35em 0 .3em; font-weight:680; }
+  .lede { color:var(--muted); font-size:17px; max-width:64ch; margin:0; }
+  .meta { display:flex; flex-wrap:wrap; gap:8px; margin-top:18px; font-family:var(--font-mono); font-size:12px; }
+  .tag { border:1px solid var(--line); border-radius:6px; padding:4px 9px; color:var(--muted); background:var(--surface); }
+  .tag b { color:var(--ink); font-weight:600; }
+  section { padding:36px 0 6px; border-bottom:1px solid var(--line); }
+  section:last-of-type { border-bottom:0; }
+  h2 { font-size:22px; letter-spacing:-.01em; margin:0 0 4px; font-weight:670; display:flex; align-items:baseline; gap:11px; }
+  h2 .num { font-family:var(--font-mono); font-size:13px; color:var(--accent); font-weight:600; }
+  h3 { font-size:15px; margin:24px 0 8px; font-weight:640; }
+  p { max-width:68ch; }
+  .sub { color:var(--muted); max-width:66ch; margin-top:2px; }
+  code { font-family:var(--font-mono); font-size:.86em; background:var(--surface-2); border:1px solid var(--line); border-radius:5px; padding:1px 5px; }
+  .tablewrap { overflow-x:auto; margin:14px 0 6px; border:1px solid var(--line); border-radius:11px; }
+  table { border-collapse:collapse; width:100%; font-size:14px; min-width:560px; }
+  th,td { text-align:left; padding:10px 13px; border-bottom:1px solid var(--line); vertical-align:top; }
+  thead th { font-family:var(--font-mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); background:var(--surface-2); }
+  tbody tr:last-child td { border-bottom:0; }
+  .field { font-family:var(--font-mono); font-size:12.5px; color:var(--violet); white-space:nowrap; }
+  .chip { font-family:var(--font-mono); font-size:11px; letter-spacing:.04em; padding:2px 7px; border-radius:999px; border:1px solid; display:inline-block; white-space:nowrap; }
+  .chip.forge { color:var(--accent); border-color:color-mix(in srgb,var(--accent) 45%,transparent); }
+  .chip.ui { color:var(--violet); border-color:color-mix(in srgb,var(--violet) 45%,transparent); }
+  .chip.qa { color:var(--live); border-color:color-mix(in srgb,var(--live) 45%,transparent); }
+  ul.tight { padding-left:20px; max-width:68ch; }
+  ul.tight li { margin:5px 0; }
+  .sev { font-family:var(--font-mono); font-size:11px; padding:2px 8px; border-radius:5px; font-weight:600; }
+  .sev.must { color:#fff; background:#bf443e; }
+  .sev.should { color:var(--ground); background:var(--accent); }
+
+  /* ---- live demo: timeline + context ---- */
+  .demo { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px; margin:18px 0 8px; }
+  .demo-note { font-size:13px; color:var(--muted); margin:10px 0 0; }
+  .sim { display:flex; gap:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; height:320px; }
+  .timeline { width:56px; flex:none; background:var(--surface-2); border-right:1px solid var(--line);
+    display:flex; flex-direction:column; align-items:center; padding:12px 0; gap:0; position:relative; }
+  .tl-rail { position:absolute; top:16px; bottom:16px; width:2px; background:var(--line); left:50%; transform:translateX(-1px); }
+  .tl-stop { position:relative; z-index:1; width:44px; height:44px; display:flex; align-items:center; justify-content:center;
+    background:none; border:none; cursor:pointer; padding:0; }
+  .tl-diamond { width:11px; height:11px; transform:rotate(45deg); background:var(--surface); border:2px solid var(--muted); transition:all .15s; }
+  .tl-stop:hover .tl-diamond, .tl-stop:focus-visible .tl-diamond { border-color:var(--accent-bright); }
+  .tl-stop:focus-visible { outline:2px solid var(--accent); outline-offset:-4px; border-radius:8px; }
+  .tl-stop.active .tl-diamond { background:var(--accent); border-color:var(--accent); box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 25%,transparent); }
+  .tl-stop.live .tl-diamond { border-radius:50%; transform:none; background:var(--live); border-color:var(--live); animation:pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow:0 0 0 5px color-mix(in srgb,var(--live) 25%,transparent); } }
+  @media (prefers-reduced-motion:reduce){ .tl-stop.live .tl-diamond { animation:none; } }
+  .tl-pop { position:absolute; left:52px; top:50%; transform:translateY(-50%); background:var(--surface); border:1px solid var(--line);
+    border-radius:9px; padding:8px 10px; display:none; flex-direction:column; gap:6px; z-index:5; box-shadow:0 8px 22px -12px rgba(0,0,0,.5); min-width:150px; }
+  .tl-stop:hover .tl-pop, .tl-stop:focus-within .tl-pop { display:flex; }
+  .tl-pop .t { font-family:var(--font-mono); font-size:11px; color:var(--muted); white-space:nowrap; max-width:220px; overflow:hidden; text-overflow:ellipsis; }
+  .tl-pop button { font-family:var(--font-mono); font-size:11.5px; cursor:pointer; border-radius:7px; padding:5px 9px;
+    border:1px solid var(--line); background:var(--surface-2); color:var(--ink); }
+  .tl-pop button:hover { border-color:var(--violet); color:var(--violet); }
+  .ctx { flex:1; background:var(--term-bg); color:var(--term-ink); font-family:var(--font-mono); font-size:12.5px;
+    line-height:1.55; overflow-y:auto; padding:12px 14px; }
+  .ctx .u { color:var(--accent-bright); }
+  .ctx .d { color:var(--term-dim); }
+  .ctx .seg { padding:2px 6px; margin:0 -6px; border-left:2px solid transparent; }
+  .ctx .seg.hl { background:var(--hl); border-left-color:var(--accent); }
+  .demo-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
+  .mode { display:flex; gap:0; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .mode button { font-family:var(--font-mono); font-size:11.5px; padding:6px 11px; border:none; cursor:pointer; background:var(--surface-2); color:var(--muted); }
+  .mode button.on { background:var(--accent); color:var(--ground); }
+  .now { font-family:var(--font-mono); font-size:12px; color:var(--muted); }
+  .now b { color:var(--accent); }
+  .foot { margin-top:38px; padding-top:18px; border-top:1px solid var(--line);
+    font-family:var(--font-mono); font-size:12px; color:var(--muted); display:flex; flex-wrap:wrap; gap:6px 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="mast">
+    <div class="eyebrow">Cookrew · engineering spec · checkpoint UX v1</div>
+    <h1>Checkpoints: timeline, context sync &amp; dual titles</h1>
+    <p class="lede">The checkpoint list is 1:1 with the agent's own history — now the terminal view gets a timeline scrollbar that makes every checkpoint a place you can jump to, act on, and read two ways.</p>
+    <div class="meta">
+      <span class="tag">source: <b>checkpoint-ux-program-spec-u</b></span>
+      <span class="tag">mapping: <b>Forge</b></span>
+      <span class="tag">component/sync: <b>Velvet</b></span>
+      <span class="tag">visuals: <b>Fresco</b></span>
+      <span class="tag">eval: <b>Magpie</b></span>
+    </div>
+  </header>
+
+  <section>
+    <h2><span class="num">00</span> Principle &amp; foundation (already shipped)</h2>
+    <p>A checkpoint is <strong>one user-intent boundary</strong>: one real Enter, one prompt→reply exchange, one restore point. Capture-side integrity is done — Shift+Enter (ESC+CR) appends a newline instead of minting phantoms (<code>15d48f1</code>), boot phantoms are discarded, and the list is verified 1:1 against the agent's native <code>/rewind</code> history. This spec is the <em>presentation</em> program on top of that foundation: items 2–4 of the note.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">02</span> Context follows checkpoint <span class="chip forge" style="align-self:center">Forge</span> <span class="chip ui" style="align-self:center">Velvet</span></h2>
+    <p>Selecting a checkpoint scrolls the black context view to that turn and <strong>highlights its span</strong>; scrolling the context steps the active checkpoint. Bi-directional, no feedback loops.</p>
+    <h3>Forge mapping contract (already landing in <code>shared/turn.ts</code>)</h3>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Field</th><th>Where</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td class="field">TurnRecord.scrollLine</td><td><code>turns API</code></td><td>0-based scrollback line where the checkpoint's prompt echo begins (tracker snapshot at turn start). Best-effort: absent when the tracker never saw the start.</td></tr>
+          <tr><td class="field">activity.turnStartLine</td><td><code>activities</code></td><td>Scrollback line where the LIVE turn began; null outside a running turn. Same coordinate space.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul class="tight">
+      <li><strong>Coordinate space:</strong> pane-width-wrapped lines as the PTY attach replay serves them. A resize re-wraps — treat offsets as best-effort and <em>clamp</em>; a screen clear invalidates older offsets (consumers clamp to buffer start).</li>
+      <li><strong>Highlight span</strong> = <code>[ckpt[i].scrollLine, (ckpt[i+1].scrollLine ?? turnStartLine ?? bufferEnd))</code>.</li>
+      <li><strong>Sync guard (Velvet):</strong> one owner at a time — a programmatic jump sets a <code>syncing</code> flag that suppresses the scroll listener until the scroll settles (or ~150&nbsp;ms), and vice-versa. Never re-enter.</li>
+      <li><strong>Scroll→checkpoint stepping:</strong> the active checkpoint is the last one whose <code>scrollLine ≤ viewportTop + ⅓·viewportHeight</code> — the reader's eye line, not the exact top.</li>
+      <li>Records with no <code>scrollLine</code> (pre-feature history, missed starts) are still listed and jumpable — jump falls back to prompt-echo text search in the buffer, else no-op with the stop still selectable for actions.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">03</span> Dual title modes <span class="chip ui" style="align-self:center">Velvet</span></h2>
+    <p>Every checkpoint reads two ways — a user toggle, persisted:</p>
+    <ul class="tight">
+      <li><strong>CONCLUSION</strong> — the Sous title (what the turn <em>accomplished</em>). Fallback: first line of the prompt when no title exists.</li>
+      <li><strong>PRECISE PROMPT</strong> — the exact user input, newlines preserved (the 1:1 fix records multiline prompts verbatim, so this mode is now honest). Render with <code>white-space:pre-line</code>, clamp to ~3 lines, full text on hover/title.</li>
+      <li>The toggle applies everywhere checkpoints are titled: timeline popovers, history panel rows, card pager meta. One preference, one key (e.g. <code>checkpointTitleMode</code> in the persisted UI prefs; phone follows via the same remote-api surface).</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">04</span> The timeline scrollbar <span class="chip ui" style="align-self:center">Velvet</span> <span class="chip ui" style="align-self:center">Fresco</span></h2>
+    <p>A vertical checkpoint timeline docked to the context view <strong>replaces the ◀/▶ arrow pager</strong>. Each stop is a checkpoint diamond (the existing badge language); the live head is a pulsing dot. <strong>Press</strong> a stop → the context jumps there. <strong>Hover</strong> (desktop) / <strong>long-press</strong> (phone) → inline <em>SAVE ROLE</em> and <em>FORK AGENT</em> actions — the timeline becomes the primary entry point for both.</p>
+
+    <h3>Live behavioral mock — this is the contract, interactively</h3>
+    <div class="demo">
+      <div class="demo-head">
+        <span class="now">active: <b id="now-label">T4 · live</b></span>
+        <div class="mode" role="group" aria-label="Title mode">
+          <button id="m-conc" class="on">CONCLUSION</button>
+          <button id="m-prec">PRECISE PROMPT</button>
+        </div>
+      </div>
+      <div class="sim">
+        <div class="timeline" id="tl" aria-label="Checkpoint timeline">
+          <div class="tl-rail"></div>
+        </div>
+        <div class="ctx" id="ctx" tabindex="0" aria-label="Terminal context"></div>
+      </div>
+      <p class="demo-note"><strong>Try it:</strong> press a diamond → the context jumps and the span highlights. Scroll the context → the active diamond steps with you (sync guard prevents loops). Hover a diamond → title (in the selected mode) + SAVE ROLE / FORK AGENT. The green dot is the live head.</p>
+    </div>
+
+    <h3>Interaction rules</h3>
+    <ul class="tight">
+      <li>Stops are evenly spaced when they fit; beyond ~14 checkpoints the timeline becomes proportional (position ∝ <code>scrollLine</code>) with collision-nudging so stops never overlap. Tap targets stay ≥44px (phone).</li>
+      <li>Press = jump + select. Selection state = amber-filled diamond + highlight span in the context.</li>
+      <li>Hover/long-press popover: title (current mode), timestamp, and the two actions. Actions call the <em>existing</em> role-save-from-checkpoint and fork flows with the stop's turn — no new backend.</li>
+      <li>Long-press: 350&nbsp;ms hold, cancels on 10px drift; popover dismisses on outside tap / Esc / scroll.</li>
+      <li>The ◀/▶ pager buttons are removed from the overlay header; keyboard ←/→ still step checkpoints (a11y parity), Esc returns to live.</li>
+      <li>Jumping back while a turn streams: the live head keeps pulsing; any new output auto-scroll is <em>suspended</em> while a past checkpoint is selected and resumes on return-to-live (press the live dot or Esc).</li>
+    </ul>
+
+    <h3>Fresco visual notes</h3>
+    <ul class="tight">
+      <li>Diamond = saved checkpoint (amber when active), pulsing round dot = live head, violet ring on a stop whose turn seeded a role — reuse the checkpoint badge + RoleAvatar language.</li>
+      <li>Highlight span: low-alpha amber wash + 2px left rule (see mock) — readable on the black view without fighting the phosphor text.</li>
+      <li>Phone: timeline width ≥48px, popover becomes a bottom sheet under 480px width.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">05</span> Guardrails</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Rule</th><th>Level</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td>Sync has a single owner at a time (flag-guarded)</td><td><span class="sev must">MUST</span></td><td>Scroll↔jump feedback loops oscillate.</td></tr>
+          <tr><td>Clamp all <code>scrollLine</code> jumps to the live buffer</td><td><span class="sev must">MUST</span></td><td>Resize re-wraps and clears invalidate offsets.</td></tr>
+          <tr><td>Actions reuse existing role-save/fork flows</td><td><span class="sev must">MUST</span></td><td>No parallel backend paths; provenance stays uuid-keyed.</td></tr>
+          <tr><td>Auto-scroll suspends while a past checkpoint is selected</td><td><span class="sev must">MUST</span></td><td>Streaming output must not yank the user out of history.</td></tr>
+          <tr><td>≥44px targets, long-press 350ms/10px, popover Esc-dismiss</td><td><span class="sev should">SHOULD</span></td><td>Phone ergonomics.</td></tr>
+          <tr><td>Proportional layout past ~14 stops, collision-nudged</td><td><span class="sev should">SHOULD</span></td><td>Long histories must stay tappable.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">06</span> QA matrix <span class="chip qa" style="align-self:center">Magpie</span></h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Check</th><th>Method</th><th>Pass criteria</th></tr></thead>
+        <tbody>
+          <tr><td>E1 · 1:1 list integrity</td><td>Native <code>/rewind</code> side-by-side + API audit incl. multiline (done for capture layer; re-run per build)</td><td>Count, order, text identical; multiline verbatim.</td></tr>
+          <tr><td>E2 · press-to-jump</td><td>Press each stop incl. first/last/uuid-less</td><td>Context lands on the span, highlight correct, no loop.</td></tr>
+          <tr><td>E2 · scroll-to-step</td><td>Scroll the context end-to-end</td><td>Active stop steps monotonically; no oscillation with the guard.</td></tr>
+          <tr><td>Actions</td><td>Hover/long-press → SAVE ROLE / FORK AGENT</td><td>Existing flows fire with the right turn; provenance uuid matches the stop.</td></tr>
+          <tr><td>Title modes</td><td>Toggle both modes, desktop + phone</td><td>Conclusion ↔ precise prompt everywhere; preference persists.</td></tr>
+          <tr><td>Streaming</td><td>Select a past stop mid-turn</td><td>Auto-scroll suspended; live dot pulses; return-to-live resumes.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="foot">
+    <span>Cookrew · checkpoint UX spec v1</span>
+    <span>source note: checkpoint-ux-program-spec-u</span>
+    <span>foundation: 15d48f1 (one Enter = one checkpoint)</span>
+  </div>
+</div>
+
+<script>
+  (function () {
+    var CKPTS = [
+      { i:1, conc:'Repo scaffolding committed', prec:'set up the repo\nwith vitest + tsconfig', lines:14 },
+      { i:2, conc:'Auth flow implemented', prec:'implement the auth flow', lines:18 },
+      { i:3, conc:'Flaky test pinned + fixed', prec:'the login test is flaky\nfind and fix the cause', lines:16 },
+      { i:4, conc:'live', prec:'live', live:true, lines:10 }
+    ];
+    var tl = document.getElementById('tl'), ctx = document.getElementById('ctx');
+    var nowLabel = document.getElementById('now-label');
+    var mode = 'conc';
+    var active = 3, syncing = false, segs = [], stops = [];
+
+    // build context segments
+    CKPTS.forEach(function (c, idx) {
+      var seg = document.createElement('div');
+      seg.className = 'seg';
+      var html = '<span class="u">❯ ' + (c.live ? '(streaming…)' : c.prec.replace(/\n/g, ' ⏎ ')) + '</span>\n';
+      for (var j = 0; j < c.lines; j++) {
+        html += '<span class="d">' + (c.live && j === c.lines - 1 ? '✻ working…' : '  output line ' + (j + 1) + ' of turn ' + c.i) + '</span>\n';
+      }
+      seg.innerHTML = html.replace(/\n/g, '<br>');
+      ctx.appendChild(seg);
+      segs.push(seg);
+    });
+
+    function title(c) { return c.live ? 'T' + c.i + ' · live' : 'T' + c.i + ' · ' + (mode === 'conc' ? c.conc : c.prec.split('\n')[0] + '…'); }
+
+    function setActive(idx, jump) {
+      active = idx;
+      stops.forEach(function (s, k) { s.classList.toggle('active', k === idx && !CKPTS[k].live); });
+      segs.forEach(function (s, k) { s.classList.toggle('hl', k === idx); });
+      nowLabel.textContent = title(CKPTS[idx]);
+      if (jump) {
+        syncing = true;
+        segs[idx].scrollIntoView({ block: 'start', behavior: 'smooth' });
+        setTimeout(function () { syncing = false; }, 420);
+      }
+    }
+
+    CKPTS.forEach(function (c, idx) {
+      var b = document.createElement('button');
+      b.className = 'tl-stop' + (c.live ? ' live' : '');
+      b.setAttribute('aria-label', 'Checkpoint ' + c.i);
+      b.innerHTML = '<span class="tl-diamond"></span>' +
+        (c.live ? '' :
+          '<span class="tl-pop"><span class="t"></span>' +
+          '<button type="button">◆ SAVE ROLE</button><button type="button">⑂ FORK AGENT</button></span>');
+      b.style.flex = '1';
+      b.addEventListener('click', function (e) {
+        if (e.target.tagName === 'BUTTON' && e.target !== b) {
+          e.target.textContent = e.target.textContent.indexOf('SAVE') !== -1 ? '◆ SAVED ✓' : '⑂ FORKED ✓';
+          setTimeout(function () {
+            e.target.textContent = e.target.getAttribute('data-orig');
+          }, 1200);
+          return;
+        }
+        setActive(idx, true);
+      });
+      b.querySelectorAll('.tl-pop button').forEach(function (ab) { ab.setAttribute('data-orig', ab.textContent); });
+      tl.appendChild(b);
+      stops.push(b);
+    });
+
+    function refreshPops() {
+      stops.forEach(function (s, k) {
+        var t = s.querySelector('.tl-pop .t');
+        if (t) t.textContent = title(CKPTS[k]);
+      });
+    }
+
+    document.getElementById('m-conc').addEventListener('click', function () {
+      mode = 'conc'; this.classList.add('on'); document.getElementById('m-prec').classList.remove('on');
+      refreshPops(); nowLabel.textContent = title(CKPTS[active]);
+    });
+    document.getElementById('m-prec').addEventListener('click', function () {
+      mode = 'prec'; this.classList.add('on'); document.getElementById('m-conc').classList.remove('on');
+      refreshPops(); nowLabel.textContent = title(CKPTS[active]);
+    });
+
+    ctx.addEventListener('scroll', function () {
+      if (syncing) return;
+      var eye = ctx.scrollTop + ctx.clientHeight / 3;
+      var idx = 0;
+      segs.forEach(function (s, k) { if (s.offsetTop <= eye) idx = k; });
+      if (idx !== active) setActive(idx, false);
+    });
+
+    refreshPops();
+    setActive(3, false);
+  })();
+</script>
+</body>
+</html>

@@ -54,6 +54,9 @@ const TITLE_FIRST_MS = 800
 /** While the turn keeps running, refresh the Sous title at this cadence. */
 const TITLE_REFRESH_MS = 15_000
 
+/** Tolerance between tracker turn start and the session prompt entry time. */
+const IN_FLIGHT_STAMP_SLACK_MS = 5000
+
 /** Normalized-prefix prompt equality for carrying titles across reconciles. */
 const PROMPT_MATCH_CHARS = 48
 
@@ -96,6 +99,14 @@ interface TrackedTerminal {
   heldInput: string
   /** Epoch ms of the last Enter that did NOT start or answer a turn; 0 when consumed. */
   lastSubmitAt: number
+  /**
+   * Sticky per-turn flag: has the CURRENT turn seen any user input since it
+   * opened? Set on typing/submit; reset only when a turn opens from NON-input
+   * (a boot-noise self-heal). Unlike lastSubmitAt (which resumeThinking
+   * resets to 0), this survives a resume, so a first ask that merges into a
+   * boot phantom is never mistaken for input-less boot noise at finalize.
+   */
+  sawInputThisTurn: boolean
   /** Epoch ms of the last self-heal viewport scan (throttle). */
   lastHealScanAt: number
   prompt: string | null
@@ -185,7 +196,8 @@ export class TurnTracker extends EventEmitter {
         ...(prior.scrollLine !== undefined ? { scrollLine: prior.scrollLine } : {})
       }
     })
-    const deduped = dedupePhantomEchoes(merged)
+    const stamped = this.stampInFlightScrollLine(terminalId, merged)
+    const deduped = dedupePhantomEchoes(stamped)
     const capped =
       deduped.length > MAX_TURN_HISTORY ? deduped.slice(deduped.length - MAX_TURN_HISTORY) : deduped
     this.histories.set(terminalId, capped)
@@ -278,6 +290,30 @@ export class TurnTracker extends EventEmitter {
   }
 
   /**
+   * scrollLine for the LIVE turn (Magpie E2 gap): Claude writes the prompt
+   * entry the moment a turn starts, so the reconcile usually replaces
+   * history BEFORE the scraped record — the scrollLine carrier — exists,
+   * and the scrape's later append is dropped as a phantom echo. While a
+   * turn is in flight, stamp the incoming record that covers it straight
+   * from the tracker's live turnStartLine. Guards: only the NEWEST record,
+   * only when its prompt matches the live one and its start time is not
+   * older than the live turn (a reconcile from a pre-turn write must never
+   * inherit the new turn's offset).
+   */
+  private stampInFlightScrollLine(terminalId: string, records: TurnRecord[]): TurnRecord[] {
+    const t = this.tracked.get(terminalId)
+    const inFlight = t && (t.phase === 'thinking' || t.phase === 'waiting')
+    if (!t || !inFlight || t.turnStartLine === null || records.length === 0) return records
+    const last = records[records.length - 1]
+    const covers =
+      last.scrollLine === undefined &&
+      promptsMatch(t.prompt ?? '', last.prompt) &&
+      last.startedAt >= t.turnStartedAt - IN_FLIGHT_STAMP_SLACK_MS
+    if (!covers) return records
+    return [...records.slice(0, -1), { ...last, scrollLine: t.turnStartLine }]
+  }
+
+  /**
    * Acknowledge-on-view: 'replied' (TURN COMPLETE) means UNREAD, and it
    * demotes to 'idle' exactly when the user views the result — the terminal
    * overlay mounts (desktop zoom / phone popout) or the next prompt starts a
@@ -325,6 +361,7 @@ export class TurnTracker extends EventEmitter {
       inPaste: false,
       heldInput: '',
       lastSubmitAt: 0,
+      sawInputThisTurn: false,
       lastHealScanAt: 0,
       prompt: null,
       snapshot: '',
@@ -382,6 +419,7 @@ export class TurnTracker extends EventEmitter {
         turnCount: this.history(terminalId).length,
         turnStartedAt: null,
         turnStartLine: null,
+        scrollRow: null,
         updatedAt: Date.now()
       } satisfies TerminalActivity)
     }
@@ -420,6 +458,7 @@ export class TurnTracker extends EventEmitter {
     t.heldInput = fed.held
     if (!t.agent) return
     if (fed.submitted.length > 0) t.lastSubmitAt = Date.now()
+    if (fed.submitted.length > 0 || fed.buffer.trim().length > 0) t.sawInputThisTurn = true
     if (t.phase === 'waiting' && fed.submitted.length > 0 && t.prompt !== null) {
       // Enter on an approval/question menu answers the SAME real turn — resume
       // thinking with the original prompt and snapshot intact. A PROMPTLESS
@@ -446,6 +485,7 @@ export class TurnTracker extends EventEmitter {
     t.turnStartLine = scrollLineOf(t.snapshot)
     t.phase = 'thinking'
     t.lastSubmitAt = 0
+    t.sawInputThisTurn = true
     t.prompt = prompt
     t.reply = null
     t.title = null
@@ -560,6 +600,9 @@ export class TurnTracker extends EventEmitter {
       // echo on its boot screen, so recover the prompt we actually captured
       // instead of labelling the first turn '(recovered turn)'.
       t.prompt = extractPromptEcho(cleanTurnLines(t.snapshot)) ?? (t.promptBuffer.trim() || null)
+      // Boot-noise until proven otherwise: only mark input-seen if the ask
+      // had already buffered a prompt when this phantom opened.
+      t.sawInputThisTurn = t.promptBuffer.trim().length > 0
     }
     t.phase = 'thinking'
     t.reply = null
@@ -604,8 +647,11 @@ export class TurnTracker extends EventEmitter {
     // output in the reply is not a real turn). A promptless turn that DID see
     // input keeps the synthetic label; session-bound agents additionally get
     // the real turn from the session-file reconcile.
-    const sawInput = t.promptBuffer.trim().length > 0 || t.lastSubmitAt !== 0
-    if (t.prompt === null && !sawInput) {
+    // Use the STICKY per-turn flag, not lastSubmitAt: resumeThinking resets
+    // lastSubmitAt to 0, so a first ask that merged into a boot phantom would
+    // otherwise finalize looking input-less and be discarded (the Codex
+    // first-ask drop). sawInputThisTurn survives the resume.
+    if (t.prompt === null && !t.sawInputThisTurn) {
       this.push(t)
       return
     }
@@ -724,6 +770,11 @@ export class TurnTracker extends EventEmitter {
       turnCount: this.history(terminalId).length,
       turnStartedAt: inTurn ? t.turnStartedAt : null,
       turnStartLine: inTurn ? t.turnStartLine : null,
+      // Optional-called: fake sessions in tests may not implement it. Gated
+      // off during a turn: the pane is live (not copy-mode) so tmux reports
+      // no scroll position anyway — skipping the subprocess spawn on the hot
+      // streaming path (every ~250-400ms push per busy agent otherwise).
+      scrollRow: inTurn ? null : (t.session.scrollRow?.() ?? null),
       updatedAt: Date.now()
     }
   }

@@ -255,6 +255,35 @@ describe('TurnTracker recovered turns (empty-prompt history bug)', () => {
     tracker.disposeAll()
   })
 
+  // Regression (27fe569 → fixed): a first ask that merges into a boot phantom
+  // was dropped because resumeThinking resets lastSubmitAt to 0, so the
+  // input-seen state was lost by finalize and the turn looked like boot noise.
+  // The sticky sawInputThisTurn flag survives the resume, so the turn records.
+  it('records a turn whose input-seen state was reset by a later resume', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    // Boot phantom self-heals, quiesces, and is discarded as boot noise.
+    session.full = '✻ Cerebrating… (esc to interrupt · 3s)'
+    session.emit('data', '✻ Cerebrating… (esc to interrupt · 3s)')
+    session.full = 'OpenAI Codex v0.145.0\nWelcome'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(phaseOf(tracker)).toBe('replied')
+    expect(tracker.history('term-1')).toHaveLength(0)
+
+    // The ask arrives (input seen), then agent output triggers a resume that
+    // zeroes lastSubmitAt — the exact state that used to look input-less.
+    session.idle = 0
+    session.emit('input', '\r')
+    session.emit('data', '⏺ working')
+    expect(phaseOf(tracker)).toBe('thinking')
+    session.full += '\n⏺ done'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(tracker.history('term-1')).toHaveLength(1)
+    tracker.disposeAll()
+  })
+
   it('keeps the synthetic label for a promptless turn that DID see input', async () => {
     vi.useFakeTimers()
     const { tracker, session } = makeTracker()
@@ -630,6 +659,74 @@ describe('checkpoint scrollback mapping (scrollLine, checkpoint-ux item 2)', () 
     const history = tracker.history('term-1')
     expect(history[0].uuid).toBe('u1')
     expect(history[0].scrollLine).toBe(0)
+    tracker.disposeAll()
+  })
+})
+
+describe('activity.scrollRow (scroll→step, checkpoint-ux item 2 gap)', () => {
+  it('reflects the pane scroll position when the session reports one', () => {
+    const { tracker, session } = makeTracker()
+    ;(session as unknown as { scrollRow: () => number | null }).scrollRow = () => 42
+    expect(tracker.list()[0].scrollRow).toBe(42)
+    ;(session as unknown as { scrollRow: () => number | null }).scrollRow = () => null
+    expect(tracker.list()[0].scrollRow).toBeNull()
+    tracker.disposeAll()
+  })
+
+  it('is null for sessions without scroll reporting (fakes, no tmux)', () => {
+    const { tracker } = makeTracker()
+    expect(tracker.list()[0].scrollRow).toBeNull()
+    tracker.disposeAll()
+  })
+})
+
+describe('scrollLine on session-derived records (Magpie E2 gap: reconcile race)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('stamps the in-flight record from the live turn when the reconcile beats the scrape', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    await completeTurn(tracker, session) // turn 1 'fix it', buffer now 1 line
+
+    // Turn 2 starts (start line 1); Claude writes the prompt entry to the
+    // session file IMMEDIATELY, so the reconcile fires before quiescence
+    // ever appends the scraped record that would carry scrollLine.
+    session.idle = 0
+    session.emit('input', 'second ask\r')
+    expect(phaseOf(tracker)).toBe('thinking')
+    tracker.replaceHistory('term-1', [
+      { index: 1, prompt: 'fix it', reply: 'done, all tests pass', uuid: 'u1', startedAt: 1, endedAt: 2 },
+      { index: 2, prompt: 'second ask', reply: '', uuid: 'u2', startedAt: Date.now(), endedAt: Date.now() }
+    ])
+
+    const history = tracker.history('term-1')
+    expect(history[1].uuid).toBe('u2')
+    expect(history[1].scrollLine).toBe(1) // stamped from the live turn
+    expect(history[0].scrollLine).toBe(0) // prior carryover untouched
+
+    // Survives the NEXT reconcile via the normal uuid carryover.
+    tracker.replaceHistory('term-1', [
+      { index: 1, prompt: 'fix it', reply: 'done, all tests pass', uuid: 'u1', startedAt: 1, endedAt: 2 },
+      { index: 2, prompt: 'second ask', reply: 'done two', uuid: 'u2', startedAt: 5, endedAt: 6 }
+    ])
+    expect(tracker.history('term-1')[1].scrollLine).toBe(1)
+    tracker.disposeAll()
+  })
+
+  it('does not stamp when the newest reconciled record is NOT the live turn', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    await completeTurn(tracker, session)
+    session.idle = 0
+    session.emit('input', 'second ask\r')
+    // Reconcile from a write that predates the in-flight prompt: its last
+    // record is the PREVIOUS turn — must not inherit turn 2's start line.
+    tracker.replaceHistory('term-1', [
+      { index: 1, prompt: 'fix it', reply: 'done, all tests pass', uuid: 'u1', startedAt: 1, endedAt: 2 }
+    ])
+    expect(tracker.history('term-1')[0].scrollLine).toBe(0) // carryover, not a stamp of 1
     tracker.disposeAll()
   })
 })
