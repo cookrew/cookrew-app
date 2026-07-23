@@ -87,6 +87,7 @@ const api = {
   queryEvents: (query: unknown) => ipcRenderer.invoke('events:query', query),
   countEvents: (query: unknown) => ipcRenderer.invoke('events:count', query),
   listAgents: () => ipcRenderer.invoke('agents:list'),
+  recoverAgent: (id: string) => ipcRenderer.invoke('agent:recover', id),
   saveRole: (input: unknown) => ipcRenderer.invoke('role:save', input),
   onTerminalActivity: (cb: (activity: unknown) => void) => {
     const listener = (_e: unknown, activity: unknown): void => cb(activity)

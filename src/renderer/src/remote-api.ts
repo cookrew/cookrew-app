@@ -158,6 +158,7 @@ export function createRemoteApi(): CookrewApi {
       const result = await req<{ agents: unknown[] }>('/api/agents')
       return result.agents
     },
+    recoverAgent: (id) => req(`/api/agents/${id}/recover`, 'POST'),
     listTurns: (terminalId) => req<TurnRecord[]>(`/api/terminal/${terminalId}/turns`),
     listTraceIndex: (terminalId) => req(`/api/terminal/${terminalId}/trace/index`),
     listTrace: async (terminalId, request) => {

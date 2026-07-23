@@ -20,6 +20,7 @@ import {
 import { addDir, removeDir, setPrimary } from '../shared/workspace-dirs'
 import type { CookrewEvent, EventActor } from './event-log'
 import { upgradeNode } from './node-upgrades'
+import type { RecoverableSnapshot } from './recoverable'
 
 const DATA_DIR = path.join(homedir(), '.cookrew')
 const LEGACY_DATA_DIR = path.join(homedir(), '.cava')
@@ -416,6 +417,38 @@ export class WorkspaceStore extends EventEmitter {
     this.emit('op', event)
   }
 
+  // Recovery snapshot hook (agent-recover): captured just before a terminal
+  // node is hard-removed, so recoverAgent can restore it as it was.
+  private onTerminalRemoved: ((snapshot: RecoverableSnapshot) => void) | null = null
+  setTerminalRemovedHook(fn: (snapshot: RecoverableSnapshot) => void): void {
+    this.onTerminalRemoved = fn
+  }
+
+  /**
+   * Snapshot a terminal for recovery ahead of an EXTERNAL kill that bypasses
+   * removeNode — notably workspace delete, which kills tmux + rm's the state
+   * dir directly (HIGH-1). Resolves the node across workspaces so an inactive
+   * workspace's terminals are captured too.
+   */
+  snapshotTerminal(id: string): void {
+    const hit = this.nodeAcrossWorkspaces(id)
+    if (hit && hit.node.kind === 'terminal') this.captureRecoverable(hit.node, hit.workspaceId)
+  }
+
+  private captureRecoverable(node: CanvasNode, workspaceId: string): void {
+    if (!this.onTerminalRemoved || node.kind !== 'terminal') return
+    const workspaceName =
+      this.registry.workspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId
+    const peers = this.connectedToAcross(node.id).map((h) => h.node.id)
+    this.onTerminalRemoved({
+      node,
+      workspaceId,
+      workspaceName,
+      peers,
+      savedAt: Date.now()
+    })
+  }
+
   /** Ops living outside the store (role/team saves) still go through here. */
   recordEvent(type: string, entityId: string, entityName: string, details?: string): void {
     this.emitOp(type, entityId, entityName, this.registry.activeId, details)
@@ -618,6 +651,7 @@ export class WorkspaceStore extends EventEmitter {
       this.removeNode(id)
       return
     }
+    this.captureRecoverable(hit.node, hit.workspaceId)
     this.patchWorkspace(hit.workspaceId, (s) => ({
       ...s,
       nodes: s.nodes.filter((n) => n.id !== id),
@@ -684,6 +718,7 @@ export class WorkspaceStore extends EventEmitter {
 
   removeNode(id: string): void {
     const node = this.node(id)
+    if (node) this.captureRecoverable(node, this.registry.activeId)
     this.mutate({
       ...this.state,
       nodes: this.state.nodes.filter((n) => n.id !== id),

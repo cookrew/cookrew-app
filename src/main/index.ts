@@ -18,6 +18,7 @@ import {
   CanvasNode,
   DEFAULT_TERMINAL_SIZE,
   TeamForkSpec,
+  RecoverResult,
   TeamMeta,
   TerminalNodeData,
   WorkspaceMeta
@@ -25,6 +26,7 @@ import {
 import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
 import { forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
 import { AgentRegistry } from './agent-registry'
+import { RecoverableStore, planRecovery } from './recoverable'
 import { EventLog } from './event-log'
 import { isClaudeCommand } from '../shared/claude-fork'
 import {
@@ -36,6 +38,8 @@ import {
   saveRoleSessionCopy
 } from './claude-fork'
 import { isCodexCommand, resolveCodexRollout } from './codex-bind'
+import { isOpenCodeCommand, resolveOpencodeSession } from './opencode-bind'
+import { harnessFor } from './harness'
 import { TraceReader } from './trace'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
@@ -59,6 +63,10 @@ const teams = new TeamStore()
 const gitCache = new GitInfoCache()
 const agents = new AgentRegistry()
 const events = new EventLog()
+const recoverable = new RecoverableStore()
+// Snapshot every killed terminal (node + position + session refs + edges)
+// so recoverAgent can restore it exactly as it was (agent-recover feature).
+store.setTerminalRemovedHook((snapshot) => recoverable.capture(snapshot))
 const traces = new TraceReader(store)
 // Observability: the store's op choke-point feeds the durable event log;
 // the log's live stream broadcasts to the renderer (mobile gets the same
@@ -108,6 +116,7 @@ function spawnTracked(t: {
   cwd: string
   claudeSessionId?: string | null
   codexSessionRef?: string | null
+  opencodeSessionId?: string | null
 }): void {
   const upgraded = LEGACY_COMMANDS[t.command.trim()]
   const command = upgraded ?? t.command
@@ -138,6 +147,17 @@ function spawnTracked(t: {
     if (t.claudeSessionId !== sessionId) store.updateNodeUnsafe(t.id, { claudeSessionId: sessionId })
     effective = claudeSpawnCommand(command, t.cwd, sessionId)
     boundSessionId = sessionId
+  } else if (isCodexCommand(command) && t.codexSessionRef) {
+    // Resume the bound Codex rollout as-is (Tinker: `codex resume <uuid>`,
+    // uuid from the rollout filename; global opts kept before the subcommand).
+    // Route through resumeKey so the ref is validated, not shelled raw (HIGH-2).
+    const harness = harnessFor(command)
+    const key = harness?.resumeKey(t.codexSessionRef) ?? null
+    if (harness && key) effective = harness.resumeCommand(command, key)
+  } else if (isOpenCodeCommand(command) && t.opencodeSessionId) {
+    const harness = harnessFor(command)
+    const key = harness?.resumeKey(t.opencodeSessionId) ?? null
+    if (harness && key) effective = harness.resumeCommand(command, key)
   }
   const session = ptys.spawn({ terminalId: t.id, command: effective, cwd: t.cwd })
   turns.track(session, command.trim().length > 0)
@@ -158,11 +178,41 @@ function spawnTracked(t: {
             .map((n) => path.resolve(n.codexSessionRef as string))
         )
         const ref = resolveCodexRollout({ cwd: t.cwd, spawnedAt, exclude: claimed })
-        if (ref && store.node(t.id)) store.updateNodeUnsafe(t.id, { codexSessionRef: ref })
+        if (ref && store.nodeAcrossWorkspaces(t.id)) store.updateNodeUnsafe(t.id, { codexSessionRef: ref })
       } catch (error) {
         console.error('Codex rollout bind failed (lazy retry remains):', error)
       }
     }, 8000)
+  }
+  // OpenCode session bind (Tinker recipe): the ses_<id>.json appears at/after
+  // the first turn, so retry on a schedule until it binds (MEDIUM-3 — the
+  // lazy re-bind, not a single shot). recover snapshots then carry
+  // opencodeSessionId so `opencode --session <id>` can resume.
+  if (isOpenCodeCommand(command) && !t.opencodeSessionId) {
+    const spawnedAt = Date.now()
+    const attempt = (delays: number[]): void => {
+      if (delays.length === 0) return
+      setTimeout(() => {
+        try {
+          const hit = store.nodeAcrossWorkspaces(t.id)
+          // Gone, or already bound by a prior attempt → stop.
+          if (!hit || hit.node.kind !== 'terminal') return
+          if ((hit.node as TerminalNodeData).opencodeSessionId) return
+          const claimed = new Set(
+            store
+              .terminalsAcross()
+              .filter((n) => n.id !== t.id && typeof n.opencodeSessionId === 'string')
+              .map((n) => n.opencodeSessionId as string)
+          )
+          const sid = resolveOpencodeSession({ cwd: t.cwd, spawnedAt, exclude: claimed })
+          if (sid) store.updateNodeUnsafe(t.id, { opencodeSessionId: sid })
+          else attempt(delays.slice(1)) // not written yet — retry later
+        } catch (error) {
+          console.error('OpenCode session bind failed:', error)
+        }
+      }, delays[0])
+    }
+    attempt([8000, 20000, 45000])
   }
   // Session-bound terminals: the Claude session JSONL is the source of truth
   // for turn records — reconcile now (rebuilds legacy scraped records) and
@@ -226,6 +276,7 @@ function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
   // active workspace's terminals are killed, not merely detached. Kills are
   // by tmux session name, so parked (detached) terminals are reached too.
   for (const id of store.terminalIdsOf(meta.id)) {
+    store.snapshotTerminal(id) // HIGH-1: capture recovery snapshot before the kill
     sessionSync.unwatch(id)
     ptys.killDetached(id)
     turns.untrack(id)
@@ -280,6 +331,87 @@ function updateNode(id: string, patch: Partial<CanvasNode>): CanvasNode | undefi
     return Object.keys(rest).length > 0 ? store.updateNode(id, rest) : written
   }
   return store.updateNode(id, patch)
+}
+
+function workspaceName(id: string): string {
+  return store.list().workspaces.find((w) => w.id === id)?.name ?? id
+}
+
+/** The active workspace's orch terminal, for reachability wiring. */
+function activeOrch(): TerminalNodeData | undefined {
+  return store
+    .terminals()
+    .find((t) => t.orch)
+}
+
+/**
+ * Recover an inactive teammate as it was (agent-recover feature). Order:
+ *  1. Node still on a canvas (dead process) → respawn if its workspace is
+ *     active (resumes its session), else leave it for workspace activation.
+ *  2. Kill snapshot → re-add the node bound to its session (harness resume on
+ *     spawn), reconnect SURVIVING peers, and only if none reaches an orch wire
+ *     to the current orch. PTY boots ONLY when the target workspace is active
+ *     (registry-consistent; inactive workspaces defer to activation).
+ *  3. No snapshot (legacy pre-feature kill) → best-effort re-add from the
+ *     registry + wire to the current orch.
+ */
+function recoverAgent(id: string): RecoverResult {
+  // (1) present-but-dead
+  const hit = store.nodeAcrossWorkspaces(id)
+  if (hit && hit.node.kind === 'terminal') {
+    // Only report spawned when we actually (re)booted — an already-live
+    // process is a no-op double-recover (LOW).
+    const didSpawn = hit.workspaceId === store.activeId && !ptys.get(id)
+    if (didSpawn) spawnTracked(hit.node)
+    return {
+      ok: true, id, name: hit.node.name, workspaceId: hit.workspaceId,
+      workspaceName: workspaceName(hit.workspaceId), spawned: didSpawn, legacy: false
+    }
+  }
+
+  const snap = recoverable.get(id)
+  if (snap) {
+    const orch = activeOrch()
+    const plan = planRecovery(snap, {
+      activeWorkspaceId: store.activeId,
+      workspaceExists: (wid) => store.list().workspaces.some((w) => w.id === wid),
+      nodeExists: (pid) => store.nodeAcrossWorkspaces(pid) !== undefined,
+      isOrch: (pid) => {
+        const peer = store.nodeAcrossWorkspaces(pid)
+        return peer?.node.kind === 'terminal' && (peer.node as TerminalNodeData).orch === true
+      },
+      currentOrchId: orch?.id ?? null
+    })
+    const added = store.addNodeToWorkspace(plan.targetWorkspaceId, snap.node) as TerminalNodeData
+    for (const peerId of plan.peerEdges) store.connectAcross(added.id, peerId)
+    if (plan.orchEdge) store.connectAcross(added.id, plan.orchEdge)
+    if (plan.spawn) spawnTracked(added)
+    recoverable.remove(id)
+    return {
+      ok: true, id, name: added.name, workspaceId: plan.targetWorkspaceId,
+      workspaceName: workspaceName(plan.targetWorkspaceId), spawned: plan.spawn, legacy: false
+    }
+  }
+
+  // (3) legacy fallback from the registry (no full snapshot).
+  const entry = agents.lookup(id)
+  if (!entry) throw new Error(`No recoverable agent '${id}'`)
+  const wsExists = store.list().workspaces.some((w) => w.id === entry.workspaceId)
+  const targetWs = wsExists ? entry.workspaceId : store.activeId
+  const node: TerminalNodeData = {
+    kind: 'terminal', id, name: entry.name, preset: entry.preset,
+    command: entry.command, cwd: entry.cwd, orch: entry.orch, role: entry.role,
+    position: { x: 240, y: 200 }, size: DEFAULT_TERMINAL_SIZE
+  }
+  const added = store.addNodeToWorkspace(targetWs, node) as TerminalNodeData
+  const orch = activeOrch()
+  if (orch && orch.id !== added.id) store.connectAcross(added.id, orch.id)
+  const active = targetWs === store.activeId
+  if (active) spawnTracked(added)
+  return {
+    ok: true, id, name: added.name, workspaceId: targetWs,
+    workspaceName: workspaceName(targetWs), spawned: active, legacy: true
+  }
 }
 
 function removeNode(id: string): void {
@@ -645,6 +777,7 @@ app.whenReady().then(() => {
     events,
     agents,
     traces,
+    recoverAgent,
     ptys,
     voice,
     turns,
@@ -818,6 +951,7 @@ function registerIpc(): void {
   ipcMain.handle('events:query', (_e, query) => events.query(query ?? {}))
   ipcMain.handle('events:count', (_e, query) => events.count(query ?? {}))
   ipcMain.handle('agents:list', () => agents.list())
+  ipcMain.handle('agent:recover', (_e, id: string) => recoverAgent(id))
   ipcMain.handle('terminal:fork', (_e, sourceId: string, turnIndex?: number) =>
     forkTerminal(sourceId, turnIndex)
   )
