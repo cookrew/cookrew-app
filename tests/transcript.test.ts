@@ -11,9 +11,12 @@ import {
   checkpointRowTitle,
   createHoldReveal,
   focusedCheckpoint,
+  fanLayout,
   mergeCheckpointRows,
   mergeTrace,
-  railGesture,
+  neighborWindow,
+  railAnchorTop,
+  scrollFocusState,
   scrubPreviewRow,
   pruneToTotal,
   railPointerFraction,
@@ -466,11 +469,96 @@ describe('createHoldReveal (v3: hold a tab/row to reveal its actions)', () => {
   })
 })
 
-describe('railGesture (unified: drag scrubs the transcript, tap opens the list)', () => {
-  it('a drag (traveled past the tap threshold) scrubs the transcript', () => {
-    expect(railGesture(true)).toBe('scrub')
+describe('scrollFocusState (scroll-driven list: focus → highlight, show/hide)', () => {
+  const rows = mergeCheckpointRows(
+    [],
+    [
+      { index: 7, title: 'seven' },
+      { index: 8, title: 'eight' },
+      { index: 9, title: 'nine' }
+    ]
+  )
+  it('scrolled onto a checkpoint → highlight it and show the list', () => {
+    expect(scrollFocusState(rows, 8)).toEqual({ focusedIndex: 8, listShown: true })
   })
-  it('a plain click/tap (no travel) opens the stick-open list', () => {
-    expect(railGesture(false)).toBe('open')
+  it('at the live tail (no focus) → hide the list', () => {
+    expect(scrollFocusState(rows, null)).toEqual({ focusedIndex: null, listShown: false })
+  })
+  it('an identity not among the rows → no focus, no list', () => {
+    expect(scrollFocusState(rows, 999)).toEqual({ focusedIndex: null, listShown: false })
+  })
+})
+
+describe('neighborWindow (extended tab: focused centred, neighbors up + down)', () => {
+  const rows = mergeCheckpointRows(
+    [],
+    Array.from({ length: 20 }, (_, i) => ({ index: i + 1, title: `t${i + 1}` })) // T1..T20
+  )
+  it('centres the focused row with `radius` neighbors each side', () => {
+    expect(neighborWindow(rows, 10, 3).map((r) => r.index)).toEqual([7, 8, 9, 10, 11, 12, 13])
+  })
+  it('clamps at the start (fewer above)', () => {
+    expect(neighborWindow(rows, 2, 3).map((r) => r.index)).toEqual([1, 2, 3, 4, 5])
+  })
+  it('clamps at the end (fewer below)', () => {
+    expect(neighborWindow(rows, 19, 3).map((r) => r.index)).toEqual([16, 17, 18, 19, 20])
+  })
+  it('is empty with no focus or an unknown identity', () => {
+    expect(neighborWindow(rows, null, 3)).toEqual([])
+    expect(neighborWindow(rows, 999, 3)).toEqual([])
+  })
+})
+
+describe('railAnchorTop (marker-Y == focused-row-Y invariant)', () => {
+  it('is the SAME position for a fraction — marker and focused row share it', () => {
+    // The here-marker and the focused tab/row both call this with focused.frac,
+    // so their Y is identical by construction.
+    expect(railAnchorTop(0.5)).toBe('calc(16px + 0.5 * (100% - 32px))')
+    expect(railAnchorTop(0.5)).toBe(railAnchorTop(0.5))
+  })
+  it('clamps a boundary fraction (still resolves on the line)', () => {
+    expect(railAnchorTop(-0.3)).toBe('calc(16px + 0 * (100% - 32px))')
+    expect(railAnchorTop(1.4)).toBe(railAnchorTop(1))
+  })
+})
+
+describe('fanLayout (focus anchored, neighbors fan up/down; clip keeps alignment)', () => {
+  const rows = mergeCheckpointRows(
+    [],
+    Array.from({ length: 20 }, (_, i) => ({ index: i + 1, title: `t${i + 1}` }))
+  )
+  it('splits a centred window into equal above + focused + below', () => {
+    const w = neighborWindow(rows, 10, 3) // [7..13]
+    const { above, focused, below } = fanLayout(w, 10)
+    expect(above.map((r) => r.index)).toEqual([7, 8, 9])
+    expect(focused?.index).toBe(10)
+    expect(below.map((r) => r.index)).toEqual([11, 12, 13])
+  })
+  it('boundary near the TOP: fewer above, focus STILL the anchor (alignment first)', () => {
+    const w = neighborWindow(rows, 2, 3) // [1..5], clamped at the start
+    const { above, focused, below } = fanLayout(w, 2)
+    expect(above.map((r) => r.index)).toEqual([1]) // only one above — clipped, not re-centred
+    expect(focused?.index).toBe(2) // focus stays the anchor at its true fraction
+    expect(below.map((r) => r.index)).toEqual([3, 4, 5])
+  })
+  it('boundary near the BOTTOM: fewer below, focus still the anchor', () => {
+    const w = neighborWindow(rows, 19, 3) // [16..20]
+    const { above, focused, below } = fanLayout(w, 19)
+    expect(above.map((r) => r.index)).toEqual([16, 17, 18])
+    expect(focused?.index).toBe(19)
+    expect(below.map((r) => r.index)).toEqual([20])
+  })
+  it('HIGH-1: ASYMMETRIC window (above=1, below=4) → focus is the SOLE anchor', () => {
+    // Marker near the top: only ONE neighbor above but four below. The focus is
+    // still returned as exactly one anchor row (never re-centered into the
+    // container middle), so the CSS pins it on the marker Y — not offset by the
+    // asymmetry.
+    const w = neighborWindow(rows, 2, 4) // radius 4, clamped at the start → [1..6]
+    const { above, focused, below } = fanLayout(w, 2)
+    expect(above).toHaveLength(1) // one above
+    expect(below).toHaveLength(4) // four below — asymmetric
+    expect(focused?.index).toBe(2) // the anchor is the focus, unchanged
+    // the anchor is a SINGLE row (not the geometric middle of the 6-row window)
+    expect(above.length + 1 + below.length).toBe(w.length)
   })
 })

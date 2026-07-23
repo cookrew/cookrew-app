@@ -7,9 +7,11 @@ import { hasRoleFromCheckpoint, saveRoleFromCheckpoint } from './role-checkpoint
 import {
   checkpointRowTitle,
   createHoldReveal,
-  focusedCheckpoint,
-  railGesture,
+  fanLayout,
+  neighborWindow,
+  railAnchorTop,
   railPointerFraction,
+  scrollFocusState,
   scrubPreviewRow,
   type CheckpointRow
 } from './transcript'
@@ -21,6 +23,9 @@ const SCRUB_THRESHOLD = 4
 /** Press-and-hold a tab/row this long (~2s) to reveal its SAVE ROLE / FORK
  *  actions. Same gesture for mouse and touch — desktop == mobile. */
 const HOLD_REVEAL_MS = 1500
+/** Neighbor rows rendered ABOVE and BELOW the focused one in the fan; generous
+ *  so it fills the view — Fresco clips the overflow at the boundary. */
+const NEIGHBOR_RADIUS = 12
 
 /**
  * Checkpoint timeline on the terminal context view.
@@ -74,19 +79,16 @@ export function CheckpointTimeline({
    */
   onScrub?: (fraction: number) => void
 }): React.JSX.Element | null {
-  /** STATE B: the full list is open (only via an explicit mini tap). */
-  const [open, setOpen] = useState(false)
   /** True while a rail scrub drag is active — drives the .dragging affordance. */
   const [scrubbing, setScrubbing] = useState(false)
-  /** STATE A: the checkpoint the single tab tracks (focused chapter) + its frac. */
+  /** The FOCUSED checkpoint (scroll/scrub) the list highlights + centres on. */
   const [focused, setFocused] = useState<{ index: number; frac: number } | null>(null)
-  /** The tab/row whose SAVE ROLE / FORK actions are revealed (held ~2s). */
+  /** The row whose SAVE ROLE / FORK actions are revealed (held ~2s). */
   const [acting, setActing] = useState<number | null>(null)
   const [savingIndex, setSavingIndex] = useState<number | null>(null)
   const [forkingIndex, setForkingIndex] = useState<number | null>(null)
   const railRef = useRef<HTMLDivElement>(null)
   const miniRef = useRef<HTMLDivElement>(null)
-  const listRef = useRef<HTMLDivElement>(null)
   // Rail scrub gesture: a press that travels past SCRUB_THRESHOLD becomes a
   // scrollbar drag; a press that stays put is a tap that opens the fan.
   const scrub = useRef<{ startY: number; moved: boolean }>({ startY: 0, moved: false })
@@ -102,46 +104,30 @@ export function CheckpointTimeline({
   )
   useEffect(() => () => hold.cancel(), [hold])
 
-  // STATE A: track the focused checkpoint for the tab (not while scrubbing — the
-  // scrub sets it directly). Null at the live tail → no tab.
+  // SCROLL → FOCUS: track the focused checkpoint (+ its PRECISE identity fraction
+  // in markerFrac) from the identity in view — not while scrubbing (the scrub
+  // sets it directly). Null at the live tail → the tab hides. The fraction is the
+  // ONE position source of truth for both the here-marker and the tab.
   useEffect(() => {
     if (scrubbing) return
-    const row = focusedCheckpoint(rows, activeIndex ?? null)
-    setFocused(row ? { index: row.index, frac: markerFrac ?? 1 } : null)
+    const { focusedIndex } = scrollFocusState(rows, activeIndex ?? null)
+    setFocused(focusedIndex !== null ? { index: focusedIndex, frac: markerFrac ?? 1 } : null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeIndex, markerFrac, scrubbing])
 
-  // Collapse State B, or the tab's revealed actions, on a pointerdown OUTSIDE the
-  // rail (touch has no mouseleave). The tab lives inside the rail, so tapping it
-  // never self-closes.
+  // Dismiss a row's revealed actions on a pointerdown OUTSIDE the rail (the tab
+  // is scroll-driven, not click-opened, so it needs no dismissal itself).
   useEffect(() => {
-    if (!open && acting === null) return
+    if (acting === null) return
     const onDown = (e: PointerEvent): void => {
       if (railRef.current && !railRef.current.contains(e.target as Node)) {
-        setOpen(false)
         setActing(null)
         setSavingIndex(null)
       }
     }
     document.addEventListener('pointerdown', onDown)
     return () => document.removeEventListener('pointerdown', onDown)
-  }, [open, acting])
-
-  // STATE B opens ANCHORED on the focus: scroll the active row to the middle so
-  // its neighbors fill above and below — it IS the same full list, just
-  // positioned at the focused checkpoint (not reset to T1).
-  // Anchor on `focused` (the drag/scroll focus) so a rail-drag DRIVES the list —
-  // it re-centres on the checkpoint under the drag — falling back to activeIndex.
-  useEffect(() => {
-    if (!open) return
-    const anchor = focused?.index ?? activeIndex ?? null
-    const node =
-      anchor != null
-        ? listRef.current?.querySelector<HTMLElement>(`[data-checkpoint="${anchor}"]`)
-        : null
-    node?.scrollIntoView({ block: 'center' })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, focused?.index, activeIndex])
+  }, [acting])
 
   if (rows.length === 0) return null
 
@@ -178,11 +164,10 @@ export function CheckpointTimeline({
 
   const stop = (e: React.MouseEvent): void => e.stopPropagation()
 
-  // Unified rail gesture: press-and-DRAG the line/marker → scrub the transcript;
-  // a press that never travels is a plain click/tap → open the stick list. Same
-  // for mouse and touch.
+  // Drag the line/marker → scrub the transcript. The line/marker stays draggable
+  // even while the list is shown (it's the always-present scroll indicator).
   const onRailPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
-    if (!onScrub || open) return
+    if (!onScrub) return
     scrub.current = { startY: e.clientY, moved: false }
     setScrubbing(true)
     e.currentTarget.setPointerCapture(e.pointerId)
@@ -194,26 +179,21 @@ export function CheckpointTimeline({
     scrub.current.moved = true
     const rect = miniRef.current.getBoundingClientRect()
     const frac = railPointerFraction(e.clientY, rect.top, rect.height, RAIL_INSET)
-    // DRAG scrubs the transcript to the dragged checkpoint (marker + context
-    // follow); the tab tracks the focus. A drag does NOT open the list.
+    // DRAG the line/marker → scrub the transcript to the dragged checkpoint; the
+    // focus (list highlight + re-centre) follows.
     onScrub(frac)
     const row = scrubPreviewRow(rows, frac)
     setFocused(row ? { index: row.index, frac } : null)
   }
   const onRailPointerUp = (e: React.PointerEvent<HTMLDivElement>): void => {
     setScrubbing(false)
+    scrub.current.moved = false
     if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId)
     }
   }
-  // A plain click/tap (no travel) opens the stick list; a drag is swallowed.
-  const onRailClick = (): void => {
-    const moved = scrub.current.moved
-    scrub.current.moved = false
-    if (railGesture(moved) === 'open') setOpen(true)
-  }
 
-  const here = activeIndex ?? null
+  const here = focused?.index ?? null
   const hereFrac =
     markerFrac !== undefined
       ? markerFrac
@@ -222,7 +202,6 @@ export function CheckpointTimeline({
         : 1
 
   const rowLabel = (row: CheckpointRow): string => checkpointRowTitle(row, titleMode)
-  const focusedRow = focused ? (rows.find((r) => r.index === focused.index) ?? null) : null
 
   const rowActions = (row: CheckpointRow, index: number): React.JSX.Element => (
     <span className="cr-ckpt-row-actions" onMouseDown={stop} onClick={stop}>
@@ -247,15 +226,72 @@ export function CheckpointTimeline({
     </span>
   )
 
+  // One row of the extended tab — the same `.cr-ckpt-row` markup, tap → jump,
+  // hold → actions. The focused row is `.active` and sits AT the marker.
+  const renderRow = (row: CheckpointRow): React.JSX.Element => {
+    const isActive = row.index === here
+    const isActing = acting === row.index
+    const isLoading = loadingIndex === row.index
+    return (
+      <div
+        key={row.index}
+        role="listitem"
+        className={`cr-ckpt-row${isActive ? ' active' : ''}${isActing ? ' acting' : ''}${
+          isLoading ? ' loading' : ''
+        }`}
+        aria-label={`Checkpoint ${row.index}`}
+        aria-busy={isLoading || undefined}
+        onMouseDown={(e) => e.preventDefault()}
+        onPointerDown={() => startHold(row.index)}
+        onPointerUp={endHold}
+        onPointerLeave={endHold}
+        onPointerCancel={endHold}
+        onClick={() => onTap(() => onGoto(row.index))}
+      >
+        {rowActions(row, row.index)}
+        <span className="cr-ckpt-row-label">
+          <span className="cr-ckpt-row-idx">T{row.index}</span>
+          <span className="cr-ckpt-row-title">{isLoading ? 'loading…' : rowLabel(row)}</span>
+        </span>
+        <span className="cr-ckpt-dot">
+          <i />
+        </span>
+        <span
+          className="cr-ckpt-prog"
+          style={isActive ? ({ ['--p']: 100 } as React.CSSProperties) : undefined}
+        />
+      </div>
+    )
+  }
+
+  const focusedRow = focused ? (rows.find((r) => r.index === focused.index) ?? null) : null
+  // TWO ZONES: scrolling the transcript shows the SINGLE tag (focused row only);
+  // scrolling/dragging the rail (scrubbing) FANS the full list around it.
+  const fanned = scrubbing && focused !== null && focusedRow !== null
+  const windowRows = fanned ? neighborWindow(rows, focused!.index, NEIGHBOR_RADIUS) : []
+  const fan = fanned ? fanLayout(windowRows, focused!.index) : null
+  // Show LIVE at the bottom of the fan only when it reaches the newest checkpoint.
+  const showLive =
+    fanned && windowRows.length > 0 && windowRows[windowRows.length - 1].index === rows[rows.length - 1].index
+  // ONE position source (refinement 1): the marker AND the focused tab/row use
+  // the SAME fraction → same Y. At the live tail (no focus) the marker rides its
+  // own live fraction.
+  const anchorFrac = focused ? focused.frac : hereFrac
+
   return (
     <div
       ref={railRef}
-      className={`cr-ckpt-rail${open ? ' open' : ''}${scrubbing ? ' dragging' : ''}${
+      // The rail stays NARROW always (never `.open`-widened); the tag/fan is a
+      // floating panel, so the mini's hit-area is only the line/marker strip and
+      // never steals transcript drags (HIGH-2). `.fanned` = a rail scrub drives
+      // the full fan; a plain transcript scroll shows only the single tag.
+      className={`cr-ckpt-rail${fanned ? ' fanned' : ''}${scrubbing ? ' dragging' : ''}${
         loadingIndex != null ? ' loading' : ''
       }`}
     >
-      {/* resting: line + count + you-are-here + live. Drag scrubs; a plain tap
-          opens the full list (State B). */}
+      {/* always-present line + count + here-marker (rides the PRECISE identity
+          fraction) + live dot; the line/marker is the scroll indicator + scrub
+          handle. */}
       <div
         ref={miniRef}
         className="cr-ckpt-mini"
@@ -263,110 +299,62 @@ export function CheckpointTimeline({
         onPointerMove={onRailPointerMove}
         onPointerUp={onRailPointerUp}
         onPointerCancel={onRailPointerUp}
-        onClick={onRailClick}
       >
         <div className="cr-ckpt-line" />
         <div className="cr-ckpt-count">
           <span className="n">{rows.length}</span>
           <span className="l">CP</span>
         </div>
-        <div className="cr-ckpt-here" style={{ top: `calc(16px + ${hereFrac} * (100% - 32px))` }} />
+        <div className="cr-ckpt-here" style={{ top: railAnchorTop(anchorFrac) }} />
         <div className="cr-ckpt-livedot" />
       </div>
 
-      {/* single-checkpoint tab tracking the focused chapter (both platforms).
-          Fresco's contract — a REAL `.cr-ckpt-row` lifted onto a floating panel
-          (`.cr-ckpt-scrub-preview`), inheriting the exact row look. Hold →
-          `.acting` reveals SAVE ROLE / FORK; click/tap → open the stick list. */}
-      {!open && focused && focusedRow && (
+      {/* The tab, anchored at the focused row's PRECISE fraction — the SAME
+          source as the here-marker, so the focused row is ALWAYS on the marker's
+          horizontal line (refinement 1). Transcript scroll → just the focused row
+          (single tag); rail scrub → the FAN: neighbors above + below the anchored
+          focus (refinements 3–4). Above/below clip at the view boundary without
+          moving the focus off the marker (refinement 2). Fresco lays out the fan
+          (focus at anchor, fan-up above, fan-down below, clipped). */}
+      {focused && focusedRow && (
         <div
           className="cr-ckpt-scrub-preview"
-          style={{ top: `calc(16px + ${focused.frac} * (100% - 32px))` }}
-          onPointerDown={() => startHold(focused.index)}
-          onPointerUp={endHold}
-          onPointerLeave={endHold}
-          onPointerCancel={endHold}
-          onClick={() => onTap(() => setOpen(true))}
+          style={{ top: railAnchorTop(focused.frac) }}
+          role="list"
+          aria-label="Checkpoints"
         >
-          <div className={`cr-ckpt-row active${acting === focused.index ? ' acting' : ''}`}>
-            {rowActions(focusedRow, focused.index)}
-            <span className="cr-ckpt-row-label">
-              <span className="cr-ckpt-row-idx">T{focused.index}</span>
-              <span className="cr-ckpt-row-title">{rowLabel(focusedRow)}</span>
-            </span>
-            <span className="cr-ckpt-dot">
-              <i />
-            </span>
+          {/* The FOCUS row is the anchor — its center sits on the marker Y (via
+              .cr-ckpt-fan-focus). fan-up/down are ABSOLUTE (out of flow) so they
+              never shift the focus off the marker, whatever the neighbor counts
+              (HIGH-1). They grow up/down and clip at the view boundary. */}
+          <div className="cr-ckpt-fan-focus">
+            {fan && <div className="cr-ckpt-fan-up">{fan.above.map(renderRow)}</div>}
+            {renderRow(focusedRow)}
+            {fan && (
+              <div className="cr-ckpt-fan-down">
+                {fan.below.map(renderRow)}
+                {showLive && (
+                  <div
+                    className={`cr-ckpt-row live${here === null ? ' active' : ''}`}
+                    role="listitem"
+                    aria-label="Live"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => onTap(() => onLive())}
+                  >
+                    <span className="cr-ckpt-row-label">
+                      <span className="cr-ckpt-row-idx">LIVE</span>
+                      <span className="cr-ckpt-row-title">running now</span>
+                    </span>
+                    <span className="cr-ckpt-dot">
+                      <i />
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
-
-      {/* STATE B: the full checkpoint list (same as desktop), opened anchored on
-          the focused checkpoint. Tap a row → jump; hold → its actions. */}
-      <div className="cr-ckpt-full">
-        <div className="cr-ckpt-head">
-          <span className="cr-ckpt-head-t">CHECKPOINTS</span>
-          <span className="cr-ckpt-head-c">LIVE · {rows.length}</span>
-        </div>
-        <div ref={listRef} className="cr-ckpt-list" role="list" aria-label="Checkpoints">
-          {rows.map((row) => {
-            const isActive = row.index === here
-            const isActing = acting === row.index
-            const isLoading = loadingIndex === row.index
-            return (
-              <div
-                key={row.index}
-                role="listitem"
-                data-checkpoint={row.index}
-                className={`cr-ckpt-row${isActive ? ' active' : ''}${isActing ? ' acting' : ''}${
-                  isLoading ? ' loading' : ''
-                }`}
-                aria-label={`Checkpoint ${row.index}`}
-                aria-busy={isLoading || undefined}
-                onMouseDown={(e) => e.preventDefault()}
-                onPointerDown={() => startHold(row.index)}
-                onPointerUp={endHold}
-                onPointerLeave={endHold}
-                onPointerCancel={endHold}
-                onClick={() => onTap(() => onGoto(row.index))}
-              >
-                {rowActions(row, row.index)}
-                <span className="cr-ckpt-row-label">
-                  <span className="cr-ckpt-row-idx">T{row.index}</span>
-                  <span className="cr-ckpt-row-title">{isLoading ? 'loading…' : rowLabel(row)}</span>
-                </span>
-                <span className="cr-ckpt-dot">
-                  <i />
-                </span>
-                <span
-                  className="cr-ckpt-prog"
-                  style={isActive ? ({ ['--p']: 100 } as React.CSSProperties) : undefined}
-                />
-              </div>
-            )
-          })}
-          <div
-            className={`cr-ckpt-row live${here === null ? ' active' : ''}`}
-            role="listitem"
-            aria-label="Live"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() =>
-              onTap(() => {
-                onLive()
-                setOpen(false)
-              })
-            }
-          >
-            <span className="cr-ckpt-row-label">
-              <span className="cr-ckpt-row-idx">LIVE</span>
-              <span className="cr-ckpt-row-title">running now</span>
-            </span>
-            <span className="cr-ckpt-dot">
-              <i />
-            </span>
-          </div>
-        </div>
-      </div>
     </div>
   )
 }
