@@ -1,4 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Notification, webContents } from 'electron'
+import type { WebContents } from 'electron'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -15,6 +16,7 @@ import { VoiceEngine } from './voice'
 import { startMobileServer, mobileUrls } from './mobile-server'
 import {
   AgentRole,
+  BrowserNodeData,
   CanvasNode,
   DEFAULT_TERMINAL_SIZE,
   TeamForkSpec,
@@ -41,6 +43,7 @@ import { isCodexCommand, resolveCodexRolloutByPid } from './codex-bind'
 import { isOpenCodeCommand, resolveOpencodeSessionByPid } from './opencode-bind'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
+import { createBrowserCast } from './browser-cast'
 
 import { TraceReader } from './trace'
 import { SessionTurnSync } from './session-sync'
@@ -685,6 +688,30 @@ function noteBrowserViewed(browserId: string): void {
   }
 }
 
+// Interactive remote browser (CDP transport). The renderer reports each
+// browser tab's <webview> webContents id (trusted IPC) so main can resolve a
+// browser id to the live webContents its screencast attaches to; a LAN /stream
+// client only ever READS this map (junk ids resolve to null → socket refused),
+// so it can't accumulate state. Keyed "browserId:tabId".
+const browserWebContents = new Map<string, number>()
+
+function resolveBrowserWebContents(browserId: string): WebContents | null {
+  const hit = store.nodeAcrossWorkspaces(browserId)
+  if (!hit || hit.node.kind !== 'browser') return null
+  const tabId = (hit.node as BrowserNodeData).activeTabId
+  const wcId = browserWebContents.get(`${browserId}:${tabId}`)
+  if (wcId === undefined) return null
+  const wc = webContents.fromId(wcId)
+  return wc && !wc.isDestroyed() ? wc : null
+}
+
+// Behind a flag: the interactive stream attaches the CDP debugger (mutually
+// exclusive with DevTools) and lives on the unauth LAN server, so it is opt-in.
+const browserCast = createBrowserCast({
+  resolveWebContents: resolveBrowserWebContents,
+  enabled: () => process.env.COOKREW_INTERACTIVE_BROWSER === '1'
+})
+
 function browserCommand(args: string[], terminalId: string): Promise<string> {
   if (!mainWindow) return Promise.reject(new Error('No window'))
   const id = randomUUID()
@@ -866,6 +893,7 @@ app.whenReady().then(() => {
     saveAttachment: (name, data) => saveAttachment(defaultAttachmentsDir(), name, data),
     browserThumb: (id) => browserThumbs.get(id),
     browserThumbRequested: noteBrowserViewed,
+    onUpgrade: (request, socket) => browserCast.upgrade(request, socket),
     clientHtmlPath: mobileClientPath,
     // Built renderer bundle — served to phones so mobile gets the full
     // desktop canvas UI (missing until `npm run build` in dev checkouts).
@@ -906,6 +934,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  browserCast.shutdown() // detach every CDP debugger cleanly
   store.flush()
   events.flush()
   sessionSync.dispose()
@@ -1110,6 +1139,16 @@ function registerIpc(): void {
   ipcMain.on('browser:thumb', (_e, browserId: string, dataUrl: string) => {
     const base64 = dataUrl.split(',')[1]
     if (base64) browserThumbs.set(browserId, Buffer.from(base64, 'base64'))
+  })
+
+  // The renderer reports each browser tab's webContents id once its <webview>
+  // reaches dom-ready, so the interactive-stream transport can resolve a
+  // browser id → live webContents to attach the CDP screencast.
+  ipcMain.on('browser:webcontents', (_e, browserId: string, tabId: string, wcId: number) => {
+    browserWebContents.set(`${browserId}:${tabId}`, wcId)
+  })
+  ipcMain.on('browser:webcontents-gone', (_e, browserId: string, tabId: string) => {
+    browserWebContents.delete(`${browserId}:${tabId}`)
   })
 
   // Browser command responses coming back from the renderer

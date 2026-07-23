@@ -191,6 +191,8 @@ export function createRemoteApi(): CookrewApi {
     onBrowserCommand: () => () => undefined,
     browserResult: () => undefined,
     browserThumb: () => undefined,
+    reportBrowserWebContents: () => undefined,
+    clearBrowserWebContents: () => undefined,
     onBrowserOpenTab: () => () => undefined,
     onBrowserPhoneViewing: () => () => undefined,
     onCmdW: () => () => undefined,

@@ -284,6 +284,26 @@ function BrowserTabView({
     return () => unregisterBrowserTab(browserId, tab.id)
   }, [browserId, browserName, tab.id])
 
+  // Report this tab's webContents id to main (for the interactive CDP stream)
+  // once the <webview> is attached; getWebContentsId() throws before dom-ready.
+  useEffect(() => {
+    const webview = webviewRef.current
+    if (!webview || !hasNativeWebview()) return
+    const report = (): void => {
+      try {
+        cookrew().reportBrowserWebContents(browserId, tab.id, webview.getWebContentsId())
+      } catch {
+        // not attached yet — the dom-ready listener will retry
+      }
+    }
+    report()
+    webview.addEventListener('dom-ready', report)
+    return () => {
+      webview.removeEventListener('dom-ready', report)
+      cookrew().clearBrowserWebContents(browserId, tab.id)
+    }
+  }, [browserId, tab.id])
+
   useEffect(() => {
     const webview = webviewRef.current
     if (!webview) return

@@ -156,6 +156,13 @@ export interface CookrewApi {
   browserResult: (id: string, ok: boolean, output: string) => void;
   /** Forward a browser thumbnail frame to main (served to the mobile client). */
   browserThumb: (browserId: string, dataUrl: string) => void;
+  /**
+   * Report a browser tab's <webview> webContents id to main once it's
+   * dom-ready, so the interactive-stream transport can attach the CDP
+   * screencast to the live page. Cleared when the tab unmounts.
+   */
+  reportBrowserWebContents: (browserId: string, tabId: string, webContentsId: number) => void;
+  clearBrowserWebContents: (browserId: string, tabId: string) => void;
   onBrowserOpenTab: (
     cb: (req: { webContentsId: number; url: string }) => void,
   ) => () => void;

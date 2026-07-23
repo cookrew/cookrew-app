@@ -51,6 +51,12 @@ export interface MobileServerDeps {
   clientHtmlPath: string
   /** Built renderer bundle — the full desktop canvas UI served to phones. */
   rendererDir: string
+  /**
+   * WebSocket 'upgrade' handler for the interactive-browser stream
+   * (/api/browser/:id/stream). Attached to both the HTTP and HTTPS servers so
+   * phones get ws:// on localhost and wss:// on the LAN.
+   */
+  onUpgrade?: (request: http.IncomingMessage, socket: import('node:stream').Duplex) => void
 }
 
 /**
@@ -76,9 +82,15 @@ export function startMobileServer(deps: MobileServerDeps): void {
     })
   }
 
+  const attachUpgrade = (server: http.Server | https.Server): void => {
+    if (deps.onUpgrade) server.on('upgrade', (request, socket) => deps.onUpgrade?.(request, socket))
+  }
+
   // Plain HTTP: fine for the Mac's own localhost (a secure context) and as a
   // no-mic fallback on the LAN.
-  listenWithRetry(http.createServer(requestHandler), MOBILE_PORT)
+  const plain = http.createServer(requestHandler)
+  attachUpgrade(plain)
+  listenWithRetry(plain, MOBILE_PORT)
 
   // HTTPS with a self-signed cert: the only way phones on the LAN get a
   // secure context, which the Web Speech / mic APIs require.
@@ -88,6 +100,7 @@ export function startMobileServer(deps: MobileServerDeps): void {
     secure.on('listening', () => {
       httpsReady = true
     })
+    attachUpgrade(secure)
     listenWithRetry(secure, MOBILE_HTTPS_PORT)
   }
 }

@@ -1404,6 +1404,24 @@ body,
   color: var(--muted, #8a8a8a);
 }
 
+/* Interactive stream: the view takes touch/keys (Fresco styles the affordances +
+   the live indicator; this is structural). */
+.browser-frame.streaming {
+  cursor: pointer;
+  touch-action: none; /* we forward touch/drag as input, not native scroll */
+}
+
+.browser-frame-live {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--hp, #32d74b);
+  z-index: 2;
+}
+
 .browser-frame-glyph {
   width: 28px;
   height: 28px;
