@@ -51,7 +51,8 @@
   .spawn-toast.leaving,
   .spawn-toast-hatch::before,
   .spawn-toast-hatch .vi-avatar,
-  .spawn-toast-avatar {
+  .spawn-toast-avatar,
+  .roster-recover:hover .roster-recover-coin::before {
     animation: none;
   }
 }
@@ -316,6 +317,112 @@
   color: var(--muted);
 }
 
+/* ---- roster RECOVER action (Fresco visual; Velvet wires recoverAgent) ----
+   A revive CTA on INACTIVE rows in the desktop row-action language: a compact
+   pixel chip whose leading COIN re-hatches (the spawn-hatch ring vocabulary — a
+   RETURNING agent) while you hover the button. Hidden until the row is hovered /
+   selected (slot reserved, opacity reveal — no reflow); the faded inactive row
+   un-fades with it, a small preview of the revival. Structure (Velvet renders on
+   inactive rows only, after .roster-text, before .roster-ago):
+     <button class="roster-recover"><span class="roster-recover-coin"></span>RECOVER</button> */
+.roster-recover {
+  flex: 0 0 auto;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 8px;
+  cursor: pointer;
+  opacity: 0; /* revealed on row hover/selected — slot reserved so no reflow */
+  transition:
+    opacity 130ms ease,
+    background 130ms ease,
+    border-color 130ms ease;
+}
+
+.roster-row:hover .roster-recover,
+.roster-recover:focus-visible {
+  opacity: 1;
+}
+
+.roster-recover:hover {
+  background: var(--amber-soft);
+  border-color: var(--amber-deep);
+}
+
+/* an inactive row un-fades while you aim at its revival */
+.roster-row.inactive:hover,
+.roster-row.inactive.selected {
+  opacity: 1;
+}
+
+/* the returning coin: idle-green (the same green a fresh spawn hatches with) and a
+   hatch RING that pulses while the button is hovered — the coin about to re-hatch. */
+.roster-recover-coin {
+  position: relative;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--hp);
+  flex: 0 0 auto;
+}
+
+.roster-recover-coin::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1.5px solid var(--amber);
+  opacity: 0;
+}
+
+.roster-recover:hover .roster-recover-coin::before {
+  animation: spawn-hatch-ring 900ms ease-out infinite;
+}
+
+/* invisible 44px hit-area — finger-safe without a bigger box */
+.roster-recover::after {
+  content: '';
+  position: absolute;
+  inset: -12px -6px;
+}
+
+/* ---- recover result toast (Velvet structure; Fresco tones by data-tone) ----
+   Transient strip pinned to the panel bottom: the honest result of a recover —
+   data-tone = ok | defer (workspace inactive, deferred boot) | warn (legacy
+   best-effort) | error. Auto-dismisses ~5s (component-driven). */
+.roster-toast {
+  margin: 8px 10px 10px;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink);
+  background: var(--cream-lo);
+  border: 1.5px solid var(--line);
+  border-radius: 4px;
+}
+
+.roster-toast[data-tone='ok'] {
+  border-color: var(--hp);
+}
+
+.roster-toast[data-tone='defer'],
+.roster-toast[data-tone='warn'] {
+  border-color: var(--amber-deep);
+}
+
+.roster-toast[data-tone='error'] {
+  border-color: #c0392b;
+  color: #7c1d12;
+}
+
 /* ---- phone ---- */
 @media (max-width: 700px) {
   .spawn-toasts {
@@ -331,6 +438,17 @@
 
   .roster-row {
     min-height: 48px;
+  }
+
+  /* no hover on touch: the revive CTA is always visible on inactive rows (the
+     44px hit-area comes from the base ::after), and the inactive fade eases so
+     the always-on CTA still reads at a glance. */
+  .roster-row.inactive .roster-recover {
+    opacity: 1;
+  }
+
+  .roster-row.inactive {
+    opacity: 0.7;
   }
 }
 
