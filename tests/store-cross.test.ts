@@ -140,3 +140,28 @@ describe('updateNode allow-list (unauth patches cannot plant refs)', () => {
     expect(updated.claudeSessionId).toBe('real-bind')
   })
 })
+
+describe('snapshotTerminal — capture before external kill (HIGH-1)', () => {
+  it('captures the node + peers + workspace via the removal hook', () => {
+    const { store, orch } = makeStore()
+    const coder = store.addNode(terminal('Coder')) as TerminalNodeData
+    store.connect(orch.id, coder.id)
+    let captured: { node: { id: string }; peers: string[]; workspaceId: string } | null = null
+    store.setTerminalRemovedHook((s) => {
+      captured = s as unknown as typeof captured
+    })
+    store.snapshotTerminal(coder.id)
+    expect(captured).not.toBeNull()
+    expect(captured!.node.id).toBe(coder.id)
+    expect(captured!.peers).toContain(orch.id)
+    expect(captured!.workspaceId).toBe(store.activeId)
+  })
+
+  it('ignores a non-terminal / unknown id without firing the hook', () => {
+    const { store } = makeStore()
+    let fired = false
+    store.setTerminalRemovedHook(() => { fired = true })
+    store.snapshotTerminal('nope')
+    expect(fired).toBe(false)
+  })
+})

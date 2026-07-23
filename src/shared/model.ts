@@ -43,6 +43,11 @@ export interface TerminalNodeData {
    * session_meta cwd + spawn-time window (note trace-sourced-context-final).
    */
   codexSessionRef?: string | null
+  /**
+   * OpenCode session id this terminal is bound to (`opencode --session <id>`),
+   * the OpenCode analogue of claudeSessionId. Absent for other harnesses.
+   */
+  opencodeSessionId?: string | null
   position: CanvasPosition
   size: CanvasSize
 }
@@ -206,6 +211,19 @@ export interface TeamMeta {
   savedAt: number
   nodeCount: number
   terminalCount: number
+}
+
+/** Outcome of an agent recovery, surfaced to the roster toast (agent-recover). */
+export interface RecoverResult {
+  ok: boolean
+  id: string
+  name: string
+  workspaceId: string
+  workspaceName: string
+  /** True when the PTY (re)booted now; false when deferred to workspace activation. */
+  spawned: boolean
+  /** Best-effort restore with no full snapshot (legacy pre-feature kill). */
+  legacy: boolean
 }
 
 /** A reusable agent persona saved from a terminal node. */
