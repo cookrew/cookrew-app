@@ -2694,37 +2694,33 @@ body.cookrew-mobile .cookrew-minimap {
    "you are here" marker (Velvet sets its `top` from scroll) + a green LIVE dot.
    No per-checkpoint dots — nothing to distort, calm until reached for.
 
-   ON CLICK/TAP (.cr-ckpt-rail.open — same on desktop and mobile): fans into the
-   full list — dots pinned right, titles fan left, LIVE at the bottom; the active
-   row shows a progress bar = how far through that (maybe multi-screen) checkpoint
-   you are. It sticks open until a click/tap outside dismisses it.
+   SCROLL & FOCUS (.cr-ckpt-rail.fanned during a rail scrub — same on
+   desktop and mobile): the FAN appears anchored at the here-marker Y. The FOCUSED
+   row is PINNED on the marker's horizontal line; neighbours fan UP and DOWN from
+   it and clip at the transcript boundary (the wrap's overflow) without ever
+   moving the focus off the marker. The active row shows a progress bar = how far
+   through that (maybe multi-screen) checkpoint you are.
 
    Fresco owns the visual; Velvet mounts the structure + the scroll↔active↔
-   progress sync (item 2 logic) and sets --p (0..100) on the active row's
-   .cr-ckpt-prog and the collapsed .cr-ckpt-here `top`. Structure:
-     <div class="cr-ckpt-rail">                          (right-edge zone; widens on .open)
-       <div class="cr-ckpt-mini">                        (resting: line + count)
+   progress sync (sets --p on the active .cr-ckpt-prog, and the .cr-ckpt-here /
+   .cr-ckpt-scrub-preview `top` both = railAnchorTop(focused.frac), the SAME
+   fraction, so marker-Y == focused-row-Y). Structure:
+     <div class="cr-ckpt-rail [.fanned]">                 (right-edge zone; .fanned during a rail scrub)
+       <div class="cr-ckpt-mini">                         (the BAR — always visible)
          <div class="cr-ckpt-line"></div>
          <div class="cr-ckpt-count"><span class="n">12</span><span class="l">CP</span></div>
-         <div class="cr-ckpt-here" style="top:…"></div>   (you-are-here marker)
+         <div class="cr-ckpt-here" style="top:railAnchorTop(frac)"></div>   (you-are-here marker)
          <div class="cr-ckpt-livedot"></div>
        </div>
-       <div class="cr-ckpt-full">                         (fanned: full list)
-         <div class="cr-ckpt-head"><span class="cr-ckpt-head-t">CHECKPOINTS</span><span class="cr-ckpt-head-c">LIVE · 12</span></div>
-         <div class="cr-ckpt-list">
-           <div class="cr-ckpt-row [active]" role="button" tabindex="0">
-             <span class="cr-ckpt-row-actions">
-               <button class="cr-ckpt-action"><CrIcon name="agent"/> ROLE</button>
-               <button class="cr-ckpt-action"><CrIcon name="fork"/> FORK</button>
-             </span>
-             <span class="cr-ckpt-row-label"><span class="cr-ckpt-row-idx">T9</span><span class="cr-ckpt-row-title">…</span></span>
-             <span class="cr-ckpt-dot"><i></i></span>
-             <span class="cr-ckpt-prog" style="--p:45"></span>       (active row only)
-           </div>
-           …  <div class="cr-ckpt-row live"> … running now … </div>   (LAST = LIVE, bottom)
-         </div>
+       <div class="cr-ckpt-scrub-preview" style="top:railAnchorTop(focused.frac)">   (the FAN, anchored ON the marker Y)
+         <div class="cr-ckpt-fan-up">   … neighbour .cr-ckpt-row … </div>          (grows UP from the focus)
+         <div class="cr-ckpt-fan-focus"><div class="cr-ckpt-row active">…</div></div>  (PINNED on the marker line)
+         <div class="cr-ckpt-fan-down"> … neighbour rows … <div class="cr-ckpt-row live">…</div> </div>   (grows DOWN)
        </div>
      </div>
+   Each .cr-ckpt-row: <span class="cr-ckpt-row-actions"><button class="cr-ckpt-action">…ROLE/FORK</button></span>
+     <span class="cr-ckpt-row-label"><span class="cr-ckpt-row-idx">T9</span><span class="cr-ckpt-row-title">…</span></span>
+     <span class="cr-ckpt-dot"><i></i></span> <span class="cr-ckpt-prog" style="--p:45"></span> (active only)
    Add .on-cream on .cr-ckpt-rail for light contexts. */
 
 .cr-ckpt-rail {
@@ -2737,25 +2733,17 @@ body.cookrew-mobile .cookrew-minimap {
   transition: width 160ms ease;
 }
 
-/* Unified: the list opens on CLICK/TAP (.open) and sticks — no hover-to-open.
-   The rail stays a slim scroll zone; the select list is a compact floating card
-   (see .cr-ckpt-full) that lifts out beside it, so the rail never widens into a
-   360px strip over the transcript. */
-.cr-ckpt-rail.open {
-  width: 40px;
-  max-width: 40px;
-}
-
-/* --- resting: line + count + you-are-here + live --- */
+/* Unified (desktop == mobile): the SELECT LIST fills the right side and shows the
+   focused checkpoint highlighted with its neighbours above + below. It reveals on
+   .fanned, driven by a rail scrub (no click-to-stick). One style both
+   platforms; only the trigger differs. */
+/* --- the BAR: line + count + here-marker + live. ALWAYS visible — even when the
+   list is open — so the here-marker never detaches from the precise scroll
+   position. The list (below) leaves an 18px right strip clear for this bar; the
+   focused row aligns to the here-marker's Y (Velvet's shared precise mechanism). */
 .cr-ckpt-mini {
   position: absolute;
   inset: 0;
-  transition: opacity 130ms ease;
-}
-
-.cr-ckpt-rail.open .cr-ckpt-mini {
-  opacity: 0;
-  pointer-events: none;
 }
 
 /* the rail line doubles as the scrollbar TRACK — a thin groove the diamond
@@ -2769,10 +2757,6 @@ body.cookrew-mobile .cookrew-minimap {
   border-radius: 3px;
   background: linear-gradient(var(--vi-line), #3a3a40);
   transition: background 140ms ease;
-}
-
-.cr-ckpt-rail.open .cr-ckpt-line {
-  background: linear-gradient(#3a3a40, #4a4a52);
 }
 
 .cr-ckpt-count {
@@ -2861,66 +2845,10 @@ body.cookrew-mobile .cookrew-minimap {
   }
 }
 
-/* --- the SELECT LIST (unified: desktop == mobile) ---
-   ONE style on both platforms — a COMPACT floating card lifted left of the rail,
-   NOT a 360px sidebar. It sticks open on .open (click / single-touch); the old
-   desktop hover-fan is gone. Sized near the single-checkpoint footprint. */
-.cr-ckpt-full {
-  position: absolute;
-  top: 50%;
-  right: 48px;
-  transform: translateY(-50%);
-  display: flex;
-  flex-direction: column;
-  width: min(78vw, 290px);
-  max-width: 78vw;
-  max-height: min(62vh, 340px);
-  background: linear-gradient(to left, rgba(20, 20, 23, 0.985), rgba(20, 20, 23, 0.94));
-  border: 1px solid var(--vi-line);
-  border-radius: 7px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
-  overflow: hidden;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 130ms ease;
-}
-
-.cr-ckpt-rail.open .cr-ckpt-full {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.cr-ckpt-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 14px;
-  flex: 0 0 auto;
-  background: var(--vi-panel);
-  border-bottom: 1.5px solid var(--vi-line);
-}
-
-.cr-ckpt-head-t {
-  font-family: var(--font-pixel);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: var(--vi-text);
-}
-
-.cr-ckpt-head-c {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--vi-dim);
-}
-
-.cr-ckpt-list {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  padding: 6px 0;
-}
+/* --- the SELECT LIST is now the FAN: .cr-ckpt-scrub-preview wraps
+   .cr-ckpt-fan-up / .cr-ckpt-fan-focus / .cr-ckpt-fan-down, styled in
+   agent-roster.css next to its markup. The old full-panel kit
+   (.cr-ckpt-full / -head / -list) was removed with the markup. --- */
 
 .cr-ckpt-row {
   display: flex;
@@ -2980,30 +2908,20 @@ body.cookrew-mobile .cookrew-minimap {
   border-radius: 2px;
 }
 
-/* Per-row SAVE ROLE / FORK — ONE appearance on both platforms: collapsed at
-   rest, and on reveal they drop to their OWN full-width line beneath the label
-   (never inline, so a narrow compact panel never gets FORK boxes floating over
-   the title). Only the TRIGGER differs: hover / focus (desktop pointer) or
-   .acting hold (touch) — the look is identical. */
+/* Per-row SAVE ROLE / FORK — ONE appearance on both platforms: revealed inline
+   (the wide list has the room) on hover / focus (desktop pointer) or .acting
+   hold (touch). Only the TRIGGER differs; the look is identical. */
 .cr-ckpt-row-actions {
-  display: none;
+  display: flex;
   gap: 5px;
-}
-
-.cr-ckpt-row:hover,
-.cr-ckpt-row:focus-within,
-.cr-ckpt-row.acting {
-  flex-wrap: wrap;
+  opacity: 0;
+  transition: opacity 110ms ease;
 }
 
 .cr-ckpt-row:hover .cr-ckpt-row-actions,
 .cr-ckpt-row:focus-within .cr-ckpt-row-actions,
 .cr-ckpt-row.acting .cr-ckpt-row-actions {
-  display: flex;
-  order: 3;
-  flex-basis: 100%;
-  justify-content: flex-end;
-  padding-top: 6px;
+  opacity: 1;
 }
 
 .cr-ckpt-row.live .cr-ckpt-row-actions {
@@ -3135,17 +3053,6 @@ body.cookrew-mobile .cookrew-minimap {
   border-color: var(--cream-hi);
 }
 
-.cr-ckpt-rail.on-cream .cr-ckpt-full {
-  background: linear-gradient(to left, var(--cream-hi), var(--cream-md));
-  border-color: var(--line);
-}
-
-.cr-ckpt-rail.on-cream .cr-ckpt-head {
-  background: var(--cream-md);
-  border-bottom: 1.5px solid var(--line);
-}
-
-.cr-ckpt-rail.on-cream .cr-ckpt-head-t,
 .cr-ckpt-rail.on-cream .cr-ckpt-row-title {
   color: var(--ink);
 }

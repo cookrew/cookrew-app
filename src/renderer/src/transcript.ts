@@ -339,13 +339,65 @@ export function scrubPreviewRow(
 }
 
 /**
- * Unified rail gesture routing (desktop == mobile — only the input device
- * differs): a press that TRAVELED past the tap threshold is a DRAG → it scrubs
- * the transcript to the dragged checkpoint; a press with NO travel is a plain
- * click/tap → it opens the stick-open select list. Pure — unit-tested.
+ * Scroll → focus → highlight (scroll-driven list, desktop == mobile): from the
+ * identity in view, the FOCUSED checkpoint to highlight, plus whether the list
+ * is shown at all (hidden at the live tail, shown once scrolled onto a
+ * checkpoint). Driven purely by scroll/focus — no click-to-open. Pure — tested.
  */
-export function railGesture(moved: boolean): 'scrub' | 'open' {
-  return moved ? 'scrub' : 'open'
+export function scrollFocusState(
+  rows: readonly CheckpointRow[],
+  activeIndex: number | null
+): { focusedIndex: number | null; listShown: boolean } {
+  const row = focusedCheckpoint(rows, activeIndex)
+  return { focusedIndex: row?.index ?? null, listShown: row !== null }
+}
+
+/**
+ * The window of rows for the EXTENDED tab (v3 correction): the focused row plus
+ * `radius` neighbors ABOVE and BELOW, clamped at the list ends. The tab is
+ * positioned at the focused row's PRECISE identity fraction (the here-marker
+ * position), so the focused row sits AT the marker with neighbors up/down — the
+ * "full list" IS the grown single tab, sharing one position source of truth (no
+ * separate list, no scroll-to-centre that would lose the precise spot). Pure —
+ * unit-tested.
+ */
+export function neighborWindow(
+  rows: readonly CheckpointRow[],
+  focusedIndex: number | null,
+  radius: number
+): CheckpointRow[] {
+  if (focusedIndex === null) return []
+  const at = rows.findIndex((r) => r.index === focusedIndex)
+  if (at < 0) return []
+  return rows.slice(Math.max(0, at - radius), Math.min(rows.length, at + radius + 1))
+}
+
+/**
+ * The `top` for a rail-anchored element at a scroll FRACTION (0..1) — the ONE
+ * position source shared by the here-marker AND the focused tab/row, so they
+ * always sit on the SAME horizontal line (marker-Y == focused-row-Y, refinement
+ * 1). Matches the `.cr-ckpt-here` geometry (16px inset each end). Clamped so a
+ * boundary fraction still resolves on the line. Pure — unit-tested.
+ */
+export function railAnchorTop(fraction: number): string {
+  const f = Math.max(0, Math.min(1, fraction))
+  return `calc(16px + ${f} * (100% - 32px))`
+}
+
+/**
+ * Split a window into the FOCUSED row (the anchor, always kept at the marker Y)
+ * and its neighbors ABOVE and BELOW — the fan fans up/down around the anchored
+ * focus. Near a boundary the window is already clamped (fewer above OR below),
+ * so alignment stays FIRST and the fan simply clips (refinement 2): the focused
+ * row never moves off the marker to force centering. Pure — unit-tested.
+ */
+export function fanLayout(
+  windowRows: readonly CheckpointRow[],
+  focusedIndex: number
+): { above: CheckpointRow[]; focused: CheckpointRow | null; below: CheckpointRow[] } {
+  const at = windowRows.findIndex((r) => r.index === focusedIndex)
+  if (at < 0) return { above: [], focused: null, below: [] }
+  return { above: windowRows.slice(0, at), focused: windowRows[at], below: windowRows.slice(at + 1) }
 }
 
 /**
