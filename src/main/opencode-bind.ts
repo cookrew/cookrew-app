@@ -9,6 +9,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
+import { realCwd } from './claude-fork'
 
 export function isOpenCodeCommand(command: string): boolean {
   return /^\s*opencode\b/.test(command)
@@ -78,7 +79,7 @@ export function resolveOpencodeSession(options: OpencodeBindOptions): string | n
     for (const name of files) {
       if (!name.startsWith('ses_') || !name.endsWith('.json')) continue
       const s = readSession(path.join(dir, name))
-      if (!s || s.directory !== options.cwd) continue
+      if (!s || s.directory !== realCwd(options.cwd)) continue
       if (options.exclude?.has(s.id)) continue
       if (
         options.spawnedAt !== null &&

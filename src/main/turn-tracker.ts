@@ -148,7 +148,8 @@ export class TurnTracker extends EventEmitter {
   /**
    * Completed turns per terminal. Kept OUTSIDE `tracked` so history survives
    * untrack/re-track cycles (workspace switches reattach the same tmux
-   * session); it is only dropped via clearHistory when a node is removed.
+   * session). It is NOT dropped on kill (the R2 recovery net keeps it as a
+   * session-matching signal); clearHistory remains for explicit purges only.
    * Backed by TurnStore files (~/.cookrew/turns) so restarts keep it too —
    * terminal ids are stable across runs.
    */

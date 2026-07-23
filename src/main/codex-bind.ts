@@ -8,6 +8,7 @@ import { closeSync, existsSync, openSync, readdirSync, readSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { CodexSessionMeta, parseCodexSessionMeta } from '../shared/trace-blocks'
+import { realCwd } from './claude-fork'
 
 /** |session_meta.timestamp - spawnedAt| tolerance for the spawn-time bind. */
 export const CODEX_SPAWN_WINDOW_MS = 180_000
@@ -136,7 +137,7 @@ export function resolveCodexRollout(options: CodexBindOptions): string | null {
       if (options.exclude?.has(path.resolve(file))) continue
       const first = readFirstLine(file)
       const meta = first === null ? null : parseCodexSessionMeta(first)
-      if (!meta || meta.cwd !== options.cwd) continue
+      if (!meta || meta.cwd !== realCwd(options.cwd)) continue
       if (
         options.spawnedAt !== null &&
         Math.abs(meta.timestampMs - options.spawnedAt) > CODEX_SPAWN_WINDOW_MS

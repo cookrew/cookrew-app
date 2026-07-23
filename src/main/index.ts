@@ -89,6 +89,14 @@ const LEGACY_COMMANDS: Record<string, string> = {
  * arm exit-deactivation. Detaches (workspace switch, app quit) are NOT exits:
  * the tmux session keeps running, so wasDisposed exits leave the entry active.
  */
+/** The node's harness session reference (claude/codex/opencode), or null. */
+function nodeSessionRef(node: TerminalNodeData): string | null {
+  const harness = harnessFor(node.command)
+  if (!harness) return null
+  const ref = node[harness.sessionField]
+  return typeof ref === 'string' ? ref : null
+}
+
 function recordSpawn(terminalId: string, session: PtySession): void {
   const hit = store.nodeAcrossWorkspaces(terminalId)
   if (!hit || hit.node.kind !== 'terminal') return
@@ -102,7 +110,8 @@ function recordSpawn(terminalId: string, session: PtySession): void {
     cwd: hit.node.cwd,
     workspaceId: hit.workspaceId,
     workspaceName: meta?.name ?? hit.workspaceId,
-    orch: hit.node.orch
+    orch: hit.node.orch,
+    sessionRef: nodeSessionRef(hit.node as TerminalNodeData)
   })
   session.once('exit', () => {
     if (!session.wasDisposed) agents.deactivate(terminalId)
@@ -185,7 +194,7 @@ function spawnTracked(t: {
               .map((n) => path.resolve(n.codexSessionRef as string))
           )
           const ref = resolveCodexRollout({ cwd: t.cwd, spawnedAt, exclude: claimed })
-          if (ref) store.updateNodeUnsafe(t.id, { codexSessionRef: ref })
+          if (ref) { store.updateNodeUnsafe(t.id, { codexSessionRef: ref }); agents.setSessionRef(t.id, ref) }
           else attempt(delays.slice(1)) // not written yet — retry later
         } catch (error) {
           console.error('Codex rollout bind failed:', error)
@@ -215,7 +224,7 @@ function spawnTracked(t: {
               .map((n) => n.opencodeSessionId as string)
           )
           const sid = resolveOpencodeSession({ cwd: t.cwd, spawnedAt, exclude: claimed })
-          if (sid) store.updateNodeUnsafe(t.id, { opencodeSessionId: sid })
+          if (sid) { store.updateNodeUnsafe(t.id, { opencodeSessionId: sid }); agents.setSessionRef(t.id, sid) }
           else attempt(delays.slice(1)) // not written yet — retry later
         } catch (error) {
           console.error('OpenCode session bind failed:', error)
@@ -290,7 +299,7 @@ function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
     sessionSync.unwatch(id)
     ptys.killDetached(id)
     turns.untrack(id)
-    turns.clearHistory(id)
+    // Keep turn history as the recovery signal (see removeNode, R2 fix).
     agents.deactivate(id)
   }
   store.removeWorkspace(meta.id) // switches away first if active (fires 'switch')
@@ -408,9 +417,13 @@ function recoverAgent(id: string): RecoverResult {
   if (!entry) throw new Error(`No recoverable agent '${id}'`)
   const wsExists = store.list().workspaces.some((w) => w.id === entry.workspaceId)
   const targetWs = wsExists ? entry.workspaceId : store.activeId
+  const harness = harnessFor(entry.command)
   const node: TerminalNodeData = {
     kind: 'terminal', id, name: entry.name, preset: entry.preset,
     command: entry.command, cwd: entry.cwd, orch: entry.orch, role: entry.role,
+    // Carry the recorded session ref so legacy recover resumes the exact
+    // session (R2 fix), not a fresh one.
+    ...(harness && entry.sessionRef ? { [harness.sessionField]: entry.sessionRef } : {}),
     position: { x: 240, y: 200 }, size: DEFAULT_TERMINAL_SIZE
   }
   const added = store.addNodeToWorkspace(targetWs, node) as TerminalNodeData
@@ -427,7 +440,10 @@ function recoverAgent(id: string): RecoverResult {
 function removeNode(id: string): void {
   sessionSync.unwatch(id)
   turns.untrack(id)
-  turns.clearHistory(id)
+  // NOTE: turn history is deliberately NOT cleared on kill — it is the third
+  // recovery net (resolveClaudeSessionId matches it to the real session when
+  // no snapshot/registry ref exists). Disk-capped at 100/agent, negligible;
+  // clearing it destroyed a recovery signal for nothing (R2 fix).
   ptys.kill(id)
   browserThumbs.delete(id)
   store.removeNode(id)
