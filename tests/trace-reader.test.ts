@@ -114,20 +114,25 @@ describe('TraceReader (paged trace API over agent files)', () => {
     expect(page.blocks[0].prompt).toBe('ask 1')
   })
 
-  it('lazily binds a Codex terminal to its rollout and persists the ref', async () => {
+  it('reads the AUTHORITATIVE bound rollout; an unbound codex yields empty (no mtime rebind)', async () => {
     const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-store-')))
     const base = mkdtempSync(path.join(tmpdir(), 'trace-codex-'))
     const file = rollout(dayDir(base), 'sess', '/work/repo', Date.now(), ['hello codex'])
-    const node = store.addNode(
+    // Unbound codex node: the trace reader must NOT guess a rollout (the bind
+    // is deterministic at spawn via lsof, never an mtime scan here).
+    const unbound = store.addNode(
       terminal({ preset: 'Codex', command: 'codex', claudeSessionId: null })
     ) as TerminalNodeData
-
     const reader = new TraceReader(store, { codexSessionsDir: base })
-    const page = await reader.page(node.id, {})
+    expect(await reader.page(unbound.id, {})).toEqual({ blocks: [], total: 0, source: null })
+    // Bound codex node (ref set by the spawn binder) → reads exactly that file.
+    const bound = store.addNode(
+      terminal({ preset: 'Codex', command: 'codex', claudeSessionId: null, codexSessionRef: file })
+    ) as TerminalNodeData
+    store.updateNodeUnsafe(bound.id, { codexSessionRef: file })
+    const page = await reader.page(bound.id, {})
     expect(page.source).toBe('codex')
     expect(page.blocks[0]).toMatchObject({ id: 'p1', prompt: 'hello codex' })
-    const persisted = store.node(node.id) as TerminalNodeData
-    expect(persisted.codexSessionRef).toBe(file)
   })
 
   it('returns an empty page for unbound/sessionless terminals', async () => {
@@ -140,11 +145,9 @@ describe('TraceReader (paged trace API over agent files)', () => {
 
 
 describe('TraceReader security + disambiguation (integration takeover)', () => {
-  it('rejects a planted codexSessionRef outside the sessions tree', async () => {
+  it('rejects a planted codexSessionRef outside the sessions tree (never read, no fallback)', async () => {
     const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-sec-')))
     const base = mkdtempSync(path.join(tmpdir(), 'trace-sec-codex-'))
-    // A real rollout exists so the lazy rebind has a legitimate target.
-    const good = rollout(dayDir(base), 'good', '/work/repo', Date.now(), ['ok'])
     const evil = path.join(mkdtempSync(path.join(tmpdir(), 'evil-')), 'secrets.jsonl')
     writeFileSync(evil, '{"type":"session_meta","payload":{}}\n')
     const node = store.addNode(
@@ -153,13 +156,12 @@ describe('TraceReader security + disambiguation (integration takeover)', () => {
     store.updateNodeUnsafe(node.id, { codexSessionRef: evil })
 
     const reader = new TraceReader(store, { codexSessionsDir: base })
-    const page = await reader.page(node.id, {})
-    // The planted path is never read; the legitimate rollout wins instead.
-    expect((store.node(node.id) as TerminalNodeData).codexSessionRef).toBe(good)
-    expect(page.blocks[0]?.prompt).toBe('ok')
+    // Out-of-tree ref is rejected → no trace, and the evil file is never read
+    // (and no mtime fallback that could grab a stray).
+    expect(await reader.page(node.id, {})).toEqual({ blocks: [], total: 0, source: null })
   })
 
-  it('never binds a rollout already claimed by another terminal', async () => {
+  it('each codex terminal reads its OWN bound rollout — no cross-read', async () => {
     const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-two-')))
     const base = mkdtempSync(path.join(tmpdir(), 'trace-two-codex-'))
     const first = rollout(dayDir(base), 'one', '/work/repo', Date.now(), ['one'])
@@ -167,16 +169,15 @@ describe('TraceReader security + disambiguation (integration takeover)', () => {
     const a = store.addNode(
       terminal({ preset: 'Codex', command: 'codex', claudeSessionId: null, codexSessionRef: first })
     ) as TerminalNodeData
-    // a's ref must be inside the validated tree, so re-add it via unsafe path.
     store.updateNodeUnsafe(a.id, { codexSessionRef: first })
     const b = store.addNode(
-      terminal({ preset: 'Codex', command: 'codex', claudeSessionId: null })
+      terminal({ preset: 'Codex', command: 'codex', claudeSessionId: null, codexSessionRef: second })
     ) as TerminalNodeData
+    store.updateNodeUnsafe(b.id, { codexSessionRef: second })
 
     const reader = new TraceReader(store, { codexSessionsDir: base })
-    const page = await reader.page(b.id, {})
-    expect((store.node(b.id) as TerminalNodeData).codexSessionRef).toBe(second)
-    expect(page.blocks[0]?.prompt).toBe('two')
+    expect((await reader.page(a.id, {})).blocks[0]?.prompt).toBe('one')
+    expect((await reader.page(b.id, {})).blocks[0]?.prompt).toBe('two')
   })
 
   it('appends incrementally: growth is parsed without a full re-read', async () => {

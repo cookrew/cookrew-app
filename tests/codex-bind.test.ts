@@ -2,7 +2,12 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { resolveCodexRollout, sessionIdFromRolloutPath } from '../src/main/codex-bind'
+import {
+  resolveCodexRollout,
+  resolveCodexRolloutByPid,
+  rolloutFromOpenFiles,
+  sessionIdFromRolloutPath
+} from '../src/main/codex-bind'
 import { parseCodexSessionMeta } from '../src/shared/trace-blocks'
 
 const CWD = '/Users/drej/workspace/cookrew-dev'
@@ -88,3 +93,44 @@ describe('codex resume-on-spawn key (sessionIdFromRolloutPath)', () => {
     expect(sessionIdFromRolloutPath('/x/rollout-no-id.jsonl')).toBeNull()
   })
 })
+
+describe('rolloutFromOpenFiles / resolveCodexRolloutByPid (deterministic lsof bind)', () => {
+  it('returns the single rollout a process holds open, 1:1', () => {
+    const open = [
+      '/dev/null',
+      '/Users/x/.codex/sessions/2026/07/23/rollout-2026-07-23T20-46-41-019f8f03-88ee.jsonl',
+      '/Users/x/.codex/config.toml'
+    ]
+    expect(rolloutFromOpenFiles(open)).toBe(
+      '/Users/x/.codex/sessions/2026/07/23/rollout-2026-07-23T20-46-41-019f8f03-88ee.jsonl'
+    )
+  })
+  it('refuses to guess when zero or multiple rollouts are open (honest unbound)', () => {
+    expect(rolloutFromOpenFiles(['/tmp/x', '/etc/hosts'])).toBeNull()
+    expect(
+      rolloutFromOpenFiles([
+        '/a/sessions/rollout-1-aaa.jsonl',
+        '/a/sessions/rollout-2-bbb.jsonl'
+      ])
+    ).toBeNull()
+  })
+  it('resolveCodexRolloutByPid: null for no/invalid pid, else the open rollout', () => {
+    const reader = () => ['/a/sessions/rollout-9-ccc.jsonl']
+    expect(resolveCodexRolloutByPid(1234, reader)).toBe('/a/sessions/rollout-9-ccc.jsonl')
+    expect(resolveCodexRolloutByPid(null, reader)).toBeNull()
+    expect(resolveCodexRolloutByPid(0, reader)).toBeNull()
+    expect(resolveCodexRolloutByPid(1234, () => [])).toBeNull()
+  })
+
+  it('dedupes the same rollout held on two fds → still one bind (W1)', () => {
+    const p='/Users/x/.codex/sessions/2026/07/24/rollout-2026-07-24T00-00-00-abc.jsonl'
+    expect(rolloutFromOpenFiles([p, p])).toBe(p)
+  })
+
+  it('refuses two DIFFERENT rollouts (ambiguous → unbound)', () => {
+    const a='/Users/x/.codex/sessions/2026/07/24/rollout-a.jsonl'
+    const b='/Users/x/.codex/sessions/2026/07/24/rollout-b.jsonl'
+    expect(rolloutFromOpenFiles([a, b])).toBeNull()
+  })
+})
+

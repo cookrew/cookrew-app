@@ -224,6 +224,13 @@ export interface RecoverResult {
   spawned: boolean
   /** Best-effort restore with no full snapshot (legacy pre-feature kill). */
   legacy: boolean
+  /**
+   * True when the EXACT prior session was restored (same ref + first turn).
+   * False = the exact session couldn't be located, so the node's shell is
+   * restored but NOT booted into a fresh/stray session (EXACT-CONTEXT gate) —
+   * the toast says so instead of pretending.
+   */
+  exact: boolean
 }
 
 /** A reusable agent persona saved from a terminal node. */

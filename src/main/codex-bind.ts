@@ -5,6 +5,7 @@
 // ref persists on the node (codexSessionRef) like claudeSessionId.
 
 import { closeSync, existsSync, openSync, readdirSync, readSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { CodexSessionMeta, parseCodexSessionMeta } from '../shared/trace-blocks'
@@ -82,6 +83,60 @@ function dayDirs(base: string, aroundMs: number): string[] {
     )
   }
   return dirs
+}
+
+/**
+ * The rollout file a codex PROCESS holds open (agent-recover EXACT-CONTEXT
+ * gate): the process↔file relationship is authoritative and 1:1, so this can
+ * never grab a stray or cross-wire two agents the way the mtime scan did.
+ * Pure over a list of open-file paths (lsof output) so it is unit-testable.
+ */
+export function rolloutFromOpenFiles(openFiles: readonly string[]): string | null {
+  // Dedupe first: lsof -Fn emits one line per fd, so the process holding its
+  // rollout on multiple fds (append + read) yields the same path twice — that
+  // is still ONE rollout, not an ambiguous two.
+  const rollouts = [
+    ...new Set(
+      openFiles.filter(
+        (f) => /rollout-.*\.jsonl$/.test(f) && f.includes(`${path.sep}sessions${path.sep}`)
+      )
+    )
+  ]
+  // Exactly one session rollout per process; if genuinely ambiguous (two
+  // DIFFERENT rollouts), refuse to guess (honest unbound beats a wrong bind).
+  return rollouts.length === 1 ? rollouts[0] : null
+}
+
+/** Injectable for tests; returns the absolute paths a pid holds open. */
+export type OpenFilesReader = (pid: number) => string[]
+
+const defaultOpenFiles: OpenFilesReader = (pid) => {
+  try {
+    return execFileSync('lsof', ['-p', String(pid), '-Fn'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 4000
+    })
+      .toString('utf8')
+      .split('\n')
+      .filter((l) => l.startsWith('n'))
+      .map((l) => l.slice(1))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Deterministically resolve the rollout for a codex terminal by the file its
+ * process holds open (via lsof of the tmux pane pid — `exec codex` makes the
+ * pane pid the codex process). No mtime, no cwd guessing, no cross-wiring.
+ * Null when the process has not opened its rollout yet (poll again) or is gone.
+ */
+export function resolveCodexRolloutByPid(
+  pid: number | null,
+  readOpenFiles: OpenFilesReader = defaultOpenFiles
+): string | null {
+  if (pid === null || !Number.isFinite(pid) || pid <= 0) return null
+  return rolloutFromOpenFiles(readOpenFiles(pid))
 }
 
 export interface CodexBindOptions {

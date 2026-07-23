@@ -20,12 +20,7 @@ import {
 } from '../shared/trace-blocks'
 import { claudeSessionFile } from './claude-fork'
 import { isClaudeCommand } from '../shared/claude-fork'
-import {
-  defaultCodexSessionsDir,
-  isCodexCommand,
-  resolveCodexRollout,
-  sessionIdFromRolloutPath
-} from './codex-bind'
+import { defaultCodexSessionsDir, isCodexCommand } from './codex-bind'
 import type { WorkspaceStore } from './store'
 
 export type TraceSource = 'claude' | 'codex' | null
@@ -148,31 +143,11 @@ export class TraceReader {
 
   private codexFile(node: TerminalNodeData): string | null {
     if (!isCodexCommand(node.command)) return null
+    // Use ONLY the authoritative bound ref (set deterministically at spawn by
+    // lsof of the codex process). No mtime rebind here — that was a stray-grab
+    // / cross-wiring source (EXACT-CONTEXT gate). Unbound → no trace, honest.
     const bound = this.validCodexRef(node.codexSessionRef)
-    if (bound && existsSync(bound)) return bound
-    // Lazy (re)bind: rollouts appear seconds after our spawn. Rollouts
-    // claimed by OTHER terminals are excluded — two codex terminals in one
-    // cwd must never share a file — and a node rebinding after its ref file
-    // vanished prefers its own previous session_id (from the ref filename).
-    const claimed = new Set(
-      this.store
-        .terminalsAcross()
-        .filter((t) => t.id !== node.id && typeof t.codexSessionRef === 'string')
-        .map((t) => path.resolve(t.codexSessionRef as string))
-    )
-    const resolved = resolveCodexRollout({
-      cwd: node.cwd,
-      spawnedAt: null,
-      sessionsDir: this.options.codexSessionsDir,
-      exclude: claimed,
-      preferSessionId: node.codexSessionRef
-        ? sessionIdFromRolloutPath(node.codexSessionRef)
-        : null
-    })
-    if (resolved && this.store.node(node.id)) {
-      this.store.updateNodeUnsafe(node.id, { codexSessionRef: resolved })
-    }
-    return resolved
+    return bound && existsSync(bound) ? bound : null
   }
 
   private async blocksOf(

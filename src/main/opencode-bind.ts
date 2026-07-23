@@ -7,6 +7,7 @@
 // so `opencode --session <id>` resumes it. Mirrors codex-bind exactly.
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { realCwd } from './claude-fork'
@@ -41,6 +42,67 @@ function readSession(file: string): OpencodeSession | null {
   } catch {
     return null
   }
+}
+
+/** The ses_ id an opencode PROCESS holds open (deterministic, 1:1). Pure. */
+export function opencodeSessionFromOpenFiles(openFiles: readonly string[]): string | null {
+  // Dedupe: lsof -Fn lists one line per fd; the same session held on two fds
+  // is one session, not an ambiguous pair.
+  const ids = [
+    ...new Set(
+      openFiles
+        .filter((f) => /\/ses_[A-Za-z0-9]+\.json$/.test(f) && f.includes('storage'))
+        .map((f) => path.basename(f, '.json'))
+    )
+  ]
+  return ids.length === 1 ? ids[0] : null
+}
+
+/**
+ * Does a resumable session file still exist for this ses_ id? (S1 — the
+ * EXACT-CONTEXT gate must not pass a DELETED opencode session and fresh-boot.)
+ * The file lives under a hashed <projectID>/ we don't reconstruct, so scan the
+ * project dirs for `<sessionId>.json`. The shape check also guards traversal.
+ */
+export function opencodeSessionFileExists(
+  sessionId: string,
+  storageDir: string = defaultOpencodeStorageDir()
+): boolean {
+  if (!/^ses_[A-Za-z0-9]+$/.test(sessionId)) return false
+  if (!existsSync(storageDir)) return false
+  let projects: string[]
+  try {
+    projects = readdirSync(storageDir)
+  } catch {
+    return false
+  }
+  return projects.some((proj) => existsSync(path.join(storageDir, proj, `${sessionId}.json`)))
+}
+
+export type OpencodeOpenFilesReader = (pid: number) => string[]
+
+const defaultOpencodeOpenFiles: OpencodeOpenFilesReader = (pid) => {
+  try {
+    return execFileSync('lsof', ['-p', String(pid), '-Fn'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 4000
+    })
+      .toString('utf8')
+      .split('\n')
+      .filter((l) => l.startsWith('n'))
+      .map((l) => l.slice(1))
+  } catch {
+    return []
+  }
+}
+
+/** Deterministically resolve an opencode session by the file its process holds open. */
+export function resolveOpencodeSessionByPid(
+  pid: number | null,
+  readOpenFiles: OpencodeOpenFilesReader = defaultOpencodeOpenFiles
+): string | null {
+  if (pid === null || !Number.isFinite(pid) || pid <= 0) return null
+  return opencodeSessionFromOpenFiles(readOpenFiles(pid))
 }
 
 export interface OpencodeBindOptions {
