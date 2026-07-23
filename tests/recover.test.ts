@@ -9,7 +9,8 @@ const base: RecoverResult = {
   workspaceId: 'ws-1',
   workspaceName: 'cookrew',
   spawned: true,
-  legacy: false
+  legacy: false,
+  exact: true
 }
 
 describe('recoverEligible (agent-recover: which roster rows get the button)', () => {
@@ -31,16 +32,17 @@ describe('recoverToastFor (result → toast copy, verbatim from the landed contr
       text: 'Recovered Fresco into cookrew — resumes when that workspace opens'
     })
   })
-  it('legacy:true → best-effort copy (pre-snapshot kill)', () => {
-    expect(recoverToastFor({ ...base, legacy: true })).toEqual({
+  it('!exact → honest "couldn\'t restore exact session" warn (EXACT-CONTEXT gate)', () => {
+    expect(recoverToastFor({ ...base, exact: false, spawned: false })).toEqual({
       tone: 'warn',
-      text: 'Recovered Fresco (best-effort — pre-snapshot kill, session may start fresh)'
+      text: "Recovered Fresco's position, but its exact session couldn't be located — not resumed"
     })
   })
-  it('legacy takes precedence over the defer copy (legacy + deferred boot)', () => {
-    // A legacy restore into an inactive workspace: the session-may-start-fresh
-    // caveat outranks the defer note — one toast, the stronger warning.
-    expect(recoverToastFor({ ...base, legacy: true, spawned: false }).tone).toBe('warn')
+  it('!exact outranks defer/legacy (never a false success)', () => {
+    expect(recoverToastFor({ ...base, exact: false, legacy: true, spawned: false }).tone).toBe('warn')
+  })
+  it('legacy with exact restore is a clean recovery (no false caveat)', () => {
+    expect(recoverToastFor({ ...base, legacy: true }).tone).toBe('ok')
   })
   it('ok:false → error toast', () => {
     expect(recoverToastFor({ ...base, ok: false }).tone).toBe('error')

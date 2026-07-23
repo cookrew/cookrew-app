@@ -27,7 +27,8 @@ import { buildResumeForkNotice } from '../src/shared/fork'
 import {
   claudeSpawnCommand,
   forkClaudeSession,
-  resolveClaudeSessionId
+  resolveClaudeSessionId,
+  resolveExistingClaudeSession
 } from '../src/main/claude-fork'
 
 const T0 = Date.parse('2026-07-19T10:00:00.000Z')
@@ -612,5 +613,26 @@ describe('realCwd / symlinked cwd resume (R2 fix)', () => {
     expect(claudeSpawnCommand('claude', link, sid, projectsDir)).toBe(
       `claude --resume ${sid}` // TRUE resume, not --session-id (fresh)
     )
+  })
+})
+
+describe('resolveExistingClaudeSession (strict — never mints fresh, R2 gate)', () => {
+  it('returns the stored id when its file exists, else NULL (no fresh mint)', () => {
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'cookrew-strict-'))
+    const dir = path.join(projectsDir, claudeProjectSlug('/work/repo'))
+    mkdirSync(dir, { recursive: true })
+    const sid = '22222222-3333-4444-8555-666666666666'
+    writeFileSync(path.join(dir, `${sid}.jsonl`), sessionLines(1).join('\n') + '\n')
+
+    expect(
+      resolveExistingClaudeSession({ command: 'claude', cwd: '/work/repo', storedId: sid, turns: [], projectsDir })
+    ).toBe(sid)
+    // No file for the stored id → NULL, never a random uuid.
+    expect(
+      resolveExistingClaudeSession({ command: 'claude', cwd: '/work/repo', storedId: '99999999-3333-4444-8555-666666666666', turns: [], projectsDir })
+    ).toBeNull()
+    expect(
+      resolveExistingClaudeSession({ command: 'claude', cwd: '/work/repo', storedId: null, turns: [], projectsDir })
+    ).toBeNull()
   })
 })

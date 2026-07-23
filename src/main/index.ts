@@ -37,9 +37,10 @@ import {
   roleSessionDir,
   saveRoleSessionCopy
 } from './claude-fork'
-import { isCodexCommand, resolveCodexRollout } from './codex-bind'
-import { isOpenCodeCommand, resolveOpencodeSession } from './opencode-bind'
+import { isCodexCommand, resolveCodexRolloutByPid } from './codex-bind'
+import { isOpenCodeCommand, resolveOpencodeSessionByPid } from './opencode-bind'
 import { harnessFor } from './harness'
+import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
 import { TraceReader } from './trace'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
@@ -175,9 +176,10 @@ function spawnTracked(t: {
   // appears seconds AFTER boot, so try once after a grace delay; the trace
   // reader lazily re-binds on first fetch if this attempt is too early.
   if (isCodexCommand(command) && !t.codexSessionRef) {
-    const spawnedAt = Date.now()
-    // Staged retry until bound (the 8s one-shot can miss — live probe showed
-    // it): an early-killed codex agent would otherwise recover fresh.
+    // DETERMINISTIC bind (EXACT-CONTEXT gate): the rollout is the file the
+    // codex PROCESS holds open (lsof of the pane pid), never a most-recent
+    // mtime guess — so it cannot grab a stray or cross-wire two agents. Poll
+    // until the process opens its rollout (at session start / first turn).
     const attempt = (delays: number[]): void => {
       if (delays.length === 0) return
       setTimeout(() => {
@@ -185,53 +187,49 @@ function spawnTracked(t: {
           const hit = store.nodeAcrossWorkspaces(t.id)
           if (!hit || hit.node.kind !== 'terminal') return
           if ((hit.node as TerminalNodeData).codexSessionRef) return
-          // Same-cwd siblings must never share a rollout (disambiguation):
-          // exclude refs other terminals already claimed.
-          const claimed = new Set(
-            store
-              .terminalsAcross()
-              .filter((n) => n.id !== t.id && typeof n.codexSessionRef === 'string')
-              .map((n) => path.resolve(n.codexSessionRef as string))
-          )
-          const ref = resolveCodexRollout({ cwd: t.cwd, spawnedAt, exclude: claimed })
-          if (ref) { store.updateNodeUnsafe(t.id, { codexSessionRef: ref }); agents.setSessionRef(t.id, ref) }
-          else attempt(delays.slice(1)) // not written yet — retry later
+          const ref = resolveCodexRolloutByPid(ptys.panePid(t.id))
+          if (!ref) return void attempt(delays.slice(1)) // rollout not open yet
+          // 1:1 authoritative: a rollout already owned by another node is never
+          // reassignable (defense-in-depth; lsof already makes this 1:1).
+          if (isRefOwned(store.terminalsAcross(), t.id, 'codexSessionRef', ref)) {
+            return void attempt(delays.slice(1))
+          }
+          store.updateNodeUnsafe(t.id, { codexSessionRef: ref })
+          agents.setSessionRef(t.id, ref)
         } catch (error) {
           console.error('Codex rollout bind failed:', error)
         }
       }, delays[0])
     }
-    attempt([8000, 20000, 45000])
+    attempt([3000, 8000, 20000, 45000])
   }
   // OpenCode session bind (Tinker recipe): the ses_<id>.json appears at/after
   // the first turn, so retry on a schedule until it binds (MEDIUM-3 — the
   // lazy re-bind, not a single shot). recover snapshots then carry
   // opencodeSessionId so `opencode --session <id>` can resume.
   if (isOpenCodeCommand(command) && !t.opencodeSessionId) {
-    const spawnedAt = Date.now()
+    // DETERMINISTIC bind via lsof of the pane pid (same 1:1 guarantee as
+    // codex) — never an mtime guess that could stray/cross-wire.
     const attempt = (delays: number[]): void => {
       if (delays.length === 0) return
       setTimeout(() => {
         try {
           const hit = store.nodeAcrossWorkspaces(t.id)
-          // Gone, or already bound by a prior attempt → stop.
           if (!hit || hit.node.kind !== 'terminal') return
           if ((hit.node as TerminalNodeData).opencodeSessionId) return
-          const claimed = new Set(
-            store
-              .terminalsAcross()
-              .filter((n) => n.id !== t.id && typeof n.opencodeSessionId === 'string')
-              .map((n) => n.opencodeSessionId as string)
-          )
-          const sid = resolveOpencodeSession({ cwd: t.cwd, spawnedAt, exclude: claimed })
-          if (sid) { store.updateNodeUnsafe(t.id, { opencodeSessionId: sid }); agents.setSessionRef(t.id, sid) }
-          else attempt(delays.slice(1)) // not written yet — retry later
+          const sid = resolveOpencodeSessionByPid(ptys.panePid(t.id))
+          if (!sid) return void attempt(delays.slice(1))
+          if (isRefOwned(store.terminalsAcross(), t.id, 'opencodeSessionId', sid)) {
+            return void attempt(delays.slice(1))
+          }
+          store.updateNodeUnsafe(t.id, { opencodeSessionId: sid })
+          agents.setSessionRef(t.id, sid)
         } catch (error) {
           console.error('OpenCode session bind failed:', error)
         }
       }, delays[0])
     }
-    attempt([8000, 20000, 45000])
+    attempt([3000, 8000, 20000, 45000])
   }
   // Session-bound terminals: the Claude session JSONL is the source of truth
   // for turn records — reconcile now (rebuilds legacy scraped records) and
@@ -356,6 +354,14 @@ function workspaceName(id: string): string {
   return store.list().workspaces.find((w) => w.id === id)?.name ?? id
 }
 
+/**
+ * EXACT-CONTEXT gate (extracted + unit-tested in recover-gate.ts): can this
+ * node's exact prior session be restored right now? Wired to live turn history.
+ */
+function canRestoreExact(node: TerminalNodeData): boolean {
+  return exactGate(node, { turnsHistory: (id) => turns.history(id) })
+}
+
 /** The active workspace's orch terminal, for reachability wiring. */
 function activeOrch(): TerminalNodeData | undefined {
   return store
@@ -380,11 +386,12 @@ function recoverAgent(id: string): RecoverResult {
   if (hit && hit.node.kind === 'terminal') {
     // Only report spawned when we actually (re)booted — an already-live
     // process is a no-op double-recover (LOW).
-    const didSpawn = hit.workspaceId === store.activeId && !ptys.get(id)
+    const exact = canRestoreExact(hit.node as TerminalNodeData)
+    const didSpawn = hit.workspaceId === store.activeId && !ptys.get(id) && exact
     if (didSpawn) spawnTracked(hit.node)
     return {
       ok: true, id, name: hit.node.name, workspaceId: hit.workspaceId,
-      workspaceName: workspaceName(hit.workspaceId), spawned: didSpawn, legacy: false
+      workspaceName: workspaceName(hit.workspaceId), spawned: didSpawn, legacy: false, exact
     }
   }
 
@@ -404,11 +411,15 @@ function recoverAgent(id: string): RecoverResult {
     const added = store.addNodeToWorkspace(plan.targetWorkspaceId, snap.node) as TerminalNodeData
     for (const peerId of plan.peerEdges) store.connectAcross(added.id, peerId)
     if (plan.orchEdge) store.connectAcross(added.id, plan.orchEdge)
-    if (plan.spawn) spawnTracked(added)
+    // EXACT-CONTEXT gate: boot only when the exact session is restorable —
+    // never a fresh/stray session masquerading as recovery.
+    const exact = canRestoreExact(added)
+    const didSpawn = plan.spawn && exact
+    if (didSpawn) spawnTracked(added)
     recoverable.remove(id)
     return {
       ok: true, id, name: added.name, workspaceId: plan.targetWorkspaceId,
-      workspaceName: workspaceName(plan.targetWorkspaceId), spawned: plan.spawn, legacy: false
+      workspaceName: workspaceName(plan.targetWorkspaceId), spawned: didSpawn, legacy: false, exact
     }
   }
 
@@ -429,11 +440,12 @@ function recoverAgent(id: string): RecoverResult {
   const added = store.addNodeToWorkspace(targetWs, node) as TerminalNodeData
   const orch = activeOrch()
   if (orch && orch.id !== added.id) store.connectAcross(added.id, orch.id)
-  const active = targetWs === store.activeId
-  if (active) spawnTracked(added)
+  const exact = canRestoreExact(added)
+  const didSpawn = targetWs === store.activeId && exact
+  if (didSpawn) spawnTracked(added)
   return {
     ok: true, id, name: added.name, workspaceId: targetWs,
-    workspaceName: workspaceName(targetWs), spawned: active, legacy: true
+    workspaceName: workspaceName(targetWs), spawned: didSpawn, legacy: true, exact
   }
 }
 

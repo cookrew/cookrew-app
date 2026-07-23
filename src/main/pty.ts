@@ -443,6 +443,30 @@ export class PtyManager {
     return this.sessions.get(terminalId)
   }
 
+  /**
+   * The pid of the process running INSIDE a terminal's tmux pane. Because the
+   * boot command `exec`s the agent (claude/codex/...), the pane pid IS the
+   * agent process — used to deterministically bind codex rollouts by lsof.
+   * Null when there is no live tmux session.
+   */
+  panePid(terminalId: string): number | null {
+    if (!TMUX_AVAILABLE) return null
+    try {
+      const out = execFileSync(
+        'tmux',
+        ['-L', TMUX_LABEL, 'list-panes', '-t', sessionNameFor(terminalId), '-F', '#{pane_pid}'],
+        { stdio: ['ignore', 'pipe', 'ignore'] }
+      )
+        .toString('utf8')
+        .trim()
+        .split('\n')[0]
+      const pid = parseInt(out, 10)
+      return Number.isNaN(pid) ? null : pid
+    } catch {
+      return null
+    }
+  }
+
   /** Detach: drop the PTY but keep the tmux session alive for reattach. */
   detach(terminalId: string): void {
     const session = this.sessions.get(terminalId)

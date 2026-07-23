@@ -104,7 +104,27 @@ export interface ResolveSessionOptions {
  *  4. No signal → keep a valid stored id (idempotent) or mint a fresh one that
  *     claude adopts on a genuinely new terminal's first boot.
  */
-export function resolveClaudeSessionId(options: ResolveSessionOptions): string {
+/**
+ * Strict resolution for the RECOVER path (EXACT-CONTEXT gate): returns the
+ * exact existing session id (stored-with-file, flagged, or turn-history
+ * match) or NULL — it NEVER mints a fresh id. Recover uses null to report
+ * "cannot restore exact session" instead of silently booting fresh.
+ */
+export function resolveExistingClaudeSession(options: ResolveSessionOptions): string | null {
+  // The recover gate and the spawn resolver MUST agree on what "the existing
+  // session" is — a drift between two copies is how recover minted fresh over
+  // a live conversation (R2). Both derive from this ONE core; strict returns
+  // its null, the spawn resolver falls back to minting.
+  return findExistingClaudeSession(options)
+}
+
+/**
+ * The exact existing session id — stored-with-file, a flagged id whose file
+ * exists, or the best turn-history match — or NULL. Pure lookup, never mints.
+ * Single source of truth for both the strict (recover) and minting (spawn)
+ * resolvers so the EXACT-CONTEXT gate can never disagree with what spawns.
+ */
+function findExistingClaudeSession(options: ResolveSessionOptions): string | null {
   const { command, cwd, storedId, turns, projectsDir } = options
   try {
     if (
@@ -115,9 +135,7 @@ export function resolveClaudeSessionId(options: ResolveSessionOptions): string {
       return storedId
     }
     const flagged = extractSessionFlag(command)
-    if (flagged && existsSync(claudeSessionFile(cwd, flagged, projectsDir))) {
-      return flagged
-    }
+    if (flagged && existsSync(claudeSessionFile(cwd, flagged, projectsDir))) return flagged
     const dir = claudeProjectDir(cwd, projectsDir)
     if (turns.length > 0 && existsSync(dir)) {
       // readCandidates sorts newest-first; the strict-greater reduce keeps the
@@ -129,9 +147,19 @@ export function resolveClaudeSessionId(options: ResolveSessionOptions): string {
       if (best !== null && best.score >= 1) return path.basename(best.file, '.jsonl')
     }
   } catch (error) {
-    console.error('Claude session id resolution failed, keeping stored/fresh id:', error)
+    console.error('Claude session resolution failed:', error)
   }
-  return storedId && SESSION_UUID_RE.test(storedId) ? storedId : randomUUID()
+  return null
+}
+
+export function resolveClaudeSessionId(options: ResolveSessionOptions): string {
+  const existing = findExistingClaudeSession(options)
+  if (existing !== null) return existing
+  // No existing session: keep a valid stored id (idempotent) or mint a fresh
+  // one that claude adopts on a genuinely new terminal's first boot.
+  return options.storedId && SESSION_UUID_RE.test(options.storedId)
+    ? options.storedId
+    : randomUUID()
 }
 
 export interface ClaudeForkOptions {

@@ -24,21 +24,22 @@ export function recoverEligible(entry: { active: boolean }): boolean {
 }
 
 /**
- * RecoverResult → toast, copy per the contract note:
- *   spawned=true  → "Recovered {name}"
- *   spawned=false → "Recovered {name} into {workspaceName} — resumes when that
- *                    workspace opens"                       (deferred boot)
- *   legacy=true   → "Recovered {name} (best-effort — pre-snapshot kill,
- *                    session may start fresh)"
- * Legacy outranks the defer copy when both apply (one toast, the stronger
- * caveat). A non-ok result is an honest error, never a success toast.
+ * RecoverResult → toast. `exact` is the correctness signal (EXACT-CONTEXT
+ * gate): when the prior session couldn't be located we NEVER boot a fresh or
+ * stray session — the toast says so plainly instead of pretending. Priority:
+ *   !ok       → honest error
+ *   !exact    → warn: shell restored, exact session not found, NOT resumed
+ *   !spawned  → defer: exact session restored, boots on workspace activation
+ *   else      → ok: recovered & resumed
+ * (`legacy` is informational — the session-ref/turn-history nets restore the
+ * exact session on that path too, so it carries no "may start fresh" caveat.)
  */
 export function recoverToastFor(result: RecoverResult): RecoverToast {
   if (!result.ok) return recoverErrorToast(`could not recover ${result.name || result.id}`)
-  if (result.legacy) {
+  if (!result.exact) {
     return {
       tone: 'warn',
-      text: `Recovered ${result.name} (best-effort — pre-snapshot kill, session may start fresh)`
+      text: `Recovered ${result.name}'s position, but its exact session couldn't be located — not resumed`
     }
   }
   if (!result.spawned) {
