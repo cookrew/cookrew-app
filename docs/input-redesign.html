@@ -1,0 +1,481 @@
+<title>Composer redesign — keyboard-following floating input</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --paper:#f2ecdb; --card:#fffdf6; --ink:#2b271d; --ink-soft:#5c5333;
+    --muted:#8c8058; --hair:#ddd3b8; --hair-2:#e9e0c8;
+    --amber:#d98a1e; --amber-deep:#b06d12; --amber-soft:#f6e6bf;
+    --rose:#bf4a30; --moss:#5a8a44;
+    --phos-bg:#14110a; --phos:#e9b949; --phos-dim:#8a6d1c; --phos-line:#26200f;
+    --key:#efe6cd; --key-line:#cdbf98;
+    --shadow:0 10px 34px -12px rgba(43,39,29,.34);
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#161310; --card:#201b15; --ink:#f0e8d6; --ink-soft:#c3b894;
+      --muted:#9d9068; --hair:#312a1f; --hair-2:#2a241b;
+      --amber:#f0a836; --amber-deep:#c98420; --amber-soft:#3a2f16;
+      --rose:#e0765d; --moss:#8fc073;
+      --key:#2b241a; --key-line:#443925;
+      --shadow:0 14px 40px -14px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="light"]{
+    --paper:#f2ecdb; --card:#fffdf6; --ink:#2b271d; --ink-soft:#5c5333;
+    --muted:#8c8058; --hair:#ddd3b8; --hair-2:#e9e0c8;
+    --amber:#d98a1e; --amber-deep:#b06d12; --amber-soft:#f6e6bf;
+    --rose:#bf4a30; --moss:#5a8a44; --key:#efe6cd; --key-line:#cdbf98;
+    --shadow:0 10px 34px -12px rgba(43,39,29,.34);
+  }
+  :root[data-theme="dark"]{
+    --paper:#161310; --card:#201b15; --ink:#f0e8d6; --ink-soft:#c3b894;
+    --muted:#9d9068; --hair:#312a1f; --hair-2:#2a241b;
+    --amber:#f0a836; --amber-deep:#c98420; --amber-soft:#3a2f16;
+    --rose:#e0765d; --moss:#8fc073; --key:#2b241a; --key-line:#443925;
+    --shadow:0 14px 40px -14px rgba(0,0,0,.6);
+  }
+
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:var(--sans); line-height:1.6;
+    font-size:16px;
+  }
+  .wrap{max-width:1060px; margin:0 auto; padding:clamp(20px,4vw,56px) clamp(16px,4vw,40px) 72px}
+  .mono{font-family:var(--mono)}
+  .eyebrow{
+    font-family:var(--mono); font-size:11.5px; letter-spacing:.22em;
+    text-transform:uppercase; color:var(--amber-deep); margin:0 0 14px;
+    display:flex; align-items:center; gap:10px;
+  }
+  .eyebrow::after{content:""; height:1px; flex:1; background:var(--hair)}
+  h1{
+    font-size:clamp(28px,4.6vw,46px); line-height:1.06; margin:0 0 18px;
+    letter-spacing:-.015em; text-wrap:balance; font-weight:680;
+  }
+  h1 .u{color:var(--amber-deep); box-shadow:inset 0 -.28em 0 var(--amber-soft)}
+  .lede{font-size:clamp(17px,2.1vw,20px); color:var(--ink-soft); max-width:62ch; margin:0 0 8px}
+  .sub{color:var(--muted); max-width:64ch; margin:8px 0 0; font-size:15px}
+
+  header.top{position:relative; padding-top:6px}
+  .themebtn{
+    position:absolute; top:0; right:0; font-family:var(--mono); font-size:11px;
+    letter-spacing:.12em; text-transform:uppercase; color:var(--ink-soft);
+    background:var(--card); border:1px solid var(--hair); border-radius:8px;
+    padding:7px 11px; cursor:pointer;
+  }
+  .themebtn:hover{border-color:var(--amber)}
+  .themebtn:focus-visible{outline:2px solid var(--amber); outline-offset:2px}
+
+  section{margin-top:clamp(40px,6vw,72px)}
+  h2{
+    font-size:clamp(20px,2.7vw,27px); margin:0 0 6px; letter-spacing:-.01em; font-weight:660;
+  }
+  h2 .n{font-family:var(--mono); font-size:.6em; color:var(--amber-deep); margin-right:.6em; letter-spacing:.05em}
+  .say{color:var(--ink-soft); max-width:64ch; margin:6px 0 26px}
+
+  /* ---- the interactive stage ---- */
+  .stage{
+    display:grid; grid-template-columns:minmax(0,300px) 1fr; gap:clamp(22px,3.4vw,46px);
+    align-items:start;
+  }
+  @media (max-width:760px){ .stage{grid-template-columns:1fr} }
+
+  .phone-col{position:sticky; top:20px; display:flex; flex-direction:column; align-items:center; gap:16px}
+  @media (max-width:760px){ .phone-col{position:static} }
+
+  .phone{
+    width:290px; height:588px; flex:0 0 auto; position:relative;
+    background:#0b0906; border-radius:38px; padding:11px;
+    box-shadow:var(--shadow), 0 0 0 2px var(--hair);
+    overflow:hidden;
+  }
+  .screen{
+    position:absolute; inset:11px; border-radius:28px; overflow:hidden;
+    background:var(--phos-bg); display:flex; flex-direction:column;
+  }
+  /* header bar */
+  .phead{
+    flex:0 0 auto; display:flex; align-items:center; gap:8px;
+    padding:11px 13px; background:#1c1710; border-bottom:1px solid var(--phos-line);
+    font-family:var(--mono); font-size:11px; color:var(--phos);
+  }
+  .pled{width:11px;height:11px;border-radius:50%;background:var(--moss);box-shadow:0 0 8px var(--moss)}
+  .pname{font-weight:600;letter-spacing:.04em}
+  .pclose{margin-left:auto;color:var(--phos-dim);border:1px solid var(--phos-line);border-radius:6px;padding:3px 7px;font-size:9px;letter-spacing:.1em}
+  /* transcript */
+  .transcript{
+    flex:1; min-height:0; overflow:hidden; position:relative;
+    padding:14px 14px 0; font-family:var(--mono); font-size:11.5px; line-height:1.7;
+    color:var(--phos-dim);
+    background-image:repeating-linear-gradient(transparent 0 2px, rgba(255,255,255,.012) 2px 3px);
+  }
+  .transcript b{color:var(--phos);font-weight:600}
+  .transcript .cur{display:inline-block;width:7px;height:14px;background:var(--phos);vertical-align:-3px;animation:blink 1.1s steps(2) infinite}
+  @keyframes blink{50%{opacity:0}}
+  @media (prefers-reduced-motion:reduce){.transcript .cur{animation:none}}
+  /* the fade the floating pill sits over */
+  .transcript::after{content:"";position:absolute;left:0;right:0;bottom:0;height:96px;
+    background:linear-gradient(transparent, var(--phos-bg) 82%);pointer-events:none}
+
+  /* fake keyboard */
+  .kb{
+    position:absolute; left:0; right:0; bottom:0; height:212px; z-index:5;
+    background:linear-gradient(#241d13,#1a150d);
+    border-top:1px solid #3a2f1c;
+    transform:translateY(100%); transition:transform .34s cubic-bezier(.22,1,.36,1);
+    padding:10px 6px 8px; display:flex; flex-direction:column; gap:7px;
+  }
+  .kb.up{transform:translateY(0)}
+  @media (prefers-reduced-motion:reduce){.kb{transition:none}}
+  .kb .krow{display:flex; gap:5px; justify-content:center}
+  .kb .k{flex:1; height:32px; border-radius:6px; background:#3a3020; box-shadow:0 1.5px 0 #141009;
+    display:flex;align-items:center;justify-content:center;color:#c9bb93;font-family:var(--mono);font-size:12px}
+  .kb .k.wide{flex:2.4}
+  .kb .k.sp{flex:5}
+
+  /* ---- the floating composer (the redesign) ---- */
+  .composer{
+    position:absolute; left:10px; right:10px; z-index:8;
+    bottom:calc(var(--kb,0px) + 12px);
+    transition:bottom .34s cubic-bezier(.22,1,.36,1);
+    display:flex; flex-direction:column; gap:8px; align-items:stretch;
+  }
+  @media (prefers-reduced-motion:reduce){.composer{transition:none}}
+
+  .pill{
+    display:flex; align-items:center; gap:7px;
+    background:rgba(30,24,15,.86); -webkit-backdrop-filter:blur(9px); backdrop-filter:blur(9px);
+    border:1.5px solid #4a3d23; border-radius:23px;
+    padding:6px 6px 6px 8px;
+    box-shadow:0 10px 30px -8px rgba(0,0,0,.7);
+  }
+  .rbtn{
+    width:33px;height:33px;flex:0 0 auto;border-radius:50%;
+    border:1.5px solid #52441f; background:#221a10; color:var(--phos);
+    display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:14px;
+    cursor:pointer;
+  }
+  .rbtn.send{background:var(--amber); border-color:var(--amber-deep); color:#1c1408; font-size:15px; box-shadow:0 0 0 0 transparent}
+  .rbtn.send.lit{box-shadow:0 0 16px -2px var(--amber)}
+  .rbtn.ghost{opacity:.62}
+  .field{
+    flex:1; min-width:0; color:var(--phos); font-family:var(--mono); font-size:12.5px;
+    background:transparent; padding:2px 4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .field .ph{color:var(--phos-dim)}
+  .field .caret{display:inline-block;width:2px;height:15px;background:var(--phos);vertical-align:-3px;margin-left:1px;animation:blink 1.1s steps(2) infinite}
+  @media (prefers-reduced-motion:reduce){.field .caret{animation:none}}
+
+  /* terminal key rail (arrows + esc) */
+  .keyrail{
+    display:flex; gap:6px; align-self:flex-end;
+    background:rgba(30,24,15,.86);-webkit-backdrop-filter:blur(9px);backdrop-filter:blur(9px);
+    border:1.5px solid #4a3d23; border-radius:15px; padding:5px 7px;
+    box-shadow:0 8px 22px -8px rgba(0,0,0,.7);
+  }
+  .keyrail .tk{
+    min-width:26px;height:26px;padding:0 6px;border-radius:8px;background:#2a2113;border:1px solid #4a3d23;
+    color:var(--phos-dim);font-family:var(--mono);font-size:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;
+  }
+  .keyrail .tk:hover{color:var(--phos);border-color:var(--amber-deep)}
+
+  /* tools popover (option A) */
+  .tools{
+    display:flex; gap:6px; align-self:flex-start;
+    background:rgba(30,24,15,.86);-webkit-backdrop-filter:blur(9px);backdrop-filter:blur(9px);
+    border:1.5px solid #4a3d23; border-radius:15px; padding:5px;
+    box-shadow:0 8px 22px -8px rgba(0,0,0,.7);
+  }
+
+  /* the OLD docked bar (before) */
+  .oldbar{
+    position:absolute;left:0;right:0;bottom:0;z-index:8;
+    display:flex;align-items:center;gap:6px;
+    padding:9px 10px calc(9px + env(safe-area-inset-bottom));
+    background:#f3ecd8;border-top:2px solid #8a7a52;
+  }
+  .oldbar .ob{width:34px;height:34px;flex:0 0 auto;border:2px solid #8a7a52;box-shadow:2px 2px 0 #8a7a52;background:#fffef5;border-radius:0;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:13px;color:#2d2a20}
+  .oldbar .ob.send{background:#ffd600}
+  .oldbar .ofield{flex:1;min-width:0;border:2px solid #8a7a52;background:#faf5e6;color:#2d2a20;font-family:var(--mono);font-size:12px;padding:9px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* controls under the phone */
+  .controls{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:300px}
+  .seg{display:inline-flex;background:var(--card);border:1px solid var(--hair);border-radius:10px;padding:3px;gap:2px}
+  .seg button{
+    font-family:var(--mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase;
+    border:0;background:transparent;color:var(--ink-soft);padding:7px 11px;border-radius:7px;cursor:pointer;
+  }
+  .seg button[aria-pressed="true"]{background:var(--amber);color:#1c1408}
+  .seg button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+  .toggle{
+    font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+    border:1px solid var(--hair);background:var(--card);color:var(--ink);border-radius:10px;padding:9px 14px;cursor:pointer;
+    display:inline-flex;align-items:center;gap:8px;
+  }
+  .toggle:hover{border-color:var(--amber)}
+  .toggle:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+  .toggle .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+  .toggle[aria-pressed="true"]{border-color:var(--amber-deep);color:var(--amber-deep)}
+  .toggle[aria-pressed="true"] .dot{background:var(--amber)}
+
+  /* annotation column */
+  .notes{display:flex;flex-direction:column;gap:18px}
+  .callouts{display:grid;gap:12px}
+  .callout{
+    background:var(--card);border:1px solid var(--hair);border-left:3px solid var(--amber);
+    border-radius:0 12px 12px 0;padding:14px 16px;
+  }
+  .callout h4{margin:0 0 4px;font-size:14.5px;letter-spacing:-.01em}
+  .callout p{margin:0;font-size:14px;color:var(--ink-soft)}
+  .callout.opt{border-left-color:var(--muted)}
+  .callout.opt.pick{border-left-color:var(--moss);box-shadow:0 0 0 1px var(--moss) inset}
+  .callout .tag{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:5px}
+  .callout.opt.pick .tag{color:var(--moss)}
+
+  .cardgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px}
+  .card{background:var(--card);border:1px solid var(--hair);border-radius:14px;padding:18px 18px 16px}
+  .card h3{margin:0 0 8px;font-size:16px;display:flex;align-items:center;gap:9px}
+  .card h3 .ic{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-family:var(--mono);font-size:14px;flex:0 0 auto}
+  .card p{margin:0;font-size:14px;color:var(--ink-soft)}
+  .bad .ic{background:color-mix(in srgb,var(--rose) 16%,transparent);color:var(--rose)}
+  .good .ic{background:color-mix(in srgb,var(--moss) 18%,transparent);color:var(--moss)}
+
+  pre{
+    margin:16px 0 0; background:var(--phos-bg); color:var(--phos);
+    border:1px solid var(--phos-line); border-radius:12px; padding:16px 18px;
+    font-family:var(--mono); font-size:12.5px; line-height:1.65; overflow-x:auto;
+  }
+  pre .c{color:var(--phos-dim)}
+  pre .k{color:var(--amber)}
+
+  .spec{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin-top:4px}
+  .spec .row{background:var(--card);border:1px solid var(--hair);border-radius:12px;padding:15px 16px}
+  .spec .row .l{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber-deep);margin:0 0 6px}
+  .spec .row p{margin:0;font-size:13.5px;color:var(--ink-soft)}
+  .spec code{font-family:var(--mono);font-size:12.5px;background:var(--amber-soft);color:var(--ink);padding:1px 5px;border-radius:5px}
+
+  footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--hair);color:var(--muted);font-size:13px;display:flex;flex-wrap:wrap;gap:8px 22px;align-items:baseline}
+  footer .mono{color:var(--ink-soft)}
+  footer a{color:var(--amber-deep)}
+  .steps{counter-reset:s;display:grid;gap:10px;margin-top:6px}
+  .steps li{list-style:none;position:relative;padding-left:38px;font-size:14.5px;color:var(--ink-soft)}
+  .steps li::before{counter-increment:s;content:counter(s);position:absolute;left:0;top:-1px;width:25px;height:25px;border-radius:7px;background:var(--amber-soft);color:var(--amber-deep);font-family:var(--mono);font-size:12px;display:grid;place-items:center;font-weight:600}
+  .steps li b{color:var(--ink)}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <button class="themebtn" id="theme" aria-label="Toggle light or dark theme">◑ Theme</button>
+    <p class="eyebrow">Cookrew · mobile · design proposal</p>
+    <h1>The composer should <span class="u">ride the keyboard</span>, not hide behind it.</h1>
+    <p class="lede">Redesigning the phone input: the message field and its send &amp; arrow controls lift with the keyboard and float over the terminal — one clean pill instead of a chrome-heavy bar wedged under it.</p>
+    <p class="sub">Design first. Nothing below is built yet — toggle the phone to feel the interaction, pick a layout, then we implement.</p>
+  </header>
+
+  <!-- PROBLEM -->
+  <section>
+    <h2><span class="n">01</span>What breaks today</h2>
+    <p class="say">On a phone the layout viewport stays full height while the keyboard slides up over it. The composer sits in normal flow at the bottom of the popout — so the keyboard lands on top of it.</p>
+    <div class="cardgrid">
+      <div class="card bad"><h3><span class="ic">✕</span>Typed blind</h3><p>The input and send button are covered by the keyboard the moment you focus the field — you can't see what you're writing.</p></div>
+      <div class="card bad"><h3><span class="ic">✕</span>Never lifts</h3><p>The mobile companion doesn't watch <span class="mono">visualViewport</span> at all, so nothing reacts to the keyboard opening.</p></div>
+      <div class="card bad"><h3><span class="ic">✕</span>Five-control bar</h3><p>attach · mic · field · speak · send, boxed in hard cream chrome — cramped and busy on a narrow screen.</p></div>
+    </div>
+  </section>
+
+  <!-- INTERACTIVE -->
+  <section>
+    <h2><span class="n">02</span>The fix, live</h2>
+    <p class="say">The composer leaves the layout and becomes a floating pill pinned above the keyboard, over the transcript. Flip the keyboard and swap layouts on the real mock.</p>
+
+    <div class="stage">
+      <div class="phone-col">
+        <div class="phone">
+          <div class="screen">
+            <div class="phead"><span class="pled"></span><span class="pname">Velvet</span><span class="pclose">CLOSE ✕</span></div>
+            <div class="transcript" id="tx">
+              <span style="color:var(--phos)">you@cookrew ~ $</span> velvet, fix the rail<br>
+              <b>▸ pinning the focus row to the marker…</b><br>
+              ▸ marker-Y == focused-row-Y ✓<br>
+              ▸ opaque rows, no bleed ✓<br>
+              ▸ two-element marquee wired<br>
+              <b>▸ 133 tests green, no commits</b><br>
+              <span style="color:var(--phos)">you@cookrew ~ $</span> <span class="cur"></span>
+            </div>
+
+            <!-- BEFORE bar (shown only in "current" mode) -->
+            <div class="oldbar" id="oldbar" hidden>
+              <span class="ob">＋</span><span class="ob">🎙</span>
+              <span class="ofield">Message this agent…</span>
+              <span class="ob">🔊</span><span class="ob send">➤</span>
+            </div>
+
+            <!-- floating composer (the redesign) -->
+            <div class="composer" id="composer">
+              <div class="keyrail" id="keyrail" hidden><span class="tk">Esc</span><span class="tk">↑</span><span class="tk">↓</span><span class="tk">←</span><span class="tk">→</span></div>
+              <div class="tools" id="tools" hidden><span class="rbtn ghost">＋</span><span class="rbtn ghost">🎙</span><span class="rbtn ghost">🔊</span></div>
+              <div class="pill" id="pill">
+                <span class="rbtn" id="lead" title="Tools">＋</span>
+                <span class="field" id="field"><span class="ph">Message Velvet…</span></span>
+                <span class="rbtn" id="kbtoggle" title="Terminal keys">⌨</span>
+                <span class="rbtn send" id="send" title="Send">➤</span>
+              </div>
+            </div>
+
+            <div class="kb" id="kb"><!-- fake keyboard -->
+              <div class="krow"><span class="k">q</span><span class="k">w</span><span class="k">e</span><span class="k">r</span><span class="k">t</span><span class="k">y</span><span class="k">u</span><span class="k">i</span><span class="k">o</span><span class="k">p</span></div>
+              <div class="krow"><span class="k">a</span><span class="k">s</span><span class="k">d</span><span class="k">f</span><span class="k">g</span><span class="k">h</span><span class="k">j</span><span class="k">k</span><span class="k">l</span></div>
+              <div class="krow"><span class="k wide">⇧</span><span class="k">z</span><span class="k">x</span><span class="k">c</span><span class="k">v</span><span class="k">b</span><span class="k">n</span><span class="k">m</span><span class="k wide">⌫</span></div>
+              <div class="krow"><span class="k wide">123</span><span class="k sp">space</span><span class="k wide">return</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="controls">
+          <button class="toggle" id="kbBtn" aria-pressed="false"><span class="dot"></span>Keyboard</button>
+          <button class="toggle" id="typeBtn" aria-pressed="false"><span class="dot"></span>Typing</button>
+          <div class="seg" role="group" aria-label="Layout option">
+            <button data-opt="A" aria-pressed="true">A</button>
+            <button data-opt="B" aria-pressed="false">B</button>
+            <button data-opt="C" aria-pressed="false">C</button>
+          </div>
+          <button class="toggle" id="beforeBtn" aria-pressed="false"><span class="dot"></span>Show current</button>
+        </div>
+      </div>
+
+      <div class="notes">
+        <div class="callouts">
+          <div class="callout"><span class="tag">Rule 1 · follow</span><h4>Pinned above the keyboard</h4><p>The pill's <span class="mono">bottom</span> is driven by the live keyboard inset, so it rests just over the top keyboard row and glides with it — open, close, or a mid-drag.</p></div>
+          <div class="callout"><span class="tag">Rule 2 · float</span><h4>Over the terminal, not under it</h4><p>It leaves layout flow and floats in front of the black transcript. A soft fade behind it keeps the last lines legible; the transcript keeps its full height.</p></div>
+          <div class="callout"><span class="tag">Rule 3 · simplify</span><h4>Field first, one send</h4><p>The message field is the hero; the amber send arrow is the only always-lit control. Attach · mic · speak and the terminal arrow-keys move one tap away.</p></div>
+        </div>
+
+        <h2 style="margin-top:6px"><span class="n">03</span>Three layouts</h2>
+        <div class="callouts">
+          <div class="callout opt pick" id="c-A"><span class="tag">Option A · recommended</span><h4>One pill, tools tucked</h4><p>A single rounded pill: <span class="mono">＋</span> opens attach/mic/speak, <span class="mono">⌨</span> pops the arrow-key rail, amber <span class="mono">➤</span> sends. The calmest bar — everything secondary is a tap away.</p></div>
+          <div class="callout opt" id="c-B"><span class="tag">Option B</span><h4>Pill + always-on key rail</h4><p>The arrow &amp; Esc rail floats permanently just above the pill. Terminal control is never hidden — costs a little height and a busier resting state.</p></div>
+          <div class="callout opt" id="c-C"><span class="tag">Option C</span><h4>Minimal, expands on focus</h4><p>Collapsed it's just field + send. Focus (keyboard up) expands it upward to reveal tools and the key rail — most minimal at rest, one more state to reason about.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SPEC -->
+  <section>
+    <h2><span class="n">04</span>How it's wired</h2>
+    <p class="say">The main app already publishes a live keyboard inset; the companion just needs the same listener. The composer positions off it.</p>
+    <pre><span class="c">/* the companion gains the listener the main app already has */</span>
+visualViewport.<span class="k">addEventListener</span>('resize', () =&gt; {
+  <span class="k">const</span> kb = Math.max(0, innerHeight - visualViewport.height - visualViewport.offsetTop)
+  root.style.<span class="k">setProperty</span>('--kb-inset', kb + 'px')   <span class="c">// keyboardInset() is already unit-tested</span>
+})
+
+<span class="c">/* the composer floats above it, over the transcript */</span>
+#composer {
+  position: fixed;                          <span class="c">/* out of flow → in front of the terminal */</span>
+  left: 10px; right: 10px; z-index: 40;
+  bottom: <span class="k">calc</span>(var(--kb-inset, 0px) + env(safe-area-inset-bottom) + 10px);
+  transition: bottom .24s cubic-bezier(.22,1,.36,1);
+}</pre>
+    <div class="spec">
+      <div class="row"><p class="l">Follow</p><p>Bottom offset = <code>--kb-inset</code> + safe-area. Reuses <code>keyboard-inset.ts</code> (already tested) in the app; adds the same listener to <code>client.html</code>.</p></div>
+      <div class="row"><p class="l">Float</p><p><code>position:fixed</code> over the transcript; a bottom fade on <code>#popBody</code> keeps trailing lines readable. No layout reflow, no lost height.</p></div>
+      <div class="row"><p class="l">Reduced motion</p><p>The glide honors <code>prefers-reduced-motion</code> — the pill snaps instead of sliding.</p></div>
+      <div class="row"><p class="l">Reach</p><p>Send &amp; the popped controls keep a 44px touch target; the pill clears the home-indicator via safe-area.</p></div>
+    </div>
+  </section>
+
+  <!-- NEXT -->
+  <section>
+    <h2><span class="n">05</span>If Option A is a go</h2>
+    <ol class="steps">
+      <li>Add the <b>visualViewport listener</b> to <span class="mono">mobile/client.html</span> (mirrors <span class="mono">keyboard-inset.ts</span>) so <span class="mono">--kb-inset</span> is live on the companion.</li>
+      <li>Float <span class="mono">#composer</span> — <b>fixed, keyboard-offset bottom, over the transcript</b> — and restyle it as the pill; add the <span class="mono">＋</span> tools popover and <span class="mono">⌨</span> key-rail.</li>
+      <li>Mirror the pill in the app's <b>Dock / VoiceBar</b> phone view so both surfaces match.</li>
+      <li>QA on a real device: open/close keyboard, mid-drag, safe-area, reduced-motion.</li>
+    </ol>
+  </section>
+
+  <footer>
+    <span class="mono">Source</span>
+    <span class="mono">mobile/client.html #composer</span>
+    <span class="mono">keyboard-inset.ts</span>
+    <span class="mono">Dock.tsx · VoiceBar.tsx</span>
+    <span class="mono">styles.css .voice-bar</span>
+    <span style="flex:1"></span>
+    <span>Awaiting your pick before implementation.</span>
+  </footer>
+</div>
+
+<script>
+  (function(){
+    var root=document.documentElement;
+    document.getElementById('theme').addEventListener('click',function(){
+      var cur=root.getAttribute('data-theme');
+      if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+      root.setAttribute('data-theme', cur==='dark'?'light':'dark');
+    });
+
+    var kb=document.getElementById('kb'), composer=document.getElementById('composer'),
+        pill=document.getElementById('pill'), field=document.getElementById('field'),
+        send=document.getElementById('send'), tools=document.getElementById('tools'),
+        keyrail=document.getElementById('keyrail'), lead=document.getElementById('lead'),
+        kbtoggle=document.getElementById('kbtoggle'), oldbar=document.getElementById('oldbar');
+    var kbBtn=document.getElementById('kbBtn'), typeBtn=document.getElementById('typeBtn'),
+        beforeBtn=document.getElementById('beforeBtn');
+    var state={kb:false, typing:false, opt:'A', before:false, railOpen:false, toolsOpen:false};
+
+    function render(){
+      // before/after
+      var b=state.before;
+      oldbar.hidden=!b; composer.hidden=b; kbtoggle.style.display='';
+      // keyboard raise
+      var raised = state.kb && !b;
+      kb.classList.toggle('up', raised);
+      composer.style.setProperty('--kb', raised ? '212px' : '0px');
+      if(b){ oldbar.style.bottom = raised ? '212px' : '0px'; oldbar.style.transition='bottom .34s cubic-bezier(.22,1,.36,1)'; }
+
+      // typing state
+      var typing=state.typing;
+      field.innerHTML = typing
+        ? 'run the full suite<span class="caret"></span>'
+        : '<span class="ph">Message Velvet…</span>';
+      send.classList.toggle('lit', typing);
+
+      // option layouts
+      var A=state.opt==='A', B=state.opt==='B', C=state.opt==='C';
+      // lead + inline toggles visible only in A/B pill; C hides them at rest
+      lead.style.display = C && !raised ? 'none' : '';
+      kbtoggle.style.display = (B) ? 'none' : (C && !raised ? 'none' : '');
+      // key rail: A -> only when toggled; B -> always; C -> when raised
+      keyrail.hidden = !(B || (A && state.railOpen) || (C && raised));
+      // tools row: A -> when toggled; B -> hidden(inline via lead? keep hidden); C -> when raised
+      tools.hidden = !((A && state.toolsOpen) || (C && raised));
+      // in B, put the three tools inline is out of scope for the mock; keep lead as ＋
+      pill.style.opacity = 1;
+
+      document.getElementById('c-A').classList.toggle('pick', A);
+      document.getElementById('c-B').classList.toggle('pick', B);
+      document.getElementById('c-C').classList.toggle('pick', C);
+    }
+
+    kbBtn.addEventListener('click',function(){state.kb=!state.kb;this.setAttribute('aria-pressed',state.kb);render();});
+    typeBtn.addEventListener('click',function(){state.typing=!state.typing;this.setAttribute('aria-pressed',state.typing);render();});
+    beforeBtn.addEventListener('click',function(){state.before=!state.before;this.setAttribute('aria-pressed',state.before);render();});
+    document.querySelectorAll('.seg [data-opt]').forEach(function(btn){
+      btn.addEventListener('click',function(){
+        state.opt=btn.dataset.opt; state.railOpen=false; state.toolsOpen=false;
+        document.querySelectorAll('.seg [data-opt]').forEach(function(b){b.setAttribute('aria-pressed', b===btn);});
+        render();
+      });
+    });
+    lead.addEventListener('click',function(){ if(state.opt==='A'){state.toolsOpen=!state.toolsOpen; render();} });
+    kbtoggle.addEventListener('click',function(){ if(state.opt==='A'){state.railOpen=!state.railOpen; render();} });
+
+    render();
+  })();
+</script>

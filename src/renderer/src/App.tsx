@@ -17,6 +17,7 @@ import type { AgentRole, CanvasNode, BrowserNodeData, TerminalNodeData, Workspac
 import { activeBrowserTab, browserTabs } from '../../shared/model'
 import type { TerminalActivity } from '../../shared/turn'
 import { cookrew, isRemoteMode } from './api'
+import { isViewed, markViewed, pruneViewers, type ViewerClocks } from '../../shared/phone-viewing'
 import { TerminalNode } from './nodes/TerminalNode'
 import { NoteNode } from './nodes/NoteNode'
 import { BrowserNode } from './nodes/BrowserNode'
@@ -209,6 +210,32 @@ function Canvas(): React.JSX.Element {
     // Mirror to main so the mobile companion can serve it to the phone.
     cookrew().browserThumb(id, dataUrl)
   }, [])
+
+  // A phone viewing a browser (polling its /thumb) must keep the desktop
+  // capture loop alive for that browser even while the desktop window is
+  // hidden. Main pings us on every poll; we keep a TTL clock per browser and
+  // hand the capture loop a stable getter (a ref, so refreshes don't churn the
+  // capture effect). Desktop-only — remote/demo apis no-op the subscription.
+  const phoneViewingRef = useRef<ViewerClocks>({})
+  useEffect(
+    () =>
+      cookrew().onBrowserPhoneViewing((browserId) => {
+        phoneViewingRef.current = markViewed(phoneViewingRef.current, browserId, Date.now())
+      }),
+    []
+  )
+  // Drop lapsed/junk viewer ids so an unauth LAN client polling /thumb with
+  // random ids can't grow the map without bound.
+  useEffect(() => {
+    const t = setInterval(() => {
+      phoneViewingRef.current = pruneViewers(phoneViewingRef.current, Date.now())
+    }, 30_000)
+    return () => clearInterval(t)
+  }, [])
+  const isPhoneViewing = useCallback(
+    (browserId: string) => isViewed(phoneViewingRef.current, browserId, Date.now()),
+    []
+  )
 
   // Remote (phone) mode: iframes can't capturePage(), so browser card thumbs
   // come from the desktop's capture loop via the mobile server.
@@ -514,7 +541,12 @@ function Canvas(): React.JSX.Element {
         )}
         {rosterOpen && <RosterPanel onClose={() => setRosterOpen(false)} />}
         {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
-        <BrowserLayer browsers={browsers} lod={lod} onThumb={onThumb} />
+        <BrowserLayer
+          browsers={browsers}
+          lod={lod}
+          onThumb={onThumb}
+          isPhoneViewing={isPhoneViewing}
+        />
         <EventToastLayer />
       </div>
     </CanvasUiContext.Provider>

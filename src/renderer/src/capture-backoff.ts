@@ -32,3 +32,21 @@ export function recordFailure(state: CaptureBackoff, now: number): CaptureBackof
   const delay = Math.min(INITIAL_BACKOFF_MS * 2 ** (failures - 1), MAX_BACKOFF_MS)
   return { failures, notBefore: now + delay }
 }
+
+/**
+ * The full capture gate. A hidden/occluded window normally pauses capture (GPU
+ * protection — capturing a wedged GPU while nothing's on screen risks IOSurface
+ * exhaustion), but a browser a PHONE has open must keep capturing so its
+ * /thumb stays fresh — the phone treats that frame as its live view. The
+ * GPU-health backoff still gates every path, so a degraded GPU still backs off
+ * even while a phone is watching.
+ */
+export function shouldCapture(opts: {
+  documentHidden: boolean
+  phoneViewing: boolean
+  backoff: CaptureBackoff
+  now: number
+}): boolean {
+  if (opts.documentHidden && !opts.phoneViewing) return false
+  return canCapture(opts.backoff, opts.now)
+}

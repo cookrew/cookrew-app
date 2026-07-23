@@ -115,6 +115,11 @@ const api = {
     const listener = (_e: unknown, req: { webContentsId: number; url: string }): void => cb(req)
     ipcRenderer.on('browser:open-tab', listener)
     return () => ipcRenderer.removeListener('browser:open-tab', listener)
+  },
+  onBrowserPhoneViewing: (cb: (browserId: string) => void) => {
+    const listener = (_e: unknown, browserId: string): void => cb(browserId)
+    ipcRenderer.on('browser:phone-viewing', listener)
+    return () => ipcRenderer.removeListener('browser:phone-viewing', listener)
   }
 }
 

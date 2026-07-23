@@ -159,6 +159,12 @@ export interface CookrewApi {
   onBrowserOpenTab: (
     cb: (req: { webContentsId: number; url: string }) => void,
   ) => () => void;
+  /**
+   * Main signals here each time a phone polls a browser's /thumb, so the
+   * desktop capture loop keeps that browser alive (fresh frames for the phone)
+   * even while the desktop window is hidden/occluded.
+   */
+  onBrowserPhoneViewing: (cb: (browserId: string) => void) => () => void;
   /** Main routes ⌘W here so the renderer can close the topmost layer first. */
   onCmdW: (cb: () => void) => () => void;
   quitApp: () => void;

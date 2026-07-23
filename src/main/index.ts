@@ -41,6 +41,7 @@ import { isCodexCommand, resolveCodexRolloutByPid } from './codex-bind'
 import { isOpenCodeCommand, resolveOpencodeSessionByPid } from './opencode-bind'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
+
 import { TraceReader } from './trace'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
@@ -669,6 +670,21 @@ const browserWaiters = new Map<string, { resolve: (v: string) => void; reject: (
  */
 const browserThumbs = new Map<string, Buffer>()
 
+// Which browsers a phone is currently viewing (keyed by the last /thumb poll).
+// A phone renders a browser from the desktop's live capturePage() frames, so
+// while it's polling we tell the renderer to keep capturing that browser even
+// if the desktop window is hidden/occluded — otherwise the frame goes stale
+// and the phone blanks. Notifying on each poll (not just on entry) keeps the
+// renderer's own TTL refreshed without any polling from main.
+function noteBrowserViewed(browserId: string): void {
+  // The keep-alive decision (with its TTL) lives entirely in the renderer's
+  // phoneViewingRef — main just relays the heartbeat. No map is held here, so
+  // an unauth LAN client polling /thumb with junk ids cannot accumulate state.
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('browser:phone-viewing', browserId)
+  }
+}
+
 function browserCommand(args: string[], terminalId: string): Promise<string> {
   if (!mainWindow) return Promise.reject(new Error('No window'))
   const id = randomUUID()
@@ -849,6 +865,7 @@ app.whenReady().then(() => {
     },
     saveAttachment: (name, data) => saveAttachment(defaultAttachmentsDir(), name, data),
     browserThumb: (id) => browserThumbs.get(id),
+    browserThumbRequested: noteBrowserViewed,
     clientHtmlPath: mobileClientPath,
     // Built renderer bundle — served to phones so mobile gets the full
     // desktop canvas UI (missing until `npm run build` in dev checkouts).

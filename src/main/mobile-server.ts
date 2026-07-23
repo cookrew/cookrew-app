@@ -41,6 +41,12 @@ export interface MobileServerDeps {
   saveAttachment: (name: string, data: Buffer) => string
   /** Latest capturePage() frame for a browser, pushed from the renderer. */
   browserThumb: (browserId: string) => Buffer | undefined
+  /**
+   * A phone just polled a browser's /thumb — its heartbeat that the browser is
+   * being viewed. The desktop uses it to keep capturing that browser even when
+   * its own window is hidden (so the phone's frame doesn't go stale/blank).
+   */
+  browserThumbRequested?: (browserId: string) => void
   /** Legacy lightweight client (kept at /lite for voice-first use). */
   clientHtmlPath: string
   /** Built renderer bundle — the full desktop canvas UI served to phones. */
@@ -254,6 +260,9 @@ async function handle(
 
   const thumbMatch = url.pathname.match(/^\/api\/browser\/([^/]+)\/thumb$/)
   if (request.method === 'GET' && thumbMatch) {
+    // Heartbeat first — even a 404 (no frame yet) means a phone is watching,
+    // which is exactly when the desktop must (re)start capturing this browser.
+    deps.browserThumbRequested?.(thumbMatch[1])
     const thumb = deps.browserThumb(thumbMatch[1])
     if (!thumb) {
       respondJson(response, 404, { error: 'No thumbnail yet' })

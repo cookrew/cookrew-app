@@ -1372,6 +1372,44 @@ body,
   border: none;
 }
 
+/* Phone LIVE-FRAME view (mobile-browser-ux-fix; Velvet structure, Fresco polish):
+   the desktop's captured frame shown as an <img>, fit-scaled (letterbox) within
+   the body — so file:// / PDFs / webview-only content is VISIBLE on the phone. */
+.browser-frame {
+  position: relative;
+  overflow: hidden;
+  background: var(--phos-bg, #14110a);
+}
+
+.browser-frame-img {
+  position: absolute;
+  /* Velvet sets width/height/left/top from fitContain (letterbox, centered). */
+  image-rendering: auto;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.browser-frame-img.ready {
+  opacity: 1;
+}
+
+.browser-frame-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted, #8a8a8a);
+}
+
+.browser-frame-glyph {
+  width: 28px;
+  height: 28px;
+  opacity: 0.7;
+}
+
 /* Self-embedding tab (Cookrew URL inside Cookrew): blocked with a notice —
    see self-embed.ts for why recursion is never allowed to mount. */
 .browser-blocked {
