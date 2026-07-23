@@ -585,3 +585,32 @@ describe('buildForkedSessionLinesForUuids (assembled checkpoints)', () => {
     expect(forked.join('\n')).not.toContain('prompt 2')
   })
 })
+
+describe('realCwd / symlinked cwd resume (R2 fix)', () => {
+  it('resolves the session under the cwd REALPATH, not the symlink slug', () => {
+    // Simulate /tmp -> /private/tmp: the terminal cwd is a symlink, but claude
+    // writes the session file under the real directory's slug.
+    const real = require('node:fs').realpathSync(mkdtempSync(path.join(tmpdir(), 'cookrew-real-')))
+    const linkParent = mkdtempSync(path.join(tmpdir(), 'cookrew-link-'))
+    const link = path.join(linkParent, 'cwd')
+    require('node:fs').symlinkSync(real, link)
+    const sid = '11111111-2222-4333-8444-555555555555'
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'cookrew-proj-'))
+    const dir = path.join(projectsDir, claudeProjectSlug(real)) // REAL dir's slug
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, `${sid}.jsonl`), sessionLines(1).join('\n') + '\n')
+
+    // Launched with the SYMLINK cwd + a stored id whose file lives under real.
+    const resolved = resolveClaudeSessionId({
+      command: 'claude --permission-mode bypassPermissions',
+      cwd: link,
+      storedId: sid,
+      turns: [],
+      projectsDir
+    })
+    expect(resolved).toBe(sid) // found via realpath — not a fresh mint
+    expect(claudeSpawnCommand('claude', link, sid, projectsDir)).toBe(
+      `claude --resume ${sid}` // TRUE resume, not --session-id (fresh)
+    )
+  })
+})

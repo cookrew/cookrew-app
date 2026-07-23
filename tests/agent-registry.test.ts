@@ -72,3 +72,18 @@ describe('AgentRegistry', () => {
     expect(registry.upsert(entry()).active).toBe(true)
   })
 })
+
+describe('sessionRef enrichment (R2 legacy-recover fix)', () => {
+  it('persists sessionRef on upsert and updates it on setSessionRef', () => {
+    const { registry, file } = makeRegistry()
+    registry.upsert(entry({ sessionRef: 'claude-sess-1' }))
+    expect(new AgentRegistry(file).lookup('term-1')?.sessionRef).toBe('claude-sess-1')
+
+    // Lazy bind (codex/opencode) updates the ref later.
+    registry.setSessionRef('term-1', '/x/rollout-uuid.jsonl')
+    expect(new AgentRegistry(file).lookup('term-1')?.sessionRef).toBe('/x/rollout-uuid.jsonl')
+    // No-op for unknown ids / unchanged refs.
+    registry.setSessionRef('nope', 'x')
+    expect(registry.lookup('nope')).toBeUndefined()
+  })
+})

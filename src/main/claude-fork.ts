@@ -8,7 +8,7 @@
 // fall back to matching their scraped turn history against candidate files.
 
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import type { TurnRecord } from '../shared/turn'
@@ -28,9 +28,23 @@ import {
 /** Newest session files considered by the legacy (no stored id) fallback. */
 const CANDIDATE_FILES = 8
 
+/**
+ * The cwd as the AGENT process sees it: session files are keyed by the
+ * realpath, not the symlink the terminal was launched with (macOS /tmp ->
+ * /private/tmp). Resolving the wrong slug made existsSync miss the session
+ * file, so recover silently minted a fresh session instead of resuming (R2).
+ */
+export function realCwd(cwd: string): string {
+  try {
+    return realpathSync(cwd)
+  } catch {
+    return cwd
+  }
+}
+
 function claudeProjectDir(cwd: string, projectsDir?: string): string {
   const base = projectsDir ?? path.join(homedir(), '.claude', 'projects')
-  return path.join(base, claudeProjectSlug(cwd))
+  return path.join(base, claudeProjectSlug(realCwd(cwd)))
 }
 
 /** On-disk session file for a terminal bound to sessionId. */

@@ -22,6 +22,13 @@ export interface AgentRegistryEntry {
   workspaceId: string
   workspaceName: string
   orch: boolean
+  /**
+   * The node's harness session reference at last spawn (claudeSessionId /
+   * codexSessionRef / opencodeSessionId), so the legacy recover path (no
+   * snapshot) can still resume the exact session instead of booting fresh
+   * (R2 fix). Absent for pre-enrichment entries and plain shells.
+   */
+  sessionRef?: string | null
   /** Epoch ms of the FIRST spawn; preserved across re-spawns/reattaches. */
   spawnedAt: number
   /** False after dismiss/kill/agent exit; flips back true on re-spawn. */
@@ -87,6 +94,9 @@ export class AgentRegistry {
     const prior = this.lookup(input.id)
     const entry: AgentRegistryEntry = {
       ...input,
+      // Monotone-safe: a respawn upsert without a resolved ref must never
+      // erase a previously bound one (the ref is a recovery signal).
+      sessionRef: input.sessionRef ?? prior?.sessionRef ?? null,
       spawnedAt: prior?.spawnedAt ?? Date.now(),
       active: true,
       updatedAt: Date.now()
@@ -96,6 +106,16 @@ export class AgentRegistry {
       : [...this.entries, entry]
     this.save()
     return entry
+  }
+
+  /** Update a harness session ref after a lazy bind (codex/opencode). */
+  setSessionRef(id: string, sessionRef: string): void {
+    const prior = this.lookup(id)
+    if (!prior || prior.sessionRef === sessionRef) return
+    this.entries = this.entries.map((e) =>
+      e.id === id ? { ...e, sessionRef, updatedAt: Date.now() } : e
+    )
+    this.save()
   }
 
   /** Dismiss/kill/agent exit — the entry stays for the roster, marked inactive. */
