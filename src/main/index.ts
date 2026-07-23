@@ -167,22 +167,32 @@ function spawnTracked(t: {
   // reader lazily re-binds on first fetch if this attempt is too early.
   if (isCodexCommand(command) && !t.codexSessionRef) {
     const spawnedAt = Date.now()
-    setTimeout(() => {
-      try {
-        // Same-cwd siblings must never share a rollout (disambiguation):
-        // exclude refs other terminals already claimed.
-        const claimed = new Set(
-          store
-            .terminalsAcross()
-            .filter((n) => n.id !== t.id && typeof n.codexSessionRef === 'string')
-            .map((n) => path.resolve(n.codexSessionRef as string))
-        )
-        const ref = resolveCodexRollout({ cwd: t.cwd, spawnedAt, exclude: claimed })
-        if (ref && store.nodeAcrossWorkspaces(t.id)) store.updateNodeUnsafe(t.id, { codexSessionRef: ref })
-      } catch (error) {
-        console.error('Codex rollout bind failed (lazy retry remains):', error)
-      }
-    }, 8000)
+    // Staged retry until bound (the 8s one-shot can miss — live probe showed
+    // it): an early-killed codex agent would otherwise recover fresh.
+    const attempt = (delays: number[]): void => {
+      if (delays.length === 0) return
+      setTimeout(() => {
+        try {
+          const hit = store.nodeAcrossWorkspaces(t.id)
+          if (!hit || hit.node.kind !== 'terminal') return
+          if ((hit.node as TerminalNodeData).codexSessionRef) return
+          // Same-cwd siblings must never share a rollout (disambiguation):
+          // exclude refs other terminals already claimed.
+          const claimed = new Set(
+            store
+              .terminalsAcross()
+              .filter((n) => n.id !== t.id && typeof n.codexSessionRef === 'string')
+              .map((n) => path.resolve(n.codexSessionRef as string))
+          )
+          const ref = resolveCodexRollout({ cwd: t.cwd, spawnedAt, exclude: claimed })
+          if (ref) store.updateNodeUnsafe(t.id, { codexSessionRef: ref })
+          else attempt(delays.slice(1)) // not written yet — retry later
+        } catch (error) {
+          console.error('Codex rollout bind failed:', error)
+        }
+      }, delays[0])
+    }
+    attempt([8000, 20000, 45000])
   }
   // OpenCode session bind (Tinker recipe): the ses_<id>.json appears at/after
   // the first turn, so retry on a schedule until it binds (MEDIUM-3 — the
