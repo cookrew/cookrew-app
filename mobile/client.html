@@ -621,9 +621,55 @@
     background: var(--cream-md);
     color: var(--muted);
   }
-  .popout-browser .browser-body-wrap { border-bottom: 2px solid var(--line); }
-  .popout-browser .browser-thumb { object-fit: contain; background: #fff; }
-  .popout-browser .browser-thumb-glyph { font-size: 56px; }
+  /* Zoomed-open browser on phone = the LIVE desktop capture (Velvet polls
+     /thumb). It's a real screen, so we frame it like one: a phosphor bezel that
+     letterboxes the frame — FIT contain + centred, never stretched. */
+  .popout-browser .browser-body-wrap {
+    border-bottom: 2px solid var(--line);
+    background: var(--phos-bg);            /* the bezel the frame letterboxes into */
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.55);
+    padding: 6px;
+  }
+  .popout-browser .browser-thumb {
+    object-fit: contain;                    /* scale to fit, no stretch */
+    object-position: center;                /* centred in the bezel */
+    background: transparent;                /* letterbox = the phosphor bezel */
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(233, 185, 73, 0.12);
+  }
+
+  /* LOADING placeholder — a phosphor "acquiring the live view" screen shown until
+     the first captured frame lands. Faint scanlines like the terminal surface, a
+     pulsing browser coin, and the target URL. */
+  .popout-browser .browser-thumb-empty {
+    background:
+      repeating-linear-gradient(transparent 0 2px, rgba(255, 255, 255, 0.02) 2px 3px),
+      radial-gradient(130% 90% at 50% 8%, #1d160c, var(--phos-bg));
+    color: var(--phos-dim);
+    gap: 12px;
+  }
+  .popout-browser .browser-thumb-glyph {
+    order: 1;
+    font-size: 50px;
+    color: var(--violet);
+    filter: drop-shadow(0 0 10px rgba(155, 138, 203, 0.4));
+    animation: vi-pulse 1.5s ease-in-out infinite;
+  }
+  .popout-browser .browser-thumb-empty::after {
+    order: 2;
+    content: 'Acquiring live view…';
+    font-family: var(--font-pixel);
+    font-size: 8px;
+    letter-spacing: 0.16em;
+    color: var(--phos-dim);
+  }
+  .popout-browser .browser-thumb-empty .browser-url {
+    order: 3;
+    color: var(--phos);
+    max-width: 80%;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .popout-browser .browser-thumb-glyph { animation: none; }
+  }
   .popout-browser a { color: inherit; text-decoration: none; }
   .browser-actions {
     flex: 0 0 auto;

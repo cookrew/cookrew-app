@@ -7,8 +7,9 @@ import {
   setBrowserActiveTab,
   unregisterBrowserTab
 } from './browser-engine'
-import { cookrew, hasNativeWebview } from './api'
-import { canCapture, initialBackoff, recordFailure, recordSuccess } from './capture-backoff'
+import { cookrew, hasNativeWebview, isRemoteMode } from './api'
+import { MobileBrowserFrame } from './MobileBrowserFrame'
+import { initialBackoff, recordFailure, recordSuccess, shouldCapture } from './capture-backoff'
 import { isSelfEmbedding } from './self-embed'
 import type { ScreenRect } from './zoom-lod'
 import type { LodLayout } from './zoom-lod'
@@ -35,6 +36,8 @@ interface BrowserLayerProps {
   lod: LodLayout
   browsers: BrowserNodeData[]
   onThumb: (id: string, dataUrl: string) => void
+  /** Is a phone currently viewing this browser (keeps capture alive while hidden)? */
+  isPhoneViewing: (browserId: string) => boolean
 }
 
 /**
@@ -47,7 +50,12 @@ interface BrowserLayerProps {
  * session partition. Thumbnails come from periodic capturePage() snapshots
  * of the active tab.
  */
-export function BrowserLayer({ browsers, lod, onThumb }: BrowserLayerProps): React.JSX.Element {
+export function BrowserLayer({
+  browsers,
+  lod,
+  onThumb,
+  isPhoneViewing
+}: BrowserLayerProps): React.JSX.Element {
   usePopupTabOpener(browsers)
   // SHARED arbitration with terminal overlays (Magpie E2: a per-kind hook
   // let a browser view stack over the zoomed terminal and steal every tap).
@@ -60,6 +68,7 @@ export function BrowserLayer({ browsers, lod, onThumb }: BrowserLayerProps): Rea
           node={p}
           rect={activeIds.has(p.id) ? (rects[p.id] ?? null) : null}
           onThumb={onThumb}
+          isPhoneViewing={isPhoneViewing}
         />
       ))}
     </>
@@ -93,12 +102,14 @@ function usePopupTabOpener(browsers: BrowserNodeData[]): void {
 function BrowserHost({
   node,
   rect,
-  onThumb
+  onThumb,
+  isPhoneViewing
 }: {
   node: BrowserNodeData
   /** Screen rect to render the full browser at; null = thumbnail mode. */
   rect: ScreenRect | null
   onThumb: (id: string, dataUrl: string) => void
+  isPhoneViewing: (browserId: string) => boolean
 }): React.JSX.Element {
   const { zoomBack } = useCanvasUi()
   const tabs = browserTabs(node)
@@ -234,8 +245,10 @@ function BrowserHost({
             browserName={node.name}
             tab={tab}
             visible={tab.id === activeTab.id}
+            zoomed={rect !== null}
             onThumb={onThumb}
             patchTab={patchTab}
+            isPhoneViewing={isPhoneViewing}
           />
         ))}
       </div>
@@ -248,13 +261,18 @@ function BrowserTabView({
   browserName,
   tab,
   visible,
+  zoomed,
   onThumb,
-  patchTab
+  patchTab,
+  isPhoneViewing
 }: {
   browserId: string
   browserName: string
   tab: BrowserTab
   visible: boolean
+  /** True while the browser popout is zoomed open (drives the phone frame poll). */
+  zoomed: boolean
+  isPhoneViewing: (browserId: string) => boolean
   onThumb: (id: string, dataUrl: string) => void
   patchTab: (tabId: string, patch: Partial<BrowserTab>) => void
 }): React.JSX.Element | null {
@@ -304,10 +322,12 @@ function BrowserTabView({
 
   // Thumbnail loop for the active tab: after loads and on a slow interval.
   // capturePage() only exists on real <webview>s (Electron renderer).
-  // GPU protection: nothing captures while the window is hidden/occluded
-  // (Electron marks the document hidden in both cases), and a rejected
-  // capture backs off exponentially instead of hot-retrying a wedged GPU
-  // process. did-stop-loading captures pass through the same gate.
+  // GPU protection: capture pauses while the window is hidden/occluded — EXCEPT
+  // for a browser a phone is viewing, which must keep producing fresh frames
+  // (the phone's live view) even with the desktop offscreen. A rejected capture
+  // still backs off exponentially instead of hot-retrying a wedged GPU, so the
+  // phone-viewing bypass can't spin a degraded GPU. did-stop-loading and the
+  // interval both pass through the same shouldCapture() gate.
   useEffect(() => {
     if (!hasNativeWebview() || !visible) return
     const webview = webviewRef.current
@@ -316,7 +336,13 @@ function BrowserTabView({
     let reported = false
     let backoff = initialBackoff
     const capture = (): void => {
-      if (document.hidden || !canCapture(backoff, Date.now())) return
+      const gate = {
+        documentHidden: document.hidden,
+        phoneViewing: isPhoneViewing(browserId),
+        backoff,
+        now: Date.now()
+      }
+      if (!shouldCapture(gate)) return
       void webview
         .capturePage()
         .then((image) => {
@@ -333,8 +359,9 @@ function BrowserTabView({
     }
     const onStop = (): void => capture()
     const onVisibility = (): void => {
-      // Back from hidden/occluded: refresh the thumb immediately rather than
-      // waiting out the interval.
+      // Back from hidden/occluded: refresh immediately rather than waiting out
+      // the interval. (While still hidden, only a phone-viewed browser keeps
+      // capturing — handled by shouldCapture on the interval tick.)
       if (!document.hidden) capture()
     }
     webview.addEventListener('did-stop-loading', onStop)
@@ -346,7 +373,7 @@ function BrowserTabView({
       webview.removeEventListener('did-stop-loading', onStop)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [browserId, tab.id, visible, onThumb])
+  }, [browserId, tab.id, visible, onThumb, isPhoneViewing])
 
   // Never load Cookrew inside Cookrew: recursive embedding renders the whole
   // canvas (and its browsers, recursively) per layer and pegs the GPU.
@@ -361,8 +388,14 @@ function BrowserTabView({
     ) : null
   }
 
-  // Demo tabs and phone browsers get an iframe — only the Electron desktop
-  // renderer has full-Chromium <webview>s.
+  // PHONE (remote mode): the iframe renders file:// / PDFs / webview-only content
+  // BLANK, so show the desktop's LIVE captured frame instead (mobile-browser-ux-
+  // fix) — the primary display, polled while zoomed open. Fit-scaled, placeholder
+  // until the first frame.
+  if (isRemoteMode()) {
+    return visible ? <MobileBrowserFrame browserId={browserId} open={zoomed} /> : null
+  }
+  // Demo tabs get a plain iframe — no capture backend, and demo URLs load fine.
   if (!hasNativeWebview()) {
     return visible ? <iframe src={tab.url} className="browser-body" title={tab.title || tab.url} /> : null
   }
