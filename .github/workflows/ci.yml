@@ -10,7 +10,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # No windows leg: the app requires tmux (unsupported there), and the
+        # runner's VS finder currently breaks the node-pty ABI rebuild anyway
+        # (node-gyp ERR_CHILD_PROCESS_STDIO_MAXBUFFER).
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -31,7 +34,6 @@ jobs:
       - run: npm run build
 
       - name: Guard against pre-rename residue
-        if: runner.os != 'Windows'
         run: |
           if grep -rn --exclude-dir=node_modules --exclude-dir=out --exclude-dir=.git \
               --exclude=package-lock.json --exclude=launch-plan.html \
@@ -39,8 +41,10 @@ jobs:
             echo "::error::Found leftover pre-rename 'cava' references (see above)"
             exit 1
           fi
+          # marketing-plan.html is competitive analysis — naming competitors
+          # there is the document's job, not product copy.
           if grep -rn --exclude-dir=node_modules --exclude-dir=out --exclude-dir=.git \
-              --exclude=package-lock.json \
+              --exclude=package-lock.json --exclude=marketing-plan.html \
               -i "maestri" src cli mobile tests docs README.md package.json; then
             echo "::error::Found 'maestri' references — product copy must stand on its own (see above)"
             exit 1
