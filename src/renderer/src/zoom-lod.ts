@@ -5,7 +5,7 @@ import { isRemoteMode } from './api'
 
 /**
  * Semantic-zoom (LOD) layout: cards on the canvas are thumbnails by default
- * and swap to their full renderer (live xterm / webview) only while they
+ * and swap to their full renderer (live xterm / browser surface) only while they
  * occupy >= 80% of the stage in at least one dimension. Zooming back out
  * returns them to thumbnails. Notes never take part.
  */

@@ -105,10 +105,8 @@ const api = {
     ipcRenderer.send('browser:result', id, ok, output),
   browserThumb: (browserId: string, dataUrl: string) =>
     ipcRenderer.send('browser:thumb', browserId, dataUrl),
-  reportBrowserWebContents: (browserId: string, tabId: string, webContentsId: number) =>
-    ipcRenderer.send('browser:webcontents', browserId, tabId, webContentsId),
-  clearBrowserWebContents: (browserId: string, tabId: string) =>
-    ipcRenderer.send('browser:webcontents-gone', browserId, tabId),
+  interactiveBrowserEnabled: () => ipcRenderer.invoke('browser:interactive-enabled'),
+  browserStreamToken: () => ipcRenderer.invoke('browser:stream-token'),
   onCmdW: (cb: () => void) => {
     const listener = (): void => cb()
     ipcRenderer.on('app:cmd-w', listener)

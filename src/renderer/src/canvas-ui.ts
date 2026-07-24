@@ -15,6 +15,8 @@ export interface CanvasUi {
   activities: Record<string, TerminalActivity>
   /** Latest browser thumbnails as data URLs, keyed by node id. */
   thumbs: Record<string, string>
+  /** Fixed-at-launch browser ownership; null while capability is unresolved. */
+  interactiveBrowser: boolean | null
   zoomToNode: (id: string) => void
   zoomBack: () => void
 }
@@ -23,6 +25,7 @@ export const CanvasUiContext = createContext<CanvasUi>({
   tool: 'select',
   activities: {},
   thumbs: {},
+  interactiveBrowser: null,
   zoomToNode: () => undefined,
   zoomBack: () => undefined
 })

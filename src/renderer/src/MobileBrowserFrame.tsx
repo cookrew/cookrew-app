@@ -7,39 +7,64 @@ import {
   frameSrc,
   shouldPollFrame
 } from './browser-frame'
-import { frameSource, keyMsg, pointerMsg, viewToFramePoint, wheelMsg } from './browser-stream'
+import {
+  frameSource,
+  keyMsg,
+  pointerMsg,
+  streamSurfaceState,
+  viewToFramePoint,
+  wheelMsg,
+  type StreamSurfaceState
+} from './browser-stream'
 import { useBrowserStream } from './useBrowserStream'
 
 /**
- * The phone's LIVE browser view (mobile-browser-ux-fix + interactive-remote-
- * browser-c). Two sources, feature-detected:
- *   • STREAM (preferred): a CDP screencast over WS — live JPEG frames the phone
- *     renders AND drives (touch/scroll/type forwarded as Input events). Works for
- *     file:// / auth / localhost because the DESKTOP loads the page.
- *   • THUMB (fallback): the static 5s /thumb capture poll (phase 1) — used when
- *     the stream/CDP path is unavailable (the hook falls back loudly).
- * A webview-only page renders blank in a phone iframe, so we never use one here.
- * Fresco owns the touch affordances, streaming indicator, and loading visuals.
+ * Shared LIVE browser viewport for phone and desktop. In headless mode, both
+ * clients render and drive the same CDP screencast and fail closed on neutral
+ * loading/unavailable surfaces. Only the flag-off phone path uses /thumb.
  */
 export function MobileBrowserFrame({
   browserId,
-  open
+  open,
+  streamEnabled,
+  desktopStreamToken,
+  fallback = 'thumb'
 }: {
   browserId: string
-  /** True while the browser is zoomed open on the phone (stream/poll only then). */
+  /** True while this browser pane is zoomed open (stream/poll only then). */
   open: boolean
+  /** Resolved main/remote capability; false never opens the stream socket. */
+  streamEnabled: boolean
+  /** Per-process credential for native Electron; always null on the phone. */
+  desktopStreamToken: string | null
+  /** Flag-off phone uses /thumb; headless clients use a neutral fallback. */
+  fallback?: 'thumb' | 'loading'
 }): React.JSX.Element {
-  const stream = useBrowserStream(browserId, open)
+  const stream = useBrowserStream(browserId, open, streamEnabled, desktopStreamToken)
   const streaming = frameSource(stream.status) === 'stream'
-  // Interactive ONLY while frames are actively flowing — a WS that's open but
-  // frameless, or a stalled/frozen frame, must never present as tappable.
-  const interactive = streaming && stream.live && stream.frameUrl !== null
 
   const [seq, setSeq] = useState(0) // /thumb cache-buster (fallback mode)
   const [loaded, setLoaded] = useState(false)
+  const [streamFrameLoaded, setStreamFrameLoaded] = useState(false)
   const [view, setView] = useState({ w: 0, h: 0 })
   const [natural, setNatural] = useState({ w: 0, h: 0 })
   const boxRef = useRef<HTMLDivElement>(null)
+
+  // Interactive ONLY after a frame has decoded and while frames are actively
+  // flowing. A connected-but-frameless or stalled view is never tappable.
+  const interactive = streaming && stream.live && stream.frameUrl !== null && streamFrameLoaded
+
+  useEffect(() => {
+    if (!open) {
+      setLoaded(false)
+      setStreamFrameLoaded(false)
+      setNatural({ w: 0, h: 0 })
+    }
+  }, [open, browserId])
+
+  useEffect(() => {
+    if (!streaming) setStreamFrameLoaded(false)
+  }, [streaming])
 
   // Measure the view box so either source fit-scales (letterbox) into it.
   useEffect(() => {
@@ -52,10 +77,10 @@ export function MobileBrowserFrame({
     return () => ro.disconnect()
   }, [])
 
-  // FALLBACK poll: only when NOT streaming — the /thumb refetch loop (phase 1),
-  // gated on open + visible so a closed/occluded view stops fetching.
+  // LEGACY FLAG-OFF poll: the /thumb refetch loop, gated on open + visible so
+  // a closed/occluded phone view stops fetching. Headless mode never enters it.
   useEffect(() => {
-    if (streaming) return
+    if (fallback !== 'thumb' || streaming) return
     const poller = createFramePoller(() => setSeq((s) => s + 1), FRAME_POLL_MS)
     const sync = (): void => {
       if (shouldPollFrame({ open, hidden: document.hidden })) poller.start()
@@ -67,20 +92,42 @@ export function MobileBrowserFrame({
       poller.stop()
       document.removeEventListener('visibilitychange', sync)
     }
-  }, [streaming, open])
+  }, [fallback, streaming, open])
 
   // Both sources report their pixel size via the <img> natural size (the stream
   // frame's JPEG dims, the thumb's PNG dims) — used as the letterbox + coord basis.
   const fit = fitContain(natural.w, natural.h, view.w, view.h)
 
-  const src = streaming ? stream.frameUrl : frameSrc(browserId, seq)
+  const src = streaming
+    ? stream.frameUrl
+    : fallback === 'thumb' && open
+      ? frameSrc(browserId, seq)
+      : null
   // In stream mode the placeholder shows until the view is genuinely live, so a
   // frozen frame reads as "connecting…", not an interactive surface.
-  const showPlaceholder = streaming ? !interactive : !loaded
+  const showPlaceholder = streaming ? !interactive : fallback === 'loading' || !loaded
+  const surfaceState = streamSurfaceState({
+    open,
+    status: stream.status,
+    frameLoaded: streamFrameLoaded,
+    live: stream.live,
+    fallback
+  })
+  const statusText = STREAM_STATUS_TEXT[surfaceState]
 
   // ---- input forwarding (stream mode only): map view point → FRAME px, then send
   // the compact `t`-tagged message; Forge maps FRAME px → page px + whitelists. ----
   const dragging = useRef(false)
+  const lastPoint = useRef<{ x: number; y: number } | null>(null)
+
+  // If freshness disappears mid-drag, release the remote mouse before input is
+  // disabled so the headless page cannot be left with a stuck pressed button.
+  useEffect(() => {
+    if (interactive || !dragging.current) return
+    dragging.current = false
+    if (lastPoint.current) stream.send(pointerMsg('up', lastPoint.current))
+  }, [interactive, stream.send])
+
   const framePoint = (e: React.PointerEvent): { x: number; y: number } | null => {
     const box = boxRef.current
     if (!box || natural.w <= 0) return null
@@ -88,37 +135,47 @@ export function MobileBrowserFrame({
     return viewToFramePoint(e.clientX - r.left, e.clientY - r.top, fit, natural.w, natural.h)
   }
   const onPointerDown = (e: React.PointerEvent): void => {
-    if (!streaming) return
+    if (!interactive) return
     const p = framePoint(e)
     if (!p) return
+    e.preventDefault()
+    boxRef.current?.focus()
     dragging.current = true
+    lastPoint.current = p
     e.currentTarget.setPointerCapture(e.pointerId)
     stream.send(pointerMsg('down', p))
   }
   const onPointerMove = (e: React.PointerEvent): void => {
-    if (!streaming || !dragging.current) return
+    if (!interactive || !dragging.current) return
     const p = framePoint(e)
-    if (p) stream.send(pointerMsg('move', p))
+    if (p) {
+      lastPoint.current = p
+      stream.send(pointerMsg('move', p))
+    }
   }
   const onPointerUp = (e: React.PointerEvent): void => {
-    if (!streaming || !dragging.current) return
+    if (!dragging.current) return
     dragging.current = false
     if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
     const p = framePoint(e)
-    // down→up is a click when there was no drag, a scroll-end when there was.
-    if (p) stream.send(pointerMsg('up', p))
+    if (p) {
+      lastPoint.current = p
+      stream.send(pointerMsg('up', p))
+    }
   }
   const onWheel = (e: React.WheelEvent): void => {
-    if (!streaming) return
+    if (!interactive) return
     const box = boxRef.current
     if (!box || natural.w <= 0) return
+    e.preventDefault()
     const r = box.getBoundingClientRect()
     const p = viewToFramePoint(e.clientX - r.left, e.clientY - r.top, fit, natural.w, natural.h)
     stream.send(wheelMsg(p, e.deltaY))
   }
   const onKeyDown = (e: React.KeyboardEvent): void => {
-    if (!streaming) return
+    if (!interactive) return
     if (e.key === 'Escape') return // let harness shortcuts bubble
+    e.preventDefault()
     e.stopPropagation()
     stream.send(keyMsg(e.key, e.code))
   }
@@ -127,6 +184,13 @@ export function MobileBrowserFrame({
     <div
       ref={boxRef}
       className={`browser-body browser-frame nodrag nowheel${interactive ? ' streaming' : ''}`}
+      data-browser-id={browserId}
+      data-stream-status={stream.status}
+      data-stream-state={surfaceState}
+      data-frame-seq={stream.frameSeq ?? 'none'}
+      data-last-frame-at={stream.lastFrameAt ?? 'none'}
+      data-last-frame-fresh={stream.live ? 'true' : 'false'}
+      data-interactive={interactive ? 'true' : 'false'}
       // Interactive drive ONLY while frames are actively flowing (not merely WS
       // open); the tabIndex lets it take keys.
       tabIndex={interactive ? 0 : undefined}
@@ -137,12 +201,15 @@ export function MobileBrowserFrame({
       onWheel={interactive ? onWheel : undefined}
       onKeyDown={interactive ? onKeyDown : undefined}
     >
+      <span className="browser-frame-status" role="status" aria-live="polite" aria-atomic="true">
+        {statusText}
+      </span>
       {showPlaceholder && (
-        <div className="browser-frame-loading" role="status" aria-live="polite">
+        <div className="browser-frame-loading" aria-hidden="true">
           <span className="browser-frame-glyph">
             <CrIcon name="browser" />
           </span>
-          <span className="cr-kicker">{streaming ? 'connecting live view…' : 'loading live view…'}</span>
+          <span className="cr-kicker">{statusText}</span>
         </div>
       )}
       {interactive && <span className="browser-frame-live" aria-hidden="true" />}
@@ -165,11 +232,21 @@ export function MobileBrowserFrame({
             if (img.naturalWidth > 0 && (img.naturalWidth !== natural.w || img.naturalHeight !== natural.h)) {
               setNatural({ w: img.naturalWidth, h: img.naturalHeight })
             }
-            if (!streaming) setLoaded(true)
+            if (streaming) setStreamFrameLoaded(true)
+            else setLoaded(true)
           }}
           onError={() => undefined}
         />
       )}
     </div>
   )
+}
+
+const STREAM_STATUS_TEXT: Record<StreamSurfaceState, string> = {
+  idle: 'browser stream idle',
+  loading: 'loading live browser view',
+  live: 'live browser view',
+  stalled: 'live browser view stalled',
+  fallback: 'browser preview',
+  unavailable: 'live browser view unavailable'
 }

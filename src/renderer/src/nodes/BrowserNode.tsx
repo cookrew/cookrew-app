@@ -7,14 +7,16 @@ import { browserTabs } from '../../../shared/model'
 import { useCanvasUi } from '../canvas-ui'
 
 /**
- * Summary card for a browser: a periodically refreshed thumbnail of the page.
- * The live <webview> lives in BrowserLayer (offscreen) and is only shown by
- * the fullscreen browser popout after a click.
+ * Summary card for a browser, with a legacy thumbnail when one is available.
+ * BrowserLayer owns the live popout: a webview with the flag off, or the one
+ * node-owned headless stream with the flag on.
  */
 export function BrowserNode({ data, selected }: NodeProps): React.JSX.Element {
   const node = (data as { node: BrowserNodeData }).node
-  const { tool, thumbs, zoomToNode } = useCanvasUi()
-  const thumb = thumbs[node.id]
+  const { tool, thumbs, interactiveBrowser, zoomToNode } = useCanvasUi()
+  // Headless ownership never surfaces a legacy webview capture, including
+  // while capability is unresolved. The live stream appears in the popout.
+  const thumb = interactiveBrowser === false ? thumbs[node.id] : undefined
 
   const open = (): void => {
     if (tool === 'select') zoomToNode(node.id)

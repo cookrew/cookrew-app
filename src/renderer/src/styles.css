@@ -1372,9 +1372,8 @@ body,
   border: none;
 }
 
-/* Phone LIVE-FRAME view (mobile-browser-ux-fix; Velvet structure, Fresco polish):
-   the desktop's captured frame shown as an <img>, fit-scaled (letterbox) within
-   the body — so file:// / PDFs / webview-only content is VISIBLE on the phone. */
+/* Shared browser frame: the headless stream on desktop/phone, plus the legacy
+   flag-off phone thumbnail. Frames are fit-scaled (letterboxed) in the body. */
 .browser-frame {
   position: relative;
   overflow: hidden;
@@ -1402,6 +1401,20 @@ body,
   justify-content: center;
   gap: 8px;
   color: var(--muted, #8a8a8a);
+}
+
+/* Accessible stream state for screen readers; the matching visible status is
+   rendered separately while loading/stalled/unavailable. */
+.browser-frame-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* Interactive stream: the view takes touch/keys (Fresco styles the affordances +
@@ -1443,9 +1456,9 @@ body,
   text-align: center;
 }
 
-/* Inactive tabs stay mounted (session + automation keep working) but take no
-   space. visibility instead of display:none — hiding a <webview> with
-   display:none is a known Electron footgun (guest page glitches/reloads). */
+/* Legacy flag-off tabs stay mounted (session + automation keep working) but
+   take no space. visibility instead of display:none avoids Electron guest-page
+   glitches/reloads. */
 .browser-body-hidden {
   flex: 0 0 0;
   height: 0;

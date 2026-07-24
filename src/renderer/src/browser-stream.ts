@@ -1,9 +1,9 @@
 /**
  * Interactive remote-browser STREAM client core (interactive-remote-browser-c,
- * CDP screencast arch). The phone SEES and DRIVES the desktop webview: Forge's
- * main process attaches the CDP debugger, Page.startScreencast, and pushes JPEG
- * frames over a WebSocket at GET /api/browser/:id/stream; the client renders them
- * and forwards touch/scroll/type back as Input events on the same socket.
+ * CDP screencast arch). Desktop and phone clients SEE and DRIVE the same
+ * headless-Chromium instance: Forge pushes JPEG frames over a WebSocket at
+ * GET /api/browser/:id/stream, and both renderers forward pointer/scroll/key
+ * input to that same CDP target.
  *
  * Built against Forge's LANDED contract (src/shared/cast-input.ts +
  * screencast-pace.ts):
@@ -16,7 +16,8 @@
  *
  * This module is the JSX-free, unit-tested core: the WS URL, the frame parse, the
  * view→frame coordinate mapping, the input-message builders, and the feature-
- * detect/fallback state machine (falls back LOUDLY to the static /thumb frame).
+ * detect/fallback state machine. Legacy phone mode may fall back to /thumb;
+ * headless mode fails closed on a neutral unavailable surface.
  */
 
 import type { FitRect } from './browser-frame'
@@ -24,6 +25,39 @@ import type { FitRect } from './browser-frame'
 /** Requested screencast viewport bounds — Forge clamps 320..2048 (default 800x1400). */
 export const VIEWPORT_MIN = 320
 export const VIEWPORT_MAX = 2048
+
+/** The companion server is the native renderer's route to the stream endpoint. */
+export const DESKTOP_STREAM_ORIGIN = 'http://127.0.0.1:8639'
+
+/** Renderer surfaces that may (or may not) host the shared browser stream. */
+export type StreamClient = 'desktop' | 'remote' | 'demo'
+
+/** Exhaustive renderer ownership contract for one browser tab surface. */
+export type BrowserRenderMode =
+  | 'pending'
+  | 'headless-stream'
+  | 'legacy-webview'
+  | 'legacy-thumb'
+  | 'legacy-iframe'
+  | 'legacy-blocked'
+
+/**
+ * Capability approval wins before every legacy exception. In particular, a
+ * self-embedding URL is still rendered by the already-owned headless page;
+ * blocking, iframe, webview, and /thumb are flag-off behavior only.
+ */
+export function browserRenderMode(opts: {
+  interactive: boolean | null
+  client: StreamClient
+  selfEmbedding: boolean
+}): BrowserRenderMode {
+  if (opts.interactive === null) return 'pending'
+  if (opts.interactive) return 'headless-stream'
+  if (opts.selfEmbedding) return 'legacy-blocked'
+  if (opts.client === 'remote') return 'legacy-thumb'
+  if (opts.client === 'demo') return 'legacy-iframe'
+  return 'legacy-webview'
+}
 
 /** Clamp a requested viewport dimension to the server's accepted range (rounded). */
 export function clampViewport(px: number): number {
@@ -35,11 +69,27 @@ export function clampViewport(px: number): number {
  * The WS URL for a browser's stream, derived from the page origin (ws/wss) with
  * the requested screencast size as `w`/`h` query params (Forge's contract).
  */
-export function streamUrl(origin: string, browserId: string, w: number, h: number): string {
+export function streamUrl(
+  origin: string,
+  browserId: string,
+  w: number,
+  h: number,
+  desktopToken?: string | null
+): string {
   const scheme = origin.startsWith('https') ? 'wss' : 'ws'
   const host = origin.replace(/^https?:\/\//, '')
-  const q = `w=${clampViewport(w)}&h=${clampViewport(h)}`
+  const token = desktopToken ? `&desktopToken=${encodeURIComponent(desktopToken)}` : ''
+  const q = `w=${clampViewport(w)}&h=${clampViewport(h)}${token}`
   return `${scheme}://${host}/api/browser/${encodeURIComponent(browserId)}/stream?${q}`
+}
+
+/**
+ * Phone bundles are served by the companion server and connect same-origin.
+ * Electron is loaded from file:// (packaged) or Vite (dev), so its stream lives
+ * on the companion server's stable loopback origin instead of the page origin.
+ */
+export function streamOrigin(pageOrigin: string, client: StreamClient): string {
+  return client === 'desktop' ? DESKTOP_STREAM_ORIGIN : pageOrigin
 }
 
 /** base64 JPEG → a renderable data URL. */
@@ -133,20 +183,60 @@ export function keyMsg(key: string, code: string): CastInputMsg {
   return { t: 'key', key, code, ...(key.length === 1 ? { text: key } : {}) }
 }
 
+/** A frame is live only inside the freshness window; zero means no frame yet. */
+export function frameIsFresh(lastFrameAt: number, now: number, staleMs: number): boolean {
+  return lastFrameAt > 0 && now >= lastFrameAt && now - lastFrameAt <= staleMs
+}
+
+/** Stable, probe-facing state of the rendered browser surface. */
+export type StreamSurfaceState =
+  | 'idle'
+  | 'loading'
+  | 'live'
+  | 'stalled'
+  | 'fallback'
+  | 'unavailable'
+
+export function streamSurfaceState(opts: {
+  open: boolean
+  status: StreamStatus
+  frameLoaded: boolean
+  live: boolean
+  fallback: 'thumb' | 'loading'
+}): StreamSurfaceState {
+  if (!opts.open) return 'idle'
+  if (opts.status === 'streaming') {
+    if (!opts.frameLoaded) return 'loading'
+    return opts.live ? 'live' : 'stalled'
+  }
+  if (opts.status === 'fallback') {
+    return opts.fallback === 'thumb' ? 'fallback' : 'unavailable'
+  }
+  return 'loading'
+}
+
 // ---- feature-detect / fallback state machine ----
 
 /**
- * idle → connecting → streaming, with fallback to the static /thumb frame the
- * moment the CDP/WS path proves unavailable (unsupported env, connect error,
- * socket close, or no first frame before the connect deadline). Fallback is
- * terminal for this open; a fresh browser-open starts over. Never silent — the
- * caller logs loudly on the transition to 'fallback'.
+ * idle → connecting → streaming, with fallback the moment the CDP/WS path
+ * proves unavailable (unsupported env, connect error, socket close, or no first
+ * frame before the deadline). Fallback is terminal for this open; a fresh
+ * browser-open starts over. Never silent — the caller logs the transition.
  */
 export type StreamStatus = 'idle' | 'connecting' | 'streaming' | 'fallback'
-export type StreamEvent = 'connect' | 'open' | 'firstFrame' | 'error' | 'close' | 'unsupported'
+export type StreamEvent =
+  | 'connect'
+  | 'open'
+  | 'firstFrame'
+  | 'error'
+  | 'close'
+  | 'unsupported'
+  | 'disabled'
 
 export function nextStreamStatus(current: StreamStatus, event: StreamEvent): StreamStatus {
-  if (event === 'unsupported' || event === 'error' || event === 'close') return 'fallback'
+  if (event === 'unsupported' || event === 'disabled' || event === 'error' || event === 'close') {
+    return 'fallback'
+  }
   switch (current) {
     case 'idle':
       return event === 'connect' ? 'connecting' : current
@@ -157,9 +247,9 @@ export function nextStreamStatus(current: StreamStatus, event: StreamEvent): Str
   }
 }
 
-/** Whether the browser environment can even attempt a stream (WS present). */
-export function streamSupported(hasWebSocket: boolean, remoteMode: boolean): boolean {
-  return hasWebSocket && remoteMode
+/** Whether this renderer can attempt a capability-approved stream. */
+export function streamSupported(hasWebSocket: boolean, client: StreamClient): boolean {
+  return hasWebSocket && client !== 'demo'
 }
 
 /** Which source the view should render: the live stream only while 'streaming'. */

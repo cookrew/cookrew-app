@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
+  browserRenderMode,
   clampViewport,
+  DESKTOP_STREAM_ORIGIN,
   frameDataUrl,
+  frameIsFresh,
   frameSource,
   keyMsg,
   nextStreamStatus,
   parseStreamMessage,
   pointerMsg,
   streamSupported,
+  streamOrigin,
+  streamSurfaceState,
   streamUrl,
   viewToFramePoint,
   wheelMsg
@@ -27,6 +32,57 @@ describe('streamUrl (ws/wss from origin, w/h query per Forge contract)', () => {
   })
   it('over/under-size requests clamp into 320..2048', () => {
     expect(streamUrl('http://h', 'b', 100, 5000)).toBe('ws://h/api/browser/b/stream?w=320&h=2048')
+  })
+  it('appends and encodes the optional desktop credential', () => {
+    expect(streamUrl('http://127.0.0.1:8639', 'b', 800, 600, 'secret/one')).toBe(
+      'ws://127.0.0.1:8639/api/browser/b/stream?w=800&h=600&desktopToken=secret%2Fone'
+    )
+  })
+})
+
+describe('browserRenderMode (full renderer replacement contract)', () => {
+  it('fails closed while capability is unresolved', () => {
+    expect(browserRenderMode({ interactive: null, client: 'desktop', selfEmbedding: false })).toBe(
+      'pending'
+    )
+  })
+
+  it('flag on is headless-only for desktop, phone, demo, and self-embedding URLs', () => {
+    for (const client of ['desktop', 'remote', 'demo'] as const) {
+      expect(browserRenderMode({ interactive: true, client, selfEmbedding: false })).toBe(
+        'headless-stream'
+      )
+      expect(browserRenderMode({ interactive: true, client, selfEmbedding: true })).toBe(
+        'headless-stream'
+      )
+    }
+  })
+
+  it('flag off preserves each legacy renderer and its self-embed guard', () => {
+    expect(browserRenderMode({ interactive: false, client: 'desktop', selfEmbedding: false })).toBe(
+      'legacy-webview'
+    )
+    expect(browserRenderMode({ interactive: false, client: 'remote', selfEmbedding: false })).toBe(
+      'legacy-thumb'
+    )
+    expect(browserRenderMode({ interactive: false, client: 'demo', selfEmbedding: false })).toBe(
+      'legacy-iframe'
+    )
+    for (const client of ['desktop', 'remote', 'demo'] as const) {
+      expect(browserRenderMode({ interactive: false, client, selfEmbedding: true })).toBe(
+        'legacy-blocked'
+      )
+    }
+  })
+})
+
+describe('streamOrigin (phone same-origin, Electron via companion loopback)', () => {
+  it('keeps the companion origin for a remote phone', () => {
+    expect(streamOrigin('https://10.0.0.5:8643', 'remote')).toBe('https://10.0.0.5:8643')
+  })
+  it('routes both packaged/file and dev Electron renderers to the local server', () => {
+    expect(streamOrigin('file://', 'desktop')).toBe(DESKTOP_STREAM_ORIGIN)
+    expect(streamOrigin('http://localhost:5173', 'desktop')).toBe(DESKTOP_STREAM_ORIGIN)
   })
 })
 
@@ -135,6 +191,9 @@ describe('nextStreamStatus (feature-detect → stream, else loud fallback)', () 
   it('unsupported env → fallback immediately', () => {
     expect(nextStreamStatus('idle', 'unsupported')).toBe('fallback')
   })
+  it('an intentionally disabled capability stays on the legacy fallback', () => {
+    expect(nextStreamStatus('idle', 'disabled')).toBe('fallback')
+  })
   it('fallback is terminal for this open', () => {
     expect(nextStreamStatus('fallback', 'firstFrame')).toBe('fallback')
     expect(nextStreamStatus('fallback', 'open')).toBe('fallback')
@@ -142,15 +201,51 @@ describe('nextStreamStatus (feature-detect → stream, else loud fallback)', () 
 })
 
 describe('streamSupported / frameSource', () => {
-  it('needs WebSocket AND remote mode', () => {
-    expect(streamSupported(true, true)).toBe(true)
-    expect(streamSupported(false, true)).toBe(false)
-    expect(streamSupported(true, false)).toBe(false)
+  it('allows desktop + phone with WebSocket, but never the standalone demo', () => {
+    expect(streamSupported(true, 'desktop')).toBe(true)
+    expect(streamSupported(true, 'remote')).toBe(true)
+    expect(streamSupported(false, 'remote')).toBe(false)
+    expect(streamSupported(true, 'demo')).toBe(false)
   })
   it('renders the stream only while streaming, else the thumb', () => {
     expect(frameSource('streaming')).toBe('stream')
     expect(frameSource('connecting')).toBe('thumb')
     expect(frameSource('fallback')).toBe('thumb')
     expect(frameSource('idle')).toBe('thumb')
+  })
+})
+
+describe('frameIsFresh (B honesty contract)', () => {
+  it('requires a real frame inside the stale window', () => {
+    expect(frameIsFresh(0, 10_000, 1200)).toBe(false)
+    expect(frameIsFresh(9_000, 10_000, 1200)).toBe(true)
+    expect(frameIsFresh(8_800, 10_000, 1200)).toBe(true)
+    expect(frameIsFresh(8_799, 10_000, 1200)).toBe(false)
+    expect(frameIsFresh(10_001, 10_000, 1200)).toBe(false)
+  })
+})
+
+describe('streamSurfaceState (stable real-UI probe contract)', () => {
+  const base = {
+    open: true,
+    status: 'streaming' as const,
+    frameLoaded: true,
+    live: true,
+    fallback: 'loading' as const
+  }
+
+  it('distinguishes decoded live, stalled, and pre-decode loading states', () => {
+    expect(streamSurfaceState(base)).toBe('live')
+    expect(streamSurfaceState({ ...base, live: false })).toBe('stalled')
+    expect(streamSurfaceState({ ...base, frameLoaded: false })).toBe('loading')
+  })
+
+  it('distinguishes a neutral headless failure from the phone thumbnail fallback', () => {
+    expect(streamSurfaceState({ ...base, status: 'fallback' })).toBe('unavailable')
+    expect(streamSurfaceState({ ...base, status: 'fallback', fallback: 'thumb' })).toBe('fallback')
+  })
+
+  it('reports a closed surface as idle', () => {
+    expect(streamSurfaceState({ ...base, open: false })).toBe('idle')
   })
 })

@@ -1,4 +1,4 @@
-// Backoff state for the browser-thumbnail capturePage() loop. A rejected
+// Backoff state for the legacy flag-off browser-thumbnail capturePage() loop. A rejected
 // capture usually means the GPU process is degraded (IOSurface exhaustion,
 // wedged command buffer) — hot-retrying every tick makes that worse, so
 // failures push the next attempt out exponentially. Pure so it unit-tests
@@ -36,10 +36,9 @@ export function recordFailure(state: CaptureBackoff, now: number): CaptureBackof
 /**
  * The full capture gate. A hidden/occluded window normally pauses capture (GPU
  * protection — capturing a wedged GPU while nothing's on screen risks IOSurface
- * exhaustion), but a browser a PHONE has open must keep capturing so its
- * /thumb stays fresh — the phone treats that frame as its live view. The
- * GPU-health backoff still gates every path, so a degraded GPU still backs off
- * even while a phone is watching.
+ * exhaustion), but in flag-off mode a browser a PHONE has open must keep
+ * capturing so its /thumb stays fresh. The GPU-health backoff still gates every
+ * path, so a degraded GPU still backs off even while a phone is watching.
  */
 export function shouldCapture(opts: {
   documentHidden: boolean

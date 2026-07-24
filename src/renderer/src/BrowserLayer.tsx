@@ -15,6 +15,7 @@ import type { ScreenRect } from './zoom-lod'
 import type { LodLayout } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
 import { CrIcon } from './icons'
+import { browserRenderMode, type StreamClient } from './browser-stream'
 
 const THUMB_INTERVAL_MS = 5000
 const THUMB_WIDTH = 512
@@ -38,25 +39,26 @@ interface BrowserLayerProps {
   onThumb: (id: string, dataUrl: string) => void
   /** Is a phone currently viewing this browser (keeps capture alive while hidden)? */
   isPhoneViewing: (browserId: string) => boolean
+  /** Fixed-at-launch renderer ownership, shared with card thumbnail policy. */
+  interactiveCapability: InteractiveBrowserCapability | null
 }
 
 /**
- * Hosts every browser's webviews permanently — offscreen while the browser
- * card only shows a thumbnail, repositioned over the card's screen rect as
- * the semantic-zoom full view once the card covers enough of the stage.
- * Webviews never remount between the two states, so pages keep their
- * session and `cookrew browser` automation keeps working while collapsed. Each
- * browser is a tab group: one webview per tab, all sharing the browser's
- * session partition. Thumbnails come from periodic capturePage() snapshots
- * of the active tab.
+ * Flag off, hosts every browser's legacy webviews permanently — offscreen while
+ * its card shows a thumbnail, then repositioned over the zoomed card. Flag on,
+ * the same shell renders the node-owned headless stream on desktop and phone.
+ * The unresolved capability renders a neutral body so a transient second page
+ * instance can never start before ownership is known.
  */
 export function BrowserLayer({
   browsers,
   lod,
   onThumb,
-  isPhoneViewing
+  isPhoneViewing,
+  interactiveCapability
 }: BrowserLayerProps): React.JSX.Element {
   usePopupTabOpener(browsers)
+  const interactiveBrowser = interactiveCapability?.enabled ?? null
   // SHARED arbitration with terminal overlays (Magpie E2: a per-kind hook
   // let a browser view stack over the zoomed terminal and steal every tap).
   const { activeIds, rects } = lod
@@ -69,10 +71,50 @@ export function BrowserLayer({
           rect={activeIds.has(p.id) ? (rects[p.id] ?? null) : null}
           onThumb={onThumb}
           isPhoneViewing={isPhoneViewing}
+          interactiveBrowser={interactiveBrowser}
+          desktopStreamToken={interactiveCapability?.desktopToken ?? null}
         />
       ))}
     </>
   )
+}
+
+export interface InteractiveBrowserCapability {
+  enabled: boolean
+  desktopToken: string | null
+}
+
+/** Resolve fixed-at-launch ownership and its desktop-only stream credential once. */
+export function useInteractiveBrowserCapability(): InteractiveBrowserCapability | null {
+  const [capability, setCapability] = useState<InteractiveBrowserCapability | null>(null)
+  useEffect(() => {
+    let disposed = false
+    const api = cookrew()
+    void api
+      .interactiveBrowserEnabled()
+      .then(async (enabled) => {
+        if (!enabled || !hasNativeWebview()) {
+          if (!disposed) setCapability({ enabled, desktopToken: null })
+          return
+        }
+        let desktopToken: string | null = null
+        try {
+          desktopToken = await api.browserStreamToken()
+        } catch (error) {
+          console.error('[browser-stream] failed to resolve the desktop stream credential:', error)
+        }
+        if (!disposed) setCapability({ enabled, desktopToken })
+      })
+      .catch((error) => {
+        // Fail closed: without an ownership answer, mounting a webview could
+        // create a second page/profile while headless mode is actually on.
+        console.error('[browser-stream] failed to resolve browser ownership:', error)
+      })
+    return () => {
+      disposed = true
+    }
+  }, [])
+  return capability
 }
 
 /**
@@ -103,13 +145,17 @@ function BrowserHost({
   node,
   rect,
   onThumb,
-  isPhoneViewing
+  isPhoneViewing,
+  interactiveBrowser,
+  desktopStreamToken
 }: {
   node: BrowserNodeData
   /** Screen rect to render the full browser at; null = thumbnail mode. */
   rect: ScreenRect | null
   onThumb: (id: string, dataUrl: string) => void
   isPhoneViewing: (browserId: string) => boolean
+  interactiveBrowser: boolean | null
+  desktopStreamToken: string | null
 }): React.JSX.Element {
   const { zoomBack } = useCanvasUi()
   const tabs = browserTabs(node)
@@ -249,6 +295,8 @@ function BrowserHost({
             onThumb={onThumb}
             patchTab={patchTab}
             isPhoneViewing={isPhoneViewing}
+            interactiveBrowser={interactiveBrowser}
+            desktopStreamToken={desktopStreamToken}
           />
         ))}
       </div>
@@ -264,7 +312,9 @@ function BrowserTabView({
   zoomed,
   onThumb,
   patchTab,
-  isPhoneViewing
+  isPhoneViewing,
+  interactiveBrowser,
+  desktopStreamToken
 }: {
   browserId: string
   browserName: string
@@ -275,36 +325,20 @@ function BrowserTabView({
   isPhoneViewing: (browserId: string) => boolean
   onThumb: (id: string, dataUrl: string) => void
   patchTab: (tabId: string, patch: Partial<BrowserTab>) => void
+  interactiveBrowser: boolean | null
+  desktopStreamToken: string | null
 }): React.JSX.Element | null {
   const webviewRef = useRef<WebviewElement | null>(null)
 
   useEffect(() => {
+    if (interactiveBrowser !== false) return
     const webview = webviewRef.current
     if (webview) registerBrowserTab(browserId, browserName, tab.id, webview)
     return () => unregisterBrowserTab(browserId, tab.id)
-  }, [browserId, browserName, tab.id])
-
-  // Report this tab's webContents id to main (for the interactive CDP stream)
-  // once the <webview> is attached; getWebContentsId() throws before dom-ready.
-  useEffect(() => {
-    const webview = webviewRef.current
-    if (!webview || !hasNativeWebview()) return
-    const report = (): void => {
-      try {
-        cookrew().reportBrowserWebContents(browserId, tab.id, webview.getWebContentsId())
-      } catch {
-        // not attached yet — the dom-ready listener will retry
-      }
-    }
-    report()
-    webview.addEventListener('dom-ready', report)
-    return () => {
-      webview.removeEventListener('dom-ready', report)
-      cookrew().clearBrowserWebContents(browserId, tab.id)
-    }
-  }, [browserId, tab.id])
+  }, [browserId, browserName, tab.id, interactiveBrowser])
 
   useEffect(() => {
+    if (interactiveBrowser !== false) return
     const webview = webviewRef.current
     if (!webview) return
     try {
@@ -315,11 +349,12 @@ function BrowserTabView({
     } catch {
       // not attached yet — the src attribute already points at tab.url
     }
-  }, [tab.url])
+  }, [tab.url, interactiveBrowser])
 
   // Reflect in-page navigation and titles back into the workspace model so
   // the tab strip, address bar and `cookrew browser tabs` stay truthful.
   useEffect(() => {
+    if (interactiveBrowser !== false) return
     const webview = webviewRef.current
     if (!webview) return
     const onNavigate = (event: Event): void => {
@@ -338,7 +373,7 @@ function BrowserTabView({
       webview.removeEventListener('did-navigate-in-page', onNavigate)
       webview.removeEventListener('page-title-updated', onTitle)
     }
-  }, [tab.id, patchTab])
+  }, [tab.id, patchTab, interactiveBrowser])
 
   // Thumbnail loop for the active tab: after loads and on a slow interval.
   // capturePage() only exists on real <webview>s (Electron renderer).
@@ -349,7 +384,7 @@ function BrowserTabView({
   // phone-viewing bypass can't spin a degraded GPU. did-stop-loading and the
   // interval both pass through the same shouldCapture() gate.
   useEffect(() => {
-    if (!hasNativeWebview() || !visible) return
+    if (interactiveBrowser !== false || !hasNativeWebview() || !visible) return
     const webview = webviewRef.current
     if (!webview) return
     let disposed = false
@@ -402,42 +437,86 @@ function BrowserTabView({
       webview.removeEventListener('did-stop-loading', onStop)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [browserId, tab.id, visible, onThumb, isPhoneViewing])
+  }, [browserId, tab.id, visible, onThumb, isPhoneViewing, interactiveBrowser])
 
-  // Never load Cookrew inside Cookrew: recursive embedding renders the whole
-  // canvas (and its browsers, recursively) per layer and pegs the GPU.
-  if (isSelfEmbedding(tab.url, window.location.origin)) {
-    return visible ? (
-      <div className="browser-body browser-blocked">
-        <span>
-          ⛔ This tab points Cookrew at itself ({shortUrl(tab.url)}) — recursive embedding is
-          blocked because it melts the GPU. Open it in a real browser instead.
-        </span>
-      </div>
-    ) : null
-  }
+  const client: StreamClient = isRemoteMode() ? 'remote' : hasNativeWebview() ? 'desktop' : 'demo'
+  const renderMode = browserRenderMode({
+    interactive: interactiveBrowser,
+    client,
+    selfEmbedding: isSelfEmbedding(tab.url, window.location.origin)
+  })
 
-  // PHONE (remote mode): the iframe renders file:// / PDFs / webview-only content
-  // BLANK, so show the desktop's LIVE captured frame instead (mobile-browser-ux-
-  // fix) — the primary display, polled while zoomed open. Fit-scaled, placeholder
-  // until the first frame.
-  if (isRemoteMode()) {
-    return visible ? <MobileBrowserFrame browserId={browserId} open={zoomed} /> : null
+  switch (renderMode) {
+    case 'pending':
+      return visible ? <BrowserCapabilityLoading browserId={browserId} /> : null
+    case 'headless-stream':
+      return visible ? (
+        <MobileBrowserFrame
+          browserId={browserId}
+          open={zoomed}
+          streamEnabled
+          desktopStreamToken={client === 'desktop' ? desktopStreamToken : null}
+          fallback="loading"
+        />
+      ) : null
+    case 'legacy-blocked':
+      // Never load Cookrew inside Cookrew in a legacy renderer: recursive
+      // embedding renders the whole canvas per layer and pegs the GPU.
+      return visible ? (
+        <div className="browser-body browser-blocked">
+          <span>
+            ⛔ This tab points Cookrew at itself ({shortUrl(tab.url)}) — recursive embedding is
+            blocked because it melts the GPU. Open it in a real browser instead.
+          </span>
+        </div>
+      ) : null
+    case 'legacy-thumb':
+      return visible ? (
+        <MobileBrowserFrame
+          browserId={browserId}
+          open={zoomed}
+          streamEnabled={false}
+          desktopStreamToken={null}
+          fallback="thumb"
+        />
+      ) : null
+    case 'legacy-iframe':
+      return visible ? <iframe src={tab.url} className="browser-body" title={tab.title || tab.url} /> : null
+    case 'legacy-webview':
+      // Preserve the original Electron webview branch exactly when flag off.
+      return (
+        <webview
+          ref={(el: unknown) => {
+            webviewRef.current = el as WebviewElement | null
+          }}
+          src={tab.url}
+          className={visible ? 'browser-body' : 'browser-body browser-body-hidden'}
+          partition={`persist:browser-${browserId}`}
+          allowpopups="true"
+        />
+      )
   }
-  // Demo tabs get a plain iframe — no capture backend, and demo URLs load fine.
-  if (!hasNativeWebview()) {
-    return visible ? <iframe src={tab.url} className="browser-body" title={tab.title || tab.url} /> : null
-  }
+}
+
+function BrowserCapabilityLoading({ browserId }: { browserId: string }): React.JSX.Element {
   return (
-    <webview
-      ref={(el: unknown) => {
-        webviewRef.current = el as WebviewElement | null
-      }}
-      src={tab.url}
-      className={visible ? 'browser-body' : 'browser-body browser-body-hidden'}
-      partition={`persist:browser-${browserId}`}
-      allowpopups="true"
-    />
+    <div
+      className="browser-body browser-frame nodrag nowheel"
+      data-browser-id={browserId}
+      data-stream-status="idle"
+      data-stream-state="loading"
+      data-frame-seq="none"
+      data-last-frame-at="none"
+      data-last-frame-fresh="false"
+      data-interactive="false"
+    >
+      <div className="browser-frame-loading" role="status" aria-live="polite">
+        <span className="browser-frame-glyph">
+          <CrIcon name="browser" />
+        </span>
+        <span className="cr-kicker">loading browser…</span>
+      </div>
+    </div>
   )
 }
 

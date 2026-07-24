@@ -1,14 +1,13 @@
 /**
- * Mobile browser LIVE-FRAME view (mobile-browser-ux-fix, note: phone can't see
- * file:// / PDFs / webview-only content in a dead iframe). On the phone the
- * zoomed-open browser renders the desktop's captured frame — polled from
- * GET /api/browser/:id/thumb — instead of an iframe that renders blank. This
- * module is the JSX-free, unit-tested core: the poll cadence + lifecycle gate,
- * the cache-busted frame URL, the letterbox fit math, and the interval poller.
+ * Legacy flag-off mobile browser frame. Because a phone cannot render file://,
+ * PDFs, or webview-only content in an iframe, it polls the desktop capture at
+ * GET /api/browser/:id/thumb. Flag-on desktop and phone use the node-owned
+ * headless stream and never enter this fallback. This is the JSX-free core for
+ * poll cadence/lifecycle, cache-busting, letterbox math, and interval control.
  */
 
 /**
- * Poll cadence (ms) for the live frame while the phone has the browser open.
+ * Poll cadence (ms) for the legacy frame while the phone has the browser open.
  * CAPTURE-FRESHNESS CONTRACT (Forge, landed): each GET /api/browser/:id/thumb
  * marks the browser phone-viewed for an 8s TTL, so the desktop keeps capturing
  * it at the 5s rate even when its window is hidden/occluded (the poll itself is
@@ -19,9 +18,9 @@
 export const FRAME_POLL_MS = 5000
 
 /**
- * Poll ONLY while the browser view is OPEN (zoomed) AND the document is visible.
- * A closed or occluded phone view must stop fetching (and stop asking the
- * desktop to capture) — never poll a browser the user isn't looking at. Pure.
+ * In flag-off mode, poll ONLY while the browser view is OPEN (zoomed) and the
+ * document is visible. A closed or occluded phone view must stop fetching and
+ * stop asking the desktop to capture. Pure.
  */
 export function shouldPollFrame(opts: { open: boolean; hidden: boolean }): boolean {
   return opts.open && !opts.hidden

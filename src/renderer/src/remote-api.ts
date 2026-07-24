@@ -7,8 +7,9 @@ import type { TerminalActivity, TurnRecord } from '../../shared/turn'
  * served to a phone browser by the mobile server (window.COOKREW_MOBILE marker).
  * Same UI, no Electron: IPC invokes become fetches, IPC pushes become SSE.
  *
- * Browser commands stay silent here on purpose — the desktop renderer remains
- * the single browser automation engine; phones render browsers as iframes.
+ * Browser commands stay silent here on purpose. With C-2 enabled, the
+ * node-owned headless runtime owns automation while desktop and phone render
+ * and drive its shared stream. Flag-off phones retain the legacy /thumb view.
  */
 
 async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
@@ -187,12 +188,16 @@ export function createRemoteApi(): CookrewApi {
     roleList: () => req('/api/roles'),
     saveRole: (input) => req('/api/role/save', 'POST', input),
 
-    // Desktop-only surfaces: browser automation, thumbnail push, app chrome.
+    // No remote legacy webview bridge, thumbnail publisher, or desktop app chrome.
+    // Headless capability is queried here; its phone stream is same-origin/tokenless.
     onBrowserCommand: () => () => undefined,
     browserResult: () => undefined,
     browserThumb: () => undefined,
-    reportBrowserWebContents: () => undefined,
-    clearBrowserWebContents: () => undefined,
+    interactiveBrowserEnabled: async () => {
+      const result = await req<{ interactive: boolean }>('/api/browser/capabilities')
+      return result.interactive
+    },
+    browserStreamToken: () => Promise.resolve(null),
     onBrowserOpenTab: () => () => undefined,
     onBrowserPhoneViewing: () => () => undefined,
     onCmdW: () => () => undefined,

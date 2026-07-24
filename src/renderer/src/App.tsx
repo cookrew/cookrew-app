@@ -26,7 +26,7 @@ import { Header } from './Header'
 import { Dock } from './Dock'
 import { TerminalOverlayLayer } from './TerminalOverlay'
 import { useLodLayout } from './zoom-lod'
-import { BrowserLayer } from './BrowserLayer'
+import { BrowserLayer, useInteractiveBrowserCapability } from './BrowserLayer'
 import { CanvasUiContext, ToolId } from './canvas-ui'
 import { useBrowserEngine } from './browser-engine'
 import { ErrorBoundary } from './ErrorBoundary'
@@ -72,6 +72,8 @@ function toFlowEdges(state: WorkspaceState): Edge[] {
 }
 
 function Canvas(): React.JSX.Element {
+  const interactiveCapability = useInteractiveBrowserCapability()
+  const interactiveBrowser = interactiveCapability?.enabled ?? null
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null)
   const [nodes, setNodes] = useState<Node[]>([])
   const [tool, setTool] = useState<ToolId>('select')
@@ -206,16 +208,28 @@ function Canvas(): React.JSX.Element {
   }, [reactFlow])
 
   const onThumb = useCallback((id: string, dataUrl: string) => {
+    if (interactiveBrowser !== false) return
     setThumbs((prev) => ({ ...prev, [id]: dataUrl }))
     // Mirror to main so the mobile companion can serve it to the phone.
     cookrew().browserThumb(id, dataUrl)
-  }, [])
+  }, [interactiveBrowser])
 
-  // A phone viewing a browser (polling its /thumb) must keep the desktop
-  // capture loop alive for that browser even while the desktop window is
-  // hidden. Main pings us on every poll; we keep a TTL clock per browser and
-  // hand the capture loop a stable getter (a ref, so refreshes don't churn the
-  // capture effect). Desktop-only — remote/demo apis no-op the subscription.
+  // Never retain a legacy frame once ownership resolves to headless. Browser
+  // cards remain neutral until their shared stream is opened in the popout.
+  useEffect(() => {
+    if (interactiveBrowser !== true) return
+    setThumbs((prev) => {
+      for (const src of Object.values(prev)) {
+        if (src.startsWith('blob:')) URL.revokeObjectURL(src)
+      }
+      return Object.keys(prev).length === 0 ? prev : {}
+    })
+  }, [interactiveBrowser])
+
+  // In flag-off mode, a phone polling /thumb must keep the desktop webview
+  // capture alive while hidden. Main pings on every poll; keep a TTL per
+  // browser and hand the capture loop a stable getter. Headless streams do not
+  // use this legacy path. Remote/demo APIs no-op the subscription.
   const phoneViewingRef = useRef<ViewerClocks>({})
   useEffect(
     () =>
@@ -237,12 +251,12 @@ function Canvas(): React.JSX.Element {
     []
   )
 
-  // Remote (phone) mode: iframes can't capturePage(), so browser card thumbs
-  // come from the desktop's capture loop via the mobile server.
+  // Remote flag-off browser-card thumbs come from the desktop capture loop.
+  // Flag-on cards may remain text-only until their headless stream is opened.
   const workspaceRef = useRef(workspace)
   workspaceRef.current = workspace
   useEffect(() => {
-    if (!isRemoteMode()) return
+    if (!isRemoteMode() || interactiveBrowser !== false) return
     const tick = (): void => {
       const browserIds = (workspaceRef.current?.nodes ?? [])
         .filter((n) => n.kind === 'browser')
@@ -264,7 +278,7 @@ function Canvas(): React.JSX.Element {
     tick()
     const timer = setInterval(tick, 5000)
     return () => clearInterval(timer)
-  }, [])
+  }, [interactiveBrowser])
 
   // ESC dismisses the top overlay: modal panels (team fork / roster / metrics /
   // directory manager) self-handle it in the capture phase; this bubble-phase
@@ -284,8 +298,8 @@ function Canvas(): React.JSX.Element {
   }, [zoomBack])
 
   const ui = useMemo(
-    () => ({ tool, activities, thumbs, zoomToNode, zoomBack }),
-    [tool, activities, thumbs, zoomToNode, zoomBack]
+    () => ({ tool, activities, thumbs, interactiveBrowser, zoomToNode, zoomBack }),
+    [tool, activities, thumbs, interactiveBrowser, zoomToNode, zoomBack]
   )
 
   // Every change batch routes through the edge snapper: while a card is
@@ -546,6 +560,7 @@ function Canvas(): React.JSX.Element {
           lod={lod}
           onThumb={onThumb}
           isPhoneViewing={isPhoneViewing}
+          interactiveCapability={interactiveCapability}
         />
         <EventToastLayer />
       </div>

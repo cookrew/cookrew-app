@@ -1,8 +1,7 @@
-// Guard against pointing a canvas browser at Cookrew itself. A webview
-// loading the app recursively embeds the whole canvas (which loads its own
-// browser nodes, which embed it again…) — every layer renders, animates and
-// opens PTY/SSE streams, pegging the GPU process. Seen in the wild via QA
-// tabs on the mobile server; cost was ~90% GPU for hours.
+// Detect a canvas browser pointed at Cookrew itself. The flag-off renderer uses
+// this to prevent a legacy webview/iframe from recursively embedding the whole
+// canvas, opening another set of browser nodes and PTY/SSE streams per layer.
+// The flag-on contract keeps the node-owned headless stream instead.
 
 /** Ports that are always Cookrew's own mobile companion server. */
 const COOKREW_MOBILE_PORTS = new Set(['8639', '8643'])
@@ -10,8 +9,8 @@ const COOKREW_MOBILE_PORTS = new Set(['8639', '8643'])
 /**
  * True when a canvas-browser URL would load Cookrew inside Cookrew: the
  * app's own origin (covers the dev server in dev builds) or the mobile
- * companion ports on any host. Unparseable URLs are not blocked here —
- * the webview will fail them on its own.
+ * companion ports on any host. Unparseable URLs are not blocked here; the
+ * selected renderer handles them normally.
  */
 export function isSelfEmbedding(url: string, appOrigin: string): boolean {
   try {

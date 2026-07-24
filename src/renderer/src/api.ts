@@ -154,22 +154,18 @@ export interface CookrewApi {
     cb: (req: { id: string; args: string[]; terminalId: string }) => void,
   ) => () => void;
   browserResult: (id: string, ok: boolean, output: string) => void;
-  /** Forward a browser thumbnail frame to main (served to the mobile client). */
+  /** Forward a legacy webview thumbnail to main for flag-off mobile clients. */
   browserThumb: (browserId: string, dataUrl: string) => void;
-  /**
-   * Report a browser tab's <webview> webContents id to main once it's
-   * dom-ready, so the interactive-stream transport can attach the CDP
-   * screencast to the live page. Cleared when the tab unmounts.
-   */
-  reportBrowserWebContents: (browserId: string, tabId: string, webContentsId: number) => void;
-  clearBrowserWebContents: (browserId: string, tabId: string) => void;
+  /** True when browser nodes are owned by the shared headless runtime. */
+  interactiveBrowserEnabled: () => Promise<boolean>;
+  /** Desktop-only token authorizing its cross-origin localhost WS connection. */
+  browserStreamToken: () => Promise<string | null>;
   onBrowserOpenTab: (
     cb: (req: { webContentsId: number; url: string }) => void,
   ) => () => void;
   /**
-   * Main signals here each time a phone polls a browser's /thumb, so the
-   * desktop capture loop keeps that browser alive (fresh frames for the phone)
-   * even while the desktop window is hidden/occluded.
+   * In flag-off mode, main signals each phone /thumb poll so the legacy desktop
+   * capture loop keeps that browser fresh while the window is hidden/occluded.
    */
   onBrowserPhoneViewing: (cb: (browserId: string) => void) => () => void;
   /** Main routes ⌘W here so the renderer can close the topmost layer first. */
