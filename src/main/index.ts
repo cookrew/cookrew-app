@@ -17,6 +17,8 @@ import {
   activeBrowserTab,
   AgentRole,
   BrowserNodeData,
+  BrowserTab,
+  browserTabs,
   CanvasNode,
   DEFAULT_TERMINAL_SIZE,
   TeamForkSpec,
@@ -43,8 +45,10 @@ import { isCodexCommand, resolveCodexRolloutByPid } from './codex-bind'
 import { isOpenCodeCommand, resolveOpencodeSessionByPid } from './opencode-bind'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
-import { createBrowserCast, type StreamTarget } from './browser-cast'
+import { createBrowserCast } from './browser-cast'
 import { findChrome } from './headless-chrome'
+import { HeadlessBrowserManager } from './headless-browser-manager'
+import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 
 import { TraceReader } from './trace'
 import { SessionTurnSync } from './session-sync'
@@ -342,6 +346,7 @@ function setTerminalCwd(nodeId: string, dir: string): CanvasNode {
 function addNode(node: CanvasNode): CanvasNode {
   const added = store.addNode(node)
   if (added.kind === 'terminal') spawnTracked(added)
+  if (added.kind === 'browser') void browserManager.syncNode(added).catch(() => undefined)
   return added
 }
 
@@ -352,7 +357,11 @@ function updateNode(id: string, patch: Partial<CanvasNode>): CanvasNode | undefi
     const written = store.writeNote(id, content)
     return Object.keys(rest).length > 0 ? store.updateNode(id, rest) : written
   }
-  return store.updateNode(id, patch)
+  const updated = store.updateNode(id, patch)
+  if (updated?.kind === 'browser') {
+    void browserManager.syncNode(updated).catch(() => undefined)
+  }
+  return updated
 }
 
 function workspaceName(id: string): string {
@@ -454,7 +463,7 @@ function recoverAgent(id: string): RecoverResult {
   }
 }
 
-function removeNode(id: string): void {
+async function removeNode(id: string): Promise<void> {
   sessionSync.unwatch(id)
   turns.untrack(id)
   // NOTE: turn history is deliberately NOT cleared on kill — it is the third
@@ -463,8 +472,10 @@ function removeNode(id: string): void {
   // clearing it destroyed a recovery signal for nothing (R2 fix).
   ptys.kill(id)
   browserThumbs.delete(id)
+  const browserStopped = browserManager.remove(id)
   store.removeNode(id)
   agents.deactivate(id)
+  await browserStopped
 }
 
 /** Fork an agent from one of its turns — shared by IPC, CLI and mobile. */
@@ -674,48 +685,106 @@ const browserWaiters = new Map<string, { resolve: (v: string) => void; reject: (
  */
 const browserThumbs = new Map<string, Buffer>()
 
-// Which browsers a phone is currently viewing (keyed by the last /thumb poll).
-// A phone renders a browser from the desktop's live capturePage() frames, so
-// while it's polling we tell the renderer to keep capturing that browser even
-// if the desktop window is hidden/occluded — otherwise the frame goes stale
-// and the phone blanks. Notifying on each poll (not just on entry) keeps the
-// renderer's own TTL refreshed without any polling from main.
+// Flag-off phone browsers use the legacy /thumb feed. While one is polling,
+// tell the renderer to keep that webview capture fresh even if the desktop is
+// hidden. Flag-on phones use the headless stream and never enter this path.
 function noteBrowserViewed(browserId: string): void {
   // The keep-alive decision (with its TTL) lives entirely in the renderer's
   // phoneViewingRef — main just relays the heartbeat. No map is held here, so
   // an unauth LAN client polling /thumb with junk ids cannot accumulate state.
-  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+  if (!interactiveBrowserEnabled() && mainWindow && !mainWindow.webContents.isDestroyed()) {
     mainWindow.webContents.send('browser:phone-viewing', browserId)
   }
 }
 
-// Interactive remote browser (single-instance headless transport). A browser
-// id maps to the URL to open + a PERSISTENT profile dir under app support (so
-// cookies/session survive a Chromium restart) — the cast runs one headless
-// Chrome there and fans its screencast out to every viewer.
-// (The `browserWebContents` map below is a leftover of the old desktop-webview
-// screencast and is no longer read by the cast — removable in a follow-up.)
-const browserWebContents = new Map<string, number>()
+const interactiveBrowserEnabled = (): boolean =>
+  process.env.COOKREW_INTERACTIVE_BROWSER === '1'
+const desktopBrowserStreamToken = randomUUID()
 
-function resolveHeadlessTarget(browserId: string): StreamTarget | null {
-  const hit = store.nodeAcrossWorkspaces(browserId)
-  if (!hit || hit.node.kind !== 'browser') return null
-  const tab = activeBrowserTab(hit.node as BrowserNodeData)
-  return {
-    url: tab.url,
-    profileDir: path.join(app.getPath('userData'), 'interactive-browser', browserId)
-  }
+function activeBrowserNode(browserId: string): BrowserNodeData | null {
+  const node = store.node(browserId)
+  return node?.kind === 'browser' ? node : null
 }
 
-// Behind a flag: the interactive stream spawns a headless Chrome and lives on
-// the unauth LAN server, so it is opt-in.
-const browserCast = createBrowserCast({
-  resolveTarget: resolveHeadlessTarget,
-  chromePath: () => findChrome(),
-  enabled: () => process.env.COOKREW_INTERACTIVE_BROWSER === '1'
+/** Reflect real headless-page navigation/title state into the browser node. */
+function recordHeadlessPageState(
+  browserId: string,
+  tabId: string,
+  state: { url: string; title: string }
+): void {
+  const node = activeBrowserNode(browserId)
+  if (!node) return
+  const tabs = browserTabs(node)
+  const tab = tabs.find((candidate) => candidate.id === tabId)
+  if (!tab || (tab.url === state.url && tab.title === state.title)) return
+  const nextTabs = tabs.map((candidate) =>
+    candidate.id === tabId ? { ...candidate, url: state.url, title: state.title } : candidate
+  )
+  const active = activeBrowserTab(node).id === tabId
+  store.updateNodeUnsafe(browserId, {
+    tabs: nextTabs,
+    ...(active ? { url: state.url } : {})
+  })
+}
+
+/** Adopt a real target=_blank/window.open page into the browser-node tab model. */
+function recordHeadlessTabOpened(browserId: string, tab: BrowserTab): void {
+  const node = activeBrowserNode(browserId)
+  if (!node) return
+  const tabs = browserTabs(node)
+  if (tabs.some((candidate) => candidate.id === tab.id)) return
+  const updated = store.updateNodeUnsafe(browserId, {
+    tabs: [...tabs, tab],
+    activeTabId: tab.id,
+    url: tab.url
+  })
+  if (updated?.kind === 'browser') void browserManager.syncNode(updated).catch(() => undefined)
+}
+
+/** A page target closed itself (window.close); keep the tab model truthful. */
+function recordHeadlessTabClosed(browserId: string, tabId: string): void {
+  const node = activeBrowserNode(browserId)
+  if (!node) return
+  const tabs = browserTabs(node)
+  if (tabs.length <= 1 || !tabs.some((tab) => tab.id === tabId)) return
+  const remaining = tabs.filter((tab) => tab.id !== tabId)
+  const wasActive = activeBrowserTab(node).id === tabId
+  const nextActive = wasActive ? remaining[0] : activeBrowserTab(node)
+  const updated = store.updateNodeUnsafe(browserId, {
+    tabs: remaining,
+    activeTabId: nextActive.id,
+    url: nextActive.url
+  })
+  if (updated?.kind === 'browser') void browserManager.syncNode(updated).catch(() => undefined)
+}
+
+// C-2 ownership: one headless process/profile per active browser node. Cast
+// viewers and trusted agent commands both resolve through this manager.
+const browserManager = new HeadlessBrowserManager({
+  enabled: interactiveBrowserEnabled,
+  chromePath: findChrome,
+  profileRoot: () => path.join(app.getPath('userData'), 'interactive-browser'),
+  resolveNode: activeBrowserNode,
+  onPageState: recordHeadlessPageState,
+  onTabOpened: recordHeadlessTabOpened,
+  onTabClosed: recordHeadlessTabClosed
 })
 
-function browserCommand(args: string[], terminalId: string): Promise<string> {
+const browserCast = createBrowserCast({
+  getInstance: (browserId) => browserManager.get(browserId),
+  enabled: interactiveBrowserEnabled,
+  desktopToken: () => desktopBrowserStreamToken
+})
+
+const headlessBrowserCommands = new HeadlessBrowserCommandEngine({
+  store,
+  manager: browserManager,
+  addNode,
+  updateNode,
+  connectNodes: (aId, bId) => void store.connect(aId, bId)
+})
+
+function rendererBrowserCommand(args: string[], terminalId: string): Promise<string> {
   if (!mainWindow) return Promise.reject(new Error('No window'))
   const id = randomUUID()
   const promise = new Promise<string>((resolve, reject) => {
@@ -729,6 +798,12 @@ function browserCommand(args: string[], terminalId: string): Promise<string> {
   })
   mainWindow.webContents.send('browser:command', { id, args, terminalId })
   return promise
+}
+
+function browserCommand(args: string[], terminalId: string): Promise<string> {
+  return interactiveBrowserEnabled()
+    ? headlessBrowserCommands.run(args, terminalId)
+    : rendererBrowserCommand(args, terminalId)
 }
 
 function createWindow(): void {
@@ -895,14 +970,17 @@ app.whenReady().then(() => {
     },
     saveAttachment: (name, data) => saveAttachment(defaultAttachmentsDir(), name, data),
     browserThumb: (id) => browserThumbs.get(id),
+    interactiveBrowserEnabled,
     browserThumbRequested: noteBrowserViewed,
     onUpgrade: (request, socket) => browserCast.upgrade(request, socket),
     clientHtmlPath: mobileClientPath,
     // Built renderer bundle — served to phones so mobile gets the full
-    // desktop canvas UI (missing until `npm run build` in dev checkouts).
-    rendererDir: path.join(dirname, '../renderer')
+    // desktop canvas UI. Dev proxies Vite so phones cannot load stale out/.
+    rendererDir: path.join(dirname, '../renderer'),
+    rendererDevUrl: process.env.ELECTRON_RENDERER_URL
   })
   registerIpc()
+  void browserManager.replaceNodes(store.browsers()).catch(() => undefined)
   createWindow()
 
   // First launch: seed the active workspace with a bypass-permission orch.
@@ -936,14 +1014,28 @@ app.on('window-all-closed', () => {
   app.quit()
 })
 
-app.on('before-quit', () => {
-  browserCast.shutdown() // detach every CDP debugger cleanly
+let appShutdownStarted = false
+let appShutdownComplete = false
+
+app.on('before-quit', (event) => {
+  if (appShutdownComplete) return
+  event.preventDefault()
+  if (appShutdownStarted) return
+  appShutdownStarted = true
+  browserCast.shutdown()
   store.flush()
   events.flush()
   sessionSync.dispose()
   turns.flushHistories()
   turns.disposeAll()
   ptys.disposeAll()
+  void browserManager
+    .shutdown()
+    .catch((error) => console.error('Headless browser shutdown failed:', error))
+    .finally(() => {
+      appShutdownComplete = true
+      app.quit()
+    })
 })
 
 function showNotification(message: string): void {
@@ -970,6 +1062,7 @@ function registerIpc(): void {
       ptys.detach(tid)
     }
     for (const t of store.terminals()) spawnTracked(t)
+    void browserManager.replaceNodes(store.browsers()).catch(() => undefined)
   })
 
   // Push the workspace list to the renderer whenever it changes.
@@ -1044,6 +1137,8 @@ function registerIpc(): void {
   )
 
   ipcMain.handle('workspace:get', () => store.state)
+  ipcMain.handle('browser:interactive-enabled', () => interactiveBrowserEnabled())
+  ipcMain.handle('browser:stream-token', () => desktopBrowserStreamToken)
 
   ipcMain.handle('node:add', (_e, node: CanvasNode) => addNode(node))
   ipcMain.handle('node:update', (_e, id: string, patch: Partial<CanvasNode>) =>
@@ -1142,16 +1237,6 @@ function registerIpc(): void {
   ipcMain.on('browser:thumb', (_e, browserId: string, dataUrl: string) => {
     const base64 = dataUrl.split(',')[1]
     if (base64) browserThumbs.set(browserId, Buffer.from(base64, 'base64'))
-  })
-
-  // The renderer reports each browser tab's webContents id once its <webview>
-  // reaches dom-ready, so the interactive-stream transport can resolve a
-  // browser id → live webContents to attach the CDP screencast.
-  ipcMain.on('browser:webcontents', (_e, browserId: string, tabId: string, wcId: number) => {
-    browserWebContents.set(`${browserId}:${tabId}`, wcId)
-  })
-  ipcMain.on('browser:webcontents-gone', (_e, browserId: string, tabId: string) => {
-    browserWebContents.delete(`${browserId}:${tabId}`)
   })
 
   // Browser command responses coming back from the renderer

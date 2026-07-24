@@ -36,15 +36,35 @@ export class CdpClient {
   /** Reassembly of a fragmented message (opcode + accumulated payload). */
   private fragOpcode = 0
   private fragChunks: Buffer[] = []
+  private transportClosed = false
   onClose: () => void = () => undefined
 
   async connect(wsUrl: string): Promise<void> {
     const u = new URL(wsUrl)
     const socket = net.connect({ host: u.hostname, port: Number(u.port) })
     this.socket = socket
+    this.transportClosed = false
     const key = randomBytes(16).toString('base64')
     await new Promise<void>((resolve, reject) => {
-      socket.once('error', reject)
+      let settled = false
+      const fail = (error: Error): void => {
+        if (settled) return
+        settled = true
+        cleanup()
+        try {
+          socket.destroy()
+        } catch {
+          // already closed
+        }
+        reject(error)
+      }
+      const onError = (error: Error): void => fail(error)
+      const onClose = (): void => fail(new Error('CDP socket closed during handshake'))
+      const cleanup = (): void => {
+        socket.removeListener('error', onError)
+        socket.removeListener('close', onClose)
+        socket.removeListener('data', onHandshake)
+      }
       socket.on('connect', () => {
         socket.write(
           `GET ${u.pathname}${u.search} HTTP/1.1\r\n` +
@@ -59,20 +79,29 @@ export class CdpClient {
         if (idx === -1) return
         const head = this.inbound.subarray(0, idx).toString()
         if (!/ 101 /.test(head)) {
-          reject(new Error('CDP handshake failed'))
-          return
+          return fail(new Error('CDP handshake failed'))
         }
-        socket.removeListener('data', onHandshake)
+        settled = true
+        cleanup()
         this.inbound = this.inbound.subarray(idx + 4)
         socket.on('data', (d) => this.onData(d))
-        socket.on('close', () => this.onClose())
-        socket.removeListener('error', reject)
-        socket.on('error', () => this.onClose())
+        socket.on('close', this.handleTransportClose)
+        socket.on('error', this.handleTransportClose)
         resolve()
         if (this.inbound.length > 0) this.drainFrames()
       }
+      socket.once('error', onError)
+      socket.once('close', onClose)
       socket.on('data', onHandshake)
     })
+  }
+
+  private handleTransportClose = (): void => {
+    if (this.transportClosed) return
+    this.transportClosed = true
+    this.socket = null
+    this.rejectPending(new Error('CDP closed'))
+    this.onClose()
   }
 
   private onData(chunk: Buffer): void {
@@ -189,14 +218,34 @@ export class CdpClient {
     set.add(cb)
   }
 
+  off(method: string, cb: EventCb): void {
+    const set = this.listeners.get(method)
+    if (!set) return
+    set.delete(cb)
+    if (set.size === 0) this.listeners.delete(method)
+  }
+
+  once(method: string, cb: EventCb): void {
+    const wrapped: EventCb = (params) => {
+      this.off(method, wrapped)
+      cb(params)
+    }
+    this.on(method, wrapped)
+  }
+
   close(): void {
+    const socket = this.socket
+    this.socket = null
     try {
-      this.socket?.destroy()
+      socket?.destroy()
     } catch {
       // already closed
     }
-    this.socket = null
-    for (const p of this.pending.values()) p.reject(new Error('CDP closed'))
+    this.rejectPending(new Error('CDP closed'))
+  }
+
+  private rejectPending(error: Error): void {
+    for (const p of this.pending.values()) p.reject(error)
     this.pending.clear()
   }
 }

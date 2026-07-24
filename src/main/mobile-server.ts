@@ -16,6 +16,7 @@ import { askTerminal } from './ask'
 import { ensureCert } from './cert'
 import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps } from './mobile-api'
 import { readJson, respondJson } from './mobile-http'
+import { fetchRendererDevResource } from './renderer-dev-proxy'
 
 export const MOBILE_PORT = 8639
 export const MOBILE_HTTPS_PORT = 8643
@@ -39,18 +40,21 @@ export interface MobileServerDeps {
   presets: readonly { name: string; command: string }[]
   /** Persist a phone-uploaded attachment; returns its absolute path. */
   saveAttachment: (name: string, data: Buffer) => string
-  /** Latest capturePage() frame for a browser, pushed from the renderer. */
+  /** Latest legacy flag-off capturePage() frame, pushed from the renderer. */
   browserThumb: (browserId: string) => Buffer | undefined
+  /** Whether browser nodes are backed by the node-owned headless runtime. */
+  interactiveBrowserEnabled: () => boolean
   /**
-   * A phone just polled a browser's /thumb — its heartbeat that the browser is
-   * being viewed. The desktop uses it to keep capturing that browser even when
-   * its own window is hidden (so the phone's frame doesn't go stale/blank).
+   * A flag-off phone polled /thumb. The desktop uses this heartbeat to keep its
+   * legacy webview capture fresh while hidden.
    */
   browserThumbRequested?: (browserId: string) => void
   /** Legacy lightweight client (kept at /lite for voice-first use). */
   clientHtmlPath: string
   /** Built renderer bundle — the full desktop canvas UI served to phones. */
   rendererDir: string
+  /** electron-vite renderer URL; proxied to phones in development. */
+  rendererDevUrl?: string
   /**
    * WebSocket 'upgrade' handler for the interactive-browser stream
    * (/api/browser/:id/stream). Attached to both the HTTP and HTTPS servers so
@@ -63,9 +67,10 @@ export interface MobileServerDeps {
  * Mobile companion: a small LAN HTTP server the phone's browser connects to.
  * It serves the SAME renderer bundle as the desktop window; remote-api.ts in
  * the renderer swaps IPC for this server's HTTP/SSE endpoints, so the phone
- * gets the full canvas experience (browsers fall back to iframes — only the
- * desktop has real Chromium webviews). The pre-canvas lightweight client
- * stays available at /lite.
+ * gets the full canvas experience. With interactive browsing enabled, browser
+ * nodes render the same node-owned headless stream on phone and desktop;
+ * flag-off retains the legacy certification fallback. The pre-canvas
+ * lightweight client stays available at /lite.
  */
 export function startMobileServer(deps: MobileServerDeps): void {
   // Phones poll this server while the Mac's display is off; without a power
@@ -204,6 +209,31 @@ function serveRendererAsset(
   return true
 }
 
+/** Serve the current Vite renderer through the phone's companion origin. */
+async function serveRendererDev(
+  response: http.ServerResponse,
+  deps: MobileServerDeps,
+  url: URL,
+  injectRemoteBoot = false
+): Promise<boolean> {
+  if (!deps.rendererDevUrl) return false
+  const resource = await fetchRendererDevResource(
+    deps.rendererDevUrl,
+    url.pathname,
+    url.search
+  )
+  if (!resource) return false
+  const body = injectRemoteBoot
+    ? Buffer.from(resource.body.toString('utf8').replace('<head>', `<head>${REMOTE_BOOT}`))
+    : resource.body
+  response.writeHead(200, {
+    'content-type': resource.contentType,
+    'cache-control': 'no-cache'
+  })
+  response.end(body)
+  return true
+}
+
 async function handle(
   request: http.IncomingMessage,
   response: http.ServerResponse,
@@ -216,14 +246,19 @@ async function handle(
   }
 
   if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
-    // Full canvas UI when a renderer build exists; legacy client otherwise
-    // (dev checkouts before the first `npm run build`).
+    // Dev uses Vite's current transforms; packaged/preview builds use out/.
+    if (await serveRendererDev(response, deps, url, true)) return
     if (!serveRendererIndex(response, deps)) legacyHtml()
     return
   }
 
   if (request.method === 'GET' && url.pathname === '/lite') {
     legacyHtml()
+    return
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/browser/capabilities') {
+    respondJson(response, 200, { interactive: deps.interactiveBrowserEnabled() })
     return
   }
 
@@ -321,7 +356,8 @@ async function handle(
     return
   }
 
-  // Anything else that looks like a file: try the renderer bundle's assets.
+  // Dev module graph first, then packaged renderer assets.
+  if (request.method === 'GET' && (await serveRendererDev(response, deps, url))) return
   if (request.method === 'GET' && serveRendererAsset(response, deps, url.pathname)) return
 
   respondJson(response, 404, { error: 'Not found' })

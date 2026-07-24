@@ -4,40 +4,88 @@ import type { Duplex } from 'node:stream'
 import { createBrowserCast, originAllowed } from '../src/main/browser-cast'
 import type { HeadlessInstance } from '../src/main/headless-chrome'
 
+function maskedTextFrame(payload: string): Buffer {
+  const key = Buffer.from([0x12, 0x34, 0x56, 0x78])
+  const data = Buffer.from(payload, 'utf8')
+  const masked = Buffer.from(data.map((byte, index) => byte ^ key[index % key.length]))
+  const header = Buffer.from([0x81, 0x80 | data.length])
+  return Buffer.concat([header, key, masked])
+}
+
+interface TestSocket extends Duplex {
+  writes: string[]
+  emitEvent: (name: string, value?: unknown) => void
+  setWritableLength: (value: number) => void
+}
+
 /** Minimal socket stub recording writes + destroy. */
-function socketStub(): Duplex & { writes: string[] } {
+function socketStub(): TestSocket {
   const writes: string[] = []
-  return {
+  const listeners = new Map<string, Set<(value?: unknown) => void>>()
+  let destroyed = false
+  let writableLength = 0
+  const emitEvent = (name: string, value?: unknown): void => {
+    for (const listener of [...(listeners.get(name) ?? [])]) listener(value)
+  }
+  const socket = {
     writes,
+    get destroyed() {
+      return destroyed
+    },
+    get writableLength() {
+      return writableLength
+    },
+    emitEvent,
+    setWritableLength: (value: number) => {
+      writableLength = value
+    },
     write: vi.fn((c: unknown) => {
       writes.push(String(c))
       return true
     }),
-    destroy: vi.fn(),
-    on: vi.fn(),
-    once: vi.fn(),
-    writableLength: 0
-  } as unknown as Duplex & { writes: string[] }
+    destroy: vi.fn(() => {
+      if (destroyed) return
+      destroyed = true
+      emitEvent('close')
+    }),
+    on: vi.fn((name: string, listener: (value?: unknown) => void) => {
+      const set = listeners.get(name) ?? new Set()
+      set.add(listener)
+      listeners.set(name, set)
+      return socket
+    }),
+    once: vi.fn((name: string, listener: (value?: unknown) => void) => {
+      const wrapped = (value?: unknown): void => {
+        listeners.get(name)?.delete(wrapped)
+        listener(value)
+      }
+      const set = listeners.get(name) ?? new Set()
+      set.add(wrapped)
+      listeners.set(name, set)
+      return socket
+    })
+  }
+  return socket as unknown as TestSocket
 }
-function req(url: string): IncomingMessage {
-  return { url, headers: { 'sec-websocket-key': 'k', host: 'localhost' } } as unknown as IncomingMessage
+function req(url: string, origin?: string): IncomingMessage {
+  return {
+    url,
+    headers: { 'sec-websocket-key': 'k', host: 'localhost', ...(origin ? { origin } : {}) }
+  } as unknown as IncomingMessage
 }
 /** A headless-instance stub so upgrade() never spawns real Chrome in tests. */
 function fakeInstance(): HeadlessInstance {
   return {
     frameListeners: new Set(),
-    onExit: () => undefined,
-    start: () => Promise.resolve(),
-    stop: vi.fn(),
     dispatchInput: vi.fn(),
-    devToolsPort: 0
+    stop: vi.fn(),
+    viewport: { width: 390, height: 844 }
   } as unknown as HeadlessInstance
 }
 const okDeps = () => ({
-  resolveTarget: vi.fn(() => ({ url: 'about:blank', profileDir: '/tmp/p' })),
-  chromePath: vi.fn(() => '/fake/chrome'),
   enabled: () => true,
-  makeInstance: vi.fn(() => fakeInstance())
+  desktopToken: () => 'desktop-secret',
+  getInstance: vi.fn(() => Promise.resolve(fakeInstance()))
 })
 
 describe('upgrade() guards (sync, before any instance work)', () => {
@@ -52,24 +100,125 @@ describe('upgrade() guards (sync, before any instance work)', () => {
     const deps = { ...okDeps(), enabled: () => false }
     createBrowserCast(deps).upgrade(req('/api/browser/abc/stream?w=390&h=844'), socket)
     expect(socket.destroy).toHaveBeenCalled()
-    expect(deps.resolveTarget).not.toHaveBeenCalled()
+    expect(deps.getInstance).not.toHaveBeenCalled()
   })
   it('a valid /stream WITH a query writes the 101 (regression: match pathname, not req.url)', () => {
     const socket = socketStub()
     createBrowserCast(okDeps()).upgrade(req('/api/browser/abc123/stream?w=390&h=844'), socket)
     expect(socket.writes.join('')).toMatch(/HTTP\/1\.1 101 Switching Protocols/)
   })
+  it('authorizes the desktop cross-origin socket only with its per-process token', () => {
+    const refused = socketStub()
+    createBrowserCast(okDeps()).upgrade(
+      req('/api/browser/abc/stream', 'http://localhost:5173'),
+      refused
+    )
+    expect(refused.destroy).toHaveBeenCalled()
+
+    const accepted = socketStub()
+    createBrowserCast(okDeps()).upgrade(
+      req('/api/browser/abc/stream?desktopToken=desktop-secret', 'http://localhost:5173'),
+      accepted
+    )
+    expect(accepted.writes.join('')).toMatch(/HTTP\/1\.1 101 Switching Protocols/)
+  })
 })
 
-describe('upgrade() reaches the instance factory for a valid stream', () => {
-  it('resolves target + chrome path and builds an instance (async)', async () => {
+describe('upgrade() attaches to the node-owned instance', () => {
+  it('resolves the browser id through the manager', async () => {
     const deps = okDeps()
     createBrowserCast(deps).upgrade(req('/api/browser/xyz/stream?w=390&h=844'), socketStub())
     await Promise.resolve()
     await Promise.resolve()
-    expect(deps.chromePath).toHaveBeenCalled()
-    expect(deps.resolveTarget).toHaveBeenCalledWith('xyz')
-    expect(deps.makeInstance).toHaveBeenCalled()
+    expect(deps.getInstance).toHaveBeenCalledWith('xyz')
+  })
+
+  it('does not retain a client that disconnects while Chrome is starting', async () => {
+    let resolve!: (instance: HeadlessInstance | null) => void
+    const pending = new Promise<HeadlessInstance | null>((done) => (resolve = done))
+    const instance = fakeInstance()
+    const socket = socketStub()
+    const cast = createBrowserCast({
+      enabled: () => true,
+      desktopToken: () => 'desktop-secret',
+      getInstance: vi.fn(() => pending)
+    })
+    cast.upgrade(req('/api/browser/slow/stream'), socket)
+    socket.emitEvent('close')
+    resolve(instance)
+    await pending
+    await Promise.resolve()
+    expect(instance.frameListeners.size).toBe(0)
+    expect(cast.activeCount()).toBe(0)
+  })
+
+  it('detaches a viewer without stopping the node-owned browser', async () => {
+    const instance = fakeInstance()
+    const socket = socketStub()
+    const cast = createBrowserCast({
+      enabled: () => true,
+      desktopToken: () => 'desktop-secret',
+      getInstance: vi.fn(() => Promise.resolve(instance))
+    })
+    cast.upgrade(req('/api/browser/shared/stream'), socket)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(instance.frameListeners.size).toBe(1)
+
+    socket.emitEvent('close')
+    expect(instance.frameListeners.size).toBe(0)
+    expect(instance.stop).not.toHaveBeenCalled()
+    expect(cast.activeCount()).toBe(0)
+  })
+
+  it('drops raw CDP-shaped input and forwards sanitized input only', async () => {
+    const instance = fakeInstance()
+    const socket = socketStub()
+    createBrowserCast({
+      enabled: () => true,
+      desktopToken: () => 'desktop-secret',
+      getInstance: vi.fn(() => Promise.resolve(instance))
+    }).upgrade(req('/api/browser/secure/stream'), socket)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ method: 'Runtime.evaluate', params: { expression: '1' } }))
+    )
+    expect(instance.dispatchInput).not.toHaveBeenCalled()
+
+    socket.emitEvent('data', maskedTextFrame(JSON.stringify({ t: 'key', key: 'a', code: 'KeyA' })))
+    expect(instance.dispatchInput).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps a fast viewer flowing while a slow viewer retains only its latest frame', async () => {
+    const instance = fakeInstance()
+    const fast = socketStub()
+    const slow = socketStub()
+    const cast = createBrowserCast({
+      enabled: () => true,
+      desktopToken: () => 'desktop-secret',
+      getInstance: vi.fn(() => Promise.resolve(instance))
+    })
+    cast.upgrade(req('/api/browser/shared/stream'), fast)
+    cast.upgrade(req('/api/browser/shared/stream'), slow)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    slow.setWritableLength(1_000_000)
+    for (const listener of instance.frameListeners) listener('frame-one', {})
+    for (const listener of instance.frameListeners) listener('frame-two', {})
+
+    expect(fast.writes.join('')).toContain('frame-one')
+    expect(fast.writes.join('')).toContain('frame-two')
+    expect(slow.writes.join('')).not.toContain('frame-one')
+    expect(slow.writes.join('')).not.toContain('frame-two')
+
+    slow.setWritableLength(0)
+    slow.emitEvent('drain')
+    expect(slow.writes.join('')).not.toContain('frame-one')
+    expect(slow.writes.join('')).toContain('frame-two')
   })
 })
 

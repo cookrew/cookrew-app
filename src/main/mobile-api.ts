@@ -31,7 +31,7 @@ export interface MobileOps {
     id: string,
     patch: Partial<CanvasNode>,
   ) => CanvasNode | undefined;
-  removeNode: (id: string) => void;
+  removeNode: (id: string) => void | Promise<void>;
   createTerminal: (opts: {
     name: string;
     preset: string;
@@ -250,7 +250,7 @@ export async function handleMobileApi(
     return true;
   }
   if (nodeMatch && method === "DELETE") {
-    ops.removeNode(nodeMatch[1]);
+    await ops.removeNode(nodeMatch[1]);
     respondJson(response, 200, { ok: true });
     return true;
   }
