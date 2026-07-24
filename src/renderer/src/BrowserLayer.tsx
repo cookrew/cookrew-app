@@ -363,8 +363,17 @@ function BrowserTabView({
         now: Date.now()
       }
       if (!shouldCapture(gate)) return
-      void webview
-        .capturePage()
+      // capturePage() THROWS SYNCHRONOUSLY when the webview isn't attached /
+      // dom-ready — a sync throw the .catch() below never sees, so it surfaced
+      // as an uncaught "WebView must be attached to the DOM" flood. Guard it;
+      // the next interval / did-stop-loading retries once the page is ready.
+      let pending: ReturnType<WebviewElement['capturePage']>
+      try {
+        pending = webview.capturePage()
+      } catch {
+        return
+      }
+      void pending
         .then((image) => {
           backoff = recordSuccess()
           if (!disposed) onThumb(browserId, image.resize({ width: THUMB_WIDTH }).toDataURL())
