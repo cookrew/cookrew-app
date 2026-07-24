@@ -1,5 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Notification, webContents } from 'electron'
-import type { WebContents } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -15,6 +14,7 @@ import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
 import { startMobileServer, mobileUrls } from './mobile-server'
 import {
+  activeBrowserTab,
   AgentRole,
   BrowserNodeData,
   CanvasNode,
@@ -43,7 +43,8 @@ import { isCodexCommand, resolveCodexRolloutByPid } from './codex-bind'
 import { isOpenCodeCommand, resolveOpencodeSessionByPid } from './opencode-bind'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
-import { createBrowserCast } from './browser-cast'
+import { createBrowserCast, type StreamTarget } from './browser-cast'
+import { findChrome } from './headless-chrome'
 
 import { TraceReader } from './trace'
 import { SessionTurnSync } from './session-sync'
@@ -688,27 +689,29 @@ function noteBrowserViewed(browserId: string): void {
   }
 }
 
-// Interactive remote browser (CDP transport). The renderer reports each
-// browser tab's <webview> webContents id (trusted IPC) so main can resolve a
-// browser id to the live webContents its screencast attaches to; a LAN /stream
-// client only ever READS this map (junk ids resolve to null → socket refused),
-// so it can't accumulate state. Keyed "browserId:tabId".
+// Interactive remote browser (single-instance headless transport). A browser
+// id maps to the URL to open + a PERSISTENT profile dir under app support (so
+// cookies/session survive a Chromium restart) — the cast runs one headless
+// Chrome there and fans its screencast out to every viewer.
+// (The `browserWebContents` map below is a leftover of the old desktop-webview
+// screencast and is no longer read by the cast — removable in a follow-up.)
 const browserWebContents = new Map<string, number>()
 
-function resolveBrowserWebContents(browserId: string): WebContents | null {
+function resolveHeadlessTarget(browserId: string): StreamTarget | null {
   const hit = store.nodeAcrossWorkspaces(browserId)
   if (!hit || hit.node.kind !== 'browser') return null
-  const tabId = (hit.node as BrowserNodeData).activeTabId
-  const wcId = browserWebContents.get(`${browserId}:${tabId}`)
-  if (wcId === undefined) return null
-  const wc = webContents.fromId(wcId)
-  return wc && !wc.isDestroyed() ? wc : null
+  const tab = activeBrowserTab(hit.node as BrowserNodeData)
+  return {
+    url: tab.url,
+    profileDir: path.join(app.getPath('userData'), 'interactive-browser', browserId)
+  }
 }
 
-// Behind a flag: the interactive stream attaches the CDP debugger (mutually
-// exclusive with DevTools) and lives on the unauth LAN server, so it is opt-in.
+// Behind a flag: the interactive stream spawns a headless Chrome and lives on
+// the unauth LAN server, so it is opt-in.
 const browserCast = createBrowserCast({
-  resolveWebContents: resolveBrowserWebContents,
+  resolveTarget: resolveHeadlessTarget,
+  chromePath: () => findChrome(),
   enabled: () => process.env.COOKREW_INTERACTIVE_BROWSER === '1'
 })
 
