@@ -66,9 +66,12 @@ export function createBrowserCast(deps: BrowserCastDeps): BrowserCast {
   const sessions = new Set<CastSession>()
 
   function upgrade(req: IncomingMessage, socket: Duplex): void {
-    const match = (req.url ?? '').match(STREAM_RE)
-    // Sole upgrade handler on this server — an upgrade to any other path is
-    // refused, not left dangling.
+    const url = new URL(req.url ?? '/', 'http://localhost')
+    // Match the PATHNAME, not req.url — the raw url carries the ?w=&h= query,
+    // and STREAM_RE is `$`-anchored after /stream, so matching req.url missed
+    // for every real client (they all send w/h). Sole upgrade handler here —
+    // an upgrade to any other path is refused, not left dangling.
+    const match = url.pathname.match(STREAM_RE)
     if (!match) return void socket.destroy()
     const browserId = decodeURIComponent(match[1])
     const key = req.headers['sec-websocket-key']
@@ -87,7 +90,6 @@ export function createBrowserCast(deps: BrowserCastDeps): BrowserCast {
         'Connection: Upgrade\r\n' +
         `Sec-WebSocket-Accept: ${acceptKey(key)}\r\n\r\n`
     )
-    const url = new URL(req.url ?? '/', 'http://localhost')
     const session = new CastSession(wc, socket, {
       maxWidth: clampInt(url.searchParams.get('w'), SCREENCAST_MIN, SCREENCAST_MAX, 800),
       maxHeight: clampInt(url.searchParams.get('h'), SCREENCAST_MIN, SCREENCAST_MAX, 1400)
