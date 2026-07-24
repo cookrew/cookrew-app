@@ -14,11 +14,19 @@ import {
 /** No first frame within this long after the socket opens → fall back to /thumb. */
 const FIRST_FRAME_TIMEOUT_MS = 4000
 
+/** No frame for this long → treat the view as NOT live (frozen), touch OFF. */
+const FRAME_STALE_MS = 1200
+
 /** The current renderable frame + the input sender, exposed to the view. */
 export interface BrowserStream {
   status: StreamStatus
   /** Data URL of the latest frame (stream mode), or null before the first one. */
   frameUrl: string | null
+  /**
+   * True only while frames are ACTIVELY arriving (a frame within FRAME_STALE_MS).
+   * Gates interactivity — a stalled/frozen frame must not look tappable.
+   */
+  live: boolean
   /** Forward a whitelisted input event to the desktop webview over the WS. */
   send: (msg: CastInputMsg) => void
 }
@@ -38,9 +46,11 @@ export interface BrowserStream {
 export function useBrowserStream(browserId: string, open: boolean): BrowserStream {
   const [status, setStatus] = useState<StreamStatus>('idle')
   const [frameUrl, setFrameUrl] = useState<string | null>(null)
+  const [live, setLive] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const gotFrameRef = useRef(false)
   const warnedRef = useRef(false)
+  const lastFrameAt = useRef(0)
 
   // Drive one status transition; log LOUDLY the first time we fall back.
   const advance = useCallback(
@@ -64,7 +74,9 @@ export function useBrowserStream(browserId: string, open: boolean): BrowserStrea
     if (!open) return
     warnedRef.current = false
     gotFrameRef.current = false
+    lastFrameAt.current = 0
     setFrameUrl(null)
+    setLive(false)
 
     if (!streamSupported(typeof WebSocket !== 'undefined', isRemoteMode())) {
       advance('unsupported')
@@ -90,6 +102,13 @@ export function useBrowserStream(browserId: string, open: boolean): BrowserStrea
       if (!disposed && !gotFrameRef.current) advance('error')
     }, FIRST_FRAME_TIMEOUT_MS)
 
+    // Liveness: frames must keep ARRIVING for the view to stay interactive. If
+    // they stall (occlusion throttle, network), drop live so touch turns off
+    // and the placeholder returns instead of a frozen, tappable frame.
+    const staleTimer = setInterval(() => {
+      if (!disposed && Date.now() - lastFrameAt.current > FRAME_STALE_MS) setLive(false)
+    }, 400)
+
     ws.onopen = (): void => advance('open')
     ws.onerror = (): void => advance('error')
     ws.onclose = (): void => advance('close')
@@ -103,6 +122,8 @@ export function useBrowserStream(browserId: string, open: boolean): BrowserStrea
       }
       if (msg.kind !== 'frame') return // 'ready' — connected, awaiting frames
       setFrameUrl(msg.src)
+      lastFrameAt.current = Date.now()
+      setLive(true)
       if (!gotFrameRef.current) {
         gotFrameRef.current = true
         advance('firstFrame')
@@ -112,6 +133,7 @@ export function useBrowserStream(browserId: string, open: boolean): BrowserStrea
     return () => {
       disposed = true
       clearTimeout(deadline)
+      clearInterval(staleTimer)
       ws.onopen = ws.onerror = ws.onclose = ws.onmessage = null
       try {
         ws.close()
@@ -127,5 +149,5 @@ export function useBrowserStream(browserId: string, open: boolean): BrowserStrea
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg))
   }, [])
 
-  return { status, frameUrl, send }
+  return { status, frameUrl, live, send }
 }

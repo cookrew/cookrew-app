@@ -31,6 +31,9 @@ export function MobileBrowserFrame({
 }): React.JSX.Element {
   const stream = useBrowserStream(browserId, open)
   const streaming = frameSource(stream.status) === 'stream'
+  // Interactive ONLY while frames are actively flowing — a WS that's open but
+  // frameless, or a stalled/frozen frame, must never present as tappable.
+  const interactive = streaming && stream.live && stream.frameUrl !== null
 
   const [seq, setSeq] = useState(0) // /thumb cache-buster (fallback mode)
   const [loaded, setLoaded] = useState(false)
@@ -71,7 +74,9 @@ export function MobileBrowserFrame({
   const fit = fitContain(natural.w, natural.h, view.w, view.h)
 
   const src = streaming ? stream.frameUrl : frameSrc(browserId, seq)
-  const showPlaceholder = streaming ? stream.frameUrl === null : !loaded
+  // In stream mode the placeholder shows until the view is genuinely live, so a
+  // frozen frame reads as "connecting…", not an interactive surface.
+  const showPlaceholder = streaming ? !interactive : !loaded
 
   // ---- input forwarding (stream mode only): map view point → FRAME px, then send
   // the compact `t`-tagged message; Forge maps FRAME px → page px + whitelists. ----
@@ -121,15 +126,16 @@ export function MobileBrowserFrame({
   return (
     <div
       ref={boxRef}
-      className={`browser-body browser-frame nodrag nowheel${streaming ? ' streaming' : ''}`}
-      // Interactive drive only in stream mode; the tabIndex lets it take keys.
-      tabIndex={streaming ? 0 : undefined}
-      onPointerDown={streaming ? onPointerDown : undefined}
-      onPointerMove={streaming ? onPointerMove : undefined}
-      onPointerUp={streaming ? onPointerUp : undefined}
-      onPointerCancel={streaming ? onPointerUp : undefined}
-      onWheel={streaming ? onWheel : undefined}
-      onKeyDown={streaming ? onKeyDown : undefined}
+      className={`browser-body browser-frame nodrag nowheel${interactive ? ' streaming' : ''}`}
+      // Interactive drive ONLY while frames are actively flowing (not merely WS
+      // open); the tabIndex lets it take keys.
+      tabIndex={interactive ? 0 : undefined}
+      onPointerDown={interactive ? onPointerDown : undefined}
+      onPointerMove={interactive ? onPointerMove : undefined}
+      onPointerUp={interactive ? onPointerUp : undefined}
+      onPointerCancel={interactive ? onPointerUp : undefined}
+      onWheel={interactive ? onWheel : undefined}
+      onKeyDown={interactive ? onKeyDown : undefined}
     >
       {showPlaceholder && (
         <div className="browser-frame-loading" role="status" aria-live="polite">
@@ -139,7 +145,7 @@ export function MobileBrowserFrame({
           <span className="cr-kicker">{streaming ? 'connecting live view…' : 'loading live view…'}</span>
         </div>
       )}
-      {streaming && <span className="browser-frame-live" aria-hidden="true" />}
+      {interactive && <span className="browser-frame-live" aria-hidden="true" />}
       {src && (
         <img
           className={`browser-frame-img${showPlaceholder ? '' : ' ready'}`}
