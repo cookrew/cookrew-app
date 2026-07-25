@@ -167,9 +167,20 @@ export type CastInputMsg =
   | { t: 'move'; x: number; y: number }
   | { t: 'wheel'; x: number; y: number; dy: number }
   | { t: 'key'; key: string; code?: string; text?: string }
+  | { t: 'touchstart'; x: number; y: number }
+  | { t: 'touchmove'; x: number; y: number }
+  | { t: 'touchend'; x: number; y: number }
 
 /** Build a pointer input message (tap/down/up/move) at a FRAME point. */
 export function pointerMsg(t: 'tap' | 'down' | 'up' | 'move', p: { x: number; y: number }): CastInputMsg {
+  return { t, x: p.x, y: p.y }
+}
+
+/**
+ * Build a touch input message at a FRAME point. Touch pointers (a phone) send
+ * these instead of mouse down/move/up so a swipe scrolls the page natively.
+ */
+export function touchMsg(t: 'touchstart' | 'touchmove' | 'touchend', p: { x: number; y: number }): CastInputMsg {
   return { t, x: p.x, y: p.y }
 }
 

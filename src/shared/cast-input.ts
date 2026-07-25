@@ -2,8 +2,8 @@
 //
 // The phone drives a live browser over an UNAUTH LAN WebSocket, so the wire
 // protocol is a SMALL closed vocabulary — never raw CDP. Each message maps to
-// one or more whitelisted `Input.*` commands (mouse/key only); anything else
-// (Runtime.evaluate, Page.navigate, a smuggled `{method,params}`) is rejected.
+// one or more whitelisted `Input.*` commands (mouse/key/touch only); anything
+// else (Runtime.evaluate, Page.navigate, a smuggled `{method,params}`) is rejected.
 // Coords arrive in FRAME pixels and are divided by displayScale into the page's
 // CSS viewport, then clamped — a hostile client can never point outside the
 // page or inject a bulk payload.
@@ -13,7 +13,7 @@
 
 /** A validated CDP Input.* command — the ONLY thing allowed onto the debugger. */
 export interface CdpInputCommand {
-  method: 'Input.dispatchMouseEvent' | 'Input.dispatchKeyEvent'
+  method: 'Input.dispatchMouseEvent' | 'Input.dispatchKeyEvent' | 'Input.dispatchTouchEvent'
   params: Record<string, unknown> & { type: string }
 }
 
@@ -53,6 +53,16 @@ function mouse(type: string, p: { x: number; y: number }, extra: Record<string, 
 }
 
 const LEFT = { button: 'left', clickCount: 1 } as const
+
+/**
+ * A whitelisted touch command. touchStart/touchMove carry the single active
+ * point (already clamped page px); touchEnd carries none (the finger lifted).
+ * A drag of touchStart→touchMove…→touchEnd is what makes a phone SWIPE scroll
+ * the page natively instead of drag-selecting it.
+ */
+function touch(type: string, points: { x: number; y: number }[]): CdpInputCommand {
+  return { method: 'Input.dispatchTouchEvent', params: { type, touchPoints: points } }
+}
 
 /**
  * Translate one wire message into whitelisted CDP Input.* commands, or null to
@@ -97,6 +107,18 @@ export function sanitizeInput(raw: unknown, ctx: MapContext): CdpInputCommand[] 
         { method: 'Input.dispatchKeyEvent', params: { type: 'keyDown', ...base } },
         { method: 'Input.dispatchKeyEvent', params: { type: 'keyUp', ...base } }
       ]
+    }
+    case 'touchstart': {
+      const p = toPagePoint(msg, ctx)
+      return p ? [touch('touchStart', [p])] : null
+    }
+    case 'touchmove': {
+      const p = toPagePoint(msg, ctx)
+      return p ? [touch('touchMove', [p])] : null
+    }
+    case 'touchend': {
+      // Finger lifted — an empty touchPoints set is required by CDP for touchEnd.
+      return [touch('touchEnd', [])]
     }
     default:
       return null // whitelist: unknown types (evaluate, navigate, …) are dropped

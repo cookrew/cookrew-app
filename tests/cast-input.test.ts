@@ -33,6 +33,31 @@ describe('sanitizeInput — pointer vocab', () => {
   })
 })
 
+describe('sanitizeInput — touch vocab (phone swipe → native scroll)', () => {
+  it('touchstart/touchmove -> dispatchTouchEvent with the clamped point', () => {
+    expect(sanitizeInput({ t: 'touchstart', x: 200, y: 400 }, ctx)).toEqual([
+      { method: 'Input.dispatchTouchEvent', params: { type: 'touchStart', touchPoints: [{ x: 100, y: 200 }] } }
+    ])
+    expect(sanitizeInput({ t: 'touchmove', x: 20, y: 40 }, ctx)?.[0]).toMatchObject({
+      method: 'Input.dispatchTouchEvent',
+      params: { type: 'touchMove', touchPoints: [{ x: 10, y: 20 }] }
+    })
+  })
+  it('touchend carries an empty touchPoints set (finger lifted, CDP requirement)', () => {
+    expect(sanitizeInput({ t: 'touchend', x: 20, y: 40 }, ctx)).toEqual([
+      { method: 'Input.dispatchTouchEvent', params: { type: 'touchEnd', touchPoints: [] } }
+    ])
+  })
+  it('touch coords are clamped into the page viewport like every other input', () => {
+    expect(sanitizeInput({ t: 'touchmove', x: 100000, y: -50 }, ctx)?.[0]).toMatchObject({
+      params: { touchPoints: [{ x: 400, y: 0 }] }
+    })
+  })
+  it('a malformed touchstart (non-finite coords) is rejected, not smuggled', () => {
+    expect(sanitizeInput({ t: 'touchstart', x: 'NaN', y: 40 }, ctx)).toBeNull()
+  })
+})
+
 describe('sanitizeInput — clamping', () => {
   it('clamps out-of-range coords into [0, viewport]', () => {
     // x=100000/2 = 50000 -> clamp to 400; negative -> 0
@@ -55,6 +80,10 @@ describe('sanitizeInput — rejection (whitelist)', () => {
   it('rejects raw CDP method smuggling (no `t`)', () => {
     expect(sanitizeInput({ method: 'Runtime.evaluate', params: { expression: '1' } }, ctx)).toBeNull()
     expect(sanitizeInput({ method: 'Input.dispatchMouseEvent', params: { type: 'mousePressed' } }, ctx)).toBeNull()
+    // The new touch method must not be reachable by shape either — only via a `t` tag.
+    expect(
+      sanitizeInput({ method: 'Input.dispatchTouchEvent', params: { type: 'touchStart', touchPoints: [{ x: 0, y: 0 }] } }, ctx)
+    ).toBeNull()
   })
   it('rejects non-objects and non-finite coords', () => {
     expect(sanitizeInput(null, ctx)).toBeNull()

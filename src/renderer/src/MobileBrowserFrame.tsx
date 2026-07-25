@@ -12,6 +12,7 @@ import {
   keyMsg,
   pointerMsg,
   streamSurfaceState,
+  touchMsg,
   viewToFramePoint,
   wheelMsg,
   type StreamSurfaceState
@@ -118,14 +119,25 @@ export function MobileBrowserFrame({
   // ---- input forwarding (stream mode only): map view point → FRAME px, then send
   // the compact `t`-tagged message; Forge maps FRAME px → page px + whitelists. ----
   const dragging = useRef(false)
+  // A touch pointer (phone) drives touch events so a swipe scrolls natively; a
+  // mouse/pen pointer (desktop) keeps mouse events. Tracked per active drag.
+  const dragTouch = useRef(false)
+  // Exactly one pointer drives at a time — a second finger mid-drag would corrupt
+  // the single-touch sequence; secondary pointers are ignored until release.
+  const activePointerId = useRef<number | null>(null)
   const lastPoint = useRef<{ x: number; y: number } | null>(null)
 
-  // If freshness disappears mid-drag, release the remote mouse before input is
-  // disabled so the headless page cannot be left with a stuck pressed button.
+  // If freshness disappears mid-drag, release the remote pointer (mouse OR touch)
+  // before input is disabled so the headless page is not left mid-press/mid-touch.
   useEffect(() => {
     if (interactive || !dragging.current) return
     dragging.current = false
-    if (lastPoint.current) stream.send(pointerMsg('up', lastPoint.current))
+    activePointerId.current = null
+    if (lastPoint.current) {
+      stream.send(
+        dragTouch.current ? touchMsg('touchend', lastPoint.current) : pointerMsg('up', lastPoint.current)
+      )
+    }
   }, [interactive, stream.send])
 
   const framePoint = (e: React.PointerEvent): { x: number; y: number } | null => {
@@ -136,31 +148,35 @@ export function MobileBrowserFrame({
   }
   const onPointerDown = (e: React.PointerEvent): void => {
     if (!interactive) return
+    if (activePointerId.current !== null) return // a drag is already in flight — ignore extra fingers
     const p = framePoint(e)
     if (!p) return
     e.preventDefault()
     boxRef.current?.focus()
+    activePointerId.current = e.pointerId
     dragging.current = true
+    dragTouch.current = e.pointerType === 'touch'
     lastPoint.current = p
     e.currentTarget.setPointerCapture(e.pointerId)
-    stream.send(pointerMsg('down', p))
+    stream.send(dragTouch.current ? touchMsg('touchstart', p) : pointerMsg('down', p))
   }
   const onPointerMove = (e: React.PointerEvent): void => {
-    if (!interactive || !dragging.current) return
+    if (!interactive || !dragging.current || e.pointerId !== activePointerId.current) return
     const p = framePoint(e)
     if (p) {
       lastPoint.current = p
-      stream.send(pointerMsg('move', p))
+      stream.send(dragTouch.current ? touchMsg('touchmove', p) : pointerMsg('move', p))
     }
   }
   const onPointerUp = (e: React.PointerEvent): void => {
-    if (!dragging.current) return
+    if (!dragging.current || e.pointerId !== activePointerId.current) return
     dragging.current = false
+    activePointerId.current = null
     if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
     const p = framePoint(e)
     if (p) {
       lastPoint.current = p
-      stream.send(pointerMsg('up', p))
+      stream.send(dragTouch.current ? touchMsg('touchend', p) : pointerMsg('up', p))
     }
   }
   const onWheel = (e: React.WheelEvent): void => {
