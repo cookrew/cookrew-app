@@ -1435,6 +1435,51 @@ body,
   z-index: 2;
 }
 
+.browser-frame-live.with-control {
+  right: 44px;
+}
+
+.browser-frame-control {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 3px;
+  background: rgba(20, 17, 10, 0.86);
+  color: #fff;
+  cursor: pointer;
+}
+
+.browser-frame-control:hover,
+.browser-frame-control:focus-visible,
+.browser-frame-control.owner {
+  border-color: var(--hp, #6bbe58);
+  color: var(--hp, #6bbe58);
+}
+
+.browser-frame-control:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.browser-frame-control:disabled {
+  border-color: rgba(255, 255, 255, 0.24);
+  color: rgba(255, 255, 255, 0.5);
+  cursor: default;
+}
+
+.browser-frame-control .cr-icon {
+  width: 14px;
+  height: 14px;
+}
+
 .browser-frame-glyph {
   width: 28px;
   height: 28px;

@@ -10,6 +10,7 @@ import {
 import {
   frameSource,
   keyMsg,
+  mobileViewportPreference,
   pointerMsg,
   streamSurfaceState,
   touchMsg,
@@ -41,19 +42,25 @@ export function MobileBrowserFrame({
   /** Flag-off phone uses /thumb; headless clients use a neutral fallback. */
   fallback?: 'thumb' | 'loading'
 }): React.JSX.Element {
-  const stream = useBrowserStream(browserId, open, streamEnabled, desktopStreamToken)
-  const streaming = frameSource(stream.status) === 'stream'
-
   const [seq, setSeq] = useState(0) // /thumb cache-buster (fallback mode)
   const [loaded, setLoaded] = useState(false)
   const [streamFrameLoaded, setStreamFrameLoaded] = useState(false)
   const [view, setView] = useState({ w: 0, h: 0 })
   const [natural, setNatural] = useState({ w: 0, h: 0 })
+  const [coarsePointer, setCoarsePointer] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
+  const mobilePreference = mobileViewportPreference(view.w, coarsePointer)
+  const stream = useBrowserStream(browserId, open, streamEnabled, desktopStreamToken, {
+    width: view.w,
+    height: view.h,
+    mobile: mobilePreference
+  })
+  const streaming = frameSource(stream.status) === 'stream'
 
-  // Interactive ONLY after a frame has decoded and while frames are actively
-  // flowing. A connected-but-frameless or stalled view is never tappable.
-  const interactive = streaming && stream.live && stream.frameUrl !== null && streamFrameLoaded
+  // Observers still see and drive the shared frame. The viewport owner controls
+  // layout fit only; input requires a decoded, live frame at the current revision.
+  const frameReady = streaming && stream.live && stream.frameUrl !== null && streamFrameLoaded
+  const interactive = frameReady && stream.canDrive
 
   useEffect(() => {
     if (!open) {
@@ -63,16 +70,31 @@ export function MobileBrowserFrame({
     }
   }, [open, browserId])
 
+  useEffect(() => setStreamFrameLoaded(false), [streaming, stream.frameRevision])
+
   useEffect(() => {
-    if (!streaming) setStreamFrameLoaded(false)
-  }, [streaming])
+    if (typeof window.matchMedia !== 'function') return
+    const query = window.matchMedia('(pointer: coarse)')
+    const update = (): void => setCoarsePointer(query.matches)
+    update()
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
 
   // Measure the view box so either source fit-scales (letterbox) into it.
   useEffect(() => {
     const el = boxRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
-    const measure = (): void => setView({ w: el.clientWidth, h: el.clientHeight })
-    const ro = new ResizeObserver(measure)
+    const commit = (width: number, height: number): void => {
+      const next = { w: Math.round(width), h: Math.round(height) }
+      setView((current) => (current.w === next.w && current.h === next.h ? current : next))
+    }
+    const measure = (): void => commit(el.clientWidth, el.clientHeight)
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry) commit(entry.contentRect.width, entry.contentRect.height)
+      else measure()
+    })
     ro.observe(el)
     measure()
     return () => ro.disconnect()
@@ -106,7 +128,7 @@ export function MobileBrowserFrame({
       : null
   // In stream mode the placeholder shows until the view is genuinely live, so a
   // frozen frame reads as "connecting…", not an interactive surface.
-  const showPlaceholder = streaming ? !interactive : fallback === 'loading' || !loaded
+  const showPlaceholder = streaming ? !frameReady : fallback === 'loading' || !loaded
   const surfaceState = streamSurfaceState({
     open,
     status: stream.status,
@@ -114,7 +136,16 @@ export function MobileBrowserFrame({
     live: stream.live,
     fallback
   })
-  const statusText = STREAM_STATUS_TEXT[surfaceState]
+  const statusText = streamStatusText(surfaceState, stream)
+  const showControl = streaming && stream.controlAvailable
+  const controlDisabled = stream.agentHeld || stream.transitioning
+  const controlLabel = stream.agentHeld
+    ? 'Viewport fit is held while the agent is driving'
+    : stream.transitioning
+      ? 'Browser viewport fit is changing'
+      : stream.isOwner
+        ? 'Release viewport fit'
+        : 'Fit browser to this view'
 
   // ---- input forwarding (stream mode only): map view point → FRAME px, then send
   // the compact `t`-tagged message; Forge maps FRAME px → page px + whitelists. ----
@@ -204,9 +235,22 @@ export function MobileBrowserFrame({
       data-stream-status={stream.status}
       data-stream-state={surfaceState}
       data-frame-seq={stream.frameSeq ?? 'none'}
+      data-frame-revision={stream.frameRevision ?? 'none'}
       data-last-frame-at={stream.lastFrameAt ?? 'none'}
       data-last-frame-fresh={stream.live ? 'true' : 'false'}
       data-interactive={interactive ? 'true' : 'false'}
+      data-viewport-owner={stream.isOwner ? 'self' : (stream.owner ?? 'none')}
+      data-viewport-revision={stream.viewportRevision ?? 'none'}
+      data-viewport-width={stream.effectiveViewport?.width ?? 'none'}
+      data-viewport-height={stream.effectiveViewport?.height ?? 'none'}
+      data-viewport-mobile={stream.effectiveMobile === null ? 'unknown' : String(stream.effectiveMobile)}
+      data-viewer-count={stream.viewerCount ?? 'unknown'}
+      data-agent-held={stream.agentHeld ? 'true' : 'false'}
+      data-viewport-transitioning={stream.transitioning ? 'true' : 'false'}
+      data-control-available={stream.controlAvailable ? 'true' : 'false'}
+      data-offer-width={view.w || 'none'}
+      data-offer-height={view.h || 'none'}
+      data-offer-mobile={mobilePreference ? 'true' : 'false'}
       // Interactive drive ONLY while frames are actively flowing (not merely WS
       // open); the tabIndex lets it take keys.
       tabIndex={interactive ? 0 : undefined}
@@ -228,7 +272,27 @@ export function MobileBrowserFrame({
           <span className="cr-kicker">{statusText}</span>
         </div>
       )}
-      {interactive && <span className="browser-frame-live" aria-hidden="true" />}
+      {showControl && (
+        <button
+          type="button"
+          className={`browser-frame-control${stream.isOwner ? ' owner' : ''}`}
+          title={controlLabel}
+          aria-label={controlLabel}
+          aria-pressed={stream.isOwner === true}
+          disabled={controlDisabled}
+          onPointerDown={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+          }}
+          onKeyDown={(event) => event.stopPropagation()}
+          onClick={stream.isOwner ? stream.release : stream.claim}
+        >
+          <CrIcon name={stream.isOwner ? 'check' : 'select'} />
+        </button>
+      )}
+      {frameReady && (
+        <span className={`browser-frame-live${showControl ? ' with-control' : ''}`} aria-hidden="true" />
+      )}
       {src && (
         <img
           className={`browser-frame-img${showPlaceholder ? '' : ' ready'}`}
@@ -265,4 +329,16 @@ const STREAM_STATUS_TEXT: Record<StreamSurfaceState, string> = {
   stalled: 'live browser view stalled',
   fallback: 'browser preview',
   unavailable: 'live browser view unavailable'
+}
+
+function streamStatusText(
+  surfaceState: StreamSurfaceState,
+  stream: ReturnType<typeof useBrowserStream>
+): string {
+  if (surfaceState !== 'live' || !stream.controlAvailable) return STREAM_STATUS_TEXT[surfaceState]
+  if (stream.agentHeld) return 'live browser view, agent driving; viewport fit held'
+  if (stream.transitioning) return 'live browser view, viewport fit changing'
+  if (stream.isOwner) return 'live browser view, fitted to this view'
+  if (stream.owner === 'other') return 'live browser view, fitted to another view'
+  return 'live browser view, viewport fit available'
 }

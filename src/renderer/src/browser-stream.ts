@@ -25,12 +25,31 @@ import type { FitRect } from './browser-frame'
 /** Requested screencast viewport bounds — Forge clamps 320..2048 (default 800x1400). */
 export const VIEWPORT_MIN = 320
 export const VIEWPORT_MAX = 2048
+export const MOBILE_VIEWPORT_MAX_WIDTH = 700
 
 /** The companion server is the native renderer's route to the stream endpoint. */
 export const DESKTOP_STREAM_ORIGIN = 'http://127.0.0.1:8639'
 
 /** Renderer surfaces that may (or may not) host the shared browser stream. */
 export type StreamClient = 'desktop' | 'remote' | 'demo'
+export type ViewportOwner = 'self' | 'other' | 'none'
+
+export interface ViewportSize {
+  width: number
+  height: number
+}
+
+export interface ViewportPreference extends ViewportSize {
+  mobile: boolean
+}
+
+export type ViewportControlKind = 'offer' | 'claim' | 'release'
+
+/** Closed renderer→server viewport/controller vocabulary. */
+export type ViewportControlMsg =
+  | { t: 'viewport-offer'; width: number; height: number; mobile: boolean }
+  | { t: 'viewport-claim'; width: number; height: number; mobile: boolean }
+  | { t: 'viewport-release' }
 
 /** Exhaustive renderer ownership contract for one browser tab surface. */
 export type BrowserRenderMode =
@@ -65,6 +84,30 @@ export function clampViewport(px: number): number {
   return Math.max(VIEWPORT_MIN, Math.min(VIEWPORT_MAX, Math.round(px)))
 }
 
+/** Prefer mobile metrics for a touch-first device or a genuinely narrow view. */
+export function mobileViewportPreference(width: number, coarsePointer: boolean): boolean {
+  return coarsePointer || (width > 0 && width <= MOBILE_VIEWPORT_MAX_WIDTH)
+}
+
+/** Revisions are monotonic non-negative integers; malformed values become 0. */
+export function normalizeRevision(value: number | null | undefined): number {
+  return Number.isFinite(value) ? Math.max(0, Math.round(value ?? 0)) : 0
+}
+
+export function viewportControlMsg(
+  t: ViewportControlKind,
+  viewport: ViewportSize,
+  mobile: boolean
+): ViewportControlMsg {
+  if (t === 'release') return { t: 'viewport-release' }
+  return {
+    t: t === 'claim' ? 'viewport-claim' : 'viewport-offer',
+    width: clampViewport(viewport.width),
+    height: clampViewport(viewport.height),
+    mobile
+  }
+}
+
 /**
  * The WS URL for a browser's stream, derived from the page origin (ws/wss) with
  * the requested screencast size as `w`/`h` query params (Forge's contract).
@@ -97,10 +140,31 @@ export function frameDataUrl(base64: string): string {
   return base64.startsWith('data:') ? base64 : `data:image/jpeg;base64,${base64}`
 }
 
+interface StreamControlFields {
+  isOwner: boolean
+  owner: ViewportOwner
+  viewerCount: number
+  width: number
+  height: number
+  revision: number
+  mobile: boolean
+  agentHeld: boolean
+  transitioning: boolean
+}
+
+interface StreamFrameMeta {
+  revision?: number
+  deviceWidth?: number
+  deviceHeight?: number
+  displayScale?: number
+  mobile?: boolean
+}
+
 /** A parsed server→client message (Forge's `t`-tagged JSON text frames). */
 export type StreamMessage =
-  | { kind: 'ready'; w: number; h: number }
-  | { kind: 'frame'; seq: number; src: string }
+  | ({ kind: 'ready'; w: number; h: number; revision?: number; mobile?: boolean })
+  | ({ kind: 'control' } & StreamControlFields)
+  | ({ kind: 'frame'; seq: number; src: string } & StreamFrameMeta)
   | { kind: 'error'; msg: string }
 
 /**
@@ -114,22 +178,99 @@ export function parseStreamMessage(raw: unknown): StreamMessage | null {
   const trimmed = raw.trim()
   if (trimmed.length === 0) return null
   if (!trimmed.startsWith('{')) return { kind: 'frame', seq: 0, src: frameDataUrl(trimmed) }
-  let obj: { t?: unknown; data?: unknown; seq?: unknown; w?: unknown; h?: unknown; msg?: unknown }
+  let obj: Record<string, unknown>
   try {
     obj = JSON.parse(trimmed)
   } catch {
     return null
   }
   if (obj.t === 'frame' && typeof obj.data === 'string') {
-    return { kind: 'frame', seq: typeof obj.seq === 'number' ? obj.seq : 0, src: frameDataUrl(obj.data) }
+    const meta = asRecord(obj.meta)
+    const revision = finiteRevision(obj.revision ?? meta?.revision)
+    const deviceWidth = positiveNumber(meta?.deviceWidth)
+    const deviceHeight = positiveNumber(meta?.deviceHeight)
+    const displayScale = positiveNumber(meta?.displayScale)
+    const mobile = typeof meta?.mobile === 'boolean' ? meta.mobile : undefined
+    return {
+      kind: 'frame',
+      seq: typeof obj.seq === 'number' ? obj.seq : 0,
+      src: frameDataUrl(obj.data),
+      ...(revision !== null ? { revision } : {}),
+      ...(deviceWidth !== null ? { deviceWidth } : {}),
+      ...(deviceHeight !== null ? { deviceHeight } : {}),
+      ...(displayScale !== null ? { displayScale } : {}),
+      ...(mobile !== undefined ? { mobile } : {})
+    }
   }
   if (obj.t === 'ready') {
-    return { kind: 'ready', w: typeof obj.w === 'number' ? obj.w : 0, h: typeof obj.h === 'number' ? obj.h : 0 }
+    const w = positiveNumber(obj.w) ?? 0
+    const h = positiveNumber(obj.h) ?? 0
+    const revision = finiteRevision(obj.revision)
+    const mobile = typeof obj.mobile === 'boolean' ? obj.mobile : undefined
+    return {
+      kind: 'ready',
+      w,
+      h,
+      ...(revision !== null ? { revision } : {}),
+      ...(mobile !== undefined ? { mobile } : {})
+    }
+  }
+  if (obj.t === 'viewport-state') {
+    const control = parseControlFields(obj)
+    return control ? { kind: 'control', ...control } : null
   }
   if (obj.t === 'error') {
     return { kind: 'error', msg: typeof obj.msg === 'string' ? obj.msg : 'stream error' }
   }
   return null
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null
+}
+
+function positiveNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+}
+
+function finiteRevision(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null
+}
+
+function parseOwner(value: unknown): ViewportOwner | undefined {
+  if (value === 'self' || value === 'other' || value === 'none') return value
+  return undefined
+}
+
+function parseControlFields(obj: Record<string, unknown>): StreamControlFields | null {
+  const width = positiveNumber(obj.width)
+  const height = positiveNumber(obj.height)
+  const revision = finiteRevision(obj.revision)
+  const viewerCount = positiveNumber(obj.viewerCount)
+  const owner = parseOwner(obj.owner)
+  if (
+    owner === undefined ||
+    viewerCount === null ||
+    width === null ||
+    height === null ||
+    revision === null ||
+    typeof obj.mobile !== 'boolean' ||
+    typeof obj.agentHeld !== 'boolean' ||
+    typeof obj.transitioning !== 'boolean'
+  ) {
+    return null
+  }
+  return {
+    isOwner: owner === 'self',
+    owner,
+    viewerCount: Math.max(1, Math.round(viewerCount)),
+    width,
+    height,
+    revision,
+    mobile: obj.mobile,
+    agentHeld: obj.agentHeld,
+    transitioning: obj.transitioning
+  }
 }
 
 // ---- coordinate mapping: view px → FRAME px (Forge divides by displayScale) ----
@@ -170,6 +311,49 @@ export type CastInputMsg =
   | { t: 'touchstart'; x: number; y: number }
   | { t: 'touchmove'; x: number; y: number }
   | { t: 'touchend'; x: number; y: number }
+
+export type RevisionedCastInputMsg = CastInputMsg & { revision: number }
+
+export function inputWithRevision(msg: CastInputMsg, revision: number): RevisionedCastInputMsg {
+  return { ...msg, revision: normalizeRevision(revision) }
+}
+
+/** Input is safe only against the exact viewport revision that produced its frame. */
+export function frameMatchesViewport(
+  frameRevision: number | null,
+  viewportRevision: number | null
+): boolean {
+  return frameRevision !== null &&
+    viewportRevision !== null &&
+    frameRevision === viewportRevision
+}
+
+/** Viewer input is valid against any stable viewport with a matching frame. */
+export function streamCanDrive(opts: {
+  live: boolean
+  agentHeld: boolean
+  transitioning: boolean
+  frameRevision: number | null
+  viewportRevision: number | null
+}): boolean {
+  return opts.live &&
+    !opts.agentHeld &&
+    !opts.transitioning &&
+    frameMatchesViewport(opts.frameRevision, opts.viewportRevision)
+}
+
+/**
+ * Pointer release is cleanup, not a new drive action. It may cross a liveness or
+ * activity hold, but never a viewport-revision boundary.
+ */
+export function streamInputAllowed(
+  msg: CastInputMsg,
+  opts: Parameters<typeof streamCanDrive>[0]
+): boolean {
+  if (!frameMatchesViewport(opts.frameRevision, opts.viewportRevision)) return false
+  if (msg.t === 'up' || msg.t === 'touchend') return true
+  return streamCanDrive(opts)
+}
 
 /** Build a pointer input message (tap/down/up/move) at a FRAME point. */
 export function pointerMsg(t: 'tap' | 'down' | 'up' | 'move', p: { x: number; y: number }): CastInputMsg {
