@@ -80,78 +80,84 @@ export class HeadlessBrowserCommandEngine {
     const browserName = rest[0]
     if (!browserName) throw new Error(`Usage: cookrew browser ${sub} "Browser" ...`)
     const node = this.findBrowser(browserName)
-    if (TAB_COMMANDS.has(sub)) return this.runTabCommand(sub, node, rest.slice(1))
+    if (sub === 'tabs') return this.runTabCommand(sub, node, rest.slice(1))
 
     const instance = await this.requireInstance(node)
-    const params = rest.slice(1)
-    switch (sub) {
-      case 'snapshot':
-        return String(await instance.evaluate(SNAPSHOT_SCRIPT))
-      case 'navigate': {
-        const url = params[0]
-        if (!url) throw new Error(`Usage: cookrew browser navigate "${browserName}" URL`)
-        await instance.navigate(url)
-        return `Navigated to ${url}`
+    const releaseViewport = await instance.beginAgentViewportActivity()
+    try {
+      if (TAB_COMMANDS.has(sub)) return this.runTabCommand(sub, node, rest.slice(1))
+      const params = rest.slice(1)
+      switch (sub) {
+        case 'snapshot':
+          return String(await instance.evaluate(SNAPSHOT_SCRIPT))
+        case 'navigate': {
+          const url = params[0]
+          if (!url) throw new Error(`Usage: cookrew browser navigate "${browserName}" URL`)
+          await instance.navigate(url)
+          return `Navigated to ${url}`
+        }
+        case 'info': {
+          const info = await instance.pageInfo()
+          return `url: ${info.url}\ntitle: ${info.title}\nviewport: ${info.viewport}`
+        }
+        case 'click':
+          return withElement(instance, params[0], `el.click(); return 'Clicked'`)
+        case 'fill':
+          return withElement(
+            instance,
+            params[0],
+            `el.focus(); el.value = ${JSON.stringify(params[1] ?? '')};
+             el.dispatchEvent(new Event('input', { bubbles: true }));
+             el.dispatchEvent(new Event('change', { bubbles: true }));
+             return 'Filled'`
+          )
+        case 'type':
+          return withElement(
+            instance,
+            params.length > 1 ? params[0] : ':focus',
+            `el.focus(); el.value = (el.value || '') + ${JSON.stringify(params[params.length - 1] ?? '')};
+             el.dispatchEvent(new Event('input', { bubbles: true }));
+             return 'Typed'`
+          )
+        case 'key':
+          return String(
+            await instance.evaluate(`(() => {
+              const key = ${JSON.stringify(params[0] ?? 'Enter')}
+              const el = document.activeElement || document.body
+              for (const type of ['keydown', 'keypress', 'keyup']) {
+                el.dispatchEvent(new KeyboardEvent(type, { key, bubbles: true }))
+              }
+              if (key === 'Enter' && el.form) el.form.requestSubmit()
+              return 'Pressed ' + key
+            })()`)
+          )
+        case 'text':
+          return withElement(instance, params[0] ?? 'body', 'return el.innerText.slice(0, 20000)')
+        case 'html':
+          return String(
+            await instance.evaluate('document.documentElement.outerHTML.slice(0, 100000)')
+          )
+        case 'evaluate':
+          return String(await instance.evaluate(params[0] ?? ''))
+        case 'scroll': {
+          const direction = params[0] ?? 'down'
+          const amount = Number.parseInt(params[1] ?? '300', 10)
+          const [dx, dy] =
+            direction === 'down'
+              ? [0, amount]
+              : direction === 'up'
+                ? [0, -amount]
+                : direction === 'right'
+                  ? [amount, 0]
+                  : [-amount, 0]
+          await instance.evaluate(`scrollBy(${dx}, ${dy})`)
+          return `Scrolled ${direction} ${amount}`
+        }
+        default:
+          throw new Error(`Unknown browser command '${sub}'`)
       }
-      case 'info': {
-        const info = await instance.pageInfo()
-        return `url: ${info.url}\ntitle: ${info.title}\nviewport: ${info.viewport}`
-      }
-      case 'click':
-        return withElement(instance, params[0], `el.click(); return 'Clicked'`)
-      case 'fill':
-        return withElement(
-          instance,
-          params[0],
-          `el.focus(); el.value = ${JSON.stringify(params[1] ?? '')};
-           el.dispatchEvent(new Event('input', { bubbles: true }));
-           el.dispatchEvent(new Event('change', { bubbles: true }));
-           return 'Filled'`
-        )
-      case 'type':
-        return withElement(
-          instance,
-          params.length > 1 ? params[0] : ':focus',
-          `el.focus(); el.value = (el.value || '') + ${JSON.stringify(params[params.length - 1] ?? '')};
-           el.dispatchEvent(new Event('input', { bubbles: true }));
-           return 'Typed'`
-        )
-      case 'key':
-        return String(
-          await instance.evaluate(`(() => {
-            const key = ${JSON.stringify(params[0] ?? 'Enter')}
-            const el = document.activeElement || document.body
-            for (const type of ['keydown', 'keypress', 'keyup']) {
-              el.dispatchEvent(new KeyboardEvent(type, { key, bubbles: true }))
-            }
-            if (key === 'Enter' && el.form) el.form.requestSubmit()
-            return 'Pressed ' + key
-          })()`)
-        )
-      case 'text':
-        return withElement(instance, params[0] ?? 'body', 'return el.innerText.slice(0, 20000)')
-      case 'html':
-        return String(
-          await instance.evaluate('document.documentElement.outerHTML.slice(0, 100000)')
-        )
-      case 'evaluate':
-        return String(await instance.evaluate(params[0] ?? ''))
-      case 'scroll': {
-        const direction = params[0] ?? 'down'
-        const amount = Number.parseInt(params[1] ?? '300', 10)
-        const [dx, dy] =
-          direction === 'down'
-            ? [0, amount]
-            : direction === 'up'
-              ? [0, -amount]
-              : direction === 'right'
-                ? [amount, 0]
-                : [-amount, 0]
-        await instance.evaluate(`scrollBy(${dx}, ${dy})`)
-        return `Scrolled ${direction} ${amount}`
-      }
-      default:
-        throw new Error(`Unknown browser command '${sub}'`)
+    } finally {
+      releaseViewport()
     }
   }
 

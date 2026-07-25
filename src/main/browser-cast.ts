@@ -7,9 +7,12 @@
 
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
+import { randomUUID } from 'node:crypto'
 import { sanitizeInput, type MapContext } from '../shared/cast-input'
+import { sanitizeViewportMessage } from '../shared/cast-viewport'
 import { jpegSize } from './jpeg-size'
 import { DEFAULT_DRAIN_THRESHOLD } from './screencast-pace'
+import type { BrowserViewportState } from './browser-viewport'
 import type { FrameMeta, HeadlessInstance } from './headless-chrome'
 import {
   acceptKey,
@@ -108,15 +111,21 @@ export function createBrowserCast(deps: BrowserCastDeps): BrowserCast {
 }
 
 class ClientConn {
+  private readonly id = randomUUID()
   private inbound: Buffer = Buffer.alloc(0)
   private seq = 0
   private closed = false
   private latest: string | null = null
+  private latestRevision: number | null = null
+  private deliveredRevision: number | null = null
   private drainArmed = false
   private instance: HeadlessInstance | null = null
+  private unsubscribeViewport: (() => void) | null = null
   private ctx: MapContext = { displayScale: 1, viewportWidth: 800, viewportHeight: 600 }
   private readonly frameListener = (data: string, meta: FrameMeta): void =>
     this.pushFrame(data, meta)
+  private readonly viewportListener = (state: BrowserViewportState): void =>
+    this.pushViewportState(state)
 
   constructor(
     private readonly socket: Duplex,
@@ -130,14 +139,23 @@ class ClientConn {
   attach(instance: HeadlessInstance): void {
     if (this.closed) return
     this.instance = instance
-    const viewport = instance.viewport
+    instance.registerViewportViewer(this.id)
+    this.unsubscribeViewport = instance.onViewportState(this.viewportListener)
+    const viewport = instance.viewportState
     this.ctx = {
       displayScale: 1,
       viewportWidth: viewport.width,
       viewportHeight: viewport.height
     }
     instance.frameListeners.add(this.frameListener)
-    this.wsSend(JSON.stringify({ t: 'ready', w: viewport.width, h: viewport.height }))
+    this.wsSend(JSON.stringify({
+      t: 'ready',
+      w: viewport.width,
+      h: viewport.height,
+      mobile: viewport.mobile,
+      revision: viewport.revision
+    }))
+    this.pushViewportState(viewport)
   }
 
   fail(message: string): void {
@@ -146,17 +164,20 @@ class ClientConn {
     this.close()
   }
 
-  private pushFrame(base64: string, _meta: FrameMeta): void {
+  private pushFrame(base64: string, meta: FrameMeta): void {
     if (this.closed) return
-    const viewport = this.instance?.viewport
+    const viewport = this.instance?.viewportState
     const size = jpegSize(Buffer.from(base64, 'base64'))
-    if (viewport && size && viewport.width > 0) {
+    const deviceWidth = meta.deviceWidth ?? viewport?.width
+    const deviceHeight = meta.deviceHeight ?? viewport?.height
+    if (deviceWidth && deviceHeight && size && deviceWidth > 0) {
       this.ctx = {
-        displayScale: size.width / viewport.width,
-        viewportWidth: viewport.width,
-        viewportHeight: viewport.height
+        displayScale: size.width / deviceWidth,
+        viewportWidth: deviceWidth,
+        viewportHeight: deviceHeight
       }
     }
+    const revision = meta.revision ?? viewport?.revision ?? 1
     const msg = JSON.stringify({
       t: 'frame',
       seq: (this.seq += 1),
@@ -164,13 +185,19 @@ class ClientConn {
       meta: {
         deviceWidth: this.ctx.viewportWidth,
         deviceHeight: this.ctx.viewportHeight,
-        displayScale: this.ctx.displayScale
+        displayScale: this.ctx.displayScale,
+        mobile: meta.mobile ?? viewport?.mobile ?? false,
+        revision
       }
     })
     if (this.socket.writableLength <= DEFAULT_DRAIN_THRESHOLD) {
+      this.latest = null
+      this.latestRevision = null
       this.wsSend(msg)
+      if (!this.closed) this.deliveredRevision = revision
     } else {
       this.latest = msg
+      this.latestRevision = revision
       this.armDrain()
     }
   }
@@ -181,8 +208,13 @@ class ClientConn {
     this.socket.once('drain', () => {
       this.drainArmed = false
       const pending = this.latest
+      const revision = this.latestRevision
       this.latest = null
-      if (pending && !this.closed) this.wsSend(pending)
+      this.latestRevision = null
+      if (pending && !this.closed) {
+        this.wsSend(pending)
+        if (!this.closed) this.deliveredRevision = revision
+      }
     })
   }
 
@@ -212,6 +244,25 @@ class ClientConn {
     }
     const instance = this.instance
     if (!instance) return
+    const viewportMessage = sanitizeViewportMessage(raw)
+    if (viewportMessage) {
+      if (viewportMessage.type === 'offer') instance.offerViewport(this.id, viewportMessage.metrics)
+      else if (viewportMessage.type === 'claim') instance.claimViewport(this.id, viewportMessage.metrics)
+      else instance.releaseViewport(this.id)
+      this.pushViewportState(instance.viewportState)
+      return
+    }
+    if (typeof raw !== 'object' || raw === null) return
+    const input = raw as Record<string, unknown>
+    const revision = input.revision
+    const releasesActivePointer = input.t === 'up' || input.t === 'touchend'
+    const viewport = instance.viewportState
+    if (
+      ((viewport.transitioning || viewport.agentHeld) && !releasesActivePointer) ||
+      !Number.isInteger(revision) ||
+      revision !== viewport.revision ||
+      revision !== this.deliveredRevision
+    ) return
     const commands = sanitizeInput(raw, this.ctx)
     if (!commands) return
     for (const command of commands) instance.dispatchInput(command.method, command.params)
@@ -226,11 +277,30 @@ class ClientConn {
     }
   }
 
+  private pushViewportState(state: BrowserViewportState): void {
+    this.wsSend(JSON.stringify({
+      t: 'viewport-state',
+      width: state.width,
+      height: state.height,
+      mobile: state.mobile,
+      revision: state.revision,
+      owner: state.ownerId === this.id ? 'self' : state.ownerId ? 'other' : 'none',
+      viewerCount: state.viewerCount,
+      agentHeld: state.agentHeld,
+      transitioning: state.transitioning
+    }))
+  }
+
   close = (): void => {
     if (this.closed) return
     this.closed = true
     this.latest = null
+    this.latestRevision = null
+    this.deliveredRevision = null
     this.instance?.frameListeners.delete(this.frameListener)
+    this.unsubscribeViewport?.()
+    this.unsubscribeViewport = null
+    this.instance?.unregisterViewportViewer(this.id)
     this.instance = null
     try {
       this.socket.destroy()

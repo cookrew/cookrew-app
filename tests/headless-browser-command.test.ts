@@ -49,6 +49,7 @@ describe('HeadlessBrowserCommandEngine', () => {
     instance = {
       evaluate: vi.fn(() => Promise.resolve('shared-token')),
       navigate: vi.fn(() => Promise.resolve()),
+      beginAgentViewportActivity: vi.fn(() => Promise.resolve(vi.fn())),
       pageInfo: vi.fn(() =>
         Promise.resolve({ url: 'https://example.test', title: 'Example', viewport: '720x560' })
       )
@@ -71,6 +72,7 @@ describe('HeadlessBrowserCommandEngine', () => {
     ).resolves.toBe('shared-token')
     expect(manager.syncNode).toHaveBeenCalledWith(expect.objectContaining({ id: browser().id }))
     expect(instance.evaluate).toHaveBeenCalledWith('sessionStorage.token')
+    expect(instance.beginAgentViewportActivity).toHaveBeenCalledTimes(1)
   })
 
   it('routes navigation to headless Chrome', async () => {

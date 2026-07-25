@@ -75,11 +75,28 @@ function req(url: string, origin?: string): IncomingMessage {
 }
 /** A headless-instance stub so upgrade() never spawns real Chrome in tests. */
 function fakeInstance(): HeadlessInstance {
+  const viewportState = {
+    width: 390,
+    height: 844,
+    mobile: true,
+    revision: 1,
+    ownerId: null,
+    viewerCount: 0,
+    agentHeld: false,
+    transitioning: false
+  }
   return {
     frameListeners: new Set(),
     dispatchInput: vi.fn(),
     stop: vi.fn(),
-    viewport: { width: 390, height: 844 }
+    viewport: { width: 390, height: 844 },
+    viewportState,
+    registerViewportViewer: vi.fn(),
+    unregisterViewportViewer: vi.fn(),
+    offerViewport: vi.fn(),
+    claimViewport: vi.fn(() => true),
+    releaseViewport: vi.fn(),
+    onViewportState: vi.fn(() => vi.fn())
   } as unknown as HeadlessInstance
 }
 const okDeps = () => ({
@@ -188,8 +205,105 @@ describe('upgrade() attaches to the node-owned instance', () => {
     )
     expect(instance.dispatchInput).not.toHaveBeenCalled()
 
-    socket.emitEvent('data', maskedTextFrame(JSON.stringify({ t: 'key', key: 'a', code: 'KeyA' })))
+    for (const listener of instance.frameListeners) listener('current-frame', { revision: 1 })
+
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'key', key: 'a', code: 'KeyA', revision: 1 }))
+    )
     expect(instance.dispatchInput).toHaveBeenCalledTimes(2)
+  })
+
+  it('accepts only sanitized viewport intents and revision-gates page input', async () => {
+    const instance = fakeInstance()
+    const socket = socketStub()
+    createBrowserCast({
+      enabled: () => true,
+      desktopToken: () => 'desktop-secret',
+      getInstance: vi.fn(() => Promise.resolve(instance))
+    }).upgrade(req('/api/browser/secure/stream'), socket)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({
+        t: 'viewport-claim',
+        width: 390,
+        height: 700,
+        mobile: true,
+        method: 'Emulation.setDeviceMetricsOverride'
+      }))
+    )
+    expect(instance.claimViewport).toHaveBeenCalledWith(
+      expect.any(String),
+      { width: 390, height: 700, mobile: true }
+    )
+
+    socket.emitEvent('data', maskedTextFrame(JSON.stringify({ t: 'tap', x: 1, y: 1 })))
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'tap', x: 1, y: 1, revision: 99 }))
+    )
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'tap', x: 1, y: 1, revision: 1 }))
+    )
+    expect(instance.dispatchInput).not.toHaveBeenCalled()
+
+    for (const listener of instance.frameListeners) listener('current-frame', { revision: 1 })
+
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'tap', x: 1, y: 1, revision: 1 }))
+    )
+    expect(instance.dispatchInput).toHaveBeenCalledTimes(2)
+  })
+
+  it('enforces agent/transition holds but permits a current-revision pointer release', async () => {
+    const instance = fakeInstance()
+    const socket = socketStub()
+    createBrowserCast({
+      enabled: () => true,
+      desktopToken: () => 'desktop-secret',
+      getInstance: vi.fn(() => Promise.resolve(instance))
+    }).upgrade(req('/api/browser/secure/stream'), socket)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    for (const listener of instance.frameListeners) listener('current-frame', { revision: 1 })
+
+    Object.assign(instance.viewportState, { agentHeld: true })
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'move', x: 1, y: 1, revision: 1 }))
+    )
+    expect(instance.dispatchInput).not.toHaveBeenCalled()
+
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'touchend', x: 1, y: 1, revision: 1 }))
+    )
+    expect(instance.dispatchInput).toHaveBeenCalledWith(
+      'Input.dispatchTouchEvent',
+      { type: 'touchEnd', touchPoints: [] }
+    )
+
+    vi.mocked(instance.dispatchInput).mockClear()
+    Object.assign(instance.viewportState, { agentHeld: false, transitioning: true })
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'down', x: 1, y: 1, revision: 1 }))
+    )
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'up', x: 1, y: 1, revision: 1 }))
+    )
+    expect(instance.dispatchInput).toHaveBeenCalledTimes(1)
+    expect(instance.dispatchInput).toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mouseReleased' })
+    )
   })
 
   it('keeps a fast viewer flowing while a slow viewer retains only its latest frame', async () => {
@@ -214,11 +328,21 @@ describe('upgrade() attaches to the node-owned instance', () => {
     expect(fast.writes.join('')).toContain('frame-two')
     expect(slow.writes.join('')).not.toContain('frame-one')
     expect(slow.writes.join('')).not.toContain('frame-two')
+    slow.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'key', key: 'a', code: 'KeyA', revision: 1 }))
+    )
+    expect(instance.dispatchInput).not.toHaveBeenCalled()
 
     slow.setWritableLength(0)
     slow.emitEvent('drain')
     expect(slow.writes.join('')).not.toContain('frame-one')
     expect(slow.writes.join('')).toContain('frame-two')
+    slow.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'key', key: 'a', code: 'KeyA', revision: 1 }))
+    )
+    expect(instance.dispatchInput).toHaveBeenCalledTimes(2)
   })
 })
 

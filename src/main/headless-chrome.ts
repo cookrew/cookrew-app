@@ -12,6 +12,11 @@ import http from 'node:http'
 import path from 'node:path'
 import type { BrowserTab } from '../shared/model'
 import type { CdpInputCommand } from '../shared/cast-input'
+import type { ViewportMetrics } from '../shared/cast-viewport'
+import {
+  BrowserViewportCoordinator,
+  type BrowserViewportState
+} from './browser-viewport'
 import { CdpClient } from './cdp-client'
 
 function httpJson<T>(url: string): Promise<T> {
@@ -87,6 +92,8 @@ export interface HeadlessOptions {
 export interface FrameMeta {
   deviceWidth?: number
   deviceHeight?: number
+  mobile?: boolean
+  revision?: number
 }
 
 export interface HeadlessPageState {
@@ -135,8 +142,10 @@ export class HeadlessInstance {
   private lastHash = ''
   private width: number
   private height: number
+  private mobile = false
   private activeTabId: string
   private stopPromise: Promise<HeadlessStopResult> | null = null
+  private readonly viewportCoordinator: BrowserViewportCoordinator
   private readonly pages = new Map<string, PageBinding>()
   private readonly targetToTab = new Map<string, string>()
   private programmaticTargetCreates = 0
@@ -154,6 +163,10 @@ export class HeadlessInstance {
     this.width = opts.width
     this.height = opts.height
     this.activeTabId = opts.activeTabId
+    this.viewportCoordinator = new BrowserViewportCoordinator(
+      { width: opts.width, height: opts.height, mobile: false },
+      (metrics) => this.applyViewportMetrics(metrics)
+    )
   }
 
   async start(): Promise<void> {
@@ -462,7 +475,7 @@ export class HeadlessInstance {
   private onScreencastFrame(page: PageBinding, params: Record<string, unknown>): void {
     const sessionId = params.sessionId as number
     void page.cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => undefined)
-    if (page.tabId !== this.activeTabId) return
+    if (page.tabId !== this.activeTabId || this.viewportCoordinator.state.transitioning) return
     const data = params.data
     if (typeof data === 'string' && data.length > 0) {
       this.emitFrame(data, (params.metadata ?? {}) as FrameMeta)
@@ -470,7 +483,11 @@ export class HeadlessInstance {
   }
 
   private async pollTick(): Promise<void> {
-    if (this.closed || this.frameListeners.size === 0) return
+    if (
+      this.closed ||
+      this.frameListeners.size === 0 ||
+      this.viewportCoordinator.state.transitioning
+    ) return
     if (Date.now() - this.lastFrameAt < POLL_INTERVAL_MS) return
     const page = this.pages.get(this.activeTabId)
     if (!page) return
@@ -486,13 +503,21 @@ export class HeadlessInstance {
   }
 
   private emitFrame(base64: string, meta: FrameMeta): void {
-    if (this.closed) return
+    const viewport = this.viewportCoordinator.state
+    if (this.closed || viewport.transitioning) return
     const hash = createHash('md5').update(base64).digest('base64')
     const now = Date.now()
     if (!shouldEmitFrame(hash, this.lastHash, now, this.lastFrameAt)) return
     this.lastHash = hash
     this.lastFrameAt = now
-    for (const listener of this.frameListeners) listener(base64, meta)
+    const effectiveMeta: FrameMeta = {
+      ...meta,
+      deviceWidth: viewport.width,
+      deviceHeight: viewport.height,
+      mobile: viewport.mobile,
+      revision: viewport.revision
+    }
+    for (const listener of this.frameListeners) listener(base64, effectiveMeta)
   }
 
   private async refreshPageState(page: PageBinding): Promise<HeadlessPageState> {
@@ -573,29 +598,74 @@ export class HeadlessInstance {
     const page = this.pages.get(this.activeTabId)
     if (!page) throw new Error('active browser tab is unavailable')
     const state = await this.refreshPageState(page)
-    return { ...state, viewport: `${this.width}x${this.height}` }
+    const viewport = this.viewportCoordinator.state
+    return { ...state, viewport: `${viewport.width}x${viewport.height}` }
   }
 
+  /** Update the node-card fallback without clobbering a viewer-owned viewport. */
   async resize(width: number, height: number): Promise<void> {
-    if (width === this.width && height === this.height) return
-    this.width = width
-    this.height = height
-    for (const page of this.pages.values()) await this.resizePage(page)
+    this.viewportCoordinator.setDefault({ width, height, mobile: false })
+  }
+
+  private async applyViewportMetrics(metrics: ViewportMetrics): Promise<void> {
+    if (this.closed) throw new Error('headless browser is closed')
     const active = this.pages.get(this.activeTabId)
     if (active?.screencasting) {
       await active.cdp.send('Page.stopScreencast').catch(() => undefined)
       active.screencasting = false
-      await this.activatePage(active.tabId)
     }
+    this.width = metrics.width
+    this.height = metrics.height
+    this.mobile = metrics.mobile
+    this.lastHash = ''
+    for (const page of this.pages.values()) await this.resizePage(page, metrics)
+    if (active) await this.activatePage(active.tabId)
   }
 
-  private async resizePage(page: PageBinding): Promise<void> {
+  private async resizePage(
+    page: PageBinding,
+    metrics: ViewportMetrics = { width: this.width, height: this.height, mobile: this.mobile }
+  ): Promise<void> {
     await page.cdp.send('Emulation.setDeviceMetricsOverride', {
-      width: this.width,
-      height: this.height,
+      width: metrics.width,
+      height: metrics.height,
       deviceScaleFactor: 1,
-      mobile: false
+      mobile: metrics.mobile,
+      screenWidth: metrics.width,
+      screenHeight: metrics.height
     })
+    await page.cdp.send('Emulation.setTouchEmulationEnabled', {
+      enabled: metrics.mobile,
+      ...(metrics.mobile ? { maxTouchPoints: 1 } : {})
+    })
+  }
+
+  registerViewportViewer(id: string): void {
+    this.viewportCoordinator.registerViewer(id)
+  }
+
+  offerViewport(id: string, metrics: ViewportMetrics): void {
+    this.viewportCoordinator.offer(id, metrics)
+  }
+
+  claimViewport(id: string, metrics: ViewportMetrics): boolean {
+    return this.viewportCoordinator.claim(id, metrics)
+  }
+
+  releaseViewport(id: string): void {
+    this.viewportCoordinator.release(id)
+  }
+
+  unregisterViewportViewer(id: string): void {
+    this.viewportCoordinator.unregisterViewer(id)
+  }
+
+  onViewportState(listener: (state: BrowserViewportState) => void): () => void {
+    return this.viewportCoordinator.onState(listener)
+  }
+
+  beginAgentViewportActivity(): Promise<() => void> {
+    return this.viewportCoordinator.beginAgentActivity()
   }
 
   dispatchInput(method: CdpInputCommand['method'], params: CdpInputCommand['params']): void {
@@ -604,7 +674,12 @@ export class HeadlessInstance {
   }
 
   get viewport(): { width: number; height: number } {
-    return { width: this.width, height: this.height }
+    const { width, height } = this.viewportCoordinator.state
+    return { width, height }
+  }
+
+  get viewportState(): BrowserViewportState {
+    return this.viewportCoordinator.state
   }
 
   get devToolsPort(): number {
@@ -621,6 +696,7 @@ export class HeadlessInstance {
     if (this.pollTimer) clearInterval(this.pollTimer)
     this.pollTimer = null
     this.frameListeners.clear()
+    this.viewportCoordinator.dispose()
     for (const page of this.pages.values()) {
       page.closing = true
       page.cdp.close()

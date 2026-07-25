@@ -20,7 +20,10 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
     server = http.createServer((request, response) => {
       const page = request.url?.slice(1) || 'a'
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-      response.end(`<!doctype html><title>${page.toUpperCase()}</title><h1>${page}</h1>`)
+      response.end(
+        `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">` +
+        `<title>${page.toUpperCase()}</title><h1>${page}</h1>`
+      )
     })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const address = server.address()
@@ -48,9 +51,11 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
       activeTabId: 'tab-a'
     })
     let frames = 0
+    let lastFrameRevision = 0
     let firstProcessTree: number[] = []
-    first.frameListeners.add(() => {
+    first.frameListeners.add((_data, meta) => {
       frames += 1
+      lastFrameRevision = meta.revision ?? 0
     })
 
     try {
@@ -66,6 +71,49 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
           `document.cookie = 'cookrew-profile=shared; path=/; Max-Age=3600; SameSite=Lax'; document.cookie`
         )
       ).resolves.toContain('cookrew-profile=shared')
+
+      await first.evaluate(`
+        sessionStorage.setItem('cookrew-session', 'same-target');
+        document.documentElement.dataset.cookrewDom = 'preserved';
+      `)
+      const processBeforeReflow = first.processId
+      const targetBeforeReflow = await activeTargetId(first.devToolsPort)
+      first.registerViewportViewer('phone')
+      first.offerViewport('phone', { width: 390, height: 700, mobile: true })
+      await waitFor(() => first.viewportState.revision === 2)
+      await waitFor(() => lastFrameRevision === 2)
+
+      expect(first.processId).toBe(processBeforeReflow)
+      expect(await activeTargetId(first.devToolsPort)).toBe(targetBeforeReflow)
+      expect(first.viewportState).toMatchObject({
+        width: 390,
+        height: 700,
+        mobile: true,
+        revision: 2,
+        ownerId: 'phone'
+      })
+      await expect(first.evaluate(`({
+        width: innerWidth,
+        height: innerHeight,
+        touchPoints: navigator.maxTouchPoints,
+        session: sessionStorage.getItem('cookrew-session'),
+        cookie: document.cookie,
+        dom: document.documentElement.dataset.cookrewDom
+      })`)).resolves.toMatchObject({
+        width: 390,
+        height: 700,
+        touchPoints: 1,
+        session: 'same-target',
+        cookie: expect.stringContaining('cookrew-profile=shared'),
+        dom: 'preserved'
+      })
+
+      first.registerViewportViewer('desktop')
+      first.offerViewport('desktop', { width: 1000, height: 700, mobile: false })
+      const releaseAgent = await first.beginAgentViewportActivity()
+      expect(first.claimViewport('desktop', { width: 1000, height: 700, mobile: false })).toBe(false)
+      expect(first.viewportState).toMatchObject({ revision: 2, agentHeld: true, ownerId: 'phone' })
+      releaseAgent()
 
       await first.syncTabs(tabs, 'tab-b')
       expect((await first.pageInfo()).url).toBe(`${origin}/b`)
@@ -150,7 +198,7 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
     expect(pid).not.toBeNull()
     await new Promise((resolve) => setTimeout(resolve, 200))
     const processes = processTree(pid)
-    expect(processes.length).toBeGreaterThan(1)
+    expect(pid && processAlive(pid)).toBe(true)
 
     await manager.remove(node.id)
     await expect(starting).resolves.toBeNull()
@@ -201,4 +249,21 @@ function processTree(rootPid: number | null): number[] {
     }
   }
   return [...pids]
+}
+
+async function activeTargetId(port: number): Promise<string | null> {
+  return new Promise((resolve, reject) => {
+    http.get(`http://127.0.0.1:${port}/json`, (response) => {
+      let body = ''
+      response.on('data', (chunk) => (body += chunk))
+      response.on('end', () => {
+        try {
+          const targets = JSON.parse(body) as Array<{ id?: string; type?: string }>
+          resolve(targets.find((target) => target.type === 'page')?.id ?? null)
+        } catch (error) {
+          reject(error as Error)
+        }
+      })
+    }).on('error', reject)
+  })
 }
