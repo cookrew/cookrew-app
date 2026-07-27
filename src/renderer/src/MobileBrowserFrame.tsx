@@ -22,6 +22,7 @@ import {
   type StreamTouchPointer
 } from './browser-stream'
 import { useBrowserStream } from './useBrowserStream'
+import { useRemoteKeyboard } from './useRemoteKeyboard'
 
 /**
  * Shared LIVE browser viewport for phone and desktop. In headless mode, both
@@ -64,6 +65,10 @@ export function MobileBrowserFrame({
   // layout fit only; input requires a decoded, live frame at the current revision.
   const frameReady = streaming && stream.live && stream.frameUrl !== null && streamFrameLoaded
   const interactive = frameReady && stream.canDrive
+  // Mobile keyboard bridge: the stream is an image, so tapping a remote input
+  // can't raise the phone keyboard. The ⌨ button focuses a hidden field within
+  // the tap gesture (the only way iOS shows the keyboard) and forwards typing.
+  const kbd = useRemoteKeyboard(stream.send)
 
   useEffect(() => {
     if (!open) {
@@ -339,6 +344,53 @@ export function MobileBrowserFrame({
           <CrIcon name={stream.isOwner ? 'check' : 'select'} />
         </button>
       )}
+      {interactive && (
+        <button
+          type="button"
+          className={`browser-frame-kbd${kbd.open ? ' open' : ''}`}
+          title={kbd.open ? 'Hide keyboard' : 'Show keyboard'}
+          aria-label={kbd.open ? 'Hide keyboard' : 'Show keyboard'}
+          aria-pressed={kbd.open}
+          // Focus must happen in the tap gesture (onClick) for iOS to raise the
+          // keyboard; stop pointer events reaching the frame's drag handlers.
+          onPointerDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+          onClick={kbd.toggle}
+          style={{
+            position: 'absolute',
+            right: 8,
+            bottom: 8,
+            zIndex: 3,
+            width: 36,
+            height: 36,
+            borderRadius: 8,
+            border: '1px solid rgba(255,255,255,0.4)',
+            background: kbd.open ? 'var(--hp, #32d74b)' : 'rgba(0,0,0,0.55)',
+            color: '#fff',
+            fontSize: 18,
+            lineHeight: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+        >
+          <span aria-hidden="true">⌨</span>
+        </button>
+      )}
+      {/* Hidden keystroke capture — focused within the ⌨ gesture so the phone
+          keyboard rises; typing forwards to the remote field via keyMsg. */}
+      <textarea
+        ref={kbd.inputRef}
+        aria-hidden="true"
+        tabIndex={-1}
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
+        onBeforeInput={kbd.onBeforeInput}
+        onInput={kbd.onInput}
+        onBlur={kbd.onBlur}
+        style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, opacity: 0, border: 0, padding: 0, pointerEvents: 'none' }}
+      />
       {frameReady && (
         <span className={`browser-frame-live${showControl ? ' with-control' : ''}`} aria-hidden="true" />
       )}
