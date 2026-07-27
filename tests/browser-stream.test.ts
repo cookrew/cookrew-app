@@ -3,6 +3,7 @@ import {
   browserRenderMode,
   clampViewport,
   DESKTOP_STREAM_ORIGIN,
+  emptyTouchGesture,
   frameDataUrl,
   frameIsFresh,
   frameMatchesViewport,
@@ -10,6 +11,7 @@ import {
   inputWithRevision,
   keyMsg,
   mobileViewportPreference,
+  multiTouchMsg,
   nextStreamStatus,
   parseStreamMessage,
   pointerMsg,
@@ -20,6 +22,8 @@ import {
   streamSurfaceState,
   streamUrl,
   touchMsg,
+  updateTouchGesture,
+  releaseTouchGesture,
   viewToFramePoint,
   viewportControlMsg,
   wheelMsg
@@ -269,6 +273,88 @@ describe('input builders → whitelisted by Forge’s sanitizeInput (contract lo
   })
 })
 
+describe('two-contact touch forwarding', () => {
+  const mapCtx = { displayScale: 1, viewportWidth: 400, viewportHeight: 800 }
+
+  it('preserves the scalar wire shape for a gesture that stays single-finger', () => {
+    const start = updateTouchGesture(emptyTouchGesture(), 'start', { pointerId: 11, x: 10, y: 20 })
+    expect(start?.message).toEqual({ t: 'touchstart', x: 10, y: 20 })
+    if (!start) throw new Error('touch start was rejected')
+
+    const move = updateTouchGesture(start.state, 'move', { pointerId: 11, x: 12, y: 24 })
+    expect(move?.message).toEqual({ t: 'touchmove', x: 12, y: 24 })
+    if (!move) throw new Error('touch move was rejected')
+
+    const end = updateTouchGesture(move.state, 'end', { pointerId: 11, x: 12, y: 24 })
+    expect(end?.message).toEqual({ t: 'touchend', x: 12, y: 24 })
+    expect(end?.state).toEqual(emptyTouchGesture())
+  })
+
+  it('maps DOM pointer IDs to stable wire slots and tags the exact revision', () => {
+    const first = updateTouchGesture(emptyTouchGesture(), 'start', { pointerId: 11, x: 10, y: 20 })
+    if (!first) throw new Error('first touch was rejected')
+    const second = updateTouchGesture(first.state, 'start', { pointerId: 22, x: 30, y: 40 })
+    expect(second?.message).toEqual({
+      t: 'touchstart',
+      points: [
+        { id: 0, x: 10, y: 20 },
+        { id: 1, x: 30, y: 40 }
+      ]
+    })
+    if (!second) throw new Error('second touch was rejected')
+    expect(inputWithRevision(second.message, 9)).toEqual({
+      t: 'touchstart',
+      points: [
+        { id: 0, x: 10, y: 20 },
+        { id: 1, x: 30, y: 40 }
+      ],
+      revision: 9
+    })
+    expect(sanitizeInput(inputWithRevision(second.message, 9), mapCtx)?.[0]).toMatchObject({
+      method: 'Input.dispatchTouchEvent',
+      params: { type: 'touchStart', touchPoints: [{ id: 0 }, { id: 1 }] }
+    })
+
+    const move = updateTouchGesture(second.state, 'move', { pointerId: 11, x: 14, y: 25 })
+    expect(move?.message).toEqual({
+      t: 'touchmove',
+      points: [
+        { id: 0, x: 14, y: 25 },
+        { id: 1, x: 30, y: 40 }
+      ]
+    })
+  })
+
+  it('ignores a third pointer and removes ended/cancelled contacts without sticking', () => {
+    const first = updateTouchGesture(emptyTouchGesture(), 'start', { pointerId: 101, x: 1, y: 1 })
+    if (!first) throw new Error('first touch was rejected')
+    const second = updateTouchGesture(first.state, 'start', { pointerId: 202, x: 2, y: 2 })
+    if (!second) throw new Error('second touch was rejected')
+    expect(updateTouchGesture(second.state, 'start', { pointerId: 303, x: 3, y: 3 })).toBeNull()
+
+    const firstEnd = updateTouchGesture(second.state, 'end', { pointerId: 101, x: 4, y: 4 })
+    expect(firstEnd?.message).toEqual({ t: 'touchend' })
+    if (!firstEnd) throw new Error('touch end was rejected')
+    expect(firstEnd.state).toEqual(emptyTouchGesture())
+    expect(updateTouchGesture(firstEnd.state, 'move', { pointerId: 202, x: 4, y: 4 })).toBeNull()
+    expect(releaseTouchGesture(firstEnd.state)).toBeNull()
+  })
+
+  it('bounds and closes points messages without raw CDP fields', () => {
+    expect(multiTouchMsg('touchmove', [
+      { id: 0, x: 1, y: 2 },
+      { id: 1, x: 3, y: 4 },
+      { id: 0, x: 5, y: 6 }
+    ])).toEqual({
+      t: 'touchmove',
+      points: [
+        { id: 0, x: 1, y: 2 },
+        { id: 1, x: 3, y: 4 }
+      ]
+    })
+  })
+})
+
 describe('streamCanDrive (revision and activity gate, independent of fit owner)', () => {
   const ready = {
     live: true,
@@ -295,6 +381,7 @@ describe('streamCanDrive (revision and activity gate, independent of fit owner)'
     const held = { ...ready, live: false, agentHeld: true, transitioning: true }
     expect(streamInputAllowed(pointerMsg('up', { x: 1, y: 2 }), held)).toBe(true)
     expect(streamInputAllowed(touchMsg('touchend', { x: 1, y: 2 }), held)).toBe(true)
+    expect(streamInputAllowed({ t: 'touchend' }, held)).toBe(true)
     expect(streamInputAllowed(pointerMsg('down', { x: 1, y: 2 }), held)).toBe(false)
     expect(streamInputAllowed(touchMsg('touchmove', { x: 1, y: 2 }), held)).toBe(false)
   })

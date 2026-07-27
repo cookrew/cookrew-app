@@ -636,7 +636,7 @@ export class HeadlessInstance {
     })
     await page.cdp.send('Emulation.setTouchEmulationEnabled', {
       enabled: metrics.mobile,
-      ...(metrics.mobile ? { maxTouchPoints: 1 } : {})
+      ...(metrics.mobile ? { maxTouchPoints: 2 } : {})
     })
   }
 

@@ -258,6 +258,33 @@ describe('upgrade() attaches to the node-owned instance', () => {
       maskedTextFrame(JSON.stringify({ t: 'tap', x: 1, y: 1, revision: 1 }))
     )
     expect(instance.dispatchInput).toHaveBeenCalledTimes(2)
+
+    vi.mocked(instance.dispatchInput).mockClear()
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({
+        t: 'touchmove',
+        points: [{ id: 0, x: 10, y: 20 }, { id: 1, x: 30, y: 40 }],
+        revision: 0
+      }))
+    )
+    expect(instance.dispatchInput).not.toHaveBeenCalled()
+
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({
+        t: 'touchmove',
+        points: [{ id: 0, x: 10, y: 20 }, { id: 1, x: 30, y: 40 }],
+        revision: 1
+      }))
+    )
+    expect(instance.dispatchInput).toHaveBeenCalledWith(
+      'Input.dispatchTouchEvent',
+      {
+        type: 'touchMove',
+        touchPoints: [{ id: 0, x: 10, y: 20 }, { id: 1, x: 30, y: 40 }]
+      }
+    )
   })
 
   it('enforces agent/transition holds but permits a current-revision pointer release', async () => {

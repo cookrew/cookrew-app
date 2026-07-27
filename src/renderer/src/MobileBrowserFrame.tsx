@@ -8,15 +8,18 @@ import {
   shouldPollFrame
 } from './browser-frame'
 import {
+  emptyTouchGesture,
   frameSource,
   keyMsg,
   mobileViewportPreference,
   pointerMsg,
+  releaseTouchGesture,
   streamSurfaceState,
-  touchMsg,
+  updateTouchGesture,
   viewToFramePoint,
   wheelMsg,
-  type StreamSurfaceState
+  type StreamSurfaceState,
+  type StreamTouchPointer
 } from './browser-stream'
 import { useBrowserStream } from './useBrowserStream'
 
@@ -149,25 +152,31 @@ export function MobileBrowserFrame({
 
   // ---- input forwarding (stream mode only): map view point → FRAME px, then send
   // the compact `t`-tagged message; Forge maps FRAME px → page px + whitelists. ----
-  const dragging = useRef(false)
-  // A touch pointer (phone) drives touch events so a swipe scrolls natively; a
-  // mouse/pen pointer (desktop) keeps mouse events. Tracked per active drag.
-  const dragTouch = useRef(false)
-  // Exactly one pointer drives at a time — a second finger mid-drag would corrupt
-  // the single-touch sequence; secondary pointers are ignored until release.
-  const activePointerId = useRef<number | null>(null)
-  const lastPoint = useRef<{ x: number; y: number } | null>(null)
+  const touchGesture = useRef(emptyTouchGesture())
+  const mousePointerId = useRef<number | null>(null)
+  const mouseLastPoint = useRef<{ x: number; y: number } | null>(null)
 
-  // If freshness disappears mid-drag, release the remote pointer (mouse OR touch)
-  // before input is disabled so the headless page is not left mid-press/mid-touch.
+  // If freshness disappears mid-gesture, release every remote contact before
+  // input is disabled so Chromium is never left with a stuck mouse or touch.
   useEffect(() => {
-    if (interactive || !dragging.current) return
-    dragging.current = false
-    activePointerId.current = null
-    if (lastPoint.current) {
-      stream.send(
-        dragTouch.current ? touchMsg('touchend', lastPoint.current) : pointerMsg('up', lastPoint.current)
-      )
+    if (interactive) return
+    const touches = touchGesture.current
+    const touchRelease = releaseTouchGesture(touches)
+    touchGesture.current = emptyTouchGesture()
+    for (const contact of touches.contacts) {
+      if (boxRef.current?.hasPointerCapture?.(contact.pointerId)) {
+        boxRef.current.releasePointerCapture(contact.pointerId)
+      }
+    }
+    if (touchRelease) stream.send(touchRelease.message)
+
+    const pointerId = mousePointerId.current
+    mousePointerId.current = null
+    if (pointerId !== null && boxRef.current?.hasPointerCapture?.(pointerId)) {
+      boxRef.current.releasePointerCapture(pointerId)
+    }
+    if (pointerId !== null && mouseLastPoint.current) {
+      stream.send(pointerMsg('up', mouseLastPoint.current))
     }
   }, [interactive, stream.send])
 
@@ -177,38 +186,78 @@ export function MobileBrowserFrame({
     const r = box.getBoundingClientRect()
     return viewToFramePoint(e.clientX - r.left, e.clientY - r.top, fit, natural.w, natural.h)
   }
+  const touchPoint = (e: React.PointerEvent): StreamTouchPointer | null => {
+    const point = framePoint(e)
+    return point ? { pointerId: e.pointerId, ...point } : null
+  }
   const onPointerDown = (e: React.PointerEvent): void => {
     if (!interactive) return
-    if (activePointerId.current !== null) return // a drag is already in flight — ignore extra fingers
-    const p = framePoint(e)
-    if (!p) return
+    if (e.pointerType === 'touch') {
+      if (mousePointerId.current !== null) return
+      const point = touchPoint(e)
+      if (!point) return
+      const update = updateTouchGesture(touchGesture.current, 'start', point)
+      if (!update) return // At most two active touch pointers.
+      e.preventDefault()
+      boxRef.current?.focus()
+      touchGesture.current = update.state
+      e.currentTarget.setPointerCapture(e.pointerId)
+      stream.send(update.message)
+      return
+    }
+
+    if (mousePointerId.current !== null || touchGesture.current.contacts.length > 0) return
+    const point = framePoint(e)
+    if (!point) return
     e.preventDefault()
     boxRef.current?.focus()
-    activePointerId.current = e.pointerId
-    dragging.current = true
-    dragTouch.current = e.pointerType === 'touch'
-    lastPoint.current = p
+    mousePointerId.current = e.pointerId
+    mouseLastPoint.current = point
     e.currentTarget.setPointerCapture(e.pointerId)
-    stream.send(dragTouch.current ? touchMsg('touchstart', p) : pointerMsg('down', p))
+    stream.send(pointerMsg('down', point))
   }
   const onPointerMove = (e: React.PointerEvent): void => {
-    if (!interactive || !dragging.current || e.pointerId !== activePointerId.current) return
-    const p = framePoint(e)
-    if (p) {
-      lastPoint.current = p
-      stream.send(dragTouch.current ? touchMsg('touchmove', p) : pointerMsg('move', p))
+    if (!interactive) return
+    if (touchGesture.current.contacts.some((contact) => contact.pointerId === e.pointerId)) {
+      const point = touchPoint(e)
+      if (!point) return
+      const update = updateTouchGesture(touchGesture.current, 'move', point)
+      if (!update) return
+      touchGesture.current = update.state
+      stream.send(update.message)
+      return
     }
+    if (e.pointerId !== mousePointerId.current) return
+    const point = framePoint(e)
+    if (!point) return
+    mouseLastPoint.current = point
+    stream.send(pointerMsg('move', point))
   }
   const onPointerUp = (e: React.PointerEvent): void => {
-    if (!dragging.current || e.pointerId !== activePointerId.current) return
-    dragging.current = false
-    activePointerId.current = null
-    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
-    const p = framePoint(e)
-    if (p) {
-      lastPoint.current = p
-      stream.send(dragTouch.current ? touchMsg('touchend', p) : pointerMsg('up', p))
+    const contact = touchGesture.current.contacts.find((point) => point.pointerId === e.pointerId)
+    if (contact) {
+      const point = touchPoint(e) ?? contact
+      const contacts = touchGesture.current.contacts
+      const update = updateTouchGesture(touchGesture.current, 'end', point)
+      if (update) {
+        touchGesture.current = update.state
+        stream.send(update.message)
+      }
+      for (const active of contacts) {
+        if (e.currentTarget.hasPointerCapture?.(active.pointerId)) {
+          e.currentTarget.releasePointerCapture(active.pointerId)
+        }
+      }
+      return
     }
+
+    if (e.pointerId !== mousePointerId.current) return
+    mousePointerId.current = null
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
+    const point = framePoint(e) ?? mouseLastPoint.current
+    if (point) stream.send(pointerMsg('up', point))
   }
   const onWheel = (e: React.WheelEvent): void => {
     if (!interactive) return

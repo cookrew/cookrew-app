@@ -48,6 +48,37 @@ function toPagePoint(
   }
 }
 
+type TouchPoint = { x: number; y: number; id?: 0 | 1 }
+
+/**
+ * Validate the closed multi-touch shape. Renderer pointer ids never cross the
+ * trust boundary: clients map the first two contacts to fixed slots 0 and 1.
+ * Legacy single-point {x,y} messages remain accepted for rollout compatibility.
+ */
+function toPageTouchPoints(msg: Record<string, unknown>, ctx: MapContext): TouchPoint[] | null {
+  if (msg.points === undefined) {
+    const point = toPagePoint(msg, ctx)
+    return point ? [point] : null
+  }
+  if (!Array.isArray(msg.points) || msg.points.length < 1 || msg.points.length > 2) return null
+
+  const ids = new Set<number>()
+  const points: TouchPoint[] = []
+  for (const raw of msg.points) {
+    if (typeof raw !== 'object' || raw === null) return null
+    const point = raw as Record<string, unknown>
+    if (Object.keys(point).some((key) => key !== 'id' && key !== 'x' && key !== 'y')) return null
+    if (!Number.isInteger(point.id) || (point.id !== 0 && point.id !== 1) || ids.has(point.id)) {
+      return null
+    }
+    const mapped = toPagePoint(point, ctx)
+    if (!mapped) return null
+    ids.add(point.id)
+    points.push({ ...mapped, id: point.id })
+  }
+  return points.sort((a, b) => (a.id ?? 0) - (b.id ?? 0))
+}
+
 function mouse(type: string, p: { x: number; y: number }, extra: Record<string, unknown> = {}): CdpInputCommand {
   return { method: 'Input.dispatchMouseEvent', params: { type, x: p.x, y: p.y, ...extra } }
 }
@@ -55,12 +86,12 @@ function mouse(type: string, p: { x: number; y: number }, extra: Record<string, 
 const LEFT = { button: 'left', clickCount: 1 } as const
 
 /**
- * A whitelisted touch command. touchStart/touchMove carry the single active
- * point (already clamped page px); touchEnd carries none (the finger lifted).
+ * A whitelisted touch command. touchStart/touchMove carry at most two active
+ * points (already clamped page px); touchEnd carries none (the fingers lifted).
  * A drag of touchStart→touchMove…→touchEnd is what makes a phone SWIPE scroll
  * the page natively instead of drag-selecting it.
  */
-function touch(type: string, points: { x: number; y: number }[]): CdpInputCommand {
+function touch(type: string, points: TouchPoint[]): CdpInputCommand {
   return { method: 'Input.dispatchTouchEvent', params: { type, touchPoints: points } }
 }
 
@@ -109,15 +140,16 @@ export function sanitizeInput(raw: unknown, ctx: MapContext): CdpInputCommand[] 
       ]
     }
     case 'touchstart': {
-      const p = toPagePoint(msg, ctx)
-      return p ? [touch('touchStart', [p])] : null
+      const points = toPageTouchPoints(msg, ctx)
+      return points ? [touch('touchStart', points)] : null
     }
     case 'touchmove': {
-      const p = toPagePoint(msg, ctx)
-      return p ? [touch('touchMove', [p])] : null
+      const points = toPageTouchPoints(msg, ctx)
+      return points ? [touch('touchMove', points)] : null
     }
     case 'touchend': {
       // Finger lifted — an empty touchPoints set is required by CDP for touchEnd.
+      if (msg.points !== undefined && (!Array.isArray(msg.points) || msg.points.length !== 0)) return null
       return [touch('touchEnd', [])]
     }
     default:

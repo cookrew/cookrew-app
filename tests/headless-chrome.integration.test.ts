@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { sanitizeInput } from '../src/shared/cast-input'
 import type { BrowserNodeData, BrowserTab } from '../src/shared/model'
 import { HeadlessBrowserManager } from '../src/main/headless-browser-manager'
 import { findChrome, HeadlessInstance } from '../src/main/headless-chrome'
@@ -21,7 +22,7 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
       const page = request.url?.slice(1) || 'a'
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       response.end(
-        `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">` +
+        `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes">` +
         `<title>${page.toUpperCase()}</title><h1>${page}</h1>`
       )
     })
@@ -102,7 +103,49 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
       })`)).resolves.toMatchObject({
         width: 390,
         height: 700,
-        touchPoints: 1,
+        touchPoints: 2,
+        session: 'same-target',
+        cookie: expect.stringContaining('cookrew-profile=shared'),
+        dom: 'preserved'
+      })
+
+      const dispatchTouch = (raw: unknown): void => {
+        const commands = sanitizeInput(raw, {
+          displayScale: 1,
+          viewportWidth: 390,
+          viewportHeight: 700
+        })
+        expect(commands).not.toBeNull()
+        for (const command of commands ?? []) first.dispatchInput(command.method, command.params)
+      }
+      const scaleBeforePinch = await first.evaluate('visualViewport?.scale ?? 1') as number
+      dispatchTouch({ t: 'touchstart', x: 170, y: 350 })
+      dispatchTouch({
+        t: 'touchstart',
+        points: [{ id: 0, x: 170, y: 350 }, { id: 1, x: 220, y: 350 }]
+      })
+      dispatchTouch({
+        t: 'touchmove',
+        points: [{ id: 0, x: 120, y: 350 }, { id: 1, x: 270, y: 350 }]
+      })
+      dispatchTouch({
+        t: 'touchmove',
+        points: [{ id: 0, x: 80, y: 350 }, { id: 1, x: 310, y: 350 }]
+      })
+      dispatchTouch({ t: 'touchend' })
+      await waitFor(async () => (
+        await first.evaluate('visualViewport?.scale ?? 1') as number
+      ) > scaleBeforePinch)
+      const scaleAfterPinch = await first.evaluate('visualViewport?.scale ?? 1') as number
+      expect(scaleAfterPinch).toBeGreaterThan(scaleBeforePinch)
+      expect(first.processId).toBe(processBeforeReflow)
+      expect(await activeTargetId(first.devToolsPort)).toBe(targetBeforeReflow)
+      expect(first.viewportState.revision).toBe(2)
+      await expect(first.evaluate(`({
+        session: sessionStorage.getItem('cookrew-session'),
+        cookie: document.cookie,
+        dom: document.documentElement.dataset.cookrewDom
+      })`)).resolves.toMatchObject({
         session: 'same-target',
         cookie: expect.stringContaining('cookrew-profile=shared'),
         dom: 'preserved'
@@ -208,9 +251,9 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
   }, 30_000)
 })
 
-async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
-  while (!predicate()) {
+  while (!(await predicate())) {
     if (Date.now() >= deadline) throw new Error('timed out waiting for condition')
     await new Promise((resolve) => setTimeout(resolve, 50))
   }

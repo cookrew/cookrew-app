@@ -56,6 +56,63 @@ describe('sanitizeInput — touch vocab (phone swipe → native scroll)', () => 
   it('a malformed touchstart (non-finite coords) is rejected, not smuggled', () => {
     expect(sanitizeInput({ t: 'touchstart', x: 'NaN', y: 40 }, ctx)).toBeNull()
   })
+
+  it('maps and clamps exactly two stable touch slots for native pinch', () => {
+    expect(sanitizeInput({
+      t: 'touchmove',
+      points: [
+        { id: 1, x: 100000, y: -50 },
+        { id: 0, x: 200, y: 400 }
+      ]
+    }, ctx)).toEqual([{
+      method: 'Input.dispatchTouchEvent',
+      params: {
+        type: 'touchMove',
+        touchPoints: [
+          { id: 0, x: 100, y: 200 },
+          { id: 1, x: 400, y: 0 }
+        ]
+      }
+    }])
+  })
+
+  it('rejects third, duplicate, or client-selected touch ids', () => {
+    expect(sanitizeInput({
+      t: 'touchstart',
+      points: [
+        { id: 0, x: 1, y: 1 },
+        { id: 1, x: 2, y: 2 },
+        { id: 0, x: 3, y: 3 }
+      ]
+    }, ctx)).toBeNull()
+    expect(sanitizeInput({
+      t: 'touchmove',
+      points: [{ id: 0, x: 1, y: 1 }, { id: 0, x: 2, y: 2 }]
+    }, ctx)).toBeNull()
+    expect(sanitizeInput({
+      t: 'touchmove',
+      points: [{ id: 9, x: 1, y: 1 }]
+    }, ctx)).toBeNull()
+  })
+
+  it('rejects malformed and empty touch-point arrays', () => {
+    expect(sanitizeInput({ t: 'touchstart', points: [] }, ctx)).toBeNull()
+    expect(sanitizeInput({ t: 'touchstart', points: [{ id: 0, x: NaN, y: 1 }] }, ctx)).toBeNull()
+    expect(sanitizeInput({ t: 'touchstart', points: [{ id: 0, x: '1', y: 1 }] }, ctx)).toBeNull()
+    expect(sanitizeInput({ t: 'touchstart', points: [{ id: 0.5, x: 1, y: 1 }] }, ctx)).toBeNull()
+    expect(sanitizeInput({
+      t: 'touchstart',
+      points: [{ id: 0, x: 1, y: 1, force: 1 }]
+    }, ctx)).toBeNull()
+    expect(sanitizeInput({
+      t: 'touchend',
+      points: [{ id: 0, x: 1, y: 1 }]
+    }, ctx)).toBeNull()
+    expect(sanitizeInput({ t: 'touchend', points: [] }, ctx)).toEqual([{
+      method: 'Input.dispatchTouchEvent',
+      params: { type: 'touchEnd', touchPoints: [] }
+    }])
+  })
 })
 
 describe('sanitizeInput — clamping', () => {

@@ -300,6 +300,21 @@ export function viewToFramePoint(
 
 // ---- input wire vocabulary (mirrors cast-input.ts sanitizeInput `t` tags) ----
 
+export type TouchInputKind = 'touchstart' | 'touchmove' | 'touchend'
+export type TouchSlot = 0 | 1
+
+/** A closed renderer touch contact in FRAME pixels. */
+export interface StreamTouchPoint {
+  id: TouchSlot
+  x: number
+  y: number
+}
+
+export type TouchInputMsg =
+  | { t: TouchInputKind; x: number; y: number }
+  | { t: 'touchstart' | 'touchmove'; points: StreamTouchPoint[] }
+  | { t: 'touchend' }
+
 /** Client→server input messages — the closed vocabulary Forge whitelists. */
 export type CastInputMsg =
   | { t: 'tap'; x: number; y: number }
@@ -308,9 +323,7 @@ export type CastInputMsg =
   | { t: 'move'; x: number; y: number }
   | { t: 'wheel'; x: number; y: number; dy: number }
   | { t: 'key'; key: string; code?: string; text?: string }
-  | { t: 'touchstart'; x: number; y: number }
-  | { t: 'touchmove'; x: number; y: number }
-  | { t: 'touchend'; x: number; y: number }
+  | TouchInputMsg
 
 export type RevisionedCastInputMsg = CastInputMsg & { revision: number }
 
@@ -364,8 +377,98 @@ export function pointerMsg(t: 'tap' | 'down' | 'up' | 'move', p: { x: number; y:
  * Build a touch input message at a FRAME point. Touch pointers (a phone) send
  * these instead of mouse down/move/up so a swipe scrolls the page natively.
  */
-export function touchMsg(t: 'touchstart' | 'touchmove' | 'touchend', p: { x: number; y: number }): CastInputMsg {
+export function touchMsg(t: TouchInputKind, p: { x: number; y: number }): TouchInputMsg {
   return { t, x: p.x, y: p.y }
+}
+
+/** Build a bounded multi-contact message without forwarding arbitrary fields. */
+export function multiTouchMsg(
+  t: 'touchstart' | 'touchmove',
+  points: StreamTouchPoint[]
+): TouchInputMsg {
+  return {
+    t,
+    points: points.slice(0, 2).map(({ id, x, y }) => ({ id, x, y }))
+  }
+}
+
+export interface StreamTouchPointer {
+  pointerId: number
+  x: number
+  y: number
+}
+
+interface TouchGestureContact extends StreamTouchPoint {
+  pointerId: number
+}
+
+export interface TouchGestureState {
+  contacts: TouchGestureContact[]
+  /** Once a second contact joins, keep IDs through the rest of that gesture. */
+  multi: boolean
+}
+
+export interface TouchGestureUpdate {
+  state: TouchGestureState
+  message: TouchInputMsg
+}
+
+export function emptyTouchGesture(): TouchGestureState {
+  return { contacts: [], multi: false }
+}
+
+/**
+ * Advance a native touch gesture. Gestures that remain single-contact retain the
+ * legacy scalar wire shape; two-contact gestures use stable, bounded IDs.
+ */
+export function updateTouchGesture(
+  state: TouchGestureState,
+  phase: 'start' | 'move' | 'end',
+  point: StreamTouchPointer
+): TouchGestureUpdate | null {
+  const index = state.contacts.findIndex((contact) => contact.pointerId === point.pointerId)
+
+  if (phase === 'start') {
+    if (index !== -1 || state.contacts.length >= 2) return null
+    const id: TouchSlot = state.contacts.some((contact) => contact.id === 0) ? 1 : 0
+    const contacts = [...state.contacts, { ...point, id }]
+    const multi = state.multi || contacts.length === 2
+    return {
+      state: { contacts, multi },
+      message: multi ? multiTouchMsg('touchstart', contacts) : touchMsg('touchstart', point)
+    }
+  }
+
+  if (index === -1) return null
+  const updated = state.contacts.map((contact, contactIndex) =>
+    contactIndex === index ? { ...contact, ...point } : contact
+  )
+
+  if (phase === 'move') {
+    return {
+      state: { contacts: updated, multi: state.multi },
+      message: state.multi ? multiTouchMsg('touchmove', updated) : touchMsg('touchmove', point)
+    }
+  }
+
+  if (state.multi) {
+    return { state: emptyTouchGesture(), message: { t: 'touchend' } }
+  }
+  return {
+    state: emptyTouchGesture(),
+    message: touchMsg('touchend', point)
+  }
+}
+
+/** Release every remote touch when the surface loses interactivity. */
+export function releaseTouchGesture(state: TouchGestureState): TouchGestureUpdate | null {
+  if (state.contacts.length === 0) return null
+  return {
+    state: emptyTouchGesture(),
+    message: state.multi
+      ? { t: 'touchend' }
+      : touchMsg('touchend', state.contacts[0])
+  }
 }
 
 /** Build a wheel/scroll message at a FRAME point with a vertical delta. */
