@@ -219,7 +219,9 @@ export function MobileBrowserFrame({
     mousePointerId.current = e.pointerId
     mouseLastPoint.current = point
     e.currentTarget.setPointerCapture(e.pointerId)
-    stream.send(pointerMsg('down', point))
+    // e.detail is the click multiplicity — a double-click carries 2 so the page
+    // can select a word (3 = triple → select line/all).
+    stream.send(pointerMsg('down', point, e.detail))
   }
   const onPointerMove = (e: React.PointerEvent): void => {
     if (!interactive) return
@@ -262,7 +264,7 @@ export function MobileBrowserFrame({
       e.currentTarget.releasePointerCapture(e.pointerId)
     }
     const point = framePoint(e) ?? mouseLastPoint.current
-    if (point) stream.send(pointerMsg('up', point))
+    if (point) stream.send(pointerMsg('up', point, e.detail))
   }
   const onWheel = (e: React.WheelEvent): void => {
     if (!interactive) return
@@ -388,6 +390,7 @@ export function MobileBrowserFrame({
         spellCheck={false}
         onBeforeInput={kbd.onBeforeInput}
         onInput={kbd.onInput}
+        onKeyDown={kbd.onKeyDown}
         onBlur={kbd.onBlur}
         style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, opacity: 0, border: 0, padding: 0, pointerEvents: 'none' }}
       />

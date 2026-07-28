@@ -33,6 +33,25 @@ describe('sanitizeInput — pointer vocab', () => {
   })
 })
 
+describe('sanitizeInput — click count (double/triple click to select)', () => {
+  it('a tap with count:2 is a double-click (clickCount 2 on press AND release)', () => {
+    expect(sanitizeInput({ t: 'tap', x: 200, y: 400, count: 2 }, ctx)).toEqual([
+      { method: 'Input.dispatchMouseEvent', params: { type: 'mousePressed', x: 100, y: 200, button: 'left', clickCount: 2 } },
+      { method: 'Input.dispatchMouseEvent', params: { type: 'mouseReleased', x: 100, y: 200, button: 'left', clickCount: 2 } }
+    ])
+  })
+  it('down/up carry the click count', () => {
+    expect(sanitizeInput({ t: 'down', x: 20, y: 40, count: 3 }, ctx)?.[0]).toMatchObject({ params: { clickCount: 3 } })
+    expect(sanitizeInput({ t: 'up', x: 20, y: 40, count: 2 }, ctx)?.[0]).toMatchObject({ params: { clickCount: 2 } })
+  })
+  it('clamps an out-of-range / non-integer / missing count to a single click', () => {
+    for (const count of [9, 0, -1, 1.5, 'evil'] as const) {
+      expect(sanitizeInput({ t: 'tap', x: 20, y: 40, count }, ctx)?.[0]).toMatchObject({ params: { clickCount: 1 } })
+    }
+    expect(sanitizeInput({ t: 'tap', x: 20, y: 40 }, ctx)?.[0]).toMatchObject({ params: { clickCount: 1 } })
+  })
+})
+
 describe('sanitizeInput — touch vocab (phone swipe → native scroll)', () => {
   it('touchstart/touchmove -> dispatchTouchEvent with the clamped point', () => {
     expect(sanitizeInput({ t: 'touchstart', x: 200, y: 400 }, ctx)).toEqual([

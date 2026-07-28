@@ -83,7 +83,16 @@ function mouse(type: string, p: { x: number; y: number }, extra: Record<string, 
   return { method: 'Input.dispatchMouseEvent', params: { type, x: p.x, y: p.y, ...extra } }
 }
 
-const LEFT = { button: 'left', clickCount: 1 } as const
+/**
+ * Left-button descriptor with a clamped click multiplicity: 1 = single,
+ * 2 = double (select word), 3 = triple (select line/all). Anything else → 1, so
+ * a hostile client can never inflate the click count.
+ */
+function leftButton(msg: Record<string, unknown>): { button: 'left'; clickCount: number } {
+  const c = msg.count
+  const clickCount = Number.isInteger(c) && (c as number) >= 1 && (c as number) <= 3 ? (c as number) : 1
+  return { button: 'left', clickCount }
+}
 
 /**
  * A whitelisted touch command. touchStart/touchMove carry at most two active
@@ -108,15 +117,16 @@ export function sanitizeInput(raw: unknown, ctx: MapContext): CdpInputCommand[] 
   switch (t) {
     case 'tap': {
       const p = toPagePoint(msg, ctx)
-      return p ? [mouse('mousePressed', p, LEFT), mouse('mouseReleased', p, LEFT)] : null
+      const btn = leftButton(msg)
+      return p ? [mouse('mousePressed', p, btn), mouse('mouseReleased', p, btn)] : null
     }
     case 'down': {
       const p = toPagePoint(msg, ctx)
-      return p ? [mouse('mousePressed', p, LEFT)] : null
+      return p ? [mouse('mousePressed', p, leftButton(msg))] : null
     }
     case 'up': {
       const p = toPagePoint(msg, ctx)
-      return p ? [mouse('mouseReleased', p, LEFT)] : null
+      return p ? [mouse('mouseReleased', p, leftButton(msg))] : null
     }
     case 'move': {
       const p = toPagePoint(msg, ctx)

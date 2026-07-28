@@ -43,8 +43,26 @@ export interface RemoteKeyboard {
   inputRef: React.RefObject<HTMLTextAreaElement>
   onBeforeInput: (e: React.FormEvent<HTMLTextAreaElement>) => void
   onInput: (e: React.FormEvent<HTMLTextAreaElement>) => void
+  onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
   onBlur: () => void
 }
+
+// Editing/navigation keys fire keydown even on an EMPTY field, unlike beforeinput
+// (which needs something to delete). Forwarding Backspace here is why deleting a
+// letter now works; printable characters still flow through beforeinput.
+const FORWARDED_KEYS = new Set([
+  'Backspace',
+  'Delete',
+  'Enter',
+  'Tab',
+  'Escape',
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'ArrowDown',
+  'Home',
+  'End'
+])
 
 export function useRemoteKeyboard(send: (msg: CastInputMsg) => void): RemoteKeyboard {
   const [open, setOpen] = useState(false)
@@ -81,7 +99,17 @@ export function useRemoteKeyboard(send: (msg: CastInputMsg) => void): RemoteKeyb
     e.currentTarget.value = ''
   }, [])
 
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+      if (!FORWARDED_KEYS.has(e.key)) return // printable chars go via onBeforeInput
+      e.preventDefault()
+      e.stopPropagation() // do not also trip the frame's own key handler
+      send(keyMsg(e.key, e.code || e.key))
+    },
+    [send]
+  )
+
   const onBlur = useCallback((): void => setOpen(false), [])
 
-  return { open, toggle, close, inputRef, onBeforeInput, onInput, onBlur }
+  return { open, toggle, close, inputRef, onBeforeInput, onInput, onKeyDown, onBlur }
 }

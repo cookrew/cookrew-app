@@ -317,9 +317,9 @@ export type TouchInputMsg =
 
 /** Client→server input messages — the closed vocabulary Forge whitelists. */
 export type CastInputMsg =
-  | { t: 'tap'; x: number; y: number }
-  | { t: 'down'; x: number; y: number }
-  | { t: 'up'; x: number; y: number }
+  | { t: 'tap'; x: number; y: number; count?: number }
+  | { t: 'down'; x: number; y: number; count?: number }
+  | { t: 'up'; x: number; y: number; count?: number }
   | { t: 'move'; x: number; y: number }
   | { t: 'wheel'; x: number; y: number; dy: number }
   | { t: 'key'; key: string; code?: string; text?: string }
@@ -369,8 +369,14 @@ export function streamInputAllowed(
 }
 
 /** Build a pointer input message (tap/down/up/move) at a FRAME point. */
-export function pointerMsg(t: 'tap' | 'down' | 'up' | 'move', p: { x: number; y: number }): CastInputMsg {
-  return { t, x: p.x, y: p.y }
+export function pointerMsg(
+  t: 'tap' | 'down' | 'up' | 'move',
+  p: { x: number; y: number },
+  count = 1
+): CastInputMsg {
+  // count carries the click multiplicity (2 = double-click, 3 = triple) so the
+  // remote page can select a word / line; move never carries it.
+  return { t, x: p.x, y: p.y, ...(t !== 'move' && count > 1 ? { count } : {}) }
 }
 
 /**
