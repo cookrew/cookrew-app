@@ -18,7 +18,7 @@ export interface CdpInputCommand {
 }
 
 export interface MapContext {
-  /** frameWidth / cssViewportWidth — the screencast scale (`coords = tap/displayScale`). */
+  /** Frame px per visual-viewport CSS px, including pinch zoom. */
   displayScale: number
   /** Page CSS viewport bounds, for clamping. */
   viewportWidth: number

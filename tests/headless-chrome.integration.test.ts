@@ -7,7 +7,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { sanitizeInput } from '../src/shared/cast-input'
 import type { BrowserNodeData, BrowserTab } from '../src/shared/model'
 import { HeadlessBrowserManager } from '../src/main/headless-browser-manager'
-import { findChrome, HeadlessInstance } from '../src/main/headless-chrome'
+import { findChrome, HeadlessInstance, type FrameMeta } from '../src/main/headless-chrome'
+import { jpegSize } from '../src/main/jpeg-size'
 
 const chrome = findChrome()
 const enabled = process.env.COOKREW_REAL_CHROME_TEST === '1' && chrome !== null
@@ -53,10 +54,12 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
     })
     let frames = 0
     let lastFrameRevision = 0
+    let lastFrame: { data: string; meta: FrameMeta } | null = null
     let firstProcessTree: number[] = []
-    first.frameListeners.add((_data, meta) => {
+    first.frameListeners.add((data, meta) => {
       frames += 1
       lastFrameRevision = meta.revision ?? 0
+      lastFrame = { data, meta }
     })
 
     try {
@@ -109,6 +112,59 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
         dom: 'preserved'
       })
 
+      const tapFramePoint = async (
+        framePoint: { x: number; y: number },
+        mappingPageScaleFactor?: number
+      ): Promise<{
+        actual: { x: number; y: number }
+        expected: { x: number; y: number }
+        error: number
+      }> => {
+        const frame = lastFrame as { data: string; meta: FrameMeta } | null
+        const size = frame ? jpegSize(Buffer.from(frame.data, 'base64')) : null
+        expect(size).not.toBeNull()
+        const deviceWidth = frame?.meta.deviceWidth ?? first.viewportState.width
+        const pageScaleFactor = frame?.meta.pageScaleFactor ?? 1
+        const jpegScale = (size?.width ?? deviceWidth) / deviceWidth
+        const displayScale = jpegScale * pageScaleFactor
+        const mappingScale = jpegScale * (mappingPageScaleFactor ?? pageScaleFactor)
+        const viewport = await first.evaluate(`({
+          offsetLeft: visualViewport?.offsetLeft ?? 0,
+          offsetTop: visualViewport?.offsetTop ?? 0
+        })`) as { offsetLeft: number; offsetTop: number }
+        await first.evaluate(`
+          window.__cookrewPrecisionClick = null;
+          addEventListener('click', (event) => {
+            window.__cookrewPrecisionClick = { x: event.clientX, y: event.clientY };
+          }, { once: true });
+        `)
+        const commands = sanitizeInput({ t: 'tap', ...framePoint }, {
+          displayScale: mappingScale,
+          viewportWidth: first.viewportState.width,
+          viewportHeight: first.viewportState.height
+        })
+        expect(commands).not.toBeNull()
+        for (const command of commands ?? []) first.dispatchInput(command.method, command.params)
+        await waitFor(async () => (
+          await first.evaluate('window.__cookrewPrecisionClick')
+        ) !== null)
+        const actual = await first.evaluate(
+          'window.__cookrewPrecisionClick'
+        ) as { x: number; y: number }
+        const expected = {
+          x: framePoint.x / displayScale + viewport.offsetLeft,
+          y: framePoint.y / displayScale + viewport.offsetTop
+        }
+        return {
+          actual,
+          expected,
+          error: Math.hypot(actual.x - expected.x, actual.y - expected.y)
+        }
+      }
+
+      const scaleOneTap = await tapFramePoint({ x: 195, y: 200 })
+      expect(scaleOneTap.error).toBeLessThanOrEqual(2)
+
       const dispatchTouch = (raw: unknown): void => {
         const commands = sanitizeInput(raw, {
           displayScale: 1,
@@ -138,6 +194,20 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
       ) > scaleBeforePinch)
       const scaleAfterPinch = await first.evaluate('visualViewport?.scale ?? 1') as number
       expect(scaleAfterPinch).toBeGreaterThan(scaleBeforePinch)
+      await waitFor(() => (
+        (lastFrame as { meta: FrameMeta } | null)?.meta.pageScaleFactor ?? 0
+      ) > scaleBeforePinch)
+      const oldZoomedTap = await tapFramePoint({ x: 195, y: 200 }, 1)
+      const zoomedTap = await tapFramePoint({ x: 195, y: 200 })
+      expect(zoomedTap.error).toBeLessThanOrEqual(2)
+      if (process.env.COOKREW_REPORT_PRECISION === '1') {
+        console.info('[precision]', JSON.stringify({
+          scaleOne: scaleOneTap,
+          pageScaleFactor: scaleAfterPinch,
+          zoomedBefore: oldZoomedTap,
+          zoomedAfter: zoomedTap
+        }))
+      }
       expect(first.processId).toBe(processBeforeReflow)
       expect(await activeTargetId(first.devToolsPort)).toBe(targetBeforeReflow)
       expect(first.viewportState.revision).toBe(2)
@@ -150,6 +220,16 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
         cookie: expect.stringContaining('cookrew-profile=shared'),
         dom: 'preserved'
       })
+
+      let fallbackScale = 0
+      const fallbackListener = (_data: string, meta: { pageScaleFactor?: number }): void => {
+        fallbackScale = meta.pageScaleFactor ?? 0
+      }
+      first.frameListeners.add(fallbackListener)
+      Object.assign(first, { lastFrameAt: 0, lastHash: '' })
+      await (first as unknown as { pollTick: () => Promise<void> }).pollTick()
+      first.frameListeners.delete(fallbackListener)
+      expect(fallbackScale).toBeCloseTo(scaleAfterPinch, 3)
 
       first.registerViewportViewer('desktop')
       first.offerViewport('desktop', { width: 1000, height: 700, mobile: false })

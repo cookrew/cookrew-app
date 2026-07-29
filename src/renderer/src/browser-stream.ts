@@ -157,6 +157,7 @@ interface StreamFrameMeta {
   deviceWidth?: number
   deviceHeight?: number
   displayScale?: number
+  pageScaleFactor?: number
   mobile?: boolean
 }
 
@@ -190,6 +191,7 @@ export function parseStreamMessage(raw: unknown): StreamMessage | null {
     const deviceWidth = positiveNumber(meta?.deviceWidth)
     const deviceHeight = positiveNumber(meta?.deviceHeight)
     const displayScale = positiveNumber(meta?.displayScale)
+    const pageScaleFactor = positiveNumber(meta?.pageScaleFactor)
     const mobile = typeof meta?.mobile === 'boolean' ? meta.mobile : undefined
     return {
       kind: 'frame',
@@ -199,6 +201,7 @@ export function parseStreamMessage(raw: unknown): StreamMessage | null {
       ...(deviceWidth !== null ? { deviceWidth } : {}),
       ...(deviceHeight !== null ? { deviceHeight } : {}),
       ...(displayScale !== null ? { displayScale } : {}),
+      ...(pageScaleFactor !== null ? { pageScaleFactor } : {}),
       ...(mobile !== undefined ? { mobile } : {})
     }
   }
@@ -326,6 +329,12 @@ export type CastInputMsg =
   | TouchInputMsg
 
 export type RevisionedCastInputMsg = CastInputMsg & { revision: number }
+export type FrameBoundCastInputMsg = CastInputMsg & { frameSeq: number }
+
+/** Bind coordinate input to the exact screencast frame painted by the viewer. */
+export function inputWithFrameSeq(msg: CastInputMsg, frameSeq: number): FrameBoundCastInputMsg {
+  return { ...msg, frameSeq: normalizeRevision(frameSeq) }
+}
 
 export function inputWithRevision(msg: CastInputMsg, revision: number): RevisionedCastInputMsg {
   return { ...msg, revision: normalizeRevision(revision) }

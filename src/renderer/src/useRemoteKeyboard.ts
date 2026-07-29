@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react'
 import { keyMsg, type CastInputMsg } from './browser-stream'
 
 /**
- * Mobile keyboard bridge for the streamed browser (PROTOTYPE).
+ * Mobile keyboard bridge for the streamed browser.
  *
  * The phone renders the page as an IMAGE, so tapping a remote text field focuses
  * it server-side but never raises the phone's soft keyboard — there is no real
@@ -12,9 +12,17 @@ import { keyMsg, type CastInputMsg } from './browser-stream'
  * to the remote page's focused field via the EXISTING whitelisted key vocabulary
  * (keyMsg → Input.dispatchKeyEvent). No new CDP method, no server change.
  *
- * Known prototype limits (follow-ups): IME composition (CJK) and paste are only
- * partially covered by per-char key events — a dedicated text-insert path
- * (CDP Input.insertText) would be more faithful but adds to the whitelist.
+ * PHANTOM BUFFER: the field is kept pre-filled with padding and the cursor in the
+ * middle, then re-seeded after every edit. This is why Backspace works — on an
+ * empty field iOS fires NO delete event (nothing to delete locally), so a plain
+ * backspace was silently dropped. With padding on both sides, Backspace always
+ * deletes a pad char → fires deleteContentBackward → forwards a real Backspace;
+ * the padding is never itself forwarded (we forward the beforeinput data / event
+ * type, not the buffer contents).
+ *
+ * Known limits (follow-ups): IME composition (CJK) and paste are only partial via
+ * per-char keys — a dedicated CDP Input.insertText path would be more faithful
+ * but adds to the whitelist.
  */
 
 /** Pure: map one beforeinput (inputType, data) to whitelisted key messages. */
@@ -27,8 +35,10 @@ export function keyMsgsForInput(inputType: string, data: string | null): CastInp
     case 'insertParagraph':
       return [keyMsg('Enter', 'Enter')]
     case 'deleteContentBackward':
+    case 'deleteWordBackward':
       return [keyMsg('Backspace', 'Backspace')]
     case 'deleteContentForward':
+    case 'deleteWordForward':
       return [keyMsg('Delete', 'Delete')]
     default:
       return [] // unknown inputType → forward nothing (fail closed)
@@ -47,22 +57,20 @@ export interface RemoteKeyboard {
   onBlur: () => void
 }
 
-// Editing/navigation keys fire keydown even on an EMPTY field, unlike beforeinput
-// (which needs something to delete). Forwarding Backspace here is why deleting a
-// letter now works; printable characters still flow through beforeinput.
-const FORWARDED_KEYS = new Set([
-  'Backspace',
-  'Delete',
-  'Enter',
-  'Tab',
-  'Escape',
-  'ArrowLeft',
-  'ArrowRight',
-  'ArrowUp',
-  'ArrowDown',
-  'Home',
-  'End'
-])
+/** Padding chars on each side of the cursor. Spaces avoid word-prediction. */
+const PAD = ' '.repeat(24)
+
+/** Fill the capture field with padding and drop the cursor in the middle. */
+function seed(el: HTMLTextAreaElement): void {
+  el.value = PAD + PAD
+  el.setSelectionRange(PAD.length, PAD.length)
+}
+
+// Pure navigation keys that do NOT fire beforeinput (so they need keydown to be
+// forwarded). Backspace / Delete / Enter are NOT here — with the phantom buffer
+// they fire beforeinput and go through onBeforeInput, so forwarding them via
+// keydown too would double them.
+const NAV_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'Escape', 'Tab'])
 
 export function useRemoteKeyboard(send: (msg: CastInputMsg) => void): RemoteKeyboard {
   const [open, setOpen] = useState(false)
@@ -80,9 +88,10 @@ export function useRemoteKeyboard(send: (msg: CastInputMsg) => void): RemoteKeyb
       close()
       return
     }
-    el.value = ''
-    // Focus synchronously in the gesture so the OS raises the soft keyboard.
+    // Focus synchronously in the gesture so the OS raises the soft keyboard, then
+    // seed the phantom buffer so the first Backspace has something to delete.
     el.focus()
+    seed(el)
     setOpen(true)
   }, [open, close])
 
@@ -94,15 +103,16 @@ export function useRemoteKeyboard(send: (msg: CastInputMsg) => void): RemoteKeyb
     [send]
   )
 
-  // Keep the hidden field empty so it is a pure keystroke capture, not an editor.
+  // Re-seed after every edit so the buffer never depletes or grows — Backspace
+  // always has padding to delete and typing always has room.
   const onInput = useCallback((e: React.FormEvent<HTMLTextAreaElement>): void => {
-    e.currentTarget.value = ''
+    seed(e.currentTarget)
   }, [])
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
-      if (!FORWARDED_KEYS.has(e.key)) return // printable chars go via onBeforeInput
-      e.preventDefault()
+      if (!NAV_KEYS.has(e.key)) return // text + Backspace/Enter go via onBeforeInput
+      e.preventDefault() // keep the local buffer cursor put; only the remote moves
       e.stopPropagation() // do not also trip the frame's own key handler
       send(keyMsg(e.key, e.code || e.key))
     },

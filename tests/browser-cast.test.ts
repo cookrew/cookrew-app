@@ -12,6 +12,18 @@ function maskedTextFrame(payload: string): Buffer {
   return Buffer.concat([header, key, masked])
 }
 
+/** Minimal JPEG header with a real SOF0 width/height for display-scale tests. */
+function jpegFrame(width: number, height: number): string {
+  const sof = Buffer.alloc(10)
+  sof[0] = 0xff
+  sof[1] = 0xc0
+  sof.writeUInt16BE(8, 2)
+  sof[4] = 8
+  sof.writeUInt16BE(height, 5)
+  sof.writeUInt16BE(width, 7)
+  return Buffer.concat([Buffer.from([0xff, 0xd8]), sof]).toString('base64')
+}
+
 interface TestSocket extends Duplex {
   writes: string[]
   emitEvent: (name: string, value?: unknown) => void
@@ -247,7 +259,7 @@ describe('upgrade() attaches to the node-owned instance', () => {
     )
     socket.emitEvent(
       'data',
-      maskedTextFrame(JSON.stringify({ t: 'tap', x: 1, y: 1, revision: 1 }))
+      maskedTextFrame(JSON.stringify({ t: 'tap', x: 1, y: 1, revision: 1, frameSeq: 1 }))
     )
     expect(instance.dispatchInput).not.toHaveBeenCalled()
 
@@ -255,11 +267,17 @@ describe('upgrade() attaches to the node-owned instance', () => {
 
     socket.emitEvent(
       'data',
-      maskedTextFrame(JSON.stringify({ t: 'tap', x: 1, y: 1, revision: 1 }))
+      maskedTextFrame(JSON.stringify({ t: 'tap', x: 1, y: 1, revision: 1, frameSeq: 1 }))
     )
     expect(instance.dispatchInput).toHaveBeenCalledTimes(2)
 
     vi.mocked(instance.dispatchInput).mockClear()
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'tap', x: 1, y: 1, revision: 1, frameSeq: 999 }))
+    )
+    expect(instance.dispatchInput).not.toHaveBeenCalled()
+
     socket.emitEvent(
       'data',
       maskedTextFrame(JSON.stringify({
@@ -275,7 +293,8 @@ describe('upgrade() attaches to the node-owned instance', () => {
       maskedTextFrame(JSON.stringify({
         t: 'touchmove',
         points: [{ id: 0, x: 10, y: 20 }, { id: 1, x: 30, y: 40 }],
-        revision: 1
+        revision: 1,
+        frameSeq: 1
       }))
     )
     expect(instance.dispatchInput).toHaveBeenCalledWith(
@@ -284,6 +303,143 @@ describe('upgrade() attaches to the node-owned instance', () => {
         type: 'touchMove',
         touchPoints: [{ id: 0, x: 10, y: 20 }, { id: 1, x: 30, y: 40 }]
       }
+    )
+  })
+
+  it('includes visual viewport zoom when mapping frame pixels to page CSS pixels', async () => {
+    const instance = fakeInstance()
+    const socket = socketStub()
+    createBrowserCast({
+      enabled: () => true,
+      desktopToken: () => 'desktop-secret',
+      getInstance: vi.fn(() => Promise.resolve(instance))
+    }).upgrade(req('/api/browser/pinch/stream'), socket)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    for (const listener of instance.frameListeners) {
+      listener(jpegFrame(390, 844), {
+        deviceWidth: 390,
+        deviceHeight: 844,
+        pageScaleFactor: 2.5,
+        revision: 1
+      })
+    }
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'tap', x: 250, y: 500, revision: 1, frameSeq: 1 }))
+    )
+
+    expect(instance.dispatchInput).toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mousePressed', x: 100, y: 200 })
+    )
+    expect(socket.writes.join('')).toContain('"displayScale":2.5')
+    expect(socket.writes.join('')).toContain('"pageScaleFactor":2.5')
+
+    vi.mocked(instance.dispatchInput).mockClear()
+    const writesBeforeMissingScale = socket.writes.length
+    for (const listener of instance.frameListeners) {
+      listener(jpegFrame(390, 844), {
+        deviceWidth: 390,
+        deviceHeight: 844,
+        revision: 1
+      })
+    }
+    expect(socket.writes).toHaveLength(writesBeforeMissingScale)
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'tap', x: 250, y: 500, revision: 1, frameSeq: 1 }))
+    )
+    expect(instance.dispatchInput).toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mousePressed', x: 100, y: 200 })
+    )
+
+    vi.mocked(instance.dispatchInput).mockClear()
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'tap', x: 1e9, y: 1e9, revision: 1, frameSeq: 1 }))
+    )
+    expect(instance.dispatchInput).toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mousePressed', x: 156, y: 337.6 })
+    )
+
+    vi.mocked(instance.dispatchInput).mockClear()
+    for (const listener of instance.frameListeners) {
+      listener(jpegFrame(390, 844), {
+        deviceWidth: 390,
+        deviceHeight: 844,
+        pageScaleFactor: 1,
+        revision: 1
+      })
+    }
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'tap', x: 250, y: 500, revision: 1, frameSeq: 2 }))
+    )
+    expect(instance.dispatchInput).toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mousePressed', x: 250, y: 500 })
+    )
+  })
+
+  it('maps input against the last frame delivered to a slow client', async () => {
+    const instance = fakeInstance()
+    const socket = socketStub()
+    createBrowserCast({
+      enabled: () => true,
+      desktopToken: () => 'desktop-secret',
+      getInstance: vi.fn(() => Promise.resolve(instance))
+    }).upgrade(req('/api/browser/pinch/stream'), socket)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    for (const listener of instance.frameListeners) {
+      listener(jpegFrame(390, 844), {
+        deviceWidth: 390,
+        deviceHeight: 844,
+        pageScaleFactor: 1,
+        revision: 1
+      })
+    }
+    socket.setWritableLength(1_000_000)
+    for (const listener of instance.frameListeners) {
+      listener(jpegFrame(390, 844), {
+        deviceWidth: 390,
+        deviceHeight: 844,
+        pageScaleFactor: 2.5,
+        revision: 1
+      })
+    }
+
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'tap', x: 250, y: 500, revision: 1, frameSeq: 1 }))
+    )
+    expect(instance.dispatchInput).toHaveBeenLastCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mouseReleased', x: 250, y: 500 })
+    )
+
+    socket.emitEvent('drain')
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'tap', x: 250, y: 500, revision: 1, frameSeq: 2 }))
+    )
+    expect(instance.dispatchInput).toHaveBeenLastCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mouseReleased', x: 100, y: 200 })
+    )
+
+    socket.emitEvent(
+      'data',
+      maskedTextFrame(JSON.stringify({ t: 'tap', x: 250, y: 500, revision: 1, frameSeq: 1 }))
+    )
+    expect(instance.dispatchInput).toHaveBeenLastCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mouseReleased', x: 250, y: 500 })
     )
   })
 
@@ -303,7 +459,7 @@ describe('upgrade() attaches to the node-owned instance', () => {
     Object.assign(instance.viewportState, { agentHeld: true })
     socket.emitEvent(
       'data',
-      maskedTextFrame(JSON.stringify({ t: 'move', x: 1, y: 1, revision: 1 }))
+      maskedTextFrame(JSON.stringify({ t: 'move', x: 1, y: 1, revision: 1, frameSeq: 1 }))
     )
     expect(instance.dispatchInput).not.toHaveBeenCalled()
 
@@ -320,11 +476,11 @@ describe('upgrade() attaches to the node-owned instance', () => {
     Object.assign(instance.viewportState, { agentHeld: false, transitioning: true })
     socket.emitEvent(
       'data',
-      maskedTextFrame(JSON.stringify({ t: 'down', x: 1, y: 1, revision: 1 }))
+      maskedTextFrame(JSON.stringify({ t: 'down', x: 1, y: 1, revision: 1, frameSeq: 1 }))
     )
     socket.emitEvent(
       'data',
-      maskedTextFrame(JSON.stringify({ t: 'up', x: 1, y: 1, revision: 1 }))
+      maskedTextFrame(JSON.stringify({ t: 'up', x: 1, y: 1, revision: 1, frameSeq: 1 }))
     )
     expect(instance.dispatchInput).toHaveBeenCalledTimes(1)
     expect(instance.dispatchInput).toHaveBeenCalledWith(

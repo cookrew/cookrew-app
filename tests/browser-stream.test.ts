@@ -7,6 +7,7 @@ import {
   frameDataUrl,
   frameIsFresh,
   frameMatchesViewport,
+  inputWithFrameSeq,
   frameSource,
   inputWithRevision,
   keyMsg,
@@ -180,7 +181,7 @@ describe('parseStreamMessage (Forge ready/frame/error text frames)', () => {
 
     expect(parseStreamMessage(
       '{"t":"frame","seq":8,"data":"Zm9v","meta":{"deviceWidth":390,' +
-      '"deviceHeight":844,"displayScale":2,"mobile":true,"revision":7}}'
+      '"deviceHeight":844,"displayScale":2,"pageScaleFactor":2,"mobile":true,"revision":7}}'
     )).toEqual({
       kind: 'frame',
       seq: 8,
@@ -188,6 +189,7 @@ describe('parseStreamMessage (Forge ready/frame/error text frames)', () => {
       deviceWidth: 390,
       deviceHeight: 844,
       displayScale: 2,
+      pageScaleFactor: 2,
       mobile: true,
       revision: 7
     })
@@ -216,6 +218,18 @@ describe('parseStreamMessage (Forge ready/frame/error text frames)', () => {
     expect(frameDataUrl('AAA')).toBe('data:image/jpeg;base64,AAA')
     expect(frameDataUrl('data:image/jpeg;base64,AAA')).toBe('data:image/jpeg;base64,AAA')
   })
+  it('drops invalid page-scale metadata instead of exposing it to the renderer', () => {
+    for (const pageScaleFactor of [0, -1, '2']) {
+      const parsed = parseStreamMessage(JSON.stringify({
+        t: 'frame',
+        seq: 1,
+        data: 'Zm9v',
+        meta: { revision: 1, pageScaleFactor }
+      }))
+      expect(parsed).toMatchObject({ kind: 'frame', seq: 1 })
+      expect(parsed).not.toHaveProperty('pageScaleFactor')
+    }
+  })
 })
 
 describe('viewToFramePoint (tap → FRAME px, letterbox-aware + clamped)', () => {
@@ -235,6 +249,23 @@ describe('viewToFramePoint (tap → FRAME px, letterbox-aware + clamped)', () =>
   })
   it('unmeasured fit → origin', () => {
     expect(viewToFramePoint(10, 10, { width: 0, height: 0, left: 0, top: 0 }, 400, 800)).toEqual({ x: 0, y: 0 })
+  })
+  it('composes letterbox, JPEG downsampling, and pinch scale within one page pixel', () => {
+    // 780x1400 device -> 390x700 JPEG -> 195x350 fitted view at (20,10), pinch 2.5x.
+    const frame = viewToFramePoint(
+      170,
+      210,
+      { width: 195, height: 350, left: 20, top: 10 },
+      390,
+      700
+    )
+    expect(frame).toEqual({ x: 300, y: 400 })
+    const command = sanitizeInput(pointerMsg('tap', frame), {
+      displayScale: (390 / 780) * 2.5,
+      viewportWidth: 780,
+      viewportHeight: 1400
+    })?.[0]
+    expect(command?.params).toMatchObject({ x: 240, y: 320 })
   })
 })
 
@@ -270,6 +301,11 @@ describe('input builders → whitelisted by Forge’s sanitizeInput (contract lo
     const touch = inputWithRevision(touchMsg('touchmove', { x: 8, y: 12 }), 7)
     expect(touch).toEqual({ t: 'touchmove', x: 8, y: 12, revision: 7 })
     expect(sanitizeInput(touch, ctx)?.[0].params.type).toBe('touchMove')
+  })
+  it('binds coordinate input to the exact painted frame sequence', () => {
+    expect(inputWithFrameSeq(pointerMsg('tap', { x: 4, y: 9 }), 12)).toEqual({
+      t: 'tap', x: 4, y: 9, frameSeq: 12
+    })
   })
 })
 

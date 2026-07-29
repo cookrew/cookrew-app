@@ -92,6 +92,8 @@ export interface HeadlessOptions {
 export interface FrameMeta {
   deviceWidth?: number
   deviceHeight?: number
+  /** Visual viewport zoom reported by Page.screencastFrame metadata. */
+  pageScaleFactor?: number
   mobile?: boolean
   revision?: number
 }
@@ -492,11 +494,21 @@ export class HeadlessInstance {
     const page = this.pages.get(this.activeTabId)
     if (!page) return
     try {
-      const shot = (await page.cdp.send('Page.captureScreenshot', {
-        format: 'jpeg',
-        quality: this.opts.quality ?? 60
-      })) as { data?: string }
-      if (shot.data) this.emitFrame(shot.data, {})
+      const [shot, layout] = await Promise.all([
+        page.cdp.send('Page.captureScreenshot', {
+          format: 'jpeg',
+          quality: this.opts.quality ?? 60
+        }).catch(() => null) as Promise<{ data?: string } | null>,
+        page.cdp.send('Page.getLayoutMetrics').catch(() => null) as Promise<{
+          visualViewport?: { scale?: unknown }
+        } | null>
+      ])
+      const scale = layout?.visualViewport?.scale
+      if (shot?.data && typeof scale === 'number' && Number.isFinite(scale) && scale > 0) {
+        this.emitFrame(shot.data, {
+          pageScaleFactor: scale
+        })
+      }
     } catch {
       // Navigation can temporarily reject captures; the next tick retries.
     }

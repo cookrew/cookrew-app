@@ -116,12 +116,17 @@ class ClientConn {
   private seq = 0
   private closed = false
   private latest: string | null = null
+  private latestSeq: number | null = null
   private latestRevision: number | null = null
+  private latestContext: MapContext | null = null
   private deliveredRevision: number | null = null
   private drainArmed = false
   private instance: HeadlessInstance | null = null
   private unsubscribeViewport: (() => void) | null = null
   private ctx: MapContext = { displayScale: 1, viewportWidth: 800, viewportHeight: 600 }
+  private readonly frameContexts = new Map<number, { ctx: MapContext; revision: number }>()
+  private observedPageScaleFactor = 1
+  private hasObservedPageScaleFactor = false
   private readonly frameListener = (data: string, meta: FrameMeta): void =>
     this.pushFrame(data, meta)
   private readonly viewportListener = (state: BrowserViewportState): void =>
@@ -170,34 +175,59 @@ class ClientConn {
     const size = jpegSize(Buffer.from(base64, 'base64'))
     const deviceWidth = meta.deviceWidth ?? viewport?.width
     const deviceHeight = meta.deviceHeight ?? viewport?.height
+    if (
+      typeof meta.pageScaleFactor === 'number' &&
+      Number.isFinite(meta.pageScaleFactor) &&
+      meta.pageScaleFactor > 0
+    ) {
+      this.observedPageScaleFactor = meta.pageScaleFactor
+      this.hasObservedPageScaleFactor = true
+    } else if (this.hasObservedPageScaleFactor) {
+      // Never pair a new frame with a scale inherited from an older frame.
+      return
+    }
+    let frameContext = this.ctx
     if (deviceWidth && deviceHeight && size && deviceWidth > 0) {
-      this.ctx = {
-        displayScale: size.width / deviceWidth,
-        viewportWidth: deviceWidth,
-        viewportHeight: deviceHeight
+      frameContext = {
+        // Frame pixels cover the visual viewport. At pinch zoom, Chromium's
+        // deviceWidth remains fixed while each page CSS px occupies
+        // pageScaleFactor frame pixels.
+        displayScale: (size.width / deviceWidth) * this.observedPageScaleFactor,
+        viewportWidth: deviceWidth / this.observedPageScaleFactor,
+        viewportHeight: deviceHeight / this.observedPageScaleFactor
       }
     }
     const revision = meta.revision ?? viewport?.revision ?? 1
+    const seq = (this.seq += 1)
     const msg = JSON.stringify({
       t: 'frame',
-      seq: (this.seq += 1),
+      seq,
       data: base64,
       meta: {
-        deviceWidth: this.ctx.viewportWidth,
-        deviceHeight: this.ctx.viewportHeight,
-        displayScale: this.ctx.displayScale,
+        deviceWidth,
+        deviceHeight,
+        displayScale: frameContext.displayScale,
+        pageScaleFactor: this.observedPageScaleFactor,
         mobile: meta.mobile ?? viewport?.mobile ?? false,
         revision
       }
     })
     if (this.socket.writableLength <= DEFAULT_DRAIN_THRESHOLD) {
       this.latest = null
+      this.latestSeq = null
       this.latestRevision = null
+      this.latestContext = null
       this.wsSend(msg)
-      if (!this.closed) this.deliveredRevision = revision
+      if (!this.closed) {
+        this.ctx = frameContext
+        this.deliveredRevision = revision
+        this.rememberFrameContext(seq, revision, frameContext)
+      }
     } else {
       this.latest = msg
+      this.latestSeq = seq
       this.latestRevision = revision
+      this.latestContext = frameContext
       this.armDrain()
     }
   }
@@ -208,14 +238,33 @@ class ClientConn {
     this.socket.once('drain', () => {
       this.drainArmed = false
       const pending = this.latest
+      const seq = this.latestSeq
       const revision = this.latestRevision
+      const context = this.latestContext
       this.latest = null
+      this.latestSeq = null
       this.latestRevision = null
+      this.latestContext = null
       if (pending && !this.closed) {
         this.wsSend(pending)
-        if (!this.closed) this.deliveredRevision = revision
+        if (!this.closed) {
+          if (context) this.ctx = context
+          this.deliveredRevision = revision
+          if (seq !== null && revision !== null && context) {
+            this.rememberFrameContext(seq, revision, context)
+          }
+        }
       }
     })
+  }
+
+  private rememberFrameContext(seq: number, revision: number, ctx: MapContext): void {
+    this.frameContexts.set(seq, { ctx, revision })
+    while (this.frameContexts.size > 32) {
+      const oldest = this.frameContexts.keys().next().value
+      if (typeof oldest !== 'number') break
+      this.frameContexts.delete(oldest)
+    }
   }
 
   private onData = (chunk: Buffer): void => {
@@ -255,15 +304,21 @@ class ClientConn {
     if (typeof raw !== 'object' || raw === null) return
     const input = raw as Record<string, unknown>
     const revision = input.revision
+    const frameSeq = input.frameSeq
+    const needsFrameContext = input.t !== 'key' && input.t !== 'touchend'
+    const frameContext = Number.isInteger(frameSeq)
+      ? this.frameContexts.get(frameSeq as number)
+      : undefined
     const releasesActivePointer = input.t === 'up' || input.t === 'touchend'
     const viewport = instance.viewportState
     if (
       ((viewport.transitioning || viewport.agentHeld) && !releasesActivePointer) ||
       !Number.isInteger(revision) ||
       revision !== viewport.revision ||
-      revision !== this.deliveredRevision
+      revision !== this.deliveredRevision ||
+      (needsFrameContext && (!frameContext || frameContext.revision !== revision))
     ) return
-    const commands = sanitizeInput(raw, this.ctx)
+    const commands = sanitizeInput(raw, frameContext?.ctx ?? this.ctx)
     if (!commands) return
     for (const command of commands) instance.dispatchInput(command.method, command.params)
   }
@@ -295,8 +350,11 @@ class ClientConn {
     if (this.closed) return
     this.closed = true
     this.latest = null
+    this.latestSeq = null
     this.latestRevision = null
+    this.latestContext = null
     this.deliveredRevision = null
+    this.frameContexts.clear()
     this.instance?.frameListeners.delete(this.frameListener)
     this.unsubscribeViewport?.()
     this.unsubscribeViewport = null

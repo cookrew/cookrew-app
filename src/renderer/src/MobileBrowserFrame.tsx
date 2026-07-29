@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { CrIcon } from './icons'
 import {
   FRAME_POLL_MS,
@@ -10,6 +10,7 @@ import {
 import {
   emptyTouchGesture,
   frameSource,
+  inputWithFrameSeq,
   keyMsg,
   mobileViewportPreference,
   pointerMsg,
@@ -18,6 +19,7 @@ import {
   updateTouchGesture,
   viewToFramePoint,
   wheelMsg,
+  type CastInputMsg,
   type StreamSurfaceState,
   type StreamTouchPointer
 } from './browser-stream'
@@ -53,6 +55,7 @@ export function MobileBrowserFrame({
   const [natural, setNatural] = useState({ w: 0, h: 0 })
   const [coarsePointer, setCoarsePointer] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
+  const paintedFrameSeq = useRef<number | null>(null)
   const mobilePreference = mobileViewportPreference(view.w, coarsePointer)
   const stream = useBrowserStream(browserId, open, streamEnabled, desktopStreamToken, {
     width: view.w,
@@ -71,14 +74,18 @@ export function MobileBrowserFrame({
   const kbd = useRemoteKeyboard(stream.send)
 
   useEffect(() => {
+    paintedFrameSeq.current = null
+    setStreamFrameLoaded(false)
     if (!open) {
       setLoaded(false)
-      setStreamFrameLoaded(false)
       setNatural({ w: 0, h: 0 })
     }
   }, [open, browserId])
 
-  useEffect(() => setStreamFrameLoaded(false), [streaming, stream.frameRevision])
+  useEffect(() => {
+    paintedFrameSeq.current = null
+    setStreamFrameLoaded(false)
+  }, [streaming, stream.frameRevision])
 
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return
@@ -160,6 +167,10 @@ export function MobileBrowserFrame({
   const touchGesture = useRef(emptyTouchGesture())
   const mousePointerId = useRef<number | null>(null)
   const mouseLastPoint = useRef<{ x: number; y: number } | null>(null)
+  const sendFrameInput = useCallback((msg: CastInputMsg): void => {
+    const frameSeq = paintedFrameSeq.current
+    if (frameSeq !== null) stream.send(inputWithFrameSeq(msg, frameSeq))
+  }, [stream.send])
 
   // If freshness disappears mid-gesture, release every remote contact before
   // input is disabled so Chromium is never left with a stuck mouse or touch.
@@ -173,7 +184,7 @@ export function MobileBrowserFrame({
         boxRef.current.releasePointerCapture(contact.pointerId)
       }
     }
-    if (touchRelease) stream.send(touchRelease.message)
+    if (touchRelease) sendFrameInput(touchRelease.message)
 
     const pointerId = mousePointerId.current
     mousePointerId.current = null
@@ -181,9 +192,9 @@ export function MobileBrowserFrame({
       boxRef.current.releasePointerCapture(pointerId)
     }
     if (pointerId !== null && mouseLastPoint.current) {
-      stream.send(pointerMsg('up', mouseLastPoint.current))
+      sendFrameInput(pointerMsg('up', mouseLastPoint.current))
     }
-  }, [interactive, stream.send])
+  }, [interactive, sendFrameInput])
 
   const framePoint = (e: React.PointerEvent): { x: number; y: number } | null => {
     const box = boxRef.current
@@ -207,7 +218,7 @@ export function MobileBrowserFrame({
       boxRef.current?.focus()
       touchGesture.current = update.state
       e.currentTarget.setPointerCapture(e.pointerId)
-      stream.send(update.message)
+      sendFrameInput(update.message)
       return
     }
 
@@ -221,7 +232,7 @@ export function MobileBrowserFrame({
     e.currentTarget.setPointerCapture(e.pointerId)
     // e.detail is the click multiplicity — a double-click carries 2 so the page
     // can select a word (3 = triple → select line/all).
-    stream.send(pointerMsg('down', point, e.detail))
+    sendFrameInput(pointerMsg('down', point, e.detail))
   }
   const onPointerMove = (e: React.PointerEvent): void => {
     if (!interactive) return
@@ -231,14 +242,14 @@ export function MobileBrowserFrame({
       const update = updateTouchGesture(touchGesture.current, 'move', point)
       if (!update) return
       touchGesture.current = update.state
-      stream.send(update.message)
+      sendFrameInput(update.message)
       return
     }
     if (e.pointerId !== mousePointerId.current) return
     const point = framePoint(e)
     if (!point) return
     mouseLastPoint.current = point
-    stream.send(pointerMsg('move', point))
+    sendFrameInput(pointerMsg('move', point))
   }
   const onPointerUp = (e: React.PointerEvent): void => {
     const contact = touchGesture.current.contacts.find((point) => point.pointerId === e.pointerId)
@@ -248,7 +259,7 @@ export function MobileBrowserFrame({
       const update = updateTouchGesture(touchGesture.current, 'end', point)
       if (update) {
         touchGesture.current = update.state
-        stream.send(update.message)
+        sendFrameInput(update.message)
       }
       for (const active of contacts) {
         if (e.currentTarget.hasPointerCapture?.(active.pointerId)) {
@@ -264,7 +275,7 @@ export function MobileBrowserFrame({
       e.currentTarget.releasePointerCapture(e.pointerId)
     }
     const point = framePoint(e) ?? mouseLastPoint.current
-    if (point) stream.send(pointerMsg('up', point, e.detail))
+    if (point) sendFrameInput(pointerMsg('up', point, e.detail))
   }
   const onWheel = (e: React.WheelEvent): void => {
     if (!interactive) return
@@ -273,7 +284,7 @@ export function MobileBrowserFrame({
     e.preventDefault()
     const r = box.getBoundingClientRect()
     const p = viewToFramePoint(e.clientX - r.left, e.clientY - r.top, fit, natural.w, natural.h)
-    stream.send(wheelMsg(p, e.deltaY))
+    sendFrameInput(wheelMsg(p, e.deltaY))
   }
   const onKeyDown = (e: React.KeyboardEvent): void => {
     if (!interactive) return
@@ -416,8 +427,10 @@ export function MobileBrowserFrame({
             if (img.naturalWidth > 0 && (img.naturalWidth !== natural.w || img.naturalHeight !== natural.h)) {
               setNatural({ w: img.naturalWidth, h: img.naturalHeight })
             }
-            if (streaming) setStreamFrameLoaded(true)
-            else setLoaded(true)
+            if (streaming) {
+              paintedFrameSeq.current = stream.frameSeq
+              setStreamFrameLoaded(true)
+            } else setLoaded(true)
           }}
           onError={() => undefined}
         />
