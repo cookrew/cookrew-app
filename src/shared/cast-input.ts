@@ -29,6 +29,29 @@ export interface MapContext {
 const MAX_WHEEL_DELTA = 10_000
 const MAX_KEY_TEXT = 8
 
+/**
+ * Virtual key codes for keys whose EFFECT (delete, submit, cursor move) the
+ * browser drives from the key code, not the `text` field. Without these, CDP
+ * dispatches a Backspace/Enter/arrow event the page SEES but does not ACT on —
+ * which is why Backspace never deleted. Printable characters still carry `text`.
+ */
+const VK_CODES: Record<string, number> = {
+  Backspace: 8,
+  Tab: 9,
+  Enter: 13,
+  Escape: 27,
+  Space: 32,
+  PageUp: 33,
+  PageDown: 34,
+  End: 35,
+  Home: 36,
+  ArrowLeft: 37,
+  ArrowUp: 38,
+  ArrowRight: 39,
+  ArrowDown: 40,
+  Delete: 46
+}
+
 const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi)
 
 function isFiniteNumber(v: unknown): v is number {
@@ -143,7 +166,15 @@ export function sanitizeInput(raw: unknown, ctx: MapContext): CdpInputCommand[] 
       const text = typeof msg.text === 'string' ? msg.text : undefined
       if (text !== undefined && text.length > MAX_KEY_TEXT) return null
       const code = typeof msg.code === 'string' ? msg.code : undefined
-      const base: Record<string, unknown> = { key: msg.key, ...(code ? { code } : {}), ...(text ? { text } : {}) }
+      const vk = VK_CODES[msg.key]
+      const base: Record<string, unknown> = {
+        key: msg.key,
+        ...(code ? { code } : {}),
+        ...(text ? { text } : {}),
+        // Non-text keys need the virtual key code or the browser won't act on
+        // them (Backspace won't delete, Enter won't submit, arrows won't move).
+        ...(vk !== undefined ? { windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk } : {})
+      }
       return [
         { method: 'Input.dispatchKeyEvent', params: { type: 'keyDown', ...base } },
         { method: 'Input.dispatchKeyEvent', params: { type: 'keyUp', ...base } }

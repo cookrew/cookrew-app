@@ -179,4 +179,20 @@ describe('sanitizeInput — key vocab', () => {
   it('rejects an over-long text payload (no bulk injection)', () => {
     expect(sanitizeInput({ t: 'key', key: 'x', text: 'x'.repeat(5000) }, ctx)).toBeNull()
   })
+  it('Backspace/Enter/arrows carry a virtual key code so the browser acts on them', () => {
+    expect(sanitizeInput({ t: 'key', key: 'Backspace', code: 'Backspace' }, ctx)?.[0]).toMatchObject({
+      params: { key: 'Backspace', windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8 }
+    })
+    expect(sanitizeInput({ t: 'key', key: 'Enter', code: 'Enter' }, ctx)?.[0]).toMatchObject({
+      params: { windowsVirtualKeyCode: 13 }
+    })
+    expect(sanitizeInput({ t: 'key', key: 'ArrowLeft', code: 'ArrowLeft' }, ctx)?.[0]).toMatchObject({
+      params: { windowsVirtualKeyCode: 37 }
+    })
+  })
+  it('a printable key gets no virtual key code (it inserts via text)', () => {
+    expect(sanitizeInput({ t: 'key', key: 'a', code: 'KeyA', text: 'a' }, ctx)?.[0].params).not.toHaveProperty(
+      'windowsVirtualKeyCode'
+    )
+  })
 })
