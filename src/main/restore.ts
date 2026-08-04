@@ -2,7 +2,7 @@
 // and undo that rewind. Keeps the original session file untouched.
 
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { CanvasNode, RestorePoint, RestoreResult, TerminalNodeData } from '../shared/model'
 import { buildForkedSessionLinesAtUuid } from '../shared/claude-fork'
@@ -40,9 +40,28 @@ export function createRestoreHandlers(deps: RestoreExecutorDeps): {
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
   undoRestore: (id: string) => Promise<RestoreResult>
 } {
+  // H3: per-terminal async mutex. IPC (desktop) and HTTP (phone) both reach
+  // this executor; two concurrent restores on the SAME terminal would each
+  // pass the busy check, both kill, and the second rebind would clobber the
+  // first's lineage/undo stack. Chain each op onto the terminal's tail so
+  // restore/undo on one terminal strictly serialize (different terminals
+  // still run in parallel). The tail self-cleans when it settles.
+  const tails = new Map<string, Promise<unknown>>()
+  const serialized = <T>(id: string, op: () => Promise<T>): Promise<T> => {
+    const tail = tails.get(id) ?? Promise.resolve()
+    const next = tail.then(op, op)
+    tails.set(id, next)
+    void next
+      .catch(() => undefined)
+      .finally(() => {
+        if (tails.get(id) === next) tails.delete(id)
+      })
+    return next
+  }
   return {
-    restoreCheckpoint: (id, checkpointIndex) => restoreCheckpoint(deps, id, checkpointIndex),
-    undoRestore: (id) => undoRestore(deps, id)
+    restoreCheckpoint: (id, checkpointIndex) =>
+      serialized(id, () => restoreCheckpoint(deps, id, checkpointIndex)),
+    undoRestore: (id) => serialized(id, () => undoRestore(deps, id))
   }
 }
 
@@ -98,12 +117,27 @@ async function restoreCheckpoint(
     return fail(id, node.name, checkpointIndex, 'Checkpoint produced an empty session — refusing to restore.')
   }
 
-  const destFile = claudeSessionFile(node.cwd, newSessionId, deps.projectsDir)
-  mkdirSync(path.dirname(destFile), { recursive: true })
-  writeFileSync(destFile, `${truncated.join('\n')}\n`, 'utf8')
+  // H1: the entry busy check is stale by now — checkpointRefs awaited a
+  // potentially multi-MB read+parse, during which the agent can go
+  // idle→thinking (user types, a routine fires). Re-check immediately before
+  // the kill (only synchronous work intervenes) so a mid-turn CLI is never
+  // torn while writing the session file undo depends on.
+  const stillBusy = busyReason(deps, id)
+  if (stillBusy) return fail(id, node.name, checkpointIndex, stillBusy)
 
+  const destFile = claudeSessionFile(node.cwd, newSessionId, deps.projectsDir)
   const previousSessionId = node.claudeSessionId
-  await deps.ptys.killAndWait(id)
+  try {
+    mkdirSync(path.dirname(destFile), { recursive: true })
+    writeFileSync(destFile, `${truncated.join('\n')}\n`, 'utf8')
+    await deps.ptys.killAndWait(id)
+  } catch (error) {
+    // H2: failure BEFORE the rebind — the node still points at the original
+    // session (a kill timeout leaves the old tmux session alive), so drop
+    // the orphaned truncated copy and report honestly.
+    unlinkIfExists(destFile)
+    return fail(id, node.name, checkpointIndex, `Restore failed before rebind: ${errorMessage(error)}`)
+  }
 
   const updated = deps.store.updateNodeUnsafe(id, {
     ...withSessionLineage(node, newSessionId),
@@ -114,6 +148,11 @@ async function restoreCheckpoint(
     })
   })
   if (!updated || updated.kind !== 'terminal') {
+    // H2: the kill already landed but the rebind failed (node removed from
+    // another workspace mid-restore) — respawn with the ORIGINAL binding so
+    // the agent is never silently left dead, and drop the orphaned copy.
+    unlinkIfExists(destFile)
+    trySpawn(deps, node)
     return fail(id, node.name, checkpointIndex, 'Failed to rebind the agent to the restored session.')
   }
 
@@ -149,13 +188,21 @@ async function undoRestore(deps: RestoreExecutorDeps, id: string): Promise<Resto
   const busy = busyReason(deps, id)
   if (busy) return fail(id, node.name, point.fromIndex, busy)
 
-  await deps.ptys.killAndWait(id)
+  try {
+    await deps.ptys.killAndWait(id)
+  } catch (error) {
+    // H2: a failed (timed-out) kill leaves the original session running and
+    // the node untouched — report honestly instead of rebinding blind.
+    return fail(id, node.name, point.fromIndex, `Undo failed before rebind: ${errorMessage(error)}`)
+  }
 
   const updated = deps.store.updateNodeUnsafe(id, {
     ...withSessionLineage(node, point.sessionId),
     restoreStack: rest
   })
   if (!updated || updated.kind !== 'terminal') {
+    // H2: killed but not rebound — respawn with the original binding.
+    trySpawn(deps, node)
     return fail(id, node.name, point.fromIndex, 'Failed to rebind the agent during undo.')
   }
 
@@ -183,6 +230,27 @@ function busyReason(deps: RestoreExecutorDeps, id: string): string | null {
     return `Agent is ${phase} — wait for the turn to finish before rewinding.`
   }
   return null
+}
+
+/** Best-effort rollback respawn — never mask the original failure. */
+function trySpawn(deps: RestoreExecutorDeps, node: TerminalNodeData): void {
+  try {
+    deps.spawnTracked(node)
+  } catch {
+    // The agent stays down; the returned failure already says the rebind failed.
+  }
+}
+
+function unlinkIfExists(file: string): void {
+  try {
+    unlinkSync(file)
+  } catch {
+    // Already gone (or never written).
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function fail(

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { CanvasNode, TerminalNodeData } from '../src/shared/model'
@@ -390,6 +390,148 @@ describe('createRestoreHandlers', () => {
       const result = await createRestoreHandlers(deps).restoreCheckpoint('t1', 1)
 
       expect(result.ok).toBe(true)
+    })
+
+    it('H1: refuses when the agent goes busy DURING checkpoint resolution (TOCTOU re-check)', async () => {
+      const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
+      const cwd = path.join(tmp, 'project')
+      const node = makeNode({ cwd, claudeSessionId: 'origin-id' })
+      writeSession(cwd, 'origin-id', sessionLines('origin-id'), tmp)
+      const { deps, calls } = makeDeps(() => node, {
+        projectsDir: tmp,
+        checkpointRefs: [{ index: 1, id: U1 }]
+      })
+      // Idle at entry, thinking by the time checkpointRefs resolved.
+      let phase = 'idle'
+      deps.phaseOf = () => phase
+      const originalRefs = deps.traces.checkpointRefs
+      deps.traces.checkpointRefs = async (id: string) => {
+        const refs = await originalRefs(id)
+        phase = 'thinking'
+        return refs
+      }
+
+      const result = await createRestoreHandlers(deps).restoreCheckpoint('t1', 1)
+
+      expect(result.ok).toBe(false)
+      expect(result.reason).toMatch(/thinking/)
+      // The kill never landed and no orphaned session copy was left behind.
+      expect(deps.ptys.killAndWait).not.toHaveBeenCalled()
+      expect(calls.updates).toHaveLength(0)
+      expect(calls.spawn).toHaveLength(0)
+    })
+  })
+
+  describe('failure paths (H2 — never leave a dead terminal or an orphaned copy)', () => {
+    it('kill failure (e.g. timeout) unlinks the truncated copy and does not rebind', async () => {
+      const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
+      const cwd = path.join(tmp, 'project')
+      const node = makeNode({ cwd, claudeSessionId: 'origin-id' })
+      writeSession(cwd, 'origin-id', sessionLines('origin-id'), tmp)
+      const { deps, calls } = makeDeps(() => node, {
+        projectsDir: tmp,
+        checkpointRefs: [{ index: 1, id: U1 }]
+      })
+      deps.ptys.killAndWait = vi.fn().mockRejectedValue(new Error('tmux session survived the deadline'))
+      const projectDir = claudeProjectDir(cwd, tmp)
+      const before = new Set(readdirSync(projectDir))
+
+      const result = await createRestoreHandlers(deps).restoreCheckpoint('t1', 1)
+
+      expect(result.ok).toBe(false)
+      expect(result.reason).toMatch(/failed before rebind/i)
+      expect(calls.updates).toHaveLength(0)
+      expect(calls.spawn).toHaveLength(0)
+      // No orphaned session copy remains.
+      expect(readdirSync(projectDir).filter((f) => !before.has(f))).toHaveLength(0)
+    })
+
+    it('rebind failure AFTER a successful kill respawns the original binding and unlinks the copy', async () => {
+      const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
+      const cwd = path.join(tmp, 'project')
+      const node = makeNode({ cwd, claudeSessionId: 'origin-id' })
+      writeSession(cwd, 'origin-id', sessionLines('origin-id'), tmp)
+      const { deps, calls } = makeDeps(() => node, {
+        projectsDir: tmp,
+        checkpointRefs: [{ index: 1, id: U1 }]
+      })
+      // Node removed from another workspace mid-restore.
+      deps.store.updateNodeUnsafe = () => undefined
+      const projectDir = claudeProjectDir(cwd, tmp)
+      const before = new Set(readdirSync(projectDir))
+
+      const result = await createRestoreHandlers(deps).restoreCheckpoint('t1', 1)
+
+      expect(result.ok).toBe(false)
+      expect(result.reason).toMatch(/Failed to rebind/i)
+      // Rollback: exactly one respawn, with the ORIGINAL session binding.
+      expect(calls.spawn).toHaveLength(1)
+      expect((calls.spawn[0] as TerminalNodeData).claudeSessionId).toBe('origin-id')
+      expect(readdirSync(projectDir).filter((f) => !before.has(f))).toHaveLength(0)
+    })
+
+    it('undo kill failure reports honestly without touching the node', async () => {
+      const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
+      const cwd = path.join(tmp, 'project')
+      writeSession(cwd, 'prev1', sessionLines('prev1'), tmp)
+      const node = makeNode({
+        cwd,
+        claudeSessionId: 'current-id',
+        restoreStack: [{ sessionId: 'prev1', at: Date.now(), fromIndex: 2 }]
+      })
+      const { deps, calls } = makeDeps(() => node, { projectsDir: tmp })
+      deps.ptys.killAndWait = vi.fn().mockRejectedValue(new Error('tmux session survived the deadline'))
+
+      const result = await createRestoreHandlers(deps).undoRestore('t1')
+
+      expect(result.ok).toBe(false)
+      expect(result.reason).toMatch(/failed before rebind/i)
+      expect(calls.updates).toHaveLength(0)
+      expect(calls.spawn).toHaveLength(0)
+    })
+  })
+
+  describe('per-terminal serialization (H3)', () => {
+    it('a second restore on the same terminal waits for the first to finish', async () => {
+      const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
+      const cwd = path.join(tmp, 'project')
+      let node = makeNode({ cwd, claudeSessionId: 'origin-id' })
+      writeSession(cwd, 'origin-id', sessionLines('origin-id'), tmp)
+      const { deps, calls } = makeDeps(() => node, {
+        projectsDir: tmp,
+        checkpointRefs: [{ index: 1, id: U1 }]
+      })
+      deps.store.updateNodeUnsafe = (_id, patch) => {
+        calls.updates.push(patch)
+        node = { ...node, ...patch } as TerminalNodeData
+        return node
+      }
+      // First restore blocks inside checkpointRefs until released.
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let refsCalls = 0
+      deps.traces.checkpointRefs = vi.fn().mockImplementation(async () => {
+        refsCalls += 1
+        if (refsCalls === 1) await gate
+        return [{ index: 1, id: U1 }]
+      })
+
+      const handlers = createRestoreHandlers(deps)
+      const first = handlers.restoreCheckpoint('t1', 1)
+      const second = handlers.restoreCheckpoint('t1', 1)
+      // Give the microtask queue a turn: the second restore must NOT have
+      // started (its checkpointRefs would have run).
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(refsCalls).toBe(1)
+
+      release()
+      const [r1] = await Promise.all([first, second])
+      expect(r1.ok).toBe(true)
+      // Both ran strictly sequentially: one kill per restore, never nested.
+      expect(refsCalls).toBe(2)
+      expect(deps.ptys.killAndWait).toHaveBeenCalledTimes(2)
     })
   })
 })
