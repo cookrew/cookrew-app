@@ -63,6 +63,25 @@ export function orphanSessionNames(
   return tmuxNames.filter((name) => COOKREW_SESSION_RE.test(name) && !owned.has(name))
 }
 
+/**
+ * Poll until a tmux session is gone; THROW when it survives the deadline
+ * (H5). Extracted from PtyManager.killAndWait with an injectable liveness
+ * check so the timeout path is unit-testable without a real tmux server.
+ */
+export async function waitForTmuxDeath(
+  name: string,
+  timeoutMs: number,
+  exists: (name: string) => boolean = tmuxSessionExists
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!exists(name)) return
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  if (!exists(name)) return // one last look at the deadline boundary
+  throw new Error(`tmux session '${name}' survived the ${timeoutMs}ms kill deadline`)
+}
+
 /** Kill a cookrew tmux session by NAME (best effort) — no live PTY needed. */
 function killTmuxSessionByName(name: string): void {
   if (!TMUX_AVAILABLE) return
@@ -518,18 +537,18 @@ export class PtyManager {
    * respawn races it: `new-session -A` attaches to the dying session and the
    * teardown lands last, leaving the agent dead. Endpoint restore rebinds a
    * session and reboots in one motion, so it must await the death first.
+   *
+   * THROWS when the session survives the deadline (H5): resolving silently
+   * let restore rebind + respawn onto a session that was never killed —
+   * `new-session -A` reattached the survivor, ignored the boot command, and
+   * left the node pointing at a session id no process was running.
    */
   async killAndWait(terminalId: string, timeoutMs = 5000): Promise<void> {
     // killDetached (not kill): restore/undo MUST end the tmux session even
     // when the terminal has no tracked PTY — `kill` alone no-ops there and
     // the respawn would reattach to the old session instead of rebooting.
     this.killDetached(terminalId)
-    const name = sessionNameFor(terminalId)
-    const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
-      if (!tmuxSessionExists(name)) return
-      await new Promise((r) => setTimeout(r, 100))
-    }
+    await waitForTmuxDeath(sessionNameFor(terminalId), timeoutMs)
   }
 
   killDetached(terminalId: string): void {
