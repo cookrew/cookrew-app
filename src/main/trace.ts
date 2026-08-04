@@ -71,6 +71,9 @@ interface CacheEntry {
 }
 
 export class TraceReader {
+  /** Keyed by FILE path (H6): the pager and the lineage/segment reader share
+   *  one incremental cache, so boundaryMarkers never re-reads a file the
+   *  pager already ingested. */
   private cache = new Map<string, CacheEntry>()
   /** Derived index memo, keyed by the blocks ARRAY IDENTITY — trace growth
    *  produces a fresh array (blocksOf re-ingests), invalidating for free. */
@@ -97,7 +100,7 @@ export class TraceReader {
     const file = claude ?? codex ?? pi
     if (!file) return []
     const kind = claude ? 'claude' : codex ? 'codex' : 'pi'
-    const blocks = await this.blocksOf(terminalId, file, kind)
+    const blocks = await this.blocksOf(file, kind)
     const memo = this.indexCache.get(terminalId)
     if (memo && memo.blocks === blocks) return memo.entries
     const entries = traceIndexOf(blocks)
@@ -121,7 +124,7 @@ export class TraceReader {
     const file = claude ?? codex ?? pi
     if (!file) return []
     const kind = claude ? 'claude' : codex ? 'codex' : 'pi'
-    const blocks = await this.blocksOf(terminalId, file, kind)
+    const blocks = await this.blocksOf(file, kind)
     return blocks.map((b) => ({ index: b.index, id: b.id, sessionId: node.claudeSessionId ?? undefined }))
   }
 
@@ -182,24 +185,25 @@ export class TraceReader {
     return markers.sort((a, b) => a.afterIndex - b.afterIndex)
   }
 
-  /** Per-file memo: lineage files are static, the live file invalidates by size. */
-  private segmentMemo = new Map<string, { bytes: number; refs: { index: number; id: string }[]; markers: TraceBoundaryMarker[] }>()
+  /** Per-file memo: refs/markers keyed by the blocks ARRAY IDENTITY — trace
+   *  growth re-ingests (fresh array) and re-derives once; steady state and
+   *  repeat calls within one poll are cache hits. */
+  private segmentMemo = new Map<string, { blocks: TraceBlock[]; refs: { index: number; id: string }[]; markers: TraceBoundaryMarker[] }>()
 
+  /**
+   * Checkpoint refs + compact markers of one session file, routed through
+   * the SAME incremental cache as the pager (H6): only the appended bytes
+   * are read on growth, never the whole file per size change — a polling
+   * checkpoint rail stays O(appended) instead of O(n\u00b2) in I/O.
+   */
   private async segmentOfFile(file: string): Promise<{ refs: { index: number; id: string }[]; markers: TraceBoundaryMarker[] }> {
-    try {
-      const info = await stat(file)
-      const memo = this.segmentMemo.get(file)
-      if (memo && memo.bytes === info.size) return { refs: memo.refs, markers: memo.markers }
-      const buf = await readWindow(file, 0, info.size)
-      const lines = buf.toString('utf8').split('\n').filter((l) => l.length > 0)
-      const refs = parseClaudeTrace(lines).map((b) => ({ index: b.index, id: b.id }))
-      const markers = compactMarkersOf(lines)
-      this.segmentMemo.set(file, { bytes: info.size, refs, markers })
-      return { refs, markers }
-    } catch (error) {
-      console.error('Lineage segment read failed:', error)
-      return { refs: [], markers: [] }
-    }
+    const blocks = await this.blocksOf(file, 'claude')
+    const memo = this.segmentMemo.get(file)
+    if (memo && memo.blocks === blocks) return { refs: memo.refs, markers: memo.markers }
+    const refs = blocks.map((b) => ({ index: b.index, id: b.id }))
+    const markers = compactMarkersOf(this.cache.get(file)?.lines ?? [])
+    this.segmentMemo.set(file, { blocks, refs, markers })
+    return { refs, markers }
   }
 
   /** Identity-keyed trace window for a terminal (see the contract note). */
@@ -212,17 +216,17 @@ export class TraceReader {
     const node = hit.node
     const claude = this.claudeFile(node)
     if (claude) {
-      const blocks = await this.blocksOf(terminalId, claude, 'claude')
+      const blocks = await this.blocksOf(claude, 'claude')
       return { ...pageTraceBlocks(blocks, request), source: 'claude' }
     }
     const codex = this.codexFile(node)
     if (codex) {
-      const blocks = await this.blocksOf(terminalId, codex, 'codex')
+      const blocks = await this.blocksOf(codex, 'codex')
       return { ...pageTraceBlocks(blocks, request), source: 'codex' }
     }
     const pi = this.piFile(node)
     if (pi) {
-      const blocks = await this.blocksOf(terminalId, pi, 'pi')
+      const blocks = await this.blocksOf(pi, 'pi')
       return { ...pageTraceBlocks(blocks, request), source: 'pi' }
     }
     return { blocks: [], total: 0, source: null }
@@ -269,22 +273,21 @@ export class TraceReader {
   }
 
   private async blocksOf(
-    terminalId: string,
     file: string,
     kind: 'claude' | 'codex' | 'pi'
   ): Promise<TraceBlock[]> {
     try {
       const info = await stat(file)
-      const cached = this.cache.get(terminalId)
-      if (cached && cached.file === file && info.size === cached.bytesRead) {
+      const cached = this.cache.get(file)
+      if (cached && info.size === cached.bytesRead) {
         return cached.blocks // unchanged: zero I/O
       }
-      if (cached && cached.file === file && info.size > cached.bytesRead) {
+      if (cached && info.size > cached.bytesRead) {
         // Append-only growth: read ONLY the new bytes.
         const appended = await readWindow(file, cached.bytesRead, info.size - cached.bytesRead)
-        return this.ingest(terminalId, file, kind, cached, appended, info.size)
+        return this.ingest(file, kind, cached, appended, info.size)
       }
-      // First read, file switch, or a shrink (/rewind truncation): reload.
+      // First read or a shrink (/rewind truncation): reload.
       const whole = await readWindow(file, 0, info.size)
       const fresh: CacheEntry = {
         file,
@@ -293,7 +296,7 @@ export class TraceReader {
         lines: [],
         blocks: []
       }
-      return this.ingest(terminalId, file, kind, fresh, whole, info.size)
+      return this.ingest(file, kind, fresh, whole, info.size)
     } catch (error) {
       console.error('Trace read failed:', error)
       return []
@@ -302,7 +305,6 @@ export class TraceReader {
 
   /** Fold new bytes into the cache: complete lines parse, the tail waits. */
   private ingest(
-    terminalId: string,
     file: string,
     kind: 'claude' | 'codex' | 'pi',
     entry: CacheEntry,
@@ -324,7 +326,7 @@ export class TraceReader {
       : kind === 'codex'
         ? parseCodexTrace(lines)
         : parsePiTrace(lines)
-    this.cache.set(terminalId, {
+    this.cache.set(file, {
       file,
       bytesRead,
       remainder: Buffer.from(remainder),
