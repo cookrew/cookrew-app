@@ -19,7 +19,7 @@ import type {
   RecoverResult,
   RestoreResult,
 } from "../shared/model";
-import { readJson, respondJson, startSse } from "./mobile-http";
+import { readJson, respondJson, startSse, pairingAuthorized } from "./mobile-http";
 
 /**
  * Workspace operations shared with the renderer IPC handlers — the mobile
@@ -91,6 +91,12 @@ export interface MobileApiDeps {
   presets: readonly { name: string; command: string }[];
   /** Persist a phone-uploaded attachment; returns its absolute path. */
   saveAttachment: (name: string, data: Buffer) => string;
+  /**
+   * Pairing token required on every MUTATING route (C1) as
+   * `Authorization: Bearer <token>` (or `?token=`). Undefined =
+   * unauthenticated (loopback-only embedders, tests).
+   */
+  pairingToken?: string;
 }
 
 /** Base64 inflates ~4/3, so this admits attachments up to the 20MB save cap. */
@@ -135,6 +141,19 @@ export async function handleMobileApi(
   const { store, ptys, turns, ops, presets } = deps;
   const method = request.method ?? "GET";
   const p = url.pathname;
+
+  // C1 gate: every state-changing route requires the pairing token. This
+  // choke point runs BEFORE any route match (and before the mobile server's
+  // own POST routes, which delegate here first), so restore/undo/recover,
+  // terminal input, workspace edits, and uploads are all covered. Read-only
+  // GETs stay open: EventSource cannot set headers, and with the C2 wildcard
+  // gone only same-origin pages can read them cross-site anyway.
+  if (method !== "GET" && deps.pairingToken && !pairingAuthorized(request, url, deps.pairingToken)) {
+    respondJson(response, 401, {
+      error: "Unauthorized — open the pairing URL shown on the desktop (it carries ?token=).",
+    });
+    return true;
+  }
 
   if (method === "GET" && p === "/api/workspace") {
     // Embed git per terminal (node.git) and per workspace dir (dirsGit) so
