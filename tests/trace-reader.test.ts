@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { WorkspaceStore } from '../src/main/store'
 import { TraceReader } from '../src/main/trace'
 import { CODEX_SPAWN_WINDOW_MS, resolveCodexRollout } from '../src/main/codex-bind'
+import { piNodeSessionDir } from '../src/main/pi-bind'
 import { claudeProjectSlug } from '../src/shared/claude-fork'
 import type { TerminalNodeData } from '../src/shared/model'
 
@@ -135,6 +136,35 @@ describe('TraceReader (paged trace API over agent files)', () => {
     expect(page.blocks[0]).toMatchObject({ id: 'p1', prompt: 'hello codex' })
   })
 
+  it('serves the exact cwd-scoped Pi session bound to the node', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'trace-pi-'))
+    const cwd = path.join(root, 'work', 'repo')
+    const sessionsRoot = path.join(root, 'pi-sessions')
+    const id = 'pi-session-1'
+    mkdirSync(cwd, { recursive: true })
+    const nodeId = 'pi-reader-node'
+    const dir = piNodeSessionDir(nodeId, { rootDir: sessionsRoot })
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      path.join(dir, `2026-08-03T00-00-00-000Z_${id}.jsonl`),
+      [
+        { type: 'session', version: 3, id, cwd },
+        { type: 'message', id: 'u1', parentId: null, message: { role: 'user', content: 'hello pi', timestamp: T0 } },
+        { type: 'message', id: 'a1', parentId: 'u1', message: { role: 'assistant', content: [{ type: 'text', text: 'hello back' }], timestamp: T0 + 1 } }
+      ].map((entry) => JSON.stringify(entry)).join('\n') + '\n'
+    )
+    const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-store-')))
+    const node = store.addNode(
+      terminal({ id: nodeId, preset: 'Pi', command: 'pi', cwd, claudeSessionId: null, piSessionId: id })
+    ) as TerminalNodeData
+
+    const page = await new TraceReader(store, { piSessionsRoot: sessionsRoot }).page(node.id, {})
+    expect(page.source).toBe('pi')
+    expect(page.blocks).toEqual([
+      expect.objectContaining({ id: 'u1', prompt: 'hello pi', reply: 'hello back' })
+    ])
+  })
+
   it('returns an empty page for unbound/sessionless terminals', async () => {
     const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-store-')))
     const node = store.addNode(terminal({ command: 'claude', claudeSessionId: null }))
@@ -145,6 +175,29 @@ describe('TraceReader (paged trace API over agent files)', () => {
 
 
 describe('TraceReader security + disambiguation (integration takeover)', () => {
+  it('refuses a Pi file whose header cwd does not match the node', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'trace-pi-sec-'))
+    const cwd = path.join(root, 'work', 'repo')
+    const sessionsRoot = path.join(root, 'pi-sessions')
+    const id = 'pi-session-safe'
+    mkdirSync(cwd, { recursive: true })
+    const nodeId = 'pi-security-node'
+    const dir = piNodeSessionDir(nodeId, { rootDir: sessionsRoot })
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      path.join(dir, `2026_${id}.jsonl`),
+      `${JSON.stringify({ type: 'session', version: 3, id, cwd: '/other/project' })}\n`
+    )
+    const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-pi-sec-store-')))
+    const node = store.addNode(
+      terminal({ id: nodeId, preset: 'Pi', command: 'pi', cwd, claudeSessionId: null, piSessionId: id })
+    ) as TerminalNodeData
+
+    expect(await new TraceReader(store, { piSessionsRoot: sessionsRoot }).page(node.id, {})).toEqual({
+      blocks: [], total: 0, source: null
+    })
+  })
+
   it('rejects a planted codexSessionRef outside the sessions tree (never read, no fallback)', async () => {
     const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-sec-')))
     const base = mkdtempSync(path.join(tmpdir(), 'trace-sec-codex-'))
@@ -239,5 +292,72 @@ describe('TraceReader.index (fan listing — the missing producer)', () => {
     const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-idx-')))
     const node = store.addNode(terminal({ claudeSessionId: null }))
     expect(await new TraceReader(store, {}).index(node.id)).toEqual([])
+  })
+})
+
+describe('TraceReader checkpointRefs ∪ boundaryMarkers (lineage union)', () => {
+  const prompt = (uuid: string, text: string, ms: number, sid: string): string =>
+    JSON.stringify({ type: 'user', uuid, sessionId: sid, timestamp: iso(ms), message: { role: 'user', content: text } })
+  const reply = (ms: number, sid: string): string =>
+    JSON.stringify({ type: 'assistant', sessionId: sid, timestamp: iso(ms), message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } })
+
+  function writeClaude(projectsDir: string, cwd: string, sid: string, prompts: string[], withCompact = false): void {
+    const dir = path.join(projectsDir, claudeProjectSlug(cwd))
+    mkdirSync(dir, { recursive: true })
+    const lines: string[] = []
+    prompts.forEach((p, i) => {
+      if (withCompact && i === 1) {
+        lines.push(JSON.stringify({
+          type: 'system', subtype: 'compact_boundary',
+          compactMetadata: { trigger: 'auto', preTokens: 50000, postTokens: 2000 }
+        }))
+      }
+      lines.push(prompt(`${sid}-u${i + 1}`, p, T0 + i * 1000, sid), reply(T0 + i * 1000 + 500, sid))
+    })
+    writeFileSync(path.join(dir, `${sid}.jsonl`), lines.join('\n') + '\n')
+  }
+
+  it('checkpointRefs is current-file-only (indices never drift from the rail)', async () => {
+    const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-store-')))
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'trace-proj-'))
+    writeClaude(projectsDir, '/work/repo', 'old-sess', ['a1', 'a2', 'a3'])
+    writeClaude(projectsDir, '/work/repo', 'new-sess', ['b1', 'b2'])
+    const node = store.addNode(
+      terminal({ claudeSessionId: 'new-sess', sessionLineage: ['old-sess'] })
+    ) as TerminalNodeData
+
+    const refs = await new TraceReader(store, { projectsDir }).checkpointRefs(node.id)
+    expect(refs.map((r) => r.index)).toEqual([1, 2]) // only new-sess
+    expect(refs.map((r) => r.sessionId)).toEqual(['new-sess', 'new-sess'])
+    expect(refs[0].id).toBe('new-sess-u1')
+  })
+
+  it('emits a ⇥ clear marker at the root of a post-/clear session', async () => {
+    const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-store-')))
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'trace-proj-'))
+    writeClaude(projectsDir, '/work/repo', 'old-sess', ['a1', 'a2', 'a3'], true)
+    writeClaude(projectsDir, '/work/repo', 'new-sess', ['b1', 'b2'])
+    const node = store.addNode(
+      terminal({ claudeSessionId: 'new-sess', sessionLineage: ['old-sess'] })
+    ) as TerminalNodeData
+
+    const markers = await new TraceReader(store, { projectsDir }).boundaryMarkers(node.id)
+    // boundaryMarkers is current-file-only; the clear marker sits at the root
+    // of the fresh session file created by /clear.
+    expect(markers).toEqual([
+      { kind: 'clear', afterIndex: 0, previousSessionId: 'old-sess' }
+    ])
+  })
+
+  it('a node without lineage behaves exactly as before (single segment)', async () => {
+    const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-store-')))
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'trace-proj-'))
+    writeClaude(projectsDir, '/work/repo', 'solo', ['a1', 'a2'])
+    const node = store.addNode(terminal({ claudeSessionId: 'solo' })) as TerminalNodeData
+
+    const refs = await new TraceReader(store, { projectsDir }).checkpointRefs(node.id)
+    expect(refs.map((r) => r.index)).toEqual([1, 2])
+    expect(refs.map((r) => r.sessionId)).toEqual(['solo', 'solo'])
+    expect(await new TraceReader(store, { projectsDir }).boundaryMarkers(node.id)).toEqual([])
   })
 })

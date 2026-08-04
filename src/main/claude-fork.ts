@@ -42,7 +42,7 @@ export function realCwd(cwd: string): string {
   }
 }
 
-function claudeProjectDir(cwd: string, projectsDir?: string): string {
+export function claudeProjectDir(cwd: string, projectsDir?: string): string {
   const base = projectsDir ?? path.join(homedir(), '.claude', 'projects')
   return path.join(base, claudeProjectSlug(realCwd(cwd)))
 }

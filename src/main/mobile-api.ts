@@ -17,6 +17,7 @@ import type {
   WorkspaceMeta,
   WorkspaceState,
   RecoverResult,
+  RestoreResult,
 } from "../shared/model";
 import { readJson, respondJson, startSse } from "./mobile-http";
 
@@ -81,6 +82,9 @@ export interface MobileApiDeps {
   agents: AgentRegistry;
   /** Recover an inactive teammate as it was (agent-recover feature). */
   recoverAgent: (id: string) => RecoverResult;
+  /** Endpoint restore: rewind an agent to a checkpoint (+ undo). */
+  restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>;
+  undoRestore: (id: string) => Promise<RestoreResult>;
   /** Trace-sourced context reader (identity-keyed windows over agent files). */
   traces: TraceReader;
   ops: MobileOps;
@@ -382,6 +386,13 @@ export async function handleMobileApi(
     return true;
   }
 
+  // Boundary markers for the rail: ◆ compact (in-file) + ⇥ clear (lineage).
+  const traceMarkersMatch = p.match(/^\/api\/terminal\/([^/]+)\/trace\/markers$/);
+  if (traceMarkersMatch && method === "GET") {
+    respondJson(response, 200, await deps.traces.boundaryMarkers(traceMarkersMatch[1]));
+    return true;
+  }
+
   const traceMatch = p.match(/^\/api\/terminal\/([^/]+)\/trace$/);
   if (traceMatch && method === "GET") {
     const num = (key: string): number | undefined => {
@@ -555,6 +566,35 @@ export async function handleMobileApi(
   }
   if (method === "GET" && p === "/api/agents") {
     respondJson(response, 200, { agents: deps.agents.list() });
+    return true;
+  }
+  // ENDPOINT RESTORE: rewind an agent in place to any checkpoint (+ undo).
+  const restoreMatch = p.match(/^\/api\/agents\/([^/]+)\/restore$/);
+  if (restoreMatch && method === "POST") {
+    const body = await readJson<{ checkpointIndex?: number }>(request);
+    const index = Number(body.checkpointIndex);
+    if (!Number.isInteger(index) || index < 1) {
+      respondJson(response, 400, { error: "checkpointIndex must be a positive integer" });
+      return true;
+    }
+    try {
+      respondJson(response, 200, await deps.restoreCheckpoint(restoreMatch[1], index));
+    } catch (error) {
+      respondJson(response, 400, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return true;
+  }
+  const undoRestoreMatch = p.match(/^\/api\/agents\/([^/]+)\/restore\/undo$/);
+  if (undoRestoreMatch && method === "POST") {
+    try {
+      respondJson(response, 200, await deps.undoRestore(undoRestoreMatch[1]));
+    } catch (error) {
+      respondJson(response, 400, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return true;
   }
   const recoverMatch = p.match(/^\/api\/agents\/([^/]+)\/recover$/);

@@ -160,8 +160,12 @@ export function createRemoteApi(): CookrewApi {
       return result.agents
     },
     recoverAgent: (id) => req(`/api/agents/${id}/recover`, 'POST'),
+    restoreCheckpoint: (id, checkpointIndex) =>
+      req(`/api/agents/${id}/restore`, 'POST', { checkpointIndex }),
+    undoRestore: (id) => req(`/api/agents/${id}/restore/undo`, 'POST'),
     listTurns: (terminalId) => req<TurnRecord[]>(`/api/terminal/${terminalId}/turns`),
     listTraceIndex: (terminalId) => req(`/api/terminal/${terminalId}/trace/index`),
+    listTraceMarkers: (terminalId) => req(`/api/terminal/${terminalId}/trace/markers`),
     listTrace: async (terminalId, request) => {
       const params = new URLSearchParams()
       const r = (request ?? {}) as Record<string, unknown>

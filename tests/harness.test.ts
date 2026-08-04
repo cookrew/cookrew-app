@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { harnessFor } from '../src/main/harness'
+import { piNodeSessionDir } from '../src/main/pi-bind'
 
 describe('harnessFor — multi-harness resume registry', () => {
   it('identifies each harness and its session field', () => {
     expect(harnessFor('claude --permission-mode bypassPermissions')?.id).toBe('claude')
     expect(harnessFor('codex')?.id).toBe('codex')
     expect(harnessFor('opencode')?.id).toBe('opencode')
+    expect(harnessFor('pi')?.id).toBe('pi')
     expect(harnessFor('')).toBeNull()
     expect(harnessFor('bash')).toBeNull()
     expect(harnessFor('claude')?.sessionField).toBe('claudeSessionId')
     expect(harnessFor('codex')?.sessionField).toBe('codexSessionRef')
     expect(harnessFor('opencode')?.sessionField).toBe('opencodeSessionId')
+    expect(harnessFor('pi')?.sessionField).toBe('piSessionId')
   })
 
   it('builds a full-session resume command per harness', () => {
@@ -33,6 +36,13 @@ describe('harnessFor — multi-harness resume registry', () => {
     expect(harnessFor('opencode')!.resumeCommand('opencode --session old', 'oc-2')).toBe(
       'opencode --session oc-2'
     )
+    const piDir = piNodeSessionDir('pi-node')
+    expect(harnessFor('pi')!.resumeCommand('pi --model sonnet', '019f-safe', { terminalId: 'pi-node' })).toBe(
+      `pi --model sonnet --session 019f-safe --session-dir ${piDir}`
+    )
+    expect(harnessFor('pi')!.resumeCommand('pi --session old -c', '019f-safe', { terminalId: 'pi-node' })).toBe(
+      `pi --session 019f-safe --session-dir ${piDir}`
+    )
   })
 
   it('resolves the codex resume key from a rollout path, else a bare uuid', () => {
@@ -54,5 +64,13 @@ describe('harnessFor — multi-harness resume registry', () => {
     expect(oc.resumeKey('$(whoami)')).toBeNull()
     expect(oc.resumeKey('ses_a b')).toBeNull()
     expect(oc.resumeKey('')).toBeNull()
+  })
+
+  it('rejects a hostile Pi session ref before it reaches the shell', () => {
+    const pi = harnessFor('pi')!
+    expect(pi.resumeKey('019f88f9-safe_ID.1')).toBe('019f88f9-safe_ID.1')
+    expect(pi.resumeKey('x; rm -rf /')).toBeNull()
+    expect(pi.resumeKey('$(whoami)')).toBeNull()
+    expect(pi.resumeKey('x y')).toBeNull()
   })
 })

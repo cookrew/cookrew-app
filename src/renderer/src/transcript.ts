@@ -8,7 +8,7 @@ export type { TraceBlock } from '../../shared/trace-blocks'
 /**
  * Trace adapter (trace-sourced-context-final, integration round 2): the
  * checkpoint context is traced DIRECTLY from the agent's own session file
- * (Claude jsonl / Codex rollout) via the listTrace API. Blocks are
+ * (Claude/Pi jsonl or Codex rollout) via the listTrace API. Blocks are
  * IDENTITY-keyed by TraceBlock.index — 1-based, contiguous from the parsers,
  * so identity doubles as the layout ordinal. Array positions appear nowhere.
  */
@@ -16,7 +16,7 @@ export type { TraceBlock } from '../../shared/trace-blocks'
 export interface TracePage {
   blocks: TraceBlock[]
   total: number
-  source: 'claude' | 'codex' | null
+  source: 'claude' | 'codex' | 'pi' | null
 }
 
 export interface TraceAnchor {
@@ -140,6 +140,33 @@ export async function fetchTraceIndex(terminalId: string): Promise<TraceIndexEnt
   const fn = (cookrew() as unknown as TraceIndexBridge).listTraceIndex
   if (!fn) {
     warnAbsentBridge('listTraceIndex')
+    return []
+  }
+  return fn(terminalId)
+}
+
+/** Boundary marker as the rail renders it (mirrors TraceBoundaryMarker). */
+export interface TraceMarkerRow {
+  kind: 'compact' | 'clear' | 'rewind'
+  afterIndex: number
+  preTokens?: number
+  postTokens?: number
+  previousSessionId?: string
+  toIndex?: number
+}
+
+interface TraceMarkersBridge {
+  listTraceMarkers?: (terminalId: string) => Promise<TraceMarkerRow[]>
+}
+
+/**
+ * Boundary markers for the rail (◆ compact / ⇥ clear), empty when the bridge
+ * predates the endpoint — same absent-bridge discipline as fetchTraceIndex.
+ */
+export async function fetchTraceMarkers(terminalId: string): Promise<TraceMarkerRow[]> {
+  const fn = (cookrew() as unknown as TraceMarkersBridge).listTraceMarkers
+  if (!fn) {
+    warnAbsentBridge('listTraceMarkers')
     return []
   }
   return fn(terminalId)

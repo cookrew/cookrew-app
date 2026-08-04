@@ -17,6 +17,7 @@ import type { SessionField } from './harness'
 import { harnessFor } from './harness'
 import { resolveExistingClaudeSession, type ResolveSessionOptions } from './claude-fork'
 import { opencodeSessionFileExists } from './opencode-bind'
+import { piNodeSessionDir, piSessionFile } from './pi-bind'
 
 /** Injectable side-effects so the gate is testable without real files. */
 export interface ExactGateDeps {
@@ -26,6 +27,8 @@ export interface ExactGateDeps {
   fileExists?: (path: string) => boolean
   /** OpenCode session-file existence check (defaults to the real scan). */
   opencodeExists?: (sessionId: string) => boolean
+  /** Pi node-directory + cwd-scoped session existence check. */
+  piExists?: (nodeId: string, cwd: string, sessionId: string) => boolean
   /** Claude session resolver (defaults to the real, file-backed resolver). */
   claudeResolver?: (options: ResolveSessionOptions) => string | null
 }
@@ -35,6 +38,7 @@ export interface ExactGateDeps {
  *  - claude: an existing session id / turn-history match — NEVER a fresh mint.
  *  - codex: a bound rollout whose file still exists.
  *  - opencode: a shape-valid ses_ id whose session file still exists (S1).
+ *  - pi: a shape-valid id whose cwd-scoped JSONL file still exists.
  *  - plain shells / unknown harness: always true (nothing to restore).
  */
 export function canRestoreExact(node: TerminalNodeData, deps: ExactGateDeps): boolean {
@@ -55,6 +59,12 @@ export function canRestoreExact(node: TerminalNodeData, deps: ExactGateDeps): bo
   }
   if (harness.id === 'codex') {
     return typeof node.codexSessionRef === 'string' && fileExists(node.codexSessionRef)
+  }
+  if (harness.id === 'pi') {
+    const key = harness.resumeKey(node.piSessionId ?? '')
+    const piExists = deps.piExists ?? ((nodeId, cwd, id) =>
+      piSessionFile(cwd, id, { sessionsDir: piNodeSessionDir(nodeId) }) !== null)
+    return key !== null && piExists(node.id, node.cwd, key)
   }
   // opencode: format-valid ses_ id AND its session file still on disk. A
   // deleted session must NOT pass the gate (else recover fresh-boots — the

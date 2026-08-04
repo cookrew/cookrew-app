@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QA Report — Cookrew Phone Companion</title>
+<style>
+:root {
+  --bg: #f4f6f3;
+  --panel: #fdfdfb;
+  --ink: #1d231e;
+  --muted: #5c675e;
+  --line: #d9e0d8;
+  --accent: #1f8a4c;
+  --accent-ink: #14663a;
+  --pass-bg: #e3f2e7; --pass-ink: #17663a;
+  --fail-bg: #fbe7e2; --fail-ink: #a03325;
+  --part-bg: #f4ecdc; --part-ink: #7a5d1c;
+  --high: #c04a37;
+  --med: #b0862b;
+  --code-bg: #edf1ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #10140f;
+    --panel: #171c16;
+    --ink: #dde5da;
+    --muted: #8b978a;
+    --line: #2a322a;
+    --accent: #4cc07a;
+    --accent-ink: #6fd695;
+    --pass-bg: #16301f; --pass-ink: #7fd8a1;
+    --fail-bg: #3a1d17; --fail-ink: #f0937f;
+    --part-bg: #33290f; --part-ink: #d9b45e;
+    --high: #e06a52;
+    --med: #d0a145;
+    --code-bg: #1e241d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10140f;
+  --panel: #171c16;
+  --ink: #dde5da;
+  --muted: #8b978a;
+  --line: #2a322a;
+  --accent: #4cc07a;
+  --accent-ink: #6fd695;
+  --pass-bg: #16301f; --pass-ink: #7fd8a1;
+  --fail-bg: #3a1d17; --fail-ink: #f0937f;
+  --part-bg: #33290f; --part-ink: #d9b45e;
+  --high: #e06a52;
+  --med: #d0a145;
+  --code-bg: #1e241d;
+}
+:root[data-theme="light"] {
+  --bg: #f4f6f3;
+  --panel: #fdfdfb;
+  --ink: #1d231e;
+  --muted: #5c675e;
+  --line: #d9e0d8;
+  --accent: #1f8a4c;
+  --accent-ink: #14663a;
+  --pass-bg: #e3f2e7; --pass-ink: #17663a;
+  --fail-bg: #fbe7e2; --fail-ink: #a03325;
+  --part-bg: #f4ecdc; --part-ink: #7a5d1c;
+  --high: #c04a37;
+  --med: #b0862b;
+  --code-bg: #edf1ec;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.wrap { max-width: 880px; margin: 0 auto; padding: 40px 20px 64px; }
+header.rpt {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  background: var(--panel);
+  padding: 22px 24px;
+  margin-bottom: 28px;
+}
+.eyebrow {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--accent-ink);
+  margin: 0 0 6px;
+}
+h1 {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 24px; line-height: 1.25; margin: 0 0 10px; text-wrap: balance;
+}
+.meta { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+.meta code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line);
+}
+.chip.high { background: var(--fail-bg); color: var(--fail-ink); border-color: transparent; }
+.chip.med { background: var(--part-bg); color: var(--part-ink); border-color: transparent; }
+.chip.ok { background: var(--pass-bg); color: var(--pass-ink); border-color: transparent; }
+.callout {
+  border: 1px solid var(--line); background: var(--panel);
+  padding: 12px 16px; margin: 0 0 28px; font-size: 13.5px; color: var(--muted);
+}
+h2 {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 15px; letter-spacing: .06em; text-transform: uppercase;
+  margin: 36px 0 14px; color: var(--accent-ink);
+}
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); background: var(--panel); }
+table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 13.5px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th {
+  font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+}
+tr:last-child td { border-bottom: none; }
+.v { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; padding: 2px 8px; border-radius: 3px; white-space: nowrap; }
+.v.pass { background: var(--pass-bg); color: var(--pass-ink); }
+.v.fail { background: var(--fail-bg); color: var(--fail-ink); }
+.v.part { background: var(--part-bg); color: var(--part-ink); }
+.v.na { background: var(--code-bg); color: var(--muted); }
+.defect {
+  border: 1px solid var(--line); background: var(--panel);
+  margin-bottom: 16px; padding: 16px 20px 14px;
+  border-left-width: 4px;
+}
+.defect.high { border-left-color: var(--high); }
+.defect.med { border-left-color: var(--med); }
+.defect h3 { margin: 0 0 8px; font-size: 15.5px; line-height: 1.35; }
+.sev {
+  font-family: ui-monospace, Menlo, monospace; font-size: 10.5px;
+  letter-spacing: .1em; padding: 2px 7px; border-radius: 3px; margin-right: 8px;
+  position: relative; top: -1px;
+}
+.sev.high { background: var(--fail-bg); color: var(--fail-ink); }
+.sev.med { background: var(--part-bg); color: var(--part-ink); }
+.defect p { margin: 6px 0; font-size: 13.5px; }
+.defect .where { color: var(--muted); font-size: 12.5px; }
+.defect code, li code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+ul.obs { padding-left: 20px; margin: 0; }
+ul.obs li { margin-bottom: 8px; font-size: 13.5px; }
+footer {
+  margin-top: 44px; padding-top: 16px; border-top: 1px solid var(--line);
+  color: var(--muted); font-size: 12.5px;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="rpt">
+  <p class="eyebrow">Cookrew · QA pass</p>
+  <h1>Phone Companion QA Report</h1>
+  <p class="meta">2026-07-19 · Tester: <strong>Magpie</strong> (QA agent, browser-driven) · Target: <code>http://192.168.2.13:8639</code> · Views: "Mobile View" + "Desktop View" canvas browsers</p>
+  <div class="chips">
+    <span class="chip high">3 HIGH defects</span>
+    <span class="chip med">2 MEDIUM (CLI tooling)</span>
+    <span class="chip ok">6 flows PASS</span>
+    <span class="chip">4 flows FAIL / partial</span>
+  </div>
+</header>
+
+<div class="callout">
+  <strong>Caveat:</strong> both browser views rendered at an identical 1100×711 viewport — the CLI has no
+  viewport resize and the companion serves the same full canvas app to both, so narrow-vs-wide layout
+  differences could not be exercised. All findings reproduced identically in both views unless stated.
+</div>
+
+<h2>Pass / fail by flow</h2>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Flow</th><th>Verdict</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>Canvas zoom (buttons, wheel)</td><td><span class="v pass">PASS</span></td><td>Transform verified changing on every control</td></tr>
+    <tr><td>Canvas pan (drag)</td><td><span class="v na">NOT TESTABLE</span></td><td>No drag primitive in CLI; synthetic d3-zoom drags don't register</td></tr>
+    <tr><td>Toolbar: SELECT</td><td><span class="v pass">PASS</span></td><td>Active state + hint clearing correct</td></tr>
+    <tr><td>Toolbar: TERMINAL mode</td><td><span class="v pass">PASS</span></td><td>Hint + preset chips shown; placement not exercised (spawns a live agent)</td></tr>
+    <tr><td>Toolbar: NOTE placement</td><td><span class="v fail">FAIL</span></td><td>Defect 1 — silent failure, tool stuck</td></tr>
+    <tr><td>Toolbar: BROWSER placement</td><td><span class="v fail">FAIL</span></td><td>Defect 1 — same code path</td></tr>
+    <tr><td>Toolbar: CONNECT</td><td><span class="v pass">PASS</span></td><td>Hint progresses correctly; aborted before wiring</td></tr>
+    <tr><td>Open terminal card (zoom overlay)</td><td><span class="v fail">FAIL</span></td><td>Opens, but the wrong agent's terminal becomes interactive — Defect 2</td></tr>
+    <tr><td>Turn history panel (⑂ FORK)</td><td><span class="v fail">FAIL</span></td><td>Stuck on "Loading turns…" forever — Defect 3</td></tr>
+    <tr><td>Card turn pager (◀ TURN N ▶)</td><td><span class="v part">PARTIAL</span></td><td>Renders + clickable; ◀ enabled-but-noop on a 1-turn card</td></tr>
+    <tr><td>Attachment button (📎)</td><td><span class="v pass">PASS</span></td><td>Button + hidden multi-file input wired; native pick not exercisable headlessly</td></tr>
+    <tr><td>Composer input</td><td><span class="v pass">PASS</span></td><td>React-controlled input accepts/clears text when driven properly</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Defects</h2>
+
+<div class="defect high">
+  <h3><span class="sev high">HIGH</span>Note/Browser placement silently broken on the companion</h3>
+  <p><code>crypto.randomUUID()</code> only exists in secure contexts; the companion is served over plain HTTP
+  on a LAN IP, so it is undefined. <code>App.tsx:258</code> (note) and <code>App.tsx:271</code> (browser) call it
+  to mint the node id → unhandled rejection, no node created, no user feedback, and the tool stays stuck in
+  NOTE/BROWSER mode because <code>setTool('select')</code> sits after the awaited <code>addNode</code>.</p>
+  <p class="where">Repro: open the companion, tap ✎ NOTE, tap the canvas. Terminal placement uses
+  server-side creation and is likely unaffected.</p>
+</div>
+
+<div class="defect high">
+  <h3><span class="sev high">HIGH</span>Zoomed card stacks multiple fullscreen overlays — the wrong agent's terminal is interactive</h3>
+  <p><code>zoom-lod.ts</code> activates a card's full overlay when it covers ≥80% of the stage in
+  <em>either</em> dimension, so partially visible neighbors qualify too. In remote mode
+  (<code>zoom-lod.ts:94-98</code>) every active rect is forced to the whole stage → all active overlays render
+  fullscreen, stacked; the interactive one is whichever is last in DOM order, not the card the user clicked.</p>
+  <p class="where">Repro: click the "Magpie" card → 3 <code>.lod-overlay</code> elements mount at z-index 30;
+  the composer resolves to a different agent's overlay. Anything typed goes to the wrong agent's terminal.</p>
+</div>
+
+<div class="defect high">
+  <h3><span class="sev high">HIGH</span>All API calls hang while a card is zoomed open</h3>
+  <p>With 3 overlays mounted, their streaming PTY-attach connections plus the state stream exhaust the
+  browser's six-connections-per-origin HTTP/1.1 pool, so every subsequent fetch queues indefinitely.
+  <code>TurnHistoryPanel</code>'s <code>listTurns</code> never resolves → "Loading turns…" forever.</p>
+  <p class="where">Evidence: in-page <code>fetch('/api/terminal/test-id/turns')</code> pending &gt;6s while
+  zoomed; resolved instantly once overlays unmounted. Same endpoint via curl: 200 in 37&nbsp;ms. Consequence
+  of Defect 2, but the connection budget is worth fixing independently.</p>
+</div>
+
+<div class="defect med">
+  <h3><span class="sev med">MEDIUM</span>CLI: <code>cookrew browser screenshot</code> advertised but not implemented</h3>
+  <p><code>cookrew help</code> lists <code>screenshot</code>; invoking it returns
+  <code>Unknown browser command 'screenshot'</code>. Blocked visual-evidence capture for this whole pass.</p>
+</div>
+
+<div class="defect med">
+  <h3><span class="sev med">MEDIUM</span>CLI: <code>cookrew browser fill</code> silently fails on React-controlled inputs</h3>
+  <p><code>fill</code> reported "Filled" but the value stayed empty (React resets a bare <code>.value</code>
+  assignment). Setting the value via the native <code>HTMLInputElement</code> value setter and dispatching an
+  <code>input</code> event works — the CLI should do that.</p>
+</div>
+
+<h2>Lower-confidence observations</h2>
+<ul class="obs">
+  <li>◀ pager on a 1-turn card is enabled but does nothing when clicked (minor polish, or an intended LIVE→turn-1 toggle whose rendering happened to be identical).</li>
+  <li>Both companion pages hard-reloaded at least once mid-session (injected globals wiped, canvas reset). Cause undetermined — possibly desktop-side webview lifecycle.</li>
+  <li>Placement failures give zero user feedback — worth a toast/error UI of its own beyond Defect 1.</li>
+  <li>The header "MOBILE" chip looks like a tab but is a static badge (<code>Header.tsx:26</code>) — invites dead taps on a phone.</li>
+  <li>CLI <code>evaluate</code> runs scripts in a shared global scope (repeat <code>const</code> names throw) and errors on non-string returns — rough edges for tooling users.</li>
+  <li>Node close ✕ buttons render at ~2×3&nbsp;px at overview zoom — unusable tap targets on a real phone.</li>
+</ul>
+
+<h2>Coverage gaps</h2>
+<ul class="obs">
+  <li>True phone-width layout: untestable — both views 1100×711, no viewport resize in the CLI.</li>
+  <li>Terminal placement, actual fork, actual file attach, connect-cable completion: intentionally not executed (would mutate the live workspace / spawn processes / open native dialogs).</li>
+  <li>Canvas drag-pan and node drag: no drag primitive in the CLI.</li>
+</ul>
+
+<footer>
+  Generated by Magpie (QA agent) on the Cookrew canvas, 2026-07-19 · Source: browser-driven pass over
+  the phone companion at 192.168.2.13:8639 · Repo: anvztor/cookrew-dev · Full markdown report in the
+  session scratchpad; defects 1–3 forwarded to Tinker.
+</footer>
+
+</div>
+</body>
+</html>

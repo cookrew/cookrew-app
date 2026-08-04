@@ -115,6 +115,13 @@ export interface CheckpointStep {
  */
 export class CheckpointAssigner {
   private count = 0
+
+  /** Checkpoints assigned so far — lets boundary scanners (compact markers)
+   * position themselves relative to the checkpoint stream without their own
+   * counter. */
+  get assigned(): number {
+    return this.count
+  }
   /** parentUuid of the current checkpoint's FIRST sibling (collapse anchor). */
   private currentParent: string | undefined
   /** uuid the current checkpoint is bound to (its continuation sibling). */

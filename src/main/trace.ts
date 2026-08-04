@@ -10,25 +10,30 @@ import path from 'node:path'
 import type { TerminalNodeData } from '../shared/model'
 import {
   TraceBlock,
+  TraceBoundaryMarker,
   TraceIndexEntry,
   TracePage,
   TracePageRequest,
+  compactMarkersOf,
   pageTraceBlocks,
   parseClaudeTrace,
   parseCodexTrace,
+  parsePiTrace,
   traceIndexOf
 } from '../shared/trace-blocks'
 import { claudeSessionFile } from './claude-fork'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { defaultCodexSessionsDir, isCodexCommand } from './codex-bind'
+import { isPiCommand, piNodeSessionDir, piSessionFile } from './pi-bind'
 import type { WorkspaceStore } from './store'
 
-export type TraceSource = 'claude' | 'codex' | null
+export type TraceSource = 'claude' | 'codex' | 'pi' | null
 
 export interface TraceReaderOptions {
   /** Overrides for tests. */
   projectsDir?: string
   codexSessionsDir?: string
+  piSessionsRoot?: string
 }
 
 const READ_CHUNK_BYTES = 256 * 1024
@@ -87,14 +92,114 @@ export class TraceReader {
     if (!hit || hit.node.kind !== 'terminal') return []
     const node = hit.node
     const claude = this.claudeFile(node)
-    const file = claude ?? this.codexFile(node)
+    const codex = this.codexFile(node)
+    const pi = this.piFile(node)
+    const file = claude ?? codex ?? pi
     if (!file) return []
-    const blocks = await this.blocksOf(terminalId, file, claude ? 'claude' : 'codex')
+    const kind = claude ? 'claude' : codex ? 'codex' : 'pi'
+    const blocks = await this.blocksOf(terminalId, file, kind)
     const memo = this.indexCache.get(terminalId)
     if (memo && memo.blocks === blocks) return memo.entries
     const entries = traceIndexOf(blocks)
     this.indexCache.set(terminalId, { blocks, entries })
     return entries
+  }
+
+  /**
+   * Checkpoint identities (ordinal + stable message id) for the CURRENT session
+   * file. The rail, rewind picker, and executor all operate in this coordinate
+   * space. Pre-clear / pre-rewind endpoints are exposed via a separate lineage
+   * expansion (not mixed into the main timeline) so indices never drift.
+   */
+  async checkpointRefs(terminalId: string): Promise<{ index: number; id: string; sessionId?: string }[]> {
+    const hit = this.store.nodeAcrossWorkspaces(terminalId)
+    if (!hit || hit.node.kind !== 'terminal') return []
+    const node = hit.node
+    const claude = this.claudeFile(node)
+    const codex = this.codexFile(node)
+    const pi = this.piFile(node)
+    const file = claude ?? codex ?? pi
+    if (!file) return []
+    const kind = claude ? 'claude' : codex ? 'codex' : 'pi'
+    const blocks = await this.blocksOf(terminalId, file, kind)
+    return blocks.map((b) => ({ index: b.index, id: b.id, sessionId: node.claudeSessionId ?? undefined }))
+  }
+
+  /**
+   * Boundary markers for the main rail: ◆ compact (in the current session
+   * file), ⇥ clear (at the start of a session file created by /clear), and
+   * ⟲ rewind points (from the node's restoreStack). All coordinates are in the
+   * CURRENT session file's checkpoint ordinal space so they line up with the
+   * trace index the rail renders. Pre-clear endpoints are reached by expanding
+   * a clear marker, not by mixing lineage files into the main rail (that
+   * produced offset drift and a confusing duplicate timeline).
+   */
+  async boundaryMarkers(terminalId: string): Promise<TraceBoundaryMarker[]> {
+    const hit = this.store.nodeAcrossWorkspaces(terminalId)
+    if (!hit || hit.node.kind !== 'terminal') return []
+    const node = hit.node
+
+    // 1) compact markers from the CURRENT session file only.
+    const claude = this.claudeFile(node)
+    const markers: TraceBoundaryMarker[] = []
+    if (claude) {
+      const seg = await this.segmentOfFile(claude)
+      markers.push(...seg.markers)
+    }
+
+    // 2) clear marker at the root of the current session file if it was born
+    // from a /clear (the lineage has a predecessor AND the current file's
+    // first checkpoint is T1, i.e. it started fresh rather than by restore).
+    const currentSid = node.claudeSessionId
+    const lineage = node.sessionLineage ?? []
+    if (currentSid && lineage.length > 0) {
+      const currentFile = claudeSessionFile(node.cwd, currentSid, this.options.projectsDir)
+      if (existsSync(currentFile)) {
+        const seg = await this.segmentOfFile(currentFile)
+        const firstCurrentIndex = seg.refs[0]?.index ?? 1
+        if (firstCurrentIndex === 1) {
+          const previousSid = lineage[lineage.length - 1]
+          markers.push({ kind: 'clear', afterIndex: 0, previousSessionId: previousSid })
+        }
+      }
+    }
+
+    // 3) rewind markers: each restoreStack entry says "the agent was rewound
+    // TO toIndex". Because we truncate the copy at that checkpoint, the rewind
+    // point lives at toIndex in the CURRENT file's coordinate space (the copy
+    // kept everything <= toIndex, then new turns appended after it). Skip
+    // no-op rewinds that targeted the live checkpoint of their source file.
+    const currentMax =
+      claude
+        ? (await this.segmentOfFile(claude)).refs.reduce((m, r) => Math.max(m, r.index), 0)
+        : 0
+    for (const point of node.restoreStack ?? []) {
+      if (point.fromIndex > 0 && point.fromIndex < currentMax) {
+        markers.push({ kind: 'rewind', afterIndex: point.fromIndex, toIndex: point.fromIndex })
+      }
+    }
+
+    return markers.sort((a, b) => a.afterIndex - b.afterIndex)
+  }
+
+  /** Per-file memo: lineage files are static, the live file invalidates by size. */
+  private segmentMemo = new Map<string, { bytes: number; refs: { index: number; id: string }[]; markers: TraceBoundaryMarker[] }>()
+
+  private async segmentOfFile(file: string): Promise<{ refs: { index: number; id: string }[]; markers: TraceBoundaryMarker[] }> {
+    try {
+      const info = await stat(file)
+      const memo = this.segmentMemo.get(file)
+      if (memo && memo.bytes === info.size) return { refs: memo.refs, markers: memo.markers }
+      const buf = await readWindow(file, 0, info.size)
+      const lines = buf.toString('utf8').split('\n').filter((l) => l.length > 0)
+      const refs = parseClaudeTrace(lines).map((b) => ({ index: b.index, id: b.id }))
+      const markers = compactMarkersOf(lines)
+      this.segmentMemo.set(file, { bytes: info.size, refs, markers })
+      return { refs, markers }
+    } catch (error) {
+      console.error('Lineage segment read failed:', error)
+      return { refs: [], markers: [] }
+    }
   }
 
   /** Identity-keyed trace window for a terminal (see the contract note). */
@@ -114,6 +219,11 @@ export class TraceReader {
     if (codex) {
       const blocks = await this.blocksOf(terminalId, codex, 'codex')
       return { ...pageTraceBlocks(blocks, request), source: 'codex' }
+    }
+    const pi = this.piFile(node)
+    if (pi) {
+      const blocks = await this.blocksOf(terminalId, pi, 'pi')
+      return { ...pageTraceBlocks(blocks, request), source: 'pi' }
     }
     return { blocks: [], total: 0, source: null }
   }
@@ -150,10 +260,18 @@ export class TraceReader {
     return bound && existsSync(bound) ? bound : null
   }
 
+  private piFile(node: TerminalNodeData): string | null {
+    if (!isPiCommand(node.command) || !node.piSessionId) return null
+    const sessionsDir = piNodeSessionDir(node.id, { rootDir: this.options.piSessionsRoot })
+    return piSessionFile(node.cwd, node.piSessionId, {
+      sessionsDir
+    })
+  }
+
   private async blocksOf(
     terminalId: string,
     file: string,
-    kind: 'claude' | 'codex'
+    kind: 'claude' | 'codex' | 'pi'
   ): Promise<TraceBlock[]> {
     try {
       const info = await stat(file)
@@ -186,7 +304,7 @@ export class TraceReader {
   private ingest(
     terminalId: string,
     file: string,
-    kind: 'claude' | 'codex',
+    kind: 'claude' | 'codex' | 'pi',
     entry: CacheEntry,
     incoming: Buffer,
     bytesRead: number
@@ -201,7 +319,11 @@ export class TraceReader {
         if (line.length > 0) lines.push(line)
       }
     }
-    const blocks = kind === 'claude' ? parseClaudeTrace(lines) : parseCodexTrace(lines)
+    const blocks = kind === 'claude'
+      ? parseClaudeTrace(lines)
+      : kind === 'codex'
+        ? parseCodexTrace(lines)
+        : parsePiTrace(lines)
     this.cache.set(terminalId, {
       file,
       bytesRead,

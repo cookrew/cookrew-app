@@ -176,6 +176,20 @@ describe('planTeamFork', () => {
     expect(forked.forkOf?.turnIndex).toBe(4)
   })
 
+  it('starts Pi team forks with no inherited session binding or selector', () => {
+    const src = source([
+      terminal('pi', {
+        preset: 'Pi', command: 'pi --model sonnet --session old-session -c',
+        claudeSessionId: null, piSessionId: 'old-session'
+      })
+    ], { pi: [turn(1)] })
+    const plan = planTeamFork(src, { nodeIds: ['pi'], choices: [] }, planDeps())
+    const forked = plan.nodes[0] as TerminalNodeData
+
+    expect(forked.command).toBe('pi --model sonnet')
+    expect(forked.piSessionId).toBeNull()
+  })
+
   it('validates assembled picks and missing roles', () => {
     const src = source([terminal('a')], { a: [turn(1)] })
     expect(() =>

@@ -5,7 +5,7 @@ import { networkInterfaces } from 'node:os'
 import { existsSync, readFileSync } from 'node:fs'
 import { powerSaveBlocker } from 'electron'
 import type { WorkspaceStore } from './store'
-import type { RecoverResult } from '../shared/model'
+import type { RecoverResult, RestoreResult } from '../shared/model'
 import type { PtyManager } from './pty'
 import type { VoiceEngine } from './voice'
 import type { TurnTracker } from './turn-tracker'
@@ -36,6 +36,8 @@ export interface MobileServerDeps {
   agents: AgentRegistry
   traces: TraceReader
   recoverAgent: (id: string) => RecoverResult
+  restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
+  undoRestore: (id: string) => Promise<RestoreResult>
   ops: MobileOps
   presets: readonly { name: string; command: string }[]
   /** Persist a phone-uploaded attachment; returns its absolute path. */

@@ -31,6 +31,16 @@ function detectTmux(): boolean {
 }
 
 /** tmux session name for a terminal id (names can't contain '.' or ':'). */
+/** True while a tmux session with this name still exists. */
+function tmuxSessionExists(name: string): boolean {
+  try {
+    execFileSync('tmux', ['-L', TMUX_LABEL, 'has-session', '-t', name], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function sessionNameFor(terminalId: string): string {
   return `cookrew_${terminalId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`
 }
@@ -434,7 +444,16 @@ export class PtyManager {
       cliDir: this.runtimeDir,
       tmuxConf: this.tmuxConf
     })
-    session.on('exit', () => this.sessions.delete(options.terminalId))
+    // Delete only when the map still points at THIS session: node-pty drains
+    // 'exit' late (see the onData note above), so a killed predecessor's exit
+    // can land AFTER its replacement registered — an instance-blind delete
+    // would clobber the live session from the map (the restore "running
+    // flag" bug: pane alive, ptys.get() undefined, kill() then no-ops).
+    session.on('exit', () => {
+      if (this.sessions.get(options.terminalId) === session) {
+        this.sessions.delete(options.terminalId)
+      }
+    })
     this.sessions.set(options.terminalId, session)
     return session
   }
@@ -492,6 +511,27 @@ export class PtyManager {
    * DELETE uses this: `kill` alone would no-op for inactive terminals and
    * strand their tmux sessions (claude CLIs) forever.
    */
+  /**
+   * Kill a terminal and WAIT until its tmux session is actually gone.
+   *
+   * `kill()` returns before tmux has torn the session down, so an immediate
+   * respawn races it: `new-session -A` attaches to the dying session and the
+   * teardown lands last, leaving the agent dead. Endpoint restore rebinds a
+   * session and reboots in one motion, so it must await the death first.
+   */
+  async killAndWait(terminalId: string, timeoutMs = 5000): Promise<void> {
+    // killDetached (not kill): restore/undo MUST end the tmux session even
+    // when the terminal has no tracked PTY — `kill` alone no-ops there and
+    // the respawn would reattach to the old session instead of rebooting.
+    this.killDetached(terminalId)
+    const name = sessionNameFor(terminalId)
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (!tmuxSessionExists(name)) return
+      await new Promise((r) => setTimeout(r, 100))
+    }
+  }
+
   killDetached(terminalId: string): void {
     const session = this.sessions.get(terminalId)
     if (session) {
