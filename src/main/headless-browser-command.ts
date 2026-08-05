@@ -164,6 +164,12 @@ export class HeadlessBrowserCommandEngine {
   private async create(params: string[], terminalId: string): Promise<string> {
     const [url, requestedName] = params
     if (!url) throw new Error('Usage: cookrew browser create URL ["Name"]')
+    // A caller parked in ANOTHER workspace is refused before it gets here
+    // (cmdBrowser). What remains is a caller no workspace file holds at all —
+    // a terminal resolved from the durable registry after a reboot. It has no
+    // position to anchor to and cannot own an edge, so the browser is created
+    // unconnected and says so, instead of writing an edge to an id that exists
+    // nowhere (the dangling edge this used to leave behind).
     const terminal = this.deps.store.node(terminalId)
     const base = terminal?.position ?? { x: 0, y: 0 }
     const width = terminal?.size.width ?? 640
@@ -180,9 +186,11 @@ export class HeadlessBrowserCommandEngine {
       size: { width: 720, height: 560 }
     }
     const added = this.deps.addNode(node) as BrowserNodeData
-    this.deps.connectNodes(terminalId, added.id)
+    if (terminal) this.deps.connectNodes(terminalId, added.id)
     await this.deps.manager.syncNode(added)
-    return `Created browser "${added.name}"`
+    return terminal
+      ? `Created browser "${added.name}"`
+      : `Created browser "${added.name}" (not connected: your terminal is not a node in this workspace)`
   }
 
   private findBrowser(name: string): BrowserNodeData {

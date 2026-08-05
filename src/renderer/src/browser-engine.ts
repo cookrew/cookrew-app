@@ -162,6 +162,12 @@ async function withElement(
 async function createBrowser(url: string, name: string, terminalId: string): Promise<string> {
   const state = await cookrew().getWorkspace()
   const me = state.nodes.find((n) => n.id === terminalId)
+  // A caller parked in ANOTHER workspace is refused before it gets here
+  // (cmdBrowser). What remains is a caller no workspace file holds at all — a
+  // terminal resolved from the durable registry after a reboot. It has no
+  // position to anchor to and cannot own an edge, so the browser is created
+  // unconnected and says so, instead of connecting to an id that exists
+  // nowhere (the dangling edge this used to leave behind).
   const base = me?.position ?? { x: 0, y: 0 }
   const width = me?.size.width ?? 640
   const browser: BrowserNodeData = {
@@ -173,8 +179,10 @@ async function createBrowser(url: string, name: string, terminalId: string): Pro
     size: { width: 720, height: 560 }
   }
   const added = (await cookrew().addNode(browser as CanvasNode)) as BrowserNodeData
-  await cookrew().connectNodes(terminalId, added.id)
-  return `Created browser "${added.name}"`
+  if (me) await cookrew().connectNodes(terminalId, added.id)
+  return me
+    ? `Created browser "${added.name}"`
+    : `Created browser "${added.name}" (not connected: your terminal is not a node in this workspace)`
 }
 
 async function findBrowserNode(name: string): Promise<BrowserNodeData> {

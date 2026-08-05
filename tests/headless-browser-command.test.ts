@@ -62,8 +62,30 @@ describe('HeadlessBrowserCommandEngine', () => {
       manager,
       addNode: (node) => store.addNode(node),
       updateNode: (id, patch) => store.updateNode(id, patch),
-      connectNodes: (a, b) => void store.connect(a, b)
+      connectNodes: (a, b) => void store.connectAcross(a, b)
     })
+  })
+
+  it('creates UNCONNECTED for a caller no workspace holds, instead of a dangling edge', async () => {
+    // A registry-only terminal (post-reboot) has no node to anchor to. The old
+    // code still wrote `connect(terminalId, browserId)`, leaving an edge whose
+    // endpoint exists in no workspace. Create it, say it is unconnected, and
+    // write no edge — rather than failing a flow that used to work.
+    const output = await engine.run(['create', 'https://example.test', 'Ghost'], 'not-a-node')
+    expect(output).toMatch(/not connected/i)
+    expect(store.nodeByName('Ghost', 'browser')).toBeDefined()
+    expect(store.state.connections).toHaveLength(0)
+  })
+
+  it('places a created browser beside its caller and connects the two', async () => {
+    await expect(
+      engine.run(['create', 'https://example.test/new', 'Fresh'], terminal().id)
+    ).resolves.toMatch(/Fresh/)
+    const created = store.nodeByName('Fresh', 'browser') as BrowserNodeData
+    expect(created.position).toEqual({ x: 10 + 640 + 80, y: 20 })
+    expect(store.state.connections).toEqual([
+      expect.objectContaining({ a: terminal().id, b: created.id })
+    ])
   })
 
   it('runs trusted agent evaluation on the node-owned headless instance', async () => {

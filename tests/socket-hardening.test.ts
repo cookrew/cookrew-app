@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  browserWorkspaceError,
   RetryableDispatchError,
   resolveSelf,
   retryTransient
@@ -45,6 +46,68 @@ describe('resolveSelf — cross-workspace error naming (a)', () => {
       activeMeta: () => meta('b', 'Bravo') as never
     })
     expect(() => resolveSelf('t1', store)).toThrowError(/not attached to a Cookrew terminal/i)
+  })
+})
+
+describe('browserWorkspaceError — browsers do not cross workspaces', () => {
+  const active = { id: 'ws-dev', name: 'Cookrew Dev' }
+  const goat = { id: 'ws-goat', name: 'GOAT Team' }
+
+  it('names the browser\'s OWN workspace instead of sending the agent back to list', () => {
+    // The reported closed loop: `cookrew list` enumerates connections across
+    // ALL workspaces and advertised this browser, then the webview lookup
+    // (active workspace only) answered "not found. Run 'cookrew list'" —
+    // so an agent loops list → info → list forever.
+    const message = browserWorkspaceError({
+      active,
+      caller: goat,
+      browser: { name: '巴法云', workspaceId: goat.id, workspaceName: goat.name }
+    })
+    expect(message).toMatch(/巴法云/)
+    expect(message).toMatch(/GOAT Team/)
+    expect(message).toMatch(/Cookrew Dev/)
+    expect(message).toMatch(/workspace switch/)
+    expect(message).not.toMatch(/cookrew list/)
+  })
+
+  it('does NOT refuse on the caller when the browser is right here', () => {
+    // Regression guard: gating every subcommand on the CALLER's workspace
+    // replaced one loop with another (switch to Beta for the terminal, switch
+    // back for the browser). Only `create` needs the caller — driving a
+    // browser only needs the browser, and that used to work from anywhere.
+    expect(
+      browserWorkspaceError({
+        active,
+        browser: { name: 'Docs', workspaceId: active.id, workspaceName: active.name }
+      })
+    ).toBeNull()
+  })
+
+  it('refuses a caller parked in another workspace, before create places a node', () => {
+    // `browser create` has no browser name to check, so the caller's own
+    // workspace is the guard — without it the node silently landed in the
+    // ACTIVE workspace at (0,0) with an edge to an id that does not exist there.
+    const message = browserWorkspaceError({ active, caller: goat })
+    expect(message).toMatch(/GOAT Team/)
+    expect(message).toMatch(/Cookrew Dev/)
+    expect(message).toMatch(/workspace switch/)
+  })
+
+  it('allows the normal case: caller and browser both in the active workspace', () => {
+    expect(browserWorkspaceError({ active, caller: active })).toBeNull()
+    expect(
+      browserWorkspaceError({
+        active,
+        caller: active,
+        browser: { name: 'Docs', workspaceId: active.id, workspaceName: active.name }
+      })
+    ).toBeNull()
+  })
+
+  it('allows a caller the workspace files cannot place (registry-only, post-reboot)', () => {
+    // resolveSelf synthesizes such a terminal from the durable registry; it is
+    // not evidence of a cross-workspace call, so it must not be refused here.
+    expect(browserWorkspaceError({ active })).toBeNull()
   })
 })
 

@@ -280,7 +280,10 @@ export async function handleMobileApi(
 
   if (method === "POST" && p === "/api/connections") {
     const body = await readJson<{ a?: string; b?: string }>(request);
-    respondJson(response, 200, store.connect(body.a ?? "", body.b ?? ""));
+    // connectAcross VALIDATES both ids (this endpoint is unauthenticated and
+    // defaulted missing fields to "", persisting an edge between two nodes
+    // that do not exist).
+    respondJson(response, 200, store.connectAcross(body.a ?? "", body.b ?? ""));
     return true;
   }
   const connMatch = p.match(/^\/api\/connections\/([^/]+)$/);

@@ -875,7 +875,7 @@ const headlessBrowserCommands = new HeadlessBrowserCommandEngine({
   manager: browserManager,
   addNode,
   updateNode,
-  connectNodes: (aId, bId) => void store.connect(aId, bId)
+  connectNodes: (aId, bId) => void store.connectAcross(aId, bId)
 })
 
 function rendererBrowserCommand(args: string[], terminalId: string): Promise<string> {
@@ -1256,7 +1256,11 @@ function registerIpc(handlers: RestoreHandlers): void {
   )
   ipcMain.handle('node:remove', (_e, id: string) => removeNode(id))
 
-  ipcMain.handle('node:connect', (_e, aId: string, bId: string) => store.connect(aId, bId))
+  // connectAcross, not connect: it VALIDATES both ids exist (in any workspace)
+  // and mirrors a legitimate cross-workspace edge. store.connect writes an edge
+  // for any pair of strings, which is how a renderer caller could leave one
+  // pointing at a node the active workspace does not hold.
+  ipcMain.handle('node:connect', (_e, aId: string, bId: string) => store.connectAcross(aId, bId))
   ipcMain.handle('node:disconnect', (_e, connId: string) => store.disconnect(connId))
 
   ipcMain.handle('preset:list', () => PRESETS)

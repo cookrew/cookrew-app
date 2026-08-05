@@ -364,7 +364,12 @@ function Canvas(): React.JSX.Element {
       if (connectFrom === null) {
         setConnectFrom(node.id)
       } else if (connectFrom !== node.id) {
-        void cookrew().connectNodes(connectFrom, node.id)
+        // node:connect now VALIDATES both ids, so a node deleted between the
+        // two clicks rejects instead of writing a dangling edge. Report it
+        // rather than letting the tool reset with no edge and no explanation.
+        void cookrew()
+          .connectNodes(connectFrom, node.id)
+          .catch((error: unknown) => console.error('Connect failed:', error))
         setConnectFrom(null)
         setTool('select')
       }
@@ -432,7 +437,11 @@ function Canvas(): React.JSX.Element {
   }, [])
 
   const onConnect = useCallback((params: { source: string | null; target: string | null }) => {
-    if (params.source && params.target) void cookrew().connectNodes(params.source, params.target)
+    if (params.source && params.target) {
+      void cookrew()
+        .connectNodes(params.source, params.target)
+        .catch((error: unknown) => console.error('Connect failed:', error))
+    }
   }, [])
 
   const terminals = (workspace?.nodes.filter((n) => n.kind === 'terminal') ??
