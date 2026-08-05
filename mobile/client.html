@@ -962,7 +962,27 @@
 
   /* ---------- api ---------- */
 
+  /* Pairing token (C1): lifted from the pairing URL's ?token= and kept in
+     sessionStorage; mutating routes require it as a bearer header. */
+  const pairingToken = (() => {
+    try {
+      const fromUrl = new URLSearchParams(location.search).get('token')
+      if (fromUrl) {
+        sessionStorage.setItem('cookrew-pairing-token', fromUrl)
+        const clean = new URL(location.href)
+        clean.searchParams.delete('token')
+        history.replaceState(null, '', clean)
+        return fromUrl
+      }
+      return sessionStorage.getItem('cookrew-pairing-token')
+    } catch { return null }
+  })()
+
   async function api(path, options) {
+    options = options || {}
+    if (pairingToken) {
+      options.headers = Object.assign({}, options.headers, { authorization: 'Bearer ' + pairingToken })
+    }
     const response = await fetch(path, options)
     if (!response.ok) throw new Error((await response.json()).error || response.status)
     return response.json()
