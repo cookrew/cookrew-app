@@ -44,6 +44,7 @@ import {
 } from './claude-fork'
 import { isCodexCommand, resolveCodexRolloutByPid } from './codex-bind'
 import { isOpenCodeCommand, resolveOpencodeSessionByPid } from './opencode-bind'
+import { isPiCommand, latestPiSession, piLaunchBinding, piNodeSessionDir } from './pi-bind'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
 import { createRestoreHandlers } from './restore'
@@ -139,6 +140,7 @@ function spawnTracked(t: {
   claudeSessionId?: string | null
   codexSessionRef?: string | null
   opencodeSessionId?: string | null
+  piSessionId?: string | null
   sessionLineage?: string[]
 }): void {
   const upgraded = LEGACY_COMMANDS[t.command.trim()]
@@ -186,6 +188,17 @@ function spawnTracked(t: {
     const harness = harnessFor(command)
     const key = harness?.resumeKey(t.opencodeSessionId) ?? null
     if (harness && key) effective = harness.resumeCommand(command, key)
+  } else if (isPiCommand(command)) {
+    // H4: wire the pi-bind machinery so the Pi preset actually uses it.
+    // Every terminal gets an EXCLUSIVE session dir, so two Pi terminals in
+    // the same cwd never share one session tree (the cross-agent race
+    // pi-bind exists to eliminate). A node with a prior session in its dir
+    // resumes it; otherwise a fresh session boots scoped to that dir.
+    const binding = piLaunchBinding({ command, cwd: t.cwd, terminalId: t.id })
+    effective = binding.command
+    if (t.piSessionId !== binding.sessionId) {
+      store.updateNodeUnsafe(t.id, { piSessionId: binding.sessionId })
+    }
   }
   const session = ptys.spawn({ terminalId: t.id, command: effective, cwd: t.cwd })
   turns.track(session, command.trim().length > 0)
@@ -244,6 +257,30 @@ function spawnTracked(t: {
           agents.setSessionRef(t.id, sid)
         } catch (error) {
           console.error('OpenCode session bind failed:', error)
+        }
+      }, delays[0])
+    }
+    attempt([3000, 8000, 20000, 45000])
+  }
+  // Pi session bind: a FRESH boot has no session id yet — the file appears
+  // in the terminal's exclusive dir once Pi starts, so poll on a schedule
+  // (same recipe as codex/opencode). No 1:1 ownership check needed: the dir
+  // is exclusive to this terminal, so a discovered session is always ours.
+  if (isPiCommand(command) && !t.piSessionId) {
+    const sessionsDir = piNodeSessionDir(t.id)
+    const attempt = (delays: number[]): void => {
+      if (delays.length === 0) return
+      setTimeout(() => {
+        try {
+          const hit = store.nodeAcrossWorkspaces(t.id)
+          if (!hit || hit.node.kind !== 'terminal') return
+          if ((hit.node as TerminalNodeData).piSessionId) return
+          const session = latestPiSession(t.cwd, { sessionsDir })
+          if (!session) return void attempt(delays.slice(1))
+          store.updateNodeUnsafe(t.id, { piSessionId: session.id })
+          agents.setSessionRef(t.id, session.id)
+        } catch (error) {
+          console.error('Pi session bind failed:', error)
         }
       }, delays[0])
     }
