@@ -17,23 +17,24 @@ describe('harnessFor — multi-harness resume registry', () => {
   })
 
   it('builds a full-session resume command per harness', () => {
+    const ctx = { terminalId: 'x' } // ignored by harnesses that don't scope by terminal
     const claude = harnessFor('claude --permission-mode bypassPermissions')!
-    expect(claude.resumeCommand('claude --permission-mode bypassPermissions', 'sess-1')).toBe(
+    expect(claude.resumeCommand('claude --permission-mode bypassPermissions', 'sess-1', ctx)).toBe(
       'claude --permission-mode bypassPermissions --resume sess-1'
     )
     // strips any prior session binding (recover of a recovered agent)
-    expect(claude.resumeCommand('claude --resume old --verbose', 'new')).toBe(
+    expect(claude.resumeCommand('claude --resume old --verbose', 'new', ctx)).toBe(
       'claude --verbose --resume new'
     )
-    expect(harnessFor('codex')!.resumeCommand('codex', 'cx-uuid')).toBe('codex resume cx-uuid')
+    expect(harnessFor('codex')!.resumeCommand('codex', 'cx-uuid', ctx)).toBe('codex resume cx-uuid')
     // global bypass opts stay BEFORE the resume subcommand (Tinker)
     expect(
-      harnessFor('codex')!.resumeCommand('codex --dangerously-bypass-approvals-and-sandbox', 'u')
+      harnessFor('codex')!.resumeCommand('codex --dangerously-bypass-approvals-and-sandbox', 'u', ctx)
     ).toBe('codex --dangerously-bypass-approvals-and-sandbox resume u')
-    expect(harnessFor('opencode')!.resumeCommand('opencode', 'oc-1')).toBe(
+    expect(harnessFor('opencode')!.resumeCommand('opencode', 'oc-1', ctx)).toBe(
       'opencode --session oc-1'
     )
-    expect(harnessFor('opencode')!.resumeCommand('opencode --session old', 'oc-2')).toBe(
+    expect(harnessFor('opencode')!.resumeCommand('opencode --session old', 'oc-2', ctx)).toBe(
       'opencode --session oc-2'
     )
     const piDir = piNodeSessionDir('pi-node')

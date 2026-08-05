@@ -27,8 +27,12 @@ export interface Harness {
   sessionField: SessionField
   /** Resume KEY (session id) from the stored field value, or null if unusable. */
   resumeKey(sessionRef: string): string | null
-  /** Launch command that RESUMES the given session key, full session as-is. */
-  resumeCommand(command: string, key: string, context?: { terminalId: string }): string
+  /** Launch command that RESUMES the given session key, full session as-is.
+   *  `context` is REQUIRED (M6): harnesses that scope sessions by terminal
+   *  (pi — exclusive --session-dir) cannot build an honest resume without it,
+   *  so an optional param was a latent runtime throw on the first generic pi
+   *  call site. Harnesses that don't need it simply ignore it. */
+  resumeCommand(command: string, key: string, context: { terminalId: string }): string
 }
 
 const CLAUDE: Harness = {
@@ -71,10 +75,8 @@ const PI: Harness = {
   // This value can be restored from persisted/mobile-originated node data and
   // reaches a shell command, so accept only Pi's closed session-id alphabet.
   resumeKey: (ref) => (validPiSessionId(ref) ? ref : null),
-  resumeCommand: (command, key, context) => {
-    if (!context) throw new Error('Pi resume requires a terminal id')
-    return piResumeCommand(command, key, piNodeSessionDir(context.terminalId))
-  }
+  resumeCommand: (command, key, context) =>
+    piResumeCommand(command, key, piNodeSessionDir(context.terminalId))
 }
 
 const HARNESSES: Harness[] = [CLAUDE, CODEX, OPENCODE, PI]
