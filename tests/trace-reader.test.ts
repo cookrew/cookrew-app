@@ -133,7 +133,7 @@ describe('TraceReader (paged trace API over agent files)', () => {
     store.updateNodeUnsafe(bound.id, { codexSessionRef: file })
     const page = await reader.page(bound.id, {})
     expect(page.source).toBe('codex')
-    expect(page.blocks[0]).toMatchObject({ id: 'p1', prompt: 'hello codex' })
+    expect(page.blocks[0]).toMatchObject({ id: 'sess:p1', prompt: 'hello codex' })
   })
 
   it('serves the exact cwd-scoped Pi session bound to the node', async () => {

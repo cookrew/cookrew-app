@@ -90,6 +90,20 @@ describe('SessionTurnSync', () => {
     expect(tracker.history('term-1')).toHaveLength(1)
     sync.dispose()
   })
+
+  it('uses the harness parser passed to watch (non-Claude session formats)', () => {
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, 'whatever\n', 'utf8')
+    const parse = (lines: string[]): TurnRecord[] => [
+      { index: 1, prompt: `saw:${lines[0]}`, reply: 'r', uuid: 'x1', startedAt: 1, endedAt: 2 }
+    ]
+    sync.watch('term-1', file, parse)
+    const history = tracker.history('term-1')
+    expect(history).toHaveLength(1)
+    expect(history[0].prompt).toBe('saw:whatever')
+    expect(history[0].uuid).toBe('x1')
+    sync.dispose()
+  })
 })
 
 describe('TurnTracker.replaceHistory', () => {

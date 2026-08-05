@@ -191,3 +191,14 @@ export function piSessionFile(
   if (!validPiSessionId(sessionId)) return null
   return piSessions(cwd, options).find((match) => match.id === sessionId)?.file ?? null
 }
+
+/** Session file to poll for durable turn history (SessionTurnSync), inside
+ *  this terminal's exclusive session directory. */
+export function piWatchFile(
+  node: { id: string; cwd: string; piSessionId?: string | null },
+  options: { piSessionsRoot?: string } = {}
+): string | null {
+  if (!node.piSessionId) return null
+  const sessionsDir = piNodeSessionDir(node.id, { rootDir: options.piSessionsRoot })
+  return piSessionFile(node.cwd, node.piSessionId, { sessionsDir })
+}
