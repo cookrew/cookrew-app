@@ -7,6 +7,7 @@
 // and caching are main-process (main/trace.ts).
 
 import { CheckpointAssigner } from './session-turns'
+import type { TurnRecord } from './turn'
 
 /** One tool invocation inside a block, TUI-faithful (unified-scroll TODO). */
 export interface TraceToolCall {
@@ -241,25 +242,32 @@ export function parseCodexSessionMeta(line: string): CodexSessionMeta | null {
 const CODEX_SILENT_ITEMS = new Set(['message', 'reasoning'])
 
 /**
- * Blocks from a Codex rollout: event_msg user_message opens a block
- * ('p<ordinal>' identity), agent_message closes its reply (final_answer
- * phase wins, else the last one), non-message response_items render as
- * activity lines.
+ * Blocks from a Codex rollout: event_msg user_message opens a block,
+ * agent_message closes its reply (final_answer phase wins, else the last
+ * one), non-message response_items render as activity lines. Block identity
+ * is `<session_id>:p<ordinal>` — namespaced by the rollout's own session_id
+ * so a TurnRecord.uuid can never collide across sessions (a bare positional
+ * 'p<N>' would defeat the uuid carryover guard on rebind).
  */
 export function parseCodexTrace(lines: string[]): TraceBlock[] {
   const blocks: TraceBlock[] = []
   let current: TraceBlock | null = null
   let sawFinal = false
+  let sessionId: string | null = null
   const codexPending = new Map<string, TraceToolCall>()
   for (const line of lines) {
     const record = parseLine(line) as CodexRecord | null
     if (!record || !record.payload) continue
     const at = timeMs(record.timestamp, current?.endedAt ?? 0)
     const payload = record.payload
+    if (record.type === 'session_meta' && typeof payload.session_id === 'string') {
+      sessionId = payload.session_id
+      continue
+    }
     if (record.type === 'event_msg' && payload.type === 'user_message') {
       if (typeof payload.message !== 'string') continue
       current = {
-        id: `p${blocks.length + 1}`,
+        id: `${sessionId ?? 'session'}:p${blocks.length + 1}`,
         index: blocks.length + 1,
         prompt: payload.message,
         reply: '',
@@ -561,4 +569,36 @@ export function pageTraceBlocks(blocks: TraceBlock[], request: TracePageRequest 
     // Unknown checkpoint → tail fallback.
   }
   return { blocks: blocks.slice(Math.max(0, count - limit)), total }
+}
+
+// ---- harness session → TurnRecord derivation (harness-integration-contract) ----
+//
+// The durable turn history (endpoint rail titles, card pager) is derived from
+// the SAME trace blocks the checkpoint rail reads, so TurnRecord.index ===
+// TraceBlock.index BY CONSTRUCTION for every harness — the phantom-offset
+// class cannot re-enter through a second parser.
+
+/** Longest reply text carried into a TurnRecord (parity with session-turns). */
+const MAX_TURN_REPLY_CHARS = 4000
+
+/** Trace blocks → TurnRecords: same identity, prompt, reply, timestamps. */
+export function turnRecordsOf(blocks: TraceBlock[]): TurnRecord[] {
+  return blocks.map((block) => ({
+    index: block.index,
+    prompt: block.prompt,
+    reply: block.reply.slice(0, MAX_TURN_REPLY_CHARS),
+    uuid: block.id,
+    startedAt: block.startedAt,
+    endedAt: block.endedAt
+  }))
+}
+
+/** Codex rollout JSONL → durable turn history. */
+export function parseCodexTurns(lines: string[]): TurnRecord[] {
+  return turnRecordsOf(parseCodexTrace(lines))
+}
+
+/** Pi session JSONL (active branch) → durable turn history. */
+export function parsePiTurns(lines: string[]): TurnRecord[] {
+  return turnRecordsOf(parsePiTrace(lines))
 }

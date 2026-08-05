@@ -132,6 +132,15 @@ function recordSpawn(terminalId: string, session: PtySession): void {
   })
 }
 
+/**
+ * Slow retry tail for session-bind polls: after the fast spawn schedule runs
+ * out, keep retrying once a minute until the bind lands or the terminal goes
+ * away. Without this, an agent whose first session file appears late (or
+ * whose lsof window is missed) stays unbound FOREVER — which is exactly how
+ * the live Pi terminal ended up with no endpoint history.
+ */
+const BIND_RETRY_TAIL_MS = 60_000
+
 /** Spawn (or reuse) a PTY for a terminal node and register turn tracking. */
 function spawnTracked(t: {
   id: string
@@ -147,7 +156,6 @@ function spawnTracked(t: {
   const command = upgraded ?? t.command
   if (upgraded) store.updateNodeUnsafe(t.id, { command })
   let effective = command
-  let boundSessionId: string | null = null
   if (isClaudeCommand(command)) {
     // Bind every Claude terminal to a known session id (adopting one already
     // baked into an older fork command) so session-file features — native
@@ -176,18 +184,17 @@ function spawnTracked(t: {
       store.updateNodeUnsafe(t.id, withSessionLineage(t, sessionId))
     }
     effective = claudeSpawnCommand(command, t.cwd, sessionId)
-    boundSessionId = sessionId
   } else if (isCodexCommand(command) && t.codexSessionRef) {
     // Resume the bound Codex rollout as-is (Tinker: `codex resume <uuid>`,
     // uuid from the rollout filename; global opts kept before the subcommand).
     // Route through resumeKey so the ref is validated, not shelled raw (HIGH-2).
     const harness = harnessFor(command)
     const key = harness?.resumeKey(t.codexSessionRef) ?? null
-    if (harness && key) effective = harness.resumeCommand(command, key)
+    if (harness && key) effective = harness.resumeCommand(command, key, { terminalId: t.id })
   } else if (isOpenCodeCommand(command) && t.opencodeSessionId) {
     const harness = harnessFor(command)
     const key = harness?.resumeKey(t.opencodeSessionId) ?? null
-    if (harness && key) effective = harness.resumeCommand(command, key)
+    if (harness && key) effective = harness.resumeCommand(command, key, { terminalId: t.id })
   } else if (isPiCommand(command)) {
     // H4: wire the pi-bind machinery so the Pi preset actually uses it.
     // Every terminal gets an EXCLUSIVE session dir, so two Pi terminals in
@@ -204,33 +211,35 @@ function spawnTracked(t: {
   turns.track(session, command.trim().length > 0)
   recordSpawn(t.id, session)
   // Codex rollout bind (trace-sourced-context-final): the rollout file
-  // appears seconds AFTER boot, so try once after a grace delay; the trace
-  // reader lazily re-binds on first fetch if this attempt is too early.
+  // appears seconds AFTER boot, so poll on a schedule, then keep a slow
+  // retry tail until it binds (BIND_RETRY_TAIL_MS).
   if (isCodexCommand(command) && !t.codexSessionRef) {
     // DETERMINISTIC bind (EXACT-CONTEXT gate): the rollout is the file the
     // codex PROCESS holds open (lsof of the pane pid), never a most-recent
     // mtime guess — so it cannot grab a stray or cross-wire two agents. Poll
     // until the process opens its rollout (at session start / first turn).
     const attempt = (delays: number[]): void => {
-      if (delays.length === 0) return
+      const delay = delays.length === 0 ? BIND_RETRY_TAIL_MS : delays[0]
       setTimeout(() => {
         try {
           const hit = store.nodeAcrossWorkspaces(t.id)
           if (!hit || hit.node.kind !== 'terminal') return
           if ((hit.node as TerminalNodeData).codexSessionRef) return
           const ref = resolveCodexRolloutByPid(ptys.panePid(t.id))
-          if (!ref) return void attempt(delays.slice(1)) // rollout not open yet
+          if (!ref) return void attempt(delays.length === 0 ? [] : delays.slice(1)) // rollout not open yet
           // 1:1 authoritative: a rollout already owned by another node is never
           // reassignable (defense-in-depth; lsof already makes this 1:1).
           if (isRefOwned(store.terminalsAcross(), t.id, 'codexSessionRef', ref)) {
-            return void attempt(delays.slice(1))
+            return void attempt(delays.length === 0 ? [] : delays.slice(1))
           }
           store.updateNodeUnsafe(t.id, { codexSessionRef: ref })
           agents.setSessionRef(t.id, ref)
+          // Rollout bound → durable turn history can start reconciling.
+          watchSessionTurns(t.id)
         } catch (error) {
           console.error('Codex rollout bind failed:', error)
         }
-      }, delays[0])
+      }, delay)
     }
     attempt([3000, 8000, 20000, 45000])
   }
@@ -242,23 +251,26 @@ function spawnTracked(t: {
     // DETERMINISTIC bind via lsof of the pane pid (same 1:1 guarantee as
     // codex) — never an mtime guess that could stray/cross-wire.
     const attempt = (delays: number[]): void => {
-      if (delays.length === 0) return
+      const delay = delays.length === 0 ? BIND_RETRY_TAIL_MS : delays[0]
       setTimeout(() => {
         try {
           const hit = store.nodeAcrossWorkspaces(t.id)
           if (!hit || hit.node.kind !== 'terminal') return
           if ((hit.node as TerminalNodeData).opencodeSessionId) return
           const sid = resolveOpencodeSessionByPid(ptys.panePid(t.id))
-          if (!sid) return void attempt(delays.slice(1))
+          if (!sid) return void attempt(delays.length === 0 ? [] : delays.slice(1))
           if (isRefOwned(store.terminalsAcross(), t.id, 'opencodeSessionId', sid)) {
-            return void attempt(delays.slice(1))
+            return void attempt(delays.length === 0 ? [] : delays.slice(1))
           }
           store.updateNodeUnsafe(t.id, { opencodeSessionId: sid })
           agents.setSessionRef(t.id, sid)
+          // Registry-driven: no-op while opencode is scrape-only, automatic
+          // the day it gains a session-file parser (contract rule 4).
+          watchSessionTurns(t.id)
         } catch (error) {
           console.error('OpenCode session bind failed:', error)
         }
-      }, delays[0])
+      }, delay)
     }
     attempt([3000, 8000, 20000, 45000])
   }
@@ -269,29 +281,38 @@ function spawnTracked(t: {
   if (isPiCommand(command) && !t.piSessionId) {
     const sessionsDir = piNodeSessionDir(t.id)
     const attempt = (delays: number[]): void => {
-      if (delays.length === 0) return
+      const delay = delays.length === 0 ? BIND_RETRY_TAIL_MS : delays[0]
       setTimeout(() => {
         try {
           const hit = store.nodeAcrossWorkspaces(t.id)
           if (!hit || hit.node.kind !== 'terminal') return
           if ((hit.node as TerminalNodeData).piSessionId) return
           const session = latestPiSession(t.cwd, { sessionsDir })
-          if (!session) return void attempt(delays.slice(1))
+          if (!session) return void attempt(delays.length === 0 ? [] : delays.slice(1))
           store.updateNodeUnsafe(t.id, { piSessionId: session.id })
           agents.setSessionRef(t.id, session.id)
+          // Session discovered → durable turn history can start reconciling.
+          watchSessionTurns(t.id)
         } catch (error) {
           console.error('Pi session bind failed:', error)
         }
-      }, delays[0])
+      }, delay)
     }
     attempt([3000, 8000, 20000, 45000])
   }
-  // Session-bound terminals: the Claude session JSONL is the source of truth
+  // Session-bound terminals: the harness session file is the source of truth
   // for turn records — reconcile now (rebuilds legacy scraped records) and
-  // keep reconciling so /rewind truncation and exact prompts flow through.
-  if (boundSessionId !== null) {
-    sessionSync.watch(t.id, claudeSessionFile(t.cwd, boundSessionId))
-  }
+  // keep reconciling so truncation and exact prompts flow through. The spec
+  // is harness-generic (harness-integration-contract): any 'file'-capable
+  // harness with a bound session ref gets durable history, not just Claude.
+  watchSessionTurns(t.id)
+}
+
+/** Start (or refresh) the session-file turn reconcile for a terminal whose
+ *  harness carries 'file' turn history; a no-op for scrape-only/plain shells. */
+function watchSessionTurns(terminalId: string): void {
+  const spec = traces.watchSpec(terminalId)
+  if (spec) sessionSync.watch(terminalId, spec.file, spec.parse)
 }
 
 /**

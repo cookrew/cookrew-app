@@ -6,8 +6,8 @@
 
 import { existsSync } from 'node:fs'
 import { open, stat } from 'node:fs/promises'
-import path from 'node:path'
 import type { TerminalNodeData } from '../shared/model'
+import { restorePointIndex } from '../shared/model'
 import {
   TraceBlock,
   TraceBoundaryMarker,
@@ -23,11 +23,19 @@ import {
 } from '../shared/trace-blocks'
 import { claudeSessionFile } from './claude-fork'
 import { isClaudeCommand } from '../shared/claude-fork'
-import { defaultCodexSessionsDir, isCodexCommand } from './codex-bind'
+import { isCodexCommand, validCodexSessionRef } from './codex-bind'
+import { harnessFor } from './harness'
 import { isPiCommand, piNodeSessionDir, piSessionFile } from './pi-bind'
+import type { SessionTurnParser } from './session-sync'
 import type { WorkspaceStore } from './store'
 
 export type TraceSource = 'claude' | 'codex' | 'pi' | null
+
+/** A session file + the harness's turn parser, for SessionTurnSync.watch. */
+export interface SessionWatchSpec {
+  file: string
+  parse: SessionTurnParser
+}
 
 export interface TraceReaderOptions {
   /** Overrides for tests. */
@@ -37,6 +45,9 @@ export interface TraceReaderOptions {
 }
 
 const READ_CHUNK_BYTES = 256 * 1024
+
+/** M8: cap on per-file memoized trace state (block cache + segmentMemo). */
+const TRACE_FILE_MEMO_CAP = 128
 
 /** Async chunked read of [start, start+length) — never the whole file at once. */
 async function readWindow(file: string, start: number, length: number): Promise<Buffer> {
@@ -177,8 +188,9 @@ export class TraceReader {
         ? (await this.segmentOfFile(claude)).refs.reduce((m, r) => Math.max(m, r.index), 0)
         : 0
     for (const point of node.restoreStack ?? []) {
-      if (point.fromIndex > 0 && point.fromIndex < currentMax) {
-        markers.push({ kind: 'rewind', afterIndex: point.fromIndex, toIndex: point.fromIndex })
+      const toIndex = restorePointIndex(point)
+      if (toIndex > 0 && toIndex < currentMax) {
+        markers.push({ kind: 'rewind', afterIndex: toIndex, toIndex })
       }
     }
 
@@ -189,6 +201,21 @@ export class TraceReader {
    *  growth re-ingests (fresh array) and re-derives once; steady state and
    *  repeat calls within one poll are cache hits. */
   private segmentMemo = new Map<string, { blocks: TraceBlock[]; refs: { index: number; id: string }[]; markers: TraceBoundaryMarker[] }>()
+
+  /** M8: both per-file maps (block cache + segmentMemo) are insertion-order
+   *  capped — otherwise they grew one entry per session file for the whole
+   *  process lifetime. FIFO suffices: a polled LIVE file is re-touched
+   *  constantly so it never reaches the eviction tail; an evicted file just
+   *  re-reads fully once on next access, then goes incremental again. */
+  private static cappedSet<V>(map: Map<string, V>, key: string, value: V): void {
+    if (map.has(key)) map.delete(key) // refresh recency
+    map.set(key, value)
+    while (map.size > TRACE_FILE_MEMO_CAP) {
+      const oldest = map.keys().next().value
+      if (oldest === undefined) break
+      map.delete(oldest)
+    }
+  }
 
   /**
    * Checkpoint refs + compact markers of one session file, routed through
@@ -202,8 +229,26 @@ export class TraceReader {
     if (memo && memo.blocks === blocks) return { refs: memo.refs, markers: memo.markers }
     const refs = blocks.map((b) => ({ index: b.index, id: b.id }))
     const markers = compactMarkersOf(this.cache.get(file)?.lines ?? [])
-    this.segmentMemo.set(file, { blocks, refs, markers })
+    TraceReader.cappedSet(this.segmentMemo, file, { blocks, refs, markers })
     return { refs, markers }
+  }
+
+  /**
+   * Session-file watch spec for SessionTurnSync (harness-integration-contract):
+   * the file to poll + the harness's turn parser, or null when this terminal
+   * has no file-derived history (unbound, scrape-only harness, plain shell).
+   * Fully registry-driven: the harness entry owns both the parser and the
+   * (security-validated) file resolution, so a conforming harness needs no
+   * edits here. A missing file is fine — the sync polls until it appears.
+   */
+  watchSpec(terminalId: string): SessionWatchSpec | null {
+    const hit = this.store.nodeAcrossWorkspaces(terminalId)
+    if (!hit || hit.node.kind !== 'terminal') return null
+    const node = hit.node
+    const harness = harnessFor(node.command)
+    if (!harness?.parseTurns || !harness.watchFile) return null
+    const file = harness.watchFile(node, this.options)
+    return file ? { file, parse: harness.parseTurns } : null
   }
 
   /** Identity-keyed trace window for a terminal (see the contract note). */
@@ -238,29 +283,13 @@ export class TraceReader {
     return existsSync(file) ? file : null
   }
 
-  private codexSessionsBase(): string {
-    return path.resolve(this.options.codexSessionsDir ?? defaultCodexSessionsDir())
-  }
-
-  /**
-   * SECURITY: a codexSessionRef is only honored when it resolves INSIDE the
-   * codex sessions tree — node fields can arrive over the unauthenticated
-   * mobile surface, and a planted ref must never turn the trace reader into
-   * an arbitrary-file oracle. (updateNode also allow-lists the field away;
-   * this is the defense-in-depth check at the read site.)
-   */
-  private validCodexRef(ref: string | null | undefined): string | null {
-    if (!ref) return null
-    const resolved = path.resolve(ref)
-    return resolved.startsWith(this.codexSessionsBase() + path.sep) ? resolved : null
-  }
-
   private codexFile(node: TerminalNodeData): string | null {
     if (!isCodexCommand(node.command)) return null
     // Use ONLY the authoritative bound ref (set deterministically at spawn by
-    // lsof of the codex process). No mtime rebind here — that was a stray-grab
-    // / cross-wiring source (EXACT-CONTEXT gate). Unbound → no trace, honest.
-    const bound = this.validCodexRef(node.codexSessionRef)
+    // lsof of the codex process), validated inside the sessions tree. No
+    // mtime rebind here — that was a stray-grab / cross-wiring source
+    // (EXACT-CONTEXT gate). Unbound → no trace, honest.
+    const bound = validCodexSessionRef(node.codexSessionRef, this.options.codexSessionsDir)
     return bound && existsSync(bound) ? bound : null
   }
 
@@ -326,7 +355,7 @@ export class TraceReader {
       : kind === 'codex'
         ? parseCodexTrace(lines)
         : parsePiTrace(lines)
-    this.cache.set(file, {
+    TraceReader.cappedSet(this.cache, file, {
       file,
       bytesRead,
       remainder: Buffer.from(remainder),

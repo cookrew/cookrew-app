@@ -10,9 +10,9 @@ import { handleMobileApi, MobileApiDeps } from '../src/main/mobile-api'
 
 const TOKEN = 'pairing-token-123'
 
-function stubRequest(method: string, authorization?: string): http.IncomingMessage {
-  // A real (empty) readable so routes past the gate can read the body.
-  const request = Readable.from([]) as http.IncomingMessage
+function stubRequest(method: string, authorization?: string, body?: string): http.IncomingMessage {
+  // A real readable so routes past the gate can read the body.
+  const request = Readable.from(body ? [body] : []) as http.IncomingMessage
   request.method = method
   request.headers = authorization ? { authorization } : {}
   return request
@@ -133,5 +133,65 @@ describe('C2: no wildcard CORS headers', () => {
       stubDeps()
     )
     expect(captured.headers['access-control-allow-origin']).toBeUndefined()
+  })
+})
+
+describe('M11: route-level restore/undo dispatch (authorized)', () => {
+  function executorDeps(): { deps: MobileApiDeps; calls: [string, number | null][] } {
+    const calls: [string, number | null][] = []
+    const deps = {
+      ...stubDeps(),
+      restoreCheckpoint: async (id: string, index: number) => {
+        calls.push([id, index])
+        return { ok: true, id, name: 'Agent', checkpointIndex: index }
+      },
+      undoRestore: async (id: string) => {
+        calls.push([id, null])
+        return { ok: true, id, name: 'Agent', checkpointIndex: 0, undone: true }
+      }
+    } as unknown as MobileApiDeps
+    return { deps, calls }
+  }
+
+  it('POST /api/agents/:id/restore reaches the executor with the parsed checkpointIndex', async () => {
+    const { deps, calls } = executorDeps()
+    const { response, captured } = stubResponse()
+    const handled = await handleMobileApi(
+      stubRequest('POST', `Bearer ${TOKEN}`, JSON.stringify({ checkpointIndex: 2 })),
+      response,
+      new URL('/api/agents/t1/restore', 'http://lan.local'),
+      deps
+    )
+    expect(handled).toBe(true)
+    expect(captured.status).toBe(200)
+    expect(calls).toEqual([['t1', 2]])
+  })
+
+  it('400s a non-positive-integer checkpointIndex BEFORE touching the executor', async () => {
+    const { deps, calls } = executorDeps()
+    const { response, captured } = stubResponse()
+    const handled = await handleMobileApi(
+      stubRequest('POST', `Bearer ${TOKEN}`, JSON.stringify({ checkpointIndex: 0 })),
+      response,
+      new URL('/api/agents/t1/restore', 'http://lan.local'),
+      deps
+    )
+    expect(handled).toBe(true)
+    expect(captured.status).toBe(400)
+    expect(calls).toEqual([])
+  })
+
+  it('POST /api/agents/:id/restore/undo reaches the undo executor', async () => {
+    const { deps, calls } = executorDeps()
+    const { response, captured } = stubResponse()
+    const handled = await handleMobileApi(
+      stubRequest('POST', `Bearer ${TOKEN}`, '{}'),
+      response,
+      new URL('/api/agents/t1/restore/undo', 'http://lan.local'),
+      deps
+    )
+    expect(handled).toBe(true)
+    expect(captured.status).toBe(200)
+    expect(calls).toEqual([['t1', null]])
   })
 })

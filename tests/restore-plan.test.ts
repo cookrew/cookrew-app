@@ -69,19 +69,19 @@ describe('planCheckpointRestore — other harnesses / shells', () => {
 
 describe('pushRestorePoint — undo stack', () => {
   it('records the pre-restore session so a rewind is reversible', () => {
-    const s = pushRestorePoint([], { sessionId: 'old', at: 10, fromIndex: 5 })
-    expect(s).toEqual([{ sessionId: 'old', at: 10, fromIndex: 5 }])
+    const s = pushRestorePoint([], { sessionId: 'old', at: 10, rewoundToIndex: 5 })
+    expect(s).toEqual([{ sessionId: 'old', at: 10, rewoundToIndex: 5 }])
   })
   it('is immutable and newest-first', () => {
-    const s0 = [{ sessionId: 'a', at: 1, fromIndex: 1 }]
-    const s1 = pushRestorePoint(s0, { sessionId: 'b', at: 2, fromIndex: 2 })
+    const s0 = [{ sessionId: 'a', at: 1, rewoundToIndex: 1 }]
+    const s1 = pushRestorePoint(s0, { sessionId: 'b', at: 2, rewoundToIndex: 2 })
     expect(s1.map((r) => r.sessionId)).toEqual(['b', 'a'])
     expect(s0).toHaveLength(1)
   })
   it('caps the stack so restores never grow unbounded', () => {
     let s: ReturnType<typeof pushRestorePoint> = []
     for (let i = 0; i < RESTORE_UNDO_CAP + 5; i += 1) {
-      s = pushRestorePoint(s, { sessionId: `s${i}`, at: i, fromIndex: i })
+      s = pushRestorePoint(s, { sessionId: `s${i}`, at: i, rewoundToIndex: i })
     }
     expect(s).toHaveLength(RESTORE_UNDO_CAP)
     expect(s[0].sessionId).toBe(`s${RESTORE_UNDO_CAP + 4}`) // newest kept

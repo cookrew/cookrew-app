@@ -4,12 +4,13 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import type { CanvasNode, RestorePoint, RestoreResult, TerminalNodeData } from '../shared/model'
+import type { CanvasNode, RestoreResult, TerminalNodeData } from '../shared/model'
+import { restorePointIndex } from '../shared/model'
 import { buildForkedSessionLinesAtUuid } from '../shared/claude-fork'
 import { harnessFor } from './harness'
 import { planCheckpointRestore, pushRestorePoint } from './restore-plan'
 import { withSessionLineage } from './session-lineage'
-import { claudeSessionFile } from './claude-fork'
+import { claudeSessionFile, isSessionUuid } from './claude-fork'
 
 export interface RestoreExecutorDeps {
   store: {
@@ -108,6 +109,13 @@ async function restoreCheckpoint(
   if (!node.claudeSessionId) {
     return fail(id, node.name, checkpointIndex, 'No bound Claude session file for this agent yet.')
   }
+  // M1: every id that reaches claudeSessionFile (a bare path.join) must be
+  // UUID-shaped — a tampered store file ('../../etc/x' as session id) would
+  // otherwise escape the project dir and copy an arbitrary *.jsonl into a
+  // session the agent will load. Refuse honestly at the executor boundary.
+  if (!isSessionUuid(node.claudeSessionId)) {
+    return fail(id, node.name, checkpointIndex, 'The bound session id is malformed — refusing to restore.')
+  }
 
   const busy = busyReason(deps, id)
   if (busy) return fail(id, node.name, checkpointIndex, busy)
@@ -121,6 +129,9 @@ async function restoreCheckpoint(
   })
   if (!plan.ok) {
     return fail(id, node.name, checkpointIndex, plan.reason ?? 'Restore not possible.')
+  }
+  if (plan.cutoffSessionId !== undefined && !isSessionUuid(plan.cutoffSessionId)) {
+    return fail(id, node.name, checkpointIndex, 'The checkpoint session id is malformed — refusing to restore.')
   }
 
   const sourceFile = claudeSessionFile(node.cwd, plan.cutoffSessionId ?? node.claudeSessionId, deps.projectsDir)
@@ -165,7 +176,7 @@ async function restoreCheckpoint(
     restoreStack: pushRestorePoint(node.restoreStack ?? [], {
       sessionId: previousSessionId as string,
       at: Date.now(),
-      fromIndex: checkpointIndex
+      rewoundToIndex: checkpointIndex
     })
   })
   if (!updated || updated.kind !== 'terminal') {
@@ -201,20 +212,23 @@ async function undoRestore(deps: RestoreExecutorDeps, id: string): Promise<Resto
   }
 
   const [point, ...rest] = stack
+  if (!isSessionUuid(point.sessionId)) {
+    return fail(id, node.name, point.fromIndex, 'The undo stack session id is malformed — refusing to undo.')
+  }
   const targetFile = claudeSessionFile(node.cwd, point.sessionId, deps.projectsDir)
   if (!existsSync(targetFile)) {
-    return fail(id, node.name, point.fromIndex, 'The previous session file no longer exists — cannot undo.')
+    return fail(id, node.name, restorePointIndex(point), 'The previous session file no longer exists — cannot undo.')
   }
 
   const busy = busyReason(deps, id)
-  if (busy) return fail(id, node.name, point.fromIndex, busy)
+  if (busy) return fail(id, node.name, restorePointIndex(point), busy)
 
   try {
     await deps.ptys.killAndWait(id)
   } catch (error) {
     // H2: a failed (timed-out) kill leaves the original session running and
     // the node untouched — report honestly instead of rebinding blind.
-    return fail(id, node.name, point.fromIndex, `Undo failed before rebind: ${errorMessage(error)}`)
+    return fail(id, node.name, restorePointIndex(point), `Undo failed before rebind: ${errorMessage(error)}`)
   }
 
   const updated = deps.store.updateNodeUnsafe(id, {
@@ -224,7 +238,7 @@ async function undoRestore(deps: RestoreExecutorDeps, id: string): Promise<Resto
   if (!updated || updated.kind !== 'terminal') {
     // H2: killed but not rebound — respawn with the original binding.
     trySpawn(deps, node)
-    return fail(id, node.name, point.fromIndex, 'Failed to rebind the agent during undo.')
+    return fail(id, node.name, restorePointIndex(point), 'Failed to rebind the agent during undo.')
   }
 
   deps.spawnTracked(updated as TerminalNodeData)
@@ -233,7 +247,7 @@ async function undoRestore(deps: RestoreExecutorDeps, id: string): Promise<Resto
     ok: true,
     id,
     name: node.name,
-    checkpointIndex: point.fromIndex,
+    checkpointIndex: restorePointIndex(point),
     sessionId: point.sessionId,
     previousSessionId: node.claudeSessionId,
     undone: true
