@@ -72,7 +72,10 @@ export type RestoreHandlers = ReturnType<typeof createRestoreHandlers>
  *  index.ts doesn't have to know the channel names (M10). */
 export type IpcHandleFn = (
   channel: string,
-  listener: (event: unknown, ...args: never[]) => unknown
+  // `unknown` args, not `never[]`: electron's own `ipcMain.handle` takes
+  // `...args: any[]`, and `any` is assignable to everything EXCEPT `never` —
+  // so a `never[]` rest made `ipcMain.handle` itself unassignable here.
+  listener: (event: unknown, ...args: unknown[]) => unknown
 ) => void
 
 /**
@@ -81,10 +84,13 @@ export type IpcHandleFn = (
  * in ONE file instead of across index.ts's IPC block.
  */
 export function registerRestoreIpc(handle: IpcHandleFn, handlers: RestoreHandlers): void {
+  // Renderer-supplied args arrive untyped; the handlers validate the id and
+  // index themselves (unknown terminal / out-of-range checkpoint both fail
+  // closed with a RestoreResult), so this boundary only restores the shapes.
   handle('agent:restore-checkpoint', (_e, id, checkpointIndex) =>
-    handlers.restoreCheckpoint(id, checkpointIndex)
+    handlers.restoreCheckpoint(id as string, checkpointIndex as number)
   )
-  handle('agent:undo-restore', (_e, id) => handlers.undoRestore(id))
+  handle('agent:undo-restore', (_e, id) => handlers.undoRestore(id as string))
 }
 
 async function restoreCheckpoint(
@@ -213,7 +219,7 @@ async function undoRestore(deps: RestoreExecutorDeps, id: string): Promise<Resto
 
   const [point, ...rest] = stack
   if (!isSessionUuid(point.sessionId)) {
-    return fail(id, node.name, point.fromIndex, 'The undo stack session id is malformed — refusing to undo.')
+    return fail(id, node.name, restorePointIndex(point), 'The undo stack session id is malformed — refusing to undo.')
   }
   const targetFile = claudeSessionFile(node.cwd, point.sessionId, deps.projectsDir)
   if (!existsSync(targetFile)) {

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import type { CanvasNode, TerminalNodeData } from '../src/shared/model'
+import type { CanvasNode, RestorePoint, TerminalNodeData } from '../src/shared/model'
 import { createRestoreHandlers, registerRestoreIpc, RestoreExecutorDeps, RestoreHandlers } from '../src/main/restore'
 import { claudeProjectDir } from '../src/main/claude-fork'
 
@@ -357,7 +357,9 @@ describe('createRestoreHandlers', () => {
       const node = makeNode({
         cwd,
         // Persisted before the M9 rename: fromIndex, no rewoundToIndex.
-        restoreStack: [{ sessionId: previousId, at: Date.now(), fromIndex: 2 }]
+        // `as RestorePoint`: this literal deliberately lacks rewoundToIndex,
+        // which is exactly what a pre-M9 persisted stack looks like on disk.
+        restoreStack: [{ sessionId: previousId, at: Date.now(), fromIndex: 2 } as RestorePoint]
       })
       const { deps } = makeDeps(() => node, { projectsDir: tmp })
 
@@ -372,7 +374,7 @@ describe('createRestoreHandlers', () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
       const node = makeNode({
         cwd: path.join(tmp, 'project'),
-        restoreStack: [{ sessionId: '../../etc/evil', at: Date.now(), fromIndex: 2 }]
+        restoreStack: [{ sessionId: '../../etc/evil', at: Date.now(), fromIndex: 2 } as RestorePoint]
       })
       const { deps, calls } = makeDeps(() => node, { projectsDir: tmp })
 
