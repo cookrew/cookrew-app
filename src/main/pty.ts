@@ -30,7 +30,6 @@ function detectTmux(): boolean {
   }
 }
 
-/** tmux session name for a terminal id (names can't contain '.' or ':'). */
 /** True while a tmux session with this name still exists. */
 function tmuxSessionExists(name: string): boolean {
   try {
@@ -41,6 +40,7 @@ function tmuxSessionExists(name: string): boolean {
   }
 }
 
+/** tmux session name for a terminal id (names can't contain '.' or ':'). */
 export function sessionNameFor(terminalId: string): string {
   return `cookrew_${terminalId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`
 }

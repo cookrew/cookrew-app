@@ -12,6 +12,7 @@ import type {
   RestoreResult,
 } from "../../shared/model";
 import type { TerminalActivity, TurnRecord } from "../../shared/turn";
+import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
 
 export interface CookrewApi {
   getWorkspace: () => Promise<WorkspaceState>;
@@ -141,15 +142,7 @@ export interface CookrewApi {
    */
   listTraceMarkers?: (
     terminalId: string,
-  ) => Promise<
-    {
-      kind: 'compact' | 'clear'
-      afterIndex: number
-      preTokens?: number
-      postTokens?: number
-      previousSessionId?: string
-    }[]
-  >;
+  ) => Promise<TraceBoundaryMarker[]>;
   /** Fork a NEW agent card from a past turn; omit turnIndex for the latest. */
   forkTerminal: (sourceId: string, turnIndex?: number) => Promise<CanvasNode>;
   /** Fork a team into a NEW workspace per the spec (switches to it). */

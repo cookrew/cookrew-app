@@ -72,6 +72,15 @@ export function claudeSpawnCommand(
 /** Session ids must be UUID-shaped before use in file paths / launch commands. */
 const SESSION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/**
+ * True when a session id is UUID-shaped — the ONLY shape safe to interpolate
+ * into session-file paths (claudeSessionFile is a bare path.join, so a
+ * tampered id like '../../etc/x' would otherwise escape the project dir).
+ */
+export function isSessionUuid(id: string): boolean {
+  return SESSION_UUID_RE.test(id)
+}
+
 export interface ResolveSessionOptions {
   command: string
   cwd: string
