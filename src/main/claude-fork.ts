@@ -72,6 +72,30 @@ export function claudeSpawnCommand(
 /** Session ids must be UUID-shaped before use in file paths / launch commands. */
 const SESSION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/**
+ * True when a session id is UUID-shaped — the ONLY shape safe to interpolate
+ * into session-file paths (claudeSessionFile is a bare path.join, so a
+ * tampered id like '../../etc/x' would otherwise escape the project dir).
+ */
+export function isSessionUuid(id: string): boolean {
+  return SESSION_UUID_RE.test(id)
+}
+
+/**
+ * Session file to poll for durable turn history (SessionTurnSync), or null
+ * when the stored id is unusable. Defense-in-depth (mirrors the codex
+ * planted-ref defense): the id flows into a path on a poll timer, so it is
+ * UUID-checked here even though spawn already validates it.
+ */
+export function claudeWatchFile(
+  node: { cwd: string; claudeSessionId?: string | null },
+  options: { projectsDir?: string } = {}
+): string | null {
+  const id = node.claudeSessionId
+  if (!id || !isSessionUuid(id)) return null
+  return claudeSessionFile(node.cwd, id, options.projectsDir)
+}
+
 export interface ResolveSessionOptions {
   command: string
   cwd: string

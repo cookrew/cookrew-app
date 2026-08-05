@@ -6,7 +6,6 @@
 
 import { existsSync } from 'node:fs'
 import { open, stat } from 'node:fs/promises'
-import path from 'node:path'
 import type { TerminalNodeData } from '../shared/model'
 import { restorePointIndex } from '../shared/model'
 import {
@@ -24,11 +23,19 @@ import {
 } from '../shared/trace-blocks'
 import { claudeSessionFile } from './claude-fork'
 import { isClaudeCommand } from '../shared/claude-fork'
-import { defaultCodexSessionsDir, isCodexCommand } from './codex-bind'
+import { isCodexCommand, validCodexSessionRef } from './codex-bind'
+import { harnessFor } from './harness'
 import { isPiCommand, piNodeSessionDir, piSessionFile } from './pi-bind'
+import type { SessionTurnParser } from './session-sync'
 import type { WorkspaceStore } from './store'
 
 export type TraceSource = 'claude' | 'codex' | 'pi' | null
+
+/** A session file + the harness's turn parser, for SessionTurnSync.watch. */
+export interface SessionWatchSpec {
+  file: string
+  parse: SessionTurnParser
+}
 
 export interface TraceReaderOptions {
   /** Overrides for tests. */
@@ -226,6 +233,24 @@ export class TraceReader {
     return { refs, markers }
   }
 
+  /**
+   * Session-file watch spec for SessionTurnSync (harness-integration-contract):
+   * the file to poll + the harness's turn parser, or null when this terminal
+   * has no file-derived history (unbound, scrape-only harness, plain shell).
+   * Fully registry-driven: the harness entry owns both the parser and the
+   * (security-validated) file resolution, so a conforming harness needs no
+   * edits here. A missing file is fine — the sync polls until it appears.
+   */
+  watchSpec(terminalId: string): SessionWatchSpec | null {
+    const hit = this.store.nodeAcrossWorkspaces(terminalId)
+    if (!hit || hit.node.kind !== 'terminal') return null
+    const node = hit.node
+    const harness = harnessFor(node.command)
+    if (!harness?.parseTurns || !harness.watchFile) return null
+    const file = harness.watchFile(node, this.options)
+    return file ? { file, parse: harness.parseTurns } : null
+  }
+
   /** Identity-keyed trace window for a terminal (see the contract note). */
   async page(
     terminalId: string,
@@ -258,29 +283,13 @@ export class TraceReader {
     return existsSync(file) ? file : null
   }
 
-  private codexSessionsBase(): string {
-    return path.resolve(this.options.codexSessionsDir ?? defaultCodexSessionsDir())
-  }
-
-  /**
-   * SECURITY: a codexSessionRef is only honored when it resolves INSIDE the
-   * codex sessions tree — node fields can arrive over the unauthenticated
-   * mobile surface, and a planted ref must never turn the trace reader into
-   * an arbitrary-file oracle. (updateNode also allow-lists the field away;
-   * this is the defense-in-depth check at the read site.)
-   */
-  private validCodexRef(ref: string | null | undefined): string | null {
-    if (!ref) return null
-    const resolved = path.resolve(ref)
-    return resolved.startsWith(this.codexSessionsBase() + path.sep) ? resolved : null
-  }
-
   private codexFile(node: TerminalNodeData): string | null {
     if (!isCodexCommand(node.command)) return null
     // Use ONLY the authoritative bound ref (set deterministically at spawn by
-    // lsof of the codex process). No mtime rebind here — that was a stray-grab
-    // / cross-wiring source (EXACT-CONTEXT gate). Unbound → no trace, honest.
-    const bound = this.validCodexRef(node.codexSessionRef)
+    // lsof of the codex process), validated inside the sessions tree. No
+    // mtime rebind here — that was a stray-grab / cross-wiring source
+    // (EXACT-CONTEXT gate). Unbound → no trace, honest.
+    const bound = validCodexSessionRef(node.codexSessionRef, this.options.codexSessionsDir)
     return bound && existsSync(bound) ? bound : null
   }
 

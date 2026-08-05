@@ -249,7 +249,6 @@ export interface TeamMeta {
   terminalCount: number
 }
 
-/** Outcome of an agent recovery, surfaced to the roster toast (agent-recover). */
 /**
  * Result of an ENDPOINT RESTORE — rewinding a live teammate in place to one of
  * its checkpoints. Refusals carry `reason` so the UI never pretends a rewind
@@ -271,6 +270,7 @@ export interface RestoreResult {
   undone?: boolean
 }
 
+/** Outcome of an agent recovery, surfaced to the roster toast (agent-recover). */
 export interface RecoverResult {
   ok: boolean
   id: string

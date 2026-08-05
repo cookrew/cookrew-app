@@ -10,7 +10,7 @@ import { buildForkedSessionLinesAtUuid } from '../shared/claude-fork'
 import { harnessFor } from './harness'
 import { planCheckpointRestore, pushRestorePoint } from './restore-plan'
 import { withSessionLineage } from './session-lineage'
-import { claudeSessionFile } from './claude-fork'
+import { claudeSessionFile, isSessionUuid } from './claude-fork'
 
 export interface RestoreExecutorDeps {
   store: {
@@ -88,6 +88,13 @@ async function restoreCheckpoint(
   if (!node.claudeSessionId) {
     return fail(id, node.name, checkpointIndex, 'No bound Claude session file for this agent yet.')
   }
+  // M1: every id that reaches claudeSessionFile (a bare path.join) must be
+  // UUID-shaped — a tampered store file ('../../etc/x' as session id) would
+  // otherwise escape the project dir and copy an arbitrary *.jsonl into a
+  // session the agent will load. Refuse honestly at the executor boundary.
+  if (!isSessionUuid(node.claudeSessionId)) {
+    return fail(id, node.name, checkpointIndex, 'The bound session id is malformed — refusing to restore.')
+  }
 
   const busy = busyReason(deps, id)
   if (busy) return fail(id, node.name, checkpointIndex, busy)
@@ -101,6 +108,9 @@ async function restoreCheckpoint(
   })
   if (!plan.ok) {
     return fail(id, node.name, checkpointIndex, plan.reason ?? 'Restore not possible.')
+  }
+  if (plan.cutoffSessionId !== undefined && !isSessionUuid(plan.cutoffSessionId)) {
+    return fail(id, node.name, checkpointIndex, 'The checkpoint session id is malformed — refusing to restore.')
   }
 
   const sourceFile = claudeSessionFile(node.cwd, plan.cutoffSessionId ?? node.claudeSessionId, deps.projectsDir)
@@ -181,6 +191,9 @@ async function undoRestore(deps: RestoreExecutorDeps, id: string): Promise<Resto
   }
 
   const [point, ...rest] = stack
+  if (!isSessionUuid(point.sessionId)) {
+    return fail(id, node.name, point.fromIndex, 'The undo stack session id is malformed — refusing to undo.')
+  }
   const targetFile = claudeSessionFile(node.cwd, point.sessionId, deps.projectsDir)
   if (!existsSync(targetFile)) {
     return fail(id, node.name, restorePointIndex(point), 'The previous session file no longer exists — cannot undo.')

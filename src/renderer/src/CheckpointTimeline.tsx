@@ -24,6 +24,12 @@ const SCRUB_THRESHOLD = 4
 /** Press-and-hold a tab/row this long (~2s) to reveal its SAVE ROLE / FORK
  *  actions. Same gesture for mouse and touch — desktop == mobile. */
 const HOLD_REVEAL_MS = 1500
+
+/** M4: a two-tap REWIND arm expires after this long (walk-away safety — the
+ *  chip reverts to REWIND instead of staying one tap from a rewind). */
+const REWIND_ARM_MS = 8000
+/** M3: an inline rewind refusal lingers this long, then dismisses itself. */
+const REWIND_ERROR_MS = 6000
 /** Neighbor rows rendered ABOVE and BELOW the focused one in the fan; generous
  *  so it fills the view — Fresco clips the overflow at the boundary. */
 const NEIGHBOR_RADIUS = 12
@@ -95,6 +101,9 @@ export function CheckpointTimeline({
    * destructive-ish rail action), second tap executes. */
   const [rewindArmed, setRewindArmed] = useState<number | null>(null)
   const [rewindingIndex, setRewindingIndex] = useState<number | null>(null)
+  /** M3: a refused rewind, surfaced INLINE on the row (never window.alert — a
+   * native modal freezes the whole Electron UI). Scoped by row index. */
+  const [rewindError, setRewindError] = useState<{ index: number; reason: string } | null>(null)
   const railRef = useRef<HTMLDivElement>(null)
   const miniRef = useRef<HTMLDivElement>(null)
   // Rail scrub gesture: a press that travels past SCRUB_THRESHOLD becomes a
@@ -137,11 +146,41 @@ export function CheckpointTimeline({
     return () => document.removeEventListener('pointerdown', onDown)
   }, [acting])
 
+  // M4: rewindArmed is a checkpoint ORDINAL — when the rows shift (new
+  // checkpoints arrive), the same ordinal now names a DIFFERENT checkpoint,
+  // so the two-tap "SURE?" would fire on a row the user never armed. Disarm
+  // (and drop any surfaced refusal) on any rows-identity change.
+  const rowsSignature = rows.map((r) => `${r.index}:${r.record?.uuid ?? ''}`).join('|')
+  useEffect(() => {
+    setRewindArmed(null)
+    setRewindError(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowsSignature])
+
+  // M4: an arm also expires — walk away mid-confirmation and the chip reverts
+  // to REWIND rather than staying one tap from a destructive action.
+  useEffect(() => {
+    if (rewindArmed === null) return
+    const timeout = setTimeout(() => setRewindArmed(null), REWIND_ARM_MS)
+    return () => clearTimeout(timeout)
+  }, [rewindArmed])
+
+  // M3: a surfaced refusal auto-dismisses (closing the row's action strip).
+  useEffect(() => {
+    if (rewindError === null) return
+    const timeout = setTimeout(() => {
+      setRewindError(null)
+      setActing(null)
+    }, REWIND_ERROR_MS)
+    return () => clearTimeout(timeout)
+  }, [rewindError])
+
   if (rows.length === 0) return null
 
   const closeActions = (): void => {
     setActing(null)
     setSavingIndex(null)
+    setRewindArmed(null) // M4: never keep an arm across dismissed actions
   }
   // HOLD to reveal actions — same gesture for mouse and touch. A short release is
   // a plain tap; `held` swallows the click that fires after a completed hold.
@@ -175,6 +214,7 @@ export function CheckpointTimeline({
   const rewind = (index: number): void => {
     if (rewindingIndex !== null) return
     if (rewindArmed !== index) {
+      setRewindError(null)
       setRewindArmed(index)
       return
     }
@@ -183,13 +223,20 @@ export function CheckpointTimeline({
     setRewindingIndex(index)
     void restore(terminalId, index)
       .then((result) => {
-        if (!result.ok) window.alert(result.reason ?? 'Rewind refused.')
+        if (result.ok) {
+          closeActions()
+        } else {
+          // M3: no window.alert — the refusal rides the row's action strip
+          // inline (actions stay open) and auto-dismisses.
+          setRewindError({ index, reason: result.reason ?? 'Rewind refused.' })
+        }
       })
-      .catch((error) => console.error('Rewind failed:', error))
+      .catch((error: unknown) => {
+        setRewindError({ index, reason: error instanceof Error ? error.message : String(error) })
+      })
       .finally(() => {
         setRewindArmed(null)
         setRewindingIndex(null)
-        closeActions()
       })
   }
 
@@ -236,6 +283,11 @@ export function CheckpointTimeline({
 
   const rowActions = (row: CheckpointRow, index: number): React.JSX.Element => (
     <span className="cr-ckpt-row-actions" onMouseDown={stop} onClick={stop}>
+      {rewindError?.index === index && (
+        <span className="cr-ckpt-rewind-error" role="alert">
+          {rewindError.reason}
+        </span>
+      )}
       {savingIndex === index && row.record ? (
         <SaveRoleInline terminalId={terminalId} record={row.record} onDone={closeActions} />
       ) : (
