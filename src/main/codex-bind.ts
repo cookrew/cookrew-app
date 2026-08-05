@@ -33,6 +33,31 @@ export function defaultCodexSessionsDir(): string {
 }
 
 /**
+ * SECURITY: a codexSessionRef is only honored when it resolves INSIDE the
+ * codex sessions tree — node fields can arrive over the network, and a
+ * planted ref must never turn a reader into an arbitrary-file oracle.
+ * (updateNode also allow-lists the field away; this is the
+ * defense-in-depth check at the read site.)
+ */
+export function validCodexSessionRef(
+  ref: string | null | undefined,
+  sessionsDir?: string
+): string | null {
+  if (!ref) return null
+  const base = path.resolve(sessionsDir ?? defaultCodexSessionsDir())
+  const resolved = path.resolve(ref)
+  return resolved.startsWith(base + path.sep) ? resolved : null
+}
+
+/** Rollout file to poll for durable turn history (SessionTurnSync). */
+export function codexWatchFile(
+  node: { codexSessionRef?: string | null },
+  options: { codexSessionsDir?: string } = {}
+): string | null {
+  return validCodexSessionRef(node.codexSessionRef, options.codexSessionsDir)
+}
+
+/**
  * First line of a (possibly large) rollout, read incrementally until the
  * newline instead of a fixed head — session_meta lines exceed 8KB. Scans at
  * the BYTE level (newline 0x0A is never part of a multibyte UTF-8 sequence)

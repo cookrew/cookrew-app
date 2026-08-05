@@ -121,7 +121,7 @@ describe('parseCodexTrace (rollout blocks)', () => {
     const blocks = parseCodexTrace(codexLines())
     expect(blocks).toHaveLength(2)
     expect(blocks[0]).toMatchObject({
-      id: 'p1',
+      id: 'sess-1:p1',
       index: 1,
       prompt: 'Reply with exactly: PROBE-ONE',
       reply: 'PROBE-ONE'
@@ -129,7 +129,7 @@ describe('parseCodexTrace (rollout blocks)', () => {
     expect(blocks[0].activity).toEqual([
       { tool: 'shell', args: '{"cmd":"ls"}', result: 'README.md\nsrc' }
     ])
-    expect(blocks[1]).toMatchObject({ id: 'p2', index: 2, prompt: 'and again', reply: 'again done' })
+    expect(blocks[1]).toMatchObject({ id: 'sess-1:p2', index: 2, prompt: 'and again', reply: 'again done' })
   })
 
   it('parses session_meta for the binder', () => {
