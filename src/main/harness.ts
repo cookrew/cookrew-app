@@ -5,8 +5,20 @@
 // agent-recover-feature-design).
 
 import { stripSessionFlags } from '../shared/claude-fork'
-import { sessionIdFromRolloutPath } from './codex-bind'
-import { isPiCommand, piNodeSessionDir, piResumeCommand, validPiSessionId } from './pi-bind'
+import type { TerminalNodeData } from '../shared/model'
+import { parseSessionTurns } from '../shared/session-turns'
+import { parseCodexTurns, parsePiTurns } from '../shared/trace-blocks'
+import type { TurnRecord } from '../shared/turn'
+import { claudeWatchFile } from './claude-fork'
+import { codexWatchFile, sessionIdFromRolloutPath } from './codex-bind'
+import { isPiCommand, piNodeSessionDir, piResumeCommand, piWatchFile, validPiSessionId } from './pi-bind'
+
+/** Session-root overrides a watchFile resolver honors (tests). */
+export interface HarnessWatchOptions {
+  projectsDir?: string
+  codexSessionsDir?: string
+  piSessionsRoot?: string
+}
 
 export type HarnessId = 'claude' | 'codex' | 'opencode' | 'pi'
 
@@ -29,6 +41,26 @@ export interface Harness {
   resumeKey(sessionRef: string): string | null
   /** Launch command that RESUMES the given session key, full session as-is. */
   resumeCommand(command: string, key: string, context?: { terminalId: string }): string
+  /**
+   * Turn-history capability (harness-integration-contract):
+   * 'file'   — durable TurnRecords are derived from the harness's session
+   *            FILE (SessionTurnSync reconcile); `parseTurns` must be wired
+   *            and its indices must equal the trace-block indices.
+   * 'scrape' — PTY-scrape only; a conscious, declared limitation. New
+   *            harnesses are expected to reach 'file' before their preset
+   *            ships (tests/harness-conformance.test.ts pins this).
+   */
+  turns: 'file' | 'scrape'
+  /** Session-file lines → TurnRecords; present exactly when turns === 'file'. */
+  parseTurns?: (lines: string[]) => TurnRecord[]
+  /**
+   * The session file SessionTurnSync should poll for this node, or null when
+   * unbound/unusable. Owned by the harness so adding one is registry-only
+   * (contract rule 4) — each resolver carries its own security validation
+   * (UUID shape, sessions-tree prefix, exclusive-dir scan). Present exactly
+   * when turns === 'file'.
+   */
+  watchFile?: (node: TerminalNodeData, options: HarnessWatchOptions) => string | null
 }
 
 const CLAUDE: Harness = {
@@ -36,7 +68,10 @@ const CLAUDE: Harness = {
   matches: (c) => /^\s*claude\b/.test(c),
   sessionField: 'claudeSessionId',
   resumeKey: (ref) => (ref ? ref : null),
-  resumeCommand: (command, key) => `${stripSessionFlags(command)} --resume ${key}`
+  resumeCommand: (command, key) => `${stripSessionFlags(command)} --resume ${key}`,
+  turns: 'file',
+  parseTurns: parseSessionTurns,
+  watchFile: claudeWatchFile
 }
 
 const CODEX: Harness = {
@@ -48,7 +83,10 @@ const CODEX: Harness = {
   // Global opts (e.g. --dangerously-bypass-approvals-and-sandbox) MUST stay
   // BEFORE the `resume` subcommand (Tinker). Strip any prior resume tail.
   resumeCommand: (command, key) =>
-    `${command.replace(/\s+resume\b.*$/, '').trim()} resume ${key}`
+    `${command.replace(/\s+resume\b.*$/, '').trim()} resume ${key}`,
+  turns: 'file',
+  parseTurns: parseCodexTurns,
+  watchFile: codexWatchFile
 }
 
 const OPENCODE_SESSION_FLAG_RE = /\s(?:--session|--continue|-s|-c)(?:[= ]\S+)?/g
@@ -61,7 +99,9 @@ const OPENCODE: Harness = {
   // `ses_<base62>` shape before it can reach the launch string.
   resumeKey: (ref) => (/^ses_[A-Za-z0-9]+$/.test(ref) ? ref : null),
   resumeCommand: (command, key) =>
-    `${command.replace(OPENCODE_SESSION_FLAG_RE, '').trim()} --session ${key}`
+    `${command.replace(OPENCODE_SESSION_FLAG_RE, '').trim()} --session ${key}`,
+  // OpenCode has no session-file trace/turn parser yet — declared limitation.
+  turns: 'scrape'
 }
 
 const PI: Harness = {
@@ -74,10 +114,14 @@ const PI: Harness = {
   resumeCommand: (command, key, context) => {
     if (!context) throw new Error('Pi resume requires a terminal id')
     return piResumeCommand(command, key, piNodeSessionDir(context.terminalId))
-  }
+  },
+  turns: 'file',
+  parseTurns: parsePiTurns,
+  watchFile: piWatchFile
 }
 
-const HARNESSES: Harness[] = [CLAUDE, CODEX, OPENCODE, PI]
+/** Every registered harness. Conformance: tests/harness-conformance.test.ts. */
+export const HARNESSES: Harness[] = [CLAUDE, CODEX, OPENCODE, PI]
 
 /** The harness a launch command runs, or null (plain shell / unknown). */
 export function harnessFor(command: string): Harness | null {
