@@ -1,4 +1,8 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { piSessionDir } from '../src/main/pi-bind'
 import { canRestoreExact, isRefOwned } from '../src/main/recover-gate'
 import type { TerminalNodeData } from '../src/shared/model'
 
@@ -114,6 +118,34 @@ describe('canRestoreExact — Pi', () => {
     const deps = { ...noTurns, piExists: () => { checked = true; return true } }
     expect(canRestoreExact(node({ command: 'pi', piSessionId: 'x;touch /tmp/pwn' }), deps)).toBe(false)
     expect(checked).toBe(false)
+  })
+
+  it('a session adopted from a legacy pane is exactly restorable (default check)', () => {
+    // The default existence check must use the same home as resume/watch: an
+    // adopted session lives in pi's own cwd dir, and gating on the exclusive
+    // dir alone made exactly the nodes the adoption path repairs permanently
+    // non-recoverable (recover falls back to a fresh boot).
+    const root = mkdtempSync(path.join(tmpdir(), 'gate-pi-adopted-'))
+    const cwd = path.join(root, 'work')
+    const agentDir = path.join(root, 'agent')
+    mkdirSync(cwd, { recursive: true })
+    const shared = piSessionDir(cwd, { agentDir })
+    mkdirSync(shared, { recursive: true })
+    const id = '019fd18d-adopted'
+    writeFileSync(
+      path.join(shared, `2026_${id}.jsonl`),
+      `${JSON.stringify({ type: 'session', version: 3, id, cwd })}\n`
+    )
+    const previous = process.env.PI_CODING_AGENT_DIR
+    process.env.PI_CODING_AGENT_DIR = agentDir
+    try {
+      expect(canRestoreExact(node({ command: 'pi', cwd, piSessionId: id }), noTurns)).toBe(true)
+      expect(canRestoreExact(node({ command: 'pi', cwd, piSessionId: 'other' }), noTurns)).toBe(false)
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR
+      else process.env.PI_CODING_AGENT_DIR = previous
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 

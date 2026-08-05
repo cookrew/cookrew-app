@@ -11,13 +11,21 @@ import { parseCodexTurns, parsePiTurns } from '../shared/trace-blocks'
 import type { TurnRecord } from '../shared/turn'
 import { claudeWatchFile } from './claude-fork'
 import { codexWatchFile, sessionIdFromRolloutPath } from './codex-bind'
-import { isPiCommand, piNodeSessionDir, piResumeCommand, piWatchFile, validPiSessionId } from './pi-bind'
+import {
+  isPiCommand,
+  piNodeSessionDir,
+  piResumeCommand,
+  piSessionHome,
+  piWatchFile,
+  validPiSessionId
+} from './pi-bind'
 
 /** Session-root overrides a watchFile resolver honors (tests). */
 export interface HarnessWatchOptions {
   projectsDir?: string
   codexSessionsDir?: string
   piSessionsRoot?: string
+  piAgentDir?: string
 }
 
 export type HarnessId = 'claude' | 'codex' | 'opencode' | 'pi'
@@ -43,8 +51,11 @@ export interface Harness {
    *  `context` is REQUIRED (M6): harnesses that scope sessions by terminal
    *  (pi — exclusive --session-dir) cannot build an honest resume without it,
    *  so an optional param was a latent runtime throw on the first generic pi
-   *  call site. Harnesses that don't need it simply ignore it. */
-  resumeCommand(command: string, key: string, context: { terminalId: string }): string
+   *  call site. `cwd` is part of it because a session may live outside the
+   *  terminal's own directory (pi legacy-pane adoption, contract rule 8) and
+   *  resuming it in the wrong directory strands the conversation. Harnesses
+   *  that don't need either field simply ignore them. */
+  resumeCommand(command: string, key: string, context: { terminalId: string; cwd: string }): string
   /**
    * Turn-history capability (harness-integration-contract):
    * 'file'   — durable TurnRecords are derived from the harness's session
@@ -115,8 +126,17 @@ const PI: Harness = {
   // This value can be restored from persisted/mobile-originated node data and
   // reaches a shell command, so accept only Pi's closed session-id alphabet.
   resumeKey: (ref) => (validPiSessionId(ref) ? ref : null),
+  // Resume in the directory that HOLDS the session: the terminal's exclusive
+  // dir normally, pi's own cwd dir for a session adopted from a legacy pane.
+  // Hard-coding the exclusive dir would boot an empty conversation beside the
+  // real one — the exact outcome the adoption path exists to prevent.
   resumeCommand: (command, key, context) =>
-    piResumeCommand(command, key, piNodeSessionDir(context.terminalId)),
+    piResumeCommand(
+      command,
+      key,
+      piSessionHome(context.cwd, key, context.terminalId)?.dir ??
+        piNodeSessionDir(context.terminalId)
+    ),
   turns: 'file',
   parseTurns: parsePiTurns,
   watchFile: piWatchFile

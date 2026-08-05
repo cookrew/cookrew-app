@@ -28,6 +28,7 @@ A harness is **integrated** when an agent running it gets the same user-visible 
 5. **Security invariants** (all pinned by tests): session ids/refs validated before touching paths or shell strings; each harness's `watchFile` resolver carries its own defense-in-depth check (claude UUID shape, codex sessions-tree prefix, pi exclusive-dir + header/cwd agreement); store writes go through the `updateNode` allow-list.
 6. **Turn identity is session-namespaced**: a `TurnRecord.uuid` must be unique per SESSION, never positional-only — codex block ids are `<session_id>:p<ordinal>` because a bare `p<N>` collides across sessions and silently defeats the uuid title-carryover guard in `TurnTracker.replaceHistory`.
 7. **Small files, immutable updates** per repo style; parsers are pure functions of `string[]`.
+8. **Bind against the LIVE pane, not the command we would build today.** tmux `new-session -A` reattaches an existing session and silently ignores the launch command, so a pane created before a binding scheme existed keeps running the old one forever — a stored/derived command describes an intention, `#{pane_start_command}` + `#{session_created}` (`PtyManager.paneLaunch`) describe reality. When a harness locates sessions by a launch FLAG (pi's `--session-dir`), read that flag off the live pane; when the pane declares none, its session sits in the harness's shared default directory, and adopting from there stays deterministic only under two proofs: the session's own start timestamp inside the pane's start window (`PI_PANE_WINDOW_MS`) and the 1:1 ownership check against every other terminal. No pane start time = no adoption. The matching resume path must then resume the session **where it actually lives**, and every consumer — resume (`piLaunchBinding`, the registry's `resumeCommand`), watch, trace, and the recover EXACT-CONTEXT gate — must read that location from ONE resolver (`piSessionHome`); when they disagree, the rail fills while the trace drawer stays blank and recover refuses to spawn the very nodes adoption repaired. Adoption proofs, in order: the window is **forward-only** (a session already running when the pane booted belongs to someone else), tight (`PI_PANE_WINDOW_MS`), the winner is the session that opened **nearest** the pane start (mtime would hand a quiet pane's session to whoever typed last), and the id must be unclaimed by every other terminal. *Declared limitation:* if a legacy pane's agent switches sessions mid-life, adoption stays on the session that opened with the pane — a shared directory offers no honest way to follow the switch, and a wrong follow is worse than a stale-but-true binding.
 
 ## 3. Conformance tests (run for every harness)
 
@@ -49,6 +50,7 @@ Supporting suites: `tests/session-watch.test.ts` (TraceReader.watchSpec resoluti
 - **G4 injection gate** — resumeKey rejection of hostile refs (test 4).
 - **G5 watch gate** — `watchSpec` returns null for unbound/scrape/plain-shell terminals and refuses out-of-tree refs and non-UUID claude ids (`tests/session-watch.test.ts`).
 - **G6 identity-namespace gate** — codex turn uuids carry the rollout session id; two sessions never share a uuid (`tests/pi-turns.test.ts`).
+- **G7 reattach gate** — a live pane launched WITHOUT the harness's session flag still binds (from the shared dir, window + ownership proven), a pane that declares its dir never adopts a shared-dir decoy, adoption without a pane start time is refused, and an adopted session stays watchable at the watch boundary (`tests/pi-bind.test.ts`, `tests/session-watch.test.ts`). This is the gap that left the Playground Pi's rail reading `(recovered turn)` while its real history sat on disk.
 
 ## 5. Current capability matrix
 
@@ -56,7 +58,7 @@ Supporting suites: `tests/session-watch.test.ts` (TraceReader.watchSpec resoluti
 |---|---|---|---|---|---|
 | claude | minted/resolved id | `--resume <uuid>` | ✅ | ✅ file | ✅ |
 | codex | lsof pane pid | `resume <uuid>` | ✅ | ✅ file | ❌ (honest refusal) |
-| pi | exclusive `--session-dir` | `--session <id>` | ✅ | ✅ file | ❌ (honest refusal) |
+| pi | exclusive `--session-dir`, or live-pane adoption (rule 8) | `--session <id>` in the dir that holds it | ✅ | ✅ file | ❌ (honest refusal) |
 | opencode | lsof pane pid | `--session <id>` | ❌ | ⚠️ scrape (declared) | ❌ (honest refusal) |
 
 OpenCode reaching `'file'` = add `parseOpencodeTrace` (+ `parseOpencodeTurns` composition + `opencodeWatchFile`) and flip the two registry fields — no call-site edits anywhere else (rule 4).

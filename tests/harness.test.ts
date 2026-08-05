@@ -1,6 +1,9 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { harnessFor } from '../src/main/harness'
-import { piNodeSessionDir } from '../src/main/pi-bind'
+import { piNodeSessionDir, piSessionDir } from '../src/main/pi-bind'
 
 describe('harnessFor — multi-harness resume registry', () => {
   it('identifies each harness and its session field', () => {
@@ -17,7 +20,8 @@ describe('harnessFor — multi-harness resume registry', () => {
   })
 
   it('builds a full-session resume command per harness', () => {
-    const ctx = { terminalId: 'x' } // ignored by harnesses that don't scope by terminal
+    // cwd/terminalId are ignored by harnesses that scope neither.
+    const ctx = { terminalId: 'x', cwd: '/work/repo' }
     const claude = harnessFor('claude --permission-mode bypassPermissions')!
     expect(claude.resumeCommand('claude --permission-mode bypassPermissions', 'sess-1', ctx)).toBe(
       'claude --permission-mode bypassPermissions --resume sess-1'
@@ -38,12 +42,39 @@ describe('harnessFor — multi-harness resume registry', () => {
       'opencode --session oc-2'
     )
     const piDir = piNodeSessionDir('pi-node')
-    expect(harnessFor('pi')!.resumeCommand('pi --model sonnet', '019f-safe', { terminalId: 'pi-node' })).toBe(
+    expect(harnessFor('pi')!.resumeCommand('pi --model sonnet', '019f-safe', { terminalId: 'pi-node', cwd: '/work/repo' })).toBe(
       `pi --model sonnet --session 019f-safe --session-dir ${piDir}`
     )
-    expect(harnessFor('pi')!.resumeCommand('pi --session old -c', '019f-safe', { terminalId: 'pi-node' })).toBe(
+    expect(harnessFor('pi')!.resumeCommand('pi --session old -c', '019f-safe', { terminalId: 'pi-node', cwd: '/work/repo' })).toBe(
       `pi --session 019f-safe --session-dir ${piDir}`
     )
+  })
+
+  it('pi resumes an ADOPTED session in the directory that holds it', () => {
+    // Registry parity with piLaunchBinding: the generic resume path (recover,
+    // restore) must not send an adopted node back to its empty exclusive dir.
+    const root = mkdtempSync(path.join(tmpdir(), 'harness-pi-adopted-'))
+    const cwd = path.join(root, 'work')
+    const agentDir = path.join(root, 'agent')
+    mkdirSync(cwd, { recursive: true })
+    const shared = piSessionDir(cwd, { agentDir })
+    mkdirSync(shared, { recursive: true })
+    const id = '019fd18d-adopted'
+    writeFileSync(
+      path.join(shared, `2026_${id}.jsonl`),
+      `${JSON.stringify({ type: 'session', version: 3, id, cwd })}\n`
+    )
+    const previous = process.env.PI_CODING_AGENT_DIR
+    process.env.PI_CODING_AGENT_DIR = agentDir
+    try {
+      expect(harnessFor('pi')!.resumeCommand('pi', id, { terminalId: 'pi-node', cwd })).toBe(
+        `pi --session ${id} --session-dir ${shared}`
+      )
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR
+      else process.env.PI_CODING_AGENT_DIR = previous
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it('resolves the codex resume key from a rollout path, else a bare uuid', () => {

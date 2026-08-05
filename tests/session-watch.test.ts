@@ -9,7 +9,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { WorkspaceStore } from '../src/main/store'
 import { TraceReader } from '../src/main/trace'
-import { piNodeSessionDir } from '../src/main/pi-bind'
+import { piNodeSessionDir, piSessionDir } from '../src/main/pi-bind'
 import { claudeProjectSlug } from '../src/shared/claude-fork'
 import type { TerminalNodeData } from '../src/shared/model'
 
@@ -82,6 +82,37 @@ describe('TraceReader.watchSpec', () => {
     const turns = spec!.parse(['ignored'])
     expect(typeof spec!.parse).toBe('function')
     void turns
+  })
+
+  it('pi: a session adopted from a LEGACY pane is watched in pi\'s own cwd dir', () => {
+    // Regression, live '(recovered turn)' rail: a pane launched before the
+    // exclusive-dir wiring is reattached as-is by `new-session -A`, so its pi
+    // keeps writing to pi's cwd-derived dir. Once such a session is bound the
+    // watch must find it there, or the rail silently degrades to PTY scrapes.
+    const root = mkdtempSync(path.join(tmpdir(), 'watch-pi-legacy-'))
+    const agentDir = path.join(root, 'agent')
+    const cwd = path.join(root, 'work')
+    mkdirSync(cwd, { recursive: true })
+    const shared = piSessionDir(cwd, { agentDir })
+    mkdirSync(shared, { recursive: true })
+    const id = '019fd18d-legacy'
+    const file = path.join(shared, `2026-08-05_${id}.jsonl`)
+    writeFileSync(file, `${JSON.stringify({ type: 'session', version: 3, id, cwd })}\n`)
+    const { store, node } = storeWith(
+      terminal({ command: 'pi', cwd, claudeSessionId: null, piSessionId: id })
+    )
+    const reader = new TraceReader(store, {
+      piSessionsRoot: path.join(root, 'exclusive'),
+      piAgentDir: agentDir
+    })
+    const spec = reader.watchSpec(node.id)
+    expect(spec).not.toBeNull()
+    expect(spec!.file).toBe(file)
+    // The trace drawer reads the SAME home — a rail with history beside a
+    // blank drawer is the divergence this shares one resolver to prevent.
+    return reader.page(node.id).then((page) => {
+      expect(page.source).toBe('pi')
+    })
   })
 
   it('pi: unbound terminal (no piSessionId yet) has no watch spec', () => {
