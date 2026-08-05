@@ -20,7 +20,7 @@ function makeNode(overrides: Partial<TerminalNodeData> = {}): TerminalNodeData {
     cwd: '/tmp/cookrew-restore-test',
     orch: false,
     role: null,
-    claudeSessionId: 'origin-id',
+    claudeSessionId: 'aa000000-0000-4000-8000-000000000001',
     position: { x: 0, y: 0 },
     size: { width: 300, height: 200 },
     ...overrides
@@ -100,8 +100,8 @@ describe('createRestoreHandlers', () => {
     it('truncates the session at the checkpoint and rebinds the node', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
       const cwd = path.join(tmp, 'project')
-      const node = makeNode({ cwd, claudeSessionId: 'origin-id' })
-      writeSession(cwd, 'origin-id', sessionLines('origin-id'), tmp)
+      const node = makeNode({ cwd, claudeSessionId: 'aa000000-0000-4000-8000-000000000001' })
+      writeSession(cwd, 'aa000000-0000-4000-8000-000000000001', sessionLines('aa000000-0000-4000-8000-000000000001'), tmp)
       const { deps, calls } = makeDeps(() => node, {
         projectsDir: tmp,
         checkpointRefs: [
@@ -115,17 +115,17 @@ describe('createRestoreHandlers', () => {
 
       expect(result.ok).toBe(true)
       expect(result.checkpointIndex).toBe(2)
-      expect(result.previousSessionId).toBe('origin-id')
+      expect(result.previousSessionId).toBe('aa000000-0000-4000-8000-000000000001')
       expect(result.sessionId).toBeDefined()
-      expect(result.sessionId).not.toBe('origin-id')
+      expect(result.sessionId).not.toBe('aa000000-0000-4000-8000-000000000001')
 
       // Original file intact.
-      expect(existsSync(path.join(claudeProjectDir(cwd, tmp), 'origin-id.jsonl'))).toBe(true)
+      expect(existsSync(path.join(claudeProjectDir(cwd, tmp), 'aa000000-0000-4000-8000-000000000001.jsonl'))).toBe(true)
       // New truncated file exists.
       const newFile = path.join(claudeProjectDir(cwd, tmp), `${result.sessionId}.jsonl`)
       expect(existsSync(newFile)).toBe(true)
       const newLines = readFileSync(newFile, 'utf8').split('\n').filter(Boolean)
-      expect(newLines.length).toBeLessThan(sessionLines('origin-id').length)
+      expect(newLines.length).toBeLessThan(sessionLines('aa000000-0000-4000-8000-000000000001').length)
       // Every kept record restamped with the new session id.
       for (const line of newLines) {
         const record = JSON.parse(line)
@@ -138,7 +138,7 @@ describe('createRestoreHandlers', () => {
       expect(calls.updates).toHaveLength(1)
       expect(calls.updates[0]).toMatchObject({
         claudeSessionId: result.sessionId,
-        restoreStack: [{ sessionId: 'origin-id', fromIndex: 2 }]
+        restoreStack: [{ sessionId: 'aa000000-0000-4000-8000-000000000001', fromIndex: 2 }]
       })
       expect(calls.spawn).toHaveLength(1)
       expect((calls.spawn[0] as TerminalNodeData).claudeSessionId).toBe(result.sessionId)
@@ -164,10 +164,44 @@ describe('createRestoreHandlers', () => {
       expect(result.reason).toMatch(/No bound Claude session file/i)
     })
 
+    it('M1: refuses a non-UUID bound session id (tampered store) — no file read, no kill', async () => {
+      const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
+      const node = makeNode({ cwd: path.join(tmp, 'project'), claudeSessionId: '../../etc/evil' })
+      const { deps, calls } = makeDeps(() => node, {
+        projectsDir: tmp,
+        checkpointRefs: [{ index: 1, id: U1 }]
+      })
+
+      const result = await createRestoreHandlers(deps).restoreCheckpoint('t1', 1)
+
+      expect(result.ok).toBe(false)
+      expect(result.reason).toMatch(/malformed/i)
+      expect(deps.ptys.killAndWait).not.toHaveBeenCalled()
+      expect(calls.updates).toHaveLength(0)
+      expect(calls.spawn).toHaveLength(0)
+    })
+
+    it('M1: refuses a non-UUID checkpoint session id from the refs', async () => {
+      const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
+      const cwd = path.join(tmp, 'project')
+      const node = makeNode({ cwd })
+      writeSession(cwd, node.claudeSessionId!, sessionLines(node.claudeSessionId!), tmp)
+      const { deps } = makeDeps(() => node, {
+        projectsDir: tmp,
+        checkpointRefs: [{ index: 1, id: U1, sessionId: '../../etc/evil' }]
+      })
+
+      const result = await createRestoreHandlers(deps).restoreCheckpoint('t1', 1)
+
+      expect(result.ok).toBe(false)
+      expect(result.reason).toMatch(/malformed/i)
+      expect(deps.ptys.killAndWait).not.toHaveBeenCalled()
+    })
+
     it('refuses an unknown checkpoint index', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
-      const node = makeNode({ cwd: path.join(tmp, 'project'), claudeSessionId: 'origin-id' })
-      writeSession(node.cwd, 'origin-id', sessionLines('origin-id'), tmp)
+      const node = makeNode({ cwd: path.join(tmp, 'project'), claudeSessionId: 'aa000000-0000-4000-8000-000000000001' })
+      writeSession(node.cwd, 'aa000000-0000-4000-8000-000000000001', sessionLines('aa000000-0000-4000-8000-000000000001'), tmp)
       const { deps } = makeDeps(() => node, {
         projectsDir: tmp,
         checkpointRefs: [{ index: 1, id: U1 }]
@@ -181,7 +215,7 @@ describe('createRestoreHandlers', () => {
 
     it('refuses when the source session file is missing', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
-      const node = makeNode({ cwd: path.join(tmp, 'project'), claudeSessionId: 'origin-id' })
+      const node = makeNode({ cwd: path.join(tmp, 'project'), claudeSessionId: 'aa000000-0000-4000-8000-000000000001' })
       const { deps } = makeDeps(() => node, {
         projectsDir: tmp,
         checkpointRefs: [{ index: 1, id: U1 }]
@@ -195,8 +229,8 @@ describe('createRestoreHandlers', () => {
 
     it('refuses a checkpoint whose id is not a real uuid', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
-      const node = makeNode({ cwd: path.join(tmp, 'project'), claudeSessionId: 'origin-id' })
-      writeSession(node.cwd, 'origin-id', sessionLines('origin-id'), tmp)
+      const node = makeNode({ cwd: path.join(tmp, 'project'), claudeSessionId: 'aa000000-0000-4000-8000-000000000001' })
+      writeSession(node.cwd, 'aa000000-0000-4000-8000-000000000001', sessionLines('aa000000-0000-4000-8000-000000000001'), tmp)
       const { deps } = makeDeps(() => node, {
         projectsDir: tmp,
         checkpointRefs: [{ index: 1, id: 'not-a-uuid' }]
@@ -211,8 +245,8 @@ describe('createRestoreHandlers', () => {
     it('pushes multiple restore points and caps the undo stack', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
       const cwd = path.join(tmp, 'project')
-      let node = makeNode({ cwd, claudeSessionId: 'origin-id' })
-      writeSession(cwd, 'origin-id', sessionLines('origin-id'), tmp)
+      let node = makeNode({ cwd, claudeSessionId: 'aa000000-0000-4000-8000-000000000001' })
+      writeSession(cwd, 'aa000000-0000-4000-8000-000000000001', sessionLines('aa000000-0000-4000-8000-000000000001'), tmp)
       const { deps, calls } = makeDeps(() => node, {
         projectsDir: tmp,
         checkpointRefs: [
@@ -256,8 +290,8 @@ describe('createRestoreHandlers', () => {
     it('rebinds to the previous session and pops the undo stack', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
       const cwd = path.join(tmp, 'project')
-      const previousId = 'previous-id'
-      const currentId = 'current-id'
+      const previousId = 'bb000000-0000-4000-8000-000000000001'
+      const currentId = 'aa000000-0000-4000-8000-000000000002'
       writeSession(cwd, previousId, sessionLines(previousId), tmp)
       const node = makeNode({
         cwd,
@@ -293,13 +327,30 @@ describe('createRestoreHandlers', () => {
       expect(result.reason).toMatch(/Nothing to undo/i)
     })
 
+    it('M1: refuses a non-UUID undo-stack session id (tampered store) — no file read, no kill', async () => {
+      const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
+      const node = makeNode({
+        cwd: path.join(tmp, 'project'),
+        restoreStack: [{ sessionId: '../../etc/evil', at: Date.now(), fromIndex: 2 }]
+      })
+      const { deps, calls } = makeDeps(() => node, { projectsDir: tmp })
+
+      const result = await createRestoreHandlers(deps).undoRestore('t1')
+
+      expect(result.ok).toBe(false)
+      expect(result.reason).toMatch(/malformed/i)
+      expect(deps.ptys.killAndWait).not.toHaveBeenCalled()
+      expect(calls.updates).toHaveLength(0)
+      expect(calls.spawn).toHaveLength(0)
+    })
+
     it('refuses when the previous session file is missing', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
       const cwd = path.join(tmp, 'project')
       const node = makeNode({
         cwd,
-        claudeSessionId: 'current-id',
-        restoreStack: [{ sessionId: 'missing-id', at: Date.now(), fromIndex: 2 }]
+        claudeSessionId: 'aa000000-0000-4000-8000-000000000002',
+        restoreStack: [{ sessionId: 'aa000000-0000-4000-8000-000000000003', at: Date.now(), fromIndex: 2 }]
       })
       const { deps } = makeDeps(() => node, { projectsDir: tmp })
 
@@ -312,14 +363,14 @@ describe('createRestoreHandlers', () => {
     it('preserves older undo points after undoing the newest', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
       const cwd = path.join(tmp, 'project')
-      writeSession(cwd, 'prev1', sessionLines('prev1'), tmp)
-      writeSession(cwd, 'prev2', sessionLines('prev2'), tmp)
+      writeSession(cwd, 'aa000000-0000-4000-8000-000000000004', sessionLines('aa000000-0000-4000-8000-000000000004'), tmp)
+      writeSession(cwd, 'aa000000-0000-4000-8000-000000000005', sessionLines('aa000000-0000-4000-8000-000000000005'), tmp)
       const node = makeNode({
         cwd,
-        claudeSessionId: 'current-id',
+        claudeSessionId: 'aa000000-0000-4000-8000-000000000002',
         restoreStack: [
-          { sessionId: 'prev2', at: Date.now(), fromIndex: 3 },
-          { sessionId: 'prev1', at: Date.now() - 1000, fromIndex: 2 }
+          { sessionId: 'aa000000-0000-4000-8000-000000000005', at: Date.now(), fromIndex: 3 },
+          { sessionId: 'aa000000-0000-4000-8000-000000000004', at: Date.now() - 1000, fromIndex: 2 }
         ]
       })
       const { deps, calls } = makeDeps(() => node, { projectsDir: tmp })
@@ -327,10 +378,10 @@ describe('createRestoreHandlers', () => {
       const result = await createRestoreHandlers(deps).undoRestore('t1')
 
       expect(result.ok).toBe(true)
-      expect(result.sessionId).toBe('prev2')
+      expect(result.sessionId).toBe('aa000000-0000-4000-8000-000000000005')
       expect(calls.updates[0]).toMatchObject({
-        claudeSessionId: 'prev2',
-        restoreStack: [{ sessionId: 'prev1', fromIndex: 2 }]
+        claudeSessionId: 'aa000000-0000-4000-8000-000000000005',
+        restoreStack: [{ sessionId: 'aa000000-0000-4000-8000-000000000004', fromIndex: 2 }]
       })
     })
   })
@@ -339,8 +390,8 @@ describe('createRestoreHandlers', () => {
     it('restore refuses while the agent is thinking — no kill, no rebind, no spawn', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
       const cwd = path.join(tmp, 'project')
-      const node = makeNode({ cwd, claudeSessionId: 'origin-id' })
-      writeSession(cwd, 'origin-id', sessionLines('origin-id'), tmp)
+      const node = makeNode({ cwd, claudeSessionId: 'aa000000-0000-4000-8000-000000000001' })
+      writeSession(cwd, 'aa000000-0000-4000-8000-000000000001', sessionLines('aa000000-0000-4000-8000-000000000001'), tmp)
       const { deps, calls } = makeDeps(() => node, {
         projectsDir: tmp,
         checkpointRefs: [{ index: 1, id: U1 }]
@@ -359,11 +410,11 @@ describe('createRestoreHandlers', () => {
     it('undo refuses while the agent is waiting on a prompt', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
       const cwd = path.join(tmp, 'project')
-      writeSession(cwd, 'prev1', sessionLines('prev1'), tmp)
+      writeSession(cwd, 'aa000000-0000-4000-8000-000000000004', sessionLines('aa000000-0000-4000-8000-000000000004'), tmp)
       const node = makeNode({
         cwd,
-        claudeSessionId: 'current-id',
-        restoreStack: [{ sessionId: 'prev1', at: Date.now(), fromIndex: 2 }]
+        claudeSessionId: 'aa000000-0000-4000-8000-000000000002',
+        restoreStack: [{ sessionId: 'aa000000-0000-4000-8000-000000000004', at: Date.now(), fromIndex: 2 }]
       })
       const { deps, calls } = makeDeps(() => node, { projectsDir: tmp })
       deps.phaseOf = () => 'waiting'
@@ -379,8 +430,8 @@ describe('createRestoreHandlers', () => {
     it('a replied/idle agent restores normally (guard does not over-fire)', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
       const cwd = path.join(tmp, 'project')
-      const node = makeNode({ cwd, claudeSessionId: 'origin-id' })
-      writeSession(cwd, 'origin-id', sessionLines('origin-id'), tmp)
+      const node = makeNode({ cwd, claudeSessionId: 'aa000000-0000-4000-8000-000000000001' })
+      writeSession(cwd, 'aa000000-0000-4000-8000-000000000001', sessionLines('aa000000-0000-4000-8000-000000000001'), tmp)
       const { deps } = makeDeps(() => node, {
         projectsDir: tmp,
         checkpointRefs: [{ index: 1, id: U1 }]
@@ -395,8 +446,8 @@ describe('createRestoreHandlers', () => {
     it('H1: refuses when the agent goes busy DURING checkpoint resolution (TOCTOU re-check)', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
       const cwd = path.join(tmp, 'project')
-      const node = makeNode({ cwd, claudeSessionId: 'origin-id' })
-      writeSession(cwd, 'origin-id', sessionLines('origin-id'), tmp)
+      const node = makeNode({ cwd, claudeSessionId: 'aa000000-0000-4000-8000-000000000001' })
+      writeSession(cwd, 'aa000000-0000-4000-8000-000000000001', sessionLines('aa000000-0000-4000-8000-000000000001'), tmp)
       const { deps, calls } = makeDeps(() => node, {
         projectsDir: tmp,
         checkpointRefs: [{ index: 1, id: U1 }]
@@ -426,8 +477,8 @@ describe('createRestoreHandlers', () => {
     it('kill failure (e.g. timeout) unlinks the truncated copy and does not rebind', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
       const cwd = path.join(tmp, 'project')
-      const node = makeNode({ cwd, claudeSessionId: 'origin-id' })
-      writeSession(cwd, 'origin-id', sessionLines('origin-id'), tmp)
+      const node = makeNode({ cwd, claudeSessionId: 'aa000000-0000-4000-8000-000000000001' })
+      writeSession(cwd, 'aa000000-0000-4000-8000-000000000001', sessionLines('aa000000-0000-4000-8000-000000000001'), tmp)
       const { deps, calls } = makeDeps(() => node, {
         projectsDir: tmp,
         checkpointRefs: [{ index: 1, id: U1 }]
@@ -449,8 +500,8 @@ describe('createRestoreHandlers', () => {
     it('rebind failure AFTER a successful kill respawns the original binding and unlinks the copy', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
       const cwd = path.join(tmp, 'project')
-      const node = makeNode({ cwd, claudeSessionId: 'origin-id' })
-      writeSession(cwd, 'origin-id', sessionLines('origin-id'), tmp)
+      const node = makeNode({ cwd, claudeSessionId: 'aa000000-0000-4000-8000-000000000001' })
+      writeSession(cwd, 'aa000000-0000-4000-8000-000000000001', sessionLines('aa000000-0000-4000-8000-000000000001'), tmp)
       const { deps, calls } = makeDeps(() => node, {
         projectsDir: tmp,
         checkpointRefs: [{ index: 1, id: U1 }]
@@ -466,18 +517,18 @@ describe('createRestoreHandlers', () => {
       expect(result.reason).toMatch(/Failed to rebind/i)
       // Rollback: exactly one respawn, with the ORIGINAL session binding.
       expect(calls.spawn).toHaveLength(1)
-      expect((calls.spawn[0] as TerminalNodeData).claudeSessionId).toBe('origin-id')
+      expect((calls.spawn[0] as TerminalNodeData).claudeSessionId).toBe('aa000000-0000-4000-8000-000000000001')
       expect(readdirSync(projectDir).filter((f) => !before.has(f))).toHaveLength(0)
     })
 
     it('undo kill failure reports honestly without touching the node', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
       const cwd = path.join(tmp, 'project')
-      writeSession(cwd, 'prev1', sessionLines('prev1'), tmp)
+      writeSession(cwd, 'aa000000-0000-4000-8000-000000000004', sessionLines('aa000000-0000-4000-8000-000000000004'), tmp)
       const node = makeNode({
         cwd,
-        claudeSessionId: 'current-id',
-        restoreStack: [{ sessionId: 'prev1', at: Date.now(), fromIndex: 2 }]
+        claudeSessionId: 'aa000000-0000-4000-8000-000000000002',
+        restoreStack: [{ sessionId: 'aa000000-0000-4000-8000-000000000004', at: Date.now(), fromIndex: 2 }]
       })
       const { deps, calls } = makeDeps(() => node, { projectsDir: tmp })
       deps.ptys.killAndWait = vi.fn().mockRejectedValue(new Error('tmux session survived the deadline'))
@@ -495,8 +546,8 @@ describe('createRestoreHandlers', () => {
     it('a second restore on the same terminal waits for the first to finish', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
       const cwd = path.join(tmp, 'project')
-      let node = makeNode({ cwd, claudeSessionId: 'origin-id' })
-      writeSession(cwd, 'origin-id', sessionLines('origin-id'), tmp)
+      let node = makeNode({ cwd, claudeSessionId: 'aa000000-0000-4000-8000-000000000001' })
+      writeSession(cwd, 'aa000000-0000-4000-8000-000000000001', sessionLines('aa000000-0000-4000-8000-000000000001'), tmp)
       const { deps, calls } = makeDeps(() => node, {
         projectsDir: tmp,
         checkpointRefs: [{ index: 1, id: U1 }]
@@ -540,17 +591,17 @@ describe('cross-clear restore (checkpoint in an OLD lineage file)', () => {
   it('cuts the file the ref names, not the current binding — and grows the lineage', async () => {
     const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
     const cwd = path.join(tmp, 'project')
-    // old-id ran before a /clear; new-id is the current binding.
-    writeSession(cwd, 'old-id', sessionLines('old-id'), tmp)
-    writeSession(cwd, 'new-id', sessionLines('new-id'), tmp)
-    const node = makeNode({ cwd, claudeSessionId: 'new-id', sessionLineage: ['old-id'] })
+    // aa000000-0000-4000-8000-000000000006 ran before a /clear; aa000000-0000-4000-8000-000000000007 is the current binding.
+    writeSession(cwd, 'aa000000-0000-4000-8000-000000000006', sessionLines('aa000000-0000-4000-8000-000000000006'), tmp)
+    writeSession(cwd, 'aa000000-0000-4000-8000-000000000007', sessionLines('aa000000-0000-4000-8000-000000000007'), tmp)
+    const node = makeNode({ cwd, claudeSessionId: 'aa000000-0000-4000-8000-000000000007', sessionLineage: ['aa000000-0000-4000-8000-000000000006'] })
     const { deps, calls } = makeDeps(() => node, {
       projectsDir: tmp,
       // Union rail: old segment (3 cps) + new segment; target = old cp 2.
       checkpointRefs: [
-        { index: 1, id: U1, sessionId: 'old-id' },
-        { index: 2, id: U2, sessionId: 'old-id' },
-        { index: 3, id: U3, sessionId: 'old-id' }
+        { index: 1, id: U1, sessionId: 'aa000000-0000-4000-8000-000000000006' },
+        { index: 2, id: U2, sessionId: 'aa000000-0000-4000-8000-000000000006' },
+        { index: 3, id: U3, sessionId: 'aa000000-0000-4000-8000-000000000006' }
       ]
     })
 
@@ -558,19 +609,19 @@ describe('cross-clear restore (checkpoint in an OLD lineage file)', () => {
 
     expect(result.ok).toBe(true)
     // The truncated copy came from the OLD file: its kept lines carry the new
-    // id but originate from old-id's prompts (U2 cutoff).
+    // id but originate from aa000000-0000-4000-8000-000000000006's prompts (U2 cutoff).
     const newFile = path.join(claudeProjectDir(cwd, tmp), `${result.sessionId}.jsonl`)
     expect(existsSync(newFile)).toBe(true)
     const kept = readFileSync(newFile, 'utf8')
     expect(kept).toContain('prompt 2')
     expect(kept).not.toContain('prompt 3')
-    // Lineage grew by the transition new-id -> restored-id (old-id was already there).
+    // Lineage grew by the transition aa000000-0000-4000-8000-000000000007 -> restored-id (aa000000-0000-4000-8000-000000000006 was already there).
     expect(calls.updates[0]).toMatchObject({
       claudeSessionId: result.sessionId,
-      sessionLineage: ['old-id', 'new-id']
+      sessionLineage: ['aa000000-0000-4000-8000-000000000006', 'aa000000-0000-4000-8000-000000000007']
     })
     // Both originals untouched.
-    expect(existsSync(path.join(claudeProjectDir(cwd, tmp), 'old-id.jsonl'))).toBe(true)
-    expect(existsSync(path.join(claudeProjectDir(cwd, tmp), 'new-id.jsonl'))).toBe(true)
+    expect(existsSync(path.join(claudeProjectDir(cwd, tmp), 'aa000000-0000-4000-8000-000000000006.jsonl'))).toBe(true)
+    expect(existsSync(path.join(claudeProjectDir(cwd, tmp), 'aa000000-0000-4000-8000-000000000007.jsonl'))).toBe(true)
   })
 })
