@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -359,5 +359,48 @@ describe('TraceReader checkpointRefs ∪ boundaryMarkers (lineage union)', () =>
     expect(refs.map((r) => r.index)).toEqual([1, 2])
     expect(refs.map((r) => r.sessionId)).toEqual(['solo', 'solo'])
     expect(await new TraceReader(store, { projectsDir }).boundaryMarkers(node.id)).toEqual([])
+  })
+
+  it('H6: one reader polling a GROWING file sees new refs/markers (incremental path, no full re-read)', async () => {
+    const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-store-')))
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'trace-proj-'))
+    writeClaude(projectsDir, '/work/repo', 'live', ['a1', 'a2'])
+    const node = store.addNode(terminal({ claudeSessionId: 'live' })) as TerminalNodeData
+    const reader = new TraceReader(store, { projectsDir })
+
+    expect((await reader.checkpointRefs(node.id)).map((r) => r.index)).toEqual([1, 2])
+    expect(await reader.boundaryMarkers(node.id)).toEqual([])
+
+    // The session grows: another turn plus a compact boundary. The SAME
+    // reader must observe both through the incremental ingest.
+    const file = path.join(projectsDir, claudeProjectSlug('/work/repo'), 'live.jsonl')
+    const appended = [
+      JSON.stringify({
+        type: 'system', subtype: 'compact_boundary',
+        compactMetadata: { trigger: 'auto', preTokens: 50000, postTokens: 2000 }
+      }),
+      prompt('live-u3', 'a3', T0 + 2000, 'live'),
+      reply(T0 + 2500, 'live')
+    ]
+    appendFileSync(file, appended.join('\n') + '\n')
+
+    expect((await reader.checkpointRefs(node.id)).map((r) => r.index)).toEqual([1, 2, 3])
+    const markers = await reader.boundaryMarkers(node.id)
+    expect(markers).toEqual([
+      { kind: 'compact', afterIndex: 2, preTokens: 50000, postTokens: 2000 }
+    ])
+  })
+
+  it('H6: a SHRINK (/rewind truncation) resets the cache instead of serving stale refs', async () => {
+    const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'trace-store-')))
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'trace-proj-'))
+    writeClaude(projectsDir, '/work/repo', 'live', ['a1', 'a2', 'a3'])
+    const node = store.addNode(terminal({ claudeSessionId: 'live' })) as TerminalNodeData
+    const reader = new TraceReader(store, { projectsDir })
+
+    expect((await reader.checkpointRefs(node.id)).map((r) => r.index)).toEqual([1, 2, 3])
+
+    writeClaude(projectsDir, '/work/repo', 'live', ['a1']) // truncated
+    expect((await reader.checkpointRefs(node.id)).map((r) => r.index)).toEqual([1])
   })
 })
