@@ -66,6 +66,27 @@ export function createRestoreHandlers(deps: RestoreExecutorDeps): {
   }
 }
 
+export type RestoreHandlers = ReturnType<typeof createRestoreHandlers>
+
+/** Minimal `ipcMain.handle` surface, so the IPC block is unit-testable and
+ *  index.ts doesn't have to know the channel names (M10). */
+export type IpcHandleFn = (
+  channel: string,
+  listener: (event: unknown, ...args: never[]) => unknown
+) => void
+
+/**
+ * Register the endpoint-restore IPC channels. Lives alongside the executor
+ * (M10) so the channel names, argument order, and handler delegation change
+ * in ONE file instead of across index.ts's IPC block.
+ */
+export function registerRestoreIpc(handle: IpcHandleFn, handlers: RestoreHandlers): void {
+  handle('agent:restore-checkpoint', (_e, id, checkpointIndex) =>
+    handlers.restoreCheckpoint(id, checkpointIndex)
+  )
+  handle('agent:undo-restore', (_e, id) => handlers.undoRestore(id))
+}
+
 async function restoreCheckpoint(
   deps: RestoreExecutorDeps,
   id: string,

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { CanvasNode, TerminalNodeData } from '../src/shared/model'
-import { createRestoreHandlers, RestoreExecutorDeps } from '../src/main/restore'
+import { createRestoreHandlers, registerRestoreIpc, RestoreExecutorDeps, RestoreHandlers } from '../src/main/restore'
 import { claudeProjectDir } from '../src/main/claude-fork'
 
 const U1 = '1e54c8a8-4e59-49e7-979c-8b9dccb361c3'
@@ -94,6 +94,28 @@ function makeDeps(
   }
   return { deps, calls }
 }
+
+describe('registerRestoreIpc (M10: restore IPC block lives beside the executor)', () => {
+  it('registers both channels and delegates in argument order', async () => {
+    const registered = new Map<string, (event: unknown, ...args: unknown[]) => unknown>()
+    const handlers: RestoreHandlers = {
+      restoreCheckpoint: vi.fn().mockResolvedValue({ ok: true }),
+      undoRestore: vi.fn().mockResolvedValue({ ok: true, undone: true })
+    } as unknown as RestoreHandlers
+    registerRestoreIpc((channel, listener) => {
+      registered.set(channel, listener as (event: unknown, ...args: unknown[]) => unknown)
+    }, handlers)
+
+    expect([...registered.keys()].sort()).toEqual([
+      'agent:restore-checkpoint',
+      'agent:undo-restore'
+    ])
+    await registered.get('agent:restore-checkpoint')!(null, 't1', 3)
+    expect(handlers.restoreCheckpoint).toHaveBeenCalledWith('t1', 3)
+    await registered.get('agent:undo-restore')!(null, 't1')
+    expect(handlers.undoRestore).toHaveBeenCalledWith('t1')
+  })
+})
 
 describe('createRestoreHandlers', () => {
   describe('restoreCheckpoint', () => {
