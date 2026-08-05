@@ -3153,6 +3153,84 @@ body.cookrew-mobile .cookrew-minimap {
   height: 11px;
 }
 
+/* REWIND is the rail's one in-place (destructive-ish) action: default amber
+   on hover like the rest, but the armed two-tap state goes solid amber so the
+   "SURE?" confirmation can't be misread as an idle chip. */
+.cr-ckpt-action.rewind.armed {
+  background: var(--amber);
+  color: #141312;
+  border-color: var(--amber);
+}
+
+/* Boundary divider between checkpoint rows: ◆ compact (context squeezed) and
+   ⇥ clear (session restarted, earlier endpoints reachable via lineage). */
+.cr-ckpt-boundary {
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dim);
+  text-align: center;
+  padding: 3px 6px;
+  margin: 1px 0;
+  border-top: 1px dashed var(--vi-line);
+  border-bottom: 1px dashed var(--vi-line);
+  user-select: none;
+}
+
+.cr-ckpt-boundary.compact {
+  color: var(--amber);
+}
+
+.cr-ckpt-boundary.rewind {
+  color: var(--vi-text);
+  border-color: var(--amber);
+  background: rgba(184, 119, 10, 0.12);
+}
+
+.cr-ckpt-boundary.clear {
+  color: var(--vi-text);
+  border-color: var(--amber);
+}
+
+/* Boundary ticks ON the rail line (at-first-sight positions): ◆ compact is a
+   small amber diamond hugging the line, ⇥ clear a brighter wider break bar.
+   Same anchor math as the here-marker (railAnchorTop) so ticks sit exactly on
+   their identity fraction. */
+.cr-ckpt-tick {
+  position: absolute;
+  right: 10.5px;
+  width: 8px;
+  height: 8px;
+  transform: translateY(-50%) rotate(45deg);
+  border-radius: 1px;
+  background: var(--amber);
+  opacity: 0.85;
+  pointer-events: auto;
+}
+
+.cr-ckpt-tick.clear {
+  right: 8px;
+  width: 13px;
+  height: 3px;
+  transform: translateY(-50%);
+  border-radius: 1.5px;
+  background: var(--vi-text);
+  box-shadow: 0 0 4px var(--amber);
+  opacity: 0.95;
+}
+
+.cr-ckpt-tick.rewind {
+  right: 8px;
+  width: 13px;
+  height: 3px;
+  transform: translateY(-50%);
+  border-radius: 1.5px;
+  background: var(--amber);
+  box-shadow: 0 0 5px var(--amber);
+  opacity: 0.95;
+}
+
 /* --- cream chrome (light contexts) --- */
 .cr-ckpt-rail.on-cream .cr-ckpt-line {
   background: linear-gradient(var(--line-soft), var(--dim));

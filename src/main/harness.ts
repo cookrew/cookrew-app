@@ -6,11 +6,16 @@
 
 import { stripSessionFlags } from '../shared/claude-fork'
 import { sessionIdFromRolloutPath } from './codex-bind'
+import { isPiCommand, piNodeSessionDir, piResumeCommand, validPiSessionId } from './pi-bind'
 
-export type HarnessId = 'claude' | 'codex' | 'opencode'
+export type HarnessId = 'claude' | 'codex' | 'opencode' | 'pi'
 
 /** TerminalNodeData fields that hold a harness's session reference. */
-export type SessionField = 'claudeSessionId' | 'codexSessionRef' | 'opencodeSessionId'
+export type SessionField =
+  | 'claudeSessionId'
+  | 'codexSessionRef'
+  | 'opencodeSessionId'
+  | 'piSessionId'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -23,7 +28,7 @@ export interface Harness {
   /** Resume KEY (session id) from the stored field value, or null if unusable. */
   resumeKey(sessionRef: string): string | null
   /** Launch command that RESUMES the given session key, full session as-is. */
-  resumeCommand(command: string, key: string): string
+  resumeCommand(command: string, key: string, context?: { terminalId: string }): string
 }
 
 const CLAUDE: Harness = {
@@ -59,7 +64,20 @@ const OPENCODE: Harness = {
     `${command.replace(OPENCODE_SESSION_FLAG_RE, '').trim()} --session ${key}`
 }
 
-const HARNESSES: Harness[] = [CLAUDE, CODEX, OPENCODE]
+const PI: Harness = {
+  id: 'pi',
+  matches: isPiCommand,
+  sessionField: 'piSessionId',
+  // This value can be restored from persisted/mobile-originated node data and
+  // reaches a shell command, so accept only Pi's closed session-id alphabet.
+  resumeKey: (ref) => (validPiSessionId(ref) ? ref : null),
+  resumeCommand: (command, key, context) => {
+    if (!context) throw new Error('Pi resume requires a terminal id')
+    return piResumeCommand(command, key, piNodeSessionDir(context.terminalId))
+  }
+}
+
+const HARNESSES: Harness[] = [CLAUDE, CODEX, OPENCODE, PI]
 
 /** The harness a launch command runs, or null (plain shell / unknown). */
 export function harnessFor(command: string): Harness | null {

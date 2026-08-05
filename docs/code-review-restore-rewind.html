@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code Review — Restore/Rewind + Pi Harness — cookrew dev — 2026-08-05</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1a1d24; --dim: #5b6270;
+    --line: #e2e5ea; --accent: #4f46e5;
+    --crit-bg: #fde8e8; --crit-fg: #b91c1c;
+    --high-bg: #fef0e0; --high-fg: #b45309;
+    --med-bg: #fef9e0; --med-fg: #92680a;
+    --ok-bg: #e6f6ec; --ok-fg: #15803d;
+    --code-bg: #eef0f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12141a; --card: #1b1e27; --ink: #e8eaf0; --dim: #9aa1b0;
+      --line: #2c303c; --accent: #8b85ff;
+      --crit-bg: #3d1a1a; --crit-fg: #f09595;
+      --high-bg: #3d2c14; --high-fg: #f0b775;
+      --med-bg: #38330f; --med-fg: #e3cf7a;
+      --ok-bg: #14301f; --ok-fg: #7ed8a4;
+      --code-bg: #242833;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12141a; --card: #1b1e27; --ink: #e8eaf0; --dim: #9aa1b0;
+    --line: #2c303c; --accent: #8b85ff;
+    --crit-bg: #3d1a1a; --crit-fg: #f09595;
+    --high-bg: #3d2c14; --high-fg: #f0b775;
+    --med-bg: #38330f; --med-fg: #e3cf7a;
+    --ok-bg: #14301f; --ok-fg: #7ed8a4;
+    --code-bg: #242833;
+  }
+  :root[data-theme="light"] {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1a1d24; --dim: #5b6270;
+    --line: #e2e5ea; --accent: #4f46e5;
+    --crit-bg: #fde8e8; --crit-fg: #b91c1c;
+    --high-bg: #fef0e0; --high-fg: #b45309;
+    --med-bg: #fef9e0; --med-fg: #92680a;
+    --ok-bg: #e6f6ec; --ok-fg: #15803d;
+    --code-bg: #eef0f4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 20px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 36px 0 12px; padding-top: 8px; border-top: 1px solid var(--line); }
+  .sub { color: var(--dim); margin: 0 0 20px; }
+  code {
+    background: var(--code-bg); border-radius: 4px; padding: 1px 5px;
+    font: 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .verdict {
+    border-radius: 12px; padding: 18px 20px; margin: 18px 0 8px;
+    background: var(--crit-bg); color: var(--crit-fg);
+    font-weight: 700; font-size: 17px;
+  }
+  .verdict small { display: block; font-weight: 500; font-size: 13.5px; margin-top: 6px; color: inherit; opacity: .85; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 18px 0; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .card .n { font-size: 26px; font-weight: 800; }
+  .card .l { color: var(--dim); font-size: 12.5px; }
+  .card.crit .n { color: var(--crit-fg); }
+  .card.high .n { color: var(--high-fg); }
+  .card.med .n { color: var(--med-fg); }
+  .card.ok .n { color: var(--ok-fg); }
+  .pill {
+    display: inline-block; border-radius: 999px; padding: 2px 10px;
+    font-size: 11.5px; font-weight: 700; letter-spacing: .4px; white-space: nowrap;
+  }
+  .pill.crit { background: var(--crit-bg); color: var(--crit-fg); }
+  .pill.high { background: var(--high-bg); color: var(--high-fg); }
+  .pill.med { background: var(--med-bg); color: var(--med-fg); }
+  .pill.ok { background: var(--ok-bg); color: var(--ok-fg); }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; font-size: 13.5px; }
+  th { color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+  tr:last-child td { border-bottom: none; }
+  .finding {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 18px; margin: 14px 0;
+  }
+  .finding h3 { margin: 0 0 6px; font-size: 15.5px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .finding .loc { color: var(--dim); font-size: 12.5px; font-family: ui-monospace, Menlo, monospace; }
+  .finding p { margin: 8px 0 0; }
+  .finding .lbl { font-weight: 700; color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+  details { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin: 8px 0; }
+  summary { cursor: pointer; font-weight: 600; }
+  ul { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--dim); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Pre-commit Code Review — uncommitted changes on <code>dev</code></h1>
+<p class="sub">Scope: 43 files, +2,972/−35 — endpoint restore (rewind/undo), session lineage, Pi harness binding, checkpoint-rail boundary markers. Four parallel review clusters, all CRITICAL/HIGH claims re-verified against the code by the orchestrator. 2026-08-05.</p>
+
+<div class="verdict">BLOCK — do not commit yet.
+<small>2 CRITICAL (unauthenticated destructive endpoints on LAN + wildcard CORS) and 6 HIGH (restore TOCTOU race, dead-terminal-on-failure, missing IPC↔HTTP serialization, dead Pi wiring, silent killAndWait timeout, O(n²) trace parsing). Tests: 874 passed / 3 skipped. Secrets sweep: clean.</small>
+</div>
+
+<div class="cards">
+  <div class="card crit"><div class="n">2</div><div class="l">CRITICAL</div></div>
+  <div class="card high"><div class="n">6</div><div class="l">HIGH</div></div>
+  <div class="card med"><div class="n">11</div><div class="l">MEDIUM</div></div>
+  <div class="card ok"><div class="n">874</div><div class="l">tests passing (3 skipped)</div></div>
+  <div class="card ok"><div class="n">0</div><div class="l">secrets / hardcoded creds</div></div>
+</div>
+
+<h2>Cluster verdicts</h2>
+<table>
+  <tr><th>Cluster</th><th>Files</th><th>Verdict</th><th>Headline</th></tr>
+  <tr><td>Server / transport</td><td>mobile-api, mobile-server, mobile-http, teams, trace, index</td><td><span class="pill crit">BLOCK</span></td><td>Restore/undo endpoints on unauthenticated 0.0.0.0 listener with ACAO:*</td></tr>
+  <tr><td>Restore / lineage</td><td>restore, restore-plan, session-lineage, recover-gate, recoverable</td><td><span class="pill crit">BLOCK</span></td><td>Busy-guard TOCTOU before kill; no error handling → dead terminal on mid-sequence failure</td></tr>
+  <tr><td>Fork / harness / pi-bind</td><td>pi-bind, claude-fork, fork, harness, pty, presets</td><td><span class="pill crit">BLOCK</span></td><td>Pi preset ships but binding machinery is never invoked; killAndWait fails silently on timeout</td></tr>
+  <tr><td>Renderer / shared</td><td>preload, CheckpointTimeline, TerminalOverlay, api, transcript, trace-blocks, session-turns, model</td><td><span class="pill ok">CLEAN</span></td><td>4 MEDIUM only (type-contract drift, blocking alert, stale rewind-arm, orphaned JSDoc)</td></tr>
+</table>
+
+<h2>CRITICAL</h2>
+
+<div class="finding">
+  <h3><span class="pill crit">C1</span> Unauthenticated destructive restore/undo endpoints on the LAN</h3>
+  <div class="loc">src/main/mobile-api.ts:572-599 · bound by src/main/mobile-server.ts:127,132 (0.0.0.0, zero auth — verified)</div>
+  <p>The diff adds <code>POST /api/agents/:id/restore</code> and <code>/restore/undo</code> — routes that kill the agent's CLI process and rebind its session (<code>restore.ts:106-120</code>) — to a server any LAN device can reach with no credentials. Anyone on the same Wi-Fi can curl the endpoint with any <code>checkpointIndex</code> and repeatedly rewind/kill running agents, or undo legitimate restores. The companion's trust model already accepts this for terminal input, but this diff extends the surface to <strong>irreversible session surgery</strong>.</p>
+  <p><span class="lbl">Fix</span> — require a pairing token (<code>Authorization: Bearer …</code> shown once in the desktop UI) on all mutating routes, or bind plain HTTP to <code>127.0.0.1</code> and gate the LAN listener behind the token. Note: <code>docs/briefs/voice-agent-gateway-brief.md</code> already tracks this posture as item P0-1 — this diff raises its stakes.</p>
+</div>
+
+<div class="finding">
+  <h3><span class="pill crit">C2</span> <code>access-control-allow-origin: *</code> on every API + SSE response</h3>
+  <div class="loc">src/main/mobile-http.ts:12 (JSON) and :46 (SSE) — verified</div>
+  <p>Combined with C1, any web page open in any browser on the network can cross-origin <strong>read full session transcripts</strong> (<code>/api/terminal/:id/trace</code>, <code>/output</code>) and POST the new restore/undo endpoints — a malicious ad iframe suffices, no LAN foothold needed. Failure scenario: user browses a hostile page while the companion runs; the page fetches <code>/api/state</code>, enumerates terminal ids, and drives restores.</p>
+  <p><span class="lbl">Fix</span> — drop the wildcard header entirely (the same-origin phone UI doesn't need CORS) or reflect an allowlisted origin only.</p>
+</div>
+
+<h2>HIGH</h2>
+
+<div class="finding">
+  <h3><span class="pill high">H1</span> Busy-agent guard defeated by check-then-await ordering (TOCTOU, data-loss risk)</h3>
+  <div class="loc">src/main/restore.ts:72-106 — flagged independently by two clusters; verified</div>
+  <p><code>busyReason</code> is checked at :72, then the code <code>await</code>s <code>checkpointRefs</code> (:75 — a read + parse of a potentially multi-MB session JSONL), does sync fs work, and only then calls <code>killAndWait</code> at :106. During that window the agent can transition idle→thinking (user types, a routine fires) and the kill lands mid-turn — tearing the session JSONL being written, which is precisely the corruption the <code>phaseOf</code> docstring (:29-34) says the guard exists to prevent, and it corrupts the <em>previous</em> session that undo depends on.</p>
+  <p><span class="lbl">Fix</span> — re-evaluate <code>busyReason</code> immediately before <code>killAndWait</code> (refuse if it changed), or hold a per-terminal restore lock for the whole sequence.</p>
+</div>
+
+<div class="finding">
+  <h3><span class="pill high">H2</span> No error handling in the restore/undo sequence — failure after kill leaves a dead terminal</h3>
+  <div class="loc">src/main/restore.ts:49-173 — verified</div>
+  <p>No try/catch around <code>checkpointRefs</code>, <code>readFileSync</code>, <code>writeFileSync</code>, <code>mkdirSync</code>, or <code>killAndWait</code>. Worst case: <code>killAndWait</code> succeeds but <code>updateNodeUnsafe</code> returns undefined (node removed from another workspace mid-restore) — the code returns <code>fail(...)</code> at :117 but the pty is already dead and never respawned, silently destroying a running agent with no rollback. Also: the truncated session copy written at :103 is orphaned on any failure path (no <code>unlink</code>).</p>
+  <p><span class="lbl">Fix</span> — wrap the post-write section in try/catch; on any failure after a successful kill, attempt <code>spawnTracked(node)</code> with the original binding before returning the failure; unlink the orphaned dest file.</p>
+</div>
+
+<div class="finding">
+  <h3><span class="pill high">H3</span> No serialization between IPC and HTTP restore paths mutating the same terminal</h3>
+  <div class="loc">src/main/index.ts:1161-1164 vs src/main/mobile-api.ts:572-599, both delegating to restore.ts:49-173</div>
+  <p>Two concurrent restores (desktop restore + phone undo, or two HTTP posts) both pass the busy check, both <code>killAndWait</code>, then compute patches from the same pre-read <code>node</code> — the second <code>updateNodeUnsafe</code> overwrites the first's <code>sessionLineage</code>/<code>restoreStack</code>, and <code>spawnTracked</code> runs twice, leaving the agent bound to a session whose lineage/undo stack is corrupt.</p>
+  <p><span class="lbl">Fix</span> — per-terminal async mutex inside <code>createRestoreHandlers</code> (a <code>Map&lt;id, Promise&gt;</code> chain).</p>
+</div>
+
+<div class="finding">
+  <h3><span class="pill high">H4</span> Pi spawn integration missing — new module is production-dead code</h3>
+  <div class="loc">src/main/pi-bind.ts:138-167 · src/main/index.ts:135-190 · src/main/fork.ts:101 · src/main/teams.ts:304</div>
+  <p><code>latestPiSession</code>/<code>piLaunchBinding</code>/<code>piFreshCommand</code> are called only from tests. <code>spawnTracked</code> has branches for claude/codex/opencode but no <code>isPiCommand</code> branch, and <code>piSessionId</code> is only ever assigned <code>null</code>. A user picking the new <code>Pi</code> preset (<code>presets.ts:15</code>) spawns bare <code>pi</code> in the default cwd-encoded session tree, so two Pi terminals in the same cwd share one session tree — the exact cross-agent race pi-bind's header says it exists to eliminate. The pi branches in <code>trace.ts:264</code> and <code>recover-gate.ts:63-66</code> are unreachable.</p>
+  <p><span class="lbl">Fix</span> — add a pi branch in <code>spawnTracked</code> calling <code>piLaunchBinding({command, cwd, terminalId})</code> and persist the returned sessionId; or hold the preset out of this commit.</p>
+</div>
+
+<div class="finding">
+  <h3><span class="pill high">H5</span> <code>killAndWait</code> fails silently on timeout</h3>
+  <div class="loc">src/main/pty.ts:514-535 · callers restore.ts:106,152</div>
+  <p>If the tmux session survives the 5s deadline the loop just exits and the promise resolves normally — no throw, no log. Restore then rebinds the node to a new session id and respawns; <code>new-session -A</code> reattaches to the surviving old session and ignores the boot command, leaving the node pointing at a session id no process is running — the phantom-session-id divergence class this codebase has already been burned by. The timeout path is untested.</p>
+  <p><span class="lbl">Fix</span> — throw (or return a status and have restore fail loudly) when the deadline expires; add a unit test with a fake <code>has-session</code> that never dies.</p>
+</div>
+
+<div class="finding">
+  <h3><span class="pill high">H6</span> <code>segmentOfFile</code> re-reads and re-parses the entire session file on every size change</h3>
+  <div class="loc">src/main/trace.ts:188-198, called from boundaryMarkers up to 3× per invocation</div>
+  <p>A polling checkpoint rail against an actively-growing session file is O(n²) in I/O and parse time (a 100 MB JSONL fully buffered and reparsed per appended byte-range), contradicting the module's own "I/O is WINDOWED and ASYNC" contract (<code>trace.ts:3</code>).</p>
+  <p><span class="lbl">Fix</span> — route through the incremental <code>blocksOf</code> cache, or memo on a byte-offset and parse only the appended window.</p>
+</div>
+
+<h2>MEDIUM (11)</h2>
+<table>
+  <tr><th>#</th><th>Location</th><th>Issue</th><th>Fix</th></tr>
+  <tr><td>M1</td><td>restore.ts:86,144 · restore-plan.ts:96</td><td>Session ids flow into <code>claudeSessionFile()</code> (bare <code>path.join</code>) without shape validation — tampered store file (<code>../../etc/x</code> as session id) yields arbitrary <code>*.jsonl</code> read copied into a session the agent will load</td><td>Apply the existing UUID regex (<code>claude-fork.ts:73</code>) to all three ids at the executor boundary; refuse honestly</td></tr>
+  <tr><td>M2</td><td>renderer/src/api.ts:143-153</td><td><code>listTraceMarkers</code> type omits <code>'rewind'</code>/<code>toIndex</code> while main emits them — declared contract lies; future consumers silently drop rewind markers</td><td>Widen to match <code>TraceMarkerRow</code> or import the shared <code>TraceBoundaryMarker</code> type</td></tr>
+  <tr><td>M3</td><td>CheckpointTimeline.tsx:186</td><td>Only <code>window.alert</code> in the renderer — a refused rewind freezes the whole Electron UI in a native modal</td><td>Inline armed-chip error state or the existing toast path</td></tr>
+  <tr><td>M4</td><td>CheckpointTimeline.tsx:174-179</td><td><code>rewindArmed</code> survives row shifts — arm T5, new checkpoints arrive, second tap rewinds a different checkpoint than intended</td><td>Clear on <code>closeActions</code> and <code>rows</code> identity change, or add an arm timeout</td></tr>
+  <tr><td>M5</td><td>shared/model.ts:241-242 · pty.ts:33-35</td><td>Two orphaned doc comments (RecoverResult's JSDoc now dangles on RestoreResult; sessionNameFor's doc sits above tmuxSessionExists)</td><td>Move both comments back to their owners</td></tr>
+  <tr><td>M6</td><td>harness.ts:28,73-77</td><td><code>resumeCommand(command, key, context?)</code> is optional at type level but <code>PI.resumeCommand</code> throws without it — latent runtime trap on the first future generic pi resume path</td><td>Make <code>context</code> required in the interface or give PI a defined fallback</td></tr>
+  <tr><td>M7</td><td>pi-bind.ts:23</td><td><code>stripPiSessionFlags</code> eats the token after <code>--fork</code> and mangles quoted values (<code>--session "my id"</code> → corrupt)</td><td>Move <code>--fork</code> to the switch regex if boolean; document the quoted-value limitation</td></tr>
+  <tr><td>M8</td><td>trace.ts:186</td><td><code>segmentMemo</code> never evicted — one entry per session file for process lifetime, unbounded across nodes</td><td>Evict on node removal or LRU-cap</td></tr>
+  <tr><td>M9</td><td>restore.ts:113 · trace.ts:163-165</td><td><code>RestorePoint.fromIndex</code> stores the rewind <em>target</em> index — works today, name invites a future off-by-semantics bug</td><td>Rename or document on the type</td></tr>
+  <tr><td>M10</td><td>src/main/index.ts</td><td>Now 1,280 lines (&gt;800 guideline; pre-existing trend this diff extends)</td><td>Extract the restore IPC block alongside <code>createRestoreHandlers</code></td></tr>
+  <tr><td>M11</td><td>tests/</td><td>Test gaps: killAndWait rejects mid-restore; updateNodeUnsafe fails after kill (dead-terminal case); non-UUID sessionId refusal; killAndWait timeout path; no route-level test for the new mobile restore endpoints</td><td>Add the five tests (they pin H1/H2/H5/M1 fixes)</td></tr>
+</table>
+
+<h2>Verified clean</h2>
+<ul>
+  <li><strong>Secrets:</strong> no hardcoded credentials, API keys, or tokens anywhere in the diff; docs sweep clean (one LAN subnet reference in a brief, internal docs only).</li>
+  <li><strong>Injection guards:</strong> <code>piSessionId</code> passes a closed-alphabet regex (<code>pi-bind.ts:22</code>) before shell interpolation; <code>piNodeSessionDir</code> sha256-hashes hostile terminal ids (tested); restore rebinds to <code>randomUUID()</code> so the unescaped <code>--resume</code> interpolation never receives a restore-controlled id; <code>checkpointIndex</code> validated as positive int on the HTTP boundary.</li>
+  <li><strong>Path traversal (store):</strong> <code>updateNode</code> allow-list blocks planting session ids via the store (<code>tests/store-cross.test.ts:120-135</code>); Pi trace reader verifies header id + filename + realpath'd cwd all agree (tested); <code>serveRendererAsset</code> root-prefix guard intact.</li>
+  <li><strong>Renderer XSS:</strong> no <code>dangerouslySetInnerHTML</code>; markers render only numbers and fixed strings via React text nodes; preload additions are explicit named channels, no arbitrary pass-through.</li>
+  <li><strong>Immutability:</strong> all new modules (<code>session-lineage</code>, <code>restore-plan</code>, parsers) are pure spread/slice constructions; no shared-state mutation in the diff.</li>
+  <li><strong>Hygiene:</strong> no <code>console.log</code> added in non-test code; nesting ≤3; all new functions &lt;50 lines except <code>restoreCheckpoint</code> (~82, M-counted); keyed React lists; <code>useEffect</code> cleanup guards present; a11y roles on boundary dividers.</li>
+  <li><strong>Tests:</strong> 874 passed / 3 skipped across 72 files; new logic well covered except the gaps in M11.</li>
+</ul>
+
+<h2>Suggested fix order</h2>
+<ul>
+  <li><strong>Before any commit:</strong> C1+C2 (auth token on mutating routes + drop ACAO wildcard — one small patch across mobile-http/mobile-server/mobile-api), H1+H2+H3 (restore.ts: re-check busy pre-kill, try/catch + rollback-respawn + orphan unlink, per-terminal mutex — all inside <code>createRestoreHandlers</code>), H4 (wire the pi spawn branch <em>or</em> drop the preset), H5 (loud killAndWait timeout + test).</li>
+  <li><strong>Same pass, cheap:</strong> M1 (UUID guard at executor), M2 (type widen), M5 (comment moves), M11 tests pinning the HIGH fixes.</li>
+  <li><strong>Follow-up PR:</strong> H6 (incremental segment parsing), M3/M4 (rewind UX), M6–M10.</li>
+</ul>
+
+<footer>
+  Source: 4 parallel general-purpose review agents (restore/lineage, fork/harness/pi-bind, server/transport, renderer/shared), orchestrator spot-verification of all CRITICAL/HIGH claims, full vitest run (874/877). Repo: cookrew-dev @ dev, 43 changed files, +2,972/−35. Generated 2026-08-05.
+</footer>
+
+</div>
+</body>
+</html>

@@ -9,6 +9,7 @@ import type {
   WorkspaceMeta,
   WorkspaceState,
   RecoverResult,
+  RestoreResult,
 } from "../../shared/model";
 import type { TerminalActivity, TurnRecord } from "../../shared/turn";
 
@@ -84,6 +85,10 @@ export interface CookrewApi {
    * the node bound to its session and resume. Optional — feature-detect.
    */
   recoverAgent?: (id: string) => Promise<RecoverResult>;
+  /** ENDPOINT RESTORE: rewind this agent in place to one of its checkpoints. */
+  restoreCheckpoint?: (id: string, checkpointIndex: number) => Promise<RestoreResult>;
+  /** Undo the last endpoint restore (rebind to the pre-restore session). */
+  undoRestore?: (id: string) => Promise<RestoreResult>;
   /** Completed turns of a terminal (oldest first) for the card pager. */
   listTurns: (terminalId: string) => Promise<TurnRecord[]>;
   /**
@@ -103,7 +108,7 @@ export interface CookrewApi {
   /**
    * Trace-sourced context (trace-sourced-context-final): identity-keyed
    * TraceBlock windows read directly from the agent's own session file
-   * (Claude jsonl / Codex rollout). Optional — feature-detect.
+   * (Claude/Pi jsonl or Codex rollout). Optional — feature-detect.
    */
   listTrace?: (
     terminalId: string,
@@ -116,7 +121,7 @@ export interface CookrewApi {
   ) => Promise<{
     blocks: unknown[];
     total: number;
-    source: "claude" | "codex" | null;
+    source: "claude" | "codex" | "pi" | null;
   }>;
   /**
    * Cheap identity+title listing of the FULL trace (unified-scroll item 3): one
@@ -129,6 +134,22 @@ export interface CookrewApi {
   listTraceIndex?: (
     terminalId: string,
   ) => Promise<{ index: number; title: string }[]>;
+  /**
+   * Boundary markers for the checkpoint rail: ◆ compact (in-file) and ⇥ clear
+   * (lineage segment boundary). Optional — feature-detect; the rail simply
+   * renders no markers when absent.
+   */
+  listTraceMarkers?: (
+    terminalId: string,
+  ) => Promise<
+    {
+      kind: 'compact' | 'clear'
+      afterIndex: number
+      preTokens?: number
+      postTokens?: number
+      previousSessionId?: string
+    }[]
+  >;
   /** Fork a NEW agent card from a past turn; omit turnIndex for the latest. */
   forkTerminal: (sourceId: string, turnIndex?: number) => Promise<CanvasNode>;
   /** Fork a team into a NEW workspace per the spec (switches to it). */

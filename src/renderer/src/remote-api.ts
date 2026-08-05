@@ -12,12 +12,36 @@ import type { TerminalActivity, TurnRecord } from '../../shared/turn'
  * and drive its shared stream. Flag-off phones retain the legacy /thumb view.
  */
 
+/**
+ * Pairing token (C1): the desktop's pairing URL carries `?token=`; we lift it
+ * into sessionStorage (surviving refresh) and strip it from the address bar.
+ * Mutating routes require it as a bearer header; read-only GETs/SSE stay open.
+ */
+const pairingToken: string | null = (() => {
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get('token')
+    if (fromUrl) {
+      window.sessionStorage.setItem('cookrew-pairing-token', fromUrl)
+      const clean = new URL(window.location.href)
+      clean.searchParams.delete('token')
+      window.history.replaceState(null, '', clean)
+      return fromUrl
+    }
+    return window.sessionStorage.getItem('cookrew-pairing-token')
+  } catch {
+    return null
+  }
+})()
+
 async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const options: RequestInit = { method }
+  const headers: Record<string, string> = {}
+  if (pairingToken) headers.authorization = `Bearer ${pairingToken}`
   if (body !== undefined) {
-    options.headers = { 'content-type': 'application/json' }
+    headers['content-type'] = 'application/json'
     options.body = JSON.stringify(body)
   }
+  if (Object.keys(headers).length > 0) options.headers = headers
   const response = await fetch(path, options)
   if (!response.ok) {
     const detail = await response.json().catch(() => ({ error: String(response.status) }))
@@ -160,8 +184,12 @@ export function createRemoteApi(): CookrewApi {
       return result.agents
     },
     recoverAgent: (id) => req(`/api/agents/${id}/recover`, 'POST'),
+    restoreCheckpoint: (id, checkpointIndex) =>
+      req(`/api/agents/${id}/restore`, 'POST', { checkpointIndex }),
+    undoRestore: (id) => req(`/api/agents/${id}/restore/undo`, 'POST'),
     listTurns: (terminalId) => req<TurnRecord[]>(`/api/terminal/${terminalId}/turns`),
     listTraceIndex: (terminalId) => req(`/api/terminal/${terminalId}/trace/index`),
+    listTraceMarkers: (terminalId) => req(`/api/terminal/${terminalId}/trace/markers`),
     listTrace: async (terminalId, request) => {
       const params = new URLSearchParams()
       const r = (request ?? {}) as Record<string, unknown>

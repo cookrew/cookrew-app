@@ -98,6 +98,25 @@ describe('canRestoreExact — opencode (S1)', () => {
   })
 })
 
+describe('canRestoreExact — Pi', () => {
+  it('restores only a safe id with a session file in the node cwd', () => {
+    const deps = {
+      ...noTurns,
+      piExists: (nodeId: string, cwd: string, id: string) =>
+        nodeId === 'n1' && cwd === '/work/repo' && id === '019f88f9-safe'
+    }
+    expect(canRestoreExact(node({ command: 'pi', piSessionId: '019f88f9-safe' }), deps)).toBe(true)
+    expect(canRestoreExact(node({ command: 'pi', piSessionId: 'missing' }), deps)).toBe(false)
+  })
+
+  it('rejects a shell-injection session id before checking disk', () => {
+    let checked = false
+    const deps = { ...noTurns, piExists: () => { checked = true; return true } }
+    expect(canRestoreExact(node({ command: 'pi', piSessionId: 'x;touch /tmp/pwn' }), deps)).toBe(false)
+    expect(checked).toBe(false)
+  })
+})
+
 describe('isRefOwned — 1:1 claim guard', () => {
   const a = node({ id: 'a', codexSessionRef: '/roll/x.jsonl' })
   const b = node({ id: 'b', codexSessionRef: '/roll/y.jsonl' })

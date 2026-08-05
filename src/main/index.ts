@@ -23,6 +23,7 @@ import {
   DEFAULT_TERMINAL_SIZE,
   TeamForkSpec,
   RecoverResult,
+  RestoreResult,
   TeamMeta,
   TerminalNodeData,
   WorkspaceMeta
@@ -43,8 +44,11 @@ import {
 } from './claude-fork'
 import { isCodexCommand, resolveCodexRolloutByPid } from './codex-bind'
 import { isOpenCodeCommand, resolveOpencodeSessionByPid } from './opencode-bind'
+import { isPiCommand, latestPiSession, piLaunchBinding, piNodeSessionDir } from './pi-bind'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
+import { createRestoreHandlers } from './restore'
+import { withSessionLineage } from './session-lineage'
 import { createBrowserCast } from './browser-cast'
 import { findChrome } from './headless-chrome'
 import { HeadlessBrowserManager } from './headless-browser-manager'
@@ -136,6 +140,8 @@ function spawnTracked(t: {
   claudeSessionId?: string | null
   codexSessionRef?: string | null
   opencodeSessionId?: string | null
+  piSessionId?: string | null
+  sessionLineage?: string[]
 }): void {
   const upgraded = LEGACY_COMMANDS[t.command.trim()]
   const command = upgraded ?? t.command
@@ -163,7 +169,12 @@ function spawnTracked(t: {
       storedId: t.claudeSessionId,
       turns: turns.history(t.id)
     })
-    if (t.claudeSessionId !== sessionId) store.updateNodeUnsafe(t.id, { claudeSessionId: sessionId })
+    if (t.claudeSessionId !== sessionId) {
+      // Re-resolve = a transition (e.g. the stored id's file vanished after a
+      // /clear): record the old binding on the lineage so the rail keeps the
+      // earlier segment visible and rewind can still cut into it.
+      store.updateNodeUnsafe(t.id, withSessionLineage(t, sessionId))
+    }
     effective = claudeSpawnCommand(command, t.cwd, sessionId)
     boundSessionId = sessionId
   } else if (isCodexCommand(command) && t.codexSessionRef) {
@@ -177,6 +188,17 @@ function spawnTracked(t: {
     const harness = harnessFor(command)
     const key = harness?.resumeKey(t.opencodeSessionId) ?? null
     if (harness && key) effective = harness.resumeCommand(command, key)
+  } else if (isPiCommand(command)) {
+    // H4: wire the pi-bind machinery so the Pi preset actually uses it.
+    // Every terminal gets an EXCLUSIVE session dir, so two Pi terminals in
+    // the same cwd never share one session tree (the cross-agent race
+    // pi-bind exists to eliminate). A node with a prior session in its dir
+    // resumes it; otherwise a fresh session boots scoped to that dir.
+    const binding = piLaunchBinding({ command, cwd: t.cwd, terminalId: t.id })
+    effective = binding.command
+    if (t.piSessionId !== binding.sessionId) {
+      store.updateNodeUnsafe(t.id, { piSessionId: binding.sessionId })
+    }
   }
   const session = ptys.spawn({ terminalId: t.id, command: effective, cwd: t.cwd })
   turns.track(session, command.trim().length > 0)
@@ -235,6 +257,30 @@ function spawnTracked(t: {
           agents.setSessionRef(t.id, sid)
         } catch (error) {
           console.error('OpenCode session bind failed:', error)
+        }
+      }, delays[0])
+    }
+    attempt([3000, 8000, 20000, 45000])
+  }
+  // Pi session bind: a FRESH boot has no session id yet — the file appears
+  // in the terminal's exclusive dir once Pi starts, so poll on a schedule
+  // (same recipe as codex/opencode). No 1:1 ownership check needed: the dir
+  // is exclusive to this terminal, so a discovered session is always ours.
+  if (isPiCommand(command) && !t.piSessionId) {
+    const sessionsDir = piNodeSessionDir(t.id)
+    const attempt = (delays: number[]): void => {
+      if (delays.length === 0) return
+      setTimeout(() => {
+        try {
+          const hit = store.nodeAcrossWorkspaces(t.id)
+          if (!hit || hit.node.kind !== 'terminal') return
+          if ((hit.node as TerminalNodeData).piSessionId) return
+          const session = latestPiSession(t.cwd, { sessionsDir })
+          if (!session) return void attempt(delays.slice(1))
+          store.updateNodeUnsafe(t.id, { piSessionId: session.id })
+          agents.setSessionRef(t.id, session.id)
+        } catch (error) {
+          console.error('Pi session bind failed:', error)
         }
       }, delays[0])
     }
@@ -895,6 +941,17 @@ app.whenReady().then(() => {
   // so reattached terminals show the (possibly updated) status bar.
   ptys.reloadTmuxConfig()
 
+  // Endpoint restore handlers: rewind a live agent to a checkpoint + undo.
+  const { restoreCheckpoint, undoRestore } = createRestoreHandlers({
+    store,
+    ptys,
+    traces,
+    spawnTracked,
+    // Restore/undo kill the CLI; refuse while a turn is in flight so the
+    // session file is never truncated out from under a writing process.
+    phaseOf: (id) => turns.list().find((a) => a.terminalId === id)?.phase ?? null
+  })
+
   startSocketServer({
     store,
     ptys,
@@ -937,6 +994,8 @@ app.whenReady().then(() => {
     agents,
     traces,
     recoverAgent,
+    restoreCheckpoint,
+    undoRestore,
     ptys,
     voice,
     turns,
@@ -979,7 +1038,7 @@ app.whenReady().then(() => {
     rendererDir: path.join(dirname, '../renderer'),
     rendererDevUrl: process.env.ELECTRON_RENDERER_URL
   })
-  registerIpc()
+  registerIpc({ restoreCheckpoint, undoRestore })
   void browserManager.replaceNodes(store.browsers()).catch(() => undefined)
   createWindow()
 
@@ -1048,7 +1107,10 @@ function broadcast(): void {
   }
 }
 
-function registerIpc(): void {
+function registerIpc(handlers: {
+  restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
+  undoRestore: (id: string) => Promise<RestoreResult>
+}): void {
   store.on('change', broadcast)
 
   // On workspace switch, tear down the outgoing PTYs and boot the incoming
@@ -1124,6 +1186,7 @@ function registerIpc(): void {
   )
   // Trace-sourced context: identity-keyed windows straight from agent files.
   ipcMain.handle('trace:index', (_e, terminalId: string) => traces.index(terminalId))
+  ipcMain.handle('trace:markers', (_e, terminalId: string) => traces.boundaryMarkers(terminalId))
   ipcMain.handle('trace:page', (_e, terminalId: string, request?: unknown) =>
     traces.page(terminalId, (request ?? {}) as Parameters<TraceReader['page']>[1])
   )
@@ -1132,6 +1195,10 @@ function registerIpc(): void {
   ipcMain.handle('events:count', (_e, query) => events.count(query ?? {}))
   ipcMain.handle('agents:list', () => agents.list())
   ipcMain.handle('agent:recover', (_e, id: string) => recoverAgent(id))
+  ipcMain.handle('agent:restore-checkpoint', (_e, id: string, checkpointIndex: number) =>
+    handlers.restoreCheckpoint(id, checkpointIndex)
+  )
+  ipcMain.handle('agent:undo-restore', (_e, id: string) => handlers.undoRestore(id))
   ipcMain.handle('terminal:fork', (_e, sourceId: string, turnIndex?: number) =>
     forkTerminal(sourceId, turnIndex)
   )

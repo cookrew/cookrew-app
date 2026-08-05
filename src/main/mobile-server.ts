@@ -1,11 +1,12 @@
 import http from 'node:http'
 import https from 'node:https'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
 import { existsSync, readFileSync } from 'node:fs'
 import { powerSaveBlocker } from 'electron'
 import type { WorkspaceStore } from './store'
-import type { RecoverResult } from '../shared/model'
+import type { RecoverResult, RestoreResult } from '../shared/model'
 import type { PtyManager } from './pty'
 import type { VoiceEngine } from './voice'
 import type { TurnTracker } from './turn-tracker'
@@ -23,6 +24,13 @@ export const MOBILE_HTTPS_PORT = 8643
 
 let httpsReady = false
 
+/**
+ * The active pairing token (C1), minted per app run by startMobileServer and
+ * surfaced to the phone via the `?token=` query on mobileUrls(). Null before
+ * the server starts (mobileUrls then returns tokenless loopback URLs).
+ */
+let activePairingToken: string | null = null
+
 /** Active power-save-blocker id, boxed so tests can reset it. */
 const powerBlockerId: { current: number | null } = { current: null }
 
@@ -36,6 +44,8 @@ export interface MobileServerDeps {
   agents: AgentRegistry
   traces: TraceReader
   recoverAgent: (id: string) => RecoverResult
+  restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
+  undoRestore: (id: string) => Promise<RestoreResult>
   ops: MobileOps
   presets: readonly { name: string; command: string }[]
   /** Persist a phone-uploaded attachment; returns its absolute path. */
@@ -55,6 +65,8 @@ export interface MobileServerDeps {
   rendererDir: string
   /** electron-vite renderer URL; proxied to phones in development. */
   rendererDevUrl?: string
+  /** Override the pairing token (tests); a fresh one is minted per run. */
+  pairingToken?: string
   /**
    * WebSocket 'upgrade' handler for the interactive-browser stream
    * (/api/browser/:id/stream). Attached to both the HTTP and HTTPS servers so
@@ -80,6 +92,10 @@ export function startMobileServer(deps: MobileServerDeps): void {
   if (!powerBlockerId.current) {
     powerBlockerId.current = powerSaveBlocker.start('prevent-app-suspension')
   }
+
+  // C1: mint (or adopt) the pairing token BEFORE any route can run — every
+  // mutating route on this server requires it (see handleMobileApi's gate).
+  activePairingToken = deps.pairingToken ?? randomUUID()
 
   const requestHandler = (request: http.IncomingMessage, response: http.ServerResponse): void => {
     void handle(request, response, deps).catch((error: Error) => {
@@ -141,16 +157,22 @@ function lanIps(): string[] {
 }
 
 export function mobileUrls(): string[] {
+  // The pairing token rides the URL as ?token= (C1): the desktop shows this
+  // URL once, the phone's client lifts the token into sessionStorage and
+  // sends it back as a bearer header on mutating routes.
+  const paired = (url: string): string =>
+    activePairingToken ? `${url}/?token=${activePairingToken}` : url
   const ips = lanIps()
   if (ips.length === 0) {
-    return httpsReady
+    return (httpsReady
       ? [`https://localhost:${MOBILE_HTTPS_PORT}`, `http://localhost:${MOBILE_PORT}`]
       : [`http://localhost:${MOBILE_PORT}`]
+    ).map(paired)
   }
   // Prefer HTTPS (mic-capable) when available; keep HTTP as a fallback line.
   const scheme = httpsReady ? 'https' : 'http'
   const port = httpsReady ? MOBILE_HTTPS_PORT : MOBILE_PORT
-  return ips.map((ip) => `${scheme}://${ip}:${port}`)
+  return ips.map((ip) => paired(`${scheme}://${ip}:${port}`))
 }
 
 /**
@@ -318,8 +340,7 @@ async function handle(
     }
     response.writeHead(200, {
       'content-type': 'image/png',
-      'cache-control': 'no-store',
-      'access-control-allow-origin': '*'
+      'cache-control': 'no-store'
     })
     response.end(thumb)
     return

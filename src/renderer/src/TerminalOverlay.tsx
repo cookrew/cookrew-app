@@ -16,10 +16,12 @@ import { CheckpointTimeline } from './CheckpointTimeline'
 import { TranscriptView, type ActiveBlock, type TranscriptHandle } from './TranscriptView'
 import {
   fetchTraceIndex,
+  fetchTraceMarkers,
   mergeCheckpointRows,
   tailClipRows,
   traceRowLabel,
-  type TraceIndexEntry
+  type TraceIndexEntry,
+  type TraceMarkerRow
 } from './transcript'
 import { checkpointTitle, useTitleMode } from './checkpoint-sync'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
@@ -125,6 +127,7 @@ function TerminalOverlay({
   // sub-cap identities); the trace is the only target (no tmux copy-mode), and
   // the record-based pager is kept in sync best-effort for the header/fork.
   const [traceIndex, setTraceIndex] = useState<TraceIndexEntry[]>([])
+  const [traceMarkers, setTraceMarkers] = useState<TraceMarkerRow[]>([])
   useEffect(() => {
     let alive = true
     void fetchTraceIndex(node.id)
@@ -136,6 +139,11 @@ function TerminalOverlay({
         // bridge that REJECTS is a different failure — surface it, don't swallow.
         console.error('listTraceIndex failed:', error)
       })
+    void fetchTraceMarkers(node.id)
+      .then((list) => {
+        if (alive) setTraceMarkers(list)
+      })
+      .catch((error) => console.error('listTraceMarkers failed:', error))
     return () => {
       alive = false
     }
@@ -625,6 +633,7 @@ function TerminalOverlay({
         <CheckpointTimeline
           terminalId={node.id}
           rows={rows}
+          markers={traceMarkers}
           titleMode={titleMode}
           activeIndex={activeBlock.index}
           loadingIndex={pendingIndex}

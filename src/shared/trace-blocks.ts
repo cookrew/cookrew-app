@@ -1,6 +1,7 @@
 // Trace-sourced context blocks (note trace-sourced-context-final): the
 // checkpoint context is traced DIRECTLY from the agent-owned session files —
-// Claude's ~/.claude/projects JSONL and Codex's ~/.codex/sessions rollouts.
+// Claude's ~/.claude/projects JSONL, Codex's ~/.codex/sessions rollouts, and
+// Pi's cwd-scoped JSONL in Cookrew's per-node session directories.
 // Append-only and uneraseable, so blocks are exact and truncation-immune by
 // construction. Pure parsers + the identity-keyed pager live here; file IO
 // and caching are main-process (main/trace.ts).
@@ -18,7 +19,7 @@ export interface TraceToolCall {
 
 export interface TraceBlock {
   /**
-   * Stable identity: Claude prompt-entry uuid; Codex 'p<ordinal>' (1-based
+   * Stable identity: Claude/Pi prompt-entry id; Codex 'p<ordinal>' (1-based
    * user_message position — rollouts are append-only, ordinals never shift).
    */
   id: string
@@ -316,7 +317,176 @@ function codexOutputText(output: unknown): string {
   return ''
 }
 
+// ---- Pi session trace ----
+
+interface PiContentBlock {
+  type?: string
+  text?: string
+  name?: string
+  id?: string
+  arguments?: unknown
+}
+
+interface PiMessage {
+  role?: string
+  content?: unknown
+  timestamp?: number
+  toolCallId?: string
+}
+
+interface PiEntry {
+  type?: string
+  id?: string
+  parentId?: string | null
+  timestamp?: string
+  message?: PiMessage
+}
+
+function piEntryTime(entry: PiEntry, fallback: number): number {
+  if (typeof entry.message?.timestamp === 'number' && Number.isFinite(entry.message.timestamp)) {
+    return entry.message.timestamp
+  }
+  return timeMs(entry.timestamp, fallback)
+}
+
+function piText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return (content as PiContentBlock[])
+    .filter((block) => block.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text as string)
+    .join('\n')
+}
+
+/**
+ * Pi stores a tree in one JSONL file. Follow the last context-bearing leaf to
+ * the root so `/tree` branch switches expose only the active conversation,
+ * not abandoned sibling branches.
+ */
+function activePiEntries(lines: string[]): PiEntry[] {
+  const entries = lines
+    .map((line) => parseLine(line) as PiEntry | null)
+    .filter((entry): entry is PiEntry => entry !== null && typeof entry.id === 'string')
+  const byId = new Map(entries.map((entry) => [entry.id as string, entry]))
+  const leaf = [...entries].reverse().find((entry) =>
+    entry.type === 'message' || entry.type === 'compaction' || entry.type === 'branch_summary' ||
+    entry.type === 'custom_message'
+  )
+  if (!leaf) return []
+  const branch: PiEntry[] = []
+  const seen = new Set<string>()
+  let current: PiEntry | undefined = leaf
+  while (current?.id && !seen.has(current.id)) {
+    seen.add(current.id)
+    branch.push(current)
+    current = typeof current.parentId === 'string' ? byId.get(current.parentId) : undefined
+  }
+  return branch.reverse()
+}
+
+/** Active-branch transcript blocks from Pi's cwd-scoped JSONL session. */
+export function parsePiTrace(lines: string[]): TraceBlock[] {
+  const blocks: TraceBlock[] = []
+  const pending = new Map<string, TraceToolCall>()
+  let current: TraceBlock | null = null
+  for (const entry of activePiEntries(lines)) {
+    if (entry.type !== 'message' || !entry.message) continue
+    const message = entry.message
+    const at = piEntryTime(entry, current?.endedAt ?? 0)
+    if (message.role === 'user') {
+      const prompt = piText(message.content)
+      if (prompt.length === 0) continue
+      current = {
+        id: entry.id as string,
+        index: blocks.length + 1,
+        prompt,
+        reply: '',
+        activity: [],
+        startedAt: at,
+        endedAt: at
+      }
+      pending.clear()
+      blocks.push(current)
+      continue
+    }
+    if (!current) continue
+    if (message.role === 'assistant' && Array.isArray(message.content)) {
+      const texts: string[] = []
+      for (const block of message.content as PiContentBlock[]) {
+        if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
+          texts.push(block.text)
+        } else if (block.type === 'toolCall' && typeof block.name === 'string' && block.name.trim()) {
+          const call: TraceToolCall = {
+            tool: block.name.trim(),
+            args: claudeToolArgs(block.arguments),
+            result: ''
+          }
+          current.activity.push(call)
+          if (typeof block.id === 'string') pending.set(block.id, call)
+        }
+      }
+      if (texts.length > 0) {
+        const text = texts.join('\n')
+        current.reply = current.reply ? `${current.reply}\n${text}` : text
+      }
+      current.endedAt = at
+      continue
+    }
+    if (message.role === 'toolResult' && typeof message.toolCallId === 'string') {
+      const call = pending.get(message.toolCallId)
+      if (call && call.result === '') call.result = claudeResultText(message.content)
+      current.endedAt = at
+    }
+  }
+  return blocks
+}
+
 // ---- cheap identity+title listing (fan / timeline full range) ----
+
+/** A boundary event on the checkpoint rail. 'compact' is parsed from the
+ * session file itself; 'clear' is a lineage segment boundary emitted by the
+ * trace reader (a /clear starts a new FILE — nothing marks it in-file). */
+export interface TraceBoundaryMarker {
+  kind: 'compact' | 'clear' | 'rewind'
+  /** Checkpoint ordinal the boundary sits AFTER (0 = before the first). */
+  afterIndex: number
+  /** compact_metadata when the boundary record carries it. */
+  preTokens?: number
+  postTokens?: number
+  /** 'clear' only: session id the previous segment ran on. */
+  previousSessionId?: string
+  /** 'rewind' only: checkpoint the agent was rewound TO. */
+  toIndex?: number
+}
+
+/**
+ * Compact markers from ONE session file: feed every entry through the SHARED
+ * CheckpointAssigner so afterIndex matches rail ordinals BY CONSTRUCTION
+ * (the same identity rule that keeps trace-block.index === TurnRecord.index),
+ * and record each compact_boundary system entry where it lands.
+ */
+export function compactMarkersOf(lines: string[]): TraceBoundaryMarker[] {
+  const markers: TraceBoundaryMarker[] = []
+  const assigner = new CheckpointAssigner()
+  for (const line of lines) {
+    const entry = parseLine(line) as (ClaudeEntry & {
+      subtype?: string
+      compactMetadata?: { preTokens?: number; postTokens?: number }
+    }) | null
+    if (entry === null || typeof entry.type !== 'string') continue
+    assigner.feed(entry)
+    if (entry.type === 'system' && entry.subtype === 'compact_boundary') {
+      const meta = entry.compactMetadata
+      markers.push({
+        kind: 'compact',
+        afterIndex: assigner.assigned,
+        ...(typeof meta?.preTokens === 'number' ? { preTokens: meta.preTokens } : {}),
+        ...(typeof meta?.postTokens === 'number' ? { postTokens: meta.postTokens } : {})
+      })
+    }
+  }
+  return markers
+}
 
 /** A lightweight trace listing entry — identity + a display title/snippet. */
 export interface TraceIndexEntry {

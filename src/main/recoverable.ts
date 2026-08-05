@@ -6,7 +6,8 @@
 // a killed teammate comes back exactly as it was, on its own session.
 //
 // Harness-agnostic by construction: the node carries whatever session ref its
-// harness uses (claudeSessionId / codexSessionRef / opencodeSessionId), so a
+// harness uses (claudeSessionId / codexSessionRef / opencodeSessionId /
+// piSessionId), so a
 // new harness needs no change here.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'

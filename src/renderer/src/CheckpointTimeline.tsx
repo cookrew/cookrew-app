@@ -13,7 +13,8 @@ import {
   railPointerFraction,
   scrollFocusState,
   scrubPreviewRow,
-  type CheckpointRow
+  type CheckpointRow,
+  type TraceMarkerRow
 } from './transcript'
 
 /** Marker inset (matches .cr-ckpt-here top: calc(16px + …)) for scrub mapping. */
@@ -51,6 +52,7 @@ const NEIGHBOR_RADIUS = 12
 export function CheckpointTimeline({
   terminalId,
   rows,
+  markers,
   titleMode,
   activeIndex,
   loadingIndex,
@@ -62,6 +64,8 @@ export function CheckpointTimeline({
   terminalId: string
   /** Full-range selectable checkpoints (records ∪ trace listing), ascending. */
   rows: CheckpointRow[]
+  /** Boundary markers (◆ compact / ⇥ clear) interleaved between rows. */
+  markers?: TraceMarkerRow[]
   titleMode: TitleMode
   /** Checkpoint identity in view; null at the live tail. */
   activeIndex?: number | null
@@ -87,6 +91,10 @@ export function CheckpointTimeline({
   const [acting, setActing] = useState<number | null>(null)
   const [savingIndex, setSavingIndex] = useState<number | null>(null)
   const [forkingIndex, setForkingIndex] = useState<number | null>(null)
+  /** REWIND two-tap arm: first tap arms "SURE?" (in-place rewind is the one
+   * destructive-ish rail action), second tap executes. */
+  const [rewindArmed, setRewindArmed] = useState<number | null>(null)
+  const [rewindingIndex, setRewindingIndex] = useState<number | null>(null)
   const railRef = useRef<HTMLDivElement>(null)
   const miniRef = useRef<HTMLDivElement>(null)
   // Rail scrub gesture: a press that travels past SCRUB_THRESHOLD becomes a
@@ -162,6 +170,29 @@ export function CheckpointTimeline({
       })
   }
 
+  // In-place rewind: the executor kills, rebinds to a truncated copy, and
+  // respawns the SAME node (undo lives server-side on the node's restoreStack).
+  const rewind = (index: number): void => {
+    if (rewindingIndex !== null) return
+    if (rewindArmed !== index) {
+      setRewindArmed(index)
+      return
+    }
+    const restore = cookrew().restoreCheckpoint
+    if (typeof restore !== 'function') return
+    setRewindingIndex(index)
+    void restore(terminalId, index)
+      .then((result) => {
+        if (!result.ok) window.alert(result.reason ?? 'Rewind refused.')
+      })
+      .catch((error) => console.error('Rewind failed:', error))
+      .finally(() => {
+        setRewindArmed(null)
+        setRewindingIndex(null)
+        closeActions()
+      })
+  }
+
   const stop = (e: React.MouseEvent): void => e.stopPropagation()
 
   // Drag the line/marker → scrub the transcript. The line/marker stays draggable
@@ -221,10 +252,47 @@ export function CheckpointTimeline({
           >
             <CrIcon name="fork" /> {forkingIndex === index ? '…' : 'FORK'}
           </button>
+          {typeof cookrew().restoreCheckpoint === 'function' && (
+            <button
+              className={`cr-ckpt-action rewind${rewindArmed === index ? ' armed' : ''}`}
+              disabled={rewindingIndex !== null}
+              onClick={() => rewind(index)}
+            >
+              {rewindingIndex === index ? '…' : rewindArmed === index ? 'SURE?' : '⟲ REWIND'}
+            </button>
+          )}
         </>
       )}
     </span>
   )
+
+  // Boundary dividers (◆ compact / ⇥ clear) sit BETWEEN checkpoint rows, keyed
+  // to the row they follow — a compact reads as "context was squeezed here",
+  // a clear as "the session restarted here (earlier endpoints still reachable
+  // via lineage)". Rendered inline in the fan so phone + desktop share them.
+  const boundaryRows = (afterIndex: number): React.JSX.Element[] =>
+    (markers ?? [])
+      .filter((m) => m.afterIndex === afterIndex)
+      .map((m, i) => (
+        <div
+          key={`boundary-${m.kind}-${afterIndex}-${i}`}
+          className={`cr-ckpt-boundary ${m.kind}`}
+          role="separator"
+          aria-label={
+            m.kind === 'compact'
+              ? 'Compacted here'
+              : m.kind === 'rewind'
+                ? `Rewound to T${m.toIndex}`
+                : 'Session cleared here'
+          }
+        >
+          {m.kind === 'compact'
+            ? `◆ compact${m.preTokens !== undefined && m.postTokens !== undefined ? ` · ${fmtTokens(m.preTokens)} → ${fmtTokens(m.postTokens)}` : ''}`
+            : m.kind === 'rewind'
+              ? `⟲ rewind · T${m.toIndex}`
+              : `⇥ clear · earlier endpoints via lineage`}
+        </div>
+      ))
 
   // One row of the extended tab — the same `.cr-ckpt-row` markup, tap → jump,
   // hold → actions. The focused row is `.active` and sits AT the marker.
@@ -301,6 +369,28 @@ export function CheckpointTimeline({
         onPointerCancel={onRailPointerUp}
       >
         <div className="cr-ckpt-line" />
+        {/* Boundary ticks ON the rail line — compact/clear/rewind positions visible
+            at first sight. Fraction uses the rail's IDENTITY extent: the last row's
+            index (or 1 when empty), not the array length, so a marker after the last
+            checkpoint doesn't clamp to the bottom. */}
+        {(markers ?? []).map((m, i) => {
+          const maxIndex = rows.length > 0 ? rows[rows.length - 1].index : 1
+          const frac = Math.min(1, Math.max(0, m.afterIndex / maxIndex))
+          return (
+            <div
+              key={`tick-${m.kind}-${m.afterIndex}-${i}`}
+              className={`cr-ckpt-tick ${m.kind}`}
+              style={{ top: railAnchorTop(frac) }}
+              title={
+                m.kind === 'compact'
+                  ? `compact here${m.preTokens !== undefined && m.postTokens !== undefined ? ` · ${fmtTokens(m.preTokens)} → ${fmtTokens(m.postTokens)}` : ''}`
+                  : m.kind === 'rewind'
+                    ? `rewound to T${m.toIndex} here`
+                    : 'session cleared here — earlier endpoints via lineage'
+              }
+            />
+          )
+        })}
         <div className="cr-ckpt-count">
           <span className="n">{rows.length}</span>
           <span className="l">CP</span>
@@ -328,11 +418,26 @@ export function CheckpointTimeline({
               never shift the focus off the marker, whatever the neighbor counts
               (HIGH-1). They grow up/down and clip at the view boundary. */}
           <div className="cr-ckpt-fan-focus">
-            {fan && <div className="cr-ckpt-fan-up">{fan.above.map(renderRow)}</div>}
+            {fan && (
+              <div className="cr-ckpt-fan-up">
+                {fan.above.map((r) => (
+                  <span key={r.index} style={{ display: 'contents' }}>
+                    {renderRow(r)}
+                    {boundaryRows(r.index)}
+                  </span>
+                ))}
+              </div>
+            )}
             {renderRow(focusedRow)}
+            {boundaryRows(focusedRow.index)}
             {fan && (
               <div className="cr-ckpt-fan-down">
-                {fan.below.map(renderRow)}
+                {fan.below.map((r) => (
+                  <span key={r.index} style={{ display: 'contents' }}>
+                    {renderRow(r)}
+                    {boundaryRows(r.index)}
+                  </span>
+                ))}
                 {showLive && (
                   <div
                     className={`cr-ckpt-row live${here === null ? ' active' : ''}`}
@@ -357,6 +462,13 @@ export function CheckpointTimeline({
       )}
     </div>
   )
+}
+
+/** 999600 → "999.6k", 11200000 → "11.2M" — compact marker compression readout. */
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
 }
 
 function SaveRoleInline({

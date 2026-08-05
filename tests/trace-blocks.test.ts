@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  compactMarkersOf,
   pageTraceBlocks,
   parseClaudeTrace,
   parseCodexSessionMeta,
   parseCodexTrace,
+  parsePiTrace,
   traceIndexOf
 } from '../src/shared/trace-blocks'
 
@@ -138,6 +140,37 @@ describe('parseCodexTrace (rollout blocks)', () => {
   })
 })
 
+describe('parsePiTrace (active session-tree branch)', () => {
+  it('joins assistant text, matches tool results, and excludes an abandoned sibling branch', () => {
+    const line = (value: unknown): string => JSON.stringify(value)
+    const lines = [
+      line({ type: 'session', version: 3, id: 'session-id', cwd: '/work/repo' }),
+      line({ type: 'message', id: 'u1', parentId: null, timestamp: '2026-08-03T00:00:01Z', message: { role: 'user', content: 'Inspect it' } }),
+      line({ type: 'message', id: 'a1', parentId: 'u1', timestamp: '2026-08-03T00:00:02Z', message: { role: 'assistant', content: [{ type: 'text', text: 'Checking.' }, { type: 'toolCall', id: 'tool-1', name: 'read', arguments: { path: 'src/a.ts' } }] } }),
+      line({ type: 'message', id: 'r1', parentId: 'a1', timestamp: '2026-08-03T00:00:03Z', message: { role: 'toolResult', toolCallId: 'tool-1', toolName: 'read', content: [{ type: 'text', text: 'file body' }] } }),
+      line({ type: 'message', id: 'a2', parentId: 'r1', timestamp: '2026-08-03T00:00:04Z', message: { role: 'assistant', content: [{ type: 'text', text: 'Found it.' }] } }),
+      line({ type: 'message', id: 'dead-u', parentId: 'a2', timestamp: '2026-08-03T00:00:05Z', message: { role: 'user', content: 'Abandoned branch' } }),
+      line({ type: 'message', id: 'dead-a', parentId: 'dead-u', timestamp: '2026-08-03T00:00:06Z', message: { role: 'assistant', content: [{ type: 'text', text: 'Old answer' }] } }),
+      line({ type: 'message', id: 'u2', parentId: 'a2', timestamp: '2026-08-03T00:00:07Z', message: { role: 'user', content: [{ type: 'text', text: 'Fix it' }] } }),
+      line({ type: 'message', id: 'a3', parentId: 'u2', timestamp: '2026-08-03T00:00:08Z', message: { role: 'assistant', content: [{ type: 'text', text: 'Done.' }] } })
+    ]
+
+    expect(parsePiTrace(lines)).toEqual([
+      {
+        id: 'u1', index: 1, prompt: 'Inspect it', reply: 'Checking.\nFound it.',
+        activity: [{ tool: 'read', args: 'src/a.ts', result: 'file body' }],
+        startedAt: Date.parse('2026-08-03T00:00:01Z'),
+        endedAt: Date.parse('2026-08-03T00:00:04Z')
+      },
+      {
+        id: 'u2', index: 2, prompt: 'Fix it', reply: 'Done.', activity: [],
+        startedAt: Date.parse('2026-08-03T00:00:07Z'),
+        endedAt: Date.parse('2026-08-03T00:00:08Z')
+      }
+    ])
+  })
+})
+
 describe('pageTraceBlocks (identity-keyed windows, review BLOCK 2)', () => {
   const blocks = Array.from({ length: 9 }, (_, i) => ({
     id: `u${i + 1}`, index: i + 1, prompt: `p${i + 1}`, reply: '', activity: [],
@@ -248,5 +281,44 @@ describe('traceIndexOf (cheap identity+title listing for the fan)', () => {
     const entries = traceIndexOf([block(1, 'y'.repeat(200)), block(2, '   ')])
     expect(entries[0].title.length).toBeLessThanOrEqual(80)
     expect(entries[1].title).toBe('(empty prompt)')
+  })
+})
+
+describe('compactMarkersOf (◆ rail markers from compact_boundary entries)', () => {
+  const prompt = (uuid: string, text: string, ms: number): string =>
+    JSON.stringify({ type: 'user', uuid, timestamp: iso(ms), message: { role: 'user', content: text } })
+  const boundary = (pre: number, post: number): string =>
+    JSON.stringify({
+      type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted',
+      compactMetadata: { trigger: 'auto', preTokens: pre, postTokens: post }
+    })
+
+  it('positions a boundary AFTER the checkpoint ordinal it follows (assigner-aligned)', () => {
+    const lines = [
+      prompt('u1', 'first', T0),
+      prompt('u2', 'second', T0 + 1000),
+      boundary(999600, 11200),
+      prompt('u3', 'third', T0 + 2000)
+    ]
+    expect(compactMarkersOf(lines)).toEqual([
+      { kind: 'compact', afterIndex: 2, preTokens: 999600, postTokens: 11200 }
+    ])
+  })
+
+  it('a boundary before any checkpoint gets afterIndex 0; missing metadata is omitted', () => {
+    const lines = [
+      JSON.stringify({ type: 'system', subtype: 'compact_boundary' }),
+      prompt('u1', 'first', T0)
+    ]
+    expect(compactMarkersOf(lines)).toEqual([{ kind: 'compact', afterIndex: 0 }])
+  })
+
+  it('sibling-collapse prompts do not shift the boundary ordinal', () => {
+    const lines = [
+      JSON.stringify({ type: 'user', uuid: 'u1', parentUuid: 'p', timestamp: iso(T0), message: { role: 'user', content: 'same submission' } }),
+      JSON.stringify({ type: 'user', uuid: 'u2', parentUuid: 'p', timestamp: iso(T0 + 100), message: { role: 'user', content: 'same submission' } }),
+      boundary(10, 1)
+    ]
+    expect(compactMarkersOf(lines)).toEqual([{ kind: 'compact', afterIndex: 1, preTokens: 10, postTokens: 1 }])
   })
 })

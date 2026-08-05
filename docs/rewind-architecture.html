@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rewind Architecture — Role / Fork / Rewind on the Session JSONL</title>
+<style>
+  :root {
+    --bg: #f7f6f2; --surface: #fdfdfa; --surface-2: #efeee8;
+    --ink: #23272b; --ink-soft: #5a625f; --line: #d9dcd2;
+    --fork: #3b5ba5; --fork-soft: #e2e8f5;
+    --role: #7a4fa3; --role-soft: #ede4f5;
+    --rewind: #b8770a; --rewind-soft: #f5e8cd;
+    --file: #2e7d74; --file-soft: #ddefec;
+    --danger: #a6432c; --danger-soft: #f6e3dd;
+    --mono: "SF Mono", ui-monospace, Menlo, monospace;
+    --serif: Charter, "Bitstream Charter", Georgia, serif;
+    --sans: system-ui, -apple-system, "PingFang SC", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1d1b; --surface: #222624; --surface-2: #2b302d;
+      --ink: #e7e9e4; --ink-soft: #a2aca7; --line: #3a413d;
+      --fork: #8aa5dd; --fork-soft: #28324a;
+      --role: #b893d9; --role-soft: #37283f;
+      --rewind: #dfa53d; --rewind-soft: #3b3320;
+      --file: #5cb3a8; --file-soft: #22403c;
+      --danger: #d97d63; --danger-soft: #44271f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 15.5px; line-height: 1.7; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 40px 24px 64px; }
+  header.masthead { border-bottom: 3px double var(--line); padding-bottom: 22px; margin-bottom: 30px; }
+  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--rewind); margin-bottom: 10px; }
+  h1 { font-family: var(--serif); font-size: clamp(27px, 4.2vw, 36px); line-height: 1.25; margin: 0 0 10px; text-wrap: balance; }
+  .subtitle { color: var(--ink-soft); max-width: 72ch; margin: 0; }
+  h2 { font-family: var(--serif); font-size: 22px; margin: 44px 0 8px; padding-top: 18px; border-top: 1px solid var(--line); }
+  h2 .no { font-family: var(--mono); font-size: 13px; color: var(--rewind); margin-right: 10px; }
+  h3 { font-size: 16.5px; margin: 22px 0 6px; }
+  p, li { max-width: 76ch; }
+  code { font-family: var(--mono); font-size: .86em; background: var(--surface-2); border-radius: 4px; padding: 1px 5px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; margin: 16px 0; }
+  .tablebox { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; margin: 16px 0; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 13.5px; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  th { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft); background: var(--surface-2); }
+  tbody tr:last-child td { border-bottom: none; }
+  .pill { display: inline-block; font-family: var(--mono); font-size: 11px; border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+  .p-fork { background: var(--fork-soft); color: var(--fork); }
+  .p-role { background: var(--role-soft); color: var(--role); }
+  .p-rewind { background: var(--rewind-soft); color: var(--rewind); }
+  .p-file { background: var(--file-soft); color: var(--file); }
+  .p-danger { background: var(--danger-soft); color: var(--danger); }
+  svg { display: block; max-width: 100%; height: auto; }
+  .figcap { font-size: 12.5px; color: var(--ink-soft); margin: 6px 2px 0; font-family: var(--mono); }
+  .callout { border-left: 3px solid var(--rewind); background: var(--surface); border-radius: 0 8px 8px 0; padding: 12px 18px; margin: 18px 0; }
+  .callout.file { border-left-color: var(--file); }
+  .callout.danger { border-left-color: var(--danger); }
+  ul { padding-left: 1.3em; }
+  li { margin: 5px 0; }
+  li::marker { color: var(--rewind); }
+  footer { margin-top: 52px; padding-top: 16px; border-top: 3px double var(--line); font-size: 13px; color: var(--ink-soft); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="masthead">
+  <div class="eyebrow">Cookrew · Endpoint Timeline · Architecture &amp; Design · 2026-08-04</div>
+  <h1>One JSONL, Three Operations:<br>Role, Fork, and the new Rewind</h1>
+  <p class="subtitle">All three endpoint functions read the agent's original session file, cut it at an exact message uuid, and write a truncated copy under a fresh id — the original is never rewritten. They differ only in <em>where the copy goes</em> and <em>who resumes it</em>. This document draws that architecture, surveys how other agentic tools solve rewind, and designs the two missing capabilities: crossing compact &amp; clear boundaries, and marking those boundaries on the timeline rail.</p>
+</header>
+
+<h2><span class="no">01</span>The shared engine and its three consumers</h2>
+
+<div class="card">
+<svg viewBox="0 0 1000 560" role="img" aria-label="Architecture: original session JSONL feeding the truncation engine and three operations">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--ink-soft)"/>
+    </marker>
+  </defs>
+
+  <!-- original file -->
+  <rect x="30" y="230" width="220" height="110" rx="10" fill="var(--file-soft)" stroke="var(--file)" stroke-width="1.5"/>
+  <text x="140" y="258" text-anchor="middle" font-family="var(--mono)" font-size="13" fill="var(--file)">ORIGINAL session.jsonl</text>
+  <text x="140" y="280" text-anchor="middle" font-size="11.5" fill="var(--ink)">~/.claude/projects/&lt;dir&gt;/&lt;id&gt;.jsonl</text>
+  <text x="140" y="300" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)">read-only to Cookrew — only the owning</text>
+  <text x="140" y="316" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)">CLI appends (incl. its kill-time tail)</text>
+
+  <!-- engine -->
+  <rect x="330" y="210" width="280" height="150" rx="10" fill="var(--surface-2)" stroke="var(--line)" stroke-width="1.5"/>
+  <text x="470" y="238" text-anchor="middle" font-family="var(--mono)" font-size="13" fill="var(--ink)">buildForkedSessionLinesAtUuid</text>
+  <text x="470" y="262" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)">shared/claude-fork.ts — THE single cut engine</text>
+  <text x="470" y="288" text-anchor="middle" font-size="11.5" fill="var(--ink)">① walk lines, restamp sessionId → fresh uuid</text>
+  <text x="470" y="306" text-anchor="middle" font-size="11.5" fill="var(--ink)">② keep everything ≤ cutoff message uuid</text>
+  <text x="470" y="324" text-anchor="middle" font-size="11.5" fill="var(--ink)">③ stop at the next real prompt after it</text>
+  <text x="470" y="346" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)">never a positional guess · never a timestamp</text>
+
+  <line x1="250" y1="285" x2="330" y2="285" stroke="var(--ink-soft)" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- fork -->
+  <rect x="690" y="30" width="280" height="130" rx="10" fill="var(--fork-soft)" stroke="var(--fork)" stroke-width="1.5"/>
+  <text x="830" y="56" text-anchor="middle" font-family="var(--mono)" font-size="13" fill="var(--fork)">FORK ⑂</text>
+  <text x="830" y="76" text-anchor="middle" font-size="11.5" fill="var(--ink)">copy → source's project dir, fresh id</text>
+  <text x="830" y="94" text-anchor="middle" font-size="11.5" fill="var(--ink)">NEW terminal resumes the copy</text>
+  <text x="830" y="112" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)">non-destructive sibling · edge to source</text>
+  <text x="830" y="130" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)">main/fork.ts + forkClaudeSession</text>
+
+  <!-- role -->
+  <rect x="690" y="215" width="280" height="130" rx="10" fill="var(--role-soft)" stroke="var(--role)" stroke-width="1.5"/>
+  <text x="830" y="241" text-anchor="middle" font-family="var(--mono)" font-size="13" fill="var(--role)">ROLE ▣</text>
+  <text x="830" y="261" text-anchor="middle" font-size="11.5" fill="var(--ink)">copy → ~/.cookrew/roles/sessions/ (stable)</text>
+  <text x="830" y="279" text-anchor="middle" font-size="11.5" fill="var(--ink)">every boot re-copies under ANOTHER fresh id</text>
+  <text x="830" y="297" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)">one role seeds many terminals, no sharing</text>
+  <text x="830" y="315" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)">roleSaveInner + saveRoleSessionCopy / resumeRoleSession</text>
+
+  <!-- rewind -->
+  <rect x="690" y="400" width="280" height="140" rx="10" fill="var(--rewind-soft)" stroke="var(--rewind)" stroke-width="2"/>
+  <text x="830" y="426" text-anchor="middle" font-family="var(--mono)" font-size="13" fill="var(--rewind)">REWIND ⟲ (new)</text>
+  <text x="830" y="446" text-anchor="middle" font-size="11.5" fill="var(--ink)">copy → node's OWN project dir, fresh id</text>
+  <text x="830" y="464" text-anchor="middle" font-size="11.5" fill="var(--ink)">SAME node rebound in place (kill→rebind→boot)</text>
+  <text x="830" y="482" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)">reversible: restoreStack on the node (cap 10)</text>
+  <text x="830" y="500" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)">busy-agent refusal (thinking/waiting)</text>
+  <text x="830" y="518" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)">main/restore.ts + restore-plan.ts · live-probed 16/16</text>
+
+  <line x1="610" y1="255" x2="690" y2="95" stroke="var(--fork)" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="610" y1="285" x2="690" y2="280" stroke="var(--role)" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="610" y1="315" x2="690" y2="470" stroke="var(--rewind)" stroke-width="1.5" marker-end="url(#arr)"/>
+</svg>
+<p class="figcap">fig 1 — one read-only source of truth, one cut engine, three resume targets. Rewind is the only one that rebinds in place — which is why it alone needs kill-ordering, a busy guard, and an undo stack.</p>
+</div>
+
+<div class="tablebox"><table>
+  <thead><tr><th></th><th><span class="pill p-fork">FORK</span></th><th><span class="pill p-role">ROLE</span></th><th><span class="pill p-rewind">REWIND</span></th></tr></thead>
+  <tbody>
+    <tr><td><b>Question it answers</b></td><td>"What if I'd asked differently here?" — branch a sibling</td><td>"Bottle this moment as a reusable agent"</td><td>"Take THIS agent back to that moment"</td></tr>
+    <tr><td><b>Copy destination</b></td><td>source's project dir</td><td>role store (<code>~/.cookrew/roles/sessions</code>)</td><td>node's own project dir</td></tr>
+    <tr><td><b>Who resumes</b></td><td>a NEW terminal (edge to source)</td><td>each future terminal booted from the role</td><td>the SAME node, killed &amp; rebooted</td></tr>
+    <tr><td><b>Cut identity</b></td><td>turn uuid (exact) or prompt position (fallback)</td><td>checkpoint uuid (exact only)</td><td>checkpoint uuid (exact only — planner refuses otherwise)</td></tr>
+    <tr><td><b>Original file</b></td><td colspan="3">never rewritten by Cookrew — the CLI that owns it may append its own lifecycle tail (verified append-only in the live probe)</td></tr>
+    <tr><td><b>Reversibility</b></td><td>delete the fork</td><td>delete the role</td><td><code>restoreStack</code> undo, cap 10, persisted on the node</td></tr>
+    <tr><td><b>Guards</b></td><td>needs ≥1 completed turn</td><td>needs checkpoint provenance</td><td>busy-agent refusal · kill-before-spawn (killAndWait) · instance-aware pty exit</td></tr>
+    <tr><td><b>Status</b></td><td>shipped</td><td>shipped</td><td>backend live-probed 16/16 · UX + markers = this work</td></tr>
+  </tbody>
+</table></div>
+
+<h2><span class="no">02</span>What other agentic tools do — and the gap Cookrew fills</h2>
+
+<div class="tablebox"><table>
+  <thead><tr><th>Tool</th><th>Mechanism</th><th>What restores</th><th>Boundary behavior</th><th>Lesson for Cookrew</th></tr></thead>
+  <tbody>
+    <tr><td><b>Claude Code /rewind</b></td><td>in-session checkpoint picker bound to message uuids</td><td>conversation (+ code revert offered)</td><td><span class="pill p-danger">weak</span> picker only offers checkpoints still IN CONTEXT — a compact silently drops the old ones (a 10-day session: ~194 offers → 8); session-scoped, nothing across /clear</td><td>the pain Cookrew already solves: the rail parses the FILE, so every endpoint survives compact</td></tr>
+    <tr><td><b>Cline checkpoints</b></td><td>shadow git repo, snapshot commit per tool use</td><td>files (optionally + task truncation)</td><td><span class="pill p-file">files fine</span> but the conversation is not restored as usable context</td><td>orthogonal axis (files); not a substitute for session rewind; storage-heavy on big repos</td></tr>
+    <tr><td><b>Cursor checkpoints / CLI rewind</b></td><td>snapshot-based file restore</td><td>mostly files</td><td><span class="pill p-danger">weak</span> community reports rewind broken for old chats in the CLI</td><td>same lesson: in-app registries rot; the durable artifact is the session file itself</td></tr>
+    <tr><td><b>Aider /undo</b></td><td>git auto-commit per edit</td><td>files</td><td>n/a — no conversation dimension</td><td>confirms the split: everyone does files, almost nobody rewinds the agent's mind</td></tr>
+    <tr><td><b>Cookrew rewind</b></td><td>exact-uuid truncation of the session JSONL under a fresh id, in-place rebind</td><td><b>the agent's context itself</b></td><td><span class="pill p-file">compact: works today</span> (whole-file cut) · <span class="pill p-rewind">clear: this design</span></td><td>—</td></tr>
+  </tbody>
+</table></div>
+
+<div class="callout">
+<p><b>Position:</b> Cookrew should NOT build file snapshots (shadow git) — the repo's own git already covers code state, and per-machine devs can layer git-safepoint if they want. Cookrew's unique axis is the <em>agent's mind</em>: the session JSONL <em>is</em> the context, and nobody else rewinds it across compact/clear. Double down there.</p>
+</div>
+
+<h2><span class="no">03</span>Compact &amp; clear in the session file — and on the rail</h2>
+
+<div class="card">
+<svg viewBox="0 0 1000 300" role="img" aria-label="Session file anatomy with compact boundary and clear boundary">
+  <!-- file A -->
+  <rect x="30" y="40" width="560" height="200" rx="10" fill="var(--surface-2)" stroke="var(--line)"/>
+  <text x="50" y="66" font-family="var(--mono)" font-size="12" fill="var(--ink-soft)">session A.jsonl</text>
+  <!-- checkpoints -->
+  <g font-size="11" font-family="var(--mono)">
+    <rect x="50" y="84" width="100" height="24" rx="4" fill="var(--file-soft)"/><text x="60" y="100" fill="var(--ink)">cp 1..k</text>
+    <rect x="160" y="84" width="230" height="24" rx="4" fill="var(--rewind-soft)" stroke="var(--rewind)"/>
+    <text x="170" y="100" fill="var(--rewind)">◆ compact_boundary (system)</text>
+    <rect x="400" y="84" width="170" height="24" rx="4" fill="var(--file-soft)"/><text x="410" y="100" fill="var(--ink)">cp k+1..n (same file)</text>
+    <rect x="50" y="130" width="520" height="50" rx="6" fill="var(--surface)" stroke="var(--line)" stroke-dasharray="4 3"/>
+    <text x="60" y="150" font-size="11" fill="var(--ink-soft)">compact = same file, same sessionId. The uuid cut reaches back across it</text>
+    <text x="60" y="168" font-size="11" fill="var(--ink-soft)">TODAY — the resumed copy contains real pre-compact messages, not the summary.</text>
+    <rect x="50" y="196" width="230" height="24" rx="4" fill="var(--file-soft)"/><text x="60" y="212" fill="var(--ink)">…cp n (last before clear)</text>
+  </g>
+
+  <!-- clear arrow -->
+  <line x1="590" y1="140" x2="660" y2="140" stroke="var(--danger)" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arr)"/>
+  <text x="625" y="128" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--danger)">/clear</text>
+  <text x="625" y="160" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">new id, new file,</text>
+  <text x="625" y="174" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">no file-level link</text>
+
+  <!-- file B -->
+  <rect x="660" y="40" width="310" height="200" rx="10" fill="var(--surface-2)" stroke="var(--line)"/>
+  <text x="680" y="66" font-family="var(--mono)" font-size="12" fill="var(--ink-soft)">session B.jsonl (current)</text>
+  <rect x="680" y="84" width="120" height="24" rx="4" fill="var(--file-soft)"/><text x="690" y="100" font-family="var(--mono)" font-size="11" fill="var(--ink)">cp 1..m</text>
+  <rect x="680" y="130" width="270" height="50" rx="6" fill="var(--surface)" stroke="var(--line)" stroke-dasharray="4 3"/>
+  <text x="690" y="150" font-size="11" fill="var(--ink-soft)">rail today stops here — pre-clear endpoints</text>
+  <text x="690" y="168" font-size="11" fill="var(--ink-soft)">are invisible. Lineage re-attaches file A.</text>
+</svg>
+<p class="figcap">fig 2 — compact is an in-file event (crossable today); clear is an inter-file event (needs lineage).</p>
+</div>
+
+<h3>Rail marker scheme</h3>
+<ul>
+  <li><span class="pill p-rewind">◆ compact</span> — parsed from <code>type:'system', subtype:'compact_boundary'</code> (carries <code>compactMetadata.preTokens → postTokens</code>). Marker sits between checkpoint k and k+1; tooltip shows the compression (e.g. "999.6k → 11.2k tokens"). Checkpoints before it stay fully restorable.</li>
+  <li><span class="pill p-danger">⇥ clear</span> — emitted at lineage segment boundaries (file A → file B). Marker labels the previous session's short id and its checkpoint count ("12 endpoints before clear").</li>
+  <li>Both markers render in the rail's existing marker lane (same geometry as the focused-tag markers — the F6 alignment gate applies to any new marker row).</li>
+</ul>
+
+<h2><span class="no">04</span>Crossing clear: node-carried session lineage</h2>
+
+<div class="card">
+<svg viewBox="0 0 1000 340" role="img" aria-label="Lineage design: rebind choke point, rail union, restore resolution">
+  <defs>
+    <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--ink-soft)"/>
+    </marker>
+  </defs>
+
+  <!-- choke point -->
+  <rect x="30" y="30" width="300" height="120" rx="10" fill="var(--surface-2)" stroke="var(--line)"/>
+  <text x="180" y="56" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="var(--ink)">rebindClaudeSession(node, newId)</text>
+  <text x="180" y="78" text-anchor="middle" font-size="11" fill="var(--ink-soft)">single choke point — every id change:</text>
+  <text x="180" y="98" text-anchor="middle" font-size="11" fill="var(--ink)">restore · undo · stale-file re-resolve</text>
+  <text x="180" y="118" text-anchor="middle" font-size="11" fill="var(--ink)">spawn resolve · (and /clear adoption)</text>
+  <text x="180" y="138" text-anchor="middle" font-size="11" fill="var(--ink-soft)">pushes old id → node.sessionLineage (cap 20)</text>
+
+  <!-- lineage store -->
+  <rect x="390" y="30" width="260" height="120" rx="10" fill="var(--rewind-soft)" stroke="var(--rewind)"/>
+  <text x="520" y="56" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="var(--rewind)">node.sessionLineage</text>
+  <text x="520" y="78" text-anchor="middle" font-size="11" fill="var(--ink)">[A, B, …] prior session ids</text>
+  <text x="520" y="98" text-anchor="middle" font-size="11" fill="var(--ink-soft)">persisted in workspace.json — durable,</text>
+  <text x="520" y="114" text-anchor="middle" font-size="11" fill="var(--ink-soft)">survives app restarts, travels with node</text>
+  <text x="520" y="134" text-anchor="middle" font-size="11" fill="var(--ink-soft)">backfill: resolveExistingClaudeSession walk</text>
+
+  <!-- rail union -->
+  <rect x="30" y="200" width="300" height="120" rx="10" fill="var(--file-soft)" stroke="var(--file)"/>
+  <text x="180" y="226" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="var(--file)">TraceReader.checkpointRefs ∪</text>
+  <text x="180" y="248" text-anchor="middle" font-size="11" fill="var(--ink)">walk lineage oldest→newest,</text>
+  <text x="180" y="266" text-anchor="middle" font-size="11" fill="var(--ink)">parse each file, offset ordinals,</text>
+  <text x="180" y="284" text-anchor="middle" font-size="11" fill="var(--ink)">tag every ref: {index, id, sessionId}</text>
+  <text x="180" y="304" text-anchor="middle" font-size="11" fill="var(--ink-soft)">+ emit clear-markers between segments</text>
+
+  <!-- restore resolution -->
+  <rect x="390" y="200" width="300" height="120" rx="10" fill="var(--rewind-soft)" stroke="var(--rewind)" stroke-width="2"/>
+  <text x="540" y="226" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="var(--rewind)">restore executor</text>
+  <text x="540" y="248" text-anchor="middle" font-size="11" fill="var(--ink)">ref.sessionId → WHICH file to cut</text>
+  <text x="540" y="266" text-anchor="middle" font-size="11" fill="var(--ink)">truncate that file's copy at ref.id</text>
+  <text x="540" y="284" text-anchor="middle" font-size="11" fill="var(--ink)">rebind + push lineage (same choke)</text>
+  <text x="540" y="304" text-anchor="middle" font-size="11" fill="var(--ink-soft)">planner refuses only non-uuid ids, as today</text>
+
+  <line x1="330" y1="90" x2="390" y2="90" stroke="var(--ink-soft)" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <line x1="520" y1="150" x2="520" y2="200" stroke="var(--ink-soft)" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <line x1="180" y1="150" x2="180" y2="200" stroke="var(--ink-soft)" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <line x1="330" y1="260" x2="390" y2="260" stroke="var(--ink-soft)" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+  <!-- note -->
+  <rect x="730" y="200" width="240" height="120" rx="10" fill="var(--surface)" stroke="var(--line)" stroke-dasharray="4 3"/>
+  <text x="850" y="226" text-anchor="middle" font-size="11.5" fill="var(--ink)">why not pure fs-scan?</text>
+  <text x="850" y="250" text-anchor="middle" font-size="11" fill="var(--ink-soft)">mtime ordering is fragile and</text>
+  <text x="850" y="266" text-anchor="middle" font-size="11" fill="var(--ink-soft)">cross-cwd files pollute. Explicit</text>
+  <text x="850" y="282" text-anchor="middle" font-size="11" fill="var(--ink-soft)">lineage is exact; fs-matching is</text>
+  <text x="850" y="298" text-anchor="middle" font-size="11" fill="var(--ink-soft)">kept only as one-time backfill.</text>
+</svg>
+<p class="figcap">fig 3 — lineage is recorded at one choke point, consumed by the rail (union) and the executor (file resolution).</p>
+</div>
+
+<div class="callout danger">
+<p><b>The /clear adoption problem (honest edge):</b> when the user runs /clear inside the CLI, Cookrew doesn't get an event — the CLI just starts writing a new file. Detection: <code>SessionTurnSync</code> already polls the watched file; when the bound file goes stale (no growth across N ticks) AND the project dir holds a NEWER file whose turns match this terminal's history tail, the sync re-resolves and rebinds through the same choke point — recording the clear in lineage and letting the rail show the new segment. Until that first re-resolve, cross-clear rewind simply offers the pre-clear segment (which is correct, not broken).</p>
+</div>
+
+<h2><span class="no">05</span>Implementation map &amp; acceptance</h2>
+
+<div class="tablebox"><table>
+  <thead><tr><th>#</th><th>Change</th><th>Files</th><th>Tests</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>compact markers: parse <code>compact_boundary</code> into the trace index; rail renders ◆ with token compression</td><td><code>shared/trace-blocks.ts</code>, <code>CheckpointTimeline.tsx</code></td><td>trace-blocks fixture with a boundary entry → marker at the right ordinal</td></tr>
+    <tr><td>2</td><td><code>sessionLineage</code> on TerminalNodeData + <code>rebindClaudeSession</code> choke (restore/undo/spawn-resolve route through it)</td><td><code>shared/model.ts</code>, <code>main/index.ts</code>, <code>main/restore.ts</code></td><td>rebind pushes lineage immutably, capped; restore/undo record transitions</td></tr>
+    <tr><td>3</td><td>union rail: <code>checkpointRefs</code> walks lineage, tags refs with <code>sessionId</code>, emits clear-markers; ordinal offsets</td><td><code>main/trace.ts</code></td><td>two-file fixture: 3+2 checkpoints → 5 refs, boundary marker, correct offsets</td></tr>
+    <tr><td>4</td><td>cross-clear restore: executor resolves the cut file by <code>ref.sessionId</code></td><td><code>main/restore.ts</code></td><td>executor test: checkpoint in the OLD file truncates THAT file, rebinds, lineage grows</td></tr>
+    <tr><td>5</td><td>stale-file re-resolve in <code>SessionTurnSync</code> (the /clear adoption)</td><td><code>main/session-sync.ts</code></td><td>watched file stale + newer matching file → rebind + lineage</td></tr>
+    <tr><td>6</td><td>REWIND button beside ROLE/FORK (desktop + phone rail), confirm dialog, undo toast</td><td><code>CheckpointTimeline.tsx</code>, renderer api (already wired)</td><td>component test: button gated on harness=claude + idle phase</td></tr>
+  </tbody>
+</table></div>
+
+<p><b>Acceptance:</b> both typechecks green; suite green incl. the new fixtures; live probe re-run end-to-end (restore + undo on a sacrificial node) PLUS a new cross-clear probe (clear a sacrificial session, restore into the pre-clear segment, verify the pane resumes pre-clear content and the rail shows the ◆/⇥ markers); F6 marker-alignment gate extended to the new markers; code review before commit; nothing touches <code>npm run dev</code>.</p>
+
+<footer>
+  Sources: in-repo analysis of <code>fork.ts</code> / <code>claude-fork.ts</code> / <code>restore.ts</code> / <code>restore-plan.ts</code> / <code>trace-blocks.ts</code> / <code>session-turns.ts</code> / <code>session-sync.ts</code>; live session-file inspection (compact_boundary anatomy); Cline checkpoints docs; Claude Code /rewind guides &amp; its in-context picker limitation (restore-plan.ts header: ~194 → 8 offers after compact); Cursor CLI rewind bug reports; Aider git auto-commit model. Local record of the rewind backend probe: 16/16 PASS (2026-08-04).
+</footer>
+
+</div>
+</body>
+</html>

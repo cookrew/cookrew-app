@@ -31,6 +31,16 @@ function detectTmux(): boolean {
 }
 
 /** tmux session name for a terminal id (names can't contain '.' or ':'). */
+/** True while a tmux session with this name still exists. */
+function tmuxSessionExists(name: string): boolean {
+  try {
+    execFileSync('tmux', ['-L', TMUX_LABEL, 'has-session', '-t', name], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function sessionNameFor(terminalId: string): string {
   return `cookrew_${terminalId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`
 }
@@ -51,6 +61,25 @@ export function orphanSessionNames(
   const owned = new Set<string>()
   for (const id of ownedTerminalIds) owned.add(sessionNameFor(id))
   return tmuxNames.filter((name) => COOKREW_SESSION_RE.test(name) && !owned.has(name))
+}
+
+/**
+ * Poll until a tmux session is gone; THROW when it survives the deadline
+ * (H5). Extracted from PtyManager.killAndWait with an injectable liveness
+ * check so the timeout path is unit-testable without a real tmux server.
+ */
+export async function waitForTmuxDeath(
+  name: string,
+  timeoutMs: number,
+  exists: (name: string) => boolean = tmuxSessionExists
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!exists(name)) return
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  if (!exists(name)) return // one last look at the deadline boundary
+  throw new Error(`tmux session '${name}' survived the ${timeoutMs}ms kill deadline`)
 }
 
 /** Kill a cookrew tmux session by NAME (best effort) — no live PTY needed. */
@@ -434,7 +463,16 @@ export class PtyManager {
       cliDir: this.runtimeDir,
       tmuxConf: this.tmuxConf
     })
-    session.on('exit', () => this.sessions.delete(options.terminalId))
+    // Delete only when the map still points at THIS session: node-pty drains
+    // 'exit' late (see the onData note above), so a killed predecessor's exit
+    // can land AFTER its replacement registered — an instance-blind delete
+    // would clobber the live session from the map (the restore "running
+    // flag" bug: pane alive, ptys.get() undefined, kill() then no-ops).
+    session.on('exit', () => {
+      if (this.sessions.get(options.terminalId) === session) {
+        this.sessions.delete(options.terminalId)
+      }
+    })
     this.sessions.set(options.terminalId, session)
     return session
   }
@@ -492,6 +530,27 @@ export class PtyManager {
    * DELETE uses this: `kill` alone would no-op for inactive terminals and
    * strand their tmux sessions (claude CLIs) forever.
    */
+  /**
+   * Kill a terminal and WAIT until its tmux session is actually gone.
+   *
+   * `kill()` returns before tmux has torn the session down, so an immediate
+   * respawn races it: `new-session -A` attaches to the dying session and the
+   * teardown lands last, leaving the agent dead. Endpoint restore rebinds a
+   * session and reboots in one motion, so it must await the death first.
+   *
+   * THROWS when the session survives the deadline (H5): resolving silently
+   * let restore rebind + respawn onto a session that was never killed —
+   * `new-session -A` reattached the survivor, ignored the boot command, and
+   * left the node pointing at a session id no process was running.
+   */
+  async killAndWait(terminalId: string, timeoutMs = 5000): Promise<void> {
+    // killDetached (not kill): restore/undo MUST end the tmux session even
+    // when the terminal has no tracked PTY — `kill` alone no-ops there and
+    // the respawn would reattach to the old session instead of rebooting.
+    this.killDetached(terminalId)
+    await waitForTmuxDeath(sessionNameFor(terminalId), timeoutMs)
+  }
+
   killDetached(terminalId: string): void {
     const session = this.sessions.get(terminalId)
     if (session) {

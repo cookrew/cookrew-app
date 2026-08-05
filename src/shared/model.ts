@@ -19,6 +19,15 @@ export interface ForkOrigin {
   turnIndex: number
 }
 
+/** One reversible step: the session the agent was on before a restore. */
+export interface RestorePoint {
+  sessionId: string
+  /** Epoch ms of the restore. */
+  at: number
+  /** Checkpoint the agent was rewound TO (for the undo label). */
+  fromIndex: number
+}
+
 export interface TerminalNodeData {
   kind: 'terminal'
   id: string
@@ -48,6 +57,22 @@ export interface TerminalNodeData {
    * the OpenCode analogue of claudeSessionId. Absent for other harnesses.
    */
   opencodeSessionId?: string | null
+  /**
+   * Pi session id discovered in this node's exclusive `--session-dir` after
+   * Pi persists it, then resumed exactly with `--session <id>`. Absent for
+   * other harnesses and for a new session before its first persisted reply.
+   */
+  piSessionId?: string | null
+  /**
+   * Claude session lineage: prior claudeSessionIds this node ran on, oldest
+   * first (a /clear, restore, undo, or re-resolve each append one). The
+   * checkpoint rail UNIONS across it so pre-clear endpoints stay visible and
+   * rewind can reach into earlier session files. Capped; persisted with the
+   * workspace.
+   */
+  sessionLineage?: string[]
+  /** Undo stack for endpoint restore: prior sessions, newest first. */
+  restoreStack?: RestorePoint[]
   position: CanvasPosition
   size: CanvasSize
 }
@@ -214,6 +239,27 @@ export interface TeamMeta {
 }
 
 /** Outcome of an agent recovery, surfaced to the roster toast (agent-recover). */
+/**
+ * Result of an ENDPOINT RESTORE — rewinding a live teammate in place to one of
+ * its checkpoints. Refusals carry `reason` so the UI never pretends a rewind
+ * happened (same honesty rule as the recover exact-context gate).
+ */
+export interface RestoreResult {
+  ok: boolean
+  id: string
+  name: string
+  /** Checkpoint the agent was rewound to. */
+  checkpointIndex: number
+  /** Why the restore was refused (present only when ok=false). */
+  reason?: string
+  /** Session the agent now runs (the truncated copy). */
+  sessionId?: string
+  /** Session it was on before — kept on the undo stack. */
+  previousSessionId?: string | null
+  /** True when this result came from undoing a previous restore. */
+  undone?: boolean
+}
+
 export interface RecoverResult {
   ok: boolean
   id: string

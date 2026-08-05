@@ -71,6 +71,7 @@ const api = {
   listTrace: (terminalId: string, request?: unknown) =>
     ipcRenderer.invoke('trace:page', terminalId, request),
   listTraceIndex: (terminalId: string) => ipcRenderer.invoke('trace:index', terminalId),
+  listTraceMarkers: (terminalId: string) => ipcRenderer.invoke('trace:markers', terminalId),
   forkTerminal: (sourceId: string, turnIndex?: number) =>
     ipcRenderer.invoke('terminal:fork', sourceId, turnIndex),
   teamFork: (spec: unknown) => ipcRenderer.invoke('team:fork', spec),
@@ -88,6 +89,9 @@ const api = {
   countEvents: (query: unknown) => ipcRenderer.invoke('events:count', query),
   listAgents: () => ipcRenderer.invoke('agents:list'),
   recoverAgent: (id: string) => ipcRenderer.invoke('agent:recover', id),
+  restoreCheckpoint: (id: string, checkpointIndex: number) =>
+    ipcRenderer.invoke('agent:restore-checkpoint', id, checkpointIndex),
+  undoRestore: (id: string) => ipcRenderer.invoke('agent:undo-restore', id),
   saveRole: (input: unknown) => ipcRenderer.invoke('role:save', input),
   onTerminalActivity: (cb: (activity: unknown) => void) => {
     const listener = (_e: unknown, activity: unknown): void => cb(activity)
