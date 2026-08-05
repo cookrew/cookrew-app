@@ -17,7 +17,7 @@ import type { SessionField } from './harness'
 import { harnessFor } from './harness'
 import { resolveExistingClaudeSession, type ResolveSessionOptions } from './claude-fork'
 import { opencodeSessionFileExists } from './opencode-bind'
-import { piNodeSessionDir, piSessionFile } from './pi-bind'
+import { piSessionHome } from './pi-bind'
 
 /** Injectable side-effects so the gate is testable without real files. */
 export interface ExactGateDeps {
@@ -62,8 +62,12 @@ export function canRestoreExact(node: TerminalNodeData, deps: ExactGateDeps): bo
   }
   if (harness.id === 'pi') {
     const key = harness.resumeKey(node.piSessionId ?? '')
+    // Exclusive dir OR the legacy pane's own cwd dir (piSessionHome): a
+    // session adopted from a reattached pane is just as exactly-restorable,
+    // and gating it on the exclusive dir alone made those nodes permanently
+    // non-recoverable the moment binding learned to adopt them.
     const piExists = deps.piExists ?? ((nodeId, cwd, id) =>
-      piSessionFile(cwd, id, { sessionsDir: piNodeSessionDir(nodeId) }) !== null)
+      piSessionHome(cwd, id, nodeId) !== null)
     return key !== null && piExists(node.id, node.cwd, key)
   }
   // opencode: format-valid ses_ id AND its session file still on disk. A

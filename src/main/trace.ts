@@ -25,7 +25,7 @@ import { claudeSessionFile } from './claude-fork'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { isCodexCommand, validCodexSessionRef } from './codex-bind'
 import { harnessFor } from './harness'
-import { isPiCommand, piNodeSessionDir, piSessionFile } from './pi-bind'
+import { isPiCommand, piSessionHome } from './pi-bind'
 import type { SessionTurnParser } from './session-sync'
 import type { WorkspaceStore } from './store'
 
@@ -42,6 +42,7 @@ export interface TraceReaderOptions {
   projectsDir?: string
   codexSessionsDir?: string
   piSessionsRoot?: string
+  piAgentDir?: string
 }
 
 const READ_CHUNK_BYTES = 256 * 1024
@@ -295,10 +296,15 @@ export class TraceReader {
 
   private piFile(node: TerminalNodeData): string | null {
     if (!isPiCommand(node.command) || !node.piSessionId) return null
-    const sessionsDir = piNodeSessionDir(node.id, { rootDir: this.options.piSessionsRoot })
-    return piSessionFile(node.cwd, node.piSessionId, {
-      sessionsDir
-    })
+    // Same home as the watch/resume paths: a session adopted from a legacy
+    // pane lives in pi's own cwd dir, and the trace drawer must not go blank
+    // for exactly the terminals whose rail works.
+    return (
+      piSessionHome(node.cwd, node.piSessionId, node.id, {
+        sessionsRoot: this.options.piSessionsRoot,
+        agentDir: this.options.piAgentDir
+      })?.file ?? null
+    )
   }
 
   private async blocksOf(

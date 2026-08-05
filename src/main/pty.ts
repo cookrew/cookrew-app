@@ -505,6 +505,38 @@ export class PtyManager {
     }
   }
 
+  /**
+   * How the LIVE pane was actually launched: the command tmux ran and when it
+   * ran it. Both survive restarts, because `new-session -A` reattaches the
+   * existing session and silently ignores the command we would pass today —
+   * so this, not the node's stored command, is what the running agent obeys.
+   * Used to bind a Pi session that a pre-exclusive-dir pane still writes to.
+   * Null when there is no live tmux session.
+   */
+  paneLaunch(terminalId: string): { command: string; startedAtMs: number | null } | null {
+    if (!TMUX_AVAILABLE) return null
+    try {
+      const out = execFileSync(
+        'tmux',
+        [
+          '-L', TMUX_LABEL, 'display-message', '-p', '-t', sessionNameFor(terminalId),
+          '#{session_created}\t#{pane_start_command}'
+        ],
+        { stdio: ['ignore', 'pipe', 'ignore'] }
+      ).toString('utf8')
+      const [created, ...rest] = out.replace(/\n$/, '').split('\t')
+      const command = rest.join('\t')
+      if (!command) return null
+      const seconds = parseInt(created, 10)
+      return {
+        command,
+        startedAtMs: Number.isNaN(seconds) ? null : seconds * 1000
+      }
+    } catch {
+      return null
+    }
+  }
+
   /** Detach: drop the PTY but keep the tmux session alive for reattach. */
   detach(terminalId: string): void {
     const session = this.sessions.get(terminalId)
