@@ -138,7 +138,7 @@ describe('createRestoreHandlers', () => {
       expect(calls.updates).toHaveLength(1)
       expect(calls.updates[0]).toMatchObject({
         claudeSessionId: result.sessionId,
-        restoreStack: [{ sessionId: 'aa000000-0000-4000-8000-000000000001', fromIndex: 2 }]
+        restoreStack: [{ sessionId: 'aa000000-0000-4000-8000-000000000001', rewoundToIndex: 2 }]
       })
       expect(calls.spawn).toHaveLength(1)
       expect((calls.spawn[0] as TerminalNodeData).claudeSessionId).toBe(result.sessionId)
@@ -256,7 +256,7 @@ describe('createRestoreHandlers', () => {
         ]
       })
       // Simulate a growing stack across repeated restores.
-      let stack: { sessionId: string; at: number; fromIndex: number }[] = []
+      let stack: { sessionId: string; at: number; rewoundToIndex: number }[] = []
       deps.store.updateNodeUnsafe = (_id, patch) => {
         stack = ((patch as Partial<TerminalNodeData>).restoreStack as typeof stack) ?? stack
         calls.updates.push(patch)
@@ -296,7 +296,7 @@ describe('createRestoreHandlers', () => {
       const node = makeNode({
         cwd,
         claudeSessionId: currentId,
-        restoreStack: [{ sessionId: previousId, at: Date.now(), fromIndex: 2 }]
+        restoreStack: [{ sessionId: previousId, at: Date.now(), rewoundToIndex: 2 }]
       })
       const { deps, calls } = makeDeps(() => node, { projectsDir: tmp })
 
@@ -327,6 +327,25 @@ describe('createRestoreHandlers', () => {
       expect(result.reason).toMatch(/Nothing to undo/i)
     })
 
+    it('M9: undoes a LEGACY pre-rename stack entry (fromIndex only)', async () => {
+      const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
+      const cwd = path.join(tmp, 'project')
+      const previousId = 'bb000000-0000-4000-8000-000000000001'
+      writeSession(cwd, previousId, sessionLines(previousId), tmp)
+      const node = makeNode({
+        cwd,
+        // Persisted before the M9 rename: fromIndex, no rewoundToIndex.
+        restoreStack: [{ sessionId: previousId, at: Date.now(), fromIndex: 2 }]
+      })
+      const { deps } = makeDeps(() => node, { projectsDir: tmp })
+
+      const result = await createRestoreHandlers(deps).undoRestore('t1')
+
+      expect(result.ok).toBe(true)
+      expect(result.checkpointIndex).toBe(2)
+      expect(result.sessionId).toBe(previousId)
+    })
+
     it('M1: refuses a non-UUID undo-stack session id (tampered store) — no file read, no kill', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
       const node = makeNode({
@@ -350,7 +369,7 @@ describe('createRestoreHandlers', () => {
       const node = makeNode({
         cwd,
         claudeSessionId: 'aa000000-0000-4000-8000-000000000002',
-        restoreStack: [{ sessionId: 'aa000000-0000-4000-8000-000000000003', at: Date.now(), fromIndex: 2 }]
+        restoreStack: [{ sessionId: 'aa000000-0000-4000-8000-000000000003', at: Date.now(), rewoundToIndex: 2 }]
       })
       const { deps } = makeDeps(() => node, { projectsDir: tmp })
 
@@ -369,8 +388,8 @@ describe('createRestoreHandlers', () => {
         cwd,
         claudeSessionId: 'aa000000-0000-4000-8000-000000000002',
         restoreStack: [
-          { sessionId: 'aa000000-0000-4000-8000-000000000005', at: Date.now(), fromIndex: 3 },
-          { sessionId: 'aa000000-0000-4000-8000-000000000004', at: Date.now() - 1000, fromIndex: 2 }
+          { sessionId: 'aa000000-0000-4000-8000-000000000005', at: Date.now(), rewoundToIndex: 3 },
+          { sessionId: 'aa000000-0000-4000-8000-000000000004', at: Date.now() - 1000, rewoundToIndex: 2 }
         ]
       })
       const { deps, calls } = makeDeps(() => node, { projectsDir: tmp })
@@ -381,7 +400,7 @@ describe('createRestoreHandlers', () => {
       expect(result.sessionId).toBe('aa000000-0000-4000-8000-000000000005')
       expect(calls.updates[0]).toMatchObject({
         claudeSessionId: 'aa000000-0000-4000-8000-000000000005',
-        restoreStack: [{ sessionId: 'aa000000-0000-4000-8000-000000000004', fromIndex: 2 }]
+        restoreStack: [{ sessionId: 'aa000000-0000-4000-8000-000000000004', rewoundToIndex: 2 }]
       })
     })
   })
@@ -414,7 +433,7 @@ describe('createRestoreHandlers', () => {
       const node = makeNode({
         cwd,
         claudeSessionId: 'aa000000-0000-4000-8000-000000000002',
-        restoreStack: [{ sessionId: 'aa000000-0000-4000-8000-000000000004', at: Date.now(), fromIndex: 2 }]
+        restoreStack: [{ sessionId: 'aa000000-0000-4000-8000-000000000004', at: Date.now(), rewoundToIndex: 2 }]
       })
       const { deps, calls } = makeDeps(() => node, { projectsDir: tmp })
       deps.phaseOf = () => 'waiting'
@@ -528,7 +547,7 @@ describe('createRestoreHandlers', () => {
       const node = makeNode({
         cwd,
         claudeSessionId: 'aa000000-0000-4000-8000-000000000002',
-        restoreStack: [{ sessionId: 'aa000000-0000-4000-8000-000000000004', at: Date.now(), fromIndex: 2 }]
+        restoreStack: [{ sessionId: 'aa000000-0000-4000-8000-000000000004', at: Date.now(), rewoundToIndex: 2 }]
       })
       const { deps, calls } = makeDeps(() => node, { projectsDir: tmp })
       deps.ptys.killAndWait = vi.fn().mockRejectedValue(new Error('tmux session survived the deadline'))

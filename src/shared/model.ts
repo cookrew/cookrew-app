@@ -24,8 +24,19 @@ export interface RestorePoint {
   sessionId: string
   /** Epoch ms of the restore. */
   at: number
-  /** Checkpoint the agent was rewound TO (for the undo label). */
-  fromIndex: number
+  /** Checkpoint the agent was rewound TO (for the undo label) — the rewind
+   *  TARGET, not a source range. Named `rewoundToIndex` (M9): the old name
+   *  `fromIndex` read as "where the rewind came FROM" and invited an
+   *  off-by-semantics bug. */
+  rewoundToIndex: number
+  /** LEGACY persisted name of `rewoundToIndex` (pre-M9 undo stacks) —
+   *  read-compat only, new writes never set it. Read via restorePointIndex(). */
+  fromIndex?: number
+}
+
+/** The rewind target of a restore point, tolerant of pre-M9 persisted stacks. */
+export function restorePointIndex(point: RestorePoint): number {
+  return point.rewoundToIndex ?? point.fromIndex ?? 0
 }
 
 export interface TerminalNodeData {
