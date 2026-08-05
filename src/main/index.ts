@@ -47,7 +47,7 @@ import { isOpenCodeCommand, resolveOpencodeSessionByPid } from './opencode-bind'
 import { isPiCommand, latestPiSession, piLaunchBinding, piNodeSessionDir } from './pi-bind'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
-import { createRestoreHandlers } from './restore'
+import { createRestoreHandlers, registerRestoreIpc, RestoreHandlers } from './restore'
 import { withSessionLineage } from './session-lineage'
 import { createBrowserCast } from './browser-cast'
 import { findChrome } from './headless-chrome'
@@ -1107,10 +1107,7 @@ function broadcast(): void {
   }
 }
 
-function registerIpc(handlers: {
-  restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
-  undoRestore: (id: string) => Promise<RestoreResult>
-}): void {
+function registerIpc(handlers: RestoreHandlers): void {
   store.on('change', broadcast)
 
   // On workspace switch, tear down the outgoing PTYs and boot the incoming
@@ -1195,10 +1192,8 @@ function registerIpc(handlers: {
   ipcMain.handle('events:count', (_e, query) => events.count(query ?? {}))
   ipcMain.handle('agents:list', () => agents.list())
   ipcMain.handle('agent:recover', (_e, id: string) => recoverAgent(id))
-  ipcMain.handle('agent:restore-checkpoint', (_e, id: string, checkpointIndex: number) =>
-    handlers.restoreCheckpoint(id, checkpointIndex)
-  )
-  ipcMain.handle('agent:undo-restore', (_e, id: string) => handlers.undoRestore(id))
+  // Endpoint restore channels live alongside the executor (M10).
+  registerRestoreIpc(ipcMain.handle.bind(ipcMain), handlers)
   ipcMain.handle('terminal:fork', (_e, sourceId: string, turnIndex?: number) =>
     forkTerminal(sourceId, turnIndex)
   )
