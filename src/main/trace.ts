@@ -8,6 +8,7 @@ import { existsSync } from 'node:fs'
 import { open, stat } from 'node:fs/promises'
 import path from 'node:path'
 import type { TerminalNodeData } from '../shared/model'
+import { restorePointIndex } from '../shared/model'
 import {
   TraceBlock,
   TraceBoundaryMarker,
@@ -37,6 +38,9 @@ export interface TraceReaderOptions {
 }
 
 const READ_CHUNK_BYTES = 256 * 1024
+
+/** M8: cap on per-file memoized trace state (block cache + segmentMemo). */
+const TRACE_FILE_MEMO_CAP = 128
 
 /** Async chunked read of [start, start+length) — never the whole file at once. */
 async function readWindow(file: string, start: number, length: number): Promise<Buffer> {
@@ -177,8 +181,9 @@ export class TraceReader {
         ? (await this.segmentOfFile(claude)).refs.reduce((m, r) => Math.max(m, r.index), 0)
         : 0
     for (const point of node.restoreStack ?? []) {
-      if (point.fromIndex > 0 && point.fromIndex < currentMax) {
-        markers.push({ kind: 'rewind', afterIndex: point.fromIndex, toIndex: point.fromIndex })
+      const toIndex = restorePointIndex(point)
+      if (toIndex > 0 && toIndex < currentMax) {
+        markers.push({ kind: 'rewind', afterIndex: toIndex, toIndex })
       }
     }
 
@@ -189,6 +194,21 @@ export class TraceReader {
    *  growth re-ingests (fresh array) and re-derives once; steady state and
    *  repeat calls within one poll are cache hits. */
   private segmentMemo = new Map<string, { blocks: TraceBlock[]; refs: { index: number; id: string }[]; markers: TraceBoundaryMarker[] }>()
+
+  /** M8: both per-file maps (block cache + segmentMemo) are insertion-order
+   *  capped — otherwise they grew one entry per session file for the whole
+   *  process lifetime. FIFO suffices: a polled LIVE file is re-touched
+   *  constantly so it never reaches the eviction tail; an evicted file just
+   *  re-reads fully once on next access, then goes incremental again. */
+  private static cappedSet<V>(map: Map<string, V>, key: string, value: V): void {
+    if (map.has(key)) map.delete(key) // refresh recency
+    map.set(key, value)
+    while (map.size > TRACE_FILE_MEMO_CAP) {
+      const oldest = map.keys().next().value
+      if (oldest === undefined) break
+      map.delete(oldest)
+    }
+  }
 
   /**
    * Checkpoint refs + compact markers of one session file, routed through
@@ -202,7 +222,7 @@ export class TraceReader {
     if (memo && memo.blocks === blocks) return { refs: memo.refs, markers: memo.markers }
     const refs = blocks.map((b) => ({ index: b.index, id: b.id }))
     const markers = compactMarkersOf(this.cache.get(file)?.lines ?? [])
-    this.segmentMemo.set(file, { blocks, refs, markers })
+    TraceReader.cappedSet(this.segmentMemo, file, { blocks, refs, markers })
     return { refs, markers }
   }
 
@@ -326,7 +346,7 @@ export class TraceReader {
       : kind === 'codex'
         ? parseCodexTrace(lines)
         : parsePiTrace(lines)
-    this.cache.set(file, {
+    TraceReader.cappedSet(this.cache, file, {
       file,
       bytesRead,
       remainder: Buffer.from(remainder),
