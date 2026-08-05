@@ -3162,6 +3162,21 @@ body.cookrew-mobile .cookrew-minimap {
   border-color: var(--amber);
 }
 
+/* Inline rewind refusal (M3 — never window.alert, which freezes the whole
+   Electron UI in a native modal): the reason rides the row's action strip,
+   amber-outlined so it reads as a warning, and auto-dismisses. */
+.cr-ckpt-rewind-error {
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.03em;
+  color: var(--amber);
+  background: var(--vi-panel);
+  border: 1px solid var(--amber);
+  border-radius: 4px;
+  padding: 5px 8px;
+  max-width: 180px;
+}
+
 /* Boundary divider between checkpoint rows: ◆ compact (context squeezed) and
    ⇥ clear (session restarted, earlier endpoints reachable via lineage). */
 .cr-ckpt-boundary {
