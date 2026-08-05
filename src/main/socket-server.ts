@@ -3,6 +3,7 @@ import { existsSync, unlinkSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import {
   AgentRole,
+  BrowserNodeData,
   CanvasNode,
   CliRequest,
   CliResponse,
@@ -190,7 +191,7 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
       deps.notify(args.join(' '))
       return 'OK'
     case 'browser':
-      return deps.browserCommand(args, request.terminalId)
+      return cmdBrowser(request, deps)
     case 'routine':
       return cmdRoutine(request, deps)
     case 'voice':
@@ -313,6 +314,93 @@ function findConnected(
   throw new Error(`${kind === 'terminal' ? 'Agent' : kind} '${name}' not found among your connections. Run 'cookrew list'.`)
 }
 
+/**
+ * Why browser commands need a scope check that `ask`/`check`/`note` do not:
+ * those act on store data or a tmux session, which resolveSelf deliberately
+ * reaches ACROSS workspaces so an orch keeps working after a switch. A browser
+ * is different — it is driven through a webview (or a headless instance) that
+ * exists only for the ACTIVE workspace, while `cookrew list` enumerates
+ * connections across all of them. That mismatch produced a closed loop: list
+ * advertised a browser, the webview lookup answered "not found. Run 'cookrew
+ * list'", and an agent could bounce between the two forever. Refuse up front,
+ * naming the workspace to switch to. Pure so the wording is pinned by tests.
+ */
+export function browserWorkspaceError(scope: {
+  active: { id: string; name: string }
+  /** Workspace holding the CALLING terminal; absent = registry-only (post
+   *  reboot), which is not evidence of a cross-workspace call. */
+  caller?: { id: string; name: string }
+  /** The browser the subcommand names, when it resolves to a connected node. */
+  browser?: { name: string; workspaceId: string; workspaceName: string }
+}): string | null {
+  // The browser's own home is the more actionable answer, so it wins.
+  if (scope.browser && scope.browser.workspaceId !== scope.active.id) {
+    return (
+      `Browser '${scope.browser.name}' lives in workspace "${scope.browser.workspaceName}", ` +
+      `but "${scope.active.name}" is active. Browsers are driven in the active workspace only — ` +
+      `switch with: cookrew workspace switch "${scope.browser.workspaceName}"`
+    )
+  }
+  if (scope.caller && scope.caller.id !== scope.active.id) {
+    return (
+      `Your terminal lives in workspace "${scope.caller.name}", but "${scope.active.name}" is active. ` +
+      `Browser commands run in the active workspace only — ` +
+      `switch with: cookrew workspace switch "${scope.caller.name}"`
+    )
+  }
+  return null
+}
+
+export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): Promise<string> {
+  const me = self(request, deps)
+  const activeId = deps.store.activeId
+  const active = { id: activeId, name: workspaceName(deps, activeId) }
+  const [sub, name] = request.args
+
+  // Only `create` cares where the CALLER lives: it anchors the new node to the
+  // caller's position and connects the two, which is impossible across a
+  // workspace boundary. Every other subcommand just needs the BROWSER to be
+  // here, so a caller parked elsewhere must keep working (it did before).
+  if (sub === 'create') {
+    if (!deps.store.node(me.id)) {
+      const home = deps.store.workspaceOfNode(me.id)
+      const error = browserWorkspaceError({
+        active,
+        caller: home ? { id: home.id, name: home.name } : undefined
+      })
+      if (error) throw new Error(error)
+    }
+    return deps.browserCommand(request.args, request.terminalId)
+  }
+
+  // Fast path (this runs per snapshot/click/type): an in-memory scan of the
+  // ACTIVE workspace. Only when the name misses here do we pay the
+  // across-workspaces reads — i.e. on the error path, never in the hot loop.
+  // Resolving locally first also means a local browser always wins over a
+  // same-named one parked elsewhere, matching what the engines will drive.
+  if (name && !deps.store.nodeByName(name, 'browser')) {
+    const parked = connectedOf(deps.store, me.id).find(
+      (h) => h.node.kind === 'browser' && h.node.name.toLowerCase() === name.toLowerCase()
+    )
+    const error = parked
+      ? browserWorkspaceError({
+          active,
+          browser: {
+            name: parked.node.name,
+            workspaceId: parked.workspaceId,
+            workspaceName: workspaceName(deps, parked.workspaceId)
+          }
+        })
+      : null
+    if (error) throw new Error(error)
+  }
+  return deps.browserCommand(request.args, request.terminalId)
+}
+
+function workspaceName(deps: SocketServerDeps, id: string): string {
+  return deps.listWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id
+}
+
 function cmdList(request: CliRequest, deps: SocketServerDeps): string {
   if (request.flags.all) return cmdListAll(deps)
   const me = self(request, deps)
@@ -322,7 +410,7 @@ function cmdList(request: CliRequest, deps: SocketServerDeps): string {
   const connected = connectedOf(deps.store, me.id)
   const agents = connected.filter((h) => h.node.kind === 'terminal')
   const notes = connected.map((h) => h.node).filter((n) => n.kind === 'note') as NoteNodeData[]
-  const browsers = connected.map((h) => h.node).filter((n) => n.kind === 'browser')
+  const browsers = connected.filter((h) => h.node.kind === 'browser')
 
   const lines: string[] = ['You:', `  - name: "${me.name}", orch: ${me.orch}`]
   if (agents.length > 0) {
@@ -335,7 +423,17 @@ function cmdList(request: CliRequest, deps: SocketServerDeps): string {
   }
   if (browsers.length > 0) {
     lines.push('', 'Connected browsers (use `cookrew browser ...`):')
-    for (const p of browsers) lines.push(`  - name: "${p.name}" - url: ${(p as { url: string }).url}`)
+    for (const h of browsers) {
+      const p = h.node as BrowserNodeData
+      // Agents already carried this tag; browsers did not, so a listing could
+      // advertise one that `cookrew browser ...` then refuses (it is driven in
+      // the active workspace only). Say where it lives, and that it is parked.
+      const ws =
+        h.workspaceId !== activeId
+          ? ` [workspace: ${wsName(h.workspaceId)} — switch to use it]`
+          : ''
+      lines.push(`  - name: "${p.name}" - url: ${p.url}${ws}`)
+    }
   }
   if (notes.length > 0) {
     lines.push('', 'Connected notes (use `cookrew note read/write/edit`):')
