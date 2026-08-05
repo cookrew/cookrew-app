@@ -190,11 +190,11 @@ function spawnTracked(t: {
     // Route through resumeKey so the ref is validated, not shelled raw (HIGH-2).
     const harness = harnessFor(command)
     const key = harness?.resumeKey(t.codexSessionRef) ?? null
-    if (harness && key) effective = harness.resumeCommand(command, key)
+    if (harness && key) effective = harness.resumeCommand(command, key, { terminalId: t.id })
   } else if (isOpenCodeCommand(command) && t.opencodeSessionId) {
     const harness = harnessFor(command)
     const key = harness?.resumeKey(t.opencodeSessionId) ?? null
-    if (harness && key) effective = harness.resumeCommand(command, key)
+    if (harness && key) effective = harness.resumeCommand(command, key, { terminalId: t.id })
   } else if (isPiCommand(command)) {
     // H4: wire the pi-bind machinery so the Pi preset actually uses it.
     // Every terminal gets an EXCLUSIVE session dir, so two Pi terminals in

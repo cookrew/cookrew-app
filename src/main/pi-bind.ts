@@ -20,7 +20,13 @@ import path from 'node:path'
 import { shellQuotePath } from '../shared/attach'
 
 const PI_SESSION_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$/
-const PI_VALUE_SESSION_FLAGS_RE = /\s+(?:--session(?:-id|-dir)?|--fork)(?:=\S*|\s+(?!-)\S+)?/g
+// --fork takes a VALUE (path|id, per pi's CLI), so it stays a value flag —
+// eating its token is correct, not a bug. Values may be QUOTED (a fork path
+// can contain spaces), so the value pattern eats a quoted string whole;
+// leaving `"my` behind and `id"` in the command would corrupt the rebuilt
+// launch. `--flag=value` and `--flag value` forms are both covered.
+const PI_VALUE_SESSION_FLAGS_RE =
+  /\s+(?:--session(?:-id|-dir)?|--fork)(?:=(?:"[^"]*"|'[^']*'|\S*)|\s+(?!-)(?:"[^"]*"|'[^']*'|\S+))?/g
 const PI_SWITCH_SESSION_FLAGS_RE = /\s+(?:--continue|--resume|--no-session|-c|-r)(?=\s|$)/g
 
 export function isPiCommand(command: string): boolean {

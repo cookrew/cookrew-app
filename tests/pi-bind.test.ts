@@ -32,6 +32,12 @@ describe('Pi command binding', () => {
     expect(stripPiSessionFlags('pi --model sonnet --session old -c')).toBe('pi --model sonnet')
     expect(stripPiSessionFlags('pi --session-id=old --resume --no-session')).toBe('pi')
     expect(stripPiSessionFlags('pi --session-dir /tmp/other --model sonnet --fork')).toBe('pi --model sonnet')
+    // M7: --fork takes a VALUE (path|id per pi's CLI) and values may be quoted
+    // (a fork path can contain spaces) — the whole quoted token must go, not
+    // just up to the first space.
+    expect(stripPiSessionFlags('pi --session "my id" --model sonnet')).toBe('pi --model sonnet')
+    expect(stripPiSessionFlags("pi --fork '/tmp/my session/x.jsonl'")).toBe('pi')
+    expect(stripPiSessionFlags('pi --session-dir="/tmp/my dir" --model sonnet')).toBe('pi --model sonnet')
     expect(piFreshCommand('pi --session old', '/tmp/pi node')).toBe(
       'pi --session-dir /tmp/pi\\ node'
     )
