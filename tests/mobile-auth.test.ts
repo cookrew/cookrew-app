@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Readable } from 'node:stream'
+import { readFileSync } from 'node:fs'
 import type http from 'node:http'
 import { pairingAuthorized } from '../src/main/mobile-http'
 import { handleMobileApi, MobileApiDeps } from '../src/main/mobile-api'
@@ -193,5 +194,33 @@ describe('M11: route-level restore/undo dispatch (authorized)', () => {
     expect(handled).toBe(true)
     expect(captured.status).toBe(200)
     expect(calls).toEqual([['t1', null]])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The regression that motivated the fix: handleMobileApi's gate is allowed to
+// fail OPEN when no pairing token is configured (the loopback-embedder escape
+// asserted above). index.ts never passed one, so the LAN listener silently
+// selected that escape and every mutating route was unauthenticated.
+//
+// The server now injects its own minted token before delegating, so the escape
+// cannot be reached by omission. These assert the wiring, not the gate — the
+// gate itself is covered above.
+// ---------------------------------------------------------------------------
+describe('C1 wiring: the server cannot delegate without credentials', () => {
+  it('mobile-server injects the resolved tokens into the deps it delegates', () => {
+    const src = readFileSync('src/main/mobile-server.ts', 'utf8')
+    const call = src.slice(src.indexOf('const authed = {'), src.indexOf('handleMobileApi(request'))
+    expect(call).toContain('pairingToken: activePairingToken')
+    expect(call).toContain('wallToken: activeWallToken')
+    // the delegation must use the injected object, never the raw deps
+    const delegate = src.slice(src.indexOf('handleMobileApi(request'))
+    expect(delegate.slice(0, 120)).toContain('authed')
+    expect(delegate.slice(0, 120)).not.toMatch(/,\s*deps as MobileApiDeps/)
+  })
+
+  it('startMobileServer always resolves a pairing token, even when none is supplied', () => {
+    const src = readFileSync('src/main/mobile-server.ts', 'utf8')
+    expect(src).toMatch(/activePairingToken = deps\.pairingToken \?\? randomUUID\(\)/)
   })
 })

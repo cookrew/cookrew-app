@@ -1,4 +1,4 @@
-import type { CookrewApi } from './api'
+import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 
@@ -183,6 +183,8 @@ export function createRemoteApi(): CookrewApi {
       const result = await req<{ agents: unknown[] }>('/api/agents')
       return result.agents
     },
+    listBoard: (window?: string) =>
+      req<BoardSnapshotLike>(`/api/board${window ? `?window=${encodeURIComponent(window)}` : ''}`),
     recoverAgent: (id) => req(`/api/agents/${id}/recover`, 'POST'),
     restoreCheckpoint: (id, checkpointIndex) =>
       req(`/api/agents/${id}/restore`, 'POST', { checkpointIndex }),

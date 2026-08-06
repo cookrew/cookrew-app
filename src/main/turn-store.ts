@@ -5,7 +5,7 @@
 // One JSON file per terminal under ~/.cookrew/turns/<terminalId>.json.
 // Writes are debounced per terminal; TurnTracker flushes on app quit.
 
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import type { TurnRecord } from '../shared/turn'
@@ -29,19 +29,62 @@ function isTurnRecord(value: unknown): value is TurnRecord {
 export class TurnStore {
   private timers = new Map<string, NodeJS.Timeout>()
   private pending = new Map<string, TurnRecord[]>()
+  /**
+   * Whole-ledger cache for loadAll(). Built once (~129 files / 3.7 MB here)
+   * and then kept warm by write-through from flush()/remove() — this process
+   * is the only writer, so a full re-read per board request would be pure
+   * waste on the request path.
+   */
+  private all: Map<string, TurnRecord[]> | null = null
 
   constructor(private dir = path.join(homedir(), '.cookrew', 'turns')) {}
 
+  /** Filename stem == the sanitized terminal id; also the loadAll() key. */
+  private keyFor(terminalId: string): string {
+    return terminalId.replace(/[^a-zA-Z0-9_-]/g, '')
+  }
+
   private fileFor(terminalId: string): string {
-    return path.join(this.dir, `${terminalId.replace(/[^a-zA-Z0-9_-]/g, '')}.json`)
+    return path.join(this.dir, `${this.keyFor(terminalId)}.json`)
+  }
+
+  private parse(file: string): TurnRecord[] {
+    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
+    return Array.isArray(parsed) ? parsed.filter(isTurnRecord) : []
+  }
+
+  /**
+   * Every terminal's persisted history — the board's L3 ledger layer.
+   * Terminals with no usable records are omitted, so the caller never has to
+   * filter empties. The returned map is the live cache: READ ONLY.
+   */
+  loadAll(): Map<string, TurnRecord[]> {
+    if (this.all) return this.all
+    const all = new Map<string, TurnRecord[]>()
+    try {
+      if (existsSync(this.dir)) {
+        for (const name of readdirSync(this.dir)) {
+          if (!name.endsWith('.json')) continue
+          try {
+            const records = this.parse(path.join(this.dir, name))
+            if (records.length > 0) all.set(path.basename(name, '.json'), records)
+          } catch {
+            // One corrupt file must not blank the whole board.
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load turn ledger:', error)
+    }
+    this.all = all
+    return all
   }
 
   load(terminalId: string): TurnRecord[] {
     try {
       const file = this.fileFor(terminalId)
       if (!existsSync(file)) return []
-      const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
-      return Array.isArray(parsed) ? parsed.filter(isTurnRecord) : []
+      return this.parse(file)
     } catch (error) {
       console.error('Failed to load turn history:', error)
       return []
@@ -67,6 +110,12 @@ export class TurnStore {
     try {
       mkdirSync(this.dir, { recursive: true })
       writeFileSync(this.fileFor(terminalId), JSON.stringify(records, null, 2), 'utf8')
+      // Incremental refresh: keep loadAll()'s cache current instead of
+      // invalidating it (which would force a 129-file re-read next request).
+      if (this.all) {
+        if (records.length > 0) this.all.set(this.keyFor(terminalId), records)
+        else this.all.delete(this.keyFor(terminalId))
+      }
     } catch (error) {
       console.error('Failed to save turn history:', error)
     }
@@ -81,6 +130,7 @@ export class TurnStore {
     try {
       const file = this.fileFor(terminalId)
       if (existsSync(file)) unlinkSync(file)
+      this.all?.delete(this.keyFor(terminalId))
     } catch (error) {
       console.error('Failed to remove turn history:', error)
     }

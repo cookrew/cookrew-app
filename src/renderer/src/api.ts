@@ -13,6 +13,18 @@ import type {
 } from "../../shared/model";
 import type { TerminalActivity, TurnRecord } from "../../shared/turn";
 import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
+import type { BoardRow, BoardSummary } from "../../shared/board";
+
+/**
+ * GET /api/board's payload, mirrored here rather than imported from main —
+ * the renderer must not reach into src/main. Structurally identical to
+ * BoardSnapshot in main/board-index.ts.
+ */
+export interface BoardSnapshotLike {
+  rows: BoardRow[];
+  summary: BoardSummary;
+  activeWorkspaceId: string;
+}
 
 export interface CookrewApi {
   getWorkspace: () => Promise<WorkspaceState>;
@@ -81,6 +93,12 @@ export interface CookrewApi {
   queryEvents?: (query?: unknown) => Promise<unknown[]>;
   countEvents?: (query?: unknown) => Promise<Record<string, number>>;
   listAgents?: () => Promise<unknown[]>;
+  /**
+   * Activity Board snapshot (cross-workspace task view). Optional and
+   * feature-detected like listAgents — an older bridge shows the roster
+   * instead of a fabricated empty board.
+   */
+  listBoard?: (window?: string) => Promise<BoardSnapshotLike>;
   /**
    * Recover an inactive teammate as it was (agent-recover feature): re-add
    * the node bound to its session and resume. Optional — feature-detect.
