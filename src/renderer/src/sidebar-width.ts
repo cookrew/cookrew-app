@@ -10,14 +10,18 @@
 
 /** Collapsed: the status coin and nothing else. */
 export const RAIL_W = 56
-/** Narrowest width worth opening to — below this, snap back to the rail. */
-export const MIN_OPEN_W = 220
-/** Opens here the first time; remembered per browser after that. */
-export const DEFAULT_W = 470
-export const MAX_W = 680
+/** Level 1: identity — coin, name, chips. */
+export const INFO_W = 300
+/** Level 2: identity plus the turn. Opens here the first time. */
+export const TRACE_W = 470
+export const DEFAULT_W = TRACE_W
+export const MAX_W = TRACE_W
 
-/** Below this a drag means "collapse", not "make it tiny". */
-const SNAP_TO_RAIL_BELOW = 140
+/**
+ * The panel does not resize. One control cycles the three states, and the
+ * ramps below turn each step into a continuous grow-in rather than a jump.
+ */
+export const LEVELS = [RAIL_W, INFO_W, TRACE_W] as const
 
 /** Identity (name + chips) fades in across this stretch. */
 const ID_FROM = 90
@@ -51,14 +55,15 @@ export function clampWidth(width: number): number {
   return Number.isFinite(width) ? clamp(width, RAIL_W, MAX_W) : DEFAULT_W
 }
 
-/**
- * Where a drag comes to rest. Only two outcomes are forced: a near-collapsed
- * drag becomes the rail, and an open drag is at least usable. Anything else
- * keeps exactly the width chosen — the reveal is continuous, so there is no
- * reason to pull it to a preset.
- */
-export function snapWidth(width: number): number {
-  if (!Number.isFinite(width)) return DEFAULT_W
-  if (width < SNAP_TO_RAIL_BELOW) return RAIL_W
-  return clampWidth(Math.max(width, MIN_OPEN_W))
+/** Nearest state to an arbitrary width — used when restoring a stored value. */
+export function nearestLevel(width: number): number {
+  return LEVELS.reduce((best, level) =>
+    Math.abs(level - width) < Math.abs(best - width) ? level : best,
+  )
+}
+
+/** Next state in the cycle: rail → info → trace → rail. */
+export function nextLevel(width: number): number {
+  const here = LEVELS.indexOf(nearestLevel(width) as (typeof LEVELS)[number])
+  return LEVELS[(here + 1) % LEVELS.length]
 }

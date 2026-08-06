@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_W,
+  INFO_W,
+  LEVELS,
   MAX_W,
-  MIN_OPEN_W,
   RAIL_W,
+  TRACE_W,
   clampWidth,
-  revealFor,
-  snapWidth
+  nearestLevel,
+  nextLevel,
+  revealFor
 } from '../src/renderer/src/sidebar-width'
 
 /**
@@ -70,19 +73,43 @@ describe('clampWidth', () => {
   })
 })
 
-describe('snapWidth', () => {
-  it('snaps a near-collapsed drag to the rail — a 70px sidebar is not intent', () => {
-    expect(snapWidth(70)).toBe(RAIL_W)
-    expect(snapWidth(RAIL_W)).toBe(RAIL_W)
+/**
+ * The panel does not resize — one control cycles three states. The ramps above
+ * still make each step a grow-in rather than a jump.
+ */
+describe('nextLevel', () => {
+  it('cycles rail → info → trace → rail', () => {
+    expect(nextLevel(RAIL_W)).toBe(INFO_W)
+    expect(nextLevel(INFO_W)).toBe(TRACE_W)
+    expect(nextLevel(TRACE_W)).toBe(RAIL_W)
   })
 
-  it('opens to a usable width rather than a useless sliver', () => {
-    expect(snapWidth(MIN_OPEN_W + 5)).toBe(MIN_OPEN_W + 5)
-    expect(snapWidth(150)).toBeGreaterThanOrEqual(MIN_OPEN_W)
+  it('always lands on a real state, never between them', () => {
+    for (const w of [0, 57, 210, 299, 460, 9999]) {
+      expect(LEVELS).toContain(nextLevel(w))
+    }
   })
 
-  it('otherwise keeps exactly the width you dragged to', () => {
-    expect(snapWidth(317)).toBe(317)
-    expect(snapWidth(468)).toBe(468)
+  it('returns to where it started after a full cycle', () => {
+    expect(nextLevel(nextLevel(nextLevel(INFO_W)))).toBe(INFO_W)
+  })
+})
+
+describe('nearestLevel', () => {
+  it('snaps a stored width from an older build onto a real state', () => {
+    expect(nearestLevel(64)).toBe(RAIL_W)
+    expect(nearestLevel(310)).toBe(INFO_W)
+    expect(nearestLevel(600)).toBe(TRACE_W)
+  })
+})
+
+describe('the reveal covers every state', () => {
+  it('shows identity but not the turn at the info state', () => {
+    expect(revealFor(INFO_W).identity).toBe(1)
+    expect(revealFor(INFO_W).turn).toBe(0)
+  })
+
+  it('shows everything at the trace state', () => {
+    expect(revealFor(TRACE_W)).toEqual({ identity: 1, turn: 1 })
   })
 })

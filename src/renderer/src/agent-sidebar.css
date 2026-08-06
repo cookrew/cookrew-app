@@ -7,68 +7,48 @@
    widens (sidebar-width.ts), so identity fades in, then the turn grows in. No
    mode switch, no labels. Tokens only — nothing here invents a colour. */
 
+/* Same frame as the ACTIVITY and FORK TEAM panels (.tf-panel): cream ground,
+   2px ink border, hard amber bevel, square corners. Docked to the left of the
+   stage rather than centred over it, and it does not resize — one control
+   steps rail → info → trace. */
 .ags {
   position: relative;
   flex: 0 0 auto;
   width: var(--ags-w, 470px);
+  margin: 10px 16px 10px 10px;
   display: flex;
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
   background: var(--cream-hi);
-  border-right: 2px solid var(--line);
-  transition: width 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
-}
-
-/* While dragging, width tracks the pointer 1:1 — a transition would lag it. */
-.ags.dragging,
-.ags.dragging .ags-turn,
-.ags.dragging .ags-nameline {
-  transition: none;
+  border: 2px solid var(--line);
+  box-shadow: 6px 6px 0 var(--amber-deep);
+  transition: width 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 .ags-head {
   flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 7px;
   min-height: 42px;
-  padding: 8px 10px;
+  padding: 9px 10px;
   border-bottom: 2px solid var(--line);
 }
 
+/* Sizing comes from .tf-title — this only needs the truncation rules. */
 .ags-title {
-  flex: 1;
-  font-family: var(--font-pixel);
-  font-weight: 700;
-  font-size: 11px;
-  letter-spacing: 0.1em;
   white-space: nowrap;
   overflow: hidden;
 }
 
 .ags-count {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
+  margin-right: 4px;
 }
 
-.ags-btn {
+.ags-cycle {
   flex: 0 0 auto;
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  cursor: pointer;
-  background: var(--cream-hi);
-  border: 1.5px solid var(--line);
-  color: var(--ink);
-}
-
-.ags-btn:hover {
-  background: var(--amber-soft);
 }
 
 .ags-banner {
@@ -448,38 +428,13 @@
   padding: 8px 0;
 }
 
-/* ---- drag handle ---- */
-
-.ags-grip {
-  position: absolute;
-  top: 0;
-  right: -3px;
-  bottom: 0;
-  width: 6px;
-  cursor: col-resize;
-  z-index: 12;
-}
-
-.ags-grip:hover::after {
-  content: '';
-  position: absolute;
-  inset: 0 2px;
-  background: var(--amber-deep);
-}
-
-.ags.dragging .ags-grip::after {
-  content: '';
-  position: absolute;
-  inset: 0 2px;
-  background: var(--amber-deep);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .ags,
   .ags-turn,
   .ags-nameline {
     transition: none;
   }
+
   .ags-row[data-phase='waiting'] .ags-phase {
     animation: none;
   }
