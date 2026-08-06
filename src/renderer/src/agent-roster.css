@@ -1080,7 +1080,13 @@
   text-overflow: ellipsis;
 }
 
+/* display MUST be reset from the card's -webkit-box. The card clamps these
+   vertically with -webkit-line-clamp, and text-overflow has no effect on a
+   -webkit-box — so a long line overflowed and was hard-cut by an ancestor's
+   overflow:hidden instead of ellipsing. One row per line here, ellipsed. */
 .ags-turn .vi-you {
+  display: block;
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: 11.5px;
   color: var(--muted);
@@ -1120,6 +1126,13 @@
 
 .ags-turn .vi-tool-glyph {
   color: var(--amber-deep);
+}
+
+.ags-turn .vi-latest-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ags-turn .vi-latest {
