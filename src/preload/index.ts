@@ -88,6 +88,7 @@ const api = {
   queryEvents: (query: unknown) => ipcRenderer.invoke('events:query', query),
   countEvents: (query: unknown) => ipcRenderer.invoke('events:count', query),
   listAgents: () => ipcRenderer.invoke('agents:list'),
+  listBoard: (window?: string) => ipcRenderer.invoke('board:list', window),
   recoverAgent: (id: string) => ipcRenderer.invoke('agent:recover', id),
   restoreCheckpoint: (id: string, checkpointIndex: number) =>
     ipcRenderer.invoke('agent:restore-checkpoint', id, checkpointIndex),

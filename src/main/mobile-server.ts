@@ -13,6 +13,7 @@ import type { TurnTracker } from './turn-tracker'
 import type { EventLog } from './event-log'
 import type { AgentRegistry } from './agent-registry'
 import type { TraceReader } from './trace'
+import type { BoardSources } from './board-index'
 import { askTerminal } from './ask'
 import { ensureCert } from './cert'
 import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps } from './mobile-api'
@@ -31,6 +32,15 @@ let httpsReady = false
  */
 let activePairingToken: string | null = null
 
+/**
+ * The active WALL token (TV wall, P8). Separate from the pairing token on
+ * purpose: the wall URL is pasted into a Home Assistant script and lives on a
+ * always-on TV, so it must be revocable and scopeable WITHOUT invalidating
+ * every paired phone. Minted per run like the pairing token unless the caller
+ * injects one (`deps.wallToken`).
+ */
+let activeWallToken: string | null = null
+
 /** Active power-save-blocker id, boxed so tests can reset it. */
 const powerBlockerId: { current: number | null } = { current: null }
 
@@ -43,6 +53,8 @@ export interface MobileServerDeps {
   events: EventLog
   agents: AgentRegistry
   traces: TraceReader
+  /** Activity Board data plane; absent = /api/board answers 503. */
+  board?: BoardSources
   recoverAgent: (id: string) => RecoverResult
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
   undoRestore: (id: string) => Promise<RestoreResult>
@@ -59,8 +71,17 @@ export interface MobileServerDeps {
    * legacy webview capture fresh while hidden.
    */
   browserThumbRequested?: (browserId: string) => void
-  /** Legacy lightweight client (kept at /lite for voice-first use). */
+  /**
+   * Lightweight client, served at /lite. Also the TV wall: the television
+   * opens it as `/lite?view=board&density=tv` — one page, three densities,
+   * rather than a second HTML file that drifts from this one.
+   */
   clientHtmlPath: string
+  /**
+   * Override the read-only (wall) token (tests / a caller that owns token
+   * lifecycle); a fresh one is minted per run otherwise.
+   */
+  wallToken?: string
   /** Built renderer bundle — the full desktop canvas UI served to phones. */
   rendererDir: string
   /** electron-vite renderer URL; proxied to phones in development. */
@@ -96,6 +117,7 @@ export function startMobileServer(deps: MobileServerDeps): void {
   // C1: mint (or adopt) the pairing token BEFORE any route can run — every
   // mutating route on this server requires it (see handleMobileApi's gate).
   activePairingToken = deps.pairingToken ?? randomUUID()
+  activeWallToken = deps.wallToken ?? randomUUID()
 
   const requestHandler = (request: http.IncomingMessage, response: http.ServerResponse): void => {
     void handle(request, response, deps).catch((error: Error) => {
@@ -279,13 +301,31 @@ async function handle(
     return
   }
 
+
   if (request.method === 'GET' && url.pathname === '/api/browser/capabilities') {
     respondJson(response, 200, { interactive: deps.interactiveBrowserEnabled() })
     return
   }
 
   // Renderer bundle + full remote API (consumed by remote-api.ts).
-  if (await handleMobileApi(request, response, url, deps as MobileApiDeps)) return
+  // Hand the API the RESOLVED credentials, not the caller's optional ones.
+  //
+  // handleMobileApi's C1 gate reads `deps.pairingToken` and, by design, lets
+  // everything through when it is absent (the loopback-embedder escape, pinned
+  // in tests/mobile-auth.test.ts). index.ts simply never passed one — so this
+  // 0.0.0.0 listener selected that escape and every mutating route (terminal
+  // input, workspace switch, recover, restore, uploads) was open on the LAN.
+  //
+  // startMobileServer always mints a token, so injecting it here means the gate
+  // can no longer be disabled by a caller forgetting a field. The escape now
+  // requires deliberately constructing MobileApiDeps without one, which only an
+  // in-process embedder can do.
+  const authed = {
+    ...deps,
+    pairingToken: activePairingToken ?? deps.pairingToken,
+    wallToken: activeWallToken ?? deps.wallToken
+  }
+  if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return
 
   if (request.method === 'GET' && url.pathname === '/api/state') {
     const activities = Object.fromEntries(

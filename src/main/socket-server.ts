@@ -49,6 +49,7 @@ export interface SocketServerDeps {
   voice: VoiceEngine
   /** LAN URLs of the mobile companion server. */
   mobileUrls: () => string[]
+  /** LAN URLs of the TV wall (HTTP, wall-token bearing). */
   /** Workspace registry + switching (switching rebuilds PTYs). */
   listWorkspaces: () => WorkspaceList
   createWorkspace: (name: string, dir: string) => WorkspaceMeta

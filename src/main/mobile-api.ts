@@ -6,6 +6,13 @@ import type { EventLog, CookrewEvent, EventQuery } from "./event-log";
 import { pageTurns } from "../shared/turn";
 import type { AgentRegistry } from "./agent-registry";
 import type { TraceReader } from "./trace";
+import {
+  boardWindowMs,
+  buildBoard,
+  createBoardNotifier,
+  type BoardSources,
+} from "./board-index";
+
 import type {
   AgentRole,
   CanvasNode,
@@ -87,6 +94,20 @@ export interface MobileApiDeps {
   undoRestore: (id: string) => Promise<RestoreResult>;
   /** Trace-sourced context reader (identity-keyed windows over agent files). */
   traces: TraceReader;
+  /**
+   * Activity Board data plane (cross-workspace task view). Optional so this
+   * module compiles and serves before the collectors are wired in index.ts;
+   * absent = /api/board answers 503 rather than pretending the board is empty.
+   */
+  board?: BoardSources;
+  /**
+   * READ-ONLY scope token (persisted as ~/.cookrew/wall-token). Authorizes the
+   * SAME routes as pairingToken but for GET only — there is no separate
+   * read-only interface any more. Kept distinct from pairingToken because this
+   * URL lives in a Home Assistant script on an always-on screen and must never
+   * carry write authority. Field name matches MobileServerDeps.
+   */
+  wallToken?: string;
   ops: MobileOps;
   presets: readonly { name: string; command: string }[];
   /** Persist a phone-uploaded attachment; returns its absolute path. */
@@ -148,9 +169,21 @@ export async function handleMobileApi(
   // terminal input, workspace edits, and uploads are all covered. Read-only
   // GETs stay open: EventSource cannot set headers, and with the C2 wildcard
   // gone only same-origin pages can read them cross-site anyway.
-  if (method !== "GET" && deps.pairingToken && !pairingAuthorized(request, url, deps.pairingToken)) {
+  // Two SCOPES over one set of routes (there is no second, degraded API):
+  //   pairing   → read + write
+  //   read-only → GET only; any other method is refused even with a valid token
+  const hasPairing =
+    !!deps.pairingToken && pairingAuthorized(request, url, deps.pairingToken);
+  const hasReadOnly =
+    !!deps.wallToken && pairingAuthorized(request, url, deps.wallToken);
+  /** Cleared for a read: either scope. */
+  const canRead = hasPairing || hasReadOnly;
+
+  if (method !== "GET" && deps.pairingToken && !hasPairing) {
     respondJson(response, 401, {
-      error: "Unauthorized — open the pairing URL shown on the desktop (it carries ?token=).",
+      error: hasReadOnly
+        ? "Unauthorized — this token is read-only."
+        : "Unauthorized — open the pairing URL shown on the desktop (it carries ?token=).",
     });
     return true;
   }
@@ -171,6 +204,30 @@ export async function handleMobileApi(
   }
   if (method === "GET" && p === "/api/activity") {
     respondJson(response, 200, turns.list());
+    return true;
+  }
+  // Activity Board: the cross-workspace, task-first view. Strictly ADDITIVE —
+  // /api/activity above still serves the canvas cards byte-for-byte.
+  if (method === "GET" && p === "/api/board") {
+    // The board turned "know a terminalId to fetch one agent" into "one GET
+    // returns every workspace's task text" — a real exposure upgrade on an
+    // 0.0.0.0 listener, so this read is gated even though other GETs are not.
+    // EventSource cannot set headers, hence ?token= is accepted too.
+    if (deps.pairingToken && !canRead) {
+      respondJson(response, 401, {
+        error: "Unauthorized — the board requires a pairing or read-only token.",
+      });
+      return true;
+    }
+    if (!deps.board) {
+      respondJson(response, 503, { error: "board index not wired" });
+      return true;
+    }
+    respondJson(
+      response,
+      200,
+      buildBoard(deps.board, boardWindowMs(url.searchParams.get("window"))),
+    );
     return true;
   }
 
@@ -562,10 +619,28 @@ export async function handleMobileApi(
     const onActivity = (activity: unknown): void => send("activity", activity);
     // Observability stream: every store mutation, cross-workspace (toasts).
     const onOp = (event: CookrewEvent): void => send("event", event);
+    // Activity Board stream. A SEPARATE listener on the same signals — the
+    // 'activity' event above is left exactly as it was (canvas cards eat it).
+    // Board recompute spans the whole fleet, so bursts coalesce instead of
+    // pushing per tracker tick.
+    // Same data as /api/board, so the same gate: an unauthenticated
+    // subscriber still gets workspace/activity/event (existing behaviour,
+    // untouched) but never the board stream.
+    const board = !deps.pairingToken || canRead ? deps.board : undefined;
+    const boardNotifier = board
+      ? createBoardNotifier(() => send("board", buildBoard(board)))
+      : null;
+    const onBoardSignal = (): void => boardNotifier?.schedule();
+    if (board) send("board", buildBoard(board));
     store.on("change", onChange);
     store.on("workspaces", onWorkspaces);
     turns.on("activity", onActivity);
     store.on("op", onOp);
+    if (boardNotifier) {
+      turns.on("activity", onBoardSignal);
+      store.on("change", onBoardSignal);
+      store.on("workspaces", onBoardSignal);
+    }
     const heartbeat = setInterval(() => response.write(":hb\n\n"), 25000);
     request.on("close", () => {
       clearInterval(heartbeat);
@@ -573,6 +648,12 @@ export async function handleMobileApi(
       store.removeListener("workspaces", onWorkspaces);
       turns.removeListener("activity", onActivity);
       store.removeListener("op", onOp);
+      if (boardNotifier) {
+        boardNotifier.cancel();
+        turns.removeListener("activity", onBoardSignal);
+        store.removeListener("change", onBoardSignal);
+        store.removeListener("workspaces", onBoardSignal);
+      }
     });
     return true;
   }

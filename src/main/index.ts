@@ -8,6 +8,14 @@ import { PtyManager } from './pty'
 import type { PtySession } from './pty'
 import { TurnTracker } from './turn-tracker'
 import { TurnStore } from './turn-store'
+import {
+  boardSourcesFrom,
+  buildBoard,
+  boardWindowMs,
+  createProbeSampler,
+  tmuxProbeDeps
+} from './board-index'
+import { loadOrCreateReadOnlyToken } from './readonly-token'
 import { summarizeTurn } from './sous'
 import { startSocketServer } from './socket-server'
 import { RoutineScheduler } from './routines'
@@ -68,7 +76,27 @@ const dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const store = new WorkspaceStore()
 const ptys = new PtyManager()
-const turns = new TurnTracker(summarizeTurn, new TurnStore())
+// Held rather than inlined: the Activity Board reads the WHOLE ledger
+// (turnStore.loadAll()) to span workspaces the tracker cannot see.
+const turnStore = new TurnStore()
+// Read-only SCOPE token, persisted 0600 (~/.cookrew/wall-token). Authorizes
+// GETs on the same routes as the pairing token — not a separate interface.
+const wallToken = loadOrCreateReadOnlyToken()
+/**
+ * Pairing credential, minted per run (mobile-server's existing semantics) but
+ * now passed EXPLICITLY so it reaches handleMobileApi. Without this the token
+ * only ever reached the pairing URL builder, leaving mobile-api's gate — and
+ * therefore /api/board — reading `deps.pairingToken === undefined` and letting
+ * every request through.
+ */
+const pairingToken = randomUUID()
+/**
+ * L2 probe: phase for panes the TurnTracker cannot see (any workspace but the
+ * active one). Only DETACHED sessions are captured — attached terminals are
+ * already full-fidelity L1 — and the sampler parks itself when nothing is
+ * detached, so an idle machine pays nothing.
+ */
+const turns = new TurnTracker(summarizeTurn, turnStore)
 const sessionSync = new SessionTurnSync(turns)
 const routines = new RoutineScheduler(store, ptys)
 const voice = new VoiceEngine()
@@ -76,6 +104,25 @@ const roles = new RoleStore()
 const teams = new TeamStore()
 const gitCache = new GitInfoCache()
 const agents = new AgentRegistry()
+const boardProbe = createProbeSampler(
+  tmuxProbeDeps({
+    knownTerminalIds: () => agents.list().map((entry) => entry.id),
+    isAttached: (terminalId) => ptys.get(terminalId) !== undefined
+  })
+)
+/** Board sources incl. L2; probing restarts lazily whenever the board is read. */
+function boardSources(): ReturnType<typeof boardSourcesFrom> {
+  return boardSourcesFrom({
+    store,
+    turns,
+    turnStore,
+    agents,
+    probe: () => {
+      boardProbe.start()
+      return boardProbe.phases()
+    }
+  })
+}
 const events = new EventLog()
 const recoverable = new RecoverableStore()
 // Snapshot every killed terminal (node + position + session refs + edges)
@@ -1041,6 +1088,13 @@ app.whenReady().then(() => {
     events,
     agents,
     traces,
+    // Activity Board data plane. Without this /api/board answers 503 —
+    // deliberately, so a missing wire-up is loud instead of an empty board.
+    // probe (L2) is absent until the tmux sampler lands; rows then degrade to
+    // their last known task rather than claiming a phase nobody observed.
+    board: boardSources(),
+    wallToken,
+    pairingToken,
     recoverAgent,
     restoreCheckpoint,
     undoRestore,
@@ -1239,6 +1293,14 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('events:query', (_e, query) => events.query(query ?? {}))
   ipcMain.handle('events:count', (_e, query) => events.count(query ?? {}))
   ipcMain.handle('agents:list', () => agents.list())
+  // Activity Board snapshot for the desktop panel — same builder the HTTP
+  // route and the SSE push use, so the three can never drift apart.
+  ipcMain.handle('board:list', (_e, window?: unknown) =>
+    buildBoard(
+      boardSources(),
+      boardWindowMs(typeof window === 'string' ? window : null)
+    )
+  )
   ipcMain.handle('agent:recover', (_e, id: string) => recoverAgent(id))
   // Endpoint restore channels live alongside the executor (M10).
   registerRestoreIpc(ipcMain.handle.bind(ipcMain), handlers)
