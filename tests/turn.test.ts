@@ -264,6 +264,96 @@ describe('cleanTurnLines', () => {
     expect(cleanTurnLines(raw)).toEqual(['Here is the plan.'])
   })
 
+  /**
+   * status-left is '#[bold] cookrew · #S #[nobold] ', but status-left-length
+   * defaults to 10 — exactly the width of ' cookrew ·'. tmux therefore drops
+   * the session name AND the separating space, and the window list runs
+   * straight on: ' cookrew ·1:node*'. That is the only form that has ever
+   * reached a card; the untruncated form above never renders.
+   */
+  it('drops the tmux status bar as tmux actually renders it (truncated at 10)', () => {
+    expect(cleanTurnLines('Here is the plan.\n cookrew ·1:node*')).toEqual(['Here is the plan.'])
+  })
+
+  it('drops it for every harness, not just node', () => {
+    for (const bar of [' cookrew ·1:claude.exe*', ' cookrew ·1:node*', 'cookrew ·2:zsh-']) {
+      expect(cleanTurnLines(`answer\n${bar}`)).toEqual(['answer'])
+    }
+  })
+
+  it('does not eat a real line that merely mentions cookrew', () => {
+    expect(cleanTurnLines('run cookrew ask to send a prompt')).toEqual([
+      'run cookrew ask to send a prompt'
+    ])
+  })
+
+  /**
+   * The pi/ifunk TUI closes with two status rows below its input box: a
+   * cwd + git-branch row and a token/context meter. They are the LAST lines
+   * on screen, so a card falling back to the screen tail showed the meter
+   * instead of the agent's last words. Captured verbatim from a live pane.
+   */
+  it('drops the pi footer so the tail is the agent, not its status bar', () => {
+    const raw = [
+      ' Navigated to selected point',
+      '',
+      '─────────────────────────────',
+      '',
+      '─────────────────────────────',
+      '~/workspace/cookrew-dev (fix/card-single-view)',
+      '↑599k ↓116k R21M ?/128k (auto)                          (ifunk) k3'
+    ].join('\n')
+    // The card's fallback drops blanks then takes the last line, so assert on
+    // exactly that — cleanTurnLines collapses blank RUNS but does not trim.
+    const kept = cleanTurnLines(raw).filter((l) => l.trim().length > 0)
+    expect(kept[kept.length - 1]).toBe(' Navigated to selected point')
+  })
+
+  it('drops the meter however full the context is', () => {
+    for (const meter of [
+      '↑599k ↓116k R21M ?/128k (auto)     (ifunk) k3',
+      '0.0%/128k (auto)                   (ifunk) k3',
+      '↑106k ↓54k R5.0M 75.8%/128k (auto) (ifunk) k3'
+    ]) {
+      expect(cleanTurnLines(`done\n${meter}`)).toEqual(['done'])
+    }
+  })
+
+  it('drops the cwd row when it sits directly above the meter', () => {
+    const meter = '↑1k ↓1k ?/128k (auto)   (ifunk) k3'
+    expect(cleanTurnLines(`done\n~/workspace/cookrew-dev (main)\n${meter}`)).toEqual(['done'])
+    // Outside a git repo the row is a bare path with no branch.
+    expect(cleanTurnLines(`done\n/private/tmp\n${meter}`)).toEqual(['done'])
+  })
+
+  /**
+   * Adjacency IS the signal. A bare path on its own is ordinary output — a
+   * glob hit, a pwd, a file reference — and must survive.
+   */
+  it('keeps a path line that is not the meter’s cwd row', () => {
+    expect(cleanTurnLines('done\n/private/tmp')).toEqual(['done', '/private/tmp'])
+    expect(cleanTurnLines('/Users/drej/workspace/cookrew-dev\nnext line')).toEqual([
+      '/Users/drej/workspace/cookrew-dev',
+      'next line'
+    ])
+  })
+
+  // Over-cleaning guards. Tool output is full of "<path> (<n> lines)" and
+  // prose is full of parentheses; none of it may be mistaken for chrome.
+  it('does not eat tool output that looks like a path in parentheses', () => {
+    for (const real of [
+      'Read src/renderer/src/remote-api.ts (237 lines)',
+      '  src/main/index.ts (1312 lines)',
+      'Referenced file tests/board-merge.test.ts',
+      '- Final state: dev at a6c27e6+ — 923 passed / 3 skipped (874 baseline)',
+      'the model selection is (auto) by default',
+      'we trimmed it to 128k (roughly)',
+      '/Users/drej/workspace/cookrew-dev'
+    ]) {
+      expect(cleanTurnLines(real)).toEqual([real])
+    }
+  })
+
   it('strips OSC color noise from turn text', () => {
     expect(cleanTurnLines('answer \x1b]11;rgb:1414/1111/0a0a\x1b\\ done')).toEqual(['answer  done'])
   })
