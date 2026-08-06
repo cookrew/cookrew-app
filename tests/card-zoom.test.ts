@@ -100,24 +100,58 @@ describe('the full view is gone', () => {
 
 /**
  * The tool trail came WITH the deleted full view and is the one thing worth
- * keeping from it: while an agent works, the card says what it is doing, not
- * just that it is busy. It now lives in the one surviving card.
+ * keeping from it. It now lives in TurnView — the SINGLE turn block rendered
+ * by both the canvas card and the agents sidebar row.
  */
-describe('the working card shows the tool trail', () => {
-  it('renders glance.tools with their glyphs', () => {
-    expect(NODE_SOURCE).toMatch(/glance\.tools\.map/)
-    expect(NODE_SOURCE).toMatch(/vi-tools/)
-    expect(NODE_SOURCE).toMatch(/toolGlyph\(toolCall\)/)
+const TURN_VIEW = readFileSync(
+  join(__dirname, '../src/renderer/src/nodes/TurnView.tsx'),
+  'utf8'
+)
+const AGENT_ROW = readFileSync(join(__dirname, '../src/renderer/src/AgentRow.tsx'), 'utf8')
+
+describe('the working turn block shows the tool trail', () => {
+  it('renders the tools with their glyphs', () => {
+    expect(TURN_VIEW).toMatch(/tools\.map/)
+    expect(TURN_VIEW).toMatch(/vi-tools/)
+    expect(TURN_VIEW).toMatch(/toolGlyph\(toolCall\)/)
   })
 
   it('marks the newest call latest and the rest older', () => {
-    expect(NODE_SOURCE).toMatch(/i === glance\.tools\.length - 1 \? 'latest' : 'older'/)
+    expect(TURN_VIEW).toMatch(/i === tools\.length - 1 \? 'latest' : 'older'/)
   })
 
   it('keeps the styles the trail needs', () => {
     const css = readFileSync(join(__dirname, '../src/renderer/src/styles.css'), 'utf8')
-    for (const live of ['.vi-tools {', '.vi-tool {', '.vi-tool.older {', '.vi-tool.latest {', '.vi-tool-glyph {']) {
+    for (const live of [
+      '.vi-tools {',
+      '.vi-tool {',
+      '.vi-tool.older {',
+      '.vi-tool.latest {',
+      '.vi-tool-glyph {'
+    ]) {
       expect(css).toContain(live)
     }
+  })
+})
+
+/**
+ * One source. The card and the sidebar row must RENDER the shared block, not
+ * own copies of it — this is the guard against the two drifting apart.
+ */
+describe('card and sidebar row share one turn block', () => {
+  it('both render TurnView', () => {
+    expect(NODE_SOURCE).toMatch(/<TurnView model=/)
+    expect(AGENT_ROW).toMatch(/<TurnView model=/)
+  })
+
+  it('neither keeps a private copy of the turn markup', () => {
+    for (const source of [NODE_SOURCE, AGENT_ROW]) {
+      expect(source).not.toMatch(/vi-turn-title|vi-you-label|vi-tools|vi-ready/)
+    }
+  })
+
+  it('both bind to the one selector rather than reading activity directly', () => {
+    expect(NODE_SOURCE).toMatch(/turnViewOf\(/)
+    expect(AGENT_ROW).toMatch(/row\.turn/)
   })
 })

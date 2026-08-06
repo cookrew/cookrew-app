@@ -1,0 +1,486 @@
+/* Agents sidebar. Cookrew arcade chrome (cream, ink rules, pixel type) around
+   the SAME turn block the canvas card renders — TurnView emits the vi-* class
+   names, styles.css skins them for the dark card, and this file re-skins them
+   for the cream surface. One component, two surfaces, no second markup.
+
+   Width IS the level: --ags-reveal-id and --ags-reveal run 0→1 as the sidebar
+   widens (sidebar-width.ts), so identity fades in, then the turn grows in. No
+   mode switch, no labels. Tokens only — nothing here invents a colour. */
+
+.ags {
+  position: relative;
+  flex: 0 0 auto;
+  width: var(--ags-w, 470px);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--cream-hi);
+  border-right: 2px solid var(--line);
+  transition: width 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* While dragging, width tracks the pointer 1:1 — a transition would lag it. */
+.ags.dragging,
+.ags.dragging .ags-turn,
+.ags.dragging .ags-nameline {
+  transition: none;
+}
+
+.ags-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 42px;
+  padding: 8px 10px;
+  border-bottom: 2px solid var(--line);
+}
+
+.ags-title {
+  flex: 1;
+  font-family: var(--font-pixel);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.ags-count {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ags-btn {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  cursor: pointer;
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  color: var(--ink);
+}
+
+.ags-btn:hover {
+  background: var(--amber-soft);
+}
+
+.ags-banner {
+  flex: 0 0 auto;
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  padding: 5px 8px;
+  background: var(--note-bg);
+  color: var(--note-text);
+  border-bottom: 1.5px solid var(--line-soft);
+}
+
+.ags-filters {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 5px;
+  padding: 5px 8px;
+  background: var(--cream-lo);
+  border-bottom: 1.5px solid var(--line-soft);
+  overflow-x: auto;
+}
+
+.ags-filters::-webkit-scrollbar {
+  height: 0;
+}
+
+.ags-filters .cr-chip {
+  cursor: pointer;
+}
+
+.ags-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ags-empty {
+  padding: 14px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ags-quiet {
+  display: block;
+  width: 100%;
+  padding: 9px;
+  cursor: pointer;
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  background: var(--cream-md);
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.ags-quiet:hover {
+  background: var(--amber-soft);
+  color: var(--ink);
+}
+
+/* ---- the row (roster-row language: green rail, amber-soft hover) ---- */
+
+.ags-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 9px;
+  padding: 8px 10px;
+  min-width: 0;
+  cursor: pointer;
+  border-bottom: 1px solid var(--line-soft);
+  border-left: 3px solid var(--hp);
+  transition: background 120ms ease;
+}
+
+.ags-row:hover {
+  background: var(--amber-soft);
+}
+
+.ags-row:focus-visible {
+  outline: 2px solid var(--amber-deep);
+  outline-offset: -2px;
+}
+
+.ags-row[data-phase='working'] {
+  border-left-color: var(--amber-deep);
+}
+
+.ags-row[data-phase='waiting'] {
+  border-left-color: var(--rose);
+}
+
+.ags-row.selected {
+  background: var(--amber-soft);
+  border-left-color: var(--amber-deep);
+}
+
+.ags-row.inactive {
+  opacity: 0.5;
+  border-left-color: transparent;
+}
+
+.ags-row.inactive:hover {
+  opacity: 1;
+}
+
+.ags-avatar {
+  flex: 0 0 auto;
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+}
+
+.ags-role-avatar {
+  width: 24px;
+  height: 24px;
+}
+
+.ags-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* identity fades in over the rail→open stretch */
+.ags-nameline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+  opacity: var(--ags-reveal-id, 1);
+  transition: opacity 200ms ease;
+}
+
+.ags-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- level 2: the turn, grown in by width ---- */
+
+.ags-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden;
+  opacity: var(--ags-reveal, 1);
+  max-height: calc(var(--ags-reveal, 1) * 150px);
+  transform: translateY(calc((1 - var(--ags-reveal, 1)) * -4px));
+  transition:
+    opacity 240ms ease,
+    max-height 240ms ease,
+    transform 240ms ease;
+}
+
+/* Re-skin of the SHARED turn block. Same elements as the dark card; only the
+   surface differs. Type sizes drop the card's var(--z) — the sidebar does not
+   inverse-scale against canvas zoom. */
+.ags-turn .vi-turn-title {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 13.5px;
+  line-height: 1.3;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ags-turn .vi-you {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ags-turn .vi-you-label {
+  color: var(--amber-deep);
+  font-weight: 600;
+}
+
+/* The card shows the whole trail; a sidebar row has no room, so only the
+   newest call survives. CSS, not a second component. */
+.ags-turn .vi-tools {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ags-turn .vi-tool.older {
+  display: none;
+}
+
+.ags-turn .vi-tool {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--amber-deep);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ags-turn .vi-tool-glyph {
+  color: var(--amber-deep);
+}
+
+.ags-turn .vi-latest {
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ags-turn .vi-latest.working {
+  color: var(--amber-deep);
+  font-weight: 600;
+}
+
+.ags-turn .vi-latest.waiting {
+  color: var(--rose);
+  font-weight: 700;
+}
+
+/* --hp is a coin/rail colour; as body text on cream it fails contrast, so a
+   finished turn reads in ink-soft and green stays on the avatar and rail. */
+.ags-turn .vi-latest.done {
+  color: var(--ink-soft);
+}
+
+.ags-turn .vi-ready {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.ags-turn .vi-pending {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.ags-turn .vi-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+  box-shadow: none;
+}
+
+.ags-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  min-width: 0;
+}
+
+.ags-phase,
+.ags-ck,
+.ags-ago {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ags-row[data-phase='working'] .ags-phase {
+  color: var(--amber-deep);
+}
+
+.ags-row[data-phase='waiting'] .ags-phase {
+  color: var(--rose);
+  animation: cr-blink 1.1s steps(2) infinite;
+}
+
+.ags-spacer {
+  flex: 1;
+}
+
+/* RECOVER — .roster-recover verbatim: pixel chip with a re-hatching coin. */
+.ags-recover {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 7px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.ags-row:hover .ags-recover,
+.ags-recover:focus-visible {
+  opacity: 1;
+}
+
+.ags-recover:hover {
+  background: var(--amber-soft);
+  border-color: var(--amber-deep);
+}
+
+.ags-recover-coin {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--hp);
+  border: 1px solid var(--line);
+}
+
+.ags-toast {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 10;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 7px 9px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 3px 3px 0 var(--amber-deep);
+}
+
+.ags-toast[data-tone='error'] {
+  box-shadow: 3px 3px 0 var(--rose);
+}
+
+/* ---- rail: the coin and nothing else ---- */
+
+.ags.rail .ags-title,
+.ags.rail .ags-count,
+.ags.rail .ags-filters,
+.ags.rail .ags-banner,
+.ags.rail .ags-quiet,
+.ags.rail .ags-body {
+  display: none;
+}
+
+.ags.rail .ags-head {
+  justify-content: center;
+  padding: 8px 0;
+}
+
+.ags.rail .ags-row {
+  grid-template-columns: 1fr;
+  justify-items: center;
+  padding: 8px 0;
+}
+
+/* ---- drag handle ---- */
+
+.ags-grip {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 12;
+}
+
+.ags-grip:hover::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  background: var(--amber-deep);
+}
+
+.ags.dragging .ags-grip::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  background: var(--amber-deep);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ags,
+  .ags-turn,
+  .ags-nameline {
+    transition: none;
+  }
+  .ags-row[data-phase='waiting'] .ags-phase {
+    animation: none;
+  }
+}

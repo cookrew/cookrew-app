@@ -34,7 +34,7 @@ import { snapCardChanges, MOUSE_SNAP_PX, TOUCH_SNAP_PX, SnapGuide } from './card
 import { SnapGuides } from './SnapGuides'
 import { TeamForkPicker } from './TeamForkPicker'
 import { EventToastLayer } from './EventToast'
-import { RosterPanel } from './RosterPanel'
+import { AgentSidebar } from './AgentSidebar'
 import { MetricsPanel } from './MetricsPanel'
 
 /** Phone companion parity: widen the snap magnet for finger-driven gestures. */
@@ -499,7 +499,9 @@ function Canvas(): React.JSX.Element {
           onRoster={() => setRosterOpen(true)}
           onMetrics={() => setMetricsOpen(true)}
         />
-        <div className="cr-stage">
+        <div className="cr-body">
+          {rosterOpen && <AgentSidebar onClose={() => setRosterOpen(false)} />}
+          <div className="cr-stage">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -525,6 +527,7 @@ function Canvas(): React.JSX.Element {
             <MiniMap pannable zoomable className="cookrew-minimap" />
             <Controls position="bottom-right" />
           </ReactFlow>
+          </div>
         </div>
         <Dock
           tool={tool}
@@ -562,7 +565,6 @@ function Canvas(): React.JSX.Element {
         {teamPickerOpen && workspace && (
           <TeamForkPicker workspace={workspace} onClose={() => setTeamPickerOpen(false)} />
         )}
-        {rosterOpen && <RosterPanel onClose={() => setRosterOpen(false)} />}
         {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
         <BrowserLayer
           browsers={browsers}

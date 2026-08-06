@@ -65,8 +65,19 @@ body,
   height: 100%;
 }
 
+/* The stage row: agents sidebar beside the canvas, never over it. The old
+   ALL AGENTS modal used a scrim, so you could read the roster or watch the
+   canvas but not both. */
+.cr-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  min-width: 0;
+}
+
 .cr-stage {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   position: relative;
 }
