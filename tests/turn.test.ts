@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  MAX_TURN_HISTORY,
+  MAX_TURN_PAGE,
   latestTailLines,
   pageTurns,
   cleanTurnLines,
@@ -11,7 +13,8 @@ import {
   isCommandPrompt,
   isLiveStatus,
   parseAgentGlance,
-  tailLines
+  tailLines,
+  type TurnRecord
 } from '../src/shared/turn'
 
 describe('isCommandPrompt', () => {
@@ -534,5 +537,38 @@ describe('latestTailLines (live-tail boundary, unified-scroll item 1)', () => {
   it('returns null when no completion line exists (show everything)', () => {
     expect(latestTailLines('plain shell output\nmore output')).toBeNull()
     expect(latestTailLines('')).toBeNull()
+  })
+})
+
+/**
+ * Retention and page size are different concerns that used to share one
+ * constant. Raising retention to 500 would otherwise have let a single fetch
+ * ship 500 FULL turn bodies to draw one screen.
+ */
+describe('MAX_TURN_HISTORY vs MAX_TURN_PAGE', () => {
+  it('retains far more than it will ever send at once', () => {
+    expect(MAX_TURN_HISTORY).toBeGreaterThan(MAX_TURN_PAGE)
+  })
+
+  it('clamps a page to the PAGE cap, not the retention cap', () => {
+    const history = Array.from({ length: MAX_TURN_HISTORY }, (_, i) => ({
+      index: i + 1,
+      prompt: 'p',
+      reply: 'r',
+      startedAt: i,
+      endedAt: i + 1
+    })) as TurnRecord[]
+    expect(pageTurns(history, { limit: MAX_TURN_HISTORY }).turns).toHaveLength(MAX_TURN_PAGE)
+  })
+
+  it('still reports the true total so the virtualizer sizes correctly', () => {
+    const history = Array.from({ length: 300 }, (_, i) => ({
+      index: i + 1,
+      prompt: 'p',
+      reply: 'r',
+      startedAt: i,
+      endedAt: i + 1
+    })) as TurnRecord[]
+    expect(pageTurns(history, { limit: 20 }).total).toBe(300)
   })
 })

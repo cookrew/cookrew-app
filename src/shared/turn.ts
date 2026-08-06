@@ -116,7 +116,15 @@ export interface TurnRecord {
 }
 
 /** Cap on retained turn records per terminal (oldest dropped first). */
-export const MAX_TURN_HISTORY = 100
+export const MAX_TURN_HISTORY = 500
+
+/**
+ * Cap on ONE paged fetch, which is a different concern from retention and must
+ * not ride on it. pageTurns returns FULL prompt/reply bodies, so clamping a
+ * page to the retention cap would let a single request ship every retained
+ * turn — at 500 records that is megabytes across the wire to draw one screen.
+ */
+export const MAX_TURN_PAGE = 100
 
 /**
  * Synthetic prompt for turns the tracker's self-healing opened without ever
@@ -218,7 +226,7 @@ export function scrollLineOf(snapshot: string): number {
 export interface TurnPageRequest {
   /** Start BLOCK INDEX (0-based, oldest-first). Omitted → tail window. */
   offset?: number
-  /** Window size; defaults to 20, capped at MAX_TURN_HISTORY. */
+  /** Window size; defaults to 20, capped at MAX_TURN_PAGE. */
   limit?: number
   /** Center the window on the record with this TurnRecord.index (wins over
    *  offset — the checkpoint-click fetch). Unknown index → tail window. */
@@ -247,7 +255,7 @@ const TURN_PAGE_DEFAULT_LIMIT = 20
  */
 export function pageTurns(history: TurnRecord[], request: TurnPageRequest = {}): TurnPage {
   const total = history.length
-  const limit = Math.max(1, Math.min(request.limit ?? TURN_PAGE_DEFAULT_LIMIT, MAX_TURN_HISTORY))
+  const limit = Math.max(1, Math.min(request.limit ?? TURN_PAGE_DEFAULT_LIMIT, MAX_TURN_PAGE))
   if (total === 0) return { turns: [], total: 0, offset: 0 }
 
   if (request.beforeIndex !== undefined) {
