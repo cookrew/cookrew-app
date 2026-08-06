@@ -66,7 +66,10 @@ export function TurnView({ model }: { model: TurnViewModel }): React.JSX.Element
       {latest ? (
         <div className={`vi-latest ${latest.tone}`}>
           {latest.tone !== 'done' && <span className="vi-dot pulse" />}
-          {latest.text}
+          {/* Wrapped, not bare: a text node inside a flex row cannot be
+              ellipsed — text-overflow has nothing to apply to — so the
+              sidebar's one-line rows hard-cut mid-word instead. */}
+          <span className="vi-latest-text">{latest.text}</span>
         </div>
       ) : (
         <div className="vi-ready">Ready</div>

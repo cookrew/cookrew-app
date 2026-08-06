@@ -24,7 +24,8 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import type { TurnRecord } from '../shared/turn'
+import { mergeAnnotation, splitAnnotation, type TurnRecord } from '../shared/turn'
+import { AnnotationStore } from './turn-annotations'
 
 const SAVE_DEBOUNCE_MS = 300
 
@@ -61,7 +62,34 @@ export class TurnStore {
    */
   private all: Map<string, TurnRecord[]> | null = null
 
-  constructor(private dir = path.join(homedir(), '.cookrew', 'turns')) {}
+  /**
+   * Cookrew's own fields (title / seenAt / scrollLine) live here instead of on
+   * the conversation lines. This is a STORAGE split only: records go in whole
+   * and come back out whole, so nothing above this class can tell.
+   */
+  private annotations: AnnotationStore
+
+  /**
+   * Where the annotations went. Exposed so the one invariant that matters can
+   * be asserted rather than assumed: this path is NEVER inside `dir`.
+   */
+  readonly annotationsDir: string
+
+  /**
+   * `annotationsDir` defaults to a SIBLING of the turns directory, never a child
+   * of it. This is the whole point: the ledger is derived and will be documented
+   * as safe to delete, so anything a transcript cannot regenerate has to live
+   * where `rm -rf <turns>` cannot reach it. Deriving from the given `dir` rather
+   * than hard-coding the home path keeps that true for every construction — a
+   * caller with its own turns directory gets its own sibling, not the real one.
+   */
+  constructor(
+    private dir = path.join(homedir(), '.cookrew', 'turns'),
+    annotationsDir = path.resolve(dir, '..', 'checkpoint-annotations'),
+  ) {
+    this.annotationsDir = annotationsDir
+    this.annotations = new AnnotationStore(annotationsDir)
+  }
 
   private safeId(terminalId: string): string {
     return terminalId.replace(/[^a-zA-Z0-9_-]/g, '')
@@ -74,6 +102,21 @@ export class TurnStore {
   /** Pre-JSONL format: one pretty-printed array per terminal. */
   private legacyFileFor(terminalId: string): string {
     return path.join(this.dir, `${this.safeId(terminalId)}.json`)
+  }
+
+  /**
+   * Put Cookrew's fields back on the conversation records — the read half of
+   * the storage split, so every public getter returns what it always did.
+   *
+   * The annotation wins where it has a value, but a record keeps anything the
+   * annotation lacks. That is what lets a file written BEFORE the split, with
+   * title/seenAt still inline on the line, read back unchanged until the next
+   * flush moves them across.
+   */
+  private hydrate(terminalId: string, records: TurnRecord[]): TurnRecord[] {
+    const byIndex = this.annotations.load(this.safeId(terminalId))
+    if (byIndex.size === 0) return records
+    return records.map((record) => mergeAnnotation(record, byIndex.get(record.index)))
   }
 
   /**
@@ -104,6 +147,10 @@ export class TurnStore {
     try {
       const parsed: unknown = JSON.parse(readFileSync(legacy, 'utf8'))
       const records = Array.isArray(parsed) ? parsed.filter(isTurnRecord) : []
+      // A legacy file carries title/seenAt inline. writeAll strips them off the
+      // lines, so they have to be moved across in the same breath or the
+      // migration would quietly drop every recap it just read.
+      this.annotations.save(this.safeId(terminalId), records)
       this.writeAll(terminalId, records)
       // Keep the original as .migrated rather than deleting it — this is the
       // only copy of history that predates the lines format.
@@ -120,7 +167,7 @@ export class TurnStore {
     if (pending) return pending
     try {
       const file = this.fileFor(terminalId)
-      if (existsSync(file)) return this.readLines(file)
+      if (existsSync(file)) return this.hydrate(terminalId, this.readLines(file))
       return this.migrate(terminalId) ?? []
     } catch (error) {
       console.error('Failed to load turn history:', error)
@@ -180,7 +227,7 @@ export class TurnStore {
           if (isLegacy && existsSync(this.fileFor(terminalId))) continue
           try {
             const records = isLines
-              ? this.readLines(path.join(this.dir, name))
+              ? this.hydrate(terminalId, this.readLines(path.join(this.dir, name)))
               : this.load(terminalId)
             // Terminals with no usable records are OMITTED — the board's L3
             // layer relies on never having to filter empties itself.
@@ -218,8 +265,13 @@ export class TurnStore {
     )
   }
 
+  /**
+   * The conversation half of a record, as one line. Cookrew's fields are
+   * stripped out here and written to the annotations file instead — which is
+   * also why an annotation-only change no longer alters any line.
+   */
   private line(record: TurnRecord): string {
-    return JSON.stringify(record)
+    return JSON.stringify(splitAnnotation(record).conversation)
   }
 
   private writeAll(terminalId: string, records: TurnRecord[]): void {
@@ -252,10 +304,13 @@ export class TurnStore {
    * Append when the history only GREW and its previous last record is
    * byte-identical to what we wrote; otherwise rewrite.
    *
-   * The conservative half matters: seenAt stamps, Sous titles landing late and
-   * phantom-echo dedupe all EDIT existing records, and an append would silently
-   * drop those. Anything the fast path cannot prove is an append falls back to
-   * a full rewrite, so the worst case is exactly the old behaviour.
+   * WHY THE FALLBACK STAYS after the annotation split. Two of the three edit
+   * sources are gone from these lines — a seenAt stamp and a late Sous title
+   * now change only the sidecar — but phantom-echo dedupe and session
+   * reconcile still shrink and rewrite the conversation itself, and those must
+   * not be silently appended over. The guard costs nothing when it does not
+   * fire, so it stays until the scrape stops writing durable history at all
+   * (step 4 of the design); only then are these lines truly append-only.
    */
   private flush(terminalId: string): void {
     const timer = this.timers.get(terminalId)
@@ -264,6 +319,11 @@ export class TurnStore {
     const records = this.pending.get(terminalId)
     this.pending.delete(terminalId)
     if (!records) return
+
+    // Cookrew's fields first: they are the only copy, whereas the conversation
+    // below is a copy of the transcript. If one of the two writes fails, lose
+    // the reproducible one.
+    this.annotations.save(this.safeId(terminalId), records)
 
     try {
       const known = this.written.get(terminalId)
@@ -296,6 +356,7 @@ export class TurnStore {
     this.pending.delete(terminalId)
     this.written.delete(terminalId)
     this.all?.delete(this.safeId(terminalId))
+    this.annotations.remove(this.safeId(terminalId))
     try {
       for (const file of [this.fileFor(terminalId), this.legacyFileFor(terminalId)]) {
         if (existsSync(file)) unlinkSync(file)

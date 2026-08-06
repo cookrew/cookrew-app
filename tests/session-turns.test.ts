@@ -128,6 +128,9 @@ describe('parseSessionTurns', () => {
       index: 1,
       prompt: 'fix the bug',
       reply: 'Fixed it in pty.ts.',
+      // These fixture entries carry no uuid, so the identity is derived —
+      // the same one parseClaudeTrace mints for the block.
+      uuid: expect.stringMatching(/^claude-1-[0-9a-f]{8}$/) as unknown as string,
       startedAt: ms('00:00'),
       endedAt: ms('00:20')
     })
@@ -199,9 +202,13 @@ describe('parseSessionTurns', () => {
     expect(turns[0].uuid).toBe('prompt-uuid')
   })
 
-  it('omits uuid when the prompt entry has none (legacy session file)', () => {
+  // Legacy session files predate the uuid field. The record still needs an
+  // identity to join the trace block on, and it must be the SAME derived
+  // identity the trace parser mints — a uuid-less record pairs with nothing
+  // and shows up as a phantom rail row (see tests/checkpoint-identity.test.ts).
+  it('derives the ordinal identity when the prompt entry has no uuid', () => {
     const turns = parseSessionTurns([user('no uuid here', T('00:00'))])
-    expect(turns[0].uuid).toBeUndefined()
+    expect(turns[0].uuid).toMatch(/^claude-1-[0-9a-f]{8}$/)
   })
 })
 

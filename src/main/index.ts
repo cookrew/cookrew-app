@@ -1082,9 +1082,6 @@ app.whenReady().then(() => {
   })
   routines.start()
 
-  const mobileClientPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'mobile', 'client.html')
-    : path.join(dirname, '../../mobile/client.html')
   startMobileServer({
     store,
     events,
@@ -1136,7 +1133,6 @@ app.whenReady().then(() => {
     interactiveBrowserEnabled,
     browserThumbRequested: noteBrowserViewed,
     onUpgrade: (request, socket) => browserCast.upgrade(request, socket),
-    clientHtmlPath: mobileClientPath,
     // Built renderer bundle — served to phones so mobile gets the full
     // desktop canvas UI. Dev proxies Vite so phones cannot load stale out/.
     rendererDir: path.join(dirname, '../renderer'),

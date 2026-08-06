@@ -103,6 +103,38 @@ export interface CheckpointStep {
   sibling: boolean
 }
 
+/** FNV-1a, 32-bit, hex — a short stable digest of a prompt. Not a hash for
+ *  security, only for telling two exchanges apart. */
+function digest(text: string): string {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return hash.toString(16).padStart(8, '0')
+}
+
+/**
+ * The checkpoint's JOIN KEY — TurnRecord.uuid on one side, TraceBlock.id on
+ * the other, and they must be the same string or the two records of the same
+ * exchange cannot be paired.
+ *
+ * Normally that is the bound message uuid. Legacy session files predate the
+ * uuid field, and a record left without one pairs with no trace block at all:
+ * it renders as a phantom rail row that maps nowhere (the failure
+ * mergeCheckpointRows clamps around). So the fallback is DERIVED — identical
+ * on both sides because it is computed here, once, from data both sides hold.
+ *
+ * It carries the PROMPT digest, not just the ordinal, because an identity is a
+ * claim that this is the same exchange: turn-tracker's matchPrior carries the
+ * Sous title and the read marker across an exact uuid match without
+ * re-checking the prompt. Ordinal-only ids would make a rewound turn and its
+ * replacement look like one exchange and hand the old title to the new turn.
+ */
+export function checkpointIdentity(id: CheckpointId): string {
+  return id.uuid ?? `claude-${id.index}-${digest(id.prompt)}`
+}
+
 /**
  * Single-pass checkpoint identity assigner, SHARED by parseSessionTurns and
  * the trace-block parser so the two coordinate systems cannot diverge (the
@@ -186,12 +218,12 @@ export function parseSessionTurns(lines: string[]): TurnRecord[] {
     if (step !== null) {
       const last = turns[turns.length - 1]
       if (step.sibling && last !== undefined) {
-        // Same submission — collapse: adopt the continuation prompt/uuid,
+        // Same submission — collapse: adopt the continuation prompt/identity,
         // keep the accumulated reply and timestamps.
         turns[turns.length - 1] = {
           ...last,
           prompt: step.id.prompt,
-          ...(step.id.uuid !== undefined ? { uuid: step.id.uuid } : {})
+          uuid: checkpointIdentity(step.id)
         }
         continue
       }
@@ -200,7 +232,7 @@ export function parseSessionTurns(lines: string[]): TurnRecord[] {
         index: step.id.index,
         prompt: step.id.prompt,
         reply: '',
-        ...(step.id.uuid !== undefined ? { uuid: step.id.uuid } : {}),
+        uuid: checkpointIdentity(step.id),
         startedAt,
         endedAt: startedAt
       })
