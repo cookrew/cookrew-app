@@ -333,6 +333,12 @@ body,
   vertical-align: -2px;
 }
 
+.vi-tool-glyph .cr-icon {
+  width: 11px;
+  height: 11px;
+  vertical-align: -2px;
+}
+
 .card-open-hint .cr-icon {
   width: 9px;
   height: 9px;
@@ -1070,6 +1076,45 @@ body,
 
 .vi-dot.pulse {
   animation: vi-pulse 1.2s ease-in-out infinite;
+}
+
+.vi-tools {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.vi-tool {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--vi-dim);
+  background: var(--vi-panel);
+  border: 1px solid var(--vi-line);
+  border-radius: 5px;
+  padding: 3px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vi-tool.older {
+  opacity: 0.55;
+  font-size: 9.5px;
+  padding: 1px 8px;
+  border-color: transparent;
+}
+
+.vi-tool.latest {
+  color: var(--vi-text);
+}
+
+.vi-tool-glyph {
+  color: var(--vi-working);
+  display: inline-block;
+  min-width: 11px;
 }
 
 .vi-msg {

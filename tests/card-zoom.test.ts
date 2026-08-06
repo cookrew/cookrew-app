@@ -81,10 +81,6 @@ describe('the full view is gone', () => {
     expect(NODE_SOURCE).not.toMatch(/vi-foot|vi-hint|card-clock|card-spinner/)
   })
 
-  it('has no tool trail', () => {
-    expect(NODE_SOURCE).not.toMatch(/vi-tools|vi-tool-glyph/)
-  })
-
   it('leaves no orphaned styles behind', () => {
     const css = readFileSync(join(__dirname, '../src/renderer/src/styles.css'), 'utf8')
     for (const dead of [
@@ -92,14 +88,36 @@ describe('the full view is gone', () => {
       '.vi-hint',
       '.vi-conclusion',
       '.vi-status-name',
-      '.vi-tools',
-      '.vi-tool-glyph',
       '.card-spinner',
       '.card-clock',
       '.vi-card.full',
       '.vi-head.full'
     ]) {
       expect(css).not.toContain(dead)
+    }
+  })
+})
+
+/**
+ * The tool trail came WITH the deleted full view and is the one thing worth
+ * keeping from it: while an agent works, the card says what it is doing, not
+ * just that it is busy. It now lives in the one surviving card.
+ */
+describe('the working card shows the tool trail', () => {
+  it('renders glance.tools with their glyphs', () => {
+    expect(NODE_SOURCE).toMatch(/glance\.tools\.map/)
+    expect(NODE_SOURCE).toMatch(/vi-tools/)
+    expect(NODE_SOURCE).toMatch(/toolGlyph\(toolCall\)/)
+  })
+
+  it('marks the newest call latest and the rest older', () => {
+    expect(NODE_SOURCE).toMatch(/i === glance\.tools\.length - 1 \? 'latest' : 'older'/)
+  })
+
+  it('keeps the styles the trail needs', () => {
+    const css = readFileSync(join(__dirname, '../src/renderer/src/styles.css'), 'utf8')
+    for (const live of ['.vi-tools {', '.vi-tool {', '.vi-tool.older {', '.vi-tool.latest {', '.vi-tool-glyph {']) {
+      expect(css).toContain(live)
     }
   })
 })
