@@ -9,7 +9,6 @@
 // durable record.
 
 import { readFileSync, statSync } from 'node:fs'
-import { parseSessionTurns } from '../shared/session-turns'
 import type { TurnRecord } from '../shared/turn'
 import type { TurnTracker } from './turn-tracker'
 
@@ -34,9 +33,17 @@ export class SessionTurnSync {
     private pollMs = DEFAULT_POLL_MS
   ) {}
 
-  /** Start reconciling a terminal against its session file (idempotent).
-   *  `parse` is the harness's session-turn parser (defaults to Claude's). */
-  watch(terminalId: string, file: string, parse: SessionTurnParser = parseSessionTurns): void {
+  /**
+   * Start reconciling a terminal against its session file (idempotent).
+   *
+   * `parse` is REQUIRED and must be the harness's own parser — the one whose
+   * indices equal that harness's trace-block indices. It used to default to
+   * Claude's, which meant a harness that forgot to wire `parseTurns` silently
+   * got a parser for a file format it does not have: zero records, or worse,
+   * records in an index space nothing else shares. That is the divergence
+   * class this module exists to prevent, so it is now a compile error.
+   */
+  watch(terminalId: string, file: string, parse: SessionTurnParser): void {
     this.watched.set(terminalId, { file, mtimeMs: 0, size: 0, parse })
     this.reconcile(terminalId)
     if (this.timer === null) {

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionTurnSync } from '../src/main/session-sync'
+import { parseSessionTurns } from '../src/shared/session-turns'
 import { TurnTracker } from '../src/main/turn-tracker'
 import { TurnStore } from '../src/main/turn-store'
 import type { TurnRecord } from '../src/shared/turn'
@@ -44,7 +45,7 @@ describe('SessionTurnSync', () => {
   it('rebuilds history from the session file immediately on watch', () => {
     const { file, tracker, sync } = fixture()
     writeFileSync(file, [...TURN_1, ...TURN_2].join('\n') + '\n', 'utf8')
-    sync.watch('term-1', file)
+    sync.watch('term-1', file, parseSessionTurns)
     const history = tracker.history('term-1')
     expect(history.map((r) => r.prompt)).toEqual(['turn one', 'turn two'])
     expect(history.map((r) => r.index)).toEqual([1, 2])
@@ -55,7 +56,7 @@ describe('SessionTurnSync', () => {
     vi.useFakeTimers()
     const { file, tracker, sync } = fixture()
     writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
-    sync.watch('term-1', file)
+    sync.watch('term-1', file, parseSessionTurns)
     expect(tracker.history('term-1')).toHaveLength(1)
 
     writeFileSync(file, [...TURN_1, ...TURN_2].join('\n') + '\n', 'utf8')
@@ -68,7 +69,7 @@ describe('SessionTurnSync', () => {
     vi.useFakeTimers()
     const { file, tracker, sync } = fixture()
     writeFileSync(file, [...TURN_1, ...TURN_2].join('\n') + '\n', 'utf8')
-    sync.watch('term-1', file)
+    sync.watch('term-1', file, parseSessionTurns)
     expect(tracker.history('term-1')).toHaveLength(2)
 
     writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
@@ -82,7 +83,7 @@ describe('SessionTurnSync', () => {
   it('waits quietly for a session file that does not exist yet', async () => {
     vi.useFakeTimers()
     const { file, tracker, sync } = fixture()
-    sync.watch('term-1', file)
+    sync.watch('term-1', file, parseSessionTurns)
     expect(tracker.history('term-1')).toEqual([])
 
     writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
