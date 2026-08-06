@@ -115,14 +115,22 @@ export interface TurnRecord {
   scrollLine?: number
 }
 
-/** Cap on retained turn records per terminal (oldest dropped first). */
-export const MAX_TURN_HISTORY = 500
+/**
+ * History is NOT capped: every checkpoint an agent has ever produced is kept,
+ * so `turnCount` and the rail agree with reality. This is affordable because
+ * the store appends one line per turn instead of rewriting the file (see
+ * main/turn-store.ts) — the rewrite is what forced a cap in the first place.
+ *
+ * Kept as a named window for callers that want "the recent end" without
+ * loading everything: TurnTracker attaches with this many in memory and pages
+ * older ones from disk on demand.
+ */
+export const TURN_TAIL_WINDOW = 200
 
 /**
- * Cap on ONE paged fetch, which is a different concern from retention and must
- * not ride on it. pageTurns returns FULL prompt/reply bodies, so clamping a
- * page to the retention cap would let a single request ship every retained
- * turn — at 500 records that is megabytes across the wire to draw one screen.
+ * Cap on ONE paged fetch. pageTurns returns FULL prompt/reply bodies, so an
+ * unbounded page would ship an entire history across the wire to draw one
+ * screen.
  */
 export const MAX_TURN_PAGE = 100
 
@@ -280,11 +288,16 @@ export function pageTurns(history: TurnRecord[], request: TurnPageRequest = {}):
   return { turns: history.slice(clamped, clamped + limit), total, offset: clamped }
 }
 
-/** Append a completed turn immutably, assigning the next index and capping. */
+/**
+ * Append a completed turn immutably, assigning the next index. Nothing is
+ * dropped: `index` is monotonic and stable, so it stays a truthful count of
+ * everything the agent has ever done. `max` is retained for callers that want
+ * a bounded working set (tests, previews); it defaults to unbounded.
+ */
 export function appendTurnRecord(
   history: TurnRecord[],
   turn: Omit<TurnRecord, 'index'>,
-  max = MAX_TURN_HISTORY
+  max = Number.POSITIVE_INFINITY,
 ): TurnRecord[] {
   const index = (history[history.length - 1]?.index ?? 0) + 1
   const next = [...history, { ...turn, index }]
@@ -387,10 +400,7 @@ function appendPastedText(buffer: string, segment: string): string {
  * Shift+Enter arrives as ESC+CR (the TUI insert-newline binding) and appends a
  * literal newline — one REAL Enter = one submit = one checkpoint (1:1 spec).
  */
-function feedTypedSegment(
-  buffer: string,
-  segment: string
-): { line: string; submitted: string[] } {
+function feedTypedSegment(buffer: string, segment: string): { line: string; submitted: string[] } {
   const submitted: string[] = []
   let line = buffer
   const plain = stripTermNoise(segment).replace(CSI_RE, '')
@@ -424,7 +434,7 @@ export function feedPromptBuffer(
   buffer: string,
   data: string,
   inPaste = false,
-  held = ''
+  held = '',
 ): PromptFeed {
   const submitted: string[] = []
   let line = buffer
@@ -489,7 +499,7 @@ export function cleanTurnLines(text: string): string[] {
       !STATUS_RE.test(l) &&
       !TMUX_STATUS_RE.test(l) &&
       !AGENT_METER_RE.test(l) &&
-      !(AGENT_CWD_RE.test(l) && AGENT_METER_RE.test(lines[i + 1] ?? ''))
+      !(AGENT_CWD_RE.test(l) && AGENT_METER_RE.test(lines[i + 1] ?? '')),
   )
   return kept.reduce<string[]>((acc, line) => {
     if (line === '' && acc[acc.length - 1] === '') return acc
@@ -515,7 +525,7 @@ const ATTENTION_RES = [
   /\(y\/n\)|\[y\/n\]/i,
   /^\s*[❯>]?\s*\d+\.\s+(yes|no|allow|deny|approve|reject)/i,
   /allow this|grant access|permission request|needs your approval/i,
-  /waiting for (your )?(input|approval|response)/i
+  /waiting for (your )?(input|approval|response)/i,
 ]
 
 /** True when the quiet tail looks like a question the agent is blocked on. */

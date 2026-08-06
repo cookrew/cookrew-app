@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  MAX_TURN_HISTORY,
   MAX_TURN_PAGE,
+  TURN_TAIL_WINDOW,
   latestTailLines,
   pageTurns,
   cleanTurnLines,
@@ -14,6 +14,7 @@ import {
   isLiveStatus,
   parseAgentGlance,
   tailLines,
+  appendTurnRecord,
   type TurnRecord
 } from '../src/shared/turn'
 
@@ -541,24 +542,35 @@ describe('latestTailLines (live-tail boundary, unified-scroll item 1)', () => {
 })
 
 /**
- * Retention and page size are different concerns that used to share one
- * constant. Raising retention to 500 would otherwise have let a single fetch
- * ship 500 FULL turn bodies to draw one screen.
+ * History is uncapped now; page size is a separate, still-bounded concern
+ * because pageTurns returns FULL bodies.
  */
-describe('MAX_TURN_HISTORY vs MAX_TURN_PAGE', () => {
-  it('retains far more than it will ever send at once', () => {
-    expect(MAX_TURN_HISTORY).toBeGreaterThan(MAX_TURN_PAGE)
+describe('uncapped history vs bounded pages', () => {
+  it('keeps every turn, so the count stays truthful', () => {
+    let history: TurnRecord[] = []
+    for (let i = 0; i < 1200; i++) history = appendTurnRecord(history, {
+      prompt: 'p',
+      reply: 'r',
+      startedAt: i,
+      endedAt: i + 1
+    })
+    expect(history).toHaveLength(1200)
+    expect(history[history.length - 1].index).toBe(1200)
   })
 
-  it('clamps a page to the PAGE cap, not the retention cap', () => {
-    const history = Array.from({ length: MAX_TURN_HISTORY }, (_, i) => ({
+  it('holds a working window smaller than the history', () => {
+    expect(TURN_TAIL_WINDOW).toBeGreaterThan(MAX_TURN_PAGE - 1)
+  })
+
+  it('clamps a page even when the history is far larger', () => {
+    const history = Array.from({ length: 1200 }, (_, i) => ({
       index: i + 1,
       prompt: 'p',
       reply: 'r',
       startedAt: i,
       endedAt: i + 1
     })) as TurnRecord[]
-    expect(pageTurns(history, { limit: MAX_TURN_HISTORY }).turns).toHaveLength(MAX_TURN_PAGE)
+    expect(pageTurns(history, { limit: 1200 }).turns).toHaveLength(MAX_TURN_PAGE)
   })
 
   it('still reports the true total so the virtualizer sizes correctly', () => {
