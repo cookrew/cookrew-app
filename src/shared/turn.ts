@@ -313,8 +313,15 @@ const CSI_RE = /\x1b(?:\[[<>=?]?[0-9;]*[@-~]|O[@-~])/g
 const OSC_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g
 const OSC_COLOR_REMNANT_RE = /\x1b?\]1[01];rgb:[0-9a-fA-F/]+\\?/g
 
-/** The cookrew tmux status bar line (status-left is "cookrew · <session>"). */
-const TMUX_STATUS_RE = /^\s*cookrew · /
+/**
+ * The cookrew tmux status bar line. status-left is
+ * '#[bold] cookrew · #S #[nobold] ', but status-left-length defaults to 10 —
+ * exactly the width of ' cookrew ·'. tmux truncates there, dropping the
+ * session name AND the space after the separator, so the window list runs
+ * straight on and the row reads ' cookrew ·1:node*'. Match the separator
+ * followed by anything, so both the truncated and untruncated forms strip.
+ */
+const TMUX_STATUS_RE = /^\s*cookrew ·/
 
 /** Strip terminal control noise that would otherwise pollute turn text. */
 function stripTermNoise(text: string): string {
@@ -443,20 +450,38 @@ const STATUS_RE =
   /esc to interrupt|\? for shortcuts|bypass(?:ing)? permissions|shift\+tab to cycle|for agents\b/i
 
 /**
+ * The pi/ifunk TUI closes with two status rows below its input box, and they
+ * are the LAST lines on screen — so a card falling back to the screen tail
+ * showed the meter instead of the agent's last words.
+ *
+ * METER: the context gauge, "?/128k (auto)" or "75.8%/128k (auto)". Anchored
+ * on "<something>/<n>k (auto)" so prose containing "(auto)" or "128k" alone
+ * survives.
+ * CWD: the row above it — "~/workspace/cookrew-dev (some-branch)" in a repo,
+ * a bare "/private/tmp" outside one. A bare path is ordinary output (a glob
+ * hit, a pwd, a file reference), so the path shape alone is NOT enough:
+ * it only counts as chrome when the meter is on the very next line.
+ */
+const AGENT_METER_RE = /\S*\/\d+k\s+\(auto\)/
+const AGENT_CWD_RE = /^\s*[~/]\S*(?:\s+\([^)]+\))?\s*$/
+
+/**
  * Reduce raw appended terminal text to displayable summary lines: drop TUI
- * frames, status bars (including the tmux one), OSC noise and blank runs
- * while keeping the actual content.
+ * frames, status bars (the tmux one and the agent's own), OSC noise and blank
+ * runs while keeping the actual content.
  */
 export function cleanTurnLines(text: string): string[] {
   const lines = stripTermNoise(text)
     .split('\n')
     .map((l) => l.replace(/\s+$/g, ''))
   const kept = lines.filter(
-    (l) =>
+    (l, i) =>
       !CHROME_RE.test(l) &&
       !INPUT_BOX_RE.test(l) &&
       !STATUS_RE.test(l) &&
-      !TMUX_STATUS_RE.test(l)
+      !TMUX_STATUS_RE.test(l) &&
+      !AGENT_METER_RE.test(l) &&
+      !(AGENT_CWD_RE.test(l) && AGENT_METER_RE.test(lines[i + 1] ?? ''))
   )
   return kept.reduce<string[]>((acc, line) => {
     if (line === '' && acc[acc.length - 1] === '') return acc
