@@ -4,6 +4,7 @@ import {
   checkpointDepth,
   checkpointProgress,
   checkpointTitle,
+  gotoCursor,
   markerFraction
 } from '../src/renderer/src/checkpoint-sync'
 import type { TurnRecord } from '../src/shared/turn'
@@ -125,5 +126,60 @@ describe('checkpointDepth (forward-jump echo prediction)', () => {
   it('is null without a base or offset', () => {
     expect(checkpointDepth(records, 2, null)).toBeNull()
     expect(checkpointDepth([{ index: 1 }], 1, BASE)).toBeNull()
+  })
+})
+
+/**
+ * REFACTOR GUARD (checkpoint-as-identity) — the card pager / TurnPagerBar.
+ *
+ * useTurnPaging holds a `cursor`, which is an ARRAY POSITION into the fetched
+ * records, but everything the user sees and acts on is an IDENTITY:
+ * TurnPagerBar prints `CHECKPOINT {viewing.index}` and fork sends
+ * `records[cursor].index`. gotoCursor is the one place those two coordinate
+ * systems meet, so it is where a position/identity mix-up becomes a silent
+ * wrong-checkpoint action rather than a crash.
+ *
+ * The hook itself needs a DOM (this repo has no jsdom), so these pin its pure
+ * resolver — which is the part the refactor can actually break.
+ */
+describe('gotoCursor — the pager resolves identity, never array position', () => {
+  /** A capped/rewound history: indexes are sparse and do NOT equal positions. */
+  const sparse = [{ index: 7 }, { index: 8 }, { index: 12 }, { index: 30 }]
+
+  it('resolves a checkpoint index to its position, not to itself', () => {
+    // The whole bug class in one line: checkpoint 12 lives at position 2.
+    expect(gotoCursor(sparse, 12)).toBe(2)
+    expect(gotoCursor(sparse, 7)).toBe(0)
+    expect(gotoCursor(sparse, 30)).toBe(3)
+  })
+
+  it('never treats the index as an offset into the array', () => {
+    // If identity ever collapsed back into position, asking for checkpoint 30
+    // on a 4-element list would read past the end (or clamp to the tail).
+    const at = gotoCursor(sparse, 30)
+    expect(at).not.toBeNull()
+    expect(sparse[at as number].index).toBe(30)
+  })
+
+  it('returns null for a checkpoint that is not loaded, so the caller can stay put', () => {
+    // A trace-only row below the record window: the rail may offer it, the
+    // pager cannot page to it. Null is the honest answer — clamping to 0 would
+    // silently show checkpoint 7 while the rail says 3.
+    expect(gotoCursor(sparse, 3)).toBeNull()
+    expect(gotoCursor(sparse, 31)).toBeNull()
+    expect(gotoCursor([], 1)).toBeNull()
+  })
+
+  it('survives a rewind that shifts every position under a stable identity', () => {
+    // Same checkpoints, earlier ones dropped: identity 12 keeps resolving to
+    // whatever position it now occupies.
+    const afterRewind = [{ index: 12 }, { index: 30 }]
+    expect(gotoCursor(afterRewind, 12)).toBe(0)
+    expect(gotoCursor(sparse, 12)).toBe(2)
+  })
+
+  it('is exact: a near-miss index is a miss, not the nearest row', () => {
+    expect(gotoCursor(sparse, 11)).toBeNull()
+    expect(gotoCursor(sparse, 13)).toBeNull()
   })
 })
