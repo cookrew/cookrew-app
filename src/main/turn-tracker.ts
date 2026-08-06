@@ -4,7 +4,6 @@ import { diffOutput } from './ask'
 import { summarizeTurn, TurnSummarizer } from './sous'
 import type { TurnStore } from './turn-store'
 import {
-  MAX_TURN_HISTORY,
   RECOVERED_PROMPT_LABEL,
   TerminalActivity,
   TurnPhase,
@@ -199,11 +198,12 @@ export class TurnTracker extends EventEmitter {
       }
     })
     const stamped = this.stampInFlightScrollLine(terminalId, merged)
+    // No cap. History used to be trimmed because every save rewrote the whole
+    // file; the store appends now, so keeping all of it costs one line per
+    // turn. Conductor had 220 checkpoints trimmed away under the old limit.
     const deduped = dedupePhantomEchoes(stamped)
-    const capped =
-      deduped.length > MAX_TURN_HISTORY ? deduped.slice(deduped.length - MAX_TURN_HISTORY) : deduped
-    this.histories.set(terminalId, capped)
-    this.store?.scheduleSave(terminalId, capped)
+    this.histories.set(terminalId, deduped)
+    this.store?.scheduleSave(terminalId, deduped)
     const t = this.tracked.get(terminalId)
     if (t) this.push(t)
     this.ensureBackfillPump()

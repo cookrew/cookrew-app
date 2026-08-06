@@ -1065,36 +1065,6 @@ body,
   overflow: hidden;
 }
 
-.vi-status {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.vi-status.working {
-  color: var(--vi-working);
-}
-
-.vi-status.waiting {
-  color: var(--vi-wait);
-}
-
-.vi-status.done {
-  color: var(--vi-done);
-}
-
-.vi-status.idle {
-  color: var(--vi-dim);
-  font-weight: 500;
-}
-
 .vi-dot {
   width: 7px;
   height: 7px;
@@ -1206,16 +1176,6 @@ body,
 .card-status.waiting {
   color: var(--rose);
   animation: cr-blink 1.1s steps(2) infinite;
-}
-
-.card-spinner {
-  display: inline-block;
-  color: var(--amber-deep);
-}
-
-.card-clock {
-  color: var(--muted);
-  margin-left: 2px;
 }
 
 .card-screen.waiting {
@@ -1994,7 +1954,8 @@ body,
 /* ---- vibe-island agent card (semantic-zoom thumbnail) ----
    Compact typography is inverse-scaled via --z (set from 1/zoom by
    TerminalNode) so status and summary stay screen-readable when the whole
-   canvas is in view. In .full (zoom >= ~1) --z is 1 (natural sizes). */
+   canvas is in view. At zoom >= ~1 --z is 1 (natural sizes) — one card
+   rendering serves every zoom above the .mini tile. */
 
 .node.vi-card {
   background: #161618;
@@ -2077,11 +2038,6 @@ body,
   flex-direction: column;
   gap: calc(6px * var(--z, 1));
   overflow: hidden;
-}
-
-.vi-card.full .vi-card-body {
-  padding: 10px 12px;
-  gap: 6px;
 }
 
 .vi-ready {
@@ -2184,15 +2140,6 @@ body,
   text-overflow: ellipsis;
 }
 
-.vi-foot {
-  background: #141416;
-  border-top: 1px solid #232327;
-}
-
-.vi-hint {
-  color: #5a5a5f;
-}
-
 /* Status avatar (AgentAvatar.tsx), Suite B minimal coin: the agent's brand
    coin IS the avatar. Only the coin carries status — green rest, orange
    spin while thinking, red rock+blink when waiting, unread dot on replied.
@@ -2248,42 +2195,6 @@ body,
   border-radius: 50%;
   background: var(--vi-wait);
   border: 1.5px solid var(--ink);
-}
-
-/* Full-view header line: coin · name · [STATUS] · latest-turn conclusion. */
-.vi-status-name {
-  flex: 0 0 auto;
-  font-family: var(--font-pixel);
-  font-size: calc(9px * var(--z, 1));
-  letter-spacing: 0.06em;
-}
-
-.vi-status-name.idle,
-.vi-status-name.replied {
-  color: var(--vi-done);
-}
-
-.vi-status-name.thinking {
-  color: var(--vi-working);
-}
-
-.vi-status-name.waiting {
-  color: var(--vi-wait);
-}
-
-.vi-head.full .vi-title {
-  flex: 0 0 auto;
-}
-
-.vi-conclusion {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--font-mono);
-  font-size: calc(11px * var(--z, 1));
-  color: var(--vi-dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 @keyframes ava-spin {

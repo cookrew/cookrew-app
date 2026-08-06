@@ -66,6 +66,8 @@ const api = {
 
   listActivity: () => ipcRenderer.invoke('activity:list'),
   listTurns: (terminalId: string) => ipcRenderer.invoke('turn:history', terminalId),
+  searchTurns: (query: string, limit?: number) =>
+    ipcRenderer.invoke('turn:search', query, limit),
   listTurnsPage: (terminalId: string, request?: unknown) =>
     ipcRenderer.invoke('turn:page', terminalId, request),
   listTrace: (terminalId: string, request?: unknown) =>
