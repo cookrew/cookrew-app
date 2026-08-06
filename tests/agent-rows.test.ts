@@ -341,3 +341,61 @@ describe('buildAgentRows — the order must hold still', () => {
     expect(out.live[0].lastActivityAt).toBe(NOW - 20)
   })
 })
+
+/**
+ * REFACTOR GUARD (checkpoint-as-identity) — what the "N CK" chip claims.
+ *
+ * The row renders turnCount as "{n} CK", i.e. "this agent has n CHECKPOINTS".
+ * buildAgentRows only forwards activity.turnCount, so if the unification
+ * changes that field to mean something adjacent — records RETAINED after a cap
+ * eviction, blocks loaded in the current window, rows merged — the chip keeps
+ * rendering and starts lying. A count that quietly changed meaning is the
+ * exact failure we already hit once, and it cannot be spotted by eye.
+ *
+ * Ordering is pinned above ("the order must hold still"); this pins the count.
+ */
+describe('buildAgentRows — the checkpoint count must stay the checkpoint count', () => {
+  it('forwards the agent’s OWN count, unmodified', () => {
+    const out = buildAgentRows({
+      roster: [entry({ id: 'a' })],
+      activities: { a: activity({ terminalId: 'a', turnCount: 47 }) },
+      now: NOW
+    })
+    expect([...out.live, ...out.quiet][0].turnCount).toBe(47)
+  })
+
+  it('does not cap, window or otherwise shrink a long history', () => {
+    // A 229-checkpoint agent must read 229, not a retained-window size.
+    const out = buildAgentRows({
+      roster: [entry({ id: 'a' })],
+      activities: { a: activity({ terminalId: 'a', turnCount: 229 }) },
+      now: NOW
+    })
+    expect([...out.live, ...out.quiet][0].turnCount).toBe(229)
+  })
+
+  it('is 0 — not undefined, not another agent’s — when the agent has no activity', () => {
+    const out = buildAgentRows({
+      roster: [entry({ id: 'a' }), entry({ id: 'b' })],
+      activities: { b: activity({ terminalId: 'b', turnCount: 12 }) },
+      now: NOW
+    })
+    const rows = [...out.live, ...out.quiet]
+    expect(rows.find((r) => r.id === 'a')?.turnCount).toBe(0)
+    expect(rows.find((r) => r.id === 'b')?.turnCount).toBe(12)
+  })
+
+  it('never borrows a neighbour’s count when ids interleave', () => {
+    const out = buildAgentRows({
+      roster: [entry({ id: 'a' }), entry({ id: 'b' }), entry({ id: 'c' })],
+      activities: {
+        a: activity({ terminalId: 'a', turnCount: 1 }),
+        b: activity({ terminalId: 'b', turnCount: 2 }),
+        c: activity({ terminalId: 'c', turnCount: 3 })
+      },
+      now: NOW
+    })
+    const byId = new Map([...out.live, ...out.quiet].map((r) => [r.id, r.turnCount]))
+    expect([byId.get('a'), byId.get('b'), byId.get('c')]).toEqual([1, 2, 3])
+  })
+})

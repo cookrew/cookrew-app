@@ -72,12 +72,6 @@ export interface MobileServerDeps {
    */
   browserThumbRequested?: (browserId: string) => void
   /**
-   * Lightweight client, served at /lite. Also the TV wall: the television
-   * opens it as `/lite?view=board&density=tv` — one page, three densities,
-   * rather than a second HTML file that drifts from this one.
-   */
-  clientHtmlPath: string
-  /**
    * Override the read-only (wall) token (tests / a caller that owns token
    * lifecycle); a fresh one is minted per run otherwise.
    */
@@ -102,8 +96,8 @@ export interface MobileServerDeps {
  * the renderer swaps IPC for this server's HTTP/SSE endpoints, so the phone
  * gets the full canvas experience. With interactive browsing enabled, browser
  * nodes render the same node-owned headless stream on phone and desktop;
- * flag-off retains the legacy certification fallback. The pre-canvas
- * lightweight client stays available at /lite.
+ * flag-off retains the legacy certification fallback. The phone and the
+ * desktop now share ONE renderer — there is no separate lightweight client.
  */
 export function startMobileServer(deps: MobileServerDeps): void {
   // Phones poll this server while the Mac's display is off; without a power
@@ -284,20 +278,28 @@ async function handle(
   deps: MobileServerDeps
 ): Promise<void> {
   const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
-  const legacyHtml = (): void => {
-    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-    response.end(readFileSync(deps.clientHtmlPath, 'utf8'))
+  /**
+   * The renderer bundle is the phone client. When it is missing, say so
+   * plainly rather than serving something else that looks like the app — a
+   * silent fallback to a different UI is how /lite survived long after
+   * anything pointed at it.
+   */
+  const rendererMissing = (): void => {
+    response.writeHead(503, { 'content-type': 'text/html; charset=utf-8' })
+    response.end(
+      '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">' +
+        '<title>Cookrew — not built</title>' +
+        '<body style="font:16px/1.6 -apple-system,sans-serif;padding:32px;background:#faf8f4;color:#2d2a20">' +
+        '<h1 style="font-size:18px">Renderer not built</h1>' +
+        '<p>The phone client is the renderer bundle. Run <code>npm run build</code> ' +
+        '(or start the dev server) and reload.</p>'
+    )
   }
 
   if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
     // Dev uses Vite's current transforms; packaged/preview builds use out/.
     if (await serveRendererDev(response, deps, url, true)) return
-    if (!serveRendererIndex(response, deps)) legacyHtml()
-    return
-  }
-
-  if (request.method === 'GET' && url.pathname === '/lite') {
-    legacyHtml()
+    if (!serveRendererIndex(response, deps)) rendererMissing()
     return
   }
 

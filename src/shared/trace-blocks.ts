@@ -6,7 +6,7 @@
 // construction. Pure parsers + the identity-keyed pager live here; file IO
 // and caching are main-process (main/trace.ts).
 
-import { CheckpointAssigner } from './session-turns'
+import { CheckpointAssigner, checkpointIdentity } from './session-turns'
 import type { TurnRecord } from './turn'
 
 /** One tool invocation inside a block, TUI-faithful (unified-scroll TODO). */
@@ -138,13 +138,13 @@ export function parseClaudeTrace(lines: string[]): TraceBlock[] {
       if (step.sibling && current !== null) {
         // Same submission — collapse: adopt the continuation identity/prompt,
         // keep the accumulated reply/activity (siblings precede any reply).
-        current.id = step.id.uuid ?? current.id
+        current.id = checkpointIdentity(step.id)
         current.prompt = step.id.prompt
         continue
       }
       const startedAt = timeMs(entry.timestamp, current?.endedAt ?? 0)
       current = {
-        id: step.id.uuid ?? `claude-${step.id.index}`,
+        id: checkpointIdentity(step.id),
         index: step.id.index,
         prompt: step.id.prompt,
         reply: '',

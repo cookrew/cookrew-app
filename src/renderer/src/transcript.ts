@@ -44,7 +44,7 @@ export function warnAbsentBridge(method: string): void {
   warnedAbsentBridges.add(method)
   console.error(
     `[cookrew] bridge method \`${method}\` is absent — feature-detected call degraded ` +
-      'to empty. Not wired in this build (or running in demo).'
+      'to empty. Not wired in this build (or running in demo).',
   )
 }
 
@@ -58,10 +58,7 @@ export function hasTraceApi(): boolean {
  * fetch-all fallback); anchors are block identities (review BLOCK 2). Empty
  * when the API is absent — and LOUD about it (absent-bridge rule).
  */
-export async function fetchTracePage(
-  terminalId: string,
-  request: TraceAnchor
-): Promise<TracePage> {
+export async function fetchTracePage(terminalId: string, request: TraceAnchor): Promise<TracePage> {
   const fn = (cookrew() as unknown as TraceBridge).listTrace
   if (!fn) {
     warnAbsentBridge('listTrace')
@@ -77,12 +74,28 @@ export async function fetchTracePage(
  */
 export function mergeTrace(
   loaded: readonly TraceBlock[],
-  incoming: readonly TraceBlock[]
+  incoming: readonly TraceBlock[],
 ): TraceBlock[] {
   const byIndex = new Map<number, TraceBlock>()
   for (const b of loaded) byIndex.set(b.index, b)
   for (const b of incoming) byIndex.set(b.index, b)
   return [...byIndex.values()].sort((a, b) => a.index - b.index)
+}
+
+/**
+ * Once per session. The clamp firing used to be the normal case; after
+ * unified identity it means records and trace blocks have drifted apart again,
+ * which is worth seeing rather than silently absorbing.
+ */
+let warnedClamped = false
+function warnClamped(dropped: number, ceiling: number): void {
+  if (warnedClamped) return
+  warnedClamped = true
+  console.warn(
+    `[rail] ${dropped} record row(s) numbered past the trace ceiling (T${ceiling}) and were ` +
+      `dropped. Expected zero since unified identity — either the session file is still ` +
+      `flushing, or record and trace indices have diverged again.`,
+  )
 }
 
 /**
@@ -94,7 +107,7 @@ export function mergeTrace(
 export function evictTrace(
   blocks: readonly TraceBlock[],
   anchorIndex: number,
-  max: number
+  max: number,
 ): TraceBlock[] {
   if (blocks.length <= max) return [...blocks]
   const anchorAt = blocks.findIndex((b) => b.index >= anchorIndex)
@@ -238,7 +251,7 @@ export function fractionOfIdentity(identities: readonly number[], id: number | n
  */
 export function firstUnloadedInView(
   visibleIds: readonly number[],
-  loaded: ReadonlySet<number>
+  loaded: ReadonlySet<number>,
 ): number | null {
   for (const id of visibleIds) if (!loaded.has(id)) return id
   return null
@@ -275,7 +288,7 @@ export function coalescingSingleFlight(run: (id: number) => Promise<void>): Sing
     request: (id: number): void => {
       wanted = id
       if (!inFlight) fire()
-    }
+    },
   }
 }
 
@@ -307,18 +320,33 @@ export interface CheckpointRow {
  * when the store starts at T8) render trace-only from the listing. Union by
  * IDENTITY, ascending; records win.
  *
- * ROOT DEPENDENCY (Forge unified-identity, note trace-sourced-context-final):
- * trace-block.index and TurnRecord.index are currently DIFFERENT coordinate
- * systems, so a record can number BEYOND the trace ceiling (record-40 vs
- * trace-38) — producing phantom rail rows that map to no trace block (mispaired
- * titles, dead clicks). Clamp the rail to the TRACE CEILING: drop record-only
- * rows past it, so the rail spans exactly the trace. When the listing is absent
- * we can't know the ceiling, so records are kept as-is. Once Forge's unified
- * contract lands the two coincide and this clamp is a no-op. Pure — unit-tested.
+ * THE CLAMP. Records that number BEYOND the trace ceiling (record-40 vs
+ * trace-38) are phantom rail rows: they map to no trace block, so they carry
+ * mispaired titles and dead clicks. The rail is clamped to the trace ceiling
+ * and record-only rows past it are dropped. With no listing we cannot know the
+ * ceiling, so records are kept as-is.
+ *
+ * The unified-identity contract has landed, and on real data the clamp no
+ * longer fires: across 40 real Claude sessions (4,499 rail rows) zero records
+ * numbered past the ceiling. It is deliberately NOT deleted. Two reasons.
+ *
+ * One, it still guards a live window: a turn the tracker has just recorded can
+ * legitimately lead the session file by the time it takes that file to flush,
+ * so a record CAN sit one ahead of the trace for a moment. Dropping the row is
+ * the right call — a checkpoint you cannot open is worse than one that appears
+ * a beat later.
+ *
+ * Two, scrape-only harnesses have no trace at all, so the ceiling is Infinity
+ * and this is already a no-op for them.
+ *
+ * What changed is that a firing clamp is now a SIGNAL rather than routine. It
+ * warns once per session, because silently masking a coordinate divergence is
+ * exactly how the original bug survived long enough to need a clamp.
+ * Pure apart from that warning — unit-tested.
  */
 export function mergeCheckpointRows(
   records: readonly TurnRecord[],
-  traceIndex: readonly TraceIndexEntry[]
+  traceIndex: readonly TraceIndexEntry[],
 ): CheckpointRow[] {
   const byIndex = new Map<number, CheckpointRow>()
   const ceiling =
@@ -328,11 +356,16 @@ export function mergeCheckpointRows(
   for (const entry of traceIndex) {
     byIndex.set(entry.index, { index: entry.index, record: null, traceTitle: entry.title })
   }
+  let dropped = 0
   for (const record of records) {
-    if (record.index > ceiling) continue // phantom record beyond the trace ceiling
+    if (record.index > ceiling) {
+      dropped++
+      continue // phantom record beyond the trace ceiling
+    }
     const prior = byIndex.get(record.index)
     byIndex.set(record.index, { index: record.index, record, traceTitle: prior?.traceTitle ?? '' })
   }
+  if (dropped > 0) warnClamped(dropped, ceiling)
   return [...byIndex.values()].sort((a, b) => a.index - b.index)
 }
 
@@ -343,7 +376,9 @@ export function mergeCheckpointRows(
  * scrub-preview label share. Pure — unit-tested.
  */
 export function checkpointRowTitle(row: CheckpointRow, titleMode: TitleMode): string {
-  return row.record ? checkpointTitle(row.record, titleMode) : traceRowLabel(row.index, row.traceTitle)
+  return row.record
+    ? checkpointTitle(row.record, titleMode)
+    : traceRowLabel(row.index, row.traceTitle)
 }
 
 /**
@@ -355,11 +390,11 @@ export function checkpointRowTitle(row: CheckpointRow, titleMode: TitleMode): st
  */
 export function scrubPreviewRow(
   rows: readonly CheckpointRow[],
-  fraction: number
+  fraction: number,
 ): CheckpointRow | null {
   const id = identityAtFraction(
     rows.map((r) => r.index),
-    fraction
+    fraction,
   )
   if (id === null) return null
   return rows.find((r) => r.index === id) ?? null
@@ -373,7 +408,7 @@ export function scrubPreviewRow(
  */
 export function scrollFocusState(
   rows: readonly CheckpointRow[],
-  activeIndex: number | null
+  activeIndex: number | null,
 ): { focusedIndex: number | null; listShown: boolean } {
   const row = focusedCheckpoint(rows, activeIndex)
   return { focusedIndex: row?.index ?? null, listShown: row !== null }
@@ -391,7 +426,7 @@ export function scrollFocusState(
 export function neighborWindow(
   rows: readonly CheckpointRow[],
   focusedIndex: number | null,
-  radius: number
+  radius: number,
 ): CheckpointRow[] {
   if (focusedIndex === null) return []
   const at = rows.findIndex((r) => r.index === focusedIndex)
@@ -420,11 +455,15 @@ export function railAnchorTop(fraction: number): string {
  */
 export function fanLayout(
   windowRows: readonly CheckpointRow[],
-  focusedIndex: number
+  focusedIndex: number,
 ): { above: CheckpointRow[]; focused: CheckpointRow | null; below: CheckpointRow[] } {
   const at = windowRows.findIndex((r) => r.index === focusedIndex)
   if (at < 0) return { above: [], focused: null, below: [] }
-  return { above: windowRows.slice(0, at), focused: windowRows[at], below: windowRows.slice(at + 1) }
+  return {
+    above: windowRows.slice(0, at),
+    focused: windowRows[at],
+    below: windowRows.slice(at + 1),
+  }
 }
 
 /**
@@ -435,7 +474,7 @@ export function fanLayout(
  */
 export function focusedCheckpoint(
   rows: readonly CheckpointRow[],
-  activeIndex: number | null
+  activeIndex: number | null,
 ): CheckpointRow | null {
   if (activeIndex === null) return null
   return rows.find((r) => r.index === activeIndex) ?? null
@@ -470,7 +509,7 @@ export function createHoldReveal(onReveal: (index: number) => void, ms: number):
         onReveal(index)
       }, ms)
     },
-    cancel
+    cancel,
   }
 }
 
@@ -481,7 +520,7 @@ export function createHoldReveal(onReveal: (index: number) => void, ms: number):
  */
 export function activeBlockForScroll(
   tops: readonly { index: number; top: number }[],
-  scrollTop: number
+  scrollTop: number,
 ): number | null {
   let active: number | null = null
   for (const b of tops) {
@@ -507,7 +546,7 @@ export function railPointerFraction(
   clientY: number,
   rectTop: number,
   rectHeight: number,
-  inset: number
+  inset: number,
 ): number {
   const track = rectHeight - inset * 2
   if (track <= 0) return 0

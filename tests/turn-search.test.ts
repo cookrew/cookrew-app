@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
+import path from 'node:path'
+import { TurnStore } from '../src/main/turn-store'
 import { matchTurn, searchTurns } from '../src/shared/turn-search'
 import type { TurnRecord } from '../src/shared/turn'
 
@@ -157,5 +161,67 @@ describe('spacing must not change what you find', () => {
       ['x', [turn({ title: 'chrome assistant', prompt: '', reply: undefined })]],
     ])
     expect(searchTurns({ ledger: apart, query: 'homeassistant' })).toEqual([])
+  })
+})
+
+/**
+ * REFACTOR GUARD (checkpoint-as-identity) — search against the REAL ledger.
+ *
+ * Every other test here runs on a hand-built ledger, so it only proves the
+ * matcher is self-consistent. It cannot catch the failure we actually shipped:
+ * search silently missing most of its subject because the corpus says
+ * "home assistant" and the reader normalized differently. That bug looked like
+ * a working search — it returned hits, just 78% too few — so only a corpus with
+ * known content can fail it.
+ *
+ * Thresholds are floors, measured well under today's real numbers (26 hits /
+ * 7 agents over 129 agents at the time of writing) so ordinary ledger churn
+ * cannot flake them, while a regression of that magnitude cannot hide.
+ *
+ * Skips loudly (never silently passes) when the machine has no ledger — CI and
+ * fresh clones have none, and a red test there would say nothing about search.
+ */
+describe('searchTurns — real ledger eval (~/.cookrew/turns)', () => {
+  const dir = path.join(homedir(), '.cookrew', 'turns')
+  const ledger = existsSync(dir) ? new TurnStore().loadAll() : new Map()
+  const CORPUS_MIN_AGENTS = 20
+  const usable = ledger.size >= CORPUS_MIN_AGENTS
+
+  if (!usable) {
+    it.skip(`no local ledger (${ledger.size} agents at ${dir}) — corpus eval not run`, () => {})
+  }
+
+  it.runIf(usable)('finds "homeassistant" across the crew, not just one agent', () => {
+    const hits = searchTurns({ ledger, query: 'homeassistant' })
+    const agents = new Set(hits.map((h) => h.terminalId))
+    // The regression shape: plenty of hits, but collapsed onto one or two
+    // agents because most of the corpus stopped matching.
+    expect(hits.length).toBeGreaterThanOrEqual(20)
+    expect(agents.size).toBeGreaterThanOrEqual(5)
+  })
+
+  it.runIf(usable)('still matches when the corpus writes it as two words', () => {
+    // "home assistant" is how most of the ledger actually spells it; a reader
+    // that only matched the closed-up form lost the majority of the subject.
+    const spaced = searchTurns({ ledger, query: 'home assistant' })
+    expect(spaced.length).toBeGreaterThanOrEqual(20)
+    expect(new Set(spaced.map((h) => h.terminalId)).size).toBeGreaterThanOrEqual(5)
+  })
+
+  it.runIf(usable)('every hit can be opened: it names an agent and a checkpoint', () => {
+    // A match the rail cannot jump to is worse than no match. terminalId must
+    // be a real ledger key and the ordinal must exist in that agent's history.
+    for (const hit of searchTurns({ ledger, query: 'cookrew' }).slice(0, 25)) {
+      const history = ledger.get(hit.terminalId) as TurnRecord[] | undefined
+      expect(history, `hit names unknown agent ${hit.terminalId}`).toBeDefined()
+      expect(
+        history!.some((r: TurnRecord) => r.index === hit.turnIndex),
+        `checkpoint ${hit.turnIndex} not in ${hit.terminalId}'s history`
+      ).toBe(true)
+    }
+  })
+
+  it.runIf(usable)('returns nothing for a term the corpus does not contain', () => {
+    expect(searchTurns({ ledger, query: 'zzzz-not-in-any-checkpoint-zzzz' })).toEqual([])
   })
 })

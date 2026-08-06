@@ -154,6 +154,21 @@ export class TurnTracker extends EventEmitter {
    */
   private histories = new Map<string, TurnRecord[]>()
 
+  /**
+   * Terminals whose DURABLE history is written by the session file, not by
+   * this tracker (step 4: narrow the scrape). SessionTurnSync owns this flag
+   * and sets it only after a reconcile has actually landed — never from the
+   * harness declaration alone.
+   *
+   * That distinction is the whole safety property. Between spawn and the
+   * first session-file write there is a real window in which the file cannot
+   * record anything yet; a terminal flagged on its harness's say-so would
+   * record NOTHING in that window and lose those turns silently. Default is
+   * scrape, so the only way to switch a terminal off the scrape is for
+   * something to have proven the file path works for it.
+   */
+  private fileBacked = new Set<string>()
+
   /** Paced Sous title-backfill pump for historical untitled records. */
   private backfillTimer: NodeJS.Timeout | null = null
   private backfillInFlight = false
@@ -342,10 +357,29 @@ export class TurnTracker extends EventEmitter {
     this.store?.scheduleSave(terminalId, updated)
   }
 
+  /**
+   * Declare where a terminal's durable history comes from. Called by
+   * SessionTurnSync: 'file' after a reconcile lands, 'scrape' when the watch
+   * starts or rebinds (a new session file has to prove itself again) and when
+   * it stops. Everything else — plain shells, scrape-only harnesses, and any
+   * file harness whose session file has not appeared — stays on 'scrape',
+   * which is the default and needs no call.
+   */
+  setHistorySource(terminalId: string, source: 'file' | 'scrape'): void {
+    if (source === 'file') this.fileBacked.add(terminalId)
+    else this.fileBacked.delete(terminalId)
+  }
+
+  /** True when the session file owns this terminal's durable history. */
+  private writesFromFile(terminalId: string): boolean {
+    return this.fileBacked.has(terminalId)
+  }
+
   /** Forget a removed terminal's turns (node deletion, not detach). */
   clearHistory(terminalId: string): void {
     this.histories.delete(terminalId)
     this.store?.remove(terminalId)
+    this.fileBacked.delete(terminalId)
   }
 
   /** Write out pending history saves now (app quit). */
@@ -669,6 +703,19 @@ export class TurnTracker extends EventEmitter {
       this.push(t)
       return
     }
+    // STEP 4: the session file is this terminal's record. Appending here would
+    // be a second writer of the same exchange — historically it landed a
+    // uuid-less duplicate that dedupePhantomEchoes then had to throw away.
+    // The live turn above (phase, glance, reply, pendingInput) is still ours;
+    // only the durable write belongs to the file. The Sous title does NOT get
+    // dropped: it lands on the record the reconcile already created for this
+    // turn, and if that record has not arrived yet the backfill pump fills it.
+    if (this.writesFromFile(id)) {
+      this.push(t)
+      const reconciled = this.liveTurnRecordIndex(t)
+      if (reconciled !== null) void this.finalizeTitle(t, reconciled)
+      return
+    }
     const appended = appendTurnRecord(this.history(id), {
       prompt: t.prompt ?? RECOVERED_PROMPT_LABEL,
       reply: t.reply,
@@ -689,6 +736,19 @@ export class TurnTracker extends EventEmitter {
     if (deduped.some((r) => r.index === newRecord.index)) {
       void this.finalizeTitle(t, newRecord.index)
     }
+  }
+
+  /**
+   * The reconciled record covering the turn that just finished, when it is
+   * already there and still untitled — the target for the final Sous pass on
+   * a file-backed terminal. Null when the reconcile has not caught up yet
+   * (the backfill pump titles it on a later tick) or the record is titled.
+   */
+  private liveTurnRecordIndex(t: TrackedTerminal): number | null {
+    const history = this.history(t.session.terminalId)
+    const last = history[history.length - 1]
+    if (!last || last.title !== undefined) return null
+    return promptsMatch(t.prompt ?? '', last.prompt) ? last.index : null
   }
 
   private stopTurnTimers(t: TrackedTerminal): void {
