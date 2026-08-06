@@ -190,6 +190,9 @@ export function createRemoteApi(): CookrewApi {
       req(`/api/agents/${id}/restore`, 'POST', { checkpointIndex }),
     undoRestore: (id) => req(`/api/agents/${id}/restore/undo`, 'POST'),
     listTurns: (terminalId) => req<TurnRecord[]>(`/api/terminal/${terminalId}/turns`),
+    // Checkpoint search is desktop-only for now: the phone has no /api route
+    // for it yet, and a silently-empty result would read as "no matches".
+    searchTurns: undefined,
     listTraceIndex: (terminalId) => req(`/api/terminal/${terminalId}/trace/index`),
     listTraceMarkers: (terminalId) => req(`/api/terminal/${terminalId}/trace/markers`),
     listTrace: async (terminalId, request) => {

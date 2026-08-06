@@ -1361,3 +1361,28 @@
   background: var(--cream-lo);
   border: 1.5px solid var(--line);
 }
+
+/* The checkpoint that matched — why this row is in the results. */
+.ags-hit {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 2px;
+  padding: 3px 6px;
+  background: var(--amber-soft);
+  border-left: 2px solid var(--amber-deep);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ags-hit-ck {
+  flex: 0 0 auto;
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  color: var(--amber-deep);
+}

@@ -12,6 +12,7 @@ import type {
   RestoreResult,
 } from "../../shared/model";
 import type { TerminalActivity, TurnRecord } from "../../shared/turn";
+import type { TurnMatch } from "../../shared/turn-search";
 import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
 import type { BoardRow, BoardSummary } from "../../shared/board";
 
@@ -110,6 +111,12 @@ export interface CookrewApi {
   undoRestore?: (id: string) => Promise<RestoreResult>;
   /** Completed turns of a terminal (oldest first) for the card pager. */
   listTurns: (terminalId: string) => Promise<TurnRecord[]>;
+  /**
+   * Checkpoint search across EVERY agent's turn ledger, run in main. Returns
+   * matches with a capped snippet — never turn bodies. Optional: feature-detect,
+   * older bridges lack it.
+   */
+  searchTurns?: (query: string, limit?: number) => Promise<TurnMatch[]>;
   /**
    * Context-view v2 transcript windows: paged turns with FULL prompt+reply
    * bodies. Optional — demo lacks it; the transcript feature-detects.

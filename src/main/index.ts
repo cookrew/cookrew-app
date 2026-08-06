@@ -16,6 +16,7 @@ import {
   tmuxProbeDeps
 } from './board-index'
 import { loadOrCreateReadOnlyToken } from './readonly-token'
+import { searchTurns } from '../shared/turn-search'
 import { summarizeTurn } from './sous'
 import { startSocketServer } from './socket-server'
 import { RoutineScheduler } from './routines'
@@ -76,8 +77,9 @@ const dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const store = new WorkspaceStore()
 const ptys = new PtyManager()
-// Held rather than inlined: the Activity Board reads the WHOLE ledger
-// (turnStore.loadAll()) to span workspaces the tracker cannot see.
+// Held rather than inlined: both the Activity Board and checkpoint search read
+// the WHOLE ledger (turnStore.loadAll()) to span workspaces the tracker cannot
+// see. A second TurnStore would be a second cache serving stale turns.
 const turnStore = new TurnStore()
 // Read-only SCOPE token, persisted 0600 (~/.cookrew/wall-token). Authorizes
 // GETs on the same routes as the pairing token — not a separate interface.
@@ -1279,6 +1281,11 @@ function registerIpc(handlers: RestoreHandlers): void {
 
   // Turn history + fork-from-turn for the canvas cards.
   ipcMain.handle('turn:history', (_e, terminalId: string) => turns.history(terminalId))
+  // Checkpoint search: scan the whole ledger in MAIN and return matches with a
+  // capped snippet. Turn bodies never cross the wire.
+  ipcMain.handle('turn:search', (_e, query: string, limit?: number) =>
+    searchTurns({ ledger: turnStore.loadAll(), query, limit })
+  )
   // Context-view v2: paged transcript windows with full prompt+reply bodies.
   ipcMain.handle('turn:page', (_e, terminalId: string, request?: TurnPageRequest) =>
     pageTurns(turns.history(terminalId), request ?? {})

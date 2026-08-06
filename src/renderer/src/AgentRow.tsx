@@ -2,6 +2,7 @@ import { AgentAvatar } from './nodes/AgentAvatar'
 import { TurnView } from './nodes/TurnView'
 import { RoleAvatar } from './nodes/RoleAvatar'
 import type { AgentPhase, AgentRow as Row } from './agent-rows'
+import type { TurnMatch } from '../../shared/turn-search'
 import type { TurnPhase } from '../../shared/turn'
 
 /**
@@ -45,6 +46,7 @@ export function AgentRow({
   selected,
   recovering,
   canRecover,
+  hit = null,
   selectable = false,
   onOpen,
   onRecover,
@@ -54,6 +56,8 @@ export function AgentRow({
   selected: boolean
   recovering: boolean
   canRecover: boolean
+  /** Checkpoint that matched the search, when the hit was in history. */
+  hit?: TurnMatch | null
   /** Edit mode: the row ticks instead of handing off to the canvas. */
   selectable?: boolean
   onOpen: (row: Row) => void
@@ -104,6 +108,13 @@ export function AgentRow({
             The turn block is the SAME component the canvas card renders. */}
         <span className="ags-turn">
           {row.turn && <TurnView model={row.turn} />}
+          {/* Why this row is in the results: the checkpoint that matched.
+              Clicking through lands on that turn, not just on the agent. */}
+          {hit && (
+            <span className="ags-hit" title={hit.snippet}>
+              <span className="ags-hit-ck">T{hit.turnIndex}</span> {hit.snippet}
+            </span>
+          )}
           <span className="ags-meta">
             <span className="ags-phase">{PHASE_LABEL[row.phase]}</span>
             {row.turnCount > 0 && <span className="ags-ck">{row.turnCount} CK</span>}

@@ -8,6 +8,7 @@ import { AgentRow } from './AgentRow'
 import { buildAgentRows, type AgentRow as Row } from './agent-rows'
 import { advanceClock, type ActivityClock } from './activity-clock'
 import { searchAgents } from './agent-search'
+import type { TurnMatch } from '../../shared/turn-search'
 import {
   EMPTY_FILTER,
   applyFilter,
@@ -61,6 +62,8 @@ export function RosterPanel({
    * covers the loaded workspace alone — so it both ranks and filters.
    */
   const [events, setEvents] = useState<FacetEvent[]>([])
+  /** Checkpoint hits from the whole ledger, keyed by agent. */
+  const [hits, setHits] = useState<Map<string, TurnMatch>>(() => new Map())
   // One clock for every relative label — 228 rows must not each own a timer.
   const [now, setNow] = useState(() => Date.now())
   // When each agent last DID something, as opposed to when the tracker last
@@ -87,10 +90,16 @@ export function RosterPanel({
   // Searching looks through the WHOLE crew: a quiet agent you are hunting for
   // by name must not be hidden behind a disclosure.
   const searching = query.trim().length > 0
-  const results = useMemo(
-    () => (searching ? searchAgents([...live, ...quiet], query) : []),
-    [searching, live, quiet, query],
-  )
+  const results = useMemo(() => {
+    if (!searching) return []
+    const rows = [...live, ...quiet]
+    const direct = searchAgents(rows, query)
+    // An agent whose only match is in its HISTORY still belongs in the results;
+    // searchAgents only sees what the row currently displays.
+    const seen = new Set(direct.map((r) => r.id))
+    const historical = rows.filter((r) => !seen.has(r.id) && hits.has(r.id))
+    return [...direct, ...historical]
+  }, [searching, live, quiet, query, hits])
   const activeCount = roster.filter((a) => a.active).length
   /** Id of the row whose recover is in flight (disables its button). */
   const [recovering, setRecovering] = useState<string | null>(null)
@@ -122,6 +131,33 @@ export function RosterPanel({
     const timer = setInterval(() => setNow(Date.now()), 60_000)
     return () => clearInterval(timer)
   }, [])
+
+  /**
+   * Checkpoint search runs in MAIN over every agent's turn ledger — the only
+   * corpus that is both cross-workspace and small enough to scan. Debounced,
+   * because it reads ~3 MB; only snippets come back, never turn bodies.
+   */
+  useEffect(() => {
+    const search = cookrew().searchTurns
+    if (typeof search !== 'function' || !searching) {
+      setHits(new Map())
+      return
+    }
+    const timer = setTimeout(() => {
+      void search(query, 200)
+        .then((matches) => {
+          // Best hit per agent — the row shows one line, not a thread.
+          const best = new Map<string, TurnMatch>()
+          for (const match of matches) {
+            const seen = best.get(match.terminalId)
+            if (!seen || match.score > seen.score) best.set(match.terminalId, match)
+          }
+          setHits(best)
+        })
+        .catch(() => undefined)
+    }, 150)
+    return () => clearTimeout(timer)
+  }, [query, searching])
 
   // One read of the log on open, then follow the live stream. Metadata only —
   // no conversation text ever crosses this wire (main/event-log.ts).
@@ -182,6 +218,7 @@ export function RosterPanel({
       selected={editing ? picked.has(row.id) : selected === row.id}
       recovering={recovering === row.id}
       canRecover={!editing && canRecover && recoverEligible(row)}
+      hit={hits.get(row.id) ?? null}
       selectable={editing}
       onOpen={editing ? toggle : open}
       onRecover={recover}
@@ -258,8 +295,8 @@ export function RosterPanel({
           <div className="roster-list">
             {results.length === 0 ? (
               <div className="tf-role-note">
-                Nothing matches “{query.trim()}”. Conversation text is searched for the loaded
-                workspace only.
+                Nothing matches “{query.trim()}” — in any agent's name, current task, or checkpoint
+                history.
               </div>
             ) : (
               results.map(renderRow)
