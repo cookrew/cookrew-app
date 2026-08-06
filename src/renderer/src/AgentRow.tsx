@@ -45,6 +45,7 @@ export function AgentRow({
   selected,
   recovering,
   canRecover,
+  selectable = false,
   onOpen,
   onRecover,
 }: {
@@ -53,12 +54,17 @@ export function AgentRow({
   selected: boolean
   recovering: boolean
   canRecover: boolean
+  /** Edit mode: the row ticks instead of handing off to the canvas. */
+  selectable?: boolean
   onOpen: (row: Row) => void
   onRecover: (row: Row) => void
 }): React.JSX.Element {
   return (
     <div
-      className={`ags-row${selected ? ' selected' : ''}${row.active ? '' : ' inactive'}`}
+      className={`ags-row${selected ? ' selected' : ''}${row.active ? '' : ' inactive'}${
+        selectable ? ' selectable' : ''
+      }`}
+      aria-pressed={selectable ? selected : undefined}
       data-phase={row.phase}
       role="button"
       tabIndex={0}
@@ -71,6 +77,11 @@ export function AgentRow({
         }
       }}
     >
+      {selectable && (
+        <span className={`ags-tick${selected ? ' on' : ''}`} aria-hidden="true">
+          {selected ? '✓' : ''}
+        </span>
+      )}
       <span className="ags-avatar">
         {row.role ? (
           <RoleAvatar name={row.role} className="ags-role-avatar" />

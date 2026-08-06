@@ -944,6 +944,13 @@
 .ags-row {
   display: grid;
   grid-template-columns: auto 1fr;
+}
+
+.ags-row.selectable {
+  grid-template-columns: auto auto 1fr;
+}
+
+.ags-row {
   align-items: start;
   gap: 9px;
   padding: 8px 10px;
@@ -1268,4 +1275,76 @@
 .roster-quiet:hover {
   background: var(--amber-soft);
   color: var(--ink);
+}
+
+/* ---- search: the dock's front door ---- */
+
+.roster-search {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  background: var(--cream-lo);
+  border: 1.5px solid var(--line);
+}
+
+.roster-search-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+
+.roster-search-input::placeholder {
+  color: var(--dim);
+}
+
+/* ---- edit mode ---- */
+
+.ags-row.selectable {
+  cursor: pointer;
+}
+
+.ags-tick {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  color: var(--ink);
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+}
+
+.ags-tick.on {
+  background: var(--amber);
+}
+
+.roster-edit-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  background: var(--cream-lo);
+  border: 1.5px solid var(--line);
+}
+
+.roster-edit-count {
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.roster-edit-spacer {
+  flex: 1;
 }

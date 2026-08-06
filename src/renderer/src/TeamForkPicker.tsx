@@ -1,10 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type {
-  AgentRole,
-  TeamForkSpec,
-  TeamMeta,
-  WorkspaceState
-} from '../../shared/model'
+import type { AgentRole, TeamForkSpec, TeamMeta, WorkspaceState } from '../../shared/model'
 import { cookrew, isRemoteMode } from './api'
 import { CrIcon, type CrIconName } from './icons'
 import { RoleAvatar } from './nodes/RoleAvatar'
@@ -16,7 +11,7 @@ import './team-fork.css'
 const KIND_ICON: Record<string, CrIconName> = {
   terminal: 'agent',
   note: 'note',
-  browser: 'browser'
+  browser: 'browser',
 }
 
 function dateLabel(epochMs: number): string {
@@ -24,7 +19,7 @@ function dateLabel(epochMs: number): string {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
-    minute: '2-digit'
+    minute: '2-digit',
   })
 }
 
@@ -39,14 +34,23 @@ function dateLabel(epochMs: number): string {
  */
 export function TeamForkPicker({
   workspace,
-  onClose
+  seed,
+  onClose,
 }: {
   workspace: WorkspaceState
+  /**
+   * Terminal ids to arrive pre-ticked, so the agents dock can hand a selection
+   * straight into the fork sheet. Defaults to the whole workspace, which is how
+   * it has always opened from the header.
+   */
+  seed?: ReadonlySet<string>
   onClose: () => void
 }): React.JSX.Element {
   const nodes = workspace.nodes
-  const [included, setIncluded] = useState<ReadonlySet<string>>(
-    () => new Set(nodes.map((n) => n.id))
+  const [included, setIncluded] = useState<ReadonlySet<string>>(() =>
+    seed && seed.size > 0
+      ? new Set(nodes.filter((n) => seed.has(n.id)).map((n) => n.id))
+      : new Set(nodes.map((n) => n.id)),
   )
   const [choices, setChoices] = useState<Record<string, TerminalChoice>>({})
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
@@ -138,7 +142,7 @@ export function TeamForkPicker({
         choices: [],
         fromSavedTeam: source,
         dirs: forkDirs,
-        worktree: useWorktree
+        worktree: useWorktree,
       }
     }
     const terminals = nodes.filter((n) => n.kind === 'terminal' && included.has(n.id))
@@ -157,9 +161,9 @@ export function TeamForkPicker({
           ...(choice.mode === 'assembled' ? { turnIndexes: choice.turnIndexes } : {}),
           ...(choice.mode === 'role'
             ? { roleName: (t as { role?: string | null }).role ?? undefined }
-            : {})
+            : {}),
         }
-      })
+      }),
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, forkName, nodes, included, choices, forkDirs, targetDirs, useWorktree])
@@ -171,7 +175,7 @@ export function TeamForkPicker({
             n.kind === 'terminal' &&
             included.has(n.id) &&
             choiceOf(n.id).mode === 'assembled' &&
-            choiceOf(n.id).turnIndexes.length === 0
+            choiceOf(n.id).turnIndexes.length === 0,
         )
       : undefined
   const nothingIncluded = source === 'live' && spec.nodeIds.length === 0
@@ -199,7 +203,10 @@ export function TeamForkPicker({
         setBusy(null)
         setSavedFlash(meta.name)
         setSaveName('')
-        void cookrew().teamList().then(setTeams).catch(() => undefined)
+        void cookrew()
+          .teamList()
+          .then(setTeams)
+          .catch(() => undefined)
       })
       .catch((err: unknown) => {
         setBusy(null)
@@ -222,8 +229,8 @@ export function TeamForkPicker({
 
         {apiMissing && (
           <div className="tf-banner">
-            TEAM API UNAVAILABLE — the picker previews the fork spec; forking is disabled
-            until the app exposes the team API.
+            TEAM API UNAVAILABLE — the picker previews the fork spec; forking is disabled until the
+            app exposes the team API.
           </div>
         )}
 
@@ -390,7 +397,11 @@ export function TeamForkPicker({
                   onChange={(e) => setDirDraft(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && addForkDir(dirDraft)}
                 />
-                <button className="cr-btn sm" disabled={!dirDraft.trim()} onClick={() => addForkDir(dirDraft)}>
+                <button
+                  className="cr-btn sm"
+                  disabled={!dirDraft.trim()}
+                  onClick={() => addForkDir(dirDraft)}
+                >
                   ADD
                 </button>
               </>

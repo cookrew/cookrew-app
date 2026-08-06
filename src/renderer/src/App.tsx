@@ -562,7 +562,9 @@ function Canvas(): React.JSX.Element {
         {teamPickerOpen && workspace && (
           <TeamForkPicker workspace={workspace} onClose={() => setTeamPickerOpen(false)} />
         )}
-        {rosterOpen && <RosterPanel onClose={() => setRosterOpen(false)} />}
+        {rosterOpen && (
+          <RosterPanel workspace={workspace} onClose={() => setRosterOpen(false)} />
+        )}
         {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
         <BrowserLayer
           browsers={browsers}

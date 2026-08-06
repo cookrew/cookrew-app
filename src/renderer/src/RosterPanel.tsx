@@ -7,9 +7,12 @@ import { hasRegistry, useRoster, type AgentRegistryEntry } from './agent-registr
 import { AgentRow } from './AgentRow'
 import { buildAgentRows, type AgentRow as Row } from './agent-rows'
 import { advanceClock, type ActivityClock } from './activity-clock'
+import { searchAgents } from './agent-search'
+import { TeamForkPicker } from './TeamForkPicker'
 import { useCanvasUi } from './canvas-ui'
 import { recoverEligible, recoverErrorToast, recoverToastFor, type RecoverToast } from './recover'
 import { dirLabel } from './workspace-v2'
+import type { WorkspaceState } from '../../shared/model'
 import './agent-roster.css'
 
 /** Once-only loud warn when the bridge lacks recoverAgent. */
@@ -25,16 +28,40 @@ const RECOVER_TOAST_MS = 5000
  * mock from the active workspace otherwise). Phone-friendly sheet. Fresco
  * owns visual polish; this owns structure + data.
  */
-export function RosterPanel({ onClose }: { onClose: () => void }): React.JSX.Element {
+export function RosterPanel({
+  workspace,
+  onClose,
+}: {
+  /** Loaded workspace — what FORK TEAM can act on. Null before it loads. */
+  workspace: WorkspaceState | null
+  onClose: () => void
+}): React.JSX.Element {
   const roster = useRoster()
   const { activities, zoomToNode } = useCanvasUi()
   const [showQuiet, setShowQuiet] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  /** Edit mode: rows become checkboxes and the footer becomes team actions. */
+  const [editing, setEditing] = useState(false)
+  const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set())
+  const [forkOpen, setForkOpen] = useState(false)
   // One clock for every relative label — 228 rows must not each own a timer.
   const [now, setNow] = useState(() => Date.now())
+  // When each agent last DID something, as opposed to when the tracker last
+  // re-serialized it. This is what the ranking uses; updatedAt advances four
+  // times a second and reordered the list continuously (activity-clock.ts).
+  const clock = useRef<ActivityClock>({})
+  clock.current = advanceClock(clock.current, activities, Date.now())
   const { live, quiet } = useMemo(
-    () => buildAgentRows({ roster, activities, now }),
+    () => buildAgentRows({ roster, activities, now, changedAt: clock.current }),
     [roster, activities, now],
+  )
+  // Searching looks through the WHOLE crew: a quiet agent you are hunting for
+  // by name must not be hidden behind a disclosure.
+  const searching = query.trim().length > 0
+  const results = useMemo(
+    () => (searching ? searchAgents([...live, ...quiet], query) : []),
+    [searching, live, quiet, query],
   )
   const activeCount = roster.filter((a) => a.active).length
   /** Id of the row whose recover is in flight (disables its button). */
@@ -86,6 +113,13 @@ export function RosterPanel({ onClose }: { onClose: () => void }): React.JSX.Ele
     }
   }
 
+  const toggle = (row: Row): void => {
+    const next = new Set(picked)
+    if (next.has(row.id)) next.delete(row.id)
+    else next.add(row.id)
+    setPicked(next)
+  }
+
   const recover = (row: Row): void => {
     const fn = cookrew().recoverAgent
     if (!fn || recovering !== null) return
@@ -98,6 +132,20 @@ export function RosterPanel({ onClose }: { onClose: () => void }): React.JSX.Ele
       .finally(() => setRecovering(null))
   }
 
+  const renderRow = (row: Row): React.JSX.Element => (
+    <AgentRow
+      key={row.id}
+      row={row}
+      now={now}
+      selected={editing ? picked.has(row.id) : selected === row.id}
+      recovering={recovering === row.id}
+      canRecover={!editing && canRecover && recoverEligible(row)}
+      selectable={editing}
+      onOpen={editing ? toggle : open}
+      onRecover={recover}
+    />
+  )
+
   return (
     <div className="tf-scrim" onClick={onClose}>
       <div className="tf-panel roster-panel" onClick={(e) => e.stopPropagation()}>
@@ -105,11 +153,49 @@ export function RosterPanel({ onClose }: { onClose: () => void }): React.JSX.Ele
           <CrIcon name="agent" />
           <span className="tf-title">ALL AGENTS</span>
           <span className="roster-count">
-            {activeCount} active · {roster.length} total
+            {searching
+              ? `${results.length} of ${roster.length}`
+              : `${activeCount} active · ${roster.length} total`}
           </span>
+          <button
+            className={`cr-btn sm${editing ? ' on' : ''}`}
+            title="Select agents to save or fork as a team"
+            onClick={() => {
+              setEditing(!editing)
+              setPicked(new Set())
+            }}
+          >
+            {editing ? 'DONE' : 'SELECT'}
+          </button>
           <button className="cr-btn sm icon tf-close" title="Close" onClick={onClose}>
             <CrIcon name="close" />
           </button>
+        </div>
+
+        {/* Search ranks the crew by anything you remember — who they are, or
+            what was said. Conversation text covers the LOADED workspace only;
+            the note below says so rather than letting it look complete. */}
+        <div className="roster-search">
+          <CrIcon name="search" />
+          <input
+            className="roster-search-input"
+            type="search"
+            value={query}
+            placeholder="Search agents, tasks, replies…"
+            autoFocus
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && query) {
+                e.stopPropagation()
+                setQuery('')
+              }
+            }}
+          />
+          {searching && (
+            <button className="cr-btn sm icon" title="Clear" onClick={() => setQuery('')}>
+              <CrIcon name="close" />
+            </button>
+          )}
         </div>
 
         {!hasRegistry() && (
@@ -121,44 +207,53 @@ export function RosterPanel({ onClose }: { onClose: () => void }): React.JSX.Ele
 
         {roster.length === 0 ? (
           <div className="tf-role-note">No agents yet.</div>
+        ) : searching ? (
+          <div className="roster-list">
+            {results.length === 0 ? (
+              <div className="tf-role-note">
+                Nothing matches “{query.trim()}”. Conversation text is searched for the loaded
+                workspace only.
+              </div>
+            ) : (
+              results.map(renderRow)
+            )}
+          </div>
         ) : (
           <div className="roster-list">
-            {live.map((row) => (
-              <AgentRow
-                key={row.id}
-                row={row}
-                now={now}
-                selected={selected === row.id}
-                recovering={recovering === row.id}
-                canRecover={canRecover && recoverEligible(row)}
-                onOpen={open}
-                onRecover={recover}
-              />
-            ))}
+            {live.map(renderRow)}
 
             {/* The 228 collapse: agents that have never run a turn carry no
                 information, so they fold behind one row instead of filling
                 the panel. */}
             {quiet.length > 0 && (
               <>
-                {showQuiet &&
-                  quiet.map((row) => (
-                    <AgentRow
-                      key={row.id}
-                      row={row}
-                      now={now}
-                      selected={selected === row.id}
-                      recovering={recovering === row.id}
-                      canRecover={canRecover && recoverEligible(row)}
-                      onOpen={open}
-                      onRecover={recover}
-                    />
-                  ))}
+                {showQuiet && quiet.map(renderRow)}
                 <button className="roster-quiet" onClick={() => setShowQuiet(!showQuiet)}>
                   {showQuiet ? `HIDE ${quiet.length} QUIET` : `+ ${quiet.length} QUIET · SHOW`}
                 </button>
               </>
             )}
+          </div>
+        )}
+
+        {/* Edit mode footer: the fork sheet is the existing TeamForkPicker,
+            handed this selection — not a second implementation of forking. */}
+        {editing && (
+          <div className="roster-edit-bar">
+            <span className="roster-edit-count">{picked.size} SELECTED</span>
+            <span className="roster-edit-spacer" />
+            <button
+              className="cr-btn sm"
+              disabled={picked.size === 0 || !workspace}
+              title={
+                workspace
+                  ? 'Fork the selected agents into a new workspace'
+                  : 'Forking needs a loaded workspace'
+              }
+              onClick={() => setForkOpen(true)}
+            >
+              FORK TEAM
+            </button>
           </div>
         )}
 
@@ -168,6 +263,10 @@ export function RosterPanel({ onClose }: { onClose: () => void }): React.JSX.Ele
           <div className="roster-toast" data-tone={toast.tone} role="status" aria-live="polite">
             {toast.text}
           </div>
+        )}
+
+        {forkOpen && workspace && (
+          <TeamForkPicker workspace={workspace} seed={picked} onClose={() => setForkOpen(false)} />
         )}
       </div>
     </div>
