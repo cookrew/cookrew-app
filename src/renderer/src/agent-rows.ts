@@ -29,7 +29,11 @@ export interface AgentRow {
   /** Bound from the SAME selector the canvas card uses. */
   turn: TurnViewModel | null
   turnCount: number
-  /** THE sort key. Descending. */
+  /**
+   * THE sort key, descending. Start time while a turn is in flight, last
+   * output once it is done — never a value that moves on its own, or the list
+   * reorders under the pointer (see sortKeyOf).
+   */
   lastActivityAt: number
 }
 
@@ -75,6 +79,22 @@ function hasTurn(activity: TerminalActivity | undefined): boolean {
   return (activity.lines ?? []).some((l) => l.trim().length > 0)
 }
 
+/**
+ * THE sort key, and it must hold still. `updatedAt` is stamped at
+ * serialization time (turn-tracker.activityOf) and the tracker pushes every
+ * 250ms while an agent works, so it advances four times a second whether or
+ * not anything changed — ordering on it made the list churn continuously.
+ *
+ * An in-flight turn therefore ranks by when it STARTED, which is fixed for the
+ * turn's whole life. A finished one ranks by its last output, which has
+ * already stopped moving.
+ */
+function sortKeyOf(activity: TerminalActivity | undefined): number | null {
+  if (!activity) return null
+  const inTurn = activity.phase === 'thinking' || activity.phase === 'waiting'
+  return (inTurn ? activity.turnStartedAt : null) ?? activity.updatedAt
+}
+
 function phaseOf(activity: TerminalActivity | undefined, active: boolean): AgentPhase {
   if (!active) return 'offline'
   if (!activity) return 'quiet'
@@ -108,7 +128,7 @@ function rowOf(entry: AgentRegistryEntry, activity: TerminalActivity | undefined
     phase: phaseOf(activity, entry.active),
     turn: hasTurn(activity) ? turnViewOf(activity) : null,
     turnCount: activity?.turnCount ?? 0,
-    lastActivityAt: activity?.updatedAt ?? entry.spawnedAt,
+    lastActivityAt: sortKeyOf(activity) ?? entry.spawnedAt,
   }
 }
 

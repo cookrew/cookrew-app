@@ -985,16 +985,28 @@
   opacity: 1;
 }
 
+/* Avatar and glyphs stay exactly the size the roster has always used. The
+   shared avatar sizes itself as calc(24px * var(--z)) so it can inverse-scale
+   with canvas zoom; the panel has no zoom, so --z is pinned to 1 here and the
+   box is fixed — it can never inherit a scale from a future ancestor. */
 .ags-avatar {
   flex: 0 0 auto;
   display: inline-flex;
   width: 24px;
   height: 24px;
+  --z: 1;
 }
 
+.ags-avatar .vi-avatar,
 .ags-role-avatar {
   width: 24px;
   height: 24px;
+}
+
+.ags-turn .vi-tool-glyph .cr-icon {
+  width: 11px;
+  height: 11px;
+  vertical-align: -2px;
 }
 
 .ags-body {

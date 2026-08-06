@@ -17,7 +17,7 @@ function entry(over: Partial<AgentRegistryEntry> = {}): AgentRegistryEntry {
     spawnedAt: NOW - 600_000,
     orch: false,
     active: true,
-    ...over
+    ...over,
   }
 }
 
@@ -30,12 +30,16 @@ function activity(over: Partial<TerminalActivity> = {}): TerminalActivity {
     reply: null,
     title: 'Wire the sidebar',
     lines: [],
-    glance: { status: 'Herding… (esc to interrupt · 3s)', tools: ['Read a.ts', 'Edit b.ts'], message: null },
+    glance: {
+      status: 'Herding… (esc to interrupt · 3s)',
+      tools: ['Read a.ts', 'Edit b.ts'],
+      message: null,
+    },
     pendingInput: null,
     turnCount: 12,
     turnStartedAt: NOW - 30_000,
     updatedAt: NOW - 1_000,
-    ...over
+    ...over,
   } as TerminalActivity
 }
 
@@ -44,7 +48,7 @@ describe('buildAgentRows — the roster is the spine', () => {
     const out = buildAgentRows({
       roster: [entry({ id: 'a' }), entry({ id: 'b' })],
       activities: {},
-      now: NOW
+      now: NOW,
     })
     expect([...out.live, ...out.quiet].map((r) => r.id).sort()).toEqual(['a', 'b'])
   })
@@ -53,7 +57,7 @@ describe('buildAgentRows — the roster is the spine', () => {
     const out = buildAgentRows({
       roster: [entry({ id: 't7' })],
       activities: { t7: activity({ terminalId: 't7' }) },
-      now: NOW
+      now: NOW,
     })
     expect(out.live[0].turn?.title).toBe('Wire the sidebar')
   })
@@ -62,7 +66,7 @@ describe('buildAgentRows — the roster is the spine', () => {
     const out = buildAgentRows({
       roster: [entry({ id: 'mine' })],
       activities: { other: activity({ terminalId: 'other' }) },
-      now: NOW
+      now: NOW,
     })
     expect(out.quiet.find((r) => r.id === 'mine')?.turn).toBeNull()
   })
@@ -74,7 +78,8 @@ describe('buildAgentRows — phase', () => {
     return [...out.live, ...out.quiet][0].phase
   }
 
-  it('maps a thinking agent to working', () => expect(phaseOf({ phase: 'thinking' })).toBe('working'))
+  it('maps a thinking agent to working', () =>
+    expect(phaseOf({ phase: 'thinking' })).toBe('working'))
   it('maps a waiting agent to waiting', () => expect(phaseOf({ phase: 'waiting' })).toBe('waiting'))
   it('maps a replied agent to done', () => expect(phaseOf({ phase: 'replied' })).toBe('done'))
 
@@ -96,7 +101,7 @@ describe('buildAgentRows — the turn the row shows', () => {
     const out = buildAgentRows({
       roster: [entry()],
       activities: { t1: activity({ prompt: '\n\n  restart main  \nsecond line' }) },
-      now: NOW
+      now: NOW,
     })
     expect(out.live[0].turn?.ask).toBe('restart main')
   })
@@ -115,7 +120,7 @@ describe('buildAgentRows — the turn the row shows', () => {
     const out = buildAgentRows({
       roster: [entry()],
       activities: { t1: activity({ phase: 'idle', reply: 'done' }) },
-      now: NOW
+      now: NOW,
     })
     expect(out.live[0].turn?.tools).toEqual([])
   })
@@ -124,7 +129,7 @@ describe('buildAgentRows — the turn the row shows', () => {
     const out = buildAgentRows({
       roster: [entry()],
       activities: { t1: activity({ phase: 'replied', reply: 'all 970 tests pass' }) },
-      now: NOW
+      now: NOW,
     })
     expect(out.live[0].turn?.latest?.text).toBe('all 970 tests pass')
   })
@@ -133,7 +138,7 @@ describe('buildAgentRows — the turn the row shows', () => {
     const out = buildAgentRows({
       roster: [entry()],
       activities: { t1: activity({ phase: 'idle', reply: null }) },
-      now: NOW
+      now: NOW,
     })
     expect([...out.live, ...out.quiet][0].turn?.latest ?? null).toBeNull()
   })
@@ -148,7 +153,11 @@ describe('buildAgentRows — the 228 collapse', () => {
 
   it('collapses 228 identity-only agents behind one live row', () => {
     const roster = Array.from({ length: 228 }, (_, i) => entry({ id: `a${i}` }))
-    const out = buildAgentRows({ roster, activities: { a0: activity({ terminalId: 'a0' }) }, now: NOW })
+    const out = buildAgentRows({
+      roster,
+      activities: { a0: activity({ terminalId: 'a0' }) },
+      now: NOW,
+    })
     expect(out.live).toHaveLength(1)
     expect(out.quiet).toHaveLength(227)
   })
@@ -157,7 +166,7 @@ describe('buildAgentRows — the 228 collapse', () => {
     const out = buildAgentRows({
       roster: [entry({ active: false })],
       activities: { t1: activity({ phase: 'waiting' }) },
-      now: NOW
+      now: NOW,
     })
     expect(out.live.map((r) => r.id)).toEqual(['t1'])
     expect(out.live[0].phase).toBe('offline')
@@ -165,14 +174,18 @@ describe('buildAgentRows — the 228 collapse', () => {
 })
 
 describe('buildAgentRows — ordering', () => {
+  // Finished turns, so the key is their last output — the case where
+  // "most recent first" means exactly what it says.
+  const done = (id: string, updatedAt: number): TerminalActivity =>
+    activity({ terminalId: id, phase: 'idle', reply: 'done', updatedAt })
   const three = {
     roster: [entry({ id: 'old' }), entry({ id: 'new' }), entry({ id: 'mid' })],
     activities: {
-      old: activity({ terminalId: 'old', updatedAt: NOW - 9000 }),
-      new: activity({ terminalId: 'new', updatedAt: NOW - 1000 }),
-      mid: activity({ terminalId: 'mid', updatedAt: NOW - 5000 })
+      old: done('old', NOW - 9000),
+      new: done('new', NOW - 1000),
+      mid: done('mid', NOW - 5000),
     },
-    now: NOW
+    now: NOW,
   }
 
   it('sorts by last activity, most recent first', () => {
@@ -184,9 +197,9 @@ describe('buildAgentRows — ordering', () => {
       roster: [entry({ id: 'w' }), entry({ id: 'r' })],
       activities: {
         w: activity({ terminalId: 'w', phase: 'waiting', updatedAt: NOW - 9000 }),
-        r: activity({ terminalId: 'r', phase: 'idle', reply: 'x', updatedAt: NOW - 1000 })
+        r: activity({ terminalId: 'r', phase: 'idle', reply: 'x', updatedAt: NOW - 1000 }),
       },
-      now: NOW
+      now: NOW,
     })
     expect(out.live.map((r) => r.id)).toEqual(['r', 'w'])
   })
@@ -196,10 +209,10 @@ describe('buildAgentRows — ordering', () => {
       roster: [entry({ id: 'w' }), entry({ id: 'r' })],
       activities: {
         w: activity({ terminalId: 'w', phase: 'waiting', updatedAt: NOW - 9000 }),
-        r: activity({ terminalId: 'r', phase: 'idle', reply: 'x', updatedAt: NOW - 1000 })
+        r: activity({ terminalId: 'r', phase: 'idle', reply: 'x', updatedAt: NOW - 1000 }),
       },
       now: NOW,
-      floatWaiting: true
+      floatWaiting: true,
     })
     expect(out.live.map((r) => r.id)).toEqual(['w', 'r'])
   })
@@ -208,7 +221,7 @@ describe('buildAgentRows — ordering', () => {
     const out = buildAgentRows({
       roster: [entry({ id: 'a', spawnedAt: 100 }), entry({ id: 'b', spawnedAt: 900 })],
       activities: {},
-      now: NOW
+      now: NOW,
     })
     expect(out.quiet.map((r) => r.id)).toEqual(['b', 'a'])
   })
@@ -218,14 +231,18 @@ describe('buildAgentRows — workspace facets', () => {
   const roster = [
     entry({ id: 'a', workspaceId: 'ws1', workspaceName: 'cookrew-dev' }),
     entry({ id: 'b', workspaceId: 'ws2', workspaceName: 'voice', spawnedAt: 100 }),
-    entry({ id: 'c', workspaceId: 'ws2', workspaceName: 'voice', spawnedAt: 900 })
+    entry({ id: 'c', workspaceId: 'ws2', workspaceName: 'voice', spawnedAt: 900 }),
   ]
 
   it('counts every workspace over the WHOLE roster, not just live rows', () => {
-    const out = buildAgentRows({ roster, activities: { a: activity({ terminalId: 'a' }) }, now: NOW })
+    const out = buildAgentRows({
+      roster,
+      activities: { a: activity({ terminalId: 'a' }) },
+      now: NOW,
+    })
     expect(out.workspaces).toEqual([
       { id: 'ws1', name: 'cookrew-dev', total: 1 },
-      { id: 'ws2', name: 'voice', total: 2 }
+      { id: 'ws2', name: 'voice', total: 2 },
     ])
   })
 
@@ -233,5 +250,94 @@ describe('buildAgentRows — workspace facets', () => {
     const out = buildAgentRows({ roster, activities: {}, now: NOW, workspaceId: 'ws2' })
     expect([...out.live, ...out.quiet].map((r) => r.id)).toEqual(['c', 'b'])
     expect(out.workspaces).toHaveLength(2)
+  })
+})
+
+/**
+ * updatedAt is stamped at SERIALIZATION time (turn-tracker.activityOf), and
+ * the tracker pushes every 250ms while an agent works — so it advances four
+ * times a second whether or not anything changed. Ordering on it made the list
+ * churn continuously. The sort key has to be stable for as long as the row's
+ * state is.
+ */
+describe('buildAgentRows — the order must hold still', () => {
+  const working = (updatedAt: number): TerminalActivity =>
+    activity({ terminalId: 'w', phase: 'thinking', turnStartedAt: NOW - 600_000, updatedAt })
+
+  it('does not move a working agent as its output streams', () => {
+    const roster = [entry({ id: 'w' }), entry({ id: 'done' })]
+    const order = (updatedAt: number): string[] =>
+      buildAgentRows({
+        roster,
+        activities: {
+          w: working(updatedAt),
+          done: activity({
+            terminalId: 'done',
+            phase: 'idle',
+            reply: 'finished',
+            turnStartedAt: NOW - 300_000,
+            updatedAt: NOW - 300_000,
+          }),
+        },
+        now: NOW,
+      }).live.map((r) => r.id)
+
+    const first = order(NOW - 5000)
+    // four pushes later — 1s of streaming output, nothing else changed
+    expect(order(NOW - 4750)).toEqual(first)
+    expect(order(NOW - 4500)).toEqual(first)
+    expect(order(NOW)).toEqual(first)
+  })
+
+  it('ranks an in-flight turn by when it STARTED, not by its last output', () => {
+    const out = buildAgentRows({
+      roster: [entry({ id: 'old-turn' }), entry({ id: 'new-turn' })],
+      activities: {
+        // started long ago, still streaming right now
+        'old-turn': activity({
+          terminalId: 'old-turn',
+          phase: 'thinking',
+          turnStartedAt: NOW - 900_000,
+          updatedAt: NOW,
+        }),
+        // started recently, also streaming
+        'new-turn': activity({
+          terminalId: 'new-turn',
+          phase: 'thinking',
+          turnStartedAt: NOW - 60_000,
+          updatedAt: NOW,
+        }),
+      },
+      now: NOW,
+    })
+    expect(out.live.map((r) => r.id)).toEqual(['new-turn', 'old-turn'])
+  })
+
+  it('still uses the last output time for a finished turn, which stops moving', () => {
+    const out = buildAgentRows({
+      roster: [entry({ id: 'a' }), entry({ id: 'b' })],
+      activities: {
+        a: activity({ terminalId: 'a', phase: 'idle', reply: 'x', updatedAt: NOW - 9000 }),
+        b: activity({ terminalId: 'b', phase: 'idle', reply: 'y', updatedAt: NOW - 1000 }),
+      },
+      now: NOW,
+    })
+    expect(out.live.map((r) => r.id)).toEqual(['b', 'a'])
+  })
+
+  it('falls back to last output when a turn reports no start time', () => {
+    const out = buildAgentRows({
+      roster: [entry({ id: 'x' })],
+      activities: {
+        x: activity({
+          terminalId: 'x',
+          phase: 'thinking',
+          turnStartedAt: null,
+          updatedAt: NOW - 20,
+        }),
+      },
+      now: NOW,
+    })
+    expect(out.live[0].lastActivityAt).toBe(NOW - 20)
   })
 })
