@@ -116,6 +116,72 @@ export interface TurnRecord {
 }
 
 /**
+ * COOKREW'S OWN ANNOTATIONS on a checkpoint — the fields above that no other
+ * system has or could reconstruct.
+ *
+ * A TurnRecord mixes two things with different owners. The conversation
+ * (prompt, reply, timing, and the `uuid` that binds it to the session file) is
+ * already owned by the harness transcript; the ledger only keeps a copy of it.
+ * These three are ours alone: a Sous recap, whether the user has looked at the
+ * result, and where the turn started in scrollback. Losing the ledger loses
+ * nothing permanently — losing these loses read state and every recap.
+ *
+ * They are stored apart from the conversation and merged back on read, so this
+ * split is invisible above main/turn-store.ts (see main/turn-annotations.ts for
+ * the file, and why it is rewritten whole rather than appended).
+ */
+export interface TurnAnnotation {
+  title?: string
+  seenAt?: number
+  scrollLine?: number
+}
+
+/** True when there is anything worth persisting for this checkpoint. */
+export function hasAnnotation(annotation: TurnAnnotation): boolean {
+  return (
+    annotation.title !== undefined ||
+    annotation.seenAt !== undefined ||
+    annotation.scrollLine !== undefined
+  )
+}
+
+/**
+ * Split a record into the conversation half (what the transcript owns) and
+ * Cookrew's half. Absent fields are left absent rather than set to undefined,
+ * so the conversation line serializes byte-identically to a record that never
+ * carried an annotation at all.
+ */
+export function splitAnnotation(record: TurnRecord): {
+  conversation: TurnRecord
+  annotation: TurnAnnotation
+} {
+  const { title, seenAt, scrollLine, ...conversation } = record
+  const annotation: TurnAnnotation = {}
+  if (title !== undefined) annotation.title = title
+  if (seenAt !== undefined) annotation.seenAt = seenAt
+  if (scrollLine !== undefined) annotation.scrollLine = scrollLine
+  return { conversation, annotation }
+}
+
+/**
+ * Put an annotation back onto a conversation record. The annotation wins where
+ * it has a value; anything it lacks keeps whatever the record carried, which is
+ * what lets a pre-split file — annotations still inline on the line — read back
+ * unchanged before it has ever been rewritten.
+ */
+export function mergeAnnotation(
+  record: TurnRecord,
+  annotation: TurnAnnotation | undefined,
+): TurnRecord {
+  if (annotation === undefined || !hasAnnotation(annotation)) return record
+  const merged: TurnRecord = { ...record }
+  if (annotation.title !== undefined) merged.title = annotation.title
+  if (annotation.seenAt !== undefined) merged.seenAt = annotation.seenAt
+  if (annotation.scrollLine !== undefined) merged.scrollLine = annotation.scrollLine
+  return merged
+}
+
+/**
  * History is NOT capped: every checkpoint an agent has ever produced is kept,
  * so `turnCount` and the rail agree with reality. This is affordable because
  * the store appends one line per turn instead of rewriting the file (see
