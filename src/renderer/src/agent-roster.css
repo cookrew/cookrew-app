@@ -932,3 +932,323 @@
   flex: 0 0 auto;
 }
 
+/* ---- agent rows (the trace body inside the ALL AGENTS panel) ----
+   AgentRow renders TurnView — the SAME turn block the canvas card renders.
+   styles.css skins those vi-* classes for the dark card; the rules below
+   re-skin them for this cream panel. One component, two surfaces, no second
+   markup. There is no width level here, so the reveal vars stay at their
+   default of 1. Tokens only; nothing below invents a colour. */
+
+/* ---- the row (roster-row language: green rail, amber-soft hover) ---- */
+
+.ags-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 9px;
+  padding: 8px 10px;
+  min-width: 0;
+  cursor: pointer;
+  border-bottom: 1px solid var(--line-soft);
+  border-left: 3px solid var(--hp);
+  transition: background 120ms ease;
+}
+
+.ags-row:hover {
+  background: var(--amber-soft);
+}
+
+.ags-row:focus-visible {
+  outline: 2px solid var(--amber-deep);
+  outline-offset: -2px;
+}
+
+.ags-row[data-phase='working'] {
+  border-left-color: var(--amber-deep);
+}
+
+.ags-row[data-phase='waiting'] {
+  border-left-color: var(--rose);
+}
+
+.ags-row.selected {
+  background: var(--amber-soft);
+  border-left-color: var(--amber-deep);
+}
+
+.ags-row.inactive {
+  opacity: 0.5;
+  border-left-color: transparent;
+}
+
+.ags-row.inactive:hover {
+  opacity: 1;
+}
+
+.ags-avatar {
+  flex: 0 0 auto;
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+}
+
+.ags-role-avatar {
+  width: 24px;
+  height: 24px;
+}
+
+.ags-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* identity fades in over the rail→open stretch */
+.ags-nameline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+  opacity: var(--ags-reveal-id, 1);
+  transition: opacity 200ms ease;
+}
+
+.ags-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- level 2: the turn, grown in by width ---- */
+
+.ags-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden;
+  opacity: var(--ags-reveal, 1);
+  max-height: calc(var(--ags-reveal, 1) * 150px);
+  transform: translateY(calc((1 - var(--ags-reveal, 1)) * -4px));
+  transition:
+    opacity 240ms ease,
+    max-height 240ms ease,
+    transform 240ms ease;
+}
+
+/* Re-skin of the SHARED turn block. Same elements as the dark card; only the
+   surface differs. Type sizes drop the card's var(--z) — the sidebar does not
+   inverse-scale against canvas zoom. */
+.ags-turn .vi-turn-title {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 13.5px;
+  line-height: 1.3;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ags-turn .vi-you {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ags-turn .vi-you-label {
+  color: var(--amber-deep);
+  font-weight: 600;
+}
+
+/* The card shows the whole trail; a sidebar row has no room, so only the
+   newest call survives. CSS, not a second component. */
+.ags-turn .vi-tools {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ags-turn .vi-tool.older {
+  display: none;
+}
+
+.ags-turn .vi-tool {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--amber-deep);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ags-turn .vi-tool-glyph {
+  color: var(--amber-deep);
+}
+
+.ags-turn .vi-latest {
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ags-turn .vi-latest.working {
+  color: var(--amber-deep);
+  font-weight: 600;
+}
+
+.ags-turn .vi-latest.waiting {
+  color: var(--rose);
+  font-weight: 700;
+}
+
+/* --hp is a coin/rail colour; as body text on cream it fails contrast, so a
+   finished turn reads in ink-soft and green stays on the avatar and rail. */
+.ags-turn .vi-latest.done {
+  color: var(--ink-soft);
+}
+
+.ags-turn .vi-ready {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.ags-turn .vi-pending {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.ags-turn .vi-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+  box-shadow: none;
+}
+
+.ags-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  min-width: 0;
+}
+
+.ags-phase,
+.ags-ck,
+.ags-ago {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ags-row[data-phase='working'] .ags-phase {
+  color: var(--amber-deep);
+}
+
+.ags-row[data-phase='waiting'] .ags-phase {
+  color: var(--rose);
+  animation: cr-blink 1.1s steps(2) infinite;
+}
+
+.ags-spacer {
+  flex: 1;
+}
+
+/* RECOVER — .roster-recover verbatim: pixel chip with a re-hatching coin. */
+.ags-recover {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 7px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.ags-row:hover .ags-recover,
+.ags-recover:focus-visible {
+  opacity: 1;
+}
+
+.ags-recover:hover {
+  background: var(--amber-soft);
+  border-color: var(--amber-deep);
+}
+
+.ags-recover-coin {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--hp);
+  border: 1px solid var(--line);
+}
+
+.ags-toast {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 10;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 7px 9px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 3px 3px 0 var(--amber-deep);
+}
+
+.ags-toast[data-tone='error'] {
+  box-shadow: 3px 3px 0 var(--rose);
+}
+
+/* Quiet disclosure — one row instead of two hundred. */
+.roster-quiet {
+  display: block;
+  width: 100%;
+  padding: 9px;
+  cursor: pointer;
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  background: var(--cream-md);
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.roster-quiet:hover {
+  background: var(--amber-soft);
+  color: var(--ink);
+}

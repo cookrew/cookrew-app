@@ -3,8 +3,10 @@ import { NodeHandles } from './NodeHandles'
 import { CardClose } from './CardClose'
 import { AgentAvatar, StatusCoin } from './AgentAvatar'
 import { GitChip } from '../GitChip'
-import { CrIcon, type CrIconName } from '../icons'
+import { CrIcon } from '../icons'
 import { cardTypeScale, cardZoomMode } from './card-zoom'
+import { TurnView } from './TurnView'
+import { turnViewOf } from '../turn-view-model'
 import { PastTurnView, TurnPagerBar, useTurnPaging } from './TurnPager'
 import type { TerminalNodeData } from '../../../shared/model'
 import type { TerminalActivity } from '../../../shared/turn'
@@ -114,117 +116,12 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
         {paging.viewing ? (
           <PastTurnView record={paging.viewing} />
         ) : (
-          <TurnSummary activity={activity} />
+          <TurnView model={turnViewOf(activity)} />
         )}
       </div>
       {(paging.count > 0 || paging.viewing !== null) && <TurnPagerBar paging={paging} />}
     </div>
   )
-}
-
-/**
- * The card body at every zoom: Sous recap headline, "You:" line, and the
- * latest status/reply. Type is inverse-scaled (var(--z)) so it reads at
- * overview zoom and stays natural size once zoomed in.
- */
-function TurnSummary({ activity }: { activity: TerminalActivity | undefined }): React.JSX.Element {
-  if (!activity || activity.prompt === null) {
-    // Reattached after a restart: no turn is tracked yet, but the tmux
-    // session's screen carries the latest turn — surface its tail instead of
-    // pretending the agent is fresh.
-    const tail = (activity?.lines ?? []).filter((l) => l.trim().length > 0)
-    if (tail.length === 0) return <div className="vi-ready">Ready</div>
-    return <div className="vi-latest done">{firstLine(tail[tail.length - 1], 220)}</div>
-  }
-  const { phase, glance } = activity
-  const msgSnippet = glance?.message ? firstLine(glance.message, 220) : null
-  const inTurn = phase === 'thinking' || phase === 'waiting'
-  return (
-    <>
-      {activity.title && <div className="vi-turn-title">{firstLine(activity.title, 90)}</div>}
-      <div className="vi-you">
-        <span className="vi-you-label">You:</span> {firstLine(activity.prompt, 160)}
-      </div>
-      {phase === 'thinking' && (
-        <div className="vi-latest working">
-          <span className="vi-dot pulse" /> {stripStatus(glance?.status) ?? 'Working…'}
-          {msgSnippet && <span className="vi-latest-snip"> — {msgSnippet}</span>}
-        </div>
-      )}
-      {/* What it's doing RIGHT NOW: the status verb above says it's busy, the
-          trail says with what. Newest last, older calls dimmed. */}
-      {inTurn && glance !== null && glance.tools.length > 0 && (
-        <div className="vi-tools">
-          {glance.tools.map((toolCall, i) => (
-            <div
-              key={`${i}-${toolCall}`}
-              className={`vi-tool ${i === glance.tools.length - 1 ? 'latest' : 'older'}`}
-              title={toolCall}
-            >
-              <span className="vi-tool-glyph">
-                <CrIcon name={toolGlyph(toolCall)} />
-              </span>{' '}
-              {toolCall}
-            </div>
-          ))}
-        </div>
-      )}
-      {phase === 'waiting' && (
-        <div className="vi-latest waiting">⚠ {msgSnippet ?? 'Needs your input'}</div>
-      )}
-      {phase === 'replied' && (
-        <div className="vi-latest done">
-          ✅ {activity.reply ? firstLine(activity.reply, 220) : 'Checkpoint saved'}
-        </div>
-      )}
-      {/* Ready keeps the latest turn on screen, same as turn-complete —
-          the ask stays above, the reply stays here. */}
-      {phase === 'idle' &&
-        (activity.reply ? (
-          <div className="vi-latest done">{firstLine(activity.reply, 220)}</div>
-        ) : (
-          <div className="vi-ready">Ready</div>
-        ))}
-      <PendingInputLine activity={activity} />
-    </>
-  )
-}
-
-/** Typed-but-unsent input box content: visibly IN the inputbox, never
-    masquerading as an ask (DEFECT 2, renderer half). */
-function PendingInputLine({ activity }: { activity: TerminalActivity }): React.JSX.Element | null {
-  if (!activity.pendingInput) return null
-  return (
-    <div className="vi-pending">
-      <span className="vi-pending-label">typing:</span> {firstLine(activity.pendingInput, 120)}
-      <span className="vi-caret">▍</span>
-    </div>
-  )
-}
-
-/** Vibe-island shows a per-tool view; the card gets a per-tool glyph. */
-const TOOL_GLYPHS: [RegExp, CrIconName][] = [
-  [/^Bash/i, 'bash'],
-  [/^(Read|Write|Edit|Update|Create|NotebookEdit)/i, 'note'],
-  [/^(Grep|Glob|Search|Find)/i, 'search'],
-  [/^Web/i, 'browser'],
-  [/^(Task|Agent)/i, 'agent']
-]
-
-function toolGlyph(toolCall: string): CrIconName {
-  return TOOL_GLYPHS.find(([re]) => re.test(toolCall))?.[1] ?? 'dot'
-}
-
-/** Drop the "(esc to interrupt · …)" chrome — not useful at card size. */
-function stripStatus(status: string | null | undefined): string | null {
-  if (!status) return null
-  const cleaned = status.replace(/\s*\((?:[^)]*esc to interrupt[^)]*)\)\s*$/i, '').trim()
-  return cleaned.length > 0 ? cleaned : null
-}
-
-function firstLine(text: string, max: number): string {
-  const line = text.split('\n').find((l) => l.trim() !== '') ?? ''
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line
 }
 
 function agoLabel(since: number): string {
