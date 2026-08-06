@@ -1348,3 +1348,16 @@
 .roster-edit-spacer {
   flex: 1;
 }
+
+/* Facet chips: structured narrowing from the registry and the event log. */
+.roster-facets {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 8px;
+  max-height: 74px;
+  overflow-y: auto;
+  background: var(--cream-lo);
+  border: 1.5px solid var(--line);
+}

@@ -8,6 +8,15 @@ import { AgentRow } from './AgentRow'
 import { buildAgentRows, type AgentRow as Row } from './agent-rows'
 import { advanceClock, type ActivityClock } from './activity-clock'
 import { searchAgents } from './agent-search'
+import {
+  EMPTY_FILTER,
+  applyFilter,
+  buildFacets,
+  eventClock,
+  type AgentFacets,
+  type AgentFilter,
+  type FacetEvent,
+} from './agent-facets'
 import { TeamForkPicker } from './TeamForkPicker'
 import { useCanvasUi } from './canvas-ui'
 import { recoverEligible, recoverErrorToast, recoverToastFor, type RecoverToast } from './recover'
@@ -45,6 +54,13 @@ export function RosterPanel({
   const [editing, setEditing] = useState(false)
   const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set())
   const [forkOpen, setForkOpen] = useState(false)
+  const [filter, setFilter] = useState<AgentFilter>(EMPTY_FILTER)
+  /**
+   * The cookrew event log, joined to agents by entityId. It is the ONLY
+   * cross-workspace signal of when an agent was last touched — live turn state
+   * covers the loaded workspace alone — so it both ranks and filters.
+   */
+  const [events, setEvents] = useState<FacetEvent[]>([])
   // One clock for every relative label — 228 rows must not each own a timer.
   const [now, setNow] = useState(() => Date.now())
   // When each agent last DID something, as opposed to when the tracker last
@@ -52,9 +68,21 @@ export function RosterPanel({
   // times a second and reordered the list continuously (activity-clock.ts).
   const clock = useRef<ActivityClock>({})
   clock.current = advanceClock(clock.current, activities, Date.now())
+  const changedAt = useMemo(
+    () => ({ ...eventClock(events), ...clock.current }),
+    [events, clock.current],
+  )
+  const all = useMemo(
+    () => buildAgentRows({ roster, activities, now, changedAt }),
+    [roster, activities, now, changedAt],
+  )
+  const facets = useMemo(() => buildFacets([...all.live, ...all.quiet]), [all])
   const { live, quiet } = useMemo(
-    () => buildAgentRows({ roster, activities, now, changedAt: clock.current }),
-    [roster, activities, now],
+    () => ({
+      live: applyFilter(all.live, filter),
+      quiet: applyFilter(all.quiet, filter),
+    }),
+    [all, filter],
   )
   // Searching looks through the WHOLE crew: a quiet agent you are hunting for
   // by name must not be hidden behind a disclosure.
@@ -93,6 +121,20 @@ export function RosterPanel({
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60_000)
     return () => clearInterval(timer)
+  }, [])
+
+  // One read of the log on open, then follow the live stream. Metadata only —
+  // no conversation text ever crosses this wire (main/event-log.ts).
+  useEffect(() => {
+    const query = cookrew().queryEvents
+    if (typeof query !== 'function') return
+    void query({ limit: 4000 })
+      .then((list) => setEvents(list as FacetEvent[]))
+      .catch(() => undefined)
+    const off = cookrew().onEvent?.((event) =>
+      setEvents((prior) => [...prior, event as FacetEvent]),
+    )
+    return () => off?.()
   }, [])
 
   useEffect(() => {
@@ -205,6 +247,11 @@ export function RosterPanel({
           </div>
         )}
 
+        {/* Facets from the registry + event log — structured narrowing, which
+            is what these records can answer well. Conversation text is NOT
+            here: the event log carries none by design. */}
+        <FacetBar facets={facets} filter={filter} onChange={setFilter} />
+
         {roster.length === 0 ? (
           <div className="tf-role-note">No agents yet.</div>
         ) : searching ? (
@@ -269,6 +316,62 @@ export function RosterPanel({
           <TeamForkPicker workspace={workspace} seed={picked} onClose={() => setForkOpen(false)} />
         )}
       </div>
+    </div>
+  )
+}
+
+/** OR within a facet, AND across facets — chips, as people expect them. */
+function FacetBar({
+  facets,
+  filter,
+  onChange,
+}: {
+  facets: AgentFacets
+  filter: AgentFilter
+  onChange: (next: AgentFilter) => void
+}): React.JSX.Element | null {
+  const groups: {
+    key: keyof AgentFilter
+    items: { value: string; count: number; id?: string }[]
+  }[] = [
+    { key: 'states', items: facets.states },
+    { key: 'presets', items: facets.presets },
+    { key: 'roles', items: facets.roles },
+    { key: 'workspaceIds', items: facets.workspaces },
+  ]
+  const active = groups.some((g) => filter[g.key].length > 0)
+  if (facets.presets.length + facets.roles.length + facets.workspaces.length === 0) return null
+
+  const toggle = (key: keyof AgentFilter, value: string): void => {
+    const current = filter[key] as string[]
+    const next = current.includes(value) ? current.filter((v) => v !== value) : [...current, value]
+    onChange({ ...filter, [key]: next } as AgentFilter)
+  }
+
+  return (
+    <div className="roster-facets">
+      {active && (
+        <button className="cr-chip clickable" onClick={() => onChange(EMPTY_FILTER)}>
+          CLEAR
+        </button>
+      )}
+      {groups.map((group) =>
+        group.items.map((item) => {
+          // Workspaces filter by id but read as their name.
+          const value = item.id ?? item.value
+          const on = (filter[group.key] as string[]).includes(value)
+          return (
+            <button
+              key={`${group.key}:${value}`}
+              className={`cr-chip clickable${on ? ' amber' : ''}`}
+              title={`${item.value} · ${item.count}`}
+              onClick={() => toggle(group.key, value)}
+            >
+              {item.value} {item.count}
+            </button>
+          )
+        }),
+      )}
     </div>
   )
 }
