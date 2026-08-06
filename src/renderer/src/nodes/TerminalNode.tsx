@@ -3,7 +3,7 @@ import { NodeHandles } from './NodeHandles'
 import { CardClose } from './CardClose'
 import { AgentAvatar, StatusCoin } from './AgentAvatar'
 import { GitChip } from '../GitChip'
-import { CrIcon } from '../icons'
+import { CrIcon, type CrIconName } from '../icons'
 import { cardTypeScale, cardZoomMode } from './card-zoom'
 import { PastTurnView, TurnPagerBar, useTurnPaging } from './TurnPager'
 import type { TerminalNodeData } from '../../../shared/model'
@@ -138,6 +138,7 @@ function TurnSummary({ activity }: { activity: TerminalActivity | undefined }): 
   }
   const { phase, glance } = activity
   const msgSnippet = glance?.message ? firstLine(glance.message, 220) : null
+  const inTurn = phase === 'thinking' || phase === 'waiting'
   return (
     <>
       {activity.title && <div className="vi-turn-title">{firstLine(activity.title, 90)}</div>}
@@ -148,6 +149,24 @@ function TurnSummary({ activity }: { activity: TerminalActivity | undefined }): 
         <div className="vi-latest working">
           <span className="vi-dot pulse" /> {stripStatus(glance?.status) ?? 'Working…'}
           {msgSnippet && <span className="vi-latest-snip"> — {msgSnippet}</span>}
+        </div>
+      )}
+      {/* What it's doing RIGHT NOW: the status verb above says it's busy, the
+          trail says with what. Newest last, older calls dimmed. */}
+      {inTurn && glance !== null && glance.tools.length > 0 && (
+        <div className="vi-tools">
+          {glance.tools.map((toolCall, i) => (
+            <div
+              key={`${i}-${toolCall}`}
+              className={`vi-tool ${i === glance.tools.length - 1 ? 'latest' : 'older'}`}
+              title={toolCall}
+            >
+              <span className="vi-tool-glyph">
+                <CrIcon name={toolGlyph(toolCall)} />
+              </span>{' '}
+              {toolCall}
+            </div>
+          ))}
         </div>
       )}
       {phase === 'waiting' && (
@@ -181,6 +200,19 @@ function PendingInputLine({ activity }: { activity: TerminalActivity }): React.J
       <span className="vi-caret">▍</span>
     </div>
   )
+}
+
+/** Vibe-island shows a per-tool view; the card gets a per-tool glyph. */
+const TOOL_GLYPHS: [RegExp, CrIconName][] = [
+  [/^Bash/i, 'bash'],
+  [/^(Read|Write|Edit|Update|Create|NotebookEdit)/i, 'note'],
+  [/^(Grep|Glob|Search|Find)/i, 'search'],
+  [/^Web/i, 'browser'],
+  [/^(Task|Agent)/i, 'agent']
+]
+
+function toolGlyph(toolCall: string): CrIconName {
+  return TOOL_GLYPHS.find(([re]) => re.test(toolCall))?.[1] ?? 'dot'
 }
 
 /** Drop the "(esc to interrupt · …)" chrome — not useful at card size. */
