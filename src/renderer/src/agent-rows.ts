@@ -1,4 +1,5 @@
 import { turnViewOf, type TurnViewModel } from './turn-view-model'
+import type { ActivityClock } from './activity-clock'
 import type { AgentRegistryEntry } from './agent-registry'
 import type { TerminalActivity } from '../../shared/turn'
 
@@ -52,6 +53,12 @@ export interface AgentRowsInput {
   floatWaiting?: boolean
   /** Facet filter. Null/undefined shows every workspace. */
   workspaceId?: string | null
+  /**
+   * terminalId → when that agent last DID something (activity-clock.ts). This
+   * is what "jump to the top" ranks on. Without it the rows fall back to the
+   * turn's own timestamps, which is correct but coarser.
+   */
+  changedAt?: ActivityClock
 }
 
 export interface AgentRows {
@@ -80,7 +87,8 @@ function hasTurn(activity: TerminalActivity | undefined): boolean {
 }
 
 /**
- * THE sort key, and it must hold still. `updatedAt` is stamped at
+ * Fallback sort key when no activity clock is supplied, and it must still hold
+ * still. `updatedAt` is stamped at
  * serialization time (turn-tracker.activityOf) and the tracker pushes every
  * 250ms while an agent works, so it advances four times a second whether or
  * not anything changed — ordering on it made the list churn continuously.
@@ -113,7 +121,11 @@ function phaseOf(activity: TerminalActivity | undefined, active: boolean): Agent
   }
 }
 
-function rowOf(entry: AgentRegistryEntry, activity: TerminalActivity | undefined): AgentRow {
+function rowOf(
+  entry: AgentRegistryEntry,
+  activity: TerminalActivity | undefined,
+  changedAt: number | undefined,
+): AgentRow {
   return {
     id: entry.id,
     name: entry.name,
@@ -128,7 +140,7 @@ function rowOf(entry: AgentRegistryEntry, activity: TerminalActivity | undefined
     phase: phaseOf(activity, entry.active),
     turn: hasTurn(activity) ? turnViewOf(activity) : null,
     turnCount: activity?.turnCount ?? 0,
-    lastActivityAt: sortKeyOf(activity) ?? entry.spawnedAt,
+    lastActivityAt: changedAt ?? sortKeyOf(activity) ?? entry.spawnedAt,
   }
 }
 
@@ -149,12 +161,12 @@ function facetsOf(roster: AgentRegistryEntry[]): WorkspaceFacet[] {
 }
 
 export function buildAgentRows(input: AgentRowsInput): AgentRows {
-  const { roster, activities, floatWaiting = false, workspaceId = null } = input
+  const { roster, activities, floatWaiting = false, workspaceId = null, changedAt = {} } = input
   const workspaces = facetsOf(roster)
 
   const rows = roster
     .filter((entry) => workspaceId === null || entry.workspaceId === workspaceId)
-    .map((entry) => rowOf(entry, activities[entry.id]))
+    .map((entry) => rowOf(entry, activities[entry.id], changedAt[entry.id]))
 
   // A row is quiet when there is nothing to say about it — no turn tracked at
   // all. Everything else earns a place on the timeline, including agents that

@@ -997,10 +997,15 @@
   --z: 1;
 }
 
+/* Both avatars must land on the SAME box. .role-avatar's own rule is 16px and
+   .vi-avatar's is 24px, and a single class override only TIES with them — the
+   16px was winning on source order, which is why role rows looked smaller.
+   Descendant selectors outrank both, so the box is settled here for good. */
 .ags-avatar .vi-avatar,
-.ags-role-avatar {
+.ags-avatar .role-avatar {
   width: 24px;
   height: 24px;
+  vertical-align: 0;
 }
 
 .ags-turn .vi-tool-glyph .cr-icon {
