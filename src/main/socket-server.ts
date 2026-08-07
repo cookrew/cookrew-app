@@ -813,8 +813,13 @@ async function cmdGit(request: CliRequest, deps: SocketServerDeps): Promise<stri
   return `${info.branch ?? 'detached'} — ${state}  (${info.root})`
 }
 
-function cmdMobile(request: CliRequest, deps: SocketServerDeps): string {
-  if (request.args[0] === '--rotate') {
+export function cmdMobile(request: CliRequest, deps: SocketServerDeps): string {
+  // `flags`, not `args`: the CLI's parseArgv routes every `--token` into flags
+  // and leaves args empty, so reading args[0] here meant `cookrew mobile
+  // --rotate` exited 0, printed the ordinary URL list, and revoked NOTHING.
+  // Silent success on a revocation path is the dangerous shape — an operator
+  // burning a leaked token would believe it was dead while it stayed live.
+  if (request.flags.rotate === true) {
     deps.rotatePairingToken()
     return renderRotated(deps.mobileEndpoints())
   }
