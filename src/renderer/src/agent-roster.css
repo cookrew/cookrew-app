@@ -1112,10 +1112,20 @@
   display: none;
 }
 
-.ags-turn .vi-tool {
+/* `.latest` in the selector is NOT redundant — do not "clean it up". styles.css
+   dresses the newest call for the DARK card with `.vi-tool.latest { color:
+   var(--vi-text) }`, which is 0-2-0, exactly the same specificity as
+   `.ags-turn .vi-tool`. main.tsx imports App — and with it agent-roster.css —
+   BEFORE './styles.css', so styles.css is injected last and won the tie: the
+   newest tool call rendered #f5f5f7 on this cream row, 1.03:1, invisible.
+   Naming the class here wins by specificity instead of by sheet order.
+   Text is ink-soft (7.6:1 even on the amber-soft hover row); amber-deep stays
+   on the glyph, where it marks the line rather than being read. */
+.ags-turn .vi-tool,
+.ags-turn .vi-tool.latest {
   font-family: var(--font-mono);
   font-size: 10.5px;
-  color: var(--amber-deep);
+  color: var(--ink-soft);
   background: transparent;
   border: 0;
   padding: 0;
