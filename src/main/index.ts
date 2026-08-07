@@ -16,12 +16,19 @@ import {
   tmuxProbeDeps
 } from './board-index'
 import { loadOrCreateReadOnlyToken } from './readonly-token'
+import { loadOrCreatePairingToken } from './pairing-token'
 import { searchTurns } from '../shared/turn-search'
 import { summarizeTurn } from './sous'
 import { startSocketServer } from './socket-server'
 import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
-import { startMobileServer, mobileUrls } from './mobile-server'
+import {
+  startMobileServer,
+  mobileUrls,
+  mobileEndpointList,
+  uncoveredCertHosts,
+  rotateActivePairingToken
+} from './mobile-server'
 import {
   activeBrowserTab,
   AgentRole,
@@ -85,13 +92,18 @@ const turnStore = new TurnStore()
 // GETs on the same routes as the pairing token — not a separate interface.
 const wallToken = loadOrCreateReadOnlyToken()
 /**
- * Pairing credential, minted per run (mobile-server's existing semantics) but
- * now passed EXPLICITLY so it reaches handleMobileApi. Without this the token
- * only ever reached the pairing URL builder, leaving mobile-api's gate — and
- * therefore /api/board — reading `deps.pairingToken === undefined` and letting
- * every request through.
+ * Pairing credential, passed EXPLICITLY so it reaches handleMobileApi. Without
+ * this the token only ever reached the pairing URL builder, leaving
+ * mobile-api's gate — and therefore /api/board — reading
+ * `deps.pairingToken === undefined` and letting every request through.
+ *
+ * PERSISTED (~/.cookrew/pairing-token, 0600) rather than minted per run: a
+ * per-run UUID unpaired every phone on every restart, which the phone had no
+ * way to report. Because this value is supplied, it is what mobile-server
+ * adopts — its own persisted fallback is only reached by callers that pass
+ * nothing.
  */
-const pairingToken = randomUUID()
+const pairingToken = loadOrCreatePairingToken()
 /**
  * L2 probe: phase for panes the TurnTracker cannot see (any workspace but the
  * active one). Only DETACHED sessions are captured — attached terminals are
@@ -1063,6 +1075,9 @@ app.whenReady().then(() => {
     injectInput,
     voice,
     mobileUrls,
+    mobileEndpoints: mobileEndpointList,
+    uncoveredCertHosts,
+    rotatePairingToken: rotateActivePairingToken,
     listWorkspaces,
     createWorkspace,
     createWorkspaceFromTeam,

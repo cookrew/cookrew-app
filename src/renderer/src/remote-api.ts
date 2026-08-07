@@ -1,3 +1,4 @@
+import { AuthError, authStore, type AuthScope } from './auth-gate'
 import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
@@ -13,30 +14,15 @@ import type { TerminalActivity, TurnRecord } from '../../shared/turn'
  */
 
 /**
- * Pairing token (C1): the desktop's pairing URL carries `?token=`; we lift it
- * into sessionStorage (surviving refresh) and strip it from the address bar.
- * Mutating routes require it as a bearer header; read-only GETs/SSE stay open.
+ * Pairing token (C1): the desktop's pairing URL carries `?token=`; auth-gate
+ * lifts it into storage and strips it from the address bar. Mutating routes
+ * require it as a bearer header; read-only GETs/SSE stay open.
  */
-const pairingToken: string | null = (() => {
-  try {
-    const fromUrl = new URLSearchParams(window.location.search).get('token')
-    if (fromUrl) {
-      window.sessionStorage.setItem('cookrew-pairing-token', fromUrl)
-      const clean = new URL(window.location.href)
-      clean.searchParams.delete('token')
-      window.history.replaceState(null, '', clean)
-      return fromUrl
-    }
-    return window.sessionStorage.getItem('cookrew-pairing-token')
-  } catch {
-    return null
-  }
-})()
-
 async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const options: RequestInit = { method }
   const headers: Record<string, string> = {}
-  if (pairingToken) headers.authorization = `Bearer ${pairingToken}`
+  const token = authStore().token()
+  if (token) headers.authorization = `Bearer ${token}`
   if (body !== undefined) {
     headers['content-type'] = 'application/json'
     options.body = JSON.stringify(body)
@@ -45,15 +31,49 @@ async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> 
   const response = await fetch(path, options)
   if (!response.ok) {
     const detail = await response.json().catch(() => ({ error: String(response.status) }))
-    throw new Error((detail as { error?: string }).error ?? `HTTP ${response.status}`)
+    const message = (detail as { error?: string }).error ?? `HTTP ${response.status}`
+    if (response.status === 401) {
+      // A stale credential is the most likely error this client will ever
+      // see. Raise it as its own type so it reaches the re-pair screen
+      // instead of being counted as a generic network hiccup.
+      const failure = new AuthError(message, /read-only/i.test(message) ? 'read-only' : 'none')
+      authStore().report(failure)
+      throw failure
+    }
+    throw new Error(message)
   }
   const text = await response.text()
   return (text ? JSON.parse(text) : undefined) as T
 }
 
-/** Fire-and-forget POST for streams of small events (keystrokes, resizes). */
+/**
+ * Fire-and-forget POST for streams of small events (keystrokes, resizes).
+ * The rejection is still dropped here — there is no caller to hand it to —
+ * but req() has already REPORTED an auth failure to the store by this point,
+ * so the re-pair screen appears even though nothing awaits this promise. That
+ * report is deduplicated, so a held-down key raises one screen, not hundreds.
+ */
 function post(path: string, body: unknown): void {
   void req(path, 'POST', body).catch(() => undefined)
+}
+
+/**
+ * Ask the server what the current credential is worth. Used to verify a
+ * pasted token during re-pairing, and on boot so an unpaired phone says so
+ * before the user discovers it by pressing something.
+ */
+export async function checkAuth(candidate?: string): Promise<AuthScope> {
+  const token = candidate ?? authStore().token()
+  const response = await fetch('/api/auth/status', {
+    headers: token ? { authorization: `Bearer ${token}` } : undefined
+  })
+  if (!response.ok) throw new Error(`Auth check failed (HTTP ${response.status})`)
+  const body = (await response.json()) as { scope?: AuthScope; required?: boolean }
+  // A server with no token configured authorizes everything; report that as
+  // full access rather than as "none", which would strand the UI behind a
+  // re-pair screen it can never satisfy.
+  if (body.required === false) return 'pairing'
+  return body.scope ?? 'none'
 }
 
 /**
@@ -94,7 +114,25 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
+/**
+ * Ask once at boot whether this device is still paired.
+ *
+ * Only a hard 'none' raises the screen. A read-only device is a legitimate,
+ * fully usable state — the TV wall is one by design — so it stays quiet until
+ * the user actually attempts a write and gets a 401 back.
+ */
+function checkAuthOnBoot(): void {
+  void checkAuth()
+    .then((scope) => {
+      if (scope === 'none') {
+        authStore().report(new AuthError('This device is not paired.', 'none'))
+      }
+    })
+    .catch(() => undefined)
+}
+
 export function createRemoteApi(): CookrewApi {
+  checkAuthOnBoot()
   return {
     getWorkspace: () => req<WorkspaceState>('/api/workspace'),
     onWorkspaceState: (cb) => subscribe<WorkspaceState>('workspace', cb),
