@@ -83,7 +83,9 @@ export class TmuxMultiplexer implements Multiplexer {
   readonly capabilities: MultiplexerCapabilities = {
     attach: true,
     copyModeSearch: true,
-    monotonicHistory: true
+    monotonicHistory: true,
+    // The reason Cookrew uses a multiplexer at all.
+    persistsAcrossRestart: true
   }
 
   private readonly runner: CommandRunner
