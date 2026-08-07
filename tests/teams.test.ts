@@ -336,7 +336,7 @@ describe('team fork by directory + worktree (GOAL 3/5)', () => {
     })
     expect(on).toHaveLength(1)
     expect(on[0].repoDir).toBe('/work/repo')
-    expect(on[0].worktreePath).toBe('/wt/repo')
+    expect(on[0].worktreePath).toBe(path.join('/wt', 'repo'))
     expect(planWorktrees(['/work/repo'], isRepo, { enabled: false, worktreeRoot: '/wt', branch: 'b' })).toEqual([])
   })
 
@@ -360,7 +360,7 @@ describe('team fork by directory + worktree (GOAL 3/5)', () => {
       worktreeRoot: '/wt',
       branch: 'cookrew/fork'
     })
-    expect(remap.get('/work/repo')).toBe('/wt/repo')
+    expect(remap.get('/work/repo')).toBe(path.join('/wt', 'repo'))
     expect(remap.has('/work/bad')).toBe(false)
     expect(remap.has('/plain')).toBe(false)
     expect(errors[0]).toContain('/work/bad')

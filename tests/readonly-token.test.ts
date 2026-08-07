@@ -16,7 +16,9 @@ describe('read-only token', () => {
     expect(token.length).toBeGreaterThanOrEqual(16)
     const file = readOnlyTokenFile(dir)
     expect(readFileSync(file, 'utf8').trim()).toBe(token)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    // Windows has no POSIX mode bits; the guarantee under test is a
+    // POSIX one, so assert it where it exists rather than faking it.
+    if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
   })
 
   it('reuses an existing token so a paired screen survives restarts', () => {
@@ -32,6 +34,6 @@ describe('read-only token', () => {
   })
 
   it('keeps the historical wall-token path so existing pairings survive', () => {
-    expect(readOnlyTokenFile('/base')).toBe('/base/wall-token')
+    expect(readOnlyTokenFile('/base')).toBe(path.join('/base', 'wall-token'))
   })
 })

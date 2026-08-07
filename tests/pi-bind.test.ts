@@ -34,7 +34,21 @@ function writeSession(dir: string, cwd: string, id: string, startedAtMs: number)
   return file
 }
 
-describe('Pi command binding', () => {
+/**
+ * POSIX-only. Skipped on Windows because the FEATURE is POSIX-only, not
+ * because the assertions are awkward there:
+ *
+ *   - codex session binding shells out to `lsof`, which does not exist on
+ *     Windows. There is no Windows implementation yet.
+ *   - pi session directories are built with path.resolve() and then
+ *     shell-quoted for a POSIX shell. On Windows path.resolve() correctly
+ *     prepends a drive letter and the quoting escapes backslashes that cmd
+ *     does not treat as escapes.
+ *
+ * Rewriting these expectations to accept Windows output would make CI green
+ * while hiding a real functional gap. Skipping states the gap instead.
+ */
+describe.skipIf(process.platform === 'win32')('Pi command binding', () => {
   it('recognizes only the Pi executable token', () => {
     expect(isPiCommand('pi')).toBe(true)
     expect(isPiCommand('  pi --model sonnet')).toBe(true)
@@ -70,7 +84,8 @@ describe('Pi command binding', () => {
   })
 })
 
-describe('Pi session lookup', () => {
+// POSIX-only for the same reason as the block above.
+describe.skipIf(process.platform === 'win32')('Pi session lookup', () => {
   it('launches fresh in an exclusive node directory, then resumes its exact persisted id', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'cookrew-pi-launch-'))
     roots.push(root)
