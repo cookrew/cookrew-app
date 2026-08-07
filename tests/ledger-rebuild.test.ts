@@ -13,7 +13,7 @@
 // clone). A silent pass here would be worse than no test: it would report
 // "the ledger is derived" on a machine that never checked.
 
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, statSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -71,10 +71,55 @@ function target(agent: RegistryAgent): RebuildTarget {
 const ledger = existsSync(TURNS_DIR) ? new TurnStore().loadAll() : new Map<string, TurnRecord[]>()
 const agents = registryAgents()
 
-/** Agents whose ledger we can actually check: rebuild succeeded AND a ledger exists. */
+/**
+ * How long a ledger must sit untouched before this suite will read it.
+ *
+ * The corpus is the live machine, so an agent that is mid-turn RIGHT NOW is in
+ * it — including, on a developer's box, the agent running these very tests.
+ * Its newest record is still being written: `endedAt` advances every few
+ * seconds until the turn settles. Any assertion that reads the ledger twice
+ * and compares then depends on whether output happened to land in between.
+ *
+ * Observed directly: index 344 read 4s apart gave endedAt 1786073186716 then
+ * 1786073194797 — same record, different value, no bug.
+ *
+ * Excluding live agents keeps the assertions STRICT rather than loosening them
+ * to tolerate drift. It costs almost nothing: measured on this machine, 1 of
+ * 129 ledgers had been written in the last minute and 118 were over an hour
+ * old, against a corpus floor of 5.
+ */
+const QUIET_MS = 60_000
+
+/** True when nothing has appended to this agent's ledger recently. */
+function quiet(agentId: string, now = Date.now()): boolean {
+  try {
+    const file = path.join(TURNS_DIR, `${agentId}.jsonl`)
+    return !existsSync(file) || now - statSync(file).mtimeMs >= QUIET_MS
+  } catch {
+    // Unreadable mtime is not evidence of writing; the stored/rebuild filters
+    // below still decide whether this agent is usable at all.
+    return true
+  }
+}
+
+const live = agents.filter((agent) => !quiet(agent.id))
+
+/**
+ * Agents whose ledger we can actually check: settled on disk, rebuild
+ * succeeded, AND a ledger exists.
+ */
 const derivable = agents
+  .filter((agent) => quiet(agent.id))
   .map((agent) => ({ agent, stored: ledger.get(agent.id) ?? [], rebuild: rebuildLedger(target(agent)) }))
   .filter((row) => row.rebuild.ok && row.stored.length > 0)
+
+// Say what was skipped. A corpus that silently shrinks reads as "everything
+// passed" when it might mean "almost nothing was checked".
+if (live.length > 0) {
+  console.error(
+    `ledger-rebuild: ${live.length} agent(s) writing within ${QUIET_MS / 1000}s — excluded from the corpus`
+  )
+}
 
 const CORPUS_MIN_AGENTS = 5
 const usable = derivable.length >= CORPUS_MIN_AGENTS
@@ -230,13 +275,16 @@ describe.runIf(usable)('ledger derivation — the temp store never touches the r
     const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-rebuild-'))
     const store = new TurnStore(dir)
     const row = derivable[0]
+    // Baseline read HERE, not at module load. The module-load snapshot is
+    // minutes old by the time this runs, so anything appended in between was
+    // being reported as "the rebuild wrote into the real ledger" — a false
+    // alarm on a safety property, which is the worst kind to cry wolf on.
+    const before = new TurnStore().load(row.agent.id).map(derivedFields)
     rebuildLedgerInto(store, target(row.agent))
     // The record landed in the temp dir…
     expect(store.load(row.agent.id).length).toBeGreaterThan(0)
     // …and the real ledger still reads exactly as before.
-    expect(new TurnStore().load(row.agent.id).map(derivedFields)).toEqual(
-      row.stored.map(derivedFields)
-    )
+    expect(new TurnStore().load(row.agent.id).map(derivedFields)).toEqual(before)
   })
 })
 
