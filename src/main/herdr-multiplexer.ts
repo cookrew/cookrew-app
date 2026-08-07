@@ -24,9 +24,34 @@
 // attach, could not resolve any target form (agent label, pane id, terminal
 // id) even for an agent that `agent list` was reporting at that moment.
 //
+// THE OTHER ARCHITECTURE, ALSO CLOSED
+// -----------------------------------
+// Attaching a PTY is not the only way this could work. The inverse — herdr
+// OWNS the pane, and Cookrew drives it entirely over the socket API — needs no
+// attach at all, and it was tested separately:
+//
+//   input   `pane send-text` / `send-keys`  WORKS (verified: keystrokes land)
+//   state   `agent_status`, `state_change_seq`                        WORKS
+//   output  no subscribable event carries pane bytes                  FAILS
+//
+// `events.subscribe` accepts pane.updated, pane.output_matched,
+// pane.agent_status_changed and pane.scroll_changed. A subscription starts
+// cleanly and then delivers NOTHING across repeated real output: pane.updated
+// does not fire for output. The event that would carry it,
+// `pane_output_changed`, exists in the schema's event enum but is absent from
+// the Subscription union — the server emits it internally and no client can
+// subscribe.
+//
+// Hosting a terminal that way would therefore mean polling full-screen
+// snapshots. That is lossy by construction (anything that scrolls past between
+// polls is gone) and incompatible with feeding an incremental ANSI parser, so
+// it is worse than what Cookrew has rather than a migration.
+//
 // So `capabilities.attach` is false, `attachSpawn` throws, and the selector
 // refuses to make this the primary backend. That is the honest shape: a
-// read-side accelerator, not a tmux replacement — until an attach path exists.
+// read-side accelerator, not a tmux replacement. Two independent routes to
+// hosting were tried and both are closed in 0.8.0; reopening either needs a
+// change upstream, not another attempt here.
 
 import { execFileSync, spawnSync } from 'node:child_process'
 import type {
