@@ -2,9 +2,10 @@ import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { mkdirSync, copyFileSync, chmodSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { execFileSync, spawnSync } from 'node:child_process'
 import pty, { IPty } from 'node-pty'
 import xtermHeadless from '@xterm/headless'
+import type { Multiplexer } from './multiplexer'
+import { TmuxMultiplexer, sessionNameFor as tmuxSessionNameFor, TMUX_LABEL as TMUX_LABEL_CONST } from './tmux-multiplexer'
 import type { Terminal as HeadlessTerminalType } from '@xterm/headless'
 
 const { Terminal: HeadlessTerminal } = xtermHeadless as unknown as {
@@ -18,31 +19,34 @@ const { Terminal: HeadlessTerminal } = xtermHeadless as unknown as {
  * `new-session -A` which reattaches the live session with its scrollback and
  * running agent intact. Only an explicit close (⌘W / dismiss) kills it.
  */
-export const TMUX_LABEL = 'cookrew'
-const TMUX_AVAILABLE = detectTmux()
+// Re-exported so existing importers keep their path; the tmux specifics now
+// live in tmux-multiplexer.ts behind the Multiplexer interface.
+export const TMUX_LABEL = TMUX_LABEL_CONST
 
-function detectTmux(): boolean {
-  try {
-    const result = spawnSync('tmux', ['-V'], { stdio: 'ignore' })
-    return result.status === 0
-  } catch {
-    return false
-  }
+/**
+ * The process-wide multiplexer. Set once by PtyManager (which owns the config
+ * file the backend needs); module-level helpers below use it so the session
+ * reaper keeps working without threading an instance through every call.
+ */
+let activeMux: Multiplexer | null = null
+
+export function setMultiplexer(mux: Multiplexer): void {
+  activeMux = mux
 }
 
-/** True while a tmux session with this name still exists. */
+/** The active backend, or null before PtyManager has constructed one. */
+export function multiplexer(): Multiplexer | null {
+  return activeMux
+}
+
+/** True while a session with this name still exists. */
 function tmuxSessionExists(name: string): boolean {
-  try {
-    execFileSync('tmux', ['-L', TMUX_LABEL, 'has-session', '-t', name], { stdio: 'ignore' })
-    return true
-  } catch {
-    return false
-  }
+  return activeMux?.sessionExists(name) ?? false
 }
 
 /** tmux session name for a terminal id (names can't contain '.' or ':'). */
 export function sessionNameFor(terminalId: string): string {
-  return `cookrew_${terminalId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`
+  return tmuxSessionNameFor(terminalId)
 }
 
 /** Our tmux session naming, so the reaper never touches foreign sessions. */
@@ -84,25 +88,12 @@ export async function waitForTmuxDeath(
 
 /** Kill a cookrew tmux session by NAME (best effort) — no live PTY needed. */
 function killTmuxSessionByName(name: string): void {
-  if (!TMUX_AVAILABLE) return
-  try {
-    execFileSync('tmux', ['-L', TMUX_LABEL, 'kill-session', '-t', name], { stdio: 'ignore' })
-  } catch {
-    // already gone
-  }
+  activeMux?.killSession(name)
 }
 
 /** Live cookrew tmux session names, or [] when no server / tmux is absent. */
 function listTmuxSessionNames(): string[] {
-  if (!TMUX_AVAILABLE) return []
-  try {
-    const out = execFileSync('tmux', ['-L', TMUX_LABEL, 'list-sessions', '-F', '#{session_name}'], {
-      encoding: 'utf8'
-    })
-    return out.split('\n').map((s) => s.trim()).filter((s) => s.length > 0)
-  } catch {
-    return [] // no running server (no sessions)
-  }
+  return activeMux?.listSessions() ?? []
 }
 
 export interface PtySessionOptions {
@@ -138,7 +129,7 @@ export class PtySession extends EventEmitter {
     const shell = process.env.SHELL ?? '/bin/zsh'
     const cols = options.cols ?? 100
     const rows = options.rows ?? 30
-    this.usesTmux = TMUX_AVAILABLE && Boolean(options.tmuxConf)
+    this.usesTmux = (activeMux?.available() ?? false) && Boolean(options.tmuxConf)
     this.sessionName = sessionNameFor(options.terminalId)
 
     this.screen = new HeadlessTerminal({ cols, rows, scrollback: 5000, allowProposedApi: true })
@@ -153,27 +144,24 @@ export class PtySession extends EventEmitter {
     }
 
     if (this.usesTmux) {
-      // `new-session -A`: reattach the terminal's session if it survived a
-      // restart/switch, else create it. tmux does NOT reliably propagate our
-      // injected env into the pane (its server has its own environment), so
-      // bake the vars into a boot script the session runs — including a full
-      // PATH, since a GUI-launched app inherits a stripped one. On reattach
-      // tmux ignores this command, so the original env/agent persist.
-      const inner =
-        options.command && options.command.trim().length > 0 ? options.command : `${shell} -l`
-      const boot = [
-        `export TERM_PROGRAM=Cookrew`,
-        `export COOKREW_TERMINAL_ID='${options.terminalId}'`,
-        `export COOKREW_SOCKET='${options.socketPath}'`,
-        `export COOKREW_CLI='${path.join(options.cliDir, 'cookrew')}'`,
-        `export PATH='${options.cliDir}:${process.env.PATH ?? ''}'`,
-        `exec ${inner}`
-      ].join('; ')
-      const args = [
-        '-L', TMUX_LABEL, '-f', options.tmuxConf!, 'new-session', '-A', '-s', this.sessionName,
-        'sh', '-c', boot
-      ]
-      this.proc = pty.spawn('tmux', args, { name: 'xterm-256color', cols, rows, cwd: options.cwd, env })
+      // The backend decides how to create-or-reattach; Cookrew only supplies
+      // the identity and environment the pane needs. See Multiplexer.attachSpawn.
+      const spawnSpec = activeMux!.attachSpawn({
+        sessionName: this.sessionName,
+        command: options.command,
+        shell,
+        terminalId: options.terminalId,
+        socketPath: options.socketPath,
+        cliDir: options.cliDir,
+        path: `${options.cliDir}:${process.env.PATH ?? ''}`
+      })
+      this.proc = pty.spawn(spawnSpec.file, spawnSpec.args, {
+        name: 'xterm-256color',
+        cols,
+        rows,
+        cwd: options.cwd,
+        env
+      })
     } else {
       this.proc = pty.spawn(shell, ['-l', '-c', options.command || shell], {
         name: 'xterm-256color',
@@ -292,13 +280,7 @@ export class PtySession extends EventEmitter {
   /** Terminate the tmux session for good (explicit close: ⌘W / dismiss). */
   killSession(): void {
     if (!this.usesTmux) return
-    try {
-      execFileSync('tmux', ['-L', TMUX_LABEL, 'kill-session', '-t', this.sessionName], {
-        stdio: 'ignore'
-      })
-    } catch {
-      // session already gone — nothing to do
-    }
+    activeMux?.killSession(this.sessionName)
   }
 
   /**
@@ -309,15 +291,13 @@ export class PtySession extends EventEmitter {
    */
   jumpToText(text: string): void {
     if (!this.usesTmux || this.disposed) return
-    this.tmuxBestEffort(['send-keys', '-t', this.sessionName, '-X', 'cancel'])
-    this.tmuxBestEffort(['copy-mode', '-t', this.sessionName])
-    this.tmuxBestEffort(['send-keys', '-t', this.sessionName, '-X', 'search-backward', text])
+    activeMux?.jumpToText(this.sessionName, text)
   }
 
   /** Leave copy-mode and return the pane to the live tail. */
   exitCopyMode(): void {
     if (!this.usesTmux || this.disposed) return
-    this.tmuxBestEffort(['send-keys', '-t', this.sessionName, '-X', 'cancel'])
+    activeMux?.exitCopyMode(this.sessionName)
   }
 
   /**
@@ -335,32 +315,7 @@ export class PtySession extends EventEmitter {
    */
   paneScrollState(): { scrollRow: number | null; historySize: number | null } {
     if (!this.usesTmux || this.disposed) return { scrollRow: null, historySize: null }
-    try {
-      const out = execFileSync(
-        'tmux',
-        [
-          '-L',
-          TMUX_LABEL,
-          'display-message',
-          '-p',
-          '-t',
-          this.sessionName,
-          '#{scroll_position}:#{history_size}'
-        ],
-        { stdio: ['ignore', 'pipe', 'ignore'] }
-      )
-        .toString('utf8')
-        .trim()
-      const [rowRaw = '', historyRaw = ''] = out.split(':')
-      const row = rowRaw.length === 0 ? NaN : parseInt(rowRaw, 10)
-      const history = parseInt(historyRaw, 10)
-      return {
-        scrollRow: Number.isNaN(row) ? null : row,
-        historySize: Number.isNaN(history) ? null : history
-      }
-    } catch {
-      return { scrollRow: null, historySize: null }
-    }
+    return activeMux?.scrollState(this.sessionName) ?? { scrollRow: null, historySize: null }
   }
 
   /** Live scroll position only (see paneScrollState). */
@@ -374,13 +329,6 @@ export class PtySession extends EventEmitter {
     return this.paneScrollState().historySize
   }
 
-  private tmuxBestEffort(args: string[]): void {
-    try {
-      execFileSync('tmux', ['-L', TMUX_LABEL, ...args], { stdio: 'ignore' })
-    } catch {
-      // pane not in the expected mode (e.g. cancel outside copy-mode)
-    }
-  }
 }
 
 // Terminals are visibly tmux: the status bar is ON so window/pane management
@@ -424,6 +372,10 @@ export class PtyManager {
     this.socketPath = path.join(this.runtimeDir, 'cookrew.sock')
     this.tmuxConf = path.join(this.runtimeDir, 'cookrew.tmux.conf')
     writeFileSync(this.tmuxConf, TMUX_CONF)
+    // The backend is chosen here because this is where the config file it
+    // needs is written. Published module-wide so the session reaper and every
+    // PtySession share ONE instance (and one availability probe).
+    setMultiplexer(new TmuxMultiplexer({ configFile: this.tmuxConf }))
   }
 
   /**
@@ -446,12 +398,7 @@ export class PtyManager {
    * loads it.
    */
   reloadTmuxConfig(): void {
-    if (!TMUX_AVAILABLE) return
-    try {
-      execFileSync('tmux', ['-L', TMUX_LABEL, 'source-file', this.tmuxConf], { stdio: 'ignore' })
-    } catch {
-      // server not running yet — new-session will load the config
-    }
+    activeMux?.reloadConfig()
   }
 
   spawn(options: Omit<PtySessionOptions, 'socketPath' | 'cliDir' | 'tmuxConf'>): PtySession {
@@ -488,21 +435,7 @@ export class PtyManager {
    * Null when there is no live tmux session.
    */
   panePid(terminalId: string): number | null {
-    if (!TMUX_AVAILABLE) return null
-    try {
-      const out = execFileSync(
-        'tmux',
-        ['-L', TMUX_LABEL, 'list-panes', '-t', sessionNameFor(terminalId), '-F', '#{pane_pid}'],
-        { stdio: ['ignore', 'pipe', 'ignore'] }
-      )
-        .toString('utf8')
-        .trim()
-        .split('\n')[0]
-      const pid = parseInt(out, 10)
-      return Number.isNaN(pid) ? null : pid
-    } catch {
-      return null
-    }
+    return activeMux?.panePid(sessionNameFor(terminalId)) ?? null
   }
 
   /**
@@ -514,27 +447,7 @@ export class PtyManager {
    * Null when there is no live tmux session.
    */
   paneLaunch(terminalId: string): { command: string; startedAtMs: number | null } | null {
-    if (!TMUX_AVAILABLE) return null
-    try {
-      const out = execFileSync(
-        'tmux',
-        [
-          '-L', TMUX_LABEL, 'display-message', '-p', '-t', sessionNameFor(terminalId),
-          '#{session_created}\t#{pane_start_command}'
-        ],
-        { stdio: ['ignore', 'pipe', 'ignore'] }
-      ).toString('utf8')
-      const [created, ...rest] = out.replace(/\n$/, '').split('\t')
-      const command = rest.join('\t')
-      if (!command) return null
-      const seconds = parseInt(created, 10)
-      return {
-        command,
-        startedAtMs: Number.isNaN(seconds) ? null : seconds * 1000
-      }
-    } catch {
-      return null
-    }
+    return activeMux?.paneLaunch(sessionNameFor(terminalId)) ?? null
   }
 
   /** Detach: drop the PTY but keep the tmux session alive for reattach. */

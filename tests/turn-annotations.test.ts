@@ -87,8 +87,12 @@ describe('annotations live OUTSIDE the ledger, structurally', () => {
   })
 
   it('defaults to the sibling of the turns directory it was given', () => {
-    expect(new TurnStore('/var/data/cookrew/turns').annotationsDir).toBe(
-      path.join('/var/data/cookrew', 'checkpoint-annotations'),
+    // path.resolve() inside TurnStore absolutises against the cwd, which on
+    // Windows prepends a drive letter. Compare the resolved forms so the
+    // assertion is about the SIBLING relationship, not about how the platform
+    // spells an absolute path.
+    expect(new TurnStore(path.join('/var/data/cookrew/turns')).annotationsDir).toBe(
+      path.resolve('/var/data/cookrew', 'checkpoint-annotations'),
     )
   })
 

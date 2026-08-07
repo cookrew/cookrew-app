@@ -22,10 +22,9 @@ import {
   type BoardRow,
   type BoardSummary
 } from '../shared/board'
-import { execFileSync } from 'node:child_process'
 import { detectAttention, detectLiveWork } from '../shared/turn'
 import type { TerminalActivity, TurnRecord } from '../shared/turn'
-import { TMUX_LABEL, sessionNameFor } from './pty'
+import { multiplexer, sessionNameFor } from './pty'
 
 /** What GET /api/board returns, and what the SSE 'board' event carries. */
 export interface BoardSnapshot {
@@ -287,31 +286,12 @@ export function tmuxProbeDeps(runtime: {
   isAttached: (terminalId: string) => boolean
 }): ProbeDeps {
   return {
-    listSessions: () => {
-      try {
-        return execFileSync('tmux', ['-L', TMUX_LABEL, 'list-sessions', '-F', '#{session_name}'], {
-          encoding: 'utf8',
-          stdio: ['ignore', 'pipe', 'ignore'],
-          timeout: 2000
-        })
-          .split('\n')
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0)
-      } catch {
-        return [] // no tmux server → nothing detached to probe
-      }
-    },
-    capturePane: (sessionName) => {
-      try {
-        return execFileSync('tmux', ['-L', TMUX_LABEL, 'capture-pane', '-p', '-t', sessionName], {
-          encoding: 'utf8',
-          stdio: ['ignore', 'pipe', 'ignore'],
-          timeout: 2000
-        })
-      } catch {
-        return ''
-      }
-    },
+    // Through the seam: the probe asks the ACTIVE backend, so swapping the
+    // multiplexer swaps what the board reads with no change here. A missing
+    // backend degrades to "nothing detached to probe", which probeOnce already
+    // treats as no signal rather than as a phase.
+    listSessions: () => multiplexer()?.listSessions() ?? [],
+    capturePane: (sessionName) => multiplexer()?.capture(sessionName) ?? '',
     knownTerminalIds: runtime.knownTerminalIds,
     isAttached: runtime.isAttached,
     sessionNameFor,
