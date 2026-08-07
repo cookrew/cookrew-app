@@ -57,11 +57,15 @@ export const execRunner: CommandRunner = {
  */
 export function bootScript(spec: AttachSpec): string {
   const inner = spec.command && spec.command.trim().length > 0 ? spec.command : `${spec.shell} -l`
+  // path.posix, not path — this string is a POSIX shell script handed to
+  // `sh -c`, so it must use forward slashes on every platform. Using the
+  // platform joiner emitted `\tmp\cli\cookrew` on Windows, where the
+  // backslashes would be read by sh as escapes rather than separators.
   return [
     `export TERM_PROGRAM=Cookrew`,
     `export COOKREW_TERMINAL_ID='${spec.terminalId}'`,
     `export COOKREW_SOCKET='${spec.socketPath}'`,
-    `export COOKREW_CLI='${path.join(spec.cliDir, 'cookrew')}'`,
+    `export COOKREW_CLI='${path.posix.join(spec.cliDir, 'cookrew')}'`,
     `export PATH='${spec.path}'`,
     `exec ${inner}`
   ].join('; ')
