@@ -47,6 +47,33 @@
 // polls is gone) and incompatible with feeding an incremental ANSI parser, so
 // it is worse than what Cookrew has rather than a migration.
 //
+// THE REFRAME THAT CHANGES THE VERDICT
+// ------------------------------------
+// Both findings above answer "can herdr replace the BYTE STREAM?". That is the
+// wrong question. The byte stream is not a requirement — it is an artefact of
+// tmux being dumb about agents, which is why a scraper had to exist at all.
+//
+// Ask instead what the scraper INFERS, and where that data really lives:
+//
+//   turn boundaries, replies, tools -> the agent's own session file, already
+//                                      the source of truth (turns: 'file')
+//   phase / attention               -> pane.agent_status_changed (streams;
+//                                      verified, and herdr's OWN detector
+//                                      corrected a real claude TUI ~100ms
+//                                      after our reported state)
+//   quiescence for `cookrew ask`    -> agent wait --status idle (~10ms)
+//   the screen                      -> ANSI snapshot poll, DISPLAY ONLY
+//
+// That dissolves the fidelity objection. Snapshot polling looks lossy only if
+// the scraper runs on it. Move parsing to the session file and state to
+// herdr's protocol, and the snapshot only has to be good enough to LOOK at —
+// a terminal display is a screen, and a screen is what herdr returns.
+//
+// So the path to hosting is real, and it runs through DELETING the scraper
+// rather than through finding a byte stream to feed it. What remains for
+// `opencode` alone is scrape-only by declaration (no session file), which is
+// exactly the harness capability the registry already models.
+//
 // So `capabilities.attach` is false, `attachSpawn` throws, and the selector
 // refuses to make this the primary backend. That is the honest shape: a
 // read-side accelerator, not a tmux replacement. Two independent routes to
