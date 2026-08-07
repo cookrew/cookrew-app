@@ -1,0 +1,61 @@
+# Packaging. Cookrew had none — on any platform — so `npm run build` produced
+# out/ and nothing installable. This adds the first distributable.
+#
+# WINDOWS IS A DEGRADED TARGET ON PURPOSE
+# ---------------------------------------
+# Cookrew's headline behaviour is that agents survive a restart, which comes
+# from running each terminal inside a multiplexer session. tmux does not exist
+# on Windows, and herdr — the only cross-platform candidate — cannot host a
+# terminal (its attach returns a TUI, not the pane: 60,666 bytes where tmux
+# returns 2,090, and typed input is never echoed back).
+#
+# pty.ts already degrades to a plain node-pty spawn when no multiplexer is
+# available, so the Windows build RUNS. What it loses is persistence: closing
+# the app ends the agents. That is a real product tradeoff, so the build is
+# marked accordingly rather than shipped as if it were at parity.
+
+appId: dev.cookrew.app
+productName: Cookrew
+copyright: Copyright © 2026 Cookrew
+
+directories:
+  output: release
+  buildResources: resources
+
+# out/ is what electron-vite emits; cli/ ships because agents invoke `cookrew`
+# from inside their panes and the wrapper is installed from this copy.
+files:
+  - out/**/*
+  - cli/**/*
+  - package.json
+
+asarUnpack:
+  # node-pty is native and must be a real file on disk to be spawnable.
+  - node_modules/node-pty/**/*
+
+mac:
+  category: public.app-category.developer-tools
+  icon: resources/icon.icns
+  target:
+    - dmg
+    - zip
+
+win:
+  icon: resources/icon.png
+  target:
+    # Portable first: an NSIS installer implies a supported product, and the
+    # Windows build has a known functional gap (no session persistence).
+    - portable
+    - nsis
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  # Named so the tradeoff is visible before installation, not after.
+  artifactName: ${productName}-${version}-windows-preview-${arch}.${ext}
+
+linux:
+  icon: resources/icon.png
+  category: Development
+  target:
+    - AppImage

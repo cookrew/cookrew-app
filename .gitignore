@@ -11,3 +11,4 @@ coverage/
 # Working docs, briefs and reports — local notes, not shipped artifacts.
 # Files already tracked stay tracked; this stops NEW ones being added.
 docs/
+release/
