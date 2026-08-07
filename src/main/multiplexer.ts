@@ -70,6 +70,18 @@ export interface PaneLaunch {
  * pretend, so the UI can hide the affordance instead of silently no-opping.
  */
 export interface MultiplexerCapabilities {
+  /**
+   * Can node-pty attach to a session and get a TRANSPARENT byte stream — the
+   * pane's own output, with nothing of the multiplexer's own UI in it?
+   *
+   * This is the hard requirement for hosting agents, and it is not a given.
+   * Measured: `tmux attach` yields 2,090 bytes and echoes typed input back;
+   * `herdr session attach` yields 97,553 bytes of TUI repaint for the same
+   * pane and never echoes the input at all. A backend that cannot do this can
+   * still serve READS (see the board probe) but must never host a terminal,
+   * so the flag is declared rather than assumed.
+   */
+  attach: boolean
   copyModeSearch: boolean
   /** Scrollback depth that rises monotonically — checkpoint ordering needs it. */
   monotonicHistory: boolean

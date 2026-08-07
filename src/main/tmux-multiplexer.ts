@@ -77,6 +77,7 @@ export class TmuxMultiplexer implements Multiplexer {
   readonly id = 'tmux'
 
   readonly capabilities: MultiplexerCapabilities = {
+    attach: true,
     copyModeSearch: true,
     monotonicHistory: true
   }

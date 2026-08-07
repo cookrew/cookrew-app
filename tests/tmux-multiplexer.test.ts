@@ -183,6 +183,7 @@ describe('TmuxMultiplexer', () => {
 
   it('declares the capabilities a replacement has to match', () => {
     expect(mux(fakeRunner()).capabilities).toEqual({
+      attach: true,
       copyModeSearch: true,
       monotonicHistory: true
     })
