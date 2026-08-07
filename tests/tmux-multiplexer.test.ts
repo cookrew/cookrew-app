@@ -185,7 +185,8 @@ describe('TmuxMultiplexer', () => {
     expect(mux(fakeRunner()).capabilities).toEqual({
       attach: true,
       copyModeSearch: true,
-      monotonicHistory: true
+      monotonicHistory: true,
+      persistsAcrossRestart: true
     })
   })
 })

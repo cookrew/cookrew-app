@@ -6,6 +6,8 @@ import pty, { IPty } from 'node-pty'
 import xtermHeadless from '@xterm/headless'
 import type { Multiplexer } from './multiplexer'
 import { TmuxMultiplexer, sessionNameFor as tmuxSessionNameFor, TMUX_LABEL as TMUX_LABEL_CONST } from './tmux-multiplexer'
+import { DirectMultiplexer } from './direct-multiplexer'
+import { selectMultiplexers } from './multiplexer-select'
 import type { Terminal as HeadlessTerminalType } from '@xterm/headless'
 
 const { Terminal: HeadlessTerminal } = xtermHeadless as unknown as {
@@ -129,7 +131,10 @@ export class PtySession extends EventEmitter {
     const shell = process.env.SHELL ?? '/bin/zsh'
     const cols = options.cols ?? 100
     const rows = options.rows ?? 30
-    this.usesTmux = (activeMux?.available() ?? false) && Boolean(options.tmuxConf)
+    // Now a CAPABILITY question, not an identity one: "does my session
+    // outlive the app?" rather than "am I tmux?". The direct backend answers
+    // false and everything downstream degrades on that fact.
+    this.usesTmux = activeMux?.capabilities.persistsAcrossRestart ?? false
     this.sessionName = sessionNameFor(options.terminalId)
 
     this.screen = new HeadlessTerminal({ cols, rows, scrollback: 5000, allowProposedApi: true })
@@ -143,34 +148,24 @@ export class PtySession extends EventEmitter {
       PATH: `${options.cliDir}:${process.env.PATH ?? ''}`
     }
 
-    if (this.usesTmux) {
-      // The backend decides how to create-or-reattach; Cookrew only supplies
-      // the identity and environment the pane needs. See Multiplexer.attachSpawn.
-      const spawnSpec = activeMux!.attachSpawn({
-        sessionName: this.sessionName,
-        command: options.command,
-        shell,
-        terminalId: options.terminalId,
-        socketPath: options.socketPath,
-        cliDir: options.cliDir,
-        path: `${options.cliDir}:${process.env.PATH ?? ''}`
-      })
-      this.proc = pty.spawn(spawnSpec.file, spawnSpec.args, {
-        name: 'xterm-256color',
-        cols,
-        rows,
-        cwd: options.cwd,
-        env
-      })
-    } else {
-      this.proc = pty.spawn(shell, ['-l', '-c', options.command || shell], {
-        name: 'xterm-256color',
-        cols,
-        rows,
-        cwd: options.cwd,
-        env
-      })
-    }
+    // One path for every backend. The direct backend returns a plain login
+    // shell here, which is exactly what the old `else` branch spawned by hand.
+    const spawnSpec = activeMux!.attachSpawn({
+      sessionName: this.sessionName,
+      command: options.command,
+      shell,
+      terminalId: options.terminalId,
+      socketPath: options.socketPath,
+      cliDir: options.cliDir,
+      path: `${options.cliDir}:${process.env.PATH ?? ''}`
+    })
+    this.proc = pty.spawn(spawnSpec.file, spawnSpec.args, {
+      name: 'xterm-256color',
+      cols,
+      rows,
+      cwd: options.cwd,
+      env
+    })
 
     // A JS exception escaping these callbacks crosses back into node-pty's
     // NAPI thread-safe function, becomes a C++ exception and ABORTS the whole
@@ -375,7 +370,13 @@ export class PtyManager {
     // The backend is chosen here because this is where the config file it
     // needs is written. Published module-wide so the session reaper and every
     // PtySession share ONE instance (and one availability probe).
-    setMultiplexer(new TmuxMultiplexer({ configFile: this.tmuxConf }))
+    // Selection, not assumption: tmux when it is there, the direct backend
+    // otherwise. On Windows tmux does not exist and herdr cannot host a
+    // terminal, so `direct` is what the release actually runs on.
+    const roles = selectMultiplexers({
+      candidates: [new TmuxMultiplexer({ configFile: this.tmuxConf }), new DirectMultiplexer()]
+    })
+    setMultiplexer(roles.host)
   }
 
   /**

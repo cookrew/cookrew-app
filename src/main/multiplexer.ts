@@ -85,6 +85,17 @@ export interface MultiplexerCapabilities {
   copyModeSearch: boolean
   /** Scrollback depth that rises monotonically — checkpoint ordering needs it. */
   monotonicHistory: boolean
+  /**
+   * Does an agent survive the app closing?
+   *
+   * This is Cookrew's headline behaviour, not a detail: tmux keeps the session
+   * so reopening reattaches a still-running agent. A backend without it still
+   * works — it is what Windows ships, since tmux does not exist there and
+   * herdr cannot host a terminal — but "your agents die on quit" is something
+   * the product has to be able to say out loud, so it is declared here rather
+   * than re-derived from the backend's name at each call site.
+   */
+  persistsAcrossRestart: boolean
 }
 
 export interface Multiplexer {
