@@ -1,0 +1,58 @@
+name: Release
+
+# Cookrew had no packaging on any platform, so there was nothing to release
+# anywhere. This builds installable artifacts on the runners, which is not a
+# convenience: node-pty is a native module, so a Windows binary cannot be
+# produced from a Mac at all, and the macOS toolchain on a given developer
+# machine may be broken independently of the code.
+#
+# Manual dispatch, or a version tag.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            script: dist:mac
+            artifact: cookrew-macos
+          # windows-2022, not windows-latest: @electron/node-gyp's VS finder
+          # does not recognise the toolchain layout on the current latest image
+          # ("Could not find any Visual Studio installation"), while 2022 works.
+          - os: windows-2022
+            script: dist:win
+            artifact: cookrew-windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # postinstall rebuilds node-pty against Electron's ABI. This is the step
+      # that cannot be done cross-platform, and the reason this job exists.
+      - run: npm ci
+
+      # Correctness is gated by ci.yml. Running the suite again here would
+      # block Windows artifacts on 16 known POSIX assumptions in tests, which
+      # are a portability debt rather than a statement about the build.
+      - run: npm run ${{ matrix.script }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          # Ship the installers, not the unpacked tree.
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+            release/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
