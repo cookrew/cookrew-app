@@ -45,9 +45,14 @@ function mux(responses: Record<string, string> = {}, throwOn: string[] = []): He
 }
 
 describe('capabilities — the load-bearing declaration', () => {
-  it('declares that it CANNOT host a terminal', () => {
+  it('declares that THIS backend cannot host a terminal', () => {
     // Measured: `herdr session attach` returns 97,553 bytes of TUI where tmux
-    // returns 2,090 bytes of pane, and never echoes typed input.
+    // returns 2,090 bytes of pane.
+    //
+    // That is a fact about `session attach`, NOT about herdr — the sibling
+    // HerdrHostMultiplexer hosts with `agent attach`, which is pane-scoped and
+    // echoes at 27ms. This backend stays read-only because reading whole
+    // scrollback is all it was built for.
     expect(mux().capabilities.attach).toBe(false)
   })
 
@@ -58,7 +63,14 @@ describe('capabilities — the load-bearing declaration', () => {
   it('THROWS rather than degrading when asked to host a terminal', () => {
     // A silent fallback would hand node-pty a TUI stream and the damage would
     // surface much later, as a scraper producing nonsense.
-    expect(() => mux().attachSpawn()).toThrow(/cannot host a terminal/i)
+    expect(() => mux().attachSpawn()).toThrow(/read-only/i)
+  })
+
+  it('points the reader at the backend that CAN host', () => {
+    // The old message asserted "herdr cannot host a terminal", which is now
+    // false. A stale absolute claim in an error string is how a wrong verdict
+    // outlives the evidence that overturned it.
+    expect(() => mux().attachSpawn()).toThrow(/HerdrHostMultiplexer/)
   })
 })
 

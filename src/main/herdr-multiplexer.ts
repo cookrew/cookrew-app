@@ -249,12 +249,21 @@ export class HerdrMultiplexer implements Multiplexer {
     if (pane?.pane_id) this.runner.runQuiet(this.bin, ['pane', 'close', pane.pane_id])
   }
 
+  /** Never hosts, so there is never a session of its own to create. */
+  ensureSession(): void {}
+
   attachSpawn(): AttachSpawn {
     // Deliberately fatal rather than degraded. A silent fallback here would
     // hand node-pty a TUI stream and the failure would surface much later, as
     // a scraper producing nonsense.
+    //
+    // NOTE: this backend reads with `session attach`, which really does return
+    // the TUI. It is NOT the last word on herdr hosting — see
+    // herdr-host-multiplexer.ts, where `agent attach` against a chrome-free
+    // config was measured to be pane-scoped, echoing and quiet. Use that one to
+    // host; this one only reads.
     throw new Error(
-      'herdr cannot host a terminal: `session attach` returns its TUI, not the pane. ' +
+      'this herdr backend is read-only: use HerdrHostMultiplexer to host a terminal. ' +
         'Check capabilities.attach before selecting a backend.'
     )
   }

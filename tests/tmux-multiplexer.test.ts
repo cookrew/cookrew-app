@@ -50,7 +50,8 @@ const SPEC: AttachSpec = {
   terminalId: 'abc-123',
   socketPath: '/tmp/sock',
   cliDir: '/tmp/cli',
-  path: '/tmp/cli:/usr/bin'
+  path: '/tmp/cli:/usr/bin',
+  cwd: '/tmp/work'
 }
 
 describe('sessionNameFor', () => {

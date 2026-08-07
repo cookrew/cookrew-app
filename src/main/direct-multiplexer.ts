@@ -68,6 +68,9 @@ export class DirectMultiplexer implements Multiplexer {
     // up, which is the same fact as persistsAcrossRestart: false.
   }
 
+  /** Nothing to create: the spawn IS the session. */
+  ensureSession(): void {}
+
   /**
    * A login shell running the command, with the CLI bridge in the environment.
    *

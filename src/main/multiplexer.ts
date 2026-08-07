@@ -33,6 +33,15 @@ export interface AttachSpec {
   cliDir: string
   /** PATH the pane should run with (a GUI-launched app inherits a stripped one). */
   path: string
+  /**
+   * Working directory for the pane.
+   *
+   * tmux and the direct backend never needed this in the spec: node-pty spawns
+   * the attaching process and `cwd` is a spawn option, so the pane inherits it.
+   * herdr's SERVER creates the pane, in its own process with its own cwd, so it
+   * has to be told — otherwise every agent starts in the server's directory.
+   */
+  cwd: string
 }
 
 /**
@@ -109,6 +118,20 @@ export interface Multiplexer {
   /** Session names this backend owns — never foreign ones. */
   listSessions(): string[]
   killSession(name: string): void
+
+  /**
+   * Make sure the session exists and is running the agent, BEFORE attaching.
+   *
+   * tmux folds create-or-reattach into the attach itself (`new-session -A`),
+   * so this is a no-op there — which is exactly why it was never a method.
+   * herdr cannot: a pane must exist before anything can attach to it, and the
+   * pane is created over the socket rather than by the attaching process.
+   *
+   * Idempotent by contract. Calling it for a session that already exists must
+   * do NOTHING — in particular it must not re-run the agent command, because
+   * reattaching a surviving agent is the behaviour this whole layer protects.
+   */
+  ensureSession(spec: AttachSpec): void
 
   attachSpawn(spec: AttachSpec): AttachSpawn
 

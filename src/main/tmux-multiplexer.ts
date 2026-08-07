@@ -134,6 +134,12 @@ export class TmuxMultiplexer implements Multiplexer {
   }
 
   /**
+   * Nothing to do: `new-session -A` in attachSpawn IS the create-or-reattach,
+   * and doing it in one step is what makes tmux's reattach atomic.
+   */
+  ensureSession(): void {}
+
+  /**
    * `new-session -A`: reattach the terminal's session if it survived a
    * restart/switch, else create it.
    */
