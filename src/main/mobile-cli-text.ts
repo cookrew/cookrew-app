@@ -11,6 +11,12 @@ export interface MobileHelpInput {
   uncovered: string[]
   /** True when Tailscale is up on this machine. */
   tailnet: boolean
+  /**
+   * Proxy bypass entries the user must add before a browser on THIS Mac can
+   * load the tailnet URLs. Absent or empty means there is nothing to warn
+   * about — no proxy, or the tailnet is already exempt.
+   */
+  proxyBypassGaps?: string[]
 }
 
 /** Group order matches mobileEndpoints(): most-reachable first. */
@@ -45,6 +51,19 @@ export function renderMobileHelp(input: MobileHelpInput): string {
       `⚠ The certificate does not cover: ${input.uncovered.join(', ')}`,
       '  Those URLs fail with a name mismatch the phone cannot bypass.',
       '  Restart Cookrew to reissue the certificate with them included.'
+    )
+  }
+
+  // Gate on an ADVERTISED tailnet endpoint, not merely on Tailscale running:
+  // a proxy gap only matters if we actually printed a URL it will eat.
+  const gaps = input.proxyBypassGaps ?? []
+  if (gaps.length > 0 && input.endpoints.some((endpoint) => endpoint.kind === 'tailscale')) {
+    lines.push(
+      '',
+      '⚠ A system proxy here does not exempt the tailnet, so a browser ON THIS MAC',
+      '  fails the Tailscale URLs above with ERR_CONNECTION_CLOSED. Your phone is',
+      '  unaffected — this is the proxy, not Cookrew.',
+      `  Add to the proxy's bypass list: ${gaps.join(', ')}`
     )
   }
 

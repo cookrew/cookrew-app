@@ -92,6 +92,68 @@ describe('renderMobileHelp', () => {
     expect(text).toContain('mic')
   })
 
+  it('warns when a system proxy would swallow the tailnet URL it just printed', () => {
+    const text = renderMobileHelp({
+      endpoints: withTailnet,
+      secure: true,
+      uncovered: [],
+      tailnet: true,
+      proxyBypassGaps: ['100.64.0.0/10', '*.ts.net']
+    })
+    expect(text).toContain('100.64.0.0/10')
+    expect(text).toContain('*.ts.net')
+    // The symptom the user will actually see, so searching for it lands here.
+    expect(text).toContain('ERR_CONNECTION_CLOSED')
+    // It must not read as a Cookrew fault — that is the whole point.
+    expect(text).toContain('proxy')
+  })
+
+  it('lists only the bypass entry that is actually missing', () => {
+    const text = renderMobileHelp({
+      endpoints: withTailnet,
+      secure: true,
+      uncovered: [],
+      tailnet: true,
+      proxyBypassGaps: ['*.ts.net']
+    })
+    expect(text).toContain('*.ts.net')
+    expect(text).not.toContain('100.64.0.0/10')
+  })
+
+  it('stays quiet when the proxy already exempts the tailnet', () => {
+    const text = renderMobileHelp({
+      endpoints: withTailnet,
+      secure: true,
+      uncovered: [],
+      tailnet: true,
+      proxyBypassGaps: []
+    })
+    expect(text).not.toContain('ERR_CONNECTION_CLOSED')
+  })
+
+  it('stays quiet when the input says nothing about a proxy', () => {
+    const text = renderMobileHelp({ endpoints: withTailnet, secure: true, uncovered: [], tailnet: true })
+    expect(text).not.toContain('ERR_CONNECTION_CLOSED')
+  })
+
+  it('says nothing about the proxy when no tailnet URL was advertised', () => {
+    // Nothing to break: without a tailnet endpoint the proxy gap is academic.
+    const text = renderMobileHelp({
+      endpoints: mobileEndpoints({
+        addresses: ['192.168.2.13'],
+        tailnet: null,
+        secure: true,
+        token: null
+      }),
+      secure: true,
+      uncovered: [],
+      tailnet: false,
+      proxyBypassGaps: ['100.64.0.0/10', '*.ts.net']
+    })
+    expect(text).not.toContain('ERR_CONNECTION_CLOSED')
+    expect(text).not.toContain('100.64.0.0/10')
+  })
+
   it('tells the user how to revoke — a token that survives restarts needs one', () => {
     const text = renderMobileHelp({
       endpoints: withTailnet,
