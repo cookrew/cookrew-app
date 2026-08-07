@@ -85,7 +85,9 @@ export class TmuxMultiplexer implements Multiplexer {
     copyModeSearch: true,
     monotonicHistory: true,
     // The reason Cookrew uses a multiplexer at all.
-    persistsAcrossRestart: true
+    persistsAcrossRestart: true,
+    // No agent lifecycle: quiescence has to be inferred from output silence.
+    agentLifecycle: false
   }
 
   private readonly runner: CommandRunner

@@ -1,4 +1,4 @@
-import type { PtySession } from './pty'
+import { multiplexer, type PtySession } from './pty'
 
 export interface AskOptions {
   /** ms of continuous silence that counts as "the agent finished". */
@@ -60,19 +60,55 @@ export async function askTerminal(
   const before = session.fullText()
   await pasteAndSubmit(session, prompt)
 
+  await waitForReply(session, { quiescenceMs, timeoutMs, graceMs })
+
+  return diffOutput(before, session.fullText())
+}
+
+/**
+ * Wait until the agent has finished replying.
+ *
+ * Prefers ASKING the multiplexer over inferring it. Output quiescence — "silent
+ * for 2500ms, therefore done" — is wrong in both directions: an agent pausing
+ * mid-turn for a long tool call reads as finished, and an agent that answers
+ * instantly still costs the full 2500ms. A backend with `agentLifecycle` knows
+ * the real answer and reports it in milliseconds.
+ *
+ * The heuristic stays as the fallback, unchanged, for tmux and the direct
+ * backend — and for a herdr pane whose state herdr cannot report, which
+ * `waitUntilIdle` signals by resolving false rather than throwing.
+ */
+async function waitForReply(
+  session: PtySession,
+  timing: { quiescenceMs: number; timeoutMs: number; graceMs: number }
+): Promise<void> {
+  const mux = multiplexer()
+  if (mux?.capabilities.agentLifecycle && mux.waitUntilIdle) {
+    // The grace period still applies: an agent that has not started working
+    // yet is idle, and returning on that would report the PREVIOUS turn's
+    // output as this turn's reply.
+    await new Promise((resolve) => setTimeout(resolve, timing.graceMs))
+    if (await mux.waitUntilIdle(session.sessionName, timing.timeoutMs)) return
+  }
+  await waitForQuiescence(session, timing)
+}
+
+/** The original heuristic: silence for `quiescenceMs` means finished. */
+function waitForQuiescence(
+  session: PtySession,
+  timing: { quiescenceMs: number; timeoutMs: number; graceMs: number }
+): Promise<void> {
   const startedAt = Date.now()
-  await new Promise<void>((resolve) => {
+  return new Promise<void>((resolve) => {
     const timer = setInterval(() => {
       const elapsed = Date.now() - startedAt
-      const quiet = session.idleFor() >= quiescenceMs
-      if ((elapsed >= graceMs && quiet) || elapsed >= timeoutMs) {
+      const quiet = session.idleFor() >= timing.quiescenceMs
+      if ((elapsed >= timing.graceMs && quiet) || elapsed >= timing.timeoutMs) {
         clearInterval(timer)
         resolve()
       }
     }, 200)
   })
-
-  return diffOutput(before, session.fullText())
 }
 
 /** Send raw bytes (with escapes already decoded) and return the viewport. */

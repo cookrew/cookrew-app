@@ -105,6 +105,15 @@ export interface MultiplexerCapabilities {
    * than re-derived from the backend's name at each call site.
    */
   persistsAcrossRestart: boolean
+  /**
+   * Does the backend KNOW when an agent is working, blocked or idle?
+   *
+   * When false, "has the agent finished?" has to be inferred from output
+   * quiescence — silence for N ms — which reports a mid-turn pause as finished
+   * and taxes every fast reply by N ms. When true, `waitUntilIdle` answers it
+   * directly and the heuristic is not used at all.
+   */
+  agentLifecycle: boolean
 }
 
 export interface Multiplexer {
@@ -148,6 +157,17 @@ export interface Multiplexer {
 
   /** Re-read backend configuration, if it has any. */
   reloadConfig(): void
+
+  /**
+   * Wait until the agent in this session stops working.
+   *
+   * ASYNC and optional, unlike everything else here. Async because the wait can
+   * legitimately last minutes and a synchronous one would freeze the main
+   * process; optional because only a backend with `agentLifecycle` can answer
+   * it at all. Resolves false when the answer is unavailable, so callers fall
+   * back to inferring it rather than failing.
+   */
+  waitUntilIdle?(name: string, timeoutMs: number): Promise<boolean>
 }
 
 /**

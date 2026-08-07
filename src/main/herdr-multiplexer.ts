@@ -74,11 +74,23 @@
 // `opencode` alone is scrape-only by declaration (no session file), which is
 // exactly the harness capability the registry already models.
 //
-// So `capabilities.attach` is false, `attachSpawn` throws, and the selector
-// refuses to make this the primary backend. That is the honest shape: a
-// read-side accelerator, not a tmux replacement. Two independent routes to
-// hosting were tried and both are closed in 0.8.0; reopening either needs a
-// change upstream, not another attempt here.
+// AND THEN IT WAS REOPENED — SEE herdr-host-multiplexer.ts
+// --------------------------------------------------------
+// The paragraph above used to end "both routes are closed in 0.8.0; reopening
+// either needs a change upstream, not another attempt here." That was wrong,
+// and nothing upstream changed. A THIRD route was never tried: `agent attach`
+// against a Cookrew-owned config with herdr's chrome switched off, typing into
+// the client's stdin rather than pushing over the socket. It is pane-scoped,
+// echoes at 27ms, emits 0 bytes when idle, and its session survives the client
+// being killed.
+//
+// Both measurements in this header remain true. The conclusion drawn from them
+// did not survive, because both experiments held herdr's UI configuration
+// fixed and only one of them fed input the way Cookrew does.
+//
+// So: `capabilities.attach` is false FOR THIS BACKEND, `attachSpawn` throws,
+// and the selector will not make it primary. It is a read-side accelerator.
+// HerdrHostMultiplexer is the tmux replacement.
 
 import { execFileSync, spawnSync } from 'node:child_process'
 import type {
@@ -189,7 +201,9 @@ export class HerdrMultiplexer implements Multiplexer {
     monotonicHistory: true,
     // herdr's server does own its panes across restarts — but it cannot host
     // a Cookrew terminal, so this never applies in practice.
-    persistsAcrossRestart: true
+    persistsAcrossRestart: true,
+    // Reads only; it never hosts, so it has no agent to report a state for.
+    agentLifecycle: false
   }
 
   private readonly runner: CommandRunner

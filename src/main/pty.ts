@@ -124,7 +124,12 @@ export class PtySession extends EventEmitter {
   private disposed = false
 
   readonly usesTmux: boolean
-  private sessionName: string
+  /**
+   * The multiplexer session this terminal lives in. Public because callers
+   * that ask the backend about this terminal — `cookrew ask` waiting for the
+   * agent to go idle — need to name it.
+   */
+  readonly sessionName: string
 
   constructor(options: PtySessionOptions) {
     super()

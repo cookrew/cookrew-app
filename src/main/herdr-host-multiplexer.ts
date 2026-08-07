@@ -50,6 +50,7 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { waitForAgentState } from './herdr-agent-wait'
 import type {
   AttachSpawn,
   AttachSpec,
@@ -264,10 +265,15 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // scroll.max_offset_from_bottom rises with the session (measured).
     monotonicHistory: true,
     // MEASURED: the session outlived its client being killed.
-    persistsAcrossRestart: true
+    persistsAcrossRestart: true,
+    // herdr tracks agent lifecycle for the panes it hosts, so "has the agent
+    // finished?" is asked rather than inferred from output silence.
+    agentLifecycle: true
   }
 
   private readonly runner: CommandRunner
+  private readonly session: string
+  private readonly configPath: string
   private readonly startServer: () => void
   private readonly waitForServerMs: number
   private probed: boolean | null = null
@@ -279,6 +285,8 @@ export class HerdrHostMultiplexer implements Multiplexer {
       HERDR_SESSION: options.session,
       HERDR_CONFIG_PATH: options.configPath
     }
+    this.session = options.session
+    this.configPath = options.configPath
     this.runner = options.runner ?? createHerdrRunner(env)
     this.startServer = options.startServer ?? (() => spawnHerdrServer(env))
     this.waitForServerMs = options.waitForServerMs ?? 5000
@@ -530,5 +538,23 @@ export class HerdrHostMultiplexer implements Multiplexer {
   reloadConfig(): void {
     if (!this.available()) return
     this.quiet(['server', 'reload-config'])
+  }
+
+  /**
+   * Ask herdr when the agent stopped working, instead of inferring it.
+   *
+   * Async, and deliberately NOT routed through this class's synchronous runner:
+   * the wait lasts as long as the agent takes, and execFileSync would freeze
+   * the main process for exactly that long.
+   */
+  async waitUntilIdle(name: string, timeoutMs: number): Promise<boolean> {
+    const pane = this.paneFor(name)
+    if (!pane) return false
+    return waitForAgentState({
+      session: this.session,
+      configPath: this.configPath,
+      target: pane.pane_id,
+      timeoutMs
+    })
   }
 }

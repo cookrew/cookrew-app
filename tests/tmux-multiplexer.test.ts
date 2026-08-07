@@ -187,7 +187,11 @@ describe('TmuxMultiplexer', () => {
       attach: true,
       copyModeSearch: true,
       monotonicHistory: true,
-      persistsAcrossRestart: true
+      persistsAcrossRestart: true,
+      // tmux knows nothing about agents — it multiplexes terminals. This is
+      // the one capability the herdr backend has that tmux does not, and it
+      // is why `cookrew ask` still infers quiescence here.
+      agentLifecycle: false
     })
   })
 })

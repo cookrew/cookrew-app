@@ -42,7 +42,9 @@ export class DirectMultiplexer implements Multiplexer {
     // No history counter that survives anything, so checkpoint ordering must
     // fall back to its screen-derived path.
     monotonicHistory: false,
-    persistsAcrossRestart: false
+    persistsAcrossRestart: false,
+    // No agent lifecycle: quiescence has to be inferred from output silence.
+    agentLifecycle: false
   }
 
   /** Always: node-pty is a dependency, not an external program. */
