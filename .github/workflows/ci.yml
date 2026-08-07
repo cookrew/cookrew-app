@@ -10,11 +10,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # No windows leg: the app requires tmux (unsupported there), and the
-        # runner's VS finder currently breaks the node-pty ABI rebuild anyway
-        # (node-gyp ERR_CHILD_PROCESS_STDIO_MAXBUFFER).
-        os: [ubuntu-latest, macos-latest]
+        # Windows is an EXPERIMENT leg (continue-on-error), not a gate.
+        #
+        # Two blockers were recorded here. The first — "the app requires tmux"
+        # — is now weaker: every tmux call sits behind the Multiplexer seam and
+        # pty.ts already falls back to a plain node-pty spawn when no
+        # multiplexer is available, so Windows would run WITHOUT session
+        # persistence rather than not at all.
+        #
+        # The second is empirical and said "currently": the runner's VS finder
+        # breaking the node-pty ABI rebuild (node-gyp
+        # ERR_CHILD_PROCESS_STDIO_MAXBUFFER). Whether that still holds is a
+        # fact about today's runner image, so this leg measures it instead of
+        # assuming it. It must not block merges until it passes consistently.
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # Windows is exploratory until the node-pty rebuild is proven stable there.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -34,6 +46,7 @@ jobs:
       - run: npm run build
 
       - name: Guard against pre-rename residue
+        if: runner.os != 'Windows'
         run: |
           if grep -rn --exclude-dir=node_modules --exclude-dir=out --exclude-dir=.git \
               --exclude=package-lock.json --exclude=launch-plan.html \
