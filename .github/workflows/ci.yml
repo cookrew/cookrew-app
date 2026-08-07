@@ -18,15 +18,18 @@ jobs:
         # multiplexer is available, so Windows would run WITHOUT session
         # persistence rather than not at all.
         #
-        # The second is empirical and said "currently": the runner's VS finder
-        # breaking the node-pty ABI rebuild (node-gyp
-        # ERR_CHILD_PROCESS_STDIO_MAXBUFFER). Whether that still holds is a
-        # fact about today's runner image, so this leg measures it instead of
-        # assuming it. It must not block merges until it passes consistently.
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # The second is empirical and said "currently", so this leg measures
+        # it. First run on windows-latest failed differently from the recorded
+        # symptom: not ERR_CHILD_PROCESS_STDIO_MAXBUFFER but
+        #   gyp ERR! find VS — Could not find any Visual Studio installation
+        # i.e. @electron/node-gyp's VS finder does not recognise the toolchain
+        # on the current windows-latest image. Pinned to windows-2022, whose
+        # VS 2022 layout that finder does understand. Still non-blocking until
+        # it passes consistently.
+        os: [ubuntu-latest, macos-latest, windows-2022]
     runs-on: ${{ matrix.os }}
     # Windows is exploratory until the node-pty rebuild is proven stable there.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    continue-on-error: ${{ startsWith(matrix.os, 'windows') }}
     steps:
       - uses: actions/checkout@v4
 
