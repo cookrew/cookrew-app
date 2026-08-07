@@ -20,6 +20,7 @@ import {
 import { WorkspaceStore, WorkspaceNodeHit } from './store'
 import type { MobileEndpoint } from './mobile-endpoints'
 import { renderMobileHelp, renderRotated } from './mobile-cli-text'
+import { readProxyConfig, tailnetProxyGaps } from './proxy-bypass'
 import { AgentRegistry, AgentRegistryEntry } from './agent-registry'
 import { planRecruitTarget } from '../shared/workspace-dirs'
 import { PtyManager } from './pty'
@@ -824,11 +825,17 @@ export function cmdMobile(request: CliRequest, deps: SocketServerDeps): string {
     return renderRotated(deps.mobileEndpoints())
   }
   const endpoints = deps.mobileEndpoints()
+  const tailnetHosts = endpoints
+    .filter((endpoint) => endpoint.kind === 'tailscale')
+    .map((endpoint) => endpoint.host)
   return renderMobileHelp({
     endpoints,
     secure: endpoints.some((endpoint) => endpoint.url.startsWith('https')),
     uncovered: deps.uncoveredCertHosts(),
-    tailnet: endpoints.some((endpoint) => endpoint.kind === 'tailscale')
+    tailnet: endpoints.some((endpoint) => endpoint.kind === 'tailscale'),
+    // Read at print time, not at startup: the user may well fix their bypass
+    // list because of this warning, and the next run should stop nagging.
+    proxyBypassGaps: tailnetProxyGaps(tailnetHosts, readProxyConfig())
   })
 }
 
