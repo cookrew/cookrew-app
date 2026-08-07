@@ -221,6 +221,83 @@ describe('C1 wiring: the server cannot delegate without credentials', () => {
 
   it('startMobileServer always resolves a pairing token, even when none is supplied', () => {
     const src = readFileSync('src/main/mobile-server.ts', 'utf8')
-    expect(src).toMatch(/activePairingToken = deps\.pairingToken \?\? randomUUID\(\)/)
+    // The fallback is now the PERSISTED token rather than a per-run UUID, so a
+    // phone paired once survives a restart. The guarantee under test is
+    // unchanged: the server never delegates without a credential.
+    expect(src).toMatch(/activePairingToken = deps\.pairingToken \?\? loadOrCreatePairingToken\(\)/)
+  })
+
+  it('index.ts supplies the PERSISTED token — the fallback alone is not enough', () => {
+    // The bug this pins: mobile-server's `deps.pairingToken ?? persisted()`
+    // fallback is never reached, because index.ts always passes a token. It
+    // passed randomUUID(), so every restart still unpaired every device while
+    // the fallback sat there looking correct. Asserting mobile-server's source
+    // proved the fallback EXISTS, not that anything reaches it.
+    const src = readFileSync('src/main/index.ts', 'utf8')
+    expect(src).toMatch(/const pairingToken = loadOrCreatePairingToken\(\)/)
+    expect(src).not.toMatch(/const pairingToken = randomUUID\(\)/)
+  })
+
+  it('rotation swaps the token the RUNNING server checks, not just the file', () => {
+    // Writing the file alone leaves the process authorizing the revoked token
+    // while rejecting the freshly-printed one — the exact inverse of intent.
+    const src = readFileSync('src/main/mobile-server.ts', 'utf8')
+    const fn = src.slice(src.indexOf('export function rotateActivePairingToken'))
+    expect(fn.slice(0, 200)).toMatch(/activePairingToken = rotatePairingToken\(\)/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// /api/auth/status — the route that lets the phone find out it is unpaired
+// BEFORE it tries to act. Without it the only signal was a 401 on a write that
+// the renderer swallowed, so the UI simply went dead.
+// ---------------------------------------------------------------------------
+describe('/api/auth/status', () => {
+  const statusUrl = new URL('/api/auth/status', 'http://lan.local')
+
+  it('reports the pairing scope for a valid token', async () => {
+    const { response, captured } = stubResponse()
+    const handled = await handleMobileApi(
+      stubRequest('GET', `Bearer ${TOKEN}`),
+      response,
+      statusUrl,
+      stubDeps()
+    )
+    expect(handled).toBe(true)
+    expect(captured.status).toBe(200)
+    expect(captured.body).toMatchObject({ scope: 'pairing', required: true, canWrite: true })
+  })
+
+  it('reports scope "none" — with a 200, not a 401 — for an unpaired device', async () => {
+    // A 401 here would be caught by the very error path this route exists to
+    // replace; the phone needs a plain answer it can render.
+    const { response, captured } = stubResponse()
+    await handleMobileApi(stubRequest('GET'), response, statusUrl, stubDeps())
+    expect(captured.status).toBe(200)
+    expect(captured.body).toMatchObject({ scope: 'none', canWrite: false })
+  })
+
+  it('distinguishes a read-only token from a pairing token', async () => {
+    const deps = { pairingToken: TOKEN, wallToken: 'wall-token-456' } as unknown as MobileApiDeps
+    const { response, captured } = stubResponse()
+    await handleMobileApi(stubRequest('GET', 'Bearer wall-token-456'), response, statusUrl, deps)
+    expect(captured.body).toMatchObject({ scope: 'read-only', canWrite: false })
+  })
+
+  it('never echoes the token back', async () => {
+    const { response, captured } = stubResponse()
+    await handleMobileApi(stubRequest('GET', `Bearer ${TOKEN}`), response, statusUrl, stubDeps())
+    expect(JSON.stringify(captured.body)).not.toContain(TOKEN)
+  })
+
+  it('accepts a candidate token as a query param so a paste can be verified', async () => {
+    const { response, captured } = stubResponse()
+    await handleMobileApi(
+      stubRequest('GET'),
+      response,
+      new URL(`/api/auth/status?token=${TOKEN}`, 'http://lan.local'),
+      stubDeps()
+    )
+    expect(captured.body).toMatchObject({ scope: 'pairing' })
   })
 })

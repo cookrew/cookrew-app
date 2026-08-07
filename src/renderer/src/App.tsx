@@ -30,6 +30,7 @@ import { BrowserLayer, useInteractiveBrowserCapability } from './BrowserLayer'
 import { CanvasUiContext, ToolId } from './canvas-ui'
 import { useBrowserEngine } from './browser-engine'
 import { ErrorBoundary } from './ErrorBoundary'
+import { ReauthOverlay } from './ReauthOverlay'
 import { snapCardChanges, MOUSE_SNAP_PX, TOUCH_SNAP_PX, SnapGuide } from './card-snap'
 import { SnapGuides } from './SnapGuides'
 import { TeamForkPicker } from './TeamForkPicker'
@@ -574,6 +575,7 @@ function Canvas(): React.JSX.Element {
           interactiveCapability={interactiveCapability}
         />
         <EventToastLayer />
+        <ReauthOverlay />
       </div>
     </CanvasUiContext.Provider>
   )

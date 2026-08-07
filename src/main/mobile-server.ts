@@ -3,6 +3,10 @@ import https from 'node:https'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
+import { MOBILE_PORT, MOBILE_HTTPS_PORT } from './mobile-ports'
+import { mobileEndpoints, type MobileEndpoint } from './mobile-endpoints'
+import { loadOrCreatePairingToken, rotatePairingToken } from './pairing-token'
+import { readTailnet, tailnetCertHosts, type TailnetIdentity } from './tailscale'
 import { existsSync, readFileSync } from 'node:fs'
 import { powerSaveBlocker } from 'electron'
 import type { WorkspaceStore } from './store'
@@ -14,14 +18,16 @@ import type { EventLog } from './event-log'
 import type { AgentRegistry } from './agent-registry'
 import type { TraceReader } from './trace'
 import type { BoardSources } from './board-index'
+import { X509Certificate } from 'node:crypto'
 import { askTerminal } from './ask'
-import { ensureCert } from './cert'
+import { ensureCert, missingHosts, sansOf } from './cert'
 import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps } from './mobile-api'
 import { readJson, respondJson } from './mobile-http'
 import { fetchRendererDevResource } from './renderer-dev-proxy'
 
-export const MOBILE_PORT = 8639
-export const MOBILE_HTTPS_PORT = 8643
+// Re-exported so existing importers keep their import path; the constants
+// themselves live in an Electron-free module so pure code can use them.
+export { MOBILE_PORT, MOBILE_HTTPS_PORT } from './mobile-ports'
 
 let httpsReady = false
 
@@ -40,6 +46,9 @@ let activePairingToken: string | null = null
  * injects one (`deps.wallToken`).
  */
 let activeWallToken: string | null = null
+
+/** SAN list of the cert actually in use; empty until HTTPS starts. */
+let certSans: string[] = []
 
 /** Active power-save-blocker id, boxed so tests can reset it. */
 const powerBlockerId: { current: number | null } = { current: null }
@@ -108,9 +117,11 @@ export function startMobileServer(deps: MobileServerDeps): void {
     powerBlockerId.current = powerSaveBlocker.start('prevent-app-suspension')
   }
 
-  // C1: mint (or adopt) the pairing token BEFORE any route can run — every
-  // mutating route on this server requires it (see handleMobileApi's gate).
-  activePairingToken = deps.pairingToken ?? randomUUID()
+  // C1: resolve the pairing token BEFORE any route can run — every mutating
+  // route on this server requires it (see handleMobileApi's gate). The
+  // fallback is the PERSISTED token: a per-run UUID silently unpaired every
+  // phone on each restart, and the renderer swallowed the resulting 401s.
+  activePairingToken = deps.pairingToken ?? loadOrCreatePairingToken()
   activeWallToken = deps.wallToken ?? randomUUID()
 
   const requestHandler = (request: http.IncomingMessage, response: http.ServerResponse): void => {
@@ -130,9 +141,17 @@ export function startMobileServer(deps: MobileServerDeps): void {
   listenWithRetry(plain, MOBILE_PORT)
 
   // HTTPS with a self-signed cert: the only way phones on the LAN get a
-  // secure context, which the Web Speech / mic APIs require.
-  const cert = ensureCert(lanIps())
+  // secure context, which the Web Speech / mic APIs require. The tailnet
+  // address and MagicDNS name go in the SAN list too — without them the one
+  // endpoint that works away from home is the one the phone refuses to load.
+  const tailnet = refreshTailnet()
+  const tailnetHosts = tailnetCertHosts(tailnet)
+  const cert = ensureCert({
+    ips: [...new Set([...localAddresses(), ...tailnetHosts.ips])],
+    dnsNames: tailnetHosts.dnsNames
+  })
   if (cert) {
+    certSans = sansOf(new X509Certificate(cert.cert).subjectAltName)
     const secure = https.createServer({ key: cert.key, cert: cert.cert }, requestHandler)
     secure.on('listening', () => {
       httpsReady = true
@@ -162,7 +181,7 @@ function listenWithRetry(server: http.Server | https.Server, port: number): void
   server.listen(port, '0.0.0.0')
 }
 
-function lanIps(): string[] {
+function localAddresses(): string[] {
   const ips: string[] = []
   for (const list of Object.values(networkInterfaces())) {
     for (const net of list ?? []) {
@@ -172,23 +191,66 @@ function lanIps(): string[] {
   return ips
 }
 
+/**
+ * Tailscale can come up long after the app did, so the identity is re-read on
+ * demand rather than pinned at startup — but not on every call: `tailscale
+ * status` forks a process, and `cookrew mobile` is not the only caller.
+ */
+const tailnetCache: { value: TailnetIdentity | null; readAt: number } = { value: null, readAt: 0 }
+const TAILNET_TTL_MS = 15_000
+
+function refreshTailnet(): TailnetIdentity | null {
+  const now = Date.now()
+  if (now - tailnetCache.readAt < TAILNET_TTL_MS) return tailnetCache.value
+  tailnetCache.value = readTailnet()
+  tailnetCache.readAt = now
+  return tailnetCache.value
+}
+
+/**
+ * Every address the phone could use, classified and ordered — tailnet first,
+ * then the LAN. The pairing token rides each URL as ?token= (C1): the desktop
+ * shows the URL, the phone lifts the token into storage and sends it back as
+ * a bearer header on mutating routes.
+ */
+export function mobileEndpointList(): MobileEndpoint[] {
+  return mobileEndpoints({
+    addresses: localAddresses(),
+    tailnet: refreshTailnet(),
+    secure: httpsReady,
+    token: activePairingToken
+  })
+}
+
 export function mobileUrls(): string[] {
-  // The pairing token rides the URL as ?token= (C1): the desktop shows this
-  // URL once, the phone's client lifts the token into sessionStorage and
-  // sends it back as a bearer header on mutating routes.
-  const paired = (url: string): string =>
-    activePairingToken ? `${url}/?token=${activePairingToken}` : url
-  const ips = lanIps()
-  if (ips.length === 0) {
-    return (httpsReady
-      ? [`https://localhost:${MOBILE_HTTPS_PORT}`, `http://localhost:${MOBILE_PORT}`]
-      : [`http://localhost:${MOBILE_PORT}`]
-    ).map(paired)
-  }
-  // Prefer HTTPS (mic-capable) when available; keep HTTP as a fallback line.
-  const scheme = httpsReady ? 'https' : 'http'
-  const port = httpsReady ? MOBILE_HTTPS_PORT : MOBILE_PORT
-  return ips.map((ip) => paired(`${scheme}://${ip}:${port}`))
+  return mobileEndpointList().map((endpoint) => endpoint.url)
+}
+
+/**
+ * Revoke the pairing token and adopt the new one IN THE RUNNING SERVER.
+ *
+ * Rotating the file alone would be worse than not rotating at all: the
+ * process keeps authorizing the old token, so every device that was supposed
+ * to be revoked still works, while the freshly-printed URL is rejected until
+ * the next restart. The write and the swap belong together.
+ */
+export function rotateActivePairingToken(): string {
+  activePairingToken = rotatePairingToken()
+  return activePairingToken
+}
+
+/**
+ * Hosts the running HTTPS cert does NOT cover. Non-empty means those endpoints
+ * fail with a name mismatch the user cannot wave away — worth saying out loud
+ * rather than letting them debug it on a phone. Empty when HTTPS is off (the
+ * cert is then irrelevant) or when the cert covers everything.
+ */
+export function uncoveredCertHosts(): string[] {
+  if (!httpsReady || certSans.length === 0) return []
+  return missingHosts(certSans, {
+    ips: mobileEndpointList().map((endpoint) => endpoint.host),
+    dnsNames: []
+  })
 }
 
 /**

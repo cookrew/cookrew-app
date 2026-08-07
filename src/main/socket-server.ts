@@ -18,6 +18,8 @@ import {
   WorkspaceMeta
 } from '../shared/model'
 import { WorkspaceStore, WorkspaceNodeHit } from './store'
+import type { MobileEndpoint } from './mobile-endpoints'
+import { renderMobileHelp, renderRotated } from './mobile-cli-text'
 import { AgentRegistry, AgentRegistryEntry } from './agent-registry'
 import { planRecruitTarget } from '../shared/workspace-dirs'
 import { PtyManager } from './pty'
@@ -49,6 +51,12 @@ export interface SocketServerDeps {
   voice: VoiceEngine
   /** LAN URLs of the mobile companion server. */
   mobileUrls: () => string[]
+  /** The same endpoints, classified (tailnet / LAN) and ordered. */
+  mobileEndpoints: () => MobileEndpoint[]
+  /** Endpoint hosts the running HTTPS cert does not cover. */
+  uncoveredCertHosts: () => string[]
+  /** Revoke the pairing token; every paired device must re-pair. */
+  rotatePairingToken: () => string
   /** LAN URLs of the TV wall (HTTP, wall-token bearing). */
   /** Workspace registry + switching (switching rebuilds PTYs). */
   listWorkspaces: () => WorkspaceList
@@ -198,7 +206,7 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
     case 'voice':
       return cmdVoice(request, deps)
     case 'mobile':
-      return cmdMobile(deps)
+      return cmdMobile(request, deps)
     case 'workspace':
       return cmdWorkspace(request, deps)
     case 'team':
@@ -805,20 +813,18 @@ async function cmdGit(request: CliRequest, deps: SocketServerDeps): Promise<stri
   return `${info.branch ?? 'detached'} — ${state}  (${info.root})`
 }
 
-function cmdMobile(deps: SocketServerDeps): string {
-  const urls = deps.mobileUrls()
-  const secure = urls.some((u) => u.startsWith('https'))
-  return [
-    'Cookrew Mobile — open on your phone (same Wi-Fi):',
-    ...urls.map((u) => `  ${u}`),
-    '',
-    secure
-      ? 'These are HTTPS (self-signed): the phone will warn once — tap Advanced →\nProceed / Visit anyway. HTTPS is required so 🎙️ voice dictation can use the mic.'
-      : '⚠ HTTP only (openssl not found): 🎙️ voice dictation needs HTTPS, so the mic\nwill be blocked on the phone. Everything else works.',
-    '',
-    'The client lists terminals, tails output, sends prompts, does 🎙️ dictation',
-    'and reads replies aloud (Web Speech API).'
-  ].join('\n')
+function cmdMobile(request: CliRequest, deps: SocketServerDeps): string {
+  if (request.args[0] === '--rotate') {
+    deps.rotatePairingToken()
+    return renderRotated(deps.mobileEndpoints())
+  }
+  const endpoints = deps.mobileEndpoints()
+  return renderMobileHelp({
+    endpoints,
+    secure: endpoints.some((endpoint) => endpoint.url.startsWith('https')),
+    uncovered: deps.uncoveredCertHosts(),
+    tailnet: endpoints.some((endpoint) => endpoint.kind === 'tailscale')
+  })
 }
 
 function cmdRoutine(request: CliRequest, deps: SocketServerDeps): string {

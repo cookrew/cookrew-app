@@ -179,6 +179,22 @@ export async function handleMobileApi(
   /** Cleared for a read: either scope. */
   const canRead = hasPairing || hasReadOnly;
 
+  // What the presented credential is worth. The phone asks BEFORE it acts, so
+  // an unpaired device can say "you are unpaired" instead of letting every
+  // write fail silently; it is also how a pasted token gets verified during
+  // re-pairing. Deliberately open: it discloses whether the caller's OWN token
+  // works, never the token itself, and the tokens are 192-bit secrets.
+  if (method === "GET" && p === "/api/auth/status") {
+    respondJson(response, 200, {
+      scope: hasPairing ? "pairing" : hasReadOnly ? "read-only" : "none",
+      // False only for an in-process embedder that constructed deps without a
+      // token; on the 0.0.0.0 listener it is always true.
+      required: !!deps.pairingToken,
+      canWrite: !deps.pairingToken || hasPairing,
+    });
+    return true;
+  }
+
   if (method !== "GET" && deps.pairingToken && !hasPairing) {
     respondJson(response, 401, {
       error: hasReadOnly

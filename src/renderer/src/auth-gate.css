@@ -1,0 +1,81 @@
+/* Re-pair screen. Sits above everything: an unpaired phone has no working UI
+   underneath to interact with, so there is nothing to see past it. */
+
+.cr-reauth {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  /* Slightly opaque rather than fully: the canvas behind stays recognisable,
+     so it reads as "this device is locked out", not "the app crashed". */
+  background: color-mix(in srgb, var(--cr-bg, #faf8f4) 82%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.cr-reauth-card {
+  width: min(420px, 100%);
+  padding: 20px;
+  border: 1px solid var(--cr-line, #d9d2c4);
+  border-radius: var(--cr-radius, 10px);
+  background: var(--cr-panel, #fffdf8);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 18%);
+}
+
+.cr-reauth-title {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--cr-ink, #2d2a20);
+}
+
+.cr-reauth-body {
+  margin: 0 0 16px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--cr-ink-dim, #6b6455);
+}
+
+.cr-reauth-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--cr-ink-dim, #6b6455);
+}
+
+.cr-reauth-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--cr-line, #d9d2c4);
+  border-radius: 8px;
+  background: var(--cr-bg, #faf8f4);
+  color: var(--cr-ink, #2d2a20);
+  font-family: var(--cr-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  /* 16px: anything smaller makes iOS Safari zoom the viewport on focus. */
+  font-size: 16px;
+}
+
+.cr-reauth-input:focus {
+  outline: 2px solid var(--cr-accent, #c2703d);
+  outline-offset: 1px;
+}
+
+.cr-reauth-error {
+  margin: 10px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--cr-danger, #b4453a);
+}
+
+.cr-reauth-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
