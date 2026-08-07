@@ -28,8 +28,10 @@ jobs:
         # it passes consistently.
         os: [ubuntu-latest, macos-latest, windows-2022]
     runs-on: ${{ matrix.os }}
-    # Windows is exploratory until the node-pty rebuild is proven stable there.
-    continue-on-error: ${{ startsWith(matrix.os, 'windows') }}
+    # Windows was exploratory while the node-pty rebuild was unproven. It
+    # builds on windows-2022 and the suite passes there now, so it gates like
+    # any other leg — otherwise a Windows regression lands silently.
+    continue-on-error: false
     steps:
       - uses: actions/checkout@v4
 

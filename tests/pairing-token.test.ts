@@ -34,7 +34,9 @@ describe('loadOrCreatePairingToken', () => {
     const dir = freshDir()
     loadOrCreatePairingToken(dir)
     const mode = statSync(pairingTokenFile(dir)).mode & 0o777
-    expect(mode).toBe(0o600)
+    // Windows has no POSIX mode bits; the guarantee under test is a
+    // POSIX one, so assert it where it exists rather than faking it.
+    if (process.platform !== 'win32') expect(mode).toBe(0o600)
     rmSync(dir, { recursive: true, force: true })
   })
 
