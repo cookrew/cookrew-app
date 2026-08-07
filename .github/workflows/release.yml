@@ -6,11 +6,19 @@ name: Release
 # produced from a Mac at all, and the macOS toolchain on a given developer
 # machine may be broken independently of the code.
 #
-# Manual dispatch, or a version tag.
+# Manual dispatch, or a version tag. Also on PRs that touch the packaging
+# itself: a release pipeline nobody exercises until release day is a pipeline
+# that breaks on release day, and the path filter keeps it from building
+# installers for every unrelated change.
 on:
   workflow_dispatch:
   push:
     tags: ['v*']
+  pull_request:
+    paths:
+      - 'electron-builder.yml'
+      - '.github/workflows/release.yml'
+      - 'package.json'
 
 jobs:
   build:
