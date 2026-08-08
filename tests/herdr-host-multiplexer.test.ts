@@ -526,3 +526,81 @@ describe('attachSpawn never hands out an argv that exits instantly', () => {
     expect(runner.calls.some((c) => c.args[1] === 'report-agent')).toBe(false)
   })
 })
+
+describe('attachability is re-established on EVERY attach', () => {
+  const HEALTHY = JSON.stringify({
+    result: {
+      process_info: {
+        shell_pid: 7,
+        foreground_processes: [{ argv: ['claude'], argv0: 'claude', name: 'claude', pid: 7 }]
+      }
+    }
+  })
+
+  it('re-reports the agent for a healthy EXISTING pane', () => {
+    // The bug this guards: herdr restores panes from disk across a server
+    // restart WITHOUT their agent registration, while the process keeps
+    // running. `agent attach` resolves through that registry, so the pane
+    // becomes permanently unattachable — terminal never opens, transcript
+    // never renders. Measured live: 5 of 17 panes in that state.
+    const runner = fakeRunner({
+      'pane list': PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc', agent: 'claude' }]),
+      'pane process-info': HEALTHY
+    })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).ensureSession(SPEC)
+    expect(runner.calls.some((c) => c.args[1] === 'report-agent')).toBe(true)
+  })
+
+  it('still does NOT reboot the agent while re-reporting', () => {
+    // Re-registering must not become a second way to restart a live agent.
+    const runner = fakeRunner({
+      'pane list': PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc', agent: 'claude' }]),
+      'pane process-info': HEALTHY
+    })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).ensureSession(SPEC)
+    const mutating = runner.calls.filter((c) => ['split', 'send-text', 'send-keys'].includes(c.args[1]))
+    expect(mutating).toEqual([])
+  })
+
+  it('preserves the state herdr already holds instead of asserting idle', () => {
+    // Cookrew feeds this state into turn-tracker now. Claiming `idle` over a
+    // working agent would end the turn early and mint a checkpoint from a
+    // half-written reply.
+    const runner = fakeRunner({
+      'pane list': PANE_LIST([
+        { pane_id: 'w1:p1', label: 'cookrew_abc', agent: 'claude', agent_status: 'working' }
+      ]),
+      'pane process-info': HEALTHY
+    })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).ensureSession(SPEC)
+    const report = runner.calls.find((c) => c.args[1] === 'report-agent')!
+    expect(report.args[report.args.indexOf('--state') + 1]).toBe('working')
+  })
+
+  it('falls back to `unknown`, never a guessed idle', () => {
+    const runner = fakeRunner({
+      'pane list': PANE_LIST([
+        { pane_id: 'w1:p1', label: 'cookrew_abc', agent: 'claude', agent_status: 'unknown' }
+      ]),
+      'pane process-info': HEALTHY
+    })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).ensureSession(SPEC)
+    const report = runner.calls.find((c) => c.args[1] === 'report-agent')!
+    expect(report.args[report.args.indexOf('--state') + 1]).toBe('unknown')
+  })
+
+  it('keeps the agent herdr recorded over one derived from the command', () => {
+    // A node whose command was edited must not have its restored registration
+    // relabelled to something the pane is not running.
+    const runner = fakeRunner({
+      'pane list': PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc', agent: 'codex' }]),
+      'pane process-info': HEALTHY
+    })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).ensureSession({
+      ...SPEC,
+      command: 'claude --permission-mode bypassPermissions'
+    })
+    const report = runner.calls.find((c) => c.args[1] === 'report-agent')!
+    expect(report.args[report.args.indexOf('--agent') + 1]).toBe('codex')
+  })
+})

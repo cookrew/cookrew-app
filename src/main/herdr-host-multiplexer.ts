@@ -73,6 +73,8 @@ export interface HerdrPane {
   label?: string | null
   /** herdr's own view of which agent runs here — set by report-agent. */
   agent?: string | null
+  /** herdr's current lifecycle state for this pane, when it has one. */
+  agent_status?: string | null
   terminal_id?: string | null
   cwd?: string | null
   revision?: number
@@ -422,7 +424,22 @@ export class HerdrHostMultiplexer implements Multiplexer {
     if (!this.ensureServer()) throw new Error('herdr server did not come up on Cookrew\'s socket')
 
     const existing = this.paneFor(spec.sessionName)
-    if (existing && !this.isHusk(existing, spec)) return
+    if (existing && !this.isHusk(existing, spec)) {
+      // The pane is healthy — but attachability is NOT durable, and that is a
+      // separate failure from the husk.
+      //
+      // herdr restores panes from disk across a server restart WITHOUT their
+      // agent registration, while the agent process keeps running. `agent
+      // attach` resolves its target through that registry, so such a pane is
+      // permanently unattachable: agent_not_found, terminal never opens,
+      // transcript never renders. Measured on a live session — 5 of 17 panes
+      // had a running agent and no registration.
+      //
+      // Re-reporting is idempotent and costs one call, so it happens on every
+      // attach rather than only when the pane is created.
+      this.reportAgent(existing, spec)
+      return
+    }
 
     const pane = existing ?? this.adoptOrCreate(spec)
     if (!pane?.pane_id) throw new Error(`herdr could not create a pane for '${spec.sessionName}'`)
@@ -452,11 +469,31 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // this and will correct the state (observed: a reported state overridden
     // ~100ms later by herdr's own reading of a live claude TUI), which is the
     // signal Cookrew currently infers by scraping.
+    this.reportAgent(pane, spec)
+  }
+
+  /**
+   * Register the agent so `agent attach` can resolve this pane.
+   *
+   * The state reported is the one herdr ALREADY holds, not a fixed 'idle'.
+   * Asserting idle over a working agent would be a lie for as long as it takes
+   * herdr's own detector to correct it — and Cookrew now feeds that state
+   * straight into turn-tracker, where a spurious idle ends the turn early and
+   * mints a checkpoint from a half-written reply. `unknown` is the honest
+   * fallback: the status feed maps it to "no signal" and keeps inferring.
+   */
+  private reportAgent(pane: HerdrPane, spec: AttachSpec): void {
+    const known = pane.agent_status
+    const state =
+      known === 'idle' || known === 'working' || known === 'blocked' ? known : 'unknown'
     this.quiet([
       'pane', 'report-agent', pane.pane_id,
       '--source', 'cookrew',
-      '--agent', agentKind(spec.command),
-      '--state', 'idle'
+      // Prefer what herdr already recorded: a pane whose registration is being
+      // restored keeps the agent it actually runs, even if the node's command
+      // has since been edited.
+      '--agent', pane.agent && pane.agent.length > 0 ? pane.agent : agentKind(spec.command),
+      '--state', state
     ])
   }
 
