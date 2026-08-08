@@ -51,12 +51,18 @@ export interface StatusFeedOptions {
 /**
  * One event line -> a status update, or null.
  *
- * `unknown` deliberately yields null rather than a status. herdr reports it
- * when its detector cannot tell, and null means "no signal" to every caller —
- * so the scraped path stays in charge. Mapping unknown to `idle` would end
- * turns on herdr's uncertainty, which is worse than the heuristic it replaces.
+ * `unknown` is a REAL update, not noise: it is herdr explicitly retracting a
+ * state it can no longer stand behind, and it must ERASE the cached entry.
+ * The first design skipped it, which left the previous status in the map —
+ * and a stale `working` is the worst possible resident: turn-tracker's poll
+ * returns early on `working`, so one retraction swallowed meant every
+ * subsequent turn was held open forever (the frozen checkpoint rail,
+ * 2026-08-09: the conductor's turn store stopped at the second the herdr
+ * server died and never advanced through five hours of conversation).
  */
-export function parseStatusEvent(line: string): { paneId: string; status: HerdrStatus } | null {
+export function parseStatusEvent(
+  line: string
+): { paneId: string; status: HerdrStatus | 'unknown' } | null {
   let msg: { event?: string; data?: { pane_id?: unknown; agent_status?: unknown } }
   try {
     msg = JSON.parse(line) as typeof msg
@@ -67,7 +73,13 @@ export function parseStatusEvent(line: string): { paneId: string; status: HerdrS
   const paneId = msg.data?.pane_id
   const status = msg.data?.agent_status
   if (typeof paneId !== 'string') return null
-  if (status !== 'idle' && status !== 'working' && status !== 'blocked' && status !== 'done') {
+  if (
+    status !== 'idle' &&
+    status !== 'working' &&
+    status !== 'blocked' &&
+    status !== 'done' &&
+    status !== 'unknown'
+  ) {
     return null
   }
   return { paneId, status }
@@ -213,10 +225,17 @@ export class HerdrStatusFeed {
     socket.on('data', (chunk) => this.ingest(chunk))
     socket.on('close', () => {
       this.socket = null
+      // A dead subscription makes every cached status a GUESS about a world
+      // that has moved on — and the server dying mid-`working` is precisely
+      // when the guess is wrong. Callers treat an empty map as "no signal"
+      // and fall back to inference, which is strictly better than a stale
+      // fact. The reconnect re-seeds from the live pane list.
+      this.status.clear()
       this.scheduleReconnect()
     })
     socket.on('error', () => {
       this.socket = null
+      this.status.clear()
       this.scheduleReconnect()
     })
 
@@ -246,7 +265,12 @@ export class HerdrStatusFeed {
         const label = this.labels.get(update.paneId)
         // A pane Cookrew does not own (or one whose label we have not seen)
         // is not an error — it is simply not ours to record.
-        if (label) this.status.set(label, update.status)
+        if (label) {
+          // unknown ERASES: herdr retracting a state must not leave the old
+          // one behind, or a stale `working` blocks turn finalization forever.
+          if (update.status === 'unknown') this.status.delete(label)
+          else this.status.set(label, update.status)
+        }
       }
       nl = this.buffer.indexOf('\n')
     }

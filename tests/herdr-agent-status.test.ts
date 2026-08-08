@@ -61,11 +61,16 @@ describe('parseStatusEvent — and what counts as no answer', () => {
     })
   })
 
-  it('treats `unknown` as NO SIGNAL, not as idle', () => {
-    // The single most important line in this file. herdr reports `unknown`
-    // when its detector cannot tell; mapping that to idle would end turns on
-    // herdr's uncertainty — worse than the heuristic it replaces.
-    expect(parseStatusEvent(EVENT('w1:p1', 'unknown'))).toBeNull()
+  it('treats `unknown` as a RETRACTION — parsed, never mapped to a state', () => {
+    // Two wrong readings of `unknown`, each caught live. Mapping it to idle
+    // would end turns on herdr's uncertainty. But DISCARDING it (the first
+    // design) left the previous status in the cache — a stale `working` that
+    // held every turn open for five hours (the frozen checkpoint rail). The
+    // event parses as itself; the feed ERASES the cached entry on it.
+    expect(parseStatusEvent(EVENT('w1:p1', 'unknown'))).toEqual({
+      paneId: 'w1:p1',
+      status: 'unknown'
+    })
   })
 
   it('ignores other event types and malformed lines', () => {
@@ -258,5 +263,32 @@ describe('seeding — the blind spot events alone leave', () => {
       result: { panes: [{ pane_id: 'w1:p1', label: 'a', agent_status: 'blocked' }] }
     })
     expect(panesFrom(raw)).toEqual([{ paneId: 'w1:p1', label: 'a', status: 'blocked' }])
+  })
+})
+
+describe('staleness — the frozen checkpoint rail (2026-08-09)', () => {
+  // The conductor's turn store stopped at the SECOND the herdr server died
+  // and stayed frozen for five hours: the feed cached `working`, the socket
+  // dropped, and nothing ever retracted it — so turn-tracker's poll returned
+  // early on every tick and no turn could finalize. Two invariants close it.
+
+  it('a dropped connection ERASES every cached status', () => {
+    const { feed, socket } = feedWith([
+      { paneId: 'w1:p1', label: 'cookrew_abc', status: 'working' }
+    ])
+    expect(feed.statusFor('cookrew_abc')).toBe('working')
+    socket.close()
+    // Null means "no signal": callers fall back to inference, which is
+    // strictly better than a fact about a world that has moved on.
+    expect(feed.statusFor('cookrew_abc')).toBeNull()
+  })
+
+  it('an `unknown` event ERASES the entry rather than skipping the update', () => {
+    const { feed, socket } = feedWith([
+      { paneId: 'w1:p1', label: 'cookrew_abc', status: 'working' }
+    ])
+    expect(feed.statusFor('cookrew_abc')).toBe('working')
+    socket.emit(EVENT('w1:p1', 'unknown') + '\n')
+    expect(feed.statusFor('cookrew_abc')).toBeNull()
   })
 })
