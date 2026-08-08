@@ -133,7 +133,12 @@ describe('ensureSession — idempotence IS the persistence guarantee', () => {
     // an existing pane would kill and restart the user's agent on every app
     // launch, which is the exact opposite of what persistence means.
     const runner = fakeRunner({
-      'pane list': PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc' }])
+      'pane list': PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc' }]),
+      // The pane must LOOK live: ensureSession now verifies the agent is
+      // actually running before trusting the label (the husk fix).
+      'pane process-info': JSON.stringify({
+      result: { process_info: { shell_pid: 7, foreground_processes: [{ argv: ['claude'], argv0: 'claude', name: 'claude', pid: 7 }] } }
+    })
     })
     new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).ensureSession(SPEC)
     const mutating = runner.calls.filter((c) => ['split', 'send-text', 'send-keys'].includes(c.args[1]))
@@ -143,7 +148,10 @@ describe('ensureSession — idempotence IS the persistence guarantee', () => {
   it('creates, LABELS, then boots — in that order', () => {
     const runner = fakeRunner({
       'pane list': PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_other' }]),
-      'pane split': JSON.stringify({ result: { pane: { pane_id: 'w1:p9' } } })
+      'pane split': JSON.stringify({ result: { pane: { pane_id: 'w1:p9' } } }),
+      'pane process-info': JSON.stringify({
+      result: { process_info: { shell_pid: 7, foreground_processes: [{ argv: ['claude'], argv0: 'claude', name: 'claude', pid: 7 }] } }
+    })
     })
     new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).ensureSession(SPEC)
     // Only the MUTATIONS are asserted, and only their order. Reads are an
@@ -158,7 +166,10 @@ describe('ensureSession — idempotence IS the persistence guarantee', () => {
   it('labels BEFORE booting so a failed boot leaves a findable pane, not an orphan', () => {
     const runner = fakeRunner({
       'pane list': PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_other' }]),
-      'pane split': JSON.stringify({ result: { pane: { pane_id: 'w1:p9' } } })
+      'pane split': JSON.stringify({ result: { pane: { pane_id: 'w1:p9' } } }),
+      'pane process-info': JSON.stringify({
+      result: { process_info: { shell_pid: 7, foreground_processes: [{ argv: ['claude'], argv0: 'claude', name: 'claude', pid: 7 }] } }
+    })
     })
     new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).ensureSession(SPEC)
     const rename = runner.calls.findIndex((c) => c.args[1] === 'rename')
@@ -169,7 +180,10 @@ describe('ensureSession — idempotence IS the persistence guarantee', () => {
   it('passes the cwd to herdr — the SERVER creates the pane, not node-pty', () => {
     const runner = fakeRunner({
       'pane list': PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_other' }]),
-      'pane split': JSON.stringify({ result: { pane: { pane_id: 'w1:p9' } } })
+      'pane split': JSON.stringify({ result: { pane: { pane_id: 'w1:p9' } } }),
+      'pane process-info': JSON.stringify({
+      result: { process_info: { shell_pid: 7, foreground_processes: [{ argv: ['claude'], argv0: 'claude', name: 'claude', pid: 7 }] } }
+    })
     })
     new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).ensureSession(SPEC)
     const split = runner.calls.find((c) => c.args[1] === 'split')!
@@ -183,7 +197,10 @@ describe('ensureSession — idempotence IS the persistence guarantee', () => {
     // branch the very first Cookrew terminal could never start.
     const runner = fakeRunner({
       'pane list': PANE_LIST([]),
-      'workspace create': JSON.stringify({ result: { root_pane: { pane_id: 'w1:p1' } } })
+      'workspace create': JSON.stringify({ result: { root_pane: { pane_id: 'w1:p1' } } }),
+      'pane process-info': JSON.stringify({
+      result: { process_info: { shell_pid: 7, foreground_processes: [{ argv: ['claude'], argv0: 'claude', name: 'claude', pid: 7 }] } }
+    })
     })
     new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).ensureSession(SPEC)
     expect(runner.calls.some((c) => c.args[0] === 'workspace' && c.args[1] === 'create')).toBe(true)
@@ -196,7 +213,10 @@ describe('ensureSession — idempotence IS the persistence guarantee', () => {
     // the seam herdr's own detector corrects on top of.
     const runner = fakeRunner({
       'pane list': PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_other' }]),
-      'pane split': JSON.stringify({ result: { pane: { pane_id: 'w1:p9' } } })
+      'pane split': JSON.stringify({ result: { pane: { pane_id: 'w1:p9' } } }),
+      'pane process-info': JSON.stringify({
+      result: { process_info: { shell_pid: 7, foreground_processes: [{ argv: ['claude'], argv0: 'claude', name: 'claude', pid: 7 }] } }
+    })
     })
     new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).ensureSession(SPEC)
     const report = runner.calls.find((c) => c.args[1] === 'report-agent')
@@ -373,5 +393,98 @@ describe('panePid', () => {
 
   it('is null for an unknown session rather than a wrong pid', () => {
     expect(mux({ 'pane list': PANE_LIST([]) }).panePid('cookrew_gone')).toBeNull()
+  })
+})
+
+describe('husk recovery — a restored label is not a recovered agent', () => {
+  // herdr persists pane LAYOUT, not processes: when its server dies, agents
+  // die with it, and the next server restores each pane as a fresh shell
+  // wearing the old label. Measured live; scratchpad/herdr-server-restart-probe
+  // is the end-to-end version of these tests.
+  const husk = (processInfo: string | undefined): ReturnType<typeof fakeRunner> =>
+    fakeRunner({
+      'pane list': PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc' }]),
+      ...(processInfo === undefined ? {} : { 'pane process-info': processInfo })
+    })
+  const shellInfo = JSON.stringify({
+    result: {
+      process_info: {
+        shell_pid: 9,
+        foreground_processes: [{ argv: ['-zsh'], argv0: 'zsh', name: 'zsh', pid: 9 }]
+      }
+    }
+  })
+
+  it('REBOOTS the existing pane when its foreground is a bare shell', () => {
+    const runner = husk(shellInfo)
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner, settleMs: 10 })
+      .ensureSession(SPEC)
+    // Into the SAME pane — no split, no new workspace, and the typed boot.
+    expect(runner.calls.some((c) => c.args[1] === 'send-text' && c.args[2] === 'w1:p1')).toBe(true)
+    expect(runner.calls.some((c) => c.args[1] === 'split')).toBe(false)
+    expect(runner.calls.some((c) => c.args[0] === 'workspace')).toBe(false)
+  })
+
+  it('re-REPORTS the agent after a husk reboot — registration died with the server', () => {
+    const runner = husk(shellInfo)
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner, settleMs: 10 })
+      .ensureSession(SPEC)
+    expect(runner.calls.some((c) => c.args[1] === 'report-agent')).toBe(true)
+  })
+
+  it('does NOT reboot when the expected agent is visible in the pane argv', () => {
+    // argv containment, not argv0 equality: script-wrapper agents exec through
+    // an interpreter, so a live claude pane can report argv0 `node`.
+    const live = husk(
+      JSON.stringify({
+        result: {
+          process_info: {
+            shell_pid: 7,
+            foreground_processes: [
+              { argv: ['node', '/usr/local/bin/claude'], argv0: 'node', name: 'node', pid: 7 }
+            ]
+          }
+        }
+      })
+    )
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner: live, settleMs: 10 })
+      .ensureSession(SPEC)
+    expect(live.calls.some((c) => c.args[1] === 'send-text')).toBe(false)
+  })
+
+  it('does NOT mistake an rc-init child process for a husk OR a live agent', () => {
+    // The restored shell's rc runs children like `git` (prompt frameworks).
+    // "Not a shell" once meant "must be the agent" and silently skipped
+    // recovery; the fix polls for a POSITIVE identification and, absent one,
+    // refuses to type. Typing needs a license, and ambiguity is not one.
+    const rcInit = husk(
+      JSON.stringify({
+        result: {
+          process_info: {
+            shell_pid: 9,
+            foreground_processes: [{ argv: ['git', 'status'], argv0: 'git', name: 'git', pid: 11 }]
+          }
+        }
+      })
+    )
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner: rcInit, settleMs: 10 })
+      .ensureSession(SPEC)
+    expect(rcInit.calls.some((c) => c.args[1] === 'send-text')).toBe(false)
+  })
+
+  it('refuses to act when process-info is unanswerable', () => {
+    // The fake runner throws on unscripted `run` calls, which is exactly the
+    // shape of a transiently erroring process-info after a server restart.
+    const runner = husk(undefined)
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner, settleMs: 10 })
+      .ensureSession(SPEC)
+    expect(runner.calls.some((c) => c.args[1] === 'send-text')).toBe(false)
+  })
+
+  it('never reboots a terminal whose command IS a shell — its husk is indistinguishable', () => {
+    const runner = husk(shellInfo)
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner, settleMs: 10 })
+      .ensureSession({ ...SPEC, command: '' })
+    expect(runner.calls.some((c) => c.args[1] === 'send-text')).toBe(false)
   })
 })

@@ -29,13 +29,18 @@ const panes = () => {
 const { HerdrHostMultiplexer } = await import('../src/main/herdr-host-multiplexer.ts')
 const SPEC = {
   sessionName: 'cookrew_restart1',
-  // A distinctive long-lived "agent" whose presence is checkable by pid/cmdline.
-  command: `sh -c 'echo AGENT_IS_ALIVE_MARKER; exec sleep 9999'`,
+  // A long-lived fake agent. Its binary must NOT be a shell: the husk check
+  // keys on "expected an agent, found a shell", and a shell-first command is
+  // (correctly) treated as a plain shell terminal that never gets rebooted —
+  // exactly how a real `claude ...` or `codex ...` command is not.
+  command: `node -e 'console.log("AGENT_IS_ALIVE_MARKER"); setInterval(() => {}, 1e6)'`,
   shell: '/bin/sh',
   terminalId: 'restart-1',
   socketPath: '/tmp/rs.sock',
   cliDir: '/tmp/rscli',
-  path: '/tmp/rscli:/usr/bin:/bin',
+  // Real PATH: the fake agent is `node`, and `exec node` on a PATH without it
+  // kills the pane at boot — which reads as a recovery failure that isn't one.
+  path: `/tmp/rscli:${process.env.PATH}`,
   cwd: '/tmp'
 }
 
@@ -78,9 +83,22 @@ const cap = mux2.capture(SPEC.sessionName) ?? ''
 console.log('AFTER   agent booted (marker on screen):', cap.includes('AGENT_IS_ALIVE_MARKER'))
 console.log('AFTER   capture tail:', JSON.stringify(cap.slice(-160)))
 
+// The OTHER direction, which matters more: ensureSession against a LIVE agent
+// must be a no-op. Booting is typed into the pane, so a false husk verdict
+// would paste a shell command into the running agent's prompt.
+const mux3 = new HerdrHostMultiplexer({ session: SESSION, configPath: CONFIG })
+mux3.ensureSession(SPEC)
+await sleep(1500)
+const pidFinal = mux3.panePid(SPEC.sessionName)
+console.log('\nLIVE-AGENT ensureSession: pid before', pidAfter, '→ after', pidFinal,
+  pidFinal === pidAfter ? '(untouched ✓)' : '*** REBOOTED A LIVE AGENT ***')
+
 console.log('\nVERDICT:')
 if (!after) console.log('  pane GONE after server restart -> ensureSession recreates. Safe.')
-else if (cap.includes('AGENT_IS_ALIVE_MARKER')) console.log('  pane restored AND agent rebooted. Safe.')
+else if (cap.includes('AGENT_IS_ALIVE_MARKER') && pidFinal === pidAfter)
+  console.log('  husk rebooted, live agent untouched. RECOVERY WORKS.')
+else if (cap.includes('AGENT_IS_ALIVE_MARKER'))
+  console.log('  *** recovery works but a LIVE agent was rebooted — unsafe ***')
 else console.log('  *** LABEL SURVIVED WITHOUT THE AGENT — ensureSession early-returns on a dead pane ***')
 
 cli(['server', 'stop'], true)

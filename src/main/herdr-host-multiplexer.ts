@@ -64,6 +64,9 @@ import type {
 /** Cookrew's own herdr session, isolated from the user's — tmux's `-L cookrew`. */
 export const HERDR_SESSION = 'cookrew'
 
+/** Bare shells — what a restored husk runs, and what a live agent never is. */
+const SHELL_NAMES = /^(sh|bash|zsh|fish|dash|ksh)$/
+
 /** A pane herdr reports in `pane list`. Only the fields Cookrew reads. */
 export interface HerdrPane {
   pane_id: string
@@ -235,6 +238,12 @@ export interface HerdrHostOptions {
   startServer?: () => void
   /** Overridable for tests; real waits are a poll against the socket. */
   waitForServerMs?: number
+  /**
+   * How long to let a just-started server restore panes from disk, and a
+   * just-restored pane spawn its shell, before acting on their absence.
+   * Overridable so tests do not busy-wait the real grace.
+   */
+  settleMs?: number
 }
 
 /**
@@ -276,6 +285,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
   private readonly configPath: string
   private readonly startServer: () => void
   private readonly waitForServerMs: number
+  private readonly settleMs: number
   private probed: boolean | null = null
   private serverUp = false
 
@@ -290,6 +300,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
     this.runner = options.runner ?? createHerdrRunner(env)
     this.startServer = options.startServer ?? (() => spawnHerdrServer(env))
     this.waitForServerMs = options.waitForServerMs ?? 5000
+    this.settleMs = options.settleMs ?? 2000
   }
 
   /**
@@ -311,10 +322,28 @@ export class HerdrHostMultiplexer implements Multiplexer {
     while (Date.now() < deadline) {
       if (this.serverRunning()) {
         this.serverUp = true
+        this.waitForRestore()
         return true
       }
     }
     return false
+  }
+
+  /**
+   * Let a just-started server finish restoring panes before anyone looks.
+   *
+   * A fresh server answers `pane list` BEFORE it has replayed the session from
+   * disk, so the first look can return an empty list — and Cookrew would then
+   * create a SECOND pane wearing the label the restored original is about to
+   * come back with. Waiting for panes to appear (bounded, because a genuinely
+   * new session has none to restore) closes that race. Each probe is a process
+   * spawn, so this loop is self-throttling rather than hot.
+   */
+  private waitForRestore(): void {
+    const deadline = Date.now() + this.settleMs
+    while (Date.now() < deadline) {
+      if (this.panes().length > 0) return
+    }
   }
 
   /**
@@ -374,16 +403,26 @@ export class HerdrHostMultiplexer implements Multiplexer {
   }
 
   /**
-   * Create the pane and start the agent — unless the pane is already there,
-   * in which case do NOTHING and let the attach reattach a running agent.
-   * That early return is the whole persistence guarantee.
+   * Create the pane and start the agent — unless the pane already exists AND
+   * is genuinely running one, in which case do NOTHING and let the attach
+   * reattach the live agent. That early return is the persistence guarantee.
+   *
+   * "A pane with this label exists" is NOT that condition, though it was the
+   * original check. herdr persists pane LAYOUT, not processes: when the herdr
+   * server dies (reboot, crash, `herdr update`), every agent dies with it, and
+   * the next server restores the pane as a fresh shell wearing the old label —
+   * a HUSK. Early-returning on a husk reattached Cookrew to an empty prompt
+   * while reporting the agent recovered. Under tmux the two conditions were
+   * the same condition, which is exactly why the port got it wrong.
    */
   ensureSession(spec: AttachSpec): void {
     if (!this.available()) return
     if (!this.ensureServer()) throw new Error('herdr server did not come up on Cookrew\'s socket')
-    if (this.paneFor(spec.sessionName)) return
 
-    const pane = this.adoptOrCreate(spec)
+    const existing = this.paneFor(spec.sessionName)
+    if (existing && !this.isHusk(existing, spec)) return
+
+    const pane = existing ?? this.adoptOrCreate(spec)
     if (!pane?.pane_id) throw new Error(`herdr could not create a pane for '${spec.sessionName}'`)
 
     // Label FIRST: if the boot command fails, the pane is still findable and
@@ -401,14 +440,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
     //
     // Sourcing a file keeps the typed line to one short command, and sidesteps
     // shell-quoting hazards in the agent command as a side benefit.
-    const bootPath = path.join(spec.cliDir, `boot-${spec.sessionName}.sh`)
-    // PtyManager creates the runtime dir, but this backend must not depend on
-    // the caller having done so — a missing dir would throw here and take the
-    // whole terminal down.
-    mkdirSync(spec.cliDir, { recursive: true })
-    writeFileSync(bootPath, `${bootCommand(spec)}\n`, { mode: 0o700 })
-    this.quiet(['pane', 'send-text', pane.pane_id, `clear; exec sh ${bootPath}`])
-    this.quiet(['pane', 'send-keys', pane.pane_id, 'enter'])
+    this.bootIntoPane(pane.pane_id, spec)
 
     // REQUIRED, not decorative: `agent attach` resolves its target through the
     // agent registry and fails with agent_not_found on a pane that merely runs
@@ -424,6 +456,184 @@ export class HerdrHostMultiplexer implements Multiplexer {
       '--agent', agentKind(spec.command),
       '--state', 'idle'
     ])
+  }
+
+  /**
+   * A HUSK: the pane's label survived the herdr server dying, its agent did
+   * not. herdr restores the pane from disk as a fresh shell — measured:
+   *
+   *   before server restart   label=cookrew_x  agent process pid ALIVE
+   *   after  server restart   label=cookrew_x  same label, bare zsh prompt
+   *
+   * The verdict deliberately IGNORES `agent_status`. A restored pane initially
+   * carries its PERSISTED status (e.g. 'idle') and only decays to 'unknown'
+   * once herdr's detector finds nothing — so at the moment Cookrew checks, a
+   * husk still claims to be a live agent. That field lying at exactly the
+   * wrong instant is what sank the first attempt at this fix.
+   *
+   * What cannot lie is the pane's FOREGROUND PROCESS. The boot script `exec`s
+   * the agent, so a live agent pane's foreground is the agent binary; when
+   * that process dies with the server, the restored pane's foreground is a
+   * bare login shell. Three verdicts, ordered by what they risk:
+   *
+   *   - process-info unanswerable  -> NOT a husk. Booting is TYPED into the
+   *     pane, so misreading a live agent would paste a shell command into its
+   *     prompt — worse than failing to recover. No answer, no action.
+   *   - foreground is a bare shell, but an AGENT was expected -> husk.
+   *   - foreground absent (shell still spawning after restore) -> husk; the
+   *     boot path waits for the shell before typing.
+   *
+   * A terminal whose command IS a shell can't be told apart from its husk —
+   * both show a shell — so it is never rebooted. It loses only env vars on
+   * server death, not an agent, and wiping a live shell to fix that is the
+   * wrong trade.
+   */
+  private isHusk(pane: HerdrPane, spec: AttachSpec): boolean {
+    const expected = agentKind(spec.command)
+    if (SHELL_NAMES.test(expected) || expected === 'shell') return false
+
+    // Poll rather than peek: immediately after a server restart, process-info
+    // ERRORS transiently, then reports the restored shell's RC INIT — child
+    // processes like `git` from a prompt framework. A peek that treated
+    // "not a shell" as "must be the agent" mistook that `git` for a live
+    // agent and silently skipped recovery (measured; it flipped run to run
+    // with rc timing). Only three readings end the poll, and two of them are
+    // POSITIVE identifications rather than absences:
+    //
+    //   agent visible  -> live, leave it alone
+    //   bare shell     -> husk. On an agent pane, a shell in the foreground
+    //                     means the agent is not there — an rc-init flicker
+    //                     only ever happens on a freshly restored shell,
+    //                     which is a husk by definition
+    //   window expires -> refuse to act; booting types into the pane, and
+    //                     "I could not tell" is not a license to type
+    const deadline = Date.now() + this.settleMs
+    for (;;) {
+      const seen = this.paneRuns(pane.pane_id, expected)
+      if (seen === 'agent') return false
+      if (seen === 'shell') return true
+      if (Date.now() >= deadline) return false
+    }
+  }
+
+  /**
+   * What the pane's foreground is running, classified against the expected
+   * agent. Matches the expected token anywhere in the foreground argv rather
+   * than argv0 alone: agents installed as script wrappers exec through an
+   * interpreter, so a live `claude` pane can report argv0 `node` with the
+   * script path in argv — argv0 equality would misread it as not-the-agent.
+   */
+  private paneRuns(
+    paneId: string,
+    expected: string
+  ): 'agent' | 'shell' | 'other' | 'unanswerable' {
+    try {
+      const result = parseEnvelope(this.herdr(['pane', 'process-info', '--pane', paneId]))
+      if (!result) return 'unanswerable'
+      const info = result.process_info as { foreground_processes?: unknown[] } | undefined
+      const front = info?.foreground_processes ?? []
+      if (front.length === 0) return 'other'
+      if (JSON.stringify(front).includes(expected)) return 'agent'
+      const first = front[0] as { name?: unknown; argv0?: unknown }
+      const name = String(first.argv0 ?? first.name ?? '').replace(/^-/, '')
+      return SHELL_NAMES.test(name) ? 'shell' : 'other'
+    } catch {
+      return 'unanswerable'
+    }
+  }
+
+  /**
+   * The pane's foreground process name; `ok: false` when herdr could not
+   * answer, `name: null` when it answered "nothing yet". Callers act on the
+   * difference — see isHusk.
+   */
+  private foreground(paneId: string): { ok: boolean; name: string | null } {
+    try {
+      const result = parseEnvelope(this.herdr(['pane', 'process-info', '--pane', paneId]))
+      if (!result) return { ok: false, name: null }
+      const info = result.process_info as
+        | { foreground_processes?: { name?: unknown; argv0?: unknown }[] }
+        | undefined
+      const front = info?.foreground_processes?.[0]
+      if (!front) return { ok: true, name: null }
+      // argv0 over name: login shells report argv0 '-zsh' but name may be the
+      // underlying binary ('bash' on macOS zsh panes, observed live).
+      const raw = String(front.argv0 ?? front.name ?? '').replace(/^-/, '')
+      return { ok: true, name: raw.length > 0 ? raw : null }
+    } catch {
+      return { ok: false, name: null }
+    }
+  }
+
+  /**
+   * Block until the pane can receive keystrokes (its shell exists). Bounded:
+   * a pane that never reports a foreground process gets typed at anyway after
+   * the grace, which at worst repeats the original symptom instead of adding
+   * a new failure mode.
+   */
+  private waitForShell(paneId: string): void {
+    const deadline = Date.now() + this.settleMs
+    while (Date.now() < deadline) {
+      const probe = this.foreground(paneId)
+      if (probe.ok && probe.name !== null) return
+    }
+  }
+
+  /**
+   * Type the boot command and VERIFY it took — retyping until it does.
+   *
+   * herdr has no "run this argv in a pane": booting arrives as keystrokes, and
+   * keystrokes into a freshly created or freshly restored pane are sometimes
+   * dropped even after a foreground process is visible (measured: identical
+   * runs flip between booted and a bare prompt). One-shot typing therefore
+   * cannot be trusted; nothing about it reports failure.
+   *
+   * The boot `exec`s the agent, which IS the verification signal: success
+   * means the pane's foreground stops being a shell. Verified boots make both
+   * first creation and husk recovery deterministic instead of timing-lucky.
+   *
+   * A terminal whose command is itself a shell has no such signal — its
+   * foreground is a shell before and after — so it is typed once, unverified,
+   * exactly as before. Retyping into it could stack boot commands in the NEW
+   * shell, which is worse than the flake being guarded against.
+   */
+  private bootIntoPane(paneId: string, spec: AttachSpec): void {
+    const bootPath = path.join(spec.cliDir, `boot-${spec.sessionName}.sh`)
+    // PtyManager creates the runtime dir, but this backend must not depend on
+    // the caller having done so — a missing dir would throw here and take the
+    // whole terminal down.
+    mkdirSync(spec.cliDir, { recursive: true })
+    writeFileSync(bootPath, `${bootCommand(spec)}\n`, { mode: 0o700 })
+
+    const type = (): void => {
+      this.waitForShell(paneId)
+      this.quiet(['pane', 'send-text', paneId, `clear; exec sh ${bootPath}`])
+      this.quiet(['pane', 'send-keys', paneId, 'enter'])
+    }
+
+    const expected = agentKind(spec.command)
+    if (SHELL_NAMES.test(expected) || expected === 'shell') {
+      type()
+      return
+    }
+
+    // Measured on a restored pane: the shell swallows keystrokes for the
+    // whole of its rc init (~3s+ with a prompt framework), and drops them
+    // without a trace — so the budget must comfortably outlast that window,
+    // and the verify slice must be short enough to get many attempts in.
+    // Dropped keys leave nothing to stack, so retyping is safe; the first
+    // attempt that lands execs the agent and verification ends the loop.
+    const deadline = Date.now() + this.settleMs * 6
+    for (;;) {
+      type()
+      const verifyBy = Math.min(deadline, Date.now() + Math.min(this.settleMs, 1000))
+      while (Date.now() < verifyBy) {
+        // Positive identification only: `!shell` also matches the rc init's
+        // child processes, which is the same misreading isHusk had to shed.
+        if (this.paneRuns(paneId, expected) === 'agent') return
+      }
+      if (Date.now() >= deadline) return
+    }
   }
 
   /**
