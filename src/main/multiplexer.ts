@@ -181,6 +181,22 @@ export interface Multiplexer {
   waitUntilIdle?(name: string, timeoutMs: number): Promise<boolean>
 
   /**
+   * Submit a prompt to the agent in this session and wait for it to finish.
+   *
+   * This is agent-to-agent communication as a MULTIPLEXER primitive — the
+   * reason herdr was chosen over tmux. `cookrew ask` otherwise has to type
+   * the prompt into the PTY (bracketed paste, tuned submit delays, the
+   * swallowed-Enter hazard) and then GUESS at completion; a backend that
+   * models agents does both natively, with its own submission handling and a
+   * real lifecycle answer.
+   *
+   * Same contract as waitUntilIdle: async, optional, resolves false whenever
+   * the backend cannot do it — callers keep the typed path as the fallback,
+   * so a half-working protocol degrades instead of breaking the ask.
+   */
+  promptAgent?(name: string, prompt: string, timeoutMs: number): Promise<boolean>
+
+  /**
    * Tell the backend where this agent's session transcript lives.
    *
    * Cookrew's harness registry already resolves this path to build turn

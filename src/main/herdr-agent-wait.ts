@@ -53,6 +53,49 @@ export function waitArgs(target: string, until: HerdrAgentStatus[], timeoutMs: n
   ]
 }
 
+/**
+ * Arguments for `herdr agent prompt --wait`: submit AND block until the agent
+ * stops working, in one herdr call. The prompt rides as a single argv element,
+ * so no shell quoting hazard exists no matter what the text contains.
+ *
+ * The default `until` matches waitForAgentState: blocked counts as done —
+ * an agent stuck on a permission prompt has stopped producing an answer, and
+ * the caller needs to hear that rather than wait out the full timeout.
+ */
+export function promptArgs(target: string, prompt: string, timeoutMs: number): string[] {
+  return [
+    'agent',
+    'prompt',
+    target,
+    prompt,
+    '--wait',
+    '--until', 'idle',
+    '--until', 'done',
+    '--until', 'blocked',
+    '--timeout',
+    String(timeoutMs)
+  ]
+}
+
+/**
+ * Submit a prompt via herdr and wait for the agent to finish. Same soft-fail
+ * contract as waitForAgentState: false means "herdr could not do it" and the
+ * caller types the prompt the old way instead.
+ */
+export async function promptViaHerdr(options: WaitOptions & { prompt: string }): Promise<boolean> {
+  const exec = options.exec ?? runCli
+  try {
+    await exec('herdr', promptArgs(options.target, options.prompt, options.timeoutMs), {
+      ...process.env,
+      HERDR_SESSION: options.session,
+      HERDR_CONFIG_PATH: options.configPath
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
 const runCli = (file: string, args: string[], env: NodeJS.ProcessEnv): Promise<void> =>
   new Promise((resolve, reject) => {
     execFile(file, args, { env }, (error) => (error ? reject(error) : resolve()))

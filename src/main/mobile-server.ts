@@ -423,7 +423,10 @@ async function handle(
       // Full scrollback, not just the viewport — the phone's fullscreen view
       // is scrollable, so history has to travel with the payload.
       output: session.fullText(),
-      busy: session.idleFor() < 2000,
+      // ASKED, not inferred, when the multiplexer models agents: herdr
+      // reports working/idle directly, and 2s of silence mid tool-call is
+      // not idleness. The heuristic stays for backends that cannot say.
+      busy: agentStatus(session.sessionName) === 'working' || session.idleFor() < 2000,
       // Screen geometry so the phone can scale the full view to fit: lines
       // are at most `cols` chars, so font-size = screenWidth / cols.
       cols: session.cols,

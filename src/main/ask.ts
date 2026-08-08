@@ -58,6 +58,24 @@ export async function askTerminal(
   const graceMs = options.graceMs ?? 1500
 
   const before = session.fullText()
+
+  // herdr-native ask: the multiplexer submits the prompt (its own paste and
+  // submit handling) and blocks until the agent actually finishes — no typed
+  // bracketed paste, no tuned submit delay, no quiescence guessing. The reply
+  // still comes out of the mirror diff, so the shape callers see is identical.
+  const mux = multiplexer()
+  if (mux?.capabilities.agentLifecycle && mux.promptAgent) {
+    // The tracker learns prompts from session.write's input event; a
+    // herdr-side submission never passes through write, so announce it —
+    // otherwise every herdr-native ask records as a promptless phantom turn.
+    session.noteExternalInput(prompt + '\r')
+    if (await mux.promptAgent(session.sessionName, prompt, timeoutMs)) {
+      return diffOutput(before, session.fullText())
+    }
+    // herdr could not take it (agent unresolvable, server briefly down) —
+    // fall through to the typed path exactly as before this existed.
+  }
+
   await pasteAndSubmit(session, prompt)
 
   await waitForReply(session, { quiescenceMs, timeoutMs, graceMs })

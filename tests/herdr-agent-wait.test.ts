@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { waitArgs, waitForAgentState } from '../src/main/herdr-agent-wait'
+import { promptArgs, promptViaHerdr, waitArgs, waitForAgentState } from '../src/main/herdr-agent-wait'
 
 /**
  * This replaces `cookrew ask`'s output-quiescence heuristic, which is wrong in
@@ -71,6 +71,40 @@ describe('waitForAgentState', () => {
         env = passed
       }
     })
+    expect(env.HERDR_SESSION).toBe('cookrew')
+  })
+})
+
+describe('promptArgs — agent-to-agent ask as a herdr primitive', () => {
+  it('submits and waits in ONE herdr call, prompt as a single argv element', () => {
+    const args = promptArgs('w1:p3', 'fix the bug\nwith details', 60_000)
+    expect(args.slice(0, 4)).toEqual(['agent', 'prompt', 'w1:p3', 'fix the bug\nwith details'])
+    expect(args).toContain('--wait')
+    expect(args).toContain('--timeout')
+  })
+
+  it('treats blocked as an answer — a permission prompt must not eat the timeout', () => {
+    expect(promptArgs('t', 'p', 1000)).toContain('blocked')
+  })
+})
+
+describe('promptViaHerdr', () => {
+  const opts = { session: 'cookrew', configPath: '/c', target: 'w1:p3', timeoutMs: 1000, prompt: 'hi' }
+
+  it('is true when herdr accepted and the agent finished', async () => {
+    expect(await promptViaHerdr({ ...opts, exec: async () => {} })).toBe(true)
+  })
+
+  it('is FALSE on failure so the caller types the prompt the old way', async () => {
+    const failing = async (): Promise<void> => {
+      throw new Error('agent_not_found')
+    }
+    expect(await promptViaHerdr({ ...opts, exec: failing })).toBe(false)
+  })
+
+  it('scopes to COOKREW session', async () => {
+    let env: NodeJS.ProcessEnv = {}
+    await promptViaHerdr({ ...opts, exec: async (_f, _a, e) => { env = e } })
     expect(env.HERDR_SESSION).toBe('cookrew')
   })
 })

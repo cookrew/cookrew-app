@@ -50,7 +50,7 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { waitForAgentState } from './herdr-agent-wait'
+import { promptViaHerdr, waitForAgentState } from './herdr-agent-wait'
 import type {
   AttachSpawn,
   AttachSpec,
@@ -515,15 +515,25 @@ export class HerdrHostMultiplexer implements Multiplexer {
     const known = pane.agent_status
     const state =
       known === 'idle' || known === 'working' || known === 'blocked' ? known : 'unknown'
+    const kind = pane.agent && pane.agent.length > 0 ? pane.agent : agentKind(spec.command)
     this.quiet([
       'pane', 'report-agent', pane.pane_id,
       '--source', 'cookrew',
       // Prefer what herdr already recorded: a pane whose registration is being
       // restored keeps the agent it actually runs, even if the node's command
       // has since been edited.
-      '--agent', pane.agent && pane.agent.length > 0 ? pane.agent : agentKind(spec.command),
+      '--agent', kind,
       '--state', state
     ])
+    // Release lifecycle authority IMMEDIATELY. Reporting with a source CLAIMS
+    // it, and herdr's detector then stands down waiting for updates this
+    // source will never send — measured: every pane stuck at 'unknown' seq 0,
+    // `agent prompt --wait` stalling by definition, and one release-agent
+    // flipping the pane to detector-tracked 'idle' seq 1. The registry entry
+    // (what attach and prompt resolve through) SURVIVES the release; only the
+    // authority moves — to the detector, which is the party Cookrew actually
+    // wants reporting.
+    this.quiet(['pane', 'release-agent', pane.pane_id, '--source', 'cookrew', '--agent', kind])
   }
 
   /**
@@ -819,6 +829,10 @@ export class HerdrHostMultiplexer implements Multiplexer {
       '--agent', agentKind(spec.command),
       '--state', 'idle'
     ])
+    // Same discipline as reportAgent: registration without a muzzled detector.
+    this.quiet([
+      'pane', 'release-agent', paneId, '--source', 'cookrew', '--agent', agentKind(spec.command)
+    ])
     // Registration propagates asynchronously; give it a bounded moment so the
     // attach spawned right after this does not race it.
     const deadline = Date.now() + Math.min(this.settleMs, 1000)
@@ -925,6 +939,27 @@ export class HerdrHostMultiplexer implements Multiplexer {
       '--agent', pane.agent && pane.agent.length > 0 ? pane.agent : 'shell',
       '--agent-session-path', sessionPath
     ])
+  }
+
+  /**
+   * Agent-to-agent ask, natively: herdr submits the prompt (its own paste and
+   * submit handling) and blocks until the agent leaves 'working'. Replaces
+   * the typed bracketed-paste + guessed-quiescence path for herdr panes.
+   *
+   * The registry check first: `agent prompt` fails on an unresolvable target,
+   * and repairing registration is this backend's job, not the caller's.
+   */
+  async promptAgent(name: string, prompt: string, timeoutMs: number): Promise<boolean> {
+    const pane = this.paneFor(name)
+    if (!pane) return false
+    if (!this.agentResolvable(pane.pane_id)) return false
+    return promptViaHerdr({
+      session: this.session,
+      configPath: this.configPath,
+      target: pane.pane_id,
+      timeoutMs,
+      prompt
+    })
   }
 
   async waitUntilIdle(name: string, timeoutMs: number): Promise<boolean> {
