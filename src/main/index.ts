@@ -1029,6 +1029,21 @@ function createWindow(): void {
   })
 }
 
+// ONE Cookrew per machine, enforced before anything else runs.
+//
+// Two instances do not merely conflict over ports — they FIGHT over the same
+// multiplexer panes. Under herdr every attach uses --takeover, so instance B
+// steals each pane from instance A, A's client exits, A reattaches and steals
+// it back. That churn of near-instant PTY exits lands in node-pty's known
+// ThreadSafeFunction crash window (Napi::Error thrown in CallJS -> libc++
+// abort), which took the whole app down at launch on 2026-08-08 — see the
+// Electron-*-172115.ips crash report. The lock turns "two instances slowly
+// corrupt each other" into "the second instance exits immediately".
+if (!app.requestSingleInstanceLock()) {
+  console.error('Another Cookrew instance is already running — exiting.')
+  app.exit(1)
+}
+
 app.whenReady().then(() => {
   // Dock icon must be set at runtime in dev; packaged builds also bundle
   // resources/icon.icns via the packager config when one is added.

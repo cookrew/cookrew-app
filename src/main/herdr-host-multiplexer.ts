@@ -679,6 +679,17 @@ export class HerdrHostMultiplexer implements Multiplexer {
   attachSpawn(spec: AttachSpec): AttachSpawn {
     const pane = this.paneFor(spec.sessionName)
     if (!pane) throw new Error(`no herdr pane labelled '${spec.sessionName}' — ensureSession first`)
+
+    // The attach must not be able to exit INSTANTLY. `agent attach` resolves
+    // its target through herdr's agent registry, and an unresolvable target
+    // makes the client print agent_not_found and exit within milliseconds —
+    // which is not merely a blank card: node-pty's exit callback has a known
+    // native crash window for near-instant exits (Napi::Error in the
+    // ThreadSafeFunction -> libc++ abort, the 2026-08-08 launch crash). The
+    // registry entry is runtime state that outages can drop while the pane
+    // lives on, so it is verified — and repaired — before argv is handed out.
+    this.ensureAgentResolvable(pane.pane_id, spec)
+
     // --takeover is REQUIRED, not a convenience. Cookrew drops its client by
     // killing the PTY (workspace switch, app quit), which herdr sees as a
     // client that never detached; without takeover the next attach does not
@@ -692,6 +703,38 @@ export class HerdrHostMultiplexer implements Multiplexer {
       // the e2e probe masked it by injecting the session env by hand, which
       // is why it only surfaced in the running app.
       env: { HERDR_SESSION: this.session, HERDR_CONFIG_PATH: this.configPath }
+    }
+  }
+
+  /**
+   * Make `agent attach <pane>` resolvable, re-reporting the agent when the
+   * registry entry is missing. Idempotent and cheap when already resolvable
+   * (one `agent get`). Best effort beyond that: if herdr still cannot resolve
+   * after a repair, the attach will fail visibly — but that is the rare tail,
+   * not the common case this closes.
+   */
+  private ensureAgentResolvable(paneId: string, spec: AttachSpec): void {
+    if (this.agentResolvable(paneId)) return
+    this.quiet([
+      'pane', 'report-agent', paneId,
+      '--source', 'cookrew',
+      '--agent', agentKind(spec.command),
+      '--state', 'idle'
+    ])
+    // Registration propagates asynchronously; give it a bounded moment so the
+    // attach spawned right after this does not race it.
+    const deadline = Date.now() + Math.min(this.settleMs, 1000)
+    while (Date.now() < deadline) {
+      if (this.agentResolvable(paneId)) return
+    }
+  }
+
+  /** Does herdr's agent registry resolve this pane right now? */
+  private agentResolvable(paneId: string): boolean {
+    try {
+      return parseEnvelope(this.herdr(['agent', 'get', paneId])) !== null
+    } catch {
+      return false
     }
   }
 

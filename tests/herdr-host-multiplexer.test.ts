@@ -237,7 +237,7 @@ describe('ensureSession — idempotence IS the persistence guarantee', () => {
 
 describe('attachSpawn', () => {
   it('attaches to the AGENT, not the session — session attach returns the TUI', () => {
-    const m = mux({ 'pane list': PANE_LIST([{ pane_id: 'w1:p7', label: 'cookrew_abc' }]) })
+    const m = mux({ 'pane list': PANE_LIST([{ pane_id: 'w1:p7', label: 'cookrew_abc' }]), 'agent get': JSON.stringify({ result: { agent: { agent: 'claude', pane_id: 'w1:p7' } } }) })
     expect(m.attachSpawn(SPEC)).toEqual({
       file: 'herdr',
       args: ['agent', 'attach', 'w1:p7', '--takeover'],
@@ -249,7 +249,7 @@ describe('attachSpawn', () => {
     // Measured: a workspace switch or quit SIGKILLs the client, which herdr
     // sees as a client that never detached. Without takeover the next attach
     // does not get the pane and the terminal comes back blank.
-    const m = mux({ 'pane list': PANE_LIST([{ pane_id: 'w1:p7', label: 'cookrew_abc' }]) })
+    const m = mux({ 'pane list': PANE_LIST([{ pane_id: 'w1:p7', label: 'cookrew_abc' }]), 'agent get': JSON.stringify({ result: { agent: { agent: 'claude', pane_id: 'w1:p7' } } }) })
     expect(m.attachSpawn(SPEC).args).toContain('--takeover')
   })
 
@@ -258,7 +258,7 @@ describe('attachSpawn', () => {
     // terminal blank, because the attach resolved the user's default socket
     // (stopped) — HERDR_SESSION selects the server and only the backend
     // knows it. tmux never needed this; its target rides in the argv.
-    const m = mux({ 'pane list': PANE_LIST([{ pane_id: 'w1:p7', label: 'cookrew_abc' }]) })
+    const m = mux({ 'pane list': PANE_LIST([{ pane_id: 'w1:p7', label: 'cookrew_abc' }]), 'agent get': JSON.stringify({ result: { agent: { agent: 'claude', pane_id: 'w1:p7' } } }) })
     expect(m.attachSpawn(SPEC).env?.HERDR_SESSION).toBe('cookrewtest')
   })
 
@@ -496,5 +496,33 @@ describe('husk recovery — a restored label is not a recovered agent', () => {
     new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner, settleMs: 10 })
       .ensureSession({ ...SPEC, command: '' })
     expect(runner.calls.some((c) => c.args[1] === 'send-text')).toBe(false)
+  })
+})
+
+describe('attachSpawn never hands out an argv that exits instantly', () => {
+  // `agent attach` on an unresolvable target prints agent_not_found and exits
+  // within milliseconds — and near-instant PTY exits land in node-pty's known
+  // native crash window (Napi::Error in the exit ThreadSafeFunction, libc++
+  // abort). This is the 2026-08-08 launch crash, so the registry entry is
+  // verified — and repaired — before the argv leaves the backend.
+  it('re-reports the agent when the registry no longer resolves the pane', () => {
+    const runner = fakeRunner({
+      'pane list': PANE_LIST([{ pane_id: 'w1:p7', label: 'cookrew_abc' }])
+      // 'agent get' deliberately unscripted: the throw IS the unresolvable case.
+    })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner, settleMs: 10 })
+      .attachSpawn(SPEC)
+    const report = runner.calls.find((c) => c.args[1] === 'report-agent')
+    expect(report?.args[2]).toBe('w1:p7')
+  })
+
+  it('does NOT re-report when the agent already resolves', () => {
+    const runner = fakeRunner({
+      'pane list': PANE_LIST([{ pane_id: 'w1:p7', label: 'cookrew_abc' }]),
+      'agent get': JSON.stringify({ result: { agent: { agent: 'claude' } } })
+    })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner, settleMs: 10 })
+      .attachSpawn(SPEC)
+    expect(runner.calls.some((c) => c.args[1] === 'report-agent')).toBe(false)
   })
 })
