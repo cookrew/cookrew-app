@@ -71,6 +71,8 @@ const SHELL_NAMES = /^(sh|bash|zsh|fish|dash|ksh)$/
 export interface HerdrPane {
   pane_id: string
   label?: string | null
+  /** herdr's own view of which agent runs here — set by report-agent. */
+  agent?: string | null
   terminal_id?: string | null
   cwd?: string | null
   revision?: number
@@ -765,6 +767,25 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * the wait lasts as long as the agent takes, and execFileSync would freeze
    * the main process for exactly that long.
    */
+  /**
+   * Report the agent's transcript path to herdr.
+   *
+   * The `--agent` label is REQUIRED by the CLI, and it is read back off the
+   * pane rather than threaded down from the caller: herdr already stores what
+   * `report-agent` declared, so the value survives an app restart where the
+   * pane exists but Cookrew never re-ran ensureSession for it.
+   */
+  reportAgentSession(name: string, sessionPath: string): void {
+    const pane = this.paneFor(name)
+    if (!pane) return
+    this.quiet([
+      'pane', 'report-agent-session', pane.pane_id,
+      '--source', 'cookrew',
+      '--agent', pane.agent && pane.agent.length > 0 ? pane.agent : 'shell',
+      '--agent-session-path', sessionPath
+    ])
+  }
+
   async waitUntilIdle(name: string, timeoutMs: number): Promise<boolean> {
     const pane = this.paneFor(name)
     if (!pane) return false

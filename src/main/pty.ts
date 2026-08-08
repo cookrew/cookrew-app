@@ -7,6 +7,7 @@ import xtermHeadless from '@xterm/headless'
 import type { Multiplexer } from './multiplexer'
 import { TmuxMultiplexer, sessionNameFor as tmuxSessionNameFor, TMUX_LABEL as TMUX_LABEL_CONST } from './tmux-multiplexer'
 import { HerdrHostMultiplexer, HERDR_SESSION } from './herdr-host-multiplexer'
+import { HerdrStatusFeed, setStatusFeed, statusFeed } from './herdr-agent-status'
 import { DirectMultiplexer } from './direct-multiplexer'
 import { selectMultiplexers } from './multiplexer-select'
 import type { Terminal as HeadlessTerminalType } from '@xterm/headless'
@@ -447,6 +448,16 @@ export class PtyManager {
       ])
     })
     setMultiplexer(roles.host)
+
+    // Push-fed agent state, when the backend has it. Subscriptions are
+    // per-pane, so the feed is refreshed whenever the terminal set changes —
+    // see spawn()/kill(); a pane created after the subscription would
+    // otherwise never be reported on.
+    if (roles.host.capabilities.agentLifecycle) {
+      const feed = new HerdrStatusFeed({ session: HERDR_SESSION, configPath: this.herdrConf })
+      setStatusFeed(feed)
+      feed.start()
+    }
   }
 
   /**
@@ -492,6 +503,8 @@ export class PtyManager {
       }
     })
     this.sessions.set(options.terminalId, session)
+    // A pane created after the subscription was made is not covered by it.
+    statusFeed()?.refresh()
     return session
   }
 

@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import type { PtySession } from './pty'
 import { diffOutput } from './ask'
+import { agentStatus } from './herdr-agent-status'
 import { summarizeTurn, TurnSummarizer } from './sous'
 import type { TurnStore } from './turn-store'
 import {
@@ -657,16 +658,30 @@ export class TurnTracker extends EventEmitter {
   private poll(t: TrackedTerminal): void {
     if (t.phase !== 'thinking') return
     const elapsed = Date.now() - t.turnStartedAt
-    if (elapsed < GRACE_MS || t.session.idleFor() < QUIESCENCE_MS) return
+    if (elapsed < GRACE_MS) return
+
+    // Three questions decide whether this turn is over: is the agent still
+    // working, is it blocked on the human, and has it gone quiet. Every one of
+    // them used to be answered by reading the screen. When the multiplexer
+    // tracks agent lifecycle, ASK it instead — the scraped answers stay as the
+    // fallback for backends (and panes) that cannot say.
+    const reported = agentStatus(t.session.sessionName)
+    if (reported === 'working') return
+    if (reported === null && t.session.idleFor() < QUIESCENCE_MS) return
+
     const delta = diffOutput(t.snapshot, t.session.fullText())
     // Agents pause well past quiescence mid-turn (long tool calls, slow
     // output). While the tail still shows an in-flight spinner the turn is
     // NOT over — hold it open. Completed-style status ("✻ Brewed for
     // 4m 15s") and spinner-less output fall through to the quiescence rule.
-    const status = parseAgentGlance(delta).status
-    if (status !== null && isLiveStatus(status)) return
+    // Skipped entirely when herdr already told us the agent is not working:
+    // a real answer beats a guess about a spinner glyph.
+    if (reported === null) {
+      const status = parseAgentGlance(delta).status
+      if (status !== null && isLiveStatus(status)) return
+    }
     const lines = cleanTurnLines(delta).filter((l) => !this.isPromptEcho(l, t.prompt))
-    if (detectAttention(lines)) {
+    if (reported === 'blocked' || (reported === null && detectAttention(lines))) {
       // Blocked on the human — keep the poll alive; handleData resumes
       // 'thinking' when output flows again.
       t.phase = 'waiting'

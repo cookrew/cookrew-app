@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './store'
-import { PtyManager } from './pty'
+import { PtyManager, multiplexer, sessionNameFor } from './pty'
 import type { PtySession } from './pty'
 import { TurnTracker } from './turn-tracker'
 import { TurnStore } from './turn-store'
@@ -400,7 +400,12 @@ function claimedPiSessions(selfId: string): ReadonlySet<string> {
  *  harness carries 'file' turn history; a no-op for scrape-only/plain shells. */
 function watchSessionTurns(terminalId: string): void {
   const spec = traces.watchSpec(terminalId)
-  if (spec) sessionSync.watch(terminalId, spec.file, spec.parse)
+  if (!spec) return
+  sessionSync.watch(terminalId, spec.file, spec.parse)
+  // The multiplexer gets the transcript path too, when it models agents —
+  // this is the same fact, and herdr's own detection can use it rather than
+  // inferring the agent's state from what it painted.
+  multiplexer()?.reportAgentSession?.(sessionNameFor(terminalId), spec.file)
 }
 
 /**

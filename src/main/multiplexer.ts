@@ -179,6 +179,17 @@ export interface Multiplexer {
    * back to inferring it rather than failing.
    */
   waitUntilIdle?(name: string, timeoutMs: number): Promise<boolean>
+
+  /**
+   * Tell the backend where this agent's session transcript lives.
+   *
+   * Cookrew's harness registry already resolves this path to build turn
+   * history; handing it to the multiplexer lets the backend's own agent
+   * detection use the transcript instead of guessing from the screen, and it
+   * makes the binding visible to anything else attached to the same server.
+   * Optional: only a backend that models agents has anywhere to put it.
+   */
+  reportAgentSession?(name: string, sessionPath: string): void
 }
 
 /**
