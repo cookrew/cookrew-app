@@ -397,7 +397,16 @@ const HERDR_CONF = [
   'host_cursor = "native"',
   'confirm_close = false',
   'prompt_new_tab_name = false',
-  'prompt_new_workspace_name = false'
+  'prompt_new_workspace_name = false',
+  '',
+  // The cookrew herdr server died four times on 2026-08-08/09, killing every
+  // agent each time; one death followed an update check within minutes and
+  // none logged a stop request. The background updater is the one lifecycle
+  // actor Cookrew can switch off, so it is off — Cookrew's agents must never
+  // be collateral of a version check.
+  '[update]',
+  'version_check = false',
+  'manifest_check = false'
 ].join('\n')
 
 /**
@@ -451,6 +460,9 @@ export class PtyManager {
       ])
     })
     setMultiplexer(roles.host)
+    // A dead herdr server means every agent is dead until it returns; the
+    // supervisor turns that from "until the next app launch" into ~15s.
+    if (roles.host instanceof HerdrHostMultiplexer) roles.host.startSupervisor()
 
     // Push-fed agent state, when the backend has it. Subscriptions are
     // per-pane, so the feed is refreshed whenever the terminal set changes —

@@ -351,6 +351,35 @@ export class HerdrHostMultiplexer implements Multiplexer {
   }
 
   /**
+   * Watch the server and restart it when it dies.
+   *
+   * tmux never needed this: its server has two decades of hardening and dies
+   * only when told to. herdr's shut itself down four times in one day
+   * (measured — "server shutdown initiated" with live clients attached and no
+   * stop request logged), and every death kills every agent. Cookrew cannot
+   * make the server durable, but it can make the OUTAGE short: with the
+   * server back up, the husk-recovery path reboots each agent with --resume
+   * the moment its terminal respawns, instead of every terminal staying dead
+   * until the next full app launch.
+   *
+   * The timer unrefs so it never holds the app open.
+   */
+  startSupervisor(intervalMs = 15_000): NodeJS.Timeout {
+    const timer = setInterval(() => {
+      if (this.serverRunning()) return
+      this.serverUp = false
+      try {
+        this.ensureServer()
+        console.error('herdr server died and was restarted by the supervisor')
+      } catch (error) {
+        console.error('herdr server died and could not be restarted:', error)
+      }
+    }, intervalMs)
+    timer.unref?.()
+    return timer
+  }
+
+  /**
    * Liveness, probed with a command that actually needs the server.
    *
    * NOT `herdr status server`: it exits 0 and prints "status: not running" when
