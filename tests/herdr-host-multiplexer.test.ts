@@ -9,6 +9,7 @@ import {
   toScrollState
 } from '../src/main/herdr-host-multiplexer'
 import { selectMultiplexers } from '../src/main/multiplexer-select'
+import { sanitizeAgentEnv } from '../src/main/multiplexer'
 import type { AttachSpec, CommandRunner, Multiplexer } from '../src/main/multiplexer'
 
 /**
@@ -670,5 +671,29 @@ describe('boot retype discipline — junk in a live agent is worse than a husk',
       .ensureSession(SPEC)
     const types = runner.calls.filter((c) => c.args[1] === 'send-text')
     expect(types.length).toBeGreaterThan(1)
+  })
+})
+
+describe('sanitizeAgentEnv — the launcher session must not leak into agents', () => {
+  it('strips Claude Code session markers, keeps everything else', () => {
+    const clean = sanitizeAgentEnv({
+      CLAUDE_CODE_CHILD_SESSION: '1',
+      CLAUDECODE: '1',
+      CLAUDE_PID: '123',
+      CLAUDE_EFFORT: 'high',
+      CLAUDE_CODE_ENTRYPOINT: 'cli',
+      PATH: '/usr/bin',
+      HERDR_SESSION: 'cookrew'
+    })
+    // A claude inheriting CHILD_SESSION turns OFF transcript saving: session
+    // files freeze and file-backed checkpoints stop advancing (measured live
+    // across every pane — the frozen-at-376 ledger).
+    expect(clean.CLAUDE_CODE_CHILD_SESSION).toBeUndefined()
+    expect(clean.CLAUDECODE).toBeUndefined()
+    expect(clean.CLAUDE_PID).toBeUndefined()
+    expect(clean.CLAUDE_EFFORT).toBeUndefined()
+    expect(clean.CLAUDE_CODE_ENTRYPOINT).toBeUndefined()
+    expect(clean.PATH).toBe('/usr/bin')
+    expect(clean.HERDR_SESSION).toBe('cookrew')
   })
 })

@@ -51,14 +51,15 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { promptViaHerdr, waitForAgentState } from './herdr-agent-wait'
-import type {
-  AttachSpawn,
-  AttachSpec,
-  CommandRunner,
-  Multiplexer,
-  MultiplexerCapabilities,
-  PaneLaunch,
-  ScrollState
+import {
+  sanitizeAgentEnv,
+  type AttachSpawn,
+  type AttachSpec,
+  type CommandRunner,
+  type Multiplexer,
+  type MultiplexerCapabilities,
+  type PaneLaunch,
+  type ScrollState
 } from './multiplexer'
 
 /** Cookrew's own herdr session, isolated from the user's — tmux's `-L cookrew`. */
@@ -298,11 +299,14 @@ export class HerdrHostMultiplexer implements Multiplexer {
   private serverUp = false
 
   constructor(options: HerdrHostOptions) {
-    const env = {
+    // Sanitized: the server is every pane's PARENT, so whatever launched
+    // Cookrew leaks straight into every agent through it — measured as the
+    // transcript-saving freeze (see sanitizeAgentEnv).
+    const env = sanitizeAgentEnv({
       ...process.env,
       HERDR_SESSION: options.session,
       HERDR_CONFIG_PATH: options.configPath
-    }
+    })
     this.session = options.session
     this.configPath = options.configPath
     this.runner = options.runner ?? createHerdrRunner(env)

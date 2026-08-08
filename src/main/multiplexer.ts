@@ -16,6 +16,32 @@
 // sites ask what a multiplexer CAN do rather than branching on which one it
 // is, so a half-migrated configuration is supported rather than broken.
 
+/**
+ * Strip the spawning Claude Code session's own markers from an env that will
+ * reach an AGENT.
+ *
+ * Cookrew (or its herdr server) is sometimes launched from inside a Claude
+ * Code session — a dev shell, an orchestrator agent. That session's env
+ * carries markers like CLAUDE_CODE_CHILD_SESSION, and a claude that inherits
+ * them believes it is a nested child session and SWITCHES OFF its transcript
+ * saving. Measured live: every pane's claude carried the marker, every
+ * session file froze, and file-backed checkpoints stopped advancing — the
+ * ledger silently gapped for hours.
+ *
+ * The leak path is parenthood, not the boot script: panes are children of the
+ * multiplexer server, and the server inherited the launcher's env. So this is
+ * applied wherever Cookrew hands an env to a server or a pane process.
+ */
+export function sanitizeAgentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const clean: NodeJS.ProcessEnv = {}
+  for (const [key, value] of Object.entries(env)) {
+    if (key === 'CLAUDECODE' || key === 'CLAUDE_PID' || key === 'CLAUDE_EFFORT') continue
+    if (key.startsWith('CLAUDE_CODE_')) continue
+    clean[key] = value
+  }
+  return clean
+}
+
 /** What node-pty should spawn to create-or-reattach a session. */
 export interface AttachSpawn {
   file: string

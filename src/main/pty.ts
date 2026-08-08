@@ -5,6 +5,7 @@ import { homedir, tmpdir } from 'node:os'
 import pty, { IPty } from 'node-pty'
 import xtermHeadless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
+import { sanitizeAgentEnv } from './multiplexer'
 import type { Multiplexer } from './multiplexer'
 import { TmuxMultiplexer, sessionNameFor as tmuxSessionNameFor, TMUX_LABEL as TMUX_LABEL_CONST } from './tmux-multiplexer'
 import { HerdrHostMultiplexer, HERDR_SESSION } from './herdr-host-multiplexer'
@@ -226,7 +227,10 @@ export class PtySession extends EventEmitter {
     this.screen.loadAddon(this.serializer)
 
     const env = {
-      ...process.env,
+      // Sanitized: under tmux/direct the pane (or the tmux SERVER on its
+      // first start) inherits this env, and a launcher-session marker turns
+      // off the agent's transcript saving (see sanitizeAgentEnv).
+      ...sanitizeAgentEnv(process.env),
       TERM_PROGRAM: 'Cookrew',
       COOKREW_TERMINAL_ID: options.terminalId,
       COOKREW_SOCKET: options.socketPath,
