@@ -119,7 +119,12 @@ async function waitForReply(
     // yet is idle, and returning on that would report the PREVIOUS turn's
     // output as this turn's reply.
     await new Promise((resolve) => setTimeout(resolve, timing.graceMs))
-    if (await mux.waitUntilIdle(session.sessionName, timing.timeoutMs)) return
+    await mux.waitUntilIdle(session.sessionName, timing.timeoutMs)
+    // CORROBORATE, never trust alone: the per-pane detector can stick at
+    // 'idle' (measured under a live 48s spinner), and a stuck idle resolves
+    // this wait instantly — truncating the reply to whatever happened to be
+    // on screen. Quiescence returns quickly when the agent genuinely
+    // finished, and holds exactly when the detector was lying.
   }
   await waitForQuiescence(session, timing)
 }
