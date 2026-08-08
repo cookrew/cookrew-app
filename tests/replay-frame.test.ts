@@ -16,7 +16,7 @@
 import { describe, expect, it } from 'vitest'
 import xtermHeadless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
-import { buildReplayFrame, CLEAR_SCREEN } from '../src/main/pty'
+import { buildReplayFrame, planWheelJump, CLEAR_SCREEN } from '../src/main/pty'
 import type { Terminal as HeadlessTerminalType } from '@xterm/headless'
 
 const { Terminal } = xtermHeadless as unknown as { Terminal: typeof HeadlessTerminalType }
@@ -137,5 +137,44 @@ describe('replay frame — geometry is declared, not guessed', () => {
     const wrong = new Terminal({ cols: 45, rows: 8, scrollback: 5000, allowProposedApi: true })
     await write(wrong, frame())
     expect(visible(wrong)).not.toEqual(visible(screen))
+  })
+})
+
+describe('planWheelJump — checkpoint jumps without a copy-mode', () => {
+  // herdr has no copy-mode to command, but its attach client scrolls 3 lines
+  // per SGR wheel notch (measured live: 5 notches -> offset exactly 15, and
+  // Escape returns to live). The planner turns "find this text" into a notch
+  // count; PtySession writes that many wheel events into the PTY it owns.
+  const row = (text: string, wrapped = false): { text: string; wrapped: boolean } => ({
+    text,
+    wrapped
+  })
+
+  it('scrolls the LAST occurrence to the top of the viewport, in notches', () => {
+    const rows = [
+      row('needle here'),
+      ...Array.from({ length: 89 }, (_, i) => row(`line ${i}`))
+    ]
+    // Match at row 0, buffer 90 rows, viewport 30: target 60 -> 20 notches.
+    expect(planWheelJump(rows, 30, 'needle here')).toBe(20)
+  })
+
+  it('finds text spanning WRAPPED rows — a long prompt is one logical line', () => {
+    const rows = [
+      row('the beginning of a very long promp'),
+      row('t that wrapped onto the next row', true),
+      ...Array.from({ length: 58 }, (_, i) => row(`line ${i}`))
+    ]
+    expect(planWheelJump(rows, 30, 'long prompt that wrapped')).not.toBeNull()
+  })
+
+  it('answers 0 notches when the text is already on the live screen', () => {
+    const rows = [...Array.from({ length: 25 }, (_, i) => row(`line ${i}`)), row('needle')]
+    expect(planWheelJump(rows, 30, 'needle')).toBe(0)
+  })
+
+  it('answers null for absent or blank text — a jump must not scroll blindly', () => {
+    expect(planWheelJump([row('a'), row('b')], 30, 'missing')).toBeNull()
+    expect(planWheelJump([row('a')], 30, '   ')).toBeNull()
   })
 })

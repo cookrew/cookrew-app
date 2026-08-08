@@ -39,6 +39,8 @@ export class DirectMultiplexer implements Multiplexer {
     // No scrollback server to search: the headless xterm mirror is all there
     // is, and it cannot be scrolled from outside.
     copyModeSearch: false,
+    // No out-of-process scrollback for a wheel event to scroll.
+    wheelScrollback: false,
     // No history counter that survives anything, so checkpoint ordering must
     // fall back to its screen-derived path.
     monotonicHistory: false,

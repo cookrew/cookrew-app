@@ -126,6 +126,55 @@ function listTmuxSessionNames(): string[] {
   return activeMux?.listSessions() ?? []
 }
 
+/** One physical mirror row, as the wheel-jump planner needs it. */
+export interface BufferRow {
+  text: string
+  /** True when this row is the continuation of the previous logical line. */
+  wrapped: boolean
+}
+
+/**
+ * herdr wheel granularity: SGR wheel events scroll 3 lines per notch (herdr's
+ * mouse_scroll_lines default — measured: 5 notches moved offset_from_bottom by
+ * exactly 15).
+ */
+const WHEEL_LINES = 3
+/** SGR mouse: button 64 = wheel up, at an arbitrary in-pane cell. */
+const WHEEL_UP = '\x1b[<64;10;10M'
+
+/**
+ * How many wheel notches scroll the LAST occurrence of `needle` into view.
+ *
+ * Wrapped rows are joined into logical lines before matching — a long prompt
+ * spans physical rows, and matching row-by-row would never find it. The jump
+ * lands the match at (or up to WHEEL_LINES-1 rows below) the top of the
+ * viewport. Null when the text is absent or blank; 0 when it is already on
+ * the live screen.
+ */
+export function planWheelJump(rows: BufferRow[], viewportRows: number, text: string): number | null {
+  const needle = text.trim()
+  if (needle.length === 0) return null
+
+  let matchRow: number | null = null
+  let logicalStart = 0
+  let logical = ''
+  for (let i = 0; i < rows.length; i += 1) {
+    if (!rows[i].wrapped && logical.length > 0) {
+      if (logical.includes(needle)) matchRow = logicalStart
+      logicalStart = i
+      logical = ''
+    }
+    logical += rows[i].text
+  }
+  if (logical.includes(needle)) matchRow = logicalStart
+  if (matchRow === null) return null
+
+  // Rows between the match and the bottom of the buffer, minus one viewport:
+  // scrolling that far up puts the match at the top row.
+  const target = Math.max(0, rows.length - matchRow - viewportRows)
+  return Math.ceil(target / WHEEL_LINES)
+}
+
 export interface PtySessionOptions {
   terminalId: string
   command: string
@@ -389,20 +438,77 @@ export class PtySession extends EventEmitter {
   }
 
   /**
-   * Scroll the pane's view to the most recent occurrence of `text` (tmux
-   * copy-mode literal search). Always restarts from the live tail so
-   * successive jumps land deterministically regardless of the current
-   * scroll position. Best-effort no-op without tmux.
+   * Scroll the pane's view to the most recent occurrence of `text`. Always
+   * restarts from the live tail so successive jumps land deterministically
+   * regardless of the current scroll position.
+   *
+   * Two mechanisms, chosen by capability:
+   * - copyModeSearch (tmux): the backend searches its own scrollback.
+   * - wheelScrollback (herdr): there is no copy-mode to command, but the
+   *   attach client scrolls the pane on wheel input — so the MIRROR is the
+   *   search index and the jump is delivered as wheel events written into
+   *   the PTY this session already owns. Same user-visible behaviour,
+   *   through the input channel instead of a control channel.
+   *
+   * Without either capability this is a no-op — which under herdr it used to
+   * be by accident, and "cannot scroll transcripts" was the user-visible bug.
    */
   jumpToText(text: string): void {
-    if (!this.usesTmux || this.disposed) return
-    activeMux?.jumpToText(this.sessionName, text)
+    if (this.disposed) return
+    const mux = activeMux
+    if (!mux) return
+    if (mux.capabilities.copyModeSearch) {
+      mux.jumpToText(this.sessionName, text)
+      return
+    }
+    if (mux.capabilities.wheelScrollback) this.wheelJumpTo(text)
   }
 
-  /** Leave copy-mode and return the pane to the live tail. */
+  /** Leave scrollback browsing and return the pane to the live tail. */
   exitCopyMode(): void {
-    if (!this.usesTmux || this.disposed) return
-    activeMux?.exitCopyMode(this.sessionName)
+    if (this.disposed) return
+    const mux = activeMux
+    if (!mux) return
+    if (mux.capabilities.copyModeSearch) {
+      mux.exitCopyMode(this.sessionName)
+      return
+    }
+    if (mux.capabilities.wheelScrollback) this.wheelExitScrollback()
+  }
+
+  /**
+   * Escape returns a scrolled pane to live (measured: offset 74 -> 0). It is
+   * ONLY safe while actually scrolled — at the live tail herdr forwards the
+   * Escape to the agent, where it lands as an interrupt in a TUI's input.
+   */
+  private wheelExitScrollback(): void {
+    const offset = activeMux?.scrollState(this.sessionName).scrollRow ?? null
+    if (offset !== null && offset > 0) this.proc.write('\x1b')
+  }
+
+  /**
+   * The wheel-event jump: find the last occurrence of `text` in the mirror,
+   * compute how far above the live tail it sits, and scroll there.
+   *
+   * The mirror is the honest search index here — it is fed by the same
+   * transparent attach stream the pane renders, at the same width, so its
+   * line offsets and herdr's scrollback offsets agree. Wrapped rows are
+   * joined into logical lines before matching (a long prompt spans physical
+   * rows; matching row-by-row would never find it). Granularity is the wheel
+   * notch, so the landing can be up to WHEEL_LINES-1 rows shy — the target
+   * stays in the viewport, which is what a jump promises.
+   */
+  private wheelJumpTo(text: string): void {
+    const rows: BufferRow[] = []
+    const buffer = this.screen.buffer.active
+    for (let i = 0; i < buffer.length; i += 1) {
+      const line = buffer.getLine(i)
+      rows.push({ text: line ? line.translateToString(true) : '', wrapped: line?.isWrapped ?? false })
+    }
+    const notches = planWheelJump(rows, this.screen.rows, text)
+    if (notches === null) return
+    this.wheelExitScrollback()
+    for (let i = 0; i < notches; i += 1) this.proc.write(WHEEL_UP)
   }
 
   /**

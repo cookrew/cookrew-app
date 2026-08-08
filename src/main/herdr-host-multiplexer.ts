@@ -275,6 +275,10 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // instead of silently no-opping. This is the one capability tmux has and
     // herdr does not.
     copyModeSearch: false,
+    // MEASURED: the attach client requests mouse tracking and scrolls the
+    // pane 3 lines per SGR wheel notch; Escape returns to live. PtySession
+    // uses this to deliver checkpoint jumps without a copy-mode.
+    wheelScrollback: true,
     // scroll.max_offset_from_bottom rises with the session (measured).
     monotonicHistory: true,
     // MEASURED: the session outlived its client being killed.

@@ -198,6 +198,8 @@ export class HerdrMultiplexer implements Multiplexer {
     // for text but does not SCROLL the pane to it, which is what the
     // checkpoint jump needs.
     copyModeSearch: false,
+    // Read-only backend: it holds no PTY to write wheel events into.
+    wheelScrollback: false,
     monotonicHistory: true,
     // herdr's server does own its panes across restarts — but it cannot host
     // a Cookrew terminal, so this never applies in practice.

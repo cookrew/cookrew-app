@@ -103,6 +103,18 @@ export interface MultiplexerCapabilities {
    */
   attach: boolean
   copyModeSearch: boolean
+  /**
+   * Scrollback that the ATTACH CLIENT scrolls on mouse-wheel input.
+   *
+   * herdr has no copy-mode to command from outside, but its client requests
+   * mouse tracking and scrolls the pane's server-side scrollback on wheel
+   * events (measured: 3 lines per SGR wheel notch, deterministic; Escape
+   * returns to live). A backend declaring this lets PtySession implement
+   * checkpoint jumps by WRITING wheel events into the PTY it already owns —
+   * the same user-visible behaviour tmux's copy-mode search delivers, through
+   * the input channel instead of a control channel.
+   */
+  wheelScrollback: boolean
   /** Scrollback depth that rises monotonically — checkpoint ordering needs it. */
   monotonicHistory: boolean
   /**

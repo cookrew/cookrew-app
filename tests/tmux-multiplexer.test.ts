@@ -186,6 +186,8 @@ describe('TmuxMultiplexer', () => {
     expect(mux(fakeRunner()).capabilities).toEqual({
       attach: true,
       copyModeSearch: true,
+      // tmux scrolls via copy-mode COMMANDS, not by consuming wheel input.
+      wheelScrollback: false,
       monotonicHistory: true,
       persistsAcrossRestart: true,
       // tmux knows nothing about agents — it multiplexes terminals. This is
