@@ -548,7 +548,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
     //                     "I could not tell" is not a license to type
     const deadline = Date.now() + this.settleMs
     for (;;) {
-      const seen = this.paneRuns(pane.pane_id, expected)
+      const seen = this.paneRuns(pane.pane_id, expected, spec.sessionName)
       if (seen === 'agent') return false
       if (seen === 'shell') return true
       if (Date.now() >= deadline) return false
@@ -556,26 +556,49 @@ export class HerdrHostMultiplexer implements Multiplexer {
   }
 
   /**
-   * What the pane's foreground is running, classified against the expected
-   * agent. Matches the expected token anywhere in the foreground argv rather
-   * than argv0 alone: agents installed as script wrappers exec through an
-   * interpreter, so a live `claude` pane can report argv0 `node` with the
-   * script path in argv — argv0 equality would misread it as not-the-agent.
+   * What the pane is running, judged by its ROOT process — never by the
+   * foreground group.
+   *
+   * The foreground group was the first design and it typed a boot command
+   * into a LIVE claude (2026-08-09, twice): job control moves the foreground
+   * to whatever a TUI agent's current tool is running, so a claude mid
+   * Bash-tool presents a bare `sh` with no claude in the group at all —
+   * indistinguishable from a husk by that witness.
+   *
+   * The root cannot be fooled that way. The boot script `exec`s the agent, so
+   * a live pane's root IS the agent process for the pane's whole life,
+   * whatever its tools are doing. Verified live: the pane whose foreground
+   * read as `sh` had root argv `claude --permission-mode ... --resume ...`.
+   *
+   * herdr reports the root pid (`shell_pid`); its argv comes from ps. The
+   * classifications, and what each licenses:
+   *
+   *   'agent'   — expected token in the root argv. Live; never touch.
+   *   'booting' — the root is running this session's boot script. In flight;
+   *               wait, never type.
+   *   'shell'   — the root is a bare shell where an agent was expected: a
+   *               husk, or typed keys that were dropped. The only state that
+   *               licenses typing.
+   *   'other'   — something unrecognized; wait.
    */
   private paneRuns(
     paneId: string,
-    expected: string
-  ): 'agent' | 'shell' | 'other' | 'unanswerable' {
+    expected: string,
+    sessionName: string
+  ): 'agent' | 'booting' | 'shell' | 'other' | 'unanswerable' {
     try {
       const result = parseEnvelope(this.herdr(['pane', 'process-info', '--pane', paneId]))
       if (!result) return 'unanswerable'
-      const info = result.process_info as { foreground_processes?: unknown[] } | undefined
-      const front = info?.foreground_processes ?? []
-      if (front.length === 0) return 'other'
-      if (JSON.stringify(front).includes(expected)) return 'agent'
-      const first = front[0] as { name?: unknown; argv0?: unknown }
-      const name = String(first.argv0 ?? first.name ?? '').replace(/^-/, '')
-      return SHELL_NAMES.test(name) ? 'shell' : 'other'
+      const info = result.process_info as { shell_pid?: unknown } | undefined
+      const pid = info?.shell_pid
+      if (typeof pid !== 'number') return 'unanswerable'
+      const argv = this.runner.run('ps', ['-o', 'args=', '-p', String(pid)]).trim()
+      if (argv.length === 0) return 'unanswerable'
+      if (argv.includes(expected)) return 'agent'
+      if (argv.includes(`boot-${sessionName}.sh`)) return 'booting'
+      const head = (argv.split(/\s+/)[0] ?? '').split('/').pop()?.replace(/^-/, '') ?? ''
+      if (SHELL_NAMES.test(head) && argv.split(/\s+/).length === 1) return 'shell'
+      return 'other'
     } catch {
       return 'unanswerable'
     }
@@ -644,8 +667,15 @@ export class HerdrHostMultiplexer implements Multiplexer {
     mkdirSync(spec.cliDir, { recursive: true })
     writeFileSync(bootPath, `${bootCommand(spec)}\n`, { mode: 0o700 })
 
+    // ctrl+u FIRST, every time. rc-init keystrokes are not reliably dropped —
+    // they can be BUFFERED and flush after init (measured 2026-08-09: a retype
+    // stacked a second boot line into the input of the claude the FIRST line
+    // had just booted). The kill-line clears whatever is pending, in order,
+    // before this line arrives — so a retype can never stack, whichever of
+    // buffered or dropped the previous attempt turned out to be.
     const type = (): void => {
       this.waitForShell(paneId)
+      this.quiet(['pane', 'send-keys', paneId, 'ctrl+u'])
       this.quiet(['pane', 'send-text', paneId, `clear; exec sh ${bootPath}`])
       this.quiet(['pane', 'send-keys', paneId, 'enter'])
     }
@@ -656,20 +686,22 @@ export class HerdrHostMultiplexer implements Multiplexer {
       return
     }
 
-    // Measured on a restored pane: the shell swallows keystrokes for the
-    // whole of its rc init (~3s+ with a prompt framework), and drops them
-    // without a trace — so the budget must comfortably outlast that window,
-    // and the verify slice must be short enough to get many attempts in.
-    // Dropped keys leave nothing to stack, so retyping is safe; the first
-    // attempt that lands execs the agent and verification ends the loop.
+    // Retype discipline, shaped by two live failures pulling opposite ways:
+    // a single type is not trusted (rc init can eat it), but retyping typed
+    // junk into a live agent TWICE — once because the verifier watched the
+    // foreground group, once because "dropped" keys were actually buffered.
+    // So: retype ONLY while the ROOT process is still a bare shell (positive
+    // evidence the boot has not begun), a full beat apart, with ctrl+u making
+    // each attempt self-cleaning.
     const deadline = Date.now() + this.settleMs * 6
+    type()
+    let lastTypedAt = Date.now()
     for (;;) {
-      type()
-      const verifyBy = Math.min(deadline, Date.now() + Math.min(this.settleMs, 1000))
-      while (Date.now() < verifyBy) {
-        // Positive identification only: `!shell` also matches the rc init's
-        // child processes, which is the same misreading isHusk had to shed.
-        if (this.paneRuns(paneId, expected) === 'agent') return
+      const seen = this.paneRuns(paneId, expected, spec.sessionName)
+      if (seen === 'agent') return
+      if (seen === 'shell' && Date.now() - lastTypedAt >= this.settleMs) {
+        type()
+        lastTypedAt = Date.now()
       }
       if (Date.now() >= deadline) return
     }
