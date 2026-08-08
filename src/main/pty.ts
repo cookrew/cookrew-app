@@ -46,12 +46,41 @@ export const CLEAR_SCREEN = '\x1b[2J\x1b[3J\x1b[H'
  *
  * Scrollback is bounded to one screenful: the mirror keeps 5000 lines and a
  * phone on SSE should not receive a megabyte to render one screen.
+ *
+ * MODES travel with the frame, because serialize() captures only buffer
+ * content. A viewer that joins mid-session never saw the pane's init
+ * sequences — under tmux it always did (every attach spawned a fresh client
+ * that re-emitted them), which is why this was never needed before. Without
+ * the mouse-tracking replay the viewer's xterm never enters mouse mode, its
+ * wheel/touch handling stays local against a one-screen buffer, and the LIVE
+ * pane simply cannot be scrolled — the exact herdr-mode symptom reported.
  */
 export function buildReplayFrame(
-  screen: Pick<HeadlessTerminalType, 'rows'>,
+  screen: Pick<HeadlessTerminalType, 'rows' | 'modes'>,
   serializer: Pick<SerializeAddon, 'serialize'>
 ): string {
-  return CLEAR_SCREEN + serializer.serialize({ scrollback: screen.rows })
+  return CLEAR_SCREEN + serializer.serialize({ scrollback: screen.rows }) + modeReplay(screen.modes)
+}
+
+/** DECSET replay for the modes a mid-session viewer must adopt. */
+export function modeReplay(modes: HeadlessTerminalType['modes']): string {
+  let out = ''
+  const tracking: Record<string, string> = {
+    x10: '\x1b[?9h',
+    vt200: '\x1b[?1000h',
+    drag: '\x1b[?1002h',
+    any: '\x1b[?1003h'
+  }
+  if (modes.mouseTrackingMode !== 'none') {
+    // SGR encoding rides along: it is what herdr negotiates, and the widths
+    // of a modern pane overflow the legacy X10 byte encoding anyway.
+    out += tracking[modes.mouseTrackingMode] + '\x1b[?1006h'
+  }
+  if (modes.bracketedPasteMode) out += '\x1b[?2004h'
+  // Arrow keys: a TUI in application-cursor mode expects SS3 arrows; a viewer
+  // that missed the init would send CSI arrows and the agent would see junk.
+  if (modes.applicationCursorKeysMode) out += '\x1b[?1h'
+  return out
 }
 
 /**

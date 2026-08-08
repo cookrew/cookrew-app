@@ -16,7 +16,7 @@
 import { describe, expect, it } from 'vitest'
 import xtermHeadless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
-import { buildReplayFrame, planWheelJump, CLEAR_SCREEN } from '../src/main/pty'
+import { buildReplayFrame, modeReplay, planWheelJump, CLEAR_SCREEN } from '../src/main/pty'
 import type { Terminal as HeadlessTerminalType } from '@xterm/headless'
 
 const { Terminal } = xtermHeadless as unknown as { Terminal: typeof HeadlessTerminalType }
@@ -176,5 +176,59 @@ describe('planWheelJump — checkpoint jumps without a copy-mode', () => {
   it('answers null for absent or blank text — a jump must not scroll blindly', () => {
     expect(planWheelJump([row('a'), row('b')], 30, 'missing')).toBeNull()
     expect(planWheelJump([row('a')], 30, '   ')).toBeNull()
+  })
+})
+
+describe('modeReplay — a mid-session viewer must adopt the pane modes', () => {
+  // serialize() carries buffer content only. Under tmux every viewer saw the
+  // init sequences (each attach spawned a fresh client); with a replay
+  // baseline nobody does — and a viewer without the mouse-tracking mode never
+  // forwards wheel/touch, so the LIVE pane cannot be scrolled (the reported
+  // herdr-mode symptom).
+  type HeadlessLike = Pick<HeadlessTerminalType, 'modes'>
+  const modes = (over: Record<string, unknown>): HeadlessLike['modes'] =>
+    ({
+      applicationCursorKeysMode: false,
+      applicationKeypadMode: false,
+      bracketedPasteMode: false,
+      insertMode: false,
+      mouseTrackingMode: 'none',
+      originMode: false,
+      reverseWraparoundMode: false,
+      sendFocusMode: false,
+      wraparoundMode: true,
+      ...over
+    }) as HeadlessLike['modes']
+
+  it('replays mouse tracking WITH the SGR encoding', () => {
+    const seq = modeReplay(modes({ mouseTrackingMode: 'drag' }))
+    expect(seq).toContain('\x1b[?1002h')
+    expect(seq).toContain('\x1b[?1006h')
+  })
+
+  it('replays bracketed paste and application cursor keys', () => {
+    const seq = modeReplay(
+      modes({ bracketedPasteMode: true, applicationCursorKeysMode: true })
+    )
+    expect(seq).toContain('\x1b[?2004h')
+    expect(seq).toContain('\x1b[?1h')
+  })
+
+  it('replays NOTHING for a plain shell pane — no modes, no side effects', () => {
+    expect(modeReplay(modes({}))).toBe('')
+  })
+
+  it('rides on the frame: a real mirror with mouse tracking produces a frame that re-enables it', () => {
+    const term = new Terminal({ cols: 20, rows: 5, allowProposedApi: true })
+    const serializer = new SerializeAddon()
+    term.loadAddon(serializer)
+    return new Promise<void>((resolve) => {
+      term.write('hello\x1b[?1002h\x1b[?1006h', () => {
+        const frame = buildReplayFrame(term, serializer)
+        expect(frame).toContain('\x1b[?1002h')
+        expect(frame).toContain('\x1b[?1006h')
+        resolve()
+      })
+    })
   })
 })
