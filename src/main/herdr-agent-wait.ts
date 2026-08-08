@@ -78,11 +78,24 @@ export function promptArgs(target: string, prompt: string, timeoutMs: number): s
 }
 
 /**
- * Submit a prompt via herdr and wait for the agent to finish. Same soft-fail
- * contract as waitForAgentState: false means "herdr could not do it" and the
- * caller types the prompt the old way instead.
+ * What happened to a prompt handed to herdr. The three-way split is the
+ * safety contract, measured the hard way:
+ *
+ *   'done'      — submitted AND the agent finished; the reply is on screen.
+ *   'submitted' — herdr delivered the prompt but could not observe the
+ *                 outcome (agent_prompt_stalled: its detector saw no state
+ *                 change). The prompt IS in the pane. Typing it again
+ *                 double-submits — observed live as a queued duplicate in the
+ *                 agent's input box — so the caller must WAIT, never retype.
+ *   'failed'    — herdr never delivered it (unresolvable agent, server
+ *                 down). Typing is the correct fallback.
  */
-export async function promptViaHerdr(options: WaitOptions & { prompt: string }): Promise<boolean> {
+export type PromptOutcome = 'done' | 'submitted' | 'failed'
+
+/** Submit a prompt via herdr and wait for the agent to finish. */
+export async function promptViaHerdr(
+  options: WaitOptions & { prompt: string }
+): Promise<PromptOutcome> {
   const exec = options.exec ?? runCli
   try {
     await exec('herdr', promptArgs(options.target, options.prompt, options.timeoutMs), {
@@ -90,10 +103,22 @@ export async function promptViaHerdr(options: WaitOptions & { prompt: string }):
       HERDR_SESSION: options.session,
       HERDR_CONFIG_PATH: options.configPath
     })
-    return true
-  } catch {
-    return false
+    return 'done'
+  } catch (error) {
+    return isStall(error) ? 'submitted' : 'failed'
   }
+}
+
+/**
+ * A stall error means the prompt LANDED — herdr's own words: "agent prompt
+ * produced no observed state change". The marker is searched in everything
+ * the process said, because herdr prints the error envelope to stdout and
+ * exec errors carry both streams.
+ */
+export function isStall(error: unknown): boolean {
+  const e = error as { message?: string; stdout?: unknown; stderr?: unknown }
+  const text = `${e?.message ?? ''} ${String(e?.stdout ?? '')} ${String(e?.stderr ?? '')}`
+  return text.includes('agent_prompt_stalled')
 }
 
 const runCli = (file: string, args: string[], env: NodeJS.ProcessEnv): Promise<void> =>

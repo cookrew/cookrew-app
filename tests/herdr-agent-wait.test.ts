@@ -88,18 +88,31 @@ describe('promptArgs — agent-to-agent ask as a herdr primitive', () => {
   })
 })
 
-describe('promptViaHerdr', () => {
+describe('promptViaHerdr — the tri-state IS the safety contract', () => {
   const opts = { session: 'cookrew', configPath: '/c', target: 'w1:p3', timeoutMs: 1000, prompt: 'hi' }
 
-  it('is true when herdr accepted and the agent finished', async () => {
-    expect(await promptViaHerdr({ ...opts, exec: async () => {} })).toBe(true)
+  it('done: herdr submitted and the agent finished', async () => {
+    expect(await promptViaHerdr({ ...opts, exec: async () => {} })).toBe('done')
   })
 
-  it('is FALSE on failure so the caller types the prompt the old way', async () => {
+  it('failed: never delivered — typing is the correct fallback', async () => {
     const failing = async (): Promise<void> => {
       throw new Error('agent_not_found')
     }
-    expect(await promptViaHerdr({ ...opts, exec: failing })).toBe(false)
+    expect(await promptViaHerdr({ ...opts, exec: failing })).toBe('failed')
+  })
+
+  it('SUBMITTED on a stall — the prompt landed, retyping double-submits', async () => {
+    // Measured live: herdr typed the prompt, its detector saw no state
+    // change, the CLI errored agent_prompt_stalled — and the boolean version
+    // of this function read that as "failed", typed the prompt AGAIN, and a
+    // duplicate sat queued in the agent's input box.
+    const stalled = async (): Promise<void> => {
+      const error = new Error('command failed') as Error & { stdout: string }
+      error.stdout = '{"error":{"code":"agent_prompt_stalled","message":"no observed state change"}}'
+      throw error
+    }
+    expect(await promptViaHerdr({ ...opts, exec: stalled })).toBe('submitted')
   })
 
   it('scopes to COOKREW session', async () => {

@@ -65,15 +65,28 @@ export async function askTerminal(
   // still comes out of the mirror diff, so the shape callers see is identical.
   const mux = multiplexer()
   if (mux?.capabilities.agentLifecycle && mux.promptAgent) {
-    // The tracker learns prompts from session.write's input event; a
-    // herdr-side submission never passes through write, so announce it —
-    // otherwise every herdr-native ask records as a promptless phantom turn.
-    session.noteExternalInput(prompt + '\r')
-    if (await mux.promptAgent(session.sessionName, prompt, timeoutMs)) {
+    const outcome = await mux.promptAgent(session.sessionName, prompt, timeoutMs)
+    if (outcome !== 'failed') {
+      // The tracker learns prompts from session.write's input event; a
+      // herdr-side submission never passes through write, so announce it —
+      // otherwise every herdr-native ask records as a promptless phantom turn.
+      session.noteExternalInput(prompt + '\r')
+    }
+    if (outcome === 'done') {
       return diffOutput(before, session.fullText())
     }
-    // herdr could not take it (agent unresolvable, server briefly down) —
-    // fall through to the typed path exactly as before this existed.
+    if (outcome === 'submitted') {
+      // The prompt IS in the pane — herdr just could not observe the agent
+      // finishing (a stalled detector). Typing again double-submits; measured
+      // live as a queued duplicate in the agent's input box. So wait it out
+      // by OUTPUT QUIESCENCE — the one completion signal that needs no
+      // detector — and skip waitUntilIdle for the same reason the detector
+      // stalled: a stuck 'idle' answers instantly and truncates the reply.
+      await waitForQuiescence(session, { quiescenceMs, timeoutMs, graceMs })
+      return diffOutput(before, session.fullText())
+    }
+    // 'failed': herdr never delivered it (agent unresolvable, server briefly
+    // down) — fall through to the typed path exactly as before this existed.
   }
 
   await pasteAndSubmit(session, prompt)

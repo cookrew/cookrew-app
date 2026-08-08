@@ -194,7 +194,11 @@ export interface Multiplexer {
    * the backend cannot do it — callers keep the typed path as the fallback,
    * so a half-working protocol degrades instead of breaking the ask.
    */
-  promptAgent?(name: string, prompt: string, timeoutMs: number): Promise<boolean>
+  promptAgent?(
+    name: string,
+    prompt: string,
+    timeoutMs: number
+  ): Promise<'done' | 'submitted' | 'failed'>
 
   /**
    * Tell the backend where this agent's session transcript lives.

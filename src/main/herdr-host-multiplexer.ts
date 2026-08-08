@@ -949,10 +949,14 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * The registry check first: `agent prompt` fails on an unresolvable target,
    * and repairing registration is this backend's job, not the caller's.
    */
-  async promptAgent(name: string, prompt: string, timeoutMs: number): Promise<boolean> {
+  async promptAgent(
+    name: string,
+    prompt: string,
+    timeoutMs: number
+  ): Promise<'done' | 'submitted' | 'failed'> {
     const pane = this.paneFor(name)
-    if (!pane) return false
-    if (!this.agentResolvable(pane.pane_id)) return false
+    if (!pane) return 'failed'
+    if (!this.agentResolvable(pane.pane_id)) return 'failed'
     return promptViaHerdr({
       session: this.session,
       configPath: this.configPath,
