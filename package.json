@@ -1,7 +1,7 @@
 {
   "name": "cookrew",
   "version": "0.1.0",
-  "description": "Cookrew \u2014 an open-source spatial canvas for AI agents. Terminals, notes, browsers and physics cables on an infinite canvas, orchestrated through a Unix-socket CLI.",
+  "description": "Cookrew — an open-source spatial canvas for AI agents. Terminals, notes, browsers and physics cables on an infinite canvas, orchestrated through a Unix-socket CLI.",
   "main": "out/main/index.js",
   "type": "module",
   "license": "MIT",
@@ -17,7 +17,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
     "dist": "electron-vite build && electron-builder",
     "dist:win": "electron-vite build && electron-builder --win",
-    "dist:mac": "electron-vite build && electron-builder --mac"
+    "dist:mac": "electron-vite build && electron-builder --mac",
+    "install-cli": "node scripts/install-cli.mjs"
   },
   "dependencies": {
     "@xterm/addon-clipboard": "^0.2.0",

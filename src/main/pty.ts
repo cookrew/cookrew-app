@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { mkdirSync, copyFileSync, chmodSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import pty, { IPty } from 'node-pty'
 import xtermHeadless from '@xterm/headless'
 import type { Multiplexer } from './multiplexer'
@@ -26,6 +26,9 @@ const { Terminal: HeadlessTerminal } = xtermHeadless as unknown as {
 // Re-exported so existing importers keep their path; the tmux specifics now
 // live in tmux-multiplexer.ts behind the Multiplexer interface.
 export const TMUX_LABEL = TMUX_LABEL_CONST
+
+/** Stable per-user dir; the socket pointer lives here for the PATH-installed CLI. */
+const COOKREW_HOME = path.join(homedir(), '.cookrew')
 
 /**
  * The process-wide multiplexer. Set once by PtyManager (which owns the config
@@ -466,6 +469,22 @@ export class PtyManager {
    * `import`s would be parsed as CommonJS by node.
    */
   installCli(cliSource: string): void {
+    // Publish the socket at a STABLE path so a `cookrew` on the system PATH can
+    // find it without guessing.
+    //
+    // The runtime dir lives under the OS temp dir, and that is NOT derivable
+    // from another process: on macOS TMPDIR is per-user
+    // (/var/folders/.../T), and a shell without TMPDIR makes os.tmpdir()
+    // answer '/tmp' instead — a different, wrong socket. Measured from an
+    // `env -i` shell. ~/.cookrew is stable for every process this user runs.
+    try {
+      mkdirSync(COOKREW_HOME, { recursive: true })
+      writeFileSync(path.join(COOKREW_HOME, 'socket'), this.socketPath)
+    } catch (error) {
+      // A missing pointer only costs the PATH-installed CLI its default; panes
+      // still get COOKREW_SOCKET injected directly.
+      console.error('Publishing the socket pointer failed:', error)
+    }
     const script = path.join(this.runtimeDir, 'cookrew.mjs')
     copyFileSync(cliSource, script)
     const wrapper = path.join(this.runtimeDir, 'cookrew')
