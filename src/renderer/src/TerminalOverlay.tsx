@@ -330,7 +330,19 @@ function TerminalOverlay({
       }
       fitUntilStable()
 
-      const detach = cookrew().ptyAttach(node.id, (chunk) => term.write(chunk))
+      // Adopt the mirror's geometry BEFORE the first byte. The replay frame is
+      // serialized at the mirror's columns and herdr's later deltas address the
+      // cursor absolutely against them, so painting them into a differently
+      // sized grid re-wraps lines and drops blocks at the wrong rows — the
+      // scrambled transcript. The fit-driven resize kick below then moves the
+      // PANE to this viewer's size, and the server answers with a fresh frame.
+      const detach = cookrew().ptyAttach(
+        node.id,
+        (chunk) => term.write(chunk),
+        ({ cols, rows }) => {
+          if (!disposed && cols > 0 && rows > 0) term.resize(cols, rows)
+        }
+      )
       const inputSub = term.onData((input) => cookrew().ptyInput(node.id, input))
       term.focus()
 

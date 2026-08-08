@@ -187,9 +187,15 @@ export function createRemoteApi(): CookrewApi {
     turnSeen: (terminalId) => post(`/api/terminal/${terminalId}/seen`, {}),
     ptyResize: (terminalId, cols, rows) =>
       post(`/api/terminal/${terminalId}/resize`, { cols, rows }),
-    ptyAttach: (terminalId, onData) => {
+    ptyAttach: (terminalId, onData, onHello) => {
       const stream = new EventSource(`/api/terminal/${terminalId}/stream`)
       const listener = (e: MessageEvent): void => onData(JSON.parse(e.data) as string)
+      // The server sends this before the first frame; sizing the xterm from it
+      // is what keeps a 45x24 phone from re-wrapping a frame serialized at the
+      // pane's 100x30 and then misplacing every absolute-addressed delta.
+      const helloListener = (e: MessageEvent): void =>
+        onHello?.(JSON.parse(e.data) as { cols: number; rows: number })
+      stream.addEventListener('hello', helloListener)
       stream.addEventListener('data', listener)
       return () => stream.close()
     },

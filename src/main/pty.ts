@@ -4,6 +4,7 @@ import { mkdirSync, copyFileSync, chmodSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import pty, { IPty } from 'node-pty'
 import xtermHeadless from '@xterm/headless'
+import { SerializeAddon } from '@xterm/addon-serialize'
 import type { Multiplexer } from './multiplexer'
 import { TmuxMultiplexer, sessionNameFor as tmuxSessionNameFor, TMUX_LABEL as TMUX_LABEL_CONST } from './tmux-multiplexer'
 import { HerdrHostMultiplexer, HERDR_SESSION } from './herdr-host-multiplexer'
@@ -29,6 +30,28 @@ export const TMUX_LABEL = TMUX_LABEL_CONST
 
 /** Stable per-user dir; the socket pointer lives here for the PATH-installed CLI. */
 const COOKREW_HOME = path.join(homedir(), '.cookrew')
+
+/**
+ * Erase screen + scrollback + home the cursor. Every replay starts here so a
+ * reattach REPLACES what the viewer was showing instead of appending under it.
+ */
+export const CLEAR_SCREEN = '\x1b[2J\x1b[3J\x1b[H'
+
+/**
+ * Build the replay frame for a mirror. Split out of PtySession so it can be
+ * exercised against a real headless terminal without spawning a PTY — the
+ * fidelity claim is the whole point of this change, so it needs a test that
+ * actually round-trips a frame rather than one that mocks the answer.
+ *
+ * Scrollback is bounded to one screenful: the mirror keeps 5000 lines and a
+ * phone on SSE should not receive a megabyte to render one screen.
+ */
+export function buildReplayFrame(
+  screen: Pick<HeadlessTerminalType, 'rows'>,
+  serializer: Pick<SerializeAddon, 'serialize'>
+): string {
+  return CLEAR_SCREEN + serializer.serialize({ scrollback: screen.rows })
+}
 
 /**
  * The process-wide multiplexer. Set once by PtyManager (which owns the config
@@ -124,6 +147,8 @@ export class PtySession extends EventEmitter {
   readonly terminalId: string
   private proc: IPty
   private screen: HeadlessTerminalType
+  /** Turns the mirror back into ANSI for replayFrame(); see it for why. */
+  private serializer: SerializeAddon
   private lastOutputAt = 0
   private disposed = false
 
@@ -148,6 +173,8 @@ export class PtySession extends EventEmitter {
     this.sessionName = sessionNameFor(options.terminalId)
 
     this.screen = new HeadlessTerminal({ cols, rows, scrollback: 5000, allowProposedApi: true })
+    this.serializer = new SerializeAddon()
+    this.screen.loadAddon(this.serializer)
 
     const env = {
       ...process.env,
@@ -216,13 +243,78 @@ export class PtySession extends EventEmitter {
     this.emit('input', data)
   }
 
+  /**
+   * Announce input that reached the agent WITHOUT passing through write —
+   * a herdr-native ask submits the prompt server-side, so the only way turn
+   * tracking hears about it is this. Same event, same payload shape.
+   */
+  noteExternalInput(data: string): void {
+    this.emit('input', data)
+  }
+
   resize(cols: number, rows: number): void {
+    const changed = cols !== this.screen.cols || rows !== this.screen.rows
     try {
       this.proc.resize(cols, rows)
       this.screen.resize(cols, rows)
     } catch (error) {
       console.error('PTY resize failed:', error)
+      return
     }
+    // A geometry change invalidates every viewer's screen, because herdr's
+    // deltas address the cursor ABSOLUTELY against the pane geometry (see
+    // replayFrame). Re-serialize at the NEW size and push it to viewers so
+    // nobody keeps applying fresh deltas onto stale addressing — this is what
+    // tmux gave away for free by fully repainting on every attach and resize.
+    //
+    // Emitted as 'replay', NOT 'data': the turn tracker listens on 'data' to
+    // decide whether the agent is producing output, and a synthetic
+    // full-screen repaint there reads as agent activity — it would reset
+    // quiescence and mint phantom checkpoints. Only viewers subscribe here.
+    if (changed && !this.disposed) this.emit('replay', this.replayFrame())
+  }
+
+  /**
+   * A faithful ANSI repaint of the mirror at its CURRENT geometry — the
+   * baseline a viewer must apply BEFORE any live delta.
+   *
+   * The old baseline was `viewportText()`, plain text with the escapes
+   * stripped. Under tmux that was survivable: tmux fully repaints on every
+   * attach and resize, so a viewer that started from an approximation was
+   * corrected within one frame. herdr does not — its chrome-off client
+   * optimizes to dirty-region repaints with ABSOLUTE cursor addressing bound
+   * to the pane geometry (measured: 0 idle bytes). Apply those to a screen
+   * that was seeded with unstyled, unwrapped text at a different width and
+   * the addresses land in the wrong cells: doubled line spacing and blocks out
+   * of order — the scrambled transcripts users only ever saw in herdr mode.
+   *
+   * Serializing the headless mirror instead reproduces colours, attributes,
+   * wrapping and cursor position, so the viewer's grid matches the mirror cell
+   * for cell and the absolute addresses in later deltas mean what they say.
+   *
+   * The leading clear resets both screen and scrollback: a reattach must not
+   * append this frame under whatever the viewer was showing before.
+   */
+  replayFrame(): string {
+    if (this.disposed) return ''
+    try {
+      return buildReplayFrame(this.screen, this.serializer)
+    } catch (error) {
+      // Never let a serialize failure take down an attach: fall back to the
+      // pre-existing plain-text baseline rather than showing nothing.
+      console.error('PTY replay serialize failed, falling back to text:', error)
+      return CLEAR_SCREEN + this.viewportText() + '\r\n'
+    }
+  }
+
+  /**
+   * The geometry a viewer must adopt before applying `replayFrame()`. Sent
+   * first in an attach so the client's xterm is built at the mirror's size:
+   * the frame's wrapping is baked in at these columns, and a client that
+   * paints it at its own width re-wraps every long line.
+   */
+  geometry(): { cols: number; rows: number } {
+    return { cols: this.screen.cols, rows: this.screen.rows }
   }
 
   /** Current screen width in columns (viewportText lines never exceed it). */

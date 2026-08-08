@@ -43,13 +43,25 @@ const api = {
   ptyJump: (terminalId: string, text: string | null) =>
     ipcRenderer.send('pty:jump', terminalId, text),
   turnSeen: (terminalId: string) => ipcRenderer.send('turn:seen', terminalId),
-  ptyAttach: (terminalId: string, onData: (data: string) => void) => {
+  ptyAttach: (
+    terminalId: string,
+    onData: (data: string) => void,
+    onHello?: (geometry: { cols: number; rows: number }) => void
+  ) => {
     const channel = `pty:data:${terminalId}`
+    const helloChannel = `pty:hello:${terminalId}`
     const listener = (_e: unknown, data: string): void => onData(data)
+    const helloListener = (_e: unknown, geometry: { cols: number; rows: number }): void =>
+      onHello?.(geometry)
+    // Subscribed BEFORE the invoke: main sends the hello and the first frame
+    // synchronously inside that handler, so a listener added after it would
+    // miss both.
+    ipcRenderer.on(helloChannel, helloListener)
     ipcRenderer.on(channel, listener)
     void ipcRenderer.invoke('pty:attach', terminalId)
     return () => {
       ipcRenderer.removeListener(channel, listener)
+      ipcRenderer.removeListener(helloChannel, helloListener)
       ipcRenderer.send('pty:detach', terminalId)
     }
   },

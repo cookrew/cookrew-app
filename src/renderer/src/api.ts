@@ -82,7 +82,18 @@ export interface CookrewApi {
   ptyJump: (terminalId: string, text: string | null) => void;
   /** Acknowledge-on-view: user is looking at this terminal's result. */
   turnSeen: (terminalId: string) => void;
-  ptyAttach: (terminalId: string, onData: (data: string) => void) => () => void;
+  /**
+   * Stream a terminal's output. `onHello` (optional) fires ONCE, before the
+   * first byte, with the mirror's geometry: the replay frame's wrapping is
+   * baked in at those columns, and herdr's deltas address the cursor
+   * absolutely against them, so a viewer must adopt that size before applying
+   * anything. Transports that cannot report it simply never call it.
+   */
+  ptyAttach: (
+    terminalId: string,
+    onData: (data: string) => void,
+    onHello?: (geometry: { cols: number; rows: number }) => void
+  ) => () => void;
   listActivity: () => Promise<TerminalActivity[]>;
   onTerminalActivity: (cb: (activity: TerminalActivity) => void) => () => void;
   /**

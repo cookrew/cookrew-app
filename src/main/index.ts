@@ -1412,6 +1412,8 @@ function registerIpc(handlers: RestoreHandlers): void {
   // remounts) call attach repeatedly, and stacked listeners would duplicate
   // every byte of output in the renderer.
   const forwarders = new Map<string, (data: string) => void>()
+  /** Replay-frame forwarders, kept beside `forwarders` so detach drops both. */
+  const replayForwarders = new Map<string, (frame: string) => void>()
   ipcMain.handle('pty:attach', (event, terminalId: string) => {
     const session = ptys.get(terminalId)
     if (!session) return false
@@ -1429,22 +1431,34 @@ function registerIpc(handlers: RestoreHandlers): void {
     }
     forwarders.set(terminalId, listener)
     session.on('data', listener)
-    // Clear the fresh renderer terminal before replaying: the replay is
-    // plain text and cannot reconstruct a TUI's screen state — the popout
-    // follows up with a resize kick to force a authoritative repaint.
-    event.sender.send(
-      `pty:data:${terminalId}`,
-      '\x1b[2J\x1b[3J\x1b[H' + session.viewportText() + '\r\n'
-    )
+    // A geometry change re-serializes the mirror; forward that frame to the
+    // popout so it never keeps applying herdr's absolute-addressed deltas onto
+    // a screen laid out at the previous size. Same listener lifetime as the
+    // data forwarder — pty:detach drops both.
+    const onReplay = (frame: string): void => {
+      if (event.sender.isDestroyed()) return
+      event.sender.send(`pty:data:${terminalId}`, frame)
+    }
+    replayForwarders.set(terminalId, onReplay)
+    session.on('replay', onReplay)
+    // Geometry BEFORE bytes: the frame's wrapping is baked in at the mirror's
+    // columns, so a popout that paints it at its own width re-wraps every long
+    // line. The renderer sizes its xterm from this, then sends the resize kick.
+    event.sender.send(`pty:hello:${terminalId}`, session.geometry())
+    // A faithful ANSI frame, not plain text — see PtySession.replayFrame.
+    event.sender.send(`pty:data:${terminalId}`, session.replayFrame())
     return true
   })
   // The popout detaches on close; without this the forwarder would keep
   // serializing every output chunk to a channel nobody listens on.
   ipcMain.on('pty:detach', (_e, terminalId: string) => {
     const listener = forwarders.get(terminalId)
+    const onReplay = replayForwarders.get(terminalId)
     const session = ptys.get(terminalId)
     if (listener && session) session.removeListener('data', listener)
+    if (onReplay && session) session.removeListener('replay', onReplay)
     forwarders.delete(terminalId)
+    replayForwarders.delete(terminalId)
   })
 
   // Thumbnail frames from the renderer's browser capture loop (data URLs).

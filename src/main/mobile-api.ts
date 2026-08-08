@@ -607,17 +607,28 @@ export async function handleMobileApi(
     }
     if (method === "GET" && ptyMatch[2] === "stream") {
       const send = startSse(response);
-      // Same replay the IPC attach does: clear the fresh xterm, then paint
-      // the current viewport text (a resize kick follows from the client).
-      send("data", "\x1b[2J\x1b[3J\x1b[H" + session.viewportText() + "\r\n");
+      // GEOMETRY FIRST, then the frame. The phone opens its xterm at its own
+      // size (measured: 45x24 while the pane was still 100x30) and the resize
+      // kick only arrives AFTER the first paint — so a frame applied before
+      // the client knows the mirror's size gets re-wrapped, and herdr's
+      // absolute-addressed deltas then land in the wrong cells. Announcing the
+      // size first lets the client size its grid BEFORE any byte arrives.
+      send("hello", session.geometry());
+      // A faithful ANSI frame, not plain text — see PtySession.replayFrame.
+      send("data", session.replayFrame());
       const onData = (data: string): void => send("data", data);
+      // Geometry changed: the server re-serialized at the new size. Applying
+      // it verbatim is what keeps this viewer's addressing valid.
+      const onReplay = (frame: string): void => send("data", frame);
       const onExit = (): void => send("exit", {});
       session.on("data", onData);
+      session.on("replay", onReplay);
       session.on("exit", onExit);
       const heartbeat = setInterval(() => response.write(":hb\n\n"), 25000);
       request.on("close", () => {
         clearInterval(heartbeat);
         session.removeListener("data", onData);
+        session.removeListener("replay", onReplay);
         session.removeListener("exit", onExit);
       });
       return true;
