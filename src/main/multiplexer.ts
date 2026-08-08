@@ -20,6 +20,17 @@
 export interface AttachSpawn {
   file: string
   args: string[]
+  /**
+   * Env the ATTACHING PROCESS itself needs, merged over the terminal's env.
+   *
+   * tmux never needed this — its target is in the argv (`-L cookrew`). herdr
+   * selects its server via HERDR_SESSION in the environment, and an attach
+   * spawned without it talks to the user's DEFAULT socket instead: the panes
+   * are healthy on Cookrew's server, the attach fails instantly on the wrong
+   * one, and every terminal renders blank. The backend that knows the env is
+   * the one that returns the argv, so it rides along here.
+   */
+  env?: Record<string, string>
 }
 
 /** Everything needed to build that argv. */

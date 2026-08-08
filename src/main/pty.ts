@@ -176,7 +176,9 @@ export class PtySession extends EventEmitter {
       cols,
       rows,
       cwd: options.cwd,
-      env
+      // The backend's own env last: it knows which server the attach must
+      // talk to (herdr's HERDR_SESSION), and nothing else does.
+      env: { ...env, ...spawnSpec.env }
     })
 
     // A JS exception escaping these callbacks crosses back into node-pty's

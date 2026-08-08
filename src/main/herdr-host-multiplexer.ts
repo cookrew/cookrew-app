@@ -682,7 +682,15 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // client that never detached; without takeover the next attach does not
     // get the pane and the terminal comes back blank. Cookrew is the only
     // client of its own herdr session, so there is nobody to steal from.
-    return { file: 'herdr', args: ['agent', 'attach', pane.pane_id, '--takeover'] }
+    return {
+      file: 'herdr',
+      args: ['agent', 'attach', pane.pane_id, '--takeover'],
+      // Without this the attach resolves the DEFAULT socket and dies with
+      // server_not_running while the pane sits healthy on Cookrew's server —
+      // the e2e probe masked it by injecting the session env by hand, which
+      // is why it only surfaced in the running app.
+      env: { HERDR_SESSION: this.session, HERDR_CONFIG_PATH: this.configPath }
+    }
   }
 
   capture(name: string): string | null {

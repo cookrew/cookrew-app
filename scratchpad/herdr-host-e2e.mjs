@@ -74,12 +74,16 @@ const check = (name, ok, detail = '') => {
 
 const attach = () => {
   const spawnSpec = mux.attachSpawn(SPEC)
+  // Spawn EXACTLY as PtySession does: base env + the backend's declared env.
+  // Hand-injecting HERDR_SESSION here is what previously masked a real bug —
+  // the app spawned attaches without it and every terminal rendered blank
+  // while this probe passed 14/14.
   return pty.spawn(spawnSpec.file, spawnSpec.args, {
     name: 'xterm-256color',
     cols: 100,
     rows: 30,
     cwd: SPEC.cwd,
-    env: { ...process.env, HERDR_SESSION: SESSION, HERDR_CONFIG_PATH: CONFIG }
+    env: { ...process.env, ...spawnSpec.env }
   })
 }
 

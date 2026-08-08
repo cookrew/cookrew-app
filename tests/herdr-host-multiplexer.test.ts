@@ -240,7 +240,8 @@ describe('attachSpawn', () => {
     const m = mux({ 'pane list': PANE_LIST([{ pane_id: 'w1:p7', label: 'cookrew_abc' }]) })
     expect(m.attachSpawn(SPEC)).toEqual({
       file: 'herdr',
-      args: ['agent', 'attach', 'w1:p7', '--takeover']
+      args: ['agent', 'attach', 'w1:p7', '--takeover'],
+      env: { HERDR_SESSION: 'cookrewtest', HERDR_CONFIG_PATH: '/tmp/cookrew/config.toml' }
     })
   })
 
@@ -250,6 +251,15 @@ describe('attachSpawn', () => {
     // does not get the pane and the terminal comes back blank.
     const m = mux({ 'pane list': PANE_LIST([{ pane_id: 'w1:p7', label: 'cookrew_abc' }]) })
     expect(m.attachSpawn(SPEC).args).toContain('--takeover')
+  })
+
+  it('carries the session env — an env-less attach talks to the WRONG server', () => {
+    // Measured in the running app: panes healthy on Cookrew's server, every
+    // terminal blank, because the attach resolved the user's default socket
+    // (stopped) — HERDR_SESSION selects the server and only the backend
+    // knows it. tmux never needed this; its target rides in the argv.
+    const m = mux({ 'pane list': PANE_LIST([{ pane_id: 'w1:p7', label: 'cookrew_abc' }]) })
+    expect(m.attachSpawn(SPEC).env?.HERDR_SESSION).toBe('cookrewtest')
   })
 
   it('refuses to guess when the pane is missing', () => {
