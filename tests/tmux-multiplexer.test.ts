@@ -50,7 +50,8 @@ const SPEC: AttachSpec = {
   terminalId: 'abc-123',
   socketPath: '/tmp/sock',
   cliDir: '/tmp/cli',
-  path: '/tmp/cli:/usr/bin'
+  path: '/tmp/cli:/usr/bin',
+  cwd: '/tmp/work'
 }
 
 describe('sessionNameFor', () => {
@@ -185,8 +186,14 @@ describe('TmuxMultiplexer', () => {
     expect(mux(fakeRunner()).capabilities).toEqual({
       attach: true,
       copyModeSearch: true,
+      // tmux scrolls via copy-mode COMMANDS, not by consuming wheel input.
+      wheelScrollback: false,
       monotonicHistory: true,
-      persistsAcrossRestart: true
+      persistsAcrossRestart: true,
+      // tmux knows nothing about agents — it multiplexes terminals. This is
+      // the one capability the herdr backend has that tmux does not, and it
+      // is why `cookrew ask` still infers quiescence here.
+      agentLifecycle: false
     })
   })
 })

@@ -3,22 +3,63 @@
 // Verbs: list, ask, check, note, browser,
 // connect, recruit, dismiss, preset, notify, help.
 import net from 'node:net'
+import path from 'node:path'
+import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { homedir, tmpdir } from 'node:os'
 import process from 'node:process'
-
-const socketPath = process.env.COOKREW_SOCKET
-const terminalId = process.env.COOKREW_TERMINAL_ID
 
 function fail(message) {
   process.stderr.write(`cookrew: ${message}\n`)
   process.exit(1)
 }
 
-if (!socketPath) fail('COOKREW_SOCKET is not set — run this inside a Cookrew terminal')
-if (!terminalId) fail('COOKREW_TERMINAL_ID is not set — run this inside a Cookrew terminal')
+/**
+ * The app's socket.
+ *
+ * Inside a pane COOKREW_SOCKET is injected. Outside one — a plain shell, once
+ * this CLI is on the system PATH — the app publishes it at ~/.cookrew/socket.
+ *
+ * That pointer exists because the path is NOT safely derivable: the runtime dir
+ * sits under the OS temp dir, and on macOS TMPDIR is per-user, so a shell
+ * without TMPDIR computes '/tmp/...' and reaches a socket that is not there.
+ * The tmpdir guess is kept as a last resort for an app too old to publish.
+ */
+function readSocketPointer() {
+  try {
+    const value = readFileSync(path.join(homedir(), '.cookrew', 'socket'), 'utf8').trim()
+    return value.length > 0 ? value : null
+  } catch {
+    return null
+  }
+}
+
+const socketPath =
+  process.env.COOKREW_SOCKET ??
+  readSocketPointer() ??
+  path.join(tmpdir(), 'cookrew-runtime', 'cookrew.sock')
 
 const { cmd, args, flags } = parseArgv(process.argv.slice(2))
 if (!cmd) fail("No command given. Run 'cookrew help'.")
+
+/**
+ * Who is calling.
+ *
+ * Every identity-scoped command (list, ask, note, connect …) resolves "self"
+ * from a terminal id, because the caller is normally an agent inside its own
+ * pane. From a plain shell there is no pane, so `--as "Agent Name"` names the
+ * terminal to speak as and the app resolves it.
+ *
+ * This grants nothing new: the socket is a user-owned Unix socket, and inside a
+ * pane COOKREW_TERMINAL_ID is just an environment variable. Anything running as
+ * this user could already claim any identity — `--as` only makes it sayable.
+ *
+ * Deliberately NOT validated here: which commands need an identity is the app's
+ * business (`list --all` needs none), so an empty id is forwarded and the app
+ * answers. Rejecting it in the CLI would duplicate that rule in two places and
+ * get it wrong the first time a command changes.
+ */
+const terminalId = process.env.COOKREW_TERMINAL_ID ?? ''
 
 // `preset list` / `note read` style subcommands stay in args; flags are --key [value].
 function parseArgv(argv) {

@@ -1,13 +1,18 @@
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { mkdirSync, copyFileSync, chmodSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import pty, { IPty } from 'node-pty'
 import xtermHeadless from '@xterm/headless'
+import { SerializeAddon } from '@xterm/addon-serialize'
+import { sanitizeAgentEnv } from './multiplexer'
 import type { Multiplexer } from './multiplexer'
 import { TmuxMultiplexer, sessionNameFor as tmuxSessionNameFor, TMUX_LABEL as TMUX_LABEL_CONST } from './tmux-multiplexer'
+import { HerdrHostMultiplexer, HERDR_SESSION } from './herdr-host-multiplexer'
+import { HerdrStatusFeed, setStatusFeed, statusFeed } from './herdr-agent-status'
 import { DirectMultiplexer } from './direct-multiplexer'
 import { selectMultiplexers } from './multiplexer-select'
+import { harnessFor } from './harness'
 import type { Terminal as HeadlessTerminalType } from '@xterm/headless'
 
 const { Terminal: HeadlessTerminal } = xtermHeadless as unknown as {
@@ -25,6 +30,60 @@ const { Terminal: HeadlessTerminal } = xtermHeadless as unknown as {
 // live in tmux-multiplexer.ts behind the Multiplexer interface.
 export const TMUX_LABEL = TMUX_LABEL_CONST
 
+/** Stable per-user dir; the socket pointer lives here for the PATH-installed CLI. */
+const COOKREW_HOME = path.join(homedir(), '.cookrew')
+
+/**
+ * Erase screen + scrollback + home the cursor. Every replay starts here so a
+ * reattach REPLACES what the viewer was showing instead of appending under it.
+ */
+export const CLEAR_SCREEN = '\x1b[2J\x1b[3J\x1b[H'
+
+/**
+ * Build the replay frame for a mirror. Split out of PtySession so it can be
+ * exercised against a real headless terminal without spawning a PTY — the
+ * fidelity claim is the whole point of this change, so it needs a test that
+ * actually round-trips a frame rather than one that mocks the answer.
+ *
+ * Scrollback is bounded to one screenful: the mirror keeps 5000 lines and a
+ * phone on SSE should not receive a megabyte to render one screen.
+ *
+ * MODES travel with the frame, because serialize() captures only buffer
+ * content. A viewer that joins mid-session never saw the pane's init
+ * sequences — under tmux it always did (every attach spawned a fresh client
+ * that re-emitted them), which is why this was never needed before. Without
+ * the mouse-tracking replay the viewer's xterm never enters mouse mode, its
+ * wheel/touch handling stays local against a one-screen buffer, and the LIVE
+ * pane simply cannot be scrolled — the exact herdr-mode symptom reported.
+ */
+export function buildReplayFrame(
+  screen: Pick<HeadlessTerminalType, 'rows' | 'modes'>,
+  serializer: Pick<SerializeAddon, 'serialize'>
+): string {
+  return CLEAR_SCREEN + serializer.serialize({ scrollback: screen.rows }) + modeReplay(screen.modes)
+}
+
+/** DECSET replay for the modes a mid-session viewer must adopt. */
+export function modeReplay(modes: HeadlessTerminalType['modes']): string {
+  let out = ''
+  const tracking: Record<string, string> = {
+    x10: '\x1b[?9h',
+    vt200: '\x1b[?1000h',
+    drag: '\x1b[?1002h',
+    any: '\x1b[?1003h'
+  }
+  if (modes.mouseTrackingMode !== 'none') {
+    // SGR encoding rides along: it is what herdr negotiates, and the widths
+    // of a modern pane overflow the legacy X10 byte encoding anyway.
+    out += tracking[modes.mouseTrackingMode] + '\x1b[?1006h'
+  }
+  if (modes.bracketedPasteMode) out += '\x1b[?2004h'
+  // Arrow keys: a TUI in application-cursor mode expects SS3 arrows; a viewer
+  // that missed the init would send CSI arrows and the agent would see junk.
+  if (modes.applicationCursorKeysMode) out += '\x1b[?1h'
+  return out
+}
+
 /**
  * The process-wide multiplexer. Set once by PtyManager (which owns the config
  * file the backend needs); module-level helpers below use it so the session
@@ -32,8 +91,20 @@ export const TMUX_LABEL = TMUX_LABEL_CONST
  */
 let activeMux: Multiplexer | null = null
 
+/**
+ * Every constructed backend, host or not. The migration check needs to ask
+ * the NON-host backends whether they still hold a live session — the fork
+ * that produced two populations of the same agents happened precisely because
+ * each backend only ever looked at its own namespace.
+ */
+let allBackends: Multiplexer[] = []
+
 export function setMultiplexer(mux: Multiplexer): void {
   activeMux = mux
+}
+
+export function setBackends(backends: Multiplexer[]): void {
+  allBackends = backends
 }
 
 /** The active backend, or null before PtyManager has constructed one. */
@@ -98,6 +169,109 @@ function listTmuxSessionNames(): string[] {
   return activeMux?.listSessions() ?? []
 }
 
+/** One physical mirror row, as the wheel-jump planner needs it. */
+export interface BufferRow {
+  text: string
+  /** True when this row is the continuation of the previous logical line. */
+  wrapped: boolean
+}
+
+/**
+ * herdr wheel granularity: SGR wheel events scroll 3 lines per notch (herdr's
+ * mouse_scroll_lines default — measured: 5 notches moved offset_from_bottom by
+ * exactly 15).
+ */
+const WHEEL_LINES = 3
+/** SGR mouse: button 64 = wheel up, at an arbitrary in-pane cell. */
+const WHEEL_UP = '\x1b[<64;10;10M'
+
+/**
+ * How many wheel notches scroll the LAST occurrence of `needle` into view.
+ *
+ * Wrapped rows are joined into logical lines before matching — a long prompt
+ * spans physical rows, and matching row-by-row would never find it. The jump
+ * lands the match at (or up to WHEEL_LINES-1 rows below) the top of the
+ * viewport. Null when the text is absent or blank; 0 when it is already on
+ * the live screen.
+ */
+export function planWheelJump(rows: BufferRow[], viewportRows: number, text: string): number | null {
+  const needle = text.trim()
+  if (needle.length === 0) return null
+
+  let matchRow: number | null = null
+  let logicalStart = 0
+  let logical = ''
+  for (let i = 0; i < rows.length; i += 1) {
+    if (!rows[i].wrapped && logical.length > 0) {
+      if (logical.includes(needle)) matchRow = logicalStart
+      logicalStart = i
+      logical = ''
+    }
+    logical += rows[i].text
+  }
+  if (logical.includes(needle)) matchRow = logicalStart
+  if (matchRow === null) return null
+
+  // Rows between the match and the bottom of the buffer, minus one viewport:
+  // scrolling that far up puts the match at the top row.
+  const target = Math.max(0, rows.length - matchRow - viewportRows)
+  return Math.ceil(target / WHEEL_LINES)
+}
+
+/**
+ * ONE live process per terminal, across ALL multiplexers — enforced, not
+ * guarded.
+ *
+ * Switching hosts (tmux <-> herdr) used to FORK the agent population: each
+ * backend booted its own copy under the same session name, both wrote the
+ * same conversation, and the rail froze on whichever binding lost. The fix
+ * follows from what each layer actually stores: a multiplexer hosts only a
+ * PROCESS; the conversation lives in the harness session file. So a process
+ * found in a non-host backend is killed there and resumed here — a
+ * migration, because `--resume` rebuilds it from the source of truth.
+ *
+ * The one honest exception: a harness with `turns: 'scrape'` has no session
+ * file, so for it the conversation IS the process. Killing it would destroy
+ * real state, so it stays where it lives and the skip is said out loud.
+ * Plain shells (no harness) are also left: they hold unresumable state
+ * (jobs, history) and are not agents.
+ *
+ * Returns what happened so the decision is testable and loggable.
+ */
+export function migrateForeignSession(
+  spec: { sessionName: string; command: string },
+  host: Multiplexer,
+  others: Multiplexer[],
+  turnsFor: (command: string) => 'file' | 'scrape' | null,
+  waitMs = 3000
+): 'none' | 'migrated' | 'left-unresumable' {
+  const holder = others.find(
+    (backend) => backend !== host && backend.available() && backend.sessionExists(spec.sessionName)
+  )
+  if (!holder) return 'none'
+
+  if (turnsFor(spec.command) !== 'file') {
+    console.error(
+      `terminal ${spec.sessionName} is alive under '${holder.id}' but cannot be resumed ` +
+        `(no session file) — leaving it there; the '${host.id}' host will run a separate instance`
+    )
+    return 'left-unresumable'
+  }
+
+  holder.killSession(spec.sessionName)
+  // The kill is asynchronous on the other side; booting here while the old
+  // process still holds the session file's tail invites interleaved writes.
+  const deadline = Date.now() + waitMs
+  while (Date.now() < deadline && holder.sessionExists(spec.sessionName)) {
+    // Each probe is a process spawn — self-throttling.
+  }
+  console.error(
+    `terminal ${spec.sessionName}: migrated from '${holder.id}' to '${host.id}' ` +
+      '(process killed there, conversation resumes here from its session file)'
+  )
+  return 'migrated'
+}
+
 export interface PtySessionOptions {
   terminalId: string
   command: string
@@ -119,11 +293,18 @@ export class PtySession extends EventEmitter {
   readonly terminalId: string
   private proc: IPty
   private screen: HeadlessTerminalType
+  /** Turns the mirror back into ANSI for replayFrame(); see it for why. */
+  private serializer: SerializeAddon
   private lastOutputAt = 0
   private disposed = false
 
   readonly usesTmux: boolean
-  private sessionName: string
+  /**
+   * The multiplexer session this terminal lives in. Public because callers
+   * that ask the backend about this terminal — `cookrew ask` waiting for the
+   * agent to go idle — need to name it.
+   */
+  readonly sessionName: string
 
   constructor(options: PtySessionOptions) {
     super()
@@ -138,9 +319,14 @@ export class PtySession extends EventEmitter {
     this.sessionName = sessionNameFor(options.terminalId)
 
     this.screen = new HeadlessTerminal({ cols, rows, scrollback: 5000, allowProposedApi: true })
+    this.serializer = new SerializeAddon()
+    this.screen.loadAddon(this.serializer)
 
     const env = {
-      ...process.env,
+      // Sanitized: under tmux/direct the pane (or the tmux SERVER on its
+      // first start) inherits this env, and a launcher-session marker turns
+      // off the agent's transcript saving (see sanitizeAgentEnv).
+      ...sanitizeAgentEnv(process.env),
       TERM_PROGRAM: 'Cookrew',
       COOKREW_TERMINAL_ID: options.terminalId,
       COOKREW_SOCKET: options.socketPath,
@@ -150,21 +336,34 @@ export class PtySession extends EventEmitter {
 
     // One path for every backend. The direct backend returns a plain login
     // shell here, which is exactly what the old `else` branch spawned by hand.
-    const spawnSpec = activeMux!.attachSpawn({
+    const attachSpec = {
       sessionName: this.sessionName,
       command: options.command,
       shell,
       terminalId: options.terminalId,
       socketPath: options.socketPath,
       cliDir: options.cliDir,
-      path: `${options.cliDir}:${process.env.PATH ?? ''}`
-    })
+      path: `${options.cliDir}:${process.env.PATH ?? ''}`,
+      cwd: options.cwd
+    }
+    // One live process per terminal across ALL backends: a copy of this
+    // agent alive under a non-host multiplexer is killed there first and
+    // resumed here — see migrateForeignSession. Without this, switching
+    // hosts forked the whole agent population.
+    migrateForeignSession(attachSpec, activeMux!, allBackends, (c) => harnessFor(c)?.turns ?? null)
+    // Idempotent, and a no-op for tmux (whose `new-session -A` does it inside
+    // the attach). Backends that cannot create-and-attach in one step — herdr,
+    // where the server owns the pane — need the pane to exist first.
+    activeMux!.ensureSession(attachSpec)
+    const spawnSpec = activeMux!.attachSpawn(attachSpec)
     this.proc = pty.spawn(spawnSpec.file, spawnSpec.args, {
       name: 'xterm-256color',
       cols,
       rows,
       cwd: options.cwd,
-      env
+      // The backend's own env last: it knows which server the attach must
+      // talk to (herdr's HERDR_SESSION), and nothing else does.
+      env: { ...env, ...spawnSpec.env }
     })
 
     // A JS exception escaping these callbacks crosses back into node-pty's
@@ -198,13 +397,78 @@ export class PtySession extends EventEmitter {
     this.emit('input', data)
   }
 
+  /**
+   * Announce input that reached the agent WITHOUT passing through write —
+   * a herdr-native ask submits the prompt server-side, so the only way turn
+   * tracking hears about it is this. Same event, same payload shape.
+   */
+  noteExternalInput(data: string): void {
+    this.emit('input', data)
+  }
+
   resize(cols: number, rows: number): void {
+    const changed = cols !== this.screen.cols || rows !== this.screen.rows
     try {
       this.proc.resize(cols, rows)
       this.screen.resize(cols, rows)
     } catch (error) {
       console.error('PTY resize failed:', error)
+      return
     }
+    // A geometry change invalidates every viewer's screen, because herdr's
+    // deltas address the cursor ABSOLUTELY against the pane geometry (see
+    // replayFrame). Re-serialize at the NEW size and push it to viewers so
+    // nobody keeps applying fresh deltas onto stale addressing — this is what
+    // tmux gave away for free by fully repainting on every attach and resize.
+    //
+    // Emitted as 'replay', NOT 'data': the turn tracker listens on 'data' to
+    // decide whether the agent is producing output, and a synthetic
+    // full-screen repaint there reads as agent activity — it would reset
+    // quiescence and mint phantom checkpoints. Only viewers subscribe here.
+    if (changed && !this.disposed) this.emit('replay', this.replayFrame())
+  }
+
+  /**
+   * A faithful ANSI repaint of the mirror at its CURRENT geometry — the
+   * baseline a viewer must apply BEFORE any live delta.
+   *
+   * The old baseline was `viewportText()`, plain text with the escapes
+   * stripped. Under tmux that was survivable: tmux fully repaints on every
+   * attach and resize, so a viewer that started from an approximation was
+   * corrected within one frame. herdr does not — its chrome-off client
+   * optimizes to dirty-region repaints with ABSOLUTE cursor addressing bound
+   * to the pane geometry (measured: 0 idle bytes). Apply those to a screen
+   * that was seeded with unstyled, unwrapped text at a different width and
+   * the addresses land in the wrong cells: doubled line spacing and blocks out
+   * of order — the scrambled transcripts users only ever saw in herdr mode.
+   *
+   * Serializing the headless mirror instead reproduces colours, attributes,
+   * wrapping and cursor position, so the viewer's grid matches the mirror cell
+   * for cell and the absolute addresses in later deltas mean what they say.
+   *
+   * The leading clear resets both screen and scrollback: a reattach must not
+   * append this frame under whatever the viewer was showing before.
+   */
+  replayFrame(): string {
+    if (this.disposed) return ''
+    try {
+      return buildReplayFrame(this.screen, this.serializer)
+    } catch (error) {
+      // Never let a serialize failure take down an attach: fall back to the
+      // pre-existing plain-text baseline rather than showing nothing.
+      console.error('PTY replay serialize failed, falling back to text:', error)
+      return CLEAR_SCREEN + this.viewportText() + '\r\n'
+    }
+  }
+
+  /**
+   * The geometry a viewer must adopt before applying `replayFrame()`. Sent
+   * first in an attach so the client's xterm is built at the mirror's size:
+   * the frame's wrapping is baked in at these columns, and a client that
+   * paints it at its own width re-wraps every long line.
+   */
+  geometry(): { cols: number; rows: number } {
+    return { cols: this.screen.cols, rows: this.screen.rows }
   }
 
   /** Current screen width in columns (viewportText lines never exceed it). */
@@ -279,20 +543,77 @@ export class PtySession extends EventEmitter {
   }
 
   /**
-   * Scroll the pane's view to the most recent occurrence of `text` (tmux
-   * copy-mode literal search). Always restarts from the live tail so
-   * successive jumps land deterministically regardless of the current
-   * scroll position. Best-effort no-op without tmux.
+   * Scroll the pane's view to the most recent occurrence of `text`. Always
+   * restarts from the live tail so successive jumps land deterministically
+   * regardless of the current scroll position.
+   *
+   * Two mechanisms, chosen by capability:
+   * - copyModeSearch (tmux): the backend searches its own scrollback.
+   * - wheelScrollback (herdr): there is no copy-mode to command, but the
+   *   attach client scrolls the pane on wheel input — so the MIRROR is the
+   *   search index and the jump is delivered as wheel events written into
+   *   the PTY this session already owns. Same user-visible behaviour,
+   *   through the input channel instead of a control channel.
+   *
+   * Without either capability this is a no-op — which under herdr it used to
+   * be by accident, and "cannot scroll transcripts" was the user-visible bug.
    */
   jumpToText(text: string): void {
-    if (!this.usesTmux || this.disposed) return
-    activeMux?.jumpToText(this.sessionName, text)
+    if (this.disposed) return
+    const mux = activeMux
+    if (!mux) return
+    if (mux.capabilities.copyModeSearch) {
+      mux.jumpToText(this.sessionName, text)
+      return
+    }
+    if (mux.capabilities.wheelScrollback) this.wheelJumpTo(text)
   }
 
-  /** Leave copy-mode and return the pane to the live tail. */
+  /** Leave scrollback browsing and return the pane to the live tail. */
   exitCopyMode(): void {
-    if (!this.usesTmux || this.disposed) return
-    activeMux?.exitCopyMode(this.sessionName)
+    if (this.disposed) return
+    const mux = activeMux
+    if (!mux) return
+    if (mux.capabilities.copyModeSearch) {
+      mux.exitCopyMode(this.sessionName)
+      return
+    }
+    if (mux.capabilities.wheelScrollback) this.wheelExitScrollback()
+  }
+
+  /**
+   * Escape returns a scrolled pane to live (measured: offset 74 -> 0). It is
+   * ONLY safe while actually scrolled — at the live tail herdr forwards the
+   * Escape to the agent, where it lands as an interrupt in a TUI's input.
+   */
+  private wheelExitScrollback(): void {
+    const offset = activeMux?.scrollState(this.sessionName).scrollRow ?? null
+    if (offset !== null && offset > 0) this.proc.write('\x1b')
+  }
+
+  /**
+   * The wheel-event jump: find the last occurrence of `text` in the mirror,
+   * compute how far above the live tail it sits, and scroll there.
+   *
+   * The mirror is the honest search index here — it is fed by the same
+   * transparent attach stream the pane renders, at the same width, so its
+   * line offsets and herdr's scrollback offsets agree. Wrapped rows are
+   * joined into logical lines before matching (a long prompt spans physical
+   * rows; matching row-by-row would never find it). Granularity is the wheel
+   * notch, so the landing can be up to WHEEL_LINES-1 rows shy — the target
+   * stays in the viewport, which is what a jump promises.
+   */
+  private wheelJumpTo(text: string): void {
+    const rows: BufferRow[] = []
+    const buffer = this.screen.buffer.active
+    for (let i = 0; i < buffer.length; i += 1) {
+      const line = buffer.getLine(i)
+      rows.push({ text: line ? line.translateToString(true) : '', wrapped: line?.isWrapped ?? false })
+    }
+    const notches = planWheelJump(rows, this.screen.rows, text)
+    if (notches === null) return
+    this.wheelExitScrollback()
+    for (let i = 0; i < notches; i += 1) this.proc.write(WHEEL_UP)
   }
 
   /**
@@ -352,11 +673,70 @@ const TMUX_CONF = [
   'set -g default-terminal "xterm-256color"'
 ].join('\n')
 
+/**
+ * Cookrew's herdr config — and it is not cosmetic.
+ *
+ * herdr's chrome (sidebar, tab bar, pane borders, scrollbars) is what made an
+ * earlier attach measure 97KB of TUI and get written off as unhostable. With
+ * the chrome off, `agent attach` streams the pane and nothing else: measured at
+ * 27ms echo, 0 bytes over 3s idle, no chrome words in the stream.
+ *
+ * `host_cursor = "native"` matters too — Cookrew renders into xterm.js, which
+ * draws its own cursor from the escape stream, so herdr must not paint a
+ * second one as cell content.
+ */
+const HERDR_CONF = [
+  '# Generated by Cookrew. Chrome is off so `agent attach` is a transparent',
+  '# pane stream rather than a terminal UI.',
+  'onboarding = false',
+  '',
+  '[ui]',
+  'sidebar_start_collapsed = true',
+  'sidebar_collapsed_mode = "hidden"',
+  'hide_tab_bar_when_single_tab = true',
+  'pane_borders = false',
+  'pane_scrollbars = false',
+  'pane_gaps = false',
+  'host_cursor = "native"',
+  'confirm_close = false',
+  'prompt_new_tab_name = false',
+  'prompt_new_workspace_name = false',
+  '',
+  // The cookrew herdr server died four times on 2026-08-08/09, killing every
+  // agent each time; one death followed an update check within minutes and
+  // none logged a stop request. The background updater is the one lifecycle
+  // actor Cookrew can switch off, so it is off — Cookrew's agents must never
+  // be collateral of a version check.
+  '[update]',
+  'version_check = false',
+  'manifest_check = false'
+].join('\n')
+
+/**
+ * Backends in preference order.
+ *
+ * herdr is preferred where it exists because it is the only backend that gives
+ * persistence on EVERY platform — tmux does not exist on Windows, and `direct`
+ * loses the agent when the app closes. `COOKREW_MULTIPLEXER` forces one
+ * explicitly, which is the escape hatch for a machine where herdr misbehaves.
+ */
+export function multiplexerOrder(
+  preference: string | undefined,
+  candidates: Multiplexer[]
+): Multiplexer[] {
+  if (!preference) return candidates
+  const chosen = candidates.filter((m) => m.id === preference)
+  // An unknown name falls through to the default order rather than leaving
+  // Cookrew with no host at all.
+  return chosen.length > 0 ? [...chosen, ...candidates.filter((m) => m.id !== preference)] : candidates
+}
+
 export class PtyManager {
   private sessions = new Map<string, PtySession>()
   readonly runtimeDir: string
   readonly socketPath: string
   private tmuxConf: string
+  private herdrConf: string
 
   constructor() {
     // Fixed (pid-independent) so a tmux session's baked-in COOKREW_SOCKET /
@@ -367,16 +747,35 @@ export class PtyManager {
     this.socketPath = path.join(this.runtimeDir, 'cookrew.sock')
     this.tmuxConf = path.join(this.runtimeDir, 'cookrew.tmux.conf')
     writeFileSync(this.tmuxConf, TMUX_CONF)
+    this.herdrConf = path.join(this.runtimeDir, 'cookrew.herdr.toml')
+    writeFileSync(this.herdrConf, HERDR_CONF)
     // The backend is chosen here because this is where the config file it
     // needs is written. Published module-wide so the session reaper and every
     // PtySession share ONE instance (and one availability probe).
     // Selection, not assumption: tmux when it is there, the direct backend
     // otherwise. On Windows tmux does not exist and herdr cannot host a
     // terminal, so `direct` is what the release actually runs on.
-    const roles = selectMultiplexers({
-      candidates: [new TmuxMultiplexer({ configFile: this.tmuxConf }), new DirectMultiplexer()]
-    })
+    const candidates = multiplexerOrder(process.env.COOKREW_MULTIPLEXER, [
+      new HerdrHostMultiplexer({ session: HERDR_SESSION, configPath: this.herdrConf }),
+      new TmuxMultiplexer({ configFile: this.tmuxConf }),
+      new DirectMultiplexer()
+    ])
+    const roles = selectMultiplexers({ candidates })
     setMultiplexer(roles.host)
+    setBackends(candidates)
+    // A dead herdr server means every agent is dead until it returns; the
+    // supervisor turns that from "until the next app launch" into ~15s.
+    if (roles.host instanceof HerdrHostMultiplexer) roles.host.startSupervisor()
+
+    // Push-fed agent state, when the backend has it. Subscriptions are
+    // per-pane, so the feed is refreshed whenever the terminal set changes —
+    // see spawn()/kill(); a pane created after the subscription would
+    // otherwise never be reported on.
+    if (roles.host.capabilities.agentLifecycle) {
+      const feed = new HerdrStatusFeed({ session: HERDR_SESSION, configPath: this.herdrConf })
+      setStatusFeed(feed)
+      feed.start()
+    }
   }
 
   /**
@@ -385,6 +784,22 @@ export class PtyManager {
    * `import`s would be parsed as CommonJS by node.
    */
   installCli(cliSource: string): void {
+    // Publish the socket at a STABLE path so a `cookrew` on the system PATH can
+    // find it without guessing.
+    //
+    // The runtime dir lives under the OS temp dir, and that is NOT derivable
+    // from another process: on macOS TMPDIR is per-user
+    // (/var/folders/.../T), and a shell without TMPDIR makes os.tmpdir()
+    // answer '/tmp' instead — a different, wrong socket. Measured from an
+    // `env -i` shell. ~/.cookrew is stable for every process this user runs.
+    try {
+      mkdirSync(COOKREW_HOME, { recursive: true })
+      writeFileSync(path.join(COOKREW_HOME, 'socket'), this.socketPath)
+    } catch (error) {
+      // A missing pointer only costs the PATH-installed CLI its default; panes
+      // still get COOKREW_SOCKET injected directly.
+      console.error('Publishing the socket pointer failed:', error)
+    }
     const script = path.join(this.runtimeDir, 'cookrew.mjs')
     copyFileSync(cliSource, script)
     const wrapper = path.join(this.runtimeDir, 'cookrew')
@@ -422,6 +837,8 @@ export class PtyManager {
       }
     })
     this.sessions.set(options.terminalId, session)
+    // A pane created after the subscription was made is not covered by it.
+    statusFeed()?.refresh()
     return session
   }
 

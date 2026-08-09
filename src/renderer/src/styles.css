@@ -3451,20 +3451,25 @@ body.cookrew-mobile .cookrew-minimap {
   }
 }
 
+/* Same 30px frame as the header's icon buttons. `width: auto` is load-bearing:
+   the phone rule below pins .voice-bar .cr-btn to a square, and ESC is three
+   glyphs wide — without it the label overflows its own button. This selector
+   is 0-3-0, so it wins that square back regardless of source order. */
 .voice-keys .cr-btn.term-key {
-  min-width: 44px;
-  min-height: 44px;
+  min-width: 30px;
+  min-height: 30px;
+  width: auto;
+  height: 30px;
   justify-content: center;
-  padding: 0 6px;
+  padding: 0 5px;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 700;
 }
 
-/* Mobile zoomed dock: the send group owns the whole bar in static flow so
-   the key cluster can wrap onto its own line — the default absolute,
-   height-centered sliding pane would clip a second line against the dock's
-   overflow:hidden. */
+/* Mobile zoomed dock: the send group owns the whole bar in static flow —
+   the default absolute, height-centered sliding pane is width-capped and
+   would clip the row against the dock's overflow:hidden. */
 body.cookrew-mobile .cr-dock.zoomed .dock-canvas {
   display: none;
 }
@@ -3476,30 +3481,43 @@ body.cookrew-mobile .cr-dock.zoomed .dock-send {
   transform: none;
 }
 
+/* ONE row, not two. The cluster used to take a full-width row of its own
+   above the action row; that cost the dock ~50px of height on the one
+   screen where height is scarcest — the phone, where the dock and the
+   terminal share it. Keys now ride inline with attach/mic/speak/send, and
+   if a very narrow phone can't seat all nine the row scrolls sideways
+   (same idiom as .popout-header) rather than wrapping the line back. */
 body.cookrew-mobile .cr-dock .voice-bar {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
-  row-gap: 6px;
-}
-
-/* On the phone the cluster gets its own full-width row ABOVE the action
-   row — five evenly stretched keys read as a deliberate key row, instead
-   of a ragged wrap that strands send beside ESC. */
-body.cookrew-mobile .cr-dock .voice-keys {
-  order: -1;
-  flex: 1 1 100%;
   gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
 
-body.cookrew-mobile .cr-dock .voice-keys .cr-btn.term-key {
-  flex: 1;
+body.cookrew-mobile .cr-dock .voice-bar::-webkit-scrollbar {
+  display: none;
+}
+
+body.cookrew-mobile .cr-dock .voice-keys {
+  gap: 4px;
+}
+
+/* The dictation caption is the only elastic item in a nowrap row — it
+   ellipsises so the buttons never get pushed into the scroll region. */
+body.cookrew-mobile .cr-dock .voice-ghost {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 /* ---- phone companion (narrow viewports) ----
    The remote (mobile-server) UI shares this stylesheet; below ~700px the
    zoomed terminal overlay compacts so the terminal itself gets the screen:
-   one-line horizontally-scrollable header, 44px tap targets, touch-scrolling
-   scrollback and turn panel. Desktop layout is untouched. */
+   one-line horizontally-scrollable header and send row, 44px tap targets on
+   the canvas dock, touch-scrolling scrollback and turn panel. Desktop layout
+   is untouched. */
 
 @media (max-width: 700px) {
   /* One compact control row that scrolls horizontally when crowded. Without
@@ -3522,14 +3540,26 @@ body.cookrew-mobile .cr-dock .voice-keys .cr-btn.term-key {
     flex: 0 0 auto;
   }
 
-  /* One shared 44px frame for every icon button on the phone — popout
-     actions, send group, and dock tools all sit on the same grid. */
-  .popout-header .cr-btn,
-  .voice-bar .cr-btn,
+  /* Two frames, chosen by what each row competes with. The canvas dock
+     tools keep the 44px tap target — nothing is fighting them for space.
+     The zoomed transcript's own chrome does not: the popout actions above
+     and the send group below bracket the terminal, so every pixel they
+     hold is scrollback the user can't read. Both drop to the 30px frame
+     the header's activity / all-agents / fork buttons already use, which
+     is the smallest target already proven tappable in this UI. */
   .cr-dock-tools .cr-btn {
     width: 44px;
     height: 44px;
     min-width: 44px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .popout-header .cr-btn,
+  .voice-bar .cr-btn {
+    width: 30px;
+    height: 30px;
+    min-width: 30px;
     padding: 0;
     justify-content: center;
   }

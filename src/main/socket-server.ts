@@ -230,7 +230,46 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
 }
 
 function self(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
+  // `--as "Agent Name"`: the caller is a plain shell, not a pane, so it names
+  // the terminal to speak as. Only consulted when there is no pane identity —
+  // an agent inside its own pane can never impersonate another by passing it.
+  if (!request.terminalId && typeof request.flags.as === 'string') {
+    return resolveSelfByName(request.flags.as, deps.store, deps.agents)
+  }
   return resolveSelf(request.terminalId, deps.store, deps.agents)
+}
+
+/**
+ * Resolve a caller identity from an agent NAME.
+ *
+ * Exists for `cookrew` on the system PATH: outside a pane there is no terminal
+ * id, and every identity-scoped command needs one. Names are what the user
+ * actually knows — they are what the canvas and `cookrew list` show.
+ *
+ * Ambiguity is an ERROR, not a first match: two agents may share a name across
+ * workspaces, and silently picking one would send a prompt to the wrong agent.
+ */
+export function resolveSelfByName(
+  name: string,
+  store: WorkspaceStore,
+  agents?: AgentRegistry
+): TerminalNodeData {
+  const wanted = name.trim().toLowerCase()
+  const matches = (store.terminalsAcross?.() ?? store.terminals()).filter(
+    (t) => t.name.trim().toLowerCase() === wanted
+  )
+  if (matches.length === 1) return matches[0]
+  if (matches.length > 1) {
+    throw new Error(
+      `More than one terminal is named "${name}". Run it from that agent's own ` +
+        'terminal, or rename one so the name is unambiguous.'
+    )
+  }
+  // Same reboot-safe fallback resolveSelf has: the registry outlives workspace
+  // files, so a name it still knows is a valid identity.
+  const entry = agents?.list().find((e) => e.name.trim().toLowerCase() === wanted)
+  if (entry) return terminalFromRegistry(entry)
+  throw new Error(`No terminal named "${name}". See: cookrew list --all`)
 }
 
 /** Minimal terminal node synthesized from a registry entry (reboot fallback). */
@@ -292,6 +331,14 @@ export function resolveSelf(
           `Switch back with: cookrew workspace switch "${home.name}"`
       )
     }
+  }
+  if (!terminalId) {
+    // The `cookrew` on the system PATH lands here: a plain shell has no pane,
+    // so say what to do rather than only what is wrong.
+    throw new Error(
+      'No caller identity: this shell is not a Cookrew terminal. Name one with ' +
+        '--as, e.g. `cookrew --as "Conductor" list`, or use `cookrew list --all`.'
+    )
   }
   throw new Error('This shell is not attached to a Cookrew terminal node')
 }

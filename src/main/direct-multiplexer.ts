@@ -39,10 +39,14 @@ export class DirectMultiplexer implements Multiplexer {
     // No scrollback server to search: the headless xterm mirror is all there
     // is, and it cannot be scrolled from outside.
     copyModeSearch: false,
+    // No out-of-process scrollback for a wheel event to scroll.
+    wheelScrollback: false,
     // No history counter that survives anything, so checkpoint ordering must
     // fall back to its screen-derived path.
     monotonicHistory: false,
-    persistsAcrossRestart: false
+    persistsAcrossRestart: false,
+    // No agent lifecycle: quiescence has to be inferred from output silence.
+    agentLifecycle: false
   }
 
   /** Always: node-pty is a dependency, not an external program. */
@@ -67,6 +71,9 @@ export class DirectMultiplexer implements Multiplexer {
     // Disposing the PtySession kills the child. Nothing survives it to clean
     // up, which is the same fact as persistsAcrossRestart: false.
   }
+
+  /** Nothing to create: the spawn IS the session. */
+  ensureSession(): void {}
 
   /**
    * A login shell running the command, with the CLI bridge in the environment.

@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './store'
-import { PtyManager } from './pty'
+import { PtyManager, multiplexer, sessionNameFor } from './pty'
 import type { PtySession } from './pty'
 import { TurnTracker } from './turn-tracker'
 import { TurnStore } from './turn-store'
@@ -400,7 +400,12 @@ function claimedPiSessions(selfId: string): ReadonlySet<string> {
  *  harness carries 'file' turn history; a no-op for scrape-only/plain shells. */
 function watchSessionTurns(terminalId: string): void {
   const spec = traces.watchSpec(terminalId)
-  if (spec) sessionSync.watch(terminalId, spec.file, spec.parse)
+  if (!spec) return
+  sessionSync.watch(terminalId, spec.file, spec.parse)
+  // The multiplexer gets the transcript path too, when it models agents —
+  // this is the same fact, and herdr's own detection can use it rather than
+  // inferring the agent's state from what it painted.
+  multiplexer()?.reportAgentSession?.(sessionNameFor(terminalId), spec.file)
 }
 
 /**
@@ -1024,6 +1029,21 @@ function createWindow(): void {
   })
 }
 
+// ONE Cookrew per machine, enforced before anything else runs.
+//
+// Two instances do not merely conflict over ports — they FIGHT over the same
+// multiplexer panes. Under herdr every attach uses --takeover, so instance B
+// steals each pane from instance A, A's client exits, A reattaches and steals
+// it back. That churn of near-instant PTY exits lands in node-pty's known
+// ThreadSafeFunction crash window (Napi::Error thrown in CallJS -> libc++
+// abort), which took the whole app down at launch on 2026-08-08 — see the
+// Electron-*-172115.ips crash report. The lock turns "two instances slowly
+// corrupt each other" into "the second instance exits immediately".
+if (!app.requestSingleInstanceLock()) {
+  console.error('Another Cookrew instance is already running — exiting.')
+  app.exit(1)
+}
+
 app.whenReady().then(() => {
   // Dock icon must be set at runtime in dev; packaged builds also bundle
   // resources/icon.icns via the packager config when one is added.
@@ -1392,6 +1412,8 @@ function registerIpc(handlers: RestoreHandlers): void {
   // remounts) call attach repeatedly, and stacked listeners would duplicate
   // every byte of output in the renderer.
   const forwarders = new Map<string, (data: string) => void>()
+  /** Replay-frame forwarders, kept beside `forwarders` so detach drops both. */
+  const replayForwarders = new Map<string, (frame: string) => void>()
   ipcMain.handle('pty:attach', (event, terminalId: string) => {
     const session = ptys.get(terminalId)
     if (!session) return false
@@ -1409,22 +1431,34 @@ function registerIpc(handlers: RestoreHandlers): void {
     }
     forwarders.set(terminalId, listener)
     session.on('data', listener)
-    // Clear the fresh renderer terminal before replaying: the replay is
-    // plain text and cannot reconstruct a TUI's screen state — the popout
-    // follows up with a resize kick to force a authoritative repaint.
-    event.sender.send(
-      `pty:data:${terminalId}`,
-      '\x1b[2J\x1b[3J\x1b[H' + session.viewportText() + '\r\n'
-    )
+    // A geometry change re-serializes the mirror; forward that frame to the
+    // popout so it never keeps applying herdr's absolute-addressed deltas onto
+    // a screen laid out at the previous size. Same listener lifetime as the
+    // data forwarder — pty:detach drops both.
+    const onReplay = (frame: string): void => {
+      if (event.sender.isDestroyed()) return
+      event.sender.send(`pty:data:${terminalId}`, frame)
+    }
+    replayForwarders.set(terminalId, onReplay)
+    session.on('replay', onReplay)
+    // Geometry BEFORE bytes: the frame's wrapping is baked in at the mirror's
+    // columns, so a popout that paints it at its own width re-wraps every long
+    // line. The renderer sizes its xterm from this, then sends the resize kick.
+    event.sender.send(`pty:hello:${terminalId}`, session.geometry())
+    // A faithful ANSI frame, not plain text — see PtySession.replayFrame.
+    event.sender.send(`pty:data:${terminalId}`, session.replayFrame())
     return true
   })
   // The popout detaches on close; without this the forwarder would keep
   // serializing every output chunk to a channel nobody listens on.
   ipcMain.on('pty:detach', (_e, terminalId: string) => {
     const listener = forwarders.get(terminalId)
+    const onReplay = replayForwarders.get(terminalId)
     const session = ptys.get(terminalId)
     if (listener && session) session.removeListener('data', listener)
+    if (onReplay && session) session.removeListener('replay', onReplay)
     forwarders.delete(terminalId)
+    replayForwarders.delete(terminalId)
   })
 
   // Thumbnail frames from the renderer's browser capture loop (data URLs).

@@ -83,9 +83,12 @@ export class TmuxMultiplexer implements Multiplexer {
   readonly capabilities: MultiplexerCapabilities = {
     attach: true,
     copyModeSearch: true,
+    wheelScrollback: false,
     monotonicHistory: true,
     // The reason Cookrew uses a multiplexer at all.
-    persistsAcrossRestart: true
+    persistsAcrossRestart: true,
+    // No agent lifecycle: quiescence has to be inferred from output silence.
+    agentLifecycle: false
   }
 
   private readonly runner: CommandRunner
@@ -132,6 +135,12 @@ export class TmuxMultiplexer implements Multiplexer {
     if (!this.available()) return
     this.quiet(['kill-session', '-t', name])
   }
+
+  /**
+   * Nothing to do: `new-session -A` in attachSpawn IS the create-or-reattach,
+   * and doing it in one step is what makes tmux's reattach atomic.
+   */
+  ensureSession(): void {}
 
   /**
    * `new-session -A`: reattach the terminal's session if it survived a
