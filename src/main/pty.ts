@@ -12,6 +12,7 @@ import { HerdrHostMultiplexer, HERDR_SESSION } from './herdr-host-multiplexer'
 import { HerdrStatusFeed, setStatusFeed, statusFeed } from './herdr-agent-status'
 import { DirectMultiplexer } from './direct-multiplexer'
 import { selectMultiplexers } from './multiplexer-select'
+import { harnessFor } from './harness'
 import type { Terminal as HeadlessTerminalType } from '@xterm/headless'
 
 const { Terminal: HeadlessTerminal } = xtermHeadless as unknown as {
@@ -90,8 +91,20 @@ export function modeReplay(modes: HeadlessTerminalType['modes']): string {
  */
 let activeMux: Multiplexer | null = null
 
+/**
+ * Every constructed backend, host or not. The migration check needs to ask
+ * the NON-host backends whether they still hold a live session — the fork
+ * that produced two populations of the same agents happened precisely because
+ * each backend only ever looked at its own namespace.
+ */
+let allBackends: Multiplexer[] = []
+
 export function setMultiplexer(mux: Multiplexer): void {
   activeMux = mux
+}
+
+export function setBackends(backends: Multiplexer[]): void {
+  allBackends = backends
 }
 
 /** The active backend, or null before PtyManager has constructed one. */
@@ -205,6 +218,60 @@ export function planWheelJump(rows: BufferRow[], viewportRows: number, text: str
   return Math.ceil(target / WHEEL_LINES)
 }
 
+/**
+ * ONE live process per terminal, across ALL multiplexers — enforced, not
+ * guarded.
+ *
+ * Switching hosts (tmux <-> herdr) used to FORK the agent population: each
+ * backend booted its own copy under the same session name, both wrote the
+ * same conversation, and the rail froze on whichever binding lost. The fix
+ * follows from what each layer actually stores: a multiplexer hosts only a
+ * PROCESS; the conversation lives in the harness session file. So a process
+ * found in a non-host backend is killed there and resumed here — a
+ * migration, because `--resume` rebuilds it from the source of truth.
+ *
+ * The one honest exception: a harness with `turns: 'scrape'` has no session
+ * file, so for it the conversation IS the process. Killing it would destroy
+ * real state, so it stays where it lives and the skip is said out loud.
+ * Plain shells (no harness) are also left: they hold unresumable state
+ * (jobs, history) and are not agents.
+ *
+ * Returns what happened so the decision is testable and loggable.
+ */
+export function migrateForeignSession(
+  spec: { sessionName: string; command: string },
+  host: Multiplexer,
+  others: Multiplexer[],
+  turnsFor: (command: string) => 'file' | 'scrape' | null,
+  waitMs = 3000
+): 'none' | 'migrated' | 'left-unresumable' {
+  const holder = others.find(
+    (backend) => backend !== host && backend.available() && backend.sessionExists(spec.sessionName)
+  )
+  if (!holder) return 'none'
+
+  if (turnsFor(spec.command) !== 'file') {
+    console.error(
+      `terminal ${spec.sessionName} is alive under '${holder.id}' but cannot be resumed ` +
+        `(no session file) — leaving it there; the '${host.id}' host will run a separate instance`
+    )
+    return 'left-unresumable'
+  }
+
+  holder.killSession(spec.sessionName)
+  // The kill is asynchronous on the other side; booting here while the old
+  // process still holds the session file's tail invites interleaved writes.
+  const deadline = Date.now() + waitMs
+  while (Date.now() < deadline && holder.sessionExists(spec.sessionName)) {
+    // Each probe is a process spawn — self-throttling.
+  }
+  console.error(
+    `terminal ${spec.sessionName}: migrated from '${holder.id}' to '${host.id}' ` +
+      '(process killed there, conversation resumes here from its session file)'
+  )
+  return 'migrated'
+}
+
 export interface PtySessionOptions {
   terminalId: string
   command: string
@@ -279,6 +346,11 @@ export class PtySession extends EventEmitter {
       path: `${options.cliDir}:${process.env.PATH ?? ''}`,
       cwd: options.cwd
     }
+    // One live process per terminal across ALL backends: a copy of this
+    // agent alive under a non-host multiplexer is killed there first and
+    // resumed here — see migrateForeignSession. Without this, switching
+    // hosts forked the whole agent population.
+    migrateForeignSession(attachSpec, activeMux!, allBackends, (c) => harnessFor(c)?.turns ?? null)
     // Idempotent, and a no-op for tmux (whose `new-session -A` does it inside
     // the attach). Backends that cannot create-and-attach in one step — herdr,
     // where the server owns the pane — need the pane to exist first.
@@ -683,14 +755,14 @@ export class PtyManager {
     // Selection, not assumption: tmux when it is there, the direct backend
     // otherwise. On Windows tmux does not exist and herdr cannot host a
     // terminal, so `direct` is what the release actually runs on.
-    const roles = selectMultiplexers({
-      candidates: multiplexerOrder(process.env.COOKREW_MULTIPLEXER, [
-        new HerdrHostMultiplexer({ session: HERDR_SESSION, configPath: this.herdrConf }),
-        new TmuxMultiplexer({ configFile: this.tmuxConf }),
-        new DirectMultiplexer()
-      ])
-    })
+    const candidates = multiplexerOrder(process.env.COOKREW_MULTIPLEXER, [
+      new HerdrHostMultiplexer({ session: HERDR_SESSION, configPath: this.herdrConf }),
+      new TmuxMultiplexer({ configFile: this.tmuxConf }),
+      new DirectMultiplexer()
+    ])
+    const roles = selectMultiplexers({ candidates })
     setMultiplexer(roles.host)
+    setBackends(candidates)
     // A dead herdr server means every agent is dead until it returns; the
     // supervisor turns that from "until the next app launch" into ~15s.
     if (roles.host instanceof HerdrHostMultiplexer) roles.host.startSupervisor()
