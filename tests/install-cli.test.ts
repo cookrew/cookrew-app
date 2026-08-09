@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
-// @ts-expect-error scripts/install-cli.mjs ships no types; the test exercises runtime behaviour
-import { launcherScript, pickBinDir } from '../scripts/install-cli.mjs'
+// @ts-expect-error the installer lib ships no types; the test exercises runtime behaviour.
+// install-cli-LIB, not install-cli: the executable carries a shebang, and
+// vite-node on Windows inlines project .mjs imports — the unstripped `#!`
+// killed the whole suite there with "Invalid or unexpected token".
+import { launcherScript, pickBinDir } from '../scripts/install-cli-lib.mjs'
 
 /**
  * `cookrew` on the system PATH. Every assertion here is a failure that was
