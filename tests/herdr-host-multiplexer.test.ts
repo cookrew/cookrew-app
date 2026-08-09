@@ -697,3 +697,57 @@ describe('sanitizeAgentEnv — the launcher session must not leak into agents', 
     expect(clean.HERDR_SESSION).toBe('cookrew')
   })
 })
+
+describe('release without losing registration — detectorless kinds', () => {
+  // "The registry survives release" is only true for kinds herdr's detector
+  // re-registers (claude/codex/pi). A kind with NO detector — 'shell', any
+  // unrecognized binary — is ERASED by the release: agent attach resolves
+  // nothing, the client exits instantly, the card renders blank. Measured on
+  // every shell terminal after a server restart.
+  it('re-reports (keeping authority) when the release erased the registration', () => {
+    const runner = fakeRunner({
+      'pane list': PANE_LIST([{ pane_id: 'w1:pQ', label: 'cookrew_abc' }])
+      // 'agent get' unscripted -> throws -> not resolvable after release.
+    })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner, settleMs: 10 })
+      .attachSpawn({ ...SPEC, command: '' })
+    const reports = runner.calls.filter((c) => c.args[1] === 'report-agent')
+    const releases = runner.calls.filter((c) => c.args[1] === 'release-agent')
+    expect(releases.length).toBeGreaterThanOrEqual(1)
+    // Two reports: the initial one, and the restore after the release erased it.
+    expect(reports.length).toBeGreaterThanOrEqual(2)
+    const last = runner.calls.filter((c) => ['report-agent', 'release-agent'].includes(c.args[1])).at(-1)
+    expect(last?.args[1]).toBe('report-agent')
+  })
+
+  it('does NOT re-report when the registration survives (detector-backed kind)', () => {
+    let resolvable = false
+    const calls: Call[] = []
+    const runner: CommandRunner & { calls: Call[] } = {
+      calls,
+      run: (file, args) => {
+        calls.push({ file, args })
+        const key = args.slice(0, 2).join(' ')
+        if (key === 'pane list') return PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc' }])
+        if (key === 'agent get') {
+          if (resolvable) return JSON.stringify({ result: { agent: { agent: 'claude' } } })
+          throw new Error('agent_not_found')
+        }
+        throw new Error(`no scripted reply for ${key}`)
+      },
+      runQuiet: (file, args) => {
+        calls.push({ file, args })
+        // The detector re-registers a claude the moment authority is released.
+        if (args[1] === 'report-agent' || args[1] === 'release-agent') resolvable = true
+      },
+      probe: (file, args) => {
+        calls.push({ file, args })
+        return true
+      }
+    }
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner, settleMs: 10 })
+      .attachSpawn(SPEC)
+    const reports = calls.filter((c) => c.args[1] === 'report-agent')
+    expect(reports.length).toBe(1)
+  })
+})

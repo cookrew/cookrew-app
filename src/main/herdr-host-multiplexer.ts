@@ -537,11 +537,35 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // it, and herdr's detector then stands down waiting for updates this
     // source will never send — measured: every pane stuck at 'unknown' seq 0,
     // `agent prompt --wait` stalling by definition, and one release-agent
-    // flipping the pane to detector-tracked 'idle' seq 1. The registry entry
-    // (what attach and prompt resolve through) SURVIVES the release; only the
-    // authority moves — to the detector, which is the party Cookrew actually
-    // wants reporting.
-    this.quiet(['pane', 'release-agent', pane.pane_id, '--source', 'cookrew', '--agent', kind])
+    // flipping the pane to detector-tracked 'idle' seq 1.
+    this.releaseKeepingRegistration(pane.pane_id, kind, state)
+  }
+
+  /**
+   * Release authority WITHOUT losing the registration.
+   *
+   * "The registry entry survives the release" turned out to be true only for
+   * kinds herdr's detector recognizes (claude, codex, pi, ...) — the detector
+   * re-registers them the moment authority is free. A kind with NO detector
+   * ('shell', any unrecognized binary) has nobody to re-register it, so the
+   * release ERASES it: `agent attach` resolves nothing, the attach client
+   * exits instantly, and the card renders blank — measured on every shell
+   * terminal after a server restart.
+   *
+   * The rule is empirical rather than a hardcoded kind list: release, look,
+   * and if the registration vanished, re-report and KEEP authority. For a
+   * detectorless kind an un-released source costs nothing — there is no
+   * detector being muzzled, and the reported state is as true as any.
+   */
+  private releaseKeepingRegistration(paneId: string, kind: string, state: string): void {
+    this.quiet(['pane', 'release-agent', paneId, '--source', 'cookrew', '--agent', kind])
+    if (this.agentResolvable(paneId)) return
+    this.quiet([
+      'pane', 'report-agent', paneId,
+      '--source', 'cookrew',
+      '--agent', kind,
+      '--state', state
+    ])
   }
 
   /**
@@ -837,10 +861,9 @@ export class HerdrHostMultiplexer implements Multiplexer {
       '--agent', agentKind(spec.command),
       '--state', 'idle'
     ])
-    // Same discipline as reportAgent: registration without a muzzled detector.
-    this.quiet([
-      'pane', 'release-agent', paneId, '--source', 'cookrew', '--agent', agentKind(spec.command)
-    ])
+    // Same discipline as reportAgent: un-muzzle the detector where one
+    // exists, but never at the cost of the registration itself.
+    this.releaseKeepingRegistration(paneId, agentKind(spec.command), 'idle')
     // Registration propagates asynchronously; give it a bounded moment so the
     // attach spawned right after this does not race it.
     const deadline = Date.now() + Math.min(this.settleMs, 1000)
