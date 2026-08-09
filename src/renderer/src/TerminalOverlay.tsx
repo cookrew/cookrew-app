@@ -16,10 +16,12 @@ import { CheckpointTimeline } from './CheckpointTimeline'
 import { TranscriptView, type ActiveBlock, type TranscriptHandle } from './TranscriptView'
 import {
   fetchTraceIndex,
+  fetchTraceMarkers,
   mergeCheckpointRows,
   tailClipRows,
   traceRowLabel,
-  type TraceIndexEntry
+  type TraceIndexEntry,
+  type TraceMarkerRow
 } from './transcript'
 import { checkpointTitle, useTitleMode } from './checkpoint-sync'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
@@ -125,6 +127,7 @@ function TerminalOverlay({
   // sub-cap identities); the trace is the only target (no tmux copy-mode), and
   // the record-based pager is kept in sync best-effort for the header/fork.
   const [traceIndex, setTraceIndex] = useState<TraceIndexEntry[]>([])
+  const [traceMarkers, setTraceMarkers] = useState<TraceMarkerRow[]>([])
   useEffect(() => {
     let alive = true
     void fetchTraceIndex(node.id)
@@ -136,6 +139,11 @@ function TerminalOverlay({
         // bridge that REJECTS is a different failure — surface it, don't swallow.
         console.error('listTraceIndex failed:', error)
       })
+    void fetchTraceMarkers(node.id)
+      .then((list) => {
+        if (alive) setTraceMarkers(list)
+      })
+      .catch((error) => console.error('listTraceMarkers failed:', error))
     return () => {
       alive = false
     }
@@ -322,7 +330,46 @@ function TerminalOverlay({
       }
       fitUntilStable()
 
-      const detach = cookrew().ptyAttach(node.id, (chunk) => term.write(chunk))
+      // Adopt the mirror's geometry BEFORE the first byte. The replay frame is
+      // serialized at the mirror's columns and herdr's later deltas address the
+      // cursor absolutely against them, so painting them into a differently
+      // sized grid re-wraps lines and drops blocks at the wrong rows — the
+      // scrambled transcript. The fit-driven resize kick below then moves the
+      // PANE to this viewer's size, and the server answers with a fresh frame.
+      // Adoption needs a counterweight. Adopting alone means the LAST viewer
+      // to resize owns every other viewer's layout forever: a phone opening
+      // the same terminal shrinks the pane to 45x24 and the desktop renders a
+      // narrow strip in a full-width card until someone drags the window
+      // (measured in herdr mode; tmux mode behaved as last-writer-wins, so
+      // the active viewer always recovered). The rule that restores that:
+      // adopt the frame so it paints correctly, then — if THIS viewer is the
+      // focused one and the pane's size is not its own — re-assert its fitted
+      // size. Idle viewers adopt and stay quiet, so two viewers cannot fight.
+      let reassertTimer: ReturnType<typeof setTimeout> | null = null
+      const detach = cookrew().ptyAttach(
+        node.id,
+        (chunk) => term.write(chunk),
+        ({ cols, rows }) => {
+          if (disposed || cols <= 0 || rows <= 0) return
+          term.resize(cols, rows)
+          if (document.visibilityState !== 'visible' || !document.hasFocus()) return
+          if (reassertTimer) clearTimeout(reassertTimer)
+          reassertTimer = setTimeout(() => {
+            if (disposed) return
+            try {
+              fit.fit()
+              if (term.cols !== cols || term.rows !== rows) {
+                cookrew().ptyResize(node.id, term.cols, term.rows)
+              }
+            } catch {
+              // container may be mid-teardown
+            }
+          }, 400)
+        }
+      )
+      cleanups.push(() => {
+        if (reassertTimer) clearTimeout(reassertTimer)
+      })
       const inputSub = term.onData((input) => cookrew().ptyInput(node.id, input))
       term.focus()
 
@@ -625,6 +672,7 @@ function TerminalOverlay({
         <CheckpointTimeline
           terminalId={node.id}
           rows={rows}
+          markers={traceMarkers}
           titleMode={titleMode}
           activeIndex={activeBlock.index}
           loadingIndex={pendingIndex}

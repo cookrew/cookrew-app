@@ -1,0 +1,529 @@
+<title>ADR: Remote browser control — single-instance vs OSR</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    /* warm phosphor neutrals — cream paper, near-black ink with an amber bias */
+    --paper: #f4efe4;
+    --paper-2: #ece5d6;
+    --card: #fbf8f1;
+    --ink: #211c12;
+    --ink-2: #574f3d;
+    --ink-3: #8a806a;
+    --rule: #ddd4c0;
+    --rule-2: #cabf a6;
+    --rule-2: #cabfa6;
+    /* phosphor amber accent, used sparingly */
+    --accent: #b9821a;
+    --accent-soft: #f2e4c2;
+    /* semantic verdict colors — separate from the accent */
+    --good: #3f7d3f;
+    --good-bg: #e4eedc;
+    --warn: #a9741a;
+    --warn-bg: #f4e8c9;
+    --bad: #b0402f;
+    --bad-bg: #f3ddd5;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --shadow: 0 1px 2px rgba(33,28,18,.06), 0 8px 28px rgba(33,28,18,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #14110b;
+      --paper-2: #1b1710;
+      --card: #1f1a12;
+      --ink: #f0e9d8;
+      --ink-2: #b8ae97;
+      --ink-3: #837a64;
+      --rule: #322b1e;
+      --rule-2: #40382733;
+      --accent: #e6b23e;
+      --accent-soft: #3a2f16;
+      --good: #7db36a;
+      --good-bg: #21301c;
+      --warn: #d7a544;
+      --warn-bg: #33290f;
+      --bad: #e08167;
+      --bad-bg: #3a1f18;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"] {
+    --paper: #f4efe4; --paper-2: #ece5d6; --card: #fbf8f1; --ink: #211c12; --ink-2: #574f3d;
+    --ink-3: #8a806a; --rule: #ddd4c0; --rule-2: #cabfa6; --accent: #b9821a; --accent-soft: #f2e4c2;
+    --good: #3f7d3f; --good-bg: #e4eedc; --warn: #a9741a; --warn-bg: #f4e8c9; --bad: #b0402f; --bad-bg: #f3ddd5;
+    --shadow: 0 1px 2px rgba(33,28,18,.06), 0 8px 28px rgba(33,28,18,.06);
+  }
+  :root[data-theme="dark"] {
+    --paper: #14110b; --paper-2: #1b1710; --card: #1f1a12; --ink: #f0e9d8; --ink-2: #b8ae97;
+    --ink-3: #837a64; --rule: #322b1e; --rule-2: #40382733; --accent: #e6b23e; --accent-soft: #3a2f16;
+    --good: #7db36a; --good-bg: #21301c; --warn: #d7a544; --warn-bg: #33290f; --bad: #e08167; --bad-bg: #3a1f18;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: clamp(20px, 5vw, 56px) clamp(16px, 4vw, 40px) 80px; }
+
+  /* ---- header ---- */
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .eyebrow .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  h1 {
+    font-size: clamp(28px, 5vw, 44px); line-height: 1.08; letter-spacing: -.02em; margin: 0 0 16px;
+    text-wrap: balance; font-weight: 680;
+  }
+  .lede { font-size: clamp(16px, 2.4vw, 19px); color: var(--ink-2); max-width: 64ch; margin: 0; }
+  .meta {
+    font-family: var(--mono); font-size: 12.5px; color: var(--ink-3); margin-top: 22px;
+    display: flex; gap: 18px 26px; flex-wrap: wrap; border-top: 1px solid var(--rule); padding-top: 16px;
+  }
+  .meta b { color: var(--ink-2); font-weight: 600; }
+
+  /* ---- verdict banner ---- */
+  .verdict {
+    margin: 34px 0 8px; background: var(--card); border: 1px solid var(--rule); border-left: 4px solid var(--good);
+    border-radius: 10px; padding: 22px 24px; box-shadow: var(--shadow);
+  }
+  .verdict .tag {
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--good); font-weight: 700; margin-bottom: 8px;
+  }
+  .verdict p { margin: 0; font-size: 16.5px; }
+  .verdict strong { color: var(--ink); }
+
+  /* ---- sections ---- */
+  section { margin-top: 52px; }
+  .kicker {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .15em; text-transform: uppercase;
+    color: var(--ink-3); margin: 0 0 6px;
+  }
+  h2 { font-size: clamp(21px, 3vw, 27px); letter-spacing: -.01em; margin: 0 0 18px; text-wrap: balance; font-weight: 660; }
+  h3 { font-size: 17px; margin: 26px 0 8px; font-weight: 640; }
+  p { margin: 0 0 14px; max-width: 68ch; }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--rule-2); }
+  a:hover { border-bottom-color: var(--accent); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+  code {
+    font-family: var(--mono); font-size: .88em; background: var(--paper-2); border: 1px solid var(--rule);
+    padding: 1px 5px; border-radius: 5px; color: var(--ink);
+  }
+  strong { font-weight: 640; }
+
+  /* ---- timeline ---- */
+  ol.timeline { list-style: none; counter-reset: step; margin: 0; padding: 0; display: grid; gap: 2px; }
+  ol.timeline li {
+    counter-increment: step; position: relative; padding: 16px 18px 16px 58px;
+    background: var(--card); border: 1px solid var(--rule); border-radius: 8px;
+  }
+  ol.timeline li::before {
+    content: counter(step, decimal-leading-zero); position: absolute; left: 16px; top: 15px;
+    font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--accent);
+  }
+  ol.timeline .t { font-weight: 640; margin: 0 0 3px; }
+  ol.timeline .d { color: var(--ink-2); font-size: 14.5px; margin: 0; max-width: none; }
+  ol.timeline .flag { color: var(--bad); font-weight: 640; }
+
+  /* ---- tables ---- */
+  .table-scroll { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; background: var(--card); font-size: 14.5px; }
+  caption { text-align: left; caption-side: top; }
+  th, td { text-align: left; padding: 12px 15px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  thead th {
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--ink-3); font-weight: 600; background: var(--paper-2); position: sticky; top: 0;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  th[scope="row"] { font-weight: 600; color: var(--ink); white-space: nowrap; }
+  td.c { text-align: center; font-variant-numeric: tabular-nums; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11.5px;
+    font-weight: 600; padding: 2px 9px; border-radius: 999px; white-space: nowrap;
+  }
+  .pill.good { color: var(--good); background: var(--good-bg); }
+  .pill.warn { color: var(--warn); background: var(--warn-bg); }
+  .pill.bad { color: var(--bad); background: var(--bad-bg); }
+  .col-pick { background: color-mix(in srgb, var(--good-bg) 55%, transparent); }
+
+  /* ---- callouts ---- */
+  .note {
+    border: 1px solid var(--rule); border-left: 3px solid var(--accent); background: var(--card);
+    border-radius: 8px; padding: 16px 18px; margin: 18px 0; font-size: 14.5px;
+  }
+  .note .lbl { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 6px; }
+  .note.bad { border-left-color: var(--bad); }
+  .note.bad .lbl { color: var(--bad); }
+
+  /* ---- HITL two-column walkthrough ---- */
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 680px) { .cols { grid-template-columns: 1fr; } }
+  .flow { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 18px 20px; }
+  .flow.pick { border-color: color-mix(in srgb, var(--good) 45%, var(--rule)); }
+  .flow h3 { margin-top: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .flow ol { margin: 8px 0 0; padding-left: 20px; font-size: 14.5px; color: var(--ink-2); }
+  .flow ol li { margin-bottom: 7px; }
+  .flow .out { margin-top: 14px; font-family: var(--mono); font-size: 12.5px; padding: 8px 11px; border-radius: 6px; }
+  .flow .out.good { color: var(--good); background: var(--good-bg); }
+  .flow .out.bad { color: var(--bad); background: var(--bad-bg); }
+
+  /* ---- ships list ---- */
+  .ships { display: grid; gap: 12px; margin-top: 6px; }
+  .ship { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: start; background: var(--card); border: 1px solid var(--rule); border-radius: 8px; padding: 15px 18px; }
+  .ship .k { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--accent); padding-top: 2px; }
+  .ship .b { font-size: 14.5px; }
+  .ship .b b { display: block; margin-bottom: 2px; }
+  .ship .b span { color: var(--ink-2); }
+
+  footer {
+    margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--rule);
+    font-family: var(--mono); font-size: 12px; color: var(--ink-3); line-height: 1.7;
+  }
+  footer a { color: var(--ink-2); }
+  @media (prefers-reduced-motion: no-preference) {
+    a, .flow { transition: border-color .15s ease; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow"><span class="dot"></span> Cookrew · Architecture Decision Record</p>
+    <h1>How the phone drives the agent's browser</h1>
+    <p class="lede">Deciding the frame-source and control model for the interactive remote browser — with human-in-the-loop login as the deciding use case.</p>
+    <div class="meta">
+      <span><b>Status</b> &nbsp;Decision — recommend single-instance</span>
+      <span><b>Flag</b> &nbsp;COOKREW_INTERACTIVE_BROWSER</span>
+      <span><b>Date</b> &nbsp;2026-07-24</span>
+      <span><b>Commits</b> &nbsp;6c08ae8 · 198e73c</span>
+    </div>
+  </header>
+
+  <div class="verdict">
+    <div class="tag">◆ Decided &amp; proven — C</div>
+    <p><strong>One headless Chromium, streamed everywhere.</strong> A single <code>--headless=new</code> Chromium child, driven over CDP, with one screencast fanned out to every client (desktop and phone) and input via the closed <code>Input.*</code> vocabulary. One instance means cookies, session, and DOM are unified — the human logs into the exact page the agent keeps. Milestone C-1 proved all six criteria end-to-end (below); the decisive one — a shared <code>sessionStorage</code> token across the agent and two viewers — is the thing OSR structurally could not do.</p>
+  </div>
+
+  <section>
+    <p class="kicker">Context</p>
+    <h2>What we're deciding</h2>
+    <p>A phone can view and drive a desktop browser pane over a WebSocket — JPEG frames down, input up via the Chrome DevTools Protocol. The hard requirement is <strong>human-in-the-loop (HITL) login</strong>: the agent opens a site, hits a login wall, hands off to the human, then continues on the now-authenticated browser. The question is what produces the frames and <em>which browser instance</em> the human actually logs into.</p>
+    <p>Three candidates emerged. They share the same control channel (CDP <code>Input.*</code>, a closed input vocabulary — never raw CDP) and differ only in the frame source and, critically, in whether the human and the agent share one page instance or two.</p>
+  </section>
+
+  <section>
+    <p class="kicker">How we got here</p>
+    <h2>The path to this decision</h2>
+    <ol class="timeline">
+      <li>
+        <p class="t">Dispatched: CDP screencast + <code>Input.*</code> over WebSocket</p>
+        <p class="d">Built and committed (<code>6c08ae8</code>), secured, benchmarked. <code>Page.startScreencast</code> on the desktop webview + CDP input. Milestone-1 numbers looked excellent: ~5&nbsp;ms latency, ~100&nbsp;fps.</p>
+      </li>
+      <li>
+        <p class="t">Phone test failed: <span class="flag">still can't touch</span></p>
+        <p class="d">The bench measured a freshly-mounted, <em>visible</em> node. On a real (offscreen) pane, no frames arrived. Root cause: <strong>Chromium throttles compositing of occluded webviews</strong>, so <code>startScreencast</code> emits nothing when the desktop isn't showing that pane. The input half was always fine.</p>
+      </li>
+      <li>
+        <p class="t">Fork: only the frame source needs to change</p>
+        <p class="d"><code>capturePage()</code> is the one call proven to force a paint on an occluded webview — that's why the old static thumbnail worked. Three options put forward: keep screencast (dead offscreen), a capturePage loop, or an offscreen-rendered (OSR) window.</p>
+      </li>
+      <li>
+        <p class="t">Detour: OSR chosen for its fps ceiling</p>
+        <p class="d">OSR isn't occlusion-throttled, so it streams continuously. Built with a shared session partition for auth. But an OSR window loads a <strong>separate second instance</strong> of the page.</p>
+      </li>
+      <li>
+        <p class="t">Divergence surfaced <span class="flag">— and a stray blank window</span></p>
+        <p class="d">A visible <code>"No content under offscreen mode"</code> panel appeared (an offscreen window can't composite to screen), and the HITL-login question exposed the real cost: the human would log into a <em>copy</em>, not the agent's page. This ADR is the result.</p>
+      </li>
+    </ol>
+  </section>
+
+  <section>
+    <p class="kicker">Comparison</p>
+    <h2>The three candidates</h2>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Dimension</th>
+            <th scope="col">CDP screencast <span style="font-weight:400;text-transform:none;letter-spacing:0">(as dispatched)</span></th>
+            <th scope="col" class="col-pick">capturePage loop</th>
+            <th scope="col">OSR window</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">Target instance</th>
+            <td>desktop browser</td>
+            <td class="col-pick">desktop browser — <b>same one the agent uses</b></td>
+            <td>a separate second copy</td>
+          </tr>
+          <tr>
+            <th scope="row">Control channel</th>
+            <td>CDP <code>Input.*</code></td>
+            <td class="col-pick">CDP <code>Input.*</code> — unchanged</td>
+            <td>CDP <code>Input.*</code></td>
+          </tr>
+          <tr>
+            <th scope="row">Frame source</th>
+            <td><code>Page.startScreencast</code></td>
+            <td class="col-pick"><code>capturePage()</code></td>
+            <td><code>paint</code> event</td>
+          </tr>
+          <tr>
+            <th scope="row">Works when pane offscreen</th>
+            <td class="c"><span class="pill bad">no</span></td>
+            <td class="c col-pick"><span class="pill good">yes</span></td>
+            <td class="c"><span class="pill good">yes</span></td>
+          </tr>
+          <tr>
+            <th scope="row">Frame rate</th>
+            <td class="c">~100 fps <span class="pill warn">visible only</span></td>
+            <td class="c col-pick">~10–15 fps</td>
+            <td class="c">~60–100 fps</td>
+          </tr>
+          <tr>
+            <th scope="row">HITL login state</th>
+            <td class="c">n/a (no frames)</td>
+            <td class="c col-pick"><span class="pill good">shared — it is the agent's page</span></td>
+            <td class="c"><span class="pill bad">diverges</span></td>
+          </tr>
+          <tr>
+            <th scope="row">Resource cost</th>
+            <td class="c">1×</td>
+            <td class="c col-pick">1×</td>
+            <td class="c">2× (two live pages)</td>
+          </tr>
+          <tr>
+            <th scope="row">Stray on-screen window</th>
+            <td class="c"><span class="pill good">none</span></td>
+            <td class="c col-pick"><span class="pill good">none</span></td>
+            <td class="c"><span class="pill bad">yes (bug)</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:14px;font-size:14px;color:var(--ink-3)">The only column OSR wins is raw fps — and for a remote <em>control</em> surface, not a video stream, 10–15&nbsp;fps is comfortably usable.</p>
+  </section>
+
+  <section>
+    <p class="kicker">The core constraint</p>
+    <h2>Why OSR can't win the login case</h2>
+    <p>Two structural facts, neither fixable in our code:</p>
+    <h3>1 · An offscreen window can never be shown natively</h3>
+    <p>An OSR <code>BrowserWindow</code> has no on-screen surface — its content is only retrievable as a bitmap via the <code>paint</code> event. So the desktop <em>must</em> keep its own separate on-screen <code>&lt;webview&gt;</code> to display anything. OSR therefore <strong>forces two instances by construction</strong>; the divergence is intrinsic, not incidental. (The <code>"No content under offscreen mode"</code> panel is exactly this fact leaking on screen.)</p>
+    <h3>2 · <code>sessionStorage</code> can be copied, never shared</h3>
+    <p>By the Web Storage spec, <code>sessionStorage</code> is scoped to a single top-level browsing context: it is copied once at context creation, then the two areas are permanently independent. The shared session <em>partition</em> covers cookies, localStorage, IndexedDB, cache, and service workers — but <strong>not</strong> sessionStorage, and not in-memory JS state. No Electron or Chromium flag changes this.</p>
+    <div class="note bad">
+      <span class="lbl">The unfixable hole</span>
+      So under OSR, "carry the login over" reduces to a one-time <em>copy</em> of sessionStorage plus a desktop reload — which still misses tokens the site keeps only in memory or in mid-SPA state, and the reload destroys the very DOM/route state you were trying to preserve. You'd ship "login carries over, <em>unless</em>…", conditional on where each site happens to store its session.
+    </div>
+  </section>
+
+  <section>
+    <p class="kicker">The deciding use case</p>
+    <h2>HITL login, walked through both ways</h2>
+    <div class="cols">
+      <div class="flow">
+        <h3>OSR (two instances) <span class="pill bad">conditional</span></h3>
+        <ol>
+          <li>Agent opens the site on the desktop pane → login wall.</li>
+          <li>Human logs in on the <strong>OSR copy</strong> via the phone.</li>
+          <li>Auth lands in the OSR copy's context.</li>
+          <li>Agent continues on the <strong>desktop copy</strong> — logged out unless the token sat in a shared store <em>and</em> the desktop reloads.</li>
+        </ol>
+        <div class="out bad">✗ Breaks on sessionStorage / in-memory auth</div>
+      </div>
+      <div class="flow pick">
+        <h3>capturePage (one instance) <span class="pill good">just works</span></h3>
+        <ol>
+          <li>Agent opens the site on the desktop pane → login wall.</li>
+          <li>Human drives <strong>that exact pane</strong> from the phone.</li>
+          <li>Login completes <strong>in place</strong> — cookies, all storage, DOM, memory, everything.</li>
+          <li>Agent continues on the same page — no transfer, no reload, no caveats.</li>
+        </ol>
+        <div class="out good">✓ Works for every auth type</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <p class="kicker">Best practice</p>
+    <h2>What the production platforms actually do</h2>
+    <p>Every reviewed agent-browser platform handles live HITL the same way: <strong>one shared session with in-place human takeover</strong>. None fork a second instance and transfer auth. Cross-instance state transfer exists only as an <em>offline</em> persistence primitive (profiles / <code>storageState</code>) — and even those deliberately exclude sessionStorage.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th scope="col">Platform</th><th scope="col">HITL mechanism</th><th scope="col">Model</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">Browserbase</th><td>"Live View" streams the same session; a toggle flips read-only ↔ take control.</td><td><span class="pill good">single</span></td></tr>
+          <tr><th scope="row">Steel.dev</th><td>Session Viewer on the one live session; credentials injected into it.</td><td><span class="pill good">single</span></td></tr>
+          <tr><th scope="row">Anchor / Hyperbrowser</th><td>Embed the single live session for interactive control.</td><td><span class="pill good">single</span></td></tr>
+          <tr><th scope="row">Playwright / Puppeteer</th><td><code>storageState</code> reuse — <em>offline</em>, and it excludes sessionStorage.</td><td><span class="pill warn">offline only</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:14px">The spec forbids live sessionStorage sharing, copying can't reach in-memory auth, and offscreen windows can't be shown natively — so OSR-style transfer fights both the web platform and the field's consensus. Sources: Browserbase Live View, Steel secure-auth, Anchor managed-auth, Hyperbrowser Live View, Playwright auth docs, MDN <code>sessionStorage</code>, Electron offscreen-rendering.</p>
+  </section>
+
+  <section>
+    <p class="kicker">The reframe</p>
+    <h2>The real issue: remote-displaying a headless browser</h2>
+    <p>Every hard problem here is one problem in disguise: <strong>you cannot natively show a browser that isn't composited to a screen, so you are forced to remote-display it.</strong> The offscreen throttle killing <code>startScreencast</code>, OSR's <code>"No content under offscreen mode"</code>, the frozen passive animation, <code>paintWhenInitiallyHidden</code> — all of it is the friction of streaming an instance that stopped painting to a real screen.</p>
+    <p>That splits the decision into two coherent single-instance answers. Both solve login; they differ only in <em>what the desktop pane is</em>.</p>
+    <div class="cols">
+      <div class="flow pick">
+        <h3>A · Keep it composited <span class="pill good">fits today</span></h3>
+        <p style="font-size:14.5px;color:var(--ink-2);margin:0">The one instance stays a real on-screen <code>&lt;webview&gt;</code>. Desktop renders it natively; the phone is a remote viewer via <code>capturePage</code>. Never lets the instance go headless, so it sidesteps the display problem entirely. Small addition to Cookrew as it is.</p>
+      </div>
+      <div class="flow">
+        <h3>C · One headless instance <span class="pill warn">future / cloud</span></h3>
+        <p style="font-size:14.5px;color:var(--ink-2);margin:0">A single headless browser is the instance; <em>both</em> desktop and phone remote-display it (frames + CDP input) — the Browserbase/Steel model. Uniform, but the desktop loses native browsing and it inherits OSR's paint quirks. Right only if browsers must run with no desktop at all.</p>
+      </div>
+    </div>
+    <div class="note">
+      <span class="lbl">The question that decides A vs C</span>
+      Is a desktop always present and primary → <strong>A</strong>. Or must the browser run headless without a desktop (cloud sessions, server-side agents) → <strong>C</strong>. For the desktop-first canvas as it stands, A is the fit; C is the migration path if Cookrew goes cloud.
+    </div>
+  </section>
+
+  <section>
+    <p class="kicker">If C — the build path</p>
+    <h2>Headless Chromium, streamed everywhere (not OSR, not WebRTC)</h2>
+    <p>If Cookrew goes single-headless-instance, the researched answer is a real <code>--headless=new</code> <strong>Chromium child process</strong> driven over CDP, with one <code>Page.startScreencast</code> re-broadcast to every client and the closed input vocabulary translated to CDP <code>Input.*</code> on the same session — the <a href="https://github.com/vercel-labs/agent-browser">vercel-labs/agent-browser</a> shape, the closest public analog to this exact case.</p>
+    <div class="note">
+      <span class="lbl">Why this clears every hurdle</span>
+      A headless window is <em>never composited to a screen</em>, so there is no occluded surface to throttle — <code>startScreencast</code> fires for every frame the page produces, going quiet only when nothing changes. That is the precise failure that sank OSR, and it does not occur headless. The <code>user-data-dir</code> <code>SingletonLock</code> makes agent + all viewers one process on one profile, so cookies / session / DOM are unified for HITL by construction. And it reuses the existing cast code (<code>ws-frame</code>, <code>cast-input</code>, <code>screencast-pace</code>) — only the target changes.
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Transport</th>
+            <th scope="col" class="col-pick">CDP screencast / WS</th>
+            <th scope="col">WebRTC / virtual display</th>
+            <th scope="col">VNC / noVNC</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">Used by</th><td class="col-pick">Browserbase, browserless, agent-browser</td><td>Steel, Neko, Selkies</td><td>Kasm</td></tr>
+          <tr><th scope="row">fps / fidelity</th><td class="col-pick">~4–15 fps, JPEG</td><td>25–60 fps, video + OS-native UI</td><td>adaptive; weak on motion</td></tr>
+          <tr><th scope="row">Latency (LAN)</th><td class="col-pick">low (1 WS hop + ack)</td><td>lowest (UDP)</td><td>moderate (TCP)</td></tr>
+          <tr><th scope="row">Multi-client fan-out</th><td class="col-pick">re-broadcast base64 to N sockets</td><td>SFU / per-peer encode</td><td>shared framebuffer</td></tr>
+          <tr><th scope="row">Audio</th><td class="c col-pick"><span class="pill bad">no</span></td><td class="c"><span class="pill good">yes</span></td><td class="c"><span class="pill bad">no</span></td></tr>
+          <tr><th scope="row">Native UI (dialogs, &lt;select&gt;)</th><td class="c col-pick"><span class="pill bad">no</span></td><td class="c"><span class="pill good">yes</span></td><td class="c"><span class="pill good">yes</span></td></tr>
+          <tr><th scope="row">macOS infra</th><td class="c col-pick"><span class="pill good">plain child process</span></td><td class="c"><span class="pill bad">Xvfb + GStreamer</span></td><td class="c"><span class="pill bad">Xvfb + VNC</span></td></tr>
+          <tr><th scope="row">Shares agent's CDP target</th><td class="c col-pick"><span class="pill good">yes</span></td><td class="c"><span class="pill warn">no</span></td><td class="c"><span class="pill warn">no</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3>Two things to design around</h3>
+    <p><strong>Slow-client fan-out:</strong> CDP gives one stream per session. Re-broadcast the frames to N sockets, but <strong>ack CDP immediately</strong> and, per client, keep only the latest frame and drop stale ones when a socket is backed up — never apply per-client backpressure upstream to Chrome, or one slow phone stalls the desktop too. (This changes the current single-client ack-on-drain pacing.)</p>
+    <p><strong>No native UI:</strong> CDP screencast can't show file pickers, permission prompts, native <code>&lt;select&gt;</code> popups, or the PDF viewer — the reason Steel moved to WebRTC. Keep login flows DOM-rendered, intercept file choosers via CDP, and hold WebRTC as a documented escape hatch.</p>
+    <h3>The one real decision — the Chromium binary</h3>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th scope="col">Option</th><th scope="col">Bundle size</th><th scope="col">Dependency</th><th scope="col">macOS signing</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Reuse installed Chrome (<code>puppeteer-core</code>)</th><td class="c">zero</td><td>needs Chrome present</td><td class="c"><span class="pill good">none</span></td></tr>
+          <tr><th scope="row">Bundle Chromium</th><td class="c">+150–300 MB</td><td>self-contained</td><td class="c"><span class="pill warn">code-sign + notarize</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:12px;font-size:14px;color:var(--ink-3)">Reusing Electron's own Chromium is <em>not</em> an option — it means a second hidden window, which is the excluded OSR path.</p>
+  </section>
+
+  <section>
+    <style>
+      .arch { display: flex; align-items: stretch; gap: 12px; flex-wrap: wrap; margin: 6px 0 4px; }
+      .arch-col { display: flex; flex-direction: column; gap: 10px; justify-content: center; }
+      .arch-box { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; box-shadow: var(--shadow); min-width: 150px; }
+      .arch-box b { display: block; font-size: 15px; }
+      .arch-box span { display: block; font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); margin-top: 3px; }
+      .arch-core { border-color: color-mix(in srgb, var(--good) 45%, var(--rule)); border-width: 2px; text-align: center; }
+      .arch-core .lock { color: var(--good); margin-top: 8px; }
+      .arch-arrow { display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--accent); font-family: var(--mono); font-size: 12px; min-width: 70px; text-align: center; gap: 4px; }
+      .arch-arrow .a { font-size: 22px; line-height: 1; }
+      .arch-clients { display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+      .arch-client { background: var(--paper-2); border: 1px solid var(--rule); border-radius: 8px; padding: 9px 14px; font-size: 14px; font-weight: 600; }
+      .arch-client span { font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--ink-3); margin-left: 6px; }
+      @media (max-width: 640px) { .arch-arrow .a { transform: rotate(90deg); } }
+    </style>
+    <p class="kicker">C-1 · proven</p>
+    <h2>The architecture, and what it proved</h2>
+    <div class="arch">
+      <div class="arch-col">
+        <div class="arch-box"><b>AI agent</b><span>drives via CDP</span></div>
+      </div>
+      <div class="arch-arrow"><span class="a">→</span>CDP</div>
+      <div class="arch-col">
+        <div class="arch-box arch-core">
+          <b>headless Chromium</b>
+          <span>--headless=new · one instance</span>
+          <span class="lock">◆ SingletonLock → unified session</span>
+        </div>
+      </div>
+      <div class="arch-arrow"><span class="a">→</span>screencast<br>fan-out</div>
+      <div class="arch-clients">
+        <div class="arch-client">Desktop <span>localhost</span></div>
+        <div class="arch-client">Phone <span>LAN</span></div>
+        <div class="arch-client">Phone <span>LAN</span></div>
+      </div>
+    </div>
+    <p style="margin-top:18px">One instance, driven by the agent over CDP; one screencast re-broadcast to every client. Frames are event-driven via <code>Page.startScreencast</code> where a display exists (Linux/cloud, continuous), and a ~15fps <code>captureScreenshot</code> poll fills in non-input changes on local macOS-no-display. Input from any client passes through the same <code>sanitizeInput</code> → whitelisted CDP <code>Input.*</code> — never raw passthrough.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th scope="col">#</th><th scope="col">Criterion</th><th scope="col">Result</th><th scope="col" class="c">Status</th></tr></thead>
+        <tbody>
+          <tr><td class="c">1</td><th scope="row">Non-input frames</th><td>~15fps poll catches every DOM change on macOS; continuous via screencast on Linux/cloud. Casualty: smooth canvas-rAF / <code>&lt;video&gt;</code> → WebRTC escape hatch.</td><td class="c"><span class="pill good">pass</span></td></tr>
+          <tr><td class="c">2</td><th scope="row">Session unification</th><td><code>sessionStorage.token</code> = <code>tok-xyz</code> read identically by the agent + 2 viewers — one shared instance, the win OSR could not deliver.</td><td class="c"><span class="pill good">pass</span></td></tr>
+          <tr><td class="c">3</td><th scope="row">Concurrent + slow client</th><td>Fast client 33.8 fps, 0 sequence gaps; a stalled client dropped to latest-frame-only without stalling the fast client or CDP.</td><td class="c"><span class="pill good">pass</span></td></tr>
+          <tr><td class="c">4</td><th scope="row">Latency / fps</th><td>localhost median 6 ms / p90 32 ms · LAN median 6 ms / p90 12 ms · ~34 fps input-driven. <em>(frame bytes not isolated — content-dependent JPEG q60)</em></td><td class="c"><span class="pill good">pass</span></td></tr>
+          <tr><td class="c">5</td><th scope="row">Profile persistence</th><td>A real cookie survived a full Chromium kill + restart on the same <code>user-data-dir</code>.</td><td class="c"><span class="pill good">pass</span></td></tr>
+          <tr><td class="c">6</td><th scope="row">No leak</th><td>Chromium child 1 → 0 across three open/close/reopen cycles; app healthy.</td><td class="c"><span class="pill good">pass</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:14px;font-size:14px;color:var(--ink-3)">Security surface unchanged — the new <code>cdp-client.ts</code> is internal transport, never exposed to WS clients. Typecheck clean; 28 cast/ws tests green; A1 + B intact; OSR fully reverted. One honest caveat: on local macOS this is a ~15fps poll (same ballpark as capturePage); the continuous-frame win is cloud-only.</p>
+  </section>
+
+  <section>
+    <p class="kicker">Decision</p>
+    <h2>What ships</h2>
+    <div class="ships">
+      <div class="ship">
+        <div class="k">A1</div>
+        <div class="b"><b>Kill the capture error flood</b><span>Guard <code>capturePage()</code> so it never fires before the webview is dom-ready (it throws synchronously; <code>.catch()</code> misses it). Lands regardless of the frame-source choice.</span></div>
+      </div>
+      <div class="ship">
+        <div class="k">B</div>
+        <div class="b"><b>Renderer honesty</b><span>Touch stays disabled and the placeholder shows until real frames are flowing (<code>live</code> = a frame within ~1.2&nbsp;s), so a frozen frame never looks tappable; clean fallback to the static thumbnail. Lands regardless.</span></div>
+      </div>
+      <div class="ship">
+        <div class="k">C-1</div>
+        <div class="b"><b>Headless Chromium, streamed everywhere <span class="pill good" style="margin-left:6px">proven</span></b><span>A single <code>--headless=new</code> Chromium child driven over CDP, one screencast fanned out to all clients, input via <code>sanitizeInput</code> → CDP <code>Input.*</code>. New: <code>cdp-client.ts</code>, <code>headless-chrome.ts</code>; <code>browser-cast.ts</code> becomes the fan-out. Reuses <code>ws-frame</code> / <code>cast-input</code> / <code>screencast-pace</code>. Behind the flag; OSR reverted.</span></div>
+      </div>
+    </div>
+    <div class="note">
+      <span class="lbl">Deferred to distribution time</span>
+      The prototype reuses the installed Chrome via <code>puppeteer-core</code> (zero bundle, no signing). Bundling + notarizing a Chromium binary is a packaging decision for shipping, not for proving the model.
+    </div>
+    <div class="note">
+      <span class="lbl">Scope note</span>
+      Keep the feature flag-gated to a trusted LAN: the human's credentials are typed on the phone and travel over the input channel to the desktop. That's the human doing their own login (the correct HITL pattern) — but it's a reason to keep the transport off by default and paired to trusted networks.
+    </div>
+  </section>
+
+  <footer>
+    Cookrew · interactive remote browser · ADR-01<br>
+    Decision record — supersedes the OSR direction taken on 2026-07-24. Frame source: one <code>--headless=new</code> Chromium via CDP screencast (with a ~15fps <code>captureScreenshot</code>-poll fallback on local macOS). Control: CDP <code>Input.*</code>. Flag: <code>COOKREW_INTERACTIVE_BROWSER</code>.<br>
+    Research grounded in public docs from Browserbase, Steel, Anchor, Hyperbrowser, Playwright, MDN, and Electron.
+  </footer>
+</div>

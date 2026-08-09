@@ -1,4 +1,5 @@
-import type { CookrewApi } from './api'
+import { AuthError, authStore, type AuthScope } from './auth-gate'
+import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 
@@ -12,24 +13,67 @@ import type { TerminalActivity, TurnRecord } from '../../shared/turn'
  * and drive its shared stream. Flag-off phones retain the legacy /thumb view.
  */
 
+/**
+ * Pairing token (C1): the desktop's pairing URL carries `?token=`; auth-gate
+ * lifts it into storage and strips it from the address bar. Mutating routes
+ * require it as a bearer header; read-only GETs/SSE stay open.
+ */
 async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const options: RequestInit = { method }
+  const headers: Record<string, string> = {}
+  const token = authStore().token()
+  if (token) headers.authorization = `Bearer ${token}`
   if (body !== undefined) {
-    options.headers = { 'content-type': 'application/json' }
+    headers['content-type'] = 'application/json'
     options.body = JSON.stringify(body)
   }
+  if (Object.keys(headers).length > 0) options.headers = headers
   const response = await fetch(path, options)
   if (!response.ok) {
     const detail = await response.json().catch(() => ({ error: String(response.status) }))
-    throw new Error((detail as { error?: string }).error ?? `HTTP ${response.status}`)
+    const message = (detail as { error?: string }).error ?? `HTTP ${response.status}`
+    if (response.status === 401) {
+      // A stale credential is the most likely error this client will ever
+      // see. Raise it as its own type so it reaches the re-pair screen
+      // instead of being counted as a generic network hiccup.
+      const failure = new AuthError(message, /read-only/i.test(message) ? 'read-only' : 'none')
+      authStore().report(failure)
+      throw failure
+    }
+    throw new Error(message)
   }
   const text = await response.text()
   return (text ? JSON.parse(text) : undefined) as T
 }
 
-/** Fire-and-forget POST for streams of small events (keystrokes, resizes). */
+/**
+ * Fire-and-forget POST for streams of small events (keystrokes, resizes).
+ * The rejection is still dropped here — there is no caller to hand it to —
+ * but req() has already REPORTED an auth failure to the store by this point,
+ * so the re-pair screen appears even though nothing awaits this promise. That
+ * report is deduplicated, so a held-down key raises one screen, not hundreds.
+ */
 function post(path: string, body: unknown): void {
   void req(path, 'POST', body).catch(() => undefined)
+}
+
+/**
+ * Ask the server what the current credential is worth. Used to verify a
+ * pasted token during re-pairing, and on boot so an unpaired phone says so
+ * before the user discovers it by pressing something.
+ */
+export async function checkAuth(candidate?: string): Promise<AuthScope> {
+  const token = candidate ?? authStore().token()
+  const response = await fetch('/api/auth/status', {
+    headers: token ? { authorization: `Bearer ${token}` } : undefined
+  })
+  if (!response.ok) throw new Error(`Auth check failed (HTTP ${response.status})`)
+  const body = (await response.json()) as { scope?: AuthScope; required?: boolean }
+  // A server with no token configured authorizes everything; report that as
+  // full access rather than as "none", which would strand the UI behind a
+  // re-pair screen it can never satisfy.
+  if (body.required === false) return 'pairing'
+  return body.scope ?? 'none'
 }
 
 /**
@@ -70,7 +114,25 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
+/**
+ * Ask once at boot whether this device is still paired.
+ *
+ * Only a hard 'none' raises the screen. A read-only device is a legitimate,
+ * fully usable state — the TV wall is one by design — so it stays quiet until
+ * the user actually attempts a write and gets a 401 back.
+ */
+function checkAuthOnBoot(): void {
+  void checkAuth()
+    .then((scope) => {
+      if (scope === 'none') {
+        authStore().report(new AuthError('This device is not paired.', 'none'))
+      }
+    })
+    .catch(() => undefined)
+}
+
 export function createRemoteApi(): CookrewApi {
+  checkAuthOnBoot()
   return {
     getWorkspace: () => req<WorkspaceState>('/api/workspace'),
     onWorkspaceState: (cb) => subscribe<WorkspaceState>('workspace', cb),
@@ -125,9 +187,15 @@ export function createRemoteApi(): CookrewApi {
     turnSeen: (terminalId) => post(`/api/terminal/${terminalId}/seen`, {}),
     ptyResize: (terminalId, cols, rows) =>
       post(`/api/terminal/${terminalId}/resize`, { cols, rows }),
-    ptyAttach: (terminalId, onData) => {
+    ptyAttach: (terminalId, onData, onHello) => {
       const stream = new EventSource(`/api/terminal/${terminalId}/stream`)
       const listener = (e: MessageEvent): void => onData(JSON.parse(e.data) as string)
+      // The server sends this before the first frame; sizing the xterm from it
+      // is what keeps a 45x24 phone from re-wrapping a frame serialized at the
+      // pane's 100x30 and then misplacing every absolute-addressed delta.
+      const helloListener = (e: MessageEvent): void =>
+        onHello?.(JSON.parse(e.data) as { cols: number; rows: number })
+      stream.addEventListener('hello', helloListener)
       stream.addEventListener('data', listener)
       return () => stream.close()
     },
@@ -159,9 +227,18 @@ export function createRemoteApi(): CookrewApi {
       const result = await req<{ agents: unknown[] }>('/api/agents')
       return result.agents
     },
+    listBoard: (window?: string) =>
+      req<BoardSnapshotLike>(`/api/board${window ? `?window=${encodeURIComponent(window)}` : ''}`),
     recoverAgent: (id) => req(`/api/agents/${id}/recover`, 'POST'),
+    restoreCheckpoint: (id, checkpointIndex) =>
+      req(`/api/agents/${id}/restore`, 'POST', { checkpointIndex }),
+    undoRestore: (id) => req(`/api/agents/${id}/restore/undo`, 'POST'),
     listTurns: (terminalId) => req<TurnRecord[]>(`/api/terminal/${terminalId}/turns`),
+    // Checkpoint search is desktop-only for now: the phone has no /api route
+    // for it yet, and a silently-empty result would read as "no matches".
+    searchTurns: undefined,
     listTraceIndex: (terminalId) => req(`/api/terminal/${terminalId}/trace/index`),
+    listTraceMarkers: (terminalId) => req(`/api/terminal/${terminalId}/trace/markers`),
     listTrace: async (terminalId, request) => {
       const params = new URLSearchParams()
       const r = (request ?? {}) as Record<string, unknown>

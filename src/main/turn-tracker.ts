@@ -1,10 +1,10 @@
 import { EventEmitter } from 'node:events'
 import type { PtySession } from './pty'
 import { diffOutput } from './ask'
+import { agentStatus } from './herdr-agent-status'
 import { summarizeTurn, TurnSummarizer } from './sous'
 import type { TurnStore } from './turn-store'
 import {
-  MAX_TURN_HISTORY,
   RECOVERED_PROMPT_LABEL,
   TerminalActivity,
   TurnPhase,
@@ -27,6 +27,12 @@ import {
 
 /** Output silence that counts as "the agent finished its turn". */
 const QUIESCENCE_MS = 2500
+/**
+ * How long a herdr 'working' report holds a turn open with NO output at all.
+ * Long enough for slow silent tool calls, short enough that a detector stuck
+ * at 'working' cannot pin a turn open for the rest of the run.
+ */
+const WORKING_TRUST_MS = 60_000
 /**
  * An Enter that started no turn counts as "pending input" for this long —
  * agent output arriving within the window re-enters 'thinking' (self-heal).
@@ -155,6 +161,21 @@ export class TurnTracker extends EventEmitter {
    */
   private histories = new Map<string, TurnRecord[]>()
 
+  /**
+   * Terminals whose DURABLE history is written by the session file, not by
+   * this tracker (step 4: narrow the scrape). SessionTurnSync owns this flag
+   * and sets it only after a reconcile has actually landed — never from the
+   * harness declaration alone.
+   *
+   * That distinction is the whole safety property. Between spawn and the
+   * first session-file write there is a real window in which the file cannot
+   * record anything yet; a terminal flagged on its harness's say-so would
+   * record NOTHING in that window and lose those turns silently. Default is
+   * scrape, so the only way to switch a terminal off the scrape is for
+   * something to have proven the file path works for it.
+   */
+  private fileBacked = new Set<string>()
+
   /** Paced Sous title-backfill pump for historical untitled records. */
   private backfillTimer: NodeJS.Timeout | null = null
   private backfillInFlight = false
@@ -199,11 +220,12 @@ export class TurnTracker extends EventEmitter {
       }
     })
     const stamped = this.stampInFlightScrollLine(terminalId, merged)
+    // No cap. History used to be trimmed because every save rewrote the whole
+    // file; the store appends now, so keeping all of it costs one line per
+    // turn. Conductor had 220 checkpoints trimmed away under the old limit.
     const deduped = dedupePhantomEchoes(stamped)
-    const capped =
-      deduped.length > MAX_TURN_HISTORY ? deduped.slice(deduped.length - MAX_TURN_HISTORY) : deduped
-    this.histories.set(terminalId, capped)
-    this.store?.scheduleSave(terminalId, capped)
+    this.histories.set(terminalId, deduped)
+    this.store?.scheduleSave(terminalId, deduped)
     const t = this.tracked.get(terminalId)
     if (t) this.push(t)
     this.ensureBackfillPump()
@@ -342,10 +364,29 @@ export class TurnTracker extends EventEmitter {
     this.store?.scheduleSave(terminalId, updated)
   }
 
+  /**
+   * Declare where a terminal's durable history comes from. Called by
+   * SessionTurnSync: 'file' after a reconcile lands, 'scrape' when the watch
+   * starts or rebinds (a new session file has to prove itself again) and when
+   * it stops. Everything else — plain shells, scrape-only harnesses, and any
+   * file harness whose session file has not appeared — stays on 'scrape',
+   * which is the default and needs no call.
+   */
+  setHistorySource(terminalId: string, source: 'file' | 'scrape'): void {
+    if (source === 'file') this.fileBacked.add(terminalId)
+    else this.fileBacked.delete(terminalId)
+  }
+
+  /** True when the session file owns this terminal's durable history. */
+  private writesFromFile(terminalId: string): boolean {
+    return this.fileBacked.has(terminalId)
+  }
+
   /** Forget a removed terminal's turns (node deletion, not detach). */
   clearHistory(terminalId: string): void {
     this.histories.delete(terminalId)
     this.store?.remove(terminalId)
+    this.fileBacked.delete(terminalId)
   }
 
   /** Write out pending history saves now (app quit). */
@@ -623,16 +664,41 @@ export class TurnTracker extends EventEmitter {
   private poll(t: TrackedTerminal): void {
     if (t.phase !== 'thinking') return
     const elapsed = Date.now() - t.turnStartedAt
-    if (elapsed < GRACE_MS || t.session.idleFor() < QUIESCENCE_MS) return
+    if (elapsed < GRACE_MS) return
+
+    // Three questions decide whether this turn is over: is the agent still
+    // working, is it blocked on the human, and has it gone quiet.
+    //
+    // herdr's answer is used ASYMMETRICALLY, and the asymmetry is the fix for
+    // a live bug: its per-pane detector can STICK (measured: 'idle' seq 1
+    // under a 48s spinner, while a neighbouring pane tracked fine). A stuck
+    // 'idle' that is trusted outright bypasses both the quiescence gate and
+    // the spinner hold — the turn falsely ends, a checkpoint is minted, output
+    // keeps flowing, self-heal reopens the turn, and the card flaps
+    // READY → WORKING → endpoint-saved in a loop that spams phantom
+    // checkpoints (the user watched it happen).
+    //
+    // So: a POSITIVE herdr signal ('working', 'blocked') may hold a turn open
+    // or mark it waiting — worst case is a late turn end. A NEGATIVE one
+    // ('idle') may never end a turn on its own — ending needs the observable
+    // corroboration (output quiet AND no live spinner) that was always
+    // required before herdr existed. Cheap to check, immune to a stuck feed.
+    const reported = agentStatus(t.session.sessionName)
+    // Hold while herdr says working — this survives long silent tool calls,
+    // which is the feed's real value — but not FOREVER: a detector stuck at
+    // 'working' would otherwise pin the turn open for the rest of the run.
+    if (reported === 'working' && t.session.idleFor() < WORKING_TRUST_MS) return
+    if (t.session.idleFor() < QUIESCENCE_MS) return
+
     const delta = diffOutput(t.snapshot, t.session.fullText())
     // Agents pause well past quiescence mid-turn (long tool calls, slow
     // output). While the tail still shows an in-flight spinner the turn is
-    // NOT over — hold it open. Completed-style status ("✻ Brewed for
-    // 4m 15s") and spinner-less output fall through to the quiescence rule.
-    const status = parseAgentGlance(delta).status
-    if (status !== null && isLiveStatus(status)) return
+    // NOT over — hold it open, REGARDLESS of what the feed claims: the screen
+    // is the corroboration a stuck 'idle' cannot fake.
+    const glanceStatus = parseAgentGlance(delta).status
+    if (glanceStatus !== null && isLiveStatus(glanceStatus)) return
     const lines = cleanTurnLines(delta).filter((l) => !this.isPromptEcho(l, t.prompt))
-    if (detectAttention(lines)) {
+    if (reported === 'blocked' || detectAttention(lines)) {
       // Blocked on the human — keep the poll alive; handleData resumes
       // 'thinking' when output flows again.
       t.phase = 'waiting'
@@ -669,6 +735,19 @@ export class TurnTracker extends EventEmitter {
       this.push(t)
       return
     }
+    // STEP 4: the session file is this terminal's record. Appending here would
+    // be a second writer of the same exchange — historically it landed a
+    // uuid-less duplicate that dedupePhantomEchoes then had to throw away.
+    // The live turn above (phase, glance, reply, pendingInput) is still ours;
+    // only the durable write belongs to the file. The Sous title does NOT get
+    // dropped: it lands on the record the reconcile already created for this
+    // turn, and if that record has not arrived yet the backfill pump fills it.
+    if (this.writesFromFile(id)) {
+      this.push(t)
+      const reconciled = this.liveTurnRecordIndex(t)
+      if (reconciled !== null) void this.finalizeTitle(t, reconciled)
+      return
+    }
     const appended = appendTurnRecord(this.history(id), {
       prompt: t.prompt ?? RECOVERED_PROMPT_LABEL,
       reply: t.reply,
@@ -689,6 +768,19 @@ export class TurnTracker extends EventEmitter {
     if (deduped.some((r) => r.index === newRecord.index)) {
       void this.finalizeTitle(t, newRecord.index)
     }
+  }
+
+  /**
+   * The reconciled record covering the turn that just finished, when it is
+   * already there and still untitled — the target for the final Sous pass on
+   * a file-backed terminal. Null when the reconcile has not caught up yet
+   * (the backfill pump titles it on a later tick) or the record is titled.
+   */
+  private liveTurnRecordIndex(t: TrackedTerminal): number | null {
+    const history = this.history(t.session.terminalId)
+    const last = history[history.length - 1]
+    if (!last || last.title !== undefined) return null
+    return promptsMatch(t.prompt ?? '', last.prompt) ? last.index : null
   }
 
   private stopTurnTimers(t: TrackedTerminal): void {

@@ -1,9 +1,10 @@
 /** Per-agent pixel sprites on the invader's 3px-cell grid (11×8 cells,
     33×24 px), drawn in currentColor so the card's phase class tints them:
-    Claude Code a starburst, Codex a ring, OpenCode a terminal block, and
+    Claude Code a starburst, Codex a ring, OpenCode a terminal block, Pi a
+    pixel π, and
     Shell (or any custom preset) the classic invader. */
 
-export type AgentSpriteKind = 'claude' | 'codex' | 'opencode' | 'shell'
+export type AgentSpriteKind = 'claude' | 'codex' | 'opencode' | 'pi' | 'shell'
 
 const GRIDS: Record<AgentSpriteKind, string[]> = {
   claude: [
@@ -33,6 +34,15 @@ const GRIDS: Record<AgentSpriteKind, string[]> = {
     'X.........X',
     'XXXXXXXXXXX'
   ],
+  pi: [
+    'XXXXXXXXXXX',
+    '..XX...XX..',
+    '..XX...XX..',
+    '..XX...XX..',
+    '..XX...XX..',
+    '..XX...XX..',
+    '..XX....XXX'
+  ],
   shell: [
     '..X.....X..',
     '...X...X...',
@@ -49,6 +59,7 @@ export function spriteForPreset(preset: string): AgentSpriteKind {
   if (/claude/i.test(preset)) return 'claude'
   if (/codex/i.test(preset)) return 'codex'
   if (/opencode/i.test(preset)) return 'opencode'
+  if (/^pi$/i.test(preset.trim())) return 'pi'
   return 'shell'
 }
 

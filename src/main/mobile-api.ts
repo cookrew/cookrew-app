@@ -6,6 +6,13 @@ import type { EventLog, CookrewEvent, EventQuery } from "./event-log";
 import { pageTurns } from "../shared/turn";
 import type { AgentRegistry } from "./agent-registry";
 import type { TraceReader } from "./trace";
+import {
+  boardWindowMs,
+  buildBoard,
+  createBoardNotifier,
+  type BoardSources,
+} from "./board-index";
+
 import type {
   AgentRole,
   CanvasNode,
@@ -17,8 +24,9 @@ import type {
   WorkspaceMeta,
   WorkspaceState,
   RecoverResult,
+  RestoreResult,
 } from "../shared/model";
-import { readJson, respondJson, startSse } from "./mobile-http";
+import { readJson, respondJson, startSse, pairingAuthorized } from "./mobile-http";
 
 /**
  * Workspace operations shared with the renderer IPC handlers — the mobile
@@ -81,12 +89,35 @@ export interface MobileApiDeps {
   agents: AgentRegistry;
   /** Recover an inactive teammate as it was (agent-recover feature). */
   recoverAgent: (id: string) => RecoverResult;
+  /** Endpoint restore: rewind an agent to a checkpoint (+ undo). */
+  restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>;
+  undoRestore: (id: string) => Promise<RestoreResult>;
   /** Trace-sourced context reader (identity-keyed windows over agent files). */
   traces: TraceReader;
+  /**
+   * Activity Board data plane (cross-workspace task view). Optional so this
+   * module compiles and serves before the collectors are wired in index.ts;
+   * absent = /api/board answers 503 rather than pretending the board is empty.
+   */
+  board?: BoardSources;
+  /**
+   * READ-ONLY scope token (persisted as ~/.cookrew/wall-token). Authorizes the
+   * SAME routes as pairingToken but for GET only — there is no separate
+   * read-only interface any more. Kept distinct from pairingToken because this
+   * URL lives in a Home Assistant script on an always-on screen and must never
+   * carry write authority. Field name matches MobileServerDeps.
+   */
+  wallToken?: string;
   ops: MobileOps;
   presets: readonly { name: string; command: string }[];
   /** Persist a phone-uploaded attachment; returns its absolute path. */
   saveAttachment: (name: string, data: Buffer) => string;
+  /**
+   * Pairing token required on every MUTATING route (C1) as
+   * `Authorization: Bearer <token>` (or `?token=`). Undefined =
+   * unauthenticated (loopback-only embedders, tests).
+   */
+  pairingToken?: string;
 }
 
 /** Base64 inflates ~4/3, so this admits attachments up to the 20MB save cap. */
@@ -132,6 +163,47 @@ export async function handleMobileApi(
   const method = request.method ?? "GET";
   const p = url.pathname;
 
+  // C1 gate: every state-changing route requires the pairing token. This
+  // choke point runs BEFORE any route match (and before the mobile server's
+  // own POST routes, which delegate here first), so restore/undo/recover,
+  // terminal input, workspace edits, and uploads are all covered. Read-only
+  // GETs stay open: EventSource cannot set headers, and with the C2 wildcard
+  // gone only same-origin pages can read them cross-site anyway.
+  // Two SCOPES over one set of routes (there is no second, degraded API):
+  //   pairing   → read + write
+  //   read-only → GET only; any other method is refused even with a valid token
+  const hasPairing =
+    !!deps.pairingToken && pairingAuthorized(request, url, deps.pairingToken);
+  const hasReadOnly =
+    !!deps.wallToken && pairingAuthorized(request, url, deps.wallToken);
+  /** Cleared for a read: either scope. */
+  const canRead = hasPairing || hasReadOnly;
+
+  // What the presented credential is worth. The phone asks BEFORE it acts, so
+  // an unpaired device can say "you are unpaired" instead of letting every
+  // write fail silently; it is also how a pasted token gets verified during
+  // re-pairing. Deliberately open: it discloses whether the caller's OWN token
+  // works, never the token itself, and the tokens are 192-bit secrets.
+  if (method === "GET" && p === "/api/auth/status") {
+    respondJson(response, 200, {
+      scope: hasPairing ? "pairing" : hasReadOnly ? "read-only" : "none",
+      // False only for an in-process embedder that constructed deps without a
+      // token; on the 0.0.0.0 listener it is always true.
+      required: !!deps.pairingToken,
+      canWrite: !deps.pairingToken || hasPairing,
+    });
+    return true;
+  }
+
+  if (method !== "GET" && deps.pairingToken && !hasPairing) {
+    respondJson(response, 401, {
+      error: hasReadOnly
+        ? "Unauthorized — this token is read-only."
+        : "Unauthorized — open the pairing URL shown on the desktop (it carries ?token=).",
+    });
+    return true;
+  }
+
   if (method === "GET" && p === "/api/workspace") {
     // Embed git per terminal (node.git) and per workspace dir (dirsGit) so
     // phone cards show branch/dirty without a round-trip (Fresco GitChip).
@@ -148,6 +220,30 @@ export async function handleMobileApi(
   }
   if (method === "GET" && p === "/api/activity") {
     respondJson(response, 200, turns.list());
+    return true;
+  }
+  // Activity Board: the cross-workspace, task-first view. Strictly ADDITIVE —
+  // /api/activity above still serves the canvas cards byte-for-byte.
+  if (method === "GET" && p === "/api/board") {
+    // The board turned "know a terminalId to fetch one agent" into "one GET
+    // returns every workspace's task text" — a real exposure upgrade on an
+    // 0.0.0.0 listener, so this read is gated even though other GETs are not.
+    // EventSource cannot set headers, hence ?token= is accepted too.
+    if (deps.pairingToken && !canRead) {
+      respondJson(response, 401, {
+        error: "Unauthorized — the board requires a pairing or read-only token.",
+      });
+      return true;
+    }
+    if (!deps.board) {
+      respondJson(response, 503, { error: "board index not wired" });
+      return true;
+    }
+    respondJson(
+      response,
+      200,
+      buildBoard(deps.board, boardWindowMs(url.searchParams.get("window"))),
+    );
     return true;
   }
 
@@ -257,7 +353,10 @@ export async function handleMobileApi(
 
   if (method === "POST" && p === "/api/connections") {
     const body = await readJson<{ a?: string; b?: string }>(request);
-    respondJson(response, 200, store.connect(body.a ?? "", body.b ?? ""));
+    // connectAcross VALIDATES both ids (this endpoint is unauthenticated and
+    // defaulted missing fields to "", persisting an edge between two nodes
+    // that do not exist).
+    respondJson(response, 200, store.connectAcross(body.a ?? "", body.b ?? ""));
     return true;
   }
   const connMatch = p.match(/^\/api\/connections\/([^/]+)$/);
@@ -382,6 +481,13 @@ export async function handleMobileApi(
     return true;
   }
 
+  // Boundary markers for the rail: ◆ compact (in-file) + ⇥ clear (lineage).
+  const traceMarkersMatch = p.match(/^\/api\/terminal\/([^/]+)\/trace\/markers$/);
+  if (traceMarkersMatch && method === "GET") {
+    respondJson(response, 200, await deps.traces.boundaryMarkers(traceMarkersMatch[1]));
+    return true;
+  }
+
   const traceMatch = p.match(/^\/api\/terminal\/([^/]+)\/trace$/);
   if (traceMatch && method === "GET") {
     const num = (key: string): number | undefined => {
@@ -501,17 +607,28 @@ export async function handleMobileApi(
     }
     if (method === "GET" && ptyMatch[2] === "stream") {
       const send = startSse(response);
-      // Same replay the IPC attach does: clear the fresh xterm, then paint
-      // the current viewport text (a resize kick follows from the client).
-      send("data", "\x1b[2J\x1b[3J\x1b[H" + session.viewportText() + "\r\n");
+      // GEOMETRY FIRST, then the frame. The phone opens its xterm at its own
+      // size (measured: 45x24 while the pane was still 100x30) and the resize
+      // kick only arrives AFTER the first paint — so a frame applied before
+      // the client knows the mirror's size gets re-wrapped, and herdr's
+      // absolute-addressed deltas then land in the wrong cells. Announcing the
+      // size first lets the client size its grid BEFORE any byte arrives.
+      send("hello", session.geometry());
+      // A faithful ANSI frame, not plain text — see PtySession.replayFrame.
+      send("data", session.replayFrame());
       const onData = (data: string): void => send("data", data);
+      // Geometry changed: the server re-serialized at the new size. Applying
+      // it verbatim is what keeps this viewer's addressing valid.
+      const onReplay = (frame: string): void => send("data", frame);
       const onExit = (): void => send("exit", {});
       session.on("data", onData);
+      session.on("replay", onReplay);
       session.on("exit", onExit);
       const heartbeat = setInterval(() => response.write(":hb\n\n"), 25000);
       request.on("close", () => {
         clearInterval(heartbeat);
         session.removeListener("data", onData);
+        session.removeListener("replay", onReplay);
         session.removeListener("exit", onExit);
       });
       return true;
@@ -529,10 +646,28 @@ export async function handleMobileApi(
     const onActivity = (activity: unknown): void => send("activity", activity);
     // Observability stream: every store mutation, cross-workspace (toasts).
     const onOp = (event: CookrewEvent): void => send("event", event);
+    // Activity Board stream. A SEPARATE listener on the same signals — the
+    // 'activity' event above is left exactly as it was (canvas cards eat it).
+    // Board recompute spans the whole fleet, so bursts coalesce instead of
+    // pushing per tracker tick.
+    // Same data as /api/board, so the same gate: an unauthenticated
+    // subscriber still gets workspace/activity/event (existing behaviour,
+    // untouched) but never the board stream.
+    const board = !deps.pairingToken || canRead ? deps.board : undefined;
+    const boardNotifier = board
+      ? createBoardNotifier(() => send("board", buildBoard(board)))
+      : null;
+    const onBoardSignal = (): void => boardNotifier?.schedule();
+    if (board) send("board", buildBoard(board));
     store.on("change", onChange);
     store.on("workspaces", onWorkspaces);
     turns.on("activity", onActivity);
     store.on("op", onOp);
+    if (boardNotifier) {
+      turns.on("activity", onBoardSignal);
+      store.on("change", onBoardSignal);
+      store.on("workspaces", onBoardSignal);
+    }
     const heartbeat = setInterval(() => response.write(":hb\n\n"), 25000);
     request.on("close", () => {
       clearInterval(heartbeat);
@@ -540,6 +675,12 @@ export async function handleMobileApi(
       store.removeListener("workspaces", onWorkspaces);
       turns.removeListener("activity", onActivity);
       store.removeListener("op", onOp);
+      if (boardNotifier) {
+        boardNotifier.cancel();
+        turns.removeListener("activity", onBoardSignal);
+        store.removeListener("change", onBoardSignal);
+        store.removeListener("workspaces", onBoardSignal);
+      }
     });
     return true;
   }
@@ -555,6 +696,35 @@ export async function handleMobileApi(
   }
   if (method === "GET" && p === "/api/agents") {
     respondJson(response, 200, { agents: deps.agents.list() });
+    return true;
+  }
+  // ENDPOINT RESTORE: rewind an agent in place to any checkpoint (+ undo).
+  const restoreMatch = p.match(/^\/api\/agents\/([^/]+)\/restore$/);
+  if (restoreMatch && method === "POST") {
+    const body = await readJson<{ checkpointIndex?: number }>(request);
+    const index = Number(body.checkpointIndex);
+    if (!Number.isInteger(index) || index < 1) {
+      respondJson(response, 400, { error: "checkpointIndex must be a positive integer" });
+      return true;
+    }
+    try {
+      respondJson(response, 200, await deps.restoreCheckpoint(restoreMatch[1], index));
+    } catch (error) {
+      respondJson(response, 400, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return true;
+  }
+  const undoRestoreMatch = p.match(/^\/api\/agents\/([^/]+)\/restore\/undo$/);
+  if (undoRestoreMatch && method === "POST") {
+    try {
+      respondJson(response, 200, await deps.undoRestore(undoRestoreMatch[1]));
+    } catch (error) {
+      respondJson(response, 400, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return true;
   }
   const recoverMatch = p.match(/^\/api\/agents\/([^/]+)\/recover$/);

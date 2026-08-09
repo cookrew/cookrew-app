@@ -13,6 +13,7 @@ import { DEFAULT_TERMINAL_SIZE, TerminalNodeData, uniqueName } from '../shared/m
 import { buildForkPreamble, buildResumeForkNotice } from '../shared/fork'
 import { stripSessionFlags } from '../shared/claude-fork'
 import { forkClaudeSession } from './claude-fork'
+import { isPiCommand, stripPiSessionFlags } from './pi-bind'
 import type { WorkspaceStore } from './store'
 import type { PtyManager, PtySession } from './pty'
 import type { TurnTracker } from './turn-tracker'
@@ -27,6 +28,7 @@ export interface ForkDeps {
     command: string
     cwd: string
     claudeSessionId?: string | null
+    piSessionId?: string | null
   }) => void
 }
 
@@ -86,14 +88,17 @@ export function forkTerminal(
     // addNodeToWorkspace unique-names within the source's workspace.
     name: `${source.name} ⑂T${index}`,
     preset: source.preset,
-    // Session binding lives on claudeSessionId, not in the command — the
-    // spawn path appends --resume/--session-id for the bound id itself.
-    command: stripSessionFlags(source.command),
+    // Session bindings live on node fields, not in the command. The spawn
+    // path reconstructs the correct harness flags for the new node.
+    command: isPiCommand(source.command)
+      ? stripPiSessionFlags(source.command)
+      : stripSessionFlags(source.command),
     cwd: source.cwd,
     orch: false,
     role: source.role,
     forkOf: { sourceId: source.id, sourceName: source.name, turnIndex: index },
     claudeSessionId: native ? native.sessionId : null,
+    piSessionId: null,
     position: {
       x: source.position.x + source.size.width + 80,
       y: source.position.y + 80

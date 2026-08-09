@@ -1,21 +1,34 @@
-// Continuous reconcile of TurnRecords against Claude Code session files.
+// Continuous reconcile of TurnRecords against agent session files.
 //
-// Each watched terminal's session JSONL (~/.claude/projects/...) is polled
-// with a debounced mtime+size check; on change the file is re-parsed and the
-// tracker's history REPLACED — appends grow it, /rewind truncation shrinks
-// it, so recorded turns always mirror the original conversation. The PTY
-// tracker keeps owning the live phase; this owns the durable record.
+// Each watched terminal's session file (Claude's ~/.claude/projects JSONL,
+// a Codex rollout, a Pi per-node session — the harness's `parseTurns` picks
+// the shape) is polled with a debounced mtime+size check; on change the file
+// is re-parsed and the tracker's history REPLACED — appends grow it, /rewind
+// truncation shrinks it, so recorded turns always mirror the original
+// conversation. The PTY tracker keeps owning the live phase; this owns the
+// durable record.
+//
+// Owning it also means DECLARING it (step 4, checkpoint-as-identity): this is
+// the only place that takes a terminal off the tracker's scrape path, and it
+// does so from evidence — a reconcile that actually landed — never from the
+// harness's declared capability. A terminal is handed back to the scrape the
+// moment that evidence lapses: a rebind to a different file, an unwatch, a
+// dispose. The rule is that at every instant SOMETHING is recording history.
 
 import { readFileSync, statSync } from 'node:fs'
-import { parseSessionTurns } from '../shared/session-turns'
+import type { TurnRecord } from '../shared/turn'
 import type { TurnTracker } from './turn-tracker'
 
 const DEFAULT_POLL_MS = 2000
+
+/** Session-file lines → TurnRecords; one per 'file'-capable harness. */
+export type SessionTurnParser = (lines: string[]) => TurnRecord[]
 
 interface WatchedFile {
   file: string
   mtimeMs: number
   size: number
+  parse: SessionTurnParser
 }
 
 export class SessionTurnSync {
@@ -27,9 +40,23 @@ export class SessionTurnSync {
     private pollMs = DEFAULT_POLL_MS
   ) {}
 
-  /** Start reconciling a terminal against its session file (idempotent). */
-  watch(terminalId: string, file: string): void {
-    this.watched.set(terminalId, { file, mtimeMs: 0, size: 0 })
+  /**
+   * Start reconciling a terminal against its session file (idempotent).
+   *
+   * `parse` is REQUIRED and must be the harness's own parser — the one whose
+   * indices equal that harness's trace-block indices. It used to default to
+   * Claude's, which meant a harness that forgot to wire `parseTurns` silently
+   * got a parser for a file format it does not have: zero records, or worse,
+   * records in an index space nothing else shares. That is the divergence
+   * class this module exists to prevent, so it is now a compile error.
+   */
+  watch(terminalId: string, file: string, parse: SessionTurnParser): void {
+    this.watched.set(terminalId, { file, mtimeMs: 0, size: 0, parse })
+    // This file has not proven anything yet — a fresh --session-id boot writes
+    // nothing for seconds, and a restore rebinds to a file that may not exist.
+    // The scrape covers the window; reconcile() hands over if the file is
+    // already there and readable.
+    this.turns.setHistorySource(terminalId, 'scrape')
     this.reconcile(terminalId)
     if (this.timer === null) {
       this.timer = setInterval(() => this.tick(), this.pollMs)
@@ -39,6 +66,7 @@ export class SessionTurnSync {
 
   unwatch(terminalId: string): void {
     this.watched.delete(terminalId)
+    this.turns.setHistorySource(terminalId, 'scrape')
     if (this.watched.size === 0 && this.timer !== null) {
       clearInterval(this.timer)
       this.timer = null
@@ -48,6 +76,10 @@ export class SessionTurnSync {
   dispose(): void {
     if (this.timer !== null) clearInterval(this.timer)
     this.timer = null
+    // Nothing is reconciling any more, so nothing may stay off the scrape.
+    for (const terminalId of this.watched.keys()) {
+      this.turns.setHistorySource(terminalId, 'scrape')
+    }
     this.watched.clear()
   }
 
@@ -62,10 +94,18 @@ export class SessionTurnSync {
       const stat = statSync(watched.file)
       if (stat.mtimeMs === watched.mtimeMs && stat.size === watched.size) return
       this.watched.set(terminalId, { ...watched, mtimeMs: stat.mtimeMs, size: stat.size })
-      const records = parseSessionTurns(readFileSync(watched.file, 'utf8').split('\n'))
+      const records = watched.parse(readFileSync(watched.file, 'utf8').split('\n'))
       this.turns.replaceHistory(terminalId, records)
+      // Read and parsed: the file is real and is now the durable record, so
+      // the tracker can stop writing history for this terminal. Deliberately
+      // NOT conditional on records.length — a session file that exists but
+      // holds no turns yet is still the thing the next turn lands in, and the
+      // reconcile that brings it will replace whatever is here anyway.
+      this.turns.setHistorySource(terminalId, 'file')
     } catch {
-      // Session file not written yet (fresh --session-id boot) — keep polling.
+      // Session file not written yet (fresh --session-id boot) — keep polling,
+      // and leave the terminal on the scrape so the turns it takes meanwhile
+      // are still recorded.
     }
   }
 }

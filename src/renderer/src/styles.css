@@ -1065,36 +1065,6 @@ body,
   overflow: hidden;
 }
 
-.vi-status {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.vi-status.working {
-  color: var(--vi-working);
-}
-
-.vi-status.waiting {
-  color: var(--vi-wait);
-}
-
-.vi-status.done {
-  color: var(--vi-done);
-}
-
-.vi-status.idle {
-  color: var(--vi-dim);
-  font-weight: 500;
-}
-
 .vi-dot {
   width: 7px;
   height: 7px;
@@ -1206,16 +1176,6 @@ body,
 .card-status.waiting {
   color: var(--rose);
   animation: cr-blink 1.1s steps(2) infinite;
-}
-
-.card-spinner {
-  display: inline-block;
-  color: var(--amber-deep);
-}
-
-.card-clock {
-  color: var(--muted);
-  margin-left: 2px;
 }
 
 .card-screen.waiting {
@@ -1994,7 +1954,8 @@ body,
 /* ---- vibe-island agent card (semantic-zoom thumbnail) ----
    Compact typography is inverse-scaled via --z (set from 1/zoom by
    TerminalNode) so status and summary stay screen-readable when the whole
-   canvas is in view. In .full (zoom >= ~1) --z is 1 (natural sizes). */
+   canvas is in view. At zoom >= ~1 --z is 1 (natural sizes) — one card
+   rendering serves every zoom above the .mini tile. */
 
 .node.vi-card {
   background: #161618;
@@ -2077,11 +2038,6 @@ body,
   flex-direction: column;
   gap: calc(6px * var(--z, 1));
   overflow: hidden;
-}
-
-.vi-card.full .vi-card-body {
-  padding: 10px 12px;
-  gap: 6px;
 }
 
 .vi-ready {
@@ -2184,15 +2140,6 @@ body,
   text-overflow: ellipsis;
 }
 
-.vi-foot {
-  background: #141416;
-  border-top: 1px solid #232327;
-}
-
-.vi-hint {
-  color: #5a5a5f;
-}
-
 /* Status avatar (AgentAvatar.tsx), Suite B minimal coin: the agent's brand
    coin IS the avatar. Only the coin carries status — green rest, orange
    spin while thinking, red rock+blink when waiting, unread dot on replied.
@@ -2248,42 +2195,6 @@ body,
   border-radius: 50%;
   background: var(--vi-wait);
   border: 1.5px solid var(--ink);
-}
-
-/* Full-view header line: coin · name · [STATUS] · latest-turn conclusion. */
-.vi-status-name {
-  flex: 0 0 auto;
-  font-family: var(--font-pixel);
-  font-size: calc(9px * var(--z, 1));
-  letter-spacing: 0.06em;
-}
-
-.vi-status-name.idle,
-.vi-status-name.replied {
-  color: var(--vi-done);
-}
-
-.vi-status-name.thinking {
-  color: var(--vi-working);
-}
-
-.vi-status-name.waiting {
-  color: var(--vi-wait);
-}
-
-.vi-head.full .vi-title {
-  flex: 0 0 auto;
-}
-
-.vi-conclusion {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--font-mono);
-  font-size: calc(11px * var(--z, 1));
-  color: var(--vi-dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 @keyframes ava-spin {
@@ -3153,6 +3064,99 @@ body.cookrew-mobile .cookrew-minimap {
   height: 11px;
 }
 
+/* REWIND is the rail's one in-place (destructive-ish) action: default amber
+   on hover like the rest, but the armed two-tap state goes solid amber so the
+   "SURE?" confirmation can't be misread as an idle chip. */
+.cr-ckpt-action.rewind.armed {
+  background: var(--amber);
+  color: #141312;
+  border-color: var(--amber);
+}
+
+/* Inline rewind refusal (M3 — never window.alert, which freezes the whole
+   Electron UI in a native modal): the reason rides the row's action strip,
+   amber-outlined so it reads as a warning, and auto-dismisses. */
+.cr-ckpt-rewind-error {
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.03em;
+  color: var(--amber);
+  background: var(--vi-panel);
+  border: 1px solid var(--amber);
+  border-radius: 4px;
+  padding: 5px 8px;
+  max-width: 180px;
+}
+
+/* Boundary divider between checkpoint rows: ◆ compact (context squeezed) and
+   ⇥ clear (session restarted, earlier endpoints reachable via lineage). */
+.cr-ckpt-boundary {
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dim);
+  text-align: center;
+  padding: 3px 6px;
+  margin: 1px 0;
+  border-top: 1px dashed var(--vi-line);
+  border-bottom: 1px dashed var(--vi-line);
+  user-select: none;
+}
+
+.cr-ckpt-boundary.compact {
+  color: var(--amber);
+}
+
+.cr-ckpt-boundary.rewind {
+  color: var(--vi-text);
+  border-color: var(--amber);
+  background: rgba(184, 119, 10, 0.12);
+}
+
+.cr-ckpt-boundary.clear {
+  color: var(--vi-text);
+  border-color: var(--amber);
+}
+
+/* Boundary ticks ON the rail line (at-first-sight positions): ◆ compact is a
+   small amber diamond hugging the line, ⇥ clear a brighter wider break bar.
+   Same anchor math as the here-marker (railAnchorTop) so ticks sit exactly on
+   their identity fraction. */
+.cr-ckpt-tick {
+  position: absolute;
+  right: 10.5px;
+  width: 8px;
+  height: 8px;
+  transform: translateY(-50%) rotate(45deg);
+  border-radius: 1px;
+  background: var(--amber);
+  opacity: 0.85;
+  pointer-events: auto;
+}
+
+.cr-ckpt-tick.clear {
+  right: 8px;
+  width: 13px;
+  height: 3px;
+  transform: translateY(-50%);
+  border-radius: 1.5px;
+  background: var(--vi-text);
+  box-shadow: 0 0 4px var(--amber);
+  opacity: 0.95;
+}
+
+.cr-ckpt-tick.rewind {
+  right: 8px;
+  width: 13px;
+  height: 3px;
+  transform: translateY(-50%);
+  border-radius: 1.5px;
+  background: var(--amber);
+  box-shadow: 0 0 5px var(--amber);
+  opacity: 0.95;
+}
+
 /* --- cream chrome (light contexts) --- */
 .cr-ckpt-rail.on-cream .cr-ckpt-line {
   background: linear-gradient(var(--line-soft), var(--dim));
@@ -3447,20 +3451,25 @@ body.cookrew-mobile .cookrew-minimap {
   }
 }
 
+/* Same 30px frame as the header's icon buttons. `width: auto` is load-bearing:
+   the phone rule below pins .voice-bar .cr-btn to a square, and ESC is three
+   glyphs wide — without it the label overflows its own button. This selector
+   is 0-3-0, so it wins that square back regardless of source order. */
 .voice-keys .cr-btn.term-key {
-  min-width: 44px;
-  min-height: 44px;
+  min-width: 30px;
+  min-height: 30px;
+  width: auto;
+  height: 30px;
   justify-content: center;
-  padding: 0 6px;
+  padding: 0 5px;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 700;
 }
 
-/* Mobile zoomed dock: the send group owns the whole bar in static flow so
-   the key cluster can wrap onto its own line — the default absolute,
-   height-centered sliding pane would clip a second line against the dock's
-   overflow:hidden. */
+/* Mobile zoomed dock: the send group owns the whole bar in static flow —
+   the default absolute, height-centered sliding pane is width-capped and
+   would clip the row against the dock's overflow:hidden. */
 body.cookrew-mobile .cr-dock.zoomed .dock-canvas {
   display: none;
 }
@@ -3472,30 +3481,43 @@ body.cookrew-mobile .cr-dock.zoomed .dock-send {
   transform: none;
 }
 
+/* ONE row, not two. The cluster used to take a full-width row of its own
+   above the action row; that cost the dock ~50px of height on the one
+   screen where height is scarcest — the phone, where the dock and the
+   terminal share it. Keys now ride inline with attach/mic/speak/send, and
+   if a very narrow phone can't seat all nine the row scrolls sideways
+   (same idiom as .popout-header) rather than wrapping the line back. */
 body.cookrew-mobile .cr-dock .voice-bar {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
-  row-gap: 6px;
-}
-
-/* On the phone the cluster gets its own full-width row ABOVE the action
-   row — five evenly stretched keys read as a deliberate key row, instead
-   of a ragged wrap that strands send beside ESC. */
-body.cookrew-mobile .cr-dock .voice-keys {
-  order: -1;
-  flex: 1 1 100%;
   gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
 
-body.cookrew-mobile .cr-dock .voice-keys .cr-btn.term-key {
-  flex: 1;
+body.cookrew-mobile .cr-dock .voice-bar::-webkit-scrollbar {
+  display: none;
+}
+
+body.cookrew-mobile .cr-dock .voice-keys {
+  gap: 4px;
+}
+
+/* The dictation caption is the only elastic item in a nowrap row — it
+   ellipsises so the buttons never get pushed into the scroll region. */
+body.cookrew-mobile .cr-dock .voice-ghost {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 /* ---- phone companion (narrow viewports) ----
    The remote (mobile-server) UI shares this stylesheet; below ~700px the
    zoomed terminal overlay compacts so the terminal itself gets the screen:
-   one-line horizontally-scrollable header, 44px tap targets, touch-scrolling
-   scrollback and turn panel. Desktop layout is untouched. */
+   one-line horizontally-scrollable header and send row, 44px tap targets on
+   the canvas dock, touch-scrolling scrollback and turn panel. Desktop layout
+   is untouched. */
 
 @media (max-width: 700px) {
   /* One compact control row that scrolls horizontally when crowded. Without
@@ -3518,14 +3540,26 @@ body.cookrew-mobile .cr-dock .voice-keys .cr-btn.term-key {
     flex: 0 0 auto;
   }
 
-  /* One shared 44px frame for every icon button on the phone — popout
-     actions, send group, and dock tools all sit on the same grid. */
-  .popout-header .cr-btn,
-  .voice-bar .cr-btn,
+  /* Two frames, chosen by what each row competes with. The canvas dock
+     tools keep the 44px tap target — nothing is fighting them for space.
+     The zoomed transcript's own chrome does not: the popout actions above
+     and the send group below bracket the terminal, so every pixel they
+     hold is scrollback the user can't read. Both drop to the 30px frame
+     the header's activity / all-agents / fork buttons already use, which
+     is the smallest target already proven tappable in this UI. */
   .cr-dock-tools .cr-btn {
     width: 44px;
     height: 44px;
     min-width: 44px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .popout-header .cr-btn,
+  .voice-bar .cr-btn {
+    width: 30px;
+    height: 30px;
+    min-width: 30px;
     padding: 0;
     justify-content: center;
   }

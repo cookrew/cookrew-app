@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checkpoint Final-Gate Report — Cookrew</title>
+<style>
+:root {
+  --bg: #f4f6f3; --panel: #fdfdfb; --ink: #1d231e; --muted: #5c675e;
+  --line: #d9e0d8; --accent: #1f8a4c; --accent-ink: #14663a;
+  --pass-bg: #e3f2e7; --pass-ink: #17663a;
+  --fail-bg: #fbe7e2; --fail-ink: #a03325;
+  --part-bg: #f4ecdc; --part-ink: #7a5d1c;
+  --high: #c04a37; --med: #b0862b; --code-bg: #edf1ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #10140f; --panel: #171c16; --ink: #dde5da; --muted: #8b978a;
+    --line: #2a322a; --accent: #4cc07a; --accent-ink: #6fd695;
+    --pass-bg: #16301f; --pass-ink: #7fd8a1;
+    --fail-bg: #3a1d17; --fail-ink: #f0937f;
+    --part-bg: #33290f; --part-ink: #d9b45e;
+    --high: #e06a52; --med: #d0a145; --code-bg: #1e241d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10140f; --panel: #171c16; --ink: #dde5da; --muted: #8b978a;
+  --line: #2a322a; --accent: #4cc07a; --accent-ink: #6fd695;
+  --pass-bg: #16301f; --pass-ink: #7fd8a1;
+  --fail-bg: #3a1d17; --fail-ink: #f0937f;
+  --part-bg: #33290f; --part-ink: #d9b45e;
+  --high: #e06a52; --med: #d0a145; --code-bg: #1e241d;
+}
+:root[data-theme="light"] {
+  --bg: #f4f6f3; --panel: #fdfdfb; --ink: #1d231e; --muted: #5c675e;
+  --line: #d9e0d8; --accent: #1f8a4c; --accent-ink: #14663a;
+  --pass-bg: #e3f2e7; --pass-ink: #17663a;
+  --fail-bg: #fbe7e2; --fail-ink: #a03325;
+  --part-bg: #f4ecdc; --part-ink: #7a5d1c;
+  --high: #c04a37; --med: #b0862b; --code-bg: #edf1ec;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width: 880px; margin: 0 auto; padding: 40px 20px 64px; }
+header.rpt { border: 1px solid var(--line); border-left: 4px solid var(--accent); background: var(--panel); padding: 22px 24px; margin-bottom: 28px; }
+.eyebrow { font-family: ui-monospace, Menlo, monospace; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent-ink); margin: 0 0 6px; }
+h1 { font-family: ui-monospace, Menlo, monospace; font-size: 24px; line-height: 1.25; margin: 0 0 10px; text-wrap: balance; }
+.meta { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+.meta code, p code, li code, td code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); }
+.chip.ok { background: var(--pass-bg); color: var(--pass-ink); border-color: transparent; }
+.chip.warn { background: var(--part-bg); color: var(--part-ink); border-color: transparent; }
+.chip.bad { background: var(--fail-bg); color: var(--fail-ink); border-color: transparent; }
+h2 { font-family: ui-monospace, Menlo, monospace; font-size: 15px; letter-spacing: .06em; text-transform: uppercase; margin: 36px 0 14px; color: var(--accent-ink); }
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); background: var(--panel); }
+table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 13.5px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-family: ui-monospace, Menlo, monospace; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+tr:last-child td { border-bottom: none; }
+.v { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; padding: 2px 8px; border-radius: 3px; white-space: nowrap; }
+.v.pass { background: var(--pass-bg); color: var(--pass-ink); }
+.v.fail { background: var(--fail-bg); color: var(--fail-ink); }
+.v.part { background: var(--part-bg); color: var(--part-ink); }
+section.item { border: 1px solid var(--line); background: var(--panel); margin-bottom: 16px; padding: 16px 20px 14px; border-left-width: 4px; border-left-color: var(--accent); }
+section.item.fail { border-left-color: var(--high); }
+section.item.part { border-left-color: var(--med); }
+section.item h3 { margin: 0 0 8px; font-size: 15.5px; line-height: 1.35; }
+section.item p, section.item li { margin: 6px 0; font-size: 13.5px; }
+.sev { font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; letter-spacing: .1em; padding: 2px 7px; border-radius: 3px; margin-right: 8px; position: relative; top: -1px; }
+.sev.med { background: var(--part-bg); color: var(--part-ink); }
+.sev.low { background: var(--code-bg); color: var(--muted); }
+.fixed { font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; padding: 2px 7px; border-radius: 3px; background: var(--pass-bg); color: var(--pass-ink); margin-left: 6px; }
+ul { padding-left: 20px; margin: 6px 0; }
+.bottom { border: 1px solid var(--line); border-left: 4px solid var(--accent); background: var(--panel); padding: 16px 20px; font-size: 14px; }
+footer { margin-top: 44px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="rpt">
+  <p class="eyebrow">Cookrew · Checkpoint program · Final gate</p>
+  <h1>Checkpoint Final-Gate Report</h1>
+  <p class="meta">2026-07-21 · Tester: <strong>Magpie</strong> (QA) · Build: <code>835ce9a</code> after verified single-instance restart · Method: live phone-build API + on-disk session-file forensics + code inspection · All mutating tests ran in throwaway workspaces, fully cleaned up</p>
+  <div class="chips">
+    <span class="chip ok">4/5 criteria PASS</span>
+    <span class="chip warn">1 PARTIAL (fixed, pending re-verify)</span>
+    <span class="chip bad">1 Codex edge (fixed, pending re-verify)</span>
+    <span class="chip ok">Mobile sweep PASS</span>
+  </div>
+</header>
+
+<h2>Verdicts at a glance</h2>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>#</th><th>Gate item</th><th>Verdict</th></tr></thead>
+  <tbody>
+    <tr><td>(a)</td><td>Fork list == session prompts (incl. Codex)</td><td><span class="v pass">PASS Claude 8/8</span> <span class="v fail">FAIL Codex T1</span></td></tr>
+    <tr><td>(b)</td><td>Assembled fork carries REAL context</td><td><span class="v pass">PASS</span></td></tr>
+    <tr><td>(c)</td><td>Native fork+edit+rewind uuid-exact</td><td><span class="v pass">PASS</span></td></tr>
+    <tr><td>(d)</td><td>Role-from-checkpoint restores</td><td><span class="v part">PARTIAL</span></td></tr>
+    <tr><td>(e)</td><td>Team fork-from-saved native-rewinds in fresh dir</td><td><span class="v pass">PASS</span></td></tr>
+    <tr><td>—</td><td>Mobile client sweep</td><td><span class="v pass">PASS</span></td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Findings per item</h2>
+
+<section class="item fail">
+  <h3>(a) Fork list == session prompts — PASS for Claude, FAIL on Codex first turn</h3>
+  <p><strong>Claude:</strong> all 8 live agents align exactly — checkpoint count equals session prompt count and every prompt text matches at the same position: Conductor 77/77, Velvet 21/21, Magpie 38/38, Beacon 6/6, Fresco 28/28, Forge 11/11, Tinker 40/40, Claude Code 8/8. The phantom dedupe healed Conductor's prior 72-vs-70 mismatch (the duplicate <code>push</code> records merged away).</p>
+  <p><strong>Codex:</strong> a fresh Codex terminal driven with three exact-text turns captured T2 and T3 verbatim, but T1 became <code>(recovered turn)</code> with a hallucinated title. Root cause found: a promptless self-heal phantom sat in <code>waiting</code>, so the first ask's Enter was consumed as a menu answer. Defect #1 — <strong>already fixed in the working tree</strong>, re-verify pending.</p>
+</section>
+
+<section class="item">
+  <h3>(b) Assembled fork carries real context — PASS</h3>
+  <p>Team fork of Beacon in assembled mode selecting checkpoints 1 and 3 produced a native session copy containing <em>exactly</em> those two checkpoints' conversation records — checkpoint 2 verifiably excluded — as real session records, not a text preamble. The rewind-coverage guard couldn't be triggered live and is covered by unit tests.</p>
+</section>
+
+<section class="item">
+  <h3>(c) Native fork + edit + rewind, uuid-exact — PASS</h3>
+  <p>First-checkpoint fork contained exactly one conversation prompt (Beacon's checkpoint 1, text-verified). The only other prompt in the file was the fork's own boot notice, appended after the fork came alive — not a truncation error. Truncation is uuid-keyed throughout.</p>
+</section>
+
+<section class="item part">
+  <h3>(d) Role-from-checkpoint restores — PARTIAL</h3>
+  <p>Saving with provenance works (uuid + prompt persisted); booting from the role injects the prompt. But the <em>recovery point</em> half was dead plumbing: <code>sessionCopyRef</code> had no producer or consumer, so role boots carried none of the checkpoint's conversation context. Defect #2 — <strong>already fixed in the working tree</strong> (<code>saveRoleSessionCopy</code> writes the session copy; <code>resumeRoleSession</code> consumes it at boot), re-verify pending.</p>
+</section>
+
+<section class="item">
+  <h3>(e) Team fork-from-saved native-rewinds in a fresh dir — PASS</h3>
+  <p>A saved 10-agent team snapshotted its session files; forking Beacon from the <em>saved</em> snapshot into <code>/tmp/cookrew-qa-fresh</code> produced a native-bound session whose truncated copy was written under the fresh dir's own project slug, content verified.</p>
+</section>
+
+<section class="item">
+  <h3>Mobile client sweep — PASS</h3>
+  <ul>
+    <li>Invariant guard: 7/7 green.</li>
+    <li>Avatar suite present; <code>.cr-git</code> kit restored (21 markers, was 0 two commits ago); <code>/api/state</code> git-enriched — all 8 terminals carry git data.</li>
+    <li>Stale fork wording: 0. Duplicate CSS blocks: 0.</li>
+    <li>One intent note: the guard's comment still claims mobile is checkpoint-free while the client now intentionally shows 2 checkpoint strings — defect #3 (LOW), reconcile either direction.</li>
+  </ul>
+</section>
+
+<h2>Defects filed (all with Tinker)</h2>
+<section class="item part">
+  <ul style="list-style:none; padding-left:0;">
+    <li><span class="sev med">MEDIUM</span>Codex first-turn prompt capture fails (waiting-phantom consumes the Enter)<span class="fixed">FIXED IN TREE</span></li>
+    <li style="margin-top:8px;"><span class="sev med">MEDIUM</span>Role-from-checkpoint native restore was dead plumbing (no <code>sessionCopyRef</code> producer/consumer)<span class="fixed">FIXED IN TREE</span></li>
+    <li style="margin-top:8px;"><span class="sev low">LOW</span>Guard-test comment/enforcement mismatch on mobile checkpoint wording</li>
+  </ul>
+</section>
+
+<h2>Bottom line</h2>
+<div class="bottom">
+  <p>The checkpoint program is substantially real: exact, uuid-keyed restore points hold end-to-end for Claude agents across single-point forks, assembled forks, and saved-team forks in fresh directories. <strong>4 of 5 first-principle criteria verified</strong>, with (d) half-delivered and one Codex first-turn edge on (a) — both root-caused and fixed in the working tree within the same cycle, one rebuild away from delta re-verification.</p>
+  <p style="margin-bottom:0;">Gate residue fully cleaned; kept deliberately: team snapshots "QA Gate E Team" (test fixture) and "Cookrew Core Team v2" (user-requested baseline).</p>
+</div>
+
+<footer>
+  Generated by Magpie (QA agent) on the Cookrew canvas, 2026-07-21 · Build 835ce9a · Repo: anvztor/cookrew-dev · Full markdown in session scratchpad · Prior report: Phone Companion QA (2026-07-19)
+</footer>
+
+</div>
+</body>
+</html>

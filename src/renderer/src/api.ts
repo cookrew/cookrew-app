@@ -9,8 +9,23 @@ import type {
   WorkspaceMeta,
   WorkspaceState,
   RecoverResult,
+  RestoreResult,
 } from "../../shared/model";
 import type { TerminalActivity, TurnRecord } from "../../shared/turn";
+import type { TurnMatch } from "../../shared/turn-search";
+import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
+import type { BoardRow, BoardSummary } from "../../shared/board";
+
+/**
+ * GET /api/board's payload, mirrored here rather than imported from main —
+ * the renderer must not reach into src/main. Structurally identical to
+ * BoardSnapshot in main/board-index.ts.
+ */
+export interface BoardSnapshotLike {
+  rows: BoardRow[];
+  summary: BoardSummary;
+  activeWorkspaceId: string;
+}
 
 export interface CookrewApi {
   getWorkspace: () => Promise<WorkspaceState>;
@@ -67,7 +82,18 @@ export interface CookrewApi {
   ptyJump: (terminalId: string, text: string | null) => void;
   /** Acknowledge-on-view: user is looking at this terminal's result. */
   turnSeen: (terminalId: string) => void;
-  ptyAttach: (terminalId: string, onData: (data: string) => void) => () => void;
+  /**
+   * Stream a terminal's output. `onHello` (optional) fires ONCE, before the
+   * first byte, with the mirror's geometry: the replay frame's wrapping is
+   * baked in at those columns, and herdr's deltas address the cursor
+   * absolutely against them, so a viewer must adopt that size before applying
+   * anything. Transports that cannot report it simply never call it.
+   */
+  ptyAttach: (
+    terminalId: string,
+    onData: (data: string) => void,
+    onHello?: (geometry: { cols: number; rows: number }) => void
+  ) => () => void;
   listActivity: () => Promise<TerminalActivity[]>;
   onTerminalActivity: (cb: (activity: TerminalActivity) => void) => () => void;
   /**
@@ -80,12 +106,28 @@ export interface CookrewApi {
   countEvents?: (query?: unknown) => Promise<Record<string, number>>;
   listAgents?: () => Promise<unknown[]>;
   /**
+   * Activity Board snapshot (cross-workspace task view). Optional and
+   * feature-detected like listAgents — an older bridge shows the roster
+   * instead of a fabricated empty board.
+   */
+  listBoard?: (window?: string) => Promise<BoardSnapshotLike>;
+  /**
    * Recover an inactive teammate as it was (agent-recover feature): re-add
    * the node bound to its session and resume. Optional — feature-detect.
    */
   recoverAgent?: (id: string) => Promise<RecoverResult>;
+  /** ENDPOINT RESTORE: rewind this agent in place to one of its checkpoints. */
+  restoreCheckpoint?: (id: string, checkpointIndex: number) => Promise<RestoreResult>;
+  /** Undo the last endpoint restore (rebind to the pre-restore session). */
+  undoRestore?: (id: string) => Promise<RestoreResult>;
   /** Completed turns of a terminal (oldest first) for the card pager. */
   listTurns: (terminalId: string) => Promise<TurnRecord[]>;
+  /**
+   * Checkpoint search across EVERY agent's turn ledger, run in main. Returns
+   * matches with a capped snippet — never turn bodies. Optional: feature-detect,
+   * older bridges lack it.
+   */
+  searchTurns?: (query: string, limit?: number) => Promise<TurnMatch[]>;
   /**
    * Context-view v2 transcript windows: paged turns with FULL prompt+reply
    * bodies. Optional — demo lacks it; the transcript feature-detects.
@@ -103,7 +145,7 @@ export interface CookrewApi {
   /**
    * Trace-sourced context (trace-sourced-context-final): identity-keyed
    * TraceBlock windows read directly from the agent's own session file
-   * (Claude jsonl / Codex rollout). Optional — feature-detect.
+   * (Claude/Pi jsonl or Codex rollout). Optional — feature-detect.
    */
   listTrace?: (
     terminalId: string,
@@ -116,7 +158,7 @@ export interface CookrewApi {
   ) => Promise<{
     blocks: unknown[];
     total: number;
-    source: "claude" | "codex" | null;
+    source: "claude" | "codex" | "pi" | null;
   }>;
   /**
    * Cheap identity+title listing of the FULL trace (unified-scroll item 3): one
@@ -129,6 +171,14 @@ export interface CookrewApi {
   listTraceIndex?: (
     terminalId: string,
   ) => Promise<{ index: number; title: string }[]>;
+  /**
+   * Boundary markers for the checkpoint rail: ◆ compact (in-file) and ⇥ clear
+   * (lineage segment boundary). Optional — feature-detect; the rail simply
+   * renders no markers when absent.
+   */
+  listTraceMarkers?: (
+    terminalId: string,
+  ) => Promise<TraceBoundaryMarker[]>;
   /** Fork a NEW agent card from a past turn; omit turnIndex for the latest. */
   forkTerminal: (sourceId: string, turnIndex?: number) => Promise<CanvasNode>;
   /** Fork a team into a NEW workspace per the spec (switches to it). */

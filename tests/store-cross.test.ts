@@ -120,6 +120,7 @@ describe('updateNode allow-list (unauth patches cannot plant refs)', () => {
       name: 'Renamed',
       claudeSessionId: 'planted',
       codexSessionRef: '/tmp/evil.jsonl',
+      piSessionId: 'planted-pi',
       command: 'evil',
       orch: false,
       cwd: '/elsewhere'
@@ -127,6 +128,7 @@ describe('updateNode allow-list (unauth patches cannot plant refs)', () => {
     expect(updated.name).toBe('Renamed')
     expect(updated.claudeSessionId ?? null).toBeNull()
     expect(updated.codexSessionRef ?? null).toBeNull()
+    expect(updated.piSessionId ?? null).toBeNull()
     expect(updated.command).not.toBe('evil')
     expect(updated.orch).toBe(true)
     expect(updated.cwd).not.toBe('/elsewhere')

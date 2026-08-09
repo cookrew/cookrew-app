@@ -11,7 +11,7 @@ Built with Electron + React, so it runs on macOS, Linux, and Windows.
 
 - **Infinite canvas** — dark dotted grid, pan/zoom, minimap, drag/resize nodes
 - **Terminal nodes** — real PTYs (node-pty) rendered with xterm.js; agent presets
-  (Claude Code, Codex, OpenCode, plain shell); Orch flag for orchestrator terminals
+  (Claude Code, Codex, OpenCode, Pi, plain shell); Orch flag for orchestrator terminals
 - **Notes** — markdown sticky notes, auto-named from their first line (rename-on-edit),
   persisted as real `.md` files under `~/.cookrew/notes`
 - **Connections** — dashed cables between any nodes; connectivity defines what an

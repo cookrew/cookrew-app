@@ -202,6 +202,7 @@ export function createDemoApi(): CookrewApi {
         { name: 'Claude Code', command: 'claude --permission-mode bypassPermissions' },
         { name: 'Codex', command: 'codex' },
         { name: 'OpenCode', command: 'opencode' },
+        { name: 'Pi', command: 'pi' },
         { name: 'Shell', command: '' }
       ]),
     createTerminal: (opts) => {

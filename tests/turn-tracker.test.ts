@@ -793,3 +793,141 @@ describe('activity.tailLines (live-tail clip signal, unified-scroll item 1)', ()
     tracker.disposeAll()
   })
 })
+
+// REFACTOR STEP 4 (checkpoint-as-identity): for a harness whose durable
+// history comes from its session file, the tracker keeps the LIVE turn and
+// stops being a second writer of history. The switch is per terminal and is
+// thrown by SessionTurnSync only after a reconcile has actually landed — not
+// by the harness declaring turns: 'file' — because between spawn and the
+// first session-file write there is a window where the file cannot record
+// anything yet. In that window the scrape is the only writer there is.
+describe('TurnTracker history source (step 4: narrow the scrape)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('defaults to scraping — an unconfigured terminal records as it always did', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    await completeTurn(tracker, session)
+    expect(tracker.history('term-1')).toHaveLength(1)
+    tracker.disposeAll()
+  })
+
+  it('BOOT WINDOW: a file harness still scrapes until its session file reconciles', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    // Spawned, session file not written yet — SessionTurnSync has not marked
+    // it 'file'. If this ever records nothing, an agent silently loses the
+    // turns it took before its session file appeared.
+    await completeTurn(tracker, session)
+    expect(tracker.history('term-1')).toHaveLength(1)
+    expect(tracker.history('term-1')[0].prompt).toBe('fix it')
+    tracker.disposeAll()
+  })
+
+  it('stops appending once the session file is the record', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    // The reconcile landed: history now comes from the file.
+    tracker.replaceHistory('term-1', [
+      { index: 1, prompt: 'an earlier ask', reply: 'from the file', uuid: 'u1', startedAt: 1, endedAt: 2 }
+    ])
+    tracker.setHistorySource('term-1', 'file')
+
+    // A DIFFERENT prompt on purpose. With a matching one, a scrape record
+    // would be swallowed by dedupePhantomEchoes (uuid-less echo beside its
+    // uuid original) and this test would pass whether or not the append was
+    // actually suppressed — it would assert nothing.
+    session.emit('input', 'a brand new ask\r')
+    session.full = '⏺ done'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(phaseOf(tracker)).toBe('replied')
+
+    const history = tracker.history('term-1')
+    expect(history).toHaveLength(1) // no scrape record minted beside it
+    expect(history[0].reply).toBe('from the file')
+    tracker.disposeAll()
+  })
+
+  it('keeps the live turn for a file-backed terminal — phase, prompt, pending input', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    tracker.setHistorySource('term-1', 'file')
+
+    session.emit('input', 'run the migration\r')
+    expect(phaseOf(tracker)).toBe('thinking')
+    expect(tracker.list()[0].prompt).toBe('run the migration')
+
+    session.full = '⏺ Bash(npm run migrate)\n✻ Marinating… (2m 45s · ↓ 774 tokens)'
+    session.emit('data', '✻ Marinating…')
+    expect(tracker.list()[0].glance).not.toBeNull()
+
+    // Spinner gone (the turn really ended) — otherwise isLiveStatus holds it.
+    session.full = '⏺ Bash(npm run migrate)\n⏺ migration applied'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(phaseOf(tracker)).toBe('replied')
+    expect(tracker.list()[0].reply).not.toBeNull()
+    tracker.disposeAll()
+  })
+
+  // Titles are the regression this guards, not suppression: a same-prompt turn
+  // converges either way (dedupePhantomEchoes drops the echo and hands its
+  // title to the original), so this pins that the final Sous pass still LANDS
+  // when the tracker no longer owns the record it would have titled.
+  it('still titles the turn when the record belongs to the session file', async () => {
+    vi.useFakeTimers()
+    const tracker = new TurnTracker(async () => 'Fixing it', null)
+    const session = new FakeSession()
+    tracker.track(session as unknown as PtySession, true)
+    // The session file already carries this turn (Claude writes the prompt
+    // entry the moment the turn starts), untitled.
+    tracker.replaceHistory('term-1', [
+      { index: 1, prompt: 'fix it', reply: '', uuid: 'u1', startedAt: 1, endedAt: 2 }
+    ])
+    tracker.setHistorySource('term-1', 'file')
+
+    await completeTurn(tracker, session)
+    await vi.advanceTimersByTimeAsync(10)
+    const history = tracker.history('term-1')
+    expect(history).toHaveLength(1)
+    expect(history[0].title).toBe('Fixing it')
+    tracker.disposeAll()
+  })
+
+  it('resumes scraping when the terminal is put back on the scrape path (rebind)', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = makeTracker()
+    tracker.setHistorySource('term-1', 'file')
+    // Rebind to a fresh session file: SessionTurnSync drops it back to
+    // 'scrape' until the NEW file parses, so the window is covered again.
+    tracker.setHistorySource('term-1', 'scrape')
+
+    await completeTurn(tracker, session)
+    expect(tracker.history('term-1')).toHaveLength(1)
+    tracker.disposeAll()
+  })
+
+  it('still persists the read marker and titles for a file-backed terminal', async () => {
+    vi.useFakeTimers()
+    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-filebacked-'))
+    const store = new TurnStore(dir)
+    const tracker = new TurnTracker(async () => null, store)
+    const session = new FakeSession()
+    tracker.track(session as unknown as PtySession, true)
+    tracker.replaceHistory('term-1', [
+      { index: 1, prompt: 'fix it', reply: 'r', uuid: 'u1', startedAt: 1, endedAt: 2 }
+    ])
+    tracker.setHistorySource('term-1', 'file')
+
+    await completeTurn(tracker, session)
+    tracker.seen('term-1')
+    tracker.flushHistories()
+    const persisted = new TurnStore(dir).load('term-1')
+    expect(persisted).toHaveLength(1)
+    expect(persisted[0].seenAt).toBeTypeOf('number')
+    tracker.disposeAll()
+  })
+})

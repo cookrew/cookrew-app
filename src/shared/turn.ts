@@ -115,8 +115,90 @@ export interface TurnRecord {
   scrollLine?: number
 }
 
-/** Cap on retained turn records per terminal (oldest dropped first). */
-export const MAX_TURN_HISTORY = 100
+/**
+ * COOKREW'S OWN ANNOTATIONS on a checkpoint — the fields above that no other
+ * system has or could reconstruct.
+ *
+ * A TurnRecord mixes two things with different owners. The conversation
+ * (prompt, reply, timing, and the `uuid` that binds it to the session file) is
+ * already owned by the harness transcript; the ledger only keeps a copy of it.
+ * These three are ours alone: a Sous recap, whether the user has looked at the
+ * result, and where the turn started in scrollback. Losing the ledger loses
+ * nothing permanently — losing these loses read state and every recap.
+ *
+ * They are stored apart from the conversation and merged back on read, so this
+ * split is invisible above main/turn-store.ts (see main/turn-annotations.ts for
+ * the file, and why it is rewritten whole rather than appended).
+ */
+export interface TurnAnnotation {
+  title?: string
+  seenAt?: number
+  scrollLine?: number
+}
+
+/** True when there is anything worth persisting for this checkpoint. */
+export function hasAnnotation(annotation: TurnAnnotation): boolean {
+  return (
+    annotation.title !== undefined ||
+    annotation.seenAt !== undefined ||
+    annotation.scrollLine !== undefined
+  )
+}
+
+/**
+ * Split a record into the conversation half (what the transcript owns) and
+ * Cookrew's half. Absent fields are left absent rather than set to undefined,
+ * so the conversation line serializes byte-identically to a record that never
+ * carried an annotation at all.
+ */
+export function splitAnnotation(record: TurnRecord): {
+  conversation: TurnRecord
+  annotation: TurnAnnotation
+} {
+  const { title, seenAt, scrollLine, ...conversation } = record
+  const annotation: TurnAnnotation = {}
+  if (title !== undefined) annotation.title = title
+  if (seenAt !== undefined) annotation.seenAt = seenAt
+  if (scrollLine !== undefined) annotation.scrollLine = scrollLine
+  return { conversation, annotation }
+}
+
+/**
+ * Put an annotation back onto a conversation record. The annotation wins where
+ * it has a value; anything it lacks keeps whatever the record carried, which is
+ * what lets a pre-split file — annotations still inline on the line — read back
+ * unchanged before it has ever been rewritten.
+ */
+export function mergeAnnotation(
+  record: TurnRecord,
+  annotation: TurnAnnotation | undefined,
+): TurnRecord {
+  if (annotation === undefined || !hasAnnotation(annotation)) return record
+  const merged: TurnRecord = { ...record }
+  if (annotation.title !== undefined) merged.title = annotation.title
+  if (annotation.seenAt !== undefined) merged.seenAt = annotation.seenAt
+  if (annotation.scrollLine !== undefined) merged.scrollLine = annotation.scrollLine
+  return merged
+}
+
+/**
+ * History is NOT capped: every checkpoint an agent has ever produced is kept,
+ * so `turnCount` and the rail agree with reality. This is affordable because
+ * the store appends one line per turn instead of rewriting the file (see
+ * main/turn-store.ts) — the rewrite is what forced a cap in the first place.
+ *
+ * Kept as a named window for callers that want "the recent end" without
+ * loading everything: TurnTracker attaches with this many in memory and pages
+ * older ones from disk on demand.
+ */
+export const TURN_TAIL_WINDOW = 200
+
+/**
+ * Cap on ONE paged fetch. pageTurns returns FULL prompt/reply bodies, so an
+ * unbounded page would ship an entire history across the wire to draw one
+ * screen.
+ */
+export const MAX_TURN_PAGE = 100
 
 /**
  * Synthetic prompt for turns the tracker's self-healing opened without ever
@@ -218,7 +300,7 @@ export function scrollLineOf(snapshot: string): number {
 export interface TurnPageRequest {
   /** Start BLOCK INDEX (0-based, oldest-first). Omitted → tail window. */
   offset?: number
-  /** Window size; defaults to 20, capped at MAX_TURN_HISTORY. */
+  /** Window size; defaults to 20, capped at MAX_TURN_PAGE. */
   limit?: number
   /** Center the window on the record with this TurnRecord.index (wins over
    *  offset — the checkpoint-click fetch). Unknown index → tail window. */
@@ -247,7 +329,7 @@ const TURN_PAGE_DEFAULT_LIMIT = 20
  */
 export function pageTurns(history: TurnRecord[], request: TurnPageRequest = {}): TurnPage {
   const total = history.length
-  const limit = Math.max(1, Math.min(request.limit ?? TURN_PAGE_DEFAULT_LIMIT, MAX_TURN_HISTORY))
+  const limit = Math.max(1, Math.min(request.limit ?? TURN_PAGE_DEFAULT_LIMIT, MAX_TURN_PAGE))
   if (total === 0) return { turns: [], total: 0, offset: 0 }
 
   if (request.beforeIndex !== undefined) {
@@ -272,11 +354,16 @@ export function pageTurns(history: TurnRecord[], request: TurnPageRequest = {}):
   return { turns: history.slice(clamped, clamped + limit), total, offset: clamped }
 }
 
-/** Append a completed turn immutably, assigning the next index and capping. */
+/**
+ * Append a completed turn immutably, assigning the next index. Nothing is
+ * dropped: `index` is monotonic and stable, so it stays a truthful count of
+ * everything the agent has ever done. `max` is retained for callers that want
+ * a bounded working set (tests, previews); it defaults to unbounded.
+ */
 export function appendTurnRecord(
   history: TurnRecord[],
   turn: Omit<TurnRecord, 'index'>,
-  max = MAX_TURN_HISTORY
+  max = Number.POSITIVE_INFINITY,
 ): TurnRecord[] {
   const index = (history[history.length - 1]?.index ?? 0) + 1
   const next = [...history, { ...turn, index }]
@@ -313,8 +400,15 @@ const CSI_RE = /\x1b(?:\[[<>=?]?[0-9;]*[@-~]|O[@-~])/g
 const OSC_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g
 const OSC_COLOR_REMNANT_RE = /\x1b?\]1[01];rgb:[0-9a-fA-F/]+\\?/g
 
-/** The cookrew tmux status bar line (status-left is "cookrew · <session>"). */
-const TMUX_STATUS_RE = /^\s*cookrew · /
+/**
+ * The cookrew tmux status bar line. status-left is
+ * '#[bold] cookrew · #S #[nobold] ', but status-left-length defaults to 10 —
+ * exactly the width of ' cookrew ·'. tmux truncates there, dropping the
+ * session name AND the space after the separator, so the window list runs
+ * straight on and the row reads ' cookrew ·1:node*'. Match the separator
+ * followed by anything, so both the truncated and untruncated forms strip.
+ */
+const TMUX_STATUS_RE = /^\s*cookrew ·/
 
 /** Strip terminal control noise that would otherwise pollute turn text. */
 function stripTermNoise(text: string): string {
@@ -372,10 +466,7 @@ function appendPastedText(buffer: string, segment: string): string {
  * Shift+Enter arrives as ESC+CR (the TUI insert-newline binding) and appends a
  * literal newline — one REAL Enter = one submit = one checkpoint (1:1 spec).
  */
-function feedTypedSegment(
-  buffer: string,
-  segment: string
-): { line: string; submitted: string[] } {
+function feedTypedSegment(buffer: string, segment: string): { line: string; submitted: string[] } {
   const submitted: string[] = []
   let line = buffer
   const plain = stripTermNoise(segment).replace(CSI_RE, '')
@@ -409,7 +500,7 @@ export function feedPromptBuffer(
   buffer: string,
   data: string,
   inPaste = false,
-  held = ''
+  held = '',
 ): PromptFeed {
   const submitted: string[] = []
   let line = buffer
@@ -443,20 +534,38 @@ const STATUS_RE =
   /esc to interrupt|\? for shortcuts|bypass(?:ing)? permissions|shift\+tab to cycle|for agents\b/i
 
 /**
+ * The pi/ifunk TUI closes with two status rows below its input box, and they
+ * are the LAST lines on screen — so a card falling back to the screen tail
+ * showed the meter instead of the agent's last words.
+ *
+ * METER: the context gauge, "?/128k (auto)" or "75.8%/128k (auto)". Anchored
+ * on "<something>/<n>k (auto)" so prose containing "(auto)" or "128k" alone
+ * survives.
+ * CWD: the row above it — "~/workspace/cookrew-dev (some-branch)" in a repo,
+ * a bare "/private/tmp" outside one. A bare path is ordinary output (a glob
+ * hit, a pwd, a file reference), so the path shape alone is NOT enough:
+ * it only counts as chrome when the meter is on the very next line.
+ */
+const AGENT_METER_RE = /\S*\/\d+k\s+\(auto\)/
+const AGENT_CWD_RE = /^\s*[~/]\S*(?:\s+\([^)]+\))?\s*$/
+
+/**
  * Reduce raw appended terminal text to displayable summary lines: drop TUI
- * frames, status bars (including the tmux one), OSC noise and blank runs
- * while keeping the actual content.
+ * frames, status bars (the tmux one and the agent's own), OSC noise and blank
+ * runs while keeping the actual content.
  */
 export function cleanTurnLines(text: string): string[] {
   const lines = stripTermNoise(text)
     .split('\n')
     .map((l) => l.replace(/\s+$/g, ''))
   const kept = lines.filter(
-    (l) =>
+    (l, i) =>
       !CHROME_RE.test(l) &&
       !INPUT_BOX_RE.test(l) &&
       !STATUS_RE.test(l) &&
-      !TMUX_STATUS_RE.test(l)
+      !TMUX_STATUS_RE.test(l) &&
+      !AGENT_METER_RE.test(l) &&
+      !(AGENT_CWD_RE.test(l) && AGENT_METER_RE.test(lines[i + 1] ?? '')),
   )
   return kept.reduce<string[]>((acc, line) => {
     if (line === '' && acc[acc.length - 1] === '') return acc
@@ -482,7 +591,7 @@ const ATTENTION_RES = [
   /\(y\/n\)|\[y\/n\]/i,
   /^\s*[❯>]?\s*\d+\.\s+(yes|no|allow|deny|approve|reject)/i,
   /allow this|grant access|permission request|needs your approval/i,
-  /waiting for (your )?(input|approval|response)/i
+  /waiting for (your )?(input|approval|response)/i,
 ]
 
 /** True when the quiet tail looks like a question the agent is blocked on. */

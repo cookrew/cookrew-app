@@ -12,6 +12,7 @@ export const PRESETS: AgentPreset[] = [
   { name: 'Claude Code', command: 'claude --permission-mode bypassPermissions' },
   { name: 'Codex', command: 'codex' },
   { name: 'OpenCode', command: 'opencode' },
+  { name: 'Pi', command: 'pi' },
   { name: 'Shell', command: '' }
 ]
 

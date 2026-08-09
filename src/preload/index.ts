@@ -43,13 +43,25 @@ const api = {
   ptyJump: (terminalId: string, text: string | null) =>
     ipcRenderer.send('pty:jump', terminalId, text),
   turnSeen: (terminalId: string) => ipcRenderer.send('turn:seen', terminalId),
-  ptyAttach: (terminalId: string, onData: (data: string) => void) => {
+  ptyAttach: (
+    terminalId: string,
+    onData: (data: string) => void,
+    onHello?: (geometry: { cols: number; rows: number }) => void
+  ) => {
     const channel = `pty:data:${terminalId}`
+    const helloChannel = `pty:hello:${terminalId}`
     const listener = (_e: unknown, data: string): void => onData(data)
+    const helloListener = (_e: unknown, geometry: { cols: number; rows: number }): void =>
+      onHello?.(geometry)
+    // Subscribed BEFORE the invoke: main sends the hello and the first frame
+    // synchronously inside that handler, so a listener added after it would
+    // miss both.
+    ipcRenderer.on(helloChannel, helloListener)
     ipcRenderer.on(channel, listener)
     void ipcRenderer.invoke('pty:attach', terminalId)
     return () => {
       ipcRenderer.removeListener(channel, listener)
+      ipcRenderer.removeListener(helloChannel, helloListener)
       ipcRenderer.send('pty:detach', terminalId)
     }
   },
@@ -66,11 +78,14 @@ const api = {
 
   listActivity: () => ipcRenderer.invoke('activity:list'),
   listTurns: (terminalId: string) => ipcRenderer.invoke('turn:history', terminalId),
+  searchTurns: (query: string, limit?: number) =>
+    ipcRenderer.invoke('turn:search', query, limit),
   listTurnsPage: (terminalId: string, request?: unknown) =>
     ipcRenderer.invoke('turn:page', terminalId, request),
   listTrace: (terminalId: string, request?: unknown) =>
     ipcRenderer.invoke('trace:page', terminalId, request),
   listTraceIndex: (terminalId: string) => ipcRenderer.invoke('trace:index', terminalId),
+  listTraceMarkers: (terminalId: string) => ipcRenderer.invoke('trace:markers', terminalId),
   forkTerminal: (sourceId: string, turnIndex?: number) =>
     ipcRenderer.invoke('terminal:fork', sourceId, turnIndex),
   teamFork: (spec: unknown) => ipcRenderer.invoke('team:fork', spec),
@@ -87,7 +102,11 @@ const api = {
   queryEvents: (query: unknown) => ipcRenderer.invoke('events:query', query),
   countEvents: (query: unknown) => ipcRenderer.invoke('events:count', query),
   listAgents: () => ipcRenderer.invoke('agents:list'),
+  listBoard: (window?: string) => ipcRenderer.invoke('board:list', window),
   recoverAgent: (id: string) => ipcRenderer.invoke('agent:recover', id),
+  restoreCheckpoint: (id: string, checkpointIndex: number) =>
+    ipcRenderer.invoke('agent:restore-checkpoint', id, checkpointIndex),
+  undoRestore: (id: string) => ipcRenderer.invoke('agent:undo-restore', id),
   saveRole: (input: unknown) => ipcRenderer.invoke('role:save', input),
   onTerminalActivity: (cb: (activity: unknown) => void) => {
     const listener = (_e: unknown, activity: unknown): void => cb(activity)

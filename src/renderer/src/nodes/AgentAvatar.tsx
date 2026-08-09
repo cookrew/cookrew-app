@@ -16,7 +16,7 @@ import { spriteForPreset, type AgentSpriteKind } from './AgentSprite'
 const STAMP = '#1c1408'
 
 /** Brand marks echoing each agent's real logo: Claude sunburst, OpenAI
-    blossom (Codex), opencode block-cursor, arcade invader for Shell. */
+    blossom (Codex), opencode block-cursor, Pi's π, arcade invader for Shell. */
 function brandMark(kind: AgentSpriteKind): React.JSX.Element {
   if (kind === 'claude') {
     return (
@@ -59,6 +59,15 @@ function brandMark(kind: AgentSpriteKind): React.JSX.Element {
       <g fill={STAMP}>
         <rect x="7.6" y="7" width="6.2" height="10" rx="1" />
         <rect x="15.4" y="14.8" width="3.6" height="2.2" rx="0.6" />
+      </g>
+    )
+  }
+  if (kind === 'pi') {
+    return (
+      <g fill={STAMP}>
+        <rect x="6.5" y="7" width="13" height="2.4" rx="0.8" />
+        <rect x="8" y="8.5" width="2.8" height="9" rx="0.9" />
+        <path d="M14.2 8.5h2.8v6.4c0 1 .4 1.5 1.4 1.5h.8v2.2h-1.6c-2.3 0-3.4-1.2-3.4-3.6z" />
       </g>
     )
   }

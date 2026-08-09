@@ -38,6 +38,7 @@ import {
 import { stripSessionFlags } from '../shared/claude-fork'
 import { claudeSessionFile, forkClaudeSession, forkClaudeSessionAssembled } from './claude-fork'
 import { injectWhenReady } from './fork'
+import { isPiCommand, stripPiSessionFlags } from './pi-bind'
 import { roleSlug } from './roles'
 import type { RoleStore } from './roles'
 import type { WorkspaceStore } from './store'
@@ -296,8 +297,11 @@ function planTerminal(
     cwd: targetDir,
     preset: role ? role.preset : node.preset,
     // Session binding never carries over — the fork engine assigns its own.
-    command: stripSessionFlags(role ? role.command : node.command),
+    command: isPiCommand(role ? role.command : node.command)
+      ? stripPiSessionFlags(role ? role.command : node.command)
+      : stripSessionFlags(role ? role.command : node.command),
     claudeSessionId: null,
+    piSessionId: null,
     role: role ? role.name : node.role,
     forkOf:
       mode === 'role' || turnIndex === null

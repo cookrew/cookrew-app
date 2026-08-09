@@ -30,6 +30,7 @@ import { BrowserLayer, useInteractiveBrowserCapability } from './BrowserLayer'
 import { CanvasUiContext, ToolId } from './canvas-ui'
 import { useBrowserEngine } from './browser-engine'
 import { ErrorBoundary } from './ErrorBoundary'
+import { ReauthOverlay } from './ReauthOverlay'
 import { snapCardChanges, MOUSE_SNAP_PX, TOUCH_SNAP_PX, SnapGuide } from './card-snap'
 import { SnapGuides } from './SnapGuides'
 import { TeamForkPicker } from './TeamForkPicker'
@@ -364,7 +365,12 @@ function Canvas(): React.JSX.Element {
       if (connectFrom === null) {
         setConnectFrom(node.id)
       } else if (connectFrom !== node.id) {
-        void cookrew().connectNodes(connectFrom, node.id)
+        // node:connect now VALIDATES both ids, so a node deleted between the
+        // two clicks rejects instead of writing a dangling edge. Report it
+        // rather than letting the tool reset with no edge and no explanation.
+        void cookrew()
+          .connectNodes(connectFrom, node.id)
+          .catch((error: unknown) => console.error('Connect failed:', error))
         setConnectFrom(null)
         setTool('select')
       }
@@ -432,7 +438,11 @@ function Canvas(): React.JSX.Element {
   }, [])
 
   const onConnect = useCallback((params: { source: string | null; target: string | null }) => {
-    if (params.source && params.target) void cookrew().connectNodes(params.source, params.target)
+    if (params.source && params.target) {
+      void cookrew()
+        .connectNodes(params.source, params.target)
+        .catch((error: unknown) => console.error('Connect failed:', error))
+    }
   }, [])
 
   const terminals = (workspace?.nodes.filter((n) => n.kind === 'terminal') ??
@@ -553,7 +563,9 @@ function Canvas(): React.JSX.Element {
         {teamPickerOpen && workspace && (
           <TeamForkPicker workspace={workspace} onClose={() => setTeamPickerOpen(false)} />
         )}
-        {rosterOpen && <RosterPanel onClose={() => setRosterOpen(false)} />}
+        {rosterOpen && (
+          <RosterPanel workspace={workspace} onClose={() => setRosterOpen(false)} />
+        )}
         {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
         <BrowserLayer
           browsers={browsers}
@@ -563,6 +575,7 @@ function Canvas(): React.JSX.Element {
           interactiveCapability={interactiveCapability}
         />
         <EventToastLayer />
+        <ReauthOverlay />
       </div>
     </CanvasUiContext.Provider>
   )

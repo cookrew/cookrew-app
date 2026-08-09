@@ -1,3 +1,6 @@
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { appendTurnRecord, TurnRecord } from '../src/shared/turn'
 import {
@@ -5,6 +8,9 @@ import {
   buildForkPreamble,
   buildRoleBootMessage
 } from '../src/shared/fork'
+import { forkTerminal, type ForkDeps } from '../src/main/fork'
+import { WorkspaceStore } from '../src/main/store'
+import type { TerminalNodeData } from '../src/shared/model'
 
 function turn(index: number, overrides: Partial<TurnRecord> = {}): TurnRecord {
   return {
@@ -16,6 +22,30 @@ function turn(index: number, overrides: Partial<TurnRecord> = {}): TurnRecord {
     ...overrides
   }
 }
+
+describe('forkTerminal session isolation', () => {
+  it('starts a Pi fork without the source session id or session flags', () => {
+    const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'cookrew-pi-fork-')))
+    const source = store.addNode({
+      kind: 'terminal', id: 'pi-source', name: 'Pi Agent', preset: 'Pi',
+      command: 'pi --model sonnet --session old-session --resume', cwd: '/work/repo',
+      orch: false, role: null, piSessionId: 'old-session',
+      position: { x: 0, y: 0 }, size: { width: 400, height: 300 }
+    }) as TerminalNodeData
+    const spawned: TerminalNodeData[] = []
+    const deps = {
+      store,
+      ptys: { get: () => undefined },
+      turns: { history: () => [turn(1)] },
+      spawnTerminal: (node: TerminalNodeData) => spawned.push(node)
+    } as unknown as ForkDeps
+
+    const forked = forkTerminal(deps, source.id, 1)
+    expect(forked.command).toBe('pi --model sonnet')
+    expect(forked.piSessionId).toBeNull()
+    expect(spawned).toEqual([expect.objectContaining({ id: forked.id, piSessionId: null })])
+  })
+})
 
 describe('appendTurnRecord', () => {
   it('assigns 1-based monotonic indexes', () => {

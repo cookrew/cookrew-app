@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionTurnSync } from '../src/main/session-sync'
+import { parseSessionTurns } from '../src/shared/session-turns'
 import { TurnTracker } from '../src/main/turn-tracker'
 import { TurnStore } from '../src/main/turn-store'
 import type { TurnRecord } from '../src/shared/turn'
@@ -44,7 +45,7 @@ describe('SessionTurnSync', () => {
   it('rebuilds history from the session file immediately on watch', () => {
     const { file, tracker, sync } = fixture()
     writeFileSync(file, [...TURN_1, ...TURN_2].join('\n') + '\n', 'utf8')
-    sync.watch('term-1', file)
+    sync.watch('term-1', file, parseSessionTurns)
     const history = tracker.history('term-1')
     expect(history.map((r) => r.prompt)).toEqual(['turn one', 'turn two'])
     expect(history.map((r) => r.index)).toEqual([1, 2])
@@ -55,7 +56,7 @@ describe('SessionTurnSync', () => {
     vi.useFakeTimers()
     const { file, tracker, sync } = fixture()
     writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
-    sync.watch('term-1', file)
+    sync.watch('term-1', file, parseSessionTurns)
     expect(tracker.history('term-1')).toHaveLength(1)
 
     writeFileSync(file, [...TURN_1, ...TURN_2].join('\n') + '\n', 'utf8')
@@ -68,7 +69,7 @@ describe('SessionTurnSync', () => {
     vi.useFakeTimers()
     const { file, tracker, sync } = fixture()
     writeFileSync(file, [...TURN_1, ...TURN_2].join('\n') + '\n', 'utf8')
-    sync.watch('term-1', file)
+    sync.watch('term-1', file, parseSessionTurns)
     expect(tracker.history('term-1')).toHaveLength(2)
 
     writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
@@ -82,12 +83,26 @@ describe('SessionTurnSync', () => {
   it('waits quietly for a session file that does not exist yet', async () => {
     vi.useFakeTimers()
     const { file, tracker, sync } = fixture()
-    sync.watch('term-1', file)
+    sync.watch('term-1', file, parseSessionTurns)
     expect(tracker.history('term-1')).toEqual([])
 
     writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
     await vi.advanceTimersByTimeAsync(200)
     expect(tracker.history('term-1')).toHaveLength(1)
+    sync.dispose()
+  })
+
+  it('uses the harness parser passed to watch (non-Claude session formats)', () => {
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, 'whatever\n', 'utf8')
+    const parse = (lines: string[]): TurnRecord[] => [
+      { index: 1, prompt: `saw:${lines[0]}`, reply: 'r', uuid: 'x1', startedAt: 1, endedAt: 2 }
+    ]
+    sync.watch('term-1', file, parse)
+    const history = tracker.history('term-1')
+    expect(history).toHaveLength(1)
+    expect(history[0].prompt).toBe('saw:whatever')
+    expect(history[0].uuid).toBe('x1')
     sync.dispose()
   })
 })
@@ -303,5 +318,72 @@ describe('TurnTracker.replaceHistory', () => {
       { index: 1, prompt: 'commit and push', reply: 'done longer', uuid: 'u-1', startedAt: 1, endedAt: 2 }
     ])
     expect(tracker.history('term-1')[0].title).toBe('Commit and push')
+  })
+})
+
+// REFACTOR STEP 4 (checkpoint-as-identity): SessionTurnSync is the ONLY thing
+// allowed to take a terminal off the scrape path, and only once a reconcile
+// has actually landed. Declaring turns: 'file' is not enough — between spawn
+// and the first session-file write nothing could record at all.
+describe('SessionTurnSync history-source handover', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('leaves the terminal scraping while the session file does not exist yet', () => {
+    const { file, tracker, sync } = fixture()
+    const sources: Array<[string, string]> = []
+    tracker.setHistorySource = (id, source) => void sources.push([id, source])
+
+    sync.watch('term-1', file, parseSessionTurns) // file not written yet
+    expect(sources).toEqual([['term-1', 'scrape']])
+    sync.dispose()
+  })
+
+  it('hands history over to the file on the first successful reconcile', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    const sources: Array<[string, string]> = []
+    tracker.setHistorySource = (id, source) => void sources.push([id, source])
+
+    sync.watch('term-1', file, parseSessionTurns)
+    expect(sources.at(-1)).toEqual(['term-1', 'scrape'])
+
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    await vi.advanceTimersByTimeAsync(200)
+    expect(sources.at(-1)).toEqual(['term-1', 'file'])
+    sync.dispose()
+  })
+
+  it('puts the terminal BACK on the scrape until a rebound file proves itself', () => {
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parseSessionTurns)
+
+    const sources: Array<[string, string]> = []
+    tracker.setHistorySource = (id, source) => void sources.push([id, source])
+    // Restore/rewind rebinds the node to a session file that does not exist
+    // yet — the window reopens, so the scrape has to cover it again.
+    sync.watch('term-1', path.join(path.dirname(file), 'rebound.jsonl'), parseSessionTurns)
+    expect(sources).toEqual([['term-1', 'scrape']])
+    sync.dispose()
+  })
+
+  it('returns the terminal to the scrape path on unwatch and dispose', () => {
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parseSessionTurns)
+
+    const sources: Array<[string, string]> = []
+    tracker.setHistorySource = (id, source) => void sources.push([id, source])
+    sync.unwatch('term-1')
+    expect(sources).toEqual([['term-1', 'scrape']])
+
+    const second = fixture()
+    second.sync.watch('term-2', file, parseSessionTurns)
+    const disposed: Array<[string, string]> = []
+    second.tracker.setHistorySource = (id, source) => void disposed.push([id, source])
+    second.sync.dispose()
+    expect(disposed).toEqual([['term-2', 'scrape']])
   })
 })

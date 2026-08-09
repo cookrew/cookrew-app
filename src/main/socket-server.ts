@@ -3,6 +3,7 @@ import { existsSync, unlinkSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import {
   AgentRole,
+  BrowserNodeData,
   CanvasNode,
   CliRequest,
   CliResponse,
@@ -17,6 +18,9 @@ import {
   WorkspaceMeta
 } from '../shared/model'
 import { WorkspaceStore, WorkspaceNodeHit } from './store'
+import type { MobileEndpoint } from './mobile-endpoints'
+import { renderMobileHelp, renderRotated } from './mobile-cli-text'
+import { readProxyConfig, tailnetProxyGaps } from './proxy-bypass'
 import { AgentRegistry, AgentRegistryEntry } from './agent-registry'
 import { planRecruitTarget } from '../shared/workspace-dirs'
 import { PtyManager } from './pty'
@@ -48,6 +52,13 @@ export interface SocketServerDeps {
   voice: VoiceEngine
   /** LAN URLs of the mobile companion server. */
   mobileUrls: () => string[]
+  /** The same endpoints, classified (tailnet / LAN) and ordered. */
+  mobileEndpoints: () => MobileEndpoint[]
+  /** Endpoint hosts the running HTTPS cert does not cover. */
+  uncoveredCertHosts: () => string[]
+  /** Revoke the pairing token; every paired device must re-pair. */
+  rotatePairingToken: () => string
+  /** LAN URLs of the TV wall (HTTP, wall-token bearing). */
   /** Workspace registry + switching (switching rebuilds PTYs). */
   listWorkspaces: () => WorkspaceList
   createWorkspace: (name: string, dir: string) => WorkspaceMeta
@@ -190,13 +201,13 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
       deps.notify(args.join(' '))
       return 'OK'
     case 'browser':
-      return deps.browserCommand(args, request.terminalId)
+      return cmdBrowser(request, deps)
     case 'routine':
       return cmdRoutine(request, deps)
     case 'voice':
       return cmdVoice(request, deps)
     case 'mobile':
-      return cmdMobile(deps)
+      return cmdMobile(request, deps)
     case 'workspace':
       return cmdWorkspace(request, deps)
     case 'team':
@@ -219,7 +230,46 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
 }
 
 function self(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
+  // `--as "Agent Name"`: the caller is a plain shell, not a pane, so it names
+  // the terminal to speak as. Only consulted when there is no pane identity —
+  // an agent inside its own pane can never impersonate another by passing it.
+  if (!request.terminalId && typeof request.flags.as === 'string') {
+    return resolveSelfByName(request.flags.as, deps.store, deps.agents)
+  }
   return resolveSelf(request.terminalId, deps.store, deps.agents)
+}
+
+/**
+ * Resolve a caller identity from an agent NAME.
+ *
+ * Exists for `cookrew` on the system PATH: outside a pane there is no terminal
+ * id, and every identity-scoped command needs one. Names are what the user
+ * actually knows — they are what the canvas and `cookrew list` show.
+ *
+ * Ambiguity is an ERROR, not a first match: two agents may share a name across
+ * workspaces, and silently picking one would send a prompt to the wrong agent.
+ */
+export function resolveSelfByName(
+  name: string,
+  store: WorkspaceStore,
+  agents?: AgentRegistry
+): TerminalNodeData {
+  const wanted = name.trim().toLowerCase()
+  const matches = (store.terminalsAcross?.() ?? store.terminals()).filter(
+    (t) => t.name.trim().toLowerCase() === wanted
+  )
+  if (matches.length === 1) return matches[0]
+  if (matches.length > 1) {
+    throw new Error(
+      `More than one terminal is named "${name}". Run it from that agent's own ` +
+        'terminal, or rename one so the name is unambiguous.'
+    )
+  }
+  // Same reboot-safe fallback resolveSelf has: the registry outlives workspace
+  // files, so a name it still knows is a valid identity.
+  const entry = agents?.list().find((e) => e.name.trim().toLowerCase() === wanted)
+  if (entry) return terminalFromRegistry(entry)
+  throw new Error(`No terminal named "${name}". See: cookrew list --all`)
 }
 
 /** Minimal terminal node synthesized from a registry entry (reboot fallback). */
@@ -282,6 +332,14 @@ export function resolveSelf(
       )
     }
   }
+  if (!terminalId) {
+    // The `cookrew` on the system PATH lands here: a plain shell has no pane,
+    // so say what to do rather than only what is wrong.
+    throw new Error(
+      'No caller identity: this shell is not a Cookrew terminal. Name one with ' +
+        '--as, e.g. `cookrew --as "Conductor" list`, or use `cookrew list --all`.'
+    )
+  }
   throw new Error('This shell is not attached to a Cookrew terminal node')
 }
 
@@ -313,6 +371,93 @@ function findConnected(
   throw new Error(`${kind === 'terminal' ? 'Agent' : kind} '${name}' not found among your connections. Run 'cookrew list'.`)
 }
 
+/**
+ * Why browser commands need a scope check that `ask`/`check`/`note` do not:
+ * those act on store data or a tmux session, which resolveSelf deliberately
+ * reaches ACROSS workspaces so an orch keeps working after a switch. A browser
+ * is different — it is driven through a webview (or a headless instance) that
+ * exists only for the ACTIVE workspace, while `cookrew list` enumerates
+ * connections across all of them. That mismatch produced a closed loop: list
+ * advertised a browser, the webview lookup answered "not found. Run 'cookrew
+ * list'", and an agent could bounce between the two forever. Refuse up front,
+ * naming the workspace to switch to. Pure so the wording is pinned by tests.
+ */
+export function browserWorkspaceError(scope: {
+  active: { id: string; name: string }
+  /** Workspace holding the CALLING terminal; absent = registry-only (post
+   *  reboot), which is not evidence of a cross-workspace call. */
+  caller?: { id: string; name: string }
+  /** The browser the subcommand names, when it resolves to a connected node. */
+  browser?: { name: string; workspaceId: string; workspaceName: string }
+}): string | null {
+  // The browser's own home is the more actionable answer, so it wins.
+  if (scope.browser && scope.browser.workspaceId !== scope.active.id) {
+    return (
+      `Browser '${scope.browser.name}' lives in workspace "${scope.browser.workspaceName}", ` +
+      `but "${scope.active.name}" is active. Browsers are driven in the active workspace only — ` +
+      `switch with: cookrew workspace switch "${scope.browser.workspaceName}"`
+    )
+  }
+  if (scope.caller && scope.caller.id !== scope.active.id) {
+    return (
+      `Your terminal lives in workspace "${scope.caller.name}", but "${scope.active.name}" is active. ` +
+      `Browser commands run in the active workspace only — ` +
+      `switch with: cookrew workspace switch "${scope.caller.name}"`
+    )
+  }
+  return null
+}
+
+export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): Promise<string> {
+  const me = self(request, deps)
+  const activeId = deps.store.activeId
+  const active = { id: activeId, name: workspaceName(deps, activeId) }
+  const [sub, name] = request.args
+
+  // Only `create` cares where the CALLER lives: it anchors the new node to the
+  // caller's position and connects the two, which is impossible across a
+  // workspace boundary. Every other subcommand just needs the BROWSER to be
+  // here, so a caller parked elsewhere must keep working (it did before).
+  if (sub === 'create') {
+    if (!deps.store.node(me.id)) {
+      const home = deps.store.workspaceOfNode(me.id)
+      const error = browserWorkspaceError({
+        active,
+        caller: home ? { id: home.id, name: home.name } : undefined
+      })
+      if (error) throw new Error(error)
+    }
+    return deps.browserCommand(request.args, request.terminalId)
+  }
+
+  // Fast path (this runs per snapshot/click/type): an in-memory scan of the
+  // ACTIVE workspace. Only when the name misses here do we pay the
+  // across-workspaces reads — i.e. on the error path, never in the hot loop.
+  // Resolving locally first also means a local browser always wins over a
+  // same-named one parked elsewhere, matching what the engines will drive.
+  if (name && !deps.store.nodeByName(name, 'browser')) {
+    const parked = connectedOf(deps.store, me.id).find(
+      (h) => h.node.kind === 'browser' && h.node.name.toLowerCase() === name.toLowerCase()
+    )
+    const error = parked
+      ? browserWorkspaceError({
+          active,
+          browser: {
+            name: parked.node.name,
+            workspaceId: parked.workspaceId,
+            workspaceName: workspaceName(deps, parked.workspaceId)
+          }
+        })
+      : null
+    if (error) throw new Error(error)
+  }
+  return deps.browserCommand(request.args, request.terminalId)
+}
+
+function workspaceName(deps: SocketServerDeps, id: string): string {
+  return deps.listWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id
+}
+
 function cmdList(request: CliRequest, deps: SocketServerDeps): string {
   if (request.flags.all) return cmdListAll(deps)
   const me = self(request, deps)
@@ -322,7 +467,7 @@ function cmdList(request: CliRequest, deps: SocketServerDeps): string {
   const connected = connectedOf(deps.store, me.id)
   const agents = connected.filter((h) => h.node.kind === 'terminal')
   const notes = connected.map((h) => h.node).filter((n) => n.kind === 'note') as NoteNodeData[]
-  const browsers = connected.map((h) => h.node).filter((n) => n.kind === 'browser')
+  const browsers = connected.filter((h) => h.node.kind === 'browser')
 
   const lines: string[] = ['You:', `  - name: "${me.name}", orch: ${me.orch}`]
   if (agents.length > 0) {
@@ -335,7 +480,17 @@ function cmdList(request: CliRequest, deps: SocketServerDeps): string {
   }
   if (browsers.length > 0) {
     lines.push('', 'Connected browsers (use `cookrew browser ...`):')
-    for (const p of browsers) lines.push(`  - name: "${p.name}" - url: ${(p as { url: string }).url}`)
+    for (const h of browsers) {
+      const p = h.node as BrowserNodeData
+      // Agents already carried this tag; browsers did not, so a listing could
+      // advertise one that `cookrew browser ...` then refuses (it is driven in
+      // the active workspace only). Say where it lives, and that it is parked.
+      const ws =
+        h.workspaceId !== activeId
+          ? ` [workspace: ${wsName(h.workspaceId)} — switch to use it]`
+          : ''
+      lines.push(`  - name: "${p.name}" - url: ${p.url}${ws}`)
+    }
   }
   if (notes.length > 0) {
     lines.push('', 'Connected notes (use `cookrew note read/write/edit`):')
@@ -706,20 +861,29 @@ async function cmdGit(request: CliRequest, deps: SocketServerDeps): Promise<stri
   return `${info.branch ?? 'detached'} — ${state}  (${info.root})`
 }
 
-function cmdMobile(deps: SocketServerDeps): string {
-  const urls = deps.mobileUrls()
-  const secure = urls.some((u) => u.startsWith('https'))
-  return [
-    'Cookrew Mobile — open on your phone (same Wi-Fi):',
-    ...urls.map((u) => `  ${u}`),
-    '',
-    secure
-      ? 'These are HTTPS (self-signed): the phone will warn once — tap Advanced →\nProceed / Visit anyway. HTTPS is required so 🎙️ voice dictation can use the mic.'
-      : '⚠ HTTP only (openssl not found): 🎙️ voice dictation needs HTTPS, so the mic\nwill be blocked on the phone. Everything else works.',
-    '',
-    'The client lists terminals, tails output, sends prompts, does 🎙️ dictation',
-    'and reads replies aloud (Web Speech API).'
-  ].join('\n')
+export function cmdMobile(request: CliRequest, deps: SocketServerDeps): string {
+  // `flags`, not `args`: the CLI's parseArgv routes every `--token` into flags
+  // and leaves args empty, so reading args[0] here meant `cookrew mobile
+  // --rotate` exited 0, printed the ordinary URL list, and revoked NOTHING.
+  // Silent success on a revocation path is the dangerous shape — an operator
+  // burning a leaked token would believe it was dead while it stayed live.
+  if (request.flags.rotate === true) {
+    deps.rotatePairingToken()
+    return renderRotated(deps.mobileEndpoints())
+  }
+  const endpoints = deps.mobileEndpoints()
+  const tailnetHosts = endpoints
+    .filter((endpoint) => endpoint.kind === 'tailscale')
+    .map((endpoint) => endpoint.host)
+  return renderMobileHelp({
+    endpoints,
+    secure: endpoints.some((endpoint) => endpoint.url.startsWith('https')),
+    uncovered: deps.uncoveredCertHosts(),
+    tailnet: endpoints.some((endpoint) => endpoint.kind === 'tailscale'),
+    // Read at print time, not at startup: the user may well fix their bypass
+    // list because of this warning, and the next run should stop nagging.
+    proxyBypassGaps: tailnetProxyGaps(tailnetHosts, readProxyConfig())
+  })
 }
 
 function cmdRoutine(request: CliRequest, deps: SocketServerDeps): string {

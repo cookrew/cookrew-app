@@ -4,15 +4,31 @@ import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './store'
-import { PtyManager } from './pty'
+import { PtyManager, multiplexer, sessionNameFor } from './pty'
 import type { PtySession } from './pty'
 import { TurnTracker } from './turn-tracker'
 import { TurnStore } from './turn-store'
+import {
+  boardSourcesFrom,
+  buildBoard,
+  boardWindowMs,
+  createProbeSampler,
+  tmuxProbeDeps
+} from './board-index'
+import { loadOrCreateReadOnlyToken } from './readonly-token'
+import { loadOrCreatePairingToken } from './pairing-token'
+import { searchTurns } from '../shared/turn-search'
 import { summarizeTurn } from './sous'
 import { startSocketServer } from './socket-server'
 import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
-import { startMobileServer, mobileUrls } from './mobile-server'
+import {
+  startMobileServer,
+  mobileUrls,
+  mobileEndpointList,
+  uncoveredCertHosts,
+  rotateActivePairingToken
+} from './mobile-server'
 import {
   activeBrowserTab,
   AgentRole,
@@ -23,6 +39,7 @@ import {
   DEFAULT_TERMINAL_SIZE,
   TeamForkSpec,
   RecoverResult,
+  RestoreResult,
   TeamMeta,
   TerminalNodeData,
   WorkspaceMeta
@@ -43,8 +60,11 @@ import {
 } from './claude-fork'
 import { isCodexCommand, resolveCodexRolloutByPid } from './codex-bind'
 import { isOpenCodeCommand, resolveOpencodeSessionByPid } from './opencode-bind'
+import { isPiCommand, piLaunchBinding, resolvePiSessionByPane } from './pi-bind'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
+import { createRestoreHandlers, registerRestoreIpc, RestoreHandlers } from './restore'
+import { withSessionLineage } from './session-lineage'
 import { createBrowserCast } from './browser-cast'
 import { findChrome } from './headless-chrome'
 import { HeadlessBrowserManager } from './headless-browser-manager'
@@ -64,7 +84,33 @@ const dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const store = new WorkspaceStore()
 const ptys = new PtyManager()
-const turns = new TurnTracker(summarizeTurn, new TurnStore())
+// Held rather than inlined: both the Activity Board and checkpoint search read
+// the WHOLE ledger (turnStore.loadAll()) to span workspaces the tracker cannot
+// see. A second TurnStore would be a second cache serving stale turns.
+const turnStore = new TurnStore()
+// Read-only SCOPE token, persisted 0600 (~/.cookrew/wall-token). Authorizes
+// GETs on the same routes as the pairing token — not a separate interface.
+const wallToken = loadOrCreateReadOnlyToken()
+/**
+ * Pairing credential, passed EXPLICITLY so it reaches handleMobileApi. Without
+ * this the token only ever reached the pairing URL builder, leaving
+ * mobile-api's gate — and therefore /api/board — reading
+ * `deps.pairingToken === undefined` and letting every request through.
+ *
+ * PERSISTED (~/.cookrew/pairing-token, 0600) rather than minted per run: a
+ * per-run UUID unpaired every phone on every restart, which the phone had no
+ * way to report. Because this value is supplied, it is what mobile-server
+ * adopts — its own persisted fallback is only reached by callers that pass
+ * nothing.
+ */
+const pairingToken = loadOrCreatePairingToken()
+/**
+ * L2 probe: phase for panes the TurnTracker cannot see (any workspace but the
+ * active one). Only DETACHED sessions are captured — attached terminals are
+ * already full-fidelity L1 — and the sampler parks itself when nothing is
+ * detached, so an idle machine pays nothing.
+ */
+const turns = new TurnTracker(summarizeTurn, turnStore)
 const sessionSync = new SessionTurnSync(turns)
 const routines = new RoutineScheduler(store, ptys)
 const voice = new VoiceEngine()
@@ -72,6 +118,25 @@ const roles = new RoleStore()
 const teams = new TeamStore()
 const gitCache = new GitInfoCache()
 const agents = new AgentRegistry()
+const boardProbe = createProbeSampler(
+  tmuxProbeDeps({
+    knownTerminalIds: () => agents.list().map((entry) => entry.id),
+    isAttached: (terminalId) => ptys.get(terminalId) !== undefined
+  })
+)
+/** Board sources incl. L2; probing restarts lazily whenever the board is read. */
+function boardSources(): ReturnType<typeof boardSourcesFrom> {
+  return boardSourcesFrom({
+    store,
+    turns,
+    turnStore,
+    agents,
+    probe: () => {
+      boardProbe.start()
+      return boardProbe.phases()
+    }
+  })
+}
 const events = new EventLog()
 const recoverable = new RecoverableStore()
 // Snapshot every killed terminal (node + position + session refs + edges)
@@ -128,6 +193,15 @@ function recordSpawn(terminalId: string, session: PtySession): void {
   })
 }
 
+/**
+ * Slow retry tail for session-bind polls: after the fast spawn schedule runs
+ * out, keep retrying once a minute until the bind lands or the terminal goes
+ * away. Without this, an agent whose first session file appears late (or
+ * whose lsof window is missed) stays unbound FOREVER — which is exactly how
+ * the live Pi terminal ended up with no endpoint history.
+ */
+const BIND_RETRY_TAIL_MS = 60_000
+
 /** Spawn (or reuse) a PTY for a terminal node and register turn tracking. */
 function spawnTracked(t: {
   id: string
@@ -136,12 +210,13 @@ function spawnTracked(t: {
   claudeSessionId?: string | null
   codexSessionRef?: string | null
   opencodeSessionId?: string | null
+  piSessionId?: string | null
+  sessionLineage?: string[]
 }): void {
   const upgraded = LEGACY_COMMANDS[t.command.trim()]
   const command = upgraded ?? t.command
   if (upgraded) store.updateNodeUnsafe(t.id, { command })
   let effective = command
-  let boundSessionId: string | null = null
   if (isClaudeCommand(command)) {
     // Bind every Claude terminal to a known session id (adopting one already
     // baked into an older fork command) so session-file features — native
@@ -163,52 +238,74 @@ function spawnTracked(t: {
       storedId: t.claudeSessionId,
       turns: turns.history(t.id)
     })
-    if (t.claudeSessionId !== sessionId) store.updateNodeUnsafe(t.id, { claudeSessionId: sessionId })
+    if (t.claudeSessionId !== sessionId) {
+      // Re-resolve = a transition (e.g. the stored id's file vanished after a
+      // /clear): record the old binding on the lineage so the rail keeps the
+      // earlier segment visible and rewind can still cut into it.
+      store.updateNodeUnsafe(t.id, withSessionLineage(t, sessionId))
+    }
     effective = claudeSpawnCommand(command, t.cwd, sessionId)
-    boundSessionId = sessionId
   } else if (isCodexCommand(command) && t.codexSessionRef) {
     // Resume the bound Codex rollout as-is (Tinker: `codex resume <uuid>`,
     // uuid from the rollout filename; global opts kept before the subcommand).
     // Route through resumeKey so the ref is validated, not shelled raw (HIGH-2).
     const harness = harnessFor(command)
     const key = harness?.resumeKey(t.codexSessionRef) ?? null
-    if (harness && key) effective = harness.resumeCommand(command, key)
+    if (harness && key) effective = harness.resumeCommand(command, key, { terminalId: t.id, cwd: t.cwd })
   } else if (isOpenCodeCommand(command) && t.opencodeSessionId) {
     const harness = harnessFor(command)
     const key = harness?.resumeKey(t.opencodeSessionId) ?? null
-    if (harness && key) effective = harness.resumeCommand(command, key)
+    if (harness && key) effective = harness.resumeCommand(command, key, { terminalId: t.id, cwd: t.cwd })
+  } else if (isPiCommand(command)) {
+    // H4: wire the pi-bind machinery so the Pi preset actually uses it.
+    // Every terminal gets an EXCLUSIVE session dir, so two Pi terminals in
+    // the same cwd never share one session tree (the cross-agent race
+    // pi-bind exists to eliminate). A node with a prior session in its dir
+    // resumes it; otherwise a fresh session boots scoped to that dir.
+    const binding = piLaunchBinding({
+      command,
+      cwd: t.cwd,
+      terminalId: t.id,
+      storedSessionId: t.piSessionId
+    })
+    effective = binding.command
+    if (t.piSessionId !== binding.sessionId) {
+      store.updateNodeUnsafe(t.id, { piSessionId: binding.sessionId })
+    }
   }
   const session = ptys.spawn({ terminalId: t.id, command: effective, cwd: t.cwd })
   turns.track(session, command.trim().length > 0)
   recordSpawn(t.id, session)
   // Codex rollout bind (trace-sourced-context-final): the rollout file
-  // appears seconds AFTER boot, so try once after a grace delay; the trace
-  // reader lazily re-binds on first fetch if this attempt is too early.
+  // appears seconds AFTER boot, so poll on a schedule, then keep a slow
+  // retry tail until it binds (BIND_RETRY_TAIL_MS).
   if (isCodexCommand(command) && !t.codexSessionRef) {
     // DETERMINISTIC bind (EXACT-CONTEXT gate): the rollout is the file the
     // codex PROCESS holds open (lsof of the pane pid), never a most-recent
     // mtime guess — so it cannot grab a stray or cross-wire two agents. Poll
     // until the process opens its rollout (at session start / first turn).
     const attempt = (delays: number[]): void => {
-      if (delays.length === 0) return
+      const delay = delays.length === 0 ? BIND_RETRY_TAIL_MS : delays[0]
       setTimeout(() => {
         try {
           const hit = store.nodeAcrossWorkspaces(t.id)
           if (!hit || hit.node.kind !== 'terminal') return
           if ((hit.node as TerminalNodeData).codexSessionRef) return
           const ref = resolveCodexRolloutByPid(ptys.panePid(t.id))
-          if (!ref) return void attempt(delays.slice(1)) // rollout not open yet
+          if (!ref) return void attempt(delays.length === 0 ? [] : delays.slice(1)) // rollout not open yet
           // 1:1 authoritative: a rollout already owned by another node is never
           // reassignable (defense-in-depth; lsof already makes this 1:1).
           if (isRefOwned(store.terminalsAcross(), t.id, 'codexSessionRef', ref)) {
-            return void attempt(delays.slice(1))
+            return void attempt(delays.length === 0 ? [] : delays.slice(1))
           }
           store.updateNodeUnsafe(t.id, { codexSessionRef: ref })
           agents.setSessionRef(t.id, ref)
+          // Rollout bound → durable turn history can start reconciling.
+          watchSessionTurns(t.id)
         } catch (error) {
           console.error('Codex rollout bind failed:', error)
         }
-      }, delays[0])
+      }, delay)
     }
     attempt([3000, 8000, 20000, 45000])
   }
@@ -220,32 +317,95 @@ function spawnTracked(t: {
     // DETERMINISTIC bind via lsof of the pane pid (same 1:1 guarantee as
     // codex) — never an mtime guess that could stray/cross-wire.
     const attempt = (delays: number[]): void => {
-      if (delays.length === 0) return
+      const delay = delays.length === 0 ? BIND_RETRY_TAIL_MS : delays[0]
       setTimeout(() => {
         try {
           const hit = store.nodeAcrossWorkspaces(t.id)
           if (!hit || hit.node.kind !== 'terminal') return
           if ((hit.node as TerminalNodeData).opencodeSessionId) return
           const sid = resolveOpencodeSessionByPid(ptys.panePid(t.id))
-          if (!sid) return void attempt(delays.slice(1))
+          if (!sid) return void attempt(delays.length === 0 ? [] : delays.slice(1))
           if (isRefOwned(store.terminalsAcross(), t.id, 'opencodeSessionId', sid)) {
-            return void attempt(delays.slice(1))
+            return void attempt(delays.length === 0 ? [] : delays.slice(1))
           }
           store.updateNodeUnsafe(t.id, { opencodeSessionId: sid })
           agents.setSessionRef(t.id, sid)
+          // Registry-driven: no-op while opencode is scrape-only, automatic
+          // the day it gains a session-file parser (contract rule 4).
+          watchSessionTurns(t.id)
         } catch (error) {
           console.error('OpenCode session bind failed:', error)
         }
-      }, delays[0])
+      }, delay)
     }
     attempt([3000, 8000, 20000, 45000])
   }
-  // Session-bound terminals: the Claude session JSONL is the source of truth
-  // for turn records — reconcile now (rebuilds legacy scraped records) and
-  // keep reconciling so /rewind truncation and exact prompts flow through.
-  if (boundSessionId !== null) {
-    sessionSync.watch(t.id, claudeSessionFile(t.cwd, boundSessionId))
+  // Pi session bind: a FRESH boot has no session id yet — the file appears
+  // once Pi starts, so poll on a schedule (same recipe as codex/opencode).
+  // Resolution follows the LIVE pane's own launch, not the command we would
+  // build today: a pane created before the exclusive-dir wiring is reattached
+  // as-is by `new-session -A` and keeps writing to pi's shared cwd dir, and
+  // scanning only the exclusive dir left such nodes forever unbound (their
+  // rail degraded to PTY scrapes labelled '(recovered turn)'). Adoption from
+  // the shared dir is gated on the pane's start window plus the 1:1 ownership
+  // check below, so no other agent's session can be taken.
+  if (isPiCommand(command) && !t.piSessionId) {
+    const attempt = (delays: number[]): void => {
+      const delay = delays.length === 0 ? BIND_RETRY_TAIL_MS : delays[0]
+      setTimeout(() => {
+        try {
+          const hit = store.nodeAcrossWorkspaces(t.id)
+          if (!hit || hit.node.kind !== 'terminal') return
+          if ((hit.node as TerminalNodeData).piSessionId) return
+          const pane = ptys.paneLaunch(t.id)
+          const session = resolvePiSessionByPane({
+            cwd: t.cwd,
+            terminalId: t.id,
+            command: pane?.command ?? null,
+            paneStartedAtMs: pane?.startedAtMs ?? null,
+            exclude: claimedPiSessions(t.id)
+          })
+          if (!session) return void attempt(delays.length === 0 ? [] : delays.slice(1))
+          store.updateNodeUnsafe(t.id, { piSessionId: session.id })
+          agents.setSessionRef(t.id, session.id)
+          // Session discovered → durable turn history can start reconciling.
+          watchSessionTurns(t.id)
+        } catch (error) {
+          console.error('Pi session bind failed:', error)
+        }
+      }, delay)
+    }
+    attempt([3000, 8000, 20000, 45000])
   }
+  // Session-bound terminals: the harness session file is the source of truth
+  // for turn records — reconcile now (rebuilds legacy scraped records) and
+  // keep reconciling so truncation and exact prompts flow through. The spec
+  // is harness-generic (harness-integration-contract): any 'file'-capable
+  // harness with a bound session ref gets durable history, not just Claude.
+  watchSessionTurns(t.id)
+}
+
+/** Pi sessions already bound to OTHER terminals — a shared-dir session is
+ *  never reassignable, exactly as for codex rollouts / opencode sessions. */
+function claimedPiSessions(selfId: string): ReadonlySet<string> {
+  return new Set(
+    store
+      .terminalsAcross()
+      .filter((node) => node.id !== selfId && node.piSessionId)
+      .map((node) => node.piSessionId as string)
+  )
+}
+
+/** Start (or refresh) the session-file turn reconcile for a terminal whose
+ *  harness carries 'file' turn history; a no-op for scrape-only/plain shells. */
+function watchSessionTurns(terminalId: string): void {
+  const spec = traces.watchSpec(terminalId)
+  if (!spec) return
+  sessionSync.watch(terminalId, spec.file, spec.parse)
+  // The multiplexer gets the transcript path too, when it models agents —
+  // this is the same fact, and herdr's own detection can use it rather than
+  // inferring the agent's state from what it painted.
+  multiplexer()?.reportAgentSession?.(sessionNameFor(terminalId), spec.file)
 }
 
 /**
@@ -781,7 +941,7 @@ const headlessBrowserCommands = new HeadlessBrowserCommandEngine({
   manager: browserManager,
   addNode,
   updateNode,
-  connectNodes: (aId, bId) => void store.connect(aId, bId)
+  connectNodes: (aId, bId) => void store.connectAcross(aId, bId)
 })
 
 function rendererBrowserCommand(args: string[], terminalId: string): Promise<string> {
@@ -869,6 +1029,21 @@ function createWindow(): void {
   })
 }
 
+// ONE Cookrew per machine, enforced before anything else runs.
+//
+// Two instances do not merely conflict over ports — they FIGHT over the same
+// multiplexer panes. Under herdr every attach uses --takeover, so instance B
+// steals each pane from instance A, A's client exits, A reattaches and steals
+// it back. That churn of near-instant PTY exits lands in node-pty's known
+// ThreadSafeFunction crash window (Napi::Error thrown in CallJS -> libc++
+// abort), which took the whole app down at launch on 2026-08-08 — see the
+// Electron-*-172115.ips crash report. The lock turns "two instances slowly
+// corrupt each other" into "the second instance exits immediately".
+if (!app.requestSingleInstanceLock()) {
+  console.error('Another Cookrew instance is already running — exiting.')
+  app.exit(1)
+}
+
 app.whenReady().then(() => {
   // Dock icon must be set at runtime in dev; packaged builds also bundle
   // resources/icon.icns via the packager config when one is added.
@@ -895,6 +1070,17 @@ app.whenReady().then(() => {
   // so reattached terminals show the (possibly updated) status bar.
   ptys.reloadTmuxConfig()
 
+  // Endpoint restore handlers: rewind a live agent to a checkpoint + undo.
+  const { restoreCheckpoint, undoRestore } = createRestoreHandlers({
+    store,
+    ptys,
+    traces,
+    spawnTracked,
+    // Restore/undo kill the CLI; refuse while a turn is in flight so the
+    // session file is never truncated out from under a writing process.
+    phaseOf: (id) => turns.list().find((a) => a.terminalId === id)?.phase ?? null
+  })
+
   startSocketServer({
     store,
     ptys,
@@ -909,6 +1095,9 @@ app.whenReady().then(() => {
     injectInput,
     voice,
     mobileUrls,
+    mobileEndpoints: mobileEndpointList,
+    uncoveredCertHosts,
+    rotatePairingToken: rotateActivePairingToken,
     listWorkspaces,
     createWorkspace,
     createWorkspaceFromTeam,
@@ -928,15 +1117,21 @@ app.whenReady().then(() => {
   })
   routines.start()
 
-  const mobileClientPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'mobile', 'client.html')
-    : path.join(dirname, '../../mobile/client.html')
   startMobileServer({
     store,
     events,
     agents,
     traces,
+    // Activity Board data plane. Without this /api/board answers 503 —
+    // deliberately, so a missing wire-up is loud instead of an empty board.
+    // probe (L2) is absent until the tmux sampler lands; rows then degrade to
+    // their last known task rather than claiming a phase nobody observed.
+    board: boardSources(),
+    wallToken,
+    pairingToken,
     recoverAgent,
+    restoreCheckpoint,
+    undoRestore,
     ptys,
     voice,
     turns,
@@ -973,13 +1168,12 @@ app.whenReady().then(() => {
     interactiveBrowserEnabled,
     browserThumbRequested: noteBrowserViewed,
     onUpgrade: (request, socket) => browserCast.upgrade(request, socket),
-    clientHtmlPath: mobileClientPath,
     // Built renderer bundle — served to phones so mobile gets the full
     // desktop canvas UI. Dev proxies Vite so phones cannot load stale out/.
     rendererDir: path.join(dirname, '../renderer'),
     rendererDevUrl: process.env.ELECTRON_RENDERER_URL
   })
-  registerIpc()
+  registerIpc({ restoreCheckpoint, undoRestore })
   void browserManager.replaceNodes(store.browsers()).catch(() => undefined)
   createWindow()
 
@@ -1048,7 +1242,7 @@ function broadcast(): void {
   }
 }
 
-function registerIpc(): void {
+function registerIpc(handlers: RestoreHandlers): void {
   store.on('change', broadcast)
 
   // On workspace switch, tear down the outgoing PTYs and boot the incoming
@@ -1118,12 +1312,18 @@ function registerIpc(): void {
 
   // Turn history + fork-from-turn for the canvas cards.
   ipcMain.handle('turn:history', (_e, terminalId: string) => turns.history(terminalId))
+  // Checkpoint search: scan the whole ledger in MAIN and return matches with a
+  // capped snippet. Turn bodies never cross the wire.
+  ipcMain.handle('turn:search', (_e, query: string, limit?: number) =>
+    searchTurns({ ledger: turnStore.loadAll(), query, limit })
+  )
   // Context-view v2: paged transcript windows with full prompt+reply bodies.
   ipcMain.handle('turn:page', (_e, terminalId: string, request?: TurnPageRequest) =>
     pageTurns(turns.history(terminalId), request ?? {})
   )
   // Trace-sourced context: identity-keyed windows straight from agent files.
   ipcMain.handle('trace:index', (_e, terminalId: string) => traces.index(terminalId))
+  ipcMain.handle('trace:markers', (_e, terminalId: string) => traces.boundaryMarkers(terminalId))
   ipcMain.handle('trace:page', (_e, terminalId: string, request?: unknown) =>
     traces.page(terminalId, (request ?? {}) as Parameters<TraceReader['page']>[1])
   )
@@ -1131,7 +1331,17 @@ function registerIpc(): void {
   ipcMain.handle('events:query', (_e, query) => events.query(query ?? {}))
   ipcMain.handle('events:count', (_e, query) => events.count(query ?? {}))
   ipcMain.handle('agents:list', () => agents.list())
+  // Activity Board snapshot for the desktop panel — same builder the HTTP
+  // route and the SSE push use, so the three can never drift apart.
+  ipcMain.handle('board:list', (_e, window?: unknown) =>
+    buildBoard(
+      boardSources(),
+      boardWindowMs(typeof window === 'string' ? window : null)
+    )
+  )
   ipcMain.handle('agent:recover', (_e, id: string) => recoverAgent(id))
+  // Endpoint restore channels live alongside the executor (M10).
+  registerRestoreIpc(ipcMain.handle.bind(ipcMain), handlers)
   ipcMain.handle('terminal:fork', (_e, sourceId: string, turnIndex?: number) =>
     forkTerminal(sourceId, turnIndex)
   )
@@ -1146,7 +1356,11 @@ function registerIpc(): void {
   )
   ipcMain.handle('node:remove', (_e, id: string) => removeNode(id))
 
-  ipcMain.handle('node:connect', (_e, aId: string, bId: string) => store.connect(aId, bId))
+  // connectAcross, not connect: it VALIDATES both ids exist (in any workspace)
+  // and mirrors a legitimate cross-workspace edge. store.connect writes an edge
+  // for any pair of strings, which is how a renderer caller could leave one
+  // pointing at a node the active workspace does not hold.
+  ipcMain.handle('node:connect', (_e, aId: string, bId: string) => store.connectAcross(aId, bId))
   ipcMain.handle('node:disconnect', (_e, connId: string) => store.disconnect(connId))
 
   ipcMain.handle('preset:list', () => PRESETS)
@@ -1198,6 +1412,8 @@ function registerIpc(): void {
   // remounts) call attach repeatedly, and stacked listeners would duplicate
   // every byte of output in the renderer.
   const forwarders = new Map<string, (data: string) => void>()
+  /** Replay-frame forwarders, kept beside `forwarders` so detach drops both. */
+  const replayForwarders = new Map<string, (frame: string) => void>()
   ipcMain.handle('pty:attach', (event, terminalId: string) => {
     const session = ptys.get(terminalId)
     if (!session) return false
@@ -1215,22 +1431,34 @@ function registerIpc(): void {
     }
     forwarders.set(terminalId, listener)
     session.on('data', listener)
-    // Clear the fresh renderer terminal before replaying: the replay is
-    // plain text and cannot reconstruct a TUI's screen state — the popout
-    // follows up with a resize kick to force a authoritative repaint.
-    event.sender.send(
-      `pty:data:${terminalId}`,
-      '\x1b[2J\x1b[3J\x1b[H' + session.viewportText() + '\r\n'
-    )
+    // A geometry change re-serializes the mirror; forward that frame to the
+    // popout so it never keeps applying herdr's absolute-addressed deltas onto
+    // a screen laid out at the previous size. Same listener lifetime as the
+    // data forwarder — pty:detach drops both.
+    const onReplay = (frame: string): void => {
+      if (event.sender.isDestroyed()) return
+      event.sender.send(`pty:data:${terminalId}`, frame)
+    }
+    replayForwarders.set(terminalId, onReplay)
+    session.on('replay', onReplay)
+    // Geometry BEFORE bytes: the frame's wrapping is baked in at the mirror's
+    // columns, so a popout that paints it at its own width re-wraps every long
+    // line. The renderer sizes its xterm from this, then sends the resize kick.
+    event.sender.send(`pty:hello:${terminalId}`, session.geometry())
+    // A faithful ANSI frame, not plain text — see PtySession.replayFrame.
+    event.sender.send(`pty:data:${terminalId}`, session.replayFrame())
     return true
   })
   // The popout detaches on close; without this the forwarder would keep
   // serializing every output chunk to a channel nobody listens on.
   ipcMain.on('pty:detach', (_e, terminalId: string) => {
     const listener = forwarders.get(terminalId)
+    const onReplay = replayForwarders.get(terminalId)
     const session = ptys.get(terminalId)
     if (listener && session) session.removeListener('data', listener)
+    if (onReplay && session) session.removeListener('replay', onReplay)
     forwarders.delete(terminalId)
+    replayForwarders.delete(terminalId)
   })
 
   // Thumbnail frames from the renderer's browser capture loop (data URLs).
