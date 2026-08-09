@@ -97,7 +97,10 @@ describe('replay frame — fidelity', () => {
     expect(frame().startsWith(CLEAR_SCREEN)).toBe(true)
   })
 
-  it('bounds the payload to about a screenful, not the whole 5000-line scrollback', async () => {
+  // 400 awaited xterm writes take ~1s locally and just over vitest's 5s
+  // default on the windows-2022 runner (measured: 5008ms — a timeout, not a
+  // hang). The work is real, so the budget moves rather than the workload.
+  it('bounds the payload to about a screenful, not the whole 5000-line scrollback', { timeout: 30_000 }, async () => {
     // A phone on SSE gets one screen, not a megabyte. The guard is the reason
     // `scrollback: screen.rows` is passed rather than the mirror's capacity.
     const { screen, frame } = mirror(40, 6)
