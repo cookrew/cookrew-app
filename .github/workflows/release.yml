@@ -20,6 +20,13 @@ on:
       - '.github/workflows/release.yml'
       - 'package.json'
 
+# electron-builder publishes to a GitHub release when it detects a tag build,
+# and that path needs a token with release-write access. PR and dispatch runs
+# never enter it, which is exactly how the gap survived every green PR run and
+# surfaced only on the v0.1.0 tag itself.
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -52,6 +59,10 @@ jobs:
       # block Windows artifacts on 16 known POSIX assumptions in tests, which
       # are a portability debt rather than a statement about the build.
       - run: npm run ${{ matrix.script }}
+        env:
+          # Only meaningful on tag builds, where electron-builder publishes
+          # the artifacts to the release for this tag.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/upload-artifact@v4
         with:
