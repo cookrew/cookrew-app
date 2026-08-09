@@ -20,7 +20,8 @@ function backend(id: string, holds: Set<string>, available = true): Multiplexer 
       copyModeSearch: false,
       monotonicHistory: false,
       persistsAcrossRestart: true,
-      agentLifecycle: false
+      agentLifecycle: false,
+      wheelScrollback: false
     },
     available: () => available,
     sessionExists: (name: string) => holds.has(name),

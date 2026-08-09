@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  type FeedPane,
   HerdrStatusFeed,
   panesFrom,
   parseStatusEvent,
@@ -39,7 +40,7 @@ function fakeSocket(): StatusSocket & { emit: (s: string) => void; written: stri
 }
 
 function feedWith(
-  panes: { paneId: string; label: string }[]
+  panes: FeedPane[]
 ): { feed: HerdrStatusFeed; socket: ReturnType<typeof fakeSocket> } {
   const socket = fakeSocket()
   const feed = new HerdrStatusFeed({

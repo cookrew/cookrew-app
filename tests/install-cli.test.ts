@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+// @ts-expect-error scripts/install-cli.mjs ships no types; the test exercises runtime behaviour
 import { launcherScript, pickBinDir } from '../scripts/install-cli.mjs'
 
 /**
@@ -47,11 +48,11 @@ describe('launcherScript', () => {
 describe('pickBinDir', () => {
   it('prefers a user-owned dir over one needing sudo', () => {
     const dirs = ['/home/u/.local/bin', '/usr/local/bin']
-    expect(pickBinDir(dirs, (d) => d.startsWith('/home'))).toBe('/home/u/.local/bin')
+    expect(pickBinDir(dirs, (d: string) => d.startsWith('/home'))).toBe('/home/u/.local/bin')
   })
 
   it('falls through to the system dir when it is genuinely writable', () => {
-    expect(pickBinDir(['/home/u/.local/bin', '/usr/local/bin'], (d) => d === '/usr/local/bin')).toBe(
+    expect(pickBinDir(['/home/u/.local/bin', '/usr/local/bin'], (d: string) => d === '/usr/local/bin')).toBe(
       '/usr/local/bin'
     )
   })

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { resolveSelfByName } from '../src/main/socket-server'
-import type { TerminalNodeData } from '../src/shared/nodes'
+import type { TerminalNodeData } from '../src/shared/model'
 
 /**
  * Identity for a caller that is NOT a pane.
