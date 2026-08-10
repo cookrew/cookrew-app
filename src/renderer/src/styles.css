@@ -232,6 +232,12 @@ body,
   gap: 6px;
 }
 
+/* .cr-btn is worn by <a>s too (popout "open in browser" renders as a real
+   anchor off-desktop so OS deep links fire on the tap). */
+a.cr-btn {
+  text-decoration: none;
+}
+
 .cr-btn:hover {
   background: var(--amber-soft);
 }
@@ -447,6 +453,7 @@ body,
   display: flex;
   gap: 8px;
 }
+
 
 .tool-icon {
   font-size: 11px;
@@ -1220,6 +1227,19 @@ body,
   color: var(--rose);
 }
 
+/* "Open in browser" wears the close button's clothes but is not destructive —
+   hover darkens instead of warning. It renders as a REAL anchor on the phone
+   (a genuine tap is what lets OS deep links fire), so the anchor form needs
+   the same look. No display override: staying inline like the sibling ✕ keeps
+   both icons on the .cr-icon vertical-align baseline. */
+a.card-close {
+  text-decoration: none;
+}
+
+.card-external:hover {
+  color: var(--ink);
+}
+
 /* vi (dark) cards inverse-scale their type via --z — the close button
    follows so it stays a constant, tappable size at overview zoom. */
 .card-close.dark {
@@ -1395,47 +1415,58 @@ body,
   z-index: 2;
 }
 
-.browser-frame-live.with-control {
-  right: 44px;
+/* Zoomed browser controls: viewport fit, keyboard, open-in-browser, floating
+   bottom-right OVER the page. Deliberately NOT the .cr-btn bevel — a solid bar
+   would cost the view its own height, and these sit on top of arbitrary web
+   content, so they stay translucent and let the page read through. */
+.browser-frame-actions {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.browser-frame-control {
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  z-index: 3;
+.browser-frame-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.42);
-  border-radius: 3px;
-  background: rgba(20, 17, 10, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
   color: #fff;
+  font-size: 14px;
+  line-height: 1;
   cursor: pointer;
+  /* Readable over both a white page and a dark one. */
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
 }
 
-.browser-frame-control:hover,
-.browser-frame-control:focus-visible,
-.browser-frame-control.owner {
+.browser-frame-btn:hover,
+.browser-frame-btn:focus-visible,
+.browser-frame-btn.on {
   border-color: var(--hp, #6bbe58);
   color: var(--hp, #6bbe58);
 }
 
-.browser-frame-control:focus-visible {
+.browser-frame-btn:focus-visible {
   outline: 2px solid #fff;
   outline-offset: 2px;
 }
 
-.browser-frame-control:disabled {
+.browser-frame-btn:disabled {
   border-color: rgba(255, 255, 255, 0.24);
   color: rgba(255, 255, 255, 0.5);
   cursor: default;
 }
 
-.browser-frame-control .cr-icon {
+.browser-frame-btn .cr-icon {
   width: 14px;
   height: 14px;
 }
@@ -3540,22 +3571,13 @@ body.cookrew-mobile .cr-dock .voice-ghost {
     flex: 0 0 auto;
   }
 
-  /* Two frames, chosen by what each row competes with. The canvas dock
-     tools keep the 44px tap target — nothing is fighting them for space.
-     The zoomed transcript's own chrome does not: the popout actions above
-     and the send group below bracket the terminal, so every pixel they
-     hold is scrollback the user can't read. Both drop to the 30px frame
-     the header's activity / all-agents / fork buttons already use, which
-     is the smallest target already proven tappable in this UI. */
-  .cr-dock-tools .cr-btn {
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
-    padding: 0;
-    justify-content: center;
-  }
-
+  /* One frame for every icon button on the phone: the 30px the header's
+     activity / all-agents / fork buttons already use. The dock tools used to
+     hold a larger 44px target since nothing competes with them for space, but
+     two button sizes stacked in one column read as a mistake — matching the
+     fork button keeps the whole UI on one rhythm. */
   .popout-header .cr-btn,
+  .cr-dock-tools .cr-btn,
   .voice-bar .cr-btn {
     width: 30px;
     height: 30px;

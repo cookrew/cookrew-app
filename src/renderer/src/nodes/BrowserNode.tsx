@@ -1,6 +1,7 @@
 import { NodeProps, NodeResizer } from '@xyflow/react'
 import { NodeHandles } from './NodeHandles'
 import { CardClose } from './CardClose'
+import { OpenExternal } from './OpenExternal'
 import { CrIcon } from '../icons'
 import type { BrowserNodeData } from '../../../shared/model'
 import { browserTabs } from '../../../shared/model'
@@ -29,6 +30,9 @@ export function BrowserNode({ data, selected }: NodeProps): React.JSX.Element {
       <div className="node-header">
         <span className="node-dot" />
         <span className="node-title">{node.name}</span>
+        {/* Before the url chip, NOT beside the ✕: a navigational control a
+            thumb-width from "destroy this card" is a mis-tap trap on touch. */}
+        <OpenExternal url={node.url} className="card-close card-external" />
         <span className="cr-chip preset-chip browser-url-chip" title={node.url}>
           {shortUrl(node.url)}
         </span>

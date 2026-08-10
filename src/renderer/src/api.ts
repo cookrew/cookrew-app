@@ -220,6 +220,12 @@ export interface CookrewApi {
   onBrowserPhoneViewing: (cb: (browserId: string) => void) => () => void;
   /** Main routes ⌘W here so the renderer can close the topmost layer first. */
   onCmdW: (cb: () => void) => () => void;
+  /**
+   * Open a WEB URL in the system's default browser. Desktop bridge only —
+   * the phone/demo fallbacks render a real anchor instead (see OpenExternal:
+   * on the phone a genuine tap is what makes OS deep links fire).
+   */
+  openExternal?: (url: string) => Promise<void>;
   quitApp: () => void;
 }
 

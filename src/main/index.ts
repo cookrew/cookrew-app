@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -50,6 +50,7 @@ import { AgentRegistry } from './agent-registry'
 import { RecoverableStore, planRecovery } from './recoverable'
 import { EventLog } from './event-log'
 import { isClaudeCommand } from '../shared/claude-fork'
+import { canonicalWebUrl } from '../shared/external-url'
 import {
   claudeSessionFile,
   claudeSpawnCommand,
@@ -1296,6 +1297,18 @@ function registerIpc(handlers: RestoreHandlers): void {
     if (!mainWindow) return null
     const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
     return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
+  })
+
+  // "Open in browser" from a browser card/popout. Validated HERE, not only in
+  // the renderer: shell.openExternal on a non-web scheme launches whatever
+  // local handler claims it. The CANONICAL href is what gets opened — WHATWG
+  // URL strips embedded tab/newline, so validating the raw string and opening
+  // it would let 'ht\ntps://…' pass one parser and mean something else to the
+  // OS one. The `unknown` is honest: type annotations don't cross IPC.
+  ipcMain.handle('shell:openExternal', (_e, url: unknown) => {
+    const canonical = typeof url === 'string' ? canonicalWebUrl(url) : null
+    if (canonical === null) throw new Error('Only http(s) URLs can be opened externally')
+    return shell.openExternal(canonical)
   })
 
   // Turn/summary activity for the canvas cards.

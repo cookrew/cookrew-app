@@ -26,6 +26,7 @@ import { Header } from './Header'
 import { Dock } from './Dock'
 import { TerminalOverlayLayer } from './TerminalOverlay'
 import { useLodLayout } from './zoom-lod'
+import { browserInFullView } from './dock-target'
 import { BrowserLayer, useInteractiveBrowserCapability } from './BrowserLayer'
 import { CanvasUiContext, ToolId } from './canvas-ui'
 import { useBrowserEngine } from './browser-engine'
@@ -546,6 +547,7 @@ function Canvas(): React.JSX.Element {
               ? { id: zoomedTerminalId, activity: activities[zoomedTerminalId] }
               : null
           }
+          browserFor={browserInFullView(lod.primaryId, browsers)}
           connectHint={
             tool === 'connect'
               ? connectFrom

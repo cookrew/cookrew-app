@@ -37,6 +37,12 @@ interface DockProps {
   connectHint: string | null
   /** Zoomed-in terminal: the dock swaps the tool group for its composer. */
   voiceFor: { id: string; activity: TerminalActivity | undefined } | null
+  /**
+   * Zoomed-in browser: the whole bar stands down so the page keeps its height.
+   * The controls that DO apply there (viewport fit, keyboard, open in browser)
+   * float translucently over the frame instead.
+   */
+  browserFor: { id: string; url: string } | null
 }
 
 /**
@@ -44,7 +50,8 @@ interface DockProps {
  * canvas: the tool group (left) plus preset chips and hint. Zoomed into a
  * terminal: the tools glide out left and the send group (attach / mic /
  * speak / send — no input box, the terminal itself is the input) glides
- * in from the right.
+ * in from the right. Zoomed into a browser the bar is absent entirely —
+ * see the early return.
  */
 export function Dock({
   tool,
@@ -58,13 +65,19 @@ export function Dock({
   orch,
   onOrch,
   connectHint,
-  voiceFor
+  voiceFor,
+  browserFor
 }: DockProps): React.JSX.Element {
   const hint = tool === 'connect' ? connectHint : (HINTS[tool] ?? null)
   // Ride above the on-screen keyboard (Defect 2): the dock is position:relative
   // in normal flow, so a `bottom` offset lifts it by the keyboard inset. 0 (and
   // no offset) on desktop / when no keyboard is up.
   const kbInset = useKeyboardInset()
+  // A zoomed browser has no use for ANY of this — every tool places something
+  // on a canvas the page is covering — so the bar leaves entirely and gives its
+  // height back to the page. The browser's own controls float over the frame.
+  // (After every hook: an early return above one breaks the Rules of Hooks.)
+  if (browserFor) return <></>
   return (
     <footer
       className={`cr-dock${voiceFor ? ' zoomed' : ''}`}

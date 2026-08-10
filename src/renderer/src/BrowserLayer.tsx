@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { BrowserNodeData, BrowserTab } from '../../shared/model'
 import { activeBrowserTab, browserTabs } from '../../shared/model'
+import { resolveAddress } from '../../shared/address-bar'
 import {
   findBrowserTabByWebContentsId,
   registerBrowserTab,
@@ -9,6 +10,7 @@ import {
 } from './browser-engine'
 import { cookrew, hasNativeWebview, isRemoteMode } from './api'
 import { MobileBrowserFrame } from './MobileBrowserFrame'
+import { OpenExternal } from './nodes/OpenExternal'
 import { initialBackoff, recordFailure, recordSuccess, shouldCapture } from './capture-backoff'
 import { isSelfEmbedding } from './self-embed'
 import type { ScreenRect } from './zoom-lod'
@@ -217,8 +219,14 @@ function BrowserHost({
     })
   }
 
+  // Resolve what was TYPED into what we NAVIGATE to ("github.com" → the real
+  // URL, unaddressable text → search). The input re-syncs from the tab url, so
+  // the resolved form lands back in the bar the way a browser's does.
   const commitAddress = (): void => {
-    if (address !== activeTab.url) patchTab(activeTab.id, { url: address })
+    const resolved = resolveAddress(address)
+    if (resolved === null) return
+    if (resolved !== activeTab.url) patchTab(activeTab.id, { url: resolved })
+    else setAddress(resolved)
   }
 
   return (
@@ -239,6 +247,9 @@ function BrowserHost({
               if (e.key === 'Enter') commitAddress()
             }}
           />
+          {/* "Open in browser" is NOT here: in full view it lives in the dock's
+              bottom-right, where the tool group would be (see Dock). The header
+              keeps only what re-frames the card itself. */}
           <button
             className="cr-btn sm popout-close"
             title="Back to canvas"
@@ -457,6 +468,7 @@ function BrowserTabView({
           streamEnabled
           desktopStreamToken={client === 'desktop' ? desktopStreamToken : null}
           fallback="loading"
+          actions={zoomed ? <OpenExternal url={tab.url} className="browser-frame-btn" /> : null}
         />
       ) : null
     case 'legacy-blocked':
@@ -478,6 +490,7 @@ function BrowserTabView({
           streamEnabled={false}
           desktopStreamToken={null}
           fallback="thumb"
+          actions={zoomed ? <OpenExternal url={tab.url} className="browser-frame-btn" /> : null}
         />
       ) : null
     case 'legacy-iframe':

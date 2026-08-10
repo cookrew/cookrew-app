@@ -31,6 +31,7 @@ const api = {
     ipcRenderer.invoke('terminal:setCwd', nodeId, dir),
   pickDir: () => ipcRenderer.invoke('dir:pick'),
   gitInfo: (dir: string) => ipcRenderer.invoke('git:info', dir),
+  openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   onWorkspaceList: (cb: (list: unknown) => void) => {
     const listener = (_e: unknown, list: unknown): void => cb(list)
     ipcRenderer.on('workspace:list', listener)
