@@ -15,6 +15,7 @@ import { claudeProjectSlug } from '../src/shared/claude-fork'
 import {
   TeamStore,
   applyWorktreeRemap,
+  copyTeam,
   planTeamFork,
   planWorktrees,
   resolveTerminalContext,
@@ -118,6 +119,9 @@ describe('TeamStore', () => {
     expect(meta.name).toBe('Cookrew Dev')
     expect(meta.nodeCount).toBe(2)
     expect(meta.terminalCount).toBe(1)
+    // The template picker's thumbnail: elements + the cable between them.
+    expect(meta.preview?.items.map((i) => i.kind)).toEqual(['terminal', 'note'])
+    expect(meta.preview?.cables).toEqual([{ a: 'a', b: 'n1' }])
     expect(store.list()).toHaveLength(1)
 
     const loaded = store.load('cookrew dev')
@@ -132,6 +136,37 @@ describe('TeamStore', () => {
     store.save(state(), () => [turn(1)], 'Alpha Team')
     expect(store.list()).toHaveLength(1)
     expect(store.load('Alpha Team')!.turns['a']).toHaveLength(1)
+  })
+
+  it('scopes a save to a selection: nodes, cables with both ends, turns (Figma model)', () => {
+    const store = makeStore()
+    const full: WorkspaceState = {
+      name: 'Cookrew Dev',
+      dir: '/work/repo',
+      dirs: ['/work/repo'],
+      nodes: [terminal('a'), terminal('b'), note('n1')],
+      connections: [
+        { id: 'cab', a: 'a', b: 'b' },
+        { id: 'can', a: 'a', b: 'n1' }
+      ]
+    }
+    const meta = store.save(full, (id) => (id === 'a' ? [turn(1)] : [turn(1), turn(2)]), 'Duo', [
+      'a',
+      'n1'
+    ])
+    expect(meta.nodeCount).toBe(2)
+    expect(meta.terminalCount).toBe(1)
+    const loaded = store.load('Duo')!
+    expect(loaded.nodes.map((n) => n.id)).toEqual(['a', 'n1'])
+    // cab reaches the unselected 'b' — a dangling cable must not travel.
+    expect(loaded.connections.map((c) => c.id)).toEqual(['can'])
+    // Only the selected terminal's history is snapshotted.
+    expect(Object.keys(loaded.turns)).toEqual(['a'])
+  })
+
+  it('rejects a selection that matches nothing', () => {
+    const store = makeStore()
+    expect(() => store.save(state(), () => [], 'Ghost', ['nope'])).toThrow(/matched nothing/)
   })
 })
 
@@ -620,5 +655,287 @@ describe('workspaceFromTemplate (FEATURE 1: workspace from team template)', () =
     await expect(
       workspaceFromTemplate(deps, { name: 'X', dir: '/work/fresh', team: 'Nope' })
     ).rejects.toThrow(/No saved team 'Nope'/)
+  })
+})
+
+describe('copyTeam (Figma copy into an existing workspace)', () => {
+  function copyDeps(history: TurnRecord[] = []): {
+    deps: Parameters<typeof copyTeam>[0]
+    store: WorkspaceStore
+    adopted: CanvasNode[]
+  } {
+    const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'cookrew-copy-store-')))
+    const adopted: CanvasNode[] = []
+    const deps = {
+      store,
+      turns: { history: () => history } as unknown as Parameters<typeof copyTeam>[0]['turns'],
+      roles: { get: () => undefined } as unknown as Parameters<typeof copyTeam>[0]['roles'],
+      teams: new TeamStore(mkdtempSync(path.join(tmpdir(), 'cookrew-copy-teams-'))),
+      ptys: { get: () => undefined } as unknown as Parameters<typeof copyTeam>[0]['ptys'],
+      switchWorkspace: (id: string) => void store.switchWorkspace(id),
+      adoptNode: (n: CanvasNode) => void adopted.push(n),
+      git: {
+        gitInfo: async () => ({ isRepo: false, root: null, branch: null, dirty: false, ahead: 0, behind: 0 }),
+        addWorktree: async () => ({ ok: false as const, error: 'off' })
+      },
+      worktreeRoot: mkdtempSync(path.join(tmpdir(), 'cookrew-copy-wt-'))
+    }
+    return { deps, store, adopted }
+  }
+
+  function seedSelection(store: WorkspaceStore): { aId: string; bId: string; noteId: string } {
+    const a = store.addNode(terminal('src-a'))
+    const b = store.addNode(terminal('src-b', { name: 'Sous' }))
+    const n = store.addNode(note('src-n'))
+    store.connect(a.id, b.id)
+    store.connect(b.id, n.id)
+    return { aId: a.id, bId: b.id, noteId: n.id }
+  }
+
+  it('appends copies + inner cables to an INACTIVE workspace without switching or booting', async () => {
+    const { deps, store, adopted } = copyDeps()
+    const { aId, bId } = seedSelection(store)
+    const sourceWsId = store.activeId
+    const target = store.createWorkspace('Staging', '/work/staging')
+
+    const result = await copyTeam(deps, { nodeIds: [aId, bId], intoWorkspaceId: target.id })
+    expect(result).toMatchObject({
+      workspaceId: target.id,
+      workspaceName: 'Staging',
+      copiedNodes: 2,
+      copiedCables: 1
+    })
+    // No switch, no boot: inactive targets come alive on activation.
+    expect(store.activeId).toBe(sourceWsId)
+    expect(adopted).toEqual([])
+
+    const targetState = store.workspaceState(target.id)
+    expect(targetState.nodes).toHaveLength(2)
+    // Fresh ids — the source nodes stay untouched on their canvas.
+    expect(targetState.nodes.map((n) => n.id)).not.toContain(aId)
+    expect(store.state.nodes).toHaveLength(3)
+    // The a↔b cable traveled; the cable reaching the unselected note did not.
+    expect(targetState.connections).toHaveLength(1)
+    // Figma paste nudge, so a copy never lands pixel-exact on its source.
+    expect(targetState.nodes[0].position).toEqual({ x: 42, y: 52 })
+    // Copies adopt the TARGET's workdir: the source cwd (/work/repo) is not
+    // in the target's dir list, so terminals land in the target primary and
+    // the dir list itself is untouched.
+    const copiedTerminals = targetState.nodes.filter(
+      (n): n is TerminalNodeData => n.kind === 'terminal'
+    )
+    expect(copiedTerminals.every((t) => t.cwd === '/work/staging')).toBe(true)
+    expect(store.workspaceState(target.id).dirs).toEqual(['/work/staging'])
+  })
+
+  it('refuses to copy WORKING agents, by name', async () => {
+    const { deps, store } = copyDeps()
+    const { aId, bId } = seedSelection(store)
+    const target = store.createWorkspace('Staging', '/work/staging')
+    const guarded = { ...deps, isWorking: (id: string) => id === aId }
+    await expect(
+      copyTeam(guarded, { nodeIds: [aId, bId], intoWorkspaceId: target.id })
+    ).rejects.toThrow(/Working agents can't be copied — wait for “Agent src-a”/)
+  })
+
+  it('pastes from an INACTIVE source workspace (fromWorkspaceId, post-switch)', async () => {
+    const { deps, store, adopted } = copyDeps()
+    const { aId, bId } = seedSelection(store)
+    const sourceWsId = store.activeId
+    const target = store.createWorkspace('Staging', '/work/staging')
+    store.switchWorkspace(target.id)
+
+    const result = await copyTeam(deps, {
+      nodeIds: [aId, bId],
+      intoWorkspaceId: target.id,
+      fromWorkspaceId: sourceWsId
+    })
+    expect(result.copiedNodes).toBe(2)
+    expect(result.copiedCables).toBe(1)
+    // Landed on the now-active canvas: adopted (booted) and re-homed to the
+    // target's workdir; the source workspace keeps its originals.
+    expect(adopted).toHaveLength(2)
+    const copied = store.state.nodes.filter((n): n is TerminalNodeData => n.kind === 'terminal')
+    expect(copied.every((t) => t.cwd === '/work/staging')).toBe(true)
+    expect(store.workspaceState(sourceWsId).nodes).toHaveLength(3)
+  })
+
+  it('copy into the ACTIVE workspace duplicates in place and adopts every node', async () => {
+    const { deps, store, adopted } = copyDeps()
+    const { aId } = seedSelection(store)
+    const web = store.addNode({
+      kind: 'browser',
+      id: 'src-web',
+      name: 'Docs',
+      url: 'https://example.com',
+      position: { x: 900, y: 20 },
+      size: { width: 400, height: 300 }
+    })
+
+    const result = await copyTeam(deps, {
+      nodeIds: [aId, web.id],
+      intoWorkspaceId: store.activeId
+    })
+    expect(result.copiedNodes).toBe(2)
+    // EVERY kind is adopted (terminals spawn, browsers sync) — not just
+    // terminals; a copied browser must not render as a dead card.
+    expect(adopted.map((n) => n.kind).sort()).toEqual(['browser', 'terminal'])
+    // The duplicate gets a unique name next to its source.
+    const names = store.state.nodes.map((n) => n.name)
+    expect(new Set(names).size).toBe(names.length)
+  })
+
+  it('NEVER carries a harness session binding onto the copy', async () => {
+    const { deps, store } = copyDeps()
+    const src = store.addNode(
+      terminal('src-bound', {
+        command: 'codex',
+        claudeSessionId: 'sess-1',
+        codexSessionRef: '/rollouts/live.jsonl',
+        opencodeSessionId: 'oc-1',
+        piSessionId: 'pi-1',
+        sessionLineage: ['sess-0'],
+        restoreStack: [{ rewoundToIndex: 1 } as never]
+      })
+    )
+    const target = store.createWorkspace('Staging', '/work/staging')
+    await copyTeam(deps, { nodeIds: [src.id], intoWorkspaceId: target.id })
+
+    const copy = store.workspaceState(target.id).nodes[0] as TerminalNodeData
+    // An inherited codexSessionRef would `codex resume` the SOURCE's live
+    // rollout — two processes appending to one session file.
+    expect(copy.claudeSessionId).toBeNull()
+    expect(copy.codexSessionRef).toBeNull()
+    expect(copy.opencodeSessionId).toBeNull()
+    expect(copy.piSessionId).toBeNull()
+    expect(copy.sessionLineage).toBeUndefined()
+    expect(copy.restoreStack).toBeUndefined()
+  })
+
+  it('stashes the context preamble for INACTIVE targets (pendingInject)', async () => {
+    const { deps, store } = copyDeps([turn(1)])
+    const src = store.addNode(terminal('src-codex', { command: 'codex' }))
+    const target = store.createWorkspace('Staging', '/work/staging')
+    await copyTeam(deps, { nodeIds: [src.id], intoWorkspaceId: target.id })
+
+    // A preamble-based agent (codex) cannot be injected into a PTY that
+    // does not exist yet — the switch boot delivers this later. Without it
+    // the copy would boot fresh while wearing a forkOf badge.
+    const copy = store.workspaceState(target.id).nodes[0] as TerminalNodeData
+    expect(copy.pendingInject).toEqual(expect.stringContaining('prompt 1'))
+  })
+
+  it('preserveIdentity MOVES notes/browsers: same id, same position, cables re-homed', async () => {
+    const { deps, store } = copyDeps()
+    const a = store.addNode(terminal('src-a'))
+    const n = store.addNode(note('src-n'))
+    store.connect(a.id, n.id)
+    const target = store.createWorkspace('Staging', '/work/staging')
+
+    await copyTeam(deps, {
+      nodeIds: [a.id, n.id],
+      intoWorkspaceId: target.id,
+      preserveIdentity: [n.id]
+    })
+    const state = store.workspaceState(target.id)
+    const movedNote = state.nodes.find((x) => x.kind === 'note')
+    const copiedAgent = state.nodes.find((x) => x.kind === 'terminal')
+    // The note is the SAME card (id + position); the agent re-ids.
+    expect(movedNote?.id).toBe(n.id)
+    expect(movedNote?.position).toEqual(n.position)
+    expect(copiedAgent?.id).not.toBe(a.id)
+    // The cable between them survived, re-homed onto the copied agent.
+    expect(state.connections).toHaveLength(1)
+    expect([state.connections[0].a, state.connections[0].b].sort()).toEqual(
+      [copiedAgent?.id, n.id].sort()
+    )
+  })
+
+  it('terminals can never transfer identity', async () => {
+    const { deps, store } = copyDeps()
+    const { aId } = seedSelection(store)
+    const target = store.createWorkspace('Staging', '/work/staging')
+    await expect(
+      copyTeam(deps, { nodeIds: [aId], intoWorkspaceId: target.id, preserveIdentity: [aId] })
+    ).rejects.toThrow(/Terminals can't transfer identity/)
+  })
+
+  it('spawns copies into a FRESH named worktree when requested', async () => {
+    const { deps, store } = copyDeps()
+    const { aId, bId } = seedSelection(store)
+    const target = store.createWorkspace('Staging', '/work/staging')
+    const added: string[][] = []
+    const gitDeps = {
+      ...deps,
+      git: {
+        gitInfo: async () => ({ isRepo: true, root: '/work/repo', branch: 'main', dirty: false, ahead: 0, behind: 0 }),
+        addWorktree: async (repo: string, wt: string, branch: string) => {
+          added.push([repo, wt, branch])
+          return { ok: true as const, path: wt }
+        }
+      }
+    }
+    await copyTeam(gitDeps, {
+      nodeIds: [aId, bId],
+      intoWorkspaceId: target.id,
+      worktree: { name: 'Fix Attempt' }
+    })
+    // One worktree of the shared repo dir, named branch, slugged path.
+    expect(added).toHaveLength(1)
+    expect(added[0][0]).toBe('/work/repo')
+    expect(added[0][1].endsWith('/fix-attempt')).toBe(true)
+    expect(added[0][2]).toBe('cookrew/fix-attempt')
+    // Every copied agent lands IN the worktree, and the target lists it.
+    const state = store.workspaceState(target.id)
+    const copied = state.nodes.filter((n): n is TerminalNodeData => n.kind === 'terminal')
+    expect(copied.map((t) => t.cwd)).toEqual([added[0][1], added[0][1]])
+    expect(state.dirs).toContain(added[0][1])
+  })
+
+  it('worktree paste fails LOUDLY — never the silent in-place fallback', async () => {
+    const { deps, store } = copyDeps()
+    const { aId } = seedSelection(store)
+    const target = store.createWorkspace('Staging', '/work/staging')
+    // Not a repo → refuse.
+    await expect(
+      copyTeam(deps, { nodeIds: [aId], intoWorkspaceId: target.id, worktree: { name: 'x' } })
+    ).rejects.toThrow(/is not a git repo/)
+    // Repo, but the worktree add fails (e.g. name taken) → refuse, by reason.
+    const failing = {
+      ...deps,
+      git: {
+        gitInfo: async () => ({ isRepo: true, root: '/work/repo', branch: 'main', dirty: false, ahead: 0, behind: 0 }),
+        addWorktree: async () => ({ ok: false as const, error: 'branch exists' })
+      }
+    }
+    await expect(
+      copyTeam(failing, { nodeIds: [aId], intoWorkspaceId: target.id, worktree: { name: 'x' } })
+    ).rejects.toThrow(/branch exists — pick a fresh name/)
+    // Agents across two workdirs cannot share one worktree.
+    const b2 = store.addNode(terminal('src-c', { cwd: '/work/other' }))
+    await expect(
+      copyTeam(failing, {
+        nodeIds: [aId, b2.id],
+        intoWorkspaceId: target.id,
+        worktree: { name: 'x' }
+      })
+    ).rejects.toThrow(/ONE workdir/)
+    // Nothing was pasted by any of the refusals.
+    expect(store.workspaceState(target.id).nodes).toHaveLength(0)
+  })
+
+  it('rejects an unknown target workspace and malformed specs', async () => {
+    const { deps, store } = copyDeps()
+    const { aId } = seedSelection(store)
+    await expect(copyTeam(deps, { nodeIds: [aId], intoWorkspaceId: 'nope' })).rejects.toThrow(
+      /No workspace 'nope'/
+    )
+    await expect(
+      copyTeam(deps, { nodeIds: 'evil' as unknown as string[], intoWorkspaceId: store.activeId })
+    ).rejects.toThrow(/string\[\]/)
+    // A stale selection speaks copy, not fork.
+    await expect(
+      copyTeam(deps, { nodeIds: ['ghost'], intoWorkspaceId: store.activeId })
+    ).rejects.toThrow(/^Team copy needs at least one selected node/)
   })
 })

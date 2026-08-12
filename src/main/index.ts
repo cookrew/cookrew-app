@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './store'
 import { PtyManager, multiplexer, sessionNameFor } from './pty'
 import type { PtySession } from './pty'
+import type { PaneCardInfo } from './multiplexer'
 import { TurnTracker } from './turn-tracker'
 import { TurnStore } from './turn-store'
 import {
@@ -37,6 +38,8 @@ import {
   browserTabs,
   CanvasNode,
   DEFAULT_TERMINAL_SIZE,
+  TeamClipStatus,
+  TeamCopyResult,
   TeamForkSpec,
   RecoverResult,
   RestoreResult,
@@ -50,7 +53,7 @@ import { AgentRegistry } from './agent-registry'
 import { RecoverableStore, planRecovery } from './recoverable'
 import { EventLog } from './event-log'
 import { isClaudeCommand } from '../shared/claude-fork'
-import { canonicalWebUrl } from '../shared/external-url'
+import { canonicalExternalUrl } from '../shared/external-url'
 import {
   claudeSessionFile,
   claudeSpawnCommand,
@@ -74,7 +77,9 @@ import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 import { TraceReader } from './trace'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
-import { TeamStore, forkTeam, workspaceFromTemplate } from './teams'
+import { TeamStore, copyTeam, forkTeam, workspaceFromTemplate } from './teams'
+import { TeamClipboard } from './team-clip'
+import { UNCOPYABLE_PHASES } from '../shared/turn'
 import { GitInfoCache, addWorktree } from './git'
 import { buildRoleBootMessage } from '../shared/fork'
 import { pageTurns } from '../shared/turn'
@@ -203,6 +208,43 @@ function recordSpawn(terminalId: string, session: PtySession): void {
  */
 const BIND_RETRY_TAIL_MS = 60_000
 
+/**
+ * The card a herdr-hosted pane should wear: name, role (falling back to the
+ * preset/harness), the workspace it belongs to and where it works. Only
+ * backends with their own chrome implement the binding (multiplexer.ts),
+ * so this is a no-op under tmux/direct.
+ */
+function paneCard(t: {
+  id: string
+  name: string
+  role: string | null
+  preset: string
+  cwd: string
+}): PaneCardInfo {
+  return {
+    terminalId: t.id,
+    title: t.name,
+    agent: t.role ?? t.preset,
+    workspace: store.state.name,
+    cwd: t.cwd
+  }
+}
+
+/**
+ * The workspace half of the herdr binding: Cookrew's herdr workspace wears
+ * the ACTIVE Cookrew workspace's name and identity tokens. Re-reported on
+ * every switch (and once at boot); a no-op under tmux/direct.
+ */
+function reportWorkspaceBinding(): void {
+  const list = store.list()
+  const active = list.workspaces.find((w) => w.id === list.activeId)
+  if (!active) return
+  multiplexer()?.reportWorkspace?.({
+    label: active.name,
+    tokens: { cookrew_workspace: active.id, cookrew_dir: active.dir }
+  })
+}
+
 /** Spawn (or reuse) a PTY for a terminal node and register turn tracking. */
 function spawnTracked(t: {
   id: string
@@ -274,7 +316,12 @@ function spawnTracked(t: {
       store.updateNodeUnsafe(t.id, { piSessionId: binding.sessionId })
     }
   }
-  const session = ptys.spawn({ terminalId: t.id, command: effective, cwd: t.cwd })
+  // The herdr pane wears the card's display info (no-op elsewhere). Resolved
+  // from the store rather than threaded through every caller — the node is
+  // always persisted before it spawns, so the store is the freshest source.
+  const cardNode = store.node(t.id)
+  const card = cardNode?.kind === 'terminal' ? paneCard(cardNode) : undefined
+  const session = ptys.spawn({ terminalId: t.id, command: effective, cwd: t.cwd, card })
   turns.track(session, command.trim().length > 0)
   recordSpawn(t.id, session)
   // Codex rollout bind (trace-sourced-context-final): the rollout file
@@ -504,10 +551,38 @@ function setTerminalCwd(nodeId: string, dir: string): CanvasNode {
 
 // ---- node operations (shared by renderer IPC and the mobile HTTP API) ----
 
-function addNode(node: CanvasNode): CanvasNode {
-  const added = store.addNode(node)
+/** Per-kind side effects that bring a just-added ACTIVE-canvas node alive. */
+function adoptLiveNode(added: CanvasNode): void {
   if (added.kind === 'terminal') spawnTracked(added)
   if (added.kind === 'browser') void browserManager.syncNode(added).catch(() => undefined)
+}
+
+/**
+ * A copy made while this terminal's workspace was inactive stashed its
+ * context preamble on the node (copyTeam) — deliver it once a PTY exists.
+ * The stage is cleared only when a session is actually there to receive it;
+ * a failed spawn keeps the preamble for the next boot.
+ */
+function deliverPendingInject(t: TerminalNodeData): void {
+  if (!t.pendingInject) return
+  const session = ptys.get(t.id)
+  if (!session) return
+  const inject = t.pendingInject
+  store.updateNodeUnsafe(t.id, { pendingInject: null })
+  injectWhenReady(session, inject).catch((error) => {
+    console.error('Deferred copy context injection failed:', error)
+  })
+}
+
+/** Boot one restored terminal: spawn + any deferred copy context. */
+function bootTerminal(t: TerminalNodeData): void {
+  spawnTracked(t)
+  deliverPendingInject(t)
+}
+
+function addNode(node: CanvasNode): CanvasNode {
+  const added = store.addNode(node)
+  adoptLiveNode(added)
   return added
 }
 
@@ -521,6 +596,12 @@ function updateNode(id: string, patch: Partial<CanvasNode>): CanvasNode | undefi
   const updated = store.updateNode(id, patch)
   if (updated?.kind === 'browser') {
     void browserManager.syncNode(updated).catch(() => undefined)
+  }
+  // A renamed/re-roled terminal re-binds its pane chrome (herdr only — the
+  // method is absent elsewhere). The name the pane wears comes from the
+  // store, so this runs AFTER the patch lands.
+  if (updated?.kind === 'terminal' && ('name' in patch || 'role' in patch)) {
+    multiplexer()?.reportPaneCard?.(sessionNameFor(id), paneCard(updated))
   }
   return updated
 }
@@ -711,9 +792,76 @@ function teamForkDeps(): Parameters<typeof forkTeam>[0] {
     teams,
     ptys,
     switchWorkspace: (id) => void switchWorkspace(id),
+    adoptNode: adoptLiveNode,
+    isWorking: terminalIsWorking,
     git: { gitInfo: (dir) => gitCache.info(dir), addWorktree },
     worktreeRoot: path.join(homedir(), '.cookrew', 'worktrees')
   }
+}
+
+// ---- SELECT-mode clipboard: copy/cut a selection, paste it anywhere ----
+
+/** Is this terminal mid-turn? Only phases in UNCOPYABLE_PHASES refuse; a
+ *  detached (untracked) terminal reads as not-working — the paste result
+ *  carries `staleSource` so that blindness is surfaced, not hidden. */
+function terminalIsWorking(id: string): boolean {
+  const activity = turns.list().find((a) => a.terminalId === id)
+  return activity !== undefined && UNCOPYABLE_PHASES.has(activity.phase)
+}
+
+const teamClipboard = new TeamClipboard({
+  activeId: () => store.activeId,
+  workspaces: () => store.list().workspaces,
+  workspaceState: (id) => store.workspaceState(id),
+  activeNodes: () => store.state.nodes,
+  isWorking: terminalIsWorking,
+  paste: (spec) => copyTeam(teamForkDeps(), spec),
+  // Cut removal is WORKSPACE-SCOPED: identity-moved notes/browsers now
+  // exist in the target under the SAME id, so an id-based cross-workspace
+  // lookup could remove the freshly pasted card instead of the source.
+  // The source is inactive by construction (same-workspace cut refused),
+  // but its cut agents' detached sessions are still ALIVE — end them now
+  // (killDetached reaches sessions with no live PTY), not at the next
+  // startup reap. Moved notes/browsers have nothing to tear down.
+  removeCut: async (nodeIds, fromWorkspaceId) => {
+    const state = store.workspaceState(fromWorkspaceId)
+    for (const node of state.nodes) {
+      if (node.kind !== 'terminal' || !nodeIds.includes(node.id)) continue
+      sessionSync.unwatch(node.id)
+      turns.untrack(node.id)
+      ptys.kill(node.id)
+      ptys.killDetached(node.id)
+      agents.deactivate(node.id)
+    }
+    store.removeNodesFromWorkspace(fromWorkspaceId, nodeIds)
+  }
+})
+
+function teamClipSet(
+  nodeIds: string[],
+  cut: boolean,
+  worktree?: { name: string }
+): TeamClipStatus {
+  return teamClipboard.set(nodeIds, cut, worktree)
+}
+
+function teamClipStatus(): TeamClipStatus | null {
+  return teamClipboard.status()
+}
+
+async function teamPaste(): Promise<TeamCopyResult> {
+  const cut = teamClipboard.status()?.cut === true
+  const result = await teamClipboard.paste()
+  // The toast is the paste's confirmation (the bar exits with the mode), so
+  // the context-staleness note rides its detail — honesty over silence.
+  store.recordEvent(
+    cut ? 'team.moved' : 'team.copied',
+    result.workspaceId,
+    result.workspaceName,
+    `${result.copiedNodes} node${result.copiedNodes === 1 ? '' : 's'}` +
+      (result.staleSource ? ' · context as of last visit' : '')
+  )
+  return result
 }
 
 function teamForkInner(spec: TeamForkSpec): Promise<WorkspaceMeta> {
@@ -733,14 +881,14 @@ async function createWorkspaceFromTeam(
   return workspaceFromTemplate(teamForkDeps(), { name, dir: dir || store.state.dir, team })
 }
 
-function teamSaveTracked(name?: string): TeamMeta {
-  const meta = teamSaveInner(name)
+function teamSaveTracked(name?: string, nodeIds?: string[]): TeamMeta {
+  const meta = teamSaveInner(name, nodeIds)
   store.recordEvent('team.saved', meta.name, meta.name, `${meta.terminalCount} agents`)
   return meta
 }
 
-function teamSaveInner(name?: string): TeamMeta {
-  return teams.save(store.state, (id) => turns.history(id), name)
+function teamSaveInner(name?: string, nodeIds?: string[]): TeamMeta {
+  return teams.save(store.state, (id) => turns.history(id), name, nodeIds)
 }
 
 interface RoleSaveInput {
@@ -1159,6 +1307,9 @@ app.whenReady().then(() => {
       gitInfo: (dir: string) => gitCache.info(dir),
       teamFork,
       teamSave: teamSaveTracked,
+      teamClipSet,
+      teamClipGet: teamClipStatus,
+      teamPaste,
       teamList: () => teams.list(),
       roleSave: roleSaveTracked,
       roleList: () => roles.list(),
@@ -1195,10 +1346,11 @@ app.whenReady().then(() => {
     console.error('Skipping orphan reap: could not enumerate all workspace terminals', error)
   }
 
-  // Boot PTYs for terminals restored from the saved workspace.
-  for (const t of store.terminals()) {
-    spawnTracked(t)
-  }
+  // Boot PTYs for terminals restored from the saved workspace — through
+  // bootTerminal, so a pending copy preamble staged before the app quit is
+  // delivered on cold start too, not only on workspace switches.
+  for (const t of store.terminals()) bootTerminal(t)
+  reportWorkspaceBinding()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -1256,8 +1408,10 @@ function registerIpc(handlers: RestoreHandlers): void {
       turns.untrack(tid)
       ptys.detach(tid)
     }
-    for (const t of store.terminals()) spawnTracked(t)
+    for (const t of store.terminals()) bootTerminal(t)
     void browserManager.replaceNodes(store.browsers()).catch(() => undefined)
+    // The herdr workspace's chrome follows the active Cookrew workspace.
+    reportWorkspaceBinding()
   })
 
   // Push the workspace list to the renderer whenever it changes.
@@ -1280,6 +1434,8 @@ function registerIpc(handlers: RestoreHandlers): void {
   })
   ipcMain.handle('workspace:rename', (_e, id: string, name: string) => {
     store.renameWorkspace(id, name)
+    // The active workspace's new name is what the herdr workspace wears.
+    if (id === store.activeId) reportWorkspaceBinding()
     return store.list()
   })
   // Workspace v2: remove + multi-directory + per-terminal cwd + git.
@@ -1306,8 +1462,10 @@ function registerIpc(handlers: RestoreHandlers): void {
   // it would let 'ht\ntps://…' pass one parser and mean something else to the
   // OS one. The `unknown` is honest: type annotations don't cross IPC.
   ipcMain.handle('shell:openExternal', (_e, url: unknown) => {
-    const canonical = typeof url === 'string' ? canonicalWebUrl(url) : null
-    if (canonical === null) throw new Error('Only http(s) URLs can be opened externally')
+    const canonical = typeof url === 'string' ? canonicalExternalUrl(url) : null
+    if (canonical === null) {
+      throw new Error('Only http(s) URLs and renderable local files can be opened externally')
+    }
     return shell.openExternal(canonical)
   })
 
@@ -1382,7 +1540,14 @@ function registerIpc(handlers: RestoreHandlers): void {
 
   // Team fork / team save / roles (contract in note team-fork-roles-spec-v1).
   ipcMain.handle('team:fork', (_e, spec: TeamForkSpec) => teamFork(spec))
-  ipcMain.handle('team:save', (_e, name?: string) => teamSaveTracked(name))
+  ipcMain.handle('team:save', (_e, name?: string, nodeIds?: string[]) =>
+    teamSaveTracked(name, nodeIds)
+  )
+  ipcMain.handle('team:clip:set', (_e, nodeIds: string[], cut: boolean, worktree?: { name: string }) =>
+    teamClipSet(nodeIds, cut, worktree)
+  )
+  ipcMain.handle('team:clip:get', () => teamClipStatus())
+  ipcMain.handle('team:clip:paste', () => teamPaste())
   ipcMain.handle('team:list', () => teams.list())
   ipcMain.handle('role:save', (_e, input: RoleSaveInput) =>
     roleSaveTracked(input)
@@ -1478,6 +1643,23 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.on('browser:thumb', (_e, browserId: string, dataUrl: string) => {
     const base64 = dataUrl.split(',')[1]
     if (base64) browserThumbs.set(browserId, Buffer.from(base64, 'base64'))
+  })
+
+  /**
+   * Card thumbnail with the flag ON. There is no renderer webview to capture
+   * any more, so the picture has to come from the headless page that actually
+   * owns the tab — without it every browser card sits on the placeholder
+   * forever. Stored in the same map the legacy loop fills, so the phone's
+   * /api/browser/:id/thumb starts working in headless mode too.
+   */
+  ipcMain.handle('browser:snapshot', async (_e, browserId: unknown) => {
+    if (typeof browserId !== 'string' || !interactiveBrowserEnabled()) return null
+    // peek, not get: drawing a thumbnail must never be what launches a browser.
+    const instance = browserManager.peek(browserId)
+    const base64 = (await instance?.snapshot().catch(() => null)) ?? null
+    if (base64 === null) return null
+    browserThumbs.set(browserId, Buffer.from(base64, 'base64'))
+    return `data:image/jpeg;base64,${base64}`
   })
 
   // Browser command responses coming back from the renderer

@@ -84,6 +84,12 @@ export interface TerminalNodeData {
   sessionLineage?: string[]
   /** Undo stack for endpoint restore: prior sessions, newest first. */
   restoreStack?: RestorePoint[]
+  /**
+   * Context preamble a copy could not deliver at creation time because its
+   * workspace was inactive (PTYs boot on activation). The switch boot
+   * injects it once the terminal is live, then clears it. Absent otherwise.
+   */
+  pendingInject?: string | null
   position: CanvasPosition
   size: CanvasSize
 }
@@ -241,12 +247,100 @@ export interface TeamForkSpec {
   worktree?: boolean
 }
 
+/** Copy selected canvas nodes (+cables among them) into a workspace. */
+export interface TeamCopySpec {
+  /** Node ids to copy; cables among them travel too. */
+  nodeIds: string[]
+  /** Workspace that receives the copies (the active one = duplicate in place). */
+  intoWorkspaceId: string
+  /**
+   * Workspace the nodes live in; defaults to the active one. Set by PASTE
+   * when the clipboard was filled before a workspace switch.
+   */
+  fromWorkspaceId?: string
+  /**
+   * Spawn the copies into a FRESH git worktree of the selection's shared
+   * repo workdir (requires every selected agent in one repo dir). The name
+   * becomes the worktree dir + `cookrew/<slug>` branch. Explicitly
+   * requested → failures throw; never the silent in-place fallback.
+   */
+  worktree?: { name: string }
+  /**
+   * CUT-paste identity transfer: these node ids keep their ORIGINAL id in
+   * the target (ownership moves). Non-terminals only: terminals always
+   * re-id because they carry sessions.
+   *
+   * STATEFULNESS CONTRACT: headless browser profiles (cookies, sessions,
+   * localStorage) live on disk keyed by node id — so a cut-pasted browser
+   * is a COMPLETE stateful transfer, while copy-paste and save→fork mint
+   * fresh ids and are deliberately stateless.
+   */
+  preserveIdentity?: string[]
+}
+
+export interface TeamCopyResult {
+  workspaceId: string
+  workspaceName: string
+  copiedNodes: number
+  copiedCables: number
+  /**
+   * True when the source workspace was inactive at paste time: detached
+   * agents aren't turn-tracked, so the copied context is as of the last
+   * visit to that workspace — surfaced, never silently pretended fresh.
+   */
+  staleSource?: boolean
+}
+
+/** One element of a team mini-graph (clipboard tray, template previews). */
+export interface TeamGraphItem {
+  id: string
+  kind: CanvasNode['kind']
+  name: string
+  position: CanvasPosition
+  size: CanvasSize
+}
+
+/**
+ * The simplified shape of a set of elements: what they are, where they sit
+ * relative to each other, and the cables among them. Rendered as a tiny SVG
+ * (TeamGraphThumb) wherever a selection travels — the clipboard tray and
+ * the saved-template picker.
+ */
+export interface TeamGraph {
+  items: TeamGraphItem[]
+  cables: { a: string; b: string }[]
+}
+
+/** One staged element, enough to preview it and ghost its landing spot. */
+export interface TeamClipItem extends TeamGraphItem {
+  /** Identity transfer on paste (cut, session-less kinds): stateful move. */
+  moves: boolean
+}
+
+/** What the COPY-PASTE clipboard is holding, for the PASTE affordance. */
+export interface TeamClipStatus {
+  count: number
+  fromWorkspaceName: string
+  /** Source workspace id — lets the renderer detect a cross-workspace paste. */
+  fromWorkspaceId: string
+  /** True when a PASTE will also remove the sources (cut = move). */
+  cut: boolean
+  /** Set when the paste will spawn into a fresh worktree of this name. */
+  worktreeName?: string
+  /** The staged elements, pruned against reality (see TeamClipboard). */
+  items: TeamClipItem[]
+  /** Cables among the staged elements (both ends staged) — the thumbnail. */
+  cables: { a: string; b: string }[]
+}
+
 /** Listing entry for a saved team snapshot (~/.cookrew/teams). */
 export interface TeamMeta {
   name: string
   savedAt: number
   nodeCount: number
   terminalCount: number
+  /** Mini-graph of the snapshot for template pickers (absent pre-feature). */
+  preview?: TeamGraph
 }
 
 /**

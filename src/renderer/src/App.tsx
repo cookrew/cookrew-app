@@ -8,12 +8,13 @@ import {
   Edge,
   NodeChange,
   ReactFlow,
+  ViewportPortal,
   applyNodeChanges,
   useReactFlow,
   ReactFlowProvider
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import type { AgentRole, CanvasNode, BrowserNodeData, TerminalNodeData, WorkspaceState } from '../../shared/model'
+import type { AgentRole, CanvasNode, BrowserNodeData, TeamClipStatus, TerminalNodeData, WorkspaceState } from '../../shared/model'
 import { activeBrowserTab, browserTabs } from '../../shared/model'
 import type { TerminalActivity } from '../../shared/turn'
 import { cookrew, isRemoteMode } from './api'
@@ -22,8 +23,9 @@ import { TerminalNode } from './nodes/TerminalNode'
 import { NoteNode } from './nodes/NoteNode'
 import { BrowserNode } from './nodes/BrowserNode'
 import { CableEdge } from './CableEdge'
-import { Header } from './Header'
+import { Header, type MainView } from './Header'
 import { Dock } from './Dock'
+import { CardMenu, type CardMenuAnchor } from './CardMenu'
 import { TerminalOverlayLayer } from './TerminalOverlay'
 import { useLodLayout } from './zoom-lod'
 import { browserInFullView } from './dock-target'
@@ -34,10 +36,15 @@ import { ErrorBoundary } from './ErrorBoundary'
 import { ReauthOverlay } from './ReauthOverlay'
 import { snapCardChanges, MOUSE_SNAP_PX, TOUCH_SNAP_PX, SnapGuide } from './card-snap'
 import { SnapGuides } from './SnapGuides'
-import { TeamForkPicker } from './TeamForkPicker'
 import { EventToastLayer } from './EventToast'
 import { RosterPanel } from './RosterPanel'
 import { MetricsPanel } from './MetricsPanel'
+import { SelectionBar } from './SelectionBar'
+import { ConfirmClose } from './ConfirmClose'
+
+/** How often a headless browser card refreshes its still. Matches the legacy
+ *  webview capture cadence — the same picture, from the page that now owns it. */
+const BROWSER_SNAPSHOT_MS = 5000
 
 /** Phone companion parity: widen the snap magnet for finger-driven gestures. */
 const snapRadiusPx = window.matchMedia('(pointer: coarse)').matches ? TOUCH_SNAP_PX : MOUSE_SNAP_PX
@@ -78,7 +85,25 @@ function Canvas(): React.JSX.Element {
   const interactiveBrowser = interactiveCapability?.enabled ?? null
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null)
   const [nodes, setNodes] = useState<Node[]>([])
-  const [tool, setTool] = useState<ToolId>('select')
+  const [tool, setTool] = useState<ToolId>('move')
+  /**
+   * Clipboard selection mode — a TOGGLE over the resting hand (the board
+   * view's model), not a tool: cards stay draggable, clicking a card picks
+   * it, clicking it again cancels.
+   */
+  const [clipping, setClipping] = useState(false)
+  /** The clipboard's picked card ids — the unit of copy/cut/save/paste. */
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set())
+  /** Card under the cursor while clipping; its cables light up with it. */
+  const [hoverId, setHoverId] = useState<string | null>(null)
+  /** Open card edit menu (right-click / long-press on a card). */
+  const [cardMenu, setCardMenu] = useState<CardMenuAnchor | null>(null)
+  /** The stage element — the long-press gesture listens on it. */
+  const stageRef = useRef<HTMLDivElement>(null)
+  /** Clipboard status lifted from the bar — drives the paste ghosts. */
+  const [clipInfo, setClipInfo] = useState<TeamClipStatus | null>(null)
+  /** Active workspace id (state objects carry none; names can collide). */
+  const [activeWsId, setActiveWsId] = useState<string | null>(null)
   const [connectFrom, setConnectFrom] = useState<string | null>(null)
   const [preset, setPreset] = useState('Shell')
   const [orch, setOrch] = useState(false)
@@ -92,12 +117,23 @@ function Canvas(): React.JSX.Element {
   const [guides, setGuides] = useState<SnapGuide[]>([])
   /** Terminal whose overlay owns the stage — the dock shows its composer. */
   const [zoomedTerminalId, setZoomedTerminalId] = useState<string | null>(null)
-  /** Team-fork picker overlay (opened from the header's ⑂ button). */
-  const [teamPickerOpen, setTeamPickerOpen] = useState(false)
   /** Global agent roster panel (opened from the header). */
-  const [rosterOpen, setRosterOpen] = useState(false)
-  /** Activity metrics / history panel (opened from the header). */
+  /**
+   * Which of the two main views the stage shows. The agents view renders as a
+   * full-bleed overlay INSIDE the stage rather than replacing it: the canvas
+   * owns live webviews and terminal panes that must never remount, and swapping
+   * it out of the tree would also drop the viewport transform.
+   */
+  const [view, setView] = useState<MainView>('canvas')
+  /** Activity metrics / history panel (opened from the workspace popout). */
   const [metricsOpen, setMetricsOpen] = useState(false)
+  /** Board selection mode — the dock's slid-in clipboard button drives it. */
+  const [boardSelecting, setBoardSelecting] = useState(false)
+  /**
+   * Node awaiting a close confirmation. Every ✕ routes here instead of calling
+   * removeNode, so there is one dialog and no close button can skip it.
+   */
+  const [closingId, setClosingId] = useState<string | null>(null)
 
   useEffect(() => {
     void cookrew()
@@ -106,8 +142,19 @@ function Canvas(): React.JSX.Element {
     // Saved roles ride alongside presets as terminal-creation options.
     void cookrew().roleList().then(setRoles).catch(() => undefined)
   }, [])
+
+  // Track the active workspace ID — the paste ghosts only show for a
+  // CROSS-workspace paste, and comparing names would lie on collisions.
+  useEffect(() => {
+    void cookrew()
+      .listWorkspaces()
+      .then((list) => setActiveWsId(list.activeId))
+      .catch(() => undefined)
+    return cookrew().onWorkspaceList((list) => setActiveWsId(list.activeId))
+  }, [])
   const reactFlow = useReactFlow()
   const { screenToFlowPosition } = reactFlow
+  const browsersRef = useRef<BrowserNodeData[]>([])
   const draggingRef = useRef(false)
   /** Viewport before the last zoomToNode, so ⤢ CANVAS can return to it. */
   const prevViewportRef = useRef<{ x: number; y: number; zoom: number } | null>(null)
@@ -130,7 +177,19 @@ function Canvas(): React.JSX.Element {
       })
     return cookrew().onWorkspaceState((state) => {
       setWorkspace(state)
-      if (!draggingRef.current) setNodes(toFlowNodes(state))
+      // Selection must SURVIVE the rebuild: toFlowNodes carries no
+      // `selected`, so a bare replacement would clear it on every broadcast
+      // — including the N broadcasts a duplicate-in-place itself fires,
+      // unmounting the SelectionBar before its own success can render.
+      if (!draggingRef.current) {
+        setNodes((prev) => {
+          const selected = new Set(prev.filter((n) => n.selected).map((n) => n.id))
+          if (selected.size === 0) return toFlowNodes(state)
+          return toFlowNodes(state).map((n) =>
+            selected.has(n.id) ? { ...n, selected: true } : n
+          )
+        })
+      }
     })
   }, [])
 
@@ -166,7 +225,147 @@ function Canvas(): React.JSX.Element {
     }
   }, [])
 
-  const edges = useMemo(() => (workspace ? toFlowEdges(workspace) : []), [workspace])
+  // Cables light up with the hovered card while clipping — the hover tells
+  // you what would travel with the selection before you commit to it. Split
+  // memos so resting-hand hovers never rebuild the edge set.
+  const baseEdges = useMemo(() => (workspace ? toFlowEdges(workspace) : []), [workspace])
+  const edges = useMemo(() => {
+    if (!clipping || hoverId === null) return baseEdges
+    return baseEdges.map((e) =>
+      e.source === hoverId || e.target === hoverId ? { ...e, data: { hot: true } } : e
+    )
+  }, [baseEdges, clipping, hoverId])
+
+  const togglePick = useCallback((id: string): void => {
+    setPicked((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  // Picked ids must track the canvas: a cut-pasted (removed) card, or a
+  // workspace switch, prunes itself out — never a stale id in the clipboard
+  // spec. Toggling the clipboard off keeps the picks (the board view keeps
+  // them too): re-entering finds the slate as it was left.
+  useEffect(() => {
+    if (!workspace) return
+    setPicked((prev) => {
+      const alive = new Set(workspace.nodes.map((n) => n.id))
+      const next = new Set([...prev].filter((id) => alive.has(id)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [workspace])
+  useEffect(() => {
+    if (!clipping) setHoverId(null)
+  }, [clipping])
+  // Leaving the board view stands its selection mode down.
+  useEffect(() => {
+    if (view !== 'agents') setBoardSelecting(false)
+  }, [view])
+
+  /** Mirrors for the ⌘A handler (stable subscription, fresh reads). */
+  const viewRef = useRef<MainView>(view)
+  viewRef.current = view
+  const clippingRef = useRef(clipping)
+  clippingRef.current = clipping
+  const activitiesRef = useRef(activities)
+  activitiesRef.current = activities
+  // Long-press on a card = right-click: the touch path into the card edit
+  // menu. 550ms hold with a 10px slop, touch pointers only; interactive
+  // descendants (buttons, editors, the live terminal) keep their own
+  // gestures. The synthetic click that follows the release is swallowed so
+  // the card doesn't zoom out from under the fresh menu.
+  useEffect(() => {
+    const stage = stageRef.current
+    if (!stage) return
+    let timer: number | null = null
+    let sx = 0
+    let sy = 0
+    let suppressClick = false
+    const cancel = (): void => {
+      if (timer !== null) {
+        clearTimeout(timer)
+        timer = null
+      }
+    }
+    const onDown = (e: PointerEvent): void => {
+      if (e.pointerType !== 'touch' || !e.isPrimary) return
+      const target = e.target as HTMLElement | null
+      if (
+        !target ||
+        target.closest('button, input, textarea, select, a, .xterm, [contenteditable="true"]')
+      ) {
+        return
+      }
+      const nodeEl = target.closest('.react-flow__node') as HTMLElement | null
+      const nodeId = nodeEl?.dataset.id
+      if (!nodeId) return
+      sx = e.clientX
+      sy = e.clientY
+      timer = window.setTimeout(() => {
+        timer = null
+        suppressClick = true
+        setCardMenu({ nodeId, x: sx, y: sy })
+        // No release-click may follow (pointercancel) — don't eat a later one.
+        window.setTimeout(() => {
+          suppressClick = false
+        }, 800)
+      }, 550)
+    }
+    const onMove = (e: PointerEvent): void => {
+      if (timer === null) return
+      if (Math.hypot(e.clientX - sx, e.clientY - sy) > 10) cancel()
+    }
+    const onClick = (e: MouseEvent): void => {
+      if (!suppressClick) return
+      suppressClick = false
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    stage.addEventListener('pointerdown', onDown, true)
+    stage.addEventListener('pointermove', onMove, true)
+    stage.addEventListener('pointerup', cancel, true)
+    stage.addEventListener('pointercancel', cancel, true)
+    stage.addEventListener('click', onClick, true)
+    return () => {
+      cancel()
+      stage.removeEventListener('pointerdown', onDown, true)
+      stage.removeEventListener('pointermove', onMove, true)
+      stage.removeEventListener('pointerup', cancel, true)
+      stage.removeEventListener('pointercancel', cancel, true)
+      stage.removeEventListener('click', onClick, true)
+    }
+  }, [])
+
+  // ⌘A while clipping picks the whole canvas — the whole-team case the old
+  // dock buttons owned. Never while typing (any input/textarea/xterm owns
+  // its own ⌘A), never under the agents view or a zoomed card.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'a') return
+      const target = e.target as HTMLElement | null
+      if (target?.closest('input, textarea, [contenteditable="true"], .xterm')) return
+      if (viewRef.current !== 'canvas' || !clippingRef.current) return
+      if (zoomedNodeIdRef.current) return
+      e.preventDefault()
+      const state = workspaceRef.current
+      if (!state) return
+      // Working agents are uncopyable, so ⌘A leaves them out — a pick-all
+      // that traps the selection behind a busy agent isn't "all".
+      const working = activitiesRef.current
+      setPicked(
+        new Set(
+          state.nodes
+            .filter((n) => n.kind !== 'terminal' || working[n.id]?.phase !== 'thinking')
+            .map((n) => n.id)
+        )
+      )
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // Semantic zoom: clicking a card animates the viewport until the card
   // fills the stage; crossing the coverage threshold swaps its thumbnail
@@ -209,11 +408,77 @@ function Canvas(): React.JSX.Element {
     }
   }, [reactFlow])
 
+  const requestClose = useCallback((nodeId: string) => setClosingId(nodeId), [])
+
+  /**
+   * Dock tool selection. There is no MOVE button — the resting hand is what
+   * every tool falls back to: re-clicking the active tool stands it down,
+   * and arming a placement tool always stands the clipboard down (one
+   * click-target contract at a time).
+   */
+  const selectTool = useCallback((next: ToolId) => {
+    setTool((prev) => (prev === next ? 'move' : next))
+    setClipping(false)
+  }, [])
+  /** The clipboard toggle: arming it stands any placement tool down. */
+  const toggleClipping = useCallback(() => {
+    setClipping((prev) => {
+      if (!prev) setTool('move')
+      return !prev
+    })
+  }, [])
+
+  /**
+   * Carry out a confirmed close. Un-zoom FIRST: the overlay is anchored to a
+   * card that is about to stop existing, and leaving the stage zoomed onto a
+   * gap is how you end up unable to see the canvas you just returned to.
+   */
+  const confirmClose = useCallback(
+    (nodeId: string) => {
+      setClosingId(null)
+      if (zoomedNodeIdRef.current === nodeId) zoomBack()
+      void cookrew().removeNode(nodeId)
+    },
+    [zoomBack]
+  )
+
   const onThumb = useCallback((id: string, dataUrl: string) => {
     if (interactiveBrowser !== false) return
     setThumbs((prev) => ({ ...prev, [id]: dataUrl }))
     // Mirror to main so the mobile companion can serve it to the phone.
     cookrew().browserThumb(id, dataUrl)
+  }, [interactiveBrowser])
+
+  /**
+   * Card thumbnails with the flag ON. The legacy loop captured a webview that
+   * no longer exists here, so every browser card sat on its placeholder; the
+   * picture now comes from the headless page that owns the tab.
+   *
+   * Paused while the window is hidden and while a card is zoomed — the zoomed
+   * one is showing the live stream, and its own card is behind that overlay.
+   */
+  useEffect(() => {
+    if (interactiveBrowser !== true) return
+    const snapshot = cookrew().browserSnapshot
+    if (!snapshot) return
+    let disposed = false
+    const tick = async (): Promise<void> => {
+      if (document.hidden) return
+      for (const browser of browsersRef.current) {
+        if (disposed) return
+        if (browser.id === zoomedNodeIdRef.current) continue
+        const dataUrl = await snapshot(browser.id).catch(() => null)
+        if (!disposed && dataUrl) {
+          setThumbs((prev) => (prev[browser.id] === dataUrl ? prev : { ...prev, [browser.id]: dataUrl }))
+        }
+      }
+    }
+    void tick()
+    const timer = setInterval(() => void tick(), BROWSER_SNAPSHOT_MS)
+    return () => {
+      disposed = true
+      clearInterval(timer)
+    }
   }, [interactiveBrowser])
 
   // Never retain a legacy frame once ownership resolves to headless. Browser
@@ -300,8 +565,19 @@ function Canvas(): React.JSX.Element {
   }, [zoomBack])
 
   const ui = useMemo(
-    () => ({ tool, activities, thumbs, interactiveBrowser, zoomToNode, zoomBack }),
-    [tool, activities, thumbs, interactiveBrowser, zoomToNode, zoomBack]
+    () => ({
+      tool,
+      clipping,
+      activities,
+      thumbs,
+      interactiveBrowser,
+      zoomToNode,
+      zoomBack,
+      requestClose,
+      picked,
+      togglePick
+    }),
+    [tool, clipping, activities, thumbs, interactiveBrowser, zoomToNode, zoomBack, requestClose, picked, togglePick]
   )
 
   // Every change batch routes through the edge snapper: while a card is
@@ -373,7 +649,7 @@ function Canvas(): React.JSX.Element {
           .connectNodes(connectFrom, node.id)
           .catch((error: unknown) => console.error('Connect failed:', error))
         setConnectFrom(null)
-        setTool('select')
+        setTool('move')
       }
     },
     [tool, connectFrom]
@@ -392,7 +668,7 @@ function Canvas(): React.JSX.Element {
             ? { name: selectedRole.name, preset: selectedRole.preset, roleName: selectedRole.name, position, orch }
             : { name: preset, preset, position, orch }
         )
-        setTool('select')
+        setTool('move')
         // A new code agent zooms straight into its live terminal so the
         // first prompt can be typed immediately; plain shells stay as
         // overview cards.
@@ -411,7 +687,7 @@ function Canvas(): React.JSX.Element {
           size: { width: 280, height: 220 }
         }
         await cookrew().addNode(note)
-        setTool('select')
+        setTool('move')
       } else if (tool === 'browser') {
         const browser: CanvasNode = {
           kind: 'browser',
@@ -422,12 +698,15 @@ function Canvas(): React.JSX.Element {
           size: { width: 720, height: 560 }
         }
         await cookrew().addNode(browser)
-        setTool('select')
+        setTool('move')
       } else {
+        // A pane click while clipping clears the pick — the canvas-wide
+        // "click again to cancel". Arming no tool just stands connect down.
+        if (clipping) setPicked((prev) => (prev.size === 0 ? prev : new Set()))
         setConnectFrom(null)
       }
     },
-    [tool, preset, role, roles, orch, screenToFlowPosition, zoomToNode]
+    [tool, preset, role, roles, orch, clipping, screenToFlowPosition, zoomToNode]
   )
 
   const onNodesDelete = useCallback((deleted: Node[]) => {
@@ -449,11 +728,18 @@ function Canvas(): React.JSX.Element {
   const terminals = (workspace?.nodes.filter((n) => n.kind === 'terminal') ??
     []) as TerminalNodeData[]
   const browsers = (workspace?.nodes.filter((n) => n.kind === 'browser') ?? []) as BrowserNodeData[]
+  // The snapshot poll reads this instead of `browsers`, so it subscribes once
+  // rather than tearing down its interval on every workspace push.
+  browsersRef.current = browsers
   // ONE shared overlay arbitration across terminals AND browsers — per-kind
   // instances each picked their own remote fullscreen winner, stacking a
   // browser view over the zoomed terminal (Magpie E2 HIGH 2).
   const overlayNodes = useMemo(() => [...terminals, ...browsers], [terminals, browsers])
   const lod = useLodLayout(overlayNodes)
+  /** Null once the node is gone, which is also how the dialog self-dismisses. */
+  const closingNode = closingId
+    ? (workspace?.nodes.find((n) => n.id === closingId) ?? null)
+    : null
   const busyCount = terminals.filter((t) => activities[t.id]?.phase === 'thinking').length
   const attentionCount = terminals.filter((t) => activities[t.id]?.phase === 'waiting').length
 
@@ -481,27 +767,31 @@ function Canvas(): React.JSX.Element {
           return
         }
       }
-      zoomBack()
-      void cookrew().removeNode(zoomedId)
+      requestClose(zoomedId)
       return
     }
-    for (const node of nodes.filter((n) => n.selected)) void cookrew().removeNode(node.id)
+    // Selection close asks too, but only for a single card: the dialog names
+    // one thing and its cost, and a bulk variant would be a second prompt
+    // worded differently for the same act.
+    const selected = nodes.filter((n) => n.selected)
+    if (selected.length === 1) requestClose(selected[0].id)
+    else for (const node of selected) void cookrew().removeNode(node.id)
   }
 
   return (
     <CanvasUiContext.Provider value={ui}>
-      <div className={`cr cr-app tool-${tool}`}>
+      <div className={`cr cr-app tool-${tool}${clipping ? ' clipping' : ''}`}>
         <Header
           workspaceName={workspace?.name ?? 'Cookrew'}
           dir={workspace?.dir ?? ''}
           terminalCount={terminals.length}
           busyCount={busyCount}
           attentionCount={attentionCount}
-          onTeamFork={() => setTeamPickerOpen(true)}
-          onRoster={() => setRosterOpen(true)}
-          onMetrics={() => setMetricsOpen(true)}
+          view={view}
+          onViewChange={setView}
+          onActivity={() => setMetricsOpen(true)}
         />
-        <div className="cr-stage">
+        <div className="cr-stage" ref={stageRef}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -512,13 +802,34 @@ function Canvas(): React.JSX.Element {
             onNodeDragStop={onNodeDragStop}
             onNodeClick={onNodeClick}
             onPaneClick={onPaneClick}
+            onNodeContextMenu={(e, node) => {
+              // Right-click edits the card under the cursor (touch gets the
+              // same menu via long-press — see the stage effect above).
+              e.preventDefault()
+              setCardMenu({ nodeId: node.id, x: e.clientX, y: e.clientY })
+            }}
+            onNodeMouseEnter={(_e, n) => {
+              if (clipping) setHoverId(n.id)
+            }}
+            onNodeMouseLeave={() => {
+              if (clipping) setHoverId(null)
+            }}
+            /* Cards stay draggable while clipping — the clipboard is a
+               toggle over the resting hand, not a separate one: the header
+               drags, the body click picks (click again cancels). */
             onNodesDelete={onNodesDelete}
             onEdgesDelete={onEdgesDelete}
             onConnect={onConnect}
             minZoom={0.1}
             maxZoom={8}
             onlyRenderVisibleElements
-            deleteKeyCode={['Backspace', 'Delete']}
+            /* Backspace/Delete used to remove a selected card outright — and
+               disconnect its cables on the way, since ReactFlow deletes the
+               attached edges too. That is the accident the close confirmation
+               exists to prevent, and it fired from a key that sits next to the
+               ones you type with. ⌘W is the keyboard way to close now, and it
+               asks like every ✕ does. */
+            deleteKeyCode={null}
             proOptions={{ hideAttribution: true }}
             fitView
           >
@@ -526,11 +837,87 @@ function Canvas(): React.JSX.Element {
             <SnapGuides guides={guides} />
             <MiniMap pannable zoomable className="cookrew-minimap" />
             <Controls position="bottom-right" />
+            {/* Cross-workspace paste preview: dashed ghosts at the exact
+                spots the staged elements would land (moves keep their
+                position, copies nudge +32). Flow coordinates via the
+                viewport portal, so they pan/zoom with the canvas. */}
+            {clipping &&
+              clipInfo !== null &&
+              activeWsId !== null &&
+              clipInfo.fromWorkspaceId !== activeWsId && (
+                <ViewportPortal>
+                  {clipInfo.items.map((item) => {
+                    const nudge = item.moves ? 0 : 32
+                    return (
+                      <div
+                        key={item.id}
+                        className="cr-paste-ghost"
+                        style={{
+                          transform: `translate(${item.position.x + nudge}px, ${item.position.y + nudge}px)`,
+                          width: item.size.width,
+                          height: item.size.height
+                        }}
+                      >
+                        <span className="cr-paste-ghost-name">{item.name}</span>
+                      </div>
+                    )
+                  })}
+                </ViewportPortal>
+              )}
           </ReactFlow>
+          {/* Inside the stage on purpose: it covers exactly the canvas and
+              leaves the header — which owns the way back — reachable above it.
+              The canvas keeps running underneath rather than unmounting. */}
+          {view === 'agents' && (
+            <RosterPanel
+              workspace={workspace}
+              activeWorkspaceId={activeWsId}
+              picked={picked}
+              onTogglePick={togglePick}
+              editing={boardSelecting}
+              onEditingChange={setBoardSelecting}
+              onClipStaged={() => {
+                // Land where the clipboard lives: the canvas with the
+                // clipboard armed, tray showing what the board just staged.
+                setView('canvas')
+                setClipping(true)
+                setTool('move')
+              }}
+              variant="view"
+              onClose={() => setView('canvas')}
+            />
+          )}
+          {/* The clipboard's action bar: copy / cut / save / paste on the
+              picked cards (cables included). Present the whole time the
+              toggle is on — PASTE must be reachable before anything is
+              picked. Hidden when a card zooms to full view. */}
+          {workspace && clipping && view === 'canvas' && lod.primaryId === null && (
+            <SelectionBar
+              workspace={workspace}
+              picked={picked}
+              onClipChange={setClipInfo}
+              onPasted={() => setClipping(false)}
+            />
+          )}
+          {/* Right-click / long-press card edit menu: rename, save/fork by
+              checkpoint, workdir. Rendered at viewport coordinates inside
+              the stage; CardMenu dismisses itself outside / on Escape. */}
+          {cardMenu &&
+          workspace &&
+          view === 'canvas' &&
+          workspace.nodes.some((n) => n.id === cardMenu.nodeId) ? (
+            <CardMenu
+              anchor={cardMenu}
+              workspace={workspace}
+              onClose={() => setCardMenu(null)}
+            />
+          ) : null}
         </div>
         <Dock
           tool={tool}
-          onSelect={setTool}
+          onSelect={selectTool}
+          clipping={clipping}
+          onToggleClipping={toggleClipping}
           presets={presets}
           preset={preset}
           onPreset={(name) => {
@@ -548,6 +935,14 @@ function Canvas(): React.JSX.Element {
               : null
           }
           browserFor={browserInFullView(lod.primaryId, browsers)}
+          /* Board view: the canvas tools glide out and the board's
+             clipboard selection toggle glides in — the SAME dock, the same
+             motion as zooming a terminal. */
+          boardFor={
+            view === 'agents'
+              ? { editing: boardSelecting, onToggle: () => setBoardSelecting((v) => !v) }
+              : null
+          }
           connectHint={
             tool === 'connect'
               ? connectFrom
@@ -562,13 +957,19 @@ function Canvas(): React.JSX.Element {
           lod={lod}
           onPrimaryChange={setZoomedTerminalId}
         />
-        {teamPickerOpen && workspace && (
-          <TeamForkPicker workspace={workspace} onClose={() => setTeamPickerOpen(false)} />
-        )}
-        {rosterOpen && (
-          <RosterPanel workspace={workspace} onClose={() => setRosterOpen(false)} />
-        )}
         {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
+        {/* One confirmation for every close path. Rendered last so it sits over
+            the zoomed overlays the ✕ was clicked in. A node that vanished while
+            the dialog was open (⌘W elsewhere, a crash) simply has nothing to
+            confirm, so the lookup failing closes it rather than throwing. */}
+        {closingNode && (
+          <ConfirmClose
+            node={closingNode}
+            activity={activities[closingNode.id] ?? null}
+            onCancel={() => setClosingId(null)}
+            onConfirm={() => confirmClose(closingNode.id)}
+          />
+        )}
         <BrowserLayer
           browsers={browsers}
           lod={lod}

@@ -74,6 +74,8 @@ export interface SocketServerDeps {
   gitInfo: (dir: string) => Promise<GitInfo>
   /** Team fork/save + roles (spec note team-fork-roles-v1). */
   teamFork: (spec: TeamForkSpec) => Promise<WorkspaceMeta>
+  // Whole-canvas by design: the CLI has no selection, so no nodeIds and no
+  // teamCopy here — the selection bar's copy rides IPC / the mobile API.
   teamSave: (name?: string) => TeamMeta
   teamList: () => TeamMeta[]
   roleSave: (input: { nodeId: string; name: string; rolePrompt: string }) => AgentRole

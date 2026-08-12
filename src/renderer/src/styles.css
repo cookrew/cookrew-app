@@ -122,11 +122,173 @@ body,
   min-width: 0;
 }
 
+/* ---- CANVAS ⇄ AGENTS switch ----
+   The row's primary control, and the same segmented idiom the phone uses for
+   canvas/board so one gesture reads the same on both surfaces. It replaces an
+   icon button that opened a modal: navigation now shows which of the two views
+   you are in, which a button that fires and forgets never could. */
+
+.cr-viewseg {
+  display: flex;
+  flex: 0 0 auto;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--cream-hi);
+}
+
+.cr-viewseg button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: none;
+  border: none;
+  border-right: 2px solid var(--line);
+  padding: 6px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cr-viewseg button:last-child {
+  border-right: none;
+}
+
+.cr-viewseg button[aria-pressed='true'] {
+  background: var(--amber);
+}
+
+.cr-viewseg button:not([aria-pressed='true']):hover {
+  background: var(--amber-soft);
+}
+
+.cr-viewseg .cr-icon {
+  width: 13px;
+  height: 13px;
+}
+
+/* Attention rides the destination, not a label beside it: the count IS the
+   button that takes you to the agent asking. */
+.cr-viewseg-badge {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--rose);
+  color: var(--cream-hi);
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cr-viewseg button.attention:not([aria-pressed='true']) {
+  animation: cr-blink 1.6s steps(2) infinite;
+}
+
 .cr-header-status {
   margin-left: auto;
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* Shared on-state for toggle buttons (the roster's SELECT among them, which
+   had no pressed look at all). */
+.cr-btn.on {
+  background: var(--amber);
+}
+
+/* The button that destroys something. Kept as a modifier rather than a colour
+   applied ad hoc, so "this one is the irreversible one" reads the same
+   wherever it appears. */
+.cr-btn.danger {
+  background: var(--rose);
+  color: var(--cream-hi);
+  border-color: var(--line);
+}
+
+.cr-btn.danger:hover {
+  background: #b91c1c;
+}
+
+/* ---- close confirmation ----
+   Narrow on purpose: it holds one sentence about one card, and a wide sheet
+   would make a routine close feel like a system error. */
+
+.confirm-close {
+  width: min(420px, calc(100vw - 32px));
+  gap: 8px;
+}
+
+.confirm-close-subject {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.confirm-close-note {
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* Only when something is actually lost or a live turn is cut short — so the
+   red edge still means something on the day it appears. */
+.confirm-close.danger {
+  box-shadow: 6px 6px 0 var(--rose);
+}
+
+.confirm-close.danger .confirm-close-note {
+  color: var(--ink);
+}
+
+.confirm-close-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* The 88px above is clearance for macOS traffic lights. The phone companion
+   has no window chrome, so on that surface it is 88px of nothing in the row
+   that had the least space to give. */
+body.cookrew-mobile .cr-header {
+  padding-left: 12px;
+}
+
+/* Narrow: the row sheds decoration in order of how little it carries — the
+   wordmark first (the mark still brands it), then the switch's labels (the
+   icons and the pressed state still say which view), then the word WORKING
+   (the ratio is the information). Nothing that navigates or acts is dropped. */
+@media (max-width: 700px) {
+  .cr-header {
+    gap: 8px;
+    padding-right: 10px;
+  }
+
+  .cr-logo {
+    display: none;
+  }
+
+  .cr-viewseg-label,
+  .cr-header-status .cr-kicker-word {
+    display: none;
+  }
+
+  .cr-viewseg button {
+    padding: 6px 9px;
+  }
 }
 
 .cr-kicker {
@@ -485,6 +647,387 @@ a.cr-btn {
   border: 1.5px dashed var(--line);
   padding: 4px 10px;
   animation: cr-fadein 160ms ease-out;
+}
+
+/* ---- selection bar (Figma model: selected elements grow actions) ---- */
+
+/* Floats over the canvas just above the dock, centered. */
+.cr-selbar {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 24px);
+  padding: 6px 10px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 3px 3px 0 var(--line);
+  animation: cr-fadein 160ms ease-out;
+}
+
+.cr-selbar-count {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.cr-selbar-name {
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  color: var(--ink);
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  padding: 4px 8px;
+  width: 150px;
+}
+
+.cr-selbar-flash,
+.cr-selbar-error {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: cr-fadein 160ms ease-out;
+}
+
+.cr-selbar-flash {
+  color: var(--ink-soft);
+}
+
+.cr-selbar-error {
+  color: var(--rose);
+}
+
+/* Clipboard tray: what would paste, floating above the bar. */
+.cr-selbar-tray {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 80vw;
+  padding: 4px 8px;
+  background: var(--cream-hi);
+  border: 1.5px dashed var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  animation: cr-fadein 160ms ease-out;
+}
+
+/* Mini canvas: the team's shape, directly — element chips at their real
+   relative positions, cables drawn between the chips. */
+/* No overflow:hidden — the hover tip rises above the frame's top edge. */
+.team-graph {
+  position: relative;
+  flex: 0 0 auto;
+  background: var(--cream);
+  border: 1.5px solid var(--line-soft);
+}
+
+/* Hover tip: the dot's name, floating above it. */
+.team-graph-tip {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  padding: 1px 6px;
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.cr-selbar-tray-more,
+.cr-selbar-tray-from {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+/* Cross-workspace paste preview: where the staged elements would land. */
+.cr-paste-ghost {
+  position: absolute;
+  border: 2px dashed var(--amber-deep);
+  background: rgba(255, 214, 0, 0.08);
+  pointer-events: none;
+  display: flex;
+  align-items: flex-start;
+  padding: 6px;
+}
+
+.cr-paste-ghost-name {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--amber-deep);
+  background: var(--cream-hi);
+  padding: 1px 5px;
+  border: 1.5px dashed var(--amber-deep);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* The armed-overwrite warning: destruction pending, one press away. */
+.cr-selbar-warn {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--amber-deep);
+  white-space: nowrap;
+  animation: cr-fadein 160ms ease-out;
+}
+
+/* SELECT mode: every card grows a checkbox top-right; picked cards and the
+   hovered card (plus its cables — see CableEdge `hot`) light up. */
+.card-pick {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 6;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.card-pick.on {
+  background: var(--amber);
+}
+
+.card-pick:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.node.picked {
+  outline: 3px solid var(--amber-deep);
+  outline-offset: 2px;
+}
+
+/* ---- Card edit menu (right-click / long-press) ---- */
+
+.cr-cardmenu {
+  position: fixed;
+  z-index: 40;
+  width: 252px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 3px 3px 0 var(--line);
+  font-family: var(--font-pixel);
+  color: var(--ink);
+}
+
+.cr-cardmenu-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 2px solid var(--line);
+}
+
+.cr-cardmenu-title {
+  flex: 1;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cr-cardmenu-back {
+  display: inline-flex;
+  align-items: center;
+  border: none;
+  background: none;
+  color: var(--ink-soft);
+  cursor: pointer;
+  padding: 2px;
+}
+
+.cr-cardmenu-back:hover {
+  color: var(--ink);
+}
+
+.cr-cardmenu-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.cr-cardmenu-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 10px;
+  border: none;
+  border-bottom: 1px solid var(--line-soft);
+  background: none;
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.cr-cardmenu-item:last-child {
+  border-bottom: none;
+}
+
+.cr-cardmenu-item:hover {
+  background: var(--amber-soft, #f2e3c2);
+}
+
+.cr-cardmenu-sub {
+  font-size: 8px;
+  color: var(--ink-soft);
+  letter-spacing: 0.04em;
+  text-transform: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 130px;
+}
+
+.cr-cardmenu-pane {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+}
+
+.cr-cardmenu-pane.col {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.cr-cardmenu-pane .tf-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.cr-cardmenu-ckpts {
+  display: flex;
+  flex-direction: column;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.cr-cardmenu-ckpt {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 8px;
+  border: none;
+  border-bottom: 1px solid var(--line-soft);
+  background: none;
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.cr-cardmenu-ckpt:hover {
+  background: var(--amber-soft, #f2e3c2);
+}
+
+.cr-cardmenu-ckpt.armed {
+  background: var(--amber-soft, #f2e3c2);
+  outline: 2px solid var(--amber-deep);
+  outline-offset: -2px;
+}
+
+.cr-cardmenu-ckpt.current {
+  color: var(--ink-soft);
+  cursor: default;
+}
+
+.cr-cardmenu-ckpt-id {
+  flex-shrink: 0;
+  min-width: 26px;
+  color: var(--amber-deep);
+  letter-spacing: 0.06em;
+}
+
+.cr-cardmenu-ckpt-prompt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cr-cardmenu-hint {
+  padding: 10px;
+  font-size: 8.5px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+
+.cr-cardmenu-error {
+  padding: 8px 10px;
+  font-size: 8.5px;
+  line-height: 1.5;
+  color: #a33;
+  border-top: 1px solid var(--line-soft);
+}
+
+.clipping .node:hover {
+  outline: 3px dashed var(--amber-deep);
+  outline-offset: 2px;
+}
+
+.clipping .node.picked:hover {
+  outline-style: solid;
+}
+
+/* Narrow screens: the bar hugs the width and scrolls sideways rather than
+   overflowing the stage (same strip treatment as the dock rows). */
+@media (max-width: 700px) {
+  .cr-selbar {
+    bottom: 10px;
+    gap: 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .cr-selbar::-webkit-scrollbar {
+    display: none;
+  }
+  .cr-selbar > * {
+    flex: 0 0 auto;
+  }
+  .cr-selbar-name {
+    width: 110px;
+  }
+  .cr-selbar-flash,
+  .cr-selbar-error {
+    max-width: 40vw;
+  }
 }
 
 /* ---- nodes (cards) ---- */
@@ -1502,29 +2045,99 @@ a.card-close {
   visibility: hidden;
 }
 
-/* ---- browser tab strip (agent-browser style tab group) ---- */
+/* ---- browser TITLE ROW ----
+   One row carries the page's identity: its title, with the host beneath as
+   provenance. It replaces both the node name (which said "Browser" and nothing
+   else) and a permanently-mounted address field that showed a truncated URL a
+   row away from the title it belonged to. The plate IS the address field —
+   tapping it swaps the two in place, the mobile-browser idiom — so editing
+   costs a tap rather than a row of chrome on the screen with the least of it. */
+
+.browser-idplate {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1px;
+  margin-left: 2px;
+  padding: 3px 8px;
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  text-align: left;
+  cursor: text;
+  overflow: hidden;
+}
+
+.browser-idplate:hover,
+.browser-idplate:focus-visible {
+  border-color: var(--amber-deep);
+  outline: none;
+}
+
+.browser-idplate-title,
+.browser-idplate-host {
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.browser-idplate-title {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--ink);
+}
+
+/* Dropped entirely when it would only repeat the title (see pageSubhead), so a
+   titleless tab collapses to a single line instead of echoing itself. */
+.browser-idplate-host {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1.2;
+  color: var(--muted);
+}
+
+/* Tab count. Present only above one tab, and it is what opens the strip — the
+   single-tab case therefore carries no tab chrome at all. */
+.browser-tabs-pill {
+  gap: 4px;
+  font-family: var(--font-pixel);
+  font-size: 9px;
+}
+
+.browser-tabs-pill.on {
+  background: var(--amber);
+}
+
+/* ---- browser tab strip (opened from the pill, never always-on) ---- */
 
 .browser-tabstrip {
   display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  padding: 5px 8px 0;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
   background: var(--cream-md);
   border-bottom: 1.5px solid var(--line);
   overflow-x: auto;
   flex: 0 0 auto;
 }
 
+/* Chips now, not folder tabs: the strip no longer sits under a row it belongs
+   to, so the notched shape had nothing left to attach itself to. */
 .browser-tab {
   display: flex;
   align-items: center;
   gap: 6px;
   max-width: 200px;
-  padding: 3px 9px 4px;
+  padding: 3px 4px 3px 9px;
   font-family: var(--font-mono);
   font-size: 10.5px;
   border: 1.5px solid var(--line);
-  border-bottom: none;
+  border-radius: 3px;
   background: var(--cream-hi);
   color: var(--muted);
   cursor: pointer;
@@ -1533,8 +2146,9 @@ a.card-close {
 }
 
 .browser-tab.active {
-  background: #fff;
+  background: var(--amber-soft);
   color: var(--ink);
+  border-color: var(--amber-deep);
 }
 
 .browser-tab-title {
@@ -1543,8 +2157,7 @@ a.card-close {
   max-width: 160px;
 }
 
-.browser-tab-close,
-.browser-tab-add {
+.browser-tab-close {
   border: none;
   background: none;
   font-family: var(--font-mono);
@@ -1555,16 +2168,8 @@ a.card-close {
   padding: 1px 3px;
 }
 
-.browser-tab-close:hover,
-.browser-tab-add:hover {
+.browser-tab-close:hover {
   color: var(--ink);
-}
-
-.browser-tab-add {
-  margin-bottom: 3px;
-  border: 1.5px solid var(--line);
-  background: var(--cream-hi);
-  padding: 1px 7px 3px;
 }
 
 /* Browser card thumbnail */
@@ -3495,7 +4100,10 @@ body.cookrew-mobile .cookrew-minimap {
   padding: 0 5px;
   font-family: var(--font-mono);
   font-size: 11px;
-  font-weight: 700;
+}
+
+body.cookrew-mobile .cr-dock .voice-keys {
+  gap: 4px;
 }
 
 /* Mobile zoomed dock: the send group owns the whole bar in static flow —
@@ -3532,9 +4140,6 @@ body.cookrew-mobile .cr-dock .voice-bar::-webkit-scrollbar {
   display: none;
 }
 
-body.cookrew-mobile .cr-dock .voice-keys {
-  gap: 4px;
-}
 
 /* The dictation caption is the only elastic item in a nowrap row — it
    ellipsises so the buttons never get pushed into the scroll region. */
@@ -3571,11 +4176,26 @@ body.cookrew-mobile .cr-dock .voice-ghost {
     flex: 0 0 auto;
   }
 
-  /* One frame for every icon button on the phone: the 30px the header's
-     activity / all-agents / fork buttons already use. The dock tools used to
-     hold a larger 44px target since nothing competes with them for space, but
-     two button sizes stacked in one column read as a mistake — matching the
-     fork button keeps the whole UI on one rhythm. */
+  /* The one elastic item in the browser's title row. Everything else in a
+     popout header is a fixed control that may scroll sideways, but the plate
+     has to absorb the leftover width — pinned to 0 0 auto it collapses to its
+     content and pushes the window controls off the visible strip. */
+  .browser-header .browser-idplate,
+  .browser-header .browser-address {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* The row is the page's identity, so it does not scroll away from its own
+     controls: the plate ellipsises instead. */
+  .browser-header {
+    overflow-x: visible;
+  }
+
+  /* One frame for every icon button on the phone: the 30px rhythm the
+     header's CANVAS/AGENTS segmented switch sets. The dock tools used to
+     hold a larger 44px target since nothing competes with them for space,
+     but two button sizes stacked in one column read as a mistake. */
   .popout-header .cr-btn,
   .cr-dock-tools .cr-btn,
   .voice-bar .cr-btn {
@@ -3624,3 +4244,4 @@ body.cookrew-mobile .cr-dock .voice-ghost {
     font-size: calc(11px * var(--z, 1));
   }
 }
+

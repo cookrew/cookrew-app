@@ -102,7 +102,7 @@ function TerminalOverlay({
   activity: TerminalActivity | undefined
   rect: ScreenRect
 }): React.JSX.Element {
-  const { zoomBack } = useCanvasUi()
+  const { zoomBack, requestClose } = useCanvasUi()
   const containerRef = useRef<HTMLDivElement>(null)
   // Drag-in attachments: dragenter/leave bubble from every child of the
   // overlay, so a plain boolean would flicker — count enters vs leaves.
@@ -618,10 +618,7 @@ function TerminalOverlay({
             className="cr-btn sm icon popout-kill"
             title="Close card & kill session (⌘W)"
             aria-label="Close card & kill session"
-            onClick={() => {
-              zoomBack()
-              void cookrew().removeNode(node.id)
-            }}
+            onClick={() => requestClose(node.id)}
           >
             <CrIcon name="close" />
           </button>

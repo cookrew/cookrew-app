@@ -4,6 +4,8 @@ import type {
   Connection,
   GitInfo,
   TeamForkSpec,
+  TeamClipStatus,
+  TeamCopyResult,
   TeamMeta,
   WorkspaceList,
   WorkspaceMeta,
@@ -183,8 +185,23 @@ export interface CookrewApi {
   forkTerminal: (sourceId: string, turnIndex?: number) => Promise<CanvasNode>;
   /** Fork a team into a NEW workspace per the spec (switches to it). */
   teamFork: (spec: TeamForkSpec) => Promise<WorkspaceMeta>;
-  /** Snapshot the live canvas + turn histories to ~/.cookrew/teams. */
-  teamSave: (name?: string) => Promise<TeamMeta>;
+  /**
+   * Snapshot the live canvas + turn histories to ~/.cookrew/teams. With
+   * nodeIds: only that selection and the cables between (Figma model).
+   */
+  teamSave: (name?: string, nodeIds?: string[]) => Promise<TeamMeta>;
+  /**
+   * SELECT-mode clipboard: stage a copy/cut of the picked nodes, inspect
+   * what's staged, paste into the ACTIVE workspace (a cut removes the
+   * sources after a successful paste). Optional — demo mode lacks them.
+   */
+  teamClipSet?: (
+    nodeIds: string[],
+    cut: boolean,
+    worktree?: { name: string },
+  ) => Promise<TeamClipStatus>;
+  teamClipGet?: () => Promise<TeamClipStatus | null>;
+  teamPaste?: () => Promise<TeamCopyResult>;
   teamList: () => Promise<TeamMeta[]>;
   roleList: () => Promise<AgentRole[]>;
   /**
@@ -226,6 +243,9 @@ export interface CookrewApi {
    * on the phone a genuine tap is what makes OS deep links fire).
    */
   openExternal?: (url: string) => Promise<void>;
+  /** Still of a headless browser page for its card thumbnail; null when the
+   *  flag is off or the page cannot be captured right now. */
+  browserSnapshot?: (browserId: string) => Promise<string | null>;
   quitApp: () => void;
 }
 

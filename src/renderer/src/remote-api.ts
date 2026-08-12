@@ -260,7 +260,11 @@ export function createRemoteApi(): CookrewApi {
     forkTerminal: (sourceId, turnIndex) =>
       req(`/api/terminal/${sourceId}/fork`, 'POST', { turnIndex }),
     teamFork: (spec) => req('/api/team/fork', 'POST', { spec }),
-    teamSave: (name) => req('/api/team/save', 'POST', { name }),
+    teamSave: (name, nodeIds) => req('/api/team/save', 'POST', { name, nodeIds }),
+    teamClipSet: (nodeIds, cut, worktree) =>
+      req('/api/team/clip', 'POST', { nodeIds, cut, worktree }),
+    teamClipGet: () => req('/api/team/clip'),
+    teamPaste: () => req('/api/team/paste', 'POST', {}),
     teamList: () => req('/api/teams'),
     roleList: () => req('/api/roles'),
     saveRole: (input) => req('/api/role/save', 'POST', input),

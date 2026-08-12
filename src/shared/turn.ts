@@ -12,6 +12,15 @@
  */
 export type TurnPhase = 'idle' | 'thinking' | 'waiting' | 'replied'
 
+/**
+ * Phases in which an agent refuses to be copied/cut (SELECT-mode clipboard).
+ * Only 'thinking' — the session file is actively being appended to, so a
+ * clone would be neither the turn's before nor its after. 'waiting' is
+ * DELIBERATELY copyable: the last completed turn is on disk and the clone
+ * cuts there, exactly like a normal fork of a waiting agent.
+ */
+export const UNCOPYABLE_PHASES: ReadonlySet<TurnPhase> = new Set(['thinking'])
+
 export interface TerminalActivity {
   terminalId: string
   /** True when the terminal runs an agent preset (non-empty command). */

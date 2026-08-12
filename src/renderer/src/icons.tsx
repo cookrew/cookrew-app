@@ -30,6 +30,7 @@ export type CrIconName =
   | 'dot'
   | 'summary'
   | 'external'
+  | 'clipboard'
 
 const STROKE = {
   fill: 'none',
@@ -91,6 +92,13 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
     <g {...STROKE} strokeWidth={1.8} strokeLinecap="square">
       <path d="M9.6 2.4 H13.6 V6.4 M13.4 2.6 L7.8 8.2" />
       <path d="M6.2 3.6 H2.8 V13.2 H12.4 V9.8" />
+    </g>
+  ),
+  clipboard: (
+    <g {...STROKE} strokeWidth={1.8} strokeLinecap="square">
+      <rect x="3.4" y="3.2" width="9.2" height="10.4" />
+      <path d="M6 3.2 V1.8 H10 V3.2" />
+      <path d="M5.6 7 H10.4 M5.6 9.6 H8.6" />
     </g>
   ),
   collapse: (

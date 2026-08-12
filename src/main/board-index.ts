@@ -24,6 +24,7 @@ import {
 } from '../shared/board'
 import { detectAttention, detectLiveWork } from '../shared/turn'
 import type { TerminalActivity, TurnRecord } from '../shared/turn'
+import { agentStatus, type HerdrStatus } from './herdr-agent-status'
 import { multiplexer, sessionNameFor } from './pty'
 
 /** What GET /api/board returns, and what the SSE 'board' event carries. */
@@ -149,13 +150,27 @@ export interface ProbeDeps {
   /** Phase classifiers (src/shared/turn.ts), injected so this stays testable. */
   detectWorking: (chunk: string) => boolean
   detectWaiting: (lines: string[]) => boolean
+  /**
+   * herdr's pushed agent state for this terminal, or null for "no signal".
+   * Optional because only a backend with `agentLifecycle` can answer; when
+   * absent (or null) the pane scrape below keeps deciding, exactly as before.
+   */
+  askedStatus?: (terminalId: string) => HerdrStatus | null
 }
 
 /**
- * One sampling pass. Reports ONLY the two phases a pane capture can actually
+ * One sampling pass. Reports ONLY the two phases this layer can actually
  * establish — 'working' and 'waiting'. An idle detached pane is deliberately
  * omitted rather than guessed at, so the ledger layer keeps deciding between
  * unread/offline instead of the probe inventing a completion it never saw.
+ *
+ * herdr is consulted FIRST where the backend can answer: a status that is
+ * asked beats one inferred from pixels. Its working/blocked map straight onto
+ * the two probe phases. An idle/done answer sets nothing AND suppresses the
+ * scrape — a detached pane's last painted frame can hold a stale spinner
+ * forever, and frozen pixels must not overrule an answer — while still never
+ * clearing an unread marker, because omission leaves that call to the ledger.
+ * Null means no signal, and the capture-pane path decides exactly as before.
  */
 export function probeOnce(deps: ProbeDeps): Map<string, BoardPhase> {
   const phases = new Map<string, BoardPhase>()
@@ -165,6 +180,12 @@ export function probeOnce(deps: ProbeDeps): Map<string, BoardPhase> {
     if (deps.isAttached(terminalId)) continue // L1 already has full fidelity
     const session = deps.sessionNameFor(terminalId)
     if (!live.has(session)) continue // no pane at all → a ledger row
+    const asked = deps.askedStatus?.(terminalId) ?? null
+    if (asked !== null) {
+      if (asked === 'working') phases.set(terminalId, 'working')
+      else if (asked === 'blocked') phases.set(terminalId, 'waiting')
+      continue
+    }
     const chunk = deps.capturePane(session)
     if (chunk.length === 0) continue
     if (deps.detectWorking(chunk)) phases.set(terminalId, 'working')
@@ -277,6 +298,19 @@ export function createBoardNotifier(
 }
 
 /**
+ * herdr's view of this terminal's agent, or null for "no signal".
+ *
+ * Gated on the CAPABILITY, never the backend's name: a backend that does not
+ * model agent lifecycle cannot vouch for whatever the feed still holds, so
+ * the answer is no signal and callers keep inferring. The feed itself already
+ * answers null for a pane it has never heard of.
+ */
+export function askedAgentStatus(terminalId: string): HerdrStatus | null {
+  if (multiplexer()?.capabilities.agentLifecycle !== true) return null
+  return agentStatus(sessionNameFor(terminalId))
+}
+
+/**
  * ProbeDeps backed by the real cookrew tmux socket. `capture-pane -p` prints
  * the visible pane; failures degrade to '' (the pane vanished mid-scan), which
  * probeOnce treats as "no signal" rather than a phase.
@@ -296,6 +330,7 @@ export function tmuxProbeDeps(runtime: {
     isAttached: runtime.isAttached,
     sessionNameFor,
     detectWorking: detectLiveWork,
-    detectWaiting: detectAttention
+    detectWaiting: detectAttention,
+    askedStatus: askedAgentStatus
   }
 }

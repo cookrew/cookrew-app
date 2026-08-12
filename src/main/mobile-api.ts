@@ -18,6 +18,8 @@ import type {
   CanvasNode,
   GitInfo,
   TeamForkSpec,
+  TeamClipStatus,
+  TeamCopyResult,
   TeamMeta,
   TerminalNodeData,
   WorkspaceList,
@@ -65,7 +67,10 @@ export interface MobileOps {
   gitInfo: (dir: string) => Promise<GitInfo>;
   /** Team fork/save + roles (spec note team-fork-roles-v1). */
   teamFork: (spec: TeamForkSpec) => Promise<WorkspaceMeta>;
-  teamSave: (name?: string) => TeamMeta;
+  teamSave: (name?: string, nodeIds?: string[]) => TeamMeta;
+  teamClipSet: (nodeIds: string[], cut: boolean, worktree?: { name: string }) => TeamClipStatus;
+  teamClipGet: () => TeamClipStatus | null;
+  teamPaste: () => Promise<TeamCopyResult>;
   teamList: () => TeamMeta[];
   roleSave: (input: {
     nodeId: string;
@@ -398,9 +403,47 @@ export async function handleMobileApi(
     return true;
   }
   if (method === "POST" && p === "/api/team/save") {
-    const body = await readJson<{ name?: string }>(request);
+    const body = await readJson<{ name?: string; nodeIds?: string[] }>(request);
     try {
-      respondJson(response, 200, ops.teamSave(body.name));
+      if (body.nodeIds !== undefined && !Array.isArray(body.nodeIds)) {
+        throw new Error("nodeIds must be an array when present");
+      }
+      respondJson(response, 200, ops.teamSave(body.name, body.nodeIds));
+    } catch (error) {
+      respondJson(response, 400, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return true;
+  }
+  // SELECT-mode clipboard (copy/cut → paste), phone parity with the bar.
+  if (method === "POST" && p === "/api/team/clip") {
+    const body = await readJson<{
+      nodeIds?: string[];
+      cut?: boolean;
+      worktree?: { name?: string };
+    }>(request);
+    try {
+      if (!Array.isArray(body.nodeIds)) throw new Error("Missing nodeIds");
+      const worktree =
+        body.worktree && typeof body.worktree.name === "string"
+          ? { name: body.worktree.name }
+          : undefined;
+      respondJson(response, 200, ops.teamClipSet(body.nodeIds, body.cut === true, worktree));
+    } catch (error) {
+      respondJson(response, 400, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return true;
+  }
+  if (method === "GET" && p === "/api/team/clip") {
+    respondJson(response, 200, ops.teamClipGet());
+    return true;
+  }
+  if (method === "POST" && p === "/api/team/paste") {
+    try {
+      respondJson(response, 200, await ops.teamPaste());
     } catch (error) {
       respondJson(response, 400, {
         error: error instanceof Error ? error.message : String(error),

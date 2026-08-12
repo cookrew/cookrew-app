@@ -482,6 +482,11 @@ export class WorkspaceStore extends EventEmitter {
     return id === this.registry.activeId ? this.state : loadWorkspaceState(this.baseDir, id)
   }
 
+  /** Read-only state of ANY workspace (active from memory, inactive from disk). */
+  workspaceState(id: string): WorkspaceState {
+    return this.stateOf(id)
+  }
+
   /** Terminal node ids of ONE workspace (active from memory, inactive from disk). */
   terminalIdsOf(workspaceId: string): string[] {
     return this.stateOf(workspaceId)
@@ -639,6 +644,22 @@ export class WorkspaceStore extends EventEmitter {
       named.kind === 'terminal' ? (named as TerminalNodeData).preset : undefined
     )
     return named
+  }
+
+  /**
+   * Remove nodes (and their local cables) from ONE workspace's state in a
+   * single patch — the cut/paste flow owns the lifecycle: no recoverable
+   * capture (the content lives on in the paste), no per-node events (the
+   * caller records one team.moved summary), and no cross-workspace lookup
+   * (identity-moved nodes exist in the TARGET under the same id).
+   */
+  removeNodesFromWorkspace(workspaceId: string, ids: string[]): void {
+    const gone = new Set(ids)
+    this.patchWorkspace(workspaceId, (s) => ({
+      ...s,
+      nodes: s.nodes.filter((n) => !gone.has(n.id)),
+      connections: s.connections.filter((c) => !gone.has(c.a) && !gone.has(c.b))
+    }))
   }
 
   /** Remove a node (and its local edges) from its OWNING workspace. */

@@ -3,6 +3,7 @@ import type { TeamMeta, WorkspaceList, WorkspaceMeta } from '../../shared/model'
 import { cookrew } from './api'
 import { CrIcon } from './icons'
 import { DirectoryManager } from './DirectoryManager'
+import { TeamGraphThumb } from './TeamGraphThumb'
 import { removeWorkspace } from './workspace-v2'
 
 function templateLabel(team: TeamMeta): string {
@@ -13,16 +14,24 @@ function templateLabel(team: TeamMeta): string {
 interface WorkspaceSwitcherProps {
   fallbackName: string
   fallbackDir: string
+  /**
+   * Opens the activity / history panel. History is a property of the
+   * workspace, so it lives here as a popout option rather than holding a
+   * header button of its own.
+   */
+  onActivity?: () => void
 }
 
 /**
  * The workspace identity in the header, doubling as a switcher. Click to open
  * a dropdown of all workspaces; pick one to switch (which rebuilds the canvas
- * and its PTYs), or create a new one inline.
+ * and its PTYs), create a new one inline, or open the workspace's activity
+ * history.
  */
 export function WorkspaceSwitcher({
   fallbackName,
-  fallbackDir
+  fallbackDir,
+  onActivity
 }: WorkspaceSwitcherProps): React.JSX.Element {
   const [list, setList] = useState<WorkspaceList | null>(null)
   const [open, setOpen] = useState(false)
@@ -41,9 +50,13 @@ export function WorkspaceSwitcher({
     return cookrew().onWorkspaceList(setList)
   }, [])
 
+  // Refetched every open, not just on mount: the dock's SAVE can add a
+  // snapshot at any point in the session, and a stale list here would make
+  // that save look like it never happened when creating from a template.
   useEffect(() => {
+    if (!open) return
     void cookrew().teamList().then(setTeams).catch(() => undefined)
-  }, [])
+  }, [open])
 
   // Close on outside click.
   useEffect(() => {
@@ -210,7 +223,13 @@ export function WorkspaceSwitcher({
                       className={`cr-ws-template-item${template === team.name ? ' active' : ''}`}
                       onClick={() => pickTemplate(team.name)}
                     >
-                      <CrIcon name="fork" />
+                      {/* The same cable-relation thumbnail the clipboard
+                          tray shows — a template's shape at a glance. */}
+                      {team.preview ? (
+                        <TeamGraphThumb graph={team.preview} width={120} height={56} />
+                      ) : (
+                        <CrIcon name="fork" />
+                      )}
                       <span className="cr-ws-template-name">{team.name}</span>
                       <span className="cr-ws-template-meta">{templateLabel(team)}</span>
                     </button>
@@ -228,6 +247,24 @@ export function WorkspaceSwitcher({
               </span>
               <span className="cr-ws-item-name">New workspace</span>
             </button>
+          )}
+
+          {onActivity && (
+            <>
+              <div className="cr-ws-sep" />
+              <button
+                className="cr-ws-item"
+                onClick={() => {
+                  setOpen(false)
+                  onActivity()
+                }}
+              >
+                <span className="cr-ws-icon">
+                  <CrIcon name="search" />
+                </span>
+                <span className="cr-ws-item-name">Activity & history</span>
+              </button>
+            </>
           )}
         </div>
       )}

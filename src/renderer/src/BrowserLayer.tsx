@@ -159,16 +159,38 @@ function BrowserHost({
   interactiveBrowser: boolean | null
   desktopStreamToken: string | null
 }): React.JSX.Element {
-  const { zoomBack } = useCanvasUi()
+  const { zoomBack, requestClose } = useCanvasUi()
   const tabs = browserTabs(node)
   const activeTab = activeBrowserTab(node)
   const [address, setAddress] = useState(activeTab.url)
+  /** The title plate swaps to the editable address field only while true. */
+  const [editingAddress, setEditingAddress] = useState(false)
+  /**
+   * The tab strip. Shown by default so multi-tab browsing is unchanged, and
+   * collapsible from the count pill for when the page matters more than the
+   * tabs. It only exists above one tab, which is where the row was pure
+   * overhead: a single chip restating the title now in the row above it.
+   */
+  const [tabsOpen, setTabsOpen] = useState(true)
   const nodeRef = useRef(node)
   nodeRef.current = node
 
   useEffect(() => {
     setAddress(activeTab.url)
   }, [activeTab.id, activeTab.url])
+
+  // Navigating or switching tabs ends editing: the field would otherwise keep
+  // showing what was typed for a page the pane has already left.
+  useEffect(() => {
+    setEditingAddress(false)
+  }, [activeTab.id, activeTab.url])
+
+  // Reopening on the next split is the useful default, so dropping back to one
+  // tab restores the shown state rather than remembering a collapse that only
+  // applied to a strip the user can no longer see.
+  useEffect(() => {
+    if (tabs.length < 2) setTabsOpen(true)
+  }, [tabs.length])
 
   // Keep the engine registry pointed at the active tab so `cookrew browser`
   // commands target it.
@@ -235,18 +257,69 @@ function BrowserHost({
       style={rect ? { left: rect.x, top: rect.y, width: rect.width, height: rect.height } : undefined}
     >
       <div className="popout browser-popout">
-        <div className="popout-header">
+        {/* TITLE ROW — one row, not two. The page's own title is the identity;
+            the node name ("Browser") labelled nothing, and the address was a
+            truncated raw field sitting a row away from the title it belongs to.
+            Tapping the plate turns it into that field, so editing costs a tap
+            instead of a permanent row. */}
+        <div className="popout-header browser-header">
           <span className="node-dot" />
-          <span className="popout-title">{node.name}</span>
-          <input
-            className="browser-address"
-            value={address}
-            onChange={(e) => setAddress(e.target.value)}
-            onKeyDown={(e) => {
-              e.stopPropagation()
-              if (e.key === 'Enter') commitAddress()
-            }}
-          />
+          {editingAddress ? (
+            <input
+              className="browser-address"
+              value={address}
+              autoFocus
+              aria-label="Address"
+              onChange={(e) => setAddress(e.target.value)}
+              onBlur={() => {
+                setEditingAddress(false)
+                setAddress(activeTab.url)
+              }}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+                if (e.key === 'Enter') {
+                  commitAddress()
+                  setEditingAddress(false)
+                }
+                if (e.key === 'Escape') {
+                  setAddress(activeTab.url)
+                  setEditingAddress(false)
+                }
+              }}
+            />
+          ) : (
+            <button
+              type="button"
+              className="browser-idplate"
+              title={activeTab.url}
+              aria-label={`Address: ${activeTab.url}`}
+              onClick={() => {
+                setAddress(activeTab.url)
+                setEditingAddress(true)
+              }}
+            >
+              <span className="browser-idplate-title">{pageHeading(activeTab)}</span>
+              {pageSubhead(activeTab) && (
+                <span className="browser-idplate-host">{pageSubhead(activeTab)}</span>
+              )}
+            </button>
+          )}
+          {/* Tabs cost nothing until there is more than one: the strip below is
+              opened from this pill, so the common single-tab case is chrome-free. */}
+          {tabs.length > 1 && (
+            <button
+              className={`cr-btn sm browser-tabs-pill${tabsOpen ? ' on' : ''}`}
+              aria-expanded={tabsOpen}
+              title={`${tabs.length} tabs`}
+              onClick={() => setTabsOpen((open) => !open)}
+            >
+              <CrIcon name="browser" />
+              {tabs.length}
+            </button>
+          )}
+          <button className="cr-btn sm" title="New tab" aria-label="New tab" onClick={addTab}>
+            <CrIcon name="plus" />
+          </button>
           {/* "Open in browser" is NOT here: in full view it lives in the dock's
               bottom-right, where the tool group would be (see Dock). The header
               keeps only what re-frames the card itself. */}
@@ -261,26 +334,24 @@ function BrowserHost({
           <button
             className="cr-btn sm popout-kill"
             title="Close browser card (⌘W)"
-            onClick={() => {
-              zoomBack()
-              void cookrew().removeNode(node.id)
-            }}
+            onClick={() => requestClose(node.id)}
           >
             <CrIcon name="close" />
           </button>
         </div>
-        <div className="browser-tabstrip">
-          {tabs.map((tab) => (
-            <div
-              key={tab.id}
-              className={`browser-tab${tab.id === activeTab.id ? ' active' : ''}`}
-              title={tab.url}
-              onClick={() => selectTab(tab)}
-            >
-              <span className="browser-tab-title">{tab.title || shortUrl(tab.url)}</span>
-              {tabs.length > 1 && (
+        {tabsOpen && tabs.length > 1 && (
+          <div className="browser-tabstrip">
+            {tabs.map((tab) => (
+              <div
+                key={tab.id}
+                className={`browser-tab${tab.id === activeTab.id ? ' active' : ''}`}
+                title={tab.url}
+                onClick={() => selectTab(tab)}
+              >
+                <span className="browser-tab-title">{tab.title || shortUrl(tab.url)}</span>
                 <button
                   className="browser-tab-close"
+                  aria-label="Close tab"
                   onClick={(e) => {
                     e.stopPropagation()
                     closeTab(tab)
@@ -288,13 +359,10 @@ function BrowserHost({
                 >
                   ×
                 </button>
-              )}
-            </div>
-          ))}
-          <button className="browser-tab-add" title="New tab" onClick={addTab}>
-            +
-          </button>
-        </div>
+              </div>
+            ))}
+          </div>
+        )}
         {tabs.map((tab) => (
           <BrowserTabView
             key={tab.id}
@@ -540,4 +608,30 @@ function shortUrl(url: string): string {
   } catch {
     return url
   }
+}
+
+/** Host alone — the recognisable half of an address, without the path noise. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return url
+  }
+}
+
+/**
+ * The title row's two lines. The page's own title is what a person recognises,
+ * so it leads; the host sits under it as provenance. A tab with no title yet
+ * (still loading, or a bare `about:`) leads with the address instead of showing
+ * an empty line, and the host line is dropped whenever it would just repeat it.
+ */
+function pageHeading(tab: BrowserTab): string {
+  const title = tab.title?.trim()
+  return title && title.length > 0 ? title : shortUrl(tab.url)
+}
+
+function pageSubhead(tab: BrowserTab): string | null {
+  const heading = pageHeading(tab)
+  const host = hostOf(tab.url)
+  return host && host !== heading ? host : null
 }
