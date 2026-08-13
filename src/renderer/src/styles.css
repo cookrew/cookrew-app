@@ -3127,6 +3127,38 @@ a.card-close {
 .cr-ws-input:focus {
   border-color: var(--amber-deep);
 }
+.cr-ws-dir-picker {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 12px;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  text-align: left;
+  background: var(--cream);
+  border: 1.5px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.cr-ws-dir-picker span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cr-ws-dir-picker:hover,
+.cr-ws-dir-picker:focus-visible {
+  border-color: var(--amber-deep);
+  outline: none;
+}
+.cr-ws-dir-picker:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
 .cr-ws-create {
   font-family: var(--font-pixel);
   font-size: 9px;
@@ -4244,4 +4276,3 @@ body.cookrew-mobile .cr-dock .voice-ghost {
     font-size: calc(11px * var(--z, 1));
   }
 }
-

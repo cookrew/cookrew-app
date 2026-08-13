@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import type { CanvasNode, WorkspaceMeta, WorkspaceState } from '../../shared/model'
 import { normalizeDirs } from '../../shared/model'
-import { cookrew, isRemoteMode } from './api'
+import { cookrew, isDemoMode, isRemoteMode } from './api'
 
 /**
  * Workspace-v2 adapter (picker/workspace UX lane). The keystone model change
@@ -214,7 +214,7 @@ export async function pickDirectory(): Promise<string | null> {
 
 /** True when a native directory picker is available (desktop with the API). */
 export function hasNativeDirPicker(): boolean {
-  return typeof bridge().pickDir === 'function' && !isRemoteMode()
+  return typeof bridge().pickDir === 'function' && !isRemoteMode() && !isDemoMode()
 }
 
 /**

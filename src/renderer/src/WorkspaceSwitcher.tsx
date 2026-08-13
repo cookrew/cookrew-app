@@ -4,7 +4,11 @@ import { cookrew } from './api'
 import { CrIcon } from './icons'
 import { DirectoryManager } from './DirectoryManager'
 import { TeamGraphThumb } from './TeamGraphThumb'
-import { removeWorkspace } from './workspace-v2'
+import {
+  hasNativeDirPicker,
+  pickDirectory,
+  removeWorkspace
+} from './workspace-v2'
 
 function templateLabel(team: TeamMeta): string {
   const when = new Date(team.savedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })
@@ -38,6 +42,7 @@ export function WorkspaceSwitcher({
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const [newDir, setNewDir] = useState('')
+  const [pickingDir, setPickingDir] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const [managingDirs, setManagingDirs] = useState<WorkspaceMeta | null>(null)
   const [teams, setTeams] = useState<TeamMeta[]>([])
@@ -104,6 +109,17 @@ export function WorkspaceSwitcher({
     void cookrew().createWorkspace(trimmed, newDir.trim(), template ?? undefined)
     setCreating(false)
     setOpen(false)
+  }
+
+  const pickPrimaryDir = (): void => {
+    if (pickingDir) return
+    setPickingDir(true)
+    void pickDirectory()
+      .then((picked) => {
+        if (picked) setNewDir(picked)
+      })
+      .catch((error: unknown) => console.error('Failed to select working directory:', error))
+      .finally(() => setPickingDir(false))
   }
 
   // Removing the active workspace switches away first (backend also guards);
@@ -198,16 +214,30 @@ export function WorkspaceSwitcher({
                   if (e.key === 'Escape') setCreating(false)
                 }}
               />
-              <input
-                className="cr-ws-input"
-                placeholder="working directory"
-                value={newDir}
-                onChange={(e) => setNewDir(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') submitCreate()
-                  if (e.key === 'Escape') setCreating(false)
-                }}
-              />
+              {hasNativeDirPicker() ? (
+                <button
+                  type="button"
+                  className="cr-ws-dir-picker"
+                  title="Select the primary working directory"
+                  disabled={pickingDir}
+                  onClick={pickPrimaryDir}
+                >
+                  <CrIcon name="terminal" />
+                  <span>{newDir || 'Select working directory'}</span>
+                  <CrIcon name="caret-right" />
+                </button>
+              ) : (
+                <input
+                  className="cr-ws-input"
+                  placeholder="working directory"
+                  value={newDir}
+                  onChange={(e) => setNewDir(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') submitCreate()
+                    if (e.key === 'Escape') setCreating(false)
+                  }}
+                />
+              )}
               {teams.length > 0 && (
                 <div className="cr-ws-template">
                   <div className="cr-ws-template-head">FROM TEMPLATE</div>
