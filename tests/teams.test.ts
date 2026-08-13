@@ -697,6 +697,8 @@ describe('copyTeam (Figma copy into an existing workspace)', () => {
     const { aId, bId } = seedSelection(store)
     const sourceWsId = store.activeId
     const target = store.createWorkspace('Staging', '/work/staging')
+    const events: string[] = []
+    store.on('op', (event: { type: string }) => events.push(event.type))
 
     const result = await copyTeam(deps, { nodeIds: [aId, bId], intoWorkspaceId: target.id })
     expect(result).toMatchObject({
@@ -726,6 +728,9 @@ describe('copyTeam (Figma copy into an existing workspace)', () => {
     )
     expect(copiedTerminals.every((t) => t.cwd === '/work/staging')).toBe(true)
     expect(store.workspaceState(target.id).dirs).toEqual(['/work/staging'])
+    // teamPaste records one grouped summary after copyTeam returns. The copy
+    // engine itself must not emit one event per appended node/cable.
+    expect(events).toEqual([])
   })
 
   it('refuses to copy WORKING agents, by name', async () => {
@@ -772,6 +777,12 @@ describe('copyTeam (Figma copy into an existing workspace)', () => {
       size: { width: 400, height: 300 }
     })
 
+    let changes = 0
+    const events: string[] = []
+    store.on('change', () => {
+      changes += 1
+    })
+    store.on('op', (event: { type: string }) => events.push(event.type))
     const result = await copyTeam(deps, {
       nodeIds: [aId, web.id],
       intoWorkspaceId: store.activeId
@@ -783,6 +794,8 @@ describe('copyTeam (Figma copy into an existing workspace)', () => {
     // The duplicate gets a unique name next to its source.
     const names = store.state.nodes.map((n) => n.name)
     expect(new Set(names).size).toBe(names.length)
+    expect(changes).toBe(1)
+    expect(events).toEqual([])
   })
 
   it('NEVER carries a harness session binding onto the copy', async () => {
@@ -880,10 +893,12 @@ describe('copyTeam (Figma copy into an existing workspace)', () => {
       intoWorkspaceId: target.id,
       worktree: { name: 'Fix Attempt' }
     })
-    // One worktree of the shared repo dir, named branch, slugged path.
+    // One worktree of the shared repo dir, named branch, slugged path — the
+    // path goes through path.join, so compare platform-joined, not with a
+    // hard-coded '/': on Windows the separator is a backslash.
     expect(added).toHaveLength(1)
     expect(added[0][0]).toBe('/work/repo')
-    expect(added[0][1].endsWith('/fix-attempt')).toBe(true)
+    expect(added[0][1]).toBe(path.join(deps.worktreeRoot, 'fix-attempt'))
     expect(added[0][2]).toBe('cookrew/fix-attempt')
     // Every copied agent lands IN the worktree, and the target lists it.
     const state = store.workspaceState(target.id)
