@@ -29,10 +29,14 @@ interface WatchedFile {
   mtimeMs: number
   size: number
   parse: SessionTurnParser
+  /** Exact tracker array produced by the last successful reconcile. */
+  history: TurnRecord[] | null
 }
 
 export class SessionTurnSync {
   private watched = new Map<string, WatchedFile>()
+  /** Last verified signature survives a workspace-switch unwatch/reattach. */
+  private dormant = new Map<string, WatchedFile>()
   private timer: NodeJS.Timeout | null = null
 
   constructor(
@@ -51,20 +55,51 @@ export class SessionTurnSync {
    * class this module exists to prevent, so it is now a compile error.
    */
   watch(terminalId: string, file: string, parse: SessionTurnParser): void {
-    this.watched.set(terminalId, { file, mtimeMs: 0, size: 0, parse })
+    const prior = this.watched.get(terminalId) ?? this.dormant.get(terminalId)
+    this.dormant.delete(terminalId)
+    if (prior && prior.file === file && prior.parse === parse && prior.history !== null) {
+      try {
+        const stat = statSync(file)
+        const historyIntact = this.turns.history(terminalId) === prior.history
+        if (historyIntact && stat.mtimeMs === prior.mtimeMs && stat.size === prior.size) {
+          // Exact same source and bytes as the last successful reconcile. The
+          // TurnTracker intentionally retains history across a workspace
+          // detach, so reparsing hundreds of MB cannot make it more exact.
+          this.watched.set(terminalId, prior)
+          this.turns.setHistorySource(terminalId, 'file')
+          this.ensureTimer()
+          return
+        }
+      } catch {
+        // Rotated/missing file: fall through to the ordinary scrape-covered
+        // reconcile path, which will retry on the next poll.
+      }
+    }
+
+    this.watched.set(terminalId, { file, mtimeMs: 0, size: 0, parse, history: null })
     // This file has not proven anything yet — a fresh --session-id boot writes
     // nothing for seconds, and a restore rebinds to a file that may not exist.
     // The scrape covers the window; reconcile() hands over if the file is
     // already there and readable.
     this.turns.setHistorySource(terminalId, 'scrape')
     this.reconcile(terminalId)
-    if (this.timer === null) {
-      this.timer = setInterval(() => this.tick(), this.pollMs)
-      this.timer.unref?.()
-    }
+    this.ensureTimer()
   }
 
+  /** Workspace switch only: retain a verified signature for exact reattach. */
+  suspend(terminalId: string): void {
+    const watched = this.watched.get(terminalId)
+    if (watched) this.dormant.set(terminalId, watched)
+    this.stopWatching(terminalId)
+  }
+
+  /** Permanent/rebind release: no dormant context may survive it. */
   unwatch(terminalId: string): void {
+    this.dormant.delete(terminalId)
+    this.stopWatching(terminalId)
+  }
+
+  private stopWatching(terminalId: string): void {
     this.watched.delete(terminalId)
     this.turns.setHistorySource(terminalId, 'scrape')
     if (this.watched.size === 0 && this.timer !== null) {
@@ -81,6 +116,13 @@ export class SessionTurnSync {
       this.turns.setHistorySource(terminalId, 'scrape')
     }
     this.watched.clear()
+    this.dormant.clear()
+  }
+
+  private ensureTimer(): void {
+    if (this.timer !== null) return
+    this.timer = setInterval(() => this.tick(), this.pollMs)
+    this.timer.unref?.()
   }
 
   private tick(): void {
@@ -93,9 +135,14 @@ export class SessionTurnSync {
     try {
       const stat = statSync(watched.file)
       if (stat.mtimeMs === watched.mtimeMs && stat.size === watched.size) return
-      this.watched.set(terminalId, { ...watched, mtimeMs: stat.mtimeMs, size: stat.size })
       const records = watched.parse(readFileSync(watched.file, 'utf8').split('\n'))
       this.turns.replaceHistory(terminalId, records)
+      this.watched.set(terminalId, {
+        ...watched,
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+        history: this.turns.history(terminalId)
+      })
       // Read and parsed: the file is real and is now the durable record, so
       // the tracker can stop writing history for this terminal. Deliberately
       // NOT conditional on records.length — a session file that exists but

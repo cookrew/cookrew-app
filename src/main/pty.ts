@@ -845,7 +845,9 @@ export class PtyManager {
     })
     this.sessions.set(options.terminalId, session)
     // A pane created after the subscription was made is not covered by it.
-    statusFeed()?.refresh()
+    // A workspace switch spawns every terminal synchronously, so collapse that
+    // burst to one subscription rebuild after the last pane exists.
+    statusFeed()?.refreshSoon()
     return session
   }
 

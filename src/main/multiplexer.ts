@@ -219,6 +219,10 @@ export interface Multiplexer {
 
   attachSpawn(spec: AttachSpec): AttachSpawn
 
+  /** Optional scope for sharing a backend's global session snapshot. */
+  beginAttachBatch?(): void
+  endAttachBatch?(): void
+
   /** Full scrollback as text, or null when the session is gone. */
   capture(name: string): string | null
   scrollState(name: string): ScrollState

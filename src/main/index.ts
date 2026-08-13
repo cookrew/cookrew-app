@@ -8,6 +8,8 @@ import { WorkspaceStore } from './store'
 import { PtyManager, multiplexer, sessionNameFor } from './pty'
 import type { PtySession } from './pty'
 import type { PaneCardInfo } from './multiplexer'
+import { statusFeed, type StatusObservation } from './herdr-agent-status'
+import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
 import { TurnTracker, type CompletedTurn } from './turn-tracker'
 import { TurnStore } from './turn-store'
 import {
@@ -94,6 +96,29 @@ const dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const store = new WorkspaceStore()
 const ptys = new PtyManager()
+/**
+ * terminal.booted (p95-p98 spec, wave 3): spawn → the agent is reachable.
+ *
+ * The ready signal is herdr's PUSHED agent state — the first state it reports
+ * for a pane that had none, which its detector cannot produce before an agent
+ * is actually running (see boot-latency.ts). Wired here rather than inside
+ * PtyManager so the emission rides the store's choke-point like every other
+ * event, and so the whole feature is absent — not degraded — on a backend with
+ * no lifecycle signal: `statusFeed()` is null under tmux and direct, nothing
+ * subscribes, and no boot is ever timed. The asymmetry is deliberate: tmux can
+ * say a pane exists, never that the agent inside it came up, and a metric that
+ * meant different things per backend would be worse than one that is missing.
+ */
+const boots = new BootLatency()
+boots.on('booted', ({ terminalId, durationMs }: BootSample) => {
+  const node = store.node(terminalId)
+  // Actor is the AGENT for the same reason turn.completed is: nobody typed
+  // this event, an agent coming up produced it.
+  store.withOpContext({ actor: 'agent' }, () =>
+    store.recordEvent('terminal.booted', terminalId, node?.name ?? terminalId, undefined, durationMs)
+  )
+})
+statusFeed()?.on('status', ({ sessionName }: StatusObservation) => boots.ready(sessionName))
 // Held rather than inlined: both the Activity Board and checkpoint search read
 // the WHOLE ledger (turnStore.loadAll()) to span workspaces the tracker cannot
 // see. A second TurnStore would be a second cache serving stale turns.
@@ -180,6 +205,37 @@ function nodeSessionRef(node: TerminalNodeData): string | null {
   if (!harness) return null
   const ref = node[harness.sessionField]
   return typeof ref === 'string' ? ref : null
+}
+
+/**
+ * Open a boot sample — but only for a COLD spawn.
+ *
+ * `sessionExists` is the discriminator, and this is the last moment it can be
+ * asked: ensureSession (inside the PtySession constructor) creates the pane, so
+ * a check afterwards always answers "it exists". A pane that is already there
+ * is being REATTACHED — the agent inside it booted minutes or days ago, and
+ * timing the handover would report a multiplexer's attach cost as an agent's
+ * boot cost. Those emit nothing at all.
+ *
+ * Costs one `pane list` on the boot path, and only where the metric is
+ * possible: no status feed (tmux, direct) means no ready signal, so there is
+ * nothing to sample and the probe is skipped entirely.
+ *
+ * A HUSK — a labelled pane whose agent died with the herdr server — reads as
+ * existing and is therefore never timed, even though ensureSession is about to
+ * boot a real agent into it. That under-reports; it does not fabricate, which
+ * is the direction this metric is allowed to be wrong in.
+ */
+function beginBootTiming(terminalId: string): boolean {
+  const hasReadySignal = statusFeed() !== null
+  // Short-circuited, not merely gated: on a backend with no ready signal the
+  // `pane list` this would cost is spent for an answer nobody can use.
+  if (!hasReadySignal) return false
+  const sessionName = sessionNameFor(terminalId)
+  const sessionExists = multiplexer()?.sessionExists(sessionName) ?? false
+  if (!shouldTimeBoot({ hasReadySignal, sessionExists })) return false
+  boots.begin(sessionName, terminalId)
+  return true
 }
 
 function recordSpawn(terminalId: string, session: PtySession): void {
@@ -325,7 +381,14 @@ function spawnTracked(t: {
   // always persisted before it spawns, so the store is the freshest source.
   const cardNode = store.node(t.id)
   const card = cardNode?.kind === 'terminal' ? paneCard(cardNode) : undefined
+  // Before the spawn, because the spawn is what makes the pane exist.
+  const timingBoot = beginBootTiming(t.id)
   const session = ptys.spawn({ terminalId: t.id, command: effective, cwd: t.cwd, card })
+  // A terminal that dies before it is ready never booted: drop the pending
+  // sample rather than leave it to time out. Registered only when a sample is
+  // actually open — spawnTracked is called repeatedly for a REUSED session
+  // (workspace switches), and an unconditional listener would pile up on it.
+  if (timingBoot) session.once('exit', () => boots.cancel(sessionNameFor(t.id)))
   turns.track(session, command.trim().length > 0)
   recordSpawn(t.id, session)
   // Codex rollout bind (trace-sourced-context-final): the rollout file
@@ -1491,14 +1554,22 @@ function registerIpc(handlers: RestoreHandlers): void {
     // Detach (not kill): the outgoing workspace's tmux sessions stay alive so
     // switching back reattaches them with their agents and scrollback intact.
     for (const tid of previousTerminalIds) {
-      sessionSync.unwatch(tid)
+      sessionSync.suspend(tid)
       turns.untrack(tid)
       ptys.detach(tid)
     }
-    for (const t of store.terminals()) bootTerminal(t)
-    void browserManager.replaceNodes(store.browsers()).catch(() => undefined)
-    // The herdr workspace's chrome follows the active Cookrew workspace.
-    reportWorkspaceBinding()
+    const mux = multiplexer()
+    mux?.beginAttachBatch?.()
+    try {
+      // Serial by design: each PTY exists before its pendingInject delivery.
+      // Herdr shares only its pane inventory inside this scope.
+      for (const t of store.terminals()) bootTerminal(t)
+      void browserManager.replaceNodes(store.browsers()).catch(() => undefined)
+      // The herdr workspace's chrome follows the active Cookrew workspace.
+      reportWorkspaceBinding()
+    } finally {
+      mux?.endAttachBatch?.()
+    }
   })
 
   // Push the workspace list to the renderer whenever it changes.
