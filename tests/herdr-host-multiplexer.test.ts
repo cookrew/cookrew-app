@@ -492,6 +492,61 @@ describe('husk recovery — a restored label is not a recovered agent', () => {
     expect(rcInit.calls.some((c) => c.args[1] === 'send-text')).toBe(false)
   })
 
+  it('does not spend a settle window on a positively identified different live root', () => {
+    // Command edits and harness migrations can leave a pane whose live root is
+    // not the node's current expected agent. That is ambiguous, but it is not
+    // permission to type a boot command. One reading already proves the only
+    // safe verdict (leave it alone), so polling for 2s per terminal is pure
+    // switch latency and used to compound to 16.4s for eight panes.
+    const differentAgent = fakeRunner({
+      'pane list': PANE_LIST([
+        { pane_id: 'w1:p1', label: 'cookrew_abc', agent: 'claude', agent_status: 'idle' }
+      ]),
+      'pane process-info': JSON.stringify({ result: { process_info: { shell_pid: 7 } } }),
+      '-o args=': 'claude --permission-mode bypassPermissions --resume existing'
+    })
+    new HerdrHostMultiplexer({
+      session: 'cookrewtest',
+      configPath: '/c',
+      runner: differentAgent,
+      settleMs: 100
+    }).ensureSession({ ...SPEC, command: 'codex' })
+
+    expect(differentAgent.calls.filter((c) => c.args[1] === 'process-info')).toHaveLength(1)
+    expect(differentAgent.calls.filter((c) => c.file === 'ps')).toHaveLength(1)
+    expect(differentAgent.calls.some((c) => c.args[1] === 'send-text')).toBe(false)
+  })
+
+  it('shares one pane-list snapshot across a warm attach batch', () => {
+    const runner = fakeRunner({
+      'pane list': PANE_LIST([
+        { pane_id: 'w1:p1', label: 'cookrew_abc', agent: 'claude', agent_status: 'idle' }
+      ]),
+      'pane process-info': JSON.stringify({ result: { process_info: { shell_pid: 7 } } }),
+      '-o args=': 'claude --permission-mode bypassPermissions',
+      'agent get': JSON.stringify({ result: { agent: { agent: 'claude', pane_id: 'w1:p1' } } })
+    })
+    const backend = new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner })
+
+    backend.beginAttachBatch()
+    const setupLists = runner.calls.filter(
+      (c) => c.args[0] === 'pane' && c.args[1] === 'list'
+    ).length
+    backend.sessionExists(SPEC.sessionName)
+    backend.ensureSession(SPEC)
+    backend.attachSpawn(SPEC)
+    backend.sessionExists(SPEC.sessionName)
+    expect(runner.calls.filter((c) => c.args[0] === 'pane' && c.args[1] === 'list')).toHaveLength(
+      setupLists
+    )
+    backend.endAttachBatch()
+
+    expect(backend.sessionExists(SPEC.sessionName)).toBe(true)
+    expect(runner.calls.filter((c) => c.args[0] === 'pane' && c.args[1] === 'list')).toHaveLength(
+      setupLists + 1
+    )
+  })
+
   it('refuses to act when process-info is unanswerable', () => {
     // The fake runner throws on unscripted `run` calls, which is exactly the
     // shape of a transiently erroring process-info after a server restart.
