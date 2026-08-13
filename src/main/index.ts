@@ -8,7 +8,7 @@ import { WorkspaceStore } from './store'
 import { PtyManager, multiplexer, sessionNameFor } from './pty'
 import type { PtySession } from './pty'
 import type { PaneCardInfo } from './multiplexer'
-import { TurnTracker } from './turn-tracker'
+import { TurnTracker, type CompletedTurn } from './turn-tracker'
 import { TurnStore } from './turn-store'
 import {
   boardSourcesFrom,
@@ -920,8 +920,9 @@ function teamClipStatus(): TeamClipStatus | null {
 async function teamPaste(): Promise<TeamCopyResult> {
   const cut = teamClipboard.status()?.cut === true
   const result = await teamClipboard.paste()
-  // The toast is the paste's confirmation (the bar exits with the mode), so
-  // the context-staleness note rides its detail — honesty over silence.
+  // This is the paste's ONE operation event/toast. copyTeam batches its state
+  // append without per-node/per-cable events, so a 30-node paste neither
+  // floods the renderer nor schedules 59 redundant event-log entries.
   store.recordEvent(
     cut ? 'team.moved' : 'team.copied',
     result.workspaceId,
@@ -1560,6 +1561,20 @@ function registerIpc(handlers: RestoreHandlers): void {
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('terminal:activity', activity)
     }
+  })
+
+  // A completed turn is the fleet's headline latency (p95-p98 spec). The
+  // tracker measures it and index.ts records it, so it enters the log through
+  // the store's choke-point like everything else rather than growing a second
+  // way in. Actor is the AGENT: nobody typed this event, an agent finishing
+  // its work produced it. A terminal whose node has since gone (dismissed
+  // between the reply and this tick) still reports — losing the sample would
+  // bias the tail toward the agents that survive.
+  turns.on('turn', ({ terminalId, durationMs }: CompletedTurn) => {
+    const node = store.node(terminalId)
+    store.withOpContext({ actor: 'agent' }, () =>
+      store.recordEvent('turn.completed', terminalId, node?.name ?? terminalId, undefined, durationMs)
+    )
   })
   ipcMain.handle('activity:list', () => turns.list())
 

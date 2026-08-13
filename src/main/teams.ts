@@ -966,11 +966,10 @@ export async function copyTeam(deps: TeamForkDeps, spec: TeamCopySpec): Promise<
 
   // The worktree dir must be in the target's list BEFORE the nodes land:
   // normalizeState snaps any terminal cwd outside the dir list to the
-  // primary on every load, and appending N nodes is N load-modify-save
-  // cycles — an after-the-fact listing would find the cwds already snapped.
+  // primary on load. This is one extra O(1) patch only for worktree pastes;
+  // the team itself lands below as one nodes+cables state mutation.
   if (worktreePath) deps.store.addWorkspaceDir(target.id, worktreePath)
-  const added = nodes.map((n) => deps.store.addNodeToWorkspace(target.id, n))
-  for (const c of plan.connections) deps.store.connectAcross(c.a, c.b)
+  const added = deps.store.appendTeamToWorkspace(target.id, nodes, plan.connections)
 
   // Hand each carried conversation to its new card — BEFORE adoptNode, which
   // is what boots the pty. The spawn resolves its session against the new id

@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CookrewEvent, EventLog } from '../src/main/event-log'
 
 function event(overrides: Partial<CookrewEvent> = {}): CookrewEvent {
@@ -23,6 +23,8 @@ function makeLog(options = {}): { log: EventLog; file: string } {
 }
 
 describe('EventLog', () => {
+  afterEach(() => vi.useRealTimers())
+
   it('buffers appends, emits live, and flushes as JSONL', () => {
     const { log, file } = makeLog()
     const seen: CookrewEvent[] = []
@@ -37,6 +39,25 @@ describe('EventLog', () => {
     const lines = readFileSync(file, 'utf8').trim().split('\n')
     expect(lines).toHaveLength(2)
     expect(JSON.parse(lines[1]).type).toBe('note.created')
+  })
+
+  it('keeps a burst off the caller hot path and coalesces it behind one timer', () => {
+    vi.useFakeTimers()
+    const { log, file } = makeLog({ flushMs: 200 })
+    const seen: CookrewEvent[] = []
+    log.on('event', (e: CookrewEvent) => seen.push(e))
+
+    for (let i = 0; i < 30; i += 1) log.append(event({ entityId: `t${i}` }))
+
+    expect(seen).toHaveLength(30)
+    expect(existsSync(file)).toBe(false)
+    expect(vi.getTimerCount()).toBe(1)
+
+    vi.advanceTimersByTime(199)
+    expect(existsSync(file)).toBe(false)
+    vi.advanceTimersByTime(1)
+    expect(readFileSync(file, 'utf8').trim().split('\n')).toHaveLength(30)
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('queries buffered + persisted events with filters', () => {
