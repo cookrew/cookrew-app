@@ -246,6 +246,12 @@ export interface CookrewApi {
   /** Still of a headless browser page for its card thumbnail; null when the
    *  flag is off or the page cannot be captured right now. */
   browserSnapshot?: (browserId: string) => Promise<string | null>;
+  /**
+   * Re-establish the push channel if it has died. Remote clients only: a
+   * desktop renderer talks to main over IPC, which cannot go down while the
+   * window it belongs to is still on screen.
+   */
+  reconnect?: () => void;
   quitApp: () => void;
 }
 

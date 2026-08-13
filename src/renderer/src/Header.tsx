@@ -18,6 +18,27 @@ interface HeaderProps {
   onViewChange: (view: MainView) => void
   /** Opens the activity metrics / history panel (workspace popout item). */
   onActivity: () => void
+  /** Re-pull the canvas and re-establish the push channel (the brand mark). */
+  onResync: () => void
+}
+
+/**
+ * The brand mark doubles as REFRESH. A phone whose link to the desktop went
+ * quiet has no way to say so — the canvas simply stops changing, or comes back
+ * from a reload empty — and reaching a browser's reload from a home-screen web
+ * app is awkward. The mark is the one control always on screen, so tapping it
+ * asks for everything again. Styled inline rather than through the stylesheet:
+ * it must look EXACTLY like the plain mark it replaces, with no button chrome.
+ */
+const RESYNC_BUTTON: React.CSSProperties = {
+  background: 'none',
+  border: 'none',
+  padding: 0,
+  margin: 0,
+  font: 'inherit',
+  color: 'inherit',
+  lineHeight: 0,
+  cursor: 'pointer'
 }
 
 /**
@@ -43,12 +64,21 @@ export function Header({
   attentionCount,
   view,
   onViewChange,
-  onActivity
+  onActivity,
+  onResync
 }: HeaderProps): React.JSX.Element {
   return (
     <header className="cr-header">
       <div className="cr-header-brand">
-        <CrLogoMark />
+        <button
+          type="button"
+          style={RESYNC_BUTTON}
+          title="Refresh — pull the canvas from the desktop again"
+          aria-label="Refresh the canvas"
+          onClick={onResync}
+        >
+          <CrLogoMark />
+        </button>
         <span className="cr-logo">COOKREW</span>
         {isDemoMode() && (
           <span className="cr-chip violet icon" title="Demo data">

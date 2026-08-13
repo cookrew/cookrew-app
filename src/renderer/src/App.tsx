@@ -35,6 +35,7 @@ import {
   shouldPollThumbs,
   shouldSnapshotLocally
 } from './browser-thumb-policy'
+import { retry } from './retry'
 import { CanvasUiContext, ToolId } from './canvas-ui'
 import { useBrowserEngine } from './browser-engine'
 import { ErrorBoundary } from './ErrorBoundary'
@@ -206,13 +207,40 @@ function Canvas(): React.JSX.Element {
 
   useBrowserEngine()
 
+  /**
+   * Load the canvas from the server, replacing whatever is on screen.
+   *
+   * RETRIED, because this is the only pull the canvas ever makes: a phone
+   * asks at the worst moment (screen just unlocked, tailnet still coming up,
+   * desktop app mid-restart) and one missed answer used to leave it showing an
+   * empty workspace until the user reloaded the page.
+   */
+  const loadWorkspace = useCallback(
+    () =>
+      retry(() => cookrew().getWorkspace())
+        .then((state) => {
+          setWorkspace(state)
+          setNodes(toFlowNodes(state))
+        })
+        .catch((error: unknown) => {
+          console.error('Could not load the workspace:', error)
+        }),
+    []
+  )
+
+  /**
+   * Bring a stale client back in step — the push channel is re-established
+   * (a dead one delivers nothing and never says so) and the canvas re-pulled.
+   * Reached from the brand mark, and automatically when the page returns to
+   * the foreground or the network comes back.
+   */
+  const resync = useCallback((): void => {
+    cookrew().reconnect?.()
+    void loadWorkspace()
+  }, [loadWorkspace])
+
   useEffect(() => {
-    void cookrew()
-      .getWorkspace()
-      .then((state) => {
-        setWorkspace(state)
-        setNodes(toFlowNodes(state))
-      })
+    void loadWorkspace()
     return cookrew().onWorkspaceState((state) => {
       setWorkspace(state)
       // Selection must SURVIVE the rebuild: toFlowNodes carries no
@@ -229,7 +257,26 @@ function Canvas(): React.JSX.Element {
         })
       }
     })
-  }, [])
+  }, [loadWorkspace])
+
+  /**
+   * A phone spends most of its life asleep. Coming back to the foreground (or
+   * back onto the network) is exactly when its push channel may already have
+   * been reaped without notice — so re-establish it and re-pull the canvas
+   * rather than trusting what is on screen.
+   */
+  useEffect(() => {
+    if (!isRemoteMode()) return
+    const onVisible = (): void => {
+      if (!document.hidden) resync()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('online', resync)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('online', resync)
+    }
+  }, [resync])
 
   // Fire the armed fit, one frame after the incoming nodes are committed —
   // React Flow measures a node on layout, and fitting before that measurement
@@ -848,6 +895,7 @@ function Canvas(): React.JSX.Element {
           view={view}
           onViewChange={setView}
           onActivity={() => setMetricsOpen(true)}
+          onResync={resync}
         />
         <div className="cr-stage" ref={stageRef}>
           <ReactFlow
