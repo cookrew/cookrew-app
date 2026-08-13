@@ -148,10 +148,25 @@ function Canvas(): React.JSX.Element {
   useEffect(() => {
     void cookrew()
       .listWorkspaces()
-      .then((list) => setActiveWsId(list.activeId))
+      .then((list) => noteActiveWorkspace(list.activeId))
       .catch(() => undefined)
-    return cookrew().onWorkspaceList((list) => setActiveWsId(list.activeId))
+    return cookrew().onWorkspaceList((list) => noteActiveWorkspace(list.activeId))
   }, [])
+  /**
+   * A workspace switch replaces every node while the viewport still frames the
+   * OUTGOING canvas — so the incoming workspace opens somewhere off in empty
+   * space and the user has to hunt for their own agents. Fit the view on
+   * arrival.
+   *
+   * Armed here, fired below, because the switch lands as TWO broadcasts: the
+   * store emits 'workspaces' (the new activeId) before 'change' (the new
+   * nodes). Fitting the moment the id changes would frame the canvas we are
+   * leaving. Arming happens in the message callback rather than in an effect
+   * so it rides that delivery order directly, instead of on whichever renders
+   * React chooses to batch the two updates into.
+   */
+  const fitPendingRef = useRef(false)
+  const knownWsIdRef = useRef<string | null>(null)
   const reactFlow = useReactFlow()
   const { screenToFlowPosition } = reactFlow
   const browsersRef = useRef<BrowserNodeData[]>([])
@@ -165,6 +180,24 @@ function Canvas(): React.JSX.Element {
   zoomedTerminalIdRef.current = zoomedTerminalId
   /** Latest ⌘W handler; a stable subscription calls through this ref. */
   const cmdWRef = useRef<() => void>(() => undefined)
+
+  /**
+   * Record the active workspace, and arm a fit when it CHANGED. The first id
+   * we learn is the workspace already on screen, not a switch — fitting there
+   * would fight the viewport the canvas restored on load.
+   */
+  const noteActiveWorkspace = (id: string): void => {
+    const previous = knownWsIdRef.current
+    knownWsIdRef.current = id
+    setActiveWsId(id)
+    if (previous === null || previous === id) return
+    fitPendingRef.current = true
+    // The outgoing canvas is gone, so the saved "back" viewport and the zoomed
+    // node both point at cards that no longer exist; ⤢ / ESC must fall back to
+    // the overview rather than restore a dead frame.
+    prevViewportRef.current = null
+    zoomedNodeIdRef.current = null
+  }
 
   useBrowserEngine()
 
@@ -192,6 +225,21 @@ function Canvas(): React.JSX.Element {
       }
     })
   }, [])
+
+  // Fire the armed fit, one frame after the incoming nodes are committed —
+  // React Flow measures a node on layout, and fitting before that measurement
+  // frames the cards at a stale size.
+  useEffect(() => {
+    if (!fitPendingRef.current) return
+    fitPendingRef.current = false
+    // An empty workspace has nothing to frame; fitView would be a no-op that
+    // still costs an animation, so leave the viewport where it is.
+    if (nodes.length === 0) return
+    const frame = requestAnimationFrame(() => {
+      void reactFlow.fitView({ duration: 450, padding: 0.1 })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [nodes, reactFlow])
 
   useEffect(() => {
     void cookrew()
