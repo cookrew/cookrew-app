@@ -70,10 +70,13 @@ export interface SocketServerDeps {
   addWorkspaceDir: (id: string, dir: string) => WorkspaceList
   removeWorkspaceDir: (id: string, dir: string) => WorkspaceList
   setPrimaryDir: (id: string, dir: string) => WorkspaceList
-  setTerminalCwd: (nodeId: string, dir: string) => CanvasNode
+  /** Async: the respawn waits for the old session to actually be gone. */
+  setTerminalCwd: (nodeId: string, dir: string) => Promise<CanvasNode>
   gitInfo: (dir: string) => Promise<GitInfo>
   /** Team fork/save + roles (spec note team-fork-roles-v1). */
   teamFork: (spec: TeamForkSpec) => Promise<WorkspaceMeta>
+  // Whole-canvas by design: the CLI has no selection, so no nodeIds and no
+  // teamCopy here — the selection bar's copy rides IPC / the mobile API.
   teamSave: (name?: string) => TeamMeta
   teamList: () => TeamMeta[]
   roleSave: (input: { nodeId: string; name: string; rolePrompt: string }) => AgentRole
@@ -839,12 +842,12 @@ function cmdWorkspaceDir(request: CliRequest, deps: SocketServerDeps): string {
   }
 }
 
-function cmdTerminalCwd(request: CliRequest, deps: SocketServerDeps): string {
+async function cmdTerminalCwd(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const dir = request.args[1]
   if (!dir) throw new Error('Usage: cookrew terminal cwd PATH')
   const me = self(request, deps)
-  deps.setTerminalCwd(me.id, dir)
-  return `Terminal cwd set to ${dir} (respawned)`
+  await deps.setTerminalCwd(me.id, dir)
+  return `Terminal cwd set to ${dir} (respawned, session carried over)`
 }
 
 async function cmdGit(request: CliRequest, deps: SocketServerDeps): Promise<string> {

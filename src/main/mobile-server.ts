@@ -19,6 +19,7 @@ import type { EventLog } from './event-log'
 import type { AgentRegistry } from './agent-registry'
 import type { TraceReader } from './trace'
 import type { BoardSources } from './board-index'
+import type { ThumbFrame } from './browser-thumb-cache'
 import { X509Certificate } from 'node:crypto'
 import { askTerminal } from './ask'
 import { ensureCert, missingHosts, sansOf } from './cert'
@@ -72,15 +73,16 @@ export interface MobileServerDeps {
   presets: readonly { name: string; command: string }[]
   /** Persist a phone-uploaded attachment; returns its absolute path. */
   saveAttachment: (name: string, data: Buffer) => string
-  /** Latest legacy flag-off capturePage() frame, pushed from the renderer. */
-  browserThumb: (browserId: string) => Buffer | undefined
+  /** Latest card frame for a browser, whichever owner produced it. */
+  browserThumb: (browserId: string) => ThumbFrame | undefined
   /** Whether browser nodes are backed by the node-owned headless runtime. */
   interactiveBrowserEnabled: () => boolean
   /**
-   * A flag-off phone polled /thumb. The desktop uses this heartbeat to keep its
-   * legacy webview capture fresh while hidden.
+   * A phone polled /thumb. Awaited, because with headless browsers this is
+   * what TAKES the picture (the desktop renderer no longer owns the page);
+   * with legacy webviews it just relays the keep-capturing heartbeat.
    */
-  browserThumbRequested?: (browserId: string) => void
+  browserThumbRequested?: (browserId: string) => void | Promise<void>
   /**
    * Override the read-only (wall) token (tests / a caller that owns token
    * lifecycle); a fresh one is minted per run otherwise.
@@ -438,19 +440,23 @@ async function handle(
 
   const thumbMatch = url.pathname.match(/^\/api\/browser\/([^/]+)\/thumb$/)
   if (request.method === 'GET' && thumbMatch) {
-    // Heartbeat first — even a 404 (no frame yet) means a phone is watching,
-    // which is exactly when the desktop must (re)start capturing this browser.
-    deps.browserThumbRequested?.(thumbMatch[1])
+    // Heartbeat first, and AWAITED — this is what produces the frame when the
+    // headless runtime owns the page, and what restarts the desktop's legacy
+    // capture when it does not. Either way, asking is what makes a picture
+    // exist, so reading the cache before it would answer 404 forever.
+    await deps.browserThumbRequested?.(thumbMatch[1])
     const thumb = deps.browserThumb(thumbMatch[1])
     if (!thumb) {
       respondJson(response, 404, { error: 'No thumbnail yet' })
       return
     }
     response.writeHead(200, {
-      'content-type': 'image/png',
+      // The type the frame really is: png from a webview capture, jpeg from a
+      // headless screenshot. Mislabelling leaves the phone decoding a lie.
+      'content-type': thumb.type,
       'cache-control': 'no-store'
     })
-    response.end(thumb)
+    response.end(thumb.data)
     return
   }
 

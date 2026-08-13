@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { NodeProps, NodeResizer } from '@xyflow/react'
 import { NodeHandles } from './NodeHandles'
 import { CardClose } from './CardClose'
+import { CardPick } from './CardPick'
 import { marked } from 'marked'
 import type { NoteNodeData } from '../../../shared/model'
 import { cookrew } from '../api'
@@ -9,7 +10,7 @@ import { useCanvasUi } from '../canvas-ui'
 
 export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
   const node = (data as { node: NoteNodeData }).node
-  const { tool, zoomToNode } = useCanvasUi()
+  const { tool, clipping, zoomToNode, picked, togglePick } = useCanvasUi()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.content)
   // Single click zooms the note to the stage after a beat; a double click
@@ -27,7 +28,12 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
   }, [])
 
   const onBodyClick = (): void => {
-    if (tool !== 'select') return
+    // Clipping: the whole card is a bigger checkbox — no zoom.
+    if (clipping) {
+      togglePick(node.id)
+      return
+    }
+    if (tool !== 'move') return
     if (clickTimer.current) clearTimeout(clickTimer.current)
     clickTimer.current = setTimeout(() => {
       clickTimer.current = null
@@ -51,9 +57,10 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
   }
 
   return (
-    <div className={`node note-node${selected ? ' selected' : ''}`}>
+    <div className={`node note-node${selected ? ' selected' : ''}${clipping && picked.has(node.id) ? ' picked' : ''}`}>
       <NodeResizer isVisible={selected} minWidth={180} minHeight={120} />
       <NodeHandles />
+      <CardPick id={node.id} />
       <div className="node-header note-header">
         <span className="node-title">{node.name}</span>
         {node.locked && <span className="lock-badge">locked</span>}

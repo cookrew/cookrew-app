@@ -5,6 +5,8 @@ import { AgentAvatar } from './nodes/AgentAvatar'
 import { RoleAvatar } from './nodes/RoleAvatar'
 import { hasRegistry, useRoster, type AgentRegistryEntry } from './agent-registry'
 import { AgentRow } from './AgentRow'
+import { NoteRow } from './NoteRow'
+import { BrowserRow } from './BrowserRow'
 import { buildAgentRows, type AgentRow as Row } from './agent-rows'
 import { advanceClock, type ActivityClock } from './activity-clock'
 import { searchAgents } from './agent-search'
@@ -22,7 +24,7 @@ import { TeamForkPicker } from './TeamForkPicker'
 import { useCanvasUi } from './canvas-ui'
 import { recoverEligible, recoverErrorToast, recoverToastFor, type RecoverToast } from './recover'
 import { dirLabel } from './workspace-v2'
-import type { WorkspaceState } from '../../shared/model'
+import type { BrowserNodeData, NoteNodeData, WorkspaceState } from '../../shared/model'
 import './agent-roster.css'
 
 /** Once-only loud warn when the bridge lacks recoverAgent. */
@@ -40,22 +42,75 @@ const RECOVER_TOAST_MS = 5000
  */
 export function RosterPanel({
   workspace,
+  activeWorkspaceId = null,
+  picked: pickedProp,
+  onTogglePick,
+  onClipStaged,
+  editing: editingProp,
+  onEditingChange,
   onClose,
+  variant = 'modal',
 }: {
   /** Loaded workspace — what FORK TEAM can act on. Null before it loads. */
   workspace: WorkspaceState | null
+  /** Active workspace id — scopes facet tags and what SELECT may pick. */
+  activeWorkspaceId?: string | null
+  /**
+   * The CANVAS clipboard selection, shared: picking on the board IS picking
+   * on the canvas, so a copy staged here shows the same tray there. Absent
+   * (older callers) → a local set.
+   */
+  picked?: ReadonlySet<string>
+  onTogglePick?: (id: string) => void
+  /** COPY/CUT staged from the board — jump to the canvas CLIPBOARD mode. */
+  onClipStaged?: () => void
+  /**
+   * Selection mode, CONTROLLED by App when the dock owns the toggle (view
+   * variant): the dock's clipboard button slides in where the canvas tools
+   * were and drives this. Absent → local state (modal variant).
+   */
+  editing?: boolean
+  onEditingChange?: (editing: boolean) => void
   onClose: () => void
+  /**
+   * `modal` floats over the canvas on a scrim and closes on an outside click.
+   * `view` fills the stage as one of the two main views, where the header's
+   * switch is what leaves it — so there is no scrim to dismiss and no ✕, which
+   * would otherwise be a second, differently-shaped way out of the same place.
+   */
+  variant?: 'modal' | 'view'
 }): React.JSX.Element {
   const roster = useRoster()
-  const { activities, zoomToNode } = useCanvasUi()
+  const { activities, thumbs, zoomToNode } = useCanvasUi()
   const [showQuiet, setShowQuiet] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   /** Edit mode: rows become checkboxes and the footer becomes team actions. */
-  const [editing, setEditing] = useState(false)
-  const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set())
+  const [localEditing, setLocalEditing] = useState(false)
+  const editing = editingProp ?? localEditing
+  const setEditing = onEditingChange ?? setLocalEditing
+  const [localPicked, setLocalPicked] = useState<ReadonlySet<string>>(() => new Set())
+  const picked = pickedProp ?? localPicked
+  const togglePick =
+    onTogglePick ??
+    ((id: string): void => {
+      setLocalPicked((prev) => {
+        const next = new Set(prev)
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+        return next
+      })
+    })
   const [forkOpen, setForkOpen] = useState(false)
   const [filter, setFilter] = useState<AgentFilter>(EMPTY_FILTER)
+  /**
+   * The facet tags only surface while the search field holds focus — the
+   * board's default face is the roster, not the filter chrome. Focus is
+   * tracked at the panel root (capture phase) so moving from the input to a
+   * facet chip keeps them open; blur fires before click, so state alone on
+   * the input would unmount the chips mid-click.
+   */
+  const [searchHot, setSearchHot] = useState(false)
   /**
    * The cookrew event log, joined to agents by entityId. It is the ONLY
    * cross-workspace signal of when an agent was last touched — live turn state
@@ -79,7 +134,14 @@ export function RosterPanel({
     () => buildAgentRows({ roster, activities, now, changedAt }),
     [roster, activities, now, changedAt],
   )
-  const facets = useMemo(() => buildFacets([...all.live, ...all.quiet]), [all])
+  // Facet TAGS speak for the CURRENT workspace only — a wall of every
+  // workspace's presets/roles was noise; the list itself stays global.
+  const facets = useMemo(() => {
+    const rows = [...all.live, ...all.quiet]
+    const scoped =
+      activeWorkspaceId === null ? rows : rows.filter((r) => r.workspaceId === activeWorkspaceId)
+    return buildFacets(scoped)
+  }, [all, activeWorkspaceId])
   const { live, quiet } = useMemo(
     () => ({
       live: applyFilter(all.live, filter),
@@ -101,6 +163,25 @@ export function RosterPanel({
     return [...direct, ...historical]
   }, [searching, live, quiet, query, hits])
   const activeCount = roster.filter((a) => a.active).length
+  // The active workspace's NOTES & BROWSERS join the board in the SAME row
+  // family as agents, but each kind binds ITS OWN body from the exact
+  // source its canvas card uses: a note's content from the workspace state
+  // (what NoteNode renders), a browser's snapshot from the shared `thumbs`
+  // record (what BrowserNode shows). Three kinds — never one mechanical
+  // template. Search narrows by name, url, or note content.
+  const elements = useMemo(() => {
+    if (!workspace) return []
+    const q = query.trim().toLowerCase()
+    return workspace.nodes
+      .filter((n) => n.kind !== 'terminal')
+      .filter(
+        (n) =>
+          q.length === 0 ||
+          n.name.toLowerCase().includes(q) ||
+          (n.kind === 'browser' && (n as BrowserNodeData).url.toLowerCase().includes(q)) ||
+          (n.kind === 'note' && (n as NoteNodeData).content.toLowerCase().includes(q)),
+      )
+  }, [workspace, query])
   /** Id of the row whose recover is in flight (disables its button). */
   const [recovering, setRecovering] = useState<string | null>(null)
   /** Transient recover-result toast (ok / defer / warn / error). */
@@ -191,11 +272,35 @@ export function RosterPanel({
     }
   }
 
+  // The clipboard stages from the ACTIVE canvas only (that is what a paste
+  // reads) — picking a foreign-workspace row says so instead of no-opping.
   const toggle = (row: Row): void => {
-    const next = new Set(picked)
-    if (next.has(row.id)) next.delete(row.id)
-    else next.add(row.id)
-    setPicked(next)
+    if (activeWorkspaceId !== null && row.workspaceId !== activeWorkspaceId) {
+      setToast({
+        tone: 'warn',
+        text: `“${row.name}” lives in ${row.workspaceName} — switch there to clip it`,
+      })
+      return
+    }
+    togglePick(row.id)
+  }
+
+  /** COPY/CUT from the board: stage the shared selection, land on the
+   *  canvas in CLIPBOARD mode where the tray shows what's staged. */
+  const runClip = (cut: boolean): void => {
+    const set = cookrew().teamClipSet
+    if (!set || picked.size === 0) return
+    void set([...picked], cut)
+      .then(() => {
+        setEditing(false)
+        onClipStaged?.()
+      })
+      .catch((error: unknown) =>
+        setToast({
+          tone: 'error',
+          text: error instanceof Error ? error.message : String(error),
+        }),
+      )
   }
 
   const recover = (row: Row): void => {
@@ -209,6 +314,38 @@ export function RosterPanel({
       )
       .finally(() => setRecovering(null))
   }
+
+  /** Element click: tick in edit mode, hand off to the canvas otherwise. */
+  const openElement = (id: string): void => {
+    if (editing) {
+      togglePick(id)
+      return
+    }
+    zoomToNode(id)
+    onClose()
+  }
+
+  const renderElement = (node: (typeof elements)[number]): React.JSX.Element =>
+    node.kind === 'note' ? (
+      <NoteRow
+        key={node.id}
+        node={node as NoteNodeData}
+        workspaceName={workspace?.name ?? ''}
+        selected={editing ? picked.has(node.id) : selected === node.id}
+        selectable={editing}
+        onOpen={openElement}
+      />
+    ) : (
+      <BrowserRow
+        key={node.id}
+        node={node as BrowserNodeData}
+        thumb={thumbs[node.id]}
+        workspaceName={workspace?.name ?? ''}
+        selected={editing ? picked.has(node.id) : selected === node.id}
+        selectable={editing}
+        onOpen={openElement}
+      />
+    )
 
   const renderRow = (row: Row): React.JSX.Element => (
     <AgentRow
@@ -226,52 +363,56 @@ export function RosterPanel({
   )
 
   return (
-    <div className="tf-scrim" onClick={onClose}>
-      <div className="tf-panel roster-panel" onClick={(e) => e.stopPropagation()}>
+    <div
+      className={variant === 'view' ? 'roster-view' : 'tf-scrim'}
+      onClick={variant === 'view' ? undefined : onClose}
+    >
+      <div
+        className="tf-panel roster-panel"
+        onClick={(e) => e.stopPropagation()}
+        onFocusCapture={(e) => {
+          if ((e.target as Element).closest?.('.roster-search, .roster-facets')) setSearchHot(true)
+        }}
+        onBlurCapture={(e) => {
+          const next = e.relatedTarget as Element | null
+          if (!next?.closest?.('.roster-search, .roster-facets')) setSearchHot(false)
+        }}
+      >
         <div className="tf-head">
           <CrIcon name="agent" />
-          <span className="tf-title">ALL AGENTS</span>
+          <span className="tf-title">BOARD</span>
           <span className="roster-count">
             {searching
               ? `${results.length} of ${roster.length}`
               : `${activeCount} active · ${roster.length} total`}
           </span>
-          <button
-            className={`cr-btn sm${editing ? ' on' : ''}`}
-            title="Select agents to save or fork as a team"
-            onClick={() => {
-              setEditing(!editing)
-              setPicked(new Set())
-            }}
-          >
-            {editing ? 'DONE' : 'SELECT'}
-          </button>
-          <button className="cr-btn sm icon tf-close" title="Close" onClick={onClose}>
-            <CrIcon name="close" />
-          </button>
-        </div>
-
-        {/* Search ranks the crew by anything you remember — who they are, or
-            what was said. Conversation text covers the LOADED workspace only;
-            the note below says so rather than letting it look complete. */}
-        <div className="roster-search">
-          <CrIcon name="search" />
-          <input
-            className="roster-search-input"
-            type="search"
-            value={query}
-            placeholder="Search agents, tasks, replies…"
-            autoFocus
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape' && query) {
-                e.stopPropagation()
-                setQuery('')
-              }
-            }}
-          />
-          {searching && (
-            <button className="cr-btn sm icon" title="Clear" onClick={() => setQuery('')}>
+          {/* Search ranks the crew by anything you remember — who they are, or
+              what was said. It lives in the header's top-right and never grabs
+              focus on its own: opening BOARD lands on the roster. Conversation
+              text covers the LOADED workspace only. */}
+          <div className="roster-search">
+            <CrIcon name="search" />
+            <input
+              className="roster-search-input"
+              type="search"
+              value={query}
+              placeholder="Search agents, tasks, replies…"
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape' && query) {
+                  e.stopPropagation()
+                  setQuery('')
+                }
+              }}
+            />
+            {searching && (
+              <button className="cr-btn sm icon" title="Clear" onClick={() => setQuery('')}>
+                <CrIcon name="close" />
+              </button>
+            )}
+          </div>
+          {variant === 'modal' && (
+            <button className="cr-btn sm icon tf-close" title="Close" onClick={onClose}>
               <CrIcon name="close" />
             </button>
           )}
@@ -286,25 +427,32 @@ export function RosterPanel({
 
         {/* Facets from the registry + event log — structured narrowing, which
             is what these records can answer well. Conversation text is NOT
-            here: the event log carries none by design. */}
-        <FacetBar facets={facets} filter={filter} onChange={setFilter} />
+            here: the event log carries none by design. Shown only while the
+            search field is hot. */}
+        {searchHot && <FacetBar facets={facets} filter={filter} onChange={setFilter} />}
 
-        {roster.length === 0 ? (
+        {roster.length === 0 && elements.length === 0 ? (
           <div className="tf-role-note">No agents yet.</div>
         ) : searching ? (
           <div className="roster-list">
-            {results.length === 0 ? (
+            {results.length === 0 && elements.length === 0 ? (
               <div className="tf-role-note">
                 Nothing matches “{query.trim()}” — in any agent's name, current task, or checkpoint
                 history.
               </div>
             ) : (
-              results.map(renderRow)
+              <>
+                {results.map(renderRow)}
+                {elements.map(renderElement)}
+              </>
             )}
           </div>
         ) : (
           <div className="roster-list">
             {live.map(renderRow)}
+            {/* Notes & browsers of the active workspace — each kind binds
+                its own canvas-card source (NoteRow / BrowserRow). */}
+            {elements.map(renderElement)}
 
             {/* The 228 collapse: agents that have never run a turn carry no
                 information, so they fold behind one row instead of filling
@@ -320,12 +468,33 @@ export function RosterPanel({
           </div>
         )}
 
-        {/* Edit mode footer: the fork sheet is the existing TeamForkPicker,
-            handed this selection — not a second implementation of forking. */}
+        {/* Edit mode footer: COPY/CUT share the canvas clipboard (the same
+            selection, the same tray); the fork sheet is the existing
+            TeamForkPicker — not a second implementation of forking. */}
         {editing && (
           <div className="roster-edit-bar">
             <span className="roster-edit-count">{picked.size} SELECTED</span>
             <span className="roster-edit-spacer" />
+            {typeof cookrew().teamClipSet === 'function' && (
+              <>
+                <button
+                  className="cr-btn sm"
+                  disabled={picked.size === 0}
+                  title="Copy the selection to the clipboard — lands on the canvas in CLIPBOARD mode"
+                  onClick={() => runClip(false)}
+                >
+                  COPY
+                </button>
+                <button
+                  className="cr-btn sm"
+                  disabled={picked.size === 0}
+                  title="Cut the selection — pasting moves it out of this workspace"
+                  onClick={() => runClip(true)}
+                >
+                  CUT
+                </button>
+              </>
+            )}
             <button
               className="cr-btn sm"
               disabled={picked.size === 0 || !workspace}
@@ -353,6 +522,7 @@ export function RosterPanel({
           <TeamForkPicker workspace={workspace} seed={picked} onClose={() => setForkOpen(false)} />
         )}
       </div>
+
     </div>
   )
 }

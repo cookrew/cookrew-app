@@ -36,7 +36,8 @@ export function MobileBrowserFrame({
   open,
   streamEnabled,
   desktopStreamToken,
-  fallback = 'thumb'
+  fallback = 'thumb',
+  actions
 }: {
   browserId: string
   /** True while this browser pane is zoomed open (stream/poll only then). */
@@ -47,6 +48,12 @@ export function MobileBrowserFrame({
   desktopStreamToken: string | null
   /** Flag-off phone uses /thumb; headless clients use a neutral fallback. */
   fallback?: 'thumb' | 'loading'
+  /**
+   * Page-level actions (open in browser) joined to the frame's own controls in
+   * one floating cluster — the parent owns them because it knows the active
+   * tab's url.
+   */
+  actions?: React.ReactNode
 }): React.JSX.Element {
   const [seq, setSeq] = useState(0) // /thumb cache-buster (fallback mode)
   const [loaded, setLoaded] = useState(false)
@@ -339,56 +346,47 @@ export function MobileBrowserFrame({
           <span className="cr-kicker">{statusText}</span>
         </div>
       )}
-      {showControl && (
-        <button
-          type="button"
-          className={`browser-frame-control${stream.isOwner ? ' owner' : ''}`}
-          title={controlLabel}
-          aria-label={controlLabel}
-          aria-pressed={stream.isOwner === true}
-          disabled={controlDisabled}
-          onPointerDown={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-          }}
-          onKeyDown={(event) => event.stopPropagation()}
-          onClick={stream.isOwner ? stream.release : stream.claim}
-        >
-          <CrIcon name={stream.isOwner ? 'check' : 'select'} />
-        </button>
-      )}
-      {interactive && (
-        <button
-          type="button"
-          className={`browser-frame-kbd${kbd.open ? ' open' : ''}`}
-          title={kbd.open ? 'Hide keyboard' : 'Show keyboard'}
-          aria-label={kbd.open ? 'Hide keyboard' : 'Show keyboard'}
-          aria-pressed={kbd.open}
-          // Focus must happen in the tap gesture (onClick) for iOS to raise the
-          // keyboard; stop pointer events reaching the frame's drag handlers.
-          onPointerDown={(event) => event.stopPropagation()}
-          onKeyDown={(event) => event.stopPropagation()}
-          onClick={kbd.toggle}
-          style={{
-            position: 'absolute',
-            right: 8,
-            bottom: 8,
-            zIndex: 3,
-            width: 36,
-            height: 36,
-            borderRadius: 8,
-            border: '1px solid rgba(255,255,255,0.4)',
-            background: kbd.open ? 'var(--hp, #32d74b)' : 'rgba(0,0,0,0.55)',
-            color: '#fff',
-            fontSize: 18,
-            lineHeight: 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center'
-          }}
-        >
-          <span aria-hidden="true">⌨</span>
-        </button>
+      {/* One floating cluster, bottom-right OVER the page: translucent so it
+          costs the browser no layout height at all — every pixel of the view
+          stays the page's. */}
+      {(showControl || interactive || actions) && (
+        <div className="browser-frame-actions">
+          {showControl && (
+            <button
+              type="button"
+              className={`browser-frame-btn${stream.isOwner ? ' on' : ''}`}
+              title={controlLabel}
+              aria-label={controlLabel}
+              aria-pressed={stream.isOwner === true}
+              disabled={controlDisabled}
+              onPointerDown={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+              }}
+              onKeyDown={(event) => event.stopPropagation()}
+              onClick={stream.isOwner ? stream.release : stream.claim}
+            >
+              <CrIcon name={stream.isOwner ? 'check' : 'select'} />
+            </button>
+          )}
+          {interactive && (
+            <button
+              type="button"
+              className={`browser-frame-btn${kbd.open ? ' on' : ''}`}
+              title={kbd.open ? 'Hide keyboard' : 'Show keyboard'}
+              aria-label={kbd.open ? 'Hide keyboard' : 'Show keyboard'}
+              aria-pressed={kbd.open}
+              // Focus must happen in the tap gesture (onClick) for iOS to raise
+              // the keyboard; stop pointer events reaching the drag handlers.
+              onPointerDown={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+              onClick={kbd.toggle}
+            >
+              <span aria-hidden="true">⌨</span>
+            </button>
+          )}
+          {actions}
+        </div>
       )}
       {/* Hidden keystroke capture — focused within the ⌨ gesture so the phone
           keyboard rises; typing forwards to the remote field via keyMsg. */}
@@ -405,9 +403,9 @@ export function MobileBrowserFrame({
         onBlur={kbd.onBlur}
         style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, opacity: 0, border: 0, padding: 0, pointerEvents: 'none' }}
       />
-      {frameReady && (
-        <span className={`browser-frame-live${showControl ? ' with-control' : ''}`} aria-hidden="true" />
-      )}
+      {/* The live dot keeps the corner to itself now that the controls sit in
+          the dock — nothing left up here to make room for. */}
+      {frameReady && <span className="browser-frame-live" aria-hidden="true" />}
       {src && (
         <img
           className={`browser-frame-img${showPlaceholder ? '' : ' ready'}`}

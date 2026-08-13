@@ -26,7 +26,12 @@ function toolGlyph(toolCall: string): CrIconName {
 export function TurnView({ model }: { model: TurnViewModel }): React.JSX.Element {
   const { title, ask, tools, latest, pendingInput, tail } = model
 
-  if (ask === null) {
+  // The shell-tail path belongs to an agent with NOTHING tracked — not to one
+  // whose ask is merely unknown. A self-healed turn (see turnViewOf) has no
+  // ask but does have a title, a live status verb and a tool trail; keying
+  // this branch on `ask` alone collapsed those cards to the screen's last
+  // line, which under a running agent is the bare '❯' input prompt.
+  if (ask === null && latest === null && title === null && tools.length === 0) {
     return (
       <>
         {tail === null ? (
@@ -42,9 +47,14 @@ export function TurnView({ model }: { model: TurnViewModel }): React.JSX.Element
   return (
     <>
       {title && <div className="vi-turn-title">{title}</div>}
-      <div className="vi-you">
-        <span className="vi-you-label">You:</span> {ask}
-      </div>
+      {/* No "You:" line rather than an empty one: the tracker joined this turn
+          late and does not know the ask. Better a missing row than a blank
+          label implying the user sent nothing. */}
+      {ask !== null && (
+        <div className="vi-you">
+          <span className="vi-you-label">You:</span> {ask}
+        </div>
+      )}
       {/* What it's doing RIGHT NOW: the status verb says it's busy, the trail
           says with what. Newest last, older calls dimmed. */}
       {tools.length > 0 && (

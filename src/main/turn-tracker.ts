@@ -135,6 +135,18 @@ interface TrackedTerminal {
 }
 
 /**
+ * Payload of the tracker's 'turn' event: one real exchange finished, and how
+ * long the agent took over it. Deliberately just the two facts — the terminal
+ * to attribute it to and the milliseconds — so nothing about the conversation
+ * can ride out to the event log on it.
+ */
+export interface CompletedTurn {
+  terminalId: string
+  /** Milliseconds from the turn opening ('thinking') to 'replied'. */
+  durationMs: number
+}
+
+/**
  * Watches every PTY and derives per-terminal turn state for the summary
  * cards: Enter starts a turn ('thinking', streaming the new-output tail as a
  * live thinking chain), output quiescence ends it ('replied', exposing the
@@ -734,6 +746,22 @@ export class TurnTracker extends EventEmitter {
     if (t.prompt !== null && isCommandPrompt(t.prompt)) {
       this.push(t)
       return
+    }
+    // A real exchange just ended: announce how long it took (latency spec
+    // p95-p98). Emitted HERE, past the two discards above, so the samples are
+    // turns somebody actually waited on — never a boot screen tripping
+    // self-heal, never a typed slash command. It rides ahead of the two
+    // recording paths below because it is true of both: a turn whose durable
+    // record belongs to the session file still happened, and still took time.
+    //
+    // The tracker does not reach the event log itself — index.ts translates
+    // this into store.recordEvent, so latency enters through the same
+    // choke-point as every other event and cannot diverge from it.
+    if (t.turnStartedAt > 0) {
+      this.emit('turn', {
+        terminalId: id,
+        durationMs: Date.now() - t.turnStartedAt
+      } satisfies CompletedTurn)
     }
     // STEP 4: the session file is this terminal's record. Appending here would
     // be a second writer of the same exchange — historically it landed a

@@ -1,4 +1,5 @@
 import { AuthError, authStore, type AuthScope } from './auth-gate'
+import { ReconnectingStream } from './live-stream'
 import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
@@ -78,20 +79,20 @@ export async function checkAuth(candidate?: string): Promise<AuthScope> {
 
 /**
  * One shared /api/events stream for workspace state, workspace list and
- * terminal activity. EventSource reconnects on its own after network blips.
+ * terminal activity — and the client's ONLY source of canvas updates, so it
+ * heals itself. EventSource retries the failures it considers retryable and
+ * gives up on the rest; a phone that loses this stream for good sits on
+ * whatever it last drew, which after a reload is nothing at all.
  */
-let events: EventSource | null = null
+let events: ReconnectingStream | null = null
 
-function sharedEvents(): EventSource {
-  if (!events) events = new EventSource('/api/events')
+function sharedEvents(): ReconnectingStream {
+  if (!events) events = new ReconnectingStream({ open: () => new EventSource('/api/events') })
   return events
 }
 
 function subscribe<T>(event: string, cb: (data: T) => void): () => void {
-  const source = sharedEvents()
-  const listener = (e: MessageEvent): void => cb(JSON.parse(e.data) as T)
-  source.addEventListener(event, listener)
-  return () => source.removeEventListener(event, listener)
+  return sharedEvents().on(event, (e) => cb(JSON.parse(e.data) as T))
 }
 
 /** data-URL detour: base64 without blowing the call stack on big files. */
@@ -260,7 +261,11 @@ export function createRemoteApi(): CookrewApi {
     forkTerminal: (sourceId, turnIndex) =>
       req(`/api/terminal/${sourceId}/fork`, 'POST', { turnIndex }),
     teamFork: (spec) => req('/api/team/fork', 'POST', { spec }),
-    teamSave: (name) => req('/api/team/save', 'POST', { name }),
+    teamSave: (name, nodeIds) => req('/api/team/save', 'POST', { name, nodeIds }),
+    teamClipSet: (nodeIds, cut, worktree) =>
+      req('/api/team/clip', 'POST', { nodeIds, cut, worktree }),
+    teamClipGet: () => req('/api/team/clip'),
+    teamPaste: () => req('/api/team/paste', 'POST', {}),
     teamList: () => req('/api/teams'),
     roleList: () => req('/api/roles'),
     saveRole: (input) => req('/api/role/save', 'POST', input),
@@ -275,6 +280,7 @@ export function createRemoteApi(): CookrewApi {
       return result.interactive
     },
     browserStreamToken: () => Promise.resolve(null),
+    reconnect: () => sharedEvents().revive(),
     onBrowserOpenTab: () => () => undefined,
     onBrowserPhoneViewing: () => () => undefined,
     onCmdW: () => () => undefined,

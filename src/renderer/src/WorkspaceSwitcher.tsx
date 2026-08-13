@@ -3,7 +3,12 @@ import type { TeamMeta, WorkspaceList, WorkspaceMeta } from '../../shared/model'
 import { cookrew } from './api'
 import { CrIcon } from './icons'
 import { DirectoryManager } from './DirectoryManager'
-import { removeWorkspace } from './workspace-v2'
+import { TeamGraphThumb } from './TeamGraphThumb'
+import {
+  hasNativeDirPicker,
+  pickDirectory,
+  removeWorkspace
+} from './workspace-v2'
 
 function templateLabel(team: TeamMeta): string {
   const when = new Date(team.savedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })
@@ -13,22 +18,31 @@ function templateLabel(team: TeamMeta): string {
 interface WorkspaceSwitcherProps {
   fallbackName: string
   fallbackDir: string
+  /**
+   * Opens the activity / history panel. History is a property of the
+   * workspace, so it lives here as a popout option rather than holding a
+   * header button of its own.
+   */
+  onActivity?: () => void
 }
 
 /**
  * The workspace identity in the header, doubling as a switcher. Click to open
  * a dropdown of all workspaces; pick one to switch (which rebuilds the canvas
- * and its PTYs), or create a new one inline.
+ * and its PTYs), create a new one inline, or open the workspace's activity
+ * history.
  */
 export function WorkspaceSwitcher({
   fallbackName,
-  fallbackDir
+  fallbackDir,
+  onActivity
 }: WorkspaceSwitcherProps): React.JSX.Element {
   const [list, setList] = useState<WorkspaceList | null>(null)
   const [open, setOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const [newDir, setNewDir] = useState('')
+  const [pickingDir, setPickingDir] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const [managingDirs, setManagingDirs] = useState<WorkspaceMeta | null>(null)
   const [teams, setTeams] = useState<TeamMeta[]>([])
@@ -41,9 +55,13 @@ export function WorkspaceSwitcher({
     return cookrew().onWorkspaceList(setList)
   }, [])
 
+  // Refetched every open, not just on mount: the dock's SAVE can add a
+  // snapshot at any point in the session, and a stale list here would make
+  // that save look like it never happened when creating from a template.
   useEffect(() => {
+    if (!open) return
     void cookrew().teamList().then(setTeams).catch(() => undefined)
-  }, [])
+  }, [open])
 
   // Close on outside click.
   useEffect(() => {
@@ -91,6 +109,17 @@ export function WorkspaceSwitcher({
     void cookrew().createWorkspace(trimmed, newDir.trim(), template ?? undefined)
     setCreating(false)
     setOpen(false)
+  }
+
+  const pickPrimaryDir = (): void => {
+    if (pickingDir) return
+    setPickingDir(true)
+    void pickDirectory()
+      .then((picked) => {
+        if (picked) setNewDir(picked)
+      })
+      .catch((error: unknown) => console.error('Failed to select working directory:', error))
+      .finally(() => setPickingDir(false))
   }
 
   // Removing the active workspace switches away first (backend also guards);
@@ -185,16 +214,30 @@ export function WorkspaceSwitcher({
                   if (e.key === 'Escape') setCreating(false)
                 }}
               />
-              <input
-                className="cr-ws-input"
-                placeholder="working directory"
-                value={newDir}
-                onChange={(e) => setNewDir(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') submitCreate()
-                  if (e.key === 'Escape') setCreating(false)
-                }}
-              />
+              {hasNativeDirPicker() ? (
+                <button
+                  type="button"
+                  className="cr-ws-dir-picker"
+                  title="Select the primary working directory"
+                  disabled={pickingDir}
+                  onClick={pickPrimaryDir}
+                >
+                  <CrIcon name="terminal" />
+                  <span>{newDir || 'Select working directory'}</span>
+                  <CrIcon name="caret-right" />
+                </button>
+              ) : (
+                <input
+                  className="cr-ws-input"
+                  placeholder="working directory"
+                  value={newDir}
+                  onChange={(e) => setNewDir(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') submitCreate()
+                    if (e.key === 'Escape') setCreating(false)
+                  }}
+                />
+              )}
               {teams.length > 0 && (
                 <div className="cr-ws-template">
                   <div className="cr-ws-template-head">FROM TEMPLATE</div>
@@ -210,7 +253,13 @@ export function WorkspaceSwitcher({
                       className={`cr-ws-template-item${template === team.name ? ' active' : ''}`}
                       onClick={() => pickTemplate(team.name)}
                     >
-                      <CrIcon name="fork" />
+                      {/* The same cable-relation thumbnail the clipboard
+                          tray shows — a template's shape at a glance. */}
+                      {team.preview ? (
+                        <TeamGraphThumb graph={team.preview} width={120} height={56} />
+                      ) : (
+                        <CrIcon name="fork" />
+                      )}
                       <span className="cr-ws-template-name">{team.name}</span>
                       <span className="cr-ws-template-meta">{templateLabel(team)}</span>
                     </button>
@@ -228,6 +277,24 @@ export function WorkspaceSwitcher({
               </span>
               <span className="cr-ws-item-name">New workspace</span>
             </button>
+          )}
+
+          {onActivity && (
+            <>
+              <div className="cr-ws-sep" />
+              <button
+                className="cr-ws-item"
+                onClick={() => {
+                  setOpen(false)
+                  onActivity()
+                }}
+              >
+                <span className="cr-ws-icon">
+                  <CrIcon name="search" />
+                </span>
+                <span className="cr-ws-item-name">Activity & history</span>
+              </button>
+            </>
           )}
         </div>
       )}

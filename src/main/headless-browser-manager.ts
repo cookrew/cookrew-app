@@ -73,6 +73,17 @@ export class HeadlessBrowserManager {
     return instance
   }
 
+  /**
+   * An already-running instance, or null. Unlike get(), this NEVER starts one.
+   *
+   * For callers whose request must not cause a browser to launch — the card
+   * thumbnail poll is the case: it runs for every browser on the canvas, and
+   * making a picture is never a reason to spend a Chrome process.
+   */
+  peek(browserId: string): HeadlessInstance | null {
+    return this.instances.get(browserId) ?? null
+  }
+
   async get(browserId: string): Promise<HeadlessInstance | null> {
     if (!this.deps.enabled() || this.shuttingDown) return null
     const node = this.deps.resolveNode(browserId)

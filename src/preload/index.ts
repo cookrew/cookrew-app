@@ -31,6 +31,8 @@ const api = {
     ipcRenderer.invoke('terminal:setCwd', nodeId, dir),
   pickDir: () => ipcRenderer.invoke('dir:pick'),
   gitInfo: (dir: string) => ipcRenderer.invoke('git:info', dir),
+  openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
+  browserSnapshot: (browserId: string) => ipcRenderer.invoke('browser:snapshot', browserId),
   onWorkspaceList: (cb: (list: unknown) => void) => {
     const listener = (_e: unknown, list: unknown): void => cb(list)
     ipcRenderer.on('workspace:list', listener)
@@ -89,7 +91,11 @@ const api = {
   forkTerminal: (sourceId: string, turnIndex?: number) =>
     ipcRenderer.invoke('terminal:fork', sourceId, turnIndex),
   teamFork: (spec: unknown) => ipcRenderer.invoke('team:fork', spec),
-  teamSave: (name?: string) => ipcRenderer.invoke('team:save', name),
+  teamSave: (name?: string, nodeIds?: string[]) => ipcRenderer.invoke('team:save', name, nodeIds),
+  teamClipSet: (nodeIds: string[], cut: boolean, worktree?: { name: string }) =>
+    ipcRenderer.invoke('team:clip:set', nodeIds, cut, worktree),
+  teamClipGet: () => ipcRenderer.invoke('team:clip:get'),
+  teamPaste: () => ipcRenderer.invoke('team:clip:paste'),
   teamList: () => ipcRenderer.invoke('team:list'),
   roleList: () => ipcRenderer.invoke('role:list'),
   // Observability event log (observability-event-log-spec): global stream +

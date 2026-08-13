@@ -19,6 +19,8 @@ import type {
   CanvasNode,
   Connection,
   GitInfo,
+  TeamCopyResult,
+  TeamCopySpec,
   TeamForkChoice,
   TeamForkSpec,
   TeamMeta,
@@ -36,6 +38,8 @@ import {
   buildRoleBootMessage
 } from '../shared/fork'
 import { stripSessionFlags } from '../shared/claude-fork'
+import { scopeToSelection } from '../shared/team-actions'
+import { fileSlug } from '../shared/slug'
 import { claudeSessionFile, forkClaudeSession, forkClaudeSessionAssembled } from './claude-fork'
 import { injectWhenReady } from './fork'
 import { isPiCommand, stripPiSessionFlags } from './pi-bind'
@@ -84,7 +88,19 @@ function metaOf(snapshot: TeamSnapshot): TeamMeta {
     name: snapshot.name,
     savedAt: snapshot.savedAt,
     nodeCount: snapshot.nodes.length,
-    terminalCount: snapshot.nodes.filter((n) => n.kind === 'terminal').length
+    terminalCount: snapshot.nodes.filter((n) => n.kind === 'terminal').length,
+    // Mini-graph for template pickers: the same cable-relation thumbnail
+    // the clipboard tray shows, so a saved team reads at a glance.
+    preview: {
+      items: snapshot.nodes.map((n) => ({
+        id: n.id,
+        kind: n.kind,
+        name: n.name,
+        position: n.position,
+        size: n.size
+      })),
+      cables: snapshot.connections.map((c) => ({ a: c.a, b: c.b }))
+    }
   }
 }
 
@@ -108,8 +124,22 @@ export class TeamStore {
    * terminals with a live session file get that file COPIED into the team's
    * sessions sidecar, so a later fork-from-saved can native-rewind even in a
    * fresh directory (item 2b) — the canvas may be long gone by then.
+   *
+   * With nodeIds the snapshot is SCOPED to that selection (Figma model):
+   * only the selected nodes, only the cables with both ends selected, only
+   * those terminals' turns and sessions.
    */
-  save(state: WorkspaceState, turnsOf: (terminalId: string) => TurnRecord[], name?: string): TeamMeta {
+  save(
+    fullState: WorkspaceState,
+    turnsOf: (terminalId: string) => TurnRecord[],
+    name?: string,
+    nodeIds?: string[]
+  ): TeamMeta {
+    const state =
+      nodeIds && nodeIds.length > 0 ? scopeToSelection(fullState, nodeIds) : fullState
+    if (state.nodes.length === 0) {
+      throw new Error('Team save needs at least one node — the selection matched nothing')
+    }
     const teamName = (name ?? state.name).trim()
     if (teamName.length === 0) throw new Error('Team name must not be empty')
     const sessions = this.snapshotSessions(teamName, state)
@@ -241,6 +271,13 @@ export interface TeamForkPlan {
 interface PlanDeps {
   newId: () => string
   roleOf: (name: string) => AgentRole | undefined
+  /** Node ids that keep their ORIGINAL id (cut-paste identity transfer). */
+  keepIdentity?: ReadonlySet<string>
+  /**
+   * Terminal ids whose SESSION moves to the copy (cut-paste). They still
+   * re-id; only the conversation travels. See TeamCopySpec.carrySessions.
+   */
+  carrySessions?: ReadonlySet<string>
 }
 
 /**
@@ -291,20 +328,41 @@ function planTerminal(
           ? (turnIndexes[turnIndexes.length - 1] ?? null)
           : null
 
+  // A CUT MOVES the conversation: the source card is removed, so nothing is
+  // left to append to that session and the copy may hold its ref outright.
+  // Same ref means no lineage transition, no spurious /clear marker on the
+  // rail, and checkpoint ordinals identical either side of the paste — the
+  // rule session-move.ts already follows for a workdir change. A role fork
+  // is a different agent by definition, so it never carries.
+  const carries = mode !== 'role' && deps.carrySessions?.has(node.id) === true
+
   const forked: TerminalNodeData = {
     ...node,
     id: newId,
     cwd: targetDir,
     preset: role ? role.preset : node.preset,
-    // Session binding never carries over — the fork engine assigns its own.
+    // NO session binding carries over — the fork engine assigns its own.
+    // An inherited codexSessionRef/opencodeSessionId would make the copy
+    // `resume` the SOURCE's live session file: duplicate-in-place would run
+    // two processes appending to one rollout. Lineage and the restore stack
+    // reference the source's sessions, so they stay behind too.
     command: isPiCommand(role ? role.command : node.command)
       ? stripPiSessionFlags(role ? role.command : node.command)
       : stripSessionFlags(role ? role.command : node.command),
-    claudeSessionId: null,
-    piSessionId: null,
+    claudeSessionId: carries ? (node.claudeSessionId ?? null) : null,
+    piSessionId: carries ? (node.piSessionId ?? null) : null,
+    codexSessionRef: carries ? (node.codexSessionRef ?? null) : null,
+    opencodeSessionId: carries ? (node.opencodeSessionId ?? null) : null,
+    // Lineage travels with the session it describes: it names the earlier
+    // segments of THIS conversation, which is now this card's.
+    sessionLineage: carries ? node.sessionLineage : undefined,
+    // The restore stack is not carried even by a move: its entries reference
+    // the source terminal's snapshots by its id, which is gone.
+    restoreStack: undefined,
+    pendingInject: null,
     role: role ? role.name : node.role,
     forkOf:
-      mode === 'role' || turnIndex === null
+      carries || mode === 'role' || turnIndex === null
         ? null
         : { sourceId: node.id, sourceName: node.name, turnIndex }
   }
@@ -339,7 +397,7 @@ export function planTeamFork(
 
   for (const node of source.nodes) {
     if (!included.has(node.id)) continue
-    const newId = deps.newId()
+    const newId = deps.keepIdentity?.has(node.id) ? node.id : deps.newId()
     idMap.set(node.id, newId)
     if (node.kind !== 'terminal') {
       nodes.push({ ...node, id: newId })
@@ -574,12 +632,52 @@ export interface TeamForkDeps {
   ptys: PtyManager
   /** index.ts switch wrapper — the switch boots the forked terminals. */
   switchWorkspace: (id: string) => void
+  /**
+   * Bring one just-added node alive on the ACTIVE canvas — the same per-kind
+   * side effects index.ts addNode owns (spawn terminals, sync browsers).
+   * copyTeam uses it when the copy lands on the live workspace; copies into
+   * inactive workspaces come alive on activation — same rule as agent-recover.
+   */
+  adoptNode?: (n: CanvasNode) => void
+  /**
+   * Is this terminal mid-turn right now? A WORKING agent cannot be copied —
+   * its session file is being appended to and a clone taken mid-write is
+   * neither the turn's before nor its after. Absent → nothing is working.
+   */
+  isWorking?: (terminalId: string) => boolean
+  /**
+   * Move a CUT terminal's conversation onto its new card: the turn ledger
+   * (keyed by terminal id, so a re-id would otherwise open a blank
+   * transcript) and, for a harness whose sessions are keyed by directory,
+   * the session file itself. Absent → nothing carries, and spec.carrySessions
+   * is inert; present → called once per carried terminal before the boot.
+   */
+  carrySession?: (from: TerminalNodeData, to: TerminalNodeData) => void
   /** Git worktree operations (injectable for tests). */
   git: WorktreeApi
   /** Root under which fork worktrees are created (default ~/.cookrew/worktrees). */
   worktreeRoot: string
   /** Test override for ~/.claude/projects (native session forks). */
   projectsDir?: string
+}
+
+/**
+ * Fork source for a NON-active workspace (PASTE after a switch): state from
+ * the store, turn histories from the tracker (keyed by terminal id, so they
+ * survive the detach), live-disk session resolution — the same recover-mode
+ * machinery that re-binds an agent's session in a new directory.
+ */
+function sourceFromWorkspace(deps: TeamForkDeps, workspaceId: string): TeamForkSource {
+  const state = deps.store.workspaceState(workspaceId)
+  return {
+    name: state.name,
+    dir: state.dir,
+    dirs: normalizeDirs({ dir: state.dir, dirs: state.dirs }),
+    nodes: state.nodes,
+    connections: state.connections,
+    turnsOf: (id) => deps.turns.history(id),
+    fromSnapshot: false
+  }
 }
 
 function resolveSource(deps: TeamForkDeps, spec: TeamForkSpec): TeamForkSource {
@@ -692,4 +790,228 @@ export async function forkTeam(deps: TeamForkDeps, spec: TeamForkSpec): Promise<
     }
   }
   return meta
+}
+
+// ---- copy a selection into an EXISTING workspace (Figma model) ----
+
+/** Offset so a copy never lands pixel-exact on its source (Figma paste). */
+const COPY_NUDGE_PX = 32
+
+/**
+ * Copy selected canvas elements into an existing workspace: same planning
+ * as a fork (fresh ids, remapped cables, latest checkpoints, native session
+ * copies) but the nodes are APPENDED to the target instead of seeding a new
+ * workspace. Copies adopt the TARGET's working directories — a source cwd
+ * survives only if the target already lists it, else the terminal lands in
+ * the target's primary dir, with its context riding the same
+ * session-restore machinery agent-recover uses. WORKING agents refuse to be
+ * copied (isWorking). The view does NOT switch: nodes come alive now only
+ * when the target is the live canvas; otherwise terminals boot on
+ * activation, which also delivers any stashed context preamble
+ * (pendingInject) that could not be injected into an unbooted PTY.
+ */
+export async function copyTeam(deps: TeamForkDeps, spec: TeamCopySpec): Promise<TeamCopyResult> {
+  // The IPC layer's type annotations are compile-time fiction; validate here
+  // so both entry points (IPC + mobile HTTP) share one guard.
+  if (!Array.isArray(spec.nodeIds) || !spec.nodeIds.every((id) => typeof id === 'string')) {
+    throw new Error('Team copy needs nodeIds as a string[]')
+  }
+  if (typeof spec.intoWorkspaceId !== 'string') {
+    throw new Error('Team copy needs intoWorkspaceId as a string')
+  }
+  const workspaces = deps.store.list().workspaces
+  const target = workspaces.find((w) => w.id === spec.intoWorkspaceId)
+  if (!target) throw new Error(`No workspace '${spec.intoWorkspaceId}' to copy into`)
+  const intoActive = target.id === deps.store.activeId
+  if (intoActive && !deps.adoptNode) {
+    throw new Error('Team copy onto the live canvas requires the adoptNode dep')
+  }
+
+  const fromId = spec.fromWorkspaceId ?? deps.store.activeId
+  if (!workspaces.some((w) => w.id === fromId)) {
+    throw new Error(`The copied nodes' workspace is gone — copy again`)
+  }
+  const source =
+    fromId === deps.store.activeId
+      ? resolveSource(deps, { nodeIds: spec.nodeIds, choices: [] })
+      : sourceFromWorkspace(deps, fromId)
+
+  const chosen = source.nodes.filter((n) => spec.nodeIds.includes(n.id))
+  const working = chosen.filter(
+    (n): n is TerminalNodeData => n.kind === 'terminal' && (deps.isWorking?.(n.id) ?? false)
+  )
+  if (working.length > 0) {
+    const names = working.map((t) => `“${t.name}”`).join(', ')
+    throw new Error(`Working agents can't be copied — wait for ${names} to finish`)
+  }
+
+  // Identity transfer is for session-less kinds only; a terminal keeping
+  // its id would collide with its own still-live session machinery.
+  const preserved = new Set(spec.preserveIdentity ?? [])
+  if (preserved.size > 0) {
+    const badTerminal = chosen.find((n) => preserved.has(n.id) && n.kind === 'terminal')
+    if (badTerminal) {
+      throw new Error(`Terminals can't transfer identity — “${badTerminal.name}” must re-id`)
+    }
+  }
+
+  // The mirror image: a session moves only for a TERMINAL that is actually in
+  // this paste. Anything else is a caller bug, and a silently ignored carry is
+  // the failure this whole path exists to end — the agent would arrive empty
+  // and nothing would say so.
+  const carrySessions = new Set(spec.carrySessions ?? [])
+  for (const id of carrySessions) {
+    const node = chosen.find((n) => n.id === id)
+    if (!node) throw new Error(`Can't carry a session for '${id}' — it is not in this paste`)
+    if (node.kind !== 'terminal') {
+      throw new Error(`Only agents carry sessions — “${node.name}” is a ${node.kind}`)
+    }
+  }
+
+  // An EXPLICIT worktree request: every selected agent must sit in one git
+  // repo workdir; a fresh worktree + branch is created for the copies. The
+  // user asked for isolation by name, so any failure here throws — never
+  // the fork engine's silent in-place fallback.
+  let worktreePath: string | null = null
+  if (spec.worktree) {
+    const rawName = typeof spec.worktree.name === 'string' ? spec.worktree.name.trim() : ''
+    if (!rawName) throw new Error('Worktree paste needs a name')
+    const terminals = chosen.filter((n): n is TerminalNodeData => n.kind === 'terminal')
+    if (terminals.length === 0) {
+      throw new Error('Worktree paste needs at least one agent in the selection')
+    }
+    const cwds = [...new Set(terminals.map((t) => t.cwd))]
+    if (cwds.length !== 1) {
+      throw new Error('Worktree paste needs every selected agent in ONE workdir')
+    }
+    const repoDir = cwds[0]
+    const info = await deps.git.gitInfo(repoDir).catch(() => null)
+    if (!info?.isRepo) {
+      throw new Error(`“${repoDir}” is not a git repo — a worktree needs one`)
+    }
+    const wtSlug = fileSlug(rawName, 'worktree')
+    const created = await deps.git.addWorktree(
+      repoDir,
+      path.join(deps.worktreeRoot, wtSlug),
+      `cookrew/${wtSlug}`
+    )
+    if (!created.ok) {
+      throw new Error(`Worktree “${rawName}” failed: ${created.error} — pick a fresh name`)
+    }
+    worktreePath = created.path
+  }
+
+  const targetState = deps.store.workspaceState(target.id)
+  // The copy adopts the TARGET's dirs: resolveTargetDir keeps a source cwd
+  // only when the target already lists it, else the primary takes over —
+  // unless a worktree was requested, which pins every agent there.
+  const targetBase = normalizeDirs({ dir: targetState.dir, dirs: targetState.dirs })
+  const dirs = worktreePath ? [...targetBase, worktreePath] : targetBase
+  const choices: TeamForkChoice[] = worktreePath
+    ? chosen
+        .filter((n): n is TerminalNodeData => n.kind === 'terminal')
+        .map((n) => ({ nodeId: n.id, mode: 'latest' as const, targetDir: worktreePath as string }))
+    : []
+
+  const plan = (() => {
+    try {
+      return planTeamFork(
+        source,
+        { nodeIds: spec.nodeIds, choices, dirs, worktree: false },
+        {
+          newId: randomUUID,
+          roleOf: (name) => deps.roles.get(name),
+          keepIdentity: preserved,
+          carrySessions
+        }
+      )
+    } catch (error) {
+      // The planner speaks fork; this caller pressed COPY/CUT then PASTE.
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(message.replace(/^Team fork/, 'Team copy'))
+    }
+  })()
+
+  // A carried terminal is NOT forked, so it gets no fork context: no
+  // truncated session copy, no "you are a fork of X" preamble. It already
+  // holds the real conversation — the only thing left is to make that
+  // conversation resolvable from its new id and workdir (deps.carrySession).
+  const contexts = new Map(
+    plan.terminals
+      .filter((t) => !carrySessions.has(t.source.id))
+      .map((t) => [t.newId, resolveTerminalContext(t, source, deps.projectsDir)])
+  )
+  const nodes = plan.nodes.map((n) => {
+    const context = contexts.get(n.id)
+    const seeded =
+      context && n.kind === 'terminal'
+        ? {
+            ...n,
+            claudeSessionId: context.claudeSessionId,
+            // Inactive target: the preamble cannot be injected into a PTY
+            // that does not exist yet — stash it on the node for the switch
+            // boot to deliver. Without this, every preamble-based agent
+            // (Codex, pi, failed native forks) would copy as a hollow fork.
+            pendingInject: intoActive ? null : (context.inject ?? null)
+          }
+        : n
+    // A MOVED node (identity transfer) keeps its position too — it is the
+    // same card in a new home, not a paste beside something.
+    if (preserved.has(seeded.id)) return seeded
+    return {
+      ...seeded,
+      position: { x: seeded.position.x + COPY_NUDGE_PX, y: seeded.position.y + COPY_NUDGE_PX }
+    }
+  })
+
+  // The worktree dir must be in the target's list BEFORE the nodes land:
+  // normalizeState snaps any terminal cwd outside the dir list to the
+  // primary on load. This is one extra O(1) patch only for worktree pastes;
+  // the team itself lands below as one nodes+cables state mutation.
+  if (worktreePath) deps.store.addWorkspaceDir(target.id, worktreePath)
+  const added = deps.store.appendTeamToWorkspace(target.id, nodes, plan.connections)
+
+  // Hand each carried conversation to its new card — BEFORE adoptNode, which
+  // is what boots the pty. The spawn resolves its session against the new id
+  // and the new workdir, so both have to be true by the time it runs; this is
+  // the same order the workdir move keeps (carry, then spawn).
+  if (deps.carrySession) {
+    const newById = new Map(added.map((n) => [n.id, n]))
+    for (const t of plan.terminals) {
+      if (!carrySessions.has(t.source.id)) continue
+      const to = newById.get(t.newId)
+      if (to?.kind !== 'terminal') continue
+      try {
+        deps.carrySession(t.source, to)
+      } catch (error) {
+        // Never block the paste on it: the card has already landed, and a
+        // conversation that failed to follow is a loud log, not a lost node.
+        console.error(`Carrying “${t.source.name}” session to the pasted card failed:`, error)
+      }
+    }
+  }
+
+  if (intoActive && deps.adoptNode) {
+    for (const node of added) {
+      deps.adoptNode(node)
+      if (node.kind !== 'terminal') continue
+      const inject = contexts.get(node.id)?.inject
+      const session = inject ? deps.ptys.get(node.id) : undefined
+      if (inject && session) {
+        injectWhenReady(session, inject).catch((error) => {
+          console.error('Team copy context injection failed:', error)
+        })
+      }
+    }
+  }
+
+  return {
+    workspaceId: target.id,
+    workspaceName: target.name,
+    copiedNodes: added.length,
+    copiedCables: plan.connections.length,
+    // Detached sources aren't turn-tracked (the working guard can't see
+    // them and histories are frozen at the last visit) — say so.
+    ...(fromId !== deps.store.activeId ? { staleSource: true } : {})
+  }
 }

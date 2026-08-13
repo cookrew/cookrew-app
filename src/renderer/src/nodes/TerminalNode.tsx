@@ -1,5 +1,6 @@
 import { NodeProps, NodeResizer, useStore } from '@xyflow/react'
 import { NodeHandles } from './NodeHandles'
+import { CardPick } from './CardPick'
 import { CardClose } from './CardClose'
 import { AgentAvatar, StatusCoin } from './AgentAvatar'
 import { GitChip } from '../GitChip'
@@ -25,7 +26,7 @@ import { useCanvasUi } from '../canvas-ui'
  */
 export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
   const node = (data as { node: TerminalNodeData }).node
-  const { tool, activities, zoomToNode } = useCanvasUi()
+  const { tool, clipping, activities, zoomToNode, picked, togglePick } = useCanvasUi()
   // Quantized subscriptions: these only change when crossing a bucket, so
   // zoom animation frames don't re-render every card.
   const mode = useStore((s) => cardZoomMode(s.transform[2]))
@@ -35,8 +36,18 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
   const phase = activity?.phase ?? 'idle'
   const paging = useTurnPaging(node.id, activity?.turnCount ?? 0)
 
+  // The picked highlight belongs to the clipboard toggle — a pick survives
+  // the toggle being off (the board keeps it too) but never SHOWS then.
+  const pickedOn = clipping && picked.has(node.id)
+
   const open = (): void => {
-    if (tool === 'select') zoomToNode(node.id)
+    // Clipping: the whole card is a bigger checkbox — no zoom. Working
+    // blocks ADDING only; a picked card can always be unpicked (CardPick).
+    if (clipping) {
+      if (picked.has(node.id) || activity?.phase !== 'thinking') togglePick(node.id)
+      return
+    }
+    if (tool === 'move') zoomToNode(node.id)
   }
 
   // Below visual range: a minimal tile — status-tinted card, dot + name.
@@ -44,11 +55,12 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
   if (mode === 'mini') {
     return (
       <div
-        className={`node vi-card mini${selected ? ' selected' : ''}${phase === 'thinking' ? ' working' : ''}${phase === 'waiting' ? ' attention' : ''}`}
+        className={`node vi-card mini${selected ? ' selected' : ''}${pickedOn ? ' picked' : ''}${phase === 'thinking' ? ' working' : ''}${phase === 'waiting' ? ' attention' : ''}`}
         style={{ ['--z' as string]: String(invZoom) }}
         onClick={open}
       >
         <NodeHandles />
+        <CardPick id={node.id} />
         <div className="vi-mini node-header">
           <StatusCoin phase={phase} preset={node.preset} />
           <span className="vi-mini-name">{node.name}</span>
@@ -59,9 +71,10 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
 
   if (!agent) {
     return (
-      <div className={`node terminal-card${selected ? ' selected' : ''}`}>
+      <div className={`node terminal-card${selected ? ' selected' : ''}${pickedOn ? ' picked' : ''}`}>
         <NodeResizer isVisible={selected} minWidth={240} minHeight={160} />
         <NodeHandles />
+        <CardPick id={node.id} />
         <div className="node-header">
           <span className="cr-led on" />
           <span className="node-title">{node.name}</span>
@@ -84,11 +97,12 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
 
   return (
     <div
-      className={`node vi-card${selected ? ' selected' : ''}${phase === 'thinking' ? ' working' : ''}${phase === 'waiting' ? ' attention' : ''}`}
+      className={`node vi-card${selected ? ' selected' : ''}${pickedOn ? ' picked' : ''}${phase === 'thinking' ? ' working' : ''}${phase === 'waiting' ? ' attention' : ''}`}
       style={{ ['--z' as string]: String(invZoom) }}
     >
       <NodeResizer isVisible={selected} minWidth={240} minHeight={140} />
       <NodeHandles />
+      <CardPick id={node.id} />
       {/* Header always names the agent (vibe-island session-card scheme).
           The coin avatar IS the status indicator — no second status coin. */}
       <div className="node-header vi-head">

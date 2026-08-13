@@ -12,7 +12,11 @@ export type TurnTone = 'working' | 'waiting' | 'done'
 export interface TurnViewModel {
   /** Sous recap — the headline. */
   title: string | null
-  /** The ask, first meaningful line. */
+  /**
+   * The ask, first meaningful line. Null when the tracker never saw the
+   * prompt — a self-healed turn (reattach, or input sent around the PTY) is
+   * still a REAL turn, so this being null does NOT mean "nothing to show".
+   */
   ask: string | null
   /** Tool calls in TUI order, oldest→newest. */
   tools: string[]
@@ -58,7 +62,19 @@ export function turnViewOf(activity: TerminalActivity | undefined): TurnViewMode
 
   const pendingInput = activity.pendingInput ? firstLine(activity.pendingInput) : null
 
-  if (activity.prompt === null) {
+  const inTurn = activity.phase === 'thinking' || activity.phase === 'waiting'
+
+  // A NULL PROMPT IS NOT AN EMPTY TURN. The tracker loses the prompt whenever
+  // it self-heals into a turn it did not start (reattach after a restart, or
+  // input delivered around the PTY — herdr/tmux send-keys, the CLI, the
+  // phone): TurnTracker.resumeThinking can only recover the prompt from the
+  // TUI's own on-screen echo, and a long turn scrolls that echo away. Falling
+  // through to the screen tail here threw away the phase, the Sous title, the
+  // live status verb and the tool trail — cards under a running spinner
+  // rendered as a lone '❯' with "LIVE · N CHECKPOINTS" beneath them.
+  // So the tail is for agents with genuinely NOTHING running; a turn in
+  // flight renders as a turn, with or without a known ask.
+  if (activity.prompt === null && !inTurn) {
     // Reattached after a restart: no turn is tracked yet, but the session's
     // screen carries the latest turn — surface it rather than pretending the
     // agent is fresh.
@@ -70,7 +86,6 @@ export function turnViewOf(activity: TerminalActivity | undefined): TurnViewMode
     }
   }
 
-  const inTurn = activity.phase === 'thinking' || activity.phase === 'waiting'
   const message = activity.glance?.message ? firstLine(activity.glance.message) : null
   const latest: TurnViewModel['latest'] =
     activity.phase === 'thinking'
@@ -86,7 +101,7 @@ export function turnViewOf(activity: TerminalActivity | undefined): TurnViewMode
 
   return {
     title: activity.title ? firstLine(activity.title) : null,
-    ask: firstLine(activity.prompt),
+    ask: activity.prompt === null ? null : firstLine(activity.prompt),
     tools: inTurn ? (activity.glance?.tools ?? []) : [],
     latest,
     pendingInput,

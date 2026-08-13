@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TerminalActivity } from '../../shared/turn'
 import { cookrew } from './api'
 import { AttachButton } from './AttachButton'
@@ -35,13 +35,17 @@ function speak(text: string): void {
 const SPEAK_PREF_KEY = 'cookrew-speak-replies'
 
 /** Control keys the touch keyboard cannot send, as raw PTY sequences. */
-const TERM_KEYS: Array<{ label: string; seq: string; title: string }> = [
-  { label: '←', seq: '\x1b[D', title: 'Arrow left' },
-  { label: '↓', seq: '\x1b[B', title: 'Arrow down' },
-  { label: '↑', seq: '\x1b[A', title: 'Arrow up' },
-  { label: '→', seq: '\x1b[C', title: 'Arrow right' },
-  { label: 'ESC', seq: '\x1b', title: 'Escape' }
+const TERM_KEYS: Array<{ label: string; seq: string; title: string; repeat: boolean }> = [
+  { label: '←', seq: '\x1b[D', title: 'Arrow left', repeat: true },
+  { label: '↓', seq: '\x1b[B', title: 'Arrow down', repeat: true },
+  { label: '↑', seq: '\x1b[A', title: 'Arrow up', repeat: true },
+  { label: '→', seq: '\x1b[C', title: 'Arrow right', repeat: true },
+  { label: 'ESC', seq: '\x1b', title: 'Escape', repeat: false }
 ]
+
+/** Hold-to-repeat cadence: a pause before the first repeat, then ~14/s. */
+const REPEAT_DELAY_MS = 450
+const REPEAT_RATE_MS = 70
 
 /**
  * Arrow cluster + Esc beside the send button, phone companion only (coarse
@@ -49,8 +53,50 @@ const TERM_KEYS: Array<{ label: string; seq: string; title: string }> = [
  * /model pickers, message history) are undrivable from a touch keyboard
  * without them. pointerdown is swallowed and the buttons are unfocusable,
  * so a tap never dismisses the software keyboard or steals focus.
+ *
+ * HOLD-TO-REPEAT: the key fires on pointerdown (not click, so there is no
+ * dead-time before the first move) and the arrows keep firing while held —
+ * paging a long scrollback or a deep menu one tap per row is unusable.
+ * Esc stays single-shot: a repeated Escape cancels past the menu you meant
+ * to leave. contextmenu is swallowed so an iOS/Android long-press never
+ * pops the callout over the cluster.
  */
 function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
+  const timersRef = useRef<{ delay: number | null; interval: number | null }>({
+    delay: null,
+    interval: null
+  })
+
+  const stopRepeat = useCallback((): void => {
+    const timers = timersRef.current
+    if (timers.delay !== null) window.clearTimeout(timers.delay)
+    if (timers.interval !== null) window.clearInterval(timers.interval)
+    timers.delay = null
+    timers.interval = null
+  }, [])
+
+  // A held key must die with the view (unmount) and with window blur — an
+  // alert()/tab-switch mid-hold never delivers the pointerup that stops it.
+  useEffect(() => {
+    window.addEventListener('blur', stopRepeat)
+    return () => {
+      window.removeEventListener('blur', stopRepeat)
+      stopRepeat()
+    }
+  }, [stopRepeat])
+
+  const press = (key: (typeof TERM_KEYS)[number]): void => {
+    cookrew().ptyInput(terminalId, key.seq)
+    if (!key.repeat) return
+    stopRepeat()
+    timersRef.current.delay = window.setTimeout(() => {
+      timersRef.current.interval = window.setInterval(
+        () => cookrew().ptyInput(terminalId, key.seq),
+        REPEAT_RATE_MS
+      )
+    }, REPEAT_DELAY_MS)
+  }
+
   return (
     <div className="voice-keys">
       {TERM_KEYS.map((key) => (
@@ -59,9 +105,14 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
           className="cr-btn sm term-key"
           tabIndex={-1}
           title={key.title}
-          onPointerDown={(e) => e.preventDefault()}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => cookrew().ptyInput(terminalId, key.seq)}
+          onPointerDown={(e) => {
+            e.preventDefault()
+            press(key)
+          }}
+          onPointerUp={stopRepeat}
+          onPointerLeave={stopRepeat}
+          onPointerCancel={stopRepeat}
+          onContextMenu={(e) => e.preventDefault()}
         >
           {key.label}
         </button>

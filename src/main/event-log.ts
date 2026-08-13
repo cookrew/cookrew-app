@@ -26,6 +26,18 @@ export interface CookrewEvent {
   timestamp: number
   /** Brief metadata (preset, target names) — never conversation content. */
   details?: string
+  /**
+   * How long the thing this event reports on TOOK, in milliseconds. Optional
+   * and absent — not null, not zero — on every untimed event, which is most
+   * of them: the log records that a note was created, not how long creating
+   * it took. Consumers derive P50/P95/P98 from the events that carry one and
+   * must keep working unchanged against the ones that do not.
+   *
+   * A duration is a count of milliseconds and nothing else. Emitters drop a
+   * value that is not finite and non-negative rather than let a NaN reach a
+   * percentile, where it would skew every number ranked above it.
+   */
+  durationMs?: number
 }
 
 export interface EventQuery {

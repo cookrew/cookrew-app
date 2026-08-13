@@ -484,6 +484,27 @@ export class HeadlessInstance {
     }
   }
 
+  /**
+   * A single still of the active tab, for the canvas card's thumbnail.
+   *
+   * Separate from the screencast on purpose: the stream only runs while
+   * something is watching (frameListeners), so with the flag on a card that has
+   * never been zoomed had no picture at all and fell back to the placeholder.
+   * This asks the page directly and is safe to call when nobody is streaming.
+   *
+   * Skipped mid-transition for the same reason pollTick skips: a capture taken
+   * while the viewport is being resized shows the wrong geometry.
+   */
+  async snapshot(): Promise<string | null> {
+    if (this.closed || this.viewportCoordinator.state.transitioning) return null
+    const page = this.pages.get(this.activeTabId)
+    if (!page) return null
+    const shot = (await page.cdp
+      .send('Page.captureScreenshot', { format: 'jpeg', quality: 55 })
+      .catch(() => null)) as { data?: string } | null
+    return typeof shot?.data === 'string' && shot.data.length > 0 ? shot.data : null
+  }
+
   private async pollTick(): Promise<void> {
     if (
       this.closed ||

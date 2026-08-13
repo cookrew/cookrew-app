@@ -7,8 +7,14 @@ import { CrIcon, type CrIconName } from './icons'
 import { AgentSprite } from './nodes/AgentSprite'
 import { RoleAvatar } from './nodes/RoleAvatar'
 
+/**
+ * Placement tools only. There is no MOVE button: the resting hand (pan,
+ * drag, click to zoom) is what every tool falls back to — re-clicking the
+ * active tool stands it down. The clipboard is not a tool either but a
+ * TOGGLE over the resting hand (the board view's model), rendered next to
+ * the tools with a pressed state rather than among them.
+ */
 const TOOLS: { id: ToolId; label: string; icon: CrIconName }[] = [
-  { id: 'select', label: 'SELECT', icon: 'select' },
   { id: 'terminal', label: 'TERMINAL', icon: 'terminal' },
   { id: 'note', label: 'NOTE', icon: 'note' },
   { id: 'browser', label: 'BROWSER', icon: 'browser' },
@@ -24,6 +30,9 @@ const HINTS: Partial<Record<ToolId, string>> = {
 interface DockProps {
   tool: ToolId
   onSelect: (tool: ToolId) => void
+  /** Clipboard selection mode — the toggle sitting beside the tools. */
+  clipping: boolean
+  onToggleClipping: () => void
   presets: string[]
   preset: string
   onPreset: (name: string) => void
@@ -37,6 +46,18 @@ interface DockProps {
   connectHint: string | null
   /** Zoomed-in terminal: the dock swaps the tool group for its composer. */
   voiceFor: { id: string; activity: TerminalActivity | undefined } | null
+  /**
+   * Zoomed-in browser: the whole bar stands down so the page keeps its height.
+   * The controls that DO apply there (viewport fit, keyboard, open in browser)
+   * float translucently over the frame instead.
+   */
+  browserFor: { id: string; url: string } | null
+  /**
+   * BOARD view: the canvas tools glide out (same motion as zooming a
+   * terminal) and the board's one control glides in — the clipboard
+   * selection toggle, wearing the same glyph as the canvas CLIPBOARD tool.
+   */
+  boardFor: { editing: boolean; onToggle: () => void } | null
 }
 
 /**
@@ -44,11 +65,14 @@ interface DockProps {
  * canvas: the tool group (left) plus preset chips and hint. Zoomed into a
  * terminal: the tools glide out left and the send group (attach / mic /
  * speak / send — no input box, the terminal itself is the input) glides
- * in from the right.
+ * in from the right. Zoomed into a browser the bar is absent entirely —
+ * see the early return.
  */
 export function Dock({
   tool,
   onSelect,
+  clipping,
+  onToggleClipping,
   presets,
   preset,
   onPreset,
@@ -58,34 +82,57 @@ export function Dock({
   orch,
   onOrch,
   connectHint,
-  voiceFor
+  voiceFor,
+  browserFor,
+  boardFor
 }: DockProps): React.JSX.Element {
   const hint = tool === 'connect' ? connectHint : (HINTS[tool] ?? null)
+  /** Either occupant of the slide-in pane parks the canvas tools. */
+  const slidIn = voiceFor !== null || boardFor !== null
   // Ride above the on-screen keyboard (Defect 2): the dock is position:relative
   // in normal flow, so a `bottom` offset lifts it by the keyboard inset. 0 (and
   // no offset) on desktop / when no keyboard is up.
   const kbInset = useKeyboardInset()
+  // A zoomed browser has no use for ANY of this — every tool places something
+  // on a canvas the page is covering — so the bar leaves entirely and gives its
+  // height back to the page. The browser's own controls float over the frame.
+  // (After every hook: an early return above one breaks the Rules of Hooks.)
+  if (browserFor) return <></>
   return (
     <footer
-      className={`cr-dock${voiceFor ? ' zoomed' : ''}`}
+      className={`cr-dock${slidIn ? ' zoomed' : ''}`}
       style={kbInset ? { bottom: kbInset } : undefined}
     >
-      <div className="dock-pane dock-canvas" aria-hidden={voiceFor !== null}>
+      <div className="dock-pane dock-canvas" aria-hidden={slidIn}>
         <div className="cr-dock-tools">
+          {/* The clipboard toggle leads the tools: it is the one control
+              that is NOT a tool, so it wears a pressed state instead of
+              the active-tool highlight — the same glyph and contract as
+              the board view's selection toggle. */}
+          <button
+            className={`cr-btn tool icon${clipping ? ' primary' : ''}`}
+            title={clipping ? 'Done selecting' : 'Select cards — click to pick, click again to cancel'}
+            aria-label="CLIPBOARD"
+            aria-pressed={clipping}
+            tabIndex={slidIn ? -1 : 0}
+            onClick={onToggleClipping}
+          >
+            <CrIcon name="clipboard" className="tool-icon" />
+          </button>
           {TOOLS.map((t) => (
             <button
               key={t.id}
               className={`cr-btn tool icon${tool === t.id ? ' primary' : ''}`}
               title={t.label}
               aria-label={t.label}
-              tabIndex={voiceFor ? -1 : 0}
+              tabIndex={slidIn ? -1 : 0}
               onClick={() => onSelect(t.id)}
             >
               <CrIcon name={t.icon} className="tool-icon" />
             </button>
           ))}
         </div>
-        {!voiceFor && tool === 'terminal' && (
+        {!slidIn && tool === 'terminal' && (
           <div className="cr-dock-presets">
             {presets.map((name) => (
               <button
@@ -112,11 +159,24 @@ export function Dock({
             </label>
           </div>
         )}
-        {!voiceFor && hint && <div className="cr-dock-hint">{hint}</div>}
-      </div>
-      <div className="dock-pane dock-send" aria-hidden={voiceFor === null}>
+        {!slidIn && hint && <div className="cr-dock-hint">{hint}</div>}      </div>
+      <div className="dock-pane dock-send" aria-hidden={!slidIn}>
         {voiceFor && (
           <VoiceBar key={voiceFor.id} terminalId={voiceFor.id} activity={voiceFor.activity} />
+        )}
+        {!voiceFor && boardFor && (
+          <button
+            className={`cr-btn tool icon${boardFor.editing ? ' primary' : ''}`}
+            title={
+              boardFor.editing
+                ? 'Done selecting'
+                : 'Select elements — the same selection the canvas clipboard toggle uses'
+            }
+            aria-pressed={boardFor.editing}
+            onClick={boardFor.onToggle}
+          >
+            <CrIcon name="clipboard" />
+          </button>
         )}
       </div>
     </footer>

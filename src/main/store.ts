@@ -35,6 +35,17 @@ if (!existsSync(DATA_DIR) && existsSync(LEGACY_DATA_DIR)) {
     console.error('Failed to migrate legacy data dir ~/.cava:', error)
   }
 }
+/**
+ * A duration is a finite, non-negative count of milliseconds — anything else
+ * is dropped rather than emitted (CookrewEvent.durationMs). One definition,
+ * at the choke-point every emitter passes through, so no caller can put a NaN
+ * or a negative into the log and skew every percentile ranked above it. A
+ * clock that ran backwards is not a measurement; it is the absence of one.
+ */
+function isDuration(value: number | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
 // All persistence paths derive from a base dir so tests can run a store
 // against a temp directory instead of the real ~/.cookrew.
 const registryFile = (base: string): string => path.join(base, 'registry.json')
@@ -156,6 +167,12 @@ export class WorkspaceStore extends EventEmitter {
     if (!target) throw new Error(`Workspace '${id}' not found`)
     if (id === this.registry.activeId) return target
 
+    // The clock starts at INITIATION and stops after the 'switch' listener has
+    // run, because that listener is the switch: index.ts detaches the outgoing
+    // PTYs and boots the incoming ones inside it, synchronously. Timing only
+    // the bookkeeping above would report a couple of milliseconds for
+    // something the user waits seconds on.
+    const startedAt = Date.now()
     const previousTerminalIds = this.terminals().map((t) => t.id)
     this.flushSave()
 
@@ -166,7 +183,14 @@ export class WorkspaceStore extends EventEmitter {
     this.emit('switch', { previousTerminalIds })
     this.emit('workspaces', this.list())
     this.emit('change', this.state)
-    this.emitOp('workspace.switched', target.id, target.name, target.id)
+    this.emitOp(
+      'workspace.switched',
+      target.id,
+      target.name,
+      target.id,
+      undefined,
+      Date.now() - startedAt
+    )
     return target
   }
 
@@ -401,7 +425,8 @@ export class WorkspaceStore extends EventEmitter {
     entityId: string,
     entityName: string,
     workspaceId: string,
-    details?: string
+    details?: string,
+    durationMs?: number
   ): void {
     const ws = this.registry.workspaces.find((w) => w.id === workspaceId)
     const event: CookrewEvent = {
@@ -412,7 +437,8 @@ export class WorkspaceStore extends EventEmitter {
       workspaceName: ws?.name ?? workspaceId,
       actor: this.opContext.actor,
       timestamp: Date.now(),
-      ...(details !== undefined ? { details } : {})
+      ...(details !== undefined ? { details } : {}),
+      ...(isDuration(durationMs) ? { durationMs } : {})
     }
     this.emit('op', event)
   }
@@ -449,9 +475,20 @@ export class WorkspaceStore extends EventEmitter {
     })
   }
 
-  /** Ops living outside the store (role/team saves) still go through here. */
-  recordEvent(type: string, entityId: string, entityName: string, details?: string): void {
-    this.emitOp(type, entityId, entityName, this.registry.activeId, details)
+  /**
+   * Ops living outside the store (role/team saves, a turn completing in the
+   * tracker) still go through here — one choke-point, so the event stream can
+   * never diverge from state. `durationMs` is how a caller that measured
+   * something reports it; omit it and the event is untimed, as before.
+   */
+  recordEvent(
+    type: string,
+    entityId: string,
+    entityName: string,
+    details?: string,
+    durationMs?: number
+  ): void {
+    this.emitOp(type, entityId, entityName, this.registry.activeId, details, durationMs)
   }
 
   private createdType(kind: CanvasNode['kind']): string {
@@ -480,6 +517,11 @@ export class WorkspaceStore extends EventEmitter {
   /** Active workspace state from memory (fresh), inactive from disk. */
   private stateOf(id: string): WorkspaceState {
     return id === this.registry.activeId ? this.state : loadWorkspaceState(this.baseDir, id)
+  }
+
+  /** Read-only state of ANY workspace (active from memory, inactive from disk). */
+  workspaceState(id: string): WorkspaceState {
+    return this.stateOf(id)
   }
 
   /** Terminal node ids of ONE workspace (active from memory, inactive from disk). */
@@ -639,6 +681,68 @@ export class WorkspaceStore extends EventEmitter {
       named.kind === 'terminal' ? (named as TerminalNodeData).preset : undefined
     )
     return named
+  }
+
+  /**
+   * Append one copied team to a workspace in ONE state mutation. Unlike the
+   * ordinary add/connect APIs this deliberately emits no per-item operation
+   * events: the paste boundary owns one `team.copied` / `team.moved` summary.
+   *
+   * `copyTeam` only passes cables whose endpoints are in `nodes`, so no edge
+   * mirroring or cross-workspace lookup is needed here. Names are still made
+   * unique sequentially, exactly as N calls to addNodeToWorkspace would be.
+   */
+  appendTeamToWorkspace(
+    workspaceId: string,
+    nodes: CanvasNode[],
+    connections: Connection[]
+  ): CanvasNode[] {
+    if (!this.registry.workspaces.some((w) => w.id === workspaceId)) {
+      throw new Error(`Workspace '${workspaceId}' not found`)
+    }
+    let added: CanvasNode[] = []
+    this.patchWorkspace(workspaceId, (current) => {
+      const names = current.nodes.map((n) => n.name)
+      added = nodes.map((node) => {
+        const named = { ...node, name: uniqueName(node.name, names) } as CanvasNode
+        names.push(named.name)
+        return named
+      })
+      const addedIds = new Set(added.map((node) => node.id))
+      const innerConnections = connections.filter(
+        (connection) => addedIds.has(connection.a) && addedIds.has(connection.b)
+      )
+      return {
+        ...current,
+        nodes: [...current.nodes, ...added],
+        connections: [...current.connections, ...innerConnections]
+      }
+    })
+
+    // Preserve addNode's note-file side effect on the active workspace. The
+    // JSON state is already durable; these mirrors remain best-effort async.
+    if (workspaceId === this.registry.activeId) {
+      for (const node of added) {
+        if (node.kind === 'note') void this.persistNoteFile(node)
+      }
+    }
+    return added
+  }
+
+  /**
+   * Remove nodes (and their local cables) from ONE workspace's state in a
+   * single patch — the cut/paste flow owns the lifecycle: no recoverable
+   * capture (the content lives on in the paste), no per-node events (the
+   * caller records one team.moved summary), and no cross-workspace lookup
+   * (identity-moved nodes exist in the TARGET under the same id).
+   */
+  removeNodesFromWorkspace(workspaceId: string, ids: string[]): void {
+    const gone = new Set(ids)
+    this.patchWorkspace(workspaceId, (s) => ({
+      ...s,
+      nodes: s.nodes.filter((n) => !gone.has(n.id)),
+      connections: s.connections.filter((c) => !gone.has(c.a) && !gone.has(c.b))
+    }))
   }
 
   /** Remove a node (and its local edges) from its OWNING workspace. */

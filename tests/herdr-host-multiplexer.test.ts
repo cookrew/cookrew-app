@@ -751,3 +751,114 @@ describe('release without losing registration — detectorless kinds', () => {
     expect(reports.length).toBe(1)
   })
 })
+
+describe('the card binding — Cookrew names in herdr chrome', () => {
+  const CARD = {
+    terminalId: 'abc-123',
+    title: 'reviewer',
+    agent: 'claude',
+    workspace: 'cookrew-dev',
+    cwd: '/work/repo'
+  }
+  const SPEC_WITH_CARD: AttachSpec = { ...SPEC, card: CARD }
+  /** A live, healthy pane wearing the session label (not a husk). */
+  const LIVE_REPLIES = {
+    'pane list': PANE_LIST([
+      { pane_id: 'w1:p1', label: 'cookrew_abc', workspace_id: 'w1' }
+    ]),
+    'pane process-info': JSON.stringify({
+      result: {
+        process_info: {
+          shell_pid: 7,
+          foreground_processes: [{ argv0: 'claude', name: 'claude', pid: 7 }]
+        }
+      }
+    }),
+    '-o args=': 'claude --permission-mode bypassPermissions'
+  }
+
+  it('reports title, display-agent and identity tokens after a fresh boot', () => {
+    const runner = fakeRunner({
+      'pane list': PANE_LIST([{ pane_id: 'w1:p2', label: 'cookrew_other' }]),
+      'pane split': JSON.stringify({ result: { pane: { pane_id: 'w1:p9' } } }),
+      'pane process-info': LIVE_REPLIES['pane process-info'],
+      '-o args=': LIVE_REPLIES['-o args=']
+    })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner })
+      .ensureSession(SPEC_WITH_CARD)
+    const report = runner.calls.find((c) => c.args[1] === 'report-metadata')
+    expect(report?.args).toEqual([
+      'pane', 'report-metadata', 'w1:p9', '--source', 'cookrew',
+      '--title', 'reviewer',
+      '--display-agent', 'claude',
+      '--token', 'cookrew_terminal=abc-123',
+      '--token', 'cookrew_workspace=cookrew-dev',
+      '--token', 'cookrew_cwd=/work/repo'
+    ])
+  })
+
+  it('re-reports on reattach — herdr persists pane LAYOUT, not metadata', () => {
+    // Same argument as the agent registration repair: a server restart keeps
+    // the pane but drops reported metadata, so the binding rides every attach.
+    const runner = fakeRunner(LIVE_REPLIES)
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner })
+      .ensureSession(SPEC_WITH_CARD)
+    expect(runner.calls.some((c) => c.args[1] === 'report-metadata')).toBe(true)
+    // ...but reattachment still boots nothing.
+    expect(runner.calls.some((c) => c.args[1] === 'split')).toBe(false)
+  })
+
+  it('does NOT report when the spec carries no card — tmux/direct parity', () => {
+    const runner = fakeRunner(LIVE_REPLIES)
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner })
+      .ensureSession(SPEC)
+    expect(runner.calls.some((c) => c.args[1] === 'report-metadata')).toBe(false)
+  })
+
+  it('reportPaneCard no-ops when the pane is gone — display, never control flow', () => {
+    const runner = fakeRunner({ 'pane list': PANE_LIST([]) })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner })
+      .reportPaneCard('cookrew_abc', CARD)
+    expect(runner.calls.some((c) => c.args[1] === 'report-metadata')).toBe(false)
+  })
+
+  it('reportWorkspace renames a stale label and reports the identity tokens', () => {
+    const runner = fakeRunner({
+      'pane list': PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc', workspace_id: 'w1' }]),
+      'workspace list': JSON.stringify({
+        result: { workspaces: [{ workspace_id: 'w1', label: 'old-name' }] }
+      })
+    })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner })
+      .reportWorkspace({ label: 'cookrew-dev', tokens: { cookrew_workspace: 'ws-1' } })
+    expect(runner.calls.some(
+      (c) => c.args[0] === 'workspace' && c.args[1] === 'rename' &&
+        c.args[2] === 'w1' && c.args[3] === 'cookrew-dev'
+    )).toBe(true)
+    const report = runner.calls.find(
+      (c) => c.args[0] === 'workspace' && c.args[1] === 'report-metadata'
+    )
+    expect(report?.args).toContain('cookrew_workspace=ws-1')
+  })
+
+  it('reportWorkspace does NOT rename when the label already matches', () => {
+    const runner = fakeRunner({
+      'pane list': PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc', workspace_id: 'w1' }]),
+      'workspace list': JSON.stringify({
+        result: { workspaces: [{ workspace_id: 'w1', label: 'cookrew-dev' }] }
+      })
+    })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner })
+      .reportWorkspace({ label: 'cookrew-dev', tokens: { cookrew_workspace: 'ws-1' } })
+    expect(runner.calls.some((c) => c.args[1] === 'rename')).toBe(false)
+    // The tokens still re-report — they are not durable either.
+    expect(runner.calls.some((c) => c.args[1] === 'report-metadata')).toBe(true)
+  })
+
+  it('reportWorkspace no-ops with no panes — nothing created the workspace yet', () => {
+    const runner = fakeRunner({ 'pane list': PANE_LIST([]) })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner })
+      .reportWorkspace({ label: 'cookrew-dev', tokens: { cookrew_workspace: 'ws-1' } })
+    expect(runner.calls.some((c) => c.args[0] === 'workspace')).toBe(false)
+  })
+})

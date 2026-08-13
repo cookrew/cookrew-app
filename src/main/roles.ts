@@ -7,15 +7,11 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFile
 import { homedir } from 'node:os'
 import path from 'node:path'
 import type { AgentRole, TerminalNodeData } from '../shared/model'
+import { fileSlug } from '../shared/slug'
 
-/** Filesystem-safe file stem for a role name. */
+/** Filesystem-safe file stem for a role name (shared impl — see slug.ts). */
 export function roleSlug(name: string): string {
-  const cleaned = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  return cleaned || 'role'
+  return fileSlug(name)
 }
 
 function isRole(value: unknown): value is AgentRole {

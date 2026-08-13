@@ -58,6 +58,7 @@ import {
   type CommandRunner,
   type Multiplexer,
   type MultiplexerCapabilities,
+  type PaneCardInfo,
   type PaneLaunch,
   type ScrollState
 } from './multiplexer'
@@ -72,6 +73,8 @@ const SHELL_NAMES = /^(sh|bash|zsh|fish|dash|ksh)$/
 export interface HerdrPane {
   pane_id: string
   label?: string | null
+  /** The workspace this pane lives in — herdr always answers it. */
+  workspace_id?: string | null
   /** herdr's own view of which agent runs here — set by report-agent. */
   agent?: string | null
   /** herdr's current lifecycle state for this pane, when it has one. */
@@ -473,8 +476,11 @@ export class HerdrHostMultiplexer implements Multiplexer {
       // had a running agent and no registration.
       //
       // Re-reporting is idempotent and costs one call, so it happens on every
-      // attach rather than only when the pane is created.
+      // attach rather than only when the pane is created. The card binding
+      // re-reports for the same reason: herdr persists pane LAYOUT, not the
+      // metadata a source reported.
       this.reportAgent(existing, spec)
+      if (spec.card) this.reportPaneCardTo(existing, spec.card)
       return
     }
 
@@ -507,6 +513,67 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // ~100ms later by herdr's own reading of a live claude TUI), which is the
     // signal Cookrew currently infers by scraping.
     this.reportAgent(pane, spec)
+
+    // The card binding lands once the pane is labelled and booted: herdr's
+    // chrome then shows Cookrew's card name and role instead of a raw shell.
+    if (spec.card) this.reportPaneCardTo(pane, spec.card)
+  }
+
+  /**
+   * The Cookrew card behind this pane, in herdr's own chrome: the pane
+   * title is the card's name, the display-agent its role (or harness), and
+   * the workspace/cwd ride as metadata tokens. Display-only — Cookrew's
+   * control flow never reads any of it back.
+   */
+  reportPaneCard(name: string, card: PaneCardInfo): void {
+    const pane = this.paneFor(name)
+    if (!pane) return
+    this.reportPaneCardTo(pane, card)
+  }
+
+  /** reportPaneCard with the pane already resolved (ensureSession's path). */
+  private reportPaneCardTo(pane: HerdrPane, card: PaneCardInfo): void {
+    this.quiet([
+      'pane', 'report-metadata', pane.pane_id, '--source', 'cookrew',
+      ...(card.title.length > 0 ? ['--title', card.title] : []),
+      '--display-agent', card.agent,
+      '--token', `cookrew_terminal=${card.terminalId}`,
+      '--token', `cookrew_workspace=${card.workspace}`,
+      '--token', `cookrew_cwd=${card.cwd}`
+    ])
+  }
+
+  /**
+   * The workspace half of the binding: Cookrew's one herdr workspace wears
+   * the ACTIVE Cookrew workspace's name, with tokens carrying its identity.
+   * Panes from every Cookrew workspace share the one herdr workspace, so
+   * the label tracks which one is live — each pane keeps its OWN workspace
+   * as a token (see reportPaneCard), which is where the precise binding
+   * lives.
+   */
+  reportWorkspace(info: { label: string; tokens: Record<string, string> }): void {
+    if (!this.available() || !this.serverRunning()) return
+    // The workspace id comes off any pane: Cookrew's panes all live in the
+    // one workspace adoptOrCreate made, and herdr reports it on each.
+    const wsId = this.panes().find((pane) => pane.workspace_id)?.workspace_id
+    if (!wsId) return
+    try {
+      const list = parseEnvelope(this.herdr(['workspace', 'list']))
+      const workspaces = (list?.workspaces ?? []) as { workspace_id?: string; label?: string }[]
+      const current = workspaces.find((w) => w.workspace_id === wsId)
+      if (current && current.label !== info.label && info.label.length > 0) {
+        this.quiet(['workspace', 'rename', wsId, info.label])
+      }
+      const tokens = Object.entries(info.tokens).flatMap(([key, value]) => [
+        '--token',
+        `${key}=${value}`
+      ])
+      if (tokens.length > 0) {
+        this.quiet(['workspace', 'report-metadata', wsId, '--source', 'cookrew', ...tokens])
+      }
+    } catch {
+      // Best effort by contract — the binding is chrome, never control flow.
+    }
   }
 
   /**

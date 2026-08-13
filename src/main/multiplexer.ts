@@ -79,6 +79,32 @@ export interface AttachSpec {
    * has to be told — otherwise every agent starts in the server's directory.
    */
   cwd: string
+  /**
+   * The Cookrew card behind this session, for backends that have somewhere
+   * to SHOW it (herdr's pane/workspace chrome). Purely presentational —
+   * control flow never reads it back, and backends with no UI of their own
+   * (tmux, direct) ignore it entirely.
+   */
+  card?: PaneCardInfo
+}
+
+/**
+ * What Cookrew knows about the card behind a session: its display name, its
+ * role (falling back to the harness/preset), the workspace it belongs to
+ * and where it works. The display-binding payload for reportPaneCard —
+ * herdr renders it as pane title, display-agent and metadata tokens.
+ */
+export interface PaneCardInfo {
+  /** The terminal node this session belongs to. */
+  terminalId: string
+  /** Card title — the node's display name. */
+  title: string
+  /** Role when the card has one, else the harness/preset (claude, shell…). */
+  agent: string
+  /** Name of the Cookrew workspace the card lives in. */
+  workspace: string
+  /** The card's working directory. */
+  cwd: string
 }
 
 /**
@@ -248,6 +274,23 @@ export interface Multiplexer {
    * Optional: only a backend that models agents has anywhere to put it.
    */
   reportAgentSession?(name: string, sessionPath: string): void
+
+  /**
+   * Bind a session to its Cookrew CARD in the backend's own UI, when it has
+   * one — herdr shows the card's name as the pane title, its role as the
+   * display-agent, and the workspace/cwd as metadata tokens. Display-only
+   * and best effort: control flow never depends on it, and backends with
+   * nowhere to show it (tmux, direct) do not implement it.
+   */
+  reportPaneCard?(name: string, card: PaneCardInfo): void
+
+  /**
+   * The workspace-level half of the binding: the backend's workspace wears
+   * the ACTIVE Cookrew workspace's name, with tokens carrying the identity
+   * (Cookrew's workspace id, primary dir). Same display-only, best-effort
+   * contract as reportPaneCard.
+   */
+  reportWorkspace?(info: { label: string; tokens: Record<string, string> }): void
 }
 
 /**

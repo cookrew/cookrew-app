@@ -79,7 +79,9 @@ const META: Record<string, EventMeta> = {
   'workspace.renamed': { label: 'Renamed', verb: 'renamed', noun: 'workspace', icon: 'note', hatch: false, metric: null },
   'workspace.deleted': { label: 'Workspace', verb: 'deleted', noun: 'workspace', icon: 'close', hatch: false, metric: 'removed' },
   'role.saved': { label: 'Role', verb: 'saved', noun: 'role', icon: 'agent', hatch: false, metric: null },
-  'team.saved': { label: 'Team', verb: 'saved', noun: 'team', icon: 'fork', hatch: false, metric: null }
+  'team.saved': { label: 'Team', verb: 'saved', noun: 'team', icon: 'fork', hatch: false, metric: null },
+  'team.copied': { label: 'Team copy', verb: 'copied into', noun: 'team', icon: 'fork', hatch: false, metric: 'forks' },
+  'team.moved': { label: 'Team move', verb: 'moved into', noun: 'team', icon: 'fork', hatch: false, metric: 'forks' }
 }
 
 const FALLBACK_META: EventMeta = {
@@ -106,7 +108,7 @@ export function kindFor(type: string): EventKind | undefined {
   if (type.endsWith('.forked')) return 'fork'
   if (type === 'workspace.switched') return 'switch'
   const verb = type.split('.').pop() ?? ''
-  if (['created', 'saved', 'made', 'recruited'].includes(verb)) return 'create'
+  if (['created', 'saved', 'made', 'recruited', 'copied', 'moved'].includes(verb)) return 'create'
   if (['dismissed', 'killed', 'deleted', 'closed', 'removed'].includes(verb)) return 'remove'
   return undefined
 }

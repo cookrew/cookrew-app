@@ -6,7 +6,7 @@ import pty, { IPty } from 'node-pty'
 import xtermHeadless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { sanitizeAgentEnv } from './multiplexer'
-import type { Multiplexer } from './multiplexer'
+import type { Multiplexer, PaneCardInfo } from './multiplexer'
 import { TmuxMultiplexer, sessionNameFor as tmuxSessionNameFor, TMUX_LABEL as TMUX_LABEL_CONST } from './tmux-multiplexer'
 import { HerdrHostMultiplexer, HERDR_SESSION } from './herdr-host-multiplexer'
 import { HerdrStatusFeed, setStatusFeed, statusFeed } from './herdr-agent-status'
@@ -282,6 +282,12 @@ export interface PtySessionOptions {
   cliDir: string
   /** Path to the cookrew tmux config; when set (and tmux exists), sessions run in tmux. */
   tmuxConf?: string
+  /**
+   * The Cookrew card behind this terminal, for backends that bind display
+   * metadata into their own UI (herdr's pane title/tokens). Ignored by
+   * backends with no UI of their own.
+   */
+  card?: PaneCardInfo
 }
 
 /**
@@ -344,7 +350,8 @@ export class PtySession extends EventEmitter {
       socketPath: options.socketPath,
       cliDir: options.cliDir,
       path: `${options.cliDir}:${process.env.PATH ?? ''}`,
-      cwd: options.cwd
+      cwd: options.cwd,
+      card: options.card
     }
     // One live process per terminal across ALL backends: a copy of this
     // agent alive under a non-host multiplexer is killed there first and
