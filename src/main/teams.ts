@@ -273,6 +273,11 @@ interface PlanDeps {
   roleOf: (name: string) => AgentRole | undefined
   /** Node ids that keep their ORIGINAL id (cut-paste identity transfer). */
   keepIdentity?: ReadonlySet<string>
+  /**
+   * Terminal ids whose SESSION moves to the copy (cut-paste). They still
+   * re-id; only the conversation travels. See TeamCopySpec.carrySessions.
+   */
+  carrySessions?: ReadonlySet<string>
 }
 
 /**
@@ -323,6 +328,14 @@ function planTerminal(
           ? (turnIndexes[turnIndexes.length - 1] ?? null)
           : null
 
+  // A CUT MOVES the conversation: the source card is removed, so nothing is
+  // left to append to that session and the copy may hold its ref outright.
+  // Same ref means no lineage transition, no spurious /clear marker on the
+  // rail, and checkpoint ordinals identical either side of the paste — the
+  // rule session-move.ts already follows for a workdir change. A role fork
+  // is a different agent by definition, so it never carries.
+  const carries = mode !== 'role' && deps.carrySessions?.has(node.id) === true
+
   const forked: TerminalNodeData = {
     ...node,
     id: newId,
@@ -336,16 +349,20 @@ function planTerminal(
     command: isPiCommand(role ? role.command : node.command)
       ? stripPiSessionFlags(role ? role.command : node.command)
       : stripSessionFlags(role ? role.command : node.command),
-    claudeSessionId: null,
-    piSessionId: null,
-    codexSessionRef: null,
-    opencodeSessionId: null,
-    sessionLineage: undefined,
+    claudeSessionId: carries ? (node.claudeSessionId ?? null) : null,
+    piSessionId: carries ? (node.piSessionId ?? null) : null,
+    codexSessionRef: carries ? (node.codexSessionRef ?? null) : null,
+    opencodeSessionId: carries ? (node.opencodeSessionId ?? null) : null,
+    // Lineage travels with the session it describes: it names the earlier
+    // segments of THIS conversation, which is now this card's.
+    sessionLineage: carries ? node.sessionLineage : undefined,
+    // The restore stack is not carried even by a move: its entries reference
+    // the source terminal's snapshots by its id, which is gone.
     restoreStack: undefined,
     pendingInject: null,
     role: role ? role.name : node.role,
     forkOf:
-      mode === 'role' || turnIndex === null
+      carries || mode === 'role' || turnIndex === null
         ? null
         : { sourceId: node.id, sourceName: node.name, turnIndex }
   }
@@ -628,6 +645,14 @@ export interface TeamForkDeps {
    * neither the turn's before nor its after. Absent → nothing is working.
    */
   isWorking?: (terminalId: string) => boolean
+  /**
+   * Move a CUT terminal's conversation onto its new card: the turn ledger
+   * (keyed by terminal id, so a re-id would otherwise open a blank
+   * transcript) and, for a harness whose sessions are keyed by directory,
+   * the session file itself. Absent → nothing carries, and spec.carrySessions
+   * is inert; present → called once per carried terminal before the boot.
+   */
+  carrySession?: (from: TerminalNodeData, to: TerminalNodeData) => void
   /** Git worktree operations (injectable for tests). */
   git: WorktreeApi
   /** Root under which fork worktrees are created (default ~/.cookrew/worktrees). */
@@ -830,6 +855,19 @@ export async function copyTeam(deps: TeamForkDeps, spec: TeamCopySpec): Promise<
     }
   }
 
+  // The mirror image: a session moves only for a TERMINAL that is actually in
+  // this paste. Anything else is a caller bug, and a silently ignored carry is
+  // the failure this whole path exists to end — the agent would arrive empty
+  // and nothing would say so.
+  const carrySessions = new Set(spec.carrySessions ?? [])
+  for (const id of carrySessions) {
+    const node = chosen.find((n) => n.id === id)
+    if (!node) throw new Error(`Can't carry a session for '${id}' — it is not in this paste`)
+    if (node.kind !== 'terminal') {
+      throw new Error(`Only agents carry sessions — “${node.name}” is a ${node.kind}`)
+    }
+  }
+
   // An EXPLICIT worktree request: every selected agent must sit in one git
   // repo workdir; a fresh worktree + branch is created for the copies. The
   // user asked for isolation by name, so any failure here throws — never
@@ -880,7 +918,12 @@ export async function copyTeam(deps: TeamForkDeps, spec: TeamCopySpec): Promise<
       return planTeamFork(
         source,
         { nodeIds: spec.nodeIds, choices, dirs, worktree: false },
-        { newId: randomUUID, roleOf: (name) => deps.roles.get(name), keepIdentity: preserved }
+        {
+          newId: randomUUID,
+          roleOf: (name) => deps.roles.get(name),
+          keepIdentity: preserved,
+          carrySessions
+        }
       )
     } catch (error) {
       // The planner speaks fork; this caller pressed COPY/CUT then PASTE.
@@ -889,8 +932,14 @@ export async function copyTeam(deps: TeamForkDeps, spec: TeamCopySpec): Promise<
     }
   })()
 
+  // A carried terminal is NOT forked, so it gets no fork context: no
+  // truncated session copy, no "you are a fork of X" preamble. It already
+  // holds the real conversation — the only thing left is to make that
+  // conversation resolvable from its new id and workdir (deps.carrySession).
   const contexts = new Map(
-    plan.terminals.map((t) => [t.newId, resolveTerminalContext(t, source, deps.projectsDir)])
+    plan.terminals
+      .filter((t) => !carrySessions.has(t.source.id))
+      .map((t) => [t.newId, resolveTerminalContext(t, source, deps.projectsDir)])
   )
   const nodes = plan.nodes.map((n) => {
     const context = contexts.get(n.id)
@@ -922,6 +971,26 @@ export async function copyTeam(deps: TeamForkDeps, spec: TeamCopySpec): Promise<
   if (worktreePath) deps.store.addWorkspaceDir(target.id, worktreePath)
   const added = nodes.map((n) => deps.store.addNodeToWorkspace(target.id, n))
   for (const c of plan.connections) deps.store.connectAcross(c.a, c.b)
+
+  // Hand each carried conversation to its new card — BEFORE adoptNode, which
+  // is what boots the pty. The spawn resolves its session against the new id
+  // and the new workdir, so both have to be true by the time it runs; this is
+  // the same order the workdir move keeps (carry, then spawn).
+  if (deps.carrySession) {
+    const newById = new Map(added.map((n) => [n.id, n]))
+    for (const t of plan.terminals) {
+      if (!carrySessions.has(t.source.id)) continue
+      const to = newById.get(t.newId)
+      if (to?.kind !== 'terminal') continue
+      try {
+        deps.carrySession(t.source, to)
+      } catch (error) {
+        // Never block the paste on it: the card has already landed, and a
+        // conversation that failed to follow is a loud log, not a lost node.
+        console.error(`Carrying “${t.source.name}” session to the pasted card failed:`, error)
+      }
+    }
+  }
 
   if (intoActive && deps.adoptNode) {
     for (const node of added) {

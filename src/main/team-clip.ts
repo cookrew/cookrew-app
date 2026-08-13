@@ -22,6 +22,17 @@ export interface TeamClipDeps {
   /** The copy engine (copyTeam bound to its deps). */
   paste: (spec: TeamCopySpec) => Promise<TeamCopyResult>
   /**
+   * End the cut sources' PROCESSES before the paste, leaving their cards
+   * standing. A cut moves the session, so the copy will resume the very file
+   * the source is still appending to — and a source in an inactive workspace
+   * is DETACHED, not dead (a workspace switch detaches panes; it does not
+   * kill them). Two live processes on one rollout is the corruption the fork
+   * engine's session-nulling was written to prevent, so the original stops
+   * first. Cards, not processes, so a failed paste still leaves something to
+   * recover.
+   */
+  stopCut?: (nodeIds: string[], fromWorkspaceId: string) => Promise<void>
+  /**
    * Remove the cut sources AFTER a successful paste. Owns the per-node
    * teardown: an active-workspace node has a live process/browser behind it
    * that must die with the card — state-only removal would leak an
@@ -152,17 +163,28 @@ export class TeamClipboard {
     // browsers keep their id (profile, file) — no kill-and-recreate.
     // Terminals re-id and ride the copy machinery (session restore).
     const fromNodes = this.deps.workspaceState(clip.fromWorkspaceId).nodes
-    const moveIds = clip.cut
-      ? fromNodes
-          .filter((n) => clip.nodeIds.includes(n.id) && n.kind !== 'terminal')
-          .map((n) => n.id)
-      : []
+    const staged = fromNodes.filter((n) => clip.nodeIds.includes(n.id))
+    const moveIds = clip.cut ? staged.filter((n) => n.kind !== 'terminal').map((n) => n.id) : []
+    // A terminal cannot transfer its id, so its CONVERSATION transfers
+    // instead: same session ref, same checkpoint ordinals, and the ledger
+    // handed to the new id. Without it a cut agent arrives as a stranger —
+    // empty transcript, fresh session — which is not what moving a card means.
+    // A worktree paste is excluded: it exists to put the copies somewhere
+    // ISOLATED, and that is a fork by intent even when the gesture was a cut.
+    const carrySessions =
+      clip.cut && !clip.worktreeName
+        ? staged.filter((n) => n.kind === 'terminal').map((n) => n.id)
+        : []
+    if (carrySessions.length > 0 && this.deps.stopCut) {
+      await this.deps.stopCut(carrySessions, clip.fromWorkspaceId)
+    }
     const result = await this.deps.paste({
       nodeIds: clip.nodeIds,
       intoWorkspaceId: this.deps.activeId(),
       fromWorkspaceId: clip.fromWorkspaceId,
       ...(clip.worktreeName ? { worktree: { name: clip.worktreeName } } : {}),
-      ...(moveIds.length > 0 ? { preserveIdentity: moveIds } : {})
+      ...(moveIds.length > 0 ? { preserveIdentity: moveIds } : {}),
+      ...(carrySessions.length > 0 ? { carrySessions } : {})
     })
     if (clip.cut) {
       await this.deps.removeCut(clip.nodeIds, clip.fromWorkspaceId)

@@ -821,9 +821,36 @@ function teamForkDeps(): Parameters<typeof forkTeam>[0] {
     switchWorkspace: (id) => void switchWorkspace(id),
     adoptNode: adoptLiveNode,
     isWorking: terminalIsWorking,
+    carrySession: carrySessionToPastedCard,
     git: { gitInfo: (dir) => gitCache.info(dir), addWorktree },
     worktreeRoot: path.join(homedir(), '.cookrew', 'worktrees')
   }
+}
+
+/**
+ * A CUT card arrives with its conversation. Two things have to move, because
+ * the paste changes BOTH coordinates a session is found by:
+ *
+ *   the ledger  keyed by TERMINAL ID, and a terminal must re-id on paste —
+ *               so without this the transcript opens blank even when the
+ *               agent itself resumes perfectly (the “Homelab Codex” report).
+ *   the session keyed by WORKDIR for claude and pi, and the copy adopts the
+ *               target workspace's dirs — the same repoint the workdir move
+ *               already does, which is why it is the same function.
+ *
+ * Codex and OpenCode need only the first: their refs are global addresses, so
+ * carrying the binding is enough to resume from anywhere.
+ */
+function carrySessionToPastedCard(from: TerminalNodeData, to: TerminalNodeData): void {
+  const history = turnStore.load(from.id)
+  if (history.length > 0) turnStore.scheduleSave(to.id, history)
+  carrySessionToCwd({
+    node: from,
+    fromCwd: from.cwd,
+    toCwd: to.cwd,
+    toNodeId: to.id,
+    turns: history
+  })
 }
 
 // ---- SELECT-mode clipboard: copy/cut a selection, paste it anywhere ----
@@ -850,6 +877,19 @@ const teamClipboard = new TeamClipboard({
   // but its cut agents' detached sessions are still ALIVE — end them now
   // (killDetached reaches sessions with no live PTY), not at the next
   // startup reap. Moved notes/browsers have nothing to tear down.
+  // A cut MOVES the session, so the copy will resume the very file the source
+  // is still appending to. An inactive workspace's agents are detached, not
+  // dead, so they are ended here — before the paste, not after it. killAndWait
+  // throws on a survivor rather than letting `new-session -A` reattach it.
+  stopCut: async (nodeIds, fromWorkspaceId) => {
+    const state = store.workspaceState(fromWorkspaceId)
+    for (const node of state.nodes) {
+      if (node.kind !== 'terminal' || !nodeIds.includes(node.id)) continue
+      sessionSync.unwatch(node.id)
+      turns.untrack(node.id)
+      await ptys.killAndWait(node.id)
+    }
+  },
   removeCut: async (nodeIds, fromWorkspaceId) => {
     const state = store.workspaceState(fromWorkspaceId)
     for (const node of state.nodes) {

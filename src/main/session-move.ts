@@ -46,6 +46,13 @@ export interface SessionMoveOptions {
   fromCwd: string
   toCwd: string
   /**
+   * Terminal id the session lands UNDER, when the card is not the one it left
+   * — a cut-and-paste re-ids the terminal, so Pi's per-node session dir has a
+   * different name on each side of the move. Defaults to the source's own id
+   * (a workdir change, where the card keeps its identity).
+   */
+  toNodeId?: string
+  /**
    * The terminal's turn history. A stored session id can DIVERGE from the
    * file the agent is really writing (a reattach that ignored our boot
    * command, a /clear), and history is what identifies the real one — the
@@ -141,7 +148,12 @@ function carryPiSession(options: SessionMoveOptions, ref: string | null): Sessio
   if (!home) return { kind: 'unavailable' }
   const moved = withPiHeaderCwd(readFileSync(home.file, 'utf8'), options.toCwd)
   if (moved === null) return { kind: 'unavailable' }
-  const exclusive = piNodeSessionDir(options.node.id, { rootDir: options.piSessionsRoot })
+  // Source dir keyed by the OLD id (above), destination by the new one: a
+  // cut-and-paste re-ids the card, and writing back under the source's id
+  // would leave the session in a dir the new terminal never looks in.
+  const exclusive = piNodeSessionDir(options.toNodeId ?? options.node.id, {
+    rootDir: options.piSessionsRoot
+  })
   mkdirSync(exclusive, { recursive: true })
   writeFileSync(path.join(exclusive, path.basename(home.file)), moved, 'utf8')
   return { kind: 'carried', sessionRef: ref }

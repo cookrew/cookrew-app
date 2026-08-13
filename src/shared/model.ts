@@ -276,6 +276,22 @@ export interface TeamCopySpec {
    * fresh ids and are deliberately stateless.
    */
   preserveIdentity?: string[]
+  /**
+   * CUT-paste session transfer: these TERMINAL ids MOVE their conversation to
+   * the copy instead of forking it — same session ref, same checkpoint
+   * ordinals, no lineage transition.
+   *
+   * The two are separate because a terminal cannot do what a note does: it
+   * must re-id (its id keys a live pty, a tmux session and a turn ledger, and
+   * the source is still standing when the paste runs), yet the conversation
+   * must still arrive. So identity moves for notes/browsers, and the SESSION
+   * moves for terminals.
+   *
+   * Only a CUT may set this. A copy's source keeps running, and an inherited
+   * ref would put two live processes on one rollout — which is exactly why
+   * the fork engine nulls these bindings by default.
+   */
+  carrySessions?: string[]
 }
 
 export interface TeamCopyResult {
