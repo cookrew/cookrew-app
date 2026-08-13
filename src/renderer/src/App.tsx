@@ -30,6 +30,11 @@ import { TerminalOverlayLayer } from './TerminalOverlay'
 import { useLodLayout } from './zoom-lod'
 import { browserInFullView } from './dock-target'
 import { BrowserLayer, useInteractiveBrowserCapability } from './BrowserLayer'
+import {
+  shouldClearLegacyThumbs,
+  shouldPollThumbs,
+  shouldSnapshotLocally
+} from './browser-thumb-policy'
 import { CanvasUiContext, ToolId } from './canvas-ui'
 import { useBrowserEngine } from './browser-engine'
 import { ErrorBoundary } from './ErrorBoundary'
@@ -506,7 +511,7 @@ function Canvas(): React.JSX.Element {
    * one is showing the live stream, and its own card is behind that overlay.
    */
   useEffect(() => {
-    if (interactiveBrowser !== true) return
+    if (!shouldSnapshotLocally({ remote: isRemoteMode(), interactive: interactiveBrowser })) return
     const snapshot = cookrew().browserSnapshot
     if (!snapshot) return
     let disposed = false
@@ -531,8 +536,10 @@ function Canvas(): React.JSX.Element {
 
   // Never retain a legacy frame once ownership resolves to headless. Browser
   // cards remain neutral until their shared stream is opened in the popout.
+  // Desktop only: a phone holds POLLED frames here, and wiping (and revoking)
+  // those is how its cards went blank.
   useEffect(() => {
-    if (interactiveBrowser !== true) return
+    if (!shouldClearLegacyThumbs({ remote: isRemoteMode(), interactive: interactiveBrowser })) return
     setThumbs((prev) => {
       for (const src of Object.values(prev)) {
         if (src.startsWith('blob:')) URL.revokeObjectURL(src)
@@ -566,12 +573,15 @@ function Canvas(): React.JSX.Element {
     []
   )
 
-  // Remote flag-off browser-card thumbs come from the desktop capture loop.
-  // Flag-on cards may remain text-only until their headless stream is opened.
+  // Remote browser-card thumbs are polled from main, under EITHER owner: the
+  // desktop's webview capture with the flag off, the headless page main
+  // photographs on request with it on. Gating this to flag-off left the phone
+  // with no producer at all once browsers went headless — every card on the
+  // canvas sat on its placeholder.
   const workspaceRef = useRef(workspace)
   workspaceRef.current = workspace
   useEffect(() => {
-    if (!isRemoteMode() || interactiveBrowser !== false) return
+    if (!shouldPollThumbs({ remote: isRemoteMode(), interactive: interactiveBrowser })) return
     const tick = (): void => {
       const browserIds = (workspaceRef.current?.nodes ?? [])
         .filter((n) => n.kind === 'browser')

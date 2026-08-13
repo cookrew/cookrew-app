@@ -73,6 +73,7 @@ import { withSessionLineage } from './session-lineage'
 import { carrySessionToCwd } from './session-move'
 import { moveTerminalCwd } from './terminal-cwd'
 import { createBrowserCast } from './browser-cast'
+import { BrowserThumbCache } from './browser-thumb-cache'
 import { findChrome } from './headless-chrome'
 import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine } from './headless-browser-command'
@@ -740,7 +741,7 @@ async function removeNode(id: string): Promise<void> {
   // no snapshot/registry ref exists). Disk-capped at 100/agent, negligible;
   // clearing it destroyed a recovery signal for nothing (R2 fix).
   ptys.kill(id)
-  browserThumbs.delete(id)
+  browserThumbs.forget(id)
   const browserStopped = browserManager.remove(id)
   store.removeNode(id)
   agents.deactivate(id)
@@ -1055,20 +1056,38 @@ async function captureWindow(): Promise<string> {
 const browserWaiters = new Map<string, { resolve: (v: string) => void; reject: (e: Error) => void }>()
 
 /**
- * Latest browser thumbnails, pushed from the renderer's capturePage() loop.
- * Kept here (not just in renderer state) so the mobile companion can serve
- * them as images to the phone's canvas cards.
+ * Latest browser thumbnails. Kept here (not just in renderer state) so the
+ * mobile companion can serve them as images to the phone's canvas cards —
+ * pushed by the renderer's capturePage() loop with the flag off, taken from
+ * the headless page main itself owns with the flag on.
  */
-const browserThumbs = new Map<string, Buffer>()
+const browserThumbs = new BrowserThumbCache({
+  // peek, not get: drawing a thumbnail must never be what launches a browser.
+  // A page that cannot be photographed right now (navigating, mid-resize) is
+  // ordinary, not an error: the card keeps its last frame and the next poll
+  // tries again.
+  capture: async (browserId) =>
+    interactiveBrowserEnabled()
+      ? ((await browserManager.peek(browserId)?.snapshot().catch(() => null)) ?? null)
+      : null
+})
 
-// Flag-off phone browsers use the legacy /thumb feed. While one is polling,
-// tell the renderer to keep that webview capture fresh even if the desktop is
-// hidden. Flag-on phones use the headless stream and never enter this path.
-function noteBrowserViewed(browserId: string): void {
+/**
+ * A phone polled /thumb. What that heartbeat has to trigger depends on who
+ * owns the page: with the flag OFF the desktop renderer must keep its legacy
+ * webview capture running even while hidden, and with it ON main takes the
+ * picture itself — which is what a phone-only viewer needs, since the desktop
+ * loop is paused whenever its window is hidden and skips the zoomed card.
+ */
+async function noteBrowserViewed(browserId: string): Promise<void> {
+  if (interactiveBrowserEnabled()) {
+    await browserThumbs.refresh(browserId)
+    return
+  }
   // The keep-alive decision (with its TTL) lives entirely in the renderer's
   // phoneViewingRef — main just relays the heartbeat. No map is held here, so
   // an unauth LAN client polling /thumb with junk ids cannot accumulate state.
-  if (!interactiveBrowserEnabled() && mainWindow && !mainWindow.webContents.isDestroyed()) {
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
     mainWindow.webContents.send('browser:phone-viewing', browserId)
   }
 }
@@ -1383,7 +1402,7 @@ app.whenReady().then(() => {
       roleDelete: (name: string) => roles.delete(name)
     },
     saveAttachment: (name, data) => saveAttachment(defaultAttachmentsDir(), name, data),
-    browserThumb: (id) => browserThumbs.get(id),
+    browserThumb: (id) => browserThumbs.frame(id),
     interactiveBrowserEnabled,
     browserThumbRequested: noteBrowserViewed,
     onUpgrade: (request, socket) => browserCast.upgrade(request, socket),
@@ -1708,25 +1727,20 @@ function registerIpc(handlers: RestoreHandlers): void {
 
   // Thumbnail frames from the renderer's browser capture loop (data URLs).
   ipcMain.on('browser:thumb', (_e, browserId: string, dataUrl: string) => {
-    const base64 = dataUrl.split(',')[1]
-    if (base64) browserThumbs.set(browserId, Buffer.from(base64, 'base64'))
+    browserThumbs.putDataUrl(browserId, dataUrl)
   })
 
   /**
    * Card thumbnail with the flag ON. There is no renderer webview to capture
    * any more, so the picture has to come from the headless page that actually
    * owns the tab — without it every browser card sits on the placeholder
-   * forever. Stored in the same map the legacy loop fills, so the phone's
-   * /api/browser/:id/thumb starts working in headless mode too.
+   * forever. The DESKTOP loop's entry point only: a phone reaches the same
+   * cache through /api/browser/:id/thumb, which no longer waits on this.
    */
   ipcMain.handle('browser:snapshot', async (_e, browserId: unknown) => {
     if (typeof browserId !== 'string' || !interactiveBrowserEnabled()) return null
-    // peek, not get: drawing a thumbnail must never be what launches a browser.
-    const instance = browserManager.peek(browserId)
-    const base64 = (await instance?.snapshot().catch(() => null)) ?? null
-    if (base64 === null) return null
-    browserThumbs.set(browserId, Buffer.from(base64, 'base64'))
-    return `data:image/jpeg;base64,${base64}`
+    await browserThumbs.refresh(browserId)
+    return browserThumbs.dataUrl(browserId)
   })
 
   // Browser command responses coming back from the renderer
