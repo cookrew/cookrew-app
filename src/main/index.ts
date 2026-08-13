@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron'
 import path from 'node:path'
+import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
@@ -69,6 +70,8 @@ import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
 import { createRestoreHandlers, registerRestoreIpc, RestoreHandlers } from './restore'
 import { withSessionLineage } from './session-lineage'
+import { carrySessionToCwd } from './session-move'
+import { moveTerminalCwd } from './terminal-cwd'
 import { createBrowserCast } from './browser-cast'
 import { findChrome } from './headless-chrome'
 import { HeadlessBrowserManager } from './headless-browser-manager'
@@ -536,17 +539,41 @@ function setPrimaryDir(id: string, dir: string): ReturnType<WorkspaceStore['list
 }
 
 /**
- * Repoint a terminal to another workspace directory and respawn its PTY
- * there — a running process can't change cwd, so the tmux session is killed
- * and recreated in the new dir (turn history survives; it's keyed by id).
+ * Repoint a terminal to another directory and respawn its PTY there — a
+ * running process can't change cwd, so the session is killed and recreated
+ * in the new dir. The conversation travels with it (session-move.ts), so the
+ * agent resumes where it left off and its checkpoints keep their ordinals; a
+ * directory the workspace does not have yet is enrolled first, which is what
+ * makes the file browser a working escape hatch. Order lives in terminal-cwd.ts.
  */
-function setTerminalCwd(nodeId: string, dir: string): CanvasNode {
-  const node = store.setTerminalCwd(nodeId, dir)
-  sessionSync.unwatch(nodeId)
-  turns.untrack(nodeId)
-  ptys.kill(nodeId)
-  spawnTracked(node)
-  return node
+async function setTerminalCwd(nodeId: string, dir: string): Promise<CanvasNode> {
+  return moveTerminalCwd(
+    {
+      store: {
+        activeId: store.activeId,
+        node: (id) => store.node(id),
+        dirs: () => store.dirs(),
+        addWorkspaceDir: (workspaceId, target) => store.addWorkspaceDir(workspaceId, target),
+        setTerminalCwd: (id, target) => store.setTerminalCwd(id, target)
+      },
+      release: (id) => {
+        sessionSync.unwatch(id)
+        turns.untrack(id)
+      },
+      kill: (id) => ptys.killAndWait(id),
+      spawn: (node) => spawnTracked(node),
+      carry: (move) => carrySessionToCwd({ ...move, turns: turns.history(move.node.id) }),
+      dirExists: (target) => {
+        try {
+          return statSync(target).isDirectory()
+        } catch {
+          return false
+        }
+      }
+    },
+    nodeId,
+    dir
+  )
 }
 
 // ---- node operations (shared by renderer IPC and the mobile HTTP API) ----

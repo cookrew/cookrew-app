@@ -63,7 +63,8 @@ export interface MobileOps {
   addWorkspaceDir: (id: string, dir: string) => WorkspaceList;
   removeWorkspaceDir: (id: string, dir: string) => WorkspaceList;
   setPrimaryDir: (id: string, dir: string) => WorkspaceList;
-  setTerminalCwd: (nodeId: string, dir: string) => CanvasNode;
+  /** Async: the respawn waits for the old session to actually be gone. */
+  setTerminalCwd: (nodeId: string, dir: string) => Promise<CanvasNode>;
   gitInfo: (dir: string) => Promise<GitInfo>;
   /** Team fork/save + roles (spec note team-fork-roles-v1). */
   teamFork: (spec: TeamForkSpec) => Promise<WorkspaceMeta>;
@@ -586,7 +587,7 @@ export async function handleMobileApi(
       respondJson(
         response,
         200,
-        ops.setTerminalCwd(cwdMatch[1], body.dir ?? ""),
+        await ops.setTerminalCwd(cwdMatch[1], body.dir ?? ""),
       );
     } catch (error) {
       respondJson(response, 400, {

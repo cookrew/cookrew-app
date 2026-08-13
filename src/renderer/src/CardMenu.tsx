@@ -315,7 +315,13 @@ function CheckpointPick({
   )
 }
 
-/** Workdir switcher: the workspace's dirs plus a browse escape hatch. */
+/**
+ * Workdir switcher: the workspace's dirs plus a browse escape hatch. A
+ * browsed directory JOINS the workspace on the way through (the backend
+ * enrols it), so the picker is a real escape hatch and not a chooser that
+ * throws on everything outside the list. The agent respawns there carrying
+ * its conversation, so checkpoints and transcript survive the move.
+ */
 function WorkdirPane({
   terminal,
   workspace,
@@ -332,36 +338,35 @@ function WorkdirPane({
   // demo stubs), so BROWSE is bridge-only by mode, not by stub probing.
   const canBrowse = !isRemoteMode() && !isDemoMode()
 
-  const move = (dir: string): void => {
-    if (busy || dir === terminal.cwd) return
+  /** Resolve a directory, then dispatch the move. One busy latch for both
+   *  entries, so a cancelled browse can never leave the pane stuck. */
+  const run = (pick: () => Promise<string | null>): void => {
+    if (busy) return
     setBusy(true)
-    void api
-      .setTerminalCwd(terminal.id, dir)
-      .then(() => onDone())
+    setError(null)
+    void pick()
+      .then((dir) => {
+        if (!dir) return void setBusy(false) // browse cancelled
+        if (dir === terminal.cwd) return void onDone() // already there
+        return api.setTerminalCwd(terminal.id, dir).then(() => onDone())
+      })
       .catch((e: unknown) => {
         setBusy(false)
         setError(e instanceof Error ? e.message : String(e))
       })
   }
 
+  const move = (dir: string): void => run(() => Promise.resolve(dir))
   const browse = (): void => {
-    if (busy || !canBrowse) return
-    setBusy(true)
-    void api
-      .pickDir()
-      .then((dir) => {
-        if (dir) move(dir)
-        else setBusy(false)
-      })
-      .catch((e: unknown) => {
-        setBusy(false)
-        setError(e instanceof Error ? e.message : String(e))
-      })
+    if (canBrowse) run(() => api.pickDir())
   }
 
   return (
     <div className="cr-cardmenu-pane col">
-      <div className="cr-cardmenu-hint">Moving respawns the agent in the new directory.</div>
+      <div className="cr-cardmenu-hint">
+        Moving respawns the agent in the new directory, with its session and
+        checkpoints intact.
+      </div>
       <div className="cr-cardmenu-ckpts">
         {workspace.dirs.map((dir) => (
           <button
