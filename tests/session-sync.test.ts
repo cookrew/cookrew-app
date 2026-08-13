@@ -105,6 +105,80 @@ describe('SessionTurnSync', () => {
     expect(history[0].uuid).toBe('x1')
     sync.dispose()
   })
+
+  it('does not reread an unchanged exact-context file after workspace detach', () => {
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    const parse = vi.fn(parseSessionTurns)
+
+    sync.watch('term-1', file, parse)
+    sync.suspend('term-1')
+    sync.watch('term-1', file, parse)
+
+    expect(parse).toHaveBeenCalledTimes(1)
+    expect(tracker.history('term-1').map((turn) => turn.prompt)).toEqual(['turn one'])
+    sync.dispose()
+  })
+
+  it('does reread after a permanent unwatch, which cannot retain context', () => {
+    const { file, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    const parse = vi.fn(parseSessionTurns)
+
+    sync.watch('term-1', file, parse)
+    sync.unwatch('term-1')
+    sync.watch('term-1', file, parse)
+
+    expect(parse).toHaveBeenCalledTimes(2)
+    sync.dispose()
+  })
+
+  it('reconciles after detach when the exact-context file changed', () => {
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    const parse = vi.fn(parseSessionTurns)
+    sync.watch('term-1', file, parse)
+    sync.suspend('term-1')
+
+    writeFileSync(file, [...TURN_1, ...TURN_2].join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parse)
+
+    expect(parse).toHaveBeenCalledTimes(2)
+    expect(tracker.history('term-1').map((turn) => turn.prompt)).toEqual(['turn one', 'turn two'])
+    sync.dispose()
+  })
+
+  it('reconciles an unchanged file when tracker history was cleared while detached', () => {
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    const parse = vi.fn(parseSessionTurns)
+    sync.watch('term-1', file, parse)
+    sync.suspend('term-1')
+    tracker.clearHistory('term-1')
+
+    sync.watch('term-1', file, parse)
+
+    expect(parse).toHaveBeenCalledTimes(2)
+    expect(tracker.history('term-1')).toHaveLength(1)
+    sync.dispose()
+  })
+
+  it('reconciles when detached tracker history changed without changing length', () => {
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    const parse = vi.fn(parseSessionTurns)
+    sync.watch('term-1', file, parse)
+    sync.suspend('term-1')
+    tracker.replaceHistory('term-1', [
+      { index: 1, prompt: 'same count, wrong turn', reply: 'x', startedAt: 1, endedAt: 2 }
+    ])
+
+    sync.watch('term-1', file, parse)
+
+    expect(parse).toHaveBeenCalledTimes(2)
+    expect(tracker.history('term-1')[0].prompt).toBe('turn one')
+    sync.dispose()
+  })
 })
 
 describe('TurnTracker.replaceHistory', () => {
