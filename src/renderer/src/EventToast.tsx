@@ -42,6 +42,8 @@ export function EventToastLayer(): React.JSX.Element {
 
   useEffect(() => {
     return onEvent((event) => {
+      // Timed observability events feed the LATENCY rollup, never the feed.
+      if (eventMeta(event.type).toast === false) return
       const now = nowMs()
       setToasts((prev) => {
         // Coalesce onto a live toast of the same type+workspace in the window.
