@@ -642,6 +642,7 @@ describe('workspaceFromTemplate (FEATURE 1: workspace from team template)', () =
       team: 'Core Team'
     })
     expect(meta.name).toBe('Sprint 9')
+    expect(meta.serviceState).toBe('dormant')
     // Switched into the new workspace: full team, retargeted dir, edges kept.
     expect(store.activeId).toBe(meta.id)
     const terminals = store.terminals()
@@ -655,6 +656,38 @@ describe('workspaceFromTemplate (FEATURE 1: workspace from team template)', () =
     await expect(
       workspaceFromTemplate(deps, { name: 'X', dir: '/work/fresh', team: 'Nope' })
     ).rejects.toThrow(/No saved team 'Nope'/)
+  })
+
+  it('can create and boot a hot team workspace without stealing focus', async () => {
+    const { deps, store, teams } = templateDeps()
+    const originalWorkspaceId = store.activeId
+    const booted: string[] = []
+    Object.assign(deps, { bootWorkspaceTerminals: (id: string) => booted.push(id) })
+    teams.save(
+      {
+        name: 'Background Team',
+        dir: '/work/old',
+        dirs: ['/work/old'],
+        nodes: [terminal('a')],
+        connections: []
+      },
+      () => [turn(1)],
+      'Background Team'
+    )
+
+    const meta = await workspaceFromTemplate(
+      deps,
+      { name: 'Detached Service', dir: '/work/service', team: 'Background Team' },
+      { focus: false, serviceState: 'hot' }
+    )
+
+    expect(store.activeId).toBe(originalWorkspaceId)
+    expect(meta.serviceState).toBe('hot')
+    expect(booted).toEqual([meta.id])
+    expect(store.workspaceState(meta.id).nodes[0]).toMatchObject({
+      kind: 'terminal',
+      pendingInject: expect.any(String)
+    })
   })
 })
 
@@ -731,6 +764,19 @@ describe('copyTeam (Figma copy into an existing workspace)', () => {
     // teamPaste records one grouped summary after copyTeam returns. The copy
     // engine itself must not emit one event per appended node/cable.
     expect(events).toEqual([])
+  })
+
+  it('boots newly pasted terminals when the inactive target is already hot', async () => {
+    const { deps, store } = copyDeps()
+    const { aId } = seedSelection(store)
+    const target = store.createWorkspace('Hot Service', '/work/hot')
+    store.setWorkspaceServiceState(target.id, 'hot')
+    const booted: string[] = []
+    Object.assign(deps, { bootWorkspaceTerminals: (id: string) => booted.push(id) })
+
+    await copyTeam(deps, { nodeIds: [aId], intoWorkspaceId: target.id })
+
+    expect(booted).toEqual([target.id])
   })
 
   it('refuses to copy WORKING agents, by name', async () => {

@@ -12,6 +12,7 @@ import {
   TerminalNodeData,
   WorkspaceList,
   WorkspaceMeta,
+  WorkspaceServiceState,
   WorkspaceState,
   noteNameFromContent,
   normalizeDirs,
@@ -24,6 +25,31 @@ import type { RecoverableSnapshot } from './recoverable'
 
 const DATA_DIR = path.join(homedir(), '.cookrew')
 const LEGACY_DATA_DIR = path.join(homedir(), '.cava')
+
+/**
+ * Hard process-level ceiling for service workspaces. A HOT workspace may boot
+ * an entire agent team, so leaving this unbounded turns one persisted metadata
+ * bit into an unlimited process-spawn loop at startup. Four lanes (including
+ * the focused workspace when it is hot) is the conservative v1 capacity;
+ * factory/catalog capacity may advertise less, never more.
+ */
+export const MAX_HOT_WORKSPACES = 4
+
+/**
+ * Refusing a HOT transition because the ceiling is full.
+ *
+ * Its own type so a CALLER can tell it from a fault: over HTTP this is a 409
+ * ("the fleet is full, try later or park something"), while a bare Error falls
+ * through to the catch-all 500 and tells a consumer the server broke. The
+ * message is unchanged, so anything matching on text still matches.
+ */
+export class HotCapacityError extends Error {
+  readonly limit = MAX_HOT_WORKSPACES
+  constructor() {
+    super(`HOT workspace capacity reached (${MAX_HOT_WORKSPACES})`)
+    this.name = 'HotCapacityError'
+  }
+}
 
 // One-time migration from the pre-brand-merge data dir (~/.cava). Must run
 // before anything touches DATA_DIR, so it lives at module scope — store.ts is
@@ -79,7 +105,10 @@ export class WorkspaceStore extends EventEmitter {
 
   constructor(private baseDir = DATA_DIR) {
     super()
-    this.registry = loadRegistry(this.baseDir)
+    const loaded = loadRegistry(this.baseDir)
+    const capped = capHotWorkspaces(loaded)
+    this.registry = capped.registry
+    if (capped.changed) saveRegistry(this.baseDir, this.registry)
     this.state = loadWorkspaceState(this.baseDir, this.activeId)
   }
 
@@ -104,12 +133,25 @@ export class WorkspaceStore extends EventEmitter {
     return this.registry.workspaces.find((w) => w.name.toLowerCase() === name.toLowerCase())
   }
 
-  createWorkspace(name: string, dir: string, icon = '🗂'): WorkspaceMeta {
+  createWorkspace(
+    name: string,
+    dir: string,
+    icon = '🗂',
+    serviceState: WorkspaceServiceState = 'dormant'
+  ): WorkspaceMeta {
+    this.assertHotCapacity(serviceState)
     const finalName = uniqueName(
       name.trim() || 'Workspace',
       this.registry.workspaces.map((w) => w.name)
     )
-    const meta: WorkspaceMeta = { id: randomUUID(), name: finalName, dir, dirs: [dir], icon }
+    const meta: WorkspaceMeta = {
+      id: randomUUID(),
+      name: finalName,
+      dir,
+      dirs: [dir],
+      icon,
+      serviceState
+    }
     this.registry = { ...this.registry, workspaces: [...this.registry.workspaces, meta] }
     // Seed an empty canvas file so the switch loads cleanly.
     saveWorkspaceState(this.baseDir, meta.id, { name: meta.name, dir, dirs: [dir], nodes: [], connections: [] })
@@ -130,15 +172,24 @@ export class WorkspaceStore extends EventEmitter {
     nodes: CanvasNode[],
     connections: Connection[],
     icon = '⑂',
-    dirs?: string[]
+    dirs?: string[],
+    serviceState: WorkspaceServiceState = 'dormant'
   ): WorkspaceMeta {
+    this.assertHotCapacity(serviceState)
     const finalName = uniqueName(
       name.trim() || 'Workspace',
       this.registry.workspaces.map((w) => w.name)
     )
     const finalDirs = normalizeDirs({ dir, dirs })
     const primary = finalDirs[0] ?? dir
-    const meta: WorkspaceMeta = { id: randomUUID(), name: finalName, dir: primary, dirs: finalDirs, icon }
+    const meta: WorkspaceMeta = {
+      id: randomUUID(),
+      name: finalName,
+      dir: primary,
+      dirs: finalDirs,
+      icon,
+      serviceState
+    }
     this.registry = { ...this.registry, workspaces: [...this.registry.workspaces, meta] }
     saveWorkspaceState(this.baseDir, meta.id, { name: finalName, dir: primary, dirs: finalDirs, nodes, connections })
     try {
@@ -173,6 +224,7 @@ export class WorkspaceStore extends EventEmitter {
     // the bookkeeping above would report a couple of milliseconds for
     // something the user waits seconds on.
     const startedAt = Date.now()
+    const previousWorkspaceId = this.registry.activeId
     const previousTerminalIds = this.terminals().map((t) => t.id)
     this.flushSave()
 
@@ -180,7 +232,7 @@ export class WorkspaceStore extends EventEmitter {
     saveRegistry(this.baseDir, this.registry)
     this.state = loadWorkspaceState(this.baseDir, id)
 
-    this.emit('switch', { previousTerminalIds })
+    this.emit('switch', { previousWorkspaceId, previousTerminalIds })
     this.emit('workspaces', this.list())
     this.emit('change', this.state)
     this.emitOp(
@@ -206,6 +258,37 @@ export class WorkspaceStore extends EventEmitter {
     this.emitOp('workspace.renamed', id, name, id)
   }
 
+  /** Persist a service transition without changing canvas focus. */
+  setWorkspaceServiceState(id: string, serviceState: WorkspaceServiceState): WorkspaceMeta {
+    if (!isWorkspaceServiceState(serviceState)) throw new Error(`Invalid service state '${serviceState}'`)
+    const previous = this.registry.workspaces.find((workspace) => workspace.id === id)
+    if (!previous) throw new Error(`Workspace '${id}' not found`)
+    if (previous.serviceState === serviceState) return previous
+    this.assertHotCapacity(serviceState)
+    const updated = { ...previous, serviceState }
+    this.registry = {
+      ...this.registry,
+      workspaces: this.registry.workspaces.map((workspace) =>
+        workspace.id === id ? updated : workspace
+      )
+    }
+    saveRegistry(this.baseDir, this.registry)
+    this.emit('service', {
+      workspaceId: id,
+      previous: previous.serviceState,
+      serviceState
+    })
+    this.emit('workspaces', this.list())
+    this.emitOp('workspace.service-state-changed', id, updated.name, id, serviceState)
+    return updated
+  }
+
+  private assertHotCapacity(serviceState: WorkspaceServiceState): void {
+    if (serviceState !== 'hot') return
+    const count = this.registry.workspaces.filter((workspace) => workspace.serviceState === 'hot').length
+    if (count >= MAX_HOT_WORKSPACES) throw new HotCapacityError()
+  }
+
   /**
    * Delete a workspace and its on-disk state/notes. Never removes the last
    * workspace; if the removed one is active, switches to another first (the
@@ -223,7 +306,7 @@ export class WorkspaceStore extends EventEmitter {
     if (id === this.registry.activeId) {
       const other = this.registry.workspaces.find((w) => w.id !== id)
       if (other) {
-        this.switchWorkspace(other.id) // saves current, boots the target
+        this.switchWorkspace(other.id) // saves current and loads the target
         switchedTo = other.id
       }
     }
@@ -481,6 +564,21 @@ export class WorkspaceStore extends EventEmitter {
    * never diverge from state. `durationMs` is how a caller that measured
    * something reports it; omit it and the event is untimed, as before.
    */
+  recordEventIn(
+    workspaceId: string,
+    type: string,
+    entityId: string,
+    entityName: string,
+    details?: string,
+    durationMs?: number
+  ): void {
+    if (!this.registry.workspaces.some((workspace) => workspace.id === workspaceId)) {
+      throw new Error(`Workspace '${workspaceId}' not found`)
+    }
+    this.emitOp(type, entityId, entityName, workspaceId, details, durationMs)
+  }
+
+  /** Active-workspace convenience for UI operations that have no other owner. */
   recordEvent(
     type: string,
     entityId: string,
@@ -488,7 +586,7 @@ export class WorkspaceStore extends EventEmitter {
     details?: string,
     durationMs?: number
   ): void {
-    this.emitOp(type, entityId, entityName, this.registry.activeId, details, durationMs)
+    this.recordEventIn(this.registry.activeId, type, entityId, entityName, details, durationMs)
   }
 
   private createdType(kind: CanvasNode['kind']): string {
@@ -820,6 +918,30 @@ export class WorkspaceStore extends EventEmitter {
     return updated
   }
 
+  /**
+   * Full-field update for an internal binding that may belong to a detached
+   * workspace. Inactive state is patched on disk without changing focus or
+   * broadcasting the active canvas as though it had changed.
+   */
+  updateNodeAcrossWorkspacesUnsafe(
+    id: string,
+    patch: Partial<CanvasNode>
+  ): CanvasNode | undefined {
+    const hit = this.nodeAcrossWorkspaces(id)
+    if (!hit) return undefined
+    if (hit.workspaceId === this.registry.activeId) return this.updateNodeUnsafe(id, patch)
+    let updated: CanvasNode | undefined
+    this.patchWorkspace(hit.workspaceId, (state) => ({
+      ...state,
+      nodes: state.nodes.map((node) => {
+        if (node.id !== id) return node
+        updated = { ...node, ...patch } as CanvasNode
+        return updated
+      })
+    }))
+    return updated
+  }
+
   removeNode(id: string): void {
     const node = this.node(id)
     if (node) this.captureRecoverable(node, this.registry.activeId)
@@ -905,7 +1027,12 @@ function loadRegistry(base: string): Registry {
         const workspaces = raw.workspaces.map((w) => {
           const dirs = normalizeDirs({ dir: w.dir, dirs: w.dirs })
           const finalDirs = dirs.length > 0 ? dirs : [homedir()]
-          return { ...w, dir: finalDirs[0], dirs: finalDirs }
+          const serviceState = isWorkspaceServiceState(w.serviceState)
+            ? w.serviceState
+            : w.id === raw.activeId
+              ? 'hot'
+              : 'dormant'
+          return { ...w, dir: finalDirs[0], dirs: finalDirs, serviceState }
         })
         return { ...raw, workspaces }
       }
@@ -932,7 +1059,14 @@ function migrateOrSeed(base: string): Registry {
       renameSync(legacyWorkspaceFile(base), `${legacyWorkspaceFile(base)}.migrated`)
       const dir = legacy.dir || homedir()
       const dirs = normalizeDirs({ dir, dirs: legacy.dirs })
-      const meta: WorkspaceMeta = { id, name: legacy.name || 'My Workspace', dir, dirs, icon: '🗂' }
+      const meta: WorkspaceMeta = {
+        id,
+        name: legacy.name || 'My Workspace',
+        dir,
+        dirs,
+        icon: '🗂',
+        serviceState: 'hot'
+      }
       const registry: Registry = { workspaces: [meta], activeId: id }
       saveRegistry(base, registry)
       return registry
@@ -942,7 +1076,14 @@ function migrateOrSeed(base: string): Registry {
   }
 
   const dir = homedir()
-  const meta: WorkspaceMeta = { id, name: 'My Workspace', dir, dirs: [dir], icon: '🗂' }
+  const meta: WorkspaceMeta = {
+    id,
+    name: 'My Workspace',
+    dir,
+    dirs: [dir],
+    icon: '🗂',
+    serviceState: 'hot'
+  }
   saveWorkspaceState(base, id, { name: meta.name, dir, dirs: [dir], nodes: [], connections: [] })
   const registry: Registry = { workspaces: [meta], activeId: id }
   saveRegistry(base, registry)
@@ -1003,5 +1144,36 @@ function saveRegistry(base: string, registry: Registry): void {
     writeFileSync(registryFile(base), JSON.stringify(registry, null, 2), 'utf8')
   } catch (error) {
     console.error('Failed to save registry:', error)
+  }
+}
+
+function isWorkspaceServiceState(value: unknown): value is WorkspaceServiceState {
+  return value === 'hot' || value === 'dormant' || value === 'parked'
+}
+
+/**
+ * Bound legacy registries written while every creation path forced HOT. The
+ * focused lane gets first claim, then persisted order, and excess lanes become
+ * dormant (their panes remain resumable; they simply do not auto-boot).
+ */
+function capHotWorkspaces(registry: Registry): { registry: Registry; changed: boolean } {
+  const hot = registry.workspaces.filter((workspace) => workspace.serviceState === 'hot')
+  if (hot.length <= MAX_HOT_WORKSPACES) return { registry, changed: false }
+  const active = hot.find((workspace) => workspace.id === registry.activeId)
+  const ordered = [
+    ...(active ? [active] : []),
+    ...hot.filter((workspace) => workspace.id !== registry.activeId)
+  ]
+  const allowed = new Set(ordered.slice(0, MAX_HOT_WORKSPACES).map((workspace) => workspace.id))
+  return {
+    registry: {
+      ...registry,
+      workspaces: registry.workspaces.map((workspace) =>
+        workspace.serviceState === 'hot' && !allowed.has(workspace.id)
+          ? { ...workspace, serviceState: 'dormant' }
+          : workspace
+      )
+    },
+    changed: true
   }
 }

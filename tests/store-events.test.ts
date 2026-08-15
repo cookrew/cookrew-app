@@ -109,4 +109,34 @@ describe('WorkspaceStore op choke-point (observability event log)', () => {
     expect(events[0]).toMatchObject({ type: 'role.saved', entityName: 'Reviewer' })
     expect(events[0].workspaceId).toBe(store.activeId)
   })
+
+  it('attributes a background external event to its owning workspace and node name', () => {
+    const { store, events } = makeStore()
+    const background = store.createWorkspace('Background', '/work/background')
+    const node = store.addNodeToWorkspace(background.id, terminal('Remote', '/work/background'))
+    events.length = 0
+
+    const hit = store.nodeAcrossWorkspaces(node.id)
+    store.withOpContext({ actor: 'agent' }, () =>
+      store.recordEventIn(
+        hit!.workspaceId,
+        'turn.completed',
+        node.id,
+        hit!.node.name,
+        undefined,
+        8_000
+      )
+    )
+
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      type: 'turn.completed',
+      entityId: node.id,
+      entityName: 'Remote',
+      workspaceId: background.id,
+      workspaceName: 'Background',
+      actor: 'agent',
+      durationMs: 8_000
+    })
+  })
 })

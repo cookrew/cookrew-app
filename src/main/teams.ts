@@ -26,6 +26,7 @@ import type {
   TeamMeta,
   TerminalNodeData,
   WorkspaceMeta,
+  WorkspaceServiceState,
   WorkspaceState
 } from '../shared/model'
 import { normalizeDirs } from '../shared/model'
@@ -630,13 +631,16 @@ export interface TeamForkDeps {
   roles: RoleStore
   teams: TeamStore
   ptys: PtyManager
-  /** index.ts switch wrapper — the switch boots the forked terminals. */
+  /** index.ts focus wrapper; focused creation attaches the forked terminals. */
   switchWorkspace: (id: string) => void
+  /** Boot a HOT workspace's service plane without changing canvas focus. */
+  bootWorkspaceTerminals?: (id: string) => void
   /**
    * Bring one just-added node alive on the ACTIVE canvas — the same per-kind
    * side effects index.ts addNode owns (spawn terminals, sync browsers).
    * copyTeam uses it when the copy lands on the live workspace; copies into
-   * inactive workspaces come alive on activation — same rule as agent-recover.
+   * inactive DORMANT workspaces come alive on activation; HOT workspaces use
+   * bootWorkspaceTerminals instead.
    */
   adoptNode?: (n: CanvasNode) => void
   /**
@@ -659,6 +663,13 @@ export interface TeamForkDeps {
   worktreeRoot: string
   /** Test override for ~/.claude/projects (native session forks). */
   projectsDir?: string
+}
+
+export interface TeamForkRuntimeOptions {
+  /** Existing UI flows focus by default; factory/service callers opt out. */
+  focus?: boolean
+  /** New workspaces are dormant unless a bounded service caller opts in. */
+  serviceState?: WorkspaceServiceState
 }
 
 /**
@@ -709,8 +720,8 @@ function resolveSource(deps: TeamForkDeps, spec: TeamForkSpec): TeamForkSource {
 
 /**
  * Execute a team fork: plan, write native session copies, create the new
- * workspace pre-seeded with the forked nodes, switch to it (which boots the
- * terminals), then inject each terminal's context once its TUI is quiet.
+ * workspace pre-seeded with the forked nodes, then either focus+attach it or
+ * boot its service plane in place. Context injection waits for a real PTY.
  */
 /**
  * FEATURE 1 (note workspace-from-template-role): create a workspace from a
@@ -721,23 +732,34 @@ function resolveSource(deps: TeamForkDeps, spec: TeamForkSpec): TeamForkSource {
  */
 export async function workspaceFromTemplate(
   deps: TeamForkDeps,
-  input: { name: string; dir: string; team: string }
+  input: { name: string; dir: string; team: string },
+  options: TeamForkRuntimeOptions = {}
 ): Promise<WorkspaceMeta> {
   if (!deps.teams.load(input.team)) {
     throw new Error(`No saved team '${input.team}' to use as a template`)
   }
   const dir = input.dir.trim()
-  return forkTeam(deps, {
-    name: input.name,
-    nodeIds: [], // snapshot semantic: the whole saved team
-    choices: [],
-    fromSavedTeam: input.team,
-    dirs: dir.length > 0 ? [dir] : undefined,
-    worktree: false
-  })
+  return forkTeam(
+    deps,
+    {
+      name: input.name,
+      nodeIds: [], // snapshot semantic: the whole saved team
+      choices: [],
+      fromSavedTeam: input.team,
+      dirs: dir.length > 0 ? [dir] : undefined,
+      worktree: false
+    },
+    options
+  )
 }
 
-export async function forkTeam(deps: TeamForkDeps, spec: TeamForkSpec): Promise<WorkspaceMeta> {
+export async function forkTeam(
+  deps: TeamForkDeps,
+  spec: TeamForkSpec,
+  options: TeamForkRuntimeOptions = {}
+): Promise<WorkspaceMeta> {
+  const focus = options.focus !== false
+  const serviceState = options.serviceState ?? 'dormant'
   const source = resolveSource(deps, spec)
   const planned = planTeamFork(source, spec, {
     newId: randomUUID,
@@ -765,7 +787,13 @@ export async function forkTeam(deps: TeamForkDeps, spec: TeamForkSpec): Promise<
   const nodes = plan.nodes.map((n) => {
     const context = contexts.get(n.id)
     return context && n.kind === 'terminal'
-      ? { ...n, claudeSessionId: context.claudeSessionId }
+      ? {
+          ...n,
+          claudeSessionId: context.claudeSessionId,
+          // A detached boot has no input channel. Keep the preamble durable
+          // until the first real attachment, where bootTerminal delivers it.
+          pendingInject: focus ? n.pendingInject : (context.inject ?? n.pendingInject)
+        }
       : n
   })
 
@@ -775,11 +803,13 @@ export async function forkTeam(deps: TeamForkDeps, spec: TeamForkSpec): Promise<
     nodes,
     plan.connections,
     undefined,
-    plan.dirs
+    plan.dirs,
+    serviceState
   )
-  deps.switchWorkspace(meta.id)
+  if (focus) deps.switchWorkspace(meta.id)
+  else if (serviceState === 'hot') deps.bootWorkspaceTerminals?.(meta.id)
 
-  for (const t of plan.terminals) {
+  for (const t of focus ? plan.terminals : []) {
     const inject = contexts.get(t.newId)?.inject
     if (!inject) continue
     const session = deps.ptys.get(t.newId)
@@ -949,8 +979,8 @@ export async function copyTeam(deps: TeamForkDeps, spec: TeamCopySpec): Promise<
             ...n,
             claudeSessionId: context.claudeSessionId,
             // Inactive target: the preamble cannot be injected into a PTY
-            // that does not exist yet — stash it on the node for the switch
-            // boot to deliver. Without this, every preamble-based agent
+            // that does not exist yet — stash it on the node for the first
+            // attach to deliver. Without this, every preamble-based agent
             // (Codex, pi, failed native forks) would copy as a hollow fork.
             pendingInject: intoActive ? null : (context.inject ?? null)
           }
@@ -1003,6 +1033,10 @@ export async function copyTeam(deps: TeamForkDeps, spec: TeamCopySpec): Promise<
         })
       }
     }
+  } else if (target.serviceState === 'hot') {
+    // The target is already a live service even though nobody is viewing it.
+    // Re-run the idempotent workspace boot so newly pasted terminals join it.
+    deps.bootWorkspaceTerminals?.(target.id)
   }
 
   return {
@@ -1010,8 +1044,8 @@ export async function copyTeam(deps: TeamForkDeps, spec: TeamCopySpec): Promise<
     workspaceName: target.name,
     copiedNodes: added.length,
     copiedCables: plan.connections.length,
-    // Detached sources aren't turn-tracked (the working guard can't see
-    // them and histories are frozen at the last visit) — say so.
+    // Not every detached source is file-backed/hot, so the working guard may
+    // still be unable to prove freshness. Keep the conservative disclosure.
     ...(fromId !== deps.store.activeId ? { staleSource: true } : {})
   }
 }

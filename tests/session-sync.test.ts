@@ -1,8 +1,8 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { SessionTurnSync } from '../src/main/session-sync'
+import { SessionTurnSync, STALE_TICKS, type SessionTurnSyncHooks } from '../src/main/session-sync'
 import { parseSessionTurns } from '../src/shared/session-turns'
 import { TurnTracker } from '../src/main/turn-tracker'
 import { TurnStore } from '../src/main/turn-store'
@@ -35,6 +35,24 @@ function fixture(): { file: string; tracker: TurnTracker; sync: SessionTurnSync 
   const tracker = new TurnTracker(async () => null, null)
   const sync = new SessionTurnSync(tracker, 50)
   return { file, tracker, sync }
+}
+
+const POLL_MS = 50
+
+function stalenessFixture(hooks: SessionTurnSyncHooks): {
+  file: string
+  tracker: TurnTracker
+  sync: SessionTurnSync
+} {
+  const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-stale-'))
+  const file = path.join(dir, 'abc.jsonl')
+  const tracker = new TurnTracker(async () => null, null)
+  return { file, tracker, sync: new SessionTurnSync(tracker, POLL_MS, hooks) }
+}
+
+/** Polls, in fake time — one tick is one reconcile pass. */
+async function ticks(count: number): Promise<void> {
+  await vi.advanceTimersByTimeAsync(count * POLL_MS + 1)
 }
 
 describe('SessionTurnSync', () => {
@@ -392,6 +410,162 @@ describe('TurnTracker.replaceHistory', () => {
       { index: 1, prompt: 'commit and push', reply: 'done longer', uuid: 'u-1', startedAt: 1, endedAt: 2 }
     ])
     expect(tracker.history('term-1')[0].title).toBe('Commit and push')
+  })
+})
+
+// Mid-flight session ROTATION (claude-rotation): a Claude conversation that
+// runs out of context continues in a NEW session file with no respawn and no
+// exit, so the only thing the app can observe is the bound file going quiet
+// while the pane keeps working. This is the sync's half of that — noticing,
+// and reporting it to whoever owns the rebind. It never rebinds itself.
+describe('SessionTurnSync staleness reporting', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('reports a bound file that stops growing while the pane is mid-turn', async () => {
+    vi.useFakeTimers()
+    const stale: string[] = []
+    const { file, sync } = stalenessFixture({
+      isInTurn: () => true,
+      onStale: (id) => void stale.push(id)
+    })
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parseSessionTurns)
+
+    await ticks(STALE_TICKS - 1)
+    expect(stale).toEqual([])
+    await ticks(1)
+    expect(stale).toEqual(['term-1'])
+    sync.dispose()
+  })
+
+  it('says nothing about a quiet file whose pane is idle', async () => {
+    vi.useFakeTimers()
+    const stale: string[] = []
+    const { file, sync } = stalenessFixture({
+      isInTurn: () => false,
+      onStale: (id) => void stale.push(id)
+    })
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parseSessionTurns)
+
+    await ticks(STALE_TICKS * 3)
+    expect(stale).toEqual([])
+    sync.dispose()
+  })
+
+  // The load-bearing detail: `claude --resume <id>` TOUCHES the session file
+  // it opens without appending to it, so a dead session's mtime keeps moving.
+  // Counting mtime instead of bytes would reset the signal on the exact files
+  // this feature exists to catch.
+  it('keeps counting when the mtime moves but the bytes do not', async () => {
+    vi.useFakeTimers()
+    const stale: string[] = []
+    const { file, sync } = stalenessFixture({
+      isInTurn: () => true,
+      onStale: (id) => void stale.push(id)
+    })
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parseSessionTurns)
+
+    await ticks(STALE_TICKS - 2)
+    const touched = statSync(file).mtimeMs / 1000 + 3600
+    utimesSync(file, touched, touched)
+    await ticks(2)
+    expect(stale).toEqual(['term-1'])
+    sync.dispose()
+  })
+
+  it('starts over when the file actually grows', async () => {
+    vi.useFakeTimers()
+    const stale: string[] = []
+    const { file, sync } = stalenessFixture({
+      isInTurn: () => true,
+      onStale: (id) => void stale.push(id)
+    })
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parseSessionTurns)
+
+    await ticks(STALE_TICKS - 1)
+    writeFileSync(file, [...TURN_1, ...TURN_2].join('\n') + '\n', 'utf8')
+    await ticks(2)
+    expect(stale).toEqual([])
+    await ticks(STALE_TICKS)
+    expect(stale).toEqual(['term-1'])
+    sync.dispose()
+  })
+
+  it('says nothing about a file that has never reconciled', async () => {
+    vi.useFakeTimers()
+    const stale: string[] = []
+    const { file, sync } = stalenessFixture({
+      isInTurn: () => true,
+      onStale: (id) => void stale.push(id)
+    })
+    // A fresh --session-id boot: the pane is working, the file does not exist
+    // yet. Nothing has gone stale — nothing has happened at all.
+    sync.watch('term-1', file, parseSessionTurns)
+    await ticks(STALE_TICKS * 2)
+    expect(stale).toEqual([])
+    sync.dispose()
+  })
+
+  it('reports once per stale window, not once per poll', async () => {
+    vi.useFakeTimers()
+    const stale: string[] = []
+    const { file, sync } = stalenessFixture({
+      isInTurn: () => true,
+      onStale: (id) => void stale.push(id)
+    })
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parseSessionTurns)
+
+    await ticks(STALE_TICKS * 3)
+    expect(stale).toHaveLength(3)
+    sync.dispose()
+  })
+
+  // The rebind runs INSIDE the report, re-watching the terminal on the
+  // successor file. The reconcile pass that reported must not then carry on
+  // and reconcile the dead file over the top of it.
+  it('lets the report rebind the terminal without being overwritten', async () => {
+    vi.useFakeTimers()
+    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-rebind-'))
+    const dead = path.join(dir, 'dead.jsonl')
+    const live = path.join(dir, 'live.jsonl')
+    writeFileSync(dead, TURN_1.join('\n') + '\n', 'utf8')
+    writeFileSync(live, [...TURN_1, ...TURN_2].join('\n') + '\n', 'utf8')
+    const tracker = new TurnTracker(async () => null, null)
+    let rebinds = 0
+    const sync: SessionTurnSync = new SessionTurnSync(tracker, POLL_MS, {
+      isInTurn: () => true,
+      onStale: (id) => {
+        rebinds += 1
+        sync.watch(id, live, parseSessionTurns)
+      }
+    })
+    sync.watch('term-1', dead, parseSessionTurns)
+    expect(tracker.history('term-1')).toHaveLength(1)
+
+    await ticks(STALE_TICKS)
+    expect(rebinds).toBe(1)
+    expect(tracker.history('term-1').map((r) => r.prompt)).toEqual(['turn one', 'turn two'])
+    // And it STAYS rebound: later polls reconcile the live file, never the
+    // dead one, so nothing rotates the history back.
+    await ticks(STALE_TICKS * 2)
+    expect(tracker.history('term-1')).toHaveLength(2)
+    sync.dispose()
+  })
+
+  it('is inert with no hooks wired (harnesses that never rotate)', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = stalenessFixture({})
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parseSessionTurns)
+    await ticks(STALE_TICKS * 3)
+    expect(tracker.history('term-1')).toHaveLength(1)
+    sync.dispose()
   })
 })
 
