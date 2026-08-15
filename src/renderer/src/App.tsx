@@ -18,6 +18,7 @@ import type { AgentRole, CanvasNode, BrowserNodeData, TeamClipStatus, TerminalNo
 import { activeBrowserTab, browserTabs } from '../../shared/model'
 import type { TerminalActivity } from '../../shared/turn'
 import { cookrew, isRemoteMode } from './api'
+import { authStore } from './auth-gate'
 import { isViewed, markViewed, pruneViewers, type ViewerClocks } from '../../shared/phone-viewing'
 import { TerminalNode } from './nodes/TerminalNode'
 import { NoteNode } from './nodes/NoteNode'
@@ -634,7 +635,13 @@ function Canvas(): React.JSX.Element {
         .filter((n) => n.kind === 'browser')
         .map((n) => n.id)
       for (const id of browserIds) {
-        void fetch(`/api/browser/${id}/thumb?v=${Date.now()}`)
+        // A bare fetch, so the credential has to be spelled out: this poll runs
+        // only in remote (phone) mode, where /api/* is gated (v4 §4).
+        void fetch(`/api/browser/${id}/thumb?v=${Date.now()}`, {
+          headers: authStore().token()
+            ? { authorization: `Bearer ${authStore().token()}` }
+            : undefined
+        })
           .then((r) => (r.ok ? r.blob() : null))
           .then((blob) => {
             if (!blob) return

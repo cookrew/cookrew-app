@@ -6,6 +6,8 @@
  * poll cadence/lifecycle, cache-busting, letterbox math, and interval control.
  */
 
+import { withStreamToken } from './stream-ticket'
+
 /**
  * Poll cadence (ms) for the legacy frame while the phone has the browser open.
  * CAPTURE-FRESHNESS CONTRACT (Forge, landed): each GET /api/browser/:id/thumb
@@ -31,8 +33,10 @@ export function shouldPollFrame(opts: { open: boolean; hidden: boolean }): boole
  * pulls a FRESH frame: the endpoint is `no-store`, but an <img> reusing an
  * identical src can skip the network entirely, freezing the view. Pure.
  */
-export function frameSrc(browserId: string, seq: number): string {
-  return `/api/browser/${encodeURIComponent(browserId)}/thumb?f=${seq}`
+export function frameSrc(browserId: string, seq: number, token?: string | null): string {
+  // `<img src>` cannot carry a bearer header, so the phone's credential rides
+  // as a stream ticket (v4 §4) — this GET is gated like every other /api/*.
+  return withStreamToken(`/api/browser/${encodeURIComponent(browserId)}/thumb?f=${seq}`, token)
 }
 
 /** A fitted (letterboxed) rect for the frame within the view. */

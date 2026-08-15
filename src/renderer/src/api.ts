@@ -17,6 +17,7 @@ import type { TerminalActivity, TurnRecord } from "../../shared/turn";
 import type { TurnMatch } from "../../shared/turn-search";
 import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
 import type { BoardRow, BoardSummary } from "../../shared/board";
+import type { StreamNotice } from "./api-failure";
 
 /**
  * GET /api/board's payload, mirrored here rather than imported from main —
@@ -94,7 +95,15 @@ export interface CookrewApi {
   ptyAttach: (
     terminalId: string,
     onData: (data: string) => void,
-    onHello?: (geometry: { cols: number; rows: number }) => void
+    onHello?: (geometry: { cols: number; rows: number }) => void,
+    /**
+     * Why this card has no live output, when the transport can tell. Optional
+     * on both sides: transports that cannot diagnose a refusal never call it,
+     * and a viewer that does not render notices simply omits it. Exists
+     * because a gated stream (v4 §4) otherwise leaves a blank card with no
+     * explanation — D6.
+     */
+    onNotice?: (notice: StreamNotice) => void
   ) => () => void;
   listActivity: () => Promise<TerminalActivity[]>;
   onTerminalActivity: (cb: (activity: TerminalActivity) => void) => () => void;

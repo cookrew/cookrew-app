@@ -21,6 +21,7 @@
  */
 
 import type { FitRect } from './browser-frame'
+import { withStreamToken } from './stream-ticket'
 
 /** Requested screencast viewport bounds — Forge clamps 320..2048 (default 800x1400). */
 export const VIEWPORT_MIN = 320
@@ -117,13 +118,18 @@ export function streamUrl(
   browserId: string,
   w: number,
   h: number,
-  desktopToken?: string | null
+  desktopToken?: string | null,
+  pairingToken?: string | null
 ): string {
   const scheme = origin.startsWith('https') ? 'wss' : 'ws'
   const host = origin.replace(/^https?:\/\//, '')
   const token = desktopToken ? `&desktopToken=${encodeURIComponent(desktopToken)}` : ''
   const q = `w=${clampViewport(w)}&h=${clampViewport(h)}${token}`
-  return `${scheme}://${host}/api/browser/${encodeURIComponent(browserId)}/stream?${q}`
+  const url = `${scheme}://${host}/api/browser/${encodeURIComponent(browserId)}/stream?${q}`
+  // The phone's stream ticket. WebSocket has no header argument, and the
+  // upgrade is gated as `terminal-io` now (v4 §4) — the desktop presents its
+  // own per-process secret above and needs none of this.
+  return withStreamToken(url, desktopToken ? null : pairingToken)
 }
 
 /**

@@ -365,6 +365,13 @@ function TerminalOverlay({
               // container may be mid-teardown
             }
           }, 400)
+        },
+        // A refused stream used to leave this card blank with no diagnosis
+        // (D6). Written into the terminal itself because that IS the card —
+        // dim, framed, and unmistakably not agent output.
+        (notice) => {
+          if (disposed) return
+          term.write(`\r\n\x1b[2m── ${notice.message} ──\x1b[0m\r\n`)
         }
       )
       cleanups.push(() => {

@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react'
 import { cookrew } from './api'
 import { latencyStats, type LatencyStats } from '../../shared/stats'
+import { noticeForError, type StreamNotice } from './api-failure'
+
+/** Card-level copy when the log itself cannot be read (D6). */
+const queryNotice = (error: unknown): StreamNotice => noticeForError(error, 'The activity log')
 
 /**
  * A CrIcon name — kept as a plain string (not imported from icons.tsx) so this
@@ -350,16 +354,31 @@ export async function queryEvents(filter?: EventFilter): Promise<CookrewEvent[]>
   return mockLog.filter((e) => matches(e, filter)).sort((a, b) => b.timestamp - a.timestamp)
 }
 
+export interface EventQueryResult {
+  events: CookrewEvent[]
+  /**
+   * Set when the log could not be read at all. A scope refusal (v4 §4: this
+   * credential may render the board but not query the log) must NOT look like
+   * an empty result — "no events in this range" would be a lie, and it is the
+   * one the wall would show. D6.
+   */
+  notice: StreamNotice | null
+}
+
 /** Live query hook: initial fetch + re-query whenever a new event streams in. */
-export function useEventQuery(filter?: EventFilter): CookrewEvent[] {
-  const [events, setEvents] = useState<CookrewEvent[]>([])
+export function useEventQuery(filter?: EventFilter): EventQueryResult {
+  const [result, setResult] = useState<EventQueryResult>({ events: [], notice: null })
   const key = JSON.stringify(filter ?? {})
   useEffect(() => {
     let alive = true
     const refresh = (): void => {
-      void queryEvents(filter).then((list) => {
-        if (alive) setEvents(list)
-      })
+      void queryEvents(filter)
+        .then((list) => {
+          if (alive) setResult({ events: list, notice: null })
+        })
+        .catch((error: unknown) => {
+          if (alive) setResult({ events: [], notice: queryNotice(error) })
+        })
     }
     refresh()
     const off = onEvent(refresh)
@@ -369,5 +388,5 @@ export function useEventQuery(filter?: EventFilter): CookrewEvent[] {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
-  return events
+  return result
 }

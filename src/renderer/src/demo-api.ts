@@ -70,7 +70,7 @@ const DEMO_RESPONSES: Record<string, string> = {
 export function createDemoApi(): CookrewApi {
   // In-memory workspace registry so the demo can switch canvases too.
   const metas: WorkspaceMeta[] = [
-    { id: 'demo-ws', name: 'Cookrew Demo', dir: '~', dirs: ['~'], icon: '🗂' }
+    { id: 'demo-ws', name: 'Cookrew Demo', dir: '~', dirs: ['~'], icon: '🗂', serviceState: 'hot' }
   ]
   const states = new Map<string, WorkspaceState>([['demo-ws', demoWorkspace()]])
   let activeId = 'demo-ws'
@@ -105,7 +105,8 @@ export function createDemoApi(): CookrewApi {
         name: uniqueName(name.trim() || 'Workspace', metas.map((m) => m.name)),
         dir: wsDir,
         dirs: [wsDir],
-        icon: '🗂'
+        icon: '🗂',
+        serviceState: 'dormant'
       }
       metas.push(meta)
       states.set(meta.id, {

@@ -62,7 +62,7 @@ export function MetricsPanel({ onClose }: { onClose: () => void }): React.JSX.El
     () => (span === null ? {} : { since: now - span }),
     [span, now]
   )
-  const all = useEventQuery(filter)
+  const { events: all, notice } = useEventQuery(filter)
 
   // Workspace / type option lists come from what's in the (time-filtered) log.
   const workspaces = useMemo(() => {
@@ -203,7 +203,13 @@ export function MetricsPanel({ onClose }: { onClose: () => void }): React.JSX.El
           </select>
         </div>
 
-        {events.length === 0 ? (
+        {notice ? (
+          // Never the empty state for a refused read: "no events in this
+          // range" would claim there is nothing to show (D6).
+          <div className="tf-role-note metrics-notice" data-notice={notice.kind}>
+            {notice.message}
+          </div>
+        ) : events.length === 0 ? (
           <div className="tf-role-note">No events in this range.</div>
         ) : (
           <div className="metrics-timeline">
