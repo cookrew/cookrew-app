@@ -31,10 +31,22 @@ export function pairingAuthorized(
   const bearer = typeof header === 'string' && header.startsWith('Bearer ')
     ? header.slice('Bearer '.length)
     : null
-  const candidate = bearer ?? url.searchParams.get('token')
-  if (!candidate) return false
+  return secretEquals(bearer ?? url.searchParams.get('token'), token)
+}
+
+/**
+ * Constant-time secret compare, for every credential this process checks.
+ *
+ * Extracted so there is ONE of these. `===` on a secret leaks its length and
+ * then its prefix through timing — a slow leak, but the listener is 0.0.0.0
+ * and the attacker chooses the retry rate. A missing or wrong-length candidate
+ * short-circuits to false, which reveals only what the caller already knows
+ * (timingSafeEqual requires equal lengths and would throw otherwise).
+ */
+export function secretEquals(candidate: string | null | undefined, secret: string): boolean {
+  if (!candidate || !secret) return false
   const a = Buffer.from(candidate)
-  const b = Buffer.from(token)
+  const b = Buffer.from(secret)
   return a.length === b.length && timingSafeEqual(a, b)
 }
 

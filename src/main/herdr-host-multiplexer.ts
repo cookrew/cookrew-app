@@ -1000,6 +1000,21 @@ export class HerdrHostMultiplexer implements Multiplexer {
     }
   }
 
+  /** The same read, reaching `lines` rows back instead of herdr's default. */
+  captureDeep(name: string, lines: number): string | null {
+    const pane = this.paneFor(name)
+    if (!pane) return null
+    try {
+      return this.herdr([
+        'pane', 'read', pane.pane_id,
+        '--source', 'recent-unwrapped',
+        '--lines', String(Math.max(1, lines))
+      ])
+    } catch {
+      return null
+    }
+  }
+
   scrollState(name: string): ScrollState {
     return toScrollState(this.paneFor(name))
   }

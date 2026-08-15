@@ -36,8 +36,13 @@ export function submitDelayMs(promptLength: number): number {
  * than folded into a still-ingesting paste — the "[Pasted text] never sent"
  * bug that a bare raw write hits when the TUI's own paste heuristic collapses
  * the burst. Same mechanism the fork engine uses (injectWhenReady).
+ *
+ * EXPORTED for the dispatch fallback, which needs the typed path and ONLY the
+ * typed path: askTerminal re-enters the multiplexer first, so using it as a
+ * fallback for a failed herdr submission sends the same prompt to herdr a
+ * second time. This is the primitive that is provably not herdr.
  */
-async function pasteAndSubmit(session: PtySession, body: string): Promise<void> {
+export async function pasteAndSubmit(session: PtySession, body: string): Promise<void> {
   session.write(`${BRACKETED_PASTE_START}${body}${BRACKETED_PASTE_END}`)
   await new Promise((resolve) => setTimeout(resolve, submitDelayMs(body.length)))
   session.write('\r')

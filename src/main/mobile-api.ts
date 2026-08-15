@@ -1,11 +1,13 @@
 import type http from "node:http";
 import type { WorkspaceStore } from "./store";
+import { HotCapacityError } from "./store";
 import type { PtyManager } from "./pty";
 import type { TurnTracker } from "./turn-tracker";
 import type { EventLog, CookrewEvent, EventQuery } from "./event-log";
 import { pageTurns } from "../shared/turn";
 import type { AgentRegistry } from "./agent-registry";
 import type { TraceReader } from "./trace";
+import type { DispatchService } from "./dispatch";
 import {
   boardWindowMs,
   buildBoard,
@@ -24,11 +26,14 @@ import type {
   TerminalNodeData,
   WorkspaceList,
   WorkspaceMeta,
+  WorkspaceServiceState,
   WorkspaceState,
   RecoverResult,
   RestoreResult,
 } from "../shared/model";
 import { readJson, respondJson, startSse, pairingAuthorized } from "./mobile-http";
+import { gateMessage, gateRequest, gatedPath } from "./auth-gate";
+import type { GateConsumer } from "../shared/gate";
 
 /**
  * Workspace operations shared with the renderer IPC handlers — the mobile
@@ -58,6 +63,10 @@ export interface MobileOps {
   ) => WorkspaceMeta | Promise<WorkspaceMeta>;
   switchWorkspace: (id: string) => WorkspaceMeta;
   renameWorkspace: (id: string, name: string) => WorkspaceList;
+  setWorkspaceServiceState: (
+    id: string,
+    state: WorkspaceServiceState,
+  ) => WorkspaceMeta;
   /** Workspace v2: remove workspace + multi-dir + per-terminal cwd + git. */
   removeWorkspace: (id: string) => WorkspaceList;
   addWorkspaceDir: (id: string, dir: string) => WorkspaceList;
@@ -95,6 +104,13 @@ export interface MobileApiDeps {
   agents: AgentRegistry;
   /** Recover an inactive teammate as it was (agent-recover feature). */
   recoverAgent: (id: string) => RecoverResult;
+  /**
+   * Attach-free dispatch engine (v4 §3). Optional so this module compiles and
+   * serves before it is wired; absent = the two dispatch routes answer 503
+   * rather than 404, because a missing wire-up must not look like a missing
+   * feature to a consumer holding a catalog entry for it.
+   */
+  dispatch?: DispatchService;
   /** Endpoint restore: rewind an agent to a checkpoint (+ undo). */
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>;
   undoRestore: (id: string) => Promise<RestoreResult>;
@@ -119,11 +135,16 @@ export interface MobileApiDeps {
   /** Persist a phone-uploaded attachment; returns its absolute path. */
   saveAttachment: (name: string, data: Buffer) => string;
   /**
-   * Pairing token required on every MUTATING route (C1) as
-   * `Authorization: Bearer <token>` (or `?token=`). Undefined =
-   * unauthenticated (loopback-only embedders, tests).
+   * Pairing token required on every /api/* route (v4 §4) as
+   * `Authorization: Bearer <token>` (or `?token=` for header-less clients).
+   * Undefined = unauthenticated (loopback-only embedders, tests).
    */
   pairingToken?: string;
+  /**
+   * ~/.cookrew/consumers.json rows, keyed by consumer name. Absent = the two
+   * generated rows (phone + wall), which is exactly today's behaviour.
+   */
+  consumers?: Readonly<Record<string, GateConsumer>>;
 }
 
 /** Base64 inflates ~4/3, so this admits attachments up to the 20MB save cap. */
@@ -169,21 +190,24 @@ export async function handleMobileApi(
   const method = request.method ?? "GET";
   const p = url.pathname;
 
-  // C1 gate: every state-changing route requires the pairing token. This
-  // choke point runs BEFORE any route match (and before the mobile server's
-  // own POST routes, which delegate here first), so restore/undo/recover,
-  // terminal input, workspace edits, and uploads are all covered. Read-only
-  // GETs stay open: EventSource cannot set headers, and with the C2 wildcard
-  // gone only same-origin pages can read them cross-site anyway.
-  // Two SCOPES over one set of routes (there is no second, degraded API):
-  //   pairing   → read + write
-  //   read-only → GET only; any other method is refused even with a valid token
+  // The v4 §4 gate (see auth-gate.ts). This choke point runs BEFORE any route
+  // match — and before the mobile server's own routes, which delegate here
+  // first — so every /api/* path on this 0.0.0.0 listener passes through it.
+  //
+  // WHAT CHANGED FROM C1: the old gate fired on non-GET only, which meant every
+  // read (workspace state, board, activity, transcripts) was open to anyone on
+  // the LAN. §4 is deny-by-default: a known credential is required for reads
+  // too, and only /api/auth/status plus the static bootstrap stay public.
+  //
+  // The two tokens are now the first two consumer ROWS rather than two special
+  // cases (a strict generalization, §4's words):
+  //   pairing (phone) → observe, dispatch, orchestrate, terminal-io, admin
+  //   read-only (wall) → observe; anything else is 403, not 401 — the token is
+  //                      KNOWN, so re-pairing is not the caller's fix (Sol F9)
   const hasPairing =
     !!deps.pairingToken && pairingAuthorized(request, url, deps.pairingToken);
   const hasReadOnly =
     !!deps.wallToken && pairingAuthorized(request, url, deps.wallToken);
-  /** Cleared for a read: either scope. */
-  const canRead = hasPairing || hasReadOnly;
 
   // What the presented credential is worth. The phone asks BEFORE it acts, so
   // an unpaired device can say "you are unpaired" instead of letting every
@@ -201,13 +225,24 @@ export async function handleMobileApi(
     return true;
   }
 
-  if (method !== "GET" && deps.pairingToken && !hasPairing) {
-    respondJson(response, 401, {
-      error: hasReadOnly
-        ? "Unauthorized — this token is read-only."
-        : "Unauthorized — open the pairing URL shown on the desktop (it carries ?token=).",
+  // `pairingToken` absent = the in-process embedder escape, unchanged: a
+  // caller that constructed these deps without a credential is not on the
+  // network. startMobileServer always injects one, so the LAN never selects it.
+  if (deps.pairingToken && gatedPath(p)) {
+    const verdict = gateRequest({
+      method,
+      url,
+      request,
+      tokens: {
+        pairingToken: deps.pairingToken,
+        wallToken: deps.wallToken,
+        consumers: deps.consumers,
+      },
     });
-    return true;
+    if (verdict.status !== 200) {
+      respondJson(response, verdict.status, { error: gateMessage(verdict) });
+      return true;
+    }
   }
 
   if (method === "GET" && p === "/api/workspace") {
@@ -231,16 +266,8 @@ export async function handleMobileApi(
   // Activity Board: the cross-workspace, task-first view. Strictly ADDITIVE —
   // /api/activity above still serves the canvas cards byte-for-byte.
   if (method === "GET" && p === "/api/board") {
-    // The board turned "know a terminalId to fetch one agent" into "one GET
-    // returns every workspace's task text" — a real exposure upgrade on an
-    // 0.0.0.0 listener, so this read is gated even though other GETs are not.
-    // EventSource cannot set headers, hence ?token= is accepted too.
-    if (deps.pairingToken && !canRead) {
-      respondJson(response, 401, {
-        error: "Unauthorized — the board requires a pairing or read-only token.",
-      });
-      return true;
-    }
+    // The board's own 401 lived here while other GETs were open — it is now
+    // one `observe` route among many, gated at the choke point like the rest.
     if (!deps.board) {
       respondJson(response, 503, { error: "board index not wired" });
       return true;
@@ -295,6 +322,45 @@ export async function handleMobileApi(
     } catch (error) {
       respondJson(response, 400, {
         error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return true;
+  }
+  const wsServiceMatch = p.match(/^\/api\/workspaces\/([^/]+)\/service$/);
+  if (wsServiceMatch && method === "POST") {
+    const body = await readJson<{ state?: unknown }>(request);
+    if (
+      body.state !== "hot" &&
+      body.state !== "dormant" &&
+      body.state !== "parked"
+    ) {
+      respondJson(response, 400, {
+        error: "state must be hot, dormant, or parked",
+      });
+      return true;
+    }
+    const workspaceId = wsServiceMatch[1];
+    if (!ops.listWorkspaces().workspaces.some((workspace) => workspace.id === workspaceId)) {
+      respondJson(response, 404, { error: `Workspace '${workspaceId}' not found` });
+      return true;
+    }
+    try {
+      respondJson(
+        response,
+        200,
+        ops.setWorkspaceServiceState(workspaceId, body.state),
+      );
+    } catch (error) {
+      // A full HOT fleet is a CAPACITY answer, not a fault: 409 is the same
+      // thing /dispatch says when an agent is busy, and it tells the caller to
+      // park something and retry. Without this the throw reached the
+      // catch-all and reported 500 — "the server broke" — for a refusal the
+      // server made on purpose. Anything else still surfaces as a fault.
+      if (!(error instanceof HotCapacityError)) throw error;
+      respondJson(response, 409, {
+        error: error.message,
+        limit: error.limit,
+        state: body.state,
       });
     }
     return true;
@@ -694,10 +760,10 @@ export async function handleMobileApi(
     // 'activity' event above is left exactly as it was (canvas cards eat it).
     // Board recompute spans the whole fleet, so bursts coalesce instead of
     // pushing per tracker tick.
-    // Same data as /api/board, so the same gate: an unauthenticated
-    // subscriber still gets workspace/activity/event (existing behaviour,
-    // untouched) but never the board stream.
-    const board = !deps.pairingToken || canRead ? deps.board : undefined;
+    // The board sub-stream's own gate, from when this SSE route was open to
+    // anyone: reaching here at all now means the choke point cleared an
+    // `observe` credential, which is exactly what the board needs.
+    const board = deps.board;
     const boardNotifier = board
       ? createBoardNotifier(() => send("board", buildBoard(board)))
       : null;
@@ -769,6 +835,38 @@ export async function handleMobileApi(
         error: error instanceof Error ? error.message : String(error),
       });
     }
+    return true;
+  }
+  // V4 §3: attach-free dispatch. The one route the protocol lacked — give an
+  // agent work without a terminal open on it. 202 + a dispatch id; the answer
+  // arrives at GET /api/dispatches/:id, correlated through the turn that
+  // answered it. Absent dep = the engine is not wired, which is a 503 rather
+  // than a silent 404 on a route the catalog advertises.
+  const dispatchMatch = p.match(/^\/api\/agents\/([^/]+)\/dispatch$/);
+  if (dispatchMatch && method === "POST") {
+    if (!deps.dispatch) {
+      respondJson(response, 503, { error: "dispatch is not available" });
+      return true;
+    }
+    const body = await readJson<{
+      brief?: string;
+      text?: string;
+      idempotencyKey?: string;
+    }>(request);
+    const result = await deps.dispatch.dispatch(dispatchMatch[1], body);
+    respondJson(response, result.status, result.body);
+    return true;
+  }
+  const dispatchGetMatch = p.match(/^\/api\/dispatches\/([^/]+)$/);
+  if (dispatchGetMatch && method === "GET") {
+    // Gated at the choke point as `dispatch` (the manifest's group for it), so
+    // a wall token is refused here even though it may read the board.
+    if (!deps.dispatch) {
+      respondJson(response, 503, { error: "dispatch is not available" });
+      return true;
+    }
+    const result = deps.dispatch.lookup(dispatchGetMatch[1]);
+    respondJson(response, result.status, result.body);
     return true;
   }
   const recoverMatch = p.match(/^\/api\/agents\/([^/]+)\/recover$/);

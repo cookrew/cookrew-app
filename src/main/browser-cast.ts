@@ -9,6 +9,7 @@ import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { randomUUID } from 'node:crypto'
 import { sanitizeInput, type MapContext } from '../shared/cast-input'
+import { secretEquals } from './mobile-http'
 import { sanitizeViewportMessage } from '../shared/cast-viewport'
 import { jpegSize } from './jpeg-size'
 import { DEFAULT_DRAIN_THRESHOLD } from './screencast-pace'
@@ -29,6 +30,14 @@ export interface BrowserCastDeps {
   enabled: () => boolean
   /** Per-process secret used only by the cross-origin Electron renderer. */
   desktopToken: () => string
+  /**
+   * The v4 §4 gate for this upgrade (auth-gate.gateRequest over the same route
+   * manifest as HTTP). An upgrade is a GET, and this route is `terminal-io` —
+   * raw pane and page bytes — so a pairing credential passes and the wall's
+   * observe-only token does not. Absent = ungated, which only an in-process
+   * embedder can arrange (index.ts always supplies it).
+   */
+  authorize?: (request: IncomingMessage, url: URL) => { status: number; reason: string }
 }
 
 const STREAM_RE = /^\/api\/browser\/([^/]+)\/stream$/
@@ -52,6 +61,25 @@ export interface BrowserCast {
   activeCount: () => number
 }
 
+/**
+ * Refuse an upgrade with a real HTTP status instead of a bare socket kill.
+ *
+ * A destroyed socket tells the client "something went wrong"; 401 and 403 tell
+ * it which — re-pair, or stop retrying. Same distinction the HTTP door draws,
+ * and the reason a stream refusal is diagnosable at all.
+ */
+function refuse(socket: Duplex, status: number): void {
+  const text = status === 401 ? 'Unauthorized' : 'Forbidden'
+  try {
+    socket.write(
+      `HTTP/1.1 ${status} ${text}\r\nConnection: close\r\ncontent-length: 0\r\n\r\n`
+    )
+  } catch {
+    // Client already gone; the destroy below is all that is left to do.
+  }
+  socket.destroy()
+}
+
 export function createBrowserCast(deps: BrowserCastDeps): BrowserCast {
   const clients = new Set<ClientConn>()
 
@@ -66,13 +94,28 @@ export function createBrowserCast(deps: BrowserCastDeps): BrowserCast {
       return void socket.destroy()
     }
     const key = req.headers['sec-websocket-key']
-    const desktopAuthorized = url.searchParams.get('desktopToken') === deps.desktopToken()
+    // Constant-time, like every other credential this process checks (D5).
+    // `===` bails at the first differing byte, and this is the ONE secret that
+    // bypasses the gate entirely — on a 0.0.0.0 listener, where the attacker
+    // picks the retry rate, that is the wrong place to leak a prefix.
+    const desktopAuthorized = secretEquals(url.searchParams.get('desktopToken'), deps.desktopToken())
     if (
       !deps.enabled() ||
       typeof key !== 'string' ||
       (!originAllowed(req) && !desktopAuthorized)
     ) {
       return void socket.destroy()
+    }
+
+    // The credential check, and it is NOT implied by the origin one: an origin
+    // header is client-supplied and absent entirely from a non-browser client,
+    // so same-origin admitted every curl on the LAN to a live page stream.
+    // The desktop's per-process secret stays a valid credential — it never
+    // leaves this machine and the Electron renderer is cross-origin by
+    // construction, so it cannot carry the pairing token in a query.
+    if (!desktopAuthorized && deps.authorize) {
+      const verdict = deps.authorize(req, url)
+      if (verdict.status !== 200) return void refuse(socket, verdict.status)
     }
 
     socket.write(

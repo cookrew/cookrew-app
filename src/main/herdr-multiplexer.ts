@@ -305,6 +305,18 @@ export class HerdrMultiplexer implements Multiplexer {
     return raw
   }
 
+  /** The same read, deeper: `--lines` is the only knob scrollback needs here. */
+  captureDeep(name: string, lines: number): string | null {
+    const pane = this.paneFor(name)
+    if (!pane?.pane_id) return null
+    return this.tryRun([
+      'pane', 'read', pane.pane_id,
+      '--source', 'recent-unwrapped',
+      '--lines', String(Math.max(1, lines)),
+      '--format', 'text'
+    ])
+  }
+
   scrollState(name: string): ScrollState {
     return toScrollState(this.paneFor(name)?.scroll)
   }

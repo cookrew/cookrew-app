@@ -7,6 +7,9 @@ import { MOBILE_PORT, MOBILE_HTTPS_PORT } from './mobile-ports'
 import { agentStatus } from './herdr-agent-status'
 import { mobileEndpoints, type MobileEndpoint } from './mobile-endpoints'
 import { loadOrCreatePairingToken, rotatePairingToken } from './pairing-token'
+import { defaultConsumersFile, loadConsumerRows } from './consumers'
+import type { AuthTokens } from './auth-gate'
+import type { GateConsumer } from '../shared/gate'
 import { readTailnet, tailnetCertHosts, type TailnetIdentity } from './tailscale'
 import { existsSync, readFileSync } from 'node:fs'
 import { powerSaveBlocker } from 'electron'
@@ -18,6 +21,7 @@ import type { TurnTracker } from './turn-tracker'
 import type { EventLog } from './event-log'
 import type { AgentRegistry } from './agent-registry'
 import type { TraceReader } from './trace'
+import type { DispatchService } from './dispatch'
 import type { BoardSources } from './board-index'
 import type { ThumbFrame } from './browser-thumb-cache'
 import { X509Certificate } from 'node:crypto'
@@ -49,6 +53,14 @@ let activePairingToken: string | null = null
  */
 let activeWallToken: string | null = null
 
+/**
+ * Parsed ~/.cookrew/consumers.json (v4 §4). Empty = the two generated rows,
+ * which is exactly the pre-v4 two-token behaviour. Read once at startup: a
+ * table re-read per request would let a mid-flight edit change a decision
+ * halfway through a session, and rotation is an explicit action here.
+ */
+let activeConsumers: Readonly<Record<string, GateConsumer>> = {}
+
 /** SAN list of the cert actually in use; empty until HTTPS starts. */
 let certSans: string[] = []
 
@@ -67,6 +79,8 @@ export interface MobileServerDeps {
   /** Activity Board data plane; absent = /api/board answers 503. */
   board?: BoardSources
   recoverAgent: (id: string) => RecoverResult
+  /** Attach-free dispatch engine (v4 §3); absent = the routes answer 503. */
+  dispatch?: DispatchService
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
   undoRestore: (id: string) => Promise<RestoreResult>
   ops: MobileOps
@@ -126,6 +140,7 @@ export function startMobileServer(deps: MobileServerDeps): void {
   // phone on each restart, and the renderer swallowed the resulting 401s.
   activePairingToken = deps.pairingToken ?? loadOrCreatePairingToken()
   activeWallToken = deps.wallToken ?? randomUUID()
+  activeConsumers = loadConsumerRows(defaultConsumersFile())
 
   const requestHandler = (request: http.IncomingMessage, response: http.ServerResponse): void => {
     void handle(request, response, deps).catch((error: Error) => {
@@ -227,6 +242,22 @@ export function mobileEndpointList(): MobileEndpoint[] {
 
 export function mobileUrls(): string[] {
   return mobileEndpointList().map((endpoint) => endpoint.url)
+}
+
+/**
+ * The credentials the RUNNING server honours, for the other door.
+ *
+ * The WebSocket upgrade is handled outside `handle()` (Node emits it on the
+ * server, not through the request path), so it cannot read the injected deps —
+ * and a gate the upgrade cannot reach is the gap Sol F2 named. Rotation
+ * swaps these in place, so the upgrade re-reads them per connection.
+ */
+export function activeAuthTokens(): AuthTokens {
+  return {
+    ...(activePairingToken !== null ? { pairingToken: activePairingToken } : {}),
+    ...(activeWallToken !== null ? { wallToken: activeWallToken } : {}),
+    consumers: activeConsumers
+  }
 }
 
 /**
@@ -369,11 +400,6 @@ async function handle(
   }
 
 
-  if (request.method === 'GET' && url.pathname === '/api/browser/capabilities') {
-    respondJson(response, 200, { interactive: deps.interactiveBrowserEnabled() })
-    return
-  }
-
   // Renderer bundle + full remote API (consumed by remote-api.ts).
   // Hand the API the RESOLVED credentials, not the caller's optional ones.
   //
@@ -390,9 +416,18 @@ async function handle(
   const authed = {
     ...deps,
     pairingToken: activePairingToken ?? deps.pairingToken,
-    wallToken: activeWallToken ?? deps.wallToken
+    wallToken: activeWallToken ?? deps.wallToken,
+    consumers: activeConsumers
   }
   if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return
+
+  // Below the gate, deliberately: everything from here on is an /api/* route
+  // the manifest classifies, and handleMobileApi returning false means the
+  // caller was ALLOWED, not that nothing checked.
+  if (request.method === 'GET' && url.pathname === '/api/browser/capabilities') {
+    respondJson(response, 200, { interactive: deps.interactiveBrowserEnabled() })
+    return
+  }
 
   if (request.method === 'GET' && url.pathname === '/api/state') {
     const activities = Object.fromEntries(
