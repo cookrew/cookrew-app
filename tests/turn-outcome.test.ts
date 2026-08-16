@@ -93,6 +93,47 @@ describe('codex turn_aborted (Sol r3 P1)', () => {
   })
 })
 
+// ---- codex: abort-only turns must not fabricate zero duration either ----
+
+describe('codex prompt→abort with NO prior activity (Sol r4 P2)', () => {
+  // The shape the r3 fixture masked with its +500ms tool call: a prompt
+  // aborted before any reply/tool event ever supplied a clock. endedAt still
+  // equals startedAt, so preserving it would close a zero-duration
+  // interrupted turn — the turn_aborted timestamp is the only closing clock
+  // the file holds, the task_complete fallback's exact twin.
+  const promptThenAbort = [
+    JSON.stringify({ type: 'session_meta', payload: { session_id: 's', cwd: '/w' } }),
+    JSON.stringify({
+      timestamp: iso(T0),
+      type: 'event_msg',
+      payload: { type: 'user_message', message: 'do it' }
+    }),
+    JSON.stringify({
+      timestamp: iso(T0 + 2000),
+      type: 'event_msg',
+      payload: { type: 'turn_aborted', reason: 'interrupted' }
+    })
+  ]
+
+  it('adopts the turn_aborted timestamp as endedAt — durationMs is real, not 0', () => {
+    const blocks = parseCodexTrace(promptThenAbort)
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({ final: true, outcome: 'interrupted' })
+    expect(blocks[0].endedAt).toBe(T0 + 2000)
+    expect(blocks[0].endedAt - blocks[0].startedAt).toBe(2000)
+    const [record] = parseCodexTurns(promptThenAbort)
+    expect(record.endedAt - record.startedAt).toBe(2000)
+  })
+
+  it('a prior-activity clock stays untouched — ledger ground truth outranks the marker', () => {
+    // Same fixture as the r3 suite above: the tool call at +500ms supplied a
+    // clock, so the abort at +2000 must NOT move it (12/163 real agents
+    // drifted when task_complete's clock was adopted over a real one).
+    const blocks = parseCodexTrace(codexAborted())
+    expect(blocks[0].endedAt).toBe(T0 + 500)
+  })
+})
+
 // ---- codex: task_complete-only fallback must not fabricate zero duration ----
 
 describe('codex task_complete as the ONLY reply (Sol r3 P2)', () => {
@@ -221,6 +262,18 @@ describe('pi terminal stopReasons (Sol r3 P1)', () => {
   it('endedAt derivation is untouched by the classification', () => {
     expect(parsePiTrace(piTurn('aborted'))[0].endedAt).toBe(T0 + 1000)
     expect(parsePiTrace(piTurn('stop'))[0].endedAt).toBe(T0 + 1000)
+  })
+
+  it('an abort-only pi turn cannot report zero duration — the marker IS a timestamped assistant message (Sol r4 P2, checked no-op)', () => {
+    // Codex needed a fix here because turn_aborted is a SEPARATE event whose
+    // clock the block deliberately ignores. Pi's abort marker rides ON the
+    // aborting assistant entry itself, which carries its own timestamp, and
+    // the ordinary latest-assistant endedAt advance adopts it — so a prompt
+    // aborted before any other activity already closes with the abort clock.
+    // (An assistant entry with NO timestamp at all would leave endedAt at
+    // the prompt, but then the file holds no closing clock to adopt either.)
+    const [block] = parsePiTrace(piTurn('aborted'))
+    expect(block.endedAt - block.startedAt).toBe(1000)
   })
 })
 

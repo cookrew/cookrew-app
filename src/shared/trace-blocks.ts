@@ -9,6 +9,7 @@
 import {
   CheckpointAssigner,
   checkpointIdentity,
+  type HistoryDelta,
   type SessionTurnAccumulator,
   type StreamingTurnParser
 } from './session-turns'
@@ -403,10 +404,16 @@ export function createCodexTraceAccumulator(): TraceBlockAccumulator {
       // Codex's own record that the turn was cut short — positive TERMINAL
       // evidence, not quiet (Sol r3 P1: discarding it stranded the dispatch
       // until the ten-minute sweep). The turn ended, unsuccessfully: final,
-      // with the outcome named. Like task_complete, the marker never moves
-      // endedAt — the previous derivation ignored the event entirely, so the
-      // stored ledger clocks are ground truth (and an aborted turn carries
-      // no closing reply whose absence would need the fallback above).
+      // with the outcome named. Like task_complete, the marker never moves a
+      // clock that prior reply/tool activity supplied — the previous
+      // derivation ignored the event entirely, so the stored ledger rows
+      // built on those clocks are ground truth. But a prompt aborted before
+      // ANY activity landed has no clock at all: endedAt still equals the
+      // prompt time, and closing there fabricated a zero-duration
+      // interrupted turn (Sol r4 P2). In that shape the abort marker is the
+      // only closing clock the file holds — the task_complete fallback's
+      // exact twin — so its timestamp becomes endedAt.
+      if (current.endedAt === current.startedAt) current.endedAt = at
       current.final = true
       current.outcome = 'interrupted'
       return
@@ -875,29 +882,98 @@ const MAX_TURN_REPLY_CHARS = 4000
  * verdict on an exchange still running. */
 export function turnRecordsOf(blocks: TraceBlock[]): TurnRecord[] {
   const tail = blocks.length - 1
-  return blocks.map((block, at) => {
-    const final = at < tail || block.final === true
-    return {
-      index: block.index,
-      prompt: block.prompt,
-      reply: block.reply.slice(0, MAX_TURN_REPLY_CHARS),
-      uuid: block.id,
-      startedAt: block.startedAt,
-      endedAt: block.endedAt,
-      ...(final ? { final: true } : {}),
-      ...(final && block.outcome !== undefined ? { outcome: block.outcome } : {})
-    }
-  })
+  return blocks.map((block, at) => turnRecordOf(block, at === tail))
+}
+
+/** One block's TurnRecord projection — `tail` says whether it currently sits
+ *  at the end of the history (positional finality applies to everything
+ *  else). Extracted from turnRecordsOf so the delta path below can project a
+ *  SUFFIX without mapping the whole array. */
+function turnRecordOf(block: TraceBlock, tail: boolean): TurnRecord {
+  const final = !tail || block.final === true
+  return {
+    index: block.index,
+    prompt: block.prompt,
+    reply: block.reply.slice(0, MAX_TURN_REPLY_CHARS),
+    uuid: block.id,
+    startedAt: block.startedAt,
+    endedAt: block.endedAt,
+    ...(final ? { final: true } : {}),
+    ...(final && block.outcome !== undefined ? { outcome: block.outcome } : {})
+  }
+}
+
+/** Field equality over everything a parser-derived TurnRecord carries — the
+ *  delta cursor's change detector. Trace blocks are extended in place by the
+ *  streaming parsers, so (unlike the Claude accumulator's replaced records)
+ *  reference identity cannot stand in for it. */
+function sameTurnRecord(a: TurnRecord, b: TurnRecord): boolean {
+  return (
+    a.index === b.index &&
+    a.uuid === b.uuid &&
+    a.prompt === b.prompt &&
+    a.reply === b.reply &&
+    a.startedAt === b.startedAt &&
+    a.endedAt === b.endedAt &&
+    a.final === b.final &&
+    a.outcome === b.outcome
+  )
 }
 
 /** A TraceBlockAccumulator wrapped as the SessionTurnAccumulator shape
  *  SessionTurnSync resumes — records() re-derives finality positionally, so
  *  a block that stops being the tail becomes final exactly on the feed that
- *  brought the next prompt. */
+ *  brought the next prompt.
+ *
+ *  takeDelta (Sol r4 P1) rides the same invariant the parsers guarantee: a
+ *  NON-TAIL block never changes again (Codex's late tool outputs touch only
+ *  `activity`, which no TurnRecord field reads), so the change since the
+ *  last take is the tail plus whatever appended — projected as a SUFFIX,
+ *  O(delta). The one exception is Pi's branch-switch rebuild, which swaps
+ *  the builder and with it the identity of the blocks() array; a changed
+ *  array is the 'reset' signal (Codex and the linear Pi path keep one array
+ *  for the accumulator's lifetime). */
 function turnAccumulatorOver(blockAccumulator: TraceBlockAccumulator): SessionTurnAccumulator {
+  /** takeDelta cursor: blocks projected by the last take… */
+  let emittedCount = 0
+  /** …the tail record exactly as it was handed out… */
+  let emittedTail: TurnRecord | undefined
+  /** …and the blocks() array it was projected from (rebuild detection). */
+  let emittedBlocks: TraceBlock[] | undefined
+
   return {
     feed: (lines) => blockAccumulator.feed(lines),
-    records: () => turnRecordsOf(blockAccumulator.blocks())
+    records: () => turnRecordsOf(blockAccumulator.blocks()),
+    takeDelta(): HistoryDelta {
+      const blocks = blockAccumulator.blocks()
+      const count = blocks.length
+      if (emittedBlocks !== undefined && blocks !== emittedBlocks) {
+        // A rebuilt branch re-wrote history at arbitrary depth — nothing
+        // previously emitted can be trusted, so the consumer re-projects.
+        emittedBlocks = blocks
+        emittedCount = count
+        emittedTail = count > 0 ? turnRecordOf(blocks[count - 1], true) : undefined
+        return { kind: 'reset' }
+      }
+      emittedBlocks = blocks
+      // The last emitted record, projected for its CURRENT position — when
+      // blocks appended behind it, positional finality lands here (the same
+      // rule turnRecordsOf applies), which is exactly the rewrite the delta
+      // must carry. A stale tail goes out ALONE (partial advance, see
+      // HistoryDelta): queued appends follow on the immediate next take.
+      const prior =
+        emittedCount > 0 ? turnRecordOf(blocks[emittedCount - 1], emittedCount === count) : undefined
+      if (prior !== undefined && emittedTail !== undefined && !sameTurnRecord(prior, emittedTail)) {
+        emittedTail = prior
+        return { kind: 'tail', record: prior }
+      }
+      const records = blocks
+        .slice(emittedCount)
+        .map((block, at, span) => turnRecordOf(block, at === span.length - 1))
+      emittedCount = count
+      if (records.length > 0) emittedTail = records[records.length - 1]
+      return { kind: 'append', records }
+    }
   }
 }
 

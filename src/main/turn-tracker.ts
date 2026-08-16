@@ -1,12 +1,16 @@
 import { EventEmitter } from 'node:events'
-import type { PtySession } from './pty'
+import type { OwnerInputVerdict, PtySession } from './pty'
 import { sessionNameFor } from './pty'
 import { diffOutput } from './ask'
 // The dispatch engine's own prompt-identity rule, reused verbatim: ONE
 // normalization decides both "did the prompt land?" and "is this turn the
 // dispatched one?" — two rules would let a prompt land under one and never
 // complete under the other.
-import { promptAnswersDispatch } from './dispatch'
+import { promptAnswersDispatch, type FinalTurnAnswer } from './dispatch'
+// The delta seam's wire type is the parser lane's (shared/session-turns) —
+// one definition, or the emitter and this applier drift apart.
+import type { HistoryDelta } from '../shared/session-turns'
+export type { HistoryDelta }
 import { agentStatus } from './herdr-agent-status'
 import { summarizeTurn, TurnSummarizer } from './sous'
 import type { TurnStore } from './turn-store'
@@ -106,6 +110,66 @@ function promptsMatch(scraped: string, exact: string): boolean {
 }
 
 /**
+ * Does a scrape-emitted latency observation's prompt identify a durable
+ * record as ITS exchange? Stricter than promptsMatch: an observation with no
+ * usable prompt (null, empty, the recovered label, a collapsed paste
+ * placeholder) identifies NOTHING — matching it loosely is exactly how a
+ * nearby owner turn stole a dispatch's sample (Sol r4 P1). Exact bytes win
+ * outright; the lossy fallback exists only because a screen echo is a
+ * rendering (rewrapped, truncated) — the same excuse as landing detection,
+ * and the only place outside it where lossy matching is allowed.
+ */
+function observationAnswers(observed: string | null, recordPrompt: string): boolean {
+  if (observed === null || observed.length === 0 || observed === RECOVERED_PROMPT_LABEL) {
+    return false
+  }
+  if (observed.startsWith('[Pasted text')) return false
+  if (observed === recordPrompt) return true
+  const key = (s: string): string =>
+    s.trim().replace(/\s+/g, ' ').toLowerCase().slice(0, PROMPT_MATCH_CHARS)
+  return key(observed) === key(recordPrompt)
+}
+
+/**
+ * Could this settled scrape turn's recovered prompt NOT prove its own
+ * identity (Sol r4 P1 replay guard)? True for the shapes a TUI leaves when
+ * the real bytes never crossed the input stream: no prompt at all, the
+ * recovered-turn label, a collapsed paste placeholder, or a truncated prefix
+ * of the attempted bytes. A full, different prompt is PROVABLE — that turn
+ * belongs to someone else and must never be replayed onto the dispatch.
+ */
+/**
+ * Is a delta-carried record the SAME exchange as the row it would replace?
+ * Same slot (index) and, when both sides carry a uuid, the same uuid — the
+ * guard that keeps a rewind-reused index from inheriting a stranger's
+ * title/read-marker through the incremental path.
+ */
+function sameExchange(incoming: TurnRecord, current: TurnRecord): boolean {
+  if (incoming.index !== current.index) return false
+  if (incoming.uuid !== undefined && current.uuid !== undefined) {
+    return incoming.uuid === current.uuid
+  }
+  return true
+}
+
+/** Carry what the reconcile source cannot know onto the superseding record. */
+function carryOverOnto(incoming: TurnRecord, replaced: TurnRecord): TurnRecord {
+  return {
+    ...incoming,
+    ...(replaced.title !== undefined ? { title: replaced.title } : {}),
+    ...(replaced.seenAt !== undefined ? { seenAt: replaced.seenAt } : {}),
+    ...(replaced.scrollLine !== undefined ? { scrollLine: replaced.scrollLine } : {})
+  }
+}
+
+function promptUnprovable(recovered: string | null, attempted: string): boolean {
+  if (recovered === null || recovered.length === 0) return true
+  if (recovered === RECOVERED_PROMPT_LABEL) return true
+  if (recovered.startsWith('[Pasted text')) return true
+  return recovered.length < attempted.length && attempted.startsWith(recovered)
+}
+
+/**
  * Find the prior record that is the SAME exchange as `record`, for carrying
  * over the Sous title / read marker on reconcile:
  * - exact message-uuid match wins (survives an index shift from a rewind);
@@ -124,6 +188,18 @@ function matchPrior(
   if (!at) return undefined
   if (record.uuid && at.uuid && at.uuid !== record.uuid) return undefined
   return promptsMatch(at.prompt, record.prompt) ? at : undefined
+}
+
+/**
+ * One scrape-emitted latency observation awaiting its file closure. `at` is
+ * the scrape's turnStartedAt (TTL clock and an eligibility floor, never an
+ * identity); `prompt` is the observed prompt-of-record; `uuid` is stamped by
+ * reconcile once the durable record for this exchange is known.
+ */
+interface ScrapeObservation {
+  at: number
+  prompt: string | null
+  uuid?: string
 }
 
 interface TrackedTerminal {
@@ -160,7 +236,7 @@ interface TrackedTerminal {
   pushTimer: NodeJS.Timeout | null
   pollTimer: NodeJS.Timeout | null
   titleTimer: NodeJS.Timeout | null
-  onInput: (data: string) => void
+  onInput: (data: string, source?: 'dispatch') => void
   onData: (data: string) => void
   onExit: () => void
 }
@@ -218,6 +294,14 @@ export interface CompletedTurn {
    */
   turnIndex?: number
   /**
+   * STABLE identity of the answering record — its harness message uuid, when
+   * the durable record carries one (Sol r4 P1). turnIndex is a display
+   * ordinal a rewind/branch switch can reuse; the listener passes THIS to
+   * DispatchService.completeTurn so the persisted dispatch stays resolvable
+   * after index reuse. Absent for scrape-only records without a uuid.
+   */
+  turnUuid?: string
+  /**
    * True when this exchange's public latency sample already rode an earlier
    * 'turn' event — the scrape observed an attached file-backed turn settle
    * and emitted, and this later event is the file closer enriching the SAME
@@ -246,18 +330,23 @@ export class TurnTracker extends EventEmitter {
   private tracked = new Map<string, TrackedTerminal>()
 
   /**
-   * The local-producer serializer (Sol r3 P0-2c): the owner at the keyboard
-   * submits a NEW prompt into a terminal carrying an armed dispatch. Wired by
-   * the conductor to interrupt that dispatch ('preempted by owner input') —
-   * the owner outranks the machinery, so the machinery stands down rather
-   * than racing the owner's turn for the stamp. Fired at most once per
-   * dispatch, BEFORE the owner's turn opens; the dispatch's own pty-fallback
-   * delivery is exempt (it submits the exact dispatched bytes through the
-   * same input stream). With this plus the HTTP producers' 409s, every
-   * producer at an armed terminal is serialized — the invariant that lets
-   * exact-bytes + armedAt stand as exchange identity.
+   * The local-producer serializer (Sol r3 P0-2c, synchronous-durable per
+   * Sol r4 P0-1d): the owner at the keyboard submits a NEW prompt into a
+   * terminal carrying an armed dispatch. Wired by the conductor to interrupt
+   * that dispatch ('preempted by owner input') AND report whether the
+   * interrupt row durably committed — the wiring returns
+   * `!dispatchService.hasOpenDispatch(terminalId)`. `false` means the
+   * transition parked fail-closed (ledger down, reservation kept): the
+   * owner's write is then REFUSED by the PTY guard rather than delivered
+   * beside a live reservation. `true`/`undefined` (legacy void wirings) read
+   * as committed. Fired BEFORE the owner's turn opens; the dispatch's own
+   * pty-fallback delivery is exempt BY SOURCE TAG, never by byte equality
+   * (Sol r4 P0-1b) — an owner typing the identical bytes still preempts.
+   * With this plus the HTTP producers' 409s, every producer at an armed
+   * terminal is serialized — the invariant that lets exact-bytes + armedAt
+   * stand as exchange identity.
    */
-  onOwnerPreempt: ((terminalId: string) => void) | null = null
+  onOwnerPreempt: ((terminalId: string) => boolean | void) | null = null
 
   /** Both injectable for tests; store null = in-memory only. */
   constructor(
@@ -311,18 +400,19 @@ export class TurnTracker extends EventEmitter {
   private deliveredPrompt = new Map<string, { prompt: string; at: number }>()
 
   /**
-   * terminalId → the turnStartedAt values of exchanges whose latency the
-   * scrape has already emitted publicly, on a FILE-BACKED terminal. The file
-   * closer matching one of these exchanges still closes the dispatch but
-   * flags the event `latencyReported` so the sample is never counted twice.
+   * terminalId → ORDERED queue of exchanges whose latency the scrape has
+   * already emitted publicly, on a FILE-BACKED terminal. The file closer
+   * matching one of these exchanges still closes the dispatch but flags the
+   * event `latencyReported` so the sample is never counted twice.
    *
-   * Keyed by TURN IDENTITY (startedAt), not one slot per terminal (Sol r3
-   * P1-12): local owner turns are allowed while a dispatch stamp is armed,
-   * so an intervening attached turn must not overwrite the dispatch
-   * exchange's evidence before its file closure. Entries expire when matched
-   * or after SCRAPE_EMIT_TTL_MS.
+   * Identity is the observation's PROMPT plus monotonic order, reconciled to
+   * the durable record's uuid when the reconcile lands it — NEVER a free
+   * timestamp window (Sol r4 P1): a five-second slack let an owner turn near
+   * the dispatch turn consume the dispatch's sample. Observations are
+   * consumed in queue order by the first record they actually identify;
+   * unmatched ones are retained by identity until SCRAPE_EMIT_TTL_MS.
    */
-  private scrapeEmitted = new Map<string, Set<number>>()
+  private scrapeEmitted = new Map<string, ScrapeObservation[]>()
 
   /**
    * terminalId → epoch ms a turn was OBSERVED to open whose finality has not
@@ -383,14 +473,111 @@ export class TurnTracker extends EventEmitter {
     // file; the store appends now, so keeping all of it costs one line per
     // turn. Conductor had 220 checkpoints trimmed away under the old limit.
     const deduped = dedupePhantomEchoes(stamped)
-    this.histories.set(terminalId, deduped)
-    this.store?.scheduleSave(terminalId, deduped)
+    this.commitReconciled(terminalId, deduped)
+  }
+
+  /**
+   * Apply one INCREMENTAL history change (I3 — the parser lane emits deltas,
+   * this side applies them). The point is bounded work per append: only the
+   * affected records are touched — no full-map carryover rebuild, no
+   * whole-history dedupe. Every observer of replaceHistory (open-turn-fact
+   * clearing, scrape-observation reconcile, the dispatch-closure scan reading
+   * this.histories, the store save) sees a delta-applied history identically.
+   *
+   * - append (per the shared apply contract): splice at
+   *   `records[0].index - 1` — always |H| (pure concat) or |H|-1 (the
+   *   finalized RE-CARRY of the previously-emitted open tail) — then dedupe
+   *   only the BOUNDARY window (the one neighborhood a split-echo phantom
+   *   can span; dedupePhantomEchoes carries title/seenAt onto the surviving
+   *   uuid record itself). Genuinely new records have no prior to carry
+   *   from, so the incremental path skips the full matchPrior pass by
+   *   construction; the re-carried tail inherits from the record it
+   *   supersedes.
+   * - tail: replace the last record in place, carrying over what the emitter
+   *   cannot know (title/seenAt/scrollLine) from the record it replaces —
+   *   same-exchange only (a uuid mismatch is not a tail update; fall back to
+   *   the full reconcile).
+   * - reset: the accumulator rewrote/branched — fall back to replaceHistory
+   *   over fullRecords(), the one path allowed to cost O(history).
+   *
+   * Any delta whose premise does not hold against the tracker's actual
+   * history (positions drifted, foreign records interleaved) falls back to
+   * the full reconcile rather than guessing.
+   *
+   * TurnStore.scheduleSave keeps its own bounded model underneath: its flush
+   * appends per-record when the array only grew and its last known line is
+   * unchanged, and rewrites otherwise — so an append delta stays an append
+   * on disk too, and a tail rewrite pays the store's ordinary edit path.
+   */
+  applyHistoryDelta(
+    terminalId: string,
+    delta: HistoryDelta,
+    fullRecords: () => TurnRecord[]
+  ): void {
+    if (delta.kind === 'reset') {
+      this.replaceHistory(terminalId, fullRecords())
+      return
+    }
+    const previous = this.history(terminalId)
+    if (delta.kind === 'tail') {
+      const replaced = previous[previous.length - 1]
+      // No tail to replace, or the emitter's idea of the tail is not ours
+      // (index/uuid mismatch = a different exchange): the incremental
+      // premise failed, so take the honest full path instead of guessing.
+      if (replaced === undefined || !sameExchange(delta.record, replaced)) {
+        this.replaceHistory(terminalId, fullRecords())
+        return
+      }
+      const next = this.stampInFlightScrollLine(terminalId, [
+        ...previous.slice(0, -1),
+        carryOverOnto(delta.record, replaced)
+      ])
+      this.commitReconciled(terminalId, next)
+      return
+    }
+    if (delta.records.length === 0) return
+    const at = delta.records[0].index - 1
+    // The contract admits exactly two landing slots: past the tail, or ON
+    // the tail (its finalized re-carry). Anything else means this tracker's
+    // history has drifted from the emitter's (extra scrape rows, a missed
+    // take) — re-read the whole projection.
+    if (at !== previous.length && at !== previous.length - 1) {
+      this.replaceHistory(terminalId, fullRecords())
+      return
+    }
+    const replaced = at === previous.length - 1 ? previous[at] : undefined
+    if (replaced !== undefined && !sameExchange(delta.records[0], replaced)) {
+      this.replaceHistory(terminalId, fullRecords())
+      return
+    }
+    const head = previous.slice(0, at)
+    const landed =
+      replaced === undefined
+        ? delta.records
+        : [carryOverOnto(delta.records[0], replaced), ...delta.records.slice(1)]
+    // Dedupe touches ONLY the boundary window: the last kept record plus the
+    // landed ones — the only neighborhood a phantom twin can span.
+    const boundary = Math.max(0, head.length - 1)
+    const window = dedupePhantomEchoes([...head.slice(boundary), ...landed])
+    const next = this.stampInFlightScrollLine(terminalId, [...head.slice(0, boundary), ...window])
+    this.commitReconciled(terminalId, next)
+  }
+
+  /**
+   * The shared landing for a reconciled history, full or delta: store it,
+   * schedule the save, resolve the A4 open-turn fact against the new tail,
+   * bind scrape latency observations to their durable records, and push.
+   */
+  private commitReconciled(terminalId: string, records: TurnRecord[]): void {
+    this.histories.set(terminalId, records)
+    this.store?.scheduleSave(terminalId, records)
+    this.reconcileScrapeObservations(terminalId, records)
     // Parser finality clears the A4 open-turn fact (v5 A4): a FINAL tail
     // covering the observed open (file prompt-entry time within slack of the
     // observation) means the in-flight turn ended and was durably recorded.
     // A final tail OLDER than the fact is a previous exchange — the observed
     // turn's own record has not landed yet, so the fact stands.
-    const tail = deduped[deduped.length - 1]
+    const tail = records[records.length - 1]
     const openedAt = this.openTurnFacts.get(terminalId)
     if (
       tail !== undefined &&
@@ -593,17 +780,36 @@ export class TurnTracker extends EventEmitter {
 
   /**
    * Does the tracker believe a turn is running here? Live scrape phase when a
-   * PTY is attached; detached, the only witnesses are herdr's push feed (a
-   * positive working/blocked claim) and an armed dispatch (work this app
-   * itself submitted). Gates the staleness report — a quiet file under an
-   * agent nobody believes is working is rest, not rotation.
+   * PTY is attached; detached, the witnesses are herdr's push feed (a
+   * positive working/blocked claim), an armed dispatch (work this app itself
+   * submitted), and the OWNED open-turn fact (Sol r4 P1): a switched-away
+   * human turn whose status feed went absent is still an observed open — a
+   * rotation gate that ignored it would rotate a session out from under work
+   * in flight. Gates the staleness report — a quiet file under an agent
+   * nobody believes is working is rest, not rotation.
    */
   inTurn(terminalId: string): boolean {
     const t = this.tracked.get(terminalId)
     if (t) return t.phase === 'thinking' || t.phase === 'waiting'
     if (this.pendingDispatch.has(terminalId)) return true
+    if (this.openTurnFacts.has(terminalId)) return true
     const reported = agentStatus(sessionNameFor(terminalId))
     return reported === 'working' || reported === 'blocked'
+  }
+
+  /**
+   * Lifecycle end for the owned open-turn fact (Sol r4 P1): the conductor
+   * calls this at permanent node removal AND on backend death for every
+   * terminal whose pane died — a fact for a turn whose process no longer
+   * exists must not hold a watch (or veto a rotation/restore) forever. Also
+   * the escape hatch for a stale-rebind resolver that gave up: the fact
+   * itself never times out, so ONLY these lifecycle events may end it without
+   * observed finality. Clears the waiting delivered-prompt fact with it — a
+   * dead pane can no longer open the turn those bytes were for.
+   */
+  clearOpenTurnFact(terminalId: string): void {
+    this.openTurnFacts.delete(terminalId)
+    this.deliveredPrompt.delete(terminalId)
   }
 
   /**
@@ -655,8 +861,70 @@ export class TurnTracker extends EventEmitter {
       this.openTurnFacts.set(terminalId, t.turnStartedAt)
       return
     }
-    this.deliveredPrompt.set(terminalId, { prompt, at: Date.now() })
-    this.openTurnFacts.set(terminalId, Date.now())
+    // Sol r4 P1 replay: the authoritative bytes arrived AFTER the scrape
+    // already settled the turn (the blocking native submit returned late).
+    // If that settled turn is eligible (opened after arming) and its
+    // recovered prompt was unprovable, it WAS the dispatch's exchange —
+    // consume the stamp once, now, instead of stranding the dispatch.
+    if (t !== undefined && pending !== undefined) {
+      if (this.replaySettledScrapeClosure(terminalId, t, pending, prompt)) return
+    }
+    const at = Date.now()
+    this.deliveredPrompt.set(terminalId, { prompt, at })
+    this.openTurnFacts.set(terminalId, at)
+  }
+
+  /**
+   * The attempted-delivery fact registered before the native submission was
+   * DISPROVEN (nonDeliveryProven) — take it back (Sol r4 P1). Matches the
+   * exact bytes so a newer, different fact is never collateral; clears the
+   * open-turn fact only when the retracted delivery is what minted it (same
+   * clock stamp), never one a real turn opening set.
+   */
+  retractDispatchDelivered(terminalId: string, prompt: string): void {
+    const fact = this.deliveredPrompt.get(terminalId)
+    if (fact === undefined || fact.prompt !== prompt) return
+    this.deliveredPrompt.delete(terminalId)
+    if (this.openTurnFacts.get(terminalId) === fact.at) {
+      this.openTurnFacts.delete(terminalId)
+    }
+  }
+
+  /**
+   * One-shot late closure for a SETTLED scrape turn (Sol r4 P1): guarded by
+   * scrape authority (the file closer owns file-backed terminals), armedAt
+   * eligibility, a settled phase, and an UNPROVABLE recovered prompt — null,
+   * the recovered label, a collapsed paste placeholder, or a truncated
+   * prefix of the attempted bytes. Anything provable that failed identity
+   * was genuinely somebody else's turn and is not replayed. The completion
+   * event is flagged latencyReported: the settled turn already emitted its
+   * public sample once.
+   */
+  private replaySettledScrapeClosure(
+    terminalId: string,
+    t: TrackedTerminal,
+    pending: PendingDispatch,
+    prompt: string
+  ): boolean {
+    if (this.writesFromFile(terminalId)) return false
+    if (t.phase !== 'replied' && t.phase !== 'idle') return false
+    if (t.turnStartedAt === 0) return false
+    if (t.turnStartedAt < pending.armedAt - IN_FLIGHT_STAMP_SLACK_MS) return false
+    if (!promptUnprovable(t.prompt, prompt)) return false
+    t.prompt = prompt
+    this.pendingDispatch.delete(terminalId)
+    this.deliveredPrompt.delete(terminalId)
+    const history = this.history(terminalId)
+    const tail = history[history.length - 1]
+    this.emit('turn', {
+      terminalId,
+      durationMs: Math.max(0, (tail?.endedAt ?? Date.now()) - t.turnStartedAt),
+      dispatchId: pending.id,
+      ...(tail !== undefined ? { turnIndex: tail.index } : {}),
+      ...(tail?.uuid !== undefined ? { turnUuid: tail.uuid } : {}),
+      latencyReported: true
+    } satisfies CompletedTurn)
+    return true
   }
 
   /**
@@ -748,10 +1016,11 @@ export class TurnTracker extends EventEmitter {
         this.openTurnFacts.delete(terminalId)
       }
       // One public completion per exchange: if the scrape already emitted
-      // THIS exchange's latency (matched by turn identity, not by terminal —
-      // an intervening owner turn keeps its own outstanding entry), this
-      // event closes the dispatch but must not mint a second sample.
-      const latencyReported = this.consumeScrapeEmitted(terminalId, candidate.startedAt)
+      // THIS exchange's latency (matched by record identity — uuid when
+      // reconciled, else prompt + queue order; an intervening owner turn
+      // keeps its own outstanding entry), this event closes the dispatch but
+      // must not mint a second sample.
+      const latencyReported = this.consumeScrapeEmitted(terminalId, candidate)
       // Parser-native terminal outcome; absent = done (records written
       // before the parser lane landed the field, or a parser without one).
       const outcome = candidate.outcome
@@ -760,6 +1029,7 @@ export class TurnTracker extends EventEmitter {
         durationMs: Math.max(0, candidate.endedAt - candidate.startedAt),
         dispatchId: pending.id,
         turnIndex: candidate.index,
+        ...(candidate.uuid !== undefined ? { turnUuid: candidate.uuid } : {}),
         ...(latencyReported ? { latencyReported: true } : {}),
         ...(outcome !== undefined ? { outcome } : {})
       } satisfies CompletedTurn)
@@ -768,47 +1038,101 @@ export class TurnTracker extends EventEmitter {
   }
 
   /**
-   * Does a durable FINAL record answering (prompt, armedAt) exist here? The
+   * The durable FINAL record answering (prompt, armedAt), or null. The
    * conductor wires this behind the dispatch sweep's hasFinalAnswer dep
-   * (Sol r3 P0-6): before sparing a stale dispatch on a working idleSignal,
-   * the sweep asks whether parser-proven finality already outranks the
-   * status claim. Same eligibility window and the same exact-bytes identity
-   * as completeFromHistory — this is a read-only probe of the identical
+   * (Sol r3 P0-6; payload per Sol r4 P0-3): the sweep commits the returned
+   * record's OWN outcome and identity through the normal completion path
+   * instead of converting proven finality into a timeout interruption. Same
+   * eligibility window, same exact-bytes identity, and the same OLDEST-first
+   * scan as completeFromHistory — this is a read-only probe of the identical
    * evidence, consuming nothing.
    */
-  hasFinalAnswer(terminalId: string, prompt: string, armedAt: number): boolean {
+  hasFinalAnswer(terminalId: string, prompt: string, armedAt: number): FinalTurnAnswer | null {
     const records = this.history(terminalId)
     const cutoff = armedAt - DISPATCH_ARM_SLACK_MS
-    for (let i = records.length - 1; i >= 0; i -= 1) {
+    let start = records.length
+    while (start > 0 && records[start - 1].startedAt >= cutoff) start -= 1
+    for (let i = start; i < records.length; i += 1) {
       const candidate = records[i]
-      if (candidate.startedAt < cutoff) break
       if (candidate.final !== true) continue
-      if (promptAnswersDispatch(candidate.prompt, prompt)) return true
+      if (!promptAnswersDispatch(candidate.prompt, prompt)) continue
+      return {
+        turnIndex: candidate.index,
+        ...(candidate.uuid !== undefined ? { uuid: candidate.uuid } : {}),
+        ...(candidate.outcome !== undefined ? { outcome: candidate.outcome } : {}),
+        ...(candidate.reply.length > 0 ? { reply: candidate.reply } : {})
+      }
     }
-    return false
+    return null
   }
 
   /**
-   * Match (and expire) a scrape-emitted latency observation by turn identity
-   * (Sol r3 P1-12). A match within the clock slack consumes exactly that
-   * entry; anything older than SCRAPE_EMIT_TTL_MS is expired on the way.
+   * Match (and expire) a scrape-emitted latency observation against the
+   * durable record that closes a dispatch (Sol r4 P1). Identity, in order of
+   * strength: the record uuid a reconcile stamped onto the observation, else
+   * the observation's prompt — consumed in QUEUE ORDER, first identifying
+   * entry wins. Never a timestamp window: a nearby owner turn's observation
+   * has a different prompt/uuid and keeps its own entry. `at` serves only as
+   * the TTL clock and a not-older-than-the-record eligibility floor.
    */
-  private consumeScrapeEmitted(terminalId: string, startedAt: number): boolean {
-    const emitted = this.scrapeEmitted.get(terminalId)
-    if (emitted === undefined) return false
+  private consumeScrapeEmitted(terminalId: string, record: TurnRecord): boolean {
+    const queue = this.scrapeEmitted.get(terminalId)
+    if (queue === undefined) return false
     const floor = Date.now() - SCRAPE_EMIT_TTL_MS
-    const match = [...emitted].find((at) => Math.abs(startedAt - at) <= DISPATCH_ARM_SLACK_MS)
-    const kept = new Set([...emitted].filter((at) => at !== match && at >= floor))
-    if (kept.size === 0) this.scrapeEmitted.delete(terminalId)
+    const live = queue.filter((o) => o.at >= floor)
+    const index = live.findIndex((o) =>
+      o.uuid !== undefined && record.uuid !== undefined
+        ? o.uuid === record.uuid
+        : observationAnswers(o.prompt, record.prompt) &&
+          record.startedAt >= o.at - DISPATCH_ARM_SLACK_MS
+    )
+    const kept = index === -1 ? live : live.filter((_, i) => i !== index)
+    if (kept.length === 0) this.scrapeEmitted.delete(terminalId)
     else this.scrapeEmitted.set(terminalId, kept)
-    return match !== undefined
+    return index !== -1
   }
 
-  /** Record a scrape-emitted exchange identity, expiring stale entries. */
-  private noteScrapeEmitted(terminalId: string, startedAt: number): void {
+  /** Record a scrape-emitted exchange observation, expiring stale entries. */
+  private noteScrapeEmitted(terminalId: string, startedAt: number, prompt: string | null): void {
     const floor = Date.now() - SCRAPE_EMIT_TTL_MS
-    const kept = [...(this.scrapeEmitted.get(terminalId) ?? [])].filter((at) => at >= floor)
-    this.scrapeEmitted.set(terminalId, new Set([...kept, startedAt]))
+    const kept = (this.scrapeEmitted.get(terminalId) ?? []).filter((o) => o.at >= floor)
+    this.scrapeEmitted.set(terminalId, [...kept, { at: startedAt, prompt }])
+  }
+
+  /**
+   * Bind outstanding scrape observations to the durable records a reconcile
+   * just landed (Sol r4 P1): walk both in order, stamping each unmatched
+   * observation with the uuid of the first eligible record whose prompt it
+   * identifies. From then on the observation is consumed BY UUID — precise
+   * even when two exchanges carry identical prompts. Bounded by the (small,
+   * TTL-capped) observation queue, not by history length: the record scan
+   * advances a cursor and never restarts.
+   */
+  private reconcileScrapeObservations(terminalId: string, records: TurnRecord[]): void {
+    const queue = this.scrapeEmitted.get(terminalId)
+    if (queue === undefined || queue.length === 0) return
+    let cursor = 0
+    const stamped = queue.map((observation) => {
+      if (observation.uuid !== undefined) {
+        for (let i = cursor; i < records.length; i += 1) {
+          if (records[i].uuid === observation.uuid) {
+            cursor = i + 1
+            break
+          }
+        }
+        return observation
+      }
+      for (let i = cursor; i < records.length; i += 1) {
+        const record = records[i]
+        if (record.uuid === undefined) continue
+        if (record.startedAt < observation.at - DISPATCH_ARM_SLACK_MS) continue
+        if (!observationAnswers(observation.prompt, record.prompt)) continue
+        cursor = i + 1
+        return { ...observation, uuid: record.uuid }
+      }
+      return observation
+    })
+    this.scrapeEmitted.set(terminalId, stamped)
   }
 
   /**
@@ -896,7 +1220,7 @@ export class TurnTracker extends EventEmitter {
       pushTimer: null,
       pollTimer: null,
       titleTimer: null,
-      onInput: (data) => this.handleInput(session.terminalId, data),
+      onInput: (data, source) => this.handleInput(session.terminalId, data, source),
       onData: (data) => this.handleData(session.terminalId, data),
       onExit: () => this.handleExit(session.terminalId)
     }
@@ -987,7 +1311,7 @@ export class TurnTracker extends EventEmitter {
     this.openTurnFacts.clear()
   }
 
-  private handleInput(terminalId: string, data: string): void {
+  private handleInput(terminalId: string, data: string, source?: 'dispatch'): void {
     const t = this.tracked.get(terminalId)
     if (!t) return
     const fed = feedPromptBuffer(t.promptBuffer, data, t.inPaste, t.heldInput)
@@ -1015,8 +1339,18 @@ export class TurnTracker extends EventEmitter {
       // turn that opens below is the owner's alone — never a candidate for
       // the dispatch's closure. Menu answers (empty submits) and typing that
       // never submits do not preempt: they feed the CURRENT turn, whichever
-      // producer opened it, and produce no competing exchange.
-      this.preemptOnOwnerSubmit(terminalId, prompt)
+      // producer opened it, and produce no competing exchange. The dispatch's
+      // own pty-fallback delivery arrives source-tagged and is exempt by that
+      // PROVENANCE (Sol r4 P0-1b) — identical owner bytes still preempt.
+      // 'preempt-failed' here is the unguarded belt (the PTY guard refuses
+      // the bytes upstream when wired): the bytes already reached the child,
+      // but the tracker refuses to open an owner turn beside a reservation
+      // whose interrupt could not commit — fail-closed, self-heal will
+      // re-derive the screen state once the dispatch resolves.
+      if (this.preemptOnOwnerSubmit(terminalId, source) === 'preempt-failed') {
+        this.schedulePush(terminalId)
+        return
+      }
       this.startTurn(t, prompt)
       return
     }
@@ -1026,33 +1360,78 @@ export class TurnTracker extends EventEmitter {
   }
 
   /**
-   * The local-producer serializer's trigger (Sol r3 P0-2c): a NEW prompt is
-   * being submitted at a terminal carrying an armed dispatch. Exempt when the
-   * submitted bytes ARE the dispatched prompt — the pty-fallback delivers the
-   * dispatch through this same input stream, and by exact-bytes identity that
-   * submission is the dispatch's own delivery, not a competitor. Also exempt
-   * once the dispatch's ANSWER is already observed (the settled live turn is
-   * its exchange, or a durable final row matches): preemption serializes
-   * producers racing the delivery, and a dispatch whose turn already
-   * completed is not being raced — interrupting it then would overwrite a
-   * proven outcome with a weaker one, the very inversion P0-3 forbids.
-   * Fires at most once per dispatch (the guard matters only when no callback
-   * is wired; the production wiring disarms the stamp synchronously).
+   * The PTY write guard's tracker half (Sol r4 P0-1a), wired by the conductor
+   * onto PtySession.beforeOwnerInput and consulted BEFORE proc.write. A pure
+   * PEEK: feedPromptBuffer is side-effect-free here — the real state advances
+   * only when the delivered bytes come back through handleInput. Only a write
+   * that would SUBMIT a new prompt at a terminal carrying an armed dispatch
+   * triggers preemption; everything else (typing, menu answers on a live
+   * waiting turn, shells, unarmed terminals) is allowed through untouched.
    */
-  private preemptOnOwnerSubmit(terminalId: string, prompt: string): void {
+  guardOwnerInput(terminalId: string, data: string): OwnerInputVerdict {
+    const t = this.tracked.get(terminalId)
+    if (!t || !t.agent) return 'allow'
+    if (!this.pendingDispatch.has(terminalId)) return 'allow'
+    const fed = feedPromptBuffer(t.promptBuffer, data, t.inPaste, t.heldInput)
+    if (t.phase === 'waiting' && fed.submitted.length > 0 && t.prompt !== null) return 'allow'
+    const submits = fed.submitted.some((s) => s.length > 0)
+    if (!submits) return 'allow'
+    return this.preemptOnOwnerSubmit(terminalId, undefined)
+  }
+
+  /**
+   * The local-producer serializer's trigger (Sol r3 P0-2c, hardened per
+   * Sol r4 P0-1): a NEW prompt is being submitted at a terminal carrying an
+   * armed dispatch.
+   *
+   * - Source-tagged dispatch input (the pty-fallback's own delivery) is
+   *   exempt by PROVENANCE — byte equality proves nothing about who typed,
+   *   so an owner submitting the identical bytes still preempts (P0-1b).
+   * - A dispatch whose answer is already SETTLED is exempt: the live turn
+   *   must be `replied` with the dispatched prompt (a still-thinking turn is
+   *   not an answer — P0-1c), or a durable final row must match. Preemption
+   *   serializes producers racing the delivery; a completed exchange is not
+   *   being raced, and interrupting it would overwrite a proven outcome with
+   *   a weaker one (the P0-3 inversion).
+   * - The preemption is SYNCHRONOUS-DURABLE (P0-1d): the wired callback
+   *   interrupts and reports whether the terminal row committed. An explicit
+   *   false — the intent parked fail-closed with its reservation — refuses
+   *   the owner's write; the stamp stays armed and a later submission
+   *   retries the preemption once the ledger recovers.
+   */
+  private preemptOnOwnerSubmit(terminalId: string, source?: 'dispatch'): OwnerInputVerdict {
     const pending = this.pendingDispatch.get(terminalId)
-    if (pending === undefined || pending.preemptFired === true) return
-    if (prompt === pending.prompt) return
+    if (pending === undefined || source === 'dispatch') return 'allow'
+    if (pending.preemptFired === true) return 'allow'
     const t = this.tracked.get(terminalId)
     const answeredOnScreen =
       t !== undefined &&
+      t.phase === 'replied' &&
       t.prompt === pending.prompt &&
       t.turnStartedAt >= pending.armedAt - IN_FLIGHT_STAMP_SLACK_MS
-    if (answeredOnScreen || this.hasFinalAnswer(terminalId, pending.prompt, pending.armedAt)) {
-      return
+    if (
+      answeredOnScreen ||
+      this.hasFinalAnswer(terminalId, pending.prompt, pending.armedAt) !== null
+    ) {
+      return 'allow'
     }
-    this.pendingDispatch.set(terminalId, { ...pending, preemptFired: true })
-    this.onOwnerPreempt?.(terminalId)
+    if (this.onOwnerPreempt === null) {
+      // Unwired (tests, plain trackers): nothing can interrupt, so record
+      // that preemption was owed and let the input through — the historical
+      // behavior, safe only because production always wires the callback.
+      this.pendingDispatch.set(terminalId, { ...pending, preemptFired: true })
+      return 'allow'
+    }
+    const committed = this.onOwnerPreempt(terminalId)
+    if (committed === false) return 'preempt-failed'
+    // The wiring normally disarms the stamp synchronously (clearDispatch via
+    // the interrupt's release); if a callback chose not to, the flag keeps
+    // this dispatch from being preempted twice.
+    const still = this.pendingDispatch.get(terminalId)
+    if (still !== undefined && still.id === pending.id) {
+      this.pendingDispatch.set(terminalId, { ...still, preemptFired: true })
+    }
+    return 'allow'
   }
 
   private startTurn(t: TrackedTerminal, prompt: string): void {
@@ -1303,7 +1682,7 @@ export class TurnTracker extends EventEmitter {
     // dispatch closure never mints a second public sample.
     if (this.writesFromFile(id)) {
       if (t.turnStartedAt > 0) {
-        this.noteScrapeEmitted(id, t.turnStartedAt)
+        this.noteScrapeEmitted(id, t.turnStartedAt, t.prompt)
         this.emitCompletedTurn(id, Date.now() - t.turnStartedAt, t.turnStartedAt, t.prompt)
       }
       this.push(t)

@@ -963,14 +963,26 @@ describe('POST /api/terminal/:id/{input,ask,raw} while a dispatch is armed', () 
 // live tracker (the native path never crosses the PTY input stream).
 // ---------------------------------------------------------------------------
 
-describe('confirmed delivery hands the tracker the exact prompt', () => {
-  it('notes the delivered prompt on herdr done', async () => {
-    const delivered: [string, string][] = []
+describe('delivery prompt facts: attempted BEFORE the blocking submit (Sol r4 P1)', () => {
+  it('registers the attempted fact before promptAgent runs, then confirms on done', async () => {
+    // herdr `agent prompt` blocks until the agent leaves working — a fact
+    // registered only on return can arrive after the scrape already settled
+    // the turn. The ordering is the contract: fact first, submission second.
+    const events: string[] = []
     const service = new DispatchService(
-      deps({ noteDelivered: (agentId, prompt) => delivered.push([agentId, prompt]) })
+      deps({
+        promptAgent: async () => {
+          events.push('submit')
+          return 'done'
+        },
+        noteDelivered: (agentId, prompt) => events.push(`note:${agentId}:${prompt === PROMPT}`)
+      })
     )
     await dispatchAndSettle(service)
-    expect(delivered).toEqual([['agent-1', PROMPT]])
+    // Attempted registration precedes the submission; done re-confirms.
+    expect(events[0]).toBe('note:agent-1:true')
+    expect(events.indexOf('submit')).toBe(1)
+    expect(events.filter((e) => e.startsWith('note:'))).toHaveLength(2)
   })
 
   it('notes it when the landing check finds the echo (stalled-but-landed)', async () => {
@@ -984,16 +996,18 @@ describe('confirmed delivery hands the tracker the exact prompt', () => {
     )
     await dispatchAndSettle(service)
     expect(service.get('dsp-1')?.confirmed).toBe(true)
-    expect(delivered).toEqual([PROMPT])
+    // The attempted registration plus the landing confirmation.
+    expect(delivered).toEqual([PROMPT, PROMPT])
   })
 
-  it('notes the ATTEMPTED prompt when non-delivery is unproven (Sol r3 P1-9)', async () => {
+  it('keeps the fact when non-delivery is unproven (Sol r3 P1-9)', async () => {
     // The common collapsed-echo path: the submission almost certainly landed
     // but the screen cannot show it. The exchange still needs its exact
     // prompt fact — without it, scrape closure depends on recovering identity
     // from "[Pasted text #1 …]", which proves nothing. The confidence
     // distinction stays on the record (`confirmed: false`), not on the fact.
     const delivered: string[] = []
+    const retracted: string[] = []
     let submitted = false
     const service = new DispatchService(
       deps({
@@ -1003,31 +1017,174 @@ describe('confirmed delivery hands the tracker the exact prompt', () => {
         },
         // Screen moved but no echo: honest grade is unconfirmed.
         capture: () => (submitted ? '> [Pasted text #1 +40 lines]\n⏺ working' : '> '),
-        noteDelivered: (_agentId, prompt) => delivered.push(prompt)
+        noteDelivered: (_agentId, prompt) => delivered.push(prompt),
+        retractDelivered: (_agentId, prompt) => retracted.push(prompt)
       })
     )
     await dispatchAndSettle(service)
     expect(service.get('dsp-1')?.confirmed).toBe(false)
-    expect(delivered).toEqual([PROMPT])
+    expect(delivered.length).toBeGreaterThanOrEqual(1)
+    expect(retracted).toEqual([])
   })
 
-  it('does NOT note a prompt whose non-delivery was proven', async () => {
-    // The one branch that keeps its silence: pane unchanged, no echo, agent
-    // not busy — positive proof the prompt never arrived. Registering a
-    // prompt fact here would let the fallback's re-send get correlated
+  it('RETRACTS the attempted fact when non-delivery is proven (Sol r4 P1)', async () => {
+    // Pane unchanged, no echo, agent not busy — positive proof the prompt
+    // never arrived. The attempted fact registered before the submission is
+    // now false: retract it, or the fallback's re-send would be correlated
     // against a delivery that never happened.
     const delivered: string[] = []
+    const retracted: string[] = []
     const service = new DispatchService(
       deps({
         promptAgent: async () => 'submitted',
         capture: () => '> ',
         noteDelivered: (_agentId, prompt) => delivered.push(prompt),
+        retractDelivered: (agentId, prompt) => retracted.push(`${agentId}:${prompt}`),
         reattachFallback: async () => true
       })
     )
     await dispatchAndSettle(service)
     expect(service.get('dsp-1')?.via).toBe('pty-fallback')
+    expect(delivered).toEqual([PROMPT]) // the attempted registration
+    expect(retracted).toEqual([`agent-1:${PROMPT}`]) // taken back on proof
+  })
+
+  it('a context-full refusal never registers a fact — nothing was attempted', async () => {
+    const delivered: string[] = []
+    const service = new DispatchService(
+      deps({
+        capture: () => '100% context used',
+        noteDelivered: (_agentId, prompt) => delivered.push(prompt)
+      })
+    )
+    await dispatchAndSettle(service)
+    expect(service.get('dsp-1')?.error).toBe('context-full')
     expect(delivered).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r4 P1 — terminal evidence carries provenance: parser outranks
+// infrastructure at equal state; equal evidence merges metadata.
+// ---------------------------------------------------------------------------
+
+describe('terminal intents rank provenance, not just state (Sol r4 P1)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('a parked PARSER interrupted survives an equal-state infrastructure interruption', async () => {
+    // The review's exact shape: a parser-proven interrupted completion (with
+    // its answering turn identity) parks on a ledger fault; a backend death
+    // then projects to the same state. Equal strength used to REPLACE the
+    // parked parser row — the generic interruption landed without its turn
+    // evidence. Provenance now keeps the parser verdict.
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let ledgerUp = true
+    const service = new DispatchService(deps({ persist: () => ledgerUp }))
+    await dispatchAndSettle(service)
+    ledgerUp = false
+    service.completeTurn('dsp-1', { turnIndex: 7, uuid: 'uuid-7', outcome: 'interrupted' })
+    expect(service.get('dsp-1')?.state).toBe('running') // parked, fail-closed
+    service.onBackendDeath('herdr server died')
+    ledgerUp = true
+    service.sweep()
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'interrupted',
+      turnIndex: 7,
+      turnUuid: 'uuid-7',
+      error: 'interrupted: the agent turn was interrupted'
+    })
+  })
+
+  it('a PARSER interrupted replaces a parked infrastructure interruption — the other direction', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let ledgerUp = true
+    const service = new DispatchService(deps({ persist: () => ledgerUp }))
+    await dispatchAndSettle(service)
+    ledgerUp = false
+    service.interrupt('dsp-1', 'backend hiccup, never durable')
+    expect(service.get('dsp-1')?.state).toBe('running')
+    // The parser lane lands its own interrupted verdict for the same
+    // dispatch: equal state, stronger provenance — it takes the park.
+    service.completeTurn('dsp-1', { turnIndex: 9, uuid: 'uuid-9', outcome: 'interrupted' })
+    ledgerUp = true
+    service.sweep()
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'interrupted',
+      turnIndex: 9,
+      turnUuid: 'uuid-9'
+    })
+  })
+
+  it('equal provenance and state MERGES metadata rather than erasing it', async () => {
+    // Two infrastructure interruptions: the later reason lands, but nothing
+    // the earlier intent knew is thrown away — and the release still fires
+    // exactly once when the row finally lands.
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let ends = 0
+    let ledgerUp = true
+    const service = new DispatchService(
+      deps({
+        persist: () => ledgerUp,
+        endWork: () => {
+          ends += 1
+        }
+      })
+    )
+    await dispatchAndSettle(service)
+    ledgerUp = false
+    service.interrupt('dsp-1', 'first infrastructure verdict')
+    service.onBackendDeath('second infrastructure verdict')
+    ledgerUp = true
+    service.sweep()
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'interrupted',
+      error: 'second infrastructure verdict'
+    })
+    expect(ends).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r4 P1 — the answering identity is persisted beside the display index.
+// ---------------------------------------------------------------------------
+
+describe('turnUuid — a rewind-reused index stays distinguishable', () => {
+  it('persists the uuid through completeTurn and serves it on lookup', async () => {
+    const persisted: DispatchRecord[] = []
+    const service = new DispatchService(
+      deps({
+        persist: (record) => {
+          persisted.push(record)
+          return true
+        }
+      })
+    )
+    await dispatchAndSettle(service)
+    service.completeTurn('dsp-1', { turnIndex: 3, uuid: 'uuid-life-1', reply: 'first answer' })
+    expect(service.lookup('dsp-1').body).toMatchObject({ turnIndex: 3, turnUuid: 'uuid-life-1' })
+    // On disk too — an audit resolves by identity, not by a reusable ordinal.
+    expect(persisted.at(-1)).toMatchObject({ turnIndex: 3, turnUuid: 'uuid-life-1' })
+  })
+
+  it('two dispatches answered at the SAME index differ by uuid after a rewind', async () => {
+    let n = 0
+    const service = new DispatchService(deps({ newId: () => `dsp-${(n += 1)}` }))
+    await dispatchAndSettle(service)
+    service.completeTurn('dsp-1', { turnIndex: 3, uuid: 'uuid-before-rewind' })
+    // A /rewind reuses index 3 for entirely different work; the next
+    // dispatch's answer lands at the same ordinal.
+    await dispatchAndSettle(service)
+    service.completeTurn('dsp-2', { turnIndex: 3, uuid: 'uuid-after-rewind' })
+
+    expect(service.get('dsp-1')).toMatchObject({ turnIndex: 3, turnUuid: 'uuid-before-rewind' })
+    expect(service.get('dsp-2')).toMatchObject({ turnIndex: 3, turnUuid: 'uuid-after-rewind' })
+  })
+
+  it('tolerates absence — a scrape closure without a uuid persists none', async () => {
+    const service = new DispatchService(deps())
+    await dispatchAndSettle(service)
+    service.completeTurn('dsp-1', { turnIndex: 3 })
+    expect(service.get('dsp-1')?.turnUuid).toBeUndefined()
   })
 })
 

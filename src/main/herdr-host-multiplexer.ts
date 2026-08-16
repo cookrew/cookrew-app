@@ -454,6 +454,28 @@ export class HerdrHostMultiplexer implements Multiplexer {
   }
 
   /**
+   * Bounded-staleness pane inventory for ADMISSION questions only (dispatch
+   * acceptance asking "does this session exist?"). 500ms of staleness is the
+   * freshness contract: a pane that died inside the window produces a
+   * delivery failure moments later, which the engine already classifies —
+   * while a fresh fork per concurrent POST serialized the main thread
+   * (Sol r4, I6). Lifecycle decisions (create/kill/reattach) must NEVER read
+   * this — they keep readPanes(), so nothing is created or killed from a
+   * cached answer.
+   */
+  private admissionCache: { at: number; panes: HerdrPane[] } | null = null
+
+  sessionExistsCached(name: string): boolean {
+    if (this.attachSnapshot) return this.sessionExists(name)
+    const now = Date.now()
+    if (!this.admissionCache || now - this.admissionCache.at > 500) {
+      this.admissionCache = { at: now, panes: this.readPanes() }
+    }
+    const label = name
+    return this.admissionCache.panes.some((pane) => pane.label === label)
+  }
+
+  /**
    * Share one global pane snapshot across a serial workspace reattach.
    * Herdr already returns every pane in one response; this avoids forking a
    * CLI to ask the same global question at each per-terminal lookup.

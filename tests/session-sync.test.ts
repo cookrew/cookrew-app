@@ -6,6 +6,7 @@ import { SessionTurnSync } from '../src/main/session-sync'
 import {
   createSessionTurnAccumulator,
   parseSessionTurns,
+  type HistoryDelta,
   type StreamingTurnParser
 } from '../src/shared/session-turns'
 import { TurnTracker } from '../src/main/turn-tracker'
@@ -547,6 +548,183 @@ describe('SessionTurnSync incremental observation', () => {
     }
     await vi.advanceTimersByTimeAsync(200)
     expect(tracker.history('t')).toEqual(parseSessionTurns(lines))
+    sync.dispose()
+  })
+})
+
+// Sol r4 P1 (end-to-end O(delta)): a growth reconcile hands the tracker a
+// DELTA through applyHistoryDelta — the seam the parallel lane implements on
+// TurnTracker — instead of replaceHistory's whole-history re-projection. The
+// seam is feature-checked BOTH ways and the check is permanent
+// compatibility: no takeDelta (retained-lines fallback) or no
+// applyHistoryDelta (tracker without the seam) falls back to replaceHistory;
+// shrink/rotation/first-contact stay on replaceHistory by design.
+describe('SessionTurnSync delta handoff (Sol r4 P1)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  interface DeltaCall {
+    terminalId: string
+    delta: HistoryDelta
+  }
+
+  type DeltaSeam = TurnTracker & {
+    applyHistoryDelta?: (
+      terminalId: string,
+      delta: HistoryDelta,
+      records: () => TurnRecord[]
+    ) => void
+  }
+
+  /** Arm the tracker's delta seam with a spy. The REAL applyHistoryDelta is
+   *  wrapped when the tracker has one (the cross-lane integration this gate
+   *  exists for); a tracker predating the seam gets an emulation that
+   *  follows the HistoryDelta apply contract, so the handoff assertions
+   *  hold either way. */
+  function armDeltaSeam(tracker: TurnTracker): DeltaCall[] {
+    const calls: DeltaCall[] = []
+    const real = (tracker as DeltaSeam).applyHistoryDelta?.bind(tracker)
+    ;(tracker as DeltaSeam).applyHistoryDelta = (terminalId, delta, records) => {
+      calls.push({ terminalId, delta })
+      if (real !== undefined) {
+        real(terminalId, delta, records)
+        return
+      }
+      if (delta.kind === 'reset') {
+        tracker.replaceHistory(terminalId, records())
+        return
+      }
+      const prior = tracker.history(terminalId)
+      if (delta.kind === 'tail') {
+        tracker.replaceHistory(terminalId, [...prior.slice(0, -1), delta.record])
+        return
+      }
+      if (delta.records.length === 0) return
+      tracker.replaceHistory(terminalId, [...prior, ...delta.records])
+    }
+    return calls
+  }
+
+  /** One END_TURN-closed exchange — the marker keeps the tail settled, so an
+   *  appended turn's delta is exactly one record. */
+  function closedTurn(n: number): string[] {
+    return [
+      user(`prompt ${n}`, `2026-07-20T10:00:${String(n % 60).padStart(2, '0')}Z`),
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: `reply ${n}` }],
+          stop_reason: 'end_turn'
+        },
+        timestamp: `2026-07-20T10:00:${String(n % 60).padStart(2, '0')}Z`,
+        sessionId: 'src'
+      })
+    ]
+  }
+
+  it('a 300-turn file growing by ONE turn hands downstream a one-record append — never the history', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    const backlog = Array.from({ length: 300 }, (_, n) => closedTurn(n)).flat()
+    writeFileSync(file, backlog.join('\n') + '\n', 'utf8')
+    const deltas = armDeltaSeam(tracker)
+    const replace = vi.spyOn(tracker, 'replaceHistory')
+
+    // First contact is a FULL parse and stays on replaceHistory by design.
+    sync.watch('term-1', file, parseSessionTurns)
+    expect(tracker.history('term-1')).toHaveLength(300)
+    expect(deltas).toHaveLength(0)
+    const replacesAfterWatch = replace.mock.calls.length
+
+    appendFileSync(file, closedTurn(300).join('\n') + '\n', 'utf8')
+    await vi.advanceTimersByTimeAsync(200)
+
+    expect(deltas).toHaveLength(1)
+    expect(deltas[0].terminalId).toBe('term-1')
+    const delta = deltas[0].delta
+    expect(delta.kind).toBe('append')
+    if (delta.kind === 'append') {
+      expect(delta.records).toHaveLength(1)
+      expect(delta.records[0].index).toBe(301)
+    }
+    // The applied result is exact — same 301 records a whole parse derives.
+    expect(tracker.history('term-1')).toEqual(
+      parseSessionTurns([...backlog, ...closedTurn(300)])
+    )
+    // And growth itself paid no replaceHistory beyond the seam's own apply.
+    expect(replace.mock.calls.length - replacesAfterWatch).toBeLessThanOrEqual(1)
+    sync.dispose()
+  })
+
+  it('repeated delta growths stay exact — every applied step equals the whole-file parse', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    const lines = closedTurn(0)
+    writeFileSync(file, lines.join('\n') + '\n', 'utf8')
+    armDeltaSeam(tracker)
+    sync.watch('term-1', file, parseSessionTurns)
+
+    for (let n = 1; n <= 4; n += 1) {
+      const next = closedTurn(n)
+      appendFileSync(file, next.join('\n') + '\n', 'utf8')
+      lines.push(...next)
+      await vi.advanceTimersByTimeAsync(200)
+      expect(tracker.history('term-1'), `after turn ${n}`).toEqual(parseSessionTurns(lines))
+    }
+    sync.dispose()
+  })
+
+  it('a tracker WITHOUT applyHistoryDelta keeps the replaceHistory path — the compatibility seam', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    // Pin the seam absent even after the parallel lane lands it on the class.
+    ;(tracker as { applyHistoryDelta?: unknown }).applyHistoryDelta = undefined
+    writeFileSync(file, closedTurn(0).join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parseSessionTurns)
+
+    appendFileSync(file, closedTurn(1).join('\n') + '\n', 'utf8')
+    await vi.advanceTimersByTimeAsync(200)
+    expect(tracker.history('term-1').map((r) => r.prompt)).toEqual(['prompt 0', 'prompt 1'])
+    sync.dispose()
+  })
+
+  it('a shrink stays on replaceHistory even when the delta seam exists (the invalidation path)', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, [...closedTurn(0), ...closedTurn(1)].join('\n') + '\n', 'utf8')
+    const deltas = armDeltaSeam(tracker)
+    sync.watch('term-1', file, parseSessionTurns)
+
+    writeFileSync(file, closedTurn(0).join('\n') + '\n', 'utf8')
+    await vi.advanceTimersByTimeAsync(200)
+    expect(deltas).toHaveLength(0)
+    expect(tracker.history('term-1').map((r) => r.prompt)).toEqual(['prompt 0'])
+    sync.dispose()
+  })
+
+  it('the retained-lines fallback (no createAccumulator) keeps the old path even with the seam armed', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, 'one\n', 'utf8')
+    const deltas = armDeltaSeam(tracker)
+    // A plain parser without takeDelta: its accumulator retains lines and
+    // re-parses — it has no O(delta) story, so it must not pretend to one.
+    const parse = (lines: string[]): TurnRecord[] =>
+      lines.map((line, at) => ({
+        index: at + 1,
+        prompt: line,
+        reply: '',
+        startedAt: at,
+        endedAt: at
+      }))
+    sync.watch('term-1', file, parse)
+    appendFileSync(file, 'two\n', 'utf8')
+    await vi.advanceTimersByTimeAsync(200)
+
+    expect(deltas).toHaveLength(0)
+    expect(tracker.history('term-1').map((r) => r.prompt)).toEqual(['one', 'two'])
     sync.dispose()
   })
 })

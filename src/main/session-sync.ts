@@ -19,11 +19,27 @@
 
 import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import {
+  type HistoryDelta,
   type SessionTurnAccumulator,
   type StreamingTurnParser
 } from '../shared/session-turns'
 import type { TurnRecord } from '../shared/turn'
 import type { TurnTracker } from './turn-tracker'
+
+/**
+ * The delta seam (Sol r4 P1): TurnTracker gains applyHistoryDelta — apply an
+ * O(delta) history change, with records() as the recovery projection when
+ * the delta cannot land (see HistoryDelta's apply contract). The method is
+ * feature-checked at the call site and the check is PERMANENT compatibility:
+ * a tracker without it is always legal, just O(history) via replaceHistory.
+ */
+type DeltaCapableTracker = TurnTracker & {
+  applyHistoryDelta?: (
+    terminalId: string,
+    delta: HistoryDelta,
+    records: () => TurnRecord[]
+  ) => void
+}
 
 const DEFAULT_POLL_MS = 2000
 
@@ -576,7 +592,36 @@ export class SessionTurnSync {
       const boundary = data.lastIndexOf(NEWLINE)
       const carry = boundary === -1 ? data : data.subarray(boundary + 1)
       if (boundary !== -1) acc.feed(data.toString('utf8', 0, boundary).split('\n'))
-      this.turns.replaceHistory(terminalId, acc.records())
+      // GROWTH hands downstream the DELTA, not the whole history (Sol r4 P1:
+      // an appended turn must cost O(appended) end to end — replaceHistory
+      // re-maps, re-dedupes and re-schedules the complete array). Both sides
+      // are feature-checked: a retained-lines accumulator has no takeDelta,
+      // and the tracker seam may be absent — either absence falls back to
+      // full replacement. Shrink, rotation, rebind and first contact stay on
+      // replaceHistory BY DESIGN: they are the invalidation paths.
+      const applyDelta = (this.turns as DeltaCapableTracker).applyHistoryDelta
+      if (grown && acc.takeDelta !== undefined && typeof applyDelta === 'function') {
+        // Drain the take: a combined change (an emitted tail rewritten AND
+        // new records queued behind it) arrives as two deltas — the 'tail'
+        // rewrite first, then the 'append' — so every delta lands on a
+        // consumer history of exactly the matching shape. Bounded: a 'tail'
+        // take syncs the tail cursor, so the loop runs at most twice.
+        for (;;) {
+          const delta = acc.takeDelta()
+          applyDelta.call(this.turns, terminalId, delta, () => acc.records())
+          if (delta.kind !== 'tail') break
+        }
+      } else {
+        this.turns.replaceHistory(terminalId, acc.records())
+        // replaceHistory just delivered the full state, so the delta cursor
+        // is drained to match — the NEXT growth emits O(delta) instead of
+        // re-emitting anything the tracker already holds.
+        if (acc.takeDelta !== undefined) {
+          while (acc.takeDelta().kind === 'tail') {
+            // partial advance — keep taking until the cursor is synced
+          }
+        }
+      }
       const moved = !known || stat.size !== watched.size
       this.watched.set(terminalId, {
         ...watched,

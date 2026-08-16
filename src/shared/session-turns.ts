@@ -201,6 +201,44 @@ function assistantText(entry: SessionEntry): string | null {
 }
 
 /**
+ * What changed in an accumulator's records() since the last takeDelta() —
+ * the O(delta) handoff that keeps downstream from re-projecting the whole
+ * history on every append (Sol r4 P1: incremental byte READS were not I3;
+ * every growth still handed TurnTracker/TurnStore the complete array). Only
+ * the TAIL record of a history can ever change in place (reply growth,
+ * finality landing, outcome landing, a sibling resend); everything earlier
+ * is immutable, so three kinds cover every legal transition:
+ *
+ *  - 'append': records STRICTLY NEW since the last take, index-contiguous
+ *    past the consumer's tail (a record never emitted before, complete or
+ *    the freshly-opened tail). An empty records array is the no-op take.
+ *  - 'tail': the last-emitted record's in-place rewrite (open turn growing,
+ *    finality landing, outcome landing, a sibling resend).
+ *  - 'reset': prior emissions are invalid (a Pi branch switch re-rooting the
+ *    conversation) — the consumer must re-project from records() whole.
+ *
+ * A take is a PARTIAL-ADVANCE cursor: when the emitted tail was rewritten
+ * AND new records queued behind it in the same span (the next-user boundary
+ * lands finality and the next prompt in one feed), takeDelta hands out the
+ * 'tail' rewrite ALONE and leaves the append for the immediate next call —
+ * so every delta lands on a consumer history of exactly the matching shape
+ * and no record is ever emitted twice. Callers drain: take until the
+ * returned kind is not 'tail' (bounded — a 'tail' take syncs the tail
+ * cursor, so at most two takes drain any span).
+ *
+ * APPLY CONTRACT (the replay tests/history-delta.test.ts property-checks,
+ * and the shape TurnTracker.applyHistoryDelta implements): given history H,
+ *   append → concat after H (records[0].index === |H| + 1);
+ *   tail   → replace H's last record (same index/uuid);
+ *   reset  → discard H, take records() whole.
+ * Draining every take this way reconstructs records() exactly.
+ */
+export type HistoryDelta =
+  | { kind: 'append'; records: TurnRecord[] }
+  | { kind: 'tail'; record: TurnRecord }
+  | { kind: 'reset' }
+
+/**
  * Resumable turn parser: feed session JSONL lines in any number of chunks
  * (split anywhere at LINE granularity — byte-level partial lines are the
  * caller's carry buffer) and read the records so far. Output is identical to
@@ -210,6 +248,14 @@ function assistantText(entry: SessionEntry): string | null {
 export interface SessionTurnAccumulator {
   feed(lines: string[]): void
   records(): TurnRecord[]
+  /**
+   * Consume the change since the previous take (see HistoryDelta). OPTIONAL
+   * — the retained-lines fallback in session-sync has no O(delta) story and
+   * omits it honestly, which keeps it on the full replaceHistory path; the
+   * three harness accumulators (Claude here, Codex/Pi in trace-blocks) all
+   * implement it.
+   */
+  takeDelta?(): HistoryDelta
 }
 
 /**
@@ -227,6 +273,11 @@ export function createSessionTurnAccumulator(): SessionTurnAccumulator {
   // Identity (index + sibling collapse + uuid binding) comes from the SHARED
   // assigner so trace-block.index === TurnRecord.index by construction.
   const assigner = new CheckpointAssigner()
+  /** takeDelta cursor: how much of `turns` the last take handed out… */
+  let emittedCount = 0
+  /** …and the exact tail object it handed out. Records are REPLACED, never
+   *  mutated (see feedLine), so reference identity IS change detection. */
+  let emittedTail: TurnRecord | undefined
 
   const feedLine = (line: string): void => {
     if (line.trim().length === 0) return
@@ -301,6 +352,24 @@ export function createSessionTurnAccumulator(): SessionTurnAccumulator {
     },
     records(): TurnRecord[] {
       return [...turns]
+    },
+    takeDelta(): HistoryDelta {
+      // `turns` never shrinks and only its LAST element is ever replaced, so
+      // the change since the last take is fully described by the count and
+      // the tail's identity. A stale tail goes out ALONE — even when new
+      // records queued behind it (the next-user boundary landing finality
+      // and the next prompt in one feed) — advancing only the tail cursor;
+      // the queued records arrive on the immediately following take. Never a
+      // whole-history replay, never a record emitted twice.
+      const tailStale = emittedCount > 0 && turns[emittedCount - 1] !== emittedTail
+      if (tailStale) {
+        emittedTail = turns[emittedCount - 1]
+        return { kind: 'tail', record: emittedTail }
+      }
+      const records = turns.slice(emittedCount)
+      emittedCount = turns.length
+      emittedTail = turns[turns.length - 1]
+      return { kind: 'append', records }
     }
   }
 }

@@ -136,17 +136,19 @@ describe('scrape closure demands prompt identity, not just timestamp order', () 
   })
 })
 
-describe('owner input preempts an armed dispatch (Sol r3 P0-2c)', () => {
+describe('owner input preempts an armed dispatch (Sol r3 P0-2c, r4 P0-1)', () => {
   afterEach(() => vi.useRealTimers())
 
   it('fires onOwnerPreempt once, BEFORE the owner turn opens', async () => {
     vi.useFakeTimers()
     const { tracker, session, seen } = fixture()
     const preempts: string[] = []
-    // The conductor's wiring: interrupt the dispatch, which disarms the stamp.
+    // The conductor's wiring: interrupt the dispatch (disarming the stamp)
+    // and report that the interrupt row durably committed.
     tracker.onOwnerPreempt = (terminalId) => {
       preempts.push(terminalId)
       tracker.clearDispatch(terminalId, 'dsp-1')
+      return true
     }
     tracker.track(session as unknown as PtySession, true)
     tracker.noteDispatch('term-1', 'dsp-1', 'the dispatched brief')
@@ -160,19 +162,49 @@ describe('owner input preempts an armed dispatch (Sol r3 P0-2c)', () => {
     tracker.disposeAll()
   })
 
-  it('the pty-fallback delivery (exact dispatched bytes) does not preempt itself', async () => {
-    // The fallback pastes the dispatch's own prompt through the same PTY
-    // input stream every owner keystroke uses. By exact-bytes identity that
-    // submission IS the dispatch's delivery — preempting on it would make
-    // the fallback self-destruct.
+  it('an owner submitting the IDENTICAL bytes still preempts — provenance, not text (Sol r4 P0-1b)', async () => {
+    // The old exemption keyed on byte equality: any untagged submission of
+    // the dispatched text was ASSUMED to be the pty-fallback. A real owner
+    // can type the same text after arming, producing two identical turns —
+    // only the source tag proves who wrote.
     vi.useFakeTimers()
     const { tracker, session, seen } = fixture()
     const preempts: string[] = []
-    tracker.onOwnerPreempt = (terminalId) => preempts.push(terminalId)
+    tracker.onOwnerPreempt = (terminalId) => {
+      preempts.push(terminalId)
+      tracker.clearDispatch(terminalId, 'dsp-1')
+      return true
+    }
     tracker.track(session as unknown as PtySession, true)
     tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
 
-    await runTurn(session, 'do the task')
+    await runTurn(session, 'do the task') // untagged = owner, identical bytes
+    expect(preempts).toEqual(['term-1'])
+    expect(seen).toHaveLength(1)
+    expect(seen[0].dispatchId).toBeUndefined()
+    tracker.disposeAll()
+  })
+
+  it('the pty-fallback delivery does not preempt itself — exempt by SOURCE TAG', async () => {
+    // The fallback pastes the dispatch's own prompt through the same PTY
+    // input stream every owner keystroke uses, but through writeFromDispatch,
+    // which tags the input event with its source. THAT is the exemption —
+    // never the bytes.
+    vi.useFakeTimers()
+    const { tracker, session, seen } = fixture()
+    const preempts: string[] = []
+    tracker.onOwnerPreempt = (terminalId) => {
+      preempts.push(terminalId)
+      return true
+    }
+    tracker.track(session as unknown as PtySession, true)
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+
+    session.idle = 0
+    session.emit('input', 'do the task\r', 'dispatch')
+    session.full = '⏺ done'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
     expect(preempts).toEqual([])
     // Scrape-owned terminal: the closer consumes the stamp with that turn.
     expect(seen).toHaveLength(1)
@@ -180,11 +212,36 @@ describe('owner input preempts an armed dispatch (Sol r3 P0-2c)', () => {
     tracker.disposeAll()
   })
 
+  it('a mid-thinking DIFFERENT owner prompt preempts — a live turn is not a settled answer (Sol r4 P0-1c)', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = fixture()
+    const preempts: string[] = []
+    tracker.onOwnerPreempt = (terminalId) => {
+      preempts.push(terminalId)
+      tracker.clearDispatch(terminalId, 'dsp-1')
+      return true
+    }
+    tracker.track(session as unknown as PtySession, true)
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    // The dispatched turn opens (tagged) and is still THINKING…
+    session.emit('input', 'do the task\r', 'dispatch')
+    session.full = '⏺ thinking'
+    await vi.advanceTimersByTimeAsync(100)
+    // …when the owner submits something else. The dispatch turn has not
+    // settled: this IS a competing producer and must preempt.
+    session.emit('input', 'change of plan, stop\r')
+    expect(preempts).toEqual(['term-1'])
+    tracker.disposeAll()
+  })
+
   it('fires at most once per dispatch even when the callback does not disarm', async () => {
     vi.useFakeTimers()
     const { tracker, session } = fixture()
     const preempts: string[] = []
-    tracker.onOwnerPreempt = (terminalId) => preempts.push(terminalId)
+    tracker.onOwnerPreempt = (terminalId) => {
+      preempts.push(terminalId)
+      return true
+    }
     tracker.track(session as unknown as PtySession, true)
     tracker.noteDispatch('term-1', 'dsp-1', 'the dispatched brief')
 
@@ -198,12 +255,61 @@ describe('owner input preempts an armed dispatch (Sol r3 P0-2c)', () => {
     vi.useFakeTimers()
     const { tracker, session } = fixture()
     const preempts: string[] = []
-    tracker.onOwnerPreempt = (terminalId) => preempts.push(terminalId)
+    tracker.onOwnerPreempt = (terminalId) => {
+      preempts.push(terminalId)
+      return true
+    }
     tracker.track(session as unknown as PtySession, true)
     tracker.noteDispatch('term-1', 'dsp-1', 'the dispatched brief')
     session.emit('input', '\r')
     await vi.advanceTimersByTimeAsync(100)
     expect(preempts).toEqual([])
+    expect(tracker.hasArmedDispatch('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('ledger-down preemption refuses the input — fail-closed, and it retries (Sol r4 P0-1d)', async () => {
+    // The wired interrupt could not commit its terminal row (returns false):
+    // the reservation is still live, so the owner's submission must not open
+    // a competing turn. The PTY guard refuses the bytes upstream; this pins
+    // the tracker's own belt for the same verdict.
+    vi.useFakeTimers()
+    const { tracker, session, seen } = fixture()
+    let committed = false
+    const preempts: string[] = []
+    tracker.onOwnerPreempt = (terminalId) => {
+      preempts.push(terminalId)
+      if (committed) tracker.clearDispatch(terminalId, 'dsp-1')
+      return committed
+    }
+    tracker.track(session as unknown as PtySession, true)
+    tracker.noteDispatch('term-1', 'dsp-1', 'the dispatched brief')
+
+    // The guard (wired onto PtySession.beforeOwnerInput) refuses the write.
+    expect(tracker.guardOwnerInput('term-1', 'a competing ask\r')).toBe('preempt-failed')
+    expect(tracker.hasArmedDispatch('term-1')).toBe(true)
+    // The unguarded belt: even bytes that already reached the child open no
+    // owner turn beside the live reservation.
+    await runTurn(session, 'a competing ask')
+    expect(seen).toHaveLength(0)
+    expect(tracker.hasArmedDispatch('term-1')).toBe(true)
+
+    // Not latched: the ledger recovers, the next submission preempts through.
+    committed = true
+    expect(tracker.guardOwnerInput('term-1', 'a competing ask\r')).toBe('allow')
+    expect(tracker.hasArmedDispatch('term-1')).toBe(false)
+    expect(preempts.length).toBeGreaterThanOrEqual(2)
+    tracker.disposeAll()
+  })
+
+  it('guardOwnerInput is a pure peek — typing and unarmed terminals pass untouched', () => {
+    const { tracker, session } = fixture()
+    tracker.track(session as unknown as PtySession, true)
+    // No armed dispatch: everything is allowed.
+    expect(tracker.guardOwnerInput('term-1', 'hello\r')).toBe('allow')
+    tracker.noteDispatch('term-1', 'dsp-1', 'the dispatched brief')
+    // Typing without a submit never preempts.
+    expect(tracker.guardOwnerInput('term-1', 'partial line, no enter')).toBe('allow')
     expect(tracker.hasArmedDispatch('term-1')).toBe(true)
     tracker.disposeAll()
   })
@@ -216,12 +322,21 @@ describe('owner input preempts an armed dispatch (Sol r3 P0-2c)', () => {
     vi.useFakeTimers()
     const { tracker, session, seen } = fixture()
     const preempts: string[] = []
-    tracker.onOwnerPreempt = (terminalId) => preempts.push(terminalId)
+    tracker.onOwnerPreempt = (terminalId) => {
+      preempts.push(terminalId)
+      return true
+    }
     tracker.track(session as unknown as PtySession, true)
     tracker.setHistorySource('term-1', 'file')
     tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
     const dispatchStart = Date.now()
-    await runTurn(session, 'do the task') // settles on screen; stamp still armed
+    // The dispatch's own delivery (source-tagged) settles on screen; the
+    // stamp stays armed until the durable row lands.
+    session.idle = 0
+    session.emit('input', 'do the task\r', 'dispatch')
+    session.full = '⏺ done'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
     expect(tracker.hasArmedDispatch('term-1')).toBe(true)
 
     await runTurn(session, 'an owner aside')
@@ -347,15 +462,32 @@ describe('empty finals and parser outcomes (Sol r3 P1-7, P1-8)', () => {
   })
 })
 
-describe('hasFinalAnswer — the sweep-side finality probe (Sol r3 P0-6)', () => {
-  it('finds a final record with exact identity inside the armed window', () => {
+describe('hasFinalAnswer — the sweep-side finality probe (Sol r3 P0-6, payload per r4 P0-3)', () => {
+  it('returns the matching record PAYLOAD — identity and outcome, not a bare yes', () => {
+    const { tracker } = fixture()
+    const at = Date.now()
+    tracker.replaceHistory('term-1', [
+      { ...record({ final: true, startedAt: at + 5, uuid: 'uuid-a' }), outcome: 'failed' } as TurnRecord
+    ])
+    expect(tracker.hasFinalAnswer('term-1', 'do the task', at)).toMatchObject({
+      turnIndex: 1,
+      uuid: 'uuid-a',
+      outcome: 'failed',
+      reply: 'task done'
+    })
+    // Wrong bytes, non-final, or pre-arming records do not answer.
+    expect(tracker.hasFinalAnswer('term-1', 'another brief', at)).toBeNull()
+    expect(tracker.hasFinalAnswer('term-1', 'do the task', at + 60_000)).toBeNull()
+    tracker.disposeAll()
+  })
+
+  it('a successful final leaves outcome absent — absent means done', () => {
     const { tracker } = fixture()
     const at = Date.now()
     tracker.replaceHistory('term-1', [record({ final: true, startedAt: at + 5 })])
-    expect(tracker.hasFinalAnswer('term-1', 'do the task', at)).toBe(true)
-    // Wrong bytes, non-final, or pre-arming records do not answer.
-    expect(tracker.hasFinalAnswer('term-1', 'another brief', at)).toBe(false)
-    expect(tracker.hasFinalAnswer('term-1', 'do the task', at + 60_000)).toBe(false)
+    const answer = tracker.hasFinalAnswer('term-1', 'do the task', at)
+    expect(answer).toMatchObject({ turnIndex: 1 })
+    expect(answer?.outcome).toBeUndefined()
     tracker.disposeAll()
   })
 
@@ -364,7 +496,7 @@ describe('hasFinalAnswer — the sweep-side finality probe (Sol r3 P0-6)', () =>
     tracker.setHistorySource('term-1', 'file')
     tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
     tracker.replaceHistory('term-1', [record({ final: true })])
-    expect(tracker.hasFinalAnswer('term-1', 'do the task', Date.now() - 1000)).toBe(true)
+    expect(tracker.hasFinalAnswer('term-1', 'do the task', Date.now() - 1000)).not.toBeNull()
     expect(tracker.hasArmedDispatch('term-1')).toBe(true)
     expect(seen).toHaveLength(0)
     tracker.disposeAll()
@@ -802,6 +934,233 @@ describe('hasOpenTurnFact — the observed in-flight-turn fact', () => {
     tracker.replaceHistory('term-1', [record({ final: true })])
     tracker.completeFromHistory('term-1')
     expect(tracker.hasOpenTurnFact('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r4 P1 — the open-turn fact's lifecycle: detached inTurn includes it, and
+// removal/backend death end it through an explicit method.
+// ---------------------------------------------------------------------------
+
+describe('openTurnFacts lifecycle (Sol r4 P1)', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('detached inTurn() includes the owned open-turn fact — the no-status rotation gate fires', async () => {
+    // A switched-away human turn with an ABSENT status feed used to read as
+    // not-in-turn, so the stale-rotation gate could never fire for it while
+    // holdOpen (which does consult the fact) pinned its watch forever.
+    vi.useFakeTimers()
+    const { tracker, session } = fixture()
+    tracker.track(session as unknown as PtySession, true)
+    session.emit('input', 'a long human ask\r')
+    tracker.untrack('term-1')
+    // No herdr status, no armed dispatch — only the observed open turn.
+    expect(tracker.hasOpenTurnFact('term-1')).toBe(true)
+    expect(tracker.inTurn('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('clearOpenTurnFact ends the fact and the waiting delivered prompt (removal path)', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = fixture()
+    tracker.track(session as unknown as PtySession, true)
+    session.emit('input', 'a long human ask\r')
+    tracker.untrack('term-1')
+    tracker.clearOpenTurnFact('term-1')
+    expect(tracker.hasOpenTurnFact('term-1')).toBe(false)
+    expect(tracker.inTurn('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+
+  it('backend death (via the method) clears a delivery-minted fact too', () => {
+    const { tracker } = fixture()
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    tracker.noteDispatchDelivered('term-1', 'do the task')
+    expect(tracker.hasOpenTurnFact('term-1')).toBe(true)
+    // The conductor's backend-death fan-out calls this per dead pane.
+    tracker.clearOpenTurnFact('term-1')
+    expect(tracker.hasOpenTurnFact('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r4 P1 — latency dedupe by record identity, never a timestamp window.
+// ---------------------------------------------------------------------------
+
+describe('latency observations reconcile to record identity (Sol r4 P1)', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('an owner turn observed within 5s of the dispatch turn does not steal the sample', async () => {
+    // The five-second heuristic's failure: the dispatch turn's scrape was
+    // MISSED (nobody attached), an owner turn was observed moments later,
+    // and the file closure consumed the owner's timestamp — marking the
+    // dispatch latencyReported when its sample was never public at all.
+    vi.useFakeTimers()
+    const { tracker, session, seen } = fixture()
+    tracker.track(session as unknown as PtySession, true)
+    tracker.setHistorySource('term-1', 'file')
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    const dispatchStart = Date.now()
+    // Only the OWNER's turn crosses the scrape, 2s after the dispatch armed.
+    await vi.advanceTimersByTimeAsync(2000)
+    await runTurn(session, 'an owner aside')
+    expect(seen).toHaveLength(1)
+
+    // The dispatch's own record lands: its closure matches NO observation —
+    // the owner's queued entry has a different prompt, and there is no
+    // timestamp window to fall into.
+    tracker.replaceHistory('term-1', [
+      record({ final: true, startedAt: dispatchStart + 10, endedAt: dispatchStart + 3000 }),
+      record({
+        index: 2,
+        prompt: 'an owner aside',
+        reply: 'sure',
+        final: true,
+        startedAt: dispatchStart + 2000,
+        endedAt: dispatchStart + 5000
+      })
+    ])
+    tracker.completeFromHistory('term-1')
+    expect(seen).toHaveLength(2)
+    expect(seen[1].dispatchId).toBe('dsp-1')
+    // NOT flagged: this closure is the dispatch exchange's first public
+    // completion — the owner's sample stays the owner's.
+    expect(seen[1].latencyReported).toBeUndefined()
+    tracker.disposeAll()
+  })
+
+  it('a scrape-observed dispatch exchange is consumed by uuid after reconcile stamps it', async () => {
+    vi.useFakeTimers()
+    const { tracker, session, seen } = fixture()
+    tracker.track(session as unknown as PtySession, true)
+    tracker.setHistorySource('term-1', 'file')
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    const startedAt = Date.now()
+    await runTurn(session, 'do the task') // scrape sample, queued by prompt
+    // A first reconcile lands the (non-final) record: the observation binds
+    // to its uuid.
+    tracker.replaceHistory('term-1', [
+      record({ startedAt, endedAt: startedAt + 3000, uuid: 'uuid-d' })
+    ])
+    // The finality reconcile closes: consumed by that uuid.
+    tracker.replaceHistory('term-1', [
+      record({ final: true, startedAt, endedAt: startedAt + 3000, uuid: 'uuid-d' })
+    ])
+    tracker.completeFromHistory('term-1')
+    expect(seen).toHaveLength(2)
+    expect(seen[1]).toMatchObject({ dispatchId: 'dsp-1', latencyReported: true, turnUuid: 'uuid-d' })
+    tracker.disposeAll()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r4 P1 — the answering identity rides the completion event.
+// ---------------------------------------------------------------------------
+
+describe('turnUuid rides the file closure', () => {
+  it('emits the durable record uuid beside the display index', () => {
+    const { tracker, seen } = fixture()
+    tracker.setHistorySource('term-1', 'file')
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    tracker.replaceHistory('term-1', [record({ final: true, uuid: 'uuid-7' })])
+    tracker.completeFromHistory('term-1')
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({ dispatchId: 'dsp-1', turnIndex: 1, turnUuid: 'uuid-7' })
+    tracker.disposeAll()
+  })
+
+  it('tolerates a uuid-less record — turnUuid is simply absent', () => {
+    const { tracker, seen } = fixture()
+    tracker.setHistorySource('term-1', 'file')
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    tracker.replaceHistory('term-1', [record({ final: true })])
+    tracker.completeFromHistory('term-1')
+    expect(seen[0].turnUuid).toBeUndefined()
+    tracker.disposeAll()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r4 P1 — attempted-delivery facts: late authoritative bytes replay a
+// settled scrape turn once; proven non-delivery retracts the fact.
+// ---------------------------------------------------------------------------
+
+describe('attempted-delivery correlation (Sol r4 P1)', () => {
+  afterEach(() => vi.useRealTimers())
+
+  const BRIEF = 'run the long brief with every detail intact'
+  const SPINNER = '✻ Cerebrating… (esc to interrupt · 3s)'
+
+  it('stalled-timeout landing: bytes arriving AFTER the scrape settled replay closure once', async () => {
+    // herdr `agent prompt` blocks until the agent leaves working, so on a
+    // stalled/timeout outcome whose prompt actually landed, the authoritative
+    // bytes can reach the tracker after the attached scrape already settled
+    // the turn with a collapsed placeholder prompt. That settled turn IS the
+    // dispatch's exchange — replay its closure instead of stranding the
+    // dispatch for the sweep.
+    vi.useFakeTimers()
+    const { tracker, session, seen } = fixture()
+    tracker.track(session as unknown as PtySession, true)
+    tracker.noteDispatch('term-1', 'dsp-1', BRIEF)
+    // The turn runs and settles with only the collapsed echo recoverable.
+    session.full = `> [Pasted text #1 +40 lines]\n\n${SPINNER}`
+    session.emit('data', SPINNER)
+    await vi.advanceTimersByTimeAsync(100)
+    session.full += '\n⏺ task done'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(seen).toHaveLength(1)
+    expect(seen[0].dispatchId).toBeUndefined()
+    expect(tracker.hasArmedDispatch('term-1')).toBe(true)
+
+    // The blocking submit finally returns; the delivered fact arrives late.
+    tracker.noteDispatchDelivered('term-1', BRIEF)
+    expect(seen).toHaveLength(2)
+    expect(seen[1].dispatchId).toBe('dsp-1')
+    // One public sample per exchange: the settled turn already emitted it.
+    expect(seen[1].latencyReported).toBe(true)
+    expect(tracker.hasArmedDispatch('term-1')).toBe(false)
+
+    // ONE-shot: a duplicate confirmation replays nothing.
+    tracker.noteDispatchDelivered('term-1', BRIEF)
+    expect(seen).toHaveLength(2)
+    tracker.disposeAll()
+  })
+
+  it('a settled turn with a PROVABLE different prompt is not replayed onto the dispatch', async () => {
+    vi.useFakeTimers()
+    const { tracker, session, seen } = fixture()
+    tracker.track(session as unknown as PtySession, true)
+    tracker.noteDispatch('term-1', 'dsp-1', BRIEF)
+    await runTurn(session, 'a fully visible owner ask')
+    expect(seen).toHaveLength(1)
+
+    tracker.noteDispatchDelivered('term-1', BRIEF)
+    // The settled turn proves its own (different) identity: no replay — the
+    // fact waits for the dispatch's real turn instead.
+    expect(seen).toHaveLength(1)
+    expect(tracker.hasArmedDispatch('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('proven non-delivery retracts the attempted fact and its minted open-turn fact', () => {
+    const { tracker } = fixture()
+    tracker.noteDispatch('term-1', 'dsp-1', BRIEF)
+    tracker.noteDispatchDelivered('term-1', BRIEF)
+    expect(tracker.hasOpenTurnFact('term-1')).toBe(true)
+    tracker.retractDispatchDelivered('term-1', BRIEF)
+    expect(tracker.hasOpenTurnFact('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+
+  it('retraction matches exact bytes — a different fact is never collateral', () => {
+    const { tracker } = fixture()
+    tracker.noteDispatch('term-1', 'dsp-1', BRIEF)
+    tracker.noteDispatchDelivered('term-1', BRIEF)
+    tracker.retractDispatchDelivered('term-1', 'some other prompt')
+    expect(tracker.hasOpenTurnFact('term-1')).toBe(true)
     tracker.disposeAll()
   })
 })

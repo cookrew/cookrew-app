@@ -578,6 +578,78 @@ describe('idempotencyKey — a repeated dispatch is the SAME dispatch', () => {
     expect(second.body.dispatchId).toBe('dsp-2')
   })
 
+  it('one key fronting BYTE-distinct briefs is refused — case and whitespace are semantic (Sol r4 P0-2)', async () => {
+    // The lossy fingerprint aliased `build:\n\tmake all` with `BUILD: make
+    // all`: same normalized hash, different work — a replay answered 200 for
+    // a brief the caller never sent. Exact request bytes are the identity.
+    let n = 0
+    const service = new DispatchService(deps({ newId: () => `dsp-${(n += 1)}` }))
+    await dispatchAndSettle(service, 'agent-1', {
+      text: 'build:\n\tmake all',
+      idempotencyKey: 'key-a'
+    })
+    for (const variant of ['BUILD: make all', 'build:\n    make all', 'build: make all']) {
+      const reused = await service.dispatch('agent-1', { text: variant, idempotencyKey: 'key-a' })
+      expect(reused.status).toBe(409)
+      expect(reused.body).toMatchObject({ error: 'idempotency key reused for different work' })
+    }
+    // The byte-exact retry is still the replay it always was.
+    const replay = await service.dispatch('agent-1', {
+      text: 'build:\n\tmake all',
+      idempotencyKey: 'key-a'
+    })
+    expect(replay.status).toBe(200)
+    expect(replay.body).toMatchObject({ dispatchId: 'dsp-1', replay: true })
+  })
+
+  it('delivers the caller EXACT bytes — no trim before delivery (Sol r4 P0-2)', async () => {
+    const delivered: string[] = []
+    const service = new DispatchService(
+      deps({
+        promptAgent: async (_session, prompt) => {
+          delivered.push(prompt)
+          return 'done'
+        }
+      })
+    )
+    const brief = '  indented first line\n\trecipe line\n'
+    await dispatchAndSettle(service, 'agent-1', { text: brief })
+    expect(delivered).toEqual([brief])
+  })
+
+  it('a legacy lossy (v1) fingerprint cannot prove difference — replay, not 409', async () => {
+    // Pre-upgrade rows carry bare-hex v1 hashes of a normalized prompt.
+    // Measuring a v2 exact-bytes hash against one proves nothing in either
+    // direction, so the key's promise wins: replay. A one-time miss window,
+    // documented on fingerprintsConflict, that ages out with the 90-day TTL.
+    const NOW = 1_700_000_000_000
+    const service = new DispatchService(
+      deps({
+        now: () => NOW,
+        loadRecords: () => [
+          {
+            id: 'dsp-old',
+            agentId: 'agent-1',
+            agentName: 'Forge',
+            workspaceId: 'ws-1',
+            state: 'done',
+            via: 'herdr',
+            createdAt: NOW - 1000,
+            updatedAt: NOW - 1000,
+            idempotencyKey: 'key-legacy',
+            promptHash: 'deadbeef'.repeat(8) // bare hex = v1, lossy
+          } as DispatchRecord
+        ]
+      })
+    )
+    const replay = await service.dispatch('agent-1', {
+      text: 'entirely different bytes than whatever v1 hashed',
+      idempotencyKey: 'key-legacy'
+    })
+    expect(replay.status).toBe(200)
+    expect(replay.body).toMatchObject({ dispatchId: 'dsp-old', replay: true })
+  })
+
   it('scopes the key by consumer — one tenant cannot replay another', async () => {
     // The scope is (consumer, key), so tenant B pressing tenant A's key gets
     // its OWN dispatch, never a replay describing somebody else's work.
@@ -814,14 +886,14 @@ describe('sweep — nothing holds an agent’s slot forever', () => {
     expect(service.get('dsp-1')?.state).toBe('done')
   })
 
-  it('a WORKING status cannot veto a durable final answer (Sol r3 P0-6)', async () => {
-    // A stuck 'working' feed spared a stale dispatch forever, even while a
-    // parser-proven final row answering it sat in the ledger. Positive parser
-    // finality outranks the status claim: when hasFinalAnswer confirms the
-    // row, the sweep proceeds instead of sparing — the normal closers should
-    // have consumed it long before; this is the bound on the veto.
+  it('a proven durable outcome is COMMITTED, never converted to a timeout interrupt (Sol r4 P0-3)', async () => {
+    // The inversion this replaces: hasFinalAnswer used to be a boolean that
+    // merely ended the working-status veto, after which the sweep stamped
+    // `interrupted: no outcome within 10 minutes` OVER a parser-proven final
+    // answer. The probe now returns the matching record's own payload and
+    // the sweep commits THAT outcome through the normal completion path.
     const asked: [string, string, number][] = []
-    let final = false
+    let final: { turnIndex: number; uuid?: string; reply?: string } | null = null
     const { service, tick } = aging({
       agentStatus: () => 'working',
       hasFinalAnswer: (agentId, prompt, armedAt) => {
@@ -835,10 +907,39 @@ describe('sweep — nothing holds an agent’s slot forever', () => {
     expect(service.sweep()).toEqual([])
     expect(asked.at(-1)).toEqual(['agent-1', PROMPT, START])
 
-    // A matching final durable record exists: the veto ends.
-    final = true
+    // A matching final durable record exists: the sweep closes the dispatch
+    // with the record's OWN outcome and identity — done, not interrupted.
+    final = { turnIndex: 12, uuid: 'uuid-12', reply: 'the actual answer' }
+    expect(service.sweep()).toEqual(['dsp-1'])
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'done',
+      turnIndex: 12,
+      turnUuid: 'uuid-12'
+    })
+    expect(service.get('dsp-1')?.error).toBeUndefined()
+  })
+
+  it('a durable FAILED outcome sweeps as failed — the record speaks, not the clock', async () => {
+    const { service, tick } = aging({
+      hasFinalAnswer: () => ({ turnIndex: 4, outcome: 'failed' as const })
+    })
+    await dispatchAndSettle(service)
+    tick(TEN_MINUTES + 1)
+    expect(service.sweep()).toEqual(['dsp-1'])
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'failed',
+      turnIndex: 4,
+      error: 'agent aborted/errored'
+    })
+  })
+
+  it('timeout-interrupt fires ONLY when no matching durable terminal record exists', async () => {
+    const { service, tick } = aging({ hasFinalAnswer: () => null })
+    await dispatchAndSettle(service)
+    tick(TEN_MINUTES + 1)
     expect(service.sweep()).toEqual(['dsp-1'])
     expect(service.get('dsp-1')?.state).toBe('interrupted')
+    expect(service.get('dsp-1')?.error).toMatch(/no outcome within/i)
   })
 
   it('the working spare stands when hasFinalAnswer is not wired', async () => {

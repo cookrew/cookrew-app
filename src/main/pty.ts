@@ -272,6 +272,15 @@ export function migrateForeignSession(
   return 'migrated'
 }
 
+/**
+ * Verdict for one owner write at a possibly-armed terminal (Sol r4 P0-1).
+ * 'preempt-failed' means the armed dispatch's interrupt row could NOT commit
+ * durably (ledger down, intent parked fail-closed) — the owner's bytes are
+ * REFUSED rather than delivered, because delivering them would open a second
+ * producer's turn beside a reservation that is still live.
+ */
+export type OwnerInputVerdict = 'allow' | 'preempt-failed'
+
 export interface PtySessionOptions {
   terminalId: string
   command: string
@@ -311,6 +320,20 @@ export class PtySession extends EventEmitter {
    * agent to go idle — need to name it.
    */
   readonly sessionName: string
+
+  /**
+   * The local-producer guard (Sol r4 P0-1a), consulted BEFORE proc.write —
+   * which is the only place a guard can actually stop a competing submission;
+   * a hook that fires after delivery only changes bookkeeping. Wired by the
+   * conductor to the tracker's preemption (TurnTracker.guardOwnerInput): when
+   * the write would submit a NEW prompt into a terminal carrying an armed
+   * dispatch, the guard preempts the dispatch synchronously-durably first.
+   * 'preempt-failed' (the interrupt row could not commit) REFUSES the write,
+   * fail-closed: the bytes never reach the child and no input event fires.
+   * Null (unwired) allows everything — the plain write path of tests and
+   * shells.
+   */
+  beforeOwnerInput: ((terminalId: string, data: string) => OwnerInputVerdict) | null = null
 
   constructor(options: PtySessionOptions) {
     super()
@@ -398,10 +421,26 @@ export class PtySession extends EventEmitter {
   }
 
   write(data: string): void {
+    // The producer guard runs BEFORE the bytes reach the child (Sol r4 P0-1a):
+    // preemption after proc.write cannot stop a competing submission, only
+    // relabel it. A refused write delivers nothing and announces nothing.
+    if (this.beforeOwnerInput?.(this.terminalId, data) === 'preempt-failed') return
     this.proc.write(data)
     // Every input path (renderer keystrokes, `cookrew ask`, routines) funnels
     // through here, so turn tracking can observe prompts uniformly.
     this.emit('input', data)
+  }
+
+  /**
+   * The dispatch engine's OWN delivery through this PTY — the reattach
+   * fallback, and nothing else (Sol r4 P0-1a/b). Bypasses the owner guard
+   * (the dispatch must not preempt itself) and tags the input event with its
+   * source, so the tracker's fallback exemption keys on PROVENANCE, never on
+   * byte equality — an owner typing the identical bytes is still an owner.
+   */
+  writeFromDispatch(data: string): void {
+    this.proc.write(data)
+    this.emit('input', data, 'dispatch')
   }
 
   /**

@@ -486,6 +486,114 @@ describe('createRestoreHandlers', () => {
       expect(result.ok).toBe(true)
     })
 
+    it('restore refuses while a dispatch is armed — attached phase cannot see it (Sol r4 P1)', async () => {
+      // A detached/background agent mid-dispatch reads as phase null: the
+      // old guard passed, and restore killed the CLI and forked the session
+      // file out from under a live commercial reservation.
+      const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
+      const cwd = path.join(tmp, 'project')
+      const node = makeNode({ cwd, claudeSessionId: 'aa000000-0000-4000-8000-000000000001' })
+      writeSession(cwd, 'aa000000-0000-4000-8000-000000000001', sessionLines('aa000000-0000-4000-8000-000000000001'), tmp)
+      const { deps, calls } = makeDeps(() => node, {
+        projectsDir: tmp,
+        checkpointRefs: [{ index: 1, id: U1 }]
+      })
+      deps.phaseOf = () => null // detached: the tracker cannot see the agent
+      deps.hasArmedDispatch = (id) => id === 't1'
+
+      const result = await createRestoreHandlers(deps).restoreCheckpoint('t1', 1)
+
+      expect(result.ok).toBe(false)
+      expect(result.reason).toMatch(/dispatch in flight/i)
+      expect(deps.ptys.killAndWait).not.toHaveBeenCalled()
+      expect(calls.updates).toHaveLength(0)
+    })
+
+    it('undo refuses while a dispatch is armed', async () => {
+      const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
+      const cwd = path.join(tmp, 'project')
+      writeSession(cwd, 'aa000000-0000-4000-8000-000000000004', sessionLines('aa000000-0000-4000-8000-000000000004'), tmp)
+      const node = makeNode({
+        cwd,
+        claudeSessionId: 'aa000000-0000-4000-8000-000000000002',
+        restoreStack: [{ sessionId: 'aa000000-0000-4000-8000-000000000004', at: Date.now(), rewoundToIndex: 2 }]
+      })
+      const { deps, calls } = makeDeps(() => node, { projectsDir: tmp })
+      deps.hasArmedDispatch = () => true
+
+      const result = await createRestoreHandlers(deps).undoRestore('t1')
+
+      expect(result.ok).toBe(false)
+      expect(result.reason).toMatch(/dispatch in flight/i)
+      expect(deps.ptys.killAndWait).not.toHaveBeenCalled()
+      expect(calls.updates).toHaveLength(0)
+    })
+
+    it('restore refuses on an OPEN TURN fact — detached human work counts too', async () => {
+      const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
+      const cwd = path.join(tmp, 'project')
+      const node = makeNode({ cwd, claudeSessionId: 'aa000000-0000-4000-8000-000000000001' })
+      writeSession(cwd, 'aa000000-0000-4000-8000-000000000001', sessionLines('aa000000-0000-4000-8000-000000000001'), tmp)
+      const { deps } = makeDeps(() => node, {
+        projectsDir: tmp,
+        checkpointRefs: [{ index: 1, id: U1 }]
+      })
+      deps.hasOpenWork = (id) => id === 't1'
+
+      const result = await createRestoreHandlers(deps).restoreCheckpoint('t1', 1)
+
+      expect(result.ok).toBe(false)
+      expect(result.reason).toMatch(/open turn in flight/i)
+      expect(deps.ptys.killAndWait).not.toHaveBeenCalled()
+    })
+
+    it('a dispatch arming DURING checkpoint resolution is caught at the pre-kill guard', async () => {
+      // Both guard points consult the dispatch facts: quiet at entry, armed
+      // by the time the multi-MB checkpoint read resolved — the TOCTOU
+      // re-check must refuse before the kill.
+      const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
+      const cwd = path.join(tmp, 'project')
+      const node = makeNode({ cwd, claudeSessionId: 'aa000000-0000-4000-8000-000000000001' })
+      writeSession(cwd, 'aa000000-0000-4000-8000-000000000001', sessionLines('aa000000-0000-4000-8000-000000000001'), tmp)
+      const { deps, calls } = makeDeps(() => node, {
+        projectsDir: tmp,
+        checkpointRefs: [{ index: 1, id: U1 }]
+      })
+      let armed = false
+      deps.hasArmedDispatch = () => armed
+      const originalRefs = deps.traces.checkpointRefs
+      deps.traces.checkpointRefs = async (id: string) => {
+        const refs = await originalRefs(id)
+        armed = true // the dispatch lands while the read was in flight
+        return refs
+      }
+
+      const result = await createRestoreHandlers(deps).restoreCheckpoint('t1', 1)
+
+      expect(result.ok).toBe(false)
+      expect(result.reason).toMatch(/dispatch in flight/i)
+      expect(deps.ptys.killAndWait).not.toHaveBeenCalled()
+      expect(calls.updates).toHaveLength(0)
+      // No orphaned truncated session copy was left behind either.
+      expect(readdirSync(claudeProjectDir(cwd, tmp)).filter((f) => f.endsWith('.jsonl'))).toHaveLength(1)
+    })
+
+    it('quiet agents with no dispatch facts wired restore exactly as before', async () => {
+      const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
+      const cwd = path.join(tmp, 'project')
+      const node = makeNode({ cwd, claudeSessionId: 'aa000000-0000-4000-8000-000000000001' })
+      writeSession(cwd, 'aa000000-0000-4000-8000-000000000001', sessionLines('aa000000-0000-4000-8000-000000000001'), tmp)
+      const { deps } = makeDeps(() => node, {
+        projectsDir: tmp,
+        checkpointRefs: [{ index: 1, id: U1 }]
+      })
+      deps.hasArmedDispatch = () => false
+      deps.hasOpenWork = () => false
+
+      const result = await createRestoreHandlers(deps).restoreCheckpoint('t1', 1)
+      expect(result.ok).toBe(true)
+    })
+
     it('H1: refuses when the agent goes busy DURING checkpoint resolution (TOCTOU re-check)', async () => {
       const tmp = mkdtempSync(path.join(tmpdir(), 'restore-'))
       const cwd = path.join(tmp, 'project')

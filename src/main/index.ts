@@ -17,6 +17,7 @@ import {
   DispatchService,
   appendDispatchRecord,
   appendDispatchTombstone,
+  compactDispatchRegistry,
   defaultDispatchRegistry,
   readDispatchRecords,
   readDispatchTombstones,
@@ -433,6 +434,10 @@ function spawnTracked(t: {
   // Before the spawn, because the spawn is what makes the pane exist.
   const timingBoot = beginBootTiming(t.id)
   const session = ptys.spawn({ terminalId: t.id, command: effective, cwd: t.cwd, card })
+  // One producer per conversation: every owner keystroke consults the
+  // tracker BEFORE the byte reaches the child; a dispatch in flight is
+  // preempted durably or the write is refused (Sol r4 P0-1).
+  session.beforeOwnerInput = (terminalId, data) => turns.guardOwnerInput(terminalId, data)
   // A terminal that dies before it is ready never booted: drop the pending
   // sample rather than leave it to time out. Registered only when a sample is
   // actually open — spawnTracked is called repeatedly for a REUSED session
@@ -729,7 +734,14 @@ const dispatchService = new DispatchService({
     return { name: hit.node.name, workspaceId: hit.workspaceId }
   },
   sessionNameFor,
-  sessionExists: (name) => multiplexer()?.sessionExists(name) === true,
+  // Admission reads the bounded-staleness inventory (500ms) — a fresh herdr
+  // fork per concurrent POST serialized the main thread (Sol r4/I6). A pane
+  // that died inside the window becomes a classified delivery failure.
+  sessionExists: (name) => {
+    const mux = multiplexer()
+    if (mux instanceof HerdrHostMultiplexer) return mux.sessionExistsCached(name)
+    return mux?.sessionExists(name) === true
+  },
   capture: (name) => multiplexer()?.capture(name) ?? null,
   // The deep read the landing check needs: "is the prompt on screen?" is what
   // a re-send hangs on, and a viewport-sized capture answers no for every
@@ -746,6 +758,10 @@ const dispatchService = new DispatchService({
   // Confirmed delivery hands the tracker the EXACT prompt: scrape closure
   // then correlates on delivered text, never on a truncated screen echo.
   noteDelivered: (agentId, prompt) => turns.noteDispatchDelivered(agentId, prompt),
+  // Proven non-delivery retracts the attempted fact — and ONLY proven: an
+  // unconfirmed submission keeps its bytes so a settled scrape turn can
+  // still be correlated when they arrive late.
+  retractDelivered: (agentId, prompt) => turns.retractDispatchDelivered(agentId, prompt),
   clearDispatch: (agentId, dispatchId) => turns.clearDispatch(agentId, dispatchId),
   // Accept time: the dispatch's turn must land in a watched session file, and
   // the pin holds that watch open until the record closes (v5 A4). False =
@@ -789,6 +805,10 @@ const dispatchService = new DispatchService({
   loadRecords: () => readDispatchRecords(defaultDispatchRegistry()),
   persistTombstone: (tombstone) => appendDispatchTombstone(defaultDispatchRegistry(), tombstone),
   loadTombstones: () => readDispatchTombstones(defaultDispatchRegistry()),
+  // Hydrate-time atomic compaction: the append-only registry stays bounded
+  // across a commercial lifetime instead of parsing every historical line
+  // on every restart forever.
+  compactRegistry: () => void compactDispatchRegistry(defaultDispatchRegistry()),
   // "Cannot say" (absent liveness) must never classify a failure as death —
   // only a positive dead answer routes delivery errors to 'interrupted'.
   backendAlive: () => {
@@ -802,7 +822,7 @@ const dispatchService = new DispatchService({
   reattachFallback: async (agentId, prompt) => {
     const session = ptys.get(agentId)
     if (!session) return false
-    await pasteAndSubmit(session, prompt)
+    await pasteAndSubmit(session, prompt, (data) => session.writeFromDispatch(data))
     return true
   }
 })
@@ -810,12 +830,22 @@ const dispatchService = new DispatchService({
 // Backend death reaches the dispatch plane the moment the supervisor sees it:
 // every open record the dead server hosted is stamped interrupted (billed as
 // infrastructure, never as the agent failing), not left to the sweep.
-ptys.onBackendDeath = (why) => dispatchService.onBackendDeath(why)
+ptys.onBackendDeath = (why) => {
+  dispatchService.onBackendDeath(why)
+  // Every pane died with the server: no first-party open-turn fact can
+  // outlive the process it observed.
+  for (const node of store.terminalsAcross()) turns.clearOpenTurnFact(node.id)
+}
 // Owner typing into an agent mid-dispatch takes the agent over: the dispatch
 // is interrupted BEFORE the owner's turn opens, so exact-bytes identity can
 // never be asked to distinguish two producers on one conversation (Sol r3).
-turns.onOwnerPreempt = (terminalId) =>
+turns.onOwnerPreempt = (terminalId) => {
   dispatchService.interruptAgent(terminalId, 'preempted by owner input')
+  // Success = the interrupt actually landed (fail-closed ledger can park it
+  // open); a false verdict refuses the owner's write rather than letting two
+  // producers share one conversation.
+  return !dispatchService.hasOpenDispatch(terminalId)
+}
 
 /**
  * How often the sweep looks for dispatches nothing will ever close (D1).
@@ -1116,6 +1146,7 @@ function recoverAgent(id: string): RecoverResult {
 
 async function removeNode(id: string): Promise<void> {
   dispatchService.interruptAgent(id, 'terminal removed')
+  turns.clearOpenTurnFact(id)
   sessionSync.unwatch(id)
   turns.untrack(id)
   // NOTE: turn history is deliberately NOT cleared on kill — it is the third
@@ -1698,7 +1729,12 @@ app.whenReady().then(() => {
     spawnTracked,
     // Restore/undo kill the CLI; refuse while a turn is in flight so the
     // session file is never truncated out from under a writing process.
-    phaseOf: (id) => turns.list().find((a) => a.terminalId === id)?.phase ?? null
+    phaseOf: (id) => turns.list().find((a) => a.terminalId === id)?.phase ?? null,
+    // A detached/background target has no tracked phase but may carry an
+    // armed dispatch or an open-turn fact — restore must not kill and rebind
+    // a session mid-commissioned-work (Sol r4).
+    hasArmedDispatch: (id) => turns.hasArmedDispatch(id),
+    hasOpenWork: (id) => turns.hasOpenTurnFact(id)
   })
 
   startSocketServer({
@@ -2012,7 +2048,9 @@ function registerIpc(handlers: RestoreHandlers): void {
         dispatchService.completeTurn(dispatchId, {
           turnIndex: completed?.index ?? 0,
           ...(completed?.reply !== undefined ? { reply: completed.reply } : {}),
-          ...(outcome !== undefined ? { outcome } : {})
+          ...(outcome !== undefined ? { outcome } : {}),
+          // The answering identity survives rewinds; the ordinal is display.
+          ...(completed?.uuid !== undefined ? { uuid: completed.uuid } : {})
         })
       }
     }

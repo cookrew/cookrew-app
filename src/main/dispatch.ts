@@ -24,7 +24,20 @@
 // preceded by reading the transcript. Never blind.
 
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
+import {
+  appendFileSync,
+  chmodSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeSync
+} from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 
@@ -57,6 +70,31 @@ export type ObserverGrade = 'native-file' | 'scrape'
  */
 export type TurnOutcome = 'done' | 'failed' | 'interrupted'
 
+/**
+ * PROVENANCE of a terminal intent (Sol r4 P1): who observed the ending.
+ * 'parser' is a fact about the turn itself — a durable native record with an
+ * outcome; 'infrastructure' is a fact about the machinery around it (backend
+ * death, restart, timeout sweep, failed delivery). At equal projected STATE,
+ * parser evidence outranks infrastructure: a parser-proven `interrupted`
+ * carrying the answering turn's identity must never be replaced by a generic
+ * infrastructure interruption that carries nothing.
+ */
+export type TerminalEvidence = 'parser' | 'infrastructure'
+
+/**
+ * A durable FINAL record already answering an open dispatch — what the
+ * hasFinalAnswer dep returns (Sol r4 P0-3). No longer a boolean: the sweep
+ * needs the record's own outcome and identity so it can commit THAT verdict
+ * through the normal completion path instead of converting a proven answer
+ * into `interrupted: no outcome within 10 minutes`.
+ */
+export interface FinalTurnAnswer {
+  turnIndex: number
+  uuid?: string
+  outcome?: TurnOutcome
+  reply?: string
+}
+
 export interface DispatchRecord {
   id: string
   agentId: string
@@ -70,10 +108,12 @@ export interface DispatchRecord {
   /** Idempotency is consumer-scoped; absent for owner calls. */
   consumer?: string
   /**
-   * sha256 of the normalized prompt (promptFingerprint). The idempotency key
-   * says "this is the same work"; the hash is what lets the service CHECK
-   * that claim — one key fronting two different briefs is refused instead of
-   * silently replaying whichever brief arrived first.
+   * Versioned sha256 of the EXACT request bytes (promptFingerprint). The
+   * idempotency key says "this is the same work"; the hash is what lets the
+   * service CHECK that claim — one key fronting two different briefs is
+   * refused instead of silently replaying whichever brief arrived first.
+   * Compared only across the same fingerprint version (fingerprintsConflict);
+   * legacy bare-hex rows were lossy and cannot prove sameness against v2.
    */
   promptHash?: string
   /**
@@ -85,6 +125,14 @@ export interface DispatchRecord {
   confirmed?: boolean
   /** The turn that answered this dispatch (correlated via CompletedTurn). */
   turnIndex?: number
+  /**
+   * STABLE identity of the answering turn — the harness's own message uuid
+   * (Sol r4 P1). `turnIndex` is a display ordinal a rewind or branch switch
+   * can reuse for entirely different work; the uuid survives index shifts, so
+   * receipts and audits resolve the exchange by THIS when present. Absent for
+   * harnesses without durable per-turn ids (scrape-only closures).
+   */
+  turnUuid?: string
   /**
    * The agent's answer, IN MEMORY ONLY — it is dropped from the persisted row
    * and from the HTTP projection alike (F4/D3). The text lives in the turn
@@ -192,9 +240,23 @@ export interface DispatchDeps {
    * two grades differ only in confidence (the record's `confirmed` flag keeps
    * the distinction); for prompt-of-record purposes the tracker treats them
    * the same, because the only turn these bytes can open is the dispatched
-   * one. NOT called when non-delivery was positively proven.
+   * one. Registered at ATTEMPTED grade BEFORE the blocking native submission
+   * (Sol r4 P1): herdr `agent prompt` blocks until the agent leaves working,
+   * so a fact registered only afterwards can arrive after the scrape already
+   * settled the turn — too late to be its prompt-of-record. Re-called at
+   * confirmation (done / landed / unproven), which refreshes the fact and
+   * lets the tracker replay closure for a turn that settled unprovable.
    */
   noteDelivered?: (agentId: string, prompt: string) => void
+  /**
+   * The attempted-delivery fact registered before submission turned out to be
+   * FALSE: non-delivery was positively proven (nonDeliveryProven — the pane
+   * never moved, no echo, agent not busy). Wired by the conductor to
+   * TurnTracker.retractDispatchDelivered so the fallback's re-send is never
+   * correlated against a delivery that never happened. Called ONLY on proven
+   * non-delivery — an unproven absence keeps the fact.
+   */
+  retractDelivered?: (agentId: string, prompt: string) => void
   /**
    * The dispatch is accepted: start the tracking it depends on (v5 A4 —
    * tracking follows work). Called once per accepted dispatch, after the
@@ -215,14 +277,16 @@ export interface DispatchDeps {
    */
   beginWork: (agentId: string) => 'native-file' | 'scrape' | boolean
   /**
-   * Does a durable FINAL record answering (prompt, armedAt) already exist for
-   * this agent (Sol r3 P0-6)? The sweep asks it before sparing a stale
-   * dispatch on a working idleSignal: a stuck status feed must not outrank a
-   * parser-proven final row forever. The conductor wires this to a tracker
-   * history scan (TurnTracker.hasFinalAnswer). Absent = cannot say, and the
-   * working spare stands as before.
+   * The durable FINAL record answering (prompt, armedAt), when one exists for
+   * this agent (Sol r3 P0-6, payload per Sol r4 P0-3). The sweep asks it for
+   * every stale dispatch: a matching record's own outcome is committed via
+   * the normal completion path — timeout-interrupt is reserved for dispatches
+   * with NO durable terminal record — and a stuck 'working' status feed
+   * cannot outrank parser-proven finality. The conductor wires this to a
+   * tracker history scan (TurnTracker.hasFinalAnswer). Absent or null =
+   * cannot say, and the working spare / timeout classification stand.
    */
-  hasFinalAnswer?: (agentId: string, prompt: string, armedAt: number) => boolean
+  hasFinalAnswer?: (agentId: string, prompt: string, armedAt: number) => FinalTurnAnswer | null
   /**
    * Has the observer a native-file acceptance was predicated on actually
    * MATERIALIZED (Sol r3 P1-17)? A watchSpec is a path-shaped promise, not a
@@ -259,6 +323,16 @@ export interface DispatchDeps {
   loadRecords?: () => DispatchRecord[]
   /** Tombstone lines from the registry, for rebuilding the key index at boot. */
   loadTombstones?: () => DispatchTombstone[]
+  /**
+   * Compact the physical registry file (Sol r4 P1). Called exactly once, at
+   * the END of hydrate — after the restart interrupts and prune have landed
+   * their rows, so dead weight is measured against the final live set — and
+   * NEVER mid-run: the service appends while it runs, and a rewrite racing
+   * an append loses rows. The conductor wires this to
+   * `compactDispatchRegistry(defaultDispatchRegistry())`; absent = a
+   * memory-only service (tests) with no file to bound.
+   */
+  compactRegistry?: () => void
   /**
    * Cheap backend liveness probe. Used ONLY to classify a failed delivery:
    * promptAgent failing while the server is provably gone is `interrupted`
@@ -352,13 +426,48 @@ export function promptAnswersDispatch(turnPrompt: string, dispatchedPrompt: stri
 }
 
 /**
+ * Version marker on every fingerprint this build writes. v1 (the bare-hex
+ * legacy) hashed a trimmed/lowercased/whitespace-collapsed prompt, which
+ * aliased byte-distinct work — `build:\n\tmake all` and `BUILD: make all`
+ * fingerprinted identically (Sol r4 P0-2). v2 hashes the EXACT request bytes.
+ */
+export const PROMPT_FINGERPRINT_VERSION = 'v2'
+
+/**
  * Request fingerprint for idempotency-key reuse detection: sha256 over the
- * same normalization as everything else here. Stored on the record (and on
- * the key's tombstone), so "same key, different work" stays detectable for as
- * long as the key itself is honored.
+ * EXACT request bytes — no trim, no case fold, no whitespace collapse
+ * (Sol r4 P0-2). Case and indentation are semantic in source, shell, YAML and
+ * Make recipes, so one key fronting two byte-distinct briefs must be refused,
+ * never silently replayed. Lossy normalization survives ONLY inside screen
+ * landing detection (promptLanded), where the fuzz describes a rendering.
+ * Stored on the record (and on the key's tombstone), so "same key, different
+ * work" stays detectable for as long as the key itself is honored.
  */
 export function promptFingerprint(prompt: string): string {
-  return createHash('sha256').update(normalize(prompt)).digest('hex')
+  return `${PROMPT_FINGERPRINT_VERSION}:${createHash('sha256').update(prompt, 'utf8').digest('hex')}`
+}
+
+/** A bare-hex legacy hash predates version markers — it is v1 by definition. */
+function fingerprintVersion(hash: string): string {
+  const colon = hash.indexOf(':')
+  return colon === -1 ? 'v1' : hash.slice(0, colon)
+}
+
+/**
+ * Do two stored fingerprints PROVE the same key fronts different work?
+ * Comparable only when both sides exist AND carry the same fingerprint
+ * version: a v1 hash was lossy, so measuring it against a v2 exact-bytes hash
+ * proves nothing in either direction. MIGRATION NOTE (Sol r4 P0-2): records
+ * written before v2 keep their v1 hashes; a retry of such a key with a
+ * different brief passes this check unproven and replays — a one-time miss
+ * window that closes as v1 rows age out of the 90-day idempotency TTL. The
+ * alternative (409ing every cross-version retry) would refuse every honest
+ * replay of pre-upgrade work.
+ */
+export function fingerprintsConflict(a: string | undefined, b: string | undefined): boolean {
+  if (a === undefined || b === undefined) return false
+  if (fingerprintVersion(a) !== fingerprintVersion(b)) return false
+  return a !== b
 }
 
 /**
@@ -591,16 +700,161 @@ function readRegistryLines<T>(file: string, pick: (parsed: unknown) => T | null)
   }
 }
 
+// ---- registry compaction (Sol r4 P1: the physical ledger stays bounded) ----
+
+/**
+ * Compact when at least this fraction of the file's parseable lines are dead
+ * weight (superseded transitions, buried records, expired tombstones)…
+ */
+export const REGISTRY_COMPACT_DEAD_FRACTION = 0.5
+/** …or when the file has grown past this size with ANY dead weight at all. */
+export const REGISTRY_COMPACT_MIN_BYTES = 4 * 1024 * 1024
+
+/**
+ * Where the rewrite lands before the atomic rename. Deterministic and in the
+ * SAME directory as the registry (rename must not cross filesystems); a crash
+ * between temp-write and rename leaves the original registry untouched and
+ * the orphaned temp file is simply overwritten by the next compaction.
+ */
+export function compactionTempPath(file: string): string {
+  return `${file}.compacting`
+}
+
+export interface RegistryCompaction {
+  /** True when the file was actually rewritten. */
+  rewritten: boolean
+  /** Lines the live set needs (kept on rewrite; measured either way). */
+  liveLines: number
+  /** Parseable lines the live set does NOT need. */
+  droppedLines: number
+}
+
+/**
+ * Crash-safe compaction of the append-only registry (Sol r4 P1). Every
+ * transition, buried record and expired tombstone used to stay in the file
+ * forever: prune deleted only in-memory entries, so a commercial workload had
+ * unbounded disk growth AND unbounded restart parsing (hydration re-reads the
+ * whole file every boot).
+ *
+ * HYDRATE-TIME ONLY, never mid-run: the service appends while it runs, and a
+ * rewrite racing an append would lose the appended row. The single-process
+ * boundary at hydrate — before any dispatch is accepted — is the one moment
+ * the file has exactly one writer with nothing in flight.
+ *
+ * PRESERVED, exactly one line each: every OPEN record (a reservation is never
+ * dropped, however old), every closed record within RECORD_RETENTION_MS,
+ * every closed-but-unburied record that still carries an idempotency key (the
+ * key's promise lives on the record until prune lands its tombstone), and the
+ * latest unexpired tombstone per scope. DROPPED: superseded transition lines
+ * (only the last line per id is a record's current state), records already
+ * superseded by an equal-or-newer burial (the tombstone is the survivor —
+ * hydration would skip the row anyway), keyless closed records past
+ * retention, and tombstones past IDEMPOTENCY_TTL_MS.
+ *
+ * ATOMIC: live lines go to a temp file (0600, same directory), fsync'd, then
+ * renamed over the registry — the same temp+rename pattern the receipts
+ * ledger uses. Any failure leaves the original registry byte-identical; the
+ * temp file is best-effort unlinked and the error is loud, never fatal.
+ */
+export function compactDispatchRegistry(
+  file: string,
+  now: number = Date.now()
+): RegistryCompaction {
+  const untouched = { rewritten: false, liveLines: 0, droppedLines: 0 }
+  try {
+    if (!existsSync(file)) return untouched
+    const records = readDispatchRecords(file)
+    const tombstones = readDispatchTombstones(file)
+    const totalLines = records.length + tombstones.length
+
+    // Append-only means the LAST line per id is the record's current state.
+    const lastById = new Map<string, { row: DispatchRecord; at: number }>()
+    records.forEach((row, at) => lastById.set(row.id, { row, at }))
+    // Latest tombstone per scope — an older duplicate says nothing newer.
+    const latestByScope = new Map<string, { row: DispatchTombstone; at: number }>()
+    tombstones.forEach((row, at) => {
+      const held = latestByScope.get(row.scope)
+      if (held === undefined || row.closedAt >= held.row.closedAt) {
+        latestByScope.set(row.scope, { row, at })
+      }
+    })
+
+    const retentionCutoff = now - RECORD_RETENTION_MS
+    const keptRecords = [...lastById.values()].filter(({ row }) => {
+      if (!TERMINAL_STATES.has(row.state)) return true
+      const scope =
+        row.idempotencyKey !== undefined
+          ? idempotencyScope(row.consumer, row.idempotencyKey)
+          : null
+      const buried = scope !== null ? latestByScope.get(scope)?.row : undefined
+      // An equal-or-newer burial supersedes the row entirely (hydration's own
+      // rule): the tombstone is the survivor — and when the tombstone has
+      // expired too, both are gone and no suppression is needed, because the
+      // record no longer exists to be wrongly resurrected.
+      if (buried !== undefined && buried.closedAt >= row.updatedAt) return false
+      // Closed past retention: droppable only when it carries no key — a
+      // keyed record whose burial never landed is still the key's only
+      // carrier, and dropping it would silently re-run replayed work.
+      if (row.updatedAt < retentionCutoff && scope === null) return false
+      return true
+    })
+    const tombstoneExpiry = now - IDEMPOTENCY_TTL_MS
+    const keptTombstones = [...latestByScope.values()].filter(
+      ({ row }) => row.closedAt >= tombstoneExpiry
+    )
+
+    const liveLines = keptRecords.length + keptTombstones.length
+    const droppedLines = totalLines - liveLines
+    if (droppedLines <= 0) return { rewritten: false, liveLines, droppedLines: 0 }
+    const deadFraction = totalLines === 0 ? 0 : droppedLines / totalLines
+    if (
+      deadFraction < REGISTRY_COMPACT_DEAD_FRACTION &&
+      statSync(file).size < REGISTRY_COMPACT_MIN_BYTES
+    ) {
+      return { rewritten: false, liveLines, droppedLines }
+    }
+
+    // Original file order preserved (by each survivor's last line position):
+    // reload semantics are order-sensitive only in that later lines supersede
+    // earlier ones, and every survivor now appears exactly once.
+    const lines = [
+      ...keptRecords.sort((a, b) => a.at - b.at).map(({ row }) => JSON.stringify(row)),
+      ...keptTombstones.sort((a, b) => a.at - b.at).map(({ row }) => JSON.stringify(row))
+    ]
+    const tmp = compactionTempPath(file)
+    const fd = openSync(tmp, 'w', 0o600)
+    try {
+      if (lines.length > 0) writeSync(fd, `${lines.join('\n')}\n`)
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+    try {
+      renameSync(tmp, file)
+    } catch (error) {
+      // The original registry is still byte-identical — only the temp is
+      // stale. Drop it (best effort) and report the failure loudly.
+      try {
+        unlinkSync(tmp)
+      } catch {
+        // the orphan is overwritten by the next compaction attempt
+      }
+      throw error
+    }
+    return { rewritten: true, liveLines, droppedLines }
+  } catch (error) {
+    console.error('Dispatch registry compaction failed (registry left as-is):', error)
+    return untouched
+  }
+}
+
 const TERMINAL_STATES: ReadonlySet<DispatchState> = new Set(['done', 'failed', 'interrupted'])
 
 /**
  * Evidence-precedence lattice for competing terminal intents (Sol r3 P0-3).
- * Parser-proven `done` outranks `failed`, which outranks an infrastructure
- * `interrupted` — the earlier facts are observations of the turn itself,
- * the last is an observation of the machinery around it. A parked stronger
- * intent is never replaced by a weaker one; only a stronger (or equal —
- * fresher reason, same fact) verdict may replace. Non-terminal states rank
- * below everything, though nothing non-terminal ever reaches the comparison.
+ * `done` outranks `failed`, which outranks `interrupted` — state strength is
+ * the FIRST axis. Non-terminal states rank below everything, though nothing
+ * non-terminal ever reaches the comparison.
  */
 const EVIDENCE_STRENGTH: Readonly<Record<DispatchState, number>> = {
   done: 3,
@@ -608,6 +862,48 @@ const EVIDENCE_STRENGTH: Readonly<Record<DispatchState, number>> = {
   interrupted: 1,
   running: 0,
   submitted: 0
+}
+
+/** A terminal intent held while its append fails: the row plus who proved it. */
+interface ParkedIntent {
+  record: DispatchRecord
+  evidence: TerminalEvidence
+}
+
+/**
+ * Compare two terminal intents (Sol r4 P1): state strength first, then
+ * PROVENANCE — parser outranks infrastructure at equal state, because "the
+ * durable record says this turn was interrupted, at index N" is a fact about
+ * the turn while "the backend died" is a fact about the machinery. Positive =
+ * the parked intent wins (newcomer discarded); negative = the newcomer wins
+ * (intent replaced); zero = same state AND same provenance — the newcomer
+ * lands but MERGES the parked intent's metadata (turnIndex/uuid/reply) rather
+ * than erasing evidence it does not itself carry.
+ */
+function compareTerminalIntents(
+  parked: { state: DispatchState; evidence: TerminalEvidence },
+  next: { state: DispatchState; evidence: TerminalEvidence }
+): number {
+  const rank = (intent: { state: DispatchState; evidence: TerminalEvidence }): number =>
+    EVIDENCE_STRENGTH[intent.state] * 2 + (intent.evidence === 'parser' ? 1 : 0)
+  return rank(parked) - rank(next)
+}
+
+/** Equal-evidence merge: keep the parked row's answering-turn identity. */
+function mergeTerminalMeta(parked: DispatchRecord, next: DispatchRecord): DispatchRecord {
+  return {
+    ...next,
+    ...(next.turnIndex === undefined && parked.turnIndex !== undefined
+      ? { turnIndex: parked.turnIndex }
+      : {}),
+    ...(next.turnUuid === undefined && parked.turnUuid !== undefined
+      ? { turnUuid: parked.turnUuid }
+      : {}),
+    ...(next.reply === undefined && parked.reply !== undefined ? { reply: parked.reply } : {}),
+    ...(next.hasReply === undefined && parked.hasReply !== undefined
+      ? { hasReply: parked.hasReply }
+      : {})
+  }
 }
 
 /**
@@ -647,12 +943,12 @@ export class DispatchService {
   /** dispatchId → the async delivery leg, for tests and for shutdown. */
   private readonly inFlight = new Map<string, Promise<void>>()
   /**
-   * dispatchId → the terminal row whose durable append failed (commitTerminal).
-   * The record it belongs to is held open with a ledgerFault mark; every sweep
-   * pass retries the append, and the release fires when — and only when — a
-   * row lands.
+   * dispatchId → the terminal row whose durable append failed (commitTerminal)
+   * plus the PROVENANCE that decided it (Sol r4 P1). The record it belongs to
+   * is held open with a ledgerFault mark; every sweep pass retries the append,
+   * and the release fires when — and only when — a row lands.
    */
-  private readonly ledgerFaults = new Map<string, DispatchRecord>()
+  private readonly ledgerFaults = new Map<string, ParkedIntent>()
   /**
    * dispatchId → in-memory facts about an OPEN dispatch that never touch the
    * ledger: the exact delivered prompt (privacy — rows carry only its hash),
@@ -736,6 +1032,15 @@ export class DispatchService {
     // the process has a full view of them.
     this.sweep()
     this.prune()
+    // Registry compaction LAST (Sol r4 P1): the interrupts and burials above
+    // have appended their rows, so the file now holds the full live set plus
+    // every line it no longer needs — the one safe, single-writer moment to
+    // rewrite it. A failing dep must not take hydration down with it.
+    try {
+      this.deps.compactRegistry?.()
+    } catch (error) {
+      console.error('Dispatch registry compaction hook failed:', error)
+    }
   }
 
   private now(): number {
@@ -788,11 +1093,15 @@ export class DispatchService {
    * the handle: GET /api/dispatches/:id is where the answer shows up.
    */
   async dispatch(agentId: string, input: DispatchInput): Promise<DispatchResponse> {
-    const prompt = (input.text ?? input.brief ?? '').trim()
+    // The caller's EXACT bytes, delivered as sent (Sol r4 P0-2): trimming
+    // before delivery meant the ledger fingerprinted (and the agent received)
+    // something other than the request — indentation and edges are semantic
+    // in code, shell and Make briefs. Emptiness is still judged on substance.
+    const prompt = input.text ?? input.brief ?? ''
     // Fingerprinted before any refusal: the replay lookup needs it, and it
     // exists only when there is a prompt to fingerprint — an empty retry can
     // still replay by key, it just cannot prove or disprove sameness.
-    const promptHash = prompt.length > 0 ? promptFingerprint(prompt) : undefined
+    const promptHash = prompt.trim().length > 0 ? promptFingerprint(prompt) : undefined
 
     // A REPLAY outruns EVERY refusal below — busy, 404 and 400 included. The
     // retry a flaky network produces can arrive while the original is still
@@ -809,23 +1118,17 @@ export class DispatchService {
         // Same key fronting a DIFFERENT brief is a caller bug: replaying
         // would hand back a result for a prompt this caller did not send, and
         // running it would break the key's promise. Checkable only when both
-        // sides carry a fingerprint (pre-upgrade rows do not).
-        if (
-          promptHash !== undefined &&
-          held?.promptHash !== undefined &&
-          held.promptHash !== promptHash
-        ) {
+        // sides carry a fingerprint OF THE SAME VERSION (pre-upgrade rows are
+        // missing or lossy-v1 — see fingerprintsConflict for the migration
+        // window).
+        if (fingerprintsConflict(held?.promptHash, promptHash)) {
           return { status: 409, body: reused }
         }
         return { status: 200, body: { dispatchId: existing, replay: true } }
       }
       const tombstone = this.tombstones.get(scopedKey)
       if (tombstone !== undefined) {
-        if (
-          promptHash !== undefined &&
-          tombstone.promptHash !== undefined &&
-          tombstone.promptHash !== promptHash
-        ) {
+        if (fingerprintsConflict(tombstone.promptHash, promptHash)) {
           return { status: 409, body: reused }
         }
         // The record itself is pruned: the id, how it closed and "it closed"
@@ -851,7 +1154,7 @@ export class DispatchService {
 
     const agent = this.deps.resolveAgent(agentId)
     if (!agent) return { status: 404, body: { error: 'no such agent' } }
-    if (prompt.length === 0) {
+    if (prompt.trim().length === 0) {
       return { status: 400, body: { error: 'dispatch needs a brief or text' } }
     }
 
@@ -1002,6 +1305,14 @@ export class DispatchService {
     // the single post-submission one below are the only pane reads this leg
     // makes, reused by every question that follows.
     const before = this.deepCapture(sessionName)
+    // The ATTEMPTED-delivery fact goes to the tracker BEFORE the blocking
+    // native submission (Sol r4 P1): herdr `agent prompt` blocks until the
+    // agent leaves working, so a fact registered only on return can arrive
+    // after an attached scrape already opened AND settled the turn — whose
+    // collapsed/absent echo then left its prompt-of-record unprovable and the
+    // dispatch stranded. Registered against the armed generation; retracted
+    // below only on POSITIVE proof of non-delivery.
+    this.deps.noteDelivered?.(agentId, prompt)
     let outcome: 'done' | 'submitted' | 'failed'
     try {
       outcome = await promptAgent(sessionName, prompt, this.deps.timeoutMs ?? DISPATCH_TIMEOUT_MS)
@@ -1061,6 +1372,10 @@ export class DispatchService {
       return
     }
 
+    // Non-delivery is PROVEN: the attempted-delivery fact registered before
+    // the submission is false — retract it, or the fallback's re-send below
+    // would be correlated against a delivery that never happened.
+    this.deps.retractDelivered?.(agentId, prompt)
     await this.fallback(
       dispatchId,
       prompt,
@@ -1123,31 +1438,40 @@ export class DispatchService {
    */
   completeTurn(
     dispatchId: string,
-    result: { turnIndex: number; reply?: string; outcome?: TurnOutcome }
+    result: { turnIndex: number; uuid?: string; reply?: string; outcome?: TurnOutcome }
   ): void {
     const record = this.records.get(dispatchId)
     if (!record || TERMINAL_STATES.has(record.state)) return
     const reply =
       result.reply !== undefined && result.reply.length > 0 ? { reply: result.reply } : {}
+    // The answering turn's STABLE identity rides every terminal projection
+    // (Sol r4 P1): a rewind can reuse turnIndex for different work, the
+    // harness uuid cannot be reused.
+    const identity = {
+      turnIndex: result.turnIndex,
+      ...(result.uuid !== undefined ? { turnUuid: result.uuid } : {})
+    }
     const outcome = result.outcome ?? 'done'
+    // Every branch here is PARSER evidence: the verdict comes from the
+    // answering record itself, interrupted included (Sol r4 P1) — it must
+    // outrank any equal-state infrastructure guess parked beside it.
     if (outcome === 'interrupted') {
-      this.update(dispatchId, {
-        state: 'interrupted',
-        turnIndex: result.turnIndex,
-        error: 'interrupted: the agent turn was interrupted'
-      })
+      this.update(
+        dispatchId,
+        { state: 'interrupted', ...identity, error: 'interrupted: the agent turn was interrupted' },
+        'parser'
+      )
       return
     }
     if (outcome === 'failed') {
-      this.update(dispatchId, {
-        state: 'failed',
-        turnIndex: result.turnIndex,
-        error: 'agent aborted/errored',
-        ...reply
-      })
+      this.update(
+        dispatchId,
+        { state: 'failed', ...identity, error: 'agent aborted/errored', ...reply },
+        'parser'
+      )
       return
     }
-    this.update(dispatchId, { state: 'done', turnIndex: result.turnIndex, ...reply })
+    this.update(dispatchId, { state: 'done', ...identity, ...reply }, 'parser')
   }
 
   /**
@@ -1164,6 +1488,19 @@ export class DispatchService {
   /** Every dispatch still holding a slot — app quit stamps these interrupted. */
   openDispatchIds(): string[] {
     return [...this.reserved.values()]
+  }
+
+  /**
+   * Is any dispatch still OPEN against this agent — reservation held or
+   * record non-terminal (a parked ledger fault keeps both)? The owner
+   * preemption wiring threads this back as its success signal (Sol r4 P0-1d):
+   * after interruptAgent, `!hasOpenDispatch(id)` means the interrupt row
+   * durably committed and the owner's write may proceed; anything still open
+   * means the transition parked fail-closed and the write must be refused.
+   */
+  hasOpenDispatch(agentId: string): boolean {
+    if (this.reserved.has(agentId)) return true
+    return this.openIdsWhere((record) => record.agentId === agentId).length > 0
   }
 
   /**
@@ -1215,19 +1552,39 @@ export class DispatchService {
         record.updatedAt <= cutoff &&
         !this.ledgerFaults.has(record.id)
     )
-    const abandoned = stale.filter((record) => {
-      if (this.idleSignal(this.deps.sessionNameFor(record.agentId)) !== false) return true
-      // A working idleSignal spares the record — UNLESS a durable final row
-      // answering this exact dispatch already exists (Sol r3 P0-6): a status
-      // feed stuck at 'working' must not outrank parser-proven finality
-      // forever. The normal closers should have consumed that row long ago;
-      // if the stamp is somehow gone, this is the path that still closes.
+    // A durable final record answering the dispatch OUTRANKS the timeout
+    // (Sol r4 P0-3): the parser already proved how this turn ended, so the
+    // sweep commits THAT outcome through the normal completion path —
+    // done/failed/interrupted from the record, with its turn identity —
+    // never `interrupted: no outcome within 10 minutes`. It also ends the
+    // working-status veto (Sol r3 P0-6): a feed stuck at 'working' cannot
+    // outrank parser-proven finality forever.
+    const completed: string[] = []
+    const abandoned: DispatchRecord[] = []
+    for (const record of stale) {
       const meta = this.openMeta.get(record.id)
-      return (
-        meta !== undefined &&
-        this.deps.hasFinalAnswer?.(record.agentId, meta.prompt, meta.armedAt) === true
-      )
-    })
+      const final =
+        meta !== undefined
+          ? (this.deps.hasFinalAnswer?.(record.agentId, meta.prompt, meta.armedAt) ?? null)
+          : null
+      if (final !== null) {
+        this.completeTurn(record.id, {
+          turnIndex: final.turnIndex,
+          ...(final.uuid !== undefined ? { uuid: final.uuid } : {}),
+          ...(final.reply !== undefined ? { reply: final.reply } : {}),
+          ...(final.outcome !== undefined ? { outcome: final.outcome } : {})
+        })
+        if (TERMINAL_STATES.has(this.records.get(record.id)?.state ?? record.state)) {
+          completed.push(record.id)
+        }
+        continue
+      }
+      // No durable terminal record: a WORKING agent is spared, however old
+      // the row — positive evidence the turn is still alive. Everything else
+      // is genuinely abandoned and gets the honest timeout interrupt.
+      if (this.idleSignal(this.deps.sessionNameFor(record.agentId)) === false) continue
+      abandoned.push(record)
+    }
     const stamped = this.interruptEach(
       abandoned.map((record) => record.id),
       `interrupted: no outcome within ${Math.round(STALE_DISPATCH_MS / 60_000)} minutes`
@@ -1236,7 +1593,7 @@ export class DispatchService {
     // tombstone could not be appended gets another prune pass every sweep,
     // not only when some other dispatch happens to release.
     this.prune()
-    return [...probationStamped, ...stamped]
+    return [...probationStamped, ...completed, ...stamped]
   }
 
   /**
@@ -1289,7 +1646,11 @@ export class DispatchService {
     return stamped
   }
 
-  private update(dispatchId: string, patch: Partial<DispatchRecord>): void {
+  private update(
+    dispatchId: string,
+    patch: Partial<DispatchRecord>,
+    evidence: TerminalEvidence = 'infrastructure'
+  ): void {
     const record = this.records.get(dispatchId)
     // Async delivery can settle after turn correlation has already closed the
     // dispatch. Terminal states are immutable: a late `running` observation
@@ -1297,7 +1658,7 @@ export class DispatchService {
     if (!record || TERMINAL_STATES.has(record.state)) return
     const next = { ...record, ...patch, updatedAt: this.now() }
     if (TERMINAL_STATES.has(next.state)) {
-      this.commitTerminal(record, next)
+      this.commitTerminal(record, next, evidence)
       return
     }
     this.write(next)
@@ -1314,17 +1675,32 @@ export class DispatchService {
    * mark, the reservation is kept, and the sweep retries the append each
    * pass until it lands.
    */
-  private commitTerminal(open: DispatchRecord, next: DispatchRecord): void {
-    // The lattice gate, BEFORE any append attempt (Sol r3 P0-3): a parked
-    // stronger fact must not be overwritten by a weaker later event even when
-    // the ledger has recovered in between — a parser-proven `done` whose
-    // append failed, followed by onBackendDeath, must retry as done, never
-    // land as interrupted. Only an equal-or-stronger verdict may replace the
-    // parked intent; the weaker one is discarded (the stronger fact already
-    // subsumes its release, when the sweep finally lands the row).
+  private commitTerminal(
+    open: DispatchRecord,
+    next: DispatchRecord,
+    evidence: TerminalEvidence
+  ): void {
+    // The lattice gate, BEFORE any append attempt (Sol r3 P0-3; provenance
+    // per Sol r4 P1): a parked stronger fact must not be overwritten by a
+    // weaker later event even when the ledger has recovered in between — a
+    // parser-proven `done` whose append failed, followed by onBackendDeath,
+    // must retry as done, never land as interrupted. State strength decides
+    // first; at EQUAL state, parser provenance outranks infrastructure (a
+    // parser-proven `interrupted` carrying its turn identity survives a
+    // generic backend-death interruption); equal state AND provenance lands
+    // the newcomer but merges the parked intent's turn identity/metadata
+    // rather than replacing evidence with nothing.
+    let intent = next
     const parked = this.ledgerFaults.get(next.id)
-    if (parked && EVIDENCE_STRENGTH[parked.state] > EVIDENCE_STRENGTH[next.state]) return
-    const { ledgerFault, ...intended } = next
+    if (parked) {
+      const order = compareTerminalIntents(
+        { state: parked.record.state, evidence: parked.evidence },
+        { state: next.state, evidence }
+      )
+      if (order > 0) return
+      if (order === 0) intent = mergeTerminalMeta(parked.record, next)
+    }
+    const { ledgerFault, ...intended } = intent
     if (this.persistRecord(intended) || this.persistRecord(intended)) {
       this.ledgerFaults.delete(intended.id)
       this.records.set(intended.id, intended)
@@ -1337,7 +1713,7 @@ export class DispatchService {
     // the evidence lattice above (a turn completing over a pending interrupt
     // upgrades it; the reverse is discarded), and the release still fires
     // exactly once, when an append finally lands.
-    this.ledgerFaults.set(intended.id, intended)
+    this.ledgerFaults.set(intended.id, { record: intended, evidence })
     this.records.set(intended.id, { ...open, ledgerFault: true })
     console.error(
       `Dispatch ledger append failed for ${intended.id} (state=${intended.state}) — held open with a ledger fault; the sweep retries until it lands`
@@ -1346,7 +1722,7 @@ export class DispatchService {
 
   /** Sweep pass: land every parked terminal row whose append failed. */
   private retryLedgerFaults(): void {
-    for (const [id, intended] of [...this.ledgerFaults]) {
+    for (const [id, { record: intended }] of [...this.ledgerFaults]) {
       if (!this.persistRecord(intended)) continue
       this.ledgerFaults.delete(id)
       const current = this.records.get(id)
