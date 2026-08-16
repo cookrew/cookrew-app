@@ -260,13 +260,30 @@ describe.runIf(usable)('ledger derivation — regenerate from the transcript and
 
   it('is repeatable: the same transcript rebuilds to the same records', () => {
     // Derivation with any nondeterminism in it (a clock, a Map iteration, a
-    // random id) is not derivation.
-    const row = derivable[0]
-    const again = rebuildLedger(target(row.agent))
-    expect(again.ok).toBe(true)
-    expect((again.ok ? again.records : []).map(derivedFields)).toEqual(
-      (row.rebuild.ok ? row.rebuild.records : []).map(derivedFields)
-    )
+    // random id) is not derivation. The property is about the SAME BYTES —
+    // this suite runs against the live corpus, and the most active agent's
+    // transcript grows between module load and this test body (measured: the
+    // Conductor rebuilding itself while running the suite), which is growth,
+    // not nondeterminism. So: rebuild twice back-to-back and only compare
+    // when the file provably did not change between the two reads.
+    for (const row of derivable.slice(0, 8)) {
+      if (!row.rebuild.ok) continue
+      const file = row.rebuild.sessionFile
+      const before = statSync(file)
+      const first = rebuildLedger(target(row.agent))
+      const second = rebuildLedger(target(row.agent))
+      const after = statSync(file)
+      if (before.mtimeMs !== after.mtimeMs || before.size !== after.size) continue
+      expect(first.ok).toBe(true)
+      expect(second.ok).toBe(true)
+      expect((second.ok ? second.records : []).map(derivedFields)).toEqual(
+        (first.ok ? first.records : []).map(derivedFields)
+      )
+      return
+    }
+    // Every candidate was mid-write — determinism cannot be measured on a
+    // moving file; the corpus gates above still verified exactness.
+    expect(derivable.length).toBeGreaterThan(0)
   })
 })
 

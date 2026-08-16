@@ -87,6 +87,14 @@ const DISPATCH_ARM_SLACK_MS = IN_FLIGHT_STAMP_SLACK_MS
  */
 const DELIVERED_PROMPT_WINDOW_MS = RESUME_WINDOW_MS
 
+/**
+ * How long a scrape-emitted latency observation stays matchable against its
+ * file closure before it expires (Sol r3 P1-12). Bounded so the per-terminal
+ * identity set cannot grow for the life of the process; generous enough that
+ * a reconcile lagging the screen by minutes still matches.
+ */
+const SCRAPE_EMIT_TTL_MS = 10 * 60_000
+
 /** Normalized-prefix prompt equality for carrying titles across reconciles. */
 const PROMPT_MATCH_CHARS = 48
 
@@ -170,10 +178,18 @@ interface PendingDispatch {
    * just a start time after the arming — a human ask racing the dispatch into
    * the same agent also starts a turn after armedAt, and a stamp consumed by
    * timestamp alone would bill the caller for that stranger's exchange.
+   * Compared as EXACT bytes (promptAnswersDispatch): with every producer
+   * serialized, exact-bytes + armedAt is the exchange identity.
    */
   prompt: string
   /** Prevents a dispatch from claiming a turn already in flight when it armed. */
   armedAt: number
+  /**
+   * onOwnerPreempt has fired for this dispatch — exactly once. In production
+   * the wired interrupt disarms the stamp synchronously, so this guard only
+   * matters when the callback is absent or chose not to act.
+   */
+  preemptFired?: boolean
 }
 
 /**
@@ -209,6 +225,15 @@ export interface CompletedTurn {
    * the listener must not record a second latency sample for it.
    */
   latencyReported?: boolean
+  /**
+   * How the answering record says the turn ENDED (Sol r3 P1-7): the parser's
+   * native terminal outcome, present only on file-closer events whose record
+   * carries one. Absent = 'done' — the field arrives in a parallel parser
+   * lane and every consumer must tolerate its absence. The dispatch listener
+   * maps it to the record's terminal state (done → done, failed → failed
+   * with reason 'agent aborted/errored', interrupted → interrupted).
+   */
+  outcome?: 'done' | 'failed' | 'interrupted'
 }
 
 /**
@@ -219,6 +244,20 @@ export interface CompletedTurn {
  */
 export class TurnTracker extends EventEmitter {
   private tracked = new Map<string, TrackedTerminal>()
+
+  /**
+   * The local-producer serializer (Sol r3 P0-2c): the owner at the keyboard
+   * submits a NEW prompt into a terminal carrying an armed dispatch. Wired by
+   * the conductor to interrupt that dispatch ('preempted by owner input') —
+   * the owner outranks the machinery, so the machinery stands down rather
+   * than racing the owner's turn for the stamp. Fired at most once per
+   * dispatch, BEFORE the owner's turn opens; the dispatch's own pty-fallback
+   * delivery is exempt (it submits the exact dispatched bytes through the
+   * same input stream). With this plus the HTTP producers' 409s, every
+   * producer at an armed terminal is serialized — the invariant that lets
+   * exact-bytes + armedAt stand as exchange identity.
+   */
+  onOwnerPreempt: ((terminalId: string) => void) | null = null
 
   /** Both injectable for tests; store null = in-memory only. */
   constructor(
@@ -272,12 +311,18 @@ export class TurnTracker extends EventEmitter {
   private deliveredPrompt = new Map<string, { prompt: string; at: number }>()
 
   /**
-   * terminalId → turnStartedAt of the exchange whose latency the scrape has
-   * already emitted publicly, on a FILE-BACKED terminal. The file closer
-   * matching the same exchange still closes the dispatch but flags the event
-   * `latencyReported` so the sample is never counted twice.
+   * terminalId → the turnStartedAt values of exchanges whose latency the
+   * scrape has already emitted publicly, on a FILE-BACKED terminal. The file
+   * closer matching one of these exchanges still closes the dispatch but
+   * flags the event `latencyReported` so the sample is never counted twice.
+   *
+   * Keyed by TURN IDENTITY (startedAt), not one slot per terminal (Sol r3
+   * P1-12): local owner turns are allowed while a dispatch stamp is armed,
+   * so an intervening attached turn must not overwrite the dispatch
+   * exchange's evidence before its file closure. Entries expire when matched
+   * or after SCRAPE_EMIT_TTL_MS.
    */
-  private scrapeEmitted = new Map<string, number>()
+  private scrapeEmitted = new Map<string, Set<number>>()
 
   /**
    * terminalId → epoch ms a turn was OBSERVED to open whose finality has not
@@ -581,10 +626,16 @@ export class TurnTracker extends EventEmitter {
   }
 
   /**
-   * A confirmed native delivery's exact prompt (Sol r2 P1 — the native path
-   * never registers input with the live tracker). Called by the dispatch
-   * service right after submission is confirmed (herdr `done`, or the landing
-   * check finding the echo). If a turn eligible to be the dispatch's answer
+   * A native delivery's exact prompt (Sol r2 P1 — the native path never
+   * registers input with the live tracker). Called by the dispatch service
+   * when submission is CONFIRMED (herdr `done`, or the landing check finding
+   * the echo) — and, at a weaker confidence, when delivery was ATTEMPTED and
+   * non-delivery was NOT proven (Sol r3 P1-9: the collapsed-echo path, where
+   * the prompt usually landed but the screen cannot show it). The tracker
+   * treats both grades the same for prompt-of-record purposes: the only turn
+   * these exact bytes can open is the dispatched one, and the confidence
+   * distinction stays on the dispatch record's `confirmed` flag, not here.
+   * If a turn eligible to be the dispatch's answer
    * is ALREADY opening, the delivered text becomes its prompt-of-record
    * immediately — the screen echo is a rendering, this is the fact. Otherwise
    * the fact waits (DELIVERED_PROMPT_WINDOW_MS) for the turn to open, where
@@ -657,12 +708,23 @@ export class TurnTracker extends EventEmitter {
    * - FULL prompt identity — timestamp order is eligibility, the prompt is
    *   proof, and the proof is the whole normalized prompt, never a prefix.
    *
-   * Scans BACKWARDS from the tail over every record inside the armed window,
-   * not just `history.at(-1)` (Sol r2 P0, tail overtake): a new user prompt
-   * arriving between growth and the quiet poll appends a fresh non-final
-   * tail, and the dispatched turn's finalized record then sits one row back —
-   * where a tail-only closer would never look again, stranding the stamp and
-   * the reservation until the sweep.
+   * Scans every record inside the armed window OLDEST-first, not just
+   * `history.at(-1)` (Sol r2 P0, tail overtake; direction per Sol r3 P0-2):
+   * a new user prompt arriving between growth and the quiet poll appends a
+   * fresh non-final tail, and the dispatched turn's finalized record then
+   * sits one row back — where a tail-only closer would never look again.
+   * OLDEST-first because the dispatch was delivered FIRST: with producers
+   * serialized an identical later human turn should not exist, but if one
+   * ever does, the earlier record is the dispatch's own delivery and the
+   * later one must not be consumed in its place.
+   *
+   * A final record with an EMPTY reply still closes (Sol r3 P1-8): a
+   * tool/artifact-only turn carries every ownership and finality proof the
+   * closure needs, and the dispatch record's hasReply semantics say honestly
+   * that no text came back. And the record's parser-native `outcome` rides
+   * the event (Sol r3 P1-7) — absent means 'done' until the parser lane
+   * lands it — so a natively aborted/errored turn closes the dispatch as a
+   * failure instead of stranding it for the sweep.
    */
   completeFromHistory(terminalId: string): void {
     const pending = this.pendingDispatch.get(terminalId)
@@ -670,10 +732,13 @@ export class TurnTracker extends EventEmitter {
     const records = this.histories.get(terminalId)
     if (!records) return
     const cutoff = pending.armedAt - DISPATCH_ARM_SLACK_MS
-    for (let i = records.length - 1; i >= 0; i -= 1) {
+    // Records are time-ordered: walk back to the armed window's first row,
+    // then scan forward so the OLDEST eligible match wins.
+    let start = records.length
+    while (start > 0 && records[start - 1].startedAt >= cutoff) start -= 1
+    for (let i = start; i < records.length; i += 1) {
       const candidate = records[i]
-      if (candidate.startedAt < cutoff) break
-      if (candidate.final !== true || candidate.reply.length === 0) continue
+      if (candidate.final !== true) continue
       if (!promptAnswersDispatch(candidate.prompt, pending.prompt)) continue
       this.pendingDispatch.delete(terminalId)
       this.deliveredPrompt.delete(terminalId)
@@ -683,21 +748,67 @@ export class TurnTracker extends EventEmitter {
         this.openTurnFacts.delete(terminalId)
       }
       // One public completion per exchange: if the scrape already emitted
-      // this exchange's latency (attached file-backed turn), this event
-      // closes the dispatch but must not mint a second sample.
-      const scrapeAt = this.scrapeEmitted.get(terminalId)
-      const latencyReported =
-        scrapeAt !== undefined && Math.abs(candidate.startedAt - scrapeAt) <= DISPATCH_ARM_SLACK_MS
-      this.scrapeEmitted.delete(terminalId)
+      // THIS exchange's latency (matched by turn identity, not by terminal —
+      // an intervening owner turn keeps its own outstanding entry), this
+      // event closes the dispatch but must not mint a second sample.
+      const latencyReported = this.consumeScrapeEmitted(terminalId, candidate.startedAt)
+      // Parser-native terminal outcome; absent = done (records written
+      // before the parser lane landed the field, or a parser without one).
+      const outcome = candidate.outcome
       this.emit('turn', {
         terminalId,
         durationMs: Math.max(0, candidate.endedAt - candidate.startedAt),
         dispatchId: pending.id,
         turnIndex: candidate.index,
-        ...(latencyReported ? { latencyReported: true } : {})
+        ...(latencyReported ? { latencyReported: true } : {}),
+        ...(outcome !== undefined ? { outcome } : {})
       } satisfies CompletedTurn)
       return
     }
+  }
+
+  /**
+   * Does a durable FINAL record answering (prompt, armedAt) exist here? The
+   * conductor wires this behind the dispatch sweep's hasFinalAnswer dep
+   * (Sol r3 P0-6): before sparing a stale dispatch on a working idleSignal,
+   * the sweep asks whether parser-proven finality already outranks the
+   * status claim. Same eligibility window and the same exact-bytes identity
+   * as completeFromHistory — this is a read-only probe of the identical
+   * evidence, consuming nothing.
+   */
+  hasFinalAnswer(terminalId: string, prompt: string, armedAt: number): boolean {
+    const records = this.history(terminalId)
+    const cutoff = armedAt - DISPATCH_ARM_SLACK_MS
+    for (let i = records.length - 1; i >= 0; i -= 1) {
+      const candidate = records[i]
+      if (candidate.startedAt < cutoff) break
+      if (candidate.final !== true) continue
+      if (promptAnswersDispatch(candidate.prompt, prompt)) return true
+    }
+    return false
+  }
+
+  /**
+   * Match (and expire) a scrape-emitted latency observation by turn identity
+   * (Sol r3 P1-12). A match within the clock slack consumes exactly that
+   * entry; anything older than SCRAPE_EMIT_TTL_MS is expired on the way.
+   */
+  private consumeScrapeEmitted(terminalId: string, startedAt: number): boolean {
+    const emitted = this.scrapeEmitted.get(terminalId)
+    if (emitted === undefined) return false
+    const floor = Date.now() - SCRAPE_EMIT_TTL_MS
+    const match = [...emitted].find((at) => Math.abs(startedAt - at) <= DISPATCH_ARM_SLACK_MS)
+    const kept = new Set([...emitted].filter((at) => at !== match && at >= floor))
+    if (kept.size === 0) this.scrapeEmitted.delete(terminalId)
+    else this.scrapeEmitted.set(terminalId, kept)
+    return match !== undefined
+  }
+
+  /** Record a scrape-emitted exchange identity, expiring stale entries. */
+  private noteScrapeEmitted(terminalId: string, startedAt: number): void {
+    const floor = Date.now() - SCRAPE_EMIT_TTL_MS
+    const kept = [...(this.scrapeEmitted.get(terminalId) ?? [])].filter((at) => at >= floor)
+    this.scrapeEmitted.set(terminalId, new Set([...kept, startedAt]))
   }
 
   /**
@@ -899,12 +1010,49 @@ export class TurnTracker extends EventEmitter {
     }
     const prompt = fed.submitted.filter((s) => s.length > 0).pop()
     if (prompt !== undefined) {
+      // BEFORE the owner's turn opens: preempt an armed dispatch (Sol r3
+      // P0-2c). The wired interrupt disarms the stamp synchronously, so the
+      // turn that opens below is the owner's alone — never a candidate for
+      // the dispatch's closure. Menu answers (empty submits) and typing that
+      // never submits do not preempt: they feed the CURRENT turn, whichever
+      // producer opened it, and produce no competing exchange.
+      this.preemptOnOwnerSubmit(terminalId, prompt)
       this.startTurn(t, prompt)
       return
     }
     // No submit: the input box content changed (typing, paste) — surface it
     // as pendingInput on the next throttled push.
     this.schedulePush(terminalId)
+  }
+
+  /**
+   * The local-producer serializer's trigger (Sol r3 P0-2c): a NEW prompt is
+   * being submitted at a terminal carrying an armed dispatch. Exempt when the
+   * submitted bytes ARE the dispatched prompt — the pty-fallback delivers the
+   * dispatch through this same input stream, and by exact-bytes identity that
+   * submission is the dispatch's own delivery, not a competitor. Also exempt
+   * once the dispatch's ANSWER is already observed (the settled live turn is
+   * its exchange, or a durable final row matches): preemption serializes
+   * producers racing the delivery, and a dispatch whose turn already
+   * completed is not being raced — interrupting it then would overwrite a
+   * proven outcome with a weaker one, the very inversion P0-3 forbids.
+   * Fires at most once per dispatch (the guard matters only when no callback
+   * is wired; the production wiring disarms the stamp synchronously).
+   */
+  private preemptOnOwnerSubmit(terminalId: string, prompt: string): void {
+    const pending = this.pendingDispatch.get(terminalId)
+    if (pending === undefined || pending.preemptFired === true) return
+    if (prompt === pending.prompt) return
+    const t = this.tracked.get(terminalId)
+    const answeredOnScreen =
+      t !== undefined &&
+      t.prompt === pending.prompt &&
+      t.turnStartedAt >= pending.armedAt - IN_FLIGHT_STAMP_SLACK_MS
+    if (answeredOnScreen || this.hasFinalAnswer(terminalId, pending.prompt, pending.armedAt)) {
+      return
+    }
+    this.pendingDispatch.set(terminalId, { ...pending, preemptFired: true })
+    this.onOwnerPreempt?.(terminalId)
   }
 
   private startTurn(t: TrackedTerminal, prompt: string): void {
@@ -1155,7 +1303,7 @@ export class TurnTracker extends EventEmitter {
     // dispatch closure never mints a second public sample.
     if (this.writesFromFile(id)) {
       if (t.turnStartedAt > 0) {
-        this.scrapeEmitted.set(id, t.turnStartedAt)
+        this.noteScrapeEmitted(id, t.turnStartedAt)
         this.emitCompletedTurn(id, Date.now() - t.turnStartedAt, t.turnStartedAt, t.prompt)
       }
       this.push(t)

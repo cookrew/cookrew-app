@@ -272,6 +272,15 @@ export function createSessionTurnAccumulator(): SessionTurnAccumulator {
       // closing entry; "tool_use"/null mean more of this turn is coming — a
       // nonempty reply text is NOT completion evidence (the same record keeps
       // extending with later tool/result entries).
+      //
+      // FAILURE outcomes (Sol r3 P1): Claude writes NO marker for an errored
+      // or interrupted turn — the tail simply never gets its end_turn — so
+      // there is no TurnRecord.outcome to set here, deliberately. The turn
+      // stays open until the next-user boundary closes it (finality with
+      // outcome absent, i.e. done: the file holds no failure evidence, and
+      // fabricating one from silence would violate quiet-is-non-terminal).
+      // Codex (`turn_aborted`) and pi ('aborted'/'error'/'length') DO write
+      // native failure markers; theirs are classified in trace-blocks.ts.
       const reply = assistantText(entry)
       const closed = entry.message?.stop_reason === 'end_turn'
       const { final: _open, ...rest } = current

@@ -277,6 +277,84 @@ describe('SessionTurnSync holdOpen hook', () => {
   })
 })
 
+// Sol r3 P1: hard facts are not soft claims. holdOpen carries THIRD-PARTY
+// status (herdr working/blocked) and wears the HOLD_TRUST_TICKS cap;
+// holdFact carries a FIRST-PARTY owned fact (the tracker's observed-turn
+// fact) and is exempt, exactly like pins and subscribers — the fact has an
+// owned lifecycle (cleared on finality/interruption) and expiring it on the
+// status feed's quiet clock silently drained genuine long silent turns.
+describe('SessionTurnSync holdFact hook (first-party, uncapped)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function factFixture(): {
+    file: string
+    tracker: TurnTracker
+    sync: SessionTurnSync
+    state: { fact: boolean }
+  } {
+    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-fact-'))
+    const file = path.join(dir, 'abc.jsonl')
+    const tracker = new TurnTracker(async () => null, null)
+    const state = { fact: false }
+    const sync = new SessionTurnSync(tracker, POLL_MS, { holdFact: () => state.fact })
+    return { file, tracker, sync, state }
+  }
+
+  it('a fact-held terminal outlives HOLD_TRUST_TICKS — facts do not expire on the status clock', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync, state } = factFixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    sync.release('t')
+    state.fact = true
+    // Far past the trust cap that expires a STATUS hold: the fact still holds.
+    await ticks(HOLD_TRUST_TICKS * 3)
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(2)
+    sync.dispose()
+  })
+
+  it('the drain fires on the FIRST quiet tick after the fact clears (hold, not reset)', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync, state } = factFixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    sync.release('t')
+    state.fact = true
+    await ticks(DRAIN_TICKS * 2)
+    state.fact = false
+    await ticks(1)
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(1)
+    sync.dispose()
+  })
+
+  it('an expired STATUS hold beside a live fact still holds — the fact rules', async () => {
+    vi.useFakeTimers()
+    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-fact-both-'))
+    const file = path.join(dir, 'abc.jsonl')
+    const tracker = new TurnTracker(async () => null, null)
+    // Both hooks wired, as the conductor wires them: a stuck status feed
+    // (holdOpen forever-true) expires; the observed-turn fact must not.
+    const sync = new SessionTurnSync(tracker, POLL_MS, {
+      holdOpen: () => true,
+      holdFact: () => true
+    })
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    sync.release('t')
+    await ticks(HOLD_TRUST_TICKS * 2)
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(2)
+    sync.dispose()
+  })
+})
+
 // Fix 4: live subscribers are a tracking fact — a terminal someone is
 // watching may not drain (same treatment as a pin: the last unsubscribe
 // re-arms the drain clock).

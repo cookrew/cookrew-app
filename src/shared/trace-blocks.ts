@@ -47,6 +47,17 @@ export interface TraceBlock {
    * boundary, applied in turnRecordsOf) can close it.
    */
   final?: boolean
+  /**
+   * UNSUCCESSFUL terminal evidence the harness itself wrote (Sol r3 P1):
+   * codex `turn_aborted` → 'interrupted'; pi `stopReason: 'aborted'` →
+   * 'interrupted', 'error'/'length' → 'failed'. Always paired with
+   * `final: true` — an abort/error IS positive evidence the turn ended,
+   * just not well. Successful finality leaves it absent (absent-on-final
+   * means done, see TurnRecord.outcome). Claude has no in-file failure
+   * marker (an errored turn simply never writes end_turn), so Claude
+   * blocks never carry it.
+   */
+  outcome?: 'failed' | 'interrupted'
 }
 
 /** Head of a tool input rendered into an activity line. */
@@ -295,10 +306,11 @@ function codexItemText(content: unknown): string | null {
  *
  * FINALITY: `task_complete` is codex's own end-of-turn marker — present in
  * both generations, written once per completed turn with the closing reply
- * as `last_agent_message`, and absent when a turn is interrupted (aborted
- * turns write `turn_aborted` instead). It is the positive evidence that
- * lets the TAIL block claim final; everything else waits for the next-user
- * boundary in turnRecordsOf.
+ * as `last_agent_message`. An interrupted turn writes `turn_aborted`
+ * instead — ALSO terminal evidence (final, outcome 'interrupted'): the turn
+ * ended, unsuccessfully, and a dispatch waiting on it must not strand until
+ * the sweep. Either marker lets the TAIL block claim final; everything else
+ * waits for the next-user boundary in turnRecordsOf.
  */
 export function createCodexTraceAccumulator(): TraceBlockAccumulator {
   const blocks: TraceBlock[] = []
@@ -327,10 +339,11 @@ export function createCodexTraceAccumulator(): TraceBlockAccumulator {
       current.reply = text
       if (phase === 'final_answer') sawFinal = true
     }
-    // A reply arriving REOPENS a block: whatever finality it had earned no
-    // longer describes the tail of the exchange (parity with the Claude
-    // accumulator's latest-assistant-entry rule).
+    // A reply arriving REOPENS a block: whatever finality (and terminal
+    // outcome) it had earned no longer describes the tail of the exchange
+    // (parity with the Claude accumulator's latest-assistant-entry rule).
     delete current.final
+    delete current.outcome
     current.endedAt = at
   }
 
@@ -366,18 +379,36 @@ export function createCodexTraceAccumulator(): TraceBlockAccumulator {
     }
     if (record.type === 'event_msg' && payload.type === 'task_complete') {
       // The turn ended and codex said so — a FINALITY marker and nothing
-      // more. It must NOT move endedAt: the previous derivation ignored this
-      // event entirely, so the block's endedAt is the last agent message's
-      // timestamp, and the stored ledger rows built on that are ground truth
-      // (the event lands 100-500ms after the reply; adopting its clock
-      // drifted 12/163 real agents on rebuild). The event also carries the
-      // closing reply verbatim — used only when no reply event landed at all
-      // (truncated reads, transitional formats), where the old parser had
-      // nothing either.
+      // more. It must NOT move endedAt when a reply event landed: the
+      // previous derivation ignored this event entirely, so the block's
+      // endedAt is the last agent message's timestamp, and the stored
+      // ledger rows built on that are ground truth (the event lands
+      // 100-500ms after the reply; adopting its clock drifted 12/163 real
+      // agents on rebuild). The event also carries the closing reply
+      // verbatim — used only when no reply event landed at all (truncated
+      // reads, transitional formats), where the old parser had nothing
+      // either. In THAT fallback there is no prior-derivation ground truth
+      // to preserve — endedAt still sat at the prompt time, fabricating a
+      // zero-duration completed turn (Sol r3 P2) — so the task_complete
+      // timestamp, the only closing clock the file holds, becomes endedAt.
       if (current.reply === '' && typeof payload.last_agent_message === 'string') {
         current.reply = payload.last_agent_message
+        current.endedAt = at
       }
       current.final = true
+      delete current.outcome
+      return
+    }
+    if (record.type === 'event_msg' && payload.type === 'turn_aborted') {
+      // Codex's own record that the turn was cut short — positive TERMINAL
+      // evidence, not quiet (Sol r3 P1: discarding it stranded the dispatch
+      // until the ten-minute sweep). The turn ended, unsuccessfully: final,
+      // with the outcome named. Like task_complete, the marker never moves
+      // endedAt — the previous derivation ignored the event entirely, so the
+      // stored ledger clocks are ground truth (and an aborted turn carries
+      // no closing reply whose absence would need the fallback above).
+      current.final = true
+      current.outcome = 'interrupted'
       return
     }
     if (record.type === 'response_item' && payload.type && !CODEX_SILENT_ITEMS.has(payload.type)) {
@@ -500,18 +531,28 @@ function activePiEntries(entries: readonly PiEntry[]): PiEntry[] {
   return branch.reverse()
 }
 
-/** Active-branch blocks from already-parsed pi entries. */
-function buildPiBlocks(entries: readonly PiEntry[]): TraceBlock[] {
+/**
+ * Streaming builder over ONE active branch: feed branch entries in order and
+ * read the blocks so far. The extracted loop body of the old buildPiBlocks,
+ * so the incremental accumulator (extend-the-suffix) and the full rebuild
+ * (branch switch) run the SAME code and cannot diverge.
+ */
+interface PiBlockBuilder {
+  add(entry: PiEntry): void
+  blocks(): TraceBlock[]
+}
+
+function createPiBlockBuilder(): PiBlockBuilder {
   const blocks: TraceBlock[] = []
   const pending = new Map<string, TraceToolCall>()
   let current: TraceBlock | null = null
-  for (const entry of activePiEntries(entries)) {
-    if (entry.type !== 'message' || !entry.message) continue
+  const add = (entry: PiEntry): void => {
+    if (entry.type !== 'message' || !entry.message) return
     const message = entry.message
     const at = piEntryTime(entry, current?.endedAt ?? 0)
     if (message.role === 'user') {
       const prompt = piText(message.content)
-      if (prompt.length === 0) continue
+      if (prompt.length === 0) return
       current = {
         id: entry.id as string,
         index: blocks.length + 1,
@@ -523,9 +564,9 @@ function buildPiBlocks(entries: readonly PiEntry[]): TraceBlock[] {
       }
       pending.clear()
       blocks.push(current)
-      continue
+      return
     }
-    if (!current) continue
+    if (!current) return
     if (message.role === 'assistant' && Array.isArray(message.content)) {
       const texts: string[] = []
       for (const block of message.content as PiContentBlock[]) {
@@ -546,13 +587,33 @@ function buildPiBlocks(entries: readonly PiEntry[]): TraceBlock[] {
         current.reply = current.reply ? `${current.reply}\n${text}` : text
       }
       // FINALITY tracks the LATEST assistant message's stopReason, exactly
-      // like Claude's stop_reason rule: 'stop' is pi's own end-of-turn
-      // marker (verified on real session files — 'toolUse' means more of
-      // this turn is coming; 'aborted'/'error'/'length' are not completion).
-      if (message.stopReason === 'stop') current.final = true
-      else delete current.final
+      // like Claude's stop_reason rule (verified on real session files):
+      //  - 'stop'    — pi's own end-of-turn marker: final, successful
+      //                (outcome absent = done);
+      //  - 'toolUse' — more of this turn is coming: open;
+      //  - 'aborted' — the turn was cut short: TERMINAL, 'interrupted';
+      //  - 'error'   — the model errored out: TERMINAL, 'failed';
+      //  - 'length'  — the context/output limit cut the turn: TERMINAL,
+      //                'failed' — the turn ENDED, unsuccessfully. Quiet
+      //                stays non-terminal everywhere, but a native
+      //                abort/error/length marker IS positive evidence the
+      //                exchange is over (Sol r3 P1: treating it as
+      //                non-final stranded dispatches until the sweep).
+      if (message.stopReason === 'stop') {
+        current.final = true
+        delete current.outcome
+      } else if (message.stopReason === 'aborted') {
+        current.final = true
+        current.outcome = 'interrupted'
+      } else if (message.stopReason === 'error' || message.stopReason === 'length') {
+        current.final = true
+        current.outcome = 'failed'
+      } else {
+        delete current.final
+        delete current.outcome
+      }
       current.endedAt = at
-      continue
+      return
     }
     if (message.role === 'toolResult' && typeof message.toolCallId === 'string') {
       const call = pending.get(message.toolCallId)
@@ -560,32 +621,103 @@ function buildPiBlocks(entries: readonly PiEntry[]): TraceBlock[] {
       current.endedAt = at
     }
   }
-  return blocks
+  return { add, blocks: () => blocks }
+}
+
+/** Active-branch blocks from already-parsed pi entries (full walk). */
+function buildPiBlocks(entries: readonly PiEntry[]): TraceBlock[] {
+  const builder = createPiBlockBuilder()
+  for (const entry of activePiEntries(entries)) builder.add(entry)
+  return builder.blocks()
+}
+
+/** Entry types that can be the active-branch leaf (mirrors activePiEntries). */
+const PI_LEAF_TYPES = new Set(['message', 'compaction', 'branch_summary', 'custom_message'])
+
+/** Parse-work counters for the incremental gate (tests/pi-incremental.test.ts):
+ *  the eval instrument that keeps Pi observation from regressing to O(total). */
+export interface PiTraceStats {
+  /** Entries pushed through the block builder since construction. */
+  entriesWalked: number
+  /** Branch switches paid as full branch rebuilds — the explicit exception. */
+  fullRebuilds: number
+}
+
+/** A Pi accumulator additionally exposes its parse-work counters. */
+export interface PiTraceAccumulator extends TraceBlockAccumulator {
+  stats(): PiTraceStats
 }
 
 /**
  * Streaming Pi session parser. Pi stores a TREE, and the active branch is
- * derived from the LAST leaf backwards — a new entry can re-root the whole
- * visible conversation — so feeding is O(Δ) (JSON.parse of the new lines
- * only) while blocks() rebuilds the branch walk over retained parsed
- * entries: O(entries), but with no re-parse of bytes. Memoised per feed
- * generation so repeat reads within one poll are free.
+ * derived from the LAST context-bearing leaf backwards — a new entry can
+ * re-root the whole visible conversation. Observation is INCREMENTAL in the
+ * common case (Sol r3 P1 — I3 promises cost independent of history size,
+ * not merely O(Δ) disk reads): an appended entry whose parent IS the
+ * current leaf extends the active branch, so it is fed straight into the
+ * retained block builder — O(1) per entry, O(suffix) per feed.
+ *
+ * THE EXPLICIT EXCEPTION: a context-bearing entry whose parent is NOT the
+ * current leaf re-roots the branch (a `/tree` switch, a rewind resume, an
+ * adopted mid-tree fork). The old branch suffix cannot be un-fed from a
+ * streaming builder, so this pays one full branch rebuild — O(entries) —
+ * and is counted in stats().fullRebuilds. Branch switches are human-rate
+ * events; appends are token-rate, and only appends are on the hot path.
+ * All entries stay retained (parsed, not bytes) precisely so the rebuild
+ * needs no re-read.
  */
-export function createPiTraceAccumulator(): TraceBlockAccumulator {
+export function createPiTraceAccumulator(): PiTraceAccumulator {
   const entries: PiEntry[] = []
-  let memo: { fed: number; blocks: TraceBlock[] } | null = null
+  const known = new Set<string>()
+  let builder = createPiBlockBuilder()
+  /** Id of the current active-branch leaf the builder is synced to. */
+  let leafId: string | null = null
+  let entriesWalked = 0
+  let fullRebuilds = 0
+
+  const rebuild = (): void => {
+    builder = createPiBlockBuilder()
+    for (const entry of activePiEntries(entries)) {
+      entriesWalked += 1
+      builder.add(entry)
+    }
+    fullRebuilds += 1
+  }
+
+  const feedEntry = (entry: PiEntry): void => {
+    entries.push(entry)
+    if (typeof entry.type !== 'string' || !PI_LEAF_TYPES.has(entry.type)) {
+      // Not a context-bearing entry: it cannot be the leaf and is not part
+      // of any branch walk until something parents onto it (which the
+      // extend check below then sees as a re-root).
+      known.add(entry.id as string)
+      return
+    }
+    const parent = typeof entry.parentId === 'string' ? entry.parentId : null
+    const extendsBranch =
+      leafId !== null ? parent === leafId : parent === null || !known.has(parent)
+    known.add(entry.id as string)
+    leafId = entry.id as string
+    if (extendsBranch) {
+      entriesWalked += 1
+      builder.add(entry)
+      return
+    }
+    rebuild()
+  }
+
   return {
     feed(lines: string[]): void {
       for (const line of lines) {
         const entry = parseLine(line) as PiEntry | null
-        if (entry !== null && typeof entry.id === 'string') entries.push(entry)
+        if (entry !== null && typeof entry.id === 'string') feedEntry(entry)
       }
     },
     blocks(): TraceBlock[] {
-      if (memo === null || memo.fed !== entries.length) {
-        memo = { fed: entries.length, blocks: buildPiBlocks(entries) }
-      }
-      return memo.blocks
+      return builder.blocks()
+    },
+    stats(): PiTraceStats {
+      return { entriesWalked, fullRebuilds }
     }
   }
 }
@@ -737,18 +869,25 @@ const MAX_TURN_REPLY_CHARS = 4000
  * file is positive evidence the earlier exchange ended (the same next-user
  * rule the Claude accumulator applies). The TAIL record claims final only
  * from a marker the harness itself wrote (TraceBlock.final — codex
- * `task_complete`, pi `stopReason: 'stop'`); a tail mid-stream stays open. */
+ * `task_complete`/`turn_aborted`, pi's terminal stopReasons); a tail
+ * mid-stream stays open. An unsuccessful terminal marker (block.outcome)
+ * rides along on final records only — outcome without finality would be a
+ * verdict on an exchange still running. */
 export function turnRecordsOf(blocks: TraceBlock[]): TurnRecord[] {
   const tail = blocks.length - 1
-  return blocks.map((block, at) => ({
-    index: block.index,
-    prompt: block.prompt,
-    reply: block.reply.slice(0, MAX_TURN_REPLY_CHARS),
-    uuid: block.id,
-    startedAt: block.startedAt,
-    endedAt: block.endedAt,
-    ...(at < tail || block.final === true ? { final: true } : {})
-  }))
+  return blocks.map((block, at) => {
+    const final = at < tail || block.final === true
+    return {
+      index: block.index,
+      prompt: block.prompt,
+      reply: block.reply.slice(0, MAX_TURN_REPLY_CHARS),
+      uuid: block.id,
+      startedAt: block.startedAt,
+      endedAt: block.endedAt,
+      ...(final ? { final: true } : {}),
+      ...(final && block.outcome !== undefined ? { outcome: block.outcome } : {})
+    }
+  })
 }
 
 /** A TraceBlockAccumulator wrapped as the SessionTurnAccumulator shape

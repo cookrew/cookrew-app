@@ -99,13 +99,18 @@ describe('parsePiTurns finality', () => {
     expect(turns[0].final).toBeUndefined()
   })
 
-  it("an aborted or errored tail is NOT completion evidence", () => {
-    for (const stopReason of ['aborted', 'error', 'length']) {
+  it('an aborted or errored tail IS terminal — final with an unsuccessful outcome', () => {
+    // Sol r3: written abort/error evidence ends the turn (quiet alone still
+    // does not) — a dispatch closes honestly as interrupted/failed instead
+    // of stranding until the sweep.
+    const expected = { aborted: 'interrupted', error: 'failed', length: 'failed' } as const
+    for (const stopReason of ['aborted', 'error', 'length'] as const) {
       const turns = parsePiTurns([
         piMessage('u1', null, 'user', 'do it', T0),
         piMessage('a1', 'u1', 'assistant', [{ type: 'text', text: 'partial' }], T0 + 1000, stopReason)
       ])
-      expect(turns[0].final, stopReason).toBeUndefined()
+      expect(turns[0].final, stopReason).toBe(true)
+      expect(turns[0].outcome, stopReason).toBe(expected[stopReason])
     }
   })
 })
@@ -157,12 +162,15 @@ describe('parseCodexTurns', () => {
     expect(turns.map((t) => t.final)).toEqual([true, true])
   })
 
-  it('an interrupted turn (turn_aborted, no task_complete) stays open until the next prompt', () => {
+  it('an interrupted turn (turn_aborted, no task_complete) is final with outcome interrupted', () => {
+    // Sol r3: turn_aborted is the harness's own written word that the turn
+    // ended — terminal evidence, closed as interrupted, never a strand.
     const turns = parseCodexTurns([
       ...CODEX_LINES,
       codexLine(T0 + 3000, 'event_msg', { type: 'turn_aborted', turn_id: 't2' })
     ])
-    expect(turns[1].final).toBeUndefined()
+    expect(turns[1].final).toBe(true)
+    expect(turns[1].outcome).toBe('interrupted')
   })
 
   it('reads the NEW rollout generation (item_completed) with task_complete finality', () => {

@@ -172,6 +172,41 @@ describe('SessionTurnSync staleness (rotation-rebind foundation)', () => {
     sync.dispose()
   })
 
+  it('a fact-held quiet terminal still reports stale — rotation recovery reaches a rotated file with NO status feed (Sol r3 P1)', async () => {
+    vi.useFakeTimers()
+    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-stale-fact-'))
+    const file = path.join(dir, 'abc.jsonl')
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    const tracker = new TurnTracker(async () => null, null)
+    const stale: string[] = []
+    // holdFact true (the tracker's observed-turn fact), no holdOpen at all —
+    // the silently-rotated-file shape when herdr's status is absent. The
+    // hard hold keeps the watch alive past every trust cap, and the stale
+    // clock must keep running UNDER it: holding a watch open is not
+    // vouching for the file it watches.
+    const sync = new SessionTurnSync(tracker, POLL_MS, {
+      holdFact: () => true,
+      isInTurn: () => true,
+      onStale: (terminalId) => stale.push(terminalId)
+    })
+    sync.watch('t', file, parseSessionTurns)
+    sync.release('t')
+    await ticks(STALE_TICKS)
+    expect(stale).toEqual(['t'])
+    // Once per EVIDENCE: identical stuck picture, no re-report…
+    await ticks(STALE_TICKS * 3)
+    expect(stale).toEqual(['t'])
+    // …a stat delta is new evidence, and the next due window fires again.
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(STALE_TICKS + 2)
+    expect(stale).toEqual(['t', 't'])
+    // The fact held the watch the whole way — well past the drain window.
+    appendFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t').length).toBeGreaterThan(0)
+    sync.dispose()
+  })
+
   it('a rebind inside onStale installs a fresh entry that is not clobbered', async () => {
     vi.useFakeTimers()
     const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-stale-rebind-'))

@@ -12,7 +12,7 @@
 // - the consumer principal comes from the route's auth, never the body, and
 //   a foreign principal's id reads as nonexistent.
 
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { Readable } from 'node:stream'
@@ -227,7 +227,52 @@ describe('the ledger is consulted before work, not after', () => {
     await service.settled(String((next.body as { dispatchId: string }).dispatchId))
   })
 
-  it('a later transition replaces a parked ledger fault — last decision wins, one release', async () => {
+  it('a parked done outranks a later infrastructure interrupt (Sol r3 P0-3)', async () => {
+    // The evidence lattice: parser-proven done > failed > interrupted. The
+    // done append fails and parks; the backend then dies. The retried row
+    // must be the done — recovery must never persist the weaker verdict over
+    // the stronger unpersisted fact.
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let ends = 0
+    let ledgerUp = true
+    const service = new DispatchService(
+      deps({
+        persist: () => ledgerUp,
+        endWork: () => {
+          ends += 1
+        }
+      })
+    )
+    await dispatchAndSettle(service)
+    ledgerUp = false
+    service.completeTurn('dsp-1', { turnIndex: 3, reply: 'proven done' })
+    expect(service.get('dsp-1')?.state).toBe('running') // parked, fail-closed
+    service.onBackendDeath('herdr server died')
+    expect(service.get('dsp-1')?.state).toBe('running') // done still parked
+    ledgerUp = true
+    service.sweep()
+    expect(service.get('dsp-1')).toMatchObject({ state: 'done', turnIndex: 3 })
+    expect(ends).toBe(1)
+  })
+
+  it('the weaker verdict is discarded even when the ledger recovered first', async () => {
+    // The sharper race: done parks while the ledger is down, the ledger
+    // recovers, THEN the death event arrives. Without the lattice gate the
+    // interrupted append would now succeed and land the wrong outcome.
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let ledgerUp = true
+    const service = new DispatchService(deps({ persist: () => ledgerUp }))
+    await dispatchAndSettle(service)
+    ledgerUp = false
+    service.completeTurn('dsp-1', { turnIndex: 3, reply: 'proven done' })
+    ledgerUp = true
+    service.onBackendDeath('herdr server died')
+    // The interrupt was refused before any append; the sweep lands the done.
+    service.sweep()
+    expect(service.get('dsp-1')).toMatchObject({ state: 'done', turnIndex: 3 })
+  })
+
+  it('a STRONGER transition replaces a parked ledger fault — lattice up, one release', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined)
     let ends = 0
     let ledgerUp = true
@@ -243,13 +288,174 @@ describe('the ledger is consulted before work, not after', () => {
     ledgerUp = false
     service.interrupt('dsp-1', 'first verdict, never durable')
     expect(service.get('dsp-1')?.state).toBe('running')
-    // The turn actually completes while the interrupt is still parked: the
-    // completion is the truer outcome and replaces the parked intent.
+    // The turn actually completes while the interrupt is still parked: done
+    // outranks interrupted on the evidence lattice and replaces the intent.
     service.completeTurn('dsp-1', { turnIndex: 5, reply: 'made it after all' })
     ledgerUp = true
     service.sweep()
     expect(service.get('dsp-1')).toMatchObject({ state: 'done', turnIndex: 5 })
     expect(ends).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r3 P0-4 — a fail-closed restart fault keeps its agent reserved.
+// ---------------------------------------------------------------------------
+
+describe('hydration reserves every loaded open record (Sol r3 P0-4)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const openRow: DispatchRecord = {
+    id: 'dsp-open',
+    agentId: 'agent-1',
+    agentName: 'Forge',
+    workspaceId: 'ws-1',
+    state: 'running',
+    via: 'herdr',
+    createdAt: NOW - 60_000,
+    updatedAt: NOW - 60_000
+  }
+
+  it('restart with the ledger down → a second dispatch on that agent is 409 busy', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let ledgerUp = false
+    const service = new DispatchService(
+      deps({
+        loadRecords: () => [openRow],
+        persist: () => ledgerUp,
+        newId: () => 'dsp-new'
+      })
+    )
+    // The restart interrupt could not land: fail closed — the record stays
+    // open with its ledger fault, and the reservation holds with it. New
+    // work must not be admitted beside an unresolved commercial record.
+    expect(service.get('dsp-open')?.state).toBe('running')
+    const refused = await service.dispatch('agent-1', { text: PROMPT })
+    expect(refused.status).toBe(409)
+    expect(refused.body).toMatchObject({ error: 'busy', dispatchId: 'dsp-open' })
+
+    // The ledger recovers; the sweep lands the interrupt, and only THEN is
+    // the agent dispatchable again.
+    ledgerUp = true
+    service.sweep()
+    expect(service.get('dsp-open')?.state).toBe('interrupted')
+    const accepted = await service.dispatch('agent-1', { text: PROMPT })
+    expect(accepted.status).toBe(202)
+    await service.settled('dsp-new')
+  })
+
+  it('a clean restart still releases the reservation the moment the row lands', async () => {
+    const service = new DispatchService(deps({ loadRecords: () => [openRow] }))
+    expect(service.get('dsp-open')?.state).toBe('interrupted')
+    const accepted = await service.dispatch('agent-1', { text: PROMPT })
+    expect(accepted.status).toBe(202)
+    await service.settled('dsp-1')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r3 P0-5 — consumer settlement requires the native-file observer grade.
+// ---------------------------------------------------------------------------
+
+describe('consumer dispatch needs native file finality (Sol r3 P0-5)', () => {
+  it('refuses a consumer on scrape grade with a complete rollback', async () => {
+    const cleared: string[] = []
+    const persisted: DispatchRecord[] = []
+    let ends = 0
+    const service = new DispatchService(
+      deps({
+        beginWork: () => 'scrape',
+        endWork: () => {
+          ends += 1
+        },
+        clearDispatch: (_agentId, dispatchId) => cleared.push(dispatchId),
+        persist: (record) => {
+          persisted.push(record)
+          return true
+        }
+      })
+    )
+    const refused = await service.dispatch('agent-1', { text: PROMPT, consumer: 'tenant-a' })
+    expect(refused.status).toBe(503)
+    expect(refused.body).toMatchObject({ error: 'consumer dispatch needs native file finality' })
+    // Refused BEFORE any row exists, and beginWork's effects are unwound.
+    expect(persisted).toEqual([])
+    expect(cleared).toEqual(['dsp-1'])
+    expect(ends).toBe(1)
+    expect(service.get('dsp-1')).toBeUndefined()
+
+    // The owner is still served on scrape grade — the person at the keyboard
+    // can accept screen-quiescence evidence for their own work.
+    const owner = await dispatchAndSettle(service)
+    expect(owner.status).toBe(202)
+  })
+
+  it('accepts a consumer on the native-file grade', async () => {
+    const service = new DispatchService(deps({ beginWork: () => 'native-file' }))
+    const accepted = await dispatchAndSettle(service, 'agent-1', {
+      text: PROMPT,
+      consumer: 'tenant-a'
+    })
+    expect(accepted.status).toBe(202)
+  })
+
+  it('treats a legacy boolean beginWork as scrape — fail closed for consumers', async () => {
+    // Until every wiring reports its grade, `true` cannot be trusted to mean
+    // durable native finality. Owners proceed; consumers are refused.
+    const service = new DispatchService(deps({ beginWork: () => true }))
+    const refused = await service.dispatch('agent-1', { text: PROMPT, consumer: 'tenant-a' })
+    expect(refused.status).toBe(503)
+    const owner = await dispatchAndSettle(service)
+    expect(owner.status).toBe(202)
+  })
+
+  it('the explicit owner principal is served on scrape grade', async () => {
+    const service = new DispatchService(deps({ beginWork: () => 'scrape' }))
+    const accepted = await dispatchAndSettle(service, 'agent-1', {
+      text: PROMPT,
+      consumer: 'owner'
+    })
+    expect(accepted.status).toBe(202)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r3 P1-7 / P1-8 — parser outcomes map to terminal states; empty finals
+// close honestly.
+// ---------------------------------------------------------------------------
+
+describe('completeTurn maps the parser outcome (Sol r3 P1-7, P1-8)', () => {
+  it('outcome failed → state failed with reason "agent aborted/errored"', async () => {
+    const service = new DispatchService(deps())
+    await dispatchAndSettle(service)
+    service.completeTurn('dsp-1', { turnIndex: 4, outcome: 'failed', reply: 'partial output' })
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'failed',
+      turnIndex: 4,
+      error: 'agent aborted/errored'
+    })
+  })
+
+  it('outcome interrupted → state interrupted', async () => {
+    const service = new DispatchService(deps())
+    await dispatchAndSettle(service)
+    service.completeTurn('dsp-1', { turnIndex: 4, outcome: 'interrupted' })
+    expect(service.get('dsp-1')).toMatchObject({ state: 'interrupted', turnIndex: 4 })
+  })
+
+  it('absent outcome closes done — tolerant until the parser lane lands', async () => {
+    const service = new DispatchService(deps())
+    await dispatchAndSettle(service)
+    service.completeTurn('dsp-1', { turnIndex: 4, reply: 'answered' })
+    expect(service.get('dsp-1')).toMatchObject({ state: 'done', turnIndex: 4 })
+  })
+
+  it('an EMPTY reply closes done with hasReply false (tool-only final turn)', async () => {
+    const service = new DispatchService(deps())
+    await dispatchAndSettle(service)
+    service.completeTurn('dsp-1', { turnIndex: 4, reply: '' })
+    const view = service.lookup('dsp-1')
+    expect(view.body).toMatchObject({ state: 'done', turnIndex: 4, hasReply: false })
   })
 })
 
@@ -461,6 +667,45 @@ describe('pruned keys leave tombstones', () => {
     expect(readDispatchRecords(file).every((row) => typeof row.id === 'string')).toBe(true)
   })
 
+  it('repeated hydrations do not grow the file or duplicate burials (Sol r3 P1-13)', async () => {
+    const file = path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-dsp-')), 'dispatches.jsonl')
+    const onDisk = (at: number): DispatchService =>
+      new DispatchService(
+        deps({
+          now: () => at,
+          persist: (record) => appendDispatchRecord(file, record),
+          persistTombstone: (tombstone) => appendDispatchTombstone(file, tombstone),
+          loadRecords: () => readDispatchRecords(file),
+          loadTombstones: () => readDispatchTombstones(file)
+        })
+      )
+    const lines = (): number => readFileSync(file, 'utf8').split('\n').filter(Boolean).length
+
+    // Life 1: the work happens and closes. Life 2: hydration prunes the aged
+    // record and buries its key — the ONE legitimate burial.
+    const first = onDisk(NOW - 30 * DAY)
+    await dispatchAndSettle(first, 'agent-1', { text: PROMPT, idempotencyKey: 'key-a' })
+    first.completeTurn('dsp-1', { turnIndex: 1 })
+    onDisk(NOW)
+    const afterBurial = lines()
+    expect(readDispatchTombstones(file)).toHaveLength(1)
+
+    // Lives 3 and 4: the record is already superseded by its tombstone —
+    // it is not reloaded as live and NEVER re-buried. The file is stable.
+    onDisk(NOW)
+    onDisk(NOW)
+    expect(lines()).toBe(afterBurial)
+    expect(readDispatchTombstones(file)).toHaveLength(1)
+
+    // The key's promise still replays from the tombstone.
+    const replay = await onDisk(NOW).dispatch('agent-1', {
+      text: PROMPT,
+      idempotencyKey: 'key-a'
+    })
+    expect(replay.status).toBe(200)
+    expect(replay.body).toMatchObject({ dispatchId: 'dsp-1', replay: true, tombstone: true })
+  })
+
   it('tombstones expire after the 90-day TTL — long, not forever', async () => {
     const buried: DispatchTombstone[] = []
     const service = new DispatchService(
@@ -624,7 +869,8 @@ describe('the principal comes from the auth, never the body', () => {
   })
 
   it('a foreign principal reading a dispatch gets 404, not 403', async () => {
-    const service = new DispatchService(deps())
+    // Consumers require the native-file observer grade (Sol r3 P0-5).
+    const service = new DispatchService(deps({ beginWork: () => 'native-file' }))
     await dispatchAndSettle(service, 'agent-1', { text: PROMPT, consumer: 'tenant-a' })
     // The refusal must be indistinguishable from a nonexistent id — 403 would
     // confirm to tenant-b that tenant-a's dispatch exists.
@@ -647,7 +893,9 @@ describe('the principal comes from the auth, never the body', () => {
 
   it('idempotency scopes do not collide across principals', async () => {
     let n = 0
-    const service = new DispatchService(deps({ newId: () => `dsp-${(n += 1)}` }))
+    const service = new DispatchService(
+      deps({ newId: () => `dsp-${(n += 1)}`, beginWork: () => 'native-file' })
+    )
     await dispatchAndSettle(service, 'agent-1', {
       text: PROMPT,
       idempotencyKey: 'key-a',
@@ -739,7 +987,12 @@ describe('confirmed delivery hands the tracker the exact prompt', () => {
     expect(delivered).toEqual([PROMPT])
   })
 
-  it('never notes an UNCONFIRMED delivery — the fact is confirmation, not hope', async () => {
+  it('notes the ATTEMPTED prompt when non-delivery is unproven (Sol r3 P1-9)', async () => {
+    // The common collapsed-echo path: the submission almost certainly landed
+    // but the screen cannot show it. The exchange still needs its exact
+    // prompt fact — without it, scrape closure depends on recovering identity
+    // from "[Pasted text #1 …]", which proves nothing. The confidence
+    // distinction stays on the record (`confirmed: false`), not on the fact.
     const delivered: string[] = []
     let submitted = false
     const service = new DispatchService(
@@ -755,6 +1008,25 @@ describe('confirmed delivery hands the tracker the exact prompt', () => {
     )
     await dispatchAndSettle(service)
     expect(service.get('dsp-1')?.confirmed).toBe(false)
+    expect(delivered).toEqual([PROMPT])
+  })
+
+  it('does NOT note a prompt whose non-delivery was proven', async () => {
+    // The one branch that keeps its silence: pane unchanged, no echo, agent
+    // not busy — positive proof the prompt never arrived. Registering a
+    // prompt fact here would let the fallback's re-send get correlated
+    // against a delivery that never happened.
+    const delivered: string[] = []
+    const service = new DispatchService(
+      deps({
+        promptAgent: async () => 'submitted',
+        capture: () => '> ',
+        noteDelivered: (_agentId, prompt) => delivered.push(prompt),
+        reattachFallback: async () => true
+      })
+    )
+    await dispatchAndSettle(service)
+    expect(service.get('dsp-1')?.via).toBe('pty-fallback')
     expect(delivered).toEqual([])
   })
 })

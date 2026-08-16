@@ -87,30 +87,39 @@ describe('scrape closure demands prompt identity, not just timestamp order', () 
     tracker.disposeAll()
   })
 
-  it('identity survives the TUI rewrapping the echo (full normalization, one rule)', () => {
+  it('identity is EXACT delivered bytes — no lossy normalization (Sol r3 P0-2)', () => {
     // The tracker reuses the engine's promptAnswersDispatch — pin the shared
-    // rule here so the two paths cannot normalize differently ever again.
-    expect(promptAnswersDispatch('Run   THE f2\n simulation now', 'run the F2 simulation now')).toBe(
+    // rule here so the two paths cannot diverge ever again. Exact bytes: a
+    // case- or whitespace-sensitive brief (code, shell, YAML, Make) must
+    // never collide with a normalized cousin. Both closers compare DELIVERED
+    // text (the durable user record, or the delivered-prompt fact), so the
+    // TUI's rewrapped echo never enters the comparison at all.
+    expect(promptAnswersDispatch('run the F2 simulation now', 'run the F2 simulation now')).toBe(
       true
+    )
+    // Rewrapped/case-folded variants are DIFFERENT bytes — not the exchange.
+    expect(promptAnswersDispatch('Run   THE f2\n simulation now', 'run the F2 simulation now')).toBe(
+      false
     )
     expect(promptAnswersDispatch('run the F3 simulation now', 'run the F2 simulation now')).toBe(
       false
     )
+    // The Make-recipe collision the normalized hash allowed: tabs vs spaces.
+    expect(promptAnswersDispatch('build:\n    make all', 'build:\n\tmake all')).toBe(false)
     // An empty dispatched prompt matches nothing — no identity, no closure.
     expect(promptAnswersDispatch('anything', '')).toBe(false)
   })
 
   it('a shared 24-char prefix is NOT identity — the FULL prompt decides (Sol r2 P0)', () => {
-    // Both briefs normalize to the same first 24 characters ("deploy the
-    // release after"). The old prefix rule called them the same work; a
-    // billing-grade ownership proof cannot.
+    // Both briefs share their first 24 characters ("deploy the release
+    // after"). The old prefix rule called them the same work; a billing-grade
+    // ownership proof cannot — and since r3, neither can a normalized rewrap.
     expect(
       promptAnswersDispatch('Deploy the release after lunch', 'Deploy the release after tests')
     ).toBe(false)
-    // Full identity still tolerates the rewrap: whitespace and case collapse.
     expect(
       promptAnswersDispatch('deploy   THE release\n after tests', 'Deploy the release after tests')
-    ).toBe(true)
+    ).toBe(false)
   })
 
   it('the file closer refuses a same-prefix different-suffix record', () => {
@@ -123,6 +132,107 @@ describe('scrape closure demands prompt identity, not just timestamp order', () 
     tracker.completeFromHistory('term-1')
     expect(seen).toHaveLength(0)
     expect(tracker.hasArmedDispatch('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+})
+
+describe('owner input preempts an armed dispatch (Sol r3 P0-2c)', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('fires onOwnerPreempt once, BEFORE the owner turn opens', async () => {
+    vi.useFakeTimers()
+    const { tracker, session, seen } = fixture()
+    const preempts: string[] = []
+    // The conductor's wiring: interrupt the dispatch, which disarms the stamp.
+    tracker.onOwnerPreempt = (terminalId) => {
+      preempts.push(terminalId)
+      tracker.clearDispatch(terminalId, 'dsp-1')
+    }
+    tracker.track(session as unknown as PtySession, true)
+    tracker.noteDispatch('term-1', 'dsp-1', 'the dispatched brief')
+
+    await runTurn(session, 'an owner ask')
+    expect(preempts).toEqual(['term-1'])
+    // Disarmed before the owner's turn opened: never billed to the dispatch.
+    expect(tracker.hasArmedDispatch('term-1')).toBe(false)
+    expect(seen).toHaveLength(1)
+    expect(seen[0].dispatchId).toBeUndefined()
+    tracker.disposeAll()
+  })
+
+  it('the pty-fallback delivery (exact dispatched bytes) does not preempt itself', async () => {
+    // The fallback pastes the dispatch's own prompt through the same PTY
+    // input stream every owner keystroke uses. By exact-bytes identity that
+    // submission IS the dispatch's delivery — preempting on it would make
+    // the fallback self-destruct.
+    vi.useFakeTimers()
+    const { tracker, session, seen } = fixture()
+    const preempts: string[] = []
+    tracker.onOwnerPreempt = (terminalId) => preempts.push(terminalId)
+    tracker.track(session as unknown as PtySession, true)
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+
+    await runTurn(session, 'do the task')
+    expect(preempts).toEqual([])
+    // Scrape-owned terminal: the closer consumes the stamp with that turn.
+    expect(seen).toHaveLength(1)
+    expect(seen[0].dispatchId).toBe('dsp-1')
+    tracker.disposeAll()
+  })
+
+  it('fires at most once per dispatch even when the callback does not disarm', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = fixture()
+    const preempts: string[] = []
+    tracker.onOwnerPreempt = (terminalId) => preempts.push(terminalId)
+    tracker.track(session as unknown as PtySession, true)
+    tracker.noteDispatch('term-1', 'dsp-1', 'the dispatched brief')
+
+    await runTurn(session, 'first owner ask')
+    await runTurn(session, 'second owner ask')
+    expect(preempts).toEqual(['term-1'])
+    tracker.disposeAll()
+  })
+
+  it('an empty Enter (menu answer) does not preempt — it feeds the current turn', async () => {
+    vi.useFakeTimers()
+    const { tracker, session } = fixture()
+    const preempts: string[] = []
+    tracker.onOwnerPreempt = (terminalId) => preempts.push(terminalId)
+    tracker.track(session as unknown as PtySession, true)
+    tracker.noteDispatch('term-1', 'dsp-1', 'the dispatched brief')
+    session.emit('input', '\r')
+    await vi.advanceTimersByTimeAsync(100)
+    expect(preempts).toEqual([])
+    expect(tracker.hasArmedDispatch('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('does not preempt a dispatch whose answer is already on screen', async () => {
+    // The dispatch's turn ran and settled; the reconcile just has not landed
+    // its durable row yet. The owner's next prompt is the NEXT exchange, not
+    // a competing producer — interrupting here would overwrite a proven
+    // outcome with a weaker one (the P0-3 inversion).
+    vi.useFakeTimers()
+    const { tracker, session, seen } = fixture()
+    const preempts: string[] = []
+    tracker.onOwnerPreempt = (terminalId) => preempts.push(terminalId)
+    tracker.track(session as unknown as PtySession, true)
+    tracker.setHistorySource('term-1', 'file')
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    const dispatchStart = Date.now()
+    await runTurn(session, 'do the task') // settles on screen; stamp still armed
+    expect(tracker.hasArmedDispatch('term-1')).toBe(true)
+
+    await runTurn(session, 'an owner aside')
+    expect(preempts).toEqual([])
+
+    // The reconcile lands; the file closer still closes the dispatch done.
+    tracker.replaceHistory('term-1', [
+      record({ final: true, startedAt: dispatchStart, endedAt: dispatchStart + 3000 })
+    ])
+    tracker.completeFromHistory('term-1')
+    expect(seen.some((turn) => turn.dispatchId === 'dsp-1')).toBe(true)
     tracker.disposeAll()
   })
 })
@@ -168,6 +278,95 @@ describe('tail overtake: the file closer scans the armed window, not just the ta
     tracker.completeFromHistory('term-1')
     expect(seen).toHaveLength(0)
     expect(tracker.hasArmedDispatch('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+})
+
+describe('the armed window is scanned OLDEST-first (Sol r3 P0-2)', () => {
+  it('two identical eligible finals: the EARLIER record is the dispatch', () => {
+    // The dispatch was delivered first. If an identical human turn somehow
+    // lands later in the window, the older record is the dispatch's own
+    // delivery — consuming the newer one billed the caller for the human's
+    // exchange (the newest-first bug).
+    const { tracker, seen } = fixture()
+    tracker.setHistorySource('term-1', 'file')
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    const at = Date.now()
+    tracker.replaceHistory('term-1', [
+      record({ index: 1, final: true, startedAt: at + 5, endedAt: at + 3000 }),
+      record({ index: 2, final: true, startedAt: at + 60_000, endedAt: at + 63_000 })
+    ])
+    tracker.completeFromHistory('term-1')
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({ dispatchId: 'dsp-1', turnIndex: 1 })
+    tracker.disposeAll()
+  })
+})
+
+describe('empty finals and parser outcomes (Sol r3 P1-7, P1-8)', () => {
+  it('a tool-only final turn (empty reply) closes the dispatch', () => {
+    // Finality + exact identity is the whole proof; an empty assistant
+    // message is a valid way for a turn to end. hasReply=false semantics ride
+    // through the dispatch record (the listener passes the empty reply and
+    // completeTurn refuses to call it an answer).
+    const { tracker, seen } = fixture()
+    tracker.setHistorySource('term-1', 'file')
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    tracker.replaceHistory('term-1', [record({ final: true, reply: '' })])
+    tracker.completeFromHistory('term-1')
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({ dispatchId: 'dsp-1', turnIndex: 1 })
+    expect(tracker.hasArmedDispatch('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+
+  it('threads a native failure outcome onto the completion event', () => {
+    // The parser lane will stamp final records with outcome. A record
+    // carrying 'failed' closes the dispatch as a failure instead of
+    // stranding it for the ten-minute sweep.
+    const { tracker, seen } = fixture()
+    tracker.setHistorySource('term-1', 'file')
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    const failed = { ...record({ final: true }), outcome: 'failed' } as TurnRecord
+    tracker.replaceHistory('term-1', [failed])
+    tracker.completeFromHistory('term-1')
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({ dispatchId: 'dsp-1', outcome: 'failed' })
+    tracker.disposeAll()
+  })
+
+  it('tolerates the outcome field being absent — absent means done', () => {
+    const { tracker, seen } = fixture()
+    tracker.setHistorySource('term-1', 'file')
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    tracker.replaceHistory('term-1', [record({ final: true })])
+    tracker.completeFromHistory('term-1')
+    expect(seen).toHaveLength(1)
+    expect(seen[0].outcome).toBeUndefined()
+    tracker.disposeAll()
+  })
+})
+
+describe('hasFinalAnswer — the sweep-side finality probe (Sol r3 P0-6)', () => {
+  it('finds a final record with exact identity inside the armed window', () => {
+    const { tracker } = fixture()
+    const at = Date.now()
+    tracker.replaceHistory('term-1', [record({ final: true, startedAt: at + 5 })])
+    expect(tracker.hasFinalAnswer('term-1', 'do the task', at)).toBe(true)
+    // Wrong bytes, non-final, or pre-arming records do not answer.
+    expect(tracker.hasFinalAnswer('term-1', 'another brief', at)).toBe(false)
+    expect(tracker.hasFinalAnswer('term-1', 'do the task', at + 60_000)).toBe(false)
+    tracker.disposeAll()
+  })
+
+  it('is a read-only probe — the stamp and the history are untouched', () => {
+    const { tracker, seen } = fixture()
+    tracker.setHistorySource('term-1', 'file')
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    tracker.replaceHistory('term-1', [record({ final: true })])
+    expect(tracker.hasFinalAnswer('term-1', 'do the task', Date.now() - 1000)).toBe(true)
+    expect(tracker.hasArmedDispatch('term-1')).toBe(true)
+    expect(seen).toHaveLength(0)
     tracker.disposeAll()
   })
 })
@@ -393,6 +592,35 @@ describe('duplicate emission: one latency sample per exchange', () => {
     expect(seen[1]).toMatchObject({ dispatchId: 'dsp-1', latencyReported: true, turnIndex: 1 })
     // Exactly one UNFLAGGED (publicly countable) sample for the exchange.
     expect(seen.filter((turn) => turn.latencyReported !== true)).toHaveLength(1)
+    tracker.disposeAll()
+  })
+
+  it('an interleaved owner turn cannot steal the dispatch exchange identity (Sol r3 P1-12)', async () => {
+    // Latency dedupe is keyed by TURN identity, not one slot per terminal:
+    // an owner turn between the dispatch turn and its file closure keeps its
+    // own outstanding observation, and the closure matches the dispatch's.
+    vi.useFakeTimers()
+    const { tracker, session, seen } = fixture()
+    tracker.track(session as unknown as PtySession, true)
+    tracker.setHistorySource('term-1', 'file')
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    const dispatchStart = Date.now()
+    await runTurn(session, 'do the task') // scrape sample 1 (dispatch exchange)
+    await vi.advanceTimersByTimeAsync(10_000) // outside the identity slack
+    await runTurn(session, 'an owner aside') // scrape sample 2 (owner exchange)
+    expect(seen).toHaveLength(2)
+    expect(seen.every((turn) => turn.latencyReported !== true)).toBe(true)
+
+    // The file closer lands the DISPATCH exchange: it matches identity 1 —
+    // not the owner's later observation — and suppresses the duplicate.
+    tracker.replaceHistory('term-1', [
+      record({ final: true, startedAt: dispatchStart, endedAt: dispatchStart + 3000 })
+    ])
+    tracker.completeFromHistory('term-1')
+    expect(seen).toHaveLength(3)
+    expect(seen[2]).toMatchObject({ dispatchId: 'dsp-1', latencyReported: true })
+    // Exactly one publicly countable sample per exchange: dispatch + owner.
+    expect(seen.filter((turn) => turn.latencyReported !== true)).toHaveLength(2)
     tracker.disposeAll()
   })
 

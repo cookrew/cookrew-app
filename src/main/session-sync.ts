@@ -55,8 +55,9 @@ export const STALE_TICKS = 10
  * whose terminal writes nothing was observed in the wild, and an unbounded
  * trust would hold that watch (and its stale-probe cycle) open forever. A
  * genuinely working agent grows its file, which resets the quiet count and
- * re-earns the trust. Pins and subscribers are DELIBERATELY exempt: they are
- * first-party facts with owned lifecycles, not third-party claims.
+ * re-earns the trust. Pins, subscribers and holdFact are DELIBERATELY
+ * exempt: they are first-party facts with owned lifecycles, not third-party
+ * claims.
  */
 export const HOLD_TRUST_TICKS = 30
 
@@ -73,12 +74,25 @@ export interface SessionTurnSyncHooks {
    */
   onQuiet?: (terminalId: string) => void
   /**
-   * Positive external evidence of in-flight work (herdr agent_status
-   * working/blocked). A HOLD, not a reset: quiet ticks keep accumulating
-   * while it returns true, so the drain fires on the first quiet tick after
-   * the hold clears rather than starting a fresh window.
+   * SOFT hold: positive THIRD-PARTY evidence of in-flight work (herdr
+   * agent_status working/blocked). A HOLD, not a reset: quiet ticks keep
+   * accumulating while it returns true, so the drain fires on the first
+   * quiet tick after the hold clears rather than starting a fresh window.
+   * Believed only under HOLD_TRUST_TICKS quiet polls — a status claim whose
+   * file writes nothing for a minute is a stuck feed, not a turn.
    */
   holdOpen?: (terminalId: string) => boolean
+  /**
+   * HARD hold: a FIRST-PARTY owned fact that a turn is open (the tracker's
+   * observed-turn fact — a prompt it saw delivered, a turn it saw start).
+   * EXEMPT from the HOLD_TRUST_TICKS cap, exactly like pins and subscribers:
+   * the fact has an owned lifecycle (cleared on finality/interruption), so
+   * expiring it on the status feed's quiet clock silently dropped genuine
+   * long silent human turns after ~60s (Sol r3 P1 — the observed-turn fact
+   * was accidentally given the status feed's expiry). Facts are not claims;
+   * only the third-party holdOpen wears the trust cap.
+   */
+  holdFact?: (terminalId: string) => boolean
   /** The tracker believes a turn is running on this terminal. Gates onStale
    *  — a quiet file under an idle agent is rest, not rot. */
   isInTurn?: (terminalId: string) => boolean
@@ -390,6 +404,18 @@ export class SessionTurnSync {
     this.ensureTimer()
   }
 
+  /**
+   * Has this terminal's observer actually MATERIALIZED — a reconcile that
+   * landed, not merely a path someone computed? Observer probation
+   * (dispatch acceptance, Sol r3): a watch whose file never appeared has a
+   * null history and is indistinguishable from a wrong session ref, so the
+   * sweep interrupts rather than waiting the full stale window.
+   */
+  isVerified(terminalId: string): boolean {
+    const watched = this.watched.get(terminalId)
+    return watched !== undefined && watched.history !== null
+  }
+
   /** Permanent/rebind release: no dormant context may survive it. */
   unwatch(terminalId: string): void {
     this.dormant.delete(terminalId)
@@ -436,11 +462,17 @@ export class SessionTurnSync {
    * byte growth — a STATUS hold (holdOpen) is only believed while that
    * count is under HOLD_TRUST_TICKS, because a claim of work that writes
    * nothing for a minute is a stuck feed, not a turn (Sol round-2 #6).
-   * Pins and subscribers hold regardless: they are owned facts, not claims.
+   * Pins, subscribers and the FIRST-PARTY holdFact hold regardless: they
+   * are owned facts with owned lifecycles, not third-party claims. Note a
+   * hard-held quiet terminal still runs its STALE clock — holding a watch
+   * open is not vouching for the file it watches, so rotation recovery
+   * (fireStaleIfDue via hooks.isInTurn) reaches a silently-rotated file
+   * even when the status feed is absent.
    */
   private held(terminalId: string, quietTicks: number): boolean {
     if (this.pinned.has(terminalId)) return true
     if ((this.subscribers.get(terminalId) ?? 0) > 0) return true
+    if (this.hooks.holdFact?.(terminalId) === true) return true
     if (quietTicks >= HOLD_TRUST_TICKS) return false
     return this.hooks.holdOpen?.(terminalId) === true
   }

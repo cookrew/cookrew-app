@@ -176,7 +176,10 @@ describe('dispatch completion from the session file (no PTY)', () => {
     sync.dispose()
   })
 
-  it('requires an actual reply — a prompt-only tail cannot close a dispatch', async () => {
+  it('requires FINALITY — a still-open prompt-only tail cannot close a dispatch', async () => {
+    // Since Sol r3 P1-8 an empty reply on a FINAL record closes honestly
+    // (tool-only turns), so the gate here is the parser's finality marker:
+    // a prompt whose exchange is still open has no end-of-turn evidence.
     vi.useFakeTimers()
     const { file, tracker, sync, turns } = fixture()
     writeFileSync(file, turnLines('old turn', 'old reply', Date.now() - 60_000), 'utf8')

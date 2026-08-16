@@ -40,6 +40,23 @@ export type DispatchState = 'submitted' | 'running' | 'done' | 'failed' | 'inter
 /** How the prompt actually reached the agent. */
 export type DispatchVia = 'herdr' | 'pty-fallback'
 
+/**
+ * What kind of witness beginWork installed for an accepted dispatch.
+ * 'native-file' is the settlement-grade observer (durable native finality);
+ * 'scrape' is a live-PTY witness whose closure evidence is screen quiescence
+ * — owner-grade only (Sol r3 P0-5).
+ */
+export type ObserverGrade = 'native-file' | 'scrape'
+
+/**
+ * How the turn that answered a dispatch actually ENDED, per the parser
+ * (Sol r3 P1-7). 'done' is a successful native tail; 'failed' covers native
+ * aborted/error/length markers; 'interrupted' is an infrastructure ending.
+ * Absent anywhere it could appear means 'done' — the field lands in a
+ * parallel lane and this side tolerates its absence.
+ */
+export type TurnOutcome = 'done' | 'failed' | 'interrupted'
+
 export interface DispatchRecord {
   id: string
   agentId: string
@@ -165,12 +182,17 @@ export interface DispatchDeps {
   clearDispatch?: (agentId: string, dispatchId: string) => void
   /**
    * Native delivery is CONFIRMED (herdr watched it land, or the transcript
-   * shows the echo): hand the tracker the EXACT delivered prompt as the live
-   * turn's prompt-of-record. The native path never touches the PTY input
-   * stream, so without this the scrape closer can only recover the prompt
-   * from a rendered echo — which a TUI collapses into "[Pasted text #1 …]" or
+   * shows the echo) — or ATTEMPTED without proof of non-delivery (Sol r3
+   * P1-9): hand the tracker the EXACT delivered prompt as the live turn's
+   * prompt-of-record. The native path never touches the PTY input stream, so
+   * without this the scrape closer can only recover the prompt from a
+   * rendered echo — which a TUI collapses into "[Pasted text #1 …]" or
    * truncates, leaving prompt identity unprovable and the dispatch open. The
-   * fact, not the keystrokes: the prompt is not written a second time.
+   * fact, not the keystrokes: the prompt is not written a second time. The
+   * two grades differ only in confidence (the record's `confirmed` flag keeps
+   * the distinction); for prompt-of-record purposes the tracker treats them
+   * the same, because the only turn these bytes can open is the dispatched
+   * one. NOT called when non-delivery was positively proven.
    */
   noteDelivered?: (agentId: string, prompt: string) => void
   /**
@@ -179,13 +201,38 @@ export interface DispatchDeps {
    * agent's slot is reserved and before delivery, so the session-file watch
    * and the drain pin exist before the turn they must observe.
    *
-   * Returns FALSE when no durable observer could be installed AND the agent
-   * is not scrape-tracked — a pin with no watch, which is an acceptance
-   * nothing would ever close. A false return promises the failed attempt
-   * left no state behind (the implementation releases anything it
-   * half-built); the service then rolls its own side back and refuses 503.
+   * Returns the GRADE of observer it installed (Sol r3 P0-5):
+   * - 'native-file' — a session-file observer with native finality; the only
+   *   grade a non-owner consumer's dispatch may settle on.
+   * - 'scrape'      — a live PTY scrape; owner-grade only, since its closure
+   *   evidence is screen quiescence, not a durable native row.
+   * - false         — no observer at all: a pin with no watch, an acceptance
+   *   nothing would ever close. A false return promises the failed attempt
+   *   left no state behind (the implementation releases anything it
+   *   half-built); the service then rolls its own side back and refuses 503.
+   * `true` is the legacy boolean alias and is treated as 'scrape' — the
+   * fail-closed reading for consumers — until every wiring reports the grade.
    */
-  beginWork: (agentId: string) => boolean
+  beginWork: (agentId: string) => 'native-file' | 'scrape' | boolean
+  /**
+   * Does a durable FINAL record answering (prompt, armedAt) already exist for
+   * this agent (Sol r3 P0-6)? The sweep asks it before sparing a stale
+   * dispatch on a working idleSignal: a stuck status feed must not outrank a
+   * parser-proven final row forever. The conductor wires this to a tracker
+   * history scan (TurnTracker.hasFinalAnswer). Absent = cannot say, and the
+   * working spare stands as before.
+   */
+  hasFinalAnswer?: (agentId: string, prompt: string, armedAt: number) => boolean
+  /**
+   * Has the observer a native-file acceptance was predicated on actually
+   * MATERIALIZED (Sol r3 P1-17)? A watchSpec is a path-shaped promise, not a
+   * proven observer — a permanently wrong session ref computes a filename
+   * that never appears. The conductor wires this to "sessionSync has a
+   * verified reconcile for that terminal". The sweep interrupts native-file
+   * dispatches still open past OBSERVER_PROBATION_MS whose observer never
+   * went live. Absent = no probation (tests, memory-only services).
+   */
+  observerLive?: (agentId: string) => boolean
   /**
    * The record reached a terminal state — done, failed or interrupted, by any
    * path (turn correlation, failed delivery, sweep, hydrate, app quit). Called
@@ -235,6 +282,14 @@ export interface DispatchDeps {
 /** Default ceiling for one native submission. */
 const DISPATCH_TIMEOUT_MS = 10 * 60 * 1000
 
+/**
+ * How long a native-file dispatch may run before its observer must have
+ * MATERIALIZED (observerLive) — long enough for a fresh session file's first
+ * write, short enough that a misbound session ref is not left for the
+ * ten-minute sweep (Sol r3 P1-17).
+ */
+export const OBSERVER_PROBATION_MS = 60_000
+
 /** Context headroom below which an agent silently swallows work. */
 const CONTEXT_FULL_PERCENT = 98
 
@@ -274,17 +329,26 @@ export function dispatchPromptKey(prompt: string): string {
  * somebody else's exchange. An empty dispatched prompt matches nothing —
  * there is no identity to prove.
  *
- * FULL identity, deliberately not the 24-char landing prefix: this is the
- * billing-grade ownership proof both closers (file and scrape) hang on, and a
- * prefix is a collision, not a proof. Compared as promptFingerprint equality —
- * the same whole-prompt normalization the idempotency check stores — so
- * rewrapped whitespace still matches and a different suffix never does. The
- * prefix key survives only in promptLanded, where the truncation is the
- * screen's, not ours.
+ * EXACT delivered bytes, no normalization (Sol r3 P0): a case- or
+ * whitespace-sensitive brief — code, shell, YAML, a Make recipe — must never
+ * collide with a normalized cousin, so the comparison is byte equality
+ * against the prompt the dispatch actually delivered. Both closers compare
+ * delivered text, never a rendered echo: the file closer reads the harness's
+ * durable user record, and the scrape closer's prompt-of-record is the
+ * delivered-prompt fact (noteDispatchDelivered) whenever one exists.
+ *
+ * THE IDENTITY INVARIANT this rests on: every producer at an armed terminal
+ * is serialized — the HTTP producers (/input, /ask, /raw) answer 409 while a
+ * stamp is armed, and local owner input PREEMPTS the dispatch (the tracker's
+ * onOwnerPreempt → interrupt). So at most one turn carrying these exact
+ * bytes can open after armedAt, and exact-bytes + the armedAt bound IS the
+ * exchange identity. Lossy normalization survives only in promptFingerprint
+ * (idempotency "same work" checks) and promptLanded (screen landing), where
+ * the fuzz is the point, not a hole.
  */
 export function promptAnswersDispatch(turnPrompt: string, dispatchedPrompt: string): boolean {
-  if (normalize(dispatchedPrompt).length === 0) return false
-  return promptFingerprint(turnPrompt) === promptFingerprint(dispatchedPrompt)
+  if (dispatchedPrompt.length === 0) return false
+  return turnPrompt === dispatchedPrompt
 }
 
 /**
@@ -530,6 +594,23 @@ function readRegistryLines<T>(file: string, pick: (parsed: unknown) => T | null)
 const TERMINAL_STATES: ReadonlySet<DispatchState> = new Set(['done', 'failed', 'interrupted'])
 
 /**
+ * Evidence-precedence lattice for competing terminal intents (Sol r3 P0-3).
+ * Parser-proven `done` outranks `failed`, which outranks an infrastructure
+ * `interrupted` — the earlier facts are observations of the turn itself,
+ * the last is an observation of the machinery around it. A parked stronger
+ * intent is never replaced by a weaker one; only a stronger (or equal —
+ * fresher reason, same fact) verdict may replace. Non-terminal states rank
+ * below everything, though nothing non-terminal ever reaches the comparison.
+ */
+const EVIDENCE_STRENGTH: Readonly<Record<DispatchState, number>> = {
+  done: 3,
+  failed: 2,
+  interrupted: 1,
+  running: 0,
+  submitted: 0
+}
+
+/**
  * How long a CLOSED dispatch stays in memory. Long enough that a caller's
  * retry of a week-old key is still recognised as a replay rather than run
  * again; short enough that the maps do not grow for the life of the process.
@@ -572,6 +653,17 @@ export class DispatchService {
    * row lands.
    */
   private readonly ledgerFaults = new Map<string, DispatchRecord>()
+  /**
+   * dispatchId → in-memory facts about an OPEN dispatch that never touch the
+   * ledger: the exact delivered prompt (privacy — rows carry only its hash),
+   * the arming time, and the observer grade beginWork installed. The sweep
+   * needs all three (hasFinalAnswer, observer probation); cleared on release.
+   * A hydrated open record has no entry — hydration interrupts it anyway.
+   */
+  private readonly openMeta = new Map<
+    string,
+    { prompt: string; armedAt: number; grade: ObserverGrade }
+  >()
 
   constructor(private readonly deps: DispatchDeps) {
     this.hydrate()
@@ -596,20 +688,43 @@ export class DispatchService {
     // Tombstones first, records second: a scope that somehow has both is
     // answered from the LIVE record, which still knows its state and turn.
     const expired = this.now() - IDEMPOTENCY_TTL_MS
+    const buried = new Map<string, number>()
     for (const tombstone of this.deps.loadTombstones?.() ?? []) {
+      // The SUPPRESSION view keeps every line, expired included (Sol r3
+      // P1-13): a record already superseded by a tombstone must never be
+      // re-loaded as live and re-buried — that appended a duplicate tombstone
+      // per restart and re-parsed the full commercial history forever. The
+      // REPLAY view below stays TTL-bounded as before.
+      buried.set(
+        tombstone.scope,
+        Math.max(buried.get(tombstone.scope) ?? -Infinity, tombstone.closedAt)
+      )
       if (tombstone.closedAt < expired) continue
       this.tombstones.set(tombstone.scope, tombstone)
     }
     const rows = this.deps.loadRecords?.() ?? []
     for (const row of rows) {
       if (typeof row?.id !== 'string') continue
-      this.records.set(row.id, row)
       if (row.idempotencyKey !== undefined) {
-        this.byKey.set(idempotencyScope(row.consumer, row.idempotencyKey), row.id)
+        const scope = idempotencyScope(row.consumer, row.idempotencyKey)
+        // An equal-or-newer tombstone for this scope supersedes the row
+        // entirely (bury stamps closedAt = the record's own updatedAt, so
+        // equality is the normal case): the record was pruned and buried by
+        // an earlier life, and reloading it would only re-bury it.
+        const closedAt = buried.get(scope)
+        if (closedAt !== undefined && closedAt >= row.updatedAt) continue
+        this.byKey.set(scope, row.id)
       }
+      this.records.set(row.id, row)
     }
     for (const record of [...this.records.values()]) {
       if (TERMINAL_STATES.has(record.state)) continue
+      // Reserve BEFORE attempting the interrupt transition (Sol r3 P0-4): if
+      // the append fails, commitTerminal holds the record open with a ledger
+      // fault — and a fail-closed fault must not admit new work beside it,
+      // so the agent answers 409 busy until the terminal row durably lands
+      // (release() is what drops this reservation, exactly then).
+      this.reserved.set(record.agentId, record.id)
       this.update(record.id, {
         state: 'interrupted',
         error: 'interrupted: the app restarted while this dispatch was open'
@@ -745,12 +860,15 @@ export class DispatchService {
       return { status: 409, body: { error: 'busy', dispatchId: held } }
     }
 
+    // The ONLY backend question admission asks (Sol r3 P1-15): existence. The
+    // conductor answers it from a cached inventory, never a synchronous fork.
+    // The context-full check moved to the deliver() leg — it needs a pane
+    // capture, and a capture on the accept path made every 202 wait on a CLI
+    // process. Context-full is therefore a prompt-DELIVERY failure now
+    // (state 'failed', reason 'context-full'), not a sync 503.
     const sessionName = this.deps.sessionNameFor(agentId)
     if (!this.deps.sessionExists(sessionName)) {
       return { status: 503, body: { error: 'unreachable' } }
-    }
-    if (contextExhausted(this.deps.capture(sessionName))) {
-      return { status: 503, body: { error: 'context-full' } }
     }
     if (!this.deps.promptAgent) {
       return { status: 503, body: { error: 'backend cannot dispatch' } }
@@ -788,10 +906,26 @@ export class DispatchService {
     // all, refuse rather than accept: a pin with no watch is a dispatch only
     // the ten-minute sweep would ever close, which is a timeout pretending to
     // be an answer. Roll back completely — no reservation, no stamp, no row.
-    if (!this.deps.beginWork(agentId)) {
+    const installed = this.deps.beginWork(agentId)
+    if (installed === false) {
       this.reserved.delete(agentId)
       this.deps.clearDispatch?.(agentId, id)
       return { status: 503, body: { error: 'agent has no durable observer' } }
+    }
+    // Legacy boolean wirings read as 'scrape' — the fail-closed grade: an
+    // owner dispatch proceeds, a consumer's is refused until the wiring
+    // reports what it actually installed.
+    const grade: ObserverGrade = installed === true ? 'scrape' : installed
+    // Sol r3 P0-5: a non-owner consumer's settlement needs durable native
+    // finality. A scrape-grade acceptance closes on screen quiescence, which
+    // is owner-grade evidence — good enough for the person at the keyboard,
+    // never for billing a third party. Refuse BEFORE any row exists, and
+    // unwind what beginWork installed (endWork, exactly once).
+    if (input.consumer !== undefined && input.consumer !== 'owner' && grade !== 'native-file') {
+      this.reserved.delete(agentId)
+      this.deps.clearDispatch?.(agentId, id)
+      this.deps.endWork(agentId)
+      return { status: 503, body: { error: 'consumer dispatch needs native file finality' } }
     }
     // Durability before delivery: the submitted row must be ON DISK before
     // the prompt can go out, or a crash in the gap runs work the ledger never
@@ -806,6 +940,7 @@ export class DispatchService {
       return { status: 503, body: { error: 'dispatch ledger unavailable' } }
     }
     if (scopedKey !== undefined) this.byKey.set(scopedKey, record.id)
+    this.openMeta.set(record.id, { prompt, armedAt: at, grade })
 
     // The reservation is NOT released here (F6). Submission settles
     // milliseconds after the prompt goes out and the agent then works for
@@ -850,6 +985,17 @@ export class DispatchService {
   ): Promise<void> {
     const promptAgent = this.deps.promptAgent
     if (!promptAgent) return
+    // Context-full is checked HERE, not at admission (Sol r3 P1-15): it needs
+    // a pane capture, and captures are synchronous CLI forks the 202 must not
+    // wait on. A full agent swallows prompts whole (measured 2026-08-13:
+    // herdr said idle, the brief vanished), so refusing to deliver is the
+    // honest outcome — a delivery FAILURE the caller can act on, using the
+    // plain screen capture on purpose (a deep one can dredge up a stale
+    // "100% context used" footer from before a /compact).
+    if (contextExhausted(this.deps.capture(sessionName))) {
+      this.update(dispatchId, { state: 'failed', error: 'context-full' })
+      return
+    }
     // The pre-submission screen, so "did anything happen after we submitted?"
     // is answerable later. Taken here rather than in dispatch() so it is the
     // last look before the prompt goes out — and taken ONCE: this capture and
@@ -903,6 +1049,14 @@ export class DispatchService {
       // collapses long pastes, so "not on screen" is routinely true of a prompt
       // that landed perfectly. Record the weaker grade of evidence and let the
       // turn correlation close the dispatch; a re-send here is the double-send.
+      //
+      // Sol r3 P1-9: the ATTEMPTED prompt is still a prompt fact. This is the
+      // common "submission probably landed but the echo is collapsed" path —
+      // the real turn can open and finish here, and without the exact bytes
+      // the closer would be left recovering identity from a collapsed TUI
+      // echo. Registered whenever non-delivery is NOT proven; the confidence
+      // distinction lives in `confirmed`, not in the fact.
+      this.deps.noteDelivered?.(agentId, prompt)
       this.update(dispatchId, { via: 'herdr', confirmed: false })
       return
     }
@@ -956,15 +1110,44 @@ export class DispatchService {
     }
   }
 
-  /** The turn that answered this dispatch finished (CompletedTurn correlation). */
-  completeTurn(dispatchId: string, result: { turnIndex: number; reply?: string }): void {
+  /**
+   * The turn that answered this dispatch finished (CompletedTurn correlation).
+   *
+   * `outcome` is the parser's native verdict on how that turn ENDED (Sol r3
+   * P1-7): absent or 'done' closes the record done; 'failed' (a native
+   * aborted/error/length marker) closes it failed — the agent stopped
+   * unsuccessfully, which is an answer, not a strand for the sweep;
+   * 'interrupted' routes to the infrastructure ending. An EMPTY reply is a
+   * valid final turn (tool/artifact-only — Sol r3 P1-8): the record closes
+   * with hasReply absent rather than pretending an empty string is an answer.
+   */
+  completeTurn(
+    dispatchId: string,
+    result: { turnIndex: number; reply?: string; outcome?: TurnOutcome }
+  ): void {
     const record = this.records.get(dispatchId)
     if (!record || TERMINAL_STATES.has(record.state)) return
-    this.update(dispatchId, {
-      state: 'done',
-      turnIndex: result.turnIndex,
-      ...(result.reply !== undefined ? { reply: result.reply } : {})
-    })
+    const reply =
+      result.reply !== undefined && result.reply.length > 0 ? { reply: result.reply } : {}
+    const outcome = result.outcome ?? 'done'
+    if (outcome === 'interrupted') {
+      this.update(dispatchId, {
+        state: 'interrupted',
+        turnIndex: result.turnIndex,
+        error: 'interrupted: the agent turn was interrupted'
+      })
+      return
+    }
+    if (outcome === 'failed') {
+      this.update(dispatchId, {
+        state: 'failed',
+        turnIndex: result.turnIndex,
+        error: 'agent aborted/errored',
+        ...reply
+      })
+      return
+    }
+    this.update(dispatchId, { state: 'done', turnIndex: result.turnIndex, ...reply })
   }
 
   /**
@@ -1004,6 +1187,27 @@ export class DispatchService {
     // already HAS its outcome — the sweep's job for it is to land the row and
     // release, not to invent a fresh interrupt over the decided state.
     this.retryLedgerFaults()
+    // Observer probation (Sol r3 P1-17): a native-file acceptance was
+    // predicated on a watchSpec, which is a path-shaped promise. If the
+    // observer never MATERIALIZED (no verified reconcile) within the
+    // probation window, no closure can ever arrive for this dispatch —
+    // interrupt it promptly instead of leaving it to the ten-minute sweep.
+    const probation = this.now() - OBSERVER_PROBATION_MS
+    const unobserved =
+      this.deps.observerLive === undefined
+        ? []
+        : [...this.records.values()].filter(
+            (record) =>
+              !TERMINAL_STATES.has(record.state) &&
+              !this.ledgerFaults.has(record.id) &&
+              record.createdAt <= probation &&
+              this.openMeta.get(record.id)?.grade === 'native-file' &&
+              this.deps.observerLive?.(record.agentId) === false
+          )
+    const probationStamped = this.interruptEach(
+      unobserved.map((record) => record.id),
+      'interrupted: observer never materialized'
+    )
     const cutoff = this.now() - STALE_DISPATCH_MS
     const stale = [...this.records.values()].filter(
       (record) =>
@@ -1011,9 +1215,19 @@ export class DispatchService {
         record.updatedAt <= cutoff &&
         !this.ledgerFaults.has(record.id)
     )
-    const abandoned = stale.filter(
-      (record) => this.idleSignal(this.deps.sessionNameFor(record.agentId)) !== false
-    )
+    const abandoned = stale.filter((record) => {
+      if (this.idleSignal(this.deps.sessionNameFor(record.agentId)) !== false) return true
+      // A working idleSignal spares the record — UNLESS a durable final row
+      // answering this exact dispatch already exists (Sol r3 P0-6): a status
+      // feed stuck at 'working' must not outrank parser-proven finality
+      // forever. The normal closers should have consumed that row long ago;
+      // if the stamp is somehow gone, this is the path that still closes.
+      const meta = this.openMeta.get(record.id)
+      return (
+        meta !== undefined &&
+        this.deps.hasFinalAnswer?.(record.agentId, meta.prompt, meta.armedAt) === true
+      )
+    })
     const stamped = this.interruptEach(
       abandoned.map((record) => record.id),
       `interrupted: no outcome within ${Math.round(STALE_DISPATCH_MS / 60_000)} minutes`
@@ -1022,7 +1236,7 @@ export class DispatchService {
     // tombstone could not be appended gets another prune pass every sweep,
     // not only when some other dispatch happens to release.
     this.prune()
-    return stamped
+    return [...probationStamped, ...stamped]
   }
 
   /**
@@ -1101,6 +1315,15 @@ export class DispatchService {
    * pass until it lands.
    */
   private commitTerminal(open: DispatchRecord, next: DispatchRecord): void {
+    // The lattice gate, BEFORE any append attempt (Sol r3 P0-3): a parked
+    // stronger fact must not be overwritten by a weaker later event even when
+    // the ledger has recovered in between — a parser-proven `done` whose
+    // append failed, followed by onBackendDeath, must retry as done, never
+    // land as interrupted. Only an equal-or-stronger verdict may replace the
+    // parked intent; the weaker one is discarded (the stronger fact already
+    // subsumes its release, when the sweep finally lands the row).
+    const parked = this.ledgerFaults.get(next.id)
+    if (parked && EVIDENCE_STRENGTH[parked.state] > EVIDENCE_STRENGTH[next.state]) return
     const { ledgerFault, ...intended } = next
     if (this.persistRecord(intended) || this.persistRecord(intended)) {
       this.ledgerFaults.delete(intended.id)
@@ -1110,9 +1333,10 @@ export class DispatchService {
     }
     // Fail CLOSED: memory does not advance, nothing is released, and the
     // caller-visible state remains the open one. The intended terminal row is
-    // parked for the sweep; a later transition (a turn completing over a
-    // pending interrupt, say) simply replaces the intent — last decision wins,
-    // and the release still fires exactly once, when an append finally lands.
+    // parked for the sweep; a later transition replaces the intent only per
+    // the evidence lattice above (a turn completing over a pending interrupt
+    // upgrades it; the reverse is discarded), and the release still fires
+    // exactly once, when an append finally lands.
     this.ledgerFaults.set(intended.id, intended)
     this.records.set(intended.id, { ...open, ledgerFault: true })
     console.error(
@@ -1145,6 +1369,7 @@ export class DispatchService {
    */
   private release(record: DispatchRecord): void {
     if (this.reserved.get(record.agentId) === record.id) this.reserved.delete(record.agentId)
+    this.openMeta.delete(record.id)
     this.deps.clearDispatch?.(record.agentId, record.id)
     this.deps.endWork(record.agentId)
     this.prune()

@@ -61,6 +61,46 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  */
 export type TurnFinality = 'native' | 'boundary'
 
+/**
+ * Golden-save cloning contract (Sol r3 P1; S7, see
+ * scratchpad/v5-instance-economy.html): how a harness turns a published
+ * golden session file into a FRESH runnable instance. A generic byte copy is
+ * NOT a clone — session formats carry identity and lineage (Claude sessionId
+ * fields, Codex session_meta + rollout paths, Pi id/parent graphs), and a
+ * copy that keeps them can share identity with the golden source, resume the
+ * ORIGINAL conversation, break parent links, or leave the golden file open
+ * to mutation. Only Claude has format-aware restamping today (claude-fork's
+ * saveRoleSessionCopy/resumeRoleSession, which refuse non-Claude).
+ *
+ * An implementation MUST guarantee, per clone:
+ *  - FRESH IDENTITY: a newly minted session id/ref, never the golden one;
+ *  - REWRITTEN REFERENCES: every format-specific self-reference (embedded
+ *    session ids, file paths, parent/graph links) restamped to the fresh
+ *    identity — nothing in the clone names the source;
+ *  - ISOLATED INSTANCE PATH: the clone lands in the instance's own session
+ *    tree, never beside (or over) the golden file;
+ *  - RESUME PROVENANCE VALIDATION: the resume key the clone yields is
+ *    verified to resolve to the CLONE's file before it is handed to a
+ *    launch command — a clone that would resume the source is a failure;
+ *  - SOURCE IMMUTABILITY: the golden file is opened read-only and is
+ *    byte-identical after the clone, verified, not assumed.
+ *
+ * No harness implements this yet — the field exists so the contract is
+ * pinned in the type BEFORE S7 lands, and so absence is checkable: a harness
+ * without goldenClone cannot publish golden-save templates (template
+ * publishing must REFUSE, exactly like turnFinality 'boundary' refuses
+ * file-backed background dispatch). tests/harness-conformance.test.ts pins
+ * the absent-means-unsupported semantics.
+ */
+export interface GoldenCloneCapability {
+  /**
+   * Clone `goldenFile` into `instanceSessionDir`, returning the fresh
+   * session reference (in the harness's own sessionField format) that
+   * resumes the CLONE. Must throw rather than fall back to a byte copy.
+   */
+  clone(goldenFile: string, instanceSessionDir: string): Promise<{ sessionRef: string }>
+}
+
 export interface Harness {
   id: HarnessId
   /** True when a launch command runs this harness. */
@@ -104,6 +144,12 @@ export interface Harness {
    * when turns === 'file'.
    */
   watchFile?: (node: TerminalNodeData, options: HarnessWatchOptions) => string | null
+  /**
+   * Golden-save clone capability (see GoldenCloneCapability). ABSENT on
+   * every harness today — absent means golden-save template publishing must
+   * refuse this harness; it must never degrade to a byte copy.
+   */
+  goldenClone?: GoldenCloneCapability
 }
 
 const CLAUDE: Harness = {

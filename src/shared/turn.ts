@@ -119,6 +119,22 @@ export interface TurnRecord {
    */
   final?: boolean
   /**
+   * HOW the exchange ended, from the harness's own terminal marker (Sol r3
+   * P1 — native failure markers must close a dispatch honestly, not strand
+   * it until the sweep). Set ONLY on final records, and ONLY when the
+   * harness wrote an unsuccessful ending: codex `turn_aborted` →
+   * 'interrupted'; pi `stopReason: 'aborted'` → 'interrupted',
+   * 'error'/'length' → 'failed'. SUCCESSFUL finality leaves this ABSENT —
+   * absent-on-a-final-record means done, which keeps every historical ledger
+   * row (none of which carry the field) reading as the success it was, and
+   * matches the tracker's absent-final-is-done treatment. Claude writes no
+   * end_turn on an errored turn, so a Claude record never carries this: its
+   * failure shape is a tail that stays open until the next-user boundary
+   * closes it (as done — the file holds no failure evidence to report).
+   * Quiet is still non-terminal; only positive native evidence lands here.
+   */
+  outcome?: 'done' | 'failed' | 'interrupted'
+  /**
    * Scrollback anchor where this checkpoint began (checkpoint-ux item 2,
    * re-stamped after the Magpie degenerate-offset finding): tmux history_size
    * at turn start — lines scrolled into scrollback so far. Rises with each

@@ -150,17 +150,55 @@ describe('POST /api/agents/:id/dispatch — refusals', () => {
     expect(response.body).toMatchObject({ error: 'unreachable' })
   })
 
-  it('503s a context-full agent that herdr would happily call idle', async () => {
+  it('fails a context-full agent at DELIVERY — accepted, then failed context-full', async () => {
     // Measured 2026-08-13: a Claude session at 100% context reported
     // agent_status "idle" and silently swallowed the brief — exit 0, empty
     // output, no turn. The status feed cannot see this; the pane's own status
-    // line can. Refusing beats dispatching into a black hole.
+    // line can. Sol r3 P1-15 moved the check off the accept path (a capture
+    // is a synchronous CLI fork the 202 must not wait on): context-full is a
+    // prompt-DELIVERY failure now — state 'failed', reason 'context-full' —
+    // and the prompt is never submitted into the black hole.
+    let prompts = 0
     const service = new DispatchService(
-      deps({ capture: () => 'some output\n  ⏵⏵ 100% context used  ' })
+      deps({
+        capture: () => 'some output\n  ⏵⏵ 100% context used  ',
+        promptAgent: async () => {
+          prompts += 1
+          return 'done'
+        }
+      })
     )
     const response = await service.dispatch('agent-1', { text: PROMPT })
-    expect(response.status).toBe(503)
-    expect(response.body).toMatchObject({ error: 'context-full' })
+    expect(response.status).toBe(202)
+    await service.settled('dsp-1')
+    expect(service.get('dsp-1')).toMatchObject({ state: 'failed', error: 'context-full' })
+    expect(prompts).toBe(0)
+  })
+
+  it('the accept path performs ZERO capture calls (Sol r3 P1-15)', async () => {
+    // Admission asks the backend one question — session existence, which the
+    // conductor answers from a cached inventory. Every pane read (context
+    // check included) belongs to the delivery leg, past the 202.
+    let captures = 0
+    let deepCaptures = 0
+    const service = new DispatchService(
+      deps({
+        capture: () => {
+          captures += 1
+          return 'idle\n> '
+        },
+        captureDeep: () => {
+          deepCaptures += 1
+          return 'idle\n> '
+        }
+      })
+    )
+    const response = await service.dispatch('agent-1', { text: PROMPT })
+    expect(response.status).toBe(202)
+    expect(captures).toBe(0)
+    expect(deepCaptures).toBe(0)
+    await service.settled('dsp-1')
+    expect(captures).toBeGreaterThan(0) // the deliver leg's context check ran
   })
 
   it('503s when the backend cannot dispatch at all', async () => {
@@ -543,8 +581,11 @@ describe('idempotencyKey — a repeated dispatch is the SAME dispatch', () => {
   it('scopes the key by consumer — one tenant cannot replay another', async () => {
     // The scope is (consumer, key), so tenant B pressing tenant A's key gets
     // its OWN dispatch, never a replay describing somebody else's work.
+    // Consumers require the native-file observer grade (Sol r3 P0-5).
     let n = 0
-    const service = new DispatchService(deps({ newId: () => `dsp-${(n += 1)}` }))
+    const service = new DispatchService(
+      deps({ newId: () => `dsp-${(n += 1)}`, beginWork: () => 'native-file' })
+    )
     await dispatchAndSettle(service, 'agent-1', {
       text: PROMPT,
       idempotencyKey: 'key-a',
@@ -771,6 +812,85 @@ describe('sweep — nothing holds an agent’s slot forever', () => {
     tick(TEN_MINUTES * 10)
     expect(service.sweep()).toEqual([])
     expect(service.get('dsp-1')?.state).toBe('done')
+  })
+
+  it('a WORKING status cannot veto a durable final answer (Sol r3 P0-6)', async () => {
+    // A stuck 'working' feed spared a stale dispatch forever, even while a
+    // parser-proven final row answering it sat in the ledger. Positive parser
+    // finality outranks the status claim: when hasFinalAnswer confirms the
+    // row, the sweep proceeds instead of sparing — the normal closers should
+    // have consumed it long before; this is the bound on the veto.
+    const asked: [string, string, number][] = []
+    let final = false
+    const { service, tick } = aging({
+      agentStatus: () => 'working',
+      hasFinalAnswer: (agentId, prompt, armedAt) => {
+        asked.push([agentId, prompt, armedAt])
+        return final
+      }
+    })
+    await dispatchAndSettle(service)
+    tick(TEN_MINUTES + 1)
+    // No final row: the working spare stands, as it always did.
+    expect(service.sweep()).toEqual([])
+    expect(asked.at(-1)).toEqual(['agent-1', PROMPT, START])
+
+    // A matching final durable record exists: the veto ends.
+    final = true
+    expect(service.sweep()).toEqual(['dsp-1'])
+    expect(service.get('dsp-1')?.state).toBe('interrupted')
+  })
+
+  it('the working spare stands when hasFinalAnswer is not wired', async () => {
+    const { service, tick } = aging({ agentStatus: () => 'working' })
+    await dispatchAndSettle(service)
+    tick(TEN_MINUTES * 3)
+    expect(service.sweep()).toEqual([])
+  })
+
+  // Sol r3 P1-17 — observer probation: a path-shaped watch spec is a promise,
+  // not a proven observer. A native-file dispatch whose observer never
+  // MATERIALIZES is interrupted promptly, not left for the ten-minute sweep.
+
+  it('interrupts a native-file dispatch whose observer never materialized', async () => {
+    let live = false
+    let n = 0
+    const { service, tick } = aging({
+      beginWork: () => 'native-file',
+      observerLive: () => live,
+      newId: () => `dsp-${(n += 1)}`
+    })
+    await dispatchAndSettle(service)
+    // Inside the probation window: a fresh session file gets its grace.
+    tick(59_000)
+    expect(service.sweep()).toEqual([])
+
+    tick(2_000)
+    expect(service.sweep()).toEqual(['dsp-1'])
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'interrupted',
+      error: 'interrupted: observer never materialized'
+    })
+
+    // Healthy path: the observer went live — no probation interrupt, ever.
+    live = true
+    const next = await service.dispatch('agent-1', { text: PROMPT })
+    await service.settled(String((next.body as { dispatchId: string }).dispatchId))
+    tick(TEN_MINUTES - 1)
+    expect(service.sweep()).toEqual([])
+  })
+
+  it('scrape-grade acceptances are not on observer probation', async () => {
+    // A scrape acceptance has a live PTY witness by definition; probation is
+    // for the file observer that was only ever a computed path.
+    const { service, tick } = aging({
+      beginWork: () => 'scrape',
+      observerLive: () => false
+    })
+    await dispatchAndSettle(service)
+    tick(61_000)
+    expect(service.sweep()).toEqual([])
+    expect(service.get('dsp-1')?.state).toBe('running')
   })
 
   it('a late delivery cannot resurrect a swept dispatch', async () => {

@@ -166,8 +166,11 @@ const sessionSync = new SessionTurnSync(turns, undefined, {
   // asymmetry it never ends one, and its absence alone never completes
   // anything either — completion still needs the settled FINAL tail record.
   onQuiet: (terminalId) => {
-    const reported = agentStatus(sessionNameFor(terminalId))
-    if (reported === 'working' || reported === 'blocked') return
+    // No status veto here (Sol r3): completeFromHistory demands parser
+    // finality plus exact identity, which is STRONGER evidence than any
+    // status claim — a feed stuck at 'working' must never strand a
+    // natively finalized dispatch. Status still holds the DRAIN open
+    // (holdOpen below); it just cannot outrank a durable final row.
     turns.completeFromHistory(terminalId)
   },
   // Sol r1 P0: a switched-away human turn inside a long silent tool call must
@@ -175,14 +178,18 @@ const sessionSync = new SessionTurnSync(turns, undefined, {
   // the watch open (a hold, not a reset: drain fires on the first quiet tick
   // after it clears). Its absence is NOT evidence of rest; that asymmetry is
   // why drain also needs the full quiet window.
+  // Soft hold: third-party status, subject to the 60s trust cap — a stuck
+  // feed must not retain tracking forever (Sol r2/r3).
   holdOpen: (terminalId) => {
     const reported = agentStatus(sessionNameFor(terminalId))
-    if (reported === 'working' || reported === 'blocked') return true
-    // A4's observed-turn fact: a turn the tracker saw open (live, delivered,
-    // or surviving an untrack) holds the watch until finality clears it —
-    // the status feed supports the fact but is not its sole representation.
-    return turns.hasOpenTurnFact(terminalId)
+    return reported === 'working' || reported === 'blocked'
   },
+  // Hard hold: A4's observed-turn fact — first-party evidence the tracker
+  // itself minted (live turn, confirmed delivery, surviving an untrack).
+  // Exempt from the trust cap, like pins and subscribers; cleared only by
+  // finality, interruption, or removal. The status feed supports the fact
+  // but is never its sole representation (Sol r3).
+  holdFact: (terminalId) => turns.hasOpenTurnFact(terminalId),
   isInTurn: (terminalId) => turns.inTurn(terminalId),
   onStale: (terminalId) => void rebindRotatedClaudeSession(terminalId),
   // Lets a subscriber START observation on a never-watched terminal — the
@@ -753,8 +760,13 @@ const dispatchService = new DispatchService({
     // otherwise only a live scrape will do. Checked BEFORE any state
     // change, because false promises acceptance left nothing behind.
     const spec = traces.watchSpec(agentId)
-    const observable = (spec !== null && spec.finality === 'native') || turns.isTracked(agentId)
-    if (!observable) return false
+    const grade =
+      spec !== null && spec.finality === 'native'
+        ? ('native-file' as const)
+        : turns.isTracked(agentId)
+          ? ('scrape' as const)
+          : false
+    if (grade === false) return false
     if (spec) watchSessionTurns(agentId, { deferInitial: true })
     sessionSync.pin(agentId)
     // A background target was watched BY this dispatch, not by focus, so the
@@ -764,9 +776,15 @@ const dispatchService = new DispatchService({
     if (store.nodeAcrossWorkspaces(agentId)?.workspaceId !== store.activeId) {
       sessionSync.release(agentId)
     }
-    return true
+    return grade
   },
   endWork: (agentId) => sessionSync.unpin(agentId),
+  // The sweep must not spare a stuck-working agent whose durable final
+  // answer already exists — status may hold, never outrank the row.
+  hasFinalAnswer: (agentId, prompt, armedAt) => turns.hasFinalAnswer(agentId, prompt, armedAt),
+  // Observer probation: a native-file acceptance must see its watch actually
+  // reconcile; a path that never materializes interrupts at 60s, not 10min.
+  observerLive: (agentId) => sessionSync.isVerified(agentId),
   persist: (record) => appendDispatchRecord(defaultDispatchRegistry(), record),
   loadRecords: () => readDispatchRecords(defaultDispatchRegistry()),
   persistTombstone: (tombstone) => appendDispatchTombstone(defaultDispatchRegistry(), tombstone),
@@ -793,6 +811,11 @@ const dispatchService = new DispatchService({
 // every open record the dead server hosted is stamped interrupted (billed as
 // infrastructure, never as the agent failing), not left to the sweep.
 ptys.onBackendDeath = (why) => dispatchService.onBackendDeath(why)
+// Owner typing into an agent mid-dispatch takes the agent over: the dispatch
+// is interrupted BEFORE the owner's turn opens, so exact-bytes identity can
+// never be asked to distinguish two producers on one conversation (Sol r3).
+turns.onOwnerPreempt = (terminalId) =>
+  dispatchService.interruptAgent(terminalId, 'preempted by owner input')
 
 /**
  * How often the sweep looks for dispatches nothing will ever close (D1).
@@ -1959,7 +1982,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   // bias the tail toward the agents that survive.
   turns.on(
     'turn',
-    ({ terminalId, durationMs, dispatchId, turnIndex, latencyReported }: CompletedTurn) => {
+    ({ terminalId, durationMs, dispatchId, turnIndex, latencyReported, outcome }: CompletedTurn) => {
       // One latency sample per exchange: an attached file-backed dispatch is
       // observed by the scrape first (no dispatchId) and closed by the file
       // path second — the second event carries latencyReported and must not
@@ -1988,7 +2011,8 @@ function registerIpc(handlers: RestoreHandlers): void {
             : history[history.length - 1]
         dispatchService.completeTurn(dispatchId, {
           turnIndex: completed?.index ?? 0,
-          ...(completed?.reply !== undefined ? { reply: completed.reply } : {})
+          ...(completed?.reply !== undefined ? { reply: completed.reply } : {}),
+          ...(outcome !== undefined ? { outcome } : {})
         })
       }
     }
