@@ -8,10 +8,18 @@ import { WorkspaceStore } from './store'
 import { PtyManager, multiplexer, sessionNameFor } from './pty'
 import type { PtySession } from './pty'
 import type { PaneCardInfo } from './multiplexer'
-import { statusFeed, type StatusObservation } from './herdr-agent-status'
+import { agentStatus, statusFeed, type StatusObservation } from './herdr-agent-status'
 import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
 import { TurnTracker, type CompletedTurn } from './turn-tracker'
 import { TurnStore } from './turn-store'
+import {
+  DispatchService,
+  appendDispatchRecord,
+  defaultDispatchRegistry,
+  readDispatchRecords,
+  turnDetails
+} from './dispatch'
+import { pasteAndSubmit } from './ask'
 import {
   boardSourcesFrom,
   buildBoard,
@@ -146,7 +154,19 @@ const pairingToken = loadOrCreatePairingToken()
  * detached, so an idle machine pays nothing.
  */
 const turns = new TurnTracker(summarizeTurn, turnStore)
-const sessionSync = new SessionTurnSync(turns)
+const sessionSync = new SessionTurnSync(turns, undefined, {
+  // Settle confirmation for background dispatches: on a quiet poll, let the
+  // file observer close an armed dispatch — unless herdr's push feed says
+  // the agent is still working/blocked. The positive signal may hold a turn
+  // open (its real value through long silent tool calls); per the standing
+  // asymmetry it never ends one, and its absence alone never completes
+  // anything either — completion still needs the settled tail record.
+  onQuiet: (terminalId) => {
+    const reported = agentStatus(sessionNameFor(terminalId))
+    if (reported === 'working' || reported === 'blocked') return
+    turns.completeFromHistory(terminalId)
+  }
+})
 const routines = new RoutineScheduler(store, ptys)
 const voice = new VoiceEngine()
 const roles = new RoleStore()
@@ -522,6 +542,95 @@ function watchSessionTurns(terminalId: string): void {
   // inferring the agent's state from what it painted.
   multiplexer()?.reportAgentSession?.(sessionNameFor(terminalId), spec.file)
 }
+
+/**
+ * Scrollback rows the dispatch engine reads when it asks "did the prompt land?".
+ * Deep enough that a multi-minute turn's own output cannot bury the echo.
+ */
+const DISPATCH_CAPTURE_LINES = 2000
+
+/**
+ * The attach-free dispatch engine (v4 §3, on v5 tracking). Every dep is a
+ * narrow function so the engine never learns what a PtySession is — the whole
+ * point of the route is that the target has no terminal open on it.
+ *
+ * `beginWork`/`endWork` are the v5 replacement for the serviceState gate: a
+ * dispatch is accepted for ANY resolvable agent, and the acceptance itself
+ * brings up the tracking it needs — the session-file watch plus a drain pin
+ * that holds it open through the longest quiet tool call — then hands the
+ * terminal back to the ordinary drain clock when the record closes.
+ *
+ * `reattachFallback` is the single exception and the single PTY: it runs only
+ * after the transcript has shown the prompt never landed, and it degrades to
+ * "no fallback" whenever the agent has no live session to reattach.
+ */
+const dispatchService = new DispatchService({
+  resolveAgent: (agentId) => {
+    const hit = store.nodeAcrossWorkspaces(agentId)
+    if (!hit || hit.node.kind !== 'terminal') return null
+    return { name: hit.node.name, workspaceId: hit.workspaceId }
+  },
+  sessionNameFor,
+  sessionExists: (name) => multiplexer()?.sessionExists(name) === true,
+  capture: (name) => multiplexer()?.capture(name) ?? null,
+  // The deep read the landing check needs: "is the prompt on screen?" is what
+  // a re-send hangs on, and a viewport-sized capture answers no for every
+  // prompt a long turn has already scrolled past. Backends that cannot go
+  // deeper simply have no captureDeep and the engine uses the plain one.
+  captureDeep: (name) => multiplexer()?.captureDeep?.(name, DISPATCH_CAPTURE_LINES) ?? null,
+  agentStatus: (name) => agentStatus(name),
+  promptAgent: (name, prompt, timeoutMs) => {
+    const mux = multiplexer()
+    if (!mux?.capabilities.agentLifecycle || !mux.promptAgent) return Promise.resolve('failed')
+    return mux.promptAgent(name, prompt, timeoutMs)
+  },
+  noteDispatch: (agentId, dispatchId) => turns.noteDispatch(agentId, dispatchId),
+  clearDispatch: (agentId, dispatchId) => turns.clearDispatch(agentId, dispatchId),
+  // Accept time: the dispatch's turn must land in a watched session file, and
+  // the pin holds that watch open until the record closes (v5 A4).
+  beginWork: (agentId) => {
+    watchSessionTurns(agentId)
+    sessionSync.pin(agentId)
+    // A background target was watched BY this dispatch, not by focus, so the
+    // watch must owe its drain from the start: released-but-pinned holds for
+    // the whole dispatch and then drains on the ordinary quiet clock. A
+    // focused target is repinned by presence on the next watch() anyway.
+    if (store.nodeAcrossWorkspaces(agentId)?.workspaceId !== store.activeId) {
+      sessionSync.release(agentId)
+    }
+  },
+  endWork: (agentId) => sessionSync.unpin(agentId),
+  persist: (record) => appendDispatchRecord(defaultDispatchRegistry(), record),
+  loadRecords: () => readDispatchRecords(defaultDispatchRegistry()),
+  // The typed path and ONLY the typed path: askTerminal asks the multiplexer
+  // first, so reaching for it here would hand the same prompt back to herdr —
+  // a second identical submission on the exact outcome that means "herdr could
+  // not deliver this". pasteAndSubmit cannot reach herdr by construction.
+  reattachFallback: async (agentId, prompt) => {
+    const session = ptys.get(agentId)
+    if (!session) return false
+    await pasteAndSubmit(session, prompt)
+    return true
+  }
+})
+
+/**
+ * How often the sweep looks for dispatches nothing will ever close (D1).
+ *
+ * A minute: the sweep is a map scan over records the process already holds, and
+ * the thing it frees is an agent's in-flight slot — an hour of 409 busy on a
+ * dead dispatch is a worse trade than sixty cheap passes.
+ */
+const DISPATCH_SWEEP_MS = 60_000
+
+const dispatchSweep = setInterval(() => {
+  const stamped = dispatchService.sweep()
+  if (stamped.length > 0) {
+    console.error(`Dispatch sweep closed ${stamped.length} abandoned dispatch(es)`)
+  }
+}, DISPATCH_SWEEP_MS)
+// Never hold the process open for a janitor.
+dispatchSweep.unref?.()
 
 /**
  * Give the active workspace an orch terminal when it has none. It opens the
@@ -1426,6 +1535,8 @@ app.whenReady().then(() => {
     // probe (L2) is absent until the tmux sampler lands; rows then degrade to
     // their last known task rather than claiming a phase nobody observed.
     board: boardSources(),
+    // Attach-free dispatch (v4 §3): the two /api routes answer 503 without it.
+    dispatch: dispatchService,
     wallToken,
     pairingToken,
     recoverAgent,
@@ -1519,6 +1630,12 @@ app.on('before-quit', (event) => {
   event.preventDefault()
   if (appShutdownStarted) return
   appShutdownStarted = true
+  // Before anything is torn down: an open dispatch is commissioned work whose
+  // outcome this process was the only witness to. Stamping it interrupted is
+  // what separates "we lost sight of it" from "it never happened" for whoever
+  // reads the ledger after the restart.
+  clearInterval(dispatchSweep)
+  dispatchService.interruptAll('app quit')
   browserCast.shutdown()
   store.flush()
   events.flush()
@@ -1644,11 +1761,28 @@ function registerIpc(handlers: RestoreHandlers): void {
   // its work produced it. A terminal whose node has since gone (dismissed
   // between the reply and this tick) still reports — losing the sample would
   // bias the tail toward the agents that survive.
-  turns.on('turn', ({ terminalId, durationMs }: CompletedTurn) => {
+  turns.on('turn', ({ terminalId, durationMs, dispatchId }: CompletedTurn) => {
     const node = store.node(terminalId)
     store.withOpContext({ actor: 'agent' }, () =>
-      store.recordEvent('turn.completed', terminalId, node?.name ?? terminalId, undefined, durationMs)
+      store.recordEvent(
+        'turn.completed',
+        terminalId,
+        node?.name ?? terminalId,
+        turnDetails(dispatchId),
+        durationMs
+      )
     )
+    // Close the dispatch this turn answered (v4 §3): submitted → running →
+    // done {turnIndex, reply}. The reply comes from the ledger, not from the
+    // event — the log stays metadata only.
+    if (dispatchId !== undefined) {
+      const history = turns.history(terminalId)
+      const completed = history[history.length - 1]
+      dispatchService.completeTurn(dispatchId, {
+        turnIndex: completed?.index ?? 0,
+        ...(completed?.reply !== undefined ? { reply: completed.reply } : {})
+      })
+    }
   })
   ipcMain.handle('activity:list', () => turns.list())
 

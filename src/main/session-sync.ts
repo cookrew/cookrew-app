@@ -35,6 +35,17 @@ export const DRAIN_TICKS = 15
 /** Session-file lines → TurnRecords; one per 'file'-capable harness. */
 export type SessionTurnParser = (lines: string[]) => TurnRecord[]
 
+export interface SessionTurnSyncHooks {
+  /**
+   * A poll found the file unchanged. This is the settle confirmation the
+   * file-observer dispatch closure needs: a record that was CURRENT on the
+   * last growth poll and is still the tail one quiet poll later belongs to
+   * a finished turn, not a stream in flight. Fired for every watched
+   * terminal; the handler decides whether anything is armed.
+   */
+  onQuiet?: (terminalId: string) => void
+}
+
 interface WatchedFile {
   file: string
   mtimeMs: number
@@ -58,7 +69,8 @@ export class SessionTurnSync {
 
   constructor(
     private turns: TurnTracker,
-    private pollMs = DEFAULT_POLL_MS
+    private pollMs = DEFAULT_POLL_MS,
+    private hooks: SessionTurnSyncHooks = {}
   ) {}
 
   /**
@@ -211,7 +223,11 @@ export class SessionTurnSync {
       const stat = statSync(watched.file)
       const bytesMoved = stat.size !== watched.size
       if (stat.mtimeMs === watched.mtimeMs && stat.size === watched.size) {
+        // Drain accounting first: the quiet hook may settle a dispatch whose
+        // endWork unpins this very entry, and that reset must not be
+        // clobbered by a stale copy taken before the callback ran.
         this.noteDrainQuiet(terminalId, watched)
+        this.hooks.onQuiet?.(terminalId)
         return
       }
       const records = watched.parse(readFileSync(watched.file, 'utf8').split('\n'))

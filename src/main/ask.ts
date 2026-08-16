@@ -37,7 +37,7 @@ export function submitDelayMs(promptLength: number): number {
  * bug that a bare raw write hits when the TUI's own paste heuristic collapses
  * the burst. Same mechanism the fork engine uses (injectWhenReady).
  */
-async function pasteAndSubmit(session: PtySession, body: string): Promise<void> {
+export async function pasteAndSubmit(session: PtySession, body: string): Promise<void> {
   session.write(`${BRACKETED_PASTE_START}${body}${BRACKETED_PASTE_END}`)
   await new Promise((resolve) => setTimeout(resolve, submitDelayMs(body.length)))
   session.write('\r')

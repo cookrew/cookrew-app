@@ -2,6 +2,7 @@ import type http from "node:http";
 import type { WorkspaceStore } from "./store";
 import type { PtyManager } from "./pty";
 import type { TurnTracker } from "./turn-tracker";
+import type { DispatchService } from "./dispatch";
 import type { EventLog, CookrewEvent, EventQuery } from "./event-log";
 import { pageTurns } from "../shared/turn";
 import type { AgentRegistry } from "./agent-registry";
@@ -124,6 +125,12 @@ export interface MobileApiDeps {
    * unauthenticated (loopback-only embedders, tests).
    */
   pairingToken?: string;
+  /**
+   * Attach-free dispatch engine (v4 §3). Optional so this module compiles and
+   * serves before it is wired; absent = the two dispatch routes answer 503
+   * rather than a silent 404 on a route the catalog advertises.
+   */
+  dispatch?: DispatchService;
 }
 
 /** Base64 inflates ~4/3, so this admits attachments up to the 20MB save cap. */
@@ -769,6 +776,57 @@ export async function handleMobileApi(
         error: error instanceof Error ? error.message : String(error),
       });
     }
+    return true;
+  }
+  // V4 §3: attach-free dispatch. The one route the protocol lacked — give an
+  // agent work without a terminal open on it. 202 + a dispatch id; the answer
+  // arrives at GET /api/dispatches/:id, correlated through the turn that
+  // answered it. Absent dep = the engine is not wired, which is a 503 rather
+  // than a silent 404 on a route the catalog advertises. Writing, so the C1
+  // choke point above has already demanded the pairing token — the same
+  // admission every other mutating route here gets, nothing extra.
+  const dispatchMatch = p.match(/^\/api\/agents\/([^/]+)\/dispatch$/);
+  if (dispatchMatch && method === "POST") {
+    if (!deps.dispatch) {
+      respondJson(response, 503, { error: "dispatch is not available" });
+      return true;
+    }
+    const body = await readJson<{
+      brief?: string;
+      text?: string;
+      idempotencyKey?: string;
+    }>(request);
+    const result = await deps.dispatch.dispatch(dispatchMatch[1], {
+      brief: body.brief,
+      text: body.text,
+      idempotencyKey: body.idempotencyKey,
+    });
+    respondJson(response, result.status, result.body);
+    return true;
+  }
+  const dispatchGetMatch = p.match(/^\/api\/dispatches\/([^/]+)$/);
+  if (dispatchGetMatch && method === "GET") {
+    // The choke point fires on non-GET only, so without this the read would be
+    // open on the 0.0.0.0 listener: any id, from anyone on the LAN, described
+    // commissioned work at a named agent. Same exposure argument as
+    // /api/board, but scoped to the PAIRING token: following a dispatch is
+    // part of commissioning work, and the wall's read-only token covers the
+    // curated projections, not this. 403 rather than 401 when the read-only
+    // token is presented — the credential is known, its scope is not enough.
+    if (deps.pairingToken && !hasPairing) {
+      respondJson(response, hasReadOnly ? 403 : 401, {
+        error: hasReadOnly
+          ? "Forbidden — dispatches require the pairing token."
+          : "Unauthorized — dispatches require the pairing token.",
+      });
+      return true;
+    }
+    if (!deps.dispatch) {
+      respondJson(response, 503, { error: "dispatch is not available" });
+      return true;
+    }
+    const result = deps.dispatch.lookup(dispatchGetMatch[1]);
+    respondJson(response, result.status, result.body);
     return true;
   }
   const recoverMatch = p.match(/^\/api\/agents\/([^/]+)\/recover$/);

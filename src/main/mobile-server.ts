@@ -19,6 +19,7 @@ import type { EventLog } from './event-log'
 import type { AgentRegistry } from './agent-registry'
 import type { TraceReader } from './trace'
 import type { BoardSources } from './board-index'
+import type { DispatchService } from './dispatch'
 import type { ThumbFrame } from './browser-thumb-cache'
 import { X509Certificate } from 'node:crypto'
 import { askTerminal } from './ask'
@@ -66,6 +67,8 @@ export interface MobileServerDeps {
   traces: TraceReader
   /** Activity Board data plane; absent = /api/board answers 503. */
   board?: BoardSources
+  /** Attach-free dispatch engine (v4 §3); absent = the routes answer 503. */
+  dispatch?: DispatchService
   recoverAgent: (id: string) => RecoverResult
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
   undoRestore: (id: string) => Promise<RestoreResult>
