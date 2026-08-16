@@ -464,15 +464,41 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * cached answer.
    */
   private admissionCache: { at: number; panes: HerdrPane[] } | null = null
+  private admissionRefreshing = false
+
+  /**
+   * Zero forks on the request path (Sol r5): an expired snapshot is SERVED
+   * STALE while one async refresh runs behind it — the admission question
+   * tolerates bounded staleness by contract (a pane that died in the window
+   * becomes a classified delivery failure), and the alternative was one
+   * synchronous CLI round trip blocking Electron main per expiry window.
+   * Cold start is pre-warmed by startSupervisor; a truly cold call answers
+   * from an empty inventory (refusal-safe: 503 unreachable, retryable)
+   * rather than ever forking inline.
+   */
+  private refreshAdmissionCacheSoon(): void {
+    if (this.admissionRefreshing) return
+    this.admissionRefreshing = true
+    setImmediate(() => {
+      try {
+        this.admissionCache = { at: Date.now(), panes: this.readPanes() }
+      } finally {
+        this.admissionRefreshing = false
+      }
+    })
+  }
+
+  /** Seed the inventory outside any request (boot / supervisor start). */
+  primeAdmissionCache(): void {
+    this.admissionCache = { at: Date.now(), panes: this.readPanes() }
+  }
 
   sessionExistsCached(name: string): boolean {
     if (this.attachSnapshot) return this.sessionExists(name)
-    const now = Date.now()
-    if (!this.admissionCache || now - this.admissionCache.at > 500) {
-      this.admissionCache = { at: now, panes: this.readPanes() }
+    if (!this.admissionCache || Date.now() - this.admissionCache.at > 500) {
+      this.refreshAdmissionCacheSoon()
     }
-    const label = name
-    return this.admissionCache.panes.some((pane) => pane.label === label)
+    return this.admissionCache?.panes.some((pane) => pane.label === name) ?? false
   }
 
   /**

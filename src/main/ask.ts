@@ -72,6 +72,18 @@ export async function askTerminal(
   // still comes out of the mirror diff, so the shape callers see is identical.
   const mux = multiplexer()
   if (mux?.capabilities.agentLifecycle && mux.promptAgent) {
+    // THE ONE-PRODUCER GUARD, at the submit site (Sol r5 P0-1). A native ask
+    // submits server-side and never crosses PtySession.write, so this is the
+    // only place its bytes can meet the same guard every other owner producer
+    // meets — the primitive that durably PREEMPTS an armed dispatch or
+    // refuses. Consulted synchronously with NO await between verdict and
+    // submission, which closes the check-to-submit race a route-level armed
+    // check leaves open (a dispatch arming while the route parses its body).
+    // Guarded with the submitting Enter attached: the guard peeks at the
+    // bytes to decide whether they SUBMIT a prompt, and the bare text without
+    // its Enter reads as typing — the same prompt+'\r' shape the accepted
+    // submission announces below.
+    guardOwnerSubmit(session, prompt)
     const outcome = await mux.promptAgent(session.sessionName, prompt, timeoutMs)
     if (outcome !== 'failed') {
       // The tracker learns prompts from session.write's input event; a
@@ -96,11 +108,33 @@ export async function askTerminal(
     // down) — fall through to the typed path exactly as before this existed.
   }
 
+  // The typed path's writes DO cross PtySession.write and its guard — but
+  // that guard refuses by silently dropping the submitting bytes, which here
+  // would mean waiting out quiescence over an agent that never received the
+  // prompt and returning noise as its "reply". Consult the guard first so a
+  // refused ask is an honest error at the submit site (Sol r5 P0-1).
+  guardOwnerSubmit(session, prompt)
   await pasteAndSubmit(session, prompt)
 
   await waitForReply(session, { quiescenceMs, timeoutMs, graceMs })
 
   return diffOutput(before, session.fullText())
+}
+
+/**
+ * Fail-closed owner-producer reservation around an ask's irreversible
+ * submission (Sol r5 P0-1): the session's owner-input guard — the exact
+ * primitive PtySession.write consults before proc.write — either durably
+ * preempts an armed dispatch, allows (nothing armed / already answered), or
+ * reports that the preemption could NOT commit. On 'preempt-failed' the ask
+ * is REFUSED: submitting anyway would land a second producer's bytes beside
+ * an armed dispatch whose interrupt row never became durable. Unwired guards
+ * (tests, plain sessions) allow, matching write()'s own behavior.
+ */
+function guardOwnerSubmit(session: PtySession, prompt: string): void {
+  if (session.beforeOwnerInput?.(session.terminalId, `${prompt}\r`) === 'preempt-failed') {
+    throw new Error('agent has a dispatch in flight that could not be preempted')
+  }
 }
 
 /**

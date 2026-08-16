@@ -29,6 +29,7 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  fchmodSync,
   fsyncSync,
   mkdirSync,
   openSync,
@@ -112,8 +113,9 @@ export interface DispatchRecord {
    * idempotency key says "this is the same work"; the hash is what lets the
    * service CHECK that claim — one key fronting two different briefs is
    * refused instead of silently replaying whichever brief arrived first.
-   * Compared only across the same fingerprint version (fingerprintsConflict);
-   * legacy bare-hex rows were lossy and cannot prove sameness against v2.
+   * Comparable only within one fingerprint version (fingerprintVerdict);
+   * legacy bare-hex rows were lossy, cannot prove sameness against v2, and
+   * are refused fail-closed rather than replayed on faith (Sol r5 P0-3).
    */
   promptHash?: string
   /**
@@ -174,6 +176,19 @@ export interface DispatchInput {
    * never replay (or shadow) another's dispatch. Absent for owner calls.
    */
   consumer?: string
+}
+
+/**
+ * The GENERATION a delivery fact belongs to (Sol r5 P1): the dispatch that
+ * armed it and when. Threaded through every attempted/confirmed/retracted
+ * delivery call so the tracker can scope the fact to one exchange — a
+ * confirmation returning AFTER that dispatch settled (the blocking native
+ * submit outliving a fast scrape/file closure) must be a no-op, never a fresh
+ * open-turn fact minted at Date.now() with no future turn to close it.
+ */
+export interface DispatchGeneration {
+  dispatchId: string
+  armedAt: number
 }
 
 export interface DispatchDeps {
@@ -246,17 +261,27 @@ export interface DispatchDeps {
    * settled the turn — too late to be its prompt-of-record. Re-called at
    * confirmation (done / landed / unproven), which refreshes the fact and
    * lets the tracker replay closure for a turn that settled unprovable.
+   *
+   * GENERATION-SCOPED (Sol r5 P1): every call carries the arming generation,
+   * so the tracker treats a confirmation whose dispatchId no longer holds a
+   * stamp as settled history, not as a new delivery. The conductor wires this
+   * to TurnTracker.noteDispatchDelivered's (terminalId, prompt, gen)
+   * signature; a transitional 2-arg tracker wiring still typechecks (the
+   * lambda simply ignores gen) and keeps the pre-generation behavior until
+   * the tracker lane lands.
    */
-  noteDelivered?: (agentId: string, prompt: string) => void
+  noteDelivered?: (agentId: string, prompt: string, gen: DispatchGeneration) => void
   /**
    * The attempted-delivery fact registered before submission turned out to be
    * FALSE: non-delivery was positively proven (nonDeliveryProven — the pane
    * never moved, no echo, agent not busy). Wired by the conductor to
    * TurnTracker.retractDispatchDelivered so the fallback's re-send is never
    * correlated against a delivery that never happened. Called ONLY on proven
-   * non-delivery — an unproven absence keeps the fact.
+   * non-delivery — an unproven absence keeps the fact. Generation-scoped like
+   * noteDelivered (Sol r5 P1): a retraction takes back its OWN generation's
+   * fact, never a successor's.
    */
-  retractDelivered?: (agentId: string, prompt: string) => void
+  retractDelivered?: (agentId: string, prompt: string, gen: DispatchGeneration) => void
   /**
    * The dispatch is accepted: start the tracking it depends on (v5 A4 —
    * tracking follows work). Called once per accepted dispatch, after the
@@ -454,20 +479,37 @@ function fingerprintVersion(hash: string): string {
 }
 
 /**
- * Do two stored fingerprints PROVE the same key fronts different work?
- * Comparable only when both sides exist AND carry the same fingerprint
- * version: a v1 hash was lossy, so measuring it against a v2 exact-bytes hash
- * proves nothing in either direction. MIGRATION NOTE (Sol r4 P0-2): records
- * written before v2 keep their v1 hashes; a retry of such a key with a
- * different brief passes this check unproven and replays — a one-time miss
- * window that closes as v1 rows age out of the 90-day idempotency TTL. The
- * alternative (409ing every cross-version retry) would refuse every honest
- * replay of pre-upgrade work.
+ * What an idempotency-key hit is allowed to DO, judged by fingerprints alone.
  */
-export function fingerprintsConflict(a: string | undefined, b: string | undefined): boolean {
-  if (a === undefined || b === undefined) return false
-  if (fingerprintVersion(a) !== fingerprintVersion(b)) return false
-  return a !== b
+export type FingerprintVerdict = 'replay' | 'conflict' | 'incomparable'
+
+/**
+ * Compare the fingerprint a held record (or tombstone) carries against the
+ * incoming request's. The idempotency boundary FAILS CLOSED (Sol r5 P0-3):
+ *
+ * - 'replay'       — equality PROVEN (same version, same hash), or the retry
+ *   carries no work bytes at all (an empty/mangled retry replays by the key's
+ *   promise — with nothing to run, nothing can be mis-attributed).
+ * - 'conflict'     — difference proven under one comparable scheme: the key
+ *   fronts different work. 409, as ever.
+ * - 'incomparable' — the held row's fingerprint cannot be measured against
+ *   the incoming one (a lossy v1 hash vs an exact-bytes v2, any cross-version
+ *   pair, or a row that predates fingerprints entirely). Equality is
+ *   UNPROVABLE, and unprovable equality must never be treated as equality at
+ *   a billing-grade idempotency boundary — the previous policy replayed
+ *   another request's dispatch/result here for the whole 90-day migration
+ *   window. The caller is told to mint a new key; the honest byte-exact
+ *   retries of pre-upgrade work this refuses are the price of never serving
+ *   somebody a result for bytes they did not send.
+ */
+export function fingerprintVerdict(
+  held: string | undefined,
+  incoming: string | undefined
+): FingerprintVerdict {
+  if (incoming === undefined) return 'replay'
+  if (held === undefined) return 'incomparable'
+  if (fingerprintVersion(held) !== fingerprintVersion(incoming)) return 'incomparable'
+  return held === incoming ? 'replay' : 'conflict'
 }
 
 /**
@@ -751,10 +793,16 @@ export interface RegistryCompaction {
  * hydration would skip the row anyway), keyless closed records past
  * retention, and tombstones past IDEMPOTENCY_TTL_MS.
  *
- * ATOMIC: live lines go to a temp file (0600, same directory), fsync'd, then
- * renamed over the registry — the same temp+rename pattern the receipts
- * ledger uses. Any failure leaves the original registry byte-identical; the
- * temp file is best-effort unlinked and the error is loud, never fatal.
+ * ATOMIC AND DURABLE (Sol r5 P2): a stale temp from a crashed run is removed
+ * before reuse (openSync's mode applies at CREATE only, so truncating an
+ * existing permissive temp would keep — and then rename into place — its old
+ * mode; fchmod on the open descriptor is the backstop when the remove cannot
+ * land). Live lines go to the temp (0600, same directory), fsync'd, then
+ * renamed over the registry, and the PARENT DIRECTORY is fsync'd after the
+ * rename — without that the rename lives only in the directory's page cache
+ * and power loss can resurrect the pre-compaction file. Any failure leaves
+ * the original registry byte-identical; the temp file is best-effort unlinked
+ * and the error is loud, never fatal.
  */
 export function compactDispatchRegistry(
   file: string,
@@ -822,8 +870,22 @@ export function compactDispatchRegistry(
       ...keptTombstones.sort((a, b) => a.at - b.at).map(({ row }) => JSON.stringify(row))
     ]
     const tmp = compactionTempPath(file)
+    // Prefer a FRESH temp over reusing a validated-stale one (Sol r5 P2): a
+    // crashed run's leftover may carry a permissive mode that `openSync(...,
+    // 'w', 0600)` cannot repair — mode applies at create time only.
+    if (existsSync(tmp)) {
+      try {
+        unlinkSync(tmp)
+      } catch {
+        // cannot remove: the fchmod below repairs the inherited mode instead
+      }
+    }
     const fd = openSync(tmp, 'w', 0o600)
     try {
+      // Repair on the DESCRIPTOR, so the mode is right on the very inode the
+      // rename will install — a stale temp that survived the unlink above
+      // must not become a world-readable registry.
+      fchmodSync(fd, 0o600)
       if (lines.length > 0) writeSync(fd, `${lines.join('\n')}\n`)
       fsyncSync(fd)
     } finally {
@@ -837,9 +899,24 @@ export function compactDispatchRegistry(
       try {
         unlinkSync(tmp)
       } catch {
-        // the orphan is overwritten by the next compaction attempt
+        // the orphan is removed (or repaired) by the next compaction attempt
       }
       throw error
+    }
+    // Durable rename (Sol r5 P2): fsync the PARENT DIRECTORY so the new
+    // directory entry survives power loss — the temp's own fsync made the
+    // DATA durable, not the name pointing at it. Best-effort and loud: the
+    // rewrite itself already succeeded, and reporting it as failed would lie
+    // about the registry's (correct) contents.
+    try {
+      const dirFd = openSync(path.dirname(file), 'r')
+      try {
+        fsyncSync(dirFd)
+      } finally {
+        closeSync(dirFd)
+      }
+    } catch (error) {
+      console.error('Dispatch registry directory fsync failed (rename not yet durable):', error)
     }
     return { rewritten: true, liveLines, droppedLines }
   } catch (error) {
@@ -851,10 +928,11 @@ export function compactDispatchRegistry(
 const TERMINAL_STATES: ReadonlySet<DispatchState> = new Set(['done', 'failed', 'interrupted'])
 
 /**
- * Evidence-precedence lattice for competing terminal intents (Sol r3 P0-3).
- * `done` outranks `failed`, which outranks `interrupted` — state strength is
- * the FIRST axis. Non-terminal states rank below everything, though nothing
- * non-terminal ever reaches the comparison.
+ * State-strength axis of the terminal-intent lattice (Sol r3 P0-3): `done`
+ * outranks `failed`, which outranks `interrupted`. Consulted only BETWEEN
+ * intents of equal authority — state strength never overrules provenance.
+ * Non-terminal states rank below everything, though nothing non-terminal
+ * ever reaches the comparison.
  */
 const EVIDENCE_STRENGTH: Readonly<Record<DispatchState, number>> = {
   done: 3,
@@ -871,22 +949,28 @@ interface ParkedIntent {
 }
 
 /**
- * Compare two terminal intents (Sol r4 P1): state strength first, then
- * PROVENANCE — parser outranks infrastructure at equal state, because "the
- * durable record says this turn was interrupted, at index N" is a fact about
- * the turn while "the backend died" is a fact about the machinery. Positive =
- * the parked intent wins (newcomer discarded); negative = the newcomer wins
- * (intent replaced); zero = same state AND same provenance — the newcomer
- * lands but MERGES the parked intent's metadata (turnIndex/uuid/reply) rather
- * than erasing evidence it does not itself carry.
+ * Compare two terminal intents — AUTHORITY FIRST (Sol r5 P1). Parser evidence
+ * is the durable record's own verdict on how the answering turn ended,
+ * carrying that turn's identity; infrastructure evidence describes the
+ * machinery around it. Billing-grade authority dominates at ANY state: a
+ * parser-proven `interrupted` parked on a ledger fault must survive a later
+ * infrastructure `failed`, even though `failed` is the stronger-LOOKING state
+ * label — the previous stateStrength-first ranking let exactly that
+ * replacement lose the turn's outcome and identity. Only at EQUAL authority
+ * does state strength decide; equal authority AND state is a deterministic
+ * merge. Positive = the parked intent wins (newcomer discarded); negative =
+ * the newcomer wins (intent replaced); zero = the newcomer lands but MERGES
+ * the parked intent's metadata (turnIndex/uuid/reply) rather than erasing
+ * evidence it does not itself carry.
  */
-function compareTerminalIntents(
+export function compareTerminalIntents(
   parked: { state: DispatchState; evidence: TerminalEvidence },
   next: { state: DispatchState; evidence: TerminalEvidence }
 ): number {
-  const rank = (intent: { state: DispatchState; evidence: TerminalEvidence }): number =>
-    EVIDENCE_STRENGTH[intent.state] * 2 + (intent.evidence === 'parser' ? 1 : 0)
-  return rank(parked) - rank(next)
+  const authority = (evidence: TerminalEvidence): number => (evidence === 'parser' ? 1 : 0)
+  const byAuthority = authority(parked.evidence) - authority(next.evidence)
+  if (byAuthority !== 0) return byAuthority
+  return EVIDENCE_STRENGTH[parked.state] - EVIDENCE_STRENGTH[next.state]
 }
 
 /** Equal-evidence merge: keep the parked row's answering-turn identity. */
@@ -942,6 +1026,16 @@ export class DispatchService {
   private readonly tombstones = new Map<string, DispatchTombstone>()
   /** dispatchId → the async delivery leg, for tests and for shutdown. */
   private readonly inFlight = new Map<string, Promise<void>>()
+  /**
+   * dispatchIds whose queued delivery was ABORTED (Sol r5 P0-2): an owner
+   * preemption, backend death, node removal or sweep settled/parked the
+   * record while its delivery leg sat queued on the setImmediate hop or
+   * blocked inside promptAgent. The leg revalidates against this (plus record
+   * openness and reservation ownership) immediately before every irreversible
+   * prompt write; entries live only as long as the leg itself (cleared with
+   * inFlight), so the set is bounded by concurrent deliveries.
+   */
+  private readonly cancelledDeliveries = new Set<string>()
   /**
    * dispatchId → the terminal row whose durable append failed (commitTerminal)
    * plus the PROVENANCE that decided it (Sol r4 P1). The record it belongs to
@@ -1112,25 +1206,31 @@ export class DispatchService {
     const scopedKey = key === undefined ? undefined : idempotencyScope(input.consumer, key)
     if (scopedKey !== undefined) {
       const reused = { error: 'idempotency key reused for different work' }
+      // Cross-version/pre-fingerprint rows FAIL CLOSED (Sol r5 P0-3): a
+      // replay is a claim of proven equality, and a lossy v1 hash cannot
+      // prove a v2 exact-bytes request is the same work — refusing with a
+      // clear instruction beats silently answering with another request's
+      // dispatch.
+      const stale = { error: 'idempotency key predates exact-byte fingerprints — use a new key' }
       const existing = this.byKey.get(scopedKey)
       if (existing !== undefined) {
         const held = this.records.get(existing)
         // Same key fronting a DIFFERENT brief is a caller bug: replaying
         // would hand back a result for a prompt this caller did not send, and
-        // running it would break the key's promise. Checkable only when both
-        // sides carry a fingerprint OF THE SAME VERSION (pre-upgrade rows are
-        // missing or lossy-v1 — see fingerprintsConflict for the migration
-        // window).
-        if (fingerprintsConflict(held?.promptHash, promptHash)) {
-          return { status: 409, body: reused }
-        }
+        // running it would break the key's promise. Same-version equality
+        // replays; same-version difference is 409; anything UNPROVABLE
+        // (pre-upgrade rows, missing or lossy-v1 — fingerprintVerdict) is
+        // refused rather than replayed on faith.
+        const verdict = fingerprintVerdict(held?.promptHash, promptHash)
+        if (verdict === 'conflict') return { status: 409, body: reused }
+        if (verdict === 'incomparable') return { status: 409, body: stale }
         return { status: 200, body: { dispatchId: existing, replay: true } }
       }
       const tombstone = this.tombstones.get(scopedKey)
       if (tombstone !== undefined) {
-        if (fingerprintsConflict(tombstone.promptHash, promptHash)) {
-          return { status: 409, body: reused }
-        }
+        const verdict = fingerprintVerdict(tombstone.promptHash, promptHash)
+        if (verdict === 'conflict') return { status: 409, body: reused }
+        if (verdict === 'incomparable') return { status: 409, body: stale }
         // The record itself is pruned: the id, how it closed and "it closed"
         // are ALL that is still known — turnIndex, agent, timings went with
         // the record, and `tombstone: true` says so instead of faking a
@@ -1260,8 +1360,13 @@ export class DispatchService {
     this.inFlight.set(
       record.id,
       new Promise<void>((resolve) => setImmediate(resolve))
-        .then(() => this.deliver(record.id, agentId, sessionName, prompt))
-        .finally(() => this.inFlight.delete(record.id))
+        .then(() => this.deliver(record.id, agentId, sessionName, prompt, at))
+        .finally(() => {
+          this.inFlight.delete(record.id)
+          // The abort token dies with its leg — the set stays bounded by
+          // whatever is actually in flight (Sol r5 P0-2).
+          this.cancelledDeliveries.delete(record.id)
+        })
     )
 
     return {
@@ -1284,10 +1389,20 @@ export class DispatchService {
     dispatchId: string,
     agentId: string,
     sessionName: string,
-    prompt: string
+    prompt: string,
+    armedAt: number
   ): Promise<void> {
     const promptAgent = this.deps.promptAgent
     if (!promptAgent) return
+    // Every delivery fact carries its arming generation (Sol r5 P1), so the
+    // tracker can tell THIS exchange's confirmation from a stale echo of a
+    // settled one.
+    const gen: DispatchGeneration = { dispatchId, armedAt }
+    // Cancelled while still queued (Sol r5 P0-2)? The interrupt/release that
+    // aborted this leg already owns the record's outcome — assert NOTHING,
+    // not even context-full: a 'failed' from a cancelled leg would challenge
+    // the canceller's parked intent on the lattice.
+    if (!this.deliveryLive(dispatchId, agentId)) return
     // Context-full is checked HERE, not at admission (Sol r3 P1-15): it needs
     // a pane capture, and captures are synchronous CLI forks the 202 must not
     // wait on. A full agent swallows prompts whole (measured 2026-08-13:
@@ -1312,7 +1427,16 @@ export class DispatchService {
     // collapsed/absent echo then left its prompt-of-record unprovable and the
     // dispatch stranded. Registered against the armed generation; retracted
     // below only on POSITIVE proof of non-delivery.
-    this.deps.noteDelivered?.(agentId, prompt)
+    this.deps.noteDelivered?.(agentId, prompt, gen)
+    // The LAST revalidation before the irreversible submission (Sol r5 P0-2),
+    // in the same synchronous stretch as the write itself — no await sits
+    // between this check and promptAgent, so nothing can settle the record in
+    // between. A leg that lost its record, its reservation or its token here
+    // retracts ONLY its own attempted fact and writes no prompt.
+    if (!this.deliveryLive(dispatchId, agentId)) {
+      this.deps.retractDelivered?.(agentId, prompt, gen)
+      return
+    }
     let outcome: 'done' | 'submitted' | 'failed'
     try {
       outcome = await promptAgent(sessionName, prompt, this.deps.timeoutMs ?? DISPATCH_TIMEOUT_MS)
@@ -1321,12 +1445,25 @@ export class DispatchService {
       console.error('Dispatch submission threw:', describeSubmissionError(error, prompt.length))
     }
 
+    if (!this.deliveryLive(dispatchId, agentId)) {
+      // The record settled (or parked a terminal intent) while promptAgent
+      // blocked — whoever settled it owns the outcome. The submission DID
+      // happen, so on a positive `done` the delivered fact is still true and
+      // is confirmed under its generation (the tracker no-ops a settled
+      // generation — Sol r5 P1); everything else this leg could say is a
+      // weaker observation about an exchange that is already history, and a
+      // fallback re-send here would type a cancelled brief beside the owner's
+      // work.
+      if (outcome === 'done') this.deps.noteDelivered?.(agentId, prompt, gen)
+      return
+    }
+
     if (outcome === 'done') {
       // Delivered and observed. The turn correlation still closes the record —
       // `done` from the backend says the agent stopped, not what it produced.
       // Confirmed delivery = the tracker learns the exact delivered text, so
       // scrape closure can prove prompt identity without trusting the echo.
-      this.deps.noteDelivered?.(agentId, prompt)
+      this.deps.noteDelivered?.(agentId, prompt, gen)
       this.update(dispatchId, { state: 'running', via: 'herdr', confirmed: true })
       return
     }
@@ -1350,7 +1487,7 @@ export class DispatchService {
       // agent's input box — measured, on a dispatch that had worked.
       // Landing is confirmation too — the delivered-prompt fact goes to the
       // tracker for the same reason as on `done`.
-      this.deps.noteDelivered?.(agentId, prompt)
+      this.deps.noteDelivered?.(agentId, prompt, gen)
       this.update(dispatchId, { state: 'running', via: 'herdr', confirmed: true })
       return
     }
@@ -1367,7 +1504,7 @@ export class DispatchService {
       // the closer would be left recovering identity from a collapsed TUI
       // echo. Registered whenever non-delivery is NOT proven; the confidence
       // distinction lives in `confirmed`, not in the fact.
-      this.deps.noteDelivered?.(agentId, prompt)
+      this.deps.noteDelivered?.(agentId, prompt, gen)
       this.update(dispatchId, { via: 'herdr', confirmed: false })
       return
     }
@@ -1375,14 +1512,43 @@ export class DispatchService {
     // Non-delivery is PROVEN: the attempted-delivery fact registered before
     // the submission is false — retract it, or the fallback's re-send below
     // would be correlated against a delivery that never happened.
-    this.deps.retractDelivered?.(agentId, prompt)
+    this.deps.retractDelivered?.(agentId, prompt, gen)
     await this.fallback(
       dispatchId,
+      agentId,
       prompt,
       outcome === 'failed'
         ? 'herdr could not deliver the prompt'
         : 'the pane never moved and the prompt never appeared'
     )
+  }
+
+  /**
+   * Is this dispatch's delivery leg still entitled to write its prompt
+   * (Sol r5 P0-2)? Consulted IMMEDIATELY before every irreversible
+   * submission — native and reattach-fallback alike. Three things must all
+   * hold: the token is unaborted, the record is still open with NO parked
+   * terminal intent (a ledger fault means the outcome is already decided,
+   * merely not yet durable), and the record still owns the agent's
+   * reservation. Losing any of them — owner preemption, backend death, node
+   * removal, hydrate/sweep interrupt, endWork-via-release — cancels the
+   * write, not the bookkeeping around it.
+   */
+  private deliveryLive(dispatchId: string, agentId: string): boolean {
+    if (this.cancelledDeliveries.has(dispatchId)) return false
+    const record = this.records.get(dispatchId)
+    if (!record || TERMINAL_STATES.has(record.state)) return false
+    if (record.ledgerFault === true) return false
+    return this.reserved.get(agentId) === dispatchId
+  }
+
+  /**
+   * Abort a queued/in-flight delivery leg (Sol r5 P0-2). A no-op when no leg
+   * is in flight — the token exists to stop a prompt write that has not
+   * happened yet, and a leg that already settled has nothing to stop.
+   */
+  private cancelDelivery(dispatchId: string): void {
+    if (this.inFlight.has(dispatchId)) this.cancelledDeliveries.add(dispatchId)
   }
 
   /** Scrollback where the backend has it, the plain screen where it does not. */
@@ -1401,7 +1567,19 @@ export class DispatchService {
   }
 
   /** The one PTY in the design, and only ever after the evidence. */
-  private async fallback(dispatchId: string, prompt: string, why: string): Promise<void> {
+  private async fallback(
+    dispatchId: string,
+    agentId: string,
+    prompt: string,
+    why: string
+  ): Promise<void> {
+    // Revalidated immediately before the OTHER irreversible submission
+    // (Sol r5 P0-2): the reattach types the brief into a live pane, and a leg
+    // cancelled while promptAgent blocked must not deliver it beside the
+    // owner's work. The attempted fact was already retracted on the proven
+    // non-delivery that routed here; the canceller owns the record's outcome,
+    // so this asserts nothing.
+    if (!this.deliveryLive(dispatchId, agentId)) return
     const record = this.records.get(dispatchId)
     const reattach = this.deps.reattachFallback
     if (!reattach || !record) {
@@ -1482,6 +1660,12 @@ export class DispatchService {
   interrupt(dispatchId: string, why: string): void {
     const record = this.records.get(dispatchId)
     if (!record || TERMINAL_STATES.has(record.state)) return
+    // Abort the queued delivery FIRST (Sol r5 P0-2): the interrupt's intent
+    // is decided here whether or not its append commits below (a failed
+    // append parks it fail-closed), and a delivery leg still sitting on its
+    // setImmediate hop — or blocked inside promptAgent with the fallback
+    // ahead of it — must not write the cancelled brief into the pane.
+    this.cancelDelivery(dispatchId)
     this.update(dispatchId, { state: 'interrupted', error: why })
   }
 
@@ -1680,16 +1864,17 @@ export class DispatchService {
     next: DispatchRecord,
     evidence: TerminalEvidence
   ): void {
-    // The lattice gate, BEFORE any append attempt (Sol r3 P0-3; provenance
-    // per Sol r4 P1): a parked stronger fact must not be overwritten by a
-    // weaker later event even when the ledger has recovered in between — a
+    // The lattice gate, BEFORE any append attempt (Sol r3 P0-3; authority
+    // first per Sol r5 P1): a parked stronger fact must not be overwritten by
+    // a weaker later event even when the ledger has recovered in between — a
     // parser-proven `done` whose append failed, followed by onBackendDeath,
-    // must retry as done, never land as interrupted. State strength decides
-    // first; at EQUAL state, parser provenance outranks infrastructure (a
-    // parser-proven `interrupted` carrying its turn identity survives a
-    // generic backend-death interruption); equal state AND provenance lands
-    // the newcomer but merges the parked intent's turn identity/metadata
-    // rather than replacing evidence with nothing.
+    // must retry as done, never land as interrupted. AUTHORITY decides first:
+    // parser evidence (the answering turn's own durable verdict, with its
+    // identity) dominates infrastructure at any state, so a parser-proven
+    // `interrupted` survives an infrastructure `failed`. At equal authority,
+    // state strength decides; equal authority AND state lands the newcomer
+    // but merges the parked intent's turn identity/metadata rather than
+    // replacing evidence with nothing.
     let intent = next
     const parked = this.ledgerFaults.get(next.id)
     if (parked) {
@@ -1744,6 +1929,10 @@ export class DispatchService {
    * an open dispatch, so endWork fires exactly once per record.
    */
   private release(record: DispatchRecord): void {
+    // Terminal by ANY path — turn correlation, sweep, hydrate, quit — ends
+    // the delivery leg's licence to write (Sol r5 P0-2): a completion racing
+    // the queued delivery must not be followed by the brief it answered.
+    this.cancelDelivery(record.id)
     if (this.reserved.get(record.agentId) === record.id) this.reserved.delete(record.agentId)
     this.openMeta.delete(record.id)
     this.deps.clearDispatch?.(record.agentId, record.id)

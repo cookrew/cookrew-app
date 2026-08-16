@@ -822,6 +822,9 @@ export class PtyManager {
     // supervisor turns that from "until the next app launch" into ~15s.
     if (roles.host instanceof HerdrHostMultiplexer) {
       roles.host.startSupervisor(undefined, (why) => this.onBackendDeath?.(why))
+      // Seed the admission inventory at boot so the first dispatch never
+      // answers from an empty snapshot (and never forks inline either).
+      roles.host.primeAdmissionCache()
     }
 
     // Push-fed agent state, when the backend has it. Subscriptions are

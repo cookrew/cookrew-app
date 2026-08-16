@@ -757,11 +757,11 @@ const dispatchService = new DispatchService({
   noteDispatch: (agentId, dispatchId, prompt) => turns.noteDispatch(agentId, dispatchId, prompt),
   // Confirmed delivery hands the tracker the EXACT prompt: scrape closure
   // then correlates on delivered text, never on a truncated screen echo.
-  noteDelivered: (agentId, prompt) => turns.noteDispatchDelivered(agentId, prompt),
+  noteDelivered: (agentId, prompt, gen) => turns.noteDispatchDelivered(agentId, prompt, gen),
   // Proven non-delivery retracts the attempted fact — and ONLY proven: an
   // unconfirmed submission keeps its bytes so a settled scrape turn can
   // still be correlated when they arrive late.
-  retractDelivered: (agentId, prompt) => turns.retractDispatchDelivered(agentId, prompt),
+  retractDelivered: (agentId, prompt, gen) => turns.retractDispatchDelivered(agentId, prompt, gen),
   clearDispatch: (agentId, dispatchId) => turns.clearDispatch(agentId, dispatchId),
   // Accept time: the dispatch's turn must land in a watched session file, and
   // the pin holds that watch open until the record closes (v5 A4). False =
@@ -922,8 +922,7 @@ function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
     store.snapshotTerminal(id) // HIGH-1: capture recovery snapshot before the kill
     // An open dispatch dies WITH its workspace — interrupted (infrastructure),
     // never left submitted/busy until the sweep (Sol r1 P1).
-    dispatchService.interruptAgent(id, 'workspace removed')
-    sessionSync.unwatch(id)
+    retireTerminal(id, 'workspace removed')
     ptys.killDetached(id)
     turns.untrack(id)
     // Keep turn history as the recovery signal (see removeNode, R2 fix).
@@ -1144,11 +1143,24 @@ function recoverAgent(id: string): RecoverResult {
   }
 }
 
-async function removeNode(id: string): Promise<void> {
-  dispatchService.interruptAgent(id, 'terminal removed')
+/**
+ * Permanent terminal retirement — ONE primitive for every path that ends a
+ * terminal's life (remove, workspace remove, cut, rebind death). Ordering is
+ * the contract: interrupt the dispatch while its stamp still exists, clear
+ * the first-party facts (untrack deliberately preserves them for ordinary
+ * switches, so an ending MUST clear them or a moved/recovered id inherits a
+ * phantom in-turn veto — Sol r5), then tear down observation. The kill
+ * itself stays with the caller: cut awaits it, remove fire-and-forgets.
+ */
+function retireTerminal(id: string, why: string): void {
+  dispatchService.interruptAgent(id, why)
   turns.clearOpenTurnFact(id)
   sessionSync.unwatch(id)
   turns.untrack(id)
+}
+
+async function removeNode(id: string): Promise<void> {
+  retireTerminal(id, 'terminal removed')
   // NOTE: turn history is deliberately NOT cleared on kill — it is the third
   // recovery net (resolveClaudeSessionId matches it to the real session when
   // no snapshot/registry ref exists). Disk-capped at 100/agent, negligible;
@@ -1299,9 +1311,7 @@ const teamClipboard = new TeamClipboard({
     const state = store.workspaceState(fromWorkspaceId)
     for (const node of state.nodes) {
       if (node.kind !== 'terminal' || !nodeIds.includes(node.id)) continue
-      dispatchService.interruptAgent(node.id, 'terminal cut')
-      sessionSync.unwatch(node.id)
-      turns.untrack(node.id)
+      retireTerminal(node.id, 'terminal cut')
       await ptys.killAndWait(node.id)
     }
   },
@@ -1309,9 +1319,7 @@ const teamClipboard = new TeamClipboard({
     const state = store.workspaceState(fromWorkspaceId)
     for (const node of state.nodes) {
       if (node.kind !== 'terminal' || !nodeIds.includes(node.id)) continue
-      dispatchService.interruptAgent(node.id, 'terminal cut')
-      sessionSync.unwatch(node.id)
-      turns.untrack(node.id)
+      retireTerminal(node.id, 'terminal cut')
       ptys.kill(node.id)
       ptys.killDetached(node.id)
       agents.deactivate(node.id)

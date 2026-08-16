@@ -23,10 +23,12 @@ import {
   DispatchService,
   appendDispatchRecord,
   appendDispatchTombstone,
+  compareTerminalIntents,
   promptFingerprint,
   readDispatchRecords,
   readDispatchTombstones,
   type DispatchDeps,
+  type DispatchGeneration,
   type DispatchRecord,
   type DispatchTombstone
 } from '../src/main/dispatch'
@@ -1219,5 +1221,365 @@ describe('the 202 leaves before the delivery leg starts', () => {
     await service.settled('dsp-1')
     expect(deepReads).toBe(1) // the pre-submission look — taken inside the leg
     expect(prompts).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r5 P0-2 — a queued delivery does not survive interruption: every
+// irreversible submission revalidates that its dispatch is still open, still
+// owns the reservation, and was not aborted.
+// ---------------------------------------------------------------------------
+
+describe('interruption cancels the queued delivery before any prompt write (Sol r5 P0-2)', () => {
+  it('202 → interrupt in the setImmediate gap → promptAgent never runs, no fact lingers', async () => {
+    // The 202 leaves, the delivery leg sits queued on its macrotask hop, and
+    // the owner preempts (interruptAgent) in that gap. The captured callback
+    // used to submit unconditionally — the cancelled consumer brief landed
+    // beside the owner's work. Now the leg revalidates and writes nothing.
+    let prompts = 0
+    const delivered: string[] = []
+    const retracted: string[] = []
+    const service = new DispatchService(
+      deps({
+        promptAgent: async () => {
+          prompts += 1
+          return 'done'
+        },
+        noteDelivered: (_agentId, prompt) => delivered.push(prompt),
+        retractDelivered: (_agentId, prompt) => retracted.push(prompt)
+      })
+    )
+    const response = await service.dispatch('agent-1', { text: PROMPT })
+    expect(response.status).toBe(202)
+    expect(service.interruptAgent('agent-1', 'owner preempted the dispatch')).toEqual(['dsp-1'])
+    await service.settled('dsp-1')
+
+    expect(prompts).toBe(0)
+    // The attempted-delivery fact either never registered or was retracted —
+    // nothing about a prompt that never went out survives in the tracker.
+    expect(delivered).toEqual(retracted)
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'interrupted',
+      error: 'owner preempted the dispatch'
+    })
+  })
+
+  it('a cancellation between the attempted fact and the submission retracts exactly that fact', async () => {
+    // The tightest race: the leg has already registered its attempted fact
+    // when the interrupt lands (modeled via the pre-submission deepCapture,
+    // which runs in the same synchronous stretch). The revalidation
+    // immediately before promptAgent catches it: no submission, and the
+    // attempted fact is taken back under its own generation.
+    let prompts = 0
+    const delivered: Array<{ prompt: string; gen: DispatchGeneration }> = []
+    const retracted: Array<{ prompt: string; gen: DispatchGeneration }> = []
+    let service!: DispatchService
+    service = new DispatchService(
+      deps({
+        captureDeep: () => {
+          // The owner preempts while the leg is between its pane reads and
+          // the irreversible submission.
+          service.interruptAgent('agent-1', 'owner preempted')
+          return '> '
+        },
+        promptAgent: async () => {
+          prompts += 1
+          return 'done'
+        },
+        noteDelivered: (_agentId, prompt, gen) => delivered.push({ prompt, gen }),
+        retractDelivered: (_agentId, prompt, gen) => retracted.push({ prompt, gen })
+      })
+    )
+    await dispatchAndSettle(service)
+
+    expect(prompts).toBe(0)
+    expect(delivered).toEqual([
+      { prompt: PROMPT, gen: { dispatchId: 'dsp-1', armedAt: NOW } }
+    ])
+    // Retracted under the SAME generation — its own attempted fact, nothing
+    // a successor might have registered.
+    expect(retracted).toEqual(delivered)
+    expect(service.get('dsp-1')?.state).toBe('interrupted')
+  })
+
+  it('a cancellation while promptAgent blocks stops the reattach fallback too', async () => {
+    // promptAgent fails after the owner already preempted: the evidence path
+    // would prove non-delivery and reach for the PTY fallback — the OTHER
+    // irreversible submission. The revalidation before reattach refuses it.
+    let reattaches = 0
+    let interruptNow = (): void => undefined
+    const gate = new Promise<void>((resolve) => (interruptNow = resolve))
+    const service = new DispatchService(
+      deps({
+        promptAgent: async () => {
+          await gate
+          return 'failed'
+        },
+        capture: () => '> ', // pane never moved, no echo
+        agentStatus: () => 'idle',
+        reattachFallback: async () => {
+          reattaches += 1
+          return true
+        }
+      })
+    )
+    const response = await service.dispatch('agent-1', { text: PROMPT })
+    expect(response.status).toBe(202)
+    // Let the leg reach its blocking submission, then preempt mid-await.
+    await new Promise((resolve) => setImmediate(resolve))
+    service.interruptAgent('agent-1', 'owner preempted mid-submission')
+    interruptNow()
+    await service.settled('dsp-1')
+
+    expect(reattaches).toBe(0)
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'interrupted',
+      error: 'owner preempted mid-submission'
+    })
+  })
+
+  it('backend death in the gap cancels the delivery the same way', async () => {
+    let prompts = 0
+    const service = new DispatchService(
+      deps({
+        promptAgent: async () => {
+          prompts += 1
+          return 'done'
+        }
+      })
+    )
+    await service.dispatch('agent-1', { text: PROMPT })
+    expect(service.onBackendDeath('herdr server died')).toEqual(['dsp-1'])
+    await service.settled('dsp-1')
+    expect(prompts).toBe(0)
+    expect(service.get('dsp-1')?.state).toBe('interrupted')
+  })
+
+  it('endWork-via-release (turn completes in the gap) cancels the queued delivery', async () => {
+    // A file-closer completion can land between the 202 and the macrotask
+    // hop. The record settles done — and the queued leg must not then type
+    // the already-answered brief into the pane.
+    let prompts = 0
+    const service = new DispatchService(
+      deps({
+        promptAgent: async () => {
+          prompts += 1
+          return 'done'
+        }
+      })
+    )
+    await service.dispatch('agent-1', { text: PROMPT })
+    service.completeTurn('dsp-1', { turnIndex: 2, uuid: 'uuid-2', reply: 'already answered' })
+    await service.settled('dsp-1')
+    expect(prompts).toBe(0)
+    expect(service.get('dsp-1')).toMatchObject({ state: 'done', turnIndex: 2 })
+  })
+
+  it('an owner preemption whose interrupt row PARKS still cancels the write (fail closed)', async () => {
+    // The interrupt's append fails, so the record is held open with a ledger
+    // fault — the outcome is decided, merely not yet durable. The queued leg
+    // must treat a parked terminal intent exactly like a terminal state.
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let prompts = 0
+    let ledgerUp = true
+    const service = new DispatchService(
+      deps({
+        persist: () => ledgerUp,
+        promptAgent: async () => {
+          prompts += 1
+          return 'done'
+        }
+      })
+    )
+    await service.dispatch('agent-1', { text: PROMPT })
+    ledgerUp = false
+    service.interruptAgent('agent-1', 'owner preempted, ledger down')
+    await service.settled('dsp-1')
+    expect(prompts).toBe(0)
+    // The parked intent lands once the ledger recovers.
+    ledgerUp = true
+    service.sweep()
+    expect(service.get('dsp-1')?.state).toBe('interrupted')
+    vi.restoreAllMocks()
+  })
+
+  it('the healthy path is untouched: no cancellation, normal delivery and closure', async () => {
+    const delivered: Array<{ prompt: string; gen: DispatchGeneration }> = []
+    let prompts = 0
+    const service = new DispatchService(
+      deps({
+        promptAgent: async () => {
+          prompts += 1
+          return 'done'
+        },
+        noteDelivered: (_agentId, prompt, gen) => delivered.push({ prompt, gen })
+      })
+    )
+    await dispatchAndSettle(service)
+    expect(prompts).toBe(1)
+    // Attempted + confirmed, both under the arming generation.
+    expect(delivered).toEqual([
+      { prompt: PROMPT, gen: { dispatchId: 'dsp-1', armedAt: NOW } },
+      { prompt: PROMPT, gen: { dispatchId: 'dsp-1', armedAt: NOW } }
+    ])
+    expect(service.get('dsp-1')?.state).toBe('running')
+    service.completeTurn('dsp-1', { turnIndex: 1 })
+    expect(service.get('dsp-1')?.state).toBe('done')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r5 P1 — delivery facts are generation-scoped: a confirmation returning
+// after the dispatch settled carries its generation and changes no state.
+// ---------------------------------------------------------------------------
+
+describe('late confirmation is generation-scoped (Sol r5 P1)', () => {
+  it('a confirmation after settlement carries the arming generation and changes no record state', async () => {
+    // The blocking native submit outlives a fast file closure: the record is
+    // done (and released) by the time `done` returns. The confirmation still
+    // goes to the tracker — WITH the generation, so a tracker whose stamp for
+    // that dispatchId is gone treats it as history — and the record itself
+    // does not move.
+    const delivered: Array<{ prompt: string; gen: DispatchGeneration }> = []
+    let finish!: (outcome: 'done') => void
+    const outcome = new Promise<'done'>((resolve) => (finish = resolve))
+    const service = new DispatchService(
+      deps({
+        promptAgent: async () => outcome,
+        noteDelivered: (_agentId, prompt, gen) => delivered.push({ prompt, gen })
+      })
+    )
+    await service.dispatch('agent-1', { text: PROMPT })
+    // Let the leg submit, then settle the dispatch while it blocks.
+    await new Promise((resolve) => setImmediate(resolve))
+    service.completeTurn('dsp-1', { turnIndex: 5, uuid: 'uuid-5', reply: 'fast close' })
+    const settled = service.get('dsp-1')
+    finish('done')
+    await service.settled('dsp-1')
+
+    // Every fact this exchange emitted names the same generation — the stub
+    // tracker can prove which dispatch each call belongs to.
+    expect(delivered.length).toBeGreaterThanOrEqual(2) // attempted + late confirm
+    for (const call of delivered) {
+      expect(call.gen).toEqual({ dispatchId: 'dsp-1', armedAt: NOW })
+    }
+    // And the settled record did not move: no state change, no new timestamps.
+    expect(service.get('dsp-1')).toEqual(settled)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r5 P1 — the lattice ranks AUTHORITY before state: parser evidence
+// dominates infrastructure at any state; state strength only breaks equal
+// authority; equal both merges deterministically.
+// ---------------------------------------------------------------------------
+
+describe('terminal intents rank authority before state (Sol r5 P1)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('compareTerminalIntents: parser dominates infrastructure at ANY state', () => {
+    // The Sol r4 miss: stateStrength*2 + parserBit let infra `failed` (4)
+    // outscore parser `interrupted` (3). Authority is now the first axis.
+    const parked = { state: 'interrupted' as const, evidence: 'parser' as const }
+    const infraFailed = { state: 'failed' as const, evidence: 'infrastructure' as const }
+    expect(compareTerminalIntents(parked, infraFailed)).toBeGreaterThan(0)
+    // Both directions: a parser newcomer takes a stronger-looking infra park.
+    expect(
+      compareTerminalIntents(
+        { state: 'failed', evidence: 'infrastructure' },
+        { state: 'interrupted', evidence: 'parser' }
+      )
+    ).toBeLessThan(0)
+    // Equal authority still ranks by state strength…
+    expect(
+      compareTerminalIntents(
+        { state: 'done', evidence: 'parser' },
+        { state: 'interrupted', evidence: 'parser' }
+      )
+    ).toBeGreaterThan(0)
+    expect(
+      compareTerminalIntents(
+        { state: 'interrupted', evidence: 'infrastructure' },
+        { state: 'failed', evidence: 'infrastructure' }
+      )
+    ).toBeLessThan(0)
+    // …and equal both is the deterministic-merge tie.
+    expect(
+      compareTerminalIntents(
+        { state: 'interrupted', evidence: 'infrastructure' },
+        { state: 'interrupted', evidence: 'infrastructure' }
+      )
+    ).toBe(0)
+  })
+
+  it('the exact Sol scenario: parked parser interrupted survives an infra failed, and lands on recovery', async () => {
+    // A parser-native interrupted completion (with its turn identity) parks
+    // on a ledger fault; an infrastructure `failed` intent then challenges
+    // it; the ledger recovers. The parser row — outcome AND identity — is
+    // what must land, never the stronger-looking infrastructure label.
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let ledgerUp = true
+    let deliverFailed!: () => void
+    const gate = new Promise<'failed'>((resolve) => (deliverFailed = () => resolve('failed')))
+    const service = new DispatchService(
+      deps({
+        persist: () => ledgerUp,
+        promptAgent: async () => gate,
+        capture: () => '> ',
+        agentStatus: () => 'idle'
+      })
+    )
+    await service.dispatch('agent-1', { text: PROMPT })
+    await new Promise((resolve) => setImmediate(resolve))
+    // The parser lane proves the turn ended interrupted — append faults, so
+    // the verdict parks fail-closed.
+    ledgerUp = false
+    service.completeTurn('dsp-1', { turnIndex: 7, uuid: 'uuid-7', outcome: 'interrupted' })
+    expect(service.get('dsp-1')?.ledgerFault).toBe(true)
+    // Infrastructure now asserts `failed` — the delivery leg's own failure
+    // path resolves against the parked parser verdict.
+    deliverFailed()
+    await service.settled('dsp-1')
+    // The ledger recovers; the sweep lands what the parser proved.
+    ledgerUp = true
+    service.sweep()
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'interrupted',
+      turnIndex: 7,
+      turnUuid: 'uuid-7',
+      error: 'interrupted: the agent turn was interrupted'
+    })
+  })
+
+  it('an infrastructure failed never replaces a parked parser interrupt — direct challenge', async () => {
+    // Belt to the scenario above: force the infra `failed` through the
+    // commit path itself (a failed fallback-less delivery on a live record
+    // is 'failed'/infrastructure) and watch the lattice discard it.
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let ledgerUp = true
+    const service = new DispatchService(
+      deps({
+        persist: () => ledgerUp,
+        promptAgent: async () => 'done'
+      })
+    )
+    await dispatchAndSettle(service)
+    ledgerUp = false
+    service.completeTurn('dsp-1', { turnIndex: 3, uuid: 'uuid-3', outcome: 'interrupted' })
+    expect(service.get('dsp-1')?.ledgerFault).toBe(true)
+    // onBackendDeath sweeps ALL non-terminal records with an infrastructure
+    // interruption; a parked parser verdict must survive it (equal state,
+    // lower authority) — and DID before. The new claim: authority holds even
+    // against the stronger-looking `failed` label, pinned above at the unit
+    // level and here end-to-end through commitTerminal's gate.
+    service.onBackendDeath('backend died — infrastructure verdict')
+    ledgerUp = true
+    service.sweep()
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'interrupted',
+      turnIndex: 3,
+      turnUuid: 'uuid-3',
+      error: 'interrupted: the agent turn was interrupted'
+    })
   })
 })

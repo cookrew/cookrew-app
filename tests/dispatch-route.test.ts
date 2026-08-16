@@ -617,37 +617,87 @@ describe('idempotencyKey — a repeated dispatch is the SAME dispatch', () => {
     expect(delivered).toEqual([brief])
   })
 
-  it('a legacy lossy (v1) fingerprint cannot prove difference — replay, not 409', async () => {
+  it('a legacy lossy (v1) fingerprint FAILS CLOSED — 409 requiring a new key, never a replay (Sol r5 P0-3)', async () => {
     // Pre-upgrade rows carry bare-hex v1 hashes of a normalized prompt.
     // Measuring a v2 exact-bytes hash against one proves nothing in either
-    // direction, so the key's promise wins: replay. A one-time miss window,
-    // documented on fingerprintsConflict, that ages out with the 90-day TTL.
+    // direction — and a replay is a claim of PROVEN equality. The old policy
+    // ("the key's promise wins") answered such a retry with another request's
+    // dispatch and result for the whole 90-day migration window. Unprovable
+    // equality is refused, with the remedy in the error.
+    const NOW = 1_700_000_000_000
+    const legacyRow = (id: string): DispatchRecord =>
+      ({
+        id,
+        agentId: 'agent-1',
+        agentName: 'Forge',
+        workspaceId: 'ws-1',
+        state: 'done',
+        via: 'herdr',
+        createdAt: NOW - 1000,
+        updatedAt: NOW - 1000,
+        idempotencyKey: 'key-legacy',
+        promptHash: 'deadbeef'.repeat(8) // bare hex = v1, lossy
+      }) as DispatchRecord
+    const service = new DispatchService(
+      deps({ now: () => NOW, loadRecords: () => [legacyRow('dsp-old')] })
+    )
+    for (const text of [
+      'entirely different bytes than whatever v1 hashed',
+      PROMPT // even a plausible same-work retry: v1 cannot PROVE it
+    ]) {
+      const refused = await service.dispatch('agent-1', { text, idempotencyKey: 'key-legacy' })
+      expect(refused.status).toBe(409)
+      expect(refused.body).toEqual({
+        error: 'idempotency key predates exact-byte fingerprints — use a new key'
+      })
+    }
+    // The record itself is untouched — refusal, not corruption.
+    expect(service.get('dsp-old')?.state).toBe('done')
+  })
+
+  it('a hashless legacy TOMBSTONE fails closed the same way (Sol r5 P0-3)', async () => {
+    // A buried key whose tombstone predates fingerprints entirely: equality
+    // against incoming work bytes is just as unprovable as cross-version.
     const NOW = 1_700_000_000_000
     const service = new DispatchService(
       deps({
         now: () => NOW,
-        loadRecords: () => [
+        loadTombstones: () => [
           {
-            id: 'dsp-old',
-            agentId: 'agent-1',
-            agentName: 'Forge',
-            workspaceId: 'ws-1',
-            state: 'done',
-            via: 'herdr',
-            createdAt: NOW - 1000,
-            updatedAt: NOW - 1000,
-            idempotencyKey: 'key-legacy',
-            promptHash: 'deadbeef'.repeat(8) // bare hex = v1, lossy
-          } as DispatchRecord
+            kind: 'tombstone' as const,
+            scope: '\u0000key-prehistoric',
+            dispatchId: 'dsp-prehistoric',
+            state: 'done' as const,
+            closedAt: NOW - 1000
+          }
         ]
       })
     )
-    const replay = await service.dispatch('agent-1', {
-      text: 'entirely different bytes than whatever v1 hashed',
-      idempotencyKey: 'key-legacy'
+    const refused = await service.dispatch('agent-1', {
+      text: PROMPT,
+      idempotencyKey: 'key-prehistoric'
     })
+    expect(refused.status).toBe(409)
+    expect(refused.body).toEqual({
+      error: 'idempotency key predates exact-byte fingerprints — use a new key'
+    })
+  })
+
+  it('same-version verdicts are unchanged: equal replays, different 409s reused', async () => {
+    // The fail-closed lane is ONLY for unprovable comparisons — provable
+    // equality still replays and provable difference still refuses as before.
+    let n = 0
+    const service = new DispatchService(deps({ newId: () => `dsp-${(n += 1)}` }))
+    await dispatchAndSettle(service, 'agent-1', { text: PROMPT, idempotencyKey: 'key-v2' })
+    const replay = await service.dispatch('agent-1', { text: PROMPT, idempotencyKey: 'key-v2' })
     expect(replay.status).toBe(200)
-    expect(replay.body).toMatchObject({ dispatchId: 'dsp-old', replay: true })
+    expect(replay.body).toMatchObject({ dispatchId: 'dsp-1', replay: true })
+    const reused = await service.dispatch('agent-1', {
+      text: 'byte-different work',
+      idempotencyKey: 'key-v2'
+    })
+    expect(reused.status).toBe(409)
+    expect(reused.body).toMatchObject({ error: 'idempotency key reused for different work' })
   })
 
   it('scopes the key by consumer — one tenant cannot replay another', async () => {

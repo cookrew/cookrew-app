@@ -13,12 +13,16 @@
 
 import {
   appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   renameSync,
   statSync,
+  truncateSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
@@ -54,6 +58,17 @@ export class TurnStore {
   private timers = new Map<string, NodeJS.Timeout>()
   private pending = new Map<string, TurnRecord[]>()
   private written = new Map<string, Written>()
+  /**
+   * What changed since the last flush, per terminal (Sol r5 P1). 'all' — a
+   * full save (scheduleSave) whose flush must scan and may rewrite anything.
+   * A map of checkpoint index → latest changed record — a delta save
+   * (scheduleDelta) whose flush touches ONLY those records: the annotation
+   * pass folds them in incrementally, and the conversation write appends (or
+   * replaces just the last line) instead of visiting the other N records.
+   * A later scheduleSave overrides any accumulated delta; a delta never
+   * downgrades an 'all'.
+   */
+  private dirty = new Map<string, Map<number, TurnRecord> | 'all'>()
   /**
    * Whole-ledger cache for loadAll(). Built once and kept warm by write-through
    * from flush()/remove() — this process is the only writer, so re-reading every
@@ -258,6 +273,41 @@ export class TurnStore {
 
   scheduleSave(terminalId: string, records: TurnRecord[]): void {
     this.pending.set(terminalId, records)
+    this.dirty.set(terminalId, 'all')
+    if (this.timers.has(terminalId)) return
+    this.timers.set(
+      terminalId,
+      setTimeout(() => this.flush(terminalId), SAVE_DEBOUNCE_MS),
+    )
+  }
+
+  /**
+   * The delta pipeline's save (Sol r5 P1): the tracker names EXACTLY which
+   * records changed, so flush can persist an append or a tail edit without
+   * visiting the other N. `records` may be the tracker's live (tracker-owned)
+   * buffer rather than a point-in-time copy — that is fine here because every
+   * mutation of that buffer arrives through another scheduleDelta before the
+   * debounced flush runs, so the dirty set always covers what the buffer
+   * holds at flush time; like loadAll's cache, what this class holds is a
+   * live picture, read through single-threaded event-loop turns.
+   *
+   * CONTRACT: `changed` must cover every record whose content differs from
+   * the last save, and the change must be expressible as "records were
+   * appended and/or the previously-last record changed". A mid-history edit
+   * or a shrink is NOT — those go through scheduleSave, the full path.
+   */
+  scheduleDelta(
+    terminalId: string,
+    records: TurnRecord[],
+    changed: readonly TurnRecord[],
+  ): void {
+    this.pending.set(terminalId, records)
+    const held = this.dirty.get(terminalId)
+    if (held !== 'all') {
+      const merged = held ?? new Map<number, TurnRecord>()
+      for (const record of changed) merged.set(record.index, record)
+      this.dirty.set(terminalId, merged)
+    }
     if (this.timers.has(terminalId)) return
     this.timers.set(
       terminalId,
@@ -302,7 +352,8 @@ export class TurnStore {
 
   /**
    * Append when the history only GREW and its previous last record is
-   * byte-identical to what we wrote; otherwise rewrite.
+   * byte-identical to what we wrote; replace just the tail when a delta save
+   * proved the change stops at the previously-last record; otherwise rewrite.
    *
    * WHY THE FALLBACK STAYS after the annotation split. Two of the three edit
    * sources are gone from these lines — a seenAt stamp and a late Sous title
@@ -318,34 +369,80 @@ export class TurnStore {
     this.timers.delete(terminalId)
     const records = this.pending.get(terminalId)
     this.pending.delete(terminalId)
+    const dirty = this.dirty.get(terminalId) ?? 'all'
+    this.dirty.delete(terminalId)
     if (!records) return
 
     // Cookrew's fields first: they are the only copy, whereas the conversation
     // below is a copy of the transcript. If one of the two writes fails, lose
-    // the reproducible one.
-    this.annotations.save(this.safeId(terminalId), records)
+    // the reproducible one. A delta save names its changed records, so the
+    // annotation pass folds in exactly those instead of scanning every
+    // checkpoint (Sol r5 P1); a full save still rebuilds from everything.
+    if (dirty === 'all') this.annotations.save(this.safeId(terminalId), records)
+    else this.annotations.update(this.safeId(terminalId), [...dirty.values()])
 
     try {
       const known = this.written.get(terminalId)
       const file = this.fileFor(terminalId)
-      const canAppend =
-        known !== undefined &&
-        known.count > 0 &&
-        records.length > known.count &&
-        existsSync(file) &&
-        this.line(records[known.count - 1]) === known.lastLine
+      const extendable =
+        known !== undefined && known.count > 0 && records.length >= known.count && existsSync(file)
 
-      if (canAppend) {
-        const added = records.slice(known.count).map((r) => `${this.line(r)}\n`)
-        appendFileSync(file, added.join(''), 'utf8')
-        this.remember(terminalId, records)
-        this.cache(terminalId, records)
-        return
+      if (extendable) {
+        const boundary = known.count - 1
+        const boundaryRecord = records[boundary]
+        if (this.line(boundaryRecord) === known.lastLine) {
+          // Pure growth — or an annotation-only change, whose conversation
+          // bytes are untouched and need no write at all.
+          if (records.length > known.count) {
+            const added = records.slice(known.count).map((r) => `${this.line(r)}\n`)
+            appendFileSync(file, added.join(''), 'utf8')
+          }
+          this.remember(terminalId, records)
+          this.cache(terminalId, records)
+          return
+        }
+        // The last written line changed. On the delta path — where the dirty
+        // set proves nothing BELOW that line changed — replace just the tail
+        // instead of rewriting every record (Sol r5 P1): the common shape is
+        // a finalized re-carry of the open tail plus the records behind it.
+        const tailOnly =
+          dirty !== 'all' && [...dirty.keys()].every((index) => index >= boundaryRecord.index)
+        if (tailOnly && this.rewriteTail(file, known.lastLine, records.slice(boundary))) {
+          this.remember(terminalId, records)
+          this.cache(terminalId, records)
+          return
+        }
       }
       this.writeAll(terminalId, records)
     } catch (error) {
       console.error('Failed to save turn history:', error)
     }
+  }
+
+  /**
+   * Replace the file's LAST line and append from there — the tail-update leg
+   * of the delta path. Refuses (returns false, caller rewrites) unless the
+   * bytes about to be truncated are EXACTLY the line the last flush wrote:
+   * the file is user-editable, and truncating on faith could eat a record
+   * this process never knew about. The verification reads only the tail
+   * bytes, so the cost stays O(one line), never O(file).
+   */
+  private rewriteTail(file: string, lastLine: string, tail: readonly TurnRecord[]): boolean {
+    const expected = `${lastLine}\n`
+    const bytes = Buffer.byteLength(expected, 'utf8')
+    const size = statSync(file).size
+    if (size < bytes) return false
+    const fd = openSync(file, 'r')
+    try {
+      const held = Buffer.alloc(bytes)
+      const read = readSync(fd, held, 0, bytes, size - bytes)
+      if (read !== bytes || held.toString('utf8') !== expected) return false
+    } finally {
+      closeSync(fd)
+    }
+    truncateSync(file, size - bytes)
+    appendFileSync(file, tail.map((r) => `${this.line(r)}\n`).join(''), 'utf8')
+    return true
   }
 
   /** Drop a removed terminal's history file (node deletion). */
@@ -354,6 +451,7 @@ export class TurnStore {
     if (timer) clearTimeout(timer)
     this.timers.delete(terminalId)
     this.pending.delete(terminalId)
+    this.dirty.delete(terminalId)
     this.written.delete(terminalId)
     this.all?.delete(this.safeId(terminalId))
     this.annotations.remove(this.safeId(terminalId))

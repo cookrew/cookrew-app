@@ -8,8 +8,13 @@
 // closure scan, the store save — must see a delta-applied history identically.
 
 import { EventEmitter } from 'node:events'
-import { describe, expect, it } from 'vitest'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TurnTracker, type CompletedTurn } from '../src/main/turn-tracker'
+import { TurnStore } from '../src/main/turn-store'
+import type { AnnotationStore } from '../src/main/turn-annotations'
 import type { TurnRecord } from '../src/shared/turn'
 import type { PtySession } from '../src/main/pty'
 
@@ -164,6 +169,182 @@ describe('applyHistoryDelta — reset', () => {
     const full = [record({ index: 1, uuid: 'branch-root', prompt: 'the other branch' })]
     tracker.applyHistoryDelta('term-1', { kind: 'reset' }, () => full)
     expect(tracker.history('term-1').map((r) => r.uuid)).toEqual(['branch-root'])
+    tracker.disposeAll()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r5 P1 — O(delta) THROUGH PERSISTENCE. The parser lane emitting a
+// one-record delta means nothing if applying it copies the whole prefix,
+// hands the whole array to the annotation pass, and rewrites the whole file.
+// This gate counts the work where it actually lands: records visited by the
+// annotation pass, bytes written to the conversation file, and the identity
+// of the tracker's backing buffer.
+// ---------------------------------------------------------------------------
+
+interface StoreInternals {
+  annotations: AnnotationStore
+  writeAll: (terminalId: string, records: TurnRecord[]) => void
+}
+
+interface TrackerInternals {
+  histories: Map<string, TurnRecord[]>
+  scrapeEmitted: Map<string, { uuid?: string }[]>
+}
+
+describe('O(delta) through persistence (Sol r5 P1)', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'cookrew-delta-gate-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  const HISTORY = 300
+
+  /** A 300-turn, fully-titled, flushed history — the gate's baseline. */
+  function seeded(): { store: TurnStore; tracker: TurnTracker } {
+    const store = new TurnStore(path.join(dir, 'turns'))
+    const tracker = new TurnTracker(async () => null, store)
+    const base = Array.from({ length: HISTORY }, (_, i) =>
+      record({
+        index: i + 1,
+        uuid: `u${i + 1}`,
+        prompt: `ask ${i + 1}`,
+        reply: `reply ${i + 1}`,
+        title: `title ${i + 1}`,
+        final: true
+      })
+    )
+    tracker.replaceHistory('term-1', base)
+    store.flushAll()
+    return { store, tracker }
+  }
+
+  const turnsFile = (): string => path.join(dir, 'turns', 'term-1.jsonl')
+  const sidecarFile = (): string => path.join(dir, 'checkpoint-annotations', 'term-1.json')
+
+  it('300-turn history + 1 appended turn: annotation pass visits the delta, file gains one line, no rewrite', () => {
+    const { store, tracker } = seeded()
+    const internals = store as unknown as StoreInternals
+    const annSave = vi.spyOn(internals.annotations, 'save')
+    const annUpdate = vi.spyOn(internals.annotations, 'update')
+    const writeAll = vi.spyOn(internals, 'writeAll')
+    const bytesBefore = readFileSync(turnsFile(), 'utf8')
+    const sidecarBefore = readFileSync(sidecarFile(), 'utf8')
+
+    tracker.applyHistoryDelta(
+      'term-1',
+      {
+        kind: 'append',
+        records: [record({ index: 301, uuid: 'u301', prompt: 'ask 301', reply: 'reply 301', title: 'title 301', final: true })]
+      },
+      noFull
+    )
+    store.flushAll()
+
+    // The annotation pass never rebuilt from all 300 records — it folded in
+    // only the delta window (the boundary record plus the landed one).
+    expect(annSave).not.toHaveBeenCalled()
+    expect(annUpdate).toHaveBeenCalledTimes(1)
+    expect(annUpdate.mock.calls[0][1].length).toBeLessThanOrEqual(2)
+    // The conversation write was an append of exactly one line: the original
+    // bytes are untouched and no full rewrite happened.
+    expect(writeAll).not.toHaveBeenCalled()
+    const bytesAfter = readFileSync(turnsFile(), 'utf8')
+    expect(bytesAfter.startsWith(bytesBefore)).toBe(true)
+    expect(bytesAfter.trim().split('\n')).toHaveLength(HISTORY + 1)
+    // The sidecar gained the appended turn's title and nothing else moved.
+    const sidecar = JSON.parse(readFileSync(sidecarFile(), 'utf8')) as Record<string, unknown>
+    expect(sidecar['301']).toEqual({ title: 'title 301' })
+    expect(Object.keys(sidecar)).toHaveLength(HISTORY + 1)
+    expect(JSON.parse(sidecarBefore)).toMatchObject({ '1': { title: 'title 1' } })
+    // And it all reads back whole.
+    expect(tracker.history('term-1')).toHaveLength(HISTORY + 1)
+    tracker.disposeAll()
+  })
+
+  it('an appended turn with NO annotation leaves the sidecar bytes completely untouched', () => {
+    const { store, tracker } = seeded()
+    const sidecarBefore = readFileSync(sidecarFile(), 'utf8')
+    tracker.applyHistoryDelta(
+      'term-1',
+      { kind: 'append', records: [record({ index: 301, uuid: 'u301', prompt: 'ask 301', reply: 'reply 301', final: true })] },
+      noFull
+    )
+    store.flushAll()
+    expect(readFileSync(sidecarFile(), 'utf8')).toBe(sidecarBefore)
+    tracker.disposeAll()
+  })
+
+  it('a tail finalization replaces ONE line via truncate+append — never a full rewrite', () => {
+    const { store, tracker } = seeded()
+    const internals = store as unknown as StoreInternals
+    const writeAll = vi.spyOn(internals, 'writeAll')
+    const before = readFileSync(turnsFile(), 'utf8')
+    const prefix = before.slice(0, before.lastIndexOf('\n', before.length - 2) + 1)
+
+    tracker.applyHistoryDelta(
+      'term-1',
+      {
+        kind: 'tail',
+        record: record({ index: HISTORY, uuid: `u${HISTORY}`, prompt: `ask ${HISTORY}`, reply: 'grew a longer reply', final: true })
+      },
+      noFull
+    )
+    store.flushAll()
+
+    expect(writeAll).not.toHaveBeenCalled()
+    const after = readFileSync(turnsFile(), 'utf8')
+    // Every line but the last is byte-identical; the last carries the edit.
+    expect(after.startsWith(prefix)).toBe(true)
+    const lines = after.trim().split('\n')
+    expect(lines).toHaveLength(HISTORY)
+    expect(lines[lines.length - 1]).toContain('grew a longer reply')
+    // The replaced tail still carried its title across (annotation intact).
+    expect(tracker.history('term-1')[HISTORY - 1].title).toBe(`title ${HISTORY}`)
+    tracker.disposeAll()
+  })
+
+  it('the tracker-private buffer is appended IN PLACE — the prefix is never copied', () => {
+    const { tracker } = fixture()
+    tracker.replaceHistory(
+      'term-1',
+      Array.from({ length: HISTORY }, (_, i) => record({ index: i + 1, uuid: `u${i + 1}`, final: true }))
+    )
+    const buffer = (tracker as unknown as TrackerInternals).histories.get('term-1')
+    tracker.applyHistoryDelta(
+      'term-1',
+      { kind: 'append', records: [record({ index: 301, uuid: 'u301' })] },
+      noFull
+    )
+    // Same array object, one longer: the append mutated the tracker-owned
+    // buffer instead of allocating a copy of the 300 untouched records.
+    expect((tracker as unknown as TrackerInternals).histories.get('term-1')).toBe(buffer)
+    expect(buffer).toHaveLength(HISTORY + 1)
+    tracker.disposeAll()
+  })
+
+  it('history() identity survives the buffer: same reference while unchanged, new after a delta, old copy frozen in time', () => {
+    // The contract SessionTurnSync's watch() re-adopt depends on:
+    // `history(id) === prior.history` must mean "nothing changed".
+    const { tracker } = fixture()
+    tracker.replaceHistory('term-1', [record({ index: 1, uuid: 'u1', final: true })])
+    const before = tracker.history('term-1')
+    expect(tracker.history('term-1')).toBe(before)
+    tracker.applyHistoryDelta(
+      'term-1',
+      { kind: 'append', records: [record({ index: 2, uuid: 'u2' })] },
+      noFull
+    )
+    const after = tracker.history('term-1')
+    expect(after).not.toBe(before)
+    expect(after).toHaveLength(2)
+    // The handed-out snapshot is point-in-time: the in-place append did not
+    // reach through the reference a caller captured earlier.
+    expect(before).toHaveLength(1)
     tracker.disposeAll()
   })
 })

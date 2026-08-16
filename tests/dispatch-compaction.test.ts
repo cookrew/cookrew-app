@@ -7,7 +7,7 @@
 // (temp + fsync + rename, the receipts-ledger pattern), at hydrate time
 // only, and a failure at any point leaves the original byte-identical.
 
-import { mkdtempSync, readFileSync, statSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, vi, afterEach } from 'vitest'
@@ -25,10 +25,18 @@ import {
   type DispatchTombstone
 } from '../src/main/dispatch'
 
-// The crash simulation: rename fails on demand while every other fs call
-// passes through — a crash between temp-write and rename is exactly "the
-// rename never happened".
-const crash = vi.hoisted(() => ({ failRename: false }))
+// The crash simulation: rename (and, for the Sol r5 P2 tests, unlink) fails
+// on demand while every other fs call passes through — a crash between
+// temp-write and rename is exactly "the rename never happened". openSync,
+// fsyncSync and fchmodSync are recorded pass-throughs, so the durability
+// tests can assert WHICH descriptors were synced and repaired.
+const crash = vi.hoisted(() => ({
+  failRename: false,
+  failUnlink: false,
+  opened: [] as Array<{ fd: number; path: string }>,
+  fsynced: [] as number[],
+  fchmods: [] as Array<{ fd: number; mode: number }>
+}))
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
   return {
@@ -36,9 +44,35 @@ vi.mock('node:fs', async (importOriginal) => {
     renameSync: (from: string, to: string): void => {
       if (crash.failRename) throw new Error('simulated crash before rename landed')
       actual.renameSync(from, to)
+    },
+    unlinkSync: (target: string): void => {
+      if (crash.failUnlink) throw new Error('simulated EPERM: stale temp cannot be removed')
+      actual.unlinkSync(target)
+    },
+    openSync: (target: string, flags: string | number, mode?: number): number => {
+      const fd = actual.openSync(target, flags as never, mode)
+      crash.opened.push({ fd, path: String(target) })
+      return fd
+    },
+    fsyncSync: (fd: number): void => {
+      crash.fsynced.push(fd)
+      actual.fsyncSync(fd)
+    },
+    fchmodSync: (fd: number, mode: number): void => {
+      crash.fchmods.push({ fd, mode })
+      actual.fchmodSync(fd, mode)
     }
   }
 })
+
+/** Reset the simulation between tests. */
+function resetCrashSim(): void {
+  crash.failRename = false
+  crash.failUnlink = false
+  crash.opened.length = 0
+  crash.fsynced.length = 0
+  crash.fchmods.length = 0
+}
 
 const PROMPT = 'Run the F2 simulation and report the counts.'
 const NOW = 1_700_000_000_000
@@ -109,7 +143,7 @@ const lineCount = (file: string): number =>
 
 describe('compactDispatchRegistry — the live set survives, the dead weight goes', () => {
   afterEach(() => {
-    crash.failRename = false
+    resetCrashSim()
     vi.restoreAllMocks()
   })
 
@@ -240,7 +274,7 @@ describe('compactDispatchRegistry — the live set survives, the dead weight goe
 
 describe('hydrate-time compaction keeps the file bounded across restarts', () => {
   afterEach(() => {
-    crash.failRename = false
+    resetCrashSim()
     vi.restoreAllMocks()
   })
 
@@ -293,7 +327,7 @@ describe('hydrate-time compaction keeps the file bounded across restarts', () =>
 
 describe('crash safety — the original registry survives anything short of the rename', () => {
   afterEach(() => {
-    crash.failRename = false
+    resetCrashSim()
     vi.restoreAllMocks()
   })
 
@@ -325,5 +359,88 @@ describe('crash safety — the original registry survives anything short of the 
     crash.failRename = false
     expect(compactDispatchRegistry(file, NOW).rewritten).toBe(true)
     expect(lineCount(file)).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r5 P2 — durable across power loss, and stale temps cannot leak modes.
+// ---------------------------------------------------------------------------
+
+describe('compaction durability and temp-permission repair (Sol r5 P2)', () => {
+  afterEach(() => {
+    resetCrashSim()
+    vi.restoreAllMocks()
+  })
+
+  /** A registry with enough dead weight that compaction must rewrite. */
+  const compactable = (): string => {
+    const file = ledger()
+    appendDispatchRecord(file, row({ state: 'submitted' }))
+    appendDispatchRecord(file, row({ state: 'running', updatedAt: NOW - 900 }))
+    appendDispatchRecord(file, row({ state: 'done', updatedAt: NOW - 800 }))
+    return file
+  }
+
+  it('a pre-existing 0644 temp is repaired before the rename — the registry stays 0600', () => {
+    // A crashed run's leftover .compacting with a permissive mode: openSync's
+    // create-mode cannot fix it (mode applies at CREATE only), so without the
+    // remove-then-fchmod pair the rename installs a world-readable registry.
+    const file = compactable()
+    const tmp = compactionTempPath(file)
+    writeFileSync(tmp, 'stale rewrite from a crashed compaction\n')
+    chmodSync(tmp, 0o644)
+
+    const result = compactDispatchRegistry(file, NOW)
+    expect(result.rewritten).toBe(true)
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expect(lineCount(file)).toBe(1)
+  })
+
+  it('repairs the mode on the DESCRIPTOR when the stale temp cannot be removed', () => {
+    // The unlink path is blocked (EPERM): the rewrite proceeds over the
+    // stale inode, and fchmod on the open fd is what repairs its 0644 before
+    // that inode is renamed into place.
+    const file = compactable()
+    const tmp = compactionTempPath(file)
+    writeFileSync(tmp, 'stale rewrite from a crashed compaction\n')
+    chmodSync(tmp, 0o644)
+    crash.failUnlink = true
+
+    const result = compactDispatchRegistry(file, NOW)
+    expect(result.rewritten).toBe(true)
+    // The fchmod happened, against the temp's descriptor, before the rename.
+    const tempOpen = crash.opened.find((open) => open.path === tmp)
+    expect(tempOpen).toBeDefined()
+    expect(crash.fchmods).toContainEqual({ fd: tempOpen!.fd, mode: 0o600 })
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expect(lineCount(file)).toBe(1)
+  })
+
+  it('fsyncs the PARENT DIRECTORY after the rename — the entry is durable, not just atomic', () => {
+    // The temp's own fsync makes the data durable; only a directory fsync
+    // makes the NAME durable. Without it a power loss after "successful"
+    // compaction can resurrect the pre-compaction registry.
+    const file = compactable()
+    const result = compactDispatchRegistry(file, NOW)
+    expect(result.rewritten).toBe(true)
+
+    const dir = path.dirname(file)
+    const dirOpen = crash.opened.find((open) => open.path === dir)
+    expect(dirOpen).toBeDefined()
+    // Two fsyncs: the temp's data, then — LAST, after the rename — the
+    // directory entry. (Descriptor NUMBERS can be reused once the temp
+    // closes, so the order is pinned on the call sequence, not raw fds.)
+    const tempOpen = crash.opened.find((open) => open.path === compactionTempPath(file))
+    expect(tempOpen).toBeDefined()
+    expect(crash.fsynced).toHaveLength(2)
+    expect(crash.fsynced.at(-1)).toBe(dirOpen!.fd)
+    expect(crash.opened.indexOf(tempOpen!)).toBeLessThan(crash.opened.indexOf(dirOpen!))
+  })
+
+  it('no directory fsync when nothing was rewritten', () => {
+    const file = ledger()
+    appendDispatchRecord(file, row({ id: 'dsp-a', state: 'done', updatedAt: NOW - DAY }))
+    expect(compactDispatchRegistry(file, NOW).rewritten).toBe(false)
+    expect(crash.opened.find((open) => open.path === path.dirname(file))).toBeUndefined()
   })
 })

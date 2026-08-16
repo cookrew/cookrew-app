@@ -1,0 +1,76 @@
+[P0] Native ask submissions bypass the one-producer guard
+WHERE: src/main/ask.ts:69-80; src/main/socket-server.ts:529-552; src/main/mobile-server.ts:474-493; src/main/pty.ts:423-443
+CLAIM: The new pre-write guard covers PtySession.write, but the normal herdr-native ask path submits directly through mux.promptAgent and therefore never reaches that guard before bytes are delivered.
+EVIDENCE: cookrew ask reaches askTerminal with no armed-dispatch check, and askTerminal calls promptAgent directly. It announces the input only after the blocking submission returns, when preemption is too late. The HTTP /ask route has a router-level armed check, but then awaits request parsing before taking the same direct path, leaving a check-to-submit race in which a dispatch can arm. If the native submission fails, only the later typed fallback uses session.write and its guard. Thus an owner ask can land beside an armed dispatch and either be attributed to it or create two producers despite the invariant at dispatch.ts:414-418.
+FIX: Put a fail-closed owner-producer reservation immediately around the irreversible mux.promptAgent call, ideally as a PtySession owner-submit primitive used by CLI and HTTP. It must synchronously durably preempt an armed dispatch (or refuse), source-tag the accepted submission, and close the check-to-submit race rather than relying on route admission.
+
+[P0] Interrupted dispatch delivery is not cancelled before submission
+WHERE: src/main/dispatch.ts:1254-1264,1283-1318,1482-1503; src/main/turn-tracker.ts:1402-1433
+CLAIM: Owner preemption can durably interrupt and release a dispatch while its setImmediate delivery remains queued; deliver never checks that its record/reservation is still open before sending the prompt.
+EVIDENCE: dispatch returns 202 and schedules deliver on the next macrotask. An owner submit in that gap invokes interruptAgent, commits interrupted, clears the tracker stamp, and is allowed into the agent. The queued callback then captures and calls promptAgent unconditionally. update correctly refuses to regress the terminal dispatch record afterward, but that protects only bookkeeping: the cancelled consumer brief has already been delivered beside the owner's work. Node removal and backend interruption have the same stale-callback shape.
+FIX: Give each delivery an abort/generation token and revalidate that the same dispatch still owns the agent immediately before every irreversible submission (native and fallback). interrupt/release/removal must cancel queued delivery; a cancelled callback must retract only its own attempted fact and perform no prompt write.
+
+[P0] Legacy idempotency keys still silently replay different work
+WHERE: src/main/dispatch.ts:450-470,1118-1133; tests/dispatch-route.test.ts:620-650
+CLAIM: Exact v2 fingerprints fix new rows, but a request using an extant v1 key and byte-different work is deliberately replayed instead of rejected, preserving the billing/idempotency failure for the advertised 90-day migration window.
+EVIDENCE: fingerprintsConflict returns false whenever versions differ. The regression test constructs a legacy key and explicitly expects entirely different v2 bytes to receive 200 replay. The service therefore answers with another request's dispatch/result while claiming same-key replay; absence of proof of equality is being treated as equality at the load-bearing idempotency boundary.
+FIX: Fail closed on cross-version or missing fingerprints (409 requiring a new key), or migrate only rows for which original exact request bytes are durably available. Never return a successful replay unless equality is proven under one comparable fingerprint scheme.
+
+[P1] Late delivery confirmation recreates a settled open-turn fact
+WHERE: src/main/dispatch.ts:1308-1330; src/main/turn-tracker.ts:820-830,852-875
+CLAIM: noteDelivered is called before the blocking native submit and again on confirmed return, but the second call is not tied to a still-armed dispatch generation and can recreate work after that dispatch already closed.
+EVIDENCE: A fast scrape/file closer can consume pendingDispatch and clear its open fact while promptAgent is blocked. When outcome=done returns, the second noteDispatchDelivered sees no pending stamp and no live thinking turn, so it installs deliveredPrompt and openTurnFacts at Date.now(). update then no-ops because the dispatch is terminal. With no future turn for that fact, it can hold tracking/restore indefinitely and can contaminate the next turn's prompt-of-record.
+FIX: Pass dispatchId/generation into attempted, confirmed, and retract calls. Confirmation must update the existing fact only when that exact generation is still pending; it must be a no-op after settlement. Do not model attempt and confirmation as two unscoped deliveries.
+
+[P1] Permanent detached lifecycle paths still leak open-turn facts
+WHERE: src/main/index.ts:911-933,1298-1319; src/main/turn-tracker.ts:800-813,1283-1293
+CLAIM: clearOpenTurnFact is wired for removeNode and global backend death, but workspace removal and both cut phases unwatch/untrack before killing without clearing the terminal-owned fact.
+EVIDENCE: A detached terminal has no tracked process-exit callback after untrack, and untrack intentionally preserves openTurnFacts for ordinary workspace switches. removeWorkspace and team cut are permanent lifecycle endings yet omit clearOpenTurnFact. A cut preserves the same node id in the destination, so the stale fact can immediately make the moved agent appear in-turn and veto drain/restore; workspace removal leaks it until full tracker disposal.
+FIX: Centralize permanent terminal retirement in one lifecycle primitive that interrupts the dispatch, clears the open/delivered facts, unwatches, untracks, and then kills. Use it for node remove, workspace remove, cut, rebind death, and backend death; test detached facts on every path.
+
+[P1] Terminal evidence still ranks outcome state before provenance
+WHERE: src/main/dispatch.ts:853-889,1678-1717
+CLAIM: Metadata merge was added, but the comparison is still stateStrength*2 plus a parser bit, so a weaker infrastructure assertion of a stronger-looking state replaces direct parser evidence.
+EVIDENCE: A parser-native interrupted record can be parked when the ledger append faults. A later infrastructure failed intent scores 4 versus the parser interruption's 3 and replaces it, losing the authoritative turn outcome and identity. The requested provenance-first lattice was implemented only as an equal-state tie-breaker even though parser finality is the billing-grade authority and infrastructure describes machinery, not how the answering turn ended.
+FIX: Rank evidence authority before projected state: native parser evidence with matching turn identity must dominate all infrastructure guesses. For equal authority merge metadata deterministically; allow only stronger evidence, not a numerically stronger state label, to replace a parked intent.
+
+[P1] Dispatch admission still synchronously forks herdr on cache misses
+WHERE: src/main/herdr-host-multiplexer.ts:440-475; src/main/index.ts:737-743; src/main/dispatch.ts:1166-1174
+CLAIM: The 500 ms cache reduces fork frequency but does not make the 202 path spawn-free: the first admission after every expiry runs herdr pane list synchronously on Electron main.
+EVIDENCE: sessionExistsCached refreshes by directly calling readPanes, which calls runner.run synchronously. Concurrent requests cannot share an in-flight refresh because the first blocks the event loop; at least one request each window pays the full CLI/server round trip. This contradicts dispatch.ts's statement that admission reads a cache and never a synchronous fork, and retains recurring tail stalls under sparse requests or repeated windows.
+FIX: Maintain a pushed or asynchronously refreshed generation-scoped pane inventory outside request handlers. Admission reads only the last bounded snapshot; the async delivery leg revalidates existence and closes unreachable honestly. Add a zero-runner-spawn assertion around dispatch admission on both warm and expired snapshots.
+
+[P1] The delta pipeline still performs O(total history) work per append
+WHERE: src/main/turn-tracker.ts:521-574; src/main/turn-store.ts:315-345; src/main/turn-annotations.ts:129-136
+CLAIM: Parsers and SessionTurnSync now hand off deltas, but applying one append still copies the complete history and hands the complete array to persistence, whose annotation pass scans every turn.
+EVIDENCE: applyHistoryDelta constructs next with array spreads over previous, then commitReconciled stores and schedules the whole array. TurnStore.flush calls annotations.save before its append optimization, and AnnotationStore.save rebuilds annotations by iterating every record. Tail updates likewise copy all but the last record. The 300+1 gate can count one incoming record while missing the dominant downstream O(N) allocation, scan, and JSON comparison, so design invariant I3 is not satisfied end to end.
+FIX: Give TurnTracker and TurnStore append/tail-update primitives backed by a structure that does not copy the prefix, and update annotation state only for changed records. Materialize a full array only for read APIs and explicit reset/branch paths; gate allocations/records visited through persistence, not just delta payload size.
+
+[P1] Latency dedupe expires long turns immediately and is not restart-stable
+WHERE: src/main/turn-tracker.ts:94-100,1078-1099,1111-1135
+CLAIM: UUID reconciliation improves nearby-turn precision, but the observation's turn start is also its ten-minute expiry clock and the dedupe queue exists only in memory.
+EVIDENCE: noteScrapeEmitted is called when a scrape turn settles but stores startedAt as at. Any turn lasting more than ten minutes is already older than the TTL when recorded; consumeScrapeEmitted filters it out immediately, so file closure reports the same latency again. A process restart between scrape emission and durable closure loses the queue with the same duplicate effect. Before UUID binding, the fallback still compares a normalized 48-character prompt prefix, so prefix-colliding ordered turns can be paired incorrectly.
+FIX: Persist the reported marker by durable turn UUID/event identity, with a monotonic per-terminal generation for pre-UUID observations. Use observation time, not turn start, for retention, and do not use lossy prompt prefixes as final dedupe identity.
+
+[P2] Registry compaction is not fully crash-durable and can inherit stale temp permissions
+WHERE: src/main/dispatch.ts:754-757,824-844
+CLAIM: fsyncing the temp file then renaming is atomic during the running process, but it does not make the rename durable across power loss, and opening an existing deterministic temp path with mode 0600 does not repair its existing mode.
+EVIDENCE: No parent-directory fsync follows rename, so the advertised crash-safe replacement is not guaranteed durable by the filesystem. If a prior .compacting file survives with permissive mode, openSync(...,'w',0600) truncates it but retains that mode; rename can then replace the protected registry with the permissive inode. Tests simulate rename failure only and cannot cover either case.
+FIX: fchmod the opened temp descriptor to 0600, fsync it, rename, then fsync the parent directory. Prefer a fresh O_EXCL/random temp or safely remove a validated stale temp, and test pre-existing mode repair plus the directory-fsync call.
+
+R4-#1: PARTIAL - PtySession writes now guard before proc.write with source-tagged fallback, but herdr-native ask bypasses the guard and an already-queued dispatch delivery survives preemption.
+R4-#2: PARTIAL - New requests are fingerprinted and delivered as exact bytes, but legacy/cross-version keys still replay byte-different work by explicit policy.
+R4-#3: FIXED - hasFinalAnswer returns the parser payload and sweep completes with its outcome and identity rather than fabricating a timeout interruption.
+R4-#4: PARTIAL - Terminal intents now retain provenance and merge equal evidence, but state is still the first comparison axis and can overwrite stronger parser evidence.
+R4-#5: PARTIAL - Detached inTurn observes open facts and node/backend paths clear them, but workspace removal/cut and late confirmation can still leave permanent facts.
+R4-#6: PARTIAL - A 500 ms snapshot amortizes pane-list calls, but every expired admission cache still refreshes through a synchronous herdr CLI fork.
+R4-#7: PARTIAL - Hydrate-time compaction bounds ordinary registry growth, but parent-directory durability and stale-temp permission repair are missing from the atomicity claim.
+R4-#8: PARTIAL - UUID-backed ordered observations replace the five-second timestamp heuristic, but long-turn expiry, restart loss, and lossy pre-UUID fallback still permit wrong dedupe.
+R4-#9: PARTIAL - Attempted delivery is registered before await and settled scrape replay exists, but repeated unscoped confirmation after settlement recreates a stale fact.
+R4-#10: FIXED - Restore and undo check armed-dispatch and open-work facts at entry and again immediately before kill.
+R4-#11: FIXED - Dispatch records persist turnUuid alongside turnIndex and the completion wiring carries the matching UUID.
+R4-#12: PARTIAL - Parser and SessionTurnSync handoff is delta-shaped, but TurnTracker array construction and TurnStore/annotation persistence remain O(total turns) per append.
+R4-#13: FIXED - The design now states the implemented post-202 asynchronous context-full preflight and its non-chargeable failed outcome.
+R4-#14: FIXED - Abort-only Codex turns adopt the abort marker as their closing clock when no later activity timestamp exists.
+
+VERDICT: UNSOUND - P0:3 P1:6 P2:1

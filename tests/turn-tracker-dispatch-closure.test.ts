@@ -1056,6 +1056,204 @@ describe('latency observations reconcile to record identity (Sol r4 P1)', () => 
 })
 
 // ---------------------------------------------------------------------------
+// Sol r5 P1 — latency dedupe: retention runs on OBSERVATION time (a turn
+// longer than the TTL still dedupes), identity is EXACT prompt bytes (a
+// 48-char prefix collision must not suppress a real sample), and identical
+// prompts are consumed strictly one observation per closure, in order.
+// ---------------------------------------------------------------------------
+
+describe('latency dedupe: observation-time TTL, exact bytes, FIFO (Sol r5 P1)', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('a turn LONGER than the TTL still dedupes its own file closure', async () => {
+    // The old queue stored the turn's startedAt as its TTL clock, so any turn
+    // outliving SCRAPE_EMIT_TTL_MS was expired the instant it was recorded —
+    // and the file closer then billed a second public sample.
+    vi.useFakeTimers()
+    const { tracker, session, seen } = fixture()
+    tracker.track(session as unknown as PtySession, true)
+    tracker.setHistorySource('term-1', 'file')
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    const startedAt = Date.now()
+    session.idle = 0
+    session.emit('input', 'do the task\r')
+    // The turn runs 15 minutes — past the 10-minute observation TTL.
+    await vi.advanceTimersByTimeAsync(15 * 60_000)
+    session.full = '⏺ done'
+    session.idle = 99_999
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(seen).toHaveLength(1) // the scrape emitted the public sample
+
+    tracker.replaceHistory('term-1', [
+      record({
+        prompt: 'do the task',
+        final: true,
+        startedAt,
+        endedAt: startedAt + 15 * 60_000,
+        uuid: 'u-long'
+      })
+    ])
+    tracker.completeFromHistory('term-1')
+    expect(seen).toHaveLength(2)
+    expect(seen[1]).toMatchObject({ dispatchId: 'dsp-1', latencyReported: true })
+    tracker.disposeAll()
+  })
+
+  it('a 48-char prefix collision does not pair — exact bytes or nothing', async () => {
+    // Two different prompts sharing a long common prefix: the lossy fallback
+    // used to match them, letting a nearby owner turn's observation suppress
+    // the dispatch exchange's only public sample.
+    vi.useFakeTimers()
+    const shared = 'refactor the ingest pipeline exactly as specified in the brief'
+    const ownerPrompt = `${shared} but stop before deploying`
+    const dispatched = `${shared} and deploy when green`
+    const { tracker, session, seen } = fixture()
+    tracker.track(session as unknown as PtySession, true)
+    tracker.setHistorySource('term-1', 'file')
+    tracker.noteDispatch('term-1', 'dsp-1', dispatched)
+    await runTurn(session, ownerPrompt) // owner's sample queued
+    expect(seen).toHaveLength(1)
+
+    tracker.replaceHistory('term-1', [
+      record({ prompt: dispatched, final: true, startedAt: Date.now() - 100, endedAt: Date.now(), uuid: 'u-d' })
+    ])
+    tracker.completeFromHistory('term-1')
+    expect(seen).toHaveLength(2)
+    expect(seen[1].dispatchId).toBe('dsp-1')
+    // NOT flagged: the owner's prefix-colliding observation is not this
+    // exchange, and leaving the closure unsuppressed is the honest outcome.
+    expect(seen[1].latencyReported).toBeUndefined()
+    tracker.disposeAll()
+  })
+
+  it('identical prompts: strictly one observation per closure, consumed in FIFO order', async () => {
+    vi.useFakeTimers()
+    const { tracker, session, seen } = fixture()
+    tracker.track(session as unknown as PtySession, true)
+    tracker.setHistorySource('term-1', 'file')
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    const t0 = Date.now()
+    await runTurn(session, 'do the task') // observation 1
+    await runTurn(session, 'do the task') // observation 2
+    expect(seen).toHaveLength(2)
+
+    // The reconcile stamps the queued observations against the records IN
+    // ORDER: first observation → first record, second → second, never both
+    // onto the first.
+    tracker.replaceHistory('term-1', [
+      record({ index: 1, prompt: 'do the task', final: true, startedAt: t0, endedAt: t0 + 100, uuid: 'u1' }),
+      record({ index: 2, prompt: 'do the task', final: true, startedAt: t0 + 3000, endedAt: t0 + 3100, uuid: 'u2' })
+    ])
+    tracker.completeFromHistory('term-1')
+    expect(seen).toHaveLength(3)
+    // The closure consumed the FIRST observation (the oldest eligible record
+    // wins, and its observation is the queue head)…
+    expect(seen[2]).toMatchObject({ dispatchId: 'dsp-1', latencyReported: true, turnUuid: 'u1' })
+    // …and the second observation still guards the second exchange.
+    const queue = (tracker as unknown as { scrapeEmitted: Map<string, { uuid?: string }[]> })
+      .scrapeEmitted.get('term-1')
+    expect(queue).toHaveLength(1)
+    expect(queue?.[0].uuid).toBe('u2')
+    tracker.disposeAll()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r5 P1 — delivery confirmation is scoped to an arming GENERATION: after
+// the dispatch settled, a late confirmation must not recreate a stale fact.
+// ---------------------------------------------------------------------------
+
+describe('confirmation scoped to a generation (Sol r5 P1)', () => {
+  afterEach(() => vi.useRealTimers())
+
+  const BRIEF = 'run the long brief with every detail intact'
+  const gen = (dispatchId: string, armedAt: number): { dispatchId: string; armedAt: number } => ({
+    dispatchId,
+    armedAt
+  })
+
+  it('a scoped confirmation for the LIVE armed dispatch still lands the fact', () => {
+    const { tracker } = fixture()
+    tracker.noteDispatch('term-1', 'dsp-1', BRIEF)
+    tracker.noteDispatchDelivered('term-1', BRIEF, gen('dsp-1', Date.now()))
+    expect(tracker.hasOpenTurnFact('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('a confirmation returning AFTER settlement is a no-op — no stale fact is minted', () => {
+    const { tracker, seen } = fixture()
+    tracker.setHistorySource('term-1', 'file')
+    const armedAt = Date.now()
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    // A fast file closer settles the dispatch while the native submit blocks.
+    tracker.replaceHistory('term-1', [record({ final: true })])
+    tracker.completeFromHistory('term-1')
+    expect(seen).toHaveLength(1)
+    expect(tracker.hasArmedDispatch('term-1')).toBe(false)
+    // The blocking submit finally returns and confirms: its generation is
+    // settled, so nothing may be minted — no deliveredPrompt, no open-turn
+    // fact with no future turn to resolve it.
+    tracker.noteDispatchDelivered('term-1', 'do the task', gen('dsp-1', armedAt))
+    expect(tracker.hasOpenTurnFact('term-1')).toBe(false)
+    expect(tracker.inTurn('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+
+  it('the deprecated unscoped confirmation is fail-closed after settlement too', () => {
+    const { tracker } = fixture()
+    tracker.setHistorySource('term-1', 'file')
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    tracker.replaceHistory('term-1', [record({ final: true })])
+    tracker.completeFromHistory('term-1')
+    tracker.noteDispatchDelivered('term-1', 'do the task')
+    expect(tracker.hasOpenTurnFact('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+
+  it('a late confirmation cannot touch a successor dispatch armed in its place', () => {
+    const { tracker } = fixture()
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    const g1 = gen('dsp-1', Date.now())
+    tracker.clearDispatch('term-1', 'dsp-1') // interrupted, then retried by another dispatch
+    tracker.noteDispatch('term-1', 'dsp-2', 'other work entirely')
+    tracker.noteDispatchDelivered('term-1', 'do the task', g1)
+    // Nothing minted under dsp-2's stamp, and the stamp itself is untouched.
+    expect(tracker.hasOpenTurnFact('term-1')).toBe(false)
+    expect(tracker.hasArmedDispatch('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('a re-armed retry of the SAME id is a new generation the old confirmation must not touch', async () => {
+    vi.useFakeTimers()
+    const { tracker } = fixture()
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task')
+    const stale = gen('dsp-1', Date.now())
+    tracker.clearDispatch('term-1', 'dsp-1')
+    await vi.advanceTimersByTimeAsync(10_000)
+    tracker.noteDispatch('term-1', 'dsp-1', 'do the task') // the retry re-arms
+    tracker.noteDispatchDelivered('term-1', 'do the task', stale)
+    expect(tracker.hasOpenTurnFact('term-1')).toBe(false)
+    expect(tracker.hasArmedDispatch('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('retraction is scoped: only the generation that minted the fact takes it back', () => {
+    const { tracker } = fixture()
+    tracker.noteDispatch('term-1', 'dsp-1', BRIEF)
+    const g1 = gen('dsp-1', Date.now())
+    tracker.noteDispatchDelivered('term-1', BRIEF, g1)
+    expect(tracker.hasOpenTurnFact('term-1')).toBe(true)
+    // A stranger generation retracting the identical bytes is a no-op…
+    tracker.retractDispatchDelivered('term-1', BRIEF, gen('dsp-2', Date.now()))
+    expect(tracker.hasOpenTurnFact('term-1')).toBe(true)
+    // …the minting generation's retraction lands.
+    tracker.retractDispatchDelivered('term-1', BRIEF, g1)
+    expect(tracker.hasOpenTurnFact('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Sol r4 P1 — the answering identity rides the completion event.
 // ---------------------------------------------------------------------------
 

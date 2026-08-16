@@ -75,9 +75,22 @@ function isAnnotation(value: unknown): value is TurnAnnotation {
   )
 }
 
+/** Field-by-field equality — an annotation carries at most three scalars. */
+function sameAnnotation(a: TurnAnnotation, b: TurnAnnotation): boolean {
+  return a.title === b.title && a.seenAt === b.seenAt && a.scrollLine === b.scrollLine
+}
+
 export class AnnotationStore {
   /** Last written state per terminal, so an unchanged flush touches no disk. */
   private written = new Map<string, string>()
+
+  /**
+   * The persisted picture per terminal, kept in memory so the incremental
+   * path (`update`) can fold in ONLY the changed checkpoints instead of
+   * rebuilding the whole map from every record on every flush — the O(total)
+   * scan Sol r5 P1 called out. Lazily seeded from disk on first touch.
+   */
+  private state = new Map<string, Map<number, TurnAnnotation>>()
 
   constructor(private dir: string) {}
 
@@ -127,18 +140,74 @@ export class AnnotationStore {
    * otherwise rewrite the file for no reason.
    */
   save(safeId: string, records: readonly TurnRecord[]): void {
-    const next: AnnotationFile = {}
+    const next = new Map<number, TurnAnnotation>()
     for (const record of records) {
       const { annotation } = splitAnnotation(record)
-      if (hasAnnotation(annotation)) next[String(record.index)] = annotation
+      if (hasAnnotation(annotation)) next.set(record.index, annotation)
+    }
+    this.state.set(safeId, next)
+    this.persist(safeId, next)
+  }
+
+  /**
+   * The incremental half of `save` (Sol r5 P1): fold ONLY the changed records
+   * into the persisted picture. `save` rebuilds the map from an agent's whole
+   * history and stays the entry point for the paths that legitimately touch
+   * everything (reset, shrink, rewind, migration); this one exists so a
+   * single appended turn costs one record visit, never a scan of every
+   * checkpoint the agent ever produced. Absence still clears, per record: a
+   * changed record that no longer carries an annotation deletes its key,
+   * exactly as the full rebuild would. Skips the disk entirely when none of
+   * the changed records moved an annotation — the common append, whose fresh
+   * record has no title/seenAt/scrollLine yet.
+   */
+  update(safeId: string, changed: readonly TurnRecord[]): void {
+    if (changed.length === 0) return
+    const state = this.stateOf(safeId)
+    let dirty = false
+    for (const record of changed) {
+      const { annotation } = splitAnnotation(record)
+      const current = state.get(record.index)
+      if (hasAnnotation(annotation)) {
+        if (current === undefined || !sameAnnotation(current, annotation)) {
+          state.set(record.index, annotation)
+          dirty = true
+        }
+      } else if (current !== undefined) {
+        state.delete(record.index)
+        dirty = true
+      }
+    }
+    if (dirty) this.persist(safeId, state)
+  }
+
+  /** The in-memory picture, seeded from disk the first time it is needed. */
+  private stateOf(safeId: string): Map<number, TurnAnnotation> {
+    const held = this.state.get(safeId)
+    if (held) return held
+    const loaded = this.load(safeId)
+    this.state.set(safeId, loaded)
+    return loaded
+  }
+
+  /**
+   * The whole-file write both paths share. Still a full rewrite BY DESIGN
+   * (see the header): the file is small precisely because of what it lacks,
+   * and an in-place edit format would be compaction with extra steps. Keys
+   * are serialized in ascending checkpoint order so the written-body
+   * comparison is stable across the full and incremental paths.
+   */
+  private persist(safeId: string, byIndex: Map<number, TurnAnnotation>): void {
+    const next: AnnotationFile = {}
+    for (const index of [...byIndex.keys()].sort((a, b) => a - b)) {
+      next[String(index)] = byIndex.get(index) as TurnAnnotation
     }
     const body = JSON.stringify(next)
     if (this.written.get(safeId) === body) return
 
     try {
       const file = this.fileFor(safeId)
-      const empty = Object.keys(next).length === 0
-      if (empty) {
+      if (byIndex.size === 0) {
         // Nothing to remember: drop the file rather than leave an empty object
         // behind, so the directory only ever holds agents that have some.
         if (existsSync(file)) unlinkSync(file)
@@ -159,6 +228,7 @@ export class AnnotationStore {
   /** Drop one agent's annotations (node deletion). */
   remove(safeId: string): void {
     this.written.delete(safeId)
+    this.state.delete(safeId)
     try {
       const file = this.fileFor(safeId)
       if (existsSync(file)) unlinkSync(file)

@@ -484,6 +484,12 @@ async function handle(
       respondJson(response, 400, { error: 'Missing text' })
       return
     }
+    // Producer serialization: mobile-api's 409 while a dispatch stamp is
+    // armed ran BEFORE this handler, but it is a fast-path refusal only, not
+    // load-bearing (Sol r5 P0-1) — a dispatch can arm in the await gaps
+    // between that check and the writes below. The invariant is enforced at
+    // the submit sites: session.write's owner-input guard for /input, and
+    // askTerminal's synchronous pre-submission guard for /ask.
     if (inputMatch[2] === 'input') {
       session.write(text)
       session.write('\r')

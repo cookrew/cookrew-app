@@ -548,6 +548,11 @@ async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<stri
     return askRaw(session, decodeRawEscapes(String(request.flags.raw)))
   }
   if (!prompt) throw new Error('Missing prompt')
+  // No armed-dispatch check here, on purpose (Sol r5 P0-1): a route-level
+  // refusal would only be a fast path with a check-to-submit race behind it.
+  // The load-bearing guard lives at the submit site — askTerminal consults
+  // the session's owner-input guard synchronously before the irreversible
+  // submission, preempting an armed dispatch durably or throwing.
   const reply = await askTerminal(session, prompt)
   if (deps.voice.enabled) {
     deps.voice.speakReply(target.name, reply).catch((error) => {

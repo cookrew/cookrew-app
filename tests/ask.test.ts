@@ -2,6 +2,26 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { askRaw, askTerminal, decodeRawEscapes, diffOutput, submitDelayMs } from '../src/main/ask'
 import type { PtySession } from '../src/main/pty'
 
+/**
+ * The ask layer's one runtime dependency on the pty module is multiplexer().
+ * Held in a test-controlled slot: null (the default) exercises the typed
+ * path exactly as before; a fake with agentLifecycle exercises the
+ * herdr-native path and its submit-site guard (Sol r5 P0-1).
+ */
+interface FakeMux {
+  capabilities: { agentLifecycle: boolean }
+  promptAgent?: (
+    sessionName: string,
+    prompt: string,
+    timeoutMs: number
+  ) => Promise<'done' | 'submitted' | 'failed'>
+  waitUntilIdle?: (sessionName: string, timeoutMs: number) => Promise<boolean>
+}
+const muxHolder = vi.hoisted(() => ({ current: null as unknown }))
+vi.mock('../src/main/pty', () => ({
+  multiplexer: () => muxHolder.current
+}))
+
 /** Wrap text the way the ask layer delivers it: one bracketed-paste unit. */
 const paste = (body: string): string => `\x1b[200~${body}\x1b[201~`
 
@@ -168,5 +188,166 @@ describe('decodeRawEscapes', () => {
 
   it('decodes ESC sequences', () => {
     expect(decodeRawEscapes('\\e[A')).toBe('\x1b[A')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r5 P0-1 — the one-producer guard runs at the SUBMIT site: a native ask
+// consults the session's owner-input guard synchronously before the
+// irreversible promptAgent call (and the typed path before its paste), so an
+// armed dispatch is durably preempted or the ask is refused — a route-level
+// armed check upstream is a fast path with a check-to-submit race behind it.
+// ---------------------------------------------------------------------------
+
+describe('askTerminal — the one-producer guard at the submit site (Sol r5 P0-1)', () => {
+  afterEach(() => {
+    muxHolder.current = null
+    vi.useRealTimers()
+  })
+
+  const nativeMux = (
+    events: string[],
+    outcome: 'done' | 'submitted' | 'failed' = 'done'
+  ): FakeMux => ({
+    capabilities: { agentLifecycle: true },
+    promptAgent: async () => {
+      events.push('promptAgent')
+      return outcome
+    }
+  })
+
+  it('consults the guard with the SUBMITTING bytes, synchronously before promptAgent', async () => {
+    const events: string[] = []
+    muxHolder.current = nativeMux(events)
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      noteExternalInput: (data: string) => events.push(`announce:${JSON.stringify(data)}`),
+      beforeOwnerInput: (terminalId: string, data: string) => {
+        events.push(`guard:${terminalId}:${JSON.stringify(data)}`)
+        return 'allow' as const
+      }
+    } as unknown as PtySession
+
+    await askTerminal(session, 'fix the bug')
+    // The guard sees prompt + Enter (the bytes that SUBMIT — a bare prompt
+    // reads as typing and would not trigger preemption), the verdict precedes
+    // the submission with nothing in between, and only an accepted
+    // submission is announced as owner work.
+    expect(events).toEqual([
+      'guard:term-1:"fix the bug\\r"',
+      'promptAgent',
+      'announce:"fix the bug\\r"'
+    ])
+  })
+
+  it('REFUSES the ask on preempt-failed: no submission, no announcement', async () => {
+    const events: string[] = []
+    muxHolder.current = nativeMux(events)
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      noteExternalInput: () => events.push('announce'),
+      beforeOwnerInput: () => 'preempt-failed' as const
+    } as unknown as PtySession
+
+    await expect(askTerminal(session, 'fix the bug')).rejects.toThrow(
+      'agent has a dispatch in flight that could not be preempted'
+    )
+    expect(events).toEqual([])
+  })
+
+  it('closes the check-to-submit race: a dispatch arming AFTER route admission is still caught', async () => {
+    // The route's armed check passed with nothing armed; a dispatch arms
+    // while the request is still being read (modeled inside fullText, the
+    // last read before the guard). The submit-site guard — not the stale
+    // route answer — decides, and it refuses.
+    let armed = false
+    const events: string[] = []
+    muxHolder.current = nativeMux(events)
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => {
+        armed = true
+        return ''
+      },
+      noteExternalInput: () => events.push('announce'),
+      beforeOwnerInput: (): 'allow' | 'preempt-failed' =>
+        armed ? 'preempt-failed' : 'allow'
+    } as unknown as PtySession
+
+    await expect(askTerminal(session, 'deploy the release')).rejects.toThrow(
+      'agent has a dispatch in flight that could not be preempted'
+    )
+    expect(events).toEqual([])
+  })
+
+  it('a guard that PREEMPTS (allow after committing the interrupt) lets the ask proceed', async () => {
+    // The armed-dispatch case where preemption CAN commit: the guard
+    // interrupts the dispatch durably and answers allow — the ask then owns
+    // the agent and submits exactly once.
+    const events: string[] = []
+    muxHolder.current = nativeMux(events)
+    let dispatchOpen = true
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      noteExternalInput: () => events.push('announce'),
+      beforeOwnerInput: () => {
+        if (dispatchOpen) {
+          dispatchOpen = false // the durable preemption
+          events.push('preempted')
+        }
+        return 'allow' as const
+      }
+    } as unknown as PtySession
+
+    await askTerminal(session, 'fix the bug')
+    expect(events).toEqual(['preempted', 'promptAgent', 'announce'])
+    expect(dispatchOpen).toBe(false)
+  })
+
+  it('guards the TYPED path too: a refused ask throws instead of silently dropping bytes', async () => {
+    // No native mux → pasteAndSubmit, whose writes cross session.write. That
+    // guard refuses by silently dropping the submit — which here would mean
+    // waiting out quiescence over an agent that never got the prompt and
+    // returning noise as its reply. The ask-level guard makes the refusal an
+    // honest error, before anything reaches the pty.
+    muxHolder.current = null
+    const writes: string[] = []
+    const session = {
+      terminalId: 'term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      write: (data: string) => writes.push(data),
+      beforeOwnerInput: () => 'preempt-failed' as const
+    } as unknown as PtySession
+
+    await expect(askTerminal(session, 'fix the bug')).rejects.toThrow(
+      'agent has a dispatch in flight that could not be preempted'
+    )
+    expect(writes).toEqual([])
+  })
+
+  it('an unwired guard allows — plain sessions and existing tests are untouched', async () => {
+    const events: string[] = []
+    muxHolder.current = nativeMux(events)
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      noteExternalInput: () => events.push('announce')
+      // no beforeOwnerInput: nothing wired, nothing armed — allow.
+    } as unknown as PtySession
+
+    await askTerminal(session, 'fix the bug')
+    expect(events).toEqual(['promptAgent', 'announce'])
   })
 })

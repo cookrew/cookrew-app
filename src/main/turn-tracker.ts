@@ -114,20 +114,19 @@ function promptsMatch(scraped: string, exact: string): boolean {
  * record as ITS exchange? Stricter than promptsMatch: an observation with no
  * usable prompt (null, empty, the recovered label, a collapsed paste
  * placeholder) identifies NOTHING — matching it loosely is exactly how a
- * nearby owner turn stole a dispatch's sample (Sol r4 P1). Exact bytes win
- * outright; the lossy fallback exists only because a screen echo is a
- * rendering (rewrapped, truncated) — the same excuse as landing detection,
- * and the only place outside it where lossy matching is allowed.
+ * nearby owner turn stole a dispatch's sample (Sol r4 P1). And the bytes
+ * must be EXACT (Sol r5 P1): the old 48-char normalized-prefix fallback let
+ * two different prompts sharing a prefix pair up and silently suppress a
+ * real sample. A rendering the TUI rewrapped or truncated simply cannot
+ * identify its record here — the observation stays queued until its TTL and
+ * the exchange reports twice, which is honest; a wrong suppression is not.
  */
 function observationAnswers(observed: string | null, recordPrompt: string): boolean {
   if (observed === null || observed.length === 0 || observed === RECOVERED_PROMPT_LABEL) {
     return false
   }
   if (observed.startsWith('[Pasted text')) return false
-  if (observed === recordPrompt) return true
-  const key = (s: string): string =>
-    s.trim().replace(/\s+/g, ' ').toLowerCase().slice(0, PROMPT_MATCH_CHARS)
-  return key(observed) === key(recordPrompt)
+  return observed === recordPrompt
 }
 
 /**
@@ -191,13 +190,19 @@ function matchPrior(
 }
 
 /**
- * One scrape-emitted latency observation awaiting its file closure. `at` is
- * the scrape's turnStartedAt (TTL clock and an eligibility floor, never an
- * identity); `prompt` is the observed prompt-of-record; `uuid` is stamped by
- * reconcile once the durable record for this exchange is known.
+ * One scrape-emitted latency observation awaiting its file closure.
+ * `startedAt` is the observed turn's start — an eligibility floor, never an
+ * identity; `observedAt` is when the observation was RECORDED
+ * (noteScrapeEmitted ran) and is the TTL clock (Sol r5 P1: keying retention
+ * on the turn's start expired any turn longer than the TTL the instant it
+ * settled, so a two-hour turn's sample was "stale" on arrival and its file
+ * closure billed a second public sample); `prompt` is the observed
+ * prompt-of-record; `uuid` is stamped by reconcile once the durable record
+ * for this exchange is known.
  */
 interface ScrapeObservation {
-  at: number
+  startedAt: number
+  observedAt: number
   prompt: string | null
   uuid?: string
 }
@@ -266,6 +271,26 @@ interface PendingDispatch {
    * matters when the callback is absent or chose not to act.
    */
   preemptFired?: boolean
+}
+
+/**
+ * The arming GENERATION a delivery confirmation belongs to (Sol r5 P1). The
+ * dispatch service mints one when it stamps the tracker (noteDispatch) and
+ * passes it to every attempted/confirmed/retract call for that delivery, so a
+ * confirmation returning AFTER the dispatch settled — stamp consumed,
+ * cleared, or re-armed for a retry — is a NO-OP instead of minting a fresh
+ * deliveredPrompt/open-turn fact that no turn will ever resolve.
+ */
+export interface DispatchDeliveryGen {
+  dispatchId: string
+  /**
+   * Clock stamp of the arming this delivery ran under: a re-armed retry of
+   * the SAME dispatch id is a new generation the old delivery's late
+   * confirmation must not touch. Compared with IN_FLIGHT_STAMP_SLACK_MS of
+   * slack — the caller's stamp and the tracker's are taken moments apart on
+   * the same clock.
+   */
+  armedAt: number
 }
 
 /**
@@ -363,8 +388,29 @@ export class TurnTracker extends EventEmitter {
    * session-matching signal); clearHistory remains for explicit purges only.
    * Backed by TurnStore files (~/.cookrew/turns) so restarts keep it too —
    * terminal ids are stable across runs.
+   *
+   * TRACKER-PRIVATE MUTABLE BUFFERS (Sol r5 P1). The arrays in this map are
+   * never handed outside this class: the delta path (applyHistoryDelta)
+   * appends/edits them IN PLACE so one new turn on an N-turn history costs
+   * O(delta), not an O(N) copy of the untouched prefix. That is the one
+   * sanctioned bend of the repo's immutability rule, and it is safe precisely
+   * because the buffer is never shared — every external read goes through
+   * history(), which hands out a memoized point-in-time copy (`snapshots`).
+   * Every non-delta write (reconcile, rewind fallback, scrape append,
+   * seen/title edits) still swaps in a fresh array via setHistory().
    */
   private histories = new Map<string, TurnRecord[]>()
+
+  /**
+   * terminalId → the point-in-time copy history() last handed out.
+   * Invalidated on EVERY change, full or delta, so snapshot identity tracks
+   * content identity: the same reference while nothing changed, a new one
+   * after any change — exactly the contract SessionTurnSync's watch()
+   * re-adopt relies on when it compares `history(id) === prior.history` to
+   * prove the tracker still holds what it captured at suspend time. A caller
+   * holding a snapshot never sees it mutate under it.
+   */
+  private snapshots = new Map<string, TurnRecord[]>()
 
   /**
    * Terminals whose DURABLE history is written by the session file, not by
@@ -396,8 +442,13 @@ export class TurnTracker extends EventEmitter {
    * collapses ("[Pasted text #1 …]") or truncates, leaving the closer's
    * prompt-identity proof unprovable. Consumed when a turn opens within
    * DELIVERED_PROMPT_WINDOW_MS; cleared with the dispatch it served.
+   * `dispatchId` records the generation that minted the fact, so retraction
+   * is scoped: only the minting dispatch may take its own fact back.
    */
-  private deliveredPrompt = new Map<string, { prompt: string; at: number }>()
+  private deliveredPrompt = new Map<
+    string,
+    { prompt: string; at: number; dispatchId: string }
+  >()
 
   /**
    * terminalId → ORDERED queue of exchanges whose latency the scrape has
@@ -405,12 +456,20 @@ export class TurnTracker extends EventEmitter {
    * matching one of these exchanges still closes the dispatch but flags the
    * event `latencyReported` so the sample is never counted twice.
    *
-   * Identity is the observation's PROMPT plus monotonic order, reconciled to
-   * the durable record's uuid when the reconcile lands it — NEVER a free
-   * timestamp window (Sol r4 P1): a five-second slack let an owner turn near
-   * the dispatch turn consume the dispatch's sample. Observations are
-   * consumed in queue order by the first record they actually identify;
-   * unmatched ones are retained by identity until SCRAPE_EMIT_TTL_MS.
+   * Identity is the observation's PROMPT (exact bytes) plus monotonic order,
+   * reconciled to the durable record's uuid when the reconcile lands it —
+   * NEVER a free timestamp window (Sol r4 P1): a five-second slack let an
+   * owner turn near the dispatch turn consume the dispatch's sample.
+   * Observations are consumed in queue order by the first record they
+   * actually identify; unmatched ones are retained until SCRAPE_EMIT_TTL_MS
+   * past their OBSERVATION time.
+   *
+   * IN-MEMORY ONLY, deliberately (Sol r5 P1c): this queue is telemetry
+   * dedupe, not billing state — nothing here decides whether a dispatch is
+   * charged or closed. A restart between the scrape's public emission and
+   * the durable closure loses the queue and costs at most one duplicate
+   * latency sample, which is honest and self-limiting; persisting it would
+   * buy nothing but a stale guess to be wrong with later.
    */
   private scrapeEmitted = new Map<string, ScrapeObservation[]>()
 
@@ -431,13 +490,39 @@ export class TurnTracker extends EventEmitter {
   /** Last backfill attempt per record ("terminalId:index" → epoch ms). */
   private backfillAttempt = new Map<string, number>()
 
-  /** Completed turns for a terminal, oldest first (lazy-loaded from disk). */
+  /**
+   * Completed turns for a terminal, oldest first (lazy-loaded from disk) — a
+   * memoized POINT-IN-TIME copy, never the tracker-private buffer (see
+   * `histories`/`snapshots`). Copy-on-read is the price of the O(delta)
+   * append: a shallow slice per changed read, against deep prefix copies plus
+   * full persistence scans per append before.
+   */
   history(terminalId: string): TurnRecord[] {
+    const memo = this.snapshots.get(terminalId)
+    if (memo) return memo
+    const snapshot = [...this.liveHistory(terminalId)]
+    this.snapshots.set(terminalId, snapshot)
+    return snapshot
+  }
+
+  /** The tracker-private live buffer (lazy-loaded). NEVER handed outside. */
+  private liveHistory(terminalId: string): TurnRecord[] {
     const cached = this.histories.get(terminalId)
     if (cached) return cached
     const loaded = this.store?.load(terminalId) ?? []
     this.histories.set(terminalId, loaded)
     return loaded
+  }
+
+  /** Wholesale replacement — every non-delta write path lands through this. */
+  private setHistory(terminalId: string, records: TurnRecord[]): void {
+    this.histories.set(terminalId, records)
+    this.snapshots.delete(terminalId)
+  }
+
+  /** History length without materializing a snapshot (activity hot path). */
+  private historyCount(terminalId: string): number {
+    return this.liveHistory(terminalId).length
   }
 
   /**
@@ -451,7 +536,7 @@ export class TurnTracker extends EventEmitter {
    * after /rewind the rewound turns disappear so counts match reality.
    */
   replaceHistory(terminalId: string, records: TurnRecord[]): void {
-    const previous = this.history(terminalId)
+    const previous = this.liveHistory(terminalId)
     const byUuid = new Map(previous.filter((r) => r.uuid).map((r) => [r.uuid, r]))
     const byIndex = new Map(previous.map((r) => [r.index, r]))
     const merged = records.map((record) => {
@@ -504,10 +589,14 @@ export class TurnTracker extends EventEmitter {
    * history (positions drifted, foreign records interleaved) falls back to
    * the full reconcile rather than guessing.
    *
-   * TurnStore.scheduleSave keeps its own bounded model underneath: its flush
-   * appends per-record when the array only grew and its last known line is
-   * unchanged, and rewrites otherwise — so an append delta stays an append
-   * on disk too, and a tail rewrite pays the store's ordinary edit path.
+   * O(delta) END TO END (Sol r5 P1): both incremental kinds MUTATE the
+   * tracker-private buffer in place — the untouched prefix is never copied
+   * (see `histories` for why that bend of the immutability rule is safe) —
+   * and hand TurnStore.scheduleDelta the exact changed records, so the
+   * annotation pass folds in only those and the JSONL write appends (or
+   * replaces just the last line) instead of visiting every record. The one
+   * incremental shape that cannot name its change — the boundary dedupe
+   * actually dropping a phantom twin, a shrink — takes the full save path.
    */
   applyHistoryDelta(
     terminalId: string,
@@ -518,7 +607,7 @@ export class TurnTracker extends EventEmitter {
       this.replaceHistory(terminalId, fullRecords())
       return
     }
-    const previous = this.history(terminalId)
+    const previous = this.liveHistory(terminalId)
     if (delta.kind === 'tail') {
       const replaced = previous[previous.length - 1]
       // No tail to replace, or the emitter's idea of the tail is not ours
@@ -528,11 +617,9 @@ export class TurnTracker extends EventEmitter {
         this.replaceHistory(terminalId, fullRecords())
         return
       }
-      const next = this.stampInFlightScrollLine(terminalId, [
-        ...previous.slice(0, -1),
-        carryOverOnto(delta.record, replaced)
-      ])
-      this.commitReconciled(terminalId, next)
+      const landed = this.stampInFlight(terminalId, carryOverOnto(delta.record, replaced))
+      previous[previous.length - 1] = landed
+      this.commitDelta(terminalId, [landed])
       return
     }
     if (delta.records.length === 0) return
@@ -550,27 +637,60 @@ export class TurnTracker extends EventEmitter {
       this.replaceHistory(terminalId, fullRecords())
       return
     }
-    const head = previous.slice(0, at)
     const landed =
       replaced === undefined
         ? delta.records
         : [carryOverOnto(delta.records[0], replaced), ...delta.records.slice(1)]
     // Dedupe touches ONLY the boundary window: the last kept record plus the
     // landed ones — the only neighborhood a phantom twin can span.
-    const boundary = Math.max(0, head.length - 1)
-    const window = dedupePhantomEchoes([...head.slice(boundary), ...landed])
-    const next = this.stampInFlightScrollLine(terminalId, [...head.slice(0, boundary), ...window])
-    this.commitReconciled(terminalId, next)
+    const boundary = Math.max(0, at - 1)
+    const expected = at - boundary + landed.length
+    const window = dedupePhantomEchoes([...previous.slice(boundary, at), ...landed])
+    previous.length = boundary
+    previous.push(...window)
+    const lastAt = previous.length - 1
+    if (lastAt >= 0) previous[lastAt] = this.stampInFlight(terminalId, previous[lastAt])
+    if (window.length !== expected) {
+      // The boundary dedupe dropped a phantom twin: the change is a shrink,
+      // which the delta save contract cannot express — full save path.
+      this.snapshots.delete(terminalId)
+      this.store?.scheduleSave(terminalId, previous)
+      this.afterCommit(terminalId, previous)
+      return
+    }
+    this.commitDelta(terminalId, previous.slice(boundary))
   }
 
   /**
-   * The shared landing for a reconciled history, full or delta: store it,
-   * schedule the save, resolve the A4 open-turn fact against the new tail,
-   * bind scrape latency observations to their durable records, and push.
+   * The full-reconcile landing: adopt the fresh array wholesale, schedule the
+   * full save, and run the shared observers.
    */
   private commitReconciled(terminalId: string, records: TurnRecord[]): void {
-    this.histories.set(terminalId, records)
+    this.setHistory(terminalId, records)
     this.store?.scheduleSave(terminalId, records)
+    this.afterCommit(terminalId, records)
+  }
+
+  /**
+   * The delta landing: the tracker-private buffer was already mutated in
+   * place (the whole point — no prefix copy), so this only invalidates the
+   * point-in-time snapshot, hands the store the same buffer plus the NAMES of
+   * the changed records, and runs the shared observers.
+   */
+  private commitDelta(terminalId: string, changed: TurnRecord[]): void {
+    const records = this.liveHistory(terminalId)
+    this.snapshots.delete(terminalId)
+    this.store?.scheduleDelta(terminalId, records, changed)
+    this.afterCommit(terminalId, records)
+  }
+
+  /**
+   * The shared landing for a reconciled history, full or delta: resolve the
+   * A4 open-turn fact against the new tail, bind scrape latency observations
+   * to their durable records, and push. Every observer here sees a
+   * delta-applied history identically to a full-reconciled one.
+   */
+  private afterCommit(terminalId: string, records: TurnRecord[]): void {
     this.reconcileScrapeObservations(terminalId, records)
     // Parser finality clears the A4 open-turn fact (v5 A4): a FINAL tail
     // covering the observed open (file prompt-entry time within slack of the
@@ -665,7 +785,7 @@ export class TurnTracker extends EventEmitter {
       if (!current || !live || live.title !== undefined) return
       if (live.uuid !== next.record.uuid || live.prompt !== next.record.prompt) return
       const updated = current.map((r) => (r.index === next.record.index ? { ...r, title } : r))
-      this.histories.set(next.terminalId, updated)
+      this.setHistory(next.terminalId, updated)
       this.store?.scheduleSave(next.terminalId, updated)
       const t = this.tracked.get(next.terminalId)
       if (t) this.push(t)
@@ -686,16 +806,23 @@ export class TurnTracker extends EventEmitter {
    * inherit the new turn's offset).
    */
   private stampInFlightScrollLine(terminalId: string, records: TurnRecord[]): TurnRecord[] {
-    const t = this.tracked.get(terminalId)
-    const inFlight = t && (t.phase === 'thinking' || t.phase === 'waiting')
-    if (!t || !inFlight || t.turnStartLine === null || records.length === 0) return records
+    if (records.length === 0) return records
     const last = records[records.length - 1]
+    const stamped = this.stampInFlight(terminalId, last)
+    if (stamped === last) return records
+    return [...records.slice(0, -1), stamped]
+  }
+
+  /** The single-record form — the delta path stamps its landed tail with it. */
+  private stampInFlight(terminalId: string, last: TurnRecord): TurnRecord {
+    const t = this.tracked.get(terminalId)
+    const inFlight = t !== undefined && (t.phase === 'thinking' || t.phase === 'waiting')
+    if (!t || !inFlight || t.turnStartLine === null) return last
     const covers =
       last.scrollLine === undefined &&
       promptsMatch(t.prompt ?? '', last.prompt) &&
       last.startedAt >= t.turnStartedAt - IN_FLIGHT_STAMP_SLACK_MS
-    if (!covers) return records
-    return [...records.slice(0, -1), { ...last, scrollLine: t.turnStartLine }]
+    return covers ? { ...last, scrollLine: t.turnStartLine } : last
   }
 
   /**
@@ -717,11 +844,11 @@ export class TurnTracker extends EventEmitter {
 
   /** Persist the read marker so unread state survives restarts/switches. */
   private markLastRecordSeen(terminalId: string): void {
-    const history = this.history(terminalId)
+    const history = this.liveHistory(terminalId)
     const last = history[history.length - 1]
     if (!last || last.seenAt !== undefined) return
     const updated = [...history.slice(0, -1), { ...last, seenAt: Date.now() }]
-    this.histories.set(terminalId, updated)
+    this.setHistory(terminalId, updated)
     this.store?.scheduleSave(terminalId, updated)
   }
 
@@ -848,13 +975,32 @@ export class TurnTracker extends EventEmitter {
    * resumeThinking prefers it over echo recovery. Either way the terminal now
    * carries an observed-turn fact (A4): a confirmed delivery means a turn is
    * opening whether or not any PTY is attached to watch it.
+   *
+   * SCOPED TO A GENERATION (Sol r5 P1): the call binds to `gen.dispatchId`,
+   * and when that dispatch's stamp is no longer armed — settled, cleared, or
+   * re-armed for a retry (a newer armedAt) — it is a NO-OP. A blocking
+   * native submit can return long after a fast closer consumed the stamp;
+   * an unscoped confirmation then minted deliveredPrompt/openTurnFacts for
+   * an exchange that already ended, a fact with no future turn to resolve it
+   * that held tracking open and could contaminate the next turn's
+   * prompt-of-record. The 2-arg form is DEPRECATED — kept only for the
+   * conductor's legacy wiring (index.ts noteDelivered) — and binds to
+   * whatever stamp is currently armed, with the same fail-closed no-op when
+   * none is.
    */
-  noteDispatchDelivered(terminalId: string, prompt: string): void {
-    const t = this.tracked.get(terminalId)
+  noteDispatchDelivered(terminalId: string, prompt: string, gen?: DispatchDeliveryGen): void {
     const pending = this.pendingDispatch.get(terminalId)
+    // Generation gate: no armed stamp, a stamp belonging to a different
+    // dispatch, or a newer arming of the same id all mean the delivery this
+    // call confirms is already settled — nothing here may be minted for it.
+    if (pending === undefined) return
+    if (gen !== undefined) {
+      if (pending.id !== gen.dispatchId) return
+      if (gen.armedAt < pending.armedAt - IN_FLIGHT_STAMP_SLACK_MS) return
+    }
+    const t = this.tracked.get(terminalId)
     const inTurn = t !== undefined && (t.phase === 'thinking' || t.phase === 'waiting')
-    const ownsLiveTurn =
-      inTurn && t !== undefined && (pending === undefined || t.turnStartedAt >= pending.armedAt)
+    const ownsLiveTurn = inTurn && t !== undefined && t.turnStartedAt >= pending.armedAt
     if (t !== undefined && ownsLiveTurn) {
       t.prompt = prompt
       t.sawInputThisTurn = true
@@ -866,24 +1012,28 @@ export class TurnTracker extends EventEmitter {
     // If that settled turn is eligible (opened after arming) and its
     // recovered prompt was unprovable, it WAS the dispatch's exchange —
     // consume the stamp once, now, instead of stranding the dispatch.
-    if (t !== undefined && pending !== undefined) {
+    if (t !== undefined) {
       if (this.replaySettledScrapeClosure(terminalId, t, pending, prompt)) return
     }
     const at = Date.now()
-    this.deliveredPrompt.set(terminalId, { prompt, at })
+    this.deliveredPrompt.set(terminalId, { prompt, at, dispatchId: pending.id })
     this.openTurnFacts.set(terminalId, at)
   }
 
   /**
    * The attempted-delivery fact registered before the native submission was
    * DISPROVEN (nonDeliveryProven) — take it back (Sol r4 P1). Matches the
-   * exact bytes so a newer, different fact is never collateral; clears the
-   * open-turn fact only when the retracted delivery is what minted it (same
-   * clock stamp), never one a real turn opening set.
+   * exact bytes so a newer, different fact is never collateral, and — scoped
+   * like the confirmation (Sol r5 P1) — only the generation that minted the
+   * fact may retract it: a successor dispatch delivering the identical bytes
+   * is not collateral either. Clears the open-turn fact only when the
+   * retracted delivery is what minted it (same clock stamp), never one a
+   * real turn opening set.
    */
-  retractDispatchDelivered(terminalId: string, prompt: string): void {
+  retractDispatchDelivered(terminalId: string, prompt: string, gen?: DispatchDeliveryGen): void {
     const fact = this.deliveredPrompt.get(terminalId)
     if (fact === undefined || fact.prompt !== prompt) return
+    if (gen !== undefined && fact.dispatchId !== gen.dispatchId) return
     this.deliveredPrompt.delete(terminalId)
     if (this.openTurnFacts.get(terminalId) === fact.at) {
       this.openTurnFacts.delete(terminalId)
@@ -914,7 +1064,7 @@ export class TurnTracker extends EventEmitter {
     t.prompt = prompt
     this.pendingDispatch.delete(terminalId)
     this.deliveredPrompt.delete(terminalId)
-    const history = this.history(terminalId)
+    const history = this.liveHistory(terminalId)
     const tail = history[history.length - 1]
     this.emit('turn', {
       terminalId,
@@ -1048,7 +1198,7 @@ export class TurnTracker extends EventEmitter {
    * evidence, consuming nothing.
    */
   hasFinalAnswer(terminalId: string, prompt: string, armedAt: number): FinalTurnAnswer | null {
-    const records = this.history(terminalId)
+    const records = this.liveHistory(terminalId)
     const cutoff = armedAt - DISPATCH_ARM_SLACK_MS
     let start = records.length
     while (start > 0 && records[start - 1].startedAt >= cutoff) start -= 1
@@ -1079,12 +1229,12 @@ export class TurnTracker extends EventEmitter {
     const queue = this.scrapeEmitted.get(terminalId)
     if (queue === undefined) return false
     const floor = Date.now() - SCRAPE_EMIT_TTL_MS
-    const live = queue.filter((o) => o.at >= floor)
+    const live = queue.filter((o) => o.observedAt >= floor)
     const index = live.findIndex((o) =>
       o.uuid !== undefined && record.uuid !== undefined
         ? o.uuid === record.uuid
         : observationAnswers(o.prompt, record.prompt) &&
-          record.startedAt >= o.at - DISPATCH_ARM_SLACK_MS
+          record.startedAt >= o.startedAt - DISPATCH_ARM_SLACK_MS
     )
     const kept = index === -1 ? live : live.filter((_, i) => i !== index)
     if (kept.length === 0) this.scrapeEmitted.delete(terminalId)
@@ -1092,11 +1242,17 @@ export class TurnTracker extends EventEmitter {
     return index !== -1
   }
 
-  /** Record a scrape-emitted exchange observation, expiring stale entries. */
+  /**
+   * Record a scrape-emitted exchange observation, expiring stale entries.
+   * Retention runs on OBSERVATION time, never the turn's start (Sol r5 P1):
+   * the sample of a turn that ran longer than the TTL must still dedupe its
+   * own file closure.
+   */
   private noteScrapeEmitted(terminalId: string, startedAt: number, prompt: string | null): void {
-    const floor = Date.now() - SCRAPE_EMIT_TTL_MS
-    const kept = (this.scrapeEmitted.get(terminalId) ?? []).filter((o) => o.at >= floor)
-    this.scrapeEmitted.set(terminalId, [...kept, { at: startedAt, prompt }])
+    const now = Date.now()
+    const floor = now - SCRAPE_EMIT_TTL_MS
+    const kept = (this.scrapeEmitted.get(terminalId) ?? []).filter((o) => o.observedAt >= floor)
+    this.scrapeEmitted.set(terminalId, [...kept, { startedAt, observedAt: now, prompt }])
   }
 
   /**
@@ -1125,7 +1281,7 @@ export class TurnTracker extends EventEmitter {
       for (let i = cursor; i < records.length; i += 1) {
         const record = records[i]
         if (record.uuid === undefined) continue
-        if (record.startedAt < observation.at - DISPATCH_ARM_SLACK_MS) continue
+        if (record.startedAt < observation.startedAt - DISPATCH_ARM_SLACK_MS) continue
         if (!observationAnswers(observation.prompt, record.prompt)) continue
         cursor = i + 1
         return { ...observation, uuid: record.uuid }
@@ -1186,6 +1342,7 @@ export class TurnTracker extends EventEmitter {
   /** Forget a removed terminal's turns (node deletion, not detach). */
   clearHistory(terminalId: string): void {
     this.histories.delete(terminalId)
+    this.snapshots.delete(terminalId)
     this.store?.remove(terminalId)
     this.fileBacked.delete(terminalId)
     this.deliveredPrompt.delete(terminalId)
@@ -1231,7 +1388,7 @@ export class TurnTracker extends EventEmitter {
     // as acknowledgement. A mid-turn agent self-heals to 'thinking' from its
     // live spinner output moments later.
     if (agent) {
-      const history = this.history(session.terminalId)
+      const history = this.liveHistory(session.terminalId)
       const last = history[history.length - 1]
       if (last) {
         t.prompt = last.prompt
@@ -1263,7 +1420,7 @@ export class TurnTracker extends EventEmitter {
         reply: t.reply,
         glance: null,
         title: t.title,
-        turnCount: this.history(terminalId).length,
+        turnCount: this.historyCount(terminalId),
         turnStartedAt: null,
         turnStartLine: null,
         scrollRow: null,
@@ -1696,7 +1853,7 @@ export class TurnTracker extends EventEmitter {
     // that instant — emitting first handed it the PREVIOUS exchange as the
     // tail (or an empty history on a first turn), and the dispatch was
     // billed against a turn it did not commission.
-    const appended = appendTurnRecord(this.history(id), {
+    const appended = appendTurnRecord(this.liveHistory(id), {
       prompt: t.prompt ?? RECOVERED_PROMPT_LABEL,
       reply: t.reply,
       ...(t.title !== null ? { title: t.title } : {}),
@@ -1709,7 +1866,7 @@ export class TurnTracker extends EventEmitter {
     // instead of waiting for the next reconcile to full-replace it away.
     const newRecord = appended[appended.length - 1]
     const deduped = dedupePhantomEchoes(appended)
-    this.histories.set(id, deduped)
+    this.setHistory(id, deduped)
     this.store?.scheduleSave(id, deduped)
     const survived = deduped.some((r) => r.index === newRecord.index)
     if (t.turnStartedAt > 0) {
@@ -1736,7 +1893,7 @@ export class TurnTracker extends EventEmitter {
    * (the backfill pump titles it on a later tick) or the record is titled.
    */
   private liveTurnRecordIndex(t: TrackedTerminal): number | null {
-    const history = this.history(t.session.terminalId)
+    const history = this.liveHistory(t.session.terminalId)
     const last = history[history.length - 1]
     if (!last || last.title !== undefined) return null
     return promptsMatch(t.prompt ?? '', last.prompt) ? last.index : null
@@ -1770,7 +1927,7 @@ export class TurnTracker extends EventEmitter {
     const history = this.histories.get(id)
     if (history?.some((r) => r.index === recordIndex)) {
       const updated = history.map((r) => (r.index === recordIndex ? { ...r, title } : r))
-      this.histories.set(id, updated)
+      this.setHistory(id, updated)
       this.store?.scheduleSave(id, updated)
     }
     // Only retitle the live card if no new turn started while summarizing.
@@ -1825,7 +1982,7 @@ export class TurnTracker extends EventEmitter {
       reply: t.reply,
       glance: t.agent && inTurn ? parseAgentGlance(rawDelta) : null,
       title: t.title,
-      turnCount: this.history(terminalId).length,
+      turnCount: this.historyCount(terminalId),
       turnStartedAt: inTurn ? t.turnStartedAt : null,
       turnStartLine: inTurn ? t.turnStartLine : null,
       // ONE combined tmux round-trip for both fields (optional-called; fakes
