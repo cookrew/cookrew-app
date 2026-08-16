@@ -111,7 +111,14 @@ const META: Record<string, EventMeta> = {
   'role.saved': { label: 'Role', verb: 'saved', noun: 'role', icon: 'agent', hatch: false, metric: null },
   'team.saved': { label: 'Team', verb: 'saved', noun: 'team', icon: 'fork', hatch: false, metric: null },
   'team.copied': { label: 'Team copy', verb: 'copied into', noun: 'team', icon: 'fork', hatch: false, metric: 'forks' },
-  'team.moved': { label: 'Team move', verb: 'moved into', noun: 'team', icon: 'fork', hatch: false, metric: 'forks' }
+  'team.moved': { label: 'Team move', verb: 'moved into', noun: 'team', icon: 'fork', hatch: false, metric: 'forks' },
+  // The dispatch plane's product surface: accepted/settled announcements
+  // (details carry the agent's name and, on failure, the honest error).
+  'dispatch.accepted': { label: 'Dispatch', verb: 'took a dispatch', noun: 'dispatch', icon: 'agent', hatch: false, metric: null },
+  'dispatch.done': { label: 'Dispatch', verb: 'finished a dispatch', noun: 'dispatch', icon: 'agent', hatch: false, metric: null },
+  'dispatch.failed': { label: 'Dispatch', verb: 'failed a dispatch', noun: 'dispatch', icon: 'close', hatch: false, metric: null },
+  'dispatch.interrupted': { label: 'Dispatch', verb: 'had a dispatch interrupted', noun: 'dispatch', icon: 'close', hatch: false, metric: null },
+  'terminal.input-refused': { label: 'Refused', verb: 'refused input', noun: 'terminal', icon: 'close', hatch: false, metric: null }
 }
 
 const FALLBACK_META: EventMeta = {
