@@ -1,10 +1,5 @@
 import { useEffect, useState } from 'react'
 import { cookrew } from './api'
-import { latencyStats, type LatencyStats } from '../../shared/stats'
-import { noticeForError, type StreamNotice } from './api-failure'
-
-/** Card-level copy when the log itself cannot be read (D6). */
-const queryNotice = (error: unknown): StreamNotice => noticeForError(error, 'The activity log')
 
 /**
  * A CrIcon name — kept as a plain string (not imported from icons.tsx) so this
@@ -42,23 +37,6 @@ export interface CookrewEvent {
   actor: EventActor
   timestamp: number
   details?: string
-  /**
-   * How long the thing this event reports on took, in ms (p95-p98-latency-
-   * metrics-spec). OPTIONAL and absent — not null, not zero — on every untimed
-   * event, which is most of them. Mirrors main/event-log.ts exactly; every
-   * existing consumer keeps working unchanged against events without one.
-   */
-  durationMs?: number
-}
-
-/**
- * Whether an event carries a usable duration. Guards the percentile input:
- * a NaN or a negative reaching latencyStats would rank above every real
- * sample and silently poison p95/p98, so a malformed value is treated as
- * untimed rather than trusted.
- */
-export function isTimed(e: CookrewEvent): boolean {
-  return typeof e.durationMs === 'number' && Number.isFinite(e.durationMs) && e.durationMs >= 0
 }
 
 export interface EventFilter {
@@ -79,13 +57,6 @@ export interface EventMeta {
   hatch: boolean
   /** Metric bucket this type rolls into, or null to exclude from counts. */
   metric: MetricKey | null
-  /**
-   * false = never toast this type. Timed observability events (turn.completed,
-   * terminal.booted) fire on every turn / cold spawn — as toasts they would
-   * shadow every Recruited/Created toast with a metrics echo. They exist for
-   * the LATENCY rollup, not the feed.
-   */
-  toast?: false
 }
 
 export type MetricKey = 'spawned' | 'cards' | 'forks' | 'switches' | 'removed'
@@ -93,11 +64,6 @@ export type MetricKey = 'spawned' | 'cards' | 'forks' | 'switches' | 'removed'
 const META: Record<string, EventMeta> = {
   'terminal.recruited': { label: 'Recruited', verb: 'recruited', noun: 'agent', icon: 'agent', hatch: true, metric: 'spawned' },
   'terminal.created': { label: 'Created', verb: 'created', noun: 'terminal', icon: 'terminal', hatch: true, metric: 'spawned' },
-  // Timed types (durationMs). metric: null — a turn completing is not a thing
-  // spawned/created/removed, so it must not inflate any count bucket; it earns
-  // its place in the LATENCY rollup instead.
-  'turn.completed': { label: 'Turn', verb: 'finished a turn', noun: 'turn', icon: 'agent', hatch: false, metric: null, toast: false },
-  'terminal.booted': { label: 'Booted', verb: 'booted', noun: 'terminal', icon: 'terminal', hatch: false, metric: null, toast: false },
   'terminal.dismissed': { label: 'Dismissed', verb: 'dismissed', noun: 'agent', icon: 'close', hatch: false, metric: 'removed' },
   'terminal.killed': { label: 'Killed', verb: 'killed', noun: 'agent', icon: 'close', hatch: false, metric: 'removed' },
   'note.created': { label: 'Note', verb: 'created', noun: 'note', icon: 'note', hatch: false, metric: 'cards' },
@@ -155,56 +121,6 @@ export const METRIC_ORDER: { key: MetricKey; label: string }[] = [
   { key: 'switches', label: 'Switches' },
   { key: 'removed', label: 'Removed' }
 ]
-
-/** One LATENCY table row: an event type and the percentile summary for it. */
-export interface LatencyRow {
-  type: string
-  /** eventMeta label, resolved here so the panel stays presentational. */
-  label: string
-  stats: LatencyStats
-}
-
-/**
- * Percentile rollup per event type, computed CLIENT-SIDE from whatever the
- * caller already filtered (p95-p98-latency-metrics-spec §4) — so the workspace
- * / type / time filters apply for free and no new IPC is needed. Untimed
- * events are dropped, which is why an all-untimed log yields [] and the panel
- * can hide the section outright rather than draw a table of zeros.
- *
- * Ordered worst tail first (p95 desc, type asc to break ties deterministically)
- * because the point of the section is finding the offender, not reading an
- * alphabet. Percentile math is Piye's shared module — never re-implemented.
- */
-export function latencyRows(events: readonly CookrewEvent[]): LatencyRow[] {
-  const byType = new Map<string, number[]>()
-  for (const e of events) {
-    if (!isTimed(e)) continue
-    const bucket = byType.get(e.type)
-    if (bucket) bucket.push(e.durationMs as number)
-    else byType.set(e.type, [e.durationMs as number])
-  }
-  const rows: LatencyRow[] = []
-  for (const [type, values] of byType) {
-    const stats = latencyStats(values)
-    if (stats) rows.push({ type, label: eventMeta(type).label, stats })
-  }
-  return rows.sort((a, b) => b.stats.p95 - a.stats.p95 || a.type.localeCompare(b.type))
-}
-
-/**
- * Duration for display. Sub-second stays in ms (the resolution that matters
- * for a boot), seconds get one decimal, and past a minute it reads as m/s —
- * "94.3s" is a number you have to parse, "1m 34s" is one you can feel.
- */
-export function formatDuration(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return '—'
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
-  const mins = Math.floor(ms / 60_000)
-  const secs = Math.round((ms % 60_000) / 1000)
-  // 1m 60s is not a time. Carry the rounded-up second into the minute.
-  return secs === 60 ? `${mins + 1}m 0s` : `${mins}m ${secs}s`
-}
 
 /** Default burst-coalesce window: same type+workspace within this gap merges. */
 export const COALESCE_MS = 2000
@@ -268,69 +184,6 @@ export function onEvent(cb: (e: CookrewEvent) => void): () => void {
   return () => window.removeEventListener(MOCK_EVENT, listener)
 }
 
-/**
- * Timed sample events for the mock adapter, so the LATENCY section is
- * exercisable without the live backend. Offsets are relative to `now` (all
- * within the last hour, so every time range shows them) and the durations are
- * deliberately skewed — a long tail on turn.completed is what makes p98
- * diverge from p50 and proves the row is not just an average in disguise.
- *
- * Named "SAMPLE" on purpose: these must be legible as fabricated the moment
- * they land in the timeline next to real observed events.
- */
-export const MOCK_LATENCY_SAMPLES: readonly { type: string; agoMs: number; durationMs: number }[] = [
-  { type: 'turn.completed', agoMs: 55 * 60_000, durationMs: 4_200 },
-  { type: 'turn.completed', agoMs: 48 * 60_000, durationMs: 6_800 },
-  { type: 'turn.completed', agoMs: 41 * 60_000, durationMs: 5_100 },
-  { type: 'turn.completed', agoMs: 35 * 60_000, durationMs: 9_400 },
-  { type: 'turn.completed', agoMs: 28 * 60_000, durationMs: 3_600 },
-  { type: 'turn.completed', agoMs: 22 * 60_000, durationMs: 7_900 },
-  { type: 'turn.completed', agoMs: 17 * 60_000, durationMs: 12_500 },
-  { type: 'turn.completed', agoMs: 11 * 60_000, durationMs: 5_800 },
-  { type: 'turn.completed', agoMs: 6 * 60_000, durationMs: 88_000 },
-  { type: 'turn.completed', agoMs: 2 * 60_000, durationMs: 4_900 },
-  { type: 'workspace.switched', agoMs: 44 * 60_000, durationMs: 310 },
-  { type: 'workspace.switched', agoMs: 26 * 60_000, durationMs: 520 },
-  { type: 'workspace.switched', agoMs: 9 * 60_000, durationMs: 1_450 },
-  { type: 'terminal.booted', agoMs: 52 * 60_000, durationMs: 820 },
-  { type: 'terminal.booted', agoMs: 31 * 60_000, durationMs: 1_180 },
-  { type: 'terminal.booted', agoMs: 4 * 60_000, durationMs: 640 }
-]
-
-/** Build (but do not emit) the sample timed events. Pure — testable. */
-export function mockLatencyEvents(now: number): CookrewEvent[] {
-  return MOCK_LATENCY_SAMPLES.map((s) => ({
-    type: s.type,
-    entityId: `sample-${s.type}`,
-    entityName: 'SAMPLE',
-    workspaceId: 'sample-ws',
-    workspaceName: 'Sample workspace',
-    actor: 'orch' as EventActor,
-    timestamp: now - s.agoMs,
-    details: 'mock latency sample',
-    durationMs: s.durationMs
-  }))
-}
-
-/**
- * Seed the mock log with the timed samples. Explicit opt-in, never automatic:
- * fabricated events appearing on their own would read as real history. Refuses
- * when Forge's log is live — the point is to stand in for a missing backend,
- * not to pollute a present one. Emits through the existing window channel so
- * every open query refreshes the same way a real event would.
- */
-export function seedMockEvents(now: number = Date.now()): number {
-  if (hasEventLog()) {
-    console.warn('[event-log] seedMockEvents ignored: the real event log is live')
-    return 0
-  }
-  const events = mockLatencyEvents(now)
-  for (const detail of events) {
-    window.dispatchEvent(new CustomEvent<CookrewEvent>(MOCK_EVENT, { detail }))
-  }
-  return events.length
-}
-
 function matches(e: CookrewEvent, filter?: EventFilter): boolean {
   if (!filter) return true
   if (filter.workspaceId && e.workspaceId !== filter.workspaceId) return false
@@ -354,31 +207,16 @@ export async function queryEvents(filter?: EventFilter): Promise<CookrewEvent[]>
   return mockLog.filter((e) => matches(e, filter)).sort((a, b) => b.timestamp - a.timestamp)
 }
 
-export interface EventQueryResult {
-  events: CookrewEvent[]
-  /**
-   * Set when the log could not be read at all. A scope refusal (v4 §4: this
-   * credential may render the board but not query the log) must NOT look like
-   * an empty result — "no events in this range" would be a lie, and it is the
-   * one the wall would show. D6.
-   */
-  notice: StreamNotice | null
-}
-
 /** Live query hook: initial fetch + re-query whenever a new event streams in. */
-export function useEventQuery(filter?: EventFilter): EventQueryResult {
-  const [result, setResult] = useState<EventQueryResult>({ events: [], notice: null })
+export function useEventQuery(filter?: EventFilter): CookrewEvent[] {
+  const [events, setEvents] = useState<CookrewEvent[]>([])
   const key = JSON.stringify(filter ?? {})
   useEffect(() => {
     let alive = true
     const refresh = (): void => {
-      void queryEvents(filter)
-        .then((list) => {
-          if (alive) setResult({ events: list, notice: null })
-        })
-        .catch((error: unknown) => {
-          if (alive) setResult({ events: [], notice: queryNotice(error) })
-        })
+      void queryEvents(filter).then((list) => {
+        if (alive) setEvents(list)
+      })
     }
     refresh()
     const off = onEvent(refresh)
@@ -388,5 +226,5 @@ export function useEventQuery(filter?: EventFilter): EventQueryResult {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
-  return result
+  return events
 }

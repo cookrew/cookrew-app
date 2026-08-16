@@ -300,8 +300,6 @@ export class HerdrHostMultiplexer implements Multiplexer {
   private readonly settleMs: number
   private probed: boolean | null = null
   private serverUp = false
-  /** One immutable pane-list snapshot while a synchronous attach burst runs. */
-  private attachSnapshot: HerdrPane[] | null = null
 
   constructor(options: HerdrHostOptions) {
     // Sanitized: the server is every pane's PARENT, so whatever launched
@@ -417,8 +415,8 @@ export class HerdrHostMultiplexer implements Multiplexer {
     this.runner.runQuiet('herdr', args)
   }
 
-  /** Read every Cookrew pane from herdr, bypassing an attach-burst snapshot. */
-  private readPanes(): HerdrPane[] {
+  /** Every Cookrew pane, by label. */
+  private panes(): HerdrPane[] {
     if (!this.available()) return []
     try {
       return parsePaneList(this.herdr(['pane', 'list']))
@@ -426,34 +424,6 @@ export class HerdrHostMultiplexer implements Multiplexer {
       // No server running is the ordinary "no sessions" case, not an error.
       return []
     }
-  }
-
-  /** Every Cookrew pane, stable across a synchronous workspace attach burst. */
-  private panes(): HerdrPane[] {
-    return this.attachSnapshot ?? this.readPanes()
-  }
-
-  /**
-   * Share one global pane snapshot across a serial workspace reattach.
-   * Herdr already returns every pane in one response; this avoids forking a
-   * CLI to ask the same global question at each per-terminal lookup.
-   */
-  beginAttachBatch(): void {
-    if (this.attachSnapshot) return
-    if (!this.available() || !this.ensureServer()) return
-    this.attachSnapshot = this.readPanes()
-  }
-
-  endAttachBatch(): void {
-    this.attachSnapshot = null
-  }
-
-  /** Make a pane created during a batch visible to later attach steps. */
-  private rememberPane(pane: HerdrPane): void {
-    if (!this.attachSnapshot) return
-    const index = this.attachSnapshot.findIndex((candidate) => candidate.pane_id === pane.pane_id)
-    if (index === -1) this.attachSnapshot.push(pane)
-    else this.attachSnapshot[index] = pane
   }
 
   private paneFor(name: string): HerdrPane | null {
@@ -520,8 +490,6 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // Label FIRST: if the boot command fails, the pane is still findable and
     // killable by name rather than leaking as an unlabelled orphan.
     this.quiet(['pane', 'rename', pane.pane_id, spec.sessionName])
-    const namedPane = { ...pane, label: spec.sessionName }
-    this.rememberPane(namedPane)
 
     // Boot from a FILE, not by typing the script.
     //
@@ -544,11 +512,11 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // this and will correct the state (observed: a reported state overridden
     // ~100ms later by herdr's own reading of a live claude TUI), which is the
     // signal Cookrew currently infers by scraping.
-    this.reportAgent(namedPane, spec)
+    this.reportAgent(pane, spec)
 
     // The card binding lands once the pane is labelled and booted: herdr's
     // chrome then shows Cookrew's card name and role instead of a raw shell.
-    if (spec.card) this.reportPaneCardTo(namedPane, spec.card)
+    if (spec.card) this.reportPaneCardTo(pane, spec.card)
   }
 
   /**
@@ -721,14 +689,6 @@ export class HerdrHostMultiplexer implements Multiplexer {
       const seen = this.paneRuns(pane.pane_id, expected, spec.sessionName)
       if (seen === 'agent') return false
       if (seen === 'shell') return true
-      // A registered DIFFERENT agent plus a non-shell root is the durable
-      // command-edit/migration shape: exact reattach means preserving that live
-      // process, never waiting for it to turn into the node's newer command.
-      // The old per-pane settle loop compounded this known mismatch to 16.4s
-      // for eight terminals. Keep polling an unregistered `other`, though: a
-      // restored shell can be doing transient rc work and may still settle into
-      // the positive bare-shell verdict that licenses recovery.
-      if (seen === 'other' && pane.agent && pane.agent !== expected) return false
       if (Date.now() >= deadline) return false
     }
   }
@@ -995,21 +955,6 @@ export class HerdrHostMultiplexer implements Multiplexer {
       // recent-unwrapped: scrollback with herdr's soft wrapping undone, which
       // is what a scraper wants and what `capture-pane -p` approximates.
       return this.herdr(['pane', 'read', pane.pane_id, '--source', 'recent-unwrapped'])
-    } catch {
-      return null
-    }
-  }
-
-  /** The same read, reaching `lines` rows back instead of herdr's default. */
-  captureDeep(name: string, lines: number): string | null {
-    const pane = this.paneFor(name)
-    if (!pane) return null
-    try {
-      return this.herdr([
-        'pane', 'read', pane.pane_id,
-        '--source', 'recent-unwrapped',
-        '--lines', String(Math.max(1, lines))
-      ])
     } catch {
       return null
     }

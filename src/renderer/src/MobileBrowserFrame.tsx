@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CrIcon } from './icons'
-import { authStore } from './auth-gate'
 import {
   FRAME_POLL_MS,
   createFramePoller,
@@ -147,7 +146,7 @@ export function MobileBrowserFrame({
   const src = streaming
     ? stream.frameUrl
     : fallback === 'thumb' && open
-      ? frameSrc(browserId, seq, authStore().token())
+      ? frameSrc(browserId, seq)
       : null
   // In stream mode the placeholder shows until the view is genuinely live, so a
   // frozen frame reads as "connecting…", not an interactive surface.

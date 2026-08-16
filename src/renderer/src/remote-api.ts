@@ -1,12 +1,4 @@
 import { AuthError, authStore, type AuthScope } from './auth-gate'
-import {
-  classifyHttpFailure,
-  diagnoseStreamFailure,
-  failureScope,
-  isReadOnlyRefusal,
-  ScopeError
-} from './api-failure'
-import { withStreamToken } from './stream-ticket'
 import { ReconnectingStream } from './live-stream'
 import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
@@ -41,26 +33,15 @@ async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> 
   if (!response.ok) {
     const detail = await response.json().catch(() => ({ error: String(response.status) }))
     const message = (detail as { error?: string }).error ?? `HTTP ${response.status}`
-    // 401 = "I don't know you"; 403 = "I know you, this is not yours". Since
-    // v4 §4 gated reads, those two stopped having the same fix — so only the
-    // failures a re-pair would actually resolve reach the re-pair screen, and
-    // a scope refusal is raised for the call site to render locally (D6).
-    switch (classifyHttpFailure({ status: response.status, message, path, method })) {
-      case 'credential': {
-        // A stale credential is the most likely error this client will ever
-        // see. Raise it as its own type so it reaches the re-pair screen
-        // instead of being counted as a generic network hiccup.
-        const failure = new AuthError(message, failureScope(message))
-        authStore().report(failure)
-        throw failure
-      }
-      case 'scope':
-        // NOT reported: the rest of the app is still authorized, and evicting
-        // it over one out-of-scope route is the bug this replaces.
-        throw new ScopeError(message, path, isReadOnlyRefusal(message))
-      default:
-        throw new Error(message)
+    if (response.status === 401) {
+      // A stale credential is the most likely error this client will ever
+      // see. Raise it as its own type so it reaches the re-pair screen
+      // instead of being counted as a generic network hiccup.
+      const failure = new AuthError(message, /read-only/i.test(message) ? 'read-only' : 'none')
+      authStore().report(failure)
+      throw failure
     }
+    throw new Error(message)
   }
   const text = await response.text()
   return (text ? JSON.parse(text) : undefined) as T
@@ -106,14 +87,7 @@ export async function checkAuth(candidate?: string): Promise<AuthScope> {
 let events: ReconnectingStream | null = null
 
 function sharedEvents(): ReconnectingStream {
-  if (!events) {
-    // A stream ticket, not a second credential: EventSource cannot set the
-    // bearer header every other call uses, and /api/events is gated like the
-    // rest of /api/* now (v4 §4).
-    events = new ReconnectingStream({
-      open: () => new EventSource(withStreamToken('/api/events', authStore().token()))
-    })
-  }
+  if (!events) events = new ReconnectingStream({ open: () => new EventSource('/api/events') })
   return events
 }
 
@@ -214,46 +188,16 @@ export function createRemoteApi(): CookrewApi {
     turnSeen: (terminalId) => post(`/api/terminal/${terminalId}/seen`, {}),
     ptyResize: (terminalId, cols, rows) =>
       post(`/api/terminal/${terminalId}/resize`, { cols, rows }),
-    ptyAttach: (terminalId, onData, onHello, onNotice) => {
-      const stream = new EventSource(
-        withStreamToken(`/api/terminal/${terminalId}/stream`, authStore().token())
-      )
-      // EventSource hides the HTTP status, so a stream the gate refused looks
-      // exactly like one that dropped — which is how a 403 became a blank
-      // terminal card with no diagnosis (D6). `opened` separates the two: a
-      // stream that never delivered a byte and then errored was refused.
-      let opened = false
-      let diagnosed = false
-      const listener = (e: MessageEvent): void => {
-        opened = true
-        onData(JSON.parse(e.data) as string)
-      }
+    ptyAttach: (terminalId, onData, onHello) => {
+      const stream = new EventSource(`/api/terminal/${terminalId}/stream`)
+      const listener = (e: MessageEvent): void => onData(JSON.parse(e.data) as string)
       // The server sends this before the first frame; sizing the xterm from it
       // is what keeps a 45x24 phone from re-wrapping a frame serialized at the
       // pane's 100x30 and then misplacing every absolute-addressed delta.
-      const helloListener = (e: MessageEvent): void => {
-        opened = true
+      const helloListener = (e: MessageEvent): void =>
         onHello?.(JSON.parse(e.data) as { cols: number; rows: number })
-      }
-      const onError = (): void => {
-        // Once per attach: EventSource re-fires this on every retry, and a
-        // card does not need the same notice ten times.
-        if (diagnosed || opened) return
-        diagnosed = true
-        void checkAuth()
-          .catch(() => null)
-          .then((scope) => {
-            const verdict = diagnoseStreamFailure({ opened, scope })
-            if (verdict.action === 'report') {
-              authStore().report(new AuthError(verdict.message, verdict.scope))
-            } else if (verdict.action === 'notice') {
-              onNotice?.(verdict.notice)
-            }
-          })
-      }
       stream.addEventListener('hello', helloListener)
       stream.addEventListener('data', listener)
-      stream.addEventListener('error', onError)
       return () => stream.close()
     },
 

@@ -166,15 +166,6 @@ export class TmuxMultiplexer implements Multiplexer {
     }
   }
 
-  /** `-S -N`: start N rows back in the history rather than at the viewport. */
-  captureDeep(name: string, lines: number): string | null {
-    try {
-      return this.tmux(['capture-pane', '-p', '-S', `-${Math.max(1, lines)}`, '-t', name])
-    } catch {
-      return null
-    }
-  }
-
   scrollState(name: string): ScrollState {
     try {
       const out = this.tmux(['display-message', '-p', '-t', name, '#{scroll_position}:#{history_size}'])

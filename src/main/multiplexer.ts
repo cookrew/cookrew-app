@@ -219,24 +219,8 @@ export interface Multiplexer {
 
   attachSpawn(spec: AttachSpec): AttachSpawn
 
-  /** Optional scope for sharing a backend's global session snapshot. */
-  beginAttachBatch?(): void
-  endAttachBatch?(): void
-
   /** Full scrollback as text, or null when the session is gone. */
   capture(name: string): string | null
-
-  /**
-   * The same read, but reaching back `lines` rows into scrollback.
-   *
-   * `capture` is bounded — visible rows on tmux, a fixed recent window on
-   * herdr — which is correct for a screen scraper and wrong for "did this
-   * prompt ever arrive?": one long turn scrolls the echo away and the answer
-   * flips to no. Optional because a backend with no out-of-process view of the
-   * screen (direct) cannot do better than its `capture`, and callers must
-   * degrade to that rather than assume depth they did not get.
-   */
-  captureDeep?(name: string, lines: number): string | null
   scrollState(name: string): ScrollState
   panePid(name: string): number | null
   paneLaunch(name: string): PaneLaunch | null

@@ -155,15 +155,7 @@ export interface WorkspaceMeta {
   dirs: string[]
   /** One emoji shown in the switcher. */
   icon: string
-  /**
-   * Service is orthogonal to focus: hot workspaces are tracked/dispatchable,
-   * dormant workspaces keep their panes but suspend background bookkeeping,
-   * and parked workspaces have stopped execution awaiting an explicit resume.
-   */
-  serviceState: WorkspaceServiceState
 }
-
-export type WorkspaceServiceState = 'hot' | 'dormant' | 'parked'
 
 /** Git state of a workspace directory (main/git.ts). */
 export interface GitInfo {

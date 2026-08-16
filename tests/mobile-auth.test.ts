@@ -80,12 +80,7 @@ describe('handleMobileApi mutating-route gate', () => {
   })
 
   it('401s restore/undo and workspace mutations without a token', async () => {
-    for (const path of [
-      '/api/agents/t1/restore/undo',
-      '/api/workspaces',
-      '/api/workspaces/ws-1/service',
-      '/api/nodes'
-    ]) {
+    for (const path of ['/api/agents/t1/restore/undo', '/api/workspaces', '/api/nodes']) {
       const { response, captured } = stubResponse()
       await handleMobileApi(stubRequest('POST'), response, new URL(path, 'http://lan.local'), stubDeps())
       expect(captured.status).toBe(401)
@@ -97,30 +92,22 @@ describe('handleMobileApi mutating-route gate', () => {
     const handled = await handleMobileApi(
       stubRequest('POST', `Bearer ${TOKEN}`),
       response,
-      // A CLASSIFIED route, because an unknown one is now a 403 (below): the
-      // gate's job is to authorize the manifest, and the router's is to say
-      // what exists. /api/say is served by mobile-server, past this module.
-      new URL('/api/say', 'http://lan.local'),
+      new URL('/api/no-such-route', 'http://lan.local'),
       stubDeps()
     )
-    // Gate passed; no route handler owned it in these bare deps, so the server
-    // keeps dispatching.
+    // Gate passed; no route owned the path, so the server keeps dispatching.
     expect(handled).toBe(false)
   })
 
-  it('gates read-only GETs too — deny-by-default replaced "GETs are open"', async () => {
-    // The migration: /api/* used to be write-gated, so every read (board,
-    // state, activity, transcripts) was open to anyone on the LAN. Header-less
-    // clients now present the token as a stream ticket instead (v4 §4).
-    const { response, captured } = stubResponse()
+  it('does not gate read-only GETs (EventSource cannot set headers)', async () => {
+    const { response } = stubResponse()
     const handled = await handleMobileApi(
       stubRequest('GET'),
       response,
-      new URL('/api/workspaces', 'http://lan.local'),
+      new URL('/api/no-such-route', 'http://lan.local'),
       stubDeps()
     )
-    expect(handled).toBe(true)
-    expect(captured.status).toBe(401)
+    expect(handled).toBe(false)
   })
 
   it('passes everything when no pairing token is configured (loopback embedders)', async () => {
@@ -134,134 +121,6 @@ describe('handleMobileApi mutating-route gate', () => {
       deps
     )
     expect(handled).toBe(false)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// V4 §4 — Probe's G4 blocker list, as unit cases. The live eval (16/29,
-// scratchpad/v4-auth-eval.mjs) named four blockers; each `A##` below is the
-// check id it maps to, so a red row over HTTP has a test that fails with it.
-// ---------------------------------------------------------------------------
-
-const WALL = 'wall-token-456'
-
-/** Both credentials configured, as the running server always has them. */
-function gatedDeps(): MobileApiDeps {
-  return { pairingToken: TOKEN, wallToken: WALL } as unknown as MobileApiDeps
-}
-
-const at = (path: string): URL => new URL(path, 'http://lan.local')
-
-async function call(
-  method: string,
-  path: string,
-  token?: string
-): Promise<{ status: number; body: unknown; handled: boolean }> {
-  const { response, captured } = stubResponse()
-  const handled = await handleMobileApi(
-    stubRequest(method, token ? `Bearer ${token}` : undefined, method === 'GET' ? undefined : '{}'),
-    response,
-    at(path),
-    gatedDeps()
-  )
-  return { status: captured.status, body: captured.body, handled }
-}
-
-describe('v4 §4 gate — deny-by-default over every /api/* route', () => {
-  const GARBAGE = 'x'.repeat(TOKEN.length)
-
-  it('A05/A06: an observe GET is 401 with no token and with a garbage token', async () => {
-    // The blocker as Probe measured it: both of these answered 200.
-    expect((await call('GET', '/api/workspaces')).status).toBe(401)
-    expect((await call('GET', '/api/workspaces', GARBAGE)).status).toBe(401)
-  })
-
-  it('A07/A08: both known credentials may observe', async () => {
-    // /api/state is `observe` and lives in mobile-server, so a cleared gate
-    // shows up here as "not handled" rather than as a route touching deps.
-    expect((await call('GET', '/api/state', WALL)).handled).toBe(false)
-    expect((await call('GET', '/api/state', TOKEN)).handled).toBe(false)
-  })
-
-  it('A01–A04: /api/auth/status stays public, and answers what the caller holds', async () => {
-    // The one route that must answer an unpaired device — it is how a phone
-    // discovers it needs to pair rather than by failing at something else.
-    for (const [token, scope] of [
-      [undefined, 'none'],
-      [GARBAGE, 'none'],
-      [TOKEN, 'pairing'],
-      [WALL, 'read-only']
-    ] as const) {
-      const response = await call('GET', '/api/auth/status', token)
-      expect(response.status).toBe(200)
-      expect(response.body).toMatchObject({ scope })
-    }
-  })
-
-  it('A11/A12: a write is 401 without a credential', async () => {
-    expect((await call('POST', '/api/workspaces/ws-1/service')).status).toBe(401)
-    expect((await call('POST', '/api/workspaces/ws-1/service', GARBAGE)).status).toBe(401)
-  })
-
-  it('A13: a WALL write is 403 — the 401→403 migration', async () => {
-    // The semantics change, spec'd in §4 and already encoded in Piye's
-    // gate.test.ts: the token is KNOWN, so "re-pair" is the wrong instruction.
-    // 401 told a correct client to go fix a credential that was never broken.
-    const response = await call('POST', '/api/workspaces/ws-1/service', WALL)
-    expect(response.status).toBe(403)
-    // The phrase the phone reads to tell a scope refusal from an unpaired
-    // device (remote-api.ts raises it as a read-only AuthError).
-    expect(response.body).toMatchObject({ error: expect.stringMatching(/read-only/i) })
-  })
-
-  it('A17: dispatch is out of the wall’s groups — 403, and not a 404 either', async () => {
-    // Authorization outranks existence: this agent id does not exist, and the
-    // caller must not be able to learn that.
-    const response = await call('POST', '/api/agents/00000000-0000-4000-8000-000000000000/dispatch', WALL)
-    expect(response.status).toBe(403)
-  })
-
-  it('A15/A16: authentication happens BEFORE resolution — 401, never 404', async () => {
-    const missing = '/api/agents/00000000-0000-4000-8000-000000000000/dispatch'
-    expect((await call('POST', missing)).status).toBe(401)
-    expect((await call('POST', missing, GARBAGE)).status).toBe(401)
-  })
-
-  it('A18–A25: an unclassified route is 401 unauthenticated and 403 authenticated', async () => {
-    // The ORDER blocker: an unknown /api/* path used to 404 before auth,
-    // which answers "no such thing" to a caller we have not identified.
-    for (const method of ['GET', 'POST']) {
-      expect((await call(method, '/api/v4-unclassified')).status).toBe(401)
-      expect((await call(method, '/api/v4-unclassified', GARBAGE)).status).toBe(401)
-      expect((await call(method, '/api/v4-unclassified', WALL)).status).toBe(403)
-      expect((await call(method, '/api/v4-unclassified', TOKEN)).status).toBe(403)
-    }
-  })
-
-  it('a 403 body never says which route or workspace would have worked', async () => {
-    const response = await call('GET', '/api/v4-unclassified', TOKEN)
-    expect(JSON.stringify(response.body)).not.toContain('v4-unclassified')
-  })
-
-  it('leaves the static bootstrap ungated — a phone must be able to load the client', async () => {
-    // handleMobileApi does not serve these, but it must not REFUSE them
-    // either: gating the bundle leaves a phone with a blank page and no way
-    // to pair. Non-/api paths fall through untouched.
-    for (const path of ['/', '/index.html', '/assets/index-abc123.js']) {
-      expect((await call('GET', path)).handled).toBe(false)
-    }
-  })
-
-  it('a token in the query still authenticates — EventSource has no headers', async () => {
-    const { response, captured } = stubResponse()
-    const handled = await handleMobileApi(
-      stubRequest('GET'),
-      response,
-      at(`/api/state?token=${TOKEN}`),
-      gatedDeps()
-    )
-    expect(handled).toBe(false)
-    expect(captured.status).toBe(0)
   })
 })
 

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { hasNativeWebview, isRemoteMode } from './api'
-import { authStore } from './auth-gate'
 import {
   clampViewport,
   frameIsFresh,
@@ -271,10 +270,7 @@ export function useBrowserStream(
             browserId,
             w,
             h,
-            client === 'desktop' ? desktopToken : null,
-            // The phone's pairing token rides as a stream ticket; the desktop
-            // presents its per-process secret instead (v4 §4).
-            client === 'desktop' ? null : authStore().token()
+            client === 'desktop' ? desktopToken : null
           )
         )
       } catch {

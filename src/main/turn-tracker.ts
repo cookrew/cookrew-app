@@ -2,7 +2,6 @@ import { EventEmitter } from 'node:events'
 import type { PtySession } from './pty'
 import { diffOutput } from './ask'
 import { agentStatus } from './herdr-agent-status'
-import { sessionNameFor } from './pty'
 import { summarizeTurn, TurnSummarizer } from './sous'
 import type { TurnStore } from './turn-store'
 import {
@@ -50,8 +49,6 @@ const BACKFILL_TICK_MS = 2000
 const BACKFILL_RETRY_MS = 60_000
 /** Minimum turn duration before quiescence may end it (agent spin-up). */
 const GRACE_MS = 1500
-/** Missing detached status eventually yields to a complete durable record. */
-export const DETACHED_EMIT_GRACE_MS = 5000
 const POLL_MS = 400
 const PUSH_THROTTLE_MS = 250
 const SUMMARY_TAIL = 14
@@ -98,23 +95,6 @@ function matchPrior(
   return promptsMatch(at.prompt, record.prompt) ? at : undefined
 }
 
-function sameExchange(previous: TurnRecord, next: TurnRecord): boolean {
-  if (previous.uuid && next.uuid) return previous.uuid === next.uuid
-  return previous.index === next.index && promptsMatch(previous.prompt, next.prompt)
-}
-
-/**
- * Prove an append, rather than guessing from length. A rewind/rewrite merely
- * establishes a new baseline; only a later strict suffix is a completion.
- */
-function strictAppends(previous: TurnRecord[], next: TurnRecord[]): TurnRecord[] {
-  if (next.length <= previous.length) return []
-  for (let index = 0; index < previous.length; index += 1) {
-    if (!sameExchange(previous[index], next[index])) return []
-  }
-  return next.slice(previous.length)
-}
-
 interface TrackedTerminal {
   session: PtySession
   agent: boolean
@@ -154,53 +134,16 @@ interface TrackedTerminal {
   onExit: () => void
 }
 
-interface RegisteredTerminal {
-  agent: boolean
-  /** Raw session records at the last reconcile, used only for append proof. */
-  baseline: TurnRecord[]
-  /** False until initial history has been accepted without emitting events. */
-  armed: boolean
-}
-
-interface PendingDetachedTurn {
-  /** Latest parser view of this exchange; the same record fills in over time. */
-  record: TurnRecord
-  /** Wall-clock time this append was first staged; same-record refreshes preserve it. */
-  stagedAt: number
-  /** Dispatch held when this prompt first appeared, never inferred later. */
-  dispatchId?: string
-}
-
-interface PendingDispatch {
-  id: string
-  /** Prevents a boot-window dispatch from claiming pre-existing history. */
-  armedAt: number
-}
-
-export interface TurnTrackerOptions {
-  /** Synchronous detached-agent status; injectable so no test needs herdr. */
-  statusOf?: (terminalId: string) => 'idle' | 'working' | 'blocked' | 'done' | null
-  now?: () => number
-}
-
 /**
  * Payload of the tracker's 'turn' event: one real exchange finished, and how
- * long the agent took when its timestamps prove that interval. Nothing about
- * the conversation can ride out to the event log on it.
+ * long the agent took over it. Deliberately just the two facts — the terminal
+ * to attribute it to and the milliseconds — so nothing about the conversation
+ * can ride out to the event log on it.
  */
 export interface CompletedTurn {
   terminalId: string
   /** Milliseconds from the turn opening ('thinking') to 'replied'. */
-  durationMs?: number
-  /** Exact detached record that completed; live scrape completion may omit it. */
-  turnIndex?: number
-  /**
-   * The dispatch this turn answers (v4 §3), when the work arrived over the
-   * API rather than from a human at the keyboard. Absent otherwise — an
-   * agent's own next turn is nobody's dispatch, and correlating it to one
-   * would invent a billing record.
-   */
-  dispatchId?: string
+  durationMs: number
 }
 
 /**
@@ -211,14 +154,11 @@ export interface CompletedTurn {
  */
 export class TurnTracker extends EventEmitter {
   private tracked = new Map<string, TrackedTerminal>()
-  /** Service registration survives a hot workspace's PTY detach. */
-  private registered = new Map<string, RegisteredTerminal>()
 
   /** Both injectable for tests; store null = in-memory only. */
   constructor(
     private summarize: TurnSummarizer = summarizeTurn,
-    private store: TurnStore | null = null,
-    private options: TurnTrackerOptions = {}
+    private store: TurnStore | null = null
   ) {
     super()
   }
@@ -232,8 +172,6 @@ export class TurnTracker extends EventEmitter {
    * terminal ids are stable across runs.
    */
   private histories = new Map<string, TurnRecord[]>()
-  /** Parser output before phantom-echo dedupe; append proofs stay in this space. */
-  private rawHistories = new Map<string, TurnRecord[]>()
 
   /**
    * Terminals whose DURABLE history is written by the session file, not by
@@ -250,19 +188,6 @@ export class TurnTracker extends EventEmitter {
    */
   private fileBacked = new Set<string>()
 
-  /**
-   * terminalId → the dispatch its NEXT completed turn answers (v4 §3). Set by
-   * the dispatch service just before the prompt goes out and consumed by the
-   * first turn to finish, so the correlation cannot leak onto a later turn the
-   * caller never asked for.
-   */
-  private pendingDispatch = new Map<string, PendingDispatch>()
-
-  /** Prompt records waiting for final JSONL evidence + detached idle/done. */
-  private pendingDetachedTurns = new Map<string, PendingDetachedTurn[]>()
-  /** Per-terminal wall-clock fallback for missing detached status. */
-  private detachedEmitTimers = new Map<string, NodeJS.Timeout>()
-
   /** Paced Sous title-backfill pump for historical untitled records. */
   private backfillTimer: NodeJS.Timeout | null = null
   private backfillInFlight = false
@@ -278,10 +203,6 @@ export class TurnTracker extends EventEmitter {
     return loaded
   }
 
-  private now(): number {
-    return this.options.now?.() ?? Date.now()
-  }
-
   /**
    * Session-file reconcile (SessionTurnSync): replace a terminal's history
    * with records derived from its Claude session JSONL — the source of truth
@@ -294,11 +215,6 @@ export class TurnTracker extends EventEmitter {
    */
   replaceHistory(terminalId: string, records: TurnRecord[]): void {
     const previous = this.history(terminalId)
-    const registered = this.registered.get(terminalId)
-    const detachedAppends =
-      registered?.agent === true && registered.armed && !this.tracked.has(terminalId)
-        ? strictAppends(registered.baseline, records)
-        : []
     const byUuid = new Map(previous.filter((r) => r.uuid).map((r) => [r.uuid, r]))
     const byIndex = new Map(previous.map((r) => [r.index, r]))
     const merged = records.map((record) => {
@@ -320,142 +236,11 @@ export class TurnTracker extends EventEmitter {
     // file; the store appends now, so keeping all of it costs one line per
     // turn. Conductor had 220 checkpoints trimmed away under the old limit.
     const deduped = dedupePhantomEchoes(stamped)
-    this.rawHistories.set(terminalId, records)
     this.histories.set(terminalId, deduped)
     this.store?.scheduleSave(terminalId, deduped)
-    if (registered) {
-      registered.baseline = records
-      registered.armed = true
-    }
     const t = this.tracked.get(terminalId)
     if (t) this.push(t)
-    // Install first, reconcile completion second: listeners may immediately
-    // read the exact turn. A new prompt record is NOT a completed turn yet —
-    // parseSessionTurns creates it with an empty reply and equal timestamps,
-    // then enriches that same record as tool/result/final lines arrive.
-    this.reconcileDetachedTurns(terminalId, records, detachedAppends)
     this.ensureBackfillPump()
-  }
-
-  /**
-   * Keep appended detached records alive across same-length reconciles.
-   *
-   * Completion has two independent witnesses: the session file must contain a
-   * final reply, and herdr must report the detached agent idle/done. Either can
-   * arrive first. A later prompt is also
-   * proof that every earlier candidate ended, which prevents a missed status
-   * transition from stranding historical completions.
-   */
-  private reconcileDetachedTurns(
-    terminalId: string,
-    records: TurnRecord[],
-    appends: TurnRecord[]
-  ): void {
-    const pending = (this.pendingDetachedTurns.get(terminalId) ?? []).flatMap((candidate) => {
-      const current = records.find((record) => sameExchange(candidate.record, record))
-      return current ? [{ ...candidate, record: current }] : []
-    })
-
-    const dispatch = this.pendingDispatch.get(terminalId)
-    const stagedAt = this.now()
-    for (const [offset, record] of appends.entries()) {
-      if (pending.some((candidate) => sameExchange(candidate.record, record))) continue
-      // If a delayed reconcile reveals several appends at once, the currently
-      // armed dispatch can only be the newest prompt. Assigning it to the first
-      // historical append would close the dispatch with somebody else's turn.
-      const ownsDispatch =
-        offset === appends.length - 1 &&
-        dispatch !== undefined &&
-        record.startedAt >= dispatch.armedAt
-      pending.push({
-        record,
-        stagedAt,
-        ...(ownsDispatch ? { dispatchId: dispatch.id } : {})
-      })
-    }
-
-    if (pending.length > 0) this.pendingDetachedTurns.set(terminalId, pending)
-    else this.pendingDetachedTurns.delete(terminalId)
-    this.flushDetachedTurns(terminalId)
-  }
-
-  /** Re-check staged detached turns after a pushed herdr status observation. */
-  refreshDetachedCompletions(): void {
-    for (const terminalId of [...this.pendingDetachedTurns.keys()]) {
-      this.flushDetachedTurns(terminalId)
-    }
-  }
-
-  private flushDetachedTurns(terminalId: string): void {
-    this.clearDetachedEmitTimer(terminalId)
-    // Once a PTY view attaches, its scrape state machine owns this exchange.
-    // Keeping the staged file copy would emit the same turn again when status
-    // changes or the grace timer fires.
-    if (this.tracked.has(terminalId)) {
-      this.pendingDetachedTurns.delete(terminalId)
-      return
-    }
-    const pending = this.pendingDetachedTurns.get(terminalId)
-    if (!pending || pending.length === 0) return
-    const status = this.detachedStatus(terminalId)
-    const agentStopped = status === 'idle' || status === 'done'
-    const now = this.now()
-
-    while (pending.length > 0) {
-      const candidate = pending[0]
-      const recordComplete = candidate.record.reply.trim().length > 0
-      // A subsequent prompt proves the preceding exchange ended even if the
-      // status transition was missed. The newest record still needs idle/done.
-      const followedByPrompt = pending.length > 1
-      const statusMissingAndStale =
-        status === null && now - candidate.stagedAt >= DETACHED_EMIT_GRACE_MS
-      if (!recordComplete || (!agentStopped && !followedByPrompt && !statusMissingAndStale)) break
-      pending.shift()
-      this.emitDetachedTurn(terminalId, candidate)
-    }
-
-    if (pending.length === 0) this.pendingDetachedTurns.delete(terminalId)
-    else this.scheduleDetachedFlush(terminalId)
-  }
-
-  private scheduleDetachedFlush(terminalId: string): void {
-    if (this.detachedEmitTimers.has(terminalId)) return
-    const first = this.pendingDetachedTurns.get(terminalId)?.[0]
-    // A prompt-only record cannot self-witness yet. Its later final reconcile
-    // will schedule the deadline without spending a polling timer meanwhile.
-    if (!first || first.record.reply.trim().length === 0) return
-    const remaining = first.stagedAt + DETACHED_EMIT_GRACE_MS - this.now()
-    // If status was still working at the first deadline, keep checking at the
-    // same bounded cadence so a later feed death/unknown cannot strand it.
-    const delay = remaining > 0 ? remaining : DETACHED_EMIT_GRACE_MS
-    const timer = setTimeout(() => {
-      this.detachedEmitTimers.delete(terminalId)
-      this.flushDetachedTurns(terminalId)
-    }, delay)
-    timer.unref?.()
-    this.detachedEmitTimers.set(terminalId, timer)
-  }
-
-  private clearDetachedEmitTimer(terminalId: string): void {
-    const timer = this.detachedEmitTimers.get(terminalId)
-    if (timer) clearTimeout(timer)
-    this.detachedEmitTimers.delete(terminalId)
-  }
-
-  private emitDetachedTurn(terminalId: string, candidate: PendingDetachedTurn): void {
-    if (candidate.dispatchId !== undefined) {
-      if (this.pendingDispatch.get(terminalId)?.id === candidate.dispatchId) {
-        this.pendingDispatch.delete(terminalId)
-      }
-    }
-    this.emit('turn', {
-      terminalId,
-      ...(candidate.record.endedAt > candidate.record.startedAt
-        ? { durationMs: candidate.record.endedAt - candidate.record.startedAt }
-        : {}),
-      turnIndex: candidate.record.index,
-      ...(candidate.dispatchId !== undefined ? { dispatchId: candidate.dispatchId } : {})
-    } satisfies CompletedTurn)
   }
 
   /**
@@ -599,82 +384,9 @@ export class TurnTracker extends EventEmitter {
    * file harness whose session file has not appeared — stays on 'scrape',
    * which is the default and needs no call.
    */
-  /**
-   * Attribute this terminal's next completed turn to a dispatch (v4 §3).
-   *
-   * Stamped BEFORE the prompt is submitted, because a fast agent can finish
-   * inside the submission call and a correlation applied afterwards would miss
-   * its own turn. One dispatch, one turn: the stamp is consumed on use.
-   *
-   * REFUSES to overwrite a live stamp, returning false. A terminal carries at
-   * most one pending dispatch because it produces one turn at a time; taking
-   * the second would close the newcomer with the incumbent's turn and leave
-   * the incumbent open forever — two dispatches, one answer, both billed.
-   */
-  noteDispatch(terminalId: string, dispatchId: string): boolean {
-    const held = this.pendingDispatch.get(terminalId)
-    if (held !== undefined) return held.id === dispatchId
-    this.pendingDispatch.set(terminalId, { id: dispatchId, armedAt: this.now() })
-    const registered = this.registered.get(terminalId)
-    if (registered) registered.armed = true
-    return true
-  }
-
-  /**
-   * Drop a stamp whose dispatch ended without producing a turn (failed
-   * delivery, interrupt). Matched on the id so a dispatch that has already
-   * been superseded cannot disarm its successor.
-   */
-  clearDispatch(terminalId: string, dispatchId: string): void {
-    if (this.pendingDispatch.get(terminalId)?.id !== dispatchId) return
-    this.pendingDispatch.delete(terminalId)
-    const pending = this.pendingDetachedTurns.get(terminalId)
-    if (pending) {
-      this.pendingDetachedTurns.set(
-        terminalId,
-        pending.map((candidate) =>
-          candidate.dispatchId === dispatchId
-            ? { record: candidate.record, stagedAt: candidate.stagedAt }
-            : candidate
-        )
-      )
-    }
-    // `armed` is left alone: it means "initial history accepted", not "a
-    // dispatch is pending", and clearing it here would silence the detached
-    // append emission this terminal's next turn depends on.
-  }
-
-  private emitCompletedTurn(terminalId: string, durationMs?: number): void {
-    const dispatchId = this.pendingDispatch.get(terminalId)?.id
-    this.pendingDispatch.delete(terminalId)
-    this.emit('turn', {
-      terminalId,
-      ...(durationMs !== undefined ? { durationMs } : {}),
-      ...(dispatchId !== undefined ? { dispatchId } : {})
-    } satisfies CompletedTurn)
-  }
-
   setHistorySource(terminalId: string, source: 'file' | 'scrape'): void {
     if (source === 'file') this.fileBacked.add(terminalId)
     else this.fileBacked.delete(terminalId)
-  }
-
-  /**
-   * Is this terminal's pane mid-turn — the agent working, not idle?
-   *
-   * The PTY scrape's view, which is exactly what the caller wants: an agent
-   * whose session file stopped growing WHILE the scrape still shows it
-   * working is the signature of a session that rotated out from under its
-   * binding (see claude-rotation). Detached HOT terminals use herdr's
-   * session-global lifecycle signal; no PTY attachment is required.
-   */
-  inTurn(terminalId: string): boolean {
-    const t = this.tracked.get(terminalId)
-    if (t) return t.phase === 'thinking' || t.phase === 'waiting'
-    const registered = this.registered.get(terminalId)
-    if (!registered?.agent) return false
-    const status = this.detachedStatus(terminalId)
-    return status === 'working' || status === 'blocked'
   }
 
   /** True when the session file owns this terminal's durable history. */
@@ -685,13 +397,8 @@ export class TurnTracker extends EventEmitter {
   /** Forget a removed terminal's turns (node deletion, not detach). */
   clearHistory(terminalId: string): void {
     this.histories.delete(terminalId)
-    this.rawHistories.delete(terminalId)
     this.store?.remove(terminalId)
     this.fileBacked.delete(terminalId)
-    this.clearDetachedEmitTimer(terminalId)
-    this.pendingDetachedTurns.delete(terminalId)
-    const registered = this.registered.get(terminalId)
-    if (registered) registered.baseline = []
   }
 
   /** Write out pending history saves now (app quit). */
@@ -699,28 +406,7 @@ export class TurnTracker extends EventEmitter {
     this.store?.flushAll()
   }
 
-  /** Register service bookkeeping independently of any attached PTY view. */
-  register(terminalId: string, agent: boolean): void {
-    const existing = this.registered.get(terminalId)
-    if (existing) {
-      existing.agent = agent
-      return
-    }
-    const rawBaseline = this.rawHistories.get(terminalId)
-    this.registered.set(terminalId, {
-      agent,
-      baseline: rawBaseline ?? this.history(terminalId),
-      // A dormant → hot transition re-registers inside the same process. Its
-      // raw parser baseline is already accepted, so disarming here would make
-      // the next real prompt look like cold-start history and swallow it. A
-      // true process-start registration has no raw baseline and still waits
-      // for one reconcile, unless a dispatch was explicitly armed first.
-      armed: rawBaseline !== undefined || this.pendingDispatch.has(terminalId)
-    })
-  }
-
   track(session: PtySession, agent: boolean): void {
-    this.register(session.terminalId, agent)
     if (this.tracked.has(session.terminalId)) return
     const t: TrackedTerminal = {
       session,
@@ -766,7 +452,6 @@ export class TurnTracker extends EventEmitter {
     session.on('data', t.onData)
     session.on('exit', t.onExit)
     this.tracked.set(session.terminalId, t)
-    this.flushDetachedTurns(session.terminalId)
   }
 
   /**
@@ -798,36 +483,20 @@ export class TurnTracker extends EventEmitter {
     this.untrack(terminalId)
   }
 
-  /** Drop only the attached view; keep HOT service registration alive. */
-  detach(terminalId: string): void {
-    const t = this.tracked.get(terminalId)
-    if (t) {
-      if (t.pushTimer) clearTimeout(t.pushTimer)
-      if (t.pollTimer) clearInterval(t.pollTimer)
-      if (t.titleTimer) clearTimeout(t.titleTimer)
-      t.session.removeListener('input', t.onInput)
-      t.session.removeListener('data', t.onData)
-      t.session.removeListener('exit', t.onExit)
-      this.tracked.delete(terminalId)
-    }
-    const registered = this.registered.get(terminalId)
-    if (registered) {
-      registered.baseline = this.rawHistories.get(terminalId) ?? this.history(terminalId)
-      registered.armed = true
-    }
-  }
-
-  /** Full service unregister for dormant/parked/deleted terminals. */
   untrack(terminalId: string): void {
-    this.detach(terminalId)
-    this.registered.delete(terminalId)
-    this.pendingDispatch.delete(terminalId)
-    this.clearDetachedEmitTimer(terminalId)
-    this.pendingDetachedTurns.delete(terminalId)
+    const t = this.tracked.get(terminalId)
+    if (!t) return
+    if (t.pushTimer) clearTimeout(t.pushTimer)
+    if (t.pollTimer) clearInterval(t.pollTimer)
+    if (t.titleTimer) clearTimeout(t.titleTimer)
+    t.session.removeListener('input', t.onInput)
+    t.session.removeListener('data', t.onData)
+    t.session.removeListener('exit', t.onExit)
+    this.tracked.delete(terminalId)
   }
 
   list(): TerminalActivity[] {
-    return [...this.registered.keys()].map((id) => this.activityOf(id)).filter(
+    return [...this.tracked.keys()].map((id) => this.activityOf(id)).filter(
       (a): a is TerminalActivity => a !== null
     )
   }
@@ -835,11 +504,6 @@ export class TurnTracker extends EventEmitter {
   disposeAll(): void {
     this.stopBackfillPump()
     for (const id of [...this.tracked.keys()]) this.untrack(id)
-    this.registered.clear()
-    this.pendingDispatch.clear()
-    this.pendingDetachedTurns.clear()
-    for (const timer of this.detachedEmitTimers.values()) clearTimeout(timer)
-    this.detachedEmitTimers.clear()
   }
 
   private handleInput(terminalId: string, data: string): void {
@@ -1094,7 +758,10 @@ export class TurnTracker extends EventEmitter {
     // this into store.recordEvent, so latency enters through the same
     // choke-point as every other event and cannot diverge from it.
     if (t.turnStartedAt > 0) {
-      this.emitCompletedTurn(id, Date.now() - t.turnStartedAt)
+      this.emit('turn', {
+        terminalId: id,
+        durationMs: Date.now() - t.turnStartedAt
+      } satisfies CompletedTurn)
     }
     // STEP 4: the session file is this terminal's record. Appending here would
     // be a second writer of the same exchange — historically it landed a
@@ -1204,7 +871,7 @@ export class TurnTracker extends EventEmitter {
 
   private activityOf(terminalId: string): TerminalActivity | null {
     const t = this.tracked.get(terminalId)
-    if (!t) return this.detachedActivityOf(terminalId)
+    if (!t) return null
     const inTurn = t.phase === 'thinking' || t.phase === 'waiting'
     // The glance parser needs the RAW delta (status lines are chrome that
     // cleanTurnLines strips); the display tail uses the cleaned one.
@@ -1242,47 +909,5 @@ export class TurnTracker extends EventEmitter {
       tailLines: inTurn || !t.agent ? null : latestTailLines(t.session.fullText()),
       updatedAt: Date.now()
     }
-  }
-
-  /** Honest low-fidelity projection for a registered HOT agent with no PTY view. */
-  private detachedActivityOf(terminalId: string): TerminalActivity | null {
-    const registered = this.registered.get(terminalId)
-    if (!registered) return null
-    const status = registered.agent ? this.detachedStatus(terminalId) : null
-    const phase: TurnPhase =
-      status === 'working'
-        ? 'thinking'
-        : status === 'blocked'
-          ? 'waiting'
-          : this.history(terminalId).at(-1)?.seenAt === undefined && this.history(terminalId).length > 0
-            ? 'replied'
-            : 'idle'
-    const last = this.history(terminalId).at(-1)
-    return {
-      terminalId,
-      agent: registered.agent,
-      phase,
-      prompt: last?.prompt ?? null,
-      pendingInput: null,
-      // No attachment means no pane bytes. Empty is honest; callers still get
-      // lifecycle phase + durable prompt/reply/count from independent sources.
-      lines: [],
-      reply: last?.reply ?? null,
-      glance: null,
-      title: last?.title ?? null,
-      turnCount: this.history(terminalId).length,
-      turnStartedAt: null,
-      turnStartLine: null,
-      scrollRow: null,
-      scrollBase: null,
-      tailLines: null,
-      updatedAt: this.options.now?.() ?? Date.now()
-    }
-  }
-
-  private detachedStatus(terminalId: string): 'idle' | 'working' | 'blocked' | 'done' | null {
-    return this.options.statusOf
-      ? this.options.statusOf(terminalId)
-      : agentStatus(sessionNameFor(terminalId))
   }
 }

@@ -172,34 +172,6 @@ describe('subscription', () => {
     expect(feed.connected).toBe(false)
     feed.stop()
   })
-
-  it('coalesces a terminal-spawn burst into one subscription rebuild', async () => {
-    let connects = 0
-    let lists = 0
-    const feed = new HerdrStatusFeed({
-      session: 'cookrew',
-      configPath: '/c',
-      listPanes: () => {
-        lists += 1
-        return [{ paneId: 'w1:p1', label: 'cookrew_abc' }]
-      },
-      resolveSocketPath: () => '/tmp/h.sock',
-      connect: () => {
-        connects += 1
-        return fakeSocket()
-      }
-    })
-    feed.start()
-    const initialLists = lists
-    const initialConnects = connects
-
-    for (let i = 0; i < 30; i += 1) feed.refreshSoon()
-    await Promise.resolve()
-
-    expect(lists - initialLists).toBe(1)
-    expect(connects - initialConnects).toBe(1)
-    feed.stop()
-  })
 })
 
 describe('socketPathFor', () => {

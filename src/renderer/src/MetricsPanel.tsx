@@ -2,16 +2,12 @@ import { useMemo, useState, useEffect } from 'react'
 import { CrIcon, type CrIconName } from './icons'
 import {
   eventMeta,
-  formatDuration,
   hasEventLog,
   kindFor,
-  latencyRows,
   METRIC_ORDER,
-  seedMockEvents,
   useEventQuery,
   type CookrewEvent,
-  type EventFilter,
-  type LatencyRow
+  type EventFilter
 } from './event-log'
 
 type TimeRange = '1h' | '24h' | 'all'
@@ -62,7 +58,7 @@ export function MetricsPanel({ onClose }: { onClose: () => void }): React.JSX.El
     () => (span === null ? {} : { since: now - span }),
     [span, now]
   )
-  const { events: all, notice } = useEventQuery(filter)
+  const all = useEventQuery(filter)
 
   // Workspace / type option lists come from what's in the (time-filtered) log.
   const workspaces = useMemo(() => {
@@ -91,10 +87,6 @@ export function MetricsPanel({ onClose }: { onClose: () => void }): React.JSX.El
     return tally
   }, [events])
 
-  // Derived from the SAME already-filtered list the timeline draws, so the
-  // workspace / type / time filters apply to the percentiles for free.
-  const latency = useMemo(() => latencyRows(events), [events])
-
   return (
     <div className="tf-scrim" onClick={onClose}>
       <div className="tf-panel metrics-panel" onClick={(e) => e.stopPropagation()}>
@@ -111,13 +103,6 @@ export function MetricsPanel({ onClose }: { onClose: () => void }): React.JSX.El
           <div className="tf-banner">
             EVENT LOG NOT WIRED YET — showing events observed this session; the durable
             cross-workspace history lands with Forge&apos;s log.
-            <button
-              className="cr-btn sm metrics-latency-seed"
-              onClick={() => seedMockEvents()}
-              title="Add fabricated timed events so the LATENCY section renders"
-            >
-              LOAD SAMPLE LATENCY
-            </button>
           </div>
         )}
 
@@ -129,41 +114,6 @@ export function MetricsPanel({ onClose }: { onClose: () => void }): React.JSX.El
             </div>
           ))}
         </div>
-
-        {/* Hidden outright when nothing in range carries a duration: a latency
-            table with no samples would be a grid of dashes claiming meaning. */}
-        {latency.length > 0 && (
-          <div className="metrics-latency">
-            <div className="metrics-latency-head">
-              <span className="metrics-latency-title">LATENCY</span>
-              <span className="metrics-latency-sub">
-                {latency.reduce((n, r) => n + r.stats.count, 0)} timed events
-              </span>
-            </div>
-            <table className="metrics-latency-table">
-              <thead>
-                <tr>
-                  <th className="metrics-latency-th" scope="col">
-                    EVENT
-                  </th>
-                  <th className="metrics-latency-th num" scope="col">
-                    N
-                  </th>
-                  {LATENCY_STATS.map((s) => (
-                    <th key={s.key} className="metrics-latency-th num" data-stat={s.key} scope="col">
-                      {s.label}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {latency.map((row) => (
-                  <LatencyTableRow key={row.type} row={row} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
 
         <div className="metrics-filters">
           <div className="metrics-seg">
@@ -203,13 +153,7 @@ export function MetricsPanel({ onClose }: { onClose: () => void }): React.JSX.El
           </select>
         </div>
 
-        {notice ? (
-          // Never the empty state for a refused read: "no events in this
-          // range" would claim there is nothing to show (D6).
-          <div className="tf-role-note metrics-notice" data-notice={notice.kind}>
-            {notice.message}
-          </div>
-        ) : events.length === 0 ? (
+        {events.length === 0 ? (
           <div className="tf-role-note">No events in this range.</div>
         ) : (
           <div className="metrics-timeline">
@@ -224,35 +168,6 @@ export function MetricsPanel({ onClose }: { onClose: () => void }): React.JSX.El
         )}
       </div>
     </div>
-  )
-}
-
-/** Percentile columns, in display order. `key` doubles as Fresco's data hook. */
-const LATENCY_STATS: { key: 'p50' | 'p95' | 'p98' | 'max'; label: string }[] = [
-  { key: 'p50', label: 'P50' },
-  { key: 'p95', label: 'P95' },
-  { key: 'p98', label: 'P98' },
-  { key: 'max', label: 'MAX' }
-]
-
-function LatencyTableRow({ row }: { row: LatencyRow }): React.JSX.Element {
-  const meta = eventMeta(row.type)
-  return (
-    <tr className="metrics-latency-row" data-type={row.type} data-kind={kindFor(row.type)}>
-      <th className="metrics-latency-type" scope="row" title={row.type}>
-        <span className="metrics-latency-icon">
-          <CrIcon name={meta.icon as CrIconName} />
-        </span>
-        <span className="metrics-latency-label">{row.label}</span>
-        <span className="metrics-latency-slug">{row.type}</span>
-      </th>
-      <td className="metrics-latency-n num">{row.stats.count}</td>
-      {LATENCY_STATS.map((s) => (
-        <td key={s.key} className="metrics-latency-cell num" data-stat={s.key}>
-          {formatDuration(row.stats[s.key])}
-        </td>
-      ))}
-    </tr>
   )
 }
 

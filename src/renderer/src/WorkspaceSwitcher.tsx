@@ -9,33 +9,6 @@ import {
   pickDirectory,
   removeWorkspace
 } from './workspace-v2'
-import {
-  backgroundHotCount,
-  serviceBadge,
-  serviceStateOf,
-  type ServiceStateSource
-} from './workspace-service-state'
-
-/** Service-state badge for a switcher row (v4 §1). Render-only. */
-function ServiceStateBadge({
-  workspace,
-  isActive
-}: {
-  workspace: WorkspaceMeta
-  isActive: boolean
-}): React.JSX.Element {
-  const badge = serviceBadge(serviceStateOf(workspace as ServiceStateSource, isActive))
-  return (
-    <span
-      className={`cr-ws-state${badge.muted ? ' muted' : ''}`}
-      data-state={badge.state}
-      title={badge.title}
-    >
-      <span className="cr-ws-state-dot" />
-      <span className="cr-ws-state-label">{badge.label}</span>
-    </span>
-  )
-}
 
 function templateLabel(team: TeamMeta): string {
   const when = new Date(team.savedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })
@@ -104,10 +77,6 @@ export function WorkspaceSwitcher({
     return () => document.removeEventListener('mousedown', onDown)
   }, [open])
 
-  // Background HOT workspaces are the thing v4 makes possible and the closed
-  // switcher would otherwise hide entirely. Zero (today, and whenever nothing
-  // is serviced off-focus) renders nothing.
-  const backgroundHot = backgroundHotCount(list?.workspaces ?? [], list?.activeId)
   const active = list?.workspaces.find((w) => w.id === list.activeId)
   const name = active?.name ?? fallbackName
   const icon = active?.icon ?? '🗂'
@@ -175,14 +144,6 @@ export function WorkspaceSwitcher({
       <button className="cr-ws-current" onClick={() => setOpen((v) => !v)} title={dir}>
         <span className="cr-ws-icon">{icon}</span>
         <span className="cr-kicker cr-ws-name">{name}</span>
-        {backgroundHot > 0 && (
-          <span
-            className="cr-ws-hot-count"
-            title={`${backgroundHot} other workspace${backgroundHot === 1 ? ' is' : 's are'} being serviced in the background`}
-          >
-            {backgroundHot} HOT
-          </span>
-        )}
         <span className="cr-ws-caret">
           <CrIcon name={open ? 'caret-down' : 'caret-right'} />
         </span>
@@ -204,7 +165,6 @@ export function WorkspaceSwitcher({
                       {w.dir}
                     </span>
                   </span>
-                  <ServiceStateBadge workspace={w} isActive={isActive} />
                   {isActive && (
                     <span className="cr-ws-check">
                       <CrIcon name="check" />

@@ -38,7 +38,7 @@ export interface BoardSnapshot {
 export interface BoardSources {
   /** Workspace currently loaded — marks rows `workspace.active`. */
   activeWorkspaceId: () => string
-  /** L1: TurnTracker.list(), including herdr-status HOT detached agents. */
+  /** L1: TurnTracker.list(). */
   live: () => TerminalActivity[]
   /** L3: the whole persisted ledger, terminalId → history. */
   ledger: () => Map<string, TurnRecord[]>

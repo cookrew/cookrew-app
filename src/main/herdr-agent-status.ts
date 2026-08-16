@@ -25,16 +25,9 @@
 // every Cookrew pane at once and re-subscribes when the pane set changes.
 
 import net from 'node:net'
-import { EventEmitter } from 'node:events'
 import { execFileSync } from 'node:child_process'
 
 export type HerdrStatus = 'idle' | 'working' | 'blocked' | 'done'
-
-/** What the feed announces on 'status': herdr has a state for this session. */
-export interface StatusObservation {
-  sessionName: string
-  status: HerdrStatus
-}
 
 /** A live socket the feed reads lines from. Narrowed for testability. */
 export interface StatusSocket {
@@ -140,21 +133,7 @@ export function panesFrom(raw: string): FeedPane[] {
   }
 }
 
-/**
- * Cached agent state, plus a PUSH door for consumers that care about the
- * moment rather than the value.
- *
- * The synchronous read (statusFor) is what turn-tracker's poll needs and the
- * reason this class exists. But "herdr now has a state for this pane" is an
- * EVENT, and one consumer — terminal.booted's boot timer — needs it as one:
- * the first known state on a new pane is the agent becoming reachable, and a
- * cache read a beat later cannot tell you when that happened. So 'status' is
- * emitted for every known-state observation, from the socket AND from the pane
- * list seed (which is the common path for a freshly created pane, because the
- * subscription is only made once the pane exists). `unknown` announces nothing:
- * it is a retraction, and a retraction is not a state.
- */
-export class HerdrStatusFeed extends EventEmitter {
+export class HerdrStatusFeed {
   private readonly options: StatusFeedOptions
   /** Cookrew session name -> latest status. Keyed by LABEL, not pane id. */
   private status = new Map<string, HerdrStatus>()
@@ -164,32 +143,9 @@ export class HerdrStatusFeed extends EventEmitter {
   private buffer = ''
   private stopped = false
   private reconnectTimer: NodeJS.Timeout | null = null
-  private refreshQueued = false
 
   constructor(options: StatusFeedOptions) {
-    super()
     this.options = options
-  }
-
-  /**
-   * Record a known state and announce it.
-   *
-   * Announced on every observation, not only on a CHANGE: a consumer timing a
-   * boot asks "is the agent there yet", and a pane that herdr re-reports as
-   * still-idle answers that question just as well as a transition does. The
-   * listeners are bounded and cheap; a missed announcement costs a sample,
-   * a duplicate costs nothing.
-   */
-  private record(sessionName: string, status: HerdrStatus): void {
-    this.status.set(sessionName, status)
-    // record() fires from a socket data callback and from connect()'s seed
-    // loop — a throwing listener (the chain reaches webContents.send, which
-    // throws on a torn-down window during quit) must not escape into either.
-    try {
-      this.emit('status', { sessionName, status } satisfies StatusObservation)
-    } catch (error) {
-      console.error('[herdr-status] status listener failed:', error)
-    }
   }
 
   /**
@@ -236,30 +192,6 @@ export class HerdrStatusFeed extends EventEmitter {
     this.connect()
   }
 
-  /**
-   * Coalesce a synchronous terminal-spawn burst into one global pane refresh.
-   *
-   * A workspace switch constructs every incoming PtySession in one call stack.
-   * Calling refresh() after each one used to run `session list` + `pane list`,
-   * tear down the same socket, and rebuild an increasingly large subscription
-   * N times. One microtask runs after the burst, when every new pane exists, so
-   * it subscribes to the same final set without putting any wait on PTY bytes.
-   */
-  refreshSoon(): void {
-    if (this.stopped || this.refreshQueued) return
-    this.refreshQueued = true
-    queueMicrotask(() => {
-      this.refreshQueued = false
-      // A microtask has no handler frame above it — an escape here is an
-      // uncaught main-process exception, not a failed refresh.
-      try {
-        this.refresh()
-      } catch (error) {
-        console.error('[herdr-status] deferred refresh failed:', error)
-      }
-    })
-  }
-
   private connect(): void {
     if (this.stopped) return
     const socketPath = this.resolveSocketPath()
@@ -278,7 +210,7 @@ export class HerdrStatusFeed extends EventEmitter {
     // change, so without this a pane that never transitions again is invisible
     // to the feed for the whole run.
     for (const pane of panes) {
-      if (pane.status) this.record(pane.label, pane.status)
+      if (pane.status) this.status.set(pane.label, pane.status)
     }
     let socket: StatusSocket
     try {
@@ -337,7 +269,7 @@ export class HerdrStatusFeed extends EventEmitter {
           // unknown ERASES: herdr retracting a state must not leave the old
           // one behind, or a stale `working` blocks turn finalization forever.
           if (update.status === 'unknown') this.status.delete(label)
-          else this.record(label, update.status)
+          else this.status.set(label, update.status)
         }
       }
       nl = this.buffer.indexOf('\n')

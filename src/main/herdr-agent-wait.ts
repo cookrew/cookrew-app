@@ -83,12 +83,10 @@ export function promptArgs(target: string, prompt: string, timeoutMs: number): s
  *
  *   'done'      — submitted AND the agent finished; the reply is on screen.
  *   'submitted' — herdr delivered the prompt but could not observe the
- *                 outcome: its detector saw no state change
- *                 (agent_prompt_stalled), or the wait expired while the agent
- *                 was still working. The prompt IS in the pane. Typing it
- *                 again double-submits — observed live as a queued duplicate
- *                 in the agent's input box — so the caller must WAIT, never
- *                 retype.
+ *                 outcome (agent_prompt_stalled: its detector saw no state
+ *                 change). The prompt IS in the pane. Typing it again
+ *                 double-submits — observed live as a queued duplicate in the
+ *                 agent's input box — so the caller must WAIT, never retype.
  *   'failed'    — herdr never delivered it (unresolvable agent, server
  *                 down). Typing is the correct fallback.
  */
@@ -107,13 +105,7 @@ export async function promptViaHerdr(
     })
     return 'done'
   } catch (error) {
-    // A TIMEOUT is 'submitted', not 'failed'. `agent prompt --wait` submits and
-    // THEN waits, so when the wait expires the prompt is in the pane and the
-    // agent is very likely still answering — the only thing that timed out is
-    // our patience. Mapping it to 'failed' told the caller "it never went out"
-    // and every turn longer than the timeout got a second copy of the brief.
-    if (isStall(error) || isTimeout(error)) return 'submitted'
-    return 'failed'
+    return isStall(error) ? 'submitted' : 'failed'
   }
 }
 
@@ -127,21 +119,6 @@ export function isStall(error: unknown): boolean {
   const e = error as { message?: string; stdout?: unknown; stderr?: unknown }
   const text = `${e?.message ?? ''} ${String(e?.stdout ?? '')} ${String(e?.stderr ?? '')}`
   return text.includes('agent_prompt_stalled')
-}
-
-/**
- * Did the WAIT expire rather than the submission fail?
- *
- * herdr reports it as an `agent_wait_timeout` envelope; a killed child process
- * reports it as ETIMEDOUT. Both mean the same thing here — the prompt was
- * handed over and the outcome is simply unobserved — and both must be kept
- * away from the retry path.
- */
-export function isTimeout(error: unknown): boolean {
-  const e = error as { code?: unknown; message?: unknown; stdout?: unknown; stderr?: unknown }
-  if (e?.code === 'ETIMEDOUT') return true
-  const text = `${String(e?.message ?? '')} ${String(e?.stdout ?? '')} ${String(e?.stderr ?? '')}`
-  return /agent_wait_timeout|\btimed?[ _-]?out\b/i.test(text)
 }
 
 const runCli = (file: string, args: string[], env: NodeJS.ProcessEnv): Promise<void> =>

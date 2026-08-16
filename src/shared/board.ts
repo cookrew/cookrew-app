@@ -115,7 +115,7 @@ export interface BoardRow {
 }
 
 export interface MergeBoardInput {
-  /** TurnTracker.list() — attached terminals plus registered HOT agents. */
+  /** TurnTracker.list() — active workspace only. */
   live: TerminalActivity[]
   /** terminalId → phase, from sampling detached panes. Probe knows no text. */
   probe: Map<string, BoardPhase>

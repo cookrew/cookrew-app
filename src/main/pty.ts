@@ -6,7 +6,7 @@ import pty, { IPty } from 'node-pty'
 import xtermHeadless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { sanitizeAgentEnv } from './multiplexer'
-import type { AttachSpec, Multiplexer, PaneCardInfo } from './multiplexer'
+import type { Multiplexer, PaneCardInfo } from './multiplexer'
 import { TmuxMultiplexer, sessionNameFor as tmuxSessionNameFor, TMUX_LABEL as TMUX_LABEL_CONST } from './tmux-multiplexer'
 import { HerdrHostMultiplexer, HERDR_SESSION } from './herdr-host-multiplexer'
 import { HerdrStatusFeed, setStatusFeed, statusFeed } from './herdr-agent-status'
@@ -290,44 +290,6 @@ export interface PtySessionOptions {
   card?: PaneCardInfo
 }
 
-type ManagedPtyOptions = Omit<PtySessionOptions, 'socketPath' | 'cliDir' | 'tmuxConf'>
-
-function attachSpecFor(
-  options: ManagedPtyOptions,
-  socketPath: string,
-  cliDir: string
-): AttachSpec {
-  return {
-    sessionName: sessionNameFor(options.terminalId),
-    command: options.command,
-    shell: process.env.SHELL ?? '/bin/zsh',
-    terminalId: options.terminalId,
-    socketPath,
-    cliDir,
-    path: `${cliDir}:${process.env.PATH ?? ''}`,
-    cwd: options.cwd,
-    card: options.card
-  }
-}
-
-/**
- * Start a multiplexer-owned pane without creating a node-pty attachment.
- * This is the service-plane primitive: herdr can boot the agent directly,
- * while tmux/direct honestly remain attach-to-boot backends.
- */
-export function bootMultiplexerSession(
-  spec: AttachSpec,
-  host: Multiplexer,
-  backends: Multiplexer[],
-  turnsFor: (command: string) => 'file' | 'scrape' | null = (command) =>
-    harnessFor(command)?.turns ?? null
-): boolean {
-  const existed = host.sessionExists(spec.sessionName)
-  migrateForeignSession(spec, host, backends, turnsFor)
-  host.ensureSession(spec)
-  return !existed && host.sessionExists(spec.sessionName)
-}
-
 /**
  * One PTY per terminal node. A headless xterm mirrors the screen so the
  * main process can answer `cookrew check` (current viewport text) and detect
@@ -353,6 +315,7 @@ export class PtySession extends EventEmitter {
   constructor(options: PtySessionOptions) {
     super()
     this.terminalId = options.terminalId
+    const shell = process.env.SHELL ?? '/bin/zsh'
     const cols = options.cols ?? 100
     const rows = options.rows ?? 30
     // Now a CAPABILITY question, not an identity one: "does my session
@@ -379,7 +342,17 @@ export class PtySession extends EventEmitter {
 
     // One path for every backend. The direct backend returns a plain login
     // shell here, which is exactly what the old `else` branch spawned by hand.
-    const attachSpec = attachSpecFor(options, options.socketPath, options.cliDir)
+    const attachSpec = {
+      sessionName: this.sessionName,
+      command: options.command,
+      shell,
+      terminalId: options.terminalId,
+      socketPath: options.socketPath,
+      cliDir: options.cliDir,
+      path: `${options.cliDir}:${process.env.PATH ?? ''}`,
+      cwd: options.cwd,
+      card: options.card
+    }
     // One live process per terminal across ALL backends: a copy of this
     // agent alive under a non-host multiplexer is killed there first and
     // resumed here — see migrateForeignSession. Without this, switching
@@ -851,7 +824,7 @@ export class PtyManager {
     activeMux?.reloadConfig()
   }
 
-  spawn(options: ManagedPtyOptions): PtySession {
+  spawn(options: Omit<PtySessionOptions, 'socketPath' | 'cliDir' | 'tmuxConf'>): PtySession {
     const existing = this.sessions.get(options.terminalId)
     if (existing) return existing
     const session = new PtySession({
@@ -872,22 +845,8 @@ export class PtyManager {
     })
     this.sessions.set(options.terminalId, session)
     // A pane created after the subscription was made is not covered by it.
-    // A workspace switch spawns every terminal synchronously, so collapse that
-    // burst to one subscription rebuild after the last pane exists.
-    statusFeed()?.refreshSoon()
+    statusFeed()?.refresh()
     return session
-  }
-
-  /**
-   * Ensure the agent process exists without attaching a PTY client. Returns
-   * true only when this call created a previously absent host session.
-   */
-  boot(options: ManagedPtyOptions): boolean {
-    if (!activeMux) return false
-    const spec = attachSpecFor(options, this.socketPath, this.runtimeDir)
-    const created = bootMultiplexerSession(spec, activeMux, allBackends)
-    statusFeed()?.refreshSoon()
-    return created
   }
 
   get(terminalId: string): PtySession | undefined {
