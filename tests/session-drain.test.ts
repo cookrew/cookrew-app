@@ -10,7 +10,7 @@ import { appendFileSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { DRAIN_TICKS, SessionTurnSync } from '../src/main/session-sync'
+import { DRAIN_TICKS, HOLD_TRUST_TICKS, SessionTurnSync } from '../src/main/session-sync'
 import { parseSessionTurns } from '../src/shared/session-turns'
 import { TurnTracker } from '../src/main/turn-tracker'
 
@@ -156,7 +156,9 @@ describe('SessionTurnSync drain (v5 work-driven tracking)', () => {
 // Fix 3 (Sol P0): drain must not fire while there is positive evidence of
 // work — hooks.holdOpen (herdr agent_status working/blocked). A hold, not a
 // reset: quiet ticks keep accumulating, so the drain fires on the FIRST
-// quiet tick after the hold clears.
+// quiet tick after the hold clears. Round-2 #6 bounds the trust: a status
+// hold whose file has not grown for HOLD_TRUST_TICKS is a stuck feed, not a
+// turn, and stops holding — pins and subscribers are exempt (owned facts).
 describe('SessionTurnSync holdOpen hook', () => {
   afterEach(() => {
     vi.useRealTimers()
@@ -176,14 +178,63 @@ describe('SessionTurnSync holdOpen hook', () => {
     return { file, tracker, sync, state }
   }
 
-  it('a held terminal never drains, however long the quiet', async () => {
+  it('a held terminal survives quiet stretches the drain window alone would not allow', async () => {
     vi.useFakeTimers()
     const { file, tracker, sync, state } = heldFixture()
     writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
     sync.watch('t', file, parseSessionTurns)
     sync.release('t')
     state.held = true
-    await ticks(DRAIN_TICKS * 4)
+    // Past DRAIN_TICKS but under the trust bound: the hold is still believed.
+    await ticks(HOLD_TRUST_TICKS - 2)
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(2)
+    sync.dispose()
+  })
+
+  it('a hold with NO file growth expires at HOLD_TRUST_TICKS — a stuck feed cannot hold forever', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync, state } = heldFixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    sync.release('t')
+    state.held = true
+    // The status claims work forever; the file writes nothing. Once the
+    // quiet count passes the trust bound the claim stops counting and the
+    // (long-elapsed) drain window closes.
+    await ticks(HOLD_TRUST_TICKS + 2)
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(1)
+    sync.dispose()
+  })
+
+  it('growth under a hold re-earns the trust — a genuinely working agent is never cut off', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync, state } = heldFixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    sync.release('t')
+    state.held = true
+    // Each growth resets the quiet count, so the trust bound never trips.
+    await ticks(HOLD_TRUST_TICKS - 2)
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(HOLD_TRUST_TICKS - 2)
+    appendFileSync(file, TURN_3.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(3)
+    sync.dispose()
+  })
+
+  it('a PIN outlives the trust bound — first-party facts are not status claims', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = heldFixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    sync.release('t')
+    sync.pin('t')
+    await ticks(HOLD_TRUST_TICKS * 2)
     appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
     await ticks(3)
     expect(tracker.history('t')).toHaveLength(2)
@@ -288,6 +339,109 @@ describe('SessionTurnSync subscribers', () => {
     sync.unsubscribe('t')
     await ticks(DRAIN_TICKS + 2)
     appendFileSync(file, TURN_3.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(2)
+    sync.dispose()
+  })
+
+  // Sol round-2 #3: subscribe() must ENSURE the watch, not merely hold one
+  // that happens to exist — a remote viewer opening a stream on a drained or
+  // never-watched terminal is entitled to the record.
+  it('subscribing a DRAINED terminal resumes the watch from its dormant signature', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    sync.release('t')
+    await ticks(DRAIN_TICKS + 2)
+    // Drained. A viewer arrives; growth is observed again…
+    sync.subscribe('t')
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(2)
+    // …and holds through arbitrary quiet, exactly like any subscriber.
+    await ticks(DRAIN_TICKS * 3)
+    appendFileSync(file, TURN_3.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(3)
+    // The viewer leaves: the ensured watch drains on the ordinary clock —
+    // a peek at a parked terminal leaks nothing.
+    sync.unsubscribe('t')
+    await ticks(DRAIN_TICKS + 2)
+    appendFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(3)
+    sync.dispose()
+  })
+
+  it('subscribing a NEVER-watched terminal starts the watch via hooks.resolveWatch', async () => {
+    vi.useFakeTimers()
+    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-sub-resolve-'))
+    const file = path.join(dir, 'abc.jsonl')
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    const tracker = new TurnTracker(async () => null, null)
+    const resolved: string[] = []
+    const sync = new SessionTurnSync(tracker, POLL_MS, {
+      resolveWatch: (terminalId) => {
+        resolved.push(terminalId)
+        return { file, parse: parseSessionTurns }
+      }
+    })
+    sync.subscribe('t')
+    expect(resolved).toEqual(['t'])
+    // The initial reconcile is deferred off the subscribe path; the poll
+    // timer lands it within a tick.
+    await ticks(3)
+    expect(tracker.history('t').map((r) => r.prompt)).toEqual(['turn one'])
+    // Last unsubscribe: the ensured watch drains, nothing leaks.
+    sync.unsubscribe('t')
+    await ticks(DRAIN_TICKS + 2)
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(1)
+    sync.dispose()
+  })
+
+  it('a terminal the resolver cannot name subscribes without a watch — honest, no crash', async () => {
+    vi.useFakeTimers()
+    const { tracker, sync } = fixture()
+    sync.subscribe('unknown')
+    await ticks(3)
+    expect(tracker.history('unknown')).toEqual([])
+    sync.unsubscribe('unknown')
+    sync.dispose()
+  })
+
+  it('an abrupt DOUBLE-unsubscribe never goes negative — the next subscriber still holds', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    sync.subscribe('t')
+    // A stream that errors after its close handler already ran: two
+    // unsubscribes for one subscribe.
+    sync.unsubscribe('t')
+    sync.unsubscribe('t')
+    // A NEW viewer arrives; its hold must be whole, not pre-consumed.
+    sync.subscribe('t')
+    sync.release('t')
+    await ticks(DRAIN_TICKS * 3)
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(2)
+    sync.dispose()
+  })
+
+  it('a subscriber holds the record through a workspace SWITCH (release + long quiet)', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    sync.subscribe('t')
+    // Focus leaves the workspace; the remote viewer is still looking.
+    sync.release('t')
+    await ticks(DRAIN_TICKS * 4)
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
     await ticks(3)
     expect(tracker.history('t')).toHaveLength(2)
     sync.dispose()

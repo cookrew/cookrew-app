@@ -748,6 +748,46 @@ describe('resolveRotationChain — the RESUME shape (crash recovery)', () => {
     await expect(resolveRotationChain({ cwd: CWD, sessionId: OLD, fs })).resolves.toBeNull()
   })
 
+  // Sol round-2 P0: the overlap operands are DIRECTIONAL — the denominator is
+  // the CANDIDATE's head, and every replayed record it opens with must
+  // already exist in the predecessor. The original fixtures were symmetric
+  // (20-vs-20), which passes with the operands reversed too; these two are
+  // asymmetric on purpose and pin the direction.
+  it('refuses a candidate holding the predecessor PLUS unrelated history (superset-with-noise)', async () => {
+    // OLD's whole head is 8 records; the candidate replays all 8 — and then
+    // carries 12 records OLD never had. Reversed operands score this 8/8 and
+    // rebind the terminal onto a mostly foreign conversation; the intended
+    // proof scores 8/20 and refuses.
+    const foreign = Array.from({ length: 12 }, (_, i) =>
+      JSON.stringify({
+        type: i % 2 === 0 ? 'user' : 'assistant',
+        uuid: `bbbbbbbb-cccc-4ddd-8eee-${String(i).padStart(12, '0')}`,
+        message: { role: i % 2 === 0 ? 'user' : 'assistant', content: `foreign ${i}` },
+        sessionId: RESUMED,
+        cwd: CWD
+      })
+    )
+    const fs = fakeFs([
+      { sessionId: OLD, head: conversation(OLD, 8), mtimeMs: 1000 },
+      { sessionId: RESUMED, head: [...resumeHead(OLD, 8), ...foreign], mtimeMs: 2000 }
+    ])
+    await expect(resolveRotationChain({ cwd: CWD, sessionId: OLD, fs })).resolves.toBeNull()
+  })
+
+  it('accepts a SUBSET replay — a candidate whose whole head lives inside a longer predecessor', async () => {
+    // The predecessor holds 20 records; the resume replayed only the first 8
+    // (still >= ROTATION_RESUME_MIN_UUIDS). Every candidate head uuid exists
+    // in the predecessor, so the intended proof scores 8/8 and accepts;
+    // reversed operands score 8/20 and wrongly refuse a real rotation.
+    const fs = fakeFs([
+      { sessionId: OLD, head: conversation(OLD, 20), mtimeMs: 1000 },
+      { sessionId: RESUMED, head: resumeHead(OLD, 8), mtimeMs: 2000 }
+    ])
+    await expect(resolveRotationChain({ cwd: CWD, sessionId: OLD, fs })).resolves.toEqual([
+      RESUMED
+    ])
+  })
+
   it('follows a MIXED chain: a compaction, then a crash recovery', async () => {
     const fs = fakeFs([
       { sessionId: OLD, head: conversation(OLD, 20), mtimeMs: 1000 },

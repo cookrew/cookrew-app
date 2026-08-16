@@ -75,6 +75,8 @@ export interface MobileServerDeps {
    * terminal, so HTTP producers are serialized against in-flight dispatches.
    */
   hasArmedDispatch?: (terminalId: string) => boolean
+  subscribeTerminal?: (terminalId: string) => void
+  unsubscribeTerminal?: (terminalId: string) => void
   recoverAgent: (id: string) => RecoverResult
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
   undoRestore: (id: string) => Promise<RestoreResult>

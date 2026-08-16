@@ -133,12 +133,14 @@ describe('POST /api/agents/:id/dispatch — refusals', () => {
     const second = await service.dispatch('agent-1', { text: 'and another thing' })
     expect(second.status).toBe(409)
     expect(second.body).toMatchObject({ error: 'busy', dispatchId: 'dsp-1' })
-    // The second prompt was never delivered — that is the whole point of a
-    // reservation. Two prompts racing into one input box is the double-submit.
-    expect(calls).toBe(1)
 
     release()
     await service.settled('dsp-1')
+    // The second prompt was never delivered — that is the whole point of a
+    // reservation. Two prompts racing into one input box is the double-submit.
+    // (Counted after settle: the leg starts on a setImmediate, so at 202 time
+    // the count is legitimately still zero.)
+    expect(calls).toBe(1)
   })
 
   it('503s when the pane is gone — unreachable, not busy', async () => {

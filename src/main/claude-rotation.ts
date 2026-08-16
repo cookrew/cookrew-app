@@ -463,7 +463,14 @@ class ReplayScan {
       if (candidate.sessionId === predecessorId) continue
       if (this.declaring.has(candidate.sessionId)) continue
       if (candidate.mtimeMs <= predecessor.mtimeMs) continue
-      const overlap = replayOverlap([...known], new Set(await this.headUuidsOf(candidate)))
+      // Operand order is the proof's direction (Sol round-2 P0): the CANDIDATE
+      // head is the numerator/denominator — every replayed record it opens
+      // with must already exist in the predecessor. Reversed, a candidate
+      // holding the predecessor's records PLUS unrelated history scores 1.0
+      // (false rebind onto a stranger), while a short-but-genuine subset
+      // replay of a long predecessor scores shared/|predecessor| (false
+      // refusal). replayOverlap's own contract: (candidateUuids, predecessorSet).
+      const overlap = replayOverlap(await this.headUuidsOf(candidate), known)
       if (!isReplayContinuation(overlap)) continue
       const cwd = await this.cwdOf(candidate)
       if (cwd !== null && realCwd(cwd) !== this.here) continue

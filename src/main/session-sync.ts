@@ -48,6 +48,18 @@ export const DRAIN_TICKS = 15
  */
 export const STALE_TICKS = 10
 
+/**
+ * Quiet (no byte GROWTH) polls after which a positive STATUS hold
+ * (hooks.holdOpen) stops being believed: ~60s at the default poll, mirroring
+ * the TurnTracker's WORKING_TRUST_MS rationale — a stuck herdr feed entry
+ * whose terminal writes nothing was observed in the wild, and an unbounded
+ * trust would hold that watch (and its stale-probe cycle) open forever. A
+ * genuinely working agent grows its file, which resets the quiet count and
+ * re-earns the trust. Pins and subscribers are DELIBERATELY exempt: they are
+ * first-party facts with owned lifecycles, not third-party claims.
+ */
+export const HOLD_TRUST_TICKS = 30
+
 /** Session-file lines → TurnRecords; one per 'file'-capable harness. */
 export type SessionTurnParser = (lines: string[]) => TurnRecord[]
 
@@ -75,8 +87,20 @@ export interface SessionTurnSyncHooks {
    * is not receiving the claimed work (rotation candidate). Reported at most
    * once per window; the counter is reset BEFORE the call so a rebind inside
    * the handler installs a fresh entry that is not clobbered afterwards.
+   * After a report the watch is SUPPRESSED until the file shows any stat
+   * delta or the binding generation changes (watch/rebind) — identical
+   * evidence must not launch a rotation scan every window forever.
    */
   onStale?: (terminalId: string) => void
+  /**
+   * The session-file watch spec for a terminal that has never been watched
+   * (no live entry, no dormant signature) — lets subscribe() start the watch
+   * a remote viewer is entitled to (Sol round-2 #3: a subscriber must ENSURE
+   * a watch exists, not merely hold one that happens to be there). Return
+   * null for terminals with no file-derived history (scrape harness, plain
+   * shell, unbound session); the subscription then holds nothing, honestly.
+   */
+  resolveWatch?: (terminalId: string) => { file: string; parse: SessionTurnParser } | null
 }
 
 export interface SessionWatchOptions {
@@ -115,6 +139,13 @@ interface WatchedFile {
   drainTicks: number
   /** Consecutive polls without byte growth, on the stale clock (fix 6). */
   staleTicks: number
+  /**
+   * A stale report went out for the CURRENT evidence (stat unchanged since).
+   * Any stat delta — growth, shrink, rotation, even a bare mtime touch — or
+   * a fresh binding generation (watch/rebind) clears it; until then the
+   * stale clock may run but must not re-report the same stuck picture.
+   */
+  staleReported: boolean
 }
 
 export class SessionTurnSync {
@@ -155,20 +186,45 @@ export class SessionTurnSync {
       try {
         const stat = statSync(file)
         const historyIntact = this.turns.history(terminalId) === prior.history
+        const sameInode = stat.dev === prior.dev && stat.ino === prior.ino
         if (
           historyIntact &&
+          sameInode &&
           stat.mtimeMs === prior.mtimeMs &&
-          stat.size === prior.size &&
-          stat.dev === prior.dev &&
-          stat.ino === prior.ino
+          stat.size === prior.size
         ) {
           // Exact same source and bytes as the last successful reconcile. The
           // TurnTracker intentionally retains history across a workspace
           // detach, so reparsing hundreds of MB cannot make it more exact.
           // Presence pins: a watch() is focus (or a fresh dispatch), so any
           // pending drain is cancelled.
-          this.watched.set(terminalId, { ...prior, draining: false, drainTicks: 0, staleTicks: 0 })
+          this.watched.set(terminalId, {
+            ...prior,
+            draining: false,
+            drainTicks: 0,
+            staleTicks: 0,
+            staleReported: false
+          })
           this.turns.setHistorySource(terminalId, 'file')
+          this.ensureTimer()
+          return
+        }
+        // Dormant GROWTH (same inode, size only moved forward, retained
+        // accumulator): re-adopt the suspended parser state and byte offset
+        // so the reconcile reads the appended span only — reattaching a
+        // parked workspace costs O(Δ), never a full re-parse (Sol round-2
+        // #4a). A shrink, a rotation, or a lost accumulator falls through to
+        // the fresh entry below: one whole-file parse, the designed path.
+        if (historyIntact && sameInode && prior.acc !== null && stat.size > prior.size) {
+          this.watched.set(terminalId, {
+            ...prior,
+            draining: false,
+            drainTicks: 0,
+            staleTicks: 0,
+            staleReported: false
+          })
+          this.turns.setHistorySource(terminalId, 'file')
+          if (opts.deferInitial !== true) this.reconcile(terminalId)
           this.ensureTimer()
           return
         }
@@ -190,7 +246,8 @@ export class SessionTurnSync {
       history: null,
       draining: false,
       drainTicks: 0,
-      staleTicks: 0
+      staleTicks: 0,
+      staleReported: false
     })
     // This file has not proven anything yet — a fresh --session-id boot writes
     // nothing for seconds, and a restore rebinds to a file that may not exist.
@@ -234,20 +291,37 @@ export class SessionTurnSync {
    * A live viewer opened on this terminal (reference-counted): someone is
    * LOOKING, so the record may not drain out from under them — the same
    * treatment as a pin. The last unsubscribe re-arms the drain clock.
+   *
+   * Subscribing also ENSURES the watch exists (Sol round-2 #3): a drained
+   * terminal resumes from its dormant signature, and a never-watched one is
+   * started from hooks.resolveWatch when the hook can name a file. The
+   * ensured watch is immediately released — the subscription itself is the
+   * only thing holding it, so the last unsubscribe drains it on the
+   * ordinary clock and a viewer who peeked at a parked terminal leaks
+   * nothing.
    */
   subscribe(terminalId: string): void {
     this.subscribers.set(terminalId, (this.subscribers.get(terminalId) ?? 0) + 1)
+    if (this.watched.has(terminalId)) return
+    const dormant = this.dormant.get(terminalId)
+    const spec = dormant ?? this.hooks.resolveWatch?.(terminalId)
+    if (!spec) return
+    this.watch(terminalId, spec.file, spec.parse, { deferInitial: true })
+    this.release(terminalId)
   }
 
   unsubscribe(terminalId: string): void {
     const count = this.subscribers.get(terminalId) ?? 0
+    // An abrupt double-unsubscribe (a stream erroring after its close handler
+    // already ran) must not go negative and steal a later subscriber's hold.
+    if (count === 0) return
     if (count > 1) {
       this.subscribers.set(terminalId, count - 1)
       return
     }
     this.subscribers.delete(terminalId)
     const watched = this.watched.get(terminalId)
-    if (count === 1 && watched && watched.draining) {
+    if (watched && watched.draining) {
       this.watched.set(terminalId, { ...watched, drainTicks: 0 })
     }
   }
@@ -255,11 +329,65 @@ export class SessionTurnSync {
   /** Workspace switch only: retain a verified signature for exact reattach. */
   suspend(terminalId: string): void {
     const watched = this.watched.get(terminalId)
-    // The signature survives; the accumulator does not — a fallback (non-
-    // streaming) accumulator retains every fed line, which a dormant map
-    // must not pin in memory. Reattach-then-growth pays one full re-parse.
-    if (watched) this.dormant.set(terminalId, { ...watched, acc: null, carry: EMPTY })
+    if (watched) {
+      // The signature survives, and so does a STREAMING accumulator: its
+      // state is derived records (bounded by conversation size), so keeping
+      // it lets a dormant terminal whose file only GREW resume from the
+      // saved byte offset instead of re-parsing the whole transcript (Sol
+      // round-2 #4a). The retained-LINES fallback is different — it pins
+      // every fed line, which a dormant map must not hold in memory — so a
+      // non-streaming parser still drops its accumulator and pays one full
+      // re-parse on reattach-then-growth, its own declared cost model.
+      const streaming =
+        (watched.parse as Partial<StreamingTurnParser>).createAccumulator !== undefined
+      this.dormant.set(
+        terminalId,
+        streaming ? { ...watched } : { ...watched, acc: null, carry: EMPTY }
+      )
+    }
     this.stopWatching(terminalId)
+  }
+
+  /**
+   * ATOMIC rebind onto a DIFFERENT session file — the rotation migration
+   * (Sol round-2 #5). unwatch()+watch() is lifecycle teardown: it deletes
+   * the pin count an open background dispatch still owns and the subscriber
+   * count a live viewer still owns, and boots a watch whose drain state
+   * forgot it was released — the dispatch loses its hold and the fresh
+   * watch never drains (a per-agent polling leak). rebind swaps ONLY the
+   * binding: file, parser, accumulator and offsets start over (a full parse
+   * of the NEW file is correct — the old offsets mean nothing there), while
+   * pins, subscribers, and the draining fact survive untouched; the drain
+   * and stale clocks restart at zero for the fresh binding generation.
+   */
+  rebind(
+    terminalId: string,
+    file: string,
+    parse: SessionTurnParser,
+    opts: SessionWatchOptions = {}
+  ): void {
+    const prior = this.watched.get(terminalId) ?? this.dormant.get(terminalId)
+    this.dormant.delete(terminalId)
+    this.watched.set(terminalId, {
+      file,
+      mtimeMs: 0,
+      size: 0,
+      dev: 0,
+      ino: 0,
+      parse,
+      acc: null,
+      carry: EMPTY,
+      history: null,
+      draining: prior?.draining ?? false,
+      drainTicks: 0,
+      staleTicks: 0,
+      staleReported: false
+    })
+    // The successor has not proven itself yet — exactly like watch(), the
+    // scrape covers the window until the first reconcile lands.
+    this.turns.setHistorySource(terminalId, 'scrape')
+    if (opts.deferInitial !== true) this.reconcile(terminalId)
+    this.ensureTimer()
   }
 
   /** Permanent/rebind release: no dormant context may survive it. */
@@ -302,13 +430,19 @@ export class SessionTurnSync {
     for (const terminalId of [...this.watched.keys()]) this.reconcile(terminalId)
   }
 
-  /** Anything with positive evidence of interest: no drain while it holds. */
-  private held(terminalId: string): boolean {
-    return (
-      this.pinned.has(terminalId) ||
-      (this.subscribers.get(terminalId) ?? 0) > 0 ||
-      this.hooks.holdOpen?.(terminalId) === true
-    )
+  /**
+   * Anything with positive evidence of interest: no drain while it holds.
+   * `quietTicks` is how many consecutive polls the file has gone without
+   * byte growth — a STATUS hold (holdOpen) is only believed while that
+   * count is under HOLD_TRUST_TICKS, because a claim of work that writes
+   * nothing for a minute is a stuck feed, not a turn (Sol round-2 #6).
+   * Pins and subscribers hold regardless: they are owned facts, not claims.
+   */
+  private held(terminalId: string, quietTicks: number): boolean {
+    if (this.pinned.has(terminalId)) return true
+    if ((this.subscribers.get(terminalId) ?? 0) > 0) return true
+    if (quietTicks >= HOLD_TRUST_TICKS) return false
+    return this.hooks.holdOpen?.(terminalId) === true
   }
 
   /**
@@ -323,7 +457,7 @@ export class SessionTurnSync {
   private noteDrainQuiet(terminalId: string, watched: WatchedFile): void {
     if (!watched.draining) return
     const drainTicks = watched.drainTicks + 1
-    if (drainTicks < DRAIN_TICKS || this.held(terminalId)) {
+    if (drainTicks < DRAIN_TICKS || this.held(terminalId, drainTicks)) {
       this.watched.set(terminalId, { ...watched, drainTicks })
       return
     }
@@ -343,11 +477,17 @@ export class SessionTurnSync {
   private fireStaleIfDue(terminalId: string): void {
     const watched = this.watched.get(terminalId)
     if (!watched || watched.history === null || watched.staleTicks < STALE_TICKS) return
+    // One report per EVIDENCE, not per window: an already-reported watch
+    // whose stat never moved again is the same stuck picture, and re-probing
+    // it every window forever is exactly the rotation-scan churn Sol's #6
+    // names. Any stat delta (reconcile clears the flag) or a fresh binding
+    // generation (watch/rebind installs a fresh entry) re-arms the report.
+    if (watched.staleReported) return
     if (this.hooks.isInTurn?.(terminalId) !== true) return
     // Reset BEFORE the handler: onStale may rebind this terminal onto a
     // different file (watch() installs a fresh entry) and nothing here may
-    // write over it afterwards. The reset is also the once-per-window latch.
-    this.watched.set(terminalId, { ...watched, staleTicks: 0 })
+    // write over it afterwards.
+    this.watched.set(terminalId, { ...watched, staleTicks: 0, staleReported: true })
     this.hooks.onStale?.(terminalId)
   }
 
@@ -417,7 +557,11 @@ export class SessionTurnSync {
         history: this.turns.history(terminalId),
         // A shrink is movement too — a /rewind means the agent is writing.
         drainTicks: moved ? 0 : watched.drainTicks + 1,
-        staleTicks: moved ? 0 : watched.staleTicks + 1
+        staleTicks: moved ? 0 : watched.staleTicks + 1,
+        // ANY stat delta reached this branch — growth, shrink, rotation, or
+        // a bare mtime touch — which is new evidence: a suppressed stale
+        // report may fire again if the stall persists past it.
+        staleReported: false
       })
       // Read and parsed: the file is real and is now the durable record, so
       // the tracker can stop writing history for this terminal. Deliberately
@@ -428,7 +572,11 @@ export class SessionTurnSync {
       // A drain can come due on this path too: an mtime that moves while the
       // size stands still is a touch, not work, and must not watch forever.
       const updated = this.watched.get(terminalId)
-      if (updated?.draining && updated.drainTicks >= DRAIN_TICKS && !this.held(terminalId)) {
+      if (
+        updated?.draining &&
+        updated.drainTicks >= DRAIN_TICKS &&
+        !this.held(terminalId, updated.drainTicks)
+      ) {
         this.suspend(terminalId)
       }
       this.fireStaleIfDue(terminalId)

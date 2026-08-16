@@ -143,6 +143,39 @@ describe('dispatch completion from the session file (no PTY)', () => {
     sync.dispose()
   })
 
+  it('closes when the dispatched finality and the NEXT user prompt land in one batch', async () => {
+    // Sol r2 P0 (tail overtake): local canvas input is allowed during a
+    // dispatch, so the human's next prompt can arrive between growth and the
+    // quiet poll. The Claude accumulator then marks the dispatched exchange
+    // final AND appends a fresh open tail in the same reconcile — the answer
+    // sits one row back, where a tail-only closer never looked.
+    vi.useFakeTimers()
+    const { file, tracker, sync, turns } = fixture()
+    writeFileSync(file, turnLines('old turn', 'old reply', Date.now() - 60_000), 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    tracker.noteDispatch('t', 'd1', 'do the task')
+    await ticks(1)
+    // ONE append: the dispatched exchange followed immediately by the next
+    // human prompt. The tail record is the human's open exchange.
+    appendFileSync(
+      file,
+      turnLines('do the task', 'task done', Date.now()) +
+        user('a follow-up human ask', Date.now() + 1) +
+        '\n',
+      'utf8'
+    )
+    await ticks(1) // growth: history now ends at the follow-up, not the answer
+    await ticks(1) // quiet: the closer scans the armed window and finds it
+    expect(turns).toHaveLength(1)
+    expect(turns[0].dispatchId).toBe('d1')
+    // The event names the ANSWERING record, so the listener never bills the
+    // follow-up tail.
+    const answer = tracker.history('t').find((r) => r.index === turns[0].turnIndex)
+    expect(answer?.prompt).toBe('do the task')
+    expect(answer?.reply).toBe('task done')
+    sync.dispose()
+  })
+
   it('requires an actual reply — a prompt-only tail cannot close a dispatch', async () => {
     vi.useFakeTimers()
     const { file, tracker, sync, turns } = fixture()

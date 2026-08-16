@@ -109,7 +109,7 @@ describe('SessionTurnSync staleness (rotation-rebind foundation)', () => {
     sync.dispose()
   })
 
-  it('reports at most once per window, then re-arms for the next full window', async () => {
+  it('never refires on IDENTICAL evidence — one report until the stat moves (round-2 #6)', async () => {
     vi.useFakeTimers()
     const { file, sync, state, stale } = fixture()
     writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
@@ -117,11 +117,46 @@ describe('SessionTurnSync staleness (rotation-rebind foundation)', () => {
     state.inTurn = true
     await ticks(STALE_TICKS)
     expect(stale).toEqual(['t'])
-    // A partial second window stays silent…
-    await ticks(STALE_TICKS - 2)
+    // The stat never moves again: however many windows elapse, the picture
+    // is the same stuck picture, and re-reporting it would launch a
+    // rotation scan every window forever.
+    await ticks(STALE_TICKS * 5)
     expect(stale).toEqual(['t'])
-    // …the full second window reports again.
-    await ticks(2)
+    sync.dispose()
+  })
+
+  it('a stat delta (growth) re-arms the report — a NEW stall is new evidence', async () => {
+    vi.useFakeTimers()
+    const { file, sync, state, stale } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    state.inTurn = true
+    await ticks(STALE_TICKS)
+    expect(stale).toEqual(['t'])
+    // The file moves (a growth here; any stat delta clears the latch), then
+    // stalls again for a full window: that is a fresh stall, reported once.
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(STALE_TICKS + 2)
+    expect(stale).toEqual(['t', 't'])
+    // …and the fresh stall is again reported only once.
+    await ticks(STALE_TICKS * 3)
+    expect(stale).toEqual(['t', 't'])
+    sync.dispose()
+  })
+
+  it('a bare mtime TOUCH is a stat delta too — --resume touching the file re-arms one report', async () => {
+    vi.useFakeTimers()
+    const { file, sync, state, stale } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    state.inTurn = true
+    await ticks(STALE_TICKS)
+    expect(stale).toEqual(['t'])
+    // A touch does not reset the stale CLOCK (still no growth), but it is
+    // new evidence, so the suppression clears and the next due window fires.
+    const when = new Date(Date.parse('2026-07-20T12:00:00Z'))
+    utimesSync(file, when, when)
+    await ticks(STALE_TICKS + 2)
     expect(stale).toEqual(['t', 't'])
     sync.dispose()
   })

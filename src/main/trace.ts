@@ -24,7 +24,7 @@ import {
 import { claudeSessionFile } from './claude-fork'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { isCodexCommand, validCodexSessionRef } from './codex-bind'
-import { harnessFor } from './harness'
+import { harnessFor , type TurnFinality } from './harness'
 import { isPiCommand, piSessionHome } from './pi-bind'
 import type { SessionTurnParser } from './session-sync'
 import type { WorkspaceStore } from './store'
@@ -35,6 +35,13 @@ export type TraceSource = 'claude' | 'codex' | 'pi' | null
 export interface SessionWatchSpec {
   file: string
   parse: SessionTurnParser
+  /**
+   * The harness's declared closure story (see TurnFinality): 'native' can
+   * prove its tail record final, 'boundary' only ever finalizes a record
+   * when the NEXT one arrives — which a background dispatch never sends, so
+   * dispatch acceptance refuses 'boundary' file targets (A2 precondition).
+   */
+  finality: TurnFinality
 }
 
 export interface TraceReaderOptions {
@@ -249,7 +256,7 @@ export class TraceReader {
     const harness = harnessFor(node.command)
     if (!harness?.parseTurns || !harness.watchFile) return null
     const file = harness.watchFile(node, this.options)
-    return file ? { file, parse: harness.parseTurns } : null
+    return file ? { file, parse: harness.parseTurns, finality: harness.turnFinality } : null
   }
 
   /** Identity-keyed trace window for a terminal (see the contract note). */

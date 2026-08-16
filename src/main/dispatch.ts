@@ -80,6 +80,14 @@ export interface DispatchRecord {
    * instead of implying the agent said nothing.
    */
   hasReply?: boolean
+  /**
+   * IN MEMORY ONLY, never persisted: a terminal transition was decided but its
+   * durable append failed, so the record is held OPEN — reservation kept,
+   * terminal state invisible on GET — until the sweep lands the append and
+   * releases exactly once. A terminal state that exists only in memory is a
+   * settlement S5 could never audit, so it is not allowed to exist at all.
+   */
+  ledgerFault?: boolean
   error?: string
 }
 
@@ -156,6 +164,16 @@ export interface DispatchDeps {
    */
   clearDispatch?: (agentId: string, dispatchId: string) => void
   /**
+   * Native delivery is CONFIRMED (herdr watched it land, or the transcript
+   * shows the echo): hand the tracker the EXACT delivered prompt as the live
+   * turn's prompt-of-record. The native path never touches the PTY input
+   * stream, so without this the scrape closer can only recover the prompt
+   * from a rendered echo — which a TUI collapses into "[Pasted text #1 …]" or
+   * truncates, leaving prompt identity unprovable and the dispatch open. The
+   * fact, not the keystrokes: the prompt is not written a second time.
+   */
+  noteDelivered?: (agentId: string, prompt: string) => void
+  /**
    * The dispatch is accepted: start the tracking it depends on (v5 A4 —
    * tracking follows work). Called once per accepted dispatch, after the
    * agent's slot is reserved and before delivery, so the session-file watch
@@ -221,22 +239,27 @@ const DISPATCH_TIMEOUT_MS = 10 * 60 * 1000
 const CONTEXT_FULL_PERCENT = 98
 
 /**
- * Chars of normalized prompt compared against the transcript tail. Short
- * enough to survive the TUI rewrapping its echo, long enough to tell two
- * briefs at the same agent apart. A prompt the TUI collapsed into a
- * "[Pasted text #1 …]" placeholder matches nothing at any length, and reads
- * as unconfirmed — which is the honest answer, not a reason to lengthen it.
+ * Chars of normalized prompt compared against the transcript tail — for the
+ * SCREEN LANDING question only ("is the prompt on the pane?"). Short enough
+ * to survive the TUI rewrapping its echo, long enough to tell two briefs at
+ * the same agent apart. A prompt the TUI collapsed into a "[Pasted text #1 …]"
+ * placeholder matches nothing at any length, and reads as unconfirmed — which
+ * is the honest answer, not a reason to lengthen it.
  */
 const LANDING_MATCH_CHARS = 24
 
 const normalize = (text: string): string => text.trim().replace(/\s+/g, ' ').toLowerCase()
 
 /**
- * The ONE normalized-prefix key every dispatch-correlation question uses —
- * "is the prompt on the pane?" (promptLanded) and "is this completed turn the
- * dispatched one?" (promptAnswersDispatch). One normalization on purpose: with
- * two rules a prompt could land under one and complete under the other, and
- * the dispatch would never close.
+ * Normalized-PREFIX key, used by promptLanded and NOTHING else. The prefix
+ * exists because the truncation there is physical — a pane echoes a bounded,
+ * rewrapped rendering of the prompt, so a full compare against the screen
+ * would call every long prompt undelivered. That physical excuse does not
+ * extend to CLOSURE: a durable turn record and a delivered prompt both carry
+ * the full text, and two briefs sharing their first 24 characters
+ * ("Deploy the release after lunch" / "… after tests") must never consume
+ * each other's dispatch stamp. Closure uses promptAnswersDispatch below,
+ * which is full-identity.
  */
 export function dispatchPromptKey(prompt: string): string {
   return normalize(prompt).slice(0, LANDING_MATCH_CHARS)
@@ -250,11 +273,18 @@ export function dispatchPromptKey(prompt: string): string {
  * turn after armedAt, and closing on that turn would bill the caller for
  * somebody else's exchange. An empty dispatched prompt matches nothing —
  * there is no identity to prove.
+ *
+ * FULL identity, deliberately not the 24-char landing prefix: this is the
+ * billing-grade ownership proof both closers (file and scrape) hang on, and a
+ * prefix is a collision, not a proof. Compared as promptFingerprint equality —
+ * the same whole-prompt normalization the idempotency check stores — so
+ * rewrapped whitespace still matches and a different suffix never does. The
+ * prefix key survives only in promptLanded, where the truncation is the
+ * screen's, not ours.
  */
 export function promptAnswersDispatch(turnPrompt: string, dispatchedPrompt: string): boolean {
-  const key = dispatchPromptKey(dispatchedPrompt)
-  if (key.length === 0) return false
-  return dispatchPromptKey(turnPrompt) === key
+  if (normalize(dispatchedPrompt).length === 0) return false
+  return promptFingerprint(turnPrompt) === promptFingerprint(dispatchedPrompt)
 }
 
 /**
@@ -386,7 +416,9 @@ export function defaultDispatchRegistry(): string {
  * and it is the only record of WHY a dispatch produced nothing.
  */
 export function persistedRecord(record: DispatchRecord): DispatchRecord {
-  const { reply, ...row } = record
+  // ledgerFault is a statement ABOUT the ledger, not a fact for it — a row
+  // carrying it would be a durable copy of "this could not be made durable".
+  const { reply, ledgerFault, ...row } = record
   return { ...row, ...(reply !== undefined || row.hasReply ? { hasReply: true } : {}) }
 }
 
@@ -403,6 +435,14 @@ export interface DispatchTombstone {
   /** Consumer-scoped idempotency key (idempotencyScope output). */
   scope: string
   dispatchId: string
+  /**
+   * The ACTUAL terminal state the record closed in. A tombstone that forgets
+   * it fabricates outcomes on replay — a pruned `failed` answering `done`
+   * tells the caller commissioned work succeeded when it did not. Absent only
+   * on legacy lines written before this field existed; those replay as an
+   * explicit closed/unknown projection, never as `done`.
+   */
+  state?: DispatchState
   /** Fingerprint of the original prompt, for key-reuse detection. */
   promptHash?: string
   /** When the record it stands for closed — the TTL clock. */
@@ -525,6 +565,13 @@ export class DispatchService {
   private readonly tombstones = new Map<string, DispatchTombstone>()
   /** dispatchId → the async delivery leg, for tests and for shutdown. */
   private readonly inFlight = new Map<string, Promise<void>>()
+  /**
+   * dispatchId → the terminal row whose durable append failed (commitTerminal).
+   * The record it belongs to is held open with a ledgerFault mark; every sweep
+   * pass retries the append, and the release fires when — and only when — a
+   * row lands.
+   */
+  private readonly ledgerFaults = new Map<string, DispatchRecord>()
 
   constructor(private readonly deps: DispatchDeps) {
     this.hydrate()
@@ -666,12 +713,23 @@ export class DispatchService {
         ) {
           return { status: 409, body: reused }
         }
-        // The record itself is pruned: the id and "it closed" are ALL that is
-        // still known — turnIndex, agent, timings went with the record, and
-        // `tombstone: true` says so instead of faking a fuller answer.
+        // The record itself is pruned: the id, how it closed and "it closed"
+        // are ALL that is still known — turnIndex, agent, timings went with
+        // the record, and `tombstone: true` says so instead of faking a
+        // fuller answer. The STATE is replayed exactly as buried: a pruned
+        // `failed` must never replay as success. A legacy tombstone that
+        // predates the state field cannot know, and says so — closed with an
+        // unknown outcome — rather than fabricating `done`.
         return {
           status: 200,
-          body: { dispatchId: tombstone.dispatchId, state: 'done', replay: true, tombstone: true }
+          body: {
+            dispatchId: tombstone.dispatchId,
+            ...(tombstone.state !== undefined
+              ? { state: tombstone.state }
+              : { state: 'closed', outcome: 'unknown' }),
+            replay: true,
+            tombstone: true
+          }
         }
       }
     }
@@ -754,11 +812,18 @@ export class DispatchService {
     // minutes; a second dispatch accepted in that window overwrites the
     // tracker's stamp, so B closes with A's turn and A never closes at all.
     // The slot is held until the record reaches a terminal state.
+    //
+    // Started on a setImmediate, not inline: deliver()'s first act is a deep
+    // capture and the backend implements captures with synchronous CLI calls,
+    // so an inline start made the 202 wait on pane reads it does not need.
+    // The macrotask hop lets the response leave first; the admission reads
+    // above (sessionExists, the context-full capture) are still synchronous —
+    // that is the conductor's caching seam, not this one.
     this.inFlight.set(
       record.id,
-      this.deliver(record.id, sessionName, prompt).finally(() =>
-        this.inFlight.delete(record.id)
-      )
+      new Promise<void>((resolve) => setImmediate(resolve))
+        .then(() => this.deliver(record.id, agentId, sessionName, prompt))
+        .finally(() => this.inFlight.delete(record.id))
     )
 
     return {
@@ -777,12 +842,19 @@ export class DispatchService {
    * already sitting in the agent's input box. Only `done` skips the check,
    * because only `done` cannot be improved on.
    */
-  private async deliver(dispatchId: string, sessionName: string, prompt: string): Promise<void> {
+  private async deliver(
+    dispatchId: string,
+    agentId: string,
+    sessionName: string,
+    prompt: string
+  ): Promise<void> {
     const promptAgent = this.deps.promptAgent
     if (!promptAgent) return
     // The pre-submission screen, so "did anything happen after we submitted?"
     // is answerable later. Taken here rather than in dispatch() so it is the
-    // last look before the prompt goes out.
+    // last look before the prompt goes out — and taken ONCE: this capture and
+    // the single post-submission one below are the only pane reads this leg
+    // makes, reused by every question that follows.
     const before = this.deepCapture(sessionName)
     let outcome: 'done' | 'submitted' | 'failed'
     try {
@@ -795,6 +867,9 @@ export class DispatchService {
     if (outcome === 'done') {
       // Delivered and observed. The turn correlation still closes the record —
       // `done` from the backend says the agent stopped, not what it produced.
+      // Confirmed delivery = the tracker learns the exact delivered text, so
+      // scrape closure can prove prompt identity without trusting the echo.
+      this.deps.noteDelivered?.(agentId, prompt)
       this.update(dispatchId, { state: 'running', via: 'herdr', confirmed: true })
       return
     }
@@ -816,6 +891,9 @@ export class DispatchService {
       // F2: the prompt IS in the pane and herdr simply could not watch it
       // arrive. Stop here. Re-sending would queue a duplicate in a live
       // agent's input box — measured, on a dispatch that had worked.
+      // Landing is confirmation too — the delivered-prompt fact goes to the
+      // tracker for the same reason as on `done`.
+      this.deps.noteDelivered?.(agentId, prompt)
       this.update(dispatchId, { state: 'running', via: 'herdr', confirmed: true })
       return
     }
@@ -922,17 +1000,29 @@ export class DispatchService {
    * Returns the ids it stamped, so a caller can log what it closed.
    */
   sweep(): string[] {
+    // Ledger faults first: a record held open by a failed terminal append
+    // already HAS its outcome — the sweep's job for it is to land the row and
+    // release, not to invent a fresh interrupt over the decided state.
+    this.retryLedgerFaults()
     const cutoff = this.now() - STALE_DISPATCH_MS
     const stale = [...this.records.values()].filter(
-      (record) => !TERMINAL_STATES.has(record.state) && record.updatedAt <= cutoff
+      (record) =>
+        !TERMINAL_STATES.has(record.state) &&
+        record.updatedAt <= cutoff &&
+        !this.ledgerFaults.has(record.id)
     )
     const abandoned = stale.filter(
       (record) => this.idleSignal(this.deps.sessionNameFor(record.agentId)) !== false
     )
-    return this.interruptEach(
+    const stamped = this.interruptEach(
       abandoned.map((record) => record.id),
       `interrupted: no outcome within ${Math.round(STALE_DISPATCH_MS / 60_000)} minutes`
     )
+    // Retry cadence for failed burials too: a record retained because its
+    // tombstone could not be appended gets another prune pass every sweep,
+    // not only when some other dispatch happens to release.
+    this.prune()
+    return stamped
   }
 
   /**
@@ -992,8 +1082,57 @@ export class DispatchService {
     // must never regress done → running and erase the completed lifecycle.
     if (!record || TERMINAL_STATES.has(record.state)) return
     const next = { ...record, ...patch, updatedAt: this.now() }
+    if (TERMINAL_STATES.has(next.state)) {
+      this.commitTerminal(record, next)
+      return
+    }
     this.write(next)
-    if (!TERMINAL_STATES.has(record.state) && TERMINAL_STATES.has(next.state)) this.release(next)
+  }
+
+  /**
+   * A terminal transition is DURABLE BEFORE IT IS TRUE (Sol r2 P0). The old
+   * order — advance memory, release the reservation, then try the append —
+   * meant a failed append left GET reporting `done`, the agent's slot free
+   * and a restart reloading the older open row: a settlement nobody could
+   * audit. Now the append (one retry) gates everything: only a landed row
+   * makes the terminal state visible and releases the reservation, exactly
+   * once. On failure the record stays OPEN in memory with a `ledgerFault`
+   * mark, the reservation is kept, and the sweep retries the append each
+   * pass until it lands.
+   */
+  private commitTerminal(open: DispatchRecord, next: DispatchRecord): void {
+    const { ledgerFault, ...intended } = next
+    if (this.persistRecord(intended) || this.persistRecord(intended)) {
+      this.ledgerFaults.delete(intended.id)
+      this.records.set(intended.id, intended)
+      this.release(intended)
+      return
+    }
+    // Fail CLOSED: memory does not advance, nothing is released, and the
+    // caller-visible state remains the open one. The intended terminal row is
+    // parked for the sweep; a later transition (a turn completing over a
+    // pending interrupt, say) simply replaces the intent — last decision wins,
+    // and the release still fires exactly once, when an append finally lands.
+    this.ledgerFaults.set(intended.id, intended)
+    this.records.set(intended.id, { ...open, ledgerFault: true })
+    console.error(
+      `Dispatch ledger append failed for ${intended.id} (state=${intended.state}) — held open with a ledger fault; the sweep retries until it lands`
+    )
+  }
+
+  /** Sweep pass: land every parked terminal row whose append failed. */
+  private retryLedgerFaults(): void {
+    for (const [id, intended] of [...this.ledgerFaults]) {
+      if (!this.persistRecord(intended)) continue
+      this.ledgerFaults.delete(id)
+      const current = this.records.get(id)
+      // The record can only still be open (commitTerminal is the one path to
+      // terminal and it goes through this map) — but stay defensive: a row
+      // somehow already terminal must not be released a second time.
+      if (!current || TERMINAL_STATES.has(current.state)) continue
+      this.records.set(id, intended)
+      this.release(intended)
+    }
   }
 
   /**
@@ -1026,14 +1165,20 @@ export class DispatchService {
       .sort((a, b) => a.updatedAt - b.updatedAt)
     closed.forEach((record, index) => {
       if (index >= overflow && record.updatedAt >= cutoff) return
-      this.records.delete(record.id)
+      // Burial BEFORE deletion, and only if it lands (Sol r2 P1): the record
+      // is the richer source the tombstone is built from, and deleting it
+      // first turns a failed append into data loss the moment ledger
+      // compaction removes the old rows. A record whose burial fails is
+      // RETAINED — key and all — and this prune pass simply retries on the
+      // next one.
       if (record.idempotencyKey !== undefined) {
         const key = idempotencyScope(record.consumer, record.idempotencyKey)
         if (this.byKey.get(key) === record.id) {
+          if (!this.bury(key, record)) return
           this.byKey.delete(key)
-          this.bury(key, record)
         }
       }
+      this.records.delete(record.id)
     })
     // Tombstones expire too — after the TTL, not never.
     const expired = this.now() - IDEMPOTENCY_TTL_MS
@@ -1042,16 +1187,22 @@ export class DispatchService {
     }
   }
 
-  /** The key survives its record: install and persist the tombstone. */
-  private bury(scope: string, record: DispatchRecord): void {
+  /**
+   * The key survives its record: persist the tombstone DURABLY, then install
+   * it. Returns false — and installs nothing — when the append fails, so the
+   * caller keeps the source record and retries next pass. A memory-only
+   * service (no persistTombstone dep) buries in memory alone, which is all
+   * the durability it ever promised.
+   */
+  private bury(scope: string, record: DispatchRecord): boolean {
     const tombstone: DispatchTombstone = {
       kind: 'tombstone',
       scope,
       dispatchId: record.id,
+      state: record.state,
       ...(record.promptHash !== undefined ? { promptHash: record.promptHash } : {}),
       closedAt: record.updatedAt
     }
-    this.tombstones.set(scope, tombstone)
     let appended = false
     try {
       appended = this.deps.persistTombstone?.(tombstone) !== false
@@ -1060,9 +1211,12 @@ export class DispatchService {
     }
     if (!appended) {
       console.error(
-        `Dispatch tombstone append failed for ${record.id} — a replay of its key will not survive a restart`
+        `Dispatch tombstone append failed for ${record.id} — record retained; burial retries next prune`
       )
+      return false
     }
+    this.tombstones.set(scope, tombstone)
+    return true
   }
 
   /** One durable append; a throw counts as a failure — the dep may do either. */
@@ -1075,12 +1229,15 @@ export class DispatchService {
     }
   }
 
+  /**
+   * NON-terminal transitions only (submitted → running, confirmed flips):
+   * memory advances and a failed append is loud but not blocking — `running`
+   * is an observation, not a settlement, and the terminal row that follows
+   * carries the same facts. Terminal transitions go through commitTerminal,
+   * which fails CLOSED instead.
+   */
   private write(record: DispatchRecord): void {
     this.records.set(record.id, record)
-    // Transition appends retry once, then fail LOUDLY with the id: memory has
-    // already advanced (a state machine cannot un-happen the turn it just
-    // observed), so the fault must at least be visible instead of silently
-    // forking disk from memory.
     if (this.persistRecord(record) || this.persistRecord(record)) return
     console.error(
       `Dispatch ledger append failed for ${record.id} (state=${record.state}) — memory advanced, disk did not`

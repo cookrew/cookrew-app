@@ -1,0 +1,125 @@
+[P0] Accepted Codex and Pi dispatches have no file-finality witness
+WHERE: src/main/harness.ts:92-104,122-142; src/shared/trace-blocks.ts:584-603; src/main/turn-tracker.ts:518-532
+CLAIM: The exportability check accepts Codex and Pi as durable-file targets, but neither parser can produce the `final === true` fact required to close a file-backed dispatch.
+EVIDENCE: Both harnesses declare `turns: 'file'`, so `beginWork` succeeds once their watch path resolves. `parseCodexTurns` and `parsePiTurns` both pass trace blocks through `turnRecordsOf`, which copies index/prompt/reply/timestamps but no finality. `completeFromHistory` categorically returns unless the tail record has `final === true`. A successful Codex or Pi dispatch therefore stays reserved until an interrupt or the ten-minute sweep.
+FIX: Give every file-exportable parser positive finality (native end marker and next-user boundary) and a streaming accumulator, with completion tests for each harness. Until then, make the exportability precondition refuse those harnesses rather than treating a readable file as a sufficient observer.
+
+[P0] Billing identity is a collision-prone 24-character lowercase prefix
+WHERE: src/main/dispatch.ts:223-258; src/main/turn-tracker.ts:518-532,547-566; scratchpad/v5-export-concurrency.html:90-93,224 (A4/I7)
+CLAIM: `promptAnswersDispatch` does not prove prompt identity; it proves only equality of a short normalized prefix, so a concurrent prompt with the same first 24 characters can consume another caller's dispatch stamp.
+EVIDENCE: `dispatchPromptKey` trims, lowercases, collapses whitespace, and slices to 24 characters. Both file and scrape closers use equality of that value as their positive ownership proof. Two briefs such as `Deploy the release after ` followed by different instructions are indistinguishable, despite I7 calling the decision billing-grade. The full SHA-256 `promptFingerprint` is stored for idempotency but is not used by either closer.
+FIX: Carry a delivery nonce/turn token into the durable user record and correlate on it. Where the harness cannot carry a nonce, use full parser-proven prompt identity and serialize every producer; retain the 24-character heuristic only for non-authoritative screen landing detection.
+
+[P0] Terminal transitions still advance and release when their ledger append fails
+WHERE: src/main/dispatch.ts:988-1011,1068-1087; tests/dispatch-hardening.test.ts:162-181; scratchpad/v5-export-concurrency.html:224 (I7)
+CLAIM: The submitted row is now fail-closed, but every later billing-grade transition remains fail-open: memory advances, the agent reservation is released, and clients can observe a terminal state even when no durable transition exists.
+EVIDENCE: `update` calls `write(next)` and unconditionally calls `release(next)` for terminal states. `write` installs `next` in memory before attempting persistence twice and only logs after both failures. The hardening test explicitly asserts that memory advances on failed transition appends. After a `done` append failure, GET reports done and the next dispatch is admitted, while restart reloads the older running row and converts it to interrupted. That violates I7's durable-row requirement and gives S5 no authoritative settlement state.
+FIX: Make transition persistence part of the state transition: keep an explicit pending-ledger-fault state/reservation until the terminal row is durably appended, then expose/release exactly once. If retry is asynchronous, persist a recoverable outbox before acknowledging the transition; logging alone is not fail-closed.
+
+[P0] A later user boundary can permanently hide the dispatch's final record
+WHERE: src/shared/session-turns.ts:250-263; src/main/turn-tracker.ts:518-532; src/main/session-sync.ts:372-434
+CLAIM: File-backed closure examines only the current history tail, so a new prompt arriving before the quiet-poll closer runs can move the matching completed dispatch one row back and strand it forever.
+EVIDENCE: The Claude accumulator marks the previous exchange final when it sees the next user prompt, then immediately appends a new, non-final tail record. Reconcile updates history on growth but calls `completeFromHistory` only from the later quiet hook. If the next prompt arrives inside that interval, `completeFromHistory` sees only the new tail; it never scans the now-final matching predecessor. Later turns keep replacing the tail, so the stamp and reservation survive until sweep. Local canvas input is intentionally allowed during a dispatch, making this a supported race rather than a theoretical malformed file.
+FIX: Correlate against every newly finalized record since the dispatch's durable cursor/armed position, not only `history.at(-1)`, and mark the matched record consumed by stable identity. Add a test where dispatch finality and the next user record arrive in the same reconcile batch.
+
+[P0] Scrape-only completion persists the previous turn as the dispatch result
+WHERE: src/main/turn-tracker.ts:932-977; src/main/index.ts:1932-1952
+CLAIM: For a scrape-only dispatch, the tracker emits its synchronous `turn` event before appending the just-completed TurnRecord, while the listener immediately reads the history tail to set `turnIndex` and `reply`.
+EVIDENCE: `poll` calls `emitCompletedTurn` at lines 942-944 and does not call `appendTurnRecord` until lines 958-965. Node EventEmitter listeners run synchronously, so index.ts handles the dispatchId while history still ends at the prior exchange (or is empty), then marks the dispatch done with that prior index/reply (or index 0). The correct record is appended only after `completeTurn` has made the terminal state immutable.
+FIX: Append/dedupe the scrape TurnRecord before emitting completion, or include the exact immutable record/index/reply in `CompletedTurn` and make the listener consume that payload. Add a first-turn and prior-history scrape-dispatch test.
+
+[P0] Resume-provenance overlap is computed in the wrong direction
+WHERE: src/main/claude-rotation.ts:239-265,454-473; tests/claude-rotation.test.ts:657-760
+CLAIM: The replay-continuation fix reverses `replayOverlap`'s candidate and predecessor arguments, so the proof can reject valid subset replays and accept a mostly unrelated candidate as the live successor.
+EVIDENCE: `replayOverlap(candidateUuids, predecessorSet)` defines its denominator as the candidate head. `successorOf` instead passes `[...known predecessor UUIDs]` as the candidate and the actual candidate UUIDs as the set. With eight predecessor UUIDs all present in a candidate containing those eight plus twelve unrelated UUIDs, the implementation reports 8/8 and accepts; the intended proof reports 8/20 and refuses. Conversely, an eight-record replay from a twenty-record predecessor is wrongly scored 8/20. Existing tests use symmetric 20-versus-20 or 4-versus-4 fixtures, so they cannot expose operand direction. A false positive rebind violates exact-context ownership at both the stale watcher and spawn-time probe.
+FIX: Call `replayOverlap(await headUuidsOf(candidate), known)` and add asymmetric subset/superset fixtures, including a candidate with the minimum eight shared UUIDs plus unrelated history.
+
+[P1] Attached file-backed dispatches emit `turn.completed` twice
+WHERE: src/main/turn-tracker.ts:518-532,932-955; src/main/index.ts:1932-1952
+CLAIM: The one-closer rule protects the dispatch stamp but not the completion event: the scrape emits once without dispatchId, then the file closer emits the same exchange again with dispatchId.
+EVIDENCE: `emitCompletedTurn` always emits a `turn` event; for file-backed terminals it merely declines to consume the pending stamp. `completeFromHistory` later emits another `turn` event after consuming that stamp. index.ts records `turn.completed` for both, so an attached file-backed dispatch contributes duplicate event rows and duplicate duration samples, even though `completeTurn` runs only on the second event.
+FIX: Separate generic turn-latency observation from dispatch closure, or deduplicate by stable turn identity. For an attached file-backed turn, one authority must emit the public completion; the file path may enrich/close the dispatch without recording the same latency sample twice.
+
+[P1] Tombstone replay fabricates successful completion
+WHERE: src/main/dispatch.ts:393-410,660-675,1045-1053
+CLAIM: A pruned failed or interrupted dispatch replays as `state: 'done'`, changing the outcome of commissioned work.
+EVIDENCE: `DispatchTombstone` stores scope, dispatchId, promptHash, and closedAt but not terminal state. The replay response hard-codes `state: 'done'` for every tombstone. Pruning applies to all terminal states, so a caller retrying a failed/interrupted key is told the work succeeded.
+FIX: Persist the original terminal state (and the minimum safe outcome metadata) in the tombstone and replay it exactly. If legacy tombstones lack it, return an explicit closed/unknown projection rather than `done`.
+
+[P1] Pruning deletes the live key before its tombstone is durable
+WHERE: src/main/dispatch.ts:1021-1065
+CLAIM: Tombstone persistence is not fail-closed: the in-memory record and `byKey` entry are deleted before `persistTombstone` succeeds.
+EVIDENCE: `prune` deletes `records` and `byKey`, then calls `bury`; `bury` installs the in-memory tombstone, tries one append, and only logs failure. The old append-only record currently lets a restart reconstruct the key, but the ordering becomes data loss as soon as S5 compaction/ledger retention removes old rows, and the current process has already discarded the richer source state needed to retry burial.
+FIX: Build and durably append the tombstone first, then delete the source record/key. On failure, retain the source record and retry; add a persistence-failure test that proves no pruning occurred.
+
+[P1] The protocol still promises replay-always while the implementation expires keys
+WHERE: src/main/dispatch.ts:412-416,551-555,1038-1042; scratchpad/v5-export-concurrency.html:209,244
+CLAIM: The amended document says both “tombstones for at least 90 days” and “same idempotency key replays 200 always,” while code forgets every tombstone after exactly 90 days regardless of receipt lifetime.
+EVIDENCE: Hydration drops tombstones older than `IDEMPOTENCY_TTL_MS`, in-memory prune expires them on the same clock, and the hardening test expects an old key to become fresh work. A surviving S5 receipt can therefore coexist with a forgotten dedupe key and permit a second execution/charge, contrary to the lifecycle text that a key with a surviving receipt never becomes fresh.
+FIX: Define one protocol contract. Prefer retaining the compact key/fingerprint/state at least as long as any receipt or dispute can survive, and have S5 extend/own that lifetime; otherwise advertise a bounded idempotency TTL and remove “always.”
+
+[P1] Subscriber tracking exists only as an unused class API
+WHERE: src/main/session-sync.ts:120-128,233-253; src/main/mobile-api.ts:685-710; src/main/index.ts:161-184
+CLAIM: A4's live-remote-subscriber fact is not connected to any production stream, so the implementation's tracking union still contains only focus, dispatch pins, and status holds.
+EVIDENCE: `SessionTurnSync.subscribe/unsubscribe` are reference-counted, but there are no production call sites. `/api/terminal/:id/stream` adds and removes only PtySession listeners and receives no SessionTurnSync dependency. It neither resumes a watch on open nor holds one across workspace switch/close.
+FIX: Wire subscribe/unsubscribe to every terminal stream open/close/error path and make first subscription ensure the session-file watch exists; make final unsubscribe re-arm drain. Test duplicate subscribers, abrupt disconnect, and a workspace switch with a subscriber still open.
+
+[P1] I3 remains harness- and lifecycle-dependent rather than O(delta)
+WHERE: src/main/session-sync.ts:255-261,372-420,443-460; src/shared/session-turns.ts:218-313; src/shared/trace-blocks.ts:597-603
+CLAIM: Incremental byte reads landed, but incremental parsing only exists for Claude, and even Claude discards its accumulator on suspend, so common growth paths still reparse total transcript history.
+EVIDENCE: `accumulatorFor` retains every line and reruns the whole parser on every `records()` call when `createAccumulator` is absent; Codex and Pi expose plain parsers only. `suspend` sets every accumulator to null, so growth while dormant makes the next watch/reconcile read from byte zero and rebuild the whole Claude transcript too. This contradicts I3/A6's “full parse only on shrink/rotation” claim.
+FIX: Implement equivalent resumable accumulators for every file harness. Preserve or serialize bounded accumulator state across dormancy (at least for streaming parsers), so a dormant-growth reattach can resume from the saved byte offset/history instead of forcing a full parse. Gate both append and dormant-reattach bytes/parse work.
+
+[P1] Rotation rebind discards pin, subscriber, and drain ownership
+WHERE: src/main/index.ts:608-644; src/main/session-sync.ts:233-270
+CLAIM: The rotation path migrates the session binding by `unwatch` plus a fresh `watch`, but `unwatch` is destructive lifecycle teardown, not migration, so it erases the tracking facts the open dispatch/viewer still owns.
+EVIDENCE: `commitRotatedClaudeSession` intentionally preserves the TurnTracker dispatch stamp, then calls `sessionSync.unwatch` and `watchSessionTurns`. `unwatch` deletes pinned and subscriber counts; the fresh watch defaults `draining: false`. A background dispatch therefore loses its pin, and after completion the new watch never enters drain, leaking per-agent polling indefinitely. A live subscriber's reference count is also silently lost.
+FIX: Add an atomic `rebind` primitive that swaps file/parser/accumulator generation while preserving pin count, subscriber count, and draining/focus state. Test rotation during a background dispatch and with multiple subscribers, then prove the watch drains after the last fact ends.
+
+[P1] A stuck positive status can hold a watch and retrigger rotation scans forever
+WHERE: src/main/session-sync.ts:305-351; src/main/index.ts:168-183; src/main/turn-tracker.ts:478-484
+CLAIM: `holdOpen` trusts `working`/`blocked` without any age bound, while the stale clock continues to fire, so one stale herdr feed entry can retain tracking forever and launch a rotation scan every stale window.
+EVIDENCE: `noteDrainQuiet` increments ticks but refuses to suspend whenever `held` is true. `holdOpen` maps any current `agentStatus` working/blocked directly to true. At the same time `isInTurn` trusts the same feed, `fireStaleIfDue` resets its counter and calls `onStale`, and no negative result clears the positive entry here. TurnTracker already caps working trust for scrape polling because stuck feeds were observed; SessionTurnSync has no equivalent bound.
+FIX: Make status holds generation- and age-aware, cap or invalidate a claim that has no transcript/feed progress, and suppress repeated identical stale probes until new evidence or a binding generation change. Preserve a separate parser-derived in-flight fact for genuinely long work.
+
+[P1] `/raw` bypasses the dispatch producer reservation
+WHERE: src/main/mobile-api.ts:638-669
+CLAIM: HTTP producer serialization covers `/input` and `/ask` only; an authenticated caller can still write arbitrary bytes, including a prompt and Enter, through `/raw` while a dispatch is armed.
+EVIDENCE: The busy regex explicitly matches only `(input|ask)`. The following PTY route accepts POST `/api/terminal/:id/raw` and immediately calls `session.write(body.data)` with no `hasArmedDispatch` check. That can interleave input or submit an identical/prefix-colliding prompt into the single agent, defeating both reservation and ownership correlation.
+FIX: Put every input-producing HTTP route, including raw, behind one per-agent admission choke point. If raw must remain for owner control, explicitly interrupt/cancel the armed dispatch before accepting it; do not let it silently coexist.
+
+[P1] Native scrape-only dispatch never registers its input with the live tracker
+WHERE: src/main/dispatch.ts:780-839; src/main/index.ts:719-724; src/main/turn-tracker.ts:811-847; src/main/mobile-server.ts:472-493
+CLAIM: A focused scrape-only agent may be accepted as observable, but native `promptAgent` delivery does not call the tracker's input path, so completion depends on best-effort recovery of a TUI echo.
+EVIDENCE: Dispatch arms `pendingDispatch` but the native path never invokes `PtySession.noteExternalInput`/TurnTracker input handling. The normal `/ask` path goes through the PTY-aware ask machinery, while dispatch goes directly to herdr. TurnTracker can only self-heal from activity/spinner and recover the prompt from rendered output; a collapsed, absent, or truncated echo leaves `t.prompt` null/different, so the scrape closer cannot satisfy prompt identity and the dispatch stays open.
+FIX: On confirmed native submission, inject a tracker-side external-input fact containing the exact delivered prompt and start generation, without writing the prompt a second time. Better, make scrape-only exportability require a backend correlation token rather than screen echo.
+
+[P1] Dispatch acceptance still blocks Electron main on a synchronous herdr chain
+WHERE: src/main/dispatch.ts:679-699,726-748,780-789; src/main/index.ts:669-749; src/main/herdr-host-multiplexer.ts:193-210,423-465,1011-1030,1106-1133
+CLAIM: `deferInitial` removes the inline full-file reconcile, but the 202 request path still performs several synchronous CLI process calls and pane reads before its first asynchronous yield.
+EVIDENCE: Admission calls synchronous `sessionExists` (global pane inventory) and `capture`; `beginWork` reports the session through another pane lookup/CLI call. Starting `deliver()` runs synchronously through `deepCapture`, then `promptAgent` synchronously resolves the pane and runs `agent get` before reaching its asynchronous backend wait. The herdr runner implements these operations with `execFileSync`/`spawnSync`, so concurrent accepts serialize on Electron main despite attach-free delivery.
+FIX: Admit from a bounded generation-scoped inventory/session cache, move reads and agent resolution to async APIs, and schedule the delivery leg after the response can yield. Add structural sync-spawn-count and dispatch-accept P95 gates.
+
+[P1] The observed-human-turn fact in A4 is still not represented
+WHERE: scratchpad/v5-export-concurrency.html:86-93 (A4); src/main/index.ts:173-183,1841-1847; src/main/session-sync.ts:204-217,323-330
+CLAIM: Switching away drops the live TurnTracker state and leaves no durable “observed in-flight turn” fact; only a positive herdr status happens to hold the file watch.
+EVIDENCE: The switch handler releases SessionTurnSync, immediately untracks the outgoing terminal, and detaches its PTY. `holdOpen` consults only the current status-feed value. If the feed is absent, stale-deleted, or unsupported during a long silent tool call, the watch suspends after thirty quiet seconds even though A4's observed turn is still in flight; the later final append has no poller to see it until some future rewatch.
+FIX: Persist a per-terminal observed-turn fact when a reliable prompt/user boundary is seen and clear it only on parser finality or explicit interruption. Status may support/refresh that fact but cannot be its sole representation. Test switch during a silent tool call with no status feed and append finality after the drain window.
+
+R1-#1: PARTIAL — positive herdr working/blocked now holds drain, but the specified observed in-flight-turn fact is still discarded on switch and absent feeds still drain mid-turn.
+R1-#2: PARTIAL — `beginWork` now refuses when no observer installs, but accepted Codex/Pi file observers cannot produce the finality required for normal completion.
+R1-#3: PARTIAL — prompt text was added and HTTP input/ask serialize, but ownership is only a 24-character prefix and raw/local/direct producers remain outside the reservation.
+R1-#4: PARTIAL — Claude now emits explicit/next-user finality, but Codex/Pi emit no `final` marker, so the partial-reply flaw is fixed for only one file harness.
+R1-#5: FIXED — file-backed dispatch stamps are no longer consumed by scrape completion; closure waits for the durable file record (the new tail-overtake and duplicate-event bugs are separate).
+R1-#6: PARTIAL — acceptance is durably appended before delivery and rolls back on failure, but every subsequent transition still advances/releases after append failure.
+R1-#7: UNFIXED — reference-count methods exist, but no production remote stream calls them or resumes a watch from the subscriber fact.
+R1-#8: PARTIAL — reads are byte-incremental and Claude parsing is resumable, but Codex/Pi reparse retained history and dormant growth forces full reparses.
+R1-#9: PARTIAL — remove/workspace-remove/cwd-rebind/cut now interrupt first, but rotation still uses destructive `unwatch` without migrating pin/subscriber/drain state.
+R1-#10: FIXED — consumer-scoped replay and prompt-fingerprint conflict checks run before agent resolution and body validation.
+R1-#11: PARTIAL — durable tombstones extend retention, but they fabricate `done`, prune before durability, expire despite replay-always wording, and are not tied to future receipt lifetime.
+R1-#12: FIXED — the herdr supervisor now reaches `PtyManager.onBackendDeath`, which interrupts all open dispatches through the normal release path.
+R1-#13: PARTIAL — initial transcript reconcile is deferred, but synchronous pane inventory/capture/report/get calls remain on dispatch acceptance before the first yield.
+R1-#14: FIXED — POST injects the authenticated owner principal rather than parsing it, and GET lookup scopes by principal with foreign ids returning 404.
+R1-#15: PARTIAL — dev/ino resets, stale/spawn probes, ownership re-check, and lineage landed, but replay overlap is reversed and rebind destroys tracking ownership state.
+
+VERDICT: UNSOUND — P0:6 P1:12 P2:0

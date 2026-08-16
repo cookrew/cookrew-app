@@ -159,7 +159,7 @@ describe('the ledger is consulted before work, not after', () => {
     expect(refused.body).toMatchObject({ error: 'dispatch ledger unavailable' })
   })
 
-  it('a transition append failure retries once, then reports the id loudly', async () => {
+  it('a NON-terminal transition append failure retries once, then reports the id loudly', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     let appends = 0
     const service = new DispatchService(
@@ -172,12 +172,84 @@ describe('the ledger is consulted before work, not after', () => {
       })
     )
     await dispatchAndSettle(service)
-    // Memory advanced regardless — the state machine cannot un-happen the
-    // delivery — but the fault is visible and names the dispatch.
+    // `running` is an observation, not a settlement: memory advances and the
+    // fault is loud, naming the dispatch. (Terminal transitions fail CLOSED —
+    // the suite below.)
     expect(service.get('dsp-1')?.state).toBe('running')
     expect(appends).toBe(3) // accept + transition + its one retry
     const said = error.mock.calls.map((call) => String(call[0])).join('\n')
     expect(said).toContain('dsp-1')
+  })
+
+  it('a TERMINAL transition is durable before it is visible or releases (fail closed)', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let ends = 0
+    let ledgerUp = true
+    let n = 0
+    const service = new DispatchService(
+      deps({
+        newId: () => `dsp-${(n += 1)}`,
+        persist: () => ledgerUp,
+        endWork: () => {
+          ends += 1
+        }
+      })
+    )
+    await dispatchAndSettle(service)
+    expect(service.get('dsp-1')?.state).toBe('running')
+
+    ledgerUp = false
+    service.completeTurn('dsp-1', { turnIndex: 3, reply: 'answered' })
+    // The done row never landed, so `done` does not exist anywhere a caller
+    // can observe: GET reports the current OPEN state, marked with the fault.
+    expect(service.get('dsp-1')?.state).toBe('running')
+    expect(service.lookup('dsp-1').body).toMatchObject({ state: 'running', ledgerFault: true })
+    // Nothing released: not the pin, not the agent's slot.
+    expect(ends).toBe(0)
+    expect((await service.dispatch('agent-1', { text: 'a second brief' })).status).toBe(409)
+    expect(error.mock.calls.map((call) => String(call[0])).join('\n')).toContain('dsp-1')
+
+    // A sweep while the ledger is still down retries, fails, changes nothing —
+    // and does NOT re-interrupt a record whose outcome is already decided.
+    expect(service.sweep()).toEqual([])
+    expect(service.get('dsp-1')?.state).toBe('running')
+    expect(ends).toBe(0)
+
+    // The pass after the ledger recovers lands the row, then — and only
+    // then — the terminal state becomes visible and the release fires once.
+    ledgerUp = true
+    service.sweep()
+    expect(service.get('dsp-1')).toMatchObject({ state: 'done', turnIndex: 3 })
+    expect(service.get('dsp-1')?.ledgerFault).toBeUndefined()
+    expect(ends).toBe(1)
+    const next = await service.dispatch('agent-1', { text: 'a second brief' })
+    expect(next.status).toBe(202)
+    await service.settled(String((next.body as { dispatchId: string }).dispatchId))
+  })
+
+  it('a later transition replaces a parked ledger fault — last decision wins, one release', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let ends = 0
+    let ledgerUp = true
+    const service = new DispatchService(
+      deps({
+        persist: () => ledgerUp,
+        endWork: () => {
+          ends += 1
+        }
+      })
+    )
+    await dispatchAndSettle(service)
+    ledgerUp = false
+    service.interrupt('dsp-1', 'first verdict, never durable')
+    expect(service.get('dsp-1')?.state).toBe('running')
+    // The turn actually completes while the interrupt is still parked: the
+    // completion is the truer outcome and replaces the parked intent.
+    service.completeTurn('dsp-1', { turnIndex: 5, reply: 'made it after all' })
+    ledgerUp = true
+    service.sweep()
+    expect(service.get('dsp-1')).toMatchObject({ state: 'done', turnIndex: 5 })
+    expect(ends).toBe(1)
   })
 })
 
@@ -260,10 +332,10 @@ describe('pruned keys leave tombstones', () => {
     // The record is gone (30 days > the 7-day retention)…
     expect(service.get('dsp-old')).toBeUndefined()
     expect(buried).toHaveLength(1)
-    expect(buried[0]).toMatchObject({ kind: 'tombstone', dispatchId: 'dsp-old' })
+    expect(buried[0]).toMatchObject({ kind: 'tombstone', dispatchId: 'dsp-old', state: 'done' })
 
     // …but the key's promise is not: the retry replays, and says plainly
-    // that only the id and "it closed" remain.
+    // that only the id and how it closed remain.
     const replay = await service.dispatch('agent-1', { text: PROMPT, idempotencyKey: 'key-old' })
     expect(replay.status).toBe(200)
     expect(replay.body).toMatchObject({
@@ -272,6 +344,79 @@ describe('pruned keys leave tombstones', () => {
       replay: true,
       tombstone: true
     })
+  })
+
+  it('a pruned FAILED dispatch replays failed — burial never fabricates success', async () => {
+    const service = new DispatchService(
+      deps({
+        loadRecords: () => [closedRow({ state: 'failed' })],
+        persistTombstone: () => true
+      })
+    )
+    const replay = await service.dispatch('agent-1', { text: PROMPT, idempotencyKey: 'key-old' })
+    expect(replay.status).toBe(200)
+    expect(replay.body).toMatchObject({ dispatchId: 'dsp-old', state: 'failed', tombstone: true })
+  })
+
+  it('a legacy stateless tombstone replays closed/unknown, never done', async () => {
+    // Lines written before the state field existed cannot know the outcome —
+    // and an honest "closed, outcome unknown" is the only answer that does
+    // not change the result of commissioned work.
+    const service = new DispatchService(
+      deps({
+        loadTombstones: () => [
+          {
+            kind: 'tombstone',
+            // idempotencyScope(undefined, 'key-old') — the owner scope.
+            scope: '\u0000key-old',
+            dispatchId: 'dsp-old',
+            promptHash: promptFingerprint(PROMPT),
+            closedAt: NOW - DAY
+          }
+        ]
+      })
+    )
+    const replay = await service.dispatch('agent-1', { text: PROMPT, idempotencyKey: 'key-old' })
+    expect(replay.status).toBe(200)
+    expect(replay.body).toMatchObject({
+      dispatchId: 'dsp-old',
+      state: 'closed',
+      outcome: 'unknown',
+      replay: true,
+      tombstone: true
+    })
+  })
+
+  it('retains the record when its tombstone cannot be appended — burial before deletion', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let buriable = false
+    const buried: DispatchTombstone[] = []
+    const service = new DispatchService(
+      deps({
+        loadRecords: () => [closedRow()],
+        persistTombstone: (tombstone) => {
+          if (!buriable) return false
+          buried.push(tombstone)
+          return true
+        }
+      })
+    )
+    // Burial failed, so NOTHING was pruned: the record (the richer source the
+    // tombstone is built from) still answers, and the key replays from it —
+    // no tombstone marker, because no tombstone exists.
+    expect(service.get('dsp-old')).toBeDefined()
+    const replay = await service.dispatch('agent-1', { text: PROMPT, idempotencyKey: 'key-old' })
+    expect(replay.status).toBe(200)
+    expect(replay.body).toMatchObject({ dispatchId: 'dsp-old', replay: true })
+    expect(replay.body.tombstone).toBeUndefined()
+
+    // The next prune pass (sweep cadence) retries, lands the burial, and only
+    // THEN deletes the source record.
+    buriable = true
+    service.sweep()
+    expect(buried).toHaveLength(1)
+    expect(buried[0]).toMatchObject({ dispatchId: 'dsp-old', state: 'done' })
+    expect(service.get('dsp-old')).toBeUndefined()
   })
 
   it('a tombstoned key still refuses DIFFERENT work', async () => {
@@ -523,9 +668,12 @@ describe('the principal comes from the auth, never the body', () => {
 // Fix 1 (route half) — HTTP producers are serialized against a live dispatch.
 // ---------------------------------------------------------------------------
 
-describe('POST /api/terminal/:id/{input,ask} while a dispatch is armed', () => {
-  it('refuses 409 for both producers while the stamp is armed', async () => {
-    for (const route of ['input', 'ask']) {
+describe('POST /api/terminal/:id/{input,ask,raw} while a dispatch is armed', () => {
+  it('refuses 409 for every HTTP producer while the stamp is armed — raw included', async () => {
+    // /raw writes arbitrary bytes (a prompt plus Enter included) straight
+    // into the same input box; leaving it outside the choke point was a
+    // reservation with a side door.
+    for (const route of ['input', 'ask', 'raw']) {
       const { response, captured } = stubResponse()
       const handled = await handleMobileApi(
         stubRequest('POST', { text: 'a competing prompt' }),
@@ -559,5 +707,88 @@ describe('POST /api/terminal/:id/{input,ask} while a dispatch is armed', () => {
       { hasArmedDispatch: (id: string) => id === 'term-1' } as unknown as MobileApiDeps
     )
     expect(handled).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r2 P1 — a confirmed native delivery registers its exact prompt with the
+// live tracker (the native path never crosses the PTY input stream).
+// ---------------------------------------------------------------------------
+
+describe('confirmed delivery hands the tracker the exact prompt', () => {
+  it('notes the delivered prompt on herdr done', async () => {
+    const delivered: [string, string][] = []
+    const service = new DispatchService(
+      deps({ noteDelivered: (agentId, prompt) => delivered.push([agentId, prompt]) })
+    )
+    await dispatchAndSettle(service)
+    expect(delivered).toEqual([['agent-1', PROMPT]])
+  })
+
+  it('notes it when the landing check finds the echo (stalled-but-landed)', async () => {
+    const delivered: string[] = []
+    const service = new DispatchService(
+      deps({
+        promptAgent: async () => 'submitted',
+        capture: () => `⏺ working\n> ${PROMPT}\n`,
+        noteDelivered: (_agentId, prompt) => delivered.push(prompt)
+      })
+    )
+    await dispatchAndSettle(service)
+    expect(service.get('dsp-1')?.confirmed).toBe(true)
+    expect(delivered).toEqual([PROMPT])
+  })
+
+  it('never notes an UNCONFIRMED delivery — the fact is confirmation, not hope', async () => {
+    const delivered: string[] = []
+    let submitted = false
+    const service = new DispatchService(
+      deps({
+        promptAgent: async () => {
+          submitted = true
+          return 'submitted'
+        },
+        // Screen moved but no echo: honest grade is unconfirmed.
+        capture: () => (submitted ? '> [Pasted text #1 +40 lines]\n⏺ working' : '> '),
+        noteDelivered: (_agentId, prompt) => delivered.push(prompt)
+      })
+    )
+    await dispatchAndSettle(service)
+    expect(service.get('dsp-1')?.confirmed).toBe(false)
+    expect(delivered).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r2 P1 — acceptance must not block on the delivery leg's pane reads.
+// ---------------------------------------------------------------------------
+
+describe('the 202 leaves before the delivery leg starts', () => {
+  it('no deepCapture and no promptAgent work has run when dispatch() returns', async () => {
+    let deepReads = 0
+    let prompts = 0
+    const service = new DispatchService(
+      deps({
+        captureDeep: () => {
+          deepReads += 1
+          return '> '
+        },
+        promptAgent: async () => {
+          prompts += 1
+          return 'done'
+        }
+      })
+    )
+    const response = await service.dispatch('agent-1', { text: PROMPT })
+    expect(response.status).toBe(202)
+    // The delivery leg starts on a setImmediate — its synchronous pane reads
+    // (deepCapture is a CLI call in production) have not run yet, so the
+    // response never waited on them. The admission's own `capture` read
+    // (context-full) is a different, index-cached seam.
+    expect(deepReads).toBe(0)
+    expect(prompts).toBe(0)
+    await service.settled('dsp-1')
+    expect(deepReads).toBe(1) // the pre-submission look — taken inside the leg
+    expect(prompts).toBe(1)
   })
 })

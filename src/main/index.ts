@@ -92,7 +92,7 @@ import { findChrome } from './headless-chrome'
 import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 
-import { TraceReader } from './trace'
+import { TraceReader, type SessionWatchSpec } from './trace'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
 import { TeamStore, copyTeam, forkTeam, workspaceFromTemplate } from './teams'
@@ -177,10 +177,17 @@ const sessionSync = new SessionTurnSync(turns, undefined, {
   // why drain also needs the full quiet window.
   holdOpen: (terminalId) => {
     const reported = agentStatus(sessionNameFor(terminalId))
-    return reported === 'working' || reported === 'blocked'
+    if (reported === 'working' || reported === 'blocked') return true
+    // A4's observed-turn fact: a turn the tracker saw open (live, delivered,
+    // or surviving an untrack) holds the watch until finality clears it —
+    // the status feed supports the fact but is not its sole representation.
+    return turns.hasOpenTurnFact(terminalId)
   },
   isInTurn: (terminalId) => turns.inTurn(terminalId),
-  onStale: (terminalId) => void rebindRotatedClaudeSession(terminalId)
+  onStale: (terminalId) => void rebindRotatedClaudeSession(terminalId),
+  // Lets a subscriber START observation on a never-watched terminal — the
+  // subscription is then the only hold, so a peek leaks nothing.
+  resolveWatch: (terminalId) => traces.watchSpec(terminalId)
 })
 const routines = new RoutineScheduler(store, ptys)
 const voice = new VoiceEngine()
@@ -634,14 +641,21 @@ function commitRotatedClaudeSession(
   )
   store.updateNodeAcrossWorkspacesUnsafe(terminalId, patch)
   agents.setSessionRef(terminalId, rotated)
-  // The successor file is the durable record now. unwatch first: the
-  // dead file's verified signature must not survive as dormant context.
+  // The successor file is the durable record now. MIGRATE the observer —
+  // rebind swaps the file while the pin count, subscriber count and drain
+  // state survive (an unwatch would wipe them: a background dispatch would
+  // lose its pin and the fresh watch would never drain — Sol r2).
   // Deliberately NOT interrupting an open dispatch here: a rotation is the
   // SAME conversation continuing in a new file — the armed stamp (prompt
   // identity + armedAt) survives, and the successor's tail is exactly where
   // the dispatched turn will land. The observer migrates; the record lives.
-  sessionSync.unwatch(terminalId)
-  watchSessionTurns(terminalId)
+  const spec = traces.watchSpec(terminalId)
+  if (spec) {
+    sessionSync.rebind(terminalId, spec.file, spec.parse)
+    multiplexer()?.reportAgentSession?.(sessionNameFor(terminalId), spec.file)
+  } else {
+    sessionSync.unwatch(terminalId)
+  }
   store.withOpContext({ actor: 'agent' }, () =>
     store.recordEventIn(
       hit.workspaceId,
@@ -669,15 +683,15 @@ function claimedPiSessions(selfId: string): ReadonlySet<string> {
 function watchSessionTurns(
   terminalId: string,
   opts: { deferInitial?: boolean } = {}
-): boolean {
+): SessionWatchSpec | null {
   const spec = traces.watchSpec(terminalId)
-  if (!spec) return false
+  if (!spec) return null
   sessionSync.watch(terminalId, spec.file, spec.parse, opts)
   // The multiplexer gets the transcript path too, when it models agents —
   // this is the same fact, and herdr's own detection can use it rather than
   // inferring the agent's state from what it painted.
   multiplexer()?.reportAgentSession?.(sessionNameFor(terminalId), spec.file)
-  return true
+  return spec
 }
 
 /**
@@ -722,6 +736,9 @@ const dispatchService = new DispatchService({
     return mux.promptAgent(name, prompt, timeoutMs)
   },
   noteDispatch: (agentId, dispatchId, prompt) => turns.noteDispatch(agentId, dispatchId, prompt),
+  // Confirmed delivery hands the tracker the EXACT prompt: scrape closure
+  // then correlates on delivered text, never on a truncated screen echo.
+  noteDelivered: (agentId, prompt) => turns.noteDispatchDelivered(agentId, prompt),
   clearDispatch: (agentId, dispatchId) => turns.clearDispatch(agentId, dispatchId),
   // Accept time: the dispatch's turn must land in a watched session file, and
   // the pin holds that watch open until the record closes (v5 A4). False =
@@ -730,8 +747,15 @@ const dispatchService = new DispatchService({
   // can ever end (A2's exportability precondition). deferInitial: the accept
   // path must not pay a full-transcript parse inline; the poll covers it.
   beginWork: (agentId) => {
-    const watched = watchSessionTurns(agentId, { deferInitial: true })
-    if (!watched && !turns.isTracked(agentId)) return false
+    // A2 exportability, sharpened by Sol r2: a 'boundary' harness only ever
+    // finalizes a record when the NEXT one arrives — which a background
+    // dispatch never sends — so a file target must prove NATIVE finality;
+    // otherwise only a live scrape will do. Checked BEFORE any state
+    // change, because false promises acceptance left nothing behind.
+    const spec = traces.watchSpec(agentId)
+    const observable = (spec !== null && spec.finality === 'native') || turns.isTracked(agentId)
+    if (!observable) return false
+    if (spec) watchSessionTurns(agentId, { deferInitial: true })
     sessionSync.pin(agentId)
     // A background target was watched BY this dispatch, not by focus, so the
     // watch must owe its drain from the start: released-but-pinned holds for
@@ -1705,6 +1729,10 @@ app.whenReady().then(() => {
     // While a dispatch is armed, the HTTP input/ask producers refuse 409 —
     // two writers racing one agent is two answers to one reservation.
     hasArmedDispatch: (terminalId) => turns.hasArmedDispatch(terminalId),
+    // A live stream is a watcher (A4): open holds/starts the file watch,
+    // close hands the terminal back to the drain clock.
+    subscribeTerminal: (terminalId) => sessionSync.subscribe(terminalId),
+    unsubscribeTerminal: (terminalId) => sessionSync.unsubscribe(terminalId),
     wallToken,
     pairingToken,
     recoverAgent,
@@ -1929,29 +1957,42 @@ function registerIpc(handlers: RestoreHandlers): void {
   // its work produced it. A terminal whose node has since gone (dismissed
   // between the reply and this tick) still reports — losing the sample would
   // bias the tail toward the agents that survive.
-  turns.on('turn', ({ terminalId, durationMs, dispatchId }: CompletedTurn) => {
-    const node = store.node(terminalId)
-    store.withOpContext({ actor: 'agent' }, () =>
-      store.recordEvent(
-        'turn.completed',
-        terminalId,
-        node?.name ?? terminalId,
-        turnDetails(dispatchId),
-        durationMs
-      )
-    )
-    // Close the dispatch this turn answered (v4 §3): submitted → running →
-    // done {turnIndex, reply}. The reply comes from the ledger, not from the
-    // event — the log stays metadata only.
-    if (dispatchId !== undefined) {
-      const history = turns.history(terminalId)
-      const completed = history[history.length - 1]
-      dispatchService.completeTurn(dispatchId, {
-        turnIndex: completed?.index ?? 0,
-        ...(completed?.reply !== undefined ? { reply: completed.reply } : {})
-      })
+  turns.on(
+    'turn',
+    ({ terminalId, durationMs, dispatchId, turnIndex, latencyReported }: CompletedTurn) => {
+      // One latency sample per exchange: an attached file-backed dispatch is
+      // observed by the scrape first (no dispatchId) and closed by the file
+      // path second — the second event carries latencyReported and must not
+      // land a duplicate row in the event log.
+      if (latencyReported !== true) {
+        const node = store.node(terminalId)
+        store.withOpContext({ actor: 'agent' }, () =>
+          store.recordEvent(
+            'turn.completed',
+            terminalId,
+            node?.name ?? terminalId,
+            turnDetails(dispatchId),
+            durationMs
+          )
+        )
+      }
+      // Close the dispatch this turn answered (v4 §3): submitted → running →
+      // done {turnIndex, reply}. The event names the ANSWERING record — a
+      // tail read would bill the follow-up prompt whenever the file closer
+      // fired past a tail-overtake (Sol r2).
+      if (dispatchId !== undefined) {
+        const history = turns.history(terminalId)
+        const completed =
+          turnIndex !== undefined
+            ? history.find((record) => record.index === turnIndex)
+            : history[history.length - 1]
+        dispatchService.completeTurn(dispatchId, {
+          turnIndex: completed?.index ?? 0,
+          ...(completed?.reply !== undefined ? { reply: completed.reply } : {})
+        })
+      }
     }
-  })
+  )
   ipcMain.handle('activity:list', () => turns.list())
 
   // Acknowledge-on-view: the renderer reports "user is viewing this

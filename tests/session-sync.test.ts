@@ -483,6 +483,44 @@ describe('SessionTurnSync incremental observation', () => {
     sync.dispose()
   })
 
+  // Sol round-2 #4a: dormancy must not forfeit the accumulator. A suspended
+  // terminal whose file only GREW resumes from the retained parser state and
+  // byte offset — reattaching a parked workspace feeds the appended lines
+  // only, never the whole transcript.
+  it('dormant GROWTH resumes the retained accumulator — reattach feeds only the appended lines', async () => {
+    const { file, tracker, sync } = fixture()
+    const { parse, feeds } = instrumented()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parse)
+    sync.suspend('term-1')
+
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    const feedsBefore = feeds.length
+    sync.watch('term-1', file, parse)
+
+    expect(tracker.history('term-1').map((r) => r.prompt)).toEqual(['turn one', 'turn two'])
+    const later = feeds.slice(feedsBefore).flat()
+    expect(later.some((line) => line.includes('turn two'))).toBe(true)
+    expect(later.some((line) => line.includes('turn one'))).toBe(false)
+    sync.dispose()
+  })
+
+  it('a SHRINK while dormant still resets and re-parses whole (rewind while parked)', async () => {
+    const { file, tracker, sync } = fixture()
+    const { parse, feeds } = instrumented()
+    writeFileSync(file, [...TURN_1, ...TURN_2].join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parse)
+    sync.suspend('term-1')
+
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parse)
+
+    expect(tracker.history('term-1').map((r) => r.prompt)).toEqual(['turn one'])
+    // The re-parse fed 'turn one' again — a fresh accumulator, not a resume.
+    expect(feeds.flat().filter((line) => line.includes('turn one')).length).toBeGreaterThan(1)
+    sync.dispose()
+  })
+
   it('property: randomized byte-level appends (mid-line, mid-UTF-8) equal the whole-file parse', async () => {
     vi.useFakeTimers()
     const lines: string[] = []

@@ -70,6 +70,23 @@ const TITLE_REFRESH_MS = 15_000
 /** Tolerance between tracker turn start and the session prompt entry time. */
 const IN_FLIGHT_STAMP_SLACK_MS = 5000
 
+/**
+ * Clock slack applied to the armedAt eligibility bound when scanning durable
+ * records for a dispatch's answer: the file's timestamps come from the
+ * harness's clock at prompt-entry time, armedAt from ours at stamping time,
+ * and a record a breath older than the arming can still be the dispatched
+ * turn. Prompt identity — full, not a prefix — is the proof; this only sets
+ * how far back the scan is allowed to look.
+ */
+const DISPATCH_ARM_SLACK_MS = IN_FLIGHT_STAMP_SLACK_MS
+
+/**
+ * How long a confirmed-delivery prompt fact waits for its turn to open before
+ * it goes stale. Matches the self-heal resume window: past it, output can no
+ * longer be assumed to belong to the delivered prompt.
+ */
+const DELIVERED_PROMPT_WINDOW_MS = RESUME_WINDOW_MS
+
 /** Normalized-prefix prompt equality for carrying titles across reconciles. */
 const PROMPT_MATCH_CHARS = 48
 
@@ -161,9 +178,9 @@ interface PendingDispatch {
 
 /**
  * Payload of the tracker's 'turn' event: one real exchange finished, and how
- * long the agent took over it. Deliberately just the two facts — the terminal
- * to attribute it to and the milliseconds — so nothing about the conversation
- * can ride out to the event log on it.
+ * long the agent took over it. Deliberately metadata only — the terminal to
+ * attribute it to, the milliseconds, and identifying indices — so nothing
+ * about the conversation can ride out to the event log on it.
  */
 export interface CompletedTurn {
   terminalId: string
@@ -176,6 +193,22 @@ export interface CompletedTurn {
    * would invent an attribution.
    */
   dispatchId?: string
+  /**
+   * Index of the TurnRecord this completion belongs to, when a durable record
+   * identifies it. The listener that closes a dispatch must consume THIS —
+   * never `history.at(-1)`: a new user prompt can land in the same reconcile
+   * batch as the dispatched turn's finality (tail overtake), and the tail is
+   * then somebody else's open exchange.
+   */
+  turnIndex?: number
+  /**
+   * True when this exchange's public latency sample already rode an earlier
+   * 'turn' event — the scrape observed an attached file-backed turn settle
+   * and emitted, and this later event is the file closer enriching the SAME
+   * exchange with its dispatch closure. One public completion per exchange:
+   * the listener must not record a second latency sample for it.
+   */
+  latencyReported?: boolean
 }
 
 /**
@@ -227,6 +260,36 @@ export class TurnTracker extends EventEmitter {
    */
   private pendingDispatch = new Map<string, PendingDispatch>()
 
+  /**
+   * terminalId → the EXACT prompt a confirmed native delivery carried
+   * (noteDispatchDelivered), waiting for its turn to open. The native path
+   * writes nothing through the PTY input stream, so without this fact the
+   * scrape can only recover the prompt from a rendered echo — which a TUI
+   * collapses ("[Pasted text #1 …]") or truncates, leaving the closer's
+   * prompt-identity proof unprovable. Consumed when a turn opens within
+   * DELIVERED_PROMPT_WINDOW_MS; cleared with the dispatch it served.
+   */
+  private deliveredPrompt = new Map<string, { prompt: string; at: number }>()
+
+  /**
+   * terminalId → turnStartedAt of the exchange whose latency the scrape has
+   * already emitted publicly, on a FILE-BACKED terminal. The file closer
+   * matching the same exchange still closes the dispatch but flags the event
+   * `latencyReported` so the sample is never counted twice.
+   */
+  private scrapeEmitted = new Map<string, number>()
+
+  /**
+   * terminalId → epoch ms a turn was OBSERVED to open whose finality has not
+   * yet been observed (v5 A4). Deliberately OUTSIDE `tracked`, surviving
+   * untrack: a workspace switch drops the live scrape state, and this fact is
+   * what still says "work is in flight here" to holdOpen. Set on turn open
+   * and on a confirmed native delivery; cleared on parser finality
+   * (replaceHistory final tail / completeFromHistory), scrape-observed turn
+   * end, dispatch interruption (clearDispatch), process exit and removal.
+   */
+  private openTurnFacts = new Map<string, number>()
+
   /** Paced Sous title-backfill pump for historical untitled records. */
   private backfillTimer: NodeJS.Timeout | null = null
   private backfillInFlight = false
@@ -277,6 +340,21 @@ export class TurnTracker extends EventEmitter {
     const deduped = dedupePhantomEchoes(stamped)
     this.histories.set(terminalId, deduped)
     this.store?.scheduleSave(terminalId, deduped)
+    // Parser finality clears the A4 open-turn fact (v5 A4): a FINAL tail
+    // covering the observed open (file prompt-entry time within slack of the
+    // observation) means the in-flight turn ended and was durably recorded.
+    // A final tail OLDER than the fact is a previous exchange — the observed
+    // turn's own record has not landed yet, so the fact stands.
+    const tail = deduped[deduped.length - 1]
+    const openedAt = this.openTurnFacts.get(terminalId)
+    if (
+      tail !== undefined &&
+      openedAt !== undefined &&
+      tail.final === true &&
+      openedAt <= tail.startedAt + DISPATCH_ARM_SLACK_MS
+    ) {
+      this.openTurnFacts.delete(terminalId)
+    }
     const t = this.tracked.get(terminalId)
     if (t) this.push(t)
     this.ensureBackfillPump()
@@ -489,8 +567,70 @@ export class TurnTracker extends EventEmitter {
    * been superseded cannot disarm its successor.
    */
   clearDispatch(terminalId: string, dispatchId: string): void {
-    if (this.pendingDispatch.get(terminalId)?.id !== dispatchId) return
+    const pending = this.pendingDispatch.get(terminalId)
+    if (pending?.id !== dispatchId) return
     this.pendingDispatch.delete(terminalId)
+    this.deliveredPrompt.delete(terminalId)
+    // Interruption ends the A4 fact this dispatch minted — but only ITS fact:
+    // an open-turn observation older than the arming belongs to somebody
+    // else's still-running exchange and survives the dispatch's death.
+    const openedAt = this.openTurnFacts.get(terminalId)
+    if (openedAt !== undefined && openedAt >= pending.armedAt) {
+      this.openTurnFacts.delete(terminalId)
+    }
+  }
+
+  /**
+   * A confirmed native delivery's exact prompt (Sol r2 P1 — the native path
+   * never registers input with the live tracker). Called by the dispatch
+   * service right after submission is confirmed (herdr `done`, or the landing
+   * check finding the echo). If a turn eligible to be the dispatch's answer
+   * is ALREADY opening, the delivered text becomes its prompt-of-record
+   * immediately — the screen echo is a rendering, this is the fact. Otherwise
+   * the fact waits (DELIVERED_PROMPT_WINDOW_MS) for the turn to open, where
+   * resumeThinking prefers it over echo recovery. Either way the terminal now
+   * carries an observed-turn fact (A4): a confirmed delivery means a turn is
+   * opening whether or not any PTY is attached to watch it.
+   */
+  noteDispatchDelivered(terminalId: string, prompt: string): void {
+    const t = this.tracked.get(terminalId)
+    const pending = this.pendingDispatch.get(terminalId)
+    const inTurn = t !== undefined && (t.phase === 'thinking' || t.phase === 'waiting')
+    const ownsLiveTurn =
+      inTurn && t !== undefined && (pending === undefined || t.turnStartedAt >= pending.armedAt)
+    if (t !== undefined && ownsLiveTurn) {
+      t.prompt = prompt
+      t.sawInputThisTurn = true
+      this.openTurnFacts.set(terminalId, t.turnStartedAt)
+      return
+    }
+    this.deliveredPrompt.set(terminalId, { prompt, at: Date.now() })
+    this.openTurnFacts.set(terminalId, Date.now())
+  }
+
+  /**
+   * Is there an OBSERVED turn here whose finality has not been observed yet
+   * (v5 A4)? Attached, the live scrape phase answers; detached, the answer is
+   * the persisted fact minted at turn open (or at confirmed delivery) and
+   * cleared only by finality — replaceHistory landing a final tail,
+   * completeFromHistory, the scrape watching the turn settle — or by
+   * interruption/removal. This is a FACT probe, not a status guess: the
+   * conductor wires it into holdOpen so a switched-away turn inside a long
+   * silent tool call cannot drain its watch just because the status feed
+   * went absent.
+   */
+  hasOpenTurnFact(terminalId: string): boolean {
+    const t = this.tracked.get(terminalId)
+    if (t) return t.phase === 'thinking' || t.phase === 'waiting'
+    return this.openTurnFacts.has(terminalId)
+  }
+
+  /** Consume the delivered-prompt fact if a fresh one is waiting. */
+  private takeDeliveredPrompt(terminalId: string): string | null {
+    const fact = this.deliveredPrompt.get(terminalId)
+    if (fact === undefined) return null
+    this.deliveredPrompt.delete(terminalId)
+    return Date.now() - fact.at <= DELIVERED_PROMPT_WINDOW_MS ? fact.prompt : null
   }
 
   /**
@@ -506,30 +646,58 @@ export class TurnTracker extends EventEmitter {
    * - file authority (`writesFromFile`) — closure must read the durable row
    *   it bills against; a scrape-only terminal has no such row and its own
    *   path closes it;
-   * - a tail record with a reply AND `final === true` — finality, not quiet,
+   * - a record with a reply AND `final === true` — finality, not quiet,
    *   is the evidence: an assistant text block followed by a tool call looks
    *   exactly like a finished reply until the tool result lands, and the
    *   parser stamps `final` only on positive end-of-turn evidence (absent
    *   means "maybe still running", which for billing-grade closure means NO);
-   * - the armedAt guard — a turn that opened before the dispatch armed is
-   *   somebody else's exchange;
-   * - prompt identity — timestamp order is eligibility, the prompt is proof.
+   * - the armedAt bound — a turn that opened before the dispatch armed
+   *   (slack-adjusted for the two clocks involved) is somebody else's
+   *   exchange;
+   * - FULL prompt identity — timestamp order is eligibility, the prompt is
+   *   proof, and the proof is the whole normalized prompt, never a prefix.
+   *
+   * Scans BACKWARDS from the tail over every record inside the armed window,
+   * not just `history.at(-1)` (Sol r2 P0, tail overtake): a new user prompt
+   * arriving between growth and the quiet poll appends a fresh non-final
+   * tail, and the dispatched turn's finalized record then sits one row back —
+   * where a tail-only closer would never look again, stranding the stamp and
+   * the reservation until the sweep.
    */
   completeFromHistory(terminalId: string): void {
     const pending = this.pendingDispatch.get(terminalId)
     if (pending === undefined || !this.writesFromFile(terminalId)) return
     const records = this.histories.get(terminalId)
-    const last = records?.[records.length - 1]
-    if (!last || last.reply.length === 0) return
-    if (last.final !== true) return
-    if (last.startedAt < pending.armedAt) return
-    if (!promptAnswersDispatch(last.prompt, pending.prompt)) return
-    this.pendingDispatch.delete(terminalId)
-    this.emit('turn', {
-      terminalId,
-      durationMs: Math.max(0, last.endedAt - last.startedAt),
-      dispatchId: pending.id
-    } satisfies CompletedTurn)
+    if (!records) return
+    const cutoff = pending.armedAt - DISPATCH_ARM_SLACK_MS
+    for (let i = records.length - 1; i >= 0; i -= 1) {
+      const candidate = records[i]
+      if (candidate.startedAt < cutoff) break
+      if (candidate.final !== true || candidate.reply.length === 0) continue
+      if (!promptAnswersDispatch(candidate.prompt, pending.prompt)) continue
+      this.pendingDispatch.delete(terminalId)
+      this.deliveredPrompt.delete(terminalId)
+      // Finality observed: the A4 open-turn fact this exchange minted ends.
+      const openedAt = this.openTurnFacts.get(terminalId)
+      if (openedAt !== undefined && openedAt <= candidate.endedAt + DISPATCH_ARM_SLACK_MS) {
+        this.openTurnFacts.delete(terminalId)
+      }
+      // One public completion per exchange: if the scrape already emitted
+      // this exchange's latency (attached file-backed turn), this event
+      // closes the dispatch but must not mint a second sample.
+      const scrapeAt = this.scrapeEmitted.get(terminalId)
+      const latencyReported =
+        scrapeAt !== undefined && Math.abs(candidate.startedAt - scrapeAt) <= DISPATCH_ARM_SLACK_MS
+      this.scrapeEmitted.delete(terminalId)
+      this.emit('turn', {
+        terminalId,
+        durationMs: Math.max(0, candidate.endedAt - candidate.startedAt),
+        dispatchId: pending.id,
+        turnIndex: candidate.index,
+        ...(latencyReported ? { latencyReported: true } : {})
+      } satisfies CompletedTurn)
+      return
+    }
   }
 
   /**
@@ -548,20 +716,29 @@ export class TurnTracker extends EventEmitter {
     terminalId: string,
     durationMs: number,
     startedAt: number,
-    prompt: string | null
+    prompt: string | null,
+    turnIndex?: number
   ): void {
     const pending = this.writesFromFile(terminalId)
       ? undefined
       : this.pendingDispatch.get(terminalId)
+    // FULL prompt identity, like the file closer — and thanks to the
+    // delivered-prompt fact (noteDispatchDelivered) the live prompt compared
+    // here is the exact delivered text whenever the tracker holds one, not a
+    // screen echo the TUI may have collapsed or truncated.
     const owns =
       pending !== undefined &&
       startedAt >= pending.armedAt &&
       prompt !== null &&
       promptAnswersDispatch(prompt, pending.prompt)
-    if (owns) this.pendingDispatch.delete(terminalId)
+    if (owns) {
+      this.pendingDispatch.delete(terminalId)
+      this.deliveredPrompt.delete(terminalId)
+    }
     this.emit('turn', {
       terminalId,
       durationMs,
+      ...(turnIndex !== undefined ? { turnIndex } : {}),
       ...(owns ? { dispatchId: pending.id } : {})
     } satisfies CompletedTurn)
   }
@@ -576,6 +753,9 @@ export class TurnTracker extends EventEmitter {
     this.histories.delete(terminalId)
     this.store?.remove(terminalId)
     this.fileBacked.delete(terminalId)
+    this.deliveredPrompt.delete(terminalId)
+    this.scrapeEmitted.delete(terminalId)
+    this.openTurnFacts.delete(terminalId)
   }
 
   /** Write out pending history saves now (app quit). */
@@ -657,6 +837,11 @@ export class TurnTracker extends EventEmitter {
         updatedAt: Date.now()
       } satisfies TerminalActivity)
     }
+    // The process is gone: no turn can be in flight behind it, so the A4
+    // fact (and any waiting delivered prompt) ends here rather than holding
+    // a watch open for an agent that no longer exists.
+    this.openTurnFacts.delete(terminalId)
+    this.deliveredPrompt.delete(terminalId)
     this.untrack(terminalId)
   }
 
@@ -686,6 +871,9 @@ export class TurnTracker extends EventEmitter {
     // the turn when the terminal is re-tracked. Only full teardown drops it —
     // the dispatch side (clearDispatch) handles every per-dispatch ending.
     this.pendingDispatch.clear()
+    this.deliveredPrompt.clear()
+    this.scrapeEmitted.clear()
+    this.openTurnFacts.clear()
   }
 
   private handleInput(terminalId: string, data: string): void {
@@ -732,6 +920,11 @@ export class TurnTracker extends EventEmitter {
     t.title = null
     t.titleGen += 1
     t.turnStartedAt = Date.now()
+    // A TYPED prompt (this path) is already exact — a delivered-prompt fact
+    // still waiting here belongs to no turn now, and left behind it could
+    // relabel a later self-heal open. Turn open is an A4 fact.
+    this.deliveredPrompt.delete(t.session.terminalId)
+    this.openTurnFacts.set(t.session.terminalId, t.turnStartedAt)
     if (!t.pollTimer) {
       t.pollTimer = setInterval(() => this.poll(t), POLL_MS)
     }
@@ -833,18 +1026,26 @@ export class TurnTracker extends EventEmitter {
       t.snapshot = t.session.fullText()
       t.turnStartLine = t.session.scrollAnchor?.() ?? scrollLineOf(t.snapshot)
       t.turnStartedAt = Date.now()
-      // The prompt was typed before this tracker existed (reattach) — the
-      // TUI's own echo of it is still on screen. Recover it so the card and
-      // the eventual TurnRecord show the real prompt, not a synthetic label.
-      // Fall back to the still-buffered input: a fresh Codex terminal whose
-      // ask pasted the prompt (Enter not yet submitted) has no "> prompt"
-      // echo on its boot screen, so recover the prompt we actually captured
-      // instead of labelling the first turn '(recovered turn)'.
-      t.prompt = extractPromptEcho(cleanTurnLines(t.snapshot)) ?? (t.promptBuffer.trim() || null)
-      // Boot-noise until proven otherwise: only mark input-seen if the ask
-      // had already buffered a prompt when this phantom opened.
-      t.sawInputThisTurn = t.promptBuffer.trim().length > 0
+      // Prompt-of-record, strongest first: a confirmed native delivery's
+      // EXACT text (noteDispatchDelivered — the screen may show a collapsed
+      // "[Pasted text #1 …]" or a truncated echo of it, neither of which can
+      // prove prompt identity at closure). Then the TUI's own echo, recovered
+      // from the screen (typed before this tracker existed — reattach). Then
+      // the still-buffered input: a fresh Codex terminal whose ask pasted the
+      // prompt (Enter not yet submitted) has no "> prompt" echo on its boot
+      // screen, so recover the prompt we actually captured instead of
+      // labelling the first turn '(recovered turn)'.
+      const delivered = this.takeDeliveredPrompt(t.session.terminalId)
+      t.prompt =
+        delivered ??
+        extractPromptEcho(cleanTurnLines(t.snapshot)) ??
+        (t.promptBuffer.trim() || null)
+      // Boot-noise until proven otherwise: only mark input-seen if something
+      // real fed this turn — a delivered dispatch prompt, or input the ask
+      // had already buffered when this phantom opened.
+      t.sawInputThisTurn = delivered !== null || t.promptBuffer.trim().length > 0
     }
+    this.openTurnFacts.set(t.session.terminalId, t.turnStartedAt)
     t.phase = 'thinking'
     t.reply = null
     t.lastSubmitAt = 0
@@ -906,6 +1107,10 @@ export class TurnTracker extends EventEmitter {
     t.phase = 'replied'
     const id = t.session.terminalId
     this.stopTurnTimers(t)
+    // The scrape watched this turn end — the A4 open-turn fact it minted is
+    // resolved, discard paths included (a discarded boot phantom is not work
+    // in flight either).
+    this.openTurnFacts.delete(id)
     // A promptless self-heal turn that ALSO never saw user input is boot
     // noise — a fresh agent's boot screen (e.g. Codex) tripping self-heal,
     // not an exchange. Recording it as '(recovered turn)' would mint a
@@ -930,31 +1135,40 @@ export class TurnTracker extends EventEmitter {
       return
     }
     // A real exchange just ended: announce how long it took (latency spec
-    // p95-p98). Emitted HERE, past the two discards above, so the samples are
+    // p95-p98). Emitted past the two discards above, so the samples are
     // turns somebody actually waited on — never a boot screen tripping
-    // self-heal, never a typed slash command. It rides ahead of the two
-    // recording paths below because it is true of both: a turn whose durable
-    // record belongs to the session file still happened, and still took time.
+    // self-heal, never a typed slash command.
     //
     // The tracker does not reach the event log itself — index.ts translates
     // this into store.recordEvent, so latency enters through the same
     // choke-point as every other event and cannot diverge from it.
-    if (t.turnStartedAt > 0) {
-      this.emitCompletedTurn(id, Date.now() - t.turnStartedAt, t.turnStartedAt, t.prompt)
-    }
-    // STEP 4: the session file is this terminal's record. Appending here would
-    // be a second writer of the same exchange — historically it landed a
-    // uuid-less duplicate that dedupePhantomEchoes then had to throw away.
-    // The live turn above (phase, glance, reply, pendingInput) is still ours;
-    // only the durable write belongs to the file. The Sous title does NOT get
-    // dropped: it lands on the record the reconcile already created for this
-    // turn, and if that record has not arrived yet the backfill pump fills it.
+    //
+    // STEP 4: the session file is a file-backed terminal's record. Appending
+    // here would be a second writer of the same exchange — historically it
+    // landed a uuid-less duplicate that dedupePhantomEchoes then had to
+    // throw away. The live turn above (phase, glance, reply, pendingInput)
+    // is still ours; only the durable write belongs to the file. The Sous
+    // title does NOT get dropped: it lands on the record the reconcile
+    // already created for this turn, and if that record has not arrived yet
+    // the backfill pump fills it. The latency emit still fires — marked in
+    // scrapeEmitted so the file closer enriching the SAME exchange with its
+    // dispatch closure never mints a second public sample.
     if (this.writesFromFile(id)) {
+      if (t.turnStartedAt > 0) {
+        this.scrapeEmitted.set(id, t.turnStartedAt)
+        this.emitCompletedTurn(id, Date.now() - t.turnStartedAt, t.turnStartedAt, t.prompt)
+      }
       this.push(t)
       const reconciled = this.liveTurnRecordIndex(t)
       if (reconciled !== null) void this.finalizeTitle(t, reconciled)
       return
     }
+    // SCRAPE-owned history: the record is appended and deduped BEFORE the
+    // completion event fires (Sol r2 P0). The 'turn' listener runs
+    // synchronously and closes a dispatch against the history it can see at
+    // that instant — emitting first handed it the PREVIOUS exchange as the
+    // tail (or an empty history on a first turn), and the dispatch was
+    // billed against a turn it did not commission.
     const appended = appendTurnRecord(this.history(id), {
       prompt: t.prompt ?? RECOVERED_PROMPT_LABEL,
       reply: t.reply,
@@ -970,9 +1184,20 @@ export class TurnTracker extends EventEmitter {
     const deduped = dedupePhantomEchoes(appended)
     this.histories.set(id, deduped)
     this.store?.scheduleSave(id, deduped)
+    const survived = deduped.some((r) => r.index === newRecord.index)
+    if (t.turnStartedAt > 0) {
+      const recordIndex = survived ? newRecord.index : deduped[deduped.length - 1]?.index
+      this.emitCompletedTurn(
+        id,
+        Date.now() - t.turnStartedAt,
+        t.turnStartedAt,
+        t.prompt,
+        recordIndex
+      )
+    }
     this.push(t)
     // Skip the title pass when the just-appended turn was itself the phantom.
-    if (deduped.some((r) => r.index === newRecord.index)) {
+    if (survived) {
       void this.finalizeTitle(t, newRecord.index)
     }
   }

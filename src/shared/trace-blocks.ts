@@ -6,7 +6,12 @@
 // construction. Pure parsers + the identity-keyed pager live here; file IO
 // and caching are main-process (main/trace.ts).
 
-import { CheckpointAssigner, checkpointIdentity } from './session-turns'
+import {
+  CheckpointAssigner,
+  checkpointIdentity,
+  type SessionTurnAccumulator,
+  type StreamingTurnParser
+} from './session-turns'
 import type { TurnRecord } from './turn'
 
 /** One tool invocation inside a block, TUI-faithful (unified-scroll TODO). */
@@ -34,6 +39,14 @@ export interface TraceBlock {
   activity: TraceToolCall[]
   startedAt: number
   endedAt: number
+  /**
+   * POSITIVE end-of-turn evidence written by the harness itself into its own
+   * file — codex's `task_complete` event, pi's assistant `stopReason: 'stop'`
+   * (both verified on real session files, see the parsers). Absent means the
+   * block has no self-proving tail: only a later user prompt (the next-user
+   * boundary, applied in turnRecordsOf) can close it.
+   */
+  final?: boolean
 }
 
 /** Head of a tool input rendered into an activity line. */
@@ -214,6 +227,10 @@ interface CodexRecord {
     arguments?: string
     input?: string
     output?: unknown
+    /** New rollout format (codex-cli ≥ ~0.147): completed conversation items. */
+    item?: { type?: string; content?: unknown; phase?: string }
+    /** `task_complete` carries the closing reply verbatim. */
+    last_agent_message?: string
   }
 }
 
@@ -241,52 +258,127 @@ export function parseCodexSessionMeta(line: string): CodexSessionMeta | null {
 /** response_item payload types that are conversation noise, not activity. */
 const CODEX_SILENT_ITEMS = new Set(['message', 'reasoning'])
 
+/** A resumable trace parser: feed rollout/session lines in any chunking and
+ *  read the blocks so far — identical to a whole-file parse by construction
+ *  (the whole-file parsers below are single-feed uses of these). */
+export interface TraceBlockAccumulator {
+  feed(lines: string[]): void
+  blocks(): TraceBlock[]
+}
+
+/** Joined text of a new-format item's content blocks. Codex writes the type
+ *  tag as 'text' on UserMessage items and 'Text' on AgentMessage items
+ *  (verified on real 0.147 rollouts) — accept both. */
+function codexItemText(content: unknown): string | null {
+  if (!Array.isArray(content)) return null
+  return (content as Array<{ type?: string; text?: string }>)
+    .filter((c) => typeof c.type === 'string' && c.type.toLowerCase() === 'text' && typeof c.text === 'string')
+    .map((c) => c.text as string)
+    .join('\n')
+}
+
 /**
- * Blocks from a Codex rollout: event_msg user_message opens a block,
- * agent_message closes its reply (final_answer phase wins, else the last
- * one), non-message response_items render as activity lines. Block identity
- * is `<session_id>:p<ordinal>` — namespaced by the rollout's own session_id
- * so a TurnRecord.uuid can never collide across sessions (a bare positional
+ * Streaming Codex rollout parser. A user prompt opens a block, the agent
+ * reply closes it (final_answer phase wins, else the last one), non-message
+ * response_items render as activity lines. Block identity is
+ * `<session_id>:p<ordinal>` — namespaced by the rollout's own session_id so
+ * a TurnRecord.uuid can never collide across sessions (a bare positional
  * 'p<N>' would defeat the uuid carryover guard on rebind).
+ *
+ * BOTH rollout generations are read (verified against the real corpus under
+ * ~/.codex/sessions, 851 old / 12 new / 7 transitional files):
+ *  - old:  event_msg `user_message` / `agent_message` events;
+ *  - new (codex-cli ≥ ~0.147): event_msg `item_completed` whose item.type is
+ *    'UserMessage' / 'AgentMessage' — the old events are gone entirely.
+ *    Transitional builds emit item_completed only for 'Plan' items, so the
+ *    two prompt shapes never co-occur and cannot double-open a block.
+ *
+ * FINALITY: `task_complete` is codex's own end-of-turn marker — present in
+ * both generations, written once per completed turn with the closing reply
+ * as `last_agent_message`, and absent when a turn is interrupted (aborted
+ * turns write `turn_aborted` instead). It is the positive evidence that
+ * lets the TAIL block claim final; everything else waits for the next-user
+ * boundary in turnRecordsOf.
  */
-export function parseCodexTrace(lines: string[]): TraceBlock[] {
+export function createCodexTraceAccumulator(): TraceBlockAccumulator {
   const blocks: TraceBlock[] = []
   let current: TraceBlock | null = null
   let sawFinal = false
   let sessionId: string | null = null
   const codexPending = new Map<string, TraceToolCall>()
-  for (const line of lines) {
+
+  const open = (prompt: string, at: number): void => {
+    current = {
+      id: `${sessionId ?? 'session'}:p${blocks.length + 1}`,
+      index: blocks.length + 1,
+      prompt,
+      reply: '',
+      activity: [],
+      startedAt: at,
+      endedAt: at
+    }
+    sawFinal = false
+    blocks.push(current)
+  }
+
+  const reply = (text: string, phase: string | undefined, at: number): void => {
+    if (current === null) return
+    if (!sawFinal || phase === 'final_answer') {
+      current.reply = text
+      if (phase === 'final_answer') sawFinal = true
+    }
+    // A reply arriving REOPENS a block: whatever finality it had earned no
+    // longer describes the tail of the exchange (parity with the Claude
+    // accumulator's latest-assistant-entry rule).
+    delete current.final
+    current.endedAt = at
+  }
+
+  const feedLine = (line: string): void => {
     const record = parseLine(line) as CodexRecord | null
-    if (!record || !record.payload) continue
+    if (!record || !record.payload) return
     const at = timeMs(record.timestamp, current?.endedAt ?? 0)
     const payload = record.payload
     if (record.type === 'session_meta' && typeof payload.session_id === 'string') {
       sessionId = payload.session_id
-      continue
+      return
     }
     if (record.type === 'event_msg' && payload.type === 'user_message') {
-      if (typeof payload.message !== 'string') continue
-      current = {
-        id: `${sessionId ?? 'session'}:p${blocks.length + 1}`,
-        index: blocks.length + 1,
-        prompt: payload.message,
-        reply: '',
-        activity: [],
-        startedAt: at,
-        endedAt: at
-      }
-      sawFinal = false
-      blocks.push(current)
-      continue
+      if (typeof payload.message === 'string') open(payload.message, at)
+      return
     }
-    if (!current) continue
-    if (record.type === 'event_msg' && payload.type === 'agent_message') {
-      if (typeof payload.message === 'string' && (!sawFinal || payload.phase === 'final_answer')) {
-        current.reply = payload.message
-        if (payload.phase === 'final_answer') sawFinal = true
+    if (record.type === 'event_msg' && payload.type === 'item_completed') {
+      const item = payload.item
+      if (item?.type === 'UserMessage') {
+        const prompt = codexItemText(item.content)
+        if (prompt !== null) open(prompt, at)
+      } else if (item?.type === 'AgentMessage') {
+        const text = codexItemText(item.content)
+        if (text !== null) reply(text, item.phase, at)
       }
-      current.endedAt = at
-      continue
+      return
+    }
+    if (!current) return
+    if (record.type === 'event_msg' && payload.type === 'agent_message') {
+      if (typeof payload.message === 'string') reply(payload.message, payload.phase, at)
+      else current.endedAt = at
+      return
+    }
+    if (record.type === 'event_msg' && payload.type === 'task_complete') {
+      // The turn ended and codex said so — a FINALITY marker and nothing
+      // more. It must NOT move endedAt: the previous derivation ignored this
+      // event entirely, so the block's endedAt is the last agent message's
+      // timestamp, and the stored ledger rows built on that are ground truth
+      // (the event lands 100-500ms after the reply; adopting its clock
+      // drifted 12/163 real agents on rebuild). The event also carries the
+      // closing reply verbatim — used only when no reply event landed at all
+      // (truncated reads, transitional formats), where the old parser had
+      // nothing either.
+      if (current.reply === '' && typeof payload.last_agent_message === 'string') {
+        current.reply = payload.last_agent_message
+      }
+      current.final = true
+      return
     }
     if (record.type === 'response_item' && payload.type && !CODEX_SILENT_ITEMS.has(payload.type)) {
       // Tool call open: function_call {name, arguments} / custom_tool_call
@@ -310,7 +402,23 @@ export function parseCodexTrace(lines: string[]): TraceBlock[] {
       current.endedAt = at
     }
   }
-  return blocks
+
+  return {
+    feed(lines: string[]): void {
+      for (const line of lines) feedLine(line)
+    },
+    blocks(): TraceBlock[] {
+      return blocks
+    }
+  }
+}
+
+/** Whole-rollout parse — a single feed of the accumulator, so incremental
+ *  and whole-file parsing cannot diverge. */
+export function parseCodexTrace(lines: string[]): TraceBlock[] {
+  const accumulator = createCodexTraceAccumulator()
+  accumulator.feed(lines)
+  return accumulator.blocks()
 }
 
 /** Text head of a codex output (string, or [{type:'input_text', text}]). */
@@ -340,6 +448,9 @@ interface PiMessage {
   content?: unknown
   timestamp?: number
   toolCallId?: string
+  /** Assistant messages carry the model's stop reason ('stop' | 'toolUse' |
+   *  'aborted' | 'error' | 'length' — verified on real pi session files). */
+  stopReason?: string
 }
 
 interface PiEntry {
@@ -371,10 +482,7 @@ function piText(content: unknown): string {
  * the root so `/tree` branch switches expose only the active conversation,
  * not abandoned sibling branches.
  */
-function activePiEntries(lines: string[]): PiEntry[] {
-  const entries = lines
-    .map((line) => parseLine(line) as PiEntry | null)
-    .filter((entry): entry is PiEntry => entry !== null && typeof entry.id === 'string')
+function activePiEntries(entries: readonly PiEntry[]): PiEntry[] {
   const byId = new Map(entries.map((entry) => [entry.id as string, entry]))
   const leaf = [...entries].reverse().find((entry) =>
     entry.type === 'message' || entry.type === 'compaction' || entry.type === 'branch_summary' ||
@@ -392,12 +500,12 @@ function activePiEntries(lines: string[]): PiEntry[] {
   return branch.reverse()
 }
 
-/** Active-branch transcript blocks from Pi's cwd-scoped JSONL session. */
-export function parsePiTrace(lines: string[]): TraceBlock[] {
+/** Active-branch blocks from already-parsed pi entries. */
+function buildPiBlocks(entries: readonly PiEntry[]): TraceBlock[] {
   const blocks: TraceBlock[] = []
   const pending = new Map<string, TraceToolCall>()
   let current: TraceBlock | null = null
-  for (const entry of activePiEntries(lines)) {
+  for (const entry of activePiEntries(entries)) {
     if (entry.type !== 'message' || !entry.message) continue
     const message = entry.message
     const at = piEntryTime(entry, current?.endedAt ?? 0)
@@ -437,6 +545,12 @@ export function parsePiTrace(lines: string[]): TraceBlock[] {
         const text = texts.join('\n')
         current.reply = current.reply ? `${current.reply}\n${text}` : text
       }
+      // FINALITY tracks the LATEST assistant message's stopReason, exactly
+      // like Claude's stop_reason rule: 'stop' is pi's own end-of-turn
+      // marker (verified on real session files — 'toolUse' means more of
+      // this turn is coming; 'aborted'/'error'/'length' are not completion).
+      if (message.stopReason === 'stop') current.final = true
+      else delete current.final
       current.endedAt = at
       continue
     }
@@ -447,6 +561,41 @@ export function parsePiTrace(lines: string[]): TraceBlock[] {
     }
   }
   return blocks
+}
+
+/**
+ * Streaming Pi session parser. Pi stores a TREE, and the active branch is
+ * derived from the LAST leaf backwards — a new entry can re-root the whole
+ * visible conversation — so feeding is O(Δ) (JSON.parse of the new lines
+ * only) while blocks() rebuilds the branch walk over retained parsed
+ * entries: O(entries), but with no re-parse of bytes. Memoised per feed
+ * generation so repeat reads within one poll are free.
+ */
+export function createPiTraceAccumulator(): TraceBlockAccumulator {
+  const entries: PiEntry[] = []
+  let memo: { fed: number; blocks: TraceBlock[] } | null = null
+  return {
+    feed(lines: string[]): void {
+      for (const line of lines) {
+        const entry = parseLine(line) as PiEntry | null
+        if (entry !== null && typeof entry.id === 'string') entries.push(entry)
+      }
+    },
+    blocks(): TraceBlock[] {
+      if (memo === null || memo.fed !== entries.length) {
+        memo = { fed: entries.length, blocks: buildPiBlocks(entries) }
+      }
+      return memo.blocks
+    }
+  }
+}
+
+/** Active-branch transcript blocks from Pi's cwd-scoped JSONL session —
+ *  a single feed of the accumulator, so the two paths cannot diverge. */
+export function parsePiTrace(lines: string[]): TraceBlock[] {
+  const accumulator = createPiTraceAccumulator()
+  accumulator.feed(lines)
+  return accumulator.blocks()
 }
 
 // ---- cheap identity+title listing (fan / timeline full range) ----
@@ -581,24 +730,50 @@ export function pageTraceBlocks(blocks: TraceBlock[], request: TracePageRequest 
 /** Longest reply text carried into a TurnRecord (parity with session-turns). */
 const MAX_TURN_REPLY_CHARS = 4000
 
-/** Trace blocks → TurnRecords: same identity, prompt, reply, timestamps. */
+/** Trace blocks → TurnRecords: same identity, prompt, reply, timestamps.
+ *
+ * FINALITY (Sol round-2 P0 — a file-backed dispatch must be closable): every
+ * NON-TAIL record is final, because a later user prompt in an append-only
+ * file is positive evidence the earlier exchange ended (the same next-user
+ * rule the Claude accumulator applies). The TAIL record claims final only
+ * from a marker the harness itself wrote (TraceBlock.final — codex
+ * `task_complete`, pi `stopReason: 'stop'`); a tail mid-stream stays open. */
 export function turnRecordsOf(blocks: TraceBlock[]): TurnRecord[] {
-  return blocks.map((block) => ({
+  const tail = blocks.length - 1
+  return blocks.map((block, at) => ({
     index: block.index,
     prompt: block.prompt,
     reply: block.reply.slice(0, MAX_TURN_REPLY_CHARS),
     uuid: block.id,
     startedAt: block.startedAt,
-    endedAt: block.endedAt
+    endedAt: block.endedAt,
+    ...(at < tail || block.final === true ? { final: true } : {})
   }))
 }
 
-/** Codex rollout JSONL → durable turn history. */
-export function parseCodexTurns(lines: string[]): TurnRecord[] {
-  return turnRecordsOf(parseCodexTrace(lines))
+/** A TraceBlockAccumulator wrapped as the SessionTurnAccumulator shape
+ *  SessionTurnSync resumes — records() re-derives finality positionally, so
+ *  a block that stops being the tail becomes final exactly on the feed that
+ *  brought the next prompt. */
+function turnAccumulatorOver(blockAccumulator: TraceBlockAccumulator): SessionTurnAccumulator {
+  return {
+    feed: (lines) => blockAccumulator.feed(lines),
+    records: () => turnRecordsOf(blockAccumulator.blocks())
+  }
 }
 
-/** Pi session JSONL (active branch) → durable turn history. */
-export function parsePiTurns(lines: string[]): TurnRecord[] {
-  return turnRecordsOf(parsePiTrace(lines))
-}
+/** Codex rollout JSONL → durable turn history (resumable: O(Δ) reconcile). */
+export const parseCodexTurns: StreamingTurnParser = Object.assign(
+  function parseCodexTurns(lines: string[]): TurnRecord[] {
+    return turnRecordsOf(parseCodexTrace(lines))
+  },
+  { createAccumulator: () => turnAccumulatorOver(createCodexTraceAccumulator()) }
+)
+
+/** Pi session JSONL (active branch) → durable turn history (resumable). */
+export const parsePiTurns: StreamingTurnParser = Object.assign(
+  function parsePiTurns(lines: string[]): TurnRecord[] {
+    return turnRecordsOf(parsePiTrace(lines))
+  },
+  { createAccumulator: () => turnAccumulatorOver(createPiTraceAccumulator()) }
+)

@@ -139,6 +139,14 @@ export interface MobileApiDeps {
    * both. Absent = no serialization (embedders/tests without a tracker).
    */
   hasArmedDispatch?: (terminalId: string) => boolean;
+  /**
+   * A4 subscriber facts: a live terminal stream is a watcher, so its open
+   * must hold (and may start) the session-file observation, and its close
+   * must hand the terminal back to the drain clock. Optional so this module
+   * serves before the sync is wired.
+   */
+  subscribeTerminal?: (terminalId: string) => void;
+  unsubscribeTerminal?: (terminalId: string) => void;
 }
 
 /** Base64 inflates ~4/3, so this admits attachments up to the 20MB save cap. */
@@ -641,9 +649,12 @@ export async function handleMobileApi(
   // stamp is armed on a terminal, a second HTTP producer typing into it would
   // interleave two principals' work in one input box AND break the
   // prompt-identity correlation that closes the dispatch — refuse 409 and let
-  // the dispatch close first. Local canvas typing (IPC) is deliberately NOT
-  // serialized: the owner at the keyboard outranks the machinery.
-  const httpProducerMatch = p.match(/^\/api\/terminal\/([^/]+)\/(input|ask)$/);
+  // the dispatch close first. /raw is a producer too — it writes arbitrary
+  // bytes (a prompt plus Enter included) straight into the same input box, so
+  // leaving it outside the choke point was a reservation with a side door.
+  // Local canvas typing (IPC) is deliberately NOT serialized: the owner at
+  // the keyboard outranks the machinery.
+  const httpProducerMatch = p.match(/^\/api\/terminal\/([^/]+)\/(input|ask|raw)$/);
   if (
     httpProducerMatch &&
     method === "POST" &&
@@ -684,6 +695,8 @@ export async function handleMobileApi(
     }
     if (method === "GET" && ptyMatch[2] === "stream") {
       const send = startSse(response);
+      // The viewer is a tracking fact from the first byte (A4).
+      deps.subscribeTerminal?.(ptyMatch[1]);
       // GEOMETRY FIRST, then the frame. The phone opens its xterm at its own
       // size (measured: 45x24 while the pane was still 100x30) and the resize
       // kick only arrives AFTER the first paint — so a frame applied before
@@ -707,6 +720,8 @@ export async function handleMobileApi(
         session.removeListener("data", onData);
         session.removeListener("replay", onReplay);
         session.removeListener("exit", onExit);
+        // Abrupt closes included — unsubscribe is double-call safe.
+        deps.unsubscribeTerminal?.(ptyMatch[1]);
       });
       return true;
     }
