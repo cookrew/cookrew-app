@@ -206,8 +206,16 @@ export interface DispatchDeps {
   /** The token join: Cookrew's node id → the multiplexer's session name. */
   sessionNameFor: (agentId: string) => string
   sessionExists: (sessionName: string) => boolean
-  /** Visible pane transcript, attach-free. Null when the pane is gone. */
-  capture: (sessionName: string) => string | null
+  /**
+   * Visible pane transcript, attach-free. Null when the pane is gone.
+   *
+   * MAY BE ASYNC (Sol r10 P1): every read of this dep happens inside the
+   * async delivery leg, which awaits it — so the conductor can wire the
+   * herdr backend's captureAsync (cached pane resolution + async CLI child)
+   * and a delivery leg forks nothing synchronously on Electron main. A sync
+   * wiring (tmux, tests) still typechecks and behaves identically.
+   */
+  capture: (sessionName: string) => string | null | Promise<string | null>
   /**
    * The same pane, reaching back into scrollback — for "did this prompt ever
    * arrive?", which a viewport-sized capture answers NO for as soon as a long
@@ -218,8 +226,9 @@ export interface DispatchDeps {
    * /compact deep in the scrollback would refuse a perfectly serviceable
    * agent forever. Depth helps one question and lies about the other.
    * Absent = the backend cannot go deeper, and `capture` answers both.
+   * May be async, exactly as `capture` (Sol r10 P1).
    */
-  captureDeep?: (sessionName: string) => string | null
+  captureDeep?: (sessionName: string) => string | null | Promise<string | null>
   /**
    * Native submission. Optional exactly as on the Multiplexer: a backend
    * without agent lifecycle cannot dispatch, and saying 503 beats typing into
@@ -1450,11 +1459,12 @@ export class DispatchService {
     // The slot is held until the record reaches a terminal state.
     //
     // Started on a setImmediate, not inline: deliver()'s first act is a deep
-    // capture and the backend implements captures with synchronous CLI calls,
-    // so an inline start made the 202 wait on pane reads it does not need.
-    // The macrotask hop lets the response leave first; the admission reads
-    // above (sessionExists, the context-full capture) are still synchronous —
-    // that is the conductor's caching seam, not this one.
+    // capture — awaited, and with the herdr async wiring never a synchronous
+    // fork (Sol r10 P1); a sync backend (tmux) still pays its CLI call inside
+    // the leg, so an inline start would make the 202 wait on pane reads it
+    // does not need. The macrotask hop lets the response leave first; the
+    // admission reads above (sessionExists) answer from the conductor's
+    // cached inventory, never a fork.
     this.inFlight.set(
       record.id,
       new Promise<void>((resolve) => setImmediate(resolve))
@@ -1510,13 +1520,14 @@ export class DispatchService {
     // the canceller's parked intent on the lattice.
     if (!this.deliveryLive(dispatchId, agentId)) return
     // Context-full is checked HERE, not at admission (Sol r3 P1-15): it needs
-    // a pane capture, and captures are synchronous CLI forks the 202 must not
-    // wait on. A full agent swallows prompts whole (measured 2026-08-13:
-    // herdr said idle, the brief vanished), so refusing to deliver is the
-    // honest outcome — a delivery FAILURE the caller can act on, using the
-    // plain screen capture on purpose (a deep one can dredge up a stale
-    // "100% context used" footer from before a /compact).
-    if (contextExhausted(this.deps.capture(sessionName))) {
+    // a pane capture, and a capture is a CLI child the 202 must not wait on
+    // (awaited here — and with the async herdr wiring, never a synchronous
+    // fork at all; Sol r10 P1). A full agent swallows prompts whole (measured
+    // 2026-08-13: herdr said idle, the brief vanished), so refusing to
+    // deliver is the honest outcome — a delivery FAILURE the caller can act
+    // on, using the plain screen capture on purpose (a deep one can dredge up
+    // a stale "100% context used" footer from before a /compact).
+    if (contextExhausted(await this.deps.capture(sessionName))) {
       this.update(dispatchId, { state: 'failed', error: 'context-full' })
       return
     }
@@ -1525,7 +1536,7 @@ export class DispatchService {
     // last look before the prompt goes out — and taken ONCE: this capture and
     // the single post-submission one below are the only pane reads this leg
     // makes, reused by every question that follows.
-    const before = this.deepCapture(sessionName)
+    const before = await this.deepCapture(sessionName)
     // The ATTEMPTED-delivery fact goes to the tracker BEFORE the blocking
     // native submission (Sol r4 P1): herdr `agent prompt` blocks until the
     // agent leaves working, so a fact registered only on return can arrive
@@ -1681,7 +1692,7 @@ export class DispatchService {
       return
     }
 
-    const after = this.deepCapture(sessionName)
+    const after = await this.deepCapture(sessionName)
     if (promptLanded(after, prompt)) {
       // F2: the prompt IS in the pane and herdr simply could not watch it
       // arrive. Stop here. Re-sending would queue a duplicate in a live
@@ -1757,8 +1768,10 @@ export class DispatchService {
   }
 
   /** Scrollback where the backend has it, the plain screen where it does not. */
-  private deepCapture(sessionName: string): string | null {
-    return this.deps.captureDeep?.(sessionName) ?? this.deps.capture(sessionName)
+  private async deepCapture(sessionName: string): Promise<string | null> {
+    const deep =
+      this.deps.captureDeep !== undefined ? await this.deps.captureDeep(sessionName) : null
+    return deep ?? (await this.deps.capture(sessionName))
   }
 
   /** True = the agent is not working, false = it is, null = nobody can say. */

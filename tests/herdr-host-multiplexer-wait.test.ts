@@ -41,6 +41,29 @@ function runner(): CommandRunner {
 const mux = (): HerdrHostMultiplexer =>
   new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner: runner() })
 
+/**
+ * The delivery legs (submitAgent) resolve their pane from the CACHED
+ * inventory and check the registry on the ASYNC runner now (Sol r10 P1) —
+ * zero synchronous forks — so their backend answers ride the async seam and
+ * the cache is warmed before the call.
+ */
+const warmMux = async (): Promise<HerdrHostMultiplexer> => {
+  const backend = new HerdrHostMultiplexer({
+    session: 'cookrewtest',
+    configPath: '/c',
+    runner: runner(),
+    asyncRunner: async (args) => {
+      const key = args.slice(0, 2).join(' ')
+      if (key === 'pane list') return PANE_LIST
+      if (key === 'agent get') return AGENT_GET
+      throw new Error(`no scripted async reply for ${key}`)
+    }
+  })
+  backend.primeAdmissionCache()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  return backend
+}
+
 beforeEach(() => {
   vi.mocked(waitForAgentState).mockClear()
   vi.mocked(submitViaHerdr).mockClear()
@@ -70,7 +93,8 @@ describe('waitUntilIdle — the reply-wait leg is cancellable (Sol r9)', () => {
 describe('submitAgent — the submission leg already carries the signal (verified)', () => {
   it('threads the AbortSignal through to submitViaHerdr', async () => {
     const controller = new AbortController()
-    await expect(mux().submitAgent('cookrew_abc', 'the brief', 1000, controller.signal))
+    const backend = await warmMux()
+    await expect(backend.submitAgent('cookrew_abc', 'the brief', 1000, controller.signal))
       .resolves.toBe('submitted')
     expect(vi.mocked(submitViaHerdr)).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -80,5 +104,21 @@ describe('submitAgent — the submission leg already carries the signal (verifie
         signal: controller.signal
       })
     )
+  })
+
+  it('answers a COLD inventory with an honest failed, never a synchronous fork (Sol r10)', async () => {
+    // No prime: the cache is cold. The sync runner would throw on any
+    // unscripted fork; instead the leg kicks the async refresh and refuses.
+    const backend = new HerdrHostMultiplexer({
+      session: 'cookrewtest',
+      configPath: '/c',
+      runner: { run: () => { throw new Error('sync fork on a delivery leg') }, runQuiet: () => {}, probe: () => true },
+      asyncRunner: async () => PANE_LIST
+    })
+    await expect(backend.submitAgent('cookrew_abc', 'the brief', 1000)).resolves.toBe('failed')
+    expect(vi.mocked(submitViaHerdr)).not.toHaveBeenCalled()
+    // The refusal kicked the refresh: once it publishes, the retry succeeds.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await expect(backend.submitAgent('cookrew_abc', 'the brief', 1000)).resolves.toBe('submitted')
   })
 })

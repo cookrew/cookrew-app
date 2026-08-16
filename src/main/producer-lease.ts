@@ -75,9 +75,19 @@
 // caller owns its hold's lifetime and releases in a `finally`; a retired
 // holder's release is a no-op, so retirement and orderly release compose.
 //
-// Pure map-over-ids state, no I/O — the whole matrix is unit-testable.
+// DURABLE PROVENANCE (Sol r10 P0-1): both marks — owner-editing and
+// contamination — describe the REAL input box of a pane that deliberately
+// outlives this process. An attached InputProvenanceStore makes them survive
+// it: dirtying writes hit the WAL before the byte crosses the pane boundary
+// (noteBytesEntering, called by the PTY write paths), marks write through,
+// clears and retirement clear durably, and a NEW process adopts a recorded
+// fact fail-closed at first sight of the terminal id. Without a store
+// (tests, embedders) the lease is the pure in-memory object it always was.
+//
+// Pure map-over-ids state otherwise — the whole matrix is unit-testable.
 
 import { randomUUID } from 'node:crypto'
+import type { InputProvenanceStore } from './input-provenance'
 
 /** The named refusal every producer surfaces while the buffer is dirty. */
 export const CONTAMINATED_REFUSAL =
@@ -130,6 +140,27 @@ function sameHolder(a: ProducerHolder, b: ProducerHolder): boolean {
 }
 
 export class ProducerLease {
+  /**
+   * The durable input-provenance WAL, when wired (production: PtyManager
+   * attaches the default store at construction; tests inject their own or
+   * none). Null = process-memory-only marks, the pre-r10 behavior.
+   */
+  private provenance: InputProvenanceStore | null
+
+  constructor(provenance: InputProvenanceStore | null = null) {
+    this.provenance = provenance
+  }
+
+  /**
+   * Late wiring for the shared default instance: the conductor's module graph
+   * constructs the lease before anything owns a state directory, so the store
+   * arrives when the PTY plane boots. Must precede seeding and first-sight
+   * queries — attach only affects adoption from this point on.
+   */
+  attachProvenance(store: InputProvenanceStore): void {
+    this.provenance = store
+  }
+
   private readonly holds = new Map<string, Hold>()
   /** terminalId → current generation; absent reads as 0. */
   private readonly generations = new Map<string, number>()
@@ -169,16 +200,40 @@ export class ProducerLease {
    * eviction for as long as it lives. Idempotent; a retire between register
    * calls (a CWD rebind's retire-then-respawn) keeps the pin — the entry
    * belongs to the id's lifetime, not to any one generation.
+   *
+   * EXISTENCE, not attachment (Sol r10 P1): registration is about the durable
+   * terminal NODE — its pane may be alive with no PTY attach in this process
+   * (an inactive workspace, a background dispatch target). Wiring it only at
+   * spawn left exactly those attach-free targets unpinned; seedLive covers
+   * them at store load. Registration is also a first-sight point: a durable
+   * provenance fact recorded by the previous process adopts here.
    */
   registerTerminal(terminalId: string): void {
+    this.adopt(terminalId)
     this.live.add(terminalId)
   }
 
   /**
-   * The terminal id is PERMANENTLY gone (node removed): release the liveness
-   * pin. The generation entry remains as an ordinary bounded tombstone so
-   * stale async legs still fail their generation checks until the tombstone
-   * window drains — exactly the pre-liveness behavior for dead ids.
+   * Pin EVERY terminal node the workspace store knows about, attached or not
+   * (Sol r10 P1) — called by the conductor once at store load, before any
+   * dispatch can target a cold detached node. Idempotent per id (registration
+   * is a Set add), so overlapping seeds and later spawnTracked registrations
+   * compose.
+   */
+  seedLive(ids: Iterable<string>): void {
+    for (const id of ids) this.registerTerminal(id)
+  }
+
+  /**
+   * The terminal id is PERMANENTLY gone (node removed, workspace removed,
+   * terminal cut): release the liveness pin. The generation entry remains as
+   * an ordinary bounded tombstone so stale async legs still fail their
+   * generation checks until the tombstone window drains — exactly the
+   * pre-liveness behavior for dead ids.
+   *
+   * IDEMPOTENT and order-free (Sol r10 P1): a Set delete, so every permanent
+   * removal path — removeNode, workspace delete, both cut legs — calls it
+   * without coordinating; double-forget and forget-then-register both behave.
    */
   forgetTerminal(terminalId: string): void {
     this.live.delete(terminalId)
@@ -196,6 +251,33 @@ export class ProducerLease {
    * and backend death.
    */
   retire(terminalId: string): void {
+    this.retireOne(terminalId, true)
+  }
+
+  /**
+   * PROCESS SHUTDOWN, not pane endings (Sol r10 P1): bump every known
+   * generation so each in-flight leg — native asks blocked in their CLI
+   * children foremost — observes retirement (onRetire fires per id, aborting
+   * their controllers) and every stranded hold dies with this process instead
+   * of pinning state into teardown. The panes themselves stay ALIVE for the
+   * next launch, which is exactly why this is NOT a durable clear: the WAL's
+   * dirty/contaminated facts describe input boxes that survive the quit and
+   * must be adopted by the next process. Only `retire` — a permanent pane
+   * ending — clears the durable record.
+   */
+  retireAll(): void {
+    const known = new Set<string>([
+      ...this.live,
+      ...this.generations.keys(),
+      ...this.holds.keys(),
+      ...this.contaminated.keys(),
+      ...this.ownerEditing.keys()
+    ])
+    for (const id of known) this.retireOne(id, false)
+  }
+
+  /** One retirement; `durable` says whether the pane itself is gone too. */
+  private retireOne(terminalId: string, durable: boolean): void {
     const next = this.generationOf(terminalId) + 1
     this.holds.delete(terminalId)
     // Delete-then-set refreshes Map insertion order, so the tombstone bound
@@ -204,6 +286,10 @@ export class ProducerLease {
     this.generations.set(terminalId, next)
     this.contaminated.delete(terminalId)
     this.ownerEditing.delete(terminalId)
+    // A permanently ended pane takes its input box with it: the durable fact
+    // (and any unadopted record) is proven moot — the r10 WAL's one
+    // retirement clear. Shutdown (retireAll) deliberately skips this.
+    if (durable) this.provenance?.clear(terminalId)
     this.boundGenerations()
     for (const listener of [...this.retireListeners]) listener(terminalId)
   }
@@ -283,6 +369,9 @@ export class ProducerLease {
     const current = this.generationOf(terminalId)
     if (generation !== undefined && generation !== current) return
     this.contaminated.set(terminalId, current)
+    // Durable too (Sol r10 P0-1): the stranded paste sits in a pane that
+    // outlives this process, so the fact must outlive it as well.
+    this.provenance?.markContaminated(terminalId)
   }
 
   /**
@@ -294,6 +383,7 @@ export class ProducerLease {
    * process with a provably empty input box.
    */
   isContaminated(terminalId: string): boolean {
+    this.adopt(terminalId)
     return this.contaminated.get(terminalId) === this.generationOf(terminalId)
   }
 
@@ -308,6 +398,11 @@ export class ProducerLease {
     const current = this.generationOf(terminalId)
     if (generation !== undefined && generation !== current) return
     this.ownerEditing.set(terminalId, current)
+    // Belt for the WAL: the PTY write path already recorded the dirty fact
+    // before the byte crossed (noteBytesEntering); bytes that reached the
+    // tracker some other way (noteExternalInput) still land here. Debounced —
+    // an existing record costs nothing.
+    this.provenance?.markDirty(terminalId)
   }
 
   /**
@@ -321,12 +416,55 @@ export class ProducerLease {
    * bytes must keep the mark.
    */
   clearOwnerEditing(terminalId: string): void {
+    // Adopt BEFORE clearing: a pending durable fact must not resurrect the
+    // mark on the next query after proof already consumed it here.
+    this.adopt(terminalId)
     this.ownerEditing.delete(terminalId)
+    // The durable record clears with the proof (Sol r10 P0-1) — UNLESS the
+    // stronger contaminated fact stands: contamination's only exit is
+    // retirement, in memory and on disk alike.
+    if (this.contaminated.get(terminalId) !== this.generationOf(terminalId)) {
+      this.provenance?.clear(terminalId)
+    }
   }
 
   /** Is the owner composing in this terminal's input box right now? */
   isOwnerEditing(terminalId: string): boolean {
+    this.adopt(terminalId)
     return this.ownerEditing.get(terminalId) === this.generationOf(terminalId)
+  }
+
+  /**
+   * WRITE-AHEAD dirty fact (Sol r10 P0-1): called by the PTY write paths —
+   * tagged and untagged alike — BEFORE the bytes cross the pane boundary, and
+   * by pasteAndSubmit before its paste write. `data`, when given, lets the
+   * store skip chunks that cannot leave input-box content (mouse reports,
+   * arrows, fully-consumed submits — see dirtiesInputBox). Purely durable: the
+   * in-memory owner-editing mark stays the tracker's to maintain, because a
+   * dispatch's own tagged paste dirties the BOX without being owner
+   * composition.
+   */
+  noteBytesEntering(terminalId: string, data?: string): void {
+    this.provenance?.markDirty(terminalId, data)
+  }
+
+  /**
+   * First sight of a terminal id in this process: adopt the previous
+   * process's durable fact fail-closed — 'dirty' as the owner-editing mark,
+   * 'contaminated' as contamination — at the CURRENT generation, from where
+   * the ordinary clear rules (observed submit, proven single-line clear,
+   * retirement) govern it. Absence adopts clean: every dirtying write was
+   * WAL-first, so no record is evidence of an empty box. The false-dirty
+   * asymmetry (crash between WAL mark and byte write) resolves through the
+   * same rules — one submit or restart clears it.
+   */
+  private adopt(terminalId: string): void {
+    if (this.provenance === null) return
+    const fact = this.provenance.takeAdoptable(terminalId)
+    if (fact === null) return
+    const current = this.generationOf(terminalId)
+    if (fact === 'contaminated') this.contaminated.set(terminalId, current)
+    else this.ownerEditing.set(terminalId, current)
   }
 
   /**

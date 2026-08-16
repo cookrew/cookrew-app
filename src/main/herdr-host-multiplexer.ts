@@ -69,6 +69,21 @@ export const HERDR_SESSION = 'cookrew'
 /** Bare shells — what a restored husk runs, and what a live agent never is. */
 const SHELL_NAMES = /^(sh|bash|zsh|fish|dash|ksh)$/
 
+/**
+ * The admission inventory's freshness contract (Sol r4/I6): a snapshot older
+ * than this kicks one async refresh behind itself. Shared by existence
+ * (sessionExistsCached) and pane RESOLUTION (paneFromInventory) — the same
+ * bounded staleness, the same stale-serve discipline.
+ */
+const ADMISSION_FRESH_MS = 500
+
+/** An unref'd wait — background retries must never hold the app open. */
+const sleepUnref = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    timer.unref?.()
+  })
+
 /** A pane herdr reports in `pane list`. Only the fields Cookrew reads. */
 export interface HerdrPane {
   pane_id: string
@@ -614,10 +629,40 @@ export class HerdrHostMultiplexer implements Multiplexer {
 
   sessionExistsCached(name: string): boolean {
     if (this.attachSnapshot) return this.sessionExists(name)
-    if (!this.admissionCache || Date.now() - this.admissionCache.at > 500) {
+    if (!this.admissionCache || Date.now() - this.admissionCache.at > ADMISSION_FRESH_MS) {
       this.refreshAdmissionCacheSoon()
     }
     return this.admissionCache?.panes.some((pane) => pane.label === name) ?? false
+  }
+
+  /**
+   * Pane RESOLUTION from the cached inventory — never a synchronous fork
+   * (Sol r10 P1). The DELIVERY paths (submitAgent/promptAgent, the async
+   * captures, the transcript-binding report) used to resolve their pane via
+   * paneFor → panes → readPanes, which forks the CLI inline on Electron main
+   * for every cache miss; concurrent dispatches serialized a per-agent spawn
+   * chain there, against A5's one-inventory rule.
+   *
+   * Stale-serve, exactly as sessionExistsCached: an expired snapshot answers
+   * while one async refresh runs behind it — the id↔label binding is far more
+   * stable than existence, and a pane that died inside the window becomes a
+   * classified delivery failure moments later. Only a truly COLD cache
+   * misses: the refresh is kicked and null is returned, so the caller reports
+   * an honest retryable failure. THE TRADEOFF, STATED: a cold cache turns
+   * into one classified retryable failure ('failed' / null — the engine
+   * already classifies honest delivery failures and retries via sweep and
+   * landing checks) instead of a main-thread stall. Lifecycle decisions
+   * (create/kill/reattach) must NEVER read this — they keep readPanes(), so
+   * nothing is created or killed from a cached answer.
+   */
+  private paneFromInventory(name: string): HerdrPane | null {
+    if (this.attachSnapshot) {
+      return this.attachSnapshot.find((pane) => pane.label === name) ?? null
+    }
+    if (!this.admissionCache || Date.now() - this.admissionCache.at > ADMISSION_FRESH_MS) {
+      this.refreshAdmissionCacheSoon()
+    }
+    return this.admissionCache?.panes.find((pane) => pane.label === name) ?? null
   }
 
   /**
@@ -1175,8 +1220,32 @@ export class HerdrHostMultiplexer implements Multiplexer {
     }
   }
 
+  /**
+   * The same registry question on the ASYNC runner (Sol r10 P1): the delivery
+   * legs are already async, and the sync `agent get` was one more inline fork
+   * on Electron main per submission. Bounded like the admission refresh; a
+   * spawn/exit/timeout failure reads as unresolvable, which the caller maps
+   * to the honest 'failed'.
+   */
+  private async agentResolvableAsync(paneId: string): Promise<boolean> {
+    try {
+      return parseEnvelope(await this.asyncRunner(['agent', 'get', paneId], 3000)) !== null
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Pane resolution rides the cached inventory (Sol r10 P1): a capture on a
+   * cold cache answers null — "no view of the pane", which every caller
+   * already tolerates — while the refresh runs, instead of forking readPanes
+   * inline. The read itself remains one bounded synchronous CLI call for the
+   * Multiplexer interface's synchronous callers (board pane snapshots); the
+   * dispatch engine's delivery legs use captureAsync/captureDeepAsync below,
+   * which fork nothing synchronously at all.
+   */
   capture(name: string): string | null {
-    const pane = this.paneFor(name)
+    const pane = this.paneFromInventory(name)
     if (!pane) return null
     try {
       // recent-unwrapped: scrollback with herdr's soft wrapping undone, which
@@ -1189,7 +1258,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
 
   /** The same read, reaching `lines` rows back instead of herdr's default. */
   captureDeep(name: string, lines: number): string | null {
-    const pane = this.paneFor(name)
+    const pane = this.paneFromInventory(name)
     if (!pane) return null
     try {
       return this.herdr([
@@ -1197,6 +1266,46 @@ export class HerdrHostMultiplexer implements Multiplexer {
         '--source', 'recent-unwrapped',
         '--lines', String(Math.max(1, lines))
       ])
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * The DELIVERY-LEG capture (Sol r10 P1): pane resolved from the cached
+   * inventory, the read itself on the async runner — zero synchronous runner
+   * calls on Electron main, which is the structural gate dispatch enforces.
+   * Null on a cold cache or a failed read; the engine classifies both as the
+   * honest "no view of the pane" it already handles (F3: unconfirmed is not
+   * undelivered). The conductor wires the dispatch deps' capture/captureDeep
+   * here for herdr hosts.
+   */
+  async captureAsync(name: string): Promise<string | null> {
+    const pane = this.paneFromInventory(name)
+    if (!pane) return null
+    try {
+      return await this.asyncRunner(
+        ['pane', 'read', pane.pane_id, '--source', 'recent-unwrapped'],
+        5000
+      )
+    } catch {
+      return null
+    }
+  }
+
+  /** captureAsync, reaching `lines` rows back — the landing-check depth. */
+  async captureDeepAsync(name: string, lines: number): Promise<string | null> {
+    const pane = this.paneFromInventory(name)
+    if (!pane) return null
+    try {
+      return await this.asyncRunner(
+        [
+          'pane', 'read', pane.pane_id,
+          '--source', 'recent-unwrapped',
+          '--lines', String(Math.max(1, lines))
+        ],
+        5000
+      )
     } catch {
       return null
     }
@@ -1263,22 +1372,66 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * the main process for exactly that long.
    */
   /**
+   * Transcript-binding reports currently in flight, keyed name+path — the
+   * single-flight guard for reportAgentSession (Sol r10 P1). Bounded by
+   * distinct live bindings: an entry dies when its async report (retries
+   * included) settles.
+   */
+  private readonly sessionReports = new Set<string>()
+
+  /**
    * Report the agent's transcript path to herdr.
    *
    * The `--agent` label is REQUIRED by the CLI, and it is read back off the
    * pane rather than threaded down from the caller: herdr already stores what
    * `report-agent` declared, so the value survives an app restart where the
    * pane exists but Cookrew never re-ran ensureSession for it.
+   *
+   * ASYNC-SAFE (Sol r10 P1): this sits on the dispatch accept path —
+   * beginWork → watchSessionTurns calls it before the 202 — and the old
+   * shape ran paneFor → readPanes plus the `quiet` report as TWO synchronous
+   * forks there. The pane now resolves from the cached inventory and the
+   * report rides the async runner, fire-and-forget and single-flight per
+   * name+path. A cold cache SKIPS the report and retries asynchronously
+   * once the kicked refresh publishes (bounded attempts, unref'd waits) —
+   * dropping a beat is safe because the binding is idempotent and re-reported
+   * on every attach and every watch refresh anyway.
    */
   reportAgentSession(name: string, sessionPath: string): void {
-    const pane = this.paneFor(name)
-    if (!pane) return
-    this.quiet([
-      'pane', 'report-agent-session', pane.pane_id,
-      '--source', 'cookrew',
-      '--agent', pane.agent && pane.agent.length > 0 ? pane.agent : 'shell',
-      '--agent-session-path', sessionPath
-    ])
+    const key = `${name} ${sessionPath}`
+    if (this.sessionReports.has(key)) return
+    this.sessionReports.add(key)
+    void this.reportAgentSessionAsync(name, sessionPath).finally(() => {
+      this.sessionReports.delete(key)
+    })
+  }
+
+  /** The async body: resolve from cache, retry briefly across a cold window. */
+  private async reportAgentSessionAsync(name: string, sessionPath: string): Promise<void> {
+    // The retry cadence rides settleMs (tests shrink it): paneFromInventory
+    // kicks the refresh on a stale/cold cache, and one publish interval is
+    // all a live pane needs to appear.
+    const retryMs = Math.min(this.settleMs, 1000)
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const pane = this.paneFromInventory(name)
+      if (pane) {
+        try {
+          await this.asyncRunner(
+            [
+              'pane', 'report-agent-session', pane.pane_id,
+              '--source', 'cookrew',
+              '--agent', pane.agent && pane.agent.length > 0 ? pane.agent : 'shell',
+              '--agent-session-path', sessionPath
+            ],
+            3000
+          )
+        } catch {
+          // Best effort by contract — the binding re-reports on every attach.
+        }
+        return
+      }
+      await sleepUnref(retryMs)
+    }
   }
 
   /**
@@ -1295,9 +1448,12 @@ export class HerdrHostMultiplexer implements Multiplexer {
     timeoutMs: number,
     signal?: AbortSignal
   ): Promise<'done' | 'submitted' | 'failed'> {
-    const pane = this.paneFor(name)
+    // Cached resolution + async registry check (Sol r10 P1): the delivery
+    // leg forks nothing synchronously. A cold cache is an honest 'failed' —
+    // the engine classifies it and retries — with the refresh already kicked.
+    const pane = this.paneFromInventory(name)
     if (!pane) return 'failed'
-    if (!this.agentResolvable(pane.pane_id)) return 'failed'
+    if (!(await this.agentResolvableAsync(pane.pane_id))) return 'failed'
     return promptViaHerdr({
       session: this.session,
       configPath: this.configPath,
@@ -1320,9 +1476,11 @@ export class HerdrHostMultiplexer implements Multiplexer {
     timeoutMs: number,
     signal?: AbortSignal
   ): Promise<'submitted' | 'failed'> {
-    const pane = this.paneFor(name)
+    // Same discipline as promptAgent (Sol r10 P1): cached resolution, async
+    // registry check, zero synchronous forks on the delivery leg.
+    const pane = this.paneFromInventory(name)
     if (!pane) return 'failed'
-    if (!this.agentResolvable(pane.pane_id)) return 'failed'
+    if (!(await this.agentResolvableAsync(pane.pane_id))) return 'failed'
     return submitViaHerdr({
       session: this.session,
       configPath: this.configPath,

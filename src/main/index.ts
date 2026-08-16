@@ -24,7 +24,7 @@ import {
   turnDetails
 } from './dispatch'
 import { HerdrHostMultiplexer } from './herdr-host-multiplexer'
-import { pasteAndSubmit } from './ask'
+import { cancelAllAsks, pasteAndSubmit } from './ask'
 import { defaultProducerLease } from './producer-lease'
 import {
   boardSourcesFrom,
@@ -110,6 +110,11 @@ const dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const store = new WorkspaceStore()
 const ptys = new PtyManager()
+// Liveness covers EXISTENCE, not attachment: every terminal node — including
+// inactive-workspace agents this process never spawns an attach for — pins
+// its lease generation against tombstone eviction, and any write-ahead
+// input-provenance fact from the previous process adopts fail-closed here.
+defaultProducerLease().seedLive(store.terminalsAcross().map((node) => node.id))
 /**
  * terminal.booted (p95-p98 spec, wave 3): spawn → the agent is reachable.
  *
@@ -746,12 +751,25 @@ const dispatchService = new DispatchService({
     if (mux instanceof HerdrHostMultiplexer) return mux.sessionExistsCached(name)
     return mux?.sessionExists(name) === true
   },
-  capture: (name) => multiplexer()?.capture(name) ?? null,
+  // Async capture for the delivery legs (Sol r10): the pane read rides the
+  // async runner off the main thread; a cold inventory classifies as a
+  // retryable failure instead of a synchronous fork.
+  capture: (name) => {
+    const mux = multiplexer()
+    if (mux instanceof HerdrHostMultiplexer) return mux.captureAsync(name)
+    return mux?.capture(name) ?? null
+  },
   // The deep read the landing check needs: "is the prompt on screen?" is what
   // a re-send hangs on, and a viewport-sized capture answers no for every
   // prompt a long turn has already scrolled past. Backends that cannot go
   // deeper simply have no captureDeep and the engine uses the plain one.
-  captureDeep: (name) => multiplexer()?.captureDeep?.(name, DISPATCH_CAPTURE_LINES) ?? null,
+  captureDeep: (name) => {
+    const mux = multiplexer()
+    if (mux instanceof HerdrHostMultiplexer) {
+      return mux.captureDeepAsync(name, DISPATCH_CAPTURE_LINES)
+    }
+    return mux?.captureDeep?.(name, DISPATCH_CAPTURE_LINES) ?? null
+  },
   agentStatus: (name) => agentStatus(name),
   promptAgent: (name, prompt, timeoutMs, signal) => {
     const mux = multiplexer()
@@ -949,6 +967,7 @@ function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
     // An open dispatch dies WITH its workspace — interrupted (infrastructure),
     // never left submitted/busy until the sweep (Sol r1 P1).
     retireTerminal(id, 'workspace removed')
+    defaultProducerLease().forgetTerminal(id)
     ptys.killDetached(id)
     turns.untrack(id)
     // Keep turn history as the recovery signal (see removeNode, R2 fix).
@@ -1341,6 +1360,7 @@ const teamClipboard = new TeamClipboard({
     for (const node of state.nodes) {
       if (node.kind !== 'terminal' || !nodeIds.includes(node.id)) continue
       retireTerminal(node.id, 'terminal cut')
+      defaultProducerLease().forgetTerminal(node.id)
       await ptys.killAndWait(node.id)
     }
   },
@@ -1349,6 +1369,7 @@ const teamClipboard = new TeamClipboard({
     for (const node of state.nodes) {
       if (node.kind !== 'terminal' || !nodeIds.includes(node.id)) continue
       retireTerminal(node.id, 'terminal cut')
+      defaultProducerLease().forgetTerminal(node.id)
       ptys.kill(node.id)
       ptys.killDetached(node.id)
       agents.deactivate(node.id)
@@ -1928,6 +1949,10 @@ app.on('before-quit', (event) => {
   // reads the ledger after the restart.
   clearInterval(dispatchSweep)
   dispatchService.interruptAll('app quit')
+  // Panes stay alive across a quit, but no herdr CLI child may survive it:
+  // retire every lease generation (fires the abort seam into active asks and
+  // deliveries) and await the bounded TERM→KILL settlements (Sol r10).
+  defaultProducerLease().retireAll()
   browserCast.shutdown()
   store.flush()
   events.flush()
@@ -1935,8 +1960,9 @@ app.on('before-quit', (event) => {
   turns.flushHistories()
   turns.disposeAll()
   ptys.disposeAll()
-  void browserManager
-    .shutdown()
+  void cancelAllAsks()
+    .catch(() => undefined)
+    .then(() => browserManager.shutdown())
     .catch((error) => console.error('Headless browser shutdown failed:', error))
     .finally(() => {
       appShutdownComplete = true

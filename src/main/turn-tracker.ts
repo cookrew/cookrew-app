@@ -1413,7 +1413,10 @@ export class TurnTracker extends EventEmitter {
       // A mark that predates this attachment (set, then the view detached
       // and re-tracked) means the REAL box holds owner bytes this fresh
       // model never watched: nothing modelled here can prove it empty until
-      // an observed submit consumes it (Sol r9 P0-1/P0-2).
+      // an observed submit consumes it (Sol r9 P0-1/P0-2). This includes a
+      // mark ADOPTED from the durable WAL (Sol r10 P0-1) — bytes a PREVIOUS
+      // process watched enter a pane that outlived it; isOwnerEditing
+      // performs that first-sight adoption on a provenance-wired lease.
       unprovenBox: this.lease.isOwnerEditing(session.terminalId),
       prompt: null,
       snapshot: '',
@@ -1547,6 +1550,23 @@ export class TurnTracker extends EventEmitter {
         inPaste: prevInPaste,
         held: prevHeld
       })
+    } else if (
+      fed.submitted.length > 0 &&
+      fed.buffer.length === 0 &&
+      !fed.inPaste &&
+      fed.held.length === 0 &&
+      !(t.agent && t.phase === 'waiting' && t.prompt !== null)
+    ) {
+      // A dispatch delivery's OWN observed submit consumes the shared box
+      // wholesale exactly as an owner's does — the proof does not depend on
+      // who pressed Enter. Routing it through clearOwnerEditing settles the
+      // durable write-ahead dirty fact the delivery's paste recorded (Sol
+      // r10 P0-1); without this, every crash after any pty-fallback dispatch
+      // would false-dirty its terminal for the next process. The in-memory
+      // owner mark is not set on this path (tagged bytes never mark), so
+      // clearing it is a no-op there. Menu Enters are excluded as ever: they
+      // feed the current turn, not the box.
+      this.lease.clearOwnerEditing(terminalId)
     }
     if (!t.agent) return
     if (fed.submitted.length > 0) t.lastSubmitAt = Date.now()
@@ -1618,6 +1638,15 @@ export class TurnTracker extends EventEmitter {
    * multiline/unknown state — which also flags the model DIVERGED
    * (unprovenBox): feedPromptBuffer maps those ops to an empty buffer, but
    * the real box may retain earlier lines the model no longer shows.
+   *
+   * PASTE PROVENANCE IS STICKY (Sol r10 P0-2): a bracketed paste — even a
+   * completed SINGLE-LINE one — sets unprovenBox for the rest of the buffer
+   * lifetime. The r9 rule only flagged pastes that were open, split, or
+   * multiline at a destructive op, so a closed one-line paste was silently
+   * promoted to fully watched typed provenance and a later Ctrl-U "proved"
+   * empty a box whose TUI may hold the paste as an opaque item. Now nothing
+   * short of an observed submit (or retirement) restores proof after any
+   * paste marker.
    */
   private maintainOwnerEditing(
     t: TrackedTerminal,
@@ -1645,12 +1674,30 @@ export class TurnTracker extends EventEmitter {
     // re-anchors it.
     if (destructive && (prevOpaque || chunkOpaque)) t.unprovenBox = true
     if (data.includes('\x03') && (prevOpaque || prev.buffer.length > 0)) t.unprovenBox = true
+    // STICKY PASTE PROVENANCE (Sol r10 P0-2): ANY bracketed-paste marker
+    // observed in this buffer lifetime makes the box opaque — including a
+    // COMPLETED single-line paste, which the destructive checks above only
+    // caught while it was still open or multiline. Agent TUIs may hold a
+    // paste as an opaque paste ITEM rather than line-edited bytes, so a later
+    // Ctrl-U over it provably clears nothing the model can vouch for; the
+    // bit therefore survives the paste close and no destructive op ever
+    // converts the box back to proven-empty. Only the observed-submit
+    // re-anchor below (or retirement) clears it. Split markers count via the
+    // held carry: the marker bytes may arrive across chunks.
+    const pasteObserved =
+      (prev.held + data).includes('\x1b[200~') ||
+      (prev.held + data).includes('\x1b[201~') ||
+      fed.inPaste ||
+      fed.held.length > 0
+    if (pasteObserved) t.unprovenBox = true
     if (holdsBytes) this.lease.markOwnerEditing(terminalId)
     const menuAnswer =
       t.agent && t.phase === 'waiting' && t.prompt !== null && fed.submitted.length > 0
     if (fed.submitted.length > 0 && !menuAnswer) {
-      // The observed-submit proof: the box was consumed wholesale.
-      t.unprovenBox = false
+      // The observed-submit proof: the box was consumed wholesale. Bytes that
+      // FOLLOWED the Enter in this same chunk re-open the buffer — typed ones
+      // are watched from here, but pasted ones stay opaque (r10 P0-2).
+      t.unprovenBox = pasteObserved && holdsBytes
       if (!holdsBytes) this.lease.clearOwnerEditing(terminalId)
       return
     }

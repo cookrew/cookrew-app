@@ -13,6 +13,8 @@ import { HerdrStatusFeed, setStatusFeed, statusFeed } from './herdr-agent-status
 import { DirectMultiplexer } from './direct-multiplexer'
 import { selectMultiplexers } from './multiplexer-select'
 import { harnessFor } from './harness'
+import { defaultProducerLease } from './producer-lease'
+import { defaultInputProvenance } from './input-provenance'
 import type { Terminal as HeadlessTerminalType } from '@xterm/headless'
 
 const { Terminal: HeadlessTerminal } = xtermHeadless as unknown as {
@@ -457,6 +459,14 @@ export class PtySession extends EventEmitter {
       return verdict
     }
     this.lastRefusalInfo = null
+    // WRITE-AHEAD provenance (Sol r10 P0-1), after the verdict — refused
+    // bytes never cross, so they never dirty — and BEFORE proc.write: the
+    // pane outlives this process, and the durable dirty fact must land first
+    // so a crash mid-keystroke leaves at worst a false-dirty the normal
+    // clears (observed submit, proven clear, retire) resolve, never a
+    // false-clean box the next process would dispatch into. `data` rides
+    // along so pure navigation (mouse, arrows) does not mark.
+    defaultProducerLease().noteBytesEntering(this.terminalId, data)
     this.proc.write(data)
     // Every input path (renderer keystrokes, `cookrew ask`, routines) funnels
     // through here, so turn tracking can observe prompts uniformly.
@@ -484,6 +494,9 @@ export class PtySession extends EventEmitter {
    * tracker must learn the prompt from them exactly as it does from typing.
    */
   writeFromOwner(data: string): void {
+    // Tagged paths mark too (Sol r10 P0-1): the WAL cares that bytes entered
+    // the box, not which producer's door they came through.
+    defaultProducerLease().noteBytesEntering(this.terminalId, data)
     this.proc.write(data)
     this.emit('input', data)
   }
@@ -496,6 +509,11 @@ export class PtySession extends EventEmitter {
    * byte equality — an owner typing the identical bytes is still an owner.
    */
   writeFromDispatch(data: string): void {
+    // The dispatch's paste dirties the shared box exactly like owner bytes
+    // (Sol r10 P0-1): a crash between its paste and its CR strands the same
+    // residue, and the next process must adopt it fail-closed. The observed
+    // submit that consumes it clears the record through the tracker.
+    defaultProducerLease().noteBytesEntering(this.terminalId, data)
     this.proc.write(data)
     this.emit('input', data, 'dispatch')
   }
@@ -851,6 +869,13 @@ export class PtyManager {
   onBackendDeath: ((why: string) => void) | null = null
 
   constructor() {
+    // Wire the durable input-provenance WAL into the process-wide producer
+    // lease (Sol r10 P0-1). Done HERE — the PTY plane's boot, before any
+    // session exists or any terminal id is queried — so every write path's
+    // WAL-first mark and every first-sight adoption consult the same store.
+    // Tests never construct a PtyManager, so their leases stay pure memory
+    // unless they inject a store themselves.
+    defaultProducerLease().attachProvenance(defaultInputProvenance())
     // Fixed (pid-independent) so a tmux session's baked-in COOKREW_SOCKET /
     // COOKREW_CLI paths stay valid across app restarts — the whole point of
     // persisting terminals in tmux.

@@ -87,6 +87,16 @@ export async function pasteAndSubmit(
 ): Promise<'submitted' | 'cancelled'> {
   const generation = lease.generationOf(session.terminalId)
   if (stillValid !== undefined && !stillValid()) return 'cancelled'
+  // WRITE-AHEAD provenance (Sol r10 P0-1): the dirty fact lands durably
+  // BEFORE the paste crosses the pane boundary. The pane outlives this
+  // process, so if we die between the paste and the CR the NEXT process must
+  // find the fact and adopt the box fail-closed; a crash between this mark
+  // and the write costs only a false-dirty the normal clears resolve. The
+  // real PTY write paths mark too — this covers duck-typed `write` callbacks
+  // and keeps the ordering guarantee at the primitive that owns the window.
+  if (typeof session.terminalId === 'string') {
+    lease.noteBytesEntering(session.terminalId)
+  }
   write(`${BRACKETED_PASTE_START}${body}${BRACKETED_PASTE_END}`)
   await new Promise((resolve) => setTimeout(resolve, submitDelayMs(body.length)))
   // The check that matters most: cancellation during the delay means the CR
@@ -94,6 +104,9 @@ export async function pasteAndSubmit(
   // holds a cancelled producer's text: contaminated (see above).
   if (stillValid !== undefined && !stillValid()) {
     if (typeof session.terminalId === 'string') {
+      // Durable through the lease (Sol r10 P0-1): a provenance-wired lease
+      // upgrades the write-ahead dirty fact to 'contaminated' on disk, so a
+      // restart adopts the stranded paste instead of calling the box clean.
       lease.markContaminated(session.terminalId, generation)
     }
     return 'cancelled'
@@ -145,6 +158,64 @@ export async function askTerminal(
 }
 
 /**
+ * SHUTDOWN CANCELLATION (Sol r10 P1): every native ask registers its
+ * AbortController here for the app's before-quit. Retirement already aborts a
+ * single terminal's asks via lease.onRetire, but app quit neither retires the
+ * surviving terminals nor otherwise reaches an ask blocked inside a
+ * `herdr agent prompt/wait` child — which could outlive Electron until its
+ * ten-minute timeout. The registry is bounded by in-flight asks: each entry is
+ * added on entry to nativeAsk and settled/removed in its `finally`.
+ */
+interface ActiveAsk {
+  readonly abort: AbortController
+  readonly settled: Promise<void>
+  readonly settle: () => void
+}
+
+const activeAsks = new Set<ActiveAsk>()
+
+/** Total time cancelAllAsks waits for TERM→KILL settlements before quitting anyway. */
+const CANCEL_ALL_ASKS_CAP_MS = 3000
+
+function registerActiveAsk(abort: AbortController): ActiveAsk {
+  let settle: () => void = () => undefined
+  const settled = new Promise<void>((resolve) => {
+    settle = resolve
+  })
+  const entry: ActiveAsk = { abort, settled, settle }
+  activeAsks.add(entry)
+  return entry
+}
+
+/** In-flight native asks right now — diagnostics and the shutdown gate. */
+export function activeAskCount(): number {
+  return activeAsks.size
+}
+
+/**
+ * THE before-quit primitive (Sol r10 P1), called by the conductor before the
+ * final app.quit: fire every active ask's AbortController — each abort
+ * TERM-kills its CLI child, with the runner's own 2s SIGKILL fallback behind
+ * it — and await the bounded settlements, capped at CANCEL_ALL_ASKS_CAP_MS so
+ * a child that ignores everything cannot hold the quit hostage. The panes
+ * (and the agents in them) stay alive for the next launch; what this proves
+ * is that NO herdr CLI child of ours survives the Electron process. Safe to
+ * call with nothing in flight, and more than once.
+ */
+export async function cancelAllAsks(capMs = CANCEL_ALL_ASKS_CAP_MS): Promise<void> {
+  const entries = [...activeAsks]
+  for (const entry of entries) entry.abort.abort()
+  if (entries.length === 0) return
+  await Promise.race([
+    Promise.all(entries.map((entry) => entry.settled)).then(() => undefined),
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, capMs)
+      timer.unref?.()
+    })
+  ])
+}
+
+/**
  * The backend-native leg of an ask. Returns the post-turn full text for the
  * caller's diff, or null when herdr never delivered the prompt (agent
  * unresolvable, server briefly down) and the typed path should run instead.
@@ -187,9 +258,20 @@ async function nativeAsk(
   const terminalId = session.terminalId
   const generation = lease.generationOf(terminalId)
   const abort = new AbortController()
+  // Registered for app shutdown (Sol r10 P1): cancelAllAsks fires this same
+  // controller, so quit reaches the blocked CLI child exactly as retirement
+  // does. Settled in the finally — the registry is bounded by in-flight work.
+  const active = registerActiveAsk(abort)
   const unsubscribe = lease.onRetire((retired) => {
     if (retired === terminalId) abort.abort()
   })
+  // Every awaited phase ends with this: retirement throws the honest
+  // 'retired' error, and a shutdown abort (generation intact, signal fired)
+  // its own — never falling through to read the session as a reply.
+  const assertLive = (): void => {
+    assertGeneration(lease, terminalId, generation)
+    if (abort.signal.aborted) throw new Error('the ask was cancelled at app shutdown')
+  }
   try {
     const holder = acquireOwnerLease(lease, session, `${prompt}\r`)
     let outcome: 'done' | 'submitted' | 'failed'
@@ -199,10 +281,15 @@ async function nativeAsk(
           ? await mux.submitAgent(session.sessionName, prompt, timing.timeoutMs, abort.signal)
           : await mux.promptAgent!(session.sessionName, prompt, timing.timeoutMs, abort.signal)
     } catch (error) {
-      // A rejection from a killed child is the RETIREMENT speaking, not a
-      // submission fault — name it as such instead of leaking an AbortError.
-      if (abort.signal.aborted || lease.generationOf(terminalId) !== generation) {
+      // A rejection from a killed child is the RETIREMENT (or the shutdown)
+      // speaking, not a submission fault — name which instead of leaking an
+      // AbortError. Generation mismatch distinguishes them: retirement bumps
+      // it, a shutdown abort does not.
+      if (lease.generationOf(terminalId) !== generation) {
         throw new Error('the terminal was retired mid-ask')
+      }
+      if (abort.signal.aborted) {
+        throw new Error('the ask was cancelled at app shutdown')
       }
       throw error
     } finally {
@@ -211,12 +298,10 @@ async function nativeAsk(
       // tracker stamp's job, not the lease's.
       lease.release(terminalId, holder)
     }
-    if (lease.generationOf(terminalId) !== generation) {
-      // Retired mid-await (the abort above fired, or the call settled first
-      // by luck). The dead leg must not fall through and type into the
-      // reborn terminal's input box.
-      throw new Error('the terminal was retired mid-ask')
-    }
+    // Retired or shutdown-cancelled mid-await (the abort fired, or the call
+    // settled first by luck). The dead leg must not fall through and type
+    // into the reborn terminal's input box.
+    assertLive()
     if (outcome === 'failed') return null
     // The tracker learns prompts from session.write's input event; a
     // herdr-side submission never passes through write, so announce it —
@@ -232,7 +317,7 @@ async function nativeAsk(
       // and the generation is re-checked before any session read, so the
       // dead leg never returns output rendered by the REBORN terminal.
       await waitForReply(session, timing, abort.signal)
-      assertGeneration(lease, terminalId, generation)
+      assertLive()
       return session.fullText()
     }
     // promptAgent 'submitted': the prompt IS in the pane — herdr just could
@@ -244,10 +329,12 @@ async function nativeAsk(
     // truncates the reply. Abortable and generation-checked like the
     // reply-wait above (Sol r9 P1-4).
     await waitForQuiescence(session, timing, abort.signal)
-    assertGeneration(lease, terminalId, generation)
+    assertLive()
     return session.fullText()
   } finally {
     unsubscribe()
+    activeAsks.delete(active)
+    active.settle()
   }
 }
 

@@ -586,6 +586,85 @@ describe('owner-editing proof rules (Sol r9 P0-2)', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// Sol r10 P0-2 — paste provenance is STICKY. A COMPLETED single-line
+// bracketed paste used to be promoted to fully watched typed provenance: the
+// close marker landed, the model held one plain line, and a later Ctrl-U
+// "proved" the box empty — though agent TUIs may hold a paste as an opaque
+// paste ITEM a kill-line does not clear. Any observed paste marker now makes
+// the box opaque for the rest of the buffer lifetime; only an observed submit
+// (or retirement) restores proof.
+// ---------------------------------------------------------------------------
+
+describe('sticky paste provenance (Sol r10 P0-2)', () => {
+  it('a COMPLETED single-line paste → Ctrl-U keeps the mark', () => {
+    const { tracker, session } = guardFixture()
+    session.emit('input', '\x1b[200~one clean line\x1b[201~')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    // The model shows a single watched-looking line — but the bytes arrived
+    // as a paste, so a kill-line proves nothing about the real box.
+    session.emit('input', '\x15')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    // Nor does a second one, or a backspace run.
+    session.emit('input', '\x15')
+    session.emit('input', '\x7f\x7f')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('a split-CLOSE paste → Ctrl-U keeps the mark too', () => {
+    const { tracker, session } = guardFixture()
+    session.emit('input', '\x1b[200~pasted text')
+    session.emit('input', '\x1b[201~')
+    session.emit('input', '\x15')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('a marker split across chunks still sticks', () => {
+    const { tracker, session } = guardFixture()
+    session.emit('input', '\x1b[20')
+    session.emit('input', '0~pasted\x1b[201~')
+    session.emit('input', '\x15')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('the observed submit re-anchors: typed-only single-line Ctrl-U proves clear again', () => {
+    const { tracker, session } = guardFixture()
+    // A full paste → submit cycle consumes the box wholesale…
+    session.emit('input', '\x1b[200~ship the release\x1b[201~')
+    session.emit('input', '\r')
+    expect(tracker.ownerComposing('term-1')).toBe(false)
+    // …after which fully watched typed editing is provable once more.
+    session.emit('input', 'a fresh typed thought')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    session.emit('input', '\x15')
+    expect(tracker.ownerComposing('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+
+  it('a paste that FOLLOWS a submit in the same chunk stays opaque', () => {
+    const { tracker, session } = guardFixture()
+    session.emit('input', 'go\r\x1b[200~trailing paste\x1b[201~')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    session.emit('input', '\x15')
+    // The Enter consumed only what preceded it; the trailing paste is opaque.
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('retirement clears it with everything else', () => {
+    const { tracker, lease, session } = guardFixture()
+    session.emit('input', '\x1b[200~stranded\x1b[201~')
+    session.emit('input', '\x15')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    lease.retire('term-1')
+    expect(tracker.ownerComposing('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+})
+
 describe('TurnTracker.refusalReason (Sol r8 P1)', () => {
   it('names the holder, the contamination, or nothing', () => {
     const { tracker, lease } = guardFixture()
@@ -701,6 +780,98 @@ describe('ProducerLease — liveness pins generations (Sol r9 P1-8)', () => {
     expect(lease.mapSizes().live).toBe(50)
     for (let i = 0; i < 50; i += 1) lease.forgetTerminal(`spawn-${i}`)
     expect(lease.mapSizes().live).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r10 P1 — liveness wiring gaps. Registration was spawn-only, so cold
+// detached nodes (inactive workspaces, background dispatch targets) were
+// never pinned; seedLive covers the whole store-load population, and
+// forgetTerminal is idempotent for every permanent-removal path.
+// ---------------------------------------------------------------------------
+
+describe('ProducerLease — seedLive and forget (Sol r10 P1)', () => {
+  it('a cold unregistered id seeded at store load is generation-eviction-proof', () => {
+    const lease = new ProducerLease()
+    // Never spawned, never held, never marked — just a node in the store.
+    lease.seedLive(['cold-term'])
+    // Backend death retires every terminal; the cold target rebinds to gen 1.
+    lease.retire('cold-term')
+    const generation = lease.generationOf('cold-term')
+    expect(generation).toBe(1)
+    for (let i = 0; i < 2000; i += 1) lease.retire(`churn-${i}`)
+    // Still generation 1: a current-generation ask keeps passing and an
+    // ancient generation-0 leg keeps failing.
+    expect(lease.generationOf('cold-term')).toBe(generation)
+    expect(lease.acquire('cold-term', ownerHolder(), { generation })).toBe('acquired')
+  })
+
+  it('seedLive is idempotent and composes with spawn-time registration', () => {
+    const lease = new ProducerLease()
+    lease.seedLive(['a', 'b'])
+    lease.seedLive(['b', 'c'])
+    lease.registerTerminal('a')
+    expect(lease.mapSizes().live).toBe(3)
+  })
+
+  it('forgetTerminal is idempotent — safe from removeNode, workspace delete AND cut', () => {
+    const lease = new ProducerLease()
+    lease.registerTerminal('term-gone')
+    lease.retire('term-gone')
+    // Every permanent-removal path calls forget without coordinating.
+    lease.forgetTerminal('term-gone')
+    lease.forgetTerminal('term-gone')
+    expect(lease.mapSizes().live).toBe(0)
+    // Forgetting an id that was never registered is harmless too.
+    lease.forgetTerminal('never-seen')
+    // And a forgotten id can be registered again (paste-back after a cut).
+    lease.registerTerminal('term-gone')
+    expect(lease.mapSizes().live).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r10 P1 — the shutdown primitive. before-quit must end every in-process
+// lifetime (aborting native asks via onRetire) while the panes — and the WAL
+// facts describing their boxes — survive for the next launch.
+// ---------------------------------------------------------------------------
+
+describe('ProducerLease — retireAll (Sol r10 P1)', () => {
+  it('bumps every known generation: holds, marks, live pins and tombstones alike', () => {
+    const lease = new ProducerLease()
+    lease.registerTerminal('live-idle')
+    lease.acquire('held', dispatchHolder('dsp-1'))
+    lease.markOwnerEditing('editing')
+    lease.markContaminated('dirty')
+    lease.retire('tombstone')
+    lease.retireAll()
+    expect(lease.generationOf('live-idle')).toBe(1)
+    expect(lease.generationOf('held')).toBe(1)
+    expect(lease.generationOf('editing')).toBe(1)
+    expect(lease.generationOf('dirty')).toBe(1)
+    expect(lease.generationOf('tombstone')).toBe(2)
+    expect(lease.holderOf('held')).toBeNull()
+    expect(lease.isOwnerEditing('editing')).toBe(false)
+    expect(lease.isContaminated('dirty')).toBe(false)
+  })
+
+  it('notifies retire listeners per terminal — the abort seam native asks hang on', () => {
+    const lease = new ProducerLease()
+    lease.acquire('term-1', dispatchHolder('dsp-1'))
+    lease.acquire('term-2', ownerHolder())
+    const seen: string[] = []
+    lease.onRetire((id) => seen.push(id))
+    lease.retireAll()
+    expect(seen.sort()).toEqual(['term-1', 'term-2'])
+  })
+
+  it('is safe on an empty lease and safe to call twice', () => {
+    const lease = new ProducerLease()
+    lease.retireAll()
+    lease.registerTerminal('term-1')
+    lease.retireAll()
+    lease.retireAll()
+    expect(lease.generationOf('term-1')).toBe(2)
   })
 })
 

@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  activeAskCount,
   askRaw,
   askTerminal,
+  cancelAllAsks,
   decodeRawEscapes,
   diffOutput,
   pasteAndSubmit,
@@ -664,6 +666,97 @@ describe('askTerminal — abort on terminal retirement (Sol r8 P1)', () => {
     await expect(promise).rejects.toThrow('retired mid-ask')
     expect(writes).toEqual([])
     expect(lease.holderOf('term-1')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r10 P1 — app shutdown cancels owner asks. Retirement aborts a single
+// terminal's asks, but before-quit neither retires the surviving terminals
+// nor otherwise reaches a `herdr agent prompt/wait` child — which could
+// outlive Electron until its ten-minute timeout. cancelAllAsks is the
+// conductor's before-quit primitive: it fires every active controller and
+// awaits the bounded TERM→KILL settlements.
+// ---------------------------------------------------------------------------
+
+describe('cancelAllAsks — the shutdown primitive (Sol r10 P1)', () => {
+  afterEach(() => {
+    muxHolder.current = null
+  })
+
+  const askSession = (terminalId: string): PtySession =>
+    ({
+      terminalId,
+      sessionName: `cookrew_${terminalId}`,
+      fullText: () => '',
+      idleFor: () => 99_999,
+      noteExternalInput: () => undefined
+    }) as unknown as PtySession
+
+  it('two active native asks → cancelAll kills both children and resolves within bound', async () => {
+    const lease = new ProducerLease()
+    const signals: AbortSignal[] = []
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      // Model the blocking CLI child: pending until its signal fires, then
+      // settle the way a TERM-killed execFile rejects its callback.
+      promptAgent: (_name, _prompt, _timeout, signal) =>
+        new Promise((_resolve, reject) => {
+          if (signal) signals.push(signal)
+          signal?.addEventListener('abort', () => reject(new Error('AbortError')), {
+            once: true
+          })
+        })
+    } satisfies FakeMux
+
+    const first = askTerminal(askSession('term-1'), 'first ask', { lease })
+    const second = askTerminal(askSession('term-2'), 'second ask', { lease })
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(activeAskCount()).toBe(2)
+    expect(signals.map((s) => s.aborted)).toEqual([false, false])
+
+    const startedAt = Date.now()
+    await cancelAllAsks()
+    // Both controllers fired (each child got its TERM) and the settlements
+    // were awaited — well inside the 3s cap, not at any ask timeout.
+    expect(Date.now() - startedAt).toBeLessThan(3000)
+    expect(signals.map((s) => s.aborted)).toEqual([true, true])
+    await expect(first).rejects.toThrow('cancelled at app shutdown')
+    await expect(second).rejects.toThrow('cancelled at app shutdown')
+    // The registry drained with the settlements — nothing survives the quit.
+    expect(activeAskCount()).toBe(0)
+  })
+
+  it('a child that ignores the signal cannot hold the quit hostage past the cap', async () => {
+    const lease = new ProducerLease()
+    let freeChild: (outcome: 'done') => void = () => undefined
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      // Pathological: ignores its signal entirely; settles only when the
+      // test releases it after the cap has been proven.
+      promptAgent: () =>
+        new Promise((resolve) => {
+          freeChild = resolve
+        })
+    } satisfies FakeMux
+
+    const stuck = askTerminal(askSession('term-stuck'), 'doomed', { lease })
+    stuck.catch(() => undefined) // settles late, past the bounded quit
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(activeAskCount()).toBe(1)
+
+    const startedAt = Date.now()
+    await cancelAllAsks(50)
+    expect(Date.now() - startedAt).toBeLessThan(1000)
+    // Drain the leg so it cannot bleed into later tests: once the child
+    // finally settles, the post-await abort check still refuses the reply
+    // and the registry empties.
+    freeChild('done')
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(activeAskCount()).toBe(0)
+  })
+
+  it('is safe with nothing in flight', async () => {
+    await expect(cancelAllAsks()).resolves.toBeUndefined()
   })
 })
 

@@ -39,9 +39,7 @@ import {
   appendFileSync,
   closeSync,
   existsSync,
-  fchmodSync,
   fstatSync,
-  fsyncSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -50,8 +48,15 @@ import {
   renameSync,
   statSync,
   unlinkSync,
-  writeSync,
 } from 'node:fs'
+// The FOLD's durable I/O rides fs/promises FileHandles (Sol r10 P1):
+// open/read/write/sync run on the libuv threadpool, so the temp write, its
+// fsync and the parent-directory fsync — the fold's slow-storage hazards —
+// no longer block Electron main the way writeSync/fsyncSync did. The HOT
+// write path (flush/append/writeAll) stays synchronous on purpose: its units
+// are O(changed bytes) and its callers depend on flush() completing within
+// one event-loop turn (the fold's race discipline is built on that).
+import { open, type FileHandle } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { mergeAnnotation, splitAnnotation, type TurnRecord } from '../shared/turn'
@@ -60,14 +65,45 @@ import { AnnotationStore, fsyncDirDurable, renameLanded, writeFileAtomic } from 
 const SAVE_DEBOUNCE_MS = 300
 
 /**
- * The fold's event-loop budget (Sol r9 P1). The fold reads, parses,
- * serializes and writes in bounded chunks with a yield between each, so the
- * O(total history) rewrite never blocks Electron's main thread for more than
- * one chunk's worth of work — renderer IPC, PTY handling and other agents
- * keep running through a 91 MB compaction instead of freezing for it.
+ * The fold's event-loop budget (Sol r9 P1, byte-bounded per Sol r10 P1). The
+ * fold reads, parses, serializes and writes in bounded chunks with a yield
+ * between each, so the O(total history) rewrite never blocks Electron's main
+ * thread for more than one chunk's worth of work — renderer IPC, PTY handling
+ * and other agents keep running through a 91 MB compaction instead of
+ * freezing for it. BOTH budgets are BYTES: the r9 shape bounded serialization
+ * by record COUNT, and 200 ten-megabyte records serialized as one unbounded
+ * stretch. THE RESIDUAL, STATED: a SINGLE oversized record still parses
+ * (JSON.parse of one 10 MB line) and stringifies synchronously — that is
+ * irreducible on this thread without a worker, so the fold bounds the harm
+ * instead: an oversized record is processed ALONE in its own unit with a
+ * yield before and after, never stacked onto its neighbours' work.
  */
 const FOLD_READ_CHUNK_BYTES = 256 * 1024
-const FOLD_SERIALIZE_CHUNK_RECORDS = 200
+const FOLD_SERIALIZE_CHUNK_BYTES = 256 * 1024
+
+/**
+ * Directory-fsync debt retry cadence (Sol r10 P1): base doubles per failed
+ * attempt, capped, on unref'd timers — a debt-only retry independent of new
+ * turns, because a fold-created debt on a quiet ledger has no later flush to
+ * ride (compaction is exactly the moment new records stop).
+ */
+const DIR_DEBT_RETRY_BASE_MS = 500
+const DIR_DEBT_RETRY_MAX_MS = 30_000
+
+/**
+ * Codes that POSITIVELY mean this filesystem cannot fsync a directory —
+ * mirrored from turn-annotations' fsyncDirDurable (its set is private to
+ * that module): every retry would fail identically, so they are tolerated.
+ */
+const DIR_FSYNC_UNSUPPORTED = new Set(['EISDIR', 'ENOTSUP', 'EINVAL'])
+
+/**
+ * Directories whose ASYNC post-rename fsync already failed once this process
+ * — the same repeat-escalation discipline as fsyncDirDurable's, tracked for
+ * the fold's threadpool-backed fsync path. A repeat is surfaced as a LOUD
+ * PERSISTENT STORAGE FAULT; cleared by the next success on the directory.
+ */
+const asyncDirFsyncFaulted = new Set<string>()
 
 /** Hand the event loop back between fold chunks — setImmediate as a promise. */
 const yieldToLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
@@ -202,6 +238,18 @@ export class TurnStore {
    * FAULT), and only a flush whose debt is settled may clear pending/dirty.
    */
   private dirDebt = new Set<string>()
+  /**
+   * The debt-only retry timers (Sol r10 P1), one per indebted terminal —
+   * unref'd, backoff-doubling, independent of new turns. A fold-created debt
+   * on a ledger that then goes QUIET had no retry trigger at all: only
+   * flush() settled debt, and a file that just compacted has no pending
+   * flush, so a crash could still lose the renamed directory entry and a
+   * persistent fault never reached the repeat-failure escalation. flushAll
+   * (app quit) settles or escalates whatever is still outstanding.
+   */
+  private debtTimers = new Map<string, NodeJS.Timeout>()
+  /** Failed retry attempts per indebted terminal — the backoff's exponent. */
+  private debtAttempts = new Map<string, number>()
   /**
    * Cached LOGICAL record count per terminal (Sol r9 P2): seeded by the
    * first full read (readLines or count()'s own recovery parse — the same
@@ -707,6 +755,87 @@ export class TurnStore {
     if (!this.dirDebt.has(terminalId)) return
     fsyncDirDurable(this.dir)
     this.dirDebt.delete(terminalId)
+    // The debt is proven durable — any standing debt-only retry is moot.
+    this.clearDebtRetry(terminalId)
+  }
+
+  /** Stop (and forget) the debt-only retry for a terminal. */
+  private clearDebtRetry(terminalId: string): void {
+    const timer = this.debtTimers.get(terminalId)
+    if (timer) clearTimeout(timer)
+    this.debtTimers.delete(terminalId)
+    this.debtAttempts.delete(terminalId)
+  }
+
+  /**
+   * Arm the debt-only retry (Sol r10 P1): an unref'd timer, doubling from
+   * DIR_DEBT_RETRY_BASE_MS per failed attempt, capped. Single-flight per
+   * terminal; a no-op when the debt is already settled. Fired by the fold's
+   * dir-fsync failure — the one producer of debt with no later flush
+   * guaranteed to retry it.
+   */
+  private scheduleDirDebtRetry(terminalId: string): void {
+    if (!this.dirDebt.has(terminalId) || this.debtTimers.has(terminalId)) return
+    const attempt = this.debtAttempts.get(terminalId) ?? 0
+    const delay = Math.min(DIR_DEBT_RETRY_BASE_MS * 2 ** attempt, DIR_DEBT_RETRY_MAX_MS)
+    const timer = setTimeout(() => {
+      this.debtTimers.delete(terminalId)
+      void this.retryDirDebt(terminalId)
+    }, delay)
+    timer.unref?.()
+    this.debtTimers.set(terminalId, timer)
+  }
+
+  /** One debt-only retry attempt: settle the fsync or re-arm with backoff. */
+  private async retryDirDebt(terminalId: string): Promise<void> {
+    if (!this.dirDebt.has(terminalId)) {
+      // A flush (or flushAll) settled it while the timer waited.
+      this.debtAttempts.delete(terminalId)
+      return
+    }
+    try {
+      await this.fsyncDirAsync(this.dir)
+      this.dirDebt.delete(terminalId)
+      this.debtAttempts.delete(terminalId)
+    } catch {
+      // fsyncDirAsync already said PERSISTENT STORAGE FAULT out loud on a
+      // repeat; the debt stays and the backoff doubles — retries stop only
+      // when the fsync lands or the process ends (flushAll escalates last).
+      this.debtAttempts.set(terminalId, (this.debtAttempts.get(terminalId) ?? 0) + 1)
+      this.scheduleDirDebtRetry(terminalId)
+    }
+  }
+
+  /**
+   * fsyncDirDurable's ASYNC twin (Sol r10 P1) — same tolerance list, same
+   * repeat-escalation contract, but the fsync runs on the libuv threadpool
+   * via a FileHandle instead of blocking Electron main. Lives here rather
+   * than widening turn-annotations: the synchronous callers (flush-time
+   * settle, writeFileAtomic) keep their one shared implementation.
+   */
+  private async fsyncDirAsync(parent: string): Promise<void> {
+    if (process.platform === 'win32') return // directories cannot be opened for fsync
+    let handle: FileHandle | null = null
+    try {
+      handle = await open(parent, 'r')
+      await handle.sync()
+      asyncDirFsyncFaulted.delete(parent)
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== undefined && DIR_FSYNC_UNSUPPORTED.has(code)) return
+      if (asyncDirFsyncFaulted.has(parent)) {
+        console.error(
+          `PERSISTENT STORAGE FAULT: directory fsync keeps failing for ${parent} ` +
+            `(${code ?? 'unknown'}) — renames are landing but their durability cannot be ` +
+            'guaranteed; check permissions and disk health',
+        )
+      }
+      asyncDirFsyncFaulted.add(parent)
+      throw error
+    } finally {
+      // close() must not mask the fsync verdict either way.
+      if (handle !== null) await handle.close().catch(() => {})
+    }
   }
 
   /**
@@ -971,39 +1100,69 @@ export class TurnStore {
         // one bad line, not the file
       }
     }
-    const fd = openSync(file, 'r')
+    // Oversized isolation (Sol r10 P1): a completed line region larger than
+    // one read chunk means a single record line spans chunks — its
+    // JSON.parse is the irreducible residual (a worker is the only way to
+    // move it off this thread; stated, not hidden), so it runs ALONE
+    // between two yields instead of stacking onto neighbouring lines' work.
+    const applyRegion = async (region: Buffer): Promise<void> => {
+      const oversized = region.length > FOLD_READ_CHUNK_BYTES
+      if (oversized) await yieldToLoop()
+      for (const line of region.toString('utf8').split('\n')) apply(line)
+      if (oversized) await yieldToLoop()
+    }
+    const handle = await open(file, 'r')
     try {
       const chunk = Buffer.allocUnsafe(FOLD_READ_CHUNK_BYTES)
-      let carry: Buffer = Buffer.alloc(0)
+      // The carry accumulates CHUNKS, concatenated ONCE per completed line
+      // region (Sol r10 P1): the previous shape Buffer.concat'ed the whole
+      // unterminated carry on every read, making one 10 MB line O(n²) in
+      // copies. Invariant: no chunk in `carry` contains a newline, so only
+      // the freshly read chunk needs searching.
+      let carry: Buffer[] = []
       for (;;) {
-        const got = readSync(fd, chunk, 0, chunk.length, null)
-        if (got <= 0) break
-        const held = Buffer.concat([carry, chunk.subarray(0, got)])
-        const cut = held.lastIndexOf(0x0a)
+        const { bytesRead } = await handle.read(chunk, 0, chunk.length, null)
+        if (bytesRead <= 0) break
+        const view = chunk.subarray(0, bytesRead)
+        const cut = view.lastIndexOf(0x0a)
         if (cut === -1) {
-          carry = held
+          // Copies, because the read buffer is reused next iteration.
+          carry.push(Buffer.from(view))
         } else {
-          for (const line of held.toString('utf8', 0, cut).split('\n')) apply(line)
-          carry = Buffer.from(held.subarray(cut + 1))
+          const region =
+            carry.length > 0
+              ? Buffer.concat([...carry, view.subarray(0, cut)])
+              : view.subarray(0, cut)
+          carry = []
+          const rest = view.subarray(cut + 1)
+          if (rest.length > 0) carry.push(Buffer.from(rest))
+          await applyRegion(region)
         }
         await yieldToLoop()
       }
-      if (carry.length > 0) apply(carry.toString('utf8'))
+      if (carry.length > 0) {
+        await applyRegion(carry.length === 1 ? carry[0] : Buffer.concat(carry))
+      }
     } finally {
-      closeSync(fd)
+      await handle.close().catch(() => {})
     }
     return records
   }
 
   /**
-   * The write half of the fold: chunked serialization into a temp file of
-   * its own (`.fold.tmp` — writeFileAtomic's `.tmp` may be claimed by a
-   * racing synchronous rewrite), then ONE synchronous commit block — verify
-   * the generation, rename, parent-dir fsync — with no await between the
-   * verification and the rename: flush() runs on this same thread, so
-   * nothing can append between the check and the swap. A dir-fsync failure
-   * after the landed rename is recorded as durability debt exactly like
-   * writeAll's (the next flush settles it).
+   * The write half of the fold: BYTE-bounded serialization (Sol r10 P1 —
+   * record-count chunks let 200 oversized records serialize as one stretch)
+   * into a temp file of its own (`.fold.tmp` — writeFileAtomic's `.tmp` may
+   * be claimed by a racing synchronous rewrite), written and fsync'ed
+   * through an fs/promises FileHandle so the bytes and the durability wait
+   * ride the libuv threadpool, never Electron main. Then ONE synchronous
+   * commit block — verify the generation, rename, tail bookkeeping — with
+   * no await between the verification and the rename: flush() runs on this
+   * same thread, so nothing can append between the check and the swap (nor
+   * between the swap and remember()). The parent-directory fsync is async
+   * and AFTER the debt is recorded: a failure inside it cannot lose the
+   * retry obligation, and it is settled by the next flush OR by the
+   * debt-only retry timer (a quiet ledger has no next flush).
    */
   private async replaceChunked(
     terminalId: string,
@@ -1018,26 +1177,57 @@ export class TurnStore {
     } catch {
       // no file being replaced: the temp keeps the platform default
     }
-    const fd = openSync(temp, 'w')
+    const handle = await open(temp, 'w')
     let closed = false
     try {
-      if (mode !== null) fchmodSync(fd, mode)
-      for (let start = 0; start < records.length; start += FOLD_SERIALIZE_CHUNK_RECORDS) {
-        const slice = records.slice(start, start + FOLD_SERIALIZE_CHUNK_RECORDS)
-        const body = Buffer.from(slice.map((r) => `${this.line(r)}\n`).join(''), 'utf8')
+      if (mode !== null) await handle.chmod(mode)
+      const writeOut = async (body: Buffer): Promise<void> => {
         let landed = 0
         while (landed < body.length) {
-          const wrote = writeSync(fd, body, landed, body.length - landed)
-          if (wrote <= 0) throw new Error(`short write folding ${temp}`)
-          landed += wrote
+          const { bytesWritten } = await handle.write(body, landed, body.length - landed)
+          if (bytesWritten <= 0) throw new Error(`short write folding ${temp}`)
+          landed += bytesWritten
         }
+      }
+      let buffered: string[] = []
+      let bufferedBytes = 0
+      const flushBuffered = async (): Promise<void> => {
+        if (bufferedBytes === 0) return
+        const body = Buffer.from(buffered.join(''), 'utf8')
+        buffered = []
+        bufferedBytes = 0
+        await writeOut(body)
         await yieldToLoop()
       }
-      fsyncSync(fd)
-      closeSync(fd)
+      for (const record of records) {
+        // Oversized detection BEFORE the stringify, off the record's own
+        // text lengths: the JSON.stringify of a 10 MB reply is the write
+        // side's irreducible residual (stated — a worker is the only way
+        // off this thread), so it runs ALONE between two yields instead of
+        // on top of a full buffer's serialization.
+        if (record.reply.length + record.prompt.length >= FOLD_SERIALIZE_CHUNK_BYTES) {
+          await flushBuffered()
+          await yieldToLoop()
+          await writeOut(Buffer.from(`${this.line(record)}\n`, 'utf8'))
+          await yieldToLoop()
+          continue
+        }
+        const line = `${this.line(record)}\n`
+        const bytes = Buffer.byteLength(line, 'utf8')
+        if (bufferedBytes > 0 && bufferedBytes + bytes > FOLD_SERIALIZE_CHUNK_BYTES) {
+          await flushBuffered()
+        }
+        buffered.push(line)
+        bufferedBytes += bytes
+      }
+      await flushBuffered()
+      // Durability on the handle, off-main: fsyncSync here blocked the event
+      // loop for as long as slow storage cared to take (Sol r10 P1).
+      await handle.sync()
+      await handle.close()
       closed = true
     } catch (error) {
-      if (!closed) closeSync(fd)
+      if (!closed) await handle.close().catch(() => {})
       try {
         unlinkSync(temp)
       } catch {
@@ -1065,17 +1255,33 @@ export class TurnStore {
       throw error
     }
     this.bumpGen(terminalId)
-    try {
-      fsyncDirDurable(this.dir)
-      this.dirDebt.delete(terminalId)
-    } catch (error) {
-      // The rename landed; only the entry's durability is unproven — the
-      // same debt writeAll records, settled by the next flush.
-      this.dirDebt.add(terminalId)
-      console.error('Turn-ledger fold renamed but its directory entry is not yet durable:', error)
-    }
+    // Debt FIRST, then the async fsync (Sol r10 P1): the directory entry is
+    // unproven until the fsync lands, and recording the debt before any
+    // await means neither a failure inside the async fsync nor a crash can
+    // lose the retry obligation. The tail bookkeeping shares the rename's
+    // synchronous stretch — a flush racing the awaited fsync below sees a
+    // current written-tail, never a stale one.
+    this.dirDebt.add(terminalId)
     this.remember(terminalId, records)
     this.cache(terminalId, this.hydrate(terminalId, records))
+    try {
+      await this.fsyncDirAsync(this.dir)
+      this.dirDebt.delete(terminalId)
+      this.clearDebtRetry(terminalId)
+    } catch (error) {
+      // The rename landed; only the entry's durability is unproven — the
+      // same debt writeAll records. A flush settles it if one ever comes;
+      // the debt-only retry covers the quiet ledger that never flushes
+      // again (Sol r10 P1). A flush that settled it DURING the await above
+      // makes this stale news: nothing left to schedule.
+      if (this.dirDebt.has(terminalId)) {
+        console.error(
+          'Turn-ledger fold renamed but its directory entry is not yet durable:',
+          error,
+        )
+        this.scheduleDirDebtRetry(terminalId)
+      }
+    }
     return true
   }
 
@@ -1115,6 +1321,7 @@ export class TurnStore {
     this.written.delete(terminalId)
     this.foldOnLoad.delete(terminalId)
     this.dirDebt.delete(terminalId)
+    this.clearDebtRetry(terminalId)
     this.counts.delete(terminalId)
     this.all?.delete(this.safeId(terminalId))
     this.annotations.remove(this.safeId(terminalId))
@@ -1137,8 +1344,27 @@ export class TurnStore {
     }
   }
 
-  /** Write out every debounced save now (app quit). */
+  /**
+   * Write out every debounced save now (app quit) — and settle every
+   * OUTSTANDING directory-fsync debt (Sol r10 P1): a fold-created debt has
+   * no pending flush to ride, and quit is the last chance to prove its
+   * rename durable or escalate the fault out loud. Synchronous on purpose:
+   * shutdown must not await; fsyncDirDurable carries the repeat-escalation.
+   */
   flushAll(): void {
     for (const terminalId of [...this.timers.keys()]) this.flush(terminalId)
+    for (const terminalId of [...this.dirDebt]) {
+      // A terminal whose flush just failed and RETAINED its work owns its
+      // own retry (and already attempted this very fsync moments ago —
+      // re-attempting here would turn one transient failure into an instant
+      // repeat-escalation). This loop exists for the debt with no other
+      // trigger: a fold-created debt on a quiet ledger.
+      if (this.timers.has(terminalId)) continue
+      try {
+        this.settleDirDebt(terminalId)
+      } catch (error) {
+        console.error('Turn-ledger directory fsync still failing at final flush:', error)
+      }
+    }
   }
 }
