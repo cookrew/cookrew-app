@@ -826,6 +826,28 @@ const dispatchService = new DispatchService({
     return grade
   },
   endWork: (agentId) => sessionSync.unpin(agentId),
+  // The dispatch becomes VISIBLE the moment it exists: accepted and settled
+  // flow through the ordinary event stream — toast layer, event panel and
+  // the phone all get them for free (owner's product-surface rule).
+  announce: ({ kind, record }) => {
+    const node = store.nodeAcrossWorkspaces(record.agentId)
+    const name = node?.node.name ?? record.agentId
+    const workspaceId = record.workspaceId ?? node?.workspaceId ?? store.activeId
+    const type = kind === 'accepted' ? 'dispatch.accepted' : `dispatch.${record.state}`
+    const details =
+      kind === 'accepted'
+        ? `→ ${name}`
+        : record.error !== undefined
+          ? `${name}: ${record.error}`
+          : `→ ${name}`
+    store.withOpContext({ actor: 'agent' }, () => {
+      try {
+        store.recordEventIn(workspaceId, type, record.agentId, name, details)
+      } catch {
+        store.recordEvent(type, record.agentId, name, details)
+      }
+    })
+  },
   // The sweep must not spare a stuck-working agent whose durable final
   // answer already exists — status may hold, never outrank the row.
   hasFinalAnswer: (agentId, prompt, armedAt) => turns.hasFinalAnswer(agentId, prompt, armedAt),

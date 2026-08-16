@@ -392,6 +392,14 @@ export interface DispatchDeps {
    */
   endWork: (agentId: string) => void
   /**
+   * Product-surface observability (owner's acceptance rule: a dispatch that
+   * only an API can see does not exist). Called at acceptance and exactly
+   * once at every terminal settlement — the wiring turns these into store
+   * events (toasts, event panel, phone). Fire-and-forget: a throwing
+   * announcer must never affect the dispatch itself.
+   */
+  announce?: (event: { kind: 'accepted' | 'settled'; record: DispatchRecord }) => void
+  /**
    * Append the record to the durable registry. MUST report failure — return
    * false (or throw) — never swallow it: the accept path refuses work it
    * cannot durably record, and transitions that fail must at least be loud.
@@ -1477,6 +1485,12 @@ export class DispatchService {
         })
     )
 
+    try {
+      this.deps.announce?.({ kind: 'accepted', record })
+    } catch {
+      // Observability must never fail the dispatch.
+    }
+
     return {
       status: 202,
       body: { dispatchId: record.id, state: 'submitted' }
@@ -2234,6 +2248,11 @@ export class DispatchService {
     // Terminal by ANY path — turn correlation, sweep, hydrate, quit — ends
     // the delivery leg's licence to write (Sol r5 P0-2): a completion racing
     // the queued delivery must not be followed by the brief it answered.
+    try {
+      this.deps.announce?.({ kind: 'settled', record })
+    } catch {
+      // Observability must never fail the settlement.
+    }
     this.cancelDelivery(record.id)
     if (this.reserved.get(record.agentId) === record.id) this.reserved.delete(record.agentId)
     this.openMeta.delete(record.id)
