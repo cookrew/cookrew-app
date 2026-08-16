@@ -340,6 +340,18 @@ export class PtySession extends EventEmitter {
    */
   beforeOwnerInput: ((terminalId: string, data: string) => OwnerInputVerdict) | null = null
 
+  /**
+   * The most recent refused owner write, while the refusal is CURRENT (Sol
+   * r8 P1 — desktop refusals were silent): cleared by the next allowed
+   * write. write() returns the verdict per call, but the renderer's
+   * fire-and-forget IPC discards returns — this is the pull-side record the
+   * conductor exposes (PtyManager.lastRefusal → IPC) so the UI can explain a
+   * dead keystroke after the fact. The refusal REASON lives with the state
+   * that refused: TurnTracker.refusalReason names it from the lease.
+   */
+  private lastRefusalInfo: { verdict: Exclude<OwnerInputVerdict, 'allow'>; at: number } | null =
+    null
+
   constructor(options: PtySessionOptions) {
     super()
     this.terminalId = options.terminalId
@@ -440,12 +452,25 @@ export class PtySession extends EventEmitter {
     // submit sequence IS an acquire-submit-release with no window a second
     // producer could enter.
     const verdict = this.beforeOwnerInput?.(this.terminalId, data) ?? 'allow'
-    if (verdict !== 'allow') return verdict
+    if (verdict !== 'allow') {
+      this.lastRefusalInfo = { verdict, at: Date.now() }
+      return verdict
+    }
+    this.lastRefusalInfo = null
     this.proc.write(data)
     // Every input path (renderer keystrokes, `cookrew ask`, routines) funnels
     // through here, so turn tracking can observe prompts uniformly.
     this.emit('input', data)
     return 'allow'
+  }
+
+  /**
+   * The still-current refusal of the most recent owner write, or null once a
+   * write has flowed again. See lastRefusalInfo for why this exists beside
+   * write()'s own return.
+   */
+  lastRefusal(): { verdict: Exclude<OwnerInputVerdict, 'allow'>; at: number } | null {
+    return this.lastRefusalInfo
   }
 
   /**
@@ -938,6 +963,17 @@ export class PtyManager {
 
   get(terminalId: string): PtySession | undefined {
     return this.sessions.get(terminalId)
+  }
+
+  /**
+   * The still-current refusal of a terminal's most recent owner write (Sol
+   * r8 P1). The conductor exposes this over IPC beside the tracker's
+   * refusalReason, so the renderer can explain a swallowed keystroke instead
+   * of leaving the desktop the one surface where refusals are silent. Null:
+   * no session, or the last write flowed.
+   */
+  lastRefusal(terminalId: string): { verdict: OwnerInputVerdict; at: number } | null {
+    return this.sessions.get(terminalId)?.lastRefusal() ?? null
   }
 
   /**

@@ -1,4 +1,4 @@
-// THE ONE-PRODUCER LEASE (Sol r6 P0-1, hardened per Sol r7): one submission
+// THE ONE-PRODUCER LEASE (Sol r6 P0-1, hardened per Sol r7/r8): one submission
 // window per terminal.
 //
 // The r5 owner guard was a point-in-time check — it preempted a dispatch that
@@ -42,15 +42,28 @@
 // execFile that only settles at the ask timeout) stranded the reborn
 // terminal's window until the dead promise finally resolved.
 //
-// CONTAMINATION (Sol r7 P0-1): a delivery cancelled AFTER its paste write but
-// BEFORE its CR leaves the cancelled prompt sitting in the TUI's shared input
-// box. That buffer is no longer any producer's clean slate — the next submit
-// at the terminal would carry the cancelled text. The flag records that fact
-// at the lease (the one object every producer already consults); while set,
-// every submit-capable write refuses, until the owner clears the box (see
-// TurnTracker.handleInput) or the terminal is retired (fresh process, fresh
-// box). Marking is generation-checked so a retire that raced the cancellation
-// never stains the reborn terminal.
+// CONTAMINATION (Sol r7 P0-1, fail-closed per Sol r8 P0-2): a delivery
+// cancelled AFTER its paste write but BEFORE its CR leaves the cancelled
+// prompt sitting in the TUI's shared input box. That buffer is no longer any
+// producer's clean slate — the next submit at the terminal would carry the
+// cancelled text. The flag records that fact at the lease (the one object
+// every producer already consults); while set, every submit-capable write
+// refuses. The ONLY clear is a terminal generation reset (`retire` — fresh
+// process, fresh input box). The r7 owner-acknowledgment clear (one observed
+// Ctrl-U/Ctrl-C byte) is gone: a control byte is an observation, never PROOF
+// — Ctrl-U provably clears one line of a multi-line residue, Ctrl-C doubles
+// as quit in some harnesses — and converting it into proof readmitted
+// submits over live residue. Marking is generation-checked so a retire that
+// raced the cancellation never stains the reborn terminal.
+//
+// OWNER EDITING (Sol r8 P0-1): the composing mark. The tracker sets it on the
+// first meaningful owner byte entering the shared input box and clears it when
+// the box provably empties (submit completion, buffer emptied) or the terminal
+// retires. While set, dispatch admission and both delivery legs refuse — the
+// input box is the owner's, and a delivery pasted beside half-typed owner text
+// would submit a combined prompt no producer ever asked for. It is a MARK, not
+// a hold: owner typing must never block owner typing, so it carries no holder
+// identity and no depth.
 //
 // NO TIMERS, on purpose: the lease never expires a hold on its own. Every
 // caller owns its hold's lifetime and releases in a `finally`; a retired
@@ -59,6 +72,20 @@
 // Pure map-over-ids state, no I/O — the whole matrix is unit-testable.
 
 import { randomUUID } from 'node:crypto'
+
+/** The named refusal every producer surfaces while the buffer is dirty. */
+export const CONTAMINATED_REFUSAL =
+  'input box contaminated by a cancelled delivery — restart the terminal to clear it'
+
+/**
+ * Generation entries a retired-and-never-reused terminal id may keep (Sol r8
+ * P2). A tombstone only matters while a stale asynchronous holder could still
+ * return — bounded by the ask timeout — so the map is bounded rather than
+ * eternal: beyond this, the oldest tombstones with no live hold or mark are
+ * reclaimed. Generous on purpose: live terminals number in the dozens, and a
+ * stale leg lives minutes, not thousands of retires.
+ */
+const GENERATION_TOMBSTONES = 1024
 
 /**
  * Who holds a terminal's submission window. Owner holders carry a minted
@@ -102,6 +129,16 @@ export class ProducerLease {
   private readonly generations = new Map<string, number>()
   /** terminalId → the generation whose input buffer holds cancelled residue. */
   private readonly contaminated = new Map<string, number>()
+  /** terminalId → the generation whose input box holds owner typing (r8 P0-1). */
+  private readonly ownerEditing = new Map<string, number>()
+  /**
+   * Retirement observers (Sol r8 P1): the abort seam. A native prompt child
+   * blocked inside execFile cannot poll the generation it captured; whoever
+   * holds its AbortController subscribes here and aborts when the terminal's
+   * lifetime ends. Notified AFTER the retire's own state changes land, so a
+   * listener observing the lease sees the retired world.
+   */
+  private readonly retireListeners = new Set<(terminalId: string) => void>()
 
   /** The terminal's current lifetime generation (0 until first retire). */
   generationOf(terminalId: string): number {
@@ -111,13 +148,37 @@ export class ProducerLease {
   /**
    * Permanent terminal ending (Sol r7 P1): bump the generation so every hold
    * acquired in the old lifetime becomes invisible — a stale async leg's late
-   * release no-ops, and the reborn terminal's producers acquire freely.
-   * Contamination dies with the process whose input box carried it. Wired by
-   * the conductor into retireTerminal and backend death.
+   * release no-ops, and the reborn terminal's producers acquire freely. The
+   * dead hold itself is DELETED (Sol r8 P2), not merely hidden: retired ids
+   * are UUIDs that never return, and hiding kept their entries for the
+   * process lifetime. Contamination and the owner-editing mark die with the
+   * process whose input box carried them — retirement is the ONLY exit for
+   * contamination (Sol r8 P0-2). Wired by the conductor into retireTerminal
+   * and backend death.
    */
   retire(terminalId: string): void {
-    this.generations.set(terminalId, this.generationOf(terminalId) + 1)
+    const next = this.generationOf(terminalId) + 1
+    this.holds.delete(terminalId)
+    // Delete-then-set refreshes Map insertion order, so the tombstone bound
+    // below reclaims oldest-retired first.
+    this.generations.delete(terminalId)
+    this.generations.set(terminalId, next)
     this.contaminated.delete(terminalId)
+    this.ownerEditing.delete(terminalId)
+    this.boundGenerations()
+    for (const listener of [...this.retireListeners]) listener(terminalId)
+  }
+
+  /**
+   * Observe retirements (Sol r8 P1). Returns the unsubscribe; callers pair it
+   * with their own settle path in a `finally` so the set stays bounded by
+   * in-flight work.
+   */
+  onRetire(listener: (terminalId: string) => void): () => void {
+    this.retireListeners.add(listener)
+    return () => {
+      this.retireListeners.delete(listener)
+    }
   }
 
   /**
@@ -185,17 +246,58 @@ export class ProducerLease {
     this.contaminated.set(terminalId, current)
   }
 
-  /** Does the terminal's input box hold cancelled-delivery residue? */
+  /**
+   * Does the terminal's input box hold cancelled-delivery residue? While
+   * true, every submit-capable producer refuses with CONTAMINATED_REFUSAL.
+   * There is deliberately NO clear operation (Sol r8 P0-2): no byte this
+   * process can send or observe PROVES a multi-line residue gone, so the
+   * flag holds until `retire` resets the terminal generation — a fresh
+   * process with a provably empty input box.
+   */
   isContaminated(terminalId: string): boolean {
     return this.contaminated.get(terminalId) === this.generationOf(terminalId)
   }
 
   /**
-   * The owner acknowledged and cleared the residue (an explicit line-clear
-   * typed at the terminal — see TurnTracker.handleInput). Submits flow again.
+   * The owner's typing entered the shared input box (Sol r8 P0-1): the first
+   * meaningful owner byte acquires this mark, and the tracker keeps it while
+   * its prompt-buffer model of the box holds owner text. Generation-checked
+   * like contamination — a mark racing a retire must not stain the reborn
+   * terminal's box.
    */
-  clearContaminated(terminalId: string): void {
-    this.contaminated.delete(terminalId)
+  markOwnerEditing(terminalId: string, generation?: number): void {
+    const current = this.generationOf(terminalId)
+    if (generation !== undefined && generation !== current) return
+    this.ownerEditing.set(terminalId, current)
+  }
+
+  /**
+   * The box provably emptied — a submit completed (the buffer's content left
+   * as one owner prompt) or the owner cleared their typing. Called by the
+   * tracker from the same buffer feed that set the mark; `retire` clears it
+   * with everything else.
+   */
+  clearOwnerEditing(terminalId: string): void {
+    this.ownerEditing.delete(terminalId)
+  }
+
+  /** Is the owner composing in this terminal's input box right now? */
+  isOwnerEditing(terminalId: string): boolean {
+    return this.ownerEditing.get(terminalId) === this.generationOf(terminalId)
+  }
+
+  /**
+   * Entry counts, for the growth gates (Sol r8 P2) and diagnostics. Retired
+   * ids must not accumulate: holds/contamination/editing die at retire, and
+   * generation tombstones are bounded by GENERATION_TOMBSTONES.
+   */
+  mapSizes(): { holds: number; generations: number; contaminated: number; ownerEditing: number } {
+    return {
+      holds: this.holds.size,
+      generations: this.generations.size,
+      contaminated: this.contaminated.size,
+      ownerEditing: this.ownerEditing.size
+    }
   }
 
   /** The current-generation hold, treating a dead generation's as absent. */
@@ -203,6 +305,24 @@ export class ProducerLease {
     const held = this.holds.get(terminalId)
     if (held === undefined || held.generation !== this.generationOf(terminalId)) return undefined
     return held
+  }
+
+  /**
+   * Keep the generation tombstones bounded (Sol r8 P2). Oldest-retired ids
+   * are reclaimed first (retire refreshes insertion order); an id still
+   * carrying a live hold or mark is never reclaimed — dropping its generation
+   * to zero would blind the generation checks that protect a LIVE terminal.
+   * Reclaiming a truly dead tombstone re-opens only a negligible window: its
+   * stale legs would need to return after ~a thousand later retires AND carry
+   * a captured generation of exactly zero.
+   */
+  private boundGenerations(): void {
+    if (this.generations.size <= GENERATION_TOMBSTONES) return
+    for (const id of this.generations.keys()) {
+      if (this.generations.size <= GENERATION_TOMBSTONES) return
+      if (this.holds.has(id) || this.contaminated.has(id) || this.ownerEditing.has(id)) continue
+      this.generations.delete(id)
+    }
   }
 }
 

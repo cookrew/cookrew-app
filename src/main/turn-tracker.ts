@@ -15,7 +15,7 @@ import { agentStatus } from './herdr-agent-status'
 // The one-producer lease (Sol r6 P0-1): the PTY guard consults it so owner
 // bytes are refused while a dispatch DELIVERY is mid-submission — the shared
 // input box may hold its half-ingested paste.
-import { defaultProducerLease, type ProducerLease } from './producer-lease'
+import { CONTAMINATED_REFUSAL, defaultProducerLease, type ProducerLease } from './producer-lease'
 import { summarizeTurn, TurnSummarizer } from './sous'
 import type { TurnStore } from './turn-store'
 import {
@@ -1501,23 +1501,30 @@ export class TurnTracker extends EventEmitter {
   private handleInput(terminalId: string, data: string, source?: 'dispatch'): void {
     const t = this.tracked.get(terminalId)
     if (!t) return
-    // Contamination acknowledgment (Sol r7 P0-1): a cancelled delivery's
-    // paste is sitting in the input box, submits are refused, and the ONE
-    // party who can see the box is the owner. An explicit owner line-clear
-    // (Ctrl-C / Ctrl-U — the same bytes feedTypedSegment models as clearing
-    // the line) is taken as that acknowledgment. Best-effort by design: the
-    // flag is Cookrew's model of the box, not the TUI's truth — an owner who
-    // cleared a multi-line residue with other keys stays refused until a
-    // Ctrl-U/Ctrl-C, and a Ctrl-U that only killed one line of a multi-line
-    // residue clears the flag anyway. Documented residual risk; the honest
-    // alternative (proving the TUI's buffer empty) does not exist.
-    if (source !== 'dispatch' && !t.inPaste && /[\x03\x15]/.test(data)) {
-      this.lease.clearContaminated(terminalId)
-    }
+    // NO contamination clearing here (Sol r8 P0-2). The r7 rule took one
+    // observed Ctrl-U/Ctrl-C byte as the owner's acknowledgment that the box
+    // was clean — but a control byte is an observation, never proof: Ctrl-U
+    // provably clears ONE line of a multi-line residue, and Ctrl-C doubles
+    // as interrupt/quit per harness. The flag now holds until the terminal
+    // generation resets (producer-lease.retire — a restarted process with a
+    // provably empty box), and every refusal names that requirement.
     const fed = feedPromptBuffer(t.promptBuffer, data, t.inPaste, t.heldInput)
     t.promptBuffer = fed.buffer
     t.inPaste = fed.inPaste
     t.heldInput = fed.held
+    // THE EDITING RESERVATION (Sol r8 P0-1), maintained from the same buffer
+    // feed that renders 'typing:' on cards — and synchronously with the
+    // write that delivered the bytes (PtySession.write emits 'input' in the
+    // same stretch), so there is no window between an owner byte landing in
+    // the shared input box and dispatch admission seeing the mark. Owner
+    // bytes only: the dispatch fallback's own tagged paste passes through
+    // this buffer too and must not read as the owner composing. The mark
+    // clears when the box provably empties — a submit consumed the buffer,
+    // or the owner erased their typing.
+    if (source !== 'dispatch') {
+      if (fed.buffer.trim().length > 0) this.lease.markOwnerEditing(terminalId)
+      else this.lease.clearOwnerEditing(terminalId)
+    }
     if (!t.agent) return
     if (fed.submitted.length > 0) t.lastSubmitAt = Date.now()
     if (fed.submitted.length > 0 || fed.buffer.trim().length > 0) t.sawInputThisTurn = true
@@ -1578,9 +1585,10 @@ export class TurnTracker extends EventEmitter {
    * un-send bytes that already crossed the boundary, so the owner waits.
    *
    * (2) A CONTAMINATED buffer (a cancelled delivery's paste stranded in the
-   * input box) refuses every submit-capable byte until the owner clears the
-   * box (see handleInput); non-submitting bytes — including the clearing
-   * Ctrl-U/Ctrl-C itself — pass.
+   * input box) refuses every submit-capable byte until the terminal is
+   * RESTARTED (the generation reset — Sol r8 P0-2; no observed control byte
+   * is proof of a clean box). Non-submitting bytes still pass: editing keys
+   * are harmless in a box nothing can submit from.
    *
    * (3) While a dispatch is merely ARMED (stamped, not delivering — no lease
    * hold), behavior is unchanged: typing and menu answers pass, and only a
@@ -1609,6 +1617,42 @@ export class TurnTracker extends EventEmitter {
     const submits = fed.submitted.some((s) => s.length > 0)
     if (!submits) return 'allow'
     return this.preemptOnOwnerSubmit(terminalId, undefined)
+  }
+
+  /**
+   * INPUT-BUFFER OWNERSHIP (Sol r8 P0-1): is the owner composing in this
+   * terminal's shared input box right now? True while the tracked prompt
+   * buffer holds meaningful owner bytes — the editing reservation handleInput
+   * maintains on the lease from the same feed that renders 'typing:' on
+   * cards; dispatch-tagged bytes never set it — or while an owner submission
+   * HOLDS the lease (its paste may be mid-flight toward that same box).
+   *
+   * Wired by the conductor as DispatchDeps.ownerComposing: admission refuses
+   * 409 while it is true, and both delivery legs revalidate it immediately
+   * before their irreversible submission — half-typed owner text combined
+   * with an admitted dispatch would submit a prompt no producer ever asked
+   * for. An UNTRACKED terminal has no composer (no PTY): false.
+   */
+  ownerComposing(terminalId: string): boolean {
+    if (!this.tracked.has(terminalId)) return false
+    if (this.lease.isOwnerEditing(terminalId)) return true
+    return this.lease.holderOf(terminalId)?.kind === 'owner'
+  }
+
+  /**
+   * Name the reason an owner write at this terminal refuses right now, or
+   * null when nothing would refuse (Sol r8 P1 — desktop refusals were
+   * silent). The PTY guard's verdict is an enum; this is the sentence the
+   * conductor surfaces beside it (IPC → renderer toast) so a keystroke
+   * vanishing during a held submission window or into a contaminated box is
+   * an explained refusal, not a dead key.
+   */
+  refusalReason(terminalId: string): string | null {
+    const holder = this.lease.holderOf(terminalId)
+    if (holder?.kind === 'dispatch') return 'a dispatch is being delivered — retry in a moment'
+    if (holder?.kind === 'owner') return 'another owner submission is in flight'
+    if (this.lease.isContaminated(terminalId)) return CONTAMINATED_REFUSAL
+    return null
   }
 
   /**

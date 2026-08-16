@@ -181,18 +181,21 @@ describe('ProducerLease — retirement generations (Sol r7 P1)', () => {
 // terminal's next submit — any producer's — would carry it.
 // ---------------------------------------------------------------------------
 
-describe('ProducerLease — contamination (Sol r7 P0-1)', () => {
-  it('mark / observe / clear', () => {
+describe('ProducerLease — contamination (Sol r7 P0-1, fail-closed per r8 P0-2)', () => {
+  it('mark / observe — and there is NO clear operation on the lease', () => {
     const lease = new ProducerLease()
     expect(lease.isContaminated('term-1')).toBe(false)
     lease.markContaminated('term-1')
     expect(lease.isContaminated('term-1')).toBe(true)
     expect(lease.isContaminated('term-2')).toBe(false)
-    lease.clearContaminated('term-1')
-    expect(lease.isContaminated('term-1')).toBe(false)
+    // The r7 clearContaminated is deleted: converting an observed control
+    // byte into proof of a clean box readmitted submits over live residue.
+    expect(
+      (lease as unknown as Record<string, unknown>).clearContaminated
+    ).toBeUndefined()
   })
 
-  it('retire clears contamination — the residue died with the process', () => {
+  it('retire — the ONLY clear: the residue died with the process', () => {
     const lease = new ProducerLease()
     lease.markContaminated('term-1')
     lease.retire('term-1')
@@ -324,7 +327,7 @@ describe('guardOwnerInput while a producer holds the lease', () => {
   })
 })
 
-describe('guardOwnerInput under contamination (Sol r7 P0-1)', () => {
+describe('guardOwnerInput under contamination (Sol r7 P0-1, fail-closed per r8 P0-2)', () => {
   it('refuses submit-capable bytes, allows non-submitting ones', () => {
     const { tracker, lease } = guardFixture()
     lease.markContaminated('term-1')
@@ -332,30 +335,224 @@ describe('guardOwnerInput under contamination (Sol r7 P0-1)', () => {
     // and the box holds a cancelled producer's paste.
     expect(tracker.guardOwnerInput('term-1', 'a new prompt\r')).toBe('refused')
     expect(tracker.guardOwnerInput('term-1', '\r')).toBe('refused')
-    // Typing and editing keys pass: the owner must be able to clear the box.
+    // Editing keys still pass: they are harmless in a box nothing can
+    // submit from, and dropping them would make the terminal feel dead.
     expect(tracker.guardOwnerInput('term-1', 'typing')).toBe('allow')
     expect(tracker.guardOwnerInput('term-1', '\x15')).toBe('allow')
     tracker.disposeAll()
   })
 
-  it('an owner line-clear (Ctrl-U / Ctrl-C) through the input path clears the flag', () => {
+  it('control bytes do NOT clear the flag — an observation is not proof (r8 P0-2)', () => {
+    // The r7 rule took one observed Ctrl-U/Ctrl-C as the owner's
+    // acknowledgment of a clean box — but Ctrl-U provably clears ONE line of
+    // a multi-line residue and Ctrl-C doubles as interrupt/quit per harness,
+    // so the next submit could still carry cancelled consumer text under a
+    // fresh producer identity.
     const { tracker, lease, session } = guardFixture()
     lease.markContaminated('term-1')
     expect(tracker.guardOwnerInput('term-1', 'retry\r')).toBe('refused')
-    // The acknowledgment: the owner clears the box with their own keys. The
-    // bytes are non-submitting, so the guard passes them, and handleInput —
-    // the delivered-bytes side — clears the flag.
     session.emit('input', '\x15')
+    session.emit('input', '\x03')
+    expect(lease.isContaminated('term-1')).toBe(true)
+    expect(tracker.guardOwnerInput('term-1', 'retry\r')).toBe('refused')
+    // The named refusal tells the owner the one real remedy.
+    expect(tracker.refusalReason('term-1')).toContain('restart the terminal')
+    tracker.disposeAll()
+  })
+
+  it('terminal retirement — the generation reset — is what clears it', () => {
+    const { tracker, lease, session } = guardFixture()
+    lease.markContaminated('term-1')
+    session.emit('input', '\x15')
+    expect(lease.isContaminated('term-1')).toBe(true)
+    lease.retire('term-1')
     expect(lease.isContaminated('term-1')).toBe(false)
     expect(tracker.guardOwnerInput('term-1', 'retry\r')).toBe('allow')
     tracker.disposeAll()
   })
+})
 
-  it("a dispatch's OWN tagged bytes never count as the owner's acknowledgment", () => {
-    const { tracker, lease, session } = guardFixture()
-    lease.markContaminated('term-1')
-    session.emit('input', '\x15', 'dispatch')
-    expect(lease.isContaminated('term-1')).toBe(true)
+// ---------------------------------------------------------------------------
+// Sol r8 P0-1 — input-buffer ownership. Typing is not a submission, so the
+// lease never saw it: real owner text could sit in the shared input box while
+// a dispatch acquired the free lease and submitted the combined principal
+// input. The editing reservation marks the box as the owner's from the first
+// meaningful byte, and ownerComposing is the question dispatch admission and
+// both delivery legs ask.
+// ---------------------------------------------------------------------------
+
+describe('ProducerLease — the owner-editing mark (Sol r8 P0-1)', () => {
+  it('mark / observe / clear', () => {
+    const lease = new ProducerLease()
+    expect(lease.isOwnerEditing('term-1')).toBe(false)
+    lease.markOwnerEditing('term-1')
+    expect(lease.isOwnerEditing('term-1')).toBe(true)
+    expect(lease.isOwnerEditing('term-2')).toBe(false)
+    lease.clearOwnerEditing('term-1')
+    expect(lease.isOwnerEditing('term-1')).toBe(false)
+  })
+
+  it('is a mark, not a hold: the lease stays acquirable by the owner themselves', () => {
+    const lease = new ProducerLease()
+    lease.markOwnerEditing('term-1')
+    expect(lease.acquire('term-1', ownerHolder())).toBe('acquired')
+  })
+
+  it('retire clears it — the typing died with the process', () => {
+    const lease = new ProducerLease()
+    lease.markOwnerEditing('term-1')
+    lease.retire('term-1')
+    expect(lease.isOwnerEditing('term-1')).toBe(false)
+  })
+
+  it('a stale-generation mark no-ops, like contamination', () => {
+    const lease = new ProducerLease()
+    const generation = lease.generationOf('term-1')
+    lease.retire('term-1')
+    lease.markOwnerEditing('term-1', generation)
+    expect(lease.isOwnerEditing('term-1')).toBe(false)
+  })
+})
+
+describe('TurnTracker.ownerComposing (Sol r8 P0-1)', () => {
+  it('typed owner bytes compose; a submit consumes the buffer and releases', () => {
+    const { tracker, session } = guardFixture()
+    expect(tracker.ownerComposing('term-1')).toBe(false)
+    session.emit('input', 'deploy the rel')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    // Submit completion: the buffer empties through the same feed.
+    session.emit('input', 'ease\r')
+    expect(tracker.ownerComposing('term-1')).toBe(false)
     tracker.disposeAll()
+  })
+
+  it('the owner erasing their typing releases the reservation', () => {
+    const { tracker, session } = guardFixture()
+    session.emit('input', 'half a thought')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    session.emit('input', '\x15')
+    expect(tracker.ownerComposing('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+
+  it("a dispatch's OWN tagged paste never reads as the owner composing", () => {
+    const { tracker, session } = guardFixture()
+    session.emit('input', '\x1b[200~the dispatched brief\x1b[201~', 'dispatch')
+    expect(tracker.ownerComposing('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+
+  it('an owner-held lease composes too — its paste is mid-flight toward the box', () => {
+    const { tracker, lease } = guardFixture()
+    const owner = ownerHolder()
+    lease.acquire('term-1', owner)
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    lease.release('term-1', owner)
+    expect(tracker.ownerComposing('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+
+  it('an UNTRACKED terminal has no composer (no PTY): false', () => {
+    const lease = new ProducerLease()
+    const tracker = new TurnTracker(async () => null, null, lease)
+    expect(tracker.ownerComposing('term-9')).toBe(false)
+    // Even a stray mark cannot make a PTY-less terminal compose.
+    lease.markOwnerEditing('term-9')
+    expect(tracker.ownerComposing('term-9')).toBe(false)
+  })
+
+  it('terminal retirement releases the reservation with everything else', () => {
+    const { tracker, lease, session } = guardFixture()
+    session.emit('input', 'typing at the point of death')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    lease.retire('term-1')
+    expect(tracker.ownerComposing('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+})
+
+describe('TurnTracker.refusalReason (Sol r8 P1)', () => {
+  it('names the holder, the contamination, or nothing', () => {
+    const { tracker, lease } = guardFixture()
+    expect(tracker.refusalReason('term-1')).toBeNull()
+    const dispatch = dispatchHolder('dsp-1')
+    lease.acquire('term-1', dispatch)
+    expect(tracker.refusalReason('term-1')).toContain('dispatch is being delivered')
+    lease.release('term-1', dispatch)
+    const owner = ownerHolder()
+    lease.acquire('term-1', owner)
+    expect(tracker.refusalReason('term-1')).toContain('owner submission is in flight')
+    lease.release('term-1', owner)
+    lease.markContaminated('term-1')
+    expect(tracker.refusalReason('term-1')).toContain('restart the terminal')
+    tracker.disposeAll()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r8 P2 — retirement reclaims state. `retire` used to hide the dead hold
+// behind a generation mismatch and keep both map entries for the process
+// lifetime; removed UUIDs never return, so create/retire cycles grew the
+// singleton monotonically.
+// ---------------------------------------------------------------------------
+
+describe('ProducerLease — retirement reclaims map state (Sol r8 P2)', () => {
+  it('retire DELETES the holds entry, not merely hides it', () => {
+    const lease = new ProducerLease()
+    lease.acquire('term-1', dispatchHolder('dsp-old'))
+    expect(lease.mapSizes().holds).toBe(1)
+    lease.retire('term-1')
+    expect(lease.mapSizes().holds).toBe(0)
+  })
+
+  it('create/retire cycles stay bounded across every map', () => {
+    const lease = new ProducerLease()
+    for (let i = 0; i < 3000; i += 1) {
+      const id = `term-${i}`
+      lease.acquire(id, dispatchHolder(`dsp-${i}`))
+      lease.markContaminated(id)
+      lease.markOwnerEditing(id)
+      lease.retire(id)
+    }
+    const sizes = lease.mapSizes()
+    expect(sizes.holds).toBe(0)
+    expect(sizes.contaminated).toBe(0)
+    expect(sizes.ownerEditing).toBe(0)
+    // Generation tombstones are bounded, not eternal: kept only while a
+    // stale asynchronous holder could still return.
+    expect(sizes.generations).toBeLessThanOrEqual(1024)
+  })
+
+  it('the bound never reclaims a generation protecting a LIVE hold or mark', () => {
+    const lease = new ProducerLease()
+    // A rebound terminal: retired once, then re-acquired in its new life.
+    lease.retire('term-live')
+    const generation = lease.generationOf('term-live')
+    lease.acquire('term-live', dispatchHolder('dsp-live'))
+    lease.markContaminated('term-mark')
+    lease.retire('term-mark')
+    lease.markContaminated('term-mark')
+    for (let i = 0; i < 2000; i += 1) lease.retire(`churn-${i}`)
+    // The churn evicted dead tombstones, never the live ones.
+    expect(lease.generationOf('term-live')).toBe(generation)
+    expect(lease.holderOf('term-live')).toEqual(dispatchHolder('dsp-live'))
+    expect(lease.isContaminated('term-mark')).toBe(true)
+  })
+})
+
+describe('ProducerLease — retirement observers (Sol r8 P1)', () => {
+  it('notifies with the retired id, after the retire landed; unsubscribe stops it', () => {
+    const lease = new ProducerLease()
+    const seen: Array<{ id: string; holds: number }> = []
+    const unsubscribe = lease.onRetire((id) =>
+      seen.push({ id, holds: lease.mapSizes().holds })
+    )
+    lease.acquire('term-1', dispatchHolder('dsp-1'))
+    lease.retire('term-1')
+    // The listener observed the retired world — the hold already reclaimed.
+    expect(seen).toEqual([{ id: 'term-1', holds: 0 }])
+    unsubscribe()
+    lease.retire('term-2')
+    expect(seen).toHaveLength(1)
   })
 })

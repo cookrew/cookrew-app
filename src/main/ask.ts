@@ -1,6 +1,8 @@
 import { feedPromptBuffer } from '../shared/turn'
 import { multiplexer, type PtySession } from './pty'
+import type { Multiplexer } from './multiplexer'
 import {
+  CONTAMINATED_REFUSAL,
   defaultProducerLease,
   ownerHolder,
   type ProducerHolder,
@@ -57,19 +59,21 @@ export function submitDelayMs(promptLength: number): number {
  * 'cancelled'. Callers thread their own liveness in — the dispatch fallback
  * passes its deliveryLive + lease check, the owner submit its own lease hold.
  *
- * THE RESIDUE (Sol r7 P0-1): a cancellation after the paste but before the CR
- * leaves the pasted prompt sitting UNSUBMITTED in the TUI's input box, where
- * the terminal's NEXT submission — any producer's — would carry it. That is
- * no longer left as folklore: the terminal is marked CONTAMINATED on the
- * shared producer lease, and every submit-capable write refuses until the
- * owner clears the input box (see TurnTracker.handleInput for the
- * acknowledgment). The residue is deliberately NOT auto-cleared here: at the
- * live tail an ESC is an agent interrupt in every harness TUI we host, and
- * Ctrl-C/Ctrl-U semantics differ per harness (Claude Code's Ctrl-C doubles as
- * quit; a kill-line only provably clears ONE line of a multi-line paste), so
- * no control sequence this code could send is PROOF of a clean buffer.
- * Marking is generation-scoped: a terminal retired mid-cancellation reboots
- * with a fresh input box and must not inherit the flag.
+ * THE RESIDUE (Sol r7 P0-1, fail-closed per Sol r8 P0-2): a cancellation
+ * after the paste but before the CR leaves the pasted prompt sitting
+ * UNSUBMITTED in the TUI's input box, where the terminal's NEXT submission —
+ * any producer's — would carry it. That is no longer left as folklore: the
+ * terminal is marked CONTAMINATED on the shared producer lease, and every
+ * submit-capable write refuses until the terminal is RESTARTED (a generation
+ * reset — producer-lease.retire, wired at retireTerminal/backend death). The
+ * residue is deliberately NOT auto-cleared, and no observed control byte
+ * clears the flag either: at the live tail an ESC is an agent interrupt in
+ * every harness TUI we host, and Ctrl-C/Ctrl-U semantics differ per harness
+ * (Claude Code's Ctrl-C doubles as quit; a kill-line only provably clears ONE
+ * line of a multi-line paste), so no control sequence this code could send OR
+ * observe is PROOF of a clean buffer. Marking is generation-scoped: a
+ * terminal retired mid-cancellation reboots with a fresh input box and must
+ * not inherit the flag.
  */
 export async function pasteAndSubmit(
   session: PtySession,
@@ -116,53 +120,14 @@ export async function askTerminal(
   const before = session.fullText()
 
   // herdr-native ask: the multiplexer submits the prompt (its own paste and
-  // submit handling) and blocks until the agent actually finishes — no typed
-  // bracketed paste, no tuned submit delay, no quiescence guessing. The reply
-  // still comes out of the mirror diff, so the shape callers see is identical.
+  // submit handling) — no typed bracketed paste, no tuned submit delay. The
+  // reply still comes out of the mirror diff, so the shape callers see is
+  // identical. Null = herdr could not deliver at all; fall through to the
+  // typed path exactly as before this existed.
   const mux = multiplexer()
-  if (mux?.capabilities.agentLifecycle && mux.promptAgent) {
-    // THE ONE-PRODUCER LEASE, at the submit site (Sol r5 P0-1, hardened into
-    // a reservation per r6 P0-1). A native ask submits server-side and never
-    // crosses PtySession.write, so this is the only place its bytes can meet
-    // the same serialization every other producer meets. Acquiring holds the
-    // terminal's submission window for the whole blocking promptAgent — the
-    // r5 guard verdict evaporated the moment it was returned, so a dispatch
-    // (or a second owner ask) could arm and submit DURING that await; the
-    // lease makes them refuse instead. Preemption of an armed dispatch is
-    // unchanged (guardOwnerBytes, inside the acquisition): synchronous, with
-    // NO await between verdict and submission. The guard sees the SUBMITTING
-    // bytes — prompt plus Enter, the exact shape a typed submit would have.
-    const holder = acquireOwnerLease(lease, session, `${prompt}\r`)
-    let outcome: 'done' | 'submitted' | 'failed'
-    try {
-      outcome = await mux.promptAgent(session.sessionName, prompt, timeoutMs)
-    } finally {
-      // Submission acknowledgement: promptAgent resolved (or threw), so the
-      // bytes-in-flight window is over. The TURN keeps running — that is the
-      // tracker stamp's job, not the lease's.
-      lease.release(session.terminalId, holder)
-    }
-    if (outcome !== 'failed') {
-      // The tracker learns prompts from session.write's input event; a
-      // herdr-side submission never passes through write, so announce it —
-      // otherwise every herdr-native ask records as a promptless phantom turn.
-      session.noteExternalInput(prompt + '\r')
-    }
-    if (outcome === 'done') {
-      return diffOutput(before, session.fullText())
-    }
-    if (outcome === 'submitted') {
-      // The prompt IS in the pane — herdr just could not observe the agent
-      // finishing (a stalled detector). Typing again double-submits; measured
-      // live as a queued duplicate in the agent's input box. So wait it out
-      // by OUTPUT QUIESCENCE — the one completion signal that needs no
-      // detector — and skip waitUntilIdle for the same reason the detector
-      // stalled: a stuck 'idle' answers instantly and truncates the reply.
-      await waitForQuiescence(session, { quiescenceMs, timeoutMs, graceMs })
-      return diffOutput(before, session.fullText())
-    }
-    // 'failed': herdr never delivered it (agent unresolvable, server briefly
-    // down) — fall through to the typed path exactly as before this existed.
+  if (mux?.capabilities.agentLifecycle && (mux.submitAgent ?? mux.promptAgent) !== undefined) {
+    const native = await nativeAsk(session, prompt, { quiescenceMs, timeoutMs, graceMs }, lease, mux)
+    if (native !== null) return diffOutput(before, native)
   }
 
   // The typed path routes through THE submit primitive (Sol r7 P0-2):
@@ -177,6 +142,103 @@ export async function askTerminal(
   await waitForReply(session, { quiescenceMs, timeoutMs, graceMs })
 
   return diffOutput(before, session.fullText())
+}
+
+/**
+ * The backend-native leg of an ask. Returns the post-turn full text for the
+ * caller's diff, or null when herdr never delivered the prompt (agent
+ * unresolvable, server briefly down) and the typed path should run instead.
+ *
+ * THE ONE-PRODUCER LEASE, at the submit site (Sol r5 P0-1, a reservation per
+ * r6 P0-1): a native ask submits server-side and never crosses
+ * PtySession.write, so this is the only place its bytes can meet the same
+ * serialization every other producer meets. Preemption of an armed dispatch
+ * is unchanged (guardOwnerBytes, inside the acquisition): synchronous, with
+ * NO await between verdict and submission. The guard sees the SUBMITTING
+ * bytes — prompt plus Enter, the exact shape a typed submit would have.
+ *
+ * THE LEASE WINDOW (Sol r8 P1): with a backend that acknowledges submission
+ * (`submitAgent` — herdr's `agent prompt` without `--wait`), the lease is
+ * held only across that acknowledgement and the reply-wait runs OUTSIDE it,
+ * so owner input at the desktop is refused for milliseconds instead of the
+ * whole turn. Without the mode, `promptAgent` keeps the CONSERVATIVE hold —
+ * acquired before the blocking call, released when it settles — because the
+ * only acknowledgement that backend offers IS turn completion; the refusal
+ * surfacing (PtySession.write verdicts, TurnTracker.refusalReason) is what
+ * makes that long hold visible instead of silent.
+ *
+ * THE ABORT SEAM (Sol r8 P1): the terminal retiring mid-await fires an
+ * AbortController threaded into the backend call, which TERM-kills the CLI
+ * child — no orphaned `herdr agent prompt` waiting out the full timeout
+ * behind a dead terminal. The generation captured at entry is re-checked
+ * after the call settles: a retired ask throws honestly rather than falling
+ * through to type into the reborn terminal.
+ */
+async function nativeAsk(
+  session: PtySession,
+  prompt: string,
+  timing: { quiescenceMs: number; timeoutMs: number; graceMs: number },
+  lease: ProducerLease,
+  mux: Multiplexer
+): Promise<string | null> {
+  const terminalId = session.terminalId
+  const generation = lease.generationOf(terminalId)
+  const abort = new AbortController()
+  const unsubscribe = lease.onRetire((retired) => {
+    if (retired === terminalId) abort.abort()
+  })
+  try {
+    const holder = acquireOwnerLease(lease, session, `${prompt}\r`)
+    let outcome: 'done' | 'submitted' | 'failed'
+    try {
+      outcome =
+        mux.submitAgent !== undefined
+          ? await mux.submitAgent(session.sessionName, prompt, timing.timeoutMs, abort.signal)
+          : await mux.promptAgent!(session.sessionName, prompt, timing.timeoutMs, abort.signal)
+    } catch (error) {
+      // A rejection from a killed child is the RETIREMENT speaking, not a
+      // submission fault — name it as such instead of leaking an AbortError.
+      if (abort.signal.aborted || lease.generationOf(terminalId) !== generation) {
+        throw new Error('the terminal was retired mid-ask')
+      }
+      throw error
+    } finally {
+      // Submission acknowledgement (or the attempt settled): the
+      // bytes-in-flight window is over. The TURN keeps running — that is the
+      // tracker stamp's job, not the lease's.
+      lease.release(terminalId, holder)
+    }
+    if (lease.generationOf(terminalId) !== generation) {
+      // Retired mid-await (the abort above fired, or the call settled first
+      // by luck). The dead leg must not fall through and type into the
+      // reborn terminal's input box.
+      throw new Error('the terminal was retired mid-ask')
+    }
+    if (outcome === 'failed') return null
+    // The tracker learns prompts from session.write's input event; a
+    // herdr-side submission never passes through write, so announce it —
+    // otherwise every herdr-native ask records as a promptless phantom turn.
+    session.noteExternalInput(prompt + '\r')
+    if (outcome === 'done') return session.fullText()
+    if (mux.submitAgent !== undefined) {
+      // Acknowledged submission, reply pending: the ordinary reply-wait —
+      // waitUntilIdle where the backend answers, quiescence corroborating —
+      // runs with the lease already free.
+      await waitForReply(session, timing)
+      return session.fullText()
+    }
+    // promptAgent 'submitted': the prompt IS in the pane — herdr just could
+    // not observe the agent finishing (a stalled detector). Typing again
+    // double-submits; measured live as a queued duplicate in the agent's
+    // input box. So wait it out by OUTPUT QUIESCENCE — the one completion
+    // signal that needs no detector — and skip waitUntilIdle for the same
+    // reason the detector stalled: a stuck 'idle' answers instantly and
+    // truncates the reply.
+    await waitForQuiescence(session, timing)
+    return session.fullText()
+  } finally {
+    unsubscribe()
+  }
 }
 
 /** Is `holder` still the one holding this terminal's submission window? */
@@ -200,8 +262,8 @@ function holdsLease(lease: ProducerLease, terminalId: string, holder: ProducerHo
  *   that is merely ARMED (stamped, no hold) is still preempted exactly as
  *   before, by guardOwnerSubmit below — that path never crosses the
  *   boundary.
- * - CONTAMINATED input buffer → refused until the owner clears the box (see
- *   pasteAndSubmit's residue note).
+ * - CONTAMINATED input buffer → refused until the terminal is restarted (a
+ *   generation reset — see pasteAndSubmit's residue note; Sol r8 P0-2).
  * - free → guardOwnerSubmit (armed-dispatch preemption, fail-closed), then
  *   acquired. Guard and acquire share one synchronous stretch, so nothing
  *   can take the window between the verdict and the hold.
@@ -223,7 +285,7 @@ function acquireOwnerLease(
     throw new Error('another owner submission is in flight')
   }
   if (lease.isContaminated(terminalId)) {
-    throw new Error(CONTAMINATED_REASON)
+    throw new Error(CONTAMINATED_REFUSAL)
   }
   guardOwnerBytes(session, bytes)
   const holder = ownerHolder()
@@ -233,10 +295,6 @@ function acquireOwnerLease(
   }
   return holder
 }
-
-/** The named refusal every producer sees while the buffer is dirty. */
-const CONTAMINATED_REASON =
-  'the input box holds a cancelled delivery — clear it (Ctrl-U/Ctrl-C) and retry'
 
 /**
  * Fail-closed owner-producer preemption around an ask's irreversible

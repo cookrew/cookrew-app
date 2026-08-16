@@ -273,12 +273,39 @@ export interface Multiplexer {
    * Same contract as waitUntilIdle: async, optional, resolves false whenever
    * the backend cannot do it — callers keep the typed path as the fallback,
    * so a half-working protocol degrades instead of breaking the ask.
+   *
+   * `signal` is the abort seam (Sol r8 P1): a retired terminal or a dead
+   * backend must be able to kill the blocking CLI child instead of leaving it
+   * alive until the caller timeout. Optional and safely ignorable by a
+   * backend that has nothing to kill.
    */
   promptAgent?(
     name: string,
     prompt: string,
-    timeoutMs: number
+    timeoutMs: number,
+    signal?: AbortSignal
   ): Promise<'done' | 'submitted' | 'failed'>
+
+  /**
+   * Submit a prompt and return at SUBMISSION ACKNOWLEDGEMENT — promptAgent
+   * without the turn-wait (Sol r8 P1). The producer lease guards only the
+   * bytes-in-flight window; a backend that can acknowledge submission lets
+   * the ask release the lease in milliseconds and run its reply-wait
+   * (waitUntilIdle + quiescence) OUTSIDE it, so owner input is not refused
+   * for the whole turn. herdr has the mode (`agent prompt` without `--wait`
+   * — see herdr-agent-wait.submitViaHerdr); backends without it simply omit
+   * this and callers keep the conservative full-turn hold.
+   *
+   * 'submitted' covers the ambiguous outcomes too (stall, timeout): the
+   * prompt may be in the pane and re-sending double-submits — the same
+   * do-not-retype contract promptAgent's 'submitted' carries.
+   */
+  submitAgent?(
+    name: string,
+    prompt: string,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ): Promise<'submitted' | 'failed'>
 
   /**
    * Tell the backend where this agent's session transcript lives.

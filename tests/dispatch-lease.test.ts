@@ -237,19 +237,21 @@ describe('the fallback under the lease (Sol r6 P0-1 + P0-2)', () => {
     expect(lease.isContaminated('agent-1')).toBe(true)
 
     // The NEXT dispatch — a fresh producer — refuses at the delivery leg:
-    // its native submission would type into the same dirty box.
+    // its native submission would type into the same dirty box. The refusal
+    // names the one real remedy (Sol r8 P0-2): restart the terminal.
     const response = await service.dispatch('agent-1', { text: 'fresh brief' })
     expect(response.status).toBe(202)
     await settle(service, 'dsp-2')
     expect(service.get('dsp-2')).toMatchObject({
       state: 'failed',
-      error: 'the terminal input box holds a cancelled delivery (contaminated)'
+      error: 'input box contaminated by a cancelled delivery — restart the terminal to clear it'
     })
 
-    // The owner clears the box (tracker acknowledgment) — deliveries flow.
-    lease.clearContaminated('agent-1')
+    // ONLY the terminal generation reset (restart) readmits deliveries —
+    // no control byte, no owner acknowledgment (Sol r8 P0-2).
+    lease.retire('agent-1')
     deliverNatively = true
-    await service.dispatch('agent-1', { text: 'after the clear' })
+    await service.dispatch('agent-1', { text: 'after the restart' })
     await settle(service, 'dsp-3')
     expect(service.get('dsp-3')?.state).toBe('running')
   })
@@ -278,9 +280,7 @@ describe('the fallback under the lease (Sol r6 P0-1 + P0-2)', () => {
     await service.dispatch('agent-1', { text: PROMPT })
     await settle(service)
     expect(reattaches).toBe(0)
-    expect(String(service.get('dsp-1')?.error)).toContain(
-      'holds a cancelled delivery (contaminated)'
-    )
+    expect(String(service.get('dsp-1')?.error)).toContain('restart the terminal to clear it')
   })
 
   it('an owner taking the window between promptAgent and the fallback refuses the fallback', async () => {
@@ -313,5 +313,206 @@ describe('the fallback under the lease (Sol r6 P0-1 + P0-2)', () => {
       'an owner submission was in flight at fallback time'
     )
     expect(lease.holderOf('agent-1')).toBe(owner)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r8 P0-1 — input-buffer ownership. Typing is not a submission, so the
+// lease alone let a dispatch acquire the free window while real owner text
+// sat half-typed in the shared input box; the delivered paste would ride the
+// owner's eventual Enter as one combined principal input. `ownerComposing`
+// (wired to TurnTracker.ownerComposing) closes it at admission AND at both
+// irreversible submission sites.
+// ---------------------------------------------------------------------------
+
+describe('owner composing vs dispatch (Sol r8 P0-1)', () => {
+  it('type-then-dispatch: admission refuses 409 — the input box is theirs', async () => {
+    let noted = 0
+    const service = new DispatchService(
+      deps({
+        ownerComposing: () => true,
+        noteDispatch: () => {
+          noted += 1
+          return true
+        }
+      })
+    )
+    const response = await service.dispatch('agent-1', { text: PROMPT })
+    expect(response).toEqual({
+      status: 409,
+      body: { error: 'owner is composing — the input box is theirs' }
+    })
+    // Refused before anything was recorded: no stamp, no row, no reservation.
+    expect(noted).toBe(0)
+    expect(service.get('dsp-1')).toBeUndefined()
+    const clear = new DispatchService(deps({ ownerComposing: () => false }))
+    expect((await clear.dispatch('agent-1', { text: PROMPT })).status).toBe(202)
+  })
+
+  it('dispatch-202-then-type: the delivery leg cancels like an interrupt', async () => {
+    // Admission saw a clean box; the owner starts typing while the leg sits
+    // on its setImmediate hop. The revalidation immediately before the
+    // irreversible promptAgent cancels the delivery and retracts the
+    // attempted fact — nothing went out, and the record says whose box it is.
+    let composing = false
+    let prompts = 0
+    const delivered: string[] = []
+    const retracted: string[] = []
+    const service = new DispatchService(
+      deps({
+        ownerComposing: () => composing,
+        promptAgent: async () => {
+          prompts += 1
+          return 'done'
+        },
+        noteDelivered: (_agentId, prompt) => delivered.push(prompt),
+        retractDelivered: (_agentId, prompt) => retracted.push(prompt)
+      })
+    )
+    const response = await service.dispatch('agent-1', { text: PROMPT })
+    expect(response.status).toBe(202)
+    composing = true
+    await settle(service)
+    expect(prompts).toBe(0)
+    expect(retracted).toEqual(delivered)
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'interrupted',
+      error: 'interrupted: owner took the input box'
+    })
+  })
+
+  it('buffer cleared: the next dispatch is admitted and delivers', async () => {
+    let composing = true
+    let prompts = 0
+    let seq = 0
+    const service = new DispatchService(
+      deps({
+        ownerComposing: () => composing,
+        newId: () => `dsp-${(seq += 1)}`,
+        promptAgent: async () => {
+          prompts += 1
+          return 'done'
+        }
+      })
+    )
+    expect((await service.dispatch('agent-1', { text: PROMPT })).status).toBe(409)
+    // The owner submitted (or erased) their typing — the reservation lifted.
+    composing = false
+    expect((await service.dispatch('agent-1', { text: PROMPT })).status).toBe(202)
+    await settle(service, 'dsp-1')
+    expect(prompts).toBe(1)
+    expect(service.get('dsp-1')?.state).toBe('running')
+  })
+
+  it('a background terminal is unaffected by the composing owner elsewhere', async () => {
+    let prompts = 0
+    const service = new DispatchService(
+      deps({
+        resolveAgent: (id) =>
+          id === 'agent-1' || id === 'agent-2' ? { name: 'Forge', workspaceId: 'ws-1' } : null,
+        // The owner is typing at agent-1's terminal only.
+        ownerComposing: (agentId) => agentId === 'agent-1',
+        promptAgent: async () => {
+          prompts += 1
+          return 'done'
+        }
+      })
+    )
+    expect((await service.dispatch('agent-1', { text: PROMPT })).status).toBe(409)
+    expect((await service.dispatch('agent-2', { text: PROMPT })).status).toBe(202)
+    await settle(service)
+    expect(prompts).toBe(1)
+    expect(service.get('dsp-1')?.state).toBe('running')
+  })
+
+  it('the FALLBACK leg revalidates composing before its paste too', async () => {
+    let composing = false
+    let reattaches = 0
+    const service = new DispatchService(
+      deps({
+        ownerComposing: () => composing,
+        promptAgent: async () => 'failed',
+        capture: () => '> ',
+        // The compose starts between the failed native attempt and the
+        // fallback — modeled in the evidence pass, the last read before it.
+        agentStatus: () => {
+          composing = true
+          return 'idle'
+        },
+        reattachFallback: async () => {
+          reattaches += 1
+          return true
+        }
+      })
+    )
+    await service.dispatch('agent-1', { text: PROMPT })
+    await settle(service)
+    expect(reattaches).toBe(0)
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'interrupted',
+      error: 'interrupted: owner took the input box'
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r8 P1 — the abort seam. Generation checks already made a late child's
+// settlement harmless to STATE; the AbortController makes it harmless to
+// RESOURCES: the blocking CLI child is killed at cancellation instead of
+// living out the ten-minute timeout.
+// ---------------------------------------------------------------------------
+
+describe('the delivery abort seam (Sol r8 P1)', () => {
+  it('interruptAgent mid-native-wait kills the child; the leg settles with no state change', async () => {
+    const lease = new ProducerLease()
+    let observed: AbortSignal | undefined
+    const service = new DispatchService(
+      deps({
+        lease,
+        // Model execFile with a signal: block until the abort fires, then
+        // reject the way a TERM-killed child settles its callback.
+        promptAgent: (_name, _prompt, _timeout, signal) =>
+          new Promise((_resolve, reject) => {
+            observed = signal
+            signal?.addEventListener('abort', () => reject(new Error('AbortError')), {
+              once: true
+            })
+          })
+      })
+    )
+    const response = await service.dispatch('agent-1', { text: PROMPT })
+    expect(response.status).toBe(202)
+    // Let the leg reach its blocking promptAgent.
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(observed).toBeDefined()
+    expect(observed?.aborted).toBe(false)
+
+    service.interruptAgent('agent-1', 'terminal removed')
+    // The interrupt aborted the child NOW — no ten-minute zombie.
+    expect(observed?.aborted).toBe(true)
+    await settle(service)
+    // The canceller owns the outcome; the aborted leg asserted nothing.
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'interrupted',
+      error: 'terminal removed'
+    })
+    expect(lease.holderOf('agent-1')).toBeNull()
+  })
+
+  it('promptAgent receives the signal on the ordinary path and it never fires', async () => {
+    const signals: Array<AbortSignal | undefined> = []
+    const service = new DispatchService(
+      deps({
+        promptAgent: async (_name, _prompt, _timeout, signal) => {
+          signals.push(signal)
+          return 'done'
+        }
+      })
+    )
+    await service.dispatch('agent-1', { text: PROMPT })
+    await settle(service)
+    expect(signals).toHaveLength(1)
+    expect(signals[0]?.aborted).toBe(false)
+    expect(service.get('dsp-1')?.state).toBe('running')
   })
 })

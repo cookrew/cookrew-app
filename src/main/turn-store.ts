@@ -22,9 +22,10 @@
 // apply last-wins per index; superseded lines are dead weight that a bounded
 // fold clears: when overlay lines reach TAIL_OVERLAY_COMPACT_MIN_LINES and
 // their bytes reach half the file, ONE atomic full rewrite (writeAll) folds
-// them away — at load time (the dispatch-registry pattern) or in place of the
-// overlay append that crossed the line. Amortized, every write is O(changed
-// bytes): the fold's O(file) cost is paid for by an equal weight of dead
+// them away — at load time (the dispatch-registry pattern) or as a SCHEDULED
+// idle task when a write crosses the line (Sol r8 P1: the flush that crosses
+// the threshold never pays the rewrite itself). Amortized, every write is
+// O(changed bytes): the fold's O(file) cost is paid for by an equal weight of dead
 // bytes it removes. TurnStore is the ONLY reader of these files (board,
 // search, rebuild-diff all go through load/loadAll; ledger-rebuild reads
 // harness transcripts) — anything new that parses the raw JSONL must apply
@@ -49,7 +50,7 @@ import {
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { mergeAnnotation, splitAnnotation, type TurnRecord } from '../shared/turn'
-import { AnnotationStore, writeFileAtomic } from './turn-annotations'
+import { AnnotationStore, renameLanded, writeFileAtomic } from './turn-annotations'
 
 const SAVE_DEBOUNCE_MS = 300
 
@@ -145,6 +146,19 @@ export class TurnStore {
    * hydrated records, i.e. outside every hot write path.
    */
   private foldOnLoad = new Set<string>()
+  /**
+   * Terminals whose WRITE path crossed the fold policy (Sol r8 P1). The flush
+   * that crosses the threshold keeps appending overlays — correctness is
+   * unaffected, readers are last-wins per index — and the O(total history)
+   * rewrite runs here instead: an unref'd idle task, single-flight per
+   * terminal, off every flush stack. Overlay growth between the threshold and
+   * the scheduled fold is bounded by the scheduling delay — one macrotask, so
+   * at most the overlays of one additional flush cycle (~2s of parser
+   * reports), never unbounded accumulation. A process that dies before the
+   * task runs is covered by the load-time fold (foldOnLoad/maybeFold), and an
+   * unref'd timer never holds the app open for it.
+   */
+  private pendingCompact = new Map<string, NodeJS.Timeout>()
   /**
    * Whole-ledger cache for loadAll(). Built once and kept warm by write-through
    * from flush()/remove() — this process is the only writer, so re-reading every
@@ -355,14 +369,16 @@ export class TurnStore {
   }
 
   /**
-   * How many checkpoints this agent has, WITHOUT parsing any of them. This is
-   * what makes an uncapped history affordable to display: the count is exact
-   * even when only a tail is held in memory.
-   *
-   * Overlay lines each supersede one earlier line, so the logical count is
-   * physical lines minus overlays. The overlay scan is a substring count, no
-   * JSON parse: a raw newline cannot occur inside a JSON string, so
-   * newline-then-marker can only ever be a line start.
+   * How many checkpoints this agent has, counted with the SAME recovery rules
+   * readLines applies (Sol r8 P2): a line that does not parse as a record is
+   * dropped, a canonical overlay supersedes an existing record without adding
+   * one, and an orphan overlay — whose base line is gone — still counts as
+   * the record the reader preserves. The previous substring scan subtracted
+   * every marker-shaped physical line and counted every corrupt one, so the
+   * pager's count diverged from the loaded history on exactly the corruption
+   * this store promises to tolerate; the count and the reader must not use
+   * incompatible recovery rules. Still lighter than load(): shapes only — no
+   * hydration, no record retention, no append-tail metadata side effects.
    */
   count(terminalId: string): number {
     const pending = this.pending.get(terminalId)
@@ -370,18 +386,24 @@ export class TurnStore {
     try {
       const file = this.fileFor(terminalId)
       if (!existsSync(file)) return this.migrate(terminalId)?.length ?? 0
-      let lines = 0
-      const text = readFileSync(file, 'utf8')
-      for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) lines++
-      let overlays = text.startsWith(TAIL_MARKER_PREFIX) ? 1 : 0
-      const needle = `\n${TAIL_MARKER_PREFIX}`
-      for (let hit = text.indexOf(needle); hit !== -1; hit = text.indexOf(needle, hit + 1)) {
-        overlays++
+      const present = new Set<number>()
+      let logical = 0
+      for (const line of readFileSync(file, 'utf8').split('\n')) {
+        if (line.trim() === '') continue
+        const overlay = parseOverlay(line)
+        try {
+          const parsed: unknown = JSON.parse(overlay?.line ?? line)
+          if (!isTurnRecord(parsed)) continue
+          // Mirrors readLines exactly: only an overlay that supersedes a
+          // record already seen replaces instead of adding.
+          if (overlay !== null && present.has(parsed.index)) continue
+          present.add(parsed.index)
+          logical += 1
+        } catch {
+          // one bad line, not the file — the reader drops it too
+        }
       }
-      // A trailing newline is written after every record, so lines === records
-      // unless the file ends mid-write.
-      const physical = text.endsWith('\n') ? lines : lines + 1
-      return Math.max(0, physical - overlays)
+      return logical
     } catch {
       return 0
     }
@@ -512,10 +534,24 @@ export class TurnStore {
   private writeAll(terminalId: string, records: TurnRecord[]): void {
     mkdirSync(this.dir, { recursive: true })
     const body = records.map((r) => `${this.line(r)}\n`).join('')
-    // Atomic (Sol r6 P2): a crash mid-rewrite must leave the previous ledger,
-    // not a truncated hybrid — this file is the only durable copy until the
-    // native transcript is re-parsed.
-    writeFileAtomic(this.fileFor(terminalId), body)
+    try {
+      // Atomic (Sol r6 P2): a crash mid-rewrite must leave the previous
+      // ledger, not a truncated hybrid — this file is the only durable copy
+      // until the native transcript is re-parsed.
+      writeFileAtomic(this.fileFor(terminalId), body)
+    } catch (error) {
+      // Ambiguous failure AFTER the rename landed (Sol r8 P1, the dir-fsync
+      // window): the file now holds exactly `records` — only the directory
+      // entry's durability is unproven. Remember that truthfully before
+      // rethrowing: a retry that still believed the OLD tail would re-append
+      // lines the file already carries, and duplicate physical records
+      // corrupt the logical history — worse than the missed fsync retry.
+      if (renameLanded(error)) {
+        this.remember(terminalId, records)
+        this.cache(terminalId, records)
+      }
+      throw error
+    }
     this.remember(terminalId, records)
     this.cache(terminalId, records)
   }
@@ -605,8 +641,9 @@ export class TurnStore {
    * its previous last record is byte-identical to what we wrote; append an
    * OVERLAY superseding the tail when a delta save proved the change stops at
    * the previously-last record; otherwise rewrite. Every branch is O(changed
-   * bytes) except the explicit fold. Throws on I/O failure — the caller
-   * retains the un-landed records and retries.
+   * bytes) — the fold that clears overlay weight runs OUTSIDE this path (load
+   * time or the scheduled idle task, Sol r8 P1). Throws on I/O failure — the
+   * caller retains the un-landed records and retries.
    *
    * WHY THE FALLBACK STAYS after the annotation split. Two of the three edit
    * sources are gone from these lines — a seenAt stamp and a late Sous title
@@ -680,10 +717,13 @@ export class TurnStore {
    * about. The check reads only the final line's length from the file — the
    * whole point is that nothing here scales with history size.
    *
-   * Also refuses — deliberately — when this overlay would push the dead
-   * weight past the fold policy: the caller's writeAll IS the fold, one
-   * atomic rewrite whose cost is amortized by the >= half-file of dead bytes
-   * it clears.
+   * When this overlay pushes the dead weight past the fold policy, the append
+   * still happens — last-wins keeps every reader correct however many
+   * overlays stack up — and the fold is SCHEDULED (see pendingCompact)
+   * instead of performed here: the flush that crosses the threshold must
+   * never pay the O(total history) rewrite on the hot path (Sol r8 P1; the
+   * r7 shape refused the append and fell through to writeAll inside this
+   * very flush, one tail observation copying the whole uncapped ledger).
    */
   private appendTailOverlay(
     terminalId: string,
@@ -698,9 +738,6 @@ export class TurnStore {
     const overlayAdded = Buffer.byteLength(overlay, 'utf8') + 1
     const overlayLines = known.overlayLines + 1
     const overlayBytes = known.overlayBytes + overlayAdded
-    if (foldDue(overlayLines, overlayBytes, statSync(file).size + overlayAdded)) {
-      return false
-    }
     const added = records.slice(boundary + 1).map((r) => `${this.line(r)}\n`)
     appendFileSync(file, `${overlay}\n${added.join('')}`, 'utf8')
     const lastLine = added.length > 0 ? added[added.length - 1].slice(0, -1) : overlay
@@ -712,7 +749,49 @@ export class TurnStore {
       overlayLines,
       overlayBytes,
     })
+    if (foldDue(overlayLines, overlayBytes, statSync(file).size)) {
+      this.scheduleFold(terminalId)
+    }
     return true
+  }
+
+  /**
+   * Single-flight idle scheduling for the write-path fold. setTimeout(0)
+   * rather than the flush stack: the rewrite lands one macrotask later,
+   * bounding overlay growth past the threshold to whatever that single delay
+   * admits (in practice at most one more flush cycle). Unref'd so a pending
+   * fold never holds the app open — a quit before it runs is recovered by the
+   * load-time fold on the next boot.
+   */
+  private scheduleFold(terminalId: string): void {
+    if (this.pendingCompact.has(terminalId)) return
+    const timer = setTimeout(() => this.foldNow(terminalId), 0)
+    timer.unref?.()
+    this.pendingCompact.set(terminalId, timer)
+  }
+
+  /**
+   * The scheduled half of the write-path fold: ONE atomic rewrite of the
+   * current logical records, off every flush stack. Best-effort like the
+   * load-time fold — a failure costs only the dead bytes it would have
+   * cleared, and the overlay bookkeeping (still past the policy) reschedules
+   * on the next overlay append.
+   */
+  private foldNow(terminalId: string): void {
+    this.pendingCompact.delete(terminalId)
+    try {
+      // load() serves pending records when a flush is queued (they are the
+      // newest truth and every reader already sees them), and may itself run
+      // the load-time fold — in which case the bookkeeping below shows zero
+      // overlays and this task has nothing left to do.
+      const records = this.load(terminalId)
+      const known = this.written.get(terminalId)
+      if (known !== undefined && known.overlayLines === 0) return
+      if (records.length === 0) return
+      this.writeAll(terminalId, records)
+    } catch (error) {
+      console.error('Failed to fold turn ledger tail overlays:', error)
+    }
   }
 
   /** Does the file end with exactly these bytes? Reads only that many. */
@@ -739,6 +818,9 @@ export class TurnStore {
     const timer = this.timers.get(terminalId)
     if (timer) clearTimeout(timer)
     this.timers.delete(terminalId)
+    const fold = this.pendingCompact.get(terminalId)
+    if (fold) clearTimeout(fold)
+    this.pendingCompact.delete(terminalId)
     this.pending.delete(terminalId)
     this.dirty.delete(terminalId)
     this.written.delete(terminalId)

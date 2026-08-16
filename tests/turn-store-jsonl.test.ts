@@ -151,10 +151,13 @@ describe('TurnStore — migration from the old JSON array', () => {
     expect(all.get('t1')).toHaveLength(2)
   })
 
-  it('does not lose the history if a line is corrupt', () => {
+  it('does not lose the history if a line is corrupt — and count() drops it too', () => {
     save([rec(1), rec(2)])
     writeFileSync(path.join(dir, 't1.jsonl'), `${lines()[0]}\n{ broken\n${lines()[1]}\n`, 'utf8')
     expect(store.load('t1').map((r) => r.index)).toEqual([1, 2])
+    // Sol r8 P2: the reader drops the corrupt line, so the count must not
+    // keep it — the old physical-line count answered 3 here.
+    expect(store.count('t1')).toBe(2)
   })
 })
 

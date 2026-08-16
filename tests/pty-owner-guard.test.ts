@@ -119,6 +119,31 @@ describe('PtySession.write consults the owner guard BEFORE proc.write', () => {
     session.dispose()
   })
 
+  it('records the still-current refusal for the conductor to surface (Sol r8 P1)', () => {
+    // The renderer's pty:input IPC is fire-and-forget, so write()'s returned
+    // verdict never reaches it; lastRefusal is the pull-side record the
+    // conductor exposes so a swallowed desktop keystroke can be explained.
+    const session = makeSession()
+    expect(session.lastRefusal()).toBeNull()
+    session.beforeOwnerInput = () => 'refused'
+    session.write('typing into a held window')
+    expect(session.lastRefusal()).toMatchObject({ verdict: 'refused' })
+    expect(session.lastRefusal()?.at).toBeGreaterThan(0)
+    // A flowing write clears it — the refusal is CURRENT state, not history.
+    session.beforeOwnerInput = () => 'allow'
+    session.write('now it flows')
+    expect(session.lastRefusal()).toBeNull()
+    session.dispose()
+  })
+
+  it('a preempt-failed refusal is recorded with its own verdict', () => {
+    const session = makeSession()
+    session.beforeOwnerInput = () => 'preempt-failed'
+    session.write('an owner ask\r')
+    expect(session.lastRefusal()).toMatchObject({ verdict: 'preempt-failed' })
+    session.dispose()
+  })
+
   it('writeFromDispatch bypasses the guard and tags its input event by source', () => {
     // The reattach fallback delivers the dispatch's own bytes: guarding it
     // would make the dispatch preempt itself, and an UNtagged event would

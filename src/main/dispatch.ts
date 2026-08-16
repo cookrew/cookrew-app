@@ -45,6 +45,7 @@ import path from 'node:path'
 // legs hold a terminal's submission window across their irreversible writes,
 // and every producer (owner asks, the PTY guard) shares the same instance.
 import {
+  CONTAMINATED_REFUSAL,
   defaultProducerLease,
   type ProducerHolder,
   type ProducerLease
@@ -223,12 +224,35 @@ export interface DispatchDeps {
    * Native submission. Optional exactly as on the Multiplexer: a backend
    * without agent lifecycle cannot dispatch, and saying 503 beats typing into
    * a pane nobody is watching.
+   *
+   * `signal` is the abort seam (Sol r8 P1): the service fires it when the
+   * delivery leg is cancelled — interrupt, release, terminal retirement,
+   * backend death — and a wiring that threads it into herdr-agent-wait's
+   * execFile TERM-kills the blocking CLI child instead of leaving it (and
+   * its pipes, callbacks and promise) alive for the full timeout. A wiring
+   * that ignores the parameter still typechecks; it merely keeps the old
+   * leak.
    */
   promptAgent?: (
     sessionName: string,
     prompt: string,
-    timeoutMs: number
+    timeoutMs: number,
+    signal?: AbortSignal
   ) => Promise<'done' | 'submitted' | 'failed'>
+  /**
+   * INPUT-BUFFER OWNERSHIP (Sol r8 P0-1): is the OWNER composing in this
+   * agent's shared input box right now — meaningful typed bytes in the
+   * tracked prompt buffer, or an owner editing reservation/lease held? Wired
+   * by the conductor to TurnTracker.ownerComposing. Consulted at admission
+   * (refuse 409: the input box is the owner's) AND revalidated by both
+   * delivery legs immediately before their irreversible submission — a
+   * compose that starts after the 202 cancels the delivery like an
+   * interrupt, because a native or pasted submission would append the
+   * dispatch's bytes to the owner's half-typed text and submit a combined
+   * prompt that is neither producer's work. Absent = cannot say (tests,
+   * memory-only services): admission proceeds on the lease alone.
+   */
+  ownerComposing?: (agentId: string) => boolean
   /**
    * Ask herdr what the agent is doing right now, when the backend can answer.
    * Used as EVIDENCE ONLY — a working agent proves something landed, which is
@@ -1062,6 +1086,16 @@ export class DispatchService {
    */
   private readonly cancelledDeliveries = new Set<string>()
   /**
+   * dispatchId → the AbortController for its blocking native submission
+   * (Sol r8 P1). cancelDelivery fires it alongside the token above: the
+   * token stops writes that have not happened yet, the abort KILLS the CLI
+   * child already blocking inside promptAgent — interrupt, release, terminal
+   * retirement and backend death all reach both through the same choke
+   * point. Bounded by in-flight legs: set immediately before promptAgent,
+   * deleted in its finally.
+   */
+  private readonly deliveryAborts = new Map<string, AbortController>()
+  /**
    * dispatchId → the terminal row whose durable append failed (commitTerminal)
    * plus the PROVENANCE that decided it (Sol r4 P1). The record it belongs to
    * is held open with a ledgerFault mark; every sweep pass retries the append,
@@ -1296,6 +1330,16 @@ export class DispatchService {
       return { status: 409, body: { error: 'busy', dispatchId: held } }
     }
 
+    // INPUT-BUFFER OWNERSHIP at admission (Sol r8 P0-1): the owner has
+    // meaningful typed bytes sitting in the shared input box. Admitting now
+    // and delivering later would paste the brief BESIDE that half-typed text
+    // — the eventual submit carries both, destroying prompt identity for
+    // both producers. Refused before anything is recorded; the caller
+    // retries once the owner submits or clears.
+    if (this.deps.ownerComposing?.(agentId) === true) {
+      return { status: 409, body: { error: 'owner is composing — the input box is theirs' } }
+    }
+
     // The ONLY backend question admission asks (Sol r3 P1-15): existence. The
     // conductor answers it from a cached inventory, never a synchronous fork.
     // The context-full check moved to the deliver() leg — it needs a pane
@@ -1479,7 +1523,7 @@ export class DispatchService {
       this.deps.retractDelivered?.(agentId, prompt, gen)
       this.update(dispatchId, {
         state: 'failed',
-        error: 'the terminal input box holds a cancelled delivery (contaminated)'
+        error: CONTAMINATED_REFUSAL
       })
       return
     }
@@ -1501,13 +1545,47 @@ export class DispatchService {
       this.deps.retractDelivered?.(agentId, prompt, gen)
       return
     }
+    // OWNER COMPOSING, revalidated in the same synchronous stretch (Sol r8
+    // P0-1): admission answered 202 with a clean box, but a compose that
+    // started since would make this submission append the brief to the
+    // owner's half-typed text. That cancels the delivery like an interrupt —
+    // the attempted fact is retracted (nothing went out) and the record
+    // closes 'interrupted', never 'failed': re-sending on top of a composing
+    // owner is the exact combined-submit this guard exists to prevent.
+    if (this.deps.ownerComposing?.(agentId) === true) {
+      this.lease.release(agentId, holder)
+      this.deps.retractDelivered?.(agentId, prompt, gen)
+      this.update(dispatchId, {
+        state: 'interrupted',
+        error: 'interrupted: owner took the input box'
+      })
+      return
+    }
+    // The abort seam (Sol r8 P1): cancellation paths — interrupt, release,
+    // retirement, backend death — fire this controller via cancelDelivery,
+    // and a wiring that threads the signal into execFile kills the blocking
+    // CLI child NOW instead of at the ten-minute timeout. Bounded by
+    // in-flight legs: the entry dies in the finally below.
+    const abort = new AbortController()
+    this.deliveryAborts.set(dispatchId, abort)
     let outcome: 'done' | 'submitted' | 'failed'
     try {
-      outcome = await promptAgent(sessionName, prompt, this.deps.timeoutMs ?? DISPATCH_TIMEOUT_MS)
+      outcome = await promptAgent(
+        sessionName,
+        prompt,
+        this.deps.timeoutMs ?? DISPATCH_TIMEOUT_MS,
+        abort.signal
+      )
     } catch (error) {
       outcome = 'failed'
-      console.error('Dispatch submission threw:', describeSubmissionError(error, prompt.length))
+      // An aborted child is the canceller's doing, not a submission fault —
+      // the generation/liveness checks below own what happens next, and the
+      // error log would only smear a deliberate kill as a failure.
+      if (!abort.signal.aborted) {
+        console.error('Dispatch submission threw:', describeSubmissionError(error, prompt.length))
+      }
     } finally {
+      this.deliveryAborts.delete(dispatchId)
       // Submission acknowledged (or the attempt settled): the bytes-in-flight
       // window is over, and the TURN the submission opened is guarded by the
       // reservation, not the lease. A hold seized mid-flight by a committed
@@ -1615,10 +1693,14 @@ export class DispatchService {
   /**
    * Abort a queued/in-flight delivery leg (Sol r5 P0-2). A no-op when no leg
    * is in flight — the token exists to stop a prompt write that has not
-   * happened yet, and a leg that already settled has nothing to stop.
+   * happened yet, and a leg that already settled has nothing to stop. The
+   * abort controller (Sol r8 P1) covers the other half: a write that already
+   * STARTED — the blocking CLI child inside promptAgent — is TERM-killed so
+   * its process, pipes and promise settle now instead of at the timeout.
    */
   private cancelDelivery(dispatchId: string): void {
     if (this.inFlight.has(dispatchId)) this.cancelledDeliveries.add(dispatchId)
+    this.deliveryAborts.get(dispatchId)?.abort()
   }
 
   /** Scrollback where the backend has it, the plain screen where it does not. */
@@ -1669,7 +1751,19 @@ export class DispatchService {
       this.update(dispatchId, {
         state: 'failed',
         confirmed: false,
-        error: `${why}; the terminal input box holds a cancelled delivery (contaminated)`
+        error: `${why}; ${CONTAMINATED_REFUSAL}`
+      })
+      return
+    }
+    // OWNER COMPOSING, revalidated before the OTHER irreversible submission
+    // (Sol r8 P0-1): the reattach types the brief into the same input box the
+    // owner is typing in — the paste would land beside their half-typed text
+    // and the eventual CR submits both. Cancelled like an interrupt, exactly
+    // as on the native leg.
+    if (this.deps.ownerComposing?.(agentId) === true) {
+      this.update(dispatchId, {
+        state: 'interrupted',
+        error: 'interrupted: owner took the input box'
       })
       return
     }

@@ -128,7 +128,7 @@ describe('overlay semantics — last wins per checkpoint index', () => {
     expect(reopen().load('t1')[1].reply).toBe('second')
   })
 
-  it('count() subtracts overlays without parsing — logical, not physical, lines', () => {
+  it('count() subtracts only canonical overlays — logical, not physical, lines', () => {
     seed(2)
     appendFileSync(
       file(),
@@ -138,12 +138,37 @@ describe('overlay semantics — last wins per checkpoint index', () => {
     expect(reopen().count('t1')).toBe(2)
   })
 
-  it('an orphan overlay (base line lost) still surfaces its record', () => {
+  it('an orphan overlay (base line lost) still surfaces its record — and count() agrees', () => {
     seed(1)
     appendFileSync(file(), `${overlayLineFor(rec(5, { reply: 'orphan' }))}\n`, 'utf8')
     const loaded = reopen().load('t1')
     expect(loaded.map((r) => r.index)).toEqual([1, 5])
     expect(loaded[1].reply).toBe('orphan')
+    // Sol r8 P2: the reader PRESERVES the orphan as a record, so the pager's
+    // count must not subtract it as though it superseded anything. The old
+    // substring count answered 1 here against a loaded history of 2.
+    expect(reopen().count('t1')).toBe(2)
+  })
+
+  it('count() applies the reader’s recovery rules to corrupt and orphan lines alike', () => {
+    seed(2)
+    appendFileSync(
+      file(),
+      [
+        overlayLineFor(rec(9, { reply: 'orphan — a record the reader keeps' })),
+        '{"__tail":true,"supersedes":2,broken', // marker-shaped corrupt: dropped
+        'plain garbage line', // corrupt: dropped, never counted
+        overlayLineFor(rec(2, { reply: 'canonical — supersedes base 2' })),
+      ]
+        .map((line) => `${line}\n`)
+        .join(''),
+      'utf8',
+    )
+    const fresh = reopen()
+    // The invariant, stated as itself: whatever mix of plain, overlay, orphan
+    // and corrupt lines the file holds, count() and the loaded history agree.
+    expect(fresh.count('t1')).toBe(fresh.load('t1').length)
+    expect(fresh.count('t1')).toBe(3) // 1, 2 (superseded in place), orphan 9
   })
 })
 
@@ -239,10 +264,15 @@ describe('the write path appends overlays and stays O(changed) — byte-counted'
 })
 
 describe('bounded fold — dead overlay weight is compacted OUTSIDE the hot path', () => {
-  it('the overlay append that crosses the policy folds into ONE clean rewrite', () => {
+  /** The scheduled fold is an unref'd setTimeout(0) — one macrotask away. */
+  const idle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 10))
+
+  it('the overlay append that crosses the policy schedules ONE clean rewrite off the flush stack', async () => {
     seed(2)
     const fresh = reopen()
     fresh.load('t1')
+    const internals = fresh as unknown as { writeAll: (id: string, r: TurnRecord[]) => void }
+    const writeAll = vi.spyOn(internals, 'writeAll')
     // Small base: the byte half-fraction is crossed early, so the line floor
     // is the binding constraint — the fold fires exactly at the floor.
     for (let i = 1; i <= TAIL_OVERLAY_COMPACT_MIN_LINES; i += 1) {
@@ -250,6 +280,14 @@ describe('bounded fold — dead overlay weight is compacted OUTSIDE the hot path
       fresh.scheduleDelta('t1', [rec(1), tail], [tail])
       fresh.flushAll()
     }
+    // Sol r8 P1: NO flush folded — the threshold overlay was appended like
+    // any other and the file still carries the dead weight…
+    expect(writeAll).not.toHaveBeenCalled()
+    expect(text()).toContain('__tail')
+
+    // …until the scheduled idle task performs the one atomic rewrite.
+    await idle()
+    expect(writeAll).toHaveBeenCalledTimes(1)
     const folded = text()
     expect(folded).not.toContain('__tail')
     expect(folded.trim().split('\n')).toHaveLength(2)
@@ -257,6 +295,51 @@ describe('bounded fold — dead overlay weight is compacted OUTSIDE the hot path
       `round ${TAIL_OVERLAY_COMPACT_MIN_LINES}`,
     )
     expect(fresh.count('t1')).toBe(2)
+  })
+
+  it('at the threshold against a LARGE ledger, the flush itself moves zero full-file bytes', async () => {
+    // Large synthetic ledger: 300 base records plus ~2 KB overlay replies, so
+    // the byte half-fraction is crossed long before the 64-line floor and the
+    // floor is what fires — exactly at overlay #64, against a >100 KB file.
+    seed(300)
+    const fresh = reopen()
+    fresh.load('t1')
+    const base = Array.from({ length: 299 }, (_, i) => rec(i + 1))
+    const grow = (round: number): TurnRecord =>
+      rec(300, { reply: `${'x'.repeat(2000)} round ${round}` })
+    const internals = fresh as unknown as { writeAll: (id: string, r: TurnRecord[]) => void }
+    const writeAll = vi.spyOn(internals, 'writeAll')
+
+    for (let round = 1; round < TAIL_OVERLAY_COMPACT_MIN_LINES; round += 1) {
+      fresh.scheduleDelta('t1', [...base, grow(round)], [grow(round)])
+      fresh.flushAll()
+    }
+    const ledgerBytes = statSync(file()).size
+    expect(ledgerBytes).toBeGreaterThan(100_000)
+
+    // Overlay #64 — the flush that reaches the fold policy — metered alone.
+    meter.active = true
+    const last = grow(TAIL_OVERLAY_COMPACT_MIN_LINES)
+    fresh.scheduleDelta('t1', [...base, last], [last])
+    fresh.flushAll()
+    meter.active = false
+
+    // The gate (Sol r8 P1): zero full-file bytes on the flush path. What
+    // moved is one ~2 KB overlay line plus the tail verification read —
+    // nothing that scales with the 100+ KB ledger. The r7 shape rewrote the
+    // whole file from THIS flush.
+    expect(writeAll).not.toHaveBeenCalled()
+    expect(meter.writeBytes).toBeLessThan(4_000)
+    expect(meter.readBytes).toBeLessThan(8_000)
+    expect(meter.writeBytes).toBeLessThan(ledgerBytes / 10)
+
+    // The scheduled fold lands off the flush stack — once, atomic, clean.
+    await idle()
+    expect(writeAll).toHaveBeenCalledTimes(1)
+    expect(text()).not.toContain('__tail')
+    const replayed = reopen().load('t1')
+    expect(replayed).toHaveLength(300)
+    expect(replayed[299].reply).toBe(last.reply)
   })
 
   it('a heavy overlay file left by a crash is folded at LOAD time, annotations intact', () => {

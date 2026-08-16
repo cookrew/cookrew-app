@@ -21,8 +21,15 @@ interface FakeMux {
   promptAgent?: (
     sessionName: string,
     prompt: string,
-    timeoutMs: number
+    timeoutMs: number,
+    signal?: AbortSignal
   ) => Promise<'done' | 'submitted' | 'failed'>
+  submitAgent?: (
+    sessionName: string,
+    prompt: string,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ) => Promise<'submitted' | 'failed'>
   waitUntilIdle?: (sessionName: string, timeoutMs: number) => Promise<boolean>
 }
 const muxHolder = vi.hoisted(() => ({ current: null as unknown }))
@@ -521,7 +528,7 @@ describe('askTerminal — the producer lease (Sol r6 P0-1)', () => {
     expect(lease.holderOf('term-1')).toBeNull()
   })
 
-  it('a contaminated input box refuses the ask until the owner clears it', async () => {
+  it('a contaminated input box refuses the ask until the terminal restarts (r8 P0-2)', async () => {
     const lease = new ProducerLease()
     lease.markContaminated('term-1')
     muxHolder.current = {
@@ -536,10 +543,12 @@ describe('askTerminal — the producer lease (Sol r6 P0-1)', () => {
       noteExternalInput: () => undefined
     } as unknown as PtySession
 
+    // The refusal names the one real remedy — no control byte clears it.
     await expect(askTerminal(session, 'fresh work', { lease })).rejects.toThrow(
-      'cancelled delivery'
+      'restart the terminal'
     )
-    lease.clearContaminated('term-1')
+    // Only the generation reset (terminal restart) readmits submits.
+    lease.retire('term-1')
     await expect(askTerminal(session, 'fresh work', { lease })).resolves.toBe('')
   })
 
@@ -602,5 +611,117 @@ describe('askTerminal — the producer lease (Sol r6 P0-1)', () => {
       'a dispatch delivery is mid-submission at this terminal'
     )
     expect(lease.holderOf('term-1')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r8 P1 — the native leg's abort seam and the lease-window split.
+// ---------------------------------------------------------------------------
+
+describe('askTerminal — abort on terminal retirement (Sol r8 P1)', () => {
+  afterEach(() => {
+    muxHolder.current = null
+  })
+
+  it('retiring the terminal mid-native-wait aborts the child and the ask throws honestly', async () => {
+    const lease = new ProducerLease()
+    let observed: AbortSignal | undefined
+    const writes: string[] = []
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      // Model execFile with a signal: pending until the abort fires, then
+      // reject the way a TERM-killed child settles its callback.
+      promptAgent: (_name, _prompt, _timeout, signal) =>
+        new Promise((_resolve, reject) => {
+          observed = signal
+          signal?.addEventListener('abort', () => reject(new Error('AbortError')), {
+            once: true
+          })
+        })
+    } satisfies FakeMux
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      write: (data: string) => writes.push(data),
+      noteExternalInput: () => undefined
+    } as unknown as PtySession
+
+    const promise = askTerminal(session, 'doomed ask', { lease })
+    // Let the ask reach its blocking native call, then end the terminal.
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(observed?.aborted).toBe(false)
+    lease.retire('term-1')
+    expect(observed?.aborted).toBe(true)
+    // The promise settles NOW (not at the ask timeout), throws instead of
+    // falling through to type into the reborn terminal, and left no state:
+    // no typed-path writes, no hold, and the dead leg's release no-oped.
+    await expect(promise).rejects.toThrow('retired mid-ask')
+    expect(writes).toEqual([])
+    expect(lease.holderOf('term-1')).toBeNull()
+  })
+})
+
+describe('askTerminal — the submission-ack lease window (Sol r8 P1)', () => {
+  afterEach(() => {
+    muxHolder.current = null
+  })
+
+  it('with submitAgent, the lease covers only the ack; the reply-wait runs outside it', async () => {
+    const lease = new ProducerLease()
+    const holderDuring: Array<string | undefined> = []
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      submitAgent: async () => {
+        holderDuring.push(lease.holderOf('term-1')?.kind)
+        return 'submitted'
+      },
+      waitUntilIdle: async () => {
+        holderDuring.push(lease.holderOf('term-1')?.kind)
+        return true
+      }
+    } satisfies FakeMux
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      noteExternalInput: () => undefined
+    } as unknown as PtySession
+
+    await askTerminal(session, 'quick ask', { lease, quiescenceMs: 0, graceMs: 0 })
+    // Held for the submission acknowledgement, FREE for the minutes-long
+    // reply wait — the desktop's input box is refused for milliseconds, not
+    // the whole turn.
+    expect(holderDuring).toEqual(['owner', undefined])
+    expect(lease.holderOf('term-1')).toBeNull()
+  })
+
+  it('a positively failed submitAgent falls back to the typed path, exactly like promptAgent', async () => {
+    vi.useFakeTimers()
+    const lease = new ProducerLease()
+    const writes: string[] = []
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      submitAgent: async () => 'failed'
+    } satisfies FakeMux
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      write: (data: string) => writes.push(data),
+      noteExternalInput: () => undefined
+    } as unknown as PtySession
+
+    const promise = askTerminal(session, 'typed instead', {
+      lease,
+      quiescenceMs: 0,
+      graceMs: 0
+    })
+    await vi.advanceTimersByTimeAsync(3000)
+    await promise
+    expect(writes).toEqual([paste('typed instead'), '\r'])
   })
 })

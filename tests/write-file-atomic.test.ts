@@ -12,7 +12,12 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { AnnotationStore, writeFileAtomic } from '../src/main/turn-annotations'
+import {
+  ANNOTATION_LOG_COMPACT_MIN_OPS,
+  AnnotationStore,
+  renameLanded,
+  writeFileAtomic,
+} from '../src/main/turn-annotations'
 import type { TurnRecord } from '../src/shared/turn'
 
 const inject = vi.hoisted(() => ({
@@ -107,6 +112,12 @@ describe('writeFileAtomic — mode preservation', () => {
   })
 })
 
+const errnoError = (code: string): NodeJS.ErrnoException => {
+  const error: NodeJS.ErrnoException = new Error(`${code}: simulated`)
+  error.code = code
+  return error
+}
+
 describe('writeFileAtomic — directory-fsync failure is a FAILURE', () => {
   it('propagates a real dir-fsync error instead of claiming success', () => {
     inject.dirFsyncError = eio()
@@ -120,6 +131,59 @@ describe('writeFileAtomic — directory-fsync failure is a FAILURE', () => {
     expect(() => writeFileAtomic(target(), 'body')).not.toThrow()
     expect(readFileSync(target(), 'utf8')).toBe('body')
   })
+
+  it('EACCES/EPERM are permission DENIALS, not fsync inability — they propagate (Sol r8)', () => {
+    // A process can hold enough rights to rename the entry while lacking
+    // open/read rights on the directory: the rename lands, the entry is not
+    // durable, and swallowing the denial would discard the caller's retry
+    // state exactly when it is still needed.
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+    for (const code of ['EACCES', 'EPERM']) {
+      inject.dirFsyncError = errnoError(code)
+      expect(() => writeFileAtomic(target(), `body-${code}`)).toThrow(new RegExp(code))
+    }
+    quiet.mockRestore()
+  })
+
+  it('a post-rename failure carries {renamed: true} — the new bytes ARE published', () => {
+    writeFileSync(target(), 'previous', 'utf8')
+    inject.dirFsyncError = eio()
+    let caught: unknown
+    try {
+      writeFileAtomic(target(), 'published but not yet durable')
+    } catch (error) {
+      caught = error
+    }
+    expect(renameLanded(caught)).toBe(true)
+    // The marker tells the truth: every reader now sees the new bytes.
+    expect(readFileSync(target(), 'utf8')).toBe('published but not yet durable')
+    // And a failure BEFORE the rename does not wear the marker.
+    inject.dirFsyncError = null
+    inject.writeZero = true
+    let early: unknown
+    try {
+      writeFileAtomic(target(), 'never lands')
+    } catch (error) {
+      early = error
+    }
+    expect(renameLanded(early)).toBe(false)
+  })
+
+  it('surfaces a LOUD persistent-storage fault when the same directory keeps failing', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    inject.dirFsyncError = errnoError('EACCES')
+    expect(() => writeFileAtomic(target(), 'one')).toThrow()
+    const faultsAfterFirst = spy.mock.calls.filter((call) =>
+      String(call[0]).includes('PERSISTENT STORAGE FAULT'),
+    )
+    expect(faultsAfterFirst).toHaveLength(0) // the first failure could be transient
+    expect(() => writeFileAtomic(target(), 'two')).toThrow()
+    const faults = spy.mock.calls.filter((call) =>
+      String(call[0]).includes('PERSISTENT STORAGE FAULT'),
+    )
+    expect(faults).toHaveLength(1) // the repeat is a standing fault, said loudly
+    spy.mockRestore()
+  })
 })
 
 describe('AnnotationStore under dir-fsync failure — retry state is retained', () => {
@@ -130,6 +194,38 @@ describe('AnnotationStore under dir-fsync failure — retry state is retained', 
     startedAt: index * 10,
     endedAt: index * 10 + 5,
     ...over,
+  })
+
+  it('compaction: rename lands, dir-fsync throws, next update, crash — NO title loss (Sol r8)', () => {
+    // The exact desync window: log compaction writes an epoch-bumped snapshot
+    // whose RENAME lands, then the directory fsync fails. Pre-fix the store
+    // kept the old epoch cached and treated the compaction as if nothing had
+    // published — so the next incremental op was stamped with the DEAD epoch,
+    // and a crash before the following compaction reopened on the new
+    // snapshot, which ignores that op: the title silently vanished.
+    const annotations = new AnnotationStore(dir)
+    expect(annotations.save('t1', [rec(1, { title: 'recap' })])).toBe(true) // epoch 1
+    for (let i = 1; i < ANNOTATION_LOG_COMPACT_MIN_OPS; i += 1) {
+      expect(annotations.update('t1', [rec(1, { title: 'recap', seenAt: i })])).toBe(true)
+    }
+
+    // The op that crosses the threshold triggers compaction; its snapshot
+    // rename LANDS but the parent-directory fsync throws.
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+    inject.dirFsyncError = eio()
+    expect(annotations.update('t1', [rec(1, { title: 'recap', seenAt: 999 })])).toBe(true)
+    inject.dirFsyncError = null
+    quiet.mockRestore()
+
+    // Next update: a late Sous title lands — underivable state, the whole
+    // reason this directory exists.
+    expect(annotations.update('t1', [rec(1, { title: 'late title', seenAt: 999 })])).toBe(true)
+
+    // Crash-sim: a FRESH store replays only what the disk holds.
+    expect(new AnnotationStore(dir).load('t1').get(1)).toEqual({
+      title: 'late title',
+      seenAt: 999,
+    })
   })
 
   it('save reports failure, keeps the candidate readable, and the retry lands durably', () => {

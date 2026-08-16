@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { promptArgs, promptViaHerdr, waitArgs, waitForAgentState } from '../src/main/herdr-agent-wait'
+import {
+  promptArgs,
+  promptViaHerdr,
+  submitArgs,
+  submitViaHerdr,
+  waitArgs,
+  waitForAgentState
+} from '../src/main/herdr-agent-wait'
 
 /**
  * This replaces `cookrew ask`'s output-quiescence heuristic, which is wrong in
@@ -119,5 +126,97 @@ describe('promptViaHerdr — the tri-state IS the safety contract', () => {
     let env: NodeJS.ProcessEnv = {}
     await promptViaHerdr({ ...opts, exec: async (_f, _a, e) => { env = e } })
     expect(env.HERDR_SESSION).toBe('cookrew')
+  })
+
+  it('threads the AbortSignal down to the exec seam (Sol r8 P1)', async () => {
+    // execFile's own `signal` option is the kill switch: a retired terminal
+    // or interrupted dispatch fires it and the CLI child dies NOW instead of
+    // at the ten-minute timeout. The seam must actually receive it.
+    const abort = new AbortController()
+    let observed: AbortSignal | undefined
+    await promptViaHerdr({
+      ...opts,
+      signal: abort.signal,
+      exec: async (_f, _a, _e, signal) => {
+        observed = signal
+      }
+    })
+    expect(observed).toBe(abort.signal)
+  })
+
+  it('an aborted child settles as failed — the canceller owns what happens next', async () => {
+    // The generation/liveness checks at every caller make a late 'failed'
+    // from a killed child change no state; what matters here is that the
+    // rejection SETTLES the promise instead of hanging it.
+    const aborted = async (): Promise<void> => {
+      const error = new Error('The operation was aborted') as Error & { code: string }
+      error.code = 'ABORT_ERR'
+      throw error
+    }
+    expect(await promptViaHerdr({ ...opts, exec: aborted })).toBe('failed')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r8 P1 — the submission-ack mode. Investigated against the real CLI:
+// `herdr agent prompt <target> <text>` WITHOUT `--wait` returns as soon as
+// herdr has typed the prompt, which is exactly the bytes-in-flight window the
+// producer lease guards — the reply-wait can run outside the lease.
+// ---------------------------------------------------------------------------
+
+describe('submitArgs — submission acknowledgement, not turn completion', () => {
+  it('omits --wait and --until: the call returns at submission', () => {
+    const args = submitArgs('w1:p3', 'fix the bug', 60_000)
+    expect(args.slice(0, 4)).toEqual(['agent', 'prompt', 'w1:p3', 'fix the bug'])
+    expect(args).not.toContain('--wait')
+    expect(args).not.toContain('--until')
+  })
+
+  it('still bounds the CLI call itself with a timeout', () => {
+    expect(submitArgs('t', 'p', 5000)).toEqual(
+      expect.arrayContaining(['--timeout', '5000'])
+    )
+  })
+})
+
+describe('submitViaHerdr — the two-state ack contract', () => {
+  const opts = { session: 'cookrew', configPath: '/c', target: 'w1:p3', timeoutMs: 1000, prompt: 'hi' }
+
+  it('submitted: herdr accepted the prompt', async () => {
+    expect(await submitViaHerdr({ ...opts, exec: async () => {} })).toBe('submitted')
+  })
+
+  it('failed: herdr positively refused — typing is the correct fallback', async () => {
+    const failing = async (): Promise<void> => {
+      throw new Error('agent_not_found')
+    }
+    expect(await submitViaHerdr({ ...opts, exec: failing })).toBe('failed')
+  })
+
+  it('AMBIGUOUS outcomes are submitted, never failed — the do-not-retype rule', async () => {
+    // A killed child or expired wait leaves the prompt possibly in the pane;
+    // reporting 'failed' invites the caller to type a duplicate on top.
+    const timedOut = async (): Promise<void> => {
+      const error = new Error('killed') as Error & { code: string }
+      error.code = 'ETIMEDOUT'
+      throw error
+    }
+    expect(await submitViaHerdr({ ...opts, exec: timedOut })).toBe('submitted')
+  })
+
+  it('scopes to COOKREW session and threads the signal', async () => {
+    const abort = new AbortController()
+    let env: NodeJS.ProcessEnv = {}
+    let observed: AbortSignal | undefined
+    await submitViaHerdr({
+      ...opts,
+      signal: abort.signal,
+      exec: async (_f, _a, e, signal) => {
+        env = e
+        observed = signal
+      }
+    })
+    expect(env.HERDR_SESSION).toBe('cookrew')
+    expect(observed).toBe(abort.signal)
   })
 })

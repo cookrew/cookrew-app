@@ -201,14 +201,42 @@ function effectiveGet(
 }
 
 /**
- * fsync-inability codes on a parent-directory open/fsync: EISDIR (platforms
- * that refuse directory fds), ENOTSUP/EINVAL (filesystems without directory
- * fsync), EPERM/EACCES (directories that cannot be opened for reading).
- * These are permanent facts about the environment, not transient failures —
- * retrying would fail forever, so they stay best-effort. Everything else
- * (EIO, ENOSPC, …) is a real durability failure and PROPAGATES.
+ * Codes that POSITIVELY denote the platform/filesystem cannot fsync a
+ * directory: EISDIR (platforms that refuse directory fds), ENOTSUP/EINVAL
+ * (filesystems without directory fsync). Those are permanent facts about the
+ * environment — every retry would fail identically — so they stay
+ * best-effort. EACCES/EPERM are NOT here (Sol r8 P1): a permission failure
+ * means this process was DENIED the operation that makes the rename durable,
+ * not that the operation does not exist — a process can hold enough rights to
+ * rename a directory entry while lacking open/read rights on the directory
+ * itself, and in that state a crash can still lose the entry. Permission
+ * failures propagate like EIO/ENOSPC, so callers retain their dirty state.
  */
-const DIR_FSYNC_UNSUPPORTED = new Set(['EISDIR', 'ENOTSUP', 'EINVAL', 'EPERM', 'EACCES'])
+const DIR_FSYNC_UNSUPPORTED = new Set(['EISDIR', 'ENOTSUP', 'EINVAL'])
+
+/**
+ * Directories whose post-rename fsync has already failed once this process.
+ * A repeat is no longer a transient: it is surfaced as a LOUD persistent
+ * storage fault, so a standing durability hole (revoked permissions, a dying
+ * disk) cannot hide inside per-write retry noise. Cleared by the next
+ * success on the same directory.
+ */
+const dirFsyncFaulted = new Set<string>()
+
+/**
+ * Did this writeFileAtomic failure happen AFTER the rename landed? Such an
+ * error is AMBIGUOUS for callers: the target file already carries the new
+ * bytes — visible to every reader — while their durability is unproven.
+ * Callers that cache derived state about the target (the annotation store's
+ * epoch, the turn store's written tail) must resync from the PUBLISHED file
+ * before stamping anything else — see AnnotationStore.persistSnapshot and
+ * TurnStore.writeAll.
+ */
+export function renameLanded(error: unknown): boolean {
+  return (
+    typeof error === 'object' && error !== null && (error as { renamed?: unknown }).renamed === true
+  )
+}
 
 /**
  * Temp + fsync + rename replacement of a whole file — the dispatch-registry
@@ -225,9 +253,12 @@ const DIR_FSYNC_UNSUPPORTED = new Set(['EISDIR', 'ENOTSUP', 'EINVAL', 'EPERM', '
  *   directory entry is durable the rename is not, and claiming success drops
  *   the caller's retry state exactly when it is still needed. Callers already
  *   treat a throw as "retain dirty work and retry" (AnnotationStore's
- *   persistSnapshot, TurnStore's flush/retain). Codes that mean the
- *   filesystem CANNOT fsync a directory are tolerated — see
- *   DIR_FSYNC_UNSUPPORTED — because they would fail every retry identically.
+ *   persistSnapshot, TurnStore's flush/retain). Only codes that POSITIVELY
+ *   mean the filesystem cannot fsync a directory are tolerated — see
+ *   DIR_FSYNC_UNSUPPORTED — because they would fail every retry identically;
+ *   permission denials propagate, and a failure thrown after the rename
+ *   landed carries {renamed: true} (see renameLanded) because it publishes
+ *   the new bytes without proving their durability.
  *
  * The replaced file's mode is preserved onto the temp (fchmod, so the umask
  * cannot dilute it) — a rename must not quietly widen a user-tightened 0600.
@@ -275,13 +306,28 @@ export function writeFileAtomic(file: string, body: string | Buffer): void {
     throw error
   }
   if (process.platform === 'win32') return // directories cannot be opened for fsync
+  const parent = path.dirname(file)
   let dirFd: number | null = null
   try {
-    dirFd = openSync(path.dirname(file), 'r')
+    dirFd = openSync(parent, 'r')
     fsyncSync(dirFd)
+    dirFsyncFaulted.delete(parent)
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
-    if (code === undefined || !DIR_FSYNC_UNSUPPORTED.has(code)) throw error
+    if (code === undefined || !DIR_FSYNC_UNSUPPORTED.has(code)) {
+      if (dirFsyncFaulted.has(parent)) {
+        console.error(
+          `PERSISTENT STORAGE FAULT: directory fsync keeps failing for ${parent} ` +
+            `(${code ?? 'unknown'}) — renames are landing but their durability cannot be ` +
+            'guaranteed; check permissions and disk health',
+        )
+      }
+      dirFsyncFaulted.add(parent)
+      // The rename already landed — mark the throw so callers can tell this
+      // ambiguous failure (new bytes published, durability unproven) from one
+      // that left the previous file in place (Sol r8 P1).
+      throw Object.assign(error as object, { renamed: true })
+    }
   } finally {
     if (dirFd !== null) closeSync(dirFd)
   }
@@ -417,6 +463,18 @@ export class AnnotationStore {
     return epoch
   }
 
+  /**
+   * Re-seed the epoch cache from the snapshot actually PUBLISHED on disk
+   * (Sol r8 P1). Used after an ambiguous post-rename failure: the renamed
+   * snapshot is already what every reader replays over, so a cache that kept
+   * the pre-rename epoch would stamp later ops with a generation the visible
+   * snapshot has superseded — a crash would then silently drop them.
+   */
+  private resyncEpoch(safeId: string): void {
+    this.epochs.delete(safeId)
+    this.epochOf(safeId)
+  }
+
   /** The in-memory durable picture, seeded from disk the first time. */
   private stateOf(safeId: string): Map<number, TurnAnnotation> {
     const held = this.state.get(safeId)
@@ -549,14 +607,22 @@ export class AnnotationStore {
 
   /**
    * Fold the log into a fresh snapshot once replay weight crosses the
-   * threshold (see ANNOTATION_LOG_COMPACT_MIN_OPS). Best-effort: the ops are
-   * already durable in the log, so a failed compaction costs replay time on
-   * the next read, never data — and the counter keeps the trigger armed.
+   * threshold (see ANNOTATION_LOG_COMPACT_MIN_OPS). The ops are already
+   * durable in the log, so a failed compaction costs no data that has landed
+   * — but it is NOT free to ignore (Sol r8 P1): the failure may have left a
+   * bumped-epoch snapshot published (rename landed, durability unproven), and
+   * an incremental op appended after that with the cached epoch would be
+   * inert to the very snapshot it extends. So an unresolved compaction
+   * failure raises the pendingFull barrier: every subsequent change folds
+   * into a retried FULL snapshot, which reconciles epoch and state in one
+   * atomic replacement before any op line is stamped again.
    */
   private maybeCompact(safeId: string, state: Map<number, TurnAnnotation>): void {
     const ops = this.logOps.get(safeId) ?? 0
     if (ops < ANNOTATION_LOG_COMPACT_MIN_OPS || ops < state.size) return
-    this.persistSnapshot(safeId, state)
+    if (!this.persistSnapshot(safeId, state)) {
+      this.pendingFull.set(safeId, new Map(state))
+    }
   }
 
   /**
@@ -608,6 +674,11 @@ export class AnnotationStore {
       }
       return true
     } catch (error) {
+      // Ambiguous post-rename failure (Sol r8 P1): the rename LANDED, so the
+      // published snapshot already carries the bumped epoch while the cache
+      // still holds the old one. Resync from the file on disk so nothing is
+      // ever stamped with a generation the visible snapshot has superseded.
+      if (renameLanded(error)) this.resyncEpoch(safeId)
       console.error('Failed to save checkpoint annotations:', error)
       return false
     }

@@ -750,10 +750,10 @@ const dispatchService = new DispatchService({
   // deeper simply have no captureDeep and the engine uses the plain one.
   captureDeep: (name) => multiplexer()?.captureDeep?.(name, DISPATCH_CAPTURE_LINES) ?? null,
   agentStatus: (name) => agentStatus(name),
-  promptAgent: (name, prompt, timeoutMs) => {
+  promptAgent: (name, prompt, timeoutMs, signal) => {
     const mux = multiplexer()
     if (!mux?.capabilities.agentLifecycle || !mux.promptAgent) return Promise.resolve('failed')
-    return mux.promptAgent(name, prompt, timeoutMs)
+    return mux.promptAgent(name, prompt, timeoutMs, signal)
   },
   noteDispatch: (agentId, dispatchId, prompt) => turns.noteDispatch(agentId, dispatchId, prompt),
   // Confirmed delivery hands the tracker the EXACT prompt: scrape closure
@@ -799,6 +799,9 @@ const dispatchService = new DispatchService({
   // The sweep must not spare a stuck-working agent whose durable final
   // answer already exists — status may hold, never outrank the row.
   hasFinalAnswer: (agentId, prompt, armedAt) => turns.hasFinalAnswer(agentId, prompt, armedAt),
+  // The input box belongs to a composing owner: admission refuses and both
+  // delivery legs stand down rather than pasting under their typing.
+  ownerComposing: (agentId) => turns.ownerComposing(agentId),
   // Observer probation: a native-file acceptance must see its watch actually
   // reconcile; a path that never materializes interrupts at 60s, not 10min.
   observerLive: (agentId) => sessionSync.isVerified(agentId),
@@ -2174,8 +2177,29 @@ function registerIpc(handlers: RestoreHandlers): void {
   )
 
   // Terminal stream bridging renderer xterm <-> PTY
+  const inputRefusalAnnounced = new Map<string, number>()
   ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {
-    ptys.get(terminalId)?.write(data)
+    const verdict = ptys.get(terminalId)?.write(data)
+    // A refused byte must be VISIBLE (Sol r8): silently vanishing keystrokes
+    // during a delivery window or a contaminated box read as a broken app.
+    // Announced through the ordinary event stream (toast layer + phone),
+    // throttled per terminal so held-down keys make one toast, not fifty.
+    if (verdict && verdict !== 'allow') {
+      const last = inputRefusalAnnounced.get(terminalId) ?? 0
+      if (Date.now() - last > 3000) {
+        inputRefusalAnnounced.set(terminalId, Date.now())
+        const node = store.node(terminalId)
+        store.withOpContext({ actor: 'agent' }, () =>
+          store.recordEvent(
+            'terminal.input-refused',
+            terminalId,
+            node?.name ?? terminalId,
+            turns.refusalReason(terminalId) ??
+              'a dispatch is being delivered — input refused for a moment'
+          )
+        )
+      }
+    }
   })
   ipcMain.on('pty:resize', (_e, terminalId: string, cols: number, rows: number) => {
     ptys.get(terminalId)?.resize(cols, rows)

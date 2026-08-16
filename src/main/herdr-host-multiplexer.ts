@@ -50,7 +50,7 @@
 import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { promptViaHerdr, waitForAgentState } from './herdr-agent-wait'
+import { promptViaHerdr, submitViaHerdr, waitForAgentState } from './herdr-agent-wait'
 import {
   sanitizeAgentEnv,
   type AttachSpawn,
@@ -107,9 +107,27 @@ export function parseEnvelope(raw: string): Record<string, unknown> | null {
 
 /** Panes out of a `pane list` envelope, or [] when herdr said anything else. */
 export function parsePaneList(raw: string): HerdrPane[] {
+  return parsePaneListStrict(raw) ?? []
+}
+
+/**
+ * STRICT pane-list parse for the ADMISSION path (Sol r8 P1): only a
+ * well-formed pane_list envelope — a success result actually carrying a
+ * `panes` array — counts as an answer, and an empty array IS a valid answer
+ * (a fresh session genuinely has zero panes). Malformed JSON, herdr error
+ * envelopes and pane-less results return null so the refresh takes the
+ * failure backoff. The lenient parsePaneList above maps all of those to [],
+ * which was correct for its callers ("no signal" and "no panes" license the
+ * same non-action) but made the refresh's parse-failure backoff unreachable:
+ * an exit-0 bad response was PUBLISHED as a successful empty inventory,
+ * de-admitting every live agent while resetting the very backoff meant to
+ * bound the outage.
+ */
+export function parsePaneListStrict(raw: string): HerdrPane[] | null {
   const result = parseEnvelope(raw)
-  const panes = result?.panes
-  return Array.isArray(panes) ? (panes as HerdrPane[]) : []
+  if (result === null) return null
+  const panes = result.panes
+  return Array.isArray(panes) ? (panes as HerdrPane[]) : null
 }
 
 /**
@@ -224,6 +242,34 @@ export function agentKind(command: string): string {
   return base.length > 0 ? base : 'shell'
 }
 
+/**
+ * The ASYNC CLI seam behind the admission-cache refresh: run `herdr` with
+ * these args, resolve stdout, reject on any spawn/exit/timeout failure.
+ */
+export type AsyncCliRunner = (args: string[], timeoutMs: number) => Promise<string>
+
+/**
+ * The default AsyncCliRunner: execFile with the wait handed to libuv, bounded
+ * by a SIGKILL timeout so a hung `pane list` can neither latch the refresh's
+ * single-flight forever nor let its successors amplify forks (Sol r7). The
+ * child is unref'd — an admission probe must never hold the app open.
+ */
+export function createAsyncHerdrRunner(env: NodeJS.ProcessEnv): AsyncCliRunner {
+  return (args, timeoutMs) =>
+    new Promise((resolve, reject) => {
+      const child = execFile(
+        'herdr',
+        args,
+        { encoding: 'utf8', env, timeout: timeoutMs, killSignal: 'SIGKILL' },
+        (error, stdout) => {
+          if (error) reject(error)
+          else resolve(typeof stdout === 'string' ? stdout : String(stdout))
+        }
+      )
+      child.unref?.()
+    })
+}
+
 export interface HerdrHostOptions {
   /**
    * Cookrew's herdr SESSION name — the isolation boundary, and tmux's
@@ -239,6 +285,16 @@ export interface HerdrHostOptions {
   /** Cookrew's herdr config — the chrome-off one that makes attach transparent. */
   configPath: string
   runner?: CommandRunner
+  /**
+   * The async refresh behind the admission cache (Sol r8 P1). Defaults to a
+   * bounded execFile against `herdr` with the sanitized env
+   * (createAsyncHerdrRunner). Injectable so tests can drive malformed stdout,
+   * error envelopes, timeouts, fast failures and recovery through the REAL
+   * publish/backoff logic — the previous hard-coded execFile made that path
+   * untestable, which is how a malformed exit-0 response came to publish as
+   * a successful empty inventory.
+   */
+  asyncRunner?: AsyncCliRunner
   /**
    * Start Cookrew's herdr server. Injected so the backend is testable without
    * spawning a daemon, and so the wait strategy lives in one place.
@@ -293,13 +349,12 @@ export class HerdrHostMultiplexer implements Multiplexer {
   }
 
   private readonly runner: CommandRunner
+  private readonly asyncRunner: AsyncCliRunner
   private readonly session: string
   private readonly configPath: string
   private readonly startServer: () => void
   private readonly waitForServerMs: number
   private readonly settleMs: number
-  /** Sanitized runner env, kept for the one async (libuv-side) CLI call. */
-  private readonly env: NodeJS.ProcessEnv
   private probed: boolean | null = null
   private serverUp = false
   /** One immutable pane-list snapshot while a synchronous attach burst runs. */
@@ -316,8 +371,8 @@ export class HerdrHostMultiplexer implements Multiplexer {
     })
     this.session = options.session
     this.configPath = options.configPath
-    this.env = env
     this.runner = options.runner ?? createHerdrRunner(env)
+    this.asyncRunner = options.asyncRunner ?? createAsyncHerdrRunner(env)
     this.startServer = options.startServer ?? (() => spawnHerdrServer(env))
     this.waitForServerMs = options.waitForServerMs ?? 5000
     this.settleMs = options.settleMs ?? 2000
@@ -488,41 +543,49 @@ export class HerdrHostMultiplexer implements Multiplexer {
     if (this.admissionRefreshing || Date.now() < this.admissionBackoffUntil) return
     this.admissionRefreshing = true
     // GENUINELY async (Sol r6): a deferred synchronous fork still stalls the
-    // main loop one turn later — execFile hands the wait to libuv and the
-    // snapshot publishes on completion (single-flight). Admission keeps
-    // serving the last snapshot meanwhile; a failed refresh keeps the stale
-    // one, which the delivery leg's own revalidation covers.
-    const child = execFile(
-      'herdr',
-      ['pane', 'list'],
-      // Bounded: a hung `pane list` must neither latch single-flight forever
-      // nor let its successor amplify forks — SIGKILL at the timeout, then
-      // the backoff below owns the cadence (Sol r7).
-      { encoding: 'utf8', env: this.env, timeout: 3000, killSignal: 'SIGKILL' },
-      (error, stdout) => {
-        try {
-          if (!error && typeof stdout === 'string') {
-            this.admissionCache = { at: Date.now(), panes: parsePaneList(stdout) }
-            this.admissionBackoffUntil = 0
-          } else {
-            // Failure publishes a backoff timestamp: fast-failing children
-            // must not respawn once per admission during the very outage the
-            // cache exists to degrade through.
-            this.admissionBackoffUntil = Date.now() + 5000
-          }
-        } catch {
+    // main loop one turn later — the injectable runner (default: execFile
+    // with a 3s SIGKILL bound) hands the wait to libuv and the snapshot
+    // publishes on completion (single-flight). Admission keeps serving the
+    // last snapshot meanwhile; a failed refresh keeps the stale one, which
+    // the delivery leg's own revalidation covers.
+    this.asyncRunner(['pane', 'list'], 3000)
+      .then((stdout) => {
+        // STRICT (Sol r8 P1): only a well-formed pane_list publishes — zero
+        // panes included. Malformed/error output takes the same backoff as a
+        // failed child; publishing it as an empty inventory would de-admit
+        // every live agent AND reset the backoff during the outage.
+        const panes = parsePaneListStrict(stdout)
+        if (panes === null) {
           this.admissionBackoffUntil = Date.now() + 5000
-        } finally {
-          this.admissionRefreshing = false
+          return
         }
-      }
-    )
-    child.unref?.()
+        this.admissionCache = { at: Date.now(), panes }
+        this.admissionBackoffUntil = 0
+      })
+      .catch(() => {
+        // Failure publishes a backoff timestamp: fast-failing children must
+        // not respawn once per admission during the very outage the cache
+        // exists to degrade through.
+        this.admissionBackoffUntil = Date.now() + 5000
+      })
+      .finally(() => {
+        this.admissionRefreshing = false
+      })
   }
 
-  /** Seed the inventory outside any request (boot / supervisor start). */
+  /**
+   * Seed the inventory outside any request (boot / supervisor start).
+   *
+   * Async-safe (Sol r8 P1): this must NOT call the synchronous readPanes — it
+   * runs on Electron's main thread at boot, and a wedged herdr CLI would
+   * freeze app launch indefinitely (neither the sync runner nor the probe has
+   * a timeout). It fires the same bounded single-flight refresh instead,
+   * fire-and-forget; until that publishes, the cold window serves the empty
+   * inventory, which admission classifies as a retryable refusal (503
+   * unreachable) rather than a hard failure.
+   */
   primeAdmissionCache(): void {
-    this.admissionCache = { at: Date.now(), panes: this.readPanes() }
+    this.refreshAdmissionCacheSoon()
   }
 
   sessionExistsCached(name: string): boolean {
@@ -1205,7 +1268,8 @@ export class HerdrHostMultiplexer implements Multiplexer {
   async promptAgent(
     name: string,
     prompt: string,
-    timeoutMs: number
+    timeoutMs: number,
+    signal?: AbortSignal
   ): Promise<'done' | 'submitted' | 'failed'> {
     const pane = this.paneFor(name)
     if (!pane) return 'failed'
@@ -1215,7 +1279,33 @@ export class HerdrHostMultiplexer implements Multiplexer {
       configPath: this.configPath,
       target: pane.pane_id,
       timeoutMs,
-      prompt
+      prompt,
+      signal
+    })
+  }
+
+  /**
+   * Submission-acknowledgement mode: returns as soon as the prompt is IN,
+   * without waiting out the turn — the short window a producer lease needs
+   * to cover, nothing more (Sol r8). Ambiguity maps to 'submitted': the
+   * do-not-retype rule applies exactly as in promptAgent.
+   */
+  async submitAgent(
+    name: string,
+    prompt: string,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ): Promise<'submitted' | 'failed'> {
+    const pane = this.paneFor(name)
+    if (!pane) return 'failed'
+    if (!this.agentResolvable(pane.pane_id)) return 'failed'
+    return submitViaHerdr({
+      session: this.session,
+      configPath: this.configPath,
+      target: pane.pane_id,
+      timeoutMs,
+      prompt,
+      signal
     })
   }
 
