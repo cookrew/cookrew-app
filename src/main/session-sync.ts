@@ -21,6 +21,17 @@ import type { TurnTracker } from './turn-tracker'
 
 const DEFAULT_POLL_MS = 2000
 
+/**
+ * Consecutive quiet polls (no byte GROWTH — an mtime touch is not work, and
+ * `claude --resume` touches without appending) a RELEASED terminal survives
+ * before it drains to a suspended signature. Thirty seconds at the default
+ * poll: long enough that a turn's ordinary pauses never drain mid-work,
+ * short enough that a quiet background fleet returns to zero cost. Drain is
+ * the v5 replacement for a manual tracking flag — there is nothing to
+ * forget, so nothing can leak.
+ */
+export const DRAIN_TICKS = 15
+
 /** Session-file lines → TurnRecords; one per 'file'-capable harness. */
 export type SessionTurnParser = (lines: string[]) => TurnRecord[]
 
@@ -31,12 +42,18 @@ interface WatchedFile {
   parse: SessionTurnParser
   /** Exact tracker array produced by the last successful reconcile. */
   history: TurnRecord[] | null
+  /** Focus left this terminal: drain after DRAIN_TICKS without growth. */
+  draining: boolean
+  /** Consecutive polls without byte growth, counted only while draining. */
+  drainTicks: number
 }
 
 export class SessionTurnSync {
   private watched = new Map<string, WatchedFile>()
   /** Last verified signature survives a workspace-switch unwatch/reattach. */
   private dormant = new Map<string, WatchedFile>()
+  /** In-flight work (a dispatch) holding a released terminal open. */
+  private pinned = new Set<string>()
   private timer: NodeJS.Timeout | null = null
 
   constructor(
@@ -65,7 +82,9 @@ export class SessionTurnSync {
           // Exact same source and bytes as the last successful reconcile. The
           // TurnTracker intentionally retains history across a workspace
           // detach, so reparsing hundreds of MB cannot make it more exact.
-          this.watched.set(terminalId, prior)
+          // Presence pins: a watch() is focus (or a fresh dispatch), so any
+          // pending drain is cancelled.
+          this.watched.set(terminalId, { ...prior, draining: false, drainTicks: 0 })
           this.turns.setHistorySource(terminalId, 'file')
           this.ensureTimer()
           return
@@ -76,7 +95,15 @@ export class SessionTurnSync {
       }
     }
 
-    this.watched.set(terminalId, { file, mtimeMs: 0, size: 0, parse, history: null })
+    this.watched.set(terminalId, {
+      file,
+      mtimeMs: 0,
+      size: 0,
+      parse,
+      history: null,
+      draining: false,
+      drainTicks: 0
+    })
     // This file has not proven anything yet — a fresh --session-id boot writes
     // nothing for seconds, and a restore rebinds to a file that may not exist.
     // The scrape covers the window; reconcile() hands over if the file is
@@ -84,6 +111,34 @@ export class SessionTurnSync {
     this.turns.setHistorySource(terminalId, 'scrape')
     this.reconcile(terminalId)
     this.ensureTimer()
+  }
+
+  /**
+   * Focus left this terminal's workspace (v5 A4). Do NOT stop watching:
+   * work is whatever the session file says it is, and the file growing IS
+   * the work. The watch stays live while bytes arrive and drains to a
+   * suspended signature after DRAIN_TICKS quiet polls — automatically,
+   * with no flag anyone can forget. A pin (in-flight dispatch) holds the
+   * watch open through the longest quiet tool call.
+   */
+  release(terminalId: string): void {
+    const watched = this.watched.get(terminalId)
+    if (!watched) return
+    this.watched.set(terminalId, { ...watched, draining: true, drainTicks: 0 })
+  }
+
+  /** In-flight dispatch: this terminal may not drain until unpin(). */
+  pin(terminalId: string): void {
+    this.pinned.add(terminalId)
+  }
+
+  /** Dispatch settled: the ordinary drain clock owns the terminal again. */
+  unpin(terminalId: string): void {
+    this.pinned.delete(terminalId)
+    const watched = this.watched.get(terminalId)
+    if (watched && watched.draining) {
+      this.watched.set(terminalId, { ...watched, drainTicks: 0 })
+    }
   }
 
   /** Workspace switch only: retain a verified signature for exact reattach. */
@@ -96,6 +151,7 @@ export class SessionTurnSync {
   /** Permanent/rebind release: no dormant context may survive it. */
   unwatch(terminalId: string): void {
     this.dormant.delete(terminalId)
+    this.pinned.delete(terminalId)
     this.stopWatching(terminalId)
   }
 
@@ -117,6 +173,7 @@ export class SessionTurnSync {
     }
     this.watched.clear()
     this.dormant.clear()
+    this.pinned.clear()
   }
 
   private ensureTimer(): void {
@@ -129,19 +186,43 @@ export class SessionTurnSync {
     for (const terminalId of [...this.watched.keys()]) this.reconcile(terminalId)
   }
 
+  /**
+   * A poll where a draining terminal's file did not GROW. Measured in bytes,
+   * never mtime — `claude --resume` touches the file it opens without
+   * appending, and a touch that reset this clock would hold a dead session
+   * watched forever. When the window closes and no pin holds the terminal,
+   * it drains: suspend, keeping the verified signature so the next watch()
+   * costs zero bytes.
+   */
+  private noteDrainQuiet(terminalId: string, watched: WatchedFile): void {
+    if (!watched.draining) return
+    const drainTicks = watched.drainTicks + 1
+    if (drainTicks < DRAIN_TICKS || this.pinned.has(terminalId)) {
+      this.watched.set(terminalId, { ...watched, drainTicks })
+      return
+    }
+    this.suspend(terminalId)
+  }
+
   private reconcile(terminalId: string): void {
     const watched = this.watched.get(terminalId)
     if (!watched) return
     try {
       const stat = statSync(watched.file)
-      if (stat.mtimeMs === watched.mtimeMs && stat.size === watched.size) return
+      const bytesMoved = stat.size !== watched.size
+      if (stat.mtimeMs === watched.mtimeMs && stat.size === watched.size) {
+        this.noteDrainQuiet(terminalId, watched)
+        return
+      }
       const records = watched.parse(readFileSync(watched.file, 'utf8').split('\n'))
       this.turns.replaceHistory(terminalId, records)
       this.watched.set(terminalId, {
         ...watched,
         mtimeMs: stat.mtimeMs,
         size: stat.size,
-        history: this.turns.history(terminalId)
+        history: this.turns.history(terminalId),
+        // A shrink is movement too — a /rewind means the agent is writing.
+        drainTicks: bytesMoved ? 0 : watched.drainTicks + 1
       })
       // Read and parsed: the file is real and is now the durable record, so
       // the tracker can stop writing history for this terminal. Deliberately
@@ -149,6 +230,16 @@ export class SessionTurnSync {
       // holds no turns yet is still the thing the next turn lands in, and the
       // reconcile that brings it will replace whatever is here anyway.
       this.turns.setHistorySource(terminalId, 'file')
+      // A drain can come due on this path too: an mtime that moves while the
+      // size stands still is a touch, not work, and must not watch forever.
+      const updated = this.watched.get(terminalId)
+      if (
+        updated?.draining &&
+        updated.drainTicks >= DRAIN_TICKS &&
+        !this.pinned.has(terminalId)
+      ) {
+        this.suspend(terminalId)
+      }
     } catch {
       // Session file not written yet (fresh --session-id boot) — keep polling,
       // and leave the terminal on the scrape so the turns it takes meanwhile

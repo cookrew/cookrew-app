@@ -1549,12 +1549,15 @@ function registerIpc(handlers: RestoreHandlers): void {
   store.on('change', broadcast)
 
   // On workspace switch, tear down the outgoing PTYs and boot the incoming
-  // canvas's terminals. Only the active workspace holds live processes.
+  // canvas's terminals. Only the active workspace holds live SCREENS — but
+  // not the only live work: an outgoing terminal's session file stays
+  // watched while it grows and drains on its own once the work stops
+  // (v5 A4: tracking follows work, never focus and never a flag).
   store.on('switch', ({ previousTerminalIds }: { previousTerminalIds: string[] }) => {
     // Detach (not kill): the outgoing workspace's tmux sessions stay alive so
     // switching back reattaches them with their agents and scrollback intact.
     for (const tid of previousTerminalIds) {
-      sessionSync.suspend(tid)
+      sessionSync.release(tid)
       turns.untrack(tid)
       ptys.detach(tid)
     }
