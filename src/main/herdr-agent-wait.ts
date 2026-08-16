@@ -104,8 +104,13 @@ export function promptArgs(target: string, prompt: string, timeoutMs: number): s
  * instead of the whole turn. `--timeout` still rides along to bound the CLI
  * call itself.
  */
-export function submitArgs(target: string, prompt: string, timeoutMs: number): string[] {
-  return ['agent', 'prompt', target, prompt, '--timeout', String(timeoutMs)]
+export function submitArgs(target: string, prompt: string): string[] {
+  // NO --timeout here: the CLI rejects it without --wait ("--timeout
+  // requires --wait" — measured live when the first real ack-mode dispatch
+  // silently delivered nothing), and ack-mode needs no wait bound anyway:
+  // the CLI returns at submission. Hangs are owned by the caller's
+  // AbortSignal (delivery cancellation, shutdown drain).
+  return ['agent', 'prompt', target, prompt]
 }
 
 /**
@@ -174,7 +179,7 @@ export async function submitViaHerdr(
   try {
     await exec(
       'herdr',
-      submitArgs(options.target, options.prompt, options.timeoutMs),
+      submitArgs(options.target, options.prompt),
       {
         ...process.env,
         HERDR_SESSION: options.session,
@@ -213,6 +218,12 @@ export function isTimeout(error: unknown): boolean {
   const e = error as { code?: unknown; message?: unknown; stdout?: unknown; stderr?: unknown }
   if (e?.code === 'ETIMEDOUT') return true
   const text = `${String(e?.message ?? '')} ${String(e?.stdout ?? '')} ${String(e?.stderr ?? '')}`
+  // A USAGE error is never a timeout, however many times the word appears in
+  // it — "--timeout requires --wait" matched the loose word-regex and turned
+  // an invalid invocation into 'submitted', the do-not-retype rule then
+  // suppressed every retry, and the first real ack-mode dispatch delivered
+  // nothing while reporting success (measured live).
+  if (/requires --wait|invalid|usage:/i.test(text)) return false
   return /agent_wait_timeout|\btimed?[ _-]?out\b/i.test(text)
 }
 

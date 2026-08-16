@@ -170,16 +170,33 @@ describe('promptViaHerdr — the tri-state IS the safety contract', () => {
 
 describe('submitArgs — submission acknowledgement, not turn completion', () => {
   it('omits --wait and --until: the call returns at submission', () => {
-    const args = submitArgs('w1:p3', 'fix the bug', 60_000)
+    const args = submitArgs('w1:p3', 'fix the bug')
     expect(args.slice(0, 4)).toEqual(['agent', 'prompt', 'w1:p3', 'fix the bug'])
     expect(args).not.toContain('--wait')
     expect(args).not.toContain('--until')
   })
 
-  it('still bounds the CLI call itself with a timeout', () => {
-    expect(submitArgs('t', 'p', 5000)).toEqual(
-      expect.arrayContaining(['--timeout', '5000'])
-    )
+  it('carries NO --timeout — the CLI rejects it without --wait (measured live)', () => {
+    // The first real ack-mode dispatch delivered NOTHING while reporting
+    // 'submitted': `herdr agent prompt <t> <p> --timeout N` errors with
+    // "--timeout requires --wait", and the loose timeout regex classified
+    // that usage error as a timeout. Ack-mode submission is bounded by the
+    // caller's AbortSignal, never by a CLI flag the CLI refuses.
+    expect(submitArgs('w1:p1', 'hello')).toEqual(['agent', 'prompt', 'w1:p1', 'hello'])
+  })
+
+  it('a usage error is FAILED, never submitted (the silent-non-delivery bug)', async () => {
+    const outcome = await submitViaHerdr({
+      session: 's',
+      configPath: '/tmp/c',
+      target: 'w1:p1',
+      timeoutMs: 5000,
+      prompt: 'hello',
+      exec: async () => {
+        throw new Error('--timeout requires --wait')
+      }
+    })
+    expect(outcome).toBe('failed')
   })
 })
 
