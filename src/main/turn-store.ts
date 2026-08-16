@@ -9,13 +9,38 @@
 // full on every turn: O(n) per turn and O(n²) over a session, which is the
 // reason a cap existed at all.
 //
+// TAIL OVERLAY LINES (Sol r7 P1). The open turn's record grows and finalizes
+// in place, and the parser lane reports that every ~2s — so "replace the last
+// line" is the second-hottest write after the append. Rewriting the whole
+// file atomically for it (the r6 shape) made every tail delta O(total
+// history): a long active turn against a large ledger copied the entire file
+// per poll. A tail change is now itself an APPEND — a versioned overlay line
+//
+//   {"__tail":true,"supersedes":<index>,<…the record's own fields…>}
+//
+// meaning "the newest version of checkpoint <index> is this line". Readers
+// apply last-wins per index; superseded lines are dead weight that a bounded
+// fold clears: when overlay lines reach TAIL_OVERLAY_COMPACT_MIN_LINES and
+// their bytes reach half the file, ONE atomic full rewrite (writeAll) folds
+// them away — at load time (the dispatch-registry pattern) or in place of the
+// overlay append that crossed the line. Amortized, every write is O(changed
+// bytes): the fold's O(file) cost is paid for by an equal weight of dead
+// bytes it removes. TurnStore is the ONLY reader of these files (board,
+// search, rebuild-diff all go through load/loadAll; ledger-rebuild reads
+// harness transcripts) — anything new that parses the raw JSONL must apply
+// the same last-wins rule.
+//
 // Writes are debounced per terminal; TurnTracker flushes on app quit.
 
 import {
   appendFileSync,
+  closeSync,
   existsSync,
+  fstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   renameSync,
   statSync,
@@ -27,6 +52,43 @@ import { mergeAnnotation, splitAnnotation, type TurnRecord } from '../shared/tur
 import { AnnotationStore, writeFileAtomic } from './turn-annotations'
 
 const SAVE_DEBOUNCE_MS = 300
+
+/**
+ * Overlay-fold floor. Below this many overlay lines the dead weight cannot be
+ * worth a full rewrite, however small the file; at or above it, the fold
+ * fires once overlay bytes reach half the file — the doubling policy that
+ * makes the fold's O(file) cost amortized O(changed) per write.
+ */
+export const TAIL_OVERLAY_COMPACT_MIN_LINES = 64
+
+/** Byte-exact prefix of every overlay line this writer produces. */
+const TAIL_MARKER_PREFIX = '{"__tail":true,"supersedes":'
+
+/** Build the overlay line for a record's canonical conversation line. */
+function tailOverlayLine(index: number, recordLine: string): string {
+  // Splice the marker fields into the record's own JSON object, so the exact
+  // record bytes are recoverable by stripping the marker prefix back off.
+  return `${TAIL_MARKER_PREFIX}${index},${recordLine.slice(1)}`
+}
+
+/**
+ * Recognize an overlay line, recovering the EXACT record line it carries —
+ * '{' plus everything past the marker — and the index it supersedes. Null for
+ * a plain record line, or for anything not in this writer's canonical shape.
+ */
+function parseOverlay(raw: string): { supersedes: number; line: string } | null {
+  if (!raw.startsWith(TAIL_MARKER_PREFIX)) return null
+  const comma = raw.indexOf(',', TAIL_MARKER_PREFIX.length)
+  if (comma === -1) return null
+  const digits = raw.slice(TAIL_MARKER_PREFIX.length, comma)
+  if (!/^\d+$/.test(digits)) return null
+  return { supersedes: Number(digits), line: `{${raw.slice(comma + 1)}` }
+}
+
+/** The bounded fold policy — one place, used by load and the write path. */
+function foldDue(overlayLines: number, overlayBytes: number, fileBytes: number): boolean {
+  return overlayLines >= TAIL_OVERLAY_COMPACT_MIN_LINES && overlayBytes * 2 >= fileBytes
+}
 
 /** Shape check for records read back from disk (files are user-editable). */
 function isTurnRecord(value: unknown): value is TurnRecord {
@@ -44,9 +106,22 @@ function isTurnRecord(value: unknown): value is TurnRecord {
 
 /** What the last flush left on disk, so the next one can tell append from edit. */
 interface Written {
+  /** LOGICAL records — physical lines minus the overlays that supersede one. */
   count: number
-  /** Serialized form of the final record — an edit to it forces a rewrite. */
+  /** Raw bytes of the last PHYSICAL line — the overlay append verifies the
+   *  file still ends with exactly these before superseding anything. */
   lastLine: string
+  /** Exact record line of the last LOGICAL record: `lastLine` itself, or the
+   *  record bytes inside it when that line is an overlay. An edit to the
+   *  record this fails to match forces the safe full rewrite. */
+  tailLine: string
+  /** Checkpoint index of the last logical record — an overlay may only ever
+   *  supersede this one. */
+  lastIndex: number
+  /** Overlay lines currently in the file — the fold trigger's input. */
+  overlayLines: number
+  /** Their bytes (newlines included) — the fold trigger's other input. */
+  overlayBytes: number
 }
 
 export class TurnStore {
@@ -64,6 +139,12 @@ export class TurnStore {
    * downgrades an 'all'.
    */
   private dirty = new Map<string, Map<number, TurnRecord> | 'all'>()
+  /**
+   * Terminals whose last read found overlay weight past the fold policy —
+   * load() folds them with ONE atomic rewrite as soon as it holds the
+   * hydrated records, i.e. outside every hot write path.
+   */
+  private foldOnLoad = new Set<string>()
   /**
    * Whole-ledger cache for loadAll(). Built once and kept warm by write-through
    * from flush()/remove() — this process is the only writer, so re-reading every
@@ -131,10 +212,14 @@ export class TurnStore {
 
   /**
    * Read the lines file, dropping any line that will not parse. A single
-   * corrupt line must not blank an agent's whole history.
+   * corrupt line must not blank an agent's whole history. An overlay line
+   * (see the header) replaces the record it supersedes IN PLACE — last wins
+   * per checkpoint index — so callers see the logical history whatever mix of
+   * plain and overlay lines the file holds.
    *
    * COLD-START SEEDING (Sol r6 P1): a CLEAN read — every line parsed, file
-   * newline-terminated — also seeds the written-tail metadata, with the RAW
+   * newline-terminated, overlays canonical, final line carrying the final
+   * logical record — also seeds the written-tail metadata, with the RAW
    * last line as it sits on disk. Without this the first scheduleDelta after
    * a restart found no `written` entry and fell through to a whole-file
    * rewrite, making persistence O(delta) only until the next boot. Raw bytes,
@@ -142,33 +227,89 @@ export class TurnStore {
    * verification compare against exactly what the file holds; a hand-edited
    * line that no longer serializes identically simply fails the boundary
    * check and takes the safe full rewrite. A NON-clean read (corrupt or
-   * truncated lines the parse dropped) clears the entry instead: appending
-   * relative to a count the file does not actually have would land records
-   * in the wrong place.
+   * truncated lines the parse dropped, non-canonical overlays) clears the
+   * entry instead: appending relative to a shape the file does not actually
+   * have would land records in the wrong place.
    */
   private readLines(terminalId: string, file: string): TurnRecord[] {
     const records: TurnRecord[] = []
+    const at = new Map<number, number>() // checkpoint index → position
     const text = readFileSync(file, 'utf8')
     let clean = text === '' || text.endsWith('\n')
     let lastLine = ''
+    let lastRecord: TurnRecord | null = null
+    let overlayLines = 0
+    let overlayBytes = 0
     for (const line of text.split('\n')) {
       if (line.trim() === '') continue
+      const overlay = parseOverlay(line)
       try {
-        const parsed: unknown = JSON.parse(line)
-        if (isTurnRecord(parsed)) {
-          records.push(parsed)
-          lastLine = line
-        } else {
+        const parsed: unknown = JSON.parse(overlay?.line ?? line)
+        if (!isTurnRecord(parsed)) {
           clean = false
+          continue
         }
+        if (overlay !== null) {
+          overlayLines += 1
+          overlayBytes += Buffer.byteLength(line, 'utf8') + 1
+          if (overlay.supersedes !== parsed.index) clean = false
+          const pos = at.get(parsed.index)
+          if (pos !== undefined) {
+            records[pos] = parsed
+          } else {
+            // An overlay whose base line is gone (corrupt, hand-assembled):
+            // keep the newest version of the record — losing data to a shape
+            // quibble is worse — but distrust the file as an append base.
+            at.set(parsed.index, records.length)
+            records.push(parsed)
+            clean = false
+          }
+        } else {
+          at.set(parsed.index, records.length)
+          records.push(parsed)
+        }
+        lastLine = line
+        lastRecord = parsed
       } catch {
         // one bad line, not the file
         clean = false
       }
     }
-    if (clean) this.written.set(terminalId, { count: records.length, lastLine })
-    else this.written.delete(terminalId)
+    // The append/overlay machinery assumes the final physical line carries
+    // the final logical record; a file where it does not is not extendable.
+    if (records.length > 0 && lastRecord !== records[records.length - 1]) clean = false
+    if (!clean) {
+      this.written.delete(terminalId)
+      return records
+    }
+    this.written.set(terminalId, {
+      count: records.length,
+      lastLine,
+      tailLine: parseOverlay(lastLine)?.line ?? lastLine,
+      lastIndex: records.length > 0 ? records[records.length - 1].index : -1,
+      overlayLines,
+      overlayBytes,
+    })
+    if (foldDue(overlayLines, overlayBytes, Buffer.byteLength(text, 'utf8'))) {
+      this.foldOnLoad.add(terminalId)
+    }
     return records
+  }
+
+  /**
+   * The load-time half of overlay compaction: one atomic rewrite when the
+   * last read flagged the fold, holding the HYDRATED records so the loadAll
+   * cache (which stores records annotations-on) stays truthful. Best-effort —
+   * a failed fold costs nothing but the dead bytes it would have cleared, and
+   * the write-path fold retries the same policy.
+   */
+  private maybeFold(terminalId: string, hydrated: TurnRecord[]): void {
+    if (!this.foldOnLoad.delete(terminalId)) return
+    try {
+      this.writeAll(terminalId, hydrated)
+    } catch (error) {
+      console.error('Failed to fold turn ledger tail overlays:', error)
+    }
   }
 
   /**
@@ -201,7 +342,11 @@ export class TurnStore {
     if (pending) return pending
     try {
       const file = this.fileFor(terminalId)
-      if (existsSync(file)) return this.hydrate(terminalId, this.readLines(terminalId, file))
+      if (existsSync(file)) {
+        const records = this.hydrate(terminalId, this.readLines(terminalId, file))
+        this.maybeFold(terminalId, records)
+        return records
+      }
       return this.migrate(terminalId) ?? []
     } catch (error) {
       console.error('Failed to load turn history:', error)
@@ -213,6 +358,11 @@ export class TurnStore {
    * How many checkpoints this agent has, WITHOUT parsing any of them. This is
    * what makes an uncapped history affordable to display: the count is exact
    * even when only a tail is held in memory.
+   *
+   * Overlay lines each supersede one earlier line, so the logical count is
+   * physical lines minus overlays. The overlay scan is a substring count, no
+   * JSON parse: a raw newline cannot occur inside a JSON string, so
+   * newline-then-marker can only ever be a line start.
    */
   count(terminalId: string): number {
     const pending = this.pending.get(terminalId)
@@ -223,9 +373,15 @@ export class TurnStore {
       let lines = 0
       const text = readFileSync(file, 'utf8')
       for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) lines++
+      let overlays = text.startsWith(TAIL_MARKER_PREFIX) ? 1 : 0
+      const needle = `\n${TAIL_MARKER_PREFIX}`
+      for (let hit = text.indexOf(needle); hit !== -1; hit = text.indexOf(needle, hit + 1)) {
+        overlays++
+      }
       // A trailing newline is written after every record, so lines === records
       // unless the file ends mid-write.
-      return text.endsWith('\n') ? lines : lines + 1
+      const physical = text.endsWith('\n') ? lines : lines + 1
+      return Math.max(0, physical - overlays)
     } catch {
       return 0
     }
@@ -260,9 +416,16 @@ export class TurnStore {
           const terminalId = name.slice(0, name.lastIndexOf('.'))
           if (isLegacy && existsSync(this.fileFor(terminalId))) continue
           try {
-            const records = isLines
-              ? this.hydrate(terminalId, this.readLines(terminalId, path.join(this.dir, name)))
-              : this.load(terminalId)
+            let records: TurnRecord[]
+            if (isLines) {
+              records = this.hydrate(
+                terminalId,
+                this.readLines(terminalId, path.join(this.dir, name)),
+              )
+              this.maybeFold(terminalId, records)
+            } else {
+              records = this.load(terminalId)
+            }
             // Terminals with no usable records are OMITTED — the board's L3
             // layer relies on never having to filter empties itself.
             if (records.length > 0) all.set(terminalId, records)
@@ -368,10 +531,16 @@ export class TurnStore {
     else this.all.delete(key)
   }
 
+  /** After a full rewrite: no overlays left, the last line IS the last record. */
   private remember(terminalId: string, records: TurnRecord[]): void {
+    const last = records.length > 0 ? this.line(records[records.length - 1]) : ''
     this.written.set(terminalId, {
       count: records.length,
-      lastLine: records.length > 0 ? this.line(records[records.length - 1]) : '',
+      lastLine: last,
+      tailLine: last,
+      lastIndex: records.length > 0 ? records[records.length - 1].index : -1,
+      overlayLines: 0,
+      overlayBytes: 0,
     })
   }
 
@@ -433,10 +602,11 @@ export class TurnStore {
 
   /**
    * The conversation half of one flush. Append when the history only GREW and
-   * its previous last record is byte-identical to what we wrote; replace just
-   * the tail when a delta save proved the change stops at the previously-last
-   * record; otherwise rewrite. Throws on I/O failure — the caller retains the
-   * un-landed records and retries.
+   * its previous last record is byte-identical to what we wrote; append an
+   * OVERLAY superseding the tail when a delta save proved the change stops at
+   * the previously-last record; otherwise rewrite. Every branch is O(changed
+   * bytes) except the explicit fold. Throws on I/O failure — the caller
+   * retains the un-landed records and retries.
    *
    * WHY THE FALLBACK STAYS after the annotation split. Two of the three edit
    * sources are gone from these lines — a seenAt stamp and a late Sous title
@@ -459,25 +629,37 @@ export class TurnStore {
     if (extendable) {
       const boundary = known.count - 1
       const boundaryRecord = records[boundary]
-      if (this.line(boundaryRecord) === known.lastLine) {
+      if (this.line(boundaryRecord) === known.tailLine) {
         // Pure growth — or an annotation-only change, whose conversation
-        // bytes are untouched and need no write at all.
+        // bytes are untouched and need no write at all. Overlay bookkeeping
+        // carries over: nothing already in the file moved.
         if (records.length > known.count) {
           const added = records.slice(known.count).map((r) => `${this.line(r)}\n`)
           appendFileSync(file, added.join(''), 'utf8')
+          const lastLine = added[added.length - 1].slice(0, -1)
+          this.written.set(terminalId, {
+            ...known,
+            count: records.length,
+            lastLine,
+            tailLine: lastLine,
+            lastIndex: records[records.length - 1].index,
+          })
         }
-        this.remember(terminalId, records)
         this.cache(terminalId, records)
         return
       }
       // The last written line changed. On the delta path — where the dirty
-      // set proves nothing BELOW that line changed — replace just the tail
-      // instead of rewriting every record (Sol r5 P1): the common shape is
-      // a finalized re-carry of the open tail plus the records behind it.
+      // set proves nothing BELOW that line changed — supersede just the tail
+      // instead of rewriting every record (Sol r5 P1 / r7 P1): the common
+      // shape is the open tail growing, or its finalized re-carry plus the
+      // records behind it.
       const tailOnly =
         dirty !== 'all' && [...dirty.keys()].every((index) => index >= boundaryRecord.index)
-      if (tailOnly && this.rewriteTail(file, known.lastLine, records.slice(boundary))) {
-        this.remember(terminalId, records)
+      if (
+        tailOnly &&
+        boundaryRecord.index === known.lastIndex &&
+        this.appendTailOverlay(terminalId, file, known, records, boundary)
+      ) {
         this.cache(terminalId, records)
         return
       }
@@ -486,35 +668,70 @@ export class TurnStore {
   }
 
   /**
-   * Replace the file's LAST line and append from there — the tail-update leg
-   * of the delta path. Refuses (returns false, caller rewrites) unless the
-   * bytes about to be replaced are EXACTLY the line the last flush wrote:
-   * the file is user-editable, and replacing on faith could eat a record
-   * this process never knew about.
+   * The tail-update leg of the delta path: ONE appended overlay line marks
+   * the previously-last record superseded, then any newly-appended records
+   * follow as plain lines — O(changed bytes), never a copy of the ledger
+   * (Sol r7 P1; the r6 shape rewrote the whole file atomically per tail
+   * delta, O(total history) every ~2s of a long active turn).
    *
-   * ATOMIC, NOT IN-PLACE (Sol r6 P2). The previous shape — truncate the old
-   * tail, then append the replacement — destroyed the only ledger copy's last
-   * record BEFORE the new bytes existed: a crash or append failure in that
-   * window lost it until a native re-parse happened to rebuild the file. Now
-   * the prefix plus the new tail go to a temp file, fsync, rename
-   * (writeFileAtomic): the old bytes stay durable until the replacement is.
-   * THE TRADE-OFF, stated plainly: this makes the tail-change write O(file)
-   * bytes where truncate+append was O(one line). It is bounded — one line per
-   * turn, ~1.4 MB on the largest agent observed — and it buys the same
-   * crash-safety contract the annotation sidecar and dispatch registry
-   * already hold; the hot append path is untouched. If profiling ever shows
-   * this copy mattering, the next step is a segment strategy, not a return to
-   * the crash-lossy window.
+   * Refuses (returns false, caller rewrites) unless the file still ENDS with
+   * exactly the bytes the last flush left: the file is user-editable, and an
+   * overlay landed on faith would shadow a record this process never knew
+   * about. The check reads only the final line's length from the file — the
+   * whole point is that nothing here scales with history size.
+   *
+   * Also refuses — deliberately — when this overlay would push the dead
+   * weight past the fold policy: the caller's writeAll IS the fold, one
+   * atomic rewrite whose cost is amortized by the >= half-file of dead bytes
+   * it clears.
    */
-  private rewriteTail(file: string, lastLine: string, tail: readonly TurnRecord[]): boolean {
-    const expected = Buffer.from(`${lastLine}\n`, 'utf8')
-    const held = readFileSync(file)
-    if (held.length < expected.length) return false
-    if (!held.subarray(held.length - expected.length).equals(expected)) return false
-    const prefix = held.subarray(0, held.length - expected.length)
-    const replacement = Buffer.from(tail.map((r) => `${this.line(r)}\n`).join(''), 'utf8')
-    writeFileAtomic(file, Buffer.concat([prefix, replacement]))
+  private appendTailOverlay(
+    terminalId: string,
+    file: string,
+    known: Written,
+    records: TurnRecord[],
+    boundary: number,
+  ): boolean {
+    if (!this.tailBytesMatch(file, Buffer.from(`${known.lastLine}\n`, 'utf8'))) return false
+    const replacement = this.line(records[boundary])
+    const overlay = tailOverlayLine(records[boundary].index, replacement)
+    const overlayAdded = Buffer.byteLength(overlay, 'utf8') + 1
+    const overlayLines = known.overlayLines + 1
+    const overlayBytes = known.overlayBytes + overlayAdded
+    if (foldDue(overlayLines, overlayBytes, statSync(file).size + overlayAdded)) {
+      return false
+    }
+    const added = records.slice(boundary + 1).map((r) => `${this.line(r)}\n`)
+    appendFileSync(file, `${overlay}\n${added.join('')}`, 'utf8')
+    const lastLine = added.length > 0 ? added[added.length - 1].slice(0, -1) : overlay
+    this.written.set(terminalId, {
+      count: records.length,
+      lastLine,
+      tailLine: added.length > 0 ? lastLine : replacement,
+      lastIndex: records[records.length - 1].index,
+      overlayLines,
+      overlayBytes,
+    })
     return true
+  }
+
+  /** Does the file end with exactly these bytes? Reads only that many. */
+  private tailBytesMatch(file: string, expected: Buffer): boolean {
+    const fd = openSync(file, 'r')
+    try {
+      const size = fstatSync(fd).size
+      if (size < expected.length) return false
+      const held = Buffer.allocUnsafe(expected.length)
+      let got = 0
+      while (got < expected.length) {
+        const read = readSync(fd, held, got, expected.length - got, size - expected.length + got)
+        if (read <= 0) return false
+        got += read
+      }
+      return held.equals(expected)
+    } finally {
+      closeSync(fd)
+    }
   }
 
   /** Drop a removed terminal's history file (node deletion). */
@@ -525,6 +742,7 @@ export class TurnStore {
     this.pending.delete(terminalId)
     this.dirty.delete(terminalId)
     this.written.delete(terminalId)
+    this.foldOnLoad.delete(terminalId)
     this.all?.delete(this.safeId(terminalId))
     this.annotations.remove(this.safeId(terminalId))
     try {

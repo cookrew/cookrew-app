@@ -494,7 +494,7 @@ describe('TurnTracker restart restore (last exchange + unread state)', () => {
     dir: string
     boot: () => { tracker: TurnTracker; session: FakeSession }
   } {
-    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-turns-'))
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-turns-')), 'turns')
     return {
       dir,
       boot: () => {
@@ -912,7 +912,7 @@ describe('TurnTracker history source (step 4: narrow the scrape)', () => {
 
   it('still persists the read marker and titles for a file-backed terminal', async () => {
     vi.useFakeTimers()
-    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-filebacked-'))
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-filebacked-')), 'turns')
     const store = new TurnStore(dir)
     const tracker = new TurnTracker(async () => null, store)
     const session = new FakeSession()

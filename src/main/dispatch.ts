@@ -1469,7 +1469,20 @@ export class DispatchService {
     // bytes beside the owner's. An owner-held lease refuses the delivery
     // honestly — 'failed', so the caller knows the prompt never went out and
     // may retry once the owner's submission settles.
+    //
+    // A CONTAMINATED input buffer (Sol r7 P0-1) refuses the delivery the
+    // same way: a cancelled producer's paste is stranded in the shared input
+    // box, and a native submission — herdr types into that same box — would
+    // carry it. The dispatch fails honestly until the owner clears the box.
     const holder: ProducerHolder = { kind: 'dispatch', dispatchId }
+    if (this.lease.isContaminated(agentId)) {
+      this.deps.retractDelivered?.(agentId, prompt, gen)
+      this.update(dispatchId, {
+        state: 'failed',
+        error: 'the terminal input box holds a cancelled delivery (contaminated)'
+      })
+      return
+    }
     if (this.lease.acquire(agentId, holder) !== 'acquired') {
       this.deps.retractDelivered?.(agentId, prompt, gen)
       this.update(dispatchId, {
@@ -1648,7 +1661,18 @@ export class DispatchService {
     // have taken the terminal in between. Held across the fallback's whole
     // paste → delay → CR, so an owner write inside that window is refused at
     // the PTY guard rather than interleaved with a partial paste.
+    //
+    // Contamination refuses the fallback too (Sol r7 P0-1): typing a fresh
+    // brief into a box that still holds a cancelled paste submits both.
     const holder: ProducerHolder = { kind: 'dispatch', dispatchId }
+    if (this.lease.isContaminated(agentId)) {
+      this.update(dispatchId, {
+        state: 'failed',
+        confirmed: false,
+        error: `${why}; the terminal input box holds a cancelled delivery (contaminated)`
+      })
+      return
+    }
     if (this.lease.acquire(agentId, holder) !== 'acquired') {
       this.update(dispatchId, {
         state: 'failed',

@@ -425,16 +425,41 @@ export class PtySession extends EventEmitter {
     })
   }
 
-  write(data: string): void {
+  write(data: string): OwnerInputVerdict {
     // The producer guard runs BEFORE the bytes reach the child (Sol r4 P0-1a):
     // preemption after proc.write cannot stop a competing submission, only
-    // relabel it. A refused write — failed preemption OR a dispatch delivery
-    // holding the producer lease (Sol r6 P0-1) — delivers nothing and
-    // announces nothing.
-    if ((this.beforeOwnerInput?.(this.terminalId, data) ?? 'allow') !== 'allow') return
+    // relabel it. A refused write — failed preemption OR a producer holding
+    // the lease (Sol r6 P0-1, extended to owner holders per r7 P0-2) —
+    // delivers nothing and announces nothing. The verdict is RETURNED (r7
+    // P0-2): a refusal used to vanish into a void return, so HTTP/CLI callers
+    // waited out quiescence over bytes that never landed. Legacy callers that
+    // ignore the return lose nothing.
+    //
+    // A submitting canvas Enter needs no async lease hold here: the guard
+    // verdict and proc.write share one synchronous stretch, so the classify →
+    // submit sequence IS an acquire-submit-release with no window a second
+    // producer could enter.
+    const verdict = this.beforeOwnerInput?.(this.terminalId, data) ?? 'allow'
+    if (verdict !== 'allow') return verdict
     this.proc.write(data)
     // Every input path (renderer keystrokes, `cookrew ask`, routines) funnels
     // through here, so turn tracking can observe prompts uniformly.
+    this.emit('input', data)
+    return 'allow'
+  }
+
+  /**
+   * The owner-submit primitive's OWN delivery through this PTY (Sol r7 P0-2)
+   * — `ownerSubmit` in ask.ts, and nothing else. The primitive has already
+   * performed everything the guard would: it holds the producer lease as the
+   * owner, refused if any other producer held it, and ran the armed-dispatch
+   * preemption. Routing its bytes back through the guard would make the
+   * holder refuse itself (the guard refuses ALL untagged bytes while a lease
+   * is held). The input event stays untagged: these ARE owner bytes, and the
+   * tracker must learn the prompt from them exactly as it does from typing.
+   */
+  writeFromOwner(data: string): void {
+    this.proc.write(data)
     this.emit('input', data)
   }
 

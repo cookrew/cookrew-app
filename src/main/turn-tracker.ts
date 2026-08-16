@@ -1501,6 +1501,19 @@ export class TurnTracker extends EventEmitter {
   private handleInput(terminalId: string, data: string, source?: 'dispatch'): void {
     const t = this.tracked.get(terminalId)
     if (!t) return
+    // Contamination acknowledgment (Sol r7 P0-1): a cancelled delivery's
+    // paste is sitting in the input box, submits are refused, and the ONE
+    // party who can see the box is the owner. An explicit owner line-clear
+    // (Ctrl-C / Ctrl-U — the same bytes feedTypedSegment models as clearing
+    // the line) is taken as that acknowledgment. Best-effort by design: the
+    // flag is Cookrew's model of the box, not the TUI's truth — an owner who
+    // cleared a multi-line residue with other keys stays refused until a
+    // Ctrl-U/Ctrl-C, and a Ctrl-U that only killed one line of a multi-line
+    // residue clears the flag anyway. Documented residual risk; the honest
+    // alternative (proving the TUI's buffer empty) does not exist.
+    if (source !== 'dispatch' && !t.inPaste && /[\x03\x15]/.test(data)) {
+      this.lease.clearContaminated(terminalId)
+    }
     const fed = feedPromptBuffer(t.promptBuffer, data, t.inPaste, t.heldInput)
     t.promptBuffer = fed.buffer
     t.inPaste = fed.inPaste
@@ -1552,36 +1565,49 @@ export class TurnTracker extends EventEmitter {
    * PEEK: feedPromptBuffer is side-effect-free here — the real state advances
    * only when the delivered bytes come back through handleInput.
    *
-   * TWO LAYERS since Sol r6 P0-1. While a dispatch DELIVERY holds the
-   * producer lease — its paste possibly half-ingested in the shared input box
-   * — every owner byte that does not carry a preempting submission is REFUSED
-   * outright: typing, menu Enters and bare Enters alike would land inside (or
-   * submit) a buffer containing a partial dispatch delivery. A SUBMITTING
-   * owner write still routes to the durable preemption below: owner takeover
-   * interrupts the dispatch first, and the displaced delivery leg's
-   * stillValid check stops every byte it has not yet written. While a
-   * dispatch is merely ARMED (stamped, not delivering — no lease hold),
-   * behavior is unchanged: typing and menu answers pass, only a new-prompt
-   * submission triggers preemption.
+   * THREE LAYERS since Sol r7 P0-1/P0-2.
+   *
+   * (1) While ANY producer holds the lease — a dispatch delivery mid-paste,
+   * OR an owner submission mid-flight (a typed ask between its paste and CR,
+   * a native ask inside its blocking promptAgent) — every untagged byte is
+   * REFUSED. The holder's own bytes travel the tagged paths (writeFromOwner /
+   * writeFromDispatch), so anything arriving here is a SECOND producer's, and
+   * a second producer's bytes must not enter (or submit) the shared input box
+   * while a submission is in flight. This is the conservative r7 rule: owner
+   * takeover of a dispatch-HELD window is gone — a ledger interrupt cannot
+   * un-send bytes that already crossed the boundary, so the owner waits.
+   *
+   * (2) A CONTAMINATED buffer (a cancelled delivery's paste stranded in the
+   * input box) refuses every submit-capable byte until the owner clears the
+   * box (see handleInput); non-submitting bytes — including the clearing
+   * Ctrl-U/Ctrl-C itself — pass.
+   *
+   * (3) While a dispatch is merely ARMED (stamped, not delivering — no lease
+   * hold), behavior is unchanged: typing and menu answers pass, and only a
+   * new-prompt submission triggers the durable preemption — the one takeover
+   * that never crosses the irreversible boundary.
    */
   guardOwnerInput(terminalId: string, data: string): OwnerInputVerdict {
-    const delivering = this.lease.holderOf(terminalId)?.kind === 'dispatch'
+    if (this.lease.holderOf(terminalId) !== null) return 'refused'
     const t = this.tracked.get(terminalId)
-    if (!t || !t.agent) return delivering ? 'refused' : 'allow'
-    if (!delivering && !this.pendingDispatch.has(terminalId)) return 'allow'
+    if (this.lease.isContaminated(terminalId)) {
+      const fed = t
+        ? feedPromptBuffer(t.promptBuffer, data, t.inPaste, t.heldInput)
+        : feedPromptBuffer('', data)
+      // ANY submit — an empty menu Enter included — sends whatever the box
+      // holds, and the box holds a cancelled producer's text.
+      return fed.submitted.length > 0 ? 'refused' : 'allow'
+    }
+    if (!t || !t.agent) return 'allow'
+    if (!this.pendingDispatch.has(terminalId)) return 'allow'
     const fed = feedPromptBuffer(t.promptBuffer, data, t.inPaste, t.heldInput)
     if (t.phase === 'waiting' && fed.submitted.length > 0 && t.prompt !== null) {
-      // A menu answer submits whatever the input box holds — mid-delivery
-      // that includes the dispatch's partial paste, so it is refused with
-      // the other non-preempting bytes.
-      return delivering ? 'refused' : 'allow'
+      // A menu answer while a dispatch is armed feeds the CURRENT turn and
+      // produces no competing exchange — allowed, as ever.
+      return 'allow'
     }
     const submits = fed.submitted.some((s) => s.length > 0)
-    if (!submits) return delivering ? 'refused' : 'allow'
-    // A delivery holding the lease with NO armed stamp left to preempt is a
-    // leg still unwinding (the interrupt already disarmed it): fail closed
-    // until its hold clears rather than submit beside its residue.
-    if (delivering && !this.pendingDispatch.has(terminalId)) return 'refused'
+    if (!submits) return 'allow'
     return this.preemptOnOwnerSubmit(terminalId, undefined)
   }
 

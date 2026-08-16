@@ -185,24 +185,30 @@ describe('TurnStore — cold start stays O(delta)', () => {
     expect(fresh.load('t1').map((r) => r.index)).toEqual([1, 2, 3])
   })
 
-  it('replaces just the tail on the first tail-delta after a restart', () => {
+  it('supersedes the tail via an appended overlay on the first tail-delta after a restart', () => {
     save([rec(1), rec(2)])
     const fresh = new TurnStore(dir)
     fresh.load('t1')
     const internals = fresh as unknown as { writeAll: (id: string, records: TurnRecord[]) => void }
     const writeAll = vi.spyOn(internals, 'writeAll')
     const before = readFileSync(file(), 'utf8')
-    const prefix = before.slice(0, before.indexOf('\n') + 1)
 
     const finalized = rec(2, { reply: 'grew a reply', final: true })
     fresh.scheduleDelta('t1', [rec(1), finalized], [finalized])
     fresh.flushAll()
 
+    // Sol r7 P1: the tail change is an APPENDED overlay line — every byte
+    // that was in the file is still there, and only the overlay was written.
     expect(writeAll).not.toHaveBeenCalled()
     const after = readFileSync(file(), 'utf8')
-    expect(after.startsWith(prefix)).toBe(true)
-    expect(after.trim().split('\n')).toHaveLength(2)
-    expect(fresh.load('t1')[1].reply).toBe('grew a reply')
+    expect(after.startsWith(before)).toBe(true)
+    const physical = after.trim().split('\n')
+    expect(physical).toHaveLength(3)
+    expect(physical[2].startsWith('{"__tail":true,"supersedes":2,')).toBe(true)
+    // Logically the history is still two records, tail replaced.
+    expect(fresh.count('t1')).toBe(2)
+    expect(fresh.load('t1').map((r) => r.reply)).toEqual(['reply 1', 'grew a reply'])
+    expect(new TurnStore(dir).load('t1')[1].reply).toBe('grew a reply')
   })
 
   it('does NOT trust a file whose lines did not all parse as an append base', () => {
@@ -224,31 +230,31 @@ describe('TurnStore — cold start stays O(delta)', () => {
 })
 
 /**
- * Sol r6 P2: the tail-change write must never destroy the old tail before the
- * replacement is durable, and a failed flush must retain its work for retry.
+ * Sol r6 P2 / r7 P1: the tail-change write must never destroy the old tail —
+ * the overlay append adds bytes and destroys none — and a failed flush must
+ * retain its work for retry.
  */
 describe('TurnStore — tail replacement is crash-safe and failure retains retry state', () => {
   const file = (): string => path.join(dir, 't1.jsonl')
 
-  it('a failed tail replacement leaves the old bytes byte-identical, then the retry lands it', () => {
+  it('a failed tail overlay leaves the old bytes byte-identical, then the retry lands it', () => {
     save([rec(1), rec(2)])
     const before = readFileSync(file(), 'utf8')
 
-    // The atomic replacement stages its temp in the turns directory; a
-    // write-protected directory fails it before any byte of the original
-    // file can move — the crash-window guarantee, observed from outside.
-    chmodSync(dir, 0o500)
+    // A read-only ledger file fails the overlay append before any byte of the
+    // original can move — the crash-window guarantee, observed from outside.
+    chmodSync(file(), 0o400)
     const finalized = rec(2, { reply: 'finalized late', final: true })
     store.scheduleDelta('t1', [rec(1), finalized], [finalized])
     store.flushAll()
     expect(readFileSync(file(), 'utf8')).toBe(before)
 
     // The un-landed records were retained as dirty state: the next flush
-    // retries the SAME tail replacement and it lands.
-    chmodSync(dir, 0o700)
+    // retries the SAME tail update and it lands.
+    chmodSync(file(), 0o600)
     store.flushAll()
     const after = readFileSync(file(), 'utf8')
-    expect(after.startsWith(before.slice(0, before.indexOf('\n') + 1))).toBe(true)
+    expect(after.startsWith(before)).toBe(true)
     expect(after).toContain('finalized late')
     expect(new TurnStore(dir).load('t1')[1].reply).toBe('finalized late')
   })

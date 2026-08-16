@@ -25,6 +25,7 @@ import {
 } from './dispatch'
 import { HerdrHostMultiplexer } from './herdr-host-multiplexer'
 import { pasteAndSubmit } from './ask'
+import { defaultProducerLease } from './producer-lease'
 import {
   boardSourcesFrom,
   buildBoard,
@@ -839,9 +840,12 @@ const dispatchService = new DispatchService({
 // infrastructure, never as the agent failing), not left to the sweep.
 ptys.onBackendDeath = (why) => {
   dispatchService.onBackendDeath(why)
-  // Every pane died with the server: no first-party open-turn fact can
-  // outlive the process it observed.
-  for (const node of store.terminalsAcross()) turns.clearOpenTurnFact(node.id)
+  // Every pane died with the server: no first-party open-turn fact — and no
+  // producer-lease hold — can outlive the process it observed.
+  for (const node of store.terminalsAcross()) {
+    turns.clearOpenTurnFact(node.id)
+    defaultProducerLease().retire(node.id)
+  }
 }
 // Owner typing into an agent mid-dispatch takes the agent over: the dispatch
 // is interrupted BEFORE the owner's turn opens, so exact-bytes identity can
@@ -1161,6 +1165,9 @@ function recoverAgent(id: string): RecoverResult {
 function retireTerminal(id: string, why: string): void {
   dispatchService.interruptAgent(id, why)
   turns.clearOpenTurnFact(id)
+  // A dead generation's lease holder becomes invisible and its late release
+  // a no-op — a reborn id must never inherit a stranded submission window.
+  defaultProducerLease().retire(id)
   sessionSync.unwatch(id)
   turns.untrack(id)
 }

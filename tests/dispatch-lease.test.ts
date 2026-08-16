@@ -174,7 +174,10 @@ describe('the fallback under the lease (Sol r6 P0-1 + P0-2)', () => {
     expect(lease.holderOf('agent-1')).toBeNull()
   })
 
-  it('a committed owner takeover (lease seized) also flips stillValid false', async () => {
+  it('terminal retirement (lease generation bump) also flips stillValid false', async () => {
+    // With displacement gone (Sol r7 P0-1), the only ways a leg loses its
+    // hold mid-fallback are its own cancellation and RETIREMENT — the
+    // terminal's permanent ending bumping the lease generation (Sol r7 P1).
     const lease = new ProducerLease()
     const verdicts: boolean[] = []
     const service = new DispatchService(
@@ -185,10 +188,8 @@ describe('the fallback under the lease (Sol r6 P0-1 + P0-2)', () => {
         agentStatus: () => 'idle',
         reattachFallback: async (_agentId, _prompt, stillValid) => {
           verdicts.push(stillValid?.() ?? true)
-          // The owner's acquisition path: durable preemption committed, then
-          // displacement. The record interrupt is the preemption's effect...
-          service.interruptAgent('agent-1', 'preempted by owner input')
-          lease.acquire('agent-1', ownerHolder(), { displaceDispatch: true })
+          service.interruptAgent('agent-1', 'terminal removed')
+          lease.retire('agent-1')
           verdicts.push(stillValid?.() ?? true)
           return false
         }
@@ -197,6 +198,89 @@ describe('the fallback under the lease (Sol r6 P0-1 + P0-2)', () => {
     await service.dispatch('agent-1', { text: PROMPT })
     await settle(service)
     expect(verdicts).toEqual([true, false])
+    // The dead leg's finally-release was a no-op against the reborn
+    // terminal: its window is simply free.
+    expect(lease.holderOf('agent-1')).toBeNull()
+  })
+
+  it('a partial-paste cancellation CONTAMINATES the terminal, and the next delivery refuses', async () => {
+    // The full state machine (Sol r7 P0-1): the fallback's paste goes out,
+    // the leg is cancelled inside the delay window, the CR is withheld — and
+    // the cancelled prompt is now sitting in the shared input box. The
+    // wiring (index.ts reattachFallback → pasteAndSubmit) marks the lease
+    // contaminated; every later submit-capable producer refuses until the
+    // owner clears the box.
+    const lease = new ProducerLease()
+    let seq = 0
+    let deliverNatively = false
+    const service = new DispatchService(
+      deps({
+        lease,
+        newId: () => `dsp-${(seq += 1)}`,
+        promptAgent: async () => (deliverNatively ? 'done' : 'failed'),
+        capture: () => '> ',
+        agentStatus: () => 'idle',
+        reattachFallback: async (_agentId, _prompt, stillValid) => {
+          // Model exactly what pasteAndSubmit does: paste written, THEN the
+          // cancellation check fails — contaminated, CR never written.
+          service.interruptAgent('agent-1', 'cancelled mid-fallback')
+          if (stillValid !== undefined && !stillValid()) {
+            lease.markContaminated('agent-1', lease.generationOf('agent-1'))
+            return false
+          }
+          return true
+        }
+      })
+    )
+    await service.dispatch('agent-1', { text: PROMPT })
+    await settle(service, 'dsp-1')
+    expect(lease.isContaminated('agent-1')).toBe(true)
+
+    // The NEXT dispatch — a fresh producer — refuses at the delivery leg:
+    // its native submission would type into the same dirty box.
+    const response = await service.dispatch('agent-1', { text: 'fresh brief' })
+    expect(response.status).toBe(202)
+    await settle(service, 'dsp-2')
+    expect(service.get('dsp-2')).toMatchObject({
+      state: 'failed',
+      error: 'the terminal input box holds a cancelled delivery (contaminated)'
+    })
+
+    // The owner clears the box (tracker acknowledgment) — deliveries flow.
+    lease.clearContaminated('agent-1')
+    deliverNatively = true
+    await service.dispatch('agent-1', { text: 'after the clear' })
+    await settle(service, 'dsp-3')
+    expect(service.get('dsp-3')?.state).toBe('running')
+  })
+
+  it('contamination refuses the FALLBACK leg too', async () => {
+    const lease = new ProducerLease()
+    let reattaches = 0
+    const service = new DispatchService(
+      deps({
+        lease,
+        promptAgent: async () => 'failed',
+        capture: () => '> ',
+        // Contamination lands between the native attempt and the fallback
+        // (a concurrent cancellation at the same terminal), modeled inside
+        // the evidence pass — the last read before the fallback's acquire.
+        agentStatus: () => {
+          lease.markContaminated('agent-1')
+          return 'idle'
+        },
+        reattachFallback: async () => {
+          reattaches += 1
+          return true
+        }
+      })
+    )
+    await service.dispatch('agent-1', { text: PROMPT })
+    await settle(service)
+    expect(reattaches).toBe(0)
+    expect(String(service.get('dsp-1')?.error)).toContain(
+      'holds a cancelled delivery (contaminated)'
+    )
   })
 
   it('an owner taking the window between promptAgent and the fallback refuses the fallback', async () => {

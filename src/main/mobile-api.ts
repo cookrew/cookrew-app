@@ -30,6 +30,7 @@ import type {
   RestoreResult,
 } from "../shared/model";
 import { readJson, respondJson, startSse, pairingAuthorized } from "./mobile-http";
+import { ownerSubmit } from "./ask";
 
 /**
  * Workspace operations shared with the renderer IPC handlers — the mobile
@@ -675,7 +676,18 @@ export async function handleMobileApi(
     }
     if (method === "POST" && ptyMatch[2] === "raw") {
       const body = await readJson<{ data?: string }>(request);
-      if (typeof body.data === "string") session.write(body.data);
+      if (typeof body.data === "string") {
+        // /raw is a producer (Sol r7 P0-2): its bytes can be a prompt plus
+        // Enter, so they go through THE submit primitive — classified,
+        // leased across paste+CR when submit-capable, ordinarily guarded
+        // when not. A refusal is a 409 the caller can act on, never a
+        // silently dropped write followed by an ok:true.
+        const verdict = await ownerSubmit(session, body.data);
+        if (!verdict.ok) {
+          respondJson(response, 409, { error: verdict.reason });
+          return true;
+        }
+      }
       respondJson(response, 200, { ok: true });
       return true;
     }

@@ -478,7 +478,12 @@ describe('askTerminal — the producer lease (Sol r6 P0-1)', () => {
     expect(lease.holderOf('term-1')).toBeNull()
   })
 
-  it('held-by-dispatch: the ask preempts durably, SEIZES the window, and submits', async () => {
+  it('held-by-dispatch: the ask is REFUSED — no takeover past the boundary (Sol r7 P0-1)', async () => {
+    // The r6 flow preempted the dispatch and SEIZED the window here. But an
+    // owner can only observe a dispatch-held lease when promptAgent has
+    // already been invoked (no await sits between acquire and submit), so
+    // the takeover always landed owner bytes beside a submission the ledger
+    // interrupt never actually undid. Conservative rule: refuse and retry.
     const lease = new ProducerLease()
     const dispatch = { kind: 'dispatch', dispatchId: 'dsp-1' } as const
     lease.acquire('term-1', dispatch)
@@ -486,7 +491,7 @@ describe('askTerminal — the producer lease (Sol r6 P0-1)', () => {
     muxHolder.current = {
       capabilities: { agentLifecycle: true },
       promptAgent: async () => {
-        events.push(`promptAgent holder=${lease.holderOf('term-1')?.kind}`)
+        events.push('promptAgent')
         return 'done'
       }
     } satisfies FakeMux
@@ -502,18 +507,23 @@ describe('askTerminal — the producer lease (Sol r6 P0-1)', () => {
       }
     } as unknown as PtySession
 
-    await askTerminal(session, 'take over', { lease })
-    expect(events).toEqual(['preempted', 'promptAgent holder=owner'])
-    // The displaced delivery leg's own release cannot reclaim the window…
+    await expect(askTerminal(session, 'take over', { lease })).rejects.toThrow(
+      'a dispatch is being delivered — retry in a moment'
+    )
+    // Nothing was preempted, nothing submitted; the dispatch keeps its
+    // window until its own release.
+    expect(events).toEqual([])
+    expect(lease.holderOf('term-1')).toEqual(dispatch)
     lease.release('term-1', dispatch)
-    // …and the ask released its hold at acknowledgement.
+    // Once the delivery settles, the same ask goes through.
+    await askTerminal(session, 'take over', { lease })
+    expect(events).toEqual(['preempted', 'promptAgent'])
     expect(lease.holderOf('term-1')).toBeNull()
   })
 
-  it('held-by-dispatch with an UNCOMMITTED preemption refuses without acquiring', async () => {
+  it('a contaminated input box refuses the ask until the owner clears it', async () => {
     const lease = new ProducerLease()
-    const dispatch = { kind: 'dispatch', dispatchId: 'dsp-1' } as const
-    lease.acquire('term-1', dispatch)
+    lease.markContaminated('term-1')
     muxHolder.current = {
       capabilities: { agentLifecycle: true },
       promptAgent: async () => 'done'
@@ -522,15 +532,15 @@ describe('askTerminal — the producer lease (Sol r6 P0-1)', () => {
       terminalId: 'term-1',
       sessionName: 'cookrew_term-1',
       fullText: () => '',
-      noteExternalInput: () => undefined,
-      beforeOwnerInput: () => 'preempt-failed' as const
+      idleFor: () => 99_999,
+      noteExternalInput: () => undefined
     } as unknown as PtySession
 
-    await expect(askTerminal(session, 'take over', { lease })).rejects.toThrow(
-      'agent has a dispatch in flight that could not be preempted'
+    await expect(askTerminal(session, 'fresh work', { lease })).rejects.toThrow(
+      'cancelled delivery'
     )
-    // The dispatch keeps its window — nothing was displaced.
-    expect(lease.holderOf('term-1')).toEqual(dispatch)
+    lease.clearContaminated('term-1')
+    await expect(askTerminal(session, 'fresh work', { lease })).resolves.toBe('')
   })
 
   it('the TYPED path holds the lease across paste → delay → CR', async () => {

@@ -289,7 +289,7 @@ describe.runIf(usable)('ledger derivation — regenerate from the transcript and
 
 describe.runIf(usable)('ledger derivation — the temp store never touches the real ledger', () => {
   it('writes only into the directory it was given', () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-rebuild-'))
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-rebuild-')), 'turns')
     const store = new TurnStore(dir)
     const row = derivable[0]
     // Baseline read HERE, not at module load. The module-load snapshot is

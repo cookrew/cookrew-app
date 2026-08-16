@@ -468,6 +468,8 @@ export class HerdrHostMultiplexer implements Multiplexer {
    */
   private admissionCache: { at: number; panes: HerdrPane[] } | null = null
   private admissionRefreshing = false
+  /** Epoch ms before which no new refresh may start (failure backoff). */
+  private admissionBackoffUntil = 0
 
   /**
    * Zero forks on the request path (Sol r5): an expired snapshot is SERVED
@@ -480,29 +482,42 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * rather than ever forking inline.
    */
   private refreshAdmissionCacheSoon(): void {
-    if (this.admissionRefreshing || !this.available()) return
+    // No synchronous probe here: available() forks. Cold-start coverage is
+    // primeAdmissionCache at supervisor start; a truly cold admission serves
+    // the empty inventory (retryable 503) while the async child answers.
+    if (this.admissionRefreshing || Date.now() < this.admissionBackoffUntil) return
     this.admissionRefreshing = true
     // GENUINELY async (Sol r6): a deferred synchronous fork still stalls the
     // main loop one turn later — execFile hands the wait to libuv and the
     // snapshot publishes on completion (single-flight). Admission keeps
     // serving the last snapshot meanwhile; a failed refresh keeps the stale
     // one, which the delivery leg's own revalidation covers.
-    execFile(
+    const child = execFile(
       'herdr',
       ['pane', 'list'],
-      { encoding: 'utf8', env: this.env },
+      // Bounded: a hung `pane list` must neither latch single-flight forever
+      // nor let its successor amplify forks — SIGKILL at the timeout, then
+      // the backoff below owns the cadence (Sol r7).
+      { encoding: 'utf8', env: this.env, timeout: 3000, killSignal: 'SIGKILL' },
       (error, stdout) => {
         try {
           if (!error && typeof stdout === 'string') {
             this.admissionCache = { at: Date.now(), panes: parsePaneList(stdout) }
+            this.admissionBackoffUntil = 0
+          } else {
+            // Failure publishes a backoff timestamp: fast-failing children
+            // must not respawn once per admission during the very outage the
+            // cache exists to degrade through.
+            this.admissionBackoffUntil = Date.now() + 5000
           }
         } catch {
-          // Unparseable inventory: keep serving the previous snapshot.
+          this.admissionBackoffUntil = Date.now() + 5000
         } finally {
           this.admissionRefreshing = false
         }
       }
     )
+    child.unref?.()
   }
 
   /** Seed the inventory outside any request (boot / supervisor start). */

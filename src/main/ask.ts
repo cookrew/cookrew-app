@@ -1,3 +1,4 @@
+import { feedPromptBuffer } from '../shared/turn'
 import { multiplexer, type PtySession } from './pty'
 import {
   defaultProducerLease,
@@ -54,19 +55,21 @@ export function submitDelayMs(promptLength: number): number {
  * window must not be submitted by the later Enter. `stillValid` is consulted
  * BEFORE EACH write; a false verdict stops the sequence and reports
  * 'cancelled'. Callers thread their own liveness in — the dispatch fallback
- * passes its deliveryLive + lease check, the typed ask its own lease hold.
+ * passes its deliveryLive + lease check, the owner submit its own lease hold.
  *
- * THE RESIDUE, honestly: a cancellation after the paste but before the CR
- * leaves the pasted prompt sitting UNSUBMITTED in the TUI's input box. That
- * text is inert — nothing runs it, and the next real submission at that
- * terminal is the one that would carry it. It is deliberately NOT cleared
- * here: at the live tail an ESC is an agent interrupt in every harness TUI we
- * host (herdr forwards it — see PtySession.wheelExitScrollback), and
+ * THE RESIDUE (Sol r7 P0-1): a cancellation after the paste but before the CR
+ * leaves the pasted prompt sitting UNSUBMITTED in the TUI's input box, where
+ * the terminal's NEXT submission — any producer's — would carry it. That is
+ * no longer left as folklore: the terminal is marked CONTAMINATED on the
+ * shared producer lease, and every submit-capable write refuses until the
+ * owner clears the input box (see TurnTracker.handleInput for the
+ * acknowledgment). The residue is deliberately NOT auto-cleared here: at the
+ * live tail an ESC is an agent interrupt in every harness TUI we host, and
  * Ctrl-C/Ctrl-U semantics differ per harness (Claude Code's Ctrl-C doubles as
- * quit), so a "cheap" clear sequence risks interrupting the very owner turn
- * the cancellation yielded to. The residue is visible in the input box and
- * the owner clears or reuses it; the cancelled dispatch's record already
- * carries the honest outcome.
+ * quit; a kill-line only provably clears ONE line of a multi-line paste), so
+ * no control sequence this code could send is PROOF of a clean buffer.
+ * Marking is generation-scoped: a terminal retired mid-cancellation reboots
+ * with a fresh input box and must not inherit the flag.
  */
 export async function pasteAndSubmit(
   session: PtySession,
@@ -75,15 +78,22 @@ export async function pasteAndSubmit(
   // the producer guard can tell its own delivery from an owner keystroke —
   // an untagged fallback write would preempt the very dispatch it serves.
   write: (data: string) => void = (data) => session.write(data),
-  stillValid?: () => boolean
+  stillValid?: () => boolean,
+  lease: ProducerLease = defaultProducerLease()
 ): Promise<'submitted' | 'cancelled'> {
+  const generation = lease.generationOf(session.terminalId)
   if (stillValid !== undefined && !stillValid()) return 'cancelled'
   write(`${BRACKETED_PASTE_START}${body}${BRACKETED_PASTE_END}`)
   await new Promise((resolve) => setTimeout(resolve, submitDelayMs(body.length)))
   // The check that matters most: cancellation during the delay means the CR
-  // is never written — a pasted-but-unsubmitted prompt (see above) instead of
-  // a delivered one.
-  if (stillValid !== undefined && !stillValid()) return 'cancelled'
+  // is never written — and the paste ALREADY went out, so the input box now
+  // holds a cancelled producer's text: contaminated (see above).
+  if (stillValid !== undefined && !stillValid()) {
+    if (typeof session.terminalId === 'string') {
+      lease.markContaminated(session.terminalId, generation)
+    }
+    return 'cancelled'
+  }
   write('\r')
   return 'submitted'
 }
@@ -119,9 +129,10 @@ export async function askTerminal(
     // r5 guard verdict evaporated the moment it was returned, so a dispatch
     // (or a second owner ask) could arm and submit DURING that await; the
     // lease makes them refuse instead. Preemption of an armed dispatch is
-    // unchanged (guardOwnerSubmit, inside the acquisition): synchronous, with
-    // NO await between verdict and submission.
-    const holder = acquireOwnerLease(lease, session, prompt)
+    // unchanged (guardOwnerBytes, inside the acquisition): synchronous, with
+    // NO await between verdict and submission. The guard sees the SUBMITTING
+    // bytes — prompt plus Enter, the exact shape a typed submit would have.
+    const holder = acquireOwnerLease(lease, session, `${prompt}\r`)
     let outcome: 'done' | 'submitted' | 'failed'
     try {
       outcome = await mux.promptAgent(session.sessionName, prompt, timeoutMs)
@@ -154,22 +165,14 @@ export async function askTerminal(
     // down) — fall through to the typed path exactly as before this existed.
   }
 
-  // The typed path's writes DO cross PtySession.write and its guard — but
-  // that guard refuses by silently dropping the submitting bytes, which here
-  // would mean waiting out quiescence over an agent that never received the
-  // prompt and returning noise as its "reply". Acquire the lease first so a
-  // refused ask is an honest error at the submit site (Sol r5 P0-1, r6 P0-1),
-  // and hold it across paste → delay → CR: the split sequence is exactly the
-  // window a competing producer used to slip into. The stillValid hook is the
-  // ask's own lease hold — a lost hold stops the CR (Sol r6 P0-2).
-  const holder = acquireOwnerLease(lease, session, prompt)
-  try {
-    await pasteAndSubmit(session, prompt, undefined, () =>
-      holdsLease(lease, session.terminalId, holder)
-    )
-  } finally {
-    lease.release(session.terminalId, holder)
-  }
+  // The typed path routes through THE submit primitive (Sol r7 P0-2):
+  // ownerSubmit classifies, acquires the lease, runs the armed-dispatch
+  // preemption, holds across paste → delay → CR through the owner-tagged
+  // write path, and releases — the same door every other PTY producer now
+  // uses. A refusal is an honest error at the submit site, never a silent
+  // byte drop followed by quiescence over an agent that got nothing.
+  const verdict = await ownerSubmit(session, `${prompt}\r`, { lease })
+  if (!verdict.ok) throw new Error(verdict.reason)
 
   await waitForReply(session, { quiescenceMs, timeoutMs, graceMs })
 
@@ -186,17 +189,22 @@ function holdsLease(lease: ProducerLease, terminalId: string, holder: ProducerHo
 
 /**
  * Acquire the terminal's producer lease for one owner submission (Sol r6
- * P0-1), with the r5 preemption flow as its arm:
+ * P0-1, conservative per r7 P0-1 — NO displacement):
  *
  * - held by ANOTHER OWNER → refused honestly. Two concurrent owner asks are
  *   two producers; nothing preempts an owner submission mid-flight.
- * - held by a DISPATCH (a delivery is mid-submission) → run the existing
- *   durable preemption (guardOwnerSubmit → the tracker's interrupt path).
- *   Only a COMMITTED preemption displaces the holder; anything else refuses.
- *   The displaced leg's stillValid check stops any byte it has not written.
- * - free → acquired; the armed-but-not-delivering dispatch case is still
- *   guardOwnerSubmit's (the reservation, not the lease, guards that), and a
- *   failed preemption releases before throwing.
+ * - held by a DISPATCH → refused: 'a dispatch is being delivered — retry in
+ *   a moment'. Once a dispatch holds the window its bytes are (or may
+ *   already be) irreversibly in flight; a ledger interrupt cannot un-send
+ *   them, so the owner waits instead of submitting beside them. A dispatch
+ *   that is merely ARMED (stamped, no hold) is still preempted exactly as
+ *   before, by guardOwnerSubmit below — that path never crosses the
+ *   boundary.
+ * - CONTAMINATED input buffer → refused until the owner clears the box (see
+ *   pasteAndSubmit's residue note).
+ * - free → guardOwnerSubmit (armed-dispatch preemption, fail-closed), then
+ *   acquired. Guard and acquire share one synchronous stretch, so nothing
+ *   can take the window between the verdict and the hold.
  *
  * The returned holder MUST be released (finally) once the submission is
  * acknowledged.
@@ -204,32 +212,31 @@ function holdsLease(lease: ProducerLease, terminalId: string, holder: ProducerHo
 function acquireOwnerLease(
   lease: ProducerLease,
   session: PtySession,
-  prompt: string
+  bytes: string
 ): ProducerHolder {
-  const holder = ownerHolder()
   const terminalId = session.terminalId
-  const first = lease.acquire(terminalId, holder)
-  if (first === 'held-by-owner') {
+  const held = lease.holderOf(terminalId)
+  if (held?.kind === 'dispatch') {
+    throw new Error('a dispatch is being delivered — retry in a moment')
+  }
+  if (held?.kind === 'owner') {
     throw new Error('another owner submission is in flight')
   }
-  if (first === 'held-by-dispatch') {
-    guardOwnerSubmit(session, prompt)
-    const seized = lease.acquire(terminalId, holder, { displaceDispatch: true })
-    if (seized !== 'acquired') {
-      // Another owner slipped in between the committed preemption and the
-      // takeover — same honest refusal as a straight owner collision.
-      throw new Error('another owner submission is in flight')
-    }
-    return holder
+  if (lease.isContaminated(terminalId)) {
+    throw new Error(CONTAMINATED_REASON)
   }
-  try {
-    guardOwnerSubmit(session, prompt)
-  } catch (error) {
-    lease.release(terminalId, holder)
-    throw error
+  guardOwnerBytes(session, bytes)
+  const holder = ownerHolder()
+  if (lease.acquire(terminalId, holder) !== 'acquired') {
+    // Unreachable in a single-threaded stretch; kept as an honest belt.
+    throw new Error('another owner submission is in flight')
   }
   return holder
 }
+
+/** The named refusal every producer sees while the buffer is dirty. */
+const CONTAMINATED_REASON =
+  'the input box holds a cancelled delivery — clear it (Ctrl-U/Ctrl-C) and retry'
 
 /**
  * Fail-closed owner-producer preemption around an ask's irreversible
@@ -243,14 +250,108 @@ function acquireOwnerLease(
  * delivery's bytes are in the buffer right now. Unwired guards (tests, plain
  * sessions) allow, matching write()'s own behavior.
  */
-function guardOwnerSubmit(session: PtySession, prompt: string): void {
-  const verdict = session.beforeOwnerInput?.(session.terminalId, `${prompt}\r`) ?? 'allow'
+function guardOwnerBytes(session: PtySession, bytes: string): void {
+  const verdict = session.beforeOwnerInput?.(session.terminalId, bytes) ?? 'allow'
   if (verdict === 'preempt-failed') {
     throw new Error('agent has a dispatch in flight that could not be preempted')
   }
   if (verdict !== 'allow') {
     throw new Error('a dispatch delivery is mid-submission at this terminal')
   }
+}
+
+export interface OwnerSubmitOptions {
+  /** Injectable for tests; production shares the process-wide default. */
+  lease?: ProducerLease
+}
+
+/** What became of one owner submission attempt. Refusals carry their name. */
+export type OwnerSubmitResult =
+  | { ok: true; submitted: boolean }
+  | { ok: false; reason: string }
+
+/**
+ * THE owner submit primitive (Sol r7 P0-2): every PTY producer that is not
+ * the dispatch engine routes its bytes through here — askTerminal's typed
+ * path, askRaw (CLI `--raw`), the mobile /input and /raw handlers, routines,
+ * and fork context injection. It classifies the bytes with the SAME
+ * feedPromptBuffer model the tracker uses, and:
+ *
+ * - NON-submitting bytes (typing, arrows, control sequences without an
+ *   unbracketed CR) go through the ordinary guarded PtySession.write; the
+ *   guard's verdict is surfaced, so a refusal is an answer, never a silent
+ *   drop.
+ * - SUBMIT-capable bytes acquire the lease as ONE owner holder, run the
+ *   armed-dispatch preemption, deliver — a `body + Enter` payload as a
+ *   bracketed paste plus a delayed CR (the paste-swallow hazard), anything
+ *   else (a bare Enter, raw sequences with embedded CRs) as one synchronous
+ *   write — and release in a finally. The hold spans the whole multi-write
+ *   sequence, so no other producer's bytes can interleave with the paste and
+ *   its CR; the bytes themselves travel writeFromOwner, the tagged path the
+ *   guard exempts (the holder must not refuse itself).
+ *
+ * Refusals: dispatch-held ('a dispatch is being delivered — retry in a
+ * moment'), owner-held, contaminated buffer, failed/refused preemption, and
+ * a mid-flight cancellation (terminal retired between paste and CR).
+ */
+export async function ownerSubmit(
+  session: PtySession,
+  bytes: string,
+  options: OwnerSubmitOptions = {}
+): Promise<OwnerSubmitResult> {
+  const lease = options.lease ?? defaultProducerLease()
+  const terminalId = session.terminalId
+  if (feedPromptBuffer('', bytes).submitted.length === 0) {
+    // Not submit-capable. The guard still arbitrates (it refuses ALL untagged
+    // bytes while any producer holds the window); a void-returning legacy
+    // fake reads as allow, matching the unwired-guard convention.
+    const verdict = session.write(bytes) as ReturnType<PtySession['write']> | undefined
+    return verdict === undefined || verdict === 'allow'
+      ? { ok: true, submitted: false }
+      : { ok: false, reason: refusalReason(verdict) }
+  }
+  let holder: ProducerHolder
+  try {
+    holder = acquireOwnerLease(lease, session, bytes)
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) }
+  }
+  // The holder's own bytes travel the TAGGED path the guard exempts — a
+  // real PtySession always has it. Duck-typed sessions (tests, embedders)
+  // without one degrade to plain write, which their unwired guards allow.
+  const writeOwner = (data: string): void => {
+    if (typeof session.writeFromOwner === 'function') session.writeFromOwner(data)
+    else session.write(data)
+  }
+  try {
+    const trailing = /[\r\n]+$/.exec(bytes)
+    const body = trailing ? bytes.slice(0, trailing.index) : bytes
+    if (trailing !== null && body.length > 0) {
+      const outcome = await pasteAndSubmit(
+        session,
+        body,
+        writeOwner,
+        () => holdsLease(lease, terminalId, holder),
+        lease
+      )
+      return outcome === 'submitted'
+        ? { ok: true, submitted: true }
+        : { ok: false, reason: 'the submission was cancelled mid-delivery (terminal retired)' }
+    }
+    // A bare Enter or raw bytes with embedded CRs: one synchronous write
+    // under the hold — acquire, submit, release, no async window.
+    writeOwner(bytes)
+    return { ok: true, submitted: true }
+  } finally {
+    lease.release(terminalId, holder)
+  }
+}
+
+/** Name a guard refusal for callers that surface it (HTTP 409, CLI error). */
+function refusalReason(verdict: 'preempt-failed' | 'refused'): string {
+  return verdict === 'preempt-failed'
+    ? 'agent has a dispatch in flight that could not be preempted'
+    : 'another producer holds the submission window at this terminal'
 }
 
 /**
@@ -305,17 +406,19 @@ function waitForQuiescence(
 }
 
 /** Send raw bytes (with escapes already decoded) and return the viewport. */
-export async function askRaw(session: PtySession, rawInput: string): Promise<string> {
-  const trailingEnter = /[\r\n]+$/.exec(rawInput)
-  const body = trailingEnter ? rawInput.slice(0, trailingEnter.index) : rawInput
-  if (trailingEnter && body.length > 0) {
-    // Text followed by Enter: the same paste-swallow hazard askTerminal
-    // guards against — a TUI mid-ingest folds an immediate Enter into the
-    // paste and never submits. Deliver as a bracketed paste, then Enter.
-    await pasteAndSubmit(session, body)
-  } else {
-    session.write(rawInput)
-  }
+export async function askRaw(
+  session: PtySession,
+  rawInput: string,
+  options: OwnerSubmitOptions = {}
+): Promise<string> {
+  // One primitive for every shape of raw input (Sol r7 P0-2): text followed
+  // by Enter becomes a leased bracketed paste plus delayed CR (the same
+  // paste-swallow hazard askTerminal guards against), a bare Enter or control
+  // sequence a single guarded/leased write. A refusal — another producer's
+  // submission in flight, a contaminated buffer — is thrown, not silently
+  // dropped and answered with a stale viewport.
+  const verdict = await ownerSubmit(session, rawInput, options)
+  if (!verdict.ok) throw new Error(verdict.reason)
   await new Promise((resolve) => setTimeout(resolve, 800))
   return session.viewportText()
 }

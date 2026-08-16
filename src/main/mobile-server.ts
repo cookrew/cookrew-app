@@ -22,7 +22,7 @@ import type { BoardSources } from './board-index'
 import type { DispatchService } from './dispatch'
 import type { ThumbFrame } from './browser-thumb-cache'
 import { X509Certificate } from 'node:crypto'
-import { askTerminal } from './ask'
+import { askTerminal, ownerSubmit } from './ask'
 import { ensureCert, missingHosts, sansOf } from './cert'
 import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps } from './mobile-api'
 import { readJson, respondJson } from './mobile-http'
@@ -488,20 +488,24 @@ async function handle(
     // armed ran BEFORE this handler, but it is a fast-path refusal only, not
     // load-bearing (Sol r5 P0-1) — a dispatch can arm in the await gaps
     // between that check and the writes below. The invariant is enforced at
-    // the submit sites (Sol r6 P0-1): session.write's owner-input guard for
-    // /input — which now also REFUSES non-preempting bytes while a dispatch
-    // delivery holds the producer lease (its paste may be mid-ingest in the
-    // shared input box) — and askTerminal's lease acquisition for /ask, held
-    // through submission acknowledgement; a concurrent owner submission makes
-    // /ask throw 'another owner submission is in flight' (surfaced as this
-    // route's error).
+    // the submit sites (Sol r7 P0-2): /input routes through ownerSubmit — THE
+    // lease-holding submit primitive, one owner holder across paste and CR —
+    // and /ask through askTerminal's own acquisition. Either refusal (a
+    // dispatch mid-delivery, another owner submission, a contaminated input
+    // box) is surfaced as a 409 the phone can show, never a silent byte drop.
     if (inputMatch[2] === 'input') {
-      session.write(text)
-      session.write('\r')
-      respondJson(response, 200, { ok: true })
+      const verdict = await ownerSubmit(session, `${text}\r`)
+      if (verdict.ok) respondJson(response, 200, { ok: true })
+      else respondJson(response, 409, { error: verdict.reason })
     } else {
-      const reply = await askTerminal(session, text, { timeoutMs: 120000 })
-      respondJson(response, 200, { ok: true, reply })
+      try {
+        const reply = await askTerminal(session, text, { timeoutMs: 120000 })
+        respondJson(response, 200, { ok: true, reply })
+      } catch (error) {
+        respondJson(response, 409, {
+          error: error instanceof Error ? error.message : String(error)
+        })
+      }
     }
     return
   }

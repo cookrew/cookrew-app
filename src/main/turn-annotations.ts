@@ -33,6 +33,23 @@
 // compaction path for the operations that legitimately touch everything
 // (reset, shrink, rewind, migration).
 //
+// EPOCHS: SNAPSHOT AND LOG SHARE A GENERATION (Sol r7 P1)
+// -------------------------------------------------------
+// Snapshot and log are two files, and no rename covers both — so a crash
+// between "new snapshot renamed" and "old log unlinked" used to leave a NEWER
+// snapshot with an OLDER log replaying over it, rolling a full save's
+// title/read/scroll state backward on the next boot. The two files now share
+// a generation: the snapshot envelope carries {epoch}, every op line carries
+// {e: epoch}, and replay applies ONLY ops whose epoch matches the snapshot it
+// replays over. A full save writes epoch+1, so surviving stale ops are inert
+// the moment the rename lands — the unlink is mere byte reclamation and is
+// best-effort (retried by the next compaction). A missing snapshot reads as
+// epoch 0, which is also what log-only agents write, so the empty-save window
+// (snapshot unlinked, crash, log survives) is closed by the same rule: any
+// snapshot ever written carries epoch >= 1, so its orphaned ops cannot match
+// the bare-directory epoch. Legacy files — bare-map snapshots, ops without
+// `e` — both read as epoch 0 and stay mutually consistent.
+//
 // FAIL-CLOSED (Sol r6 P1)
 // -----------------------
 // Both writers report success, and the in-memory picture is published ONLY
@@ -71,11 +88,13 @@ import {
   appendFileSync,
   closeSync,
   existsSync,
+  fchmodSync,
   fsyncSync,
   mkdirSync,
   openSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeSync,
 } from 'node:fs'
@@ -83,13 +102,46 @@ import path from 'node:path'
 import { hasAnnotation, type TurnAnnotation, type TurnRecord } from '../shared/turn'
 import { splitAnnotation } from '../shared/turn'
 
-/** On-disk snapshot shape: checkpoint index (as a JSON key) → annotation. */
+/** Snapshot map body: checkpoint index (as a JSON key) → annotation. */
 type AnnotationFile = Record<string, TurnAnnotation>
 
-/** One op-log line: `a` present = set checkpoint `i`, absent = clear it. */
+/**
+ * On-disk snapshot: the map wrapped in a generation envelope. Files written
+ * before the epoch (bare maps) parse as epoch 0 — see snapshotParts.
+ */
+interface AnnotationSnapshot {
+  epoch: number
+  annotations: AnnotationFile
+}
+
+/**
+ * One op-log line: `a` present = set checkpoint `i`, absent = clear it.
+ * `e` is the snapshot epoch the op extends; replay ignores ops whose epoch
+ * does not match the snapshot on disk (legacy lines without `e` read as 0).
+ */
 interface AnnotationOp {
   i: number
   a?: TurnAnnotation
+  e?: number
+}
+
+/**
+ * Read a parsed snapshot file in either format. The envelope key "epoch" can
+ * never collide with a checkpoint key — those are all String(number).
+ */
+function snapshotParts(parsed: unknown): { epoch: number; annotations: AnnotationFile } {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { epoch: 0, annotations: {} }
+  }
+  const envelope = parsed as Partial<AnnotationSnapshot>
+  if (typeof envelope.epoch === 'number' && Number.isFinite(envelope.epoch)) {
+    const annotations = envelope.annotations
+    if (typeof annotations === 'object' && annotations !== null && !Array.isArray(annotations)) {
+      return { epoch: envelope.epoch, annotations }
+    }
+    return { epoch: envelope.epoch, annotations: {} }
+  }
+  return { epoch: 0, annotations: parsed as AnnotationFile }
 }
 
 /**
@@ -149,13 +201,36 @@ function effectiveGet(
 }
 
 /**
+ * fsync-inability codes on a parent-directory open/fsync: EISDIR (platforms
+ * that refuse directory fds), ENOTSUP/EINVAL (filesystems without directory
+ * fsync), EPERM/EACCES (directories that cannot be opened for reading).
+ * These are permanent facts about the environment, not transient failures —
+ * retrying would fail forever, so they stay best-effort. Everything else
+ * (EIO, ENOSPC, …) is a real durability failure and PROPAGATES.
+ */
+const DIR_FSYNC_UNSUPPORTED = new Set(['EISDIR', 'ENOTSUP', 'EINVAL', 'EPERM', 'EACCES'])
+
+/**
  * Temp + fsync + rename replacement of a whole file — the dispatch-registry
  * compaction pattern (dispatch.ts). The old bytes stay durable until the
  * replacement is: a crash at ANY point leaves either the previous file or the
  * new one, never a truncated hybrid. Shared with TurnStore's full-rewrite and
- * tail-replacement paths (Sol r6 P2). The parent-directory fsync is
- * best-effort and loud — the write itself already succeeded, and reporting it
- * failed would lie about the file's (correct) contents.
+ * tail-fold paths (Sol r6 P2).
+ *
+ * Sol r7 P1 hardening, both halves of "published as success":
+ * - `writeSync` is not guaranteed to consume the whole buffer, so it loops
+ *   until every byte lands or throws — a short write must never fsync+rename
+ *   a truncated temp over the only copy.
+ * - A parent-directory fsync failure now THROWS instead of logging: until the
+ *   directory entry is durable the rename is not, and claiming success drops
+ *   the caller's retry state exactly when it is still needed. Callers already
+ *   treat a throw as "retain dirty work and retry" (AnnotationStore's
+ *   persistSnapshot, TurnStore's flush/retain). Codes that mean the
+ *   filesystem CANNOT fsync a directory are tolerated — see
+ *   DIR_FSYNC_UNSUPPORTED — because they would fail every retry identically.
+ *
+ * The replaced file's mode is preserved onto the temp (fchmod, so the umask
+ * cannot dilute it) — a rename must not quietly widen a user-tightened 0600.
  */
 export function writeFileAtomic(file: string, body: string | Buffer): void {
   const temp = `${file}.tmp`
@@ -166,10 +241,24 @@ export function writeFileAtomic(file: string, body: string | Buffer): void {
       // stale temp from a crashed run: openSync 'w' below truncates it instead
     }
   }
+  let mode: number | null = null
+  try {
+    mode = statSync(file).mode & 0o777
+  } catch {
+    // no file being replaced: the temp keeps the platform default
+  }
   const bytes = typeof body === 'string' ? Buffer.from(body, 'utf8') : body
   const fd = openSync(temp, 'w')
   try {
-    writeSync(fd, bytes)
+    if (mode !== null) fchmodSync(fd, mode)
+    let landed = 0
+    while (landed < bytes.length) {
+      const wrote = writeSync(fd, bytes, landed, bytes.length - landed)
+      if (wrote <= 0) {
+        throw new Error(`short write: ${landed} of ${bytes.length} bytes reached ${temp}`)
+      }
+      landed += wrote
+    }
     fsyncSync(fd)
   } finally {
     closeSync(fd)
@@ -185,15 +274,16 @@ export function writeFileAtomic(file: string, body: string | Buffer): void {
     }
     throw error
   }
+  if (process.platform === 'win32') return // directories cannot be opened for fsync
+  let dirFd: number | null = null
   try {
-    const dirFd = openSync(path.dirname(file), 'r')
-    try {
-      fsyncSync(dirFd)
-    } finally {
-      closeSync(dirFd)
-    }
+    dirFd = openSync(path.dirname(file), 'r')
+    fsyncSync(dirFd)
   } catch (error) {
-    console.error('Directory fsync failed (rename not yet durable):', error)
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === undefined || !DIR_FSYNC_UNSUPPORTED.has(code)) throw error
+  } finally {
+    if (dirFd !== null) closeSync(dirFd)
   }
 }
 
@@ -216,8 +306,17 @@ export class AnnotationStore {
    */
   private pendingFull = new Map<string, Map<number, TurnAnnotation>>()
 
-  /** Lines currently in each on-disk log — the compaction trigger's input. */
+  /** Lines currently in each on-disk log — the compaction trigger's input.
+   *  Stale-epoch lines COUNT: they are replay weight to read past, and the
+   *  armed counter is what lazily retries their cleanup. */
   private logOps = new Map<string, number>()
+
+  /**
+   * The generation each agent's snapshot+log pair is currently on — what new
+   * ops are stamped with and what the next full save bumps past. Seeded from
+   * the snapshot envelope on first touch; 0 for a bare directory.
+   */
+  private epochs = new Map<string, number>()
 
   constructor(private dir: string) {}
 
@@ -251,24 +350,31 @@ export class AnnotationStore {
     return this.readDisk(safeId)
   }
 
-  /** Snapshot, then log replay — the durable picture as the disk holds it. */
+  /**
+   * Snapshot, then log replay — the durable picture as the disk holds it.
+   * Only ops on the SNAPSHOT'S epoch replay (Sol r7 P1): an op from before a
+   * full save describes a state that save already superseded, and replaying
+   * it would roll the newer snapshot backward. A missing/unreadable snapshot
+   * reads as epoch 0, matching log-only agents' ops.
+   */
   private readDisk(safeId: string): Map<number, TurnAnnotation> {
     const byIndex = new Map<number, TurnAnnotation>()
+    let epoch = 0
     try {
       const file = this.fileFor(safeId)
       if (existsSync(file)) {
-        const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
-        if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-          for (const [key, value] of Object.entries(parsed as AnnotationFile)) {
-            const index = Number(key)
-            if (!Number.isFinite(index) || !isAnnotation(value)) continue
-            if (hasAnnotation(value)) byIndex.set(index, value)
-          }
+        const parts = snapshotParts(JSON.parse(readFileSync(file, 'utf8')))
+        epoch = parts.epoch
+        for (const [key, value] of Object.entries(parts.annotations)) {
+          const index = Number(key)
+          if (!Number.isFinite(index) || !isAnnotation(value)) continue
+          if (hasAnnotation(value)) byIndex.set(index, value)
         }
       }
     } catch (error) {
       console.error('Failed to load checkpoint annotations:', error)
     }
+    this.epochs.set(safeId, epoch)
     try {
       const log = this.logFor(safeId)
       let lines = 0
@@ -281,6 +387,8 @@ export class AnnotationStore {
             if (typeof parsed !== 'object' || parsed === null) continue
             if (!Number.isFinite(parsed.i)) continue
             if (parsed.a !== undefined && !isAnnotation(parsed.a)) continue
+            if (parsed.e !== undefined && typeof parsed.e !== 'number') continue
+            if ((parsed.e ?? 0) !== epoch) continue // stale generation: inert
             applyOp(byIndex, parsed)
           } catch {
             // one bad op, not the log
@@ -292,6 +400,21 @@ export class AnnotationStore {
       console.error('Failed to replay checkpoint annotation log:', error)
     }
     return byIndex
+  }
+
+  /** Current generation, seeding from the snapshot envelope on first touch. */
+  private epochOf(safeId: string): number {
+    const held = this.epochs.get(safeId)
+    if (held !== undefined) return held
+    let epoch = 0
+    try {
+      const file = this.fileFor(safeId)
+      if (existsSync(file)) epoch = snapshotParts(JSON.parse(readFileSync(file, 'utf8'))).epoch
+    } catch {
+      // an unreadable snapshot reads as epoch 0, exactly as readDisk treats it
+    }
+    this.epochs.set(safeId, epoch)
+    return epoch
   }
 
   /** The in-memory durable picture, seeded from disk the first time. */
@@ -407,7 +530,15 @@ export class AnnotationStore {
   private appendOps(safeId: string, ops: readonly AnnotationOp[]): boolean {
     try {
       mkdirSync(this.dir, { recursive: true })
-      appendFileSync(this.logFor(safeId), ops.map((op) => `${JSON.stringify(op)}\n`).join(''), 'utf8')
+      // Epoch stamped at APPEND time, not creation: pending ops only survive
+      // while the generation is stable (a full save clears them), so the
+      // current epoch is always the one they extend.
+      const epoch = this.epochOf(safeId)
+      appendFileSync(
+        this.logFor(safeId),
+        ops.map((op) => `${JSON.stringify({ ...op, e: epoch })}\n`).join(''),
+        'utf8',
+      )
       this.logOps.set(safeId, (this.logOps.get(safeId) ?? 0) + ops.length)
       return true
     } catch (error) {
@@ -430,15 +561,23 @@ export class AnnotationStore {
 
   /**
    * The full snapshot write — `save`'s path and the log's compaction. Temp +
-   * fsync + rename (writeFileAtomic), THEN the log is cleared: the snapshot
-   * folds every logged op in, and stale ops replaying over a NEWER snapshot
-   * would resurrect the values they carried. That is also why a failed log
-   * clear fails the whole write — the retained candidate retries until both
-   * land. (A crash between rename and clear leaves that stale window on disk;
-   * it is closed by the retry, and never by silently accepting it.)
+   * fsync + rename (writeFileAtomic) with the epoch BUMPED in the envelope:
+   * the moment the rename lands, every op line on disk carries a dead epoch
+   * and replay ignores it (Sol r7 P1). The log unlink is therefore byte
+   * reclamation, not a correctness step — best-effort, retried lazily by the
+   * next compaction (the armed logOps counter keeps its trigger live), and a
+   * crash anywhere between rename and unlink leaves a state that reads back
+   * as exactly the new snapshot.
    *
    * An empty picture drops both files rather than leaving an empty object
    * behind, so the directory only ever holds agents that have annotations.
+   * Snapshot goes first: the surviving log's ops carry the unlinked
+   * snapshot's epoch (>= 1, every envelope ever written is), which can never
+   * match the bare-directory epoch 0 — so the symmetric crash window reads as
+   * the empty state the save intended, not a resurrection. (A LEGACY bare-map
+   * snapshot is epoch 0 and keeps a sliver of that old window until its first
+   * epoch-carrying rewrite; closing it retroactively would mean rewriting
+   * every legacy file on load, which is not worth the migration churn.)
    */
   private persistSnapshot(safeId: string, byIndex: Map<number, TurnAnnotation>): boolean {
     try {
@@ -446,20 +585,27 @@ export class AnnotationStore {
       const log = this.logFor(safeId)
       if (byIndex.size === 0) {
         if (existsSync(file)) unlinkSync(file)
+        this.epochs.set(safeId, 0)
         if (existsSync(log)) unlinkSync(log)
         this.logOps.set(safeId, 0)
         return true
       }
-      // Keys serialized in ascending checkpoint order, as before the log —
-      // the snapshot format is unchanged and older files read back as-is.
+      // Keys serialized in ascending checkpoint order, as before the log.
       const next: AnnotationFile = {}
       for (const index of [...byIndex.keys()].sort((a, b) => a - b)) {
         next[String(index)] = byIndex.get(index) as TurnAnnotation
       }
+      const epoch = this.epochOf(safeId) + 1
       mkdirSync(this.dir, { recursive: true })
-      writeFileAtomic(file, JSON.stringify(next))
-      if (existsSync(log)) unlinkSync(log)
-      this.logOps.set(safeId, 0)
+      writeFileAtomic(file, JSON.stringify({ epoch, annotations: next }))
+      this.epochs.set(safeId, epoch)
+      try {
+        if (existsSync(log)) unlinkSync(log)
+        this.logOps.set(safeId, 0)
+      } catch {
+        // Stale-epoch ops are inert; the counter stays armed so the next
+        // compaction retries the reclamation.
+      }
       return true
     } catch (error) {
       console.error('Failed to save checkpoint annotations:', error)
@@ -473,6 +619,7 @@ export class AnnotationStore {
     this.pendingOps.delete(safeId)
     this.pendingFull.delete(safeId)
     this.logOps.delete(safeId)
+    this.epochs.delete(safeId)
     try {
       for (const file of [this.fileFor(safeId), this.logFor(safeId)]) {
         if (existsSync(file)) unlinkSync(file)

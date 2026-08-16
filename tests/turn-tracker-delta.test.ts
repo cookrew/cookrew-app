@@ -268,7 +268,11 @@ describe('O(delta) through persistence (Sol r5 P1)', () => {
     const sidecar = sidecarState()
     expect(sidecar.get(301)).toEqual({ title: 'title 301' })
     expect(sidecar.size).toBe(HISTORY + 1)
-    expect(JSON.parse(sidecarBefore)).toMatchObject({ '1': { title: 'title 1' } })
+    // Snapshot envelope (Sol r7 P1): the map sits under `annotations`,
+    // beside the epoch that keys log replay.
+    expect(JSON.parse(sidecarBefore)).toMatchObject({
+      annotations: { '1': { title: 'title 1' } },
+    })
     // And it all reads back whole.
     expect(tracker.history('term-1')).toHaveLength(HISTORY + 1)
     tracker.disposeAll()
@@ -288,14 +292,14 @@ describe('O(delta) through persistence (Sol r5 P1)', () => {
     tracker.disposeAll()
   })
 
-  // Sol r6 P2 adaptation: the tail replacement is atomic (temp+fsync+rename)
-  // now, not truncate+append — same observable: prefix untouched, no writeAll.
-  it('a tail finalization replaces ONE line atomically — never a full-history rewrite', () => {
+  // Sol r7 P1 adaptation: the tail update is an appended OVERLAY line now,
+  // not an atomic whole-file rewrite — stronger observable: EVERY previous
+  // byte is untouched, the write is one superseding line, no writeAll.
+  it('a tail finalization appends ONE overlay line — never a full-history rewrite', () => {
     const { store, tracker } = seeded()
     const internals = store as unknown as StoreInternals
     const writeAll = vi.spyOn(internals, 'writeAll')
     const before = readFileSync(turnsFile(), 'utf8')
-    const prefix = before.slice(0, before.lastIndexOf('\n', before.length - 2) + 1)
 
     tracker.applyHistoryDelta(
       'term-1',
@@ -309,13 +313,57 @@ describe('O(delta) through persistence (Sol r5 P1)', () => {
 
     expect(writeAll).not.toHaveBeenCalled()
     const after = readFileSync(turnsFile(), 'utf8')
-    // Every line but the last is byte-identical; the last carries the edit.
-    expect(after.startsWith(prefix)).toBe(true)
+    // The whole previous file is byte-identical; one overlay line follows it.
+    expect(after.startsWith(before)).toBe(true)
     const lines = after.trim().split('\n')
-    expect(lines).toHaveLength(HISTORY)
+    expect(lines).toHaveLength(HISTORY + 1)
+    expect(lines[lines.length - 1].startsWith(`{"__tail":true,"supersedes":${HISTORY},`)).toBe(true)
     expect(lines[lines.length - 1]).toContain('grew a longer reply')
-    // The replaced tail still carried its title across (annotation intact).
+    // Logically the record was replaced, not duplicated…
+    expect(store.count('term-1')).toBe(HISTORY)
+    expect(store.load('term-1')[HISTORY - 1].reply).toBe('grew a longer reply')
+    // …and the replaced tail still carried its title across (annotation intact).
     expect(tracker.history('term-1')[HISTORY - 1].title).toBe(`title ${HISTORY}`)
+    tracker.disposeAll()
+  })
+
+  // Sol r7 P1 gate extension: REPEATED tail updates against a large ledger
+  // cost O(changed) bytes each — the file only ever GROWS by one overlay line
+  // per update (nothing before the append point is rewritten), and the
+  // growth is bounded by the changed record's own size, not the history's.
+  it('repeated tail updates append O(changed) bytes each; prior bytes never move', () => {
+    const { store, tracker } = seeded()
+    const internals = store as unknown as StoreInternals
+    const writeAll = vi.spyOn(internals, 'writeAll')
+    let before = readFileSync(turnsFile(), 'utf8')
+
+    for (let round = 1; round <= 10; round += 1) {
+      const reply = `growing reply ${'x'.repeat(round * 10)}`
+      tracker.applyHistoryDelta(
+        'term-1',
+        {
+          kind: 'tail',
+          record: record({ index: HISTORY, uuid: `u${HISTORY}`, prompt: `ask ${HISTORY}`, reply, final: round === 10 })
+        },
+        noFull
+      )
+      store.flushAll()
+      const after = readFileSync(turnsFile(), 'utf8')
+      // Append-only: the previous file is a byte prefix of the new one…
+      expect(after.startsWith(before)).toBe(true)
+      // …and the delta is ONE overlay line — record-sized, not history-sized.
+      const grew = after.slice(before.length)
+      expect(grew.trim().split('\n')).toHaveLength(1)
+      expect(grew.length).toBeLessThan(reply.length + 400)
+      before = after
+    }
+
+    expect(writeAll).not.toHaveBeenCalled()
+    // Ten physical overlays, still one logical tail — and it reads back last-wins.
+    expect(store.count('term-1')).toBe(HISTORY)
+    const replayed = new TurnStore(path.join(dir, 'turns')).load('term-1')
+    expect(replayed).toHaveLength(HISTORY)
+    expect(replayed[HISTORY - 1].reply).toBe(`growing reply ${'x'.repeat(100)}`)
     tracker.disposeAll()
   })
 

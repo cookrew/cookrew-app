@@ -280,7 +280,7 @@ describe('TurnTracker.replaceHistory', () => {
   // session file and must merge the persisted titles back in and re-persist
   // them — otherwise "titles everywhere" regresses to sparse on every restart.
   it('preserves persisted titles across a simulated restart and re-persists them', () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-restart-'))
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-restart-')), 'turns')
     // Last session's turn-store: titled records (legacy — no uuid yet).
     const before = new TurnStore(dir)
     before.scheduleSave('term-1', [
