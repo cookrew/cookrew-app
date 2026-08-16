@@ -15,7 +15,12 @@ import { agentStatus } from './herdr-agent-status'
 // The one-producer lease (Sol r6 P0-1): the PTY guard consults it so owner
 // bytes are refused while a dispatch DELIVERY is mid-submission — the shared
 // input box may hold its half-ingested paste.
-import { CONTAMINATED_REFUSAL, defaultProducerLease, type ProducerLease } from './producer-lease'
+import {
+  CONTAMINATED_REFUSAL,
+  DISPATCH_RESIDUE_REFUSAL,
+  defaultProducerLease,
+  type ProducerLease
+} from './producer-lease'
 import { summarizeTurn, TurnSummarizer } from './sous'
 import type { TurnStore } from './turn-store'
 import {
@@ -734,6 +739,11 @@ export class TurnTracker extends EventEmitter {
    * delta-applied history identically to a full-reconciled one.
    */
   private afterCommit(terminalId: string, records: TurnRecord[]): void {
+    // THE TRANSCRIPT WITNESS (Sol r11 P0-2/P0-3): the reconcile just landed
+    // durable records from the harness's own session file — the downstream
+    // proof that a submit crossed the pane and was consumed. This, not the
+    // local input echo, is what settles the input-provenance WAL.
+    this.witnessProvenanceConsumption(terminalId, records)
     this.reconcileScrapeObservations(terminalId, records)
     // Parser finality clears the A4 open-turn fact (v5 A4): a FINAL tail
     // covering the observed open (file prompt-entry time within slack of the
@@ -753,6 +763,58 @@ export class TurnTracker extends EventEmitter {
     const t = this.tracked.get(terminalId)
     if (t) this.push(t)
     this.ensureBackfillPump()
+  }
+
+  /**
+   * Settle the input-provenance WAL against durable transcript records (Sol
+   * r11 P0-2/P0-3). A record whose turn OPENED at/after the fact's mark time
+   * proves the shared box was consumed by a real submit the harness itself
+   * recorded — the downstream witness the local echo can never be. For
+   * 'dispatch-delivery' facts the delivered bytes themselves also identify
+   * the consuming record (promptAnswersDispatch — the dispatch plane's one
+   * prompt-identity rule), within the same clock slack the dispatch closers
+   * use. Contamination is exempt: its only exit is proven pane death.
+   *
+   * Bounded like the dispatch closure scan: records are time-ordered, so the
+   * walk stops at the first record older than the mark window.
+   */
+  private witnessProvenanceConsumption(
+    terminalId: string,
+    records: readonly TurnRecord[]
+  ): void {
+    const fact = this.lease.provenanceDetail(terminalId)
+    if (fact === null || fact.kind === 'contaminated') return
+    for (let i = records.length - 1; i >= 0; i -= 1) {
+      const record = records[i]
+      if (record.startedAt < fact.markedAt - DISPATCH_ARM_SLACK_MS) break
+      const witnessed =
+        // Opened at/after the mark: whatever sat in the box rode that
+        // submit (strict — no slack on this side, because a turn already
+        // running when the mark landed must never vouch for it).
+        record.startedAt >= fact.markedAt ||
+        (fact.kind === 'dispatch-delivery' &&
+          fact.prompt !== undefined &&
+          promptAnswersDispatch(record.prompt, fact.prompt))
+      if (witnessed) {
+        this.lease.witnessConsumed(terminalId)
+        return
+      }
+    }
+  }
+
+  /**
+   * The scrape-authority fallback witness (Sol r11 P0-2): a terminal with no
+   * session file has no transcript, but a turn the scrape watched SETTLE —
+   * agent output flowed and went quiet — is still downstream evidence that a
+   * submit at/after the mark was consumed and processed. Without this, a
+   * scrape-only dispatch target would keep its everyone-blocking residue
+   * until retirement. File-backed terminals never take this path: their
+   * reconcile owns the witness.
+   */
+  private witnessSettledScrapeTurn(terminalId: string, startedAt: number): void {
+    const fact = this.lease.provenanceDetail(terminalId)
+    if (fact === null || fact.kind === 'contaminated') return
+    if (startedAt >= fact.markedAt) this.lease.witnessConsumed(terminalId)
   }
 
   /**
@@ -1557,15 +1619,16 @@ export class TurnTracker extends EventEmitter {
       fed.held.length === 0 &&
       !(t.agent && t.phase === 'waiting' && t.prompt !== null)
     ) {
-      // A dispatch delivery's OWN observed submit consumes the shared box
-      // wholesale exactly as an owner's does — the proof does not depend on
-      // who pressed Enter. Routing it through clearOwnerEditing settles the
-      // durable write-ahead dirty fact the delivery's paste recorded (Sol
-      // r10 P0-1); without this, every crash after any pty-fallback dispatch
-      // would false-dirty its terminal for the next process. The in-memory
-      // owner mark is not set on this path (tagged bytes never mark), so
-      // clearing it is a no-op there. Menu Enters are excluded as ever: they
-      // feed the current turn, not the box.
+      // A dispatch delivery's OWN observed submit is still only the LOCAL
+      // input echo (Sol r11 P0-2) — an enqueue observation, never proof the
+      // CR crossed the asynchronous PTY write. clearOwnerEditing now records
+      // exactly that: the in-memory model consumed the box (a no-op here —
+      // tagged bytes never set the owner mark) and the store opens its
+      // re-stamp window, while the DURABLE dispatch-delivery fact and the
+      // everyone-blocking residue stand until the transcript (or the settled
+      // scrape turn) witnesses the delivered prompt consumed — or the pane
+      // provably dies. Menu Enters are excluded as ever: they feed the
+      // current turn, not the box.
       this.lease.clearOwnerEditing(terminalId)
     }
     if (!t.agent) return
@@ -1702,7 +1765,12 @@ export class TurnTracker extends EventEmitter {
       return
     }
     if (holdsBytes || fed.submitted.length > 0) return
-    if (this.provenCleared(t, data, prev)) this.lease.clearOwnerEditing(terminalId)
+    // The proven single-line erase clears DURABLY (Sol r11 P0-2 keeps it):
+    // the bytes died IN the box under fully watched editing, so no
+    // downstream witness will ever exist for them — unlike an observed
+    // submit, whose bytes travel onward and whose consumption only the
+    // transcript can prove.
+    if (this.provenCleared(t, data, prev)) this.lease.clearOwnerEditingProven(terminalId)
   }
 
   /**
@@ -1821,6 +1889,11 @@ export class TurnTracker extends EventEmitter {
     const holder = this.lease.holderOf(terminalId)
     if (holder?.kind === 'dispatch') return 'a dispatch is being delivered — retry in a moment'
     if (holder?.kind === 'owner') return 'another owner submission is in flight'
+    // Residue before contamination: isContaminated covers both (that is how
+    // every producer refuses with no new call sites — Sol r11 P0-3), but the
+    // sentence should name the fact that actually stands, because the
+    // residue clears on the transcript witness without a restart.
+    if (this.lease.hasDispatchResidue(terminalId)) return DISPATCH_RESIDUE_REFUSAL
     if (this.lease.isContaminated(terminalId)) return CONTAMINATED_REFUSAL
     return null
   }
@@ -2084,6 +2157,11 @@ export class TurnTracker extends EventEmitter {
     // resolved, discard paths included (a discarded boot phantom is not work
     // in flight either).
     this.openTurnFacts.delete(id)
+    // Scrape-authority terminals settle their input-provenance facts here
+    // (Sol r11 P0-2): the turn's completion is their only downstream witness.
+    if (!this.writesFromFile(id) && t.turnStartedAt > 0) {
+      this.witnessSettledScrapeTurn(id, t.turnStartedAt)
+    }
     // A promptless self-heal turn that ALSO never saw user input is boot
     // noise — a fresh agent's boot screen (e.g. Codex) tripping self-heal,
     // not an exchange. Recording it as '(recovered turn)' would mint a

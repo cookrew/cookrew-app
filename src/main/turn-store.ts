@@ -61,6 +61,12 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { mergeAnnotation, splitAnnotation, type TurnRecord } from '../shared/turn'
 import { AnnotationStore, fsyncDirDurable, renameLanded, writeFileAtomic } from './turn-annotations'
+// The OVERSIZED-record codec (Sol r11 P1): JSON.parse/stringify of any record
+// past 1 MB rides a worker thread, so the fold's one remaining unbounded
+// synchronous unit — the giant tool reply round 10 explicitly left on main —
+// leaves Electron main entirely. Worker death falls back to the synchronous
+// path, loudly, without touching correctness.
+import { FoldRecordCodec, OVERSIZED_RECORD_BYTES } from './turn-store-fold-worker'
 
 const SAVE_DEBOUNCE_MS = 300
 
@@ -72,11 +78,13 @@ const SAVE_DEBOUNCE_MS = 300
  * and other agents keep running through a 91 MB compaction instead of
  * freezing for it. BOTH budgets are BYTES: the r9 shape bounded serialization
  * by record COUNT, and 200 ten-megabyte records serialized as one unbounded
- * stretch. THE RESIDUAL, STATED: a SINGLE oversized record still parses
- * (JSON.parse of one 10 MB line) and stringifies synchronously — that is
- * irreducible on this thread without a worker, so the fold bounds the harm
- * instead: an oversized record is processed ALONE in its own unit with a
- * yield before and after, never stacked onto its neighbours' work.
+ * stretch. The round-10 residual — a SINGLE oversized record parsing and
+ * stringifying synchronously — is CLOSED (Sol r11 P1): past
+ * OVERSIZED_RECORD_BYTES the JSON work rides the fold worker
+ * (turn-store-fold-worker), and only linear memcpy-class steps (utf8 decode,
+ * Buffer.from, the write) remain on this thread, still isolated in their own
+ * unit with a yield before and after. Records between one chunk and the
+ * worker bound keep the r10 discipline: in-thread, alone between yields.
  */
 const FOLD_READ_CHUNK_BYTES = 256 * 1024
 const FOLD_SERIALIZE_CHUNK_BYTES = 256 * 1024
@@ -107,6 +115,24 @@ const asyncDirFsyncFaulted = new Set<string>()
 
 /** Hand the event loop back between fold chunks — setImmediate as a promise. */
 const yieldToLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+
+/** An unref'd wait — the shutdown drain's cap must never hold the app open. */
+const sleepUnref = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    timer.unref?.()
+  })
+
+/**
+ * Is this text past the worker bound (Sol r11 P1)? UTF-8 bytes are never
+ * fewer than UTF-16 units, so the cheap length check clears ordinary lines
+ * without an O(n) byte scan — only a line long enough to possibly cross the
+ * bound pays Buffer.byteLength, and that scan is trivial next to the parse
+ * it gates.
+ */
+const oversizedText = (text: string): boolean =>
+  text.length * 4 > OVERSIZED_RECORD_BYTES &&
+  (text.length > OVERSIZED_RECORD_BYTES || Buffer.byteLength(text, 'utf8') > OVERSIZED_RECORD_BYTES)
 
 /**
  * Overlay-fold floor. Below this many overlay lines the dead weight cannot be
@@ -216,6 +242,28 @@ export class TurnStore {
   /** Terminals whose ASYNC fold is currently in flight — the single-flight
    *  guard for the chunked task itself (Sol r9 P1). */
   private folding = new Set<string>()
+  /**
+   * The in-flight fold PROMISES per terminal (Sol r11 P1) — what drainFolds
+   * awaits. flushAll's debt sweep is point-in-time: a fold still running when
+   * it looked could rename afterwards and mint a directory-fsync debt nobody
+   * would settle before quit. Tracking the promise makes shutdown a bounded
+   * drain instead of a snapshot.
+   */
+  private readonly foldRuns = new Map<string, Promise<void>>()
+  /**
+   * The shutdown latch (Sol r11 P1): once drainFolds has started, no NEW
+   * fold may be scheduled or begun — draining a set that keeps refilling is
+   * not a drain. Overlay weight left unreclaimed is recovered by the
+   * load-time fold on the next boot, exactly like a quit before a scheduled
+   * fold ever was.
+   */
+  private foldsDraining = false
+  /**
+   * The oversized-record codec (Sol r11 P1): one lazily-spawned worker
+   * shared by every fold of this store. Not readonly-by-module on purpose —
+   * a store owns its worker's lifetime the way it owns its timers.
+   */
+  private readonly foldCodec = new FoldRecordCodec()
   /**
    * Physical write generation per terminal (Sol r9 P1) — bumped by every
    * append, rewrite, fold commit and removal. The async fold captures it at
@@ -993,6 +1041,10 @@ export class TurnStore {
    * rename keeps every intermediate state crash-safe).
    */
   private scheduleFold(terminalId: string): void {
+    // The drain latch outranks everything (Sol r11 P1): shutdown is
+    // draining folds, and a fresh one scheduled behind the drain would be
+    // exactly the unowned debt-minting task the drain exists to end.
+    if (this.foldsDraining) return
     if (this.pendingCompact.has(terminalId) || this.folding.has(terminalId)) return
     const timer = setTimeout(() => {
       this.pendingCompact.delete(terminalId)
@@ -1020,8 +1072,20 @@ export class TurnStore {
    * sustained writes the overlays simply keep accumulating (correct, just
    * un-reclaimed) until a quiet window lets a fold land.
    */
-  private async foldNow(terminalId: string): Promise<void> {
-    if (this.folding.has(terminalId)) return
+  private foldNow(terminalId: string): Promise<void> {
+    if (this.folding.has(terminalId) || this.foldsDraining) return Promise.resolve()
+    // The promise is REGISTERED before it is awaited (Sol r11 P1), so a
+    // drain that starts mid-fold has something to wait on; the entry dies
+    // with the run itself.
+    const run = this.runFold(terminalId).finally(() => {
+      if (this.foldRuns.get(terminalId) === run) this.foldRuns.delete(terminalId)
+    })
+    this.foldRuns.set(terminalId, run)
+    return run
+  }
+
+  /** The fold body foldNow registers — single-flight via `folding`. */
+  private async runFold(terminalId: string): Promise<void> {
     this.folding.add(terminalId)
     let retry = false
     try {
@@ -1078,37 +1142,38 @@ export class TurnStore {
   private async readRecordsChunked(file: string): Promise<TurnRecord[]> {
     const records: TurnRecord[] = []
     const at = new Map<number, number>() // checkpoint index → position
-    const apply = (line: string): void => {
-      if (line.trim() === '') return
-      const overlay = parseOverlay(line)
-      try {
-        const parsed: unknown = JSON.parse(overlay?.line ?? line)
-        if (!isTurnRecord(parsed)) return
-        if (overlay !== null) {
-          const pos = at.get(parsed.index)
-          if (pos !== undefined) {
-            records[pos] = parsed
-          } else {
-            at.set(parsed.index, records.length)
-            records.push(parsed)
-          }
+    const place = (parsed: unknown, overlay: { supersedes: number } | null): void => {
+      if (!isTurnRecord(parsed)) return
+      if (overlay !== null) {
+        const pos = at.get(parsed.index)
+        if (pos !== undefined) {
+          records[pos] = parsed
         } else {
           at.set(parsed.index, records.length)
           records.push(parsed)
         }
-      } catch {
-        // one bad line, not the file
+      } else {
+        at.set(parsed.index, records.length)
+        records.push(parsed)
       }
     }
+    const apply = async (line: string): Promise<void> => {
+      if (line.trim() === '') return
+      const overlay = parseOverlay(line)
+      const parsed = await this.parseFoldLine(overlay?.line ?? line)
+      // null = the line does not parse — one bad line, not the file.
+      if (parsed !== null) place(parsed.value, overlay)
+    }
     // Oversized isolation (Sol r10 P1): a completed line region larger than
-    // one read chunk means a single record line spans chunks — its
-    // JSON.parse is the irreducible residual (a worker is the only way to
-    // move it off this thread; stated, not hidden), so it runs ALONE
-    // between two yields instead of stacking onto neighbouring lines' work.
+    // one read chunk means a single record line spans chunks. Its JSON.parse
+    // is no longer the stated irreducible residual — past the 1 MB bound it
+    // rides the fold worker (Sol r11 P1) — but the region's utf8 DECODE is
+    // still one linear main-thread stretch, so the giant region keeps its
+    // own unit between two yields.
     const applyRegion = async (region: Buffer): Promise<void> => {
       const oversized = region.length > FOLD_READ_CHUNK_BYTES
       if (oversized) await yieldToLoop()
-      for (const line of region.toString('utf8').split('\n')) apply(line)
+      for (const line of region.toString('utf8').split('\n')) await apply(line)
       if (oversized) await yieldToLoop()
     }
     const handle = await open(file, 'r')
@@ -1147,6 +1212,40 @@ export class TurnStore {
       await handle.close().catch(() => {})
     }
     return records
+  }
+
+  /**
+   * JSON.parse for the fold (Sol r11 P1): ordinary lines in-thread, lines
+   * past OVERSIZED_RECORD_BYTES in the worker. A worker-down answer falls
+   * back to the synchronous parse — the codec already said so loudly, and
+   * correctness never depended on the worker. Null = the line does not
+   * parse under either engine; the caller drops it, exactly as readLines
+   * does.
+   */
+  private async parseFoldLine(text: string): Promise<{ value: unknown } | null> {
+    if (oversizedText(text)) {
+      const answer = await this.foldCodec.parseOversized(text)
+      if (answer.ok === true) return { value: answer.value }
+      if (answer.ok === 'invalid') return null
+    }
+    try {
+      return { value: JSON.parse(text) }
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * The record's conversation line for the fold's write half (Sol r11 P1):
+   * the annotation split stays on this thread (O(fields)), and past the
+   * worker bound the byte-proportional JSON.stringify crosses to the fold
+   * worker — the returned line lands back as a memcpy. Worker down = the
+   * synchronous stringify, correct at the old cost.
+   */
+  private async serializeFoldRecord(record: TurnRecord): Promise<string> {
+    const conversation = splitAnnotation(record).conversation
+    const answer = await this.foldCodec.serializeOversized(conversation)
+    return answer.ok === true ? answer.value : JSON.stringify(conversation)
   }
 
   /**
@@ -1200,12 +1299,25 @@ export class TurnStore {
         await yieldToLoop()
       }
       for (const record of records) {
-        // Oversized detection BEFORE the stringify, off the record's own
-        // text lengths: the JSON.stringify of a 10 MB reply is the write
-        // side's irreducible residual (stated — a worker is the only way
-        // off this thread), so it runs ALONE between two yields instead of
-        // on top of a full buffer's serialization.
-        if (record.reply.length + record.prompt.length >= FOLD_SERIALIZE_CHUNK_BYTES) {
+        const weight = record.reply.length + record.prompt.length
+        // Past the WORKER bound the stringify itself leaves this thread
+        // (Sol r11 P1): round 10 called the giant record's JSON.stringify
+        // the write side's irreducible residual, and the fold worker is the
+        // stated way off. The line comes back as a memcpy; Buffer.from and
+        // the write below are linear, bounded by the ordinary chunk
+        // discipline's own units.
+        if (weight >= OVERSIZED_RECORD_BYTES) {
+          await flushBuffered()
+          await yieldToLoop()
+          await writeOut(Buffer.from(`${await this.serializeFoldRecord(record)}\n`, 'utf8'))
+          await yieldToLoop()
+          continue
+        }
+        // Oversized-but-under-the-worker-bound: detection BEFORE the
+        // stringify, off the record's own text lengths — it runs ALONE
+        // between two yields instead of on top of a full buffer's
+        // serialization (Sol r10 P1).
+        if (weight >= FOLD_SERIALIZE_CHUNK_BYTES) {
           await flushBuffered()
           await yieldToLoop()
           await writeOut(Buffer.from(`${this.line(record)}\n`, 'utf8'))
@@ -1350,6 +1462,11 @@ export class TurnStore {
    * no pending flush to ride, and quit is the last chance to prove its
    * rename durable or escalate the fault out loud. Synchronous on purpose:
    * shutdown must not await; fsyncDirDurable carries the repeat-escalation.
+   *
+   * POINT-IN-TIME by nature (Sol r11 P1): a fold still running when this
+   * sweeps can rename AFTERWARDS and mint a debt this loop never saw. That
+   * gap is drainFolds' job — the conductor awaits it in before-quit's async
+   * tail, after this synchronous flush has landed the pending saves.
    */
   flushAll(): void {
     for (const terminalId of [...this.timers.keys()]) this.flush(terminalId)
@@ -1366,5 +1483,54 @@ export class TurnStore {
         console.error('Turn-ledger directory fsync still failing at final flush:', error)
       }
     }
+  }
+
+  /**
+   * The shutdown drain for in-flight folds (Sol r11 P1). flushAll cannot
+   * await, so its debt sweep misses exactly one shape: a fold that was
+   * paused mid-write when the sweep ran, renamed afterwards, and had its
+   * async directory fsync fail — a durability obligation minted AFTER the
+   * last synchronous look. This closes it, bounded:
+   *
+   *   1. LATCH — no new fold may be scheduled or started, and every
+   *      scheduled-but-unstarted timer is cancelled (its overlay weight is
+   *      the load-time fold's to reclaim next boot);
+   *   2. AWAIT — every in-flight fold, up to `capMs`;
+   *   3. REVOKE — a fold still running past the cap has its generation
+   *      bumped, so its commit-time check refuses the rename: after this
+   *      line no rename, and therefore no new debt, can appear;
+   *   4. SETTLE — every outstanding debt, through the synchronous
+   *      fsyncDirDurable (repeat-escalation included), created before OR
+   *      during the drain.
+   *
+   * The conductor awaits this in before-quit's async tail, alongside
+   * cancelAllAsks, before app.quit. Also tears the fold worker down: past
+   * the latch nothing can need it.
+   */
+  async drainFolds(capMs: number): Promise<void> {
+    this.foldsDraining = true
+    for (const timer of this.pendingCompact.values()) clearTimeout(timer)
+    this.pendingCompact.clear()
+    if (this.foldRuns.size > 0) {
+      await Promise.race([
+        Promise.all([...this.foldRuns.values()]).then(
+          () => undefined,
+          () => undefined
+        ),
+        sleepUnref(capMs)
+      ])
+    }
+    // Revocation and the folds' own commit blocks share this thread: the
+    // gen check + rename is one synchronous stretch, so after these bumps a
+    // late fold aborts its temp instead of renaming behind the sweep below.
+    for (const terminalId of this.foldRuns.keys()) this.bumpGen(terminalId)
+    for (const terminalId of [...this.dirDebt]) {
+      try {
+        this.settleDirDebt(terminalId)
+      } catch (error) {
+        console.error('Turn-ledger directory fsync still failing at fold drain:', error)
+      }
+    }
+    this.foldCodec.dispose()
   }
 }

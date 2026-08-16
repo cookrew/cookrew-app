@@ -233,6 +233,13 @@ const ABORT_SIGKILL_AFTER_MS = 2000
  * escalation timer dies with it. Exported for the escalation test;
  * `sigkillAfterMs` is injectable there so the bound itself stays 2s in
  * production.
+ *
+ * A signal ALREADY ABORTED at call time refuses WITHOUT SPAWNING (Sol r11
+ * P0-4). The previous shape spawned first and then noticed, which left a real
+ * spawn-to-kill race: herdr could type the prompt in the beat between the
+ * exec and the SIGTERM, and a cancelled dispatch or retired ask still reached
+ * the pane. A refusal cannot lose that race — nothing runs, so the rejection
+ * is proof that nothing was written.
  */
 export const runCli = (
   file: string,
@@ -242,6 +249,10 @@ export const runCli = (
   sigkillAfterMs: number = ABORT_SIGKILL_AFTER_MS
 ): Promise<void> =>
   new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('aborted before spawn — no child was started'))
+      return
+    }
     let killTimer: NodeJS.Timeout | null = null
     const onAbort = (): void => {
       // Ask nicely first — herdr flushes and exits on SIGTERM when healthy —
@@ -259,10 +270,9 @@ export const runCli = (
       if (error) reject(error)
       else resolve()
     })
-    if (signal !== undefined) {
-      if (signal.aborted) onAbort()
-      else signal.addEventListener('abort', onAbort, { once: true })
-    }
+    // The pre-aborted case rejected above, synchronously — by here the only
+    // abort that can arrive is a future one, and the listener owns it.
+    signal?.addEventListener('abort', onAbort, { once: true })
   })
 
 /**

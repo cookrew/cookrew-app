@@ -458,15 +458,22 @@ export class PtySession extends EventEmitter {
       this.lastRefusalInfo = { verdict, at: Date.now() }
       return verdict
     }
-    this.lastRefusalInfo = null
     // WRITE-AHEAD provenance (Sol r10 P0-1), after the verdict — refused
     // bytes never cross, so they never dirty — and BEFORE proc.write: the
     // pane outlives this process, and the durable dirty fact must land first
     // so a crash mid-keystroke leaves at worst a false-dirty the normal
-    // clears (observed submit, proven clear, retire) resolve, never a
-    // false-clean box the next process would dispatch into. `data` rides
-    // along so pure navigation (mouse, arrows) does not mark.
-    defaultProducerLease().noteBytesEntering(this.terminalId, data)
+    // clears (downstream witness, proven clear, proven pane death) resolve,
+    // never a false-clean box the next process would dispatch into. `data`
+    // rides along so pure navigation (mouse, arrows) does not mark. A mark
+    // that CANNOT COMMIT refuses the write outright (Sol r11 P0-1): an
+    // unprotected byte in a pane that outlives us is the false-clean crash
+    // window itself, so the WAL failing must fail the keystroke, not the
+    // guarantee.
+    if (!defaultProducerLease().noteBytesEntering(this.terminalId, data)) {
+      this.lastRefusalInfo = { verdict: 'refused', at: Date.now() }
+      return 'refused'
+    }
+    this.lastRefusalInfo = null
     this.proc.write(data)
     // Every input path (renderer keystrokes, `cookrew ask`, routines) funnels
     // through here, so turn tracking can observe prompts uniformly.
@@ -493,12 +500,15 @@ export class PtySession extends EventEmitter {
    * is held). The input event stays untagged: these ARE owner bytes, and the
    * tracker must learn the prompt from them exactly as it does from typing.
    */
-  writeFromOwner(data: string): void {
+  writeFromOwner(data: string): boolean {
     // Tagged paths mark too (Sol r10 P0-1): the WAL cares that bytes entered
-    // the box, not which producer's door they came through.
-    defaultProducerLease().noteBytesEntering(this.terminalId, data)
+    // the box, not which producer's door they came through. A mark that
+    // cannot commit refuses the write (Sol r11 P0-1) — false, no byte, no
+    // input event — and ownerSubmit surfaces the refusal.
+    if (!defaultProducerLease().noteBytesEntering(this.terminalId, data)) return false
     this.proc.write(data)
     this.emit('input', data)
+    return true
   }
 
   /**
@@ -508,14 +518,20 @@ export class PtySession extends EventEmitter {
    * source, so the tracker's fallback exemption keys on PROVENANCE, never on
    * byte equality — an owner typing the identical bytes is still an owner.
    */
-  writeFromDispatch(data: string): void {
-    // The dispatch's paste dirties the shared box exactly like owner bytes
-    // (Sol r10 P0-1): a crash between its paste and its CR strands the same
-    // residue, and the next process must adopt it fail-closed. The observed
-    // submit that consumes it clears the record through the tracker.
-    defaultProducerLease().noteBytesEntering(this.terminalId, data)
+  writeFromDispatch(data: string): boolean {
+    // The dispatch's paste marks with its PRODUCER IDENTITY and body (Sol
+    // r11 P0-3) before the paste crosses: a crash between paste and CR must
+    // adopt as everyone-blocking delivery residue — an owner Enter beside a
+    // dead dispatch's brief is the combined submit this plane forbids — and
+    // only the transcript witnessing the delivered prompt consumed (or
+    // proven pane death) clears it. A mark that cannot commit refuses the
+    // write (Sol r11 P0-1): the caller's stillValid/landing checks read the
+    // undelivered paste honestly, and its later bare CR submits an empty
+    // box, which every hosted TUI treats as a no-op.
+    if (!defaultProducerLease().noteDispatchBytesEntering(this.terminalId, data)) return false
     this.proc.write(data)
     this.emit('input', data, 'dispatch')
+    return true
   }
 
   /**
@@ -1066,7 +1082,20 @@ export class PtyManager {
     // when the terminal has no tracked PTY — `kill` alone no-ops there and
     // the respawn would reattach to the old session instead of rebooting.
     this.killDetached(terminalId)
-    await waitForTmuxDeath(sessionNameFor(terminalId), timeoutMs)
+    try {
+      await waitForTmuxDeath(sessionNameFor(terminalId), timeoutMs)
+    } catch (error) {
+      // The pane SURVIVED the kill deadline: its input box is still real, so
+      // the WAL fact protecting it must stand — and an unconfirmed dispatch
+      // delivery hardens to contamination, fail-closed (Sol r11 P1).
+      defaultProducerLease().noteKillFailed(terminalId)
+      throw error
+    }
+    // POSITIVELY proven pane death — the one event that may clear the box's
+    // durable provenance (Sol r11 P1): the input box the fact described no
+    // longer exists anywhere. Logical retirement (lease.retire) happened at
+    // the caller before the kill and deliberately kept the fact until now.
+    defaultProducerLease().clearProvenanceOnDeath(terminalId)
   }
 
   killDetached(terminalId: string): void {

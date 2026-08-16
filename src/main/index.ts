@@ -24,7 +24,7 @@ import {
   turnDetails
 } from './dispatch'
 import { HerdrHostMultiplexer } from './herdr-host-multiplexer'
-import { cancelAllAsks, pasteAndSubmit } from './ask'
+import { beginShutdown, cancelAllAsks, pasteAndSubmit } from './ask'
 import { defaultProducerLease } from './producer-lease'
 import {
   boardSourcesFrom,
@@ -968,6 +968,7 @@ function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
     // never left submitted/busy until the sweep (Sol r1 P1).
     retireTerminal(id, 'workspace removed')
     defaultProducerLease().forgetTerminal(id)
+    defaultProducerLease().clearProvenanceOnDeath(id)
     ptys.killDetached(id)
     turns.untrack(id)
     // Keep turn history as the recovery signal (see removeNode, R2 fix).
@@ -1209,6 +1210,9 @@ function retireTerminal(id: string, why: string): void {
 async function removeNode(id: string): Promise<void> {
   retireTerminal(id, 'terminal removed')
   defaultProducerLease().forgetTerminal(id)
+  // A permanently removed uuid never returns: its input-provenance fact
+  // protects nothing and would otherwise sit in the WAL forever.
+  defaultProducerLease().clearProvenanceOnDeath(id)
   // NOTE: turn history is deliberately NOT cleared on kill — it is the third
   // recovery net (resolveClaudeSessionId matches it to the real session when
   // no snapshot/registry ref exists). Disk-capped at 100/agent, negligible;
@@ -1361,6 +1365,7 @@ const teamClipboard = new TeamClipboard({
       if (node.kind !== 'terminal' || !nodeIds.includes(node.id)) continue
       retireTerminal(node.id, 'terminal cut')
       defaultProducerLease().forgetTerminal(node.id)
+      defaultProducerLease().clearProvenanceOnDeath(node.id)
       await ptys.killAndWait(node.id)
     }
   },
@@ -1370,6 +1375,7 @@ const teamClipboard = new TeamClipboard({
       if (node.kind !== 'terminal' || !nodeIds.includes(node.id)) continue
       retireTerminal(node.id, 'terminal cut')
       defaultProducerLease().forgetTerminal(node.id)
+      defaultProducerLease().clearProvenanceOnDeath(node.id)
       ptys.kill(node.id)
       ptys.killDetached(node.id)
       agents.deactivate(node.id)
@@ -1948,6 +1954,10 @@ app.on('before-quit', (event) => {
   // what separates "we lost sight of it" from "it never happened" for whoever
   // reads the ledger after the restart.
   clearInterval(dispatchSweep)
+  // Latch FIRST: no new ask may register after the drain snapshot begins
+  // (Sol r11) — then interrupt commissioned work and retire the lease
+  // generations, firing the abort seam into everything still in flight.
+  beginShutdown()
   dispatchService.interruptAll('app quit')
   // Panes stay alive across a quit, but no herdr CLI child may survive it:
   // retire every lease generation (fires the abort seam into active asks and
@@ -1960,7 +1970,19 @@ app.on('before-quit', (event) => {
   turns.flushHistories()
   turns.disposeAll()
   ptys.disposeAll()
+  // The bounded drain: asks, then every tracked herdr child, then in-flight
+  // folds with their directory debts — no CLI process and no unproven rename
+  // outlives the app (Sol r11).
   void cancelAllAsks()
+    .catch(() => undefined)
+    .then(() => {
+      const mux = multiplexer()
+      return mux instanceof HerdrHostMultiplexer
+        ? mux.cancelAllHerdrOperations(4000)
+        : undefined
+    })
+    .catch(() => undefined)
+    .then(() => turnStore.drainFolds(2000))
     .catch(() => undefined)
     .then(() => browserManager.shutdown())
     .catch((error) => console.error('Headless browser shutdown failed:', error))

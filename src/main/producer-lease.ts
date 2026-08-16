@@ -75,23 +75,38 @@
 // caller owns its hold's lifetime and releases in a `finally`; a retired
 // holder's release is a no-op, so retirement and orderly release compose.
 //
-// DURABLE PROVENANCE (Sol r10 P0-1): both marks — owner-editing and
-// contamination — describe the REAL input box of a pane that deliberately
-// outlives this process. An attached InputProvenanceStore makes them survive
-// it: dirtying writes hit the WAL before the byte crosses the pane boundary
-// (noteBytesEntering, called by the PTY write paths), marks write through,
-// clears and retirement clear durably, and a NEW process adopts a recorded
-// fact fail-closed at first sight of the terminal id. Without a store
-// (tests, embedders) the lease is the pure in-memory object it always was.
+// DURABLE PROVENANCE (Sol r10 P0-1, hardened per Sol r11 P0-1/2/3 and P1):
+// the marks — owner-editing, dispatch residue and contamination — describe
+// the REAL input box of a pane that deliberately outlives this process. An
+// attached InputProvenanceStore makes them survive it: dirtying writes hit
+// the WAL durably BEFORE the byte crosses the pane boundary
+// (noteBytesEntering / noteDispatchBytesEntering, called by the PTY write
+// paths — a mark that cannot commit REFUSES the write), and a NEW process
+// adopts a recorded fact fail-closed at first sight of the terminal id.
+// Clearing is proof-shaped: the transcript witness (witnessConsumed), the
+// one proven single-line erase (clearOwnerEditingProven), or PROVEN pane
+// death (clearProvenanceOnDeath, after killAndWait) — never the local input
+// echo, and never bare retirement, because retire() is bookkeeping while the
+// kill behind it can still fail. Without a store (tests, embedders) the
+// lease is the pure in-memory object it always was.
 //
 // Pure map-over-ids state otherwise — the whole matrix is unit-testable.
 
 import { randomUUID } from 'node:crypto'
-import type { InputProvenanceStore } from './input-provenance'
+import { dirtiesInputBox, pastedBodyOf } from './input-provenance'
+import type { InputProvenanceStore, ProvenanceDetail } from './input-provenance'
 
 /** The named refusal every producer surfaces while the buffer is dirty. */
 export const CONTAMINATED_REFUSAL =
   'input box contaminated by a cancelled delivery — restart the terminal to clear it'
+
+/**
+ * The refusal while an unconfirmed dispatch delivery may sit in the box (Sol
+ * r11 P0-3): unlike contamination it CAN clear without a restart — the
+ * transcript witnessing the delivered prompt consumed settles it.
+ */
+export const DISPATCH_RESIDUE_REFUSAL =
+  'input box holds an unconfirmed dispatch delivery — awaiting the transcript witness (or restart the terminal)'
 
 /**
  * Generation entries a retired-and-never-reused terminal id may keep (Sol r8
@@ -179,6 +194,15 @@ export class ProducerLease {
   private readonly live = new Set<string>()
   /** terminalId → the generation whose input buffer holds cancelled residue. */
   private readonly contaminated = new Map<string, number>()
+  /**
+   * terminalId → the generation carrying an UNCONFIRMED dispatch delivery
+   * (Sol r11 P0-3): its paste crossed (or is crossing) the pane boundary and
+   * no downstream witness has proven the submit consumed it. While set, every
+   * submit-capable producer refuses — owner included, exactly like
+   * contamination — but unlike contamination the transcript witness
+   * (`witnessConsumed`) clears it without a terminal restart.
+   */
+  private readonly dispatchResidue = new Map<string, number>()
   /** terminalId → the generation whose input box holds owner typing (r8 P0-1). */
   private readonly ownerEditing = new Map<string, number>()
   /**
@@ -240,18 +264,57 @@ export class ProducerLease {
   }
 
   /**
-   * Permanent terminal ending (Sol r7 P1): bump the generation so every hold
-   * acquired in the old lifetime becomes invisible — a stale async leg's late
-   * release no-ops, and the reborn terminal's producers acquire freely. The
-   * dead hold itself is DELETED (Sol r8 P2), not merely hidden: retired ids
-   * are UUIDs that never return, and hiding kept their entries for the
-   * process lifetime. Contamination and the owner-editing mark die with the
-   * process whose input box carried them — retirement is the ONLY exit for
-   * contamination (Sol r8 P0-2). Wired by the conductor into retireTerminal
-   * and backend death.
+   * LOGICAL terminal retirement (Sol r7 P1, split per Sol r11 P1): bump the
+   * generation so every hold acquired in the old lifetime becomes invisible —
+   * a stale async leg's late release no-ops, and the reborn terminal's
+   * producers acquire freely. The dead hold itself is DELETED (Sol r8 P2),
+   * not merely hidden: retired ids are UUIDs that never return, and hiding
+   * kept their entries for the process lifetime. Contamination and the
+   * owner-editing mark die IN MEMORY with the generation — retirement is the
+   * ONLY exit for contamination (Sol r8 P0-2). Wired by the conductor into
+   * retireTerminal and backend death.
+   *
+   * The DURABLE provenance fact deliberately SURVIVES this call (Sol r11 P1):
+   * retire is a bookkeeping statement, not proof the pane died — every caller
+   * kills best-effort AFTERWARDS, and a kill that fails (or is never awaited)
+   * leaves the real pane alive with its real input box. Only
+   * `clearProvenanceOnDeath` — called after killAndWait POSITIVELY proves
+   * pane death — clears the WAL record; until then a recover/rebind of the
+   * surviving pane re-adopts the fact fail-closed.
    */
   retire(terminalId: string): void {
-    this.retireOne(terminalId, true)
+    this.retireOne(terminalId)
+  }
+
+  /**
+   * Pane death PROVEN (Sol r11 P1): the kill was awaited and the backend
+   * confirmed the session gone, so the input box the WAL fact described no
+   * longer exists anywhere. This is the ONE durable provenance clear that
+   * retirement can produce. Kill failure must NOT call this — the fact stays
+   * (see noteKillFailed for the fail-closed upgrade).
+   */
+  clearProvenanceOnDeath(terminalId: string): void {
+    this.contaminated.delete(terminalId)
+    this.dispatchResidue.delete(terminalId)
+    this.ownerEditing.delete(terminalId)
+    this.provenance?.clear(terminalId)
+  }
+
+  /**
+   * The kill FAILED — the pane survived with its real input box (Sol r11 P1).
+   * Every fact keeps standing fail-closed, and an unconfirmed dispatch
+   * delivery is UPGRADED to contamination: its witness path died with the
+   * process that was watching for it, so the residue is now KNOWN stranded
+   * until a future kill actually succeeds.
+   */
+  noteKillFailed(terminalId: string): void {
+    const generation = this.generationOf(terminalId)
+    const residueInMemory = this.dispatchResidue.get(terminalId) === generation
+    const residueDurable = this.provenance?.recordOf(terminalId) === 'dispatch-delivery'
+    if (!residueInMemory && !residueDurable) return
+    this.dispatchResidue.delete(terminalId)
+    this.contaminated.set(terminalId, generation)
+    this.provenance?.markContaminated(terminalId)
   }
 
   /**
@@ -266,18 +329,28 @@ export class ProducerLease {
    * ending — clears the durable record.
    */
   retireAll(): void {
+    // Shutdown upgrade (Sol r11 P0-3): a dispatch delivery still unresolved
+    // at quit was cancelled by the teardown itself — its transcript witness
+    // will never arrive in this process, so the durable fact hardens to
+    // contamination before the generations die.
+    this.provenance?.upgradeUnresolvedDeliveries()
     const known = new Set<string>([
       ...this.live,
       ...this.generations.keys(),
       ...this.holds.keys(),
       ...this.contaminated.keys(),
+      ...this.dispatchResidue.keys(),
       ...this.ownerEditing.keys()
     ])
-    for (const id of known) this.retireOne(id, false)
+    for (const id of known) this.retireOne(id)
   }
 
-  /** One retirement; `durable` says whether the pane itself is gone too. */
-  private retireOne(terminalId: string, durable: boolean): void {
+  /**
+   * One LOGICAL retirement. Durable provenance is untouched by design (Sol
+   * r11 P1): panes end by kill, and only a proven kill clears the WAL —
+   * `clearProvenanceOnDeath`, after the conductor's killAndWait.
+   */
+  private retireOne(terminalId: string): void {
     const next = this.generationOf(terminalId) + 1
     this.holds.delete(terminalId)
     // Delete-then-set refreshes Map insertion order, so the tombstone bound
@@ -285,11 +358,8 @@ export class ProducerLease {
     this.generations.delete(terminalId)
     this.generations.set(terminalId, next)
     this.contaminated.delete(terminalId)
+    this.dispatchResidue.delete(terminalId)
     this.ownerEditing.delete(terminalId)
-    // A permanently ended pane takes its input box with it: the durable fact
-    // (and any unadopted record) is proven moot — the r10 WAL's one
-    // retirement clear. Shutdown (retireAll) deliberately skips this.
-    if (durable) this.provenance?.clear(terminalId)
     this.boundGenerations()
     for (const listener of [...this.retireListeners]) listener(terminalId)
   }
@@ -375,16 +445,31 @@ export class ProducerLease {
   }
 
   /**
-   * Does the terminal's input box hold cancelled-delivery residue? While
-   * true, every submit-capable producer refuses with CONTAMINATED_REFUSAL.
-   * There is deliberately NO clear operation (Sol r8 P0-2): no byte this
-   * process can send or observe PROVES a multi-line residue gone, so the
-   * flag holds until `retire` resets the terminal generation — a fresh
-   * process with a provably empty input box.
+   * Must every submit-capable producer refuse at this terminal's box? True
+   * for cancelled-delivery contamination — whose only exit is retirement
+   * (Sol r8 P0-2): no byte this process can send or observe PROVES a
+   * multi-line residue gone — AND for unconfirmed dispatch-delivery residue
+   * (Sol r11 P0-3), which exits through the transcript witness instead.
+   *
+   * The residue rides THIS query on purpose: the dispatch delivery legs (and
+   * every other producer) already consult isContaminated before their
+   * irreversible submission, so folding the residue in blocks owner and
+   * dispatch alike with no new call sites. hasDispatchResidue names which
+   * fact refused when the message matters.
    */
   isContaminated(terminalId: string): boolean {
     this.adopt(terminalId)
-    return this.contaminated.get(terminalId) === this.generationOf(terminalId)
+    const generation = this.generationOf(terminalId)
+    return (
+      this.contaminated.get(terminalId) === generation ||
+      this.dispatchResidue.get(terminalId) === generation
+    )
+  }
+
+  /** Is the refusing fact specifically an unconfirmed dispatch delivery? */
+  hasDispatchResidue(terminalId: string): boolean {
+    this.adopt(terminalId)
+    return this.dispatchResidue.get(terminalId) === this.generationOf(terminalId)
   }
 
   /**
@@ -406,26 +491,73 @@ export class ProducerLease {
   }
 
   /**
-   * The box PROVABLY emptied (Sol r9 P0-1/P0-2 — proof, not observation):
-   * a positively observed owner submit consumed the buffer while tracked,
-   * or the one proven clear op landed (Ctrl-U on a single-line buffer the
-   * model watched being typed, byte by byte). Called by the tracker from the
-   * same buffer feed that set the mark; `retire` clears it with everything
-   * else. The tracker — never this method's callers at large — owns the
-   * proof burden: whitespace, multiline state and unknown-buffer control
-   * bytes must keep the mark.
+   * The MODEL saw the box consumed (Sol r9 P0-1/P0-2, demoted to observation
+   * per Sol r11 P0-2): an observed owner submit emptied the tracker's buffer
+   * model, so the in-memory composing mark drops — owner typing and dispatch
+   * admission resume on the model's word, exactly as before. The DURABLE
+   * record deliberately STANDS: the submit the model observed is a local
+   * input-stream echo — an enqueue, not proof the bytes crossed the
+   * asynchronous PTY write and consumed the real box. It clears when a
+   * downstream witness lands (`witnessConsumed`, wired from the session-file
+   * reconcile and the scrape's settled turn), and until then a crash adopts
+   * the box dirty — the safe direction. The store is told about the local
+   * consumption so bytes typed AFTER this submit re-stamp the record's
+   * markedAt and the earlier submit's witness cannot clear their protection.
    */
   clearOwnerEditing(terminalId: string): void {
     // Adopt BEFORE clearing: a pending durable fact must not resurrect the
     // mark on the next query after proof already consumed it here.
     this.adopt(terminalId)
     this.ownerEditing.delete(terminalId)
-    // The durable record clears with the proof (Sol r10 P0-1) — UNLESS the
-    // stronger contaminated fact stands: contamination's only exit is
-    // retirement, in memory and on disk alike.
-    if (this.contaminated.get(terminalId) !== this.generationOf(terminalId)) {
-      this.provenance?.clear(terminalId)
+    this.provenance?.noteLocalConsumption(terminalId)
+  }
+
+  /**
+   * The one PROVEN local clear (Sol r9 P0-2, kept per Sol r11 P0-2): Ctrl-U
+   * on a single-line buffer the model watched being typed byte by byte. The
+   * bytes were erased IN the box, so there is nothing left for a downstream
+   * witness to consume — the durable record clears here, unless a stronger
+   * fact (contamination, unconfirmed delivery) stands.
+   */
+  clearOwnerEditingProven(terminalId: string): void {
+    this.adopt(terminalId)
+    this.ownerEditing.delete(terminalId)
+    const generation = this.generationOf(terminalId)
+    if (this.contaminated.get(terminalId) === generation) return
+    if (this.dispatchResidue.get(terminalId) === generation) return
+    const durable = this.provenance?.recordOf(terminalId)
+    if (durable === 'contaminated' || durable === 'dispatch-delivery') return
+    this.provenance?.clear(terminalId)
+  }
+
+  /**
+   * THE DOWNSTREAM WITNESS (Sol r11 P0-2/P0-3): the transcript (or a settled
+   * scrape turn) proved a submit at/after the mark consumed the shared box.
+   * Clears the owner-editing mark, the dispatch residue, and the durable
+   * record — everything except contamination, whose only exit stays proven
+   * pane death. Wired by the tracker from the session-file reconcile
+   * (afterCommit) and the scrape's turn settlement.
+   */
+  witnessConsumed(terminalId: string): void {
+    this.adopt(terminalId)
+    this.dispatchResidue.delete(terminalId)
+    if (this.provenance !== null && this.provenance.recordOf(terminalId) !== 'contaminated') {
+      this.provenance.clear(terminalId)
     }
+    // An owner-editing mark still standing here describes bytes that did NOT
+    // ride the witnessed submit — typing the guard admitted beside a
+    // dispatch's turn, or an adopted composition nothing has consumed. The
+    // mark survives and its durable protection is re-recorded; only the
+    // ordinary owner clears (observed submit + its own witness, the proven
+    // erase, proven pane death) end it.
+    if (this.ownerEditing.get(terminalId) === this.generationOf(terminalId)) {
+      this.provenance?.markDirty(terminalId)
+    }
+  }
+
+  /** The durable fact's full detail — the tracker's witness reads this. */
+  provenanceDetail(terminalId: string): ProvenanceDetail | null {
+    return this.provenance?.detailOf(terminalId) ?? null
   }
 
   /** Is the owner composing in this terminal's input box right now? */
@@ -435,28 +567,52 @@ export class ProducerLease {
   }
 
   /**
-   * WRITE-AHEAD dirty fact (Sol r10 P0-1): called by the PTY write paths —
-   * tagged and untagged alike — BEFORE the bytes cross the pane boundary, and
-   * by pasteAndSubmit before its paste write. `data`, when given, lets the
-   * store skip chunks that cannot leave input-box content (mouse reports,
-   * arrows, fully-consumed submits — see dirtiesInputBox). Purely durable: the
-   * in-memory owner-editing mark stays the tracker's to maintain, because a
-   * dispatch's own tagged paste dirties the BOX without being owner
-   * composition.
+   * WRITE-AHEAD dirty fact (Sol r10 P0-1, refusal-bearing per Sol r11 P0-1):
+   * called by the PTY write paths — tagged and untagged alike — BEFORE the
+   * bytes cross the pane boundary, and by pasteAndSubmit before its paste
+   * write. `data`, when given, lets the store skip chunks that cannot leave
+   * input-box content (mouse reports, arrows, a bare Enter — see
+   * dirtiesInputBox; submit-carrying content chunks now MARK, Sol r11 P0-2).
+   * Purely durable: the in-memory owner-editing mark stays the tracker's to
+   * maintain, because a dispatch's own tagged paste dirties the BOX without
+   * being owner composition.
+   *
+   * Returns FALSE when the WAL could not commit the fact durably — the
+   * caller MUST refuse the pane write. Storeless leases (tests, embedders)
+   * always allow: they never promised durability.
    */
-  noteBytesEntering(terminalId: string, data?: string): void {
-    this.provenance?.markDirty(terminalId, data)
+  noteBytesEntering(terminalId: string, data?: string): boolean {
+    return this.provenance?.markDirty(terminalId, data) ?? true
+  }
+
+  /**
+   * The dispatch delivery's own WRITE-AHEAD fact (Sol r11 P0-3), called by
+   * PtySession.writeFromDispatch before the paste crosses: producer identity
+   * AND the delivered body land durably first, and the in-memory residue
+   * blocks every submit-capable producer from this instant until the
+   * transcript witnesses the delivered prompt consumed (witnessConsumed) or
+   * the pane provably dies. Non-content chunks (the delivery's own trailing
+   * CR) mark nothing. Same refusal contract as noteBytesEntering.
+   */
+  noteDispatchBytesEntering(terminalId: string, data: string): boolean {
+    if (!dirtiesInputBox(data)) {
+      return this.provenance?.markDirty(terminalId, data) ?? true
+    }
+    this.dispatchResidue.set(terminalId, this.generationOf(terminalId))
+    return this.provenance?.markDispatchDelivery(terminalId, pastedBodyOf(data)) ?? true
   }
 
   /**
    * First sight of a terminal id in this process: adopt the previous
-   * process's durable fact fail-closed — 'dirty' as the owner-editing mark,
+   * process's durable fact fail-closed — 'owner-dirty' as the owner-editing
+   * mark, 'dispatch-delivery' as everyone-blocking residue (Sol r11 P0-3),
    * 'contaminated' as contamination — at the CURRENT generation, from where
-   * the ordinary clear rules (observed submit, proven single-line clear,
-   * retirement) govern it. Absence adopts clean: every dirtying write was
-   * WAL-first, so no record is evidence of an empty box. The false-dirty
-   * asymmetry (crash between WAL mark and byte write) resolves through the
-   * same rules — one submit or restart clears it.
+   * the ordinary clear rules (downstream witness, proven single-line clear,
+   * retirement/proven death) govern it. Absence adopts clean: every dirtying
+   * write was WAL-first, so no record is evidence of an empty box — unless
+   * the load itself FAULTED, in which case the store answers 'owner-dirty'
+   * for every id (Sol r11 P0-1). The false-dirty asymmetry (crash between
+   * WAL mark and byte write) resolves through the same rules.
    */
   private adopt(terminalId: string): void {
     if (this.provenance === null) return
@@ -464,6 +620,7 @@ export class ProducerLease {
     if (fact === null) return
     const current = this.generationOf(terminalId)
     if (fact === 'contaminated') this.contaminated.set(terminalId, current)
+    else if (fact === 'dispatch-delivery') this.dispatchResidue.set(terminalId, current)
     else this.ownerEditing.set(terminalId, current)
   }
 
@@ -476,6 +633,7 @@ export class ProducerLease {
     holds: number
     generations: number
     contaminated: number
+    dispatchResidue: number
     ownerEditing: number
     live: number
   } {
@@ -483,6 +641,7 @@ export class ProducerLease {
       holds: this.holds.size,
       generations: this.generations.size,
       contaminated: this.contaminated.size,
+      dispatchResidue: this.dispatchResidue.size,
       ownerEditing: this.ownerEditing.size,
       live: this.live.size
     }
@@ -511,7 +670,14 @@ export class ProducerLease {
     for (const id of this.generations.keys()) {
       if (this.generations.size <= GENERATION_TOMBSTONES) return
       if (this.live.has(id)) continue
-      if (this.holds.has(id) || this.contaminated.has(id) || this.ownerEditing.has(id)) continue
+      if (
+        this.holds.has(id) ||
+        this.contaminated.has(id) ||
+        this.dispatchResidue.has(id) ||
+        this.ownerEditing.has(id)
+      ) {
+        continue
+      }
       this.generations.delete(id)
     }
   }

@@ -3,6 +3,7 @@ import { multiplexer, type PtySession } from './pty'
 import type { Multiplexer } from './multiplexer'
 import {
   CONTAMINATED_REFUSAL,
+  DISPATCH_RESIDUE_REFUSAL,
   defaultProducerLease,
   ownerHolder,
   type ProducerHolder,
@@ -94,8 +95,10 @@ export async function pasteAndSubmit(
   // and the write costs only a false-dirty the normal clears resolve. The
   // real PTY write paths mark too — this covers duck-typed `write` callbacks
   // and keeps the ordering guarantee at the primitive that owns the window.
+  // A mark that cannot COMMIT stops the delivery before any byte crosses
+  // (Sol r11 P0-1): 'cancelled' is honest — nothing went out, no residue.
   if (typeof session.terminalId === 'string') {
-    lease.noteBytesEntering(session.terminalId)
+    if (!lease.noteBytesEntering(session.terminalId)) return 'cancelled'
   }
   write(`${BRACKETED_PASTE_START}${body}${BRACKETED_PASTE_END}`)
   await new Promise((resolve) => setTimeout(resolve, submitDelayMs(body.length)))
@@ -130,41 +133,87 @@ export async function askTerminal(
   const graceMs = options.graceMs ?? 1500
   const lease = options.lease ?? defaultProducerLease()
 
-  const before = session.fullText()
+  // The shutdown latch (Sol r11 P1): an ask arriving after beginShutdown —
+  // a socket/mobile request already awaiting its body when before-quit ran —
+  // must not slip past the drain snapshot and spawn a child nothing owns.
+  assertAsksAdmitted()
 
-  // herdr-native ask: the multiplexer submits the prompt (its own paste and
-  // submit handling) — no typed bracketed paste, no tuned submit delay. The
-  // reply still comes out of the mirror diff, so the shape callers see is
-  // identical. Null = herdr could not deliver at all; fall through to the
-  // typed path exactly as before this existed.
-  const mux = multiplexer()
-  if (mux?.capabilities.agentLifecycle && (mux.submitAgent ?? mux.promptAgent) !== undefined) {
-    const native = await nativeAsk(session, prompt, { quiescenceMs, timeoutMs, graceMs }, lease, mux)
-    if (native !== null) return diffOutput(before, native)
+  // ONE CANCELLATION SCOPE for the WHOLE ask (Sol r11 P1): native leg, typed
+  // fallback, waitForReply/waitUntilIdle, grace and quiescence all live under
+  // this controller — registered before the first await, settled in the
+  // finally — so cancelAllAsks and terminal retirement reach every phase.
+  // The r10 registration covered only nativeAsk: a failed native submission
+  // fell through to ownerSubmit + waitForReply with no signal, and its
+  // ten-minute herdr wait child was invisible to the quit drain.
+  const terminalId = session.terminalId
+  const generation = lease.generationOf(terminalId)
+  const abort = new AbortController()
+  const active = registerActiveAsk(abort)
+  const unsubscribe = lease.onRetire((retired) => {
+    if (retired === terminalId) abort.abort()
+  })
+  // Every awaited phase ends with this: retirement throws the honest
+  // 'retired' error, and a shutdown abort (generation intact, signal fired)
+  // its own — never falling through to read the session as a reply.
+  const assertLive = (): void => {
+    if (lease.generationOf(terminalId) !== generation) {
+      throw new Error('the terminal was retired mid-ask')
+    }
+    if (abort.signal.aborted) throw new Error('the ask was cancelled at app shutdown')
   }
+  try {
+    const before = session.fullText()
 
-  // The typed path routes through THE submit primitive (Sol r7 P0-2):
-  // ownerSubmit classifies, acquires the lease, runs the armed-dispatch
-  // preemption, holds across paste → delay → CR through the owner-tagged
-  // write path, and releases — the same door every other PTY producer now
-  // uses. A refusal is an honest error at the submit site, never a silent
-  // byte drop followed by quiescence over an agent that got nothing.
-  const verdict = await ownerSubmit(session, `${prompt}\r`, { lease })
-  if (!verdict.ok) throw new Error(verdict.reason)
+    // herdr-native ask: the multiplexer submits the prompt (its own paste and
+    // submit handling) — no typed bracketed paste, no tuned submit delay. The
+    // reply still comes out of the mirror diff, so the shape callers see is
+    // identical. Null = herdr could not deliver at all; fall through to the
+    // typed path exactly as before this existed.
+    const mux = multiplexer()
+    if (mux?.capabilities.agentLifecycle && (mux.submitAgent ?? mux.promptAgent) !== undefined) {
+      const native = await nativeAsk(
+        session,
+        prompt,
+        { quiescenceMs, timeoutMs, graceMs },
+        lease,
+        mux,
+        abort.signal
+      )
+      if (native !== null) return diffOutput(before, native)
+    }
+    assertLive()
 
-  await waitForReply(session, { quiescenceMs, timeoutMs, graceMs })
+    // The typed path routes through THE submit primitive (Sol r7 P0-2):
+    // ownerSubmit classifies, acquires the lease, runs the armed-dispatch
+    // preemption, holds across paste → delay → CR through the owner-tagged
+    // write path, and releases — the same door every other PTY producer now
+    // uses. A refusal is an honest error at the submit site, never a silent
+    // byte drop followed by quiescence over an agent that got nothing. The
+    // ask's signal rides along so a quit inside the paste delay stops the CR.
+    const verdict = await ownerSubmit(session, `${prompt}\r`, { lease, signal: abort.signal })
+    if (!verdict.ok) throw new Error(verdict.reason)
 
-  return diffOutput(before, session.fullText())
+    await waitForReply(session, { quiescenceMs, timeoutMs, graceMs }, abort.signal)
+    assertLive()
+
+    return diffOutput(before, session.fullText())
+  } finally {
+    unsubscribe()
+    activeAsks.delete(active)
+    active.settle()
+  }
 }
 
 /**
- * SHUTDOWN CANCELLATION (Sol r10 P1): every native ask registers its
- * AbortController here for the app's before-quit. Retirement already aborts a
- * single terminal's asks via lease.onRetire, but app quit neither retires the
- * surviving terminals nor otherwise reaches an ask blocked inside a
- * `herdr agent prompt/wait` child — which could outlive Electron until its
- * ten-minute timeout. The registry is bounded by in-flight asks: each entry is
- * added on entry to nativeAsk and settled/removed in its `finally`.
+ * SHUTDOWN CANCELLATION (Sol r10 P1, whole-ask scope per Sol r11 P1): every
+ * ask registers its AbortController here for the app's before-quit — for its
+ * ENTIRE duration, typed fallback and reply waits included. Retirement
+ * already aborts a single terminal's asks via lease.onRetire, but app quit
+ * neither retires the surviving terminals nor otherwise reaches an ask
+ * blocked inside a `herdr agent prompt/wait` child — which could outlive
+ * Electron until its ten-minute timeout. The registry is bounded by
+ * in-flight asks: each entry is added on entry to askTerminal and
+ * settled/removed in its `finally`.
  */
 interface ActiveAsk {
   readonly abort: AbortController
@@ -187,32 +236,66 @@ function registerActiveAsk(abort: AbortController): ActiveAsk {
   return entry
 }
 
-/** In-flight native asks right now — diagnostics and the shutdown gate. */
+/** In-flight asks right now — diagnostics and the shutdown gate. */
 export function activeAskCount(): number {
   return activeAsks.size
 }
 
 /**
- * THE before-quit primitive (Sol r10 P1), called by the conductor before the
- * final app.quit: fire every active ask's AbortController — each abort
- * TERM-kills its CLI child, with the runner's own 2s SIGKILL fallback behind
- * it — and await the bounded settlements, capped at CANCEL_ALL_ASKS_CAP_MS so
- * a child that ignores everything cannot hold the quit hostage. The panes
- * (and the agents in them) stay alive for the next launch; what this proves
- * is that NO herdr CLI child of ours survives the Electron process. Safe to
- * call with nothing in flight, and more than once.
+ * THE SHUTDOWN LATCH (Sol r11 P1). Once set, every NEW ask —
+ * askTerminal/askRaw over IPC, socket or mobile — is refused with an honest
+ * error instead of being admitted behind the drain's back: a request already
+ * awaiting its body when before-quit ran used to register AFTER
+ * cancelAllAsks snapshotted the Set and spawn a child nothing owned.
+ * Exported for the conductor's before-quit; cancelAllAsks latches it too, so
+ * draining and admission can never overlap even if the conductor forgets.
+ */
+let shutdownLatched = false
+
+export function beginShutdown(): void {
+  shutdownLatched = true
+}
+
+/** Tests re-arm admission between cases; production never calls this. */
+export function resetShutdownForTests(): void {
+  shutdownLatched = false
+}
+
+function assertAsksAdmitted(): void {
+  if (shutdownLatched) {
+    throw new Error('the app is shutting down — new asks are refused')
+  }
+}
+
+/**
+ * THE before-quit primitive (Sol r10 P1, loop-drain per Sol r11 P1), called
+ * by the conductor before the final app.quit: latch admission, then fire
+ * every active ask's AbortController — each abort TERM-kills its CLI child,
+ * with the runner's own 2s SIGKILL fallback behind it — and await the
+ * settlements until the registry is EMPTY, bounded by capMs so a child that
+ * ignores everything cannot hold the quit hostage. A LOOP over fresh
+ * snapshots, not one shot: an ask that slipped past the latch check before
+ * the latch landed registers late, and the next iteration aborts it too. The
+ * panes (and the agents in them) stay alive for the next launch; what this
+ * proves is that NO herdr CLI child of ours survives the Electron process.
+ * Safe to call with nothing in flight, and more than once.
  */
 export async function cancelAllAsks(capMs = CANCEL_ALL_ASKS_CAP_MS): Promise<void> {
-  const entries = [...activeAsks]
-  for (const entry of entries) entry.abort.abort()
-  if (entries.length === 0) return
-  await Promise.race([
-    Promise.all(entries.map((entry) => entry.settled)).then(() => undefined),
-    new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, capMs)
-      timer.unref?.()
-    })
-  ])
+  beginShutdown()
+  const deadline = Date.now() + capMs
+  while (activeAsks.size > 0) {
+    const entries = [...activeAsks]
+    for (const entry of entries) entry.abort.abort()
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) return
+    await Promise.race([
+      Promise.all(entries.map((entry) => entry.settled)).then(() => undefined),
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, remaining)
+        timer.unref?.()
+      })
+    ])
+  }
 }
 
 /**
@@ -238,104 +321,92 @@ export async function cancelAllAsks(capMs = CANCEL_ALL_ASKS_CAP_MS): Promise<voi
  * surfacing (PtySession.write verdicts, TurnTracker.refusalReason) is what
  * makes that long hold visible instead of silent.
  *
- * THE ABORT SEAM (Sol r8 P1, extended past the ack per r9 P1-4): the
- * terminal retiring mid-await fires an AbortController threaded into the
- * backend call — killing the CLI child — AND into the post-acknowledgement
- * reply-wait (waitUntilIdle, the quiescence interval, even the grace sleep),
- * so retirement cancels every phase of the ask, not just the submission. The
- * generation captured at entry is re-checked after EVERY awaited phase
- * before any session output is read: a retired ask throws honestly rather
- * than falling through to type into — or return output rendered by — the
- * reborn terminal.
+ * THE ABORT SEAM (Sol r8 P1, extended past the ack per r9 P1-4, owned by the
+ * WHOLE ask per r11 P1): the caller's AbortSignal — one scope covering the
+ * entire askTerminal, wired to retirement and to cancelAllAsks — threads
+ * into the backend call (killing the CLI child) AND into the
+ * post-acknowledgement reply-wait (waitUntilIdle, the quiescence interval,
+ * even the grace sleep), so retirement/shutdown cancels every phase of the
+ * ask, not just the submission. The generation captured at entry is
+ * re-checked after EVERY awaited phase before any session output is read: a
+ * retired ask throws honestly rather than falling through to type into — or
+ * return output rendered by — the reborn terminal.
  */
 async function nativeAsk(
   session: PtySession,
   prompt: string,
   timing: { quiescenceMs: number; timeoutMs: number; graceMs: number },
   lease: ProducerLease,
-  mux: Multiplexer
+  mux: Multiplexer,
+  signal: AbortSignal
 ): Promise<string | null> {
   const terminalId = session.terminalId
   const generation = lease.generationOf(terminalId)
-  const abort = new AbortController()
-  // Registered for app shutdown (Sol r10 P1): cancelAllAsks fires this same
-  // controller, so quit reaches the blocked CLI child exactly as retirement
-  // does. Settled in the finally — the registry is bounded by in-flight work.
-  const active = registerActiveAsk(abort)
-  const unsubscribe = lease.onRetire((retired) => {
-    if (retired === terminalId) abort.abort()
-  })
   // Every awaited phase ends with this: retirement throws the honest
   // 'retired' error, and a shutdown abort (generation intact, signal fired)
   // its own — never falling through to read the session as a reply.
   const assertLive = (): void => {
     assertGeneration(lease, terminalId, generation)
-    if (abort.signal.aborted) throw new Error('the ask was cancelled at app shutdown')
+    if (signal.aborted) throw new Error('the ask was cancelled at app shutdown')
   }
+  const holder = acquireOwnerLease(lease, session, `${prompt}\r`)
+  let outcome: 'done' | 'submitted' | 'failed'
   try {
-    const holder = acquireOwnerLease(lease, session, `${prompt}\r`)
-    let outcome: 'done' | 'submitted' | 'failed'
-    try {
-      outcome =
-        mux.submitAgent !== undefined
-          ? await mux.submitAgent(session.sessionName, prompt, timing.timeoutMs, abort.signal)
-          : await mux.promptAgent!(session.sessionName, prompt, timing.timeoutMs, abort.signal)
-    } catch (error) {
-      // A rejection from a killed child is the RETIREMENT (or the shutdown)
-      // speaking, not a submission fault — name which instead of leaking an
-      // AbortError. Generation mismatch distinguishes them: retirement bumps
-      // it, a shutdown abort does not.
-      if (lease.generationOf(terminalId) !== generation) {
-        throw new Error('the terminal was retired mid-ask')
-      }
-      if (abort.signal.aborted) {
-        throw new Error('the ask was cancelled at app shutdown')
-      }
-      throw error
-    } finally {
-      // Submission acknowledgement (or the attempt settled): the
-      // bytes-in-flight window is over. The TURN keeps running — that is the
-      // tracker stamp's job, not the lease's.
-      lease.release(terminalId, holder)
+    outcome =
+      mux.submitAgent !== undefined
+        ? await mux.submitAgent(session.sessionName, prompt, timing.timeoutMs, signal)
+        : await mux.promptAgent!(session.sessionName, prompt, timing.timeoutMs, signal)
+  } catch (error) {
+    // A rejection from a killed child is the RETIREMENT (or the shutdown)
+    // speaking, not a submission fault — name which instead of leaking an
+    // AbortError. Generation mismatch distinguishes them: retirement bumps
+    // it, a shutdown abort does not.
+    if (lease.generationOf(terminalId) !== generation) {
+      throw new Error('the terminal was retired mid-ask')
     }
-    // Retired or shutdown-cancelled mid-await (the abort fired, or the call
-    // settled first by luck). The dead leg must not fall through and type
-    // into the reborn terminal's input box.
-    assertLive()
-    if (outcome === 'failed') return null
-    // The tracker learns prompts from session.write's input event; a
-    // herdr-side submission never passes through write, so announce it —
-    // otherwise every herdr-native ask records as a promptless phantom turn.
-    session.noteExternalInput(prompt + '\r')
-    if (outcome === 'done') return session.fullText()
-    if (mux.submitAgent !== undefined) {
-      // Acknowledged submission, reply pending: the ordinary reply-wait —
-      // waitUntilIdle where the backend answers, quiescence corroborating —
-      // runs with the lease already free. The retirement signal rides along
-      // (Sol r9 P1-4): a terminal retiring AFTER the ack must cancel this
-      // wait's child and timers, not leave them running out the timeout —
-      // and the generation is re-checked before any session read, so the
-      // dead leg never returns output rendered by the REBORN terminal.
-      await waitForReply(session, timing, abort.signal)
-      assertLive()
-      return session.fullText()
+    if (signal.aborted) {
+      throw new Error('the ask was cancelled at app shutdown')
     }
-    // promptAgent 'submitted': the prompt IS in the pane — herdr just could
-    // not observe the agent finishing (a stalled detector). Typing again
-    // double-submits; measured live as a queued duplicate in the agent's
-    // input box. So wait it out by OUTPUT QUIESCENCE — the one completion
-    // signal that needs no detector — and skip waitUntilIdle for the same
-    // reason the detector stalled: a stuck 'idle' answers instantly and
-    // truncates the reply. Abortable and generation-checked like the
-    // reply-wait above (Sol r9 P1-4).
-    await waitForQuiescence(session, timing, abort.signal)
+    throw error
+  } finally {
+    // Submission acknowledgement (or the attempt settled): the
+    // bytes-in-flight window is over. The TURN keeps running — that is the
+    // tracker stamp's job, not the lease's.
+    lease.release(terminalId, holder)
+  }
+  // Retired or shutdown-cancelled mid-await (the abort fired, or the call
+  // settled first by luck). The dead leg must not fall through and type
+  // into the reborn terminal's input box.
+  assertLive()
+  if (outcome === 'failed') return null
+  // The tracker learns prompts from session.write's input event; a
+  // herdr-side submission never passes through write, so announce it —
+  // otherwise every herdr-native ask records as a promptless phantom turn.
+  session.noteExternalInput(prompt + '\r')
+  if (outcome === 'done') return session.fullText()
+  if (mux.submitAgent !== undefined) {
+    // Acknowledged submission, reply pending: the ordinary reply-wait —
+    // waitUntilIdle where the backend answers, quiescence corroborating —
+    // runs with the lease already free. The retirement/shutdown signal rides
+    // along (Sol r9 P1-4): a terminal retiring AFTER the ack must cancel
+    // this wait's child and timers, not leave them running out the timeout —
+    // and the generation is re-checked before any session read, so the
+    // dead leg never returns output rendered by the REBORN terminal.
+    await waitForReply(session, timing, signal)
     assertLive()
     return session.fullText()
-  } finally {
-    unsubscribe()
-    activeAsks.delete(active)
-    active.settle()
   }
+  // promptAgent 'submitted': the prompt IS in the pane — herdr just could
+  // not observe the agent finishing (a stalled detector). Typing again
+  // double-submits; measured live as a queued duplicate in the agent's
+  // input box. So wait it out by OUTPUT QUIESCENCE — the one completion
+  // signal that needs no detector — and skip waitUntilIdle for the same
+  // reason the detector stalled: a stuck 'idle' answers instantly and
+  // truncates the reply. Abortable and generation-checked like the
+  // reply-wait above (Sol r9 P1-4).
+  await waitForQuiescence(session, timing, signal)
+  assertLive()
+  return session.fullText()
 }
 
 /**
@@ -392,6 +463,13 @@ function acquireOwnerLease(
   if (held?.kind === 'owner') {
     throw new Error('another owner submission is in flight')
   }
+  // Residue named before contamination: isContaminated covers both facts
+  // (Sol r11 P0-3 — one query blocks every producer), but an unconfirmed
+  // delivery clears on the transcript witness, and the refusal should say so
+  // instead of demanding a restart.
+  if (lease.hasDispatchResidue(terminalId)) {
+    throw new Error(DISPATCH_RESIDUE_REFUSAL)
+  }
   if (lease.isContaminated(terminalId)) {
     throw new Error(CONTAMINATED_REFUSAL)
   }
@@ -429,6 +507,12 @@ function guardOwnerBytes(session: PtySession, bytes: string): void {
 export interface OwnerSubmitOptions {
   /** Injectable for tests; production shares the process-wide default. */
   lease?: ProducerLease
+  /**
+   * The owning ask's cancellation scope (Sol r11 P1): consulted before each
+   * delivery write, so a shutdown/retirement abort inside the paste delay
+   * stops the CR exactly as a lost lease does.
+   */
+  signal?: AbortSignal
 }
 
 /** What became of one owner submission attempt. Refusals carry their name. */
@@ -476,6 +560,9 @@ export async function ownerSubmit(
       ? { ok: true, submitted: false }
       : { ok: false, reason: refusalReason(verdict) }
   }
+  if (options.signal?.aborted === true) {
+    return { ok: false, reason: 'the submission was cancelled at app shutdown' }
+  }
   let holder: ProducerHolder
   try {
     holder = acquireOwnerLease(lease, session, bytes)
@@ -485,9 +572,17 @@ export async function ownerSubmit(
   // The holder's own bytes travel the TAGGED path the guard exempts — a
   // real PtySession always has it. Duck-typed sessions (tests, embedders)
   // without one degrade to plain write, which their unwired guards allow.
-  const writeOwner = (data: string): void => {
-    if (typeof session.writeFromOwner === 'function') session.writeFromOwner(data)
-    else session.write(data)
+  // The boolean is the WAL's word (Sol r11 P0-1): false means the durable
+  // mark could not commit and NO byte crossed — surfaced as a refusal, never
+  // swallowed. Void-returning legacy fakes read as delivered.
+  const writeOwner = (data: string): boolean => {
+    if (typeof session.writeFromOwner === 'function') {
+      return (session.writeFromOwner(data) as unknown) !== false
+    }
+    // Fallback write: only an explicit refusal verdict reads as refused —
+    // duck-typed fakes returning anything else (void, push counts) delivered.
+    const verdict = session.write(data) as unknown
+    return verdict !== 'refused' && verdict !== 'preempt-failed'
   }
   try {
     const trailing = /[\r\n]+$/.exec(bytes)
@@ -497,16 +592,24 @@ export async function ownerSubmit(
         session,
         body,
         writeOwner,
-        () => holdsLease(lease, terminalId, holder),
+        () => holdsLease(lease, terminalId, holder) && options.signal?.aborted !== true,
         lease
       )
       return outcome === 'submitted'
         ? { ok: true, submitted: true }
-        : { ok: false, reason: 'the submission was cancelled mid-delivery (terminal retired)' }
+        : {
+            ok: false,
+            reason: 'the submission was cancelled mid-delivery (terminal retired or app shutdown)'
+          }
     }
     // A bare Enter or raw bytes with embedded CRs: one synchronous write
     // under the hold — acquire, submit, release, no async window.
-    writeOwner(bytes)
+    if (!writeOwner(bytes)) {
+      return {
+        ok: false,
+        reason: 'the write-ahead provenance mark could not commit — the write was refused'
+      }
+    }
     return { ok: true, submitted: true }
   } finally {
     lease.release(terminalId, holder)
@@ -620,7 +723,9 @@ export async function askRaw(
   // paste-swallow hazard askTerminal guards against), a bare Enter or control
   // sequence a single guarded/leased write. A refusal — another producer's
   // submission in flight, a contaminated buffer — is thrown, not silently
-  // dropped and answered with a stale viewport.
+  // dropped and answered with a stale viewport. The shutdown latch refuses
+  // raw asks arriving after before-quit exactly like askTerminal (r11 P1).
+  assertAsksAdmitted()
   const verdict = await ownerSubmit(session, rawInput, options)
   if (!verdict.ok) throw new Error(verdict.reason)
   await new Promise((resolve) => setTimeout(resolve, 800))

@@ -1266,27 +1266,28 @@ describe('interruption cancels the queued delivery before any prompt write (Sol 
 
   it('a cancellation between the attempted fact and the submission retracts exactly that fact', async () => {
     // The tightest race: the leg has already registered its attempted fact
-    // when the interrupt lands (modeled via the pre-submission deepCapture,
-    // which runs in the same synchronous stretch). The revalidation
-    // immediately before promptAgent catches it: no submission, and the
-    // attempted fact is taken back under its own generation.
+    // when the interrupt lands. Modeled via the noteDelivered dep itself —
+    // since Sol r11 the deep capture is followed by a revalidation, so the
+    // fact's own registration is the last injectable point inside the
+    // synchronous pre-submission stretch. The revalidation immediately
+    // before promptAgent catches it: no submission, and the attempted fact
+    // is taken back under its own generation.
     let prompts = 0
     const delivered: Array<{ prompt: string; gen: DispatchGeneration }> = []
     const retracted: Array<{ prompt: string; gen: DispatchGeneration }> = []
     let service!: DispatchService
     service = new DispatchService(
       deps({
-        captureDeep: () => {
-          // The owner preempts while the leg is between its pane reads and
-          // the irreversible submission.
-          service.interruptAgent('agent-1', 'owner preempted')
-          return '> '
-        },
         promptAgent: async () => {
           prompts += 1
           return 'done'
         },
-        noteDelivered: (_agentId, prompt, gen) => delivered.push({ prompt, gen }),
+        noteDelivered: (_agentId, prompt, gen) => {
+          delivered.push({ prompt, gen })
+          // The owner preempts in the beat after the fact registers and
+          // before the irreversible submission.
+          if (delivered.length === 1) service.interruptAgent('agent-1', 'owner preempted')
+        },
         retractDelivered: (_agentId, prompt, gen) => retracted.push({ prompt, gen })
       })
     )
@@ -1425,6 +1426,121 @@ describe('interruption cancels the queued delivery before any prompt write (Sol 
     expect(service.get('dsp-1')?.state).toBe('running')
     service.completeTurn('dsp-1', { turnIndex: 1 })
     expect(service.get('dsp-1')?.state).toBe('done')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r11 P0-4 / P1 — the delivery AbortController exists from the FIRST
+// awaited preflight, and every awaited preflight is followed by a
+// revalidation in the same synchronous stretch as what comes next. The r10
+// shape created the controller only after the captures: a cancellation that
+// fired while a capture (or the registry resolution inside submitAgent) ran
+// had no token to fire, and the leg marched on to the irreversible
+// submission.
+// ---------------------------------------------------------------------------
+
+describe('the abort seam covers the awaited preflights (Sol r11)', () => {
+  it('the controller is registered BEFORE the first capture, and an interrupt during it submits nothing', async () => {
+    let releaseCapture!: (view: string) => void
+    const captureGate = new Promise<string>((resolve) => (releaseCapture = resolve))
+    let prompts = 0
+    const delivered: string[] = []
+    const service = new DispatchService(
+      deps({
+        capture: () => captureGate, // the context-full look, hanging
+        promptAgent: async () => {
+          prompts += 1
+          return 'done'
+        },
+        noteDelivered: (_agentId, prompt) => delivered.push(prompt)
+      })
+    )
+    const response = await service.dispatch('agent-1', { text: PROMPT })
+    expect(response.status).toBe(202)
+    // Let the leg off its setImmediate hop and into the hanging capture —
+    // the abort entry must ALREADY exist there (Sol r11 P1): this is the
+    // token every cancellation path fires, and the signal submitAgent
+    // revalidates across its own awaited resolution.
+    await new Promise((resolve) => setImmediate(resolve))
+    const aborts = (service as unknown as { deliveryAborts: Map<string, AbortController> })
+      .deliveryAborts
+    expect(aborts.has('dsp-1')).toBe(true)
+    const signal = aborts.get('dsp-1')!.signal
+    expect(signal.aborted).toBe(false)
+
+    service.interruptAgent('agent-1', 'owner preempted mid-capture')
+    expect(signal.aborted).toBe(true) // cancelDelivery reached a live token
+    releaseCapture('99% context used\n> ')
+    await service.settled('dsp-1')
+
+    // The revalidation after the capture stood the leg down: no submission,
+    // no fact, and the canceller's verdict untouched — not even the
+    // context-full 'failed' the released capture would have argued for.
+    expect(prompts).toBe(0)
+    expect(delivered).toEqual([])
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'interrupted',
+      error: 'owner preempted mid-capture'
+    })
+    expect(aborts.size).toBe(0) // the entry died with the leg
+  })
+
+  it('an interrupt during the PRE-SUBMISSION deep capture stands down the same way', async () => {
+    let releaseDeep!: (view: string) => void
+    const deepGate = new Promise<string>((resolve) => (releaseDeep = resolve))
+    let prompts = 0
+    const delivered: string[] = []
+    const service = new DispatchService(
+      deps({
+        captureDeep: () => deepGate,
+        promptAgent: async () => {
+          prompts += 1
+          return 'done'
+        },
+        noteDelivered: (_agentId, prompt) => delivered.push(prompt)
+      })
+    )
+    await service.dispatch('agent-1', { text: PROMPT })
+    await new Promise((resolve) => setImmediate(resolve))
+    service.interruptAgent('agent-1', 'owner preempted mid-deep-capture')
+    releaseDeep('> ')
+    await service.settled('dsp-1')
+
+    // The attempted fact registers AFTER the deep capture — a leg cancelled
+    // inside it must assert nothing at all.
+    expect(prompts).toBe(0)
+    expect(delivered).toEqual([])
+    expect(service.get('dsp-1')?.state).toBe('interrupted')
+  })
+
+  it('the wired submitAgent receives a signal that is already live through its own awaited resolution', async () => {
+    // The dispatch side of the round-11 gap: the signal handed to
+    // submitAgent is the same controller cancelDelivery fires, created
+    // before any await — so a backend that revalidates it after its `agent
+    // get` (the multiplexer does; see herdr-host-multiplexer-wait tests)
+    // refuses the submission a mid-resolution interrupt already cancelled.
+    let observed: AbortSignal | undefined
+    let releaseResolution!: () => void
+    const resolutionGate = new Promise<void>((resolve) => (releaseResolution = resolve))
+    const service = new DispatchService(
+      deps({
+        promptAgent: undefined,
+        submitAgent: async (_name, _prompt, _timeoutMs, signal) => {
+          observed = signal
+          await resolutionGate // the backend's own awaited agent-get
+          return signal?.aborted ? 'failed' : 'submitted'
+        }
+      })
+    )
+    await service.dispatch('agent-1', { text: PROMPT })
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(observed).toBeInstanceOf(AbortSignal)
+    expect(observed?.aborted).toBe(false)
+    service.interruptAgent('agent-1', 'interrupted mid-resolution')
+    expect(observed?.aborted).toBe(true) // fired WHILE the backend awaited
+    releaseResolution()
+    await service.settled('dsp-1')
+    expect(service.get('dsp-1')?.state).toBe('interrupted')
   })
 })
 

@@ -1519,6 +1519,35 @@ export class DispatchService {
     // not even context-full: a 'failed' from a cancelled leg would challenge
     // the canceller's parked intent on the lattice.
     if (!this.deliveryLive(dispatchId, agentId)) return
+    // The abort seam (Sol r8 P1), armed BEFORE the first awaited preflight
+    // (Sol r11 P1): cancellation paths — interrupt, release, retirement,
+    // backend death — fire this controller via cancelDelivery, and from the
+    // very first capture there is a token for them to fire. The r10 shape
+    // created it only after the captures, so a cancellation during those
+    // awaits had no controller and no signal to consult — and the signal is
+    // exactly what submitAgent revalidates across its own awaited agent
+    // resolution (the round-11 gap). Bounded by in-flight legs: the entry
+    // dies in the outer finally.
+    const abort = new AbortController()
+    this.deliveryAborts.set(dispatchId, abort)
+    try {
+      await this.deliverGuarded(dispatchId, agentId, sessionName, prompt, gen, abort)
+    } finally {
+      this.deliveryAborts.delete(dispatchId)
+    }
+  }
+
+  /** The delivery leg proper, run under a registered abort controller. */
+  private async deliverGuarded(
+    dispatchId: string,
+    agentId: string,
+    sessionName: string,
+    prompt: string,
+    gen: DispatchGeneration,
+    abort: AbortController
+  ): Promise<void> {
+    const submitAgent = this.deps.submitAgent
+    const promptAgent = this.deps.promptAgent
     // Context-full is checked HERE, not at admission (Sol r3 P1-15): it needs
     // a pane capture, and a capture is a CLI child the 202 must not wait on
     // (awaited here — and with the async herdr wiring, never a synchronous
@@ -1527,7 +1556,12 @@ export class DispatchService {
     // deliver is the honest outcome — a delivery FAILURE the caller can act
     // on, using the plain screen capture on purpose (a deep one can dredge up
     // a stale "100% context used" footer from before a /compact).
-    if (contextExhausted(await this.deps.capture(sessionName))) {
+    const contextView = await this.deps.capture(sessionName)
+    // Revalidated after EVERY awaited preflight (Sol r11 P0-4): a
+    // cancellation that fired while the capture ran owns the record — this
+    // leg asserts nothing, not even context-full.
+    if (!this.deliveryLive(dispatchId, agentId) || abort.signal.aborted) return
+    if (contextExhausted(contextView)) {
       this.update(dispatchId, { state: 'failed', error: 'context-full' })
       return
     }
@@ -1537,6 +1571,9 @@ export class DispatchService {
     // the single post-submission one below are the only pane reads this leg
     // makes, reused by every question that follows.
     const before = await this.deepCapture(sessionName)
+    // The same revalidation after the deep capture (Sol r11 P0-4) — no fact
+    // has been registered yet, so a cancelled leg simply stands down.
+    if (!this.deliveryLive(dispatchId, agentId) || abort.signal.aborted) return
     // The ATTEMPTED-delivery fact goes to the tracker BEFORE the blocking
     // native submission (Sol r4 P1): herdr `agent prompt` blocks until the
     // agent leaves working, so a fact registered only on return can arrive
@@ -1575,12 +1612,13 @@ export class DispatchService {
       })
       return
     }
-    // The LAST revalidation before the irreversible submission (Sol r5 P0-2),
-    // in the same synchronous stretch as the write itself — no await sits
-    // between this check and promptAgent, so nothing can settle the record in
-    // between. A leg that lost its record, its reservation or its token here
-    // retracts ONLY its own attempted fact and writes no prompt.
-    if (!this.deliveryLive(dispatchId, agentId)) {
+    // The LAST revalidation before the irreversible submission (Sol r5 P0-2;
+    // signal included per Sol r11 P0-4), in the same synchronous stretch as
+    // the write itself — no await sits between this check and promptAgent,
+    // so nothing can settle the record in between. A leg that lost its
+    // record, its reservation or its token here retracts ONLY its own
+    // attempted fact and writes no prompt.
+    if (!this.deliveryLive(dispatchId, agentId) || abort.signal.aborted) {
       this.lease.release(agentId, holder)
       this.deps.retractDelivered?.(agentId, prompt, gen)
       return
@@ -1601,13 +1639,6 @@ export class DispatchService {
       })
       return
     }
-    // The abort seam (Sol r8 P1): cancellation paths — interrupt, release,
-    // retirement, backend death — fire this controller via cancelDelivery,
-    // and a wiring that threads the signal into execFile kills the blocking
-    // CLI child NOW instead of at the ten-minute timeout. Bounded by
-    // in-flight legs: the entry dies in the finally below.
-    const abort = new AbortController()
-    this.deliveryAborts.set(dispatchId, abort)
     let outcome: 'done' | 'submitted' | 'failed'
     try {
       // The ack mode when the backend has it (Sol r9 P1-3): the await under
@@ -1636,11 +1667,12 @@ export class DispatchService {
         console.error('Dispatch submission threw:', describeSubmissionError(error, prompt.length))
       }
     } finally {
-      this.deliveryAborts.delete(dispatchId)
       // Submission acknowledged (or the attempt settled): the bytes-in-flight
       // window is over, and the TURN the submission opened is guarded by the
       // reservation, not the lease. A hold seized mid-flight by a committed
-      // owner preemption makes this a holder-mismatch no-op.
+      // owner preemption makes this a holder-mismatch no-op. The abort entry
+      // itself lives on to deliver()'s outer finally (Sol r11 P1) — the
+      // landing checks and the fallback below still run under its token.
       this.lease.release(agentId, holder)
     }
 

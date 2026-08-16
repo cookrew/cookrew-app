@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   promptArgs,
@@ -280,16 +283,24 @@ describe('runCli — abort escalates SIGTERM to SIGKILL (Sol r9 P1-5)', () => {
     expect(outcome.rejected && outcome.signal).toBe('SIGTERM')
   }, 15_000)
 
-  it('a signal already aborted at call time still kills the child (no lost race)', async () => {
+  it('a signal already aborted at call time REFUSES WITHOUT SPAWNING (Sol r11 P0-4)', async () => {
+    // The r9 shape spawned first and killed second — a race the child could
+    // win: herdr could type the prompt in the beat between exec and SIGTERM.
+    // A refusal cannot lose that race, and the marker file is the proof: a
+    // child that ran, however briefly, would have written it.
     const abort = new AbortController()
     abort.abort()
+    const marker = path.join(tmpdir(), `cookrew-preabort-${process.pid}-${Date.now()}`)
     const promise = runCli(
       process.execPath,
-      ['-e', 'setInterval(() => {}, 1000)'],
+      ['-e', `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'spawned')`],
       process.env,
       abort.signal,
       200
     )
-    await expect(promise).rejects.toBeTruthy()
+    await expect(promise).rejects.toThrow(/aborted before spawn/)
+    // Give a wrongly-spawned child every chance to leave its evidence.
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    expect(existsSync(marker)).toBe(false)
   }, 15_000)
 })

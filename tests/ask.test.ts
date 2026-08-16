@@ -3,10 +3,12 @@ import {
   activeAskCount,
   askRaw,
   askTerminal,
+  beginShutdown,
   cancelAllAsks,
   decodeRawEscapes,
   diffOutput,
   pasteAndSubmit,
+  resetShutdownForTests,
   submitDelayMs
 } from '../src/main/ask'
 import { ProducerLease, ownerHolder } from '../src/main/producer-lease'
@@ -681,6 +683,9 @@ describe('askTerminal — abort on terminal retirement (Sol r8 P1)', () => {
 describe('cancelAllAsks — the shutdown primitive (Sol r10 P1)', () => {
   afterEach(() => {
     muxHolder.current = null
+    // cancelAllAsks latches the shutdown admission gate (Sol r11 P1);
+    // later suites still admit asks.
+    resetShutdownForTests()
   })
 
   const askSession = (terminalId: string): PtySession =>
@@ -867,5 +872,120 @@ describe('askTerminal — the submission-ack lease window (Sol r8 P1)', () => {
     await vi.advanceTimersByTimeAsync(3000)
     await promise
     expect(writes).toEqual([paste('typed instead'), '\r'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r11 P1 — one cancellation scope per ask, an admission latch, and a
+// drain that returns only when the registry is EMPTY. The r10 registration
+// covered only nativeAsk: a failed native submission fell through to the
+// typed path whose reply-wait no shutdown could reach, and an ask admitted
+// after the one-shot snapshot survived the quit entirely.
+// ---------------------------------------------------------------------------
+
+describe('shutdown latch + whole-ask cancellation scope (Sol r11 P1)', () => {
+  afterEach(() => {
+    muxHolder.current = null
+    resetShutdownForTests()
+    vi.useRealTimers()
+  })
+
+  const typedSession = (writes: string[], terminalId = 'term-1'): PtySession =>
+    ({
+      terminalId,
+      sessionName: `cookrew_${terminalId}`,
+      fullText: () => '',
+      viewportText: () => '',
+      // Never quiet: the typed reply-wait holds until cancelled.
+      idleFor: () => 0,
+      write: (data: string) => {
+        writes.push(data)
+      },
+      noteExternalInput: () => undefined
+    }) as unknown as PtySession
+
+  it('an ask entering after beginShutdown is refused with an honest error', async () => {
+    const lease = new ProducerLease()
+    beginShutdown()
+    await expect(askTerminal(typedSession([]), 'late ask', { lease })).rejects.toThrow(
+      'shutting down'
+    )
+    await expect(askRaw(typedSession([]), 'late raw', { lease })).rejects.toThrow('shutting down')
+    // Nothing registered: the drain has nothing of theirs to own.
+    expect(activeAskCount()).toBe(0)
+  })
+
+  it('the TYPED fallback reply-wait is cancelled at quit — not just the native leg', async () => {
+    vi.useFakeTimers()
+    const lease = new ProducerLease()
+    const writes: string[] = []
+    // No mux at all: the pure typed path, which r10 never registered.
+    const promise = askTerminal(typedSession(writes), 'quit me', { lease })
+    promise.catch(() => undefined)
+    // The paste and its delayed CR go out; the ask is now inside
+    // waitForQuiescence, held open forever by idleFor() === 0.
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(writes).toEqual([paste('quit me'), '\r'])
+    expect(activeAskCount()).toBe(1)
+
+    // before-quit: the whole-ask scope reaches the quiescence wait NOW.
+    await cancelAllAsks()
+    await expect(promise).rejects.toThrow('cancelled at app shutdown')
+    expect(activeAskCount()).toBe(0)
+  })
+
+  it('a quit inside the typed paste delay stops the CR', async () => {
+    vi.useFakeTimers()
+    const lease = new ProducerLease()
+    const writes: string[] = []
+    const promise = askTerminal(typedSession(writes), 'half delivered', { lease })
+    promise.catch(() => undefined)
+    // Only the paste is out; the delayed CR is still pending.
+    await vi.advanceTimersByTimeAsync(1)
+    expect(writes).toEqual([paste('half delivered')])
+
+    const drained = cancelAllAsks()
+    await vi.advanceTimersByTimeAsync(3000)
+    await drained
+    await expect(promise).rejects.toThrow()
+    // The CR never followed the cancelled paste — no submit of a dead ask.
+    expect(writes).toEqual([paste('half delivered')])
+    expect(activeAskCount()).toBe(0)
+  })
+
+  it('cancelAllAsks returns only once the registry is EMPTY (drain, not snapshot)', async () => {
+    const lease = new ProducerLease()
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      // The child settles a tick AFTER its abort — a one-shot snapshot that
+      // failed to await settlement would return with the entry still live.
+      promptAgent: (_name, _prompt, _timeout, signal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener(
+            'abort',
+            () => setTimeout(() => reject(new Error('AbortError')), 10),
+            { once: true }
+          )
+        })
+    } satisfies FakeMux
+    const first = askTerminal(typedSession([], 'term-a'), 'one', { lease })
+    const second = askTerminal(typedSession([], 'term-b'), 'two', { lease })
+    first.catch(() => undefined)
+    second.catch(() => undefined)
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(activeAskCount()).toBe(2)
+
+    await cancelAllAsks()
+    expect(activeAskCount()).toBe(0)
+    await expect(first).rejects.toThrow('cancelled at app shutdown')
+    await expect(second).rejects.toThrow('cancelled at app shutdown')
+  })
+
+  it('cancelAllAsks latches admission itself — a race with a late caller cannot re-admit', async () => {
+    const lease = new ProducerLease()
+    await cancelAllAsks()
+    await expect(askTerminal(typedSession([]), 'post-drain ask', { lease })).rejects.toThrow(
+      'shutting down'
+    )
   })
 })
