@@ -97,6 +97,20 @@ describe('PtySession.write consults the owner guard BEFORE proc.write', () => {
     session.dispose()
   })
 
+  it("'refused' (a dispatch delivery holds the producer lease) drops the bytes too", () => {
+    // Sol r6 P0-1: while a delivery is mid-paste, non-preempting owner bytes
+    // must not enter the shared input buffer. Any non-'allow' verdict stops
+    // the write before proc.write.
+    const session = makeSession()
+    const inputs: string[] = []
+    session.on('input', (data: string) => inputs.push(data))
+    session.beforeOwnerInput = () => 'refused'
+    session.write('owner typing mid-delivery')
+    expect(procWrites).toEqual([])
+    expect(inputs).toEqual([])
+    session.dispose()
+  })
+
   it('allow lets the write through unchanged', () => {
     const session = makeSession()
     session.beforeOwnerInput = () => 'allow'

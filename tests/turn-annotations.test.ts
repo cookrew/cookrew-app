@@ -7,6 +7,7 @@
 // read back whole.
 
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -19,7 +20,7 @@ import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { TurnStore } from '../src/main/turn-store'
-import { AnnotationStore } from '../src/main/turn-annotations'
+import { ANNOTATION_LOG_COMPACT_MIN_OPS, AnnotationStore } from '../src/main/turn-annotations'
 import {
   hasAnnotation,
   mergeAnnotation,
@@ -42,7 +43,14 @@ beforeEach(() => {
   mkdirSync(annDir, { recursive: true })
   store = new TurnStore(dir, annDir)
 })
-afterEach(() => rmSync(path.dirname(dir), { recursive: true, force: true }))
+afterEach(() => {
+  try {
+    chmodSync(annDir, 0o700)
+  } catch {
+    // already gone
+  }
+  rmSync(path.dirname(dir), { recursive: true, force: true })
+})
 
 const rec = (index: number, over: Partial<TurnRecord> = {}): TurnRecord => ({
   index,
@@ -294,6 +302,118 @@ describe('TurnStore — annotations survive the same journeys as the history', (
   it('sanitizes the terminal id for the sidecar filename too', () => {
     save([rec(1, { title: 'recap' })], '../evil/../../id')
     expect(existsSync(path.join(annDir, 'evilid.json'))).toBe(true)
+  })
+})
+
+const annotationLog = (id = 't1'): string => path.join(annDir, `${id}.log.jsonl`)
+
+/**
+ * Sol r6 P1: the incremental path must be O(changed) ON DISK, not just in
+ * records visited. The previous persist enumerated, sorted and serialized the
+ * COMPLETE map whenever one annotation changed; now a change is one appended
+ * op line, and the snapshot is only rewritten by the full path or compaction.
+ */
+describe('AnnotationStore — updates append ops, never reserialize the snapshot', () => {
+  it('one changed annotation costs one op line; the snapshot bytes never move', () => {
+    const annotations = new AnnotationStore(annDir)
+    expect(annotations.save('t1', [rec(1, { title: 'one' }), rec(2)])).toBe(true)
+    const snapshotBefore = readFileSync(annotationFile(), 'utf8')
+
+    expect(annotations.update('t1', [rec(2, { seenAt: 5 })])).toBe(true)
+
+    expect(readFileSync(annotationFile(), 'utf8')).toBe(snapshotBefore)
+    expect(readFileSync(annotationLog(), 'utf8').trim().split('\n')).toHaveLength(1)
+  })
+
+  it('a fresh store replays snapshot + log back into one picture', () => {
+    const annotations = new AnnotationStore(annDir)
+    annotations.save('t1', [rec(1, { title: 'one' })])
+    annotations.update('t1', [rec(2, { seenAt: 5 })])
+
+    const replayed = new AnnotationStore(annDir).load('t1')
+    expect(replayed.get(1)).toEqual({ title: 'one' })
+    expect(replayed.get(2)).toEqual({ seenAt: 5 })
+  })
+
+  it('a clear op removes an annotation across a restart, exactly as the rebuild would', () => {
+    const annotations = new AnnotationStore(annDir)
+    annotations.save('t1', [rec(1, { title: 'one' }), rec(2, { seenAt: 5 })])
+    annotations.update('t1', [rec(2)])
+
+    expect(new AnnotationStore(annDir).load('t1').get(2)).toBeUndefined()
+    // The snapshot still holds the stale key — the log's clear op wins.
+    expect(JSON.parse(readFileSync(annotationFile(), 'utf8'))).toMatchObject({
+      '2': { seenAt: 5 },
+    })
+  })
+
+  it('folds the log into the snapshot once replay weight crosses the threshold', () => {
+    const annotations = new AnnotationStore(annDir)
+    annotations.save('t1', [rec(1, { title: 'recap' })])
+    for (let i = 1; i <= ANNOTATION_LOG_COMPACT_MIN_OPS; i += 1) {
+      expect(annotations.update('t1', [rec(1, { title: 'recap', seenAt: i })])).toBe(true)
+    }
+    // The op that crossed the threshold triggered compaction: log folded away,
+    // snapshot carries the latest value, and a fresh store reads it whole.
+    expect(existsSync(annotationLog())).toBe(false)
+    expect(JSON.parse(readFileSync(annotationFile(), 'utf8'))).toEqual({
+      '1': { title: 'recap', seenAt: ANNOTATION_LOG_COMPACT_MIN_OPS },
+    })
+    expect(new AnnotationStore(annDir).load('t1').get(1)).toEqual({
+      title: 'recap',
+      seenAt: ANNOTATION_LOG_COMPACT_MIN_OPS,
+    })
+  })
+})
+
+/**
+ * Sol r6 P1: a write that did not land must never be remembered as saved.
+ * Both paths return success, publish to memory only on success, retain the
+ * un-landed work, and retry it on the next flush.
+ */
+describe('AnnotationStore — a failed write is retained and retried, never claimed', () => {
+  it('save: fails closed once, then the retry lands the same bytes', () => {
+    const annotations = new AnnotationStore(annDir)
+    chmodSync(annDir, 0o500)
+    expect(annotations.save('t1', [rec(1, { title: 'recap' })])).toBe(false)
+    // Nothing on disk — and nothing forgotten: reads still see the candidate.
+    expect(existsSync(annotationFile())).toBe(false)
+    expect(annotations.load('t1').get(1)).toEqual({ title: 'recap' })
+
+    chmodSync(annDir, 0o700)
+    expect(annotations.save('t1', [rec(1, { title: 'recap' })])).toBe(true)
+    expect(JSON.parse(readFileSync(annotationFile(), 'utf8'))).toEqual({
+      '1': { title: 'recap' },
+    })
+    expect(new AnnotationStore(annDir).load('t1').get(1)).toEqual({ title: 'recap' })
+  })
+
+  it('save: an update after the failure folds into the retried rebuild', () => {
+    const annotations = new AnnotationStore(annDir)
+    chmodSync(annDir, 0o500)
+    expect(annotations.save('t1', [rec(1, { title: 'recap' })])).toBe(false)
+
+    chmodSync(annDir, 0o700)
+    expect(annotations.update('t1', [rec(2, { seenAt: 5 })])).toBe(true)
+    const replayed = new AnnotationStore(annDir).load('t1')
+    expect(replayed.get(1)).toEqual({ title: 'recap' })
+    expect(replayed.get(2)).toEqual({ seenAt: 5 })
+  })
+
+  it('update: fails closed once, then retries WITHOUT duplicating the op', () => {
+    const annotations = new AnnotationStore(annDir)
+    annotations.save('t1', [rec(1, { title: 'one' })])
+    chmodSync(annDir, 0o500)
+    expect(annotations.update('t1', [rec(2, { seenAt: 5 })])).toBe(false)
+    expect(existsSync(annotationLog())).toBe(false)
+    // Retained, not claimed: memory still carries the dirty op…
+    expect(annotations.load('t1').get(2)).toEqual({ seenAt: 5 })
+
+    chmodSync(annDir, 0o700)
+    // …and replaying the SAME record writes it exactly once.
+    expect(annotations.update('t1', [rec(2, { seenAt: 5 })])).toBe(true)
+    expect(readFileSync(annotationLog(), 'utf8').trim().split('\n')).toHaveLength(1)
+    expect(new AnnotationStore(annDir).load('t1').get(2)).toEqual({ seenAt: 5 })
   })
 })
 

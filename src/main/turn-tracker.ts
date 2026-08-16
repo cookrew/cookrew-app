@@ -12,6 +12,10 @@ import { promptAnswersDispatch, type FinalTurnAnswer } from './dispatch'
 import type { HistoryDelta } from '../shared/session-turns'
 export type { HistoryDelta }
 import { agentStatus } from './herdr-agent-status'
+// The one-producer lease (Sol r6 P0-1): the PTY guard consults it so owner
+// bytes are refused while a dispatch DELIVERY is mid-submission — the shared
+// input box may hold its half-ingested paste.
+import { defaultProducerLease, type ProducerLease } from './producer-lease'
 import { summarizeTurn, TurnSummarizer } from './sous'
 import type { TurnStore } from './turn-store'
 import {
@@ -159,6 +163,18 @@ function carryOverOnto(incoming: TurnRecord, replaced: TurnRecord): TurnRecord {
     ...(replaced.seenAt !== undefined ? { seenAt: replaced.seenAt } : {}),
     ...(replaced.scrollLine !== undefined ? { scrollLine: replaced.scrollLine } : {})
   }
+}
+
+/**
+ * Position of the LAST record carrying `index` — scanned from the tail
+ * because the record a fresh title targets is almost always the newest one,
+ * so the common case costs O(1), not O(history). -1 when absent.
+ */
+function lastPositionOfIndex(records: readonly TurnRecord[], index: number): number {
+  for (let at = records.length - 1; at >= 0; at -= 1) {
+    if (records[at].index === index) return at
+  }
+  return -1
 }
 
 function promptUnprovable(recovered: string | null, attempted: string): boolean {
@@ -373,10 +389,16 @@ export class TurnTracker extends EventEmitter {
    */
   onOwnerPreempt: ((terminalId: string) => boolean | void) | null = null
 
-  /** Both injectable for tests; store null = in-memory only. */
+  /**
+   * All injectable for tests; store null = in-memory only. The lease defaults
+   * to the process-wide instance so production shares ONE set of holds with
+   * askTerminal and the dispatch delivery legs — a private lease would
+   * reserve nothing.
+   */
   constructor(
     private summarize: TurnSummarizer = summarizeTurn,
-    private store: TurnStore | null = null
+    private store: TurnStore | null = null,
+    private lease: ProducerLease = defaultProducerLease()
   ) {
     super()
   }
@@ -470,6 +492,14 @@ export class TurnTracker extends EventEmitter {
    * the durable closure loses the queue and costs at most one duplicate
    * latency sample, which is honest and self-limiting; persisting it would
    * buy nothing but a stale guess to be wrong with later.
+   *
+   * RESTART-LOCAL AT-MOST-ONCE IS THE METRIC CONTRACT (Sol r6 P2, by
+   * documented decision rather than persistence): within one process
+   * lifetime an exchange's latency rides at most one public 'turn' event;
+   * the emission-to-durable-closure window ACROSS a restart is explicitly
+   * excluded from that claim. Any analysis validating the design against the
+   * latency tail must exclude samples whose exchange spans a restart, not
+   * lean on this queue surviving one.
    */
   private scrapeEmitted = new Map<string, ScrapeObservation[]>()
 
@@ -1520,19 +1550,38 @@ export class TurnTracker extends EventEmitter {
    * The PTY write guard's tracker half (Sol r4 P0-1a), wired by the conductor
    * onto PtySession.beforeOwnerInput and consulted BEFORE proc.write. A pure
    * PEEK: feedPromptBuffer is side-effect-free here — the real state advances
-   * only when the delivered bytes come back through handleInput. Only a write
-   * that would SUBMIT a new prompt at a terminal carrying an armed dispatch
-   * triggers preemption; everything else (typing, menu answers on a live
-   * waiting turn, shells, unarmed terminals) is allowed through untouched.
+   * only when the delivered bytes come back through handleInput.
+   *
+   * TWO LAYERS since Sol r6 P0-1. While a dispatch DELIVERY holds the
+   * producer lease — its paste possibly half-ingested in the shared input box
+   * — every owner byte that does not carry a preempting submission is REFUSED
+   * outright: typing, menu Enters and bare Enters alike would land inside (or
+   * submit) a buffer containing a partial dispatch delivery. A SUBMITTING
+   * owner write still routes to the durable preemption below: owner takeover
+   * interrupts the dispatch first, and the displaced delivery leg's
+   * stillValid check stops every byte it has not yet written. While a
+   * dispatch is merely ARMED (stamped, not delivering — no lease hold),
+   * behavior is unchanged: typing and menu answers pass, only a new-prompt
+   * submission triggers preemption.
    */
   guardOwnerInput(terminalId: string, data: string): OwnerInputVerdict {
+    const delivering = this.lease.holderOf(terminalId)?.kind === 'dispatch'
     const t = this.tracked.get(terminalId)
-    if (!t || !t.agent) return 'allow'
-    if (!this.pendingDispatch.has(terminalId)) return 'allow'
+    if (!t || !t.agent) return delivering ? 'refused' : 'allow'
+    if (!delivering && !this.pendingDispatch.has(terminalId)) return 'allow'
     const fed = feedPromptBuffer(t.promptBuffer, data, t.inPaste, t.heldInput)
-    if (t.phase === 'waiting' && fed.submitted.length > 0 && t.prompt !== null) return 'allow'
+    if (t.phase === 'waiting' && fed.submitted.length > 0 && t.prompt !== null) {
+      // A menu answer submits whatever the input box holds — mid-delivery
+      // that includes the dispatch's partial paste, so it is refused with
+      // the other non-preempting bytes.
+      return delivering ? 'refused' : 'allow'
+    }
     const submits = fed.submitted.some((s) => s.length > 0)
-    if (!submits) return 'allow'
+    if (!submits) return delivering ? 'refused' : 'allow'
+    // A delivery holding the lease with NO armed stamp left to preempt is a
+    // leg still unwinding (the interrupt already disarmed it): fail closed
+    // until its hold clears rather than submit beside its residue.
+    if (delivering && !this.pendingDispatch.has(terminalId)) return 'refused'
     return this.preemptOnOwnerSubmit(terminalId, undefined)
   }
 
@@ -1914,6 +1963,16 @@ export class TurnTracker extends EventEmitter {
    * Final Sous pass once a turn completed: summarize prompt + full reply and
    * back-fill the freshly appended TurnRecord. This is what gives short
    * turns (which end before any mid-turn refresh fires) their title.
+   *
+   * INDEXED DELTA, not a whole-history map/full-save (Sol r6, r5 P1's
+   * evidence): a title is an annotation-only change to ONE record. Locate it,
+   * replace just that slot in the tracker-private buffer (the sanctioned
+   * in-place bend — see `histories`), and hand the store exactly the changed
+   * record via scheduleDelta: the annotation pass folds in one record and the
+   * conversation flush writes nothing, because a title never alters a
+   * conversation line. The record is normally the tail; when a newer turn
+   * landed while Sous summarized, the flush's own tail check simply falls
+   * back to the safe full write — correctness never rides on position.
    */
   private async finalizeTitle(t: TrackedTerminal, recordIndex: number): Promise<void> {
     const gen = t.titleGen
@@ -1925,10 +1984,12 @@ export class TurnTracker extends EventEmitter {
     if (title === null) return
     const id = t.session.terminalId
     const history = this.histories.get(id)
-    if (history?.some((r) => r.index === recordIndex)) {
-      const updated = history.map((r) => (r.index === recordIndex ? { ...r, title } : r))
-      this.setHistory(id, updated)
-      this.store?.scheduleSave(id, updated)
+    const at = history === undefined ? -1 : lastPositionOfIndex(history, recordIndex)
+    if (history !== undefined && at !== -1) {
+      const titled = { ...history[at], title }
+      history[at] = titled
+      this.snapshots.delete(id)
+      this.store?.scheduleDelta(id, history, [titled])
     }
     // Only retitle the live card if no new turn started while summarizing.
     if (this.tracked.get(id) === t && t.titleGen === gen && t.phase === 'replied') {

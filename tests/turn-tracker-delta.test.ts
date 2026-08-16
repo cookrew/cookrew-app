@@ -8,13 +8,13 @@
 // closure scan, the store save — must see a delta-applied history identically.
 
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TurnTracker, type CompletedTurn } from '../src/main/turn-tracker'
 import { TurnStore } from '../src/main/turn-store'
-import type { AnnotationStore } from '../src/main/turn-annotations'
+import { AnnotationStore } from '../src/main/turn-annotations'
 import type { TurnRecord } from '../src/shared/turn'
 import type { PtySession } from '../src/main/pty'
 
@@ -225,6 +225,10 @@ describe('O(delta) through persistence (Sol r5 P1)', () => {
 
   const turnsFile = (): string => path.join(dir, 'turns', 'term-1.jsonl')
   const sidecarFile = (): string => path.join(dir, 'checkpoint-annotations', 'term-1.json')
+  const sidecarLog = (): string => path.join(dir, 'checkpoint-annotations', 'term-1.log.jsonl')
+  /** What the sidecar reads back as across a restart: snapshot + op log. */
+  const sidecarState = (): Map<number, unknown> =>
+    new AnnotationStore(path.join(dir, 'checkpoint-annotations')).load('term-1')
 
   it('300-turn history + 1 appended turn: annotation pass visits the delta, file gains one line, no rewrite', () => {
     const { store, tracker } = seeded()
@@ -256,10 +260,14 @@ describe('O(delta) through persistence (Sol r5 P1)', () => {
     const bytesAfter = readFileSync(turnsFile(), 'utf8')
     expect(bytesAfter.startsWith(bytesBefore)).toBe(true)
     expect(bytesAfter.trim().split('\n')).toHaveLength(HISTORY + 1)
-    // The sidecar gained the appended turn's title and nothing else moved.
-    const sidecar = JSON.parse(readFileSync(sidecarFile(), 'utf8')) as Record<string, unknown>
-    expect(sidecar['301']).toEqual({ title: 'title 301' })
-    expect(Object.keys(sidecar)).toHaveLength(HISTORY + 1)
+    // The sidecar gained the appended turn's title as ONE op-log line; the
+    // snapshot — the complete-map serialization Sol r6 P1 charged per update —
+    // is byte-identical, and a fresh store replays snapshot + log back whole.
+    expect(readFileSync(sidecarFile(), 'utf8')).toBe(sidecarBefore)
+    expect(readFileSync(sidecarLog(), 'utf8').trim().split('\n')).toHaveLength(1)
+    const sidecar = sidecarState()
+    expect(sidecar.get(301)).toEqual({ title: 'title 301' })
+    expect(sidecar.size).toBe(HISTORY + 1)
     expect(JSON.parse(sidecarBefore)).toMatchObject({ '1': { title: 'title 1' } })
     // And it all reads back whole.
     expect(tracker.history('term-1')).toHaveLength(HISTORY + 1)
@@ -276,10 +284,13 @@ describe('O(delta) through persistence (Sol r5 P1)', () => {
     )
     store.flushAll()
     expect(readFileSync(sidecarFile(), 'utf8')).toBe(sidecarBefore)
+    expect(existsSync(sidecarLog())).toBe(false)
     tracker.disposeAll()
   })
 
-  it('a tail finalization replaces ONE line via truncate+append — never a full rewrite', () => {
+  // Sol r6 P2 adaptation: the tail replacement is atomic (temp+fsync+rename)
+  // now, not truncate+append — same observable: prefix untouched, no writeAll.
+  it('a tail finalization replaces ONE line atomically — never a full-history rewrite', () => {
     const { store, tracker } = seeded()
     const internals = store as unknown as StoreInternals
     const writeAll = vi.spyOn(internals, 'writeAll')

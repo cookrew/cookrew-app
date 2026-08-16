@@ -819,11 +819,18 @@ const dispatchService = new DispatchService({
   // first, so reaching for it here would hand the same prompt back to herdr —
   // a second identical submission on the exact outcome that means "herdr could
   // not deliver this". pasteAndSubmit cannot reach herdr by construction.
-  reattachFallback: async (agentId, prompt) => {
+  reattachFallback: async (agentId, prompt, stillValid) => {
     const session = ptys.get(agentId)
     if (!session) return false
-    await pasteAndSubmit(session, prompt, (data) => session.writeFromDispatch(data))
-    return true
+    // stillValid is checked before EVERY write: a dispatch cancelled during
+    // the paste delay never emits its CR (Sol r6 P0-2).
+    const outcome = await pasteAndSubmit(
+      session,
+      prompt,
+      (data) => session.writeFromDispatch(data),
+      stillValid
+    )
+    return outcome === 'submitted'
   }
 })
 
@@ -965,11 +972,10 @@ async function setTerminalCwd(nodeId: string, dir: string): Promise<CanvasNode> 
         setTerminalCwd: (id, target) => store.setTerminalCwd(id, target)
       },
       release: (id) => {
-        // A deliberate rebind tears down the observer; an open dispatch must
-        // not silently carry its stamp across sessions — interrupt it.
-        dispatchService.interruptAgent(id, 'terminal rebound')
-        sessionSync.unwatch(id)
-        turns.untrack(id)
+        // A deliberate rebind is a permanent ending for the OLD session —
+        // same primitive as remove/cut, so the reborn id can never inherit a
+        // phantom in-turn fact from the dead one (Sol r6).
+        retireTerminal(id, 'terminal rebound')
       },
       kill: (id) => ptys.killAndWait(id),
       spawn: (node) => spawnTracked(node),

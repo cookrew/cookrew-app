@@ -47,7 +47,7 @@
 // The PUSH path (agent status) is a different concern and does not come through
 // this interface; it holds a socket open, because that is what it needs.
 
-import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { promptViaHerdr, waitForAgentState } from './herdr-agent-wait'
@@ -298,6 +298,8 @@ export class HerdrHostMultiplexer implements Multiplexer {
   private readonly startServer: () => void
   private readonly waitForServerMs: number
   private readonly settleMs: number
+  /** Sanitized runner env, kept for the one async (libuv-side) CLI call. */
+  private readonly env: NodeJS.ProcessEnv
   private probed: boolean | null = null
   private serverUp = false
   /** One immutable pane-list snapshot while a synchronous attach burst runs. */
@@ -314,6 +316,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
     })
     this.session = options.session
     this.configPath = options.configPath
+    this.env = env
     this.runner = options.runner ?? createHerdrRunner(env)
     this.startServer = options.startServer ?? (() => spawnHerdrServer(env))
     this.waitForServerMs = options.waitForServerMs ?? 5000
@@ -477,15 +480,29 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * rather than ever forking inline.
    */
   private refreshAdmissionCacheSoon(): void {
-    if (this.admissionRefreshing) return
+    if (this.admissionRefreshing || !this.available()) return
     this.admissionRefreshing = true
-    setImmediate(() => {
-      try {
-        this.admissionCache = { at: Date.now(), panes: this.readPanes() }
-      } finally {
-        this.admissionRefreshing = false
+    // GENUINELY async (Sol r6): a deferred synchronous fork still stalls the
+    // main loop one turn later — execFile hands the wait to libuv and the
+    // snapshot publishes on completion (single-flight). Admission keeps
+    // serving the last snapshot meanwhile; a failed refresh keeps the stale
+    // one, which the delivery leg's own revalidation covers.
+    execFile(
+      'herdr',
+      ['pane', 'list'],
+      { encoding: 'utf8', env: this.env },
+      (error, stdout) => {
+        try {
+          if (!error && typeof stdout === 'string') {
+            this.admissionCache = { at: Date.now(), panes: parsePaneList(stdout) }
+          }
+        } catch {
+          // Unparseable inventory: keep serving the previous snapshot.
+        } finally {
+          this.admissionRefreshing = false
+        }
       }
-    })
+    )
   }
 
   /** Seed the inventory outside any request (boot / supervisor start). */

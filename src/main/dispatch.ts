@@ -41,6 +41,14 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
+// The one-producer lease (Sol r6 P0-1) — pure state, no PTY: the delivery
+// legs hold a terminal's submission window across their irreversible writes,
+// and every producer (owner asks, the PTY guard) shares the same instance.
+import {
+  defaultProducerLease,
+  type ProducerHolder,
+  type ProducerLease
+} from './producer-lease'
 
 /**
  * Lifecycle of one dispatch (v4 §3, terminal states per Tinker's herdr-death
@@ -370,8 +378,25 @@ export interface DispatchDeps {
    * LAST RESORT: submit through a reattached single pane (the cmdAsk path).
    * The only PTY in the design. Absent = no fallback, and an undeliverable
    * dispatch fails loudly instead of being retried into the dark.
+   *
+   * `stillValid` (Sol r6 P0-2) is the delivery leg's own liveness — record
+   * open, reservation held, lease held — and the wiring MUST thread it into
+   * pasteAndSubmit, which consults it before EACH write: the paste and the
+   * submitting CR are up to 1.5s apart, and a dispatch cancelled inside that
+   * window must not be submitted by the later Enter. A wiring that ignores
+   * the argument still typechecks but reopens exactly that hole.
    */
-  reattachFallback?: (agentId: string, prompt: string) => Promise<boolean>
+  reattachFallback?: (
+    agentId: string,
+    prompt: string,
+    stillValid?: () => boolean
+  ) => Promise<boolean>
+  /**
+   * The shared producer lease (Sol r6 P0-1). Defaults to the process-wide
+   * instance — the only one that actually serializes, since askTerminal and
+   * the tracker's PTY guard consult the same default. Injectable for tests.
+   */
+  lease?: ProducerLease
   newId?: () => string
   now?: () => number
   /** How long the native submission may block before it is a stall. */
@@ -1055,7 +1080,15 @@ export class DispatchService {
     { prompt: string; armedAt: number; grade: ObserverGrade }
   >()
 
+  /**
+   * The per-terminal producer lease the delivery legs hold across their
+   * irreversible submissions (Sol r6 P0-1) — shared with every other
+   * producer via the process-wide default.
+   */
+  private readonly lease: ProducerLease
+
   constructor(private readonly deps: DispatchDeps) {
+    this.lease = deps.lease ?? defaultProducerLease()
     this.hydrate()
   }
 
@@ -1428,12 +1461,30 @@ export class DispatchService {
     // dispatch stranded. Registered against the armed generation; retracted
     // below only on POSITIVE proof of non-delivery.
     this.deps.noteDelivered?.(agentId, prompt, gen)
+    // THE PRODUCER LEASE (Sol r6 P0-1), acquired BEFORE the first
+    // irreversible byte and held through submission acknowledgement
+    // (promptAgent resolving). The r5 deliveryLive check saw only dispatch
+    // state; an owner ask already inside its own blocking promptAgent was
+    // invisible to it, and this leg would have submitted a second producer's
+    // bytes beside the owner's. An owner-held lease refuses the delivery
+    // honestly — 'failed', so the caller knows the prompt never went out and
+    // may retry once the owner's submission settles.
+    const holder: ProducerHolder = { kind: 'dispatch', dispatchId }
+    if (this.lease.acquire(agentId, holder) !== 'acquired') {
+      this.deps.retractDelivered?.(agentId, prompt, gen)
+      this.update(dispatchId, {
+        state: 'failed',
+        error: 'an owner submission was in flight at delivery time'
+      })
+      return
+    }
     // The LAST revalidation before the irreversible submission (Sol r5 P0-2),
     // in the same synchronous stretch as the write itself — no await sits
     // between this check and promptAgent, so nothing can settle the record in
     // between. A leg that lost its record, its reservation or its token here
     // retracts ONLY its own attempted fact and writes no prompt.
     if (!this.deliveryLive(dispatchId, agentId)) {
+      this.lease.release(agentId, holder)
       this.deps.retractDelivered?.(agentId, prompt, gen)
       return
     }
@@ -1443,6 +1494,12 @@ export class DispatchService {
     } catch (error) {
       outcome = 'failed'
       console.error('Dispatch submission threw:', describeSubmissionError(error, prompt.length))
+    } finally {
+      // Submission acknowledged (or the attempt settled): the bytes-in-flight
+      // window is over, and the TURN the submission opened is guarded by the
+      // reservation, not the lease. A hold seized mid-flight by a committed
+      // owner preemption makes this a holder-mismatch no-op.
+      this.lease.release(agentId, holder)
     }
 
     if (!this.deliveryLive(dispatchId, agentId)) {
@@ -1586,8 +1643,29 @@ export class DispatchService {
       this.update(dispatchId, { state: 'failed', confirmed: false, error: why })
       return
     }
+    // The lease again, for the OTHER irreversible submission (Sol r6 P0-1):
+    // the native hold was released when promptAgent settled, and an owner may
+    // have taken the terminal in between. Held across the fallback's whole
+    // paste → delay → CR, so an owner write inside that window is refused at
+    // the PTY guard rather than interleaved with a partial paste.
+    const holder: ProducerHolder = { kind: 'dispatch', dispatchId }
+    if (this.lease.acquire(agentId, holder) !== 'acquired') {
+      this.update(dispatchId, {
+        state: 'failed',
+        confirmed: false,
+        error: `${why}; an owner submission was in flight at fallback time`
+      })
+      return
+    }
     try {
-      const delivered = await reattach(record.agentId, prompt)
+      // Cancellation-aware (Sol r6 P0-2): consulted before EACH fallback
+      // write. Interrupt, release, backend death or sweep kills deliveryLive;
+      // a committed owner preemption seizes the lease — either way the paste
+      // sequence stops (in particular: no CR after a cancelled paste; the
+      // pasted residue stays inert in the input box — see pasteAndSubmit).
+      const stillValid = (): boolean =>
+        this.deliveryLive(dispatchId, agentId) && this.holdsLease(agentId, dispatchId)
+      const delivered = await reattach(record.agentId, prompt, stillValid)
       this.update(
         dispatchId,
         delivered
@@ -1600,7 +1678,15 @@ export class DispatchService {
         confirmed: false,
         error: `${why}; fallback threw: ${describeSubmissionError(error, prompt.length)}`
       })
+    } finally {
+      this.lease.release(agentId, holder)
     }
+  }
+
+  /** Does this dispatch's leg still hold the terminal's submission window? */
+  private holdsLease(agentId: string, dispatchId: string): boolean {
+    const holder = this.lease.holderOf(agentId)
+    return holder !== null && holder.kind === 'dispatch' && holder.dispatchId === dispatchId
   }
 
   /**

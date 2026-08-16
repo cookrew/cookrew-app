@@ -1,7 +1,7 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TurnStore } from '../src/main/turn-store'
 import type { TurnRecord } from '../src/shared/turn'
 
@@ -12,7 +12,15 @@ beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), 'cookrew-turns-'))
   store = new TurnStore(dir)
 })
-afterEach(() => rmSync(dir, { recursive: true, force: true }))
+afterEach(() => {
+  vi.restoreAllMocks()
+  try {
+    chmodSync(dir, 0o700)
+  } catch {
+    // already gone
+  }
+  rmSync(dir, { recursive: true, force: true })
+})
 
 const rec = (index: number, over: Partial<TurnRecord> = {}): TurnRecord => ({
   index,
@@ -147,6 +155,116 @@ describe('TurnStore — migration from the old JSON array', () => {
     save([rec(1), rec(2)])
     writeFileSync(path.join(dir, 't1.jsonl'), `${lines()[0]}\n{ broken\n${lines()[1]}\n`, 'utf8')
     expect(store.load('t1').map((r) => r.index)).toEqual([1, 2])
+  })
+})
+
+/**
+ * Sol r6 P1: the delta pipeline must stay O(delta) ACROSS A RESTART. Before
+ * the load-time seeding, a fresh store had no written-tail metadata, so the
+ * first scheduleDelta after a boot fell through to a whole-file rewrite.
+ */
+describe('TurnStore — cold start stays O(delta)', () => {
+  const file = (): string => path.join(dir, 't1.jsonl')
+
+  it('APPENDS on the first delta after a restart: load seeds the written tail', () => {
+    save([rec(1), rec(2)])
+    const fresh = new TurnStore(dir)
+    fresh.load('t1')
+    const internals = fresh as unknown as { writeAll: (id: string, records: TurnRecord[]) => void }
+    const writeAll = vi.spyOn(internals, 'writeAll')
+    const before = readFileSync(file(), 'utf8')
+
+    fresh.scheduleDelta('t1', [rec(1), rec(2), rec(3)], [rec(3)])
+    fresh.flushAll()
+
+    // Exactly one appended line; the prior bytes are untouched.
+    expect(writeAll).not.toHaveBeenCalled()
+    const after = readFileSync(file(), 'utf8')
+    expect(after.startsWith(before)).toBe(true)
+    expect(after.trim().split('\n')).toHaveLength(3)
+    expect(fresh.load('t1').map((r) => r.index)).toEqual([1, 2, 3])
+  })
+
+  it('replaces just the tail on the first tail-delta after a restart', () => {
+    save([rec(1), rec(2)])
+    const fresh = new TurnStore(dir)
+    fresh.load('t1')
+    const internals = fresh as unknown as { writeAll: (id: string, records: TurnRecord[]) => void }
+    const writeAll = vi.spyOn(internals, 'writeAll')
+    const before = readFileSync(file(), 'utf8')
+    const prefix = before.slice(0, before.indexOf('\n') + 1)
+
+    const finalized = rec(2, { reply: 'grew a reply', final: true })
+    fresh.scheduleDelta('t1', [rec(1), finalized], [finalized])
+    fresh.flushAll()
+
+    expect(writeAll).not.toHaveBeenCalled()
+    const after = readFileSync(file(), 'utf8')
+    expect(after.startsWith(prefix)).toBe(true)
+    expect(after.trim().split('\n')).toHaveLength(2)
+    expect(fresh.load('t1')[1].reply).toBe('grew a reply')
+  })
+
+  it('does NOT trust a file whose lines did not all parse as an append base', () => {
+    save([rec(1), rec(2)])
+    const good = lines()
+    writeFileSync(file(), `${good[0]}\n{ broken\n${good[1]}\n`, 'utf8')
+    const fresh = new TurnStore(dir)
+    fresh.load('t1')
+
+    fresh.scheduleDelta('t1', [rec(1), rec(2), rec(3)], [rec(3)])
+    fresh.flushAll()
+
+    // The unclean read cleared the append base, so the flush rewrote the file
+    // whole — appending relative to a count the file does not have would land
+    // records in the wrong place.
+    expect(readFileSync(file(), 'utf8')).not.toContain('{ broken')
+    expect(fresh.load('t1').map((r) => r.index)).toEqual([1, 2, 3])
+  })
+})
+
+/**
+ * Sol r6 P2: the tail-change write must never destroy the old tail before the
+ * replacement is durable, and a failed flush must retain its work for retry.
+ */
+describe('TurnStore — tail replacement is crash-safe and failure retains retry state', () => {
+  const file = (): string => path.join(dir, 't1.jsonl')
+
+  it('a failed tail replacement leaves the old bytes byte-identical, then the retry lands it', () => {
+    save([rec(1), rec(2)])
+    const before = readFileSync(file(), 'utf8')
+
+    // The atomic replacement stages its temp in the turns directory; a
+    // write-protected directory fails it before any byte of the original
+    // file can move — the crash-window guarantee, observed from outside.
+    chmodSync(dir, 0o500)
+    const finalized = rec(2, { reply: 'finalized late', final: true })
+    store.scheduleDelta('t1', [rec(1), finalized], [finalized])
+    store.flushAll()
+    expect(readFileSync(file(), 'utf8')).toBe(before)
+
+    // The un-landed records were retained as dirty state: the next flush
+    // retries the SAME tail replacement and it lands.
+    chmodSync(dir, 0o700)
+    store.flushAll()
+    const after = readFileSync(file(), 'utf8')
+    expect(after.startsWith(before.slice(0, before.indexOf('\n') + 1))).toBe(true)
+    expect(after).toContain('finalized late')
+    expect(new TurnStore(dir).load('t1')[1].reply).toBe('finalized late')
+  })
+
+  it('a failed full rewrite also leaves the previous file intact and retries', () => {
+    save([rec(1), rec(2), rec(3)])
+    const before = readFileSync(file(), 'utf8')
+
+    chmodSync(dir, 0o500)
+    store.scheduleSave('t1', [rec(1), rec(3)])
+    store.flushAll()
+    expect(readFileSync(file(), 'utf8')).toBe(before)
+
+    chmodSync(dir, 0o700)
+    store.flushAll()
+    expect(new TurnStore(dir).load('t1').map((r) => r.index)).toEqual([1, 3])
   })
 })
 

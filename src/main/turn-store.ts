@@ -13,23 +13,18 @@
 
 import {
   appendFileSync,
-  closeSync,
   existsSync,
   mkdirSync,
-  openSync,
   readFileSync,
-  readSync,
   readdirSync,
   renameSync,
   statSync,
-  truncateSync,
   unlinkSync,
-  writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { mergeAnnotation, splitAnnotation, type TurnRecord } from '../shared/turn'
-import { AnnotationStore } from './turn-annotations'
+import { AnnotationStore, writeFileAtomic } from './turn-annotations'
 
 const SAVE_DEBOUNCE_MS = 300
 
@@ -137,18 +132,42 @@ export class TurnStore {
   /**
    * Read the lines file, dropping any line that will not parse. A single
    * corrupt line must not blank an agent's whole history.
+   *
+   * COLD-START SEEDING (Sol r6 P1): a CLEAN read — every line parsed, file
+   * newline-terminated — also seeds the written-tail metadata, with the RAW
+   * last line as it sits on disk. Without this the first scheduleDelta after
+   * a restart found no `written` entry and fell through to a whole-file
+   * rewrite, making persistence O(delta) only until the next boot. Raw bytes,
+   * not a re-serialization, so the extend/append decision and the tail
+   * verification compare against exactly what the file holds; a hand-edited
+   * line that no longer serializes identically simply fails the boundary
+   * check and takes the safe full rewrite. A NON-clean read (corrupt or
+   * truncated lines the parse dropped) clears the entry instead: appending
+   * relative to a count the file does not actually have would land records
+   * in the wrong place.
    */
-  private readLines(file: string): TurnRecord[] {
+  private readLines(terminalId: string, file: string): TurnRecord[] {
     const records: TurnRecord[] = []
-    for (const line of readFileSync(file, 'utf8').split('\n')) {
+    const text = readFileSync(file, 'utf8')
+    let clean = text === '' || text.endsWith('\n')
+    let lastLine = ''
+    for (const line of text.split('\n')) {
       if (line.trim() === '') continue
       try {
         const parsed: unknown = JSON.parse(line)
-        if (isTurnRecord(parsed)) records.push(parsed)
+        if (isTurnRecord(parsed)) {
+          records.push(parsed)
+          lastLine = line
+        } else {
+          clean = false
+        }
       } catch {
         // one bad line, not the file
+        clean = false
       }
     }
+    if (clean) this.written.set(terminalId, { count: records.length, lastLine })
+    else this.written.delete(terminalId)
     return records
   }
 
@@ -182,7 +201,7 @@ export class TurnStore {
     if (pending) return pending
     try {
       const file = this.fileFor(terminalId)
-      if (existsSync(file)) return this.hydrate(terminalId, this.readLines(file))
+      if (existsSync(file)) return this.hydrate(terminalId, this.readLines(terminalId, file))
       return this.migrate(terminalId) ?? []
     } catch (error) {
       console.error('Failed to load turn history:', error)
@@ -242,7 +261,7 @@ export class TurnStore {
           if (isLegacy && existsSync(this.fileFor(terminalId))) continue
           try {
             const records = isLines
-              ? this.hydrate(terminalId, this.readLines(path.join(this.dir, name)))
+              ? this.hydrate(terminalId, this.readLines(terminalId, path.join(this.dir, name)))
               : this.load(terminalId)
             // Terminals with no usable records are OMITTED — the board's L3
             // layer relies on never having to filter empties itself.
@@ -294,6 +313,9 @@ export class TurnStore {
    * CONTRACT: `changed` must cover every record whose content differs from
    * the last save, and the change must be expressible as "records were
    * appended and/or the previously-last record changed". A mid-history edit
+   * EXCEPTION: annotation-only mid-history edits (a Sous title landing on an
+   * old record) are safe — no conversation line changes, so the tail check
+   * stays valid; finalizeTitle relies on this.
    * or a shrink is NOT — those go through scheduleSave, the full path.
    */
   scheduleDelta(
@@ -327,7 +349,10 @@ export class TurnStore {
   private writeAll(terminalId: string, records: TurnRecord[]): void {
     mkdirSync(this.dir, { recursive: true })
     const body = records.map((r) => `${this.line(r)}\n`).join('')
-    writeFileSync(this.fileFor(terminalId), body, 'utf8')
+    // Atomic (Sol r6 P2): a crash mid-rewrite must leave the previous ledger,
+    // not a truncated hybrid — this file is the only durable copy until the
+    // native transcript is re-parsed.
+    writeFileAtomic(this.fileFor(terminalId), body)
     this.remember(terminalId, records)
     this.cache(terminalId, records)
   }
@@ -350,19 +375,6 @@ export class TurnStore {
     })
   }
 
-  /**
-   * Append when the history only GREW and its previous last record is
-   * byte-identical to what we wrote; replace just the tail when a delta save
-   * proved the change stops at the previously-last record; otherwise rewrite.
-   *
-   * WHY THE FALLBACK STAYS after the annotation split. Two of the three edit
-   * sources are gone from these lines — a seenAt stamp and a late Sous title
-   * now change only the sidecar — but phantom-echo dedupe and session
-   * reconcile still shrink and rewrite the conversation itself, and those must
-   * not be silently appended over. The guard costs nothing when it does not
-   * fire, so it stays until the scrape stops writing durable history at all
-   * (step 4 of the design); only then are these lines truly append-only.
-   */
   private flush(terminalId: string): void {
     const timer = this.timers.get(terminalId)
     if (timer) clearTimeout(timer)
@@ -378,70 +390,130 @@ export class TurnStore {
     // the reproducible one. A delta save names its changed records, so the
     // annotation pass folds in exactly those instead of scanning every
     // checkpoint (Sol r5 P1); a full save still rebuilds from everything.
-    if (dirty === 'all') this.annotations.save(this.safeId(terminalId), records)
-    else this.annotations.update(this.safeId(terminalId), [...dirty.values()])
+    // Both now REPORT failure instead of swallowing it (Sol r6 P1).
+    const annotated =
+      dirty === 'all'
+        ? this.annotations.save(this.safeId(terminalId), records)
+        : this.annotations.update(this.safeId(terminalId), [...dirty.values()])
 
+    let conversed = false
     try {
-      const known = this.written.get(terminalId)
-      const file = this.fileFor(terminalId)
-      const extendable =
-        known !== undefined && known.count > 0 && records.length >= known.count && existsSync(file)
-
-      if (extendable) {
-        const boundary = known.count - 1
-        const boundaryRecord = records[boundary]
-        if (this.line(boundaryRecord) === known.lastLine) {
-          // Pure growth — or an annotation-only change, whose conversation
-          // bytes are untouched and need no write at all.
-          if (records.length > known.count) {
-            const added = records.slice(known.count).map((r) => `${this.line(r)}\n`)
-            appendFileSync(file, added.join(''), 'utf8')
-          }
-          this.remember(terminalId, records)
-          this.cache(terminalId, records)
-          return
-        }
-        // The last written line changed. On the delta path — where the dirty
-        // set proves nothing BELOW that line changed — replace just the tail
-        // instead of rewriting every record (Sol r5 P1): the common shape is
-        // a finalized re-carry of the open tail plus the records behind it.
-        const tailOnly =
-          dirty !== 'all' && [...dirty.keys()].every((index) => index >= boundaryRecord.index)
-        if (tailOnly && this.rewriteTail(file, known.lastLine, records.slice(boundary))) {
-          this.remember(terminalId, records)
-          this.cache(terminalId, records)
-          return
-        }
-      }
-      this.writeAll(terminalId, records)
+      this.persistConversation(terminalId, records, dirty)
+      conversed = true
     } catch (error) {
       console.error('Failed to save turn history:', error)
     }
+    // Fail closed (Sol r6 P1): anything that did not land goes back on the
+    // dirty pile and the debounce retries it. Retrying the half that DID land
+    // is free — the annotation store diffs to zero ops and the conversation
+    // pass sees an already-current tail and writes nothing.
+    if (!annotated || !conversed) this.retain(terminalId, records, dirty)
+  }
+
+  /**
+   * Put a failed flush's work back so the next flush retries it. flush() is
+   * fully synchronous, so nothing can have re-populated pending/dirty between
+   * its take and this restore. Bounded honesty: retries stop when the process
+   * does — a write still failing at quit is logged, not silently dropped from
+   * memory before then.
+   */
+  private retain(
+    terminalId: string,
+    records: TurnRecord[],
+    dirty: Map<number, TurnRecord> | 'all',
+  ): void {
+    this.pending.set(terminalId, records)
+    this.dirty.set(terminalId, dirty)
+    if (this.timers.has(terminalId)) return
+    this.timers.set(
+      terminalId,
+      setTimeout(() => this.flush(terminalId), SAVE_DEBOUNCE_MS),
+    )
+  }
+
+  /**
+   * The conversation half of one flush. Append when the history only GREW and
+   * its previous last record is byte-identical to what we wrote; replace just
+   * the tail when a delta save proved the change stops at the previously-last
+   * record; otherwise rewrite. Throws on I/O failure — the caller retains the
+   * un-landed records and retries.
+   *
+   * WHY THE FALLBACK STAYS after the annotation split. Two of the three edit
+   * sources are gone from these lines — a seenAt stamp and a late Sous title
+   * now change only the sidecar — but phantom-echo dedupe and session
+   * reconcile still shrink and rewrite the conversation itself, and those must
+   * not be silently appended over. The guard costs nothing when it does not
+   * fire, so it stays until the scrape stops writing durable history at all
+   * (step 4 of the design); only then are these lines truly append-only.
+   */
+  private persistConversation(
+    terminalId: string,
+    records: TurnRecord[],
+    dirty: Map<number, TurnRecord> | 'all',
+  ): void {
+    const known = this.written.get(terminalId)
+    const file = this.fileFor(terminalId)
+    const extendable =
+      known !== undefined && known.count > 0 && records.length >= known.count && existsSync(file)
+
+    if (extendable) {
+      const boundary = known.count - 1
+      const boundaryRecord = records[boundary]
+      if (this.line(boundaryRecord) === known.lastLine) {
+        // Pure growth — or an annotation-only change, whose conversation
+        // bytes are untouched and need no write at all.
+        if (records.length > known.count) {
+          const added = records.slice(known.count).map((r) => `${this.line(r)}\n`)
+          appendFileSync(file, added.join(''), 'utf8')
+        }
+        this.remember(terminalId, records)
+        this.cache(terminalId, records)
+        return
+      }
+      // The last written line changed. On the delta path — where the dirty
+      // set proves nothing BELOW that line changed — replace just the tail
+      // instead of rewriting every record (Sol r5 P1): the common shape is
+      // a finalized re-carry of the open tail plus the records behind it.
+      const tailOnly =
+        dirty !== 'all' && [...dirty.keys()].every((index) => index >= boundaryRecord.index)
+      if (tailOnly && this.rewriteTail(file, known.lastLine, records.slice(boundary))) {
+        this.remember(terminalId, records)
+        this.cache(terminalId, records)
+        return
+      }
+    }
+    this.writeAll(terminalId, records)
   }
 
   /**
    * Replace the file's LAST line and append from there — the tail-update leg
    * of the delta path. Refuses (returns false, caller rewrites) unless the
-   * bytes about to be truncated are EXACTLY the line the last flush wrote:
-   * the file is user-editable, and truncating on faith could eat a record
-   * this process never knew about. The verification reads only the tail
-   * bytes, so the cost stays O(one line), never O(file).
+   * bytes about to be replaced are EXACTLY the line the last flush wrote:
+   * the file is user-editable, and replacing on faith could eat a record
+   * this process never knew about.
+   *
+   * ATOMIC, NOT IN-PLACE (Sol r6 P2). The previous shape — truncate the old
+   * tail, then append the replacement — destroyed the only ledger copy's last
+   * record BEFORE the new bytes existed: a crash or append failure in that
+   * window lost it until a native re-parse happened to rebuild the file. Now
+   * the prefix plus the new tail go to a temp file, fsync, rename
+   * (writeFileAtomic): the old bytes stay durable until the replacement is.
+   * THE TRADE-OFF, stated plainly: this makes the tail-change write O(file)
+   * bytes where truncate+append was O(one line). It is bounded — one line per
+   * turn, ~1.4 MB on the largest agent observed — and it buys the same
+   * crash-safety contract the annotation sidecar and dispatch registry
+   * already hold; the hot append path is untouched. If profiling ever shows
+   * this copy mattering, the next step is a segment strategy, not a return to
+   * the crash-lossy window.
    */
   private rewriteTail(file: string, lastLine: string, tail: readonly TurnRecord[]): boolean {
-    const expected = `${lastLine}\n`
-    const bytes = Buffer.byteLength(expected, 'utf8')
-    const size = statSync(file).size
-    if (size < bytes) return false
-    const fd = openSync(file, 'r')
-    try {
-      const held = Buffer.alloc(bytes)
-      const read = readSync(fd, held, 0, bytes, size - bytes)
-      if (read !== bytes || held.toString('utf8') !== expected) return false
-    } finally {
-      closeSync(fd)
-    }
-    truncateSync(file, size - bytes)
-    appendFileSync(file, tail.map((r) => `${this.line(r)}\n`).join(''), 'utf8')
+    const expected = Buffer.from(`${lastLine}\n`, 'utf8')
+    const held = readFileSync(file)
+    if (held.length < expected.length) return false
+    if (!held.subarray(held.length - expected.length).equals(expected)) return false
+    const prefix = held.subarray(0, held.length - expected.length)
+    const replacement = Buffer.from(tail.map((r) => `${this.line(r)}\n`).join(''), 'utf8')
+    writeFileAtomic(file, Buffer.concat([prefix, replacement]))
     return true
   }
 

@@ -278,8 +278,13 @@ export function migrateForeignSession(
  * durably (ledger down, intent parked fail-closed) — the owner's bytes are
  * REFUSED rather than delivered, because delivering them would open a second
  * producer's turn beside a reservation that is still live.
+ * 'refused' (Sol r6 P0-1) means a dispatch DELIVERY holds the terminal's
+ * producer lease right now — its paste may be sitting half-ingested in the
+ * shared input box — and non-preempting owner bytes must not enter a buffer
+ * containing a partial dispatch delivery. Anything but 'allow' drops the
+ * bytes before they reach the child.
  */
-export type OwnerInputVerdict = 'allow' | 'preempt-failed'
+export type OwnerInputVerdict = 'allow' | 'preempt-failed' | 'refused'
 
 export interface PtySessionOptions {
   terminalId: string
@@ -423,8 +428,10 @@ export class PtySession extends EventEmitter {
   write(data: string): void {
     // The producer guard runs BEFORE the bytes reach the child (Sol r4 P0-1a):
     // preemption after proc.write cannot stop a competing submission, only
-    // relabel it. A refused write delivers nothing and announces nothing.
-    if (this.beforeOwnerInput?.(this.terminalId, data) === 'preempt-failed') return
+    // relabel it. A refused write — failed preemption OR a dispatch delivery
+    // holding the producer lease (Sol r6 P0-1) — delivers nothing and
+    // announces nothing.
+    if ((this.beforeOwnerInput?.(this.terminalId, data) ?? 'allow') !== 'allow') return
     this.proc.write(data)
     // Every input path (renderer keystrokes, `cookrew ask`, routines) funnels
     // through here, so turn tracking can observe prompts uniformly.

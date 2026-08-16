@@ -488,8 +488,13 @@ async function handle(
     // armed ran BEFORE this handler, but it is a fast-path refusal only, not
     // load-bearing (Sol r5 P0-1) — a dispatch can arm in the await gaps
     // between that check and the writes below. The invariant is enforced at
-    // the submit sites: session.write's owner-input guard for /input, and
-    // askTerminal's synchronous pre-submission guard for /ask.
+    // the submit sites (Sol r6 P0-1): session.write's owner-input guard for
+    // /input — which now also REFUSES non-preempting bytes while a dispatch
+    // delivery holds the producer lease (its paste may be mid-ingest in the
+    // shared input box) — and askTerminal's lease acquisition for /ask, held
+    // through submission acknowledgement; a concurrent owner submission makes
+    // /ask throw 'another owner submission is in flight' (surfaced as this
+    // route's error).
     if (inputMatch[2] === 'input') {
       session.write(text)
       session.write('\r')

@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { askRaw, askTerminal, decodeRawEscapes, diffOutput, submitDelayMs } from '../src/main/ask'
+import {
+  askRaw,
+  askTerminal,
+  decodeRawEscapes,
+  diffOutput,
+  pasteAndSubmit,
+  submitDelayMs
+} from '../src/main/ask'
+import { ProducerLease, ownerHolder } from '../src/main/producer-lease'
 import type { PtySession } from '../src/main/pty'
 
 /**
@@ -349,5 +357,240 @@ describe('askTerminal — the one-producer guard at the submit site (Sol r5 P0-1
 
     await askTerminal(session, 'fix the bug')
     expect(events).toEqual(['promptAgent', 'announce'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r6 P0-1 / P0-2 — the ask under the producer lease. The r5 guard was a
+// point-in-time verdict; the lease is the reservation behind it: held through
+// promptAgent resolve (native) or paste+CR completion (typed), refusing a
+// concurrent owner submission honestly, and threading its own validity into
+// the delayed CR so a lost hold never submits.
+// ---------------------------------------------------------------------------
+
+describe('pasteAndSubmit — cancellation awareness (Sol r6 P0-2)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const fakeSession = (writes: string[]): PtySession =>
+    ({
+      write: (data: string) => writes.push(data)
+    }) as unknown as PtySession
+
+  it('a stillValid that goes false during the delay stops the CR (no submit)', async () => {
+    vi.useFakeTimers()
+    const writes: string[] = []
+    let valid = true
+    const promise = pasteAndSubmit(fakeSession(writes), 'the brief', undefined, () => valid)
+    // The paste went out while the delivery was still live…
+    expect(writes).toEqual([paste('the brief')])
+    // …then the dispatch is cancelled inside the delay window.
+    valid = false
+    await vi.advanceTimersByTimeAsync(2000)
+    // No CR: the pasted prompt stays UNSUBMITTED (inert residue in the input
+    // box — documented on pasteAndSubmit), and the caller learns it stopped.
+    expect(writes).toEqual([paste('the brief')])
+    await expect(promise).resolves.toBe('cancelled')
+  })
+
+  it('a stillValid false before ANY write sends nothing at all', async () => {
+    const writes: string[] = []
+    await expect(
+      pasteAndSubmit(fakeSession(writes), 'the brief', undefined, () => false)
+    ).resolves.toBe('cancelled')
+    expect(writes).toEqual([])
+  })
+
+  it('a hold that stays valid submits exactly as before', async () => {
+    vi.useFakeTimers()
+    const writes: string[] = []
+    const promise = pasteAndSubmit(fakeSession(writes), 'the brief', undefined, () => true)
+    await vi.advanceTimersByTimeAsync(2000)
+    await expect(promise).resolves.toBe('submitted')
+    expect(writes).toEqual([paste('the brief'), '\r'])
+  })
+})
+
+describe('askTerminal — the producer lease (Sol r6 P0-1)', () => {
+  afterEach(() => {
+    muxHolder.current = null
+    vi.useRealTimers()
+  })
+
+  it('the native ask HOLDS the lease across promptAgent and releases on resolve', async () => {
+    const lease = new ProducerLease()
+    const during: Array<ReturnType<ProducerLease['holderOf']>> = []
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      promptAgent: async () => {
+        during.push(lease.holderOf('term-1'))
+        return 'done'
+      }
+    } satisfies FakeMux
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      noteExternalInput: () => undefined
+    } as unknown as PtySession
+
+    await askTerminal(session, 'fix the bug', { lease })
+    expect(during).toHaveLength(1)
+    expect(during[0]?.kind).toBe('owner')
+    expect(lease.holderOf('term-1')).toBeNull()
+  })
+
+  it('a second concurrent owner ask is refused honestly — and the first is undisturbed', async () => {
+    const lease = new ProducerLease()
+    let releaseFirst = (): void => undefined
+    const gate = new Promise<'done'>((resolve) => {
+      releaseFirst = () => resolve('done')
+    })
+    let prompts = 0
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      promptAgent: async () => {
+        prompts += 1
+        return gate
+      }
+    } satisfies FakeMux
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      noteExternalInput: () => undefined
+    } as unknown as PtySession
+
+    const first = askTerminal(session, 'first ask', { lease })
+    // Let the first ask reach its blocking promptAgent.
+    await new Promise((resolve) => setImmediate(resolve))
+    await expect(askTerminal(session, 'second ask', { lease })).rejects.toThrow(
+      'another owner submission is in flight'
+    )
+    // The refusal submitted nothing and did not disturb the first ask's hold.
+    expect(prompts).toBe(1)
+    expect(lease.holderOf('term-1')?.kind).toBe('owner')
+    releaseFirst()
+    await first
+    expect(lease.holderOf('term-1')).toBeNull()
+  })
+
+  it('held-by-dispatch: the ask preempts durably, SEIZES the window, and submits', async () => {
+    const lease = new ProducerLease()
+    const dispatch = { kind: 'dispatch', dispatchId: 'dsp-1' } as const
+    lease.acquire('term-1', dispatch)
+    const events: string[] = []
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      promptAgent: async () => {
+        events.push(`promptAgent holder=${lease.holderOf('term-1')?.kind}`)
+        return 'done'
+      }
+    } satisfies FakeMux
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      noteExternalInput: () => undefined,
+      beforeOwnerInput: () => {
+        events.push('preempted')
+        return 'allow' as const
+      }
+    } as unknown as PtySession
+
+    await askTerminal(session, 'take over', { lease })
+    expect(events).toEqual(['preempted', 'promptAgent holder=owner'])
+    // The displaced delivery leg's own release cannot reclaim the window…
+    lease.release('term-1', dispatch)
+    // …and the ask released its hold at acknowledgement.
+    expect(lease.holderOf('term-1')).toBeNull()
+  })
+
+  it('held-by-dispatch with an UNCOMMITTED preemption refuses without acquiring', async () => {
+    const lease = new ProducerLease()
+    const dispatch = { kind: 'dispatch', dispatchId: 'dsp-1' } as const
+    lease.acquire('term-1', dispatch)
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      promptAgent: async () => 'done'
+    } satisfies FakeMux
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      noteExternalInput: () => undefined,
+      beforeOwnerInput: () => 'preempt-failed' as const
+    } as unknown as PtySession
+
+    await expect(askTerminal(session, 'take over', { lease })).rejects.toThrow(
+      'agent has a dispatch in flight that could not be preempted'
+    )
+    // The dispatch keeps its window — nothing was displaced.
+    expect(lease.holderOf('term-1')).toEqual(dispatch)
+  })
+
+  it('the TYPED path holds the lease across paste → delay → CR', async () => {
+    vi.useFakeTimers()
+    muxHolder.current = null
+    const lease = new ProducerLease()
+    const writes: string[] = []
+    const session = {
+      terminalId: 'term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      write: (data: string) => {
+        writes.push(`${data === '\r' ? 'CR' : 'paste'} holder=${lease.holderOf('term-1')?.kind}`)
+      }
+    } as unknown as PtySession
+
+    const promise = askTerminal(session, 'typed ask', { lease, quiescenceMs: 0, graceMs: 0 })
+    await vi.advanceTimersByTimeAsync(2000)
+    await promise
+    // Both writes happened under the owner hold; released after the CR.
+    expect(writes).toEqual(['paste holder=owner', 'CR holder=owner'])
+    expect(lease.holderOf('term-1')).toBeNull()
+  })
+
+  it('a refusal on the typed path releases the hold before throwing', async () => {
+    muxHolder.current = null
+    const lease = new ProducerLease()
+    const session = {
+      terminalId: 'term-1',
+      fullText: () => '',
+      write: () => undefined,
+      beforeOwnerInput: () => 'preempt-failed' as const
+    } as unknown as PtySession
+
+    await expect(askTerminal(session, 'typed ask', { lease })).rejects.toThrow(
+      'agent has a dispatch in flight that could not be preempted'
+    )
+    // release-on-cancel: the failed acquisition left no orphan hold.
+    expect(lease.holderOf('term-1')).toBeNull()
+  })
+
+  it('an owner ask holding via one shared lease refuses a dispatch-held guard verdict too', async () => {
+    // The guard's mid-delivery 'refused' verdict is terminal for an ask: a
+    // delivery's bytes are in the buffer right now.
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      promptAgent: async () => 'done'
+    } satisfies FakeMux
+    const lease = new ProducerLease()
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      noteExternalInput: () => undefined,
+      beforeOwnerInput: () => 'refused' as const
+    } as unknown as PtySession
+
+    await expect(askTerminal(session, 'fix the bug', { lease })).rejects.toThrow(
+      'a dispatch delivery is mid-submission at this terminal'
+    )
+    expect(lease.holderOf('term-1')).toBeNull()
   })
 })

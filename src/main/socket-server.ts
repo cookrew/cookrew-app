@@ -550,9 +550,12 @@ async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<stri
   if (!prompt) throw new Error('Missing prompt')
   // No armed-dispatch check here, on purpose (Sol r5 P0-1): a route-level
   // refusal would only be a fast path with a check-to-submit race behind it.
-  // The load-bearing guard lives at the submit site — askTerminal consults
-  // the session's owner-input guard synchronously before the irreversible
-  // submission, preempting an armed dispatch durably or throwing.
+  // The load-bearing serialization lives at the submit site — askTerminal
+  // acquires the per-terminal producer lease (Sol r6 P0-1) and holds it
+  // through submission acknowledgement: an armed dispatch is durably
+  // preempted, a dispatch DELIVERING right now is preempted-then-displaced,
+  // and a second concurrent owner ask throws 'another owner submission is in
+  // flight' — surfaced to the CLI caller as this command's error.
   const reply = await askTerminal(session, prompt)
   if (deps.voice.enabled) {
     deps.voice.speakReply(target.name, reply).catch((error) => {
