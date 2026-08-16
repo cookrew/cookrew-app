@@ -376,11 +376,22 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * until the next full app launch.
    *
    * The timer unrefs so it never holds the app open.
+   *
+   * `onDeath` fires the moment the death is DETECTED — before the restart is
+   * attempted and independent of whether it succeeds — because the two are
+   * different facts: every open dispatch was riding the server that died, and
+   * a restarted server does not resume the turns the dead one dropped. The
+   * dispatch service uses this to interrupt (never fail) its open records.
    */
-  startSupervisor(intervalMs = 15_000): NodeJS.Timeout {
+  startSupervisor(intervalMs = 15_000, onDeath?: (why: string) => void): NodeJS.Timeout {
     const timer = setInterval(() => {
       if (this.serverRunning()) return
       this.serverUp = false
+      try {
+        onDeath?.('herdr server died')
+      } catch (error) {
+        console.error('herdr onDeath handler threw:', error)
+      }
       try {
         this.ensureServer()
         console.error('herdr server died and was restarted by the supervisor')
@@ -390,6 +401,15 @@ export class HerdrHostMultiplexer implements Multiplexer {
     }, intervalMs)
     timer.unref?.()
     return timer
+  }
+
+  /**
+   * Public liveness answer for callers that must CLASSIFY a failure rather
+   * than recover from one: a promptAgent rejection over a dead server is an
+   * interruption, not a delivery failure. Same probe the supervisor trusts.
+   */
+  serverAlive(): boolean {
+    return this.serverRunning()
   }
 
   /**

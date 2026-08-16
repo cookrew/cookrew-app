@@ -9,16 +9,20 @@ import { PtyManager, multiplexer, sessionNameFor } from './pty'
 import type { PtySession } from './pty'
 import type { PaneCardInfo } from './multiplexer'
 import { agentStatus, statusFeed, type StatusObservation } from './herdr-agent-status'
+import { resolveRotationChain, rotationCommitVerdict } from './claude-rotation'
 import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
 import { TurnTracker, type CompletedTurn } from './turn-tracker'
 import { TurnStore } from './turn-store'
 import {
   DispatchService,
   appendDispatchRecord,
+  appendDispatchTombstone,
   defaultDispatchRegistry,
   readDispatchRecords,
+  readDispatchTombstones,
   turnDetails
 } from './dispatch'
+import { HerdrHostMultiplexer } from './herdr-host-multiplexer'
 import { pasteAndSubmit } from './ask'
 import {
   boardSourcesFrom,
@@ -160,12 +164,23 @@ const sessionSync = new SessionTurnSync(turns, undefined, {
   // the agent is still working/blocked. The positive signal may hold a turn
   // open (its real value through long silent tool calls); per the standing
   // asymmetry it never ends one, and its absence alone never completes
-  // anything either — completion still needs the settled tail record.
+  // anything either — completion still needs the settled FINAL tail record.
   onQuiet: (terminalId) => {
     const reported = agentStatus(sessionNameFor(terminalId))
     if (reported === 'working' || reported === 'blocked') return
     turns.completeFromHistory(terminalId)
-  }
+  },
+  // Sol r1 P0: a switched-away human turn inside a long silent tool call must
+  // not drain — herdr's working/blocked is the positive evidence that holds
+  // the watch open (a hold, not a reset: drain fires on the first quiet tick
+  // after it clears). Its absence is NOT evidence of rest; that asymmetry is
+  // why drain also needs the full quiet window.
+  holdOpen: (terminalId) => {
+    const reported = agentStatus(sessionNameFor(terminalId))
+    return reported === 'working' || reported === 'blocked'
+  },
+  isInTurn: (terminalId) => turns.inTurn(terminalId),
+  onStale: (terminalId) => void rebindRotatedClaudeSession(terminalId)
 })
 const routines = new RoutineScheduler(store, ptys)
 const voice = new VoiceEngine()
@@ -414,6 +429,18 @@ function spawnTracked(t: {
   // Codex rollout bind (trace-sourced-context-final): the rollout file
   // appears seconds AFTER boot, so poll on a schedule, then keep a slow
   // retry tail until it binds (BIND_RETRY_TAIL_MS).
+  // SPAWN-TIME successor probe, not only the quiet-pane watcher: a crash
+  // recovery rotates the session while no pane exists, so by the time a pane
+  // exists again the staleness watcher has nothing stale to notice.
+  // resolveClaudeSessionId keeps a stored id merely because its file still
+  // EXISTS — it never asks whether a newer file claims that file's uuids.
+  // Measured on Conductor: 368/368 head uuids replayed into a successor and
+  // the rail sat frozen until the binding was repointed by hand. So every
+  // adopt asks the question too; the probe follows the chain to the newest
+  // hop and refuses on every doubt, exactly as when a watcher raises it.
+  if (isClaudeCommand(command) && t.claudeSessionId) {
+    void rebindRotatedClaudeSession(t.id)
+  }
   if (isCodexCommand(command) && !t.codexSessionRef) {
     // DETERMINISTIC bind (EXACT-CONTEXT gate): the rollout is the file the
     // codex PROCESS holds open (lsof of the pane pid), never a most-recent
@@ -520,6 +547,112 @@ function spawnTracked(t: {
   watchSessionTurns(t.id)
 }
 
+/** Claude sessions owned by OTHER terminals — current bindings AND lineage.
+ *  Lineage counts: an earlier segment of another node's conversation is still
+ *  its history, and adopting one would cross-wire two rails. */
+function claimedClaudeSessions(selfId: string): ReadonlySet<string> {
+  return new Set(
+    store
+      .terminalsAcross()
+      .filter((node) => node.id !== selfId)
+      .flatMap((node) => [
+        ...(node.claudeSessionId ? [node.claudeSessionId] : []),
+        ...(node.sessionLineage ?? [])
+      ])
+  )
+}
+
+const rotationProbes = new Set<string>()
+
+async function rebindRotatedClaudeSession(terminalId: string): Promise<void> {
+  // Single-flight per terminal: never stack probes. The sync reports once per
+  // stale window, but a window can close while the previous probe's bytes are
+  // still in flight, and two probes racing to commit the same chain is a race
+  // with nothing to win.
+  if (rotationProbes.has(terminalId)) return
+  try {
+    const hit = store.nodeAcrossWorkspaces(terminalId)
+    if (!hit || hit.node.kind !== 'terminal') return
+    const node = hit.node as TerminalNodeData
+    if (!isClaudeCommand(node.command)) return
+    const bound = node.claudeSessionId
+    if (!bound) return
+    rotationProbes.add(terminalId)
+    let chain: string[] | null
+    try {
+      chain = await resolveRotationChain({
+        cwd: node.cwd,
+        sessionId: bound,
+        claimed: claimedClaudeSessions(terminalId)
+      })
+    } finally {
+      rotationProbes.delete(terminalId)
+    }
+    if (chain === null) return
+    // ---- last await is above this line; the commit re-reads and lands ----
+    commitRotatedClaudeSession(terminalId, bound, chain)
+  } catch (error) {
+    console.error('Claude session rotation rebind failed:', error)
+  }
+}
+
+/**
+ * Land a proven rotation chain on the node — SYNCHRONOUSLY, and only if the
+ * store still says what the probe assumed. Every fact is re-read here rather
+ * than carried across the await: the node itself (it may have been killed or
+ * repurposed), its binding (it may have been rebound by recover, fork or
+ * another probe) and every other node's claims incl. lineage (a peer may have
+ * taken a hop while we were reading). MUST NOT become async — see
+ * rotationCommitVerdict.
+ */
+function commitRotatedClaudeSession(
+  terminalId: string,
+  bound: string,
+  chain: readonly string[]
+): void {
+  const hit = store.nodeAcrossWorkspaces(terminalId)
+  if (!hit || hit.node.kind !== 'terminal') return
+  const node = hit.node as TerminalNodeData
+  if (!isClaudeCommand(node.command)) return
+  const verdict = rotationCommitVerdict({
+    boundBefore: bound,
+    boundNow: node.claudeSessionId,
+    chain,
+    claimed: claimedClaudeSessions(terminalId)
+  })
+  if (verdict !== 'commit') return
+  const rotated = chain[chain.length - 1]
+  // Folded hop by hop so EVERY session the agent passed through lands on
+  // the lineage: the rail keeps each earlier segment behind its own clear
+  // marker, and cross-clear rewind can still cut into them.
+  const patch = chain.reduce(
+    withSessionLineage,
+    {
+      claudeSessionId: node.claudeSessionId,
+      sessionLineage: node.sessionLineage
+    } as Pick<TerminalNodeData, 'claudeSessionId' | 'sessionLineage'>
+  )
+  store.updateNodeAcrossWorkspacesUnsafe(terminalId, patch)
+  agents.setSessionRef(terminalId, rotated)
+  // The successor file is the durable record now. unwatch first: the
+  // dead file's verified signature must not survive as dormant context.
+  // Deliberately NOT interrupting an open dispatch here: a rotation is the
+  // SAME conversation continuing in a new file — the armed stamp (prompt
+  // identity + armedAt) survives, and the successor's tail is exactly where
+  // the dispatched turn will land. The observer migrates; the record lives.
+  sessionSync.unwatch(terminalId)
+  watchSessionTurns(terminalId)
+  store.withOpContext({ actor: 'agent' }, () =>
+    store.recordEventIn(
+      hit.workspaceId,
+      'terminal.session-rotated',
+      terminalId,
+      node.name,
+      `${bound.slice(0, 8)} → ${rotated.slice(0, 8)}`
+    )
+  )
+}
+
 /** Pi sessions already bound to OTHER terminals — a shared-dir session is
  *  never reassignable, exactly as for codex rollouts / opencode sessions. */
 function claimedPiSessions(selfId: string): ReadonlySet<string> {
@@ -533,14 +666,18 @@ function claimedPiSessions(selfId: string): ReadonlySet<string> {
 
 /** Start (or refresh) the session-file turn reconcile for a terminal whose
  *  harness carries 'file' turn history; a no-op for scrape-only/plain shells. */
-function watchSessionTurns(terminalId: string): void {
+function watchSessionTurns(
+  terminalId: string,
+  opts: { deferInitial?: boolean } = {}
+): boolean {
   const spec = traces.watchSpec(terminalId)
-  if (!spec) return
-  sessionSync.watch(terminalId, spec.file, spec.parse)
+  if (!spec) return false
+  sessionSync.watch(terminalId, spec.file, spec.parse, opts)
   // The multiplexer gets the transcript path too, when it models agents —
   // this is the same fact, and herdr's own detection can use it rather than
   // inferring the agent's state from what it painted.
   multiplexer()?.reportAgentSession?.(sessionNameFor(terminalId), spec.file)
+  return true
 }
 
 /**
@@ -584,12 +721,17 @@ const dispatchService = new DispatchService({
     if (!mux?.capabilities.agentLifecycle || !mux.promptAgent) return Promise.resolve('failed')
     return mux.promptAgent(name, prompt, timeoutMs)
   },
-  noteDispatch: (agentId, dispatchId) => turns.noteDispatch(agentId, dispatchId),
+  noteDispatch: (agentId, dispatchId, prompt) => turns.noteDispatch(agentId, dispatchId, prompt),
   clearDispatch: (agentId, dispatchId) => turns.clearDispatch(agentId, dispatchId),
   // Accept time: the dispatch's turn must land in a watched session file, and
-  // the pin holds that watch open until the record closes (v5 A4).
+  // the pin holds that watch open until the record closes (v5 A4). False =
+  // no durable observer could be installed AND no scrape covers the agent —
+  // the engine refuses the dispatch rather than accept work only the sweep
+  // can ever end (A2's exportability precondition). deferInitial: the accept
+  // path must not pay a full-transcript parse inline; the poll covers it.
   beginWork: (agentId) => {
-    watchSessionTurns(agentId)
+    const watched = watchSessionTurns(agentId, { deferInitial: true })
+    if (!watched && !turns.isTracked(agentId)) return false
     sessionSync.pin(agentId)
     // A background target was watched BY this dispatch, not by focus, so the
     // watch must owe its drain from the start: released-but-pinned holds for
@@ -598,10 +740,19 @@ const dispatchService = new DispatchService({
     if (store.nodeAcrossWorkspaces(agentId)?.workspaceId !== store.activeId) {
       sessionSync.release(agentId)
     }
+    return true
   },
   endWork: (agentId) => sessionSync.unpin(agentId),
   persist: (record) => appendDispatchRecord(defaultDispatchRegistry(), record),
   loadRecords: () => readDispatchRecords(defaultDispatchRegistry()),
+  persistTombstone: (tombstone) => appendDispatchTombstone(defaultDispatchRegistry(), tombstone),
+  loadTombstones: () => readDispatchTombstones(defaultDispatchRegistry()),
+  // "Cannot say" (absent liveness) must never classify a failure as death —
+  // only a positive dead answer routes delivery errors to 'interrupted'.
+  backendAlive: () => {
+    const mux = multiplexer()
+    return mux instanceof HerdrHostMultiplexer ? mux.serverAlive() : true
+  },
   // The typed path and ONLY the typed path: askTerminal asks the multiplexer
   // first, so reaching for it here would hand the same prompt back to herdr —
   // a second identical submission on the exact outcome that means "herdr could
@@ -613,6 +764,11 @@ const dispatchService = new DispatchService({
     return true
   }
 })
+
+// Backend death reaches the dispatch plane the moment the supervisor sees it:
+// every open record the dead server hosted is stamped interrupted (billed as
+// infrastructure, never as the agent failing), not left to the sweep.
+ptys.onBackendDeath = (why) => dispatchService.onBackendDeath(why)
 
 /**
  * How often the sweep looks for dispatches nothing will ever close (D1).
@@ -687,6 +843,9 @@ function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
   // by tmux session name, so parked (detached) terminals are reached too.
   for (const id of store.terminalIdsOf(meta.id)) {
     store.snapshotTerminal(id) // HIGH-1: capture recovery snapshot before the kill
+    // An open dispatch dies WITH its workspace — interrupted (infrastructure),
+    // never left submitted/busy until the sweep (Sol r1 P1).
+    dispatchService.interruptAgent(id, 'workspace removed')
     sessionSync.unwatch(id)
     ptys.killDetached(id)
     turns.untrack(id)
@@ -730,6 +889,9 @@ async function setTerminalCwd(nodeId: string, dir: string): Promise<CanvasNode> 
         setTerminalCwd: (id, target) => store.setTerminalCwd(id, target)
       },
       release: (id) => {
+        // A deliberate rebind tears down the observer; an open dispatch must
+        // not silently carry its stamp across sessions — interrupt it.
+        dispatchService.interruptAgent(id, 'terminal rebound')
         sessionSync.unwatch(id)
         turns.untrack(id)
       },
@@ -906,6 +1068,7 @@ function recoverAgent(id: string): RecoverResult {
 }
 
 async function removeNode(id: string): Promise<void> {
+  dispatchService.interruptAgent(id, 'terminal removed')
   sessionSync.unwatch(id)
   turns.untrack(id)
   // NOTE: turn history is deliberately NOT cleared on kill — it is the third
@@ -1058,6 +1221,7 @@ const teamClipboard = new TeamClipboard({
     const state = store.workspaceState(fromWorkspaceId)
     for (const node of state.nodes) {
       if (node.kind !== 'terminal' || !nodeIds.includes(node.id)) continue
+      dispatchService.interruptAgent(node.id, 'terminal cut')
       sessionSync.unwatch(node.id)
       turns.untrack(node.id)
       await ptys.killAndWait(node.id)
@@ -1067,6 +1231,7 @@ const teamClipboard = new TeamClipboard({
     const state = store.workspaceState(fromWorkspaceId)
     for (const node of state.nodes) {
       if (node.kind !== 'terminal' || !nodeIds.includes(node.id)) continue
+      dispatchService.interruptAgent(node.id, 'terminal cut')
       sessionSync.unwatch(node.id)
       turns.untrack(node.id)
       ptys.kill(node.id)
@@ -1537,6 +1702,9 @@ app.whenReady().then(() => {
     board: boardSources(),
     // Attach-free dispatch (v4 §3): the two /api routes answer 503 without it.
     dispatch: dispatchService,
+    // While a dispatch is armed, the HTTP input/ask producers refuse 409 —
+    // two writers racing one agent is two answers to one reservation.
+    hasArmedDispatch: (terminalId) => turns.hasArmedDispatch(terminalId),
     wallToken,
     pairingToken,
     recoverAgent,

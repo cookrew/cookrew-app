@@ -1,6 +1,12 @@
 import { EventEmitter } from 'node:events'
 import type { PtySession } from './pty'
+import { sessionNameFor } from './pty'
 import { diffOutput } from './ask'
+// The dispatch engine's own prompt-identity rule, reused verbatim: ONE
+// normalization decides both "did the prompt land?" and "is this turn the
+// dispatched one?" — two rules would let a prompt land under one and never
+// complete under the other.
+import { promptAnswersDispatch } from './dispatch'
 import { agentStatus } from './herdr-agent-status'
 import { summarizeTurn, TurnSummarizer } from './sous'
 import type { TurnStore } from './turn-store'
@@ -142,6 +148,13 @@ interface TrackedTerminal {
  */
 interface PendingDispatch {
   id: string
+  /**
+   * What the dispatch actually asked. Completion demands prompt IDENTITY, not
+   * just a start time after the arming — a human ask racing the dispatch into
+   * the same agent also starts a turn after armedAt, and a stamp consumed by
+   * timestamp alone would bill the caller for that stranger's exchange.
+   */
+  prompt: string
   /** Prevents a dispatch from claiming a turn already in flight when it armed. */
   armedAt: number
 }
@@ -427,11 +440,47 @@ export class TurnTracker extends EventEmitter {
    * the second would close the newcomer with the incumbent's turn and leave
    * the incumbent open forever — two dispatches, one answer.
    */
-  noteDispatch(terminalId: string, dispatchId: string): boolean {
+  noteDispatch(terminalId: string, dispatchId: string, prompt: string): boolean {
     const held = this.pendingDispatch.get(terminalId)
     if (held !== undefined) return held.id === dispatchId
-    this.pendingDispatch.set(terminalId, { id: dispatchId, armedAt: Date.now() })
+    this.pendingDispatch.set(terminalId, { id: dispatchId, prompt, armedAt: Date.now() })
     return true
+  }
+
+  /**
+   * Is a dispatch stamp armed on this terminal? The HTTP input producers
+   * (/input, /ask) serialize on this: a second producer typing into an agent
+   * mid-dispatch would interleave two principals' work in one input box AND
+   * poison the prompt-identity correlation for both. Local canvas typing is
+   * deliberately not gated — the owner at the keyboard outranks the machinery.
+   */
+  hasArmedDispatch(terminalId: string): boolean {
+    return this.pendingDispatch.has(terminalId)
+  }
+
+  /**
+   * Is a live PTY scrape-tracking this terminal right now? Dispatch
+   * acceptance asks this: an agent with neither a file observer nor a scrape
+   * has nobody to witness its turn, and accepting work for it would pin a
+   * watch on nothing.
+   */
+  isTracked(terminalId: string): boolean {
+    return this.tracked.has(terminalId)
+  }
+
+  /**
+   * Does the tracker believe a turn is running here? Live scrape phase when a
+   * PTY is attached; detached, the only witnesses are herdr's push feed (a
+   * positive working/blocked claim) and an armed dispatch (work this app
+   * itself submitted). Gates the staleness report — a quiet file under an
+   * agent nobody believes is working is rest, not rotation.
+   */
+  inTurn(terminalId: string): boolean {
+    const t = this.tracked.get(terminalId)
+    if (t) return t.phase === 'thinking' || t.phase === 'waiting'
+    if (this.pendingDispatch.has(terminalId)) return true
+    const reported = agentStatus(sessionNameFor(terminalId))
+    return reported === 'working' || reported === 'blocked'
   }
 
   /**
@@ -445,31 +494,36 @@ export class TurnTracker extends EventEmitter {
   }
 
   /**
-   * Announce a finished exchange, consuming the pending-dispatch stamp when
-   * this turn is the one the dispatch caused. The armedAt guard is what makes
-   * that attribution honest: a turn that OPENED before the dispatch was armed
-   * is somebody else's exchange (a human turn already in flight when the
-   * dispatch arrived), so the stamp stays armed for the agent's next turn —
-   * the one the dispatched prompt, queued in the input box, actually starts.
-   */
-  /**
-   * File-observer dispatch closure (v5 A2): a dispatched agent in a
-   * background workspace has no PTY, so the scrape can never close its
-   * dispatch — the durable history the session-file reconcile maintains is
-   * the only witness. Called by the sync on quiet polls; completes the armed
-   * dispatch when the tail record is a real exchange (a reply exists — a
-   * prompt-only tail is a turn still running) that STARTED after the
-   * dispatch armed, per the same attribution rule as the scrape path. While
-   * a live PTY exists the scrape owns correlation and this stands down —
-   * two closers racing would be two answers to one question.
+   * File-observer dispatch closure (v5 A2): for a FILE-BACKED terminal the
+   * durable history the session-file reconcile maintains is the only witness
+   * that counts, so this is the ONE closer for its dispatches — the scrape,
+   * even when a live PTY exists, only reports latency (emitCompletedTurn
+   * stands down from the stamp). One authority, one closer: two closers
+   * racing was how a dispatch got billed against a history tail the
+   * reconcile had not written yet.
+   *
+   * Called by the sync on quiet polls. Closing takes ALL of:
+   * - file authority (`writesFromFile`) — closure must read the durable row
+   *   it bills against; a scrape-only terminal has no such row and its own
+   *   path closes it;
+   * - a tail record with a reply AND `final === true` — finality, not quiet,
+   *   is the evidence: an assistant text block followed by a tool call looks
+   *   exactly like a finished reply until the tool result lands, and the
+   *   parser stamps `final` only on positive end-of-turn evidence (absent
+   *   means "maybe still running", which for billing-grade closure means NO);
+   * - the armedAt guard — a turn that opened before the dispatch armed is
+   *   somebody else's exchange;
+   * - prompt identity — timestamp order is eligibility, the prompt is proof.
    */
   completeFromHistory(terminalId: string): void {
     const pending = this.pendingDispatch.get(terminalId)
-    if (pending === undefined || this.tracked.has(terminalId)) return
+    if (pending === undefined || !this.writesFromFile(terminalId)) return
     const records = this.histories.get(terminalId)
     const last = records?.[records.length - 1]
     if (!last || last.reply.length === 0) return
+    if (last.final !== true) return
     if (last.startedAt < pending.armedAt) return
+    if (!promptAnswersDispatch(last.prompt, pending.prompt)) return
     this.pendingDispatch.delete(terminalId)
     this.emit('turn', {
       terminalId,
@@ -478,9 +532,32 @@ export class TurnTracker extends EventEmitter {
     } satisfies CompletedTurn)
   }
 
-  private emitCompletedTurn(terminalId: string, durationMs: number, startedAt: number): void {
-    const pending = this.pendingDispatch.get(terminalId)
-    const owns = pending !== undefined && startedAt >= pending.armedAt
+  /**
+   * Announce a finished exchange (the latency sample rides this for every
+   * terminal), consuming the pending-dispatch stamp ONLY where the scrape is
+   * the closing authority — a scrape-only terminal. A file-backed terminal's
+   * stamp belongs to completeFromHistory: consuming it here, at
+   * screen-settled time, let the correlation close against a history tail
+   * the reconcile had not written yet. Where the scrape does own closure it
+   * demands the same two proofs as the file path: the turn opened after the
+   * dispatch armed (a human turn already in flight when the dispatch arrived
+   * is somebody else's exchange) and the live turn's prompt matches the
+   * dispatched one.
+   */
+  private emitCompletedTurn(
+    terminalId: string,
+    durationMs: number,
+    startedAt: number,
+    prompt: string | null
+  ): void {
+    const pending = this.writesFromFile(terminalId)
+      ? undefined
+      : this.pendingDispatch.get(terminalId)
+    const owns =
+      pending !== undefined &&
+      startedAt >= pending.armedAt &&
+      prompt !== null &&
+      promptAnswersDispatch(prompt, pending.prompt)
     if (owns) this.pendingDispatch.delete(terminalId)
     this.emit('turn', {
       terminalId,
@@ -863,7 +940,7 @@ export class TurnTracker extends EventEmitter {
     // this into store.recordEvent, so latency enters through the same
     // choke-point as every other event and cannot diverge from it.
     if (t.turnStartedAt > 0) {
-      this.emitCompletedTurn(id, Date.now() - t.turnStartedAt, t.turnStartedAt)
+      this.emitCompletedTurn(id, Date.now() - t.turnStartedAt, t.turnStartedAt, t.prompt)
     }
     // STEP 4: the session file is this terminal's record. Appending here would
     // be a second writer of the same exchange — historically it landed a

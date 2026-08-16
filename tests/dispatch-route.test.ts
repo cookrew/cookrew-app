@@ -53,9 +53,9 @@ function deps(over: Partial<DispatchDeps> = {}): DispatchDeps {
     capture: () => 'idle\n> ',
     promptAgent: async () => 'done',
     noteDispatch: () => true,
-    beginWork: () => undefined,
+    beginWork: () => true,
     endWork: () => undefined,
-    persist: () => undefined,
+    persist: () => true,
     newId: () => 'dsp-1',
     now: () => 1_700_000_000_000,
     ...over
@@ -192,7 +192,13 @@ describe('POST /api/agents/:id/dispatch — refusals', () => {
     // and leaves no row.
     const persisted: DispatchRecord[] = []
     const service = new DispatchService(
-      deps({ noteDispatch: () => false, persist: (record) => persisted.push(record) })
+      deps({
+        noteDispatch: () => false,
+        persist: (record) => {
+          persisted.push(record)
+          return true
+        }
+      })
     )
     const response = await service.dispatch('agent-1', { text: PROMPT })
     expect(response.status).toBe(409)
@@ -939,15 +945,15 @@ describe('an ended dispatch lets go of the agent', () => {
 
   it('the tracker refuses to overwrite a live stamp', () => {
     const tracker = new TurnTracker(async () => null, null)
-    expect(tracker.noteDispatch('agent-1', 'dsp-1')).toBe(true)
-    expect(tracker.noteDispatch('agent-1', 'dsp-2')).toBe(false)
+    expect(tracker.noteDispatch('agent-1', 'dsp-1', PROMPT)).toBe(true)
+    expect(tracker.noteDispatch('agent-1', 'dsp-2', 'other work')).toBe(false)
     // Re-stamping the SAME dispatch is a no-op, not a conflict.
-    expect(tracker.noteDispatch('agent-1', 'dsp-1')).toBe(true)
+    expect(tracker.noteDispatch('agent-1', 'dsp-1', PROMPT)).toBe(true)
     // A superseded dispatch cannot disarm the one that replaced it.
     tracker.clearDispatch('agent-1', 'dsp-2')
-    expect(tracker.noteDispatch('agent-1', 'dsp-3')).toBe(false)
+    expect(tracker.noteDispatch('agent-1', 'dsp-3', 'third')).toBe(false)
     tracker.clearDispatch('agent-1', 'dsp-1')
-    expect(tracker.noteDispatch('agent-1', 'dsp-3')).toBe(true)
+    expect(tracker.noteDispatch('agent-1', 'dsp-3', 'third')).toBe(true)
     tracker.disposeAll()
   })
 
@@ -1023,6 +1029,7 @@ describe('beginWork on accept, endWork exactly once per terminal state', () => {
         beginWork: (agentId) => {
           counters.begins += 1
           events.push(`beginWork:${agentId}`)
+          return true
         },
         endWork: (agentId) => {
           counters.ends += 1
@@ -1271,7 +1278,7 @@ describe('dispatchId rides the turn it caused', () => {
     tracker.on('turn', (t: CompletedTurn) => seen.push(t))
     tracker.track(session as unknown as PtySession, true)
 
-    tracker.noteDispatch('agent-1', 'dsp-1')
+    tracker.noteDispatch('agent-1', 'dsp-1', 'first')
     await runTurn(session, 'first')
     await runTurn(session, 'second')
 
@@ -1310,7 +1317,7 @@ describe('dispatchId rides the turn it caused', () => {
     session.emit('input', 'a human question\r')
     session.full = '⏺ thinking'
     await vi.advanceTimersByTimeAsync(50)
-    tracker.noteDispatch('agent-1', 'dsp-1')
+    tracker.noteDispatch('agent-1', 'dsp-1', 'the dispatched brief')
     session.full = '⏺ done'
     session.idle = 99_999
     await vi.advanceTimersByTimeAsync(3000)

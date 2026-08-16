@@ -39,6 +39,7 @@ export interface PromptEntryLike {
 
 interface SessionEntry extends PromptEntryLike {
   timestamp?: string
+  message?: { content?: unknown; stop_reason?: string | null }
 }
 
 interface ContentBlock {
@@ -200,32 +201,56 @@ function assistantText(entry: SessionEntry): string | null {
 }
 
 /**
- * Derive TurnRecords from session JSONL lines: one record per real user
- * prompt, reply = the LAST assistant text of the turn (the conclusion),
- * endedAt = the latest entry timestamp inside the turn. Malformed lines are
- * skipped; assistant entries before any prompt are ignored.
+ * Resumable turn parser: feed session JSONL lines in any number of chunks
+ * (split anywhere at LINE granularity — byte-level partial lines are the
+ * caller's carry buffer) and read the records so far. Output is identical to
+ * feeding every line at once; already-fed lines are never re-read, so
+ * observing one appended turn costs the appended lines only.
  */
-export function parseSessionTurns(lines: string[]): TurnRecord[] {
+export interface SessionTurnAccumulator {
+  feed(lines: string[]): void
+  records(): TurnRecord[]
+}
+
+/**
+ * A turn parser that can also hand out a SessionTurnAccumulator — the
+ * capability SessionTurnSync checks for to reconcile in O(Δbytes). Parsers
+ * without it are re-run over retained lines instead (correct, but O(file)).
+ */
+export interface StreamingTurnParser {
+  (lines: string[]): TurnRecord[]
+  createAccumulator: () => SessionTurnAccumulator
+}
+
+export function createSessionTurnAccumulator(): SessionTurnAccumulator {
   const turns: TurnRecord[] = []
   // Identity (index + sibling collapse + uuid binding) comes from the SHARED
   // assigner so trace-block.index === TurnRecord.index by construction.
   const assigner = new CheckpointAssigner()
-  for (const line of lines) {
-    if (line.trim().length === 0) continue
+
+  const feedLine = (line: string): void => {
+    if (line.trim().length === 0) return
     const entry = parseEntry(line)
-    if (entry === null) continue
+    if (entry === null) return
     const step = assigner.feed(entry)
     if (step !== null) {
       const last = turns[turns.length - 1]
       if (step.sibling && last !== undefined) {
         // Same submission — collapse: adopt the continuation prompt/identity,
-        // keep the accumulated reply and timestamps.
+        // keep the accumulated reply and timestamps. A resend REOPENS the
+        // exchange, so any finality the superseded sibling earned is dropped.
+        const { final: _reopened, ...kept } = last
         turns[turns.length - 1] = {
-          ...last,
+          ...kept,
           prompt: step.id.prompt,
           uuid: checkpointIdentity(step.id)
         }
-        continue
+        return
+      }
+      // A later user prompt is POSITIVE evidence the previous exchange is
+      // over — the only finality a record without an end-of-turn marker gets.
+      if (last !== undefined && last.final !== true) {
+        turns[turns.length - 1] = { ...last, final: true }
       }
       const startedAt = entryTimeMs(entry, last?.endedAt ?? 0)
       turns.push({
@@ -236,16 +261,53 @@ export function parseSessionTurns(lines: string[]): TurnRecord[] {
         startedAt,
         endedAt: startedAt
       })
-      continue
+      return
     }
     const current = turns[turns.length - 1]
-    if (current === undefined) continue
-    const reply = assistantText(entry)
-    turns[turns.length - 1] = {
-      ...current,
-      endedAt: Math.max(current.endedAt, entryTimeMs(entry, current.endedAt)),
-      reply: reply !== null ? reply.slice(0, MAX_REPLY_CHARS) : current.reply
+    if (current === undefined) return
+    const endedAt = Math.max(current.endedAt, entryTimeMs(entry, current.endedAt))
+    if (entry.type === 'assistant') {
+      // Tail finality tracks the LATEST assistant entry's stop_reason:
+      // "end_turn" is the explicit end-of-turn marker Claude writes on the
+      // closing entry; "tool_use"/null mean more of this turn is coming — a
+      // nonempty reply text is NOT completion evidence (the same record keeps
+      // extending with later tool/result entries).
+      const reply = assistantText(entry)
+      const closed = entry.message?.stop_reason === 'end_turn'
+      const { final: _open, ...rest } = current
+      turns[turns.length - 1] = {
+        ...rest,
+        endedAt,
+        reply: reply !== null ? reply.slice(0, MAX_REPLY_CHARS) : current.reply,
+        ...(closed ? { final: true } : {})
+      }
+      return
+    }
+    turns[turns.length - 1] = { ...current, endedAt }
+  }
+
+  return {
+    feed(lines: string[]): void {
+      for (const line of lines) feedLine(line)
+    },
+    records(): TurnRecord[] {
+      return [...turns]
     }
   }
-  return turns
 }
+
+/**
+ * Derive TurnRecords from session JSONL lines: one record per real user
+ * prompt, reply = the LAST assistant text of the turn (the conclusion),
+ * endedAt = the latest entry timestamp inside the turn. Malformed lines are
+ * skipped; assistant entries before any prompt are ignored. Single-feed use
+ * of the accumulator, so whole-file and incremental parsing cannot diverge.
+ */
+export const parseSessionTurns: StreamingTurnParser = Object.assign(
+  function parseSessionTurns(lines: string[]): TurnRecord[] {
+    const accumulator = createSessionTurnAccumulator()
+    accumulator.feed(lines)
+    return accumulator.records()
+  },
+  { createAccumulator: createSessionTurnAccumulator }
+)

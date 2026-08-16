@@ -152,3 +152,160 @@ describe('SessionTurnSync drain (v5 work-driven tracking)', () => {
     sync.dispose()
   })
 })
+
+// Fix 3 (Sol P0): drain must not fire while there is positive evidence of
+// work — hooks.holdOpen (herdr agent_status working/blocked). A hold, not a
+// reset: quiet ticks keep accumulating, so the drain fires on the FIRST
+// quiet tick after the hold clears.
+describe('SessionTurnSync holdOpen hook', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function heldFixture(): {
+    file: string
+    tracker: TurnTracker
+    sync: SessionTurnSync
+    state: { held: boolean }
+  } {
+    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-hold-'))
+    const file = path.join(dir, 'abc.jsonl')
+    const tracker = new TurnTracker(async () => null, null)
+    const state = { held: false }
+    const sync = new SessionTurnSync(tracker, POLL_MS, { holdOpen: () => state.held })
+    return { file, tracker, sync, state }
+  }
+
+  it('a held terminal never drains, however long the quiet', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync, state } = heldFixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    sync.release('t')
+    state.held = true
+    await ticks(DRAIN_TICKS * 4)
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(2)
+    sync.dispose()
+  })
+
+  it('the drain fires on the FIRST quiet tick after the hold clears (no reset)', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync, state } = heldFixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    sync.release('t')
+    state.held = true
+    // The quiet window elapsed entirely under the hold…
+    await ticks(DRAIN_TICKS * 2)
+    state.held = false
+    // …so ONE quiet tick after it clears is enough to drain.
+    await ticks(1)
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(1)
+    sync.dispose()
+  })
+
+  it('a hold that clears before the window elapses changes nothing', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync, state } = heldFixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    sync.release('t')
+    state.held = true
+    await ticks(3)
+    state.held = false
+    // Ticks accumulated through the hold: the window closes on schedule.
+    await ticks(DRAIN_TICKS)
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(1)
+    sync.dispose()
+  })
+})
+
+// Fix 4: live subscribers are a tracking fact — a terminal someone is
+// watching may not drain (same treatment as a pin: the last unsubscribe
+// re-arms the drain clock).
+describe('SessionTurnSync subscribers', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('a subscriber holds the drain through the whole window', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    sync.subscribe('t')
+    sync.release('t')
+    await ticks(DRAIN_TICKS * 4)
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(2)
+    sync.dispose()
+  })
+
+  it('the last unsubscribe re-arms the clock — a full window before drain', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    sync.subscribe('t')
+    sync.release('t')
+    await ticks(DRAIN_TICKS * 2)
+    sync.unsubscribe('t')
+    // Re-armed: a partial window is not enough…
+    await ticks(DRAIN_TICKS - 2)
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(2)
+    // …the full window is.
+    await ticks(DRAIN_TICKS + 2)
+    appendFileSync(file, TURN_3.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(2)
+    sync.dispose()
+  })
+
+  it('double-subscribe needs two unsubscribes before the drain may fire', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    sync.subscribe('t')
+    sync.subscribe('t')
+    sync.unsubscribe('t')
+    sync.release('t')
+    // One subscriber remains: no drain.
+    await ticks(DRAIN_TICKS * 3)
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(2)
+    // The second unsubscribe releases the hold.
+    sync.unsubscribe('t')
+    await ticks(DRAIN_TICKS + 2)
+    appendFileSync(file, TURN_3.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(2)
+    sync.dispose()
+  })
+
+  it('unwatch clears subscriber counts — a rebound terminal owes nothing', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('t', file, parseSessionTurns)
+    sync.subscribe('t')
+    sync.unwatch('t')
+    sync.watch('t', file, parseSessionTurns)
+    sync.release('t')
+    await ticks(DRAIN_TICKS + 2)
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await ticks(3)
+    expect(tracker.history('t')).toHaveLength(1)
+    sync.dispose()
+  })
+})

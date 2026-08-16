@@ -27,9 +27,13 @@ function user(content: string, atMs: number): string {
 }
 
 function assistant(textContent: string, atMs: number): string {
+  // Real closing-entry shape: Claude stamps stop_reason "end_turn" on the
+  // assistant entry that ends the exchange (mid-turn entries carry
+  // "tool_use"). Fixtures carry it so these turns parse as final — the
+  // evidence a billing-grade dispatch closure requires.
   return JSON.stringify({
     type: 'assistant',
-    message: { role: 'assistant', content: [{ type: 'text', text: textContent }] },
+    message: { role: 'assistant', content: [{ type: 'text', text: textContent }], stop_reason: 'end_turn' },
     timestamp: new Date(atMs).toISOString(),
     sessionId: 'src'
   })
@@ -86,7 +90,7 @@ describe('dispatch completion from the session file (no PTY)', () => {
     const { file, tracker, sync, turns } = fixture()
     writeFileSync(file, turnLines('old turn', 'old reply', Date.now() - 60_000), 'utf8')
     sync.watch('t', file, parseSessionTurns)
-    expect(tracker.noteDispatch('t', 'd1')).toBe(true)
+    expect(tracker.noteDispatch('t', 'd1', 'do the task')).toBe(true)
     await ticks(1)
     // The dispatched turn lands AFTER arming.
     appendFileSync(file, turnLines('do the task', 'task done', Date.now()), 'utf8')
@@ -110,30 +114,32 @@ describe('dispatch completion from the session file (no PTY)', () => {
     // The whole history predates the dispatch — someone else's exchanges.
     writeFileSync(file, turnLines('old turn', 'old reply', Date.now() - 60_000), 'utf8')
     sync.watch('t', file, parseSessionTurns)
-    tracker.noteDispatch('t', 'd1')
+    tracker.noteDispatch('t', 'd1', 'do the task')
     await ticks(6)
     expect(turns).toHaveLength(0)
     sync.dispose()
   })
 
-  it('defers to the scrape while the terminal has a live PTY', async () => {
+  it('a live PTY does not create a second closer — the file path closes exactly once', async () => {
+    // One authority, one closer: for a FILE-BACKED terminal the durable
+    // history is the witness, so completeFromHistory owns the stamp even
+    // while a live PTY exists (the scrape only reports latency).
     vi.useFakeTimers()
     const { file, tracker, sync, turns } = fixture()
     writeFileSync(file, turnLines('old turn', 'old reply', Date.now() - 60_000), 'utf8')
     sync.watch('t', file, parseSessionTurns)
     const session = new FakeSession()
     tracker.track(session as unknown as PtySession, true)
-    tracker.noteDispatch('t', 'd1')
+    tracker.noteDispatch('t', 'd1', 'do the task')
     await ticks(1)
     appendFileSync(file, turnLines('do the task', 'task done', Date.now()), 'utf8')
     await ticks(4)
-    // Tracked: the live scrape owns correlation; the file path stands down.
-    expect(turns).toHaveLength(0)
-    tracker.untrack('t')
-    await ticks(2)
-    // The PTY detached (workspace switch) — the file path takes over.
     expect(turns).toHaveLength(1)
     expect(turns[0].dispatchId).toBe('d1')
+    // The PTY detaching later changes nothing — the stamp is consumed.
+    tracker.untrack('t')
+    await ticks(2)
+    expect(turns).toHaveLength(1)
     sync.dispose()
   })
 
@@ -142,7 +148,7 @@ describe('dispatch completion from the session file (no PTY)', () => {
     const { file, tracker, sync, turns } = fixture()
     writeFileSync(file, turnLines('old turn', 'old reply', Date.now() - 60_000), 'utf8')
     sync.watch('t', file, parseSessionTurns)
-    tracker.noteDispatch('t', 'd1')
+    tracker.noteDispatch('t', 'd1', 'do the task')
     await ticks(1)
     // The user record landed but the assistant has produced nothing yet.
     appendFileSync(file, user('do the task', Date.now()) + '\n', 'utf8')

@@ -481,6 +481,25 @@ export class WorkspaceStore extends EventEmitter {
    * never diverge from state. `durationMs` is how a caller that measured
    * something reports it; omit it and the event is untimed, as before.
    */
+  /**
+   * Ops living outside the store (a rotation rebind, a turn completing in
+   * the tracker) still go through here — one choke-point, so the event
+   * stream can never diverge from state, even for background workspaces.
+   */
+  recordEventIn(
+    workspaceId: string,
+    type: string,
+    entityId: string,
+    entityName: string,
+    details?: string,
+    durationMs?: number
+  ): void {
+    if (!this.registry.workspaces.some((workspace) => workspace.id === workspaceId)) {
+      throw new Error(`Workspace '${workspaceId}' not found`)
+    }
+    this.emitOp(type, entityId, entityName, workspaceId, details, durationMs)
+  }
+
   recordEvent(
     type: string,
     entityId: string,
@@ -488,7 +507,7 @@ export class WorkspaceStore extends EventEmitter {
     details?: string,
     durationMs?: number
   ): void {
-    this.emitOp(type, entityId, entityName, this.registry.activeId, details, durationMs)
+    this.recordEventIn(this.registry.activeId, type, entityId, entityName, details, durationMs)
   }
 
   private createdType(kind: CanvasNode['kind']): string {
@@ -817,6 +836,30 @@ export class WorkspaceStore extends EventEmitter {
     if (!updated) return undefined
     this.mutate({ ...this.state, nodes })
     if (updated.kind === 'note') void this.persistNoteFile(updated)
+    return updated
+  }
+
+  /**
+   * Patch a node wherever it lives — a background workspace's agent rotates
+   * its session too, and the rebind must land on the persisted state the
+   * next switch will load, not silently miss because the canvas looks away.
+   */
+  updateNodeAcrossWorkspacesUnsafe(
+    id: string,
+    patch: Partial<CanvasNode>
+  ): CanvasNode | undefined {
+    const hit = this.nodeAcrossWorkspaces(id)
+    if (!hit) return undefined
+    if (hit.workspaceId === this.registry.activeId) return this.updateNodeUnsafe(id, patch)
+    let updated: CanvasNode | undefined
+    this.patchWorkspace(hit.workspaceId, (state) => ({
+      ...state,
+      nodes: state.nodes.map((node) => {
+        if (node.id !== id) return node
+        updated = { ...node, ...patch } as CanvasNode
+        return updated
+      })
+    }))
     return updated
   }
 

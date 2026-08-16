@@ -109,6 +109,16 @@ export interface TurnRecord {
    */
   seenAt?: number
   /**
+   * The parser has POSITIVE evidence this exchange is over: a next user
+   * message exists past it, or the harness wrote an explicit end-of-turn
+   * marker (Claude: stop_reason "end_turn"). Absent/false = the turn may
+   * still be running — an assistant text block followed by a tool call
+   * looks exactly like a finished reply until the tool result lands.
+   * Billing-grade consumers (dispatch completion) must require true;
+   * cheap-recoverable ones (drain) must not.
+   */
+  final?: boolean
+  /**
    * Scrollback anchor where this checkpoint began (checkpoint-ux item 2,
    * re-stamped after the Magpie degenerate-offset finding): tmux history_size
    * at turn start — lines scrolled into scrollback so far. Rises with each

@@ -69,6 +69,12 @@ export interface MobileServerDeps {
   board?: BoardSources
   /** Attach-free dispatch engine (v4 §3); absent = the routes answer 503. */
   dispatch?: DispatchService
+  /**
+   * TurnTracker.hasArmedDispatch, threaded to handleMobileApi: the /input
+   * and /ask producers refuse 409 while a dispatch stamp is armed on the
+   * terminal, so HTTP producers are serialized against in-flight dispatches.
+   */
+  hasArmedDispatch?: (terminalId: string) => boolean
   recoverAgent: (id: string) => RecoverResult
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
   undoRestore: (id: string) => Promise<RestoreResult>

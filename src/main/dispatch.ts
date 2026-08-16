@@ -23,7 +23,7 @@
 // double-submits into a live agent's input box, so every retry here is
 // preceded by reading the transcript. Never blind.
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -52,6 +52,13 @@ export interface DispatchRecord {
   idempotencyKey?: string
   /** Idempotency is consumer-scoped; absent for owner calls. */
   consumer?: string
+  /**
+   * sha256 of the normalized prompt (promptFingerprint). The idempotency key
+   * says "this is the same work"; the hash is what lets the service CHECK
+   * that claim — one key fronting two different briefs is refused instead of
+   * silently replaying whichever brief arrived first.
+   */
+  promptHash?: string
   /**
    * Did the TRANSCRIPT agree that the prompt landed? Only meaningful for a
    * `submitted`/stalled outcome, where herdr declined to say. Recorded because
@@ -134,12 +141,14 @@ export interface DispatchDeps {
    */
   agentStatus?: (sessionName: string) => 'idle' | 'working' | 'blocked' | 'done' | null
   /**
-   * Tell the tracker which dispatch the agent's next completed turn answers.
+   * Tell the tracker which dispatch the agent's next completed turn answers,
+   * and WHAT that dispatch actually said — the tracker demands prompt
+   * identity at completion, not just a start time after the arming.
    * Returns FALSE when that agent already carries a live stamp — one turn
    * cannot answer two dispatches, and overwriting the stamp would close the
    * second dispatch with the first one's turn.
    */
-  noteDispatch: (agentId: string, dispatchId: string) => boolean
+  noteDispatch: (agentId: string, dispatchId: string, prompt: string) => boolean
   /**
    * Drop the tracker's stamp for a dispatch that ended without a turn. Without
    * it a failed dispatch leaves its id armed and the agent's next HUMAN turn
@@ -151,8 +160,14 @@ export interface DispatchDeps {
    * tracking follows work). Called once per accepted dispatch, after the
    * agent's slot is reserved and before delivery, so the session-file watch
    * and the drain pin exist before the turn they must observe.
+   *
+   * Returns FALSE when no durable observer could be installed AND the agent
+   * is not scrape-tracked — a pin with no watch, which is an acceptance
+   * nothing would ever close. A false return promises the failed attempt
+   * left no state behind (the implementation releases anything it
+   * half-built); the service then rolls its own side back and refuses 503.
    */
-  beginWork: (agentId: string) => void
+  beginWork: (agentId: string) => boolean
   /**
    * The record reached a terminal state — done, failed or interrupted, by any
    * path (turn correlation, failed delivery, sweep, hydrate, app quit). Called
@@ -160,14 +175,33 @@ export interface DispatchDeps {
    * quiet-clock owns the terminal again.
    */
   endWork: (agentId: string) => void
-  /** Append the record to the durable registry. */
-  persist: (record: DispatchRecord) => void
+  /**
+   * Append the record to the durable registry. MUST report failure — return
+   * false (or throw) — never swallow it: the accept path refuses work it
+   * cannot durably record, and transitions that fail must at least be loud.
+   */
+  persist: (record: DispatchRecord) => boolean
+  /**
+   * Append a pruned idempotency key's tombstone to the registry. Optional
+   * like loadRecords: a memory-only service simply forgets keys at prune.
+   */
+  persistTombstone?: (tombstone: DispatchTombstone) => boolean
   /**
    * Every persisted transition, for rehydration at boot. Absent = a memory-only
    * service (tests); present = idempotency keys and dispatch history survive a
    * restart instead of treating the caller's retry as new work.
    */
   loadRecords?: () => DispatchRecord[]
+  /** Tombstone lines from the registry, for rebuilding the key index at boot. */
+  loadTombstones?: () => DispatchTombstone[]
+  /**
+   * Cheap backend liveness probe. Used ONLY to classify a failed delivery:
+   * promptAgent failing while the server is provably gone is `interrupted`
+   * (the world fell over), never `failed` (we could not deliver) — a caller
+   * retries `failed` and must not retry an unknown. Absent = cannot say, so
+   * the ordinary failed-path evidence rules apply.
+   */
+  backendAlive?: () => boolean
   /**
    * LAST RESORT: submit through a reattached single pane (the cmdAsk path).
    * The only PTY in the design. Absent = no fallback, and an undeliverable
@@ -198,6 +232,42 @@ const LANDING_MATCH_CHARS = 24
 const normalize = (text: string): string => text.trim().replace(/\s+/g, ' ').toLowerCase()
 
 /**
+ * The ONE normalized-prefix key every dispatch-correlation question uses —
+ * "is the prompt on the pane?" (promptLanded) and "is this completed turn the
+ * dispatched one?" (promptAnswersDispatch). One normalization on purpose: with
+ * two rules a prompt could land under one and complete under the other, and
+ * the dispatch would never close.
+ */
+export function dispatchPromptKey(prompt: string): string {
+  return normalize(prompt).slice(0, LANDING_MATCH_CHARS)
+}
+
+/**
+ * Does this completed turn's prompt identify it as the dispatched one?
+ *
+ * Timestamp order says a turn COULD be the answer; only prompt identity says
+ * it IS. A human ask racing the dispatch into the same agent also starts a
+ * turn after armedAt, and closing on that turn would bill the caller for
+ * somebody else's exchange. An empty dispatched prompt matches nothing —
+ * there is no identity to prove.
+ */
+export function promptAnswersDispatch(turnPrompt: string, dispatchedPrompt: string): boolean {
+  const key = dispatchPromptKey(dispatchedPrompt)
+  if (key.length === 0) return false
+  return dispatchPromptKey(turnPrompt) === key
+}
+
+/**
+ * Request fingerprint for idempotency-key reuse detection: sha256 over the
+ * same normalization as everything else here. Stored on the record (and on
+ * the key's tombstone), so "same key, different work" stays detectable for as
+ * long as the key itself is honored.
+ */
+export function promptFingerprint(prompt: string): string {
+  return createHash('sha256').update(normalize(prompt)).digest('hex')
+}
+
+/**
  * Is this agent out of context?
  *
  * Measured 2026-08-13: a Claude session at 100% context reported herdr
@@ -226,7 +296,7 @@ export function contextExhausted(paneText: string | null): boolean {
  */
 export function promptLanded(paneText: string | null, prompt: string): boolean {
   if (!paneText) return false
-  const needle = normalize(prompt).slice(0, LANDING_MATCH_CHARS)
+  const needle = dispatchPromptKey(prompt)
   if (needle.length === 0) return false
   return normalize(paneText).includes(needle)
 }
@@ -321,40 +391,91 @@ export function persistedRecord(record: DispatchRecord): DispatchRecord {
 }
 
 /**
- * Append one transition. Append-only on purpose: a dispatch ledger that
- * rewrites rows cannot answer "what did this look like when it closed",
- * and a crash mid-rewrite would lose the row entirely.
- *
- * OWNER-ONLY on disk. The rows name agents, workspaces and the shape of
- * commissioned work, so the directory is created 0700 and the file 0600 — and
- * an existing file is chmod'ed on every append, because `mode` applies at
- * CREATE time only and this ledger predates the fix on every machine that
- * already ran it.
+ * What survives a pruned idempotency key. Dropping a closed record used to
+ * take its key with it, so a caller's retry past the retention window quietly
+ * became NEW work — the exact double-run the key exists to prevent. The
+ * tombstone keeps only the (scope, key) → dispatchId binding and the prompt
+ * fingerprint; everything else about the dispatch is gone by design, and the
+ * replay response says so.
  */
-export function appendDispatchRecord(file: string, record: DispatchRecord): void {
+export interface DispatchTombstone {
+  kind: 'tombstone'
+  /** Consumer-scoped idempotency key (idempotencyScope output). */
+  scope: string
+  dispatchId: string
+  /** Fingerprint of the original prompt, for key-reuse detection. */
+  promptHash?: string
+  /** When the record it stands for closed — the TTL clock. */
+  closedAt: number
+}
+
+/**
+ * How long a pruned key stays recognisable as a replay. Far past any sane
+ * retry window, bounded so the index cannot grow for the life of the ledger.
+ */
+export const IDEMPOTENCY_TTL_MS = 90 * 24 * 60 * 60 * 1000
+
+/**
+ * One durable line, owner-only. The rows name agents, workspaces and the
+ * shape of commissioned work, so the directory is created 0700 and the file
+ * 0600 — and an existing file is chmod'ed on every append, because `mode`
+ * applies at CREATE time only and this ledger predates the fix on every
+ * machine that already ran it. Failure is REPORTED, not swallowed: the accept
+ * path refuses work it cannot durably record.
+ */
+function appendRegistryLine(file: string, line: string): boolean {
   try {
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
     const inherited = existsSync(file) ? statSync(file).mode & 0o777 : 0o600
-    appendFileSync(file, `${JSON.stringify(persistedRecord(record))}\n`, {
-      encoding: 'utf8',
-      mode: 0o600
-    })
+    appendFileSync(file, `${line}\n`, { encoding: 'utf8', mode: 0o600 })
     if (inherited !== 0o600) chmodSync(file, 0o600)
+    return true
   } catch (error) {
     console.error('Dispatch registry write failed:', error)
+    return false
   }
+}
+
+/**
+ * Append one transition. Append-only on purpose: a dispatch ledger that
+ * rewrites rows cannot answer "what did this look like when it closed",
+ * and a crash mid-rewrite would lose the row entirely.
+ */
+export function appendDispatchRecord(file: string, record: DispatchRecord): boolean {
+  return appendRegistryLine(file, JSON.stringify(persistedRecord(record)))
+}
+
+/** Append a pruned key's tombstone — same file, same tolerance, same modes. */
+export function appendDispatchTombstone(file: string, tombstone: DispatchTombstone): boolean {
+  return appendRegistryLine(file, JSON.stringify(tombstone))
 }
 
 /** Every persisted transition, oldest first. A torn line is skipped, not fatal. */
 export function readDispatchRecords(file: string): DispatchRecord[] {
+  return readRegistryLines(file, (parsed) =>
+    typeof (parsed as DispatchRecord)?.id === 'string' ? (parsed as DispatchRecord) : null
+  )
+}
+
+/** Every tombstone line, oldest first — record lines are somebody else's rows. */
+export function readDispatchTombstones(file: string): DispatchTombstone[] {
+  return readRegistryLines(file, (parsed) => {
+    const tombstone = parsed as DispatchTombstone
+    return tombstone?.kind === 'tombstone' && typeof tombstone.dispatchId === 'string'
+      ? tombstone
+      : null
+  })
+}
+
+function readRegistryLines<T>(file: string, pick: (parsed: unknown) => T | null): T[] {
   try {
     if (!existsSync(file)) return []
-    const rows: DispatchRecord[] = []
+    const rows: T[] = []
     for (const line of readFileSync(file, 'utf8').split('\n')) {
       if (line.trim().length === 0) continue
       try {
-        const parsed = JSON.parse(line) as DispatchRecord
-        if (typeof parsed?.id === 'string') rows.push(parsed)
+        const picked = pick(JSON.parse(line))
+        if (picked !== null) rows.push(picked)
       } catch {
         // torn write — the next append lands cleanly after it
       }
@@ -400,6 +521,8 @@ export class DispatchService {
   private readonly reserved = new Map<string, string>()
   /** consumer + idempotencyKey → dispatchId, so one tenant cannot shadow another. */
   private readonly byKey = new Map<string, string>()
+  /** scope → tombstone: keys whose records are pruned but whose promise is not. */
+  private readonly tombstones = new Map<string, DispatchTombstone>()
   /** dispatchId → the async delivery leg, for tests and for shutdown. */
   private readonly inFlight = new Map<string, Promise<void>>()
 
@@ -423,6 +546,13 @@ export class DispatchService {
    * endWork included, which unpin tolerates for a pin the dead process held.
    */
   private hydrate(): void {
+    // Tombstones first, records second: a scope that somehow has both is
+    // answered from the LIVE record, which still knows its state and turn.
+    const expired = this.now() - IDEMPOTENCY_TTL_MS
+    for (const tombstone of this.deps.loadTombstones?.() ?? []) {
+      if (tombstone.closedAt < expired) continue
+      this.tombstones.set(tombstone.scope, tombstone)
+    }
     const rows = this.deps.loadRecords?.() ?? []
     for (const row of rows) {
       if (typeof row?.id !== 'string') continue
@@ -461,10 +591,19 @@ export class DispatchService {
    * turn ledger, which is behind the same pairing gate as everything else that
    * carries agent output; re-serving it from a dispatch id turned one leaked id
    * into a transcript read. `hasReply` keeps the poll useful without the text.
+   *
+   * `requester` is the principal the ROUTE derived from its auth (never from
+   * the caller's body). 'owner' sees everything — including in-process callers,
+   * which default to it; any other principal sees only its own records, and a
+   * foreign id answers 404, not 403: confirming that somebody else's dispatch
+   * id EXISTS is itself a disclosure.
    */
-  lookup(dispatchId: string): DispatchResponse {
+  lookup(dispatchId: string, requester: string = 'owner'): DispatchResponse {
     const record = this.records.get(dispatchId)
     if (!record) return { status: 404, body: { error: 'no such dispatch' } }
+    if (requester !== 'owner' && record.consumer !== requester) {
+      return { status: 404, body: { error: 'no such dispatch' } }
+    }
     const { reply, ...projection } = record
     return {
       status: 200,
@@ -487,24 +626,60 @@ export class DispatchService {
    * the handle: GET /api/dispatches/:id is where the answer shows up.
    */
   async dispatch(agentId: string, input: DispatchInput): Promise<DispatchResponse> {
-    const agent = this.deps.resolveAgent(agentId)
-    if (!agent) return { status: 404, body: { error: 'no such agent' } }
-
     const prompt = (input.text ?? input.brief ?? '').trim()
-    if (prompt.length === 0) {
-      return { status: 400, body: { error: 'dispatch needs a brief or text' } }
-    }
+    // Fingerprinted before any refusal: the replay lookup needs it, and it
+    // exists only when there is a prompt to fingerprint — an empty retry can
+    // still replay by key, it just cannot prove or disprove sameness.
+    const promptHash = prompt.length > 0 ? promptFingerprint(prompt) : undefined
 
-    // A REPLAY outruns every refusal below, including busy: the retry a flaky
-    // network produces arrives while the original is still in flight, and
-    // answering 409 there would tell a caller to back off from its own work.
+    // A REPLAY outruns EVERY refusal below — busy, 404 and 400 included. The
+    // retry a flaky network produces can arrive while the original is still
+    // in flight, after the agent was deleted, or with a mangled empty body,
+    // and the honest answer is still "that work exists, here is its id" — an
+    // error would tell the caller to re-send its own work.
     const key = input.idempotencyKey
     const scopedKey = key === undefined ? undefined : idempotencyScope(input.consumer, key)
     if (scopedKey !== undefined) {
+      const reused = { error: 'idempotency key reused for different work' }
       const existing = this.byKey.get(scopedKey)
       if (existing !== undefined) {
+        const held = this.records.get(existing)
+        // Same key fronting a DIFFERENT brief is a caller bug: replaying
+        // would hand back a result for a prompt this caller did not send, and
+        // running it would break the key's promise. Checkable only when both
+        // sides carry a fingerprint (pre-upgrade rows do not).
+        if (
+          promptHash !== undefined &&
+          held?.promptHash !== undefined &&
+          held.promptHash !== promptHash
+        ) {
+          return { status: 409, body: reused }
+        }
         return { status: 200, body: { dispatchId: existing, replay: true } }
       }
+      const tombstone = this.tombstones.get(scopedKey)
+      if (tombstone !== undefined) {
+        if (
+          promptHash !== undefined &&
+          tombstone.promptHash !== undefined &&
+          tombstone.promptHash !== promptHash
+        ) {
+          return { status: 409, body: reused }
+        }
+        // The record itself is pruned: the id and "it closed" are ALL that is
+        // still known — turnIndex, agent, timings went with the record, and
+        // `tombstone: true` says so instead of faking a fuller answer.
+        return {
+          status: 200,
+          body: { dispatchId: tombstone.dispatchId, state: 'done', replay: true, tombstone: true }
+        }
+      }
+    }
+
+    const agent = this.deps.resolveAgent(agentId)
+    if (!agent) return { status: 404, body: { error: 'no such agent' } }
+    if (prompt.length === 0) {
+      return { status: 400, body: { error: 'dispatch needs a brief or text' } }
     }
 
     const held = this.reserved.get(agentId)
@@ -529,7 +704,7 @@ export class DispatchService {
     // id applied afterwards would miss its own turn. A refusal here means the
     // tracker still holds a LIVE stamp for this agent — a dispatch we have no
     // reservation for — so this one is refused before anything is recorded.
-    if (!this.deps.noteDispatch(agentId, id)) {
+    if (!this.deps.noteDispatch(agentId, id, prompt)) {
       return { status: 409, body: { error: 'busy' } }
     }
 
@@ -544,15 +719,35 @@ export class DispatchService {
       createdAt: at,
       updatedAt: at,
       ...(key !== undefined ? { idempotencyKey: key } : {}),
-      ...(input.consumer !== undefined ? { consumer: input.consumer } : {})
+      ...(input.consumer !== undefined ? { consumer: input.consumer } : {}),
+      ...(promptHash !== undefined ? { promptHash } : {})
     }
-    this.write(record)
     this.reserved.set(agentId, record.id)
+    // Accepted only if OBSERVABLE: bring the tracking up BEFORE the prompt
+    // goes out (v5 A4) — the session-file watch and the drain pin must exist
+    // before the turn they are there to observe, or a fast agent's answer
+    // lands in an unwatched file. And when NO observer can be installed at
+    // all, refuse rather than accept: a pin with no watch is a dispatch only
+    // the ten-minute sweep would ever close, which is a timeout pretending to
+    // be an answer. Roll back completely — no reservation, no stamp, no row.
+    if (!this.deps.beginWork(agentId)) {
+      this.reserved.delete(agentId)
+      this.deps.clearDispatch?.(agentId, id)
+      return { status: 503, body: { error: 'agent has no durable observer' } }
+    }
+    // Durability before delivery: the submitted row must be ON DISK before
+    // the prompt can go out, or a crash in the gap runs work the ledger never
+    // heard of and a replayed key re-runs it. On failure, unwind everything —
+    // beginWork's effects via endWork, exactly once — and refuse.
+    this.records.set(record.id, record)
+    if (!this.persistRecord(record)) {
+      this.records.delete(record.id)
+      this.reserved.delete(agentId)
+      this.deps.clearDispatch?.(agentId, id)
+      this.deps.endWork(agentId)
+      return { status: 503, body: { error: 'dispatch ledger unavailable' } }
+    }
     if (scopedKey !== undefined) this.byKey.set(scopedKey, record.id)
-    // Accepted: bring the tracking up BEFORE the prompt goes out (v5 A4). The
-    // session-file watch and the drain pin must exist before the turn they are
-    // there to observe, or a fast agent's answer lands in an unwatched file.
-    this.deps.beginWork(agentId)
 
     // The reservation is NOT released here (F6). Submission settles
     // milliseconds after the prompt goes out and the agent then works for
@@ -601,6 +796,18 @@ export class DispatchService {
       // Delivered and observed. The turn correlation still closes the record —
       // `done` from the backend says the agent stopped, not what it produced.
       this.update(dispatchId, { state: 'running', via: 'herdr', confirmed: true })
+      return
+    }
+
+    if (outcome === 'failed' && this.deps.backendAlive?.() === false) {
+      // The submission did not fail — the world under it did. A dead server
+      // is `interrupted`, never `failed`: the prompt may well be sitting in a
+      // pane the restarted server will resurrect, and `failed` invites the
+      // caller to re-send it on top.
+      this.update(dispatchId, {
+        state: 'interrupted',
+        error: 'interrupted: the backend died during delivery'
+      })
       return
     }
 
@@ -737,6 +944,36 @@ export class DispatchService {
     return this.interruptEach(this.openDispatchIds(), why)
   }
 
+  /**
+   * The backend died under every open dispatch at once (herdr supervisor).
+   * Interrupted — never failed — through the same release choke point as
+   * every other terminal transition: the agents may have done the work, and
+   * nothing that outlives the server can watch their turns end. Sweeps ALL
+   * non-terminal records, not just the reserved ones, so nothing is stranded
+   * waiting on a correlation that can no longer arrive.
+   */
+  onBackendDeath(why: string): string[] {
+    return this.interruptEach(this.openIdsWhere(() => true), why)
+  }
+
+  /**
+   * One agent left the world (node removal, harness rebind): its open
+   * dispatches are interrupted, not failed — the delivery already happened,
+   * only the witness is gone. Exposed for the call sites that retire agents.
+   */
+  interruptAgent(agentId: string, why: string): string[] {
+    return this.interruptEach(
+      this.openIdsWhere((record) => record.agentId === agentId),
+      why
+    )
+  }
+
+  private openIdsWhere(keep: (record: DispatchRecord) => boolean): string[] {
+    return [...this.records.values()]
+      .filter((record) => !TERMINAL_STATES.has(record.state) && keep(record))
+      .map((record) => record.id)
+  }
+
   private interruptEach(ids: readonly string[], why: string): string[] {
     // Snapshot first: interrupt() mutates the reservation map it came from.
     const stamped: string[] = []
@@ -776,9 +1013,10 @@ export class DispatchService {
 
   /**
    * Keep the in-memory maps bounded (F17). Only CLOSED dispatches are
-   * droppable, and dropping one takes its idempotency key with it — so the
-   * window is a week rather than a handful, and an open dispatch is never
-   * pruned however old it is.
+   * droppable, and an open dispatch is never pruned however old it is.
+   * Dropping a record no longer drops its idempotency key: the key's promise
+   * outlives the record as a tombstone, for IDEMPOTENCY_TTL_MS — a caller's
+   * retry of an old key must replay, never silently re-run.
    */
   private prune(): void {
     const cutoff = this.now() - RECORD_RETENTION_MS
@@ -791,13 +1029,61 @@ export class DispatchService {
       this.records.delete(record.id)
       if (record.idempotencyKey !== undefined) {
         const key = idempotencyScope(record.consumer, record.idempotencyKey)
-        if (this.byKey.get(key) === record.id) this.byKey.delete(key)
+        if (this.byKey.get(key) === record.id) {
+          this.byKey.delete(key)
+          this.bury(key, record)
+        }
       }
     })
+    // Tombstones expire too — after the TTL, not never.
+    const expired = this.now() - IDEMPOTENCY_TTL_MS
+    for (const [scope, tombstone] of [...this.tombstones]) {
+      if (tombstone.closedAt < expired) this.tombstones.delete(scope)
+    }
+  }
+
+  /** The key survives its record: install and persist the tombstone. */
+  private bury(scope: string, record: DispatchRecord): void {
+    const tombstone: DispatchTombstone = {
+      kind: 'tombstone',
+      scope,
+      dispatchId: record.id,
+      ...(record.promptHash !== undefined ? { promptHash: record.promptHash } : {}),
+      closedAt: record.updatedAt
+    }
+    this.tombstones.set(scope, tombstone)
+    let appended = false
+    try {
+      appended = this.deps.persistTombstone?.(tombstone) !== false
+    } catch {
+      appended = false
+    }
+    if (!appended) {
+      console.error(
+        `Dispatch tombstone append failed for ${record.id} — a replay of its key will not survive a restart`
+      )
+    }
+  }
+
+  /** One durable append; a throw counts as a failure — the dep may do either. */
+  private persistRecord(record: DispatchRecord): boolean {
+    try {
+      return this.deps.persist(record) !== false
+    } catch (error) {
+      console.error('Dispatch ledger append threw:', error)
+      return false
+    }
   }
 
   private write(record: DispatchRecord): void {
     this.records.set(record.id, record)
-    this.deps.persist(record)
+    // Transition appends retry once, then fail LOUDLY with the id: memory has
+    // already advanced (a state machine cannot un-happen the turn it just
+    // observed), so the fault must at least be visible instead of silently
+    // forking disk from memory.
+    if (this.persistRecord(record) || this.persistRecord(record)) return
+    console.error(
+      `Dispatch ledger append failed for ${record.id} (state=${record.state}) — memory advanced, disk did not`
+    )
   }
 }

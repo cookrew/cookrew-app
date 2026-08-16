@@ -131,6 +131,14 @@ export interface MobileApiDeps {
    * rather than a silent 404 on a route the catalog advertises.
    */
   dispatch?: DispatchService;
+  /**
+   * Does this terminal carry an armed dispatch stamp (TurnTracker)? The HTTP
+   * producers (/input, /ask) refuse 409 while one is armed — a second
+   * producer typing into an agent mid-dispatch interleaves two principals'
+   * work in one input box and poisons the prompt-identity correlation for
+   * both. Absent = no serialization (embedders/tests without a tracker).
+   */
+  hasArmedDispatch?: (terminalId: string) => boolean;
 }
 
 /** Base64 inflates ~4/3, so this admits attachments up to the 20MB save cap. */
@@ -627,6 +635,24 @@ export async function handleMobileApi(
     return true;
   }
 
+  // Producer serialization, not a router: /input and /ask are ANSWERED by the
+  // mobile server (this returns false so its handlers run), but the refusal
+  // lives here with the API deps so every embedder gets it. While a dispatch
+  // stamp is armed on a terminal, a second HTTP producer typing into it would
+  // interleave two principals' work in one input box AND break the
+  // prompt-identity correlation that closes the dispatch — refuse 409 and let
+  // the dispatch close first. Local canvas typing (IPC) is deliberately NOT
+  // serialized: the owner at the keyboard outranks the machinery.
+  const httpProducerMatch = p.match(/^\/api\/terminal\/([^/]+)\/(input|ask)$/);
+  if (
+    httpProducerMatch &&
+    method === "POST" &&
+    deps.hasArmedDispatch?.(httpProducerMatch[1]) === true
+  ) {
+    respondJson(response, 409, { error: "agent has a dispatch in flight" });
+    return true;
+  }
+
   const ptyMatch = p.match(
     /^\/api\/terminal\/([^/]+)\/(raw|resize|stream|jump)$/,
   );
@@ -796,10 +822,19 @@ export async function handleMobileApi(
       text?: string;
       idempotencyKey?: string;
     }>(request);
+    // The consumer principal comes from the AUTH that admitted this request,
+    // never from the body — a body field would let any admitted caller wear
+    // any tenant's identity, and the principal scopes idempotency and record
+    // visibility. Today the only write credential is the pairing token (the
+    // C1 choke point already refused everything else), so every admitted
+    // producer is the owner; S4 swaps this derivation for per-consumer
+    // credentials, and inherits the seam — inject, never parse.
+    const principal = "owner";
     const result = await deps.dispatch.dispatch(dispatchMatch[1], {
       brief: body.brief,
       text: body.text,
       idempotencyKey: body.idempotencyKey,
+      consumer: principal,
     });
     respondJson(response, result.status, result.body);
     return true;
@@ -825,7 +860,11 @@ export async function handleMobileApi(
       respondJson(response, 503, { error: "dispatch is not available" });
       return true;
     }
-    const result = deps.dispatch.lookup(dispatchGetMatch[1]);
+    // Same derivation as the POST: the requester principal is what the auth
+    // says, and the pairing token is the owner. lookup() 404s a foreign
+    // principal's id — never 403 — so the read cannot confirm that somebody
+    // else's dispatch exists.
+    const result = deps.dispatch.lookup(dispatchGetMatch[1], "owner");
     respondJson(response, result.status, result.body);
     return true;
   }

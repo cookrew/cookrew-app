@@ -1,9 +1,13 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionTurnSync } from '../src/main/session-sync'
-import { parseSessionTurns } from '../src/shared/session-turns'
+import {
+  createSessionTurnAccumulator,
+  parseSessionTurns,
+  type StreamingTurnParser
+} from '../src/shared/session-turns'
 import { TurnTracker } from '../src/main/turn-tracker'
 import { TurnStore } from '../src/main/turn-store'
 import type { TurnRecord } from '../src/shared/turn'
@@ -392,6 +396,149 @@ describe('TurnTracker.replaceHistory', () => {
       { index: 1, prompt: 'commit and push', reply: 'done longer', uuid: 'u-1', startedAt: 1, endedAt: 2 }
     ])
     expect(tracker.history('term-1')[0].title).toBe('Commit and push')
+  })
+})
+
+// Fix 2 (Sol I3): observing one appended turn costs O(Δbytes) — on growth
+// only the appended span is read and only the NEW lines reach the
+// accumulator; a partial trailing line is carried as bytes until its newline
+// arrives, so UTF-8 split at any byte boundary survives.
+describe('SessionTurnSync incremental observation', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** parseSessionTurns wrapped so every accumulator feed is recorded. */
+  function instrumented(): { parse: StreamingTurnParser; feeds: string[][] } {
+    const feeds: string[][] = []
+    const createAccumulator = (): ReturnType<typeof createSessionTurnAccumulator> => {
+      const inner = createSessionTurnAccumulator()
+      return {
+        feed(lines: string[]): void {
+          feeds.push(lines)
+          inner.feed(lines)
+        },
+        records: () => inner.records()
+      }
+    }
+    const parse = Object.assign(
+      (lines: string[]) => parseSessionTurns(lines),
+      { createAccumulator }
+    )
+    return { parse, feeds }
+  }
+
+  it('feeds ONLY the appended lines on growth — earlier lines are never re-read', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    const { parse, feeds } = instrumented()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parse)
+    expect(tracker.history('term-1')).toHaveLength(1)
+    const feedsAfterInitial = feeds.length
+
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await vi.advanceTimersByTimeAsync(200)
+    expect(tracker.history('term-1')).toHaveLength(2)
+    const later = feeds.slice(feedsAfterInitial).flat()
+    expect(later.some((line) => line.includes('turn two'))).toBe(true)
+    expect(later.some((line) => line.includes('turn one'))).toBe(false)
+    sync.dispose()
+  })
+
+  it('a shrink resets the accumulator and pays one full re-parse (rewind path)', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    const { parse, feeds } = instrumented()
+    writeFileSync(file, [...TURN_1, ...TURN_2].join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parse)
+    expect(tracker.history('term-1')).toHaveLength(2)
+
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    await vi.advanceTimersByTimeAsync(200)
+    expect(tracker.history('term-1').map((r) => r.prompt)).toEqual(['turn one'])
+    // The re-parse fed 'turn one' again — a fresh accumulator, not a resume.
+    expect(feeds.flat().filter((line) => line.includes('turn one')).length).toBeGreaterThan(1)
+    sync.dispose()
+  })
+
+  it('replacement by a same-size different-inode file is detected, not treated as quiet', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    // Same byte length as TURN_1 so size alone cannot reveal the swap.
+    const swapped = [
+      JSON.stringify({ type: 'user', message: { role: 'user', content: 'turn six' }, timestamp: '2026-07-20T10:00:00Z', sessionId: 'src' }),
+      JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'reply six' }] }, timestamp: '2026-07-20T10:00:10Z', sessionId: 'src' })
+    ]
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parseSessionTurns)
+    expect(tracker.history('term-1')[0].prompt).toBe('turn one')
+
+    const replacement = path.join(path.dirname(file), 'replacement.jsonl')
+    writeFileSync(replacement, swapped.join('\n') + '\n', 'utf8')
+    const { renameSync } = await import('node:fs')
+    renameSync(replacement, file)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(tracker.history('term-1')[0].prompt).toBe('turn six')
+    sync.dispose()
+  })
+
+  it('property: randomized byte-level appends (mid-line, mid-UTF-8) equal the whole-file parse', async () => {
+    vi.useFakeTimers()
+    const lines: string[] = []
+    for (let turn = 0; turn < 8; turn += 1) {
+      lines.push(user(`prompt ${turn} — été 目标 ✓`, `2026-07-20T10:0${turn}:00Z`))
+      lines.push(assistant(`reply ${turn} — naïve 完成`, `2026-07-20T10:0${turn}:10Z`))
+    }
+    const whole = Buffer.from(lines.join('\n') + '\n', 'utf8')
+    // Deterministic LCG: a failing sequence is reproducible from the seed.
+    let state = 42
+    const rand = (): number => {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0
+      return state / 0x100000000
+    }
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, Buffer.alloc(0))
+    sync.watch('t', file, parseSessionTurns)
+    let at = 0
+    while (at < whole.length) {
+      const size = 1 + Math.floor(rand() * 40)
+      appendFileSync(file, whole.subarray(at, Math.min(at + size, whole.length)))
+      at += size
+      await vi.advanceTimersByTimeAsync(50)
+    }
+    await vi.advanceTimersByTimeAsync(200)
+    expect(tracker.history('t')).toEqual(parseSessionTurns(lines))
+    sync.dispose()
+  })
+})
+
+// Fix 5: the initial watch parse is deferrable off the accept path — the
+// poll timer covers the reconcile within one tick.
+describe('SessionTurnSync deferInitial', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('skips the synchronous reconcile and lets the timer land it', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parseSessionTurns, { deferInitial: true })
+    // Nothing parsed inline — the accept path paid nothing.
+    expect(tracker.history('term-1')).toEqual([])
+    // The timer is armed: one poll later the reconcile lands.
+    await vi.advanceTimersByTimeAsync(200)
+    expect(tracker.history('term-1').map((r) => r.prompt)).toEqual(['turn one'])
+    sync.dispose()
+  })
+
+  it('default behavior is unchanged — the first reconcile is synchronous', () => {
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parseSessionTurns)
+    expect(tracker.history('term-1')).toHaveLength(1)
+    sync.dispose()
   })
 })
 

@@ -745,6 +745,15 @@ export class PtyManager {
   private tmuxConf: string
   private herdrConf: string
 
+  /**
+   * Backend death fan-out (Sol r1 P1): the supervisor's detection must reach
+   * the dispatch plane so every open record its panes hosted is stamped
+   * interrupted — never left to the ten-minute sweep. Late-bound because the
+   * dispatch service is constructed after the manager; called only long
+   * after both exist.
+   */
+  onBackendDeath: ((why: string) => void) | null = null
+
   constructor() {
     // Fixed (pid-independent) so a tmux session's baked-in COOKREW_SOCKET /
     // COOKREW_CLI paths stay valid across app restarts — the whole point of
@@ -772,7 +781,9 @@ export class PtyManager {
     setBackends(candidates)
     // A dead herdr server means every agent is dead until it returns; the
     // supervisor turns that from "until the next app launch" into ~15s.
-    if (roles.host instanceof HerdrHostMultiplexer) roles.host.startSupervisor()
+    if (roles.host instanceof HerdrHostMultiplexer) {
+      roles.host.startSupervisor(undefined, (why) => this.onBackendDeath?.(why))
+    }
 
     // Push-fed agent state, when the backend has it. Subscriptions are
     // per-pane, so the feed is refreshed whenever the terminal set changes —
