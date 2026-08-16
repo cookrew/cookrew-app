@@ -15,6 +15,7 @@ function activity(over: Partial<TerminalActivity> = {}): TerminalActivity {
     agent: true,
     phase: 'idle' as TurnPhase,
     prompt: null,
+    dispatchId: null,
     pendingInput: null,
     lines: [],
     reply: null,

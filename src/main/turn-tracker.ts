@@ -1539,6 +1539,7 @@ export class TurnTracker extends EventEmitter {
         scrollRow: null,
         scrollBase: null,
         tailLines: null,
+        dispatchId: null,
         updatedAt: Date.now()
       } satisfies TerminalActivity)
     }
@@ -2374,6 +2375,7 @@ export class TurnTracker extends EventEmitter {
       // Clip signal only when the tail is settled — mid-turn the renderer
       // shows the whole live stream anyway.
       tailLines: inTurn || !t.agent ? null : latestTailLines(t.session.fullText()),
+      dispatchId: this.pendingDispatch.get(terminalId)?.id ?? null,
       updatedAt: Date.now()
     }
   }

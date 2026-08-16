@@ -77,6 +77,12 @@ export interface TerminalActivity {
   scrollBase: number | null
   /** Epoch ms when the current turn started; null outside a turn. */
   turnStartedAt: number | null
+  /**
+   * The dispatch whose answer the CURRENT armed stamp awaits, when work
+   * arrived over the API — the card wears it so a running dispatch is
+   * visible on the product surface, not only in a ledger.
+   */
+  dispatchId: string | null
   updatedAt: number
 }
 

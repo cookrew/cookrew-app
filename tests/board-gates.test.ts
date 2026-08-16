@@ -62,6 +62,7 @@ function activity(over: Partial<TerminalActivity> & { terminalId: string }): Ter
     agent: true,
     phase: 'idle',
     prompt: null,
+    dispatchId: null,
     pendingInput: null,
     lines: [],
     reply: null,
