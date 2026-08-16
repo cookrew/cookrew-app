@@ -38,12 +38,14 @@ export interface WaitOptions {
   until?: HerdrAgentStatus[]
   timeoutMs: number
   /**
-   * The abort seam (Sol r8 P1). Threaded into execFile, which TERM-kills the
-   * CLI child when the signal fires — a retired terminal, a backend death or
-   * an interrupted dispatch must not leave `herdr agent prompt --wait`
-   * children (pipes, callbacks, promises) alive for the full caller timeout.
-   * The settled promise rejects; callers already classify that rejection
-   * under their own liveness checks, so a late abort changes no state.
+   * The abort seam (Sol r8 P1, escalation per r9 P1-5). Firing it SIGTERMs
+   * the CLI child, and a child that ignores the courtesy is SIGKILLed after
+   * a small bound — a retired terminal, a backend death or an interrupted
+   * dispatch must not leave `herdr agent prompt` children (pipes, callbacks,
+   * promises) alive for the full caller timeout, TERM-trapping ones
+   * included. The settled promise rejects; callers already classify that
+   * rejection under their own liveness checks, so a late abort changes no
+   * state.
    */
   signal?: AbortSignal
   /** Injected for tests; defaults to the real `herdr` CLI. */
@@ -214,19 +216,53 @@ export function isTimeout(error: unknown): boolean {
   return /agent_wait_timeout|\btimed?[ _-]?out\b/i.test(text)
 }
 
-const runCli = (
+/**
+ * How long an aborted child gets to honor SIGTERM before SIGKILL (Sol r9
+ * P1-5). Small on purpose: the caller cancelled because the terminal is gone,
+ * and every second of grace is a second the dead leg keeps its pipes.
+ */
+const ABORT_SIGKILL_AFTER_MS = 2000
+
+/**
+ * Run the CLI, holding the ChildProcess handle ourselves (Sol r9 P1-5).
+ * execFile's own `signal` option sends exactly one SIGTERM and hopes; a
+ * wedged or TERM-trapping herdr child stayed alive with its pipes for the
+ * full caller timeout — the very resource class the abort seam exists to
+ * eliminate. On abort: SIGTERM now, a bounded wait, then SIGKILL. The
+ * promise settles exactly once, from the child's own exit callback, and the
+ * escalation timer dies with it. Exported for the escalation test;
+ * `sigkillAfterMs` is injectable there so the bound itself stays 2s in
+ * production.
+ */
+export const runCli = (
   file: string,
   args: string[],
   env: NodeJS.ProcessEnv,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  sigkillAfterMs: number = ABORT_SIGKILL_AFTER_MS
 ): Promise<void> =>
   new Promise((resolve, reject) => {
-    // `signal` is execFile's own abort seam: firing it TERM-kills the child
-    // and settles the callback with an AbortError — the CLI process, its
-    // pipes and this promise all end NOW instead of at the caller timeout.
-    execFile(file, args, { env, ...(signal !== undefined ? { signal } : {}) }, (error) =>
-      error ? reject(error) : resolve()
-    )
+    let killTimer: NodeJS.Timeout | null = null
+    const onAbort = (): void => {
+      // Ask nicely first — herdr flushes and exits on SIGTERM when healthy —
+      // then stop asking. The callback below is the single settle point.
+      child.kill('SIGTERM')
+      killTimer = setTimeout(() => {
+        child.kill('SIGKILL')
+      }, sigkillAfterMs)
+    }
+    const child = execFile(file, args, { env }, (error) => {
+      // The child exited (or never spawned): settle once, and take the
+      // escalation machinery down with it.
+      if (killTimer !== null) clearTimeout(killTimer)
+      signal?.removeEventListener('abort', onAbort)
+      if (error) reject(error)
+      else resolve()
+    })
+    if (signal !== undefined) {
+      if (signal.aborted) onAbort()
+      else signal.addEventListener('abort', onAbort, { once: true })
+    }
   })
 
 /**

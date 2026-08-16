@@ -240,6 +240,27 @@ export interface DispatchDeps {
     signal?: AbortSignal
   ) => Promise<'done' | 'submitted' | 'failed'>
   /**
+   * Native submission that returns at SUBMISSION ACKNOWLEDGEMENT (Sol r9
+   * P1-3) — the capability split the owner asks already use. When present,
+   * the delivery leg submits through THIS and releases the producer lease
+   * the moment the submission is acknowledged, so a minutes-long dispatched
+   * turn refuses desktop bytes for milliseconds instead of the whole turn;
+   * turn completion is observed OUTSIDE the lease by the transcript
+   * correlation and the sweep, exactly as they already do for 'submitted'
+   * outcomes. 'submitted' carries the same do-not-retype contract as
+   * promptAgent's (ambiguous outcomes included); 'failed' means herdr
+   * positively refused, and the ordinary landing evidence (captureDeep) and
+   * fallback still apply. Absent = the backend cannot acknowledge without
+   * waiting, and deliver keeps the conservative promptAgent full-turn hold.
+   * The conductor wires this to mux.submitAgent.
+   */
+  submitAgent?: (
+    sessionName: string,
+    prompt: string,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ) => Promise<'submitted' | 'failed'>
+  /**
    * INPUT-BUFFER OWNERSHIP (Sol r8 P0-1): is the OWNER composing in this
    * agent's shared input box right now — meaningful typed bytes in the
    * tracked prompt buffer, or an owner editing reservation/lease held? Wired
@@ -1350,7 +1371,7 @@ export class DispatchService {
     if (!this.deps.sessionExists(sessionName)) {
       return { status: 503, body: { error: 'unreachable' } }
     }
-    if (!this.deps.promptAgent) {
+    if (!this.deps.promptAgent && !this.deps.submitAgent) {
       return { status: 503, body: { error: 'backend cannot dispatch' } }
     }
 
@@ -1455,12 +1476,19 @@ export class DispatchService {
   /**
    * Deliver, then decide what the outcome actually means.
    *
-   * `done` is herdr watching the turn end — the strongest answer available.
-   * EVERY other outcome, `failed` included, is read against the transcript
-   * first (F2): herdr submits and THEN waits, so a wait that times out or a
-   * server that dies mid-wait both report a failure over a prompt that is
-   * already sitting in the agent's input box. Only `done` skips the check,
-   * because only `done` cannot be improved on.
+   * TWO SUBMISSION MODES (Sol r9 P1-3). With `submitAgent` wired, the leg
+   * submits at ACKNOWLEDGEMENT grade: the lease covers only the
+   * bytes-in-flight window, 'submitted' closes the delivery phase
+   * immediately (the record runs; transcript correlation and the sweep
+   * observe the turn's end outside any lease), and only 'failed' — herdr
+   * positively refused — falls through to the landing evidence below.
+   * Without it, `promptAgent --wait` remains: `done` is herdr watching the
+   * turn end — the strongest answer available — and EVERY other outcome,
+   * `failed` included, is read against the transcript first (F2): herdr
+   * submits and THEN waits, so a wait that times out or a server that dies
+   * mid-wait both report a failure over a prompt that is already sitting in
+   * the agent's input box. Only `done` skips the check, because only `done`
+   * cannot be improved on.
    */
   private async deliver(
     dispatchId: string,
@@ -1469,8 +1497,9 @@ export class DispatchService {
     prompt: string,
     armedAt: number
   ): Promise<void> {
+    const submitAgent = this.deps.submitAgent
     const promptAgent = this.deps.promptAgent
-    if (!promptAgent) return
+    if (submitAgent === undefined && promptAgent === undefined) return
     // Every delivery fact carries its arming generation (Sol r5 P1), so the
     // tracker can tell THIS exchange's confirmation from a stale echo of a
     // settled one.
@@ -1570,12 +1599,23 @@ export class DispatchService {
     this.deliveryAborts.set(dispatchId, abort)
     let outcome: 'done' | 'submitted' | 'failed'
     try {
-      outcome = await promptAgent(
-        sessionName,
-        prompt,
-        this.deps.timeoutMs ?? DISPATCH_TIMEOUT_MS,
-        abort.signal
-      )
+      // The ack mode when the backend has it (Sol r9 P1-3): the await under
+      // this lease hold ends at submission acknowledgement, not at turn
+      // completion — the lease refuses desktop bytes for milliseconds.
+      outcome =
+        submitAgent !== undefined
+          ? await submitAgent(
+              sessionName,
+              prompt,
+              this.deps.timeoutMs ?? DISPATCH_TIMEOUT_MS,
+              abort.signal
+            )
+          : await promptAgent!(
+              sessionName,
+              prompt,
+              this.deps.timeoutMs ?? DISPATCH_TIMEOUT_MS,
+              abort.signal
+            )
     } catch (error) {
       outcome = 'failed'
       // An aborted child is the canceller's doing, not a submission fault —
@@ -1613,6 +1653,19 @@ export class DispatchService {
       // scrape closure can prove prompt identity without trusting the echo.
       this.deps.noteDelivered?.(agentId, prompt, gen)
       this.update(dispatchId, { state: 'running', via: 'herdr', confirmed: true })
+      return
+    }
+
+    if (submitAgent !== undefined && outcome === 'submitted') {
+      // Acknowledged submission (Sol r9 P1-3): the delivery phase is OVER —
+      // the lease was released in the finally above, and the turn now runs
+      // with no producer hold at the terminal. The delivered-prompt fact is
+      // reaffirmed and the record moves to 'running'; transcript correlation
+      // closes it (or the sweep, on the do-not-retype ambiguous outcomes
+      // this 'submitted' also covers). confirmed stays false honestly: the
+      // ack says herdr took the prompt, not that anyone watched it land.
+      this.deps.noteDelivered?.(agentId, prompt, gen)
+      this.update(dispatchId, { state: 'running', via: 'herdr', confirmed: false })
       return
     }
 

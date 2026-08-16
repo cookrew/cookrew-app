@@ -32,6 +32,7 @@ import {
   detectLiveWork,
   extractPromptEcho,
   feedPromptBuffer,
+  type PromptFeed,
   isLiveStatus,
   latestTailLines,
   parseAgentGlance,
@@ -244,6 +245,18 @@ interface TrackedTerminal {
   sawInputThisTurn: boolean
   /** Epoch ms of the last self-heal viewport scan (throttle). */
   lastHealScanAt: number
+  /**
+   * The model's view of the REAL input box may understate it (Sol r9 P0-2):
+   * true after a clear op (Ctrl-U/Ctrl-C) landed on a multiline-or-unknown
+   * buffer — the op provably clears at most ONE line, so the box may retain
+   * text the model no longer shows — and from the moment of tracking when
+   * the owner-editing mark predates this attachment (a detach carried
+   * unwatched bytes). While true, NO modelled-empty state is proof of a
+   * clean box and the editing mark survives every control byte; only a
+   * positively observed submit (the box consumed wholesale) re-anchors the
+   * model to a provably known state.
+   */
+  unprovenBox: boolean
   prompt: string | null
   snapshot: string
   /** Scrollback line where the current turn began (checkpoint mapping). */
@@ -1397,6 +1410,11 @@ export class TurnTracker extends EventEmitter {
       lastSubmitAt: 0,
       sawInputThisTurn: false,
       lastHealScanAt: 0,
+      // A mark that predates this attachment (set, then the view detached
+      // and re-tracked) means the REAL box holds owner bytes this fresh
+      // model never watched: nothing modelled here can prove it empty until
+      // an observed submit consumes it (Sol r9 P0-1/P0-2).
+      unprovenBox: this.lease.isOwnerEditing(session.terminalId),
       prompt: null,
       snapshot: '',
       turnStartLine: null,
@@ -1508,22 +1526,27 @@ export class TurnTracker extends EventEmitter {
     // as interrupt/quit per harness. The flag now holds until the terminal
     // generation resets (producer-lease.retire — a restarted process with a
     // provably empty box), and every refusal names that requirement.
+    const prevBuffer = t.promptBuffer
+    const prevInPaste = t.inPaste
+    const prevHeld = t.heldInput
     const fed = feedPromptBuffer(t.promptBuffer, data, t.inPaste, t.heldInput)
     t.promptBuffer = fed.buffer
     t.inPaste = fed.inPaste
     t.heldInput = fed.held
-    // THE EDITING RESERVATION (Sol r8 P0-1), maintained from the same buffer
-    // feed that renders 'typing:' on cards — and synchronously with the
-    // write that delivered the bytes (PtySession.write emits 'input' in the
-    // same stretch), so there is no window between an owner byte landing in
-    // the shared input box and dispatch admission seeing the mark. Owner
-    // bytes only: the dispatch fallback's own tagged paste passes through
-    // this buffer too and must not read as the owner composing. The mark
-    // clears when the box provably empties — a submit consumed the buffer,
-    // or the owner erased their typing.
+    // THE EDITING RESERVATION (Sol r8 P0-1, proof-gated per r9 P0-2),
+    // maintained from the same buffer feed that renders 'typing:' on cards —
+    // and synchronously with the write that delivered the bytes
+    // (PtySession.write emits 'input' in the same stretch), so there is no
+    // window between an owner byte landing in the shared input box and
+    // dispatch admission seeing the mark. Owner bytes only: the dispatch
+    // fallback's own tagged paste passes through this buffer too and must
+    // not read as the owner composing.
     if (source !== 'dispatch') {
-      if (fed.buffer.trim().length > 0) this.lease.markOwnerEditing(terminalId)
-      else this.lease.clearOwnerEditing(terminalId)
+      this.maintainOwnerEditing(t, terminalId, data, fed, {
+        buffer: prevBuffer,
+        inPaste: prevInPaste,
+        held: prevHeld
+      })
     }
     if (!t.agent) return
     if (fed.submitted.length > 0) t.lastSubmitAt = Date.now()
@@ -1564,6 +1587,98 @@ export class TurnTracker extends EventEmitter {
     // No submit: the input box content changed (typing, paste) — surface it
     // as pendingInput on the next throttled push.
     this.schedulePush(terminalId)
+  }
+
+  /**
+   * Keep the lease's owner-editing mark true to the REAL input box, not the
+   * model's optimism (Sol r9 P0-1/P0-2).
+   *
+   * MARK on any byte: buffered text (whitespace included — a space is a real
+   * byte the eventual submit would carry), an open bracketed paste, or a
+   * held split paste marker. No trim: `.trim()` declared whitespace-only
+   * boxes clean and admitted dispatches over live owner bytes.
+   *
+   * CLEAR only on proof:
+   * - a positively observed owner submit while tracked — a real Enter
+   *   outside a paste hands the TUI the box WHOLESALE, so a submit that
+   *   leaves the model empty proves the box empty, and re-anchors the
+   *   model's provenance even when watched bytes follow the Enter in the
+   *   same chunk. A menu answer (phase 'waiting' with a live prompt) is NOT
+   *   that proof: its Enter feeds the menu, and typed box text may survive.
+   * - the one proven clear op: the box emptied under fully watched
+   *   single-line editing (typed bytes, backspaces, Ctrl-U on the single
+   *   line the model watched being typed — that much IS proven byte by
+   *   byte). Ctrl-C never qualifies (it doubles as interrupt/quit per
+   *   harness), and nothing qualifies while the buffer was multiline,
+   *   mid-paste, holding a split marker, or unproven — a Ctrl-U there
+   *   provably clears at most ONE line.
+   * - terminal retirement (the lease clears it with everything else).
+   *
+   * Everything else keeps the mark, including every Ctrl-U/Ctrl-C over
+   * multiline/unknown state — which also flags the model DIVERGED
+   * (unprovenBox): feedPromptBuffer maps those ops to an empty buffer, but
+   * the real box may retain earlier lines the model no longer shows.
+   */
+  private maintainOwnerEditing(
+    t: TrackedTerminal,
+    terminalId: string,
+    data: string,
+    fed: PromptFeed,
+    prev: { buffer: string; inPaste: boolean; held: string }
+  ): void {
+    const holdsBytes = fed.buffer.length > 0 || fed.inPaste || fed.held.length > 0
+    // Destructive edits: Ctrl-U/Ctrl-C and backspace. On a fully watched
+    // single line their effect is exact; over anything opaque their
+    // per-harness semantics (kill ONE line, interrupt-vs-clear, whether a
+    // backspace crosses a soft newline) are not modelled.
+    const destructive =
+      data.includes('\x15') || data.includes('\x03') || data.includes('\x7f') || data.includes('\b')
+    const chunkOpaque = /\x1b[\r\n]/.test(data) || data.includes('\x1b[200~')
+    const prevOpaque =
+      t.unprovenBox || prev.buffer.includes('\n') || prev.inPaste || prev.held.length > 0
+    // The divergence record first, from the PRE-feed state: a destructive op
+    // over a box the model cannot fully vouch for leaves model and box
+    // disagreeing from here on, whatever the rest of this chunk did. Ctrl-C
+    // is worse: over ANY non-empty buffer its effect is unknown per harness
+    // (clear, interrupt, or quit), so the model's view of the CONTENT — not
+    // just the line count — stops being proof until an observed submit
+    // re-anchors it.
+    if (destructive && (prevOpaque || chunkOpaque)) t.unprovenBox = true
+    if (data.includes('\x03') && (prevOpaque || prev.buffer.length > 0)) t.unprovenBox = true
+    if (holdsBytes) this.lease.markOwnerEditing(terminalId)
+    const menuAnswer =
+      t.agent && t.phase === 'waiting' && t.prompt !== null && fed.submitted.length > 0
+    if (fed.submitted.length > 0 && !menuAnswer) {
+      // The observed-submit proof: the box was consumed wholesale.
+      t.unprovenBox = false
+      if (!holdsBytes) this.lease.clearOwnerEditing(terminalId)
+      return
+    }
+    if (holdsBytes || fed.submitted.length > 0) return
+    if (this.provenCleared(t, data, prev)) this.lease.clearOwnerEditing(terminalId)
+  }
+
+  /**
+   * Did this chunk PROVABLY empty the real box? Only under fully watched
+   * single-line editing: the model tracked every byte of this attachment
+   * (no divergence, no pre-attachment mark), the buffer never left one line
+   * (no '\n', no open/split paste), and the chunk carried none of the
+   * unproven ops (Ctrl-C, Shift+Enter, paste markers). Within that fence the
+   * model's ops ARE the box's — typed chars, backspaces and a Ctrl-U on the
+   * one watched line — so a modelled-empty result is a real empty box: the
+   * one proven clear (Sol r9 P0-2).
+   */
+  private provenCleared(
+    t: TrackedTerminal,
+    data: string,
+    prev: { buffer: string; inPaste: boolean; held: string }
+  ): boolean {
+    if (t.unprovenBox) return false
+    if (prev.inPaste || prev.held.length > 0 || prev.buffer.includes('\n')) return false
+    if (data.includes('\x03')) return false
+    if (/\x1b[\r\n]/.test(data)) return false
+    if (data.includes('\x1b[200~') || data.includes('\x1b[201~')) return false
+    return true
   }
 
   /**
@@ -1620,21 +1735,29 @@ export class TurnTracker extends EventEmitter {
   }
 
   /**
-   * INPUT-BUFFER OWNERSHIP (Sol r8 P0-1): is the owner composing in this
-   * terminal's shared input box right now? True while the tracked prompt
-   * buffer holds meaningful owner bytes — the editing reservation handleInput
-   * maintains on the lease from the same feed that renders 'typing:' on
-   * cards; dispatch-tagged bytes never set it — or while an owner submission
-   * HOLDS the lease (its paste may be mid-flight toward that same box).
+   * INPUT-BUFFER OWNERSHIP (Sol r8 P0-1, attachment-blind per r9 P0-1): is
+   * the owner composing in this terminal's shared input box right now? True
+   * while the lease carries the editing reservation handleInput maintains
+   * from the same feed that renders 'typing:' on cards (dispatch-tagged
+   * bytes never set it), or while an owner submission HOLDS the lease (its
+   * paste may be mid-flight toward that same box).
+   *
+   * The lease mark is consulted REGARDLESS of tracker attachment. Untracked
+   * is a statement about the VIEW, not the terminal: a workspace switch
+   * detaches the screen while the pane and its input box — owner bytes
+   * included — survive. The r8 `tracked.has` short-circuit read "no attached
+   * view" as "no composer" and made exactly the detached agents that
+   * background dispatch targets dispatchable over live owner text; the mark
+   * survives untrack precisely so this answer does too, until an observed
+   * reattach+submit or retirement proves the box empty.
    *
    * Wired by the conductor as DispatchDeps.ownerComposing: admission refuses
    * 409 while it is true, and both delivery legs revalidate it immediately
    * before their irreversible submission — half-typed owner text combined
    * with an admitted dispatch would submit a prompt no producer ever asked
-   * for. An UNTRACKED terminal has no composer (no PTY): false.
+   * for.
    */
   ownerComposing(terminalId: string): boolean {
-    if (!this.tracked.has(terminalId)) return false
     if (this.lease.isOwnerEditing(terminalId)) return true
     return this.lease.holderOf(terminalId)?.kind === 'owner'
   }

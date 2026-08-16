@@ -216,7 +216,10 @@ describe('TurnStore — the split is real on disk', () => {
     save([rec(1, { title: 'recap', seenAt: 5 })])
     save([rec(1)])
     expect(store.load('t1')[0]).toEqual(rec(1))
-    expect(existsSync(annotationFile())).toBe(false)
+    // The clear is PUBLISHED as an epoch-bumped empty snapshot (Sol r9 P2),
+    // never a raw unlink a crash could roll back.
+    expect(snapshotAnnotations()).toEqual({})
+    expect(new TurnStore(dir, annDir).load('t1')[0]).toEqual(rec(1))
   })
 
   it('replaces a changed annotation rather than merging into it', () => {
@@ -498,22 +501,60 @@ describe('AnnotationStore — snapshot+log crash consistency via shared epoch', 
     expect(new AnnotationStore(annDir).load('t1').get(1)).toEqual({ title: 'B' })
   })
 
-  it('empty-save window: snapshot unlinked, stale log survives → reads EMPTY, no resurrection', () => {
+  it('legacy empty-save window: snapshot missing, stale log survives → reads EMPTY, no resurrection', () => {
     seedSnapshotPlusLog()
-    // The empty save unlinks snapshot first, then log; crash in between
-    // leaves only the log. Its ops are epoch 1; a bare directory is epoch 0.
+    // A pre-r9 empty save unlinked the snapshot first; a crash before the log
+    // unlink leaves only the log. Its ops are epoch 1; a bare directory is
+    // epoch 0 — so they stay inert whatever store version reopens the state.
     rmSync(annotationFile())
     const replayed = new AnnotationStore(annDir).load('t1')
     expect(replayed.size).toBe(0)
   })
 
-  it('the empty save itself drops both files when it completes', () => {
+  it('the empty save PUBLISHES an epoch-bumped empty snapshot and reclaims the log (Sol r9)', () => {
     seedSnapshotPlusLog()
     const annotations = new AnnotationStore(annDir)
     expect(annotations.save('t1', [rec(1)])).toBe(true)
-    expect(existsSync(annotationFile())).toBe(false)
+    // Not an unlink: emptiness rides the same temp+fsync+rename+dir-fsync
+    // path as any other save, so it is durable the moment it is claimed.
+    expect(snapshotEpoch()).toBe(2)
+    expect(snapshotAnnotations()).toEqual({})
     expect(existsSync(annotationLogFile())).toBe(false)
     expect(new AnnotationStore(annDir).load('t1').size).toBe(0)
+  })
+
+  it('crash boundary: the empty publish holds even when the log unlink never happened', () => {
+    seedSnapshotPlusLog()
+    const staleLog = readFileSync(annotationLogFile(), 'utf8')
+    const annotations = new AnnotationStore(annDir)
+    expect(annotations.save('t1', [rec(1)])).toBe(true)
+    // Crash-sim: the log unlink's directory entry never persisted — the old
+    // epoch-1 ops are back whole. The published snapshot is epoch 2, so they
+    // replay as inert and the clear the store reported SURVIVES the reboot.
+    writeFileSync(annotationLogFile(), staleLog, 'utf8')
+    expect(new AnnotationStore(annDir).load('t1').size).toBe(0)
+  })
+
+  it('a failed empty publish retains the pending clear and the retry lands it', () => {
+    seedSnapshotPlusLog()
+    const annotations = new AnnotationStore(annDir)
+    chmodSync(annDir, 0o500) // the empty snapshot's temp cannot be created
+    expect(annotations.save('t1', [rec(1)])).toBe(false)
+    // Retained, not claimed: reads already see the clear the disk lacks.
+    expect(annotations.load('t1').size).toBe(0)
+    expect(snapshotAnnotations()).toEqual({ '1': { title: 'A' } }) // disk untouched
+
+    chmodSync(annDir, 0o700)
+    expect(annotations.save('t1', [rec(1)])).toBe(true)
+    expect(snapshotAnnotations()).toEqual({})
+    expect(new AnnotationStore(annDir).load('t1').size).toBe(0)
+  })
+
+  it('an agent that never had an annotation still leaves NO file behind', () => {
+    const annotations = new AnnotationStore(annDir)
+    expect(annotations.save('t1', [rec(1), rec(2)])).toBe(true)
+    expect(existsSync(annotationFile())).toBe(false)
+    expect(existsSync(annotationLogFile())).toBe(false)
   })
 
   it('after the empty save, a log-only agent writes epoch-0 ops that DO replay', () => {

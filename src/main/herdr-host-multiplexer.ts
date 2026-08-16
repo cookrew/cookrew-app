@@ -127,7 +127,31 @@ export function parsePaneListStrict(raw: string): HerdrPane[] | null {
   const result = parseEnvelope(raw)
   if (result === null) return null
   const panes = result.panes
-  return Array.isArray(panes) ? (panes as HerdrPane[]) : null
+  if (!Array.isArray(panes)) return null
+  // EVERY element validated, not just the container (Sol r9 P1): malformed
+  // SUCCESSFUL backend output was the round-8 failure model, and a container
+  // check alone still published `{"panes":[null]}` as a healthy inventory —
+  // after which every sessionExistsCached executed `pane.label` and THREW
+  // instead of returning the refusal-safe 503. One invalid element rejects
+  // the whole snapshot into the failure backoff: a list herdr half-mangled
+  // is not evidence about any pane in it.
+  return panes.every(isPaneShaped) ? (panes as HerdrPane[]) : null
+}
+
+/**
+ * One pane element the strict parser will admit: a non-null object carrying
+ * the identity admission consumes — `pane_id` a non-empty string, `label` a
+ * string, null, or absent (an unlabelled pane is a real state; a number or
+ * object where the label should be is corruption).
+ */
+function isPaneShaped(value: unknown): value is HerdrPane {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const pane = value as Record<string, unknown>
+  if (typeof pane.pane_id !== 'string' || pane.pane_id.length === 0) return false
+  if (pane.label !== undefined && pane.label !== null && typeof pane.label !== 'string') {
+    return false
+  }
+  return true
 }
 
 /**
@@ -1309,14 +1333,23 @@ export class HerdrHostMultiplexer implements Multiplexer {
     })
   }
 
-  async waitUntilIdle(name: string, timeoutMs: number): Promise<boolean> {
+  /**
+   * `signal` rides through to the `herdr agent wait` child (Sol r9 P1): a
+   * terminal retired DURING the post-acknowledgement reply wait must be able
+   * to kill that child now — the same abort seam submitAgent/promptAgent
+   * already thread — instead of holding a stale session for the full ask
+   * timeout. An aborted wait settles as false, which callers already treat
+   * as "no answer".
+   */
+  async waitUntilIdle(name: string, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
     const pane = this.paneFor(name)
     if (!pane) return false
     return waitForAgentState({
       session: this.session,
       configPath: this.configPath,
       target: pane.pane_id,
-      timeoutMs
+      timeoutMs,
+      signal
     })
   }
 }

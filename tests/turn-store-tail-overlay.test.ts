@@ -264,8 +264,17 @@ describe('the write path appends overlays and stays O(changed) — byte-counted'
 })
 
 describe('bounded fold — dead overlay weight is compacted OUTSIDE the hot path', () => {
-  /** The scheduled fold is an unref'd setTimeout(0) — one macrotask away. */
-  const idle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 10))
+  /** Let scheduled/async work drain — a few macrotask rounds. */
+  const idle = (ms = 25): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+  /** The fold is ASYNC now (Sol r9 P1) — poll until its commit lands. */
+  const awaitFold = async (id = 't1'): Promise<void> => {
+    for (let i = 0; i < 400; i += 1) {
+      if (!text(id).includes('__tail')) return
+      await idle(5)
+    }
+    throw new Error('the scheduled fold never landed')
+  }
 
   it('the overlay append that crosses the policy schedules ONE clean rewrite off the flush stack', async () => {
     seed(2)
@@ -285,9 +294,10 @@ describe('bounded fold — dead overlay weight is compacted OUTSIDE the hot path
     expect(writeAll).not.toHaveBeenCalled()
     expect(text()).toContain('__tail')
 
-    // …until the scheduled idle task performs the one atomic rewrite.
-    await idle()
-    expect(writeAll).toHaveBeenCalledTimes(1)
+    // …until the scheduled async task commits the one atomic rewrite —
+    // chunked, off every flush stack, never through the synchronous writeAll.
+    await awaitFold()
+    expect(writeAll).not.toHaveBeenCalled()
     const folded = text()
     expect(folded).not.toContain('__tail')
     expect(folded.trim().split('\n')).toHaveLength(2)
@@ -334,15 +344,15 @@ describe('bounded fold — dead overlay weight is compacted OUTSIDE the hot path
     expect(meter.writeBytes).toBeLessThan(ledgerBytes / 10)
 
     // The scheduled fold lands off the flush stack — once, atomic, clean.
-    await idle()
-    expect(writeAll).toHaveBeenCalledTimes(1)
+    await awaitFold()
+    expect(writeAll).not.toHaveBeenCalled()
     expect(text()).not.toContain('__tail')
     const replayed = reopen().load('t1')
     expect(replayed).toHaveLength(300)
     expect(replayed[299].reply).toBe(last.reply)
   })
 
-  it('a heavy overlay file left by a crash is folded at LOAD time, annotations intact', () => {
+  it('a heavy overlay file left by a crash is SCHEDULED for folding at load — load itself only reads', async () => {
     store.scheduleSave('t1', [rec(1), rec(2, { title: 'recap' })])
     store.flushAll()
     // Simulate a session that appended a fold's worth of overlays and died.
@@ -356,6 +366,12 @@ describe('bounded fold — dead overlay weight is compacted OUTSIDE the hot path
     const fresh = reopen()
     const loaded = fresh.load('t1')
     expect(loaded[1].reply).toBe(`crash round ${TAIL_OVERLAY_COMPACT_MIN_LINES}`)
+    // Load SCHEDULES the fold rather than paying the O(history) rewrite on
+    // its own stack (Sol r9 P1): immediately after load the file still holds
+    // its overlay weight, and the reader above was already correct.
+    expect(text()).toContain('__tail')
+
+    await awaitFold()
     // The fold ran: one clean line per logical record, no overlay weight…
     const folded = text()
     expect(folded).not.toContain('__tail')
@@ -374,20 +390,58 @@ describe('bounded fold — dead overlay weight is compacted OUTSIDE the hot path
     expect(text()).toBe(before)
   })
 
-  it('a failed fold costs nothing but bytes: the history still reads whole', () => {
+  it('a failed fold costs nothing but bytes: the history still reads whole', async () => {
     seed(2)
     const overlays = Array.from(
       { length: TAIL_OVERLAY_COMPACT_MIN_LINES },
       (_, i) => `${overlayLineFor(rec(2, { reply: `round ${i + 1}` }))}\n`,
     ).join('')
     appendFileSync(file(), overlays, 'utf8')
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
     chmodSync(dir, 0o500) // the fold's temp file cannot be created
     try {
       const loaded = reopen().load('t1')
       expect(loaded[1].reply).toBe(`round ${TAIL_OVERLAY_COMPACT_MIN_LINES}`)
+      await idle(50) // the scheduled fold runs — and fails — while locked out
       expect(text()).toContain('__tail') // unfolded, but nothing lost
     } finally {
       chmodSync(dir, 0o700)
+      quiet.mockRestore()
     }
+  })
+
+  it('count() is served from the cached logical count — no reread after the seed', async () => {
+    seed(3)
+    const fresh = reopen()
+    expect(fresh.count('t1')).toBe(3) // cold seed: the one recovery parse
+    meter.active = true
+    expect(fresh.count('t1')).toBe(3)
+    expect(fresh.count('t1')).toBe(3)
+    expect(meter.readBytes).toBe(0) // served from cache, zero file bytes
+    meter.active = false
+
+    // Every write keeps the cache current instead of invalidating it: after
+    // an append + a tail overlay, count() answers without touching the file.
+    fresh.load('t1')
+    const grown = rec(4)
+    fresh.scheduleDelta('t1', [rec(1), rec(2), rec(3), grown], [grown])
+    fresh.flushAll()
+    const finalized = rec(4, { reply: 'finalized', final: true })
+    fresh.scheduleDelta('t1', [rec(1), rec(2), rec(3), finalized], [finalized])
+    fresh.flushAll()
+    meter.readBytes = 0
+    meter.active = true
+    expect(fresh.count('t1')).toBe(4)
+    expect(meter.readBytes).toBe(0)
+    meter.active = false
+
+    // A full rewrite updates it too…
+    fresh.scheduleSave('t1', [rec(1), rec(2)])
+    fresh.flushAll()
+    meter.readBytes = 0
+    meter.active = true
+    expect(fresh.count('t1')).toBe(2)
+    expect(meter.readBytes).toBe(0)
+    meter.active = false
   })
 })

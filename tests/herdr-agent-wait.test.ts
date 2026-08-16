@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   promptArgs,
   promptViaHerdr,
+  runCli,
   submitArgs,
   submitViaHerdr,
   waitArgs,
@@ -219,4 +220,76 @@ describe('submitViaHerdr — the two-state ack contract', () => {
     expect(env.HERDR_SESSION).toBe('cookrew')
     expect(observed).toBe(abort.signal)
   })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r9 P1-5 — the bounded TERM→KILL escalation. execFile's own `signal`
+// option sends exactly one SIGTERM and hopes; a wedged or TERM-trapping herdr
+// child kept its process and pipes alive for the full caller timeout. runCli
+// now owns the ChildProcess: SIGTERM on abort, a bounded wait, then SIGKILL —
+// settled exactly once, from the child's real exit.
+// ---------------------------------------------------------------------------
+
+describe('runCli — abort escalates SIGTERM to SIGKILL (Sol r9 P1-5)', () => {
+  it('a child that TRAPS SIGTERM is SIGKILLed after the bound, and the promise settles', async () => {
+    const abort = new AbortController()
+    // A real child that ignores the courtesy: traps SIGTERM and spins.
+    const promise = runCli(
+      process.execPath,
+      ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
+      process.env,
+      abort.signal,
+      // The escalation bound, shrunk for the test; production keeps 2s.
+      200
+    )
+    // Give the child time to boot and install its trap, then cancel.
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    abort.abort()
+    // The promise settles — from the child's actual exit, which only the
+    // SIGKILL escalation can produce — instead of hanging on the trap.
+    const outcome = await promise.then(
+      () => ({ rejected: false as const }),
+      (error: NodeJS.ErrnoException & { signal?: string }) => ({
+        rejected: true as const,
+        signal: error.signal
+      })
+    )
+    expect(outcome.rejected).toBe(true)
+    expect(outcome.rejected && outcome.signal).toBe('SIGKILL')
+  }, 15_000)
+
+  it('a cooperative child exits on the SIGTERM alone — no escalation needed', async () => {
+    const abort = new AbortController()
+    const promise = runCli(
+      process.execPath,
+      ['-e', 'setInterval(() => {}, 1000)'],
+      process.env,
+      abort.signal,
+      5000
+    )
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    abort.abort()
+    const outcome = await promise.then(
+      () => ({ rejected: false as const }),
+      (error: NodeJS.ErrnoException & { signal?: string }) => ({
+        rejected: true as const,
+        signal: error.signal
+      })
+    )
+    expect(outcome.rejected).toBe(true)
+    expect(outcome.rejected && outcome.signal).toBe('SIGTERM')
+  }, 15_000)
+
+  it('a signal already aborted at call time still kills the child (no lost race)', async () => {
+    const abort = new AbortController()
+    abort.abort()
+    const promise = runCli(
+      process.execPath,
+      ['-e', 'setInterval(() => {}, 1000)'],
+      process.env,
+      abort.signal,
+      200
+    )
+    await expect(promise).rejects.toBeTruthy()
+  }, 15_000)
 })

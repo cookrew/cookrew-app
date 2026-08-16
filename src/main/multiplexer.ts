@@ -257,8 +257,15 @@ export interface Multiplexer {
    * process; optional because only a backend with `agentLifecycle` can answer
    * it at all. Resolves false when the answer is unavailable, so callers fall
    * back to inferring it rather than failing.
+   *
+   * `signal` is the abort seam (Sol r9 P1): a retired terminal must be able
+   * to cancel the blocking reply-wait — its CLI child, its timers — instead
+   * of holding a stale session alive for the full caller timeout. Optional
+   * and safely ignorable by a backend with nothing to kill; an
+   * implementation that ignores it still typechecks (callers re-check their
+   * terminal generation after the wait settles either way).
    */
-  waitUntilIdle?(name: string, timeoutMs: number): Promise<boolean>
+  waitUntilIdle?(name: string, timeoutMs: number, signal?: AbortSignal): Promise<boolean>
 
   /**
    * Submit a prompt to the agent in this session and wait for it to finish.

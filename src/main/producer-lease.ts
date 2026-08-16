@@ -56,13 +56,19 @@
 // submits over live residue. Marking is generation-checked so a retire that
 // raced the cancellation never stains the reborn terminal.
 //
-// OWNER EDITING (Sol r8 P0-1): the composing mark. The tracker sets it on the
-// first meaningful owner byte entering the shared input box and clears it when
-// the box provably empties (submit completion, buffer emptied) or the terminal
-// retires. While set, dispatch admission and both delivery legs refuse — the
-// input box is the owner's, and a delivery pasted beside half-typed owner text
-// would submit a combined prompt no producer ever asked for. It is a MARK, not
-// a hold: owner typing must never block owner typing, so it carries no holder
+// OWNER EDITING (Sol r8 P0-1, hardened per r9 P0-1/P0-2): the composing mark.
+// The tracker sets it on the FIRST owner byte entering the shared input box —
+// any byte, whitespace included; a space is a real byte in the real box — and
+// clears it only on PROOF the box emptied: a positively observed owner submit
+// consuming the buffer, the one proven clear op (Ctrl-U on a single-line
+// buffer the model watched being typed), or terminal retirement. The mark
+// lives HERE, generation-scoped, precisely so it survives the tracker: a
+// workspace detach untracks the view, but the pane and its dirty input box
+// live on, and dispatch must keep refusing until reattach+submit or retire.
+// While set, dispatch admission and both delivery legs refuse — the input box
+// is the owner's, and a delivery pasted beside half-typed owner text would
+// submit a combined prompt no producer ever asked for. It is a MARK, not a
+// hold: owner typing must never block owner typing, so it carries no holder
 // identity and no depth.
 //
 // NO TIMERS, on purpose: the lease never expires a hold on its own. Every
@@ -127,6 +133,19 @@ export class ProducerLease {
   private readonly holds = new Map<string, Hold>()
   /** terminalId → current generation; absent reads as 0. */
   private readonly generations = new Map<string, number>()
+  /**
+   * Terminal ids that are ALIVE right now (Sol r8 P1 follow-up — liveness is
+   * represented, not inferred). A CWD rebind retires and immediately
+   * respawns the SAME terminal id; while that reborn generation sat idle it
+   * carried no hold or mark, so the tombstone bound could evict it and drop
+   * `generationOf` back to 0 — current-generation asks then read as retired
+   * while an ancient generation-0 leg passed the checks again. Registered
+   * ids are never evicted; eviction applies only to ids FORGOTTEN
+   * (permanently removed) once their bounded tombstone window drains. The
+   * conductor wires registerTerminal at spawn and forgetTerminal at node
+   * removal.
+   */
+  private readonly live = new Set<string>()
   /** terminalId → the generation whose input buffer holds cancelled residue. */
   private readonly contaminated = new Map<string, number>()
   /** terminalId → the generation whose input box holds owner typing (r8 P0-1). */
@@ -143,6 +162,26 @@ export class ProducerLease {
   /** The terminal's current lifetime generation (0 until first retire). */
   generationOf(terminalId: string): number {
     return this.generations.get(terminalId) ?? 0
+  }
+
+  /**
+   * The terminal id EXISTS: pin its generation entry against tombstone
+   * eviction for as long as it lives. Idempotent; a retire between register
+   * calls (a CWD rebind's retire-then-respawn) keeps the pin — the entry
+   * belongs to the id's lifetime, not to any one generation.
+   */
+  registerTerminal(terminalId: string): void {
+    this.live.add(terminalId)
+  }
+
+  /**
+   * The terminal id is PERMANENTLY gone (node removed): release the liveness
+   * pin. The generation entry remains as an ordinary bounded tombstone so
+   * stale async legs still fail their generation checks until the tombstone
+   * window drains — exactly the pre-liveness behavior for dead ids.
+   */
+  forgetTerminal(terminalId: string): void {
+    this.live.delete(terminalId)
   }
 
   /**
@@ -272,10 +311,14 @@ export class ProducerLease {
   }
 
   /**
-   * The box provably emptied — a submit completed (the buffer's content left
-   * as one owner prompt) or the owner cleared their typing. Called by the
-   * tracker from the same buffer feed that set the mark; `retire` clears it
-   * with everything else.
+   * The box PROVABLY emptied (Sol r9 P0-1/P0-2 — proof, not observation):
+   * a positively observed owner submit consumed the buffer while tracked,
+   * or the one proven clear op landed (Ctrl-U on a single-line buffer the
+   * model watched being typed, byte by byte). Called by the tracker from the
+   * same buffer feed that set the mark; `retire` clears it with everything
+   * else. The tracker — never this method's callers at large — owns the
+   * proof burden: whitespace, multiline state and unknown-buffer control
+   * bytes must keep the mark.
    */
   clearOwnerEditing(terminalId: string): void {
     this.ownerEditing.delete(terminalId)
@@ -291,12 +334,19 @@ export class ProducerLease {
    * ids must not accumulate: holds/contamination/editing die at retire, and
    * generation tombstones are bounded by GENERATION_TOMBSTONES.
    */
-  mapSizes(): { holds: number; generations: number; contaminated: number; ownerEditing: number } {
+  mapSizes(): {
+    holds: number
+    generations: number
+    contaminated: number
+    ownerEditing: number
+    live: number
+  } {
     return {
       holds: this.holds.size,
       generations: this.generations.size,
       contaminated: this.contaminated.size,
-      ownerEditing: this.ownerEditing.size
+      ownerEditing: this.ownerEditing.size,
+      live: this.live.size
     }
   }
 
@@ -308,18 +358,21 @@ export class ProducerLease {
   }
 
   /**
-   * Keep the generation tombstones bounded (Sol r8 P2). Oldest-retired ids
-   * are reclaimed first (retire refreshes insertion order); an id still
-   * carrying a live hold or mark is never reclaimed — dropping its generation
-   * to zero would blind the generation checks that protect a LIVE terminal.
-   * Reclaiming a truly dead tombstone re-opens only a negligible window: its
-   * stale legs would need to return after ~a thousand later retires AND carry
-   * a captured generation of exactly zero.
+   * Keep the generation tombstones bounded (Sol r8 P2, liveness-aware per
+   * r9). Oldest-retired ids are reclaimed first (retire refreshes insertion
+   * order). Never reclaimed: a REGISTERED (live) id — its rebound generation
+   * must survive any amount of churn, because dropping it to zero would make
+   * current-generation asks read as retired and readmit ancient generation-0
+   * legs — and an id still carrying a hold or mark. Reclaiming a truly dead,
+   * forgotten tombstone re-opens only a negligible window: its stale legs
+   * would need to return after ~a thousand later retires AND carry a
+   * captured generation of exactly zero.
    */
   private boundGenerations(): void {
     if (this.generations.size <= GENERATION_TOMBSTONES) return
     for (const id of this.generations.keys()) {
       if (this.generations.size <= GENERATION_TOMBSTONES) return
+      if (this.live.has(id)) continue
       if (this.holds.has(id) || this.contaminated.has(id) || this.ownerEditing.has(id)) continue
       this.generations.delete(id)
     }

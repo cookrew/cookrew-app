@@ -11,6 +11,7 @@
 // - every leg releases in a finally, so the terminal's window frees whether
 //   the delivery succeeded, failed or was displaced.
 
+import { EventEmitter } from 'node:events'
 import { describe, expect, it } from 'vitest'
 import {
   DispatchService,
@@ -18,6 +19,8 @@ import {
   type DispatchGeneration
 } from '../src/main/dispatch'
 import { ProducerLease, ownerHolder } from '../src/main/producer-lease'
+import { TurnTracker } from '../src/main/turn-tracker'
+import type { PtySession } from '../src/main/pty'
 
 const PROMPT = 'Run the F2 simulation and report the counts.'
 const NOW = 1_700_000_000_000
@@ -452,6 +455,193 @@ describe('owner composing vs dispatch (Sol r8 P0-1)', () => {
       state: 'interrupted',
       error: 'interrupted: owner took the input box'
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r9 P1-3 — the delivery lease covers the ACK window, not the turn. With
+// only promptAgent wired, deliver() awaited `agent prompt --wait` inside its
+// lease hold: a minutes-long dispatched turn refused every desktop byte until
+// completion. The submitAgent capability releases at acknowledged submission;
+// completion is observed outside the lease by correlation and the sweep.
+// ---------------------------------------------------------------------------
+
+describe('dispatch delivery under submitAgent (Sol r9 P1-3)', () => {
+  it('ack mode: the lease frees at acknowledgement and the record runs unconfirmed', async () => {
+    const lease = new ProducerLease()
+    const during: Array<ReturnType<ProducerLease['holderOf']>> = []
+    let prompted = 0
+    const service = new DispatchService(
+      deps({
+        lease,
+        submitAgent: async () => {
+          during.push(lease.holderOf('agent-1'))
+          return 'submitted'
+        },
+        promptAgent: async () => {
+          prompted += 1
+          return 'done'
+        }
+      })
+    )
+    const response = await service.dispatch('agent-1', { text: PROMPT })
+    expect(response.status).toBe(202)
+    await settle(service)
+    // The lease was held exactly across the ack call…
+    expect(during).toEqual([{ kind: 'dispatch', dispatchId: 'dsp-1' }])
+    expect(lease.holderOf('agent-1')).toBeNull()
+    // …the conservative full-wait primitive was never used…
+    expect(prompted).toBe(0)
+    // …and the record runs at honest ack grade: herdr took the prompt,
+    // nobody watched it land. Correlation/sweep close it outside any lease.
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'running',
+      via: 'herdr',
+      confirmed: false
+    })
+  })
+
+  it('ack mode 503-independence: submitAgent alone (no promptAgent) can dispatch', async () => {
+    const service = new DispatchService(
+      deps({
+        promptAgent: undefined,
+        submitAgent: async () => 'submitted'
+      })
+    )
+    const response = await service.dispatch('agent-1', { text: PROMPT })
+    expect(response.status).toBe(202)
+    await settle(service)
+    expect(service.get('dsp-1')?.state).toBe('running')
+  })
+
+  it("a positively failed submitAgent still runs the captureDeep landing check", async () => {
+    // herdr said no — but 'failed' evidence is still read against the
+    // transcript: a prompt visible in the pane means it DID land, and
+    // re-sending would double-submit.
+    let reattaches = 0
+    const service = new DispatchService(
+      deps({
+        submitAgent: async () => 'failed',
+        captureDeep: () => `> ${PROMPT}\nworking on it…`,
+        reattachFallback: async () => {
+          reattaches += 1
+          return true
+        }
+      })
+    )
+    await service.dispatch('agent-1', { text: PROMPT })
+    await settle(service)
+    expect(reattaches).toBe(0)
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'running',
+      via: 'herdr',
+      confirmed: true
+    })
+  })
+
+  it('a failed submitAgent with PROVEN non-delivery falls back, exactly like promptAgent', async () => {
+    let reattaches = 0
+    const service = new DispatchService(
+      deps({
+        submitAgent: async () => 'failed',
+        capture: () => '> ', // pane never moved, no echo → non-delivery proven
+        agentStatus: () => 'idle',
+        reattachFallback: async () => {
+          reattaches += 1
+          return true
+        }
+      })
+    )
+    await service.dispatch('agent-1', { text: PROMPT })
+    await settle(service)
+    expect(reattaches).toBe(1)
+    expect(service.get('dsp-1')).toMatchObject({ state: 'running', via: 'pty-fallback' })
+  })
+
+  it('conservative mode stands when submitAgent is absent: promptAgent holds through the turn', async () => {
+    // The capability split, other half: a backend that cannot acknowledge
+    // submission keeps the full-wait hold — the only acknowledgement it has
+    // IS turn completion.
+    const lease = new ProducerLease()
+    const during: Array<ReturnType<ProducerLease['holderOf']>> = []
+    const service = new DispatchService(
+      deps({
+        lease,
+        promptAgent: async () => {
+          during.push(lease.holderOf('agent-1'))
+          return 'done'
+        }
+      })
+    )
+    await service.dispatch('agent-1', { text: PROMPT })
+    await settle(service)
+    expect(during).toEqual([{ kind: 'dispatch', dispatchId: 'dsp-1' }])
+    expect(lease.holderOf('agent-1')).toBeNull()
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'running',
+      via: 'herdr',
+      confirmed: true
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r9 P0-1 — the end-to-end detach story at the dispatch door: the mark a
+// detached pane keeps must refuse background dispatch until the owner's box
+// is provably consumed.
+// ---------------------------------------------------------------------------
+
+describe('detached owner input vs dispatch (Sol r9 P0-1)', () => {
+  class FakePane extends EventEmitter {
+    terminalId = 'agent-1'
+    fullText(): string {
+      return ''
+    }
+    viewportText(): string {
+      return ''
+    }
+    idleFor(): number {
+      return 99_999
+    }
+  }
+
+  it('type → detach → dispatch refused; reattach + submit → dispatch admitted', async () => {
+    const lease = new ProducerLease()
+    const tracker = new TurnTracker(async () => null, null, lease)
+    const pane = new FakePane()
+    tracker.track(pane as unknown as PtySession, true)
+    let seq = 0
+    const service = new DispatchService(
+      deps({
+        lease,
+        newId: () => `dsp-${(seq += 1)}`,
+        ownerComposing: (agentId) => tracker.ownerComposing(agentId),
+        promptAgent: async () => 'done'
+      })
+    )
+
+    // The owner types half a prompt, then switches workspaces: untrack +
+    // detach, pane and dirty input box surviving.
+    pane.emit('input', 'half a prompt about the ')
+    tracker.untrack('agent-1')
+
+    // The background dispatch the v5 export makes possible: refused — the
+    // input box is still the owner's.
+    const refused = await service.dispatch('agent-1', { text: PROMPT })
+    expect(refused).toEqual({
+      status: 409,
+      body: { error: 'owner is composing — the input box is theirs' }
+    })
+
+    // Reattach and SUBMIT: the observed consumption of the box readmits.
+    tracker.track(pane as unknown as PtySession, true)
+    pane.emit('input', 'release notes\r')
+    const admitted = await service.dispatch('agent-1', { text: PROMPT })
+    expect(admitted.status).toBe(202)
+    // The refused attempt minted no id — this admitted one is the first.
+    await settle(service, 'dsp-1')
+    expect(service.get('dsp-1')?.state).toBe('running')
+    tracker.disposeAll()
   })
 })
 

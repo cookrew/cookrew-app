@@ -439,6 +439,9 @@ function spawnTracked(t: {
   // tracker BEFORE the byte reaches the child; a dispatch in flight is
   // preempted durably or the write is refused (Sol r4 P0-1).
   session.beforeOwnerInput = (terminalId, data) => turns.guardOwnerInput(terminalId, data)
+  // Liveness: a registered id's lease generation is never tombstone-evicted,
+  // so a rebound terminal cannot be mistaken for a dead one (Sol r9).
+  defaultProducerLease().registerTerminal(t.id)
   // A terminal that dies before it is ready never booted: drop the pending
   // sample rather than leave it to time out. Registered only when a sample is
   // actually open — spawnTracked is called repeatedly for a REUSED session
@@ -754,6 +757,15 @@ const dispatchService = new DispatchService({
     const mux = multiplexer()
     if (!mux?.capabilities.agentLifecycle || !mux.promptAgent) return Promise.resolve('failed')
     return mux.promptAgent(name, prompt, timeoutMs, signal)
+  },
+  // Submission-acknowledgement mode: the producer lease covers only the
+  // irreversible delivery; the reply is observed by transcript correlation
+  // outside the lease, so a minutes-long dispatched turn never locks the
+  // owner's keyboard (Sol r9).
+  submitAgent: (name, prompt, timeoutMs, signal) => {
+    const mux = multiplexer()
+    if (!mux?.capabilities.agentLifecycle || !mux.submitAgent) return Promise.resolve('failed')
+    return mux.submitAgent(name, prompt, timeoutMs, signal)
   },
   noteDispatch: (agentId, dispatchId, prompt) => turns.noteDispatch(agentId, dispatchId, prompt),
   // Confirmed delivery hands the tracker the EXACT prompt: scrape closure
@@ -1177,6 +1189,7 @@ function retireTerminal(id: string, why: string): void {
 
 async function removeNode(id: string): Promise<void> {
   retireTerminal(id, 'terminal removed')
+  defaultProducerLease().forgetTerminal(id)
   // NOTE: turn history is deliberately NOT cleared on kill — it is the third
   // recovery net (resolveClaudeSessionId matches it to the real session when
   // no snapshot/registry ref exists). Disk-capped at 100/agent, negligible;

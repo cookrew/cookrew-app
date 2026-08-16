@@ -21,15 +21,17 @@
 // meaning "the newest version of checkpoint <index> is this line". Readers
 // apply last-wins per index; superseded lines are dead weight that a bounded
 // fold clears: when overlay lines reach TAIL_OVERLAY_COMPACT_MIN_LINES and
-// their bytes reach half the file, ONE atomic full rewrite (writeAll) folds
-// them away — at load time (the dispatch-registry pattern) or as a SCHEDULED
-// idle task when a write crosses the line (Sol r8 P1: the flush that crosses
-// the threshold never pays the rewrite itself). Amortized, every write is
-// O(changed bytes): the fold's O(file) cost is paid for by an equal weight of dead
-// bytes it removes. TurnStore is the ONLY reader of these files (board,
-// search, rebuild-diff all go through load/loadAll; ledger-rebuild reads
-// harness transcripts) — anything new that parses the raw JSONL must apply
-// the same last-wins rule.
+// their bytes reach half the file, ONE atomic full rewrite folds them away —
+// SCHEDULED, never performed inline (Sol r8 P1 / r9 P1): both the load that
+// finds a heavy file and the flush that crosses the threshold queue an async
+// task that reads, parses, serializes and writes in bounded chunks, yielding
+// the event loop between each, and commits with fsync+rename+dir-fsync only
+// when no write raced it (see foldNow for the race discipline). Amortized,
+// every write is O(changed bytes): the fold's O(file) cost is paid for by an
+// equal weight of dead bytes it removes. TurnStore is the ONLY reader of
+// these files (board, search, rebuild-diff all go through load/loadAll;
+// ledger-rebuild reads harness transcripts) — anything new that parses the
+// raw JSONL must apply the same last-wins rule.
 //
 // Writes are debounced per terminal; TurnTracker flushes on app quit.
 
@@ -37,7 +39,9 @@ import {
   appendFileSync,
   closeSync,
   existsSync,
+  fchmodSync,
   fstatSync,
+  fsyncSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -46,13 +50,27 @@ import {
   renameSync,
   statSync,
   unlinkSync,
+  writeSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { mergeAnnotation, splitAnnotation, type TurnRecord } from '../shared/turn'
-import { AnnotationStore, renameLanded, writeFileAtomic } from './turn-annotations'
+import { AnnotationStore, fsyncDirDurable, renameLanded, writeFileAtomic } from './turn-annotations'
 
 const SAVE_DEBOUNCE_MS = 300
+
+/**
+ * The fold's event-loop budget (Sol r9 P1). The fold reads, parses,
+ * serializes and writes in bounded chunks with a yield between each, so the
+ * O(total history) rewrite never blocks Electron's main thread for more than
+ * one chunk's worth of work — renderer IPC, PTY handling and other agents
+ * keep running through a 91 MB compaction instead of freezing for it.
+ */
+const FOLD_READ_CHUNK_BYTES = 256 * 1024
+const FOLD_SERIALIZE_CHUNK_RECORDS = 200
+
+/** Hand the event loop back between fold chunks — setImmediate as a promise. */
+const yieldToLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
 
 /**
  * Overlay-fold floor. Below this many overlay lines the dead weight cannot be
@@ -159,6 +177,40 @@ export class TurnStore {
    * unref'd timer never holds the app open for it.
    */
   private pendingCompact = new Map<string, NodeJS.Timeout>()
+  /** Terminals whose ASYNC fold is currently in flight — the single-flight
+   *  guard for the chunked task itself (Sol r9 P1). */
+  private folding = new Set<string>()
+  /**
+   * Physical write generation per terminal (Sol r9 P1) — bumped by every
+   * append, rewrite, fold commit and removal. The async fold captures it at
+   * start and COMMITS only if it is unchanged at rename time: flushes keep
+   * appending to the ORIGINAL file mid-fold (readers stay correct, last-wins
+   * per index), and a fold whose input those writes outran aborts its temp
+   * and reschedules rather than renaming their bytes away.
+   */
+  private writeGen = new Map<string, number>()
+  /**
+   * Post-rename durability DEBT (Sol r9 P1), tracked APART from the logical
+   * written-tail. When writeAll's rename lands but the directory fsync
+   * fails, the file already holds the new records — the written tail below
+   * is truthful about bytes, and a retry must NOT re-append lines the file
+   * carries — but the directory entry is unproven and a crash can still
+   * lose the whole ledger. The old shape let the retry see a current tail,
+   * write nothing, and clear the retained work as success. Now the debt
+   * survives independently: every flush retries the parent-directory fsync
+   * (fsyncDirDurable, which escalates a repeat as a PERSISTENT STORAGE
+   * FAULT), and only a flush whose debt is settled may clear pending/dirty.
+   */
+  private dirDebt = new Set<string>()
+  /**
+   * Cached LOGICAL record count per terminal (Sol r9 P2): seeded by the
+   * first full read (readLines or count()'s own recovery parse — the same
+   * recovery rules), kept current by every append/overlay/rewrite/fold, so
+   * count() never reparses the ledger it already measured. This process is
+   * the only writer, the same trust the written-tail and loadAll caches
+   * already rest on.
+   */
+  private counts = new Map<string, number>()
   /**
    * Whole-ledger cache for loadAll(). Built once and kept warm by write-through
    * from flush()/remove() — this process is the only writer, so re-reading every
@@ -292,6 +344,9 @@ export class TurnStore {
     // The append/overlay machinery assumes the final physical line carries
     // the final logical record; a file where it does not is not extendable.
     if (records.length > 0 && lastRecord !== records[records.length - 1]) clean = false
+    // The logical count is what this read just measured — clean or not, it is
+    // exactly what count() would recover with the same rules (Sol r9 P2).
+    this.counts.set(terminalId, records.length)
     if (!clean) {
       this.written.delete(terminalId)
       return records
@@ -311,19 +366,16 @@ export class TurnStore {
   }
 
   /**
-   * The load-time half of overlay compaction: one atomic rewrite when the
-   * last read flagged the fold, holding the HYDRATED records so the loadAll
-   * cache (which stores records annotations-on) stays truthful. Best-effort —
-   * a failed fold costs nothing but the dead bytes it would have cleared, and
-   * the write-path fold retries the same policy.
+   * The load-time half of overlay compaction. Load SCHEDULES the fold rather
+   * than performing it (Sol r9 P1): the rewrite is O(total history), and a
+   * boot that paid it synchronously froze app launch for exactly the ledgers
+   * the fold exists to serve. The scheduled task is the same chunked,
+   * yield-between-chunks fold the write path uses; until it commits, readers
+   * keep getting the correct last-wins history from the unfolded file.
    */
-  private maybeFold(terminalId: string, hydrated: TurnRecord[]): void {
+  private maybeFold(terminalId: string): void {
     if (!this.foldOnLoad.delete(terminalId)) return
-    try {
-      this.writeAll(terminalId, hydrated)
-    } catch (error) {
-      console.error('Failed to fold turn ledger tail overlays:', error)
-    }
+    this.scheduleFold(terminalId)
   }
 
   /**
@@ -358,7 +410,7 @@ export class TurnStore {
       const file = this.fileFor(terminalId)
       if (existsSync(file)) {
         const records = this.hydrate(terminalId, this.readLines(terminalId, file))
-        this.maybeFold(terminalId, records)
+        this.maybeFold(terminalId)
         return records
       }
       return this.migrate(terminalId) ?? []
@@ -377,12 +429,19 @@ export class TurnStore {
    * every marker-shaped physical line and counted every corrupt one, so the
    * pager's count diverged from the loaded history on exactly the corruption
    * this store promises to tolerate; the count and the reader must not use
-   * incompatible recovery rules. Still lighter than load(): shapes only — no
-   * hydration, no record retention, no append-tail metadata side effects.
+   * incompatible recovery rules.
+   *
+   * SERVED FROM CACHE (Sol r9 P2): the recovery parse below runs only for
+   * the COLD seed — before this store has read or written the terminal at
+   * all. Every read seeds `counts` and every append/overlay/rewrite/fold
+   * updates it, so a pager or activity projection polling count() costs a
+   * map lookup, never a synchronous reparse of an uncapped ledger.
    */
   count(terminalId: string): number {
     const pending = this.pending.get(terminalId)
     if (pending) return pending.length
+    const cached = this.counts.get(terminalId)
+    if (cached !== undefined) return cached
     try {
       const file = this.fileFor(terminalId)
       if (!existsSync(file)) return this.migrate(terminalId)?.length ?? 0
@@ -403,6 +462,7 @@ export class TurnStore {
           // one bad line, not the file — the reader drops it too
         }
       }
+      this.counts.set(terminalId, logical)
       return logical
     } catch {
       return 0
@@ -444,7 +504,7 @@ export class TurnStore {
                 terminalId,
                 this.readLines(terminalId, path.join(this.dir, name)),
               )
-              this.maybeFold(terminalId, records)
+              this.maybeFold(terminalId)
             } else {
               records = this.load(terminalId)
             }
@@ -546,14 +606,30 @@ export class TurnStore {
       // rethrowing: a retry that still believed the OLD tail would re-append
       // lines the file already carries, and duplicate physical records
       // corrupt the logical history — worse than the missed fsync retry.
+      // The unproven durability itself is recorded as SEPARATE debt (Sol r9
+      // P1), so the truthful tail cannot double as a claim of success: the
+      // next flush must land the directory fsync before it may clear.
       if (renameLanded(error)) {
+        this.dirDebt.add(terminalId)
+        this.bumpGen(terminalId)
         this.remember(terminalId, records)
         this.cache(terminalId, records)
       }
       throw error
     }
+    this.dirDebt.delete(terminalId) // writeFileAtomic proved the entry durable
+    this.bumpGen(terminalId)
     this.remember(terminalId, records)
     this.cache(terminalId, records)
+  }
+
+  /** One physical mutation of this terminal's ledger file happened. */
+  private bumpGen(terminalId: string): void {
+    this.writeGen.set(terminalId, this.genOf(terminalId) + 1)
+  }
+
+  private genOf(terminalId: string): number {
+    return this.writeGen.get(terminalId) ?? 0
   }
 
   /**
@@ -578,6 +654,7 @@ export class TurnStore {
       overlayLines: 0,
       overlayBytes: 0,
     })
+    this.counts.set(terminalId, records.length)
   }
 
   private flush(terminalId: string): void {
@@ -604,6 +681,11 @@ export class TurnStore {
     let conversed = false
     try {
       this.persistConversation(terminalId, records, dirty)
+      // A current tail is not the whole truth (Sol r9 P1): a previous rename
+      // may have landed with its directory entry unproven. Settle that debt
+      // — retry the parent-directory fsync — before this flush may report
+      // success; a throw here retains the work exactly like a failed write.
+      this.settleDirDebt(terminalId)
       conversed = true
     } catch (error) {
       console.error('Failed to save turn history:', error)
@@ -613,6 +695,18 @@ export class TurnStore {
     // is free — the annotation store diffs to zero ops and the conversation
     // pass sees an already-current tail and writes nothing.
     if (!annotated || !conversed) this.retain(terminalId, records, dirty)
+  }
+
+  /**
+   * Retry the parent-directory fsync a landed-but-unproven rename still owes
+   * (see dirDebt). fsyncDirDurable throws on failure — and says PERSISTENT
+   * STORAGE FAULT out loud on a repeat — so a standing durability hole keeps
+   * the retained work retrying instead of being declared saved.
+   */
+  private settleDirDebt(terminalId: string): void {
+    if (!this.dirDebt.has(terminalId)) return
+    fsyncDirDurable(this.dir)
+    this.dirDebt.delete(terminalId)
   }
 
   /**
@@ -673,6 +767,7 @@ export class TurnStore {
         if (records.length > known.count) {
           const added = records.slice(known.count).map((r) => `${this.line(r)}\n`)
           appendFileSync(file, added.join(''), 'utf8')
+          this.bumpGen(terminalId)
           const lastLine = added[added.length - 1].slice(0, -1)
           this.written.set(terminalId, {
             ...known,
@@ -681,6 +776,7 @@ export class TurnStore {
             tailLine: lastLine,
             lastIndex: records[records.length - 1].index,
           })
+          this.counts.set(terminalId, records.length)
         }
         this.cache(terminalId, records)
         return
@@ -740,6 +836,7 @@ export class TurnStore {
     const overlayBytes = known.overlayBytes + overlayAdded
     const added = records.slice(boundary + 1).map((r) => `${this.line(r)}\n`)
     appendFileSync(file, `${overlay}\n${added.join('')}`, 'utf8')
+    this.bumpGen(terminalId)
     const lastLine = added.length > 0 ? added[added.length - 1].slice(0, -1) : overlay
     this.written.set(terminalId, {
       count: records.length,
@@ -749,6 +846,7 @@ export class TurnStore {
       overlayLines,
       overlayBytes,
     })
+    this.counts.set(terminalId, records.length)
     if (foldDue(overlayLines, overlayBytes, statSync(file).size)) {
       this.scheduleFold(terminalId)
     }
@@ -756,42 +854,229 @@ export class TurnStore {
   }
 
   /**
-   * Single-flight idle scheduling for the write-path fold. setTimeout(0)
-   * rather than the flush stack: the rewrite lands one macrotask later,
-   * bounding overlay growth past the threshold to whatever that single delay
-   * admits (in practice at most one more flush cycle). Unref'd so a pending
-   * fold never holds the app open — a quit before it runs is recovered by the
-   * load-time fold on the next boot.
+   * Single-flight idle scheduling for the fold (load-time and write-path
+   * alike). setTimeout(0) rather than the flush stack starts the ASYNC task
+   * one macrotask later; the task itself then yields between every chunk, so
+   * neither the flush that crossed the threshold nor any later event-loop
+   * turn pays the O(total history) rewrite in one stretch (Sol r9 P1).
+   * Unref'd so a pending fold never holds the app open — a quit before it
+   * commits is recovered by the load-time fold on the next boot (temp +
+   * rename keeps every intermediate state crash-safe).
    */
   private scheduleFold(terminalId: string): void {
-    if (this.pendingCompact.has(terminalId)) return
-    const timer = setTimeout(() => this.foldNow(terminalId), 0)
+    if (this.pendingCompact.has(terminalId) || this.folding.has(terminalId)) return
+    const timer = setTimeout(() => {
+      this.pendingCompact.delete(terminalId)
+      void this.foldNow(terminalId)
+    }, 0)
     timer.unref?.()
     this.pendingCompact.set(terminalId, timer)
   }
 
   /**
-   * The scheduled half of the write-path fold: ONE atomic rewrite of the
-   * current logical records, off every flush stack. Best-effort like the
-   * load-time fold — a failure costs only the dead bytes it would have
-   * cleared, and the overlay bookkeeping (still past the policy) reschedules
-   * on the next overlay append.
+   * The scheduled fold: one chunked, event-loop-friendly atomic rewrite of
+   * the current logical records. Best-effort — a failure costs only the dead
+   * bytes it would have cleared — and single-flight per terminal for the
+   * WHOLE async run, not just the timer.
+   *
+   * THE RACE, AND THE CHOICE MADE (Sol r9 P1): flushes keep appending to the
+   * ORIGINAL file while the fold runs — readers stay correct throughout,
+   * last-wins per index — so a rename over a file that grew mid-fold would
+   * silently drop those appends. This fold COMMITS ONLY ON A QUIET FILE: it
+   * drains any queued flush first (synchronous, O(delta)), captures the
+   * write generation, and re-verifies it in the same synchronous block as
+   * the rename. A generation that moved aborts the temp and reschedules —
+   * chosen over buffering-and-replaying racing appends because the abort
+   * path has nothing to merge and therefore nothing to get wrong; under
+   * sustained writes the overlays simply keep accumulating (correct, just
+   * un-reclaimed) until a quiet window lets a fold land.
    */
-  private foldNow(terminalId: string): void {
-    this.pendingCompact.delete(terminalId)
+  private async foldNow(terminalId: string): Promise<void> {
+    if (this.folding.has(terminalId)) return
+    this.folding.add(terminalId)
+    let retry = false
     try {
-      // load() serves pending records when a flush is queued (they are the
-      // newest truth and every reader already sees them), and may itself run
-      // the load-time fold — in which case the bookkeeping below shows zero
-      // overlays and this task has nothing left to do.
-      const records = this.load(terminalId)
-      const known = this.written.get(terminalId)
-      if (known !== undefined && known.overlayLines === 0) return
-      if (records.length === 0) return
-      this.writeAll(terminalId, records)
+      retry = !(await this.foldChunked(terminalId))
     } catch (error) {
       console.error('Failed to fold turn ledger tail overlays:', error)
+    } finally {
+      this.folding.delete(terminalId)
     }
+    // Re-queue OUTSIDE the folding guard, or the reschedule would be
+    // swallowed by the very single-flight that protects the task.
+    if (retry) this.refold(terminalId)
+  }
+
+  /** An aborted fold re-queues itself while overlay weight remains. */
+  private refold(terminalId: string): void {
+    const known = this.written.get(terminalId)
+    if (known === undefined || known.overlayLines === 0) return
+    this.scheduleFold(terminalId)
+  }
+
+  /**
+   * The fold body: read + parse in bounded chunks, serialize + write the
+   * temp in bounded chunks, one yield between each, then commit with
+   * fsync + rename + parent-dir fsync. Returns false ONLY when racing
+   * writes outran the fold (the caller reschedules); true otherwise —
+   * including the nothing-to-do exits.
+   */
+  private async foldChunked(terminalId: string): Promise<boolean> {
+    // Drain the queued flush first (synchronous, O(delta)): the fold then
+    // works from the current file with no pending records it could
+    // double-persist, and the generation below covers everything after.
+    if (this.timers.has(terminalId)) this.flush(terminalId)
+    const file = this.fileFor(terminalId)
+    if (!existsSync(file)) return true
+    const known = this.written.get(terminalId)
+    if (known !== undefined && known.overlayLines === 0) return true
+    const gen = this.genOf(terminalId)
+    const records = await this.readRecordsChunked(file)
+    if (records.length === 0) return true
+    if (this.genOf(terminalId) !== gen) return false
+    return this.replaceChunked(terminalId, file, records, gen)
+  }
+
+  /**
+   * readLines' recovery rules — drop what does not parse, last-wins per
+   * checkpoint index, keep orphan overlays — applied in bounded chunks with
+   * a yield after each, and with NO cache side effects: the fold commit
+   * publishes its own bookkeeping, and an aborted fold must leave every
+   * cache exactly as the live write path maintains it. Chunks split on the
+   * newline BYTE, never mid-character: a UTF-8 code point can straddle a
+   * read boundary, and decoding it early would corrupt the line.
+   */
+  private async readRecordsChunked(file: string): Promise<TurnRecord[]> {
+    const records: TurnRecord[] = []
+    const at = new Map<number, number>() // checkpoint index → position
+    const apply = (line: string): void => {
+      if (line.trim() === '') return
+      const overlay = parseOverlay(line)
+      try {
+        const parsed: unknown = JSON.parse(overlay?.line ?? line)
+        if (!isTurnRecord(parsed)) return
+        if (overlay !== null) {
+          const pos = at.get(parsed.index)
+          if (pos !== undefined) {
+            records[pos] = parsed
+          } else {
+            at.set(parsed.index, records.length)
+            records.push(parsed)
+          }
+        } else {
+          at.set(parsed.index, records.length)
+          records.push(parsed)
+        }
+      } catch {
+        // one bad line, not the file
+      }
+    }
+    const fd = openSync(file, 'r')
+    try {
+      const chunk = Buffer.allocUnsafe(FOLD_READ_CHUNK_BYTES)
+      let carry: Buffer = Buffer.alloc(0)
+      for (;;) {
+        const got = readSync(fd, chunk, 0, chunk.length, null)
+        if (got <= 0) break
+        const held = Buffer.concat([carry, chunk.subarray(0, got)])
+        const cut = held.lastIndexOf(0x0a)
+        if (cut === -1) {
+          carry = held
+        } else {
+          for (const line of held.toString('utf8', 0, cut).split('\n')) apply(line)
+          carry = Buffer.from(held.subarray(cut + 1))
+        }
+        await yieldToLoop()
+      }
+      if (carry.length > 0) apply(carry.toString('utf8'))
+    } finally {
+      closeSync(fd)
+    }
+    return records
+  }
+
+  /**
+   * The write half of the fold: chunked serialization into a temp file of
+   * its own (`.fold.tmp` — writeFileAtomic's `.tmp` may be claimed by a
+   * racing synchronous rewrite), then ONE synchronous commit block — verify
+   * the generation, rename, parent-dir fsync — with no await between the
+   * verification and the rename: flush() runs on this same thread, so
+   * nothing can append between the check and the swap. A dir-fsync failure
+   * after the landed rename is recorded as durability debt exactly like
+   * writeAll's (the next flush settles it).
+   */
+  private async replaceChunked(
+    terminalId: string,
+    file: string,
+    records: TurnRecord[],
+    gen: number,
+  ): Promise<boolean> {
+    const temp = `${file}.fold.tmp`
+    let mode: number | null = null
+    try {
+      mode = statSync(file).mode & 0o777
+    } catch {
+      // no file being replaced: the temp keeps the platform default
+    }
+    const fd = openSync(temp, 'w')
+    let closed = false
+    try {
+      if (mode !== null) fchmodSync(fd, mode)
+      for (let start = 0; start < records.length; start += FOLD_SERIALIZE_CHUNK_RECORDS) {
+        const slice = records.slice(start, start + FOLD_SERIALIZE_CHUNK_RECORDS)
+        const body = Buffer.from(slice.map((r) => `${this.line(r)}\n`).join(''), 'utf8')
+        let landed = 0
+        while (landed < body.length) {
+          const wrote = writeSync(fd, body, landed, body.length - landed)
+          if (wrote <= 0) throw new Error(`short write folding ${temp}`)
+          landed += wrote
+        }
+        await yieldToLoop()
+      }
+      fsyncSync(fd)
+      closeSync(fd)
+      closed = true
+    } catch (error) {
+      if (!closed) closeSync(fd)
+      try {
+        unlinkSync(temp)
+      } catch {
+        // the orphan is truncated and reused by the next fold attempt
+      }
+      throw error
+    }
+    // COMMIT — synchronous from here through the bookkeeping.
+    if (this.genOf(terminalId) !== gen) {
+      try {
+        unlinkSync(temp)
+      } catch {
+        // the orphan is truncated and reused by the next fold attempt
+      }
+      return false
+    }
+    try {
+      renameSync(temp, file)
+    } catch (error) {
+      try {
+        unlinkSync(temp)
+      } catch {
+        // the orphan is truncated and reused by the next fold attempt
+      }
+      throw error
+    }
+    this.bumpGen(terminalId)
+    try {
+      fsyncDirDurable(this.dir)
+      this.dirDebt.delete(terminalId)
+    } catch (error) {
+      // The rename landed; only the entry's durability is unproven — the
+      // same debt writeAll records, settled by the next flush.
+      this.dirDebt.add(terminalId)
+      console.error('Turn-ledger fold renamed but its directory entry is not yet durable:', error)
+    }
+    this.remember(terminalId, records)
+    this.cache(terminalId, this.hydrate(terminalId, records))
+    return true
   }
 
   /** Does the file end with exactly these bytes? Reads only that many. */
@@ -821,10 +1106,16 @@ export class TurnStore {
     const fold = this.pendingCompact.get(terminalId)
     if (fold) clearTimeout(fold)
     this.pendingCompact.delete(terminalId)
+    // An in-flight ASYNC fold cannot be interrupted, but the bump makes its
+    // commit-time generation check fail: it aborts its temp instead of
+    // renaming the removed terminal's ledger back into existence.
+    this.bumpGen(terminalId)
     this.pending.delete(terminalId)
     this.dirty.delete(terminalId)
     this.written.delete(terminalId)
     this.foldOnLoad.delete(terminalId)
+    this.dirDebt.delete(terminalId)
+    this.counts.delete(terminalId)
     this.all?.delete(this.safeId(terminalId))
     this.annotations.remove(this.safeId(terminalId))
     try {

@@ -30,7 +30,11 @@ interface FakeMux {
     timeoutMs: number,
     signal?: AbortSignal
   ) => Promise<'submitted' | 'failed'>
-  waitUntilIdle?: (sessionName: string, timeoutMs: number) => Promise<boolean>
+  waitUntilIdle?: (
+    sessionName: string,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ) => Promise<boolean>
 }
 const muxHolder = vi.hoisted(() => ({ current: null as unknown }))
 vi.mock('../src/main/pty', () => ({
@@ -696,6 +700,53 @@ describe('askTerminal — the submission-ack lease window (Sol r8 P1)', () => {
     // the whole turn.
     expect(holderDuring).toEqual(['owner', undefined])
     expect(lease.holderOf('term-1')).toBeNull()
+  })
+
+  it('retire AFTER the submission ack aborts the reply-wait and the ask throws retired (Sol r9 P1-4)', async () => {
+    // Distinct from retire-during-submit: the submission already succeeded
+    // and the lease is already free — the ask is inside its reply-wait. The
+    // r8 seam kept the AbortController subscribed but never passed it to
+    // waitUntilIdle, so retirement aborted no active child and the ask could
+    // later return output rendered by the REBORN generation.
+    const lease = new ProducerLease()
+    let idleSignal: AbortSignal | undefined
+    let reachedWait: () => void = () => undefined
+    const waitEntered = new Promise<void>((resolve) => {
+      reachedWait = resolve
+    })
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      submitAgent: async () => 'submitted',
+      // Model the real backend wait: pending until its signal fires, then
+      // settle false the way a killed CLI child resolves the wrapper.
+      waitUntilIdle: (_name, _timeout, signal) =>
+        new Promise((resolve) => {
+          idleSignal = signal
+          reachedWait()
+          signal?.addEventListener('abort', () => resolve(false), { once: true })
+        })
+    } satisfies FakeMux
+    let reads = 0
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => {
+        reads += 1
+        return reads === 1 ? '' : 'OUTPUT OF THE REBORN GENERATION'
+      },
+      idleFor: () => 99_999,
+      noteExternalInput: () => undefined
+    } as unknown as PtySession
+
+    const promise = askTerminal(session, 'slow ask', { lease, quiescenceMs: 0, graceMs: 0 })
+    await waitEntered
+    // The retirement signal reached the backend wait — and had not fired.
+    expect(idleSignal?.aborted).toBe(false)
+    lease.retire('term-1')
+    expect(idleSignal?.aborted).toBe(true)
+    // The wait settles NOW; the generation re-check after the awaited phase
+    // throws instead of reading the reborn terminal's screen as the reply.
+    await expect(promise).rejects.toThrow('retired mid-ask')
   })
 
   it('a positively failed submitAgent falls back to the typed path, exactly like promptAgent', async () => {

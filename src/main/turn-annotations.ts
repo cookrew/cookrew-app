@@ -44,11 +44,12 @@
 // replays over. A full save writes epoch+1, so surviving stale ops are inert
 // the moment the rename lands — the unlink is mere byte reclamation and is
 // best-effort (retried by the next compaction). A missing snapshot reads as
-// epoch 0, which is also what log-only agents write, so the empty-save window
-// (snapshot unlinked, crash, log survives) is closed by the same rule: any
-// snapshot ever written carries epoch >= 1, so its orphaned ops cannot match
-// the bare-directory epoch. Legacy files — bare-map snapshots, ops without
-// `e` — both read as epoch 0 and stay mutually consistent.
+// epoch 0, which is also what log-only agents write. An EMPTY save publishes
+// an epoch-bumped empty snapshot through the same atomic path (Sol r9 P2)
+// rather than unlinking: unlinks return before the directory entries are
+// durable, and a crash after them could resurrect both old files whole.
+// Legacy files — bare-map snapshots, ops without `e` — both read as epoch 0
+// and stay mutually consistent.
 //
 // FAIL-CLOSED (Sol r6 P1)
 // -----------------------
@@ -239,6 +240,40 @@ export function renameLanded(error: unknown): boolean {
 }
 
 /**
+ * Fsync a directory so a rename into it is durable, with the shared fault
+ * discipline: codes that POSITIVELY mean the filesystem cannot fsync a
+ * directory (see DIR_FSYNC_UNSUPPORTED) are tolerated — every retry would
+ * fail identically — everything else THROWS, and a repeat failure on the
+ * same directory is surfaced as a LOUD persistent storage fault. Shared by
+ * writeFileAtomic (immediately after its rename) and TurnStore's post-rename
+ * durability-debt retries (Sol r9 P1): a rename whose directory entry was
+ * never proven durable is retried through this until the fsync lands.
+ */
+export function fsyncDirDurable(parent: string): void {
+  if (process.platform === 'win32') return // directories cannot be opened for fsync
+  let dirFd: number | null = null
+  try {
+    dirFd = openSync(parent, 'r')
+    fsyncSync(dirFd)
+    dirFsyncFaulted.delete(parent)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code !== undefined && DIR_FSYNC_UNSUPPORTED.has(code)) return
+    if (dirFsyncFaulted.has(parent)) {
+      console.error(
+        `PERSISTENT STORAGE FAULT: directory fsync keeps failing for ${parent} ` +
+          `(${code ?? 'unknown'}) — renames are landing but their durability cannot be ` +
+          'guaranteed; check permissions and disk health',
+      )
+    }
+    dirFsyncFaulted.add(parent)
+    throw error
+  } finally {
+    if (dirFd !== null) closeSync(dirFd)
+  }
+}
+
+/**
  * Temp + fsync + rename replacement of a whole file — the dispatch-registry
  * compaction pattern (dispatch.ts). The old bytes stay durable until the
  * replacement is: a crash at ANY point leaves either the previous file or the
@@ -305,31 +340,13 @@ export function writeFileAtomic(file: string, body: string | Buffer): void {
     }
     throw error
   }
-  if (process.platform === 'win32') return // directories cannot be opened for fsync
-  const parent = path.dirname(file)
-  let dirFd: number | null = null
   try {
-    dirFd = openSync(parent, 'r')
-    fsyncSync(dirFd)
-    dirFsyncFaulted.delete(parent)
+    fsyncDirDurable(path.dirname(file))
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code
-    if (code === undefined || !DIR_FSYNC_UNSUPPORTED.has(code)) {
-      if (dirFsyncFaulted.has(parent)) {
-        console.error(
-          `PERSISTENT STORAGE FAULT: directory fsync keeps failing for ${parent} ` +
-            `(${code ?? 'unknown'}) — renames are landing but their durability cannot be ` +
-            'guaranteed; check permissions and disk health',
-        )
-      }
-      dirFsyncFaulted.add(parent)
-      // The rename already landed — mark the throw so callers can tell this
-      // ambiguous failure (new bytes published, durability unproven) from one
-      // that left the previous file in place (Sol r8 P1).
-      throw Object.assign(error as object, { renamed: true })
-    }
-  } finally {
-    if (dirFd !== null) closeSync(dirFd)
+    // The rename already landed — mark the throw so callers can tell this
+    // ambiguous failure (new bytes published, durability unproven) from one
+    // that left the previous file in place (Sol r8 P1).
+    throw Object.assign(error as object, { renamed: true })
   }
 }
 
@@ -635,25 +652,39 @@ export class AnnotationStore {
    * crash anywhere between rename and unlink leaves a state that reads back
    * as exactly the new snapshot.
    *
-   * An empty picture drops both files rather than leaving an empty object
-   * behind, so the directory only ever holds agents that have annotations.
-   * Snapshot goes first: the surviving log's ops carry the unlinked
-   * snapshot's epoch (>= 1, every envelope ever written is), which can never
-   * match the bare-directory epoch 0 — so the symmetric crash window reads as
-   * the empty state the save intended, not a resurrection. (A LEGACY bare-map
-   * snapshot is epoch 0 and keeps a sliver of that old window until its first
-   * epoch-carrying rewrite; closing it retroactively would mean rewriting
-   * every legacy file on load, which is not worth the migration churn.)
+   * An empty picture is PUBLISHED, never unlinked (Sol r9 P2). Raw unlinks
+   * return before the directory entries are durable, so a crash after them
+   * could restore BOTH old files whole — snapshot and its matching-epoch log
+   * — resurrecting a title/seen/scroll state this store had already reported
+   * cleared. The epoch-bumped EMPTY snapshot goes through the same atomic
+   * durable path as any other save: the moment its rename lands, every
+   * surviving op line carries a dead epoch and replay ignores it, so the log
+   * unlink stays what it always was — byte reclamation, best-effort. A
+   * directory holding neither file is already durably empty (epoch 0, no
+   * ops) and nothing is written for it, so agents that never had an
+   * annotation still leave no file behind.
    */
   private persistSnapshot(safeId: string, byIndex: Map<number, TurnAnnotation>): boolean {
     try {
       const file = this.fileFor(safeId)
       const log = this.logFor(safeId)
       if (byIndex.size === 0) {
-        if (existsSync(file)) unlinkSync(file)
-        this.epochs.set(safeId, 0)
-        if (existsSync(log)) unlinkSync(log)
-        this.logOps.set(safeId, 0)
+        if (!existsSync(file) && !existsSync(log)) {
+          this.epochs.set(safeId, 0)
+          this.logOps.set(safeId, 0)
+          return true
+        }
+        const epoch = this.epochOf(safeId) + 1
+        mkdirSync(this.dir, { recursive: true })
+        writeFileAtomic(file, JSON.stringify({ epoch, annotations: {} }))
+        this.epochs.set(safeId, epoch)
+        try {
+          if (existsSync(log)) unlinkSync(log)
+          this.logOps.set(safeId, 0)
+        } catch {
+          // Stale-epoch ops are inert; the counter stays armed so the next
+          // compaction retries the reclamation.
+        }
         return true
       }
       // Keys serialized in ascending checkpoint order, as before the log.

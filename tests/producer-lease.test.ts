@@ -426,7 +426,11 @@ describe('TurnTracker.ownerComposing (Sol r8 P0-1)', () => {
     tracker.disposeAll()
   })
 
-  it('the owner erasing their typing releases the reservation', () => {
+  it('single-line typed-then-Ctrl-U clears — the ONE proven clear op (Sol r9 P0-2)', () => {
+    // The model watched every byte of this line being typed, the buffer
+    // never left one line, and a Ctrl-U on that single watched line is
+    // proven byte-by-byte for the harnesses we host. This is the only
+    // control-byte clear; everything multiline/unknown keeps the mark.
     const { tracker, session } = guardFixture()
     session.emit('input', 'half a thought')
     expect(tracker.ownerComposing('term-1')).toBe(true)
@@ -452,20 +456,131 @@ describe('TurnTracker.ownerComposing (Sol r8 P0-1)', () => {
     tracker.disposeAll()
   })
 
-  it('an UNTRACKED terminal has no composer (no PTY): false', () => {
-    const lease = new ProducerLease()
-    const tracker = new TurnTracker(async () => null, null, lease)
-    expect(tracker.ownerComposing('term-9')).toBe(false)
-    // Even a stray mark cannot make a PTY-less terminal compose.
-    lease.markOwnerEditing('term-9')
-    expect(tracker.ownerComposing('term-9')).toBe(false)
-  })
-
   it('terminal retirement releases the reservation with everything else', () => {
     const { tracker, lease, session } = guardFixture()
     session.emit('input', 'typing at the point of death')
     expect(tracker.ownerComposing('term-1')).toBe(true)
     lease.retire('term-1')
+    expect(tracker.ownerComposing('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r9 P0-1 — the mark outlives the VIEW. A workspace switch untracks the
+// tracker and detaches the PTY view, but the pane and its input box — with
+// the owner's half-typed bytes — survive. The r8 tracked.has short-circuit
+// read "no attached view" as "no composer" and made exactly the detached
+// agents that background dispatch targets dispatchable over live owner text.
+// ---------------------------------------------------------------------------
+
+describe('ownerComposing survives detach (Sol r9 P0-1)', () => {
+  it('type → detach: the composer answer stands, dispatch stays refused', () => {
+    const { tracker, session } = guardFixture()
+    session.emit('input', 'half a brief for the release')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    tracker.untrack('term-1')
+    // The view is gone; the dirty box is not.
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('detach → reattach → submit: only the observed submit readmits', () => {
+    const { tracker, session } = guardFixture()
+    session.emit('input', 'half a brief')
+    tracker.untrack('term-1')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    tracker.track(session as unknown as PtySession, true)
+    // Still composing: reattaching proves nothing about the box.
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    // Ctrl-U after reattach cannot prove it either — the fresh model never
+    // watched the detached bytes, and a kill-line clears at most ONE line
+    // of a box whose shape it does not know.
+    session.emit('input', '\x15')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    // The positively observed submit consumes the box wholesale.
+    session.emit('input', 'ship the release\r')
+    expect(tracker.ownerComposing('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+
+  it('retirement clears a detached mark — the box died with the process', () => {
+    const { tracker, lease, session } = guardFixture()
+    session.emit('input', 'doomed typing')
+    tracker.untrack('term-1')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    lease.retire('term-1')
+    expect(tracker.ownerComposing('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r9 P0-2 — ownership is ANY byte, release is PROOF. `.trim()` declared
+// whitespace-only boxes clean, and the prompt model maps every Ctrl-U/Ctrl-C
+// to an empty buffer even though those ops prove at most one line cleared —
+// both readmitted dispatches over real owner bytes still in the TUI.
+// ---------------------------------------------------------------------------
+
+describe('owner-editing proof rules (Sol r9 P0-2)', () => {
+  it('whitespace-only typing marks — a space is a real byte in the real box', () => {
+    const { tracker, session } = guardFixture()
+    session.emit('input', '   ')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('Shift+Enter multiline then Ctrl-U keeps the mark — one line of proof is not the box', () => {
+    const { tracker, session } = guardFixture()
+    session.emit('input', 'line one')
+    session.emit('input', '\x1b\r') // Shift+Enter: the TUI insert-newline binding
+    session.emit('input', 'line two')
+    session.emit('input', '\x15')
+    // The model shows empty, but Ctrl-U provably cleared ONE line; the mark
+    // holds — and keeps holding, because the model has diverged from the box.
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    session.emit('input', '\x15')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    // The observed submit is what clears it.
+    session.emit('input', '\r')
+    expect(tracker.ownerComposing('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+
+  it('Ctrl-C never clears — it doubles as interrupt/quit per harness', () => {
+    const { tracker, session } = guardFixture()
+    session.emit('input', 'half a thought')
+    session.emit('input', '\x03')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    // And having fired over a non-empty box, it poisons content provenance:
+    // even a later single-line Ctrl-U is no longer proof until a submit.
+    session.emit('input', 'x')
+    session.emit('input', '\x15')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('split paste markers keep the mark — bytes are in flight toward the box', () => {
+    const { tracker, session } = guardFixture()
+    // A partial marker withheld across chunks is still buffered input state.
+    session.emit('input', '\x1b[20')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    // The completed open marker starts a paste: still the owner's box.
+    session.emit('input', '0~pasted text')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    // Closed paste: the content sits unsubmitted in the box.
+    session.emit('input', '\x1b[201~')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('a pasted multiline body is opaque to Ctrl-U exactly like Shift+Enter', () => {
+    const { tracker, session } = guardFixture()
+    session.emit('input', '\x1b[200~two\nlines\x1b[201~')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    session.emit('input', '\x15')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    session.emit('input', 'go\r')
     expect(tracker.ownerComposing('term-1')).toBe(false)
     tracker.disposeAll()
   })
@@ -537,6 +652,55 @@ describe('ProducerLease — retirement reclaims map state (Sol r8 P2)', () => {
     expect(lease.generationOf('term-live')).toBe(generation)
     expect(lease.holderOf('term-live')).toEqual(dispatchHolder('dsp-live'))
     expect(lease.isContaminated('term-mark')).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r9 P1-8 — liveness is REPRESENTED, not inferred from holds/marks. A CWD
+// rebind retires and immediately respawns the same terminal id; while the
+// reborn generation sat idle it carried no hold or mark, so the tombstone
+// bound could evict it — generationOf fell back to 0, current-generation asks
+// read as retired, and an ancient generation-0 leg passed the checks again.
+// The conductor wires registerTerminal at spawn and forgetTerminal at node
+// removal.
+// ---------------------------------------------------------------------------
+
+describe('ProducerLease — liveness pins generations (Sol r9 P1-8)', () => {
+  it('an idle rebound terminal (retire + register, same id) survives 2000 later retires', () => {
+    const lease = new ProducerLease()
+    lease.registerTerminal('term-rebind')
+    // The CWD rebind: permanent ending of the old pane, immediate respawn
+    // under the SAME id — no hold, no mark, just a live idle terminal.
+    lease.retire('term-rebind')
+    lease.registerTerminal('term-rebind')
+    const generation = lease.generationOf('term-rebind')
+    expect(generation).toBe(1)
+    for (let i = 0; i < 2000; i += 1) lease.retire(`churn-${i}`)
+    // Still generation 1: current-generation asks keep passing, and a stale
+    // generation-0 leg keeps failing.
+    expect(lease.generationOf('term-rebind')).toBe(generation)
+    expect(lease.acquire('term-rebind', ownerHolder(), { generation })).toBe('acquired')
+  })
+
+  it('a FORGOTTEN id evicts once its bounded tombstone window drains', () => {
+    const lease = new ProducerLease()
+    lease.registerTerminal('term-gone')
+    lease.retire('term-gone')
+    // Permanent removal: the liveness pin lifts, the entry becomes an
+    // ordinary tombstone and the churn bound reclaims it in its turn.
+    lease.forgetTerminal('term-gone')
+    for (let i = 0; i < 2000; i += 1) lease.retire(`churn-${i}`)
+    expect(lease.generationOf('term-gone')).toBe(0)
+    expect(lease.mapSizes().generations).toBeLessThanOrEqual(1024)
+  })
+
+  it('registration alone never grows the generation map — only retires mint entries', () => {
+    const lease = new ProducerLease()
+    for (let i = 0; i < 50; i += 1) lease.registerTerminal(`spawn-${i}`)
+    expect(lease.mapSizes().generations).toBe(0)
+    expect(lease.mapSizes().live).toBe(50)
+    for (let i = 0; i < 50; i += 1) lease.forgetTerminal(`spawn-${i}`)
+    expect(lease.mapSizes().live).toBe(0)
   })
 })
 

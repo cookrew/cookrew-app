@@ -167,12 +167,15 @@ export async function askTerminal(
  * surfacing (PtySession.write verdicts, TurnTracker.refusalReason) is what
  * makes that long hold visible instead of silent.
  *
- * THE ABORT SEAM (Sol r8 P1): the terminal retiring mid-await fires an
- * AbortController threaded into the backend call, which TERM-kills the CLI
- * child — no orphaned `herdr agent prompt` waiting out the full timeout
- * behind a dead terminal. The generation captured at entry is re-checked
- * after the call settles: a retired ask throws honestly rather than falling
- * through to type into the reborn terminal.
+ * THE ABORT SEAM (Sol r8 P1, extended past the ack per r9 P1-4): the
+ * terminal retiring mid-await fires an AbortController threaded into the
+ * backend call — killing the CLI child — AND into the post-acknowledgement
+ * reply-wait (waitUntilIdle, the quiescence interval, even the grace sleep),
+ * so retirement cancels every phase of the ask, not just the submission. The
+ * generation captured at entry is re-checked after EVERY awaited phase
+ * before any session output is read: a retired ask throws honestly rather
+ * than falling through to type into — or return output rendered by — the
+ * reborn terminal.
  */
 async function nativeAsk(
   session: PtySession,
@@ -223,8 +226,13 @@ async function nativeAsk(
     if (mux.submitAgent !== undefined) {
       // Acknowledged submission, reply pending: the ordinary reply-wait —
       // waitUntilIdle where the backend answers, quiescence corroborating —
-      // runs with the lease already free.
-      await waitForReply(session, timing)
+      // runs with the lease already free. The retirement signal rides along
+      // (Sol r9 P1-4): a terminal retiring AFTER the ack must cancel this
+      // wait's child and timers, not leave them running out the timeout —
+      // and the generation is re-checked before any session read, so the
+      // dead leg never returns output rendered by the REBORN terminal.
+      await waitForReply(session, timing, abort.signal)
+      assertGeneration(lease, terminalId, generation)
       return session.fullText()
     }
     // promptAgent 'submitted': the prompt IS in the pane — herdr just could
@@ -233,11 +241,24 @@ async function nativeAsk(
     // input box. So wait it out by OUTPUT QUIESCENCE — the one completion
     // signal that needs no detector — and skip waitUntilIdle for the same
     // reason the detector stalled: a stuck 'idle' answers instantly and
-    // truncates the reply.
-    await waitForQuiescence(session, timing)
+    // truncates the reply. Abortable and generation-checked like the
+    // reply-wait above (Sol r9 P1-4).
+    await waitForQuiescence(session, timing, abort.signal)
+    assertGeneration(lease, terminalId, generation)
     return session.fullText()
   } finally {
     unsubscribe()
+  }
+}
+
+/**
+ * The generation re-check EVERY awaited reply phase ends with (Sol r9 P1-4):
+ * an ask whose terminal retired mid-wait throws honestly instead of reading —
+ * and returning — session output that now belongs to the reborn generation.
+ */
+function assertGeneration(lease: ProducerLease, terminalId: string, generation: number): void {
+  if (lease.generationOf(terminalId) !== generation) {
+    throw new Error('the terminal was retired mid-ask')
   }
 }
 
@@ -427,39 +448,77 @@ function refusalReason(verdict: 'preempt-failed' | 'refused'): string {
  */
 async function waitForReply(
   session: PtySession,
-  timing: { quiescenceMs: number; timeoutMs: number; graceMs: number }
+  timing: { quiescenceMs: number; timeoutMs: number; graceMs: number },
+  signal?: AbortSignal
 ): Promise<void> {
   const mux = multiplexer()
   if (mux?.capabilities.agentLifecycle && mux.waitUntilIdle) {
     // The grace period still applies: an agent that has not started working
     // yet is idle, and returning on that would report the PREVIOUS turn's
-    // output as this turn's reply.
-    await new Promise((resolve) => setTimeout(resolve, timing.graceMs))
-    await mux.waitUntilIdle(session.sessionName, timing.timeoutMs)
+    // output as this turn's reply. Abortable (Sol r9 P1-4): retirement must
+    // not sit out even the grace sleep.
+    await abortableSleep(timing.graceMs, signal)
+    if (signal?.aborted !== true) {
+      // The signal reaches the backend wait itself, so a retirement kills
+      // its blocking CLI child now. An implementation that ignores the
+      // parameter still settles by its own timeout; the caller's generation
+      // re-check owns correctness either way.
+      await mux.waitUntilIdle(session.sessionName, timing.timeoutMs, signal)
+    }
     // CORROBORATE, never trust alone: the per-pane detector can stick at
     // 'idle' (measured under a live 48s spinner), and a stuck idle resolves
     // this wait instantly — truncating the reply to whatever happened to be
     // on screen. Quiescence returns quickly when the agent genuinely
     // finished, and holds exactly when the detector was lying.
   }
-  await waitForQuiescence(session, timing)
+  await waitForQuiescence(session, timing, signal)
 }
 
-/** The original heuristic: silence for `quiescenceMs` means finished. */
+/**
+ * The original heuristic: silence for `quiescenceMs` means finished. The
+ * abort seam (Sol r9 P1-4) resolves it EARLY — never rejects — because the
+ * caller's own generation re-check is the honest thrower; rejecting here
+ * would leak AbortErrors through the typed path that never passes a signal.
+ */
 function waitForQuiescence(
   session: PtySession,
-  timing: { quiescenceMs: number; timeoutMs: number; graceMs: number }
+  timing: { quiescenceMs: number; timeoutMs: number; graceMs: number },
+  signal?: AbortSignal
 ): Promise<void> {
   const startedAt = Date.now()
   return new Promise<void>((resolve) => {
+    if (signal?.aborted === true) {
+      resolve()
+      return
+    }
+    const settle = (): void => {
+      clearInterval(timer)
+      signal?.removeEventListener('abort', settle)
+      resolve()
+    }
     const timer = setInterval(() => {
       const elapsed = Date.now() - startedAt
       const quiet = session.idleFor() >= timing.quiescenceMs
-      if ((elapsed >= timing.graceMs && quiet) || elapsed >= timing.timeoutMs) {
-        clearInterval(timer)
-        resolve()
-      }
+      if ((elapsed >= timing.graceMs && quiet) || elapsed >= timing.timeoutMs) settle()
     }, 200)
+    signal?.addEventListener('abort', settle, { once: true })
+  })
+}
+
+/** A sleep the retirement signal can cut short (resolves, never rejects). */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal?.aborted === true) {
+      resolve()
+      return
+    }
+    const settle = (): void => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', settle)
+      resolve()
+    }
+    const timer = setTimeout(settle, ms)
+    signal?.addEventListener('abort', settle, { once: true })
   })
 }
 

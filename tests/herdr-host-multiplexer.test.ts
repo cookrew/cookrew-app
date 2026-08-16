@@ -380,6 +380,34 @@ describe('parsePaneListStrict — admission answers must be POSITIVE (Sol r8)', 
     expect(parsePaneListStrict('{"id":"x","result":{"type":"pane_list"}}')).toBeNull()
     expect(parsePaneListStrict('{"id":"x","result":{"panes":"nope"}}')).toBeNull()
   })
+
+  it('validates EVERY element — one malformed pane rejects the whole snapshot (Sol r9)', () => {
+    // `{"panes":[null]}` used to pass the container check and publish; every
+    // later sessionExistsCached then executed `pane.label` and THREW instead
+    // of answering the refusal-safe 503.
+    expect(parsePaneListStrict(PANE_LIST([null]))).toBeNull()
+    expect(parsePaneListStrict(PANE_LIST(['w1:p1']))).toBeNull()
+    expect(parsePaneListStrict(PANE_LIST([42]))).toBeNull()
+    expect(parsePaneListStrict(PANE_LIST([[]]))).toBeNull()
+    // Mixed valid/invalid: the valid pane does not rescue the snapshot — a
+    // list herdr half-mangled is not evidence about any pane in it.
+    expect(
+      parsePaneListStrict(PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc' }, null]))
+    ).toBeNull()
+    // Field-type corruption on the fields admission consumes.
+    expect(parsePaneListStrict(PANE_LIST([{ label: 'cookrew_abc' }]))).toBeNull() // no identity
+    expect(parsePaneListStrict(PANE_LIST([{ pane_id: 42, label: 'cookrew_abc' }]))).toBeNull()
+    expect(parsePaneListStrict(PANE_LIST([{ pane_id: '', label: 'cookrew_abc' }]))).toBeNull()
+    expect(parsePaneListStrict(PANE_LIST([{ pane_id: 'w1:p1', label: 42 }]))).toBeNull()
+    expect(parsePaneListStrict(PANE_LIST([{ pane_id: 'w1:p1', label: {} }]))).toBeNull()
+    // …while a null or absent label is a REAL pane state, not corruption.
+    expect(parsePaneListStrict(PANE_LIST([{ pane_id: 'w1:p1', label: null }]))).toEqual([
+      { pane_id: 'w1:p1', label: null }
+    ])
+    expect(parsePaneListStrict(PANE_LIST([{ pane_id: 'w1:p1' }]))).toEqual([
+      { pane_id: 'w1:p1' }
+    ])
+  })
 })
 
 describe('admission refresh — injectable async seam, strict publish, real backoff (Sol r8)', () => {
@@ -436,6 +464,29 @@ describe('admission refresh — injectable async seam, strict publish, real back
     now += 2
     backend.sessionExistsCached('cookrew_abc')
     expect(spawns()).toBe(2)
+  })
+
+  it('a malformed pane ELEMENT takes the failure backoff, and recovery publishes the real inventory (Sol r9)', async () => {
+    const { backend, spawns } = admissionHarness([
+      PANE_LIST([null]),
+      PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc' }])
+    ])
+    backend.sessionExistsCached('cookrew_abc')
+    await settle()
+    expect(spawns()).toBe(1)
+
+    // Nothing was published: asking again neither crashes on the null pane
+    // nor respawns inside the 5s failure backoff.
+    now += 4_999
+    for (let i = 0; i < 10; i += 1) expect(backend.sessionExistsCached('cookrew_abc')).toBe(false)
+    expect(spawns()).toBe(1)
+
+    // Past the backoff the refresh recovers and the REAL inventory answers.
+    now += 2
+    backend.sessionExistsCached('cookrew_abc')
+    expect(spawns()).toBe(2)
+    await settle()
+    expect(backend.sessionExistsCached('cookrew_abc')).toBe(true)
   })
 
   it('a herdr ERROR envelope is a failure too, and recovery publishes the real inventory', async () => {
