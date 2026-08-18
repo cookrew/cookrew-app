@@ -26,6 +26,7 @@ import {
 import { checkpointTitle, useTitleMode } from './checkpoint-sync'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
 import { handleTerminalPaste } from './terminal-paste'
+import { terminalKeyIntent } from './terminal-key-intent'
 import { CrIcon } from './icons'
 import { StatusCoin } from './nodes/AgentAvatar'
 
@@ -235,37 +236,31 @@ function TerminalOverlay({
       }, 150)
     })
 
+    // The decision is pure and unit-tested (terminal-key-intent.ts); only the
+    // effects live here. That split is not tidiness: this callback runs inside
+    // xterm's key dispatch, so a throw does not surface as an error — it
+    // swallows the keystroke. A soft keyboard's IME can hand us events with no
+    // `key`, which is what silently ate the digits and punctuation from a CJK
+    // keyboard's secondary layer.
     term.attachCustomKeyEventHandler((event) => {
-      // Shift+Enter inserts a newline in agent TUIs instead of submitting
-      // the prompt: send ESC+CR (the "insert newline" binding of Claude Code
-      // and friends) and swallow the plain CR xterm would otherwise emit.
-      // Plain shells keep the default Enter behavior.
-      if (event.key === 'Enter' && event.shiftKey && agentRef.current) {
-        if (event.type === 'keydown') cookrew().ptyInput(node.id, '\x1b\r')
-        return false
+      const intent = terminalKeyIntent(event, {
+        agent: agentRef.current,
+        hasSelection: term.hasSelection()
+      })
+      switch (intent) {
+        case 'agent-newline':
+          // ESC+CR is the "insert newline" binding of Claude Code and friends;
+          // returning false swallows the plain CR xterm would emit.
+          if (event.type === 'keydown') cookrew().ptyInput(node.id, '\x1b\r')
+          return false
+        case 'copy':
+          if (event.type === 'keydown') void writeClipboardText(term.getSelection())
+          return false
+        case 'swallow-paste':
+          return false
+        default:
+          return true
       }
-      const key = event.key.toLowerCase()
-      // ⌘C (mac) / Ctrl+Shift+C: copy the xterm selection ourselves — the
-      // menu's copy role only sees DOM selections, not xterm's internal one.
-      // Ctrl+C alone stays SIGINT.
-      const wantsCopy =
-        (event.metaKey && !event.ctrlKey && key === 'c') ||
-        (event.ctrlKey && event.shiftKey && key === 'c')
-      if (wantsCopy && term.hasSelection()) {
-        if (event.type === 'keydown') {
-          void writeClipboardText(term.getSelection())
-        }
-        return false
-      }
-      // ⌘V / Ctrl+Shift+V: swallow the accelerator so it isn't sent to the
-      // PTY as raw bytes, but do NOT paste here — the container's single
-      // 'paste' listener below owns paste. Pasting in this key handler too is
-      // exactly what inserted the text twice.
-      const wantsPaste =
-        (event.metaKey && !event.ctrlKey && key === 'v') ||
-        (event.ctrlKey && event.shiftKey && key === 'v')
-      if (wantsPaste) return false
-      return true
     })
 
     // Single paste path (text AND images): reading the text off the event
