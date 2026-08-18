@@ -28,7 +28,6 @@ import { Dock } from './Dock'
 import { CardMenu, type CardMenuAnchor } from './CardMenu'
 import { TerminalOverlayLayer } from './TerminalOverlay'
 import { useLodLayout } from './zoom-lod'
-import { useKeyboardInset } from './keyboard-inset'
 import { browserInFullView } from './dock-target'
 import { BrowserLayer, useInteractiveBrowserCapability } from './BrowserLayer'
 import {
@@ -141,16 +140,6 @@ function Canvas(): React.JSX.Element {
    * removeNode, so there is one dialog and no close button can skip it.
    */
   const [closingId, setClosingId] = useState<string | null>(null)
-  /**
-   * KEYBOARD AUTO-RISE. Owned by the shell, not by any one bar: the whole
-   * `.cr-app` column gives up the band the on-screen keyboard covers, so the
-   * dock, the stage and the zoomed terminal overlay inside it all rise
-   * together. The returned inset is unused here — the effect publishes it as
-   * `--kb-inset` and the CSS does the arithmetic — but the hook must live at a
-   * component that is always mounted, which the Dock (absent for a zoomed
-   * browser) is not.
-   */
-  useKeyboardInset()
 
   useEffect(() => {
     void cookrew()

@@ -2,6 +2,7 @@ import type { ToolId } from './canvas-ui'
 import type { TerminalActivity } from '../../shared/turn'
 import type { AgentRole } from '../../shared/model'
 import { VoiceBar } from './VoiceBar'
+import { useKeyboardInset } from './keyboard-inset'
 import { CrIcon, type CrIconName } from './icons'
 import { AgentSprite } from './nodes/AgentSprite'
 import { RoleAvatar } from './nodes/RoleAvatar'
@@ -88,21 +89,20 @@ export function Dock({
   const hint = tool === 'connect' ? connectHint : (HINTS[tool] ?? null)
   /** Either occupant of the slide-in pane parks the canvas tools. */
   const slidIn = voiceFor !== null || boardFor !== null
-  // Riding above the keyboard is no longer the dock's own job. It used to lift
-  // itself with a `bottom` offset while the shell kept full height, so the dock
-  // cleared the keyboard but the stage behind it did not — the terminal stayed
-  // tall and its prompt line stayed buried. The shell now gives up the covered
-  // band (keyboard auto-rise, .cr-app in styles.css) and the dock comes along
-  // as its last flex row. Keeping the old offset too would lift it twice.
-  //
+  // Ride above the on-screen keyboard (Defect 2): the dock is position:relative
+  // in normal flow, so a `bottom` offset lifts it by the keyboard inset. 0 (and
+  // no offset) on desktop / when no keyboard is up.
+  const kbInset = useKeyboardInset()
   // A zoomed browser has no use for ANY of this — every tool places something
   // on a canvas the page is covering — so the bar leaves entirely and gives its
   // height back to the page. The browser's own controls float over the frame.
-  // (This early return is why the keyboard hook cannot live here: it would stop
-  // running for a zoomed browser, exactly where the remote keyboard is used.)
+  // (After every hook: an early return above one breaks the Rules of Hooks.)
   if (browserFor) return <></>
   return (
-    <footer className={`cr-dock${slidIn ? ' zoomed' : ''}`}>
+    <footer
+      className={`cr-dock${slidIn ? ' zoomed' : ''}`}
+      style={kbInset ? { bottom: kbInset } : undefined}
+    >
       <div className="dock-pane dock-canvas" aria-hidden={slidIn}>
         <div className="cr-dock-tools">
           {/* The clipboard toggle leads the tools: it is the one control
