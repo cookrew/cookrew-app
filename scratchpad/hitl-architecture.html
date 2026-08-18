@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cookrew HITL 架构 — 双权限域 · 席位 · 探针闭环</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #020617; color: #e2e8f0;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    padding: 28px 20px 48px; max-width: 1080px; margin: 0 auto;
+  }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #34d399; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  h1 { font-size: 1.15rem; font-weight: 700; letter-spacing: 0.02em; }
+  .subtitle { color: #64748b; font-size: 0.78rem; margin-bottom: 18px; }
+  .diagram { border: 1px solid #1e293b; border-radius: 12px; background: #020617; padding: 8px; }
+  svg { width: 100%; height: auto; display: block; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 16px; }
+  .card { border: 1px solid #1e293b; border-radius: 10px; padding: 14px 16px; background: #0f172a; }
+  .card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .card-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .card-dot.cyan { background: #22d3ee; } .card-dot.rose { background: #fb7185; } .card-dot.violet { background: #a78bfa; }
+  .card h3 { font-size: 0.82rem; font-weight: 600; }
+  .card ul { list-style: none; }
+  .card li { font-size: 0.72rem; color: #94a3b8; line-height: 1.75; }
+  footer { margin-top: 18px; font-size: 0.68rem; color: #475569; }
+</style>
+</head>
+<body>
+
+<header><div class="dot"></div><h1>Cookrew HITL 架构</h1></header>
+<p class="subtitle">双权限域 · ask 席位 · 探针闭环 —— dispatch: running → awaiting-human → running · S8 · 2026-08-18</p>
+
+<div class="diagram">
+<svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+    </pattern>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+    </marker>
+    <marker id="arrowCyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrowRose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+    </marker>
+  </defs>
+
+  <rect width="1000" height="700" fill="url(#grid)"/>
+
+  <!-- ═══ arrows first (behind boxes) ═══ -->
+  <!-- ① dispatch → ask -->
+  <line x1="240" y1="100" x2="268" y2="100" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <!-- ② ask → 渲染器 -->
+  <line x1="370" y1="130" x2="370" y2="168" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <!-- gate class → ask -->
+  <line x1="140" y1="170" x2="140" y2="132" stroke="#64748b" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arrow)"/>
+  <!-- ③ 签名链接过缝 → 桌面 / 手机 -->
+  <path d="M 470 195 C 515 185, 525 120, 558 108" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowCyan)"/>
+  <path d="M 470 205 C 540 230, 620 55, 778 90" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowCyan)"/>
+  <!-- ④ 召唤 (dashed) -->
+  <path d="M 240 420 C 380 470, 520 210, 558 130" fill="none" stroke="#22d3ee" stroke-width="1" stroke-dasharray="4,4" marker-end="url(#arrowCyan)"/>
+  <!-- 桌面 → 扩展 / 手机 → App -->
+  <line x1="655" y1="140" x2="655" y2="188" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="870" y1="140" x2="870" y2="188" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <!-- 根权限 ↑ 供钥匙 -->
+  <line x1="655" y1="308" x2="655" y2="254" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arrowRose)"/>
+  <line x1="870" y1="308" x2="870" y2="254" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arrowRose)"/>
+  <!-- 根权限 → 行使 -->
+  <line x1="762" y1="364" x2="762" y2="406" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <!-- ⑥ 回调过缝 -->
+  <path d="M 558 438 C 512 428, 495 350, 473 318" fill="none" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arrowRose)"/>
+  <!-- ⑦ 探针 → 事实源 -->
+  <path d="M 470 305 L 504 305 L 504 536" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <!-- 行使的结果也落到事实源 (钱包广播/MFA刷新) -->
+  <path d="M 762 466 L 762 536" fill="none" stroke="#64748b" stroke-width="1" stroke-dasharray="4,4" marker-end="url(#arrow)"/>
+  <!-- ⑧ 绿灯 resume -->
+  <path d="M 300 278 C 250 240, 175 170, 148 133" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+  <!-- 事件 → transcript -->
+  <line x1="268" y1="310" x2="242" y2="310" stroke="#64748b" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arrow)"/>
+
+  <!-- ═══ 域边界 ═══ -->
+  <rect x="20" y="30" width="470" height="470" rx="12" fill="none" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+  <text x="36" y="52" fill="#fbbf24" font-size="11" font-weight="600">AGENT 域 · owner 基底</text>
+  <text x="36" y="66" fill="#78716c" font-size="8">只持派生权限:scoped token · 会话 · WC session</text>
+
+  <rect x="540" y="30" width="440" height="470" rx="12" fill="none" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+  <text x="556" y="52" fill="#fbbf24" font-size="11" font-weight="600">HUMAN 域 · 消费者设备</text>
+  <text x="556" y="66" fill="#78716c" font-size="8">根权限居住地 —— 跨机器信任边界</text>
+
+  <!-- 缝 -->
+  <line x1="515" y1="80" x2="515" y2="500" stroke="#fb7185" stroke-width="1" stroke-dasharray="4,4"/>
+  <text x="515" y="522" fill="#fb7185" font-size="9" font-weight="600" text-anchor="middle">缝 seam</text>
+  <text x="515" y="536" fill="#94a3b8" font-size="7" text-anchor="middle">过缝的只有:签名链接 · 布尔 · 回执 —— 根权限 ✗ 永不过缝</text>
+
+  <!-- ═══ agent 域组件 ═══ -->
+  <rect x="40" y="70" width="200" height="60" rx="6" fill="#0f172a"/>
+  <rect x="40" y="70" width="200" height="60" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="140" y="94" fill="white" font-size="12" font-weight="600" text-anchor="middle">dispatch 平面</text>
+  <text x="140" y="110" fill="#94a3b8" font-size="8" text-anchor="middle">running → awaiting-human → running</text>
+
+  <rect x="270" y="70" width="200" height="60" rx="6" fill="#0f172a"/>
+  <rect x="270" y="70" width="200" height="60" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="370" y="90" fill="white" font-size="12" font-weight="600" text-anchor="middle">ask 对象</text>
+  <text x="370" y="104" fill="#94a3b8" font-size="8" text-anchor="middle">kind · envelope · verify · expiry</text>
+  <text x="370" y="117" fill="#94a3b8" font-size="7" text-anchor="middle">wallet-sign/-fund · credential · plan-approval</text>
+
+  <rect x="40" y="170" width="200" height="60" rx="6" fill="#0f172a"/>
+  <rect x="40" y="170" width="200" height="60" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+  <text x="140" y="194" fill="white" font-size="12" font-weight="600" text-anchor="middle">gate class 表</text>
+  <text x="140" y="210" fill="#94a3b8" font-size="8" text-anchor="middle">动作类别→强制席位 · agent 无降级权 (L3)</text>
+
+  <rect x="270" y="170" width="200" height="60" rx="6" fill="#0f172a"/>
+  <rect x="270" y="170" width="200" height="60" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="370" y="194" fill="white" font-size="12" font-weight="600" text-anchor="middle">席位页渲染器</text>
+  <text x="370" y="210" fill="#94a3b8" font-size="8" text-anchor="middle">自包含 HTML · 一次性签名链接 · TTL</text>
+
+  <rect x="40" y="280" width="200" height="60" rx="6" fill="#0f172a"/>
+  <rect x="40" y="280" width="200" height="60" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="140" y="304" fill="white" font-size="12" font-weight="600" text-anchor="middle">transcript (A2)</text>
+  <text x="140" y="320" fill="#94a3b8" font-size="8" text-anchor="middle">ask / answer / probe 全是事件 · 无第二存储</text>
+
+  <rect x="270" y="280" width="200" height="60" rx="6" fill="#0f172a"/>
+  <rect x="270" y="280" width="200" height="60" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="370" y="304" fill="white" font-size="12" font-weight="600" text-anchor="middle">验证谓词执行器</text>
+  <text x="370" y="320" fill="#94a3b8" font-size="8" text-anchor="middle">10s 轮询探针 · 回执是探针不是人话 (L2)</text>
+
+  <rect x="40" y="390" width="200" height="60" rx="6" fill="#0f172a"/>
+  <rect x="40" y="390" width="200" height="60" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="140" y="414" fill="white" font-size="12" font-weight="600" text-anchor="middle">召唤通道</text>
+  <text x="140" y="430" fill="#94a3b8" font-size="8" text-anchor="middle">canvas fitView 聚焦 · 系统通知 · phone push</text>
+
+  <rect x="270" y="390" width="200" height="60" rx="6" fill="#0f172a"/>
+  <rect x="270" y="390" width="200" height="60" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="370" y="414" fill="white" font-size="12" font-weight="600" text-anchor="middle">交互式远程浏览器</text>
+  <text x="370" y="430" fill="#94a3b8" font-size="8" text-anchor="middle">会话修复兜底 · 输入白名单 · 凭证烧断</text>
+
+  <!-- ═══ human 域组件 ═══ -->
+  <rect x="560" y="70" width="190" height="70" rx="6" fill="#0f172a"/>
+  <rect x="560" y="70" width="190" height="70" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="655" y="94" fill="white" font-size="12" font-weight="600" text-anchor="middle">桌面真实浏览器</text>
+  <text x="655" y="110" fill="#94a3b8" font-size="8" text-anchor="middle">席位页 · EIP-6963 发现</text>
+  <text x="655" y="124" fill="#94a3b8" font-size="7" text-anchor="middle">gas 清单 / plan diff / SSO 授权页</text>
+
+  <rect x="780" y="70" width="180" height="70" rx="6" fill="#0f172a"/>
+  <rect x="780" y="70" width="180" height="70" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="870" y="94" fill="white" font-size="12" font-weight="600" text-anchor="middle">手机 · push</text>
+  <text x="870" y="110" fill="#94a3b8" font-size="8" text-anchor="middle">push 即聚焦 · 点开即手势</text>
+  <text x="870" y="124" fill="#94a3b8" font-size="7" text-anchor="middle">companion 真实锚点</text>
+
+  <rect x="560" y="190" width="190" height="64" rx="6" fill="#0f172a"/>
+  <rect x="560" y="190" width="190" height="64" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+  <text x="655" y="214" fill="white" font-size="12" font-weight="600" text-anchor="middle">钱包扩展</text>
+  <text x="655" y="230" fill="#94a3b8" font-size="8" text-anchor="middle">MetaMask / OKX · 逐笔确认</text>
+
+  <rect x="780" y="190" width="180" height="64" rx="6" fill="#0f172a"/>
+  <rect x="780" y="190" width="180" height="64" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+  <text x="870" y="210" fill="white" font-size="11" font-weight="600" text-anchor="middle">钱包 App · Authenticator</text>
+  <text x="870" y="226" fill="#94a3b8" font-size="8" text-anchor="middle">universal link 落点</text>
+  <text x="870" y="240" fill="#94a3b8" font-size="7" text-anchor="middle">wc: 配对 · 防盲签最后防线</text>
+
+  <rect x="560" y="308" width="400" height="56" rx="6" fill="#0f172a"/>
+  <rect x="560" y="308" width="400" height="56" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4"/>
+  <text x="760" y="330" fill="white" font-size="12" font-weight="600" text-anchor="middle">根权限:私钥 · passkey · TOTP · 支付工具</text>
+  <text x="760" y="348" fill="#fb7185" font-size="8" text-anchor="middle">钥匙住在哪,批准就发生在哪 —— 永不离开 human 域 (L1)</text>
+
+  <rect x="560" y="410" width="400" height="56" rx="6" fill="#0f172a"/>
+  <rect x="560" y="410" width="400" height="56" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="760" y="432" fill="white" font-size="12" font-weight="600" text-anchor="middle">行使:签名 / MFA 完成 / 摘要绑定 GO / 驳回留言</text>
+  <text x="760" y="450" fill="#94a3b8" font-size="8" text-anchor="middle">回流的只有布尔 + 签名/回执 —— 选项集永远不锁死 owner</text>
+
+  <!-- ═══ 事实源带 ═══ -->
+  <rect x="20" y="540" width="960" height="74" rx="12" fill="none" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+  <text x="36" y="560" fill="#fbbf24" font-size="10" font-weight="600">外部事实源 · ground truth —— 双方共同的裁判,现实是回执</text>
+  <rect x="60" y="570" width="270" height="34" rx="4" fill="#0f172a"/>
+  <rect x="60" y="570" width="270" height="34" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1"/>
+  <text x="195" y="591" fill="#fbbf24" font-size="9" text-anchor="middle">链上读:余额 · owner() · delegate · tx 回执</text>
+  <rect x="360" y="570" width="270" height="34" rx="4" fill="#0f172a"/>
+  <rect x="360" y="570" width="270" height="34" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1"/>
+  <text x="495" y="591" fill="#fbbf24" font-size="9" text-anchor="middle">aws sts get-caller-identity · MFA 活性</text>
+  <rect x="660" y="570" width="290" height="34" rx="4" fill="#0f172a"/>
+  <rect x="660" y="570" width="290" height="34" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1"/>
+  <text x="805" y="591" fill="#fbbf24" font-size="9" text-anchor="middle">k8s rollout status · migrate 表 · LayerZeroScan</text>
+
+  <!-- ═══ 流程序号 ═══ -->
+  <text x="252" y="92" fill="#e2e8f0" font-size="9" font-weight="700">①</text>
+  <text x="378" y="152" fill="#e2e8f0" font-size="9" font-weight="700">②</text>
+  <text x="520" y="150" fill="#22d3ee" font-size="9" font-weight="700">③</text>
+  <text x="405" y="466" fill="#22d3ee" font-size="9" font-weight="700">④ 召唤</text>
+  <text x="905" y="285" fill="#e2e8f0" font-size="9" font-weight="700">⑤</text>
+  <text x="490" y="392" fill="#fb7185" font-size="9" font-weight="700">⑥ 回调</text>
+  <text x="478" y="470" fill="#fbbf24" font-size="9" font-weight="700">⑦ 探针</text>
+  <text x="230" y="248" fill="#34d399" font-size="9" font-weight="700">⑧ 绿灯 resume</text>
+
+  <!-- ═══ 图例(边界外) ═══ -->
+  <g font-size="8">
+    <rect x="36" y="640" width="12" height="12" rx="3" fill="rgba(6,78,59,0.4)" stroke="#34d399"/>
+    <text x="54" y="650" fill="#94a3b8">运行时/探针</text>
+    <rect x="146" y="640" width="12" height="12" rx="3" fill="rgba(76,29,149,0.4)" stroke="#a78bfa"/>
+    <text x="164" y="650" fill="#94a3b8">契约/数据 (A2)</text>
+    <rect x="272" y="640" width="12" height="12" rx="3" fill="rgba(8,51,68,0.4)" stroke="#22d3ee"/>
+    <text x="290" y="650" fill="#94a3b8">传输/界面</text>
+    <rect x="382" y="640" width="12" height="12" rx="3" fill="rgba(136,19,55,0.4)" stroke="#fb7185"/>
+    <text x="400" y="650" fill="#94a3b8">根权限/安全</text>
+    <rect x="496" y="640" width="12" height="12" rx="3" fill="rgba(120,53,15,0.3)" stroke="#fbbf24"/>
+    <text x="514" y="650" fill="#94a3b8">事实源/域边界</text>
+    <line x1="614" y1="646" x2="642" y2="646" stroke="#fb7185" stroke-dasharray="4,4"/>
+    <text x="650" y="650" fill="#94a3b8">缝:只过派生物</text>
+    <text x="790" y="650" fill="#64748b">流程 ①→⑧ · 打扰次数 = 信封变更次数</text>
+  </g>
+</svg>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="card-header"><div class="card-dot violet"></div><h3>ask 席位 · 一个契约两类投影</h3></div>
+    <ul>
+      <li>• 钱包席位:gas 清单 / 逐笔签名 — unsigned tx 在 agent 域组装,签名在钱包</li>
+      <li>• 基建席位:预测 diff ∧ 边界 ∧ 退路 — 批准绑定 plan 摘要哈希</li>
+      <li>• 凭证席位:SSO/MFA — 人不打字,探针转绿即恢复</li>
+      <li>• 同构:unsigned tx ↔ plan 文件,防盲签 ↔ 防盲批</li>
+    </ul>
+  </div>
+  <div class="card">
+    <div class="card-header"><div class="card-dot rose"></div><h3>三条定律(GOAT 工况拧出)</h3></div>
+    <ul>
+      <li>• L1 卡点是根权限,不是操作 — 钥匙在哪批准在哪</li>
+      <li>• L2 回执是探针,不是人话 — 谎报 ×6 全被探针拆穿</li>
+      <li>• L3 门由动作类别触发,agent 无降级权</li>
+      <li>• L4 安全路径必须最省事 — 否则私钥回到聊天框</li>
+    </ul>
+  </div>
+  <div class="card">
+    <div class="card-header"><div class="card-dot cyan"></div><h3>传输层 · v1 零新增扩展</h3></div>
+    <ul>
+      <li>• open-in-browser 签名链接(https 边界 = scheme 出口)</li>
+      <li>• 移动:push → 手势 → universal link 深链进钱包</li>
+      <li>• 桌面:EIP-6963 扩展直连 · WC 扫码兜底</li>
+      <li>• 修复兜底:交互式远程浏览器(凭证烧断)</li>
+    </ul>
+  </div>
+</div>
+
+<footer>S8 HITL 席位设计(commit 20d8e25)· 上游:S8 v2 双浏览器权限域(383f500)· S7 定稿(8b5acaa)· 证据:GOAT Team Conductor transcripts ~55MB · dispatch 状态机与 A2/A8 公理不变</footer>
+
+</body>
+</html>
