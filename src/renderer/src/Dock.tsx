@@ -89,20 +89,19 @@ export function Dock({
   const hint = tool === 'connect' ? connectHint : (HINTS[tool] ?? null)
   /** Either occupant of the slide-in pane parks the canvas tools. */
   const slidIn = voiceFor !== null || boardFor !== null
-  // Ride above the on-screen keyboard (Defect 2): the dock is position:relative
-  // in normal flow, so a `bottom` offset lifts it by the keyboard inset. 0 (and
-  // no offset) on desktop / when no keyboard is up.
-  const kbInset = useKeyboardInset()
+  // Ride above the on-screen keyboard (Defect 2). The lift itself now lives in
+  // CSS (`.cr-dock` reads `--kb-inset`), which this hook publishes; the zoomed
+  // terminal overlay rises off the SAME variable, so the bar and the transcript
+  // cannot drift apart the way a JS offset here and a CSS one there could. The
+  // returned value is unused — the hook is called for its effect.
+  useKeyboardInset()
   // A zoomed browser has no use for ANY of this — every tool places something
   // on a canvas the page is covering — so the bar leaves entirely and gives its
   // height back to the page. The browser's own controls float over the frame.
   // (After every hook: an early return above one breaks the Rules of Hooks.)
   if (browserFor) return <></>
   return (
-    <footer
-      className={`cr-dock${slidIn ? ' zoomed' : ''}`}
-      style={kbInset ? { bottom: kbInset } : undefined}
-    >
+    <footer className={`cr-dock${slidIn ? ' zoomed' : ''}`}>
       <div className="dock-pane dock-canvas" aria-hidden={slidIn}>
         <div className="cr-dock-tools">
           {/* The clipboard toggle leads the tools: it is the one control

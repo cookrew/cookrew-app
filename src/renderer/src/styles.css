@@ -65,6 +65,28 @@ body,
   height: 100%;
 }
 
+/* KEYBOARD AUTO-RISE (the band the keyboard covers). The shell keeps its full
+   height on purpose — shrinking it is what scrambled the PTY and dropped the
+   card out of full view — so the strip under the risen dock still belongs to
+   the stage, and the stage shows the canvas: a dark terminal thumbnail. That
+   matters because the strip is not always fully covered. iOS reports a visual
+   viewport that excludes its form-accessory bar as well as the keyboard, so the
+   dock rises clear of BOTH and the translucent bar is left showing whatever is
+   behind it — a dark card reads as a black stripe between the buttons row and
+   the keyboard. Painting the band in the dock's own cream puts app chrome
+   behind that bar instead. Zero-height (so invisible) with no keyboard up. */
+.cr-app::after {
+  content: '';
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--kb-inset, 0px);
+  background: var(--cream-hi);
+  z-index: 40;
+  pointer-events: none;
+}
+
 .cr-stage {
   flex: 1;
   min-height: 0;
@@ -2233,6 +2255,15 @@ a.card-close {
   z-index: 1;
 }
 
+/* KEYBOARD AUTO-RISE (dock half). position:relative above makes a `bottom`
+   offset lift the bar without taking it out of flow or resizing anything. It
+   reads the same `--kb-inset` the zoomed terminal overlay translates by, so the
+   buttons row and the transcript move as one — driving one from JS state and
+   the other from the variable let them drift apart by a frame. */
+.cr-dock {
+  bottom: var(--kb-inset, 0px);
+}
+
 .cr-stage {
   background: var(--cream);
 }
@@ -2264,6 +2295,28 @@ a.card-close {
   background: var(--cream-hi);
   border: 2px solid var(--line);
   overflow: hidden;
+}
+
+/* KEYBOARD AUTO-RISE. The dock already lifts itself by `--kb-inset` (Dock.tsx);
+   this slides the zoomed terminal up by the same amount so its LAST rows — the
+   agent's prompt line — end up just above the risen dock instead of behind the
+   keyboard. The overlay's own top rows pass under the header, which is opaque
+   and sits at a higher z-index.
+
+   It is a TRANSFORM, deliberately, not a height change. Shrinking the overlay
+   (or the stage that sizes it) looks equivalent and is not:
+     - the overlay's ResizeObserver would refit xterm and resize the PTY, and
+       that pane is shared with the desktop viewer, so the two re-assert against
+       each other and the TUI's incremental redraw scatters mid-transcript;
+     - a shorter ReactFlow pane re-scores semantic-zoom coverage, so the card
+       drops out of its full view and the phone lands back on bare canvas;
+     - the vacated strip belongs to no element of ours, and the engine paints
+       its own (black) chrome there.
+   Translating changes what is ON SCREEN and nothing else: no resize event, no
+   SIGWINCH, no coverage change, no vacated band. `--kb-inset` is 0 / unset with
+   no keyboard up, so this is the identity on desktop. */
+.lod-overlay {
+  transform: translateY(calc(-1 * var(--kb-inset, 0px)));
 }
 
 .browser-lod .popout {
