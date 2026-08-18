@@ -202,6 +202,44 @@ export function piSessionHome(
   return adopted ? { dir: piSessionDir(cwd, { agentDir: options.agentDir }), file: adopted } : null
 }
 
+/**
+ * The session a node with NO bound id should adopt, or null.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * A Pi node whose id was never captured is stuck in a state nothing could get
+ * it out of. Observed on the Playground "Pi" node: two real conversations
+ * (1.1 MB and 677 KB) sitting in its cwd scope, `piSessionId: null` on the
+ * node, and therefore
+ *
+ *   the gate      refuses to boot it — "exact session couldn't be located"
+ *   the launcher  would boot FRESH, stranding both conversations
+ *
+ * so recovery declined forever and was right to. The session was never
+ * missing; only the pointer to it was.
+ *
+ * OWNERSHIP IS THE WHOLE SAFETY ARGUMENT. Adopting by "most recent in this
+ * cwd" is precisely the cross-agent race the exclusive-dir design exists to
+ * eliminate, so a candidate already claimed by another node is skipped. Two
+ * unbound nodes in one directory then resolve deterministically: the first
+ * takes the newest, which makes it owned, and the second moves on.
+ */
+export function piAdoptableSession(
+  cwd: string,
+  options: {
+    /** True when some OTHER node already claims this session id. */
+    isOwned: (sessionId: string) => boolean
+    agentDir?: string
+  }
+): PiSessionMatch | null {
+  // pi's own cwd-derived dir only: the exclusive dir belongs to a node that
+  // was already binding properly, and latestPiSession covers that path.
+  return (
+    piSessions(cwd, { agentDir: options.agentDir }).find((match) => !options.isOwned(match.id)) ??
+    null
+  )
+}
+
 /** Resolve one node's published-Pi CLI command without consulting other nodes. */
 export function piLaunchBinding(options: {
   command: string

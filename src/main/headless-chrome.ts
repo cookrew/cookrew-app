@@ -18,6 +18,7 @@ import {
   type BrowserViewportState
 } from './browser-viewport'
 import { CdpClient } from './cdp-client'
+import { applySignInCompatibility, presentableUserAgent } from './browser-signin'
 
 function httpJson<T>(url: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -137,6 +138,11 @@ interface RuntimeEvaluateResult {
 export class HeadlessInstance {
   private proc: ChildProcess | null = null
   private browserCdp: CdpClient | null = null
+  /**
+   * The UA every page presents, read from the running browser and stripped of
+   * its automation tell. Empty until startup has read /json/version.
+   */
+  private userAgent = ''
   private port = 0
   private closed = false
   private pollTimer: ReturnType<typeof setInterval> | null = null
@@ -249,10 +255,17 @@ export class HeadlessInstance {
     for (let attempt = 0; attempt < 100; attempt += 1) {
       if (this.closed) throw new Error('instance closed during startup')
       try {
-        const version = await httpJson<{ webSocketDebuggerUrl?: string }>(
-          `http://127.0.0.1:${this.port}/json/version`
-        )
-        if (version.webSocketDebuggerUrl) return version.webSocketDebuggerUrl
+        const version = await httpJson<{
+          webSocketDebuggerUrl?: string
+          'User-Agent'?: string
+          Browser?: string
+        }>(`http://127.0.0.1:${this.port}/json/version`)
+        if (version.webSocketDebuggerUrl) {
+          // Read here because this endpoint carries BOTH the headless UA and
+          // the real Chrome version, and every page attach needs the result.
+          this.userAgent = presentableUserAgent(version['User-Agent'] ?? '', version.Browser)
+          return version.webSocketDebuggerUrl
+        }
       } catch {
         // Chrome is still starting.
       }
@@ -329,6 +342,11 @@ export class HeadlessInstance {
 
     await cdp.send('Page.enable')
     await cdp.send('Runtime.enable')
+    // Before anything navigates: tell a sign-in page the truth about this
+    // browser. It advertised HeadlessChrome and claimed a platform
+    // authenticator it does not have, which left Google waiting forever on a
+    // passkey no Touch ID could ever answer. See browser-signin.ts.
+    await applySignInCompatibility(cdp, { userAgent: this.userAgent })
     await this.resizePage(page)
     await this.refreshPageState(page)
     return page

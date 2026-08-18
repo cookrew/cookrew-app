@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron'
 import path from 'node:path'
-import { statSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
@@ -81,9 +81,10 @@ import {
 } from './claude-fork'
 import { isCodexCommand, resolveCodexRolloutByPid } from './codex-bind'
 import { isOpenCodeCommand, resolveOpencodeSessionByPid } from './opencode-bind'
-import { isPiCommand, piLaunchBinding, resolvePiSessionByPane } from './pi-bind'
+import { isPiCommand, piAdoptableSession, piLaunchBinding, resolvePiSessionByPane } from './pi-bind'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
+import { blocksResume, holderOf, liveSessionHolders, planHeldSessionFork } from './claude-live-session'
 import { createRestoreHandlers, registerRestoreIpc, RestoreHandlers } from './restore'
 import { withSessionLineage } from './session-lineage'
 import { carrySessionToCwd } from './session-move'
@@ -361,6 +362,64 @@ function reportWorkspaceBinding(): void {
   })
 }
 
+/**
+ * How long to wait for a forked session file to appear, and how often to look.
+ * Claude writes it as it boots; a pane that was merely reattached never will,
+ * and that silence is the signal to leave the node's binding alone.
+ */
+const FORK_BIND_TIMEOUT_MS = 30_000
+const FORK_BIND_POLL_MS = 500
+
+/**
+ * Rebind a node to the copy a held-session fork produced — but only once that
+ * copy is really on disk.
+ *
+ * The old id goes onto the lineage, so the checkpoint rail keeps every turn
+ * that happened before the fork and rewind can still reach into it.
+ */
+function bindForkWhenWritten(
+  terminalId: string,
+  from: string,
+  forkedTo: string,
+  cwd: string
+): void {
+  const deadline = Date.now() + FORK_BIND_TIMEOUT_MS
+  const look = (): void => {
+    if (!existsSync(claudeSessionFile(cwd, forkedTo))) {
+      if (Date.now() < deadline) setTimeout(look, FORK_BIND_POLL_MS).unref()
+      return
+    }
+    // Re-read: this lands seconds later and the node may have moved on.
+    const node = store.node(terminalId)
+    if (node?.kind !== 'terminal') return
+    const current = node as TerminalNodeData
+    if (current.claudeSessionId !== from) return
+    store.updateNodeUnsafe(terminalId, withSessionLineage(current, forkedTo))
+    console.error(
+      `${current.name}: session ${from} was held by another claude process — ` +
+        `resumed from a copy as ${forkedTo}`
+    )
+  }
+  setTimeout(look, FORK_BIND_POLL_MS).unref()
+}
+
+/**
+ * The Pi session an UNBOUND node should adopt, or null.
+ *
+ * Both the launcher and the recover gate ask this, and they must agree: a gate
+ * that says "restorable" while the launcher boots fresh would strand the very
+ * conversation the gate promised. Ownership is resolved against every node in
+ * every workspace, so one session can never be handed to two terminals.
+ */
+function adoptablePiSession(terminalId: string, cwd: string): string | null {
+  const peers = store.terminalsAcross()
+  return (
+    piAdoptableSession(cwd, {
+      isOwned: (sessionId) => isRefOwned(peers, terminalId, 'piSessionId', sessionId)
+    })?.id ?? null
+  )
+}
+
 /** Spawn (or reuse) a PTY for a terminal node and register turn tracking. */
 function spawnTracked(t: {
   id: string
@@ -403,7 +462,28 @@ function spawnTracked(t: {
       // earlier segment visible and rewind can still cut into it.
       store.updateNodeUnsafe(t.id, withSessionLineage(t, sessionId))
     }
-    effective = claudeSpawnCommand(command, t.cwd, sessionId)
+    // A session another LIVE claude process still holds cannot be resumed —
+    // claude prints "currently running as a background agent … add
+    // --fork-session" and exits. Nothing here noticed, so the pty booted, died
+    // instantly, and the card reported READY over a black void (observed on
+    // Forge, held by a leftover `claude bg-spare`). Forking branches off a copy
+    // of the whole transcript, so the agent returns knowing what it knew; the
+    // new id is picked up by the spawn-time rotation probe below, which records
+    // the old one on the lineage so the rail keeps its history.
+    const fork = planHeldSessionFork(
+      claudeSpawnCommand(command, t.cwd, sessionId),
+      sessionId,
+      liveSessionHolders(),
+      randomUUID
+    )
+    effective = fork.command
+    // Bind the copy only once it EXISTS. Naming it ourselves is what makes the
+    // binding possible at all, but a still-live tmux session is reattached by
+    // `new-session -A`, which ignores this command entirely — so the fork may
+    // never run. Binding on intent pointed a node at a session file that was
+    // never written, which is worse than the bug it was fixing: the rail had
+    // nothing to read and the exact-context gate could no longer pass.
+    if (fork.forkedTo) bindForkWhenWritten(t.id, sessionId, fork.forkedTo, t.cwd)
   } else if (isCodexCommand(command) && t.codexSessionRef) {
     // Resume the bound Codex rollout as-is (Tinker: `codex resume <uuid>`,
     // uuid from the rollout filename; global opts kept before the subcommand).
@@ -425,7 +505,12 @@ function spawnTracked(t: {
       command,
       cwd: t.cwd,
       terminalId: t.id,
-      storedSessionId: t.piSessionId
+      // An unbound node adopts an UNOWNED session from its own cwd scope
+      // rather than booting fresh beside it. Ownership is checked here, not
+      // in pi-bind, because only the store knows what every other node claims
+      // — and that check is the whole reason this is not the most-recent
+      // guess the exclusive-dir design exists to forbid.
+      storedSessionId: t.piSessionId ?? adoptablePiSession(t.id, t.cwd)
     })
     effective = binding.command
     if (t.piSessionId !== binding.sessionId) {
@@ -1120,7 +1205,12 @@ function workspaceName(id: string): string {
  * node's exact prior session be restored right now? Wired to live turn history.
  */
 function canRestoreExact(node: TerminalNodeData): boolean {
-  return exactGate(node, { turnsHistory: (id) => turns.history(id) })
+  return exactGate(node, {
+    turnsHistory: (id) => turns.history(id),
+    // Same question the launcher asks, so the two can never disagree about
+    // whether this node's conversation is reachable.
+    piAdoptable: (id, cwd) => adoptablePiSession(id, cwd)
+  })
 }
 
 /** The active workspace's orch terminal, for reachability wiring. */
@@ -1142,6 +1232,15 @@ function activeOrch(): TerminalNodeData | undefined {
  *     registry + wire to the current orch.
  */
 function recoverAgent(id: string): RecoverResult {
+  // Asked ONCE per recovery, before anything boots: a session another live
+  // claude process holds cannot be resumed, only forked. Cheap (sub-ms, see
+  // claude-live-session.ts), so it costs nothing to always know.
+  const holders = liveSessionHolders()
+  const heldSession = (node: TerminalNodeData): boolean =>
+    isClaudeCommand(node.command) &&
+    !!node.claudeSessionId &&
+    blocksResume(holderOf(node.claudeSessionId, holders))
+
   // (1) present-but-dead
   const hit = store.nodeAcrossWorkspaces(id)
   if (hit && hit.node.kind === 'terminal') {
@@ -1149,10 +1248,11 @@ function recoverAgent(id: string): RecoverResult {
     // process is a no-op double-recover (LOW).
     const exact = canRestoreExact(hit.node as TerminalNodeData)
     const didSpawn = hit.workspaceId === store.activeId && !ptys.get(id) && exact
+    const forked = didSpawn && heldSession(hit.node as TerminalNodeData)
     if (didSpawn) spawnTracked(hit.node)
     return {
       ok: true, id, name: hit.node.name, workspaceId: hit.workspaceId,
-      workspaceName: workspaceName(hit.workspaceId), spawned: didSpawn, legacy: false, exact
+      workspaceName: workspaceName(hit.workspaceId), spawned: didSpawn, legacy: false, exact, forked
     }
   }
 
@@ -1176,11 +1276,12 @@ function recoverAgent(id: string): RecoverResult {
     // never a fresh/stray session masquerading as recovery.
     const exact = canRestoreExact(added)
     const didSpawn = plan.spawn && exact
+    const forked = didSpawn && heldSession(added)
     if (didSpawn) spawnTracked(added)
     recoverable.remove(id)
     return {
       ok: true, id, name: added.name, workspaceId: plan.targetWorkspaceId,
-      workspaceName: workspaceName(plan.targetWorkspaceId), spawned: didSpawn, legacy: false, exact
+      workspaceName: workspaceName(plan.targetWorkspaceId), spawned: didSpawn, legacy: false, exact, forked
     }
   }
 
@@ -1203,10 +1304,11 @@ function recoverAgent(id: string): RecoverResult {
   if (orch && orch.id !== added.id) store.connectAcross(added.id, orch.id)
   const exact = canRestoreExact(added)
   const didSpawn = targetWs === store.activeId && exact
+  const forked = didSpawn && heldSession(added)
   if (didSpawn) spawnTracked(added)
   return {
     ok: true, id, name: added.name, workspaceId: targetWs,
-    workspaceName: workspaceName(targetWs), spawned: didSpawn, legacy: true, exact
+    workspaceName: workspaceName(targetWs), spawned: didSpawn, legacy: true, exact, forked
   }
 }
 
@@ -1923,9 +2025,12 @@ app.whenReady().then(() => {
     browserThumbRequested: noteBrowserViewed,
     onUpgrade: (request, socket) => browserCast.upgrade(request, socket),
     // Built renderer bundle — served to phones so mobile gets the full
-    // desktop canvas UI. Dev proxies Vite so phones cannot load stale out/.
+    // desktop canvas UI. Dev proxies Vite so LAN phones get live code; a
+    // tailnet peer gets this bundle instead, because the unbundled graph is
+    // 159 dependent requests and a relayed link never finishes them.
     rendererDir: path.join(dirname, '../renderer'),
-    rendererDevUrl: process.env.ELECTRON_RENDERER_URL
+    rendererDevUrl: process.env.ELECTRON_RENDERER_URL,
+    rendererSrcDir: path.join(app.getAppPath(), 'src/renderer/src')
   })
   registerIpc({ restoreCheckpoint, undoRestore })
   void browserManager.replaceNodes(store.browsers()).catch(() => undefined)

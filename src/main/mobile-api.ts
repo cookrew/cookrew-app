@@ -29,8 +29,9 @@ import type {
   RecoverResult,
   RestoreResult,
 } from "../shared/model";
-import { readJson, respondJson, startSse, pairingAuthorized } from "./mobile-http";
+import { readBytes, readJson, respondJson, startSse, pairingAuthorized } from "./mobile-http";
 import { ownerSubmit } from "./ask";
+import { MAX_ATTACHMENT_BYTES } from "./attachments";
 
 /**
  * Workspace operations shared with the renderer IPC handlers — the mobile
@@ -152,6 +153,9 @@ export interface MobileApiDeps {
 
 /** Base64 inflates ~4/3, so this admits attachments up to the 20MB save cap. */
 const ATTACH_BODY_LIMIT = 30_000_000;
+
+/** Raw uploads carry no inflation, so the byte cap is the save cap itself. */
+const ATTACH_RAW_LIMIT = MAX_ATTACHMENT_BYTES;
 
 /**
  * Enrich a workspace state with git info for the phone: every terminal node
@@ -521,20 +525,41 @@ export async function handleMobileApi(
   }
 
   if (method === "POST" && p === "/api/attachments") {
-    const body = await readJson<{ name?: string; data?: string }>(
-      request,
-      ATTACH_BODY_LIMIT,
+    // TWO shapes, and the raw one is the fast path.
+    //
+    // Base64-in-JSON cost 33% more bytes over a link where bytes are the
+    // scarce thing, and cost the MAIN process a 27 MB string concat plus a
+    // JSON.parse of it — the app froze for the length of every upload. Raw
+    // bytes with the name in the query have neither problem.
+    //
+    // The JSON shape stays for a phone still running a cached older bundle;
+    // dropping it would break uploads until every device reloaded.
+    const json = (request.headers["content-type"] ?? "").includes(
+      "application/json",
     );
-    if (typeof body.data !== "string" || body.data.length === 0) {
-      respondJson(response, 400, { error: "Missing data" });
-      return true;
-    }
     try {
-      const saved = deps.saveAttachment(
-        body.name ?? "file",
-        Buffer.from(body.data, "base64"),
-      );
-      respondJson(response, 200, { path: saved });
+      const name = json ? undefined : url.searchParams.get("name");
+      const data = json
+        ? null
+        : await readBytes(request, ATTACH_RAW_LIMIT);
+      const body = json
+        ? await readJson<{ name?: string; data?: string }>(
+            request,
+            ATTACH_BODY_LIMIT,
+          )
+        : null;
+      const bytes =
+        data ??
+        (typeof body?.data === "string" && body.data.length > 0
+          ? Buffer.from(body.data, "base64")
+          : null);
+      if (!bytes || bytes.length === 0) {
+        respondJson(response, 400, { error: "Missing data" });
+        return true;
+      }
+      respondJson(response, 200, {
+        path: deps.saveAttachment(name || body?.name || "file", bytes),
+      });
     } catch (error) {
       respondJson(response, 400, {
         error: error instanceof Error ? error.message : String(error),
@@ -726,9 +751,9 @@ export async function handleMobileApi(
       session.on("data", onData);
       session.on("replay", onReplay);
       session.on("exit", onExit);
-      const heartbeat = setInterval(() => response.write(":hb\n\n"), 25000);
+      // Keepalive is startSse's job — see mobile-http.ts. Writing to the
+      // response here would land plaintext inside the gzip stream.
       request.on("close", () => {
-        clearInterval(heartbeat);
         session.removeListener("data", onData);
         session.removeListener("replay", onReplay);
         session.removeListener("exit", onExit);
@@ -772,9 +797,7 @@ export async function handleMobileApi(
       store.on("change", onBoardSignal);
       store.on("workspaces", onBoardSignal);
     }
-    const heartbeat = setInterval(() => response.write(":hb\n\n"), 25000);
     request.on("close", () => {
-      clearInterval(heartbeat);
       store.removeListener("change", onChange);
       store.removeListener("workspaces", onWorkspaces);
       turns.removeListener("activity", onActivity);

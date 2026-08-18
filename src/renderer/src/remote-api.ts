@@ -19,17 +19,8 @@ import type { TerminalActivity, TurnRecord } from '../../shared/turn'
  * lifts it into storage and strips it from the address bar. Mutating routes
  * require it as a bearer header; read-only GETs/SSE stay open.
  */
-async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const options: RequestInit = { method }
-  const headers: Record<string, string> = {}
-  const token = authStore().token()
-  if (token) headers.authorization = `Bearer ${token}`
-  if (body !== undefined) {
-    headers['content-type'] = 'application/json'
-    options.body = JSON.stringify(body)
-  }
-  if (Object.keys(headers).length > 0) options.headers = headers
-  const response = await fetch(path, options)
+/** Turn a server answer into a value, or into the right kind of failure. */
+async function parse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const detail = await response.json().catch(() => ({ error: String(response.status) }))
     const message = (detail as { error?: string }).error ?? `HTTP ${response.status}`
@@ -45,6 +36,69 @@ async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> 
   }
   const text = await response.text()
   return (text ? JSON.parse(text) : undefined) as T
+}
+
+async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  const options: RequestInit = { method }
+  const headers: Record<string, string> = {}
+  const token = authStore().token()
+  if (token) headers.authorization = `Bearer ${token}`
+  if (body !== undefined) {
+    headers['content-type'] = 'application/json'
+    options.body = JSON.stringify(body)
+  }
+  if (Object.keys(headers).length > 0) options.headers = headers
+  return parse<T>(await fetch(path, options))
+}
+
+/**
+ * Send one attachment as RAW BYTES.
+ *
+ * It used to go as base64 inside JSON, which put 33% more bytes on a link
+ * where bytes are the scarce thing, and made the desktop's main process build
+ * a 27 MB string and JSON.parse it — the whole app stalled for the length of
+ * every upload. A Blob goes out as-is and streams.
+ */
+async function upload(name: string, body: Blob): Promise<string> {
+  const headers: Record<string, string> = { 'content-type': 'application/octet-stream' }
+  const token = authStore().token()
+  if (token) headers.authorization = `Bearer ${token}`
+  const result = await parse<{ path: string }>(
+    await fetch(`/api/attachments?name=${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers,
+      body
+    })
+  )
+  return result.path
+}
+
+/**
+ * How many uploads may be in flight together.
+ *
+ * Uploading one at a time cost a full round trip per file, and on a relayed
+ * tailnet a round trip is 300 ms to 2.5 s — five screenshots meant five of
+ * them end to end. A small bound overlaps that latency without letting a
+ * dozen large files fight each other for a thin link.
+ */
+const UPLOAD_CONCURRENCY = 3
+
+/** Map with bounded concurrency, preserving input order in the result. */
+async function mapLimited<T, R>(
+  items: readonly T[],
+  limit: number,
+  run: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const at = next++
+      results[at] = await run(items[at])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
 }
 
 /**
@@ -95,26 +149,6 @@ function subscribe<T>(event: string, cb: (data: T) => void): () => void {
   return sharedEvents().on(event, (e) => cb(JSON.parse(e.data) as T))
 }
 
-/** data-URL detour: base64 without blowing the call stack on big files. */
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const url = String(reader.result)
-      resolve(url.slice(url.indexOf(',') + 1))
-    }
-    reader.onerror = () => reject(reader.error ?? new Error('Read failed'))
-    reader.readAsDataURL(file)
-  })
-}
-
-/** Base64-encode raw bytes (pasted clipboard image) for the upload endpoint. */
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = ''
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary)
-}
-
 /**
  * Ask once at boot whether this device is still paired.
  *
@@ -163,24 +197,14 @@ export function createRemoteApi(): CookrewApi {
 
     // Phones can't hand the desktop a local path — upload the bytes and let
     // the server persist them; the returned path is what gets pasted.
-    attachFiles: async (files) => {
-      const paths: string[] = []
-      for (const file of files) {
-        const uploaded = await req<{ path: string }>('/api/attachments', 'POST', {
-          name: file.name,
-          data: await fileToBase64(file)
-        })
-        paths.push(uploaded.path)
-      }
-      return paths
-    },
-    saveAttachmentBytes: async (name, bytes) => {
-      const uploaded = await req<{ path: string }>('/api/attachments', 'POST', {
-        name,
-        data: bytesToBase64(bytes)
-      })
-      return uploaded.path
-    },
+    // Concurrent, because the paths come back in order either way and the
+    // round trips are the expensive part.
+    attachFiles: (files) =>
+      mapLimited(files, UPLOAD_CONCURRENCY, (file) => upload(file.name, file)),
+    // Copy through a plain ArrayBuffer: a Uint8Array may be backed by a
+    // SharedArrayBuffer, which Blob will not take.
+    saveAttachmentBytes: (name, bytes) =>
+      upload(name, new Blob([new Uint8Array(bytes).slice().buffer])),
     pickFiles: () => Promise.resolve([]),
 
     ptyInput: (terminalId, data) => post(`/api/terminal/${terminalId}/raw`, { data }),

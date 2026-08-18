@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   isTailnetAddress,
+  isTailnetHost,
   parseTailscaleStatus,
-  readTailnet,
-  tailnetCertHosts
+  readTailnet
 } from '../src/main/tailscale'
 
 /**
@@ -139,16 +139,20 @@ describe('readTailnet', () => {
   })
 })
 
-describe('tailnetCertHosts', () => {
-  it('contributes the MagicDNS name and the tailnet IPs to the cert', () => {
-    const hosts = tailnetCertHosts(parseTailscaleStatus(STATUS))
-    expect(hosts.dnsNames).toEqual(['workbench.example-tailnet.ts.net'])
-    // IPv6 belongs in the SAN list too: a phone on the tailnet may resolve
-    // MagicDNS to the v6 address first.
-    expect(hosts.ips).toEqual(['100.101.102.103', 'fd7a:115c:a1e0::1234:5678'])
+describe('isTailnetHost — what a cert must never lose', () => {
+  it('accepts tailnet addresses of both families and MagicDNS names', () => {
+    expect(isTailnetHost('100.101.102.103')).toBe(true)
+    expect(isTailnetHost('fd7a:115c:a1e0::1234:5678')).toBe(true)
+    expect(isTailnetHost('FD7A:115C:A1E0:0:0:0:5401:51A4')).toBe(true)
+    expect(isTailnetHost('workbench.example-tailnet.ts.net')).toBe(true)
   })
 
-  it('is empty when there is no tailnet', () => {
-    expect(tailnetCertHosts(null)).toEqual({ ips: [], dnsNames: [] })
+  it('rejects LAN addresses, look-alike names and empty input', () => {
+    // Retention is what keeps these OUT of a cert forever: a LAN address
+    // belongs to a network, not to this machine, so it may be dropped.
+    expect(isTailnetHost('192.168.2.13')).toBe(false)
+    expect(isTailnetHost('100.12.0.1')).toBe(false)
+    expect(isTailnetHost('evil-ts.net')).toBe(false)
+    expect(isTailnetHost('  ')).toBe(false)
   })
 })

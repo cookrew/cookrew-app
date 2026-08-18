@@ -1,14 +1,15 @@
 import http from 'node:http'
 import https from 'node:https'
+import type net from 'node:net'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
 import { MOBILE_PORT, MOBILE_HTTPS_PORT } from './mobile-ports'
 import { agentStatus } from './herdr-agent-status'
-import { mobileEndpoints, type MobileEndpoint } from './mobile-endpoints'
+import { endpointCertHosts, mobileEndpoints, type MobileEndpoint } from './mobile-endpoints'
 import { loadOrCreatePairingToken, rotatePairingToken } from './pairing-token'
-import { readTailnet, tailnetCertHosts, type TailnetIdentity } from './tailscale'
-import { existsSync, readFileSync } from 'node:fs'
+import { readTailnet, type CertHosts, type TailnetIdentity } from './tailscale'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { powerSaveBlocker } from 'electron'
 import type { WorkspaceStore } from './store'
 import type { RecoverResult, RestoreResult } from '../shared/model'
@@ -26,6 +27,9 @@ import { askTerminal, ownerSubmit } from './ask'
 import { ensureCert, missingHosts, sansOf } from './cert'
 import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps } from './mobile-api'
 import { readJson, respondJson } from './mobile-http'
+import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
+import { sendBody } from './http-compress'
+import { rendererSourceFor, staleBuildNotice } from './renderer-choice'
 import { fetchRendererDevResource } from './renderer-dev-proxy'
 
 // Re-exported so existing importers keep their import path; the constants
@@ -103,6 +107,11 @@ export interface MobileServerDeps {
   rendererDir: string
   /** electron-vite renderer URL; proxied to phones in development. */
   rendererDevUrl?: string
+  /**
+   * Renderer sources, used only to date the built bundle against them so a
+   * phone served the build can be told it is behind. Absent = no notice.
+   */
+  rendererSrcDir?: string
   /** Override the pairing token (tests); a fresh one is minted per run. */
   pairingToken?: string
   /**
@@ -158,25 +167,121 @@ export function startMobileServer(deps: MobileServerDeps): void {
   // secure context, which the Web Speech / mic APIs require. The tailnet
   // address and MagicDNS name go in the SAN list too — without them the one
   // endpoint that works away from home is the one the phone refuses to load.
-  const tailnet = refreshTailnet()
-  const tailnetHosts = tailnetCertHosts(tailnet)
-  const cert = ensureCert({
-    ips: [...new Set([...localAddresses(), ...tailnetHosts.ips])],
-    dnsNames: tailnetHosts.dnsNames
-  })
+  const cert = ensureCert(advertisedCertHosts())
   if (cert) {
     certSans = sansOf(new X509Certificate(cert.cert).subjectAltName)
     const secure = https.createServer({ key: cert.key, cert: cert.cert }, requestHandler)
-    secure.on('listening', () => {
+    attachUpgrade(secure)
+    // The TLS server does not bind the port itself — the gate does, and hands
+    // it the connections that are actually TLS. See tls-port-gate.ts: a phone
+    // that types the URL without `https://` otherwise gets a blank page and
+    // zero bytes back, which is indistinguishable from the app being down.
+    const gate = createTlsPortGate({ secure, plain: httpsRedirector() })
+    gate.on('listening', () => {
       httpsReady = true
     })
-    attachUpgrade(secure)
-    listenWithRetry(secure, MOBILE_HTTPS_PORT)
+    listenWithRetry(gate, MOBILE_HTTPS_PORT)
+    watchTailnetCert(secure)
   }
 }
 
-function listenWithRetry(server: http.Server | https.Server, port: number): void {
+/**
+ * Answers plaintext requests on the TLS port with a redirect to the same URL
+ * over https — including the `?token=` the pairing URL carries, so a mistyped
+ * scheme costs a round trip rather than a re-pair.
+ */
+function httpsRedirector(): http.Server {
+  return http.createServer((request, response) => {
+    const location = httpsRedirectTarget({
+      hostHeader: request.headers.host,
+      target: request.url,
+      localAddress: request.socket.localAddress,
+      advertisedHosts: mobileEndpointList().map((endpoint) => endpoint.host),
+      port: MOBILE_HTTPS_PORT
+    })
+    if (!location) {
+      respondJson(response, 400, { error: 'This port speaks HTTPS — reconnect with https://' })
+      return
+    }
+    // Temporary and uncached: this is a courtesy for a mistyped scheme, not a
+    // fact about the port that a browser should remember.
+    response.writeHead(307, { location, 'cache-control': 'no-store' })
+    response.end()
+  })
+}
+
+/**
+ * Every host we hand out, as a cert requirement. One source for both, so the
+ * cert can never fail to cover a URL the desktop just printed.
+ */
+function advertisedCertHosts(): CertHosts {
+  return endpointCertHosts(
+    mobileEndpoints({
+      addresses: localAddresses(),
+      tailnet: refreshTailnet(),
+      // Neither affects which HOSTS are advertised, only how they are spelled.
+      secure: false,
+      token: null
+    })
+  )
+}
+
+/**
+ * How often to ask whether the tailnet has appeared. Tailscale is a launch
+ * agent and routinely finishes coming up after the app does; a minute is far
+ * below the "pick up the phone and it fails" timescale and costs one short
+ * `tailscale status` fork.
+ */
+const TAILNET_WATCH_MS = 60_000
+
+/**
+ * Re-issue the cert IN PLACE when the tailnet turns up after startup.
+ *
+ * The old code read Tailscale exactly once, at boot. Start Cookrew before
+ * Tailscale finishes connecting — the ordinary case, since both are launch
+ * agents — and the cert had no tailnet SAN for the rest of the run, while the
+ * URL list (which re-reads on a 15s TTL) cheerfully advertised the tailnet
+ * address anyway. The phone got a name mismatch on the only endpoint that
+ * works off the LAN, and Wi-Fi looked like the only thing that ever worked.
+ *
+ * `setSecureContext` swaps the cert on the RUNNING listener: new handshakes
+ * get the new cert and every open SSE stream survives, so a phone that is
+ * already connected is not knocked off to fix one that is not yet.
+ */
+function watchTailnetCert(secure: https.Server): void {
+  const timer = setInterval(() => {
+    // Past the TTL deliberately: this IS the poll for "has Tailscale come up".
+    tailnetCache.readAt = 0
+    const hosts = advertisedCertHosts()
+    const missing = missingHosts(certSans, hosts)
+    if (missing.length === 0) return
+    const reissued = ensureCert(hosts)
+    if (!reissued) return
+    certSans = sansOf(new X509Certificate(reissued.cert).subjectAltName)
+    secure.setSecureContext({ key: reissued.key, cert: reissued.cert })
+    console.error(`Mobile cert reissued for ${missing.join(', ')} — no restart needed`)
+  }, TAILNET_WATCH_MS)
+  timer.unref()
+}
+
+/**
+ * Bind both address families with one socket. `::` with ipv6Only off accepts
+ * IPv4 as well (as ::ffff:… mapped peers), and nothing here reads the peer
+ * address, so the mapping is invisible to every route.
+ *
+ * `0.0.0.0` alone was IPv4-only, which made the tailnet IPv6 URL — advertised
+ * by mobileEndpoints and covered by the cert — answer ECONNREFUSED. That is
+ * the worst kind of endpoint: printed, trusted, and dead. It matters most on
+ * exactly the network the user is complaining about, since a phone on a
+ * v6-only carrier reaches the v6 address first.
+ */
+function listenWithRetry(server: net.Server, port: number): void {
   let retries = 0
+  let dualStack = true
+  const bind = (): void => {
+    if (dualStack) server.listen({ port, host: '::', ipv6Only: false })
+    else server.listen({ port, host: '0.0.0.0' })
+  }
   server.on('error', (error: NodeJS.ErrnoException) => {
     if (error.code === 'EADDRINUSE') {
       // Another (usually outgoing) app instance still holds the port — keep
@@ -187,12 +292,18 @@ function listenWithRetry(server: http.Server | https.Server, port: number): void
       if (retries % 10 === 1) {
         console.error(`Mobile port :${port} in use — retrying every 3s (attempt ${retries})`)
       }
-      setTimeout(() => server.listen(port, '0.0.0.0'), 3000)
+      setTimeout(bind, 3000)
+    } else if (dualStack) {
+      // A host with IPv6 disabled outright. Fall back rather than leaving the
+      // companion unreachable on both families.
+      dualStack = false
+      console.error(`Mobile port :${port} could not bind IPv6 (${error.code}) — IPv4 only`)
+      bind()
     } else {
       console.error(`Mobile server error on :${port}:`, error)
     }
   })
-  server.listen(port, '0.0.0.0')
+  bind()
 }
 
 function localAddresses(): string[] {
@@ -295,20 +406,82 @@ const STATIC_MIME: Record<string, string> = {
   '.ttf': 'font/ttf'
 }
 
+/**
+ * A banner the phone can read, drawn before any script runs.
+ *
+ * The build served to a tailnet peer may be older than the source. Saying so
+ * on the DESKTOP would be useless — the person looking at the stale UI is
+ * holding a phone. It sits above the app and is dismissible.
+ */
+function staleBanner(notice: string | null): string {
+  if (!notice) return ''
+  return (
+    '<div id="cookrew-stale" style="position:fixed;inset:0 0 auto 0;z-index:99999;' +
+    'background:#4a3a12;color:#f5e6c8;font:12px/1.5 -apple-system,sans-serif;' +
+    'padding:8px 12px" onclick="this.remove()">' +
+    notice.replace(/[<&]/g, (c) => (c === '<' ? '&lt;' : '&amp;')) +
+    '</div>'
+  )
+}
+
+/** Newest mtime under a directory tree, or null when it cannot be read. */
+function newestMtime(dir: string, depth = 4): Date | null {
+  let newest: Date | null = null
+  try {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const child = path.join(dir, entry.name)
+      const at = entry.isDirectory()
+        ? depth > 0
+          ? newestMtime(child, depth - 1)
+          : null
+        : statSync(child).mtime
+      if (at && (!newest || at > newest)) newest = at
+    }
+  } catch {
+    return newest
+  }
+  return newest
+}
+
+/** Whether the built bundle exists, and how far behind the source it is. */
+function builtRenderer(deps: MobileServerDeps): { index: string; notice: string | null } | null {
+  const index = path.join(deps.rendererDir, 'index.html')
+  if (!existsSync(index)) return null
+  // Only meaningful while a dev server is running; a packaged app has no
+  // source tree to be behind.
+  const notice = deps.rendererDevUrl
+    ? staleBuildNotice(statSync(index).mtime, newestMtime(deps.rendererSrcDir ?? ''))
+    : null
+  return { index, notice }
+}
+
 /** Serve the built renderer index with the remote-mode marker injected. */
-function serveRendererIndex(response: http.ServerResponse, deps: MobileServerDeps): boolean {
-  const indexPath = path.join(deps.rendererDir, 'index.html')
-  if (!existsSync(indexPath)) return false
-  const html = readFileSync(indexPath, 'utf8').replace('<head>', `<head>${REMOTE_BOOT}`)
+function serveRendererIndex(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  deps: MobileServerDeps
+): boolean {
+  const built = builtRenderer(deps)
+  if (!built) return false
+  const html = readFileSync(built.index, 'utf8').replace(
+    '<head>',
+    `<head>${REMOTE_BOOT}${staleBanner(built.notice)}`
+  )
   // no-cache: assets are hash-named, but a cached index.html would keep
   // phones pinned to a stale bundle across app updates.
-  response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' })
-  response.end(html)
+  sendBody(
+    response,
+    200,
+    { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' },
+    Buffer.from(html),
+    request.headers['accept-encoding']
+  )
   return true
 }
 
 /** Static assets of the renderer bundle, with a path-traversal guard. */
 function serveRendererAsset(
+  request: http.IncomingMessage,
   response: http.ServerResponse,
   deps: MobileServerDeps,
   pathname: string
@@ -318,13 +491,30 @@ function serveRendererAsset(
   if (!file.startsWith(root + path.sep) || !existsSync(file)) return false
   const mime = STATIC_MIME[path.extname(file).toLowerCase()]
   if (!mime) return false
-  response.writeHead(200, { 'content-type': mime, 'cache-control': 'no-cache' })
-  response.end(readFileSync(file))
+  // Bundle assets carry a content hash in the name, so the answer can never
+  // change under that URL — let the phone keep it instead of re-fetching a
+  // megabyte of JavaScript over a relay on every reload.
+  const immutable = pathname.startsWith('/assets/')
+  sendBody(
+    response,
+    200,
+    {
+      'content-type': mime,
+      'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache'
+    },
+    readFileSync(file),
+    request.headers['accept-encoding'],
+    // Safe to cache the compressed copy only because the name IS the content
+    // hash — brotli on the 1.6 MB bundle costs 25 ms of main-process time,
+    // which is a visible stall if it happens per request.
+    immutable ? { cacheKey: pathname } : {}
+  )
   return true
 }
 
 /** Serve the current Vite renderer through the phone's companion origin. */
 async function serveRendererDev(
+  request: http.IncomingMessage,
   response: http.ServerResponse,
   deps: MobileServerDeps,
   url: URL,
@@ -340,12 +530,27 @@ async function serveRendererDev(
   const body = injectRemoteBoot
     ? Buffer.from(resource.body.toString('utf8').replace('<head>', `<head>${REMOTE_BOOT}`))
     : resource.body
-  response.writeHead(200, {
-    'content-type': resource.contentType,
-    'cache-control': 'no-cache'
-  })
-  response.end(body)
+  sendBody(
+    response,
+    200,
+    { 'content-type': resource.contentType, 'cache-control': 'no-cache' },
+    body,
+    request.headers['accept-encoding']
+  )
   return true
+}
+
+/**
+ * Where THIS client's renderer comes from. A tailnet peer gets the build; the
+ * LAN and loopback keep Vite's live graph. See renderer-choice.ts — the whole
+ * reason is that 159 dependent requests do not survive a DERP relay.
+ */
+function rendererSource(request: http.IncomingMessage, deps: MobileServerDeps): 'dev' | 'built' {
+  return rendererSourceFor({
+    remoteAddress: request.socket.remoteAddress,
+    devAvailable: !!deps.rendererDevUrl,
+    builtAvailable: existsSync(path.join(deps.rendererDir, 'index.html'))
+  })
 }
 
 async function handle(
@@ -374,8 +579,12 @@ async function handle(
 
   if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
     // Dev uses Vite's current transforms; packaged/preview builds use out/.
-    if (await serveRendererDev(response, deps, url, true)) return
-    if (!serveRendererIndex(response, deps)) rendererMissing()
+    // A tailnet peer is served the build instead — the live graph is 159
+    // dependent requests, which a relayed link never finishes.
+    if (rendererSource(request, deps) === 'dev') {
+      if (await serveRendererDev(request, response, deps, url, true)) return
+    }
+    if (!serveRendererIndex(request, response, deps)) rendererMissing()
     return
   }
 
@@ -517,9 +726,12 @@ async function handle(
     return
   }
 
-  // Dev module graph first, then packaged renderer assets.
-  if (request.method === 'GET' && (await serveRendererDev(response, deps, url))) return
-  if (request.method === 'GET' && serveRendererAsset(response, deps, url.pathname)) return
+  // Whichever source served this client's index must serve its assets too:
+  // a bundle index asking for /src/main.tsx, or the reverse, loads nothing.
+  if (request.method === 'GET' && rendererSource(request, deps) === 'dev') {
+    if (await serveRendererDev(request, response, deps, url)) return
+  }
+  if (request.method === 'GET' && serveRendererAsset(request, response, deps, url.pathname)) return
 
   respondJson(response, 404, { error: 'Not found' })
 }

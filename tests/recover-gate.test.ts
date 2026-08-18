@@ -162,3 +162,44 @@ describe('isRefOwned — 1:1 claim guard', () => {
     expect(isRefOwned([a, b], 'c', 'codexSessionRef', '/roll/free.jsonl')).toBe(false)
   })
 })
+
+describe('canRestoreExact — Pi with no bound id (the Playground case)', () => {
+  const pi = { command: 'pi', cwd: '/private/tmp', piSessionId: null }
+
+  it('restorable when there IS an unowned session to adopt', () => {
+    // Found live: two real conversations in the node's cwd scope and
+    // `piSessionId: null` on the node. The gate called that unlocatable and
+    // refused to boot, permanently — while the session sat right there.
+    const deps = {
+      ...noTurns,
+      piAdoptable: () => '019fd18d-4333-76c1-9797-f2c372f7c5b7',
+      piExists: (_n: string, _c: string, id: string) => id === '019fd18d-4333-76c1-9797-f2c372f7c5b7'
+    }
+    expect(canRestoreExact(node(pi), deps)).toBe(true)
+  })
+
+  it('still position-only when there is nothing to adopt', () => {
+    const deps = { ...noTurns, piAdoptable: () => null, piExists: () => true }
+    expect(canRestoreExact(node(pi), deps)).toBe(false)
+  })
+
+  it('does not adopt for a node that already has an id', () => {
+    // A bound node's own session is the only one it may resume; reaching for
+    // an adoptable one would silently switch which conversation it owns.
+    let asked = false
+    const deps = {
+      ...noTurns,
+      piAdoptable: () => {
+        asked = true
+        return 'other-session'
+      },
+      piExists: () => false
+    }
+    expect(canRestoreExact(node({ ...pi, piSessionId: '019f88f9-mine' }), deps)).toBe(false)
+    expect(asked).toBe(false)
+  })
+
+  it('keeps the old behaviour for a caller that supplies no adoption check', () => {
+    expect(canRestoreExact(node(pi), { ...noTurns, piExists: () => true })).toBe(false)
+  })
+})

@@ -67,6 +67,23 @@ export function isTailnetAddress(address: string): boolean {
   return parsed[0] === 100 && parsed[1] >= 64 && parsed[1] <= 127
 }
 
+/** Suffix every MagicDNS name carries, so one test covers all of them. */
+const MAGIC_DNS_SUFFIX = '.ts.net'
+
+/**
+ * True for anything that identifies this machine ON the tailnet — a tailnet
+ * address or a MagicDNS name.
+ *
+ * Used to decide what a certificate must never lose. A tailnet identity is
+ * stable and belongs to the machine; a LAN address belongs to whatever network
+ * it happens to be plugged into, and losing one of those costs nothing.
+ */
+export function isTailnetHost(host: string): boolean {
+  const target = host.trim().toLowerCase()
+  if (target.length === 0) return false
+  return isTailnetAddress(target) || target.endsWith(MAGIC_DNS_SUFFIX)
+}
+
 interface RawStatus {
   BackendState?: unknown
   TailscaleIPs?: unknown
@@ -143,17 +160,4 @@ export function readTailnet(probe: TailnetProbe = defaultProbe()): TailnetIdenti
     }
   }
   return null
-}
-
-/**
- * The SAN entries the self-signed cert needs so HTTPS over the tailnet does
- * not throw a name-mismatch. Without this the tailnet address is reachable
- * and unusable at the same time.
- */
-export function tailnetCertHosts(tailnet: TailnetIdentity | null): CertHosts {
-  if (!tailnet) return { ips: [], dnsNames: [] }
-  return {
-    ips: [...tailnet.ips],
-    dnsNames: tailnet.magicDnsName ? [tailnet.magicDnsName] : []
-  }
 }

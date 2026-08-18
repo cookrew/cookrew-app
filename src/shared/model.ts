@@ -398,6 +398,17 @@ export interface RecoverResult {
    * the toast says so instead of pretending.
    */
   exact: boolean
+  /**
+   * True when the prior session was still HELD by another live claude process
+   * (a leftover background agent, a pane we cannot reach), so recovery had to
+   * branch off a copy of it — `--fork-session`.
+   *
+   * The context is intact; the session id is new. Worth saying out loud
+   * because the old id keeps living somewhere, and because the alternative
+   * this replaced was a pty that booted, printed one error and died while the
+   * card reported READY.
+   */
+  forked?: boolean
 }
 
 /** A reusable agent persona saved from a terminal node. */

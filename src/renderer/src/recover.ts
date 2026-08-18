@@ -48,6 +48,15 @@ export function recoverToastFor(result: RecoverResult): RecoverToast {
       text: `Recovered ${result.name} into ${result.workspaceName} — resumes when that workspace opens`
     }
   }
+  if (result.forked) {
+    // Its old session is still open in another live claude process, so this
+    // is a branch off a copy: same context, new session id. Silence here
+    // would leave two conversations sharing a history with no sign of it.
+    return {
+      tone: 'ok',
+      text: `Recovered ${result.name} from a copy — its session is still open elsewhere`
+    }
+  }
   return { tone: 'ok', text: `Recovered ${result.name}` }
 }
 

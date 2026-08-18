@@ -1,10 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   isPiCommand,
   latestPiSession,
+  piAdoptableSession,
   piFreshCommand,
   piLaunchBinding,
   piNodeSessionDir,
@@ -383,5 +384,58 @@ describe.skipIf(process.platform === 'win32')('Pi session lookup', () => {
     utimesSync(oldFile, new Date(2000), new Date(2000))
 
     expect(latestPiSession(cwd, { sessionsDir })).toEqual({ id: oldId, file: oldFile })
+  })
+})
+
+describe('piAdoptableSession — a node whose id was never captured', () => {
+  /**
+   * The Playground "Pi" node, exactly as found: two real conversations in its
+   * cwd scope (1.1 MB and 677 KB), `piSessionId: null` on the node. The gate
+   * called the session unlocatable and refused to boot; the launcher would
+   * have booted fresh beside it and stranded both. The session was never
+   * missing — only the pointer to it was.
+   */
+  const seed = (dir: string, cwd: string, ids: string[]): void => {
+    const scoped = piSessionDir(cwd, { agentDir: dir })
+    mkdirSync(scoped, { recursive: true })
+    ids.forEach((id, at) => {
+      const file = path.join(scoped, `2026-08-0${at + 1}T00-00-00-000Z_${id}.jsonl`)
+      writeFileSync(file, JSON.stringify({ type: 'session', id, cwd: realpathSync(cwd) }) + '\n')
+    })
+  }
+
+  it('adopts the newest unowned session in the node’s own cwd scope', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'pi-adopt-'))
+    const cwd = mkdtempSync(path.join(tmpdir(), 'pi-cwd-'))
+    seed(dir, cwd, ['019fcfd6-aaf1-78b7-a3e8-19b11e9fe661', '019fd18d-4333-76c1-9797-f2c372f7c5b7'])
+    const match = piAdoptableSession(cwd, { isOwned: () => false, agentDir: dir })
+    expect(match?.id).toBe('019fd18d-4333-76c1-9797-f2c372f7c5b7')
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  it('SKIPS a session another node already claims', () => {
+    // This is the entire safety argument. Handing one conversation to two
+    // terminals is the cross-agent race the exclusive-dir design forbids.
+    const dir = mkdtempSync(path.join(tmpdir(), 'pi-adopt-'))
+    const cwd = mkdtempSync(path.join(tmpdir(), 'pi-cwd-'))
+    const owned = '019fd18d-4333-76c1-9797-f2c372f7c5b7'
+    seed(dir, cwd, ['019fcfd6-aaf1-78b7-a3e8-19b11e9fe661', owned])
+    const match = piAdoptableSession(cwd, { isOwned: (id) => id === owned, agentDir: dir })
+    expect(match?.id).toBe('019fcfd6-aaf1-78b7-a3e8-19b11e9fe661')
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  it('is null when every candidate is owned, and when there are none', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'pi-adopt-'))
+    const cwd = mkdtempSync(path.join(tmpdir(), 'pi-cwd-'))
+    seed(dir, cwd, ['019fcfd6-aaf1-78b7-a3e8-19b11e9fe661'])
+    expect(piAdoptableSession(cwd, { isOwned: () => true, agentDir: dir })).toBeNull()
+    const empty = mkdtempSync(path.join(tmpdir(), 'pi-cwd-'))
+    expect(piAdoptableSession(empty, { isOwned: () => false, agentDir: dir })).toBeNull()
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+    rmSync(empty, { recursive: true, force: true })
   })
 })

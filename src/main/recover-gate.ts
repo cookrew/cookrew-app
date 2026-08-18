@@ -29,6 +29,16 @@ export interface ExactGateDeps {
   opencodeExists?: (sessionId: string) => boolean
   /** Pi node-directory + cwd-scoped session existence check. */
   piExists?: (nodeId: string, cwd: string, sessionId: string) => boolean
+  /**
+   * The session an UNBOUND Pi node would adopt at launch, or null.
+   *
+   * The gate and the launcher must return the same answer here. Without it
+   * the gate saw `piSessionId: null`, called the session unlocatable, and
+   * refused to boot — while the conversation sat unowned in the node's own
+   * cwd scope the whole time. Defaults to "nothing to adopt" so a caller that
+   * does not know about ownership keeps the old, conservative behaviour.
+   */
+  piAdoptable?: (nodeId: string, cwd: string) => string | null
   /** Claude session resolver (defaults to the real, file-backed resolver). */
   claudeResolver?: (options: ResolveSessionOptions) => string | null
 }
@@ -61,7 +71,10 @@ export function canRestoreExact(node: TerminalNodeData, deps: ExactGateDeps): bo
     return typeof node.codexSessionRef === 'string' && fileExists(node.codexSessionRef)
   }
   if (harness.id === 'pi') {
-    const key = harness.resumeKey(node.piSessionId ?? '')
+    // An unbound node is restorable when there IS something for it to adopt —
+    // asked before the id lookup, because there is no id to look up.
+    const adopted = node.piSessionId ? null : deps.piAdoptable?.(node.id, node.cwd) ?? null
+    const key = harness.resumeKey(node.piSessionId ?? adopted ?? '')
     // Exclusive dir OR the legacy pane's own cwd dir (piSessionHome): a
     // session adopted from a reattached pane is just as exactly-restorable,
     // and gating it on the exclusive dir alone made those nodes permanently
