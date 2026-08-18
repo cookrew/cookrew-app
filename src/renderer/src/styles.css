@@ -58,11 +58,21 @@ body,
 
 /* ---- app shell: header / stage / dock ---- */
 
+/* KEYBOARD AUTO-RISE: the shell gives the on-screen keyboard its band back
+   rather than sitting behind it. `--kb-inset` is published on the root by
+   useKeyboardInset (see keyboard-inset.ts) and is 0 / unset everywhere there is
+   no soft keyboard — desktop, and engines that already shrink the layout
+   viewport themselves — so this is the identity there. Because the shell is a
+   flex column, the whole chain follows from one number: the dock lands on top
+   of the keyboard, .cr-stage (flex: 1) absorbs the loss, ReactFlow's pane
+   shrinks with it, and the zoomed terminal overlay — sized from that pane —
+   refits xterm and resizes the PTY, so the agent's prompt line reflows to just
+   above the keyboard instead of hiding underneath it. */
 .cr-app {
   display: flex;
   flex-direction: column;
   width: 100%;
-  height: 100%;
+  height: calc(100% - var(--kb-inset, 0px));
 }
 
 .cr-stage {
