@@ -5,6 +5,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
 import { MOBILE_PORT, MOBILE_HTTPS_PORT } from './mobile-ports'
+import { nodeInScope, resolveScopedRoute } from './mobile-slug-route'
 import { agentStatus } from './herdr-agent-status'
 import { endpointCertHosts, mobileEndpoints, type MobileEndpoint } from './mobile-endpoints'
 import { loadOrCreatePairingToken, rotatePairingToken } from './pairing-token'
@@ -12,7 +13,7 @@ import { readTailnet, type CertHosts, type TailnetIdentity } from './tailscale'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { powerSaveBlocker } from 'electron'
 import type { WorkspaceStore } from './store'
-import type { RecoverResult, RestoreResult } from '../shared/model'
+import type { RecoverResult, RestoreResult, WorkspaceState } from '../shared/model'
 import type { PtyManager } from './pty'
 import type { VoiceEngine } from './voice'
 import type { TurnTracker } from './turn-tracker'
@@ -559,6 +560,31 @@ async function handle(
   deps: MobileServerDeps
 ): Promise<void> {
   const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
+
+  // Step 3: /<slug>/... addresses ONE workspace session. The path is rewritten
+  // to what the existing handlers expect, and `scope` carries which session
+  // they are answering for. Unslugged paths keep their meaning exactly — bound
+  // to the focused session — because every paired phone has a bookmark to /.
+  //
+  // An unknown slug is 404, never a fall back to focus: silently serving a
+  // different workspace than the URL names is the confusion slugs exist to end.
+  const route = resolveScopedRoute(url.pathname, (slug) => deps.store.bySlug(slug)?.id)
+  if (route.kind === 'unknown-slug') {
+    respondJson(response, 404, { error: `No workspace at /${route.slug}` })
+    return
+  }
+  const scope = route.kind === 'scoped' ? route.workspaceId : null
+  url.pathname = route.pathname
+  /** The workspace this request is answering for. */
+  const scopedId = scope ?? deps.store.focusedId
+  const scopedState = (): WorkspaceState => deps.store.workspaceState(scopedId)
+  /**
+   * A node addressed by id must LIVE in the scoped session. Without this the
+   * slug would be decoration: /playground/api/terminal/<id-from-another-ws>
+   * would happily drive a terminal the URL does not name.
+   */
+  const inScope = (nodeId: string): boolean =>
+    nodeInScope(scope, deps.store.ownerOf(nodeId))
   /**
    * The renderer bundle is the phone client. When it is missing, say so
    * plainly rather than serving something else that looks like the app — a
@@ -620,7 +646,7 @@ async function handle(
     )
     // Git-enriched like /api/workspace (same coalescing cache), so the lite
     // client's git chips light up too — terminals carry node.git.
-    const enriched = await enrichStateWithGit(deps.store.focusedState, deps.ops.gitInfo)
+    const enriched = await enrichStateWithGit(scopedState(), deps.ops.gitInfo)
     respondJson(response, 200, {
       workspace: enriched.name,
       // The full canvas — the mobile client mirrors the desktop layout, so
@@ -637,6 +663,12 @@ async function handle(
 
   const outputMatch = url.pathname.match(/^\/api\/terminal\/([^/]+)\/output$/)
   if (request.method === 'GET' && outputMatch) {
+    if (!inScope(outputMatch[1])) {
+      // The slug names a workspace; this node lives in another one. 404, not
+      // 403 — a scoped URL must not confirm the existence of nodes outside it.
+      respondJson(response, 404, { error: 'Not in this workspace' })
+      return
+    }
     const session = deps.ptys.get(outputMatch[1])
     if (!session) {
       respondJson(response, 404, { error: 'Terminal not running' })
@@ -660,6 +692,12 @@ async function handle(
 
   const thumbMatch = url.pathname.match(/^\/api\/browser\/([^/]+)\/thumb$/)
   if (request.method === 'GET' && thumbMatch) {
+    if (!inScope(thumbMatch[1])) {
+      // The slug names a workspace; this node lives in another one. 404, not
+      // 403 — a scoped URL must not confirm the existence of nodes outside it.
+      respondJson(response, 404, { error: 'Not in this workspace' })
+      return
+    }
     // Heartbeat first, and AWAITED — this is what produces the frame when the
     // headless runtime owns the page, and what restarts the desktop's legacy
     // capture when it does not. Either way, asking is what makes a picture
@@ -682,6 +720,12 @@ async function handle(
 
   const inputMatch = url.pathname.match(/^\/api\/terminal\/([^/]+)\/(input|ask)$/)
   if (request.method === 'POST' && inputMatch) {
+    if (!inScope(inputMatch[1])) {
+      // The slug names a workspace; this node lives in another one. 404, not
+      // 403 — a scoped URL must not confirm the existence of nodes outside it.
+      respondJson(response, 404, { error: 'Not in this workspace' })
+      return
+    }
     const session = deps.ptys.get(inputMatch[1])
     if (!session) {
       respondJson(response, 404, { error: 'Terminal not running' })

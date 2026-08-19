@@ -268,3 +268,72 @@ describe('the registry stops being the authority on focus', () => {
     expect(reopened.focusedState.nodes).toEqual([])
   })
 })
+
+describe('slugs — every workspace is addressable (step 3)', () => {
+  it('mints a frozen slug at creation and resolves it back', () => {
+    const store = makeStore(false)
+    const beta = store.createWorkspace('My Playground', '/work/beta')
+
+    expect(store.slugOf(beta.id)).toBe('my-playground')
+    expect(store.bySlug('my-playground')?.id).toBe(beta.id)
+  })
+
+  it('a rename does NOT move the address', () => {
+    // The freeze rule: a phone bookmarked this URL and an exported agent is
+    // called at it. The label changes; the address does not.
+    const store = makeStore(false)
+    const beta = store.createWorkspace('My Playground', '/work/beta')
+    store.renameWorkspace(beta.id, 'Something Else Entirely')
+
+    expect(store.slugOf(beta.id)).toBe('my-playground')
+    expect(store.bySlug('my-playground')?.name).toBe('Something Else Entirely')
+  })
+
+  it('collides with a -2 suffix rather than stealing an address', () => {
+    const store = makeStore(false)
+    const first = store.createWorkspace('Playground', '/work/a')
+    const second = store.createWorkspace('Playground', '/work/b')
+
+    expect(store.slugOf(first.id)).toBe('playground')
+    expect(store.slugOf(second.id)).toBe('playground-2')
+    expect(store.bySlug('playground')?.id).toBe(first.id)
+  })
+
+  it('backfills a pre-step-3 registry and PERSISTS it', () => {
+    // A slug that lived only in memory would be re-minted every boot, which is
+    // the moving address the freeze exists to prevent.
+    const base = mkdtempSync(path.join(tmpdir(), 'cookrew-residency-'))
+    const first = new WorkspaceStore(base, { multiInstance: false })
+    const beta = first.createWorkspace('Beta', '/work/beta')
+    first.flush()
+
+    // Strip every slug, as a registry written before step 3 would look.
+    const registryFile = path.join(base, 'registry.json')
+    const raw = JSON.parse(readFileSync(registryFile, 'utf8'))
+    const { writeFileSync } = require('node:fs') as typeof import('node:fs')
+    writeFileSync(
+      registryFile,
+      JSON.stringify({
+        ...raw,
+        workspaces: raw.workspaces.map((w: Record<string, unknown>) => {
+          const { slug, ...rest } = w
+          return rest
+        })
+      }),
+      'utf8'
+    )
+
+    const reopened = new WorkspaceStore(base, { multiInstance: false })
+    const backfilled = reopened.slugOf(beta.id)
+    expect(backfilled).toBe('beta')
+
+    // Same answer after another boot — proving it went to disk.
+    const again = new WorkspaceStore(base, { multiInstance: false })
+    expect(again.slugOf(beta.id)).toBe(backfilled)
+  })
+
+  it('an unknown slug resolves to nothing, never to the focused workspace', () => {
+    const store = makeStore(false)
+    expect(store.bySlug('no-such-workspace')).toBeUndefined()
+  })
+})

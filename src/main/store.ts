@@ -18,6 +18,7 @@ import {
   uniqueName
 } from '../shared/model'
 import { addDir, removeDir, setPrimary } from '../shared/workspace-dirs'
+import { slugFor } from './workspace-slug'
 import type { CookrewEvent, EventActor } from './event-log'
 import { upgradeNode } from './node-upgrades'
 import type { RecoverableSnapshot } from './recoverable'
@@ -116,7 +117,14 @@ export class WorkspaceStore extends EventEmitter {
   constructor(private baseDir = DATA_DIR, options: WorkspaceStoreOptions = {}) {
     super()
     this.multiInstance = options.multiInstance ?? MULTI_INSTANCE_DEFAULT
-    this.registry = loadRegistry(this.baseDir)
+    const loaded = loadRegistry(this.baseDir)
+    this.registry = withSlugs(loaded)
+    // Persist a backfill immediately: a slug is FROZEN, and a slug that only
+    // exists in memory would be re-minted on the next boot — which is exactly
+    // the moving address the freeze rule exists to prevent. Cheap and once.
+    if (this.registry.workspaces.some((w, i) => w.slug !== loaded.workspaces[i]?.slug)) {
+      saveRegistry(this.baseDir, this.registry)
+    }
     // The persisted hint may name a workspace that no longer exists — another
     // window's registry write, or a hand edit. Focus must still land somewhere.
     const hint = this.registry.activeId
@@ -146,6 +154,10 @@ export class WorkspaceStore extends EventEmitter {
   /** Workspace ids currently held in memory. */
   resident(): string[] {
     return [...this.hydrated.keys()]
+  }
+
+  private takenSlugs(): string[] {
+    return this.registry.workspaces.map((w) => w.slug).filter((s): s is string => !!s)
   }
 
   private isResident(id: string): boolean {
@@ -193,6 +205,21 @@ export class WorkspaceStore extends EventEmitter {
     return this.focusedMeta() ?? this.registry.workspaces[0]
   }
 
+  /**
+   * The workspace a URL slug addresses (step 3 route scope). Undefined for an
+   * unknown slug, which the router answers 404 rather than falling back to
+   * focus — silently serving a different workspace than the URL names is the
+   * exact confusion slugs exist to end.
+   */
+  bySlug(slug: string): WorkspaceMeta | undefined {
+    return this.registry.workspaces.find((w) => w.slug === slug)
+  }
+
+  /** A workspace's URL slug. */
+  slugOf(workspaceId: string): string | undefined {
+    return this.registry.workspaces.find((w) => w.id === workspaceId)?.slug
+  }
+
   metaByName(name: string): WorkspaceMeta | undefined {
     return this.registry.workspaces.find((w) => w.name.toLowerCase() === name.toLowerCase())
   }
@@ -202,7 +229,14 @@ export class WorkspaceStore extends EventEmitter {
       name.trim() || 'Workspace',
       this.registry.workspaces.map((w) => w.name)
     )
-    const meta: WorkspaceMeta = { id: randomUUID(), name: finalName, dir, dirs: [dir], icon }
+    const meta: WorkspaceMeta = {
+      id: randomUUID(),
+      name: finalName,
+      dir,
+      dirs: [dir],
+      icon,
+      slug: slugFor({ name: finalName }, this.takenSlugs())
+    }
     this.registry = { ...this.registry, workspaces: [...this.registry.workspaces, meta] }
     // Seed an empty canvas file so the switch loads cleanly.
     saveWorkspaceState(this.baseDir, meta.id, { name: meta.name, dir, dirs: [dir], nodes: [], connections: [] })
@@ -231,7 +265,14 @@ export class WorkspaceStore extends EventEmitter {
     )
     const finalDirs = normalizeDirs({ dir, dirs })
     const primary = finalDirs[0] ?? dir
-    const meta: WorkspaceMeta = { id: randomUUID(), name: finalName, dir: primary, dirs: finalDirs, icon }
+    const meta: WorkspaceMeta = {
+      id: randomUUID(),
+      name: finalName,
+      dir: primary,
+      dirs: finalDirs,
+      icon,
+      slug: slugFor({ name: finalName }, this.takenSlugs())
+    }
     this.registry = { ...this.registry, workspaces: [...this.registry.workspaces, meta] }
     saveWorkspaceState(this.baseDir, meta.id, { name: finalName, dir: primary, dirs: finalDirs, nodes, connections })
     try {
@@ -1096,6 +1137,25 @@ export class WorkspaceStore extends EventEmitter {
 
 function workspaceFile(base: string, id: string): string {
   return path.join(workspacesDir(base), id, 'workspace.json')
+}
+
+/**
+ * Give every workspace a slug, minting for any that predate step 3.
+ *
+ * Backfill happens in REGISTRY ORDER so it is deterministic: the same set of
+ * workspaces always produces the same slugs, and an older workspace keeps the
+ * unsuffixed one rather than losing it to whichever loaded first. Once minted a
+ * slug is frozen — slugFor returns an existing one untouched.
+ */
+function withSlugs(registry: Registry): Registry {
+  const taken: string[] = registry.workspaces.map((w) => w.slug).filter((s): s is string => !!s)
+  const workspaces = registry.workspaces.map((meta) => {
+    if (meta.slug) return meta
+    const slug = slugFor(meta, taken)
+    taken.push(slug)
+    return { ...meta, slug }
+  })
+  return { ...registry, workspaces }
 }
 
 function loadRegistry(base: string): Registry {
