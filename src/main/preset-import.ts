@@ -1,7 +1,8 @@
-import type { CanvasNode, TerminalNodeData } from '../shared/model'
+import { randomUUID } from 'node:crypto'
+import type { CanvasNode, CanvasPosition, Connection, TerminalNodeData } from '../shared/model'
 import { PLACEHOLDER_PREFIX } from './preset-scrub'
 import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
-import type { TeamForkSource, TeamSnapshot } from './teams'
+import type { TeamSnapshot } from './teams'
 
 /**
  * PRESET INSTALL (marketplace §8, §10) — the planning half. Decides what a
@@ -16,28 +17,36 @@ import type { TeamForkSource, TeamSnapshot } from './teams'
  * never break something already on a canvas (A2). A marketplace-shaped node
  * type would have made every placed preset depend on the marketplace forever.
  *
- * A team installs through the EXISTING copyTeam engine — `fromSnapshot: true`
- * with an empty node selection, which is that engine's "the whole saved team".
- * No lossy conversion layer, ever: what an author exported is what a buyer
- * pastes, through the same path a locally saved team takes.
+ * A team installs as its own nodes and cables, added through the ordinary
+ * node-add path. No lossy conversion layer, ever: what an author exported is
+ * what a buyer places.
  */
 
-/** A single-agent preset: one plain terminal, ready to place. */
-export interface SinglePresetPlan {
-  kind: 'single'
-  node: TerminalNodeData
+/**
+ * What to place. Concrete nodes for BOTH kinds, with fresh ids, connections
+ * remapped onto them, and layout anchored at the click.
+ *
+ * It used to hand a team to `copyTeam`. That was wrong twice over: copyTeam is
+ * workspace-to-workspace (it wants nodeIds + intoWorkspaceId and resolves its
+ * own source from a store, ignoring a caller's snapshot), so the call threw on
+ * its first guard EVERY time — and an `as never` on the argument is what let
+ * that compile. forkTeam is no better a fit: it makes a NEW WORKSPACE, and a
+ * preset click has to land on the canvas under the pointer.
+ *
+ * So both kinds go through the ordinary node-add path instead, which is also
+ * the only way `command` and `cwd` survive: forwarding {name, preset, position,
+ * orch} to createTerminal dropped exactly the fields the scrubber worked to
+ * carry, and silently fell back to a built-in preset when the name was unknown.
+ */
+export interface PresetImportPlan {
+  /** Chip semantics: one agent, or a team. */
+  kind: 'single' | 'team'
+  /** Ready to add, in order. Terminals carry their command and mapped cwd. */
+  nodes: CanvasNode[]
+  /** Cables among the placed nodes, on the new ids. */
+  connections: Connection[]
   pin: VersionPinRecord
 }
-
-/** A team preset: the source + spec copyTeam expects. */
-export interface TeamPresetPlan {
-  kind: 'team'
-  source: TeamForkSource
-  spec: { nodeIds: string[]; choices: []; dirs: string[] }
-  pin: VersionPinRecord
-}
-
-export type PresetImportPlan = SinglePresetPlan | TeamPresetPlan
 
 export interface ImportOptions {
   /** The buyer's workspace dirs, primary first. */
@@ -47,6 +56,10 @@ export interface ImportOptions {
   pins?: readonly VersionPinRecord[]
   /** Checkpoint the install pins at; defaults to 0 (before the first turn). */
   atIndex?: number
+  /** Canvas point the placement anchors at — the click (R2). */
+  position?: CanvasPosition
+  /** Injectable id source so tests can assert remapping deterministically. */
+  newId?: () => string
   /** The manifest this install came from, when it came from one. */
   manifestId?: string
 }
@@ -84,9 +97,28 @@ export function applyWorkdirs(snapshot: TeamSnapshot, dirs: string[]): TeamSnaps
   }
 }
 
-/** A preset is "single" when exactly one terminal is what it ships. */
+/** A preset is "single" when exactly one node is what it ships. */
 function terminalsOf(snapshot: TeamSnapshot): TerminalNodeData[] {
   return snapshot.nodes.filter((n): n is TerminalNodeData => n.kind === 'terminal')
+}
+
+/** Strip everything that bound a node to the AUTHOR's machine or session. */
+function unbind(node: CanvasNode, id: string): CanvasNode {
+  if (node.kind !== 'terminal') return { ...node, id }
+  return {
+    ...node,
+    id,
+    // Lands IDLE and unbound. A pasted marketplace preset never auto-runs (A4),
+    // and it carries no session of the author's to resume.
+    claudeSessionId: null,
+    piSessionId: null,
+    codexSessionRef: null,
+    opencodeSessionId: null,
+    sessionLineage: undefined,
+    restoreStack: undefined,
+    pendingInject: null,
+    forkOf: null
+  }
 }
 
 /**
@@ -106,45 +138,42 @@ export function planPresetImport(snapshot: TeamSnapshot, options: ImportOptions)
     ...(options.manifestId !== undefined ? { manifestId: options.manifestId } : {})
   })
 
-  const terminals = terminalsOf(mapped)
-  const soloTerminal = terminals.length === 1 && mapped.nodes.length === 1
+  // Fresh ids: the same preset placed twice must not collide with itself.
+  const newId = options.newId ?? (() => randomUUID())
+  const idMap = new Map<string, string>()
+  for (const node of mapped.nodes) idMap.set(node.id, newId())
 
-  if (soloTerminal) {
-    const source = terminals[0]
-    return {
-      kind: 'single',
-      pin,
-      node: {
-        ...source,
-        // Lands IDLE and unbound. A pasted marketplace preset never auto-runs
-        // (A4), and it carries no session of the author's to resume.
-        claudeSessionId: null,
-        piSessionId: null,
-        codexSessionRef: null,
-        opencodeSessionId: null,
-        sessionLineage: undefined,
-        restoreStack: undefined,
-        pendingInject: null,
-        forkOf: null
+  // Anchor the layout at the click. The author's coordinates are relative
+  // geometry, not a place on the buyer's canvas, so the top-left of the
+  // selection is what lands under the pointer and the rest keeps its shape.
+  const originX = Math.min(...mapped.nodes.map((n) => n.position.x))
+  const originY = Math.min(...mapped.nodes.map((n) => n.position.y))
+  const at = options.position ?? { x: originX, y: originY }
+
+  const nodes = mapped.nodes.map((node) =>
+    ({
+      ...unbind(node, idMap.get(node.id) as string),
+      position: {
+        x: at.x + (node.position.x - originX),
+        y: at.y + (node.position.y - originY)
       }
-    }
-  }
+    }) as CanvasNode
+  )
+
+  // Cables travel, remapped onto the new ids. A connection naming a node the
+  // preset does not ship is dropped rather than left dangling.
+  const connections: Connection[] = mapped.connections
+    .filter((c) => idMap.has(c.a) && idMap.has(c.b))
+    .map((c) => ({
+      id: newId(),
+      a: idMap.get(c.a) as string,
+      b: idMap.get(c.b) as string
+    }))
 
   return {
-    kind: 'team',
+    kind: mapped.nodes.length === 1 && terminalsOf(mapped).length === 1 ? 'single' : 'team',
     pin,
-    source: {
-      name: mapped.name,
-      dir: options.dirs[0],
-      dirs: options.dirs,
-      nodes: mapped.nodes,
-      connections: mapped.connections,
-      turnsOf: (terminalId: string) => mapped.turns[terminalId] ?? [],
-      // The engine's "this came from a saved file", which with an empty node
-      // selection below means the whole team.
-      fromSnapshot: true,
-      sessionLinesOf: () => null
-    },
-    spec: { nodeIds: [], choices: [], dirs: options.dirs }
+    nodes,
+    connections
   }
 }

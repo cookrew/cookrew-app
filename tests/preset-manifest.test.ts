@@ -21,7 +21,7 @@ const manifest = (over: Partial<PresetManifest> = {}): PresetManifest => ({
   scrub: {
     sessions: false,
     paths: 'placeholders',
-    shells: 1,
+    commands: 1,
     notes: 2,
     urls: 0,
     secretScan: 'clean',
@@ -64,7 +64,7 @@ describe('signedPayload — the signature covers everything except itself', () =
         scrub: {
           sessions: true,
           paths: 'placeholders',
-          shells: 1,
+          commands: 1,
           notes: 2,
           urls: 0,
           secretScan: 'clean',

@@ -35,7 +35,24 @@ export function keyIdOf(key: KeyObject): string {
   // they must derive the same id.
   const pub = key.type === 'private' ? createPublicKey(key) : key
   const raw = pub.export({ format: 'jwk' }).x
-  return `ed25519:${raw ?? ''}`
+  // M6: throw rather than mint `ed25519:`. An empty key id would compare equal
+  // to another empty one, so a bad key would authenticate against a bad key.
+  if (typeof raw !== 'string' || raw.length === 0) {
+    throw new Error('not an ed25519 key: no public component to derive a key id from')
+  }
+  return `ed25519:${raw}`
+}
+
+/**
+ * Rebuild a public key from a key id. Used by the store to check a manifest
+ * against the key it was pinned to at install, so the identity that verifies
+ * is the one recorded then rather than one the file supplies now.
+ */
+export function publicKeyFromId(keyId: string): KeyObject {
+  if (!keyId.startsWith('ed25519:')) throw new Error('unsupported key id')
+  const x = keyId.slice('ed25519:'.length)
+  if (x.length === 0) throw new Error('empty key id')
+  return createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x }, format: 'jwk' })
 }
 
 export interface BuildManifestInput {

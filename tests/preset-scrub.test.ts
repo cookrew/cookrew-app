@@ -172,7 +172,7 @@ describe('scrubForPublish — the report is what the review sheet renders', () =
       })
     )
     if (!out.ok) throw new Error('blocked')
-    expect(out.report.shells).toBe(2)
+    expect(out.report.commands).toBe(2)
     expect(out.report.notes).toBe(2)
     expect(out.report.urls).toBe(1)
     // It is the product — the buyer must be able to READ it before first run.

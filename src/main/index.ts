@@ -100,7 +100,7 @@ import { TraceReader, type SessionWatchSpec } from './trace'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
 import { TeamStore, copyTeam, forkTeam, workspaceFromTemplate, type TeamSnapshot } from './teams'
-import { PresetStore } from './preset-store'
+import { PresetStore, isPresetId } from './preset-store'
 import { planPresetImport } from './preset-import'
 import { TeamClipboard } from './team-clip'
 import { UNCOPYABLE_PHASES } from '../shared/turn'
@@ -2341,40 +2341,45 @@ function registerIpc(handlers: RestoreHandlers): void {
   // reusing the channel threw on registration (Electron refuses a second
   // handler) and took every handler after it down with it.
   ipcMain.handle('preset:installed:list', () => presetStore.list())
-  ipcMain.handle('preset:installed:uninstall', (_e, id: string) => presetStore.uninstall(id))
+  ipcMain.handle('preset:installed:uninstall', (_e, id: string) => {
+    // C1: the id crosses from the renderer and ends at a recursive delete.
+    // The store validates it too; this refuses at the boundary so a hostile
+    // string never reaches a filesystem call in the first place.
+    if (!isPresetId(id)) throw new Error('not a preset id')
+    presetStore.uninstall(id)
+  })
   /**
    * R2: the canvas click is the aimed confirm, so this both aims and commits.
-   * A single agent becomes a NORMAL terminal — no new node kind, so it survives
-   * an uninstall (A2) — and a team goes through the same copyTeam paste a
-   * locally saved team takes.
+   *
+   * Both kinds place through the ordinary node-add path. A team used to be
+   * handed to copyTeam, which is workspace-to-workspace and validates
+   * nodeIds + intoWorkspaceId — so it threw on its first guard EVERY time, and
+   * an `as never` on the argument is what let that compile. Adding the planned
+   * nodes directly is also the only way `command` and `cwd` survive; forwarding
+   * {name, preset, position, orch} to createTerminal dropped both and fell back
+   * to a built-in preset whenever the name was not one of them.
    */
   ipcMain.handle(
     'preset:installed:place',
     async (_e, id: string, position: CanvasPosition, orch: boolean) => {
+      if (!isPresetId(id)) throw new Error('not a preset id')
       const stored = presetStore.read(id)
-      // Null covers absent AND a blob that no longer matches its manifest: a
-      // tampered cache must not place.
-      if (stored === null) return
+      // Null covers absent, a blob that no longer matches its manifest, and a
+      // signature that does not verify against the key pinned at install.
+      if (stored === null) throw new Error('preset is missing or failed verification')
       const snapshot = JSON.parse(stored.teamBytes.toString('utf8')) as TeamSnapshot
       const plan = planPresetImport(snapshot, {
         dirs: store.state.dirs?.length ? store.state.dirs : [store.state.dir],
         cutAt: Date.now(),
+        position,
         manifestId: stored.manifest.id
       })
-      if (plan.kind === 'single') {
-        await createTerminal({
-          name: plan.node.name,
-          preset: plan.node.preset,
-          position,
-          orch
-        })
-        return
+      for (const node of plan.nodes) {
+        // orch is the placer's choice for the agents they are placing; notes
+        // and browsers have no such flag.
+        addNode(node.kind === 'terminal' ? { ...node, orch } : node)
       }
-      copyTeam(teamForkDeps(), {
-        source: plan.source,
-        spec: { ...plan.spec, dirs: plan.spec.dirs },
-        position
-      } as never)
+      for (const connection of plan.connections) store.connect(connection.a, connection.b)
     }
   )
 

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:f
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { writeFileAtomic } from './turn-annotations'
-import { blobId } from './preset-publish'
+import { blobId, publicKeyFromId, verifyManifest } from './preset-publish'
 import type { PresetManifest } from '../shared/preset-manifest'
 import type { InstalledPreset } from '../shared/preset-chip'
 import type { TeamSnapshot } from './teams'
@@ -24,9 +24,20 @@ import type { TeamSnapshot } from './teams'
 
 const PRESETS_DIR = 'presets'
 
-/** `sha256:abc` → `sha256-abc`, since ':' is not a portable path character. */
-function dirNameFor(id: string): string {
-  return id.replace(':', '-')
+/**
+ * A preset id is a CONTENT ADDRESS, and the only one this store will touch.
+ * It arrives from the renderer, and the path it used to build ended in
+ * rmSync(recursive, force) — so an id like '../../../../tmp/victim' was a
+ * delete-anything primitive. Validated here, at the IPC boundary, and again
+ * by a containment check below: three places, because one of them being
+ * bypassed must not be enough.
+ */
+const PRESET_ID = /^sha256:[0-9a-f]{64}$/
+/** The on-disk form. Parsed explicitly rather than by splitting on a hyphen. */
+const PRESET_DIR = /^sha256-([0-9a-f]{64})$/
+
+export function isPresetId(id: string): boolean {
+  return typeof id === 'string' && PRESET_ID.test(id)
 }
 
 export interface StoredPreset {
@@ -42,8 +53,20 @@ export class PresetStore {
     this.root = path.join(base, PRESETS_DIR)
   }
 
-  private dirFor(id: string): string {
-    return path.join(this.root, dirNameFor(id))
+  /**
+   * The directory for an id, or null if the id is not a content address or the
+   * resulting path would leave the store. Every caller treats null as "not
+   * installed", so a hostile id is indistinguishable from an absent one — it
+   * gets no error to probe with and no path to escape through.
+   */
+  private dirFor(id: string): string | null {
+    if (!isPresetId(id)) return null
+    const dir = path.resolve(path.join(this.root, `sha256-${id.slice('sha256:'.length)}`))
+    const root = path.resolve(this.root)
+    // Belt to the regex's braces: even if the pattern were loosened later, a
+    // path outside the store is refused.
+    if (dir !== root && !dir.startsWith(root + path.sep)) return null
+    return dir
   }
 
   /**
@@ -53,9 +76,17 @@ export class PresetStore {
    */
   install(preset: StoredPreset, options: { entitled?: boolean } = {}): void {
     const dir = this.dirFor(preset.manifest.id)
+    if (dir === null) throw new Error(`refusing to install a preset with a non-address id`)
     mkdirSync(dir, { recursive: true })
     writeFileAtomic(path.join(dir, 'team.json'), preset.teamBytes)
     writeFileAtomic(path.join(dir, 'manifest.json'), JSON.stringify(preset.manifest, null, 2))
+    // H2: PIN THE AUTHOR KEY. Hash self-consistency proves only that a manifest
+    // agrees with the blob beside it — an attacker with write access to
+    // ~/.cookrew can tamper with both and re-sign under their own key, and a
+    // store that trusts disk accepts it. Recording the key the preset actually
+    // verified under at install time turns every later read into a real
+    // signature check against a key the attacker does not hold.
+    writeFileAtomic(path.join(dir, 'author.pub'), preset.manifest.author.keyId)
     // install.json holds LOCAL state about a preset rather than anything the
     // author signed — today just entitlement. It is a CACHE of the gate's last
     // word, never the authority: when the gate lands, a 403 overrides whatever
@@ -87,11 +118,18 @@ export class PresetStore {
    */
   read(id: string): StoredPreset | null {
     const dir = this.dirFor(id)
+    if (dir === null) return null
     try {
       const manifest = JSON.parse(readFileSync(path.join(dir, 'manifest.json'), 'utf8')) as PresetManifest
       const teamBytes = readFileSync(path.join(dir, 'team.json'))
       if (typeof manifest?.id !== 'string') return null
       if (blobId(teamBytes) !== manifest.id) return null
+      // H2: the signature, against the key pinned at install. Without this the
+      // check above proves only self-consistency, which anyone who can write
+      // the directory can manufacture.
+      const pinned = readFileSync(path.join(dir, 'author.pub'), 'utf8').trim()
+      if (pinned.length === 0 || manifest.author.keyId !== pinned) return null
+      if (!verifyManifest(manifest, publicKeyFromId(pinned))) return null
       return { manifest, teamBytes }
     } catch {
       return null
@@ -112,7 +150,11 @@ export class PresetStore {
     }
     const out: InstalledPreset[] = []
     for (const entry of entries) {
-      const id = entry.replace('-', ':')
+      // M7: parse the directory name explicitly. Splitting on the first hyphen
+      // turned any stray directory into a candidate id.
+      const match = PRESET_DIR.exec(entry)
+      if (match === null) continue
+      const id = `sha256:${match[1]}`
       const stored = this.read(id)
       if (stored === null) continue
       let snapshot: TeamSnapshot
@@ -131,7 +173,7 @@ export class PresetStore {
         members,
         // Local cache of the gate's last word (see install.json). The gate
         // supersedes it the moment it exists.
-        entitled: this.entitledOf(this.dirFor(stored.manifest.id))
+        entitled: this.entitledOf(path.join(this.root, entry))
         // headVersion is deliberately absent — it is a live HEAD answer (R3),
         // not something to persist and serve stale.
       })
@@ -146,8 +188,11 @@ export class PresetStore {
    * outcome the caller wanted.
    */
   uninstall(id: string): void {
+    // C1: a non-address id resolves to null and deletes NOTHING. This call
+    // ends in a recursive force-delete, so the validation above is the only
+    // thing standing between a renderer string and an arbitrary rmSync.
     const dir = this.dirFor(id)
-    if (!existsSync(dir)) return
+    if (dir === null || !existsSync(dir)) return
     rmSync(dir, { recursive: true, force: true })
   }
 }

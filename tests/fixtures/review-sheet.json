@@ -10,14 +10,14 @@
     "scrub": {
       "sessions": false,
       "paths": "placeholders",
-      "shells": 0,
+      "commands": 0,
       "notes": 1,
       "urls": 0,
       "secretScan": "clean",
       "findings": []
     },
     "_free": "FREE is spelled by the ABSENCE of the pricing key — never null. A renderer testing `pricing === undefined` and one testing `'pricing' in payload` must agree.",
-    "shellCommands": []
+    "commands": []
   },
 
   "shellsAndSessions": {
@@ -29,13 +29,13 @@
     "scrub": {
       "sessions": true,
       "paths": "placeholders",
-      "shells": 2,
+      "commands": 2,
       "notes": 3,
       "urls": 1,
       "secretScan": "clean",
       "findings": []
     },
-    "shellCommands": ["rm -rf ./build", "make deploy"],
+    "commands": ["rm -rf ./build", "make deploy"],
     "pricing": { "model": "one-time", "amount": "5.00", "asset": "USDC" }
   },
 

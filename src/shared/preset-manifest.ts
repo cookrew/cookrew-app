@@ -15,7 +15,12 @@ export interface SecretFinding {
 export interface ScrubReport {
   sessions: boolean
   paths: 'placeholders'
-  shells: number
+  /**
+   * Terminals carrying a command — ALL of them, not just `preset: 'Shell'`.
+   * The paste engine writes `command` into a PTY whatever the preset is, so a
+   * Shell-only count let a Claude Code node smuggle one past the sheet.
+   */
+  commands: number
   notes: number
   urls: number
   secretScan: 'clean' | 'blocked'

@@ -112,7 +112,7 @@ describe('verifyPreset — the client checks signature AND hashes for itself', (
     // lying in the sheet — the one attack a valid signature cannot rule out.
     const p = publish([terminal({ preset: 'Shell', command: 'rm -rf /' }), note('a')])
     const lying = signManifest(
-      { ...p.manifest, scrub: { ...p.manifest.scrub, shells: 0 } },
+      { ...p.manifest, scrub: { ...p.manifest.scrub, commands: 0 } },
       generateKeyPairSync('ed25519').privateKey
     )
     // Re-sign under a key we then verify with, so only the mismatch can fail it.
@@ -139,16 +139,18 @@ describe('reviewSheetPayload — R14: spec tokens verbatim, never prose', () => 
     expect(typeof sheet.scrub.sessions).toBe('boolean')
   })
 
-  it('shows every shell command VERBATIM — it is what the buyer is agreeing to run', () => {
+  it('H1: shows EVERY terminal command verbatim, not just the Shell ones', () => {
+    // The second node is a Claude Code preset carrying `npm test`. Filtering by
+    // preset used to hide it, which is the hole a hostile preset walked through.
     const sheet = reviewSheetPayload(
       verified([terminal({ preset: 'Shell', command: 'rm -rf ./build' }), terminal({ id: 't2' })])
     )
-    expect(sheet.shellCommands).toEqual(['rm -rf ./build'])
+    expect(sheet.commands).toEqual(['rm -rf ./build', 'npm test'])
   })
 
   it('reports counts from the SIGNED report, which verify has already reconciled', () => {
     const sheet = reviewSheetPayload(verified([terminal({ preset: 'Shell', command: 'x' }), note('a'), note('b')]))
-    expect(sheet.scrub.shells).toBe(1)
+    expect(sheet.scrub.commands).toBe(1)
     expect(sheet.scrub.notes).toBe(2)
   })
 
@@ -166,7 +168,7 @@ describe('reviewSheetPayload — R14: spec tokens verbatim, never prose', () => 
     const sheet = reviewSheetPayload(verified())
     // Every value is a token, a count, a boolean or verbatim user content.
     expect(Object.keys(sheet).sort()).toEqual(
-      ['author', 'id', 'schema', 'scrub', 'shellCommands', 'version'].sort()
+      ['author', 'id', 'schema', 'scrub', 'commands', 'version'].sort()
     )
   })
 
@@ -187,9 +189,11 @@ describe('planInstall — verify, then place IDLE', () => {
     if (!v.ok) throw new Error('verify failed')
     const plan = planInstall(v, { dirs: ['/home/buyer/app'], cutAt: 9 })
     expect(plan.kind).toBe('single')
-    if (plan.kind !== 'single') return
-    expect(plan.node.claudeSessionId ?? null).toBeNull()
-    expect(plan.node.cwd).toBe('/home/buyer/app')
+    const node = plan.nodes[0] as Extract<CanvasNode, { kind: 'terminal' }>
+    expect(node.claudeSessionId ?? null).toBeNull()
+    expect(node.cwd).toBe('/home/buyer/app')
+    // H4: the command survives placement — it used to be dropped.
+    expect(node.command).toBe('npm test')
   })
 
   it('records the version and the manifest it came from', () => {

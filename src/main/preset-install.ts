@@ -7,7 +7,7 @@ import {
   type ScrubReport
 } from '../shared/preset-manifest'
 import { blobId, verifyManifest } from './preset-publish'
-import { countSurfaces } from './preset-scrub'
+import { commandsOf, countSurfaces } from './preset-scrub'
 import { planPresetImport, type ImportOptions, type PresetImportPlan } from './preset-import'
 import type { TeamSnapshot } from './teams'
 
@@ -88,7 +88,7 @@ export function verifyPreset(input: VerifyInput): VerifyResult {
 
   const counted = countSurfaces(snapshot.nodes)
   if (
-    counted.shells !== manifest.scrub.shells ||
+    counted.commands !== manifest.scrub.commands ||
     counted.notes !== manifest.scrub.notes ||
     counted.urls !== manifest.scrub.urls
   ) {
@@ -112,11 +112,12 @@ export interface ReviewSheetPayload {
   author: PresetAuthor
   scrub: ScrubReport
   /**
-   * Every shell card's command, verbatim and in canvas order. The spec keeps
-   * these because they ARE the product — and shows them because the buyer must
-   * read what will run before anything does.
+   * EVERY terminal's command, verbatim and in canvas order — not just the ones
+   * whose preset is 'Shell'. The paste engine feeds `command` to a PTY
+   * regardless of preset, so filtering by preset here rendered an empty list
+   * over a team whose every node ran something.
    */
-  shellCommands: string[]
+  commands: string[]
   /**
    * ONE representation of "free": the key is ABSENT. Never null, never a
    * present-but-undefined key. A payload that spelled free as null would lock
@@ -127,9 +128,7 @@ export interface ReviewSheetPayload {
 }
 
 export function reviewSheetPayload(verified: VerifiedPreset): ReviewSheetPayload {
-  const shellCommands = verified.snapshot.nodes
-    .filter((n) => n.kind === 'terminal' && n.preset === 'Shell')
-    .map((n) => (n as { command: string }).command)
+  const commands = commandsOf(verified.snapshot.nodes)
   return {
     schema: PRESET_SCHEMA,
     id: verified.manifest.id,
@@ -137,7 +136,7 @@ export function reviewSheetPayload(verified: VerifiedPreset): ReviewSheetPayload
     author: verified.manifest.author,
     // Safe to pass through: verify has already reconciled it against the file.
     scrub: verified.manifest.scrub,
-    shellCommands,
+    commands,
     // Spread-if-present, never `pricing: undefined` — the key must not exist
     // for a free preset, so `'pricing' in payload` and `payload.pricing !==
     // undefined` give the same answer to every consumer.

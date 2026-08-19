@@ -154,6 +154,20 @@ function Canvas(): React.JSX.Element {
       .catch((error) => console.error('listInstalledPresets failed:', error))
   }, [])
   useEffect(refreshPresets, [refreshPresets])
+  /**
+   * M3: STABLE identities. Inline arrows here were new objects every render, so
+   * the dock's effect re-fired on each one and the R3 batch never settled.
+   * M5: no console TODOs — the gate sheet and the HEAD request are the
+   * registry's work, and until they exist these are no-ops that change nothing
+   * rather than log lines pretending to.
+   */
+  const openPresetGate = useCallback((_id: string) => {
+    // 401/402/403 sheets land with the gate. A locked chip already refuses to
+    // place, which is the behaviour that matters before then.
+  }, [])
+  const checkPresetUpdates = useCallback((_ids: string[]) => {
+    // A manifest HEAD by version (R3) needs a registry to ask.
+  }, [])
 
   useEffect(() => {
     void cookrew()
@@ -783,9 +797,18 @@ function Canvas(): React.JSX.Element {
         // even for a team paste. It takes precedence over the harness/role
         // chips because arming one clears the others.
         if (presetId) {
-          await cookrew().placeInstalledPreset(presetId, position, orch)
-          setPresetId(null)
-          setTool('move')
+          // M4: the reset must survive a throw. Placement now REFUSES loudly
+          // (bad id, missing preset, failed signature), and without this a
+          // refusal left the chip armed and the tool stuck — every later click
+          // on the canvas would try to place the same broken preset again.
+          try {
+            await cookrew().placeInstalledPreset(presetId, position, orch)
+          } catch (error) {
+            console.error('Placing preset failed:', error)
+          } finally {
+            setPresetId(null)
+            setTool('move')
+          }
           return
         }
         // window.prompt is unsupported in Electron — creation uses the
@@ -1070,18 +1093,8 @@ function Canvas(): React.JSX.Element {
             setPresetId(id)
             setRole(null)
           }}
-          onPresetGate={(id) => {
-            // The chip IS the gate's UI. M1 ships no gate sheet yet (401/402
-            // land with the registry), so this is loud-absent rather than a
-            // silent no-op that would read as a dead chip.
-            console.error('gate sheet not implemented for preset', id)
-          }}
-          onCheckUpdates={(ids) => {
-            // R3: a manifest HEAD by version, once per dock open. The registry
-            // it would ask does not exist yet; the batch is computed and
-            // reported so the seam is real and observable.
-            console.info('preset update check pending registry:', ids)
-          }}
+          onPresetGate={openPresetGate}
+          onCheckUpdates={checkPresetUpdates}
           orch={orch}
           onOrch={setOrch}
           voiceFor={
