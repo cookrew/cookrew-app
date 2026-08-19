@@ -161,6 +161,10 @@ export function CheckpointTimeline({
   // F3 — how many rows fit is a function of the bar's real height, so measure
   // it rather than assume: the phone overlay and the desktop sidebar are very
   // different heights, and reading railRef during render is a frame stale.
+  // Keyed on rows.length, not []: the component returns null until the first
+  // checkpoints arrive, so on the empty first render there is no element to
+  // measure and a mount-once effect would leave the height at 0 forever —
+  // which quietly collapses the reveal to its two end rows.
   useEffect(() => {
     const el = railRef.current
     if (!el) return
@@ -169,7 +173,7 @@ export function CheckpointTimeline({
     const observer = new ResizeObserver(measure)
     observer.observe(el)
     return () => observer.disconnect()
-  }, [])
+  }, [rows.length])
 
   // F5b — measure the focused title and hand the overflow to CSS. The OUTER
   // span is the clip (overflow:hidden, or scrollWidth-clientWidth reads 0); the
