@@ -1,0 +1,243 @@
+// The store stops hydrating exactly one workspace.
+//
+// Until now WorkspaceStore held a single `state` — the ACTIVE workspace's
+// canvas — and every other workspace existed only as JSON on disk. That is the
+// singleton marketplace-architecture §11 is written against: one focus change
+// swapped the world out from under every seat, and orchestration in the
+// workspace you looked away from was severed.
+//
+// Now the store holds a MAP of hydrated sessions, and focus is just a label
+// saying which one a seat is looking at. Residency is the authority; focus is
+// a hint. What is pinned here is that the two are no longer the same thing —
+// and, under COOKREW_MULTI_INSTANCE=0, that the old behaviour is preserved
+// exactly, because a flag-off regression is the one thing this refactor is not
+// allowed to cost.
+
+import { mkdtempSync, readFileSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { WorkspaceStore } from '../src/main/store'
+import type { NoteNodeData, TerminalNodeData, WorkspaceState } from '../src/shared/model'
+
+function terminal(name: string, cwd = '/work/alpha'): TerminalNodeData {
+  return {
+    kind: 'terminal',
+    id: `id-${name.toLowerCase().replace(/\s+/g, '-')}-${Math.floor(Math.random() * 1e9)}`,
+    name,
+    preset: 'Claude Code',
+    command: 'claude',
+    cwd,
+    orch: false,
+    role: null,
+    position: { x: 0, y: 0 },
+    size: { width: 400, height: 300 }
+  }
+}
+
+function makeStore(multi: boolean): WorkspaceStore {
+  const base = mkdtempSync(path.join(tmpdir(), 'cookrew-residency-'))
+  return new WorkspaceStore(base, { multiInstance: multi })
+}
+
+/** Read a workspace's canvas straight off disk, bypassing the store. */
+function onDisk(store: WorkspaceStore, id: string): WorkspaceState {
+  const file = path.join(store.baseDirForTests, 'workspaces', id, 'workspace.json')
+  return JSON.parse(readFileSync(file, 'utf8')) as WorkspaceState
+}
+
+afterEach(() => vi.useRealTimers())
+
+describe('residency vs focus', () => {
+  it('flag OFF keeps exactly one workspace hydrated — today, unchanged', () => {
+    const store = makeStore(false)
+    const alpha = store.focusedId
+    const beta = store.createWorkspace('Beta', '/work/beta')
+
+    expect(store.resident()).toEqual([alpha])
+    store.switchWorkspace(beta.id)
+    expect(store.resident()).toEqual([beta.id])
+    expect(store.focusedId).toBe(beta.id)
+  })
+
+  it('flag ON keeps the workspace you left hydrated', () => {
+    const store = makeStore(true)
+    const alpha = store.focusedId
+    const beta = store.createWorkspace('Beta', '/work/beta')
+
+    store.switchWorkspace(beta.id)
+    expect(store.resident().sort()).toEqual([alpha, beta.id].sort())
+    expect(store.focusedId).toBe(beta.id)
+  })
+
+  it("still emits 'switch' with the outgoing terminals, both flag states", () => {
+    // index.ts detaches PTYs inside this listener. Commit 1 must not change
+    // what it hears; the listener itself changes in commit 2.
+    for (const multi of [false, true]) {
+      const store = makeStore(multi)
+      const outgoing = store.addNode(terminal('Coder')) as TerminalNodeData
+      const beta = store.createWorkspace('Beta', '/work/beta')
+      const heard: string[][] = []
+      store.on('switch', ({ previousTerminalIds }) => heard.push(previousTerminalIds))
+
+      store.switchWorkspace(beta.id)
+      expect(heard).toEqual([[outgoing.id]])
+    }
+  })
+})
+
+describe('a hydrated background workspace is a real canvas', () => {
+  it('edits it in MEMORY, not through a disk round-trip', () => {
+    const store = makeStore(true)
+    const alpha = store.focusedId
+    const beta = store.createWorkspace('Beta', '/work/beta')
+    store.switchWorkspace(beta.id) // alpha stays resident, unfocused
+
+    const node = store.addNodeToWorkspace(alpha, terminal('Background'))
+    // Resident means the store can see it without loading the file.
+    expect(store.workspaceState(alpha).nodes.map((n) => n.id)).toContain(node.id)
+    expect(store.terminalIdsOf(alpha)).toContain(node.id)
+  })
+
+  it('persists a background edit to ITS OWN partition', () => {
+    const store = makeStore(true)
+    const alpha = store.focusedId
+    const beta = store.createWorkspace('Beta', '/work/beta')
+    store.switchWorkspace(beta.id)
+
+    const node = store.addNodeToWorkspace(alpha, terminal('Background'))
+    store.flush()
+
+    expect(onDisk(store, alpha).nodes.map((n) => n.id)).toContain(node.id)
+    expect(onDisk(store, beta.id).nodes.map((n) => n.id)).not.toContain(node.id)
+  })
+
+  it('attributes the event to the workspace that did the work', () => {
+    const store = makeStore(true)
+    const alpha = store.focusedId
+    const beta = store.createWorkspace('Beta', '/work/beta')
+    store.switchWorkspace(beta.id)
+
+    const seen: { type: string; workspaceId: string }[] = []
+    store.on('op', (e) => seen.push({ type: e.type, workspaceId: e.workspaceId }))
+    store.addNodeToWorkspace(alpha, terminal('Background'))
+
+    expect(seen).toHaveLength(1)
+    expect(seen[0].workspaceId).toBe(alpha) // NOT the focused one
+  })
+
+  it('writes a background note file under its own notes dir', () => {
+    const store = makeStore(true)
+    const alpha = store.focusedId
+    const beta = store.createWorkspace('Beta', '/work/beta')
+    store.switchWorkspace(beta.id)
+
+    const note = store.addNodeToWorkspace(alpha, {
+      kind: 'note',
+      id: 'note-bg',
+      name: 'Background note',
+      content: 'written while unfocused',
+      locked: false,
+      position: { x: 0, y: 0 },
+      size: { width: 300, height: 200 }
+    } as NoteNodeData)
+
+    // The mirror is best-effort async; the id/partition mapping is what matters.
+    expect(store.notesDirOf(alpha)).toBe(
+      path.join(store.baseDirForTests, 'workspaces', alpha, 'notes')
+    )
+    expect(store.notesDirOf(alpha)).not.toBe(store.notesDirOf(beta.id))
+    expect(note.name).toBe('Background note')
+  })
+})
+
+describe('the debounced save resolves its target at SCHEDULE time (R5)', () => {
+  it('a save scheduled before a focus change lands in the right partition', () => {
+    // The old code computed the save target from activeId when the 300ms timer
+    // FIRED, and stayed correct only because switchWorkspace flushed first.
+    // With N sessions that ordering guarantee is gone, so the timer now
+    // carries its own workspace.
+    vi.useFakeTimers()
+    const store = makeStore(true)
+    const alpha = store.focusedId
+    const beta = store.createWorkspace('Beta', '/work/beta')
+
+    const node = store.addNode(terminal('Alpha work')) as TerminalNodeData // schedules a save for alpha
+    store.switchWorkspace(beta.id) // focus moves before the timer fires
+    vi.advanceTimersByTime(1000)
+
+    expect(onDisk(store, alpha).nodes.map((n) => n.id)).toContain(node.id)
+    expect(onDisk(store, beta.id).nodes.map((n) => n.id)).not.toContain(node.id)
+  })
+
+  it('flushes every resident session, not just the focused one', () => {
+    const store = makeStore(true)
+    const alpha = store.focusedId
+    const beta = store.createWorkspace('Beta', '/work/beta')
+    store.switchWorkspace(beta.id)
+
+    const bg = store.addNodeToWorkspace(alpha, terminal('Background'))
+    const fg = store.addNode(terminal('Foreground')) as TerminalNodeData
+    store.flush() // app quit
+
+    expect(onDisk(store, alpha).nodes.map((n) => n.id)).toContain(bg.id)
+    expect(onDisk(store, beta.id).nodes.map((n) => n.id)).toContain(fg.id)
+  })
+})
+
+describe('eviction', () => {
+  it('flushes a session on the way out — an evicted edit is not a lost edit', () => {
+    const store = makeStore(false) // flag off: switching evicts
+    const alpha = store.focusedId
+    const beta = store.createWorkspace('Beta', '/work/beta')
+
+    const node = store.addNode(terminal('Alpha work')) as TerminalNodeData
+    store.switchWorkspace(beta.id) // evicts alpha
+
+    expect(store.resident()).toEqual([beta.id])
+    expect(onDisk(store, alpha).nodes.map((n) => n.id)).toContain(node.id)
+  })
+
+  it('a workspace deleted while resident leaves nothing behind', () => {
+    const store = makeStore(true)
+    const alpha = store.focusedId
+    const beta = store.createWorkspace('Beta', '/work/beta')
+    store.switchWorkspace(beta.id)
+    expect(store.resident()).toContain(alpha)
+
+    store.removeWorkspace(alpha)
+    expect(store.resident()).not.toContain(alpha)
+    expect(existsSync(path.join(store.baseDirForTests, 'workspaces', alpha))).toBe(false)
+  })
+})
+
+describe('the registry stops being the authority on focus', () => {
+  it('persists focus as a boot HINT and survives its absence', () => {
+    const base = mkdtempSync(path.join(tmpdir(), 'cookrew-residency-'))
+    const first = new WorkspaceStore(base, { multiInstance: false })
+    const beta = first.createWorkspace('Beta', '/work/beta')
+    first.switchWorkspace(beta.id)
+    first.flush()
+
+    const reopened = new WorkspaceStore(base, { multiInstance: false })
+    expect(reopened.focusedId).toBe(beta.id)
+  })
+
+  it('falls back to the first workspace when the hint names a stranger', () => {
+    // A registry written by another window, or hand-edited, must not leave the
+    // store focused on a workspace that does not exist.
+    const base = mkdtempSync(path.join(tmpdir(), 'cookrew-residency-'))
+    const first = new WorkspaceStore(base, { multiInstance: false })
+    const alpha = first.focusedId
+    first.flush()
+
+    const registryFile = path.join(base, 'registry.json')
+    const raw = JSON.parse(readFileSync(registryFile, 'utf8'))
+    const { writeFileSync } = require('node:fs') as typeof import('node:fs')
+    writeFileSync(registryFile, JSON.stringify({ ...raw, activeId: 'nope' }), 'utf8')
+
+    const reopened = new WorkspaceStore(base, { multiInstance: false })
+    expect(reopened.focusedId).toBe(alpha)
+    expect(reopened.state.nodes).toEqual([])
+  })
+})

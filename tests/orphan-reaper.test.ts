@@ -73,7 +73,10 @@ describe('WorkspaceStore terminal enumeration (delete-leak kill list)', () => {
 
   it('allTerminalIdsStrict THROWS on a corrupt parked workspace.json (reaper aborts, fail-safe)', () => {
     const base = mkdtempSync(path.join(tmpdir(), 'cookrew-del-'))
-    const store = new WorkspaceStore(base)
+    // multiInstance OFF is what makes 'parked' mean 'on disk only' — the
+    // premise this test needs. With sessions resident the file is never read,
+    // which the companion test below covers.
+    const store = new WorkspaceStore(base, { multiInstance: false })
     store.addNode(term('t-home', store.state.dir))
     const parked = store.createWorkspace('Parked', store.state.dir)
     store.switchWorkspace(parked.id)
@@ -88,5 +91,29 @@ describe('WorkspaceStore terminal enumeration (delete-leak kill list)', () => {
     )
     expect(new Set(store.allTerminalIds())).toEqual(new Set(['t-home']))
     expect(() => store.allTerminalIdsStrict()).toThrow()
+  })
+
+  it('a RESIDENT workspace is enumerated from memory, corrupt file or not', () => {
+    // Multi-instance makes the fail-safe stronger rather than weaker: the
+    // store is the writer, so a resident session's state is never staler than
+    // its file. A corrupt file is then not a reason to abort the reap — the
+    // terminals are known, so they are claimed and cannot be killed as
+    // unowned. The strict variant only has to fail-safe over what it must read.
+    const base = mkdtempSync(path.join(tmpdir(), 'cookrew-del-'))
+    const store = new WorkspaceStore(base, { multiInstance: true })
+    store.addNode(term('t-home', store.state.dir))
+    const other = store.createWorkspace('Resident', store.state.dir)
+    store.switchWorkspace(other.id)
+    store.addNode(term('t-resident', store.state.dir))
+    store.switchWorkspace(store.list().workspaces[0].id)
+    expect(store.resident()).toContain(other.id)
+
+    writeFileSync(
+      path.join(base, 'workspaces', other.id, 'workspace.json'),
+      '{"nodes": [truncated',
+      'utf8'
+    )
+    expect(new Set(store.allTerminalIds())).toEqual(new Set(['t-home', 't-resident']))
+    expect(() => store.allTerminalIdsStrict()).not.toThrow()
   })
 })
