@@ -3,7 +3,7 @@ import { NodeProps, NodeResizer } from '@xyflow/react'
 import { NodeHandles } from './NodeHandles'
 import { CardClose } from './CardClose'
 import { CardPick } from './CardPick'
-import { marked } from 'marked'
+import { renderNoteMarkdown } from '../note-markdown'
 import type { NoteNodeData } from '../../../shared/model'
 import { cookrew } from '../api'
 import { useCanvasUi } from '../canvas-ui'
@@ -84,7 +84,9 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
           onClick={onBodyClick}
           onDoubleClick={onBodyDoubleClick}
           dangerouslySetInnerHTML={{
-            __html: marked.parse(node.content || '*Double-click to write…*') as string
+            // Markdown only — a note's own `<div class="cr-ckpt-…">` diagram is
+            // text, not app DOM. See note-markdown.ts.
+            __html: renderNoteMarkdown(node.content || '*Double-click to write…*')
           }}
         />
       )}
