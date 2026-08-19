@@ -63,7 +63,7 @@ beforeEach(() => {
   annDir = path.join(root, 'checkpoint-annotations')
   quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
 })
-afterEach(() => {
+afterEach(async () => {
   fault.failDir = null
   // Disarm before the directory goes: a test that ends mid-escalation leaves an
   // armed retry behind, and an unref'd timer still fires. It then fsyncs a path
@@ -76,8 +76,15 @@ afterEach(() => {
     internals.debtTimers.clear()
     internals.dirDebt.clear()
   }
-  quiet.mockRestore()
+  // Restore the spy AFTER the directory is gone, and only once the loop has
+  // turned. Disarming above cannot catch a retry already in flight — its fsync
+  // is mid-await on the threadpool — and that attempt lands after rmSync, on a
+  // path that no longer exists. Restoring first would put its PERSISTENT
+  // STORAGE FAULT on the real console, attributed to whatever test is running
+  // by then. One macrotask is enough for the in-flight rejection to unwind.
   rmSync(root, { recursive: true, force: true })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  quiet.mockRestore()
 })
 
 /** Every store built by a test, so afterEach can disarm their retries. */
@@ -136,13 +143,18 @@ async function foldIntoDebt(store: TurnStore): Promise<Internals> {
   return internals
 }
 
-const until = async (deadlineMs: number, done: () => boolean): Promise<void> => {
+/**
+ * Poll until `done` holds. `what` names the condition: a timeout here reports
+ * which wait expired, not just that one did — "condition never held" made three
+ * different failures indistinguishable in CI output.
+ */
+const until = async (deadlineMs: number, what: string, done: () => boolean): Promise<void> => {
   const deadline = Date.now() + deadlineMs
   while (Date.now() < deadline) {
     if (done()) return
     await new Promise((resolve) => setTimeout(resolve, 25))
   }
-  throw new Error('condition never held')
+  throw new Error(`never held within ${deadlineMs}ms: ${what}`)
 }
 
 describe('fold rename → dir-fsync failure → debt-only retry (Sol r10)', () => {
@@ -155,7 +167,7 @@ describe('fold rename → dir-fsync failure → debt-only retry (Sol r10)', () =
     // The storage recovers; nothing else touches the store. The unref'd
     // backoff timer (base 500ms) must land the fsync by itself.
     fault.failDir = null
-    await until(5_000, () => !internals.dirDebt.has('t1'))
+    await until(5_000, 'the debt-only retry settles the fsync', () => !internals.dirDebt.has('t1'))
     expect(internals.debtTimers.size).toBe(0)
   })
 
@@ -166,7 +178,7 @@ describe('fold rename → dir-fsync failure → debt-only retry (Sol r10)', () =
 
     // The fault stands: the first retry is already a repeat on this
     // directory, and the shared escalation must say so out loud.
-    await until(5_000, () =>
+    await until(5_000, 'a repeat failure escalates to PERSISTENT STORAGE FAULT', () =>
       quiet.mock.calls.some((args) => String(args[0]).includes('PERSISTENT STORAGE FAULT'))
     )
     expect(internals.dirDebt.has('t1')).toBe(true)
@@ -180,7 +192,7 @@ describe('fold rename → dir-fsync failure → debt-only retry (Sol r10)', () =
     // above can land in it. Asserting `size === 1` at that instant read as
     // "the retry was never re-armed"; the debt was never at risk. Under load
     // the window widens, which is why this only ever failed in a full run.
-    await until(5_000, () => internals.debtTimers.size === 1)
+    await until(5_000, 'the retry re-arms after the escalated failure', () => internals.debtTimers.size === 1)
   })
 
   it('flushAll settles outstanding debt at quit — the last chance to prove the rename', async () => {
