@@ -25,12 +25,12 @@ describe('WorkspaceStore.workspaceOfNode', () => {
       size: DEFAULT_TERMINAL_SIZE
     })
     const home = store.workspaceOfNode(node.id)
-    expect(home?.id).toBe(store.activeId)
+    expect(home?.id).toBe(store.focusedId)
   })
 
   it('finds a node that lives in an INACTIVE workspace after switching away', () => {
     const store = freshStore()
-    const homeId = store.activeId
+    const homeId = store.focusedId
     const homeName = store.activeMeta().name
     store.addNode({
       kind: 'terminal',
@@ -51,7 +51,7 @@ describe('WorkspaceStore.workspaceOfNode', () => {
     const home = store.workspaceOfNode('term-home')
     expect(home?.id).toBe(homeId)
     expect(home?.name).toBe(homeName)
-    expect(store.activeId).toBe(other.id)
+    expect(store.focusedId).toBe(other.id)
   })
 
   it('returns undefined for a node that exists in no workspace', () => {

@@ -48,6 +48,33 @@ function onDisk(store: WorkspaceStore, id: string): WorkspaceState {
 
 afterEach(() => vi.useRealTimers())
 
+describe('focus stops wearing the singleton name', () => {
+  it('no longer exposes activeId — the name that conflated live and looked-at', () => {
+    const store = makeStore(false)
+    const surface = store as unknown as Record<string, unknown>
+    expect(surface.activeId).toBeUndefined()
+    expect(store.focusedId).toBeTruthy()
+  })
+
+  it('focusedState and focusedMeta agree with each other', () => {
+    const store = makeStore(true)
+    const beta = store.createWorkspace('Beta', '/work/beta')
+    store.switchWorkspace(beta.id)
+
+    expect(store.focusedMeta()?.id).toBe(beta.id)
+    expect(store.focusedMeta()?.name).toBe('Beta')
+    expect(store.focusedState.name).toBe('Beta')
+    expect(store.focusedState).toBe(store.workspaceState(beta.id))
+  })
+
+  it('list() still reports focus on the wire under its old key', () => {
+    // WorkspaceList.activeId is the renderer/phone contract; renaming it is
+    // step 2's job, together with scoping it to the asking seat.
+    const store = makeStore(false)
+    expect(store.list().activeId).toBe(store.focusedId)
+  })
+})
+
 describe('residency vs focus', () => {
   it('flag OFF keeps exactly one workspace hydrated — today, unchanged', () => {
     const store = makeStore(false)

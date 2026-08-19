@@ -37,7 +37,7 @@ describe('WorkspaceStore op choke-point (observability event log)', () => {
       type: 'terminal.created',
       entityId: node.id,
       entityName: 'Coder',
-      workspaceId: store.activeId,
+      workspaceId: store.focusedId,
       actor: 'user',
       details: 'Claude Code'
     })
@@ -107,6 +107,6 @@ describe('WorkspaceStore op choke-point (observability event log)', () => {
     const { store, events } = makeStore()
     store.recordEvent('role.saved', 'role-1', 'Reviewer', 'Claude Code')
     expect(events[0]).toMatchObject({ type: 'role.saved', entityName: 'Reviewer' })
-    expect(events[0].workspaceId).toBe(store.activeId)
+    expect(events[0].workspaceId).toBe(store.focusedId)
   })
 })

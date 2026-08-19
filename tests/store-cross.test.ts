@@ -45,7 +45,7 @@ describe('WorkspaceStore cross-workspace identity', () => {
     const { store, orch } = makeStore()
     const hit = store.nodeAcrossWorkspaces(orch.id)
     expect(hit?.node.id).toBe(orch.id)
-    expect(hit?.workspaceId).toBe(store.activeId)
+    expect(hit?.workspaceId).toBe(store.focusedId)
   })
 
   it('unique-names nodes within the target workspace on cross-workspace add', () => {
@@ -60,7 +60,7 @@ describe('WorkspaceStore cross-workspace identity', () => {
 describe('WorkspaceStore mirrored cross-workspace edges', () => {
   it('writes the same connection into both endpoint workspaces', () => {
     const { store, orch } = makeStore()
-    const alpha = store.activeId
+    const alpha = store.focusedId
     const beta = store.createWorkspace('Beta', '/work/beta')
     const coder = store.addNodeToWorkspace(beta.id, terminal('Coder', '/work/beta'))
 
@@ -156,7 +156,7 @@ describe('snapshotTerminal — capture before external kill (HIGH-1)', () => {
     expect(captured).not.toBeNull()
     expect(captured!.node.id).toBe(coder.id)
     expect(captured!.peers).toContain(orch.id)
-    expect(captured!.workspaceId).toBe(store.activeId)
+    expect(captured!.workspaceId).toBe(store.focusedId)
   })
 
   it('ignores a non-terminal / unknown id without firing the hook', () => {

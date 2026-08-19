@@ -50,7 +50,7 @@ describe('WorkspaceStore terminal enumeration (delete-leak kill list)', () => {
 
   it('terminalIdsOf lists a workspace terminals — active AND after switching away', () => {
     const store = freshStore()
-    const homeId = store.activeId
+    const homeId = store.focusedId
     store.addNode(term('t-home', store.state.dir))
     expect(store.terminalIdsOf(homeId)).toEqual(['t-home'])
 

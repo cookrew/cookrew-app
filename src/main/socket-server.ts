@@ -298,7 +298,7 @@ function terminalFromRegistry(entry: AgentRegistryEntry): TerminalNodeData {
 function connectedOf(store: WorkspaceStore, id: string): WorkspaceNodeHit[] {
   return (
     store.connectedToAcross?.(id) ??
-    store.connectedTo(id).map((node) => ({ node, workspaceId: store.activeId }))
+    store.connectedTo(id).map((node) => ({ node, workspaceId: store.focusedId }))
   )
 }
 
@@ -413,7 +413,7 @@ export function browserWorkspaceError(scope: {
 
 export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const me = self(request, deps)
-  const activeId = deps.store.activeId
+  const activeId = deps.store.focusedId
   const active = { id: activeId, name: workspaceName(deps, activeId) }
   const [sub, name] = request.args
 
@@ -464,7 +464,7 @@ function workspaceName(deps: SocketServerDeps, id: string): string {
 function cmdList(request: CliRequest, deps: SocketServerDeps): string {
   if (request.flags.all) return cmdListAll(deps)
   const me = self(request, deps)
-  const activeId = deps.store.activeId
+  const activeId = deps.store.focusedId
   const wsName = (id: string): string =>
     deps.listWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id
   const connected = connectedOf(deps.store, me.id)
@@ -509,7 +509,7 @@ function cmdList(request: CliRequest, deps: SocketServerDeps): string {
 function cmdListAll(deps: SocketServerDeps): string {
   const entries = deps.agents.list()
   if (entries.length === 0) return 'No agents recorded yet (the registry fills as agents spawn).'
-  const activeId = deps.store.activeId
+  const activeId = deps.store.focusedId
   const byWorkspace = new Map<string, AgentRegistryEntry[]>()
   for (const e of entries) {
     byWorkspace.set(e.workspaceId, [...(byWorkspace.get(e.workspaceId) ?? []), e])
@@ -709,7 +709,7 @@ function cmdRecruit(request: CliRequest, deps: SocketServerDeps): string {
     lines.push(`Added ${plan.autoAddDir} to workspace "${home.name}" (no workspace owned it)`)
   }
   // Layer 4 guard: never let a recruit land somewhere else silently.
-  if (plan.workspaceId !== deps.store.activeId) {
+  if (plan.workspaceId !== deps.store.focusedId) {
     lines.push(
       `⚠ "${added.name}" lives in workspace "${wsName(plan.workspaceId)}", not the active one — switch with: cookrew workspace switch "${wsName(plan.workspaceId)}"`
     )

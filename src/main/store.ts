@@ -175,18 +175,23 @@ export class WorkspaceStore extends EventEmitter {
     return this.focused
   }
 
-  /**
-   * @deprecated Focus, under its old name. Reads that mean "which workspace
-   * owns this?" want the owning session; only display and seat-scoped reads
-   * want focus. Removed once the call sites are classified (step 1, commit 2).
-   */
-  get activeId(): string {
-    return this.focused
+  /** The focused workspace's canvas. */
+  get focusedState(): WorkspaceState {
+    return this.hydrate(this.focused).state
   }
 
-  /** The focused workspace's canvas. */
+  /**
+   * @deprecated Focus, under the singleton's name. Reads that mean "which
+   * workspace owns this?" want the owning session; only seat-scoped reads want
+   * focus. Kept until the CLI is converted (step 1, commit 3).
+   */
   get state(): WorkspaceState {
-    return this.hydrate(this.focused).state
+    return this.focusedState
+  }
+
+  /** Meta of the focused workspace, or undefined if the registry is empty. */
+  focusedMeta(): WorkspaceMeta | undefined {
+    return this.registry.workspaces.find((w) => w.id === this.focused)
   }
 
   list(): WorkspaceList {
@@ -194,9 +199,7 @@ export class WorkspaceStore extends EventEmitter {
   }
 
   activeMeta(): WorkspaceMeta {
-    return (
-      this.registry.workspaces.find((w) => w.id === this.focused) ?? this.registry.workspaces[0]
-    )
+    return this.focusedMeta() ?? this.registry.workspaces[0]
   }
 
   metaByName(name: string): WorkspaceMeta | undefined {

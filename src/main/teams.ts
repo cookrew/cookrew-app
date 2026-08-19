@@ -822,17 +822,17 @@ export async function copyTeam(deps: TeamForkDeps, spec: TeamCopySpec): Promise<
   const workspaces = deps.store.list().workspaces
   const target = workspaces.find((w) => w.id === spec.intoWorkspaceId)
   if (!target) throw new Error(`No workspace '${spec.intoWorkspaceId}' to copy into`)
-  const intoActive = target.id === deps.store.activeId
+  const intoActive = target.id === deps.store.focusedId
   if (intoActive && !deps.adoptNode) {
     throw new Error('Team copy onto the live canvas requires the adoptNode dep')
   }
 
-  const fromId = spec.fromWorkspaceId ?? deps.store.activeId
+  const fromId = spec.fromWorkspaceId ?? deps.store.focusedId
   if (!workspaces.some((w) => w.id === fromId)) {
     throw new Error(`The copied nodes' workspace is gone — copy again`)
   }
   const source =
-    fromId === deps.store.activeId
+    fromId === deps.store.focusedId
       ? resolveSource(deps, { nodeIds: spec.nodeIds, choices: [] })
       : sourceFromWorkspace(deps, fromId)
 
@@ -1012,6 +1012,6 @@ export async function copyTeam(deps: TeamForkDeps, spec: TeamCopySpec): Promise<
     copiedCables: plan.connections.length,
     // Detached sources aren't turn-tracked (the working guard can't see
     // them and histories are frozen at the last visit) — say so.
-    ...(fromId !== deps.store.activeId ? { staleSource: true } : {})
+    ...(fromId !== deps.store.focusedId ? { staleSource: true } : {})
   }
 }

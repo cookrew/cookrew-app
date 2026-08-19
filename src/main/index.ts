@@ -369,23 +369,41 @@ function paneCard(t: {
     terminalId: t.id,
     title: t.name,
     agent: t.role ?? t.preset,
-    workspace: store.state.name,
+    workspace: store.focusedState.name,
     cwd: t.cwd
   }
 }
 
 /**
+ * Which workspace this process currently boots and holds PTYs for.
+ *
+ * Named because it is NOT the same question as "which workspace is focused",
+ * even though today it has the same answer: the switch handler boots the
+ * focused canvas's terminals and detaches the outgoing ones. Once the pty
+ * registry is scoped per session (step 1 commit 3) this becomes a residency
+ * question, and it becomes one HERE — one place, not eight call sites that
+ * each learned to spell `store.activeId`.
+ */
+function bootsTerminalsFor(workspaceId: string): boolean {
+  return workspaceId === store.focusedId
+}
+
+/**
  * The workspace half of the herdr binding: Cookrew's herdr workspace wears
- * the ACTIVE Cookrew workspace's name and identity tokens. Re-reported on
+ * the FOCUSED Cookrew workspace's name and identity tokens. Re-reported on
  * every switch (and once at boot); a no-op under tmux/direct.
+ *
+ * Commander's ruling (2026-08-20): panes already carry a cookrew_workspace
+ * token, so a WorkspaceSession scopes by TOKEN under this single existing
+ * label. No per-session relabeling — herdr reattach compat is not worth the
+ * risk, and N labels get revisited only if token scoping proves insufficient.
  */
 function reportWorkspaceBinding(): void {
-  const list = store.list()
-  const active = list.workspaces.find((w) => w.id === list.activeId)
-  if (!active) return
+  const focused = store.focusedMeta()
+  if (!focused) return
   multiplexer()?.reportWorkspace?.({
-    label: active.name,
-    tokens: { cookrew_workspace: active.id, cookrew_dir: active.dir }
+    label: focused.name,
+    tokens: { cookrew_workspace: focused.id, cookrew_dir: focused.dir }
   })
 }
 
@@ -932,7 +950,12 @@ const dispatchService = new DispatchService({
     // watch must owe its drain from the start: released-but-pinned holds for
     // the whole dispatch and then drains on the ordinary quiet clock. A
     // focused target is repinned by presence on the next watch() anyway.
-    if (store.nodeAcrossWorkspaces(agentId)?.workspaceId !== store.activeId) {
+    // Focus is the conservative predicate here: releasing merely puts the
+    // watch on the ordinary quiet clock, and a seat that IS rendering this
+    // target repins it on the next watch(). With N windows this wants to ask
+    // "is ANY seat watching" rather than "is it focused here" — safe either
+    // way, because the answer only ever costs a repin.
+    if (store.nodeAcrossWorkspaces(agentId)?.workspaceId !== store.focusedId) {
       sessionSync.release(agentId)
     }
     return grade
@@ -944,7 +967,9 @@ const dispatchService = new DispatchService({
   announce: ({ kind, record }) => {
     const node = store.nodeAcrossWorkspaces(record.agentId)
     const name = node?.node.name ?? record.agentId
-    const workspaceId = record.workspaceId ?? node?.workspaceId ?? store.activeId
+    // Ownership first, focus only as a last resort: the record knows, then
+    // the node knows, and focus is the guess of last resort when neither does.
+    const workspaceId = record.workspaceId ?? node?.workspaceId ?? store.focusedId
     const type = kind === 'accepted' ? 'dispatch.accepted' : `dispatch.${record.state}`
     const details =
       kind === 'accepted'
@@ -1056,7 +1081,7 @@ function seedConductorIfEmpty(): void {
     name: 'Conductor',
     preset: DEFAULT_ORCH_PRESET.name,
     command: DEFAULT_ORCH_PRESET.command,
-    cwd: store.state.dir,
+    cwd: store.focusedState.dir,
     orch: true,
     role: null,
     position: { x: 240, y: 200 },
@@ -1073,7 +1098,7 @@ function listWorkspaces(): ReturnType<WorkspaceStore['list']> {
 }
 
 function createWorkspace(name: string, dir: string): WorkspaceMeta {
-  const meta = store.createWorkspace(name, dir || store.state.dir)
+  const meta = store.createWorkspace(name, dir || store.focusedState.dir)
   store.switchWorkspace(meta.id) // fires 'switch' → PTY teardown/spawn
   seedConductorIfEmpty()
   return meta
@@ -1138,7 +1163,7 @@ async function setTerminalCwd(nodeId: string, dir: string): Promise<CanvasNode> 
   return moveTerminalCwd(
     {
       store: {
-        activeId: store.activeId,
+        activeId: store.focusedId,
         node: (id) => store.node(id),
         dirs: () => store.dirs(),
         addWorkspaceDir: (workspaceId, target) => store.addWorkspaceDir(workspaceId, target),
@@ -1274,7 +1299,7 @@ function recoverAgent(id: string): RecoverResult {
     // Only report spawned when we actually (re)booted — an already-live
     // process is a no-op double-recover (LOW).
     const exact = canRestoreExact(hit.node as TerminalNodeData)
-    const didSpawn = hit.workspaceId === store.activeId && !ptys.get(id) && exact
+    const didSpawn = bootsTerminalsFor(hit.workspaceId) && !ptys.get(id) && exact
     const forked = didSpawn && heldSession(hit.node as TerminalNodeData)
     if (didSpawn) spawnTracked(hit.node)
     return {
@@ -1287,7 +1312,7 @@ function recoverAgent(id: string): RecoverResult {
   if (snap) {
     const orch = activeOrch()
     const plan = planRecovery(snap, {
-      activeWorkspaceId: store.activeId,
+      activeWorkspaceId: store.focusedId,
       workspaceExists: (wid) => store.list().workspaces.some((w) => w.id === wid),
       nodeExists: (pid) => store.nodeAcrossWorkspaces(pid) !== undefined,
       isOrch: (pid) => {
@@ -1316,7 +1341,7 @@ function recoverAgent(id: string): RecoverResult {
   const entry = agents.lookup(id)
   if (!entry) throw new Error(`No recoverable agent '${id}'`)
   const wsExists = store.list().workspaces.some((w) => w.id === entry.workspaceId)
-  const targetWs = wsExists ? entry.workspaceId : store.activeId
+  const targetWs = wsExists ? entry.workspaceId : store.focusedId
   const harness = harnessFor(entry.command)
   const node: TerminalNodeData = {
     kind: 'terminal', id, name: entry.name, preset: entry.preset,
@@ -1330,7 +1355,7 @@ function recoverAgent(id: string): RecoverResult {
   const orch = activeOrch()
   if (orch && orch.id !== added.id) store.connectAcross(added.id, orch.id)
   const exact = canRestoreExact(added)
-  const didSpawn = targetWs === store.activeId && exact
+  const didSpawn = bootsTerminalsFor(targetWs) && exact
   const forked = didSpawn && heldSession(added)
   if (didSpawn) spawnTracked(added)
   return {
@@ -1403,7 +1428,7 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
       ? resumeRoleSession({
           sessionCopyRef: role.sessionCopyRef,
           copyDir: roleSessionDir(),
-          cwd: store.state.dir
+          cwd: store.focusedState.dir
         })
       : null
   const terminal: TerminalNodeData = {
@@ -1412,7 +1437,7 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     name: opts.name || role?.name || preset.name,
     preset: role ? role.preset : preset.name,
     command: role ? role.command : preset.command,
-    cwd: store.state.dir,
+    cwd: store.focusedState.dir,
     orch: opts.orch,
     role: role ? role.name : null,
     ...(restoredSessionId ? { claudeSessionId: restoredSessionId } : {}),
@@ -1493,10 +1518,10 @@ function terminalIsWorking(id: string): boolean {
 }
 
 const teamClipboard = new TeamClipboard({
-  activeId: () => store.activeId,
+  activeId: () => store.focusedId,
   workspaces: () => store.list().workspaces,
   workspaceState: (id) => store.workspaceState(id),
-  activeNodes: () => store.state.nodes,
+  activeNodes: () => store.focusedState.nodes,
   isWorking: terminalIsWorking,
   paste: (spec) => copyTeam(teamForkDeps(), spec),
   // Cut removal is WORKSPACE-SCOPED: identity-moved notes/browsers now
@@ -1577,7 +1602,7 @@ async function createWorkspaceFromTeam(
   dir: string,
   team: string
 ): Promise<WorkspaceMeta> {
-  return workspaceFromTemplate(teamForkDeps(), { name, dir: dir || store.state.dir, team })
+  return workspaceFromTemplate(teamForkDeps(), { name, dir: dir || store.focusedState.dir, team })
 }
 
 function teamSaveTracked(name?: string, nodeIds?: string[]): TeamMeta {
@@ -1587,7 +1612,7 @@ function teamSaveTracked(name?: string, nodeIds?: string[]): TeamMeta {
 }
 
 function teamSaveInner(name?: string, nodeIds?: string[]): TeamMeta {
-  return teams.save(store.state, (id) => turns.history(id), name, nodeIds)
+  return teams.save(store.focusedState, (id) => turns.history(id), name, nodeIds)
 }
 
 interface RoleSaveInput {
@@ -2152,7 +2177,7 @@ function showNotification(message: string): void {
 
 function broadcast(): void {
   if (mainWindow && !mainWindow.webContents.isDestroyed()) {
-    mainWindow.webContents.send('workspace:state', store.state)
+    mainWindow.webContents.send('workspace:state', store.focusedState)
   }
 }
 
@@ -2207,7 +2232,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('workspace:rename', (_e, id: string, name: string) => {
     store.renameWorkspace(id, name)
     // The active workspace's new name is what the herdr workspace wears.
-    if (id === store.activeId) reportWorkspaceBinding()
+    if (id === store.focusedId) reportWorkspaceBinding()
     return store.list()
   })
   // Workspace v2: remove + multi-directory + per-terminal cwd + git.
@@ -2336,7 +2361,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     forkTerminal(sourceId, turnIndex)
   )
 
-  ipcMain.handle('workspace:get', () => store.state)
+  ipcMain.handle('workspace:get', () => store.focusedState)
   ipcMain.handle('browser:interactive-enabled', () => interactiveBrowserEnabled())
   ipcMain.handle('browser:stream-token', () => desktopBrowserStreamToken)
 
