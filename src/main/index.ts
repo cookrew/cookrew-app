@@ -71,6 +71,7 @@ import { RecoverableStore, planRecovery } from './recoverable'
 import { EventLog } from './event-log'
 import { installProcessGuards } from './process-guards'
 import { SessionRegistry } from './session-registry'
+import { planWorkspaceSwitch } from './workspace-switch'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { canonicalExternalUrl } from '../shared/external-url'
 import {
@@ -2259,8 +2260,19 @@ function registerIpc(handlers: RestoreHandlers): void {
   // is torn down, which flag-off makes the outgoing workspace — today's
   // behaviour exactly.
   store.on('switch', ({ previousTerminalIds }: { previousTerminalIds: string[] }) => {
-    for (const tid of previousTerminalIds) {
-      if (bootsTerminalsFor(ptys.workspaceOfTerminal(tid) ?? '')) continue
+    // The DECISION lives in workspace-switch.ts, tested for flag-off
+    // equivalence; this handler only performs it. Keeping the two apart is
+    // what makes "off is behaviour-identical" an assertion rather than a
+    // claim — and it is the claim that turned out to be false in review.
+    const plan = planWorkspaceSwitch({
+      previousTerminalIds,
+      workspaceOfTerminal: (id) => ptys.workspaceOfTerminal(id),
+      isResident: (workspaceId) => store.resident().includes(workspaceId),
+      focusedTerminals: store.terminals(),
+      residentBrowsers: residentBrowsers()
+    })
+
+    for (const tid of plan.detach) {
       // Detach (not kill): the tmux session stays alive so returning
       // reattaches it with its agent and scrollback intact.
       sessionSync.release(tid)
@@ -2275,14 +2287,8 @@ function registerIpc(handlers: RestoreHandlers): void {
     mux?.beginAttachBatch?.()
     try {
       // Serial by design: each PTY exists before its pendingInject delivery.
-      // Every terminal, live PTY or not. spawnTracked does far more than make
-      // a PTY — owner-input hooks, the producer lease, turn tracking, registry
-      // recording, pending-inject delivery — and ptys.spawn already
-      // short-circuits an existing session, so re-running it is cheap and
-      // skipping it silently drops all the rest. A terminal cut into this
-      // workspace with its PTY still live reaches exactly that path.
-      for (const t of store.terminals()) bootTerminal(t)
-      void browserManager.replaceNodes(residentBrowsers()).catch(() => undefined)
+      for (const t of plan.boot) bootTerminal(t)
+      void browserManager.replaceNodes([...plan.browsers]).catch(() => undefined)
       // The herdr workspace's chrome follows the focused Cookrew workspace.
       reportWorkspaceBinding()
     } finally {
