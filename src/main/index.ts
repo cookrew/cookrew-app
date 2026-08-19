@@ -2336,8 +2336,12 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('terminal:create', (_e, opts: CreateTerminalOpts) => createTerminal(opts))
 
   // ---- marketplace presets (§8): the dock's third chip family ----
-  ipcMain.handle('preset:list', () => presetStore.list())
-  ipcMain.handle('preset:uninstall', (_e, id: string) => presetStore.uninstall(id))
+  // `preset:*` was already taken by the HARNESS presets above. These are a
+  // different list with a different shape, so they get their own namespace —
+  // reusing the channel threw on registration (Electron refuses a second
+  // handler) and took every handler after it down with it.
+  ipcMain.handle('preset:installed:list', () => presetStore.list())
+  ipcMain.handle('preset:installed:uninstall', (_e, id: string) => presetStore.uninstall(id))
   /**
    * R2: the canvas click is the aimed confirm, so this both aims and commits.
    * A single agent becomes a NORMAL terminal — no new node kind, so it survives
@@ -2345,7 +2349,7 @@ function registerIpc(handlers: RestoreHandlers): void {
    * locally saved team takes.
    */
   ipcMain.handle(
-    'preset:place',
+    'preset:installed:place',
     async (_e, id: string, position: CanvasPosition, orch: boolean) => {
       const stored = presetStore.read(id)
       // Null covers absent AND a blob that no longer matches its manifest: a

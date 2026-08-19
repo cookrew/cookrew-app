@@ -14,10 +14,13 @@ const api = {
   disconnect: (connId: string) => ipcRenderer.invoke('node:disconnect', connId),
   listPresets: () => ipcRenderer.invoke('preset:list'),
   createTerminal: (opts: unknown) => ipcRenderer.invoke('terminal:create', opts),
-  listInstalledPresets: () => ipcRenderer.invoke('preset:list'),
+  // NOT `preset:list` — that is the HARNESS preset list, a different shape.
+  // Aliasing them made listInstalledPresets return {name, command}[], which
+  // the chip model reads as `members.length` and crashes the dock on.
+  listInstalledPresets: () => ipcRenderer.invoke('preset:installed:list'),
   placeInstalledPreset: (id: string, position: unknown, orch: boolean) =>
-    ipcRenderer.invoke('preset:place', id, position, orch),
-  uninstallPreset: (id: string) => ipcRenderer.invoke('preset:uninstall', id),
+    ipcRenderer.invoke('preset:installed:place', id, position, orch),
+  uninstallPreset: (id: string) => ipcRenderer.invoke('preset:installed:uninstall', id),
 
   listWorkspaces: () => ipcRenderer.invoke('workspace:list'),
   createWorkspace: (name: string, dir: string, team?: string) =>
