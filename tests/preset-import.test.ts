@@ -125,7 +125,7 @@ describe('planPresetImport — the import IS a version (§10)', () => {
     const plan = planPresetImport(published(), {
       dirs: ['/home/buyer/app'],
       cutAt: 5,
-      pins: [{ version: 1, scrollLine: 0, cutAt: 1 }]
+      pins: [{ version: 1, atIndex: 0, scrollLine: 0, cutAt: 1 }]
     })
     expect(plan.pin.version).toBe(2)
   })

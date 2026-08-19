@@ -45,6 +45,8 @@ export interface ImportOptions {
   cutAt: number
   /** Versions this buyer already holds for this preset. */
   pins?: readonly VersionPinRecord[]
+  /** Checkpoint the install pins at; defaults to 0 (before the first turn). */
+  atIndex?: number
   /** The manifest this install came from, when it came from one. */
   manifestId?: string
 }
@@ -95,8 +97,10 @@ function terminalsOf(snapshot: TeamSnapshot): TerminalNodeData[] {
 export function planPresetImport(snapshot: TeamSnapshot, options: ImportOptions): PresetImportPlan {
   const mapped = applyWorkdirs(snapshot, options.dirs)
   const pin = cutVersionPin(options.pins ?? [], {
-    // A fresh install is pinned at the start of its own transcript: it has no
-    // history of the buyer's yet.
+    // An install is pinned at the checkpoint the buyer's copy BEGINS at, which
+    // is before their first turn — so it names no drawn row yet, and the rail
+    // correctly shows nothing until one exists (R17: omitted, never guessed).
+    atIndex: options.atIndex ?? 0,
     scrollLine: 0,
     cutAt: options.cutAt,
     ...(options.manifestId !== undefined ? { manifestId: options.manifestId } : {})

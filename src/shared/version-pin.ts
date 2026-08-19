@@ -24,11 +24,28 @@
  * pin that lies.
  */
 
-/** Persisted form. `scrollLine` shares TurnRecord.scrollLine's coordinate. */
+/**
+ * CONTRACT VERSION. v1 anchored pins in transcript-line space
+ * (scrollLine/scrollBase). v2 (ruling R17) anchors them in RENDER-POSITION
+ * space, because that is the space the rail actually lays rows out in. A rig
+ * reading a fixture checks this to know which shape it holds.
+ */
+export const PIN_CONTRACT_VERSION = 2
+
+/** Persisted form. */
 export interface VersionPinRecord {
   /** 1-based, monotonic, never reused. V1, V2, … */
   version: number
-  /** tmux history_size at cut time — lines from the top of history. */
+  /**
+   * The checkpoint IDENTITY (T-number) the pin was cut at. This is what the
+   * pin means; where it lands is derived from the rows actually drawn.
+   */
+  atIndex: number
+  /**
+   * tmux history_size at cut time. Kept because it is what a JUMP needs — it
+   * is NOT the rail anchor. Anchoring on it was the v1 bug: line space and
+   * render space have different denominators and drift apart.
+   */
   scrollLine: number
   /** Wall clock of the cut. */
   cutAt: number
@@ -36,41 +53,61 @@ export interface VersionPinRecord {
   manifestId?: string
 }
 
-/** Rendered form: what the rail places, derived fresh against the live base. */
+/** Rendered form: what the rail places, derived fresh against the drawn rows. */
 export interface VersionPinAnchor {
   version: number
-  /** 0 = oldest / rail top, 1 = live bottom. Same space as rail ticks. */
+  /** 0 = rail top. Render-position space, the same one the focus tab uses. */
   frac: number
 }
 
-/**
- * A pin's position on the rail: its cut line measured against the live history
- * size. Deliberately the same formula as `markerFraction(scrollBase −
- * scrollLine, scrollBase)` so a pin and a tick for the same content land on the
- * same Y — which is what lets F6 apply to pins without a special case.
- *
- * Clamped, because scrollBase can shrink underneath an old pin (a session
- * cleared out from under it) and a pin must stay on the rail. No base to
- * measure against → 1 (the live bottom), matching markerFraction's default.
- */
-export function pinFraction(scrollLine: number, scrollBase: number | null): number {
-  if (scrollBase === null || scrollBase <= 0) return 1
-  return Math.max(0, Math.min(1, scrollLine / scrollBase))
+/** A row as the rail actually lays it out — identity plus array order. */
+export interface RailRow {
+  index: number
 }
 
 /**
- * The pins a rail should draw, ordered by version. Empty without a scroll base:
- * an unplaceable pin is omitted, never guessed onto the rail — R8's rule that a
- * wrong version is worse than an absent one applies to position too.
+ * A pin's position on the rail: WHERE ITS ROW IS DRAWN.
+ *
+ * R17. The rail carried two denominators. The focus tab anchors at
+ * `rows.findIndex(r => r.index === here) / rows.length` — array position — while
+ * trace markers used `afterIndex / lastIndex` — turn number. Those agree only
+ * on a contiguous ledger, where `rows[i].index === i + 1`. On the 19-of-125 real
+ * ledgers that are not (array position 113 holding T113 while lastIndex is 124),
+ * they drift, and a marker anchored the second way lands where a turn NUMBER
+ * implies rather than on a drawn row.
+ *
+ * The canonical space is therefore the one the rows are actually laid out in,
+ * and this matches the focus tab's formula EXACTLY — `rows.length` as the
+ * denominator, not `rows.length - 1`. That looks like an off-by-one and is not:
+ * a "cleaner" denominator would put a pin half a row away from the focus tab
+ * for the same checkpoint, which is precisely the alignment F6 gates.
+ *
+ * Null when the pin's identity is not among the drawn rows. It is omitted
+ * rather than clamped to the nearest row: R8's rule that a wrong version is
+ * worse than an absent one applies to position too, and a V1 shown against T5
+ * because the ledger starts at T5 is a wrong version.
+ */
+export function pinFraction(atIndex: number, rows: readonly RailRow[]): number | null {
+  if (rows.length === 0) return null
+  const at = rows.findIndex((r) => r.index === atIndex)
+  if (at < 0) return null
+  return at / rows.length
+}
+
+/**
+ * The pins a rail should draw, ordered by version. A pin whose checkpoint is
+ * not drawn is dropped, never guessed onto the rail.
  */
 export function pinAnchors(
   records: readonly VersionPinRecord[],
-  scrollBase: number | null
+  rows: readonly RailRow[]
 ): VersionPinAnchor[] {
-  if (scrollBase === null || scrollBase <= 0) return []
-  return [...records]
-    .sort((a, b) => a.version - b.version)
-    .map((r) => ({ version: r.version, frac: pinFraction(r.scrollLine, scrollBase) }))
+  const out: VersionPinAnchor[] = []
+  for (const r of [...records].sort((a, b) => a.version - b.version)) {
+    const frac = pinFraction(r.atIndex, rows)
+    if (frac !== null) out.push({ version: r.version, frac })
+  }
+  return out
 }
 
 /**
@@ -99,6 +136,9 @@ export function nextVersion(records: readonly VersionPinRecord[]): number {
 }
 
 export interface CutOptions {
+  /** The checkpoint identity being pinned — what the pin MEANS. */
+  atIndex: number
+  /** Transcript coordinate for jumps; not the rail anchor (R17). */
   scrollLine: number
   cutAt: number
   manifestId?: string
@@ -117,6 +157,7 @@ export function cutVersionPin(
 ): VersionPinRecord {
   return {
     version: nextVersion(records),
+    atIndex: options.atIndex,
     scrollLine: options.scrollLine,
     cutAt: options.cutAt,
     ...(options.manifestId !== undefined ? { manifestId: options.manifestId } : {})
@@ -127,6 +168,8 @@ export function cutVersionPin(
 export interface TeamCutMember {
   terminalId: string
   pins: readonly VersionPinRecord[]
+  /** The checkpoint identity this member is pinned at. */
+  atIndex: number
   /** This member's own transcript point at the moment of the cut. */
   scrollLine: number
 }
@@ -163,6 +206,7 @@ export function cutTeamVersion(
       terminalId: m.terminalId,
       pin: {
         version,
+        atIndex: m.atIndex,
         scrollLine: m.scrollLine,
         cutAt: options.cutAt,
         ...(options.manifestId !== undefined ? { manifestId: options.manifestId } : {})
@@ -183,42 +227,47 @@ export type RailMarker =
   | { class: 'pin'; frac: number; version: number; label: string; labelled: boolean }
 
 export interface RailMarkerInput {
-  scrollBase: number | null
-  turns: readonly { index: number; scrollLine: number }[]
-  traceMarkers: readonly { kind: string; afterIndex: number; scrollLine: number }[]
+  /** The rows as drawn, in render order — the canonical space (R17). */
+  rows: readonly RailRow[]
+  /** Trace boundaries by the checkpoint they follow. */
+  traceMarkers: readonly { kind: string; afterIndex: number }[]
   pins: readonly VersionPinRecord[]
 }
 
 /**
- * Every marker the rail draws, in one ordered list. Oldest first so a renderer
- * walks it in a single pass. Empty without a scroll base — the alternative is
- * stacking every marker at the live bottom, which reads as real data and is not.
+ * Every marker the rail draws, in one ordered list, ALL THREE CLASSES IN ONE
+ * SPACE — render position. That is the R17 fix at its widest: the drift Fresco
+ * found existed because turn rows and trace markers were placed by two
+ * different formulas, so this places them by one, and pins join it rather than
+ * adding a third.
+ *
+ * A marker whose checkpoint is not among the drawn rows is dropped — it has no
+ * row to land on, and inventing a position for it is the exact failure the
+ * ruling names.
  */
 export function railMarkers(input: RailMarkerInput): RailMarker[] {
-  const base = input.scrollBase
-  if (base === null || base <= 0) return []
-  const out: RailMarker[] = [
-    ...input.turns.map((t) => ({
-      class: 'turn' as const,
-      frac: pinFraction(t.scrollLine, base),
-      index: t.index
-    })),
-    ...input.traceMarkers.map((m) => ({
-      class: 'trace' as const,
-      frac: pinFraction(m.scrollLine, base),
-      kind: m.kind,
-      afterIndex: m.afterIndex
-    })),
-    ...input.pins.map((p) => {
-      const label = pinLabel(p.version)
-      return {
-        class: 'pin' as const,
-        frac: pinFraction(p.scrollLine, base),
-        version: p.version,
-        label: label.text,
-        labelled: label.labelled
-      }
+  const { rows } = input
+  if (rows.length === 0) return []
+  const out: RailMarker[] = []
+  rows.forEach((row, at) => {
+    out.push({ class: 'turn', frac: at / rows.length, index: row.index })
+  })
+  for (const m of input.traceMarkers) {
+    const frac = pinFraction(m.afterIndex, rows)
+    if (frac === null) continue
+    out.push({ class: 'trace', frac, kind: m.kind, afterIndex: m.afterIndex })
+  }
+  for (const p of input.pins) {
+    const frac = pinFraction(p.atIndex, rows)
+    if (frac === null) continue
+    const label = pinLabel(p.version)
+    out.push({
+      class: 'pin',
+      frac,
+      version: p.version,
+      label: label.text,
+      labelled: label.labelled
     })
-  ]
+  }
   return out.sort((a, b) => a.frac - b.frac)
 }
