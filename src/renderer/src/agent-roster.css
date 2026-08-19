@@ -1218,7 +1218,10 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  right: 24px;
+  /* 32px, not the tag's 24px (R18, Fresco): the version PIN marker lands on the
+     bar in the pin lane, and at 24px the list's rows sat over it. The pin wins
+     the occlusion — the list steps in and leaves the lane clear. */
+  right: 32px;
   width: 336px;
   max-width: calc(100vw - 40px);
   z-index: 4; /* under the focused tag (5) and the count (6) */
