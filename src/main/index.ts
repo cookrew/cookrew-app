@@ -69,6 +69,7 @@ import { forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
 import { AgentRegistry } from './agent-registry'
 import { RecoverableStore, planRecovery } from './recoverable'
 import { EventLog } from './event-log'
+import { installProcessGuards } from './process-guards'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { canonicalExternalUrl } from '../shared/external-url'
 import {
@@ -241,6 +242,32 @@ const traces = new TraceReader(store)
 store.on('op', (e) => events.append(e))
 events.on('event', (e) => mainWindow?.webContents.send('event:new', e))
 let mainWindow: BrowserWindow | null = null
+
+// Installed the moment the store and the log exist, and before any boot path
+// can start a background promise. Node ≥15 makes an unhandled rejection fatal,
+// and this process holds every agent's PTY — so a stray promise nobody awaited
+// takes the fleet with it. That is not hypothetical: it is how the app died
+// silently mid-instantiate in August (post-mortem, archive/wave-c-20260816).
+// Rejections are logged and SURVIVED; a genuine uncaught exception still
+// exits, but flushes the durable witnesses on the way out.
+installProcessGuards({
+  append: (event) => events.append(event),
+  workspace: () => {
+    const meta = store.activeMeta()
+    return { id: meta.id, name: meta.name }
+  },
+  // The three things this process is the ONLY witness to. Synchronous by
+  // necessity — there is no awaiting anything on the way out of a fatal.
+  flush: () => {
+    store.flush()
+    events.flush()
+    turns.flushHistories()
+  },
+  // app.exit, not app.quit: the state is already suspect, so this must not
+  // depend on the before-quit drain running to completion. The flush above is
+  // what makes that safe.
+  exit: (code) => app.exit(code)
+})
 
 /**
  * Persisted commands from before a preset default changed, upgraded on
