@@ -60,10 +60,15 @@ describe('fillRows', () => {
     expect(filled[filled.length - 1].row.index).toBe(122)
   })
 
-  it('spans the full bar: first fraction 0, last fraction 1', () => {
+  it('spans the bar from the top, leaving the live tail clear', () => {
+    // R19: a row is a SPAN, so row `at` owns [at/n, (at+1)/n) and the last 1/n
+    // belongs to the live tail — the live dot and the LIVE row. The newest
+    // CHECKPOINT therefore stops at (n-1)/n instead of taking the bottom.
+    // F3 still holds: T1 at the top, LIVE at the bottom, now as its own row.
     const filled = fillRows(rows, 669, null)
     expect(filled[0].fraction).toBe(0)
-    expect(filled[filled.length - 1].fraction).toBe(1)
+    expect(filled[filled.length - 1].fraction).toBe((rows.length - 1) / rows.length)
+    expect(filled[filled.length - 1].fraction).toBeLessThan(1)
   })
 
   it('lays no more rows than the bar can hold without overlap', () => {
@@ -88,7 +93,8 @@ describe('fillRows', () => {
   it('shows every row when the conversation is shorter than the bar', () => {
     const filled = fillRows(rowsOf(3), 669, null)
     expect(filled.map((f) => f.row.index)).toEqual([1, 2, 3])
-    expect(filled.map((f) => f.fraction)).toEqual([0, 0.5, 1])
+    // Thirds, not halves: three spans over the bar, the last third left for LIVE.
+    expect(filled.map((f) => f.fraction)).toEqual([0, 1 / 3, 2 / 3])
   })
 
   it('survives an empty conversation', () => {

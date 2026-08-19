@@ -68,7 +68,11 @@ export function fillRows(
   focusedIndex: number | null
 ): FilledRow[] {
   if (rows.length === 0) return []
-  const denominator = Math.max(1, rows.length - 1)
+  // R17/R19: rows are SPANS, not points. `rows.length`, not `rows.length - 1` —
+  // row `at` owns [at/n, (at+1)/n) and the last 1/n of the bar is the live tail,
+  // where the live dot and the LIVE row live. Dividing by n-1 stretches the
+  // newest CHECKPOINT onto the bottom and leaves LIVE nowhere to go.
+  const denominator = rows.length
   return sampleIndices(rows.length, capacityFor(barHeight))
     .map((i) => ({ row: rows[i], fraction: i / denominator }))
     .filter((entry) => entry.row.index !== focusedIndex)

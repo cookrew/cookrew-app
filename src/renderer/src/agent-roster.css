@@ -1133,7 +1133,13 @@
 .cr-ckpt-scrub-preview {
   position: absolute;
   top: 0; /* Velvet sets inline = railAnchorTop(focused.frac) — the marker Y */
-  right: 24px; /* leave the bar strip so the line + here-marker stay visible */
+  /* 32px — the SAME lane reservation as .cr-ckpt-list (R18, Fresco's measure).
+     Moving only the list was half the fix and the wrong half: the focused row
+     still overlapped the pin lane by 6.0px, and that is the row on the marker,
+     so the pin a user scrubs TO was the one being covered. It also left the
+     focus row's right edge 8.0px out of line with the list rows — a step in
+     the fan that did not exist before. Horizontal only; F6 anchors on Y. */
+  right: 32px;
   transform: translateY(-50%); /* container box == focus row → pins the FOCUS on the marker */
   z-index: 5;
   pointer-events: none; /* only the rows are interactive; the empty fan passes through */
@@ -1144,7 +1150,10 @@
 .cr-ckpt-fan-focus {
   position: relative;
   width: 336px;
-  max-width: calc(100vw - 40px);
+  /* 48px, not 40: the 40 was sized for right:24 (24+16 = a 16px left margin).
+     At right:32 the same arithmetic halves the phone margin to 8px below a
+     ~368px viewport. Both blocks moved, so both budgets move. */
+  max-width: calc(100vw - 48px);
   margin-left: auto; /* hug the right (bar) side */
 }
 
@@ -1223,7 +1232,10 @@
      the occlusion — the list steps in and leaves the lane clear. */
   right: 32px;
   width: 336px;
-  max-width: calc(100vw - 40px);
+  /* 48px, not 40: the 40 was sized for right:24 (24+16 = a 16px left margin).
+     At right:32 the same arithmetic halves the phone margin to 8px below a
+     ~368px viewport. Both blocks moved, so both budgets move. */
+  max-width: calc(100vw - 48px);
   z-index: 4; /* under the focused tag (5) and the count (6) */
   pointer-events: none; /* HIGH-2: the empty area never steals a drag */
   transition: opacity 220ms ease;

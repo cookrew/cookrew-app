@@ -340,7 +340,13 @@ export function CheckpointTimeline({
     markerFrac !== undefined
       ? markerFrac
       : here !== null && rows.length > 0
-        ? Math.max(0, rows.findIndex((r) => r.index === here)) / rows.length
+        ? (() => {
+            // Math.max(0, -1) → 0 silently anchored an UNKNOWN identity to the
+            // top of the bar, i.e. onto T1. An identity we cannot place belongs
+            // at the live tail, which is what `markerFrac ?? 1` already says.
+            const at = rows.findIndex((r) => r.index === here)
+            return at < 0 ? 1 : at / rows.length
+          })()
         : 1
 
   const rowLabel = (row: CheckpointRow): string => checkpointRowTitle(row, titleMode)
@@ -525,8 +531,14 @@ export function CheckpointTimeline({
             index (or 1 when empty), not the array length, so a marker after the last
             checkpoint doesn't clamp to the bottom. */}
         {(markers ?? []).map((m, i) => {
-          const maxIndex = rows.length > 0 ? rows[rows.length - 1].index : 1
-          const frac = Math.min(1, Math.max(0, m.afterIndex / maxIndex))
+          // Drawn-row space (R17/R19), not turn-number space. AFTER row `at` is
+          // the boundary at the END of its span, so (at + 1) / n — which still
+          // puts a marker after the last checkpoint at 1.0, where the old
+          // formula put it. A marker whose checkpoint is not drawn is OMITTED:
+          // clamping put it on an end of the bar it has no claim to.
+          const at = rows.findIndex((r) => r.index === m.afterIndex)
+          if (at < 0) return null
+          const frac = (at + 1) / rows.length
           return (
             <div
               key={`tick-${m.kind}-${m.afterIndex}-${i}`}
