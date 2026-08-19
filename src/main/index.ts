@@ -54,6 +54,7 @@ import {
   BrowserTab,
   browserTabs,
   CanvasNode,
+  CanvasPosition,
   DEFAULT_TERMINAL_SIZE,
   TeamClipStatus,
   TeamCopyResult,
@@ -98,7 +99,9 @@ import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 import { TraceReader, type SessionWatchSpec } from './trace'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
-import { TeamStore, copyTeam, forkTeam, workspaceFromTemplate } from './teams'
+import { TeamStore, copyTeam, forkTeam, workspaceFromTemplate, type TeamSnapshot } from './teams'
+import { PresetStore } from './preset-store'
+import { planPresetImport } from './preset-import'
 import { TeamClipboard } from './team-clip'
 import { UNCOPYABLE_PHASES } from '../shared/turn'
 import { GitInfoCache, addWorktree } from './git'
@@ -110,6 +113,8 @@ import { defaultAttachmentsDir, saveAttachment } from './attachments'
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const store = new WorkspaceStore()
+/** Installed marketplace presets — the dock's third chip family (§8). */
+const presetStore = new PresetStore()
 const ptys = new PtyManager()
 // Liveness covers EXISTENCE, not attachment: every terminal node — including
 // inactive-workspace agents this process never spawns an attach for — pins
@@ -2329,6 +2334,45 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('preset:list', () => PRESETS)
 
   ipcMain.handle('terminal:create', (_e, opts: CreateTerminalOpts) => createTerminal(opts))
+
+  // ---- marketplace presets (§8): the dock's third chip family ----
+  ipcMain.handle('preset:list', () => presetStore.list())
+  ipcMain.handle('preset:uninstall', (_e, id: string) => presetStore.uninstall(id))
+  /**
+   * R2: the canvas click is the aimed confirm, so this both aims and commits.
+   * A single agent becomes a NORMAL terminal — no new node kind, so it survives
+   * an uninstall (A2) — and a team goes through the same copyTeam paste a
+   * locally saved team takes.
+   */
+  ipcMain.handle(
+    'preset:place',
+    async (_e, id: string, position: CanvasPosition, orch: boolean) => {
+      const stored = presetStore.read(id)
+      // Null covers absent AND a blob that no longer matches its manifest: a
+      // tampered cache must not place.
+      if (stored === null) return
+      const snapshot = JSON.parse(stored.teamBytes.toString('utf8')) as TeamSnapshot
+      const plan = planPresetImport(snapshot, {
+        dirs: store.state.dirs?.length ? store.state.dirs : [store.state.dir],
+        cutAt: Date.now(),
+        manifestId: stored.manifest.id
+      })
+      if (plan.kind === 'single') {
+        await createTerminal({
+          name: plan.node.name,
+          preset: plan.node.preset,
+          position,
+          orch
+        })
+        return
+      }
+      copyTeam(teamForkDeps(), {
+        source: plan.source,
+        spec: { ...plan.spec, dirs: plan.spec.dirs },
+        position
+      } as never)
+    }
+  )
 
   // Team fork / team save / roles (contract in note team-fork-roles-spec-v1).
   ipcMain.handle('team:fork', (_e, spec: TeamForkSpec) => teamFork(spec))

@@ -117,7 +117,13 @@ export interface ReviewSheetPayload {
    * read what will run before anything does.
    */
   shellCommands: string[]
-  pricing: PresetPricing | undefined
+  /**
+   * ONE representation of "free": the key is ABSENT. Never null, never a
+   * present-but-undefined key. A payload that spelled free as null would lock
+   * a free preset in any renderer that tests `pricing === undefined`, and both
+   * spellings existing at once means every consumer has to guess which it got.
+   */
+  pricing?: PresetPricing
 }
 
 export function reviewSheetPayload(verified: VerifiedPreset): ReviewSheetPayload {
@@ -132,7 +138,10 @@ export function reviewSheetPayload(verified: VerifiedPreset): ReviewSheetPayload
     // Safe to pass through: verify has already reconciled it against the file.
     scrub: verified.manifest.scrub,
     shellCommands,
-    pricing: verified.manifest.pricing
+    // Spread-if-present, never `pricing: undefined` — the key must not exist
+    // for a free preset, so `'pricing' in payload` and `payload.pricing !==
+    // undefined` give the same answer to every consumer.
+    ...(verified.manifest.pricing !== undefined ? { pricing: verified.manifest.pricing } : {})
   }
 }
 

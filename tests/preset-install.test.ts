@@ -166,8 +166,18 @@ describe('reviewSheetPayload — R14: spec tokens verbatim, never prose', () => 
     const sheet = reviewSheetPayload(verified())
     // Every value is a token, a count, a boolean or verbatim user content.
     expect(Object.keys(sheet).sort()).toEqual(
-      ['author', 'id', 'pricing', 'schema', 'scrub', 'shellCommands', 'version'].sort()
+      ['author', 'id', 'schema', 'scrub', 'shellCommands', 'version'].sort()
     )
+  })
+
+  it('spells FREE as an absent key — never null, never a present undefined', () => {
+    // Velvet's falsy catch: a renderer that locks on `pricing !== undefined`
+    // and one that locks on `'pricing' in payload` must reach the same verdict,
+    // or a free preset shows a lock on one surface and not the other.
+    const sheet = reviewSheetPayload(verified())
+    expect('pricing' in sheet).toBe(false)
+    expect(sheet.pricing).toBeUndefined()
+    expect(JSON.stringify(sheet)).not.toContain('pricing')
   })
 })
 

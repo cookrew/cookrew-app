@@ -17,6 +17,7 @@ import type { TerminalActivity, TurnRecord } from "../../shared/turn";
 import type { TurnMatch } from "../../shared/turn-search";
 import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
 import type { BoardRow, BoardSummary } from "../../shared/board";
+import type { InstalledPreset } from "../../shared/preset-chip";
 
 /**
  * GET /api/board's payload, mirrored here rather than imported from main —
@@ -61,6 +62,23 @@ export interface CookrewApi {
   connectNodes: (a: string, b: string) => Promise<Connection>;
   disconnect: (connId: string) => Promise<void>;
   listPresets: () => Promise<{ name: string; command: string }[]>;
+  /**
+   * Marketplace presets installed on this machine — the dock's third chip
+   * family (§8). Named apart from `listPresets`, which is the HARNESS presets.
+   */
+  listInstalledPresets: () => Promise<InstalledPreset[]>;
+  /**
+   * Place an installed preset at a point on the canvas. R2: the canvas click
+   * IS the confirm, so this both aims and commits — a single agent lands as a
+   * plain terminal, a team pastes through copyTeam.
+   */
+  placeInstalledPreset: (
+    id: string,
+    position: { x: number; y: number },
+    orch: boolean,
+  ) => Promise<void>;
+  /** Remove a preset from the dock. Placed agents are untouched (A2). */
+  uninstallPreset: (id: string) => Promise<void>;
   createTerminal: (opts: {
     name: string;
     preset: string;

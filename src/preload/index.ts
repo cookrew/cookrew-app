@@ -14,6 +14,10 @@ const api = {
   disconnect: (connId: string) => ipcRenderer.invoke('node:disconnect', connId),
   listPresets: () => ipcRenderer.invoke('preset:list'),
   createTerminal: (opts: unknown) => ipcRenderer.invoke('terminal:create', opts),
+  listInstalledPresets: () => ipcRenderer.invoke('preset:list'),
+  placeInstalledPreset: (id: string, position: unknown, orch: boolean) =>
+    ipcRenderer.invoke('preset:place', id, position, orch),
+  uninstallPreset: (id: string) => ipcRenderer.invoke('preset:uninstall', id),
 
   listWorkspaces: () => ipcRenderer.invoke('workspace:list'),
   createWorkspace: (name: string, dir: string, team?: string) =>

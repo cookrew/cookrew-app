@@ -28,6 +28,7 @@ import { Dock } from './Dock'
 import { CardMenu, type CardMenuAnchor } from './CardMenu'
 import { TerminalOverlayLayer } from './TerminalOverlay'
 import { useLodLayout } from './zoom-lod'
+import type { InstalledPreset } from '../../shared/preset-chip'
 import { browserInFullView } from './dock-target'
 import { BrowserLayer, useInteractiveBrowserCapability } from './BrowserLayer'
 import {
@@ -140,6 +141,19 @@ function Canvas(): React.JSX.Element {
    * removeNode, so there is one dialog and no close button can skip it.
    */
   const [closingId, setClosingId] = useState<string | null>(null)
+  /**
+   * Marketplace presets (§8) and the one currently armed. Arming is exclusive
+   * with the harness-preset and role chips: three families, one selection.
+   */
+  const [installedPresets, setInstalledPresets] = useState<InstalledPreset[]>([])
+  const [presetId, setPresetId] = useState<string | null>(null)
+  const refreshPresets = useCallback(() => {
+    void cookrew()
+      .listInstalledPresets()
+      .then(setInstalledPresets)
+      .catch((error) => console.error('listInstalledPresets failed:', error))
+  }, [])
+  useEffect(refreshPresets, [refreshPresets])
 
   useEffect(() => {
     void cookrew()
@@ -764,6 +778,16 @@ function Canvas(): React.JSX.Element {
     async (event: React.MouseEvent) => {
       const position = screenToFlowPosition({ x: event.clientX, y: event.clientY })
       if (tool === 'terminal') {
+        // R2: an armed marketplace chip places HERE — this click is the aimed
+        // confirm, so there is no dialog between the chip and the canvas, not
+        // even for a team paste. It takes precedence over the harness/role
+        // chips because arming one clears the others.
+        if (presetId) {
+          await cookrew().placeInstalledPreset(presetId, position, orch)
+          setPresetId(null)
+          setTool('move')
+          return
+        }
         // window.prompt is unsupported in Electron — creation uses the
         // preset (or saved-role) chips in the dock; a role boots its preset
         // with the role prompt injected once the TUI is quiet (roleName path).
@@ -811,7 +835,9 @@ function Canvas(): React.JSX.Element {
         setConnectFrom(null)
       }
     },
-    [tool, preset, role, roles, orch, clipping, screenToFlowPosition, zoomToNode]
+    // presetId belongs here: without it the callback closes over a stale arm
+    // and the click places the PREVIOUSLY armed preset, or nothing at all.
+    [tool, preset, role, roles, orch, clipping, presetId, screenToFlowPosition, zoomToNode]
   )
 
   const onNodesDelete = useCallback((deleted: Node[]) => {
@@ -1029,10 +1055,33 @@ function Canvas(): React.JSX.Element {
           onPreset={(name) => {
             setPreset(name)
             setRole(null)
+            setPresetId(null)
           }}
           roles={roles}
           role={role}
-          onRole={setRole}
+          onRole={(name) => {
+            setRole(name)
+            setPresetId(null)
+          }}
+          installedPresets={installedPresets}
+          presetId={presetId}
+          onPresetChip={(id) => {
+            // Arm only — the canvas click commits (R2).
+            setPresetId(id)
+            setRole(null)
+          }}
+          onPresetGate={(id) => {
+            // The chip IS the gate's UI. M1 ships no gate sheet yet (401/402
+            // land with the registry), so this is loud-absent rather than a
+            // silent no-op that would read as a dead chip.
+            console.error('gate sheet not implemented for preset', id)
+          }}
+          onCheckUpdates={(ids) => {
+            // R3: a manifest HEAD by version, once per dock open. The registry
+            // it would ask does not exist yet; the batch is computed and
+            // reported so the seam is real and observable.
+            console.info('preset update check pending registry:', ids)
+          }}
           orch={orch}
           onOrch={setOrch}
           voiceFor={

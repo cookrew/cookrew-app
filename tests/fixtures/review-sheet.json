@@ -16,8 +16,8 @@
       "secretScan": "clean",
       "findings": []
     },
-    "shellCommands": [],
-    "pricing": null
+    "_free": "FREE is spelled by the ABSENCE of the pricing key — never null. A renderer testing `pricing === undefined` and one testing `'pricing' in payload` must agree.",
+    "shellCommands": []
   },
 
   "shellsAndSessions": {

@@ -71,7 +71,7 @@ function sheetFor(nodes: CanvasNode[], version: number): ReturnType<typeof revie
 describe('review-sheet fixture stays true to the install path', () => {
   it('has the same field set as a real payload', () => {
     const real = sheetFor([note('n1')], 2)
-    const fixtureKeys = Object.keys(fixture.clean).filter((k) => k !== '_')
+    const fixtureKeys = Object.keys(fixture.clean).filter((k) => !k.startsWith('_'))
     expect(fixtureKeys.sort()).toEqual(Object.keys(real).sort())
   })
 
@@ -80,9 +80,14 @@ describe('review-sheet fixture stays true to the install path', () => {
     expect(real.scrub).toEqual(fixture.clean.scrub)
     expect(real.shellCommands).toEqual(fixture.clean.shellCommands)
     expect(real.version).toBe(fixture.clean.version)
-    // A free preset has no pricing; the fixture spells that null, the payload
-    // undefined — the KEY is present in both, which is what a renderer reads.
-    expect(real.pricing).toBeUndefined()
+  })
+
+  it('spells FREE the same way in the fixture and in the payload: no key', () => {
+    // Velvet's falsy catch. The fixture used to say `"pricing": null` while the
+    // payload omitted the key — a renderer locking on `pricing === undefined`
+    // would have shown a lock on the fixture and none on the real thing.
+    expect('pricing' in fixture.clean).toBe(false)
+    expect('pricing' in sheetFor([note('n1')], 2)).toBe(false)
   })
 
   it('matches the shells + notes + urls counts of the loud case', () => {
