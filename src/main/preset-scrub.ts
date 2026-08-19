@@ -63,6 +63,29 @@ const SECRET_PATTERNS: { kind: string; re: RegExp }[] = [
   { kind: 'jwt', re: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/ }
 ]
 
+/**
+ * The three surface counts the review sheet shows. Exported because the
+ * INSTALLER recounts them from the verified team file and reconciles against
+ * the signed report — an author whose report understates what the team carries
+ * is the one attack a valid signature cannot rule out, so publisher and
+ * installer must count with the same function or the check proves nothing.
+ */
+export function countSurfaces(nodes: readonly CanvasNode[]): {
+  shells: number
+  notes: number
+  urls: number
+} {
+  let shells = 0
+  let notes = 0
+  let urls = 0
+  for (const node of nodes) {
+    if (node.kind === 'note') notes += 1
+    else if (node.kind === 'browser') urls += 1
+    else if (node.preset === 'Shell') shells += 1
+  }
+  return { shells, notes, urls }
+}
+
 function scanSecrets(where: string, text: string | undefined, into: SecretFinding[]): void {
   if (!text) return
   for (const { kind, re } of SECRET_PATTERNS) {
@@ -103,18 +126,13 @@ export function scrubForPublish(snapshot: TeamSnapshot, options: ScrubOptions = 
   const mask = (text: string): string => replaceAll(text, ordered)
 
   const findings: SecretFinding[] = []
-  let shells = 0
-  let notes = 0
-  let urls = 0
 
   const nodes: CanvasNode[] = snapshot.nodes.map((node) => {
     if (node.kind === 'note') {
-      notes += 1
       scanSecrets(`nodes[${node.id}].content`, node.content, findings)
       return { ...node, content: mask(node.content) }
     }
     if (node.kind === 'browser') {
-      urls += 1
       scanSecrets(`nodes[${node.id}].url`, node.url, findings)
       const tabs = node.tabs?.map((tab) => {
         scanSecrets(`nodes[${node.id}].tabs.url`, tab.url, findings)
@@ -125,7 +143,6 @@ export function scrubForPublish(snapshot: TeamSnapshot, options: ScrubOptions = 
     // Terminal. Its command is the product — kept verbatim apart from path
     // masking and the resume flags, which would point a buyer's copy at the
     // AUTHOR's live session file.
-    if (node.preset === 'Shell') shells += 1
     scanSecrets(`nodes[${node.id}].command`, node.command, findings)
     const stripped = isPiCommand(node.command)
       ? stripPiSessionFlags(node.command)
@@ -149,12 +166,13 @@ export function scrubForPublish(snapshot: TeamSnapshot, options: ScrubOptions = 
     }
   })
 
+  // Counted with the SAME function the installer recounts with, so the
+  // reconciliation it performs against this signed report actually proves
+  // something.
   const report: ScrubReport = {
     sessions: includeSessions,
     paths: 'placeholders',
-    shells,
-    notes,
-    urls,
+    ...countSurfaces(snapshot.nodes),
     secretScan: findings.length > 0 ? 'blocked' : 'clean',
     findings
   }
