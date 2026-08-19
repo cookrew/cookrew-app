@@ -175,12 +175,33 @@ export class WorkspaceStore extends EventEmitter {
     this.hydrated.delete(id)
   }
 
+  /**
+   * Stop holding a workspace, flushing it first. The drain's teardown half —
+   * see session-registry.ts for why nothing may PIN a session, only observe
+   * that nothing is true about it any more.
+   *
+   * Refuses to drop the focused workspace: focus is one of the liveness facts,
+   * so being asked to release it means the caller's facts are wrong, and
+   * dropping it would leave the store with no canvas to render.
+   */
+  releaseSession(workspaceId: string): boolean {
+    if (workspaceId === this.focused) return false
+    if (!this.hydrated.has(workspaceId)) return false
+    this.evict(workspaceId)
+    return true
+  }
+
   /** Test seam: the data dir this store was built against. */
   get baseDirForTests(): string {
     return this.baseDir
   }
 
   // ---- workspace registry ----
+
+  /** Whether this store holds more than one workspace at a time. */
+  get isMultiInstance(): boolean {
+    return this.multiInstance
+  }
 
   /** Which workspace a seat is looking at. */
   get focusedId(): string {
@@ -200,6 +221,7 @@ export class WorkspaceStore extends EventEmitter {
   list(): WorkspaceList {
     return { workspaces: this.registry.workspaces, activeId: this.focused }
   }
+
 
   activeMeta(): WorkspaceMeta {
     return this.focusedMeta() ?? this.registry.workspaces[0]
@@ -310,6 +332,19 @@ export class WorkspaceStore extends EventEmitter {
     const previousTerminalIds = this.terminals().map((t) => t.id)
     const leaving = this.focused
 
+    // Durability BEFORE bookkeeping. The outgoing canvas may hold up to 300ms
+    // of debounced edits; writing the registry first opens a crash window in
+    // which the app reopens on the new workspace having lost them. The edits
+    // are the user's work, the hint is a convenience — order accordingly.
+    if (this.multiInstance) {
+      const session = this.hydrated.get(leaving)
+      if (session) this.flushSession(leaving, session)
+    } else {
+      // Flag OFF is today's behaviour exactly: one workspace resident, the one
+      // you left dropped — flushed on the way out by evict().
+      this.evict(leaving)
+    }
+
     this.focused = id
     // The hint, so the next boot opens where this one left off. Focus itself
     // stops living on disk here — once windows exist it is per-window, and one
@@ -317,16 +352,6 @@ export class WorkspaceStore extends EventEmitter {
     this.registry = { ...this.registry, activeId: id }
     saveRegistry(this.baseDir, this.registry)
     this.hydrate(id)
-
-    // Flag OFF is today's behaviour exactly: one workspace resident, the one
-    // you left dropped (flushed first). Flag ON keeps it hydrated, which is
-    // the whole point — the work you looked away from is still there.
-    if (this.multiInstance) {
-      const session = this.hydrated.get(leaving)
-      if (session) this.flushSession(leaving, session)
-    } else {
-      this.evict(leaving)
-    }
 
     this.emit('switch', { previousTerminalIds })
     this.emit('workspaces', this.list())
@@ -1025,7 +1050,17 @@ export class WorkspaceStore extends EventEmitter {
     return this.updateNodeUnsafe(id, safe)
   }
 
-  /** Full-field update for MAIN-PROCESS internals (spawn binds, cwd moves). */
+  /**
+   * Full-field update for MAIN-PROCESS internals (spawn binds, cwd moves).
+   *
+   * Falls through to the owning workspace when the node is not on the focused
+   * canvas. The async harness binds — session rebind after a fork, codex/pi
+   * binding, cwd moves — are keyed by TERMINAL ID alone and land whenever the
+   * probe resolves, which with sessions resident can be long after focus moved
+   * on. Matching against the focused canvas only would drop those patches
+   * silently, and a dropped session rebind is the exact-context failure the
+   * recover gate exists to catch.
+   */
   updateNodeUnsafe(id: string, patch: Partial<CanvasNode>): CanvasNode | undefined {
     let updated: CanvasNode | undefined
     const nodes = this.focusedState.nodes.map((n) => {
@@ -1033,7 +1068,7 @@ export class WorkspaceStore extends EventEmitter {
       updated = { ...n, ...patch } as CanvasNode
       return updated
     })
-    if (!updated) return undefined
+    if (!updated) return this.updateNodeAcrossWorkspacesUnsafe(id, patch)
     this.mutate({ ...this.focusedState, nodes })
     if (updated.kind === 'note') void this.persistNoteFile(updated)
     return updated

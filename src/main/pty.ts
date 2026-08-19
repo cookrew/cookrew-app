@@ -1064,11 +1064,6 @@ export class PtyManager {
 
   // ---- per-session scope (multi-instance step 2) ----
 
-  /** Terminals whose PTYs this workspace is holding. */
-  idsOfWorkspace(workspaceId: string): string[] {
-    return this.ownership.idsFor(workspaceId)
-  }
-
   /** The workspace holding a terminal's PTY, if any holds it. */
   workspaceOfTerminal(terminalId: string): string | undefined {
     return this.ownership.workspaceOf(terminalId)

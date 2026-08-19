@@ -234,3 +234,31 @@ describe('the invariant wave C failed', () => {
     expect(reg.isLive('doomed')).toBe(false)
   })
 })
+
+describe('the drain cannot be pinned by its own poller (review M3)', () => {
+  it('get() on every tick does NOT reset the death clock', () => {
+    // The wiring in index.ts calls get() for every resident session each tick
+    // so the registry can see what the store holds. If get() cleared deadSince
+    // the drain could never fire and residency would grow forever — the
+    // unbounded hold of ef5e13c, reached from the other direction.
+    // Mirrors index.ts exactly: each tick materialises what the STORE still
+    // holds, then lets liveness decide. Release removes it from the store, so
+    // a released session is not re-got on the following tick.
+    const held = new Set(['ws'])
+    const release = vi.fn((id: string) => void held.delete(id))
+    const { reg, f, tick } = registry({ release })
+    f.windows.set('ws', 1)
+    reg.get('ws')
+    f.windows.set('ws', 0)
+
+    for (let i = 0; i < 6; i += 1) {
+      for (const id of held) reg.get(id) // the poller, as index.ts drives it
+      reg.drainTick()
+      tick(5_000)
+    }
+
+    expect(release).toHaveBeenCalledWith('ws', expect.anything())
+    expect(reg.residentCount()).toBe(0)
+    expect(held.size).toBe(0)
+  })
+})

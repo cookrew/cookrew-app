@@ -10,7 +10,13 @@
 // bookmark to /, and step 3 is additive or it is a regression.
 
 import { describe, expect, it } from 'vitest'
-import { nodeInScope, resolveScopedRoute, splitSlugRoute } from '../src/main/mobile-slug-route'
+import {
+  nodeIdOfRoute,
+  nodeInScope,
+  resolveScopedRoute,
+  scopedRouteSupported,
+  splitSlugRoute
+} from '../src/main/mobile-slug-route'
 
 describe('splitSlugRoute', () => {
   it('leaves an unslugged api path exactly as it found it', () => {
@@ -127,5 +133,69 @@ describe('nodeInScope', () => {
 
   it('refuses a node that belongs to nothing at all', () => {
     expect(nodeInScope('ws-play', undefined)).toBe(false)
+  })
+})
+
+describe('scopedRouteSupported — fail closed (review C2)', () => {
+  it('allows the routes actually threaded through the scope', () => {
+    for (const p of [
+      '/',
+      '/index.html',
+      '/api/state',
+      '/api/terminal/t1/output',
+      '/api/terminal/t1/input',
+      '/api/terminal/t1/ask',
+      '/api/browser/b1/thumb'
+    ]) {
+      expect(scopedRouteSupported(p)).toBe(true)
+    }
+  })
+
+  it('REFUSES every route that still answers for focus', () => {
+    // The reviewer's C2 list. Each of these would otherwise return the focused
+    // workspace's answer to a URL naming a different one — a wrong answer that
+    // looks right, which is worse than not having the route.
+    for (const p of [
+      '/api/workspace',
+      '/api/nodes/n1',
+      '/api/terminal/t1/raw',
+      '/api/terminal/t1/resize',
+      '/api/terminal/t1/fork',
+      '/api/terminal/t1/cwd',
+      '/api/terminal/t1/stream',
+      '/api/terminal/t1/jump',
+      '/api/agents/a1/dispatch',
+      '/api/agents/a1/recover',
+      '/api/agents/a1/restore',
+      '/api/workspaces/switch',
+      '/api/events',
+      '/api/board',
+      '/api/team/fork'
+    ]) {
+      expect(scopedRouteSupported(p)).toBe(false)
+    }
+  })
+})
+
+describe('nodeIdOfRoute — one check for every scoped node route', () => {
+  it('extracts the node id a scoped route addresses', () => {
+    expect(nodeIdOfRoute('/api/terminal/t1/output')).toBe('t1')
+    expect(nodeIdOfRoute('/api/terminal/t1/input')).toBe('t1')
+    expect(nodeIdOfRoute('/api/terminal/t1/ask')).toBe('t1')
+    expect(nodeIdOfRoute('/api/browser/b9/thumb')).toBe('b9')
+  })
+
+  it('is null for routes that address no node', () => {
+    expect(nodeIdOfRoute('/api/state')).toBeNull()
+    expect(nodeIdOfRoute('/')).toBeNull()
+  })
+
+  it("the reviewer's PoC: a raw drive on another workspace's terminal", () => {
+    // POST /playground/api/terminal/<id-from-cookrew-dev>/raw — /raw is not
+    // scope-aware, so it is refused outright rather than reaching the handler.
+    expect(scopedRouteSupported('/api/terminal/other-ws-terminal/raw')).toBe(false)
+    // And the scoped variant that IS allowed still gets its node checked.
+    expect(nodeIdOfRoute('/api/terminal/other-ws-terminal/input')).toBe('other-ws-terminal')
+    expect(nodeInScope('ws-play', 'ws-dev')).toBe(false)
   })
 })

@@ -362,6 +362,26 @@ export function callerWorkspaceId(request: CliRequest, deps: SocketServerDeps): 
   return deps.store.ownerOf(self(request, deps).id) ?? deps.store.focusedId
 }
 
+/**
+ * callerWorkspaceId for commands that must still work WITHOUT a caller.
+ *
+ * self() throws 'not attached to a Cookrew terminal' for a plain shell, which
+ * is right for identity-scoped commands (ask, fork, recruit) and wrong for
+ * commands that merely prefer the caller's scope. `cookrew workspace dir list`
+ * from a normal terminal is a legitimate invocation and used to work; making
+ * scope resolution throw would have regressed it.
+ */
+export function tryCallerWorkspaceId(
+  request: CliRequest,
+  deps: SocketServerDeps
+): string | undefined {
+  try {
+    return deps.store.ownerOf(self(request, deps).id)
+  } catch {
+    return undefined
+  }
+}
+
 function requireOrch(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
   const me = self(request, deps)
   if (!me.orch) throw new Error('This terminal is not the Orch')
@@ -853,8 +873,9 @@ function cmdWorkspaceDir(request: CliRequest, deps: SocketServerDeps): string {
   const [, action, dirPath] = request.args
   // An agent enrolling a directory means ITS workspace. Reading this from focus
   // meant a command run in one workspace could silently edit another's dirs the
-  // moment a second seat looked elsewhere.
-  const activeId = callerWorkspaceId(request, deps)
+  // moment a second seat looked elsewhere. A plain shell has no workspace of
+  // its own, so it keeps the old behaviour rather than being refused.
+  const activeId = tryCallerWorkspaceId(request, deps) ?? deps.listWorkspaces().activeId
   if (action === 'list' || action === undefined) {
     const ws = deps.listWorkspaces().workspaces.find((w) => w.id === activeId)
     return (ws?.dirs ?? [])
@@ -1005,11 +1026,12 @@ async function cmdTeam(request: CliRequest, deps: SocketServerDeps): Promise<str
       // canvas ids never match snapshot node ids (BUG 1).
       requireOrch(request, deps)
       const fromSavedTeam = request.flags.from ? String(request.flags.from) : undefined
+      const forkFrom = callerWorkspaceId(request, deps)
       const spec: TeamForkSpec = {
         name: request.flags.name ? String(request.flags.name) : undefined,
-        nodeIds: fromSavedTeam
-          ? []
-          : deps.store.workspaceState(callerWorkspaceId(request, deps)).nodes.map((n) => n.id),
+        // Both halves from the SAME workspace: ids and the canvas they index.
+        nodeIds: fromSavedTeam ? [] : deps.store.workspaceState(forkFrom).nodes.map((n) => n.id),
+        fromWorkspaceId: fromSavedTeam ? undefined : forkFrom,
         choices: [],
         fromSavedTeam
       }

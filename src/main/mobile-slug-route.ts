@@ -84,3 +84,46 @@ export function nodeInScope(
 ): boolean {
   return scope === null || ownerOfNode === scope
 }
+
+/**
+ * Routes verified to honour a workspace scope.
+ *
+ * mobile-api serves ~44 routes and answers all but a handful for the FOCUSED
+ * session regardless of path. Making a slug reach them before they are
+ * scope-aware would be worse than not having slugs: POST
+ * /playground/api/terminal/<id-from-another-workspace>/raw would drive a
+ * terminal the URL does not name, and /playground/api/workspace would return
+ * a different canvas than the one asked for, with nothing to tell the caller.
+ *
+ * So the scoped surface is an ALLOW-LIST and everything else under a slug is
+ * refused. The list grows one route at a time as each is threaded through the
+ * scope; until then the honest answer is "not here yet", not a wrong answer
+ * that looks right.
+ */
+const SCOPE_AWARE: RegExp[] = [
+  /^\/$/,
+  /^\/index\.html$/,
+  /^\/api\/state$/,
+  /^\/api\/browser\/capabilities$/,
+  /^\/api\/terminal\/[^/]+\/output$/,
+  /^\/api\/terminal\/[^/]+\/(?:input|ask)$/,
+  /^\/api\/browser\/[^/]+\/thumb$/
+]
+
+export function scopedRouteSupported(pathname: string): boolean {
+  return SCOPE_AWARE.some((pattern) => pattern.test(pathname))
+}
+
+/**
+ * Node id addressed by a scope-aware path, if it addresses one.
+ *
+ * Extracted at the choke point rather than per-route so a new scoped route
+ * cannot forget its own scope check — forgetting is the failure mode this
+ * whole refactor is written against.
+ */
+export function nodeIdOfRoute(pathname: string): string | null {
+  const match = pathname.match(
+    /^\/api\/(?:terminal|browser)\/([^/]+)\/(?:output|input|ask|thumb)$/
+  )
+  return match ? match[1] : null
+}

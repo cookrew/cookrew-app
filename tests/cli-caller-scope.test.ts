@@ -10,7 +10,7 @@
 // dir add` run by an agent in workspace B silently edited workspace A's dirs.
 
 import { describe, expect, it } from 'vitest'
-import { callerWorkspaceId } from '../src/main/socket-server'
+import { callerWorkspaceId, tryCallerWorkspaceId } from '../src/main/socket-server'
 import type { SocketServerDeps } from '../src/main/socket-server'
 import type { WorkspaceStore } from '../src/main/store'
 import type { CliRequest } from '../src/shared/model'
@@ -64,5 +64,26 @@ describe('callerWorkspaceId', () => {
     const owner = (): string => 'caller-ws'
     expect(callerWorkspaceId(request(), deps({ ownerOf: owner, focusedId: 'a' }))).toBe('caller-ws')
     expect(callerWorkspaceId(request(), deps({ ownerOf: owner, focusedId: 'b' }))).toBe('caller-ws')
+  })
+})
+
+describe('tryCallerWorkspaceId — a plain shell is not an error (review C1)', () => {
+  it('resolves the caller when there IS one', () => {
+    expect(tryCallerWorkspaceId(request(), deps({ ownerOf: () => 'caller-ws' }))).toBe('caller-ws')
+  })
+
+  it('returns undefined instead of throwing for a non-pane shell', () => {
+    // `cookrew workspace dir list` from an ordinary terminal is a legitimate
+    // invocation that used to work. self() throws 'not attached' there, which
+    // is right for identity-scoped commands and wrong for scope resolution —
+    // making it throw regressed the plain CLI, flag-off.
+    const shell = deps({ node: null, ownerOf: () => undefined })
+    expect(() => tryCallerWorkspaceId(request({ terminalId: undefined }), shell)).not.toThrow()
+    expect(tryCallerWorkspaceId(request({ terminalId: undefined }), shell)).toBeUndefined()
+  })
+
+  it('the throwing variant still throws — identity commands need that', () => {
+    const shell = deps({ node: null, ownerOf: () => undefined })
+    expect(() => callerWorkspaceId(request({ terminalId: undefined }), shell)).toThrow()
   })
 })

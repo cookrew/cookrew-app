@@ -79,6 +79,10 @@ export class SessionRegistry<S> {
    */
   get(workspaceId: string): S {
     const existing = this.sessions.get(workspaceId)
+    // NOT cleared here. A poller calling get() on every tick would otherwise
+    // reset the death clock forever and nothing would ever drain — the same
+    // unbounded hold as a leaked flag, arrived at from the other direction.
+    // Only drainTick(), which actually consults liveness, clears it.
     if (existing !== undefined) return existing
 
     const session = this.deps.hydrate(workspaceId)

@@ -70,6 +70,7 @@ import { AgentRegistry } from './agent-registry'
 import { RecoverableStore, planRecovery } from './recoverable'
 import { EventLog } from './event-log'
 import { installProcessGuards } from './process-guards'
+import { SessionRegistry } from './session-registry'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { canonicalExternalUrl } from '../shared/external-url'
 import {
@@ -1230,6 +1231,48 @@ function deliverPendingInject(t: TerminalNodeData): void {
  * silently kill that session's pages on every switch. The union is the honest
  * argument now that more than one canvas can be live.
  */
+/**
+ * The drain that makes residency bounded (multi-instance step 2, C3).
+ *
+ * Without this, SessionRegistry was a design with no caller: hydrating grew
+ * the resident set monotonically and nothing ever released it — the unbounded
+ * hold of ef5e13c, reinstated by the module written to prevent it. The three
+ * liveness facts are read from where they already live, so there is still
+ * nothing to set and nothing to leak.
+ */
+const sessions = new SessionRegistry<{ id: string }>({
+  // One window today; step 4 turns this into a per-window count.
+  boundWindows: (id) => (id === store.focusedId ? 1 : 0),
+  // A phone or SSE reader watching any of this workspace's terminals.
+  subscribers: (id) =>
+    store.terminalIdsOf(id).reduce((n, tid) => n + sessionSync.subscriberCount(tid), 0),
+  // Work in flight: a terminal mid-turn is work, whoever is looking.
+  inFlightWork: (id) => store.terminalIdsOf(id).filter(terminalIsWorking).length,
+  hydrate: (id) => ({ id }),
+  release: (id) => {
+    // Order matters: stop watching before the PTYs go, so nothing re-arms a
+    // watch against a terminal that is being detached underneath it.
+    for (const tid of ptys.detachWorkspace(id)) {
+      sessionSync.release(tid)
+      turns.untrack(tid)
+    }
+    store.releaseSession(id)
+  },
+  now: () => Date.now()
+})
+
+/** How often the drain looks; a session must be dead across two of these. */
+const SESSION_DRAIN_TICK_MS = 5_000
+
+const sessionDrain = setInterval(() => {
+  // Materialise whatever the store is holding, then let liveness decide. The
+  // registry never PINS anything — get() deliberately does not clear the death
+  // clock, so a session that is merely resident still drains.
+  for (const id of store.resident()) sessions.get(id)
+  sessions.drainTick()
+}, SESSION_DRAIN_TICK_MS)
+sessionDrain.unref?.()
+
 function residentBrowsers(): BrowserNodeData[] {
   return store.resident().flatMap((id) =>
     store.workspaceState(id).nodes.filter((n): n is BrowserNodeData => n.kind === 'browser')
@@ -2034,6 +2077,8 @@ app.whenReady().then(() => {
 
   startMobileServer({
     store,
+    // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
+    multiInstance: () => store.isMultiInstance,
     events,
     agents,
     traces,
@@ -2152,6 +2197,7 @@ app.on('before-quit', (event) => {
   // what separates "we lost sight of it" from "it never happened" for whoever
   // reads the ledger after the restart.
   clearInterval(dispatchSweep)
+  clearInterval(sessionDrain)
   // Latch FIRST: no new ask may register after the drain snapshot begins
   // (Sol r11) — then interrupt commissioned work and retire the lease
   // generations, firing the abort seam into everything still in flight.
@@ -2229,10 +2275,13 @@ function registerIpc(handlers: RestoreHandlers): void {
     mux?.beginAttachBatch?.()
     try {
       // Serial by design: each PTY exists before its pendingInject delivery.
-      for (const t of store.terminals()) {
-        if (ptys.isLive(t.id)) continue // already held by this session
-        bootTerminal(t)
-      }
+      // Every terminal, live PTY or not. spawnTracked does far more than make
+      // a PTY — owner-input hooks, the producer lease, turn tracking, registry
+      // recording, pending-inject delivery — and ptys.spawn already
+      // short-circuits an existing session, so re-running it is cheap and
+      // skipping it silently drops all the rest. A terminal cut into this
+      // workspace with its PTY still live reaches exactly that path.
+      for (const t of store.terminals()) bootTerminal(t)
       void browserManager.replaceNodes(residentBrowsers()).catch(() => undefined)
       // The herdr workspace's chrome follows the focused Cookrew workspace.
       reportWorkspaceBinding()

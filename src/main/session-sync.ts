@@ -330,6 +330,11 @@ export class SessionTurnSync {
    * ordinary clock and a viewer who peeked at a parked terminal leaks
    * nothing.
    */
+  /** How many remote readers are watching this terminal right now. */
+  subscriberCount(terminalId: string): number {
+    return this.subscribers.get(terminalId) ?? 0
+  }
+
   subscribe(terminalId: string): void {
     this.subscribers.set(terminalId, (this.subscribers.get(terminalId) ?? 0) + 1)
     if (this.watched.has(terminalId)) return

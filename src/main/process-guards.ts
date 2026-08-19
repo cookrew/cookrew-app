@@ -139,22 +139,45 @@ export function installProcessGuards(deps: ProcessGuardDeps): void {
     }
   }
 
+  /**
+   * Reporting must never itself be fatal. `log` defaults to console.error,
+   * which THROWS on EPIPE once stderr is closed — routine in a packaged
+   * Electron app. An unwrapped report would then turn a survivable rejection
+   * into the abrupt, unflushed death this module exists to prevent: the guard
+   * killing the process it guards.
+   */
+  const reportSafely = (fault: FaultSummary, value: unknown): void => {
+    try {
+      report(fault, value)
+    } catch {
+      // Nowhere left to say so — stderr is the thing that failed. Surviving
+      // silently beats dying loudly.
+    }
+  }
+
   target.on('unhandledRejection', (reason: unknown) => {
     // Logged and SURVIVED. This is the whole point: a background promise
     // nobody awaited must not be able to end every agent's session.
-    report(summarizeFault('unhandledRejection', reason, now()), reason)
+    reportSafely(summarizeFault('unhandledRejection', reason, now()), reason)
   })
 
   let exiting = false
   target.on('uncaughtException', (error: Error) => {
-    report(summarizeFault('uncaughtException', error, now()), error)
-    // A second exception DURING teardown must not restart teardown.
-    if (exiting) return
+    // Latched FIRST, before anything that can throw: a second exception
+    // arriving mid-report must not restart teardown, and reporting is exactly
+    // where a closed stderr throws.
+    const reentered = exiting
     exiting = true
+    reportSafely(summarizeFault('uncaughtException', error, now()), error)
+    if (reentered) return
     try {
       deps.flush()
     } catch (flushError) {
-      log(`[cookrew] flush during fatal teardown failed: ${String(flushError)}`)
+      try {
+        log(`[cookrew] flush during fatal teardown failed: ${String(flushError)}`)
+      } catch {
+        // See reportSafely.
+      }
     }
     deps.exit(1)
   })

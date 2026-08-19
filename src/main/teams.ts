@@ -695,9 +695,13 @@ function resolveSource(deps: TeamForkDeps, spec: TeamForkSpec): TeamForkSource {
       sessionLinesOf: (id) => deps.teams.sessionLines(snap, id)
     }
   }
-  // The live canvas a save/fork is taken from is the one the seat is looking
-  // at. Step 2 scopes this to the requesting session's slug.
-  const state = deps.store.focusedState
+  // The live canvas a fork is taken from: the workspace the caller named, or
+  // the focused one for a seat that did not name one. Reading focus
+  // unconditionally would pair the CLI's caller-scoped nodeIds with a
+  // different workspace's nodes and fork the wrong canvas.
+  const state = spec.fromWorkspaceId
+    ? deps.store.workspaceState(spec.fromWorkspaceId)
+    : deps.store.focusedState
   return {
     name: state.name,
     dir: state.dir,

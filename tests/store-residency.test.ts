@@ -337,3 +337,66 @@ describe('slugs — every workspace is addressable (step 3)', () => {
     expect(store.bySlug('no-such-workspace')).toBeUndefined()
   })
 })
+
+describe('durability and teardown (review M2, C3)', () => {
+  it('flushes the workspace being left BEFORE recording the new focus', () => {
+    // Crash-window ordering: the registry write must not land first, or the
+    // app reopens on the new workspace having lost up to 300ms of the old
+    // one's edits. The edits are the user's work; the focus hint is a
+    // convenience.
+    vi.useFakeTimers()
+    const store = makeStore(false)
+    const alpha = store.focusedId
+    const beta = store.createWorkspace('Beta', '/work/beta')
+
+    const node = store.addNode(terminal('Unsaved')) as TerminalNodeData
+    store.switchWorkspace(beta.id) // no timer advance: only the flush can save it
+
+    expect(onDisk(store, alpha).nodes.map((n) => n.id)).toContain(node.id)
+    const registry = JSON.parse(
+      readFileSync(path.join(store.baseDirForTests, 'registry.json'), 'utf8')
+    )
+    expect(registry.activeId).toBe(beta.id)
+  })
+
+  it('releaseSession drops a background session and flushes it', () => {
+    const store = makeStore(true)
+    const alpha = store.focusedId
+    const beta = store.createWorkspace('Beta', '/work/beta')
+    store.switchWorkspace(beta.id)
+    const node = store.addNodeToWorkspace(alpha, terminal('Background'))
+
+    expect(store.releaseSession(alpha)).toBe(true)
+    expect(store.resident()).toEqual([beta.id])
+    expect(onDisk(store, alpha).nodes.map((n) => n.id)).toContain(node.id)
+  })
+
+  it('REFUSES to release the focused session', () => {
+    // Focus is one of the liveness facts, so being asked to drop it means the
+    // caller's facts are wrong — and dropping it would leave no canvas.
+    const store = makeStore(true)
+    expect(store.releaseSession(store.focusedId)).toBe(false)
+    expect(store.resident()).toContain(store.focusedId)
+  })
+})
+
+describe('a background node patch is not dropped (review H2)', () => {
+  it('updateNodeUnsafe falls through to the owning workspace', () => {
+    // Async harness binds are keyed by terminal id and land whenever a probe
+    // resolves — with sessions resident, long after focus moved on. Matching
+    // only the focused canvas would drop a session rebind silently, which is
+    // the exact-context failure shape.
+    const store = makeStore(true)
+    const alpha = store.focusedId
+    const beta = store.createWorkspace('Beta', '/work/beta')
+    const bg = store.addNodeToWorkspace(alpha, terminal('Background')) as TerminalNodeData
+    store.switchWorkspace(beta.id)
+
+    const patched = store.updateNodeUnsafe(bg.id, { claudeSessionId: 'sess-abc' })
+
+    expect(patched).toBeDefined()
+    expect((patched as TerminalNodeData).claudeSessionId).toBe('sess-abc')
+    const persisted = store.workspaceState(alpha).nodes.find((n) => n.id === bg.id)
+    expect((persisted as TerminalNodeData).claudeSessionId).toBe('sess-abc')
+  })
+})

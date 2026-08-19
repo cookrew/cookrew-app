@@ -246,6 +246,12 @@ export interface TeamForkSpec {
   choices: TeamForkChoice[]
   /** Fork the SAVED snapshot of this team instead of the live canvas. */
   fromSavedTeam?: string
+  /**
+   * Which live canvas the nodeIds belong to. Defaults to the focused one for
+   * callers that are a seat; the CLI passes the calling pane's workspace,
+   * which with sessions resident need not be the focused one (marketplace §11).
+   */
+  fromWorkspaceId?: string
   /** Directory set for the forked workspace; defaults to the source dirs. */
   dirs?: string[]
   /**

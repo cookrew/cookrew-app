@@ -189,3 +189,45 @@ describe('faultEvent', () => {
     expect(event.durationMs).toBeUndefined()
   })
 })
+
+describe('the guard must not kill the process it guards (review H4)', () => {
+  it('SURVIVES a rejection when stderr is closed (EPIPE)', () => {
+    // console.error throws on EPIPE once stderr is gone — routine in a
+    // packaged Electron app. An unwrapped report would turn a survivable
+    // rejection into the abrupt, unflushed death this module exists to stop.
+    const h = harness({
+      log: () => {
+        throw new Error('EPIPE: broken pipe')
+      }
+    })
+    expect(() => h.fire('unhandledRejection', new Error('boom'))).not.toThrow()
+    expect(h.exits).toEqual([])
+    expect(h.flushes).toBe(0)
+  })
+
+  it('still FLUSHES and exits on a fatal when logging is broken', () => {
+    const h = harness({
+      log: () => {
+        throw new Error('EPIPE: broken pipe')
+      }
+    })
+    expect(() => h.fire('uncaughtException', new Error('fatal'))).not.toThrow()
+    expect(h.flushes).toBe(1)
+    expect(h.exits).toEqual([1])
+  })
+
+  it('latches BEFORE reporting, so a throwing report cannot re-enter teardown', () => {
+    let calls = 0
+    const h = harness({
+      log: () => {
+        calls += 1
+        throw new Error('EPIPE')
+      }
+    })
+    h.fire('uncaughtException', new Error('first'))
+    h.fire('uncaughtException', new Error('second, mid-teardown'))
+    expect(h.exits).toEqual([1])
+    expect(h.flushes).toBe(1)
+    expect(calls).toBeGreaterThan(0)
+  })
+})
