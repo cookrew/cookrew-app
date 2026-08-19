@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { capacityFor, fillRows, ROW_HEIGHT, sampleIndices } from '../src/renderer/src/rail-fill'
+import {
+  capacityFor,
+  fillRows,
+  RAIL_INSET,
+  ROW_HEIGHT,
+  sampleIndices
+} from '../src/renderer/src/rail-fill'
 import type { CheckpointRow } from '../src/renderer/src/transcript'
 
 /**
@@ -14,9 +20,15 @@ const rowsOf = (n: number): CheckpointRow[] =>
   Array.from({ length: n }, (_, i) => ({ index: i + 1, record: null }) as unknown as CheckpointRow)
 
 describe('capacityFor', () => {
-  it('fits as many whole rows as the bar height allows', () => {
-    expect(capacityFor(669)).toBe(Math.floor(669 / ROW_HEIGHT))
-    expect(capacityFor(ROW_HEIGHT * 5)).toBe(5)
+  it('counts the USABLE span, not the full bar height', () => {
+    // Deliberate move: this asserted `barHeight / ROW_HEIGHT`, which is where
+    // the overcount lived. railAnchorTop insets both ends by RAIL_INSET, so
+    // two insets' worth of pixels are never available to lay rows in.
+    const usable = (h: number): number => Math.floor((h - 2 * RAIL_INSET) / ROW_HEIGHT)
+    expect(capacityFor(669)).toBe(usable(669))
+    expect(capacityFor(669)).toBeLessThan(Math.floor(669 / ROW_HEIGHT))
+    // A bar exactly five rows tall holds four once the insets are honoured.
+    expect(capacityFor(ROW_HEIGHT * 5)).toBe(4)
   })
 
   it('never drops below the two ends themselves', () => {
@@ -71,9 +83,46 @@ describe('fillRows', () => {
     expect(filled[filled.length - 1].fraction).toBeLessThan(1)
   })
 
-  it('lays no more rows than the bar can hold without overlap', () => {
+  /**
+   * The real gate: PIXELS, not a restatement of capacityFor.
+   *
+   * `filled.length <= capacityFor(h)` asserted the function against itself and
+   * passed happily while rows overlapped — capacityFor divided the full bar
+   * height though the layout only spans `h - 2 * RAIL_INSET`, so at h = 136 it
+   * allowed 4 rows 26px apart for 34px rows. Now that F5 makes rows opaque,
+   * that is rows clipping each other.
+   *
+   * This mirrors railAnchorTop's own arithmetic — `calc(16px + f * (100% -
+   * 32px))` — and asserts the smallest gap any two neighbours actually get.
+   */
+  const topsFor = (filled: { fraction: number }[], barHeight: number): number[] =>
+    filled.map((f) => RAIL_INSET + f.fraction * (barHeight - 2 * RAIL_INSET))
+
+  const minGap = (tops: number[]): number =>
+    tops.length < 2 ? Infinity : Math.min(...tops.slice(1).map((t, i) => t - tops[i]))
+
+  it('never lays two rows closer together than a row is tall', () => {
+    for (const barHeight of [136, 200, 340, 480, 669, 900]) {
+      const filled = fillRows(rows, barHeight, null)
+      const gap = minGap(topsFor(filled, barHeight))
+      expect(
+        gap,
+        `bar ${barHeight}px laid ${filled.length} rows, closest pair ${gap.toFixed(1)}px apart`
+      ).toBeGreaterThanOrEqual(ROW_HEIGHT)
+    }
+  })
+
+  it('still fills a tall bar rather than under-using it', () => {
+    // The inset correction must not turn into timidity: one more row than we
+    // lay would have to breach ROW_HEIGHT somewhere.
     const filled = fillRows(rows, 669, null)
+    expect(filled.length).toBeGreaterThanOrEqual(17)
     expect(filled.length).toBeLessThanOrEqual(capacityFor(669))
+  })
+
+  it('shows both ends even when the bar is far too short for them', () => {
+    const filled = fillRows(rows, 40, null)
+    expect(filled.map((f) => f.row.index)).toEqual([1, 122])
   })
 
   it('omits the focused row so it is never drawn twice', () => {

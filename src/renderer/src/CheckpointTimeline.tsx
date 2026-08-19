@@ -16,10 +16,11 @@ import {
   type CheckpointRow,
   type TraceMarkerRow
 } from './transcript'
-import { fillRows } from './rail-fill'
+/** RAIL_INSET: the marker inset (matches .cr-ckpt-here top: calc(16px + …)),
+ *  used here for scrub mapping. Imported rather than redeclared so the density
+ *  rule and the scrub mapping cannot drift — they describe the same 16px. */
+import { fillRows, RAIL_INSET } from './rail-fill'
 
-/** Marker inset (matches .cr-ckpt-here top: calc(16px + …)) for scrub mapping. */
-const RAIL_INSET = 16
 /** Px of pointer travel before a press on the rail becomes a scrub, not a tap. */
 const SCRUB_THRESHOLD = 4
 /** Press-and-hold a tab/row this long (~2s) to reveal its SAVE ROLE / FORK
@@ -336,18 +337,24 @@ export function CheckpointTimeline({
   }
 
   const here = focused?.index ?? null
-  const hereFrac =
-    markerFrac !== undefined
-      ? markerFrac
-      : here !== null && rows.length > 0
-        ? (() => {
-            // Math.max(0, -1) → 0 silently anchored an UNKNOWN identity to the
-            // top of the bar, i.e. onto T1. An identity we cannot place belongs
-            // at the live tail, which is what `markerFrac ?? 1` already says.
-            const at = rows.findIndex((r) => r.index === here)
-            return at < 0 ? 1 : at / rows.length
-          })()
-        : 1
+  /**
+   * The marker's own fraction, used ONLY when nothing is focused.
+   *
+   * There used to be a middle branch here computing a fraction by row lookup,
+   * and R19 item 3 corrected its `Math.max(0, -1) → 0` (an unknown identity
+   * anchored onto T1). Review round 1 found the branch UNREACHABLE, and that
+   * is right: `here` derives from `focused`, and `anchorFrac` reads hereFrac
+   * only in the `focused === null` arm — where `here` is necessarily null. So
+   * the whole expression always collapsed to this.
+   *
+   * Deleted rather than kept for safety. An untested unreachable fix for
+   * marker anchoring is exactly the class of thing F6 exists to catch, and a
+   * dead branch that looks live invites the next reader to trust it. The real
+   * "unknown identity" hazard was the boundary ticks clamping an unplaceable
+   * marker onto an end of the bar — a live site, fixed in R19 item 2 by
+   * omitting it instead.
+   */
+  const hereFrac = markerFrac ?? 1
 
   const rowLabel = (row: CheckpointRow): string => checkpointRowTitle(row, titleMode)
 
@@ -498,6 +505,23 @@ export function CheckpointTimeline({
   // own live fraction.
   const anchorFrac = focused ? focused.frac : hereFrac
 
+  /**
+   * Fade only when the rail is genuinely unattended.
+   *
+   * The bare `idle` flag broke touch outright. HOLD_REVEAL_MS is 1500 and the
+   * idle timer is 1700, so a long-press revealed a row's ROLE / FORK / REWIND
+   * actions and 200ms later the whole tag went to opacity 0 AND
+   * pointer-events: none — and on touch nothing wakes it, because there is no
+   * post-lift pointermove. The actions were visible for a fifth of a second and
+   * then inert: revealed, unreadable, untappable.
+   *
+   * A paused scrub had the same problem — hold the thumb still mid-drag and the
+   * thing being dragged fades out from under the finger.
+   *
+   * So: never while a row's actions are open, never mid-scrub.
+   */
+  const showIdle = idle && acting === null && !scrubbing
+
   return (
     <div
       ref={railRef}
@@ -507,7 +531,7 @@ export function CheckpointTimeline({
       // the full fan; a plain transcript scroll shows only the single tag.
       className={`cr-ckpt-rail${fanned ? ' fanned' : ''}${scrubbing ? ' dragging' : ''}${
         loadingIndex != null ? ' loading' : ''
-      }${idle ? ' idle' : ''}`}
+      }${showIdle ? ' idle' : ''}`}
       // F1 — approaching or moving over the rail is movement: it wakes the tag
       // and restarts the timer, so resting on the rail keeps the tag alive.
       // Throttled, because a raw pointermove would re-render on every pixel.
@@ -594,6 +618,18 @@ export function CheckpointTimeline({
               (HIGH-1). They grow up/down and clip at the view boundary. */}
           <div className="cr-ckpt-fan-focus">
             {renderRow(focusedRow)}
+            {/*
+              MED-4, DECLARED not restored: inline dividers stay on the focused
+              row alone. They were an in-FLOW element sitting between two rows,
+              and the full-range list has no flow to sit in — every row is
+              absolutely positioned at its own fraction, so a divider "after"
+              one would land on top of the next.
+              The information is not lost. Every boundary draws as a
+              .cr-ckpt-tick ON the bar, at (at + 1) / n in the same drawn-row
+              space (R19), computed over the FULL row set rather than the ~19
+              laid — so a boundary is visible whether or not its checkpoint was
+              sampled, which the old inline dividers could not manage either.
+            */}
             {boundaryRows(focusedRow.index)}
             {fan && (
               <div className="cr-ckpt-fan-down">

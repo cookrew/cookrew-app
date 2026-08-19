@@ -33,11 +33,26 @@ export interface FilledRow {
 export const ROW_HEIGHT = 34
 
 /**
- * How many rows the bar can show at once. At least 2 — the two ends ARE the
- * claim this gate makes, so a bar too short for more still shows T1 and LIVE.
+ * Inset at EACH end of the bar. Must match railAnchorTop, which lays fraction f
+ * at `calc(16px + f * (100% - 32px))` — so the rows occupy `barHeight - 2 *
+ * RAIL_INSET`, not the full height.
+ */
+export const RAIL_INSET = 16
+
+/**
+ * How many rows the bar can show at once.
+ *
+ * Over the USABLE span, not the full height. Dividing by barHeight overcounts
+ * by two rows' worth of inset and packs them tighter than ROW_HEIGHT: at
+ * H = 136 it asked for 4 rows across a 104px span — 26px apart for 34px rows.
+ * That was survivable while rows were transparent; now that F5 makes them
+ * opaque, overlapping rows CLIP each other.
+ *
+ * At least 2 — the two ends are the claim F3 makes, so a bar too short for more
+ * still shows T1 and the newest.
  */
 export function capacityFor(barHeight: number): number {
-  return Math.max(2, Math.floor(barHeight / ROW_HEIGHT))
+  return Math.max(2, Math.floor((barHeight - 2 * RAIL_INSET) / ROW_HEIGHT))
 }
 
 /**
