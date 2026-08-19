@@ -51,12 +51,12 @@ describe('WorkspaceStore terminal enumeration (delete-leak kill list)', () => {
   it('terminalIdsOf lists a workspace terminals — active AND after switching away', () => {
     const store = freshStore()
     const homeId = store.focusedId
-    store.addNode(term('t-home', store.state.dir))
+    store.addNode(term('t-home', store.focusedState.dir))
     expect(store.terminalIdsOf(homeId)).toEqual(['t-home'])
 
-    const other = store.createWorkspace('B', store.state.dir)
+    const other = store.createWorkspace('B', store.focusedState.dir)
     store.switchWorkspace(other.id)
-    store.addNode(term('t-b', store.state.dir))
+    store.addNode(term('t-b', store.focusedState.dir))
     // The deleted-workspace kill list must reach the now-INACTIVE home too.
     expect(store.terminalIdsOf(homeId)).toEqual(['t-home'])
     expect(store.terminalIdsOf(other.id)).toEqual(['t-b'])
@@ -64,10 +64,10 @@ describe('WorkspaceStore terminal enumeration (delete-leak kill list)', () => {
 
   it('allTerminalIds spans every workspace (the reaper ownership set)', () => {
     const store = freshStore()
-    store.addNode(term('t-home', store.state.dir))
-    const other = store.createWorkspace('B', store.state.dir)
+    store.addNode(term('t-home', store.focusedState.dir))
+    const other = store.createWorkspace('B', store.focusedState.dir)
     store.switchWorkspace(other.id)
-    store.addNode(term('t-b', store.state.dir))
+    store.addNode(term('t-b', store.focusedState.dir))
     expect(new Set(store.allTerminalIds())).toEqual(new Set(['t-home', 't-b']))
   })
 
@@ -77,10 +77,10 @@ describe('WorkspaceStore terminal enumeration (delete-leak kill list)', () => {
     // premise this test needs. With sessions resident the file is never read,
     // which the companion test below covers.
     const store = new WorkspaceStore(base, { multiInstance: false })
-    store.addNode(term('t-home', store.state.dir))
-    const parked = store.createWorkspace('Parked', store.state.dir)
+    store.addNode(term('t-home', store.focusedState.dir))
+    const parked = store.createWorkspace('Parked', store.focusedState.dir)
     store.switchWorkspace(parked.id)
-    store.addNode(term('t-parked', store.state.dir))
+    store.addNode(term('t-parked', store.focusedState.dir))
     store.switchWorkspace(store.list().workspaces[0].id)
     // Corrupt the PARKED workspace's file: lenient enumeration silently drops
     // its terminals (the fail-open bug), strict must throw so the reap aborts.
@@ -101,10 +101,10 @@ describe('WorkspaceStore terminal enumeration (delete-leak kill list)', () => {
     // unowned. The strict variant only has to fail-safe over what it must read.
     const base = mkdtempSync(path.join(tmpdir(), 'cookrew-del-'))
     const store = new WorkspaceStore(base, { multiInstance: true })
-    store.addNode(term('t-home', store.state.dir))
-    const other = store.createWorkspace('Resident', store.state.dir)
+    store.addNode(term('t-home', store.focusedState.dir))
+    const other = store.createWorkspace('Resident', store.focusedState.dir)
     store.switchWorkspace(other.id)
-    store.addNode(term('t-resident', store.state.dir))
+    store.addNode(term('t-resident', store.focusedState.dir))
     store.switchWorkspace(store.list().workspaces[0].id)
     expect(store.resident()).toContain(other.id)
 

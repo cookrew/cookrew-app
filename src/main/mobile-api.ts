@@ -244,7 +244,7 @@ export async function handleMobileApi(
     respondJson(
       response,
       200,
-      await enrichStateWithGit(store.state, ops.gitInfo),
+      await enrichStateWithGit(store.focusedState, ops.gitInfo),
     );
     return true;
   }
@@ -766,7 +766,7 @@ export async function handleMobileApi(
 
   if (method === "GET" && p === "/api/events") {
     const send = startSse(response);
-    send("workspace", store.state);
+    send("workspace", store.focusedState);
     send("workspaces", ops.listWorkspaces());
     for (const activity of turns.list()) send("activity", activity);
     const onChange = (state: WorkspaceState): void => send("workspace", state);

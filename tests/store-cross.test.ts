@@ -66,10 +66,10 @@ describe('WorkspaceStore mirrored cross-workspace edges', () => {
 
     const conn = store.connectAcross(orch.id, coder.id)
     // Active (alpha) side holds the edge…
-    expect(store.state.connections.some((c) => c.id === conn.id)).toBe(true)
+    expect(store.focusedState.connections.some((c) => c.id === conn.id)).toBe(true)
     // …and the beta file holds the SAME edge (visible once beta is active).
     store.switchWorkspace(beta.id)
-    expect(store.state.connections.some((c) => c.id === conn.id)).toBe(true)
+    expect(store.focusedState.connections.some((c) => c.id === conn.id)).toBe(true)
     store.switchWorkspace(alpha)
   })
 
@@ -81,7 +81,7 @@ describe('WorkspaceStore mirrored cross-workspace edges', () => {
     const first = store.connectAcross(orch.id, coder.id)
     const second = store.connectAcross(orch.id, coder.id)
     expect(second.id).toBe(first.id)
-    expect(store.state.connections.filter((c) => c.a === orch.id || c.b === orch.id)).toHaveLength(1)
+    expect(store.focusedState.connections.filter((c) => c.a === orch.id || c.b === orch.id)).toHaveLength(1)
   })
 
   it('resolves foreign endpoints from either side via connectedToAcross', () => {

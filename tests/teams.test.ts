@@ -647,7 +647,7 @@ describe('workspaceFromTemplate (FEATURE 1: workspace from team template)', () =
     const terminals = store.terminals()
     expect(terminals).toHaveLength(2)
     expect(terminals.every((t) => t.cwd === '/work/fresh')).toBe(true)
-    expect(store.state.connections).toHaveLength(1)
+    expect(store.focusedState.connections).toHaveLength(1)
   })
 
   it('rejects an unknown template by name', async () => {
@@ -715,7 +715,7 @@ describe('copyTeam (Figma copy into an existing workspace)', () => {
     expect(targetState.nodes).toHaveLength(2)
     // Fresh ids — the source nodes stay untouched on their canvas.
     expect(targetState.nodes.map((n) => n.id)).not.toContain(aId)
-    expect(store.state.nodes).toHaveLength(3)
+    expect(store.focusedState.nodes).toHaveLength(3)
     // The a↔b cable traveled; the cable reaching the unselected note did not.
     expect(targetState.connections).toHaveLength(1)
     // Figma paste nudge, so a copy never lands pixel-exact on its source.
@@ -760,7 +760,7 @@ describe('copyTeam (Figma copy into an existing workspace)', () => {
     // Landed on the now-active canvas: adopted (booted) and re-homed to the
     // target's workdir; the source workspace keeps its originals.
     expect(adopted).toHaveLength(2)
-    const copied = store.state.nodes.filter((n): n is TerminalNodeData => n.kind === 'terminal')
+    const copied = store.focusedState.nodes.filter((n): n is TerminalNodeData => n.kind === 'terminal')
     expect(copied.every((t) => t.cwd === '/work/staging')).toBe(true)
     expect(store.workspaceState(sourceWsId).nodes).toHaveLength(3)
   })
@@ -792,7 +792,7 @@ describe('copyTeam (Figma copy into an existing workspace)', () => {
     // terminals; a copied browser must not render as a dead card.
     expect(adopted.map((n) => n.kind).sort()).toEqual(['browser', 'terminal'])
     // The duplicate gets a unique name next to its source.
-    const names = store.state.nodes.map((n) => n.name)
+    const names = store.focusedState.nodes.map((n) => n.name)
     expect(new Set(names).size).toBe(names.length)
     expect(changes).toBe(1)
     expect(events).toEqual([])

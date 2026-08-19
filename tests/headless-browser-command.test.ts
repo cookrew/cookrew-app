@@ -74,7 +74,7 @@ describe('HeadlessBrowserCommandEngine', () => {
     const output = await engine.run(['create', 'https://example.test', 'Ghost'], 'not-a-node')
     expect(output).toMatch(/not connected/i)
     expect(store.nodeByName('Ghost', 'browser')).toBeDefined()
-    expect(store.state.connections).toHaveLength(0)
+    expect(store.focusedState.connections).toHaveLength(0)
   })
 
   it('places a created browser beside its caller and connects the two', async () => {
@@ -83,7 +83,7 @@ describe('HeadlessBrowserCommandEngine', () => {
     ).resolves.toMatch(/Fresh/)
     const created = store.nodeByName('Fresh', 'browser') as BrowserNodeData
     expect(created.position).toEqual({ x: 10 + 640 + 80, y: 20 })
-    expect(store.state.connections).toEqual([
+    expect(store.focusedState.connections).toEqual([
       expect.objectContaining({ a: terminal().id, b: created.id })
     ])
   })

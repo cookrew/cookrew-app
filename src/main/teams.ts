@@ -695,7 +695,9 @@ function resolveSource(deps: TeamForkDeps, spec: TeamForkSpec): TeamForkSource {
       sessionLinesOf: (id) => deps.teams.sessionLines(snap, id)
     }
   }
-  const state = deps.store.state
+  // The live canvas a save/fork is taken from is the one the seat is looking
+  // at. Step 2 scopes this to the requesting session's slug.
+  const state = deps.store.focusedState
   return {
     name: state.name,
     dir: state.dir,

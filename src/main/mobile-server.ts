@@ -620,7 +620,7 @@ async function handle(
     )
     // Git-enriched like /api/workspace (same coalescing cache), so the lite
     // client's git chips light up too — terminals carry node.git.
-    const enriched = await enrichStateWithGit(deps.store.state, deps.ops.gitInfo)
+    const enriched = await enrichStateWithGit(deps.store.focusedState, deps.ops.gitInfo)
     respondJson(response, 200, {
       workspace: enriched.name,
       // The full canvas — the mobile client mirrors the desktop layout, so

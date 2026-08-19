@@ -298,7 +298,7 @@ function terminalFromRegistry(entry: AgentRegistryEntry): TerminalNodeData {
 function connectedOf(store: WorkspaceStore, id: string): WorkspaceNodeHit[] {
   return (
     store.connectedToAcross?.(id) ??
-    store.connectedTo(id).map((node) => ({ node, workspaceId: store.focusedId }))
+    store.connectedTo(id).map((node) => ({ node, workspaceId: store.ownerOf(id) ?? store.focusedId }))
   )
 }
 
@@ -344,6 +344,22 @@ export function resolveSelf(
     )
   }
   throw new Error('This shell is not attached to a Cookrew terminal node')
+}
+
+/**
+ * The workspace a CLI command is ABOUT: the one owning the pane it came from.
+ *
+ * Every `cookrew` invocation arrives from inside a terminal, and that terminal
+ * already knows which workspace it lives in — so the CLI never has to consult
+ * what a desktop happens to be showing. This is what lets one global CLI socket
+ * serve N concurrent workspace sessions (marketplace-architecture §11): scope
+ * travels with the caller, not with focus.
+ *
+ * Falls back to focus only when the caller cannot be placed at all — a shell
+ * invoking `cookrew --as "Name"` against a registry entry whose node is gone.
+ */
+export function callerWorkspaceId(request: CliRequest, deps: SocketServerDeps): string {
+  return deps.store.ownerOf(self(request, deps).id) ?? deps.store.focusedId
 }
 
 function requireOrch(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
@@ -413,6 +429,13 @@ export function browserWorkspaceError(scope: {
 
 export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const me = self(request, deps)
+  // DELIBERATELY focus, not the caller's workspace. Everything below resolves
+  // through focused-scoped lookups (node/nodeByName) and browserCommand drives
+  // the engine this process actually booted, so `active` here means "where a
+  // browser can be driven", which is boot scope — the same question
+  // bootsTerminalsFor() names in index.ts. Scoping it to the caller would emit
+  // error messages that contradict what the engine then does. It converts when
+  // the browser runtime is scoped per session, not before.
   const activeId = deps.store.focusedId
   const active = { id: activeId, name: workspaceName(deps, activeId) }
   const [sub, name] = request.args
@@ -464,7 +487,10 @@ function workspaceName(deps: SocketServerDeps, id: string): string {
 function cmdList(request: CliRequest, deps: SocketServerDeps): string {
   if (request.flags.all) return cmdListAll(deps)
   const me = self(request, deps)
-  const activeId = deps.store.focusedId
+  // Relative to where the CALLER lives. An agent in workspace B asking what it
+  // is connected to must be told "[workspace: X]" against B — its own canvas —
+  // not against whichever workspace a desktop somewhere is displaying.
+  const activeId = deps.store.ownerOf(me.id) ?? deps.store.focusedId
   const wsName = (id: string): string =>
     deps.listWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id
   const connected = connectedOf(deps.store, me.id)
@@ -708,8 +734,9 @@ function cmdRecruit(request: CliRequest, deps: SocketServerDeps): string {
   if (plan.autoAddDir) {
     lines.push(`Added ${plan.autoAddDir} to workspace "${home.name}" (no workspace owned it)`)
   }
-  // Layer 4 guard: never let a recruit land somewhere else silently.
-  if (plan.workspaceId !== deps.store.focusedId) {
+  // Layer 4 guard: never let a recruit land somewhere else silently. Measured
+  // against the ORCH's own workspace — it is the one being surprised.
+  if (plan.workspaceId !== (deps.store.ownerOf(me.id) ?? deps.store.focusedId)) {
     lines.push(
       `⚠ "${added.name}" lives in workspace "${wsName(plan.workspaceId)}", not the active one — switch with: cookrew workspace switch "${wsName(plan.workspaceId)}"`
     )
@@ -821,10 +848,13 @@ async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promis
   }
 }
 
-/** Directory subcommands operate on the ACTIVE workspace. */
+/** Directory subcommands operate on the CALLER's workspace. */
 function cmdWorkspaceDir(request: CliRequest, deps: SocketServerDeps): string {
   const [, action, dirPath] = request.args
-  const { activeId } = deps.listWorkspaces()
+  // An agent enrolling a directory means ITS workspace. Reading this from focus
+  // meant a command run in one workspace could silently edit another's dirs the
+  // moment a second seat looked elsewhere.
+  const activeId = callerWorkspaceId(request, deps)
   if (action === 'list' || action === undefined) {
     const ws = deps.listWorkspaces().workspaces.find((w) => w.id === activeId)
     return (ws?.dirs ?? [])
@@ -977,7 +1007,9 @@ async function cmdTeam(request: CliRequest, deps: SocketServerDeps): Promise<str
       const fromSavedTeam = request.flags.from ? String(request.flags.from) : undefined
       const spec: TeamForkSpec = {
         name: request.flags.name ? String(request.flags.name) : undefined,
-        nodeIds: fromSavedTeam ? [] : deps.store.state.nodes.map((n) => n.id),
+        nodeIds: fromSavedTeam
+          ? []
+          : deps.store.workspaceState(callerWorkspaceId(request, deps)).nodes.map((n) => n.id),
         choices: [],
         fromSavedTeam
       }

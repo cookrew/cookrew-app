@@ -180,15 +180,6 @@ export class WorkspaceStore extends EventEmitter {
     return this.hydrate(this.focused).state
   }
 
-  /**
-   * @deprecated Focus, under the singleton's name. Reads that mean "which
-   * workspace owns this?" want the owning session; only seat-scoped reads want
-   * focus. Kept until the CLI is converted (step 1, commit 3).
-   */
-  get state(): WorkspaceState {
-    return this.focusedState
-  }
-
   /** Meta of the focused workspace, or undefined if the registry is empty. */
   focusedMeta(): WorkspaceMeta | undefined {
     return this.registry.workspaces.find((w) => w.id === this.focused)
@@ -298,7 +289,7 @@ export class WorkspaceStore extends EventEmitter {
 
     this.emit('switch', { previousTerminalIds })
     this.emit('workspaces', this.list())
-    this.emit('change', this.state)
+    this.emit('change', this.focusedState)
     this.emitOp(
       'workspace.switched',
       target.id,
@@ -320,7 +311,7 @@ export class WorkspaceStore extends EventEmitter {
     if (session) session.state = { ...session.state, name }
     saveRegistry(this.baseDir, this.registry)
     this.emit('workspaces', this.list())
-    if (id === this.focused) this.emit('change', this.state)
+    if (id === this.focused) this.emit('change', this.focusedState)
     this.emitOp('workspace.renamed', id, name, id)
   }
 
@@ -372,7 +363,7 @@ export class WorkspaceStore extends EventEmitter {
 
   /** Working directories of the active workspace, primary first. */
   dirs(): string[] {
-    return this.state.dirs
+    return this.focusedState.dirs
   }
 
   private applyDirs(id: string, nextDirs: string[]): WorkspaceList {
@@ -423,7 +414,7 @@ export class WorkspaceStore extends EventEmitter {
   setTerminalCwd(nodeId: string, dir: string): TerminalNodeData {
     const node = this.node(nodeId)
     if (!node || node.kind !== 'terminal') throw new Error('Not a terminal node')
-    if (!this.state.dirs.includes(dir)) {
+    if (!this.focusedState.dirs.includes(dir)) {
       throw new Error(`'${dir}' is not a directory of this workspace`)
     }
     return this.updateNodeUnsafe(nodeId, { cwd: dir }) as TerminalNodeData
@@ -491,11 +482,11 @@ export class WorkspaceStore extends EventEmitter {
   // ---- lookups ----
 
   node(id: string): CanvasNode | undefined {
-    return this.state.nodes.find((n) => n.id === id)
+    return this.focusedState.nodes.find((n) => n.id === id)
   }
 
   nodeByName(name: string, kind?: CanvasNode['kind']): CanvasNode | undefined {
-    return this.state.nodes.find(
+    return this.focusedState.nodes.find(
       (n) => n.name.toLowerCase() === name.toLowerCase() && (!kind || n.kind === kind)
     )
   }
@@ -508,7 +499,7 @@ export class WorkspaceStore extends EventEmitter {
    * Returns undefined when no workspace contains the node.
    */
   workspaceOfNode(id: string): WorkspaceMeta | undefined {
-    if (this.state.nodes.some((n) => n.id === id)) return this.activeMeta()
+    if (this.focusedState.nodes.some((n) => n.id === id)) return this.activeMeta()
     for (const meta of this.registry.workspaces) {
       if (meta.id === this.focused) continue
       try {
@@ -524,27 +515,27 @@ export class WorkspaceStore extends EventEmitter {
   }
 
   terminals(): TerminalNodeData[] {
-    return this.state.nodes.filter((n): n is TerminalNodeData => n.kind === 'terminal')
+    return this.focusedState.nodes.filter((n): n is TerminalNodeData => n.kind === 'terminal')
   }
 
   notes(): NoteNodeData[] {
-    return this.state.nodes.filter((n): n is NoteNodeData => n.kind === 'note')
+    return this.focusedState.nodes.filter((n): n is NoteNodeData => n.kind === 'note')
   }
 
   browsers(): BrowserNodeData[] {
-    return this.state.nodes.filter((n): n is BrowserNodeData => n.kind === 'browser')
+    return this.focusedState.nodes.filter((n): n is BrowserNodeData => n.kind === 'browser')
   }
 
   /** Everything directly connected to the given node id. */
   connectedTo(id: string): CanvasNode[] {
-    const ids = this.state.connections
+    const ids = this.focusedState.connections
       .filter((c) => c.a === id || c.b === id)
       .map((c) => (c.a === id ? c.b : c.a))
     return ids.map((nid) => this.node(nid)).filter((n): n is CanvasNode => n !== undefined)
   }
 
   isConnected(aId: string, bId: string): boolean {
-    return this.state.connections.some(
+    return this.focusedState.connections.some(
       (c) => (c.a === aId && c.b === bId) || (c.a === bId && c.b === aId)
     )
   }
@@ -766,6 +757,19 @@ export class WorkspaceStore extends EventEmitter {
     return undefined
   }
 
+  /**
+   * The workspace that OWNS a node, across every workspace.
+   *
+   * The CLI's resolver. A `cookrew` command arrives from inside a pane, so the
+   * caller's terminal id already says which workspace the command is about —
+   * the process never has to consult what anyone is looking at. That is the
+   * whole reason the CLI socket can stay global while its scope goes
+   * per-session (marketplace-architecture §11).
+   */
+  ownerOf(nodeId: string): string | undefined {
+    return this.nodeAcrossWorkspaces(nodeId)?.workspaceId
+  }
+
   workspaceOf(nodeId: string): WorkspaceMeta | undefined {
     const hit = this.nodeAcrossWorkspaces(nodeId)
     return hit ? this.registry.workspaces.find((w) => w.id === hit.workspaceId) : undefined
@@ -943,9 +947,9 @@ export class WorkspaceStore extends EventEmitter {
   addNode(node: CanvasNode): CanvasNode {
     const named: CanvasNode = {
       ...node,
-      name: uniqueName(node.name, this.state.nodes.map((n) => n.name))
+      name: uniqueName(node.name, this.focusedState.nodes.map((n) => n.name))
     }
-    this.mutate({ ...this.state, nodes: [...this.state.nodes, named] })
+    this.mutate({ ...this.focusedState, nodes: [...this.focusedState.nodes, named] })
     if (named.kind === 'note') void this.persistNoteFile(named)
     this.emitOp(
       this.createdType(named.kind),
@@ -983,13 +987,13 @@ export class WorkspaceStore extends EventEmitter {
   /** Full-field update for MAIN-PROCESS internals (spawn binds, cwd moves). */
   updateNodeUnsafe(id: string, patch: Partial<CanvasNode>): CanvasNode | undefined {
     let updated: CanvasNode | undefined
-    const nodes = this.state.nodes.map((n) => {
+    const nodes = this.focusedState.nodes.map((n) => {
       if (n.id !== id) return n
       updated = { ...n, ...patch } as CanvasNode
       return updated
     })
     if (!updated) return undefined
-    this.mutate({ ...this.state, nodes })
+    this.mutate({ ...this.focusedState, nodes })
     if (updated.kind === 'note') void this.persistNoteFile(updated)
     return updated
   }
@@ -1022,20 +1026,20 @@ export class WorkspaceStore extends EventEmitter {
     const node = this.node(id)
     if (node) this.captureRecoverable(node, this.focused)
     this.mutate({
-      ...this.state,
-      nodes: this.state.nodes.filter((n) => n.id !== id),
-      connections: this.state.connections.filter((c) => c.a !== id && c.b !== id)
+      ...this.focusedState,
+      nodes: this.focusedState.nodes.filter((n) => n.id !== id),
+      connections: this.focusedState.connections.filter((c) => c.a !== id && c.b !== id)
     })
     if (node) this.emitOp(this.removedType(node.kind), node.id, node.name, this.focused)
   }
 
   connect(aId: string, bId: string): Connection {
-    const existing = this.state.connections.find(
+    const existing = this.focusedState.connections.find(
       (c) => (c.a === aId && c.b === bId) || (c.a === bId && c.b === aId)
     )
     if (existing) return existing
     const conn: Connection = { id: randomUUID(), a: aId, b: bId }
-    this.mutate({ ...this.state, connections: [...this.state.connections, conn] })
+    this.mutate({ ...this.focusedState, connections: [...this.focusedState.connections, conn] })
     this.emitOp(
       'connection.made',
       conn.id,
@@ -1047,8 +1051,8 @@ export class WorkspaceStore extends EventEmitter {
 
   disconnect(connectionId: string): void {
     this.mutate({
-      ...this.state,
-      connections: this.state.connections.filter((c) => c.id !== connectionId)
+      ...this.focusedState,
+      connections: this.focusedState.connections.filter((c) => c.id !== connectionId)
     })
     this.emitOp('connection.removed', connectionId, '', this.focused)
   }
@@ -1058,7 +1062,7 @@ export class WorkspaceStore extends EventEmitter {
   createNote(partial: Omit<NoteNodeData, 'kind' | 'id' | 'name'>): NoteNodeData {
     const name = uniqueName(
       noteNameFromContent(partial.content),
-      this.state.nodes.map((n) => n.name)
+      this.focusedState.nodes.map((n) => n.name)
     )
     const note: NoteNodeData = { kind: 'note', id: randomUUID(), name, ...partial }
     return this.addNode(note) as NoteNodeData
@@ -1072,7 +1076,7 @@ export class WorkspaceStore extends EventEmitter {
       ? note.name
       : uniqueName(
           noteNameFromContent(content),
-          this.state.nodes.filter((n) => n.id !== id).map((n) => n.name)
+          this.focusedState.nodes.filter((n) => n.id !== id).map((n) => n.name)
         )
     return this.updateNode(id, { content, name }) as NoteNodeData
   }

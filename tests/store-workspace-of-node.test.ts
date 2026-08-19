@@ -18,7 +18,7 @@ describe('WorkspaceStore.workspaceOfNode', () => {
       name: 'A',
       preset: 'Shell',
       command: '',
-      cwd: store.state.dir,
+      cwd: store.focusedState.dir,
       orch: false,
       role: null,
       position: { x: 0, y: 0 },
@@ -38,13 +38,13 @@ describe('WorkspaceStore.workspaceOfNode', () => {
       name: 'HomeAgent',
       preset: 'Shell',
       command: '',
-      cwd: store.state.dir,
+      cwd: store.focusedState.dir,
       orch: true,
       role: null,
       position: { x: 0, y: 0 },
       size: DEFAULT_TERMINAL_SIZE
     })
-    const other = store.createWorkspace('Bravo', store.state.dir)
+    const other = store.createWorkspace('Bravo', store.focusedState.dir)
     store.switchWorkspace(other.id)
 
     expect(store.node('term-home')).toBeUndefined() // active-scoped: gone

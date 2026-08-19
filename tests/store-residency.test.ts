@@ -265,6 +265,6 @@ describe('the registry stops being the authority on focus', () => {
 
     const reopened = new WorkspaceStore(base, { multiInstance: false })
     expect(reopened.focusedId).toBe(alpha)
-    expect(reopened.state.nodes).toEqual([])
+    expect(reopened.focusedState.nodes).toEqual([])
   })
 })
