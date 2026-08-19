@@ -375,17 +375,16 @@ function paneCard(t: {
 }
 
 /**
- * Which workspace this process currently boots and holds PTYs for.
+ * Which workspaces this process boots and holds PTYs for.
  *
- * Named because it is NOT the same question as "which workspace is focused",
- * even though today it has the same answer: the switch handler boots the
- * focused canvas's terminals and detaches the outgoing ones. Once the pty
- * registry is scoped per session (step 1 commit 3) this becomes a residency
- * question, and it becomes one HERE — one place, not eight call sites that
- * each learned to spell `store.activeId`.
+ * Step 2 made this a RESIDENCY question, as commit 2 said it would — and it
+ * changed here, in the one place, rather than in the eight call sites that
+ * each used to spell `store.activeId`. Flag off, exactly one workspace is
+ * resident and the answer is identical to focus; flag on, every resident
+ * session holds its own runtimes.
  */
 function bootsTerminalsFor(workspaceId: string): boolean {
-  return workspaceId === store.focusedId
+  return store.resident().includes(workspaceId)
 }
 
 /**
@@ -569,7 +568,13 @@ function spawnTracked(t: {
   const card = cardNode?.kind === 'terminal' ? paneCard(cardNode) : undefined
   // Before the spawn, because the spawn is what makes the pane exist.
   const timingBoot = beginBootTiming(t.id)
-  const session = ptys.spawn({ terminalId: t.id, command: effective, cwd: t.cwd, card })
+  // Tagged with its owning workspace so the PTY plane can answer per-session
+  // questions (multi-instance step 2). ownerOf resolves across every
+  // workspace; focus is only the fallback for a terminal no canvas claims yet.
+  const session = ptys.spawn(
+    { terminalId: t.id, command: effective, cwd: t.cwd, card },
+    store.ownerOf(t.id) ?? store.focusedId
+  )
   // One producer per conversation: every owner keystroke consults the
   // tracker BEFORE the byte reaches the child; a dispatch in flight is
   // preempted durably or the write is refused (Sol r4 P0-1).
@@ -1217,6 +1222,20 @@ function deliverPendingInject(t: TerminalNodeData): void {
 }
 
 /** Boot one restored terminal: spawn + any deferred copy context. */
+/**
+ * Every resident session's browsers, not just the focused canvas's.
+ *
+ * replaceNodes() is a replace-the-WORLD call — anything absent is stopped — so
+ * handing it one workspace's browsers while another session is resident would
+ * silently kill that session's pages on every switch. The union is the honest
+ * argument now that more than one canvas can be live.
+ */
+function residentBrowsers(): BrowserNodeData[] {
+  return store.resident().flatMap((id) =>
+    store.workspaceState(id).nodes.filter((n): n is BrowserNodeData => n.kind === 'browser')
+  )
+}
+
 function bootTerminal(t: TerminalNodeData): void {
   spawnTracked(t)
   deliverPendingInject(t)
@@ -2184,27 +2203,38 @@ function broadcast(): void {
 function registerIpc(handlers: RestoreHandlers): void {
   store.on('change', broadcast)
 
-  // On workspace switch, tear down the outgoing PTYs and boot the incoming
-  // canvas's terminals. Only the active workspace holds live SCREENS — but
-  // not the only live work: an outgoing terminal's session file stays
-  // watched while it grows and drains on its own once the work stops
-  // (v5 A4: tracking follows work, never focus and never a flag).
+  // A workspace switch used to be a teardown: detach every outgoing PTY, boot
+  // the incoming canvas, rebuild the browser runtime from scratch. That is the
+  // singleton showing through — focus deciding what exists.
+  //
+  // With sessions resident (step 2) a switch is a FOCUS CHANGE. The workspace
+  // you left keeps its live screens, so switching back costs nothing and the
+  // work you looked away from was never interrupted. Only what is not resident
+  // is torn down, which flag-off makes the outgoing workspace — today's
+  // behaviour exactly.
   store.on('switch', ({ previousTerminalIds }: { previousTerminalIds: string[] }) => {
-    // Detach (not kill): the outgoing workspace's tmux sessions stay alive so
-    // switching back reattaches them with their agents and scrollback intact.
     for (const tid of previousTerminalIds) {
+      if (bootsTerminalsFor(ptys.workspaceOfTerminal(tid) ?? '')) continue
+      // Detach (not kill): the tmux session stays alive so returning
+      // reattaches it with its agent and scrollback intact.
       sessionSync.release(tid)
       turns.untrack(tid)
       ptys.detach(tid)
     }
     const mux = multiplexer()
+    // ONE herdr inventory for the whole reattach. The baseline probe measured
+    // unbatched pane resolution at 44.8x batched and linear in K (34 panes,
+    // 2026-08-20) — this batch is the entire reason the curve stays flat, and
+    // step 2 multiplies K by the number of resident sessions.
     mux?.beginAttachBatch?.()
     try {
       // Serial by design: each PTY exists before its pendingInject delivery.
-      // Herdr shares only its pane inventory inside this scope.
-      for (const t of store.terminals()) bootTerminal(t)
-      void browserManager.replaceNodes(store.browsers()).catch(() => undefined)
-      // The herdr workspace's chrome follows the active Cookrew workspace.
+      for (const t of store.terminals()) {
+        if (ptys.isLive(t.id)) continue // already held by this session
+        bootTerminal(t)
+      }
+      void browserManager.replaceNodes(residentBrowsers()).catch(() => undefined)
+      // The herdr workspace's chrome follows the focused Cookrew workspace.
       reportWorkspaceBinding()
     } finally {
       mux?.endAttachBatch?.()
