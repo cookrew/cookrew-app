@@ -130,3 +130,28 @@ export function isForbiddenReason(value: string): value is ForbiddenReason {
 export function isCallPathAnswer(status: number): boolean {
   return status === 200 || status === 403
 }
+
+/**
+ * R12 — METERED DRAWDOWN, recorded here because this is the module that will
+ * enforce it. NOT YET IMPLEMENTED: the call path itself does not exist, so
+ * there is nothing to charge against. Written down now so the shape cannot
+ * drift before then.
+ *
+ * The rule: drawdown is per-TURN and charged at turn ACCEPT — the moment the
+ * gate takes the turn, before any work — and the gate never interrupts a turn
+ * once running. A balance is therefore checked exactly once per turn, at the
+ * boundary, so `balance_empty` can only ever surface BETWEEN turns.
+ *
+ * That ordering is what makes "your last answer completed" true by
+ * construction rather than by copy: an accepted turn is already paid for, so
+ * there is no state in which the gate stops a turn halfway and leaves a partial
+ * answer to apologise for. Charging at completion, or re-checking mid-turn,
+ * would both create exactly that state — which is why this is a contract and
+ * not a wording choice.
+ */
+export const DRAWDOWN_CONTRACT = {
+  unit: 'turn',
+  chargedAt: 'accept',
+  interruptsRunningTurn: false,
+  surfacesBetweenTurnsOnly: true
+} as const

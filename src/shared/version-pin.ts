@@ -97,3 +97,128 @@ export function nextVersion(records: readonly VersionPinRecord[]): number {
   for (const r of records) if (r.version > highest) highest = r.version
   return highest + 1
 }
+
+export interface CutOptions {
+  scrollLine: number
+  cutAt: number
+  manifestId?: string
+}
+
+/**
+ * Cut a version. Returns a NEW record and leaves the pin list alone — the whole
+ * §10 invariant is that producing a version never writes back into what it was
+ * produced from, and a cut that appended in place would be the first violation.
+ * An unpublished cut omits `manifestId` rather than storing null, so "was this
+ * published" is a presence question with one answer.
+ */
+export function cutVersionPin(
+  records: readonly VersionPinRecord[],
+  options: CutOptions
+): VersionPinRecord {
+  return {
+    version: nextVersion(records),
+    scrollLine: options.scrollLine,
+    cutAt: options.cutAt,
+    ...(options.manifestId !== undefined ? { manifestId: options.manifestId } : {})
+  }
+}
+
+/** One member entering an atomic team cut. */
+export interface TeamCutMember {
+  terminalId: string
+  pins: readonly VersionPinRecord[]
+  /** This member's own transcript point at the moment of the cut. */
+  scrollLine: number
+}
+
+export interface TeamVersionCut {
+  version: number
+  members: { terminalId: string; pin: VersionPinRecord }[]
+}
+
+/**
+ * Cut a team version ATOMICALLY (§10): a team version is the tuple of its
+ * members' pins, so every member takes the SAME number even though each pins at
+ * its own transcript point. The number is one past the highest ANY member has
+ * reached — a member that lagged must not reuse a number a teammate already
+ * published under the same team version, or the tuple stops addressing one
+ * thing.
+ *
+ * Throws on an empty team: a version nothing carries is not a version, and
+ * returning one would let a caller record an update that installs nothing.
+ */
+export function cutTeamVersion(
+  members: readonly TeamCutMember[],
+  options: { cutAt: number; manifestId?: string }
+): TeamVersionCut {
+  if (members.length === 0) throw new Error('cannot cut a team version for an empty team')
+  let version = 1
+  for (const m of members) {
+    const next = nextVersion(m.pins)
+    if (next > version) version = next
+  }
+  return {
+    version,
+    members: members.map((m) => ({
+      terminalId: m.terminalId,
+      pin: {
+        version,
+        scrollLine: m.scrollLine,
+        cutAt: options.cutAt,
+        ...(options.manifestId !== undefined ? { manifestId: options.manifestId } : {})
+      }
+    }))
+  }
+}
+
+/**
+ * One rail marker, tagged with its class. Pins are the THIRD class beside turn
+ * diamonds and trace boundaries — distinct in kind, identical in anchor space,
+ * which is what lets the rail render all three in one pass and the strict-eval
+ * gates apply to pins with no special case.
+ */
+export type RailMarker =
+  | { class: 'turn'; frac: number; index: number }
+  | { class: 'trace'; frac: number; kind: string; afterIndex: number }
+  | { class: 'pin'; frac: number; version: number; label: string; labelled: boolean }
+
+export interface RailMarkerInput {
+  scrollBase: number | null
+  turns: readonly { index: number; scrollLine: number }[]
+  traceMarkers: readonly { kind: string; afterIndex: number; scrollLine: number }[]
+  pins: readonly VersionPinRecord[]
+}
+
+/**
+ * Every marker the rail draws, in one ordered list. Oldest first so a renderer
+ * walks it in a single pass. Empty without a scroll base — the alternative is
+ * stacking every marker at the live bottom, which reads as real data and is not.
+ */
+export function railMarkers(input: RailMarkerInput): RailMarker[] {
+  const base = input.scrollBase
+  if (base === null || base <= 0) return []
+  const out: RailMarker[] = [
+    ...input.turns.map((t) => ({
+      class: 'turn' as const,
+      frac: pinFraction(t.scrollLine, base),
+      index: t.index
+    })),
+    ...input.traceMarkers.map((m) => ({
+      class: 'trace' as const,
+      frac: pinFraction(m.scrollLine, base),
+      kind: m.kind,
+      afterIndex: m.afterIndex
+    })),
+    ...input.pins.map((p) => {
+      const label = pinLabel(p.version)
+      return {
+        class: 'pin' as const,
+        frac: pinFraction(p.scrollLine, base),
+        version: p.version,
+        label: label.text,
+        labelled: label.labelled
+      }
+    })
+  ]
+  return out.sort((a, b) => a.frac - b.frac)
+}
