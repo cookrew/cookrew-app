@@ -83,6 +83,19 @@ describe('PresetStore.list — exactly what the dock chips need', () => {
     expect(row.entitled).toBe(true)
   })
 
+  it('reports a gated preset as not entitled, so the lock badge is reachable', () => {
+    const p = published()
+    store.install(p, { entitled: false })
+    expect(store.list()[0].entitled).toBe(false)
+    // And it survives a reopen — the flag is on disk, not in memory.
+    expect(new PresetStore(base).list()[0].entitled).toBe(false)
+  })
+
+  it('treats an absent install.json as owned — the common case needs no file', () => {
+    store.install(published())
+    expect(store.list()[0].entitled).toBe(true)
+  })
+
   it('omits headVersion until a HEAD has answered (R3 asks for it)', () => {
     store.install(published())
     expect(store.list()[0].headVersion).toBeUndefined()

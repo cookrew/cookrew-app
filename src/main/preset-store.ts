@@ -51,11 +51,32 @@ export class PresetStore {
    * same bytes rewrites the same two files, so a retried download cannot
    * produce a duplicate chip.
    */
-  install(preset: StoredPreset): void {
+  install(preset: StoredPreset, options: { entitled?: boolean } = {}): void {
     const dir = this.dirFor(preset.manifest.id)
     mkdirSync(dir, { recursive: true })
     writeFileAtomic(path.join(dir, 'team.json'), preset.teamBytes)
     writeFileAtomic(path.join(dir, 'manifest.json'), JSON.stringify(preset.manifest, null, 2))
+    // install.json holds LOCAL state about a preset rather than anything the
+    // author signed — today just entitlement. It is a CACHE of the gate's last
+    // word, never the authority: when the gate lands, a 403 overrides whatever
+    // is written here, and nothing may treat a local `true` as proof of a
+    // licence. It exists now because otherwise the lock badge is unreachable
+    // and nobody can build or test the gated chip.
+    if (options.entitled === false) {
+      writeFileAtomic(path.join(dir, 'install.json'), JSON.stringify({ entitled: false }, null, 2))
+    }
+  }
+
+  /** Local entitlement cache; absent file means owned (the common case). */
+  private entitledOf(dir: string): boolean {
+    try {
+      const raw = JSON.parse(readFileSync(path.join(dir, 'install.json'), 'utf8')) as {
+        entitled?: unknown
+      }
+      return raw.entitled !== false
+    } catch {
+      return true
+    }
   }
 
   /**
@@ -108,9 +129,9 @@ export class PresetStore {
         name: snapshot.name,
         version: stored.manifest.version,
         members,
-        // M1 has no entitlement service; everything installed locally is owned.
-        // The lock arrives with the gate, and reads this same field.
-        entitled: true
+        // Local cache of the gate's last word (see install.json). The gate
+        // supersedes it the moment it exists.
+        entitled: this.entitledOf(this.dirFor(stored.manifest.id))
         // headVersion is deliberately absent — it is a live HEAD answer (R3),
         // not something to persist and serve stale.
       })
