@@ -3505,8 +3505,21 @@ body.cookrew-mobile .cookrew-minimap {
   transition: background 140ms ease;
 }
 
+/* F4 — the count sits ABOVE the reveal. The full-range list is z-index 5 and
+   its topmost row lands right under this badge, so at z-index auto the count
+   was simply covered by a row title. The backing plate keeps it legible where
+   a row passes behind it rather than relying on the gap. */
 .cr-ckpt-count {
   position: absolute;
+  z-index: 6;
+  padding: 2px 3px;
+  border-radius: 3px;
+  background: radial-gradient(
+    ellipse at center,
+    var(--phos-bg) 0%,
+    var(--phos-bg) 62%,
+    rgba(20, 17, 10, 0) 100%
+  );
   top: 14px;
   right: 7px;
   display: flex;
@@ -3596,6 +3609,10 @@ body.cookrew-mobile .cookrew-minimap {
    agent-roster.css next to its markup. The old full-panel kit
    (.cr-ckpt-full / -head / -list) was removed with the markup. --- */
 
+/* F5 — rows are OPAQUE. With `background: none` the transcript read straight
+   through every checkpoint title: over a dense pane the text of the terminal
+   and the text of the row interleave and neither is legible. The fade that F1
+   asks for is a fade of the whole tag, not a permanent see-through. */
 .cr-ckpt-row {
   display: flex;
   align-items: center;
@@ -3604,7 +3621,7 @@ body.cookrew-mobile .cookrew-minimap {
   padding: 7px 14px 7px 12px;
   cursor: pointer;
   position: relative;
-  background: none;
+  background: var(--vi-panel);
   border: none;
   text-align: left;
 }
@@ -3613,8 +3630,11 @@ body.cookrew-mobile .cookrew-minimap {
   background: rgba(255, 255, 255, 0.05);
 }
 
+/* The focused row's tint must be a SOLID colour, not an alpha wash over
+   whatever happens to be behind it — an alpha tint is how the transcript kept
+   showing through the one row that most needs to be readable (F5). */
 .cr-ckpt-row.active {
-  background: rgba(255, 214, 0, 0.07);
+  background: #2b281c;
 }
 
 .cr-ckpt-row.active::after {

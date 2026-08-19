@@ -1192,6 +1192,93 @@
   pointer-events: auto; /* rows tap/hold; the surrounding fan passes through */
 }
 
+/* ---- F1: the tag fades when movement stops, and fades back -----------------
+   A fade, deliberately, not an unmount: unmounting pops, and "the tag vanished"
+   and "the tag faded" look identical in a still but not to the eye. The
+   component keeps the tag MOUNTED and toggles `.idle` on the rail. */
+.cr-ckpt-scrub-preview {
+  opacity: 1;
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease;
+}
+
+.cr-ckpt-rail.idle .cr-ckpt-scrub-preview,
+.cr-ckpt-rail.idle .cr-ckpt-list {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---- F3: the full-range reveal, laid ALONG the bar -------------------------
+   Not a scroll panel and not a fan: a full-height overlay whose rows each sit
+   at their own fraction of T1→newest, so the reveal IS the range. The focused
+   row is NOT in here — it stays in .cr-ckpt-scrub-preview pinned to the marker
+   fraction, which is what keeps F6 exact. */
+.cr-ckpt-list {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 24px;
+  width: 336px;
+  max-width: calc(100vw - 40px);
+  z-index: 4; /* under the focused tag (5) and the count (6) */
+  pointer-events: none; /* HIGH-2: the empty area never steals a drag */
+  transition: opacity 220ms ease;
+}
+
+.cr-ckpt-list .cr-ckpt-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  transform: translateY(-50%); /* same anchoring maths as the here-marker */
+  pointer-events: auto; /* HIGH-2 opt-in — see the register above */
+}
+
+/* ---- F5b: two-element marquee on the focused title -------------------------
+   OUTER (.cr-ckpt-row-title) is the CLIP — overflow:hidden is REQUIRED or
+   scrollWidth-clientWidth measures 0 and nothing ever marquees. INNER
+   (.cr-ckpt-title-text) is the MOVER. The component measures the outer and
+   sets --marquee-shift on it. Non-focused rows keep their ellipsis. */
+.cr-ckpt-row.active .cr-ckpt-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.cr-ckpt-title-text {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.cr-ckpt-title-text.marquee {
+  animation: cr-ckpt-title-marquee 6s linear infinite alternate;
+}
+
+@keyframes cr-ckpt-title-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(var(--marquee-shift, 0));
+  }
+}
+
+/* Reduced motion: no travel at all, and the inner span collapses to inline so
+   the outer clip's ellipsis gives a readable static fallback. */
+@media (prefers-reduced-motion: reduce) {
+  .cr-ckpt-title-text.marquee {
+    animation: none;
+    transform: none;
+    display: inline;
+  }
+
+  .cr-ckpt-row.active .cr-ckpt-row-title {
+    text-overflow: ellipsis;
+  }
+}
+
 /* Inline save-role input inside a checkpoint node's action panel. */
 .cr-ckpt-saverole {
   display: flex;

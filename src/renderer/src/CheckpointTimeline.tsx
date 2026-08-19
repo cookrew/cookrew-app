@@ -16,6 +16,7 @@ import {
   type CheckpointRow,
   type TraceMarkerRow
 } from './transcript'
+import { fillRows } from './rail-fill'
 
 /** Marker inset (matches .cr-ckpt-here top: calc(16px + …)) for scrub mapping. */
 const RAIL_INSET = 16
@@ -33,6 +34,9 @@ const REWIND_ERROR_MS = 6000
 /** Neighbor rows rendered ABOVE and BELOW the focused one in the fan; generous
  *  so it fills the view — Fresco clips the overflow at the boundary. */
 const NEIGHBOR_RADIUS = 12
+
+/** F1: movement stops for this long and the tag fades out. */
+const IDLE_AFTER_MS = 1700
 
 /**
  * Checkpoint timeline on the terminal context view.
@@ -104,8 +108,20 @@ export function CheckpointTimeline({
   /** M3: a refused rewind, surfaced INLINE on the row (never window.alert — a
    * native modal freezes the whole Electron UI). Scoped by row index. */
   const [rewindError, setRewindError] = useState<{ index: number; reason: string } | null>(null)
+  /** F1: true once movement has stopped for IDLE_AFTER_MS. The tag stays
+   *  MOUNTED and fades via CSS — unmounting it pops, which is the thing the
+   *  gate distinguishes. Cleared by any scroll, scrub or approach. */
+  const [idle, setIdle] = useState(false)
   const railRef = useRef<HTMLDivElement>(null)
   const miniRef = useRef<HTMLDivElement>(null)
+  /** Measured overflow of the focused title, in px, or 0 when it fits (F5b). */
+  const [titleShift, setTitleShift] = useState(0)
+  /** Live height of the rail — how many rows the full-range reveal can lay. */
+  const [railHeight, setRailHeight] = useState(0)
+  /** Bumped by pointer activity; restarts the F1 idle timer. */
+  const [wakeCount, setWakeCount] = useState(0)
+  const lastWake = useRef(0)
+  const titleRef = useRef<HTMLSpanElement>(null)
   // Rail scrub gesture: a press that travels past SCRUB_THRESHOLD becomes a
   // scrollbar drag; a press that stays put is a tap that opens the fan.
   const scrub = useRef<{ startY: number; moved: boolean }>({ startY: 0, moved: false })
@@ -131,6 +147,42 @@ export function CheckpointTimeline({
     setFocused(focusedIndex !== null ? { index: focusedIndex, frac: markerFrac ?? 1 } : null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeIndex, markerFrac, scrubbing])
+
+  // F1 — IDLE FADE. Any change of focus or scrub position is "movement", so the
+  // timer restarts here and the tag comes back; 1.7s of stillness fades it out.
+  // The tag is never unmounted for this: an unmount is a pop, not a fade, and
+  // the gate reads opacity.
+  useEffect(() => {
+    setIdle(false)
+    const timer = setTimeout(() => setIdle(true), IDLE_AFTER_MS)
+    return () => clearTimeout(timer)
+  }, [focused?.index, focused?.frac, scrubbing, wakeCount])
+
+  // F3 — how many rows fit is a function of the bar's real height, so measure
+  // it rather than assume: the phone overlay and the desktop sidebar are very
+  // different heights, and reading railRef during render is a frame stale.
+  useEffect(() => {
+    const el = railRef.current
+    if (!el) return
+    const measure = (): void => setRailHeight(el.getBoundingClientRect().height)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  // F5b — measure the focused title and hand the overflow to CSS. The OUTER
+  // span is the clip (overflow:hidden, or scrollWidth-clientWidth reads 0); the
+  // inner .cr-ckpt-title-text is the mover. Measured after paint, per focus.
+  useEffect(() => {
+    const outer = titleRef.current
+    if (!outer) {
+      setTitleShift(0)
+      return
+    }
+    const overflow = outer.scrollWidth - outer.clientWidth
+    setTitleShift(overflow > 0 ? overflow : 0)
+  }, [focused?.index, titleMode, rows])
 
   // Dismiss a row's revealed actions on a pointerdown OUTSIDE the rail (the tab
   // is scroll-driven, not click-opened, so it needs no dismissal itself).
@@ -242,6 +294,14 @@ export function CheckpointTimeline({
 
   const stop = (e: React.MouseEvent): void => e.stopPropagation()
 
+  /** F1: pointer activity restarts the idle timer, at most ~4×/second. */
+  const wake = (): void => {
+    const now = Date.now()
+    if (now - lastWake.current < 250) return
+    lastWake.current = now
+    setWakeCount((n) => n + 1)
+  }
+
   // Drag the line/marker → scrub the transcript. The line/marker stays draggable
   // even while the list is shown (it's the always-present scroll indicator).
   const onRailPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
@@ -348,7 +408,7 @@ export function CheckpointTimeline({
 
   // One row of the extended tab — the same `.cr-ckpt-row` markup, tap → jump,
   // hold → actions. The focused row is `.active` and sits AT the marker.
-  const renderRow = (row: CheckpointRow): React.JSX.Element => {
+  const renderRow = (row: CheckpointRow, style?: React.CSSProperties): React.JSX.Element => {
     const isActive = row.index === here
     const isActing = acting === row.index
     const isLoading = loadingIndex === row.index
@@ -359,6 +419,7 @@ export function CheckpointTimeline({
         className={`cr-ckpt-row${isActive ? ' active' : ''}${isActing ? ' acting' : ''}${
           isLoading ? ' loading' : ''
         }`}
+        style={style}
         aria-label={`Checkpoint ${row.index}`}
         aria-busy={isLoading || undefined}
         onMouseDown={(e) => e.preventDefault()}
@@ -371,7 +432,25 @@ export function CheckpointTimeline({
         {rowActions(row, row.index)}
         <span className="cr-ckpt-row-label">
           <span className="cr-ckpt-row-idx">T{row.index}</span>
-          <span className="cr-ckpt-row-title">{isLoading ? 'loading…' : rowLabel(row)}</span>
+          {/* F5b two-element marquee: the OUTER span clips, the INNER moves.
+              One element cannot do both — the clip is what makes the overflow
+              measurable in the first place. Only the focused row marquees;
+              the rest keep their ellipsis. */}
+          <span
+            className="cr-ckpt-row-title"
+            ref={isActive ? titleRef : undefined}
+            style={
+              isActive && titleShift > 0
+                ? ({ ['--marquee-shift']: `${-titleShift}px` } as React.CSSProperties)
+                : undefined
+            }
+          >
+            <span
+              className={`cr-ckpt-title-text${isActive && titleShift > 0 ? ' marquee' : ''}`}
+            >
+              {isLoading ? 'loading…' : rowLabel(row)}
+            </span>
+          </span>
         </span>
         <span className="cr-ckpt-dot">
           <i />
@@ -390,6 +469,17 @@ export function CheckpointTimeline({
   const fanned = scrubbing && focused !== null && focusedRow !== null
   const windowRows = fanned ? neighborWindow(rows, focused!.index, NEIGHBOR_RADIUS) : []
   const fan = fanned ? fanLayout(windowRows, focused!.index) : null
+  /**
+   * F3 — the reveal is the FULL range, laid along the bar: T1 at the top, the
+   * newest at the bottom, as many rows between as fit without overlapping. The
+   * old ±12 fan measured 25 rows out of 122 spanning 169% of the bar, so it
+   * overflowed both ends and contained neither.
+   *
+   * The focused row is NOT in here. It stays where it was, pinned to the
+   * marker's own fraction — F6 is the gate that has regressed before, and the
+   * safest way to keep it green is to not touch what anchors it.
+   */
+  const laid = fanned ? fillRows(rows, railHeight, focused!.index) : []
   // Show LIVE at the bottom of the fan only when it reaches the newest checkpoint.
   const showLive =
     fanned && windowRows.length > 0 && windowRows[windowRows.length - 1].index === rows[rows.length - 1].index
@@ -407,7 +497,12 @@ export function CheckpointTimeline({
       // the full fan; a plain transcript scroll shows only the single tag.
       className={`cr-ckpt-rail${fanned ? ' fanned' : ''}${scrubbing ? ' dragging' : ''}${
         loadingIndex != null ? ' loading' : ''
-      }`}
+      }${idle ? ' idle' : ''}`}
+      // F1 — approaching or moving over the rail is movement: it wakes the tag
+      // and restarts the timer, so resting on the rail keeps the tag alive.
+      // Throttled, because a raw pointermove would re-render on every pixel.
+      onPointerEnter={wake}
+      onPointerMove={wake}
     >
       {/* always-present line + count + here-marker (rides the PRECISE identity
           fraction) + live dot; the line/marker is the scroll indicator + scrub
@@ -458,6 +553,18 @@ export function CheckpointTimeline({
           focus (refinements 3–4). Above/below clip at the view boundary without
           moving the focus off the marker (refinement 2). Fresco lays out the fan
           (focus at anchor, fan-up above, fan-down below, clipped). */}
+      {/* F3 — the full-range reveal, laid ALONG the bar. Every row sits at its
+          own fraction of T1→newest, so the reveal genuinely represents the whole
+          conversation instead of a window around the focus. Pointer-through by
+          default (HIGH-2 register in agent-roster.css); the rows opt back in. */}
+      {fanned && laid.length > 0 && (
+        <div className="cr-ckpt-list" role="list" aria-label="All checkpoints">
+          {laid.map(({ row, fraction }) =>
+            renderRow(row, { top: railAnchorTop(fraction) })
+          )}
+        </div>
+      )}
+
       {focused && focusedRow && (
         <div
           className="cr-ckpt-scrub-preview"
@@ -470,26 +577,10 @@ export function CheckpointTimeline({
               never shift the focus off the marker, whatever the neighbor counts
               (HIGH-1). They grow up/down and clip at the view boundary. */}
           <div className="cr-ckpt-fan-focus">
-            {fan && (
-              <div className="cr-ckpt-fan-up">
-                {fan.above.map((r) => (
-                  <span key={r.index} style={{ display: 'contents' }}>
-                    {renderRow(r)}
-                    {boundaryRows(r.index)}
-                  </span>
-                ))}
-              </div>
-            )}
             {renderRow(focusedRow)}
             {boundaryRows(focusedRow.index)}
             {fan && (
               <div className="cr-ckpt-fan-down">
-                {fan.below.map((r) => (
-                  <span key={r.index} style={{ display: 'contents' }}>
-                    {renderRow(r)}
-                    {boundaryRows(r.index)}
-                  </span>
-                ))}
                 {showLive && (
                   <div
                     className={`cr-ckpt-row live${here === null ? ' active' : ''}`}
