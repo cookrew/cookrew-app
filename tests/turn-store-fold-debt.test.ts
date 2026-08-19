@@ -65,11 +65,29 @@ beforeEach(() => {
 })
 afterEach(() => {
   fault.failDir = null
+  // Disarm before the directory goes: a test that ends mid-escalation leaves an
+  // armed retry behind, and an unref'd timer still fires. It then fsyncs a path
+  // rmSync has just deleted and prints PERSISTENT STORAGE FAULT into whatever
+  // test is running by then — `quiet` is already restored, so it lands on the
+  // real console and reads like a failure somewhere else entirely.
+  for (const store of stores.splice(0)) {
+    const internals = store as unknown as Internals
+    for (const timer of internals.debtTimers.values()) clearTimeout(timer)
+    internals.debtTimers.clear()
+    internals.dirDebt.clear()
+  }
   quiet.mockRestore()
   rmSync(root, { recursive: true, force: true })
 })
 
-const reopen = (): TurnStore => new TurnStore(dir, annDir)
+/** Every store built by a test, so afterEach can disarm their retries. */
+const stores: TurnStore[] = []
+
+const reopen = (): TurnStore => {
+  const store = new TurnStore(dir, annDir)
+  stores.push(store)
+  return store
+}
 const file = (id = 't1'): string => path.join(dir, `${id}.jsonl`)
 
 const rec = (index: number, reply: string): TurnRecord => ({
@@ -153,7 +171,16 @@ describe('fold rename → dir-fsync failure → debt-only retry (Sol r10)', () =
     )
     expect(internals.dirDebt.has('t1')).toBe(true)
     // Still armed: the debt keeps retrying until the fsync lands or quit.
-    expect(internals.debtTimers.size).toBe(1)
+    //
+    // Waited for, not asserted on the spot. The escalation is logged INSIDE
+    // fsyncDirAsync just before it throws, while the re-arm happens after that
+    // rejection unwinds through retryDirDebt's catch — with an `await
+    // handle.close()` in between. So there is a real window where the fired
+    // timer has been dropped and its replacement not yet set, and the poll
+    // above can land in it. Asserting `size === 1` at that instant read as
+    // "the retry was never re-armed"; the debt was never at risk. Under load
+    // the window widens, which is why this only ever failed in a full run.
+    await until(5_000, () => internals.debtTimers.size === 1)
   })
 
   it('flushAll settles outstanding debt at quit — the last chance to prove the rename', async () => {
