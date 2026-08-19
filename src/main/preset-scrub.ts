@@ -1,4 +1,5 @@
 import type { CanvasNode } from '../shared/model'
+import type { ScrubReport, SecretFinding } from '../shared/preset-manifest'
 import type { TeamSnapshot } from './teams'
 import { stripSessionFlags } from '../shared/claude-fork'
 import { isPiCommand, stripPiSessionFlags } from './pi-bind'
@@ -36,25 +37,10 @@ export interface ScrubOptions {
   includeSessions?: boolean
 }
 
-/** Where a secret was found. Deliberately carries no sample of the match. */
-export interface SecretFinding {
-  /** Node id + field, e.g. `nodes[z9].command` — enough to go fix it. */
-  where: string
-  /** Pattern name, e.g. `aws-access-key`. Never the matched text. */
-  kind: string
-}
-
-export interface ScrubReport {
-  /** Whether conversation context travels with the preset. */
-  sessions: boolean
-  paths: 'placeholders'
-  /** Shell cards whose literal command the buyer must read before first run. */
-  shells: number
-  notes: number
-  urls: number
-  secretScan: 'clean' | 'blocked'
-  findings: SecretFinding[]
-}
+// The report IS the manifest's `scrub` object and the review sheet's input, so
+// it is a wire type: it lives in shared and is re-exported here for callers
+// that only care about scrubbing.
+export type { ScrubReport, SecretFinding } from '../shared/preset-manifest'
 
 export type ScrubResult =
   | { ok: true; snapshot: TeamSnapshot; report: ScrubReport }
