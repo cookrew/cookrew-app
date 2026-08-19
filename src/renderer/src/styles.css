@@ -22,6 +22,12 @@
   --hp: #6bbe58;
   --rose: #dc2626;
   --violet: #9b8acb;
+  /* Violet is the persona accent (role coins, never a status colour). The HI
+     step is its raised sibling — the marketplace's own surfaces sit on it:
+     version pins on the rail, and the gated-chip lock badge. Promoted to a
+     real token because those two need to agree, and a hand-picked lighter
+     violet in each place is how palettes drift apart. */
+  --violet-hi: #c3b6e6;
   --note-bg: #fff3ad;
   --note-text: #3a3625;
 

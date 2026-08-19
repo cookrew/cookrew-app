@@ -1,0 +1,36 @@
+{
+  "_": "STUB FIXTURE — version pins (marketplace §10, ruling R7). Real shape, invented data. Fresco builds the rail marker against this; Magpie asserts B2 against `anchors` and `labels`. Regenerate expectations with tests/version-pin-fixture.test.ts, which fails if this file drifts from src/shared/version-pin.ts.",
+  "terminalId": "db9b45d0-1793-4ca3-904a-696374e6446a",
+  "scrollBase": 2000,
+  "pins": [
+    { "version": 1, "scrollLine": 200, "cutAt": 1755648000000, "manifestId": "sha256:9f2c1a" },
+    { "version": 2, "scrollLine": 640, "cutAt": 1755734400000, "manifestId": "sha256:41b7de" },
+    { "version": 3, "scrollLine": 1000, "cutAt": 1755820800000 },
+    { "version": 12, "scrollLine": 1500, "cutAt": 1755907200000, "manifestId": "sha256:c05e88" },
+    { "version": 100, "scrollLine": 1960, "cutAt": 1755993600000 }
+  ],
+  "anchors": [
+    { "version": 1, "frac": 0.1 },
+    { "version": 2, "frac": 0.32 },
+    { "version": 3, "frac": 0.5 },
+    { "version": 12, "frac": 0.75 },
+    { "version": 100, "frac": 0.98 }
+  ],
+  "labels": [
+    { "version": 1, "text": "V1", "labelled": true },
+    { "version": 2, "text": "V2", "labelled": true },
+    { "version": 3, "text": "V3", "labelled": true },
+    { "version": 12, "text": "12", "labelled": true },
+    { "version": 100, "text": "", "labelled": false }
+  ],
+  "coLocated": {
+    "_": "A turn diamond and a compact marker sharing a pin's fraction — the F6 case. A pin at the same content as a tick must land on the SAME Y, so this is the pair to screenshot.",
+    "turnIndexAtFrac": { "index": 24, "frac": 0.5 },
+    "traceMarkerAtFrac": { "kind": "compact", "afterIndex": 24, "frac": 0.5 }
+  },
+  "empty": {
+    "_": "No scroll base yet (terminal just attached): pins are omitted, never guessed onto the rail.",
+    "scrollBase": null,
+    "anchors": []
+  }
+}
