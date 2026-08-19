@@ -31,6 +31,9 @@
   --vi-line: #2c2c30;
   --vi-text: #f5f5f7;
   --vi-dim: #98989d;
+  /* Focused checkpoint row: a SOLID surface, not an alpha tint over the
+     transcript (F5). Sits between --vi-panel and the amber it carries. */
+  --vi-panel-focus: #2b281c;
   --vi-working: #ff9f0a;
   --vi-wait: #ff453a;
   --vi-done: #32d74b;
@@ -3458,10 +3461,12 @@ body.cookrew-mobile .cookrew-minimap {
          <div class="cr-ckpt-here" style="top:railAnchorTop(frac)"></div>   (you-are-here marker)
          <div class="cr-ckpt-livedot"></div>
        </div>
-       <div class="cr-ckpt-scrub-preview" style="top:railAnchorTop(focused.frac)">   (the FAN, anchored ON the marker Y)
-         <div class="cr-ckpt-fan-up">   … neighbour .cr-ckpt-row … </div>          (grows UP from the focus)
+       <div class="cr-ckpt-list">                          (the full range, laid by fraction)
+         <div class="cr-ckpt-row" style="top:railAnchorTop(row.frac)">…</div>   (T1 … newest)
+         <div class="cr-ckpt-row live" style="top:railAnchorTop(1)">…</div>     (the reserved 1/n)
+       </div>
+       <div class="cr-ckpt-scrub-preview" style="top:railAnchorTop(focused.frac)">   (anchored ON the marker Y)
          <div class="cr-ckpt-fan-focus"><div class="cr-ckpt-row active">…</div></div>  (PINNED on the marker line)
-         <div class="cr-ckpt-fan-down"> … neighbour rows … <div class="cr-ckpt-row live">…</div> </div>   (grows DOWN)
        </div>
      </div>
    Each .cr-ckpt-row: <span class="cr-ckpt-row-actions"><button class="cr-ckpt-action">…ROLE/FORK</button></span>
@@ -3605,7 +3610,7 @@ body.cookrew-mobile .cookrew-minimap {
 }
 
 /* --- the SELECT LIST is now the FAN: .cr-ckpt-scrub-preview wraps
-   .cr-ckpt-fan-up / .cr-ckpt-fan-focus / .cr-ckpt-fan-down, styled in
+   .cr-ckpt-list (full range) + .cr-ckpt-fan-focus (the pinned focus), styled in
    agent-roster.css next to its markup. The old full-panel kit
    (.cr-ckpt-full / -head / -list) was removed with the markup. --- */
 
@@ -3634,7 +3639,7 @@ body.cookrew-mobile .cookrew-minimap {
    whatever happens to be behind it — an alpha tint is how the transcript kept
    showing through the one row that most needs to be readable (F5). */
 .cr-ckpt-row.active {
-  background: #2b281c;
+  background: var(--vi-panel-focus);
 }
 
 .cr-ckpt-row.active::after {
@@ -3899,6 +3904,19 @@ body.cookrew-mobile .cookrew-minimap {
 }
 
 /* --- cream chrome (light contexts) --- */
+
+/* F5 made rows OPAQUE, which means they now carry a surface colour — and a
+   dark one on a cream rail is a black slab. The dark defaults get cream
+   counterparts here so the opacity fix does not become a theming bug the first
+   time .on-cream is used. */
+.cr-ckpt-rail.on-cream .cr-ckpt-row {
+  background: var(--cream-hi);
+}
+
+.cr-ckpt-rail.on-cream .cr-ckpt-row.active {
+  background: var(--amber-soft);
+}
+
 .cr-ckpt-rail.on-cream .cr-ckpt-line {
   background: linear-gradient(var(--line-soft), var(--dim));
 }

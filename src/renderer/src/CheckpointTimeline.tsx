@@ -7,8 +7,6 @@ import { hasRoleFromCheckpoint, saveRoleFromCheckpoint } from './role-checkpoint
 import {
   checkpointRowTitle,
   createHoldReveal,
-  fanLayout,
-  neighborWindow,
   railAnchorTop,
   railPointerFraction,
   scrollFocusState,
@@ -32,10 +30,6 @@ const HOLD_REVEAL_MS = 1500
 const REWIND_ARM_MS = 8000
 /** M3: an inline rewind refusal lingers this long, then dismisses itself. */
 const REWIND_ERROR_MS = 6000
-/** Neighbor rows rendered ABOVE and BELOW the focused one in the fan; generous
- *  so it fills the view — Fresco clips the overflow at the boundary. */
-const NEIGHBOR_RADIUS = 12
-
 /** F1: movement stops for this long and the tag fades out. */
 const IDLE_AFTER_MS = 1700
 
@@ -50,9 +44,9 @@ const IDLE_AFTER_MS = 1700
  *    checkpoint and the context follows; DRAG the line/marker → scrubs the
  *    transcript to that checkpoint. A single-checkpoint TAB shows the focused
  *    title while scrolling/scrubbing.
- *  - CLICK / TAP the rail → the full select list opens and STICKS (persistent —
- *    not a hover-fan); dismiss by a click/tap OUTSIDE. It opens anchored on the
- *    focused checkpoint (scrolled to centre; neighbors above + below).
+ *  - CLICK / TAP the rail → the full-range list opens: every row laid at its own
+ *    fraction of T1→newest along the bar, LIVE at fraction 1, and the focused
+ *    row pinned separately on the marker's line.
  *  - In the list: tap/click a row → jump; press-and-HOLD a row/tab (~2s) → its
  *    SAVE ROLE / FORK actions.
  *
@@ -484,8 +478,6 @@ export function CheckpointTimeline({
   // TWO ZONES: scrolling the transcript shows the SINGLE tag (focused row only);
   // scrolling/dragging the rail (scrubbing) FANS the full list around it.
   const fanned = scrubbing && focused !== null && focusedRow !== null
-  const windowRows = fanned ? neighborWindow(rows, focused!.index, NEIGHBOR_RADIUS) : []
-  const fan = fanned ? fanLayout(windowRows, focused!.index) : null
   /**
    * F3 — the reveal is the FULL range, laid along the bar: T1 at the top, the
    * newest at the bottom, as many rows between as fit without overlapping. The
@@ -497,9 +489,17 @@ export function CheckpointTimeline({
    * safest way to keep it green is to not touch what anchors it.
    */
   const laid = fanned ? fillRows(rows, railHeight, focused!.index) : []
-  // Show LIVE at the bottom of the fan only when it reaches the newest checkpoint.
-  const showLive =
-    fanned && windowRows.length > 0 && windowRows[windowRows.length - 1].index === rows[rows.length - 1].index
+  /**
+   * MED-2 — LIVE takes the slice the denominator reserves for it.
+   *
+   * R19's rationale is that rows are spans and the last 1/n of the bar belongs
+   * to the live tail. That was true of the live DOT and of nothing else: the
+   * LIVE row still rendered inside the fan, tucked under the focused tag, so
+   * the reserved slice sat empty and the reasoning described an intention
+   * rather than the layout. It now renders in the list at fraction 1, which is
+   * exactly the space no checkpoint may occupy.
+   */
+  const showLive = fanned
   // ONE position source (refinement 1): the marker AND the focused tab/row use
   // the SAME fraction → same Y. At the live tail (no focus) the marker rides its
   // own live fraction.
@@ -586,21 +586,31 @@ export function CheckpointTimeline({
         <div className="cr-ckpt-livedot" />
       </div>
 
-      {/* The tab, anchored at the focused row's PRECISE fraction — the SAME
-          source as the here-marker, so the focused row is ALWAYS on the marker's
-          horizontal line (refinement 1). Transcript scroll → just the focused row
-          (single tag); rail scrub → the FAN: neighbors above + below the anchored
-          focus (refinements 3–4). Above/below clip at the view boundary without
-          moving the focus off the marker (refinement 2). Fresco lays out the fan
-          (focus at anchor, fan-up above, fan-down below, clipped). */}
       {/* F3 — the full-range reveal, laid ALONG the bar. Every row sits at its
           own fraction of T1→newest, so the reveal genuinely represents the whole
           conversation instead of a window around the focus. Pointer-through by
           default (HIGH-2 register in agent-roster.css); the rows opt back in. */}
       {fanned && laid.length > 0 && (
         <div className="cr-ckpt-list" role="list" aria-label="All checkpoints">
-          {laid.map(({ row, fraction }) =>
-            renderRow(row, { top: railAnchorTop(fraction) })
+          {laid.map(({ row, fraction }) => renderRow(row, { top: railAnchorTop(fraction) }))}
+          {/* LIVE at fraction 1 — the slice the denominator reserves (MED-2). */}
+          {showLive && (
+            <div
+              className={`cr-ckpt-row live${here === null ? ' active' : ''}`}
+              role="listitem"
+              aria-label="Live"
+              style={{ top: railAnchorTop(1) }}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => onTap(() => onLive())}
+            >
+              <span className="cr-ckpt-row-label">
+                <span className="cr-ckpt-row-idx">LIVE</span>
+                <span className="cr-ckpt-row-title">running now</span>
+              </span>
+              <span className="cr-ckpt-dot">
+                <i />
+              </span>
+            </div>
           )}
         </div>
       )}
@@ -631,27 +641,6 @@ export function CheckpointTimeline({
               sampled, which the old inline dividers could not manage either.
             */}
             {boundaryRows(focusedRow.index)}
-            {fan && (
-              <div className="cr-ckpt-fan-down">
-                {showLive && (
-                  <div
-                    className={`cr-ckpt-row live${here === null ? ' active' : ''}`}
-                    role="listitem"
-                    aria-label="Live"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => onTap(() => onLive())}
-                  >
-                    <span className="cr-ckpt-row-label">
-                      <span className="cr-ckpt-row-idx">LIVE</span>
-                      <span className="cr-ckpt-row-title">running now</span>
-                    </span>
-                    <span className="cr-ckpt-dot">
-                      <i />
-                    </span>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         </div>
       )}
