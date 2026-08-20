@@ -3910,6 +3910,72 @@ body.cookrew-mobile .cookrew-minimap {
   opacity: 0.95;
 }
 
+/* --- VERSION PINS: the rail's THIRD marker class (marketplace §10, R8/R18) ---
+   Everything else on this bar is AMBER and UNLABELLED and either points
+   (diamond) or cuts (bar). A pin is the opposite on four axes at once, which is
+   what makes it separable in peripheral vision rather than on inspection:
+     hue     violet, not amber       — published identity, not session mechanics
+     shape   flag, not diamond/bar   — the only silhouette the rail was not using
+     label   named (V2), not anonymous
+     fill    opaque hard edge, not glow — permanent, not transient
+   Violet is not a free pick either: it is already this product's persona accent
+   (.role-avatar, .cr-chip.role), so a pin inherits a meaning the UI has been
+   teaching since the first role chip.
+
+   GEOMETRY, measured against the bar and not eyeballed. The rail is 30px and
+   the line sits 13–16px in from its right edge. right:11 + width:19 puts the
+   flag's LEFT edge flush with the rail's left edge (11 + 19 = 30) and drives
+   its tip 2px INTO the line, so the pin reads as attached without covering the
+   line the way the amber diamonds do — they are centred ON it. Nothing
+   overhangs the transcript.
+
+   ANCHORING: the component sets `top` from railAnchorTop(frac) and nothing
+   else, so F6 is inherited rather than re-derived. See CheckpointTimeline. */
+.cr-ckpt-pin {
+  position: absolute;
+  right: 11px;
+  width: 19px;
+  height: 13px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  padding-left: 2px;
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: var(--cream-hi);
+  background: var(--violet);
+  clip-path: polygon(0 0, 62% 0, 100% 50%, 62% 100%, 0 100%);
+  /* UNDER the scrub thumb (5) and the count (6): when the thumb lands on a pin
+     they overlap by design — same fraction — and the grabbable thing must never
+     be occluded by a decorative one. */
+  z-index: 3;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/* v100+ carries no label (R8). It keeps the full silhouette — an unlabelled
+   flag only LOOKS smaller because the eye reads text as mass. */
+.cr-ckpt-pin.bare {
+  padding-left: 0;
+}
+
+/* The version the buyer is on, in the here-marker's emphasis grammar but the
+   pin's family colour. */
+.cr-ckpt-pin.current {
+  background: var(--violet-hi);
+  color: var(--phos-bg);
+  box-shadow: 0 0 6px rgba(155, 138, 203, 0.75);
+}
+
+/* COINCIDENCE RULE: while scrubbing, the thumb passes over pins. They dim and
+   drop the glow so the handle stays the brightest thing on the line. */
+.cr-ckpt-rail.dragging .cr-ckpt-pin {
+  opacity: 0.55;
+  box-shadow: none;
+}
+
 /* --- cream chrome (light contexts) --- */
 
 /* F5 made rows OPAQUE, which means they now carry a surface colour — and a
@@ -3931,6 +3997,10 @@ body.cookrew-mobile .cookrew-minimap {
 .cr-ckpt-rail.on-cream .cr-ckpt-count .n {
   color: var(--amber-deep);
   text-shadow: none;
+}
+
+.cr-ckpt-rail.on-cream .cr-ckpt-pin {
+  color: var(--cream-hi);
 }
 
 .cr-ckpt-rail.on-cream .cr-ckpt-here {
