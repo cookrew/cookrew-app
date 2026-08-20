@@ -16,11 +16,26 @@
 const MAX_SLUG = 48
 
 /**
- * Path prefixes mobile-server already owns. A workspace slugged `api` would
- * mount its routes underneath the server's own and become unreachable, so
- * these are deflected at mint time rather than diagnosed later.
+ * First path segments the SERVER owns. A workspace slugged with one of these
+ * would mount its routes underneath the server's own and become unreachable,
+ * so they are deflected at mint time rather than diagnosed later.
+ *
+ * `src` and `node_modules` are here because of the renderer DEV proxy
+ * (renderer-dev-proxy.ts: rendererDevPathAllowed). Found by walking the live
+ * app under the flag: /src/main.tsx was being read as a workspace slug `src`
+ * and answered 404, so a phone in dev mode loaded an index and then no
+ * modules — a blank page. `/@vite/client` and `/node_modules/...` survived
+ * only because '@' and '_' happen to fail the slug shape, which is luck, not
+ * design. Exported so the route splitter uses the SAME list; two copies of a
+ * reserved-word list is how they drift.
  */
-const RESERVED = new Set(['api', 'assets', 'index.html'])
+export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
+  'api',
+  'assets',
+  'index.html',
+  'src',
+  'node_modules'
+])
 
 /**
  * Name → path segment. ASCII-only by design: a percent-encoded slug is not a
@@ -37,7 +52,7 @@ export function deriveSlug(name: string): string {
 
   if (base.length === 0) return 'workspace'
   // Suffixed rather than rejected: the owner's chosen name still shows through.
-  if (RESERVED.has(base)) return `${base}-ws`
+  if (RESERVED_SLUGS.has(base)) return `${base}-ws`
   return base
 }
 

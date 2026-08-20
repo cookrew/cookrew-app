@@ -17,6 +17,7 @@ import {
   scopedRouteSupported,
   splitSlugRoute
 } from '../src/main/mobile-slug-route'
+import { RESERVED_SLUGS, deriveSlug } from '../src/main/workspace-slug'
 
 describe('splitSlugRoute', () => {
   it('leaves an unslugged api path exactly as it found it', () => {
@@ -212,5 +213,42 @@ describe('the renderer index is NOT scope-aware (re-review N1)', () => {
   it('still allows the data routes a scoped client would call', () => {
     expect(scopedRouteSupported('/api/state')).toBe(true)
     expect(scopedRouteSupported('/api/terminal/t1/input')).toBe(true)
+  })
+})
+
+describe('the dev renderer surface is not a workspace (live-window find)', () => {
+  it('does NOT claim /src/* as a slug', () => {
+    // Found by walking the live app under the flag. /src/main.tsx matched the
+    // slug shape, resolved to no workspace, and answered
+    // {"error":"No workspace at /src"} — so a phone in dev mode loaded an
+    // index and then no modules at all. A blank page, and only under the flag,
+    // because slug routing is gated.
+    expect(splitSlugRoute('/src/main.tsx')).toEqual({ slug: null, pathname: '/src/main.tsx' })
+    expect(splitSlugRoute('/src/renderer/App.tsx').slug).toBeNull()
+  })
+
+  it('does not claim /node_modules/* either', () => {
+    // This one survived by ACCIDENT — '_' fails the slug shape. Relying on the
+    // punctuation of a directory name is luck, not design, so it is on the
+    // list explicitly now.
+    expect(splitSlugRoute('/node_modules/.vite/deps/react.js').slug).toBeNull()
+  })
+
+  it('still does not claim /@vite/* (its punctuation never matched)', () => {
+    expect(splitSlugRoute('/@vite/client').slug).toBeNull()
+  })
+
+  it('a workspace NAMED after a reserved segment gets a safe slug', () => {
+    // The mint side of the same list: a workspace called "Src" must not be
+    // handed an address that the server already owns.
+    expect(deriveSlug('Src')).toBe('src-ws')
+    expect(deriveSlug('node modules')).toBe('node-modules')
+  })
+
+  it('the two sides share ONE list', () => {
+    // Two copies of a reserved-word list is how they drift.
+    for (const reserved of RESERVED_SLUGS) {
+      expect(splitSlugRoute(`/${reserved}/whatever`).slug).toBeNull()
+    }
   })
 })
