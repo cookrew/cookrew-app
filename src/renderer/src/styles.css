@@ -31,6 +31,9 @@
   --vi-line: #2c2c30;
   --vi-text: #f5f5f7;
   --vi-dim: #98989d;
+  /* Focused checkpoint row: a SOLID surface, not an alpha tint over the
+     transcript (F5). Sits between --vi-panel and the amber it carries. */
+  --vi-panel-focus: #2b281c;
   --vi-working: #ff9f0a;
   --vi-wait: #ff453a;
   --vi-done: #32d74b;
@@ -3458,10 +3461,12 @@ body.cookrew-mobile .cookrew-minimap {
          <div class="cr-ckpt-here" style="top:railAnchorTop(frac)"></div>   (you-are-here marker)
          <div class="cr-ckpt-livedot"></div>
        </div>
-       <div class="cr-ckpt-scrub-preview" style="top:railAnchorTop(focused.frac)">   (the FAN, anchored ON the marker Y)
-         <div class="cr-ckpt-fan-up">   … neighbour .cr-ckpt-row … </div>          (grows UP from the focus)
+       <div class="cr-ckpt-list">                          (the full range, laid by fraction)
+         <div class="cr-ckpt-row" style="top:railAnchorTop(row.frac)">…</div>   (T1 … newest)
+         <div class="cr-ckpt-row live" style="top:railAnchorTop(1)">…</div>     (the reserved 1/n)
+       </div>
+       <div class="cr-ckpt-scrub-preview" style="top:railAnchorTop(focused.frac)">   (anchored ON the marker Y)
          <div class="cr-ckpt-fan-focus"><div class="cr-ckpt-row active">…</div></div>  (PINNED on the marker line)
-         <div class="cr-ckpt-fan-down"> … neighbour rows … <div class="cr-ckpt-row live">…</div> </div>   (grows DOWN)
        </div>
      </div>
    Each .cr-ckpt-row: <span class="cr-ckpt-row-actions"><button class="cr-ckpt-action">…ROLE/FORK</button></span>
@@ -3505,8 +3510,22 @@ body.cookrew-mobile .cookrew-minimap {
   transition: background 140ms ease;
 }
 
+/* F4 — the count sits ABOVE the reveal. The stack is list 4, focused tag 5,
+   this badge 6; the list's topmost row lands right under the badge, so at
+   z-index auto the count was simply covered by a row title. The backing plate
+   keeps it legible where a row passes behind it rather than relying on the
+   gap. */
 .cr-ckpt-count {
   position: absolute;
+  z-index: 6;
+  padding: 2px 3px;
+  border-radius: 3px;
+  background: radial-gradient(
+    ellipse at center,
+    var(--phos-bg) 0%,
+    var(--phos-bg) 62%,
+    rgba(20, 17, 10, 0) 100%
+  );
   top: 14px;
   right: 7px;
   display: flex;
@@ -3592,10 +3611,14 @@ body.cookrew-mobile .cookrew-minimap {
 }
 
 /* --- the SELECT LIST is now the FAN: .cr-ckpt-scrub-preview wraps
-   .cr-ckpt-fan-up / .cr-ckpt-fan-focus / .cr-ckpt-fan-down, styled in
+   .cr-ckpt-list (full range) + .cr-ckpt-fan-focus (the pinned focus), styled in
    agent-roster.css next to its markup. The old full-panel kit
    (.cr-ckpt-full / -head / -list) was removed with the markup. --- */
 
+/* F5 — rows are OPAQUE. With `background: none` the transcript read straight
+   through every checkpoint title: over a dense pane the text of the terminal
+   and the text of the row interleave and neither is legible. The fade that F1
+   asks for is a fade of the whole tag, not a permanent see-through. */
 .cr-ckpt-row {
   display: flex;
   align-items: center;
@@ -3604,7 +3627,7 @@ body.cookrew-mobile .cookrew-minimap {
   padding: 7px 14px 7px 12px;
   cursor: pointer;
   position: relative;
-  background: none;
+  background: var(--vi-panel);
   border: none;
   text-align: left;
 }
@@ -3613,8 +3636,11 @@ body.cookrew-mobile .cookrew-minimap {
   background: rgba(255, 255, 255, 0.05);
 }
 
+/* The focused row's tint must be a SOLID colour, not an alpha wash over
+   whatever happens to be behind it — an alpha tint is how the transcript kept
+   showing through the one row that most needs to be readable (F5). */
 .cr-ckpt-row.active {
-  background: rgba(255, 214, 0, 0.07);
+  background: var(--vi-panel-focus);
 }
 
 .cr-ckpt-row.active::after {
@@ -3879,6 +3905,19 @@ body.cookrew-mobile .cookrew-minimap {
 }
 
 /* --- cream chrome (light contexts) --- */
+
+/* F5 made rows OPAQUE, which means they now carry a surface colour — and a
+   dark one on a cream rail is a black slab. The dark defaults get cream
+   counterparts here so the opacity fix does not become a theming bug the first
+   time .on-cream is used. */
+.cr-ckpt-rail.on-cream .cr-ckpt-row {
+  background: var(--cream-hi);
+}
+
+.cr-ckpt-rail.on-cream .cr-ckpt-row.active {
+  background: var(--amber-soft);
+}
+
 .cr-ckpt-rail.on-cream .cr-ckpt-line {
   background: linear-gradient(var(--line-soft), var(--dim));
 }
