@@ -1,0 +1,335 @@
+{
+  "generatedBy": "scratchpad/f6-reference/render-f6-reference.mjs",
+  "capturedFrom": "the PRODUCT rail (CheckpointTimeline) via scratchpad/pin-marker-acceptance",
+  "captureScale": {
+    "railWidthPx": 30,
+    "railHeightPx": 663,
+    "deviceScaleFactor": 2
+  },
+  "fixture": "tests/fixtures/version-pins.json contract v2, post c0e6d5f",
+  "states": [
+    {
+      "id": "1-rail-at-rest",
+      "label": "pins on the bar, nothing revealed",
+      "railMounted": true,
+      "railBox": {
+        "x": 870,
+        "y": 0,
+        "w": 30,
+        "h": 663,
+        "cy": 331.5
+      },
+      "railClass": "cr-ckpt-rail idle",
+      "marks": {
+        "pin": {
+          "x": 870,
+          "y": 261.89,
+          "w": 19,
+          "h": 13,
+          "cy": 268.39
+        },
+        "trace": {
+          "x": 879.84,
+          "y": 262.73,
+          "w": 11.31,
+          "h": 11.31,
+          "cy": 268.39
+        },
+        "thumb": {
+          "x": 875.6,
+          "y": 258.49,
+          "w": 19.8,
+          "h": 19.8,
+          "cy": 268.39
+        },
+        "focusRow": {
+          "x": 532,
+          "y": 249.89,
+          "w": 336,
+          "h": 37,
+          "cy": 268.39
+        }
+      },
+      "measuredMarks": [
+        "pin",
+        "trace"
+      ],
+      "absentMarks": [],
+      "markerClassSpreadPx": 0,
+      "f6PairDeltaPx": 0,
+      "pinCount": 4,
+      "pinLabels": [
+        {
+          "version": 1,
+          "text": "V1"
+        },
+        {
+          "version": 2,
+          "text": "V2"
+        },
+        {
+          "version": 12,
+          "text": "12"
+        },
+        {
+          "version": 100,
+          "text": ""
+        }
+      ]
+    },
+    {
+      "id": "2-fan-open",
+      "label": "reveal open, thumb clear of every pin — the F6 pair",
+      "railMounted": true,
+      "railBox": {
+        "x": 870,
+        "y": 0,
+        "w": 30,
+        "h": 663,
+        "cy": 331.5
+      },
+      "railClass": "cr-ckpt-rail fanned dragging",
+      "marks": {
+        "pin": {
+          "x": 870,
+          "y": 261.89,
+          "w": 19,
+          "h": 13,
+          "cy": 268.39
+        },
+        "trace": {
+          "x": 879.84,
+          "y": 262.73,
+          "w": 11.31,
+          "h": 11.31,
+          "cy": 268.39
+        },
+        "thumb": {
+          "x": 873.19,
+          "y": 351.69,
+          "w": 22.63,
+          "h": 22.63,
+          "cy": 363
+        },
+        "focusRow": {
+          "x": 532,
+          "y": 344.5,
+          "w": 336,
+          "h": 37,
+          "cy": 363
+        }
+      },
+      "measuredMarks": [
+        "pin",
+        "trace"
+      ],
+      "absentMarks": [],
+      "markerClassSpreadPx": 0,
+      "f6PairDeltaPx": 0,
+      "pinCount": 4,
+      "pinLabels": [
+        {
+          "version": 1,
+          "text": "V1"
+        },
+        {
+          "version": 2,
+          "text": "V2"
+        },
+        {
+          "version": 12,
+          "text": "12"
+        },
+        {
+          "version": 100,
+          "text": ""
+        }
+      ]
+    },
+    {
+      "id": "3-thumb-on-pin",
+      "label": "thumb held on its coincident pin (R25: the thumb owns it)",
+      "railMounted": true,
+      "railBox": {
+        "x": 870,
+        "y": 0,
+        "w": 30,
+        "h": 663,
+        "cy": 331.5
+      },
+      "railClass": "cr-ckpt-rail fanned dragging",
+      "marks": {
+        "pin": {
+          "x": 870,
+          "y": 261.89,
+          "w": 19,
+          "h": 13,
+          "cy": 268.39
+        },
+        "trace": {
+          "x": 879.84,
+          "y": 262.73,
+          "w": 11.31,
+          "h": 11.31,
+          "cy": 268.39
+        },
+        "thumb": {
+          "x": 873.19,
+          "y": 256.69,
+          "w": 22.63,
+          "h": 22.63,
+          "cy": 268
+        },
+        "focusRow": {
+          "x": 532,
+          "y": 249.5,
+          "w": 336,
+          "h": 37,
+          "cy": 268
+        }
+      },
+      "measuredMarks": [
+        "pin",
+        "trace"
+      ],
+      "absentMarks": [],
+      "markerClassSpreadPx": 0,
+      "f6PairDeltaPx": 0,
+      "pinCount": 4,
+      "pinLabels": [
+        {
+          "version": 1,
+          "text": "V1"
+        },
+        {
+          "version": 2,
+          "text": "V2"
+        },
+        {
+          "version": 12,
+          "text": "12"
+        },
+        {
+          "version": 100,
+          "text": ""
+        }
+      ]
+    },
+    {
+      "id": "5-empty-ledger",
+      "label": "no pins in the ledger — none drawn, none guessed",
+      "railMounted": true,
+      "railBox": {
+        "x": 870,
+        "y": 0,
+        "w": 30,
+        "h": 663,
+        "cy": 331.5
+      },
+      "railClass": "cr-ckpt-rail idle",
+      "marks": {
+        "pin": null,
+        "trace": {
+          "x": 879.84,
+          "y": 262.73,
+          "w": 11.31,
+          "h": 11.31,
+          "cy": 268.39
+        },
+        "thumb": {
+          "x": 875.6,
+          "y": 258.49,
+          "w": 19.8,
+          "h": 19.8,
+          "cy": 268.39
+        },
+        "focusRow": {
+          "x": 532,
+          "y": 249.89,
+          "w": 336,
+          "h": 37,
+          "cy": 268.39
+        }
+      },
+      "measuredMarks": [
+        "trace"
+      ],
+      "absentMarks": [
+        "pin"
+      ],
+      "markerClassSpreadPx": null,
+      "f6PairDeltaPx": 0,
+      "pinCount": 0,
+      "pinLabels": []
+    },
+    {
+      "id": "6-colocated",
+      "label": "B3r REFERENCE — pin + trace boundary on one checkpoint, thumb clear, undimmed",
+      "railMounted": true,
+      "railBox": {
+        "x": 870,
+        "y": 0,
+        "w": 30,
+        "h": 663,
+        "cy": 331.5
+      },
+      "railClass": "cr-ckpt-rail idle",
+      "marks": {
+        "pin": {
+          "x": 870,
+          "y": 261.89,
+          "w": 19,
+          "h": 13,
+          "cy": 268.39
+        },
+        "trace": {
+          "x": 879.84,
+          "y": 262.73,
+          "w": 11.31,
+          "h": 11.31,
+          "cy": 268.39
+        },
+        "thumb": {
+          "x": 875.6,
+          "y": 81.82,
+          "w": 19.8,
+          "h": 19.8,
+          "cy": 91.72
+        },
+        "focusRow": {
+          "x": 532,
+          "y": 73.22,
+          "w": 336,
+          "h": 37,
+          "cy": 91.72
+        }
+      },
+      "measuredMarks": [
+        "pin",
+        "trace"
+      ],
+      "absentMarks": [],
+      "markerClassSpreadPx": 0,
+      "f6PairDeltaPx": 0,
+      "pinCount": 4,
+      "pinLabels": [
+        {
+          "version": 1,
+          "text": "V1"
+        },
+        {
+          "version": 2,
+          "text": "V2"
+        },
+        {
+          "version": 12,
+          "text": "12"
+        },
+        {
+          "version": 100,
+          "text": ""
+        }
+      ]
+    }
+  ]
+}

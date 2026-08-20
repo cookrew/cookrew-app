@@ -20,11 +20,24 @@ const pins = [
 // pin v2 (T5 at position 4 of 10). That is the co-located case, for real.
 const markers = [{ kind: 'compact', afterIndex: 4 }] as never[]
 
+// State comes from the URL so the reference generator can request a state
+// deterministically instead of driving interaction for the ones that are not
+// interactions (empty ledger, light chrome).
+const q = new URLSearchParams(location.search)
+const EMPTY = q.get('empty') === '1'
+// Thumb position as a PROP, not a drag. The reference for co-location needs the
+// thumb away from the pin AND the pins undimmed — but holding a drag to move it
+// triggers `.cr-ckpt-rail.dragging .cr-ckpt-pin { opacity: .55 }`, and releasing
+// snaps the thumb back onto the pin. Driving markerFrac gets both.
+const THUMB = q.has('thumb') ? Number(q.get('thumb')) : 0.4
+// .on-cream lives on .cr-ckpt-rail, which the component owns, so it is applied
+// after mount rather than guessed onto a parent.
+
 const host = document.getElementById('root')!
 createRoot(host).render(
   React.createElement(CheckpointTimeline as never, {
-    terminalId: 't1', rows, markers, pins, titleMode: 'conclusion',
-    activeIndex: 5, markerFrac: 0.4,
+    terminalId: 't1', rows, markers, pins: EMPTY ? [] : pins, titleMode: 'conclusion',
+    activeIndex: 5, markerFrac: THUMB,
     // Recorded, not swallowed: Tinker's pin-tap-probe reads these to prove a
     // real press reaches the handler. A no-op here made the probe unable to
     // tell "tappable" from "silently ignored".

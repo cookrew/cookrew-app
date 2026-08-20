@@ -3,8 +3,23 @@
 <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="bundle.css">
 <style>*{box-sizing:border-box}body{margin:0;background:#14110a}
-#stage{position:relative;width:900px;height:400px}</style>
-<div id="stage"><div id="root"></div></div>
+/* CAPTURE SCALE. Magpie measured every old reference band at 1120x416 while
+   the live rail renders 30x663 — a diff between those two can only ever be a
+   size mismatch. The stage is therefore the rail's REAL height, and the shots
+   are clipped to the rail's own 30px box. Height is overridable so a future
+   live measurement can move it without editing the generator. */
+#stage{position:relative;width:900px;height:var(--stage-h,663px);
+  /* The rail lives on the terminal's phosphor background in the product. The
+     app's own body rule (cream chrome) wins over the page's here, so the stage
+     states it explicitly — a reference captured on cream cannot be diffed
+     against a live rail on #14110a whatever the geometry does. */
+  background:var(--phos-bg,#14110a)}
+/* `#root` carries `background: var(--cream)` from the app's own stylesheet and
+   paints over the stage — which is why every reference came out on cream while
+   the live rail sits on the terminal's phosphor dark. A diff between those two
+   fails on background before it ever reaches the geometry. */
+#root{background:var(--phos-bg,#14110a);height:100%}</style>
+<div id="stage" style="--stage-h:663px"><div id="root"></div></div>
 <pre id="P"></pre>
 <script>window.__err=[];window.onerror=(m,u,l,c,e)=>{window.__err.push(String(e&&e.stack||m))};
 window.addEventListener('unhandledrejection',ev=>window.__err.push('rej:'+ev.reason));</script>
