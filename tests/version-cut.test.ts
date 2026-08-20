@@ -94,10 +94,28 @@ describe('railMarkers — all three classes in ONE space (R17)', () => {
     )
   })
 
-  it('places all three classes at the SAME frac for the same checkpoint (F6)', () => {
+  it('co-locates the TURN and the PIN for one checkpoint (the F6 pair)', () => {
     // T4 is drawn at array position 2 of 4 rows → 0.5, whatever its number.
+    // A pin names that checkpoint, so it shares the row. A trace marker does
+    // not: see below.
     const atT4 = railMarkers(input).filter((m) => m.frac === 0.5)
-    expect(new Set(atT4.map((m) => m.class))).toEqual(new Set(['turn', 'trace', 'pin']))
+    expect(new Set(atT4.map((m) => m.class))).toEqual(new Set(['turn', 'pin']))
+  })
+
+  it('puts a trace boundary AFTER its checkpoint, not on it', () => {
+    // `afterIndex` is the checkpoint the boundary FOLLOWS, so it belongs at the
+    // edge below that row. Anchoring it on the row itself drew every compact /
+    // clear / rewind one row early — it appeared to end the turn above it.
+    const trace = railMarkers(input).find((m) => m.class === 'trace')
+    expect(trace?.frac).toBe(0.75)
+  })
+
+  it('puts a boundary after the LAST row at the very bottom, not short of it', () => {
+    // The rail's original formula (afterIndex / lastIndex) put this at exactly
+    // 1; render-position anchoring dropped it to (n-1)/n, so the end-of-
+    // transcript marker floated one row above the end.
+    const out = railMarkers({ rows, traceMarkers: [{ kind: 'compact', afterIndex: 7 }], pins: [] })
+    expect(out.find((m) => m.class === 'trace')?.frac).toBe(1)
   })
 
   it('does NOT place them where the turn number implies — the drift being fixed', () => {

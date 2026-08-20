@@ -83,16 +83,26 @@ describe('version-pins fixture — the R17 non-contiguous regression', () => {
   })
 })
 
-describe('version-pins fixture — the F6 co-location case', () => {
-  it('puts the turn row, the compact marker and the pin on one frac', () => {
-    const { rows, checkpoint, frac } = fixture.coLocated
-    const markers = railMarkers({
+describe('version-pins fixture — one space, two anchors', () => {
+  const { rows, checkpoint, frac, traceAfterCheckpoint, endMarker } = fixture.coLocated
+  const markers = (afterIndex: number): ReturnType<typeof railMarkers> =>
+    railMarkers({
       rows,
-      traceMarkers: [{ kind: 'compact', afterIndex: checkpoint }],
+      traceMarkers: [{ kind: 'compact', afterIndex }],
       pins: [{ version: 3, atIndex: checkpoint, scrollLine: 0, cutAt: 1 }]
     })
-    const at = markers.filter((m) => m.frac === frac)
-    expect(new Set(at.map((m) => m.class))).toEqual(new Set(['turn', 'trace', 'pin']))
+
+  it('puts the turn row and the pin on ONE frac — the F6 pair', () => {
+    const at = markers(checkpoint).filter((m) => m.frac === frac)
+    expect(new Set(at.map((m) => m.class))).toEqual(new Set(['turn', 'pin']))
+  })
+
+  it('puts the trace boundary one slot BELOW, where afterIndex means', () => {
+    expect(markers(checkpoint).find((m) => m.class === 'trace')?.frac).toBe(traceAfterCheckpoint)
+  })
+
+  it('puts a boundary after the last row at the bottom, not (n-1)/n', () => {
+    expect(markers(endMarker.afterIndex).find((m) => m.class === 'trace')?.frac).toBe(endMarker.frac)
   })
 })
 
