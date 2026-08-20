@@ -21,6 +21,7 @@ const api = {
   placeInstalledPreset: (id: string, position: unknown, orch: boolean) =>
     ipcRenderer.invoke('preset:installed:place', id, position, orch),
   uninstallPreset: (id: string) => ipcRenderer.invoke('preset:installed:uninstall', id),
+  listPins: (terminalId: string) => ipcRenderer.invoke('pins:list', terminalId),
 
   listWorkspaces: () => ipcRenderer.invoke('workspace:list'),
   createWorkspace: (name: string, dir: string, team?: string) =>

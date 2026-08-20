@@ -107,6 +107,8 @@ import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
 import { TeamStore, copyTeam, forkTeam, workspaceFromTemplate, type TeamSnapshot } from './teams'
 import { PresetStore, isPresetId } from './preset-store'
+import { PinStore } from './pin-store'
+import type { VersionPinRecord } from '../shared/version-pin'
 import { planPresetImport } from './preset-import'
 import { TeamClipboard } from './team-clip'
 import { UNCOPYABLE_PHASES } from '../shared/turn'
@@ -121,6 +123,27 @@ const dirname = path.dirname(fileURLToPath(import.meta.url))
 const store = new WorkspaceStore()
 /** Installed marketplace presets — the dock's third chip family (§8). */
 const presetStore = new PresetStore()
+/** Version pins per terminal (§10) — what the rail's third marker class draws. */
+const pinStore = new PinStore()
+
+/**
+ * Record an install's version against every TERMINAL it placed. Teams version
+ * ATOMICALLY (§10): the tuple shares one number, so each member takes the same
+ * pin rather than counting independently. Notes and browsers hold no
+ * transcript, so they hold no pin.
+ */
+function recordPins(nodes: readonly CanvasNode[], pin: VersionPinRecord): void {
+  for (const node of nodes) {
+    if (node.kind !== 'terminal') continue
+    try {
+      pinStore.add(node.id, pin)
+    } catch (error) {
+      // A pin that cannot be written must not undo a placement that already
+      // happened — the agent is on the canvas and working either way.
+      console.error('Recording a version pin failed:', error)
+    }
+  }
+}
 const ptys = new PtyManager()
 // Liveness covers EXISTENCE, not attachment: every terminal node — including
 // inactive-workspace agents this process never spawns an attach for — pins
@@ -2582,6 +2605,11 @@ function registerIpc(handlers: RestoreHandlers): void {
   // reusing the channel threw on registration (Electron refuses a second
   // handler) and took every handler after it down with it.
   ipcMain.handle('preset:installed:list', () => presetStore.list())
+  /**
+   * §10's read path. Asked per terminal, because a pin belongs to a transcript
+   * and not to a workspace.
+   */
+  ipcMain.handle('pins:list', (_e, terminalId: string) => pinStore.list(terminalId))
   ipcMain.handle('preset:installed:uninstall', (_e, id: string) => {
     // C1: the id crosses from the renderer and ends at a recursive delete.
     // The store validates it too; this refuses at the boundary so a hostile
@@ -2628,7 +2656,7 @@ function registerIpc(handlers: RestoreHandlers): void {
         node.kind === 'terminal' ? ({ ...node, orch } as CanvasNode) : node
       )
       if (plan.kind === 'single') {
-        addNode(placed[0])
+        recordPins([addNode(placed[0])], plan.pin)
         return
       }
       // N2: ONE write and ONE broadcast for a team. The add-then-connect loop
@@ -2639,6 +2667,7 @@ function registerIpc(handlers: RestoreHandlers): void {
       // afterwards, because spawning a PTY is inherently per-terminal.
       const added = store.appendTeamToWorkspace(store.focusedId, placed, plan.connections)
       for (const node of added) adoptLiveNode(node)
+      recordPins(added, plan.pin)
     }
   )
 

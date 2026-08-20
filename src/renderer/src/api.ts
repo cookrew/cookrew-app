@@ -18,6 +18,7 @@ import type { TurnMatch } from "../../shared/turn-search";
 import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
 import type { BoardRow, BoardSummary } from "../../shared/board";
 import type { InstalledPreset } from "../../shared/preset-chip";
+import type { VersionPinRecord } from "../../shared/version-pin";
 
 /**
  * GET /api/board's payload, mirrored here rather than imported from main —
@@ -79,6 +80,11 @@ export interface CookrewApi {
   ) => Promise<void>;
   /** Remove a preset from the dock. Placed agents are untouched (A2). */
   uninstallPreset: (id: string) => Promise<void>;
+  /**
+   * Version pins for a terminal (§10) — the rail's third marker class. Asked
+   * per terminal because a pin belongs to a transcript, not to a workspace.
+   */
+  listPins: (terminalId: string) => Promise<VersionPinRecord[]>;
   createTerminal: (opts: {
     name: string;
     preset: string;
