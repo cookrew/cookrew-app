@@ -105,7 +105,12 @@ if (args.includes('--seed')) {
     const manifest = signManifest(built.manifest, privateKey)
 
     store.putBlob(built.teamBytes)
-    store.putManifest({ manifest, teamName: seed.name, visibility: seed.visibility })
+    store.putManifest({
+      manifest,
+      teamName: seed.name,
+      visibility: seed.visibility,
+      identityId: 'webauthn:seed'
+    })
     log.append({
       at: Date.now(),
       kind: 'publish',

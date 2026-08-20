@@ -92,7 +92,7 @@ describe('RegistryStore — addresses are validated before they become paths', (
 describe('RegistryStore — the catalogue is derived from the manifests', () => {
   it('lists a stored preset with its name, version and author', () => {
     const p = publish('Deep Research', 2)
-    store.putManifest({ manifest: p.manifest, teamName: p.teamName, visibility: 'public' })
+    store.putManifest({ manifest: p.manifest, teamName: p.teamName, visibility: 'public', identityId: 'webauthn:drej' })
     const [row] = store.list()
     expect(row).toMatchObject({ name: 'Deep Research', version: 2, author: 'drej', visibility: 'public' })
   })
@@ -103,14 +103,14 @@ describe('RegistryStore — the catalogue is derived from the manifests', () => 
     const v2 = publish('Audit Pack', 2, [terminal({ command: 'b' })])
     // Same author key for both, so they share a lineage.
     const shared = { ...v2.manifest, author: v1.manifest.author }
-    store.putManifest({ manifest: v1.manifest, teamName: 'Audit Pack', visibility: 'public' })
-    store.putManifest({ manifest: shared, teamName: 'Audit Pack', visibility: 'public' })
+    store.putManifest({ manifest: v1.manifest, teamName: 'Audit Pack', visibility: 'public', identityId: 'webauthn:drej' })
+    store.putManifest({ manifest: shared, teamName: 'Audit Pack', visibility: 'public', identityId: 'webauthn:drej' })
     for (const row of store.list()) expect(row.latestVersion).toBe(2)
   })
 
   it('skips a corrupt record instead of emptying the catalogue', () => {
     const p = publish('Deep Research', 1)
-    store.putManifest({ manifest: p.manifest, teamName: p.teamName, visibility: 'public' })
+    store.putManifest({ manifest: p.manifest, teamName: p.teamName, visibility: 'public', identityId: 'webauthn:drej' })
     writeFileSync(path.join(base, 'manifests', `${'b'.repeat(64)}.json`), 'not json')
     expect(store.list()).toHaveLength(1)
   })
@@ -127,7 +127,8 @@ describe('RegistryStore — the catalogue is derived from the manifests', () => 
       store.putManifest({
         manifest: { ...p.manifest, id: '../escape' } as PresetManifest,
         teamName: 'X',
-        visibility: 'public'
+        visibility: 'public',
+        identityId: 'webauthn:drej'
       })
     ).toThrow()
   })
@@ -138,7 +139,7 @@ describe('RegistryStore — the catalogue is derived from the manifests', () => 
       ['Ship Crew', 1]
     ] as const) {
       const p = publish(n, v)
-      store.putManifest({ manifest: p.manifest, teamName: n, visibility: 'public' })
+      store.putManifest({ manifest: p.manifest, teamName: n, visibility: 'public', identityId: 'webauthn:drej' })
     }
     expect(store.search('deep').map((p) => p.name)).toEqual(['Deep Research'])
     expect(store.search('DREJ')).toHaveLength(2)
@@ -150,9 +151,16 @@ describe('RegistryStore — the catalogue is derived from the manifests', () => 
     const a = publish('Audit Pack', 1, [terminal({ command: 'a' })])
     const b = publish('Audit Pack', 2, [terminal({ command: 'b' })])
     const shared = { ...b.manifest, author: a.manifest.author }
-    expect(lineageOf(a.manifest, 'Audit Pack')).toBe(lineageOf(shared, 'Audit Pack'))
-    // A different author is a different lineage even under the same name.
-    expect(lineageOf(a.manifest, 'Audit Pack')).not.toBe(lineageOf(b.manifest, 'Audit Pack'))
+    // One identity, one name — the lineage survives an author-KEY change,
+    // which is exactly what makes a rotation expressible (A3).
+    expect(lineageOf('webauthn:drej', 'Audit Pack')).toBe(lineageOf('webauthn:drej', 'Audit Pack'))
+    // A different identity is a different lineage even under the same name.
+    expect(lineageOf('webauthn:drej', 'Audit Pack')).not.toBe(
+      lineageOf('webauthn:someone-else', 'Audit Pack')
+    )
+    void a
+    void b
+    void shared
   })
 })
 
@@ -269,7 +277,7 @@ describe('registry server — public serving', () => {
   const seed = (name: string, version: number, visibility: 'public' | 'identified' = 'public') => {
     const p = publish(name, version)
     store.putBlob(p.teamBytes)
-    store.putManifest({ manifest: p.manifest, teamName: name, visibility })
+    store.putManifest({ manifest: p.manifest, teamName: name, visibility, identityId: 'webauthn:drej' })
     return p
   }
 

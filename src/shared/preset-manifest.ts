@@ -134,7 +134,18 @@ export const FORBIDDEN_REASONS = [
   'version_gate',
   'region',
   /** R11 / R5: a prepaid per-call balance ran out. Remedy is top-up. */
-  'balance_empty'
+  'balance_empty',
+  /**
+   * R26: a valid identity whose token does not cover this request — a publish
+   * token at the download gate, or a download token at a publish route. Both
+   * directions, one reason.
+   *
+   * It is the only 403 whose remedy is PROGRAMMATIC: the client re-runs the
+   * ceremony for the right scope. Everything else in this vocabulary needs a
+   * human (buy a seat, top up, contact the author), which is why the others
+   * surface immediately and this one does not.
+   */
+  'scope'
 ] as const
 
 export type ForbiddenReason = (typeof FORBIDDEN_REASONS)[number]
@@ -147,6 +158,23 @@ export interface ForbiddenBody {
 
 export function isForbiddenReason(value: string): value is ForbiddenReason {
   return (FORBIDDEN_REASONS as readonly string[]).includes(value)
+}
+
+/**
+ * R26 — a scope denial is retried SILENTLY, once.
+ *
+ * The client asked for the wrong capability, and it can fix that without the
+ * user: re-run the ceremony for the scope the request actually needs. Showing a
+ * sheet first would ask a person to resolve a mistake the program already knows
+ * how to correct.
+ *
+ * Once, though, and only for `scope`. A second scope 403 after a fresh
+ * ceremony means the server disagrees about what this identity may do, which is
+ * a real refusal and must surface — retrying past that is how a client ends up
+ * in the loop D4 exists to prevent, just with an extra ceremony each turn.
+ */
+export function shouldRetrySilently(reason: ForbiddenReason, attempt: number): boolean {
+  return reason === 'scope' && attempt === 0
 }
 
 /**

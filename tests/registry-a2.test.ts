@@ -185,10 +185,10 @@ describe('authorize — the 401 path and D4', () => {
     const log = new TransparencyLog(base)
     const p = publish('Pro Toolkit', 1)
     store.putBlob(p.teamBytes)
-    store.putManifest({ manifest: p.manifest, teamName: 'Pro Toolkit', visibility: 'identified' })
+    store.putManifest({ manifest: p.manifest, teamName: 'Pro Toolkit', visibility: 'identified', identityId: 'webauthn:drej' })
     const pub = publish('Deep Research', 2)
     store.putBlob(pub.teamBytes)
-    store.putManifest({ manifest: pub.manifest, teamName: 'Deep Research', visibility: 'public' })
+    store.putManifest({ manifest: pub.manifest, teamName: 'Deep Research', visibility: 'public', identityId: 'webauthn:drej' })
     const server = createRegistry({ store, log, identity, dev: true, authorize: makeAuthorize(store, identity) })
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
     const { port } = server.address() as AddressInfo

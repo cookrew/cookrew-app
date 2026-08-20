@@ -49,27 +49,38 @@ export interface PresetSummary {
 }
 
 /**
- * LINEAGE. `id` is the content address of team.json, so every version of a
- * preset has a DIFFERENT id — which means an id cannot answer "is there a newer
- * one". R3's update check needs an identity that survives a version bump.
+ * LINEAGE — the identity that OWNS a preset, plus its name.
  *
- * Derived here as (authorKeyId, team name) rather than added to the manifest,
- * because a schema field would need every published manifest re-signed and
- * every client updated before the first update check could work.
+ * `id` is the content address of team.json, so every version has a different
+ * one and an id cannot answer "is there a newer". R3's update check needs
+ * something that survives a version bump, and so does A3's TOFU.
  *
- * FLAGGED for A3: publish enforces author-key TOFU per lineage, so if the
- * lineage key ever becomes something an author can choose, the two definitions
- * must not drift apart. Today it is derived in one function and that is the
- * only place it exists.
+ * A1 derived this as (authorKeyId, name). That was WRONG, and A3 is what
+ * exposed it: including the key makes "same lineage, different key" impossible
+ * by construction, so a key rotation would silently start a NEW lineage — TOFU
+ * could never refuse a swapped key, and a buyer holding v2 would never be
+ * offered v3 because the update check would no longer recognise it as the same
+ * preset. Two features fail the same way, quietly.
+ *
+ * The passkey identity is the durable owner; the ed25519 key is a credential it
+ * holds and may rotate. So the identity keys the lineage and the author key
+ * lives INSIDE it, which is exactly what makes a rotation expressible: the
+ * lineage persists while its key changes, under a countersignature from the
+ * identity that already held it.
+ *
+ * Still derived rather than added to the manifest — a schema field would need
+ * every published manifest re-signed before the first update check could work.
  */
-export function lineageOf(manifest: PresetManifest, teamName: string): string {
-  return `${manifest.author.keyId}::${teamName}`
+export function lineageOf(identityId: string, teamName: string): string {
+  return `${identityId}::${teamName}`
 }
 
 interface StoredEntry {
   manifest: PresetManifest
   teamName: string
   visibility: 'public' | 'identified'
+  /** The publishing identity — what keys the lineage. See lineageOf. */
+  identityId: string
 }
 
 export class RegistryStore {
@@ -171,7 +182,7 @@ export class RegistryStore {
     }
     const latest = new Map<string, number>()
     for (const e of entries) {
-      const key = lineageOf(e.manifest, e.teamName)
+      const key = lineageOf(e.identityId, e.teamName)
       latest.set(key, Math.max(latest.get(key) ?? 0, e.manifest.version))
     }
     return entries
@@ -181,8 +192,8 @@ export class RegistryStore {
         version: e.manifest.version,
         author: e.manifest.author.handle,
         visibility: e.visibility,
-        lineage: lineageOf(e.manifest, e.teamName),
-        latestVersion: latest.get(lineageOf(e.manifest, e.teamName)) as number
+        lineage: lineageOf(e.identityId, e.teamName),
+        latestVersion: latest.get(lineageOf(e.identityId, e.teamName)) as number
       }))
       .sort((a, b) => a.name.localeCompare(b.name) || b.version - a.version)
   }

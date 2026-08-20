@@ -53,7 +53,10 @@ export function makeAuthorize(
     // presents the same token and loops. 401 means prove who you are; 403 means
     // you did, and it is still no — a client may retry the first and must never
     // retry the second.
-    if (claims.scope !== 'download') return { code: 403, reason: 'version_gate' }
+    // R26: `scope`, not a stand-in. The reason names what is actually wrong,
+    // and it is the one 403 a client can resolve on its own — so naming it
+    // precisely is what lets the client re-ceremony instead of surfacing.
+    if (claims.scope !== 'download') return { code: 403, reason: 'scope' }
 
     // M1 has no entitlement service: a verified identity is entitled to every
     // identified preset. A3 puts the real check HERE, and M2's 402 goes below
