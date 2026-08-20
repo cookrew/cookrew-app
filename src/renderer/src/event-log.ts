@@ -62,6 +62,12 @@ export interface EventFilter {
   types?: string[]
   since?: number
   until?: number
+  /**
+   * Most events to return, NEWEST kept. The server has always supported this
+   * (main/event-log.ts) — the client simply never sent it, so every live query
+   * pulled the whole log.
+   */
+  limit?: number
 }
 
 /** Display metadata per event type. hatch = creation event (avatar hatches). */
@@ -357,24 +363,121 @@ export async function queryEvents(filter?: EventFilter): Promise<CookrewEvent[]>
   return mockLog.filter((e) => matches(e, filter)).sort((a, b) => b.timestamp - a.timestamp)
 }
 
-/** Live query hook: initial fetch + re-query whenever a new event streams in. */
+/**
+ * Longest a streamed event waits before the panel re-queries.
+ *
+ * The refetch used to be one-per-event. Events arrive in BURSTS — an agent
+ * working emits turn and node ops in clusters — so a burst of 30 meant 30 full
+ * queries, 30 parses and 30 renders for one visually identical result. Trailing
+ * coalescing collapses a burst to a single refetch and changes nothing about
+ * what is displayed, only how often it is recomputed.
+ */
+const REFRESH_COALESCE_MS = 400
+
+/**
+ * Most events a live query will pull back when the caller names no limit.
+ *
+ * The query was UNBOUNDED: with no `limit` the server returns the whole log,
+ * measured at 3170 events / 763KB on the owner's live session, and it grows
+ * with uptime. Multiplied by one refetch per event, that is a cost that rises
+ * on its own — the shape this refactor keeps having to unlearn.
+ *
+ * Newest-first, because a metrics view that had to drop something should drop
+ * the oldest. A caller that genuinely wants everything passes its own limit.
+ */
+const DEFAULT_QUERY_LIMIT = 2000
+
+/** What a live query returned, and whether the log had more to give. */
+export interface LiveEvents {
+  events: CookrewEvent[]
+  /**
+   * The limit was reached, so this is the NEWEST slice and not the whole
+   * range. Exposed rather than swallowed: a panel showing metrics over "all"
+   * while silently holding the newest 2000 is a wrong answer that looks right.
+   */
+  truncated: boolean
+}
+
+/**
+ * Live query hook: initial fetch, then a COALESCED re-query as events stream.
+ *
+ * Returns the array directly for existing callers; useLiveEvents exposes the
+ * truncation flag alongside it.
+ */
 export function useEventQuery(filter?: EventFilter): CookrewEvent[] {
-  const [events, setEvents] = useState<CookrewEvent[]>([])
+  return useLiveEvents(filter).events
+}
+
+/**
+ * The filter to actually send. Asks for one MORE than the cap, which is how
+ * truncation is detected without a second count query — and means it can never
+ * report a truncation it did not observe.
+ */
+export function boundedFilter(filter: EventFilter | undefined, fallback = DEFAULT_QUERY_LIMIT): EventFilter {
+  const limit = filter?.limit ?? fallback
+  return { ...(filter ?? {}), limit: limit + 1 }
+}
+
+/**
+ * Trim an over-fetched list back to the cap, reporting whether it had to.
+ * Keeps the NEWEST: dropping the oldest is the only defensible direction for a
+ * metrics view, and the server returns oldest-first.
+ */
+export function applyLimit(
+  list: readonly CookrewEvent[],
+  filter: EventFilter | undefined,
+  fallback = DEFAULT_QUERY_LIMIT
+): LiveEvents {
+  const limit = filter?.limit ?? fallback
+  if (list.length <= limit) return { events: [...list], truncated: false }
+  return { events: list.slice(list.length - limit), truncated: true }
+}
+
+/**
+ * Collapse a burst of triggers into one trailing call.
+ *
+ * Separate from the query so it can be tested without a clock inside a hook:
+ * the first trigger arms a timer and every trigger until it fires is absorbed.
+ */
+export function createCoalescer(
+  delayMs: number,
+  run: () => void
+): { trigger: () => void; cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  return {
+    trigger: () => {
+      if (timer) return
+      timer = setTimeout(() => {
+        timer = null
+        run()
+      }, delayMs)
+    },
+    cancel: () => {
+      if (timer) clearTimeout(timer)
+      timer = null
+    }
+  }
+}
+
+export function useLiveEvents(filter?: EventFilter): LiveEvents {
+  const [live, setLive] = useState<LiveEvents>({ events: [], truncated: false })
   const key = JSON.stringify(filter ?? {})
   useEffect(() => {
     let alive = true
-    const refresh = (): void => {
-      void queryEvents(filter).then((list) => {
-        if (alive) setEvents(list)
+    const run = (): void => {
+      void queryEvents(boundedFilter(filter)).then((list) => {
+        if (alive) setLive(applyLimit(list, filter))
       })
     }
-    refresh()
-    const off = onEvent(refresh)
+    run()
+    const coalescer = createCoalescer(REFRESH_COALESCE_MS, run)
+    const off = onEvent(coalescer.trigger)
     return () => {
       alive = false
+      coalescer.cancel()
       off()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
-  return events
+  return live
 }
