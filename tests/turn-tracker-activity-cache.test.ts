@@ -47,7 +47,7 @@ class CountingSession extends EventEmitter {
 function fixture(): { tracker: TurnTracker; session: CountingSession } {
   const tracker = new TurnTracker(async () => null, null)
   const session = new CountingSession()
-  tracker.track(session as unknown as PtySession, { agent: true })
+  tracker.track(session as unknown as PtySession, true)
   return { tracker, session }
 }
 
@@ -108,14 +108,31 @@ describe('activityOf caches the buffer walk', () => {
     expect(activity.pendingInput).toBe('typing a prompt')
   })
 
+  it('re-derives when the prompt changes, with no new output', () => {
+    // `lines` filters the prompt echo out of the delta, so the derived values
+    // depend on t.prompt as well as on output. Atlas's MED: the first key had
+    // only (rev, phase), so a prompt change served a tail still carrying the
+    // old echo.
+    const { tracker, session } = fixture()
+    tracker.list()
+    expect(costOfList(tracker, session)).toBe(0)
+
+    // Set on the dispatch-attribution path (turn-tracker:1135), which needs a
+    // live in-flight turn to drive. The claim under test is the cache KEY, not
+    // how prompt gets there, so the field is set directly.
+    const tracked = (tracker as unknown as { tracked: Map<string, { prompt: string }> }).tracked
+    tracked.get('term-1')!.prompt = 'a different prompt'
+    expect(costOfList(tracker, session)).toBeGreaterThan(0)
+  })
+
   it('does not leak one terminal cache into another', () => {
     const tracker = new TurnTracker(async () => null, null)
     const a = new CountingSession()
     const b = new CountingSession()
     b.terminalId = 'term-2'
     b.full = 'different pane\n'
-    tracker.track(a as unknown as PtySession, { agent: true })
-    tracker.track(b as unknown as PtySession, { agent: true })
+    tracker.track(a as unknown as PtySession, true)
+    tracker.track(b as unknown as PtySession, true)
 
     tracker.list()
     a.emitOutput('only A moved\n')

@@ -245,8 +245,8 @@ interface TrackedTerminal {
    */
   outputRev: number
   /**
-   * Last output-derived activity fields, with the (rev, phase) they were
-   * derived at. activityOf recomputes them only when that pair changes.
+   * Last output-derived activity fields, with the key they were derived at.
+   * activityOf recomputes them only when that key changes.
    *
    * Deliberately narrow. It caches ONLY what costs something — the fields that
    * walk the whole xterm buffer — and never the cheap scalars (phase, prompt,
@@ -255,7 +255,7 @@ interface TrackedTerminal {
    * worst it can do is reuse a tail for output that has not arrived, and the
    * rev is bumped at the one place output arrives.
    */
-  activityCache: { rev: number; phase: TurnPhase; derived: DerivedActivity } | null
+  activityCache: { key: string; derived: DerivedActivity } | null
   agent: boolean
   phase: TurnPhase
   promptBuffer: string
@@ -302,6 +302,7 @@ interface TrackedTerminal {
   titleTimer: NodeJS.Timeout | null
   onInput: (data: string, source?: 'dispatch') => void
   onData: (data: string) => void
+  onReplay: () => void
   onExit: () => void
 }
 
@@ -1519,6 +1520,16 @@ export class TurnTracker extends EventEmitter {
       titleTimer: null,
       onInput: (data, source) => this.handleInput(session.terminalId, data, source),
       onData: (data) => this.handleData(session.terminalId, data),
+      // A resize rewraps the mirror and re-emits as 'replay', deliberately NOT
+      // 'data' (pty.resize: a synthetic repaint on 'data' would read as agent
+      // activity and mint phantom checkpoints). The derived cache still has to
+      // hear it — the buffer genuinely changed. This ONLY bumps the revision;
+      // it runs none of handleData's phase logic, so the reason 'replay' is
+      // kept off 'data' is preserved.
+      onReplay: () => {
+        const t = this.tracked.get(session.terminalId)
+        if (t) t.outputRev += 1
+      },
       onExit: () => this.handleExit(session.terminalId)
     }
     // Restore the last exchange across restarts and workspace switches:
@@ -1539,6 +1550,7 @@ export class TurnTracker extends EventEmitter {
     }
     session.on('input', t.onInput)
     session.on('data', t.onData)
+    session.on('replay', t.onReplay)
     session.on('exit', t.onExit)
     this.tracked.set(session.terminalId, t)
   }
@@ -1586,6 +1598,7 @@ export class TurnTracker extends EventEmitter {
     if (t.titleTimer) clearTimeout(t.titleTimer)
     t.session.removeListener('input', t.onInput)
     t.session.removeListener('data', t.onData)
+    t.session.removeListener('replay', t.onReplay)
     t.session.removeListener('exit', t.onExit)
     this.tracked.delete(terminalId)
   }
@@ -2388,9 +2401,29 @@ export class TurnTracker extends EventEmitter {
      * and both bump outputRev. Phase is in the key because it selects which
      * branch produced the values.
      */
+    /**
+     * The key names EVERYTHING the derived values read, not just the path I
+     * first thought of.
+     *
+     * outputRev alone was not a gate. A resize rewraps the mirror and emits
+     * 'replay', not 'data', so the revision stood still while both branches
+     * changed underneath it — fullText() over a rewrapped buffer, and
+     * viewportText()'s window, which is `buffer.length - screen.rows`. On a
+     * QUIET pane nothing arrives to correct it, so the stale tail was not
+     * bounded at all. Geometry is in the key so no future path that reflows
+     * the buffer can slip past by choosing a different event; the 'replay'
+     * listener covers reflows that leave the dimensions alone.
+     *
+     * `prompt` is here because `lines` filters the prompt echo out of the
+     * delta, so a prompt change re-derives even with no new output.
+     *
+     * Read ONCE, and used for both the comparison and the stamp: sampling the
+     * revision twice invites the two to disagree.
+     */
+    const key = `${t.outputRev}|${t.phase}|${t.session.cols}x${t.session.rows}|${t.prompt}`
     const cached = t.activityCache
     const derived: DerivedActivity =
-      cached !== null && cached.rev === t.outputRev && cached.phase === t.phase
+      cached !== null && cached.key === key
         ? cached.derived
         : (() => {
             // The glance parser needs the RAW delta (status lines are chrome
@@ -2408,7 +2441,7 @@ export class TurnTracker extends EventEmitter {
               // renderer shows the whole live stream anyway.
               tailLines: inTurn || !t.agent ? null : latestTailLines(t.session.fullText())
             }
-            t.activityCache = { rev: t.outputRev, phase: t.phase, derived: fresh }
+            t.activityCache = { key, derived: fresh }
             return fresh
           })()
     const lines = derived.lines
