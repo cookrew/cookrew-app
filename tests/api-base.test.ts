@@ -18,6 +18,19 @@ import { API_BASE, apiPath, clientSlug } from '../src/renderer/src/api-base'
 
 const RENDERER = path.join(__dirname, '..', 'src', 'renderer', 'src')
 
+/**
+ * Files whose /api URLs are DELIBERATELY unslugged, listed here rather than
+ * hidden behind a regex hole so the exemption is reviewed like anything else.
+ *
+ * browser-stream.ts builds the interactive-browser WebSocket from the PAGE
+ * ORIGIN, and the stream is addressed by browser NODE ID, which is globally
+ * unique — it is not a canvas read, so there is no workspace for it to be
+ * wrong about. Verifying that live from a slugged page is on the post-merge
+ * list; if it turns out the stream does need a scope, this line is where that
+ * decision gets made rather than a place the sweep silently never looked.
+ */
+const EXEMPT = new Set(['browser-stream.ts'])
+
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
     const full = path.join(dir, entry)
@@ -49,12 +62,19 @@ describe('conformance — no unwrapped root-absolute /api in the renderer', () =
       if (file.endsWith('api-base.ts')) continue
       const code = stripComments(readFileSync(file, 'utf8'))
       code.split('\n').forEach((line, index) => {
+        const where = `${path.relative(RENDERER, file)}:${index + 1}`
+        if (EXEMPT.has(where.split(':')[0]) && /\/api\//.test(line)) return
         // A root-absolute /api literal in any quoting style...
-        const literal = /['"`]\/api\//.exec(line)
-        if (!literal) return
-        // ...is a violation unless apiPath opens it on the same line.
-        if (/apiPath\(\s*['"`]\/api\//.test(line)) return
-        violations.push(`${path.relative(RENDERER, file)}:${index + 1}: ${line.trim()}`)
+        const rootAbsolute = /['"`]\/api\//.test(line)
+        // ...or one built INSIDE a full URL, which the quote-anchored pattern
+        // above cannot see. streamUrl is exactly that shape, and the sweep
+        // missed it: `${scheme}://${host}/api/browser/...`. A blind spot in a
+        // conformance sweep is worse than no sweep, because it reads as proof.
+        const insideFullUrl = /:\/\//.test(line) && /\/api\//.test(line)
+        if (!rootAbsolute && !insideFullUrl) return
+        // Either way it is a violation unless apiPath wraps it.
+        if (/apiPath\(/.test(line)) return
+        violations.push(`${where}: ${line.trim()}`)
       })
     }
     expect(violations).toEqual([])
