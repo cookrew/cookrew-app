@@ -72,6 +72,7 @@ import { EventLog } from './event-log'
 import { installProcessGuards } from './process-guards'
 import { SessionRegistry } from './session-registry'
 import { planWorkspaceSwitch } from './workspace-switch'
+import { terminalHasLiveWork } from './session-liveness'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { canonicalExternalUrl } from '../shared/external-url'
 import {
@@ -1248,7 +1249,7 @@ const sessions = new SessionRegistry<{ id: string }>({
   subscribers: (id) =>
     store.terminalIdsOf(id).reduce((n, tid) => n + sessionSync.subscriberCount(tid), 0),
   // Work in flight: a terminal mid-turn is work, whoever is looking.
-  inFlightWork: (id) => store.terminalIdsOf(id).filter(terminalHasLiveWork).length,
+  inFlightWork: (id) => store.terminalIdsOf(id).filter(hasLiveWork).length,
   hydrate: (id) => ({ id }),
   release: (id) => {
     // Order matters, and the comment used to lie about it: detachWorkspace
@@ -1586,23 +1587,15 @@ function terminalIsWorking(id: string): boolean {
 }
 
 /**
- * Is there live work on this terminal — the LIVENESS question, which is not
- * the clipboard's question.
- *
- * terminalIsWorking asks "would copying this corrupt it?", and answers yes for
- * 'thinking' alone, because that is when the session file is being appended
- * to. Liveness is broader: 'waiting' means the turn is NOT finished, and
- * draining a session out from under a waiting agent would detach its PTY
- * mid-turn. Anything that is not idle counts.
- *
- * An open dispatch counts even with no phase at all: a record is reserved
- * before its prompt is submitted, so a workspace can hold commissioned work
- * whose terminal has not started a turn yet.
+ * Is there live work on this terminal? The rule lives in session-liveness.ts —
+ * imported by this wiring AND by its test, so the two cannot drift. This
+ * function only gathers the facts.
  */
-function terminalHasLiveWork(id: string): boolean {
-  if (dispatchService.hasOpenDispatch(id)) return true
-  const activity = turns.list().find((a) => a.terminalId === id)
-  return activity !== undefined && activity.phase !== 'idle'
+function hasLiveWork(id: string): boolean {
+  return terminalHasLiveWork({
+    phase: turns.list().find((a) => a.terminalId === id)?.phase,
+    hasOpenDispatch: dispatchService.hasOpenDispatch(id)
+  })
 }
 
 const teamClipboard = new TeamClipboard({

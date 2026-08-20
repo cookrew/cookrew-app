@@ -1,75 +1,108 @@
-// What counts as live work (re-review N2).
+// What counts as live work.
 //
-// The drain's inFlightWork asked terminalIsWorking, which is the CLIPBOARD's
-// predicate: UNCOPYABLE_PHASES is exactly {'thinking'}, because that is when
-// the session file is being appended to and a copy would tear. Liveness is a
-// different question. 'waiting' means the turn is NOT finished, and a
-// workspace drained while an agent waits has its PTY detached mid-turn.
+// This predicate has been wrong twice, in OPPOSITE directions, and the test
+// that should have caught the second time hand-copied the logic instead of
+// importing it — so it would have passed even if the wiring reverted. That is
+// the H1 shape one level down. It imports the real function now.
 //
-// And a dispatch is reserved BEFORE its prompt is submitted, so commissioned
-// work can exist with no turn phase at all.
+//   too narrow  — asked the CLIPBOARD's predicate (UNCOPYABLE_PHASES, exactly
+//                 {'thinking'}), so a workspace could drain out from under a
+//                 'waiting' agent, detaching its PTY mid-turn.
+//   too broad   — `phase !== 'idle'` swept in 'replied', which means TURN
+//                 COMPLETE BUT UNREAD and leaves that state only when someone
+//                 VIEWS it (turn-tracker seen(): "never a TTL"). Viewing takes
+//                 focus; a background session never has focus. Residency held
+//                 forever — the leaked-flag failure mode, via a predicate.
 
 import { describe, expect, it } from 'vitest'
+import {
+  LIVE_WORK_PHASES,
+  terminalHasLiveWork,
+  type LivenessFacts
+} from '../src/main/session-liveness'
 import { UNCOPYABLE_PHASES, type TurnPhase } from '../src/shared/turn'
 
-/** The predicate as index.ts computes it, with its two inputs injected. */
-function hasLiveWork(
-  phase: TurnPhase | undefined,
-  hasOpenDispatch: boolean
-): boolean {
-  if (hasOpenDispatch) return true
-  return phase !== undefined && phase !== 'idle'
-}
+const facts = (phase: TurnPhase | undefined, hasOpenDispatch = false): LivenessFacts => ({
+  phase,
+  hasOpenDispatch
+})
 
-/** The clipboard predicate, for contrast — deliberately narrower. */
-function isCopyRefusing(phase: TurnPhase | undefined): boolean {
-  return phase !== undefined && UNCOPYABLE_PHASES.has(phase)
-}
-
-describe('liveness is broader than the clipboard predicate', () => {
-  it("counts 'waiting' as live — the turn is not finished", () => {
-    // The N2 bug in one assertion: the old wiring drained a waiting agent.
-    expect(hasLiveWork('waiting', false)).toBe(true)
-    expect(isCopyRefusing('waiting')).toBe(false)
+describe('work the agent is part-way through', () => {
+  it("counts 'thinking' — the session file is being appended to", () => {
+    expect(terminalHasLiveWork(facts('thinking'))).toBe(true)
   })
 
-  it("counts 'replied' as live — the turn has not settled to idle", () => {
-    expect(hasLiveWork('replied', false)).toBe(true)
-    expect(isCopyRefusing('replied')).toBe(false)
+  it("counts 'waiting' — the turn is not finished", () => {
+    // The too-narrow bug: draining here detaches a PTY mid-turn.
+    expect(terminalHasLiveWork(facts('waiting'))).toBe(true)
+  })
+})
+
+describe("'replied' must NOT hold a session (the mirror assertion)", () => {
+  it("does not count 'replied' — a finished-but-unread turn drains", () => {
+    // The too-broad bug. 'replied' leaves only via seen(), which needs a view,
+    // which needs focus, which a background session never gets. Counting it
+    // meant residency that never falls to zero.
+    expect(terminalHasLiveWork(facts('replied'))).toBe(false)
   })
 
-  it("counts 'thinking' as live, as both predicates always did", () => {
-    expect(hasLiveWork('thinking', false)).toBe(true)
-    expect(isCopyRefusing('thinking')).toBe(true)
+  it('a session whose every terminal is replied is entirely drainable', () => {
+    // The property that matters at the workspace level: an agent that finished
+    // while nobody watched must not pin the workspace forever. Nothing is
+    // lost by draining — the read marker is persisted and tmux is detached,
+    // not killed, so the result is still there on return.
+    const session = [facts('replied'), facts('replied'), facts('idle')]
+    expect(session.some(terminalHasLiveWork)).toBe(false)
   })
 
-  it("does NOT count 'idle' — a quiet workspace must be free to drain", () => {
-    // The other half: liveness that never falls to zero is the leaked flag.
-    expect(hasLiveWork('idle', false)).toBe(false)
+  it('but a replied terminal beside a working one keeps the session live', () => {
+    const session = [facts('replied'), facts('thinking')]
+    expect(session.some(terminalHasLiveWork)).toBe(true)
+  })
+})
+
+describe('quiet is quiet — liveness must reach zero', () => {
+  it("does not count 'idle'", () => {
+    expect(terminalHasLiveWork(facts('idle'))).toBe(false)
   })
 
   it('does not count an untracked terminal', () => {
-    expect(hasLiveWork(undefined, false)).toBe(false)
+    expect(terminalHasLiveWork(facts(undefined))).toBe(false)
   })
 })
 
 describe('an open dispatch is work before any turn exists', () => {
   it('counts with no phase at all — reserved, not yet submitted', () => {
-    expect(hasLiveWork(undefined, true)).toBe(true)
+    expect(terminalHasLiveWork(facts(undefined, true))).toBe(true)
   })
 
-  it('counts even while the terminal reads idle', () => {
-    // Commissioned work whose prompt has not landed yet: the record is
-    // reserved, the agent has not started. Draining here loses the dispatch.
-    expect(hasLiveWork('idle', true)).toBe(true)
+  it('counts while the terminal reads idle', () => {
+    expect(terminalHasLiveWork(facts('idle', true))).toBe(true)
+  })
+
+  it('counts while the terminal reads replied — the dispatch outlives the turn', () => {
+    expect(terminalHasLiveWork(facts('replied', true))).toBe(true)
   })
 })
 
-describe('the two predicates have not been accidentally merged', () => {
+describe('liveness and the clipboard predicate stay separate', () => {
   it('UNCOPYABLE_PHASES is still exactly thinking', () => {
-    // If this widens, the clipboard starts refusing copies it used to allow —
-    // a separate product decision, not a liveness one. Pinned so the two
-    // cannot drift into each other.
+    // Widening it would change what the clipboard REFUSES — a product
+    // decision with a different owner. Pinned so the two cannot merge by
+    // accident, which is how the too-narrow bug happened.
     expect([...UNCOPYABLE_PHASES]).toEqual(['thinking'])
+  })
+
+  it('liveness is strictly broader than uncopyable, and not equal to it', () => {
+    expect([...LIVE_WORK_PHASES].sort()).toEqual(['thinking', 'waiting'])
+    for (const phase of UNCOPYABLE_PHASES) expect(LIVE_WORK_PHASES.has(phase)).toBe(true)
+    expect(LIVE_WORK_PHASES.size).toBeGreaterThan(UNCOPYABLE_PHASES.size)
+  })
+
+  it('neither predicate covers every non-idle phase', () => {
+    // The explicit statement of the too-broad fix: 'replied' is non-idle and
+    // is deliberately in neither set.
+    expect(LIVE_WORK_PHASES.has('replied')).toBe(false)
+    expect(UNCOPYABLE_PHASES.has('replied')).toBe(false)
   })
 })
