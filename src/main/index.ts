@@ -1596,9 +1596,22 @@ function terminalIsWorking(id: string): boolean {
  * imported by this wiring AND by its test, so the two cannot drift. This
  * function only gathers the facts.
  */
+/**
+ * Is there live work on this terminal? The rule lives in session-liveness.ts.
+ *
+ * phaseOf, NOT list().find(): list() maps activityOf over every tracked
+ * terminal and activityOf walks the whole xterm buffer, so asking it for one
+ * scalar cost a full fleet walk PER TERMINAL — and the drain asks once per
+ * terminal per resident workspace. That is O(workspaces x terminals^2 x
+ * scrollback) every five seconds on the main thread, which is wave C's
+ * O(attached x panes) wearing a different hat, in the module written to make
+ * that impossible. Measured on the live app under the flag: it put an ~11s
+ * floor under EVERY http route, including /api/workspaces, which does no work
+ * at all.
+ */
 function hasLiveWork(id: string): boolean {
   return terminalHasLiveWork({
-    phase: turns.list().find((a) => a.terminalId === id)?.phase,
+    phase: turns.phaseOf(id),
     hasOpenDispatch: dispatchService.hasOpenDispatch(id)
   })
 }

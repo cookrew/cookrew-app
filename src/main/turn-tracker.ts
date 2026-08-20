@@ -1563,6 +1563,18 @@ export class TurnTracker extends EventEmitter {
     this.tracked.delete(terminalId)
   }
 
+  /**
+   * A terminal's turn phase, without building its activity.
+   *
+   * list() maps activityOf over EVERY tracked terminal, and activityOf walks
+   * the whole xterm buffer. Anything that only wants a phase must not go
+   * through it: reading one scalar by constructing N full activities is how a
+   * cheap question becomes O(terminals x scrollback).
+   */
+  phaseOf(terminalId: string): TurnPhase | undefined {
+    return this.tracked.get(terminalId)?.phase
+  }
+
   list(): TerminalActivity[] {
     return [...this.tracked.keys()].map((id) => this.activityOf(id)).filter(
       (a): a is TerminalActivity => a !== null
