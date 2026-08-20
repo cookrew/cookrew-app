@@ -73,6 +73,7 @@ import { EventLog } from './event-log'
 import { installProcessGuards } from './process-guards'
 import { SessionRegistry } from './session-registry'
 import { planWorkspaceSwitch } from './workspace-switch'
+import { SwitchRunner } from './switch-runner'
 import { terminalHasLiveWork } from './session-liveness'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { canonicalExternalUrl } from '../shared/external-url'
@@ -1285,6 +1286,37 @@ const sessionDrain = setInterval(() => {
 }, SESSION_DRAIN_TICK_MS)
 sessionDrain.unref?.()
 
+/**
+ * Runs a switch plan without holding the main thread.
+ *
+ * Yields between boots so the companion server can answer in the gaps. See
+ * switch-runner.ts for why serial order and the single attach batch both
+ * survive that.
+ */
+const switchRunner = new SwitchRunner<TerminalNodeData, BrowserNodeData>({
+  detach: (terminalId) => {
+    // Detach (not kill): the tmux session stays alive so returning reattaches
+    // it with its agent and scrollback intact.
+    sessionSync.release(terminalId)
+    turns.untrack(terminalId)
+    ptys.detach(terminalId)
+  },
+  boot: (terminal) => bootTerminal(terminal),
+  syncBrowsers: (browsers) => {
+    void browserManager.replaceNodes([...browsers]).catch(() => undefined)
+  },
+  // The herdr workspace's chrome follows the focused Cookrew workspace.
+  onBooted: () => reportWorkspaceBinding(),
+  // ONE herdr inventory for the whole reattach. The baseline probe measured
+  // unbatched pane resolution at 44.8x batched and linear in K (34 panes,
+  // 2026-08-20), and a switch is exactly where K is largest.
+  beginBatch: () => multiplexer()?.beginAttachBatch?.(),
+  endBatch: () => multiplexer()?.endAttachBatch?.(),
+  // setImmediate, not a timer: it runs after the poll phase, so pending HTTP
+  // callbacks are served before the next boot rather than after a delay.
+  yieldToLoop: () => new Promise<void>((resolve) => setImmediate(resolve))
+})
+
 function residentBrowsers(): BrowserNodeData[] {
   return store.resident().flatMap((id) =>
     store.workspaceState(id).nodes.filter((n): n is BrowserNodeData => n.kind === 'browser')
@@ -2296,10 +2328,10 @@ function registerIpc(handlers: RestoreHandlers): void {
   // is torn down, which flag-off makes the outgoing workspace — today's
   // behaviour exactly.
   store.on('switch', ({ previousTerminalIds }: { previousTerminalIds: string[] }) => {
-    // The DECISION lives in workspace-switch.ts, tested for flag-off
-    // equivalence; this handler only performs it. Keeping the two apart is
-    // what makes "off is behaviour-identical" an assertion rather than a
-    // claim — and it is the claim that turned out to be false in review.
+    // The DECISION lives in workspace-switch.ts and the EXECUTION in
+    // switch-runner.ts; this handler only connects them. Both were once one
+    // synchronous loop here, which is how a 16-terminal switch held the main
+    // thread — and therefore the companion HTTP server — for ~90 seconds.
     const plan = planWorkspaceSwitch({
       previousTerminalIds,
       workspaceOfTerminal: (id) => ptys.workspaceOfTerminal(id),
@@ -2307,29 +2339,14 @@ function registerIpc(handlers: RestoreHandlers): void {
       focusedTerminals: store.terminals(),
       residentBrowsers: residentBrowsers()
     })
-
-    for (const tid of plan.detach) {
-      // Detach (not kill): the tmux session stays alive so returning
-      // reattaches it with its agent and scrollback intact.
-      sessionSync.release(tid)
-      turns.untrack(tid)
-      ptys.detach(tid)
-    }
-    const mux = multiplexer()
-    // ONE herdr inventory for the whole reattach. The baseline probe measured
-    // unbatched pane resolution at 44.8x batched and linear in K (34 panes,
-    // 2026-08-20) — this batch is the entire reason the curve stays flat, and
-    // step 2 multiplies K by the number of resident sessions.
-    mux?.beginAttachBatch?.()
-    try {
-      // Serial by design: each PTY exists before its pendingInject delivery.
-      for (const t of plan.boot) bootTerminal(t)
-      void browserManager.replaceNodes([...plan.browsers]).catch(() => undefined)
-      // The herdr workspace's chrome follows the focused Cookrew workspace.
-      reportWorkspaceBinding()
-    } finally {
-      mux?.endAttachBatch?.()
-    }
+    // Fire-and-forget by necessity: 'switch' is an EventEmitter callback with
+    // nobody to await it. A boot that throws is logged and the rest continue,
+    // exactly as the synchronous loop's exception would have been swallowed by
+    // the emitter — but now it cannot take the switch's batch bookkeeping down
+    // with it, because the runner closes in a finally.
+    void switchRunner.run(plan).catch((error) => {
+      console.error('Workspace switch failed:', error)
+    })
   })
 
   // Push the workspace list to the renderer whenever it changes.
