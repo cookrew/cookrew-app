@@ -2340,10 +2340,20 @@ function registerIpc(handlers: RestoreHandlers): void {
       residentBrowsers: residentBrowsers()
     })
     // Fire-and-forget by necessity: 'switch' is an EventEmitter callback with
-    // nobody to await it. A boot that throws is logged and the rest continue,
-    // exactly as the synchronous loop's exception would have been swallowed by
-    // the emitter — but now it cannot take the switch's batch bookkeeping down
-    // with it, because the runner closes in a finally.
+    // nobody to await it.
+    //
+    // A boot that throws ABORTS THE REST OF THE SWITCH. The loop has no
+    // per-iteration catch, so the throw unwinds out of it: the remaining
+    // terminals are not booted, syncBrowsers and the chrome report are skipped,
+    // and it surfaces here as one logged line. What it can no longer do is
+    // strand the attach batch — the runner closes that in a finally — which is
+    // the part the synchronous loop got wrong.
+    //
+    // Whether a failed boot SHOULD abort the rest is a real question and not
+    // this commit's to answer: making it continue changes what a partially
+    // booted workspace looks like to every seat reading it, and wants its own
+    // test. Filed as a follow-up rather than slipped in between review and
+    // merge.
     void switchRunner.run(plan).catch((error) => {
       console.error('Workspace switch failed:', error)
     })
