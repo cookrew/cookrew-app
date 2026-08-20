@@ -18,6 +18,7 @@ import {
  *  used here for scrub mapping. Imported rather than redeclared so the density
  *  rule and the scrub mapping cannot drift — they describe the same 16px. */
 import { fillRows, RAIL_INSET } from './rail-fill'
+import { pinAnchors, pinLabel, type VersionPinRecord } from '../../shared/version-pin'
 
 /** Px of pointer travel before a press on the rail becomes a scrub, not a tap. */
 const SCRUB_THRESHOLD = 4
@@ -58,6 +59,7 @@ export function CheckpointTimeline({
   terminalId,
   rows,
   markers,
+  pins,
   titleMode,
   activeIndex,
   loadingIndex,
@@ -71,6 +73,12 @@ export function CheckpointTimeline({
   rows: CheckpointRow[]
   /** Boundary markers (◆ compact / ⇥ clear) interleaved between rows. */
   markers?: TraceMarkerRow[]
+  /**
+   * Version pins (marketplace §10) — the rail's THIRD marker class. Cuts made
+   * by an export or a remote call, each pinned at the checkpoint it forked
+   * from. Absent by default: a rail with no marketplace history draws none.
+   */
+  pins?: VersionPinRecord[]
   titleMode: TitleMode
   /** Checkpoint identity in view; null at the live tail. */
   activeIndex?: number | null
@@ -572,6 +580,51 @@ export function CheckpointTimeline({
               title={tickLabel(m)}
               aria-label={tickLabel(m)}
             />
+          )
+        })}
+        {/* VERSION PINS — the third marker class (§10). Position comes from
+            pinAnchors() and railAnchorTop() and from nowhere else: pins share
+            the drawn-row space with the rows and the ticks (R17), so F6 applies
+            to them with no special case. A pin whose checkpoint is not drawn is
+            omitted by pinAnchors, never guessed onto an end of the bar.
+
+            The exact version is in the title even when the flag carries no
+            label (R8, v100+): a truncated number would be a WRONG version, and
+            a wrong version is worse than an absent one. */}
+        {pinAnchors(pins ?? [], rows).map((p) => {
+          const label = pinLabel(p.version)
+          // pinAnchors returns {version, frac} only, so the checkpoint comes
+          // back from the record. `current` is the pin under the focus — the
+          // rail knows which checkpoint you are on, not which version you
+          // installed, and claiming the latter from here would be a guess.
+          const record = (pins ?? []).find((r) => r.version === p.version)
+          if (!record) return null
+          return (
+            <div
+              key={`pin-${p.version}`}
+              className={`cr-ckpt-pin${label.labelled ? '' : ' bare'}${
+                focused?.index === record.atIndex ? ' current' : ''
+              }`}
+              style={{ top: railAnchorTop(p.frac) }}
+              data-version={p.version}
+              role="separator"
+              // THE PIN IS A TAP TARGET, so it must not let the bar capture the
+              // pointer. `.cr-ckpt-mini`'s onPointerDown calls setPointerCapture,
+              // which retargets every later event — the click included — to the
+              // bar, so onClick here never fired and a real press produced
+              // onGoto null. Stopping propagation BEFORE the capture is taken is
+              // what makes the pin tappable; the cost is that a drag started on
+              // a pin does not scrub, which is the right trade for a 19x13 mark.
+              onPointerDown={(e) => e.stopPropagation()}
+              title={`Version ${p.version}`}
+              aria-label={`Version ${p.version}`}
+              onClick={(e) => {
+                e.stopPropagation()
+                onGoto(record.atIndex)
+              }}
+            >
+              {label.text}
+            </div>
           )
         })}
         <div className="cr-ckpt-count">
