@@ -90,6 +90,11 @@ export interface MobileOps {
 
 export interface MobileApiDeps {
   store: WorkspaceStore;
+  /**
+   * The workspace this request is FOR — a resolved slug, or null at the
+   * unslugged root where the focused session answers as it always has.
+   */
+  scope?: string | null;
   ptys: PtyManager;
   turns: TurnTracker;
   /** Observability event log (query/count) — spec observability-event-log-spec. */
@@ -196,6 +201,11 @@ export async function handleMobileApi(
   const { store, ptys, turns, ops, presets } = deps;
   const method = request.method ?? "GET";
   const p = url.pathname;
+  /** Null at the root; a workspace id under a slug. */
+  const scope = deps.scope ?? null;
+  /** The canvas this request answers for. */
+  const scopedState = (): WorkspaceState =>
+    scope === null ? store.focusedState : store.workspaceState(scope);
 
   // C1 gate: every state-changing route requires the pairing token. This
   // choke point runs BEFORE any route match (and before the mobile server's
@@ -244,7 +254,7 @@ export async function handleMobileApi(
     respondJson(
       response,
       200,
-      await enrichStateWithGit(store.focusedState, ops.gitInfo),
+      await enrichStateWithGit(scopedState(), ops.gitInfo),
     );
     return true;
   }
@@ -766,13 +776,36 @@ export async function handleMobileApi(
 
   if (method === "GET" && p === "/api/events") {
     const send = startSse(response);
-    send("workspace", store.focusedState);
+    send("workspace", scopedState());
     send("workspaces", ops.listWorkspaces());
-    for (const activity of turns.list()) send("activity", activity);
+    // Activities are keyed by terminal id across every workspace, so a scoped
+    // stream filters them or it leaks other canvases' agents into this one.
+    const inScopedCanvas = (terminalId: string): boolean =>
+      scope === null || scopedState().nodes.some((node) => node.id === terminalId);
+    for (const activity of turns.list()) {
+      if (inScopedCanvas((activity as { terminalId: string }).terminalId)) {
+        send("activity", activity);
+      }
+    }
+    // THE focus-flip channel. Unscoped it stays exactly as it was — 'change'
+    // means "the canvas on screen changed". Scoped, it listens to the tagged
+    // per-workspace signal instead, so a desktop switching workspaces no
+    // longer re-points a phone that arrived by slug, and a background
+    // workspace's own edits still reach it (marketplace §11).
     const onChange = (state: WorkspaceState): void => send("workspace", state);
+    const onScopedChange = (payload: {
+      workspaceId: string;
+      state: WorkspaceState;
+    }): void => {
+      if (payload.workspaceId === scope) send("workspace", payload.state);
+    };
     const onWorkspaces = (list: WorkspaceList): void =>
       send("workspaces", list);
-    const onActivity = (activity: unknown): void => send("activity", activity);
+    const onActivity = (activity: unknown): void => {
+      if (inScopedCanvas((activity as { terminalId: string }).terminalId)) {
+        send("activity", activity);
+      }
+    };
     // Observability stream: every store mutation, cross-workspace (toasts).
     const onOp = (event: CookrewEvent): void => send("event", event);
     // Activity Board stream. A SEPARATE listener on the same signals — the
@@ -788,7 +821,8 @@ export async function handleMobileApi(
       : null;
     const onBoardSignal = (): void => boardNotifier?.schedule();
     if (board) send("board", buildBoard(board));
-    store.on("change", onChange);
+    if (scope === null) store.on("change", onChange);
+    else store.on("workspace-change", onScopedChange);
     store.on("workspaces", onWorkspaces);
     turns.on("activity", onActivity);
     store.on("op", onOp);
@@ -798,7 +832,10 @@ export async function handleMobileApi(
       store.on("workspaces", onBoardSignal);
     }
     request.on("close", () => {
-      store.removeListener("change", onChange);
+      // Symmetric with the attach above — an unremoved scoped listener is a
+      // leak per disconnected phone, and phones disconnect constantly.
+      if (scope === null) store.removeListener("change", onChange);
+      else store.removeListener("workspace-change", onScopedChange);
       store.removeListener("workspaces", onWorkspaces);
       turns.removeListener("activity", onActivity);
       store.removeListener("op", onOp);

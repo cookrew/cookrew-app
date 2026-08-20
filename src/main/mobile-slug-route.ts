@@ -102,14 +102,28 @@ export function nodeInScope(
  * that looks right.
  */
 const SCOPE_AWARE: RegExp[] = [
-  // NOT the renderer index. The bundled client issues root-absolute /api/...
-  // requests, so serving it at /<slug> would render the FOCUSED canvas under a
-  // URL naming a different workspace — a wrong answer that looks right, which
-  // is the whole thing this allow-list exists to prevent. Serving the client
-  // per-slug needs the slug threaded to it (window.COOKREW_SLUG through
-  // REMOTE_BOOT, remote-api.ts prefixing every request); until then a bare
-  // /<slug> is refused rather than quietly lying.
+  // The renderer index, EARNED. It was refused while the bundled client
+  // issued root-absolute /api/... requests, because serving it at /<slug>
+  // rendered the FOCUSED canvas under a URL naming a different workspace. The
+  // client is genuinely slug-aware now: mobile-server injects
+  // window.COOKREW_SLUG into the boot script of both index paths and
+  // api-base.ts prefixes every request with it, enforced by an exhaustive
+  // conformance sweep (tests/api-base.test.ts).
+  /^\/$/,
+  /^\/index\.html$/,
   /^\/api\/state$/,
+  // The canvas and the live stream — the two that make a scoped client real.
+  // /api/events listens to the TAGGED per-workspace change signal when scoped,
+  // so a desktop focus change no longer re-points a phone that arrived here.
+  /^\/api\/workspace$/,
+  /^\/api\/events$/,
+  // Genuinely global, and safe to answer identically under any scope: the
+  // workspace ROSTER (not a canvas), auth status, the preset catalogue, the
+  // browser runtime capability flag, and git for a directory.
+  /^\/api\/workspaces$/,
+  /^\/api\/auth\/status$/,
+  /^\/api\/presets$/,
+  /^\/api\/git(?:\?.*)?$/,
   /^\/api\/browser\/capabilities$/,
   /^\/api\/terminal\/[^/]+\/output$/,
   /^\/api\/terminal\/[^/]+\/(?:input|ask)$/,
