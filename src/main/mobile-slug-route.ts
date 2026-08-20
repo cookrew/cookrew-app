@@ -21,8 +21,9 @@
 /** Exactly what workspace-slug.ts mints: lowercase alnum plus inner hyphens. */
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 
-/** Prefixes the server owns; they can never be a workspace scope. */
-const RESERVED = new Set(['api', 'assets', 'index.html'])
+// One list, shared with the minting side — see workspace-slug.ts for why
+// `src` and `node_modules` are on it.
+import { RESERVED_SLUGS } from './workspace-slug'
 
 export interface SlugRoute {
   /** Workspace scope, or null for the unslugged (focused-session) routes. */
@@ -36,7 +37,7 @@ export function splitSlugRoute(pathname: string): SlugRoute {
   if (!match) return { slug: null, pathname }
 
   const [, first, rest] = match
-  if (RESERVED.has(first) || !SLUG.test(first)) return { slug: null, pathname }
+  if (RESERVED_SLUGS.has(first) || !SLUG.test(first)) return { slug: null, pathname }
 
   // A bare /<slug> is that workspace's index, same as / is the focused one's.
   const remainder = rest === undefined || rest === '/' ? '/' : rest
