@@ -608,6 +608,14 @@ export function CheckpointTimeline({
               style={{ top: railAnchorTop(p.frac) }}
               data-version={p.version}
               role="separator"
+              // THE PIN IS A TAP TARGET, so it must not let the bar capture the
+              // pointer. `.cr-ckpt-mini`'s onPointerDown calls setPointerCapture,
+              // which retargets every later event — the click included — to the
+              // bar, so onClick here never fired and a real press produced
+              // onGoto null. Stopping propagation BEFORE the capture is taken is
+              // what makes the pin tappable; the cost is that a drag started on
+              // a pin does not scrub, which is the right trade for a 19x13 mark.
+              onPointerDown={(e) => e.stopPropagation()}
               title={`Version ${p.version}`}
               aria-label={`Version ${p.version}`}
               onClick={(e) => {

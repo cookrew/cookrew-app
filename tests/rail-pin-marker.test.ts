@@ -106,11 +106,46 @@ describe('drawn-row space, not turn-number space', () => {
   })
 })
 
-describe('the reserved pin lane (R18) survives in the stylesheet', () => {
-  it('sits under the scrub thumb so the handle is never occluded', () => {
-    const block = CSS.slice(CSS.indexOf('.cr-ckpt-pin {'), CSS.indexOf('.cr-ckpt-pin.bare'))
-    expect(block).toMatch(/z-index: 3;/)
+/**
+ * Tinker's review, both HIGHs. Each one is a claim my own comment made and my
+ * own code contradicted, so each gets a guard that fails on the code, not on
+ * the comment.
+ */
+describe('a pin is tappable, and it never covers the thumb', () => {
+  it('stops the pointer before the bar can capture it', () => {
+    // .cr-ckpt-mini's onPointerDown calls setPointerCapture, which retargets the
+    // click to the bar. Without this the pin renders, looks right, and does
+    // nothing — a real press returned onGoto null.
+    const block = RAIL.slice(RAIL.indexOf('cr-ckpt-pin'), RAIL.indexOf('cr-ckpt-count'))
+    expect(block).toMatch(/onPointerDown=\{\(e\) => e\.stopPropagation\(\)\}/)
   })
+
+  it('claims NO z-index, because the thumb has none either', () => {
+    // A DECLARATION, not the word: the block's comment explains the absence and
+    // the first version of this guard matched its own prose.
+    const block = CSS.slice(CSS.indexOf('.cr-ckpt-pin {'), CSS.indexOf('.cr-ckpt-pin.bare'))
+    expect(block).not.toMatch(/^\s*z-index\s*:/m)
+  })
+
+  it('renders BEFORE the thumb, which is what actually keeps it underneath', () => {
+    // Tree order decides painting for auto/0 positioned siblings, so this
+    // ordering is load-bearing the moment the z-index is gone. Compare the JSX
+    // SITES: both class names appear earlier in the file's structure comment,
+    // and the first version of this guard compared those instead.
+    const pinSite = RAIL.indexOf('`cr-ckpt-pin${')
+    const thumbSite = RAIL.indexOf('className="cr-ckpt-here"')
+    expect(pinSite).toBeGreaterThan(-1)
+    expect(thumbSite).toBeGreaterThan(-1)
+    expect(pinSite).toBeLessThan(thumbSite)
+  })
+
+  it('leaves light chrome from repainting the current pin’s label', () => {
+    // (0,3,0) on-cream beat (0,2,0) .current and dropped it to 1.86:1.
+    expect(CSS).toMatch(/\.cr-ckpt-rail\.on-cream \.cr-ckpt-pin:not\(\.current\)/)
+  })
+})
+
+describe('the reserved pin lane (R18) survives in the stylesheet', () => {
 
   it('fits inside the 30px rail: right 11 + width 19', () => {
     const block = CSS.slice(CSS.indexOf('.cr-ckpt-pin {'), CSS.indexOf('.cr-ckpt-pin.bare'))

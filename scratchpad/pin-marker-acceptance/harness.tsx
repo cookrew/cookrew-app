@@ -25,6 +25,11 @@ createRoot(host).render(
   React.createElement(CheckpointTimeline as never, {
     terminalId: 't1', rows, markers, pins, titleMode: 'conclusion',
     activeIndex: 5, markerFrac: 0.4,
-    onGoto: () => {}, onLive: () => {}, onScrub: () => {}
+    // Recorded, not swallowed: Tinker's pin-tap-probe reads these to prove a
+    // real press reaches the handler. A no-op here made the probe unable to
+    // tell "tappable" from "silently ignored".
+    onGoto: (i: number) => { (window as never as Record<string, unknown>).__goto = i },
+    onLive: () => {},
+    onScrub: (f: number) => { (window as never as Record<string, unknown>).__scrub = f }
   })
 )
