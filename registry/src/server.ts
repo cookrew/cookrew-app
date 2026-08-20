@@ -205,7 +205,11 @@ export function createRegistry(deps: RegistryDeps): Server {
     if (method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'health') {
       json(response, 200, {
         ok: true,
-        slice: 'P2-A2',
+        // The slice this deployment actually implements. A harness reconciles
+        // what it expects against this string, so it moves with the code —
+        // it said A2 through the whole of A3, which is exactly the drift the
+        // self-description exists to prevent.
+        slice: 'P2-A3',
         dev: deps.dev === true,
         routes: [
           'GET /v1/health',

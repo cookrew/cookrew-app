@@ -370,6 +370,9 @@ describe('dev contract — reconciled with Magpie\'s harness', () => {
       expect(body.ok).toBe(true)
       expect(body.routes).toContain('GET /v1/presets/:id/manifest')
       expect(body.routes).toContain('POST /v1/identity/assert')
+      // R20's rotation sheet links at the log BY PRESET. Advertised, so a
+      // harness discovers the parameter instead of assuming the whole chain.
+      expect(body.routes).toContain('GET /v1/log?from=&preset=')
       // Named explicitly so nobody builds fixtures against it.
       expect(body.notServed['/v1/pay']).toContain('M2 mounts 402 on the manifest gate')
     } finally {
