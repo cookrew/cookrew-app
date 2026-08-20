@@ -116,18 +116,38 @@ describe('fillRows', () => {
     tops.length < 2 ? Infinity : Math.min(...tops.slice(1).map((t, i) => t - tops[i]))
 
   it('never lays two rows closer together than a row is tall — LIVE INCLUDED', () => {
-    // LIVE is in the result now, so the gate covers the pair that actually
-    // broke: the newest checkpoint at (n-1)/n and LIVE at 1 were 5.2px apart
-    // at n = 122 on a 669px bar, and an opaque 34px LIVE row covered it.
-    for (const barHeight of [136, 200, 340, 480, 669, 900]) {
-      const filled = fillRows(rows, barHeight, null)
-      expect(filled.some(isLive), `bar ${barHeight}px laid no LIVE`).toBe(true)
-      const gap = minGap(topsFor(filled, barHeight))
-      expect(
-        gap,
-        `bar ${barHeight}px laid ${filled.length} entries, closest pair ${gap.toFixed(1)}px apart`
-      ).toBeGreaterThanOrEqual(ROW_HEIGHT)
+    // TWO dimensions, because one alone missed two separate bugs. Height alone
+    // missed LIVE landing on the newest checkpoint; height at a single ledger
+    // size missed sampleIndices' rounding, where a fractional step puts two
+    // picks ONE index apart while the capacity budget assumed the average.
+    for (const n of [19, 30, 60, 122]) {
+      const ledger = rowsOf(n)
+      for (const barHeight of [136, 200, 340, 480, 669, 900]) {
+        const filled = fillRows(ledger, barHeight, null)
+        expect(filled.some(isLive), `n=${n} bar ${barHeight}px laid no LIVE`).toBe(true)
+        const gap = minGap(topsFor(filled, barHeight))
+        expect(
+          gap,
+          `n=${n} bar ${barHeight}px laid ${filled.length} entries, closest pair ${gap.toFixed(1)}px apart`
+        ).toBeGreaterThanOrEqual(ROW_HEIGHT)
+      }
     }
+  })
+
+  it('holds the gap for EVERY ledger size, not just the sampled ones', () => {
+    // The four sizes above are the readable gate; this is the exhaustive one.
+    // sampleIndices' rounding failed for 71 of these 199 lengths at H=669, and
+    // which lengths collide is not something to guess at — n=33 was the worst
+    // at 19.3px and n=19/340px is what the sampled loop happened to catch.
+    const violations: string[] = []
+    for (const barHeight of [136, 200, 340, 480, 669, 900]) {
+      for (let n = 2; n <= 200; n++) {
+        const tops = topsFor(fillRows(rowsOf(n), barHeight, null), barHeight)
+        const gap = minGap(tops)
+        if (gap < ROW_HEIGHT) violations.push(`n=${n} h=${barHeight} ${gap.toFixed(1)}px`)
+      }
+    }
+    expect(violations).toEqual([])
   })
 
   it('holds the gap with the focused row pulled out, too', () => {
