@@ -3,6 +3,7 @@ import { ReconnectingStream } from './live-stream'
 import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
+import { apiPath } from './api-base'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -64,7 +65,7 @@ async function upload(name: string, body: Blob): Promise<string> {
   const token = authStore().token()
   if (token) headers.authorization = `Bearer ${token}`
   const result = await parse<{ path: string }>(
-    await fetch(`/api/attachments?name=${encodeURIComponent(name)}`, {
+    await fetch(apiPath(`/api/attachments?name=${encodeURIComponent(name)}`), {
       method: 'POST',
       headers,
       body
@@ -119,7 +120,7 @@ function post(path: string, body: unknown): void {
  */
 export async function checkAuth(candidate?: string): Promise<AuthScope> {
   const token = candidate ?? authStore().token()
-  const response = await fetch('/api/auth/status', {
+  const response = await fetch(apiPath('/api/auth/status'), {
     headers: token ? { authorization: `Bearer ${token}` } : undefined
   })
   if (!response.ok) throw new Error(`Auth check failed (HTTP ${response.status})`)
@@ -141,7 +142,7 @@ export async function checkAuth(candidate?: string): Promise<AuthScope> {
 let events: ReconnectingStream | null = null
 
 function sharedEvents(): ReconnectingStream {
-  if (!events) events = new ReconnectingStream({ open: () => new EventSource('/api/events') })
+  if (!events) events = new ReconnectingStream({ open: () => new EventSource(apiPath('/api/events')) })
   return events
 }
 
@@ -169,30 +170,30 @@ function checkAuthOnBoot(): void {
 export function createRemoteApi(): CookrewApi {
   checkAuthOnBoot()
   return {
-    getWorkspace: () => req<WorkspaceState>('/api/workspace'),
+    getWorkspace: () => req<WorkspaceState>(apiPath('/api/workspace')),
     onWorkspaceState: (cb) => subscribe<WorkspaceState>('workspace', cb),
-    listWorkspaces: () => req<WorkspaceList>('/api/workspaces'),
-    createWorkspace: (name, dir, team) => req('/api/workspaces', 'POST', { name, dir, team }),
-    switchWorkspace: (id) => req<WorkspaceList>('/api/workspaces/switch', 'POST', { id }),
-    renameWorkspace: (id, name) => req<WorkspaceList>('/api/workspaces/rename', 'POST', { id, name }),
-    removeWorkspace: (id) => req<WorkspaceList>(`/api/workspaces/${id}`, 'DELETE'),
-    addWorkspaceDir: (id, dir) => req<WorkspaceList>(`/api/workspaces/${id}/dirs`, 'POST', { path: dir }),
+    listWorkspaces: () => req<WorkspaceList>(apiPath('/api/workspaces')),
+    createWorkspace: (name, dir, team) => req(apiPath('/api/workspaces'), 'POST', { name, dir, team }),
+    switchWorkspace: (id) => req<WorkspaceList>(apiPath('/api/workspaces/switch'), 'POST', { id }),
+    renameWorkspace: (id, name) => req<WorkspaceList>(apiPath('/api/workspaces/rename'), 'POST', { id, name }),
+    removeWorkspace: (id) => req<WorkspaceList>(apiPath(`/api/workspaces/${id}`), 'DELETE'),
+    addWorkspaceDir: (id, dir) => req<WorkspaceList>(apiPath(`/api/workspaces/${id}/dirs`), 'POST', { path: dir }),
     removeWorkspaceDir: (id, dir) =>
-      req<WorkspaceList>(`/api/workspaces/${id}/dirs`, 'DELETE', { path: dir }),
+      req<WorkspaceList>(apiPath(`/api/workspaces/${id}/dirs`), 'DELETE', { path: dir }),
     setPrimaryDir: (id, dir) =>
-      req<WorkspaceList>(`/api/workspaces/${id}/primary`, 'POST', { path: dir }),
-    setTerminalCwd: (nodeId, dir) => req<CanvasNode>(`/api/terminal/${nodeId}/cwd`, 'POST', { dir }),
+      req<WorkspaceList>(apiPath(`/api/workspaces/${id}/primary`), 'POST', { path: dir }),
+    setTerminalCwd: (nodeId, dir) => req<CanvasNode>(apiPath(`/api/terminal/${nodeId}/cwd`), 'POST', { dir }),
     // No native picker on the phone — the UI collects a path via text input.
     pickDir: () => Promise.resolve(null),
-    gitInfo: (dir) => req<GitInfo>(`/api/git?dir=${encodeURIComponent(dir)}`, 'GET'),
+    gitInfo: (dir) => req<GitInfo>(apiPath(`/api/git?dir=${encodeURIComponent(dir)}`), 'GET'),
     onWorkspaceList: (cb) => subscribe<WorkspaceList>('workspaces', cb),
 
-    addNode: (node) => req('/api/nodes', 'POST', node),
-    updateNode: (id, patch) => req(`/api/nodes/${id}`, 'POST', patch),
-    removeNode: (id) => req(`/api/nodes/${id}`, 'DELETE'),
-    connectNodes: (a, b) => req('/api/connections', 'POST', { a, b }),
-    disconnect: (connId) => req(`/api/connections/${connId}`, 'DELETE'),
-    listPresets: () => req('/api/presets'),
+    addNode: (node) => req(apiPath('/api/nodes'), 'POST', node),
+    updateNode: (id, patch) => req(apiPath(`/api/nodes/${id}`), 'POST', patch),
+    removeNode: (id) => req(apiPath(`/api/nodes/${id}`), 'DELETE'),
+    connectNodes: (a, b) => req(apiPath('/api/connections'), 'POST', { a, b }),
+    disconnect: (connId) => req(apiPath(`/api/connections/${connId}`), 'DELETE'),
+    listPresets: () => req(apiPath('/api/presets')),
     // The phone's marketplace surface is the canvas BROWSER card (R1), not a
     // native chip row — and installing is a desktop act, since the store lives
     // on the machine that runs the agents. Empty and inert here until the
@@ -200,7 +201,7 @@ export function createRemoteApi(): CookrewApi {
     listInstalledPresets: () => Promise.resolve([]),
     placeInstalledPreset: () => Promise.resolve(),
     uninstallPreset: () => Promise.resolve(),
-    createTerminal: (opts) => req('/api/terminals', 'POST', opts),
+    createTerminal: (opts) => req(apiPath('/api/terminals'), 'POST', opts),
 
     // Phones can't hand the desktop a local path — upload the bytes and let
     // the server persist them; the returned path is what gets pasted.
@@ -214,13 +215,13 @@ export function createRemoteApi(): CookrewApi {
       upload(name, new Blob([new Uint8Array(bytes).slice().buffer])),
     pickFiles: () => Promise.resolve([]),
 
-    ptyInput: (terminalId, data) => post(`/api/terminal/${terminalId}/raw`, { data }),
-    ptyJump: (terminalId, text) => post(`/api/terminal/${terminalId}/jump`, { text }),
-    turnSeen: (terminalId) => post(`/api/terminal/${terminalId}/seen`, {}),
+    ptyInput: (terminalId, data) => post(apiPath(`/api/terminal/${terminalId}/raw`), { data }),
+    ptyJump: (terminalId, text) => post(apiPath(`/api/terminal/${terminalId}/jump`), { text }),
+    turnSeen: (terminalId) => post(apiPath(`/api/terminal/${terminalId}/seen`), {}),
     ptyResize: (terminalId, cols, rows) =>
-      post(`/api/terminal/${terminalId}/resize`, { cols, rows }),
+      post(apiPath(`/api/terminal/${terminalId}/resize`), { cols, rows }),
     ptyAttach: (terminalId, onData, onHello) => {
-      const stream = new EventSource(`/api/terminal/${terminalId}/stream`)
+      const stream = new EventSource(apiPath(`/api/terminal/${terminalId}/stream`))
       const listener = (e: MessageEvent): void => onData(JSON.parse(e.data) as string)
       // The server sends this before the first frame; sizing the xterm from it
       // is what keeps a 45x24 phone from re-wrapping a frame serialized at the
@@ -232,7 +233,7 @@ export function createRemoteApi(): CookrewApi {
       return () => stream.close()
     },
 
-    listActivity: () => req<TerminalActivity[]>('/api/activity'),
+    listActivity: () => req<TerminalActivity[]>(apiPath('/api/activity')),
     onTerminalActivity: (cb) => subscribe<TerminalActivity>('activity', cb),
     // Observability event log (observability-event-log-spec): the shared SSE
     // stream carries 'event'; queries/roster are plain GETs.
@@ -243,7 +244,7 @@ export function createRemoteApi(): CookrewApi {
       for (const key of ['workspaceId', 'type', 'since', 'until', 'limit']) {
         if (q[key] !== undefined) params.set(key, String(q[key]))
       }
-      const result = await req<{ events: unknown[] }>(`/api/events/query?${params}`)
+      const result = await req<{ events: unknown[] }>(apiPath(`/api/events/query?${params}`))
       return result.events
     },
     countEvents: async (query) => {
@@ -252,32 +253,34 @@ export function createRemoteApi(): CookrewApi {
       for (const key of ['workspaceId', 'type', 'since', 'until']) {
         if (q[key] !== undefined) params.set(key, String(q[key]))
       }
-      const result = await req<{ counts: Record<string, number> }>(`/api/events/query?${params}`)
+      const result = await req<{ counts: Record<string, number> }>(apiPath(`/api/events/query?${params}`))
       return result.counts
     },
     listAgents: async () => {
-      const result = await req<{ agents: unknown[] }>('/api/agents')
+      const result = await req<{ agents: unknown[] }>(apiPath('/api/agents'))
       return result.agents
     },
     listBoard: (window?: string) =>
-      req<BoardSnapshotLike>(`/api/board${window ? `?window=${encodeURIComponent(window)}` : ''}`),
-    recoverAgent: (id) => req(`/api/agents/${id}/recover`, 'POST'),
+      req<BoardSnapshotLike>(
+        apiPath(`/api/board${window ? `?window=${encodeURIComponent(window)}` : ''}`)
+      ),
+    recoverAgent: (id) => req(apiPath(`/api/agents/${id}/recover`), 'POST'),
     restoreCheckpoint: (id, checkpointIndex) =>
-      req(`/api/agents/${id}/restore`, 'POST', { checkpointIndex }),
-    undoRestore: (id) => req(`/api/agents/${id}/restore/undo`, 'POST'),
-    listTurns: (terminalId) => req<TurnRecord[]>(`/api/terminal/${terminalId}/turns`),
+      req(apiPath(`/api/agents/${id}/restore`), 'POST', { checkpointIndex }),
+    undoRestore: (id) => req(apiPath(`/api/agents/${id}/restore/undo`), 'POST'),
+    listTurns: (terminalId) => req<TurnRecord[]>(apiPath(`/api/terminal/${terminalId}/turns`)),
     // Checkpoint search is desktop-only for now: the phone has no /api route
     // for it yet, and a silently-empty result would read as "no matches".
     searchTurns: undefined,
-    listTraceIndex: (terminalId) => req(`/api/terminal/${terminalId}/trace/index`),
-    listTraceMarkers: (terminalId) => req(`/api/terminal/${terminalId}/trace/markers`),
+    listTraceIndex: (terminalId) => req(apiPath(`/api/terminal/${terminalId}/trace/index`)),
+    listTraceMarkers: (terminalId) => req(apiPath(`/api/terminal/${terminalId}/trace/markers`)),
     listTrace: async (terminalId, request) => {
       const params = new URLSearchParams()
       const r = (request ?? {}) as Record<string, unknown>
       for (const key of ['beforeIndex', 'afterIndex', 'aroundIndex', 'limit']) {
         if (r[key] !== undefined) params.set(key, String(r[key]))
       }
-      return req(`/api/terminal/${terminalId}/trace?${params}`)
+      return req(apiPath(`/api/terminal/${terminalId}/trace?${params}`))
     },
     listTurnsPage: async (terminalId, request) => {
       const params = new URLSearchParams()
@@ -287,19 +290,19 @@ export function createRemoteApi(): CookrewApi {
       }
       // At least one param forces the paged shape server-side.
       if ([...params.keys()].length === 0) params.set('limit', '20')
-      return req(`/api/terminal/${terminalId}/turns?${params}`)
+      return req(apiPath(`/api/terminal/${terminalId}/turns?${params}`))
     },
     forkTerminal: (sourceId, turnIndex) =>
-      req(`/api/terminal/${sourceId}/fork`, 'POST', { turnIndex }),
-    teamFork: (spec) => req('/api/team/fork', 'POST', { spec }),
-    teamSave: (name, nodeIds) => req('/api/team/save', 'POST', { name, nodeIds }),
+      req(apiPath(`/api/terminal/${sourceId}/fork`), 'POST', { turnIndex }),
+    teamFork: (spec) => req(apiPath('/api/team/fork'), 'POST', { spec }),
+    teamSave: (name, nodeIds) => req(apiPath('/api/team/save'), 'POST', { name, nodeIds }),
     teamClipSet: (nodeIds, cut, worktree) =>
-      req('/api/team/clip', 'POST', { nodeIds, cut, worktree }),
-    teamClipGet: () => req('/api/team/clip'),
-    teamPaste: () => req('/api/team/paste', 'POST', {}),
-    teamList: () => req('/api/teams'),
-    roleList: () => req('/api/roles'),
-    saveRole: (input) => req('/api/role/save', 'POST', input),
+      req(apiPath('/api/team/clip'), 'POST', { nodeIds, cut, worktree }),
+    teamClipGet: () => req(apiPath('/api/team/clip')),
+    teamPaste: () => req(apiPath('/api/team/paste'), 'POST', {}),
+    teamList: () => req(apiPath('/api/teams')),
+    roleList: () => req(apiPath('/api/roles')),
+    saveRole: (input) => req(apiPath('/api/role/save'), 'POST', input),
 
     // No remote legacy webview bridge, thumbnail publisher, or desktop app chrome.
     // Headless capability is queried here; its phone stream is same-origin/tokenless.
@@ -307,7 +310,7 @@ export function createRemoteApi(): CookrewApi {
     browserResult: () => undefined,
     browserThumb: () => undefined,
     interactiveBrowserEnabled: async () => {
-      const result = await req<{ interactive: boolean }>('/api/browser/capabilities')
+      const result = await req<{ interactive: boolean }>(apiPath('/api/browser/capabilities'))
       return result.interactive
     },
     browserStreamToken: () => Promise.resolve(null),

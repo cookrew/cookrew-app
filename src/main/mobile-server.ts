@@ -394,7 +394,28 @@ export function uncoveredCertHosts(): string[] {
  * the IPC bridge for remote-api.ts. Also pins the viewport so browser
  * pinch-zoom doesn't fight the canvas's own pinch gesture.
  */
-const REMOTE_BOOT = `<script>
+/**
+ * Boot script injected into the renderer index served to phones.
+ *
+ * `slug` is the workspace this client is FOR (marketplace §11 step 3). The
+ * bundle issues root-absolute /api/... requests, so without it a client loaded
+ * at /playground would read and write the FOCUSED canvas under a URL naming a
+ * different workspace — which is why / and /index.html were refused under a
+ * slug until this existed. remote-api.ts prefixes every request with it.
+ *
+ * Encoded, not interpolated raw: a slug reaches this from a URL path, and a
+ * value containing `</script>` would break out of the tag. JSON.stringify
+ * alone is NOT enough — it escapes quotes and backslashes but leaves `<` and
+ * `/` untouched, so the closing tag survives it. `<` is escaped to \u003c as
+ * well, which no JS parser cares about and no HTML parser can mistake for a
+ * tag.
+ *
+ * The route splitter already allow-lists the minted slug shape, so this is the
+ * second of two locks rather than the only one — but a lock that only works
+ * because of the other lock is not a second lock.
+ */
+export const remoteBoot = (slug: string | null): string => `<script>
+window.COOKREW_SLUG = ${JSON.stringify(slug ?? '').replace(/</g, '\\u003c')}
 window.COOKREW_MOBILE = 1
 document.addEventListener('DOMContentLoaded', () => {
   document.body.classList.add('cookrew-mobile')
@@ -470,13 +491,14 @@ function builtRenderer(deps: MobileServerDeps): { index: string; notice: string 
 function serveRendererIndex(
   request: http.IncomingMessage,
   response: http.ServerResponse,
-  deps: MobileServerDeps
+  deps: MobileServerDeps,
+  slug: string | null
 ): boolean {
   const built = builtRenderer(deps)
   if (!built) return false
   const html = readFileSync(built.index, 'utf8').replace(
     '<head>',
-    `<head>${REMOTE_BOOT}${staleBanner(built.notice)}`
+    `<head>${remoteBoot(slug)}${staleBanner(built.notice)}`
   )
   // no-cache: assets are hash-named, but a cached index.html would keep
   // phones pinned to a stale bundle across app updates.
@@ -529,7 +551,8 @@ async function serveRendererDev(
   response: http.ServerResponse,
   deps: MobileServerDeps,
   url: URL,
-  injectRemoteBoot = false
+  injectRemoteBoot = false,
+  slug: string | null = null
 ): Promise<boolean> {
   if (!deps.rendererDevUrl) return false
   const resource = await fetchRendererDevResource(
@@ -539,7 +562,7 @@ async function serveRendererDev(
   )
   if (!resource) return false
   const body = injectRemoteBoot
-    ? Buffer.from(resource.body.toString('utf8').replace('<head>', `<head>${REMOTE_BOOT}`))
+    ? Buffer.from(resource.body.toString('utf8').replace('<head>', `<head>${remoteBoot(slug)}`))
     : resource.body
   sendBody(
     response,
@@ -590,6 +613,8 @@ async function handle(
     return
   }
   const scope = route.kind === 'scoped' ? route.workspaceId : null
+  /** The slug this client was loaded at; '' at the unslugged root. */
+  const servedSlug = route.kind === 'scoped' ? route.slug : null
   url.pathname = route.pathname
 
   if (scope !== null) {
@@ -638,9 +663,9 @@ async function handle(
     // A tailnet peer is served the build instead — the live graph is 159
     // dependent requests, which a relayed link never finishes.
     if (rendererSource(request, deps) === 'dev') {
-      if (await serveRendererDev(request, response, deps, url, true)) return
+      if (await serveRendererDev(request, response, deps, url, true, servedSlug)) return
     }
-    if (!serveRendererIndex(request, response, deps)) rendererMissing()
+    if (!serveRendererIndex(request, response, deps, servedSlug)) rendererMissing()
     return
   }
 
@@ -665,6 +690,10 @@ async function handle(
   // in-process embedder can do.
   const authed = {
     ...deps,
+    // The resolved workspace travels WITH the request into the API layer,
+    // rather than each handler re-deriving it (or, as before, not deriving it
+    // at all and answering for focus).
+    scope,
     pairingToken: activePairingToken ?? deps.pairingToken,
     wallToken: activeWallToken ?? deps.wallToken
   }

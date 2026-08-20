@@ -496,7 +496,15 @@ export class WorkspaceStore extends EventEmitter {
   private mutateIn(workspaceId: string, next: WorkspaceState): void {
     const session = this.hydrate(workspaceId)
     session.state = next
+    // 'change' stays FOCUSED-ONLY: the desktop renderer and every unslugged
+    // consumer are built on it meaning "the canvas on screen changed", and
+    // widening it would push background workspaces at them.
     if (workspaceId === this.focused) this.emit('change', next)
+    // 'workspace-change' is the scoped channel — every resident mutation,
+    // tagged with its workspace. Without it a phone reading /<slug> for a
+    // workspace nobody is looking at receives silence, because the only
+    // change signal that existed was the focused one (marketplace §11).
+    this.emit('workspace-change', { workspaceId, state: next })
     this.scheduleSave(workspaceId)
   }
 
@@ -797,7 +805,13 @@ export class WorkspaceStore extends EventEmitter {
       this.mutateIn(id, fn(session.state))
       return
     }
-    saveWorkspaceState(this.baseDir, id, fn(this.stateOf(id)))
+    const next = fn(this.stateOf(id))
+    saveWorkspaceState(this.baseDir, id, next)
+    // The scoped change signal must NOT depend on residency. A workspace
+    // patched while nobody holds it in memory has still changed, and a phone
+    // reading its slug is entitled to know — silence has to mean "nothing
+    // happened here", never "this stream is dead" (marketplace §11).
+    this.emit('workspace-change', { workspaceId: id, state: next })
   }
 
   /** Workspace metas with the active one first (cheapest, freshest lookup). */

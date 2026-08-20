@@ -155,7 +155,6 @@ describe('scopedRouteSupported — fail closed (review C2)', () => {
     // workspace's answer to a URL naming a different one — a wrong answer that
     // looks right, which is worse than not having the route.
     for (const p of [
-      '/api/workspace',
       '/api/nodes/n1',
       '/api/terminal/t1/raw',
       '/api/terminal/t1/resize',
@@ -167,7 +166,6 @@ describe('scopedRouteSupported — fail closed (review C2)', () => {
       '/api/agents/a1/recover',
       '/api/agents/a1/restore',
       '/api/workspaces/switch',
-      '/api/events',
       '/api/board',
       '/api/team/fork'
     ]) {
@@ -199,15 +197,19 @@ describe('nodeIdOfRoute — one check for every scoped node route', () => {
   })
 })
 
-describe('the renderer index is NOT scope-aware (re-review N1)', () => {
-  it('refuses a bare /<slug> and the index', () => {
-    // The bundled client issues root-absolute /api/... requests, so serving it
-    // at /<slug> renders the FOCUSED canvas under a URL naming a different
-    // workspace. Threading the slug to the client (window.COOKREW_SLUG through
-    // REMOTE_BOOT, remote-api.ts prefixing) is what unlocks these; until then
-    // a refusal beats a canvas that looks right and is not.
-    expect(scopedRouteSupported('/')).toBe(false)
-    expect(scopedRouteSupported('/index.html')).toBe(false)
+describe('the renderer index, EARNED back (P2-B)', () => {
+  it('serves the client under a slug now that the client is slug-aware', () => {
+    // Refused at N1 because the bundle issued root-absolute /api/... requests.
+    // Now window.COOKREW_SLUG is injected into both index paths and api-base
+    // prefixes every request, with a conformance sweep proving no call site
+    // was missed — so the page and its data finally name the same workspace.
+    expect(scopedRouteSupported('/')).toBe(true)
+    expect(scopedRouteSupported('/index.html')).toBe(true)
+  })
+
+  it('serves the canvas and the live stream a booted client needs', () => {
+    expect(scopedRouteSupported('/api/workspace')).toBe(true)
+    expect(scopedRouteSupported('/api/events')).toBe(true)
   })
 
   it('still allows the data routes a scoped client would call', () => {

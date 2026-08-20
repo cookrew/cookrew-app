@@ -6,6 +6,8 @@
  * poll cadence/lifecycle, cache-busting, letterbox math, and interval control.
  */
 
+import { apiPath } from './api-base'
+
 /**
  * Poll cadence (ms) for the legacy frame while the phone has the browser open.
  * CAPTURE-FRESHNESS CONTRACT (Forge, landed): each GET /api/browser/:id/thumb
@@ -32,7 +34,7 @@ export function shouldPollFrame(opts: { open: boolean; hidden: boolean }): boole
  * identical src can skip the network entirely, freezing the view. Pure.
  */
 export function frameSrc(browserId: string, seq: number): string {
-  return `/api/browser/${encodeURIComponent(browserId)}/thumb?f=${seq}`
+  return apiPath(`/api/browser/${encodeURIComponent(browserId)}/thumb?f=${seq}`)
 }
 
 /** A fitted (letterboxed) rect for the frame within the view. */

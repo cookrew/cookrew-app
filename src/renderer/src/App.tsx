@@ -48,6 +48,7 @@ import { RosterPanel } from './RosterPanel'
 import { MetricsPanel } from './MetricsPanel'
 import { SelectionBar } from './SelectionBar'
 import { ConfirmClose } from './ConfirmClose'
+import { apiPath } from './api-base'
 
 /** How often a headless browser card refreshes its still. Matches the legacy
  *  webview capture cadence — the same picture, from the page that now owns it. */
@@ -668,7 +669,7 @@ function Canvas(): React.JSX.Element {
         .filter((n) => n.kind === 'browser')
         .map((n) => n.id)
       for (const id of browserIds) {
-        void fetch(`/api/browser/${id}/thumb?v=${Date.now()}`)
+        void fetch(apiPath(`/api/browser/${id}/thumb?v=${Date.now()}`))
           .then((r) => (r.ok ? r.blob() : null))
           .then((blob) => {
             if (!blob) return
