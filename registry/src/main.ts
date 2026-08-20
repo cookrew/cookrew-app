@@ -1,4 +1,4 @@
-// Dev registry entry point (P2-A1). Serves the public half over http.
+// Dev registry entry point (P2-A1 + A2). Public serving plus the 401 path.
 //
 // Usage:  npx esbuild --bundle registry/src/main.ts \
 //           --format=esm --platform=node --outfile=/tmp/registry.mjs
@@ -14,11 +14,15 @@
 //   HEAD /v1/presets/:id/manifest    update check, x-cookrew-preset-version (R3)
 //   GET  /v1/blobs/:address          immutable content
 //   GET  /v1/log?from=               transparency log, replayable
+//   POST /v1/identity/register       enrol a credential (TOFU)
+//   POST /v1/identity/assert         verify a ceremony, mint a short-lived token
 import { generateKeyPairSync } from 'node:crypto'
 import path from 'node:path'
 import { RegistryStore } from './store'
 import { TransparencyLog } from './log'
 import { createRegistry } from './server'
+import { IdentityService, DEV_CONFIG } from './identity'
+import { makeAuthorize } from './authorize'
 import { buildManifest, signManifest } from '../../src/main/preset-publish'
 import { scrubForPublish } from '../../src/main/preset-scrub'
 import type { TeamSnapshot } from '../../src/main/teams'
@@ -115,7 +119,11 @@ if (args.includes('--seed')) {
   console.log(`seeded ${SEEDS.length} presets into ${DATA}`)
 }
 
-createRegistry({ store, log }).listen(PORT, () => {
+// A2: identity is live. The origin must match what the browser will send, so
+// it follows the port rather than the DEV_CONFIG default.
+const identity = new IdentityService(DATA, { ...DEV_CONFIG, origin: `http://localhost:${PORT}` })
+
+createRegistry({ store, log, identity, authorize: makeAuthorize(store, identity) }).listen(PORT, () => {
   console.log(`registry on http://127.0.0.1:${PORT}  data=${DATA}`)
   for (const p of store.list()) {
     console.log(`  ${p.name.padEnd(16)} v${String(p.version).padEnd(3)} ${p.visibility.padEnd(11)} ${p.id}`)

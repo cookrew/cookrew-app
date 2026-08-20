@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { PRESET_VERSION_HEADER } from '../../src/shared/preset-manifest'
 import { RegistryStore, isAddress } from './store'
 import { TransparencyLog } from './log'
+import type { IdentityService } from './identity'
 
 /**
  * REGISTRY SERVER (P2-A1) — routes only. Every answer is chosen by a decision
@@ -30,6 +31,8 @@ export interface RegistryDeps {
    * entitlement and serve. No route changes at any step.
    */
   authorize?: (presetId: string, request: IncomingMessage) => Verdict
+  /** Present from A2: enrolment and assertion routes mount only when it is. */
+  identity?: IdentityService
 }
 
 function json(response: ServerResponse, code: number, body: unknown, headers: Record<string, string> = {}): void {
@@ -129,6 +132,51 @@ export function createRegistry(deps: RegistryDeps): Server {
         'cache-control': 'public, max-age=31536000, immutable'
       })
       response.end(bytes)
+      return
+    }
+
+    // POST /v1/identity/register  |  POST /v1/identity/assert
+    if (method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'identity') {
+      const identity = deps.identity
+      if (!identity) {
+        json(response, 404, { error: 'not_found' })
+        return
+      }
+      let body = ''
+      request.on('data', (chunk) => {
+        body += chunk
+        // A body this size is already not a WebAuthn assertion; stop reading
+        // rather than let an unauthenticated route grow memory.
+        if (body.length > 64 * 1024) request.destroy()
+      })
+      request.on('end', () => {
+        let parsed: Record<string, string> & { publicKeyJwk?: Record<string, unknown> }
+        try {
+          parsed = JSON.parse(body)
+        } catch {
+          json(response, 400, { error: 'bad_request' })
+          return
+        }
+        if (parts[2] === 'register') {
+          const out = identity.register(parsed.credentialId, parsed.publicKeyJwk ?? {})
+          json(response, out.ok ? 201 : 409, out.ok ? { ok: true } : { error: out.reason })
+          return
+        }
+        if (parts[2] === 'assert') {
+          const out = identity.assert({
+            credentialId: parsed.credentialId,
+            clientDataJSON: parsed.clientDataJSON,
+            authenticatorData: parsed.authenticatorData,
+            signature: parsed.signature
+          })
+          // The refusal REASON stays server-side. A client learns only that the
+          // ceremony did not take, because which check failed is a map of the
+          // verifier for anyone probing it.
+          json(response, out.ok ? 200 : 401, out.ok ? { token: out.token } : {})
+          return
+        }
+        json(response, 404, { error: 'not_found' })
+      })
       return
     }
 

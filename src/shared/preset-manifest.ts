@@ -98,6 +98,31 @@ export function updateAvailable(installed: number, head: number | null): boolean
 }
 
 /**
+ * R24 — SHEETS ARE RAISED BY USER INTENT, NEVER BY A POLL.
+ *
+ * The dock-open update check is not something the user asked for; it happens
+ * because they opened a dock. So its failures are BADGE STATE and nothing more.
+ * A HEAD that meets an expired token answers 401 — and that must stay silent:
+ * no sheet, no error, no badge. Raising a passkey prompt because a background
+ * check tripped would mean opening the dock could demand a fingerprint, which
+ * is the whole failure mode this ruling exists to prevent.
+ *
+ * `silent` therefore covers every non-200: an expired credential, a refusal, an
+ * unreachable registry. The buyer keeps the version they have, which still
+ * works, and finds out about a newer one the next time a check succeeds.
+ */
+export type UpdateCheckOutcome = 'update' | 'current' | 'silent'
+
+export function updateCheckOutcome(
+  status: number,
+  headVersion: number | null,
+  installed: number
+): UpdateCheckOutcome {
+  if (status !== 200) return 'silent'
+  return updateAvailable(installed, headVersion) ? 'update' : 'current'
+}
+
+/**
  * The 403 vocabulary (§2) plus R11's `balance_empty`. 403 is the one answer the
  * client never loops on — it is not self-recoverable — so every member needs a
  * remedy the UI can link instead of a retry.
