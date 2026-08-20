@@ -120,7 +120,7 @@ describe('boardSourcesFrom — adapting the main-process singletons', () => {
       spawnedAt: 1
     }
     const built = boardSourcesFrom({
-      store: { activeId: 'ws-1' },
+      store: { focusedId: 'ws-1' },
       turns: { list: () => [] },
       turnStore: { loadAll: () => new Map() },
       agents: { list: () => [entry] }
@@ -132,7 +132,7 @@ describe('boardSourcesFrom — adapting the main-process singletons', () => {
 
   it('omits probe entirely when the runtime has no sampler', () => {
     const built = boardSourcesFrom({
-      store: { activeId: 'ws' },
+      store: { focusedId: 'ws' },
       turns: { list: () => [] },
       turnStore: { loadAll: () => new Map() },
       agents: { list: () => [] }
@@ -143,7 +143,7 @@ describe('boardSourcesFrom — adapting the main-process singletons', () => {
   it('reads each layer lazily, so a snapshot always sees current state', () => {
     let calls = 0
     const built = boardSourcesFrom({
-      store: { activeId: 'ws' },
+      store: { focusedId: 'ws' },
       turns: (() => {
         const t = {
           list: (): TerminalActivity[] => {

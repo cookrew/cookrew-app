@@ -149,6 +149,14 @@ export interface WorkspaceState {
 export interface WorkspaceMeta {
   id: string
   name: string
+  /**
+   * URL identity — the `<slug>` in https://<host>/<slug> (marketplace §11).
+   * Minted once from the name and FROZEN: a rename never moves it, because a
+   * slug is an address a paired phone has bookmarked and an exported agent is
+   * called at. Optional on the type for registries written before step 3;
+   * the store backfills one at load.
+   */
+  slug?: string
   /** Primary directory; kept === dirs[0] for back-compat. */
   dir: string
   /** Ordered working directories; dirs[0] is primary. */
@@ -238,6 +246,12 @@ export interface TeamForkSpec {
   choices: TeamForkChoice[]
   /** Fork the SAVED snapshot of this team instead of the live canvas. */
   fromSavedTeam?: string
+  /**
+   * Which live canvas the nodeIds belong to. Defaults to the focused one for
+   * callers that are a seat; the CLI passes the calling pane's workspace,
+   * which with sessions resident need not be the focused one (marketplace §11).
+   */
+  fromWorkspaceId?: string
   /** Directory set for the forked workspace; defaults to the source dirs. */
   dirs?: string[]
   /**

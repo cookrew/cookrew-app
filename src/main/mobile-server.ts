@@ -5,6 +5,12 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
 import { MOBILE_PORT, MOBILE_HTTPS_PORT } from './mobile-ports'
+import {
+  nodeIdOfRoute,
+  nodeInScope,
+  resolveScopedRoute,
+  scopedRouteSupported
+} from './mobile-slug-route'
 import { agentStatus } from './herdr-agent-status'
 import { endpointCertHosts, mobileEndpoints, type MobileEndpoint } from './mobile-endpoints'
 import { loadOrCreatePairingToken, rotatePairingToken } from './pairing-token'
@@ -12,7 +18,7 @@ import { readTailnet, type CertHosts, type TailnetIdentity } from './tailscale'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { powerSaveBlocker } from 'electron'
 import type { WorkspaceStore } from './store'
-import type { RecoverResult, RestoreResult } from '../shared/model'
+import type { RecoverResult, RestoreResult, WorkspaceState } from '../shared/model'
 import type { PtyManager } from './pty'
 import type { VoiceEngine } from './voice'
 import type { TurnTracker } from './turn-tracker'
@@ -92,6 +98,11 @@ export interface MobileServerDeps {
   browserThumb: (browserId: string) => ThumbFrame | undefined
   /** Whether browser nodes are backed by the node-owned headless runtime. */
   interactiveBrowserEnabled: () => boolean
+  /**
+   * Whether workspace sessions are multi-instance. Gates slug routing: off,
+   * /<slug>/... is not a route and every path keeps its existing meaning.
+   */
+  multiInstance: () => boolean
   /**
    * A phone polled /thumb. Awaited, because with headless browsers this is
    * what TAKES the picture (the desktop renderer no longer owns the page);
@@ -559,6 +570,51 @@ async function handle(
   deps: MobileServerDeps
 ): Promise<void> {
   const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
+
+  // Step 3: /<slug>/... addresses ONE workspace session. The path is rewritten
+  // to what the existing handlers expect, and `scope` carries which session
+  // they are answering for. Unslugged paths keep their meaning exactly — bound
+  // to the focused session — because every paired phone has a bookmark to /.
+  //
+  // An unknown slug is 404, never a fall back to focus: silently serving a
+  // different workspace than the URL names is the confusion slugs exist to end.
+  //
+  // GATED. Flag off, a slug is not a route at all and the path is served
+  // exactly as it always was — the whole surface, unchanged, for every paired
+  // phone. Flag on, a slug scopes the request to one workspace session.
+  const route = deps.multiInstance()
+    ? resolveScopedRoute(url.pathname, (slug) => deps.store.bySlug(slug)?.id)
+    : ({ kind: 'unscoped', pathname: url.pathname } as const)
+  if (route.kind === 'unknown-slug') {
+    respondJson(response, 404, { error: `No workspace at /${route.slug}` })
+    return
+  }
+  const scope = route.kind === 'scoped' ? route.workspaceId : null
+  url.pathname = route.pathname
+
+  if (scope !== null) {
+    // FAIL CLOSED. Most of mobile-api still answers for the focused session
+    // whatever the path says, so a slug may only reach the routes proven to
+    // honour it. A wrong answer that looks right is worse than a refusal the
+    // caller can see — see scopedRouteSupported.
+    if (!scopedRouteSupported(url.pathname)) {
+      respondJson(response, 501, {
+        error: 'This route is not workspace-scoped yet — use the unslugged path',
+        route: url.pathname
+      })
+      return
+    }
+    // One check for every scoped node route, so a new one cannot forget it.
+    const nodeId = nodeIdOfRoute(url.pathname)
+    if (nodeId !== null && !nodeInScope(scope, deps.store.ownerOf(nodeId))) {
+      // 404, not 403: a scoped URL must not confirm that nodes exist outside it.
+      respondJson(response, 404, { error: 'Not in this workspace' })
+      return
+    }
+  }
+  /** The workspace this request is answering for. */
+  const scopedId = scope ?? deps.store.focusedId
+  const scopedState = (): WorkspaceState => deps.store.workspaceState(scopedId)
   /**
    * The renderer bundle is the phone client. When it is missing, say so
    * plainly rather than serving something else that looks like the app — a
@@ -615,12 +671,20 @@ async function handle(
   if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return
 
   if (request.method === 'GET' && url.pathname === '/api/state') {
+    // Activities are tracked globally by terminal id, so an unfiltered map
+    // leaks every OTHER workspace's agents into a scoped canvas — the node
+    // list is scoped but the activity map was not, which is the same
+    // wrong-answer-looks-right shape the scope check exists to stop.
+    const scopedNodeIds = new Set(scopedState().nodes.map((node) => node.id))
     const activities = Object.fromEntries(
-      deps.turns.list().map((activity) => [activity.terminalId, activity])
+      deps.turns
+        .list()
+        .filter((activity) => scope === null || scopedNodeIds.has(activity.terminalId))
+        .map((activity) => [activity.terminalId, activity])
     )
     // Git-enriched like /api/workspace (same coalescing cache), so the lite
     // client's git chips light up too — terminals carry node.git.
-    const enriched = await enrichStateWithGit(deps.store.state, deps.ops.gitInfo)
+    const enriched = await enrichStateWithGit(scopedState(), deps.ops.gitInfo)
     respondJson(response, 200, {
       workspace: enriched.name,
       // The full canvas — the mobile client mirrors the desktop layout, so

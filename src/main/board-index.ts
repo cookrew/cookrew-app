@@ -86,7 +86,7 @@ export function buildBoard(sources: BoardSources, windowMs = BOARD_WINDOW_MS): B
 
 /** Minimal shapes of the main-process singletons the adapter needs. */
 export interface BoardRuntime {
-  store: { readonly activeId: string }
+  store: { readonly focusedId: string }
   turns: { list: () => TerminalActivity[] }
   turnStore: { loadAll: () => Map<string, TurnRecord[]> }
   agents: { list: () => readonly BoardAgentMeta[] }
@@ -100,7 +100,7 @@ export interface BoardRuntime {
  */
 export function boardSourcesFrom(runtime: BoardRuntime): BoardSources {
   return {
-    activeWorkspaceId: () => runtime.store.activeId,
+    activeWorkspaceId: () => runtime.store.focusedId,
     live: () => runtime.turns.list(),
     ledger: () => runtime.turnStore.loadAll(),
     registry: () =>

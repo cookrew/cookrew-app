@@ -14,6 +14,7 @@ import { DirectMultiplexer } from './direct-multiplexer'
 import { selectMultiplexers } from './multiplexer-select'
 import { harnessFor } from './harness'
 import { defaultProducerLease } from './producer-lease'
+import { PtyOwnership } from './pty-scope'
 import { defaultInputProvenance } from './input-provenance'
 import type { Terminal as HeadlessTerminalType } from '@xterm/headless'
 
@@ -870,6 +871,13 @@ export function multiplexerOrder(
 
 export class PtyManager {
   private sessions = new Map<string, PtySession>()
+
+  /**
+   * Which workspace holds each live PTY (multi-instance step 2). ONE map, one
+   * index over it — see pty-scope.ts for why sharding would break both the
+   * orphan reaper's fail-safe and the flat pane-inventory cost curve.
+   */
+  private readonly ownership = new PtyOwnership()
   readonly runtimeDir: string
   readonly socketPath: string
   private tmuxConf: string
@@ -975,7 +983,11 @@ export class PtyManager {
     activeMux?.reloadConfig()
   }
 
-  spawn(options: Omit<PtySessionOptions, 'socketPath' | 'cliDir' | 'tmuxConf'>): PtySession {
+  spawn(
+    options: Omit<PtySessionOptions, 'socketPath' | 'cliDir' | 'tmuxConf'>,
+    workspaceId?: string
+  ): PtySession {
+    if (workspaceId) this.ownership.claim(options.terminalId, workspaceId)
     const existing = this.sessions.get(options.terminalId)
     if (existing) return existing
     const session = new PtySession({
@@ -992,6 +1004,7 @@ export class PtyManager {
     session.on('exit', () => {
       if (this.sessions.get(options.terminalId) === session) {
         this.sessions.delete(options.terminalId)
+        this.ownership.release(options.terminalId)
       }
     })
     this.sessions.set(options.terminalId, session)
@@ -1046,6 +1059,36 @@ export class PtyManager {
       session.dispose()
       this.sessions.delete(terminalId)
     }
+    this.ownership.release(terminalId)
+  }
+
+  // ---- per-session scope (multi-instance step 2) ----
+
+  /** The workspace holding a terminal's PTY, if any holds it. */
+  workspaceOfTerminal(terminalId: string): string | undefined {
+    return this.ownership.workspaceOf(terminalId)
+  }
+
+  /** Does this process hold a live PTY for that terminal? */
+  isLive(terminalId: string): boolean {
+    return this.sessions.has(terminalId)
+  }
+
+  /**
+   * Detach every PTY one workspace holds, returning the ids detached. The
+   * per-session teardown: used when a session drains, where the old code
+   * detached whatever the outgoing canvas happened to list.
+   */
+  detachWorkspace(workspaceId: string): string[] {
+    const ids = this.ownership.releaseWorkspace(workspaceId)
+    for (const id of ids) {
+      const session = this.sessions.get(id)
+      if (session) {
+        session.dispose()
+        this.sessions.delete(id)
+      }
+    }
+    return ids
   }
 
   /** Close for good: end the tmux session, then drop the PTY. */
@@ -1056,6 +1099,7 @@ export class PtyManager {
       session.dispose()
       this.sessions.delete(terminalId)
     }
+    this.ownership.release(terminalId)
   }
 
   /**
@@ -1124,5 +1168,6 @@ export class PtyManager {
   disposeAll(): void {
     for (const session of this.sessions.values()) session.dispose()
     this.sessions.clear()
+    for (const id of this.ownership.all()) this.ownership.release(id)
   }
 }
