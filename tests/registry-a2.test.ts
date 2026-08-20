@@ -227,6 +227,48 @@ describe('authorize — the 401 path and D4', () => {
     }
   })
 
+  it('D4 OVER HTTP: a publish token minted through the ROUTE gets 403 on a download', async () => {
+    // Magpie's C3/C5/C7s were BLOCK because no route passed a scope, so this
+    // branch of authorize was unreachable from outside the process. The whole
+    // ceremony now runs over the wire: challenge, assert with scope=publish,
+    // then present that token to the gate.
+    const s = await listen()
+    try {
+      const first = await fetch(`${s.url}/v1/presets/${encodeURIComponent(s.id)}/manifest`)
+      const challenge = (first.headers.get('www-authenticate') as string).split('challenge=')[1]
+      const minted = (await (
+        await fetch(`${s.url}/v1/identity/assert`, {
+          method: 'POST',
+          body: JSON.stringify({ ...auth.assert(challenge), scope: 'publish' })
+        })
+      ).json()) as { token: string; scope: string }
+      expect(minted.scope).toBe('publish')
+      const res = await fetch(`${s.url}/v1/presets/${encodeURIComponent(s.id)}/manifest`, {
+        headers: { authorization: `Bearer ${minted.token}` }
+      })
+      expect(res.status).toBe(403)
+    } finally {
+      s.close()
+    }
+  })
+
+  it('an unrecognised scope falls back to download, never up to publish', async () => {
+    const s = await listen()
+    try {
+      const first = await fetch(`${s.url}/v1/presets/${encodeURIComponent(s.id)}/manifest`)
+      const challenge = (first.headers.get('www-authenticate') as string).split('challenge=')[1]
+      const minted = (await (
+        await fetch(`${s.url}/v1/identity/assert`, {
+          method: 'POST',
+          body: JSON.stringify({ ...auth.assert(challenge), scope: 'root' })
+        })
+      ).json()) as { scope: string }
+      expect(minted.scope).toBe('download')
+    } finally {
+      s.close()
+    }
+  })
+
   it('D4: a token with the wrong scope answers 403, never 401', async () => {
     // A publish-scoped token is a valid identity that does not cover a
     // download. Answering 401 would make the client re-authenticate, present
