@@ -229,8 +229,33 @@ interface ScrapeObservation {
   uuid?: string
 }
 
+/** The half of a TerminalActivity that costs a full-buffer walk to produce. */
+interface DerivedActivity {
+  lines: string[]
+  glance: TerminalActivity['glance']
+  tailLines: TerminalActivity['tailLines']
+}
+
 interface TrackedTerminal {
   session: PtySession
+  /**
+   * Bumped on every output chunk and whenever `snapshot` is re-anchored — the
+   * ONLY things the expensive, output-derived half of activityOf depends on.
+   * Read by the activity cache below; see `activityCache`.
+   */
+  outputRev: number
+  /**
+   * Last output-derived activity fields, with the (rev, phase) they were
+   * derived at. activityOf recomputes them only when that pair changes.
+   *
+   * Deliberately narrow. It caches ONLY what costs something — the fields that
+   * walk the whole xterm buffer — and never the cheap scalars (phase, prompt,
+   * reply, title, pending input, counts), which are recomputed every call. A
+   * missed invalidation can therefore never show a stale prompt or phase; the
+   * worst it can do is reuse a tail for output that has not arrived, and the
+   * rev is bumped at the one place output arrives.
+   */
+  activityCache: { rev: number; phase: TurnPhase; derived: DerivedActivity } | null
   agent: boolean
   phase: TurnPhase
   promptBuffer: string
@@ -1482,6 +1507,8 @@ export class TurnTracker extends EventEmitter {
       unprovenBox: this.lease.isOwnerEditing(session.terminalId),
       prompt: null,
       snapshot: '',
+      outputRev: 0,
+      activityCache: null,
       turnStartLine: null,
       reply: null,
       title: null,
@@ -1956,6 +1983,7 @@ export class TurnTracker extends EventEmitter {
 
   private startTurn(t: TrackedTerminal, prompt: string): void {
     t.snapshot = t.session.fullText()
+    t.outputRev += 1
     // Monotonic tmux anchor when available; the screen-derived count is the
     // non-tmux fallback only (under tmux it saturates at pane rows).
     t.turnStartLine = t.session.scrollAnchor?.() ?? scrollLineOf(t.snapshot)
@@ -2024,6 +2052,9 @@ export class TurnTracker extends EventEmitter {
   private handleData(terminalId: string, data: string): void {
     const t = this.tracked.get(terminalId)
     if (!t) return
+    // The choke point: every byte of pane output passes here, so this is the
+    // one place the derived-activity cache has to be invalidated from.
+    t.outputRev += 1
     if (t.phase === 'waiting') {
       t.phase = 'thinking'
     } else if (
@@ -2071,6 +2102,7 @@ export class TurnTracker extends EventEmitter {
   private resumeThinking(t: TrackedTerminal): void {
     if (t.turnStartedAt === 0) {
       t.snapshot = t.session.fullText()
+    t.outputRev += 1
       t.turnStartLine = t.session.scrollAnchor?.() ?? scrollLineOf(t.snapshot)
       t.turnStartedAt = Date.now()
       // Prompt-of-record, strongest first: a confirmed native delivery's
@@ -2341,15 +2373,45 @@ export class TurnTracker extends EventEmitter {
     const t = this.tracked.get(terminalId)
     if (!t) return null
     const inTurn = t.phase === 'thinking' || t.phase === 'waiting'
-    // The glance parser needs the RAW delta (status lines are chrome that
-    // cleanTurnLines strips); the display tail uses the cleaned one.
-    const rawDelta = inTurn ? diffOutput(t.snapshot, t.session.fullText()) : ''
-    const lines = inTurn
-      ? tailLines(
-          cleanTurnLines(rawDelta).filter((l) => !this.isPromptEcho(l, t.prompt)),
-          SUMMARY_TAIL
-        )
-      : tailLines(cleanTurnLines(t.session.viewportText()), SUMMARY_TAIL)
+    /**
+     * The expensive half, reused while nothing has arrived.
+     *
+     * Each of these walks the WHOLE xterm buffer — 7.3ms per full 5000-line
+     * pane, measured — and activityOf runs once per tracked terminal per
+     * /api/state and /api/activity. At 15 terminals that was ~110ms of buffer
+     * walking per request before any diffing, and the diff itself grows with
+     * the gap between samples: diffOutput's `startsWith` fast path fails
+     * whenever a TUI repaints in place, which agent panes do constantly, so it
+     * falls back to splitting a ~500KB string twice.
+     *
+     * Nothing here can change without output arriving or the diff base moving,
+     * and both bump outputRev. Phase is in the key because it selects which
+     * branch produced the values.
+     */
+    const cached = t.activityCache
+    const derived: DerivedActivity =
+      cached !== null && cached.rev === t.outputRev && cached.phase === t.phase
+        ? cached.derived
+        : (() => {
+            // The glance parser needs the RAW delta (status lines are chrome
+            // that cleanTurnLines strips); the display tail uses the cleaned one.
+            const rawDelta = inTurn ? diffOutput(t.snapshot, t.session.fullText()) : ''
+            const fresh: DerivedActivity = {
+              lines: inTurn
+                ? tailLines(
+                    cleanTurnLines(rawDelta).filter((l) => !this.isPromptEcho(l, t.prompt)),
+                    SUMMARY_TAIL
+                  )
+                : tailLines(cleanTurnLines(t.session.viewportText()), SUMMARY_TAIL),
+              glance: t.agent && inTurn ? parseAgentGlance(rawDelta) : null,
+              // Clip signal only when the tail is settled — mid-turn the
+              // renderer shows the whole live stream anyway.
+              tailLines: inTurn || !t.agent ? null : latestTailLines(t.session.fullText())
+            }
+            t.activityCache = { rev: t.outputRev, phase: t.phase, derived: fresh }
+            return fresh
+          })()
+    const lines = derived.lines
     const pending = t.promptBuffer.trim()
     const pane = t.session.paneScrollState?.() ?? { scrollRow: null, historySize: null }
     return {
@@ -2360,7 +2422,7 @@ export class TurnTracker extends EventEmitter {
       pendingInput: pending.length > 0 ? pending : null,
       lines,
       reply: t.reply,
-      glance: t.agent && inTurn ? parseAgentGlance(rawDelta) : null,
+      glance: derived.glance,
       title: t.title,
       turnCount: this.historyCount(terminalId),
       turnStartedAt: inTurn ? t.turnStartedAt : null,
@@ -2372,9 +2434,7 @@ export class TurnTracker extends EventEmitter {
       // ~2ms display-message per throttled push (≥250ms apart per terminal).
       scrollRow: pane.scrollRow,
       scrollBase: pane.historySize,
-      // Clip signal only when the tail is settled — mid-turn the renderer
-      // shows the whole live stream anyway.
-      tailLines: inTurn || !t.agent ? null : latestTailLines(t.session.fullText()),
+      tailLines: derived.tailLines,
       dispatchId: this.pendingDispatch.get(terminalId)?.id ?? null,
       updatedAt: Date.now()
     }
