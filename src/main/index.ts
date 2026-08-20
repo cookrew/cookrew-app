@@ -2531,7 +2531,7 @@ function registerIpc(handlers: RestoreHandlers): void {
       if (stored === null) throw new Error('preset is missing or failed verification')
       const snapshot = JSON.parse(stored.teamBytes.toString('utf8')) as TeamSnapshot
       const plan = planPresetImport(snapshot, {
-        dirs: store.state.dirs?.length ? store.state.dirs : [store.state.dir],
+        dirs: store.focusedState.dirs?.length ? store.focusedState.dirs : [store.focusedState.dir],
         cutAt: Date.now(),
         position,
         manifestId: stored.manifest.id
@@ -2551,7 +2551,7 @@ function registerIpc(handlers: RestoreHandlers): void {
       // between, so a paste arrived as a stutter of half-teams. This lands the
       // whole team in a single patch; adoptLiveNode still runs per node
       // afterwards, because spawning a PTY is inherently per-terminal.
-      const added = store.appendTeamToWorkspace(store.activeId, placed, plan.connections)
+      const added = store.appendTeamToWorkspace(store.focusedId, placed, plan.connections)
       for (const node of added) adoptLiveNode(node)
     }
   )
