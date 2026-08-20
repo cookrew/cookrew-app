@@ -18,7 +18,7 @@ import {
  *  used here for scrub mapping. Imported rather than redeclared so the density
  *  rule and the scrub mapping cannot drift — they describe the same 16px. */
 import { fillRows, RAIL_INSET } from './rail-fill'
-import { pinAnchors, pinLabel, type VersionPinRecord } from '../../shared/version-pin'
+import { pinAnchors, pinLabel, traceFraction, type VersionPinRecord } from '../../shared/version-pin'
 
 /** Px of pointer travel before a press on the rail becomes a scrub, not a tap. */
 const SCRUB_THRESHOLD = 4
@@ -559,14 +559,18 @@ export function CheckpointTimeline({
             index (or 1 when empty), not the array length, so a marker after the last
             checkpoint doesn't clamp to the bottom. */}
         {(markers ?? []).map((m, i) => {
-          // Drawn-row space (R17/R19), not turn-number space. AFTER row `at` is
-          // the boundary at the END of its span, so (at + 1) / n — which still
-          // puts a marker after the last checkpoint at 1.0, where the old
-          // formula put it. A marker whose checkpoint is not drawn is OMITTED:
-          // clamping put it on an end of the bar it has no claim to.
-          const at = rows.findIndex((r) => r.index === m.afterIndex)
-          if (at < 0) return null
-          const frac = (at + 1) / rows.length
+          // ONE definition of the boundary anchor, imported rather than copied.
+          // The rule it encodes is unchanged — a boundary sits at the edge BELOW
+          // its checkpoint, so (at + 1) / n, and a marker whose checkpoint is
+          // not drawn is omitted rather than clamped onto an end of the bar it
+          // has no claim to. What changed is that the rail no longer keeps its
+          // own copy of that expression: two copies of one formula is the exact
+          // shape of the bug this all started as, where trace markers and the
+          // focus tab were placed by two expressions that agreed until a ledger
+          // made them disagree. tests/rail-tick-parity.test.ts guarded the
+          // duplication; deleting it is what the guard was waiting for.
+          const frac = traceFraction(m.afterIndex, rows)
+          if (frac === null) return null
           return (
             <div
               key={`tick-${m.kind}-${m.afterIndex}-${i}`}
