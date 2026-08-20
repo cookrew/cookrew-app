@@ -3510,10 +3510,11 @@ body.cookrew-mobile .cookrew-minimap {
   transition: background 140ms ease;
 }
 
-/* F4 — the count sits ABOVE the reveal. The full-range list is z-index 5 and
-   its topmost row lands right under this badge, so at z-index auto the count
-   was simply covered by a row title. The backing plate keeps it legible where
-   a row passes behind it rather than relying on the gap. */
+/* F4 — the count sits ABOVE the reveal. The stack is list 4, focused tag 5,
+   this badge 6; the list's topmost row lands right under the badge, so at
+   z-index auto the count was simply covered by a row title. The backing plate
+   keeps it legible where a row passes behind it rather than relying on the
+   gap. */
 .cr-ckpt-count {
   position: absolute;
   z-index: 6;

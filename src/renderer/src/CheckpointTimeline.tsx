@@ -490,16 +490,12 @@ export function CheckpointTimeline({
    */
   const laid = fanned ? fillRows(rows, railHeight, focused!.index) : []
   /**
-   * MED-2 — LIVE takes the slice the denominator reserves for it.
-   *
-   * R19's rationale is that rows are spans and the last 1/n of the bar belongs
-   * to the live tail. That was true of the live DOT and of nothing else: the
-   * LIVE row still rendered inside the fan, tucked under the focused tag, so
-   * the reserved slice sat empty and the reasoning described an intention
-   * rather than the layout. It now renders in the list at fraction 1, which is
-   * exactly the space no checkpoint may occupy.
+   * MED-2 — LIVE takes the slice the denominator reserves for it, and fillRows
+   * places it: rows and tail have to be spaced against each other, so they
+   * cannot be decided in two places. R19's rationale said the last 1/n belongs
+   * to the live tail; that was true of the live DOT and nothing else, because
+   * the LIVE row rendered inside the fan under the focused tag.
    */
-  const showLive = fanned
   // ONE position source (refinement 1): the marker AND the focused tab/row use
   // the SAME fraction → same Y. At the live tail (no focus) the marker rides its
   // own live fraction.
@@ -568,13 +564,13 @@ export function CheckpointTimeline({
               key={`tick-${m.kind}-${m.afterIndex}-${i}`}
               className={`cr-ckpt-tick ${m.kind}`}
               style={{ top: railAnchorTop(frac) }}
-              title={
-                m.kind === 'compact'
-                  ? `compact here${m.preTokens !== undefined && m.postTokens !== undefined ? ` · ${fmtTokens(m.preTokens)} → ${fmtTokens(m.postTokens)}` : ''}`
-                  : m.kind === 'rewind'
-                    ? `rewound to T${m.toIndex} here`
-                    : 'session cleared here — earlier endpoints via lineage'
-              }
+              // MED-4 says the bar ticks CARRY the boundaries that no longer
+              // render inline. That is only true for a screen reader if they
+              // announce themselves, so they take the separator role and the
+              // same wording as the divider they replaced.
+              role="separator"
+              title={tickLabel(m)}
+              aria-label={tickLabel(m)}
             />
           )
         })}
@@ -592,25 +588,31 @@ export function CheckpointTimeline({
           default (HIGH-2 register in agent-roster.css); the rows opt back in. */}
       {fanned && laid.length > 0 && (
         <div className="cr-ckpt-list" role="list" aria-label="All checkpoints">
-          {laid.map(({ row, fraction }) => renderRow(row, { top: railAnchorTop(fraction) }))}
-          {/* LIVE at fraction 1 — the slice the denominator reserves (MED-2). */}
-          {showLive && (
-            <div
-              className={`cr-ckpt-row live${here === null ? ' active' : ''}`}
-              role="listitem"
-              aria-label="Live"
-              style={{ top: railAnchorTop(1) }}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => onTap(() => onLive())}
-            >
-              <span className="cr-ckpt-row-label">
-                <span className="cr-ckpt-row-idx">LIVE</span>
-                <span className="cr-ckpt-row-title">running now</span>
-              </span>
-              <span className="cr-ckpt-dot">
-                <i />
-              </span>
-            </div>
+          {laid.map((entry) =>
+            entry.row === null ? (
+              /* LIVE, placed by fillRows so ONE function owns the spacing: it
+                 used to be dropped at fraction 1 from here, 5.2px below the
+                 newest checkpoint on a full bar, and covered it. */
+              <div
+                key="live"
+                className={`cr-ckpt-row live${here === null ? ' active' : ''}`}
+                role="listitem"
+                aria-label="Live"
+                style={{ top: railAnchorTop(entry.fraction) }}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onTap(() => onLive())}
+              >
+                <span className="cr-ckpt-row-label">
+                  <span className="cr-ckpt-row-idx">LIVE</span>
+                  <span className="cr-ckpt-row-title">running now</span>
+                </span>
+                <span className="cr-ckpt-dot">
+                  <i />
+                </span>
+              </div>
+            ) : (
+              renderRow(entry.row, { top: railAnchorTop(entry.fraction) })
+            )
           )}
         </div>
       )}
@@ -646,6 +648,20 @@ export function CheckpointTimeline({
       )}
     </div>
   )
+}
+
+/** What a boundary tick says — as a tooltip AND to a screen reader, one string
+ *  so the two can never drift. Same wording the inline divider used. */
+function tickLabel(m: TraceMarkerRow): string {
+  if (m.kind === 'compact') {
+    const size =
+      m.preTokens !== undefined && m.postTokens !== undefined
+        ? ` · ${fmtTokens(m.preTokens)} → ${fmtTokens(m.postTokens)}`
+        : ''
+    return `compact here${size}`
+  }
+  if (m.kind === 'rewind') return `rewound to T${m.toIndex} here`
+  return 'session cleared here — earlier endpoints via lineage'
 }
 
 /** 999600 → "999.6k", 11200000 → "11.2M" — compact marker compression readout. */

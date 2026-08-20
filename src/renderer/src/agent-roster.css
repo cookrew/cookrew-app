@@ -1246,7 +1246,7 @@
 
 @keyframes cr-ckpt-title-marquee {
   from {
-    transform: translateX(0);
+    transform: translateX(0px);
   }
   to {
     transform: translateX(var(--marquee-shift, 0));

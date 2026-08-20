@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   capacityFor,
   fillRows,
+  isLive,
   RAIL_INSET,
   ROW_HEIGHT,
   sampleIndices
@@ -66,21 +67,34 @@ describe('sampleIndices', () => {
 describe('fillRows', () => {
   const rows = rowsOf(122)
 
-  it('reaches T1 and the newest checkpoint — the whole point of F3', () => {
+  it('reaches T1 at the top and LIVE at the bottom — the whole point of F3', () => {
     const filled = fillRows(rows, 669, null)
-    expect(filled[0].row.index).toBe(1)
-    expect(filled[filled.length - 1].row.index).toBe(122)
+    expect(filled[0].row?.index).toBe(1)
+    expect(isLive(filled[filled.length - 1])).toBe(true)
+    expect(filled[filled.length - 1].fraction).toBe(1)
   })
 
-  it('spans the bar from the top, leaving the live tail clear', () => {
+  it('drops only the tail checkpoints that cannot clear LIVE', () => {
+    // Deliberate: fractions stay at/n, so a checkpoint too close to the tail is
+    // omitted rather than moved off its own position. It is still reachable by
+    // scrub — the focused row draws it exactly on the marker.
+    const filled = fillRows(rows, 669, null)
+    const newest = filled.filter((f) => !isLive(f)).pop()
+    expect(newest?.row?.index).toBeLessThan(122)
+    expect(newest!.fraction).toBeLessThanOrEqual(1 - ROW_HEIGHT / (669 - 2 * RAIL_INSET))
+    // …and it is still a real position, not a capped one.
+    expect(newest!.fraction).toBe((newest!.row!.index - 1) / rows.length)
+  })
+
+  it('spans the bar from the top, with the live tail its own entry', () => {
     // R19: a row is a SPAN, so row `at` owns [at/n, (at+1)/n) and the last 1/n
     // belongs to the live tail — the live dot and the LIVE row. The newest
     // CHECKPOINT therefore stops at (n-1)/n instead of taking the bottom.
     // F3 still holds: T1 at the top, LIVE at the bottom, now as its own row.
     const filled = fillRows(rows, 669, null)
     expect(filled[0].fraction).toBe(0)
-    expect(filled[filled.length - 1].fraction).toBe((rows.length - 1) / rows.length)
-    expect(filled[filled.length - 1].fraction).toBeLessThan(1)
+    const checkpoints = filled.filter((f) => !isLive(f))
+    expect(checkpoints[checkpoints.length - 1].fraction).toBeLessThan(1)
   })
 
   /**
@@ -95,34 +109,50 @@ describe('fillRows', () => {
    * This mirrors railAnchorTop's own arithmetic — `calc(16px + f * (100% -
    * 32px))` — and asserts the smallest gap any two neighbours actually get.
    */
-  const topsFor = (filled: { fraction: number }[], barHeight: number): number[] =>
+  const topsFor = (filled: readonly { fraction: number }[], barHeight: number): number[] =>
     filled.map((f) => RAIL_INSET + f.fraction * (barHeight - 2 * RAIL_INSET))
 
   const minGap = (tops: number[]): number =>
     tops.length < 2 ? Infinity : Math.min(...tops.slice(1).map((t, i) => t - tops[i]))
 
-  it('never lays two rows closer together than a row is tall', () => {
+  it('never lays two rows closer together than a row is tall — LIVE INCLUDED', () => {
+    // LIVE is in the result now, so the gate covers the pair that actually
+    // broke: the newest checkpoint at (n-1)/n and LIVE at 1 were 5.2px apart
+    // at n = 122 on a 669px bar, and an opaque 34px LIVE row covered it.
     for (const barHeight of [136, 200, 340, 480, 669, 900]) {
       const filled = fillRows(rows, barHeight, null)
+      expect(filled.some(isLive), `bar ${barHeight}px laid no LIVE`).toBe(true)
       const gap = minGap(topsFor(filled, barHeight))
       expect(
         gap,
-        `bar ${barHeight}px laid ${filled.length} rows, closest pair ${gap.toFixed(1)}px apart`
+        `bar ${barHeight}px laid ${filled.length} entries, closest pair ${gap.toFixed(1)}px apart`
       ).toBeGreaterThanOrEqual(ROW_HEIGHT)
     }
   })
 
+  it('holds the gap with the focused row pulled out, too', () => {
+    // Excluding the focus leaves a hole; the remaining neighbours must still
+    // not collide with each other or with LIVE.
+    for (const barHeight of [200, 340, 669]) {
+      for (const focus of [1, 61, 122]) {
+        const filled = fillRows(rows, barHeight, focus)
+        expect(minGap(topsFor(filled, barHeight))).toBeGreaterThanOrEqual(ROW_HEIGHT)
+      }
+    }
+  })
+
   it('still fills a tall bar rather than under-using it', () => {
-    // The inset correction must not turn into timidity: one more row than we
-    // lay would have to breach ROW_HEIGHT somewhere.
+    // The inset correction and LIVE's slot must not turn into timidity: one
+    // more entry than we lay would have to breach ROW_HEIGHT somewhere.
     const filled = fillRows(rows, 669, null)
-    expect(filled.length).toBeGreaterThanOrEqual(17)
+    expect(filled.length).toBeGreaterThanOrEqual(15)
     expect(filled.length).toBeLessThanOrEqual(capacityFor(669))
   })
 
-  it('shows both ends even when the bar is far too short for them', () => {
-    const filled = fillRows(rows, 40, null)
-    expect(filled.map((f) => f.row.index)).toEqual([1, 122])
+  it('keeps LIVE even when the bar is far too short for anything else', () => {
+    // At 40px there is 8px of usable span: no checkpoint can be a row clear of
+    // the tail, so the honest answer is the tail alone.
+    expect(fillRows(rows, 40, null)).toEqual([{ row: null, fraction: 1 }])
   })
 
   it('omits the focused row so it is never drawn twice', () => {
@@ -130,20 +160,20 @@ describe('fillRows', () => {
     // sits at its own fraction — a second row a few px off the marker, which
     // reads as the alignment gate failing.
     const filled = fillRows(rows, 669, 1)
-    expect(filled.some((f) => f.row.index === 1)).toBe(false)
+    expect(filled.some((f) => f.row?.index === 1)).toBe(false)
   })
 
   it('leaves the other rows alone when the focus is not among the sample', () => {
     const filled = fillRows(rows, 669, 2)
-    expect(filled.some((f) => f.row.index === 2)).toBe(false)
-    expect(filled[0].row.index).toBe(1)
+    expect(filled.some((f) => f.row?.index === 2)).toBe(false)
+    expect(filled[0].row?.index).toBe(1)
   })
 
   it('shows every row when the conversation is shorter than the bar', () => {
     const filled = fillRows(rowsOf(3), 669, null)
-    expect(filled.map((f) => f.row.index)).toEqual([1, 2, 3])
-    // Thirds, not halves: three spans over the bar, the last third left for LIVE.
-    expect(filled.map((f) => f.fraction)).toEqual([0, 1 / 3, 2 / 3])
+    expect(filled.map((f) => f.row?.index)).toEqual([1, 2, 3, undefined])
+    // Thirds, not halves: three spans over the bar, then LIVE on the last.
+    expect(filled.map((f) => f.fraction)).toEqual([0, 1 / 3, 2 / 3, 1])
   })
 
   it('survives an empty conversation', () => {
@@ -151,6 +181,9 @@ describe('fillRows', () => {
   })
 
   it('puts a single checkpoint at the top rather than dividing by zero', () => {
-    expect(fillRows(rowsOf(1), 669, null)).toEqual([{ row: rowsOf(1)[0], fraction: 0 }])
+    expect(fillRows(rowsOf(1), 669, null)).toEqual([
+      { row: rowsOf(1)[0], fraction: 0 },
+      { row: null, fraction: 1 }
+    ])
   })
 })

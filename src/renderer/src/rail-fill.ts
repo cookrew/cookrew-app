@@ -23,11 +23,17 @@ import type { CheckpointRow } from './transcript'
  * inline `top`.
  */
 
-/** A row plus where along the bar it belongs (0 = oldest, 1 = newest). */
+/**
+ * A row plus where along the bar it belongs (0 = oldest, 1 = the live tail).
+ * `row: null` is the LIVE entry — the tail itself, which is not a checkpoint.
+ */
 export interface FilledRow {
-  row: CheckpointRow
+  row: CheckpointRow | null
   fraction: number
 }
+
+/** The LIVE tail entry, as laid by fillRows. */
+export const isLive = (entry: FilledRow): boolean => entry.row === null
 
 /** Rail height in px a single row needs before neighbours start overlapping. */
 export const ROW_HEIGHT = 34
@@ -70,12 +76,26 @@ export function sampleIndices(length: number, count: number): number[] {
 }
 
 /**
- * The rows to lay along the bar, each with its fraction of the full range.
+ * Everything laid along the bar: the sampled checkpoints, then LIVE at 1.
  *
- * `focusedIndex` is EXCLUDED from the result even when sampling picks it: the
- * focused row is rendered separately at the marker's own precise fraction, and
- * drawing it twice would put a second, subtly misaligned copy of it one pixel
- * off the marker — which is the exact failure F6 exists to catch.
+ * ONE function owns the density rule, because splitting it is what broke it.
+ * LIVE was placed by the component at fraction 1 while fillRows chose the
+ * checkpoints, and neither knew about the other: the newest checkpoint sits at
+ * (n-1)/n, so the gap to LIVE is 1/n of the span — 5.2px at n = 122 on a 669px
+ * bar, against a 34px OPAQUE row. LIVE simply covered the newest checkpoint,
+ * which is worse than the fan placement it replaced.
+ *
+ * FRACTIONS STAY at/n. A laid row keeps its true position in the drawn-row span
+ * space R17/R19 unified across pins, ticks and the focus anchor; moving one to
+ * make room would make it lie about where its checkpoint is. So the tail rows
+ * that cannot be shown a row-height clear of LIVE are simply NOT LAID — the
+ * same reason the other ~100 checkpoints are not laid. They stay reachable by
+ * scrub, where the focused row renders them exactly on the marker.
+ *
+ * `focusedIndex` is EXCLUDED even when sampling picks it: the focused row is
+ * rendered separately at the marker's own precise fraction, and drawing it
+ * twice would put a second, subtly misaligned copy one pixel off the marker —
+ * the exact failure F6 exists to catch.
  */
 export function fillRows(
   rows: readonly CheckpointRow[],
@@ -83,12 +103,23 @@ export function fillRows(
   focusedIndex: number | null
 ): FilledRow[] {
   if (rows.length === 0) return []
-  // R17/R19: rows are SPANS, not points. `rows.length`, not `rows.length - 1` —
-  // row `at` owns [at/n, (at+1)/n) and the last 1/n of the bar is the live tail,
-  // where the live dot and the LIVE row live. Dividing by n-1 stretches the
-  // newest CHECKPOINT onto the bottom and leaves LIVE nowhere to go.
-  const denominator = rows.length
-  return sampleIndices(rows.length, capacityFor(barHeight))
-    .map((i) => ({ row: rows[i], fraction: i / denominator }))
+  const usable = Math.max(1, barHeight - 2 * RAIL_INSET)
+  const live: FilledRow = { row: null, fraction: 1 }
+  // A bar with less than one row of span cannot show a checkpoint clear of the
+  // tail at all, so the honest answer is the tail alone. Note this is the ONLY
+  // no-checkpoint case: index 0 sits at fraction 0, a whole span away from
+  // LIVE, so "the newest allowed index is 0" means one row, not none.
+  if (usable < ROW_HEIGHT) return [live]
+  // The highest fraction a checkpoint may take and still clear LIVE by a row.
+  const ceiling = 1 - ROW_HEIGHT / usable
+  // …and the newest index that lands at or below it, since fraction = at / n.
+  const lastIndex = Math.max(0, Math.floor(ceiling * rows.length))
+
+  const span = lastIndex / rows.length
+  // LIVE consumes a slot, and the checkpoints only get the span below it.
+  const room = Math.max(2, Math.floor((span * usable) / ROW_HEIGHT) + 1)
+  const laid = sampleIndices(lastIndex + 1, Math.min(room, Math.max(2, capacityFor(barHeight) - 1)))
+    .map((i) => ({ row: rows[i], fraction: i / rows.length }))
     .filter((entry) => entry.row.index !== focusedIndex)
+  return [...laid, live]
 }
