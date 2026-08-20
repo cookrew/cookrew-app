@@ -145,3 +145,45 @@ export function fillRows(
     .filter((entry) => entry.row.index !== focusedIndex)
   return [...laid, live]
 }
+
+/** Half a version pin's height — .cr-ckpt-pin is 13px, centred on its anchor. */
+export const PIN_HALF_H = 6.5
+/** .cr-ckpt-count's resting `top`, and its rendered height. Kept in step with
+ *  styles.css: a 12px numeral over a 5.5px label, plus padding. */
+export const COUNT_TOP = 14
+export const COUNT_H = 27
+/** Breathing room between a yielding badge and the pin it stepped around. */
+export const COUNT_GAP = 5
+
+/**
+ * Where the CP badge has to sit to clear the version pins, or null to leave it
+ * where it rests.
+ *
+ * The badge and a pin at the top of the bar want the same 20px. Hiding the pin
+ * loses a control; fading the badge loses a readout. So the badge YIELDS BY
+ * MOVING: it steps to the first gap it fits in and both stay fully readable,
+ * which is the only resolution that loses nothing. It yields ONLY where a pin
+ * actually reaches it — with nothing near the top it does not move at all, and
+ * that is the ordinary case; a pin at the top is what a FRESH INSTALL looks
+ * like, since its version is pinned on the oldest drawn row.
+ *
+ * Walks down to the first gap rather than stepping past the lowest pin on the
+ * bar: taking the max of every pin below the badge parked the count two thirds
+ * of the way down a rail whose only colliding pin was at the very top.
+ */
+export function countBadgeTop(pinFracs: readonly number[], railHeight: number): number | null {
+  if (railHeight <= 0 || pinFracs.length === 0) return null
+  const boxes = pinFracs.map((frac) => {
+    const centre = RAIL_INSET + frac * (railHeight - 2 * RAIL_INSET)
+    return { top: centre - PIN_HALF_H, bottom: centre + PIN_HALF_H }
+  })
+  let top = COUNT_TOP
+  // Bounded by the pin count: each pass clears at least one box, and a pass
+  // that clears none stops.
+  for (let i = 0; i <= boxes.length; i++) {
+    const hit = boxes.find((b) => b.bottom > top && b.top < top + COUNT_H)
+    if (!hit) break
+    top = hit.bottom + COUNT_GAP
+  }
+  return top === COUNT_TOP ? null : top
+}
