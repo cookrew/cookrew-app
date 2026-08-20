@@ -30,8 +30,10 @@ const source = readFileSync(
   'utf8'
 )
 
-/** The renderer's arithmetic, transcribed. Kept beside the source assertion so
- *  the two cannot drift apart silently. */
+/** The renderer's FORMER arithmetic, kept as the reference the shared function
+ *  must still match. It is no longer a transcription of live code — it is the
+ *  behaviour the rail had when the gates were green, held here so that removing
+ *  the duplication cannot quietly change what the rail draws. */
 function rendererTickFraction(afterIndex: number, rows: readonly RailRow[]): number | null {
   const at = rows.findIndex((r) => r.index === afterIndex)
   if (at < 0) return null
@@ -39,17 +41,25 @@ function rendererTickFraction(afterIndex: number, rows: readonly RailRow[]): num
 }
 
 describe('MED-2 — the rail tick and traceFraction are one formula', () => {
-  it('the renderer still computes (at + 1) / rows.length', () => {
-    // Whitespace-insensitive so formatting alone cannot fail it.
+  /*
+   * THE DUPLICATION IS GONE, so the two assertions that guarded it are gone
+   * with it. They required the renderer to CONTAIN `(at + 1) / rows.length`
+   * and `if (at < 0) return null`; the rail now calls traceFraction and holds
+   * neither string, which is the outcome this guard was written to wait for.
+   *
+   * What replaces them is deliberately smaller. Tinker's own note on my slice
+   * applies here: a source-text regex is a PROXY for behaviour, and the moment
+   * the behaviour has a real home — one shared function with an equivalence
+   * table under it, and a rendered probe over it — the proxy should shrink to
+   * the one thing source text can honestly assert, which is that the call site
+   * exists at all. Everything about what it COMPUTES is checked below against
+   * the function, and what it DRAWS is checked by the reference rig
+   * (scratchpad/f6-reference) against the rendered rail.
+   */
+  it('the renderer calls the shared anchor instead of keeping a copy', () => {
     const normalised = source.replace(/\s+/g, ' ')
-    expect(normalised).toContain('const frac = (at + 1) / rows.length')
-  })
-
-  it('the renderer still OMITS a checkpoint that is not drawn', () => {
-    const normalised = source.replace(/\s+/g, ' ')
-    // Clamping instead of omitting is the specific regression R8 forbids: a
-    // marker placed on an end of the bar it has no claim to.
-    expect(normalised).toContain('if (at < 0) return null')
+    expect(normalised).toContain('traceFraction(m.afterIndex, rows)')
+    expect(normalised).not.toContain('const frac = (at + 1) / rows.length')
   })
 
   it('agrees with traceFraction on a contiguous ledger', () => {
