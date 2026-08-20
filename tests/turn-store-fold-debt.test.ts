@@ -63,13 +63,38 @@ beforeEach(() => {
   annDir = path.join(root, 'checkpoint-annotations')
   quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
 })
-afterEach(() => {
+afterEach(async () => {
   fault.failDir = null
-  quiet.mockRestore()
+  // Disarm before the directory goes: a test that ends mid-escalation leaves an
+  // armed retry behind, and an unref'd timer still fires. It then fsyncs a path
+  // rmSync has just deleted and prints PERSISTENT STORAGE FAULT into whatever
+  // test is running by then — `quiet` is already restored, so it lands on the
+  // real console and reads like a failure somewhere else entirely.
+  for (const store of stores.splice(0)) {
+    const internals = store as unknown as Internals
+    for (const timer of internals.debtTimers.values()) clearTimeout(timer)
+    internals.debtTimers.clear()
+    internals.dirDebt.clear()
+  }
+  // Restore the spy AFTER the directory is gone, and only once the loop has
+  // turned. Disarming above cannot catch a retry already in flight — its fsync
+  // is mid-await on the threadpool — and that attempt lands after rmSync, on a
+  // path that no longer exists. Restoring first would put its PERSISTENT
+  // STORAGE FAULT on the real console, attributed to whatever test is running
+  // by then. One macrotask is enough for the in-flight rejection to unwind.
   rmSync(root, { recursive: true, force: true })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  quiet.mockRestore()
 })
 
-const reopen = (): TurnStore => new TurnStore(dir, annDir)
+/** Every store built by a test, so afterEach can disarm their retries. */
+const stores: TurnStore[] = []
+
+const reopen = (): TurnStore => {
+  const store = new TurnStore(dir, annDir)
+  stores.push(store)
+  return store
+}
 const file = (id = 't1'): string => path.join(dir, `${id}.jsonl`)
 
 const rec = (index: number, reply: string): TurnRecord => ({
@@ -118,13 +143,18 @@ async function foldIntoDebt(store: TurnStore): Promise<Internals> {
   return internals
 }
 
-const until = async (deadlineMs: number, done: () => boolean): Promise<void> => {
+/**
+ * Poll until `done` holds. `what` names the condition: a timeout here reports
+ * which wait expired, not just that one did — "condition never held" made three
+ * different failures indistinguishable in CI output.
+ */
+const until = async (deadlineMs: number, what: string, done: () => boolean): Promise<void> => {
   const deadline = Date.now() + deadlineMs
   while (Date.now() < deadline) {
     if (done()) return
     await new Promise((resolve) => setTimeout(resolve, 25))
   }
-  throw new Error('condition never held')
+  throw new Error(`never held within ${deadlineMs}ms: ${what}`)
 }
 
 describe('fold rename → dir-fsync failure → debt-only retry (Sol r10)', () => {
@@ -137,7 +167,7 @@ describe('fold rename → dir-fsync failure → debt-only retry (Sol r10)', () =
     // The storage recovers; nothing else touches the store. The unref'd
     // backoff timer (base 500ms) must land the fsync by itself.
     fault.failDir = null
-    await until(5_000, () => !internals.dirDebt.has('t1'))
+    await until(5_000, 'the debt-only retry settles the fsync', () => !internals.dirDebt.has('t1'))
     expect(internals.debtTimers.size).toBe(0)
   })
 
@@ -148,12 +178,21 @@ describe('fold rename → dir-fsync failure → debt-only retry (Sol r10)', () =
 
     // The fault stands: the first retry is already a repeat on this
     // directory, and the shared escalation must say so out loud.
-    await until(5_000, () =>
+    await until(5_000, 'a repeat failure escalates to PERSISTENT STORAGE FAULT', () =>
       quiet.mock.calls.some((args) => String(args[0]).includes('PERSISTENT STORAGE FAULT'))
     )
     expect(internals.dirDebt.has('t1')).toBe(true)
     // Still armed: the debt keeps retrying until the fsync lands or quit.
-    expect(internals.debtTimers.size).toBe(1)
+    //
+    // Waited for, not asserted on the spot. The escalation is logged INSIDE
+    // fsyncDirAsync just before it throws, while the re-arm happens after that
+    // rejection unwinds through retryDirDebt's catch — with an `await
+    // handle.close()` in between. So there is a real window where the fired
+    // timer has been dropped and its replacement not yet set, and the poll
+    // above can land in it. Asserting `size === 1` at that instant read as
+    // "the retry was never re-armed"; the debt was never at risk. Under load
+    // the window widens, which is why this only ever failed in a full run.
+    await until(5_000, 'the retry re-arms after the escalated failure', () => internals.debtTimers.size === 1)
   })
 
   it('flushAll settles outstanding debt at quit — the last chance to prove the rename', async () => {
