@@ -71,13 +71,18 @@ describe('verifyPreset — the client checks signature AND hashes for itself', (
     expect(v.reason).toBe('hash_mismatch')
   })
 
-  it('rejects a manifest signed by someone else', () => {
+  it('rejects a manifest signed by someone else — and R20 names WHICH someone else', () => {
+    // Refused either way. The reason changed with R20: a sound manifest under a
+    // key we did not pin is a ROTATION, which has a forward action, rather than
+    // an accusation of tampering. The forgery case — a key swap that does not
+    // verify under its own key — still lands on signature_invalid, and is
+    // pinned in tests/preset-rotation.test.ts.
     const p = publish()
     const other = generateKeyPairSync('ed25519')
     const v = verifyPreset({ ...p, publicKey: other.publicKey })
     expect(v.ok).toBe(false)
     if (v.ok) return
-    expect(v.reason).toBe('signature_invalid')
+    expect(v.reason).toBe('author_key_changed')
   })
 
   it('rejects an unsigned manifest rather than treating it as merely unverified', () => {

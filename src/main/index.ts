@@ -2610,6 +2610,31 @@ function registerIpc(handlers: RestoreHandlers): void {
    * and not to a workspace.
    */
   ipcMain.handle('pins:list', (_e, terminalId: string) => pinStore.list(terminalId))
+  /**
+   * R20 — the buyer's two answers to a key rotation.
+   *
+   * `seen` retires the SHEET and nothing else: the rotation itself stays, so
+   * the chip keeps saying KEY CHANGED until it is resolved. Once as a sheet,
+   * never once as a fact.
+   *
+   * `trust` moves the pin forward — and it can only ever confirm the rotation
+   * the client itself recorded. The key is checked against what is on disk
+   * rather than taken from the renderer, because a channel that accepted any
+   * key id would be a way to pin an attacker's key by IPC alone, which is
+   * precisely the decision the sheet exists to put in front of a person.
+   */
+  ipcMain.handle('preset:installed:rotation:seen', (_e, id: string) => {
+    if (!isPresetId(id)) throw new Error('not a preset id')
+    presetStore.markRotationSheetSeen(id)
+  })
+  ipcMain.handle('preset:installed:rotation:trust', (_e, id: string, newKeyId: string) => {
+    if (!isPresetId(id)) throw new Error('not a preset id')
+    const rotation = presetStore.rotationOf(id)
+    if (rotation === null || rotation.newKeyId !== newKeyId) {
+      throw new Error('no such rotation to trust')
+    }
+    presetStore.trustAuthorKey(id, newKeyId)
+  })
   ipcMain.handle('preset:installed:uninstall', (_e, id: string) => {
     // C1: the id crosses from the renderer and ends at a recursive delete.
     // The store validates it too; this refuses at the boundary so a hostile

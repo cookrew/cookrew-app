@@ -81,6 +81,18 @@ export interface CookrewApi {
   /** Remove a preset from the dock. Placed agents are untouched (A2). */
   uninstallPreset: (id: string) => Promise<void>;
   /**
+   * R20: the rotation sheet has been shown. Retires the SHEET only — the chip
+   * keeps its KEY CHANGED badge until the buyer trusts the new key or removes
+   * the preset, because a rotation announced once and then forgotten leaves a
+   * preset silently un-updatable.
+   */
+  markPresetRotationSeen: (id: string) => Promise<void>;
+  /**
+   * R20's one forward action. `newKeyId` must be the key main itself recorded
+   * as refused; main re-checks it rather than trusting what the sheet passes.
+   */
+  trustPresetAuthorKey: (id: string, newKeyId: string) => Promise<void>;
+  /**
    * Version pins for a terminal (§10) — the rail's third marker class. Asked
    * per terminal because a pin belongs to a transcript, not to a workspace.
    */

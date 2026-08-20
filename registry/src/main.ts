@@ -13,7 +13,7 @@
 //   GET  /v1/presets/:id/manifest    the gate
 //   HEAD /v1/presets/:id/manifest    update check, x-cookrew-preset-version (R3)
 //   GET  /v1/blobs/:address          immutable content
-//   GET  /v1/log?from=               transparency log, replayable
+//   GET  /v1/log?from=&preset=       transparency log, replayable; preset narrows it (R20)
 //   POST /v1/identity/register       enrol a credential (TOFU)
 //   POST /v1/identity/assert         verify a ceremony, mint a short-lived token
 import { generateKeyPairSync } from 'node:crypto'

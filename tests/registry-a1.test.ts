@@ -385,6 +385,34 @@ describe('registry server — public serving', () => {
     }
   })
 
+  it('narrows the log to one preset, keeping the real seq so it still chains (R20 evidence link)', async () => {
+    // The rotation sheet's "view in the transparency log" lands here. A link to
+    // the whole chain would be honest and useless; a narrowed view that
+    // renumbered its records would be worse than useless, because it could not
+    // be checked against the full one.
+    const shared = { version: 1, authorKeyId: 'ed25519:k', identityId: 'webauthn:i' } as const
+    log.append({ at: 1, kind: 'publish', presetId: 'sha256:a', ...shared })
+    log.append({ at: 2, kind: 'publish', presetId: 'sha256:b', ...shared })
+    log.append({ at: 3, kind: 'key-rotation', presetId: 'sha256:a', ...shared })
+    const s = await listen()
+    try {
+      const body = (await (await fetch(`${s.url}/v1/log?preset=sha256%3Aa`)).json()) as {
+        records: LogRecord[]
+      }
+      expect(body.records.map((r) => r.seq)).toEqual([1, 3])
+      expect(body.records.every((r) => r.presetId === 'sha256:a')).toBe(true)
+      const full = (await (await fetch(`${s.url}/v1/log`)).json()) as { records: LogRecord[] }
+      expect(verifyChain(full.records)).toBeNull()
+      // An unknown preset is an empty view, never every record.
+      const none = (await (await fetch(`${s.url}/v1/log?preset=sha256%3Azz`)).json()) as {
+        records: LogRecord[]
+      }
+      expect(none.records).toEqual([])
+    } finally {
+      s.close()
+    }
+  })
+
   it('404s an unknown route rather than guessing', async () => {
     const s = await listen()
     try {

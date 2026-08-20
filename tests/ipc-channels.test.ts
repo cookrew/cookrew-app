@@ -85,7 +85,11 @@ describe('the harness and marketplace preset lists stay separate channels', () =
     for (const channel of [
       'preset:installed:list',
       'preset:installed:place',
-      'preset:installed:uninstall'
+      'preset:installed:uninstall',
+      // R20's two decisions, deliberately separate: reading the rotation sheet
+      // is not accepting the key it describes.
+      'preset:installed:rotation:seen',
+      'preset:installed:rotation:trust'
     ]) {
       expect(handled()).toContain(channel)
     }

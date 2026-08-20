@@ -201,6 +201,10 @@ export function createRemoteApi(): CookrewApi {
     listInstalledPresets: () => Promise.resolve([]),
     placeInstalledPreset: () => Promise.resolve(),
     uninstallPreset: () => Promise.resolve(),
+    // Trusting a signing key is a decision about the machine that holds the
+    // store, so the phone does not get to make it either.
+    markPresetRotationSeen: () => Promise.resolve(),
+    trustPresetAuthorKey: () => Promise.resolve(),
     listPins: () => Promise.resolve([]),
     // apiPath, not a bare path: step 3 scopes the phone client's routes to the
     // workspace it is for, and a pin belongs to a transcript inside one.

@@ -203,6 +203,8 @@ export function createDemoApi(): CookrewApi {
     listInstalledPresets: () => Promise.resolve([]),
     placeInstalledPreset: () => Promise.resolve(),
     uninstallPreset: () => Promise.resolve(),
+    markPresetRotationSeen: () => Promise.resolve(),
+    trustPresetAuthorKey: () => Promise.resolve(),
     listPins: () => Promise.resolve([]),
     listPresets: () =>
       Promise.resolve([

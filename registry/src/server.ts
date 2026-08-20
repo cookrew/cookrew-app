@@ -213,7 +213,7 @@ export function createRegistry(deps: RegistryDeps): Server {
           'GET /v1/presets/:id/manifest',
           'HEAD /v1/presets/:id/manifest',
           'GET /v1/blobs/:address',
-          'GET /v1/log?from=',
+          'GET /v1/log?from=&preset=',
           'POST /v1/identity/register',
           'POST /v1/identity/assert',
           ...(deps.dev === true ? ['GET /v1/dev/identities', 'DELETE /v1/dev/identities'] : [])
@@ -245,10 +245,19 @@ export function createRegistry(deps: RegistryDeps): Server {
       return
     }
 
-    // GET /v1/log?from=
+    // GET /v1/log?from=&preset=
     if (method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'log') {
       const from = Number(url.searchParams.get('from') ?? '1')
-      json(response, 200, { records: log.from(Number.isFinite(from) ? from : 1) })
+      const records = log.from(Number.isFinite(from) ? from : 1)
+      // `preset` narrows the chain to one preset's records. R20's rotation
+      // sheet links here — "view in the transparency log" has to land on
+      // something a person can read, and the whole chain is not that. The
+      // records keep their real seq and prev, so a narrowed view is still
+      // checkable against a full one rather than a different story.
+      const preset = url.searchParams.get('preset')
+      json(response, 200, {
+        records: preset === null ? records : records.filter((r) => r.presetId === preset)
+      })
       return
     }
 

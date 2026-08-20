@@ -21,6 +21,12 @@ const api = {
   placeInstalledPreset: (id: string, position: unknown, orch: boolean) =>
     ipcRenderer.invoke('preset:installed:place', id, position, orch),
   uninstallPreset: (id: string) => ipcRenderer.invoke('preset:installed:uninstall', id),
+  // R20: dismissing the rotation sheet and accepting the new key are two
+  // different decisions, so they are two channels. Collapsing them would make
+  // "I have read this" mean "I trust this".
+  markPresetRotationSeen: (id: string) => ipcRenderer.invoke('preset:installed:rotation:seen', id),
+  trustPresetAuthorKey: (id: string, newKeyId: string) =>
+    ipcRenderer.invoke('preset:installed:rotation:trust', id, newKeyId),
   listPins: (terminalId: string) => ipcRenderer.invoke('pins:list', terminalId),
 
   listWorkspaces: () => ipcRenderer.invoke('workspace:list'),
