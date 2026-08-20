@@ -54,6 +54,7 @@ import {
   BrowserTab,
   browserTabs,
   CanvasNode,
+  CanvasPosition,
   DEFAULT_TERMINAL_SIZE,
   TeamClipStatus,
   TeamCopyResult,
@@ -98,7 +99,9 @@ import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 import { TraceReader, type SessionWatchSpec } from './trace'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
-import { TeamStore, copyTeam, forkTeam, workspaceFromTemplate } from './teams'
+import { TeamStore, copyTeam, forkTeam, workspaceFromTemplate, type TeamSnapshot } from './teams'
+import { PresetStore, isPresetId } from './preset-store'
+import { planPresetImport } from './preset-import'
 import { TeamClipboard } from './team-clip'
 import { UNCOPYABLE_PHASES } from '../shared/turn'
 import { GitInfoCache, addWorktree } from './git'
@@ -110,6 +113,8 @@ import { defaultAttachmentsDir, saveAttachment } from './attachments'
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const store = new WorkspaceStore()
+/** Installed marketplace presets — the dock's third chip family (§8). */
+const presetStore = new PresetStore()
 const ptys = new PtyManager()
 // Liveness covers EXISTENCE, not attachment: every terminal node — including
 // inactive-workspace agents this process never spawns an attach for — pins
@@ -2329,6 +2334,72 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('preset:list', () => PRESETS)
 
   ipcMain.handle('terminal:create', (_e, opts: CreateTerminalOpts) => createTerminal(opts))
+
+  // ---- marketplace presets (§8): the dock's third chip family ----
+  // `preset:*` was already taken by the HARNESS presets above. These are a
+  // different list with a different shape, so they get their own namespace —
+  // reusing the channel threw on registration (Electron refuses a second
+  // handler) and took every handler after it down with it.
+  ipcMain.handle('preset:installed:list', () => presetStore.list())
+  ipcMain.handle('preset:installed:uninstall', (_e, id: string) => {
+    // C1: the id crosses from the renderer and ends at a recursive delete.
+    // The store validates it too; this refuses at the boundary so a hostile
+    // string never reaches a filesystem call in the first place.
+    if (!isPresetId(id)) throw new Error('not a preset id')
+    presetStore.uninstall(id)
+  })
+  /**
+   * R2: the canvas click is the aimed confirm, so this both aims and commits.
+   *
+   * Both kinds place through the ordinary node-add path. A team used to be
+   * handed to copyTeam, which is workspace-to-workspace and validates
+   * nodeIds + intoWorkspaceId — so it threw on its first guard EVERY time, and
+   * an `as never` on the argument is what let that compile. Adding the planned
+   * nodes directly is also the only way `command` and `cwd` survive; forwarding
+   * {name, preset, position, orch} to createTerminal dropped both and fell back
+   * to a built-in preset whenever the name was not one of them.
+   */
+  ipcMain.handle(
+    'preset:installed:place',
+    async (_e, id: string, position: CanvasPosition, orch: boolean) => {
+      if (!isPresetId(id)) throw new Error('not a preset id')
+      // N4: THE GATE IS ENFORCED HERE, not in the renderer. The chip's click
+      // handler declining to place a locked preset is presentation; the channel
+      // is reachable without it, so a locked preset was placeable by anyone who
+      // could call the IPC. Refuse where the decision is authoritative.
+      if (presetStore.list().find((p) => p.id === id)?.entitled === false) {
+        throw new Error('preset is not entitled')
+      }
+      const stored = presetStore.read(id)
+      // Null covers absent, a blob that no longer matches its manifest, and a
+      // signature that does not verify against the key pinned at install.
+      if (stored === null) throw new Error('preset is missing or failed verification')
+      const snapshot = JSON.parse(stored.teamBytes.toString('utf8')) as TeamSnapshot
+      const plan = planPresetImport(snapshot, {
+        dirs: store.state.dirs?.length ? store.state.dirs : [store.state.dir],
+        cutAt: Date.now(),
+        position,
+        manifestId: stored.manifest.id
+      })
+      const placed = plan.nodes.map((node) =>
+        // orch is the placer's choice for the agents being placed; notes and
+        // browsers have no such flag.
+        node.kind === 'terminal' ? ({ ...node, orch } as CanvasNode) : node
+      )
+      if (plan.kind === 'single') {
+        addNode(placed[0])
+        return
+      }
+      // N2: ONE write and ONE broadcast for a team. The add-then-connect loop
+      // cost a disk write and a state broadcast per node AND per cable — seven
+      // of each for a four-node preset — and left the canvas legible in
+      // between, so a paste arrived as a stutter of half-teams. This lands the
+      // whole team in a single patch; adoptLiveNode still runs per node
+      // afterwards, because spawning a PTY is inherently per-terminal.
+      const added = store.appendTeamToWorkspace(store.activeId, placed, plan.connections)
+      for (const node of added) adoptLiveNode(node)
+    }
+  )
 
   // Team fork / team save / roles (contract in note team-fork-roles-spec-v1).
   ipcMain.handle('team:fork', (_e, spec: TeamForkSpec) => teamFork(spec))

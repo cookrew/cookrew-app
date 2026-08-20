@@ -1,0 +1,75 @@
+{
+  "_": "STUB FIXTURE — marketplace dock chips (§8, rulings R2/R3). Real shape, invented data. Magpie drives the chip place/paste gate from `installed`; Fresco designs the badge states against `chips`. Tripwire: tests/preset-chip-fixture.test.ts re-derives `chips` and `actions` from src/shared/preset-chip.ts and fails if they drift.",
+
+  "installed": [
+    {
+      "_": "Owned single agent, current. The plain case: click arms placement.",
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+      "name": "Deep Research",
+      "version": 2,
+      "members": ["Claude Code"],
+      "entitled": true,
+      "headVersion": 2
+    },
+    {
+      "_": "Owned team of three — the stacked chip. R2: still one click, no dialog before a team paste.",
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+      "name": "Ship Crew",
+      "version": 4,
+      "members": ["Claude Code", "Codex", "Shell"],
+      "entitled": true,
+      "headVersion": 4
+    },
+    {
+      "_": "Owned, registry ahead — update badge. Placing still works; the update is an offer.",
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000003",
+      "name": "Audit Pack",
+      "version": 2,
+      "members": ["Codex"],
+      "entitled": true,
+      "headVersion": 3
+    },
+    {
+      "_": "Gated — lock badge. The chip is the gate's UI: it stays clickable and opens the sheet.",
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000004",
+      "name": "Pro Toolkit",
+      "version": 1,
+      "members": ["Claude Code", "Shell"],
+      "entitled": false,
+      "headVersion": 1
+    },
+    {
+      "_": "Gated AND behind. The lock outranks the update — v2-available on something you cannot run reads as a bug.",
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000005",
+      "name": "Locked Legacy",
+      "version": 1,
+      "members": ["Pi"],
+      "entitled": false,
+      "headVersion": 2
+    },
+    {
+      "_": "Not yet checked this dock-open (R3): no headVersion, so it is in the HEAD batch and wears no badge yet.",
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000006",
+      "name": "Fresh Install",
+      "version": 1,
+      "members": ["OpenCode"],
+      "entitled": true
+    }
+  ],
+
+  "chips": [
+    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000001", "label": "Deep Research", "kind": "single", "sprites": ["Claude Code"], "badge": "none" },
+    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000002", "label": "Ship Crew", "kind": "team", "sprites": ["Claude Code", "Codex", "Shell"], "badge": "none" },
+    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000003", "label": "Audit Pack", "kind": "single", "sprites": ["Codex"], "badge": "update", "headVersion": 3 },
+    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000004", "label": "Pro Toolkit", "kind": "team", "sprites": ["Claude Code", "Shell"], "badge": "lock" },
+    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000005", "label": "Locked Legacy", "kind": "single", "sprites": ["Pi"], "badge": "lock" },
+    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000006", "label": "Fresh Install", "kind": "single", "sprites": ["OpenCode"], "badge": "none" }
+  ],
+
+  "actions": ["place", "place", "place", "gate", "gate", "place"],
+
+  "updateCheckOnOpen": {
+    "_": "R3: the ids the dock HEADs when the terminal chip row opens — only the ones not yet answered, so re-rendering does not re-ask.",
+    "ids": ["sha256:0000000000000000000000000000000000000000000000000000000000000006"]
+  }
+}

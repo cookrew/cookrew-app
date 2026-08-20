@@ -1,0 +1,58 @@
+{
+  "_": "STUB FIXTURE — install review sheet payload (marketplace §5/§8, ruling R14). Real shape, invented data. Magpie builds gate fixtures from this; Velvet/Fresco build the sheet against it. Every value is a spec token, a count, a boolean or verbatim user content — there is no prose here on purpose, the UI owns wording. Tripwire: tests/review-sheet-fixture.test.ts rebuilds these from a real publish+verify and fails if the shape drifts.",
+
+  "clean": {
+    "_": "A free, single-agent preset with nothing alarming in it.",
+    "schema": "cookrew.preset/1",
+    "id": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+    "version": 2,
+    "author": { "keyId": "ed25519:PLACEHOLDER_AUTHOR_KEY", "handle": "drej" },
+    "scrub": {
+      "sessions": false,
+      "paths": "placeholders",
+      "commands": 0,
+      "notes": 1,
+      "urls": 0,
+      "secretScan": "clean",
+      "findings": []
+    },
+    "_free": "FREE is spelled by the ABSENCE of the pricing key — never null. A renderer testing `pricing === undefined` and one testing `'pricing' in payload` must agree.",
+    "commands": []
+  },
+
+  "shellsAndSessions": {
+    "_": "The two states the sheet must make loud: shell cards that will run, and a preset that carries the author's conversation. sessions:true is opt-in per R6, so it is a legitimate state the buyer must see, not an error.",
+    "schema": "cookrew.preset/1",
+    "id": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+    "version": 7,
+    "author": { "keyId": "ed25519:PLACEHOLDER_AUTHOR_KEY", "handle": "drej" },
+    "scrub": {
+      "sessions": true,
+      "paths": "placeholders",
+      "commands": 2,
+      "notes": 3,
+      "urls": 1,
+      "secretScan": "clean",
+      "findings": []
+    },
+    "commands": ["rm -rf ./build", "make deploy"],
+    "pricing": { "model": "one-time", "amount": "5.00", "asset": "USDC" }
+  },
+
+  "verifyFailures": {
+    "_": "Tokens the install path can refuse with. The sheet never renders for these — they are the refusal states. Magpie asserts one UI branch per token.",
+    "reasons": [
+      "schema_unsupported",
+      "unsigned",
+      "signature_invalid",
+      "hash_mismatch",
+      "malformed_team",
+      "report_mismatch"
+    ]
+  },
+
+  "forbiddenReasons": {
+    "_": "The 403 vocabulary verbatim (§2 + R11). These are gate answers, not verification failures — different surface, different sheet.",
+    "reasons": ["revoked", "refunded", "seat_limit", "version_gate", "region", "balance_empty"]
+  }
+}

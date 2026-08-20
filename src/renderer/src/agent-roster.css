@@ -1007,6 +1007,73 @@
   vertical-align: -2px;
 }
 
+/* ==== marketplace preset chips — the THIRD family (§8, Forge structural) ====
+   Same chip grammar as the two groups above, one step up the persona accent:
+   roles are violet, bought presets are --violet-hi, so the row reads as
+   related-but-not-the-same at a glance. Structure only — Fresco owns the
+   finish. */
+
+.cr-dock-presets .preset-chip {
+  border-color: var(--violet-hi);
+  gap: 4px;
+}
+
+.cr-dock-presets .preset-chip.amber {
+  background: var(--violet-hi);
+  color: var(--ink);
+}
+
+/* A team wears its members as an overlapping STACK — the one visual difference
+   between a single-agent chip and a team chip, so the buyer can tell what a
+   click is about to place before it places it. */
+.preset-chip-sprites {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: -2px;
+}
+
+.preset-chip-sprites.stacked > * + * {
+  margin-left: -5px;
+}
+
+/* The lock is NOT a disabled state: a gated chip is the gate's own UI and stays
+   clickable, so it keeps full contrast and only the badge says why. */
+.preset-chip .preset-chip-badge {
+  margin-left: 2px;
+  flex: 0 0 auto;
+}
+
+.preset-chip .preset-chip-badge.lock {
+  width: 11px;
+  height: 11px;
+  vertical-align: -1px;
+}
+
+/* N4: the locked chip's own answer until the gate sheet exists. A refusal the
+   user cannot see is indistinguishable from a broken chip, so the word appears
+   in the chip itself and fades on its own. */
+.preset-chip .preset-chip-gate-note {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--amber-deep);
+  margin-left: 4px;
+}
+
+.preset-chip.gate-denied {
+  border-color: var(--amber-deep);
+}
+
+/* An update is an offer, not a warning — a dot, not a glyph, so it never
+   competes with the lock for attention. */
+.preset-chip .preset-chip-badge.update {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber-deep);
+  display: inline-block;
+}
+
 /* From-team-template list inside the workspace-create form. */
 .cr-ws-template {
   display: flex;
