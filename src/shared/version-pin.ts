@@ -98,6 +98,30 @@ export function pinFraction(atIndex: number, rows: readonly RailRow[]): number |
  * The pins a rail should draw, ordered by version. A pin whose checkpoint is
  * not drawn is dropped, never guessed onto the rail.
  */
+/**
+ * A trace boundary's position: the edge BELOW the checkpoint it follows.
+ *
+ * `afterIndex` names the checkpoint a compact / clear / rewind came after, so
+ * the marker belongs between that row and the next — not on it. R17 unified
+ * every class onto `pinFraction` and in doing so collapsed two genuinely
+ * different anchors into one, which drew every boundary a row early: a compact
+ * marker appeared to end the turn ABOVE the one it actually ended.
+ *
+ * The `+ 1` is also what restores the end of the transcript. A boundary after
+ * the last row is the bottom of the rail, and this yields exactly 1 for it —
+ * where the row's own slot gives (n−1)/n and leaves the end marker floating one
+ * row short. The rail's original formula (afterIndex / lastIndex) landed on 1
+ * for that case; this is the render-space equivalent, not a new rule.
+ *
+ * Null when the checkpoint is not drawn — omitted, never guessed (R17).
+ */
+export function traceFraction(afterIndex: number, rows: readonly RailRow[]): number | null {
+  if (rows.length === 0) return null
+  const at = rows.findIndex((r) => r.index === afterIndex)
+  if (at < 0) return null
+  return (at + 1) / rows.length
+}
+
 export function pinAnchors(
   records: readonly VersionPinRecord[],
   rows: readonly RailRow[]
@@ -235,11 +259,16 @@ export interface RailMarkerInput {
 }
 
 /**
- * Every marker the rail draws, in one ordered list, ALL THREE CLASSES IN ONE
- * SPACE — render position. That is the R17 fix at its widest: the drift Fresco
- * found existed because turn rows and trace markers were placed by two
- * different formulas, so this places them by one, and pins join it rather than
- * adding a third.
+ * Every marker the rail draws, in one ordered list and ONE SPACE — render
+ * position (R17). Turn rows and pins anchor ON a row, because each names a
+ * checkpoint; trace boundaries anchor at the edge BELOW their row, because
+ * `afterIndex` names what they come after.
+ *
+ * One space, two anchors — that distinction is the correction to R17, which
+ * flattened both onto the row slot and so drew every boundary a row early with
+ * the end-of-transcript marker short of the end. Sharing a coordinate space is
+ * what makes the rail comparable; it does not make a boundary the same thing as
+ * a row.
  *
  * A marker whose checkpoint is not among the drawn rows is dropped — it has no
  * row to land on, and inventing a position for it is the exact failure the
@@ -253,7 +282,7 @@ export function railMarkers(input: RailMarkerInput): RailMarker[] {
     out.push({ class: 'turn', frac: at / rows.length, index: row.index })
   })
   for (const m of input.traceMarkers) {
-    const frac = pinFraction(m.afterIndex, rows)
+    const frac = traceFraction(m.afterIndex, rows)
     if (frac === null) continue
     out.push({ class: 'trace', frac, kind: m.kind, afterIndex: m.afterIndex })
   }
