@@ -139,8 +139,6 @@ describe('nodeInScope', () => {
 describe('scopedRouteSupported — fail closed (review C2)', () => {
   it('allows the routes actually threaded through the scope', () => {
     for (const p of [
-      '/',
-      '/index.html',
       '/api/state',
       '/api/terminal/t1/output',
       '/api/terminal/t1/input',
@@ -197,5 +195,22 @@ describe('nodeIdOfRoute — one check for every scoped node route', () => {
     // And the scoped variant that IS allowed still gets its node checked.
     expect(nodeIdOfRoute('/api/terminal/other-ws-terminal/input')).toBe('other-ws-terminal')
     expect(nodeInScope('ws-play', 'ws-dev')).toBe(false)
+  })
+})
+
+describe('the renderer index is NOT scope-aware (re-review N1)', () => {
+  it('refuses a bare /<slug> and the index', () => {
+    // The bundled client issues root-absolute /api/... requests, so serving it
+    // at /<slug> renders the FOCUSED canvas under a URL naming a different
+    // workspace. Threading the slug to the client (window.COOKREW_SLUG through
+    // REMOTE_BOOT, remote-api.ts prefixing) is what unlocks these; until then
+    // a refusal beats a canvas that looks right and is not.
+    expect(scopedRouteSupported('/')).toBe(false)
+    expect(scopedRouteSupported('/index.html')).toBe(false)
+  })
+
+  it('still allows the data routes a scoped client would call', () => {
+    expect(scopedRouteSupported('/api/state')).toBe(true)
+    expect(scopedRouteSupported('/api/terminal/t1/input')).toBe(true)
   })
 })

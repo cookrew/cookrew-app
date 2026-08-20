@@ -101,8 +101,13 @@ export function nodeInScope(
  * that looks right.
  */
 const SCOPE_AWARE: RegExp[] = [
-  /^\/$/,
-  /^\/index\.html$/,
+  // NOT the renderer index. The bundled client issues root-absolute /api/...
+  // requests, so serving it at /<slug> would render the FOCUSED canvas under a
+  // URL naming a different workspace — a wrong answer that looks right, which
+  // is the whole thing this allow-list exists to prevent. Serving the client
+  // per-slug needs the slug threaded to it (window.COOKREW_SLUG through
+  // REMOTE_BOOT, remote-api.ts prefixing every request); until then a bare
+  // /<slug> is refused rather than quietly lying.
   /^\/api\/state$/,
   /^\/api\/browser\/capabilities$/,
   /^\/api\/terminal\/[^/]+\/output$/,

@@ -671,8 +671,16 @@ async function handle(
   if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return
 
   if (request.method === 'GET' && url.pathname === '/api/state') {
+    // Activities are tracked globally by terminal id, so an unfiltered map
+    // leaks every OTHER workspace's agents into a scoped canvas — the node
+    // list is scoped but the activity map was not, which is the same
+    // wrong-answer-looks-right shape the scope check exists to stop.
+    const scopedNodeIds = new Set(scopedState().nodes.map((node) => node.id))
     const activities = Object.fromEntries(
-      deps.turns.list().map((activity) => [activity.terminalId, activity])
+      deps.turns
+        .list()
+        .filter((activity) => scope === null || scopedNodeIds.has(activity.terminalId))
+        .map((activity) => [activity.terminalId, activity])
     )
     // Git-enriched like /api/workspace (same coalescing cache), so the lite
     // client's git chips light up too — terminals carry node.git.

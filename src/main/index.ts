@@ -1248,15 +1248,20 @@ const sessions = new SessionRegistry<{ id: string }>({
   subscribers: (id) =>
     store.terminalIdsOf(id).reduce((n, tid) => n + sessionSync.subscriberCount(tid), 0),
   // Work in flight: a terminal mid-turn is work, whoever is looking.
-  inFlightWork: (id) => store.terminalIdsOf(id).filter(terminalIsWorking).length,
+  inFlightWork: (id) => store.terminalIdsOf(id).filter(terminalHasLiveWork).length,
   hydrate: (id) => ({ id }),
   release: (id) => {
-    // Order matters: stop watching before the PTYs go, so nothing re-arms a
-    // watch against a terminal that is being detached underneath it.
-    for (const tid of ptys.detachWorkspace(id)) {
+    // Order matters, and the comment used to lie about it: detachWorkspace
+    // RETURNS the ids, so releasing inside that loop stopped the watches
+    // AFTER the PTYs had already gone. The switch path has it right — release
+    // and untrack first, then detach — so a watch can never re-arm against a
+    // terminal being torn out from under it. Read the set, then tear down.
+    const held = store.terminalIdsOf(id)
+    for (const tid of held) {
       sessionSync.release(tid)
       turns.untrack(tid)
     }
+    ptys.detachWorkspace(id)
     store.releaseSession(id)
   },
   now: () => Date.now()
@@ -1578,6 +1583,26 @@ function carrySessionToPastedCard(from: TerminalNodeData, to: TerminalNodeData):
 function terminalIsWorking(id: string): boolean {
   const activity = turns.list().find((a) => a.terminalId === id)
   return activity !== undefined && UNCOPYABLE_PHASES.has(activity.phase)
+}
+
+/**
+ * Is there live work on this terminal — the LIVENESS question, which is not
+ * the clipboard's question.
+ *
+ * terminalIsWorking asks "would copying this corrupt it?", and answers yes for
+ * 'thinking' alone, because that is when the session file is being appended
+ * to. Liveness is broader: 'waiting' means the turn is NOT finished, and
+ * draining a session out from under a waiting agent would detach its PTY
+ * mid-turn. Anything that is not idle counts.
+ *
+ * An open dispatch counts even with no phase at all: a record is reserved
+ * before its prompt is submitted, so a workspace can hold commissioned work
+ * whose terminal has not started a turn yet.
+ */
+function terminalHasLiveWork(id: string): boolean {
+  if (dispatchService.hasOpenDispatch(id)) return true
+  const activity = turns.list().find((a) => a.terminalId === id)
+  return activity !== undefined && activity.phase !== 'idle'
 }
 
 const teamClipboard = new TeamClipboard({
