@@ -85,6 +85,11 @@ export function verifyPreset(input: VerifyInput): VerifyResult {
 
   const snapshot = parseSnapshot(teamBytes)
   if (snapshot === null) return { ok: false, reason: 'malformed_team' }
+  // N6: a preset that ships nothing is malformed, not merely empty. It would
+  // verify, install, draw a chip and place NOTHING — a dead click with no
+  // failure anywhere to explain it. Refusing at verify is the only place that
+  // can say why.
+  if (snapshot.nodes.length === 0) return { ok: false, reason: 'malformed_team' }
 
   const counted = countSurfaces(snapshot.nodes)
   if (

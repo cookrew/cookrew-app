@@ -107,6 +107,17 @@ describe('verifyPreset — the client checks signature AND hashes for itself', (
     expect(['hash_mismatch', 'malformed_team']).toContain(v.reason)
   })
 
+  it('N6: rejects a preset that ships NO nodes as malformed', () => {
+    // It would verify, install, draw a chip and place nothing — a dead click
+    // with no failure anywhere to explain it. Verify is the only place that can
+    // say why.
+    const p = publish([])
+    const v = verifyPreset(p)
+    expect(v.ok).toBe(false)
+    if (v.ok) return
+    expect(v.reason).toBe('malformed_team')
+  })
+
   it('catches a manifest whose signed report UNDERSTATES what the team carries', () => {
     // Both the report and the team hash are signed, so a mismatch is the author
     // lying in the sheet — the one attack a valid signature cannot rule out.

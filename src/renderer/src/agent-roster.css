@@ -1049,6 +1049,21 @@
   vertical-align: -1px;
 }
 
+/* N4: the locked chip's own answer until the gate sheet exists. A refusal the
+   user cannot see is indistinguishable from a broken chip, so the word appears
+   in the chip itself and fades on its own. */
+.preset-chip .preset-chip-gate-note {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--amber-deep);
+  margin-left: 4px;
+}
+
+.preset-chip.gate-denied {
+  border-color: var(--amber-deep);
+}
+
 /* An update is an offer, not a warning — a dot, not a glyph, so it never
    competes with the lock for attention. */
 .preset-chip .preset-chip-badge.update {

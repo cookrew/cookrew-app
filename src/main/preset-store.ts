@@ -80,12 +80,22 @@ export class PresetStore {
     mkdirSync(dir, { recursive: true })
     writeFileAtomic(path.join(dir, 'team.json'), preset.teamBytes)
     writeFileAtomic(path.join(dir, 'manifest.json'), JSON.stringify(preset.manifest, null, 2))
-    // H2: PIN THE AUTHOR KEY. Hash self-consistency proves only that a manifest
-    // agrees with the blob beside it — an attacker with write access to
-    // ~/.cookrew can tamper with both and re-sign under their own key, and a
-    // store that trusts disk accepts it. Recording the key the preset actually
-    // verified under at install time turns every later read into a real
-    // signature check against a key the attacker does not hold.
+    // H2: PIN THE AUTHOR KEY — and say exactly what that buys, because the
+    // first version of this comment claimed more.
+    //
+    // WHAT IT GUARANTEES: read() detects tampering that does NOT also rewrite
+    // author.pub. Hash self-consistency alone proves only that a manifest
+    // agrees with the blob beside it, which anyone who can write one file can
+    // manufacture; pinning turns that into a real signature check, so editing
+    // manifest.json or team.json in place is caught.
+    //
+    // WHAT IT DOES NOT: an attacker who can write this directory can rewrite
+    // author.pub too, and then the check verifies their content against their
+    // key and passes. Write access to ~/.cookrew is ownership of the home dir,
+    // and nothing stored beside the data can survive that — the fix is an OS
+    // boundary or a key the store does not hold, not another file here. Both
+    // accepted attacks are pinned as documented-limitation tests in
+    // tests/preset-security.test.ts so the boundary stays explicit.
     writeFileAtomic(path.join(dir, 'author.pub'), preset.manifest.author.keyId)
     // install.json holds LOCAL state about a preset rather than anything the
     // author signed — today just entitlement. It is a CACHE of the gate's last

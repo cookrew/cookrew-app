@@ -2363,6 +2363,13 @@ function registerIpc(handlers: RestoreHandlers): void {
     'preset:installed:place',
     async (_e, id: string, position: CanvasPosition, orch: boolean) => {
       if (!isPresetId(id)) throw new Error('not a preset id')
+      // N4: THE GATE IS ENFORCED HERE, not in the renderer. The chip's click
+      // handler declining to place a locked preset is presentation; the channel
+      // is reachable without it, so a locked preset was placeable by anyone who
+      // could call the IPC. Refuse where the decision is authoritative.
+      if (presetStore.list().find((p) => p.id === id)?.entitled === false) {
+        throw new Error('preset is not entitled')
+      }
       const stored = presetStore.read(id)
       // Null covers absent, a blob that no longer matches its manifest, and a
       // signature that does not verify against the key pinned at install.
@@ -2374,12 +2381,23 @@ function registerIpc(handlers: RestoreHandlers): void {
         position,
         manifestId: stored.manifest.id
       })
-      for (const node of plan.nodes) {
-        // orch is the placer's choice for the agents they are placing; notes
-        // and browsers have no such flag.
-        addNode(node.kind === 'terminal' ? { ...node, orch } : node)
+      const placed = plan.nodes.map((node) =>
+        // orch is the placer's choice for the agents being placed; notes and
+        // browsers have no such flag.
+        node.kind === 'terminal' ? ({ ...node, orch } as CanvasNode) : node
+      )
+      if (plan.kind === 'single') {
+        addNode(placed[0])
+        return
       }
-      for (const connection of plan.connections) store.connect(connection.a, connection.b)
+      // N2: ONE write and ONE broadcast for a team. The add-then-connect loop
+      // cost a disk write and a state broadcast per node AND per cable — seven
+      // of each for a four-node preset — and left the canvas legible in
+      // between, so a paste arrived as a stutter of half-teams. This lands the
+      // whole team in a single patch; adoptLiveNode still runs per node
+      // afterwards, because spawning a PTY is inherently per-terminal.
+      const added = store.appendTeamToWorkspace(store.activeId, placed, plan.connections)
+      for (const node of added) adoptLiveNode(node)
     }
   )
 

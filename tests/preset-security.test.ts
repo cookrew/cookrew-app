@@ -231,3 +231,48 @@ describe('H2 — the store re-verifies signatures; disk is not trusted', () => {
     expect(store.read(p.manifest.id)).toBeNull()
   })
 })
+
+/* ------------------------------------------------ H2 accepted limits ----- */
+
+/**
+ * N1. Pinning detects tampering that does not ALSO rewrite author.pub. These
+ * two attacks defeat it, they are accepted, and they are pinned here so the
+ * boundary is a decision on the record rather than a gap someone rediscovers.
+ *
+ * Both require write access to ~/.cookrew, which is ownership of the home
+ * directory: at that point the attacker can also replace the app binary. No
+ * file stored beside the data can survive an attacker who can write every file
+ * beside it — closing this needs an OS boundary or a key the store does not
+ * hold, and either is a different piece of work from M1.
+ *
+ * If one of these ever starts FAILING, the guarantee got stronger and this
+ * block should be re-read, not deleted.
+ */
+describe('H2 documented limitation — an attacker owning ~/.cookrew wins', () => {
+  it('ACCEPTED: rewriting author.pub alongside the manifest passes verification', () => {
+    const p = publish()
+    store.install(p)
+    const dir = path.join(base, 'presets', `sha256-${p.manifest.id.slice(7)}`)
+
+    const attacker = generateKeyPairSync('ed25519')
+    const forged = signManifest({ ...p.manifest, sig: undefined }, attacker.privateKey)
+    writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(forged, null, 2))
+    // The move the single-file check catches — done properly.
+    writeFileSync(path.join(dir, 'author.pub'), keyIdOf(attacker.publicKey))
+
+    expect(store.read(p.manifest.id)).not.toBeNull()
+  })
+
+  it('ACCEPTED: replacing the whole directory with a preset they signed passes', () => {
+    const mine = publish([terminal({ command: 'npm test' })])
+    store.install(mine)
+    // Same id (same team bytes), entirely their own manifest, key and content.
+    const theirs = publish([terminal({ command: 'npm test' })])
+    const dir = path.join(base, 'presets', `sha256-${mine.manifest.id.slice(7)}`)
+    writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(theirs.manifest, null, 2))
+    writeFileSync(path.join(dir, 'team.json'), theirs.teamBytes)
+    writeFileSync(path.join(dir, 'author.pub'), theirs.manifest.author.keyId)
+
+    expect(store.read(mine.manifest.id)).not.toBeNull()
+  })
+})

@@ -102,6 +102,27 @@ function terminalsOf(snapshot: TeamSnapshot): TerminalNodeData[] {
   return snapshot.nodes.filter((n): n is TerminalNodeData => n.kind === 'terminal')
 }
 
+/**
+ * DEFERRED — M2 + N3, one ticket because they are one missing piece.
+ *
+ * A preset published with includeSessions carries `turns` and a `sessions`
+ * sidecar reference, and neither survives an install: `blobs` only ever
+ * addresses team.json, so the sidecar reference dangles, and nothing here
+ * restores turn history onto the placed nodes. So a session-carrying preset
+ * currently installs as if it carried nothing.
+ *
+ * Not patched piecemeal on purpose. Adding the blob without the restore leaves
+ * dangling hashes inside a SIGNED manifest; adding the restore without the blob
+ * restores nothing. Both need real blob plumbing — publish writes the sidecar as
+ * an addressed blob, verify checks it, the store keeps it, and the planner
+ * rehydrates it through the same sidecar path copyTeam already uses.
+ *
+ * Until then the honest behaviour is what ships: the scrub report says
+ * `sessions: true` because the author opted in, and the buyer gets the cards
+ * without the conversation. That is visible on the review sheet rather than
+ * silent.
+ */
+
 /** Strip everything that bound a node to the AUTHOR's machine or session. */
 function unbind(node: CanvasNode, id: string): CanvasNode {
   if (node.kind !== 'terminal') return { ...node, id }

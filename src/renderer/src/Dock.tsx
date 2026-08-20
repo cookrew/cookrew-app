@@ -62,6 +62,8 @@ interface DockProps {
   onPresetChip?: (id: string) => void
   /** Locked chip: the chip is the gate's UI — open the 401/402/403 sheet. */
   onPresetGate?: (id: string) => void
+  /** Chip that just refused a click, so it can say so (N4). */
+  gatedPresetId?: string | null
   /** R3: ids whose version the dock should HEAD, emitted once on open. */
   onCheckUpdates?: (ids: string[]) => void
   /** Zoomed-in terminal: the dock swaps the tool group for its composer. */
@@ -106,6 +108,7 @@ export function Dock({
   presetId = null,
   onPresetChip,
   onPresetGate,
+  gatedPresetId = null,
   onCheckUpdates,
   voiceFor,
   browserFor,
@@ -197,7 +200,7 @@ export function Dock({
                 key={chip.id}
                 className={`cr-chip clickable preset-chip${presetId === chip.id ? ' amber' : ''}${
                   chip.badge === 'lock' ? ' locked' : ''
-                }`}
+                }${gatedPresetId === chip.id ? ' gate-denied' : ''}`}
                 title={
                   chip.badge === 'lock'
                     ? `${chip.label} — locked`
@@ -219,6 +222,13 @@ export function Dock({
                   ))}
                 </span>
                 {chip.label}
+                {/* The acknowledgement a locked click gets until the gate sheet
+                    exists. aria-live so it is announced, not just drawn. */}
+                {gatedPresetId === chip.id && (
+                  <span className="preset-chip-gate-note" role="status" aria-live="polite">
+                    LOCKED
+                  </span>
+                )}
                 {chip.badge === 'lock' && <CrIcon name="lock" className="preset-chip-badge lock" />}
                 {chip.badge === 'update' && <span className="preset-chip-badge update" />}
               </button>

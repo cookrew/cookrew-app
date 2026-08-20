@@ -161,9 +161,15 @@ function Canvas(): React.JSX.Element {
    * registry's work, and until they exist these are no-ops that change nothing
    * rather than log lines pretending to.
    */
-  const openPresetGate = useCallback((_id: string) => {
-    // 401/402/403 sheets land with the gate. A locked chip already refuses to
-    // place, which is the behaviour that matters before then.
+  /**
+   * N4: a locked chip must ACKNOWLEDGE the click. The 401/402/403 sheets land
+   * with the gate, but "nothing happens" is indistinguishable from a broken
+   * chip, so until then the chip answers for itself and says it is locked.
+   */
+  const [gatedId, setGatedId] = useState<string | null>(null)
+  const openPresetGate = useCallback((id: string) => {
+    setGatedId(id)
+    window.setTimeout(() => setGatedId((current) => (current === id ? null : current)), 2400)
   }, [])
   const checkPresetUpdates = useCallback((_ids: string[]) => {
     // A manifest HEAD by version (R3) needs a registry to ask.
@@ -1093,6 +1099,7 @@ function Canvas(): React.JSX.Element {
             setPresetId(id)
             setRole(null)
           }}
+          gatedPresetId={gatedId}
           onPresetGate={openPresetGate}
           onCheckUpdates={checkPresetUpdates}
           orch={orch}
