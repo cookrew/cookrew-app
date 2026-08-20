@@ -123,7 +123,7 @@ if (args.includes('--seed')) {
 // it follows the port rather than the DEV_CONFIG default.
 const identity = new IdentityService(DATA, { ...DEV_CONFIG, origin: `http://localhost:${PORT}` })
 
-createRegistry({ store, log, identity, authorize: makeAuthorize(store, identity) }).listen(PORT, () => {
+createRegistry({ store, log, identity, dev: true, authorize: makeAuthorize(store, identity) }).listen(PORT, () => {
   console.log(`registry on http://127.0.0.1:${PORT}  data=${DATA}`)
   for (const p of store.list()) {
     console.log(`  ${p.name.padEnd(16)} v${String(p.version).padEnd(3)} ${p.visibility.padEnd(11)} ${p.id}`)

@@ -139,6 +139,22 @@ export class IdentityService {
     return this.credentials.some((c) => c.credentialId === credentialId)
   }
 
+  /** Enrolled credential ids. For the dev harness only — see the dev routes. */
+  enrolled(): string[] {
+    return this.credentials.map((c) => c.credentialId)
+  }
+
+  /**
+   * Forget every credential. DEV ONLY, and the reason it exists: a gate matrix
+   * has to start from a known-empty state or its first case is testing whatever
+   * the last run left behind. Reachable only when the registry is started in
+   * dev mode.
+   */
+  forgetAll(): void {
+    this.credentials = []
+    writeFileSync(this.file, JSON.stringify([], null, 2))
+  }
+
   /** Mint a single-use challenge. It is a nonce, not a session. */
   challenge(): string {
     const value = b64url(randomBytes(32))

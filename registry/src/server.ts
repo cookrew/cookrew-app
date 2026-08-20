@@ -33,6 +33,14 @@ export interface RegistryDeps {
   authorize?: (presetId: string, request: IncomingMessage) => Verdict
   /** Present from A2: enrolment and assertion routes mount only when it is. */
   identity?: IdentityService
+  /**
+   * DEV MODE. Mounts /v1/dev/* — a credential list and a reset, for a gate
+   * matrix that must start from a known state. Off by default and never a
+   * runtime toggle: a deployment either was started for development or it was
+   * not, and an endpoint that can forget every credential must not be one flag
+   * away in production.
+   */
+  dev?: boolean
 }
 
 function json(response: ServerResponse, code: number, body: unknown, headers: Record<string, string> = {}): void {
@@ -177,6 +185,52 @@ export function createRegistry(deps: RegistryDeps): Server {
         }
         json(response, 404, { error: 'not_found' })
       })
+      return
+    }
+
+    // GET /v1/health — liveness plus a self-description of the contract, so a
+    // harness can reconcile what it expects against what is actually served
+    // instead of discovering the difference one 404 at a time.
+    if (method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'health') {
+      json(response, 200, {
+        ok: true,
+        slice: 'P2-A2',
+        dev: deps.dev === true,
+        routes: [
+          'GET /v1/health',
+          'GET /v1/presets?q=',
+          'GET /v1/presets/:id/manifest',
+          'HEAD /v1/presets/:id/manifest',
+          'GET /v1/blobs/:address',
+          'GET /v1/log?from=',
+          'POST /v1/identity/register',
+          'POST /v1/identity/assert',
+          ...(deps.dev === true ? ['GET /v1/dev/identities', 'DELETE /v1/dev/identities'] : [])
+        ],
+        // Named so a harness does not build fixtures against a route that is
+        // never going to exist. Payment RETRIES the manifest GET with an
+        // X-Payment header (spec §4); there is deliberately no confirm endpoint.
+        notServed: { '/v1/pay': 'never — M2 mounts 402 on the manifest gate itself' }
+      })
+      return
+    }
+
+    // GET|DELETE /v1/dev/identities — dev only.
+    if (parts.length === 3 && parts[0] === 'v1' && parts[1] === 'dev' && parts[2] === 'identities') {
+      if (deps.dev !== true || !deps.identity) {
+        json(response, 404, { error: 'not_found' })
+        return
+      }
+      if (method === 'GET') {
+        json(response, 200, { credentials: deps.identity.enrolled() })
+        return
+      }
+      if (method === 'DELETE') {
+        deps.identity.forgetAll()
+        json(response, 200, { ok: true })
+        return
+      }
+      json(response, 404, { error: 'not_found' })
       return
     }
 

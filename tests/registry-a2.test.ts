@@ -189,7 +189,7 @@ describe('authorize — the 401 path and D4', () => {
     const pub = publish('Deep Research', 2)
     store.putBlob(pub.teamBytes)
     store.putManifest({ manifest: pub.manifest, teamName: 'Deep Research', visibility: 'public' })
-    const server = createRegistry({ store, log, identity, authorize: makeAuthorize(store, identity) })
+    const server = createRegistry({ store, log, identity, dev: true, authorize: makeAuthorize(store, identity) })
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
     const { port } = server.address() as AddressInfo
     return { url: `http://127.0.0.1:${port}`, close: () => server.close(), id: p.manifest.id }
@@ -303,5 +303,83 @@ describe('R24 — a dock-open check never raises a sheet', () => {
     expect(updateCheckOutcome(200, 3, 2)).toBe('update')
     expect(updateCheckOutcome(200, 2, 2)).toBe('current')
     expect(updateCheckOutcome(200, 1, 2)).toBe('current')
+  })
+})
+
+
+describe('dev contract — reconciled with Magpie\'s harness', () => {
+  const listen = async (dev: boolean): Promise<{ url: string; close: () => void }> => {
+    const store = new RegistryStore(base)
+    const log = new TransparencyLog(base)
+    const server = createRegistry({ store, log, identity, dev, authorize: makeAuthorize(store, identity) })
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+    const { port } = server.address() as AddressInfo
+    return { url: `http://127.0.0.1:${port}`, close: () => server.close() }
+  }
+
+  it('/v1/health describes the contract it actually serves', async () => {
+    const s = await listen(true)
+    try {
+      const body = (await (await fetch(`${s.url}/v1/health`)).json()) as {
+        ok: boolean
+        routes: string[]
+        notServed: Record<string, string>
+      }
+      expect(body.ok).toBe(true)
+      expect(body.routes).toContain('GET /v1/presets/:id/manifest')
+      expect(body.routes).toContain('POST /v1/identity/assert')
+      // Named explicitly so nobody builds fixtures against it.
+      expect(body.notServed['/v1/pay']).toContain('M2 mounts 402 on the manifest gate')
+    } finally {
+      s.close()
+    }
+  })
+
+  it('/v1/dev/identities lists enrolled credentials, so a matrix can assert', async () => {
+    const s = await listen(true)
+    try {
+      const body = (await (await fetch(`${s.url}/v1/dev/identities`)).json()) as {
+        credentials: string[]
+      }
+      expect(body.credentials).toContain('cred-1')
+    } finally {
+      s.close()
+    }
+  })
+
+  it('/v1/dev/identities DELETE resets, so a run starts from a known state', async () => {
+    const s = await listen(true)
+    try {
+      expect((await fetch(`${s.url}/v1/dev/identities`, { method: 'DELETE' })).status).toBe(200)
+      const body = (await (await fetch(`${s.url}/v1/dev/identities`)).json()) as {
+        credentials: string[]
+      }
+      expect(body.credentials).toEqual([])
+    } finally {
+      s.close()
+    }
+  })
+
+  it('the dev routes DO NOT EXIST without dev mode', async () => {
+    // An endpoint that can forget every credential must not be one flag away
+    // in production, so it is absent rather than refused.
+    const s = await listen(false)
+    try {
+      expect((await fetch(`${s.url}/v1/dev/identities`)).status).toBe(404)
+      expect((await fetch(`${s.url}/v1/dev/identities`, { method: 'DELETE' })).status).toBe(404)
+      const body = (await (await fetch(`${s.url}/v1/health`)).json()) as { routes: string[] }
+      expect(body.routes.some((r) => r.includes('/v1/dev/'))).toBe(false)
+    } finally {
+      s.close()
+    }
+  })
+
+  it('/v1/pay is not served, and never will be', async () => {
+    const s = await listen(true)
+    try {
+      expect((await fetch(`${s.url}/v1/pay`, { method: 'POST' })).status).toBe(404)
+    } finally {
+      s.close()
+    }
   })
 })
