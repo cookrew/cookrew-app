@@ -73,6 +73,7 @@ import { EventLog } from './event-log'
 import { installProcessGuards } from './process-guards'
 import { SessionRegistry } from './session-registry'
 import { planWorkspaceSwitch } from './workspace-switch'
+import { presetIdFromInstallUrl } from './registry-install-link'
 import { terminalHasLiveWork } from './session-liveness'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { canonicalExternalUrl } from '../shared/external-url'
@@ -1857,11 +1858,56 @@ function activeBrowserNode(browserId: string): BrowserNodeData | null {
 }
 
 /** Reflect real headless-page navigation/title state into the browser node. */
+/**
+ * Registry hosts whose /install/<presetId> links this app understands (R21).
+ *
+ * Configured, never inferred: the app must not learn to trust a host because a
+ * page it was showing claimed to be one. Empty by default, which recognises
+ * nothing — the marketplace is not shipped yet, and an unconfigured registry
+ * failing closed is the correct posture until it is.
+ */
+const registryHosts = (): string[] =>
+  (process.env.COOKREW_REGISTRY_HOST ?? '')
+    .split(',')
+    .map((host) => host.trim())
+    .filter((host) => host.length > 0)
+
+/**
+ * A browser card navigated to a marketplace install link (R21).
+ *
+ * The id is all that crosses. This does NOT install: main owns download,
+ * signature verification and the review sheet, and the user owns the decision
+ * — a page must never be able to install by being navigated to, only to ask.
+ * The ask is announced on the ordinary event stream, so the toast layer, the
+ * event panel and the phone all see it without a private channel.
+ */
+function noteRegistryInstallLink(browserId: string, url: string): void {
+  const presetId = presetIdFromInstallUrl(url, registryHosts())
+  if (presetId === null) return
+  const node = activeBrowserNode(browserId)
+  store.recordEventIn(
+    store.ownerOf(browserId) ?? store.focusedId,
+    'preset.install.requested',
+    presetId,
+    node?.name ?? browserId,
+    'registry install link'
+  )
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+    // The renderer opens the review sheet. Only the id and where it came from
+    // travel — the URL, its query and the page itself stay on the web side.
+    mainWindow.webContents.send('preset:install-requested', { presetId, browserId })
+  }
+}
+
 function recordHeadlessPageState(
   browserId: string,
   tabId: string,
   state: { url: string; title: string }
 ): void {
+  // BEFORE the early returns below: an install link is worth noticing even
+  // when the tab's recorded url/title have not changed (a re-navigation to the
+  // same link is a fresh ask), and even for a node the canvas has since lost.
+  noteRegistryInstallLink(browserId, state.url)
   const node = activeBrowserNode(browserId)
   if (!node) return
   const tabs = browserTabs(node)
