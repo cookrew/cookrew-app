@@ -1,4 +1,5 @@
 import { updateAvailable } from './preset-manifest'
+import type { KeyRotation } from './preset-rotation'
 
 /**
  * DOCK CHIP FAMILY (marketplace §8) — the third chip group in the TERMINAL row,
@@ -22,9 +23,14 @@ export interface InstalledPreset {
   entitled: boolean
   /** Registry version from the last HEAD; undefined until one has answered. */
   headVersion?: number
+  /**
+   * R20: the registry now signs this preset with a key the client did not pin,
+   * and the client refused it. Present until the buyer trusts the new key.
+   */
+  keyChanged?: KeyRotation
 }
 
-export type ChipBadge = 'none' | 'lock' | 'update'
+export type ChipBadge = 'none' | 'lock' | 'key-changed' | 'update'
 
 export interface PresetChip {
   id: string
@@ -40,10 +46,25 @@ export interface PresetChip {
 export function presetChips(installed: readonly InstalledPreset[]): PresetChip[] {
   return installed.map((p) => {
     const hasUpdate = updateAvailable(p.version, p.headVersion ?? null)
-    // The lock outranks the update: a gated preset cannot be updated into
+    // Three states, ranked by which problem is nearest.
+    //
+    // The lock outranks everything: a gated preset cannot be updated into
     // either, so leading with "v3 available" on something the buyer cannot run
     // reads as a bug rather than an offer.
-    const badge: ChipBadge = !p.entitled ? 'lock' : hasUpdate ? 'update' : 'none'
+    //
+    // KEY CHANGED outranks the update, and this one is R20's whole point. A
+    // rotated preset will REFUSE the update it is advertising, so an update
+    // badge here offers a click that cannot succeed. Replacing it also keeps
+    // the rotation visible for as long as it is unresolved — the silent
+    // failure the ruling exists to prevent is exactly a badge that never
+    // arrives with nothing on screen to say why.
+    const badge: ChipBadge = !p.entitled
+      ? 'lock'
+      : p.keyChanged !== undefined
+        ? 'key-changed'
+        : hasUpdate
+          ? 'update'
+          : 'none'
     return {
       id: p.id,
       // No version in the label — it lives on the badge and in the sheet.
@@ -65,9 +86,34 @@ export function presetChips(installed: readonly InstalledPreset[]): PresetChip[]
  *
  * An available update never blocks placing: it is an offer, and a buyer who
  * wants the version they already have should not have to dismiss anything.
+ *
+ * NOR DOES A ROTATION. "Your installed version keeps working. Nothing changed
+ * on your canvas" is the sheet's first promise, and a KEY CHANGED chip that
+ * stopped placing would make it a lie the buyer discovers by clicking.
  */
 export function chipAction(chip: PresetChip): 'place' | 'gate' {
   return chip.badge === 'lock' ? 'gate' : 'place'
+}
+
+/**
+ * What a click on the BADGE opens, as opposed to a click on the chip.
+ *
+ * R20 needs this to exist. "Surface it once" means once as a sheet, never once
+ * as a fact — so after the rotation sheet is dismissed the badge is the only
+ * route back to the decision, and a badge that is merely decorative would leave
+ * the buyer with a permanent mark and no way to act on it.
+ */
+export function chipBadgeAction(chip: PresetChip): 'none' | 'gate' | 'rotation' | 'update' {
+  switch (chip.badge) {
+    case 'lock':
+      return 'gate'
+    case 'key-changed':
+      return 'rotation'
+    case 'update':
+      return 'update'
+    default:
+      return 'none'
+  }
 }
 
 /**

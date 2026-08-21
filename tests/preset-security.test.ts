@@ -263,6 +263,28 @@ describe('H2 documented limitation — an attacker owning ~/.cookrew wins', () =
     expect(store.read(p.manifest.id)).not.toBeNull()
   })
 
+  it('ACCEPTED: writing trustedKeyId into install.json pre-trusts a key the buyer never saw (R20)', () => {
+    // R20 puts the trust decision in front of a person, and install.json is
+    // where their answer is kept. An attacker who can write that file can
+    // answer for them — the same boundary as author.pub above, not a new one,
+    // because the file sits in the same directory as the key it overrides.
+    //
+    // What it does NOT buy them: the version already installed. That is still
+    // verified against author.pub, so pre-trusting a key changes what the
+    // client will ACCEPT NEXT, and only that.
+    const p = publish()
+    store.install(p)
+    const dir = path.join(base, 'presets', `sha256-${p.manifest.id.slice(7)}`)
+    const attacker = generateKeyPairSync('ed25519')
+    writeFileSync(
+      path.join(dir, 'install.json'),
+      JSON.stringify({ trustedKeyId: keyIdOf(attacker.publicKey) }, null, 2)
+    )
+    expect(store.trustedKeyId(p.manifest.id)).toBe(keyIdOf(attacker.publicKey))
+    // The installed bytes are unaffected: still theirs, still verified.
+    expect(store.read(p.manifest.id)?.manifest.author.keyId).toBe(p.manifest.author.keyId)
+  })
+
   it('ACCEPTED: replacing the whole directory with a preset they signed passes', () => {
     const mine = publish([terminal({ command: 'npm test' })])
     store.install(mine)

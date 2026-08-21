@@ -98,6 +98,31 @@ export function updateAvailable(installed: number, head: number | null): boolean
 }
 
 /**
+ * R24 — SHEETS ARE RAISED BY USER INTENT, NEVER BY A POLL.
+ *
+ * The dock-open update check is not something the user asked for; it happens
+ * because they opened a dock. So its failures are BADGE STATE and nothing more.
+ * A HEAD that meets an expired token answers 401 — and that must stay silent:
+ * no sheet, no error, no badge. Raising a passkey prompt because a background
+ * check tripped would mean opening the dock could demand a fingerprint, which
+ * is the whole failure mode this ruling exists to prevent.
+ *
+ * `silent` therefore covers every non-200: an expired credential, a refusal, an
+ * unreachable registry. The buyer keeps the version they have, which still
+ * works, and finds out about a newer one the next time a check succeeds.
+ */
+export type UpdateCheckOutcome = 'update' | 'current' | 'silent'
+
+export function updateCheckOutcome(
+  status: number,
+  headVersion: number | null,
+  installed: number
+): UpdateCheckOutcome {
+  if (status !== 200) return 'silent'
+  return updateAvailable(installed, headVersion) ? 'update' : 'current'
+}
+
+/**
  * The 403 vocabulary (§2) plus R11's `balance_empty`. 403 is the one answer the
  * client never loops on — it is not self-recoverable — so every member needs a
  * remedy the UI can link instead of a retry.
@@ -109,7 +134,18 @@ export const FORBIDDEN_REASONS = [
   'version_gate',
   'region',
   /** R11 / R5: a prepaid per-call balance ran out. Remedy is top-up. */
-  'balance_empty'
+  'balance_empty',
+  /**
+   * R26: a valid identity whose token does not cover this request — a publish
+   * token at the download gate, or a download token at a publish route. Both
+   * directions, one reason.
+   *
+   * It is the only 403 whose remedy is PROGRAMMATIC: the client re-runs the
+   * ceremony for the right scope. Everything else in this vocabulary needs a
+   * human (buy a seat, top up, contact the author), which is why the others
+   * surface immediately and this one does not.
+   */
+  'scope'
 ] as const
 
 export type ForbiddenReason = (typeof FORBIDDEN_REASONS)[number]
@@ -122,6 +158,23 @@ export interface ForbiddenBody {
 
 export function isForbiddenReason(value: string): value is ForbiddenReason {
   return (FORBIDDEN_REASONS as readonly string[]).includes(value)
+}
+
+/**
+ * R26 — a scope denial is retried SILENTLY, once.
+ *
+ * The client asked for the wrong capability, and it can fix that without the
+ * user: re-run the ceremony for the scope the request actually needs. Showing a
+ * sheet first would ask a person to resolve a mistake the program already knows
+ * how to correct.
+ *
+ * Once, though, and only for `scope`. A second scope 403 after a fresh
+ * ceremony means the server disagrees about what this identity may do, which is
+ * a real refusal and must surface — retrying past that is how a client ends up
+ * in the loop D4 exists to prevent, just with an extra ceremony each turn.
+ */
+export function shouldRetrySilently(reason: ForbiddenReason, attempt: number): boolean {
+  return reason === 'scope' && attempt === 0
 }
 
 /**

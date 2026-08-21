@@ -54,6 +54,36 @@
       "version": 1,
       "members": ["OpenCode"],
       "entitled": true
+    },
+    {
+      "_": "R20, sheet still owed: the author rotated keys and the buyer has not been told yet. Badge is KEY CHANGED; the sheet is raised once, on the buyer's own click.",
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000007",
+      "name": "Rotated Rig",
+      "version": 3,
+      "members": ["Claude Code"],
+      "entitled": true,
+      "headVersion": 3,
+      "keyChanged": {
+        "oldKeyId": "ed25519:oldkeymaterialaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "newKeyId": "ed25519:newkeymaterialbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "at": 1700000000000,
+        "sheetSeen": false
+      }
+    },
+    {
+      "_": "R20 after dismissal, AND the registry is ahead. KEY CHANGED outranks the update badge because that update is exactly what will be refused — and headVersion is dropped from the chip so no renderer can offer 'v5 available' on it.",
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000008",
+      "name": "Rotated Legacy",
+      "version": 4,
+      "members": ["Codex", "Shell"],
+      "entitled": true,
+      "headVersion": 5,
+      "keyChanged": {
+        "oldKeyId": "ed25519:oldkeymaterialccccccccccccccccccccccccccc",
+        "newKeyId": "ed25519:newkeymaterialddddddddddddddddddddddddddd",
+        "at": 1700000100000,
+        "sheetSeen": true
+      }
     }
   ],
 
@@ -63,13 +93,25 @@
     { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000003", "label": "Audit Pack", "kind": "single", "sprites": ["Codex"], "badge": "update", "headVersion": 3 },
     { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000004", "label": "Pro Toolkit", "kind": "team", "sprites": ["Claude Code", "Shell"], "badge": "lock" },
     { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000005", "label": "Locked Legacy", "kind": "single", "sprites": ["Pi"], "badge": "lock" },
-    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000006", "label": "Fresh Install", "kind": "single", "sprites": ["OpenCode"], "badge": "none" }
+    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000006", "label": "Fresh Install", "kind": "single", "sprites": ["OpenCode"], "badge": "none" },
+    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000007", "label": "Rotated Rig", "kind": "single", "sprites": ["Claude Code"], "badge": "key-changed" },
+    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000008", "label": "Rotated Legacy", "kind": "team", "sprites": ["Codex", "Shell"], "badge": "key-changed" }
   ],
 
-  "actions": ["place", "place", "place", "gate", "gate", "place"],
+  "actions": ["place", "place", "place", "gate", "gate", "place", "place", "place"],
+
+  "badgeActions": {
+    "_": "R20: what a click on the BADGE opens, as opposed to the chip. The chip always places what the buyer already owns; the badge is where an unresolved decision lives — and after the rotation sheet is dismissed it is the ONLY route back to it.",
+    "actions": ["none", "none", "update", "gate", "gate", "none", "rotation", "rotation"]
+  },
 
   "updateCheckOnOpen": {
     "_": "R3: the ids the dock HEADs when the terminal chip row opens — only the ones not yet answered, so re-rendering does not re-ask.",
     "ids": ["sha256:0000000000000000000000000000000000000000000000000000000000000006"]
+  },
+
+  "rotationSheetOnOpen": {
+    "_": "R20: 'surface it once' means once as a SHEET. Only a rotation the buyer has not been shown raises one; the dismissed one keeps its badge and raises nothing. Assert the ids, not the pixels — a second sheet for the same rotation is the bug.",
+    "ids": ["sha256:0000000000000000000000000000000000000000000000000000000000000007"]
   }
 }

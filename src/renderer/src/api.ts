@@ -18,6 +18,7 @@ import type { TurnMatch } from "../../shared/turn-search";
 import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
 import type { BoardRow, BoardSummary } from "../../shared/board";
 import type { InstalledPreset } from "../../shared/preset-chip";
+import type { VersionPinRecord } from "../../shared/version-pin";
 
 /**
  * GET /api/board's payload, mirrored here rather than imported from main —
@@ -79,6 +80,23 @@ export interface CookrewApi {
   ) => Promise<void>;
   /** Remove a preset from the dock. Placed agents are untouched (A2). */
   uninstallPreset: (id: string) => Promise<void>;
+  /**
+   * R20: the rotation sheet has been shown. Retires the SHEET only — the chip
+   * keeps its KEY CHANGED badge until the buyer trusts the new key or removes
+   * the preset, because a rotation announced once and then forgotten leaves a
+   * preset silently un-updatable.
+   */
+  markPresetRotationSeen: (id: string) => Promise<void>;
+  /**
+   * R20's one forward action. `newKeyId` must be the key main itself recorded
+   * as refused; main re-checks it rather than trusting what the sheet passes.
+   */
+  trustPresetAuthorKey: (id: string, newKeyId: string) => Promise<void>;
+  /**
+   * Version pins for a terminal (§10) — the rail's third marker class. Asked
+   * per terminal because a pin belongs to a transcript, not to a workspace.
+   */
+  listPins: (terminalId: string) => Promise<VersionPinRecord[]>;
   createTerminal: (opts: {
     name: string;
     preset: string;

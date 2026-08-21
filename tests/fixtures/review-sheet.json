@@ -53,6 +53,6 @@
 
   "forbiddenReasons": {
     "_": "The 403 vocabulary verbatim (§2 + R11). These are gate answers, not verification failures — different surface, different sheet.",
-    "reasons": ["revoked", "refunded", "seat_limit", "version_gate", "region", "balance_empty"]
+    "reasons": ["revoked", "refunded", "seat_limit", "version_gate", "region", "balance_empty", "scope"]
   }
 }

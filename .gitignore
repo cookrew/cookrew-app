@@ -12,3 +12,4 @@ coverage/
 # Files already tracked stay tracked; this stops NEW ones being added.
 docs/
 release/
+registry/data/

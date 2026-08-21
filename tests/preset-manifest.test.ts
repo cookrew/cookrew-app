@@ -98,10 +98,10 @@ describe('updateAvailable — R3: a HEAD by version is the whole request', () =>
   })
 })
 
-describe('403 vocabulary — R11 adds balance_empty', () => {
-  it('carries the spec five plus balance_empty', () => {
+describe('403 vocabulary — R11 adds balance_empty, R26 adds scope', () => {
+  it('carries the spec five plus balance_empty and scope', () => {
     expect([...FORBIDDEN_REASONS].sort()).toEqual(
-      ['balance_empty', 'refunded', 'region', 'revoked', 'seat_limit', 'version_gate'].sort()
+      ['balance_empty', 'refunded', 'region', 'revoked', 'scope', 'seat_limit', 'version_gate'].sort()
     )
   })
 

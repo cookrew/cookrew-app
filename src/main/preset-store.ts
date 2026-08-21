@@ -3,8 +3,10 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { writeFileAtomic } from './turn-annotations'
 import { blobId, publicKeyFromId, verifyManifest } from './preset-publish'
+import { readLocalState, writeLocalState } from './preset-local-state'
 import type { PresetManifest } from '../shared/preset-manifest'
 import type { InstalledPreset } from '../shared/preset-chip'
+import type { KeyRotation } from '../shared/preset-rotation'
 import type { TeamSnapshot } from './teams'
 
 /**
@@ -98,26 +100,98 @@ export class PresetStore {
     // tests/preset-security.test.ts so the boundary stays explicit.
     writeFileAtomic(path.join(dir, 'author.pub'), preset.manifest.author.keyId)
     // install.json holds LOCAL state about a preset rather than anything the
-    // author signed — today just entitlement. It is a CACHE of the gate's last
-    // word, never the authority: when the gate lands, a 403 overrides whatever
-    // is written here, and nothing may treat a local `true` as proof of a
-    // licence. It exists now because otherwise the lock badge is unreachable
-    // and nobody can build or test the gated chip.
+    // author signed — entitlement, a refused rotation, a key the buyer trusted
+    // (see preset-local-state.ts). It is a CACHE of the gate's last word, never
+    // the authority: when the gate lands, a 403 overrides whatever is written
+    // here, and nothing may treat a local `true` as proof of a licence.
+    //
+    // Merged, not overwritten: re-installing the same bytes must not forget a
+    // rotation the buyer has not answered yet.
     if (options.entitled === false) {
-      writeFileAtomic(path.join(dir, 'install.json'), JSON.stringify({ entitled: false }, null, 2))
+      writeLocalState(dir, { entitled: false })
     }
   }
 
-  /** Local entitlement cache; absent file means owned (the common case). */
-  private entitledOf(dir: string): boolean {
+  /** The key pinned at install — the one that signed the bytes on disk (H2). */
+  private pinnedKeyIdOf(dir: string): string | null {
     try {
-      const raw = JSON.parse(readFileSync(path.join(dir, 'install.json'), 'utf8')) as {
-        entitled?: unknown
-      }
-      return raw.entitled !== false
+      const pinned = readFileSync(path.join(dir, 'author.pub'), 'utf8').trim()
+      return pinned.length > 0 ? pinned : null
     } catch {
-      return true
+      return null
     }
+  }
+
+  /**
+   * The key the client trusts for the NEXT version of this preset: whatever the
+   * buyer accepted after a rotation, else the key pinned at install.
+   *
+   * Deliberately not the same question as "what signed the installed bytes".
+   * Accepting a new key moves the trust FORWARD only; author.pub keeps naming
+   * the key that signed what is on disk, so read() still verifies the installed
+   * version against the key it was actually pinned to and trusting a rotation
+   * cannot make the running version unreadable.
+   */
+  trustedKeyId(id: string): string | null {
+    const dir = this.dirFor(id)
+    if (dir === null) return null
+    return readLocalState(dir).trustedKeyId ?? this.pinnedKeyIdOf(dir)
+  }
+
+  /** The refused rotation, if this preset has one the buyer has not resolved. */
+  rotationOf(id: string): KeyRotation | null {
+    const dir = this.dirFor(id)
+    if (dir === null) return null
+    return readLocalState(dir).rotation ?? null
+  }
+
+  /**
+   * Record that the registry now signs this preset with a different key.
+   *
+   * Idempotent for the SAME key: meeting the same rotation again — every dock
+   * open re-checks — must not re-raise a sheet the buyer already dismissed. A
+   * rotation to a DIFFERENT key is a new event and does raise one, because the
+   * buyer has never been shown that key.
+   */
+  noteKeyRotation(id: string, rotation: { newKeyId: string; at: number }): void {
+    const dir = this.dirFor(id)
+    if (dir === null) return
+    const oldKeyId = this.pinnedKeyIdOf(dir)
+    // No pinned key means no install to describe a rotation against — a
+    // half-written directory, which read() already treats as absent.
+    if (oldKeyId === null) return
+    const local = readLocalState(dir)
+    // Not a rotation at all: this is the key we already trust.
+    if (rotation.newKeyId === (local.trustedKeyId ?? oldKeyId)) return
+    const current = local.rotation
+    const sheetSeen = current?.newKeyId === rotation.newKeyId ? current.sheetSeen : false
+    writeLocalState(dir, {
+      rotation: { oldKeyId, newKeyId: rotation.newKeyId, at: rotation.at, sheetSeen }
+    })
+  }
+
+  /**
+   * R20's "once" — the sheet has been shown. The rotation itself STAYS: what is
+   * forgotten here is the interruption, never the fact, or the preset would go
+   * quietly un-updatable with nothing on screen to explain it.
+   */
+  markRotationSheetSeen(id: string): void {
+    const dir = this.dirFor(id)
+    if (dir === null) return
+    const rotation = readLocalState(dir).rotation
+    if (rotation === undefined || rotation.sheetSeen) return
+    writeLocalState(dir, { rotation: { ...rotation, sheetSeen: true } })
+  }
+
+  /**
+   * The buyer accepted the new key. Trust moves forward and the rotation is
+   * resolved, so the chip stops saying KEY CHANGED and the update badge can
+   * arrive normally on the next check.
+   */
+  trustAuthorKey(id: string, newKeyId: string): void {
+    const dir = this.dirFor(id)
+    if (dir === null || this.pinnedKeyIdOf(dir) === null) return
+    writeLocalState(dir, { trustedKeyId: newKeyId, rotation: null })
   }
 
   /**
@@ -137,8 +211,8 @@ export class PresetStore {
       // H2: the signature, against the key pinned at install. Without this the
       // check above proves only self-consistency, which anyone who can write
       // the directory can manufacture.
-      const pinned = readFileSync(path.join(dir, 'author.pub'), 'utf8').trim()
-      if (pinned.length === 0 || manifest.author.keyId !== pinned) return null
+      const pinned = this.pinnedKeyIdOf(dir)
+      if (pinned === null || manifest.author.keyId !== pinned) return null
       if (!verifyManifest(manifest, publicKeyFromId(pinned))) return null
       return { manifest, teamBytes }
     } catch {
@@ -176,6 +250,7 @@ export class PresetStore {
       const members = (snapshot.nodes ?? [])
         .filter((n) => n.kind === 'terminal')
         .map((n) => (n as { preset: string }).preset)
+      const local = readLocalState(path.join(this.root, entry))
       out.push({
         id: stored.manifest.id,
         name: snapshot.name,
@@ -183,7 +258,11 @@ export class PresetStore {
         members,
         // Local cache of the gate's last word (see install.json). The gate
         // supersedes it the moment it exists.
-        entitled: this.entitledOf(path.join(this.root, entry))
+        entitled: local.entitled !== false,
+        // R20: carried WHOLE rather than as a boolean, so the dock can decide
+        // sheet-versus-badge from the list it already has — a second round trip
+        // to ask "have I shown this yet" is a round trip that can lose.
+        ...(local.rotation !== undefined ? { keyChanged: local.rotation } : {})
         // headVersion is deliberately absent — it is a live HEAD answer (R3),
         // not something to persist and serve stale.
       })
