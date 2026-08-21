@@ -17,12 +17,16 @@
 //   GET  /v1/log?from=&preset=       transparency log, replayable; preset narrows it (R20)
 //   POST /v1/identity/register       enrol a credential (TOFU)
 //   POST /v1/identity/assert         verify a ceremony, mint a short-lived token
+//
+// Flags: --port --data --seed --origin. The origin defaults to the port that is
+// bound; pass it only to serve a ceremony on a host other than localhost, and a
+// value that contradicts --port refuses at boot.
 import { generateKeyPairSync } from 'node:crypto'
 import path from 'node:path'
 import { RegistryStore } from './store'
 import { TransparencyLog } from './log'
 import { createRegistry } from './server'
-import { IdentityService, DEV_CONFIG } from './identity'
+import { IdentityService, identityConfigFor } from './identity'
 import { makeAuthorize } from './authorize'
 import { buildManifest, signManifest } from '../../src/main/preset-publish'
 import { scrubForPublish } from '../../src/main/preset-scrub'
@@ -125,12 +129,22 @@ if (args.includes('--seed')) {
   console.log(`seeded ${SEEDS.length} presets into ${DATA}`)
 }
 
-// A2: identity is live. The origin must match what the browser will send, so
-// it follows the port rather than the DEV_CONFIG default.
-const identity = new IdentityService(DATA, { ...DEV_CONFIG, origin: `http://localhost:${PORT}` })
+// A2: identity is live. The origin and the rpId must be what a browser will
+// actually send, so both are derived from the address this process binds — and
+// a contradiction refuses at boot rather than turning every ceremony into a
+// blanket 401 that reads like a broken passkey (Tinker's LOW-1).
+const resolved = identityConfigFor({ port: PORT, origin: args.includes('--origin') ? flag('origin', '') : undefined })
+if (!resolved.ok) {
+  console.error(`refusing to start: ${resolved.reason}`)
+  process.exit(1)
+}
+const identity = new IdentityService(DATA, resolved.config)
 
 createRegistry({ store, log, identity, dev: true, authorize: makeAuthorize(store, identity) }).listen(PORT, () => {
-  console.log(`registry on http://127.0.0.1:${PORT}  data=${DATA}`)
+  // Print the ORIGIN, not a different spelling of the same port. The old banner
+  // said 127.0.0.1 while identity accepted only localhost, so the server was
+  // advertising the one address on which nobody could authenticate.
+  console.log(`registry on ${resolved.config.origin}  data=${DATA}`)
   for (const p of store.list()) {
     console.log(`  ${p.name.padEnd(16)} v${String(p.version).padEnd(3)} ${p.visibility.padEnd(11)} ${p.id}`)
   }

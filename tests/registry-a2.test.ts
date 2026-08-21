@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createHash, generateKeyPairSync, sign, type KeyObject } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
-import { IdentityService, type IdentityConfig } from '../registry/src/identity'
+import { IdentityService, identityConfigFor, type IdentityConfig } from '../registry/src/identity'
 import { makeAuthorize } from '../registry/src/authorize'
 import { createRegistry } from '../registry/src/server'
 import { RegistryStore } from '../registry/src/store'
@@ -425,6 +425,65 @@ describe('dev contract — reconciled with Magpie\'s harness', () => {
       expect((await fetch(`${s.url}/v1/pay`, { method: 'POST' })).status).toBe(404)
     } finally {
       s.close()
+    }
+  })
+})
+
+/* ------------------------------------------------ LOW-1: origin vs port ---- */
+
+describe('identityConfigFor — the two values that must never silently disagree', () => {
+  it('derives origin AND rpId from the port that is actually bound', () => {
+    const out = identityConfigFor({ port: 8803 })
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.config.origin).toBe('http://localhost:8803')
+    expect(out.config.rpId).toBe('localhost')
+  })
+
+  it('REFUSES an origin naming a different port than the one being bound', () => {
+    // Tinker's LOW-1. Absorbed, this makes every assertion fail wrong_origin —
+    // and since the refusal reason stays server-side, it surfaces as a blanket
+    // 401 that reads exactly like a broken passkey. An hour, minimum.
+    const out = identityConfigFor({ port: 8803, origin: 'http://localhost:8790' })
+    expect(out.ok).toBe(false)
+    if (out.ok) return
+    expect(out.reason).toContain('8790')
+    expect(out.reason).toContain('8803')
+  })
+
+  it('takes the rpId from the origin host, because localhost and 127.0.0.1 are different RPs', () => {
+    // The other half of the same trap: the old boot banner advertised
+    // 127.0.0.1 while identity accepted only localhost, so the server printed
+    // the one address on which nobody could authenticate.
+    const out = identityConfigFor({ port: 8803, origin: 'http://127.0.0.1:8803' })
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.config.rpId).toBe('127.0.0.1')
+    expect(out.config.origin).toBe('http://127.0.0.1:8803')
+  })
+
+  it('normalises through URL.origin so the stored string is what a browser computes', () => {
+    const out = identityConfigFor({ port: 80, origin: 'http://example.test/' })
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    // No trailing slash, no explicit :80 — either would compare unequal forever.
+    expect(out.config.origin).toBe('http://example.test')
+  })
+
+  it('refuses anything that is not a bare scheme://host[:port]', () => {
+    for (const origin of [
+      'http://localhost:8803/v1',
+      'http://localhost:8803?x=1',
+      'ftp://localhost:8803',
+      'not-a-url'
+    ]) {
+      expect([origin, identityConfigFor({ port: 8803, origin }).ok]).toEqual([origin, false])
+    }
+  })
+
+  it('refuses a port that is not a port', () => {
+    for (const port of [0, -1, 70000, Number.NaN]) {
+      expect([port, identityConfigFor({ port }).ok]).toEqual([port, false])
     }
   })
 })

@@ -33,11 +33,79 @@ export interface IdentityConfig {
   challengeTtlMs: number
 }
 
+/**
+ * Default SHAPE, not a deployment truth. The origin here is only correct for a
+ * registry actually listening on 8790 — see `identityConfigFor`, which is how
+ * anything that binds a port should build its config.
+ */
 export const DEV_CONFIG: IdentityConfig = {
   rpId: 'localhost',
   origin: 'http://localhost:8790',
   tokenTtlMs: 10 * 60 * 1000,
   challengeTtlMs: 90 * 1000
+}
+
+export type ConfigRefusal = { ok: false; reason: string }
+
+/**
+ * Build an identity config from the port the server will actually bind, and
+ * REFUSE when the inputs contradict each other.
+ *
+ * THE HOUR THIS COSTS WHEN IT IS WRONG (Tinker's LOW-1, and he is not the only
+ * one who would lose it). WebAuthn compares the assertion's origin against a
+ * configured string, exactly, and its rpIdHash against a configured domain. Get
+ * either wrong and EVERY assertion fails — not with "wrong origin", because the
+ * refusal reason is deliberately server-side, but as a blanket 401 that reads
+ * exactly like a broken credential. So the failure points at the passkey, which
+ * is the one part that is fine.
+ *
+ * Two contradictions are possible and both are now refused rather than
+ * absorbed. An `--origin` naming a different port than `--port` is a config
+ * nobody meant. And the rpId is DERIVED from the origin's hostname rather than
+ * fixed, because `localhost` and `127.0.0.1` are different origins AND
+ * different RP IDs to a browser — the pair that made the old default a trap for
+ * anyone who read the boot banner and used the address it printed.
+ */
+export function identityConfigFor(input: {
+  port: number
+  origin?: string
+}): { ok: true; config: IdentityConfig } | ConfigRefusal {
+  if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) {
+    return { ok: false, reason: `--port ${input.port} is not a port` }
+  }
+  const raw = input.origin ?? `http://localhost:${input.port}`
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return { ok: false, reason: `--origin ${raw} is not a URL` }
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return { ok: false, reason: `--origin ${raw} must be http or https` }
+  }
+  // An origin is scheme + host + port and nothing else; a path or query here
+  // means the value will never equal what a browser sends.
+  if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
+    return { ok: false, reason: `--origin ${raw} must be scheme://host[:port] with no path` }
+  }
+  const statedPort = url.port === '' ? (url.protocol === 'https:' ? 443 : 80) : Number(url.port)
+  if (statedPort !== input.port) {
+    return {
+      ok: false,
+      reason: `--origin ${raw} names port ${statedPort} but --port is ${input.port}; a browser would be refused on both`
+    }
+  }
+  return {
+    ok: true,
+    config: {
+      ...DEV_CONFIG,
+      rpId: url.hostname,
+      // Normalised through URL.origin so the stored value is the exact string a
+      // browser computes — a trailing slash or an explicit :80 would compare
+      // unequal forever.
+      origin: url.origin
+    }
+  }
 }
 
 /**
