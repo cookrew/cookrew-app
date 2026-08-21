@@ -43,9 +43,23 @@
 
 import path from 'node:path'
 import { homedir } from 'node:os'
-import { readFileSync, mkdirSync } from 'node:fs'
+import {
+  readFileSync,
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+  openSync,
+  writeSync,
+  fsyncSync,
+  closeSync
+} from 'node:fs'
 import { feedPromptBuffer } from '../shared/turn'
-import { writeFileAtomic } from './turn-annotations'
+import { writeFileAtomic, fsyncDirDurable } from './turn-annotations'
+
+/** Marks between compactions. Bounds journal replay without per-mark cost. */
+const JOURNAL_COMPACT_ENTRIES = 200
+/** Ceiling for the failure backoff, so replay stays bounded even on a bad disk. */
+const JOURNAL_COMPACT_MAX = 5000
 
 /**
  * The three durable facts, ordered by strength (Sol r11 P0-3 — producer
@@ -163,9 +177,17 @@ export class InputProvenanceStore {
   private durable = true
   /** Persist count, for the debounce gate — marks must not write per keystroke. */
   private writes = 0
+  /** Journal lines since the last compaction; bounds replay at load. */
+  private journalEntries = 0
+  /** Entries at which to attempt the next compaction; doubles on failure. */
+  private compactAt = JOURNAL_COMPACT_ENTRIES
+  /** Append-only companion to the snapshot; one line per mark. */
+  private readonly journalPath: string
 
   constructor(private readonly filePath: string = defaultInputProvenancePath()) {
-    const loaded = loadRecords(filePath)
+    this.journalPath = `${filePath}.log`
+    const loaded = loadRecords(filePath, this.journalPath)
+    this.journalEntries = loaded.journalEntries
     this.faulted = loaded.faulted
     for (const [id, record] of loaded.records) {
       this.records.set(id, record)
@@ -193,8 +215,9 @@ export class InputProvenanceStore {
       if (!restamp) return this.settled()
     }
     this.consumedLocally.delete(terminalId)
-    this.records.set(terminalId, { kind: 'owner-dirty', markedAt: Date.now() })
-    return this.persist()
+    const record: ProvenanceDetail = { kind: 'owner-dirty', markedAt: Date.now() }
+    this.records.set(terminalId, record)
+    return this.appendRecord(terminalId, record)
   }
 
   /**
@@ -338,11 +361,161 @@ export class InputProvenanceStore {
    * the in-memory state for retry and is said out loud, and the caller
    * refuses the pane write it was covering.
    */
+  /**
+   * Commit ONE record durably.
+   *
+   * Was: rewrite the entire map through writeFileAtomic — temp write, file
+   * fsync, rename, parent-dir fsync — on every mark. Two fsyncs over a payload
+   * that is O(every terminal ever marked), on the main thread, BEFORE the byte
+   * crosses. And markDirty's debounce is defeated in exactly the typing loop
+   * (a local consume sets consumedLocally, so the next keystroke re-stamps),
+   * so that was the cost of every keystroke, growing for as long as the app
+   * ran. The header for `writes` already said what the intent was: "marks must
+   * not write per keystroke".
+   *
+   * Now: append one line to a journal and fsync it. O(1) in the map, one fsync
+   * instead of two, no rename, no directory fsync. The crash guarantee is
+   * unchanged and arguably plainer — an appended-and-fsynced line is durable
+   * before the byte crosses, which is the whole contract. A torn tail from a
+   * crash mid-append is dropped at load, and a dropped tail can only LOSE a
+   * mark, which the fail-closed adoption rules already treat as unproven.
+   */
+  private appendRecord(terminalId: string, record: ProvenanceDetail | null): boolean {
+    try {
+      mkdirSync(path.dirname(this.filePath), { recursive: true })
+      const line = `${JSON.stringify({ id: terminalId, ...(record ?? { kind: null }) })}\n`
+      // CREATING the journal (fresh install, or the first mark after the file
+      // was removed) makes a new DIRECTORY ENTRY, and fsyncing the file does
+      // not make that entry durable. Without the parent fsync, markDirty could
+      // return true, the byte crosses, power is lost, and the journal is simply
+      // absent at next boot — so the box adopts CLEAN on an "absence is
+      // evidence" rule that had quietly stopped being evidence. Fail-closed
+      // depends on the file existing, so its existence has to be durable too.
+      const creating = !existsSync(this.journalPath)
+      const fd = openSync(this.journalPath, 'a')
+      try {
+        writeSync(fd, line)
+        fsyncSync(fd)
+      } finally {
+        closeSync(fd)
+      }
+      if (creating) fsyncDirDurable(path.dirname(this.journalPath))
+      this.durable = true
+      this.writes += 1
+      this.journalEntries += 1
+      // Compaction keeps replay bounded. Amortised: one full write per
+      // JOURNAL_COMPACT_ENTRIES marks, not one per mark.
+      //
+      // BACKOFF, not reset. A compaction that fails (disk full is the obvious
+      // one) leaves journalEntries above the threshold, so a plain check would
+      // attempt a full-map write on EVERY subsequent keystroke — reinstating
+      // exactly the per-keystroke cost this commit removes, in the worst
+      // conditions to do it. Resetting the counter instead would drop the
+      // replay bound, which is the other thing that must not happen, so the
+      // THRESHOLD moves rather than the count.
+      if (this.journalEntries >= this.compactAt) this.compact()
+      return true
+    } catch (error) {
+      this.durable = false
+      console.error(
+        'input-provenance WAL write failed — the covered pane write is REFUSED and the state retried:',
+        error
+      )
+      return false
+    }
+  }
+
+  /**
+   * Fold the journal into the snapshot and start it over.
+   *
+   * Snapshot FIRST, then truncate: a crash between them replays a journal
+   * whose entries the snapshot already contains, which is idempotent. The
+   * other order could lose marks.
+   */
+  private compact(): void {
+    try {
+      const shape: PersistedShape = { version: 2, boxes: Object.fromEntries(this.records) }
+      mkdirSync(path.dirname(this.filePath), { recursive: true })
+      writeFileAtomic(this.filePath, JSON.stringify(shape))
+      writeFileSync(this.journalPath, '')
+      this.journalEntries = 0
+      this.compactAt = JOURNAL_COMPACT_ENTRIES
+    } catch (error) {
+      // A failed compaction is not a failed MARK: the journal still holds
+      // every fact, so durability is intact. Push the next attempt out
+      // geometrically so a persistently failing disk costs one full write per
+      // doubling rather than one per keystroke.
+      this.compactAt = Math.min(this.compactAt * 2, JOURNAL_COMPACT_MAX)
+      console.error('input-provenance compaction failed (facts remain in the journal):', error)
+    }
+  }
+
+  /**
+   * Drop records for terminals that exist in NO workspace.
+   *
+   * The map is otherwise append-only for the life of the process, and it is
+   * what every mark used to serialise. A record's whole purpose is protecting
+   * a pane that outlives us; an id no workspace claims has no such pane, so
+   * the fact protects nothing.
+   *
+   * FAIL-SAFE, deliberately: the caller passes an enumeration that THROWS
+   * rather than under-reports (store.allTerminalIdsStrict), and a throw skips
+   * the reap entirely. Reaping on a partial list would delete facts protecting
+   * live panes, which is the one direction this store must never fail in.
+   *
+   * Call it from a QUIET moment only — startup after hydration, or a workspace
+   * delete. Never on a timer: a pane can exist before its node is persisted,
+   * and a reap landing in that window would drop the fact protecting it.
+   */
+  reap(enumerateAll: () => Iterable<string>): number {
+    let known: Set<string>
+    try {
+      known = new Set(enumerateAll())
+    } catch (error) {
+      // The enumeration VOUCHES BY SUCCEEDING. store.allTerminalIdsStrict
+      // throws rather than under-reporting when a workspace file will not
+      // load, and an under-report here would delete facts protecting live
+      // panes — the one direction this store must never fail in. A boolean
+      // flag could drift from the thing it describes; a throw cannot.
+      console.error('input-provenance reap skipped — terminal enumeration failed:', error)
+      return 0
+    }
+    let dropped = 0
+    for (const id of [...this.records.keys()]) {
+      if (known.has(id)) continue
+      this.records.delete(id)
+      this.adoptable.delete(id)
+      this.consumedLocally.delete(id)
+      dropped += 1
+    }
+    if (dropped > 0) this.compact()
+    return dropped
+  }
+
+  /**
+   * Full-snapshot commit, for the RARE mutations — contamination, a dispatch
+   * delivery, a clear. These are not on the keystroke path, so paying a whole
+   * rewrite for them is fine, and it keeps their semantics exactly as they
+   * were.
+   *
+   * It also TRUNCATES the journal, because a complete snapshot IS a
+   * compaction. Without that, journal lines written before this snapshot would
+   * replay over it at load and resurrect records this call deleted or
+   * downgraded — which is precisely what the suite caught.
+   */
   private persist(): boolean {
     try {
       const shape: PersistedShape = { version: 2, boxes: Object.fromEntries(this.records) }
       mkdirSync(path.dirname(this.filePath), { recursive: true })
       writeFileAtomic(this.filePath, JSON.stringify(shape))
+      // Snapshot first, then clear: a crash between them replays entries the
+      // snapshot already contains, which is idempotent. The other order loses.
+      try {
+        writeFileSync(this.journalPath, '')
+        this.journalEntries = 0
+      } catch {
+        // Journal left in place: replaying it over this snapshot is safe.
+      }
       this.durable = true
       this.writes += 1
       return true
@@ -367,9 +540,63 @@ export class InputProvenanceStore {
  * fault here is external truncation, permissions, or a schema from another
  * era — all adopt fail-closed, out loud.
  */
-function loadRecords(filePath: string): {
+/**
+ * Replay the append-only journal over the snapshot.
+ *
+ * A crash mid-append leaves a torn last line; it is dropped. That can only
+ * LOSE a mark, never invent one, and an absent mark is exactly the "unproven"
+ * case the adoption rules already handle fail-closed. A line with kind null is
+ * a deletion (reap/clear).
+ */
+/**
+ * The ONLY shape appendRecord emits: an owner-dirty mark, or a deletion.
+ * Deliberately narrower than ProvenanceDetail — see replayJournal.
+ */
+interface JournalEntry {
+  id?: string
+  kind?: 'owner-dirty' | null
+  markedAt?: number
+}
+
+function replayJournal(
+  journalPath: string,
+  records: Map<string, ProvenanceDetail>
+): number {
+  let raw: string
+  try {
+    raw = readFileSync(journalPath, 'utf8')
+  } catch {
+    return 0 // no journal is the ordinary case after a compaction
+  }
+  const lines = raw.split('\n').filter((l) => l.length > 0)
+  let applied = 0
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line) as JournalEntry
+      if (typeof entry.id !== 'string') continue
+      if (entry.kind === null || entry.kind === undefined) records.delete(entry.id)
+      else if (entry.kind === 'owner-dirty') {
+        records.set(entry.id, { kind: 'owner-dirty', markedAt: Number(entry.markedAt) || 0 })
+      }
+      // Anything else is not something this journal can emit, so it is not
+      // something it may rebuild. A 'dispatch-delivery' in particular carries a
+      // PROMPT that only the snapshot path persists; accepting one here would
+      // rebuild it without that prompt, and promptAnswersDispatch would then
+      // compare against undefined and silently stop matching. Narrow now, so a
+      // future call site cannot lose the prompt by widening the writer alone.
+      applied += 1
+    } catch {
+      // Torn tail from a crash mid-append. Everything before it stands.
+      break
+    }
+  }
+  return applied
+}
+
+function loadRecords(filePath: string, journalPath?: string): {
   records: Map<string, ProvenanceDetail>
   faulted: boolean
+  journalEntries: number
 } {
   const records = new Map<string, ProvenanceDetail>()
   let raw: string
@@ -377,13 +604,16 @@ function loadRecords(filePath: string): {
     raw = readFileSync(filePath, 'utf8')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { records, faulted: false } // first run — no facts, every box adopts clean
+      // No snapshot, but a journal may still hold facts from before the first
+      // compaction — replaying it is what makes the first 200 marks durable.
+      const journalEntries = journalPath ? replayJournal(journalPath, records) : 0
+      return { records, faulted: false, journalEntries }
     }
     console.error(
       'input-provenance WAL unreadable — adopting EVERY known pane dirty (fail-closed):',
       error
     )
-    return { records, faulted: true }
+    return { records, faulted: true, journalEntries: 0 }
   }
   try {
     const parsed = JSON.parse(raw) as PersistedShape | PersistedShapeV1
@@ -399,7 +629,11 @@ function loadRecords(filePath: string): {
           })
         }
       }
-      return { records, faulted: false }
+      return {
+        records,
+        faulted: false,
+        journalEntries: journalPath ? replayJournal(journalPath, records) : 0
+      }
     }
     if (parsed.version !== 2) throw new Error('unrecognized version')
     for (const [id, record] of Object.entries(parsed.boxes)) {
@@ -411,14 +645,20 @@ function loadRecords(filePath: string): {
         })
       }
     }
-    return { records, faulted: false }
+    // Journal AFTER the snapshot: it holds everything since the last
+    // compaction, so its entries must win.
+    return {
+      records,
+      faulted: false,
+      journalEntries: journalPath ? replayJournal(journalPath, records) : 0
+    }
   } catch (error) {
     console.error(
       'input-provenance WAL corrupt — adopting EVERY known pane dirty (fail-closed):',
       error
     )
     records.clear()
-    return { records, faulted: true }
+    return { records, faulted: true, journalEntries: 0 }
   }
 }
 
