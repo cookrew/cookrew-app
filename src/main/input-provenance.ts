@@ -45,6 +45,7 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import {
   readFileSync,
+  existsSync,
   mkdirSync,
   writeFileSync,
   openSync,
@@ -53,10 +54,12 @@ import {
   closeSync
 } from 'node:fs'
 import { feedPromptBuffer } from '../shared/turn'
-import { writeFileAtomic } from './turn-annotations'
+import { writeFileAtomic, fsyncDirDurable } from './turn-annotations'
 
 /** Marks between compactions. Bounds journal replay without per-mark cost. */
 const JOURNAL_COMPACT_ENTRIES = 200
+/** Ceiling for the failure backoff, so replay stays bounded even on a bad disk. */
+const JOURNAL_COMPACT_MAX = 5000
 
 /**
  * The three durable facts, ordered by strength (Sol r11 P0-3 — producer
@@ -176,6 +179,8 @@ export class InputProvenanceStore {
   private writes = 0
   /** Journal lines since the last compaction; bounds replay at load. */
   private journalEntries = 0
+  /** Entries at which to attempt the next compaction; doubles on failure. */
+  private compactAt = JOURNAL_COMPACT_ENTRIES
   /** Append-only companion to the snapshot; one line per mark. */
   private readonly journalPath: string
 
@@ -379,6 +384,14 @@ export class InputProvenanceStore {
     try {
       mkdirSync(path.dirname(this.filePath), { recursive: true })
       const line = `${JSON.stringify({ id: terminalId, ...(record ?? { kind: null }) })}\n`
+      // CREATING the journal (fresh install, or the first mark after the file
+      // was removed) makes a new DIRECTORY ENTRY, and fsyncing the file does
+      // not make that entry durable. Without the parent fsync, markDirty could
+      // return true, the byte crosses, power is lost, and the journal is simply
+      // absent at next boot — so the box adopts CLEAN on an "absence is
+      // evidence" rule that had quietly stopped being evidence. Fail-closed
+      // depends on the file existing, so its existence has to be durable too.
+      const creating = !existsSync(this.journalPath)
       const fd = openSync(this.journalPath, 'a')
       try {
         writeSync(fd, line)
@@ -386,12 +399,21 @@ export class InputProvenanceStore {
       } finally {
         closeSync(fd)
       }
+      if (creating) fsyncDirDurable(path.dirname(this.journalPath))
       this.durable = true
       this.writes += 1
       this.journalEntries += 1
       // Compaction keeps replay bounded. Amortised: one full write per
       // JOURNAL_COMPACT_ENTRIES marks, not one per mark.
-      if (this.journalEntries >= JOURNAL_COMPACT_ENTRIES) this.compact()
+      //
+      // BACKOFF, not reset. A compaction that fails (disk full is the obvious
+      // one) leaves journalEntries above the threshold, so a plain check would
+      // attempt a full-map write on EVERY subsequent keystroke — reinstating
+      // exactly the per-keystroke cost this commit removes, in the worst
+      // conditions to do it. Resetting the counter instead would drop the
+      // replay bound, which is the other thing that must not happen, so the
+      // THRESHOLD moves rather than the count.
+      if (this.journalEntries >= this.compactAt) this.compact()
       return true
     } catch (error) {
       this.durable = false
@@ -417,9 +439,13 @@ export class InputProvenanceStore {
       writeFileAtomic(this.filePath, JSON.stringify(shape))
       writeFileSync(this.journalPath, '')
       this.journalEntries = 0
+      this.compactAt = JOURNAL_COMPACT_ENTRIES
     } catch (error) {
       // A failed compaction is not a failed MARK: the journal still holds
-      // every fact, so durability is intact and the next mark retries.
+      // every fact, so durability is intact. Push the next attempt out
+      // geometrically so a persistently failing disk costs one full write per
+      // doubling rather than one per keystroke.
+      this.compactAt = Math.min(this.compactAt * 2, JOURNAL_COMPACT_MAX)
       console.error('input-provenance compaction failed (facts remain in the journal):', error)
     }
   }
@@ -432,15 +458,28 @@ export class InputProvenanceStore {
    * a pane that outlives us; an id no workspace claims has no such pane, so
    * the fact protects nothing.
    *
-   * FAIL-SAFE, deliberately: the caller passes the ids it can PROVE exist, and
-   * anything absent from that set is only dropped if the caller vouches the
-   * enumeration was complete. Reaping on a partial list would delete facts
-   * protecting live panes, which is the one direction this store must never
-   * fail in.
+   * FAIL-SAFE, deliberately: the caller passes an enumeration that THROWS
+   * rather than under-reports (store.allTerminalIdsStrict), and a throw skips
+   * the reap entirely. Reaping on a partial list would delete facts protecting
+   * live panes, which is the one direction this store must never fail in.
+   *
+   * Call it from a QUIET moment only — startup after hydration, or a workspace
+   * delete. Never on a timer: a pane can exist before its node is persisted,
+   * and a reap landing in that window would drop the fact protecting it.
    */
-  reap(knownTerminalIds: Iterable<string>, enumerationComplete: boolean): number {
-    if (!enumerationComplete) return 0
-    const known = new Set(knownTerminalIds)
+  reap(enumerateAll: () => Iterable<string>): number {
+    let known: Set<string>
+    try {
+      known = new Set(enumerateAll())
+    } catch (error) {
+      // The enumeration VOUCHES BY SUCCEEDING. store.allTerminalIdsStrict
+      // throws rather than under-reporting when a workspace file will not
+      // load, and an under-report here would delete facts protecting live
+      // panes — the one direction this store must never fail in. A boolean
+      // flag could drift from the thing it describes; a throw cannot.
+      console.error('input-provenance reap skipped — terminal enumeration failed:', error)
+      return 0
+    }
     let dropped = 0
     for (const id of [...this.records.keys()]) {
       if (known.has(id)) continue
@@ -509,6 +548,16 @@ export class InputProvenanceStore {
  * case the adoption rules already handle fail-closed. A line with kind null is
  * a deletion (reap/clear).
  */
+/**
+ * The ONLY shape appendRecord emits: an owner-dirty mark, or a deletion.
+ * Deliberately narrower than ProvenanceDetail — see replayJournal.
+ */
+interface JournalEntry {
+  id?: string
+  kind?: 'owner-dirty' | null
+  markedAt?: number
+}
+
 function replayJournal(
   journalPath: string,
   records: Map<string, ProvenanceDetail>
@@ -523,15 +572,18 @@ function replayJournal(
   let applied = 0
   for (const line of lines) {
     try {
-      const entry = JSON.parse(line) as { id?: string; kind?: string | null; markedAt?: number }
+      const entry = JSON.parse(line) as JournalEntry
       if (typeof entry.id !== 'string') continue
       if (entry.kind === null || entry.kind === undefined) records.delete(entry.id)
-      else if (entry.kind === 'owner-dirty' || entry.kind === 'contaminated' || entry.kind === 'dispatch-delivery') {
-        records.set(entry.id, {
-          kind: entry.kind,
-          markedAt: Number(entry.markedAt) || 0
-        } as ProvenanceDetail)
+      else if (entry.kind === 'owner-dirty') {
+        records.set(entry.id, { kind: 'owner-dirty', markedAt: Number(entry.markedAt) || 0 })
       }
+      // Anything else is not something this journal can emit, so it is not
+      // something it may rebuild. A 'dispatch-delivery' in particular carries a
+      // PROMPT that only the snapshot path persists; accepting one here would
+      // rebuild it without that prompt, and promptAnswersDispatch would then
+      // compare against undefined and silently stop matching. Narrow now, so a
+      // future call site cannot lose the prompt by widening the writer alone.
       applied += 1
     } catch {
       // Torn tail from a crash mid-append. Everything before it stands.
