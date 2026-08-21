@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Registry M1 — the gate, the log, and the seam</title>
+<style>
+:root {
+  --bg: #faf8f4; --panel: #fffef5; --panel-2: #f5f0e8; --ink: #2d2a20;
+  --dim: #6b6455; --line: #2d2a20; --line-soft: #d9d3c5;
+  --amber: #d97706; --violet: #7c6bb0; --green: #4a7c3f; --rose: #b3261e;
+  --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  --body: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#14130f; --panel:#1c1a15; --panel-2:#232019; --ink:#ede8dc;
+    --dim:#a49b88; --line:#3a352a; --line-soft:#2c281f;
+    --amber:#e8a33d; --violet:#b3a3e0; --green:#7fc46a; --rose:#e2685c; }
+}
+:root[data-theme="dark"] {
+  --bg:#14130f; --panel:#1c1a15; --panel-2:#232019; --ink:#ede8dc;
+  --dim:#a49b88; --line:#3a352a; --line-soft:#2c281f;
+  --amber:#e8a33d; --violet:#b3a3e0; --green:#7fc46a; --rose:#e2685c;
+}
+:root[data-theme="light"] {
+  --bg:#faf8f4; --panel:#fffef5; --panel-2:#f5f0e8; --ink:#2d2a20;
+  --dim:#6b6455; --line:#2d2a20; --line-soft:#d9d3c5;
+  --amber:#d97706; --violet:#7c6bb0; --green:#4a7c3f; --rose:#b3261e;
+}
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--body);
+  line-height:1.6; padding:32px 20px 80px; }
+.wrap { max-width: 980px; margin: 0 auto; }
+h1 { font-size: 28px; margin:0 0 6px; letter-spacing:-0.01em; }
+.sub { color:var(--dim); margin:0 0 28px; font-size:15px; }
+h2 { font-size:19px; margin:38px 0 10px; padding-bottom:6px;
+  border-bottom:2px solid var(--line); }
+h3 { font-size:15px; margin:22px 0 6px; }
+p { margin:10px 0; }
+code, .mono { font-family:var(--mono); font-size:0.88em; }
+code { background:var(--panel-2); padding:1px 5px; border-radius:3px; }
+pre { background:var(--panel); border:1px solid var(--line-soft); border-radius:6px;
+  padding:12px 14px; overflow-x:auto; font-family:var(--mono); font-size:12.5px; line-height:1.5; }
+table { width:100%; border-collapse:collapse; margin:14px 0; font-size:14px; }
+th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+th { font-size:12px; text-transform:uppercase; letter-spacing:0.06em; color:var(--dim); }
+.panel { background:var(--panel); border:1px solid var(--line-soft); border-left:3px solid var(--violet);
+  border-radius:6px; padding:14px 16px; margin:16px 0; }
+.panel.warn { border-left-color:var(--amber); }
+.panel.stop { border-left-color:var(--rose); }
+.panel.ok { border-left-color:var(--green); }
+.panel h4 { margin:0 0 6px; font-size:13px; text-transform:uppercase; letter-spacing:0.06em; }
+.doc-annot { font-family:var(--body); font-size:12px; color:var(--dim);
+  border-top:1px dashed var(--line-soft); margin-top:8px; padding-top:6px; }
+ul, ol { margin:10px 0; padding-left:22px; }
+li { margin:5px 0; }
+.q { color:var(--dim); font-size:13px; }
+.tag { display:inline-block; font-family:var(--mono); font-size:11px; padding:1px 6px;
+  border:1px solid var(--line-soft); border-radius:3px; color:var(--dim); }
+footer { margin-top:56px; padding-top:16px; border-top:1px solid var(--line-soft);
+  color:var(--dim); font-size:13px; }
+.toggle { position:fixed; top:12px; right:12px; font-family:var(--mono); font-size:11px;
+  background:var(--panel); color:var(--ink); border:1px solid var(--line-soft);
+  border-radius:4px; padding:5px 9px; cursor:pointer; }
+@media (max-width:640px){ body{padding:20px 14px 60px} h1{font-size:23px} }
+</style>
+</head>
+<body>
+<button class="toggle" id="t">theme</button>
+<div class="wrap">
+
+<h1>Registry M1 — the gate, the log, and the seam</h1>
+<p class="sub">P2-A design note · Forge · 2026-08-20 · <strong>decision required before implementation</strong><br />
+Grounded in <span class="mono">docs/design/marketplace-architecture.html</span> §0–7 and the merged M1 client half
+(<span class="mono">feat/marketplace-m1</span>, 00148e7).</p>
+
+<div class="panel">
+<h4>The one-sentence shape</h4>
+<p style="margin:0">The registry is a <strong>dumb content-addressed file server behind one authorization function</strong>. Every
+route either serves bytes that are already signed, or asks that function what answer to give. There is no
+session state, no business logic outside that function, and nothing on the server that a client is required
+to trust.</p>
+</div>
+
+<h2>1 · Service shape</h2>
+
+<p><strong>Recommendation: <span class="mono">registry/</span> at the repo root, standalone Node, no Electron, no framework.</strong>
+Started with <span class="mono">node registry/dist/main.js</span>; in dev, run through the repo's esbuild bundle
+the way the seed script already is.</p>
+
+<table>
+<tr><th>Decision</th><th>Choice</th><th>Why</th></tr>
+<tr><td>Location</td><td>in-repo <span class="mono">registry/</span></td>
+<td>So it imports <span class="mono">src/shared/preset-manifest</span> directly. That module is already pure —
+no <span class="mono">fs</span>, no <span class="mono">node:crypto</span>, no Electron — and a test enforces it.</td></tr>
+<tr><td>Verification</td><td>one implementation, two ends</td>
+<td><span class="mono">canonicalJson</span> and <span class="mono">signedPayload</span> are imported, never re-derived.
+A second implementation of a canonical form is how a signature check quietly becomes decorative: the server
+would accept what the client rejects, and the difference would surface as "sometimes installs fail".</td></tr>
+<tr><td>Transport</td><td><span class="mono">node:http</span></td>
+<td>Four verbs, five routes. A framework would be more code to audit than the thing it serves.</td></tr>
+<tr><td>Storage</td><td>content-addressed files + append-only log</td>
+<td>Blobs are immutable by construction, so the store is a directory and the index is derived. No database in M1.</td></tr>
+<tr><td>Crypto</td><td><span class="mono">node:crypto</span> ed25519</td>
+<td>Same primitives the publisher already uses.</td></tr>
+</table>
+
+<h3>Layout</h3>
+<pre>registry/
+  src/
+    server.ts        route table; no logic
+    authorize.ts     THE decision function — the only place answers are chosen
+    store.ts         blobs/ + manifests/, content-addressed, immutable
+    log.ts           append-only transparency log (hash-chained)
+    identity.ts      WebAuthn: challenge, verify, short-lived token
+    publish.ts       author-key TOFU + countersignature
+  data/              runtime: blobs/, manifests/, log.jsonl, identities/
+  test/</pre>
+
+<div class="panel warn">
+<h4>Deliberately absent in M1</h4>
+<p style="margin:0">No payments, no entitlement table beyond a boolean, no seats, no revocation, no witness
+co-signing, no CDN, no rate limiter beyond a trivial per-identity counter. Each is M2/M3 and each has a named
+seam below. A registry that grows these speculatively is a registry nobody can audit.</p>
+</div>
+
+<h2>2 · The gate endpoint</h2>
+
+<p>The whole business logic is which of four answers a request gets, and M1 implements two of them.
+<span class="tag">doc annotation</span> Status codes and reason tokens appear in this note as
+<em>labels for the design</em>. Per R14 none of them may render in shipped chrome.</p>
+
+<table>
+<tr><th>Route</th><th>Auth</th><th>Answers</th><th>Notes</th></tr>
+<tr><td class="mono">GET /v1/presets?q=</td><td>none</td><td>200</td>
+<td>Browse/search. Discovery is deliberately ungated — A2 says the marketplace adds discovery, identity,
+payment and entitlement, and only the last three are gates.</td></tr>
+<tr><td class="mono">GET /v1/presets/:id/manifest</td><td>optional</td><td>200 · 401 · <em>402 (M2)</em> · 403</td>
+<td>The gate. Idempotent, so the client's whole recovery strategy is "retry the same request".</td></tr>
+<tr><td class="mono">HEAD /v1/presets/:id/manifest</td><td>same</td><td>200 · 401 · 403</td>
+<td>R3's update check. Answers <span class="mono">x-cookrew-preset-version</span> and nothing else.</td></tr>
+<tr><td class="mono">GET /v1/blobs/:hash</td><td>none</td><td>200 · 404</td>
+<td>Content-addressed and immutable, so <span class="mono">Cache-Control: immutable</span> is honest.
+Ungated on purpose: the bytes are useless without the manifest that names them, and the manifest is the gate.</td></tr>
+<tr><td class="mono">GET /v1/log?from=&amp;preset=</td><td>none</td><td>200</td>
+<td>The transparency log, replayable by anyone. <span class="mono">preset</span> narrows it to one preset's
+records, keeping their real <span class="mono">seq</span> and <span class="mono">prev</span> — that is the link
+R20's rotation sheet hands the buyer, and "verify this yourself" has to land on something a person can read.</td></tr>
+<tr><td class="mono">POST /v1/presets</td><td>required</td><td>201 · 400 · 401 · 403 · 409 · 413</td>
+<td><b>Publish.</b> Fresh WebAuthn ceremony per manifest — and the freshness is real: the first attempt
+carries no countersignature and is answered <span class="mono">401</span> with a challenge bound to
+<em>this</em> operation, author key and preset. <span class="mono">400</span> is a manifest that does not
+describe its own bytes, <span class="mono">409</span> a conflict with what the log already holds,
+<span class="mono">403 scope</span> a download token at a write route (D4/R26's other direction).</td></tr>
+<tr><td class="mono">POST /v1/presets/:id/rotate</td><td>required</td><td>200 · 400 · 401 · 403 · 409</td>
+<td><b>Key rotation (R20's registry half).</b> Same ceremony, different operation — and the difference is
+inside the countersigned payload, not only in the URL. Both routes exist only when identity does; a
+deployment that cannot authenticate answers 404 and does not advertise them.</td></tr>
+<tr><td class="mono">GET /install/:presetId</td><td>none</td><td>200 · 404</td>
+<td><b>The shared link (R21 Option A).</b> Outside <span class="mono">/v1</span> deliberately: people paste this
+one into messages, and a version prefix in a human-held URL is a promise to keep it working when the API moves on.
+Answers <em>HTML</em>, and both answers are a page — somebody following a dead link did nothing wrong and cannot
+read a status code. Names the preset and stops: name, <span class="mono">@handle</span>, version. It is not a review
+sheet (the manifest is for a client that checked it itself — A5) and it cannot install, because it carries no script,
+no form and a CSP that forbids both.</td></tr>
+</table>
+
+<div class="panel ok">
+<h4>F3 — yes: the ungated search carries <span class="mono">visibility</span></h4>
+<p style="margin:0">Every row from <span class="mono">GET /v1/presets</span> carries
+<span class="mono">visibility: "public" | "identified"</span>, and that route takes no credential. So the market
+card renders lock state <strong>before any click</strong>: a locked chip is drawn locked from the first paint
+rather than discovered by clicking and being refused.</p>
+<p style="margin:8px 0 0">Worth stating as a rule, because it is a boundary and not a convenience:
+<em>what a preset costs is public; only what it contains is gated.</em> Hiding the lock until a click would make
+the first click of every gated preset a failure the user provoked.</p>
+<p class="doc-annot" style="margin:8px 0 0">Shipped in A1 (<span class="mono">PresetSummary</span>) and asserted
+explicitly in 364d945 — the test fetches search with no credential and checks the locked row.</p>
+</div>
+
+<h3>The 401 path, exactly</h3>
+<ol>
+<li>Client <span class="mono">GET</span>s the manifest with no token.</li>
+<li>Server answers <span class="mono">401</span> with
+<span class="mono">WWW-Authenticate: WebAuthn realm="market", challenge=&lt;b64url&gt;</span>.
+The challenge is single-use, 90s, and bound to nothing else — it is a nonce, not a session.</li>
+<li>Client runs the passkey ceremony and <span class="mono">POST</span>s the assertion to
+<span class="mono">/v1/identity/assert</span>.</li>
+<li>Server verifies and returns a token: 10 minutes, scoped to <em>downloads</em>, and worth nothing for publishing.</li>
+<li>Client <strong>retries the identical GET</strong> with <span class="mono">Authorization: Bearer</span>.</li>
+</ol>
+
+<div class="panel stop">
+<h4>D4 / R9 — a wrong-scope token is 403, never 401</h4>
+<p style="margin:0">If a token is valid but does not cover this preset, the answer is 403. Answering 401 would
+tell a client "your identity is the problem", it would re-authenticate, present the same token, and loop.
+401 means <em>prove who you are</em>; 403 means <em>you did, and it is still no</em>. A client may loop on the
+first and must never loop on the second — that asymmetry is why the codes are the protocol.</p>
+</div>
+
+<div class="panel warn">
+<h4>F2 — a background check never raises a sheet</h4>
+<p style="margin:0 0 8px">The dock-open update check (R3) is not something the user asked for; it happens
+because they opened a dock. A token lives ten minutes, so meeting an expired one on a HEAD is <em>routine</em>,
+not exceptional — and its answer is <strong>badge state and nothing else</strong>: no badge, no error, no sheet.</p>
+<p style="margin:0">Every non-200 is silent, not only 401: a refusal, an unreachable registry, a malformed
+answer. The buyer keeps the version they have, which still works, and learns about a newer one the next time a
+check succeeds. Raising a passkey prompt because a background poll tripped would mean <em>opening a dock can
+demand a fingerprint</em>, which is the failure this rule exists to prevent. Sheets are raised by user intent
+only.</p>
+<p class="doc-annot" style="margin:8px 0 0">Encoded, not merely written down:
+<span class="mono">updateCheckOutcome</span> in <span class="mono">src/shared/preset-manifest.ts</span> returns
+<span class="mono">silent</span> for every non-200, with tests. Shipped 364d945.</p>
+</div>
+
+<h3>What actually needs 401 in M1</h3>
+<p>M1 has no money, so gating would be theatre — except that an ungated M1 leaves the 401 path untested until
+M2, when it will be load-bearing. So: a preset carries <span class="mono">visibility: "public" | "identified"</span>.
+Public answers 200 to anyone. Identified answers 401 first. Both ship in the dev registry so Magpie's C-area
+matrix has real traffic to assert against, and M2 changes the <em>reason</em> a request is refused, never the machinery.</p>
+
+<h2>3 · Dev-mode passkey on localhost</h2>
+
+<p>WebAuthn requires a secure context, and <span class="mono">http://localhost</span> is one by specification —
+so dev needs no TLS and no certificate story. RP ID is <span class="mono">localhost</span>, origin is
+<span class="mono">http://localhost:&lt;port&gt;</span>, and both are asserted server-side rather than trusted from
+the client's <span class="mono">clientDataJSON</span>.</p>
+
+<table>
+<tr><th>Who</th><th>Authenticator</th><th>How</th></tr>
+<tr><td>A human on the desktop</td><td>Touch ID</td><td>Real ceremony in the market browser card. Nothing special.</td></tr>
+<tr><td>Magpie's automation</td><td>CDP virtual authenticator</td>
+<td><span class="mono">WebAuthn.addVirtualAuthenticator</span> on their own Chrome. Deterministic, scriptable,
+and it exercises the same server code a Touch ID prompt does.</td></tr>
+<tr><td>Unit tests</td><td>fixed key pair</td><td>Assertions signed in-process; no browser.</td></tr>
+</table>
+
+<div class="panel">
+<h4>No bypass switch</h4>
+<p style="margin:0">There is deliberately no <span class="mono">--dev-skip-auth</span>. A flag that turns the gate
+off is a flag that gets set in the environment that matters, and the 401 path would then be exercised by nobody
+until a buyer hits it. The virtual authenticator gives automation everything a bypass would, without ever
+building a door.</p>
+</div>
+
+<h2>4 · Publish auth, and author-key TOFU</h2>
+
+<p>This is my review carry-forward, and the part I most want a ruling on.</p>
+
+<p>The client already pins an author key at install (<span class="mono">author.pub</span>, H2) and re-verifies every
+read against it. That protects a buyer who has <em>already</em> installed. It says nothing about the <em>first</em>
+install, or about version two arriving under a different key.</p>
+
+<h3>Publishing</h3>
+<ol>
+<li>A fresh WebAuthn ceremony per manifest — a download token is explicitly not sufficient (spec §6).</li>
+<li>The manifest arrives already signed by the author's local ed25519 key. The registry never sees that key.</li>
+<li>The passkey identity <strong>countersigns the author key id</strong>: the WebAuthn assertion covers
+<span class="mono">sha256(authorKeyId ‖ manifestId)</span>. That binding is what the log records.</li>
+</ol>
+
+<h3>TOFU continuity</h3>
+<pre>first publish for a preset lineage   → bind (identityId → authorKeyId), log it
+later publish, same author key       → accept
+later publish, different author key  → REFUSE (409) unless a rotation record,
+                                       countersigned by the SAME identity,
+                                       is already in the log</pre>
+
+<div class="panel ok">
+<h4>Which half is the security boundary</h4>
+<p style="margin:0">The <strong>client's pin</strong> is. The registry's TOFU check is a convenience that catches
+mistakes early and makes the log meaningful — but per A5 a compromised registry can only <em>deny</em>, so a
+server-side rule can never be what keeps a buyer safe. Stated plainly because it is exactly the kind of check
+that gets mistaken for protection: if the registry were the boundary, an attacker who owns the registry would
+own every future version, and the entire signing design exists to make that false.</p>
+</div>
+
+<p class="q">Open question for the Commander: on rotation, should already-installed clients auto-accept the new key
+because the log shows a valid countersigned rotation, or refuse and require a human? I lean <strong>refuse and
+surface it</strong> — an auto-accepted rotation is indistinguishable from a compromised passkey, and "the author
+changed keys" is exactly the event a buyer should see once. That costs a sheet Velvet has not written.</p>
+
+<h2>5 · Transparency log</h2>
+
+<p>Append-only JSONL, one record per publish or rotation, hash-chained so an omission is detectable by anyone
+who kept an earlier head.</p>
+
+<pre>{ "seq": 41,
+  "at": 1755993600000,
+  "kind": "publish",                       // | "key-rotation"
+  "presetId": "sha256:…",                  // content address of team.json
+  "version": 3,
+  "authorKeyId": "ed25519:…",
+  "identityId": "webauthn:…",              // stable per passkey credential
+  "countersig": "webauthn:…",              // assertion over sha256(authorKeyId ‖ presetId)
+  "prev": "sha256:…",                      // hash of record 40
+  "hash": "sha256:…" }                     // sha256(canonicalJson(record minus hash))</pre>
+
+<p>Canonicalised with the <em>same</em> <span class="mono">canonicalJson</span> the manifests use — one canonical
+form in the codebase, so a log record hashes identically wherever it is checked.</p>
+
+<p><strong>In M1 the log is written and served. It is not yet witnessed.</strong> A single-operator log proves
+consistency, not honesty: the operator can still fork history for two different readers. Witness co-signing and
+gossip are M3, and until they land the log's real guarantee is "the registry cannot quietly rewrite what a client
+already saw" — which is worth having and worth not overstating.</p>
+
+<h2>6 · Where M2's 402 mounts</h2>
+
+<p>One function, one added variant. Everything else — routes, headers, client retry loop, log — is unchanged.</p>
+
+<pre>// authorize.ts — M1
+type Verdict =
+  | { code: 200 }
+  | { code: 401, challenge: string }
+  | { code: 403, reason: ForbiddenReason, remedy?: string }
+
+// authorize.ts — M2 adds ONE variant and ONE header read
+  | { code: 402, terms: { price, asset, chain, payTo, nonce, expiry } }</pre>
+
+<p>The order is fixed and each step answers before the next runs: <em>identity → entitlement → (M2) price →
+serve</em>. M2 inserts itself between entitlement and serve, reads <span class="mono">X-Payment</span> when present,
+mints an entitlement on verified settlement, and lets the client retry the same idempotent GET (spec §4). No new
+endpoint, no confirm step, no session — a crash mid-flow retries into either 200 (entitlement minted) or 402 with
+a fresh nonce (payment never landed).</p>
+
+<div class="panel stop">
+<h4>R5 — the seam is on THIS surface only</h4>
+<p style="margin:0">402 mounts on the download/chip/top-up path. The <em>call</em> path is a different route with
+a different answer set — 200 or 403, never 402 — and an exhausted prepaid meter surfaces there as
+<span class="mono">balance_empty</span> between calls. That is already encoded client-side in
+<span class="mono">isCallPathAnswer</span> and <span class="mono">DRAWDOWN_CONTRACT</span>; the registry must not be
+the thing that breaks it. Per R12 the drawdown is per call at accept, which is what makes Velvet's
+"its last answer completed" true by construction rather than by copy.</p>
+</div>
+
+<h2>7 · How the market card hands INSTALL to the app</h2>
+
+<p>R1 puts the market in a canvas browser card, so the page is a web surface and INSTALL has to cross from that
+page into the app. <strong>I found no existing mechanism to reuse</strong> — no protocol handler, no navigation
+interception on browser cards — so this is a real decision, not a detail.</p>
+
+<table>
+<tr><th>Option</th><th>Shape</th><th>Assessment</th></tr>
+<tr><td>A · canonical https deep link</td>
+<td>Page links to <span class="mono">https://&lt;host&gt;/install/&lt;presetId&gt;</span>; the browser card
+recognises the route and routes it to main.</td>
+<td><strong>Recommended.</strong> One URL that works in three places: intercepted on the canvas, deep-linked into
+the phone companion, and a real web page for anyone without the app. It is the same shape the phone handoff rule
+already relies on.</td></tr>
+<tr><td>B · custom scheme</td><td><span class="mono">cookrew://install?id=…</span></td>
+<td>Needs an OS protocol registration that does not exist yet, is invisible to a browser without the app, and
+cannot be shared.</td></tr>
+<tr><td>C · postMessage bridge</td><td>Page talks to the card's host.</td>
+<td>Couples the registry page to Cookrew internals and only works inside the canvas — the phone case dies.</td></tr>
+</table>
+
+<p>Under A, the app never installs because a page asked. The interception hands main a <em>preset id</em>; main
+downloads, verifies with the client-side <span class="mono">verifyPreset</span>, and shows the review sheet.
+<strong>The page cannot skip the sheet</strong> — that is the point of A4, and the seam is designed so a hostile
+page has no way to express "install without asking".</p>
+
+<p class="q">Dependency to flag: option A needs a small navigation hook on browser cards that does not exist.
+That is arguably Atlas's surface, not mine. I would rather agree the shape here and file the hook than build a
+second mechanism inside the registry.</p>
+
+<h2>7b · Dev contract — reconciled with Magpie's harness</h2>
+
+<p>Magpie published a harness contract and took the C-area 401 matrix live. Reconciled against what
+<span class="mono">364d945</span> actually served:</p>
+
+<table>
+<tr><th>They expected</th><th>Was served</th><th>Now</th></tr>
+<tr><td class="mono">/v1/health</td><td>—</td>
+<td><strong>Added.</strong> Liveness plus a self-description of the contract, so a harness reconciles
+expectation against reality in one request rather than one 404 at a time.</td></tr>
+<tr><td class="mono">/v1/dev/identities</td><td>—</td>
+<td><strong>Added, dev only.</strong> GET lists enrolled credentials, DELETE resets. The reset is the point: a
+gate matrix must start from a known-empty state or its first case tests whatever the last run left behind.</td></tr>
+<tr><td>manifest route</td><td class="mono">GET|HEAD /v1/presets/:id/manifest</td>
+<td>Matches. No change needed.</td></tr>
+<tr><td class="mono">/v1/pay</td><td>—</td><td><strong>Will not exist.</strong> See below.</td></tr>
+</table>
+
+<div class="panel stop">
+<h4>/v1/pay is not a gap — it is a design difference, and it matters before fixtures are written</h4>
+<p style="margin:0 0 8px">M2 mounts 402 <em>on the manifest gate itself</em>. The client pays, then
+<strong>retries the same idempotent GET</strong> carrying <span class="mono">X-Payment</span> (spec §4). There is
+deliberately no confirm endpoint: a crash mid-flow retries into either 200 (entitlement already minted) or a
+fresh 402 (payment never landed), and never into a state nobody can name.</p>
+<p style="margin:0">A separate <span class="mono">/v1/pay</span> would reintroduce exactly the two-step stateful
+checkout the status-code design exists to avoid. Flagged loudly because a fixture built against it would pass
+its own assertions while testing a route that is never going to exist — so
+<span class="mono">/v1/health</span> names it in a <span class="mono">notServed</span> field, with the reason.</p>
+</div>
+
+<p>The dev routes are <strong>absent, not refused</strong>, without dev mode, and dev mode is a startup decision
+rather than a runtime toggle: an endpoint that can forget every credential must not be one flag away in
+production. Tests assert both the 404 and that <span class="mono">/v1/health</span> does not advertise them.</p>
+
+<h2>8 · Slice plan, once approved</h2>
+<ol>
+<li><strong>P2-A1</strong> — store + log + <span class="mono">GET</span> manifest/blobs/search, public only. No auth.
+End state: the seed script's three presets served over http and installable by hand.</li>
+<li><strong>P2-A2</strong> — identity: challenge, assertion verify, short-lived token, the 401 path, and D4's 403.
+Unblocks Magpie's C-area matrix.</li>
+<li><strong>P2-A3</strong> — publish: fresh ceremony, countersignature, TOFU enforcement, log records.</li>
+<li><strong>P2-A4</strong> — the install handoff, pending §7's ruling.</li>
+</ol>
+<p>Each slice ends green with the reviewer's PoCs as tests, on <span class="mono">feat/registry-m1</span> off dev,
+in a linked worktree. No commits to dev without review.</p>
+
+<h2>9 · Decisions I need</h2>
+<ol>
+<li><strong>§4</strong> — on a countersigned key rotation, do installed clients auto-accept or refuse and surface?
+I lean refuse.</li>
+<li><strong>§7</strong> — approve option A, and confirm the browser-card navigation hook is Atlas's to build.</li>
+<li><strong>§2</strong> — confirm <span class="mono">visibility: identified</span> is worth shipping in M1 purely to
+keep the 401 path exercised before M2 depends on it.</li>
+<li><strong>§5</strong> — confirm an unwitnessed log is acceptable for M1, given the guarantee is stated narrowly.</li>
+</ol>
+
+<footer>
+Forge · P2-A design note · <span class="mono">docs/design/registry-m1.html</span><br />
+Spec: <span class="mono">docs/design/marketplace-architecture.html</span> §0–7 ·
+Client half: <span class="mono">feat/marketplace-m1</span> @ 00148e7 ·
+Rulings applied: R1, R3, R5, R9/D4, R11, R12, R14, A2, A4, A5<br />
+Status: <strong>A1 + A2 shipped</strong> — da1bd2f, 364d945, 4b53b20 · A3 scope confirmed, not started<br />Folds: F2 (§2 silent background check) · F3 (§2 visibility on ungated search) · §7b dev contract reconciled
+</footer>
+</div>
+<script>
+const t = document.getElementById('t');
+t.addEventListener('click', () => {
+  const cur = document.documentElement.getAttribute('data-theme');
+  const dark = cur ? cur === 'dark'
+    : window.matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.setAttribute('data-theme', dark ? 'light' : 'dark');
+});
+</script>
+</body>
+</html>

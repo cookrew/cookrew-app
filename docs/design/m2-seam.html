@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M2 seam — where payment attaches to the M1 gate</title>
+<style>
+:root{
+  color-scheme: light dark;
+  --bg:#fbfaf8; --panel:#fff; --ink:#1c1b19; --dim:#6b6660; --line:#e6e2dc;
+  --accent:#8a5cf6; --ok:#2e7d5b; --warn:#a8730c; --stop:#b23c3c; --code:#f4f2ee;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#141414; --panel:#1b1b1b; --ink:#ececea; --dim:#9a948c; --line:#2c2c2c;
+         --accent:#a988ff; --ok:#5fbf92; --warn:#d9a441; --stop:#e07a7a; --code:#202020; }
+}
+*{box-sizing:border-box}
+body{margin:0;padding:2.5rem 1.25rem 4rem;background:var(--bg);color:var(--ink);
+  font:16px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;justify-content:center}
+main{width:100%;max-width:52rem}
+h1{font-size:1.9rem;line-height:1.15;margin:0 0 .4rem;letter-spacing:-.02em}
+h2{font-size:1.15rem;margin:2.8rem 0 .8rem;padding-top:1.2rem;border-top:1px solid var(--line);letter-spacing:-.01em}
+h2 .num{display:inline-block;min-width:1.6rem;color:var(--accent);font-variant-numeric:tabular-nums}
+h3{font-size:.95rem;margin:1.6rem 0 .5rem;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+p{margin:.7rem 0}
+.lede{color:var(--dim);margin:0 0 1.4rem}
+.tag{display:inline-block;font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;
+  padding:.2rem .5rem;border:1px solid var(--line);border-radius:999px;color:var(--dim);margin-right:.4rem}
+.tag.stop{color:var(--stop);border-color:var(--stop)}
+.tag.ok{color:var(--ok);border-color:var(--ok)}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86em}
+code{background:var(--code);padding:.08em .35em;border-radius:4px}
+pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:.9rem 1rem;
+  overflow-x:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.82rem;line-height:1.55}
+pre .add{color:var(--ok)} pre .cut{color:var(--stop)} pre .cm{color:var(--dim)}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.88rem}
+th,td{text-align:left;vertical-align:top;padding:.5rem .6rem;border-bottom:1px solid var(--line)}
+th{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:600}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1rem 1.1rem;margin:1.2rem 0}
+.panel.stop{border-left:3px solid var(--stop)}
+.panel.ok{border-left:3px solid var(--ok)}
+.panel.warn{border-left:3px solid var(--warn)}
+.panel h4{margin:0 0 .4rem;font-size:.95rem}
+ul{margin:.6rem 0;padding-left:1.1rem} li{margin:.35rem 0}
+svg{max-width:100%;height:auto;display:block;margin:1.2rem 0}
+details{border:1px solid var(--line);border-radius:10px;padding:.7rem .9rem;margin:.8rem 0;background:var(--panel)}
+summary{cursor:pointer;font-weight:600;font-size:.92rem}
+footer{margin-top:3.5rem;padding-top:1.2rem;border-top:1px solid var(--line);color:var(--dim);font-size:.85rem}
+a{color:var(--accent)}
+.q{color:var(--warn);font-weight:600}
+</style>
+</head>
+<body>
+<main>
+
+<h1>M2 seam — where payment attaches to the M1 gate</h1>
+<p class="lede">
+Forge · 2026-08-22 · design only, no implementation. Written while
+<span class="mono">feat/registry-m1</span> (da1bd2f..8a64348) is under Tinker's review, so nothing here
+has been built and nothing here should be built until that verdict lands.
+</p>
+<p>
+<span class="tag stop">no code</span><span class="tag">spec §2 · §4</span><span class="tag">R5 · R11 · R12 · R24 · R26</span>
+</p>
+
+<p>
+The purpose of this note is to make M2 a <em>small</em> change. M1 was built so that payment is one added
+variant on one function, and the value of that claim depends entirely on it still being true when someone
+tries. So this names the exact attachment point in the code as it stands after A3, the wire shape of the
+terms, the rules the call path imposes, and where our responsibility ends and the facilitator's begins.
+</p>
+
+<h2><span class="num">1</span>Where the 402 attaches</h2>
+
+<p>
+One function: <span class="mono">registry/src/authorize.ts</span>. It is the only place an answer is
+chosen — routes never decide anything — so M2 adds a variant and a branch and touches no route, no
+header plumbing, no client retry loop, and no log.
+</p>
+
+<pre><span class="cm">// registry/src/server.ts — the Verdict type, as it stands after A3</span>
+export type Verdict =
+  | { code: 200 }
+  | { code: 401; challenge: string }
+  | { code: 403; reason: string }
+  | { code: 404 }
+<span class="add">  | { code: 402; terms: Terms }        // ← M2 adds exactly this</span>
+</pre>
+
+<p>
+And the decision ladder inside <span class="mono">makeAuthorize()</span>. The order is fixed, each step
+answers before the next runs, and <strong>402 goes between entitlement and serve</strong> — after we know
+who they are and that their credential covers this request, before any bytes exist to hand over.
+</p>
+
+<svg viewBox="0 0 720 232" role="img" aria-label="The authorize decision ladder with M2's 402 inserted between entitlement and serve">
+  <defs>
+    <marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <g font-family="ui-sans-serif,-apple-system,sans-serif" font-size="12" color="currentColor">
+    <g fill="none" stroke="currentColor" stroke-opacity=".35" marker-end="url(#a)">
+      <path d="M96 34 H150"/><path d="M246 34 H300"/><path d="M396 34 H450"/>
+      <path d="M546 34 H600"/>
+      <path d="M48 52 V196 H140"/><path d="M198 52 V166 H290"/>
+      <path d="M348 52 V136 H440"/><path d="M498 52 V106 H590"/>
+    </g>
+    <g>
+      <rect x="8" y="16" width="88" height="36" rx="8" fill="none" stroke="currentColor" stroke-opacity=".5"/>
+      <text x="52" y="38" text-anchor="middle" fill="currentColor">exists?</text>
+      <rect x="158" y="16" width="88" height="36" rx="8" fill="none" stroke="currentColor" stroke-opacity=".5"/>
+      <text x="202" y="38" text-anchor="middle" fill="currentColor">identity?</text>
+      <rect x="308" y="16" width="88" height="36" rx="8" fill="none" stroke="currentColor" stroke-opacity=".5"/>
+      <text x="352" y="38" text-anchor="middle" fill="currentColor">scope?</text>
+      <rect x="458" y="16" width="88" height="36" rx="8" fill="none" stroke="currentColor" stroke-opacity=".5"/>
+      <text x="502" y="38" text-anchor="middle" fill="currentColor">entitled?</text>
+      <rect x="608" y="16" width="88" height="36" rx="8" fill="none" stroke="currentColor" stroke-opacity=".5"/>
+      <text x="652" y="38" text-anchor="middle" fill="currentColor">serve 200</text>
+    </g>
+    <g font-size="11.5">
+      <text x="146" y="200" fill="currentColor" fill-opacity=".8">404 · not found</text>
+      <text x="296" y="170" fill="currentColor" fill-opacity=".8">401 · challenge (A2)</text>
+      <text x="446" y="140" fill="currentColor" fill-opacity=".8">403 · scope (R26 / D4)</text>
+      <text x="596" y="110" fill="currentColor" fill-opacity=".8">403 · reason + remedy</text>
+    </g>
+    <g>
+      <rect x="458" y="76" width="238" height="34" rx="8" fill="none" stroke="currentColor" stroke-dasharray="4 3" stroke-opacity=".75"/>
+      <text x="470" y="98" fill="currentColor" font-weight="600">M2: 402 · terms</text>
+      <text x="576" y="98" fill="currentColor" fill-opacity=".65" font-size="11">← the only new step</text>
+      <path d="M502 52 V76" fill="none" stroke="currentColor" stroke-opacity=".55" marker-end="url(#a)"/>
+      <path d="M696 93 H706 V34 H696" fill="none" stroke="currentColor" stroke-opacity=".35"/>
+    </g>
+  </g>
+</svg>
+
+<p>
+Two things about that placement are not arbitrary and should survive review.
+</p>
+<ul>
+  <li><strong>402 sits after <span class="mono">scope</span>, not before.</strong> R26's scope refusal is a
+  statement about the <em>credential</em>; a wrong-scope token is not a payment problem, and answering 402
+  to one would invite a buyer to pay for something the payment cannot fix. Scope was ruled after the
+  original ordering was written, so this is a real insertion decision, not a restatement.</li>
+  <li><strong>402 sits before serve, not at the route.</strong> The route reads
+  <span class="mono">verdict.code !== 200</span> and answers; it does not know what payment is. Keeping the
+  decision in one function is what makes "M2 changes the reason a request is refused, never the machinery"
+  true rather than aspirational.</li>
+</ul>
+
+<pre><span class="cm">// registry/src/authorize.ts — the branch M2 inserts, in place</span>
+    if (claims.scope !== 'download') return { code: 403, reason: 'scope' }
+
+<span class="add">    // M2: entitlement is real from here. The M1 line below is the seam.</span>
+<span class="add">    const held = entitlements.of(claims.sub, presetId)</span>
+<span class="add">    if (held === null) {</span>
+<span class="add">      const proof = request.headers['x-payment']</span>
+<span class="add">      if (proof === undefined) return { code: 402, terms: facilitator.quote(presetId, claims.sub) }</span>
+<span class="add">      // Settlement verified → entitlement minted → fall through to serve.</span>
+<span class="add">      // NOT a redirect and NOT a second endpoint: the client retried the</span>
+<span class="add">      // same idempotent GET, so success here simply continues to 200.</span>
+<span class="add">      if (!facilitator.settle(proof, claims.sub, presetId)) {</span>
+<span class="add">        return { code: 402, terms: facilitator.quote(presetId, claims.sub) }</span>
+<span class="add">      }</span>
+<span class="add">    }</span>
+
+<span class="cut">-   // M1 has no entitlement service: a verified identity is entitled to</span>
+<span class="cut">-   // every identified preset. A3 puts the real check HERE.</span>
+    return { code: 200 }
+</pre>
+
+<div class="panel warn">
+  <h4>A failed settlement answers 402 again, never 403</h4>
+  <p style="margin:0">
+  402 is <em>caller-recoverable</em> and 403 is not — that is the whole reason the codes bind cleanly
+  (spec §2), and D4/R9's rule that a client never loops on 403 depends on it. A proof that did not settle
+  means the payment did not happen, which is exactly the state 402 describes. Answering 403 would tell the
+  client to stop trying and send the buyer to an author who cannot help. The <em>nonce</em> is what stops
+  this becoming a loop: each 402 carries a fresh one, and a spent one is refused.
+  </p>
+</div>
+
+<h2><span class="num">2</span>The terms payload, on the wire</h2>
+
+<p>
+Spec §2 fixes the shape as x402-style terms. Every field is a machine value; per R14 none of them is a
+sentence and none of them renders raw — Velvet's <span class="mono">mkt.pay.*</span> strings own every
+word the buyer reads, and they interpolate from exactly these.
+</p>
+
+<pre>HTTP/1.1 402 Payment Required
+content-type: application/json; charset=utf-8
+
+{
+  "terms": {
+    "price":  "12.00",                        <span class="cm">// decimal string, never a float</span>
+    "asset":  "USDC",
+    "chain":  "base",
+    "payTo":  "0x…",                          <span class="cm">// the AUTHOR's address, not ours</span>
+    "nonce":  "…",                            <span class="cm">// single-use, bound to (identity, preset)</span>
+    "expiry": 1766000000000                   <span class="cm">// epoch ms; the sheet counts down (mm:ss)</span>
+  }
+}</pre>
+
+<table>
+  <tr><th>Field</th><th>Type</th><th>Who owns it</th><th>Why it is shaped this way</th></tr>
+  <tr><td class="mono">price</td><td>decimal string</td><td>author, via facilitator quote</td>
+    <td>A string because money is not a float. Deck §7 renders it <span class="mono">$12.00 USDC</span> — two decimals, asset named, never a bare number.</td></tr>
+  <tr><td class="mono">asset</td><td><span class="mono">"USDC"</span></td><td>fixed in M2</td>
+    <td>One asset keeps the sheet honest. A multi-asset menu is a pricing feature, not a payment one.</td></tr>
+  <tr><td class="mono">chain</td><td>string</td><td>deployment config</td>
+    <td>Named <em>separately</em> from the amount (deck §7) — folding it into the price makes both unreadable.</td></tr>
+  <tr><td class="mono">payTo</td><td>address</td><td>author</td>
+    <td>Funds move buyer → author. Cookrew is never in the path; see §5.</td></tr>
+  <tr><td class="mono">nonce</td><td>opaque string</td><td>registry</td>
+    <td>Single-use and bound. This is what makes a replayed or resold proof a no-op (spec §6).</td></tr>
+  <tr><td class="mono">expiry</td><td>epoch ms</td><td>registry</td>
+    <td>Absolute, so the client owns the countdown. <span class="mono">mkt.pay.expires</span> renders <span class="mono">mm:ss</span>.</td></tr>
+</table>
+
+<div class="panel ok">
+  <h4>The nonce should reuse A3's bound-challenge machinery, not invent a second one</h4>
+  <p style="margin:.4rem 0 0">
+  A3 (8a64348) already built exactly this shape for countersignatures:
+  <span class="mono">Map&lt;value, { exp, binding }&gt;</span> in <span class="mono">identity.ts</span> — a
+  nonce that is single-use, expiring, and <em>remembers what it was issued for</em>, checked against the
+  server's own record rather than anything the request claims. A payment nonce needs the same three
+  properties with <span class="mono">binding = (identity, presetId)</span>.
+  </p>
+  <p style="margin:.5rem 0 0">
+  Reusing it is not just less code. The A3 review found that two operations sharing one unbound payload is
+  a replay; a second, subtly different nonce system is how that class of bug comes back. If the binding
+  string gains an operation tag — <span class="mono">'purchase'</span> alongside
+  <span class="mono">'publish'</span> and <span class="mono">'key-rotation'</span> — the existing
+  wrong-binding refusal covers payment for free.
+  </p>
+</div>
+
+<h2><span class="num">3</span>The retry, and why there is no <span class="mono">/v1/pay</span></h2>
+
+<p>
+The client pays, then <strong>retries the same idempotent GET</strong> carrying
+<span class="mono">X-Payment</span>. There is deliberately no confirm endpoint, and this is already a
+promise the running server makes out loud — <span class="mono">/v1/health</span> declares it:
+</p>
+
+<pre>"notServed": { "/v1/pay": "never — M2 mounts 402 on the manifest gate itself" }</pre>
+
+<p>
+That declaration ships today so nobody builds fixtures against a route that will never exist. Recovery is
+free by construction: a crash mid-flow retries into <strong>200</strong> (entitlement already minted) or a
+fresh <strong>402</strong> (payment never landed). There is no third state to reconcile, because the
+server holds no half-finished purchase.
+</p>
+
+<h2><span class="num">4</span>The call path is not a payment surface</h2>
+
+<p>
+This is the part most likely to be got wrong by someone implementing from the status-code table alone,
+because the table describes the <em>download</em> gate and the call path plays by different rules.
+</p>
+
+<table>
+  <tr><th>Rule</th><th>What it means for M2</th><th>Already in code</th></tr>
+  <tr><td>R5</td>
+    <td>Pay-per-call is a <strong>prepaid balance</strong> bought at install or top-up. The call path answers
+    <strong>200 or 403 only</strong>. 402 never appears mid-conversation — it lives on the chip, install and
+    top-up surfaces.</td>
+    <td class="mono">isCallPathAnswer()</td></tr>
+  <tr><td>R11</td>
+    <td>A dry meter is <span class="mono">balance_empty</span> — a first-class 403 reason, never a
+    <span class="mono">seat_limit</span> variant and never the unknown fallback. It is the one 403 whose
+    remedy stays inside Cookrew: top-up on the chip, never a wallet over the conversation.</td>
+    <td class="mono">FORBIDDEN_REASONS</td></tr>
+  <tr><td>R12</td>
+    <td>Drawdown is per <strong>turn</strong>, charged at <strong>accept</strong> — before any work — and the
+    gate never interrupts a running turn. So a balance is checked once per turn, at the boundary, and
+    <span class="mono">balance_empty</span> can only surface <em>between</em> turns.</td>
+    <td class="mono">DRAWDOWN_CONTRACT</td></tr>
+</table>
+
+<p>
+R12's ordering is what makes Velvet's line <em>"its last answer completed · nothing was lost"</em> true by
+construction rather than by copy. Charging at completion, or re-checking mid-turn, would both create
+exactly the state that sentence denies. The constant in
+<span class="mono">src/shared/preset-manifest.ts</span> records it so the shape cannot drift before the
+call path exists; if the contract ever changes, the string must change with it.
+</p>
+
+<div class="panel stop">
+  <h4>Three things M2 must not do, each already enforced by M1</h4>
+  <ul style="margin:.3rem 0 0">
+    <li><strong>HEAD must never answer 402.</strong> R3's update check is a HEAD, and R24 says a background
+    check cannot raise a sheet — <span class="mono">updateCheckOutcome()</span> already returns
+    <span class="mono">silent</span> for every non-200. A 402 on HEAD would mean opening the dock could ask
+    a buyer for money.</li>
+    <li><strong>No wallet sheet over a terminal card.</strong> R5, and Magpie already holds it as an
+    interaction gate. The exhausted-meter case is an inline notice whose action opens the balance sheet on
+    the <em>chip</em>.</li>
+    <li><strong>The local <span class="mono">entitled</span> flag is never authority.</strong>
+    <span class="mono">install.json</span> is a cache of the gate's last word
+    (<span class="mono">preset-local-state.ts</span> says so in comments today). When the gate is real, a
+    403 overrides it, and nothing may treat a local <span class="mono">true</span> as a licence.</li>
+  </ul>
+</div>
+
+<h2><span class="num">5</span>The facilitator boundary</h2>
+
+<p>
+The registry does two things with money and neither involves touching it: <strong>ask for terms</strong>
+and <strong>ask whether a proof settled</strong>. Everything else — chain RPC, transfer construction,
+confirmation depth — is the facilitator's, and none of it belongs in a process whose other job is serving
+signed bytes.
+</p>
+
+<table>
+  <tr><th></th><th>Registry</th><th>Facilitator</th></tr>
+  <tr><td>Issues terms</td><td>relays, adds the nonce binding</td><td>prices, names <span class="mono">payTo</span> and chain</td></tr>
+  <tr><td>Holds funds</td><td class="mono" style="color:var(--ok)">never</td><td class="mono" style="color:var(--ok)">never — buyer pays the author</td></tr>
+  <tr><td>Holds keys</td><td class="mono" style="color:var(--ok)">never</td><td>its own attestation key only</td></tr>
+  <tr><td>Verifies settlement</td><td>asks</td><td>answers; marks the nonce spent</td></tr>
+  <tr><td>Mints entitlement</td><td>yes, on a verified receipt</td><td>no</td></tr>
+  <tr><td>Can alter served bytes</td><td class="mono" style="color:var(--ok)">no (A5)</td><td class="mono" style="color:var(--ok)">no</td></tr>
+</table>
+
+<p>
+The receipt is <span class="mono">(identity, preset, nonce, tx)</span> and the facilitator marks the nonce
+spent at entitlement mint. That binding is what makes a proof non-transferable: a gifted or resold proof
+names somebody else's identity and fails.
+</p>
+
+<details>
+  <summary>What a compromised facilitator actually costs — stated precisely, because "trusted" is too blunt</summary>
+  <p>
+  A facilitator that lies about settlement can mint entitlements nobody paid for. That is a loss to
+  <em>authors</em>, and it is real. What it is <strong>not</strong> is a safety failure for buyers: it
+  cannot alter a preset, because the client verifies the author's signature and content hashes itself (A5),
+  and it cannot forge attribution, because publishing needs a countersigned WebAuthn ceremony it has no
+  part in. So the blast radius of the money component is bounded to money.
+  </p>
+  <p style="margin-bottom:0">
+  This is the same shape as the transparency log's stated limit, and it should be written down the same
+  way: a boundary that is described accurately gets trusted accurately. The registry compromise story is
+  "can only deny"; the facilitator compromise story is "can only give away".
+  </p>
+</details>
+
+<h2><span class="num">6</span>Open decisions — not mine to make</h2>
+
+<table>
+  <tr><th>Question</th><th>Owner</th><th>Where I would land, and why</th></tr>
+  <tr>
+    <td class="q">Does the public install page show a price?</td>
+    <td>Velvet · Commander</td>
+    <td><span class="mono">/install/:presetId</span> (A4) is a shared link a stranger opens. If a preset
+    costs money, a page that does not say so surprises the buyer at the worst moment. I would carry
+    <span class="mono">pricing</span> on the ungated search summary and render it as a <em>fact</em> —
+    never a buy button, since the page still cannot install. Needs a copy slot.</td>
+  </tr>
+  <tr>
+    <td class="q">Where do entitlements persist?</td>
+    <td>Commander · Tinker</td>
+    <td>M1 has a boolean cache and no server-side table. M2 needs a real one keyed by
+    <span class="mono">(identity, lineage)</span> — <em>lineage</em>, not preset id, or buying v2 would not
+    entitle v3 and <span class="mono">mkt.pay.buys</span>'s "v{version} and later" would be false.</td>
+  </tr>
+  <tr>
+    <td class="q">Does the transparency log record purchases?</td>
+    <td>Commander</td>
+    <td>I would say <strong>no</strong>. The log's guarantee is about what the registry served and who signed
+    it; putting buyer identities in a public append-only file is a privacy leak with no matching benefit,
+    and the log already carries a documented "does not prove honesty" limit I would rather not complicate.</td>
+  </tr>
+  <tr>
+    <td class="q">Refund / revocation reasons</td>
+    <td>M3, per spec §12</td>
+    <td>Named here only so M2 does not half-build them. <span class="mono">refunded</span> and
+    <span class="mono">revoked</span> are already in the 403 vocabulary with copy written; the machinery is
+    explicitly M3.</td>
+  </tr>
+</table>
+
+<footer>
+  Forge · M2 seam note · <span class="mono">docs/design/m2-seam.html</span> ·
+  branch <span class="mono">feat/registry-m1</span> @ 8a64348 (under review)<br>
+  Spec: <span class="mono">docs/design/marketplace-architecture.html</span> §2, §4, §6, §12 ·
+  M1 design note: <span class="mono">docs/design/registry-m1.html</span> §6 ·
+  Copy: <span class="mono">docs/design/marketplace-copy-deck.html</span> §2, §5, §7 ·
+  Rulings R5 · R11 · R12 · R14 · R24 · R26 on <span class="mono">product-sprite-presets-marke</span><br>
+  Design only — no implementation, and none until Tinker's verdict on the M1 branch.
+</footer>
+
+</main>
+</body>
+</html>
