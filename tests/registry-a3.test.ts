@@ -5,6 +5,7 @@ import path from 'node:path'
 import { generateKeyPairSync, type KeyObject } from 'node:crypto'
 import { RegistryStore } from '../registry/src/store'
 import { TransparencyLog, verifyChain } from '../registry/src/log'
+import type { CountersignOperation } from '../registry/src/countersign'
 import {
   countersignPayload,
   publishPreset,
@@ -55,15 +56,24 @@ beforeEach(() => {
     store,
     log,
     verifyManifest: (m) => verifyManifest(m, author.publicKey),
-    verifyCountersign: (identityId, payload, countersig) =>
+    verifyCountersign: (_operation, identityId, payload, countersig) =>
+      // The OPERATION is inside `payload` now (countersign.ts), so this fake
+      // needs no extra bookkeeping to tell a publish from a rotation — which is
+      // the point: the two are different bytes rather than the same bytes used
+      // in two places.
       countersigned.get(`${identityId}:${payload.toString('hex')}`) === countersig
   }
 })
 afterEach(() => rmSync(base, { recursive: true, force: true }))
 
-/** Register a valid countersignature for an identity over a key+preset pair. */
-function counterSign(identityId: string, authorKeyId: string, presetId: string): string {
-  const payload = countersignPayload(authorKeyId, presetId)
+/** Register a valid countersignature for one operation on a key+preset pair. */
+function counterSign(
+  operation: CountersignOperation,
+  identityId: string,
+  authorKeyId: string,
+  presetId: string
+): string {
+  const payload = countersignPayload(operation, authorKeyId, presetId)
   const value = `sig-${identityId}-${presetId.slice(-8)}`
   countersigned.set(`${identityId}:${payload.toString('hex')}`, value)
   return value
@@ -81,7 +91,7 @@ const publish = (
     teamName: name,
     visibility: 'public',
     identityId,
-    countersig: countersig ?? counterSign(identityId, m.manifest.author.keyId, m.manifest.id),
+    countersig: countersig ?? counterSign('publish', identityId, m.manifest.author.keyId, m.manifest.id),
     at: 1
   })
 
@@ -119,7 +129,7 @@ describe('publish — three independent claims, all required', () => {
 
   it('refuses a countersignature made by a DIFFERENT identity', () => {
     const m = authored('Deep Research', 1, author.privateKey)
-    const sig = counterSign('webauthn:someone-else', m.manifest.author.keyId, m.manifest.id)
+    const sig = counterSign('publish', 'webauthn:someone-else', m.manifest.author.keyId, m.manifest.id)
     const out = publish(m, 'Deep Research', 'webauthn:drej', sig)
     expect(out).toEqual({ ok: false, reason: 'countersign_missing' })
   })
@@ -128,7 +138,7 @@ describe('publish — three independent claims, all required', () => {
     // A signature over the key alone would be replayable onto any preset.
     const first = authored('Deep Research', 1, author.privateKey)
     const second = authored('Ship Crew', 1, author.privateKey, 'make build')
-    const sigForFirst = counterSign('webauthn:drej', first.manifest.author.keyId, first.manifest.id)
+    const sigForFirst = counterSign('publish', 'webauthn:drej', first.manifest.author.keyId, first.manifest.id)
     const out = publish(second, 'Ship Crew', 'webauthn:drej', sigForFirst)
     expect(out).toEqual({ ok: false, reason: 'countersign_missing' })
   })
@@ -158,10 +168,9 @@ describe('publish — TOFU across versions', () => {
     deps.verifyManifest = (m) =>
       verifyManifest(m, author.publicKey) || verifyManifest(m, attacker.publicKey)
 
-    const sig = counterSign('webauthn:drej', v2.manifest.author.keyId, v1.manifest.id)
+    const sig = counterSign('key-rotation', 'webauthn:drej', v2.manifest.author.keyId, v1.manifest.id)
     expect(
       rotateAuthorKey(deps, {
-        lineage: 'x',
         presetId: v1.manifest.id,
         newAuthorKeyId: v2.manifest.author.keyId,
         identityId: 'webauthn:drej',
@@ -176,7 +185,6 @@ describe('publish — TOFU across versions', () => {
     expect(publish(v1, 'Audit Pack').ok).toBe(true)
     // Rotation must not be a way to TAKE a lineage over.
     const out = rotateAuthorKey(deps, {
-      lineage: 'x',
       presetId: v1.manifest.id,
       newAuthorKeyId: 'ed25519:attacker',
       identityId: 'webauthn:attacker',
@@ -219,9 +227,8 @@ describe('publish — the log records what happened', () => {
   it('keeps the chain intact across a publish and a rotation', () => {
     const v1 = authored('Audit Pack', 1, author.privateKey, 'a')
     publish(v1, 'Audit Pack')
-    const sig = counterSign('webauthn:drej', 'ed25519:new', v1.manifest.id)
+    const sig = counterSign('key-rotation', 'webauthn:drej', 'ed25519:new', v1.manifest.id)
     rotateAuthorKey(deps, {
-      lineage: 'x',
       presetId: v1.manifest.id,
       newAuthorKeyId: 'ed25519:new',
       identityId: 'webauthn:drej',

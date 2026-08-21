@@ -20,9 +20,10 @@ import {
   fillCopy,
   rotationSheetCopy,
   shortKeyId,
+  unknownDenialCopy,
   versionLabel
 } from '../src/shared/marketplace-copy'
-import { canonicalJson, type PresetManifest } from '../src/shared/preset-manifest'
+import { canonicalJson, type ForbiddenBody, type PresetManifest } from '../src/shared/preset-manifest'
 import type { TeamSnapshot } from '../src/main/teams'
 import type { CanvasNode } from '../src/shared/model'
 
@@ -464,6 +465,38 @@ describe('mkt.rotation.* — Velvet\'s deck section 5d, lifted verbatim', () => 
 
   it('throws on a placeholder nobody filled rather than rendering a brace at a buyer', () => {
     expect(() => fillCopy('{author} changed signing keys', {})).toThrow(/author/)
+  })
+})
+
+describe('mkt.denied.unknown — the forward-compatibility contract (deck section 5)', () => {
+  it('sends the buyer to the author when there IS somewhere to send them', () => {
+    const copy = unknownDenialCopy('https://author.example/support')
+    expect(copy.title).toBe("Your license doesn't cover this preset")
+    expect(copy.action).toBe("OPEN AUTHOR'S PAGE")
+  })
+
+  it('FABRICATES NO REMEDY when the denial carries none — Velvet\'s copy-check', () => {
+    // `scope` is the live case: a disagreement between our client and our
+    // registry. Pointing the buyer at an author's page would send them to
+    // somebody who cannot fix it.
+    for (const absent of [undefined, '']) {
+      const copy = unknownDenialCopy(absent)
+      expect(copy.title).toBe("Cookrew couldn't complete that")
+      expect(copy.body).toBe('Nothing was installed and nothing was charged.')
+      expect(copy.action).toBe('COPY DETAILS')
+      expect(copy.body.toLowerCase()).not.toContain('author')
+      expect(copy.action.toLowerCase()).not.toContain('author')
+    }
+  })
+
+  it('renders a sentence for a reason this client has never heard of', () => {
+    // The contract itself: never the raw token, never a blank sheet. A future
+    // reason arrives at a client already installed, so this ships in M1.
+    const future = { reason: 'quota_exhausted' } as unknown as ForbiddenBody
+    const copy = unknownDenialCopy(future.remedy)
+    expect(copy.title).not.toContain(future.reason)
+    expect(copy.title.length).toBeGreaterThan(0)
+    expect(copy.body).toMatch(/\.$/)
   })
 })
 

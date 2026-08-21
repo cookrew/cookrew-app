@@ -46,6 +46,56 @@ export const MKT_ROTATION = {
 export type MktRotationId = keyof typeof MKT_ROTATION
 
 /**
+ * Section 5 — the denial sheet's FORWARD-COMPATIBILITY contract.
+ *
+ * `mkt.denied.unknown` is not a fallback nicety. A reason string this client
+ * has never seen must render as a sentence, never as the raw token and never as
+ * a blank sheet — and it ships in M1, before there are reasons to be unknown,
+ * because the version of this client that meets a future reason is the one
+ * already installed.
+ *
+ * The `.noremedy` variant is Velvet's copy-check catching a real bug in the
+ * first version: the unknown sheet sent the buyer to the author's page, but
+ * `ForbiddenBody.remedy` is OPTIONAL by shape and `scope` is the live case —
+ * an old client meeting it would have pointed at an author who cannot fix a
+ * disagreement between our client and our registry.
+ */
+export const MKT_DENIED = {
+  'mkt.denied.unknown.title': "Your license doesn't cover this preset",
+  'mkt.denied.unknown.body': "{author}'s page has the details.",
+  'mkt.denied.unknown.action': "OPEN AUTHOR'S PAGE",
+  'mkt.denied.unknown.noremedy.title': "Cookrew couldn't complete that",
+  'mkt.denied.unknown.noremedy.body': 'Nothing was installed and nothing was charged.',
+  'mkt.denied.unknown.noremedy.action': 'COPY DETAILS'
+} as const
+
+export type MktDeniedId = keyof typeof MKT_DENIED
+
+/**
+ * Which unknown-denial sheet to render. The presence of a remedy is the whole
+ * decision: with one there is somewhere to send the buyer, and without one the
+ * only honest thing is to say it stopped, name what survived, and hand over
+ * something a bug report can carry.
+ */
+export function unknownDenialCopy(remedy: string | undefined): {
+  title: string
+  body: string
+  action: string
+} {
+  return remedy === undefined || remedy.length === 0
+    ? {
+        title: MKT_DENIED['mkt.denied.unknown.noremedy.title'],
+        body: MKT_DENIED['mkt.denied.unknown.noremedy.body'],
+        action: MKT_DENIED['mkt.denied.unknown.noremedy.action']
+      }
+    : {
+        title: MKT_DENIED['mkt.denied.unknown.title'],
+        body: MKT_DENIED['mkt.denied.unknown.body'],
+        action: MKT_DENIED['mkt.denied.unknown.action']
+      }
+}
+
+/**
  * Fill `{placeholders}`. THROWS on one nobody supplied rather than leaving a
  * brace on screen: an unfilled placeholder is a programming mistake, and the
  * buyer meeting `{author} changed signing keys` on a security sheet is worse

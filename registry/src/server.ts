@@ -1,8 +1,11 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { PRESET_VERSION_HEADER } from '../../src/shared/preset-manifest'
+import { createServer, type IncomingMessage, type Server } from 'node:http'
+import { PRESET_VERSION_HEADER, type PresetManifest } from '../../src/shared/preset-manifest'
 import { RegistryStore, isAddress } from './store'
 import { TransparencyLog } from './log'
 import { installPageHtml, originOf } from './install-page'
+import { html, json, readJsonBody } from './http'
+import { handlePublish, handleRotate } from './publish-routes'
+import { publicKeyFromId, verifyManifest } from '../../src/main/preset-publish'
 import type { IdentityService, TokenScope } from './identity'
 
 /**
@@ -44,37 +47,6 @@ export interface RegistryDeps {
   dev?: boolean
 }
 
-/**
- * The install page's answer. Sent with headers that make the document inert
- * even if a future edit puts something executable in it: no script, no frame,
- * no sniffing, no referrer leaking a shared preset link onward.
- */
-function html(response: ServerResponse, code: number, body: string): void {
-  const payload = Buffer.from(body, 'utf8')
-  response.writeHead(code, {
-    'content-type': 'text/html; charset=utf-8',
-    'content-length': String(payload.byteLength),
-    'content-security-policy':
-      "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; script-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'",
-    'x-content-type-options': 'nosniff',
-    'referrer-policy': 'no-referrer',
-    // A preset can be republished under a new address and an old one removed,
-    // so this is a page about mutable state — brief caching only.
-    'cache-control': 'public, max-age=60'
-  })
-  response.end(payload)
-}
-
-function json(response: ServerResponse, code: number, body: unknown, headers: Record<string, string> = {}): void {
-  const payload = Buffer.from(JSON.stringify(body), 'utf8')
-  response.writeHead(code, {
-    'content-type': 'application/json; charset=utf-8',
-    'content-length': String(payload.byteLength),
-    ...headers
-  })
-  response.end(payload)
-}
-
 function defaultAuthorize(store: RegistryStore): (id: string) => Verdict {
   return (id) => {
     const visibility = store.visibilityOf(id)
@@ -90,6 +62,31 @@ function defaultAuthorize(store: RegistryStore): (id: string) => Verdict {
 export function createRegistry(deps: RegistryDeps): Server {
   const { store, log } = deps
   const authorize = deps.authorize ?? ((id: string) => defaultAuthorize(store)(id))
+
+  /**
+   * What the write routes need, assembled once.
+   *
+   * A manifest is verified against the key IT NAMES, which is only sound
+   * because a publish also carries a countersignature binding the caller's
+   * identity to that key: the signature proves the key signed these bytes, the
+   * countersignature proves this identity claims the key. Either alone would
+   * let someone publish under a name that is not theirs.
+   */
+  const writeDeps = {
+    store,
+    log,
+    identity: deps.identity,
+    verifyManifest: (manifest: PresetManifest): boolean => {
+      try {
+        return verifyManifest(manifest, publicKeyFromId(manifest.author.keyId))
+      } catch {
+        // A key id that cannot be parsed is not a verification failure to
+        // reason about — it is simply not a key, and this runs on data a
+        // caller chose.
+        return false
+      }
+    }
+  }
 
   return createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://registry.local')
@@ -129,6 +126,32 @@ export function createRegistry(deps: RegistryDeps): Server {
               id: summary.id
             })
       )
+      return
+    }
+
+    // POST /v1/presets — PUBLISH. The write side of the gate (A3), mounted.
+    //
+    // Three independent things must hold, and the route proves them in the
+    // order that costs least: the caller holds a publish-scoped token (WHO),
+    // the identity countersigned THIS operation on THIS key and preset (a
+    // deliberate act, per spec §6 a fresh ceremony per manifest), and the
+    // library's own checks pass (the bytes are what the manifest says).
+    if (method === 'POST' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'presets') {
+      void handlePublish(request, response, writeDeps)
+      return
+    }
+
+    // POST /v1/presets/:id/rotate — record a countersigned key rotation (R20's
+    // registry half). Same ceremony, different operation, and the difference is
+    // inside the countersignature rather than only in the URL.
+    if (
+      method === 'POST' &&
+      parts.length === 4 &&
+      parts[0] === 'v1' &&
+      parts[1] === 'presets' &&
+      parts[3] === 'rotate'
+    ) {
+      void handleRotate(decodeURIComponent(parts[2]), request, response, writeDeps)
       return
     }
 
@@ -269,6 +292,11 @@ export function createRegistry(deps: RegistryDeps): Server {
         // self-description exists to prevent.
         slice: 'P2-A3',
         dev: deps.dev === true,
+        // BOTH WAYS. A route appears here exactly when it is mounted, and the
+        // write routes and the identity routes are mounted only when there is
+        // an identity service — a publish without one would be anonymous. A
+        // list that named routes this deployment answers 404 for would be worse
+        // than no list, because a harness would trust it.
         routes: [
           // Outside /v1 because people share it (R21 Option A). Listed anyway:
           // a harness reconciling against this must not have to guess that the
@@ -280,9 +308,17 @@ export function createRegistry(deps: RegistryDeps): Server {
           'HEAD /v1/presets/:id/manifest',
           'GET /v1/blobs/:address',
           'GET /v1/log?from=&preset=',
-          'POST /v1/identity/register',
-          'POST /v1/identity/assert',
-          ...(deps.dev === true ? ['GET /v1/dev/identities', 'DELETE /v1/dev/identities'] : [])
+          ...(deps.identity
+            ? [
+                'POST /v1/identity/register',
+                'POST /v1/identity/assert',
+                'POST /v1/presets',
+                'POST /v1/presets/:id/rotate'
+              ]
+            : []),
+          ...(deps.dev === true && deps.identity
+            ? ['GET /v1/dev/identities', 'DELETE /v1/dev/identities']
+            : [])
         ],
         // Named so a harness does not build fixtures against a route that is
         // never going to exist. Payment RETRIES the manifest GET with an

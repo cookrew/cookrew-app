@@ -61,6 +61,14 @@ export type AssertFailure =
   | 'wrong_rp'
   | 'user_not_present'
   | 'bad_signature'
+  /**
+   * The challenge was real, unexpired and unused — and issued for something
+   * else. A login nonce presented as a countersignature, a publish
+   * countersignature presented as a key rotation, or either presented for a
+   * different preset. Its own refusal because it is the one that catches a
+   * replay rather than a forgery.
+   */
+  | 'wrong_binding'
 
 const b64url = (buf: Buffer): string => buf.toString('base64url')
 const fromB64url = (value: string): Buffer => Buffer.from(value, 'base64url')
@@ -94,7 +102,16 @@ export class IdentityService {
   private readonly signingKeyFile: string
   private readonly config: IdentityConfig
   private readonly now: () => number
-  private readonly challenges = new Map<string, number>()
+  /**
+   * Outstanding nonces, each remembering WHAT IT WAS ISSUED FOR.
+   *
+   * `binding` is null for the login ceremony and the countersign payload's hex
+   * digest for a countersignature. Recording it here is what makes a
+   * countersignature unreplayable rather than merely operation-labelled: the
+   * nonce is consumed on first use and the server checks, against its own
+   * record, that the ceremony being completed is the one it issued.
+   */
+  private readonly challenges = new Map<string, { exp: number; binding: string | null }>()
   private credentials: Credential[] = []
   private signingKey: { publicKey: KeyObject; privateKey: KeyObject } | null = null
 
@@ -155,13 +172,31 @@ export class IdentityService {
     writeFileSync(this.file, JSON.stringify([], null, 2))
   }
 
-  /** Mint a single-use challenge. It is a nonce, not a session. */
+  /** Mint a single-use challenge for the LOGIN ceremony. A nonce, not a session. */
   challenge(): string {
+    return this.mintChallenge(null)
+  }
+
+  /**
+   * Mint a single-use challenge for countersigning one specific operation on one
+   * specific (author key, preset) pair.
+   *
+   * Spec §6 wants a fresh ceremony per manifest, and this is what makes that
+   * true rather than aspirational: the nonce this returns will only ever
+   * complete the ceremony it was issued for.
+   */
+  countersignChallenge(binding: string): string {
+    return this.mintChallenge(binding)
+  }
+
+  private mintChallenge(binding: string | null): string {
     const value = b64url(randomBytes(32))
-    this.challenges.set(value, this.now() + this.config.challengeTtlMs)
+    this.challenges.set(value, { exp: this.now() + this.config.challengeTtlMs, binding })
     // Opportunistic sweep: expired nonces are worthless, and this keeps the
     // map from being a slow leak on a long-running process.
-    for (const [k, exp] of this.challenges) if (exp < this.now()) this.challenges.delete(k)
+    for (const [k, entry] of this.challenges) {
+      if (entry.exp < this.now()) this.challenges.delete(k)
+    }
     return value
   }
 
@@ -173,6 +208,38 @@ export class IdentityService {
   assert(input: AssertionInput, scope: TokenScope = 'download'):
     | { ok: true; token: string; sub: string }
     | { ok: false; reason: AssertFailure } {
+    // Binding null: a login ceremony completes only a login nonce. A
+    // countersign nonce presented here is `wrong_binding`, so a publish
+    // ceremony can never be spent as a session instead.
+    const out = this.verifyAssertion(input, null)
+    if (!out.ok) return out
+    return { ok: true, sub: out.credentialId, token: this.mint(out.credentialId, scope) }
+  }
+
+  /**
+   * Verify a COUNTERSIGNATURE — a full assertion, not a bare signature.
+   *
+   * The difference is the whole point. A bare signature check proves only that
+   * a key signed some bytes; an assertion proves an authenticator produced it,
+   * with the user present, for a challenge this server issued moments ago and
+   * has now spent. That is what makes a countersignature a deliberate human act
+   * rather than a value an attacker can lift out of the public log and re-send.
+   */
+  countersign(
+    input: AssertionInput,
+    binding: string
+  ): { ok: true; credentialId: string } | { ok: false; reason: AssertFailure } {
+    return this.verifyAssertion(input, binding)
+  }
+
+  /**
+   * The one WebAuthn verification, shared by both ceremonies. Two of them would
+   * eventually differ, and the one that mattered less would be the weaker.
+   */
+  private verifyAssertion(
+    input: AssertionInput,
+    expectedBinding: string | null
+  ): { ok: true; credentialId: string } | { ok: false; reason: AssertFailure } {
     const credential = this.credentials.find((c) => c.credentialId === input.credentialId)
     if (!credential) return { ok: false, reason: 'unknown_credential' }
 
@@ -185,9 +252,16 @@ export class IdentityService {
 
     // Single-use: consumed whether or not the rest passes, so a captured
     // challenge cannot be retried against a different assertion.
-    const expiry = clientData.challenge ? this.challenges.get(clientData.challenge) : undefined
+    const entry = clientData.challenge ? this.challenges.get(clientData.challenge) : undefined
     if (clientData.challenge) this.challenges.delete(clientData.challenge)
-    if (expiry === undefined || expiry < this.now()) return { ok: false, reason: 'unknown_challenge' }
+    if (entry === undefined || entry.exp < this.now()) {
+      return { ok: false, reason: 'unknown_challenge' }
+    }
+    // The nonce was issued for a purpose, and this is it — checked against the
+    // server's OWN record rather than anything the request asserts about
+    // itself. Both directions matter: a login nonce cannot countersign, and a
+    // publish countersignature cannot be spent as a key rotation.
+    if (entry.binding !== expectedBinding) return { ok: false, reason: 'wrong_binding' }
 
     if (clientData.type !== 'webauthn.get') return { ok: false, reason: 'wrong_type' }
     // Compared against the configured origin, never echoed from the request:
@@ -215,7 +289,7 @@ export class IdentityService {
     }
     if (!good) return { ok: false, reason: 'bad_signature' }
 
-    return { ok: true, sub: credential.credentialId, token: this.mint(credential.credentialId, scope) }
+    return { ok: true, credentialId: credential.credentialId }
   }
 
   /** The server's token key, generated once and persisted beside the data. */
