@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { PRESET_VERSION_HEADER } from '../../src/shared/preset-manifest'
 import { RegistryStore, isAddress } from './store'
 import { TransparencyLog } from './log'
+import { installPageHtml, originOf } from './install-page'
 import type { IdentityService, TokenScope } from './identity'
 
 /**
@@ -43,6 +44,27 @@ export interface RegistryDeps {
   dev?: boolean
 }
 
+/**
+ * The install page's answer. Sent with headers that make the document inert
+ * even if a future edit puts something executable in it: no script, no frame,
+ * no sniffing, no referrer leaking a shared preset link onward.
+ */
+function html(response: ServerResponse, code: number, body: string): void {
+  const payload = Buffer.from(body, 'utf8')
+  response.writeHead(code, {
+    'content-type': 'text/html; charset=utf-8',
+    'content-length': String(payload.byteLength),
+    'content-security-policy':
+      "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; script-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'",
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer',
+    // A preset can be republished under a new address and an old one removed,
+    // so this is a page about mutable state — brief caching only.
+    'cache-control': 'public, max-age=60'
+  })
+  response.end(payload)
+}
+
 function json(response: ServerResponse, code: number, body: unknown, headers: Record<string, string> = {}): void {
   const payload = Buffer.from(JSON.stringify(body), 'utf8')
   response.writeHead(code, {
@@ -73,6 +95,42 @@ export function createRegistry(deps: RegistryDeps): Server {
     const url = new URL(request.url ?? '/', 'http://registry.local')
     const method = request.method ?? 'GET'
     const parts = url.pathname.split('/').filter(Boolean)
+
+    // GET /install/:presetId — R21 Option A, the page for a reader with no app.
+    //
+    // Outside /v1 on purpose: this is a URL people SHARE, and a version prefix
+    // in a link someone pastes into a message is a promise to keep that link
+    // working when the API moves on. The API is versioned because clients bind
+    // to it; a shared link is bound to by humans.
+    if (method === 'GET' && parts.length === 2 && parts[0] === 'install') {
+      // Content addresses compare by value: the app's recogniser lowercases,
+      // so a link with a capitalised digest that the APP accepts must not 404
+      // here. Two spellings of one digest are one preset or the halves of R21
+      // disagree about what a link is.
+      const id = decodeURIComponent(parts[1]).toLowerCase()
+      const summary = isAddress(id) ? store.list().find((p) => p.id === id) : undefined
+      html(
+        response,
+        summary === undefined ? 404 : 200,
+        summary === undefined
+          ? installPageHtml({ kind: 'unknown' })
+          : installPageHtml({
+              kind: 'preset',
+              name: summary.name,
+              author: summary.author,
+              // THIS address's version, never the lineage's latest. The id in
+              // the link is the content address of one specific team, and it
+              // is what the app will download — a page that advertised the
+              // newest version would be describing a different preset than the
+              // one the link actually hands over.
+              version: summary.version,
+              gated: summary.visibility === 'identified',
+              origin: originOf(request.headers.host),
+              id: summary.id
+            })
+      )
+      return
+    }
 
     // GET /v1/presets?q=
     if (method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'presets') {
@@ -212,6 +270,10 @@ export function createRegistry(deps: RegistryDeps): Server {
         slice: 'P2-A3',
         dev: deps.dev === true,
         routes: [
+          // Outside /v1 because people share it (R21 Option A). Listed anyway:
+          // a harness reconciling against this must not have to guess that the
+          // page exists.
+          'GET /install/:presetId',
           'GET /v1/health',
           'GET /v1/presets?q=',
           'GET /v1/presets/:id/manifest',

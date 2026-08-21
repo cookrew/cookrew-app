@@ -14,7 +14,14 @@ import {
   transparencyLogUrl,
   type KeyRotation
 } from '../src/shared/preset-rotation'
-import { MKT_ROTATION, fillCopy, rotationSheetCopy, shortKeyId } from '../src/shared/marketplace-copy'
+import {
+  MKT_ROTATION,
+  authorLabel,
+  fillCopy,
+  rotationSheetCopy,
+  shortKeyId,
+  versionLabel
+} from '../src/shared/marketplace-copy'
 import { canonicalJson, type PresetManifest } from '../src/shared/preset-manifest'
 import type { TeamSnapshot } from '../src/main/teams'
 import type { CanvasNode } from '../src/shared/model'
@@ -457,5 +464,21 @@ describe('mkt.rotation.* — Velvet\'s deck section 5d, lifted verbatim', () => 
 
   it('throws on a placeholder nobody filled rather than rendering a brace at a buyer', () => {
     expect(() => fillCopy('{author} changed signing keys', {})).toThrow(/author/)
+  })
+})
+
+describe('deck section 7 rules every marketplace surface shares', () => {
+  it('R8: v1–v9 are labelled, 10 and above are bare, and nothing is rounded', () => {
+    expect([1, 5, 9].map(versionLabel)).toEqual(['v1', 'v5', 'v9'])
+    expect([10, 42, 99].map(versionLabel)).toEqual(['10', '42', '99'])
+    // 100+ is a FLAG on the rail — an affordance, not a spelling. The exact
+    // version still renders, because a wrong version is worse than an absent
+    // one and no string may truncate one.
+    expect([100, 1287].map(versionLabel)).toEqual(['100', '1287'])
+  })
+
+  it('writes an author as @handle, and never doubles an @ they typed', () => {
+    expect(authorLabel('drej')).toBe('@drej')
+    expect(authorLabel('@drej')).toBe('@drej')
   })
 })

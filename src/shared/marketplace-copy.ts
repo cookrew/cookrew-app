@@ -78,6 +78,41 @@ export function shortKeyId(keyId: string): string {
 }
 
 /**
+ * R8, THE VERSION LABEL RULE (deck section 7): v1–v9 render LABELLED, 10 and
+ * above render as a bare number. The rail draws 100+ as a flag with the exact
+ * version in its fan row, which is an affordance rather than a spelling — so
+ * copy renders the exact number either way.
+ *
+ * "No string may truncate or round a version", because a wrong version is worse
+ * than an absent one. Every marketplace surface reads this one function, or the
+ * dock and a shared link end up disagreeing about what the same preset is
+ * called.
+ */
+export function versionLabel(version: number): string {
+  return version <= 9 ? `v${version}` : String(version)
+}
+
+/**
+ * OPEN QUESTION FOR VELVET, deliberately not resolved here. Section 7's R8 rule
+ * says 10+ renders bare, but `mkt.rotation.dismiss` and `mkt.update.dismiss`
+ * spell their version as a literal `v{current}` — so a buyer on v12 is offered
+ * either "Keep v12" (the template verbatim) or "Keep 12" (R8 applied). The
+ * templates are lifted verbatim above and therefore say "Keep v12" today.
+ *
+ * Left alone on purpose: quietly reinterpreting an owned string to satisfy a
+ * rule from another section is how copy drifts away from the person who wrote
+ * it. Flagged on the product note; whichever she picks is a one-line change.
+ */
+
+/**
+ * An author, as the deck writes identity: `@handle`. Idempotent, because a
+ * publisher who typed the @ themselves must not become `@@them`.
+ */
+export function authorLabel(handle: string): string {
+  return handle.startsWith('@') ? handle : `@${handle}`
+}
+
+/**
  * The rotation sheet's strings, rendered from the payload.
  *
  * The DATE arrives already formatted. Absolute dates are the deck's rule (§7)

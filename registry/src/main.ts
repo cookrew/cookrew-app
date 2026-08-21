@@ -9,6 +9,7 @@
 //           non-empty store rather than duplicating or overwriting.
 //
 // Routes (spec §2; codes are the protocol, never chrome — R14):
+//   GET  /install/:presetId          the shared link — a plain page, no app needed (R21)
 //   GET  /v1/presets?q=              browse / search
 //   GET  /v1/presets/:id/manifest    the gate
 //   HEAD /v1/presets/:id/manifest    update check, x-cookrew-preset-version (R3)
