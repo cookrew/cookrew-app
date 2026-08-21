@@ -7,11 +7,12 @@ import { generateKeyPairSync, type KeyObject } from 'node:crypto'
 import { RegistryStore } from '../registry/src/store'
 import { TransparencyLog } from '../registry/src/log'
 import { createRegistry } from '../registry/src/server'
-import { installPageHtml, originOf } from '../registry/src/install-page'
+import { canonicalInstallUrl, installPageHtml, originOf } from '../registry/src/install-page'
 import { buildManifest, signManifest } from '../src/main/preset-publish'
 import { scrubForPublish } from '../src/main/preset-scrub'
 import type { TeamSnapshot } from '../src/main/teams'
 import type { CanvasNode } from '../src/shared/model'
+import { presetIdFromInstallUrl } from '../src/main/registry-install-link'
 
 /**
  * A4 — THE INSTALL PAGE (R21 Option A).
@@ -392,5 +393,56 @@ describe('the canonical link the page shows', () => {
     })
     expect(html).toContain('Deep Research')
     expect(html).not.toContain('/install/')
+  })
+})
+
+/* ------------------------------------------- the two halves of R21 agree --- */
+
+describe('round trip: the page\'s own link, back through the app\'s recogniser', () => {
+  /**
+   * FLAGGED AT A4, WRITABLE ONLY NOW. This assertion needs BOTH halves of R21 in
+   * one tree: the registry that emits the canonical link, and Atlas's
+   * presetIdFromInstallUrl that recognises it. The branch was cut before his
+   * hook merged, so at A4 I could only test the page against his fixtures by
+   * hand and record this as a merge-time item. The rebase onto dev is the
+   * moment it becomes real, so here it is.
+   *
+   * What it proves is the thing neither half can prove alone: the URL the page
+   * PUBLISHES is the URL the app RECOGNISES, and the id survives the trip
+   * unchanged.
+   */
+  const HOSTS = ['registry.cookrew.dev']
+
+  it('emits a link the app parses back to the same preset id', () => {
+    const id = `sha256:${'9f'.repeat(32)}`
+    const url = canonicalInstallUrl('https://registry.cookrew.dev', id)
+    expect(presetIdFromInstallUrl(url, HOSTS)).toBe(id)
+  })
+
+  it('holds for every id the store can address, not one lucky digest', () => {
+    for (const hex of ['0'.repeat(64), 'f'.repeat(64), '0123456789abcdef'.repeat(4)]) {
+      const id = `sha256:${hex}`
+      const url = canonicalInstallUrl('https://registry.cookrew.dev', id)
+      expect([id, presetIdFromInstallUrl(url, HOSTS)]).toEqual([id, id])
+    }
+  })
+
+  it('survives the loopback origin the dev registry actually serves on', () => {
+    // originOf() gives http for loopback; Atlas's recogniser allows http there
+    // and nowhere else. Both halves have to agree about that exception or the
+    // dev registry is unusable from a canvas card.
+    const id = `sha256:${'ab'.repeat(32)}`
+    const origin = originOf('localhost:8790')
+    expect(origin).toBe('http://localhost:8790')
+    const url = canonicalInstallUrl(origin as string, id)
+    expect(presetIdFromInstallUrl(url, ['localhost:8790'])).toBe(id)
+  })
+
+  it('a link this page would never emit is still refused by the app', () => {
+    // The guard rail on the round trip: agreement must not have been bought by
+    // making the recogniser permissive.
+    const id = `sha256:${'ab'.repeat(32)}`
+    expect(presetIdFromInstallUrl(`https://evil.test/install/${id}`, HOSTS)).toBeNull()
+    expect(presetIdFromInstallUrl(`http://registry.cookrew.dev/install/${id}`, HOSTS)).toBeNull()
   })
 })
