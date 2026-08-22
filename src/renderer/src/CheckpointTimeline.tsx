@@ -17,8 +17,9 @@ import {
 /** RAIL_INSET: the marker inset (matches .cr-ckpt-here top: calc(16px + …)),
  *  used here for scrub mapping. Imported rather than redeclared so the density
  *  rule and the scrub mapping cannot drift — they describe the same 16px. */
-import { fillRows, RAIL_INSET } from './rail-fill'
+import { countBadgeTop, fillRows, RAIL_INSET } from './rail-fill'
 import { pinAnchors, pinLabel, traceFraction, type VersionPinRecord } from '../../shared/version-pin'
+
 
 /** Px of pointer travel before a press on the rail becomes a scrub, not a tap. */
 const SCRUB_THRESHOLD = 4
@@ -497,6 +498,13 @@ export function CheckpointTimeline({
    * safest way to keep it green is to not touch what anchors it.
    */
   const laid = fanned ? fillRows(rows, railHeight, focused!.index) : []
+  // Where the badge has to sit to clear the pins, in the same px space
+  // railAnchorTop lays them in. Null = nothing reaches it, badge stays put.
+  // Pure and unit-tested in rail-fill; the rail only supplies the fractions.
+  const countTop = countBadgeTop(
+    pinAnchors(pins ?? [], rows).map((p) => p.frac),
+    railHeight
+  )
   /**
    * MED-2 — LIVE takes the slice the denominator reserves for it, and fillRows
    * places it: rows and tail have to be spaced against each other, so they
@@ -586,6 +594,16 @@ export function CheckpointTimeline({
             />
           )
         })}
+        {/* The CP badge and a pin at the top of the bar want the same 20px.
+            Neither hiding one nor fading it is right: the badge is a readout and
+            a readout obscured is information gone, while the pin is a control
+            and R25 already ruled that a control beats decoration where they
+            collide. So the badge YIELDS BY MOVING — it steps down just past the
+            lowest pin that reaches it and both stay fully readable, which is the
+            only resolution here that loses nothing. It yields ONLY where a pin
+            actually is: with no pin near the top the badge does not move at all,
+            and this is the common case for a fresh install, whose pin sits on
+            the oldest drawn row. */}
         {/* VERSION PINS — the third marker class (§10). Position comes from
             pinAnchors() and railAnchorTop() and from nowhere else: pins share
             the drawn-row space with the rows and the ticks (R17), so F6 applies
@@ -624,6 +642,16 @@ export function CheckpointTimeline({
               aria-label={`Version ${p.version}`}
               onClick={(e) => {
                 e.stopPropagation()
+                // Tapping a pin is NAVIGATION, so it dismisses a revealed row's
+                // actions the way pointing anywhere else would. It has to do so
+                // explicitly for two reasons: this handler stops propagation so
+                // the bar cannot capture the pointer, which also keeps the event
+                // from reaching the document listener — and that listener would
+                // not have dismissed anyway, because it only fires for targets
+                // OUTSIDE the rail and a pin is inside it. Leaving the strip up
+                // would strand one row's actions over a different checkpoint.
+                setActing(null)
+                setSavingIndex(null)
                 onGoto(record.atIndex)
               }}
             >
@@ -631,7 +659,10 @@ export function CheckpointTimeline({
             </div>
           )
         })}
-        <div className="cr-ckpt-count">
+        <div
+          className="cr-ckpt-count"
+          style={countTop === null ? undefined : { top: `${Math.round(countTop)}px` }}
+        >
           <span className="n">{rows.length}</span>
           <span className="l">CP</span>
         </div>

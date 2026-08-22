@@ -1,12 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  capacityFor,
-  fillRows,
-  isLive,
-  RAIL_INSET,
-  ROW_HEIGHT,
-  sampleIndices
-} from '../src/renderer/src/rail-fill'
+import { capacityFor, fillRows, isLive, RAIL_INSET, ROW_HEIGHT, sampleIndices, countBadgeTop, PIN_HALF_H, COUNT_GAP } from '../src/renderer/src/rail-fill'
 import type { CheckpointRow } from '../src/renderer/src/transcript'
 
 /**
@@ -205,5 +198,56 @@ describe('fillRows', () => {
       { row: rowsOf(1)[0], fraction: 0 },
       { row: null, fraction: 1 }
     ])
+  })
+})
+
+/**
+ * The CP badge and a version pin at the top of the bar want the same 20px.
+ * Hiding the pin loses a control, fading the badge loses a readout, so the
+ * badge steps aside — and only where a pin actually reaches it.
+ */
+describe('countBadgeTop — the badge yields, and only where a pin is', () => {
+  const H = 663
+
+  it('does not move when there are no pins at all', () => {
+    expect(countBadgeTop([], H)).toBeNull()
+  })
+
+  it('does not move for pins that never reach it', () => {
+    // Mid-bar and bottom pins are nowhere near the badge's band.
+    expect(countBadgeTop([0.4, 0.7, 0.9], H)).toBeNull()
+  })
+
+  it('steps past a pin on the oldest drawn row — the fresh-install case', () => {
+    const top = countBadgeTop([0], H)
+    const pinBottom = RAIL_INSET + 0 * (H - 2 * RAIL_INSET) + PIN_HALF_H
+    expect(top).toBe(pinBottom + COUNT_GAP)
+  })
+
+  it('clears the pin it stepped around, with the gap intact', () => {
+    const top = countBadgeTop([0], H)!
+    const pinBottom = RAIL_INSET + PIN_HALF_H
+    expect(top).toBeGreaterThanOrEqual(pinBottom)
+    expect(top - pinBottom).toBe(COUNT_GAP)
+  })
+
+  it('does NOT chase the lowest pin down the bar', () => {
+    // The first cut took the max of every pin below the badge and parked the
+    // count two thirds of the way down a rail whose only collision was at top.
+    const withFarPins = countBadgeTop([0, 0.5, 0.95], H)!
+    const topOnly = countBadgeTop([0], H)!
+    expect(withFarPins).toBe(topOnly)
+    expect(withFarPins).toBeLessThan(H / 4)
+  })
+
+  it('keeps stepping while pins are stacked in its way', () => {
+    // Two pins close enough that clearing the first lands on the second.
+    const stacked = countBadgeTop([0, 0.03], H)!
+    const single = countBadgeTop([0], H)!
+    expect(stacked).toBeGreaterThan(single)
+  })
+
+  it('leaves the badge alone before the rail has been measured', () => {
+    expect(countBadgeTop([0], 0)).toBeNull()
   })
 })

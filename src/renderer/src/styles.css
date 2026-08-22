@@ -3540,6 +3540,11 @@ body.cookrew-mobile .cookrew-minimap {
   );
   top: 14px;
   right: 7px;
+  /* The component overrides `top` inline when a version pin reaches the badge
+     (see CheckpointTimeline): it steps down past the pin rather than hiding it
+     or fading it, so neither the count nor the pin is lost. Transitioned so a
+     pin arriving or leaving reads as the badge making room, not as a jump. */
+  transition: top 160ms ease;
   display: flex;
   flex-direction: column;
   align-items: center;
