@@ -19,7 +19,7 @@
 // renderer test infrastructure, and adding a dependency to test four lines of
 // glue is the wrong trade. The hook composes these and nothing else.
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   applyLimit,
   boundedFilter,
@@ -159,5 +159,66 @@ describe('createCoalescer — a burst is one refetch, not one each', () => {
       c.cancel()
     }).not.toThrow()
     vi.useRealTimers()
+  })
+})
+
+/**
+ * THE TWO PATHS MUST AGREE ABOUT WHICH END IS NEWEST.
+ *
+ * applyLimit trims by slicing the TAIL, so it is correct only if the query
+ * returns oldest-first. The server's contract is oldest-first (main/event-log.ts
+ * limits by `slice(length - limit)`, keeping the NEWEST) — but queryEvents used
+ * to document "newest first" and its mock branch sorted DESCENDING. Composed,
+ * the fallback path returned the OLDEST N and reported `truncated: true`: the
+ * right count, trimmed off the wrong end, in the one mode where no server was
+ * there to contradict it.
+ *
+ * Tested through the real queryEvents rather than a restatement of the sort, so
+ * a future edit to either end is what fails.
+ */
+describe('queryEvents (mock path) serves the server contract', () => {
+  /** Enough window for the mock adapter: no `cookrew`, so the bridge is absent
+   *  and queryEvents takes its fallback branch. */
+  const withMockWindow = async (): Promise<typeof import('../src/renderer/src/event-log')> => {
+    vi.stubGlobal('window', new EventTarget())
+    vi.resetModules()
+    return import('../src/renderer/src/event-log')
+  }
+  /** The channel onEvent listens on when there is no real stream. */
+  const MOCK_EVENT = 'cookrew:mock-event'
+
+  const seed = (mod: Awaited<ReturnType<typeof withMockWindow>>, stamps: number[]): void => {
+    mod.onEvent(() => {})
+    for (const t of stamps) {
+      window.dispatchEvent(new CustomEvent(MOCK_EVENT, { detail: event(t) }))
+    }
+  }
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('returns OLDEST FIRST, whatever order the events arrived in', async () => {
+    const mod = await withMockWindow()
+    seed(mod, [500, 100, 900, 300])
+    expect((await mod.queryEvents()).map((e) => e.timestamp)).toEqual([100, 300, 500, 900])
+  })
+
+  it('honours `limit` by keeping the NEWEST, exactly as the server does', async () => {
+    // The mock stands in for the server, so a filter the server would honour
+    // must not pass straight through here — otherwise applyLimit is the only
+    // trimmer in this mode and the fallback silently diverges from production.
+    const mod = await withMockWindow()
+    seed(mod, [1, 2, 3, 4, 5])
+    expect((await mod.queryEvents({ limit: 2 })).map((e) => e.timestamp)).toEqual([4, 5])
+  })
+
+  it('composed with boundedFilter + applyLimit, the NEWEST survive', async () => {
+    // The end-to-end shape the hook runs, and the one that was inverted.
+    const mod = await withMockWindow()
+    seed(mod, [10, 20, 30, 40, 50])
+    const raw = await mod.queryEvents(mod.boundedFilter({ limit: 3 }))
+    const { events, truncated } = mod.applyLimit(raw, { limit: 3 })
+
+    expect(events.map((e) => e.timestamp)).toEqual([30, 40, 50])
+    expect(truncated).toBe(true)
   })
 })

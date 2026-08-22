@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect } from 'react'
 import { CrIcon, type CrIconName } from './icons'
 import {
+  DEFAULT_QUERY_LIMIT,
   eventMeta,
   formatDuration,
   hasEventLog,
@@ -8,7 +9,7 @@ import {
   latencyRows,
   METRIC_ORDER,
   seedMockEvents,
-  useEventQuery,
+  useLiveEvents,
   type CookrewEvent,
   type EventFilter,
   type LatencyRow
@@ -62,7 +63,12 @@ export function MetricsPanel({ onClose }: { onClose: () => void }): React.JSX.El
     () => (span === null ? {} : { since: now - span }),
     [span, now]
   )
-  const all = useEventQuery(filter)
+  // TRUNCATION IS READ, NOT DISCARDED. The bounded query caps what comes back,
+  // and every number on this panel — the counts, the timed-event tally, the
+  // percentiles — is derived from that capped list. A metrics panel reporting
+  // P95 over a silent subset of the range it names is worse than one that
+  // refuses to draw, so the cap is stated wherever it applies.
+  const { events: all, truncated } = useLiveEvents(filter)
 
   // Workspace / type option lists come from what's in the (time-filtered) log.
   const workspaces = useMemo(() => {
@@ -101,7 +107,9 @@ export function MetricsPanel({ onClose }: { onClose: () => void }): React.JSX.El
         <div className="tf-head">
           <CrIcon name="search" />
           <span className="tf-title">ACTIVITY</span>
-          <span className="roster-count">{events.length} events</span>
+          <span className="roster-count">
+            {events.length} events{truncated && ' (capped)'}
+          </span>
           <button className="cr-btn sm icon tf-close" title="Close" onClick={onClose}>
             <CrIcon name="close" />
           </button>
@@ -118,6 +126,20 @@ export function MetricsPanel({ onClose }: { onClose: () => void }): React.JSX.El
             >
               LOAD SAMPLE LATENCY
             </button>
+          </div>
+        )}
+
+        {/* The query is bounded, so over a long range this panel is showing a
+            SLICE and every rolled-up number below is computed from that slice.
+            Said plainly and next to the numbers it qualifies: the alternative
+            is a P95 labelled "all" that silently describes the newest 2000
+            events, which reads as a fact about the whole range and is not one. */}
+        {truncated && (
+          <div className="tf-banner">
+            SHOWING THE NEWEST {DEFAULT_QUERY_LIMIT.toLocaleString()} EVENTS — the log holds more
+            than this{range === 'all' ? '' : ' in the selected range'}. The counts and the LATENCY
+            percentiles below describe this slice, not the full range. Narrow the range to measure
+            a window whole.
           </div>
         )}
 
@@ -138,6 +160,7 @@ export function MetricsPanel({ onClose }: { onClose: () => void }): React.JSX.El
               <span className="metrics-latency-title">LATENCY</span>
               <span className="metrics-latency-sub">
                 {latency.reduce((n, r) => n + r.stats.count, 0)} timed events
+                {truncated && ' in this slice'}
               </span>
             </div>
             <table className="metrics-latency-table">

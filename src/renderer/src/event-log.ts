@@ -350,7 +350,23 @@ function matches(e: CookrewEvent, filter?: EventFilter): boolean {
   return true
 }
 
-/** Query the event log (newest first). Real API when present, else mock log. */
+/**
+ * Query the event log — OLDEST FIRST, and `limit` keeps the NEWEST matches.
+ * Real API when present, else the mock log.
+ *
+ * ORDER IS A CONTRACT, not an incidental. applyLimit trims by slicing the TAIL,
+ * so which end holds the newest event decides whether a bounded query returns
+ * the newest slice or the oldest one. The server's contract is oldest-first
+ * (main/event-log.ts: "Filtered events, oldest first; `limit` keeps the NEWEST
+ * matches"), and the bridge hands that through untouched.
+ *
+ * This function used to DOCUMENT the opposite and its mock branch sorted
+ * descending, so the fallback path returned the oldest N while reporting a
+ * truncation — the same list, trimmed at the wrong end, in the one mode where
+ * nothing else would notice. The mock now serves the server's contract exactly,
+ * including honouring `limit`, so the two paths cannot disagree about which
+ * events a bounded query is allowed to drop.
+ */
 export async function queryEvents(filter?: EventFilter): Promise<CookrewEvent[]> {
   const fn = bridge().queryEvents
   if (fn) {
@@ -360,7 +376,12 @@ export async function queryEvents(filter?: EventFilter): Promise<CookrewEvent[]>
     if (Array.isArray(res)) return res
     return res?.events ?? []
   }
-  return mockLog.filter((e) => matches(e, filter)).sort((a, b) => b.timestamp - a.timestamp)
+  const ordered = mockLog.filter((e) => matches(e, filter)).sort((a, b) => a.timestamp - b.timestamp)
+  // Mirrors main/event-log.ts exactly: the mock is a stand-in for the server,
+  // so a filter the server would honour must not pass straight through here.
+  return filter?.limit !== undefined && ordered.length > filter.limit
+    ? ordered.slice(ordered.length - filter.limit)
+    : ordered
 }
 
 /**
@@ -385,7 +406,7 @@ const REFRESH_COALESCE_MS = 400
  * Newest-first, because a metrics view that had to drop something should drop
  * the oldest. A caller that genuinely wants everything passes its own limit.
  */
-const DEFAULT_QUERY_LIMIT = 2000
+export const DEFAULT_QUERY_LIMIT = 2000
 
 /** What a live query returned, and whether the log had more to give. */
 export interface LiveEvents {
@@ -399,10 +420,17 @@ export interface LiveEvents {
 }
 
 /**
- * Live query hook: initial fetch, then a COALESCED re-query as events stream.
+ * Live query hook returning the array alone — for callers that genuinely do not
+ * care whether the range was complete.
  *
- * Returns the array directly for existing callers; useLiveEvents exposes the
- * truncation flag alongside it.
+ * PREFER useLiveEvents. This variant DISCARDS `truncated`, and a caller that
+ * rolls the result up into a total, a rate or a percentile needs that flag: the
+ * query is bounded, so over a long enough range this array is the newest slice
+ * and any number derived from it describes the slice, not the range. Exactly
+ * that happened to MetricsPanel — it reported counts and P95 over the newest
+ * 2000 events while labelled "all", because this hook made dropping the flag
+ * the path of least resistance. Reach for it only when the events themselves
+ * are the output, never when a summary of them is.
  */
 export function useEventQuery(filter?: EventFilter): CookrewEvent[] {
   return useLiveEvents(filter).events
