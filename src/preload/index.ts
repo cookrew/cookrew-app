@@ -2,6 +2,18 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 const api = {
   getWorkspace: () => ipcRenderer.invoke('workspace:get'),
+  // The owner's grant surface. Main refuses any sender that is not the owner
+  // window's TOP frame, so exposing it here does not hand it to a browser card
+  // or an install page — see owner-grant.ts and grant-surface-shape.test.ts.
+  grantEnrol: (workspaceId: string, sub: string, jwk: unknown) =>
+    ipcRenderer.invoke('grant:enrol', workspaceId, sub, jwk),
+  grantRevoke: (workspaceId: string, sub: string) =>
+    ipcRenderer.invoke('grant:revoke', workspaceId, sub),
+  grantExport: (workspaceId: string, nodeId: string, callers: string[]) =>
+    ipcRenderer.invoke('grant:export', workspaceId, nodeId, callers),
+  grantUnexport: (workspaceId: string, nodeId: string) =>
+    ipcRenderer.invoke('grant:unexport', workspaceId, nodeId),
+  grantList: (workspaceId: string) => ipcRenderer.invoke('grant:list', workspaceId),
   onWorkspaceState: (cb: (state: unknown) => void) => {
     const listener = (_e: unknown, state: unknown): void => cb(state)
     ipcRenderer.on('workspace:state', listener)

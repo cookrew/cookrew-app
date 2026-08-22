@@ -69,6 +69,7 @@ import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
 import { forkContextReady, forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
 import { AgentRegistry } from './agent-registry'
 import { AgentExportStore } from './agent-export'
+import { OwnerGrant, isOwnerSender } from './owner-grant'
 import { CallCredentialService } from './call-credential'
 import { makeCallCeremony } from './call-ceremony'
 import { makeCallGate } from './call-gate'
@@ -263,6 +264,32 @@ const agents = new AgentRegistry()
  */
 const callCredentials = new CallCredentialService()
 const agentExports = new AgentExportStore()
+
+/**
+ * The owner's grant surface. THE WIRE CARRIES THE CEREMONY AND THE CALL, NEVER
+ * THE GRANT — see owner-grant.ts for why this is the one thing that needs no
+ * credential, and tests/grant-surface-shape.test.ts for the sweep that fails
+ * if an HTTP route ever reaches it.
+ *
+ * Every decision lands on the ordinary observability stream. A grant is what
+ * makes an agent reachable from the internet, so the owner should be able to
+ * find out later that they made one without knowing to go looking.
+ */
+const ownerGrant = new OwnerGrant({
+  store: agentExports,
+  audit: (line) => {
+    events.append({
+      type: `grant.${line.op}`,
+      entityId: line.subject,
+      entityName: line.subject,
+      workspaceId: line.workspaceId,
+      workspaceName: store.list().workspaces.find((w) => w.id === line.workspaceId)?.name ?? line.workspaceId,
+      actor: 'user',
+      timestamp: line.at,
+      details: line.via
+    })
+  }
+})
 const callConversations = new CallConversationStore()
 /**
  * The pre-credential lookup, memoized for a beat (Tinker HIGH-2).
@@ -2531,6 +2558,50 @@ function registerIpc(handlers: RestoreHandlers): void {
 
   // Renderer resolved a ⌘W to "nothing left to close" → quit.
   ipcMain.on('app:quit', () => app.quit())
+
+  // ---- the owner's grant surface (owner-only IPC, never a route) ----
+  //
+  // Every handler goes through ownerOnly. "Owner-only IPC" is worth nothing if
+  // a page the app merely RENDERS can reach the channel — a browser card hosts
+  // whatever the owner browsed to, an install page comes from a registry, a
+  // preset can ship a URL. So the sender must BE the owner window's top frame,
+  // proved rather than assumed from the fact that IPC is not HTTP.
+  const ownerOnly =
+    <A extends unknown[], R>(op: (...args: A) => R) =>
+    (event: Electron.IpcMainInvokeEvent, ...args: A): R | { ok: false; reason: string } => {
+      if (!isOwnerSender(event.sender, event.senderFrame, mainWindow?.webContents)) {
+        console.error('[cookrew] grant refused: sender is not the owner window top frame')
+        return { ok: false, reason: 'not_owner' }
+      }
+      return op(...args)
+    }
+
+  ipcMain.handle(
+    'grant:enrol',
+    ownerOnly((workspaceId: string, sub: string, jwk: Record<string, unknown>) =>
+      ownerGrant.enrol(workspaceId, sub, jwk)
+    )
+  )
+  ipcMain.handle(
+    'grant:revoke',
+    ownerOnly((workspaceId: string, sub: string) => ownerGrant.revoke(workspaceId, sub))
+  )
+  ipcMain.handle(
+    'grant:export',
+    ownerOnly((workspaceId: string, nodeId: string, callers: string[]) =>
+      ownerGrant.exportAgent(workspaceId, nodeId, callers)
+    )
+  )
+  ipcMain.handle(
+    'grant:unexport',
+    ownerOnly((workspaceId: string, nodeId: string) => ownerGrant.unexport(workspaceId, nodeId))
+  )
+  // READ paths, so the owner can see what they granted. Same ownership check:
+  // the roster of who may call your agents is not for a rendered page either.
+  ipcMain.handle(
+    'grant:list',
+    ownerOnly((workspaceId: string) => agentExports.exportsIn(workspaceId))
+  )
 
   ipcMain.handle('workspace:list', () => store.list())
   ipcMain.handle('workspace:create', (_e, name: string, dir: string, team?: string) =>
