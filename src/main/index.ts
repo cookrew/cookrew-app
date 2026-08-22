@@ -75,6 +75,7 @@ import { makeCallGate } from './call-gate'
 import { CallConversationStore } from './call-conversation'
 import { cutCallVersion } from './call-fork'
 import { makeCallSession } from './call-session'
+import { memoizeBriefly } from './call-cache'
 import { RecoverableStore, planRecovery } from './recoverable'
 import { EventLog } from './event-log'
 import { installProcessGuards } from './process-guards'
@@ -261,6 +262,15 @@ const agents = new AgentRegistry()
 const callCredentials = new CallCredentialService()
 const agentExports = new AgentExportStore()
 const callConversations = new CallConversationStore()
+/**
+ * The pre-credential lookup, memoized for a beat (Tinker HIGH-2).
+ *
+ * An unauthenticated call resolves a NAME before any credential is examined —
+ * 404 before 401, so a caller cannot map the room — and for a workspace that is
+ * not resident that read comes off disk. Cheap, not reordered: see
+ * call-cache.ts for what the window can and cannot cost.
+ */
+const callNodesOf = memoizeBriefly((workspaceId: string) => store.workspaceState(workspaceId).nodes)
 const boardProbe = createProbeSampler(
   tmuxProbeDeps({
     knownTerminalIds: () => agents.list().map((entry) => entry.id),
@@ -2245,7 +2255,7 @@ app.whenReady().then(() => {
     // for whichever canvas the owner is looking at.
     calls: {
       decide: makeCallGate({
-        nodesOf: (workspaceId) => store.workspaceState(workspaceId).nodes,
+        nodesOf: callNodesOf,
         exportOf: (workspaceId, nodeId) => agentExports.exportOf(workspaceId, nodeId),
         issuer: callCredentials
       }),

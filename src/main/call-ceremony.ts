@@ -1,4 +1,4 @@
-import { createPublicKey, verify } from 'node:crypto'
+import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto'
 import type { CallIssuer } from './call-credential'
 
 /**
@@ -47,6 +47,43 @@ export interface CallCeremonyDeps {
   issuer: CallIssuer
   /** The key this caller is enrolled with here, or null. Workspace-scoped. */
   enrolledKey: (workspaceId: string, sub: string) => Record<string, unknown> | null
+  /**
+   * Verify one signature. Injectable ONLY so a test can count the calls and
+   * prove the unknown-caller path does the same work as the bad-signature one
+   * — see the timing note below. Production always uses the default.
+   */
+  verifySignature?: (jwk: Record<string, unknown>, payload: Buffer, signature: Buffer) => boolean
+}
+
+/**
+ * A key that is enrolled for nobody, used only to spend the same time.
+ *
+ * Generated once per process rather than per call, because generating one per
+ * call would make the unknown-caller path SLOWER than the real one and simply
+ * invert the oracle.
+ */
+let dummyKey: Record<string, unknown> | null = null
+function dummyJwk(): Record<string, unknown> {
+  if (dummyKey === null) {
+    dummyKey = generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }) as Record<
+      string,
+      unknown
+    >
+  }
+  return dummyKey
+}
+
+function verifyAgainst(
+  jwk: Record<string, unknown>,
+  payload: Buffer,
+  signature: Buffer
+): boolean {
+  try {
+    return verify(null, payload, createPublicKey({ key: jwk as never, format: 'jwk' }), signature)
+  } catch {
+    // A malformed key or signature is a failed verification, not a crash.
+    return false
+  }
 }
 
 /**
@@ -94,24 +131,29 @@ export function makeCallCeremony(deps: CallCeremonyDeps): CallCeremony {
       }
 
       const jwk = deps.enrolledKey(workspaceId, input.sub)
-      if (jwk === null) return { ok: false, reason: 'unknown_caller' }
 
+      // THE ORACLE IS IN THE CLOCK, NOT ONLY IN THE BODY (Tinker MEDIUM-1).
+      //
+      // Returning early for an unknown caller made this path skip an Ed25519
+      // verification that the bad-signature path performs, so the two answered
+      // in measurably different times. The owner's ruling is that these must be
+      // indistinguishable — a caller told "unknown_caller" versus
+      // "bad_signature" learns whether an identity exists, which is the whole
+      // enumeration attack, and its next action is identical either way. A
+      // refusal that is uniform on the wire and distinguishable on a stopwatch
+      // is not uniform.
+      //
+      // So the verification happens BEFORE the branch, against a key enrolled
+      // for nobody when there is no real one. Structural rather than a rule to
+      // remember: there is no early return left to reintroduce.
       const payload = Buffer.from(
         callAssertionPayload(workspaceId, input.sub, input.challenge),
         'utf8'
       )
-      let good = false
-      try {
-        good = verify(
-          null,
-          payload,
-          createPublicKey({ key: jwk as never, format: 'jwk' }),
-          Buffer.from(input.signature, 'base64url')
-        )
-      } catch {
-        // A malformed key or signature is a failed verification, not a crash.
-        good = false
-      }
+      const verifier = deps.verifySignature ?? verifyAgainst
+      const good = verifier(jwk ?? dummyJwk(), payload, Buffer.from(input.signature, 'base64url'))
+
+      if (jwk === null) return { ok: false, reason: 'unknown_caller' }
       if (!good) return { ok: false, reason: 'bad_signature' }
 
       // The credential names this workspace and nothing else — see

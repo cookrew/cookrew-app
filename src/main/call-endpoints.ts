@@ -39,6 +39,13 @@ export interface CallEndpointDeps {
   }) => CallSession
 }
 
+/**
+ * What a realm may look like: exactly what workspace-slug.ts mints. Checked
+ * here rather than assumed, because this file is where a bad value becomes a
+ * response header.
+ */
+const SLUG_REALM = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+
 /** The credential presented, or null. Never an empty string, never a default. */
 function bearer(request: http.IncomingMessage): string | null {
   const header = request.headers.authorization
@@ -67,8 +74,20 @@ export async function handleCallRoutes(
   }
 
   if (ceremony === 'assert') {
-    const body = await readJson<Partial<AssertInput>>(request)
-    const result = deps.ceremony.assert(workspaceId, body as AssertInput)
+    // EVERY failure of this route is one 401, including the ones that are not
+    // the ceremony's (Tinker LOW-1). Malformed JSON threw out of readJson and
+    // surfaced as a 500 carrying the parser's message; mint() was unwrapped
+    // too, so a signing key with the wrong mode could have shown an anonymous
+    // caller an absolute path from this machine. A refusal that is uniform for
+    // four reasons and then leaks on a fifth is not uniform.
+    let result: ReturnType<CallCeremony['assert']>
+    try {
+      const body = await readJson<Partial<AssertInput>>(request)
+      result = deps.ceremony.assert(workspaceId, body as AssertInput)
+    } catch {
+      respondJson(response, 401, {})
+      return true
+    }
     if (!result.ok) {
       // ONE answer for every way a ceremony fails. The reason is real and it is
       // kept server-side: telling a caller that its subject was unknown but its
@@ -97,7 +116,16 @@ export async function handleCallRoutes(
     // Set before the body rather than through respondJson, which takes no
     // headers: Node merges setHeader values into writeHead's, so the shared
     // helper stays as it is for the ~44 routes that do not need one.
-    const realm = deps.slugOf(workspaceId) ?? workspaceId
+    //
+    // The realm is CHECKED here, not trusted (Tinker LOW-3). It was
+    // interpolated straight into a quoted header field on the strength of an
+    // invariant enforced in workspace-slug.ts — true today, and a header
+    // injection the moment someone relaxes it in a file that has no idea this
+    // depends on it. A value that is not the shape slugs are minted in is
+    // replaced rather than escaped: the realm is a label, and a wrong label
+    // costs a client nothing, while a quote inside one costs everything.
+    const named = deps.slugOf(workspaceId)
+    const realm = named !== undefined && SLUG_REALM.test(named) ? named : 'cookrew'
     response.setHeader(
       'www-authenticate',
       `Cookrew realm="${realm}", challenge=${verdict.challenge}`
@@ -125,7 +153,14 @@ export async function handleCallRoutes(
     return true
   }
 
-  const body = await readJson<{ conversation?: unknown }>(request)
+  let body: { conversation?: unknown }
+  try {
+    body = await readJson<{ conversation?: unknown }>(request)
+  } catch {
+    // Same rule as the ceremony: a parser message is not this route's answer.
+    respondJson(response, 403, { reason: 'conversation' })
+    return true
+  }
   const requested = body?.conversation
   if (requested !== undefined && (typeof requested !== 'string' || !isConversationId(requested))) {
     // A conversation id is a KEY. Refused rather than coerced, because two
@@ -146,10 +181,12 @@ export async function handleCallRoutes(
     // A source with no completed turns cannot be forked, and a fork that fails
     // is a call that did not happen. Said plainly rather than answered 501,
     // which would claim the gate is fine and only the turn is missing.
-    respondJson(response, 409, {
-      reason: 'no_version',
-      detail: error instanceof Error ? error.message : String(error)
-    })
+    // A reason word, never the thrown message. `error` here can come from the
+    // fork engine or the filesystem, and either can carry an absolute path from
+    // the owner's machine — which is not something an anonymous caller has any
+    // business reading out of a refusal.
+    void error
+    respondJson(response, 409, { reason: 'no_version' })
     return true
   }
 

@@ -278,6 +278,55 @@ describe('a served call cuts its version, once per conversation', () => {
     expect(forks).toBe(2)
   })
 
+  it('never puts an unvetted realm into the response header', async () => {
+    exportForge()
+    const { response, captured } = stubResponse()
+    await handleCallRoutes(
+      stubRequest('POST'),
+      response,
+      new URL('/agents/forge/ask', 'https://owner.example'),
+      // A slug shape workspace-slug.ts would never mint. This route must not
+      // rely on an invariant enforced in a file that has no idea it does.
+      { ...deps(), slugOf: () => 'evil", challenge=x, injected="' },
+      WS
+    )
+    expect(captured.status).toBe(401)
+    expect(captured.headers['www-authenticate']).not.toContain('injected')
+    expect(captured.headers['www-authenticate']).toMatch(
+      /^Cookrew realm="cookrew", challenge=[A-Za-z0-9_-]+$/
+    )
+  })
+
+  it('answers an unparseable call body without a parser message', async () => {
+    exportForge()
+    const { captured } = await call('POST', '/agents/forge/ask', {
+      authorization: `Bearer ${credentialFor()}`,
+      body: '{ not json'
+    })
+    expect(captured.status).toBe(403)
+    expect(captured.body).toEqual({ reason: 'conversation' })
+  })
+
+  it('409s without echoing the thrown message', async () => {
+    exportForge()
+    const { response, captured } = stubResponse()
+    const failing = {
+      ...deps(),
+      session: () => {
+        throw new Error('/Users/someone/workspace/secret-project has no turns')
+      }
+    }
+    await handleCallRoutes(
+      stubRequest('POST', `Bearer ${credentialFor()}`),
+      response,
+      new URL('/agents/forge/ask', 'https://owner.example'),
+      failing,
+      WS
+    )
+    expect(captured.status).toBe(409)
+    expect(captured.body).toEqual({ reason: 'no_version' })
+  })
+
   it('403s a conversation id that is not a key', async () => {
     exportForge()
     const { captured } = await call('POST', '/agents/forge/ask', {
@@ -350,20 +399,55 @@ describe('the ceremony over HTTP', () => {
 
   it('gives the same 401 for every way an assertion fails', async () => {
     enrolAlice()
-    const challenge = issuer.challenge(WS)
     const unknownCaller = await call('POST', '/api/call/assert', {
-      body: JSON.stringify({ sub: 'mallory', challenge, signature: 'x' })
+      body: JSON.stringify({ sub: 'mallory', challenge: issuer.challenge(WS), signature: 'x' })
     })
     const badSignature = await call('POST', '/api/call/assert', {
       body: JSON.stringify({ sub: 'alice', challenge: issuer.challenge(WS), signature: 'x' })
     })
     const malformed = await call('POST', '/api/call/assert', { body: '{}' })
+    // unknown_challenge was missing here, and it is the CHEAPEST oracle to
+    // trigger: no enrolment, no signature, just a nonce nobody issued.
+    const unknownChallenge = await call('POST', '/api/call/assert', {
+      body: JSON.stringify({ sub: 'alice', challenge: 'never-issued', signature: 'x' })
+    })
     // An enrolment oracle would let a stranger enumerate who may call this
-    // workspace. All three are one answer with nothing in the body.
-    for (const attempt of [unknownCaller, badSignature, malformed]) {
+    // workspace. All four are one answer with nothing in the body.
+    for (const attempt of [unknownCaller, badSignature, malformed, unknownChallenge]) {
       expect(attempt.captured.status).toBe(401)
       expect(attempt.captured.body).toEqual({})
     }
+  })
+
+  it('answers unparseable JSON with the SAME 401, not a 500 with a parser message', async () => {
+    const { captured } = await call('POST', '/api/call/assert', { body: '{ not json' })
+    expect(captured.status).toBe(401)
+    expect(captured.body).toEqual({})
+  })
+
+  it('answers a mint that throws with the same 401, leaking no path', async () => {
+    // A signing key with the wrong mode throws out of mint(). Unwrapped, that
+    // surfaced as a 500 carrying an absolute path from the owner's machine.
+    enrolAlice()
+    const throwing = {
+      ...deps(),
+      ceremony: {
+        challenge: () => 'n',
+        assert: () => {
+          throw new Error(`/Users/someone/.cookrew/call-token-key.jwk is readable`)
+        }
+      }
+    }
+    const { response, captured } = stubResponse()
+    await handleCallRoutes(
+      stubRequest('POST', undefined, '{}'),
+      response,
+      new URL('/api/call/assert', 'https://owner.example'),
+      throwing,
+      WS
+    )
+    expect(captured.status).toBe(401)
+    expect(JSON.stringify(captured.body)).not.toContain('.cookrew')
   })
 })
 

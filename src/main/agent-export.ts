@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { writeFileAtomic } from './turn-annotations'
@@ -45,8 +45,8 @@ export interface AgentExport {
   visibility: Visibility
   /**
    * Subjects entitled to call it. Empty means NOBODY, never everybody — see
-   * the closed-default rule above. Ignored when visibility is 'public', which
-   * is the owner saying out loud that identity is not required here.
+   * the closed-default rule above, and isExport for why a call is never public
+   * and so this list is never bypassed.
    */
   callers: readonly string[]
 }
@@ -103,6 +103,22 @@ function isExport(value: unknown): value is AgentExport {
 
 export class AgentExportStore {
   private readonly file: string
+  /**
+   * The parsed record, with the file identity it was parsed from.
+   *
+   * WHY THIS CACHE EXISTS (Tinker HIGH-2). Every unauthenticated call reached
+   * this store BEFORE any credential was checked — deliberately, because
+   * answering 404 before 401 is what stops a caller mapping the room — so an
+   * anonymous flood meant a readFileSync plus a JSON.parse per request, twice
+   * for a served one, on the Electron main thread. The fix is emphatically NOT
+   * to check the credential first; it is to make the pre-credential work cheap.
+   *
+   * Keyed on mtime AND size rather than mtime alone: a same-millisecond
+   * rewrite is exactly what an atomic replace produces, and a cache that missed
+   * one would serve a withdrawn grant. Writes through this class update the
+   * cache directly, so the stat is only paying for edits made behind its back.
+   */
+  private cache: { mtimeMs: number; size: number; value: ExportFile } | null = null
 
   constructor(base: string = path.join(homedir(), '.cookrew')) {
     this.file = path.join(base, 'exports.json')
@@ -113,7 +129,26 @@ export class AgentExportStore {
    * which grants nothing. Every failure mode of this function is a refusal.
    */
   private read(): ExportFile {
-    if (!existsSync(this.file)) return EMPTY
+    let stamp: { mtimeMs: number; size: number }
+    try {
+      const stat = statSync(this.file)
+      stamp = { mtimeMs: stat.mtimeMs, size: stat.size }
+    } catch {
+      // No file, or it cannot be stat'd. Either way there are no grants, and
+      // the cache is dropped so a file appearing later is picked up.
+      this.cache = null
+      return EMPTY
+    }
+    const cached = this.cache
+    if (cached !== null && cached.mtimeMs === stamp.mtimeMs && cached.size === stamp.size) {
+      return cached.value
+    }
+    const value = this.parse()
+    this.cache = { ...stamp, value }
+    return value
+  }
+
+  private parse(): ExportFile {
     try {
       const parsed = JSON.parse(readFileSync(this.file, 'utf8')) as ExportFile
       return {
@@ -127,9 +162,27 @@ export class AgentExportStore {
     }
   }
 
+  /**
+   * Persist, at 0600.
+   *
+   * THE MODE IS NOT COSMETIC (Tinker MEDIUM-3). The integrity of this file IS
+   * the gate: anyone who can write it enrols themselves and exports any agent.
+   * The signing key was created 0600 and this was left at the platform default,
+   * which was an asymmetry nobody chose — the two files are worth exactly the
+   * same to an attacker. Set on every write, not only at creation, so a
+   * restored backup or a `cp` cannot quietly loosen it.
+   */
   private write(next: ExportFile): void {
     mkdirSync(path.dirname(this.file), { recursive: true })
     writeFileAtomic(this.file, JSON.stringify(next, null, 2))
+    chmodSync(this.file, 0o600)
+    // Adopt what was just written rather than re-reading it on the next call.
+    try {
+      const stat = statSync(this.file)
+      this.cache = { mtimeMs: stat.mtimeMs, size: stat.size, value: next }
+    } catch {
+      this.cache = null
+    }
   }
 
   /**

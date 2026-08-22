@@ -376,7 +376,65 @@ number — which matters because a skipped number makes §10's versions non-cons
 conversation is never recorded pointing at a fork that was never made. A source with no completed
 turns is refused before anything is forked.</p>
 
-<h2>10 · Constraints S4 must honour</h2>
+<h2>10 · The grant surface is owner-only IPC. It is never on the listener.</h2>
+
+<div class="card ruling">
+<h3><span class="tag">Answer</span>Tinker's BLOCK asked it directly, so it is stated here rather than left inferable from a diff.</h3>
+<p><code>enrol</code>, <code>exportAgent</code> and <code>unexport</code> are reachable
+<strong>only</strong> from the desktop renderer over Electron IPC — the owner at their own keyboard.
+No HTTP route mounts them, on any listener, under any slug, with any credential.</p>
+</div>
+
+<p>The reasoning is the same one that put the call route ahead of the pairing gate, run backwards.
+This surface decides <em>who lands on the allow-list</em>, so it is strictly more powerful than the
+gate it feeds: anyone who can call it can enrol themselves and export every agent in the workspace,
+which makes every refusal downstream decorative. A credential good enough to enrol a caller would
+have to be issued by something — and whatever issued it would become the real gate, mounted on the
+same 0.0.0.0 socket, with the same properties to prove all over again.</p>
+
+<p>So the trust root for granting is the one thing that needs no credential because it is not
+reachable over a network at all: the owner's own process. IPC is not a temporary shape either —
+when M3 adds seats and revocation, those are <em>reads and writes of this same record</em>, and they
+stay here. What goes over the wire is the ceremony (prove you hold a key already enrolled) and the
+call. Never the grant.</p>
+
+<table>
+  <tr><th>Operation</th><th>Reachable from</th><th>Why</th></tr>
+  <tr><td><code>enrol</code> / <code>revoke</code></td><td>Owner IPC only</td>
+      <td>Decides who may hold a credential. Strictly above the gate.</td></tr>
+  <tr><td><code>exportAgent</code> / <code>unexport</code></td><td>Owner IPC only</td>
+      <td>Decides what is callable at all. An agent nobody exported does not exist to the internet.</td></tr>
+  <tr><td><code>POST /api/call/challenge</code></td><td>The listener, unauthenticated</td>
+      <td>A nonce is what a caller has <em>instead</em> of a credential, and grants nothing.</td></tr>
+  <tr><td><code>POST /api/call/assert</code></td><td>The listener, unauthenticated</td>
+      <td>Proves possession of an <em>already-enrolled</em> key. It cannot add one.</td></tr>
+  <tr><td><code>POST /&lt;slug&gt;/agents/&lt;name&gt;/ask</code></td><td>The listener, gated</td>
+      <td>The product.</td></tr>
+</table>
+
+<h2>11 · Hardening — what the review changed</h2>
+
+<table>
+  <tr><th></th><th>Finding</th><th>Shape of the fix</th></tr>
+  <tr><td class="no">HIGH-1</td><td>Unauthenticated nonce minting unbounded; O(n) sweep per insert, so cost grew as (TTL × rate)² on the Electron main thread</td>
+      <td>Two rotating TTL windows — expiry by discarding a Map, never by scanning one — plus a hard ceiling that evicts the oldest in O(1). A flood costs bounded memory and constant time.</td></tr>
+  <tr><td class="no">HIGH-2</td><td>Disk read + JSON.parse per unauthenticated request, twice for a served one</td>
+      <td>Grant record cached on <em>mtime and size</em> (a same-millisecond atomic replace is exactly the case mtime alone misses), writes update the cache directly; node lookup memoized for one second. <strong>Not</strong> reordered — 404-before-401 stands.</td></tr>
+  <tr><td class="no">MED-1</td><td>Enrolment oracle survived in the clock: unknown-caller skipped an Ed25519 verify that bad-signature performed</td>
+      <td>The verification now happens <em>before</em> the branch, against a real Ed25519 key enrolled for nobody. Structural — there is no early return left to reintroduce.</td></tr>
+  <tr><td class="no">MED-2</td><td>Key mode set at creation, never checked on read</td>
+      <td>Checked on load; a key readable by others is refused, not repaired — chmod would hide that it had been readable. Fails closed.</td></tr>
+  <tr><td class="no">MED-3</td><td><code>exports.json</code> at the platform default while the key was 0600</td>
+      <td>0600 on every write. Its integrity <em>is</em> the gate; the asymmetry was nobody's decision.</td></tr>
+  <tr><td>LOW</td><td>Parser messages escaping as 500s; <code>unknown_challenge</code> untested; realm interpolated unvetted; a comment describing an AND that was a swap</td>
+      <td>All four closed, each with a test.</td></tr>
+</table>
+
+<p><strong>Every fix was mutation-checked.</strong> Restoring the early return, dropping the chmod and
+disabling the mode check each killed 2–3 tests. The standard is the owner's: if a single-line mutant
+survives, the gate is not measuring what it claims.</p>
+
+<h2>12 · Constraints S4 must honour</h2>
 
 <ul>
   <li><strong>A 401 is a promise.</strong> A1 refused to answer 401 before identity existed, because
