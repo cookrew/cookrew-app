@@ -101,7 +101,59 @@ export function nodeInScope(
  * scope; until then the honest answer is "not here yet", not a wrong answer
  * that looks right.
  */
-const SCOPE_AWARE: RegExp[] = [
+/**
+ * Routes addressed by a NODE ID, and therefore safe to scope by membership.
+ *
+ * These act on one node — write to its pty, resize it, stream it, read its
+ * turns — so once nodeInScope confirms the node belongs to the scoped
+ * workspace, the handler acting by id is correct by construction. That is what
+ * separates them from /api/workspace, which answers for FOCUS whatever the
+ * path says and cannot be scoped by a membership check alone.
+ *
+ * ONE table, because SCOPE_AWARE and nodeIdOfRoute used to be two independent
+ * regexes: adding a route to the allow-list without teaching the extractor
+ * would let it through UNGATED — a slugged URL driving a node in another
+ * workspace, which is exactly the decoration the scope check exists to
+ * prevent. Derived from one source, they cannot drift.
+ *
+ * DELIBERATELY ABSENT: /fork. It creates a NEW terminal, and placement is a
+ * workspace decision rather than a property of the addressed node, so a
+ * membership check on the source does not establish where the fork lands.
+ * It stays 501 under a slug until that placement is verified scope-aware.
+ */
+export const NODE_ROUTES: RegExp[] = [
+  // Live seat: keystrokes, geometry, pane content. Without raw a slugged
+  // phone cannot TYPE, which is the gap Magpie found — a seat that cannot
+  // type is not a seat, and §11 promises a companion on a slug is one.
+  /^\/api\/terminal\/[^/]+\/raw$/,
+  /^\/api\/terminal\/[^/]+\/resize$/,
+  /^\/api\/terminal\/[^/]+\/stream$/,
+  // Submit paths (already scoped before this change).
+  /^\/api\/terminal\/[^/]+\/(?:input|ask)$/,
+  /^\/api\/terminal\/[^/]+\/output$/,
+  // Reading and navigating the transcript.
+  /^\/api\/terminal\/[^/]+\/jump$/,
+  /^\/api\/terminal\/[^/]+\/seen$/,
+  /^\/api\/terminal\/[^/]+\/turns(?:\?.*)?$/,
+  /^\/api\/terminal\/[^/]+\/trace(?:\?.*)?$/,
+  /^\/api\/terminal\/[^/]+\/trace\/index$/,
+  /^\/api\/terminal\/[^/]+\/trace\/markers$/,
+  // NOT /cwd. It reads as node-addressed, but its implementation is
+  // focus-bound: moveTerminalCwd resolves through store.node() and validates
+  // against store.focusedState.dirs, so a scoped call for a terminal in a
+  // NON-focused workspace passes the membership gate and then answers 400
+  // "Not a terminal node" for a terminal that plainly exists. That is the
+  // /api/workspace shape this file's own doctrine disqualifies — answering for
+  // focus whatever the path says — and allow-listing it would break the
+  // "correct by construction" claim the rest of this table rests on. It fails
+  // closed, so this is honesty rather than a hole; /cwd stays 501 under a slug
+  // until moveTerminalCwd takes a workspace id. A seat needs to type, not to
+  // move house. (Tinker review, 2026-08-22.)
+  // Browser card picture.
+  /^\/api\/browser\/[^/]+\/thumb$/
+]
+
+export const SCOPE_AWARE: RegExp[] = [
   // The renderer index, EARNED. It was refused while the bundled client
   // issued root-absolute /api/... requests, because serving it at /<slug>
   // rendered the FOCUSED canvas under a URL naming a different workspace. The
@@ -125,9 +177,8 @@ const SCOPE_AWARE: RegExp[] = [
   /^\/api\/presets$/,
   /^\/api\/git(?:\?.*)?$/,
   /^\/api\/browser\/capabilities$/,
-  /^\/api\/terminal\/[^/]+\/output$/,
-  /^\/api\/terminal\/[^/]+\/(?:input|ask)$/,
-  /^\/api\/browser\/[^/]+\/thumb$/
+  // Node-addressed seat routes, from the ONE table below.
+  ...NODE_ROUTES
 ]
 
 export function scopedRouteSupported(pathname: string): boolean {
@@ -142,8 +193,9 @@ export function scopedRouteSupported(pathname: string): boolean {
  * whole refactor is written against.
  */
 export function nodeIdOfRoute(pathname: string): string | null {
-  const match = pathname.match(
-    /^\/api\/(?:terminal|browser)\/([^/]+)\/(?:output|input|ask|thumb)$/
-  )
+  // Only a path the NODE_ROUTES table claims may yield an id, so a route
+  // cannot be allow-listed and left ungated, nor gated without being allowed.
+  if (!NODE_ROUTES.some((pattern) => pattern.test(pathname))) return null
+  const match = pathname.match(/^\/api\/(?:terminal|browser)\/([^/]+)\//)
   return match ? match[1] : null
 }

@@ -15,7 +15,9 @@ import {
   nodeInScope,
   resolveScopedRoute,
   scopedRouteSupported,
-  splitSlugRoute
+  splitSlugRoute,
+  NODE_ROUTES,
+  SCOPE_AWARE
 } from '../src/main/mobile-slug-route'
 import { RESERVED_SLUGS, deriveSlug } from '../src/main/workspace-slug'
 
@@ -156,12 +158,10 @@ describe('scopedRouteSupported — fail closed (review C2)', () => {
     // looks right, which is worse than not having the route.
     for (const p of [
       '/api/nodes/n1',
-      '/api/terminal/t1/raw',
-      '/api/terminal/t1/resize',
+      // /fork CREATES a terminal, and placement is a workspace decision, not a
+      // property of the addressed node — a membership check on the source
+      // proves nothing about where the fork lands.
       '/api/terminal/t1/fork',
-      '/api/terminal/t1/cwd',
-      '/api/terminal/t1/stream',
-      '/api/terminal/t1/jump',
       '/api/agents/a1/dispatch',
       '/api/agents/a1/recover',
       '/api/agents/a1/restore',
@@ -188,11 +188,11 @@ describe('nodeIdOfRoute — one check for every scoped node route', () => {
   })
 
   it("the reviewer's PoC: a raw drive on another workspace's terminal", () => {
-    // POST /playground/api/terminal/<id-from-cookrew-dev>/raw — /raw is not
-    // scope-aware, so it is refused outright rather than reaching the handler.
-    expect(scopedRouteSupported('/api/terminal/other-ws-terminal/raw')).toBe(false)
-    // And the scoped variant that IS allowed still gets its node checked.
-    expect(nodeIdOfRoute('/api/terminal/other-ws-terminal/input')).toBe('other-ws-terminal')
+    // /raw is scope-aware NOW (a slugged phone must be able to type), so the
+    // refusal moves from the route to the NODE: the path is reachable, the id
+    // is extracted, and membership is what stops it.
+    expect(scopedRouteSupported('/api/terminal/other-ws-terminal/raw')).toBe(true)
+    expect(nodeIdOfRoute('/api/terminal/other-ws-terminal/raw')).toBe('other-ws-terminal')
     expect(nodeInScope('ws-play', 'ws-dev')).toBe(false)
   })
 })
@@ -252,5 +252,96 @@ describe('the dev renderer surface is not a workspace (live-window find)', () =>
     for (const reserved of RESERVED_SLUGS) {
       expect(splitSlugRoute(`/${reserved}/whatever`).slug).toBeNull()
     }
+  })
+})
+
+describe('a slugged phone is a full SEAT, not a reader (Magpie)', () => {
+  it('can TYPE — /raw is scope-aware', () => {
+    // The gap Magpie found: /raw answered 501 under a slug, so a phone on
+    // /playground could read a terminal and never type into it. §11 promises
+    // a companion on a slug is a working seat; a seat that cannot type is not
+    // one.
+    expect(scopedRouteSupported('/api/terminal/t1/raw')).toBe(true)
+  })
+
+  it('has the rest of what a live seat needs', () => {
+    for (const p of [
+      '/api/terminal/t1/stream', // pane content
+      '/api/terminal/t1/resize', // geometry
+      '/api/terminal/t1/input',
+      '/api/terminal/t1/ask',
+      '/api/terminal/t1/output',
+      '/api/terminal/t1/jump',
+      '/api/terminal/t1/seen',
+      '/api/terminal/t1/turns',
+      '/api/terminal/t1/turns?page=2',
+      '/api/terminal/t1/trace',
+      '/api/terminal/t1/trace/index',
+      '/api/terminal/t1/trace/markers',
+      '/api/browser/b1/thumb'
+    ]) {
+      expect(scopedRouteSupported(p), p).toBe(true)
+    }
+  })
+
+  it('does NOT claim /cwd — it reads node-addressed but resolves through focus', () => {
+    // moveTerminalCwd goes through store.node() and validates against
+    // store.focusedState.dirs, so a scoped call for a terminal in a
+    // non-focused workspace would clear the membership gate and then answer
+    // 400 for a terminal that exists. Allow-listing it would make the
+    // "every claimed route is correct by construction" property above a
+    // claim rather than a fact. It stays 501 until moveTerminalCwd takes a
+    // workspace id — the same reasoning that keeps /fork out.
+    expect(scopedRouteSupported('/api/terminal/t1/cwd')).toBe(false)
+    expect(nodeIdOfRoute('/api/terminal/t1/cwd')).toBeNull()
+  })
+
+  it('EVERY scoped node route yields an id, so none can slip through ungated', () => {
+    // The structural property. Allow-listing a node route without teaching the
+    // extractor would let a slugged URL drive a node in ANOTHER workspace —
+    // the decoration the scope check exists to prevent. One table now feeds
+    // both, so this holds by construction rather than by vigilance.
+    for (const p of [
+      '/api/terminal/t1/raw',
+      '/api/terminal/t1/stream',
+      '/api/terminal/t1/resize',
+      '/api/terminal/t1/jump',
+      '/api/terminal/t1/seen',
+      '/api/terminal/t1/turns?page=2',
+      '/api/terminal/t1/trace/markers',
+      '/api/browser/b1/thumb'
+    ]) {
+      expect(nodeIdOfRoute(p), p).not.toBeNull()
+    }
+  })
+
+  it('does not yield an id for a route it does not claim', () => {
+    // The inverse: gating a path the allow-list refuses would be dead code
+    // that reads like protection.
+    expect(nodeIdOfRoute('/api/terminal/t1/fork')).toBeNull()
+    expect(nodeIdOfRoute('/api/state')).toBeNull()
+  })
+})
+
+describe('the no-drift claim, enforced rather than asserted', () => {
+  it('every node-shaped route in SCOPE_AWARE comes from NODE_ROUTES', () => {
+    // I claimed one table meant the allow-list and the id extractor could not
+    // drift. Then I simulated the drift — appending a node route to
+    // SCOPE_AWARE directly, bypassing the table — and the suite stayed green.
+    // The claim was aspirational; this is what makes it true. A node-addressed
+    // path allow-listed outside the table would be reachable under a slug and
+    // yield no id, so nothing would check membership: a slugged URL driving a
+    // node in another workspace.
+    const fromTable = new Set(NODE_ROUTES.map((r) => r.source))
+    // Node-shaped = addresses a terminal or browser AND has an id segment.
+    // That is what separates /api/browser/:id/thumb (node-addressed) from
+    // /api/browser/capabilities (global, correctly absent from the table).
+    const nodeShaped = SCOPE_AWARE.filter(
+      (r) => /terminal|browser/.test(r.source) && r.source.includes('[^/]+')
+    )
+    for (const pattern of nodeShaped) {
+      expect(fromTable.has(pattern.source), `not in NODE_ROUTES: ${pattern.source}`).toBe(true)
+    }
+    expect(nodeShaped.length).toBe(NODE_ROUTES.length)
   })
 })
