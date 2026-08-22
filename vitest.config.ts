@@ -7,8 +7,16 @@ import { defineConfig } from 'vitest/config'
  * default `include` is `**\/*.test.ts` from the root, which walks into
  * `.claude/worktrees/`. Every linked worktree carries a full copy of `tests/`,
  * so a root run executed every branch's suite at once: measured on this
- * machine, 55,705 tests in 536s with 20 failures, against 3,361 in 22s with 1
- * when the worktrees are left out.
+ * machine, 55,705 tests in 536s with 20 failures, against 3,363 tests and 0
+ * failures when the worktrees are left out.
+ *
+ * A note on the wall-clock, because the first number here was wrong and got
+ * quoted onward. The scoped suite is 38s on an IDLE machine — not the 22s
+ * originally claimed — and 349s when the fleet is busy enough to matter (load
+ * 216 during a four-agent review round). It contains individual tests in the
+ * 60-72s range against REAL session files, so a fast reading needs a quiet
+ * machine to be true. 658s → 38s is the honest comparison, and a 17x claim
+ * that reproduces beats a 24x one that does not.
  *
  * Three separate harms, and the speed was the least of them:
  *
