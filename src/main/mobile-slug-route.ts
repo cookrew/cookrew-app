@@ -138,8 +138,17 @@ export const NODE_ROUTES: RegExp[] = [
   /^\/api\/terminal\/[^/]+\/trace(?:\?.*)?$/,
   /^\/api\/terminal\/[^/]+\/trace\/index$/,
   /^\/api\/terminal\/[^/]+\/trace\/markers$/,
-  // Repoint the terminal's directory — confined to the addressed node.
-  /^\/api\/terminal\/[^/]+\/cwd$/,
+  // NOT /cwd. It reads as node-addressed, but its implementation is
+  // focus-bound: moveTerminalCwd resolves through store.node() and validates
+  // against store.focusedState.dirs, so a scoped call for a terminal in a
+  // NON-focused workspace passes the membership gate and then answers 400
+  // "Not a terminal node" for a terminal that plainly exists. That is the
+  // /api/workspace shape this file's own doctrine disqualifies — answering for
+  // focus whatever the path says — and allow-listing it would break the
+  // "correct by construction" claim the rest of this table rests on. It fails
+  // closed, so this is honesty rather than a hole; /cwd stays 501 under a slug
+  // until moveTerminalCwd takes a workspace id. A seat needs to type, not to
+  // move house. (Tinker review, 2026-08-22.)
   // Browser card picture.
   /^\/api\/browser\/[^/]+\/thumb$/
 ]

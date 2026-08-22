@@ -278,11 +278,22 @@ describe('a slugged phone is a full SEAT, not a reader (Magpie)', () => {
       '/api/terminal/t1/trace',
       '/api/terminal/t1/trace/index',
       '/api/terminal/t1/trace/markers',
-      '/api/terminal/t1/cwd',
       '/api/browser/b1/thumb'
     ]) {
       expect(scopedRouteSupported(p), p).toBe(true)
     }
+  })
+
+  it('does NOT claim /cwd — it reads node-addressed but resolves through focus', () => {
+    // moveTerminalCwd goes through store.node() and validates against
+    // store.focusedState.dirs, so a scoped call for a terminal in a
+    // non-focused workspace would clear the membership gate and then answer
+    // 400 for a terminal that exists. Allow-listing it would make the
+    // "every claimed route is correct by construction" property above a
+    // claim rather than a fact. It stays 501 until moveTerminalCwd takes a
+    // workspace id — the same reasoning that keeps /fork out.
+    expect(scopedRouteSupported('/api/terminal/t1/cwd')).toBe(false)
+    expect(nodeIdOfRoute('/api/terminal/t1/cwd')).toBeNull()
   })
 
   it('EVERY scoped node route yields an id, so none can slip through ungated', () => {
@@ -298,7 +309,6 @@ describe('a slugged phone is a full SEAT, not a reader (Magpie)', () => {
       '/api/terminal/t1/seen',
       '/api/terminal/t1/turns?page=2',
       '/api/terminal/t1/trace/markers',
-      '/api/terminal/t1/cwd',
       '/api/browser/b1/thumb'
     ]) {
       expect(nodeIdOfRoute(p), p).not.toBeNull()
