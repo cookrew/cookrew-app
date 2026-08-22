@@ -5,6 +5,8 @@ import type { CallCeremony, AssertInput } from './call-ceremony'
 import type { CallDecision } from './call-gate'
 import type { CallSession } from './call-session'
 import { isConversationId } from './call-conversation'
+import { validateCallPrompt } from './call-prompt'
+import type { CallRunResult } from './call-run'
 
 /**
  * THE INTERNET GATE'S HTTP SURFACE (§9 · ④ · S2).
@@ -37,6 +39,11 @@ export interface CallEndpointDeps {
     sub: string
     conversation?: string
   }) => CallSession
+  /**
+   * Run the turn against the fork. The ONLY path from this surface into a pty,
+   * and it never receives a terminal id that call-session did not produce.
+   */
+  run: (input: { workspaceId: string; forkId: string; prompt: string }) => Promise<CallRunResult>
 }
 
 /**
@@ -153,14 +160,25 @@ export async function handleCallRoutes(
     return true
   }
 
-  let body: { conversation?: unknown }
+  let body: { conversation?: unknown; text?: unknown }
   try {
-    body = await readJson<{ conversation?: unknown }>(request)
+    body = await readJson<{ conversation?: unknown; text?: unknown }>(request)
   } catch {
     // Same rule as the ceremony: a parser message is not this route's answer.
     respondJson(response, 403, { reason: 'conversation' })
     return true
   }
+
+  // THE INBOUND BOUNDARY. Checked before a fork is even resolved, because a
+  // prompt that will be refused should not cost the owner a harness boot — and
+  // because the bytes below travel into a real agent's input box. See
+  // call-prompt.ts for the bracketed-paste escape this closes.
+  const prompt = validateCallPrompt(body?.text)
+  if (!prompt.ok) {
+    respondJson(response, 400, { reason: prompt.reason })
+    return true
+  }
+
   const requested = body?.conversation
   if (requested !== undefined && (typeof requested !== 'string' || !isConversationId(requested))) {
     // A conversation id is a KEY. Refused rather than coerced, because two
@@ -190,19 +208,29 @@ export async function handleCallRoutes(
     return true
   }
 
-  // THE GATE SAID YES, THE VERSION EXISTS, AND THERE IS NO TURN TO RUN YET.
-  //
-  // 501, not 200. A 200 here would be a call that answered without running —
-  // the wrong-answer-that-looks-right this lane refuses everywhere else, and
-  // the caller would have no way to tell an empty reply from a finished one.
-  // S4 runs the turn against `fork` and turns this into a 200 carrying a reply;
-  // everything else in this body is already the real thing.
-  respondJson(response, 501, {
-    reason: 'turn_not_implemented',
+  const outcome = await deps.run({
+    workspaceId,
+    forkId: session.forkId,
+    prompt: prompt.text
+  })
+
+  if (!outcome.ok) {
+    // 409 for all three: not now, and the caller may retry. A busy producer, a
+    // fork whose pty is not attached and a context that never settled are
+    // different facts to the owner's log and the same instruction to a client.
+    respondJson(response, 409, { reason: outcome.reason })
+    return true
+  }
+
+  // Served, for real. The conversation and version travel with every reply so a
+  // caller can continue this conversation (and so it can SEE that continuing
+  // costs no new version) without holding state we would then have to trust.
+  respondJson(response, 200, {
+    reply: outcome.text,
+    truncated: outcome.truncated,
     agent: address.agent,
     conversation: session.conversation,
-    version: session.version,
-    fork: session.forkId
+    version: session.version
   })
   return true
 }

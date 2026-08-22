@@ -24,7 +24,7 @@ import {
   turnDetails
 } from './dispatch'
 import { HerdrHostMultiplexer } from './herdr-host-multiplexer'
-import { beginShutdown, cancelAllAsks, pasteAndSubmit } from './ask'
+import { askTerminal, beginShutdown, cancelAllAsks, pasteAndSubmit } from './ask'
 import { defaultProducerLease } from './producer-lease'
 import {
   boardSourcesFrom,
@@ -66,7 +66,7 @@ import {
   WorkspaceMeta
 } from '../shared/model'
 import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
-import { forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
+import { forkContextReady, forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
 import { AgentRegistry } from './agent-registry'
 import { AgentExportStore } from './agent-export'
 import { CallCredentialService } from './call-credential'
@@ -76,6 +76,8 @@ import { CallConversationStore } from './call-conversation'
 import { cutCallVersion } from './call-fork'
 import { makeCallSession } from './call-session'
 import { memoizeBriefly } from './call-cache'
+import { CallsInFlight } from './call-inflight'
+import { makeCallRun } from './call-run'
 import { RecoverableStore, planRecovery } from './recoverable'
 import { EventLog } from './event-log'
 import { installProcessGuards } from './process-guards'
@@ -270,6 +272,12 @@ const callConversations = new CallConversationStore()
  * not resident that read comes off disk. Cheap, not reordered: see
  * call-cache.ts for what the window can and cannot cost.
  */
+/**
+ * Calls currently being served, per workspace. Liveness fact 3 — see
+ * call-inflight.ts for why the inferred turn-phase signal is not enough on its
+ * own for a call to a PARKED workspace, which is the case §9 exists for.
+ */
+const callsInFlight = new CallsInFlight()
 const callNodesOf = memoizeBriefly((workspaceId: string) => store.workspaceState(workspaceId).nodes)
 const boardProbe = createProbeSampler(
   tmuxProbeDeps({
@@ -1306,7 +1314,11 @@ const sessions = new SessionRegistry<{ id: string }>({
   subscribers: (id) =>
     store.terminalIdsOf(id).reduce((n, tid) => n + sessionSync.subscriberCount(tid), 0),
   // Work in flight: a terminal mid-turn is work, whoever is looking.
-  inFlightWork: (id) => store.terminalIdsOf(id).filter(hasLiveWork).length,
+  // A terminal mid-turn is work, whoever is looking — plus any remote call
+  // this workspace is currently serving, which the inferred signals cannot see
+  // during a cold fork's boot.
+  inFlightWork: (id) =>
+    store.terminalIdsOf(id).filter(hasLiveWork).length + callsInFlight.count(id),
   hydrate: (id) => ({ id }),
   release: (id) => {
     // Order matters, and the comment used to lie about it: detachWorkspace
@@ -2287,6 +2299,16 @@ app.whenReady().then(() => {
           ),
         forkAlive: (forkId) => store.nodeAcrossWorkspaces(forkId) !== undefined,
         now: () => Date.now()
+      }),
+      // The only path from the internet into a pty. askTerminal brings the
+      // producer lease and the 409 vocabulary with it; the fork id comes from
+      // the session above, which cannot produce the original.
+      run: makeCallRun({
+        sessionOf: (forkId) => ptys.get(forkId),
+        ready: (forkId) => forkContextReady(forkId),
+        ask: (session, prompt) => askTerminal(session as PtySession, prompt),
+        inFlight: (workspaceId) => callsInFlight.enter(workspaceId),
+        wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms))
       })
     },
     events,

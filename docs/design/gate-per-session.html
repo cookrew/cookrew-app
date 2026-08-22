@@ -66,7 +66,7 @@
 <main>
 
 <h1>④ The gate per WorkspaceSession</h1>
-<p class="sub">Decisions of record for the remote-call lane · branch <code>feat/gate-per-session</code> · rebased on dev @ 8e271e5 · 2026-08-22</p>
+<p class="sub">Decisions of record for the remote-call lane · branch <code>feat/gate-per-session</code> · rebased on dev @ 31590f3 · 2026-08-23</p>
 
 <p>This note exists so that four rulings cannot be re-litigated from the spec text alone.
 Each of them <em>contradicts a plain reading</em> of <code>marketplace-architecture.html</code>,
@@ -285,9 +285,9 @@ stranger must not be able to reach the input box the owner is typing into.</p>
           the transcript, never touch the original. One version per caller-conversation.</td>
       <td class="yes">green</td></tr>
   <tr><td><strong>S4</strong></td>
-      <td>The turn: run the ask against the fork; register it as in-flight work so a parked workspace
-          cannot drain mid-call and a cold one hydrates.</td>
-      <td>—</td></tr>
+      <td>The turn: the ask runs against the fork through <code>askTerminal</code>; the call is
+          in-flight work; a stranger's bytes are contained in both directions.</td>
+      <td class="yes">green</td></tr>
   <tr><td><strong>S5</strong></td>
       <td>The prepaid-balance seam (R5/R12) and an honest <code>notServed</code> self-description.</td>
       <td>—</td></tr>
@@ -434,7 +434,62 @@ call. Never the grant.</p>
 disabling the mode check each killed 2–3 tests. The standard is the owner's: if a single-line mutant
 survives, the gate is not measuring what it claims.</p>
 
-<h2>12 · Constraints S4 must honour</h2>
+<h2>12 · S4 · Where injection and leakage actually get decided</h2>
+
+<p>The gate decides <em>whether</em>. This decides what happens when the answer is yes, and it is the
+only path from the internet into a pty.</p>
+
+<div class="card">
+<h3>Inbound — the bracketed-paste escape</h3>
+<p><code>ownerSubmit</code> delivers a prompt as <code>ESC[200~</code> … <code>ESC[201~</code> then a
+carriage return. Everything between the markers is <em>pasted content</em> rather than typed keys —
+which is what stops a newline in a prompt from submitting early.</p>
+<p>So a caller that puts the literal <strong>end marker inside its prompt</strong> closes the paste,
+and every byte after it is read by the agent's TUI as keystrokes. Not a formatting bug: arbitrary
+input to the owner's agent, from someone entitled only to ask a question. The same is true of a bare
+<code>ESC</code>, which is an interrupt at every TUI this codebase hosts.</p>
+<p>Prompts are therefore <strong>refused, not stripped</strong>, if they contain any C0 control
+except tab and newline, DEL, or C1. There is no <code>ESC[201~</code> without an <code>ESC</code>.
+Silently removing bytes would answer a question the caller did not ask.</p>
+</div>
+
+<div class="card">
+<h3>Outbound — two different dangers, and it is easy to see only one</h3>
+<p><strong>The owner's risk</strong> is that a reply carries more than the caller's own turn.
+<code>askTerminal</code> returns a diff — what appeared after the prompt, not the pane's scrollback —
+so containment is structural. What S4 adds is a ceiling, so an agent that can be talked into printing
+a file cannot be used as a pipe.</p>
+<p><strong>The caller's risk</strong> is the one that is easy to miss. §9's promise is that "the
+caller's terminal sees an ordinary teammate" — so this text is going to be <em>rendered in someone
+else's terminal</em>, and terminal output is a command language: move the cursor, rewrite printed
+lines, set the window title, switch screen buffers. Handing raw pty bytes to a remote terminal is the
+inbound injection pointed the other way. A reply leaves as text: no escapes, no controls.</p>
+</div>
+
+<div class="card">
+<h3>The preamble race — the leak that had no name</h3>
+<p><code>forkTerminal</code> returns as soon as the <em>card</em> exists; the context lands
+asynchronously afterwards. Fine for the owner, who watches a card fill in. Not fine for a remote
+call, because a non-native fork is seeded by pasting a <strong>plain-text replay of the source's
+turns</strong> into it — so an ask that starts while that is landing gets the replay back in its own
+reply diff. The owner's transcript, handed to the internet, by a path nobody wrote down.</p>
+<p><code>fork.ts</code> now keeps the injection promise instead of discarding it, and
+<code>forkContextReady()</code> makes it askable. The call waits for it, with a 30-second ceiling and
+an honest refusal past that. No existing caller waits; this only lets the one caller that must not
+race it find out.</p>
+</div>
+
+<h3>Liveness fact 3, told the truth</h3>
+<p>A call to a <strong>parked</strong> workspace is the case the marketplace exists for — nobody
+looking, no phone attached, and an exported agent supposed to answer anyway. So fact 3 is the only one
+that can be true, and it had to actually become true. <code>hasLiveWork</code> reads turn phase and
+open dispatches: both are <em>inferred</em> from a terminal already producing, and between accepting a
+call and the agent's first byte there is boot, injection, and a submit delay where they read idle. The
+drain ticks every 5s and releases a session dead across two. So a call is a counter, taken
+<em>before the wait</em> and released in a <code>finally</code> — a fact, not a flag, because the only
+way to increment is to hold the thing that decrements.</p>
+
+<h2>13 · What S5 owes</h2>
 
 <ul>
   <li><strong>A 401 is a promise.</strong> A1 refused to answer 401 before identity existed, because
@@ -455,12 +510,14 @@ survives, the gate is not measuring what it claims.</p>
 </ul>
 
 <footer>
-Cookrew · <code>feat/gate-per-session</code> · rebased on dev @ 8e271e5 · 2026-08-22<br>
+Cookrew · <code>feat/gate-per-session</code> · rebased on dev @ 31590f3 · 2026-08-23<br>
 Spec: <code>docs/design/marketplace-architecture.html</code> §9 · §10 · §11 · §12 ·
 audit: <code>docs/design/architecture-state-2026-08-22.html</code> §04B ·
 lane: <code>docs/design/multi-instance-refactor.html</code><br>
 Code: <code>src/shared/gate.ts</code> · <code>src/main/call-credential.ts</code> ·
-<code>src/main/call-authorize.ts</code> · <code>registry/src/authorize.ts</code><br>
+<code>src/main/call-authorize.ts</code> · <code>registry/src/authorize.ts</code> ·
+<code>src/main/call-prompt.ts</code> · <code>src/main/call-reply.ts</code> ·
+<code>src/main/call-run.ts</code> · <code>src/main/call-inflight.ts</code><br>
 <em>docs/ is gitignored — this file is force-added on purpose.</em>
 </footer>
 

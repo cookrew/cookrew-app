@@ -12,6 +12,7 @@ import { makeCallGate } from '../src/main/call-gate'
 import { AgentExportStore } from '../src/main/agent-export'
 import { CallConversationStore } from '../src/main/call-conversation'
 import { makeCallSession } from '../src/main/call-session'
+import type { CallRunResult } from '../src/main/call-run'
 import type { CanvasNode } from '../src/shared/model'
 
 /**
@@ -69,6 +70,7 @@ let issuer: CallCredentialService
 let exports: AgentExportStore
 let conversations: CallConversationStore
 let forks = 0
+let asked: string[] = []
 let caller: KeyPairKeyObjectResult
 
 beforeEach(() => {
@@ -78,6 +80,7 @@ beforeEach(() => {
   exports = new AgentExportStore(base)
   conversations = new CallConversationStore(base)
   forks = 0
+  asked = []
   caller = generateKeyPairSync('ed25519')
 })
 afterEach(() => rmSync(base, { recursive: true, force: true }))
@@ -109,7 +112,11 @@ const deps = (): Parameters<typeof handleCallRoutes>[3] => {
     forkAlive: () => true,
     now: () => clock
   })
-  return { decide, ceremony, slugOf: () => SLUG, session }
+  const run = async ({ prompt }: { prompt: string }): Promise<CallRunResult> => {
+    asked.push(prompt)
+    return { ok: true, text: `answer to: ${prompt}`, truncated: false }
+  }
+  return { decide, ceremony, slugOf: () => SLUG, session, run }
 }
 
 const call = async (
@@ -213,24 +220,32 @@ describe('the call route — what each refusal says, and what it does not', () =
     expect(captured.body).toEqual({})
   })
 
-  it('501s — not 200 — when the gate says yes and no turn exists yet', async () => {
+  it('200s with the reply once the turn actually runs', async () => {
     exportForge()
     const { captured } = await call('POST', '/agents/forge/ask', {
-      authorization: `Bearer ${credentialFor()}`
+      authorization: `Bearer ${credentialFor()}`,
+      body: JSON.stringify({ text: 'what is the state of the rail?' })
     })
-    // A 200 here would be a call that answered without running, and the caller
-    // could not tell an empty reply from a finished one. S3/S4 make it a 200.
-    expect(captured.status).toBe(501)
-    // Everything but the reply is already real: the version was cut, the fork
-    // exists, and the conversation is named. S4 replaces the reason with a
-    // reply and the code with 200.
+    expect(captured.status).toBe(200)
     expect(captured.body).toEqual({
-      reason: 'turn_not_implemented',
+      reply: 'answer to: what is the state of the rail?',
+      truncated: false,
       agent: 'forge',
       conversation: 'default',
-      version: 1,
-      fork: 'fork-node-forge-1'
+      version: 1
     })
+  })
+
+  it('does not hand the caller the fork\'s internal node id', async () => {
+    // The caller continues by CONVERSATION, its own name for its own thread. A
+    // node id is this machine's bookkeeping and buys a caller nothing it is
+    // entitled to.
+    exportForge()
+    const { captured } = await call('POST', '/agents/forge/ask', {
+      authorization: `Bearer ${credentialFor()}`,
+      body: JSON.stringify({ text: 'hello' })
+    })
+    expect(JSON.stringify(captured.body)).not.toContain('fork-')
   })
 
   it('refuses to record a public export at all — a live call is never public', () => {
@@ -252,13 +267,18 @@ describe('a served call cuts its version, once per conversation', () => {
   it('reuses the conversation across turns rather than forking per request', async () => {
     exportForge()
     const token = credentialFor()
-    const first = await call('POST', '/agents/forge/ask', { authorization: `Bearer ${token}` })
-    const second = await call('POST', '/agents/forge/ask', { authorization: `Bearer ${token}` })
-    expect((first.captured.body as { fork: string }).fork).toBe(
-      (second.captured.body as { fork: string }).fork
-    )
+    const first = await call('POST', '/agents/forge/ask', {
+      authorization: `Bearer ${token}`,
+      body: JSON.stringify({ text: 'hello' })
+    })
+    const second = await call('POST', '/agents/forge/ask', {
+      authorization: `Bearer ${token}`,
+      body: JSON.stringify({ text: 'again' })
+    })
+    expect(first.captured.status).toBe(200)
     expect((second.captured.body as { version: number }).version).toBe(1)
     expect(forks).toBe(1)
+    expect(asked).toEqual(['hello', 'again'])
   })
 
   it('runs two named conversations for one caller in parallel', async () => {
@@ -266,15 +286,14 @@ describe('a served call cuts its version, once per conversation', () => {
     const token = credentialFor()
     const one = await call('POST', '/agents/forge/ask', {
       authorization: `Bearer ${token}`,
-      body: JSON.stringify({ conversation: 'one' })
+      body: JSON.stringify({ conversation: 'one', text: 'hello' })
     })
     const two = await call('POST', '/agents/forge/ask', {
       authorization: `Bearer ${token}`,
-      body: JSON.stringify({ conversation: 'two' })
+      body: JSON.stringify({ conversation: 'two', text: 'hello' })
     })
-    expect((one.captured.body as { fork: string }).fork).not.toBe(
-      (two.captured.body as { fork: string }).fork
-    )
+    expect((one.captured.body as { conversation: string }).conversation).toBe('one')
+    expect((two.captured.body as { conversation: string }).conversation).toBe('two')
     expect(forks).toBe(2)
   })
 
@@ -317,7 +336,7 @@ describe('a served call cuts its version, once per conversation', () => {
       }
     }
     await handleCallRoutes(
-      stubRequest('POST', `Bearer ${credentialFor()}`),
+      stubRequest('POST', `Bearer ${credentialFor()}`, JSON.stringify({ text: 'hi' })),
       response,
       new URL('/agents/forge/ask', 'https://owner.example'),
       failing,
@@ -331,7 +350,7 @@ describe('a served call cuts its version, once per conversation', () => {
     exportForge()
     const { captured } = await call('POST', '/agents/forge/ask', {
       authorization: `Bearer ${credentialFor()}`,
-      body: JSON.stringify({ conversation: '../escape' })
+      body: JSON.stringify({ conversation: '../escape', text: 'hello' })
     })
     expect(captured.status).toBe(403)
     expect(captured.body).toEqual({ reason: 'conversation' })
@@ -343,7 +362,7 @@ describe('a served call cuts its version, once per conversation', () => {
     const { response, captured } = stubResponse()
     const failing = { ...deps(), session: () => { throw new Error('no completed turns to cut a version from') } }
     await handleCallRoutes(
-      stubRequest('POST', `Bearer ${credentialFor()}`),
+      stubRequest('POST', `Bearer ${credentialFor()}`, JSON.stringify({ text: 'hi' })),
       response,
       new URL('/agents/forge/ask', 'https://owner.example'),
       failing,
