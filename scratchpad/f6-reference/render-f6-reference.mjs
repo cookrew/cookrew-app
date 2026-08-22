@@ -30,6 +30,22 @@
  * three classes to share a Y: traceFraction(4, rows) === pinFraction(5, rows).
  * The harness pairs a compact after T4 with pin v2 on T5 for exactly that.
  *
+ * AND IN BOTH ROW SHAPES. That pairing is on the CONTIGUOUS ledger, where array
+ * position and turn number agree — the shape the fixture says is "exactly why
+ * the v1 bug went unnoticed", and therefore the shape in which a regression to
+ * v1 anchoring is invisible. 7-colocated-noncontiguous repeats it on rows
+ * 1,2,4,7, where the two spaces diverge, with the boundary's checkpoint DERIVED
+ * from the same functions the rail lays itself out with.
+ *
+ * THE FIXTURE IS IMPORTED, NOT RESTATED. The harness reads
+ * tests/fixtures/version-pins.json and publishes what it read on window.
+ * __fixture; this file records that per state and fails on an unexpected
+ * contract version. The previous set asserted a fixture path the harness never
+ * opened, over a hardcoded copy that had already drifted from it.
+ *
+ * A MISSING MEASUREMENT IS A FAILURE. Each state declares `requires` (and
+ * `forbids`), checked BEFORE any delta is read — see the note on ALL_MARKS.
+ *
  * DEPENDENCY: scratchpad/qa-cdp-driver.mjs (Magpie's, untracked). Copy it in
  * beside this file if it is missing.
  *
@@ -60,12 +76,34 @@ const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 /** The live rail, as Magpie measured it. The stage is sized so the rail matches. */
 const RAIL_W = 30
 const RAIL_H = 663
+/** Pin contract this set is captured against. The harness IMPORTS the fixture
+ *  and publishes what it read, so a bump lands here as a loud failure rather
+ *  than as a stale reference still claiming the old version. */
+const EXPECT_CONTRACT = 2
 const VIEWPORT = { width: 1000, height: RAIL_H + 40, deviceScaleFactor: 2 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * `requires` NAMES THE MARKS EACH STATE MUST PHOTOGRAPH.
+ *
+ * The gate at the bottom used to read only the two deltas, and skipped a null:
+ * `markerClassSpreadPx !== null && >= 0.5`. So if `.cr-ckpt-here` or
+ * `.cr-ckpt-row.active` ever stopped matching — a class rename, a DOM
+ * restructure — f6PairDeltaPx went null, the console printed `f6Pair=n/a`, and
+ * the run EXITED 0 announcing "All measured states within 0.5px". F6 disarmed
+ * silently, not by capturing a mock but by measuring nothing and calling it a
+ * pass. `absentMarks` was recorded the whole time and never asserted on.
+ *
+ * Per-state rather than blanket, because 5-empty-ledger legitimately has no pin
+ * — that absence is the thing it exists to prove. A blanket "all four present"
+ * would have to special-case it anyway, and a special case in a gate is where
+ * the next silent pass comes from.
+ */
+const ALL_MARKS = ['pin', 'trace', 'thumb', 'focusRow']
+
 const STATES = [
-  { id: '1-rail-at-rest', label: 'pins on the bar, nothing revealed', url: '' },
+  { id: '1-rail-at-rest', label: 'pins on the bar, nothing revealed', url: '', requires: ALL_MARKS },
   // HOLD, not release. On mouseup the component re-derives `focused` from its
   // activeIndex/markerFrac props, so the reveal closes and the thumb snaps back
   // — a released state photographs the rail at rest, whatever you scrubbed to.
@@ -74,14 +112,30 @@ const STATES = [
   // Held at 0.55, which is NOT a pin fraction: the reveal open with the thumb
   // clear of every pin. Held at 0.4 it was byte-identical to state 3, because
   // 0.4 IS the coincident-pin case — two names for one picture.
-  { id: '2-fan-open', label: 'reveal open, thumb clear of every pin — the F6 pair', url: '', scrub: true, hold: true, moveThumbTo: 0.55 },
-  { id: '3-thumb-on-pin', label: 'thumb held on its coincident pin (R25: the thumb owns it)', url: '', scrub: true, hold: true },
-  { id: '5-empty-ledger', label: 'no pins in the ledger — none drawn, none guessed', url: '?empty=1' },
+  { id: '2-fan-open', label: 'reveal open, thumb clear of every pin — the F6 pair', url: '', scrub: true, hold: true, moveThumbTo: 0.55, requires: ALL_MARKS },
+  { id: '3-thumb-on-pin', label: 'thumb held on its coincident pin (R25: the thumb owns it)', url: '', scrub: true, hold: true, requires: ALL_MARKS },
+  // The pin is absent BY DESIGN here, and that absence is the assertion.
+  { id: '5-empty-ledger', label: 'no pins in the ledger — none drawn, none guessed', url: '?empty=1',
+    requires: ['trace', 'thumb', 'focusRow'], forbids: ['pin'] },
   // The thumb is moved by PROP, at rest: dragging it away would dim every pin
   // to 55% (the coincidence rule) and photograph the marks faded, and releasing
   // the drag snaps the thumb straight back onto the pin.
   { id: '6-colocated', label: 'B3r REFERENCE — pin + trace boundary on one checkpoint, thumb clear, undimmed',
-    url: '?thumb=0.12' }
+    url: '?thumb=0.12', requires: ALL_MARKS },
+  /**
+   * B3r ON NON-CONTIGUOUS ROWS — the regression guard the set was missing.
+   *
+   * Every other state draws the CONTIGUOUS ledger, where array position and
+   * turn number agree; the fixture says so itself ("which is exactly why the v1
+   * bug went unnoticed"). A reference set that only ever photographs that shape
+   * cannot distinguish R17 render-position anchoring from the v1 turn-number
+   * anchoring c0e6d5f removed, so it would pass a regression to v1 without a
+   * pixel moving. Rows 1,2,4,7 pull the two spaces apart: checkpoint 4 anchors
+   * at 2/4 = 0.5 under R17 and near 4/7 under v1.
+   */
+  { id: '7-colocated-noncontiguous',
+    label: 'B3r on rows 1,2,4,7 — where render space and turn-number space DIVERGE',
+    url: '?colocated=1&thumb=0.85', requires: ALL_MARKS }
 ]
 
 const PROBE = `(() => {
@@ -157,7 +211,12 @@ async function main() {
     generatedBy: 'scratchpad/f6-reference/render-f6-reference.mjs',
     capturedFrom: 'the PRODUCT rail (CheckpointTimeline) via scratchpad/pin-marker-acceptance',
     captureScale: { railWidthPx: RAIL_W, railHeightPx: RAIL_H, deviceScaleFactor: VIEWPORT.deviceScaleFactor },
-    fixture: 'tests/fixtures/version-pins.json contract v2, post c0e6d5f', states: []
+    // The path only. The CONTRACT VERSION and the row shape are recorded
+    // per-state from window.__fixture — i.e. from what the harness actually
+    // read — because this line used to assert a fixture the harness never
+    // opened, while its own hardcoded copy had already drifted from it.
+    fixtureSource: 'tests/fixtures/version-pins.json (imported by the harness, post c0e6d5f)',
+    states: []
   }
 
   for (const state of STATES) {
@@ -207,6 +266,12 @@ async function main() {
       await sleep(250)
 
       const probe = (await cdp.send('Runtime.evaluate', { expression: PROBE, returnByValue:true })).result.value
+      // What the harness ACTUALLY rendered, read off the page rather than
+      // asserted here. The old report stamped a fixture path it had no evidence
+      // for; this is evidence.
+      const fixture = (await cdp.send('Runtime.evaluate', {
+        expression: 'window.__fixture', returnByValue: true })).result.value
+      if (!fixture) throw new Error(`${state.id}: harness published no __fixture`)
       const scrollDelta = rail.dy - rail.vy   // viewport coords -> document coords
 
       writeFileSync(resolve(OUT, `${state.id}.png`), await shot(cdp, {
@@ -215,10 +280,15 @@ async function main() {
       writeFileSync(resolve(OUT, `${state.id}--band.png`), await shot(cdp, {
         x: rail.dx - 2, y: bandCy - 26, width: rail.w + 4, height: 52, scale: 4 }))
 
-      report.states.push({ id: state.id, label: state.label, ...probe })
+      report.states.push({
+        id: state.id, label: state.label,
+        requires: state.requires ?? [], forbids: state.forbids ?? [],
+        fixture, ...probe
+      })
       const n = (v) => (v === null || v === undefined ? 'n/a' : `${v}px`)
-      console.log(`${state.id.padEnd(17)} classes=${n(probe.markerClassSpreadPx).padEnd(6)}` +
-        ` f6Pair=${n(probe.f6PairDeltaPx).padEnd(6)} pins=${probe.pinCount} rail=${probe.railBox.w}x${probe.railBox.h}`)
+      console.log(`${state.id.padEnd(26)} classes=${n(probe.markerClassSpreadPx).padEnd(6)}` +
+        ` f6Pair=${n(probe.f6PairDeltaPx).padEnd(6)} pins=${probe.pinCount}` +
+        ` rail=${probe.railBox.w}x${probe.railBox.h} case=${fixture.case}`)
     } finally { cdp.close() }
   }
 
@@ -226,14 +296,50 @@ async function main() {
   chrome.kill(); server.kill(); await sleep(600)
   try { rmSync(PROFILE, { recursive:true, force:true }) } catch {}
 
-  const over = report.states.filter(s =>
-    (s.markerClassSpreadPx !== null && s.markerClassSpreadPx >= 0.5) ||
-    (s.f6PairDeltaPx !== null && s.f6PairDeltaPx >= 0.5))
-  const sized = report.states.every(s => s.railBox && Math.round(s.railBox.w) === RAIL_W)
-  if (!sized) { console.log(`FAIL — a state did not render the rail at ${RAIL_W}px`); process.exit(1) }
-  console.log(over.length ? `FAIL — ${over.length} state(s) exceed 0.5px`
-    : `All measured states within 0.5px; rail ${RAIL_W}x${RAIL_H} in every shot.`)
-  process.exit(over.length ? 1 : 0)
+  // ---- gates. A MISSING MEASUREMENT IS A FAILURE, NOT A SKIP. ----
+  //
+  // The order matters: presence first, then the deltas. Checking a delta before
+  // establishing that its two marks exist is how a null came to read as a pass.
+  const problems = []
+
+  for (const s of report.states) {
+    const absent = s.requires.filter(k => !s.marks?.[k])
+    if (absent.length) problems.push(`${s.id}: required mark(s) never rendered — ${absent.join(', ')}`)
+    const present = s.forbids.filter(k => s.marks?.[k])
+    if (present.length) problems.push(`${s.id}: forbidden mark(s) rendered — ${present.join(', ')}`)
+
+    // Every state requires thumb + focusRow, so F6 must have produced a number.
+    // A null here means the pair was not measured, which is the failure the
+    // whole reference set exists to make impossible.
+    if (s.requires.includes('thumb') && s.requires.includes('focusRow') && s.f6PairDeltaPx === null)
+      problems.push(`${s.id}: F6 pair not measured (thumb/focusRow present but no delta)`)
+    if (s.requires.includes('pin') && s.requires.includes('trace') && s.markerClassSpreadPx === null)
+      problems.push(`${s.id}: marker-class spread not measured (pin/trace present but no delta)`)
+
+    if (s.markerClassSpreadPx !== null && s.markerClassSpreadPx >= 0.5)
+      problems.push(`${s.id}: marker classes spread ${s.markerClassSpreadPx}px`)
+    if (s.f6PairDeltaPx !== null && s.f6PairDeltaPx >= 0.5)
+      problems.push(`${s.id}: F6 pair off by ${s.f6PairDeltaPx}px`)
+    if (!s.railBox || Math.round(s.railBox.w) !== RAIL_W)
+      problems.push(`${s.id}: rail did not render at ${RAIL_W}px`)
+    if (s.fixture?.contractVersion !== EXPECT_CONTRACT)
+      problems.push(`${s.id}: fixture contract v${s.fixture?.contractVersion}, expected v${EXPECT_CONTRACT}`)
+  }
+
+  // The set must actually contain the non-contiguous case. Deleting that state
+  // would otherwise leave a green run that no longer guards the regression.
+  if (!report.states.some(s => /non-contiguous/.test(s.fixture?.case ?? '')))
+    problems.push('no state rendered the NON-CONTIGUOUS row shape — the v1-anchoring guard is gone')
+
+  if (problems.length) {
+    console.log(`FAIL — ${problems.length} problem(s):`)
+    for (const p of problems) console.log(`  ${p}`)
+    process.exit(1)
+  }
+  const measured = report.states.reduce((n, s) => n + s.requires.length, 0)
+  console.log(`PASS — ${measured} marks present and measured across ${report.states.length} states; ` +
+    `every delta < 0.5px; rail ${RAIL_W}x${RAIL_H} in every shot.`)
+  process.exit(0)
 }
 
 mkdirSync(OUT, { recursive: true })

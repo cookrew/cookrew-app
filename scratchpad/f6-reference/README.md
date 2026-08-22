@@ -22,6 +22,38 @@ and clips every band to the rail's own 30px box.
 | `3-thumb-on-pin` | thumb held on its coincident pin (R25: the thumb owns it) |
 | `5-empty-ledger` | no pins in the ledger — none drawn, none guessed |
 | `6-colocated` | **the B3r reference.** Diff `6-colocated--band.png` |
+| `7-colocated-noncontiguous` | **the regression guard.** B3r on rows 1,2,4,7 |
+
+## The fixture is read, not restated
+
+`harness.tsx` imports `tests/fixtures/version-pins.json`. It used to hold its own
+copy under a comment naming the fixture, and `measurements.json` stamped
+"contract v2" on the strength of that comment — while the copy had already
+drifted (`cutAt` 1,2,3,4 against the fixture's epoch millis, `manifestId`
+dropped). The fixture has a tripwire; a hardcoded copy in `scratchpad/` does
+not. Every state now records the contract version it actually read, and the run
+fails if it is not the expected one.
+
+## Why a non-contiguous state exists
+
+Every other state draws the **contiguous** ledger, where array position and turn
+number agree — the fixture's own note says that is "exactly why the v1 bug went
+unnoticed". A set captured only in that shape cannot tell R17 render-position
+anchoring from the v1 turn-number anchoring `c0e6d5f` removed, so it would pass
+a regression to v1 without a pixel moving. Rows 1,2,4,7 pull the two spaces
+apart: checkpoint 4 anchors at 2/4 = 0.5 under R17 and near 4/7 under v1. The
+boundary's checkpoint is *derived* from `traceFraction`/`pinFraction` rather than
+hardcoded, so the state throws instead of quietly ceasing to be co-located.
+
+## A missing measurement is a failure, not a skip
+
+Each state declares the marks it must photograph (`requires`, and `forbids` for
+the pin `5-empty-ledger` proves absent). The gate used to read only the two
+deltas and skip a null — so if `.cr-ckpt-here` or `.cr-ckpt-row.active` ever
+stopped matching, `f6PairDeltaPx` went null, the console printed `f6Pair=n/a`,
+and the run **exited 0** announcing "All measured states within 0.5px". F6
+disarmed silently by measuring nothing and calling it a pass. Presence is now
+asserted before any delta is read.
 
 ## Four things that make it diffable at all
 

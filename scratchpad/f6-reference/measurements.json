@@ -6,11 +6,36 @@
     "railHeightPx": 663,
     "deviceScaleFactor": 2
   },
-  "fixture": "tests/fixtures/version-pins.json contract v2, post c0e6d5f",
+  "fixtureSource": "tests/fixtures/version-pins.json (imported by the harness, post c0e6d5f)",
   "states": [
     {
       "id": "1-rail-at-rest",
       "label": "pins on the bar, nothing revealed",
+      "requires": [
+        "pin",
+        "trace",
+        "thumb",
+        "focusRow"
+      ],
+      "forbids": [],
+      "fixture": {
+        "contractVersion": 2,
+        "case": "contiguous",
+        "rowIndices": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "pinFrac": null,
+        "traceAfterIndex": 4
+      },
       "railMounted": true,
       "railBox": {
         "x": 870,
@@ -80,6 +105,31 @@
     {
       "id": "2-fan-open",
       "label": "reveal open, thumb clear of every pin — the F6 pair",
+      "requires": [
+        "pin",
+        "trace",
+        "thumb",
+        "focusRow"
+      ],
+      "forbids": [],
+      "fixture": {
+        "contractVersion": 2,
+        "case": "contiguous",
+        "rowIndices": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "pinFrac": null,
+        "traceAfterIndex": 4
+      },
       "railMounted": true,
       "railBox": {
         "x": 870,
@@ -149,6 +199,31 @@
     {
       "id": "3-thumb-on-pin",
       "label": "thumb held on its coincident pin (R25: the thumb owns it)",
+      "requires": [
+        "pin",
+        "trace",
+        "thumb",
+        "focusRow"
+      ],
+      "forbids": [],
+      "fixture": {
+        "contractVersion": 2,
+        "case": "contiguous",
+        "rowIndices": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "pinFrac": null,
+        "traceAfterIndex": 4
+      },
       "railMounted": true,
       "railBox": {
         "x": 870,
@@ -218,6 +293,32 @@
     {
       "id": "5-empty-ledger",
       "label": "no pins in the ledger — none drawn, none guessed",
+      "requires": [
+        "trace",
+        "thumb",
+        "focusRow"
+      ],
+      "forbids": [
+        "pin"
+      ],
+      "fixture": {
+        "contractVersion": 2,
+        "case": "empty",
+        "rowIndices": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "pinFrac": null,
+        "traceAfterIndex": 4
+      },
       "railMounted": true,
       "railBox": {
         "x": 870,
@@ -265,6 +366,31 @@
     {
       "id": "6-colocated",
       "label": "B3r REFERENCE — pin + trace boundary on one checkpoint, thumb clear, undimmed",
+      "requires": [
+        "pin",
+        "trace",
+        "thumb",
+        "focusRow"
+      ],
+      "forbids": [],
+      "fixture": {
+        "contractVersion": 2,
+        "case": "contiguous",
+        "rowIndices": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "pinFrac": null,
+        "traceAfterIndex": 4
+      },
       "railMounted": true,
       "railBox": {
         "x": 870,
@@ -328,6 +454,82 @@
         {
           "version": 100,
           "text": ""
+        }
+      ]
+    },
+    {
+      "id": "7-colocated-noncontiguous",
+      "label": "B3r on rows 1,2,4,7 — where render space and turn-number space DIVERGE",
+      "requires": [
+        "pin",
+        "trace",
+        "thumb",
+        "focusRow"
+      ],
+      "forbids": [],
+      "fixture": {
+        "contractVersion": 2,
+        "case": "coLocated (non-contiguous rows)",
+        "rowIndices": [
+          1,
+          2,
+          4,
+          7
+        ],
+        "pinFrac": 0.5,
+        "traceAfterIndex": 2
+      },
+      "railMounted": true,
+      "railBox": {
+        "x": 870,
+        "y": 0,
+        "w": 30,
+        "h": 663,
+        "cy": 331.5
+      },
+      "railClass": "cr-ckpt-rail idle",
+      "marks": {
+        "pin": {
+          "x": 870,
+          "y": 325,
+          "w": 19,
+          "h": 13,
+          "cy": 331.5
+        },
+        "trace": {
+          "x": 879.84,
+          "y": 325.84,
+          "w": 11.31,
+          "h": 11.31,
+          "cy": 331.5
+        },
+        "thumb": {
+          "x": 875.6,
+          "y": 542.44,
+          "w": 19.8,
+          "h": 19.8,
+          "cy": 552.34
+        },
+        "focusRow": {
+          "x": 532,
+          "y": 533.84,
+          "w": 336,
+          "h": 37,
+          "cy": 552.34
+        }
+      },
+      "measuredMarks": [
+        "pin",
+        "trace"
+      ],
+      "absentMarks": [],
+      "markerClassSpreadPx": 0,
+      "f6PairDeltaPx": 0,
+      "pinCount": 1,
+      "pinLabels": [
+        {
+          "version": 2,
+          "text": "V2"
         }
       ]
     }
