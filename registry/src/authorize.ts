@@ -2,8 +2,11 @@ import type { IncomingMessage } from 'node:http'
 import type { RegistryStore } from './store'
 import type { IdentityService } from './identity'
 import type { Verdict } from './server'
-import { quoteFor, type QuoteDeps } from './terms'
+import type { Terms } from './terms'
+import { priceFor, quoteFrom, type QuoteDeps } from './terms'
 import type { PayoutStore } from './payouts'
+import type { Facilitator } from './facilitator'
+import { verifyPayment } from './payment'
 
 /**
  * THE DECISION FUNCTION (P2-A2) — the only place an answer is chosen.
@@ -26,6 +29,12 @@ function bearer(request: IncomingMessage): string | null {
 /** What the price step needs. Absent → this deployment sells nothing (M1). */
 export interface PricingDeps extends QuoteDeps {
   payouts: PayoutStore
+  /**
+   * M2-A2. Required alongside pricing, so "priced implies payable" holds by
+   * construction: a deployment that could quote a price but never verify a
+   * payment would sell things nobody could buy.
+   */
+  facilitator: Facilitator
 }
 
 export function makeAuthorize(
@@ -83,23 +92,66 @@ export function makeAuthorize(
     // is the question the update badge needs and is not the paid content: the
     // manifest and its blobs are. Answered here rather than in the route,
     // because the route does not get to make payment decisions.
-    if (pricing !== undefined && request.method !== 'HEAD') {
+    // ONLY A GET IS A PURCHASE — stated positively, and that matters. Written
+    // as `!== 'HEAD'` this passed its first gate and still answered 402 to
+    // OPTIONS, POST and to a request whose method was unset: an exclusion list
+    // makes every method somebody adds later a purchase by default. The
+    // allow-list makes the next one safe without anybody remembering this.
+    if (pricing !== undefined && request.method === 'GET') {
       const manifest = store.getManifest(presetId)
-      const terms = quoteFor(pricing, {
-        presetId,
-        identityId: claims.sub,
+      // PRICE FACTS FIRST, and a nonce only when one is actually being offered.
+      // Quoting unconditionally minted an offer nobody would use on every
+      // request that already carried a proof — and the sweep that ran with it
+      // deleted the record of the very nonce being presented, which turned an
+      // `expired` into an `invalid`. C16 caught that.
+      const price = priceFor(pricing, {
         pricing: manifest?.pricing,
         payTo: pricing.payouts.addressOf(store.identityOf(presetId) ?? '')
       })
-      // A free preset quotes null and falls straight through — the common case
+      // A free preset prices null and falls straight through — the common case
       // costs one map lookup and answers exactly as it did in M1.
-      if (terms !== null) return { code: 402, terms }
-      // Priced but unquotable means an author with no payout address, which
-      // PUBLISH refuses to create (`payout_missing`). Unreachable by
-      // construction, and if it ever happens the honest answer is that this
-      // registry will not serve this preset — never 200, which would give away
-      // something priced, and never a new status code invented at the seam.
-      if (manifest?.pricing !== undefined) return { code: 404 }
+      if (price !== null) {
+        const offer = (): Terms =>
+          quoteFrom(pricing, { presetId, identityId: claims.sub, price })
+        const header = request.headers['x-payment']
+        // No proof: the opening move, not a refusal. It carries terms and NO
+        // reason — "you have not paid yet" is not a thing that went wrong, and
+        // a reason here would make the first ask read as a failure.
+        if (header === undefined) return { code: 402, terms: offer() }
+
+        const paid = verifyPayment(
+          { nonces: pricing.nonces, facilitator: pricing.facilitator, now: pricing.now },
+          {
+            header: Array.isArray(header) ? header[0] : header,
+            identityId: claims.sub,
+            presetId,
+            // Verified against OUR price, our payee and our chain — never
+            // against whatever the client believes it owes.
+            price
+          }
+        )
+        // 402 again, with a reason, and NEVER 403 — the payment did not happen,
+        // which is precisely what 402 means. A 403 would tell the client to
+        // stop retrying something that is genuinely retryable. A fresh quote
+        // rides along, because whatever went wrong, the old nonce is no longer
+        // one they can use.
+        if (!paid.ok) return { code: 402, terms: offer(), reason: paid.reason }
+        // Settled. Fall through to serve: the client retried the same
+        // idempotent GET and this is simply the answer continuing.
+      } else if (manifest?.pricing !== undefined) {
+        // Priced but unquotable — an author with no payout address, which
+        // PUBLISH refuses to create (`payout_missing`). Unreachable by
+        // construction, and if it ever happens the honest answer is that this
+        // registry will not serve this preset: never 200, which would give away
+        // something priced, and never a new status code invented at the seam.
+        //
+        // It sits in the ELSE, and A2's first green test is what put it there.
+        // Left below the payment branch it also caught the PAID case — a preset
+        // that is still priced after being bought — so a settled payment
+        // answered 404. The guard is about having no terms, not about the
+        // preset costing money.
+        return { code: 404 }
+      }
     }
 
     return { code: 200 }

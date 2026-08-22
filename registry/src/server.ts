@@ -9,6 +9,7 @@ import type { PricingDeps } from './authorize'
 import { publicKeyFromId, verifyManifest } from '../../src/main/preset-publish'
 import type { IdentityService, TokenScope } from './identity'
 import type { Terms } from './terms'
+import type { PaymentFailure } from './payment'
 
 /**
  * REGISTRY SERVER (P2-A1) — routes only. Every answer is chosen by a decision
@@ -28,7 +29,7 @@ export type Verdict =
    * client's retry loop, the log — is untouched, which is the claim the M1
    * design note made and this slice had to keep true.
    */
-  | { code: 402; terms: Terms }
+  | { code: 402; terms: Terms; reason?: PaymentFailure }
   | { code: 403; reason: string }
   | { code: 404 }
 
@@ -210,7 +211,12 @@ export function createRegistry(deps: RegistryDeps): Server {
           verdict.code === 403
             ? { reason: verdict.reason }
             : verdict.code === 402
-              ? { terms: verdict.terms }
+              ? {
+                  terms: verdict.terms,
+                  // Absent on the first ask — not having paid yet is not a
+                  // failure — and present only when a proof was refused.
+                  ...(verdict.reason !== undefined ? { reason: verdict.reason } : {})
+                }
               : {}
         json(response, verdict.code, body, headers)
         return

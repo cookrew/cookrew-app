@@ -30,6 +30,7 @@ import { IdentityService, identityConfigFor } from './identity'
 import { makeAuthorize } from './authorize'
 import { PayoutStore } from './payouts'
 import { DEFAULT_TERMS_CONFIG, MemoryPaymentNonces } from './terms'
+import { devFacilitator } from './facilitator-dev'
 import { buildManifest, signManifest } from '../../src/main/preset-publish'
 import { scrubForPublish } from '../../src/main/preset-scrub'
 import type { TeamSnapshot } from '../../src/main/teams'
@@ -161,6 +162,10 @@ const pricing = {
   payouts: new PayoutStore(DATA),
   config: { chain: CHAIN, ttlMs: TERMS_TTL_MS },
   nonces: new MemoryPaymentNonces(),
+  // The DEV facilitator: reaches no chain, verifies no transfer, and exists so
+  // the handshake can be driven end to end against the real binary. See its
+  // file — it is not a payment system and must never be one.
+  facilitator: devFacilitator(),
   now: () => Date.now()
 }
 

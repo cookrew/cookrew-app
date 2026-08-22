@@ -152,6 +152,7 @@ beforeEach(() => {
     payouts,
     config: { chain: 'base', ttlMs: 15 * 60 * 1000 },
     nonces: new MemoryPaymentNonces(),
+    facilitator: { settle: () => ({ ok: true as const }) },
     now: () => clock
   }
 })
@@ -527,5 +528,86 @@ describe('a priced preset with no payee is unreachable, and refused if reached',
     } finally {
       s.close()
     }
+  })
+})
+
+/* ------------------------------------------- GATE: a HEAD is not a purchase --- */
+
+describe('GATE — only a GET may ever be answered 402', () => {
+  /**
+   * Commander asked for this to be pinned, and pinned at the DECISION FUNCTION
+   * rather than through the route, because the failure mode is "somebody adds a
+   * second caller to authorize()". A test that only drives HTTP would keep
+   * passing while a new caller quietly demanded payment for a background check.
+   *
+   * The original defect: GET and HEAD shared one authorize(), so a priced preset
+   * made R3's dock-open update check answer 402 — and R24 forbids a background
+   * check raising a sheet at all. Opening the dock would have asked for money.
+   */
+  const methods = ['HEAD', 'OPTIONS', 'POST', 'PUT', 'DELETE', 'PATCH', undefined]
+
+  it('answers 402 for GET and never for any other method', async () => {
+    const id = seed('Pro Toolkit', 1, ONE_TIME)
+    const s = await listen()
+    try {
+      const token = await downloadToken(s.url)
+      const authorize = makeAuthorize(store, identity, pricing)
+      const ask = (method: string | undefined) =>
+        authorize(id, {
+          method,
+          headers: { authorization: `Bearer ${token}` }
+        } as never)
+
+      expect(ask('GET').code).toBe(402)
+      for (const method of methods) {
+        expect([method, ask(method).code]).toEqual([method, 200])
+      }
+    } finally {
+      s.close()
+    }
+  })
+
+  it('holds over HTTP too, for the method the update check actually uses', async () => {
+    const id = seed('Pro Toolkit', 1, ONE_TIME)
+    const s = await listen()
+    try {
+      const token = await downloadToken(s.url)
+      const res = await fetch(`${s.url}/v1/presets/${encodeURIComponent(id)}/manifest`, {
+        method: 'HEAD',
+        headers: { authorization: `Bearer ${token}` }
+      })
+      expect(res.status).toBe(200)
+      // And it still answers the one question a HEAD is for.
+      expect(res.headers.get('x-cookrew-preset-version')).toBe('1')
+    } finally {
+      s.close()
+    }
+  })
+
+  it('a HEAD does not mint a quote, so a dock open cannot drain the nonce store', () => {
+    // The quieter half of the same bug: even a HEAD that answered 200 would
+    // have minted an offer nobody asked for if the price step ran.
+    const id = seed('Pro Toolkit', 1, ONE_TIME)
+    const authorize = makeAuthorize(store, identity, pricing)
+    const before = pricing.nonces
+    void before
+    const minted: string[] = []
+    const counting = {
+      ...pricing,
+      nonces: {
+        mint: (binding: string, now: number, ttl: number) => {
+          const value = pricing.nonces.mint(binding, now, ttl)
+          minted.push(value)
+          return value
+        },
+        bindingOf: (n: string, now: number) => pricing.nonces.bindingOf(n, now),
+        stateOf: (n: string, now: number) => pricing.nonces.stateOf(n, now),
+        spend: (n: string, now: number) => pricing.nonces.spend(n, now)
+      }
+    }
+    const headAuthorize = makeAuthorize(store, identity, counting)
+    void authorize
+    headAuthorize(id, { method: 'HEAD', headers: {} } as never)
+    expect(minted).toEqual([])
   })
 })
