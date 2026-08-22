@@ -104,4 +104,35 @@ describe('the streams are covered too', () => {
     expect(streams.length).toBeGreaterThan(0)
     for (const stream of streams) expect(stream).toContain('apiPath(')
   })
+
+  it('every EventSource in the renderer also carries a token', () => {
+    // Reads are gated now, and EventSource cannot set a header — so a stream
+    // built without tokenParam is a 401 the client retries forever. That
+    // failure is INVISIBLE in the same way the scope bug above was: the socket
+    // opens, retries on its own, and the canvas simply never fills.
+    //
+    // Swept across the whole renderer rather than remote-api alone, because
+    // the next stream will not necessarily be added there, and the cost of
+    // getting this wrong is either a dead companion or somebody "fixing" it by
+    // reopening the read gate.
+    const violations: string[] = []
+    for (const file of sourceFiles(RENDERER)) {
+      const code = stripComments(readFileSync(file, 'utf8'))
+      code.split('\n').forEach((line, index) => {
+        if (!/new EventSource\(/.test(line)) return
+        if (/tokenParam\(/.test(line)) return
+        violations.push(`${path.relative(RENDERER, file)}:${index + 1}: ${line.trim()}`)
+      })
+    }
+    expect(violations).toEqual([])
+  })
+
+  it('the token sweep can actually see a violation', () => {
+    // Same discipline as the /api sweep above: a conformance test that cannot
+    // fail is decoration.
+    const offending = `new EventSource(apiPath('/api/events'))`
+    expect(/new EventSource\(/.test(offending)).toBe(true)
+    expect(/tokenParam\(/.test(offending)).toBe(false)
+  })
 })
+

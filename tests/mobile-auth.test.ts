@@ -99,15 +99,103 @@ describe('handleMobileApi mutating-route gate', () => {
     expect(handled).toBe(false)
   })
 
-  it('does not gate read-only GETs (EventSource cannot set headers)', async () => {
-    const { response } = stubResponse()
+  it('401s an unauthenticated GET — a read is a credential too', async () => {
+    // This test used to assert the OPPOSITE, on the reasoning that "EventSource
+    // cannot set headers, and with the C2 wildcard gone only same-origin pages
+    // can read them cross-site anyway". Both halves are true; neither defends
+    // this listener. Same-origin policy protects a victim's BROWSER from a page
+    // it did not ask for — it says nothing about a direct client, and curl has
+    // no origin. On 0.0.0.0 that made the roster (every workspace slug), the
+    // canvas, pane content, transcripts and the event log anonymous reads.
+    const { response, captured } = stubResponse()
     const handled = await handleMobileApi(
       stubRequest('GET'),
       response,
-      new URL('/api/no-such-route', 'http://lan.local'),
+      new URL('/api/workspaces', 'http://lan.local'),
       stubDeps()
     )
-    expect(handled).toBe(false)
+    expect(handled).toBe(true)
+    expect(captured.status).toBe(401)
+  })
+
+  it('lets an authorized GET past the gate, header or query param', async () => {
+    // Both spellings, because the header-less one is not a convenience: it is
+    // the only thing EventSource can do, and gating reads without it would
+    // have taken the live streams down with the hole.
+    for (const [request, url] of [
+      [stubRequest('GET', `Bearer ${TOKEN}`), '/api/no-such-route'],
+      [stubRequest('GET'), `/api/no-such-route?token=${TOKEN}`]
+    ] as const) {
+      const { response } = stubResponse()
+      const handled = await handleMobileApi(
+        request,
+        response,
+        new URL(url, 'http://lan.local'),
+        stubDeps()
+      )
+      // Gate passed; no route owned the path, so the server keeps dispatching.
+      expect(handled).toBe(false)
+    }
+  })
+
+  it('lets a READ-ONLY token read, but still refuses it a write', async () => {
+    // The two scopes survive the change: the wall token was always meant to be
+    // GET-only, and this is the first gate that actually exercises the read
+    // half of it.
+    const deps = { pairingToken: TOKEN, wallToken: 'wall-token-456' } as MobileApiDeps
+    const read = stubResponse()
+    expect(
+      await handleMobileApi(
+        stubRequest('GET'),
+        read.response,
+        new URL('/api/no-such-route?token=wall-token-456', 'http://lan.local'),
+        deps
+      )
+    ).toBe(false)
+
+    const write = stubResponse()
+    expect(
+      await handleMobileApi(
+        stubRequest('POST'),
+        write.response,
+        new URL('/api/no-such-route?token=wall-token-456', 'http://lan.local'),
+        deps
+      )
+    ).toBe(true)
+    expect(write.captured.status).toBe(401)
+  })
+
+  it('leaves /api/auth/status open — it is how an unpaired device finds out', async () => {
+    // The one deliberate exception, and the reason the gate is scoped rather
+    // than blanket: a device with no token must be able to learn that, and
+    // this route discloses only whether the caller's OWN token works.
+    const { response, captured } = stubResponse()
+    const handled = await handleMobileApi(
+      stubRequest('GET'),
+      response,
+      new URL('/api/auth/status', 'http://lan.local'),
+      stubDeps()
+    )
+    expect(handled).toBe(true)
+    expect(captured.status).toBe(200)
+    expect(captured.body).toMatchObject({ scope: 'none' })
+  })
+
+  it('does not gate NON-/api GETs — the pairing screen has to be able to load', async () => {
+    // An unpaired phone is served the renderer around this delegation, and a
+    // gate that 401s the bundle is a gate that removes the screen the owner
+    // uses to pair. Scoping to /api/ is what keeps the fix from eating it.
+    for (const path of ['/', '/index.html', '/assets/index-abc123.js']) {
+      const { response } = stubResponse()
+      expect(
+        await handleMobileApi(
+          stubRequest('GET'),
+          response,
+          new URL(path, 'http://lan.local'),
+          stubDeps()
+        )
+      ).toBe(false)
+    }
   })
 
   it('passes everything when no pairing token is configured (loopback embedders)', async () => {
@@ -299,5 +387,53 @@ describe('/api/auth/status', () => {
       stubDeps()
     )
     expect(captured.body).toMatchObject({ scope: 'pairing' })
+  })
+})
+
+describe('the read gate reaches the routes mobile-server owns itself', () => {
+  // /api/state, a terminal's pane content and a browser card's screenshot are
+  // answered by mobile-server AFTER it delegates here — `if (await
+  // handleMobileApi(...)) return`. So they are covered only if this function
+  // CLAIMS the request (returns true) before its own route matching, rather
+  // than falling through for someone else to handle.
+  //
+  // Asserted rather than reasoned about. "The gate runs first so everything
+  // below it is covered" is exactly the shape of argument that left reads open
+  // in the first place, and it is one refactor away from being false.
+  const OWNED_BY_SERVER = [
+    '/api/state',
+    '/api/terminal/t1/output',
+    '/api/browser/b1/thumb',
+    '/api/browser/capabilities'
+  ]
+
+  it('401s each of them, and claims the request so nothing downstream runs', async () => {
+    for (const path of OWNED_BY_SERVER) {
+      const { response, captured } = stubResponse()
+      const handled = await handleMobileApi(
+        stubRequest('GET'),
+        response,
+        new URL(path, 'http://lan.local'),
+        stubDeps()
+      )
+      expect(handled, path).toBe(true)
+      expect(captured.status, path).toBe(401)
+    }
+  })
+
+  it('serves them again once a token is presented', async () => {
+    // The other half: a gate that refused these forever would be a fix that
+    // broke the phone rather than one that secured it.
+    for (const path of OWNED_BY_SERVER) {
+      const { response } = stubResponse()
+      const handled = await handleMobileApi(
+        stubRequest('GET', `Bearer ${TOKEN}`),
+        response,
+        new URL(path, 'http://lan.local'),
+        stubDeps()
+      )
+      // Not claimed by the gate — falls through to mobile-server's own routes.
+      expect(handled, path).toBe(false)
+    }
   })
 })

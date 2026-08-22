@@ -670,11 +670,6 @@ async function handle(
   }
 
 
-  if (request.method === 'GET' && url.pathname === '/api/browser/capabilities') {
-    respondJson(response, 200, { interactive: deps.interactiveBrowserEnabled() })
-    return
-  }
-
   // Renderer bundle + full remote API (consumed by remote-api.ts).
   // Hand the API the RESOLVED credentials, not the caller's optional ones.
   //
@@ -698,6 +693,20 @@ async function handle(
     wallToken: activeWallToken ?? deps.wallToken
   }
   if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return
+
+  // MOVED BELOW THE DELEGATION, and that is the whole change to it.
+  //
+  // It used to answer ABOVE handleMobileApi, which meant it was the one /api
+  // route that never reached the C1 choke point at all — not "open because
+  // reads were open", but structurally out of the gate's reach. It leaks
+  // little on its own (a feature flag), and that is exactly why it is worth
+  // moving rather than gating in place: a second copy of the auth check here
+  // is a second thing to keep in step, and one gate in one place is the
+  // property that made the read hole findable in the first place.
+  if (request.method === 'GET' && url.pathname === '/api/browser/capabilities') {
+    respondJson(response, 200, { interactive: deps.interactiveBrowserEnabled() })
+    return
+  }
 
   if (request.method === 'GET' && url.pathname === '/api/state') {
     // Activities are tracked globally by terminal id, so an unfiltered map

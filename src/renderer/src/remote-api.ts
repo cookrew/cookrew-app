@@ -1,4 +1,4 @@
-import { AuthError, authStore, type AuthScope } from './auth-gate'
+import { AuthError, authStore, tokenParam, type AuthScope } from './auth-gate'
 import { ReconnectingStream } from './live-stream'
 import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
@@ -142,7 +142,12 @@ export async function checkAuth(candidate?: string): Promise<AuthScope> {
 let events: ReconnectingStream | null = null
 
 function sharedEvents(): ReconnectingStream {
-  if (!events) events = new ReconnectingStream({ open: () => new EventSource(apiPath('/api/events')) })
+  // tokenParam, not a header: EventSource has none. Reads are gated now, so a
+  // tokenless stream is a 401 the client would retry forever.
+  if (!events)
+    events = new ReconnectingStream({
+      open: () => new EventSource(tokenParam(apiPath('/api/events')))
+    })
   return events
 }
 
@@ -228,7 +233,7 @@ export function createRemoteApi(): CookrewApi {
     ptyResize: (terminalId, cols, rows) =>
       post(apiPath(`/api/terminal/${terminalId}/resize`), { cols, rows }),
     ptyAttach: (terminalId, onData, onHello) => {
-      const stream = new EventSource(apiPath(`/api/terminal/${terminalId}/stream`))
+      const stream = new EventSource(tokenParam(apiPath(`/api/terminal/${terminalId}/stream`)))
       const listener = (e: MessageEvent): void => onData(JSON.parse(e.data) as string)
       // The server sends this before the first frame; sizing the xterm from it
       // is what keeps a 45x24 phone from re-wrapping a frame serialized at the

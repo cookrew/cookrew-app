@@ -190,3 +190,36 @@ export function authStore(): AuthStore {
   if (!singleton) singleton = browserStore()
   return singleton
 }
+
+/**
+ * The pairing token as a QUERY PARAM, for clients that cannot set a header.
+ *
+ * There are exactly two, and both are EventSource: the workspace stream and a
+ * terminal's pane stream. EventSource has no headers by construction, which is
+ * the honest half of the reason reads went ungated for so long — so this is
+ * the seam that lets reads be gated without losing the streams.
+ *
+ * PREFER A HEADER WHEREVER ONE IS POSSIBLE. A token in a URL travels into
+ * places a header does not: server logs, `document.referrer`, a screenshot of
+ * an address bar. Nothing here is new — the pairing URL itself carries
+ * `?token=` and `pairingAuthorized` has always accepted it — but a plain
+ * `fetch` can set a header and therefore should, which is why this is used at
+ * two call sites and not three.
+ *
+ * Returns the path unchanged when there is no token: an unpaired client should
+ * get the same 401 as an anonymous one, not a URL with `token=null` in it.
+ */
+export function tokenParam(path: string, token = authStore().token()): string {
+  if (!token) return path
+  return `${path}${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
+}
+
+/**
+ * Authorization header for a token-bearing client, or {} when unpaired.
+ *
+ * The token is a default parameter rather than a closed-over read so this is
+ * testable without a DOM — every call site still omits it and gets the store.
+ */
+export function authHeaders(token = authStore().token()): Record<string, string> {
+  return token ? { authorization: `Bearer ${token}` } : {}
+}

@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   AuthError,
+  authHeaders,
   createAuthStore,
   isAuthError,
   reauthMessage,
   TOKEN_KEY,
   tokenFromInput,
+  tokenParam,
   type StorageLike
 } from '../src/renderer/src/auth-gate'
 
@@ -161,5 +163,33 @@ describe('reauthMessage', () => {
   it('distinguishes read-only from unpaired', () => {
     expect(reauthMessage('read-only')).toContain('read-only')
     expect(reauthMessage('read-only')).not.toBe(reauthMessage('none'))
+  })
+})
+
+describe('tokenParam / authHeaders — carrying the token to a gated read', () => {
+  // Reads are gated now (mobile-api's C1 choke point). Every ordinary call
+  // already sent `Authorization: Bearer`, so the only clients that needed
+  // anything new are the ones that CANNOT set a header — both EventSource.
+  it('appends the token, respecting an existing query string', () => {
+    expect(tokenParam('/api/events', 'abc123')).toBe('/api/events?token=abc123')
+    expect(tokenParam('/api/browser/b1/thumb?v=7', 'abc123')).toBe(
+      '/api/browser/b1/thumb?v=7&token=abc123'
+    )
+  })
+
+  it('percent-encodes, so a token is never read as more query', () => {
+    expect(tokenParam('/api/events', 'a b&c=d')).toBe('/api/events?token=a%20b%26c%3Dd')
+  })
+
+  it('leaves the path untouched when there is no token', () => {
+    // An unpaired client should get the same 401 an anonymous one gets, not a
+    // URL carrying the string "null" — which would read as a wrong token
+    // rather than as no token.
+    expect(tokenParam('/api/events', null)).toBe('/api/events')
+  })
+
+  it('authHeaders is a bearer header, or nothing at all', () => {
+    expect(authHeaders('abc123')).toEqual({ authorization: 'Bearer abc123' })
+    expect(authHeaders(null)).toEqual({})
   })
 })
