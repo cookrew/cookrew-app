@@ -84,23 +84,28 @@ export function purchaseBinding(identityId: string, presetId: string): string {
  * defence, or C17 is process-scoped theatre. The interface is shaped for that
  * swap now so A4 is a change of storage rather than a change of design.
  */
-export type NonceState = 'ok' | 'unknown' | 'expired' | 'spent'
+/**
+ * A quote's own lifecycle, and nothing about whether it was SPENT.
+ *
+ * `spent` used to live here and moved to the receipt in A4. Two records of the
+ * same fact can disagree, and the dangerous direction is memory saying spent
+ * while no receipt exists: a buyer whose money moved would be told `replayed`
+ * while owning nothing. The receipt IS the purchase, so it is the only thing
+ * asked.
+ */
+export type NonceState = 'ok' | 'unknown' | 'expired'
 
 export interface PaymentNonces {
   /** Mint a nonce for this binding, remembering what it was issued for. */
   mint(binding: string, now: number, ttlMs: number): string
-  /** What a nonce was issued for, or null if unknown or expired. */
-  bindingOf(nonce: string, now: number): string | null
+  /** What a quote was issued for, or null if we no longer hold it. */
+  bindingOf(nonce: string): string | null
   /**
-   * What this nonce is right now, WITHOUT consuming it.
-   *
-   * The four answers are four different things that happened to a buyer, and
-   * A2 maps three of them onto three distinct 402 reasons. Collapsing any pair
-   * here would collapse them there, which is what Magpie's C16 blocks on.
+   * What this quote is right now. Three different things that happened to a
+   * buyer, and collapsing any pair here collapses a 402 reason there — which
+   * is what Magpie's C16 blocks on.
    */
   stateOf(nonce: string, now: number): NonceState
-  /** Mark spent. False if it was already spent — the caller has a replay. */
-  spend(nonce: string, now: number): boolean
   /**
    * When this nonce lapses, or null if we no longer hold it.
    *
@@ -113,31 +118,21 @@ export interface PaymentNonces {
 
 export class MemoryPaymentNonces implements PaymentNonces {
   private readonly issued = new Map<string, { binding: string; exp: number }>()
-  /**
-   * SPENT NONCES ARE REMEMBERED, NOT DELETED, and that is the single most
-   * load-bearing line in this class.
-   *
-   * Deleting on spend would make a replayed proof read as a nonce we never
-   * issued — `replayed` would collapse into `invalid`, the two would become
-   * indistinguishable, and Magpie's C16 would BLOCK. It would also be a worse
-   * answer: "we have no record of this" and "this already bought something"
-   * are different facts about a buyer who may simply have retried.
-   *
-   * Retention is therefore longer than the quote's TTL rather than equal to it.
-   */
-  private readonly spent = new Map<string, number>()
 
   mint(binding: string, now: number, ttlMs: number): string {
     const nonce = randomBytes(32).toString('base64url')
     this.issued.set(nonce, { binding, exp: now + ttlMs })
-    this.sweep(now)
+    // A lapsed quote is kept AS lapsed for a while: dropping it the moment it
+    // expired made `expired` report as `invalid`, because the record needed to
+    // tell them apart had just been swept.
+    for (const [key, entry] of this.issued) {
+      if (entry.exp + EXPIRED_RETENTION_MS < now) this.issued.delete(key)
+    }
     return nonce
   }
 
-  bindingOf(nonce: string, now: number): string | null {
-    const entry = this.issued.get(nonce)
-    if (entry === undefined || entry.exp < now) return null
-    return entry.binding
+  bindingOf(nonce: string): string | null {
+    return this.issued.get(nonce)?.binding ?? null
   }
 
   expiryOf(nonce: string): number | null {
@@ -145,48 +140,11 @@ export class MemoryPaymentNonces implements PaymentNonces {
   }
 
   stateOf(nonce: string, now: number): NonceState {
-    // Spent is checked FIRST. A nonce that bought something and then expired is
-    // still a replay, not a stale quote: telling that buyer to re-price would
-    // invite them to pay twice.
-    if (this.spent.has(nonce)) return 'spent'
     const entry = this.issued.get(nonce)
     if (entry === undefined) return 'unknown'
     return entry.exp < now ? 'expired' : 'ok'
   }
-
-  spend(nonce: string, now: number): boolean {
-    if (this.spent.has(nonce)) return false
-    if (!this.issued.has(nonce)) return false
-    this.spent.set(nonce, now + SPENT_RETENTION_MS)
-    return true
-  }
-
-  /**
-   * An EXPIRED nonce is kept for a while after it lapses, and that retention is
-   * the second half of the same lesson as the spent set.
-   *
-   * Dropping it at the moment it expired made `expired` report as `invalid` —
-   * "your quote timed out" became "that is not a payment" — because the record
-   * needed to tell them apart had just been swept. C16 caught it: minting the
-   * replacement quote ran the sweep, which deleted the very nonce the request
-   * was asking about. A buyer who was merely slow deserves a better answer than
-   * one who sent garbage.
-   */
-  private sweep(now: number): void {
-    for (const [key, entry] of this.issued) {
-      if (entry.exp + EXPIRED_RETENTION_MS < now) this.issued.delete(key)
-    }
-    for (const [key, until] of this.spent) if (until < now) this.spent.delete(key)
-  }
 }
-
-/**
- * How long a spent nonce is remembered. Generously longer than any quote TTL,
- * because forgetting one turns a replay into an `invalid` — and in A4 this
- * moves to storage that survives a restart, since replay defence that resets
- * on reboot is process-scoped theatre.
- */
-export const SPENT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 
 /**
  * How long a lapsed quote is still remembered AS lapsed. Long enough that a

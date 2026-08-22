@@ -189,10 +189,9 @@ describe('a buyer does not sign per fetch', () => {
           minted.push(v)
           return v
         },
-        bindingOf: (n, now) => pricing.nonces.bindingOf(n, now),
-        stateOf: (n, now) => pricing.nonces.stateOf(n, now),
-        spend: (n, now) => pricing.nonces.spend(n, now),
-        expiryOf: (n) => pricing.nonces.expiryOf(n)
+        bindingOf: (n: string) => pricing.nonces.bindingOf(n),
+        stateOf: (n: string, now: number) => pricing.nonces.stateOf(n, now),
+        expiryOf: (n: string) => pricing.nonces.expiryOf(n)
       }
     }
     const authorize = makeAuthorize(store, identity, counting)

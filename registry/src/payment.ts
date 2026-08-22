@@ -108,6 +108,22 @@ export function encodePaymentProof(proof: PaymentProof): string {
 export interface VerifyPaymentDeps {
   nonces: PaymentNonces
   facilitator: Facilitator
+  /**
+   * THE DURABLE RECORD OF WHAT HAS ALREADY BEEN BOUGHT (A4).
+   *
+   * The receipt store satisfies this. Replay defence lives here rather than in
+   * the quote store for two reasons: it survives a restart, which is what
+   * Magpie flagged when it lived in a Map; and a receipt IS the purchase, so
+   * asking anything else would be asking a second record of the same fact and
+   * inviting the two to disagree.
+   *
+   * It also fails in the safe direction. If a receipt was never written, the
+   * nonce is not spent and a retry can settle again — the proof names the same
+   * transaction, so re-verifying it moves no money a second time. The opposite
+   * arrangement, a spend marked without a receipt, would tell a buyer whose
+   * money had moved that they were replaying, while owning nothing.
+   */
+  purchased: { hasNonce(nonce: string): boolean }
   now: () => number
 }
 
@@ -145,17 +161,22 @@ export function verifyPayment(
   if (proof === null) return { ok: false, reason: 'invalid' }
 
   const at = deps.now()
+
+  // ALREADY BOUGHT? Asked first, and asked of the durable record. A restart
+  // must not turn a replay into an `invalid`, which is what happened while the
+  // spent set lived only in memory.
+  if (deps.purchased.hasNonce(proof.nonce)) return { ok: false, reason: 'replayed' }
+
   const state = deps.nonces.stateOf(proof.nonce, at)
-  // A nonce we never issued is not a replay — nothing was bought with it — so
+  // A quote we never issued is not a replay — nothing was bought with it — so
   // it is invalid. Keeping these apart is the distinction C16 checks.
   if (state === 'unknown') return { ok: false, reason: 'invalid' }
   if (state === 'expired') return { ok: false, reason: 'expired' }
-  if (state === 'spent') return { ok: false, reason: 'replayed' }
 
-  // The nonce was issued for one buyer and one preset. Without this a quote is
-  // a bearer token: anyone could pay somebody else's terms and claim the
+  // The quote was issued for one buyer and one preset. Without this it is a
+  // bearer token: anyone could pay somebody else's terms and claim the
   // entitlement it bought.
-  if (deps.nonces.bindingOf(proof.nonce, at) !== purchaseBinding(input.identityId, input.presetId)) {
+  if (deps.nonces.bindingOf(proof.nonce) !== purchaseBinding(input.identityId, input.presetId)) {
     return { ok: false, reason: 'invalid' }
   }
 
@@ -171,8 +192,8 @@ export function verifyPayment(
   })
   if (!settled.ok) return { ok: false, reason: settled.reason }
 
-  // Spent only now, and only once. A4 makes this survive a restart; until then
-  // a reboot forgets, which is why A4 exists rather than being folded in here.
-  deps.nonces.spend(proof.nonce, at)
+  // Nothing is marked here. The caller records the RECEIPT, and that recording
+  // is what makes the quote spent — one act, one record, no second bookkeeping
+  // to fall out of step with it.
   return { ok: true }
 }

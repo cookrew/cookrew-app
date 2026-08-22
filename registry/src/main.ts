@@ -29,7 +29,8 @@ import { createRegistry } from './server'
 import { IdentityService, identityConfigFor } from './identity'
 import { makeAuthorize } from './authorize'
 import { PayoutStore } from './payouts'
-import { DEFAULT_TERMS_CONFIG, MemoryPaymentNonces } from './terms'
+import { DEFAULT_TERMS_CONFIG } from './terms'
+import { FilePaymentNonces } from './payment-nonces'
 import { devFacilitator } from './facilitator-dev'
 import { ReceiptStore } from './receipts'
 import { buildManifest, signManifest } from '../../src/main/preset-publish'
@@ -162,7 +163,9 @@ if (!Number.isInteger(TERMS_TTL_MS) || TERMS_TTL_MS < 1) {
 const pricing = {
   payouts: new PayoutStore(DATA),
   config: { chain: CHAIN, ttlMs: TERMS_TTL_MS },
-  nonces: new MemoryPaymentNonces(),
+  // FILE-backed: a quote must outlive the process that issued it, or a buyer
+  // who paid mid-flight and met a restart is told their payment is invalid.
+  nonces: new FilePaymentNonces(DATA),
   // The DEV facilitator: reaches no chain, verifies no transfer, and exists so
   // the handshake can be driven end to end against the real binary. See its
   // file — it is not a payment system and must never be one.

@@ -397,13 +397,17 @@ describe('the terms TTL is settable, so an expiry is judgeable from outside', ()
     expect(terms?.expiry).toBe(clock + 1_000)
   })
 
-  it('a nonce is unknown once its TTL has passed — no sleeping required', () => {
+  it('a quote LAPSES once its TTL has passed — no sleeping required', () => {
     // Magpie's gate: without a settable clock this case cannot be judged, and
     // an unjudgeable case is a BLOCK rather than a pass.
     const nonces = new MemoryPaymentNonces()
     const nonce = nonces.mint(purchaseBinding(IDENTITY, 'sha256:x'), clock, 1_000)
-    expect(nonces.bindingOf(nonce, clock + 999)).toBe(purchaseBinding(IDENTITY, 'sha256:x'))
-    expect(nonces.bindingOf(nonce, clock + 1_001)).toBeNull()
+    expect(nonces.stateOf(nonce, clock + 999)).toBe('ok')
+    expect(nonces.stateOf(nonce, clock + 1_001)).toBe('expired')
+    // The binding survives the lapse: an expired quote for the RIGHT preset and
+    // one for the wrong preset are different answers, and folding them together
+    // would make an expiry indistinguishable from a mismatch.
+    expect(nonces.bindingOf(nonce)).toBe(purchaseBinding(IDENTITY, 'sha256:x'))
   })
 
   it('binds the nonce to buyer AND preset, in one domain-separated scheme', () => {
@@ -602,9 +606,8 @@ describe('GATE — only a GET may ever be answered 402', () => {
           minted.push(value)
           return value
         },
-        bindingOf: (n: string, now: number) => pricing.nonces.bindingOf(n, now),
+        bindingOf: (n: string) => pricing.nonces.bindingOf(n),
         stateOf: (n: string, now: number) => pricing.nonces.stateOf(n, now),
-        spend: (n: string, now: number) => pricing.nonces.spend(n, now),
         expiryOf: (n: string) => pricing.nonces.expiryOf(n)
       }
     }

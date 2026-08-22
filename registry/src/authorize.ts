@@ -130,7 +130,12 @@ export function makeAuthorize(
         if (header === undefined) return { code: 402, terms: offer() }
 
         const paid = verifyPayment(
-          { nonces: pricing.nonces, facilitator: pricing.facilitator, now: pricing.now },
+          {
+            nonces: pricing.nonces,
+            facilitator: pricing.facilitator,
+            purchased: pricing.receipts,
+            now: pricing.now
+          },
           {
             header: Array.isArray(header) ? header[0] : header,
             identityId: claims.sub,
