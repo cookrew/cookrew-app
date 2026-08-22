@@ -14,8 +14,8 @@ import type { Visibility } from '../src/shared/gate'
  * be expressed: there was one pairing token for the whole app.
  */
 
-const DEV: CallTarget = { workspaceId: 'ws-cookrew-dev', agent: 'forge' }
-const PLAY: CallTarget = { workspaceId: 'ws-playground', agent: 'forge' }
+const DEV: CallTarget = { workspaceId: 'ws-cookrew-dev', nodeId: 'node-forge' }
+const PLAY: CallTarget = { workspaceId: 'ws-playground', nodeId: 'node-forge-play' }
 
 let base = ''
 let clock = 1_700_000_000_000

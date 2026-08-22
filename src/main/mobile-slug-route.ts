@@ -177,6 +177,23 @@ export const SCOPE_AWARE: RegExp[] = [
   /^\/api\/presets$/,
   /^\/api\/git(?:\?.*)?$/,
   /^\/api\/browser\/capabilities$/,
+  // THE INTERNET GATE (§9, §11 · ④). An exported agent is addressable because
+  // the workspace instance is addressable, so this is the one route family
+  // that is MEANINGLESS unslugged — there is no focused-session reading of it,
+  // and it is refused rather than answered when no slug names the workspace.
+  //
+  // Scoped by RESOLUTION, not by membership, which is why it is not on
+  // NODE_ROUTES. It carries a name rather than a node id, and a name is only
+  // meaningful inside a workspace: call-gate resolves it against the addressed
+  // workspace's own state and nowhere else, so a node outside the scope is
+  // unreachable rather than merely refused. The membership check NODE_ROUTES
+  // performs would not even have an id to check.
+  /^\/agents\/[^/]+\/ask$/,
+  // The ceremony that makes the 401 above a promise rather than a lie: a
+  // workspace-bound challenge, and the assertion that spends it for a
+  // workspace-scoped credential.
+  /^\/api\/call\/challenge$/,
+  /^\/api\/call\/assert$/,
   // Node-addressed seat routes, from the ONE table below.
   ...NODE_ROUTES
 ]

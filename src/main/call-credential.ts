@@ -77,6 +77,20 @@ const CHALLENGE_TTL_MS = 90 * 1000
 const b64url = (buf: Buffer): string => buf.toString('base64url')
 const fromB64url = (value: string): Buffer => Buffer.from(value, 'base64url')
 
+/**
+ * The app's issuer, as the rest of the lane depends on it.
+ *
+ * A `GateIssuer` whose challenge can be BOUND to the workspace that emitted the
+ * 401. The gate's own interface takes no argument — it does not know what a
+ * workspace is, and should not — so the call binding wraps this per request,
+ * where the addressed workspace is known.
+ */
+export interface CallIssuer extends GateIssuer<CallClaims> {
+  challenge(binding?: string | null): string
+  consumeChallenge(value: string, binding?: string | null): boolean
+  mint(sub: string, workspace: string, scope?: CallScope): string
+}
+
 export interface CallCredentialOptions {
   /** Where the signing key lives. Defaults beside the rest of the app's state. */
   base?: string
@@ -85,13 +99,21 @@ export interface CallCredentialOptions {
   challengeTtlMs?: number
 }
 
-export class CallCredentialService implements GateIssuer<CallClaims> {
+export class CallCredentialService implements CallIssuer {
   private readonly keyFile: string
   private readonly now: () => number
   private readonly tokenTtlMs: number
   private readonly challengeTtlMs: number
-  /** Outstanding nonces. Consumed on first use, swept when they expire. */
-  private readonly challenges = new Map<string, number>()
+  /**
+   * Outstanding nonces, each remembering WHAT IT WAS ISSUED FOR.
+   *
+   * The binding is the workspace the 401 was emitted by. Recording it here —
+   * against the server's own memory, never against anything the request
+   * asserts about itself — is what makes a nonce unreplayable across workspace
+   * sessions rather than merely single-use. Same shape as the registry's
+   * countersign nonces, and for the same reason.
+   */
+  private readonly challenges = new Map<string, { exp: number; binding: string | null }>()
   private signingKey: { publicKey: KeyObject; privateKey: KeyObject } | null = null
 
   constructor(options: CallCredentialOptions = {}) {
@@ -135,25 +157,29 @@ export class CallCredentialService implements GateIssuer<CallClaims> {
    * the same slice as the first 401 the gate can emit — a challenge nobody can
    * answer is the same lie in a different place.
    */
-  challenge(): string {
+  challenge(binding: string | null = null): string {
     const value = b64url(randomBytes(32))
-    this.challenges.set(value, this.now() + this.challengeTtlMs)
-    for (const [nonce, exp] of this.challenges) {
-      if (exp < this.now()) this.challenges.delete(nonce)
+    this.challenges.set(value, { exp: this.now() + this.challengeTtlMs, binding })
+    // Opportunistic sweep: an expired nonce is worthless, and this keeps the
+    // map from being a slow leak on a process the owner leaves running.
+    for (const [nonce, entry] of this.challenges) {
+      if (entry.exp < this.now()) this.challenges.delete(nonce)
     }
     return value
   }
 
   /**
-   * Spend a challenge. True at most once per nonce, and only while it is fresh.
+   * Spend a challenge. True at most once per nonce, only while it is fresh, and
+   * only for the binding it was issued against.
    *
    * Consumed whether or not the caller's proof then verifies, so a captured
-   * nonce cannot be retried against a second attempt.
+   * nonce cannot be retried against a second attempt — and a nonce handed out
+   * by one workspace's 401 cannot be spent at another's ceremony.
    */
-  consumeChallenge(value: string): boolean {
-    const exp = this.challenges.get(value)
+  consumeChallenge(value: string, binding: string | null = null): boolean {
+    const entry = this.challenges.get(value)
     this.challenges.delete(value)
-    return exp !== undefined && exp >= this.now()
+    return entry !== undefined && entry.exp >= this.now() && entry.binding === binding
   }
 
   /**

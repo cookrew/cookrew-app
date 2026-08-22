@@ -277,10 +277,9 @@ stranger must not be able to reach the input box the owner is typing into.</p>
           The owner's issuer: workspace-scoped mint/verify + single-use challenges. The call binding.</td>
       <td class="yes">green</td></tr>
   <tr><td><strong>S2</strong></td>
-      <td><code>/&lt;slug&gt;/agents/&lt;name&gt;/ask</code> becomes addressable and answers the verdict
-          <em>only</em> — 404 / 401 / 403, no turn run. Name→node resolution through the
-          <code>NODE_ROUTES</code> choke point. The ceremony route that spends a challenge.</td>
-      <td>next</td></tr>
+      <td><code>/&lt;slug&gt;/agents/&lt;name&gt;/ask</code> addressable and gated, answering the verdict
+          <em>only</em>. The owner's grant record. The ceremony that spends a challenge.</td>
+      <td class="yes">green</td></tr>
   <tr><td><strong>S3</strong></td>
       <td>The fork <em>and its pin, together</em>. On 200: cut the pin via <code>PinStore</code>, fork
           the transcript, never touch the original.</td>
@@ -299,7 +298,53 @@ stranger must not be able to reach the input box the owner is typing into.</p>
 without cutting a version is a call whose §10 invariant nothing can check. S3 is therefore not
 splittable into “fork now, pin later”.</p>
 
-<h2>8 · Constraints S2 must honour</h2>
+<h2>8 · S2 · Two decisions the route forced</h2>
+
+<div class="card ruling">
+<h3><span class="tag">Ruling</span>The M1 ceremony proves possession of an enrolled KEY, not a passkey.</h3>
+</div>
+
+<p>§9's whole premise is that the caller's terminal sees an ordinary teammate — so the thing on
+the other end is an agent or a CLI, not a human in front of an authenticator. A WebAuthn
+ceremony requires user presence <em>by design</em>: it is the right instrument for a person
+installing a preset and the wrong one for an agent calling a teammate every few seconds. So the
+caller signs a workspace-bound nonce with a key the owner enrolled. The human passkey path joins
+it in M3 as a second issuer, which costs nothing because the issuer is a parameter.</p>
+
+<p>The nonce is bound twice over, and either binding alone would do: the server remembers which
+workspace issued it, <em>and</em> the workspace is inside the bytes the caller signs. A mistake in
+one is therefore not a hole.</p>
+
+<div class="card ruling">
+<h3><span class="tag">Ruling</span>A call that passes the gate answers <strong>501</strong>, not 200, until S4 runs the turn.</h3>
+</div>
+
+<p>A 200 with nothing behind it is a call that answered without running, and the caller could not
+tell an empty reply from a finished one. That is the wrong-answer-that-looks-right this lane
+refuses everywhere else. 501 with a reason word is distinguishable from every refusal above it,
+and it turns "the gate passed" into something a test can assert without a turn existing.</p>
+
+<h3>Scoped by resolution, not by membership</h3>
+<p><code>NODE_ROUTES</code> scopes a route by <em>membership</em>: the path carries a node id, and
+once <code>ownerOf(id)</code> matches, the handler is correct by construction. This route carries a
+<em>name</em>, which is only meaningful inside a workspace — so it is scoped by <em>resolution</em>:
+the name is looked up in the addressed workspace's own state and nowhere else, which makes an
+out-of-scope node unreachable rather than merely refused. The two mechanisms are different, and
+<code>nodeIdOfRoute</code> is asserted to decline this path so nobody later "unifies" them.</p>
+
+<p>The trap avoided by name: <code>store.nodeByName()</code> reads <code>focusedState</code>. Using it
+would have answered for whichever canvas the owner was looking at — the defect that took
+<code>/cwd</code> off the table, and a name-addressed route is where it would be easiest to repeat.</p>
+
+<h3>Mounted ahead of the pairing gate, on purpose</h3>
+<p>The call route is handled <em>before</em> <code>handleMobileApi</code>. Below it, two bugs:
+an internet caller holds a call credential and no pairing token, so it would be asked for the very
+thing §9 replaces; and it would inherit C1's "no token configured ⇒ allow everything" escape.
+Mounted first with its own gate, neither is reachable — and a pairing token presented here buys a
+401 like any other stranger's, which is what "tiers by credential, never by listener" means when the
+listener is <code>0.0.0.0</code> for both.</p>
+
+<h2>9 · Constraints S3+ must honour</h2>
 
 <ul>
   <li><strong>A 401 is a promise.</strong> A1 refused to answer 401 before identity existed, because

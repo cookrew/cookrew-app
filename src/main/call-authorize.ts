@@ -1,5 +1,5 @@
-import { decideGate, type GateIssuer, type GateVerdict, type Visibility } from '../shared/gate'
-import type { CallClaims } from './call-credential'
+import { decideGate, type GateVerdict, type Visibility } from '../shared/gate'
+import type { CallClaims, CallIssuer } from './call-credential'
 
 /**
  * THE LIVE-CALL BINDING (§9, ④ · S1) — the app's half of the one gate.
@@ -22,38 +22,44 @@ import type { CallClaims } from './call-credential'
  * the LAN tier and the internet tier are the same socket — and the pairing gate
  * lets everything through when no token is configured. This gate therefore
  * never asks what the pairing gate decided and never asks which listener the
- * request arrived on. It is an AND, and it distinguishes tiers by the
- * credential presented.
+ * request arrived on. It distinguishes tiers by the credential presented.
  */
 
-/** What the route addressed: one agent, in one workspace session. */
+/**
+ * What the route addressed: one agent NODE, in one workspace session.
+ *
+ * A node id, not a name, because the name has already been resolved inside the
+ * addressed workspace by then (call-route.ts). By the time a decision is made
+ * there is no name left to be ambiguous, and no lookup left that could reach
+ * outside the scope.
+ */
 export interface CallTarget {
   /** The workspace the SLUG resolved to. Never the focused one. */
   workspaceId: string
-  /** The exported agent's name, as it appears in the path. */
-  agent: string
+  /** The terminal node the agent name resolved to, inside that workspace. */
+  nodeId: string
 }
 
 export interface CallAuthorizeDeps {
   /**
-   * Is this agent exported from this workspace, and does calling it need
+   * Is this node exported from this workspace, and does calling it need
    * identity? `null` means "not callable here" and becomes a 404.
    *
-   * A 404 rather than a 403 for the unexported case, and for an agent that
-   * exists in a DIFFERENT workspace: a scoped URL must not confirm what exists
-   * outside its scope, which is the same rule mobile-server already applies to
-   * node routes. Export is explicit — an agent nobody exported is not callable,
-   * so the honest default of this lookup is null and never 'public'.
+   * A 404 rather than a 403 for the unexported case: a scoped URL must not
+   * confirm what exists outside its scope, which is the same rule
+   * mobile-server already applies to node routes. Export is explicit — an agent
+   * nobody exported is not callable — so the honest default of this lookup is
+   * null and never 'public'.
    */
   exportedVisibility: (target: CallTarget) => Visibility | null
-  issuer: GateIssuer<CallClaims>
+  issuer: CallIssuer
   /**
    * Why this caller is not entitled to this agent, or null when they are.
    *
-   * Required, no default — M1's honest answer is `() => null` and a binding has
-   * to write that down rather than inherit it. R5: the LIVE CALL never answers
-   * 402. Per-call pricing settles from a prepaid balance bought at install, so
-   * an exhausted balance surfaces HERE as a 403 with a reason (`balance_empty`)
+   * Required, no default — M1's honest answer for a listed caller is null, and
+   * a binding has to write that down rather than inherit it. R5: the LIVE CALL
+   * never answers 402. Per-call pricing settles from a prepaid balance bought
+   * at install, so an exhausted balance surfaces HERE as a 403 with a reason
    * and a wallet sheet never interrupts a conversation. R12: the drawdown is
    * per turn, charged at turn accept, so this answers before a turn starts and
    * never interrupts a running one.
@@ -77,7 +83,15 @@ export function makeCallAuthorize(
     decideGate<CallClaims>({
       visibility: deps.exportedVisibility(target),
       credential,
-      issuer: deps.issuer,
+      issuer: {
+        // The challenge offered at 401 is BOUND to the workspace that emitted
+        // it, so the nonce cannot be carried to another workspace's ceremony.
+        // The gate itself takes no argument here and should not: it does not
+        // know what a workspace is. The binding does, so the binding supplies
+        // it — at the one place the addressed workspace is in hand.
+        challenge: () => deps.issuer.challenge(target.workspaceId),
+        verifyToken: (token) => deps.issuer.verifyToken(token)
+      },
       covers: (claims) => {
         // A download token is not a call token even if some future issuer signs
         // both. Checked here rather than at verification so the refusal is a
@@ -85,10 +99,10 @@ export function makeCallAuthorize(
         if (claims.scope !== 'call') return 'scope'
         // D4 / R9, and Magpie's R2: a genuine, unexpired credential minted
         // against another workspace session is 403 `workspace`, never 401. The
-        // client cannot fix this by re-authenticating with the same
-        // authenticator against the same origin — it must obtain a credential
-        // for THIS workspace — so telling it "your identity is the problem"
-        // would send it round a loop that cannot terminate.
+        // client cannot fix this by re-authenticating with the same key against
+        // the same origin — it must obtain a credential for THIS workspace — so
+        // telling it "your identity is the problem" would send it round a loop
+        // that cannot terminate.
         if (claims.workspace !== target.workspaceId) return 'workspace'
         return null
       },

@@ -68,6 +68,10 @@ import {
 import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
 import { forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
 import { AgentRegistry } from './agent-registry'
+import { AgentExportStore } from './agent-export'
+import { CallCredentialService } from './call-credential'
+import { makeCallCeremony } from './call-ceremony'
+import { makeCallGate } from './call-gate'
 import { RecoverableStore, planRecovery } from './recoverable'
 import { EventLog } from './event-log'
 import { installProcessGuards } from './process-guards'
@@ -244,6 +248,15 @@ const roles = new RoleStore()
 const teams = new TeamStore()
 const gitCache = new GitInfoCache()
 const agents = new AgentRegistry()
+/**
+ * The internet gate's two stores (§9 · ④). The issuer signs this instance's
+ * call credentials — owner-as-issuer, so nothing here reaches the registry —
+ * and the grant record says who may call what. Both default closed: no agent is
+ * callable until the owner exports it, and no caller holds a credential until
+ * the owner enrols it.
+ */
+const callCredentials = new CallCredentialService()
+const agentExports = new AgentExportStore()
 const boardProbe = createProbeSampler(
   tmuxProbeDeps({
     knownTerminalIds: () => agents.list().map((entry) => entry.id),
@@ -2217,6 +2230,27 @@ app.whenReady().then(() => {
     store,
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,
+    // THE INTERNET GATE (§9 · ④), mounted per workspace session. Reachable only
+    // under a slug, so multi-instance gates it without a second flag: an
+    // exported agent is addressable because the WORKSPACE is.
+    //
+    // Every lookup it is given is workspace-scoped at the call site.
+    // workspaceState() reads the addressed workspace (from memory when it is
+    // the active one, from disk otherwise) — deliberately NOT store.terminals()
+    // or store.nodeByName(), both of which read focusedState and would answer
+    // for whichever canvas the owner is looking at.
+    calls: {
+      decide: makeCallGate({
+        nodesOf: (workspaceId) => store.workspaceState(workspaceId).nodes,
+        exportOf: (workspaceId, nodeId) => agentExports.exportOf(workspaceId, nodeId),
+        issuer: callCredentials
+      }),
+      ceremony: makeCallCeremony({
+        issuer: callCredentials,
+        enrolledKey: (workspaceId, sub) => agentExports.enrolledKey(workspaceId, sub)
+      }),
+      slugOf: (workspaceId) => store.slugOf(workspaceId)
+    },
     events,
     agents,
     traces,
