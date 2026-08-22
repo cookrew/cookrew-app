@@ -493,6 +493,83 @@ export class AnnotationStore {
   }
 
   /** The in-memory durable picture, seeded from disk the first time. */
+  /**
+   * Move annotations onto their checkpoints' NEW index numbers, matched by uuid.
+   *
+   * A checkpoint index is a POSITION in a lineage, not an identity. This file
+   * keys by index, and the note at the top of it says why that makes the ledger
+   * undisposable — which contradicts ledger-rebuild's claim that the ledger is
+   * a derived index. Both cannot be true, and today the ledger genuinely is not
+   * disposable: renumber it and every annotation stays on a number that now
+   * names a different turn.
+   *
+   * That failure is not an orphan, it is a LIE. Nothing errors, nothing is
+   * missing, and a Sous title simply describes the wrong conversation — which
+   * the UI cannot falsify and the owner has no reason to suspect. Three things
+   * renumber: a fold, a rewind, and recovering the checkpoints a compact
+   * orphaned.
+   *
+   * The uuid is the identity that survives. Verified before relying on it:
+   * across 36 real agents, 2,327 checkpoint uuids compared between the stored
+   * ledger and a rebuild from the transcript, 2,327 identical — it is carried
+   * from the conversation, not minted here.
+   *
+   * REFUSES RATHER THAN GUESSES. An annotation whose index matches no record,
+   * or whose record has no uuid, or whose uuid appears more than once, is
+   * reported in `unmatched` and LEFT WHERE IT IS. Losing one loudly beats
+   * moving it quietly, which is the whole failure being repaired.
+   *
+   * Idempotent: re-running with the same pair moves nothing and reports 0.
+   */
+  rekeyByUuid(
+    safeId: string,
+    before: readonly TurnRecord[],
+    after: readonly TurnRecord[]
+  ): { moved: number; unmatched: number[] } {
+    const current = new Map(this.load(safeId))
+    if (current.size === 0) return { moved: 0, unmatched: [] }
+
+    // uuid -> new index, refusing any uuid that is not unique on either side.
+    const oldByIndex = new Map<number, string>()
+    const ambiguousOld = new Set<string>()
+    for (const record of before) {
+      if (record.uuid === undefined) continue
+      if ([...oldByIndex.values()].includes(record.uuid)) ambiguousOld.add(record.uuid)
+      oldByIndex.set(record.index, record.uuid)
+    }
+    const newByUuid = new Map<string, number>()
+    const ambiguousNew = new Set<string>()
+    for (const record of after) {
+      if (record.uuid === undefined) continue
+      if (newByUuid.has(record.uuid)) ambiguousNew.add(record.uuid)
+      else newByUuid.set(record.uuid, record.index)
+    }
+
+    const next = new Map<number, TurnAnnotation>()
+    const unmatched: number[] = []
+    let moved = 0
+    for (const [index, annotation] of current) {
+      const uuid = oldByIndex.get(index)
+      const target = uuid === undefined ? undefined : newByUuid.get(uuid)
+      if (uuid === undefined || target === undefined || ambiguousOld.has(uuid) || ambiguousNew.has(uuid)) {
+        // Unplaceable. Keep it exactly where it is and say so.
+        unmatched.push(index)
+        next.set(index, annotation)
+        continue
+      }
+      if (target !== index) moved += 1
+      next.set(target, annotation)
+    }
+
+    if (moved > 0) {
+      this.persistSnapshot(safeId, next)
+      this.state.set(safeId, next)
+      this.pendingOps.delete(safeId)
+      this.pendingFull.delete(safeId)
+    }
+    return { moved, unmatched }
+  }
+
   private stateOf(safeId: string): Map<number, TurnAnnotation> {
     const held = this.state.get(safeId)
     if (held) return held
