@@ -71,6 +71,23 @@ function isEnrolled(value: unknown): value is EnrolledCaller {
   )
 }
 
+/**
+ * A LIVE CALL IS NEVER PUBLIC (S3).
+ *
+ * The shared gate has a `public` branch and the registry uses it: §9 is right
+ * that "discovery and free download are not things identity should cost". A
+ * CALL is neither of those. It is an anonymous stranger running compute on the
+ * owner's machine, and — because §10 gives every conversation its own fork —
+ * anonymity leaves nothing to key a conversation on, so anonymous callers would
+ * have to share one transcript. Strangers reading each other's conversations is
+ * a worse outcome than a branch this store never produces.
+ *
+ * So a public grant is refused when written and dropped when read. The gate's
+ * public branch stays exercised where it belongs, on the download path. If
+ * public calls are wanted later the safe shape is a server-minted,
+ * unguessable conversation id handed back on the first call — a capability, not
+ * an absence of one — and that is an addition rather than a change here.
+ */
 function isExport(value: unknown): value is AgentExport {
   const e = value as AgentExport
   return (
@@ -78,7 +95,7 @@ function isExport(value: unknown): value is AgentExport {
     e !== null &&
     typeof e.workspaceId === 'string' &&
     typeof e.nodeId === 'string' &&
-    (e.visibility === 'public' || e.visibility === 'identified') &&
+    e.visibility === 'identified' &&
     Array.isArray(e.callers) &&
     e.callers.every((c) => typeof c === 'string')
   )
@@ -170,8 +187,17 @@ export class AgentExportStore {
     )
   }
 
-  /** Export an agent, or replace its existing grant. */
+  /**
+   * Export an agent, or replace its existing grant.
+   *
+   * Refuses a public grant rather than storing one that would be dropped on the
+   * next read — a write that silently does nothing is how a surface ends up
+   * believing an agent is exported when it is not.
+   */
   exportAgent(grant: AgentExport): void {
+    if (!isExport(grant)) {
+      throw new Error('a live call is never public: export an agent to named callers')
+    }
     const record = this.read()
     this.write({
       ...record,

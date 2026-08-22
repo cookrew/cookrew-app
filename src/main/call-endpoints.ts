@@ -3,6 +3,8 @@ import { readJson, respondJson } from './mobile-http'
 import { parseCallAddress, parseCeremonyRoute } from './call-route'
 import type { CallCeremony, AssertInput } from './call-ceremony'
 import type { CallDecision } from './call-gate'
+import type { CallSession } from './call-session'
+import { isConversationId } from './call-conversation'
 
 /**
  * THE INTERNET GATE'S HTTP SURFACE (§9 · ④ · S2).
@@ -25,6 +27,16 @@ export interface CallEndpointDeps {
   ceremony: CallCeremony
   /** The slug the workspace is addressed at, for the challenge realm. */
   slugOf: (workspaceId: string) => string | undefined
+  /**
+   * The fork this conversation runs against, cutting a version pin when it is
+   * the first call (§10). Only ever reached after the gate served the call.
+   */
+  session: (input: {
+    workspaceId: string
+    nodeId: string
+    sub: string
+    conversation?: string
+  }) => CallSession
 }
 
 /** The credential presented, or null. Never an empty string, never a default. */
@@ -102,14 +114,58 @@ export async function handleCallRoutes(
     return true
   }
 
-  // THE GATE SAID YES AND THERE IS NO TURN TO RUN YET (S2).
+  // Served. From here the call has a subject, a fork and a version.
+  //
+  // `claims` is null only for a public resource, and this store refuses to
+  // record a public export precisely because a call with no subject has nothing
+  // to key a conversation on (agent-export.ts). Refusing here as well means the
+  // invariant holds even if that ever changes without this being revisited.
+  if (verdict.claims === null || decision.target === null) {
+    respondJson(response, 403, { reason: 'identity' })
+    return true
+  }
+
+  const body = await readJson<{ conversation?: unknown }>(request)
+  const requested = body?.conversation
+  if (requested !== undefined && (typeof requested !== 'string' || !isConversationId(requested))) {
+    // A conversation id is a KEY. Refused rather than coerced, because two
+    // spellings that resolve to one conversation are two names for one fork.
+    respondJson(response, 403, { reason: 'conversation' })
+    return true
+  }
+
+  let session: CallSession
+  try {
+    session = deps.session({
+      workspaceId,
+      nodeId: decision.target.nodeId,
+      sub: verdict.claims.sub,
+      ...(typeof requested === 'string' ? { conversation: requested } : {})
+    })
+  } catch (error) {
+    // A source with no completed turns cannot be forked, and a fork that fails
+    // is a call that did not happen. Said plainly rather than answered 501,
+    // which would claim the gate is fine and only the turn is missing.
+    respondJson(response, 409, {
+      reason: 'no_version',
+      detail: error instanceof Error ? error.message : String(error)
+    })
+    return true
+  }
+
+  // THE GATE SAID YES, THE VERSION EXISTS, AND THERE IS NO TURN TO RUN YET.
   //
   // 501, not 200. A 200 here would be a call that answered without running —
   // the wrong-answer-that-looks-right this lane refuses everywhere else, and
   // the caller would have no way to tell an empty reply from a finished one.
-  // S3 cuts the fork and its version pin together; S4 runs the turn against the
-  // fork. Until then the honest answer is "addressed, gated, not yet served",
-  // and a client can distinguish it from every refusal above.
-  respondJson(response, 501, { reason: 'turn_not_implemented', agent: address.agent })
+  // S4 runs the turn against `fork` and turns this into a 200 carrying a reply;
+  // everything else in this body is already the real thing.
+  respondJson(response, 501, {
+    reason: 'turn_not_implemented',
+    agent: address.agent,
+    conversation: session.conversation,
+    version: session.version,
+    fork: session.forkId
+  })
   return true
 }

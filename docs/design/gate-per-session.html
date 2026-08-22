@@ -282,8 +282,8 @@ stranger must not be able to reach the input box the owner is typing into.</p>
       <td class="yes">green</td></tr>
   <tr><td><strong>S3</strong></td>
       <td>The fork <em>and its pin, together</em>. On 200: cut the pin via <code>PinStore</code>, fork
-          the transcript, never touch the original.</td>
-      <td>—</td></tr>
+          the transcript, never touch the original. One version per caller-conversation.</td>
+      <td class="yes">green</td></tr>
   <tr><td><strong>S4</strong></td>
       <td>The turn: run the ask against the fork; register it as in-flight work so a parked workspace
           cannot drain mid-call and a cold one hydrates.</td>
@@ -344,7 +344,39 @@ Mounted first with its own gate, neither is reachable — and a pairing token pr
 401 like any other stranger's, which is what "tiers by credential, never by listener" means when the
 listener is <code>0.0.0.0</code> for both.</p>
 
-<h2>9 · Constraints S3+ must honour</h2>
+<h2>9 · S3 · A live call is never public</h2>
+
+<div class="card ruling">
+<h3><span class="tag">Ruling</span>An app export cannot be <code>public</code>. Refused on write, dropped on read.</h3>
+<p>The gate keeps its public branch and the registry still uses it. This is about calls, not downloads.</p>
+</div>
+
+<p>§9 is right that “discovery and free download are not things identity should cost”. A
+<em>call</em> is neither. It is an anonymous stranger running compute on the owner's machine — and
+because §10 gives every conversation its own fork, anonymity leaves nothing to key a conversation
+on, so anonymous callers would have to <strong>share one transcript</strong>. Strangers reading each
+other's conversations is a worse outcome than a branch this store never produces.</p>
+
+<p>Refusing the write is not sufficient by itself, so a public grant already on disk — from an older
+build, or written by hand — is dropped when read. Both are tested. If public calls are wanted later,
+the safe shape is a server-minted, unguessable conversation id returned on the first call: a
+capability rather than an absence of one, and an addition rather than a change.</p>
+
+<h3>What the conversation is keyed on</h3>
+<p><code>(workspace, agent node, <strong>subject</strong>, conversation name)</code>. The subject is in
+the <em>key</em>, not the value, so one caller cannot continue another's conversation by naming it.
+A caller that sends no name gets its own <code>default</code> — the safe shape is what happens when a
+client does nothing, not something it must remember to opt into. Nothing is keyed on a token, so
+re-asserting mid-conversation resumes the same fork instead of cutting a second version.</p>
+
+<h3>Ordering, and what a failure leaves behind</h3>
+<p>The pin record is computed first (pure, cannot fail), the fork is made second, the pin is
+persisted third, and only then is the conversation recorded. So: a fork that fails burns no version
+number — which matters because a skipped number makes §10's versions non-consecutive — and a
+conversation is never recorded pointing at a fork that was never made. A source with no completed
+turns is refused before anything is forked.</p>
+
+<h2>10 · Constraints S4 must honour</h2>
 
 <ul>
   <li><strong>A 401 is a promise.</strong> A1 refused to answer 401 before identity existed, because

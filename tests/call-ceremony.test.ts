@@ -256,16 +256,18 @@ describe('the gate over real grants', () => {
     expect(gate()(WS, 'forge', token).verdict).toEqual({ code: 403, reason: 'entitlement' })
   })
 
-  it('serves a public export with no credential at all', () => {
-    exports.exportAgent({
-      workspaceId: WS,
-      nodeId: 'node-forge',
-      visibility: 'public',
-      callers: []
-    })
-    const decision = gate()(WS, 'forge', null)
-    expect(decision.verdict).toEqual({ code: 200, claims: null })
-    expect(decision.target).toEqual({ workspaceId: WS, nodeId: 'node-forge' })
+  it('cannot be made public — so the gate never serves a call to a stranger', () => {
+    expect(() =>
+      exports.exportAgent({
+        workspaceId: WS,
+        nodeId: 'node-forge',
+        visibility: 'public',
+        callers: []
+      })
+    ).toThrow(/never public/)
+    // And nothing reaches the gate's public branch by any other route: an
+    // unrecorded grant is no grant, which is 404.
+    expect(gate()(WS, 'forge', null).verdict).toEqual({ code: 404 })
   })
 
   it('never carries a target on a refusal', () => {
@@ -289,8 +291,8 @@ describe('the gate over real grants', () => {
     exports.exportAgent({
       workspaceId: OTHER,
       nodeId: 'node-atlas',
-      visibility: 'public',
-      callers: []
+      visibility: 'identified',
+      callers: ['alice']
     })
     // 'atlas' is exported — but not HERE, and resolution only ever looks here.
     expect(gate()(WS, 'atlas', token).verdict).toEqual({ code: 404 })

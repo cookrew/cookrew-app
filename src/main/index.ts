@@ -72,6 +72,9 @@ import { AgentExportStore } from './agent-export'
 import { CallCredentialService } from './call-credential'
 import { makeCallCeremony } from './call-ceremony'
 import { makeCallGate } from './call-gate'
+import { CallConversationStore } from './call-conversation'
+import { cutCallVersion } from './call-fork'
+import { makeCallSession } from './call-session'
 import { RecoverableStore, planRecovery } from './recoverable'
 import { EventLog } from './event-log'
 import { installProcessGuards } from './process-guards'
@@ -257,6 +260,7 @@ const agents = new AgentRegistry()
  */
 const callCredentials = new CallCredentialService()
 const agentExports = new AgentExportStore()
+const callConversations = new CallConversationStore()
 const boardProbe = createProbeSampler(
   tmuxProbeDeps({
     knownTerminalIds: () => agents.list().map((entry) => entry.id),
@@ -2249,7 +2253,31 @@ app.whenReady().then(() => {
         issuer: callCredentials,
         enrolledKey: (workspaceId, sub) => agentExports.enrolledKey(workspaceId, sub)
       }),
-      slugOf: (workspaceId) => store.slugOf(workspaceId)
+      slugOf: (workspaceId) => store.slugOf(workspaceId),
+      // §10: a call runs against a fork, never the original — see call-fork.ts
+      // for why that is a safety property and not a tidiness one. The fork
+      // engine and the pin store are the SHIPPING ones (the owner's own ⑂
+      // button and the rail's markers), so a marketplace copy cannot drift
+      // from what the canvas shows.
+      session: makeCallSession({
+        conversations: callConversations,
+        cutVersion: (sourceId) =>
+          cutCallVersion(
+            {
+              fork: (id, turnIndex) => forkTerminal(id, turnIndex),
+              turnsOf: (id) => turns.history(id),
+              scrollLineOf: (id) => ptys.get(id)?.paneScrollState().historySize ?? null,
+              pins: {
+                list: (id) => pinStore.list(id),
+                add: (id, pin) => pinStore.add(id, pin)
+              },
+              now: () => Date.now()
+            },
+            sourceId
+          ),
+        forkAlive: (forkId) => store.nodeAcrossWorkspaces(forkId) !== undefined,
+        now: () => Date.now()
+      })
     },
     events,
     agents,

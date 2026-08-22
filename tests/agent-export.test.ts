@@ -88,9 +88,32 @@ describe('AgentExportStore — nothing is callable until it is exported', () => 
 
   it('replaces a grant rather than accumulating two for one node', () => {
     store.exportAgent({ workspaceId: WS, nodeId: NODE, visibility: 'identified', callers: ['alice'] })
-    store.exportAgent({ workspaceId: WS, nodeId: NODE, visibility: 'public', callers: [] })
+    store.exportAgent({ workspaceId: WS, nodeId: NODE, visibility: 'identified', callers: ['bob'] })
     expect(store.exportsIn(WS)).toHaveLength(1)
-    expect(store.exportOf(WS, NODE)?.visibility).toBe('public')
+    expect(store.exportOf(WS, NODE)?.callers).toEqual(['bob'])
+  })
+
+  it('refuses to record a public grant — a live call is never public', () => {
+    // The gate keeps its public branch and the registry uses it: a free
+    // DOWNLOAD is discovery. A call is a stranger running compute on the
+    // owner's machine, and with no subject there is nothing to key a
+    // conversation on, so anonymous callers would share one fork's transcript.
+    expect(() =>
+      store.exportAgent({ workspaceId: WS, nodeId: NODE, visibility: 'public', callers: [] })
+    ).toThrow(/never public/)
+    expect(store.exportOf(WS, NODE)).toBeNull()
+  })
+
+  it('drops a public grant already on disk, rather than honouring it', () => {
+    // Refusing the write is not enough on its own: a file written by an older
+    // build, or by hand, must not open a call path this one would refuse.
+    writeRaw(
+      JSON.stringify({
+        enrolled: [],
+        exports: [{ workspaceId: WS, nodeId: NODE, visibility: 'public', callers: [] }]
+      })
+    )
+    expect(store.exportOf(WS, NODE)).toBeNull()
   })
 
   it('withdraws an export immediately', () => {
