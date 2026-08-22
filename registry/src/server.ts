@@ -5,8 +5,10 @@ import { TransparencyLog } from './log'
 import { installPageHtml, originOf } from './install-page'
 import { html, json, readJsonBody } from './http'
 import { handlePublish, handleRotate } from './publish-routes'
+import type { PricingDeps } from './authorize'
 import { publicKeyFromId, verifyManifest } from '../../src/main/preset-publish'
 import type { IdentityService, TokenScope } from './identity'
+import type { Terms } from './terms'
 
 /**
  * REGISTRY SERVER (P2-A1) — routes only. Every answer is chosen by a decision
@@ -21,6 +23,12 @@ import type { IdentityService, TokenScope } from './identity'
 export type Verdict =
   | { code: 200 }
   | { code: 401; challenge: string }
+  /**
+   * M2-A1. The ONE variant payment adds. Everything else — routes, headers, the
+   * client's retry loop, the log — is untouched, which is the claim the M1
+   * design note made and this slice had to keep true.
+   */
+  | { code: 402; terms: Terms }
   | { code: 403; reason: string }
   | { code: 404 }
 
@@ -37,6 +45,12 @@ export interface RegistryDeps {
   authorize?: (presetId: string, request: IncomingMessage) => Verdict
   /** Present from A2: enrolment and assertion routes mount only when it is. */
   identity?: IdentityService
+  /**
+   * M2-A1. Present → this deployment can price presets and the gate can answer
+   * 402. Absent → it sells nothing and behaves exactly as M1 did, which is what
+   * keeps every M1 test meaningful rather than merely still-passing.
+   */
+  pricing?: PricingDeps
   /**
    * DEV MODE. Mounts /v1/dev/* — a credential list and a reset, for a gate
    * matrix that must start from a known state. Off by default and never a
@@ -76,6 +90,10 @@ export function createRegistry(deps: RegistryDeps): Server {
     store,
     log,
     identity: deps.identity,
+    // M2-A1: present only when this deployment prices things. A publish of a
+    // priced manifest into a registry that sells nothing is refused rather
+    // than quietly stored as if it were free.
+    payouts: deps.pricing?.payouts,
     verifyManifest: (manifest: PresetManifest): boolean => {
       try {
         return verifyManifest(manifest, publicKeyFromId(manifest.author.keyId))
@@ -184,7 +202,17 @@ export function createRegistry(deps: RegistryDeps): Server {
           verdict.code === 401
             ? { 'www-authenticate': `WebAuthn realm="market", challenge=${verdict.challenge}` }
             : {}
-        json(response, verdict.code, verdict.code === 403 ? { reason: verdict.reason } : {}, headers)
+        // 402 carries its terms, 403 its reason. Both are machine values: per
+        // R14 nothing in a response body is a sentence, and Velvet's
+        // mkt.pay.* strings interpolate from the terms rather than reading
+        // anything we wrote here.
+        const body =
+          verdict.code === 403
+            ? { reason: verdict.reason }
+            : verdict.code === 402
+              ? { terms: verdict.terms }
+              : {}
+        json(response, verdict.code, body, headers)
         return
       }
       const manifest = store.getManifest(id)
@@ -320,9 +348,25 @@ export function createRegistry(deps: RegistryDeps): Server {
             ? ['GET /v1/dev/identities', 'DELETE /v1/dev/identities']
             : [])
         ],
+        // M2-A1. Advertised so a harness knows the gate can answer 402 without
+        // discovering it from a preset that happens to be priced.
+        payments: deps.pricing === undefined
+          ? { served: false, note: 'this deployment prices nothing; the gate answers 200/401/403 only' }
+          : {
+              served: true,
+              on: 'GET /v1/presets/:id/manifest',
+              asset: 'USDC',
+              chain: deps.pricing.config.chain,
+              termsTtlMs: deps.pricing.config.ttlMs,
+              // Stated in the contract, not only in a design note: the money
+              // path is buyer → author and this process is never in it. A
+              // harness can assert it, and an operator can read it.
+              custody: 'none — funds move buyer to author; the registry never holds them'
+            },
         // Named so a harness does not build fixtures against a route that is
         // never going to exist. Payment RETRIES the manifest GET with an
         // X-Payment header (spec §4); there is deliberately no confirm endpoint.
+        // STILL TRUE IN M2, and it has to stay true: 402 mounts on the gate.
         notServed: { '/v1/pay': 'never — M2 mounts 402 on the manifest gate itself' }
       })
       return

@@ -163,6 +163,17 @@ export class RegistryStore {
     return this.entry(id)?.visibility ?? null
   }
 
+  /**
+   * The identity that published this preset, or null.
+   *
+   * M2 needs it to answer "who gets paid": the payout address is keyed to the
+   * identity, not to the author key, because keys rotate (R20) and a payout
+   * binding that rotated with them would go stale exactly when money was moving.
+   */
+  identityOf(id: string): string | null {
+    return this.entry(id)?.identityId ?? null
+  }
+
   /** Every stored preset, newest version first within a lineage. */
   list(): PresetSummary[] {
     let files: string[]
