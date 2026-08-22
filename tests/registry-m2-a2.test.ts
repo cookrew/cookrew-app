@@ -15,9 +15,15 @@ import {
   PAYMENT_FAILURES,
   encodePaymentProof,
   isPaymentFailure,
+  isRetryable,
+  needsFreshQuote,
   type PaymentFailure
 } from '../registry/src/payment'
-import { devFacilitator, DEV_REFUSE_PREFIX } from '../registry/src/facilitator-dev'
+import {
+  devFacilitator,
+  DEV_REFUSE_PREFIX,
+  DEV_UNREACHABLE_PREFIX
+} from '../registry/src/facilitator-dev'
 import type { Facilitator, SettlementRequest } from '../registry/src/facilitator'
 import { FORBIDDEN_REASONS } from '../src/shared/preset-manifest'
 import { buildManifest, signManifest } from '../src/main/preset-publish'
@@ -252,6 +258,15 @@ describe('C16 — the three reasons are DISTINCT and each CONSTRUCTIBLE', () => 
       const proof = proofFor(terms)
       expect((await gate(id, token, proof)).status).toBe(200)
       return reasonOf(await gate(id, token, proof))
+    },
+    async unverifiable(): Promise<string | undefined> {
+      const id = seed('Pro Toolkit')
+      const token = await downloadToken()
+      const terms = await quote(id, token)
+      facilitatorVerdict = () => ({ ok: false as const, reason: 'unverifiable' as const })
+      const reason = await reasonOf(await gate(id, token, proofFor(terms)))
+      facilitatorVerdict = () => ({ ok: true })
+      return reason
     }
   }
 
@@ -267,11 +282,21 @@ describe('C16 — the three reasons are DISTINCT and each CONSTRUCTIBLE', () => 
     expect(await construct.replayed()).toBe('replayed')
   })
 
-  it('DOES NOT COLLAPSE: three constructions, three different reasons', async () => {
+  it('constructs `unverifiable` from a facilitator that will not answer', async () => {
+    expect(await construct.unverifiable()).toBe('unverifiable')
+  })
+
+  it('DOES NOT COLLAPSE: four constructions, four different reasons', async () => {
     // The gate itself. If any pair ever became indistinguishable this is the
-    // assertion that fails, and it fails loudly rather than by omission.
-    const reasons = [await construct.invalid(), await construct.expired(), await construct.replayed()]
-    expect(new Set(reasons).size).toBe(3)
+    // assertion that fails, and it fails loudly rather than by omission —
+    // which is what caught expired collapsing into invalid.
+    const reasons = [
+      await construct.invalid(),
+      await construct.expired(),
+      await construct.replayed(),
+      await construct.unverifiable()
+    ]
+    expect(new Set(reasons).size).toBe(4)
     expect(reasons.sort()).toEqual([...PAYMENT_FAILURES].sort())
   })
 
@@ -457,5 +482,156 @@ describe('the dev facilitator makes each case constructible against the real bin
       identityId: IDENTITY, presetId: 'p', nonce: 'n'
     }
     expect(dev.settle(request)).toEqual({ ok: false, reason: 'invalid' })
+  })
+})
+
+/* ------------------------ the fourth reason: our outage is not their fault --- */
+
+describe('unverifiable — a fact about US, never about the buyer\'s payment', () => {
+  const unreachable = () => {
+    facilitatorVerdict = () => ({ ok: false as const, reason: 'unverifiable' as const })
+  }
+
+  it('answers a DISTINCT reason when the facilitator cannot be reached', async () => {
+    // Ruled by Commander, 2026-08-22. Reporting our verifier being down as
+    // "your payment is invalid" tells someone who may have already parted with
+    // money that their money is bad — and teaches them to distrust a receipt
+    // they are holding.
+    const id = seed('Pro Toolkit')
+    const token = await downloadToken()
+    const terms = await quote(id, token)
+    unreachable()
+    const res = await gate(id, token, proofFor(terms))
+    expect(res.status).toBe(402)
+    expect(await reasonOf(res)).toBe('unverifiable')
+  })
+
+  it('is distinguishable ON THE WIRE from invalid, because the next action differs', async () => {
+    // invalid: stop and check your wallet. unverifiable: try again, yours may
+    // be fine. Two different instructions, so two different answers.
+    const id = seed('Pro Toolkit')
+    const token = await downloadToken()
+
+    const a = await quote(id, token)
+    facilitatorVerdict = () => ({ ok: false as const, reason: 'invalid' as const })
+    const refused = (await (await gate(id, token, proofFor(a))).json()) as {
+      reason: string
+      retryable: boolean
+    }
+
+    const b = await quote(id, token)
+    unreachable()
+    const outage = (await (await gate(id, token, proofFor(b))).json()) as {
+      reason: string
+      retryable: boolean
+    }
+
+    expect(refused.reason).not.toBe(outage.reason)
+    expect(refused.retryable).toBe(false)
+    expect(outage.retryable).toBe(true)
+  })
+
+  it('carries retryable as a BOOLEAN, so a client that never heard of it still retries', async () => {
+    // The M1 forward-compat rule renders an unknown reason as a sentence — but
+    // retryability cannot be guessed from a token, and guessing wrong is
+    // exactly the lie this reason exists to prevent.
+    const id = seed('Pro Toolkit')
+    const token = await downloadToken()
+    const terms = await quote(id, token)
+    unreachable()
+    const body = (await (await gate(id, token, proofFor(terms))).json()) as {
+      retryable: boolean
+    }
+    expect(body.retryable).toBe(true)
+  })
+
+  it('does NOT hand back a fresh quote — that would invite paying twice', async () => {
+    // The money may already have moved. A new nonce would read as "pay again".
+    const id = seed('Pro Toolkit')
+    const token = await downloadToken()
+    const terms = await quote(id, token)
+    unreachable()
+    const body = (await (await gate(id, token, proofFor(terms))).json()) as { terms: Terms }
+    expect(body.terms.nonce).toBe(terms.nonce)
+    expect(body.terms.expiry).toBe(terms.expiry)
+  })
+
+  it('leaves the nonce spendable, so the SAME proof succeeds once we recover', async () => {
+    const id = seed('Pro Toolkit')
+    const token = await downloadToken()
+    const terms = await quote(id, token)
+    const proof = proofFor(terms)
+    unreachable()
+    expect((await gate(id, token, proof)).status).toBe(402)
+    facilitatorVerdict = () => ({ ok: true })
+    expect((await gate(id, token, proof)).status).toBe(200)
+  })
+
+  it('never mistakes an outage for a refusal: it is a 402, never a 403', async () => {
+    const id = seed('Pro Toolkit')
+    const token = await downloadToken()
+    const terms = await quote(id, token)
+    unreachable()
+    expect((await gate(id, token, proofFor(terms))).status).toBe(402)
+  })
+
+  it('a REPLAY also refuses a fresh quote, for the same reason', async () => {
+    // It certainly bought something already. Handing over a new nonce would be
+    // an invitation to buy it twice.
+    const id = seed('Pro Toolkit')
+    const token = await downloadToken()
+    const terms = await quote(id, token)
+    const proof = proofFor(terms)
+    expect((await gate(id, token, proof)).status).toBe(200)
+    const body = (await (await gate(id, token, proof)).json()) as {
+      reason: string
+      terms: Terms
+      retryable: boolean
+    }
+    expect(body.reason).toBe('replayed')
+    expect(body.terms.nonce).toBe(terms.nonce)
+    expect(body.retryable).toBe(false)
+  })
+
+  it('DOES hand back a fresh quote when paying again IS the next step', async () => {
+    const id = seed('Pro Toolkit')
+    const token = await downloadToken()
+    const terms = await quote(id, token)
+    clock += TTL + 1
+    const body = (await (await gate(id, token, proofFor(terms))).json()) as {
+      reason: string
+      terms: Terms
+    }
+    expect(body.reason).toBe('expired')
+    expect(body.terms.nonce).not.toBe(terms.nonce)
+  })
+
+  it('four reasons now, still all distinct and none shared with the 403 vocabulary', () => {
+    expect(new Set(PAYMENT_FAILURES).size).toBe(4)
+    for (const reason of PAYMENT_FAILURES) {
+      expect([reason, (FORBIDDEN_REASONS as readonly string[]).includes(reason)]).toEqual([
+        reason,
+        false
+      ])
+    }
+    // Exactly one is retryable, and exactly the two that do not need a new
+    // quote are the two where paying again is not the next step.
+    expect(PAYMENT_FAILURES.filter(isRetryable)).toEqual(['unverifiable'])
+    expect(PAYMENT_FAILURES.filter((r) => !needsFreshQuote(r)).sort()).toEqual(
+      ['replayed', 'unverifiable'].sort()
+    )
+  })
+
+  it('is constructible against the REAL binary, like the other three', () => {
+    const dev = devFacilitator()
+    const request: SettlementRequest = {
+      tx: `${DEV_UNREACHABLE_PREFIX}down`, payTo: PAYEE, amount: '12.00', asset: 'USDC',
+      chain: 'base', identityId: IDENTITY, presetId: `sha256:${'a'.repeat(64)}`, nonce: 'n'
+    }
+    expect(dev.settle(request)).toEqual({ ok: false, reason: 'unverifiable' })
+    expect(dev.settle({ ...request, tx: `${DEV_REFUSE_PREFIX}no` })).toEqual({
+      ok: false,
+      reason: 'invalid'
+    })
   })
 })

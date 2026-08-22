@@ -602,7 +602,8 @@ describe('GATE — only a GET may ever be answered 402', () => {
         },
         bindingOf: (n: string, now: number) => pricing.nonces.bindingOf(n, now),
         stateOf: (n: string, now: number) => pricing.nonces.stateOf(n, now),
-        spend: (n: string, now: number) => pricing.nonces.spend(n, now)
+        spend: (n: string, now: number) => pricing.nonces.spend(n, now),
+        expiryOf: (n: string) => pricing.nonces.expiryOf(n)
       }
     }
     const headAuthorize = makeAuthorize(store, identity, counting)

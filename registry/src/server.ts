@@ -29,7 +29,7 @@ export type Verdict =
    * client's retry loop, the log — is untouched, which is the claim the M1
    * design note made and this slice had to keep true.
    */
-  | { code: 402; terms: Terms; reason?: PaymentFailure }
+  | { code: 402; terms: Terms; reason?: PaymentFailure; retryable?: boolean }
   | { code: 403; reason: string }
   | { code: 404 }
 
@@ -215,7 +215,9 @@ export function createRegistry(deps: RegistryDeps): Server {
                   terms: verdict.terms,
                   // Absent on the first ask — not having paid yet is not a
                   // failure — and present only when a proof was refused.
-                  ...(verdict.reason !== undefined ? { reason: verdict.reason } : {})
+                  ...(verdict.reason !== undefined
+                    ? { reason: verdict.reason, retryable: verdict.retryable === true }
+                    : {})
                 }
               : {}
         json(response, verdict.code, body, headers)

@@ -101,6 +101,14 @@ export interface PaymentNonces {
   stateOf(nonce: string, now: number): NonceState
   /** Mark spent. False if it was already spent — the caller has a replay. */
   spend(nonce: string, now: number): boolean
+  /**
+   * When this nonce lapses, or null if we no longer hold it.
+   *
+   * Needed so an answer that must NOT mint a fresh quote can still echo the
+   * offer the buyer already holds — `unverifiable` and `replayed` both hand
+   * back the terms they have rather than a new invitation to pay.
+   */
+  expiryOf(nonce: string): number | null
 }
 
 export class MemoryPaymentNonces implements PaymentNonces {
@@ -130,6 +138,10 @@ export class MemoryPaymentNonces implements PaymentNonces {
     const entry = this.issued.get(nonce)
     if (entry === undefined || entry.exp < now) return null
     return entry.binding
+  }
+
+  expiryOf(nonce: string): number | null {
+    return this.issued.get(nonce)?.exp ?? null
   }
 
   stateOf(nonce: string, now: number): NonceState {

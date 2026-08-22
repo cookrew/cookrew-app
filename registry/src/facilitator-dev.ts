@@ -24,10 +24,21 @@ import type { Facilitator, SettlementRequest, SettlementResult } from './facilit
  */
 export const DEV_REFUSE_PREFIX = 'refuse-'
 
+/**
+ * A tx beginning with this settles as UNVERIFIABLE — the stand-in for a
+ * facilitator that is down. Constructible on purpose: "we could not check" is
+ * the reason a buyer is most likely to meet on a bad day and the one with the
+ * most expensive wrong answer, so it must be drivable against the real binary.
+ */
+export const DEV_UNREACHABLE_PREFIX = 'unreachable-'
+
 export function devFacilitator(): Facilitator {
   return {
     settle(request: SettlementRequest): SettlementResult {
       if (request.tx.startsWith(DEV_REFUSE_PREFIX)) return { ok: false, reason: 'invalid' }
+      if (request.tx.startsWith(DEV_UNREACHABLE_PREFIX)) {
+        return { ok: false, reason: 'unverifiable' }
+      }
       // Everything the terms named must be present and non-empty. It proves
       // nothing about a transfer; it does prove the gate handed the facilitator
       // a complete, bound request rather than a partly-filled one — which is a

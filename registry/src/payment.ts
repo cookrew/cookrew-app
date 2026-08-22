@@ -16,6 +16,15 @@ import { purchaseBinding, type PaymentNonces, type PriceFacts } from './terms'
  *             wrong with them or with us; the price simply has to be re-quoted.
  *   replayed  this proof already bought something. Not an accusation by itself —
  *             a retry looks identical from here — but it must not buy twice.
+ *   unverifiable
+ *             WE could not check. The facilitator is unreachable or would not
+ *             answer, so nothing is known about the buyer's money — least of all
+ *             that it is bad. Reporting our outage as a fact about their payment
+ *             is a lie that costs someone real money and teaches them to
+ *             distrust a receipt they are holding. Ruled distinct by Commander,
+ *             2026-08-22, and the whole reason it exists is that the next action
+ *             differs: invalid means stop and check your wallet; unverifiable
+ *             means try again, yours may be fine.
  *
  * NEVER 403. 402 is caller-recoverable and 403 is not, which is the whole reason
  * the codes bind cleanly (spec §2), and D4/R9's rule that a client never loops
@@ -24,7 +33,7 @@ import { purchaseBinding, type PaymentNonces, type PriceFacts } from './terms'
  * to stop trying and send the buyer to an author who cannot help.
  */
 
-export type PaymentFailure = 'invalid' | 'expired' | 'replayed'
+export type PaymentFailure = 'invalid' | 'expired' | 'replayed' | 'unverifiable'
 
 /**
  * The vocabulary, listed so it can be asserted DISJOINT from the 403 reasons.
@@ -32,7 +41,33 @@ export type PaymentFailure = 'invalid' | 'expired' | 'replayed'
  * disambiguates them, and disjointness means even a client that ignored the
  * status could not mistake one for the other.
  */
-export const PAYMENT_FAILURES = ['invalid', 'expired', 'replayed'] as const
+export const PAYMENT_FAILURES = ['invalid', 'expired', 'replayed', 'unverifiable'] as const
+
+/**
+ * IS THE BUYER'S CORRECT NEXT MOVE TO TRY AGAIN WITH THE SAME PROOF?
+ *
+ * Carried on the wire as a boolean beside the reason, and that redundancy is
+ * the point: a client that has never heard of a reason we add later still
+ * knows whether to retry. The M1 forward-compat rule says an unknown reason
+ * renders as a sentence — but retryability cannot be guessed from a token, and
+ * guessing it wrong is what tells somebody their payment failed when it did not.
+ */
+export function isRetryable(reason: PaymentFailure): boolean {
+  return reason === 'unverifiable'
+}
+
+/**
+ * SHOULD THE ANSWER CARRY A FRESH QUOTE?
+ *
+ * Only when paying again is genuinely the next step. `unverifiable` and
+ * `replayed` must NOT mint one: the first means the money may already have
+ * moved and we simply cannot see it, the second means it certainly has. In both
+ * cases a new nonce is an invitation to pay twice for one preset, which is a
+ * worse outcome than the failure it was trying to be helpful about.
+ */
+export function needsFreshQuote(reason: PaymentFailure): boolean {
+  return reason === 'invalid' || reason === 'expired'
+}
 
 export function isPaymentFailure(value: string): value is PaymentFailure {
   return (PAYMENT_FAILURES as readonly string[]).includes(value)

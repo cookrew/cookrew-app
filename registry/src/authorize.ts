@@ -6,7 +6,7 @@ import type { Terms } from './terms'
 import { priceFor, quoteFrom, type QuoteDeps } from './terms'
 import type { PayoutStore } from './payouts'
 import type { Facilitator } from './facilitator'
-import { verifyPayment } from './payment'
+import { needsFreshQuote, isRetryable, parsePaymentProof, verifyPayment } from './payment'
 
 /**
  * THE DECISION FUNCTION (P2-A2) — the only place an answer is chosen.
@@ -130,12 +130,24 @@ export function makeAuthorize(
             price
           }
         )
-        // 402 again, with a reason, and NEVER 403 — the payment did not happen,
-        // which is precisely what 402 means. A 403 would tell the client to
-        // stop retrying something that is genuinely retryable. A fresh quote
-        // rides along, because whatever went wrong, the old nonce is no longer
-        // one they can use.
-        if (!paid.ok) return { code: 402, terms: offer(), reason: paid.reason }
+        // 402 again, with a reason, and NEVER 403 — the payment did not happen
+        // (or we cannot tell), which is precisely what 402 means. A 403 would
+        // tell the client to stop retrying something genuinely retryable.
+        //
+        // A FRESH QUOTE ONLY WHEN PAYING AGAIN IS THE NEXT STEP. On
+        // `unverifiable` the money may already have moved and we simply cannot
+        // see it; on `replayed` it certainly has. Minting a new nonce for
+        // either would be an invitation to pay twice for one preset — so those
+        // two echo the offer the buyer already holds instead.
+        if (!paid.ok) {
+          const held = parsePaymentProof(Array.isArray(header) ? header[0] : header)
+          const heldExpiry = held === null ? null : pricing.nonces.expiryOf(held.nonce)
+          const terms: Terms =
+            needsFreshQuote(paid.reason) || held === null || heldExpiry === null
+              ? offer()
+              : { ...price, nonce: held.nonce, expiry: heldExpiry }
+          return { code: 402, terms, reason: paid.reason, retryable: isRetryable(paid.reason) }
+        }
         // Settled. Fall through to serve: the client retried the same
         // idempotent GET and this is simply the answer continuing.
       } else if (manifest?.pricing !== undefined) {
