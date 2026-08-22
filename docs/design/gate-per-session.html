@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>④ The gate per WorkspaceSession — decisions of record</title>
+<style>
+  :root {
+    --bg: #faf8f4; --fg: #2d2a20; --dim: #6b6455; --rule: #e2dccf;
+    --card: #fffdf9; --accent: #b4531a; --good: #2f6b3a; --bad: #9b2c2c;
+    --code-bg: #f2ede3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17150f; --fg: #ece6d8; --dim: #9a917f; --rule: #322d22;
+      --card: #1e1b14; --accent: #e08a4a; --good: #7fbc8c; --bad: #e08585;
+      --code-bg: #241f17;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 40px 24px 80px;
+    background: var(--bg); color: var(--fg);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .sub { color: var(--dim); font-size: 14px; margin: 0 0 36px; }
+  h2 {
+    font-size: 15px; text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--accent); margin: 44px 0 12px;
+    padding-bottom: 6px; border-bottom: 1px solid var(--rule);
+  }
+  h3 { font-size: 16px; margin: 24px 0 8px; }
+  p { margin: 0 0 14px; }
+  code {
+    background: var(--code-bg); padding: 1px 5px; border-radius: 4px;
+    font: 13.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0 20px; font-size: 14.5px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--dim); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .card {
+    background: var(--card); border: 1px solid var(--rule);
+    border-radius: 10px; padding: 16px 20px; margin: 18px 0;
+  }
+  .card.ruling { border-left: 3px solid var(--accent); }
+  .card h3 { margin-top: 0; }
+  .tag {
+    display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; padding: 2px 7px; border-radius: 4px;
+    background: var(--accent); color: var(--bg); vertical-align: 2px; margin-right: 8px;
+  }
+  .no { color: var(--bad); font-weight: 600; }
+  .yes { color: var(--good); font-weight: 600; }
+  ul { margin: 0 0 14px; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  svg { display: block; max-width: 100%; height: auto; margin: 20px auto; }
+  footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule);
+           color: var(--dim); font-size: 13px; }
+  details { margin: 12px 0; }
+  summary { cursor: pointer; color: var(--accent); font-size: 14.5px; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>④ The gate per WorkspaceSession</h1>
+<p class="sub">Decisions of record for the remote-call lane · branch <code>feat/gate-per-session</code> · rebased on dev @ 8e271e5 · 2026-08-22</p>
+
+<p>This note exists so that four rulings cannot be re-litigated from the spec text alone.
+Each of them <em>contradicts a plain reading</em> of <code>marketplace-architecture.html</code>,
+and each is the ruling anyway, for reasons that live in the code rather than the spec.
+Read this before you read §9/§10.</p>
+
+<h2>1 · Trust root — owner-as-issuer</h2>
+
+<div class="card ruling">
+<h3><span class="tag">Ruling</span>Each app instance issues and verifies its own call credentials.</h3>
+<p>The registry stays its own issuer. It becomes a <em>second accepted issuer</em> in M3 —
+an addition, not a migration, because <code>decideGate</code> takes the issuer as a parameter.</p>
+</div>
+
+<p>§9 says download and live call are “one protocol, two resources” and share the exact same
+gate state machine. That is true and it is implemented — <em>one</em> decision function, two
+bindings. What §9 does not say, and what had to be ruled, is <strong>who signs the token</strong>.</p>
+
+<table>
+  <tr><th>Option</th><th>What it costs</th><th></th></tr>
+  <tr>
+    <td><strong>A · Owner-as-issuer</strong><br><span style="color:var(--dim)">each instance is its own RP</span></td>
+    <td>The caller obtains a credential per owner. Entitlement (“I bought this”) must be
+        conveyed to the owner — a signed receipt, which is M3's job. M1's entitlement source
+        is a local allow-list the owner controls.</td>
+    <td class="yes">Chosen</td>
+  </tr>
+  <tr>
+    <td><strong>B · Registry-as-issuer</strong><br><span style="color:var(--dim)">app verifies registry-signed tokens</span></td>
+    <td>Blocks ④ on hosting that does not exist: no domain, no TLS, nothing deployed. Worse,
+        it puts an online dependency on the registry into <em>every</em> call — including a
+        call between two machines on the same LAN. That stays a worse product after hosting lands.</td>
+    <td class="no">Rejected</td>
+  </tr>
+</table>
+
+<p>This needed ruling <em>before</em> S1 because a token's issuer cannot be retconned once
+phones and CLIs hold credentials. The answer is the one that keeps the app self-sufficient.</p>
+
+<h2>2 · The decision, and the one place it lives</h2>
+
+<p><code>src/shared/gate.ts</code> · <code>decideGate</code>. Transport-free, disk-free,
+clock-free: a pure function of facts its caller looked up. The registry binds it in
+<code>registry/src/authorize.ts</code>; the app binds it in <code>src/main/call-authorize.ts</code>.</p>
+
+<svg viewBox="0 0 800 132" role="img" aria-label="Gate order: exists, public, identity, covers, entitled, priced, serve">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <g font-family="ui-monospace, Menlo, monospace" font-size="12" color="currentColor">
+    <g stroke="currentColor" stroke-width="1.4" opacity="0.55" marker-end="url(#a)">
+      <line x1="92"  y1="46" x2="126" y2="46"/>
+      <line x1="204" y1="46" x2="238" y2="46"/>
+      <line x1="316" y1="46" x2="350" y2="46"/>
+      <line x1="428" y1="46" x2="462" y2="46"/>
+      <line x1="540" y1="46" x2="574" y2="46"/>
+      <line x1="652" y1="46" x2="686" y2="46"/>
+    </g>
+    <g fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.85">
+      <rect x="12"  y="30" width="80" height="32" rx="6"/>
+      <rect x="126" y="30" width="78" height="32" rx="6"/>
+      <rect x="238" y="30" width="78" height="32" rx="6"/>
+      <rect x="350" y="30" width="78" height="32" rx="6"/>
+      <rect x="462" y="30" width="78" height="32" rx="6"/>
+      <rect x="574" y="30" width="78" height="32" rx="6" stroke-dasharray="4 3" opacity="0.5"/>
+      <rect x="686" y="30" width="78" height="32" rx="6"/>
+    </g>
+    <g fill="currentColor" text-anchor="middle">
+      <text x="52"  y="50">exists?</text>
+      <text x="165" y="50">public?</text>
+      <text x="277" y="50">identity?</text>
+      <text x="389" y="50">covers?</text>
+      <text x="501" y="50">entitled?</text>
+      <text x="613" y="50" opacity="0.55">priced?</text>
+      <text x="725" y="50">serve</text>
+    </g>
+    <g fill="currentColor" text-anchor="middle" font-size="11" opacity="0.7">
+      <text x="52"  y="84">404</text>
+      <text x="165" y="84">200</text>
+      <text x="277" y="84">401 + challenge</text>
+      <text x="389" y="84">403 + reason</text>
+      <text x="501" y="84">403 + reason</text>
+      <text x="613" y="84" opacity="0.6">402 · M2</text>
+      <text x="725" y="84">200</text>
+    </g>
+    <text x="613" y="106" text-anchor="middle" fill="currentColor" font-size="10.5" opacity="0.5">not taken by the call path — R5</text>
+  </g>
+</svg>
+
+<p><strong>Extraction proof.</strong> <code>makeAuthorize(store, identity)</code> kept its exact
+signature and the registry's A1–A4 suites (145 tests) pass <em>untouched</em>. That is how we
+know the decision moved without being altered.</p>
+
+<h2>3 · The C1 rule — absence is never permission</h2>
+
+<div class="card ruling">
+<h3><span class="tag">Ruling</span>The call gate is an independent AND. It never delegates to the pairing gate, never trusts absence, and never distinguishes tiers by listener.</h3>
+</div>
+
+<p>The mobile listener binds <code>0.0.0.0</code>: <strong>the LAN tier and the internet tier
+are the same socket</strong>, so which listener bytes arrived on tells you nothing. And the
+pairing gate (C1) deliberately lets everything through when no token is configured — an escape
+that exists for the loopback embedder. A gate that consulted either would inherit both problems.</p>
+
+<p>So <code>decideGate</code> is <em>shaped</em> against it. There is exactly one line where a
+credential becomes claims, and it collapses “none presented” and “presented and bad” into a
+single value:</p>
+
+<p><code>const claims = credential === null ? null : issuer.verifyToken(credential)</code></p>
+
+<p>Nothing downstream can tell those apart, so nothing downstream can ever be written to prefer
+one. There is no <code>if (no credential)</code> for a permissive branch to be added to later.
+The only unauthenticated 200 is <code>public</code>, and that is reachable solely because a
+resource's owner published it as such. Two further guards in the same spirit:</p>
+
+<ul>
+  <li><code>entitled</code> is a <strong>required</strong> parameter with no default. M1's honest
+      answer is <code>() =&gt; null</code>, but a binding has to write it down. A default would let a
+      future binding be permissive by <em>forgetting a field</em>.</li>
+  <li><code>exportedVisibility</code> returns <code>null</code> — not <code>'public'</code> — for
+      anything it cannot positively establish. An agent nobody exported is not callable.</li>
+</ul>
+
+<h2>4 · Workspace-scoped credentials, and the 403 that proves it</h2>
+
+<p>Today there is one pairing token for the whole app, which is why Magpie's R2 gate could not
+even be <em>expressed</em>: “this credential may call agents in <code>playground</code>, and only
+there” had no representation. <code>CallCredentialService.mint(sub, workspace)</code> puts the
+workspace inside the <em>signed</em> claims, and the workspace id is a required argument with no
+default — an unscoped-by-omission credential is exactly the shape being replaced, so there is no
+way to ask for one.</p>
+
+<table>
+  <tr><th>Presented</th><th>Answer</th><th>Why</th></tr>
+  <tr><td>Nothing, or junk</td><td>401 + challenge</td><td>Indistinguishable by construction.</td></tr>
+  <tr><td>Genuine credential for another workspace</td><td>403 <code>workspace</code></td>
+      <td>D4/R9. Re-authenticating with the same authenticator at the same origin cannot fix it,
+          so a 401 would send the client round a loop that cannot terminate.</td></tr>
+  <tr><td>Genuine credential, wrong scope</td><td>403 <code>scope</code></td>
+      <td>R26 — the one 403 a client resolves on its own, so it is named precisely.</td></tr>
+  <tr><td>Exhausted prepaid balance</td><td>403 <code>balance_empty</code></td>
+      <td>R5 — the live call never answers 402. A wallet sheet must not interrupt a conversation.</td></tr>
+</table>
+
+<p><strong>Why scope is checked at the gate and not at verification.</strong>
+<code>verifyToken</code> proves a credential is genuine and current; it deliberately does not
+check whether it is the <em>right</em> one for the resource. Folding that in would collapse the
+403 into a 401 and make the branch unreachable — the exact bug a reviewer found in the registry
+at <code>467bcfd</code>, where the mint side could only produce one scope so the refusal could
+never fire over HTTP.</p>
+
+<h2>5 · Fork granularity — per caller-conversation</h2>
+
+<div class="card ruling">
+<h3><span class="tag">Ruling</span>A fork is cut per caller-conversation, not per HTTP call.</h3>
+<p>The first call from a caller mints the fork and cuts <strong>one</strong> pin, <code>v<sub>n</sub></code>.
+Subsequent calls on the same conversation land on that fork. R12's per-turn drawdown is unaffected.</p>
+</div>
+
+<p>§10 says “every import and every remote call forks a copy of the transcript.” Read literally,
+that is per HTTP request, and it is wrong for three reasons:</p>
+
+<ul>
+  <li><strong>Latency.</strong> <code>forkTerminal</code> returns as soon as the card exists; the
+      preamble lands asynchronously via <code>injectWhenReady</code>, after the fresh TUI boots and
+      goes quiet. Per-call forking means a full harness boot before the first token of <em>every
+      turn</em>.</li>
+  <li><strong>It destroys the rail's grammar.</strong> §10's own distinction is that diamonds are
+      session mechanics (ephemeral) and pins are published identity — permanent, named, addressable.
+      A pin per HTTP request makes pins the <em>more</em> numerous and less meaningful of the two.</li>
+  <li><strong>It breaks §10's own update channel.</strong> “Buyers see v3 available on the chip”
+      presumes versions are cut deliberately, not accreted by traffic.</li>
+</ul>
+
+<p><strong>What is bound to what.</strong> The fork belongs to the <em>subject and conversation</em>,
+never to the token. A credential lasts an hour; a conversation may outlast it. Re-asserting
+mid-conversation therefore resumes the same fork instead of cutting a second version pin —
+which is only expressible because <code>GateVerdict</code> carries the verified claims on a 200.</p>
+
+<h2>6 · The fork is safety, not purity</h2>
+
+<p>§10 reads like an invariant about cleanliness: exporting or calling an agent never mutates its
+original session. It is not. It is a <strong>safety</strong> property, and here is the failure it
+prevents:</p>
+
+<div class="card">
+<p><code>/ask</code> is a producer. It acquires the producer lease and delivers the prompt as one
+bracketed paste followed by a delayed Enter, up to 1.5 s later. If that sequence is interrupted
+between the paste and the CR, the pasted text sits <em>unsubmitted</em> in the TUI's input box,
+where the terminal's next submission — anyone's — would carry it. <code>ask.ts</code> handles this
+by marking the terminal <strong>CONTAMINATED</strong>, and every submit-capable write then refuses
+until the terminal is restarted. The residue is deliberately not auto-cleared, because no control
+byte this code could send is <em>proof</em> of a clean buffer.</p>
+<p style="margin-bottom:0"><strong>Therefore:</strong> without the fork, an internet caller whose
+connection drops at the wrong moment can brick the owner's live session — refusing the owner's own
+keyboard until they restart the terminal. Remote calls run against a version copy because a
+stranger must not be able to reach the input box the owner is typing into.</p>
+</div>
+
+<h2>7 · Slices</h2>
+
+<table>
+  <tr><th>Slice</th><th>What it lands</th><th>Status</th></tr>
+  <tr><td><strong>S1</strong></td>
+      <td>The shared decision, issuer-parameterized. Registry rebound onto it, signature unchanged.
+          The owner's issuer: workspace-scoped mint/verify + single-use challenges. The call binding.</td>
+      <td class="yes">green</td></tr>
+  <tr><td><strong>S2</strong></td>
+      <td><code>/&lt;slug&gt;/agents/&lt;name&gt;/ask</code> becomes addressable and answers the verdict
+          <em>only</em> — 404 / 401 / 403, no turn run. Name→node resolution through the
+          <code>NODE_ROUTES</code> choke point. The ceremony route that spends a challenge.</td>
+      <td>next</td></tr>
+  <tr><td><strong>S3</strong></td>
+      <td>The fork <em>and its pin, together</em>. On 200: cut the pin via <code>PinStore</code>, fork
+          the transcript, never touch the original.</td>
+      <td>—</td></tr>
+  <tr><td><strong>S4</strong></td>
+      <td>The turn: run the ask against the fork; register it as in-flight work so a parked workspace
+          cannot drain mid-call and a cold one hydrates.</td>
+      <td>—</td></tr>
+  <tr><td><strong>S5</strong></td>
+      <td>The prepaid-balance seam (R5/R12) and an honest <code>notServed</code> self-description.</td>
+      <td>—</td></tr>
+</table>
+
+<h3>The pin lands with the call, not after it</h3>
+<p>Magpie's R4/R5 stay RED and unprovable if the call ships before the pin — a call that answers
+without cutting a version is a call whose §10 invariant nothing can check. S3 is therefore not
+splittable into “fork now, pin later”.</p>
+
+<h2>8 · Constraints S2 must honour</h2>
+
+<ul>
+  <li><strong>A 401 is a promise.</strong> A1 refused to answer 401 before identity existed, because
+      a 401 invites a ceremony the server cannot complete and lying in a status code is still lying.
+      The route that spends a challenge must therefore mount <em>in the same slice</em> as the first
+      401 the gate can emit. <code>challenge()</code> already mints real single-use nonces so that
+      promise can be kept.</li>
+  <li><strong>Unslugged <code>/agents/…</code> is not a route.</strong> No focus fallback, ever.
+      Callable ⇔ addressable; a call that fell back to the focused workspace would be answered by
+      whichever canvas the owner happened to be looking at.</li>
+  <li><strong>Earn the line on the table.</strong> <code>SCOPE_AWARE</code> is a fail-closed
+      allow-list and <code>NODE_ROUTES</code> is now the single source for scope checks — after
+      <code>fix/slug-seat-routes</code> removed <code>/cwd</code>, “every route on this table is
+      correct by construction” is a fact rather than a claim. The new route joins it by being
+      genuinely scope-aware, not by being added.</li>
+  <li><strong>404, not 403, for out-of-scope existence.</strong> A scoped URL must not confirm what
+      exists outside it — the same rule <code>mobile-server</code> already applies to node routes.</li>
+</ul>
+
+<footer>
+Cookrew · <code>feat/gate-per-session</code> · rebased on dev @ 8e271e5 · 2026-08-22<br>
+Spec: <code>docs/design/marketplace-architecture.html</code> §9 · §10 · §11 · §12 ·
+audit: <code>docs/design/architecture-state-2026-08-22.html</code> §04B ·
+lane: <code>docs/design/multi-instance-refactor.html</code><br>
+Code: <code>src/shared/gate.ts</code> · <code>src/main/call-credential.ts</code> ·
+<code>src/main/call-authorize.ts</code> · <code>registry/src/authorize.ts</code><br>
+<em>docs/ is gitignored — this file is force-added on purpose.</em>
+</footer>
+
+</main>
+</body>
+</html>
