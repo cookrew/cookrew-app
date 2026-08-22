@@ -7,10 +7,18 @@
 // `session_id` is the old one. Everything the detector believes comes from
 // that pair; everything else it refuses.
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   ROTATION_CANDIDATE_CAP,
   ROTATION_MTIME_SLACK_MS,
@@ -21,6 +29,7 @@ import {
   type RotationFs,
   type SessionFileEntry
 } from '../src/main/claude-rotation'
+import { claudeProjectDir } from '../src/main/claude-fork'
 import { withSessionLineage } from '../src/main/session-lineage'
 import { claudeProjectSlug } from '../src/shared/claude-fork'
 
@@ -531,20 +540,85 @@ describe('rotation detection on REAL session files', () => {
     }
   })
 
-  it('follows every recorded rotation to that exact successor, or refuses', async () => {
-    const edges = await realEdges()
-    if (edges.length === 0) return
-    for (const edge of edges) {
-      // The scan works from a terminal's cwd; the project dir is derived from
-      // it, so ask the question the way the app asks it.
-      const cwd = await cwdOfSession(edge.file)
-      if (cwd === null) continue
-      const chain = await resolveRotationChain({ cwd, sessionId: edge.predecessorId })
-      // Refusal is always allowed (ambiguity, liveness, ownership). Landing
-      // somewhere OTHER than the successor the file itself names is not.
-      if (chain !== null) expect(chain[0]).toBe(edge.sessionId)
+  /**
+   * THE CONTRACT, HERMETICALLY — this used to be asserted against the live
+   * corpus and was deterministically WRONG the moment anyone forked a session.
+   *
+   * The old assertion demanded that resolving from a predecessor land on the
+   * successor of whichever edge file the loop happened to be holding. That is
+   * only true when a predecessor has exactly ONE successor. Measured on this
+   * machine while it failed: predecessor 4188d6fa had THREE — 427aa2f7,
+   * 4a74964b, c8c7f77b — because `claude --fork-session` is a thing this repo
+   * does constantly. Two of those three edges could not possibly pass, so the
+   * suite reported a real product bug that was not one, in a test nobody could
+   * fix without the fork in front of them.
+   *
+   * The corpus is built here instead, so the shapes are chosen rather than
+   * inherited from whatever the machine's agents did last night.
+   */
+  describe('resolving a rotation, on a corpus this test owns', () => {
+    let root: string
+
+    beforeEach(() => {
+      root = mkdtempSync(path.join(tmpdir(), 'rotation-corpus-'))
+    })
+    afterEach(() => rmSync(root, { recursive: true, force: true }))
+
+    /** The predecessor's OWN file. resolveRotationChain refuses outright when
+     *  the stale session has no file — a missing binding is a different repair. */
+    function writeStale(id: string): void {
+      const dir = claudeProjectDir(CWD, root)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(path.join(dir, `${id}.jsonl`), `${JSON.stringify({ sessionId: id, cwd: CWD })}\n`)
     }
+
+    /** Write a session file whose head records `own` continuing `predecessor`. */
+    function writeRotation(own: string, predecessor: string): void {
+      const dir = claudeProjectDir(CWD, root)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(path.join(dir, `${own}.jsonl`), `${rotationHead(own, predecessor).join('\n')}\n`)
+    }
+
+    it('lands on the successor when exactly one file claims the predecessor', async () => {
+      writeStale(OLD)
+      writeRotation(NEW, OLD)
+      const chain = await resolveRotationChain({ cwd: CWD, sessionId: OLD, projectsDir: root })
+      expect(chain?.[0]).toBe(NEW)
+    })
+
+    it('never invents a successor no file claims', async () => {
+      writeStale(OLD)
+      writeRotation(NEW, OTHER) // claims a DIFFERENT predecessor
+      const chain = await resolveRotationChain({ cwd: CWD, sessionId: OLD, projectsDir: root })
+      if (chain !== null) expect(chain[0]).not.toBe(NEW)
+    })
+
+    it('a FORK is refused or lands on a real claimant — never elsewhere', async () => {
+      // The case the live corpus grew and the old assertion could not express.
+      const forks = [NEW, '11111111-2222-4333-8444-555555555555']
+      writeStale(OLD)
+      for (const id of forks) writeRotation(id, OLD)
+      const chain = await resolveRotationChain({ cwd: CWD, sessionId: OLD, projectsDir: root })
+      if (chain !== null) expect(forks).toContain(chain[0])
+    })
   })
+
+  /**
+   * THERE IS NO CROSS-FILE ASSERTION AGAINST THE LIVE CORPUS, deliberately.
+   *
+   * Two attempts at one both lied. "Resolves to the successor this edge file
+   * names" is false as soon as a predecessor has more than one successor, and
+   * `--fork-session` produces exactly that. "Resolves to SOME file that records
+   * an edge" is false too: resolveRotationChain also accepts a candidate by
+   * mtime and size when the successor's head records no edge at all — the
+   * replay case this file documents at the top. Both were assertions about
+   * other people's live data, and the answer legitimately changes with whatever
+   * the machine's agents did overnight.
+   *
+   * What the live corpus can honestly witness is each file's own
+   * self-consistency, which is the test above it. The contract for RESOLVING
+   * lives in the owned-corpus describe, where the shapes are chosen.
+   */
 })
 
 /** The cwd a session file stamps on its records, read from its head. */
