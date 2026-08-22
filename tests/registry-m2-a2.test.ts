@@ -10,6 +10,7 @@ import { createRegistry } from '../registry/src/server'
 import { IdentityService, type IdentityConfig } from '../registry/src/identity'
 import { makeAuthorize, type PricingDeps } from '../registry/src/authorize'
 import { PayoutStore } from '../registry/src/payouts'
+import { ReceiptStore } from '../registry/src/receipts'
 import { MemoryPaymentNonces, purchaseBinding, type Terms } from '../registry/src/terms'
 import {
   PAYMENT_FAILURES,
@@ -147,6 +148,7 @@ beforeEach(async () => {
     config: { chain: 'base', ttlMs: TTL },
     nonces: new MemoryPaymentNonces(),
     facilitator: recording,
+    receipts: new ReceiptStore(base),
     now: () => clock
   }
   const s = createRegistry({
@@ -185,6 +187,19 @@ async function quote(id: string, token: string): Promise<Terms> {
   const res = await gate(id, token)
   expect(res.status).toBe(402)
   return ((await res.json()) as { terms: Terms }).terms
+}
+
+/** A second, fully enrolled identity — someone the proof does not belong to. */
+async function strangerToken(): Promise<string> {
+  const stranger = authenticator(`cred-stranger-${settled.length}-${Math.abs(clock % 97)}`)
+  identity.register(stranger.credentialId, stranger.jwk)
+  const minted = (await (
+    await fetch(`${server.url}/v1/identity/assert`, {
+      method: 'POST',
+      body: JSON.stringify({ ...stranger.assert(identity.challenge()), scope: 'download' })
+    })
+  ).json()) as { token: string }
+  return minted.token
 }
 
 const proofFor = (terms: Terms, tx = 'tx-0xabc'): string =>
@@ -237,13 +252,16 @@ describe('C16 — the three reasons are DISTINCT and each CONSTRUCTIBLE', () => 
   /** Build each failure over HTTP and return the reason the gate answered. */
   const construct = {
     async invalid(): Promise<string | undefined> {
-      const id = seed('Pro Toolkit')
+      // A preset each: once a construction BUYS one, its buyer is entitled and
+      // a later quote on the same preset is correctly served rather than
+      // priced. Sharing one preset between them made the later steps see 200.
+      const id = seed('Constructing Invalid')
       const token = await downloadToken()
       await quote(id, token)
       return reasonOf(await gate(id, token, 'not-a-proof'))
     },
     async expired(): Promise<string | undefined> {
-      const id = seed('Pro Toolkit')
+      const id = seed('Constructing Expired')
       const token = await downloadToken()
       const terms = await quote(id, token)
       // The settable TTL earning its keep: no sleeping, and the case is
@@ -252,15 +270,20 @@ describe('C16 — the three reasons are DISTINCT and each CONSTRUCTIBLE', () => 
       return reasonOf(await gate(id, token, proofFor(terms)))
     },
     async replayed(): Promise<string | undefined> {
-      const id = seed('Pro Toolkit')
+      // A3 changed who meets this, and for the better. The RIGHTFUL buyer now
+      // holds a receipt, so their retry is simply served — a replay is no
+      // longer how somebody re-opens what they bought. What remains is the case
+      // that always mattered: a proof presented by somebody it does not belong
+      // to, which is resale and theft rather than a retry.
+      const id = seed('Constructing Replayed')
       const token = await downloadToken()
       const terms = await quote(id, token)
       const proof = proofFor(terms)
       expect((await gate(id, token, proof)).status).toBe(200)
-      return reasonOf(await gate(id, token, proof))
+      return reasonOf(await gate(id, await strangerToken(), proof))
     },
     async unverifiable(): Promise<string | undefined> {
-      const id = seed('Pro Toolkit')
+      const id = seed('Constructing Unverifiable')
       const token = await downloadToken()
       const terms = await quote(id, token)
       facilitatorVerdict = () => ({ ok: false as const, reason: 'unverifiable' as const })
@@ -308,9 +331,10 @@ describe('C16 — the three reasons are DISTINCT and each CONSTRUCTIBLE', () => 
     const terms = await quote(id, token)
     const proof = proofFor(terms)
     await gate(id, token, proof)
-    const replay = await reasonOf(await gate(id, token, proof))
+    const stranger = await strangerToken()
+    const replay = await reasonOf(await gate(id, stranger, proof))
     const invented = await reasonOf(
-      await gate(id, token, encodePaymentProof({ nonce: 'never-issued', tx: 'tx-1' }))
+      await gate(id, stranger, encodePaymentProof({ nonce: 'never-issued', tx: 'tx-1' }))
     )
     expect(replay).toBe('replayed')
     expect(invented).toBe('invalid')
@@ -318,15 +342,29 @@ describe('C16 — the three reasons are DISTINCT and each CONSTRUCTIBLE', () => 
   })
 
   it('still says `replayed` for a proof that bought something and then expired', async () => {
-    // Otherwise a buyer who already paid is told to re-price, which invites
-    // them to pay twice for one preset.
+    // A spent nonce that also lapsed is still a replay, not a stale quote:
+    // "re-price this" would be the wrong instruction for a proof that already
+    // bought something.
     const id = seed('Pro Toolkit')
     const token = await downloadToken()
     const terms = await quote(id, token)
     const proof = proofFor(terms)
     expect((await gate(id, token, proof)).status).toBe(200)
     clock += TTL + 1
-    expect(await reasonOf(await gate(id, token, proof))).toBe('replayed')
+    expect(await reasonOf(await gate(id, await strangerToken(), proof))).toBe('replayed')
+  })
+
+  it('A3: the RIGHTFUL buyer retrying is simply SERVED, not accused', async () => {
+    // The kinder half of the same change. Re-presenting your own proof used to
+    // earn a refusal; now the receipt answers first and you get what you paid
+    // for. A buyer must not be told off for retrying.
+    const id = seed('Pro Toolkit')
+    const token = await downloadToken()
+    const terms = await quote(id, token)
+    const proof = proofFor(terms)
+    expect((await gate(id, token, proof)).status).toBe(200)
+    expect((await gate(id, token, proof)).status).toBe(200)
+    expect((await gate(id, token)).status).toBe(200)
   })
 
   it('is a vocabulary DISJOINT from the 403 reasons', async () => {
@@ -347,24 +385,30 @@ describe('every payment failure is a 402, and never a 403', () => {
   it('holds for a malformed proof, an unknown nonce, an expiry and a replay', async () => {
     // D4/R9: 403 is the answer a client must never loop on. Every failure here
     // is "the payment did not happen", which is exactly what 402 describes.
-    const id = seed('Pro Toolkit')
+    //
+    // The unpaid preset carries the first three: once a buyer is ENTITLED, no
+    // payment failure can reach them at all, because the receipt answers above
+    // the price step. That is A3 working, not a gap in this test.
+    const unpaid = seed('Never Bought')
     const token = await downloadToken()
-    const terms = await quote(id, token)
-    const paid = proofFor(terms)
-    expect((await gate(id, token, paid)).status).toBe(200)
-
-    const stale = await quote(id, token)
+    const stale = await quote(unpaid, token)
     clock += TTL + 1
 
     for (const proof of [
       'not-a-proof',
       encodePaymentProof({ nonce: 'never-issued', tx: 'tx-1' }),
-      proofFor(stale),
-      paid
+      proofFor(stale)
     ]) {
-      const res = await gate(id, token, proof)
+      const res = await gate(unpaid, token, proof)
       expect([proof.slice(0, 12), res.status]).toEqual([proof.slice(0, 12), 402])
     }
+
+    // And the replay, which now only a stranger can produce.
+    const owned = seed('Pro Toolkit')
+    const terms = await quote(owned, token)
+    const paid = proofFor(terms)
+    expect((await gate(owned, token, paid)).status).toBe(200)
+    expect((await gate(owned, await strangerToken(), paid)).status).toBe(402)
   })
 
   it('answers 402 when the FACILITATOR refuses, not 403', async () => {
@@ -583,7 +627,7 @@ describe('unverifiable — a fact about US, never about the buyer\'s payment', (
     const terms = await quote(id, token)
     const proof = proofFor(terms)
     expect((await gate(id, token, proof)).status).toBe(200)
-    const body = (await (await gate(id, token, proof)).json()) as {
+    const body = (await (await gate(id, await strangerToken(), proof)).json()) as {
       reason: string
       terms: Terms
       retryable: boolean

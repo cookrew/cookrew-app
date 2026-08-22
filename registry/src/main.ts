@@ -31,6 +31,7 @@ import { makeAuthorize } from './authorize'
 import { PayoutStore } from './payouts'
 import { DEFAULT_TERMS_CONFIG, MemoryPaymentNonces } from './terms'
 import { devFacilitator } from './facilitator-dev'
+import { ReceiptStore } from './receipts'
 import { buildManifest, signManifest } from '../../src/main/preset-publish'
 import { scrubForPublish } from '../../src/main/preset-scrub'
 import type { TeamSnapshot } from '../../src/main/teams'
@@ -166,6 +167,7 @@ const pricing = {
   // the handshake can be driven end to end against the real binary. See its
   // file — it is not a payment system and must never be one.
   facilitator: devFacilitator(),
+  receipts: new ReceiptStore(DATA),
   now: () => Date.now()
 }
 

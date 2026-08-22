@@ -174,6 +174,18 @@ export class RegistryStore {
     return this.entry(id)?.identityId ?? null
   }
 
+  /**
+   * The lineage a preset belongs to, or null.
+   *
+   * M2-A3 keys receipts on this rather than on the preset id: an id is the
+   * content address of ONE version, so an entitlement against it would stop
+   * covering the preset the moment its author shipped an update.
+   */
+  lineageFor(id: string): string | null {
+    const entry = this.entry(id)
+    return entry === null ? null : lineageOf(entry.identityId, entry.teamName)
+  }
+
   /** Every stored preset, newest version first within a lineage. */
   list(): PresetSummary[] {
     let files: string[]

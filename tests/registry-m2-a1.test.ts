@@ -10,6 +10,7 @@ import { createRegistry } from '../registry/src/server'
 import { IdentityService, type IdentityConfig } from '../registry/src/identity'
 import { makeAuthorize, type PricingDeps } from '../registry/src/authorize'
 import { PayoutStore, isPayoutAddress } from '../registry/src/payouts'
+import { ReceiptStore } from '../registry/src/receipts'
 import {
   DEFAULT_TERMS_CONFIG,
   MemoryPaymentNonces,
@@ -153,6 +154,7 @@ beforeEach(() => {
     config: { chain: 'base', ttlMs: 15 * 60 * 1000 },
     nonces: new MemoryPaymentNonces(),
     facilitator: { settle: () => ({ ok: true as const }) },
+    receipts: new ReceiptStore(base),
     now: () => clock
   }
 })

@@ -7,6 +7,7 @@ import { priceFor, quoteFrom, type QuoteDeps } from './terms'
 import type { PayoutStore } from './payouts'
 import type { Facilitator } from './facilitator'
 import { needsFreshQuote, isRetryable, parsePaymentProof, verifyPayment } from './payment'
+import { balanceOf, entitledTo, type ReceiptStore } from './receipts'
 
 /**
  * THE DECISION FUNCTION (P2-A2) — the only place an answer is chosen.
@@ -29,6 +30,8 @@ function bearer(request: IncomingMessage): string | null {
 /** What the price step needs. Absent → this deployment sells nothing (M1). */
 export interface PricingDeps extends QuoteDeps {
   payouts: PayoutStore
+  /** M2-A3: what this buyer already owns. Read ABOVE the price step. */
+  receipts: ReceiptStore
   /**
    * M2-A2. Required alongside pricing, so "priced implies payable" holds by
    * construction: a deployment that could quote a price but never verify a
@@ -75,10 +78,17 @@ export function makeAuthorize(
     // precisely is what lets the client re-ceremony instead of surfacing.
     if (claims.scope !== 'download') return { code: 403, reason: 'scope' }
 
-    // ENTITLEMENT. M1 had none: a verified identity was entitled to every
-    // identified preset. A3 puts the real check HERE — a receipt read — and
-    // when it lands it answers 200 ABOVE the price step, which is what stops a
-    // buyer signing again on every fetch.
+    // ENTITLEMENT (M2-A3). M1 had none: a verified identity was entitled to
+    // every identified preset. This is the real check, and its position is the
+    // feature — ABOVE the price step, so a buyer who already owns something
+    // gets an ordinary 200 and never reaches payment at all.
+    //
+    // Without it, every download re-runs the 402 handshake and opening
+    // something you bought last week costs a wallet gesture. "A buyer must not
+    // sign per fetch" is not a nicety; it is what makes a purchase mean
+    // anything after the moment it happens.
+    const owned = pricing === undefined ? null : entitlementOf(store, pricing, presetId, claims.sub)
+    if (owned === true) return { code: 200 }
 
     // PRICE (M2-A1). The one new step, and it is the last one before serving:
     // by here we know the preset exists, who is asking, and that their
@@ -139,6 +149,26 @@ export function makeAuthorize(
         // see it; on `replayed` it certainly has. Minting a new nonce for
         // either would be an invitation to pay twice for one preset — so those
         // two echo the offer the buyer already holds instead.
+        if (paid.ok) {
+          // The purchase is a fact now. Recorded BEFORE serving, so a crash
+          // between the two costs the buyer a retry that finds them entitled —
+          // never a payment with nothing to show for it.
+          const held = parsePaymentProof(Array.isArray(header) ? header[0] : header)
+          const lineage = store.lineageFor(presetId)
+          if (held !== null && lineage !== null && !pricing.receipts.hasNonce(held.nonce)) {
+            pricing.receipts.record({
+              identityId: claims.sub,
+              lineage,
+              version: manifest?.version ?? 0,
+              presetId,
+              nonce: held.nonce,
+              tx: held.tx,
+              amount: price.amount,
+              asset: price.asset,
+              at: pricing.now()
+            })
+          }
+        }
         if (!paid.ok) {
           const held = parsePaymentProof(Array.isArray(header) ? header[0] : header)
           const heldExpiry = held === null ? null : pricing.nonces.expiryOf(held.nonce)
@@ -168,4 +198,48 @@ export function makeAuthorize(
 
     return { code: 200 }
   }
+}
+
+/**
+ * Does this buyer already own this preset?
+ *
+ * Null when the question does not apply — a free preset, or one whose lineage
+ * we cannot resolve. True only on a receipt that covers this version.
+ */
+function entitlementOf(
+  store: RegistryStore,
+  pricing: PricingDeps,
+  presetId: string,
+  identityId: string
+): boolean | null {
+  const manifest = store.getManifest(presetId)
+  if (manifest?.pricing === undefined) return null
+  const lineage = store.lineageFor(presetId)
+  if (lineage === null) return null
+  const held = pricing.receipts.forLineage(identityId, lineage)
+  return entitledTo(held, { version: manifest.version, pricing: manifest.pricing })
+}
+
+/**
+ * The prepaid balance for a lineage, in both units (deck §7).
+ *
+ * Exported for the surfaces that show it — the chip and the top-up sheet — and
+ * deliberately NOT consulted by the gate. R5: whether a call may run is the
+ * meter's question and it is answered on the call path as 200 or 403. A dry
+ * meter must never become a payment demand in the middle of a conversation.
+ */
+export function balanceFor(
+  store: RegistryStore,
+  pricing: PricingDeps,
+  presetId: string,
+  identityId: string,
+  spentCents = 0
+): ReturnType<typeof balanceOf> | null {
+  const manifest = store.getManifest(presetId)
+  const lineage = store.lineageFor(presetId)
+  if (manifest?.pricing === undefined || lineage === null) return null
+  return balanceOf(pricing.receipts.forLineage(identityId, lineage), {
+    pricing: manifest.pricing,
+    spentCents
+  })
 }
