@@ -38,10 +38,18 @@ import { defineConfig } from 'vitest/config'
  * worktree, and running them there is the point of having one.
  */
 export default defineConfig({
+  // The renderer's TSX compiles with the automatic runtime, the same as the
+  // app build — so a component test needs no React import and matches how the
+  // component is actually compiled in production.
+  esbuild: { jsx: 'automatic' },
   test: {
     // Only this tree's suite. Named explicitly rather than left to the default
     // root walk, so a new directory of fixtures cannot quietly join the run.
-    include: ['tests/**/*.test.ts'],
+    // `.tsx` as well as `.ts`: the renderer's components are TSX, and a
+    // component test that cannot be collected is a component nobody tests.
+    // Still tests/ only — the point of naming this explicitly is that a new
+    // directory of fixtures cannot quietly join the run, and that holds.
+    include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
     exclude: [
       // Vitest's defaults are REPLACED, not merged, when `exclude` is set —
       // so node_modules has to be restated here or it comes back.

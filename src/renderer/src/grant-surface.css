@@ -1,0 +1,228 @@
+/*
+ * The granting surface. Structure and hierarchy here; Fresco owns treatment.
+ *
+ * The one visual rule that is a security decision rather than taste: REVOKE is
+ * never the most prominent thing on a row, and the fingerprint is the largest
+ * type on the enrol sheet. The comparison is the only defence against a
+ * well-formed key from the wrong party, so it gets the emphasis that usually
+ * goes to a primary button.
+ */
+
+.gs-panel {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 24px 28px 96px;
+  background: var(--cr-bg, #14130f);
+  color: var(--cr-ink, #ece6d8);
+  font: 14px/1.6 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  z-index: 40;
+}
+
+.gs-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  border-bottom: 2px solid var(--cr-line, #332f27);
+  padding-bottom: 14px;
+  margin-bottom: 20px;
+}
+.gs-head h1 { font-size: 20px; margin: 0 0 2px; letter-spacing: -0.01em; }
+.gs-head-actions { display: flex; gap: 10px; align-items: center; }
+.gs-sub { margin: 0; color: var(--cr-dim, #8d8577); font-size: 12.5px; }
+.gs-dim { color: var(--cr-dim, #8d8577); }
+.gs-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+.gs-enrol {
+  font: 700 11px ui-monospace, monospace;
+  letter-spacing: 0.06em;
+  background: transparent;
+  border: 1px solid var(--cr-accent, #e9b949);
+  color: var(--cr-accent, #e9b949);
+  border-radius: 3px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.gs-x {
+  background: none; border: none; color: var(--cr-dim, #8d8577);
+  font-size: 16px; cursor: pointer; padding: 4px 8px;
+}
+
+.gs-table { width: 100%; border-collapse: collapse; }
+.gs-table th {
+  text-align: left; font: 600 10.5px ui-monospace, monospace;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--cr-dim, #8d8577);
+  border-bottom: 2px solid var(--cr-line, #332f27); padding: 8px 9px;
+}
+.gs-table td { padding: 10px 9px; border-bottom: 1px solid var(--cr-line, #332f27); vertical-align: top; }
+.gs-row.gs-open { background: rgba(255, 255, 255, 0.03); }
+.gs-caller {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: inherit; font: 600 14px inherit; text-align: left; display: block;
+}
+.gs-caller:hover { text-decoration: underline; }
+.gs-row td .gs-dim { display: block; font-size: 11.5px; }
+
+/* Never the loudest thing on the row — but always one click, never a confirm. */
+.gs-revoke {
+  font: 700 10.5px ui-monospace, monospace; letter-spacing: 0.06em;
+  background: none; border: 1px solid transparent;
+  color: var(--cr-red, #e8867a); border-radius: 3px; padding: 4px 8px; cursor: pointer;
+}
+.gs-revoke:hover { border-color: var(--cr-red, #e8867a); }
+
+.gs-drawer td { background: rgba(0, 0, 0, 0.18); }
+.gs-ticks { list-style: none; margin: 4px 0 12px; padding: 0; display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px; }
+.gs-ticks label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+
+.gs-commit { margin-top: 10px; }
+.gs-consequence { margin: 6px 0 0; color: var(--cr-ink, #ece6d8); font-size: 13px; }
+
+.gs-primary {
+  font: 700 11.5px ui-monospace, monospace; letter-spacing: 0.06em;
+  background: var(--cr-accent, #e9b949); color: #14130f;
+  border: none; border-radius: 4px; padding: 9px 16px; cursor: pointer;
+}
+.gs-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+.gs-ghost {
+  background: none; border: 1px solid var(--cr-line-hard, #4c463a);
+  color: var(--cr-dim, #8d8577); border-radius: 4px; padding: 8px 14px;
+  font-size: 12px; cursor: pointer;
+}
+
+.gs-empty {
+  border: 1px solid var(--cr-line, #332f27); border-radius: 6px;
+  padding: 20px 22px; margin: 16px 0; max-width: 62ch;
+}
+.gs-empty h2 { font-size: 15px; margin: 0 0 6px; }
+.gs-empty p { margin: 0 0 12px; color: var(--cr-dim, #8d8577); }
+
+.gs-agents, .gs-revoked { margin-top: 28px; }
+.gs-agents h2, .gs-revoked h2 {
+  font: 600 10.5px ui-monospace, monospace; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--cr-dim, #8d8577); margin: 0 0 8px;
+}
+.gs-agents ul, .gs-revoked ul { list-style: none; margin: 0; padding: 0; }
+.gs-agents li, .gs-revoked li {
+  display: flex; align-items: center; gap: 14px;
+  padding: 9px 0; border-bottom: 1px solid var(--cr-line, #332f27);
+}
+.gs-agents li > span:first-child, .gs-revoked li > span:first-child { flex: 1; }
+.gs-live { color: var(--cr-accent, #e9b949); }
+
+/* ---- sheets ---- */
+.gs-scrim {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.gs-sheet {
+  background: var(--cr-panel, #1c1a16); border: 1px solid var(--cr-line-hard, #4c463a);
+  border-radius: 8px; padding: 22px 24px; width: min(560px, 100%);
+  max-height: 90vh; overflow: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.gs-sheet.gs-small { width: min(420px, 100%); }
+.gs-sheet-head { display: flex; justify-content: space-between; align-items: baseline; }
+.gs-sheet-head h2 { font-size: 17px; margin: 0; }
+.gs-sheet-foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; align-items: center; }
+
+.gs-label {
+  display: block; margin: 16px 0 5px;
+  font: 600 10.5px ui-monospace, monospace; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--cr-dim, #8d8577);
+}
+.gs-input {
+  width: 100%; background: var(--cr-code-bg, #221f19);
+  border: 1px solid var(--cr-line-hard, #4c463a); border-radius: 4px;
+  color: var(--cr-ink, #ece6d8); padding: 9px 11px; font-size: 13px;
+  font-family: inherit;
+}
+.gs-key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; resize: vertical; }
+.gs-input.gs-bad { border-color: var(--cr-red, #e8867a); }
+.gs-hint { margin: 5px 0 0; font-size: 11.5px; color: var(--cr-dim, #8d8577); }
+
+.gs-paste-error {
+  margin: 8px 0 0; font-size: 12.5px; color: var(--cr-red, #e8867a);
+  border-left: 3px solid var(--cr-red, #e8867a); padding-left: 10px;
+}
+.gs-paste-error.gs-loud {
+  background: rgba(232, 134, 122, 0.1); padding: 10px 12px; border-radius: 0 4px 4px 0;
+  font-weight: 600;
+}
+
+/*
+ * THE FINGERPRINT. The largest type on the sheet, because the spoken
+ * comparison is the only defence against a well-formed key from the wrong
+ * party — every other wrong paste is caught by the parser.
+ */
+.gs-fp {
+  margin-top: 18px; border: 1px solid var(--cr-line-hard, #4c463a);
+  border-radius: 5px; padding: 14px 16px; background: var(--cr-panel-2, #242019);
+}
+.gs-fp-cap {
+  margin: 0 0 10px; font: 600 10px ui-monospace, monospace;
+  letter-spacing: 0.11em; color: var(--cr-dim, #8d8577);
+}
+.gs-fp-body { display: flex; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.gs-fp-words {
+  margin: 0; font: 700 17px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.02em;
+}
+.gs-fp-words span { display: block; }
+.gs-fp-hex {
+  margin: 0; font: 12px/1.5 ui-monospace, monospace; color: var(--cr-dim, #8d8577);
+  text-align: right;
+}
+.gs-fp-hex span { display: block; }
+.gs-fp-hexcap { font-size: 10.5px; opacity: 0.8; }
+
+.gs-foot-note { margin: 10px 0 0; font-size: 11.5px; color: var(--cr-dim, #8d8577); }
+
+/* ---- toasts ---- */
+.gs-toast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+  z-index: 70; display: flex; align-items: center; gap: 16px;
+  background: var(--cr-panel, #1c1a16); border: 1px solid var(--cr-line-hard, #4c463a);
+  border-radius: 6px; padding: 12px 16px; font-size: 13px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45); max-width: min(680px, 92vw);
+}
+.gs-toast-bad { border-color: var(--cr-red, #e8867a); }
+.gs-undo {
+  font: 700 11px ui-monospace, monospace; letter-spacing: 0.06em;
+  background: none; border: 1px solid var(--cr-accent, #e9b949);
+  color: var(--cr-accent, #e9b949); border-radius: 3px; padding: 5px 11px; cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .gs-panel { padding: 16px 14px 90px; }
+  .gs-table thead { display: none; }
+  .gs-table td { display: block; border: none; padding: 3px 0; }
+  .gs-row { display: block; border-bottom: 1px solid var(--cr-line, #332f27); padding: 12px 0; }
+  .gs-fp-body { flex-direction: column; }
+  .gs-fp-hex { text-align: left; }
+}
+
+/*
+ * The entry point. Rendered ONLY when the owner bridge is present — see
+ * canGrant(). On a phone companion or a read-only wall this element does not
+ * exist, which is the deck's requirement: not a disabled panel, not a message,
+ * absent. A Magpie gate asserts the absence rather than a disabled state.
+ */
+.gs-entry {
+  position: absolute;
+  top: 14px;
+  right: 18px;
+  z-index: 45;
+  font: 700 10.5px ui-monospace, monospace;
+  letter-spacing: 0.07em;
+  background: var(--cr-panel, #1c1a16);
+  border: 1px solid var(--cr-accent, #e9b949);
+  color: var(--cr-accent, #e9b949);
+  border-radius: 999px;
+  padding: 6px 13px;
+  cursor: pointer;
+}
