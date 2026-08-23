@@ -1,7 +1,14 @@
 import { existsSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { claudeProjectDir } from './claude-fork'
-import { readHeadLines, rotationEdgeOf } from './claude-rotation'
+import {
+  ROTATION_RESUME_MIN_UUIDS,
+  headMessageUuids,
+  isReplayContinuation,
+  readHeadLines,
+  replayOverlap,
+  rotationEdgeOf
+} from './claude-rotation'
 
 /**
  * A checkpoint history that spans compacts.
@@ -63,6 +70,12 @@ export interface SessionFs {
   headLines: (file: string) => Promise<string[]>
 }
 
+/** Why an overlap-based join was declined. Never a silent skip. */
+export interface JoinRefusal {
+  reason: 'ambiguous' | 'weak-overlap' | 'no-candidate'
+  detail: string
+}
+
 const defaultFs: SessionFs = {
   listSessionFiles(dir) {
     try {
@@ -72,6 +85,64 @@ const defaultFs: SessionFs = {
     }
   },
   headLines: (file) => readHeadLines(file, LINEAGE_HEAD_LINES)
+}
+
+/**
+ * The predecessor of a file that declares NO boundary — the /clear case.
+ *
+ * A compact writes a compact_boundary naming its predecessor: that is a FACT,
+ * read not inferred. A /clear does not. All that can be done there is look for
+ * a file whose messages this one replays, which is a HEURISTIC, and the two
+ * must not be confused: a wrong join splices a stranger's checkpoints onto this
+ * agent's rail, and unlike a missing history that is invisible from the UI.
+ *
+ * So this REFUSES on anything short of one clear answer:
+ *   - fewer than ROTATION_RESUME_MIN_UUIDS shared messages, or a ratio under
+ *     ROTATION_RESUME_MIN_OVERLAP, is not evidence — decline;
+ *   - TWO candidates clearing the bar is ambiguity, and picking the better
+ *     score would be a guess wearing a number — decline and name both.
+ *
+ * Declining costs a shorter history, which the UI shows honestly. Guessing
+ * costs a history that is wrong in a way nobody can see.
+ */
+export async function overlapPredecessor(
+  file: string,
+  candidates: readonly LineageStep[],
+  fs: SessionFs
+): Promise<{ step: LineageStep } | { refused: JoinRefusal }> {
+  const own = headMessageUuids(await fs.headLines(file))
+  if (own.length < ROTATION_RESUME_MIN_UUIDS) {
+    return {
+      refused: {
+        reason: 'weak-overlap',
+        detail: `only ${own.length} head message uuids; ${ROTATION_RESUME_MIN_UUIDS} needed to judge a replay`
+      }
+    }
+  }
+
+  const clearing: { step: LineageStep; ratio: number }[] = []
+  for (const candidate of candidates) {
+    const theirs = new Set(headMessageUuids(await fs.headLines(candidate.file)))
+    if (theirs.size === 0) continue
+    const overlap = replayOverlap(own, theirs)
+    if (isReplayContinuation(overlap)) clearing.push({ step: candidate, ratio: overlap.ratio })
+  }
+
+  if (clearing.length === 0) {
+    return { refused: { reason: 'no-candidate', detail: 'no file this one demonstrably replays' } }
+  }
+  if (clearing.length > 1) {
+    return {
+      refused: {
+        reason: 'ambiguous',
+        detail:
+          `${clearing.length} files clear the replay bar (` +
+          clearing.map((c) => `${c.step.sessionId.slice(0, 8)} @ ${c.ratio.toFixed(2)}`).join(', ') +
+          ') — picking the higher score would be a guess'
+      }
+    }
+  }
+  return { step: clearing[0].step }
 }
 
 /**
@@ -89,13 +160,14 @@ const defaultFs: SessionFs = {
 export async function sessionChain(
   cwd: string,
   sessionId: string,
-  options: { projectsDir?: string; fs?: SessionFs } = {}
+  options: { projectsDir?: string; fs?: SessionFs; inferClearJoins?: boolean } = {}
 ): Promise<LineageStep[]> {
   const fs = options.fs ?? defaultFs
   const dir = claudeProjectDir(cwd, options.projectsDir)
   const names = new Set(fs.listSessionFiles(dir))
 
   const chain: LineageStep[] = []
+  const refusals: JoinRefusal[] = []
   const seen = new Set<string>()
   let current: string | null = sessionId
 
@@ -107,11 +179,33 @@ export async function sessionChain(
     const file = path.join(dir, name)
     chain.push({ sessionId: current, file })
     const edge = rotationEdgeOf(await fs.headLines(file))
-    current = edge && edge.predecessorId !== current ? edge.predecessorId : null
+    if (edge && edge.predecessorId !== current) {
+      current = edge.predecessorId
+      continue
+    }
+    // No declared boundary. This is where a /clear lands, and the join can only
+    // be inferred — so it is attempted ONLY when asked for, and it refuses
+    // unless exactly one candidate clears both replay bars.
+    if (!options.inferClearJoins) break
+    const others = [...names]
+      .filter((n) => n !== name)
+      .map((n) => ({ sessionId: n.replace(/\.jsonl$/, ''), file: path.join(dir, n) }))
+      .filter((c) => !seen.has(c.sessionId))
+    const found = await overlapPredecessor(file, others, fs)
+    if ('refused' in found) {
+      refusals.push(found.refused)
+      break
+    }
+    current = found.step.sessionId
   }
 
+  lastRefusals = refusals
   return chain.reverse()
 }
+
+/** Why the most recent walk stopped, when it stopped at an inferred join. */
+let lastRefusals: JoinRefusal[] = []
+export const walkRefusals = (): readonly JoinRefusal[] => lastRefusals
 
 /**
  * Why a node may not be renumbered right now.

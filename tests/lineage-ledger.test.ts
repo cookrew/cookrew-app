@@ -12,7 +12,12 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { claudeProjectDir } from '../src/main/claude-fork'
 import { ROTATION_HEAD_LINES } from '../src/main/claude-rotation'
-import { MAX_LINEAGE_DEPTH, refuseRenumber, sessionChain } from '../src/main/lineage-ledger'
+import {
+  MAX_LINEAGE_DEPTH,
+  overlapPredecessor,
+  refuseRenumber,
+  sessionChain
+} from '../src/main/lineage-ledger'
 
 const CWD = '/w/proj'
 let root: string
@@ -159,5 +164,90 @@ describe('refuseRenumber — version pins are still index-keyed', () => {
     expect(refusal?.reason).toBe('version-pins-are-index-keyed')
     expect(refusal?.detail).toContain('3 version pin')
     expect(refusal?.detail).toContain('Re-key pins by checkpoint uuid first')
+  })
+})
+
+/**
+ * /clear leaves NO compact_boundary, so the join can only be inferred from a
+ * replay overlap. That is a heuristic where the compact case had a fact, and a
+ * wrong join splices a stranger's checkpoints onto this agent's rail —
+ * invisible from the UI, unlike a history that is merely short. So every one of
+ * these asserts a REFUSAL except the single unambiguous case.
+ */
+describe('inferring a /clear join — refuses rather than guesses', () => {
+  /** Message uuids must be real uuid shapes — headMessageUuids filters on it. */
+  const uuids = (n: number, from = 0): string[] =>
+    Array.from(
+      { length: n },
+      (_, i) => `${String(from + i).padStart(8, 'c')}-2222-4222-8222-222222222222`
+    )
+
+  /** A file whose head carries these message uuids. */
+  function writeReplay(own: string, messageUuids: readonly string[]): void {
+    const dir = claudeProjectDir(CWD, root)
+    mkdirSync(dir, { recursive: true })
+    const lines = messageUuids.map((u) =>
+      JSON.stringify({ type: 'user', uuid: u, sessionId: own, cwd: CWD, message: { role: 'user' } })
+    )
+    writeFileSync(path.join(dir, `${own}.jsonl`), `${lines.join('\n')}\n`)
+  }
+
+  const fs = {
+    listSessionFiles: () => [],
+    headLines: async (file: string) =>
+      (await import('node:fs')).readFileSync(file, 'utf8').split('\n').filter(Boolean)
+  }
+
+  const step = (n: number) => ({
+    sessionId: id(n),
+    file: path.join(claudeProjectDir(CWD, root), `${id(n)}.jsonl`)
+  })
+
+  it('joins when exactly one file is demonstrably replayed', async () => {
+    writeReplay(id(1), uuids(12))
+    writeReplay(id(2), uuids(12)) // replays all of id(1)
+    const out = await overlapPredecessor(step(2).file, [step(1)], fs)
+    expect('step' in out && out.step.sessionId).toBe(id(1))
+  })
+
+  it('REFUSES when two files both clear the bar', async () => {
+    // The ambiguity that matters: a fork leaves two plausible predecessors and
+    // the higher ratio is not evidence, it is a preference.
+    writeReplay(id(1), uuids(12))
+    writeReplay(id(2), uuids(12))
+    writeReplay(id(3), uuids(12))
+    const out = await overlapPredecessor(step(3).file, [step(1), step(2)], fs)
+    expect('refused' in out && out.refused.reason).toBe('ambiguous')
+    expect('refused' in out && out.refused.detail).toContain('would be a guess')
+  })
+
+  it('REFUSES a weak overlap rather than accepting a partial match', async () => {
+    writeReplay(id(1), uuids(12))
+    writeReplay(id(2), [...uuids(3), ...uuids(9, 100)]) // only 3 of 12 shared
+    const out = await overlapPredecessor(step(2).file, [step(1)], fs)
+    expect('refused' in out && out.refused.reason).toBe('no-candidate')
+  })
+
+  it('REFUSES when there is too little evidence to judge at all', async () => {
+    writeReplay(id(1), uuids(12))
+    writeReplay(id(2), uuids(3)) // below ROTATION_RESUME_MIN_UUIDS
+    const out = await overlapPredecessor(step(2).file, [step(1)], fs)
+    expect('refused' in out && out.refused.reason).toBe('weak-overlap')
+  })
+
+  it('is OFF unless asked for — a compact walk never infers', async () => {
+    // Inference is opt-in. The compact path is a fact and must not silently
+    // acquire a heuristic behind it.
+    writeReplay(id(1), uuids(12))
+    writeReplay(id(2), uuids(12))
+    const chain = await sessionChain(CWD, id(2), { projectsDir: root })
+    expect(chain.map((s) => s.sessionId)).toEqual([id(2)])
+  })
+
+  it('joins across a /clear when inference is asked for', async () => {
+    writeReplay(id(1), uuids(12))
+    writeReplay(id(2), uuids(12))
+    const chain = await sessionChain(CWD, id(2), { projectsDir: root, inferClearJoins: true })
+    expect(chain.map((s) => s.sessionId)).toEqual([id(1), id(2)])
   })
 })
