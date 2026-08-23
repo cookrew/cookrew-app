@@ -120,14 +120,16 @@ describe('exporting to a caller who cannot use it', () => {
     expect(result).toEqual({ ok: false, reason: GRANT_REASON.notEnrolled })
   })
 
-  it('REFUSES an export naming nobody', () => {
-    // Empty means NOBODY, never everybody — the closed default. Accepting it
-    // silently would look like a successful export that answers no one.
+  it('ACCEPTS an export naming nobody — exportable is a level of its own', () => {
+    // This used to refuse, and Velvet's deck (§1) requires the state: an agent
+    // must be EXPORTABLE before it can appear in the grant matrix to be ticked,
+    // and "exportable agents, no callers" is one of the named empty states.
+    // Refusing it made the first half of every grant impossible to express.
+    //
+    // Nothing is loosened. Empty still means NOBODY, never everybody — the
+    // closed default is asserted at the gate, which reads this same record.
     const grant = new OwnerGrant({ store: fakeStore() })
-    expect(grant.exportAgent('ws-1', 'node-1', [])).toEqual({
-      ok: false,
-      reason: GRANT_REASON.noCallers
-    })
+    expect(grant.exportAgent('ws-1', 'node-1', [])).toMatchObject({ ok: true })
   })
 
   it('accepts an export to an enrolled caller', () => {
@@ -165,10 +167,16 @@ describe('reasons are distinct HERE and indistinguishable on the wire', () => {
     // The lane's indistinguishability ruling is about the LISTENER, where a
     // stranger could enumerate. There is no stranger on this surface, and an
     // owner told only "no" is left guessing at their own machine.
+    // Compared between two REAL refusals. This used to contrast notEnrolled
+    // against the no-callers refusal, which the deck removed — leaving the
+    // assertion passing against `undefined` and proving nothing.
     const grant = new OwnerGrant({ store: fakeStore() })
-    const noCallers = grant.exportAgent('ws-1', 'n', [])
+    grant.enrol('ws-1', 'known', { kty: 'OKP' })
     const notEnrolled = grant.exportAgent('ws-1', 'n', ['stranger'])
-    expect(noCallers.reason).not.toBe(notEnrolled.reason)
+    const callerExists = grant.enrol('ws-1', 'known', { kty: 'DIFFERENT' })
+    expect(notEnrolled.reason).toBe(GRANT_REASON.notEnrolled)
+    expect(callerExists.reason).toBe(GRANT_REASON.callerExists)
+    expect(notEnrolled.reason).not.toBe(callerExists.reason)
   })
 })
 

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { AgentExport, EnrolledCaller } from './agent-export'
 import type { CallIdentity } from './call-inflight'
+import { fingerprintOfDigest, rawKeyOfJwk, type KeyFingerprint } from '../shared/key-fingerprint'
 
 /**
  * WHAT THE OWNER CAN SEE ABOUT WHAT THEY GRANTED.
@@ -27,10 +28,24 @@ import type { CallIdentity } from './call-inflight'
 /** An enrolled caller, as the owner's surface needs to show it. */
 export interface RosterCaller {
   sub: string
+  /** What the owner called them. Display only, never consulted by the gate. */
+  name?: string
   /** A short digest of the enrolled public key — see keyFingerprint. */
   keyFingerprint: string
+  /**
+   * The SPOKEN fingerprint — six words, 66 bits (deck §3).
+   *
+   * null when the enrolled key is not an ed25519 public key, which the paste
+   * parser makes unreachable today. A fingerprint of the wrong bytes would be
+   * compared and would appear to work, so there is no fallback rendering.
+   */
+  fingerprint: KeyFingerprint | null
   /** Agents in THIS workspace this caller may call. Empty is a real answer. */
   agents: readonly string[]
+  /** Last time they actually called — the deck's LAST CALL column. */
+  lastCallAt?: number
+  /** Set only on the REVOKED section's rows. */
+  revokedAt?: number
 }
 
 /** An exported agent, with what is happening to it right now. */
@@ -45,6 +60,15 @@ export interface GrantRoster {
   workspaceId: string
   callers: readonly RosterCaller[]
   agents: readonly RosterAgent[]
+  /**
+   * Callers the owner revoked, with their last-call time (deck §6).
+   *
+   * "Revoking does not delete history" — who USED to have access is a security
+   * question people ask after the fact, and a hard delete answers it with
+   * silence. Kept separate from `callers` so the surface cannot accidentally
+   * render a revoked caller as live.
+   */
+  revoked: readonly RosterCaller[]
   /** Every call running right now, because that is what a revoke stops. */
   live: readonly { sub: string; nodeId: string }[]
 }
@@ -52,6 +76,7 @@ export interface GrantRoster {
 export interface GrantRosterDeps {
   workspaceId: string
   enrolledIn: (workspaceId: string) => readonly EnrolledCaller[]
+  revokedIn?: (workspaceId: string) => readonly EnrolledCaller[]
   exportsIn: (workspaceId: string) => readonly AgentExport[]
   callsIn: (workspaceId: string) => readonly CallIdentity[]
 }
@@ -67,6 +92,10 @@ export interface GrantRosterDeps {
  * happened; and sixteen hex characters, which is short enough to read aloud and
  * long enough that two enrolled callers will not collide.
  */
+function sha256(bytes: Uint8Array): Uint8Array {
+  return new Uint8Array(createHash('sha256').update(bytes).digest())
+}
+
 export function keyFingerprint(jwk: Record<string, unknown>): string {
   const canonical = JSON.stringify(
     Object.fromEntries(Object.entries(jwk).sort(([a], [b]) => a.localeCompare(b)))
@@ -79,16 +108,26 @@ export function buildGrantRoster(deps: GrantRosterDeps): GrantRoster {
   const exports = deps.exportsIn(workspaceId)
   const live = deps.callsIn(workspaceId)
 
-  return {
-    workspaceId,
-    callers: deps.enrolledIn(workspaceId).map((caller) => ({
+  const asRoster = (caller: EnrolledCaller): RosterCaller => {
+    const raw = rawKeyOfJwk(caller.jwk)
+    return {
       sub: caller.sub,
+      ...(caller.name !== undefined ? { name: caller.name } : {}),
       keyFingerprint: keyFingerprint(caller.jwk),
+      fingerprint: raw ? fingerprintOfDigest(sha256(raw)) : null,
       // Read from the exports rather than stored on the caller: the export is
       // the only record of who may call what, and a second copy here would be
       // a thing to keep in agreement with it.
-      agents: exports.filter((e) => e.callers.includes(caller.sub)).map((e) => e.nodeId)
-    })),
+      agents: exports.filter((e) => e.callers.includes(caller.sub)).map((e) => e.nodeId),
+      ...(caller.lastCallAt !== undefined ? { lastCallAt: caller.lastCallAt } : {}),
+      ...(caller.revokedAt !== undefined ? { revokedAt: caller.revokedAt } : {})
+    }
+  }
+
+  return {
+    workspaceId,
+    callers: deps.enrolledIn(workspaceId).map(asRoster),
+    revoked: (deps.revokedIn?.(workspaceId) ?? []).map(asRoster),
     agents: exports.map((e) => ({
       nodeId: e.nodeId,
       callers: [...e.callers],

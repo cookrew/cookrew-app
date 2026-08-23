@@ -20,6 +20,10 @@ const api = {
   // The ROSTER, not the raw record: enrolled callers with what each may call,
   // exported agents with how many calls are running against them, and the live
   // calls themselves — see grant-roster.ts.
+  // The deck's 10-second UNDO. Exact by construction: revoking never touched a
+  // grant, so the prior grant set comes back because it never left.
+  grantRestore: (workspaceId: string, sub: string) =>
+    ipcRenderer.invoke('grant:restore', workspaceId, sub),
   grantList: (workspaceId: string) => ipcRenderer.invoke('grant:list', workspaceId),
   onWorkspaceState: (cb: (state: unknown) => void) => {
     const listener = (_e: unknown, state: unknown): void => cb(state)

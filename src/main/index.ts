@@ -2604,6 +2604,13 @@ function registerIpc(handlers: RestoreHandlers): void {
     'grant:unexport',
     ownerOnly((workspaceId: string, nodeId: string) => ownerGrant.unexport(workspaceId, nodeId))
   )
+  // The deck's 10-second UNDO toast. A separate channel from enrol because
+  // undoing a revoke and admitting a new caller are different decisions, and
+  // collapsing them would let an undo quietly create someone.
+  ipcMain.handle(
+    'grant:restore',
+    ownerOnly((workspaceId: string, sub: string) => ownerGrant.restore(workspaceId, sub))
+  )
   // READ paths, so the owner can see what they granted. Same ownership check:
   // the roster of who may call your agents is not for a rendered page either.
   //
@@ -2617,6 +2624,7 @@ function registerIpc(handlers: RestoreHandlers): void {
       buildGrantRoster({
         workspaceId,
         enrolledIn: (id) => agentExports.enrolledIn(id),
+        revokedIn: (id) => agentExports.revokedIn(id),
         exportsIn: (id) => agentExports.exportsIn(id),
         callsIn: (id) => callsInFlight.listIn(id)
       })

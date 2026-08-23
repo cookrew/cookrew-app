@@ -50,7 +50,9 @@ function roster(input: {
 
 describe('the roster answers who can reach what', () => {
   it('is empty, and says so in a shape the surface can render', () => {
-    expect(roster({})).toEqual({ workspaceId: 'w1', callers: [], agents: [], live: [] })
+    expect(roster({})).toEqual({
+      workspaceId: 'w1', callers: [], agents: [], revoked: [], live: []
+    })
   })
 
   it('names each caller and the agents it may call', () => {
@@ -71,7 +73,15 @@ describe('the roster answers who can reach what', () => {
     // the mistake visible instead of a call that mysteriously 403s.
     const r = roster({ callers: [enrolled()] })
     expect(r.callers).toEqual([
-      { sub: 'buyer-1', keyFingerprint: keyFingerprint(JWK), agents: [] }
+      {
+        sub: 'buyer-1',
+        keyFingerprint: keyFingerprint(JWK),
+        // Not an ed25519 public key, so there is no phrase to speak. A
+        // fingerprint over the wrong bytes would be compared and would appear
+        // to work, so the roster carries null rather than inventing one.
+        fingerprint: null,
+        agents: []
+      }
     ])
   })
 

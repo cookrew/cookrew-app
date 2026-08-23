@@ -73,8 +73,7 @@ export interface GrantResult {
 export const GRANT_REASON = {
   incomplete: 'incomplete',
   callerExists: 'caller_exists',
-  notEnrolled: 'not_enrolled',
-  noCallers: 'no_callers'
+  notEnrolled: 'not_enrolled'
 } as const
 
 export interface OwnerGrantDeps {
@@ -141,7 +140,7 @@ export class OwnerGrant {
    * that they no longer entitle anyone, including mid-call.
    */
   revoke(workspaceId: string, sub: string): GrantResult {
-    this.deps.store.revoke(workspaceId, sub)
+    this.deps.store.revoke(workspaceId, sub, this.now())
     const stopped = this.cut((call) => call.workspaceId === workspaceId && call.sub === sub)
     this.note('revoke', workspaceId, sub)
     return { ok: true, stopped }
@@ -156,6 +155,20 @@ export class OwnerGrant {
    * owner believes they made and did not. Failing here is the difference
    * between a mistake and a misunderstanding.
    */
+  /**
+   * TWO LEVELS, so one mistake is bounded (Velvet's deck §1).
+   *
+   * `callers: []` is EXPORTABLE-AND-GRANTED-TO-NOBODY, and it is a real,
+   * required state rather than a mistake. This used to refuse it, which
+   * contradicted the surface the deck specifies: an agent has to be exportable
+   * BEFORE it can appear in the matrix to be ticked, and "exportable agents, no
+   * callers" is one of the deck's named empty states. Refusing it would have
+   * made the first half of every grant impossible to express.
+   *
+   * Nothing is loosened by allowing it. An export with no callers entitles
+   * NOBODY — the closed default, unchanged and asserted at the gate — so the
+   * empty list is the safe end of this control, not a gap in it.
+   */
   exportAgent(
     workspaceId: string,
     nodeId: string,
@@ -165,7 +178,6 @@ export class OwnerGrant {
     // half means an omitted argument cannot widen reach.
     visibility: Visibility = 'identified'
   ): GrantResult {
-    if (callers.length === 0) return { ok: false, reason: GRANT_REASON.noCallers }
     for (const sub of callers) {
       if (this.deps.store.enrolledKey(workspaceId, sub) === null) {
         return { ok: false, reason: GRANT_REASON.notEnrolled }
@@ -174,6 +186,20 @@ export class OwnerGrant {
     const grant: AgentExport = { workspaceId, nodeId, visibility, callers: [...callers] }
     this.deps.store.exportAgent(grant)
     this.note('export', workspaceId, nodeId)
+    return { ok: true }
+  }
+
+  /**
+   * Undo a revoke — the deck's 10-second UNDO toast.
+   *
+   * Exact by construction: revoking never touched a grant, so the prior grant
+   * set comes back because it never left. Nothing to replay, nothing to replay
+   * wrongly. Returns notEnrolled when the toast outlived the record.
+   */
+  restore(workspaceId: string, sub: string): GrantResult {
+    const restored = this.deps.store.restore(workspaceId, sub)
+    if (!restored) return { ok: false, reason: GRANT_REASON.notEnrolled }
+    this.note('enrol', workspaceId, sub)
     return { ok: true }
   }
 

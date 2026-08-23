@@ -35,6 +35,24 @@ export interface EnrolledCaller {
   sub: string
   /** ed25519 public key as a JWK. Verified against, never signed with. */
   jwk: Record<string, unknown>
+  /** What the owner called them — "Kestrel (Ana's instance)". Display only. */
+  name?: string
+  /**
+   * When the owner revoked them. Set, never deleted.
+   *
+   * REVOKING DOES NOT DELETE HISTORY (Velvet's deck §6): the row moves to a
+   * REVOKED section with its last-call time, because "who used to have access"
+   * is a security question people ask after the fact. A hard delete answers it
+   * with silence.
+   *
+   * It is also what makes the deck's 10-second UNDO exact rather than
+   * approximate. Grants live on the EXPORT, and the gate AND-s enrolment with
+   * the export's caller list — so revoking touches no grant at all, and undo is
+   * clearing this field. The prior grant set comes back because it never left.
+   */
+  revokedAt?: number
+  /** Last time this caller actually called, for the roster's LAST CALL column. */
+  lastCallAt?: number
 }
 
 /** One exported agent. */
@@ -67,7 +85,10 @@ function isEnrolled(value: unknown): value is EnrolledCaller {
     typeof c.sub === 'string' &&
     c.sub.length > 0 &&
     typeof c.jwk === 'object' &&
-    c.jwk !== null
+    c.jwk !== null &&
+    (c.revokedAt === undefined || typeof c.revokedAt === 'number') &&
+    (c.lastCallAt === undefined || typeof c.lastCallAt === 'number') &&
+    (c.name === undefined || typeof c.name === 'string')
   )
 }
 
@@ -195,7 +216,9 @@ export class AgentExportStore {
     const found = this.read().enrolled.find(
       (c) => c.workspaceId === workspaceId && c.sub === sub
     )
-    return found ? found.jwk : null
+    // A REVOKED caller is not enrolled. The record survives so the owner can see
+    // who used to have access and can undo; it entitles nothing while it stands.
+    return found && found.revokedAt === undefined ? found.jwk : null
   }
 
   /**
@@ -216,20 +239,71 @@ export class AgentExportStore {
     const existing = record.enrolled.find((c) => c.workspaceId === workspaceId && c.sub === sub)
     if (existing) {
       const same = JSON.stringify(existing.jwk) === JSON.stringify(jwk)
-      return same ? { ok: true } : { ok: false, reason: 'caller_exists' }
+      if (!same) return { ok: false, reason: 'caller_exists' }
+      // Same key, and they are REVOKED: re-enrolling is the owner deliberately
+      // letting them back in, which is `restore` — not a no-op that reports ok
+      // while the caller stays locked out.
+      if (existing.revokedAt !== undefined) {
+        this.restore(workspaceId, sub)
+      }
+      return { ok: true }
     }
     this.write({ ...record, enrolled: [...record.enrolled, { workspaceId, sub, jwk }] })
     return { ok: true }
   }
 
-  /** Forget a caller at one workspace. Its outstanding credentials still expire. */
-  revoke(workspaceId: string, sub: string): void {
+  /**
+   * Revoke a caller at one workspace. MARKED, not deleted — see `revokedAt`.
+   *
+   * Its outstanding credentials still expire on their own; what this guarantees
+   * is that they stop entitling anyone immediately, because the gate reads
+   * enrolment live at every call rather than trusting a minted token.
+   */
+  revoke(workspaceId: string, sub: string, at: number = Date.now()): void {
     const record = this.read()
     this.write({
       ...record,
-      enrolled: record.enrolled.filter(
-        (c) => !(c.workspaceId === workspaceId && c.sub === sub)
+      enrolled: record.enrolled.map((c) =>
+        c.workspaceId === workspaceId && c.sub === sub && c.revokedAt === undefined
+          ? { ...c, revokedAt: at }
+          : c
       )
+    })
+  }
+
+  /**
+   * Undo a revoke, restoring EXACTLY the prior grant set.
+   *
+   * Exact by construction rather than by bookkeeping: revoking never touched a
+   * grant, so there is no saved set to replay and nothing that can be replayed
+   * wrongly. Returns false when there was nothing revoked to restore, so the
+   * surface can tell "undone" from "the toast outlived the record".
+   */
+  restore(workspaceId: string, sub: string): boolean {
+    const record = this.read()
+    const found = record.enrolled.find(
+      (c) => c.workspaceId === workspaceId && c.sub === sub && c.revokedAt !== undefined
+    )
+    if (!found) return false
+    this.write({
+      ...record,
+      enrolled: record.enrolled.map((c) =>
+        c === found ? { workspaceId: c.workspaceId, sub: c.sub, jwk: c.jwk,
+                        ...(c.name !== undefined ? { name: c.name } : {}),
+                        ...(c.lastCallAt !== undefined ? { lastCallAt: c.lastCallAt } : {}) } : c
+      )
+    })
+    return true
+  }
+
+  /** Stamp a caller's last call, for the roster's LAST CALL column. */
+  noteCall(workspaceId: string, sub: string, at: number = Date.now()): void {
+    const record = this.read()
+    const found = record.enrolled.find((c) => c.workspaceId === workspaceId && c.sub === sub)
+    if (!found) return
+    this.write({
+      ...record,
+      enrolled: record.enrolled.map((c) => (c === found ? { ...c, lastCallAt: at } : c))
     })
   }
 
@@ -289,6 +363,15 @@ export class AgentExportStore {
    * check, and it is the only caller of it.
    */
   enrolledIn(workspaceId: string): EnrolledCaller[] {
-    return this.read().enrolled.filter((c) => c.workspaceId === workspaceId)
+    return this.read().enrolled.filter(
+      (c) => c.workspaceId === workspaceId && c.revokedAt === undefined
+    )
+  }
+
+  /** Callers the owner has revoked — the deck's REVOKED section. */
+  revokedIn(workspaceId: string): EnrolledCaller[] {
+    return this.read().enrolled.filter(
+      (c) => c.workspaceId === workspaceId && c.revokedAt !== undefined
+    )
   }
 }
