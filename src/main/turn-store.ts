@@ -611,10 +611,51 @@ export class TurnStore {
 
   viewIsStale(terminalId: string): boolean {
     const observed = this.fileStamps.get(terminalId)
-    // Never read or written by this store: there is no premise to contradict.
-    // The first load stamps it, and the tracker always loads before it writes.
+    // Never touched by this store: nothing it believes can be contradicted.
+    // Whether a WRITE is safe in that state is a different question, and a
+    // stronger one — see writeIsUnsafe.
     if (observed === undefined) return false
     return observed !== this.stampOf(terminalId)
+  }
+
+  /**
+   * May this write be applied? A reason to refuse, or null to proceed.
+   *
+   * TWO GUARANTEES, because there are two ways to write over a ledger you do
+   * not understand, and only one of them is about bytes moving.
+   *
+   *  - THE FILE MOVED. Observed once and different now: every branch below
+   *    the choke point is reasoning from `written`'s tail, `counts` and `hot`,
+   *    all of which describe a file that no longer exists. Nothing is safe
+   *    here — not a shrink, and not an append, which against a changed file
+   *    spliced index 23 in after index 542 and left a ledger that no longer
+   *    ascends. So: refuse everything.
+   *
+   *  - THE WRITER NEVER LOOKED. No observation at all, and a ledger already
+   *    on disk. A rehearsal of the owner's restore caught this: a freshly
+   *    constructed store wrote 22 records straight over the 542 it had never
+   *    opened, and the byte check had nothing to compare. Only a SHRINK is
+   *    refused here rather than every write — a full save that is the same
+   *    size or larger cannot silently drop history, and refusing those would
+   *    break writing a known-good history into a ledger this store has not
+   *    happened to read. Reading first is one call, and it is the whole of
+   *    the contract for anything that would make the record smaller.
+   */
+  private writeIsUnsafe(terminalId: string, records: readonly TurnRecord[]): string | null {
+    const observed = this.fileStamps.get(terminalId)
+    if (observed !== undefined) {
+      return observed === this.stampOf(terminalId)
+        ? null
+        : 'the ledger changed under this process since it last read or wrote it, so this ' +
+            'write is based on a file that no longer exists'
+    }
+    if (!existsSync(this.fileFor(terminalId))) return null
+    const durable = this.count(terminalId)
+    if (records.length >= durable) return null
+    return (
+      `this store has never read the ${durable} records already on disk, and this write ` +
+      'would leave fewer'
+    )
   }
 
   /**
@@ -947,12 +988,11 @@ export class TurnStore {
      * replaces. The cost of a refusal is one turn persisted late. The cost of
      * the write it refuses is every record the writer could not see.
      */
-    if (this.viewIsStale(terminalId)) {
+    const unsafe = this.writeIsUnsafe(terminalId, records)
+    if (unsafe !== null) {
       console.error(
-        `Refusing to write ${records.length} turn records for ${terminalId}: the ledger ` +
-          'changed under this process since it last read or wrote it, so this write is ' +
-          'based on a file that no longer exists. Dropping the write and re-reading; ' +
-          'the next reconcile will rebuild from the record.'
+        `Refusing to write ${records.length} turn records for ${terminalId}: ${unsafe}. ` +
+          'Dropping the write and re-reading; the next reconcile will rebuild from the record.'
       )
       this.forgetView(terminalId)
       return
