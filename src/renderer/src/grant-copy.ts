@@ -207,3 +207,35 @@ export const EXPORT_COPY = {
   publishSeam:
     'Selling this — a price, a payout address, a listing others can find — isn’t built yet.'
 } as const
+
+/**
+ * When the export toggle itself fails.
+ *
+ * DERIVED FROM VELVET'S RULE, NOT INVENTED BESIDE IT — flagged for her sign-off
+ * because she owns copy. Her deck has no string for this control (it predates
+ * the toggle being an entry point), but §7 states the principle plainly and it
+ * applies unchanged: the same failure means opposite things depending on which
+ * way the owner was moving.
+ *
+ * Turning export ON and failing is a nuisance — nothing was opened up, and the
+ * reassuring phrasing is the true one. Turning it OFF and failing means the
+ * agent IS STILL REACHABLE and whoever could call it still can, which is the
+ * fact that has to come first. Same event, two strings.
+ *
+ * A silent failure is the one option ruled out. A control that does nothing and
+ * says nothing reads as broken, and the author's next move is to press it
+ * again.
+ */
+export const EXPORT_ERROR = {
+  on: {
+    id: 'mkt.grant.error.exportable.on',
+    text: 'Couldn’t make {agent} exportable — nothing was opened up.'
+  },
+  off: {
+    id: 'mkt.grant.error.exportable.off',
+    // The frightening half first, the same shape as the revoke failure.
+    text:
+      'Couldn’t stop exporting {agent} — it is still exportable and anyone you ' +
+      'granted can still call it. Try again.'
+  }
+} as const

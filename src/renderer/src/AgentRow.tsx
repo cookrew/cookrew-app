@@ -51,6 +51,8 @@ export function AgentRow({
   hit = null,
   selectable = false,
   exportState = null,
+  exportBusy = false,
+  exportError = null,
   onExport,
   onUnexport,
   onOpenGrants,
@@ -74,6 +76,10 @@ export function AgentRow({
    * would tell an author their agent is private when it may be reachable.
    */
   exportState?: AgentExportState | null
+  /** In flight — the control disables so one press cannot become two. */
+  exportBusy?: boolean
+  /** A failure, already worded for the direction it failed in. */
+  exportError?: string | null
   onExport?: (row: Row) => void
   onUnexport?: (row: Row) => void
   onOpenGrants?: () => void
@@ -150,6 +156,8 @@ export function AgentRow({
               <ExportToggle
                 agentName={row.name}
                 state={exportState}
+                busy={exportBusy}
+                error={exportError}
                 onExport={() => onExport?.(row)}
                 onUnexport={() => onUnexport?.(row)}
                 onOpenGrants={() => onOpenGrants?.()}

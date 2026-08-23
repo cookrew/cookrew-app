@@ -13,6 +13,7 @@ import {
 } from '../src/renderer/src/grant-stage'
 import {
   EXPORT_COPY,
+  EXPORT_ERROR,
   GRANT_COPY,
   REVOKE_COPY,
   clearsFieldOn,
@@ -391,5 +392,42 @@ describe('the PUBLISH seam is stated, not mocked up', () => {
     for (const claim of ['PUBLISH', 'SET PRICE', 'SELL', 'PAYOUT']) {
       expect(surface, `no control may claim ${claim} in this lane`).not.toContain(claim)
     }
+  })
+})
+
+describe('the toggle cannot fail silently, and branches on direction', () => {
+  it('turning ON and failing is a nuisance — nothing was opened up', () => {
+    expect(fill(EXPORT_ERROR.on.text, { agent: 'Forge' })).toBe(
+      'Couldn’t make Forge exportable — nothing was opened up.'
+    )
+  })
+
+  it('turning OFF and failing leads with STILL REACHABLE', () => {
+    // Velvet's §7 rule applied to a control her deck predates: the same event
+    // means opposite things depending on which way the owner was moving, and
+    // "nothing changed" is the reassuring lie when the move was a removal.
+    const text = fill(EXPORT_ERROR.off.text, { agent: 'Forge' })
+    expect(text).toContain('still exportable')
+    expect(text.indexOf('still exportable')).toBeLessThan(text.indexOf('Try again'))
+  })
+
+  it('the two failures do not share a string', () => {
+    expect(EXPORT_ERROR.on.text).not.toBe(EXPORT_ERROR.off.text)
+    expect(EXPORT_ERROR.on.id).not.toBe(EXPORT_ERROR.off.id)
+  })
+
+  it('a refused or absent bridge method is treated as failure, not success', () => {
+    // The silent no-op that made the control look broken: an optional-chained
+    // call on a bridge without the method resolves undefined, which used to
+    // read as success and invite a second press.
+    const roster = code('RosterPanel.tsx')
+    expect(roster).toContain('if (!result?.ok) throw new Error')
+  })
+
+  it('the control disables while in flight, per node', () => {
+    // Keyed by node so exporting one agent does not freeze every other row.
+    const roster = code('RosterPanel.tsx')
+    expect(roster).toContain('exportBusy === row.id')
+    expect(code('ExportToggle.tsx')).toContain('disabled={busy}')
   })
 })

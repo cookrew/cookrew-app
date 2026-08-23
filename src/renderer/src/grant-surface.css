@@ -284,3 +284,14 @@
   opacity: 0.75;
   font-style: italic;
 }
+
+/* A per-row failure, beside the control that produced it. */
+.ex-error {
+  flex-basis: 100%;
+  color: var(--cr-red, #e8867a);
+  font-size: 11px;
+  line-height: 1.5;
+  max-width: 62ch;
+  border-left: 2px solid var(--cr-red, #e8867a);
+  padding-left: 8px;
+}

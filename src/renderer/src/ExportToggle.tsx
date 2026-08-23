@@ -35,7 +35,8 @@ export function ExportToggle({
   onExport,
   onUnexport,
   onOpenGrants,
-  busy = false
+  busy = false,
+  error = null
 }: {
   agentName: string
   /** null when the roster could not be read — render nothing, never a default. */
@@ -43,7 +44,16 @@ export function ExportToggle({
   onExport: () => void
   onUnexport: () => void
   onOpenGrants: () => void
+  /** In flight: the control disables so one press cannot become two. */
   busy?: boolean
+  /**
+   * A failure to report, already worded for the DIRECTION it failed in.
+   *
+   * Rendered beside the control the author pressed rather than in a global
+   * toast: this is a per-row action, and an error that appears somewhere else
+   * makes the author look for which row it belonged to.
+   */
+  error?: string | null
 }): React.JSX.Element | null {
   const [confirming, setConfirming] = useState(false)
 
@@ -101,6 +111,12 @@ export function ExportToggle({
         then the author's question has changed to who can call it.
       */}
       {!state.exportable && <span className="ex-safety">{EXPORT_COPY.safety}</span>}
+
+      {error && (
+        <span className="ex-error" role="alert">
+          {error}
+        </span>
+      )}
 
       {state.exportable && (
         <span className="ex-hint">

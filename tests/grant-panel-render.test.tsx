@@ -128,6 +128,35 @@ describe('the export entry point paints on the agent row', () => {
     expect(html).toContain('1 calling now')
   })
 
+  it('shows a failure beside the control that produced it', () => {
+    const html = renderToStaticMarkup(
+      <ExportToggle
+        agentName="Forge"
+        state={{ exportable: true, callers: 1, inFlight: 0 }}
+        error="Couldn’t stop exporting Forge — it is still exportable."
+        onExport={() => undefined}
+        onUnexport={() => undefined}
+        onOpenGrants={() => undefined}
+      />
+    )
+    expect(html).toContain('still exportable')
+    expect(html).toContain('role="alert"')
+  })
+
+  it('disables while in flight, so one press cannot become two', () => {
+    const html = renderToStaticMarkup(
+      <ExportToggle
+        agentName="Forge"
+        state={{ exportable: false, callers: 0, inFlight: 0 }}
+        busy
+        onExport={() => undefined}
+        onUnexport={() => undefined}
+        onOpenGrants={() => undefined}
+      />
+    )
+    expect(html).toMatch(/<button[^>]*class="ex-invite"[^>]*disabled/)
+  })
+
   it('renders NOTHING when the roster could not be read', () => {
     // Never a default of "not exportable" — that would tell an author their
     // agent is private when it may be reachable.

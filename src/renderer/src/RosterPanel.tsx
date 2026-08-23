@@ -6,6 +6,7 @@ import { RoleAvatar } from './nodes/RoleAvatar'
 import { hasRegistry, useRoster, type AgentRegistryEntry } from './agent-registry'
 import { AgentRow } from './AgentRow'
 import { exportStateOf, useGrantRoster } from './grant-state'
+import { EXPORT_ERROR, fill } from './grant-copy'
 import { NoteRow } from './NoteRow'
 import { BrowserRow } from './BrowserRow'
 import { buildAgentRows, type AgentRow as Row } from './agent-rows'
@@ -200,16 +201,37 @@ export function RosterPanel({
    * until the owner grants someone. The gate reads the same record and its
    * closed default is unchanged.
    */
-  const setExportable = async (nodeId: string, on: boolean): Promise<void> => {
+  const setExportable = async (nodeId: string, name: string, on: boolean): Promise<void> => {
     const api = cookrew() as unknown as {
       grantExport?: (w: string, n: string, c: string[]) => Promise<{ ok: boolean }>
       grantUnexport?: (w: string, n: string) => Promise<{ ok: boolean }>
     }
     if (!activeWorkspaceId) return
-    if (on) await api.grantExport?.(activeWorkspaceId, nodeId, [])
-    else await api.grantUnexport?.(activeWorkspaceId, nodeId)
-    await refreshGrants()
+    // In flight, so one press cannot become two. Keyed by node: exporting one
+    // agent must not freeze the control on every other row.
+    setExportBusy(nodeId)
+    setExportError((prior) => ({ ...prior, [nodeId]: null }))
+    try {
+      const call = on
+        ? api.grantExport?.(activeWorkspaceId, nodeId, [])
+        : api.grantUnexport?.(activeWorkspaceId, nodeId)
+      // A bridge without the method resolves undefined, which used to read as
+      // success and silently do nothing — the failure mode that makes a control
+      // look broken and invites a second press.
+      const result = await call
+      if (!result?.ok) throw new Error('refused')
+      await refreshGrants()
+    } catch {
+      const copy = on ? EXPORT_ERROR.on : EXPORT_ERROR.off
+      setExportError((prior) => ({ ...prior, [nodeId]: fill(copy.text, { agent: name }) }))
+    } finally {
+      setExportBusy(null)
+    }
   }
+
+  /** Node whose export toggle is in flight, and any per-node failure to show. */
+  const [exportBusy, setExportBusy] = useState<string | null>(null)
+  const [exportError, setExportError] = useState<Record<string, string | null>>({})
 
   /** Id of the row whose recover is in flight (disables its button). */
   const [recovering, setRecovering] = useState<string | null>(null)
@@ -387,8 +409,10 @@ export function RosterPanel({
       hit={hits.get(row.id) ?? null}
       selectable={editing}
       exportState={editing ? null : exportStateOf(grants, row.id)}
-      onExport={(r) => void setExportable(r.id, true)}
-      onUnexport={(r) => void setExportable(r.id, false)}
+      exportBusy={exportBusy === row.id}
+      exportError={exportError[row.id] ?? null}
+      onExport={(r) => void setExportable(r.id, r.name, true)}
+      onUnexport={(r) => void setExportable(r.id, r.name, false)}
       onOpenGrants={onOpenGrants}
       onOpen={editing ? toggle : open}
       onRecover={recover}
