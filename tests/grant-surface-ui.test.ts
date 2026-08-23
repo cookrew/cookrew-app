@@ -11,7 +11,17 @@ import {
   stageFrom,
   toggleAgent
 } from '../src/renderer/src/grant-stage'
-import { GRANT_COPY, REVOKE_COPY, fill, pasteMessage, clearsFieldOn } from '../src/renderer/src/grant-copy'
+import {
+  EXPORT_COPY,
+  EXPORT_ERROR,
+  GRANT_COPY,
+  REVOKE_COPY,
+  clearsFieldOn,
+  fill,
+  pasteMessage
+} from '../src/renderer/src/grant-copy'
+import { exportStateOf } from '../src/renderer/src/grant-state'
+import { MKT_EXPORT } from '../src/shared/marketplace-copy'
 import { canGrant } from '../src/renderer/src/GrantPanel'
 import { stripComments } from './support/module-imports'
 
@@ -292,5 +302,153 @@ describe('§7 · which empty state a first-time owner is shown, and in what orde
 
   it('and no empty state once there is something to show', () => {
     expect(emptyStateFor({ agents: ['a'], callers: ['someone'] })).toBe('none')
+  })
+})
+
+describe('the export entry point — Magpie give-up reason 1, first inch', () => {
+  it('the surface READS Velvet\'s string rather than carrying a copy of it', () => {
+    // The duplicate this replaced was character-identical, which is precisely
+    // why it had to go: a copy that agrees today drifts the first time she
+    // edits hers, and nothing fails when it does.
+    expect(EXPORT_COPY.safety).toBe(MKT_EXPORT['mkt.export.safety'])
+    expect(EXPORT_COPY.atRest(0, true)).toBe(MKT_EXPORT['mkt.export.access.none'])
+    expect(EXPORT_COPY.atRest(2, true)).toBe(
+      MKT_EXPORT['mkt.export.access.some'].replace('{n}', '2')
+    )
+  })
+
+  it('and does not ship "1 callers" — the one flagged deviation from her file', () => {
+    // Her 'mkt.export.access.some' is '{n} callers', always plural, and she has
+    // no singular key. That is a gap rather than a decision, so the singular is
+    // produced here and reported to her; the plural still comes from her string
+    // so her edits keep reaching this surface.
+    expect(MKT_EXPORT['mkt.export.access.some'].replace('{n}', '1')).toBe('1 callers')
+    expect(EXPORT_COPY.atRest(1, true)).toBe('1 caller')
+  })
+
+  it('VELVET\'S SENTENCE 6 IS ON THE SURFACE, verbatim', () => {
+    // Her audit's most important line. Exporting is safe by construction and
+    // version-pin.ts opens with exactly this — as a CODE COMMENT that has never
+    // been said to an author. It is the number-one reason not to export, it is
+    // already true, and it costs nothing to say.
+    expect(EXPORT_COPY.safety).toBe(
+      'Callers get a copy. Your original conversation is never touched, never sent, ' +
+        'and never resumed by anyone else.'
+    )
+    // And it is rendered as prose, not hidden behind a hover.
+    expect(code('ExportToggle.tsx')).toContain('EXPORT_COPY.safety')
+    expect(code('ExportToggle.tsx')).toContain('ex-safety')
+  })
+
+  it('access is legible AT REST, in the words she specified', () => {
+    // "{n} callers" or "Nobody can call this" — the question is asked in a
+    // glance, so an answer that costs a click is an answer nobody has.
+    expect(EXPORT_COPY.atRest(0, true)).toBe('Nobody can call this')
+    expect(EXPORT_COPY.atRest(1, true)).toBe('1 caller')
+    expect(EXPORT_COPY.atRest(3, true)).toBe('3 callers')
+    expect(EXPORT_COPY.atRest(0, false)).toBe('Not exportable')
+  })
+
+  it('an unread roster renders NOTHING rather than claiming "not exportable"', () => {
+    // An unread roster and an unexported agent are different facts. Rendering
+    // the second when we only know the first tells an author their agent is
+    // private when it may be reachable from the internet.
+    expect(exportStateOf(null, 'node-forge')).toBeNull()
+  })
+
+  it('reads one agent out of the roster, and defaults an absent one to closed', () => {
+    const roster = {
+      workspaceId: 'w1',
+      callers: [],
+      revoked: [],
+      live: [],
+      agents: [{ nodeId: 'node-forge', callers: ['kestrel'], inFlight: 2 }]
+    }
+    expect(exportStateOf(roster, 'node-forge')).toEqual({
+      exportable: true,
+      callers: 1,
+      inFlight: 2
+    })
+    // Present roster, absent agent: genuinely not exported.
+    expect(exportStateOf(roster, 'node-tinker')).toEqual({
+      exportable: false,
+      callers: 0,
+      inFlight: 0
+    })
+  })
+
+  it('the control is an INVITATION when off, not a checkbox', () => {
+    // Magpie's finding was that zero of forty controls mentioned export at all.
+    // A checkbox states a setting; this has to say there is something here.
+    expect(EXPORT_COPY.turnOn).toBe('Let people call this agent')
+    expect(code('ExportToggle.tsx')).not.toMatch(/type="checkbox"/)
+  })
+
+  it('and points at the next step once it is on', () => {
+    expect(EXPORT_COPY.next).toContain('WHO CAN CALL')
+    expect(EXPORT_COPY.onHint).toContain('nobody can call it until you grant someone')
+  })
+})
+
+describe('the PUBLISH seam is stated, not mocked up', () => {
+  it('says plainly what is not built', () => {
+    // The honest repair for "no control mentions selling" is not a dead button
+    // that opens nothing — an author who presses that learns we are unreliable,
+    // which is worse than the gap.
+    expect(EXPORT_COPY.publishSeam).toContain('isn’t built yet')
+    expect(EXPORT_COPY.publishSeam).toMatch(/price|payout|listing/)
+  })
+
+  it('promises no scrub report, because this control publishes nothing', () => {
+    // Velvet's scrub line belongs to the publish lane. Showing it here would be
+    // a string whose behaviour does not exist — the defect this program keeps
+    // finding — because exporting publishes nothing.
+    const surface = [code('ExportToggle.tsx'), code('grant-copy.ts')].join('\n')
+    expect(surface).not.toContain('strips secrets')
+    expect(surface).not.toMatch(/shows you the report/)
+  })
+
+  it('ships no control that claims to price, sell or publish', () => {
+    const surface = code('ExportToggle.tsx')
+    for (const claim of ['PUBLISH', 'SET PRICE', 'SELL', 'PAYOUT']) {
+      expect(surface, `no control may claim ${claim} in this lane`).not.toContain(claim)
+    }
+  })
+})
+
+describe('the toggle cannot fail silently, and branches on direction', () => {
+  it('turning ON and failing is a nuisance — nothing was opened up', () => {
+    expect(fill(EXPORT_ERROR.on.text, { agent: 'Forge' })).toBe(
+      'Couldn’t make Forge exportable — nothing was opened up.'
+    )
+  })
+
+  it('turning OFF and failing leads with STILL REACHABLE', () => {
+    // Velvet's §7 rule applied to a control her deck predates: the same event
+    // means opposite things depending on which way the owner was moving, and
+    // "nothing changed" is the reassuring lie when the move was a removal.
+    const text = fill(EXPORT_ERROR.off.text, { agent: 'Forge' })
+    expect(text).toContain('still exportable')
+    expect(text.indexOf('still exportable')).toBeLessThan(text.indexOf('Try again'))
+  })
+
+  it('the two failures do not share a string', () => {
+    expect(EXPORT_ERROR.on.text).not.toBe(EXPORT_ERROR.off.text)
+    expect(EXPORT_ERROR.on.id).not.toBe(EXPORT_ERROR.off.id)
+  })
+
+  it('a refused or absent bridge method is treated as failure, not success', () => {
+    // The silent no-op that made the control look broken: an optional-chained
+    // call on a bridge without the method resolves undefined, which used to
+    // read as success and invite a second press.
+    const roster = code('RosterPanel.tsx')
+    expect(roster).toContain('if (!result?.ok) throw new Error')
+  })
+
+  it('the control disables while in flight, per node', () => {
+    // Keyed by node so exporting one agent does not freeze every other row.
+    const roster = code('RosterPanel.tsx')
+    expect(roster).toContain('exportBusy === row.id')
+    expect(code('ExportToggle.tsx')).toContain('disabled={busy}')
   })
 })
