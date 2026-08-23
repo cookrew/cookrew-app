@@ -23,6 +23,17 @@ export interface AskOptions {
    * reserves anything when every producer consults the SAME instance.
    */
   lease?: ProducerLease
+  /**
+   * An outside cancellation, folded into the ask's own scope.
+   *
+   * The scope below already reaches every phase — native leg, typed fallback,
+   * waitForReply/waitUntilIdle, grace and quiescence — and is already wired to
+   * retirement and to shutdown. A remote call revoked mid-flight is the third
+   * thing that means STOP, so it joins the same controller rather than growing
+   * a second cancellation path that would have to be kept in agreement with
+   * this one. See owner-grant.ts: revoke stops calls already running.
+   */
+  signal?: AbortSignal
 }
 
 const SUBMIT_DELAY_BASE_MS = 150
@@ -152,6 +163,12 @@ export async function askTerminal(
   const unsubscribe = lease.onRetire((retired) => {
     if (retired === terminalId) abort.abort()
   })
+  // A caller-supplied stop joins the same scope. Checked for ALREADY-aborted
+  // as well as listened to: a call revoked between the gate's decision and
+  // this line would otherwise wait for an abort that has already happened.
+  const onOutsideAbort = (): void => abort.abort()
+  if (options.signal?.aborted) abort.abort()
+  else options.signal?.addEventListener('abort', onOutsideAbort, { once: true })
   // Every awaited phase ends with this: retirement throws the honest
   // 'retired' error, and a shutdown abort (generation intact, signal fired)
   // its own — never falling through to read the session as a reply.
@@ -199,6 +216,10 @@ export async function askTerminal(
     return diffOutput(before, session.fullText())
   } finally {
     unsubscribe()
+    // Dropped with everything else: a long-lived signal (one call's revoke
+    // handle outliving the ask it cut) must not accumulate listeners for
+    // asks that have already finished.
+    options.signal?.removeEventListener('abort', onOutsideAbort)
     activeAsks.delete(active)
     active.settle()
   }

@@ -43,7 +43,14 @@ export interface CallEndpointDeps {
    * Run the turn against the fork. The ONLY path from this surface into a pty,
    * and it never receives a terminal id that call-session did not produce.
    */
-  run: (input: { workspaceId: string; forkId: string; prompt: string }) => Promise<CallRunResult>
+  run: (input: {
+    workspaceId: string
+    forkId: string
+    prompt: string
+    /** Carried so a revoke can find THIS call while it is still running. */
+    sub: string
+    nodeId: string
+  }) => Promise<CallRunResult>
 }
 
 /**
@@ -211,14 +218,21 @@ export async function handleCallRoutes(
   const outcome = await deps.run({
     workspaceId,
     forkId: session.forkId,
-    prompt: prompt.text
+    prompt: prompt.text,
+    sub: verdict.claims.sub,
+    nodeId: decision.target.nodeId
   })
 
   if (!outcome.ok) {
-    // 409 for all three: not now, and the caller may retry. A busy producer, a
-    // fork whose pty is not attached and a context that never settled are
-    // different facts to the owner's log and the same instruction to a client.
-    respondJson(response, 409, { reason: outcome.reason })
+    // REVOKED IS NOT BUSY. The other three mean not now, and the caller may
+    // retry: a busy producer, a fork whose pty is not attached, a context that
+    // never settled are different facts to the owner's log and the same
+    // instruction to a client. A revoke is the opposite instruction — the
+    // owner took the access away mid-call — and answering 409 would invite
+    // exactly the retry loop the control exists to stop. It joins the gate's
+    // own refusal code rather than inventing a fourth vocabulary.
+    const status = outcome.reason === 'revoked' ? 403 : 409
+    respondJson(response, status, { reason: outcome.reason })
     return true
   }
 

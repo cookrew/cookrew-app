@@ -278,4 +278,17 @@ export class AgentExportStore {
   exportsIn(workspaceId: string): AgentExport[] {
     return this.read().exports.filter((e) => e.workspaceId === workspaceId)
   }
+
+  /**
+   * Every caller enrolled at a workspace. For the owner's own surfaces.
+   *
+   * Deliberately NOT the shape the gate uses. `enrolledKey` asks about one
+   * subject at one workspace, because a gate that could enumerate is a gate
+   * that can be asked "who is enrolled" by something that should not know.
+   * This is the owner reading their own record, behind the owner-only IPC
+   * check, and it is the only caller of it.
+   */
+  enrolledIn(workspaceId: string): EnrolledCaller[] {
+    return this.read().enrolled.filter((c) => c.workspaceId === workspaceId)
+  }
 }

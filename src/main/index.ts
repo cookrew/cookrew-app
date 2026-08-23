@@ -70,6 +70,7 @@ import { forkContextReady, forkTerminal as forkTerminalOp, injectWhenReady } fro
 import { AgentRegistry } from './agent-registry'
 import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerSender } from './owner-grant'
+import { buildGrantRoster } from './grant-roster'
 import { CallCredentialService } from './call-credential'
 import { makeCallCeremony } from './call-ceremony'
 import { makeCallGate } from './call-gate'
@@ -277,6 +278,10 @@ const agentExports = new AgentExportStore()
  */
 const ownerGrant = new OwnerGrant({
   store: agentExports,
+  // REVOKE STOPS CALLS ALREADY RUNNING. The same set that keeps a workspace
+  // resident while it serves a call is the set a revoke reaches into — one
+  // truth, so a call that is counted is a call that can be stopped.
+  cancelInFlight: (match) => callsInFlight.cancelWhere(match),
   audit: (line) => {
     events.append({
       type: `grant.${line.op}`,
@@ -2333,8 +2338,8 @@ app.whenReady().then(() => {
       run: makeCallRun({
         sessionOf: (forkId) => ptys.get(forkId),
         ready: (forkId) => forkContextReady(forkId),
-        ask: (session, prompt) => askTerminal(session as PtySession, prompt),
-        inFlight: (workspaceId) => callsInFlight.enter(workspaceId),
+        ask: (session, prompt, signal) => askTerminal(session as PtySession, prompt, { signal }),
+        inFlight: (identity, cancel) => callsInFlight.enter(identity, cancel),
         wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms))
       })
     },
@@ -2598,9 +2603,21 @@ function registerIpc(handlers: RestoreHandlers): void {
   )
   // READ paths, so the owner can see what they granted. Same ownership check:
   // the roster of who may call your agents is not for a rendered page either.
+  //
+  // The ROSTER rather than the raw exports: the record's shape is not the
+  // question's, and the revoke ruling made "is anything running right now" a
+  // thing the surface has to be able to answer — a control that promises to
+  // stop calls already running is unusable if it cannot say whether any are.
   ipcMain.handle(
     'grant:list',
-    ownerOnly((workspaceId: string) => agentExports.exportsIn(workspaceId))
+    ownerOnly((workspaceId: string) =>
+      buildGrantRoster({
+        workspaceId,
+        enrolledIn: (id) => agentExports.enrolledIn(id),
+        exportsIn: (id) => agentExports.exportsIn(id),
+        callsIn: (id) => callsInFlight.listIn(id)
+      })
+    )
   )
 
   ipcMain.handle('workspace:list', () => store.list())

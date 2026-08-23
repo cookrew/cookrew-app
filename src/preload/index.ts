@@ -7,12 +7,19 @@ const api = {
   // or an install page — see owner-grant.ts and grant-surface-shape.test.ts.
   grantEnrol: (workspaceId: string, sub: string, jwk: unknown) =>
     ipcRenderer.invoke('grant:enrol', workspaceId, sub, jwk),
+  // REVOKE STOPS CALLS ALREADY RUNNING. Both of these take access away, and
+  // both resolve with `stopped` — how many in-flight calls the decision cut —
+  // so the surface can tell the owner what actually happened rather than only
+  // that the record changed. See owner-grant.ts and call-run.ts.
   grantRevoke: (workspaceId: string, sub: string) =>
     ipcRenderer.invoke('grant:revoke', workspaceId, sub),
   grantExport: (workspaceId: string, nodeId: string, callers: string[]) =>
     ipcRenderer.invoke('grant:export', workspaceId, nodeId, callers),
   grantUnexport: (workspaceId: string, nodeId: string) =>
     ipcRenderer.invoke('grant:unexport', workspaceId, nodeId),
+  // The ROSTER, not the raw record: enrolled callers with what each may call,
+  // exported agents with how many calls are running against them, and the live
+  // calls themselves — see grant-roster.ts.
   grantList: (workspaceId: string) => ipcRenderer.invoke('grant:list', workspaceId),
   onWorkspaceState: (cb: (state: unknown) => void) => {
     const listener = (_e: unknown, state: unknown): void => cb(state)

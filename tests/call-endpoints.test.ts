@@ -346,6 +346,67 @@ describe('a served call cuts its version, once per conversation', () => {
     expect(captured.body).toEqual({ reason: 'no_version' })
   })
 
+  it('403s — not 409s — a call the owner revoked while it was running', async () => {
+    // The distinction is the whole point of the reason word. 409 tells a client
+    // NOT NOW, TRY AGAIN, which is precisely the retry loop a revoke exists to
+    // stop; 403 tells it the access is gone. Velvet's ruling — revoke stops
+    // calls already running — is only true on the wire if the wire says so.
+    exportForge()
+    const { response, captured } = stubResponse()
+    const revoked = {
+      ...deps(),
+      run: async () => ({ ok: false as const, reason: 'revoked' as const })
+    }
+    await handleCallRoutes(
+      stubRequest('POST', `Bearer ${credentialFor()}`, JSON.stringify({ text: 'hi' })),
+      response,
+      new URL('/agents/forge/ask', 'https://owner.example'),
+      revoked,
+      WS
+    )
+    expect(captured.status).toBe(403)
+    expect(captured.body).toEqual({ reason: 'revoked' })
+  })
+
+  it('still 409s the three refusals that DO mean try again', async () => {
+    for (const reason of ['busy', 'not_ready', 'not_running'] as const) {
+      exportForge()
+      const { response, captured } = stubResponse()
+      await handleCallRoutes(
+        stubRequest('POST', `Bearer ${credentialFor()}`, JSON.stringify({ text: 'hi' })),
+        response,
+        new URL('/agents/forge/ask', 'https://owner.example'),
+        { ...deps(), run: async () => ({ ok: false as const, reason }) },
+        WS
+      )
+      expect(captured.status, reason).toBe(409)
+    }
+  })
+
+  it('carries the caller identity into the run, so a revoke can find the call', async () => {
+    // A revoke matches on (workspace, sub, node). If the run never learns who
+    // is calling, the cut has nothing to match and the ruling is unenforceable
+    // one layer below where it is written.
+    exportForge()
+    const seen: unknown[] = []
+    const { response } = stubResponse()
+    await handleCallRoutes(
+      stubRequest('POST', `Bearer ${credentialFor()}`, JSON.stringify({ text: 'hi' })),
+      response,
+      new URL('/agents/forge/ask', 'https://owner.example'),
+      {
+        ...deps(),
+        run: async (input) => {
+          seen.push(input)
+          return { ok: true as const, text: 'ok', truncated: false }
+        }
+      },
+      WS
+    )
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({ sub: 'alice', nodeId: 'node-forge' })
+  })
+
   it('403s a conversation id that is not a key', async () => {
     exportForge()
     const { captured } = await call('POST', '/agents/forge/ask', {

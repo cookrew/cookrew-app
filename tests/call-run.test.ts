@@ -115,11 +115,15 @@ describe('outbound · a reply is text too, because it lands in someone else\'s t
   })
 })
 
+/** One call's identity. Its shape is what lets a revoke find the call. */
+const WS = { workspaceId: 'ws', sub: 'buyer', nodeId: 'node' }
+const NOOP = (): void => undefined
+
 describe('liveness fact 3 · a call in flight holds the workspace', () => {
   it('counts up while a call runs and back down when it ends', () => {
     const calls = new CallsInFlight()
     expect(calls.count('ws')).toBe(0)
-    const done = calls.enter('ws')
+    const done = calls.enter(WS, NOOP)
     expect(calls.count('ws')).toBe(1)
     done()
     expect(calls.count('ws')).toBe(0)
@@ -127,16 +131,16 @@ describe('liveness fact 3 · a call in flight holds the workspace', () => {
 
   it('counts concurrent calls, and one ending does not release the other', () => {
     const calls = new CallsInFlight()
-    const first = calls.enter('ws')
-    calls.enter('ws')
+    const first = calls.enter(WS, NOOP)
+    calls.enter(WS, NOOP)
     first()
     expect(calls.count('ws')).toBe(1)
   })
 
   it('is idempotent, so a double release cannot free someone else\'s call', () => {
     const calls = new CallsInFlight()
-    const first = calls.enter('ws')
-    calls.enter('ws')
+    const first = calls.enter(WS, NOOP)
+    calls.enter(WS, NOOP)
     first()
     first()
     first()
@@ -145,13 +149,13 @@ describe('liveness fact 3 · a call in flight holds the workspace', () => {
 
   it('keeps workspaces apart', () => {
     const calls = new CallsInFlight()
-    calls.enter('a')
+    calls.enter({ ...WS, workspaceId: 'a' }, NOOP)
     expect(calls.count('b')).toBe(0)
   })
 
   it('costs nothing for a workspace nobody is calling', () => {
     const calls = new CallsInFlight()
-    calls.enter('ws')()
+    calls.enter(WS, NOOP)()
     expect(calls.active()).toEqual([])
   })
 })
@@ -164,8 +168,8 @@ describe('the run · the fork, the wait, and the release', () => {
     sessionOf: () => ({ pty: true }),
     ready: async () => undefined,
     ask: async (_session, prompt) => `${ESC}[32mreply to ${prompt}${ESC}[0m`,
-    inFlight: (workspaceId) => {
-      entered.push(workspaceId)
+    inFlight: (identity) => {
+      entered.push(identity.workspaceId)
       return () => {
         released += 1
       }
@@ -179,7 +183,9 @@ describe('the run · the fork, the wait, and the release', () => {
     entered = []
   })
 
-  const input = { workspaceId: 'ws', forkId: 'fork-1', prompt: 'hello' }
+  // The caller identity travels with the run so a revoke can find THIS call
+  // while it is still running — see call-revoke-inflight.test.ts.
+  const input = { workspaceId: 'ws', forkId: 'fork-1', prompt: 'hello', sub: 'buyer', nodeId: 'node' }
 
   it('asks the FORK and returns a contained reply', async () => {
     const seen: string[] = []

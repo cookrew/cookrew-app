@@ -30,6 +30,7 @@
  */
 
 import type { AgentExportStore, AgentExport } from './agent-export'
+import type { CallIdentity } from './call-inflight'
 import type { Visibility } from '../shared/gate'
 
 /** What a grant decision records beyond the grant itself. */
@@ -47,6 +48,15 @@ export interface GrantResult {
   ok: boolean
   /** Machine-readable, and distinct at THIS boundary — see the note below. */
   reason?: string
+  /**
+   * Calls that were RUNNING and were stopped by this decision.
+   *
+   * Present on the two operations that take access away. It exists because
+   * "revoked" and "revoked, and stopped two calls that were running" are
+   * different things to be told, and the second is the one that answers the
+   * question the owner was actually asking when they reached for the control.
+   */
+  stopped?: number
 }
 
 /**
@@ -70,6 +80,19 @@ export const GRANT_REASON = {
 export interface OwnerGrantDeps {
   store: AgentExportStore
   now?: () => number
+  /**
+   * Cut every call in flight that the predicate claims; returns how many.
+   *
+   * REVOKE STOPS CALLS ALREADY RUNNING (Velvet's ruling, owner-confirmed). The
+   * control is one someone reaches for in a panic, and the only question they
+   * are asking is MAKE IT STOP NOW — so a revoke that let the current call run
+   * to completion would be a button whose words and whose behaviour disagree.
+   *
+   * Passed as a function rather than imported, for the same reason `audit` is:
+   * this module stays thin, testable without a pty, and — not incidentally —
+   * free of any edge that the listener-reach sweep would have to reason about.
+   */
+  cancelInFlight?: (match: (call: CallIdentity) => boolean) => number
   /** Appended for every decision. Metadata only — never keys, never prompts. */
   audit?: (line: {
     op: 'enrol' | 'revoke' | 'export' | 'unexport'
@@ -107,11 +130,21 @@ export class OwnerGrant {
     return result
   }
 
-  /** Forget a caller. Outstanding credentials still expire on their own. */
+  /**
+   * Forget a caller, and stop whatever it is doing right now.
+   *
+   * The record is written FIRST. If the process died between the two steps,
+   * the surviving state must be the one where access is gone — a stopped call
+   * with the grant intact is a caller who simply calls again.
+   *
+   * Outstanding credentials still expire on their own; what this guarantees is
+   * that they no longer entitle anyone, including mid-call.
+   */
   revoke(workspaceId: string, sub: string): GrantResult {
     this.deps.store.revoke(workspaceId, sub)
+    const stopped = this.cut((call) => call.workspaceId === workspaceId && call.sub === sub)
     this.note('revoke', workspaceId, sub)
-    return { ok: true }
+    return { ok: true, stopped }
   }
 
   /**
@@ -144,11 +177,37 @@ export class OwnerGrant {
     return { ok: true }
   }
 
-  /** Stop answering for an agent. The address stops existing to the internet. */
+  /**
+   * Stop answering for an agent. The address stops existing to the internet,
+   * and every call already running against it stops with it.
+   *
+   * Every CALLER of that agent, not one: unexporting is the owner saying this
+   * agent is not answering anyone, and leaving the calls that happened to be
+   * mid-flight running would be the same disagreement between the words and
+   * the behaviour that the revoke ruling ruled out.
+   */
   unexport(workspaceId: string, nodeId: string): GrantResult {
     this.deps.store.unexport(workspaceId, nodeId)
+    const stopped = this.cut((call) => call.workspaceId === workspaceId && call.nodeId === nodeId)
     this.note('unexport', workspaceId, nodeId)
-    return { ok: true }
+    return { ok: true, stopped }
+  }
+
+  /**
+   * Fire the cancellations, and never let them undo the decision.
+   *
+   * The same rule the audit line follows, and for a stronger reason: a revoke
+   * that reported failure because a cleanup threw would leave the owner
+   * believing access is still granted when the record already says it is not.
+   * The written record is the truth; stopping the call is what this does about
+   * it, and it reports 0 rather than pretending.
+   */
+  private cut(match: (call: CallIdentity) => boolean): number {
+    try {
+      return this.deps.cancelInFlight?.(match) ?? 0
+    } catch {
+      return 0
+    }
   }
 
   private note(
