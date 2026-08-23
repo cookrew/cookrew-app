@@ -9,9 +9,12 @@ import { randomUUID } from 'node:crypto'
 import { homedir, tmpdir } from 'node:os'
 import process from 'node:process'
 
-function fail(message) {
+function fail(message, exitCode = 1) {
   process.stderr.write(`cookrew: ${message}\n`)
-  process.exit(1)
+  // Per-outcome exit codes for delivery failures (shared/ask-outcome.ts): a
+  // caller's remedy differs per outcome and two of them are destructive if
+  // swapped, so `ask` never collapses them all to 1.
+  process.exit(exitCode)
 }
 
 /**
@@ -130,7 +133,7 @@ socket.on('data', (chunk) => {
     process.exit(0)
   } else {
     socket.end()
-    fail(response.error ?? 'Unknown error')
+    fail(response.error ?? 'Unknown error', response.exitCode ?? 1)
   }
 })
 
