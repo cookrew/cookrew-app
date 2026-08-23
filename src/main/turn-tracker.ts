@@ -176,6 +176,44 @@ function carryOverOnto(incoming: TurnRecord, replaced: TurnRecord): TurnRecord {
  * because the record a fresh title targets is almost always the newest one,
  * so the common case costs O(1), not O(history). -1 when absent.
  */
+/**
+ * Number an incoming reconcile against the LEDGER, not against the file it was
+ * parsed from.
+ *
+ * parseSessionTurns numbers a transcript's turns from 1, because that is all
+ * one file can know. The ledger is the durable record and may hold a history
+ * that spans several transcripts — after a compact, or after a lineage
+ * recovery. The parse then says "this is turn 1" about a turn the record calls
+ * 598, and the next reconcile OVERWRITES recovered history with live turns.
+ * That is the original bug one layer up: the durable record is the truth and
+ * the parse is a cache of it that can silently disagree.
+ *
+ * So the base is DERIVED: find where the incoming run starts in the existing
+ * history by message uuid, and continue from there. It closes the class rather
+ * than the instance — an external edit, a restore from a backup, or two writers
+ * all reconcile back to what the record says instead of what a parse assumed.
+ *
+ * Returns the records unchanged when there is nothing to align to: no uuids, or
+ * an incoming head the ledger has never seen (a genuinely new conversation).
+ * Alignment is never invented — a wrong offset would be the same silent
+ * overwrite in the other direction.
+ */
+export function alignToLedger(
+  existing: readonly TurnRecord[],
+  incoming: readonly TurnRecord[]
+): TurnRecord[] {
+  const head = incoming[0]
+  if (!head?.uuid || existing.length === 0) return [...incoming]
+  const at = existing.findIndex((r) => r.uuid === head.uuid)
+  if (at < 0) return [...incoming]
+  const base = existing[at].index
+  // Only shift when the ledger actually disagrees, so the ordinary case (a
+  // single-transcript agent) is untouched and cheap.
+  if (base === head.index) return [...incoming]
+  const shift = base - head.index
+  return incoming.map((record) => ({ ...record, index: record.index + shift }))
+}
+
 function lastPositionOfIndex(records: readonly TurnRecord[], index: number): number {
   for (let at = records.length - 1; at >= 0; at -= 1) {
     if (records[at].index === index) return at
@@ -609,8 +647,11 @@ export class TurnTracker extends EventEmitter {
    * index + prompt for legacy records without a uuid. Shrinking is expected:
    * after /rewind the rewound turns disappear so counts match reality.
    */
-  replaceHistory(terminalId: string, records: TurnRecord[]): void {
+  replaceHistory(terminalId: string, rawRecords: TurnRecord[]): void {
     const previous = this.liveHistory(terminalId)
+    // THE COUNTER DERIVES FROM THE RECORD. A transcript numbers its own turns
+    // from 1; the ledger knows where this run actually sits.
+    const records = alignToLedger(previous, rawRecords)
     const byUuid = new Map(previous.filter((r) => r.uuid).map((r) => [r.uuid, r]))
     const byIndex = new Map(previous.map((r) => [r.index, r]))
     const merged = records.map((record) => {

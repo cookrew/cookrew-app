@@ -27,6 +27,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AnnotationStore } from '../src/main/turn-annotations'
+import { alignToLedger } from '../src/main/turn-tracker'
 import type { TurnRecord } from '../src/shared/turn'
 
 let dir: string
@@ -119,5 +120,43 @@ describe('an annotation must follow its checkpoint through a renumber', () => {
     const second = store.rekeyByUuid(AGENT, before, after)
     expect(store.load(AGENT).get(400)?.title).toBe(once)
     expect(second.moved).toBe(0)
+  })
+})
+
+/**
+ * THE COUNTER DERIVES FROM THE RECORD.
+ *
+ * parseSessionTurns numbers a transcript from 1 — all one file can know. After
+ * a compact or a lineage recovery the ledger holds a history spanning several
+ * transcripts, so the parse calls a turn "1" that the record calls 598, and the
+ * next reconcile overwrites recovered history with live turns. Same defect as
+ * the original bug, one layer up: the durable record is the truth and the
+ * parse is a cache of it that can disagree.
+ */
+describe('alignToLedger', () => {
+  const rec = (index: number, uuid: string): TurnRecord =>
+    ({ index, uuid, prompt: `p${index}`, reply: 'r', startedAt: index, endedAt: index + 1 })
+
+  it('continues from where the ledger says this run sits', () => {
+    const ledger = [rec(597, 'u-a'), rec(598, 'u-b'), rec(599, 'u-c')]
+    const parsed = [rec(1, 'u-b'), rec(2, 'u-c')] // the transcript numbers from 1
+    expect(alignToLedger(ledger, parsed).map((r) => r.index)).toEqual([598, 599])
+  })
+
+  it('leaves an ordinary single-transcript agent untouched', () => {
+    const ledger = [rec(1, 'u-a'), rec(2, 'u-b')]
+    expect(alignToLedger(ledger, [rec(1, 'u-a'), rec(2, 'u-b')]).map((r) => r.index)).toEqual([1, 2])
+  })
+
+  it('does not invent an alignment for a conversation the ledger has never seen', () => {
+    // A wrong offset is the same silent overwrite in the other direction.
+    const ledger = [rec(597, 'u-a')]
+    expect(alignToLedger(ledger, [rec(1, 'u-new')]).map((r) => r.index)).toEqual([1])
+  })
+
+  it('is a no-op against an empty ledger, and on records without uuids', () => {
+    expect(alignToLedger([], [rec(1, 'u-a')]).map((r) => r.index)).toEqual([1])
+    const noUuid = [{ index: 1, prompt: 'p', reply: 'r', startedAt: 0, endedAt: 1 } as TurnRecord]
+    expect(alignToLedger([rec(9, 'u-a')], noUuid).map((r) => r.index)).toEqual([1])
   })
 })
