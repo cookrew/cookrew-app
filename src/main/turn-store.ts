@@ -71,6 +71,16 @@ import { FoldRecordCodec, OVERSIZED_RECORD_BYTES } from './turn-store-fold-worke
 const SAVE_DEBOUNCE_MS = 300
 
 /**
+ * How many terminals' ledgers load() keeps parsed in memory (see `hot`).
+ *
+ * Sized for the agents actually TAKING TURNS, which is what the reconcile calls
+ * load() for — not for the fleet, and deliberately not for a board or search
+ * sweep, whose one-shot pass over every agent must not leave a full copy of
+ * every ledger resident.
+ */
+const HOT_LEDGERS = 8
+
+/**
  * The fold's event-loop budget (Sol r9 P1, byte-bounded per Sol r10 P1). The
  * fold reads, parses, serializes and writes in bounded chunks with a yield
  * between each, so the O(total history) rewrite never blocks Electron's main
@@ -314,6 +324,13 @@ export class TurnStore {
    * The map handed back is the LIVE cache: read only.
    */
   private all: Map<string, TurnRecord[]> | null = null
+  /**
+   * Per-terminal load cache: the records, plus the `size:mtimeMs:ino` of the
+   * file they were taken from. load() serves from it when a stat still matches,
+   * so a caller that cannot trust its own copy pays a stat instead of a parse.
+   * See load() for why this is keyed on the FILE and not on authorship.
+   */
+  private hot = new Map<string, { records: TurnRecord[]; stamp: string }>()
 
   /**
    * Cookrew's own fields (title / seenAt / scrollLine) live here instead of on
@@ -499,13 +516,53 @@ export class TurnStore {
     }
   }
 
+  /**
+   * The durable history for a terminal.
+   *
+   * SERVED FROM A STAT-VALIDATED CACHE. Callers that must not trust their own
+   * in-memory copy have to call this on a hot path — the reconcile aligns
+   * against the durable record, which is CRITICAL-1 — and the read underneath
+   * is a full parse of an uncapped ledger on the Electron main thread, measured
+   * at 64.7ms for 5,000 records. Conductor carries thousands of checkpoints and
+   * would pay that per turn.
+   *
+   * So the parse is skipped when the file is byte-for-byte the one this store
+   * last read or wrote: `hot` holds those records and the stat they were taken
+   * at, and a stat is microseconds. Every write path refreshes it (see flush),
+   * which is what makes a RESTORE visible — the recovery tool saves through
+   * this store, so the cache becomes the restored ledger rather than defending
+   * the old one. That distinction is the whole reason this is a cache of the
+   * FILE and not a record of "we wrote it": an earlier attempt marked the
+   * store's own writes as ours-so-unchanged, and the round-2 probe went
+   * straight back to 16 records because the write it dismissed was the restore.
+   *
+   * FAILS TOWARD THE PARSE. Any write this store did not perform — another
+   * process, a hand-edit — moves size or mtime and re-reads. So does a path
+   * that forgets to refresh (the fold, which rewrites asynchronously): one
+   * extra parse, never a stale answer. The dangerous direction needs size AND
+   * mtime AND inode to collide on a rewritten ledger.
+   *
+   * A COPY is returned, as before: the tracker keeps this array as its live
+   * buffer and the delta path mutates it in place.
+   *
+   * SCOPE: the conversation file. An annotation written into the sidecar
+   * behind this store's back would not move the stat — nothing does that
+   * today (annotations are written here, in flush, from the same records).
+   */
   load(terminalId: string): TurnRecord[] {
     const pending = this.pending.get(terminalId)
     if (pending) return pending
     try {
       const file = this.fileFor(terminalId)
       if (existsSync(file)) {
+        const hot = this.hot.get(terminalId)
+        if (hot && hot.stamp === this.stampOf(terminalId)) {
+          this.hot.delete(terminalId) // touch: re-insert last, so LRU order holds
+          this.hot.set(terminalId, hot)
+          return [...hot.records]
+        }
         const records = this.hydrate(terminalId, this.readLines(terminalId, file))
+        this.warm(terminalId, records)
         this.maybeFold(terminalId)
         return records
       }
@@ -513,6 +570,41 @@ export class TurnStore {
     } catch (error) {
       console.error('Failed to load turn history:', error)
       return []
+    }
+  }
+
+  /**
+   * A stat-shaped fingerprint of the ledger file — size, mtime and inode. Never
+   * a read, never a parse. 'absent' when there is no file, which is a value
+   * like any other: it changes the moment one appears.
+   */
+  private stampOf(terminalId: string): string {
+    try {
+      const stat = statSync(this.fileFor(terminalId))
+      return `${stat.size}:${stat.mtimeMs}:${stat.ino}`
+    } catch {
+      return 'absent'
+    }
+  }
+
+  /**
+   * Point the hot cache at what the file now holds, after this store wrote it.
+   * A COPY of the records, never the caller's array: the tracker mutates its
+   * buffer in place on the delta path, and a cache aliasing that buffer would
+   * quietly report unflushed edits as durable.
+   */
+  private warm(terminalId: string, records: readonly TurnRecord[]): void {
+    this.hot.delete(terminalId) // re-insert last: Map order is the LRU order
+    this.hot.set(terminalId, { records: [...records], stamp: this.stampOf(terminalId) })
+    // BOUNDED, because this holds whole ledgers. The callers it exists for are
+    // the handful of agents currently taking turns, so a small LRU serves every
+    // one of them; a fleet-wide sweep (loadAll, the board, a search) would
+    // otherwise leave one full copy per agent resident forever. Evicting is
+    // free of correctness: the next load re-reads.
+    while (this.hot.size > HOT_LEDGERS) {
+      const oldest = this.hot.keys().next()
+      if (oldest.done) break
+      this.hot.delete(oldest.value)
     }
   }
 
@@ -786,6 +878,10 @@ export class TurnStore {
     } catch (error) {
       console.error('Failed to save turn history:', error)
     }
+    // What just landed IS the durable ledger now — including when the writer
+    // was a recovery tool rather than the tracker. Refreshing here is what lets
+    // the next load() see a restore without re-parsing every turn.
+    if (conversed) this.warm(terminalId, records)
     // Fail closed (Sol r6 P1): anything that did not land goes back on the
     // dirty pile and the debounce retries it. Retrying the half that DID land
     // is free — the annotation store diffs to zero ops and the conversation
@@ -1435,6 +1531,7 @@ export class TurnStore {
     this.dirDebt.delete(terminalId)
     this.clearDebtRetry(terminalId)
     this.counts.delete(terminalId)
+    this.hot.delete(terminalId)
     this.all?.delete(this.safeId(terminalId))
     this.annotations.remove(this.safeId(terminalId))
     try {

@@ -418,6 +418,15 @@ export class SessionTurnSync {
       staleTicks: 0,
       staleReported: false
     })
+    // THE LEDGER CONTINUES ACROSS THIS SEAM. A rotation is the same
+    // conversation in a new file, and a compact's successor shares no turn
+    // with what came before it — so without this, the first reconcile of the
+    // successor cannot anchor its run and replaces the entire history with it
+    // (a restored 613 becomes 1 on the owner's next compact). The licence is
+    // issued HERE, against THIS file, because this is the only place the join
+    // has been proven: see TurnTracker.declareRotation for the chain of
+    // evidence behind it, and note it is only ever this one call site.
+    this.turns.declareRotation(terminalId, file)
     // The successor has not proven itself yet — exactly like watch(), the
     // scrape covers the window until the first reconcile lands.
     this.turns.setHistorySource(terminalId, 'scrape')
@@ -617,7 +626,11 @@ export class SessionTurnSync {
           if (delta.kind !== 'tail') break
         }
       } else {
-        this.turns.replaceHistory(terminalId, acc.records())
+        // The file is named so the tracker can tell a run reconciled from the
+        // transcript a rotation just moved us onto from any other run — that
+        // is what lets a compact CONTINUE the ledger instead of replacing it
+        // (TurnTracker.declareRotation).
+        this.turns.replaceHistory(terminalId, acc.records(), { sessionFile: watched.file })
         // replaceHistory just delivered the full state, so the delta cursor
         // is drained to match — the NEXT growth emits O(delta) instead of
         // re-emitting anything the tracker already holds.
