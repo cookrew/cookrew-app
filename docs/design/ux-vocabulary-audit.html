@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Where does a user learn what these mean? — vocabulary &amp; gaps audit</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>📖</text></svg>">
+<style>
+  :root { --bg:#f7f4ec; --panel:#fffdf7; --panel-2:#f1ece0; --ink:#1b1a17; --ink-soft:#45413a;
+    --muted:#7a736a; --line:#ddd5c6; --line-hard:#b9ae9a; --amber:#b8770a; --amber-soft:#fbf0d8;
+    --green:#2f7d4f; --red:#a8362b; --blue:#2b5fa8; --violet:#6b3fa0; --code-bg:#efeade;
+    --shadow:0 1px 0 var(--line), 0 8px 24px rgba(30,25,15,.06); }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14130f; --panel:#1c1a16; --panel-2:#242019;
+    --ink:#ece6d8; --ink-soft:#c2bbab; --muted:#8d8577; --line:#332f27; --line-hard:#4c463a;
+    --amber:#e9b949; --amber-soft:#2a2213; --green:#6fca92; --red:#e8867a; --blue:#7fadf0;
+    --violet:#b795e8; --code-bg:#221f19; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(0,0,0,.35); } }
+  :root[data-theme="dark"] { --bg:#14130f; --panel:#1c1a16; --panel-2:#242019; --ink:#ece6d8;
+    --ink-soft:#c2bbab; --muted:#8d8577; --line:#332f27; --line-hard:#4c463a; --amber:#e9b949;
+    --amber-soft:#2a2213; --green:#6fca92; --red:#e8867a; --blue:#7fadf0; --violet:#b795e8;
+    --code-bg:#221f19; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(0,0,0,.35); }
+  :root[data-theme="light"] { --bg:#f7f4ec; --panel:#fffdf7; --panel-2:#f1ece0; --ink:#1b1a17;
+    --ink-soft:#45413a; --muted:#7a736a; --line:#ddd5c6; --line-hard:#b9ae9a; --amber:#b8770a;
+    --amber-soft:#fbf0d8; --green:#2f7d4f; --red:#a8362b; --blue:#2b5fa8; --violet:#6b3fa0;
+    --code-bg:#efeade; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(30,25,15,.06); }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.62 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; -webkit-text-size-adjust:100%; }
+  .wrap { max-width:1140px; margin:0 auto; padding:32px 20px 96px; }
+  header.top { border-bottom:2px solid var(--line-hard); padding-bottom:18px; margin-bottom:26px; }
+  .kicker { font:600 11px/1 ui-monospace,monospace; letter-spacing:.16em; text-transform:uppercase; color:var(--amber); }
+  h1 { font-size:clamp(24px,4.4vw,34px); line-height:1.15; margin:10px 0 8px; letter-spacing:-.015em; }
+  .sub { color:var(--muted); max-width:72ch; margin:0; }
+  .meta { margin-top:12px; font:12px/1.5 ui-monospace,monospace; color:var(--muted); }
+  h2 { font-size:20px; margin:42px 0 6px; letter-spacing:-.01em; }
+  h2 .num { color:var(--amber); font:600 13px/1 ui-monospace,monospace; margin-right:8px; }
+  h3 { font-size:14.5px; margin:24px 0 4px; }
+  p { margin:8px 0; } .lede { color:var(--ink-soft); max-width:78ch; }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86em;
+    background:var(--code-bg); padding:1px 5px; border-radius:3px; }
+  a { color:var(--blue); }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:13px; }
+  th,td { text-align:left; padding:8px 9px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font:600 10.5px/1.3 ui-monospace,monospace; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--muted); border-bottom:2px solid var(--line-hard); }
+  tbody tr:hover { background:var(--panel-2); }
+  .id { font:600 11.5px ui-monospace,monospace; color:var(--violet); white-space:nowrap; }
+  .say { font-size:14.5px; line-height:1.55; }
+  .say b { color:var(--ink); }
+  .rule { display:grid; grid-template-columns:auto 1fr; gap:10px 14px; align-items:start;
+    background:var(--amber-soft); border:1px solid var(--line-hard); border-left:4px solid var(--amber);
+    padding:14px 16px; margin:18px 0; border-radius:3px; }
+  .rule b { display:block; font-size:13px; letter-spacing:.04em; text-transform:uppercase; color:var(--amber); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:4px;
+    padding:14px 16px; margin:14px 0; box-shadow:var(--shadow); }
+  .warn { border-left:4px solid var(--red); background:color-mix(in srgb, var(--red) 8%, transparent); }
+  .ok { border-left:4px solid var(--green); }
+  .miss { border-left:4px solid var(--violet); }
+  ul.tight { padding-left:20px; margin:8px 0; } ul.tight li { margin:4px 0; }
+  ol.steps { padding-left:22px; margin:8px 0; } ol.steps li { margin:9px 0; }
+  .bar { display:flex; height:22px; border:1px solid var(--line-hard); border-radius:3px; overflow:hidden; margin:10px 0 4px; }
+  .bar i { display:block; height:100%; }
+  .bar .have { background:var(--green); }
+  .bar .gap { background:color-mix(in srgb, var(--red) 45%, transparent); }
+  footer { margin-top:56px; padding-top:18px; border-top:2px solid var(--line-hard);
+    font-size:12.5px; color:var(--muted); }
+  .toggle { position:fixed; top:12px; right:12px; z-index:10; font:600 11px ui-monospace,monospace;
+    background:var(--panel); color:var(--ink); border:1px solid var(--line-hard); border-radius:999px;
+    padding:6px 12px; cursor:pointer; box-shadow:var(--shadow); }
+  @media print { .toggle { display:none; } }
+</style>
+</head>
+<body>
+<button class="toggle" id="theme">◐ theme</button>
+<div class="wrap">
+
+<header class="top">
+  <div class="kicker">Cookrew · marketplace · vocabulary &amp; gaps audit</div>
+  <h1>Where does a user learn what any of this means?</h1>
+  <p class="sub">Every surface that speaks to a buyer or an author, audited as ONE vocabulary: the
+  canonical word for each protocol state, where each surface deviates from it, and the ten sentences the
+  product is currently missing at its ten moments of doubt.</p>
+  <p class="meta">Velvet (UX Optimizer) · 2026-08-22 · surfaces read:
+  <code>registry/src/install-copy.ts</code> · <code>install-page.ts</code> ·
+  <code>src/shared/marketplace-copy.ts</code> · <code>preset-manifest.ts</code> ·
+  the review-sheet payload · the three design decks</p>
+</header>
+
+<div class="card">
+  <b>Doc annotation (R14).</b> <code>401</code>, <code>402</code>, <code>403</code>,
+  <code>seat_limit</code> and friends appear here as design labels. A buyer never sees any of them —
+  which is exactly why this audit exists: <b>the numbers are not the vocabulary, the words are, and
+  nobody has been auditing the words as a set.</b>
+</div>
+
+<h2><span class="num">0</span>The finding, before the detail</h2>
+<p class="lede">The vocabulary is <b>designed and largely unshipped</b>. Three decks specify well over a
+hundred user-facing strings; <code>marketplace-copy.ts</code> holds <b>17</b>. Every string that exists
+is correct and lifted verbatim — the discipline is real — but the surfaces a confused user actually
+reaches are mostly silent, and the two that do speak use three different words for the same state.</p>
+
+<div class="bar" role="img" aria-label="17 of roughly 110 specified strings are implemented">
+  <i class="have" style="width:15%"></i><i class="gap" style="width:85%"></i>
+</div>
+<p class="lede" style="margin-top:0"><span style="color:var(--green)">■</span> 17 landed &nbsp;
+<span style="color:var(--red)">■</span> ~93 specified, not yet in any module. The gap is not a
+criticism of the build order — rotation and the two fallbacks were the right first strings. It is the
+answer to the Commander's question: <b>today, a user learns what these mean mostly by not learning.</b></p>
+
+<h2><span class="num">1</span>The canonical vocabulary</h2>
+<p class="lede">One word per state, everywhere, forever. Where a surface uses a different one, that is a
+defect row in §2 — not a synonym.</p>
+<table>
+  <thead><tr><th>Protocol state</th><th>CANONICAL user word</th><th>Never say</th><th>Why this word</th></tr></thead>
+  <tbody>
+    <tr><td><code>401</code> identity</td><td><b>"Prove it's you"</b> · the act is a <b>passkey</b></td>
+      <td>sign in · log in · account · unlock · authenticate</td>
+      <td>There is no account and no password. "Sign in" promises a thing that does not exist and
+      teaches the buyer to look for a forgotten one.</td></tr>
+    <tr><td><code>402</code> payment</td><td><b>"Buy"</b> / <b>"Pay {amount} {asset}"</b></td>
+      <td>unlock · upgrade · subscribe · checkout</td>
+      <td>Name the transaction, not a metaphor. "Unlock" hides whether money moves.</td></tr>
+    <tr><td><code>403</code> entitlement</td><td><b>"Your licence doesn't cover this"</b> + the specific reason</td>
+      <td>forbidden · denied · not authorised · access denied</td>
+      <td>403 is six different situations; a single word for all of them is what produced the
+      wrong-remedy bug.</td></tr>
+    <tr><td><code>scope</code></td><td><b>"Cookrew couldn't get permission for that"</b></td>
+      <td>scope · token · credential mismatch</td>
+      <td>It is our defect, not the buyer's decision. Blame no one and offer no purchase.</td></tr>
+    <tr><td><code>balance_empty</code></td><td><b>"Out of credit"</b> · the unit is a <b>call</b></td>
+      <td>turn · quota · credits exhausted</td>
+      <td>Internals charge per turn; the buyer is <em>calling a teammate</em>. One word, theirs.</td></tr>
+    <tr><td>signature fails</td><td><b>"doesn't match its signature"</b> (see §5)</td>
+      <td>invalid · corrupt · untrusted</td>
+      <td>Distinguishable from "can't be checked here" — different next action.</td></tr>
+    <tr><td>key rotation</td><td><b>"{author} changed signing keys"</b></td>
+      <td>security alert · key compromise</td>
+      <td>Usually ordinary. Alarm language spends trust we need for the real event.</td></tr>
+    <tr><td>exportable</td><td><b>"can be called by"</b> / <b>"exported"</b></td>
+      <td>shared · published · public</td>
+      <td>"Shared" reads as read-only. This is <em>execution</em> by someone else.</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">2</span>Where surfaces deviate — three real drifts</h2>
+<table>
+  <thead><tr><th>#</th><th>Surface</th><th>Says</th><th>Canonical</th><th>Fix</th></tr></thead>
+  <tbody>
+    <tr><td><b>D1</b></td><td><code>install-copy.ts</code> <span class="id">mkt.install.gated.note</span></td>
+      <td>"This preset needs an <b>account</b> before it can be downloaded."</td>
+      <td>there is no account — it is a passkey, and there is nothing to create in advance</td>
+      <td>→ <b>"This preset asks who you are before it downloads — one passkey gesture in Cookrew, no
+      password."</b> This is the single most-read sentence about 401 in the product, on the page a
+      stranger lands on, and it currently teaches the wrong model.</td></tr>
+    <tr><td><b>D2</b></td><td>copy deck <span class="id">mkt.chip.locked.free</span></td>
+      <td>"one gesture to install"</td>
+      <td>fine in itself, but it is a <em>third</em> phrasing of 401 next to "Prove it's you" and
+      "needs an account"</td>
+      <td>keep — but only because §1 now names "passkey" as the shared noun. All three must contain the
+      word <b>passkey</b> so a buyer can connect them.</td></tr>
+    <tr><td><b>D3</b></td><td>copy deck <span class="id">mkt.pay.buys</span></td>
+      <td>"buys {seats} seat · v{version} and later"</td>
+      <td><b>the manifest has no seats field</b> — <code>PresetPricing</code> is
+      <code>{model, amount, asset}</code> and nothing else</td>
+      <td>my string promises data no surface can supply. Either the manifest gains
+      <code>seats</code> and <code>updatesIncluded</code>, or the string shrinks to what is true. I
+      would rather the manifest grew — see §3, this is the buyer's most-asked question.</td></tr>
+  </tbody>
+</table>
+<div class="card warn">
+  <b>D3 is my defect, and it is the kind worth naming.</b> I wrote a string describing an entitlement
+  the protocol does not model. It would have shipped as a confident sentence about seats over a manifest
+  that has never heard of them — copy inventing a feature, which is worse than copy missing one, because
+  it is not visible as a gap until a buyer asks what they bought.
+</div>
+
+<h2><span class="num">3</span>The money story, in one breath</h2>
+<p class="lede">Asked whether an author can say where the price is set, where the money lands, and what
+the registry takes: <b>the architecture answers all three cleanly and no surface says any of it.</b>
+The facts live in <code>terms.ts</code>, <code>payment.ts</code> and <code>facilitator.ts</code> — code
+comments, read by us.</p>
+<table>
+  <thead><tr><th>Question</th><th>True answer</th><th>Said anywhere?</th></tr></thead>
+  <tbody>
+    <tr><td>Where is the price set?</td><td>By the author, in the manifest they sign.</td><td><b>no</b></td></tr>
+    <tr><td>Where does the money land?</td><td>The author's address, directly. Chain settlement.</td><td><b>no</b></td></tr>
+    <tr><td>What does the registry take?</td><td><b>Nothing. It never holds funds at all.</b></td><td><b>no</b></td></tr>
+    <tr><td>What did I buy — once, or per use?</td><td><code>model: 'one-time' | 'per-call'</code></td>
+      <td>the field exists; the buy sheet shows the amount, and the deck's cadence line is unshipped</td></tr>
+    <tr><td>Per seat?</td><td><b>unmodelled</b></td><td>no — and my copy claims otherwise (D3)</td></tr>
+    <tr><td>Updates included?</td><td><b>unmodelled</b></td><td>no</td></tr>
+  </tbody>
+</table>
+<div class="card miss">
+  <b>Recommendation.</b> Two optional manifest fields — <code>seats?: number</code> and
+  <code>updatesIncluded?: 'this-version' | 'all-future'</code> — close the buyer's two biggest unknowns
+  and cost the protocol almost nothing, because both are already <em>expressible</em> as 403 reasons
+  (<code>seat_limit</code>, <code>version_gate</code>) that the gate can enforce. Right now the product
+  can <b>refuse</b> a buyer for exceeding a limit it never told them about. That asymmetry — enforced
+  but unstated — is the actual bug, and it is a protocol gap rather than a copy one.
+</div>
+
+<h2><span class="num">4</span>The export story — the fear nobody answers</h2>
+<p class="lede">Exporting is safe by construction: the scrubber strips secrets and paths, the manifest is
+signed, a call <b>forks</b> the transcript, and a version pin marks the cut. The original session is
+never mutated — <code>version-pin.ts</code> opens with exactly that sentence.</p>
+<div class="rule">
+  <span style="font-size:22px">🫥</span>
+  <div>
+    <b>It is a code comment. It has never been said to an author.</b>
+    "If I export this agent, do strangers get my conversation?" is the number-one reason not to export,
+    we solved it in the architecture, and there is no surface where an author can read that we solved
+    it. A guarantee the user cannot see does not change their behaviour — it only makes us feel safe
+    on their behalf.
+  </div>
+</div>
+
+<h2><span class="num">5</span>unverifiable vs invalid — the two strings</h2>
+<p class="lede">Ruled distinguishable because the next action differs. Written here as the buyer sees
+them, both already in the copy deck §5b and neither yet in a module.</p>
+<table>
+  <thead><tr><th>Case</th><th>String</th><th>Next action</th></tr></thead>
+  <tbody>
+    <tr><td><b>INVALID</b> — it does not match its signature<br><span class="id">mkt.review.blocked.signature_invalid</span></td>
+      <td class="say"><b>This preset doesn't match its signature.</b><br>It may have been altered since
+      {author} published it. Nothing was installed.</td>
+      <td>report to the author — <b>an accusation, and it should sound like one</b></td></tr>
+    <tr><td><b>UNVERIFIABLE</b> — this build cannot check it<br><span class="id">mkt.review.blocked.schema_unsupported</span></td>
+      <td class="say"><b>This preset needs a newer Cookrew.</b><br>It was built for a later preset
+      format, so this version can't check it. Nothing was installed.</td>
+      <td>update Cookrew — <b>nobody did anything wrong, and it must not borrow the tampering voice</b></td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">6</span>The ten missing sentences</h2>
+<p class="lede">One per moment of doubt. Each is a sentence the product should contain and does not; each
+is placed, not floating.</p>
+<ol class="steps">
+  <li class="say"><b>What a preset is</b> — install page, exists as
+  <span class="id">mkt.install.lede</span> and is the one good answer already written. <b>Keep it and
+  reuse it in-app</b>, where the market card currently assumes you know.</li>
+  <li class="say"><b>What the identity step is</b> — replaces D1:
+  "<b>This preset asks who you are before it downloads. One passkey gesture in Cookrew — no password,
+  no account to create.</b>"</li>
+  <li class="say"><b>Why identity at all</b> — passkey sheet, one line under the action:
+  "<b>Authors can see how many people installed a preset, never who you are.</b>"</li>
+  <li class="say"><b>Where the money goes</b> — buy sheet, beside the price:
+  "<b>Paid directly to {author}. Cookrew never holds your money and takes nothing.</b>"</li>
+  <li class="say"><b>What you are buying</b> — buy sheet:
+  "<b>One-time — yours to place as often as you like.</b>" / "<b>Per call — you top up a balance and
+  each call draws from it.</b>" Two strings, chosen by <code>pricing.model</code>.</li>
+  <li class="say"><b>What happens to my session if I export</b> — the export/exportable toggle, and the
+  most important sentence in this document:
+  "<b>Callers get a copy. Your original conversation is never touched, never sent, and never resumed by
+  anyone else.</b>"</li>
+  <li class="say"><b>What leaves the machine</b> — export confirm:
+  "<b>Cookrew strips secrets and folder paths before anything is published, and shows you the report
+  first.</b>"</li>
+  <li class="say"><b>Who can call this agent right now</b> — the agent row, at rest, not in a panel:
+  "<b>{n} callers</b>" or "<b>Nobody can call this</b>". Access should be legible without opening
+  anything, because the question is asked in a glance.</li>
+  <li class="say"><b>What a version pin is</b> — the rail, on first pin:
+  "<b>A copy was cut here. This is what buyers get; your live session carries on above it.</b>"</li>
+  <li class="say"><b>What the transparency log proves — and does not</b> — beside the log link:
+  "<b>A public record of every publish. It shows if a past entry was changed; it can't prove an author
+  is honest.</b>" (R23 bounds this; the honest version is the only one we may ship.)</li>
+</ol>
+
+<h2><span class="num">7</span>What I would fix first</h2>
+<ol class="steps">
+  <li><b>Sentence 6</b> — the export fear. One line, unblocks the feature's entire premise, costs
+  nothing, and is already true.</li>
+  <li><b>D1</b> — "account" on the install page. It is wrong on the surface most strangers see, and it
+  is a two-word fix.</li>
+  <li><b>D3 / §3</b> — either model seats and updates, or stop implying them. Enforcing a limit we never
+  disclosed is the one item here with a real support cost.</li>
+  <li><b>Sentence 4</b> — "Cookrew takes nothing" is the most persuasive true sentence the product has,
+  and it is not written down anywhere a person can read it.</li>
+</ol>
+
+<footer>
+  <b>Vocabulary &amp; gaps audit.</b> Velvet (UX Optimizer), 2026-08-22.<br>
+  Decks: <a href="marketplace-flows.html">flows</a> · <a href="marketplace-copy-deck.html">copy</a> ·
+  <a href="marketplace-interaction.html">interaction</a> ·
+  <a href="grant-sheet-flows.html">granting surface</a>.<br>
+  Counted against <code>src/shared/marketplace-copy.ts</code> at <code>5cdb670</code>: 17 strings landed.
+</footer>
+
+</div>
+<script>
+  (function(){var b=document.getElementById('theme');b.addEventListener('click',function(){
+    var n=document.documentElement.getAttribute('data-theme');
+    var d=n?n==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.setAttribute('data-theme',d?'light':'dark');});})();
+</script>
+</body>
+</html>
