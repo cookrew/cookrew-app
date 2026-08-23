@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Registry M2 — payments, as built</title>
+<style>
+:root{
+  color-scheme: light dark;
+  --bg:#fbfaf8; --panel:#fff; --ink:#1c1b19; --dim:#6b6660; --line:#e6e2dc;
+  --accent:#8a5cf6; --ok:#2e7d5b; --warn:#a8730c; --stop:#b23c3c; --code:#f4f2ee;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#141414; --panel:#1b1b1b; --ink:#ececea; --dim:#9a948c; --line:#2c2c2c;
+         --accent:#a988ff; --ok:#5fbf92; --warn:#d9a441; --stop:#e07a7a; --code:#202020; }
+}
+*{box-sizing:border-box}
+body{margin:0;padding:2.5rem 1.25rem 4rem;background:var(--bg);color:var(--ink);
+  font:16px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;justify-content:center}
+main{width:100%;max-width:54rem}
+h1{font-size:1.9rem;line-height:1.15;margin:0 0 .4rem;letter-spacing:-.02em}
+h2{font-size:1.15rem;margin:2.8rem 0 .8rem;padding-top:1.2rem;border-top:1px solid var(--line);letter-spacing:-.01em}
+h2 .num{display:inline-block;min-width:1.7rem;color:var(--accent);font-variant-numeric:tabular-nums}
+h3{font-size:.95rem;margin:1.6rem 0 .5rem;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+p{margin:.7rem 0}
+.lede{color:var(--dim);margin:0 0 1.4rem}
+.tag{display:inline-block;font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;
+  padding:.2rem .5rem;border:1px solid var(--line);border-radius:999px;color:var(--dim);margin-right:.4rem}
+.tag.ok{color:var(--ok);border-color:var(--ok)}
+.tag.stop{color:var(--stop);border-color:var(--stop)}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86em}
+code{background:var(--code);padding:.08em .35em;border-radius:4px}
+pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:.9rem 1rem;
+  overflow-x:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.82rem;line-height:1.55}
+pre .add{color:var(--ok)} pre .cm{color:var(--dim)}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.88rem}
+th,td{text-align:left;vertical-align:top;padding:.5rem .6rem;border-bottom:1px solid var(--line)}
+th{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:600}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1rem 1.1rem;margin:1.2rem 0}
+.panel.stop{border-left:3px solid var(--stop)}
+.panel.ok{border-left:3px solid var(--ok)}
+.panel.warn{border-left:3px solid var(--warn)}
+.panel h4{margin:0 0 .4rem;font-size:.95rem}
+ul{margin:.6rem 0;padding-left:1.1rem} li{margin:.35rem 0}
+svg{max-width:100%;height:auto;display:block;margin:1.2rem 0}
+details{border:1px solid var(--line);border-radius:10px;padding:.7rem .9rem;margin:.8rem 0;background:var(--panel)}
+summary{cursor:pointer;font-weight:600;font-size:.92rem}
+footer{margin-top:3.5rem;padding-top:1.2rem;border-top:1px solid var(--line);color:var(--dim);font-size:.85rem}
+a{color:var(--accent)}
+.q{color:var(--warn);font-weight:600}
+</style>
+</head>
+<body>
+<main>
+
+<h1>Registry M2 — payments, as built</h1>
+<p class="lede">
+Forge · 2026-08-23 · <span class="mono">feat/registry-m2</span>, four slices on top of
+<span class="mono">dev</span>. This is the note for what EXISTS, written after building it — the
+companion to <span class="mono">docs/design/m2-seam.html</span>, which was written before and
+predicted most of it. Where the two disagree, this one is right.
+</p>
+<p>
+<span class="tag ok">A1 · A2 · A3 · A4 green</span><span class="tag">spec §2 · §4</span><span class="tag">R5 · R11 · R12 · R14 · R24 · R26</span>
+</p>
+
+<p>
+M1's design note promised that payment would be <em>one added variant on one function</em>. It held:
+<span class="mono">authorize.ts</span> gained one branch and <span class="mono">Verdict</span> gained
+one member. No route signature moved, no header plumbing changed, and the client's recovery strategy
+is still "retry the same idempotent GET".
+</p>
+
+<h2><span class="num">1</span>The ladder, as it now stands</h2>
+
+<pre>exists? → public? → identity? → scope? → <span class="add">ENTITLED?</span> → <span class="add">PRICED?</span> → serve
+                                              ↑            ↑
+                                         A3 receipts   A1/A2 402
+</pre>
+
+<p>
+Two placements carry almost all of the behaviour, and both were things the seam note called and the
+build confirmed.
+</p>
+
+<table>
+  <tr><th>Placement</th><th>Why it is there</th><th>What breaks if it moves</th></tr>
+  <tr>
+    <td><strong>Entitlement ABOVE price</strong></td>
+    <td>A buyer who already owns something gets an ordinary 200 and never reaches payment.</td>
+    <td>Every download re-runs the 402 handshake. Opening something you bought last week costs a
+    wallet gesture — "a buyer must not sign per fetch" becomes politeness rather than structure.</td>
+  </tr>
+  <tr>
+    <td><strong>Price LAST, before serve</strong></td>
+    <td>By then we know the preset exists, who is asking, and that their credential covers a
+    download.</td>
+    <td>Asking for money before knowing whether we would have served the bytes at all.</td>
+  </tr>
+  <tr>
+    <td><strong>402 AFTER scope (R26)</strong></td>
+    <td>A wrong-scope token is a statement about the credential, not about money.</td>
+    <td>Offering to sell somebody a fix for a problem payment cannot fix.</td>
+  </tr>
+</table>
+
+<div class="panel stop">
+  <h4>ONLY A GET IS A PURCHASE — an allow-list, not an exclusion list</h4>
+  <p>
+  GET and HEAD share one <span class="mono">authorize()</span>, so a priced preset made R3's
+  dock-open update check answer 402 — and R24 forbids a background check raising a sheet at all.
+  Opening the dock would have demanded payment.
+  </p>
+  <p style="margin-bottom:0">
+  Written as <span class="mono">method !== 'HEAD'</span> the fix passed its first gate and still
+  answered 402 to OPTIONS, POST and to a request with no method at all. An exclusion list makes every
+  method somebody adds later a purchase by default. It is now
+  <span class="mono">method === 'GET'</span>, and the gate that found it lives on the decision
+  function rather than the route — because the failure mode is a second caller, and an HTTP-only test
+  would keep passing while a background check quietly asked for money.
+  </p>
+</div>
+
+<h2><span class="num">2</span>Where the money goes</h2>
+
+<p>
+<strong>Buyer → author. The registry is never in the path.</strong> Ruled 2026-08-22 after the spec
+was found to contradict itself: §4 put <span class="mono">payTo</span> in the terms while §12 placed
+"author payouts" in M3. The deciding argument was that custody is a one-way door — a registry that has
+never held a buyer's money cannot lose it, cannot be asked to refund it, and does not become a money
+transmitter.
+</p>
+
+<p>
+So M2 needed one fact M1 never had: a <strong>payout address per publishing identity</strong>, keyed
+to the IDENTITY and not the author key, because R20 made keys rotatable and a payout binding that went
+stale exactly when a key rotated would send money somewhere nobody is watching. It is an address book,
+not a ledger; the moment it grows a balance column somebody has taken custody by accident.
+</p>
+
+<div class="panel">
+  <h4>A price needs a payee, enforced at PUBLISH</h4>
+  <p style="margin-bottom:0">
+  A priced manifest from an identity with no payout address is refused with
+  <span class="mono">payout_missing</span> before any bytes are stored. That puts the failure in front
+  of the AUTHOR, mid-ceremony, one field from fixed — rather than in front of a buyer who cannot fix
+  it and would meet it as a preset that simply never sells.
+  </p>
+</div>
+
+<h2><span class="num">3</span>The terms, on the wire</h2>
+
+<pre>HTTP/1.1 402 Payment Required
+
+{
+  "terms": {
+    "amount": "12.00",        <span class="cm">// decimal string; money is never a float</span>
+    "asset":  "USDC",
+    "chain":  "base",         <span class="cm">// named SEPARATELY from the amount (deck §7)</span>
+    "payTo":  "0x…",          <span class="cm">// the AUTHOR's address</span>
+    "nonce":  "…",            <span class="cm">// single-use, bound to (identity, preset)</span>
+    "expiry": 1766000000000
+  },
+  "reason": "expired",        <span class="cm">// absent on the first ask — see §4</span>
+  "retryable": false
+}</pre>
+
+<div class="panel warn">
+  <h4><span class="mono">chain</span> is in the terms, and it was nearly not</h4>
+  <p style="margin-bottom:0">
+  It was missing from the field list I was given. A transfer to the correct address on the WRONG CHAIN
+  is money gone with a successful receipt — every party's local view says success — which is the worst
+  failure shape in the feature. The facilitator is handed it and checks it.
+  </p>
+</div>
+
+<h2><span class="num">4</span>Four reasons, and why exactly four</h2>
+
+<p>
+The rule, ruled 2026-08-22 and worth restating because it decides both directions:
+<strong>distinctness is required where the caller's next action differs, and forbidden where it would
+let a stranger enumerate.</strong> These four are all next-action-distinct and leak nothing, so they
+stay apart. (The same rule keeps Atlas's ceremony failures indistinguishable, because his are
+next-action-identical and would reveal whether an identity exists.)
+</p>
+
+<table>
+  <tr><th>Reason</th><th>What happened</th><th>Buyer's next move</th><th>Fresh quote?</th></tr>
+  <tr><td class="mono">invalid</td><td>Not a payment for this preset — malformed, unknown nonce, or refused.</td><td>Stop; check your wallet.</td><td>Yes</td></tr>
+  <tr><td class="mono">expired</td><td>The quote stood and the buyer took longer.</td><td>Re-price and pay.</td><td>Yes</td></tr>
+  <tr><td class="mono">replayed</td><td>This proof already bought something.</td><td>Nothing — it is already owned.</td><td class="mono" style="color:var(--stop)">No</td></tr>
+  <tr><td class="mono">unverifiable</td><td><strong>WE could not check.</strong> The facilitator would not answer.</td><td>Try again; yours may be fine.</td><td class="mono" style="color:var(--stop)">No</td></tr>
+</table>
+
+<div class="panel stop">
+  <h4>The fourth reason changed who gets a fresh quote</h4>
+  <p>
+  A new nonce reads as "pay again". On <span class="mono">unverifiable</span> the money may already
+  have moved and we simply cannot see it; on <span class="mono">replayed</span> it certainly has.
+  Minting an offer for either is an invitation to buy one preset twice — so both echo the terms the
+  buyer already holds.
+  </p>
+  <p style="margin-bottom:0">
+  <strong><span class="mono">retryable</span> rides as a boolean</strong>, not only as a token. The M1
+  forward-compat rule renders an unknown reason as a sentence, but retryability cannot be guessed from
+  a string a client has never seen — and guessing wrong is exactly the lie the reason exists to
+  prevent. A client that has never heard of <span class="mono">unverifiable</span> still knows to
+  retry.
+  </p>
+</div>
+
+<p>
+The first ask carries <strong>terms and no reason</strong>. Not having paid yet is not a thing that
+went wrong, and a reason there would make the opening move read as a failure. The four are also
+<strong>disjoint from the 403 vocabulary</strong>, asserted — both ride in a
+<span class="mono">reason</span> field on the same gate, and disjointness means even a client that
+ignored the status could not mistake a payment failure for an entitlement refusal.
+</p>
+
+<details>
+  <summary>C16 caught a live collapse, and the story is the argument for the gate</summary>
+  <p>
+  <span class="mono">replayed</span> would have collapsed into <span class="mono">invalid</span> if a
+  spent nonce were deleted rather than remembered — a replay would read as "we never issued that".
+  That one was designed against.
+  </p>
+  <p>
+  <span class="mono">expired</span> <strong>actually did</strong> collapse. The price step quoted
+  unconditionally, so a request carrying a proof still minted a fresh offer — and the sweep that ran
+  with it deleted the very nonce being asked about. A buyer who was merely slow was told their payment
+  was invalid. Two root causes, both fixed: a lapsed quote is retained AS lapsed, and price facts are
+  now separate from the act of minting, so a nonce is created only when an offer is genuinely made.
+  </p>
+</details>
+
+<h2><span class="num">5</span>Receipts, and money that reconciles</h2>
+
+<p>
+<strong>Keyed by lineage, not preset id.</strong> An id is the content address of one version, so a
+receipt against it would stop covering the preset the moment its author shipped an update — buying v2
+would not entitle v3 and <span class="mono">mkt.pay.buys</span>'s "v{version} and later" would be
+false. The earliest purchase sets the floor.
+</p>
+
+<p>
+<strong>Not in the transparency log.</strong> The log's guarantee is about what was served and who
+signed it. Buyer identities in a public append-only file is a privacy leak with no matching benefit,
+and it would complicate a log that already carries a carefully narrow claim. Receipts are private,
+append-only, and a truncated tail stops the read rather than being skipped — records after a gap are
+purchases we cannot be sure we wrote. They are written BEFORE the bytes are served, so a crash between
+the two costs a retry that finds the buyer entitled, never a payment with nothing to show for it.
+</p>
+
+<div class="panel ok">
+  <h4>RULE: money is integer cents, never a float</h4>
+  <p style="margin-bottom:0">
+  Ten <span class="mono">0.10</span> credits total exactly <span class="mono">1.00</span>. In binary
+  floating point they do not, and the difference is between a balance that reconciles and one that
+  drifts. Amounts cross the wire as decimal strings and are summed as integers throughout. This is a
+  rule for every surface that touches money, not an implementation detail of this store.
+  </p>
+</div>
+
+<p>
+<strong>Balance carries both units</strong> (deck §7): <span class="mono">$0.30 USDC · ~4 calls
+left</span>. Money alone makes the buyer divide to learn how many answers they have; calls alone hides
+what a top-up costs. The call count <strong>floors</strong> — "one left" when there isn't is precisely
+how <span class="mono">balance_empty</span> becomes the mid-conversation surprise R5 forbids.
+</p>
+
+<div class="panel">
+  <h4>R5 holds, and is asserted rather than described</h4>
+  <p style="margin-bottom:0">
+  The balance is deliberately NOT consulted by the gate. Owning credit entitles the download; whether
+  a given CALL may run is the meter's question, answered on the call path as 200 or 403 and never as a
+  payment demand over a conversation. <strong>A dry meter still downloads what you own.</strong>
+  </p>
+</div>
+
+<h2><span class="num">6</span>Idempotency, and what survives a restart</h2>
+
+<table>
+  <tr><th>Fact</th><th>Where it lives</th><th>Survives a reboot</th></tr>
+  <tr><td>What has been bought</td><td>receipts (<span class="mono">receipts.jsonl</span>)</td><td class="mono" style="color:var(--ok)">yes</td></tr>
+  <tr><td>What a quote was for</td><td>quotes (<span class="mono">quotes.jsonl</span>)</td><td class="mono" style="color:var(--ok)">yes</td></tr>
+  <tr><td>Where an author is paid</td><td><span class="mono">payouts.json</span></td><td class="mono" style="color:var(--ok)">yes</td></tr>
+  <tr><td>Whether a nonce was "spent"</td><td colspan="2">nowhere — it is derived from the receipt (below)</td></tr>
+</table>
+
+<div class="panel stop">
+  <h4>One record of one fact</h4>
+  <p>
+  The in-memory spent set is <strong>gone</strong> rather than kept alongside the receipt. Two records
+  of the same fact can disagree, and the dangerous direction is memory saying spent while no receipt
+  exists: a buyer whose money moved would be told <span class="mono">replayed</span> while owning
+  nothing.
+  </p>
+  <p style="margin-bottom:0">
+  So the receipt is the only thing asked, and it fails safe. No receipt means not spent, so a retry
+  can settle again — the proof names the same transaction, and re-verifying a transaction moves no
+  money a second time.
+  </p>
+</div>
+
+<p>
+<strong>Quotes are durable, and that case was not on the plan.</strong> A restart used to destroy the
+record that a quote was ever issued. A buyer who took one, moved real money against it, and came back
+to a registry that had bounced would meet <span class="mono">invalid</span> — we would tell somebody
+who had just paid that their payment was not a payment. Same lie as reporting our outage as their
+fault, by a different road, and worse because it accuses rather than admits. A quote is a promise with
+a price on it, so it is written down. It still lapses on time: durability is not immortality.
+</p>
+
+<h2><span class="num">7</span>The facilitator boundary</h2>
+
+<p>
+The registry does two things with money and neither involves touching it: ask for terms, ask whether a
+proof settled. It is an injected interface, so no test reaches a chain, no key exists and no network is
+required — which matters beyond hygiene, because the cases that need testing (expired, replayed,
+refused, unreachable) are exactly the ones a real chain makes hard to produce on demand.
+</p>
+
+<p>
+<strong>What a compromised facilitator costs, stated as precisely as the log's limit:</strong> it can
+mint entitlements nobody paid for. That is a loss to AUTHORS and it is real. What it cannot do is alter
+a preset — the client verifies the author's signature and hashes itself (A5) — or forge attribution,
+which needs a countersigned ceremony it has no part in. The money component's blast radius is bounded
+to money.
+</p>
+
+<p>
+The dev facilitator is its own file under its own name, wired only by the dev entry point. It refuses a
+<span class="mono">refuse-</span> tx and reports an outage for an <span class="mono">unreachable-</span>
+one, so every failure is constructible against the real binary rather than only against a double — a
+case reachable only by mocking is a case nobody has seen the server answer.
+</p>
+
+<h2><span class="num">8</span>What M2 does NOT do</h2>
+
+<p>My own list, so it is not discovered in review. Nothing here is a surprise; several are deliberate.</p>
+
+<table>
+  <tr><th>Not done</th><th>Where it belongs</th><th>Risk if forgotten</th></tr>
+  <tr>
+    <td><strong>No real facilitator.</strong> The interface is real; the only implementation is the dev
+    stand-in, which reaches no chain and verifies no transfer.</td>
+    <td>Deployment</td>
+    <td class="q">HIGH — this is the difference between "payments work" and "the payment SHAPE works".
+    Nothing in M2 has ever moved money.</td>
+  </tr>
+  <tr>
+    <td><strong>No EIP-55 checksum on payout addresses.</strong> Format-checked only; keccak256 is not
+    in node:crypto.</td>
+    <td>Before a public network</td>
+    <td class="q">MEDIUM — a mistyped-but-well-formed address sends an author's money nowhere
+    recoverable. Mitigated only by the address arriving at publish, from the author, in a ceremony
+    they are present for.</td>
+  </tr>
+  <tr>
+    <td><strong>The call path does not exist.</strong> A3 lands the prepaid balance and its reader;
+    nothing meters or draws down, because there is nothing to meter.</td>
+    <td>§9 remote call</td>
+    <td>Low — deliberate. <span class="mono">DRAWDOWN_CONTRACT</span> and
+    <span class="mono">isCallPathAnswer</span> pin the shape so it cannot drift before then.</td>
+  </tr>
+  <tr>
+    <td><strong>No top-up route.</strong> A per-call preset can be bought once; there is no way to add
+    credit afterwards.</td>
+    <td>M2 follow-up or M3</td>
+    <td class="q">MEDIUM — R5 names top-up as a first-class surface and Velvet has written its copy. A
+    balance that can only ever go down is a half-feature.</td>
+  </tr>
+  <tr>
+    <td><strong>Single process assumed.</strong> Idempotency rests on the decision function being
+    synchronous; two registry processes over one data directory would race.</td>
+    <td>Whenever it is deployed more than once</td>
+    <td class="q">MEDIUM — silent when wrong. Two receipts for one payment, or two payments accepted
+    for one nonce.</td>
+  </tr>
+  <tr>
+    <td><strong>No price change story.</strong> Pricing is inside the signed manifest, so changing a
+    price needs a new version. Nobody has ruled whether that is intended.</td>
+    <td>Product</td>
+    <td>Low — but it will surprise the first author who tries a sale.</td>
+  </tr>
+  <tr>
+    <td><strong>Refund and revocation are untouched.</strong> <span class="mono">refunded</span> and
+    <span class="mono">revoked</span> are in the 403 vocabulary with copy written and no machinery.</td>
+    <td>M3, per §12</td>
+    <td>Low — explicitly phased.</td>
+  </tr>
+  <tr>
+    <td><strong>The install page says nothing about price.</strong> A shared link to a paid preset does
+    not mention that it costs money.</td>
+    <td>Velvet — copy slot needed</td>
+    <td class="q">MEDIUM — surprises the buyer at the worst moment. Flagged at A4 of M1 and still open.</td>
+  </tr>
+  <tr>
+    <td><strong>No client half.</strong> No wallet sheet, no 402 handling in the app, no
+    <span class="mono">mkt.pay.*</span> wired.</td>
+    <td>Velvet / Fresco</td>
+    <td>Low — by design; the server half was the assignment.</td>
+  </tr>
+  <tr>
+    <td><strong>Receipts have no retention or export.</strong> They accumulate forever and there is no
+    way for a buyer to see or carry them.</td>
+    <td>M3</td>
+    <td>Low now, awkward later.</td>
+  </tr>
+</table>
+
+<footer>
+  Forge · Registry M2 design note · <span class="mono">docs/design/registry-m2.html</span> ·
+  branch <span class="mono">feat/registry-m2</span> (A1 <span class="mono">7d618ab</span> ·
+  A2 <span class="mono">9e6fe64</span> · fourth reason <span class="mono">64123fe</span> ·
+  A3 <span class="mono">1229b6f</span> · A4 <span class="mono">c1c4ec7</span>)<br>
+  Seam note: <span class="mono">docs/design/m2-seam.html</span> ·
+  M1: <span class="mono">docs/design/registry-m1.html</span> ·
+  Spec: <span class="mono">docs/design/marketplace-architecture.html</span> §2, §4, §6, §12 ·
+  Copy: <span class="mono">docs/design/marketplace-copy-deck.html</span> §2, §5, §7<br>
+  Force-added: <span class="mono">docs/</span> is gitignored, and a note living only in a worktree is
+  one cleanup from gone.
+</footer>
+
+</main>
+</body>
+</html>

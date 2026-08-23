@@ -18,7 +18,7 @@
 //   POST /v1/identity/register       enrol a credential (TOFU)
 //   POST /v1/identity/assert         verify a ceremony, mint a short-lived token
 //
-// Flags: --port --data --seed --origin. The origin defaults to the port that is
+// Flags: --port --data --seed --origin --chain --terms-ttl. The origin defaults to the port that is
 // bound; pass it only to serve a ceremony on a host other than localhost, and a
 // value that contradicts --port refuses at boot.
 import { generateKeyPairSync } from 'node:crypto'
@@ -28,6 +28,11 @@ import { TransparencyLog } from './log'
 import { createRegistry } from './server'
 import { IdentityService, identityConfigFor } from './identity'
 import { makeAuthorize } from './authorize'
+import { PayoutStore } from './payouts'
+import { DEFAULT_TERMS_CONFIG } from './terms'
+import { FilePaymentNonces } from './payment-nonces'
+import { devFacilitator } from './facilitator-dev'
+import { ReceiptStore } from './receipts'
 import { buildManifest, signManifest } from '../../src/main/preset-publish'
 import { scrubForPublish } from '../../src/main/preset-scrub'
 import type { TeamSnapshot } from '../../src/main/teams'
@@ -39,6 +44,15 @@ const flag = (name: string, fallback: string): string => {
   return at >= 0 && args[at + 1] ? args[at + 1] : fallback
 }
 const PORT = Number(flag('port', '8790'))
+/**
+ * M2-A1. How long a 402 quote stands, in ms — SETTABLE, and that is a test
+ * requirement rather than a convenience. A gate cannot sleep out a real
+ * fifteen-minute TTL, so without this flag the "expired payment" case is
+ * unjudgeable from outside the process. Same shape and same reason as the
+ * challenge TTL identity.ts already carries.
+ */
+const TERMS_TTL_MS = Number(flag('terms-ttl', String(DEFAULT_TERMS_CONFIG.ttlMs)))
+const CHAIN = flag('chain', DEFAULT_TERMS_CONFIG.chain)
 const DATA = path.resolve(flag('data', path.join(process.cwd(), 'registry', 'data')))
 
 const store = new RegistryStore(DATA)
@@ -140,7 +154,34 @@ if (!resolved.ok) {
 }
 const identity = new IdentityService(DATA, resolved.config)
 
-createRegistry({ store, log, identity, dev: true, authorize: makeAuthorize(store, identity) }).listen(PORT, () => {
+if (!Number.isInteger(TERMS_TTL_MS) || TERMS_TTL_MS < 1) {
+  console.error(`refusing to start: --terms-ttl ${flag('terms-ttl', '')} is not a positive number of ms`)
+  process.exit(1)
+}
+// The price step. Present here because the dev registry sells things; a
+// deployment that passes no pricing behaves exactly as M1 did.
+const pricing = {
+  payouts: new PayoutStore(DATA),
+  config: { chain: CHAIN, ttlMs: TERMS_TTL_MS },
+  // FILE-backed: a quote must outlive the process that issued it, or a buyer
+  // who paid mid-flight and met a restart is told their payment is invalid.
+  nonces: new FilePaymentNonces(DATA),
+  // The DEV facilitator: reaches no chain, verifies no transfer, and exists so
+  // the handshake can be driven end to end against the real binary. See its
+  // file — it is not a payment system and must never be one.
+  facilitator: devFacilitator(),
+  receipts: new ReceiptStore(DATA),
+  now: () => Date.now()
+}
+
+createRegistry({
+  store,
+  log,
+  identity,
+  pricing,
+  dev: true,
+  authorize: makeAuthorize(store, identity, pricing)
+}).listen(PORT, () => {
   // Print the ORIGIN, not a different spelling of the same port. The old banner
   // said 127.0.0.1 while identity accepted only localhost, so the server was
   // advertising the one address on which nobody could authenticate.

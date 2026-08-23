@@ -23,6 +23,13 @@ export type PublishFailure =
   | 'countersign_missing'
   | 'author_key_changed'
   | 'version_not_newer'
+  /**
+   * M2-A1: the manifest carries a price and this identity has never said where
+   * it is paid. Refused HERE rather than at the 402, so the failure lands on
+   * the author — who can fix it in the ceremony they are already standing in —
+   * instead of on a buyer who cannot fix it and has done nothing wrong.
+   */
+  | 'payout_missing'
 
 export interface PublishInput {
   manifest: PresetManifest
@@ -33,6 +40,12 @@ export interface PublishInput {
   identityId: string
   /** Assertion over sha256(authorKeyId ‖ presetId), base64url. */
   countersig: string
+  /**
+   * M2-A1. Where this identity is paid, if it is supplying or changing one.
+   * Absent means "keep whatever is already bound" — an author who set it once
+   * does not resend it on every publish.
+   */
+  payoutAddress?: string
   at: number
 }
 
@@ -93,6 +106,12 @@ export interface PublishDeps {
   ) => boolean
   /** Verify the manifest's own ed25519 signature. */
   verifyManifest: (manifest: PresetManifest) => boolean
+  /**
+   * M2-A1. Where authors are paid. Absent in a deployment that sells nothing,
+   * in which case a priced manifest is refused rather than silently published
+   * as if it were free.
+   */
+  payouts?: { addressOf: (identityId: string) => string | null; bind: (identityId: string, address: string) => boolean }
 }
 
 export function publishPreset(deps: PublishDeps, input: PublishInput): PublishResult {
@@ -118,6 +137,34 @@ export function publishPreset(deps: PublishDeps, input: PublishInput): PublishRe
   const payload = countersignPayload('publish', manifest.author.keyId, manifest.id)
   if (!deps.verifyCountersign('publish', input.identityId, payload, input.countersig)) {
     return { ok: false, reason: 'countersign_missing' }
+  }
+
+  // M2-A1: A PRICE NEEDS A PAYEE, and the check belongs here.
+  //
+  // The money path is buyer → author (Commander, 2026-08-22), so a priced
+  // preset the registry cannot route payment for is not a preset that should
+  // exist. Refusing at publish puts the failure in front of the AUTHOR, mid
+  // ceremony, where it is one field away from fixed. Deferring it to the 402
+  // would put it in front of a BUYER, who cannot fix it, has done nothing
+  // wrong, and would meet it as a preset that simply never sells.
+  //
+  // Bound BEFORE the store write, so a publish that stores bytes always has a
+  // payee on record for them — the two must not be able to disagree after a
+  // crash between them.
+  if (manifest.pricing !== undefined) {
+    const bound =
+      input.payoutAddress !== undefined
+        ? (deps.payouts?.bind(input.identityId, input.payoutAddress) ?? false)
+        : deps.payouts?.addressOf(input.identityId) !== null &&
+          deps.payouts?.addressOf(input.identityId) !== undefined
+    if (!bound) return { ok: false, reason: 'payout_missing' }
+  } else if (input.payoutAddress !== undefined) {
+    // A free preset may still carry an address: an author setting up before
+    // pricing anything. Recorded, and a malformed one is still refused rather
+    // than stored — a bad address is not made harmless by arriving early.
+    if (!(deps.payouts?.bind(input.identityId, input.payoutAddress) ?? false)) {
+      return { ok: false, reason: 'payout_missing' }
+    }
   }
 
   const lineage = lineageOf(input.identityId, input.teamName)
