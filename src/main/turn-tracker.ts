@@ -1062,6 +1062,27 @@ export class TurnTracker extends EventEmitter {
    * point-in-time snapshot, hands the store the same buffer plus the NAMES of
    * the changed records, and runs the shared observers.
    */
+  /**
+   * AFTERCOMMIT RUNS BEFORE THE WRITE IS DURABLE, and can now outlive it.
+   *
+   * scheduleDelta queues a debounced write; afterCommit publishes immediately.
+   * That gap has always existed — an observer learns about a turn ~300ms before
+   * the bytes land — and was harmless while every queued write eventually
+   * landed. It no longer is: TurnStore.flush may REFUSE a write whose premise
+   * went stale between here and the flush (see the choke point there), so the
+   * activity push can describe a turn that never reached disk.
+   *
+   * Left as it is, deliberately. Publishing after the flush would put the UI
+   * behind the debounce for every turn to make a rare case tidy, and the case
+   * self-heals: the next reconcile finds the premise broken, takes the full
+   * path, merges against the durable ledger and writes. The cost is a turn that
+   * appears, and then appears again correctly numbered. The alternative — the
+   * write that refusal prevents — is every record the writer could not see.
+   *
+   * Named here because this is where the two facts meet, and because the next
+   * person to profile this seam will find afterCommit on the write path and
+   * reasonably assume everything below it succeeded.
+   */
   private commitDelta(terminalId: string, changed: TurnRecord[]): void {
     const records = this.liveHistory(terminalId)
     this.snapshots.delete(terminalId)
