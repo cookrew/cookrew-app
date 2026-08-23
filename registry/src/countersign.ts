@@ -26,8 +26,17 @@ import { createHash } from 'node:crypto'
  * invisibly. `'\0'` is the identical byte.
  */
 
-/** The two things an identity can countersign. Never interchangeable. */
-export type CountersignOperation = 'publish' | 'key-rotation'
+/**
+ * The things an identity can be bound to. Never interchangeable.
+ *
+ * M2 adds `purchase`. It is not countersigned by an authenticator the way the
+ * other two are — it binds a payment nonce — but it shares this digest on
+ * purpose: one domain-separated scheme means a purchase nonce, a publish
+ * countersignature and a rotation countersignature are three different values
+ * by construction. Inventing a second scheme for payments is how the replay
+ * this codebase already closed would come back wearing different clothes.
+ */
+export type CountersignOperation = 'publish' | 'key-rotation' | 'purchase'
 
 /** Domain tag, so these bytes cannot collide with any other digest we make. */
 const SCHEME = 'cookrew.countersign/1'

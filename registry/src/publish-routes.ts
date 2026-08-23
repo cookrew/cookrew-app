@@ -46,6 +46,8 @@ export interface WriteDeps {
   log: TransparencyLog
   verifyManifest: (manifest: PresetManifest) => boolean
   identity?: IdentityService
+  /** M2-A1: where authors are paid. Absent → a priced publish is refused. */
+  payouts?: PublishDeps['payouts']
   now?: () => number
 }
 
@@ -151,6 +153,9 @@ function countersignVerifier(
 const PUBLISH_STATUS: Record<PublishFailure, number> = {
   // The request does not describe what it claims to. Nothing to retry.
   schema_unsupported: 400,
+  // M2-A1: priced, with nowhere to send the money. The author's to fix, and
+  // 400 says the request was incomplete rather than that we refused them.
+  payout_missing: 400,
   unsigned: 400,
   signature_invalid: 400,
   hash_mismatch: 400,
@@ -223,6 +228,10 @@ export async function handlePublish(
       teamName,
       visibility: body.value.visibility === 'identified' ? 'identified' : 'public',
       identityId: caller,
+      // Optional: an author who bound one earlier does not resend it.
+      ...(typeof body.value.payoutAddress === 'string'
+        ? { payoutAddress: body.value.payoutAddress }
+        : {}),
       // The countersignature is an assertion now, so what the log records is
       // the signature that carried it. The bytes it committed to are derivable
       // by anyone from the record itself — kind, authorKeyId and presetId ARE
