@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exported agents — the granting surface</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🔑</text></svg>">
+<style>
+  :root { --bg:#f7f4ec; --panel:#fffdf7; --panel-2:#f1ece0; --ink:#1b1a17; --ink-soft:#45413a;
+    --muted:#7a736a; --line:#ddd5c6; --line-hard:#b9ae9a; --amber:#b8770a; --amber-soft:#fbf0d8;
+    --green:#2f7d4f; --red:#a8362b; --blue:#2b5fa8; --violet:#6b3fa0; --code-bg:#efeade;
+    --shadow:0 1px 0 var(--line), 0 8px 24px rgba(30,25,15,.06); }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14130f; --panel:#1c1a16; --panel-2:#242019;
+    --ink:#ece6d8; --ink-soft:#c2bbab; --muted:#8d8577; --line:#332f27; --line-hard:#4c463a;
+    --amber:#e9b949; --amber-soft:#2a2213; --green:#6fca92; --red:#e8867a; --blue:#7fadf0;
+    --violet:#b795e8; --code-bg:#221f19; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(0,0,0,.35); } }
+  :root[data-theme="dark"] { --bg:#14130f; --panel:#1c1a16; --panel-2:#242019; --ink:#ece6d8;
+    --ink-soft:#c2bbab; --muted:#8d8577; --line:#332f27; --line-hard:#4c463a; --amber:#e9b949;
+    --amber-soft:#2a2213; --green:#6fca92; --red:#e8867a; --blue:#7fadf0; --violet:#b795e8;
+    --code-bg:#221f19; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(0,0,0,.35); }
+  :root[data-theme="light"] { --bg:#f7f4ec; --panel:#fffdf7; --panel-2:#f1ece0; --ink:#1b1a17;
+    --ink-soft:#45413a; --muted:#7a736a; --line:#ddd5c6; --line-hard:#b9ae9a; --amber:#b8770a;
+    --amber-soft:#fbf0d8; --green:#2f7d4f; --red:#a8362b; --blue:#2b5fa8; --violet:#6b3fa0;
+    --code-bg:#efeade; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(30,25,15,.06); }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.62 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; -webkit-text-size-adjust:100%; }
+  .wrap { max-width:1140px; margin:0 auto; padding:32px 20px 96px; }
+  header.top { border-bottom:2px solid var(--line-hard); padding-bottom:18px; margin-bottom:26px; }
+  .kicker { font:600 11px/1 ui-monospace,monospace; letter-spacing:.16em; text-transform:uppercase; color:var(--amber); }
+  h1 { font-size:clamp(24px,4.4vw,34px); line-height:1.15; margin:10px 0 8px; letter-spacing:-.015em; }
+  .sub { color:var(--muted); max-width:70ch; margin:0; }
+  .meta { margin-top:12px; font:12px/1.5 ui-monospace,monospace; color:var(--muted); }
+  h2 { font-size:20px; margin:42px 0 6px; letter-spacing:-.01em; }
+  h2 .num { color:var(--amber); font:600 13px/1 ui-monospace,monospace; margin-right:8px; }
+  h3 { font-size:14.5px; margin:24px 0 4px; }
+  p { margin:8px 0; } .lede { color:var(--ink-soft); max-width:76ch; }
+  code,kbd { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86em;
+    background:var(--code-bg); padding:1px 5px; border-radius:3px; }
+  a { color:var(--blue); }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:13px; }
+  th,td { text-align:left; padding:8px 9px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font:600 10.5px/1.3 ui-monospace,monospace; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--muted); border-bottom:2px solid var(--line-hard); }
+  tbody tr:hover { background:var(--panel-2); }
+  .id { font:600 11.5px ui-monospace,monospace; color:var(--violet); white-space:nowrap; }
+  .btn { font:700 11px ui-monospace,monospace; letter-spacing:.06em; background:var(--amber-soft);
+    border:1px solid var(--amber); color:var(--amber); border-radius:3px; padding:1px 7px; white-space:nowrap; }
+  .var { font:600 11px ui-monospace,monospace; color:var(--blue); }
+  .rule { display:grid; grid-template-columns:auto 1fr; gap:10px 14px; align-items:start;
+    background:var(--amber-soft); border:1px solid var(--line-hard); border-left:4px solid var(--amber);
+    padding:14px 16px; margin:18px 0; border-radius:3px; }
+  .rule b { display:block; font-size:13px; letter-spacing:.04em; text-transform:uppercase; color:var(--amber); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:4px;
+    padding:14px 16px; margin:14px 0; box-shadow:var(--shadow); }
+  .warn { border-left:4px solid var(--red); background:color-mix(in srgb, var(--red) 8%, transparent); }
+  .ok { border-left:4px solid var(--green); }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:900px){ .grid2{grid-template-columns:1fr;} }
+  ul.tight { padding-left:20px; margin:8px 0; } ul.tight li { margin:4px 0; }
+  ol.steps { padding-left:20px; margin:8px 0; } ol.steps li { margin:5px 0; }
+  figure { margin:18px 0; }
+  figure svg { display:block; width:100%; height:auto; background:var(--panel);
+    border:1px solid var(--line); border-radius:4px; }
+  figcaption { font-size:12.5px; color:var(--muted); margin-top:7px; }
+  .svgmono { font:11px ui-monospace,monospace; fill:var(--ink-soft); }
+  .svgdim { font:10.5px ui-sans-serif,sans-serif; fill:var(--muted); }
+  .svgttl { font:600 12.5px ui-sans-serif,sans-serif; fill:var(--ink); }
+  .svgbox { fill:var(--panel-2); stroke:var(--line-hard); }
+  .svgsheet { fill:var(--panel); stroke:var(--line-hard); stroke-width:1.5; }
+  .svgbtn { fill:var(--amber); stroke:none; }
+  .svgbtn-t { font:600 11px ui-sans-serif,sans-serif; fill:#14130f; }
+  .svgghost { fill:none; stroke:var(--line-hard); }
+  .fp { font:700 15px ui-monospace,monospace; fill:var(--ink); letter-spacing:.02em; }
+  footer { margin-top:56px; padding-top:18px; border-top:2px solid var(--line-hard);
+    font-size:12.5px; color:var(--muted); }
+  .toggle { position:fixed; top:12px; right:12px; z-index:10; font:600 11px ui-monospace,monospace;
+    background:var(--panel); color:var(--ink); border:1px solid var(--line-hard); border-radius:999px;
+    padding:6px 12px; cursor:pointer; box-shadow:var(--shadow); }
+  @media print { .toggle { display:none; } }
+</style>
+</head>
+<body>
+<button class="toggle" id="theme">◐ theme</button>
+<div class="wrap">
+
+<header class="top">
+  <div class="kicker">Cookrew · exported agents · granting surface</div>
+  <h1>Who may call your agents, and how a key gets in</h1>
+  <p class="sub">The owner-facing flow spec for the last inch of the exported-agent chain: mark agents
+  exportable, enrol a caller by public key, grant per caller × per agent, revoke, and see what is granted
+  to whom. Atlas builds from this.</p>
+  <p class="meta">Velvet (UX Optimizer) · 2026-08-22 · everything from preload rightward already exists ·
+  companion to <a href="marketplace-flows.html">marketplace-flows.html</a> ·
+  <em>structure and copy here, treatment Fresco's</em></p>
+  <div class="card ok" style="margin-top:14px">
+    <b>This file is the canonical spec and it is committed on purpose.</b>
+    <code>docs/</code> is gitignored, so this was added with <code>git add -f</code> on branch
+    <code>docs/grant-surface-spec</code> — an un-forced write here is one cleanup away from gone, which
+    has already cost this project a route table twice. Atlas builds from this path, not from a message:
+    a file cannot be half-delivered, and <code>cookrew ask</code> has been dropping briefs today.
+    <br><br><b>Binding ruling carried in this document:</b> revoke stops calls already running. The copy
+    reads <em>"Any call in progress stops."</em> and the implementation meets that string — if cutting
+    in flight proves impossible, that goes back to the Commander rather than softening the sentence.
+  </div>
+</header>
+
+<div class="rule">
+  <span style="font-size:22px">🔒</span>
+  <div>
+    <b>The rule this surface is built from</b>
+    A grant that is easy to give by accident is a security defect, not a convenience. This screen is
+    strictly more powerful than the gate it feeds — whoever drives it can enrol themselves and export
+    everything, which makes every downstream refusal decorative. So <b>friction is placed deliberately
+    and asymmetrically</b>: granting is slow and specific, revoking is instant and cheap. Every design
+    choice below falls out of that one sentence.
+  </div>
+</div>
+
+<h2><span class="num">0</span>The asymmetry, stated as three laws</h2>
+<table>
+  <thead><tr><th></th><th>Granting</th><th>Revoking</th></tr></thead>
+  <tbody>
+    <tr><td><b>Cost</b></td><td>deliberate: paste → compare fingerprint → tick → commit</td>
+      <td>one click, no confirm</td></tr>
+    <tr><td><b>Default</b></td><td>nothing is granted; every tick is individual</td>
+      <td>revoked is the safe resting state</td></tr>
+    <tr><td><b>Bulk</b></td><td><b>no "select all", ever</b></td><td>"revoke all" is offered</td></tr>
+  </tbody>
+</table>
+<p class="lede">If an interaction moves toward <em>more</em> access it must be specific and attributable;
+if it moves toward <em>less</em> it should be frictionless. A confirm on revoke would be actively harmful
+— it is the control someone reaches for when they have just realised something is wrong.</p>
+
+<h2><span class="num">1</span>Two levels, so one mistake is bounded</h2>
+<ol class="steps">
+  <li><b>Exportable</b> — a property of the agent, set by the owner in the AGENTS view. Default
+  <b>off</b>. An agent that is not exportable cannot be granted to anyone, and does not appear in any
+  grant matrix.</li>
+  <li><b>Granted</b> — a (caller × agent) pair. Only exportable agents can be ticked.</li>
+</ol>
+<p class="lede">Two levels because a mistake at level 2 is then bounded by level 1: mis-ticking a row can
+only ever expose an agent the owner has already decided is exportable. It also gives a one-switch panic
+control — un-exporting an agent kills every grant against it at once, without unpicking a matrix.</p>
+
+<h2><span class="num">2</span>Where it lives, and where it must not</h2>
+<ul class="tight">
+  <li><b>Exportable toggle</b>: on the agent's row in the AGENTS view, beside the existing row actions.</li>
+  <li><b>Callers &amp; grants</b>: a panel from the AGENTS view header — <b>WHO CAN CALL</b>.</li>
+  <li><b>Desktop owner only.</b> The IPC is owner-only, so the surface must not render on a phone
+  companion or a read-only wall — <b>not even disabled</b>. A greyed-out list of who is enrolled still
+  discloses who is enrolled, on the device most likely to be lying on a table.
+  <span class="svgdim">(Revoke-from-phone is a reasonable M3 ask and deliberately out of scope here;
+  flagged, not designed.)</span></li>
+</ul>
+
+<h2><span class="num">3</span>How the key gets in — the decision</h2>
+<p class="lede"><b>Paste is the one path. QR is the same path with a different transport. The registry in
+M3 is the same path with a different source.</b> All three converge on one screen and one act, so there
+is exactly one place where a key becomes trusted and exactly one thing to get right.</p>
+
+<div class="rule">
+  <span style="font-size:22px">🗣️</span>
+  <div>
+    <b>The fingerprint is six words, and the words are the security</b>
+    <code>SHA-256(raw public key)</code> → first <b>66 bits</b> → <b>six words</b> from a fixed 2048-word
+    list, rendered large. Words because the comparison happens <em>between two humans over a channel we
+    do not control</em> — a phone call, a video call, a room. Six words can be read aloud in three
+    seconds and confirmed with certainty; sixteen hex characters are read aloud wrongly. 66 bits is far
+    past what an attacker can grind a colliding key for, and the hex is printed underneath for anyone who
+    prefers to compare text.
+  </div>
+</div>
+
+<figure>
+<svg viewBox="0 0 980 372" role="img" aria-label="Enrol a caller sheet: paste, fingerprint in six words, attest-and-enrol">
+  <rect x="250" y="14" width="480" height="344" rx="6" class="svgsheet"/>
+  <text x="274" y="44" class="svgttl">Enrol a caller</text>
+  <text x="706" y="44" text-anchor="end" class="svgdim">✕</text>
+  <text x="274" y="64" class="svgdim">They will be able to call only the agents you tick next.</text>
+
+  <text x="274" y="94" class="svgmono">Their public key</text>
+  <rect x="274" y="102" width="412" height="44" rx="3" class="svgghost"/>
+  <text x="286" y="121" class="svgmono">ed25519:MCowBQYDK2VwAyEA9r4Xk2p…</text>
+  <text x="286" y="137" class="svgdim">paste, or ⌗ scan a QR</text>
+
+  <text x="274" y="176" class="svgmono">Name them</text>
+  <rect x="274" y="184" width="412" height="30" rx="3" class="svgghost"/>
+  <text x="286" y="204" class="svgmono">Kestrel (Ana's instance)</text>
+
+  <rect x="274" y="228" width="412" height="86" rx="4" class="svgbox"/>
+  <text x="288" y="248" class="svgdim">CHECK THIS MATCHES WHAT THEY SEE</text>
+  <text x="288" y="274" class="fp">amber · harbour · pilot</text>
+  <text x="288" y="296" class="fp">rustic · meadow · token</text>
+  <text x="560" y="274" class="svgmono">9f4a 2c81</text>
+  <text x="560" y="290" class="svgmono">6de0 33b7</text>
+  <text x="560" y="306" class="svgdim">same thing, in hex</text>
+
+  <text x="470" y="342" text-anchor="end" class="svgdim">Cancel</text>
+  <rect x="482" y="324" width="204" height="30" rx="4" class="svgbtn"/>
+  <text x="584" y="344" text-anchor="middle" class="svgbtn-t">I COMPARED THESE · ENROL</text>
+</svg>
+<figcaption>One sheet, one act. The primary is not focused on open and <kbd>Enter</kbd> does not fire it
+— enrolment is irreversible in the sense that matters, so it is a deliberate pointer act (same rule the
+wallet sheet uses for money).</figcaption>
+</figure>
+
+<h3>Why the button says "I compared these"</h3>
+<p class="lede">The UI cannot verify that this is the key the owner meant — only the human comparison can,
+and it happens on a channel we have no access to. Typing the words back would prove only that the owner
+can read <em>our</em> screen, which an attacker supplying the key is delighted for them to do. So the
+friction is not a puzzle, it is an <b>attestation</b>: the control's label states the claim the click
+makes. A button labelled "Confirm" collects a reflex; a button labelled <b>I COMPARED THESE · ENROL</b>
+collects a statement, and an owner who has not compared has to knowingly assert something false. That is
+the strongest thing a UI can do here, and pretending otherwise would be the real defect.</p>
+
+<h3>Enrolment does not grant anything</h3>
+<p class="lede">Finishing this sheet creates a caller with <b>zero</b> agents. The panel then shows an
+un-ticked matrix. Enrolling and granting are separate acts on purpose: the dangerous half is granting,
+and it must not ride in on the momentum of a sheet the owner was already completing.</p>
+
+<h2><span class="num">4</span>When the paste is wrong — all six cases</h2>
+<table>
+  <thead><tr><th>What arrived</th><th>Detected</th><th>Copy · <span class="id">mkt.grant.paste.*</span></th><th>Then</th></tr></thead>
+  <tbody>
+    <tr><td>Not a key at all</td><td>parse</td>
+      <td class="id">.notakey<br><span style="font-weight:400">That doesn't look like a public key.</span></td>
+      <td>inline under the field; nothing created</td></tr>
+    <tr><td>Wrong algorithm / curve</td><td>parse</td>
+      <td class="id">.wrongtype<br><span style="font-weight:400">That's an <span class="var">{type}</span> key. Cookrew callers use ed25519.</span></td>
+      <td>inline; name the type rather than "invalid"</td></tr>
+    <tr><td>Truncated or mangled</td><td>parse</td>
+      <td class="id">.malformed<br><span style="font-weight:400">That key is incomplete — it may have been cut off when copied.</span></td>
+      <td>inline; names the likely cause</td></tr>
+    <tr><td><b>A PRIVATE key</b></td><td>parse</td>
+      <td class="id">.private<br><span style="font-weight:400"><b>That's a private key — don't share it.</b> Cookrew hasn't stored it. Ask them for their <em>public</em> key, and if they sent this to you over a channel someone else can read, they should replace the pair.</span></td>
+      <td><b>refuse loudly, clear the field</b>, and say what to do about the exposure</td></tr>
+    <tr><td>Already enrolled</td><td>lookup</td>
+      <td class="id">.duplicate<br><span style="font-weight:400">You already enrolled this key as <span class="var">{name}</span>.</span></td>
+      <td>offer <b>OPEN <span class="var">{name}</span></b> — never silently create a second caller</td></tr>
+    <tr><td><b>Valid, but not the key they meant</b></td><td><b>not detectable</b></td>
+      <td>— no error exists —</td>
+      <td><b>this is what the fingerprint is for.</b> The only defence is the comparison in §3, which is
+      why that step cannot be skipped, defaulted, or remembered</td></tr>
+  </tbody>
+</table>
+<div class="card warn">
+  <b>The sixth row is the whole reason this screen has a shape.</b> Five of six wrong pastes are caught
+  by a parser and cost the owner ten seconds. The sixth — a well-formed key belonging to the wrong party
+  — is invisible to every check we can write, survives every validation, and is exactly what an attacker
+  supplies. Design that assumes the parser is the defence has already lost; the parser only clears the
+  noise so the human comparison is the last thing standing.
+</div>
+
+<h2><span class="num">5</span>The grant matrix</h2>
+<figure>
+<svg viewBox="0 0 980 250" role="img" aria-label="Grant matrix: caller rows, agent ticks, staged commit">
+  <rect x="24" y="16" width="932" height="218" rx="6" class="svgsheet"/>
+  <text x="48" y="46" class="svgttl">Who can call · cookrew-dev</text>
+  <text x="932" y="46" text-anchor="end" class="btn" style="font:700 11px ui-monospace">＋ ENROL A CALLER</text>
+
+  <text x="48" y="76" class="svgdim">CALLER</text>
+  <text x="300" y="76" class="svgdim">FINGERPRINT</text>
+  <text x="470" y="76" class="svgdim">MAY CALL</text>
+  <text x="700" y="76" class="svgdim">LAST CALL</text>
+  <text x="800" y="76" class="svgdim">SEATS · EXPIRES</text>
+  <text x="932" y="76" text-anchor="end" class="svgdim">—</text>
+  <line x1="48" y1="84" x2="932" y2="84" stroke="var(--line-hard)"/>
+
+  <text x="48" y="112" class="svgmono">Kestrel</text>
+  <text x="48" y="128" class="svgdim">Ana's instance</text>
+  <text x="300" y="112" class="svgmono">amber harbour pilot…</text>
+  <text x="470" y="112" class="svgmono">Tinker · Forge</text>
+  <text x="700" y="112" class="svgmono">2h ago</text>
+  <text x="800" y="112" class="svgdim">— M3 —</text>
+  <text x="932" y="112" text-anchor="end" class="svgmono" style="fill:var(--red)">REVOKE</text>
+
+  <text x="48" y="158" class="svgmono">Magpie CI</text>
+  <text x="48" y="174" class="svgdim">build runner</text>
+  <text x="300" y="158" class="svgmono">rustic meadow token…</text>
+  <text x="470" y="158" class="svgdim">nothing yet</text>
+  <text x="700" y="158" class="svgdim">never</text>
+  <text x="800" y="158" class="svgdim">— M3 —</text>
+  <text x="932" y="158" text-anchor="end" class="svgmono" style="fill:var(--red)">REVOKE</text>
+
+  <line x1="48" y1="188" x2="932" y2="188" stroke="var(--line)"/>
+  <text x="48" y="212" class="svgdim">Two callers · three grants · un-export an agent to cut every grant against it at once</text>
+</svg>
+<figcaption>One row per caller. <b>SEATS</b> and <b>EXPIRES</b> are reserved now and rendered as
+<code>— M3 —</code>, so M3 fills columns rather than redesigning a list.</figcaption>
+</figure>
+
+<h3>Ticking, and committing</h3>
+<ol class="steps">
+  <li>Opening a caller row reveals the agent list — <b>exportable agents only</b>, each with an
+  unticked box. Non-exportable agents are not listed at all; a disabled row invites a fight with the
+  wrong control.</li>
+  <li>Ticks are <b>staged</b>. Nothing is granted until the owner commits.</li>
+  <li>The commit button carries the change, not a question:
+  <b>GRANT KESTREL 2 AGENTS</b>, and below it in words — <em>"Kestrel will be able to call Tinker and
+  Forge."</em> A confirm that restates the consequence is worth its click; "Are you sure?" is not.</li>
+  <li><b>No select-all.</b> Granting every agent costs one deliberate tick per agent. This is the single
+  most important line in the document: bulk-grant is precisely the accident the constraint forbids, and
+  its absence is a feature, not an omission.</li>
+  <li>Leaving with un-committed ticks warns once and discards. A staged grant is not a grant.</li>
+</ol>
+
+<h2><span class="num">6</span>Revoke</h2>
+<ul class="tight">
+  <li><b>Per grant</b> — untick and commit, same staged flow (removing access can also be staged; it is
+  safe either way).</li>
+  <li><b>Per caller</b> — <b>REVOKE</b> on the row: <b>instant, no confirm</b>, with a 10-second UNDO
+  toast. Undo rather than confirm is the right trade here: it costs nothing when you meant it, and
+  recovers fully when you did not.</li>
+  <li><b>Effect is immediate, including work in flight (RULED).</b> The string is
+  <em>"Kestrel can't call your agents. Any call in progress stops."</em> — and the code meets the
+  string, not the other way round. Someone reaching for revoke is asking one question, <em>make it stop
+  now</em>; letting the current call finish answers a different one. If cutting in flight proves
+  genuinely impossible, that goes back to the Commander rather than softening this sentence.</li>
+  <li><b>Revoking does not delete history.</b> The row moves to a REVOKED section with its last-call
+  time, because "who used to have access" is a security question people ask after the fact.</li>
+</ul>
+
+<h2><span class="num">7</span>Empty, error, refusal</h2>
+<table>
+  <thead><tr><th>State</th><th>ID</th><th>Copy</th><th>Action</th></tr></thead>
+  <tbody>
+    <tr><td>No agents exportable yet</td><td class="id">mkt.grant.empty.noexport</td>
+      <td><b>No agents are exportable</b> — mark one in the agents list first. Callers can only be given
+      agents you have already opened up.</td><td>—</td></tr>
+    <tr><td>Exportable agents, no callers</td><td class="id">mkt.grant.empty.nocallers</td>
+      <td><b>Nobody can call your agents</b> — that is the default, and it stays that way until you
+      enrol someone.</td><td class="btn">ENROL A CALLER</td></tr>
+    <tr><td>Caller with no grants</td><td class="id">mkt.grant.empty.nogrants</td>
+      <td><span class="var">{name}</span> is enrolled but can't call anything yet.</td><td>—</td></tr>
+    <tr><td>Enrol failed to save</td><td class="id">mkt.grant.error.enrol</td>
+      <td><b>Couldn't enrol <span class="var">{name}</span></b> — nothing was granted and no key was
+      stored.</td><td class="btn">RETRY</td></tr>
+    <tr><td>Grant failed to save <span class="svgdim">(staged change ADDED access)</span></td>
+      <td class="id">mkt.grant.error.commit.add</td>
+      <td><b>Couldn't save those grants</b> — <span class="var">{name}</span> was not given anything.</td>
+      <td class="btn">RETRY</td></tr>
+    <tr><td>Grant failed to save <span class="svgdim">(staged change REMOVED access)</span></td>
+      <td class="id">mkt.grant.error.commit.remove</td>
+      <td><b>Couldn't remove those grants — <span class="var">{name}</span> still has access.</b> Try
+      again, or un-export the agents to cut it off now.</td>
+      <td class="btn">RETRY</td></tr>
+    <tr><td>Revoke failed</td><td class="id">mkt.grant.error.revoke</td>
+      <td><b>Couldn't revoke <span class="var">{name}</span></b> — <b>they still have access.</b> Try
+      again, or un-export the agents to cut it off now.</td><td class="btn">RETRY</td></tr>
+    <tr><td>Un-export with live grants</td><td class="id">mkt.grant.confirm.unexport</td>
+      <td><b>Stop exporting <span class="var">{agent}</span>?</b> <span class="var">{n}</span> callers
+      can call it today and will lose access immediately.</td><td class="btn">STOP EXPORTING</td></tr>
+    <tr><td>Surface opened by a non-owner</td><td class="id">—</td>
+      <td><b>nothing renders</b> — not a message, not a disabled panel</td>
+      <td>the entry point is absent</td></tr>
+  </tbody>
+</table>
+<div class="card">
+  <b>One string split in two, applying the standard the Commander set.</b> "Couldn't save those grants
+  — access is unchanged" reads as reassurance, and it is — <em>when the staged change added access</em>.
+  When the change was a REMOVAL, "unchanged" means <b>they still have the access you just tried to take
+  away</b>, and the calm phrasing buries exactly the fact the owner needs. So the failure branches on the
+  direction of the change: adding failed is a nuisance, removing failed is a warning. Same code path, two
+  strings, because the same event means opposite things depending on which way the owner was moving.
+  <br><br><b>Two more deserve their wording defended.</b> The revoke failure says <em>"they still have
+  access"</em> — the frightening half, first, because a soft failure on a revoke is the one error in this
+  document where a reassuring tone would be a lie with consequences. And un-export is the only
+  <em>confirm</em> in the whole surface, because it is the one action that removes access from several
+  people at once as a side effect of a switch that looks like a preference.
+</div>
+
+<h2><span class="num">8</span>Gates — and who owns each</h2>
+<p class="lede"><b>Magpie owns the four that only a real drive can prove</b> (absence of a control,
+focus behaviour, a click-and-undo, an entry point that must not exist) — my own lane learned four times
+over that "the test passes" and "the thing is usable" are different claims, and every one of those four
+is a product-surface fact. <b>Atlas owns the three that are assertions about the store</b>, where a unit
+test is stronger than a screenshot because it can prove a value never arrived.</p>
+<ol class="steps">
+  <li><b>[MAGPIE]</b> No bulk grant exists — assert there is no control that ticks more than one agent.</li>
+  <li><b>[MAGPIE]</b> The enrol primary is not focus-on-open and <kbd>Enter</kbd> does not fire it.</li>
+  <li><b>[ATLAS]</b> Enrolling grants nothing: a freshly enrolled caller has zero agents.</li>
+  <li><b>[ATLAS]</b> A private key pasted is refused, the field is cleared, and <b>the value never
+  reaches the store</b> — assert the store, not the pixels.</li>
+  <li><b>[MAGPIE]</b> Revoke is one click with no confirm, and UNDO restores exactly the prior grant set.</li>
+  <li><b>[MAGPIE]</b> The surface does not render for a non-owner — assert <b>absence of the entry
+  point</b>, not a disabled state.</li>
+  <li><b>[ATLAS]</b> Un-exporting an agent drops every grant against it.</li>
+  <li><b>[MAGPIE, new — the ruling]</b> Revoke during a LIVE call stops that call. This one needs a real
+  call in flight, so it is a system-level drive rather than a unit test, and it is the gate that keeps
+  the string honest.</li>
+</ol>
+
+<h2><span class="num">9</span>Ruled: revoke stops calls already running</h2>
+<div class="card ok">
+  <b>Settled.</b> Revoke cuts in-flight calls. The copy is <em>"Any call in progress stops."</em> and
+  <b>the implementation meets the string</b>. The reasoning is worth keeping because it generalises: a
+  control reached for in a panic must answer the question actually being asked, and "make it stop" does
+  not mean "stop soon". Where a gentler behaviour and a panic control disagree, the panic control wins.
+</div>
+
+<footer>
+  <b>Exported agents — the granting surface.</b> Velvet (UX Optimizer), 2026-08-22.<br>
+  Chain: renderer UI → preload → owner-only IPC → OwnerGrant → store → gate →
+  <code>/&lt;slug&gt;/agents/&lt;name&gt;/ask</code>. Everything from preload rightward exists; this is
+  the surface. Sibling decks: <a href="marketplace-flows.html">flows</a> ·
+  <a href="marketplace-copy-deck.html">copy</a> · <a href="marketplace-interaction.html">interaction</a>.
+</footer>
+
+</div>
+<script>
+  (function(){var b=document.getElementById('theme');b.addEventListener('click',function(){
+    var n=document.documentElement.getAttribute('data-theme');
+    var d=n?n==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.setAttribute('data-theme',d?'light':'dark');});})();
+</script>
+</body>
+</html>
