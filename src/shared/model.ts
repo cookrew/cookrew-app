@@ -459,6 +459,14 @@ export interface CliResponse {
   ok: boolean
   output?: string
   error?: string
+  /**
+   * Process exit code the CLI must leave with (delivery contract,
+   * shared/ask-outcome.ts). Absent = 1, the ordinary failure. Present when the
+   * caller's next action depends on WHICH failure it was: `unsubmitted` (3)
+   * wants a carriage return, `dropped` (4) wants the brief resent, and
+   * applying either remedy to the other case corrupts the input box.
+   */
+  exitCode?: number
 }
 
 export const DEFAULT_TERMINAL_SIZE: CanvasSize = { width: 640, height: 420 }

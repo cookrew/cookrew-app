@@ -23,12 +23,19 @@ import { renderMobileHelp, renderRotated } from './mobile-cli-text'
 import { readProxyConfig, tailnetProxyGaps } from './proxy-bypass'
 import { AgentRegistry, AgentRegistryEntry } from './agent-registry'
 import { planRecruitTarget } from '../shared/workspace-dirs'
-import { PtyManager } from './pty'
+import { PtyManager, multiplexer, sessionNameFor, type PtySession } from './pty'
 import { askRaw, askTerminal, decodeRawEscapes } from './ask'
+import {
+  DeliveryError,
+  deliverAndConfirm,
+  replyText,
+  terminalDeliveryDeps
+} from './ask-delivery'
 import { PRESETS } from './presets'
 import { RoutineScheduler, parseInterval } from './routines'
 import type { VoiceEngine } from './voice'
 import type { TurnTracker } from './turn-tracker'
+import type { DispatchService } from './dispatch'
 
 export interface SocketServerDeps {
   store: WorkspaceStore
@@ -37,6 +44,13 @@ export interface SocketServerDeps {
   spawnTerminal: (t: { id: string; command: string; cwd: string }) => void
   /** Turn history source for `cookrew fork` validation/output. */
   turns: TurnTracker
+  /**
+   * The attach-free dispatch engine, for `ask --no-wait` and `cookrew
+   * dispatch <id>`. Optional so embedders and tests construct the socket
+   * server without one; absent, --no-wait refuses honestly rather than
+   * silently falling back to a blocking ask the caller did not ask for.
+   */
+  dispatch?: DispatchService
   /** Durable global agent directory (~/.cookrew/agents.json). */
   agents: AgentRegistry
   /** Fork an agent from one of its turns (same path as IPC forking). */
@@ -130,7 +144,11 @@ async function handleLine(
     respond(socket, {
       id: request.id,
       ok: false,
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error ? error.message : String(error),
+      // Per-outcome exit code (delivery contract): a shell caller's next
+      // action differs per outcome, so collapsing every failure to 1 would
+      // rebuild the ambiguity one layer down.
+      ...(error instanceof DeliveryError ? { exitCode: error.exitCode } : {})
     })
   }
 }
@@ -187,6 +205,10 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
       return cmdAsk(request, deps)
     case 'check':
       return cmdCheck(request, deps)
+    case 'status':
+      return cmdStatus(request, deps)
+    case 'dispatch':
+      return cmdDispatch(request, deps)
     case 'note':
       return cmdNote(request, deps)
     case 'connect':
@@ -602,13 +624,140 @@ async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<stri
   // preempted, a dispatch DELIVERING right now is preempted-then-displaced,
   // and a second concurrent owner ask throws 'another owner submission is in
   // flight' — surfaced to the CLI caller as this command's error.
-  const reply = await askTerminal(session, prompt)
+  // --no-wait: hand back a DISPATCH ID instead of blocking.
+  //
+  // The id is the correlation, and that is the whole point. A caller that
+  // waits for "the next turn.completed" matches whatever finishes next —
+  // including the PREVIOUS round's turn replayed by the event stream on
+  // connect, which is how an all-quiet gets declared over agents that never
+  // started. A dispatch id did not exist when the previous turn ended, so it
+  // cannot match it. Correct by construction rather than by careful timing.
+  if (request.flags['no-wait']) {
+    if (!deps.dispatch) throw new Error('--no-wait needs the dispatch engine, which is not wired')
+    const result = await deps.dispatch.dispatch(target.id, { text: prompt })
+    const body = result.body as { dispatchId?: string; error?: string }
+    if (result.status !== 202 || !body.dispatchId) {
+      throw new Error(body.error ?? `dispatch refused (${result.status})`)
+    }
+    return `${body.dispatchId}\n(started — await it with: cookrew dispatch ${body.dispatchId})`
+  }
+
+  // Same verified path the phone uses — the order lives in deliverAndConfirm.
+  const { reply, submitRetries } = await deliverAndConfirm({
+    terminalId: target.id,
+    agentName: target.name,
+    prompt,
+    deliver: () => askTerminal(session, prompt),
+    observe: terminalDeliveryDeps(deps.turns, (data) => session.write(data))
+  })
+
   if (deps.voice.enabled) {
     deps.voice.speakReply(target.name, reply).catch((error) => {
       console.error('Voice reply failed:', error)
     })
   }
-  return reply
+  return replyText(reply, submitRetries)
+}
+
+
+
+/**
+ * The truthful busy/idle fact — from the TURN TRACKER, never herdr.
+ *
+ * herdr's agent_status is a per-pane detector and it flaps: measured stuck at
+ * `idle` under a live 48-second spinner, and the owner watched it report idle
+ * for six actively-working agents. A status that is wrong in the direction of
+ * "done" is the worst one to build an orchestrator on, because the orchestrator
+ * then dispatches into a busy agent or declares an all-quiet that is not.
+ *
+ * The tracker already knows, and its four phases carry a distinction nothing
+ * surfaced before: `replied` means the turn ENDED and nobody has looked at it.
+ * An agent that answered with a plan and stopped is in `replied`, not `idle`
+ * and not `thinking` — which is exactly the state that "looks identical to
+ * still working" from the outside. Every continuation needs a fresh dispatch,
+ * and this is the fact that says so.
+ *
+ * THE LIMIT, STATED: this cannot see a WEDGED pane. A pane that has stopped
+ * reading input produces no output, so the tracker sees quiescence and reports
+ * `idle` — which is exactly how a wedge masquerades as an idle agent and a
+ * lane stops silently for an hour. A wedge is only provable RELATIVE TO A
+ * WRITE (bytes in, nothing painted), so it is detected on the delivery path
+ * and surfaced there as `unresponsive`. Reading `idle` here means "no turn is
+ * running", never "this agent is healthy and available".
+ */
+function cmdStatus(request: CliRequest, deps: SocketServerDeps): string {
+  const [name] = request.args
+  const activities = deps.turns.list()
+  const rows = name
+    ? activities.filter(
+        (entry) =>
+          entry.terminalId === (findConnected(request, deps, name, 'terminal') as TerminalNodeData).id
+      )
+    : activities
+
+  if (rows.length === 0) {
+    // No tracker entry is NOT idle — it is no view at all (a detached pane, a
+    // dormant workspace). Saying "idle" here would be the same lie the
+    // delivery contract refuses: our blindness reported as their state.
+    return name
+      ? `${name}: unverifiable — not tracked in this workspace (detached or dormant); no busy/idle fact available`
+      : 'No tracked terminals in this workspace.'
+  }
+
+  return rows
+    .map((entry) => {
+      const label = deps.store.node(entry.terminalId)?.name ?? entry.terminalId.slice(0, 8)
+      const meaning: Record<string, string> = {
+        thinking: 'working',
+        waiting: 'BLOCKED on a human',
+        replied: 'turn ENDED, unread — a continuation needs a fresh dispatch',
+        idle: 'idle'
+      }
+      const since =
+        entry.turnStartedAt !== null && entry.turnStartedAt !== undefined
+          ? ` (${Math.round((Date.now() - entry.turnStartedAt) / 1000)}s)`
+          : ''
+      return `${label}: ${entry.phase} — ${meaning[entry.phase] ?? entry.phase}${since} · ${entry.turnCount} turns`
+    })
+    .join('\n')
+}
+
+/**
+ * `cookrew dispatch <id>` — what became of THAT dispatch.
+ *
+ * Correlated by identity, never by time. The record walks submitted → running
+ * → done{turnIndex, reply} | failed | interrupted, so a caller polls one id
+ * and can never be handed a different turn's completion. This is the
+ * side-step for the SSE replay trap rather than a documentation of it: the
+ * event stream replays history on connect, so a watcher started AFTER a
+ * dispatch matches the previous round and fires instantly-false.
+ */
+function cmdDispatch(request: CliRequest, deps: SocketServerDeps): string {
+  const [dispatchId] = request.args
+  if (!dispatchId) throw new Error('Usage: cookrew dispatch <dispatchId>')
+  if (!deps.dispatch) throw new Error('The dispatch engine is not wired')
+  const result = deps.dispatch.lookup(dispatchId)
+  if (result.status !== 200) {
+    throw new Error((result.body as { error?: string }).error ?? 'no such dispatch')
+  }
+  const record = result.body as {
+    state: string
+    agentName?: string
+    turnIndex?: number
+    error?: string
+    hasReply?: boolean
+  }
+  const lines = [`${record.agentName ?? dispatchId}: ${record.state}`]
+  if (record.turnIndex !== undefined) lines.push(`turn ${record.turnIndex}`)
+  if (record.hasReply) lines.push('reply recorded')
+  if (record.error) lines.push(record.error)
+  // A dispatch that ENDED without completing must not exit 0 — the same rule
+  // the ask verb follows. `interrupted` is deliberately not `failed`: the work
+  // may well have happened, we simply stopped being able to see it.
+  if (record.state === 'failed' || record.state === 'interrupted') {
+    throw new DeliveryError('unverifiable', record.agentName ?? dispatchId)
+  }
+  return lines.join(' · ')
 }
 
 function cmdCheck(request: CliRequest, deps: SocketServerDeps): string {
@@ -1094,6 +1243,11 @@ Usage:
   cookrew ask "Agent" "prompt"                  Send a prompt to a connected agent, wait for the reply
   cookrew ask "Agent" --raw "bytes"             Send raw input (\\n Enter, \\t Tab, \\e ESC, \\xNN byte)
   cookrew check "Agent"                         Read the agent's current terminal output
+  cookrew ask "Agent" "prompt" --no-wait        Dispatch without blocking; prints a dispatchId
+  cookrew dispatch <dispatchId>                 What became of THAT dispatch (id-correlated)
+  cookrew status ["Agent"]                      Busy/idle from the TURN TRACKER, not herdr:
+                                                thinking | waiting (blocked on you) | replied
+                                                (turn ENDED, needs a fresh dispatch) | idle
   cookrew note create ["content"]               Create a connected note on the canvas
   cookrew note read "Name" [offset] [limit]     Read a note with line numbers
   cookrew note write "Name" "content"           Replace a note's content

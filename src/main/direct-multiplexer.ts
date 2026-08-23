@@ -93,11 +93,28 @@ export class DirectMultiplexer implements Multiplexer {
    * as "the pane is empty" and null as "no signal", and this backend genuinely
    * has no out-of-process view of the screen.
    */
-  capture(): string | null {
+  capture(_name: string): string | null {
     return null
   }
 
-  scrollState(): ScrollState {
+  /**
+   * Null depth, ALWAYS — this backend has no out-of-process view of a pane, so
+   * there is no scrollback counter to read.
+   *
+   * The name parameter is declared even though nothing reads it. TypeScript
+   * accepts a shorter signature against the interface, so `scrollState()`
+   * compiled fine while every caller passed a session name — and a future body
+   * that started returning real state would have had a name in scope it was
+   * not using, which is exactly how one terminal's answer gets derived from
+   * another's output. Naming the argument makes ignoring it a decision.
+   *
+   * Consequence worth stating: on this backend the delivery contract's wedge
+   * check can never fire and `promptInBox` is always unknown, so an
+   * unconfirmed delivery reports `unverifiable`. That is the fail-closed
+   * direction, and ask-delivery counts it (see blindDeliveryCount) so an inert
+   * feature is visible rather than silent.
+   */
+  scrollState(_name: string): ScrollState {
     return { scrollRow: null, historySize: null }
   }
 
