@@ -49,6 +49,8 @@ export function terminalDeliveryDeps(
   return {
     turnCountOf,
     capture: (terminalId) => multiplexer()?.capture(sessionNameFor(terminalId)) ?? null,
+    outputDepth: (terminalId) =>
+      multiplexer()?.scrollState(sessionNameFor(terminalId)).historySize ?? null,
     submit: () => write('\r'),
     settle: () => new Promise((resolve) => setTimeout(resolve, SUBMIT_SETTLE_MS))
   }
@@ -104,11 +106,13 @@ export async function deliverAndConfirm(input: {
   // was already running — identity over timing, the same reason the dispatch
   // route correlates on a dispatchId rather than on "the next completion".
   const turnsBefore = input.observe.turnCountOf(input.terminalId)
+  const depthBefore = input.observe.outputDepth?.(input.terminalId) ?? null
   const reply = await input.deliver()
   const report = await confirmDelivery(input.observe, {
     terminalId: input.terminalId,
     prompt: input.prompt,
-    turnsBefore
+    turnsBefore,
+    depthBefore
   })
   if (report.outcome !== 'completed') throw new DeliveryError(report.outcome, input.agentName)
   return { outcome: report.outcome, reply, submitRetries: report.submitRetries }
@@ -142,6 +146,17 @@ export interface DeliveryDeps {
   submit: (terminalId: string) => void
   /** Wait long enough for a submitted turn to register before re-checking. */
   settle: () => Promise<void>
+  /**
+   * Scrollback depth — output written to this pane, ever. Rises with every
+   * burst; null when it cannot be read.
+   *
+   * This is `max_offset_from_bottom`, MEASURED to rise with output
+   * (0 → 18 → 59 → 100 → 141 across four bursts). herdr's `revision` looks
+   * like the counter for this and is not: it versions pane metadata and stayed
+   * at 1 across all four, so sampling revision twice and finding it frozen is
+   * the normal state of every healthy pane.
+   */
+  outputDepth?: (terminalId: string) => number | null
 }
 
 export interface DeliveryReport {
@@ -160,7 +175,13 @@ export interface DeliveryReport {
  */
 export async function confirmDelivery(
   deps: DeliveryDeps,
-  input: { terminalId: string; prompt: string; turnsBefore: number | null }
+  input: {
+    terminalId: string
+    prompt: string
+    turnsBefore: number | null
+    /** Scrollback depth captured BEFORE delivery, for the wedge check. */
+    depthBefore?: number | null
+  }
 ): Promise<DeliveryReport> {
   const { terminalId, prompt } = input
 
@@ -176,11 +197,26 @@ export async function confirmDelivery(
   if (started()) return { outcome: 'completed', submitRetries: 0 }
   if (!observable) return { outcome: 'unverifiable', submitRetries: 0 }
 
+  // THE WEDGE CHECK. A pane that took our bytes and painted NOTHING is not
+  // idle and is not a dropped brief — it has stopped reading input, and every
+  // remedy that sends more bytes is wasted on it. Only asked when both depths
+  // are readable: an unknown depth is not evidence of a frozen one.
+  const depthNow = deps.outputDepth?.(terminalId) ?? null
+  const painted =
+    input.depthBefore === undefined || input.depthBefore === null || depthNow === null
+      ? undefined
+      : depthNow > input.depthBefore
+
   const pane = deps.capture(terminalId)
   const inBox = pane === null ? null : promptLanded(pane, prompt)
-  if (inBox !== true) {
+  if (inBox !== true || painted === false) {
     return {
-      outcome: classifyDelivery({ turnStarted: false, observable, promptInBox: inBox }),
+      outcome: classifyDelivery({
+        turnStarted: false,
+        observable,
+        promptInBox: inBox,
+        ...(painted !== undefined ? { panePainted: painted } : {})
+      }),
       submitRetries: 0
     }
   }

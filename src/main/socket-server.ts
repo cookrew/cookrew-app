@@ -676,6 +676,14 @@ async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<stri
  * and not `thinking` — which is exactly the state that "looks identical to
  * still working" from the outside. Every continuation needs a fresh dispatch,
  * and this is the fact that says so.
+ *
+ * THE LIMIT, STATED: this cannot see a WEDGED pane. A pane that has stopped
+ * reading input produces no output, so the tracker sees quiescence and reports
+ * `idle` — which is exactly how a wedge masquerades as an idle agent and a
+ * lane stops silently for an hour. A wedge is only provable RELATIVE TO A
+ * WRITE (bytes in, nothing painted), so it is detected on the delivery path
+ * and surfaced there as `unresponsive`. Reading `idle` here means "no turn is
+ * running", never "this agent is healthy and available".
  */
 function cmdStatus(request: CliRequest, deps: SocketServerDeps): string {
   const [name] = request.args

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { confirmDelivery, type DeliveryDeps } from '../src/main/ask-delivery'
+import { ASK_REMEDY } from '../src/shared/ask-outcome'
 
 // The confirmation step, against the owner's five reproductions.
 //
@@ -115,5 +116,67 @@ describe('a fact about US is not a fact about THEM', () => {
     const empty = deps({ capture: () => '', turnCountOf: () => 4 })
     expect((await run(blind)).outcome).toBe('unverifiable')
     expect((await run(empty)).outcome).toBe('dropped')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// THE WEDGE. Tinker's pane stopped reading input entirely and read as IDLE to
+// every signal the owner had; a lane sat silently stopped for an hour.
+//
+// Before this, the contract classified it `dropped` and prescribed "send the
+// whole brief again" — a remedy that can never work on a pane that is not
+// reading. Wrong remedy is worse than no remedy: it looks like progress.
+// ---------------------------------------------------------------------------
+
+describe('a wedged pane is not an idle one, and not a dropped brief', () => {
+  const wedged = (over: Partial<DeliveryDeps> = {}): DeliveryDeps & { submits: string[] } =>
+    deps({
+      turnCountOf: () => 4,
+      // Took the bytes, painted nothing: the depth never moved.
+      outputDepth: () => 100,
+      capture: () => 'a frozen screen',
+      ...over
+    })
+
+  const runWedge = (d: DeliveryDeps, depthBefore: number | null = 100) =>
+    confirmDelivery(d, { terminalId: 'term-1', prompt: PROMPT, turnsBefore: 4, depthBefore })
+
+  it('reports UNRESPONSIVE when the pane painted nothing at all', async () => {
+    expect((await runWedge(wedged())).outcome).toBe('unresponsive')
+  })
+
+  it('prescribes a restart, not a resend', async () => {
+    const { outcome } = await runWedge(wedged())
+    expect(ASK_REMEDY[outcome]).toMatch(/restart/i)
+    expect(ASK_REMEDY[outcome]).toMatch(/do not send more/i)
+  })
+
+  it('does not send more bytes into a pane that is not reading them', async () => {
+    const d = wedged()
+    await runWedge(d)
+    expect(d.submits).toEqual([])
+  })
+
+  it('a pane that PAINTED is a dropped brief, not a wedge', async () => {
+    // The healthy-pane case from the owner's report: empty prompt, brief
+    // vanished, but the pane is rendering normally. Remedy is a resend.
+    const d = wedged({ outputDepth: () => 141 })
+    expect((await runWedge(d, 100)).outcome).toBe('dropped')
+  })
+
+  it('a pane that painted AND holds the brief is unsubmitted, not a wedge', async () => {
+    const d = wedged({ outputDepth: () => 141, capture: () => `> ${PROMPT}` })
+    expect((await runWedge(d, 100)).outcome).toBe('unsubmitted')
+  })
+
+  it('an UNREADABLE depth is not evidence of a frozen one', async () => {
+    // The whole discipline of this lane: we do not convert "cannot tell" into
+    // an accusation. No depth reading means the wedge question is unasked.
+    const d = wedged({ outputDepth: () => null })
+    expect((await runWedge(d)).outcome).toBe('dropped')
+  })
+
+  it('does not claim a wedge when there was no BEFORE reading to compare', async () => {
+    expect((await runWedge(wedged(), null)).outcome).toBe('dropped')
   })
 })

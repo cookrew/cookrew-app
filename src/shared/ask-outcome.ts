@@ -50,6 +50,17 @@ export type AskOutcome =
   | 'unreachable'
   /** Delivered, and we cannot see what became of it. May well be running. */
   | 'unverifiable'
+  /**
+   * The pane took our bytes and painted NOTHING — wedged. More bytes will not
+   * help; it needs restarting.
+   *
+   * This state used to masquerade as `idle` to every signal available, which
+   * is how a lane silently stops for an hour (owner, Tinker's pane). Before
+   * this outcome existed the delivery contract called it `dropped` and told
+   * the caller to resend the brief — a remedy that can never work on a pane
+   * that is not reading input.
+   */
+  | 'unresponsive'
 
 /**
  * Process exit code per outcome. Distinct numbers because a shell caller's
@@ -68,7 +79,8 @@ export const ASK_EXIT: Readonly<Record<AskOutcome, number>> = {
   dropped: 4,
   busy: 5,
   unreachable: 6,
-  unverifiable: 7
+  unverifiable: 7,
+  unresponsive: 8
 }
 
 /**
@@ -89,6 +101,9 @@ export const ASK_HTTP_STATUS: Readonly<Record<AskOutcome, number>> = {
   // The agent is fine and busy — a conflict, not a failure.
   busy: 409,
   unreachable: 503,
+  // Wedged. Distinct from unreachable in DIAGNOSIS even where the remedy
+  // rhymes: unreachable has no pane, unresponsive has one that stopped reading.
+  unresponsive: 503,
   // We delivered and cannot confirm. Not 200: "I could not confirm" must
   // never be spendable as success, on any transport.
   unverifiable: 504
@@ -113,7 +128,9 @@ export const ASK_REMEDY: Readonly<Record<AskOutcome, string>> = {
   busy: 'wait for the current turn to finish, or preempt it deliberately',
   unreachable: 'recover or compact the agent before dispatching again',
   unverifiable:
-    'check the pane — the brief may be running; do NOT resend blind, it may double-submit'
+    'check the pane — the brief may be running; do NOT resend blind, it may double-submit',
+  unresponsive:
+    'the pane is wedged — it took the bytes and painted nothing; restart it, do not send more'
 }
 
 /**
@@ -137,6 +154,19 @@ export interface DeliveryEvidence {
    * the same as "no".
    */
   promptInBox: boolean | null
+  /**
+   * Did the pane PAINT ANYTHING since before we delivered? False means our
+   * bytes produced no output at all, which a live pane never does — even an
+   * idle shell echoes. True or undefined means the pane is rendering, so a
+   * missing brief is a missing brief rather than a wedge.
+   *
+   * Measured basis: `max_offset_from_bottom` is the scrollback depth and rises
+   * with output (0 → 18 → 59 → 100 → 141 across four bursts). herdr's
+   * `revision` field is NOT that counter despite its name — it versions pane
+   * METADATA and stayed at 1 across all four, so a revision frozen at 1 is the
+   * normal state of every pane and proves nothing about a wedge.
+   */
+  panePainted?: boolean
   /** The pane refused the work outright, with which named reason. */
   refused?: 'busy' | 'unreachable'
 }
@@ -160,6 +190,11 @@ export function classifyDelivery(evidence: DeliveryEvidence): AskOutcome {
   if (evidence.refused !== undefined) return evidence.refused
   if (evidence.turnStarted) return 'completed'
   if (!evidence.observable) return 'unverifiable'
+  // WEDGE BEFORE BOX. A pane that painted nothing at all cannot have its input
+  // box read meaningfully, and calling it `dropped` prescribes a resend that
+  // will never land. Only a pane we can SEE is judged this way — an
+  // unobservable one already returned above.
+  if (evidence.panePainted === false) return 'unresponsive'
   if (evidence.promptInBox === null) return 'unverifiable'
   return evidence.promptInBox ? 'unsubmitted' : 'dropped'
 }
