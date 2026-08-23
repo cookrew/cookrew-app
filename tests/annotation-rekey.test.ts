@@ -160,3 +160,63 @@ describe('alignToLedger', () => {
     expect(alignToLedger([rec(9, 'u-a')], noUuid).map((r) => r.index)).toEqual([1])
   })
 })
+
+/**
+ * CRITICAL-1 — the reconcile must align against the DURABLE record, not the
+ * tracker's in-memory copy of it.
+ *
+ * The restore wrote 613 records to disk. The running tracker still held the
+ * pre-restore 16 in `histories`, and alignToLedger was handed THAT. The
+ * incoming parse's head matched at index 1, so no shift was applied, 16 records
+ * were written — and because a full save treats its argument as the whole
+ * truth, the other 597 were destroyed in the ledger AND the annotation sidecar.
+ *
+ * It is the same defect the whole lane is about, one layer deeper: the durable
+ * record is the truth and a cache of it can silently disagree. Fixing the
+ * counter is not enough if the thing it derives from is itself a cache.
+ */
+describe('CRITICAL-1: the reconcile aligns against the durable ledger', () => {
+  const rec = (index: number, uuid: string): TurnRecord =>
+    ({ index, uuid, prompt: `p${uuid}`, reply: 'r', startedAt: index, endedAt: index + 1 })
+
+  it('shifts by what is ON DISK even when memory holds a stale, shorter history', () => {
+    // Disk: a recovered 613-record history. Memory: the pre-restore 16.
+    const durable = [rec(611, 'u-a'), rec(612, 'u-b'), rec(613, 'u-c')]
+    const staleMemory = [rec(1, 'u-a'), rec(2, 'u-b'), rec(3, 'u-c')]
+    const parsed = [rec(1, 'u-a'), rec(2, 'u-b'), rec(3, 'u-c')]
+
+    // Against stale memory the head already "matches" at 1, so nothing shifts —
+    // which is precisely how 613 became 16 again twenty minutes later.
+    expect(alignToLedger(staleMemory, parsed).map((r) => r.index)).toEqual([1, 2, 3])
+    // Against the durable record it lands where the record says it belongs.
+    expect(alignToLedger(durable, parsed).map((r) => r.index)).toEqual([611, 612, 613])
+  })
+})
+
+describe('CRITICAL-1: replaceHistory reads the ledger, not its own cache', () => {
+  const rec = (index: number, uuid: string): TurnRecord =>
+    ({ index, uuid, prompt: `p${uuid}`, reply: 'r', startedAt: index, endedAt: index + 1 })
+
+  it('does not shrink a restored 613-record ledger back to the parsed 16', async () => {
+    const { TurnTracker } = await import('../src/main/turn-tracker')
+    const disk = [rec(611, 'u-a'), rec(612, 'u-b'), rec(613, 'u-c')]
+    const saved: TurnRecord[][] = []
+    const store = {
+      load: () => disk,
+      scheduleSave: (_id: string, records: TurnRecord[]) => saved.push(records),
+      flushAll: () => undefined
+    }
+    const tracker = new TurnTracker(async () => null, store as never)
+    // Memory is deliberately primed with the stale, pre-restore numbering.
+    ;(tracker as unknown as { histories: Map<string, TurnRecord[]> }).histories.set('t1', [
+      rec(1, 'u-a'),
+      rec(2, 'u-b'),
+      rec(3, 'u-c')
+    ])
+
+    tracker.replaceHistory('t1', [rec(1, 'u-a'), rec(2, 'u-b'), rec(3, 'u-c')])
+
+    const history = (tracker as unknown as { histories: Map<string, TurnRecord[]> }).histories.get('t1')
+    expect(history?.map((r) => r.index)).toEqual([611, 612, 613])
+  })
+})

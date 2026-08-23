@@ -649,9 +649,34 @@ export class TurnTracker extends EventEmitter {
    */
   replaceHistory(terminalId: string, rawRecords: TurnRecord[]): void {
     const previous = this.liveHistory(terminalId)
-    // THE COUNTER DERIVES FROM THE RECORD. A transcript numbers its own turns
-    // from 1; the ledger knows where this run actually sits.
-    const records = alignToLedger(previous, rawRecords)
+    /**
+     * THE COUNTER DERIVES FROM THE RECORD — the DURABLE one.
+     *
+     * A transcript numbers its own turns from 1; the ledger knows where this
+     * run actually sits. Aligning against `previous` was not enough, and the
+     * failure was live: liveHistory returns the tracker's in-memory copy, which
+     * after a lineage restore still held the pre-restore 16 while disk held
+     * 613. The head matched at index 1, nothing shifted, 16 were written — and
+     * a full save treats its argument as the whole truth, so the other 597 died
+     * in the ledger and the annotation sidecar together.
+     *
+     * That is this lane's own defect one layer deeper: fixing the counter is
+     * worth nothing if the thing it derives from is itself a cache that can
+     * disagree. store.load() reads the file.
+     *
+     * MEDIUM-3, WRITTEN DOWN WHERE IT BITES: this is the LIVE renumber path and
+     * it has NO version-pin check. refuseRenumber() exists and is wired into
+     * planRecovery, but planRecovery is the offline tool — a node carrying pins
+     * is renumbered right here, silently, which is the exact thing the refusal
+     * was written to prevent. Pins are keyed by checkpoint index
+     * (version-pin.ts atIndex, persisted by pin-store.ts), so a shift moves
+     * every one of them onto a different checkpoint with no error. No node
+     * carries a pin today, which is the only reason this is a comment and not
+     * an incident. Before pins ship: consult refuseRenumber here and decline
+     * the shift, or re-key pins by checkpoint uuid.
+     */
+    const durable = this.store?.load(terminalId) ?? previous
+    const records = alignToLedger(durable, rawRecords)
     const byUuid = new Map(previous.filter((r) => r.uuid).map((r) => [r.uuid, r]))
     const byIndex = new Map(previous.map((r) => [r.index, r]))
     const merged = records.map((record) => {
