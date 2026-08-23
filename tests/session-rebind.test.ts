@@ -64,12 +64,28 @@ describe('SessionTurnSync.rebind — rotation keeps the tracking facts', () => {
     vi.useRealTimers()
   })
 
-  it('swaps the binding: history now mirrors the successor file (full re-parse)', () => {
+  /**
+   * THIS EXPECTATION CHANGED WITH THE LINEAGE FIX — it used to be ['turn two'].
+   *
+   * The successor file is still fully re-parsed; what changed is what the
+   * tracker does with the result. A rotation is the SAME conversation in a new
+   * file, so replacing the ledger with the successor's turns alone ORPHANS
+   * every checkpoint before the rotation — which is the bug this whole lane
+   * exists for, and how the owner lost 400+ of them. The ledger continues
+   * across the seam and the turns are numbered by their position in the
+   * LINEAGE, not their position in the new file.
+   *
+   * The licence to do that is issued by rebind() and by nothing else: the
+   * unwatch()+watch() contrast at the bottom of this file still replaces, and
+   * that is the assertion which proves the scope.
+   */
+  it('swaps the binding and CONTINUES the ledger across the rotation', () => {
     const { fileA, fileB, tracker, sync } = fixture()
     sync.watch('t', fileA, parseSessionTurns)
     expect(tracker.history('t').map((r) => r.prompt)).toEqual(['turn one'])
     sync.rebind('t', fileB, parseSessionTurns)
-    expect(tracker.history('t').map((r) => r.prompt)).toEqual(['turn two'])
+    expect(tracker.history('t').map((r) => r.prompt)).toEqual(['turn one', 'turn two'])
+    expect(tracker.history('t').map((r) => r.index)).toEqual([1, 2])
     sync.dispose()
   })
 
@@ -82,16 +98,23 @@ describe('SessionTurnSync.rebind — rotation keeps the tracking facts', () => {
     sync.rebind('t', fileB, parseSessionTurns)
     // The pin survived the rebind: quiet far past every window, still watching.
     await ticks(DRAIN_TICKS * 4)
+    const held = tracker.history('t').length
     appendFileSync(fileB, TURN_3.join('\n') + '\n', 'utf8')
     await ticks(3)
-    expect(tracker.history('t').map((r) => r.prompt)).toEqual(['turn two', 'turn three'])
+    // Still watching: the appended turn landed. Asserted as GROWTH rather than
+    // a hardcoded count — what this test is about is whether the pin kept the
+    // watch alive, and a fixed number would couple it to how the ledger
+    // numbers a rotation, which is a different question entirely.
+    expect(tracker.history('t')).toHaveLength(held + 1)
+    expect(tracker.history('t').at(-1)?.prompt).toBe('turn three')
     // Dispatch settles: the ordinary drain clock owns the terminal again…
     sync.unpin('t')
     await ticks(DRAIN_TICKS + 2)
+    const drained = tracker.history('t').length
     appendFileSync(fileB, TURN_1.join('\n') + '\n', 'utf8')
     await ticks(3)
     // …and it drained — no leaked per-agent polling after the rotation.
-    expect(tracker.history('t')).toHaveLength(2)
+    expect(tracker.history('t')).toHaveLength(drained)
     sync.dispose()
   })
 
@@ -103,15 +126,17 @@ describe('SessionTurnSync.rebind — rotation keeps the tracking facts', () => {
     sync.release('t')
     sync.rebind('t', fileB, parseSessionTurns)
     await ticks(DRAIN_TICKS * 4)
+    const held = tracker.history('t').length
     appendFileSync(fileB, TURN_3.join('\n') + '\n', 'utf8')
     await ticks(3)
-    expect(tracker.history('t')).toHaveLength(2)
+    expect(tracker.history('t')).toHaveLength(held + 1) // still watching
     // The last unsubscribe re-arms the drain, exactly as on a plain watch.
     sync.unsubscribe('t')
     await ticks(DRAIN_TICKS + 2)
+    const drained = tracker.history('t').length
     appendFileSync(fileB, TURN_1.join('\n') + '\n', 'utf8')
     await ticks(3)
-    expect(tracker.history('t')).toHaveLength(2)
+    expect(tracker.history('t')).toHaveLength(drained) // drained
     sync.dispose()
   })
 
@@ -126,14 +151,16 @@ describe('SessionTurnSync.rebind — rotation keeps the tracking facts', () => {
     // …but the successor is a fresh binding generation: a partial window is
     // not enough to drain it…
     await ticks(DRAIN_TICKS - 2)
+    const held = tracker.history('t').length
     appendFileSync(fileB, TURN_3.join('\n') + '\n', 'utf8')
     await ticks(3)
-    expect(tracker.history('t')).toHaveLength(2)
+    expect(tracker.history('t')).toHaveLength(held + 1) // still watching
     // …while the full window still is (released stayed released).
     await ticks(DRAIN_TICKS + 2)
+    const drained = tracker.history('t').length
     appendFileSync(fileB, TURN_1.join('\n') + '\n', 'utf8')
     await ticks(3)
-    expect(tracker.history('t')).toHaveLength(2)
+    expect(tracker.history('t')).toHaveLength(drained) // drained
     sync.dispose()
   })
 

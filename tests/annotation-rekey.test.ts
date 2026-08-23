@@ -430,4 +430,48 @@ describe('CRITICAL-1: the incident, replayed against a real store', () => {
 
     expect(store.load('t1')).toHaveLength(613)
   })
+
+  /**
+   * THE WHOLE SCENARIO THE OWNER IS ABOUT TO LIVE THROUGH, in order.
+   *
+   * The two halves of this fix answer different questions and it is their
+   * COMPOSITION that has to hold: restore 613, keep taking turns (the merge),
+   * then compact (the rotation licence). Either half alone still ends with the
+   * history gone — the merge survives reconciles and dies at the next compact,
+   * the licence survives a compact but not the reconcile before it. He
+   * compacts often, so the sequence below is the real acceptance test and not
+   * a contrived one.
+   */
+  it('survives a restore, then live turns, then a COMPACT', async () => {
+    const { TurnTracker } = await import('../src/main/turn-tracker')
+    const { TurnStore } = await import('../src/main/turn-store')
+    const store = new TurnStore(path.join(dir, 'turns'))
+    const tracker = new TurnTracker(undefined, store)
+
+    const live = Array.from({ length: 16 }, (_, at) => rec(at + 1, `u-${598 + at}`))
+    tracker.replaceHistory('t1', live, { sessionFile: '/before.jsonl' })
+    store.flushAll()
+
+    // 1. The repair tool restores the full lineage.
+    store.scheduleSave('t1', Array.from({ length: 613 }, (_, at) => rec(at + 1, `u-${at + 1}`)))
+    store.flushAll()
+
+    // 2. A live turn reconciles the bound transcript — the merge holds it.
+    tracker.replaceHistory('t1', live, { sessionFile: '/before.jsonl' })
+    store.flushAll()
+    expect(store.load('t1')).toHaveLength(613)
+
+    // 3. THE COMPACT. A fresh transcript, sharing no turn with anything before
+    //    it, reached through the proven rotation.
+    tracker.declareRotation('t1', '/after.jsonl')
+    tracker.replaceHistory('t1', [rec(1, 'u-post-compact')], { sessionFile: '/after.jsonl' })
+    store.flushAll()
+
+    const disk = store.load('t1')
+    expect(disk).toHaveLength(614)
+    expect(disk[disk.length - 1]).toMatchObject({ index: 614, uuid: 'u-post-compact' })
+    expect(disk.slice(0, 613).map((r) => r.uuid)).toEqual(
+      Array.from({ length: 613 }, (_, at) => `u-${at + 1}`)
+    )
+  })
 })

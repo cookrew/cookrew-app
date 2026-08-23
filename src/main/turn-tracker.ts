@@ -264,6 +264,9 @@ export interface LedgerMerge {
  * with a ledger rather than concatenating onto one — an unanchorable run must
  * not be appended to a history it may have no relationship to.
  *
+ * `continues` is the ONE exception to the no-anchor rule, and it is a fact the
+ * caller must have proven, not a hint. See TurnTracker.declareRotation.
+ *
  * THE ONE CASE THIS CANNOT SEPARATE, named because it decided the rule: a run
  * whose head sits partway into the ledger is either a transcript that starts
  * there (a compact, a recovery — keep the prefix) or a rewind that removed the
@@ -278,20 +281,33 @@ export interface LedgerMerge {
  */
 export function mergeOntoLedger(
   existing: readonly TurnRecord[],
-  incoming: readonly TurnRecord[]
+  incoming: readonly TurnRecord[],
+  options: { continues?: boolean } = {}
 ): LedgerMerge {
   const at = ledgerAnchor(existing, incoming)
-  if (at < 0) return { kept: [], aligned: [...incoming] }
-  const shift = existing[at].index - incoming[0].index
+  if (at < 0) {
+    // No shared turn — but a PROVEN rotation says this run continues the
+    // ledger anyway, and a compact is exactly that: a fresh transcript whose
+    // turns the ledger has never seen, continuing the same conversation. The
+    // caller carries the burden of proof (see TurnTracker.declareRotation);
+    // without it this stays a replace, because an unplaceable run is normally
+    // no evidence of anything.
+    if (!options.continues || existing.length === 0) return { kept: [], aligned: [...incoming] }
+    return { kept: existing, aligned: shiftTo(incoming, existing[existing.length - 1].index + 1) }
+  }
   return {
     kept: at > 0 ? existing.slice(0, at) : [],
-    // Only rebuild the records when the ledger actually disagrees, so the
-    // ordinary case (a single-transcript agent) is untouched and cheap.
-    aligned:
-      shift === 0
-        ? [...incoming]
-        : incoming.map((record) => ({ ...record, index: record.index + shift }))
+    aligned: shiftTo(incoming, existing[at].index)
   }
+}
+
+/** Renumber a run so its head lands on `base`, keeping its internal spacing. */
+function shiftTo(incoming: readonly TurnRecord[], base: number): TurnRecord[] {
+  const shift = base - incoming[0].index
+  // Only rebuild the records when the numbering actually disagrees, so the
+  // ordinary case (a single-transcript agent) is untouched and cheap.
+  if (shift === 0) return [...incoming]
+  return incoming.map((record) => ({ ...record, index: record.index + shift }))
 }
 
 /**
@@ -602,6 +618,13 @@ export class TurnTracker extends EventEmitter {
   private snapshots = new Map<string, TurnRecord[]>()
 
   /**
+   * terminalId → the session file a PROVEN rotation just moved it onto, until
+   * that file's first reconcile spends it. See declareRotation for why the
+   * licence is keyed to a file and consumed rather than left standing.
+   */
+  private rotatedInto = new Map<string, string>()
+
+  /**
    * Terminals whose DURABLE history is written by the session file, not by
    * this tracker (step 4: narrow the scrape). SessionTurnSync owns this flag
    * and sets it only after a reconcile has actually landed — never from the
@@ -742,6 +765,39 @@ export class TurnTracker extends EventEmitter {
     return durable
   }
 
+  /**
+   * DECLARE that a terminal's next reconcile of `sessionFile` CONTINUES the
+   * ledger it already has, rather than replacing it.
+   *
+   * The compact case, and the second way the owner's history dies. A compact
+   * rotates the agent onto a fresh transcript whose turns carry uuids the
+   * ledger has never seen, so the reconcile cannot anchor the run and replaces
+   * the whole history with it: a restored 613 becomes 1 the first time the
+   * agent compacts. The merge fix does not reach this, because there is no
+   * shared turn to merge on.
+   *
+   * WHY THIS IS A FACT AND NOT AN INFERENCE. The only caller is the rotation
+   * migration (SessionTurnSync.rebind), reached only from
+   * commitRotatedClaudeSession, and only after resolveRotationChain proved the
+   * chain — claude's own declared compact_boundary where it speaks, a guarded
+   * replay overlap only where it does not, and NULL on any ambiguity: two
+   * claimants, a head disagreeing with its filename, a foreign cwd, a hop past
+   * the cap — followed by rotationCommitVerdict re-reading the store to refuse
+   * a binding that moved or a hop another node claims. That is the same
+   * evidence standard the lineage walk holds itself to. A rotation is the same
+   * conversation continuing in a new file; this lets the ledger say so.
+   *
+   * KEYED TO THE FILE, and consumed when that file is reconciled. Arming a
+   * bare "next reconcile continues" would fire on whichever run arrived first
+   * — a late reconcile of the OLD transcript would spend the licence and leave
+   * the successor to destroy the ledger anyway. A standing flag would be worse
+   * still: records without uuids never anchor, so every scraped non-Claude
+   * agent would concatenate its history on every single reconcile.
+   */
+  declareRotation(terminalId: string, sessionFile: string): void {
+    this.rotatedInto.set(terminalId, sessionFile)
+  }
+
   /** Wholesale replacement — every non-delta write path lands through this. */
   private setHistory(terminalId: string, records: TurnRecord[]): void {
     this.histories.set(terminalId, records)
@@ -763,7 +819,11 @@ export class TurnTracker extends EventEmitter {
    * index + prompt for legacy records without a uuid. Shrinking is expected:
    * after /rewind the rewound turns disappear so counts match reality.
    */
-  replaceHistory(terminalId: string, rawRecords: TurnRecord[]): void {
+  replaceHistory(
+    terminalId: string,
+    rawRecords: TurnRecord[],
+    source: { sessionFile?: string } = {}
+  ): void {
     /**
      * THE COUNTER DERIVES FROM THE RECORD — the DURABLE one.
      *
@@ -814,7 +874,14 @@ export class TurnTracker extends EventEmitter {
      *    carryover keyed on the stale in-memory copy is how a title moves onto
      *    a turn it was not written about.
      */
-    const { kept, aligned: records } = mergeOntoLedger(durable, rawRecords)
+    // SPEND the rotation licence, if this is the file it was issued for. Taken
+    // whether or not the merge ends up needing it: a successor that DOES share
+    // a turn with the ledger anchors normally, and a licence left armed past
+    // its own file is one an unrelated later run could spend.
+    const continues =
+      source.sessionFile !== undefined && this.rotatedInto.get(terminalId) === source.sessionFile
+    if (continues) this.rotatedInto.delete(terminalId)
+    const { kept, aligned: records } = mergeOntoLedger(durable, rawRecords, { continues })
     const byUuid = new Map(previous.filter((r) => r.uuid).map((r) => [r.uuid, r]))
     const byIndex = new Map(previous.map((r) => [r.index, r]))
     const merged = records.map((record) => {
