@@ -44,6 +44,10 @@ export interface RecoverDeps {
   existingRecords: (terminalId: string) => TurnRecord[]
   readFile?: (file: string) => string
   inferClearJoins?: boolean
+  /** Transcript root. Injected so a recovery can be exercised without the
+   *  caller's real ~/.claude — this tool rewrites history and must be testable
+   *  somewhere that is not the owner's machine. */
+  projectsDir?: string
 }
 
 /**
@@ -71,7 +75,8 @@ export async function planRecovery(
   }
 
   const chain = await sessionChain(node.cwd, sessionId, {
-    inferClearJoins: deps.inferClearJoins === true
+    inferClearJoins: deps.inferClearJoins === true,
+    projectsDir: deps.projectsDir
   })
   if (chain.length === 0) {
     return { ok: false, reason: 'no-chain', detail: `no transcript for ${sessionId}` }
