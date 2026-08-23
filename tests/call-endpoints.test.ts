@@ -93,6 +93,7 @@ const deps = (): Parameters<typeof handleCallRoutes>[3] => {
   const decide = makeCallGate({
     nodesOf: () => [terminal('node-forge', 'Forge')],
     exportOf: (workspaceId, nodeId) => exports.exportOf(workspaceId, nodeId),
+    enrolled: (workspaceId, sub) => exports.enrolledKey(workspaceId, sub) !== null,
     issuer
   })
   const session = makeCallSession({

@@ -2301,6 +2301,9 @@ app.whenReady().then(() => {
       decide: makeCallGate({
         nodesOf: callNodesOf,
         exportOf: (workspaceId, nodeId) => agentExports.exportOf(workspaceId, nodeId),
+        // Live, at the call: a revoked caller stops being entitled the instant
+        // the record says so, not when its credential expires.
+        enrolled: (workspaceId, sub) => agentExports.enrolledKey(workspaceId, sub) !== null,
         issuer: callCredentials
       }),
       ceremony: makeCallCeremony({

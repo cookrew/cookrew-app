@@ -32,6 +32,25 @@ export interface CallGateDeps {
   nodesOf: (workspaceId: string) => readonly CanvasNode[]
   /** The owner's grant record, scoped by workspace in the lookup itself. */
   exportOf: (workspaceId: string, nodeId: string) => AgentExport | null
+  /**
+   * Is this subject STILL enrolled at this workspace? Read live, at the call.
+   *
+   * THE HOLE THIS CLOSES, found by running the lane end to end. Entitlement
+   * used to read the export's caller list alone. Revoking a caller deletes its
+   * ENROLMENT and leaves that list untouched — so a caller holding an
+   * already-minted credential kept getting served for the rest of the token's
+   * hour, and "revoke" meant "revoked in an hour". Cutting the call in flight
+   * made that worse rather than better: the running call stopped and the next
+   * one was served.
+   *
+   * The two grants are AND-ed, which is what the record always said they were:
+   * enrolment says who may hold a credential for a WORKSPACE, an export says
+   * who may call one AGENT in it. Needing both is not a new rule; reading only
+   * one of them was the defect. And it is read at the call rather than minted
+   * into the token, because a token is a claim about the past and the owner's
+   * decision is about now.
+   */
+  enrolled: (workspaceId: string, sub: string) => boolean
   issuer: CallIssuer
 }
 
@@ -61,6 +80,10 @@ export function makeCallGate(deps: CallGateDeps): (
       // but the two lookups are separate reads and a grant can be withdrawn
       // between them. A withdrawn grant refuses; it does not fall through.
       if (grant === null) return 'entitlement'
+      // BOTH grants, live. A revoked caller is not entitled the instant the
+      // record says so, not when its credential happens to expire — see
+      // `enrolled` above for the hour-long window this closes.
+      if (!deps.enrolled(target.workspaceId, claims.sub)) return 'entitlement'
       // M1's entitlement source is the owner's local allow-list (the ruling:
       // a signed receipt from the registry is M3's job). An export with no
       // callers listed entitles NOBODY — the closed default, stated at the one

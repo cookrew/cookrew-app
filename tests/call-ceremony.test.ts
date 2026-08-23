@@ -55,6 +55,7 @@ const gate = (): ReturnType<typeof makeCallGate> =>
   makeCallGate({
     nodesOf: (workspaceId) => NODES[workspaceId] ?? [],
     exportOf: (workspaceId, nodeId) => exports.exportOf(workspaceId, nodeId),
+    enrolled: (workspaceId, sub) => exports.enrolledKey(workspaceId, sub) !== null,
     issuer
   })
 
