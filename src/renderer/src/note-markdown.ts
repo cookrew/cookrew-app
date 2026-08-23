@@ -86,7 +86,46 @@ const noteMarked = new Marked({
   }
 })
 
+/**
+ * Rendered notes, keyed by their source.
+ *
+ * WHY A CACHE AND NOT useMemo. NoteNode called this straight from its render
+ * body, so every canvas re-render re-parsed every note. Measured on the real
+ * canvas — 27 notes, 430,409 chars, the largest 120,833 — opening one agent
+ * card cost 215ms pointerdown-to-painted, of which 89ms (58%) was marked.js
+ * under `NoteNode → renderWithHooks → performSyncWorkOnRoot`: a SYNCHRONOUS
+ * render on the click path. The parsed output was then thrown away, because the
+ * zoom LOD change unmounts the notes — note-body DOM writes during the open
+ * measured ZERO. Work done, discarded, and invisible to anything watching the
+ * DOM, which is why it survived this long.
+ *
+ * useMemo alone would not cover it: the notes UNMOUNT on zoom and remount on
+ * the way back, and per-instance memo dies with the instance. A module cache
+ * survives that, which is the access pattern here — content changes rarely,
+ * mount/unmount churns constantly.
+ *
+ * Bounded, because a note body is unbounded: 64 entries, oldest evicted. Not an
+ * LRU — insertion order is enough when the working set is the notes on one
+ * canvas, and a real LRU here would cost a Map delete/set on every read to buy
+ * nothing measurable.
+ */
+const RENDER_CACHE_MAX = 64
+const renderCache = new Map<string, string>()
+
 /** Note content → HTML for the card body. Inert: no tag survives from the source. */
 export function renderNoteMarkdown(content: string): string {
-  return noteMarked.parse(content, { async: false })
+  const hit = renderCache.get(content)
+  if (hit !== undefined) return hit
+  const html = noteMarked.parse(content, { async: false })
+  if (renderCache.size >= RENDER_CACHE_MAX) {
+    const oldest = renderCache.keys().next()
+    if (!oldest.done) renderCache.delete(oldest.value)
+  }
+  renderCache.set(content, html)
+  return html
+}
+
+/** Test seam: the cache is module state, so a suite must be able to clear it. */
+export function clearNoteMarkdownCache(): void {
+  renderCache.clear()
 }
