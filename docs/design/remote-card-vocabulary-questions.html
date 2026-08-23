@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remote teammate card — four vocabulary questions for Velvet</title>
+<style>
+  :root {
+    --bg:#fbfaf8; --panel:#fff; --ink:#1a1a1c; --dim:#5b5b63; --line:#e3e0da;
+    --code:#f4f2ee; --accent:#6b4fbb; --warn:#b3261e; --warn-bg:#fdeceb;
+    --ok:#2c6e49; --ok-bg:#e9f4ee; --q:#8a6d00; --q-bg:#fbf6e3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#131316; --panel:#1a1a1f; --ink:#e9e8e6; --dim:#9d9ca6; --line:#2c2c34;
+            --code:#0e0e11; --accent:#a68cf0; --warn:#ff6b5e; --warn-bg:#2a1614;
+            --ok:#5fc98d; --ok-bg:#12241a; --q:#e0c04a; --q-bg:#262112; }
+  }
+  :root[data-theme="dark"] { --bg:#131316; --panel:#1a1a1f; --ink:#e9e8e6; --dim:#9d9ca6;
+    --line:#2c2c34; --code:#0e0e11; --accent:#a68cf0; --warn:#ff6b5e; --warn-bg:#2a1614;
+    --ok:#5fc98d; --ok-bg:#12241a; --q:#e0c04a; --q-bg:#262112; }
+  :root[data-theme="light"] { --bg:#fbfaf8; --panel:#fff; --ink:#1a1a1c; --dim:#5b5b63;
+    --line:#e3e0da; --code:#f4f2ee; --accent:#6b4fbb; --warn:#b3261e; --warn-bg:#fdeceb;
+    --ok:#2c6e49; --ok-bg:#e9f4ee; --q:#8a6d00; --q-bg:#fbf6e3; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.65 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif;
+       -webkit-text-size-adjust:100%}
+  .wrap{max-width:58rem;margin:0 auto;padding:2.5rem 1.25rem 5rem}
+  header.top{border-bottom:1px solid var(--line);padding-bottom:1.4rem;margin-bottom:1.8rem}
+  h1{font-size:1.7rem;margin:0 0 .4rem;letter-spacing:-.02em}
+  h2{font-size:1.15rem;margin:2.5rem 0 .6rem;letter-spacing:-.01em}
+  .meta{color:var(--dim);font-size:.875rem}
+  code{background:var(--code);padding:.12em .38em;border-radius:4px;font-size:.86em;
+       font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:.9rem;
+      overflow-x:auto;font-size:.8125rem;line-height:1.55;
+      font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .q{background:var(--panel);border:1px solid var(--line);border-left:5px solid var(--q);
+     border-radius:10px;padding:1.15rem 1.35rem;margin:1.3rem 0}
+  .q h3{margin:0 0 .5rem;font-size:1.02rem;display:flex;gap:.6rem;align-items:baseline;flex-wrap:wrap}
+  .num{font:700 .72rem ui-monospace,monospace;letter-spacing:.08em;color:var(--q);
+       border:1px solid var(--q);background:var(--q-bg);border-radius:4px;padding:.15em .5em}
+  .lbl{font:700 .7rem ui-monospace,monospace;letter-spacing:.09em;text-transform:uppercase;
+       color:var(--dim);margin:1rem 0 .25rem}
+  .fact{background:var(--ok-bg);border-left:3px solid var(--ok);padding:.6rem .85rem;
+        border-radius:0 6px 6px 0;font-size:.9rem;margin:.5rem 0}
+  .fallback{background:var(--warn-bg);border-left:3px solid var(--warn);padding:.6rem .85rem;
+            border-radius:0 6px 6px 0;font-size:.9rem;margin:.5rem 0}
+  table{width:100%;border-collapse:collapse;margin:.8rem 0;font-size:.88rem}
+  th,td{text-align:left;padding:.5rem .55rem;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;color:var(--dim)}
+  ul{margin:.5rem 0;padding-left:1.25rem}li{margin:.28rem 0}
+  footer{margin-top:3rem;padding-top:1.2rem;border-top:1px solid var(--line);
+         color:var(--dim);font-size:.82rem}
+  .toggle{position:fixed;top:1rem;right:1rem;background:var(--panel);color:var(--ink);
+          border:1px solid var(--line);border-radius:999px;padding:.4rem .85rem;
+          font-size:.8rem;cursor:pointer;z-index:10}
+  @media(max-width:640px){.wrap{padding:1.6rem 1rem 4rem}h1{font-size:1.35rem}}
+</style>
+</head>
+<body>
+<button class="toggle" onclick="const r=document.documentElement;r.dataset.theme=(r.dataset.theme==='dark')?'light':'dark'">◐ theme</button>
+<div class="wrap">
+
+<header class="top">
+  <h1>Remote teammate card — four vocabulary questions</h1>
+  <p class="meta">
+    For Velvet, from Commander · 2026-08-24 · Door B's only surface<br>
+    The design: <strong>a normal terminal card whose binding is the gated remote ask</strong>,
+    placed from an enrolled-crews chip. Same card the user already knows, different backend.
+  </p>
+</header>
+
+<p>
+  The design is right, and the reason it is right is also what makes it risky: a remote teammate
+  <strong>inherits every affordance of a local one</strong>. Most of those carry over. Four do
+  not, and each one fails silently — the card looks correct and means something untrue.
+</p>
+<p>
+  I am not asking you to design the card. I am asking for four sets of words, because in every
+  case the honest behaviour already exists in the backend and the only thing missing is what the
+  user is told. Each question below carries the code facts it rests on, so you can answer without
+  reading source, and my fallback if you have no time — so you are correcting a draft rather than
+  starting from nothing.
+</p>
+
+<div class="q">
+  <h3><span class="num">Q1</span> The card implies a session the user owns. It is not theirs.</h3>
+  <p>
+    On a local card, scroll-back is the user's own transcript, and the rail lets them rewind and
+    fork it. On a remote card the history is <strong>a fork on someone else's machine</strong> —
+    §10 gives every conversation its own fork, and the caller sees only that fork's replies.
+  </p>
+  <div class="fact">
+    <b>Code fact.</b> The caller never receives a transcript. <code>call-reply.ts</code> returns
+    one reply per ask, contained; there is no endpoint that serves history. So the card can show
+    what <em>this user</em> said and got, and nothing before it.
+  </div>
+  <p class="lbl">What I need words for</p>
+  <ul>
+    <li>What the rail says where a local card shows checkpoints — is it empty, or does it say
+      something?</li>
+    <li>Whether rewind/fork are <b>absent</b> or <b>present-and-refusing</b>. My instinct is
+      absent, on your own rule from the grant deck: a disabled row invites a fight with the wrong
+      control.</li>
+  </ul>
+  <div class="fallback">
+    <b>My fallback if you have no time:</b> the controls are absent, and the rail carries one
+    line — "This is your conversation with {agent}. Their own history stays on their machine."
+  </div>
+</div>
+
+<div class="q">
+  <h3><span class="num">Q2</span> Access can be taken away mid-turn, from the other side</h3>
+  <p>
+    Everything on the grant surface assumes the <em>owner</em> revokes. Here the user is the
+    <em>caller</em>, and the ruling we just shipped is that <strong>revoke stops calls already
+    running</strong>. So a turn can die in flight because a person elsewhere clicked a button.
+  </p>
+  <div class="fact">
+    <b>Code fact.</b> The reply is cut at the seam and never delivered, even if the agent had
+    already answered; the wire says <code>403 revoked</code>. This is deliberate and will not be
+    softened — it is the binding ruling.
+  </div>
+  <p class="lbl">What I need words for</p>
+  <ul>
+    <li>The in-flight case: the user was mid-turn and the answer will never arrive.</li>
+    <li>The next-attempt case: they type again and are refused before anything runs.</li>
+    <li>Whether we name the owner. "Drej revoked your access" is clearer and also tells a
+      stranger who the owner is — your call, and it is a privacy decision as much as a copy one.</li>
+  </ul>
+  <div class="fallback">
+    <b>My fallback:</b> mid-turn — "Your access to {agent} was withdrawn. This answer was
+    stopped and will not arrive." Next attempt — "You can no longer call {agent}." No owner named.
+  </div>
+</div>
+
+<div class="q">
+  <h3><span class="num">Q3</span> Five refusals collapse into "it stopped", and lose the half that matters</h3>
+  <p>
+    A local card that stops is crashed or busy. This one has five distinct answers, and the
+    distinction I deliberately encoded is <strong>retryable vs never-retry</strong> — collapsing
+    them throws away the only actionable information the user has.
+  </p>
+  <table>
+    <thead><tr><th>Wire</th><th>What actually happened</th><th>Retry?</th></tr></thead>
+    <tbody>
+      <tr><td><code>401</code></td><td>No credential, or it expired</td><td>Yes, after a ceremony</td></tr>
+      <tr><td><code>403 scope</code> / <code>workspace</code></td><td>Credential is real but not for this</td><td><b>No</b></td></tr>
+      <tr><td><code>403 entitlement</code> / <code>revoked</code></td><td>Access removed</td><td><b>No</b></td></tr>
+      <tr><td><code>404</code></td><td>No such agent — or it exists and is not exported, which are ONE answer on purpose</td><td>No</td></tr>
+      <tr><td><code>409 busy</code> / <code>not_ready</code> / <code>not_running</code></td><td>Not now</td><td><b>Yes</b></td></tr>
+    </tbody>
+  </table>
+  <p class="lbl">What I need words for</p>
+  <ul>
+    <li>How many buckets do we actually show? My read is <b>three</b> — try again, you cannot,
+      and something is wrong our end — but the split is yours.</li>
+    <li>The 404 line has to stay deliberately vague: an agent that exists but is not exported
+      and one that never existed <em>must</em> read identically, or a stranger can map the room.</li>
+  </ul>
+  <div class="fallback">
+    <b>My fallback:</b> three buckets — "{agent} is busy. Try again." / "You cannot call
+    {agent}." / "{agent} isn't answering at that address."
+  </div>
+</div>
+
+<div class="q">
+  <h3><span class="num">Q4</span> Thirty seconds before the first byte — and the Chief is right that a spinner is not the answer</h3>
+  <p>
+    The first call to a parked workspace pays for a cold fork: boot, context injection, then the
+    submit delay. The ceiling is <strong>30 seconds</strong> before a single byte appears, and
+    the card the user knows shows output within milliseconds.
+  </p>
+  <div class="fact">
+    <b>Code fact.</b> <code>DEFAULT_READY_TIMEOUT_MS = 30_000</code> in <code>call-run.ts</code>.
+    Past it we refuse with <code>not_ready</code> rather than hold the connection. The wait is
+    real and bounded, and — this is the part worth saying out loud — <b>it happens once</b>. The
+    fork stays warm for the conversation.
+  </div>
+  <p class="lbl">What I need words for</p>
+  <ul>
+    <li>The waiting line itself. A spinner says "something is happening"; the user's actual
+      question is "is this broken, and how long."</li>
+    <li>Whether we say it is a one-time cost. I think we must — it converts a bad first
+      impression into an explained one, and it is true.</li>
+    <li>Whether the line changes as it goes on. Thirty seconds is long enough that one static
+      string starts to look frozen.</li>
+  </ul>
+  <div class="fallback">
+    <b>My fallback:</b> "Waking {agent} up — the first call takes a moment, the rest won't."
+    After ~15s: "Still waking up." At the timeout: "{agent} didn't wake up in time. Try again."
+  </div>
+</div>
+
+<h2>What I am doing meanwhile</h2>
+<p>
+  Building the card against merged <code>dev</code> with the fallbacks above, clearly marked as
+  mine and pending your words — the same arrangement as the two
+  <code>EXPORT_ERROR</code> strings I derived from your §7 direction rule, which are also still
+  waiting on your sign-off. Every string above is one constant away from being swapped for yours,
+  so answering late costs a diff and not a rebuild.
+</p>
+<p>
+  <b>One correction I owe you.</b> Adopting your <code>marketplace-copy.ts</code> turned up that
+  <code>mkt.export.access.some</code> is <code>'{n} callers'</code> — always plural — so one
+  caller reads "1 callers". There is no singular key. I produce the singular locally and left
+  your string for every other count; a key from you would let me delete that branch.
+</p>
+
+<footer>
+  Four questions, from the merged remote-call backend. Every behaviour described here already
+  exists and is tested — what is missing in each case is only what the user is told.
+  <br><br>
+  Commander · sent to Velvet's pane and committed to
+  <code>docs/remote-card-vocabulary</code>.
+</footer>
+
+</div>
+</body>
+</html>
