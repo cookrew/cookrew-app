@@ -172,10 +172,33 @@ function carryOverOnto(incoming: TurnRecord, replaced: TurnRecord): TurnRecord {
 }
 
 /**
- * Position of the LAST record carrying `index` — scanned from the tail
- * because the record a fresh title targets is almost always the newest one,
- * so the common case costs O(1), not O(history). -1 when absent.
+ * WHERE an incoming reconcile sits in the ledger — the position of the record
+ * whose uuid the incoming run starts at, or -1 when the ledger has never seen
+ * it.
+ *
+ * This is the one fact both halves of the reconcile need and neither may guess.
+ * The NUMBERING needs it to shift the run onto its true indices; the MERGE
+ * needs it to know which prefix of the ledger the run does not speak for.
+ * mergeOntoLedger resolves it ONCE and hands both halves the same answer — two
+ * scans of the same ledger would be a second chance to disagree about the seam,
+ * as well as a second walk of it per turn.
+ *
+ * -1 means NO EVIDENCE, and it is returned rather than approximated: an
+ * incoming head the ledger does not contain is a genuinely new conversation (or
+ * a transcript this ledger has no relationship to), and inventing an offset for
+ * it would splice a stranger's history onto this agent's rail — silently, since
+ * the numbering would look perfect. Refusing to align costs a numbering restart
+ * the UI shows honestly.
  */
+export function ledgerAnchor(
+  existing: readonly TurnRecord[],
+  incoming: readonly TurnRecord[]
+): number {
+  const head = incoming[0]
+  if (!head?.uuid || existing.length === 0) return -1
+  return existing.findIndex((r) => r.uuid === head.uuid)
+}
+
 /**
  * Number an incoming reconcile against the LEDGER, not against the file it was
  * parsed from.
@@ -197,23 +220,85 @@ function carryOverOnto(incoming: TurnRecord, replaced: TurnRecord): TurnRecord {
  * an incoming head the ledger has never seen (a genuinely new conversation).
  * Alignment is never invented — a wrong offset would be the same silent
  * overwrite in the other direction.
+ *
+ * NUMBERING ONLY. This returns the incoming run and nothing else, which is
+ * correct for what it is and was NOT sufficient as a fix: see mergeOntoLedger
+ * for why a correctly-numbered fragment, saved as the whole truth, still
+ * destroys everything in front of it.
  */
 export function alignToLedger(
   existing: readonly TurnRecord[],
   incoming: readonly TurnRecord[]
 ): TurnRecord[] {
-  const head = incoming[0]
-  if (!head?.uuid || existing.length === 0) return [...incoming]
-  const at = existing.findIndex((r) => r.uuid === head.uuid)
-  if (at < 0) return [...incoming]
-  const base = existing[at].index
-  // Only shift when the ledger actually disagrees, so the ordinary case (a
-  // single-transcript agent) is untouched and cheap.
-  if (base === head.index) return [...incoming]
-  const shift = base - head.index
-  return incoming.map((record) => ({ ...record, index: record.index + shift }))
+  return mergeOntoLedger(existing, incoming).aligned
 }
 
+/** An incoming run placed against the ledger: what it replaces, what it does not. */
+export interface LedgerMerge {
+  /** Ledger records ahead of the run, kept verbatim — indices untouched. */
+  kept: readonly TurnRecord[]
+  /** The run, renumbered onto the positions the ledger says it occupies. */
+  aligned: TurnRecord[]
+}
+
+/**
+ * Place an incoming reconcile against the ledger: MERGE, never replace.
+ *
+ * CRITICAL-1, ROUND 2. Numbering the run correctly was not the fix. A reconcile
+ * parses ONE transcript, and a ledger may span several — so the run is evidence
+ * about its own turns and about nothing before them. replaceHistory then hands
+ * its result to a full save, and a full save means THESE RECORDS ARE THE WHOLE
+ * TRUTH: everything not in the run is erased from the conversation file and the
+ * annotation sidecar together. Measured against a real store, a restored 613
+ * became 16 on the next reconcile — with the indices 598..613 perfectly right,
+ * which is what made it look fixed.
+ *
+ * So the seam is drawn at the anchor. At or after it, the run is the authority
+ * and replaces what was there — that is how a /rewind still shrinks, and it
+ * must keep working: the run genuinely says those turns are gone. Before it,
+ * the run has no evidence at all, so the ledger is kept verbatim.
+ *
+ * Anchor 0 and anchor -1 both yield an empty `kept` and degenerate to a plain
+ * replace, for opposite reasons: at 0 there is nothing in front of the run, and
+ * at -1 there is nothing PROVEN in front of it. The second is why this merges
+ * with a ledger rather than concatenating onto one — an unanchorable run must
+ * not be appended to a history it may have no relationship to.
+ *
+ * THE ONE CASE THIS CANNOT SEPARATE, named because it decided the rule: a run
+ * whose head sits partway into the ledger is either a transcript that starts
+ * there (a compact, a recovery — keep the prefix) or a rewind that removed the
+ * turns in front of it (drop them). Nothing local tells them apart: both number
+ * from 1, both leave the ledger holding records the run does not mention. So it
+ * is decided by which way it is safe to be wrong. Keeping records a rewind
+ * removed leaves stale rows at the head of a rail — visible, and repairable by
+ * a rebuild. Dropping records a compact put there destroys history no
+ * transcript can give back. A real /rewind is unaffected either way: it
+ * truncates the END of a transcript, so the run's head does not move and the
+ * drop lands after the anchor, where the run rules.
+ */
+export function mergeOntoLedger(
+  existing: readonly TurnRecord[],
+  incoming: readonly TurnRecord[]
+): LedgerMerge {
+  const at = ledgerAnchor(existing, incoming)
+  if (at < 0) return { kept: [], aligned: [...incoming] }
+  const shift = existing[at].index - incoming[0].index
+  return {
+    kept: at > 0 ? existing.slice(0, at) : [],
+    // Only rebuild the records when the ledger actually disagrees, so the
+    // ordinary case (a single-transcript agent) is untouched and cheap.
+    aligned:
+      shift === 0
+        ? [...incoming]
+        : incoming.map((record) => ({ ...record, index: record.index + shift }))
+  }
+}
+
+/**
+ * Position of the LAST record carrying `index` — scanned from the tail
+ * because the record a fresh title targets is almost always the newest one,
+ * so the common case costs O(1), not O(history). -1 when absent.
+ */
 function lastPositionOfIndex(records: readonly TurnRecord[], index: number): number {
   for (let at = records.length - 1; at >= 0; at -= 1) {
     if (records[at].index === index) return at
@@ -626,6 +711,37 @@ export class TurnTracker extends EventEmitter {
     return loaded
   }
 
+  /**
+   * The DURABLE history — what the ledger file says, not what this tracker
+   * remembers saying.
+   *
+   * The reconcile aligns and merges against this, and the distinction is the
+   * whole of CRITICAL-1: `histories` is a cache, and after a lineage restore it
+   * held the pre-restore 16 while disk held 613. Aligning against the cache
+   * found the head at index 1, shifted nothing, and wrote 16 records as the
+   * whole truth.
+   *
+   * The read is UNCONDITIONAL — no "has anything changed?" guard in front of
+   * it, and the first attempt at one is why. It asked the store whether anyone
+   * had written the file behind ITS back, which reports a restore performed
+   * THROUGH the store as nothing-to-see; the round-2 probe went straight back
+   * to 16 records past a guard that was working exactly as written. The cost
+   * that guard existed for is paid inside TurnStore.load instead, where the
+   * question is about the file rather than about who wrote it: a stat, and a
+   * parse only when the bytes moved.
+   *
+   * The result is ADOPTED into `histories` rather than merely returned. If the
+   * durable record disagrees with this tracker's copy, the durable one is the
+   * record by definition, and leaving the stale copy in place would hand the
+   * same wrong prefix to the very next reconcile.
+   */
+  private durableHistory(terminalId: string): TurnRecord[] {
+    if (!this.store) return this.liveHistory(terminalId)
+    const durable = this.store.load(terminalId)
+    this.setHistory(terminalId, durable)
+    return durable
+  }
+
   /** Wholesale replacement — every non-delta write path lands through this. */
   private setHistory(terminalId: string, records: TurnRecord[]): void {
     this.histories.set(terminalId, records)
@@ -648,21 +764,26 @@ export class TurnTracker extends EventEmitter {
    * after /rewind the rewound turns disappear so counts match reality.
    */
   replaceHistory(terminalId: string, rawRecords: TurnRecord[]): void {
-    const previous = this.liveHistory(terminalId)
     /**
      * THE COUNTER DERIVES FROM THE RECORD — the DURABLE one.
      *
      * A transcript numbers its own turns from 1; the ledger knows where this
-     * run actually sits. Aligning against `previous` was not enough, and the
-     * failure was live: liveHistory returns the tracker's in-memory copy, which
-     * after a lineage restore still held the pre-restore 16 while disk held
-     * 613. The head matched at index 1, nothing shifted, 16 were written — and
-     * a full save treats its argument as the whole truth, so the other 597 died
-     * in the ledger and the annotation sidecar together.
+     * run actually sits. Aligning against the in-memory history was not enough,
+     * and the failure was live: it still held the pre-restore 16 while disk
+     * held 613. The head matched at index 1, nothing shifted, 16 were written —
+     * and a full save treats its argument as the whole truth, so the other 597
+     * died in the ledger and the annotation sidecar together.
      *
      * That is this lane's own defect one layer deeper: fixing the counter is
      * worth nothing if the thing it derives from is itself a cache that can
-     * disagree. store.load() reads the file.
+     * disagree. durableHistory() re-reads when, and only when, the file moved.
+     *
+     * IT IS RESOLVED BEFORE `previous` IS TAKEN, deliberately. durableHistory
+     * ADOPTS a foreign write, and the carryover maps below are the reason that
+     * ordering matters: built from a copy we have just declared is not the
+     * record, they would look for the prior version of each incoming turn in a
+     * history that no longer exists, and a title would fail to carry — or carry
+     * from the wrong turn — on the one reconcile after a restore.
      *
      * MEDIUM-3, WRITTEN DOWN WHERE IT BITES: this is the LIVE renumber path and
      * it has NO version-pin check. refuseRenumber() exists and is wired into
@@ -675,8 +796,25 @@ export class TurnTracker extends EventEmitter {
      * an incident. Before pins ship: consult refuseRenumber here and decline
      * the shift, or re-key pins by checkpoint uuid.
      */
-    const durable = this.store?.load(terminalId) ?? previous
-    const records = alignToLedger(durable, rawRecords)
+    const durable = this.durableHistory(terminalId)
+    const previous = this.liveHistory(terminalId)
+    /**
+     * MERGE, DO NOT REPLACE. The run is authority from the anchor onward and
+     * silent about everything before it; `kept` is that untouched prefix, and
+     * it is re-attached at the commit rather than pushed through the pipeline
+     * below. Two reasons, and the second is the load-bearing one:
+     *
+     *  - COST. The carryover, in-flight stamp and phantom dedupe are O(records)
+     *    and run on every reconcile. Passing 613 through them to re-derive the
+     *    597 that did not change would put the whole ledger on the main thread
+     *    per turn — the exact stall this lane was told not to trade for.
+     *  - MEANING. Those passes exist to reconcile an incoming parse against
+     *    what the tracker held. The prefix is not incoming and was not parsed;
+     *    there is nothing to reconcile it against, and running it through a
+     *    carryover keyed on the stale in-memory copy is how a title moves onto
+     *    a turn it was not written about.
+     */
+    const { kept, aligned: records } = mergeOntoLedger(durable, rawRecords)
     const byUuid = new Map(previous.filter((r) => r.uuid).map((r) => [r.uuid, r]))
     const byIndex = new Map(previous.map((r) => [r.index, r]))
     const merged = records.map((record) => {
@@ -698,7 +836,7 @@ export class TurnTracker extends EventEmitter {
     // file; the store appends now, so keeping all of it costs one line per
     // turn. Conductor had 220 checkpoints trimmed away under the old limit.
     const deduped = dedupePhantomEchoes(stamped)
-    this.commitReconciled(terminalId, deduped)
+    this.commitReconciled(terminalId, kept.length > 0 ? [...kept, ...deduped] : deduped)
   }
 
   /**

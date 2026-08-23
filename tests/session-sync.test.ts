@@ -238,19 +238,52 @@ describe('TurnTracker.replaceHistory', () => {
     expect(tracker.history('term-1')[0].title).toBeUndefined()
   })
 
-  it('carries titles by uuid even when the index shifts (a mid-history turn dropped)', () => {
+  /**
+   * THIS TEST'S LENGTH EXPECTATION CHANGED, DELIBERATELY — read before trusting
+   * the old one.
+   *
+   * It used to assert that a reconcile whose run begins PAST the start of the
+   * ledger drops everything in front of it, on the reading that the missing
+   * turn was rewound away. That reading is not available any more, because a
+   * ledger may legitimately span several transcripts (a compact, a lineage
+   * recovery) and a reconcile parses exactly one of them. Under the old rule a
+   * restored 613-record history came back as the newest transcript's 16 — the
+   * indices perfectly renumbered to 598..613, the other 597 erased from the
+   * conversation file and the annotation sidecar. That was measured, not feared.
+   *
+   * Nothing local separates the two readings: in both, the ledger holds records
+   * before the run's head, and in both the run numbers itself from 1. So the
+   * rule is chosen on which way it is safe to be wrong. Keeping records that a
+   * rewind removed leaves stale rows at the head of a rail — visible, and
+   * repairable by a rebuild. Dropping records a compact put there destroys
+   * history no transcript can give back. The asymmetry is not close.
+   *
+   * A REAL /rewind still shrinks, and that is not a concession — a rewind
+   * truncates the END of a transcript, so the run's head never moves and the
+   * drop lands after the anchor, where the run IS the authority. That path is
+   * covered by 'truncates history after a /rewind shrinks the session file'
+   * above, and by the rewind case in annotation-rekey.test.ts.
+   *
+   * What this test was actually written to prove — a title following its turn
+   * by uuid when the index underneath it moves — is unchanged and asserted here.
+   */
+  it('carries titles by uuid when the ledger renumbers the incoming run', () => {
     const tracker = new TurnTracker(async () => null, null)
     tracker.replaceHistory('term-1', [
       { index: 1, prompt: 'a', reply: 'r', uuid: 'u-a', title: 'Title A', startedAt: 1, endedAt: 2 },
       { index: 2, prompt: 'b', reply: 'r', uuid: 'u-b', title: 'Title B', startedAt: 3, endedAt: 4 }
     ])
-    // Turn 'a' was rewound away; 'b' is now index 1 but same uuid.
+    // The run arrives numbering 'b' as its own turn 1, the way a parse of one
+    // transcript always does. The ledger says 'b' is turn 2.
     tracker.replaceHistory('term-1', [
       { index: 1, prompt: 'b', reply: 'r', uuid: 'u-b', startedAt: 3, endedAt: 4 }
     ])
     const history = tracker.history('term-1')
-    expect(history).toHaveLength(1)
-    expect(history[0].title).toBe('Title B')
+    // 'a' is kept: this run is not evidence about a turn it never contained.
+    expect(history).toHaveLength(2)
+    expect(history[0]).toMatchObject({ index: 1, uuid: 'u-a', title: 'Title A' })
+    // The title follows the uuid onto the record's true index, not the run's.
+    expect(history[1]).toMatchObject({ index: 2, uuid: 'u-b', title: 'Title B' })
   })
 
   it('drops a uuid-less phantom echo adjacent to its uuid original on reconcile', () => {
