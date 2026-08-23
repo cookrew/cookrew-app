@@ -1,4 +1,6 @@
 import { AgentAvatar } from './nodes/AgentAvatar'
+import { ExportToggle } from './ExportToggle'
+import type { AgentExportState } from './grant-state'
 import { TurnView } from './nodes/TurnView'
 import { RoleAvatar } from './nodes/RoleAvatar'
 import type { AgentPhase, AgentRow as Row } from './agent-rows'
@@ -48,6 +50,10 @@ export function AgentRow({
   canRecover,
   hit = null,
   selectable = false,
+  exportState = null,
+  onExport,
+  onUnexport,
+  onOpenGrants,
   onOpen,
   onRecover,
 }: {
@@ -60,6 +66,17 @@ export function AgentRow({
   hit?: TurnMatch | null
   /** Edit mode: the row ticks instead of handing off to the canvas. */
   selectable?: boolean
+  /**
+   * THE FIRST INCH OF THE AUTHOR JOURNEY (Magpie's give-up reason 1).
+   *
+   * null when the roster could not be read or the owner bridge is absent, and
+   * the control renders nothing — never a default of "not exportable", which
+   * would tell an author their agent is private when it may be reachable.
+   */
+  exportState?: AgentExportState | null
+  onExport?: (row: Row) => void
+  onUnexport?: (row: Row) => void
+  onOpenGrants?: () => void
   onOpen: (row: Row) => void
   onRecover: (row: Row) => void
 }): React.JSX.Element {
@@ -121,6 +138,23 @@ export function AgentRow({
             <span className="ags-ago" title={new Date(row.lastActivityAt).toLocaleString()}>
               {agoLabel(row.lastActivityAt, now)}
             </span>
+            {/*
+              THE EXPORT ENTRY POINT, on the row and not behind a panel.
+              Velvet's §6: "who can call this right now" is asked in a glance,
+              so the answer lives here at rest. Magpie's audit found zero of
+              forty controls mentioning export at all — this is that gap's
+              first inch, and it stops the click from reaching the row
+              underneath (which would zoom to the canvas card).
+            */}
+            {exportState && (
+              <ExportToggle
+                agentName={row.name}
+                state={exportState}
+                onExport={() => onExport?.(row)}
+                onUnexport={() => onUnexport?.(row)}
+                onOpenGrants={() => onOpenGrants?.()}
+              />
+            )}
             <span className="ags-spacer" />
             {/* RECOVER is the one action that cannot hand off to the canvas:
                 for an inactive agent the card to zoom to does not exist yet.

@@ -149,3 +149,61 @@ export const REVOKE_COPY = {
 
 /** How long the UNDO toast stands (deck §6). */
 export const UNDO_WINDOW_MS = 10_000
+
+/**
+ * THE EXPORT STORY — the fear nobody answers (Velvet's vocabulary audit, §6).
+ *
+ * Her finding, and it is the one that makes this control an entry point rather
+ * than a setting: exporting is safe by construction — a call forks the
+ * transcript and a version pin marks the cut, so the original session is never
+ * mutated — and version-pin.ts opens with exactly that sentence. IT IS A CODE
+ * COMMENT. IT HAS NEVER BEEN SAID TO AN AUTHOR.
+ *
+ * That is the number-one reason not to export, it is already true, and stating
+ * it costs nothing. So her sentence goes on the surface verbatim, at the moment
+ * the author is deciding, rather than in a panel they would have to already
+ * trust us enough to open.
+ */
+export const EXPORT_COPY = {
+  /** Sentence 6 — the most important line in her audit. Her words, unedited. */
+  safety:
+    'Callers get a copy. Your original conversation is never touched, never sent, ' +
+    'and never resumed by anyone else.',
+
+  /**
+   * Access, legible AT REST (her §6 again): "{n} callers" or "Nobody can call
+   * this", on the row itself and not inside a panel — because the question is
+   * asked in a glance and an answer that costs a click is an answer nobody has.
+   */
+  atRest: (callers: number, exportable: boolean): string =>
+    !exportable
+      ? 'Not exportable'
+      : callers === 0
+        ? 'Nobody can call this'
+        : `${callers} caller${callers === 1 ? '' : 's'}`,
+
+  /** The control itself. An invitation when off, a fact when on. */
+  turnOn: 'Let people call this agent',
+  turnOff: 'Stop exporting',
+  onHint: 'Exportable — nobody can call it until you grant someone.',
+  next: 'WHO CAN CALL →',
+
+  /**
+   * THE HONEST SEAM (Chief's scope stop).
+   *
+   * Grant is this lane; PUBLISH — price, payout address, push to the registry —
+   * is a lane nobody has been assigned yet. Magpie's audit found zero of forty
+   * controls mentioning publish or sell, and the fix for that is NOT a button
+   * here that opens nothing. So the surface says what does not exist rather
+   * than implying it does: an author who reads this knows where they are, and
+   * an author who reads a dead "Publish…" control learns we are unreliable.
+   *
+   * Velvet's scrub line — "Cookrew strips secrets and folder paths before
+   * anything is published, and shows you the report first" — belongs to that
+   * lane and is deliberately NOT shown here. Exporting publishes nothing, so
+   * promising a scrub report at this control would be a string whose behaviour
+   * does not exist, which is the defect this program keeps finding.
+   */
+  publishSeam:
+    'Selling this — a price, a payout address, a listing others can find — isn’t built yet.'
+} as const

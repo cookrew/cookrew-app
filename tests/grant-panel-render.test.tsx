@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { GrantPanel } from '../src/renderer/src/GrantPanel'
 import { EnrolSheet } from '../src/renderer/src/EnrolSheet'
+import { ExportToggle } from '../src/renderer/src/ExportToggle'
 import type { GrantRoster } from '../src/main/grant-roster'
 
 /**
@@ -89,5 +90,47 @@ describe('the WHO CAN CALL panel paints', () => {
     expect(html).toMatch(/<button[^>]*class="gs-primary"[^>]*disabled/)
     // And the sheet is not a form, so Enter has nothing to submit.
     expect(html).not.toContain('<form')
+  })
+})
+
+describe('the export entry point paints on the agent row', () => {
+  const toggle = (state: Parameters<typeof ExportToggle>[0]['state']): string =>
+    renderToStaticMarkup(
+      <ExportToggle
+        agentName="Forge"
+        state={state}
+        onExport={() => undefined}
+        onUnexport={() => undefined}
+        onOpenGrants={() => undefined}
+      />
+    )
+
+  it('offers the invitation and STATES THE GUARANTEE while off', () => {
+    // The moment the fear is live. Velvet's sentence 6 is on screen, as prose,
+    // before the author has committed to anything.
+    const html = toggle({ exportable: false, callers: 0, inFlight: 0 })
+    expect(html).toContain('Let people call this agent')
+    expect(html).toContain('never touched, never sent, and never resumed by anyone else')
+    expect(html).toContain('Not exportable')
+  })
+
+  it('answers "who can call this" at rest once it is on', () => {
+    const html = toggle({ exportable: true, callers: 0, inFlight: 0 })
+    expect(html).toContain('Nobody can call this')
+    expect(html).toContain('WHO CAN CALL')
+    // And says what is NOT built rather than implying a publish flow exists.
+    expect(html).toContain('isn’t built yet')
+  })
+
+  it('counts callers and shows live calls without opening anything', () => {
+    const html = toggle({ exportable: true, callers: 2, inFlight: 1 })
+    expect(html).toContain('2 callers')
+    expect(html).toContain('1 calling now')
+  })
+
+  it('renders NOTHING when the roster could not be read', () => {
+    // Never a default of "not exportable" — that would tell an author their
+    // agent is private when it may be reachable.
+    expect(toggle(null)).toBe('')
   })
 })

@@ -11,7 +11,15 @@ import {
   stageFrom,
   toggleAgent
 } from '../src/renderer/src/grant-stage'
-import { GRANT_COPY, REVOKE_COPY, fill, pasteMessage, clearsFieldOn } from '../src/renderer/src/grant-copy'
+import {
+  EXPORT_COPY,
+  GRANT_COPY,
+  REVOKE_COPY,
+  clearsFieldOn,
+  fill,
+  pasteMessage
+} from '../src/renderer/src/grant-copy'
+import { exportStateOf } from '../src/renderer/src/grant-state'
 import { canGrant } from '../src/renderer/src/GrantPanel'
 import { stripComments } from './support/module-imports'
 
@@ -292,5 +300,96 @@ describe('§7 · which empty state a first-time owner is shown, and in what orde
 
   it('and no empty state once there is something to show', () => {
     expect(emptyStateFor({ agents: ['a'], callers: ['someone'] })).toBe('none')
+  })
+})
+
+describe('the export entry point — Magpie give-up reason 1, first inch', () => {
+  it('VELVET\'S SENTENCE 6 IS ON THE SURFACE, verbatim', () => {
+    // Her audit's most important line. Exporting is safe by construction and
+    // version-pin.ts opens with exactly this — as a CODE COMMENT that has never
+    // been said to an author. It is the number-one reason not to export, it is
+    // already true, and it costs nothing to say.
+    expect(EXPORT_COPY.safety).toBe(
+      'Callers get a copy. Your original conversation is never touched, never sent, ' +
+        'and never resumed by anyone else.'
+    )
+    // And it is rendered as prose, not hidden behind a hover.
+    expect(code('ExportToggle.tsx')).toContain('EXPORT_COPY.safety')
+    expect(code('ExportToggle.tsx')).toContain('ex-safety')
+  })
+
+  it('access is legible AT REST, in the words she specified', () => {
+    // "{n} callers" or "Nobody can call this" — the question is asked in a
+    // glance, so an answer that costs a click is an answer nobody has.
+    expect(EXPORT_COPY.atRest(0, true)).toBe('Nobody can call this')
+    expect(EXPORT_COPY.atRest(1, true)).toBe('1 caller')
+    expect(EXPORT_COPY.atRest(3, true)).toBe('3 callers')
+    expect(EXPORT_COPY.atRest(0, false)).toBe('Not exportable')
+  })
+
+  it('an unread roster renders NOTHING rather than claiming "not exportable"', () => {
+    // An unread roster and an unexported agent are different facts. Rendering
+    // the second when we only know the first tells an author their agent is
+    // private when it may be reachable from the internet.
+    expect(exportStateOf(null, 'node-forge')).toBeNull()
+  })
+
+  it('reads one agent out of the roster, and defaults an absent one to closed', () => {
+    const roster = {
+      workspaceId: 'w1',
+      callers: [],
+      revoked: [],
+      live: [],
+      agents: [{ nodeId: 'node-forge', callers: ['kestrel'], inFlight: 2 }]
+    }
+    expect(exportStateOf(roster, 'node-forge')).toEqual({
+      exportable: true,
+      callers: 1,
+      inFlight: 2
+    })
+    // Present roster, absent agent: genuinely not exported.
+    expect(exportStateOf(roster, 'node-tinker')).toEqual({
+      exportable: false,
+      callers: 0,
+      inFlight: 0
+    })
+  })
+
+  it('the control is an INVITATION when off, not a checkbox', () => {
+    // Magpie's finding was that zero of forty controls mentioned export at all.
+    // A checkbox states a setting; this has to say there is something here.
+    expect(EXPORT_COPY.turnOn).toBe('Let people call this agent')
+    expect(code('ExportToggle.tsx')).not.toMatch(/type="checkbox"/)
+  })
+
+  it('and points at the next step once it is on', () => {
+    expect(EXPORT_COPY.next).toContain('WHO CAN CALL')
+    expect(EXPORT_COPY.onHint).toContain('nobody can call it until you grant someone')
+  })
+})
+
+describe('the PUBLISH seam is stated, not mocked up', () => {
+  it('says plainly what is not built', () => {
+    // The honest repair for "no control mentions selling" is not a dead button
+    // that opens nothing — an author who presses that learns we are unreliable,
+    // which is worse than the gap.
+    expect(EXPORT_COPY.publishSeam).toContain('isn’t built yet')
+    expect(EXPORT_COPY.publishSeam).toMatch(/price|payout|listing/)
+  })
+
+  it('promises no scrub report, because this control publishes nothing', () => {
+    // Velvet's scrub line belongs to the publish lane. Showing it here would be
+    // a string whose behaviour does not exist — the defect this program keeps
+    // finding — because exporting publishes nothing.
+    const surface = [code('ExportToggle.tsx'), code('grant-copy.ts')].join('\n')
+    expect(surface).not.toContain('strips secrets')
+    expect(surface).not.toMatch(/shows you the report/)
+  })
+
+  it('ships no control that claims to price, sell or publish', () => {
+    const surface = code('ExportToggle.tsx')
+    for (const claim of ['PUBLISH', 'SET PRICE', 'SELL', 'PAYOUT']) {
+      expect(surface, `no control may claim ${claim} in this lane`).not.toContain(claim)
+    }
   })
 })
