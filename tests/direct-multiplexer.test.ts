@@ -66,11 +66,22 @@ describe('the reads it honestly cannot answer', () => {
     // Load-bearing: the board probe reads '' as "the pane is empty" and null
     // as "no signal". This backend has no out-of-process view of the screen,
     // so claiming emptiness would invent a fact.
-    expect(direct().capture()).toBeNull()
+    expect(direct().capture('cookrew_t1')).toBeNull()
   })
 
   it('reports no scroll state rather than zeros', () => {
-    expect(direct().scrollState()).toEqual({ scrollRow: null, historySize: null })
+    expect(direct().scrollState('cookrew_t1')).toEqual({ scrollRow: null, historySize: null })
+  })
+
+  it('answers the SAME null for every terminal — never one pane\'s state for another', () => {
+    // The signature took no name while every caller passed one, so ignoring it
+    // was invisible. Two different terminals must not be able to produce a
+    // per-terminal answer here, because this backend has no per-terminal view
+    // to give — a wedge verdict derived from another pane's output is the
+    // failure this pins shut.
+    const backend = direct()
+    expect(backend.scrollState('cookrew_a')).toEqual(backend.scrollState('cookrew_b'))
+    expect(backend.capture('cookrew_a')).toBe(backend.capture('cookrew_b'))
   })
 
   it('claims no session registry it does not have', () => {

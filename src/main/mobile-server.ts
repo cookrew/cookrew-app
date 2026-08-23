@@ -822,9 +822,12 @@ async function handle(
         respondJson(response, 200, { ok: true, reply: replyText(reply, submitRetries) })
       } catch (error) {
         if (error instanceof DeliveryError) {
-          // The outcome and its remedy ride the BODY: HTTP has a small
-          // vocabulary and two outcomes share a status, but the remedies are
-          // opposite and the phone must be told which one it got.
+          // The outcome and its remedy ride the BODY, and a caller MUST NOT
+          // switch on the status alone: `unsubmitted` and `dropped` are both
+          // 502 while their remedies are OPPOSITE — one wants a bare carriage
+          // return, the other wants the whole brief resent, and each corrupts
+          // the input box when applied to the other. HTTP's vocabulary is too
+          // small to carry that distinction; `outcome` is the fact.
           respondJson(response, ASK_HTTP_STATUS[error.outcome], {
             error: error.message,
             outcome: error.outcome,

@@ -49,8 +49,17 @@ export function terminalDeliveryDeps(
   return {
     turnCountOf,
     capture: (terminalId) => multiplexer()?.capture(sessionNameFor(terminalId)) ?? null,
-    outputDepth: (terminalId) =>
-      multiplexer()?.scrollState(sessionNameFor(terminalId)).historySize ?? null,
+    outputDepth: (terminalId) => {
+      // A scrollState that THROWS on a dead session must not take the whole
+      // ask with it: the wedge check is an ENRICHMENT of the verdict, and
+      // trading a merely-wrong verdict for a hard failure is a bad trade.
+      // Unknown depth is the fail-closed direction, and it is counted below.
+      try {
+        return multiplexer()?.scrollState(sessionNameFor(terminalId)).historySize ?? null
+      } catch {
+        return null
+      }
+    },
     submit: () => write('\r'),
     settle: () => new Promise((resolve) => setTimeout(resolve, SUBMIT_SETTLE_MS))
   }
@@ -76,8 +85,54 @@ export class DeliveryError extends Error {
   }
 }
 
+/**
+ * Read the depth without ever failing the ask.
+ *
+ * Guarded HERE as well as at the production seam, because the boundary that
+ * matters is this one: the wedge check ENRICHES a verdict and must never
+ * replace a merely-wrong answer with a hard failure. A scrollState that throws
+ * on a dead session is a very ordinary thing for a backend to do.
+ */
+function readDepth(deps: DeliveryDeps, terminalId: string): number | null {
+  try {
+    return deps.outputDepth?.(terminalId) ?? null
+  } catch {
+    return null
+  }
+}
+
 /** Bounded CR retries before we stop and report `unsubmitted` honestly. */
 const MAX_SUBMIT_RETRIES = 2
+
+/**
+ * How many delivery verdicts were reached WITHOUT a usable depth reading, so
+ * the wedge check could not run.
+ *
+ * The wedge branch degrades to silence by design — an unknown depth must not
+ * become an accusation. But a feature that can only ever fail to fire is
+ * indistinguishable from a world where no pane ever wedges, and this one was
+ * bought with a day of field pain. `historySize` advancing on paint is proven
+ * against fakes returning 100/141/null; the precedent for a plausible field
+ * that does NOT advance is in this very lane (herdr's `revision`, frozen at 1
+ * across four output bursts). So the degrade is COUNTED. A fleet reporting
+ * thousands of blind deliveries and zero wedges is reporting that the check
+ * is inert, not that the panes are healthy.
+ *
+ * Deliberately a counter and not a throw: the safe direction stays the
+ * behaviour, and visibility is added beside it rather than in place of it.
+ */
+const deliveryBlindness = { blind: 0, seen: 0 }
+
+/** Delivery verdicts split by whether the wedge check could run at all. */
+export function deliveryWedgeCoverage(): { blind: number; seen: number } {
+  return { ...deliveryBlindness }
+}
+
+/** Test seam; production never resets. */
+export function resetDeliveryWedgeCoverage(): void {
+  deliveryBlindness.blind = 0
+  deliveryBlindness.seen = 0
+}
 
 /**
  * ONE CONTRACT, EVERY CALLER.
@@ -106,7 +161,7 @@ export async function deliverAndConfirm(input: {
   // was already running — identity over timing, the same reason the dispatch
   // route correlates on a dispatchId rather than on "the next completion".
   const turnsBefore = input.observe.turnCountOf(input.terminalId)
-  const depthBefore = input.observe.outputDepth?.(input.terminalId) ?? null
+  const depthBefore = readDepth(input.observe, input.terminalId)
   const reply = await input.deliver()
   const report = await confirmDelivery(input.observe, {
     terminalId: input.terminalId,
@@ -201,11 +256,23 @@ export async function confirmDelivery(
   // idle and is not a dropped brief — it has stopped reading input, and every
   // remedy that sends more bytes is wasted on it. Only asked when both depths
   // are readable: an unknown depth is not evidence of a frozen one.
-  const depthNow = deps.outputDepth?.(terminalId) ?? null
+  const depthNow = readDepth(deps, terminalId)
   const painted =
     input.depthBefore === undefined || input.depthBefore === null || depthNow === null
       ? undefined
       : depthNow > input.depthBefore
+  if (painted === undefined) {
+    deliveryBlindness.blind += 1
+    if (deliveryBlindness.blind === 1 || deliveryBlindness.blind % 50 === 0) {
+      console.warn(
+        `Delivery wedge check is blind: no scrollback depth for ${terminalId} ` +
+          `(${deliveryBlindness.blind} blind / ${deliveryBlindness.seen} seen). ` +
+          'A backend whose historySize never advances makes `unresponsive` unreachable.'
+      )
+    }
+  } else {
+    deliveryBlindness.seen += 1
+  }
 
   const pane = deps.capture(terminalId)
   const inBox = pane === null ? null : promptLanded(pane, prompt)
