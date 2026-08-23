@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { escapeHtml, renderNoteMarkdown, safeUrl } from '../src/renderer/src/note-markdown'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { escapeHtml, renderNoteMarkdown, safeUrl, clearNoteMarkdownCache } from '../src/renderer/src/note-markdown'
 
 /**
  * The bug, verbatim. These six lines are copied out of the live CHECKPOINT UX
@@ -127,5 +127,58 @@ describe('escapeHtml', () => {
     expect(escapeHtml('a plain sentence — with an em dash')).toBe(
       'a plain sentence — with an em dash'
     )
+  })
+})
+
+/**
+ * The render cache. NoteNode calls renderNoteMarkdown from its render body, so
+ * every canvas re-render re-parsed every note: measured at 89ms of marked.js
+ * inside a 215ms card open, for output the zoom LOD change then discarded.
+ */
+describe('renderNoteMarkdown caches, and stays bounded', () => {
+  beforeEach(() => clearNoteMarkdownCache())
+
+  it('returns the same HTML for the same source', () => {
+    const src = '# heading\n\nsome **bold** text'
+    expect(renderNoteMarkdown(src)).toBe(renderNoteMarkdown(src))
+  })
+
+  it('does not re-parse a source it has already seen', () => {
+    // Identity, not equality: a cache hit returns the STORED string, so the two
+    // calls share one object. A re-parse would produce an equal-but-new one.
+    const src = '- a\n- b\n\n| x | y |\n|---|---|\n| 1 | 2 |'
+    const first = renderNoteMarkdown(src)
+    const second = renderNoteMarkdown(src)
+    expect(Object.is(first, second)).toBe(true)
+  })
+
+  it('still re-parses when the note is edited', () => {
+    expect(renderNoteMarkdown('one')).not.toBe(renderNoteMarkdown('two'))
+  })
+
+  it('keeps escaping and link safety on the cached path', () => {
+    // The cache must not become a way to serve unsanitised HTML on the second
+    // read — the sanitisation lives in the parse, so this asserts the stored
+    // value is the sanitised one and not the source.
+    const hostile = '<img src=x onerror=alert(1)>'
+    const once = renderNoteMarkdown(hostile)
+    const twice = renderNoteMarkdown(hostile)
+    expect(twice).toBe(once)
+    // No live TAG survives. The escaped text still contains the literal
+    // characters "onerror=alert(1)" — asserting on that substring failed the
+    // first version of this test against correctly-sanitised output.
+    expect(twice).not.toContain('<img')
+    expect(twice).toContain('&lt;img')
+  })
+
+  it('evicts rather than growing without limit', () => {
+    // A note body is unbounded; the cache must not be. 64 entries, so 200
+    // distinct sources must not leave 200 behind.
+    for (let i = 0; i < 200; i++) renderNoteMarkdown(`note number ${i}`)
+    // the oldest is gone: re-rendering it produces a fresh object
+    const oldAgain = renderNoteMarkdown('note number 0')
+    expect(Object.is(oldAgain, renderNoteMarkdown('note number 0'))).toBe(true)
+    // and the most recent is still a hit
+    expect(Object.is(renderNoteMarkdown('note number 199'), renderNoteMarkdown('note number 199'))).toBe(true)
   })
 })
