@@ -10,7 +10,7 @@ import type { TerminalNodeData } from '../../shared/model'
 import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 import type { LodLayout, ScreenRect } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
-import { cookrew } from './api'
+import { cookrew, isRemoteMode } from './api'
 import { useTurnPaging } from './nodes/TurnPager'
 import { CheckpointTimeline } from './CheckpointTimeline'
 import { TranscriptView, type ActiveBlock, type TranscriptHandle } from './TranscriptView'
@@ -299,12 +299,30 @@ function TerminalOverlay({
       // glyphs (JetBrains Mono has none) can't accumulate horizontal drift
       // the way the DOM renderer lets them. Losing the context falls back
       // to the DOM renderer, which is degraded but functional.
-      try {
-        const webgl = new WebglAddon()
-        webgl.onContextLoss(() => webgl.dispose())
-        term.loadAddon(webgl)
-      } catch {
-        // WebGL unavailable — DOM renderer still works
+      //
+      // NOT ON THE PHONE, because there it is not one context — it is one per
+      // PAN. On a phone stage every card clears the LOD coverage threshold at
+      // any normal zoom (a 640-wide terminal covers 0.82 of a 390pt stage at
+      // zoom 0.5, 1.00 at 0.75), so an overlay is always mounted, and panning
+      // off one card onto the next flips the single overlay winner: unmount,
+      // dispose a WebGL context, mount, create another. iOS Safari reclaims
+      // GPU-process memory lazily, so that churn walks the web process into a
+      // kill — which Safari reports as "重复出现问题" and then reproduces on
+      // reload, because the restored viewport mounts an overlay again.
+      //
+      // The DOM renderer is the documented fallback above and costs CJK grid
+      // drift on phone terminals. That is a real loss and it is the smaller
+      // one: the alternative is a canvas that cannot be panned. The drift is
+      // worth removing properly by not churning overlays on pan at all (LOD
+      // hysteresis in zoom-lod.ts), which is a UX decision, not a one-liner.
+      if (!isRemoteMode()) {
+        try {
+          const webgl = new WebglAddon()
+          webgl.onContextLoss(() => webgl.dispose())
+          term.loadAddon(webgl)
+        } catch {
+          // WebGL unavailable — DOM renderer still works
+        }
       }
 
       // Fit can report bogus dimensions before layout finishes — retry
