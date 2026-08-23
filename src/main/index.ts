@@ -106,6 +106,8 @@ import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
 import { blocksResume, holderOf, liveSessionHolders, planHeldSessionFork } from './claude-live-session'
 import { createRestoreHandlers, registerRestoreIpc, RestoreHandlers } from './restore'
 import { withSessionLineage } from './session-lineage'
+import { registryHostHelp, resolveRegistryHosts } from '../shared/registry-host'
+import { RegistryHostSettings } from './registry-settings'
 import { carrySessionToCwd } from './session-move'
 import { moveTerminalCwd } from './terminal-cwd'
 import { createBrowserCast } from './browser-cast'
@@ -1992,11 +1994,32 @@ function activeBrowserNode(browserId: string): BrowserNodeData | null {
  * nothing — the marketplace is not shipped yet, and an unconfigured registry
  * failing closed is the correct posture until it is.
  */
-const registryHosts = (): string[] =>
-  (process.env.COOKREW_REGISTRY_HOST ?? '')
-    .split(',')
-    .map((host) => host.trim())
-    .filter((host) => host.length > 0)
+/** Installation-wide trust list; not workspace state, so it has its own file. */
+const registryHostSettings = new RegistryHostSettings()
+
+const registryHosts = (): string[] => resolveRegistryHosts(registryHostInput()).hosts
+
+/**
+ * The inputs the host resolution reads. Split out so the refusal path and the
+ * recognition path can never disagree about what is configured.
+ */
+const registryHostInput = (): Parameters<typeof resolveRegistryHosts>[0] => ({
+  configured: process.env.COOKREW_REGISTRY_HOST ?? '',
+  settings: registryHostSettings.list(),
+  // A PACKAGED build recognises nothing it was not told to. Loopback exists
+  // only where a shipped app cannot carry it, so the journey is walkable in
+  // dev without the product ever trusting a host nobody chose.
+  packaged: app.isPackaged
+})
+
+/**
+ * Why nothing is recognised, in words an owner can act on.
+ *
+ * The empty default was always deliberate; what was missing is that it never
+ * said so. An install link whose only instruction cannot work is a dead end,
+ * and a refusal without the fix is the same dead end with better manners.
+ */
+const registryHostRefusal = (): string => registryHostHelp()
 
 /**
  * A browser card navigated to a marketplace install link (R21).
