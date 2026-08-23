@@ -30,6 +30,13 @@ import type { DispatchService } from './dispatch'
 import type { ThumbFrame } from './browser-thumb-cache'
 import { X509Certificate } from 'node:crypto'
 import { askTerminal, ownerSubmit } from './ask'
+import {
+  DeliveryError,
+  deliverAndConfirm,
+  replyText,
+  terminalDeliveryDeps
+} from './ask-delivery'
+import { ASK_HTTP_STATUS, ASK_REMEDY } from '../shared/ask-outcome'
 import { ensureCert, missingHosts, sansOf } from './cert'
 import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps } from './mobile-api'
 import { readJson, respondJson } from './mobile-http'
@@ -705,11 +712,6 @@ async function handle(
   }
 
 
-  if (request.method === 'GET' && url.pathname === '/api/browser/capabilities') {
-    respondJson(response, 200, { interactive: deps.interactiveBrowserEnabled() })
-    return
-  }
-
   // Renderer bundle + full remote API (consumed by remote-api.ts).
   // Hand the API the RESOLVED credentials, not the caller's optional ones.
   //
@@ -733,6 +735,20 @@ async function handle(
     wallToken: activeWallToken ?? deps.wallToken
   }
   if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return
+
+  // MOVED BELOW THE DELEGATION, and that is the whole change to it.
+  //
+  // It used to answer ABOVE handleMobileApi, which meant it was the one /api
+  // route that never reached the C1 choke point at all — not "open because
+  // reads were open", but structurally out of the gate's reach. It leaks
+  // little on its own (a feature flag), and that is exactly why it is worth
+  // moving rather than gating in place: a second copy of the auth check here
+  // is a second thing to keep in step, and one gate in one place is the
+  // property that made the read hole findable in the first place.
+  if (request.method === 'GET' && url.pathname === '/api/browser/capabilities') {
+    respondJson(response, 200, { interactive: deps.interactiveBrowserEnabled() })
+    return
+  }
 
   if (request.method === 'GET' && url.pathname === '/api/state') {
     // Activities are tracked globally by terminal id, so an unfiltered map
@@ -836,9 +852,33 @@ async function handle(
       else respondJson(response, 409, { error: verdict.reason })
     } else {
       try {
-        const reply = await askTerminal(session, text, { timeoutMs: 120000 })
-        respondJson(response, 200, { ok: true, reply })
+        // ONE CONTRACT, EVERY CALLER: the phone runs the SAME verified path as
+        // the CLI. This route used to return the bare reply, so a dropped
+        // brief came back as 200 with an empty string — and the phone is
+        // exactly where an owner is least able to tell that from a slow agent.
+        const { reply, submitRetries } = await deliverAndConfirm({
+          terminalId: inputMatch[1],
+          agentName: deps.store.node(inputMatch[1])?.name ?? inputMatch[1],
+          prompt: text,
+          deliver: () => askTerminal(session, text, { timeoutMs: 120000 }),
+          observe: terminalDeliveryDeps(deps.turns, (data) => session.write(data))
+        })
+        respondJson(response, 200, { ok: true, reply: replyText(reply, submitRetries) })
       } catch (error) {
+        if (error instanceof DeliveryError) {
+          // The outcome and its remedy ride the BODY, and a caller MUST NOT
+          // switch on the status alone: `unsubmitted` and `dropped` are both
+          // 502 while their remedies are OPPOSITE — one wants a bare carriage
+          // return, the other wants the whole brief resent, and each corrupts
+          // the input box when applied to the other. HTTP's vocabulary is too
+          // small to carry that distinction; `outcome` is the fact.
+          respondJson(response, ASK_HTTP_STATUS[error.outcome], {
+            error: error.message,
+            outcome: error.outcome,
+            remedy: ASK_REMEDY[error.outcome]
+          })
+          return
+        }
         respondJson(response, 409, {
           error: error instanceof Error ? error.message : String(error)
         })

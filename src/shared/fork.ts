@@ -166,7 +166,32 @@ export function buildAssembledPreamble(options: AssembledPreambleOptions): strin
   return [header, ...transcript, footer].join('\n\n')
 }
 
+/**
+ * What the shipped prompt tells an agent about ENDING a turn.
+ *
+ * The defect is not that agents fail to announce, it is that they answer with
+ * a plan and an orchestrator cannot tell that from still working.
+ *
+ * That is why the clause says STOP rather than "report": an agent that
+ * continues past its own answer is doing work nobody is watching, and an
+ * orchestrator polling for "is it done" sees the same silence either way.
+ *
+ * DELIBERATELY SILENT ABOUT FORMAT. A format request is the first thing a
+ * model drifts from, and a drifted format reads as a missing announcement —
+ * which would make the prompt a source of false negatives rather than a help.
+ *
+ * BELT, NEVER BRACES. This is advisory and nothing may depend on it. The
+ * dispatch record and the turn tracker are the mechanisms; if a caller ever
+ * waits for an agent to ANNOUNCE, the no-completion-signal defect is rebuilt
+ * with better manners. Deleting this clause must never break a caller.
+ */
+export const COMPLETION_CLAUSE =
+  'Completion. When you finish a piece of work, say so in one line and stop. ' +
+  'Do not continue into the next task on your own — a turn that ends is the ' +
+  'signal your orchestrator waits on, and work that continues past it is work ' +
+  'nobody is watching. If you are handing off, name who and what in that same line.'
+
 /** First message for an agent booted fresh from a saved role. */
 export function buildRoleBootMessage(roleName: string, rolePrompt: string): string {
-  return `[Cookrew role: ${roleName}] ${rolePrompt.trim()}`
+  return `[Cookrew role: ${roleName}] ${rolePrompt.trim()}\n\n${COMPLETION_CLAUSE}`
 }

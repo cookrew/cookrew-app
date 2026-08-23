@@ -46,6 +46,8 @@ export type RebuildBlocker =
   | 'scrape-only'
   /** File-harness, but this node has no usable session reference yet. */
   | 'unbound'
+  /** The rebuild is SHORTER than the ledger it would replace — see below. */
+  | 'would-shrink'
   /** The reference resolves to a path that is not on disk (pruned/moved). */
   | 'session-missing'
   /** The transcript exists but could not be read or parsed. */
@@ -173,15 +175,47 @@ export function rebuildLedger(
  * that would look like a real, empty history.
  */
 export function rebuildLedgerInto(
-  store: Pick<TurnStore, 'scheduleSave' | 'flushAll'>,
+  store: Pick<TurnStore, 'scheduleSave' | 'flushAll' | 'load'>,
   node: RebuildTarget,
   options: HarnessWatchOptions = {}
 ): LedgerRebuild {
   const result = rebuildLedger(node, options)
-  if (result.ok) {
-    store.scheduleSave(result.terminalId, result.records)
-    store.flushAll()
+  if (!result.ok) return result
+
+  /**
+   * REFUSE TO WRITE A SHORTER HISTORY THAN THE ONE IT REPLACES.
+   *
+   * scheduleSave treats its argument as the WHOLE truth, so a rebuild that
+   * comes back short does not merge — it deletes. This function reads only the
+   * node's CURRENT transcript, while a ledger may legitimately span several of
+   * them: after a compact, or after a lineage recovery. Pointed at a recovered
+   * 613-record ledger it would regenerate the 16 turns of the newest file and
+   * destroy the other 597, in the ledger and the annotation sidecar together.
+   *
+   * The honest guard is not "walk the lineage here" — that would need this sync
+   * function and both its callers to become async. It is to notice that the
+   * replacement is smaller than what it replaces and DECLINE, which turns a
+   * data-destroying tool into a refusing one. A rebuild that is genuinely
+   * shorter (a /rewind removed turns) is still available through the plain
+   * rebuildLedger + an explicit save by a caller who has decided that is right.
+   */
+  const existing = store.load(result.terminalId)
+  if (existing.length > result.records.length) {
+    return {
+      ok: false,
+      terminalId: result.terminalId,
+      harness: result.harness,
+      reason: 'would-shrink',
+      detail:
+        `refusing to replace ${existing.length} stored records with ${result.records.length} ` +
+        `rebuilt from ${result.sessionFile} alone. A ledger can span several transcripts ` +
+        '(a compact, or a lineage recovery) and this rebuild reads only the current one, ' +
+        'so writing it would DELETE the difference rather than merge it.'
+    }
   }
+
+  store.scheduleSave(result.terminalId, result.records)
+  store.flushAll()
   return result
 }
 

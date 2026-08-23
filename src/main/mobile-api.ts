@@ -248,6 +248,46 @@ export async function handleMobileApi(
     return true;
   }
 
+  // READS ARE CREDENTIALS TOO.
+  //
+  // The gate above challenged only WRITES, on the reasoning quoted there:
+  // "EventSource cannot set headers, and with the C2 wildcard gone only
+  // same-origin pages can read them cross-site anyway." Both halves are true
+  // and neither defends this listener. Same-origin policy protects a VICTIM'S
+  // BROWSER from a page it did not ask for; it does nothing about a direct
+  // client, and curl has no origin. This process binds 0.0.0.0, so every GET
+  // was answerable by anyone who could reach the port — no token, no pairing,
+  // no browser.
+  //
+  // What that gave away, measured against the routes below rather than
+  // imagined: the workspace roster INCLUDING every slug (the first half of an
+  // exported agent's call address, and an inventory of what the owner is
+  // working on), the full canvas, live pane content, agent transcripts, the
+  // event log, the board, saved teams and roles, and git state for the owner's
+  // directories. /api/board alone was gated — it had noticed the problem and
+  // fixed its own instance of it.
+  //
+  // The EventSource constraint is REAL, and it is why this uses `canRead`
+  // rather than a header check: pairingAuthorized already accepts `?token=`
+  // for clients that cannot set headers, which is exactly what /api/board's
+  // own gate relies on and what the two SSE routes now send.
+  //
+  // Scoped to /api/ deliberately. The renderer bundle and its assets are
+  // served AROUND this delegation, and an unpaired phone has to be able to
+  // load the app in order to be told it is unpaired — a gate that 401s the
+  // JavaScript is a gate that removes the pairing screen.
+  //
+  // /api/auth/status is above this on purpose: it is how an unpaired device
+  // learns it is unpaired, it discloses only whether the caller's OWN token
+  // works, and it never echoes one back.
+  if (method === "GET" && p.startsWith("/api/") && deps.pairingToken && !canRead) {
+    respondJson(response, 401, {
+      error:
+        "Unauthorized — open the pairing URL shown on the desktop (it carries ?token=).",
+    });
+    return true;
+  }
+
   if (method === "GET" && p === "/api/workspace") {
     // Embed git per terminal (node.git) and per workspace dir (dirsGit) so
     // phone cards show branch/dirty without a round-trip (Fresco GitChip).

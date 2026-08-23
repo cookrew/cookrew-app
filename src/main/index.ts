@@ -2254,6 +2254,10 @@ app.whenReady().then(() => {
     spawnTerminal: spawnTracked,
     agents,
     turns,
+    // `ask --no-wait` and `cookrew dispatch <id>`: the SAME engine the HTTP
+    // route uses, so a CLI-minted dispatch and an API-minted one are one
+    // record with one lifecycle.
+    dispatch: dispatchService,
     forkTerminal,
     routines,
     browserCommand,
