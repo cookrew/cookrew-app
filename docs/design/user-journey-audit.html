@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>User-journey audit — author &amp; buyer, end to end</title>
+<style>
+:root{
+  color-scheme: light dark;
+  --bg:#fbfaf8; --fg:#1a1a1a; --dim:#6b6b6b; --line:#e4e1dc; --panel:#ffffff;
+  --clear:#1b7f4b; --clear-bg:#e8f5ed;
+  --confusing:#9a6700; --confusing-bg:#fdf6e3;
+  --wall:#b3261e; --wall-bg:#fdecea;
+  --broken:#6b21a8; --broken-bg:#f4ecfd;
+  --accent:#1f6feb;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#17171a; --fg:#ececec; --dim:#9a9a9a; --line:#2e2e33; --panel:#1e1e22;
+    --clear:#5fd39b; --clear-bg:#12301f; --confusing:#e3b341; --confusing-bg:#332905;
+    --wall:#ff7b72; --wall-bg:#3a1512; --broken:#d2a8ff; --broken-bg:#2a1a3d; --accent:#58a6ff; }
+}
+:root[data-theme="dark"]{ --bg:#17171a; --fg:#ececec; --dim:#9a9a9a; --line:#2e2e33; --panel:#1e1e22;
+  --clear:#5fd39b; --clear-bg:#12301f; --confusing:#e3b341; --confusing-bg:#332905;
+  --wall:#ff7b72; --wall-bg:#3a1512; --broken:#d2a8ff; --broken-bg:#2a1a3d; --accent:#58a6ff; }
+:root[data-theme="light"]{ --bg:#fbfaf8; --fg:#1a1a1a; --dim:#6b6b6b; --line:#e4e1dc; --panel:#ffffff;
+  --clear:#1b7f4b; --clear-bg:#e8f5ed; --confusing:#9a6700; --confusing-bg:#fdf6e3;
+  --wall:#b3261e; --wall-bg:#fdecea; --broken:#6b21a8; --broken-bg:#f4ecfd; --accent:#1f6feb; }
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:16px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Inter,system-ui,sans-serif;}
+main{max-width:1080px;margin:0 auto;padding:2.5rem 1.25rem 5rem}
+h1{font-size:2rem;line-height:1.2;margin:0 0 .4rem}
+h2{font-size:1.3rem;margin:3rem 0 .5rem;padding-bottom:.4rem;border-bottom:2px solid var(--line)}
+h3{font-size:1.05rem;margin:2rem 0 .5rem}
+p{margin:.6rem 0}
+.sub{color:var(--dim);margin:0 0 1.5rem}
+code,kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em;
+  background:color-mix(in srgb,var(--fg) 8%,transparent);padding:.1em .35em;border-radius:4px}
+pre{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--dim);
+  border-radius:6px;padding:.85rem 1rem;overflow-x:auto;font-size:.84rem;line-height:1.5;margin:.6rem 0}
+pre code{background:none;padding:0}
+
+.v{display:inline-block;font-size:.7rem;font-weight:700;letter-spacing:.06em;
+  padding:.2em .55em;border-radius:4px;text-transform:uppercase;white-space:nowrap;vertical-align:middle}
+.v-clear{color:var(--clear);background:var(--clear-bg)}
+.v-confusing{color:var(--confusing);background:var(--confusing-bg)}
+.v-wall{color:var(--wall);background:var(--wall-bg)}
+.v-broken{color:var(--broken);background:var(--broken-bg)}
+
+table{width:100%;border-collapse:collapse;margin:1rem 0;font-size:.9rem}
+th,td{text-align:left;padding:.55rem .6rem;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:600}
+tbody tr:hover{background:color-mix(in srgb,var(--fg) 3%,transparent)}
+td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+
+.step{border:1px solid var(--line);border-radius:8px;background:var(--panel);
+  padding:1rem 1.15rem;margin:.85rem 0}
+.step-h{display:flex;gap:.6rem;align-items:baseline;flex-wrap:wrap;margin-bottom:.35rem}
+.step-h .n{font-family:ui-monospace,monospace;font-size:.78rem;color:var(--dim);font-weight:700}
+.step-h .t{font-weight:650;flex:1;min-width:12rem}
+.artifact{font-size:.8rem;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;
+  margin:.7rem 0 .2rem;font-weight:600}
+
+.rank{counter-reset:r;list-style:none;padding:0;margin:1rem 0}
+.rank li{counter-increment:r;position:relative;padding:.9rem 1rem .9rem 3.2rem;
+  border:1px solid var(--line);border-radius:8px;background:var(--panel);margin:.6rem 0}
+.rank li::before{content:counter(r);position:absolute;left:1rem;top:.85rem;
+  font-family:ui-monospace,monospace;font-weight:700;font-size:1.35rem;color:var(--wall);line-height:1}
+
+.callout{border-left:3px solid var(--accent);background:color-mix(in srgb,var(--accent) 7%,transparent);
+  padding:.8rem 1rem;border-radius:0 6px 6px 0;margin:1.2rem 0;font-size:.93rem}
+.callout.warn{border-left-color:var(--confusing);background:var(--confusing-bg)}
+
+.bars{margin:1rem 0}
+.bar-row{display:grid;grid-template-columns:9rem 1fr 5rem;gap:.6rem;align-items:center;margin:.35rem 0;font-size:.85rem}
+.bar-track{background:color-mix(in srgb,var(--fg) 8%,transparent);border-radius:3px;height:1.1rem;overflow:hidden}
+.bar-fill{height:100%;border-radius:3px;background:var(--wall);opacity:.8}
+.bar-row .num{text-align:right;font-variant-numeric:tabular-nums;color:var(--dim)}
+
+footer{margin-top:4rem;padding-top:1.2rem;border-top:1px solid var(--line);color:var(--dim);font-size:.85rem}
+#tt{position:fixed;top:1rem;right:1rem;background:var(--panel);color:var(--fg);
+  border:1px solid var(--line);border-radius:6px;padding:.35rem .7rem;cursor:pointer;font-size:.8rem}
+@media (max-width:640px){ main{padding:1.5rem 1rem 3rem} h1{font-size:1.5rem}
+  .bar-row{grid-template-columns:6.5rem 1fr 4rem} #tt{display:none} }
+</style>
+</head>
+<body>
+<button id="tt" onclick="const r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark'">◐ theme</button>
+<main>
+
+<h1>User-journey audit — the author and the buyer</h1>
+<p class="sub">QA as a real user, not a gate-runner · live system, real input · 2026-08-23 · Magpie</p>
+
+<div class="callout">
+  <strong>What this is.</strong> The eval gates already proved correctness — 25 mutants, FAIL 0. This asks a
+  different question: could a person <em>find</em> these features, and would they <em>understand</em> what they found?
+  A wall is a finding, not a failure. Every verdict below is anchored to an artifact I actually saw.
+</div>
+
+<div class="callout warn">
+  <strong>Methodological caveat, stated up front.</strong> I have read this source deeply, so I know things a real
+  user cannot. Where insider knowledge got me unstuck, I have marked it — because that unblocking is itself the
+  finding. Twice during this audit my own knowledge produced a <em>wrong</em> reading, and both are recorded below
+  rather than quietly corrected.
+</div>
+
+<h2>Verdict summary</h2>
+<table>
+  <thead><tr><th>Journey</th><th>Steps</th><th>Clear</th><th>Confusing</th><th>Wall</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Person 1 — the author</strong> (export → publish → price → get paid)</td><td class="num">4</td><td class="num">0</td><td class="num">0</td><td class="num">4</td></tr>
+    <tr><td><strong>Person 2 — the buyer</strong> (link → install → 401 → 402 → 403 → call)</td><td class="num">11</td><td class="num">3</td><td class="num">4</td><td class="num">4</td></tr>
+  </tbody>
+</table>
+<p>The author journey <strong>does not exist in the product</strong>. The buyer journey exists as a protocol and is
+largely correct, but every point where a human must act is either absent or raw JSON.</p>
+
+<h2>Person 1 — the author</h2>
+<p>I built an agent worth selling. I want to export it, publish it, price it, and know where my money arrives.
+I start where anyone starts: looking at the app.</p>
+
+<div class="step">
+  <div class="step-h"><span class="n">A1</span><span class="t">Where do I click to begin?</span><span class="v v-wall">Wall</span></div>
+  <p>I enumerated every visible, clickable control in the product chrome — 40 of them.
+  <strong>Not one mentions publish, export, sell, price, payout or market.</strong> The dock is five icon-only tools.</p>
+  <div class="artifact">Artifact — the entire dock, as a user meets it</div>
+  <pre><code>⟨CLIPBOARD⟩  ⟨TERMINAL⟩  ⟨NOTE⟩  ⟨BROWSER⟩  ⟨CONNECT⟩
+top bar: ⟨Refresh the canvas⟩ · Canvas · Board · 🗂Cookrew Dev</code></pre>
+  <p><strong>The trap I nearly fell into:</strong> a document-wide scan <em>does</em> find "Marketplace", "publish"
+  and "price" on this canvas — all of it inside rendered design documents in browser cards. The canvas displays the
+  spec that defines the feature. Scoping to product chrome, the matches drop to zero.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">A2</span><span class="t">Is there a publish path at all?</span><span class="v v-wall">Wall</span></div>
+  <p>The app's whole preset/team IPC surface:</p>
+  <pre><code>preset:list              preset:installed:list        team:save    team:list
+preset:installed:uninstall   preset:installed:rotation:*  team:fork    team:clip:*</code></pre>
+  <p>Install, place, uninstall, save-a-team locally. <strong>There is no publish channel, no registry client, and no
+  call to <code>POST /v1/presets</code> anywhere in main or the renderer.</strong> The single registry reference is an
+  env var, <code>COOKREW_REGISTRY_HOST</code>, empty by default — and <em>unset on the running app</em>.</p>
+  <p><strong>My own error, recorded:</strong> I first grepped the renderer for the IPC channel string and got zero,
+  and nearly reported "the chips are wired to nothing." Wrong — the renderer calls
+  <code>window.api.listInstalledPresets()</code>; the channel name only lives in the preload. That is precisely the
+  alias blindness I had written a gate against an hour earlier, and I walked straight into it.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">A3</span><span class="t">So how does anything get published?</span><span class="v v-wall">Wall</span></div>
+  <p>Only over HTTP, by hand. To publish one priced preset I had to: generate an ed25519 keypair, build a canonical
+  manifest, sign it, run a WebAuthn ceremony for a <em>publish-scoped</em> token, POST once to receive a 401 carrying a
+  countersign challenge, sign <em>that</em> as a second assertion, and POST again with a payout address.</p>
+  <div class="artifact">Artifact — what "publishing" costs today</div>
+  <pre><code>~140 lines of code · 2 cryptographic ceremonies · 2 POSTs · 1 hand-built signature
+No human does this. I only could because I had written the crypto helper myself.</code></pre>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">A4</span><span class="t">Where will my money arrive?</span><span class="v v-wall">Wall</span></div>
+  <p>The payout address is an API field with no surface. Omit it and publish refuses with the bare token
+  <code>payout_missing</code>. Nothing explains what an EVM address is, or which chain, or that the money never
+  touches Cookrew — a genuinely reassuring fact the author never gets told.</p>
+  <p><strong>Worth a decision, not just a fix:</strong> the address is format-checked only, with no EIP-55 checksum
+  (the source says so plainly and explains why — keccak256 is not in <code>node:crypto</code>). A mistyped but
+  well-formed address passes, and the money goes somewhere unrecoverable. The mitigation the source proposes —
+  catch it at publish time, where the author is standing — is exactly the surface that does not exist yet.</p>
+</div>
+
+<h2>Person 2 — the buyer</h2>
+<p>Someone sent me a link. I have no app.</p>
+
+<div class="step">
+  <div class="step-h"><span class="n">B1</span><span class="t">Open the install link with no app</span><span class="v v-clear">Clear</span></div>
+  <p>This page is the best thing in the whole journey. It names the preset, the author and the version, says what a
+  preset <em>is</em>, and pre-empts the obvious fear.</p>
+  <div class="artifact">Artifact — verbatim visible text</div>
+  <pre><code>Pro Toolkit
+published by @cookrew-seed · v1
+A Cookrew preset — a team of AI agents you can place on your canvas.
+This preset needs an account before it can be downloaded.
+Open this link in Cookrew to place it.
+Opening a link installs nothing. Cookrew checks the preset itself and
+shows you what it contains, and you decide.
+Cookrew is open source. You can get it here: github.com/cookrew/cookrew-app</code></pre>
+  <p>"Opening a link installs nothing… and you decide" is doing real work. Keep it.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">B2</span><span class="t">…but what does it cost?</span><span class="v v-wall">Wall</span></div>
+  <p>I published a preset priced at <strong>2.50 USDC</strong> and opened its link. The page is byte-identical in
+  structure to the free one. <strong>The price appears nowhere.</strong></p>
+  <div class="artifact">Artifact — money tokens in the priced preset's page</div>
+  <pre><code>visible-text money tokens: ["Price", "Price"]
+  → both are the substring inside the preset's NAME, "Priced Toolkit".
+raw HTML: no amount, no asset, no chain, no "paid", no currency symbol.</code></pre>
+  <p>The page warns you about the 401 ("needs an account") and says nothing about the 402. A buyer learns the thing
+  costs money only after installing an app, creating a passkey, and reading a JSON body.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">B3</span><span class="t">"Open this link in Cookrew"</span><span class="v v-wall">Wall</span></div>
+  <p>The page's only call to action cannot work. The app recognises install links only for hosts listed in
+  <code>COOKREW_REGISTRY_HOST</code>, which is <strong>empty by default and unset on the running app</strong>. So a
+  default install recognises no registry at all, and the link does nothing.</p>
+  <p>This is a deliberate fail-closed posture and the source argues for it well — an app must not learn to trust a
+  host because a page said so. But the consequence is that today the shared link is a dead end for everyone.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">B4</span><span class="t">"needs an account" — how do I make one?</span><span class="v v-confusing">Confusing</span></div>
+  <p>Nothing on the page, and nothing in the app, creates an account. The passkey enrolment exists only as
+  <code>POST /v1/identity/register</code>. The word "account" also sets the wrong expectation: there is no account,
+  there is a passkey — no email, no password, nothing to recover.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">B5</span><span class="t">The 401</span><span class="v v-clear">Clear (machine)</span> <span class="v v-confusing">Confusing (human)</span></div>
+  <div class="artifact">Artifact — verbatim</div>
+  <pre><code>HTTP/1.1 401 Unauthorized
+www-authenticate: WebAuthn realm="market", challenge=CjuyDOxhBZTXz_5gRq9zngizMAy69oU7DKoWniUDOPw
+content-length: 2
+
+{}</code></pre>
+  <p>Exactly right as protocol, and the uniform empty body is a deliberate anti-enumeration choice I would defend.
+  For a person who pastes the URL into a browser, it is a blank page.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">B6</span><span class="t">The passkey ceremony</span><span class="v v-confusing">Confusing</span></div>
+  <p>It works, and it is fast — <strong>147 ms</strong> from challenge to minted token, driven headlessly with a
+  software authenticator. But there is no UI anywhere: no passkey prompt, no Touch ID sheet, no enrolment screen.
+  A real buyer cannot start it. <em>Insider knowledge did the work here — I had already written the ceremony driver.</em></p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">B7</span><span class="t">The 402 — what am I buying?</span><span class="v v-confusing">Confusing</span></div>
+  <div class="artifact">Artifact — verbatim, the whole thing a buyer receives</div>
+  <pre><code>{ "terms": {
+    "amount": "2.50",
+    "asset":  "USDC",
+    "chain":  "base",
+    "payTo":  "0xfacade0000000000000000000000000000000000",
+    "nonce":  "IgORsUXynJ0UEyTKEOoiFE9J5DU14pv_D0lFu9G-gbY",
+    "expiry": 1787493905811
+} }</code></pre>
+  <p>The values are complete and correct — price, asset and chain are all named separately, which matters, because a
+  transfer to the right address on the wrong chain is money gone with a successful receipt. Three gaps for a human:</p>
+  <ul>
+    <li><strong><code>expiry</code> is a raw epoch integer.</strong> <code>1787493905811</code> is unreadable. Nothing
+    on the wire says "you have 15 minutes".</li>
+    <li><strong>Nothing says what the payment buys.</strong> It actually buys v1 <em>and every later version</em> — a
+    genuinely good deal that the buyer is never told.</li>
+    <li><strong>Nothing says what happens after.</strong> That you will not be asked again is the strongest thing
+    about this design and it is invisible.</li>
+  </ul>
+  <p>By spec this is intentional: bodies carry machine values and the <em>sheet</em> renders sentences. The sheet does
+  not exist, so today the raw JSON <em>is</em> the user experience.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">B8</span><span class="t">The 403 — what do I do about it?</span><span class="v v-confusing">Confusing</span></div>
+  <div class="artifact">Artifact — verbatim</div>
+  <pre><code>HTTP/1.1 403 Forbidden
+{"reason":"scope"}          ← no remedy URL, no retry-after (both correct by spec)</code></pre>
+  <p>Protocol-correct: <code>scope</code> is the one denial a client resolves itself by re-running the ceremony, so a
+  remedy link would be wrong. But the word means nothing to a person, and nothing tells them re-authenticating is the
+  fix. The machine knows what to do; the human does not.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">B9</span><span class="t">Paying</span><span class="v v-wall">Wall</span></div>
+  <p>There is no wallet sheet. To pay, I base64url-encoded a JSON object by hand and set a header.</p>
+  <div class="artifact">Artifact — what a buyer must construct</div>
+  <pre><code>X-Payment: eyJub25jZSI6InIyNTYtdk9BeWZaZ1AtQnBiZFZVcTJNdm1zazFCbHlmVmhf...
+decodes to: {"nonce":"r256-vOAyfZgP-BpbdVUq2Mvmsk1BlyfVh_8pQtJL5c","tx":"tx-dev-ok"}</code></pre>
+  <p>Expected — the wallet is not built. Recording it as the buyer meets it: the money step is currently a
+  developer-console exercise.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">B10</span><span class="t">After paying</span><span class="v v-clear">Clear</span></div>
+  <p><strong>This is the part that feels finished.</strong> The payment returns the signed manifest, and the next
+  fetch with <em>no payment header at all</em> returns 200. The receipt holds. A buyer is not asked to sign again.</p>
+  <pre><code>pay      → 200  (signed manifest, author key, blob hashes)
+re-fetch → 200  (no X-Payment sent — the purchase is remembered)</code></pre>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">B11</span><span class="t">Call the exported agent</span><span class="v v-wall">Wall</span></div>
+  <p>Not possible on the shipping build. The entire call surface is absent from <code>dev</code>:</p>
+  <pre><code>call-endpoints.ts  ABSENT     call-ceremony.ts  ABSENT
+call-route.ts      ABSENT     owner-grant.ts    ABSENT
+call-gate.ts       ABSENT     agent-export.ts   ABSENT
+no call route mounted in any mobile listener</code></pre>
+  <p>Expected — it lives on Atlas's branch. Recorded because the buyer's last step is currently unreachable.</p>
+</div>
+
+<h2>Performance — the owner's "lag persists", quantified</h2>
+<p>Measured against the live app under its real load: <strong>66 canvas nodes, 18 terminals, Electron+node at 226% CPU</strong>.</p>
+
+<h3>The smallest possible call is not fast</h3>
+<p>20 samples of <code>/api/workspaces</code> — an identical <strong>1,184-byte</strong> response every time, so this
+isolates server-side latency from payload and transfer entirely.</p>
+<div class="bars">
+  <div class="bar-row"><span>min</span><div class="bar-track"><div class="bar-fill" style="width:2.8%"></div></div><span class="num">94 ms</span></div>
+  <div class="bar-row"><span>p50</span><div class="bar-track"><div class="bar-fill" style="width:41.8%"></div></div><span class="num">1403 ms</span></div>
+  <div class="bar-row"><span>p95</span><div class="bar-track"><div class="bar-fill" style="width:100%"></div></div><span class="num">3357 ms</span></div>
+</div>
+<p><strong>A 36× spread on a response that never changes size.</strong> That is not payload and not the network — it
+is contention on the main thread. This is the owner's reported lag, and it is measurable on the cheapest call in the
+product.</p>
+
+<h3>Other numbers</h3>
+<table>
+  <thead><tr><th>Interaction</th><th>Measured</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr><td><code>/api/state</code> (the canvas load)</td><td class="num">1.5 – 3.6 s</td><td><strong>506 KB</strong> for 66 nodes, fetched as one blob</td></tr>
+    <tr><td>Remote surface, first paint (unpaired)</td><td class="num">6.2 s</td><td>ends at a modal, not the canvas</td></tr>
+    <tr><td>Remote surface, first paint (paired)</td><td class="num">27.1 s</td><td>to a usable canvas</td></tr>
+    <tr><td>Passkey ceremony</td><td class="num">147 ms</td><td>the fastest thing measured all day</td></tr>
+    <tr><td>Registry gate (401 / 402 / 403)</td><td class="num">&lt; 20 ms</td><td>the protocol layer is not the problem</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <strong>The remote surface serves a stale bundle.</strong> A banner reads
+  <em>"Built bundle is 4 days behind the source — run npm run build to refresh this view."</em>
+  I caught this before drawing renderer conclusions, but it is worth saying twice: anyone QA-ing the remote surface is
+  looking at 4-day-old code, and the banner is the only thing that says so.
+</div>
+
+<h2>Two walls I hit that are not on anyone's roadmap</h2>
+<div class="step">
+  <div class="step-h"><span class="t">The remote surface greets you with "Not paired"</span><span class="v v-confusing">Confusing</span></div>
+  <p>Every pointer event is swallowed by a modal until you pair. The copy is good and the instruction is
+  <em>accurate</em> — I ran <code>cookrew mobile</code>, got a token, and it worked first try. Two notes: it says
+  "not paired <em>any more</em>", so a device silently loses pairing at some point and nothing says when or why; and
+  recovery is pasting a token by hand.</p>
+</div>
+<div class="step">
+  <div class="step-h"><span class="t">The canvas renders the spec that defines the product</span><span class="v v-confusing">Confusing</span></div>
+  <p>Not a defect, but it makes the product nearly un-auditable from the outside: any search for a feature name finds
+  the design document describing it. It also means a newcomer opening this canvas sees a dozen browser cards titled
+  "Presets Marketplace — …" and would reasonably conclude the marketplace ships today.</p>
+</div>
+
+<h2>Top 5 — what would make a real person give up</h2>
+<ol class="rank">
+  <li><strong>The author journey has no entry point at all.</strong> Zero of 40 product controls mention publishing;
+  there is no publish IPC, no registry client. The entire seller side is an HTTP API reachable only by writing
+  cryptographic code. An author cannot begin, and nothing tells them that — they just hunt and stop.
+  <em>Everything downstream is blocked on this: with no author there is nothing to buy.</em></li>
+
+  <li><strong>The shared link's only instruction cannot work.</strong> "Open this link in Cookrew to place it" —
+  but <code>COOKREW_REGISTRY_HOST</code> is empty by default, so a default install recognises no install links.
+  The best-written page in the product ends in a dead click.</li>
+
+  <li><strong>The app is slow at rest: p50 1.4 s, p95 3.4 s on a 1.2 KB call.</strong> This is felt in every single
+  interaction, so it taxes every other fix on this list. The canvas load is a 506 KB single blob on top of it.</li>
+
+  <li><strong>A paid preset never says it is paid.</strong> The link shows no price; the buyer discovers the cost
+  after installing an app and creating a passkey, as a raw JSON body. That is the worst possible moment and the
+  worst possible format to learn a thing costs money.</li>
+
+  <li><strong>Every human decision point is raw JSON.</strong> A <code>{}</code> at 401, an epoch integer at 402,
+  the bare word <code>scope</code> at 403, and a hand-built header to pay. The protocol underneath is correct and
+  well-argued — but the sheets that were always meant to turn it into sentences do not exist, so the machine layer
+  is currently the user interface.</li>
+</ol>
+
+<h2>What is genuinely good, and should not be lost</h2>
+<ul>
+  <li><strong>The install page's trust copy.</strong> "Opening a link installs nothing. Cookrew checks the preset
+  itself and shows you what it contains, and you decide."</li>
+  <li><strong>The receipt.</strong> Paying once and never being asked again works, survives a restart, and is the
+  single most convincing thing in the money story.</li>
+  <li><strong>Chain named separately from amount.</strong> Right address, wrong chain is money gone with a successful
+  receipt; the terms make that impossible to get wrong.</li>
+  <li><strong>The pairing instruction.</strong> It told me exactly what to run, and it worked first time.</li>
+  <li><strong>The protocol layer's speed.</strong> Sub-20 ms gate decisions, 147 ms passkey ceremony.</li>
+</ul>
+
+<footer>
+  <p><strong>Method.</strong> Live app on <code>:8643</code> driven by real input through external CDP Chrome on
+  <code>:9245</code>; registry built from merged <code>dev</code> (<code>5cdb670</code>, M2 included) on
+  <code>:8850</code> with a priced preset published through the real publish route. No canvas browser was pointed at
+  the app. Latency is 20 samples under the fleet's real load, reported as percentiles, never a mean.</p>
+  <p><strong>Honesty notes.</strong> Two readings in this audit were wrong before they were right — a renderer grep
+  that missed an aliased call, and a "no price anywhere" claim that needed a second look because the preset was named
+  "Priced Toolkit". Both are written into the steps rather than silently fixed. Expected walls (grant UI mid-build,
+  no wallet sheet, localhost registry) are recorded as a user meets them, not excused.</p>
+  <p>Magpie · QA lane · 2026-08-23 · <code>docs/design/user-journey-audit.html</code> on <code>docs/user-journey-audit</code></p>
+</footer>
+</main>
+</body>
+</html>
