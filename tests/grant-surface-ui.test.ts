@@ -21,6 +21,7 @@ import {
   pasteMessage
 } from '../src/renderer/src/grant-copy'
 import { exportStateOf } from '../src/renderer/src/grant-state'
+import { MKT_EXPORT } from '../src/shared/marketplace-copy'
 import { canGrant } from '../src/renderer/src/GrantPanel'
 import { stripComments } from './support/module-imports'
 
@@ -305,6 +306,26 @@ describe('§7 · which empty state a first-time owner is shown, and in what orde
 })
 
 describe('the export entry point — Magpie give-up reason 1, first inch', () => {
+  it('the surface READS Velvet\'s string rather than carrying a copy of it', () => {
+    // The duplicate this replaced was character-identical, which is precisely
+    // why it had to go: a copy that agrees today drifts the first time she
+    // edits hers, and nothing fails when it does.
+    expect(EXPORT_COPY.safety).toBe(MKT_EXPORT['mkt.export.safety'])
+    expect(EXPORT_COPY.atRest(0, true)).toBe(MKT_EXPORT['mkt.export.access.none'])
+    expect(EXPORT_COPY.atRest(2, true)).toBe(
+      MKT_EXPORT['mkt.export.access.some'].replace('{n}', '2')
+    )
+  })
+
+  it('and does not ship "1 callers" — the one flagged deviation from her file', () => {
+    // Her 'mkt.export.access.some' is '{n} callers', always plural, and she has
+    // no singular key. That is a gap rather than a decision, so the singular is
+    // produced here and reported to her; the plural still comes from her string
+    // so her edits keep reaching this surface.
+    expect(MKT_EXPORT['mkt.export.access.some'].replace('{n}', '1')).toBe('1 callers')
+    expect(EXPORT_COPY.atRest(1, true)).toBe('1 caller')
+  })
+
   it('VELVET\'S SENTENCE 6 IS ON THE SURFACE, verbatim', () => {
     // Her audit's most important line. Exporting is safe by construction and
     // version-pin.ts opens with exactly this — as a CODE COMMENT that has never

@@ -1,4 +1,5 @@
 import type { CallerKeyRefusal } from '../../shared/caller-key'
+import { MKT_EXPORT } from '../../shared/marketplace-copy'
 
 /**
  * Velvet's copy, verbatim (deck §4 and §7), with her ids.
@@ -165,22 +166,44 @@ export const UNDO_WINDOW_MS = 10_000
  * trust us enough to open.
  */
 export const EXPORT_COPY = {
-  /** Sentence 6 — the most important line in her audit. Her words, unedited. */
-  safety:
-    'Callers get a copy. Your original conversation is never touched, never sent, ' +
-    'and never resumed by anyone else.',
+  /**
+   * Sentence 6 — READ FROM VELVET'S FILE, not transcribed beside it.
+   *
+   * This was a hand-copy until her marketplace-copy.ts landed with the keyed
+   * originals. The two were character-identical, which is exactly why the
+   * duplicate had to go: a copy that agrees today is a copy that drifts the
+   * first time she edits hers, and nothing would fail when it did. One source,
+   * one diff away from the person who wrote it — the rule this file's own
+   * header states, applied to itself.
+   */
+  safety: MKT_EXPORT['mkt.export.safety'],
 
   /**
-   * Access, legible AT REST (her §6 again): "{n} callers" or "Nobody can call
-   * this", on the row itself and not inside a panel — because the question is
-   * asked in a glance and an answer that costs a click is an answer nobody has.
+   * Access, legible AT REST (her §6 again), in her words and her keys.
+   *
+   * 'Not exportable' is MINE and stays local: her pair answers "who can call
+   * this" for an agent that IS exportable, and there is no key for the state
+   * before that decision because her audit predates this control existing.
+   * Flagged for her, rather than filed under a key of hers that does not exist.
    */
   atRest: (callers: number, exportable: boolean): string =>
     !exportable
       ? 'Not exportable'
       : callers === 0
-        ? 'Nobody can call this'
-        : `${callers} caller${callers === 1 ? '' : 's'}`,
+        ? MKT_EXPORT['mkt.export.access.none']
+        : // ONE DEVIATION FROM HER FILE, DELIBERATE AND FLAGGED.
+          // 'mkt.export.access.some' is '{n} callers' — always plural — so a
+          // single caller reads "1 callers". Her file has no singular key,
+          // which is a gap rather than a decision: this line is read at rest
+          // by an author glancing at a row, and "1 callers" is exactly the
+          // unpolish a first-time reader notices and we do not.
+          //
+          // Reported to her rather than silently rewritten. Until she adds a
+          // key, the singular is produced HERE and the plural still comes from
+          // her string, so her edit continues to reach this surface.
+          callers === 1
+          ? '1 caller'
+          : fill(MKT_EXPORT['mkt.export.access.some'], { n: callers }),
 
   /** The control itself. An invitation when off, a fact when on. */
   turnOn: 'Let people call this agent',
