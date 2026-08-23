@@ -373,6 +373,10 @@ export const MKT_EXPORT = {
   'mkt.export.pin':
     'A copy was cut here. This is what callers get; your live session carries on above it.',
   'mkt.export.access.none': 'Nobody can call this',
+  /** Singular has its own key. My own §7 rule bans "(s)" and mandates "1 agent /
+   *  4 agents"; shipping only the plural made one caller read "1 callers" and
+   *  forced every call site to branch locally. Use accessLabel(). */
+  'mkt.export.access.one': '1 caller',
   'mkt.export.access.some': '{n} callers',
   /** R23 bounds this claim: hash-chained, unwitnessed. Say exactly that. */
   'mkt.export.log':
@@ -385,28 +389,6 @@ export type MktInstallPriceId = keyof typeof MKT_INSTALL_PRICE
 export type MktDeniedReasonId = keyof typeof MKT_DENIED_REASONS
 export type MktBlockedId = keyof typeof MKT_BLOCKED
 export type MktExportId = keyof typeof MKT_EXPORT
-
-/** Every group, so a renderer can resolve any id without knowing its family. */
-export const MKT_ALL = {
-  ...MKT_ROTATION,
-  ...MKT_DENIED,
-  ...MKT_AUTH,
-  ...MKT_PAY,
-  ...MKT_INSTALL_PRICE,
-  ...MKT_DENIED_REASONS,
-  ...MKT_BLOCKED,
-  ...MKT_EXPORT
-} as const
-
-export type MktId = keyof typeof MKT_ALL
-
-/** Resolve any id and fill it. Throws on an unknown id, like fillCopy does on
- *  an unfilled placeholder: both are programming mistakes, not user states. */
-export function copy(id: MktId, vars: Readonly<Record<string, string | number>> = {}): string {
-  const template = MKT_ALL[id]
-  if (template === undefined) throw new Error(`marketplace copy: unknown id ${id}`)
-  return fillCopy(template, vars)
-}
 
 /** Pricing as a buyer reads it, for the buy sheet and the install page alike. */
 export interface PriceLike {
@@ -467,4 +449,183 @@ export function blockedCopy(
   const at = (suffix: string): string =>
     fillCopy(MKT_BLOCKED[`mkt.review.blocked.${reason}.${suffix}` as MktBlockedId], vars)
   return { title: at('title'), body: at('body'), action: at('action') }
+}
+
+/**
+ * ── THE REMOTE TEAMMATE CARD (Door B) ────────────────────────────────────────
+ *
+ * A normal terminal card whose binding is a gated remote ask. The design is
+ * right and the risk is the same fact: a remote teammate inherits every
+ * affordance of a local one, and four of them mean something untrue.
+ *
+ * Answering the Commander's four questions. Where I differ from the fallbacks,
+ * the reason is in the comment — the differences are small in words and load-
+ * bearing in what they disclose.
+ */
+
+/**
+ * Q1 — the rail, where a local card shows checkpoints.
+ *
+ * The CONTROLS ARE ABSENT, not present-and-refusing: the grant deck's rule
+ * holds, a disabled row invites a fight with the wrong control. But absence
+ * explains nothing, so the rail is not empty either — it carries the reason the
+ * expected thing is missing, and says what the user DOES have. Naming the
+ * mechanism ("runs on its owner's machine") is what stops this reading as a
+ * missing feature.
+ */
+export const MKT_REMOTE_RAIL = {
+  'mkt.remote.rail.title': 'No checkpoints here',
+  'mkt.remote.rail.body':
+    "{agent} runs on its owner's machine and keeps its history there. This card holds your calls and the replies you got — nothing before them, and nothing to rewind."
+} as const
+
+/**
+ * Q2 — access withdrawn mid-turn.
+ *
+ * NAMING THE OWNER: no. Three reasons, and the third is the one that decided
+ * it. The caller was enrolled by the owner, so in the legitimate case they
+ * already know who that is and the name adds nothing. In the illegitimate case
+ * — a key enrolled by mistake, or a caller who should never have had access —
+ * the name is disclosed to precisely the person access was just taken from, and
+ * a revocation is often adversarial. And the grant deck's asymmetry says
+ * information flows toward LESS exposure on the way out.
+ *
+ * But "you cannot call this" with no recourse is a dead end, so the copy keeps
+ * the channel without the identity: whoever gave you access is a relationship
+ * the caller already has, and naming the relationship costs nothing.
+ */
+export const MKT_REMOTE_REVOKED = {
+  /**
+   * In flight. This one may be specific: the caller demonstrably had access a
+   * second ago, so nothing is disclosed they did not already know. The last
+   * clause exists because a card that stops mid-answer reads as a card that
+   * lost everything.
+   */
+  'mkt.remote.revoked.inflight':
+    "Your access to {agent} was withdrawn while it was answering. That reply was stopped and won't arrive. Everything above is still here.",
+  /**
+   * Next attempt. DELIBERATELY IDENTICAL to the generic refusal below — see the
+   * note on mkt.remote.refused.cannot. A distinct "you can no longer" line
+   * would tell a prober that this agent exists, which is the disclosure Q3's
+   * 404 rule exists to prevent.
+   */
+  'mkt.remote.revoked.recourse': 'If you think that is a mistake, ask whoever gave you access.'
+} as const
+
+/**
+ * Q3 — five wire answers, FOUR buckets.
+ *
+ * Not the Commander's three, and the difference matters in both directions.
+ *
+ * SPLIT OUT: 401 is retryable but NOT by pressing the same button — it needs a
+ * ceremony first. Folded into "busy, try again" it makes the user hammer a
+ * control that cannot work; folded into "you cannot" it hides a door that is
+ * open. It is its own bucket.
+ *
+ * ADDED: transport failure is not in the five, but the card will meet it more
+ * often than some of them, and "unreachable" is emphatically not "refused" —
+ * one is our problem and the other is a decision about the caller.
+ *
+ * MERGED, ON PURPOSE: 403 scope, 403 entitlement/revoked and 404 all render
+ * mkt.remote.refused.cannot, WORD FOR WORD. This is the mechanism that makes an
+ * unexported agent and a nonexistent one indistinguishable — not careful
+ * wording, but a shared string. Vagueness achieved by bucketing survives a
+ * refactor; vagueness achieved by two similar sentences does not.
+ */
+export const MKT_REMOTE_REFUSED = {
+  /** 409 busy / not_ready / not_running — retry now, and it may just work. */
+  'mkt.remote.refused.busy': '{agent} is busy right now. Try again in a moment.',
+  /** 401 — retryable, but only after the ceremony. */
+  'mkt.remote.refused.identity': "Prove it's you before calling {agent} — one passkey gesture.",
+  'mkt.remote.refused.identity.action': 'USE PASSKEY',
+  /**
+   * 403 scope · 403 entitlement · 403 revoked · 404. ONE STRING FOR ALL FOUR.
+   * It names no cause because every cause it could name is a disclosure.
+   */
+  'mkt.remote.refused.cannot': 'You cannot call {agent}.',
+  /** Not a refusal at all. Ours to fix, and it must not read like a decision. */
+  'mkt.remote.refused.unreachable': "Couldn't reach {agent}. Your access is fine — the connection isn't."
+} as const
+
+/**
+ * Q4 — the cold fork, up to DEFAULT_READY_TIMEOUT_MS before a first byte.
+ *
+ * YES, say it is one-time: it is true, and it converts a bad first impression
+ * into an explained one. The wait is not the problem; an unexplained wait is.
+ *
+ * The line CHANGES ONCE, and the second stage repeats the one-time fact rather
+ * than adding urgency — fifteen seconds in is the moment of maximum doubt, and
+ * it is exactly when the reassurance is worth spending again. No countdown: a
+ * timer counting toward a failure we are not certain of manufactures dread, and
+ * we do not know the real duration, only the ceiling.
+ */
+export const MKT_REMOTE_WAKING = {
+  'mkt.remote.waking.first':
+    "Waking {agent} up. The first call to a sleeping agent takes up to half a minute — after that it's quick.",
+  'mkt.remote.waking.still': 'Still waking up. This is the slow part, and it only happens once.',
+  'mkt.remote.waking.timeout': "{agent} didn't wake up in time. Try again."
+} as const
+
+export type MktRemoteRailId = keyof typeof MKT_REMOTE_RAIL
+export type MktRemoteRevokedId = keyof typeof MKT_REMOTE_REVOKED
+export type MktRemoteRefusedId = keyof typeof MKT_REMOTE_REFUSED
+export type MktRemoteWakingId = keyof typeof MKT_REMOTE_WAKING
+
+/** Which of the four buckets a wire answer falls in. The merge IS the privacy. */
+export type RemoteRefusal = 'busy' | 'identity' | 'cannot' | 'unreachable'
+
+export function remoteRefusalBucket(status: number, reason?: string): RemoteRefusal {
+  if (status === 409) return 'busy'
+  if (status === 401) return 'identity'
+  if (status === 403 || status === 404) return 'cannot'
+  // 5xx, network, timeout — anything that is not the gate answering.
+  return 'unreachable'
+}
+
+/** The sentence for a refusal. `reason` is accepted and deliberately unused for
+ *  the cannot bucket: a call site that passes it must still get one string. */
+export function remoteRefusalCopy(
+  status: number,
+  agent: string,
+  reason?: string
+): { text: string; retryable: boolean } {
+  const bucket = remoteRefusalBucket(status, reason)
+  const text = fillCopy(
+    MKT_REMOTE_REFUSED[`mkt.remote.refused.${bucket}` as MktRemoteRefusedId],
+    { agent }
+  )
+  return { text, retryable: bucket === 'busy' || bucket === 'identity' }
+}
+
+/** Callers, counted without "(s)". */
+export function accessLabel(n: number): string {
+  if (n <= 0) return MKT_EXPORT['mkt.export.access.none']
+  if (n === 1) return MKT_EXPORT['mkt.export.access.one']
+  return fillCopy(MKT_EXPORT['mkt.export.access.some'], { n })
+}
+
+/** Every group, so a renderer can resolve any id without knowing its family. */
+export const MKT_ALL = {
+  ...MKT_ROTATION,
+  ...MKT_DENIED,
+  ...MKT_AUTH,
+  ...MKT_PAY,
+  ...MKT_INSTALL_PRICE,
+  ...MKT_DENIED_REASONS,
+  ...MKT_BLOCKED,
+  ...MKT_EXPORT,
+  ...MKT_REMOTE_RAIL,
+  ...MKT_REMOTE_REVOKED,
+  ...MKT_REMOTE_REFUSED,
+  ...MKT_REMOTE_WAKING
+} as const
+
+export type MktId = keyof typeof MKT_ALL
+
+/** Resolve any id and fill it. Throws on an unknown id, like fillCopy does on
+ *  an unfilled placeholder: both are programming mistakes, not user states. */
+export function copy(id: MktId, vars: Readonly<Record<string, string | number>> = {}): string {
+  const template = MKT_ALL[id]
+  if (template === undefined) throw new Error(`marketplace copy: unknown id ${id}`)
+  return fillCopy(template, vars)
 }
