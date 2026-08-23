@@ -116,3 +116,61 @@ describe('checkPayoutAddress — accepts only what it can VERIFY', () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// Tinker's M1/L1/L2/L3.
+// ---------------------------------------------------------------------------
+
+describe('the address that can never carry a checksum (M1)', () => {
+  // Found by search, not argument: ~1 in 3,704 valid addresses has a canonical
+  // EIP-55 form that is entirely lowercase, because every letter lands on a
+  // hash nibble under 8. Refusing it is right; suggesting the string just
+  // refused is a product bug the author cannot escape.
+  const UNCHECKABLE = '0x0a7384019ee13ed132e70549512345383e6e9e01'
+
+  it('is genuinely one of them — its checksum form is its input', () => {
+    expect(toChecksumAddress(UNCHECKABLE)).toBe(UNCHECKABLE)
+  })
+
+  it('is refused as uncheckable, not as a case mistake', () => {
+    const result = checkPayoutAddress(UNCHECKABLE)
+    expect(result.ok).toBe(false)
+    expect(result.ok === false && result.reason).toBe('uncheckable-address')
+  })
+
+  it('offers NO suggestion, because handing back the input reads as a bug', () => {
+    const result = checkPayoutAddress(UNCHECKABLE)
+    expect(result.ok === false && result.suggestion).toBeUndefined()
+  })
+
+  it('says plainly that no assurance is available here', () => {
+    const result = checkPayoutAddress(UNCHECKABLE)
+    expect(result.ok === false && result.message).toMatch(/cannot (confirm|carry)/i)
+    expect(result.ok === false && result.message).toMatch(/wallet/i)
+  })
+})
+
+describe('the low findings', () => {
+  it('L3: an uppercase 0X prefix is a paste artefact, not malformed', () => {
+    const upper0X = `0X${OFFICIAL[0].slice(2)}`
+    const result = checkPayoutAddress(upper0X)
+    expect(result.ok).toBe(true)
+    // Normalised to a lowercase 0x on the way out, so nothing downstream —
+    // manifest, terms, receipt — ever differs over a prefix nobody checksums.
+    expect(result.ok === true && result.address).toBe(OFFICIAL[0])
+  })
+
+  it('L1: toChecksumAddress REJECTS an unprefixed address instead of slicing it', () => {
+    // The old slice(2) dropped two hex digits and returned a well-formed,
+    // wrong, 38-digit address — from an exported helper, next to money.
+    expect(() => toChecksumAddress(OFFICIAL[0].slice(2))).toThrow(/0x-prefixed/)
+    expect(() => toChecksumAddress('nonsense')).toThrow()
+  })
+
+  it('L2: burn-address is scoped to the zero address, and says so', () => {
+    // 0x…dEaD and friends are conventions, not protocol. A guessed blocklist
+    // that misses one is worse than a named limit.
+    const dead = toChecksumAddress(`0x${'0'.repeat(36)}dead`)
+    expect(checkPayoutAddress(dead).ok).toBe(true)
+  })
+})

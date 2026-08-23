@@ -28,9 +28,14 @@
 
 import { keccak256Hex } from './keccak'
 
-const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
-const ALL_LOWER_RE = /^0x[0-9a-f]{40}$/
-const ALL_UPPER_RE = /^0x[0-9A-F]{40}$/
+// The `0x` prefix is matched case-insensitively (L3): an uppercase `0X` is a
+// paste artefact, not a malformed address, and telling someone looking at 40
+// valid hex characters that their address is malformed reads as our bug.
+// Everything AFTER the prefix is case-SENSITIVE, because that case is the
+// checksum.
+const ADDRESS_RE = /^0[xX][0-9a-fA-F]{40}$/
+const ALL_LOWER_RE = /^[0-9a-f]{40}$/
+const ALL_UPPER_RE = /^[0-9A-F]{40}$/
 
 /** Why an address was refused. Each one implies a different fix. */
 export type PayoutRefusal =
@@ -45,6 +50,13 @@ export type PayoutRefusal =
   | 'checksum-mismatch'
   /** Well-formed, correctly checksummed, and a hole money never comes out of. */
   | 'burn-address'
+  /**
+   * Well-formed, and its canonical EIP-55 form carries no uppercase at all, so
+   * no checksum exists for it in either direction (~1 in 3,700). Distinct from
+   * `unverifiable-case` because there is no fix to suggest — the author's own
+   * eyes are the only check available.
+   */
+  | 'uncheckable-address'
 
 export type PayoutCheck =
   | { ok: true; address: string }
@@ -62,9 +74,19 @@ export type PayoutCheck =
       suggestion?: string
     }
 
-/** The EIP-55 mixed-case form of an address. Input case is ignored. */
+/**
+ * The EIP-55 mixed-case form of an address. Input case is ignored.
+ *
+ * REJECTS rather than slices (L1): this is exported, and given a bare 40-char
+ * hex the old `slice(2)` silently dropped two digits and returned a
+ * well-formed, wrong, 38-digit address. For a helper this close to money, a
+ * throw beats a plausible answer.
+ */
 export function toChecksumAddress(address: string): string {
-  const hex = address.slice(2).toLowerCase()
+  if (!ADDRESS_RE.test(address.trim())) {
+    throw new Error('toChecksumAddress needs a 0x-prefixed 40-character hex address')
+  }
+  const hex = address.trim().slice(2).toLowerCase()
   const hash = keccak256Hex(new TextEncoder().encode(hex))
   let out = '0x'
   for (let i = 0; i < hex.length; i += 1) {
@@ -101,7 +123,11 @@ export function checkPayoutAddress(address: string): PayoutCheck {
   // would otherwise be refused as `unverifiable-case` — a true statement that
   // buries the one that matters. It is also exactly what an empty
   // configuration field looks like after a well-meaning normalisation.
-  if (/^0x0{40}$/i.test(candidate)) {
+  // SCOPED DELIBERATELY to the zero address (L2). Other commonly-pasted holes
+  // (0x…dEaD and friends) pass as ordinary addresses: they are conventions,
+  // not protocol, and a guessed blocklist that misses one is worse than a
+  // named limit. The reason code reads general — this is where it is not.
+  if (/^0[xX]0{40}$/.test(candidate)) {
     return {
       ok: false,
       reason: 'burn-address',
@@ -112,10 +138,33 @@ export function checkPayoutAddress(address: string): PayoutCheck {
     }
   }
 
-  if (ALL_LOWER_RE.test(candidate) || ALL_UPPER_RE.test(candidate)) {
+  const body = candidate.slice(2)
+  if (ALL_LOWER_RE.test(body) || ALL_UPPER_RE.test(body)) {
     // Refused, not accepted-with-a-warning. The checksum lives in the case, so
     // there is nothing here to check — and this address will be paid to
     // without anyone looking at it again.
+    const checksummed = toChecksumAddress(candidate)
+    if (checksummed === candidate) {
+      // M1 — measured at ~1 in 3,700 addresses: the canonical EIP-55 form of
+      // this address IS all-lowercase, because every letter in it happens to
+      // land on a hash nibble under 8. The refusal is still right — there is
+      // genuinely no case information to check — but the suggestion would be
+      // the string just rejected, which reads as a product bug and leaves the
+      // author with no form of their address that passes.
+      //
+      // So say the true thing instead of handing back their input: this
+      // address cannot carry a checksum at all, and the only assurance
+      // available is their own eyes against their wallet.
+      return {
+        ok: false,
+        reason: 'uncheckable-address',
+        message:
+          'This address cannot carry an EIP-55 checksum: its canonical form has no uppercase ' +
+          'letters, so there is nothing for us to verify against — about 1 address in 3,700 is ' +
+          'like this, and yours is one. We cannot confirm it, and we will not pretend to. ' +
+          'Compare it character by character against your wallet before continuing.'
+      }
+    }
     return {
       ok: false,
       reason: 'unverifiable-case',
@@ -123,11 +172,15 @@ export function checkPayoutAddress(address: string): PayoutCheck {
         'This address is all one case, so it carries no checksum and cannot be verified. ' +
         'A single mistyped character would send your earnings somewhere unrecoverable. ' +
         'Paste the mixed-case form your wallet displays (suggested below), and check it against your wallet.',
-      suggestion: toChecksumAddress(candidate)
+      suggestion: checksummed
     }
   }
 
-  if (toChecksumAddress(candidate) !== candidate) {
+  // Compared on the BODY, not the whole string: the prefix carries no checksum
+  // information, and toChecksumAddress always emits a lowercase `0x`, so a
+  // whole-string compare reported every `0X…` paste as a checksum mismatch —
+  // the most alarming possible message for a correct address.
+  if (toChecksumAddress(candidate).slice(2) !== body) {
     return {
       ok: false,
       reason: 'checksum-mismatch',
@@ -138,5 +191,7 @@ export function checkPayoutAddress(address: string): PayoutCheck {
     }
   }
 
-  return { ok: true, address: candidate }
+  // Returned with a canonical lowercase `0x`, so downstream comparisons (the
+  // manifest, the terms, a receipt) never differ over a prefix nobody checksums.
+  return { ok: true, address: `0x${body}` }
 }

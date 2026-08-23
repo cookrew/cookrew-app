@@ -48,14 +48,37 @@ export type HostSource =
 export interface HostResolution {
   hosts: string[]
   source: HostSource
+  /**
+   * Entries an owner configured that are not hostnames. Surfaced rather than
+   * dropped: being told to configure a host you already configured is the dead
+   * end wearing a different coat.
+   */
+  rejected: string[]
 }
 
-/** Split a comma list into hostnames, dropping anything that is not one. */
-function parseHosts(raw: string): string[] {
-  return raw
-    .split(',')
-    .map((host) => host.trim())
-    .filter((host) => host.length > 0 && HOSTNAME_RE.test(host))
+/**
+ * Split a comma list into hostnames, keeping what was REJECTED.
+ *
+ * M2: dropping malformed entries in silence produces the same dead end this
+ * module exists to remove, arriving through the validation path instead of the
+ * empty one — an owner who sets `https://registry.example.com` is told no host
+ * is configured and to configure one. The likeliest mistake is a scheme, and a
+ * refusal that names the entry costs one string.
+ *
+ * M3: NORMALISED here, so both configuration routes agree. `add()` already
+ * lowercased; the environment path did not, so `Registry.Example.Com` was
+ * stored cased and matched nothing.
+ */
+function parseHosts(raw: string): { hosts: string[]; rejected: string[] } {
+  const hosts: string[] = []
+  const rejected: string[] = []
+  for (const entry of raw.split(',')) {
+    const trimmed = entry.trim()
+    if (trimmed.length === 0) continue
+    if (HOSTNAME_RE.test(trimmed)) hosts.push(trimmed.toLowerCase())
+    else rejected.push(trimmed)
+  }
+  return { hosts, rejected }
 }
 
 /**
@@ -75,18 +98,17 @@ export function resolveRegistryHosts(input: {
   /** app.isPackaged — a shipped build recognises nothing by default. */
   packaged: boolean
 }): HostResolution {
-  const chosen = [
-    ...parseHosts(input.configured),
-    ...parseHosts((input.settings ?? []).join(','))
-  ]
-  const deduped = [...new Set(chosen)]
-  if (deduped.length > 0) return { hosts: deduped, source: 'configured' }
+  const fromEnv = parseHosts(input.configured)
+  const fromSettings = parseHosts((input.settings ?? []).join(','))
+  const rejected = [...fromEnv.rejected, ...fromSettings.rejected]
+  const deduped = [...new Set([...fromEnv.hosts, ...fromSettings.hosts])]
+  if (deduped.length > 0) return { hosts: deduped, source: 'configured', rejected }
 
   // Dev only. A packaged build reaching this line recognises nothing, which is
   // the correct posture and is why the refusal below has to be good.
-  if (!input.packaged) return { hosts: [...LOOPBACK_HOSTS], source: 'loopback-dev' }
+  if (!input.packaged) return { hosts: [...LOOPBACK_HOSTS], source: 'loopback-dev', rejected }
 
-  return { hosts: [], source: 'none' }
+  return { hosts: [], source: 'none', rejected }
 }
 
 /**
@@ -97,8 +119,17 @@ export function resolveRegistryHosts(input: {
  * says where it lives, and gives the reason — because without the reason the
  * refusal reads as a bug and the next person routes around it with a default.
  */
-export function registryHostHelp(): string {
+export function registryHostHelp(rejected: readonly string[] = []): string {
+  // M2: lead with what they DID set. Telling someone to configure a host they
+  // configured is how a refusal reads as a bug.
+  const preamble =
+    rejected.length > 0
+      ? `These entries are not hostnames and were ignored: ${rejected.join(', ')}. ` +
+        `A hostname only — no scheme, no path, no port (registry.example.com, not ` +
+        `https://registry.example.com/).\n\n`
+      : ''
   return (
+    preamble +
     `No registry host is configured, so this app recognises no install links and will not ` +
     `publish. Add the registry's hostname in Settings → Marketplace, or set ` +
     `${REGISTRY_HOST_SETTING} (comma-separated for more than one).\n\n` +
@@ -110,5 +141,9 @@ export function registryHostHelp(): string {
 
 /** Is this host one we recognise? Exact match only — never a suffix. */
 export function recognisesHost(resolution: HostResolution, host: string): boolean {
+  // Both sides lowercased (M3): parseHosts normalises what it stores, and this
+  // normalises what it is asked about. Lowercasing one side only made a cased
+  // env value match nothing — a lockout rather than a bypass, but a lockout in
+  // the exported predicate the next caller inherits.
   return resolution.hosts.includes(host.trim().toLowerCase())
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   REGISTRY_HOST_SETTING,
+  recognisesHost,
   registryHostHelp,
   resolveRegistryHosts
 } from '../src/shared/registry-host'
@@ -106,5 +107,47 @@ describe('never a dead end either', () => {
 
   it('explains WHY it refuses, because the refusal looks like a bug otherwise', () => {
     expect(registryHostHelp()).toMatch(/payout|money|trust|supply/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Tinker's review: M2 (silent drops) and M3 (one-sided lowercasing).
+// ---------------------------------------------------------------------------
+
+describe('a configured entry that is not a hostname is NAMED, not dropped', () => {
+  it('tells the owner which entry was ignored, and why', () => {
+    // The likeliest mistake is a scheme. Being told "no host is configured,
+    // set COOKREW_REGISTRY_HOST" when you just set it is the dead end this
+    // module exists to remove, arriving through validation instead of absence.
+    const result = resolve({ configured: 'https://registry.example.com' })
+    expect(result.hosts).toEqual([])
+    expect(result.rejected).toEqual(['https://registry.example.com'])
+    expect(registryHostHelp(result.rejected)).toContain('https://registry.example.com')
+    expect(registryHostHelp(result.rejected)).toMatch(/no scheme/i)
+  })
+
+  it('keeps the good entries and reports only the bad ones', () => {
+    const result = resolve({ configured: 'good.example.com, http://bad.example.com' })
+    expect(result.hosts).toEqual(['good.example.com'])
+    expect(result.rejected).toEqual(['http://bad.example.com'])
+  })
+
+  it('says nothing extra when everything parsed', () => {
+    expect(registryHostHelp([])).not.toMatch(/ignored/i)
+  })
+})
+
+describe('both configuration routes agree about case', () => {
+  it('lowercases an env host, so a cased value is not a lockout', () => {
+    // add() already normalised; the env path did not, so Registry.Example.Com
+    // was stored cased and matched nothing.
+    expect(resolve({ configured: 'Registry.Example.Com' }).hosts).toEqual(['registry.example.com'])
+  })
+
+  it('recognisesHost matches regardless of the case either side arrived in', () => {
+    const resolution = resolve({ configured: 'Registry.Example.Com' })
+    expect(recognisesHost(resolution, 'REGISTRY.EXAMPLE.COM')).toBe(true)
+    expect(recognisesHost(resolution, 'registry.example.com')).toBe(true)
+    expect(recognisesHost(resolution, 'other.example.com')).toBe(false)
   })
 })

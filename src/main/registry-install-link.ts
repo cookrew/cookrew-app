@@ -79,3 +79,23 @@ export function presetIdFromInstallUrl(
   // become two presets.
   return id.toLowerCase()
 }
+
+/**
+ * Does this URL have the SHAPE of an install link, regardless of whether its
+ * host is one we recognise?
+ *
+ * Used only to decide whether an owner deserves an explanation. It must not be
+ * used to decide anything about trust: shape is what an attacker controls, and
+ * the recognised-host list is the only thing that grants anything. Kept
+ * deliberately narrow — path shape only, never the host — so it cannot drift
+ * into a second, laxer recognition path.
+ */
+export function looksLikeInstallLink(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false
+    return /^\/install\/[^/]+\/?$/.test(parsed.pathname)
+  } catch {
+    return false
+  }
+}

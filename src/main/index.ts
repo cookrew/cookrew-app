@@ -86,7 +86,7 @@ import { installProcessGuards } from './process-guards'
 import { SessionRegistry } from './session-registry'
 import { planWorkspaceSwitch } from './workspace-switch'
 import { SwitchRunner } from './switch-runner'
-import { presetIdFromInstallUrl } from './registry-install-link'
+import { looksLikeInstallLink, presetIdFromInstallUrl } from './registry-install-link'
 import { terminalHasLiveWork } from './session-liveness'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { canonicalExternalUrl } from '../shared/external-url'
@@ -108,6 +108,11 @@ import { createRestoreHandlers, registerRestoreIpc, RestoreHandlers } from './re
 import { withSessionLineage } from './session-lineage'
 import { registryHostHelp, resolveRegistryHosts } from '../shared/registry-host'
 import { RegistryHostSettings } from './registry-settings'
+import { publishPreset, type PayoutBinding, type PublishOutcome } from './publish-preset'
+import { pushToRegistry } from './registry-client'
+import { buildManifest, loadPublishingKey, signManifest } from './preset-publish'
+import { scrubForPublish } from './preset-scrub'
+import type { PresetPricing } from '../shared/preset-manifest'
 import { carrySessionToCwd } from './session-move'
 import { moveTerminalCwd } from './terminal-cwd'
 import { createBrowserCast } from './browser-cast'
@@ -1994,6 +1999,47 @@ function activeBrowserNode(browserId: string): BrowserNodeData | null {
  * nothing — the marketplace is not shipped yet, and an unconfigured registry
  * failing closed is the correct posture until it is.
  */
+/**
+ * Publish a saved team — the one owner action, wired to the real primitives.
+ *
+ * This is the caller Tinker's H1 found missing. `checkPayoutAddress` runs
+ * inside publishPreset, and publishPreset is reached from here, so the payout
+ * verification is in force rather than merely written.
+ *
+ * The transport posts the shape registry/src/publish-routes.ts actually reads
+ * — {manifest, team, teamName} — rather than a shape invented from the commit
+ * message. The registry lives in this tree now, so there is no excuse for a
+ * guessed contract.
+ */
+async function publishSavedTeam(input: {
+  team: string
+  handle: string
+  pricing?: unknown
+  payout?: unknown
+}): Promise<PublishOutcome> {
+  const snapshot = teams.load(input.team)
+  if (!snapshot) {
+    return { ok: false, step: 'scrub', reason: `No saved team called '${input.team}'.` }
+  }
+  const key = loadPublishingKey()
+  return publishPreset(
+    {
+      hosts: registryHosts,
+      hostHelp: () => registryHostHelp(resolveRegistryHosts(registryHostInput()).rejected),
+      scrub: (team) => scrubForPublish(team as TeamSnapshot),
+      manifest: (built) => buildManifest(built as Parameters<typeof buildManifest>[0]),
+      sign: (manifest) => signManifest(manifest, key.privateKey),
+      push: (pushed) => pushToRegistry(pushed)
+    },
+    {
+      snapshot,
+      handle: input.handle,
+      ...(input.pricing !== undefined ? { pricing: input.pricing as PresetPricing } : {}),
+      ...(input.payout !== undefined ? { payout: input.payout as PayoutBinding } : {})
+    }
+  )
+}
+
 /** Installation-wide trust list; not workspace state, so it has its own file. */
 const registryHostSettings = new RegistryHostSettings()
 
@@ -2031,8 +2077,30 @@ const registryHostRefusal = (): string => registryHostHelp()
  * event panel and the phone all see it without a private channel.
  */
 function noteRegistryInstallLink(browserId: string, url: string): void {
-  const presetId = presetIdFromInstallUrl(url, registryHosts())
-  if (presetId === null) return
+  const hosts = registryHosts()
+  const presetId = presetIdFromInstallUrl(url, hosts)
+  if (presetId === null) {
+    // H2: the refusal that makes this NOT a dead end has to reach a human.
+    //
+    // A link that looks like an install link and is not recognised because NO
+    // host is configured is precisely Magpie's give-up #2 — the shared link's
+    // only instruction cannot work. Saying nothing here reproduces it exactly:
+    // the owner sees a page, nothing happens, and there is no way to learn why.
+    //
+    // Only for links SHAPED like install links, and only when the list is
+    // empty. An unrecognised host on a populated list is a deliberate refusal
+    // and announcing it would teach the owner to add whatever host asked.
+    if (hosts.length === 0 && looksLikeInstallLink(url)) {
+      store.recordEventIn(
+        store.ownerOf(browserId) ?? store.focusedId,
+        'preset.install.refused',
+        url,
+        activeBrowserNode(browserId)?.name ?? browserId,
+        registryHostHelp(resolveRegistryHosts(registryHostInput()).rejected)
+      )
+    }
+    return
+  }
   const node = activeBrowserNode(browserId)
   store.recordEventIn(
     store.ownerOf(browserId) ?? store.focusedId,
@@ -2656,6 +2724,39 @@ function registerIpc(handlers: RestoreHandlers): void {
         callsIn: (id) => callsInFlight.listIn(id)
       })
     )
+  )
+
+  // ---- the author journey (Door A), reachable at last -------------------
+  //
+  // H1/H2/H3 of Tinker's review were ONE bug wearing three faces: the payout
+  // check, the host refusal and the settings surface were all written, tested
+  // and called by nothing. A check with no caller is not protection, and a
+  // commit message that says it is will be believed by the next lane. These
+  // handlers are the callers.
+
+  /** The trust list, and the two ways an owner changes it. H3. */
+  ipcMain.handle('registry:hosts', () => ({
+    hosts: registryHosts(),
+    configured: registryHostSettings.list(),
+    source: resolveRegistryHosts(registryHostInput()).source,
+    help: registryHostHelp(resolveRegistryHosts(registryHostInput()).rejected),
+    rejected: resolveRegistryHosts(registryHostInput()).rejected
+  }))
+  ipcMain.handle('registry:host:add', (_e, host: string) => registryHostSettings.add(host))
+  ipcMain.handle('registry:host:remove', (_e, host: string) =>
+    registryHostSettings.remove(host)
+  )
+
+  /**
+   * Publish a saved team. ONE owner action — the thing that did not exist.
+   *
+   * Every refusal comes back named, because the author has to act on it: a
+   * bare failure sends them to the ~140 hand-written lines this replaces.
+   */
+  ipcMain.handle(
+    'publish:preset',
+    async (_e, input: { team: string; handle: string; pricing?: unknown; payout?: unknown }) =>
+      publishSavedTeam(input)
   )
 
   ipcMain.handle('workspace:list', () => store.list())
