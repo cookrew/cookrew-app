@@ -40,6 +40,7 @@ import { ASK_HTTP_STATUS, ASK_REMEDY } from '../shared/ask-outcome'
 import { ensureCert, missingHosts, sansOf } from './cert'
 import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps } from './mobile-api'
 import { readJson, respondJson } from './mobile-http'
+import { handleCallRoutes, type CallEndpointDeps } from './call-endpoints'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
 import { sendBody } from './http-compress'
 import { rendererSourceFor, staleBuildNotice } from './renderer-choice'
@@ -110,6 +111,14 @@ export interface MobileServerDeps {
    * /<slug>/... is not a route and every path keeps its existing meaning.
    */
   multiInstance: () => boolean
+  /**
+   * The internet gate (§9 · ④). ABSENT means no agent in this app is callable
+   * over the internet and the routes do not exist — a 404, not a 501, because
+   * "nothing is exported" is a true statement about this app rather than a
+   * missing implementation. Nothing else in this server consults it, and it
+   * consults nothing else in this server.
+   */
+  calls?: CallEndpointDeps
   /**
    * A phone polled /thumb. Awaited, because with headless browsers this is
    * what TAKES the picture (the desktop renderer no longer owns the page);
@@ -643,6 +652,32 @@ async function handle(
       respondJson(response, 404, { error: 'Not in this workspace' })
       return
     }
+  }
+  /**
+   * THE INTERNET GATE (§9, §11 · ④), mounted per workspace session.
+   *
+   * FIRST, and deliberately ahead of handleMobileApi. Two reasons, and both
+   * would be bugs if this sat below it:
+   *
+   *  1. The pairing gate (C1) is the LAN tier's credential. An internet caller
+   *     holds a call credential and no pairing token, so a call route behind C1
+   *     would demand the very thing §9 exists to replace — "the internet tier
+   *     swaps pairing token → passkey token", not "in addition to".
+   *  2. C1 lets everything through when no pairing token is configured. A route
+   *     below it would inherit that escape. Mounted here, it cannot: the only
+   *     thing that opens this route is a credential this gate verified.
+   *
+   * So the two gates are independent, and this one never asks what the other
+   * decided, never reads the pairing token, and never looks at which listener
+   * the bytes arrived on — the mobile listener binds 0.0.0.0, so the LAN and
+   * the internet are the same socket and a listener tells you nothing.
+   *
+   * `scope === null` is the whole guard for unslugged paths: an exported agent
+   * is addressable because the WORKSPACE is, so a call that named no workspace
+   * has no focused-session reading. It falls through to the 404 at the bottom.
+   */
+  if (deps.calls && scope !== null) {
+    if (await handleCallRoutes(request, response, url, deps.calls, scope)) return
   }
   /** The workspace this request is answering for. */
   const scopedId = scope ?? deps.store.focusedId

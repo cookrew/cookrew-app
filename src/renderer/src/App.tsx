@@ -46,6 +46,7 @@ import { SnapGuides } from './SnapGuides'
 import { EventToastLayer } from './EventToast'
 import { RosterPanel } from './RosterPanel'
 import { MetricsPanel } from './MetricsPanel'
+import { GrantPanel, canGrant } from './GrantPanel'
 import { SelectionBar } from './SelectionBar'
 import { ConfirmClose } from './ConfirmClose'
 import { apiPath } from './api-base'
@@ -136,6 +137,10 @@ function Canvas(): React.JSX.Element {
   const [view, setView] = useState<MainView>('canvas')
   /** Activity metrics / history panel (opened from the workspace popout). */
   const [metricsOpen, setMetricsOpen] = useState(false)
+  // WHO CAN CALL. Owner-desktop only, and ABSENT rather than disabled anywhere
+  // else — a greyed-out list of who is enrolled still discloses who is
+  // enrolled, on the device most likely to be lying on a table.
+  const [grantOpen, setGrantOpen] = useState(false)
   /** Board selection mode — the dock's slid-in clipboard button drives it. */
   const [boardSelecting, setBoardSelecting] = useState(false)
   /**
@@ -1036,6 +1041,15 @@ function Canvas(): React.JSX.Element {
           {/* Inside the stage on purpose: it covers exactly the canvas and
               leaves the header — which owns the way back — reachable above it.
               The canvas keeps running underneath rather than unmounting. */}
+          {view === 'agents' && canGrant() && (
+            <button
+              className="gs-entry"
+              onClick={() => setGrantOpen(true)}
+              title="Who may call your agents over the internet"
+            >
+              🔑 WHO CAN CALL
+            </button>
+          )}
           {view === 'agents' && (
             <RosterPanel
               workspace={workspace}
@@ -1140,6 +1154,13 @@ function Canvas(): React.JSX.Element {
           onPrimaryChange={setZoomedTerminalId}
         />
         {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
+        {grantOpen && activeWsId && (
+          <GrantPanel
+            workspace={workspace}
+            workspaceId={activeWsId}
+            onClose={() => setGrantOpen(false)}
+          />
+        )}
         {/* One confirmation for every close path. Rendered last so it sits over
             the zoomed overlays the ✕ was clicked in. A node that vanished while
             the dialog was open (⌘W elsewhere, a crash) simply has nothing to

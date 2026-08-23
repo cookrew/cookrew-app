@@ -118,11 +118,52 @@ export function forkTerminal(
       })
   const session = deps.ptys.get(added.id)
   if (session) {
-    injectWhenReady(session, firstMessage).catch((error) => {
-      console.error('Fork context injection failed:', error)
-    })
+    trackInjection(
+      added.id,
+      injectWhenReady(session, firstMessage).catch((error) => {
+        console.error('Fork context injection failed:', error)
+      })
+    )
   }
   return added
+}
+
+/**
+ * Injections still in flight, by fork node id.
+ *
+ * WHY THIS IS OBSERVABLE NOW (④ · S4). This function has always returned as
+ * soon as the CARD exists, with the context landing asynchronously afterwards —
+ * fine for the owner, who sees a card fill in. It is not fine for a remote
+ * call, because the preamble a non-native fork receives CONTAINS A PLAIN-TEXT
+ * REPLAY OF THE SOURCE'S TURNS. A caller whose ask started before that landed
+ * would get the replay back in its own reply diff: the owner's transcript,
+ * handed to the internet, by a path nobody wrote down.
+ *
+ * So the promise stops being discarded. Nothing else about the fork changes,
+ * and no existing caller has to wait — this only makes an already-existing
+ * asynchronous fact askable by the one caller that must not race it.
+ */
+const injections = new Map<string, Promise<void>>()
+
+function trackInjection(nodeId: string, promise: Promise<void>): void {
+  injections.set(nodeId, promise)
+  // Settled entries are dropped, so this cannot grow with fork count.
+  void promise.finally(() => {
+    if (injections.get(nodeId) === promise) injections.delete(nodeId)
+  })
+}
+
+/**
+ * Resolves once this fork's context has landed — immediately if it already has.
+ *
+ * An unknown id resolves rather than rejecting: a fork made before this process
+ * started, or one whose injection already settled, is READY, and the caller
+ * asking cannot tell those apart from a fork that never needed one. Callers
+ * that need a bound must impose their own — this promise is as patient as
+ * injectWhenReady's own 25-second boot ceiling.
+ */
+export function forkContextReady(nodeId: string): Promise<void> {
+  return injections.get(nodeId) ?? Promise.resolve()
 }
 
 /**

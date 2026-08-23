@@ -1,6 +1,7 @@
 import type { IncomingMessage } from 'node:http'
+import { decideGate } from '../../src/shared/gate'
 import type { RegistryStore } from './store'
-import type { IdentityService } from './identity'
+import type { IdentityService, TokenClaims } from './identity'
 import type { Verdict } from './server'
 import type { Terms } from './terms'
 import { priceFor, quoteFrom, type QuoteDeps } from './terms'
@@ -10,14 +11,29 @@ import { needsFreshQuote, isRetryable, parsePaymentProof, verifyPayment } from '
 import { balanceOf, entitledTo, type ReceiptStore } from './receipts'
 
 /**
- * THE DECISION FUNCTION (P2-A2) — the only place an answer is chosen.
+ * THE DOWNLOAD BINDING (P2-A2) — the registry's half of the one gate.
  *
  * The order is fixed and each step answers before the next runs:
  *
- *   exists? → public? → identity? → entitlement? → [M2: priced?] → serve
+ *   exists? → public? → identity? → covers? → entitled? → [M2: priced?] → serve
  *
- * M2 inserts 402 between entitlement and serve, reads `X-Payment` when present,
- * and lets the client retry the same idempotent GET. Nothing above it moves.
+ * EVERYTHING ABOVE `priced?` IS THE SHARED DECISION. It moved to
+ * src/shared/gate.ts in S1 of the ④ lane, because the live-call gate (§9) runs
+ * in the owner's app against a different issuer, and "one protocol, two
+ * resources" is only true if there is one implementation. What is left here is
+ * the binding: which store answers "does it exist", which service verifies a
+ * credential, and what this resource requires of a token.
+ *
+ * M2'S 402 SITS EXACTLY WHERE THE SHARED GATE SAYS IT DOES — between
+ * entitlement and serve. decideGate hands back the claims on a 200, which is
+ * precisely "everything above price passed, and here is who is asking"; the
+ * price step then runs here, in the binding that owns money. The shared gate
+ * needed no payment hook to make that true, and it should not grow one: R5
+ * says the live-call binding never takes this branch, so a hook there would be
+ * a branch one of the two bindings must always decline.
+ *
+ * The price step reads `X-Payment` when present and lets the client retry the
+ * same idempotent GET. Nothing above it moves.
  */
 
 function bearer(request: IncomingMessage): string | null {
@@ -46,37 +62,32 @@ export function makeAuthorize(
   pricing?: PricingDeps
 ): (presetId: string, request: IncomingMessage) => Verdict {
   return (presetId, request) => {
-    const visibility = store.visibilityOf(presetId)
-    if (visibility === null) return { code: 404 }
-    // A public preset never sees the gate. Discovery and free download are not
-    // things identity should cost (A2).
-    if (visibility === 'public') return { code: 200 }
-
-    const token = bearer(request)
-    if (token === null) {
-      // No credential offered: ask for one. The challenge rides in the header
-      // the spec names, so a client reads one place for "what next".
-      return { code: 401, challenge: identity.challenge() }
-    }
-
-    const claims = identity.verifyToken(token)
-    if (claims === null) {
-      // Malformed, mis-signed and EXPIRED are one answer on purpose. They are
-      // all "your credential is not currently good", the remedy is identical,
-      // and distinguishing them would tell an attacker which half of a forgery
-      // was wrong.
-      return { code: 401, challenge: identity.challenge() }
-    }
-
-    // D4 / R9: authenticated but the token does not cover this. 403, NEVER 401.
-    // A 401 tells the client its identity is the problem, so it re-authenticates,
-    // presents the same token and loops. 401 means prove who you are; 403 means
-    // you did, and it is still no — a client may retry the first and must never
-    // retry the second.
-    // R26: `scope`, not a stand-in. The reason names what is actually wrong,
-    // and it is the one 403 a client can resolve on its own — so naming it
-    // precisely is what lets the client re-ceremony instead of surfacing.
-    if (claims.scope !== 'download') return { code: 403, reason: 'scope' }
+    // exists? → public? → identity? → covers? → entitled?, once, shared.
+    const verdict = decideGate<TokenClaims>({
+      visibility: store.visibilityOf(presetId),
+      credential: bearer(request),
+      issuer: identity,
+      // D4 / R9: authenticated but the token does not cover this. 403, NEVER
+      // 401 — a 401 tells the client its identity is the problem, so it
+      // re-authenticates, presents the same token and loops.
+      //
+      // R26: `scope`, not a stand-in. The reason names what is actually wrong,
+      // and it is the one 403 a client can resolve on its own — so naming it
+      // precisely is what lets the client re-ceremony instead of surfacing.
+      covers: (claims) => (claims.scope === 'download' ? null : 'scope'),
+      // M1 has no entitlement service: a verified identity is entitled to every
+      // identified preset. M2-A3's real check is OWNERSHIP, and it belongs in
+      // the price step below rather than here — see the note there for why its
+      // position above the price is the feature.
+      entitled: () => null
+    })
+    // Every refusal is the shared one. Only a 200 continues to the price step.
+    if (verdict.code !== 200) return verdict
+    // A public preset never sees the gate, and never sees a price: discovery
+    // and free download are not things identity should cost (A2), and asking
+    // an anonymous caller for money would require knowing who they are.
+    if (verdict.claims === null) return { code: 200 }
+    const claims = verdict.claims
 
     // ENTITLEMENT (M2-A3). M1 had none: a verified identity was entitled to
     // every identified preset. This is the real check, and its position is the

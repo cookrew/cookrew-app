@@ -24,7 +24,7 @@ import {
   turnDetails
 } from './dispatch'
 import { HerdrHostMultiplexer } from './herdr-host-multiplexer'
-import { beginShutdown, cancelAllAsks, pasteAndSubmit } from './ask'
+import { askTerminal, beginShutdown, cancelAllAsks, pasteAndSubmit } from './ask'
 import { defaultProducerLease } from './producer-lease'
 import {
   boardSourcesFrom,
@@ -66,8 +66,20 @@ import {
   WorkspaceMeta
 } from '../shared/model'
 import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
-import { forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
+import { forkContextReady, forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
 import { AgentRegistry } from './agent-registry'
+import { AgentExportStore } from './agent-export'
+import { OwnerGrant, isOwnerSender } from './owner-grant'
+import { buildGrantRoster } from './grant-roster'
+import { CallCredentialService } from './call-credential'
+import { makeCallCeremony } from './call-ceremony'
+import { makeCallGate } from './call-gate'
+import { CallConversationStore } from './call-conversation'
+import { cutCallVersion } from './call-fork'
+import { makeCallSession } from './call-session'
+import { memoizeBriefly } from './call-cache'
+import { CallsInFlight } from './call-inflight'
+import { makeCallRun } from './call-run'
 import { RecoverableStore, planRecovery } from './recoverable'
 import { EventLog } from './event-log'
 import { installProcessGuards } from './process-guards'
@@ -244,6 +256,61 @@ const roles = new RoleStore()
 const teams = new TeamStore()
 const gitCache = new GitInfoCache()
 const agents = new AgentRegistry()
+/**
+ * The internet gate's two stores (§9 · ④). The issuer signs this instance's
+ * call credentials — owner-as-issuer, so nothing here reaches the registry —
+ * and the grant record says who may call what. Both default closed: no agent is
+ * callable until the owner exports it, and no caller holds a credential until
+ * the owner enrols it.
+ */
+const callCredentials = new CallCredentialService()
+const agentExports = new AgentExportStore()
+
+/**
+ * The owner's grant surface. THE WIRE CARRIES THE CEREMONY AND THE CALL, NEVER
+ * THE GRANT — see owner-grant.ts for why this is the one thing that needs no
+ * credential, and tests/grant-surface-shape.test.ts for the sweep that fails
+ * if an HTTP route ever reaches it.
+ *
+ * Every decision lands on the ordinary observability stream. A grant is what
+ * makes an agent reachable from the internet, so the owner should be able to
+ * find out later that they made one without knowing to go looking.
+ */
+const ownerGrant = new OwnerGrant({
+  store: agentExports,
+  // REVOKE STOPS CALLS ALREADY RUNNING. The same set that keeps a workspace
+  // resident while it serves a call is the set a revoke reaches into — one
+  // truth, so a call that is counted is a call that can be stopped.
+  cancelInFlight: (match) => callsInFlight.cancelWhere(match),
+  audit: (line) => {
+    events.append({
+      type: `grant.${line.op}`,
+      entityId: line.subject,
+      entityName: line.subject,
+      workspaceId: line.workspaceId,
+      workspaceName: store.list().workspaces.find((w) => w.id === line.workspaceId)?.name ?? line.workspaceId,
+      actor: 'user',
+      timestamp: line.at,
+      details: line.via
+    })
+  }
+})
+const callConversations = new CallConversationStore()
+/**
+ * The pre-credential lookup, memoized for a beat (Tinker HIGH-2).
+ *
+ * An unauthenticated call resolves a NAME before any credential is examined —
+ * 404 before 401, so a caller cannot map the room — and for a workspace that is
+ * not resident that read comes off disk. Cheap, not reordered: see
+ * call-cache.ts for what the window can and cannot cost.
+ */
+/**
+ * Calls currently being served, per workspace. Liveness fact 3 — see
+ * call-inflight.ts for why the inferred turn-phase signal is not enough on its
+ * own for a call to a PARKED workspace, which is the case §9 exists for.
+ */
+const callsInFlight = new CallsInFlight()
+const callNodesOf = memoizeBriefly((workspaceId: string) => store.workspaceState(workspaceId).nodes)
 const boardProbe = createProbeSampler(
   tmuxProbeDeps({
     knownTerminalIds: () => agents.list().map((entry) => entry.id),
@@ -1279,7 +1346,11 @@ const sessions = new SessionRegistry<{ id: string }>({
   subscribers: (id) =>
     store.terminalIdsOf(id).reduce((n, tid) => n + sessionSync.subscriberCount(tid), 0),
   // Work in flight: a terminal mid-turn is work, whoever is looking.
-  inFlightWork: (id) => store.terminalIdsOf(id).filter(hasLiveWork).length,
+  // A terminal mid-turn is work, whoever is looking — plus any remote call
+  // this workspace is currently serving, which the inferred signals cannot see
+  // during a cold fork's boot.
+  inFlightWork: (id) =>
+    store.terminalIdsOf(id).filter(hasLiveWork).length + callsInFlight.count(id),
   hydrate: (id) => ({ id }),
   release: (id) => {
     // Order matters, and the comment used to lie about it: detachWorkspace
@@ -2221,6 +2292,64 @@ app.whenReady().then(() => {
     store,
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,
+    // THE INTERNET GATE (§9 · ④), mounted per workspace session. Reachable only
+    // under a slug, so multi-instance gates it without a second flag: an
+    // exported agent is addressable because the WORKSPACE is.
+    //
+    // Every lookup it is given is workspace-scoped at the call site.
+    // workspaceState() reads the addressed workspace (from memory when it is
+    // the active one, from disk otherwise) — deliberately NOT store.terminals()
+    // or store.nodeByName(), both of which read focusedState and would answer
+    // for whichever canvas the owner is looking at.
+    calls: {
+      decide: makeCallGate({
+        nodesOf: callNodesOf,
+        exportOf: (workspaceId, nodeId) => agentExports.exportOf(workspaceId, nodeId),
+        // Live, at the call: a revoked caller stops being entitled the instant
+        // the record says so, not when its credential expires.
+        enrolled: (workspaceId, sub) => agentExports.enrolledKey(workspaceId, sub) !== null,
+        issuer: callCredentials
+      }),
+      ceremony: makeCallCeremony({
+        issuer: callCredentials,
+        enrolledKey: (workspaceId, sub) => agentExports.enrolledKey(workspaceId, sub)
+      }),
+      slugOf: (workspaceId) => store.slugOf(workspaceId),
+      // §10: a call runs against a fork, never the original — see call-fork.ts
+      // for why that is a safety property and not a tidiness one. The fork
+      // engine and the pin store are the SHIPPING ones (the owner's own ⑂
+      // button and the rail's markers), so a marketplace copy cannot drift
+      // from what the canvas shows.
+      session: makeCallSession({
+        conversations: callConversations,
+        cutVersion: (sourceId) =>
+          cutCallVersion(
+            {
+              fork: (id, turnIndex) => forkTerminal(id, turnIndex),
+              turnsOf: (id) => turns.history(id),
+              scrollLineOf: (id) => ptys.get(id)?.paneScrollState().historySize ?? null,
+              pins: {
+                list: (id) => pinStore.list(id),
+                add: (id, pin) => pinStore.add(id, pin)
+              },
+              now: () => Date.now()
+            },
+            sourceId
+          ),
+        forkAlive: (forkId) => store.nodeAcrossWorkspaces(forkId) !== undefined,
+        now: () => Date.now()
+      }),
+      // The only path from the internet into a pty. askTerminal brings the
+      // producer lease and the 409 vocabulary with it; the fork id comes from
+      // the session above, which cannot produce the original.
+      run: makeCallRun({
+        sessionOf: (forkId) => ptys.get(forkId),
+        ready: (forkId) => forkContextReady(forkId),
+        ask: (session, prompt, signal) => askTerminal(session as PtySession, prompt, { signal }),
+        inFlight: (identity, cancel) => callsInFlight.enter(identity, cancel),
+        wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+      })
+    },
     events,
     agents,
     traces,
@@ -2441,6 +2570,70 @@ function registerIpc(handlers: RestoreHandlers): void {
 
   // Renderer resolved a ⌘W to "nothing left to close" → quit.
   ipcMain.on('app:quit', () => app.quit())
+
+  // ---- the owner's grant surface (owner-only IPC, never a route) ----
+  //
+  // Every handler goes through ownerOnly. "Owner-only IPC" is worth nothing if
+  // a page the app merely RENDERS can reach the channel — a browser card hosts
+  // whatever the owner browsed to, an install page comes from a registry, a
+  // preset can ship a URL. So the sender must BE the owner window's top frame,
+  // proved rather than assumed from the fact that IPC is not HTTP.
+  const ownerOnly =
+    <A extends unknown[], R>(op: (...args: A) => R) =>
+    (event: Electron.IpcMainInvokeEvent, ...args: A): R | { ok: false; reason: string } => {
+      if (!isOwnerSender(event.sender, event.senderFrame, mainWindow?.webContents)) {
+        console.error('[cookrew] grant refused: sender is not the owner window top frame')
+        return { ok: false, reason: 'not_owner' }
+      }
+      return op(...args)
+    }
+
+  ipcMain.handle(
+    'grant:enrol',
+    ownerOnly((workspaceId: string, sub: string, jwk: Record<string, unknown>) =>
+      ownerGrant.enrol(workspaceId, sub, jwk)
+    )
+  )
+  ipcMain.handle(
+    'grant:revoke',
+    ownerOnly((workspaceId: string, sub: string) => ownerGrant.revoke(workspaceId, sub))
+  )
+  ipcMain.handle(
+    'grant:export',
+    ownerOnly((workspaceId: string, nodeId: string, callers: string[]) =>
+      ownerGrant.exportAgent(workspaceId, nodeId, callers)
+    )
+  )
+  ipcMain.handle(
+    'grant:unexport',
+    ownerOnly((workspaceId: string, nodeId: string) => ownerGrant.unexport(workspaceId, nodeId))
+  )
+  // The deck's 10-second UNDO toast. A separate channel from enrol because
+  // undoing a revoke and admitting a new caller are different decisions, and
+  // collapsing them would let an undo quietly create someone.
+  ipcMain.handle(
+    'grant:restore',
+    ownerOnly((workspaceId: string, sub: string) => ownerGrant.restore(workspaceId, sub))
+  )
+  // READ paths, so the owner can see what they granted. Same ownership check:
+  // the roster of who may call your agents is not for a rendered page either.
+  //
+  // The ROSTER rather than the raw exports: the record's shape is not the
+  // question's, and the revoke ruling made "is anything running right now" a
+  // thing the surface has to be able to answer — a control that promises to
+  // stop calls already running is unusable if it cannot say whether any are.
+  ipcMain.handle(
+    'grant:list',
+    ownerOnly((workspaceId: string) =>
+      buildGrantRoster({
+        workspaceId,
+        enrolledIn: (id) => agentExports.enrolledIn(id),
+        revokedIn: (id) => agentExports.revokedIn(id),
+        exportsIn: (id) => agentExports.exportsIn(id),
+        callsIn: (id) => callsInFlight.listIn(id)
+      })
+    )
+  )
 
   ipcMain.handle('workspace:list', () => store.list())
   ipcMain.handle('workspace:create', (_e, name: string, dir: string, team?: string) =>
