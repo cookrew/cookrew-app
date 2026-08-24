@@ -58,8 +58,8 @@ footer{margin-top:3.5rem;padding-top:1.1rem;border-top:1px solid var(--line);col
 <button id="tt" onclick="const r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark'">◐ theme</button>
 <main>
 
-<h1>Acceptance checklist — the two doors</h1>
-<p class="sub">The replay script is <code>e2e-demo.html</code> (six steps, chip → sheet → pay → canvas → update); scope from <code>connected-product.html</code> §02–05 · same vocabulary as
+<h1>Acceptance checklist — both sides of the contract</h1>
+<p class="sub">Two replay scripts: <code>e2e-demo.html</code> (buyer — chip → sheet → pay → canvas → update) and <code>export-ux-demo.html</code> (author — flip → price → sign → share → enrol → revoke); scope from <code>connected-product.html</code> §02–05 · same vocabulary as
 <code>user-journey-audit.html</code>, so before/after is one diff · harness armed 2026-08-23 · Magpie</p>
 
 <div class="callout">
@@ -92,7 +92,12 @@ MISSING fingerprint   no six-word derivation exists in the product
 MISSING walletSheet   no wallet code anywhere in src, on any ref (gap #1)
 MISSING remoteCard    no surface fronts a granted line (gap #6)
 
-ARMED 14 · MISSING 3 · BLOCKED 0</code></pre>
+ARMED  payoutPair     correct + MISTYPED EIP-55 pair (spec test vector, one letter's case flipped)
+                      BASELINE: the registry ACCEPTED the mistyped address today — format-only
+ARMED  revokeMidCall  call-run.ts holds an inFlight lease for the whole call, so revoke-during
+                      -a-call is constructible
+
+ARMED 16 · MISSING 3 · BLOCKED 0</code></pre>
 
 <div class="callout warn">
   <strong>Two fixtures are deliberately not faked.</strong> The six-word fingerprint and the wallet sheet do not
@@ -208,6 +213,110 @@ Editor, and a <strong>v5 on the same lineage</strong> for step 6.</p>
     <li><em>"your V4 stays pinned; updating adds V5 beside it, never over it"</em> — assert V4 is still on the rail
     after updating. Versions accumulate as pins, so going back is a tap.</li>
     <li>Both exits: <strong>STAY ON V4</strong> as well as <strong>UPDATE TO V5</strong>.</li>
+  </ul>
+</div>
+
+<h2>The author's walk — six steps (<code>export-ux-demo.html</code>)</h2>
+<p>The mirror of the buyer's demo, and the answer to give-up #1. The rule carrying every screen: <em>the author risks
+nothing by flipping the switch</em> — exporting shares no conversation, publishing shares a scrubbed copy, granting
+shares a revocable line.</p>
+
+<div class="callout warn">
+  <strong>Precondition, and it is not optional. <code>out/renderer</code> is six days stale.</strong> The build the
+  remote surface serves is dated Aug 18; source is Aug 24, and the built bundle contains <strong>none</strong> of the
+  grant strings — <code>WHO CAN CALL</code>, <code>EXPORTABLE</code>, <code>mkt.grant</code> and
+  <code>I COMPARED THESE</code> all return zero hits. So "steps 1 and 5 are merged and tappable" is true of the
+  <em>source</em> and false of the <em>running app</em>. Replaying against it today would score two correct,
+  landed surfaces as <span class="v v-wall">Wall</span> — a wrong finding about working code. <strong>The replay
+  runs after a fresh build, and the harness asserts bundle freshness before it measures anything.</strong>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">E-1</span><span class="t">THE TOGGLE — exportable, on the agent row</span><span class="v v-armed">Merged in source</span></div>
+  <ul>
+    <li>It is an <strong>entry point, not a settings checkbox</strong>: flipping it reveals the two doors — SELL A
+    COPY and GRANT A LINE. Assert the doors appear on flip; a toggle that only records state is a different design.</li>
+    <li>The safety sentence sits <strong>beside the switch</strong>, not in a help link: <em>"Exporting never shares
+    your conversations. Calls and copies run against a fork — your original session is never touched."</em> That fear
+    is the #1 reason not to flip it, so its placement is the assertion.</li>
+    <li>Found without being told it exists — the audit's scan found 0 of 40 controls mentioning export.</li>
+  </ul>
+  <div class="lbl">Kills</div><p>Give-up #1.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">E-2</span><span class="t">PUBLISH — and the mistyped payout</span><span class="v v-wall">Wall until the sheet lands</span></div>
+  <div class="lbl">The headline assertion</div>
+  <p>Type the <strong>deliberately mistyped</strong> payout — an EIP-55 test vector with one letter's case flipped,
+  still 40 hex digits, still passing any format check. The sheet must refuse it:</p>
+  <ul>
+    <li><em>"This address fails its checksum — one character is wrong. Money sent here is gone."</em></li>
+    <li>The button reads <strong>PUBLISH — FIX PAYOUT FIRST</strong>, not a mute greyed-out control. A disabled button
+    with no reason is the same dead end as a 403 that says only <code>scope</code>.</li>
+    <li><strong>Positive control, same pass:</strong> the correctly checksummed address publishes. A sheet that
+    refuses everything would score perfectly on the refusal alone.</li>
+    <li>The refusal happens <strong>here, to the person who can fix it</strong> — never at the buyer's 402.</li>
+  </ul>
+  <div class="lbl">Baseline, measured today</div>
+  <p>The registry <strong>accepted</strong> a publish carrying the mistyped address. Format-only validation, exactly
+  as the audit flagged — so this step currently has nothing to beat but itself.</p>
+  <ul>
+    <li>Registry host <strong>configured, never inferred</strong> — the other half of give-up #2.</li>
+    <li>Price empty ⇒ publishes free; chain named separately; <em>"Cookrew never holds the money and takes nothing."</em></li>
+    <li>R27: payout is keyed to the publishing identity, not the rotating key.</li>
+  </ul>
+  <div class="lbl">Kills</div><p>Give-up #2; closes the checksum gap.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">E-3</span><span class="t">REVIEW BEFORE SIGNING</span><span class="v v-armed">Scrub engine landed</span></div>
+  <ul>
+    <li>TEAM · PATHS · CMD · NOTES · SCAN · SIG, with commands shown <strong>verbatim</strong> — the M1 review lesson:
+    a sheet that filtered by preset hid every non-Shell command.</li>
+    <li><strong>The author's list and the buyer's install list are the SAME list.</strong> Assert them equal, not
+    merely similar — one truth read from both sides, or the author is signing something the buyer does not see.</li>
+    <li><em>"Your conversations are not in this list because they are never in the package."</em></li>
+    <li>A dirty secret scan blocks <strong>here</strong>, loudly, on the author's side of the wire.</li>
+  </ul>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">E-4</span><span class="t">PUBLISHED — one link, and your own chip</span><span class="v v-armed">Fixture ready</span></div>
+  <ul>
+    <li>The link renders price · agent count · author before anything is touched — <strong>this is give-up #4's third
+    checkpoint</strong>, and it must agree with the chip and the buyer's page.</li>
+    <li>The author's own dock chip shows the violet V-tag — <em>the same mark buyers see</em>. Assert they match.</li>
+    <li>COPY LINK actually copies.</li>
+  </ul>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">E-5</span><span class="t">WHO CAN CALL — enrol, and revoke mid-call</span><span class="v v-armed">Merged in source</span></div>
+  <ul>
+    <li>Six words read aloud: <em>"Same six words on both screens = same key. Different words = STOP."</em>
+    <strong>Discrimination control required</strong> — the decoy key must render different words, or a constant passes.</li>
+    <li>The matrix is per-caller × per-agent with an explicit <code>—</code> for "may not reach". Default is none.</li>
+    <li><strong>REVOKE MID-CALL, the step this whole fixture exists for.</strong> Start a call, revoke while it is
+    running, assert it <em>stops</em> — <code>call-run.ts</code> holds an inFlight lease for the whole call, so this
+    is constructible. <em>"Revoke stops calls already running. Their conversations were forks — your originals were
+    never touched."</em></li>
+    <li><strong>The direction rule.</strong> On failure the string must lead with the frightening half:
+    <em>"They still have access — revoke didn't complete. Retry now. Until it succeeds, ana@studio can still call
+    Tinker."</em> It names <em>who</em> and <em>what they can still reach</em>. Construct both directions and assert
+    the strings differ — structurally the same defect as collapsing <code>invalid</code> into
+    <code>unverifiable</code>, and gated the same way.</li>
+  </ul>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">E-6</span><span class="t">CUT V2 — and read what your agent said</span><span class="v v-armed">Backend verified</span></div>
+  <ul>
+    <li>The author's chip shows <strong>both</strong> tags — version and price — because the author sees what buyers
+    see.</li>
+    <li>CUT V2 re-runs the same review sheet; buyers' chips light <code>V2↑</code> and <strong>nobody is
+    interrupted</strong> (R24, already gated as C21).</li>
+    <li>Every remote conversation is a pin on the <strong>agent's</strong> rail, and the author can open any fork and
+    read what their agent said on their behalf. This is the author-side proof of R4's one-pin-per-conversation.</li>
   </ul>
 </div>
 
@@ -379,10 +488,10 @@ Editor, and a <strong>v5 on the same lineage</strong> for step 6.</p>
 <table>
   <thead><tr><th>Give-up reason (audit)</th><th>Killed by</th><th>Dies when</th></tr></thead>
   <tbody>
-    <tr><td class="id">#1</td><td>AU-1, AU-2, D-1</td><td>a person finds publishing without being told it exists</td></tr>
-    <tr><td class="id">#2</td><td>A-2, AU-2</td><td>the shared link's own instruction works on a default install</td></tr>
+    <tr><td class="id">#1</td><td><strong>E-1</strong>, E-2, D-1</td><td>a person finds publishing without being told it exists</td></tr>
+    <tr><td class="id">#2</td><td>E-2, A-2</td><td>the shared link's own instruction works on a default install</td></tr>
     <tr><td class="id">#3</td><td>—</td><td>Fresco's lane; re-measured here as p50/p95 on the same 1,184-byte call</td></tr>
-    <tr><td class="id">#4</td><td><strong>D-1</strong> + A-1</td><td>the price is on the <strong>chip</strong> before the first click <em>and</em> on the page a stranger opens — both, and agreeing</td></tr>
+    <tr><td class="id">#4</td><td><strong>D-1</strong> + A-1 + E-4</td><td>the price agrees in all three places it now appears — the buyer's chip before the first click, the link a stranger opens, and the author's own chip</td></tr>
     <tr><td class="id">#5</td><td>D-3, D-4, D-6, A-3, B-3</td><td>no human decision point renders raw JSON</td></tr>
   </tbody>
 </table>
