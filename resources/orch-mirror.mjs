@@ -90,8 +90,16 @@ function connectStream() {
     },
     (res) => {
       if (res.statusCode !== 200) {
+        // A cold-boot 404 is EXPECTED: opening /stream boots the target's mirror
+        // lazily, and a cross-workspace agent's PTY is not resident on the first
+        // hit. We must actually RETRY until the boot settles — the previous code
+        // printed "retrying" but returned without scheduling a reconnect (the
+        // end/close handlers that reconnect live in the 200 branch only), so the
+        // mirror stalled forever on the first 404. Drain, then reconnect.
         process.stdout.write(`\x1b[2m[mirror: stream ${res.statusCode} — retrying]\x1b[0m\r\n`)
         res.resume()
+        res.on('end', () => scheduleReconnect())
+        res.on('close', () => scheduleReconnect())
         return
       }
       res.setEncoding('utf8')
