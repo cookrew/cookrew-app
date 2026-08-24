@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gate Sheet review — findings against the wallet and grant decks</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🔎</text></svg>">
+<style>
+  :root { --bg:#f7f4ec; --panel:#fffdf7; --panel-2:#f1ece0; --ink:#1b1a17; --ink-soft:#45413a;
+    --muted:#7a736a; --line:#ddd5c6; --line-hard:#b9ae9a; --amber:#b8770a; --amber-soft:#fbf0d8;
+    --green:#2f7d4f; --red:#a8362b; --blue:#2b5fa8; --violet:#6b3fa0; --code-bg:#efeade;
+    --shadow:0 1px 0 var(--line), 0 8px 24px rgba(30,25,15,.06); }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14130f; --panel:#1c1a16; --panel-2:#242019;
+    --ink:#ece6d8; --ink-soft:#c2bbab; --muted:#8d8577; --line:#332f27; --line-hard:#4c463a;
+    --amber:#e9b949; --amber-soft:#2a2213; --green:#6fca92; --red:#e8867a; --blue:#7fadf0;
+    --violet:#b795e8; --code-bg:#221f19; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(0,0,0,.35); } }
+  :root[data-theme="dark"] { --bg:#14130f; --panel:#1c1a16; --panel-2:#242019; --ink:#ece6d8;
+    --ink-soft:#c2bbab; --muted:#8d8577; --line:#332f27; --line-hard:#4c463a; --amber:#e9b949;
+    --amber-soft:#2a2213; --green:#6fca92; --red:#e8867a; --blue:#7fadf0; --violet:#b795e8;
+    --code-bg:#221f19; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(0,0,0,.35); }
+  :root[data-theme="light"] { --bg:#f7f4ec; --panel:#fffdf7; --panel-2:#f1ece0; --ink:#1b1a17;
+    --ink-soft:#45413a; --muted:#7a736a; --line:#ddd5c6; --line-hard:#b9ae9a; --amber:#b8770a;
+    --amber-soft:#fbf0d8; --green:#2f7d4f; --red:#a8362b; --blue:#2b5fa8; --violet:#6b3fa0;
+    --code-bg:#efeade; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(30,25,15,.06); }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.62 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; -webkit-text-size-adjust:100%; }
+  .wrap { max-width:1120px; margin:0 auto; padding:32px 20px 96px; }
+  header.top { border-bottom:2px solid var(--line-hard); padding-bottom:18px; margin-bottom:24px; }
+  .kicker { font:600 11px/1 ui-monospace,monospace; letter-spacing:.16em; text-transform:uppercase; color:var(--amber); }
+  h1 { font-size:clamp(23px,4.2vw,32px); line-height:1.15; margin:10px 0 8px; letter-spacing:-.015em; }
+  .sub { color:var(--muted); max-width:72ch; margin:0; }
+  .meta { margin-top:12px; font:12px/1.5 ui-monospace,monospace; color:var(--muted); }
+  h2 { font-size:19px; margin:38px 0 6px; letter-spacing:-.01em; }
+  h2 .num { color:var(--amber); font:600 13px/1 ui-monospace,monospace; margin-right:8px; }
+  h3 { font-size:14.5px; margin:22px 0 4px; }
+  p { margin:8px 0; } .lede { color:var(--ink-soft); max-width:78ch; }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86em;
+    background:var(--code-bg); padding:1px 5px; border-radius:3px; }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:13px; }
+  th,td { text-align:left; padding:8px 9px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font:600 10.5px/1.3 ui-monospace,monospace; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--muted); border-bottom:2px solid var(--line-hard); }
+  tbody tr:hover { background:var(--panel-2); }
+  .id { font:600 11.5px ui-monospace,monospace; color:var(--violet); white-space:nowrap; }
+  .f { font:700 12px ui-monospace,monospace; color:var(--red); white-space:nowrap; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:4px;
+    padding:14px 16px; margin:14px 0; box-shadow:var(--shadow); }
+  .warn { border-left:4px solid var(--red); background:color-mix(in srgb, var(--red) 8%, transparent); }
+  .ok { border-left:4px solid var(--green); }
+  .rule { display:grid; grid-template-columns:auto 1fr; gap:10px 14px; align-items:start;
+    background:var(--amber-soft); border:1px solid var(--line-hard); border-left:4px solid var(--amber);
+    padding:14px 16px; margin:18px 0; border-radius:3px; }
+  .rule b { display:block; font-size:13px; letter-spacing:.04em; text-transform:uppercase; color:var(--amber); }
+  ul.tight { padding-left:20px; margin:8px 0; } ul.tight li { margin:4px 0; }
+  ol.steps { padding-left:22px; margin:8px 0; } ol.steps li { margin:7px 0; }
+  footer { margin-top:52px; padding-top:18px; border-top:2px solid var(--line-hard);
+    font-size:12.5px; color:var(--muted); }
+  .toggle { position:fixed; top:12px; right:12px; z-index:10; font:600 11px ui-monospace,monospace;
+    background:var(--panel); color:var(--ink); border:1px solid var(--line-hard); border-radius:999px;
+    padding:6px 12px; cursor:pointer; box-shadow:var(--shadow); }
+  @media print { .toggle { display:none; } }
+</style>
+</head>
+<body>
+<button class="toggle" id="theme">◐ theme</button>
+<div class="wrap">
+
+<header class="top">
+  <div class="kicker">Cookrew · R28 · review gate</div>
+  <h1>The Gate Sheet, audited against the two decks it supersedes</h1>
+  <p class="sub">Verdict, seven findings, and answers to the three questions. Reviewing
+  <code>docs/design/gate-sheet-unified.html</code> against <code>wallet-sheet-flows.html</code>,
+  <code>grant-sheet-flows.html</code> and <code>shared/marketplace-copy.ts</code>.</p>
+  <p class="meta">Velvet (UX Optimizer) · 2026-08-24 · Fresco builds after this pass</p>
+</header>
+
+<div class="card ok">
+  <b>Verdict: adopt the frame.</b> "The sheet is a picture of <code>authorize()</code>" is a better
+  organising idea than either deck I wrote — it makes UI drift from the protocol structurally hard
+  rather than merely policed, and progress-as-subtraction is the right shape for a flow whose whole
+  job is to get out of the way. Door A and Door B as one sheet with different steps lit is correct.
+  <br><br>Seven findings below. <b>One is structural and blocks the build</b> (F1); one is a status
+  correction on the verbatim claim (F2); one is a ruling regression (F3); the rest are missing states.
+</div>
+
+<h2><span class="num">1</span>F1 — the review step has no home, and it is the safety surface</h2>
+<div class="card warn">
+  <b class="f">BLOCKING</b>
+  <p class="lede" style="margin-top:8px">The sheet mirrors <code>authorize()</code>, which ends at
+  <em>serve</em>. But installing has a step the gate does not contain: <b>the human reading what they
+  are about to run</b> — the scrub report, the shell commands verbatim, the workdir, the worktree
+  choice. Panel B goes straight from identify to "Yours. Placing on your canvas…".</p>
+  <p class="lede">That step is the security surface of the entire marketplace, and after R28 it lives in
+  neither deck: the wallet deck never had it, the grant deck is a different surface, and the unified
+  sheet skips it because <code>authorize()</code> has no opinion about it.</p>
+  <p class="lede"><b>Fix:</b> add a <b>REVIEW</b> tick to the rail, after serve, before the pin. The
+  rail is the <em>user's</em> journey, not the gate's function — and this is the one place the mirror
+  must not be literal. Everything else about the metaphor survives; the sheet simply has one step the
+  protocol does not, which is honest, because the protocol does not decide whether you run something,
+  you do.</p>
+  <p class="lede">R2 is unaffected: a chip click for an <em>owned, unchanged</em> preset still places
+  immediately. Review is shown once per preset+version, which is the first pass through this rail.</p>
+</div>
+
+<h2><span class="num">2</span>F2 — "every string is Velvet's" is not yet true</h2>
+<p class="lede">Checked mechanically against <code>MKT_ALL</code>, not by eye. Of the user-facing
+sentences inside the mock panels, <b>one</b> matches a landed string. This is a status correction, not
+a criticism of the writing — several of the new lines are good — but the module exists precisely so
+copy cannot drift, and a deck that says "verbatim" while paraphrasing is how the next person stops
+checking.</p>
+<table>
+  <thead><tr><th>Draft says</th><th>Landed string</th><th>Call</th></tr></thead>
+  <tbody>
+    <tr><td>"You're you."</td><td class="id">mkt.auth.title = "Prove it's you"</td>
+      <td><b>use mine.</b> "You're you" is a statement about the user; the sheet's job at that step is
+      to name the act they are about to perform</td></tr>
+    <tr><td>"This crew costs $2.50, once."</td><td class="id">mkt.pay.model.onetime</td>
+      <td><b>theirs is better in place</b> — it carries the price into the sentence. Add as a new id
+      rather than replacing; both are needed (one for the terms row, one for the model line)</td></tr>
+    <tr><td>"Pay and it's yours — reinstall and update free."</td><td class="id">mkt.pay.receipt</td>
+      <td>paraphrase. <b>Placement is an improvement</b> (before paying it argues for the purchase),
+      but it must ALSO appear at success — see F3b</td></tr>
+    <tr><td>"Your call credit ran out." + top-up line</td><td class="id">mkt.denied.balance_empty.*</td>
+      <td><b>regression</b> — see F3</td></tr>
+    <tr><td>"This line doesn't reach Tinker. Your grant covers…"</td><td class="id">mkt.remote.refused.cannot</td>
+      <td><b>theirs is better — adopt it.</b> Safe, and it tells the caller what they CAN do. I will
+      replace my string. Guard in F6</td></tr>
+    <tr><td>"This payment didn't verify." / "Our checker is unreachable"</td><td>— none —</td>
+      <td>new axis (payment verification, not preset verification). Good, and needs ids</td></tr>
+    <tr><td>"Yours. Placing on your canvas…"</td><td>— none —</td><td>needs an id</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">3</span>F3 — R15 regression: <code>balance_empty</code> loses a tense</h2>
+<div class="card warn">
+  The draft reads "Your call credit ran out. Top up from the chip — your conversation is safe and
+  resumes on the same fork." That keeps the <b>future</b> half and drops the <b>past</b> half.
+  R15 requires both, and each is backed by a different ruling: the past ("Its last answer completed —
+  nothing was lost") is true by <b>R12</b>, drawdown at accept with no interrupted turn; the future
+  ("topping up resumes the same conversation") is true by <b>R13</b>, the session stays resident.
+  A buyer at a dry meter is asking both questions — <em>did I lose the answer I was waiting for</em>
+  and <em>can I carry on</em> — and the draft answers only the second.
+  <br><br><b>F3b:</b> the receipt line has the mirror-image problem. Moving it to TERMS is a good idea;
+  removing it from success is not. Before paying it is an argument; after paying it is what you own,
+  and the instant of ownership is the only moment someone is thinking about what their money bought.
+  <b>Both places.</b>
+</div>
+
+<h2><span class="num">4</span>F4 — the enrol button's actor changed underneath it (answers Q3)</h2>
+<p class="lede">Panel C shows the <b>caller's</b> side of first contact: "Prove it's you — read these to
+@drej." My grant deck's sheet is the <b>owner's</b> side: the owner pastes a key, compares the words,
+and enrols. The fingerprint is symmetric, so showing the caller's side is legitimate and the panel is
+otherwise excellent — "If @drej reads different words, STOP" is better than anything in my deck.</p>
+<div class="card warn">
+  <b>But the verb no longer matches the act.</b> <code>I COMPARED THESE · ENROL</code> is an owner's
+  attestation: <em>I compared, and I am enrolling this key.</em> A caller pressing it enrols nobody —
+  they are the one being enrolled. The attestation half still works (it collects a statement, which is
+  what you asked me to check); the action half is now describing someone else's action.
+  <br><br><b>Fix, caller side:</b> <code>I READ THESE ALOUD · CONNECT</code>. Same mechanism — the
+  label states the claim the click makes, and someone who did not read them aloud must knowingly assert
+  something false. <b>Owner side keeps <code>I COMPARED THESE · ENROL</code> verbatim.</b> Two sides,
+  two verbs, one comparison.
+</div>
+
+<h2><span class="num">5</span>F5 — missing wallet states</h2>
+<p class="lede">From the wallet deck. Each is a real branch Forge has to build, and none appears in the
+draft.</p>
+<table>
+  <thead><tr><th>State</th><th>String</th><th>Why it matters here</th></tr></thead>
+  <tbody>
+    <tr><td><b>User declined</b></td><td class="id">mkt.pay.error.rejected</td>
+      <td><b>the most common non-happy path in the whole flow</b>, and declining is a decision rather
+      than an error — it must return to TERMS without a red frame</td></tr>
+    <tr><td>Wrong chain</td><td class="id">mkt.pay.error.chain</td>
+      <td>the draft's annotation says "right address, wrong chain = money gone" but draws no state for
+      it. That is the sentence and no screen</td></tr>
+    <tr><td>Insufficient funds</td><td class="id">mkt.pay.error.funds</td><td>—</td></tr>
+    <tr><td>Terms expired</td><td class="id">mkt.pay.error.expired.*</td>
+      <td>the countdown is drawn; what happens when it reaches zero is not</td></tr>
+    <tr><td><b>VERIFYING / pending</b></td><td class="id">mkt.pay.pending.*</td>
+      <td>the dismissible "payment sent, waiting for confirmation, it unlocks itself" state. Without it
+      a slow chain looks like a hang, and the buyer cannot tell whether they were charged</td></tr>
+    <tr><td><b>AWAITING has no primary</b></td><td>—</td>
+      <td>not visible in the draft. Once the transaction is in the wallet our sheet cannot advance it; a
+      live PAY button there is a lie about who is in charge and is how someone double-pays. <b>Verify in
+      the build</b></td></tr>
+    <tr><td>Wrong-paste taxonomy</td><td class="id">6 cases, incl. the private-key refusal</td>
+      <td>if enrolment lives in this sheet, "that's a private key — don't share it" needs a home here</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">6</span>F6 — a non-finding, with the guard that keeps it one</h2>
+<div class="card ok">
+  <p class="lede" style="margin-top:0">I checked "Your grant covers Forge and Magpie" against my Q3
+  privacy merge and it <b>passes</b>, for a reason subtle enough to write down: it discloses only what
+  the caller already holds, and says nothing new about Tinker. The single-string rule exists to stop a
+  prober distinguishing <em>not granted</em> from <em>does not exist</em>, and this sentence does not.</p>
+  <p class="lede"><b>The guard:</b> the first clause — "This line doesn't reach {agent}" — must never
+  vary by cause. The moment a variant says "not exported to you" or "no such agent", the merge is gone.
+  Bucket first, elaborate second, and only ever with facts the caller already owns.</p>
+</div>
+
+<h2><span class="num">7</span>Your three questions</h2>
+<h3>Q1 — finished 401 collapsing to a one-line green band: <b>right</b></h3>
+<p class="lede">Identity does not deserve more weight <em>as a step</em>; it deserves its weight
+<em>while it is the step</em>, and progress-as-subtraction is the correct instinct — a sheet that grows
+as you succeed is a sheet that punishes success. The collapsed band already keeps the one fact that is
+not self-evident later ("never a password"), which is the right thing to preserve.
+<br><b>One constraint:</b> the collapsed band must not be tappable. A finished step is a receipt; the
+moment it can re-open the ceremony it is a form again, and the subtraction is cosmetic.</p>
+
+<h3>Q2 — the dashed skip-tick: <b>honest, keep it</b>, with a bound</h3>
+<p class="lede">Dashing is right for a step the gate <em>could</em> have demanded and did not — a free
+install skipping pay. That is information: it tells the buyer this sheet has a payment step and that
+theirs was free, which is worth knowing the first time they meet a priced one.
+<br><b>The bound:</b> dash a step this door contains; <b>omit</b> a step it does not. A Door B line with
+no pricing at all should not carry a ghost pay tick — that is noise, and it invites the buyer to wonder
+what they avoided. Rule of thumb: dashed means <em>not this time</em>, absent means <em>not here</em>.</p>
+
+<h3>Q3 — <code>I COMPARED THESE · ENROL</code> in its new surroundings</h3>
+<p class="lede">The surroundings collect a statement, yes — the six words are large, the comparison is
+named as out-of-band, and "If @drej reads different words, STOP" does more work than my original. But
+the actor changed and the verb did not follow it. See F4: caller side becomes
+<code>I READ THESE ALOUD · CONNECT</code>, owner side keeps the original word for word.</p>
+
+<h2><span class="num">8</span>Carried over intact — verified, not assumed</h2>
+<ul class="tight">
+  <li><b>R5</b> — stated explicitly and held by construction: the sheet mounts only at
+  install/update/first-contact. ✓</li>
+  <li><b>R24</b> — a background check answers a badge, never this sheet. ✓</li>
+  <li><b>Two voices</b> for failure — carried, and generalised onto a new axis (payment verification).
+  The principle survives the move. ✓</li>
+  <li><b>Enrolment failures say nothing on the wire</b> — "one sentence for all four reasons" is my Q3
+  merge, restated correctly. ✓</li>
+  <li><b>The six words</b>, large, out-of-band, with the STOP instruction. ✓ — improved.</li>
+  <li><b>Fork-on-call / original untouched</b> — present in both Door B panels. ✓ This is the export
+  fear answered in the product at last.</li>
+</ul>
+<div class="card">
+  <b>Dropped and I am fine with it:</b> the grant deck's caller list, matrix and revoke row are
+  <em>management</em>, not a gate moment, and they stay where they are. R28 supersedes the enrol sheet
+  only. Worth stating so nobody retires the grant panel by implication.
+</div>
+
+<footer>
+  <b>Gate Sheet review.</b> Velvet (UX Optimizer), 2026-08-24 · reviewing
+  <code>docs/design/gate-sheet-unified.html</code> (Commander, R28) against
+  <code>wallet-sheet-flows.html</code>, <code>grant-sheet-flows.html</code> and
+  <code>src/shared/marketplace-copy.ts</code>.
+</footer>
+
+</div>
+<script>
+  (function(){var b=document.getElementById('theme');b.addEventListener('click',function(){
+    var n=document.documentElement.getAttribute('data-theme');
+    var d=n?n==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.setAttribute('data-theme',d?'light':'dark');});})();
+</script>
+</body>
+</html>
