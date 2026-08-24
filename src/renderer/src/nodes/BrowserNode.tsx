@@ -1,4 +1,4 @@
-import { NodeProps, NodeResizer } from '@xyflow/react'
+import { NodeProps, NodeResizer, useStore } from '@xyflow/react'
 import { NodeHandles } from './NodeHandles'
 import { CardClose } from './CardClose'
 import { CardPick } from './CardPick'
@@ -8,6 +8,7 @@ import type { BrowserNodeData } from '../../../shared/model'
 import { browserTabs } from '../../../shared/model'
 import { useCanvasUi } from '../canvas-ui'
 import { useThumb } from '../activity-thumb-store'
+import { cardZoomMode } from './card-zoom'
 
 /**
  * Summary card for a browser, with a legacy thumbnail when one is available.
@@ -24,7 +25,14 @@ export function BrowserNode({ data, selected }: NodeProps): React.JSX.Element {
   // stored then is a leftover from the other owner, and a stale frame is worse
   // than none.
   const storedThumb = useThumb(node.id)
-  const thumb = interactiveBrowser === null ? undefined : storedThumb
+  // Quantized zoom bucket (only flips crossing MINI_ZOOM, so it doesn't churn).
+  const mode = useStore((s) => cardZoomMode(s.transform[2]))
+  // A zoomed-OUT (mini) tile does not decode its thumbnail. This is the mobile
+  // OOM fix: at fit-to-view a phone shows every browser at once, and 41 decoded
+  // image bitmaps held simultaneously crashes iOS Safari's WebContent. Off at
+  // mini, the browser releases those bitmaps; the picture returns the moment the
+  // card is big enough to read it. The glyph placeholder stands in meanwhile.
+  const thumb = interactiveBrowser === null || mode === 'mini' ? undefined : storedThumb
 
   const open = (): void => {
     // Clipping: the whole card is a bigger checkbox — no zoom.

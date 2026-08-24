@@ -45,6 +45,7 @@ import {
   useThumbsSnapshot
 } from './activity-thumb-store'
 import { reconcileFlowNodes } from './flow-nodes'
+import { cardZoomMode } from './nodes/card-zoom'
 import { useBrowserEngine } from './browser-engine'
 import { ErrorBoundary } from './ErrorBoundary'
 import { ReauthOverlay } from './ReauthOverlay'
@@ -675,6 +676,12 @@ function Canvas(): React.JSX.Element {
   useEffect(() => {
     if (!shouldPollThumbs({ remote: isRemoteMode(), interactive: interactiveBrowser })) return
     const tick = (): void => {
+      // Zoomed OUT, no browser card decodes its thumb (BrowserNode mini path),
+      // so fetching + blob-decoding all of them is pure memory churn — and on a
+      // phone at fit-to-view (all cards mini) that churn is what tips iOS Safari
+      // into a WebContent OOM. Skip the whole poll at mini; it resumes when a
+      // card is zoomed in enough to actually show a picture.
+      if (document.hidden || cardZoomMode(reactFlow.getZoom()) === 'mini') return
       const browserIds = (workspaceRef.current?.nodes ?? [])
         .filter((n) => n.kind === 'browser')
         .map((n) => n.id)
