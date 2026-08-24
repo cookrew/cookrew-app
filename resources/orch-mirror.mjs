@@ -1,28 +1,28 @@
 #!/usr/bin/env node
-// ORCH MIRROR — a proxy terminal to another agent, over the SAME API the
-// cookrew mobile companion uses. It renders the target's transcript and
-// forwards what you type, so a card in one workspace can talk to the
-// orchestrator running in a served session's workspace.
+// ORCH MIRROR — a proxy terminal that renders another agent's REAL terminal and
+// forwards real keystrokes, over the SAME API the cookrew mobile companion uses.
+// It streams the target's raw pty (a faithful ANSI frame + live deltas) so the
+// proxy card looks exactly like a normal agent — the TUI, the composer, colors,
+// cursor — not a flattened transcript.
 //
-//   node orch-mirror.mjs <terminalId> [--name <label>]
+//   node orch-mirror.mjs <terminalId> --origin https://host:port [--name label]
 //
 // Transport (mobile API, self-signed localhost cert):
-//   READ  GET  <origin>/api/terminal/<id>/turns   -> TurnRecord[]
-//   WRITE POST <origin>/api/terminal/<id>/input {text}
-// Origin defaults to https://127.0.0.1:8643 (COOKREW_MOBILE_ORIGIN overrides).
-// Auth is the persisted pairing token; TLS trust is handled by the launcher
-// setting NODE_TLS_REJECT_UNAUTHORIZED=0 for this localhost hop only.
+//   READ   GET  <origin>/api/terminal/<id>/stream   (SSE: hello geometry, then
+//                                                     data = raw ANSI bytes)
+//   WRITE  POST <origin>/api/terminal/<id>/raw   {data}      (real keystrokes)
+//   SIZE   POST <origin>/api/terminal/<id>/resize {cols,rows}
+// Auth is the persisted pairing token; TLS trust is set in-process so the spawn
+// command needs no env prefix (a pane may exec argv without a shell).
 
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import readline from 'node:readline'
+import https from 'node:https'
 
-// Localhost self-signed cert: trust it here rather than via a fragile env-var
-// prefix on the spawn command (a herdr pane can exec argv without a shell, and
-// `VAR=0 node …` then means "run the program VAR=0"). Node reads this at TLS
-// connect time, so setting it before the first fetch is enough.
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+// TLS trust for the localhost self-signed cert is per-request via the Agent
+// below (rejectUnauthorized:false) — NOT the global NODE_TLS_REJECT_UNAUTHORIZED
+// env, which prints a warning that would land in the rendered terminal.
 
 const arg = (flag) => {
   const i = process.argv.indexOf(flag)
@@ -34,8 +34,8 @@ if (!id) {
   console.error('orch-mirror: no terminal id')
   process.exit(1)
 }
-
 const ORIGIN = (arg('--origin') || process.env.COOKREW_MOBILE_ORIGIN || 'https://127.0.0.1:8643').replace(/\/+$/, '')
+const base = new URL(ORIGIN)
 const token = (() => {
   try {
     return readFileSync(path.join(homedir(), '.cookrew', 'pairing-token'), 'utf8').trim()
@@ -43,91 +43,140 @@ const token = (() => {
     return ''
   }
 })()
+const agent = new https.Agent({ rejectUnauthorized: false, keepAlive: true })
+const authHeaders = token ? { Authorization: `Bearer ${token}` } : {}
 
-const auth = token ? { Authorization: `Bearer ${token}` } : {}
-const C = { dim: '\x1b[2m', reset: '\x1b[0m', cyan: '\x1b[36m', green: '\x1b[32m', yellow: '\x1b[33m' }
+// A POST with a JSON body, best-effort (a write that fails must not kill the
+// mirror — the stream is the point).
+function post(pathname, body) {
+  return new Promise((resolve) => {
+    const data = Buffer.from(JSON.stringify(body))
+    const req = https.request(
+      {
+        hostname: base.hostname,
+        port: base.port,
+        path: `/api/terminal/${encodeURIComponent(id)}/${pathname}`,
+        method: 'POST',
+        agent,
+        headers: { ...authHeaders, 'content-type': 'application/json', 'content-length': data.length }
+      },
+      (res) => {
+        res.resume()
+        res.on('end', () => resolve(res.statusCode ?? 0))
+      }
+    )
+    req.on('error', () => resolve(0))
+    req.write(data)
+    req.end()
+  })
+}
 
-const banner = () => {
-  process.stdout.write(
-    `${C.cyan}── mirror → ${label} ${C.dim}(${ORIGIN}/api/terminal/${id})${C.reset}\n` +
-      `${C.dim}   type to talk to the orch · its transcript streams below${C.reset}\n\n`
+const cols = () => process.stdout.columns || 100
+const rows = () => process.stdout.rows || 30
+
+// The SSE reader: connect, parse `event:/data:` blocks, write raw bytes to our
+// own stdout. Reconnects on drop so a transient blip doesn't blank the card.
+let closed = false
+function connectStream() {
+  const req = https.request(
+    {
+      hostname: base.hostname,
+      port: base.port,
+      path: `/api/terminal/${encodeURIComponent(id)}/stream`,
+      method: 'GET',
+      agent,
+      // identity so we parse plain SSE, not gzip.
+      headers: { ...authHeaders, accept: 'text/event-stream', 'accept-encoding': 'identity' }
+    },
+    (res) => {
+      if (res.statusCode !== 200) {
+        process.stdout.write(`\x1b[2m[mirror: stream ${res.statusCode} — retrying]\x1b[0m\r\n`)
+        res.resume()
+        return
+      }
+      res.setEncoding('utf8')
+      let buf = ''
+      res.on('data', (chunk) => {
+        buf += chunk
+        let sep
+        while ((sep = buf.indexOf('\n\n')) !== -1) {
+          const block = buf.slice(0, sep)
+          buf = buf.slice(sep + 2)
+          if (!block || block.startsWith(':')) continue // heartbeat/comment
+          let event = 'message'
+          let dataLine = ''
+          for (const line of block.split('\n')) {
+            if (line.startsWith('event:')) event = line.slice(6).trim()
+            else if (line.startsWith('data:')) dataLine += line.slice(5).trim()
+          }
+          if (!dataLine) continue
+          let payload
+          try {
+            payload = JSON.parse(dataLine)
+          } catch {
+            continue
+          }
+          if (event === 'data') {
+            process.stdout.write(payload) // faithful ANSI bytes → our xterm
+          } else if (event === 'hello') {
+            // Server announced ITS geometry; make sure it serializes at OURS.
+            void post('resize', { cols: cols(), rows: rows() })
+          } else if (event === 'exit') {
+            process.stdout.write('\r\n\x1b[2m— the orch process exited —\x1b[0m\r\n')
+          }
+        }
+      })
+      res.on('end', () => scheduleReconnect())
+      res.on('close', () => scheduleReconnect())
+    }
   )
+  req.on('error', () => scheduleReconnect())
+  req.end()
+}
+function scheduleReconnect() {
+  if (closed) return
+  setTimeout(connectStream, 800)
 }
 
-async function getTurns() {
-  const res = await fetch(`${ORIGIN}/api/terminal/${encodeURIComponent(id)}/turns`, { headers: auth })
-  if (!res.ok) throw new Error(`turns ${res.status}`)
-  return res.json()
-}
-
-async function sendInput(text) {
-  const res = await fetch(`${ORIGIN}/api/terminal/${encodeURIComponent(id)}/input`, {
-    method: 'POST',
-    headers: { ...auth, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text })
+// Real keystrokes: stdin in raw mode → POST /raw byte-for-byte, so the orch's
+// TUI receives arrows, enter, ctrl keys — everything a normal card would send.
+function wireInput() {
+  const stdin = process.stdin
+  if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') return // read-only fallback
+  try {
+    stdin.setRawMode(true)
+  } catch {
+    return
+  }
+  stdin.resume()
+  stdin.setEncoding('utf8')
+  stdin.on('data', (data) => {
+    // Ctrl-] detaches the mirror without killing the orch.
+    if (data === '\x1d') {
+      cleanup()
+      process.exit(0)
+    }
+    void post('raw', { data })
   })
-  if (res.status === 409) return { ok: false, reason: 'the orch has a dispatch in flight — try again' }
-  if (!res.ok) return { ok: false, reason: `input ${res.status}` }
-  return { ok: true }
 }
 
-// Render a turn once; a growing reply reprints only the delta.
-const printed = new Map() // index -> reply length already shown
-function render(turns) {
-  for (const t of turns) {
-    const seen = printed.get(t.index)
-    if (seen === undefined) {
-      if (t.prompt) process.stdout.write(`${C.yellow}› ${t.prompt}${C.reset}\n`)
-      if (t.reply) process.stdout.write(t.reply)
-      printed.set(t.index, (t.reply ?? '').length)
-    } else if ((t.reply ?? '').length > seen) {
-      process.stdout.write(t.reply.slice(seen))
-      printed.set(t.index, t.reply.length)
-    }
-  }
-}
-
-let alive = true
-async function poll() {
-  while (alive) {
-    try {
-      render(await getTurns())
-    } catch (err) {
-      process.stdout.write(`${C.dim}[mirror: ${String(err.message ?? err)} — retrying]${C.reset}\n`)
-    }
-    await new Promise((r) => setTimeout(r, 1200))
-  }
-}
-
-banner()
-try {
-  render(await getTurns())
-} catch (err) {
-  process.stdout.write(`${C.dim}[mirror: first read failed: ${String(err.message ?? err)}]${C.reset}\n`)
-}
-void poll()
-
-// Input is best-effort and MUST NOT own the process lifetime. In a herdr pane
-// stdin can reach EOF immediately, so tying `alive` to readline's close (the
-// first version did) killed the poll loop and the whole mirror exited — which
-// is the "process exited" the owner saw. The poll loop keeps node alive; a
-// keep-alive timer guarantees it even if the loop ever settles.
 const keepAlive = setInterval(() => {}, 1 << 30)
-try {
-  process.stdin.resume()
-  const rl = readline.createInterface({ input: process.stdin })
-  rl.on('line', (line) => {
-    const text = line.trim()
-    if (!text) return
-    void sendInput(text).then((r) => {
-      if (!r.ok) process.stdout.write(`${C.dim}[mirror: ${r.reason}]${C.reset}\n`)
-    })
-  })
-} catch {
-  // no usable stdin (rare) — mirror stays read-only rather than exiting
+function cleanup() {
+  closed = true
+  clearInterval(keepAlive)
+  try {
+    if (process.stdin.isTTY) process.stdin.setRawMode(false)
+  } catch {
+    /* ignore */
+  }
 }
 process.on('SIGINT', () => {
-  alive = false
-  clearInterval(keepAlive)
+  cleanup()
   process.exit(0)
 })
+process.stdout.on('resize', () => void post('resize', { cols: cols(), rows: rows() }))
+
+// Size first (so the first frame is serialized at our width), then stream.
+process.stdout.write(`\x1b[2m── mirror → ${label} · ${ORIGIN}\x1b[0m\r\n`)
+void post('resize', { cols: cols(), rows: rows() }).then(connectStream)
+wireInput()
