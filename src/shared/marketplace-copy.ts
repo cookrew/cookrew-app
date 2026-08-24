@@ -203,23 +203,38 @@ export function rotationSheetCopy(
  * from real state rather than written as comfort.
  */
 
-/** 401 — identity. There is no account and no password; say so, once. */
+/**
+ * 401 — identity, R31 vocabulary: THIS IS AN ACCOUNT.
+ *
+ * The previous strings said there was no account, which was true until R31
+ * created one. "Sign in with your Cookrew account" is the most familiar
+ * sentence on the internet and it now describes the product accurately — the
+ * passkey is HOW the account signs in, a mechanism, not a concept the user has
+ * to meet. It appears in the sub-line where a person looks for reassurance
+ * about typing a password, and nowhere else.
+ *
+ * The one thing still banned here is "password", because there still is not
+ * one; and "unlock", because it hides whether money moves.
+ */
 export const MKT_AUTH = {
-  'mkt.auth.title': "Prove it's you",
+  'mkt.auth.title': 'Sign in with your Cookrew account',
   'mkt.auth.body':
-    'This preset asks who you are before it downloads. One passkey gesture — no password, and no account to create.',
+    'This preset asks who you are before it downloads. Signing in takes one tap — your account uses a passkey, so there is no password to remember.',
   'mkt.auth.why': 'Authors can see how many people installed a preset, never who you are.',
   'mkt.auth.method': 'Use the passkey on this device',
   'mkt.auth.method.alt': 'or scan with your phone',
   'mkt.auth.custody': 'Cookrew stores no password and never sees your key.',
-  'mkt.auth.notwallet': "A passkey isn't a wallet — paying comes later, and only if a preset costs.",
-  'mkt.auth.action': 'USE PASSKEY',
+  'mkt.auth.notwallet':
+    "Your account isn't a wallet — paying comes later, and only if a preset costs.",
+  'mkt.auth.action': 'SIGN IN',
+  'mkt.auth.newaccount': 'No account yet? Signing in makes one — it takes the same tap.',
   'mkt.auth.dismiss': 'Not now',
   /** The 90-second challenge died while the sheet sat open. Not a cancel. */
   'mkt.auth.expired': 'That request timed out. Try again.',
   'mkt.auth.cancelled': 'Passkey cancelled.',
-  'mkt.auth.unsupported.title': "This browser can't make a passkey",
-  'mkt.auth.unsupported.body': 'Use your phone instead.',
+  'mkt.auth.unsupported.title': "This browser can't sign you in",
+  'mkt.auth.unsupported.body':
+    "It can't make a passkey, which is how Cookrew accounts sign in. Use your phone instead.",
   'mkt.auth.unsupported.action': 'SCAN WITH PHONE'
 } as const
 
@@ -278,9 +293,13 @@ export const MKT_INSTALL_PRICE = {
   'mkt.install.price.onetime': '{price} {asset}, once — paid directly to {author}.',
   'mkt.install.price.percall': '{price} {asset} per call — paid directly to {author}.',
   'mkt.install.price.note': 'Cookrew never holds the money and takes nothing.',
-  /** Replaces "needs an account", which promises a thing that does not exist. */
+  /**
+   * R31: an account IS the thing now, so the plainest sentence is also the true
+   * one. The earlier version danced around the word because there was nothing
+   * to point at.
+   */
   'mkt.install.gated.note':
-    'This preset asks who you are before it downloads — one passkey gesture in Cookrew, no password.'
+    'Sign in with your Cookrew account to download this — one tap, no password.'
 } as const
 
 /** 403 — six reasons, six next actions. One word for all of them was the bug. */
@@ -386,28 +405,6 @@ export type MktDeniedReasonId = keyof typeof MKT_DENIED_REASONS
 export type MktBlockedId = keyof typeof MKT_BLOCKED
 export type MktExportId = keyof typeof MKT_EXPORT
 
-/** Every group, so a renderer can resolve any id without knowing its family. */
-export const MKT_ALL = {
-  ...MKT_ROTATION,
-  ...MKT_DENIED,
-  ...MKT_AUTH,
-  ...MKT_PAY,
-  ...MKT_INSTALL_PRICE,
-  ...MKT_DENIED_REASONS,
-  ...MKT_BLOCKED,
-  ...MKT_EXPORT
-} as const
-
-export type MktId = keyof typeof MKT_ALL
-
-/** Resolve any id and fill it. Throws on an unknown id, like fillCopy does on
- *  an unfilled placeholder: both are programming mistakes, not user states. */
-export function copy(id: MktId, vars: Readonly<Record<string, string | number>> = {}): string {
-  const template = MKT_ALL[id]
-  if (template === undefined) throw new Error(`marketplace copy: unknown id ${id}`)
-  return fillCopy(template, vars)
-}
-
 /** Pricing as a buyer reads it, for the buy sheet and the install page alike. */
 export interface PriceLike {
   model: 'one-time' | 'per-call'
@@ -467,4 +464,316 @@ export function blockedCopy(
   const at = (suffix: string): string =>
     fillCopy(MKT_BLOCKED[`mkt.review.blocked.${reason}.${suffix}` as MktBlockedId], vars)
   return { title: at('title'), body: at('body'), action: at('action') }
+}
+
+/**
+ * ── R31: TWO IDENTITY VOCABULARIES, AND THE WALL BETWEEN THEM ────────────────
+ *
+ * The product now has two ways a person proves who they are, and they are for
+ * different relationships:
+ *
+ *   ACCOUNTS — the PUBLIC door. A stranger at /svc/, the install page, the
+ *   marketplace, any 401. They and the author have never met; the account is
+ *   what a registry can check.
+ *
+ *   SIX WORDS — between TWO HUMANS WHO ALREADY KNOW EACH OTHER. WHO CAN CALL on
+ *   a LAN, owner to caller, compared out loud over a channel we do not control.
+ *   No registry is involved and none could help.
+ *
+ * THEY MUST NOT BLEED. The failure is not aesthetic: if the enrolment ceremony
+ * starts talking about accounts, a person will look for a registry to vouch for
+ * a key that no registry has ever seen, and the comparison — the only thing
+ * that makes enrolment safe — starts to feel like a formality someone else has
+ * already handled. Conversely, an account sheet showing a fingerprint invites a
+ * stranger to verify something against nobody.
+ *
+ * The rule, and `identityVocabularyLeaks()` below enforces it: an account
+ * string never mentions words, fingerprints or reading aloud; a six-word string
+ * never mentions accounts or signing in. They may not appear in one sheet.
+ */
+
+/** The six-word ceremony. LAN, human-to-human. No account vocabulary, ever. */
+export const MKT_ENROL = {
+  'mkt.enrol.title': 'Read these to each other',
+  'mkt.enrol.body':
+    'You should both see the same six words. Same words means the same key. Different words means stop — you are not enrolling the key you think you are.',
+  'mkt.enrol.channel': 'Say them out loud on a call, not over this connection.',
+  /** The owner's act: the label states the claim the click makes. */
+  'mkt.enrol.action.owner': 'I COMPARED THESE · ENROL',
+  /** The caller's act. Different verb, because they enrol nobody. */
+  'mkt.enrol.action.caller': 'I READ THESE ALOUD · CONNECT',
+  'mkt.enrol.dismiss': 'Cancel',
+  /** The one wrong paste that is a security event rather than a typo. */
+  'mkt.enrol.paste.private':
+    "That's a private key — don't share it. Cookrew hasn't stored it. Ask them for their public key, and if it went over a channel someone else can read, they should replace the pair.",
+  'mkt.enrol.paste.notakey': "That doesn't look like a public key.",
+  'mkt.enrol.paste.wrongtype': "That's a {type} key. Cookrew callers use ed25519.",
+  'mkt.enrol.paste.malformed':
+    'That key is incomplete — it may have been cut off when copied.',
+  'mkt.enrol.paste.duplicate': 'You already enrolled this key as {name}.'
+} as const
+
+/** Saving to the account (R31). Private is the load-bearing word. */
+export const MKT_SAVE = {
+  'mkt.save.action': 'SAVE TO MY PRESETS',
+  /** The toast. "Private" answers the fear that makes the button hesitate. */
+  'mkt.save.done': 'Saved to your account, private. Nothing was published.',
+  'mkt.save.error': "Couldn't save that — nothing was stored and nothing was published."
+} as const
+
+export type MktEnrolId = keyof typeof MKT_ENROL
+export type MktSaveId = keyof typeof MKT_SAVE
+
+/** Account vocabulary — the public door. */
+const ACCOUNT_WORDS = /\baccount\b|\bsign(ed|ing)? in\b|\bsign in\b/i
+/** Ceremony vocabulary — two humans who know each other. */
+const CEREMONY_WORDS = /\bsix words\b|\bfingerprint\b|\bread (these|them) (aloud|to)\b|\bout loud\b/i
+
+/**
+ * R31's wall, as a function so a test can hold it.
+ *
+ * Returns the ids where the two identity vocabularies appear in ONE string.
+ * Empty is the only acceptable answer: a sentence that reaches for both is a
+ * sentence that has confused a registry check with a conversation between two
+ * people, and that confusion is exactly what makes one of them unsafe.
+ */
+export function identityVocabularyLeaks(
+  strings: Readonly<Record<string, string>>
+): string[] {
+  return Object.entries(strings)
+    .filter(([, v]) => ACCOUNT_WORDS.test(v) && CEREMONY_WORDS.test(v))
+    .map(([id]) => id)
+}
+
+/**
+ * ── R30: TEMPLATE · SERVE · SESSION ──────────────────────────────────────────
+ *
+ * Three words a stranger must survive without a glossary. TEMPLATE needs no
+ * gloss — "a starting point you copy from" is the right guess. SERVE is jargon
+ * alone but is taught by its own success state, so every surface here carries
+ * "takes calls" beside it rather than only the live one. SESSION is OWNER-SIDE
+ * ONLY: a stranger's session is a login, weightless and ephemeral, and this one
+ * is a workspace with a folder that parks for hours and survives the author's
+ * next version. A caller has a WORKSPACE and mostly needs no noun at all — no
+ * string in MKT_SVC uses the word, and a test holds that.
+ *
+ * "Service" is deliberately absent as a noun: a fourth word the bar has no
+ * budget for. /svc/ survives only as a URL, because nobody reads a path as
+ * vocabulary.
+ */
+
+/** Saving a workspace as a template. R31: it saves to the account, privately. */
+export const MKT_TEMPLATE = {
+  'mkt.template.action': 'SAVE AS TEMPLATE',
+  'mkt.template.what':
+    'Saves this workspace as it is right now — roles, prompts, connections — and pins the version on the rail.',
+  'mkt.template.done': 'Saved to your account, private. Nothing was published.',
+  /** JUST ME, not MINE: everything on the shelf is mine, published or not. The
+   *  state being drawn is NOT SHARED, and JUST ME is the same words as the
+   *  serve sheet's first row — one vocabulary for the tag and the answer. */
+  'mkt.template.chip.private': 'JUST ME',
+  'mkt.template.chip.tip': 'Only you can see this. Serve it when you want other people to use it.',
+  'mkt.template.error': "Couldn't save that — nothing was stored and nothing was published.",
+  'mkt.template.newversion':
+    'Saved as {version}. New callers start here; anyone already working stays on the version they started with.'
+} as const
+
+/** The SERVE sheet — one question, three rows, no per-agent matrix. */
+export const MKT_SERVE = {
+  'mkt.serve.title': 'Serve {templateName}',
+  'mkt.serve.door':
+    'Callers talk to {orch} only. It runs the rest of the team the way it always has — the others are never exposed.',
+  'mkt.serve.who': 'Who can call it?',
+  'mkt.serve.who.none': 'Just me',
+  'mkt.serve.who.none.sub': "Stays on your shelf. That's where it is now.",
+  /** R31 makes the plain label the true one; my earlier objection to "signs in"
+   *  is withdrawn — it was right for facts that have since changed. */
+  'mkt.serve.who.free': 'Anyone with a Cookrew account — free',
+  'mkt.serve.who.free.sub': 'They sign in, then start. You see who is on, never what they are doing.',
+  'mkt.serve.who.paid': 'Anyone who pays',
+  'mkt.serve.who.paid.sub':
+    'Set a price. Callers pay you directly — Cookrew never holds the money and takes nothing.',
+  /** The bound the reversibility promise needs, or it reads as a recall. */
+  'mkt.serve.reversible':
+    'Change this any time, including back to Just me — which stops new callers. Anyone already working keeps going until you end them.',
+  'mkt.serve.action': 'START SERVING',
+  'mkt.serve.dismiss': 'Cancel',
+  /** THE OWNER REASSURANCE. Not "safe" but "carry on", which is the real fear. */
+  'mkt.serve.safety':
+    "Callers never touch your workspace. Each one gets a fresh copy of the template you pinned, in its own folder. Keep working exactly as you did before — they can't see it, and nothing you do now reaches them.",
+  'mkt.serve.live': '{templateName} is taking calls.',
+  'mkt.serve.live.address': 'Callers land on {orch} · {priceLine}',
+  'mkt.serve.stop.action': 'STOP SERVING',
+  'mkt.serve.stop.confirm':
+    'Stop serving {templateName}? {n} workspaces end now, including any mid-call. The template stays on your shelf.',
+  'mkt.serve.error': "Couldn't start serving — {templateName} is still private and nobody can call it."
+} as const
+
+/** The SESSIONS table. Owner-side; the word lives here and nowhere else. */
+export const MKT_SESSIONS = {
+  'mkt.sessions.title': '{templateName} · sessions',
+  'mkt.sessions.subtitle': 'Each one is a standalone workspace in your app.',
+  'mkt.sessions.col.caller': 'Caller',
+  'mkt.sessions.col.workspace': 'Workspace',
+  'mkt.sessions.col.sandbox': 'Sandbox',
+  'mkt.sessions.col.version': 'Version',
+  'mkt.sessions.col.state': 'State',
+  'mkt.sessions.state.working': 'working',
+  /** Parked must say it is free, or an owner ends sessions to save money they
+   *  were never spending. */
+  'mkt.sessions.state.parked': 'parked {ago} · costs you nothing',
+  'mkt.sessions.empty': 'Nobody has called this yet.',
+  'mkt.sessions.end.action': 'END',
+  /** The one control here that MUST confirm — it destroys someone else's work —
+   *  and the confirm carries the consequence rather than asking "are you sure". */
+  'mkt.sessions.end.confirm.title': "End {caller}'s workspace?",
+  'mkt.sessions.end.confirm.body':
+    "Anything it's doing right now stops, and their folder is removed. They'll be told you ended it. Your own workspace and template are untouched.",
+  'mkt.sessions.end.confirm.action': 'END IT',
+  'mkt.sessions.end.done': "{caller}'s workspace ended.",
+  /** Frightening half first, plus the SECOND remedy — the first one is the
+   *  thing that just failed. */
+  'mkt.sessions.end.error':
+    "Couldn't end {caller}'s workspace — it's still running and they can still work. Try again, or stop serving to end every workspace at once."
+} as const
+
+/**
+ * The /svc/ page — a stranger with no app and no idea what Cookrew is. Four
+ * questions in the order they are asked: what is this, who runs it, what does
+ * it cost, what happens if I start. Then the Gate Sheet.
+ */
+export const MKT_SVC = {
+  'mkt.svc.title': '{templateName}',
+  'mkt.svc.byline': 'run by {author} · {n} agents · {version}',
+  'mkt.svc.what':
+    'A crew of AI agents that works on what you ask. You talk to one of them — {orch} — and it runs the others.',
+  'mkt.svc.yours':
+    'You get your own private workspace. It is created when you start, it belongs to you, and the files you make stay in it. Nobody else’s work touches yours.',
+  'mkt.svc.price.paid':
+    '{price} {asset} to start. Paid directly to {author} — Cookrew never holds the money and takes nothing.',
+  'mkt.svc.price.free': 'Free to start. Sign in with your Cookrew account first — one tap, no password.',
+  /**
+   * FLAGGED FOR ATLAS. "They can't see inside it" is a claim about what the
+   * product surfaces, not about what is reachable on a machine the author owns.
+   * If an author can read a caller's transcript this must say so instead — it
+   * is shown before payment, which makes it the most consequential sentence on
+   * the page.
+   */
+  'mkt.svc.privacy':
+    "{author} can see that you're here and can end your workspace. They can't see inside it.",
+  'mkt.svc.start.paid': 'START — {price} {asset}',
+  'mkt.svc.start.free': 'START',
+  'mkt.svc.start.note':
+    'Starting signs you in first, then takes payment. Nothing is charged until you approve it in your wallet.',
+  'mkt.svc.start.note.free': 'Starting signs you in first. Nothing is charged.',
+  'mkt.svc.ready': 'Your workspace is ready. Files you create land in your own folder.',
+  'mkt.svc.frozen':
+    '{author} released {newVersion}. You are on {version}, the one you started with, and it stays that way until you finish.',
+  /** FLAGGED: if the sandbox survives END, this must say that instead. Written
+   *  bluntly on purpose — a stranger paid, did work, and someone else's button
+   *  deleted it. Softening is the temptation and would be the lie. */
+  'mkt.svc.ended':
+    '{author} ended this workspace. Anything running stopped. Your files were in the workspace and are gone with it.',
+  'mkt.svc.ended.paid': 'You paid to start this. Contact {author} if that was not expected.',
+  'mkt.svc.unavailable': '{templateName} is not taking calls right now.'
+} as const
+
+export type MktTemplateId = keyof typeof MKT_TEMPLATE
+export type MktServeId = keyof typeof MKT_SERVE
+export type MktSessionsId = keyof typeof MKT_SESSIONS
+export type MktSvcId = keyof typeof MKT_SVC
+
+/**
+ * R30's confinement, as a function a test can hold: "session" is owner-side
+ * vocabulary and must never reach a caller. MKT_SVC is the caller's whole
+ * surface, so the check is exact rather than heuristic.
+ */
+export function callerFacingSessionLeaks(strings: Readonly<Record<string, string>>): string[] {
+  return Object.entries(strings)
+    .filter(([, v]) => /\bsessions?\b/i.test(v))
+    .map(([id]) => id)
+}
+
+
+/**
+ * ── CHIP PROVENANCE AND THE IMPORTED PIN ─────────────────────────────────────
+ *
+ * The chip family now carries two different facts in two slots, and they must
+ * not be confused for each other:
+ *
+ *   STATE      — where is this in its life? dashed/JUST ME → versioned → served.
+ *   PROVENANCE — whose is it? absent for your own, BY {handle} for someone
+ *                else's.
+ *
+ * They are separate axes. A chip can be your own and unpublished, your own and
+ * served, or someone else's and running — and the reader needs both answers at
+ * a glance, which is why one tag may not try to carry both.
+ */
+export const MKT_CHIP = {
+  /** Provenance. Absent on your own chips; the absence IS the answer. */
+  'mkt.chip.by': 'BY {handle}',
+  'mkt.chip.by.tip': '{handle} wrote this crew. You are running their work.',
+  /**
+   * The imported pin's hover. Two kinds, because the chips doc has two: a copy
+   * you bought and keep, and a live line you were granted. "The version you
+   * were granted" is wrong on a bought copy — it implies someone can take it
+   * back, and nobody can.
+   */
+  'mkt.chip.pin.bought': "You're on {handle}'s {version} — the version you installed. It stays yours.",
+  'mkt.chip.pin.granted':
+    "You're on {handle}'s {version} — the version you were granted. {handle} can end the line, and your work stops with it.",
+  'mkt.chip.pin.session':
+    "You're on {handle}'s {version} — the version you started on. New callers may get a newer one; you stay here until you finish.",
+  /** Your own pin, for contrast — the reader must be able to tell them apart. */
+  'mkt.chip.pin.own': 'Your {version}, pinned at the checkpoint you saved.'
+} as const
+
+export type MktChipId = keyof typeof MKT_CHIP
+
+/** How a caller came by this crew. Drives which pin sentence the hover shows. */
+export type ImportKind = 'bought' | 'granted' | 'session'
+
+/**
+ * The imported pin's tooltip. A resolver rather than one string, because the
+ * three relationships differ in the only way the reader cares about: whether it
+ * can be taken away. Bought cannot, granted can, a session ends when the author
+ * says so.
+ */
+export function importedPinTip(
+  kind: ImportKind,
+  handle: string,
+  version: string
+): string {
+  const id = `mkt.chip.pin.${kind}` as MktChipId
+  return fillCopy(MKT_CHIP[id], { handle: authorLabel(handle), version })
+}
+
+
+/** Every group, so a renderer can resolve any id without knowing its family. */
+export const MKT_ALL = {
+  ...MKT_ROTATION,
+  ...MKT_DENIED,
+  ...MKT_AUTH,
+  ...MKT_PAY,
+  ...MKT_INSTALL_PRICE,
+  ...MKT_DENIED_REASONS,
+  ...MKT_BLOCKED,
+  ...MKT_EXPORT,
+  ...MKT_ENROL,
+  ...MKT_SAVE,
+  ...MKT_TEMPLATE,
+  ...MKT_SERVE,
+  ...MKT_SESSIONS,
+  ...MKT_SVC,
+  ...MKT_CHIP
+} as const
+
+export type MktId = keyof typeof MKT_ALL
+
+/** Resolve any id and fill it. Throws on an unknown id, like fillCopy does on
+ *  an unfilled placeholder: both are programming mistakes, not user states. */
+export function copy(id: MktId, vars: Readonly<Record<string, string | number>> = {}): string {
+  const template = MKT_ALL[id]
+  if (template === undefined) throw new Error(`marketplace copy: unknown id ${id}`)
+  return fillCopy(template, vars)
 }
