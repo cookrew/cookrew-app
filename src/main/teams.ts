@@ -633,6 +633,26 @@ export interface TeamForkDeps {
   /** index.ts switch wrapper — the switch boots the forked terminals. */
   switchWorkspace: (id: string) => void
   /**
+   * Bring a freshly forked workspace's terminals ALIVE, without focusing it.
+   *
+   * BOOT AND FOCUS WERE ONE ACT, and only because nothing had ever needed them
+   * apart. `switchWorkspace` was called at the end of a fork for its side
+   * effect — the switch is what boots the terminals — which is correct for the
+   * owner forking on their own canvas and wrong for anything created on their
+   * behalf: a SERVED session would yank the owner's screen to a stranger's
+   * workspace on that stranger's first call, once per caller, forever.
+   *
+   * The codebase already knew these were different. copyTeam's own note says
+   * "the view does NOT switch: nodes come alive now only when the target is the
+   * live canvas; otherwise terminals boot on activation" — a deferred boot that
+   * a served session can never reach, because it is never activated.
+   *
+   * So the fork asks for BOOT and the caller decides whether that includes
+   * focus. The owner's path passes a switching implementation and is
+   * byte-unchanged; a served session passes one that boots in place.
+   */
+  bootTerminals?: (id: string) => void
+  /**
    * Bring one just-added node alive on the ACTIVE canvas — the same per-kind
    * side effects index.ts addNode owns (spawn terminals, sync browsers).
    * copyTeam uses it when the copy lands on the live workspace; copies into
@@ -783,7 +803,9 @@ export async function forkTeam(deps: TeamForkDeps, spec: TeamForkSpec): Promise<
     undefined,
     plan.dirs
   )
-  deps.switchWorkspace(meta.id)
+  // Default is the switch, so every existing caller — `cookrew workspace create
+  // --team` included — behaves exactly as before.
+  ;(deps.bootTerminals ?? deps.switchWorkspace)(meta.id)
 
   for (const t of plan.terminals) {
     const inject = contexts.get(t.newId)?.inject
