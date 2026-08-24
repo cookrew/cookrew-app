@@ -44,6 +44,7 @@ import {
   useActivitiesSnapshot,
   useThumbsSnapshot
 } from './activity-thumb-store'
+import { reconcileFlowNodes } from './flow-nodes'
 import { useBrowserEngine } from './browser-engine'
 import { ErrorBoundary } from './ErrorBoundary'
 import { ReauthOverlay } from './ReauthOverlay'
@@ -76,16 +77,11 @@ function sameViewport(
 const nodeTypes = { terminal: TerminalNode, note: NoteNode, browser: BrowserNode }
 const edgeTypes = { cable: CableEdge }
 
-function toFlowNodes(state: WorkspaceState): Node[] {
-  return state.nodes.map((n) => ({
-    id: n.id,
-    type: n.kind,
-    position: n.position,
-    data: { node: n },
-    style: { width: n.size.width, height: n.size.height },
-    dragHandle: '.node-header'
-  }))
+/** The ids ReactFlow currently marks selected — carried across a reconcile. */
+function selectedIds(nodes: Node[]): Set<string> {
+  return new Set(nodes.filter((n) => n.selected).map((n) => n.id))
 }
+
 
 function toFlowEdges(state: WorkspaceState): Edge[] {
   return state.connections.map((c) => ({
@@ -276,7 +272,7 @@ function Canvas(): React.JSX.Element {
       retry(() => cookrew().getWorkspace())
         .then((state) => {
           setWorkspace(state)
-          setNodes(toFlowNodes(state))
+          setNodes((prev) => reconcileFlowNodes(prev, state.nodes, selectedIds(prev)))
         })
         .catch((error: unknown) => {
           console.error('Could not load the workspace:', error)
@@ -299,18 +295,14 @@ function Canvas(): React.JSX.Element {
     void loadWorkspace()
     return cookrew().onWorkspaceState((state) => {
       setWorkspace(state)
-      // Selection must SURVIVE the rebuild: toFlowNodes carries no
-      // `selected`, so a bare replacement would clear it on every broadcast
-      // — including the N broadcasts a duplicate-in-place itself fires,
-      // unmounting the SelectionBar before its own success can render.
+      // Selection must SURVIVE the rebuild (reconcileFlowNodes carries no
+      // `selected` of its own), so it is re-applied from the previous nodes —
+      // including the N broadcasts a duplicate-in-place itself fires, which
+      // would otherwise unmount the SelectionBar before its own success renders.
+      // reconcileFlowNodes ALSO preserves identity for unchanged nodes, so a
+      // single-node broadcast re-renders a single card, not all 91.
       if (!draggingRef.current) {
-        setNodes((prev) => {
-          const selected = new Set(prev.filter((n) => n.selected).map((n) => n.id))
-          if (selected.size === 0) return toFlowNodes(state)
-          return toFlowNodes(state).map((n) =>
-            selected.has(n.id) ? { ...n, selected: true } : n
-          )
-        })
+        setNodes((prev) => reconcileFlowNodes(prev, state.nodes, selectedIds(prev)))
       }
     })
   }, [loadWorkspace])
@@ -922,9 +914,20 @@ function Canvas(): React.JSX.Element {
     }
   }, [])
 
-  const terminals = (workspace?.nodes.filter((n) => n.kind === 'terminal') ??
-    []) as TerminalNodeData[]
-  const browsers = (workspace?.nodes.filter((n) => n.kind === 'browser') ?? []) as BrowserNodeData[]
+  // Memoized on the node list, NOT recomputed every render: a fresh .filter()
+  // each render gave overlayNodes' memo new-identity deps (so it recomputed
+  // every frame) and handed TerminalOverlayLayer/BrowserLayer new-identity array
+  // props (so they re-rendered) even during pan/zoom and activity, when the
+  // nodes themselves are unchanged. These now change only on a real workspace
+  // push.
+  const terminals = useMemo(
+    () => (workspace?.nodes.filter((n) => n.kind === 'terminal') ?? []) as TerminalNodeData[],
+    [workspace?.nodes]
+  )
+  const browsers = useMemo(
+    () => (workspace?.nodes.filter((n) => n.kind === 'browser') ?? []) as BrowserNodeData[],
+    [workspace?.nodes]
+  )
   // The snapshot poll reads this instead of `browsers`, so it subscribes once
   // rather than tearing down its interval on every workspace push.
   browsersRef.current = browsers
