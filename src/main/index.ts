@@ -117,13 +117,15 @@ import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 import { TraceReader, type SessionWatchSpec } from './trace'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
-import { TeamStore, copyTeam, forkTeam, workspaceFromTemplate, type TeamSnapshot } from './teams'
 import {
-  planImportSession,
-  orchTerminalNode,
-  type ServeTarget
-} from './import-session'
-import { MOBILE_HTTPS_PORT } from './mobile-ports'
+  TeamStore,
+  copyTeam,
+  forkTeam,
+  workspaceFromTemplate,
+  entryAgentOf,
+  type TeamSnapshot
+} from './teams'
+import { type ServeTarget } from './import-session'
 import { PresetStore, isPresetId } from './preset-store'
 import { PinStore } from './pin-store'
 import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
@@ -1632,25 +1634,6 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
   const role = opts.roleName ? roles.get(opts.roleName) : undefined
   if (opts.roleName && !role) throw new Error(`No saved role '${opts.roleName}'`)
 
-  // A SAVED TEMPLATE placed as a preset IS the import: drop ONE terminal — the
-  // entry orchestrator — that reaches the crew over HTTP, rather than pasting
-  // the whole team. Checked after harness presets and roles, so a template can
-  // never shadow a built-in, and only when nothing else claimed the name.
-  if (!role && !PRESETS.some((p) => p.name === opts.preset)) {
-    const template = teams.load(opts.preset)
-    if (template) {
-      const plan = planImportSession(template, {
-        origin: `https://127.0.0.1:${MOBILE_HTTPS_PORT}`,
-        slug: 'local'
-      })
-      const orchNode = orchTerminalNode(plan, randomUUID(), store.focusedState.dir, opts.position)
-      const placed = store.addNode(orchNode)
-      spawnTracked(placed as TerminalNodeData)
-      store.recordEvent('session.imported', template.name, plan.orch.name, plan.orch.askUrl)
-      return placed
-    }
-  }
-
   const preset = PRESETS.find((p) => p.name === opts.preset) ?? PRESETS[PRESETS.length - 1]
   // Native restore: a role saved from a checkpoint carries a truncated session
   // copy — materialize it under a fresh id so the booted Claude agent resumes
@@ -1872,18 +1855,25 @@ async function createWorkspaceFromTeam(
  * fixture path) the orch still points at 127.0.0.1's own listener, so the flow
  * is exercisable end to end before any public relay exists.
  */
-function importTemplateAsSession(team: string, target?: ServeTarget): WorkspaceMeta {
+async function importTemplateAsSession(team: string, target?: ServeTarget): Promise<WorkspaceMeta> {
   const snapshot = teams.load(team)
   if (!snapshot) throw new Error(`No saved template '${team}' to import`)
-  const serve = target ?? { origin: `https://127.0.0.1:${MOBILE_HTTPS_PORT}`, slug: 'local' }
-  const plan = planImportSession(snapshot, serve)
-  const meta = store.createWorkspace(plan.workspaceName, snapshot.dir || store.focusedState.dir)
-  const node = orchTerminalNode(plan, `term_${randomUUID().slice(0, 12)}`, snapshot.dir, {
-    x: 160,
-    y: 120
+
+  // LOCAL import (your own template, no remote target): a REAL session — a new
+  // workspace forked from the template, with the team booted from its saved
+  // sessions and a git worktree per repo dir (the fork engine's GOAL 5). This
+  // is what makes the session visible and gives it its own workdir; the earlier
+  // "one fake orch terminal" placed a command nothing could run, so it showed
+  // blank. The single-orch-over-HTTP card is the REMOTE case (someone else's
+  // served crew, CallClient) — not a local placement.
+  const meta = await workspaceFromTemplate(teamForkDeps(), {
+    name: `${snapshot.name} · session`,
+    dir: snapshot.dir || store.focusedState.dir,
+    team
   })
-  store.addNodeToWorkspace(meta.id, node)
-  store.recordEvent('session.imported', plan.workspaceName, plan.orch.name, plan.orch.askUrl)
+  store.switchWorkspace(meta.id)
+  const entry = entryAgentOf(snapshot)
+  store.recordEvent('session.imported', meta.name, entry ?? meta.name, `${snapshot.name}`)
   return meta
 }
 

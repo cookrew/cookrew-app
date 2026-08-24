@@ -118,6 +118,7 @@ function Canvas(): React.JSX.Element {
   const [preset, setPreset] = useState('Shell')
   const [orch, setOrch] = useState(false)
   const [presets, setPresets] = useState<string[]>(['Shell'])
+  const [templates, setTemplates] = useState<string[]>([])
   const [roles, setRoles] = useState<AgentRole[]>([])
   /** Selected saved role for TERMINAL placement, or null for a plain preset. */
   const [role, setRole] = useState<string | null>(null)
@@ -188,6 +189,10 @@ function Canvas(): React.JSX.Element {
       .then((list) => setPresets(list.map((p) => p.name)))
     // Saved roles ride alongside presets as terminal-creation options.
     void cookrew().roleList().then(setRoles).catch(() => undefined)
+    // Saved templates ARE presets too, but placing one imports a session
+    // instead of dropping a terminal — so the placement path must tell them
+    // apart. Kept as a name set, refreshed on save.
+    void cookrew().teamList?.().then((list) => setTemplates(list.map((t) => t.name))).catch(() => undefined)
   }, [])
 
   // Track the active workspace ID — the paste ghosts only show for a
@@ -825,6 +830,20 @@ function Canvas(): React.JSX.Element {
             console.error('Placing preset failed:', error)
           } finally {
             setPresetId(null)
+            setTool('move')
+          }
+          return
+        }
+        // A SAVED TEMPLATE placed as a preset IMPORTS a session: a new
+        // workspace forked from the template — team, worktree, workdir —
+        // switched to. Not a terminal on this canvas, so it returns before
+        // createTerminal. The click that "placed" it is the confirm.
+        if (!role && templates.includes(preset)) {
+          try {
+            await cookrew().templateImport(preset)
+          } catch (error) {
+            console.error('Importing template failed:', error)
+          } finally {
             setTool('move')
           }
           return
