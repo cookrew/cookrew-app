@@ -695,6 +695,60 @@ export function callerFacingSessionLeaks(strings: Readonly<Record<string, string
 }
 
 
+/**
+ * ── CHIP PROVENANCE AND THE IMPORTED PIN ─────────────────────────────────────
+ *
+ * The chip family now carries two different facts in two slots, and they must
+ * not be confused for each other:
+ *
+ *   STATE      — where is this in its life? dashed/JUST ME → versioned → served.
+ *   PROVENANCE — whose is it? absent for your own, BY {handle} for someone
+ *                else's.
+ *
+ * They are separate axes. A chip can be your own and unpublished, your own and
+ * served, or someone else's and running — and the reader needs both answers at
+ * a glance, which is why one tag may not try to carry both.
+ */
+export const MKT_CHIP = {
+  /** Provenance. Absent on your own chips; the absence IS the answer. */
+  'mkt.chip.by': 'BY {handle}',
+  'mkt.chip.by.tip': '{handle} wrote this crew. You are running their work.',
+  /**
+   * The imported pin's hover. Two kinds, because the chips doc has two: a copy
+   * you bought and keep, and a live line you were granted. "The version you
+   * were granted" is wrong on a bought copy — it implies someone can take it
+   * back, and nobody can.
+   */
+  'mkt.chip.pin.bought': "You're on {handle}'s {version} — the version you installed. It stays yours.",
+  'mkt.chip.pin.granted':
+    "You're on {handle}'s {version} — the version you were granted. {handle} can end the line, and your work stops with it.",
+  'mkt.chip.pin.session':
+    "You're on {handle}'s {version} — the version you started on. New callers may get a newer one; you stay here until you finish.",
+  /** Your own pin, for contrast — the reader must be able to tell them apart. */
+  'mkt.chip.pin.own': 'Your {version}, pinned at the checkpoint you saved.'
+} as const
+
+export type MktChipId = keyof typeof MKT_CHIP
+
+/** How a caller came by this crew. Drives which pin sentence the hover shows. */
+export type ImportKind = 'bought' | 'granted' | 'session'
+
+/**
+ * The imported pin's tooltip. A resolver rather than one string, because the
+ * three relationships differ in the only way the reader cares about: whether it
+ * can be taken away. Bought cannot, granted can, a session ends when the author
+ * says so.
+ */
+export function importedPinTip(
+  kind: ImportKind,
+  handle: string,
+  version: string
+): string {
+  const id = `mkt.chip.pin.${kind}` as MktChipId
+  return fillCopy(MKT_CHIP[id], { handle: authorLabel(handle), version })
+}
+
+
 /** Every group, so a renderer can resolve any id without knowing its family. */
 export const MKT_ALL = {
   ...MKT_ROTATION,
@@ -710,7 +764,8 @@ export const MKT_ALL = {
   ...MKT_TEMPLATE,
   ...MKT_SERVE,
   ...MKT_SESSIONS,
-  ...MKT_SVC
+  ...MKT_SVC,
+  ...MKT_CHIP
 } as const
 
 export type MktId = keyof typeof MKT_ALL

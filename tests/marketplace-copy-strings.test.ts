@@ -87,7 +87,8 @@ describe('every protocol moment has words', () => {
     const mod = await import('../src/shared/marketplace-copy')
     const groups = [mod.MKT_AUTH, mod.MKT_PAY, mod.MKT_DENIED_REASONS, mod.MKT_BLOCKED,
                     mod.MKT_EXPORT, mod.MKT_ENROL, mod.MKT_SAVE, mod.MKT_INSTALL_PRICE,
-                    mod.MKT_TEMPLATE, mod.MKT_SERVE, mod.MKT_SESSIONS, mod.MKT_SVC]
+                    mod.MKT_TEMPLATE, mod.MKT_SERVE, mod.MKT_SESSIONS, mod.MKT_SVC,
+                    mod.MKT_CHIP]
     for (const group of groups) {
       for (const id of Object.keys(group)) {
         expect(Object.keys(MKT_ALL), `${id} is not reachable through MKT_ALL`).toContain(id)
@@ -162,5 +163,33 @@ describe('R30 vocabulary', () => {
   it('the owner reassurance says carry on, not merely safe', async () => {
     const { MKT_SERVE } = await import('../src/shared/marketplace-copy')
     expect(MKT_SERVE['mkt.serve.safety']).toMatch(/keep working exactly as you did before/i)
+  })
+})
+
+describe('chip provenance and the imported pin', () => {
+  it('never tells a buyer their bought copy can be taken away', async () => {
+    const { importedPinTip } = await import('../src/shared/marketplace-copy')
+    const bought = importedPinTip('bought', 'drej', 'V2')
+    expect(bought).toContain("@drej's V2")
+    expect(bought).toMatch(/stays yours/i)
+    // "the version you were granted" implies a revoker. On a purchase there
+    // isn't one, and implying otherwise sells a weaker thing than we shipped.
+    expect(bought).not.toMatch(/granted/i)
+  })
+
+  it('tells a granted caller the line can end, because it can', async () => {
+    const { importedPinTip } = await import('../src/shared/marketplace-copy')
+    expect(importedPinTip('granted', 'drej', 'V2')).toMatch(/can end the line/i)
+  })
+
+  it('distinguishes your own pin from someone else’s', async () => {
+    const { MKT_CHIP, importedPinTip } = await import('../src/shared/marketplace-copy')
+    expect(MKT_CHIP['mkt.chip.pin.own']).not.toMatch(/@|\{handle\}/)
+    expect(importedPinTip('session', 'drej', 'V2')).toContain('@drej')
+  })
+
+  it('normalises the handle exactly once', async () => {
+    const { importedPinTip } = await import('../src/shared/marketplace-copy')
+    expect(importedPinTip('bought', '@drej', 'V2')).not.toContain('@@')
   })
 })
