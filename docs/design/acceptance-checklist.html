@@ -59,7 +59,7 @@ footer{margin-top:3.5rem;padding-top:1.1rem;border-top:1px solid var(--line);col
 <main>
 
 <h1>Acceptance checklist — the two doors</h1>
-<p class="sub">Built from the storyboards in <code>connected-product.html</code> §03 · same vocabulary as
+<p class="sub">The replay script is <code>e2e-demo.html</code> (six steps, chip → sheet → pay → canvas → update); scope from <code>connected-product.html</code> §02–05 · same vocabulary as
 <code>user-journey-audit.html</code>, so before/after is one diff · harness armed 2026-08-23 · Magpie</p>
 
 <div class="callout">
@@ -76,8 +76,11 @@ footer{margin-top:3.5rem;padding-top:1.1rem;border-top:1px solid var(--line);col
 ARMED  registry       localhost:8860 · payments served · custody: none — funds move buyer to author
 ARMED  freePublic     "Deep Research" v2 — the ungated control
 ARMED  freeGated      "Pro Toolkit" v1 — the 401 leg
-ARMED  priced         "Research Crew" · 4 agents · $2.50 one-time · published via POST /v1/presets
-                      with a real countersignature and a real payout address
+ARMED  priced         "Research Crew" v4 · Scout · Digger · Librarian · Editor · $2.50 one-time
+                      published via POST /v1/presets with a real countersignature + payout
+ARMED  update         v5 on the SAME lineage — the V5↑ step
+ARMED  updateFree     a v4 buyer fetches v5 with NO payment and gets 200 — "update free,
+                      you already own this" is true on the wire TODAY
 ARMED  author         publish-scoped credential
 ARMED  buyer          download-scoped credential — a genuinely separate passkey
 ARMED  terms          402 quotes 2.50 USDC on base
@@ -89,7 +92,7 @@ MISSING fingerprint   no six-word derivation exists in the product
 MISSING walletSheet   no wallet code anywhere in src, on any ref (gap #1)
 MISSING remoteCard    no surface fronts a granted line (gap #6)
 
-ARMED 12 · MISSING 3 · BLOCKED 0</code></pre>
+ARMED 14 · MISSING 3 · BLOCKED 0</code></pre>
 
 <div class="callout warn">
   <strong>Two fixtures are deliberately not faked.</strong> The six-word fingerprint and the wallet sheet do not
@@ -104,6 +107,109 @@ ARMED 12 · MISSING 3 · BLOCKED 0</code></pre>
 <code>mobile-server.ts</code>, and the renderer now carries <code>GrantPanel.tsx</code>, <code>EnrolSheet.tsx</code>
 and <code>grant-copy.ts</code>. Door B moved from "entirely absent" to "backend merged, surfaces arriving". My own
 harness reported this before I did, which is the argument for verifying fixtures rather than declaring them.</p>
+
+<h2>The replay — six steps, in the product's own chrome</h2>
+<p><code>e2e-demo.html</code> is the contract, and it is more specific than the storyboards: it walks
+<strong>chip → sheet → pay → canvas → update</strong> in real chrome. This is the script I execute with real input.
+The fixture now matches it exactly — <em>Research Crew</em> at <strong>v4</strong> with Scout · Digger · Librarian ·
+Editor, and a <strong>v5 on the same lineage</strong> for step 6.</p>
+
+<div class="callout">
+  <strong>Give-up #4 now has two death certificates, and I check both.</strong> The demo moves the price onto the
+  <code>.cr-chip-price</code> tag, so the cost is visible <em>in the dock, before the first click</em> — earlier than
+  the link. The audit found it missing on the link; it must now be present in <strong>both</strong> places, and the
+  two must agree. A chip that says <code>$2.50</code> over a link that says nothing is still a buyer learning the
+  price late.
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">D-1</span><span class="t">THE CHIP — cost before the first click</span><span class="v v-armed">Fixture ready</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li><strong>One slot, one truth.</strong> An unowned priced chip shows <code>$2.50</code>; an owned chip shows
+    <code>V4</code>. The slot <em>flips</em> — an owned chip must never show a price, because for an owner the answer
+    to "what would this cost me" is nothing.</li>
+    <li>A free chip shows <strong>no price tag at all</strong>, not <code>$0</code>.</li>
+    <li>Amber-deep, <strong>never rose</strong> — computed style, not class name. It is an offer, not a warning; the
+    audit's lesson from B1 is that a colour saying "danger" over a price is copy, and wrong copy.</li>
+    <li>Tapping a gated chip <strong>opens the sheet</strong> and is never a dead end — and places no node. Control:
+    <code>/api/state</code> node count unchanged.</li>
+    <li>Marketplace is the <strong>third</strong> chip family, after harness presets and roles.</li>
+  </ul>
+  <div class="lbl">Kills</div><p>Give-up #4 (at the dock) and #1's downstream half.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">D-2</span><span class="t">THE SHEET — "First: you're you"</span><span class="v v-wall">Wall until the Gate Sheet lands</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>One sheet mirrors <code>authorize()</code> (R28): steps for identity → entitlement → price.</li>
+    <li>Copy: <em>"passkey · this device · never a password"</em> and <em>"Opening this sheet installed nothing. You
+    decide, at every step."</em></li>
+    <li>Both exits present — <strong>NOT NOW</strong> as well as <strong>USE PASSKEY</strong>. A sheet with only a
+    forward door is a trap.</li>
+    <li>Audit baseline: the 401 was <code>{}</code> and a 43-char header blob. Ceremony measured at 147 ms, so the
+    sheet has no latency excuse.</li>
+  </ul>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">D-3</span><span class="t">PAY — the cleared step collapses</span><span class="v v-wall">Wall until the wallet lands</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>The cleared 401 <strong>collapses to one line</strong> (<em>"✓ You're you."</em>); skipped steps go dashed.
+    Assert the collapse, not just the presence — an accumulating sheet is a different design.</li>
+    <li><em>"This crew costs $2.50, once. Pay and it's yours — reinstall and update free."</em></li>
+    <li>price · chain (<strong>Base</strong>, named separately) · <strong>paid to @drej AUTHOR</strong>.</li>
+    <li><em>"Cookrew never holds your money and takes nothing."</em></li>
+    <li>Wallets render as <strong>chips in the dock's own grammar</strong> (EIP-6963 discovery), not a bespoke list.</li>
+    <li>The two failure voices must not share a tone — <code>invalid</code> accuses, <code>unverifiable</code>
+    apologises. Both constructible from the armed harness on demand.</li>
+  </ul>
+  <div class="lbl">Kills</div><p>Give-up #5.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">D-4</span><span class="t">LANDING — the receipt is the pin</span><span class="v v-clear">Backend already true</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li><em>"their originals untouched — your copy runs against a fork"</em> — the §10 invariant, finally said out loud.</li>
+    <li><em>"V4 Pinned to your rail — this is your receipt"</em>, and the pin is really on the rail.</li>
+    <li><em>"Reinstall or update any time. You won't be asked to pay again."</em> — <strong>verified true on the wire
+    today</strong> by the armed harness.</li>
+  </ul>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">D-5</span><span class="t">THE CANVAS — normal terminals, plus one violet card</span><span class="v v-armed">Fixture ready</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>Four cards land <strong>named and connected</strong> — Scout, Digger, Librarian, Editor. The fixture ships
+    cables precisely so a cable-less paste is detectable.</li>
+    <li>They are <strong>ordinary harness terminals</strong> — no new node kind, and they survive an uninstall.</li>
+    <li><strong>One</strong> paste operation, not N.</li>
+    <li>The V4 pin sits on the rail like any checkpoint, and <strong>F6 alignment still holds with it present</strong>.</li>
+    <li>Door B's card is the same card in violet, with the warm-up stated (<em>"warms ~30s"</em>) rather than a
+    spinner — and the first message forks and cuts <strong>one</strong> pin.</li>
+  </ul>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">D-6</span><span class="t">THE UPDATE — offered, never pushed</span><span class="v v-armed">Backend verified</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>The chip shows <code>V5↑</code> — and the update tag stays <strong>loud on locked chips</strong>. A new
+    version behind a gate is the one thing a buyer must act on.</li>
+    <li><strong>A background HEAD check raises no sheet</strong> (R24). Already gated and mutation-killed as C21 —
+    12 HEADs mint 0 quotes — so this asserts the <em>surface</em> honours what the protocol already guarantees.</li>
+    <li><em>"↑ V5 is out. Update free — you already own this."</em> — <strong>the harness verifies this is true</strong>:
+    a v4 buyer fetches v5 with no payment and gets 200.</li>
+    <li><strong>No 402 step lights.</strong> The gate remembers; the sheet must show that it remembered.</li>
+    <li><em>"your V4 stays pinned; updating adds V5 beside it, never over it"</em> — assert V4 is still on the rail
+    after updating. Versions accumulate as pins, so going back is a tap.</li>
+    <li>Both exits: <strong>STAY ON V4</strong> as well as <strong>UPDATE TO V5</strong>.</li>
+  </ul>
+</div>
 
 <h2>The author — one sheet (3 steps)</h2>
 
@@ -273,11 +379,11 @@ harness reported this before I did, which is the argument for verifying fixtures
 <table>
   <thead><tr><th>Give-up reason (audit)</th><th>Killed by</th><th>Dies when</th></tr></thead>
   <tbody>
-    <tr><td class="id">#1</td><td>AU-1, AU-2</td><td>a person finds publishing without being told it exists</td></tr>
+    <tr><td class="id">#1</td><td>AU-1, AU-2, D-1</td><td>a person finds publishing without being told it exists</td></tr>
     <tr><td class="id">#2</td><td>A-2, AU-2</td><td>the shared link's own instruction works on a default install</td></tr>
     <tr><td class="id">#3</td><td>—</td><td>Fresco's lane; re-measured here as p50/p95 on the same 1,184-byte call</td></tr>
-    <tr><td class="id">#4</td><td>A-1</td><td>the price is on the page a stranger opens</td></tr>
-    <tr><td class="id">#5</td><td>A-3, A-4, B-3</td><td>no human decision point renders raw JSON</td></tr>
+    <tr><td class="id">#4</td><td><strong>D-1</strong> + A-1</td><td>the price is on the <strong>chip</strong> before the first click <em>and</em> on the page a stranger opens — both, and agreeing</td></tr>
+    <tr><td class="id">#5</td><td>D-3, D-4, D-6, A-3, B-3</td><td>no human decision point renders raw JSON</td></tr>
   </tbody>
 </table>
 <p>Perf is re-measured with the audit's exact instrument — 20 samples of <code>/api/workspaces</code>, an identical
