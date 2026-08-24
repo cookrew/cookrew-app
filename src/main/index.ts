@@ -120,7 +120,7 @@ import { RoleStore } from './roles'
 import { TeamStore, copyTeam, forkTeam, workspaceFromTemplate, type TeamSnapshot } from './teams'
 import { PresetStore, isPresetId } from './preset-store'
 import { PinStore } from './pin-store'
-import type { VersionPinRecord } from '../shared/version-pin'
+import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
 import { planPresetImport } from './preset-import'
 import { TeamClipboard } from './team-clip'
 import { UNCOPYABLE_PHASES } from '../shared/turn'
@@ -1834,7 +1834,40 @@ async function createWorkspaceFromTeam(
 function teamSaveTracked(name?: string, nodeIds?: string[]): TeamMeta {
   const meta = teamSaveInner(name, nodeIds)
   store.recordEvent('team.saved', meta.name, meta.name, `${meta.terminalCount} agents`)
+  // A saved template IS a version — so SAVE cuts a version pin on every agent
+  // it snapshotted, at that agent's current checkpoint. Without this the save
+  // was invisible: the template existed but no rail marker said "this is V1",
+  // so nothing on the canvas changed and the author could not see what they
+  // saved. The pin is per-terminal because the rail is per-terminal, and it is
+  // the same cut call the fork/import paths use, so the marker is identical.
+  cutTemplatePins(nodeIds)
   return meta
+}
+
+/**
+ * Cut a version pin on each saved agent's rail at its latest checkpoint.
+ * Silent per-terminal: an agent with no completed turn has nothing to pin, and
+ * a failed cut on one agent must not sink the save of the rest.
+ */
+function cutTemplatePins(nodeIds?: string[]): void {
+  const saved = store
+    .terminals()
+    .filter((t) => !nodeIds || nodeIds.includes(t.id))
+  for (const term of saved) {
+    try {
+      const history = turns.history(term.id)
+      if (history.length === 0) continue
+      const atIndex = history[history.length - 1].index
+      const pin = cutVersionPin(pinStore.list(term.id), {
+        atIndex,
+        scrollLine: ptys.get(term.id)?.paneScrollState().historySize ?? 0,
+        cutAt: Date.now()
+      })
+      pinStore.add(term.id, pin)
+    } catch (error) {
+      console.error(`template save: could not pin ${term.id}:`, error)
+    }
+  }
 }
 
 function teamSaveInner(name?: string, nodeIds?: string[]): TeamMeta {

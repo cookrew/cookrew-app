@@ -7,6 +7,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import type { TerminalNodeData } from '../../shared/model'
+import type { VersionPinRecord } from '../../shared/version-pin'
 import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 import type { LodLayout, ScreenRect } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
@@ -149,6 +150,33 @@ function TerminalOverlay({
       alive = false
     }
   }, [node.id, activity?.turnCount])
+
+  // VERSION PINS on the rail. Fetched here and passed to the timeline, which
+  // otherwise received nothing — so a saved template's pin was cut in the main
+  // process and never rendered. Re-fetch on the same turn signal as the trace,
+  // plus a bump when a template is saved (a save adds no turn, so turnCount
+  // alone would miss it). Without the save signal the marker only appeared
+  // after the next turn — which read as "save did nothing".
+  const [pins, setPins] = useState<VersionPinRecord[]>([])
+  const [pinRefresh, setPinRefresh] = useState(0)
+  useEffect(() => {
+    const bump = (): void => setPinRefresh((n) => n + 1)
+    window.addEventListener('cookrew:template-saved', bump)
+    return () => window.removeEventListener('cookrew:template-saved', bump)
+  }, [])
+  useEffect(() => {
+    let alive = true
+    void cookrew()
+      .listPins(node.id)
+      .then((list) => {
+        if (alive) setPins(list)
+      })
+      .catch((error) => console.error('listPins failed:', error))
+    return () => {
+      alive = false
+    }
+  }, [node.id, activity?.turnCount, pinRefresh])
+
   const rows = mergeCheckpointRows(paging.records ?? [], traceIndex)
 
   const transcriptRef = useRef<TranscriptHandle>(null)
@@ -664,6 +692,7 @@ function TerminalOverlay({
         <CheckpointTimeline
           terminalId={node.id}
           rows={rows}
+          pins={pins}
           markers={traceMarkers}
           titleMode={titleMode}
           activeIndex={activeBlock.index}
