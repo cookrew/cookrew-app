@@ -86,7 +86,8 @@ describe('every protocol moment has words', () => {
     // is the only thing that catches a test passing for the wrong reason.
     const mod = await import('../src/shared/marketplace-copy')
     const groups = [mod.MKT_AUTH, mod.MKT_PAY, mod.MKT_DENIED_REASONS, mod.MKT_BLOCKED,
-                    mod.MKT_EXPORT, mod.MKT_ENROL, mod.MKT_SAVE, mod.MKT_INSTALL_PRICE]
+                    mod.MKT_EXPORT, mod.MKT_ENROL, mod.MKT_SAVE, mod.MKT_INSTALL_PRICE,
+                    mod.MKT_TEMPLATE, mod.MKT_SERVE, mod.MKT_SESSIONS, mod.MKT_SVC]
     for (const group of groups) {
       for (const id of Object.keys(group)) {
         expect(Object.keys(MKT_ALL), `${id} is not reachable through MKT_ALL`).toContain(id)
@@ -121,5 +122,45 @@ describe('every protocol moment has words', () => {
     const { MKT_SAVE } = await import('../src/shared/marketplace-copy')
     expect(MKT_SAVE['mkt.save.done']).toMatch(/private/i)
     expect(MKT_SAVE['mkt.save.done']).toMatch(/nothing was published/i)
+  })
+})
+
+/** R30 — the confinements that are design decisions rather than preferences. */
+describe('R30 vocabulary', () => {
+  it('never says "session" to a caller', async () => {
+    const { MKT_SVC, callerFacingSessionLeaks } = await import('../src/shared/marketplace-copy')
+    // A stranger's session is a login: weightless, ephemeral. This one is a
+    // workspace with a folder that parks for hours and survives the author's
+    // next version, so their model would be far too small.
+    expect(callerFacingSessionLeaks(MKT_SVC)).toEqual([])
+  })
+
+  it('keeps "service" out of prose — /svc/ is a URL, not a fourth word', async () => {
+    const mod = await import('../src/shared/marketplace-copy')
+    for (const [id, value] of Object.entries(mod.MKT_ALL)) {
+      expect(value.toLowerCase(), id).not.toMatch(/\bservices?\b/)
+    }
+  })
+
+  it('bounds the reversibility promise — unlisting is not a recall', async () => {
+    const { MKT_SERVE } = await import('../src/shared/marketplace-copy')
+    expect(MKT_SERVE['mkt.serve.reversible']).toMatch(/already working keeps going/i)
+  })
+
+  it('says parking costs nothing, so nobody ends a session to save money', async () => {
+    const { MKT_SESSIONS } = await import('../src/shared/marketplace-copy')
+    expect(MKT_SESSIONS['mkt.sessions.state.parked']).toMatch(/costs you nothing/i)
+  })
+
+  it('the END failure leads with the frightening half and offers the second remedy', async () => {
+    const { MKT_SESSIONS } = await import('../src/shared/marketplace-copy')
+    const e = MKT_SESSIONS['mkt.sessions.end.error']
+    expect(e.indexOf('still running')).toBeLessThan(e.indexOf('Try again'))
+    expect(e).toMatch(/stop serving/i)
+  })
+
+  it('the owner reassurance says carry on, not merely safe', async () => {
+    const { MKT_SERVE } = await import('../src/shared/marketplace-copy')
+    expect(MKT_SERVE['mkt.serve.safety']).toMatch(/keep working exactly as you did before/i)
   })
 })
