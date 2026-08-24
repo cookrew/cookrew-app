@@ -203,23 +203,38 @@ export function rotationSheetCopy(
  * from real state rather than written as comfort.
  */
 
-/** 401 — identity. There is no account and no password; say so, once. */
+/**
+ * 401 — identity, R31 vocabulary: THIS IS AN ACCOUNT.
+ *
+ * The previous strings said there was no account, which was true until R31
+ * created one. "Sign in with your Cookrew account" is the most familiar
+ * sentence on the internet and it now describes the product accurately — the
+ * passkey is HOW the account signs in, a mechanism, not a concept the user has
+ * to meet. It appears in the sub-line where a person looks for reassurance
+ * about typing a password, and nowhere else.
+ *
+ * The one thing still banned here is "password", because there still is not
+ * one; and "unlock", because it hides whether money moves.
+ */
 export const MKT_AUTH = {
-  'mkt.auth.title': "Prove it's you",
+  'mkt.auth.title': 'Sign in with your Cookrew account',
   'mkt.auth.body':
-    'This preset asks who you are before it downloads. One passkey gesture — no password, and no account to create.',
+    'This preset asks who you are before it downloads. Signing in takes one tap — your account uses a passkey, so there is no password to remember.',
   'mkt.auth.why': 'Authors can see how many people installed a preset, never who you are.',
   'mkt.auth.method': 'Use the passkey on this device',
   'mkt.auth.method.alt': 'or scan with your phone',
   'mkt.auth.custody': 'Cookrew stores no password and never sees your key.',
-  'mkt.auth.notwallet': "A passkey isn't a wallet — paying comes later, and only if a preset costs.",
-  'mkt.auth.action': 'USE PASSKEY',
+  'mkt.auth.notwallet':
+    "Your account isn't a wallet — paying comes later, and only if a preset costs.",
+  'mkt.auth.action': 'SIGN IN',
+  'mkt.auth.newaccount': 'No account yet? Signing in makes one — it takes the same tap.',
   'mkt.auth.dismiss': 'Not now',
   /** The 90-second challenge died while the sheet sat open. Not a cancel. */
   'mkt.auth.expired': 'That request timed out. Try again.',
   'mkt.auth.cancelled': 'Passkey cancelled.',
-  'mkt.auth.unsupported.title': "This browser can't make a passkey",
-  'mkt.auth.unsupported.body': 'Use your phone instead.',
+  'mkt.auth.unsupported.title': "This browser can't sign you in",
+  'mkt.auth.unsupported.body':
+    "It can't make a passkey, which is how Cookrew accounts sign in. Use your phone instead.",
   'mkt.auth.unsupported.action': 'SCAN WITH PHONE'
 } as const
 
@@ -278,9 +293,13 @@ export const MKT_INSTALL_PRICE = {
   'mkt.install.price.onetime': '{price} {asset}, once — paid directly to {author}.',
   'mkt.install.price.percall': '{price} {asset} per call — paid directly to {author}.',
   'mkt.install.price.note': 'Cookrew never holds the money and takes nothing.',
-  /** Replaces "needs an account", which promises a thing that does not exist. */
+  /**
+   * R31: an account IS the thing now, so the plainest sentence is also the true
+   * one. The earlier version danced around the word because there was nothing
+   * to point at.
+   */
   'mkt.install.gated.note':
-    'This preset asks who you are before it downloads — one passkey gesture in Cookrew, no password.'
+    'Sign in with your Cookrew account to download this — one tap, no password.'
 } as const
 
 /** 403 — six reasons, six next actions. One word for all of them was the bug. */
@@ -386,28 +405,6 @@ export type MktDeniedReasonId = keyof typeof MKT_DENIED_REASONS
 export type MktBlockedId = keyof typeof MKT_BLOCKED
 export type MktExportId = keyof typeof MKT_EXPORT
 
-/** Every group, so a renderer can resolve any id without knowing its family. */
-export const MKT_ALL = {
-  ...MKT_ROTATION,
-  ...MKT_DENIED,
-  ...MKT_AUTH,
-  ...MKT_PAY,
-  ...MKT_INSTALL_PRICE,
-  ...MKT_DENIED_REASONS,
-  ...MKT_BLOCKED,
-  ...MKT_EXPORT
-} as const
-
-export type MktId = keyof typeof MKT_ALL
-
-/** Resolve any id and fill it. Throws on an unknown id, like fillCopy does on
- *  an unfilled placeholder: both are programming mistakes, not user states. */
-export function copy(id: MktId, vars: Readonly<Record<string, string | number>> = {}): string {
-  const template = MKT_ALL[id]
-  if (template === undefined) throw new Error(`marketplace copy: unknown id ${id}`)
-  return fillCopy(template, vars)
-}
-
 /** Pricing as a buyer reads it, for the buy sheet and the install page alike. */
 export interface PriceLike {
   model: 'one-time' | 'per-call'
@@ -467,4 +464,107 @@ export function blockedCopy(
   const at = (suffix: string): string =>
     fillCopy(MKT_BLOCKED[`mkt.review.blocked.${reason}.${suffix}` as MktBlockedId], vars)
   return { title: at('title'), body: at('body'), action: at('action') }
+}
+
+/**
+ * ── R31: TWO IDENTITY VOCABULARIES, AND THE WALL BETWEEN THEM ────────────────
+ *
+ * The product now has two ways a person proves who they are, and they are for
+ * different relationships:
+ *
+ *   ACCOUNTS — the PUBLIC door. A stranger at /svc/, the install page, the
+ *   marketplace, any 401. They and the author have never met; the account is
+ *   what a registry can check.
+ *
+ *   SIX WORDS — between TWO HUMANS WHO ALREADY KNOW EACH OTHER. WHO CAN CALL on
+ *   a LAN, owner to caller, compared out loud over a channel we do not control.
+ *   No registry is involved and none could help.
+ *
+ * THEY MUST NOT BLEED. The failure is not aesthetic: if the enrolment ceremony
+ * starts talking about accounts, a person will look for a registry to vouch for
+ * a key that no registry has ever seen, and the comparison — the only thing
+ * that makes enrolment safe — starts to feel like a formality someone else has
+ * already handled. Conversely, an account sheet showing a fingerprint invites a
+ * stranger to verify something against nobody.
+ *
+ * The rule, and `identityVocabularyLeaks()` below enforces it: an account
+ * string never mentions words, fingerprints or reading aloud; a six-word string
+ * never mentions accounts or signing in. They may not appear in one sheet.
+ */
+
+/** The six-word ceremony. LAN, human-to-human. No account vocabulary, ever. */
+export const MKT_ENROL = {
+  'mkt.enrol.title': 'Read these to each other',
+  'mkt.enrol.body':
+    'You should both see the same six words. Same words means the same key. Different words means stop — you are not enrolling the key you think you are.',
+  'mkt.enrol.channel': 'Say them out loud on a call, not over this connection.',
+  /** The owner's act: the label states the claim the click makes. */
+  'mkt.enrol.action.owner': 'I COMPARED THESE · ENROL',
+  /** The caller's act. Different verb, because they enrol nobody. */
+  'mkt.enrol.action.caller': 'I READ THESE ALOUD · CONNECT',
+  'mkt.enrol.dismiss': 'Cancel',
+  /** The one wrong paste that is a security event rather than a typo. */
+  'mkt.enrol.paste.private':
+    "That's a private key — don't share it. Cookrew hasn't stored it. Ask them for their public key, and if it went over a channel someone else can read, they should replace the pair.",
+  'mkt.enrol.paste.notakey': "That doesn't look like a public key.",
+  'mkt.enrol.paste.wrongtype': "That's a {type} key. Cookrew callers use ed25519.",
+  'mkt.enrol.paste.malformed':
+    'That key is incomplete — it may have been cut off when copied.',
+  'mkt.enrol.paste.duplicate': 'You already enrolled this key as {name}.'
+} as const
+
+/** Saving to the account (R31). Private is the load-bearing word. */
+export const MKT_SAVE = {
+  'mkt.save.action': 'SAVE TO MY PRESETS',
+  /** The toast. "Private" answers the fear that makes the button hesitate. */
+  'mkt.save.done': 'Saved to your account, private. Nothing was published.',
+  'mkt.save.error': "Couldn't save that — nothing was stored and nothing was published."
+} as const
+
+export type MktEnrolId = keyof typeof MKT_ENROL
+export type MktSaveId = keyof typeof MKT_SAVE
+
+/** Account vocabulary — the public door. */
+const ACCOUNT_WORDS = /\baccount\b|\bsign(ed|ing)? in\b|\bsign in\b/i
+/** Ceremony vocabulary — two humans who know each other. */
+const CEREMONY_WORDS = /\bsix words\b|\bfingerprint\b|\bread (these|them) (aloud|to)\b|\bout loud\b/i
+
+/**
+ * R31's wall, as a function so a test can hold it.
+ *
+ * Returns the ids where the two identity vocabularies appear in ONE string.
+ * Empty is the only acceptable answer: a sentence that reaches for both is a
+ * sentence that has confused a registry check with a conversation between two
+ * people, and that confusion is exactly what makes one of them unsafe.
+ */
+export function identityVocabularyLeaks(
+  strings: Readonly<Record<string, string>>
+): string[] {
+  return Object.entries(strings)
+    .filter(([, v]) => ACCOUNT_WORDS.test(v) && CEREMONY_WORDS.test(v))
+    .map(([id]) => id)
+}
+
+/** Every group, so a renderer can resolve any id without knowing its family. */
+export const MKT_ALL = {
+  ...MKT_ROTATION,
+  ...MKT_DENIED,
+  ...MKT_AUTH,
+  ...MKT_PAY,
+  ...MKT_INSTALL_PRICE,
+  ...MKT_DENIED_REASONS,
+  ...MKT_BLOCKED,
+  ...MKT_EXPORT,
+  ...MKT_ENROL,
+  ...MKT_SAVE
+} as const
+
+export type MktId = keyof typeof MKT_ALL
+
+/** Resolve any id and fill it. Throws on an unknown id, like fillCopy does on
+ *  an unfilled placeholder: both are programming mistakes, not user states. */
+export function copy(id: MktId, vars: Readonly<Record<string, string | number>> = {}): string {
+  const template = MKT_ALL[id]
+  if (template === undefined) throw new Error(`marketplace copy: unknown id ${id}`)
+  return fillCopy(template, vars)
 }
