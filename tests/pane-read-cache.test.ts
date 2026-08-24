@@ -54,10 +54,33 @@ describe('the checkpoint anchor keeps the exact reading', () => {
     expect(body).not.toMatch(/paneScrollStateCached/)
   })
 
-  it('leaves scrollState itself uncached, so every other caller is unchanged', () => {
-    // The one-line "fix everything" this deliberately did not do.
+  it('keeps scrollState EXACT (paneFor) so the anchor read cannot be stale-served', () => {
+    // The exact method still forks — anchors are read at turn boundaries, not on
+    // the activity path, so they pay the fork to stay truthful.
     const mux = readFileSync(join(__dirname, '../src/main/herdr-host-multiplexer.ts'), 'utf8')
     const fn = mux.slice(mux.indexOf('scrollState(name: string): ScrollState'))
     expect(fn.slice(0, 120)).toMatch(/toScrollState\(this\.paneFor\(name\)\)/)
+  })
+
+  it('the ACTIVITY path reads the fork-free stale inventory, not the exact fork', () => {
+    // scrollStateStale serves from paneFromInventory (the async, no-fork cache);
+    // pty.ts routes the activity cache-miss through it so activityOf never forks.
+    const mux = readFileSync(join(__dirname, '../src/main/herdr-host-multiplexer.ts'), 'utf8')
+    const stale = mux.slice(mux.indexOf('scrollStateStale(name: string): ScrollState'))
+    expect(stale.slice(0, 130)).toMatch(/toScrollState\(this\.paneFromInventory\(name\)\)/)
+
+    const pty = readFileSync(join(__dirname, '../src/main/pty.ts'), 'utf8')
+    const cached = pty.slice(pty.indexOf('paneScrollStateCached()'), pty.indexOf('scrollRow(): number | null'))
+    // The miss path uses the stale reading, NOT the exact paneScrollState.
+    expect(cached).toMatch(/this\.paneStateCache = this\.paneScrollStateStale\(\)/)
+    expect(cached).not.toMatch(/this\.paneStateCache = this\.paneScrollState\(\)/)
+  })
+
+  it('anchors still take the EXACT read (scrollAnchor → paneScrollState, no stale)', () => {
+    const pty = readFileSync(join(__dirname, '../src/main/pty.ts'), 'utf8')
+    const fn = pty.slice(pty.indexOf('scrollAnchor(): number | null'))
+    const body = fn.slice(0, fn.indexOf('}'))
+    expect(body).toMatch(/paneScrollState\(\)/)
+    expect(body).not.toMatch(/Stale|Cached/)
   })
 })

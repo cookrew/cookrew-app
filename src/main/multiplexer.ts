@@ -238,6 +238,13 @@ export interface Multiplexer {
    */
   captureDeep?(name: string, lines: number): string | null
   scrollState(name: string): ScrollState
+  /**
+   * Bounded-STALE scroll state for the hot activity path, served without a
+   * synchronous CLI fork. Optional: a backend whose scrollState is already
+   * cheap (no per-call process spawn) has nothing to add and callers fall back
+   * to scrollState. MUST NOT feed a checkpoint anchor — see scrollState.
+   */
+  scrollStateStale?(name: string): ScrollState
   panePid(name: string): number | null
   paneLaunch(name: string): PaneLaunch | null
 

@@ -1440,8 +1440,30 @@ export class HerdrHostMultiplexer implements Multiplexer {
     }
   }
 
+  /**
+   * EXACT scroll position — a live `herdr pane list` read (paneFor). This stays
+   * synchronous ON PURPOSE: scrollAnchor() reads the same value and it becomes
+   * TurnRecord.scrollLine, a persistent checkpoint anchor into the transcript.
+   * A stale anchor is a mark that points at the wrong place — worse than a slow
+   * one. The hot ACTIVITY path does NOT come through here; it uses the stale
+   * inventory (scrollStateStale) via pty.ts's cached wrapper.
+   */
   scrollState(name: string): ScrollState {
     return toScrollState(this.paneFor(name))
+  }
+
+  /**
+   * Bounded-stale scroll position for the ACTIVITY/LOD readout — served from the
+   * async inventory (paneFromInventory), never a synchronous fork. activityOf
+   * runs per tracked terminal on every output change AND on every /api/state and
+   * /api/activity poll; the exact path above forked `herdr pane list` once per
+   * terminal per 500ms cache miss, measured at 94.5% of main-thread JS. A scroll
+   * indicator tolerates bounded staleness, so the activity path reads this
+   * instead: one async refresh per 500ms shared across ALL terminals, zero forks
+   * on the read path. This must NEVER feed a checkpoint anchor — see scrollState.
+   */
+  scrollStateStale(name: string): ScrollState {
+    return toScrollState(this.paneFromInventory(name))
   }
 
   /**

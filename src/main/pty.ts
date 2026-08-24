@@ -779,6 +779,19 @@ export class PtySession extends EventEmitter {
   }
 
   /**
+   * Same reading for the hot ACTIVITY path — the backend's STALE, fork-free
+   * scroll state when it offers one (the herdr host mux serves it from its async
+   * inventory instead of forking `herdr pane list`). Falls back to the exact
+   * read for backends whose scrollState is already cheap. NEVER feeds an anchor.
+   */
+  private paneScrollStateStale(): { scrollRow: number | null; historySize: number | null } {
+    if (!this.usesTmux || this.disposed) return { scrollRow: null, historySize: null }
+    const mux = activeMux
+    if (!mux) return { scrollRow: null, historySize: null }
+    return (mux.scrollStateStale?.(this.sessionName) ?? mux.scrollState(this.sessionName))
+  }
+
+  /**
    * The SAME reading, for callers that run on a hot path and can tolerate a
    * stale one — today that is `activityOf`, which runs once per tracked
    * terminal per activity push.
@@ -810,7 +823,12 @@ export class PtySession extends EventEmitter {
     if (this.paneStateAt !== null && now - this.paneStateAt < PANE_STATE_TTL_MS) {
       return this.paneStateCache
     }
-    this.paneStateCache = this.paneScrollState()
+    // The cache MISS reads the STALE, fork-free inventory — not the exact
+    // paneScrollState, which forks `herdr pane list` inline. That inline fork on
+    // every 500ms miss, once per tracked terminal, was 94.5% of main-thread JS.
+    // Anchors keep the exact read (scrollAnchor → paneScrollState); the activity
+    // chip a stale reading feeds never reaches a TurnRecord.
+    this.paneStateCache = this.paneScrollStateStale()
     this.paneStateAt = now
     return this.paneStateCache
   }
