@@ -1301,6 +1301,28 @@ a.cr-btn {
   text-shadow: 0 0 5px rgba(255, 215, 122, 0.25);
 }
 
+/* COPY FROM THE TRANSCRIPT. The trace lives inside a ReactFlow node, and
+   @xyflow/react's stylesheet sets `user-select: none` on nodes — which cascades
+   down and made the transcript text impossible to select, so it could not be
+   copied. Re-enable text selection (and a text cursor) on the readable content;
+   the block head stays chrome. The live xterm handles its own selection. */
+.ctx-transcript {
+  cursor: text;
+}
+.ctx-transcript,
+.ctx-block,
+.ctx-block-prompt,
+.ctx-block-tool,
+.ctx-tool-call,
+.ctx-tool-name,
+.ctx-tool-args,
+.ctx-tool-result,
+.ctx-block-idx,
+.ctx-block-title {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .ctx-block-prompt::before {
   content: '❯ ';
   color: var(--amber);
