@@ -1860,18 +1860,27 @@ async function importTemplateAsSession(team: string, target?: ServeTarget): Prom
   if (!snapshot) throw new Error(`No saved template '${team}' to import`)
 
   // LOCAL import (your own template, no remote target): a REAL session — a new
-  // workspace forked from the template, with the team booted from its saved
-  // sessions and a git worktree per repo dir (the fork engine's GOAL 5). This
-  // is what makes the session visible and gives it its own workdir; the earlier
-  // "one fake orch terminal" placed a command nothing could run, so it showed
-  // blank. The single-orch-over-HTTP card is the REMOTE case (someone else's
-  // served crew, CallClient) — not a local placement.
-  const meta = await workspaceFromTemplate(teamForkDeps(), {
+  // workspace forked from the template, the team booted from its saved sessions,
+  // WITH A GIT WORKTREE per repo dir. workspaceFromTemplate hardcodes
+  // worktree:false (that was the "no worktree" bug), so import forks directly
+  // with worktree enabled.
+  const dir = snapshot.dir || store.focusedState.dir
+  const meta = await forkTeam(teamForkDeps(), {
     name: `${snapshot.name} · session`,
-    dir: snapshot.dir || store.focusedState.dir,
-    team
+    nodeIds: [],
+    choices: [],
+    fromSavedTeam: team,
+    dirs: dir.length > 0 ? [dir] : undefined,
+    worktree: true
   })
   store.switchWorkspace(meta.id)
+  // VERSION PIN: mark the session with the template version it runs. Cut on
+  // every agent that already carries history from the restored sessions; a
+  // fresh agent pins on its first turn. This is what "version pinned" means —
+  // the rail says which edition of the crew this session is.
+  cutTemplatePins(store.workspaceState(meta.id).nodes
+    .filter((n) => n.kind === 'terminal')
+    .map((n) => n.id))
   const entry = entryAgentOf(snapshot)
   store.recordEvent('session.imported', meta.name, entry ?? meta.name, `${snapshot.name}`)
   return meta
