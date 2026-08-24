@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { NodeProps, NodeResizer } from '@xyflow/react'
+import { NodeProps, NodeResizer, useStore } from '@xyflow/react'
 import { NodeHandles } from './NodeHandles'
 import { CardClose } from './CardClose'
 import { CardPick } from './CardPick'
 import { renderNoteMarkdown } from '../note-markdown'
+import { cardZoomMode } from './card-zoom'
 import type { NoteNodeData } from '../../../shared/model'
 import { cookrew } from '../api'
 import { useCanvasUi } from '../canvas-ui'
@@ -11,6 +12,8 @@ import { useCanvasUi } from '../canvas-ui'
 export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
   const node = (data as { node: NoteNodeData }).node
   const { tool, clipping, zoomToNode, picked, togglePick } = useCanvasUi()
+  // Quantized zoom bucket — only flips crossing MINI_ZOOM.
+  const mode = useStore((s) => cardZoomMode(s.transform[2]))
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.content)
   // Single click zooms the note to the stage after a beat; a double click
@@ -54,6 +57,27 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
     if (draft !== node.content) {
       void cookrew().updateNode(node.id, { content: draft })
     }
+  }
+
+  // Zoomed OUT: a minimal tile — title only, NO rendered markdown. A note's
+  // content is a full design doc, and mounting 28 of those markdown DOM trees at
+  // the fit-to-view overview is what OOMs a phone. The body renders only once a
+  // note is big enough to read (card zoom); a tap zooms in to it. This mirrors
+  // TerminalNode's mini path.
+  if (mode === 'mini') {
+    return (
+      <div
+        className={`node note-node mini${selected ? ' selected' : ''}${clipping && picked.has(node.id) ? ' picked' : ''}`}
+        onClick={onBodyClick}
+      >
+        <NodeHandles />
+        <CardPick id={node.id} />
+        <div className="node-header note-header">
+          <span className="node-title">{node.name}</span>
+          {node.locked && <span className="lock-badge">locked</span>}
+        </div>
+      </div>
+    )
   }
 
   return (

@@ -346,17 +346,12 @@ function Canvas(): React.JSX.Element {
     // still costs an animation, so leave the viewport where it is.
     if (nodes.length === 0) return
     const frame = requestAnimationFrame(() => {
-      // On a PHONE, do NOT zoom all the way out to frame every node — a large
-      // canvas (90+ cards) fit into a phone screen makes ALL of them visible at
-      // once, so onlyRenderVisibleElements can cull nothing and the initial
-      // render OOMs iOS Safari's WebContent. Cap the fit zoom so only a
-      // screen-worth renders; the rest cull until panned to. Desktop frames the
-      // whole board as before.
-      void reactFlow.fitView(
-        isRemoteMode()
-          ? { duration: 450, padding: 0.1, minZoom: 0.5 }
-          : { duration: 450, padding: 0.1 }
-      )
+      // Frame the WHOLE board, phone included — the user must be able to see all
+      // their agents at a glance. This is only affordable because every card
+      // renders a LIGHT mini tile when zoomed out (TerminalNode/NoteNode/
+      // BrowserNode mini paths: no markdown, no decoded thumbnails), so 90 tiles
+      // at the overview no longer OOM iOS Safari.
+      void reactFlow.fitView({ duration: 450, padding: 0.1 })
     })
     return () => cancelAnimationFrame(frame)
   }, [nodes, reactFlow])
@@ -1055,11 +1050,7 @@ function Canvas(): React.JSX.Element {
             onNodesDelete={onNodesDelete}
             onEdgesDelete={onEdgesDelete}
             onConnect={onConnect}
-            /* On a phone, floor the zoom so the user cannot pinch all the way
-               out to the every-node-visible state that OOMs iOS Safari — a
-               large canvas is navigated by panning, not by fitting 90 live
-               cards onto a 390px screen. Desktop keeps the full range. */
-            minZoom={isRemoteMode() ? 0.5 : 0.1}
+            minZoom={0.1}
             maxZoom={8}
             onlyRenderVisibleElements
             /* Backspace/Delete used to remove a selected card outright — and
