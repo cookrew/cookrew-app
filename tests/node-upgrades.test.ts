@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { upgradeNode } from '../src/main/node-upgrades'
 import { DEFAULT_ORCH_PRESET } from '../src/main/presets'
-import type { BrowserNodeData, TerminalNodeData } from '../src/shared/model'
+import {
+  DEFAULT_BROWSER_SIZE,
+  DEFAULT_CANVAS_POSITION,
+  DEFAULT_TERMINAL_SIZE,
+  type BrowserNodeData,
+  type TerminalNodeData
+} from '../src/shared/model'
 
 const terminal = (patch: Partial<TerminalNodeData> = {}): TerminalNodeData => ({
   kind: 'terminal',
@@ -72,5 +78,54 @@ describe('upgradeNode', () => {
     })
     const upgraded = upgradeNode(bound) as TerminalNodeData
     expect(upgraded.claudeSessionId).toBe('4188d6fa-41a0-4618-8e66-ea2af33e42b1')
+  })
+
+  it('migrates a persisted orch mirror command away from shell env assignments', () => {
+    const legacy = terminal({
+      id: '1e68e613-39d7-46b0-bd1f-00c8673540df',
+      name: 'COOKREW ORCH ▸ Commander',
+      command:
+        'NODE_TLS_REJECT_UNAUTHORIZED=0 COOKREW_MOBILE_ORIGIN=https://127.0.0.1:8643 node /Users/drej/workspace/cookrew-dev/resources/orch-mirror.mjs b5c1acb0-fafe-444f-b434-fffa8848ab63 --name "Commander"'
+    })
+
+    const upgraded = upgradeNode(legacy) as TerminalNodeData
+    expect(upgraded.command).toBe(
+      'node /Users/drej/workspace/cookrew-dev/resources/orch-mirror.mjs b5c1acb0-fafe-444f-b434-fffa8848ab63 --origin https://127.0.0.1:8643 --name "Commander"'
+    )
+  })
+
+  it('does not rewrite unrelated commands that happen to set the old env vars', () => {
+    const custom = terminal({
+      command:
+        'NODE_TLS_REJECT_UNAUTHORIZED=0 COOKREW_MOBILE_ORIGIN=https://127.0.0.1:8643 node /tmp/custom-client.mjs b5c1acb0-fafe-444f-b434-fffa8848ab63 --name "Commander"'
+    })
+    expect(upgradeNode(custom)).toEqual(custom)
+  })
+
+  it('repairs terminal geometry omitted by an unvalidated API write', () => {
+    const malformed = terminal() as TerminalNodeData
+    delete (malformed as unknown as Record<string, unknown>).position
+    delete (malformed as unknown as Record<string, unknown>).size
+    delete (malformed as unknown as Record<string, unknown>).orch
+
+    const upgraded = upgradeNode(malformed) as TerminalNodeData
+    expect(upgraded.position).toEqual(DEFAULT_CANVAS_POSITION)
+    expect(upgraded.size).toEqual(DEFAULT_TERMINAL_SIZE)
+    expect(upgraded.orch).toBe(false)
+  })
+
+  it('uses the node-kind size when repairing invalid geometry', () => {
+    const malformed = {
+      kind: 'browser',
+      id: 'b2',
+      name: 'Browser',
+      url: 'https://example.com',
+      position: null,
+      size: { width: 0, height: -1 }
+    } as unknown as BrowserNodeData
+
+    const upgraded = upgradeNode(malformed) as BrowserNodeData
+    expect(upgraded.position).toEqual(DEFAULT_CANVAS_POSITION)
+    expect(upgraded.size).toEqual(DEFAULT_BROWSER_SIZE)
   })
 })

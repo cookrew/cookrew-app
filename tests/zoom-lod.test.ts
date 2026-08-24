@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { mostCovered, pickOverlayWinner } from '../src/renderer/src/zoom-lod'
+import { hasLodGeometry, mostCovered, pickOverlayWinner } from '../src/renderer/src/zoom-lod'
+
+describe('hasLodGeometry', () => {
+  it('rejects an overlay node with missing runtime geometry', () => {
+    expect(hasLodGeometry({ id: 'broken', size: { width: 640, height: 420 } })).toBe(false)
+  })
+
+  it('accepts finite, positive geometry', () => {
+    expect(
+      hasLodGeometry({
+        id: 'valid',
+        position: { x: 10, y: 20 },
+        size: { width: 640, height: 420 }
+      })
+    ).toBe(true)
+  })
+})
 
 // Magpie E2 HIGH 2: browser fullscreen views stacked OVER terminal overlays
 // because each layer arbitrated its own winner. The shared selection must

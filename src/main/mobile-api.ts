@@ -48,8 +48,8 @@ export interface MobileOps {
   createTerminal: (opts: {
     name: string;
     preset: string;
-    position: { x: number; y: number };
-    orch: boolean;
+    position?: { x: number; y: number };
+    orch?: boolean;
     roleName?: string;
   }) => CanvasNode;
   forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData;
@@ -454,8 +454,8 @@ export async function handleMobileApi(
     const opts = await readJson<{
       name: string;
       preset: string;
-      position: { x: number; y: number };
-      orch: boolean;
+      position?: { x: number; y: number };
+      orch?: boolean;
       roleName?: string;
     }>(request);
     try {

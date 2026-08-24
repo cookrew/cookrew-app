@@ -2567,7 +2567,15 @@ app.whenReady().then(() => {
   // Boot PTYs for terminals restored from the saved workspace — through
   // bootTerminal, so a pending copy preamble staged before the app quit is
   // delivered on cold start too, not only on workspace switches.
-  for (const t of store.terminals()) bootTerminal(t)
+  for (const t of store.terminals()) {
+    try {
+      bootTerminal(t)
+    } catch (error) {
+      // A stale or malformed terminal must not reject the whole ready callback
+      // and prevent every later terminal from being restored.
+      console.error(`Failed to boot restored terminal '${t.name}' (${t.id}):`, error)
+    }
+  }
   reportWorkspaceBinding()
 
   app.on('activate', () => {

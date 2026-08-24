@@ -23,6 +23,21 @@ interface LodNode {
   size: CanvasSize
 }
 
+/** Runtime guard for persisted/API data, which is not protected by TS types. */
+export function hasLodGeometry(node: unknown): boolean {
+  if (node === null || typeof node !== 'object') return false
+  const candidate = node as Partial<LodNode>
+  return (
+    typeof candidate.id === 'string' &&
+    Number.isFinite(candidate.position?.x) &&
+    Number.isFinite(candidate.position?.y) &&
+    Number.isFinite(candidate.size?.width) &&
+    Number.isFinite(candidate.size?.height) &&
+    (candidate.size?.width ?? 0) > 0 &&
+    (candidate.size?.height ?? 0) > 0
+  )
+}
+
 /** The id with the highest recorded coverage; first wins ties (stable). */
 export function mostCovered(
   ids: Iterable<string>,
@@ -119,6 +134,7 @@ export function useLodLayout(nodes: LodNode[]): LodLayout {
   const coverages: Record<string, number> = {}
 
   for (const node of nodes) {
+    if (!hasLodGeometry(node)) continue
     const sx = node.position.x * zoom + vx
     const sy = node.position.y * zoom + vy
     const sw = node.size.width * zoom

@@ -922,9 +922,10 @@ export class WorkspaceStore extends EventEmitter {
       throw new Error(`Workspace '${workspaceId}' not found`)
     }
     const state = this.stateOf(workspaceId)
+    const upgraded = upgradeNode(node)
     const named: CanvasNode = {
-      ...node,
-      name: uniqueName(node.name, state.nodes.map((n) => n.name))
+      ...upgraded,
+      name: uniqueName(upgraded.name, state.nodes.map((n) => n.name))
     }
     // Residency-aware: a workspace held in memory must be patched THERE, or
     // its next flush writes the pre-add state straight back over this one.
@@ -964,7 +965,8 @@ export class WorkspaceStore extends EventEmitter {
     this.patchWorkspace(workspaceId, (current) => {
       const names = current.nodes.map((n) => n.name)
       added = nodes.map((node) => {
-        const named = { ...node, name: uniqueName(node.name, names) } as CanvasNode
+        const upgraded = upgradeNode(node)
+        const named = { ...upgraded, name: uniqueName(upgraded.name, names) } as CanvasNode
         names.push(named.name)
         return named
       })
@@ -1025,9 +1027,10 @@ export class WorkspaceStore extends EventEmitter {
   // ---- mutations ----
 
   addNode(node: CanvasNode): CanvasNode {
+    const upgraded = upgradeNode(node)
     const named: CanvasNode = {
-      ...node,
-      name: uniqueName(node.name, this.focusedState.nodes.map((n) => n.name))
+      ...upgraded,
+      name: uniqueName(upgraded.name, this.focusedState.nodes.map((n) => n.name))
     }
     this.mutate({ ...this.focusedState, nodes: [...this.focusedState.nodes, named] })
     if (named.kind === 'note') void this.persistNoteFile(named)

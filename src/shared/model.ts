@@ -469,6 +469,7 @@ export interface CliResponse {
   exitCode?: number
 }
 
+export const DEFAULT_CANVAS_POSITION: CanvasPosition = { x: 240, y: 200 }
 export const DEFAULT_TERMINAL_SIZE: CanvasSize = { width: 640, height: 420 }
 export const DEFAULT_NOTE_SIZE: CanvasSize = { width: 280, height: 220 }
 export const DEFAULT_BROWSER_SIZE: CanvasSize = { width: 720, height: 560 }
