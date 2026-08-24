@@ -118,6 +118,12 @@ import { TraceReader, type SessionWatchSpec } from './trace'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
 import { TeamStore, copyTeam, forkTeam, workspaceFromTemplate, type TeamSnapshot } from './teams'
+import {
+  planImportSession,
+  orchTerminalNode,
+  type ServeTarget
+} from './import-session'
+import { MOBILE_HTTPS_PORT } from './mobile-ports'
 import { PresetStore, isPresetId } from './preset-store'
 import { PinStore } from './pin-store'
 import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
@@ -1837,6 +1843,30 @@ async function createWorkspaceFromTeam(
   return workspaceFromTemplate(teamForkDeps(), { name, dir: dir || store.focusedState.dir, team })
 }
 
+/**
+ * IMPORT a template as a SESSION: a new workspace holding one terminal — the
+ * entry orchestrator — that reaches the served crew over HTTP. The team runs on
+ * the owner's side; the caller talks to the one door. See import-session.ts.
+ *
+ * `target` is the served origin+slug. With no target (a LOCAL import, the
+ * fixture path) the orch still points at 127.0.0.1's own listener, so the flow
+ * is exercisable end to end before any public relay exists.
+ */
+function importTemplateAsSession(team: string, target?: ServeTarget): WorkspaceMeta {
+  const snapshot = teams.load(team)
+  if (!snapshot) throw new Error(`No saved template '${team}' to import`)
+  const serve = target ?? { origin: `https://127.0.0.1:${MOBILE_HTTPS_PORT}`, slug: 'local' }
+  const plan = planImportSession(snapshot, serve)
+  const meta = store.createWorkspace(plan.workspaceName, snapshot.dir || store.focusedState.dir)
+  const node = orchTerminalNode(plan, `term_${randomUUID().slice(0, 12)}`, snapshot.dir, {
+    x: 160,
+    y: 120
+  })
+  store.addNodeToWorkspace(meta.id, node)
+  store.recordEvent('session.imported', plan.workspaceName, plan.orch.name, plan.orch.askUrl)
+  return meta
+}
+
 function teamSaveTracked(name?: string, nodeIds?: string[]): TeamMeta {
   const meta = teamSaveInner(name, nodeIds)
   store.recordEvent('team.saved', meta.name, meta.name, `${meta.terminalCount} agents`)
@@ -2677,6 +2707,10 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('workspace:list', () => store.list())
   ipcMain.handle('workspace:create', (_e, name: string, dir: string, team?: string) =>
     team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir)
+  )
+  // Import a template as a session: one workspace, one orch terminal over HTTP.
+  ipcMain.handle('template:import', (_e, team: string, target?: ServeTarget) =>
+    importTemplateAsSession(team, target)
   )
   ipcMain.handle('workspace:switch', (_e, id: string) => {
     switchWorkspace(id)
