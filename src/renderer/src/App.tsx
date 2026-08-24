@@ -234,6 +234,15 @@ function Canvas(): React.JSX.Element {
   const prevViewportRef = useRef<{ x: number; y: number; zoom: number } | null>(null)
   /** Node currently zoomed into full view — drives layered ⌘W. */
   const zoomedNodeIdRef = useRef<string | null>(null)
+  /**
+   * Did the user DELIBERATELY zoom into a card (tap → zoomToNode)? On mobile the
+   * overview is zoomed in to bound rendered-node count (OOM fix), so a large
+   * card there would passively cross the LOD coverage threshold and auto-open,
+   * trapping the view. Gate the auto-open on this: false in the overview, true
+   * after a tap, false again on Back. Desktop ignores it (allowAutoOpen stays
+   * true there) so its zoom-into-a-card behaviour is unchanged.
+   */
+  const deliberateOpenRef = useRef(false)
   /** Mirror of zoomedTerminalId so callbacks/handlers can read it fresh. */
   const zoomedTerminalIdRef = useRef<string | null>(null)
   zoomedTerminalIdRef.current = zoomedTerminalId
@@ -540,6 +549,10 @@ function Canvas(): React.JSX.Element {
       if (!prevViewportRef.current && !zoomedTerminalIdRef.current) {
         prevViewportRef.current = reactFlow.getViewport()
       }
+      // A deliberate tap: from here the LOD may open the card's full view (see
+      // deliberateOpenRef). The overview does not set this, so it never opens
+      // one passively on the phone.
+      deliberateOpenRef.current = true
       zoomedNodeIdRef.current = id
       // A just-created node may not be in the React Flow store yet (its
       // workspace broadcast is still in flight) — fitView can't find it, so
@@ -557,6 +570,8 @@ function Canvas(): React.JSX.Element {
     const previous = prevViewportRef.current
     prevViewportRef.current = null
     zoomedNodeIdRef.current = null
+    // Back to the overview: the LOD must not re-open the card we are leaving.
+    deliberateOpenRef.current = false
     // Restoring a saved viewport that equals the current one wouldn't move the
     // canvas — we'd stay zoomed (the loop). Fall back to fitView so Back always
     // escapes to the overview.
@@ -952,7 +967,9 @@ function Canvas(): React.JSX.Element {
   // instances each picked their own remote fullscreen winner, stacking a
   // browser view over the zoomed terminal (Magpie E2 HIGH 2).
   const overlayNodes = useMemo(() => [...terminals, ...browsers], [terminals, browsers])
-  const lod = useLodLayout(overlayNodes)
+  // Desktop always allows the passive coverage-open (zoom into a card to open
+  // it). On a phone only a deliberate tap opens one — see deliberateOpenRef.
+  const lod = useLodLayout(overlayNodes, !isRemoteMode() || deliberateOpenRef.current)
   /** Null once the node is gone, which is also how the dialog self-dismisses. */
   const closingNode = closingId
     ? (workspace?.nodes.find((n) => n.id === closingId) ?? null)

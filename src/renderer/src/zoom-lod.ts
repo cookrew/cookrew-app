@@ -113,7 +113,7 @@ export interface LodLayout {
  * a browser view stacked over the terminal overlay and stole every tap).
  * App owns the single call over the combined node list; layers consume it.
  */
-export function useLodLayout(nodes: LodNode[]): LodLayout {
+export function useLodLayout(nodes: LodNode[], allowAutoOpen = true): LodLayout {
   const { x: vx, y: vy, zoom } = useViewport()
   const paneWidth = useStore((s) => s.width)
   const paneHeight = useStore((s) => s.height)
@@ -163,7 +163,14 @@ export function useLodLayout(nodes: LodNode[]): LodLayout {
   // takes the WHOLE stage (no card-aspect letterbox; each stacked xterm would
   // also hold a PTY stream, exhausting the 6-per-origin pool) — desktop keeps
   // the card-aspect rect. The overlay's ResizeObserver refits the PTY.
-  const winner = pickOverlayWinner(activeIds, coverages, prevPrimary.current)
+  // allowAutoOpen gates PASSIVE opens: on a phone the overview is deliberately
+  // zoomed in (to bound how many cards render — mobile OOM fix), which by
+  // coverage alone is indistinguishable from a deliberate tap, so a big card in
+  // the overview would auto-open and trap the view. The caller passes false
+  // until the user taps a card (zoomToNode), so the overview never opens one.
+  const winner = allowAutoOpen
+    ? pickOverlayWinner(activeIds, coverages, prevPrimary.current)
+    : null
   if (winner === null) {
     prevActive.current = new Set()
     prevPrimary.current = null
