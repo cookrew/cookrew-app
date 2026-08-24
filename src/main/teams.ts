@@ -68,6 +68,33 @@ export interface TeamSnapshot {
    * a fresh project dir instead of falling back to preamble replay.
    */
   sessions?: Record<string, string>
+  /**
+   * The ENTRY agent — the orchestrator a caller talks to. A template is a
+   * preset with one door: importing it as a service creates a session and a
+   * single terminal for THIS agent, which runs the rest of the team. Stored by
+   * node name (stable across the fork's fresh ids). Absent on templates saved
+   * before this field: readers fall back to entryAgentOf().
+   */
+  entryAgent?: string
+}
+
+/**
+ * The orchestrator to enter a template through. The node flagged `orch`, or —
+ * for a template saved without one, or an older snapshot — the first terminal
+ * in canvas order. Never null when the snapshot has a terminal, because a
+ * template you cannot enter is a template you cannot use.
+ */
+export function entryAgentOf(snapshot: TeamSnapshot): string | null {
+  const terminals = snapshot.nodes.filter(
+    (n): n is Extract<CanvasNode, { kind: 'terminal' }> => n.kind === 'terminal'
+  )
+  if (terminals.length === 0) return null
+  if (snapshot.entryAgent) {
+    const named = terminals.find((t) => t.name === snapshot.entryAgent)
+    if (named) return named.name
+  }
+  const orch = terminals.find((t) => t.orch)
+  return (orch ?? terminals[0]).name
 }
 
 function isSnapshot(value: unknown): value is TeamSnapshot {
@@ -143,6 +170,12 @@ export class TeamStore {
     const teamName = (name ?? state.name).trim()
     if (teamName.length === 0) throw new Error('Team name must not be empty')
     const sessions = this.snapshotSessions(teamName, state)
+    // The entry orchestrator, captured at save so the template records its own
+    // door: the orch-flagged terminal, else the first. A caller imports through
+    // this one agent.
+    const entryTerminal =
+      state.nodes.find((n) => n.kind === 'terminal' && n.orch) ??
+      state.nodes.find((n) => n.kind === 'terminal')
     const snapshot: TeamSnapshot = {
       name: teamName,
       savedAt: Date.now(),
@@ -153,7 +186,8 @@ export class TeamStore {
       turns: Object.fromEntries(
         state.nodes.filter((n) => n.kind === 'terminal').map((t) => [t.id, turnsOf(t.id)])
       ),
-      ...(Object.keys(sessions).length > 0 ? { sessions } : {})
+      ...(Object.keys(sessions).length > 0 ? { sessions } : {}),
+      ...(entryTerminal ? { entryAgent: entryTerminal.name } : {})
     }
     mkdirSync(this.dir, { recursive: true })
     writeFileSync(this.fileFor(teamName), JSON.stringify(snapshot, null, 2), 'utf8')
@@ -200,6 +234,28 @@ export class TeamStore {
       .filter((s): s is TeamSnapshot => s !== null)
       .map(metaOf)
       .sort((a, b) => b.savedAt - a.savedAt)
+  }
+
+  /**
+   * Bring older templates onto the new logic: any snapshot saved before the
+   * entry-orchestrator field gets one stamped in place, computed the same way
+   * a fresh save would (orch node, else first terminal). Non-destructive —
+   * rewriting the field, never the team — so a saved crew is upgraded, not
+   * lost. Returns how many were migrated, for the boot log.
+   */
+  migrateEntryAgents(): number {
+    if (!existsSync(this.dir)) return 0
+    let migrated = 0
+    for (const f of readdirSync(this.dir).filter((f) => f.endsWith('.json'))) {
+      const file = path.join(this.dir, f)
+      const snap = this.read(file)
+      if (!snap || snap.entryAgent) continue
+      const entry = entryAgentOf(snap)
+      if (!entry) continue
+      writeFileSync(file, JSON.stringify({ ...snap, entryAgent: entry }, null, 2), 'utf8')
+      migrated++
+    }
+    return migrated
   }
 
   /** Case-insensitive lookup by team name. */

@@ -254,6 +254,12 @@ const routines = new RoutineScheduler(store, ptys)
 const voice = new VoiceEngine()
 const roles = new RoleStore()
 const teams = new TeamStore()
+// Bring templates saved before the entry-orchestrator field onto the new logic:
+// stamp each with its orch entry point. Non-destructive; logged once at boot.
+{
+  const migrated = teams.migrateEntryAgents()
+  if (migrated > 0) console.log(`teams: migrated ${migrated} template(s) to the entry-orch logic`)
+}
 const gitCache = new GitInfoCache()
 const agents = new AgentRegistry()
 /**
