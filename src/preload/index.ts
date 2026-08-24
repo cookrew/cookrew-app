@@ -99,8 +99,23 @@ const api = {
     // miss both.
     ipcRenderer.on(helloChannel, helloListener)
     ipcRenderer.on(channel, listener)
-    void ipcRenderer.invoke('pty:attach', terminalId)
+    // The lazy mirror may not be resident the instant a transcript opens — a
+    // just-booted pane, a herdr ensureSession race, a transient EAGAIN — and
+    // pty:attach then answers FALSE, sending no frame. Ignoring that left the
+    // live pane BLACK forever. So retry with backoff until it attaches (the
+    // listeners stay up, so the eventual frame paints). Cancelled on detach.
+    let detached = false
+    const tryAttach = (attempt: number): void => {
+      if (detached) return
+      void ipcRenderer.invoke('pty:attach', terminalId).then((ok: unknown) => {
+        if (ok === false && !detached && attempt < 8) {
+          setTimeout(() => tryAttach(attempt + 1), Math.min(300 * (attempt + 1), 1500))
+        }
+      })
+    }
+    tryAttach(0)
     return () => {
+      detached = true
       ipcRenderer.removeListener(channel, listener)
       ipcRenderer.removeListener(helloChannel, helloListener)
       ipcRenderer.send('pty:detach', terminalId)
