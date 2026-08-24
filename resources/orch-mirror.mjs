@@ -18,17 +18,24 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline'
 
+// Localhost self-signed cert: trust it here rather than via a fragile env-var
+// prefix on the spawn command (a herdr pane can exec argv without a shell, and
+// `VAR=0 node …` then means "run the program VAR=0"). Node reads this at TLS
+// connect time, so setting it before the first fetch is enough.
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+
+const arg = (flag) => {
+  const i = process.argv.indexOf(flag)
+  return i > 0 ? process.argv[i + 1] : undefined
+}
 const id = process.argv[2]
-const label = (() => {
-  const i = process.argv.indexOf('--name')
-  return i > 0 ? process.argv[i + 1] : id
-})()
+const label = arg('--name') ?? id
 if (!id) {
   console.error('orch-mirror: no terminal id')
   process.exit(1)
 }
 
-const ORIGIN = (process.env.COOKREW_MOBILE_ORIGIN || 'https://127.0.0.1:8643').replace(/\/+$/, '')
+const ORIGIN = (arg('--origin') || process.env.COOKREW_MOBILE_ORIGIN || 'https://127.0.0.1:8643').replace(/\/+$/, '')
 const token = (() => {
   try {
     return readFileSync(path.join(homedir(), '.cookrew', 'pairing-token'), 'utf8').trim()
@@ -100,18 +107,27 @@ try {
 }
 void poll()
 
-const rl = readline.createInterface({ input: process.stdin })
-rl.on('line', (line) => {
-  const text = line.trim()
-  if (!text) return
-  void sendInput(text).then((r) => {
-    if (!r.ok) process.stdout.write(`${C.dim}[mirror: ${r.reason}]${C.reset}\n`)
+// Input is best-effort and MUST NOT own the process lifetime. In a herdr pane
+// stdin can reach EOF immediately, so tying `alive` to readline's close (the
+// first version did) killed the poll loop and the whole mirror exited — which
+// is the "process exited" the owner saw. The poll loop keeps node alive; a
+// keep-alive timer guarantees it even if the loop ever settles.
+const keepAlive = setInterval(() => {}, 1 << 30)
+try {
+  process.stdin.resume()
+  const rl = readline.createInterface({ input: process.stdin })
+  rl.on('line', (line) => {
+    const text = line.trim()
+    if (!text) return
+    void sendInput(text).then((r) => {
+      if (!r.ok) process.stdout.write(`${C.dim}[mirror: ${r.reason}]${C.reset}\n`)
+    })
   })
-})
-rl.on('close', () => {
-  alive = false
-})
+} catch {
+  // no usable stdin (rare) — mirror stays read-only rather than exiting
+}
 process.on('SIGINT', () => {
   alive = false
+  clearInterval(keepAlive)
   process.exit(0)
 })

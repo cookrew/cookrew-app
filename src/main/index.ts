@@ -55,6 +55,7 @@ import {
   browserTabs,
   CanvasNode,
   CanvasPosition,
+  DEFAULT_CANVAS_POSITION,
   DEFAULT_TERMINAL_SIZE,
   TeamClipStatus,
   TeamCopyResult,
@@ -1624,8 +1625,8 @@ function forkTerminal(sourceId: string, turnIndex?: number): TerminalNodeData {
 interface CreateTerminalOpts {
   name: string
   preset: string
-  position: { x: number; y: number }
-  orch: boolean
+  position?: { x: number; y: number }
+  orch?: boolean
   /** Boot a fresh agent from a saved role instead of a bare preset. */
   roleName?: string
 }
@@ -1654,10 +1655,10 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     preset: role ? role.preset : preset.name,
     command: role ? role.command : preset.command,
     cwd: store.focusedState.dir,
-    orch: opts.orch,
+    orch: opts.orch ?? false,
     role: role ? role.name : null,
     ...(restoredSessionId ? { claudeSessionId: restoredSessionId } : {}),
-    position: opts.position,
+    position: opts.position ?? { ...DEFAULT_CANVAS_POSITION },
     size: DEFAULT_TERMINAL_SIZE
   }
   const added = store.addNode(terminal)
@@ -1903,9 +1904,11 @@ async function importTemplateAsSession(
       id: randomUUID(),
       name: `${snapshot.name} ▸ ${orch.name}`,
       preset: 'Shell',
+      // No env-var prefix: a pane may exec argv without a shell, so the script
+      // sets TLS trust itself and takes the origin as a flag.
       command:
-        `NODE_TLS_REJECT_UNAUTHORIZED=0 COOKREW_MOBILE_ORIGIN=https://127.0.0.1:${MOBILE_HTTPS_PORT} ` +
-        `node ${orchMirrorScript()} ${orch.id} --name ${JSON.stringify(orch.name)}`,
+        `node ${orchMirrorScript()} ${orch.id} ` +
+        `--origin https://127.0.0.1:${MOBILE_HTTPS_PORT} --name ${JSON.stringify(orch.name)}`,
       cwd: store.focusedState.dir,
       orch: false,
       role: null,
