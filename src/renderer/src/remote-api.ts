@@ -288,6 +288,9 @@ export function createRemoteApi(): CookrewApi {
     searchTurns: undefined,
     listTraceIndex: (terminalId) => req(apiPath(`/api/terminal/${terminalId}/trace/index`)),
     listTraceMarkers: (terminalId) => req(apiPath(`/api/terminal/${terminalId}/trace/markers`)),
+    // Trace-perf T1: the phone card's latest checkpoint, tail-read on the host.
+    latestCheckpoint: (terminalId) =>
+      req(apiPath(`/api/terminal/${terminalId}/latest`)),
     listTrace: async (terminalId, request) => {
       const params = new URLSearchParams()
       const r = (request ?? {}) as Record<string, unknown>

@@ -85,6 +85,7 @@ import { RecoverableStore, planRecovery } from './recoverable'
 import { EventLog } from './event-log'
 import { installProcessGuards } from './process-guards'
 import { SessionRegistry } from './session-registry'
+import { LazyTerminalAttachments } from './lazy-terminal'
 import { planWorkspaceSwitch } from './workspace-switch'
 import { SwitchRunner } from './switch-runner'
 import { presetIdFromInstallUrl } from './registry-install-link'
@@ -116,6 +117,7 @@ import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 
 import { TraceReader, type SessionWatchSpec } from './trace'
+import { LatestFileWatcher } from './latest-watch'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
 import {
@@ -351,6 +353,48 @@ const recoverable = new RecoverableStore()
 // so recoverAgent can restore it exactly as it was (agent-recover feature).
 store.setTerminalRemovedHook((snapshot) => recoverable.capture(snapshot))
 const traces = new TraceReader(store)
+
+// Trace-perf T4: push a "your checkpoint changed" nudge to the renderer the
+// instant a watched session file grows, so a card reflects a new turn without
+// waiting for its poll. Refcounted per file; the renderer keeps a slow poll as
+// the backstop for anything fs.watch coalesces or drops.
+const latestWatch = new LatestFileWatcher({
+  resolveFile: (terminalId) => traces.watchSpec(terminalId)?.file ?? null,
+  onChange: (terminalId) => mainWindow?.webContents.send('trace:latest-changed', terminalId)
+})
+
+/** Resolve Herdr's sanitized pane label back to the persisted terminal id. */
+function terminalIdForSessionName(sessionName: string): string | null {
+  return (
+    store.terminalsAcross().find((terminal) => sessionNameFor(terminal.id) === sessionName)?.id ??
+    null
+  )
+}
+
+/**
+ * Herdr owns the long-lived agent process. The local PTY mirror is loaded only
+ * for a zoomed transcript, then retained without a viewer only during work.
+ */
+const lazyTerminals = new LazyTerminalAttachments({
+  attach: (terminalId) => ensureTerminalMirror(terminalId),
+  detach: (terminalId) => detachTerminalMirror(terminalId),
+  isWorking: (terminalId) =>
+    agentStatus(sessionNameFor(terminalId)) === 'working' || turns.inTurn(terminalId),
+  watchWorking: (terminalId) => {
+    if (watchSessionTurns(terminalId, { deferInitial: true })) sessionSync.release(terminalId)
+  }
+})
+
+statusFeed()?.on('status', ({ sessionName, status }: StatusObservation) => {
+  const terminalId = terminalIdForSessionName(sessionName)
+  if (terminalId) lazyTerminals.observeStatus(terminalId, status)
+})
+
+// The feed may have seeded its cache before this listener was installed.
+for (const terminal of store.terminalsAcross()) {
+  const status = agentStatus(sessionNameFor(terminal.id))
+  if (status) lazyTerminals.observeStatus(terminal.id, status)
+}
 // Observability: the store's op choke-point feeds the durable event log;
 // the log's live stream broadcasts to the renderer (mobile gets the same
 // stream over the /api/events SSE, subscribed in mobile-api).
@@ -1210,8 +1254,8 @@ function seedConductorIfEmpty(): void {
 }
 
 // ---- workspace operations (shared by IPC and the cookrew CLI) ----
-// Switching tears down the outgoing workspace's PTYs and boots the incoming
-// canvas's terminals, so only the active workspace holds live processes.
+// Switching changes focus. Resident mirrors survive; cold terminals stay
+// detached until a transcript viewer asks for them.
 
 function listWorkspaces(): ReturnType<WorkspaceStore['list']> {
   return store.list()
@@ -1404,13 +1448,7 @@ sessionDrain.unref?.()
  * survive that.
  */
 const switchRunner = new SwitchRunner<TerminalNodeData, BrowserNodeData>({
-  detach: (terminalId) => {
-    // Detach (not kill): the tmux session stays alive so returning reattaches
-    // it with its agent and scrollback intact.
-    sessionSync.release(terminalId)
-    turns.untrack(terminalId)
-    ptys.detach(terminalId)
-  },
+  detach: (terminalId) => detachTerminalMirror(terminalId),
   boot: (terminal) => bootTerminal(terminal),
   syncBrowsers: (browsers) => {
     void browserManager.replaceNodes([...browsers]).catch(() => undefined)
@@ -1436,6 +1474,22 @@ function residentBrowsers(): BrowserNodeData[] {
 function bootTerminal(t: TerminalNodeData): void {
   spawnTracked(t)
   deliverPendingInject(t)
+}
+
+/** Open the local mirror for a zoomed transcript, never for canvas startup. */
+function ensureTerminalMirror(terminalId: string): boolean {
+  if (ptys.get(terminalId)) return true
+  const hit = store.nodeAcrossWorkspaces(terminalId)
+  if (!hit || hit.node.kind !== 'terminal') return false
+  bootTerminal(hit.node as TerminalNodeData)
+  return ptys.get(terminalId) !== undefined
+}
+
+/** Detach the mirror without killing the multiplexer-owned agent process. */
+function detachTerminalMirror(terminalId: string): void {
+  sessionSync.release(terminalId)
+  turns.untrack(terminalId)
+  ptys.detach(terminalId)
 }
 
 function addNode(node: CanvasNode): CanvasNode {
@@ -2487,6 +2541,8 @@ app.whenReady().then(() => {
     // While a dispatch is armed, the HTTP input/ask producers refuse 409 —
     // two writers racing one agent is two answers to one reservation.
     hasArmedDispatch: (terminalId) => turns.hasArmedDispatch(terminalId),
+    acquireTerminalView: (terminalId) => lazyTerminals.acquire(terminalId),
+    releaseTerminalView: (terminalId) => lazyTerminals.release(terminalId),
     // A live stream is a watcher (A4): open holds/starts the file watch,
     // close hands the terminal back to the drain clock.
     subscribeTerminal: (terminalId) => sessionSync.subscribe(terminalId),
@@ -2564,18 +2620,9 @@ app.whenReady().then(() => {
     console.error('Skipping orphan reap: could not enumerate all workspace terminals', error)
   }
 
-  // Boot PTYs for terminals restored from the saved workspace — through
-  // bootTerminal, so a pending copy preamble staged before the app quit is
-  // delivered on cold start too, not only on workspace switches.
-  for (const t of store.terminals()) {
-    try {
-      bootTerminal(t)
-    } catch (error) {
-      // A stale or malformed terminal must not reject the whole ready callback
-      // and prevent every later terminal from being restored.
-      console.error(`Failed to boot restored terminal '${t.name}' (${t.id}):`, error)
-    }
-  }
+  // Terminals stay detached on cold start. Herdr keeps their processes alive;
+  // a settled semantic zoom acquires the local PTY mirror on demand. Working
+  // agents are observed through their session files without opening mirrors.
   reportWorkspaceBinding()
 
   app.on('activate', () => {
@@ -2614,6 +2661,7 @@ app.on('before-quit', (event) => {
   store.flush()
   events.flush()
   sessionSync.dispose()
+  latestWatch.dispose()
   turns.flushHistories()
   turns.disposeAll()
   ptys.disposeAll()
@@ -2818,6 +2866,7 @@ function registerIpc(handlers: RestoreHandlers): void {
 
   // Turn/summary activity for the canvas cards.
   turns.on('activity', (activity) => {
+    lazyTerminals.reconsider(activity.terminalId)
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('terminal:activity', activity)
     }
@@ -2892,6 +2941,17 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('trace:page', (_e, terminalId: string, request?: unknown) =>
     traces.page(terminalId, (request ?? {}) as Parameters<TraceReader['page']>[1])
   )
+  // T1 card preview (trace-perf-architecture): the LATEST checkpoint only, from
+  // a bounded tail read — no PTY, O(tail). A visible-but-unzoomed card asks this.
+  ipcMain.handle('trace:latest', (_e, terminalId: string) => traces.latestCheckpoint(terminalId))
+  // T4 push: a card subscribes while it shows a checkpoint; the file watch then
+  // nudges it (`trace:latest-changed`) on every append, no poll wait.
+  ipcMain.handle('trace:latest-watch', (_e, terminalId: string) => {
+    latestWatch.subscribe(terminalId)
+  })
+  ipcMain.handle('trace:latest-unwatch', (_e, terminalId: string) => {
+    latestWatch.unsubscribe(terminalId)
+  })
   // Observability event log: filtered history + counts + agent roster.
   ipcMain.handle('events:query', (_e, query) => events.query(query ?? {}))
   ipcMain.handle('events:count', (_e, query) => events.count(query ?? {}))
@@ -3106,55 +3166,100 @@ function registerIpc(handlers: RestoreHandlers): void {
   })
   // One forwarder per terminal: React StrictMode double-mounts (and HMR
   // remounts) call attach repeatedly, and stacked listeners would duplicate
-  // every byte of output in the renderer.
-  const forwarders = new Map<string, (data: string) => void>()
-  /** Replay-frame forwarders, kept beside `forwarders` so detach drops both. */
-  const replayForwarders = new Map<string, (frame: string) => void>()
+  // every byte of output in the renderer. The binding owns the viewer lease so
+  // a renderer reload/crash releases it even when React cannot send pty:detach.
+  interface PtyForwarder {
+    session: PtySession
+    sender: Electron.WebContents
+    onData: (data: string) => void
+    onReplay: (frame: string) => void
+    onDestroyed: () => void
+  }
+  const forwarders = new Map<string, PtyForwarder>()
+  const dropForwarder = (
+    terminalId: string,
+    expected?: PtyForwarder,
+    releaseViewer = true
+  ): void => {
+    const binding = forwarders.get(terminalId)
+    if (!binding || (expected && binding !== expected)) return
+    binding.session.removeListener('data', binding.onData)
+    binding.session.removeListener('replay', binding.onReplay)
+    binding.sender.removeListener('destroyed', binding.onDestroyed)
+    forwarders.delete(terminalId)
+    if (releaseViewer) {
+      sessionSync.unsubscribe(terminalId)
+      lazyTerminals.release(terminalId)
+    }
+  }
   ipcMain.handle('pty:attach', (event, terminalId: string) => {
-    const session = ptys.get(terminalId)
-    if (!session) return false
     const previous = forwarders.get(terminalId)
-    if (previous) session.removeListener('data', previous)
-    const listener = (data: string): void => {
+    try {
+      const ready = previous
+        ? lazyTerminals.ensure(terminalId)
+        : lazyTerminals.acquire(terminalId)
+      if (!ready) return false
+    } catch (error) {
+      console.error(`Lazy terminal attach failed for '${terminalId}':`, error)
+      return false
+    }
+    const session = ptys.get(terminalId)
+    if (!session) {
+      if (!previous) lazyTerminals.release(terminalId)
+      return false
+    }
+    // Replacement keeps the existing viewer + transcript subscription while
+    // dropping both listeners and the old sender's destruction hook.
+    if (previous) dropForwarder(terminalId, previous, false)
+    let binding: PtyForwarder
+    const onData = (data: string): void => {
       // The window can be closed or reloaded while the PTY keeps emitting;
       // sending to a destroyed webContents throws "Object has been destroyed".
       if (event.sender.isDestroyed()) {
-        session.removeListener('data', listener)
-        forwarders.delete(terminalId)
+        dropForwarder(terminalId, binding)
         return
       }
       event.sender.send(`pty:data:${terminalId}`, data)
     }
-    forwarders.set(terminalId, listener)
-    session.on('data', listener)
     // A geometry change re-serializes the mirror; forward that frame to the
     // popout so it never keeps applying herdr's absolute-addressed deltas onto
     // a screen laid out at the previous size. Same listener lifetime as the
     // data forwarder — pty:detach drops both.
     const onReplay = (frame: string): void => {
-      if (event.sender.isDestroyed()) return
+      if (event.sender.isDestroyed()) {
+        dropForwarder(terminalId, binding)
+        return
+      }
       event.sender.send(`pty:data:${terminalId}`, frame)
     }
-    replayForwarders.set(terminalId, onReplay)
+    const onDestroyed = (): void => dropForwarder(terminalId, binding)
+    binding = { session, sender: event.sender, onData, onReplay, onDestroyed }
+    forwarders.set(terminalId, binding)
+    session.on('data', onData)
     session.on('replay', onReplay)
+    event.sender.once('destroyed', onDestroyed)
+    if (!previous) sessionSync.subscribe(terminalId)
     // Geometry BEFORE bytes: the frame's wrapping is baked in at the mirror's
     // columns, so a popout that paints it at its own width re-wraps every long
     // line. The renderer sizes its xterm from this, then sends the resize kick.
-    event.sender.send(`pty:hello:${terminalId}`, session.geometry())
-    // A faithful ANSI frame, not plain text — see PtySession.replayFrame.
-    event.sender.send(`pty:data:${terminalId}`, session.replayFrame())
+    try {
+      event.sender.send(`pty:hello:${terminalId}`, session.geometry())
+      // A faithful ANSI frame, not plain text — see PtySession.replayFrame.
+      event.sender.send(`pty:data:${terminalId}`, session.replayFrame())
+    } catch (error) {
+      dropForwarder(terminalId, binding)
+      console.error(`Terminal replay failed for '${terminalId}':`, error)
+      return false
+    }
     return true
   })
   // The popout detaches on close; without this the forwarder would keep
   // serializing every output chunk to a channel nobody listens on.
-  ipcMain.on('pty:detach', (_e, terminalId: string) => {
-    const listener = forwarders.get(terminalId)
-    const onReplay = replayForwarders.get(terminalId)
-    const session = ptys.get(terminalId)
-    if (listener && session) session.removeListener('data', listener)
-    if (onReplay && session) session.removeListener('replay', onReplay)
-    forwarders.delete(terminalId)
-    replayForwarders.delete(terminalId)
+  ipcMain.on('pty:detach', (event, terminalId: string) => {
+    const binding = forwarders.get(terminalId)
+    // A stale/destroyed renderer must not release a replacement window's view.
+    if (!binding || binding.sender !== event.sender) return
+    dropForwarder(terminalId, binding)
   })
 
   // Thumbnail frames from the renderer's browser capture loop (data URLs).

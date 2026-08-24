@@ -27,6 +27,7 @@ import { isCodexCommand, validCodexSessionRef } from './codex-bind'
 import { harnessFor , type TurnFinality } from './harness'
 import { isPiCommand, piSessionHome } from './pi-bind'
 import type { SessionTurnParser } from './session-sync'
+import type { TurnRecord } from '../shared/turn'
 import type { WorkspaceStore } from './store'
 
 export type TraceSource = 'claude' | 'codex' | 'pi' | null
@@ -257,6 +258,74 @@ export class TraceReader {
     if (!harness?.parseTurns || !harness.watchFile) return null
     const file = harness.watchFile(node, this.options)
     return file ? { file, parse: harness.parseTurns, finality: harness.turnFinality } : null
+  }
+
+  /**
+   * The LATEST checkpoint only — perf tier T1 (trace-perf-architecture). A card
+   * that is merely VISIBLE needs the last turn, not the whole history and never
+   * a PTY. So this reads a bounded TAIL of the session JSONL and returns the
+   * last complete turn: prompt, reply, title. O(tail), not O(file); a 100 MB
+   * transcript costs the same as a 10 KB one.
+   *
+   * The tail can start mid-turn, so the parser's FIRST record may be partial —
+   * but the LAST record is always complete (the file ends at the newest
+   * append), and that is the only one a card shows. The absolute checkpoint
+   * COUNT is deliberately not computed here: it needs the whole file, which is
+   * the cost this tier exists to avoid. Callers that need a count pay for it on
+   * zoom (the full paged parse) or from a persisted counter.
+   */
+  async latestCheckpoint(
+    terminalId: string,
+    tailBytes = 256 * 1024
+  ): Promise<{ prompt: string; reply: string; title?: string } | null> {
+    const spec = this.watchSpec(terminalId)
+    if (!spec || !existsSync(spec.file)) return null
+    let size: number
+    try {
+      size = (await stat(spec.file)).size
+    } catch {
+      return null
+    }
+    // Escalate the window until it holds a COMPLETE turn. A turn only parses
+    // when the window contains its opening user line, so a single heavy turn
+    // (huge tool output — a session mid-flight can exceed 256 KB in one turn)
+    // reads empty from a small tail. Grow 256 KB → 1 MB → 4 MB → whole file
+    // until a record appears; the common case still pays one 256 KB read.
+    for (let window = tailBytes; ; window = Math.min(window * 4, size)) {
+      let records: TurnRecord[]
+      try {
+        const start = Math.max(0, size - window)
+        const len = Math.min(size, window)
+        const fh = await open(spec.file, 'r')
+        let text: string
+        try {
+          const buf = Buffer.alloc(len)
+          await fh.read(buf, 0, len, start)
+          text = buf.toString('utf8')
+        } finally {
+          await fh.close()
+        }
+        // Drop the first line only when we read from mid-file — it is almost
+        // certainly a partial JSONL record the parser cannot use. A window that
+        // reached the start of the file keeps every line.
+        const lines = text.split('\n')
+        const usable = start > 0 && lines.length > 1 ? lines.slice(1) : lines
+        records = spec.parse(usable)
+      } catch {
+        return null
+      }
+      const last = records[records.length - 1]
+      if (last) {
+        return {
+          prompt: last.prompt,
+          reply: last.reply,
+          ...(last.title ? { title: last.title } : {})
+        }
+      }
+      // No complete turn in this window. If we have now read the whole file,
+      // there genuinely is none; otherwise grow and retry.
+      if (size - window <= 0) return null
+    }
   }
 
   /** Identity-keyed trace window for a terminal (see the contract note). */

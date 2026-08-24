@@ -7,7 +7,8 @@ import { GitChip } from '../GitChip'
 import { CrIcon } from '../icons'
 import { cardTypeScale, cardZoomMode } from './card-zoom'
 import { TurnView } from './TurnView'
-import { turnViewOf } from '../turn-view-model'
+import { turnViewOf, checkpointViewModel, isEmptyTurnView } from '../turn-view-model'
+import { useLatestCheckpoint } from '../use-latest-checkpoint'
 import { PastTurnView, TurnPagerBar, useTurnPaging } from './TurnPager'
 import type { TerminalNodeData } from '../../../shared/model'
 import type { TerminalActivity } from '../../../shared/turn'
@@ -35,6 +36,15 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
   const agent = activity?.agent ?? node.preset !== 'Shell'
   const phase = activity?.phase ?? 'idle'
   const paging = useTurnPaging(node.id, activity?.turnCount ?? 0)
+
+  // Trace-perf T1: when the live tracker has nothing to show (no PTY, never
+  // zoomed), the card renders its LATEST checkpoint from a tail read instead of
+  // "Ready" — no mirror. The rich live view wins the moment activity flows.
+  const liveModel = turnViewOf(activity)
+  const liveEmpty = isEmptyTurnView(liveModel)
+  const wantCheckpoint = agent && mode !== 'mini' && liveEmpty && !paging.viewing
+  const checkpoint = useLatestCheckpoint(node.id, wantCheckpoint)
+  const checkpointModel = wantCheckpoint ? checkpointViewModel(checkpoint) : null
 
   // The picked highlight belongs to the clipboard toggle — a pick survives
   // the toggle being off (the board keeps it too) but never SHOWS then.
@@ -130,7 +140,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
         {paging.viewing ? (
           <PastTurnView record={paging.viewing} />
         ) : (
-          <TurnView model={turnViewOf(activity)} />
+          <TurnView model={checkpointModel ?? liveModel} />
         )}
       </div>
       {(paging.count > 0 || paging.viewing !== null) && <TurnPagerBar paging={paging} />}

@@ -97,6 +97,15 @@ export interface MobileApiDeps {
   scope?: string | null;
   ptys: PtyManager;
   turns: TurnTracker;
+  /**
+   * The LATEST checkpoint for a card, from a bounded tail read of the session
+   * file — no PTY (trace-perf-architecture T1). Lets the phone canvas show an
+   * idle agent's last turn without opening a mirror, matching the desktop card.
+   * Optional so this module serves before it is wired.
+   */
+  latestCheckpoint?: (
+    terminalId: string,
+  ) => Promise<{ prompt: string; reply: string; title?: string } | null>;
   /** Observability event log (query/count) — spec observability-event-log-spec. */
   events: EventLog;
   /** Durable agent roster cache (~/.cookrew/agents.json). */
@@ -146,6 +155,9 @@ export interface MobileApiDeps {
    * both. Absent = no serialization (embedders/tests without a tracker).
    */
   hasArmedDispatch?: (terminalId: string) => boolean;
+  /** Acquire/release the local PTY mirror for a zoomed phone transcript. */
+  acquireTerminalView?: (terminalId: string) => boolean;
+  releaseTerminalView?: (terminalId: string) => void;
   /**
    * A4 subscriber facts: a live terminal stream is a watcher, so its open
    * must hold (and may start) the session-file observation, and its close
@@ -678,6 +690,16 @@ export async function handleMobileApi(
     );
     return true;
   }
+  // Trace-perf T1: the latest checkpoint only, tail-read, no PTY. The phone
+  // canvas asks this for a visible-but-unzoomed agent card.
+  const latestMatch = p.match(/^\/api\/terminal\/([^/]+)\/latest$/);
+  if (latestMatch && method === "GET") {
+    const cp = deps.latestCheckpoint
+      ? await deps.latestCheckpoint(latestMatch[1])
+      : null;
+    respondJson(response, 200, cp);
+    return true;
+  }
   // Workspace v2: repoint a terminal's cwd (respawns the pty).
   const cwdMatch = p.match(/^\/api\/terminal\/([^/]+)\/cwd$/);
   if (cwdMatch && method === "POST") {
@@ -744,8 +766,18 @@ export async function handleMobileApi(
     /^\/api\/terminal\/([^/]+)\/(raw|resize|stream|jump)$/,
   );
   if (ptyMatch) {
-    const session = ptys.get(ptyMatch[1]);
+    const terminalId = ptyMatch[1];
+    const openingStream = method === "GET" && ptyMatch[2] === "stream";
+    const acquired = openingStream
+      ? (deps.acquireTerminalView?.(terminalId) ?? true)
+      : true;
+    if (!acquired) {
+      respondJson(response, 404, { error: "Terminal not running" });
+      return true;
+    }
+    const session = ptys.get(terminalId);
     if (!session) {
+      if (openingStream) deps.releaseTerminalView?.(terminalId);
       respondJson(response, 404, { error: "Terminal not running" });
       return true;
     }
@@ -783,7 +815,7 @@ export async function handleMobileApi(
     if (method === "GET" && ptyMatch[2] === "stream") {
       const send = startSse(response);
       // The viewer is a tracking fact from the first byte (A4).
-      deps.subscribeTerminal?.(ptyMatch[1]);
+      deps.subscribeTerminal?.(terminalId);
       // GEOMETRY FIRST, then the frame. The phone opens its xterm at its own
       // size (measured: 45x24 while the pane was still 100x30) and the resize
       // kick only arrives AFTER the first paint — so a frame applied before
@@ -808,7 +840,8 @@ export async function handleMobileApi(
         session.removeListener("replay", onReplay);
         session.removeListener("exit", onExit);
         // Abrupt closes included — unsubscribe is double-call safe.
-        deps.unsubscribeTerminal?.(ptyMatch[1]);
+        deps.unsubscribeTerminal?.(terminalId);
+        deps.releaseTerminalView?.(terminalId);
       });
       return true;
     }

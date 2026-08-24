@@ -142,6 +142,23 @@ const api = {
     ipcRenderer.invoke('trace:page', terminalId, request),
   listTraceIndex: (terminalId: string) => ipcRenderer.invoke('trace:index', terminalId),
   listTraceMarkers: (terminalId: string) => ipcRenderer.invoke('trace:markers', terminalId),
+  // T1: the latest checkpoint for a visible card, no PTY. Returns
+  // {prompt, reply, title?} | null.
+  latestCheckpoint: (terminalId: string) =>
+    ipcRenderer.invoke('trace:latest', terminalId) as Promise<{
+      prompt: string
+      reply: string
+      title?: string
+    } | null>,
+  // T4 push: subscribe/unsubscribe a card's file watch, and listen for the
+  // "your checkpoint changed" nudge (payload = terminalId).
+  watchLatest: (terminalId: string) => ipcRenderer.invoke('trace:latest-watch', terminalId),
+  unwatchLatest: (terminalId: string) => ipcRenderer.invoke('trace:latest-unwatch', terminalId),
+  onLatestChanged: (cb: (terminalId: string) => void) => {
+    const listener = (_e: unknown, terminalId: string): void => cb(terminalId)
+    ipcRenderer.on('trace:latest-changed', listener)
+    return () => ipcRenderer.removeListener('trace:latest-changed', listener)
+  },
   forkTerminal: (sourceId: string, turnIndex?: number) =>
     ipcRenderer.invoke('terminal:fork', sourceId, turnIndex),
   teamFork: (spec: unknown) => ipcRenderer.invoke('team:fork', spec),

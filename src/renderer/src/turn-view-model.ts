@@ -28,6 +28,51 @@ export interface TurnViewModel {
   tail: string | null
 }
 
+/**
+ * The Ready/blank state — the live tracker knows nothing to show. This is the
+ * exact condition <TurnView> collapses to "Ready", so it is also the condition
+ * under which a card falls back to its latest checkpoint (trace-perf T1).
+ */
+export function isEmptyTurnView(model: TurnViewModel): boolean {
+  return (
+    model.ask === null &&
+    model.latest === null &&
+    model.title === null &&
+    model.tools.length === 0 &&
+    model.tail === null
+  )
+}
+
+/** The latest checkpoint a card shows without a PTY (trace-perf T1). */
+export interface LatestCheckpoint {
+  prompt: string
+  reply: string
+  title?: string
+}
+
+/**
+ * A checkpoint → the SAME view model a live turn binds to, so a card with no
+ * live activity (no PTY, never zoomed) renders its latest turn through the very
+ * same <TurnView> — identical typography, no second code path. It reads as a
+ * finished turn: the ask, the reply, done. No live status verb, no tool trail
+ * (those are the zoomed/subscribed tiers); the card shows the LATEST checkpoint,
+ * which is all it ever needs (owner ruling).
+ */
+export function checkpointViewModel(cp: LatestCheckpoint | null): TurnViewModel | null {
+  if (!cp) return null
+  const ask = cp.prompt.trim() ? firstLine(cp.prompt) : null
+  const reply = cp.reply.trim() ? firstLine(cp.reply) : null
+  if (!ask && !reply && !cp.title) return null
+  return {
+    title: cp.title ? firstLine(cp.title) : null,
+    ask,
+    tools: [],
+    latest: reply ? { text: reply, tone: 'done' } : null,
+    pendingInput: null,
+    tail: null,
+  }
+}
+
 /** First non-empty line, trimmed. Width truncation is CSS's job, not ours. */
 function firstLine(text: string): string {
   return (

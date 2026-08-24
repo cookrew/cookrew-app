@@ -227,6 +227,24 @@ export interface CookrewApi {
   listTraceMarkers?: (
     terminalId: string,
   ) => Promise<TraceBoundaryMarker[]>;
+  /**
+   * The LATEST checkpoint for a card, from a bounded tail read of the session
+   * file — no PTY, O(tail) (trace-perf-architecture T1). Lets a visible-but-
+   * unzoomed agent card show its last turn without spawning a mirror. Optional
+   * — feature-detect; the card falls back to "Ready" when absent.
+   */
+  latestCheckpoint?: (
+    terminalId: string,
+  ) => Promise<{ prompt: string; reply: string; title?: string } | null>;
+  /**
+   * Trace-perf T4 push: subscribe a card's session-file watch and listen for
+   * the change nudge, so the checkpoint refreshes the instant the file grows
+   * instead of on the poll. Electron-only; the phone card feature-detects and
+   * stays on the poll. `onLatestChanged` returns an unsubscribe.
+   */
+  watchLatest?: (terminalId: string) => Promise<void>;
+  unwatchLatest?: (terminalId: string) => Promise<void>;
+  onLatestChanged?: (cb: (terminalId: string) => void) => () => void;
   /** Fork a NEW agent card from a past turn; omit turnIndex for the latest. */
   forkTerminal: (sourceId: string, turnIndex?: number) => Promise<CanvasNode>;
   /** Fork a team into a NEW workspace per the spec (switches to it). */

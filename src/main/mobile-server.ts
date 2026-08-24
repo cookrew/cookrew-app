@@ -93,6 +93,8 @@ export interface MobileServerDeps {
    * terminal, so HTTP producers are serialized against in-flight dispatches.
    */
   hasArmedDispatch?: (terminalId: string) => boolean
+  acquireTerminalView?: (terminalId: string) => boolean
+  releaseTerminalView?: (terminalId: string) => void
   subscribeTerminal?: (terminalId: string) => void
   unsubscribeTerminal?: (terminalId: string) => void
   recoverAgent: (id: string) => RecoverResult
@@ -731,6 +733,9 @@ async function handle(
     // rather than each handler re-deriving it (or, as before, not deriving it
     // at all and answering for focus).
     scope,
+    // Trace-perf T1: the phone card's latest checkpoint, off the TraceReader
+    // this server already holds — tail-read, no PTY.
+    latestCheckpoint: (terminalId: string) => deps.traces.latestCheckpoint(terminalId),
     pairingToken: activePairingToken ?? deps.pairingToken,
     wallToken: activeWallToken ?? deps.wallToken
   }
