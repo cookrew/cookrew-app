@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Instantiator — architecture note (M-C, SEC-S)</title>
+<style>
+  :root{--bg:#fbfaf8;--panel:#fff;--ink:#1a1a1c;--dim:#5b5b63;--line:#e3e0da;--code:#f4f2ee;
+    --accent:#6b4fbb;--warn:#b3261e;--warn-bg:#fdeceb;--ok:#2c6e49;--ok-bg:#e9f4ee;
+    --q:#8a6d00;--q-bg:#fbf6e3}
+  @media(prefers-color-scheme:dark){:root{--bg:#131316;--panel:#1a1a1f;--ink:#e9e8e6;--dim:#9d9ca6;
+    --line:#2c2c34;--code:#0e0e11;--accent:#a68cf0;--warn:#ff6b5e;--warn-bg:#2a1614;--ok:#5fc98d;
+    --ok-bg:#12241a;--q:#e0c04a;--q-bg:#262112}}
+  :root[data-theme="dark"]{--bg:#131316;--panel:#1a1a1f;--ink:#e9e8e6;--dim:#9d9ca6;--line:#2c2c34;
+    --code:#0e0e11;--accent:#a68cf0;--warn:#ff6b5e;--warn-bg:#2a1614;--ok:#5fc98d;--ok-bg:#12241a;
+    --q:#e0c04a;--q-bg:#262112}
+  :root[data-theme="light"]{--bg:#fbfaf8;--panel:#fff;--ink:#1a1a1c;--dim:#5b5b63;--line:#e3e0da;
+    --code:#f4f2ee;--accent:#6b4fbb;--warn:#b3261e;--warn-bg:#fdeceb;--ok:#2c6e49;--ok-bg:#e9f4ee;
+    --q:#8a6d00;--q-bg:#fbf6e3}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif;-webkit-text-size-adjust:100%}
+  .wrap{max-width:60rem;margin:0 auto;padding:2.4rem 1.25rem 5rem}
+  h1{font-size:1.7rem;margin:0 0 .35rem;letter-spacing:-.02em}
+  h2{font-size:1.12rem;margin:2.2rem 0 .5rem;padding-bottom:.3rem;border-bottom:1px solid var(--line)}
+  h3{font-size:.98rem;margin:1.2rem 0 .3rem}
+  .meta{color:var(--dim);font-size:.86rem}
+  code{background:var(--code);padding:.1em .36em;border-radius:4px;font-size:.85em;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:.85rem;
+    overflow-x:auto;font-size:.78rem;line-height:1.5;font-family:ui-monospace,Menlo,monospace}
+  table{width:100%;border-collapse:collapse;margin:.7rem 0;font-size:.86rem}
+  th,td{text-align:left;padding:.45rem .5rem;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;color:var(--dim)}
+  .slice{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent);
+    border-radius:8px;padding:.9rem 1.1rem;margin:.9rem 0}
+  .slice h3{margin-top:0}
+  .q{background:var(--q-bg);border:1px solid var(--q);border-left:5px solid var(--q);
+    border-radius:8px;padding:1.1rem 1.3rem;margin:1.5rem 0}
+  .warn{background:var(--warn-bg);border-left:4px solid var(--warn);padding:.7rem .9rem;
+    border-radius:0 6px 6px 0;margin:.6rem 0;font-size:.92rem}
+  .ok{background:var(--ok-bg);border-left:4px solid var(--ok);padding:.7rem .9rem;
+    border-radius:0 6px 6px 0;margin:.6rem 0;font-size:.92rem}
+  ul{margin:.4rem 0;padding-left:1.2rem}li{margin:.25rem 0}
+  .proof{font-family:ui-monospace,Menlo,monospace;font-size:.78rem}
+  footer{margin-top:2.6rem;padding-top:1rem;border-top:1px solid var(--line);color:var(--dim);font-size:.8rem}
+  .toggle{position:fixed;top:1rem;right:1rem;background:var(--panel);color:var(--ink);
+    border:1px solid var(--line);border-radius:999px;padding:.35rem .8rem;font-size:.78rem;cursor:pointer}
+</style>
+</head>
+<body>
+<button class="toggle" onclick="const r=document.documentElement;r.dataset.theme=(r.dataset.theme==='dark')?'light':'dark'">◐ theme</button>
+<div class="wrap">
+
+<h1>The Instantiator — architecture note</h1>
+<p class="meta">
+  M-C, the load-bearing milestone · SEC-S ships in slice 1 · Commander · 2026-08-24<br>
+  For Tinker's review <b>before</b> code. Every mechanism below was run on this machine; the
+  commands are inline so the review can re-run them rather than take my word.
+</p>
+
+<div class="ok">
+  <b>What already exists</b>, verified in the tree rather than read off the gap table:
+  <code>SessionRegistry</code> (park/drain, residency), <code>copyTeam</code> (teams.ts:819),
+  <code>VersionPinRecord</code>/<code>nextVersion</code>, per-terminal <code>cwd</code>,
+  <code>deriveSlug</code>/<code>uniqueSlug</code>, and <code>CallsInFlight.cancelWhere</code> — the
+  mid-call cut END reuses. The instantiator composes these. It introduces one genuinely new thing:
+  <b>confinement</b>.
+</div>
+
+<h2>1 · First gated call → a session</h2>
+<pre><code>onGatedCall(serviceId, accountId, text):
+  admit(serviceId)                      // §5 — may refuse FULL before anything is created
+  session = openSessionFor(serviceId, accountId)
+         ?? mint(serviceId, accountId)  // §4 keying, template read at its LOCAL pin
+  route(session.conductorTerminalId, text)</code></pre>
+<p>
+  <b>The version resolves once, at mint, and is never re-read.</b> That is what makes "new sessions
+  get the latest pin, running sessions keep theirs" a property rather than a hope — a running
+  session holds its own pin id, so an owner cutting V2 cannot move it. Reading the pin again on a
+  later turn is the single most likely way to break the promise, so the read happens in
+  <code>mint</code> and nowhere else.
+</p>
+<p>
+  <b>Only the Conductor is addressable.</b> <code>conductorOf(sessionWorkspaceId)</code> is the only
+  resolution; there is no path from the wire to a non-orch terminal. This also supersedes the
+  per-conversation fork for services — the SESSION is the isolation, so no <code>cutVersion</code>
+  per conversation. Door B keeps the fork. Worth stating because the two paths now diverge and the
+  fork is the habit.
+</p>
+
+<h2>2 · Confinement — naming the actual mechanism</h2>
+<p>
+  The ruling is right that <b>cwd is not a jail</b>. A cwd says where a process starts; it stops
+  nothing. The mechanism I propose is <b>macOS Seatbelt via <code>sandbox-exec</code></b>, and I ran
+  it before proposing it.
+</p>
+<pre><code>(version 1)
+(deny default)
+(allow process-exec process-fork signal)
+(allow sysctl-read mach-lookup mach-priv-task-port)
+(allow file-read*)                                     &lt;-- see the asymmetry below
+(allow file-write* (subpath "/private/…/sandbox/&lt;session&gt;"))
+(allow file-write-data (literal "/dev/null") (literal "/dev/stdout") (literal "/dev/stderr"))</code></pre>
+<p class="proof">
+  1 WROTE-INSIDE &nbsp; · &nbsp; 2 BLOCKED-VIA-CD &nbsp; · &nbsp; 3 BLOCKED-OWNER-HOME
+</p>
+<p>
+  Run on this machine: a write inside the sandbox succeeds; <code>cd ../..</code> followed by a
+  write is refused; a write into <code>~/.cookrew</code> is refused. <b>The exact attack the ruling
+  names — a child that does <code>cd ..</code> — does not escape.</b>
+</p>
+<div class="warn">
+  <b>Two traps found while testing, both of which would have shipped.</b>
+  <ul>
+    <li><b>Symlinked roots silently void the profile.</b> My first profile used
+      <code>/tmp/…</code> and blocked <em>everything, including the sandbox itself</em>, because
+      macOS resolves <code>/tmp</code> → <code>/private/tmp</code> and a <code>subpath</code> is
+      matched after resolution. A profile written against an unresolved path does not fail loudly —
+      it fails as "the agent cannot write anywhere", which reads as a broken agent, not a broken
+      rule. Sandbox paths must be <code>realpath</code>-resolved at mint and the resolved value
+      stored.</li>
+    <li><b><code>sandbox-exec</code> is deprecated by Apple</b> and has been for years, while
+      remaining present and in wide use. It is the right choice today and the wrong thing to have
+      only one of: the profile belongs behind a <code>Confinement</code> interface with a named
+      implementation, so a second one can be added without touching the instantiator.</li>
+  </ul>
+</div>
+
+<h3>The structural finding: where the wrapper must attach</h3>
+<div class="warn">
+  <b>Wrapping the attach would sandbox the wrong process.</b> <code>PtySession</code> does not spawn
+  the agent directly. It calls <code>activeMux.ensureSession(spec)</code> — which CREATES the
+  tmux/herdr session the command runs in — and then <code>attachSpawn(spec)</code>, which returns a
+  command that merely ATTACHES to it. Sandboxing the attach confines a client; the agent stays a
+  child of the multiplexer server, which is the owner's, unconfined, and shared with the owner's own
+  terminals.
+  <br><br>
+  So session terminals must <b>not share the owner's multiplexer server</b>. Either the session gets
+  its own server (started, once, under the profile) or session terminals bypass the multiplexer and
+  spawn directly. This is a slice-1 decision because retrofitting it means re-parenting live agents.
+</div>
+
+<h3>The asymmetry Tinker should push hardest on</h3>
+<p>
+  <b>Writes are confinable today. Reads are not, cheaply.</b> The profile above allows
+  <code>file-read*</code> because the toolchain needs it — node, git, the harness binary and their
+  libraries read from all over the filesystem. Denying reads means enumerating every path the
+  toolchain touches, which is brittle in the direction that breaks the agent, and a wrong entry
+  surfaces as an unrelated failure days later.
+</p>
+<p>
+  So as designed, <b>a caller's agent cannot write outside its sandbox and can read the owner's
+  files.</b> SEC-S says "no cross-session reads: sandbox dirs mutually invisible". Mutual
+  invisibility <em>between sessions</em> is achievable cheaply — deny-read on the sibling sandbox
+  root is a small, stable allowlist. Invisibility of the <em>owner's</em> files is the expensive
+  one. See the question at the end; it is the same question I raised on R30 and it is now concrete
+  enough to cost a number.
+</p>
+
+<h2>3 · Scrubbed env</h2>
+<p>
+  <code>pty.ts</code> spawns with <code>{ ...env, ...spawnSpec.env }</code> — today that inherits
+  the owner's environment. A session's harness must get an <b>allowlist</b>, never the owner's env
+  minus a denylist: a denylist is a list of the secrets we thought of, and the next SDK's variable
+  is not on it.
+</p>
+<pre><code>sessionEnv(session) = {
+  PATH, HOME=&lt;sandbox&gt;, TMPDIR=&lt;sandbox&gt;/tmp, SHELL, LANG, TERM,
+  COOKREW_SESSION=&lt;id&gt;,
+  …explicitly granted model credentials, if the ruling allows a service to spend the owner's
+}</code></pre>
+<p>
+  <b>HOME points at the sandbox</b>, which does more work than it looks: it is what stops a harness
+  finding <code>~/.cookrew</code>, <code>~/.aws</code>, <code>~/.ssh</code> or its own config by the
+  usual route, and it makes the sandbox the natural place for the agent's state rather than a place
+  it has to be forced into.
+</p>
+<div class="warn">
+  <b>An open consequence the ruling should see:</b> a scrubbed env has no model API key, so a
+  caller's agents cannot run at all unless the owner's key is deliberately passed in. That is the
+  right default — a stranger's prompts should not silently spend the owner's tokens — but it means
+  "serving" implies "lending your API key", and the per-session budget in §5 is what makes that
+  survivable rather than optional.
+</div>
+
+<h2>4 · Keyed by account (R31)</h2>
+<pre><code>keyOf(serviceId, accountId, ordinal) → { sessionId, slug, workspaceName, sandboxDir }</code></pre>
+<p>
+  Account, not credential-sub, and the reason is correctness: a sub is per-enrolment, so the same
+  person on a second device is a different sub and would silently get a fresh session and lose their
+  work. The ordinal is required by the demo's own table — <code>ana-1</code> on V1 and
+  <code>ana-2</code> on V2 at once — so "does a session exist" means "does an OPEN one exist".
+  Pure and filesystem-free, so <code>..</code> in an id, a hostile account name and two accounts
+  colliding on a slug are unit tests.
+</p>
+
+<h2>5 · Admission control and per-session budget — same slice</h2>
+<p>
+  Both in slice 1, per the ruling, and both are refusals rather than throttles.
+</p>
+<table>
+  <thead><tr><th>Limit</th><th>Refusal</th><th>Why a refusal and not a queue</th></tr></thead>
+  <tbody>
+    <tr><td>Concurrent sessions per service</td><td><code>503</code> + honest "full"</td>
+      <td>A queue on a machine that may be a laptop is a promise we cannot keep; "full, try later" is true.</td></tr>
+    <tr><td>Sessions per account</td><td><code>429</code></td>
+      <td>Stops one account minting workspaces until the disk is gone — the cheapest denial-of-service here.</td></tr>
+    <tr><td>Per-session turn/token budget</td><td><code>402</code> or END</td>
+      <td>The owner's key is being spent. R12 already charges per turn; this is its ceiling.</td></tr>
+    <tr><td>Sandbox bytes</td><td>refuse the write path</td>
+      <td>Disk is the resource a stranger can exhaust fastest, and it is the owner's disk.</td></tr>
+  </tbody>
+</table>
+<p>
+  <b>Admission runs BEFORE mint</b>, so a refusal costs no workspace, no directory and no PTY. A cap
+  checked after creation is a cap that has already spent what it was protecting.
+</p>
+
+<h2>6 · END destroys the sandbox</h2>
+<pre><code>end(sessionId, reason) → { stopped: number }
+  1. cut in-flight        CallsInFlight.cancelWhere — the proven mid-call cut
+  2. stop terminals       the session's own multiplexer server dies with it
+  3. release residency    SessionRegistry drops it; park/drain unchanged
+  4. destroy sandbox      realpath-checked, refuses any path not under the service root</code></pre>
+<p>
+  <b>Order matters and step 4 is last.</b> Deleting a sandbox under a running agent turns a stop into
+  a crash, and a crash is where partial state lives. The deletion re-resolves and re-checks the path
+  rather than trusting the one stored at mint —
+  <em>the renderer-reachable <code>rmSync</code> traversal found in review week one is the family
+  SEC-S tells us to assume exists</em>, and a delete is exactly where that family bites.
+</p>
+
+<h2>Slice plan</h2>
+<ol>
+  <li><b>Pure</b> — keys, slugs, <code>confine()</code>, profile generation, env allowlist, admission
+    decisions. Mutants: <code>..</code> in a session id, an absolute cwd, a symlinked sandbox root,
+    an env var that must not survive, two accounts colliding, a cap that must refuse before mint.</li>
+  <li><b>Confinement, for real</b> — spawn under the profile in a temp root and assert the three
+    proofs above as a TEST, not a note. Includes the multiplexer decision.</li>
+  <li><b>Mint + route</b> — real <code>copyTeam</code> from a local pin, Conductor answers.</li>
+  <li><b>END</b> — cuts mid-call, destroys, and cannot be pointed outside the service root.</li>
+</ol>
+
+<div class="q">
+  <h2 style="border:0;margin:0 0 .5rem">The one question I want ruled</h2>
+  <p style="margin-top:0">
+    <b>Is SEC-S's confinement a WRITE boundary or a READ boundary?</b>
+  </p>
+  <p>
+    I can ship the write boundary in slice 1 — it is proven above, it survives <code>cd ..</code>,
+    and it costs a profile. The read boundary is a different project: denying reads means
+    enumerating every path node, git and the harness binaries touch, brittle in the direction that
+    breaks the agent, with failures surfacing far from their cause. Between sessions it is cheap
+    (deny the sibling sandbox root). Against the <em>owner's</em> files it is not.
+  </p>
+  <p>
+    This is the R30 privacy question arriving with a price tag, and the two answers are:
+  </p>
+  <ul>
+    <li><b>Write boundary (my recommendation for slice 1).</b> A caller's files land only in their
+      sandbox; a caller's agent can read the owner's disk. Cross-session read-blocking included,
+      since it is cheap. The caller-facing copy must then say what is true — this is the same
+      sentence I flagged on R30, still unruled, and it cannot say "never their data" in either
+      direction.</li>
+    <li><b>Read boundary too.</b> Real isolation, and I would want it eventually — but it is not a
+      slice-1 item, it needs a per-harness path allowlist, and I would rather it be scheduled than
+      promised.</li>
+  </ul>
+  <p style="margin-bottom:0">
+    Rule this and slice 1 is unblocked. Everything else in this note I can build against as written.
+  </p>
+</div>
+
+<footer>
+  Design note only, no code, per the ruling. Mechanisms run on this machine before being proposed —
+  the Seatbelt profile, its two traps, and the multiplexer finding are reproducible from the
+  commands inline. Open from earlier and still unruled: the caller-facing privacy sentence, and
+  pin-identity-as-content-hash. <code>docs/</code> is gitignored; force-added.
+</footer>
+
+</div>
+</body>
+</html>
