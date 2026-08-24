@@ -331,6 +331,15 @@ export class TurnStore {
    * See load() for why this is keyed on the FILE and not on authorship.
    */
   private hot = new Map<string, { records: TurnRecord[]; stamp: string }>()
+  /**
+   * The ledger file as it stood when this store last READ or WROTE it —
+   * `size:mtimeMs:ino`, per terminal. This is the premise every write in this
+   * class rests on, and the one thing that can invalidate all of it at once,
+   * so it is kept separately from `hot` (which is LRU-evicted for memory) and
+   * never evicted: forgetting a stamp would silently downgrade a refusal into
+   * a blind write, which is the entire failure this guards.
+   */
+  private fileStamps = new Map<string, string>()
 
   /**
    * Cookrew's own fields (title / seenAt / scrollLine) live here instead of on
@@ -559,6 +568,7 @@ export class TurnStore {
         if (hot && hot.stamp === this.stampOf(terminalId)) {
           this.hot.delete(terminalId) // touch: re-insert last, so LRU order holds
           this.hot.set(terminalId, hot)
+          this.fileStamps.set(terminalId, hot.stamp)
           return [...hot.records]
         }
         const records = this.hydrate(terminalId, this.readLines(terminalId, file))
@@ -571,6 +581,81 @@ export class TurnStore {
       console.error('Failed to load turn history:', error)
       return []
     }
+  }
+
+  /**
+   * IS THIS STORE'S VIEW OF THE LEDGER STILL THE LEDGER?
+   *
+   * False means the file is byte-for-byte the one this store last read or
+   * wrote, so everything derived from it — `hot`, `written`, `counts`, and any
+   * caller's copy taken from a load() — is current. True means something moved
+   * it and none of that can be trusted.
+   *
+   * Public because a caller with its OWN cache derived from a load() has the
+   * same question and no cheaper way to ask it (TurnTracker's delta path uses
+   * it to check the premise of an incremental apply). One stat, no parse.
+   */
+  /**
+   * Drop everything this store believes about a terminal's ledger, so the next
+   * read goes to the file. Used when the premise is found stale: keeping a
+   * derived cache that has been proven wrong is how a refusal turns back into
+   * a blind write one call later.
+   */
+  private forgetView(terminalId: string): void {
+    this.fileStamps.delete(terminalId)
+    this.hot.delete(terminalId)
+    this.written.delete(terminalId)
+    this.counts.delete(terminalId)
+    this.all?.delete(this.safeId(terminalId))
+  }
+
+  viewIsStale(terminalId: string): boolean {
+    const observed = this.fileStamps.get(terminalId)
+    // Never touched by this store: nothing it believes can be contradicted.
+    // Whether a WRITE is safe in that state is a different question, and a
+    // stronger one — see writeIsUnsafe.
+    if (observed === undefined) return false
+    return observed !== this.stampOf(terminalId)
+  }
+
+  /**
+   * May this write be applied? A reason to refuse, or null to proceed.
+   *
+   * TWO GUARANTEES, because there are two ways to write over a ledger you do
+   * not understand, and only one of them is about bytes moving.
+   *
+   *  - THE FILE MOVED. Observed once and different now: every branch below
+   *    the choke point is reasoning from `written`'s tail, `counts` and `hot`,
+   *    all of which describe a file that no longer exists. Nothing is safe
+   *    here — not a shrink, and not an append, which against a changed file
+   *    spliced index 23 in after index 542 and left a ledger that no longer
+   *    ascends. So: refuse everything.
+   *
+   *  - THE WRITER NEVER LOOKED. No observation at all, and a ledger already
+   *    on disk. A rehearsal of the owner's restore caught this: a freshly
+   *    constructed store wrote 22 records straight over the 542 it had never
+   *    opened, and the byte check had nothing to compare. Only a SHRINK is
+   *    refused here rather than every write — a full save that is the same
+   *    size or larger cannot silently drop history, and refusing those would
+   *    break writing a known-good history into a ledger this store has not
+   *    happened to read. Reading first is one call, and it is the whole of
+   *    the contract for anything that would make the record smaller.
+   */
+  private writeIsUnsafe(terminalId: string, records: readonly TurnRecord[]): string | null {
+    const observed = this.fileStamps.get(terminalId)
+    if (observed !== undefined) {
+      return observed === this.stampOf(terminalId)
+        ? null
+        : 'the ledger changed under this process since it last read or wrote it, so this ' +
+            'write is based on a file that no longer exists'
+    }
+    if (!existsSync(this.fileFor(terminalId))) return null
+    const durable = this.count(terminalId)
+    if (records.length >= durable) return null
+    return (
+      `this store has never read the ${durable} records already on disk, and this write ` +
+      'would leave fewer'
+    )
   }
 
   /**
@@ -594,8 +679,11 @@ export class TurnStore {
    * quietly report unflushed edits as durable.
    */
   private warm(terminalId: string, records: readonly TurnRecord[]): void {
+    const stamp = this.stampOf(terminalId)
+    // The premise for the NEXT write: this store has now seen these exact bytes.
+    this.fileStamps.set(terminalId, stamp)
     this.hot.delete(terminalId) // re-insert last: Map order is the LRU order
-    this.hot.set(terminalId, { records: [...records], stamp: this.stampOf(terminalId) })
+    this.hot.set(terminalId, { records: [...records], stamp })
     // BOUNDED, because this holds whole ledgers. The callers it exists for are
     // the handful of agents currently taking turns, so a small LRU serves every
     // one of them; a fleet-wide sweep (loadAll, the board, a search) would
@@ -854,6 +942,61 @@ export class TurnStore {
     const dirty = this.dirty.get(terminalId) ?? 'all'
     this.dirty.delete(terminalId)
     if (!records) return
+
+    /**
+     * THE CHOKE POINT — CONSULT THE RECORD BEFORE WRITING.
+     *
+     * Every write in this class arrives here, from scheduleSave or
+     * scheduleDelta, and this is the one place that can ask whether the writer
+     * still knows what it is writing over.
+     *
+     * IT EXISTS BECAUSE A CLASS OF BUG KEPT RECURRING: A WRITER THAT TREATS ITS
+     * OWN PARTIAL VIEW AS THE WHOLE TRUTH. Three members, all in the checkpoint
+     * lane, all found one at a time and all fixed with the same sentence:
+     *
+     *   1. TurnTracker.replaceHistory numbered an incoming transcript against
+     *      its in-memory copy and saved that run as the entire history. A
+     *      restored 613-record ledger came back as 16.
+     *   2. rebuildLedgerInto regenerated from a node's CURRENT transcript and
+     *      saved it over a ledger that legitimately spanned several of them.
+     *   3. TurnTracker.applyHistoryDelta mutated the same in-memory copy and
+     *      handed it to scheduleDelta as the whole history. A restored 542
+     *      became 23 on the owner's real ledger, forty-five seconds after the
+     *      restore, past two fixes that had each been verified.
+     *
+     * Fixing callers one at a time is what produced a third one, so the rule
+     * lives HERE, where the next writer inherits it without knowing it exists.
+     *
+     * THE RULE. A write is applied only if the ledger file is still byte-for-
+     * byte the one this store last read or wrote. Anything else means the
+     * premise every branch below depends on — `written`'s tail, `counts`,
+     * `hot`, and the caller's own copy — describes a file that no longer
+     * exists.
+     *
+     * IT IS NOT A SIZE CHECK, and the reason is worth keeping: the first
+     * version of this refused only shrinks, and the delta path sailed straight
+     * through it. Against a file that had changed underneath it, the append
+     * branch compared its REMEMBERED tail line rather than the bytes on disk
+     * and appended anyway — splicing index 23 in after index 542, a duplicate
+     * index and a ledger that no longer ascends. A stale premise is unsafe for
+     * every write, not merely for a small one.
+     *
+     * REFUSING IS THE SAFE DIRECTION, and it does not wedge anything. The work
+     * in hand is dropped and this store's whole view is invalidated, so the
+     * next load() re-parses the real file and the caller reconciles against it
+     * — for the tracker that is one poll away, and it merges rather than
+     * replaces. The cost of a refusal is one turn persisted late. The cost of
+     * the write it refuses is every record the writer could not see.
+     */
+    const unsafe = this.writeIsUnsafe(terminalId, records)
+    if (unsafe !== null) {
+      console.error(
+        `Refusing to write ${records.length} turn records for ${terminalId}: ${unsafe}. ` +
+          'Dropping the write and re-reading; the next reconcile will rebuild from the record.'
+      )
+      this.forgetView(terminalId)
+      return
+    }
 
     // Cookrew's fields first: they are the only copy, whereas the conversation
     // below is a copy of the transcript. If one of the two writes fails, lose
@@ -1471,6 +1614,12 @@ export class TurnStore {
     // current written-tail, never a stale one.
     this.dirDebt.add(terminalId)
     this.remember(terminalId, records)
+    // RE-OBSERVE, in the rename's synchronous stretch. The fold is this store
+    // rewriting its own file from records it just read, so the write premise is
+    // still true — but the rename changed every byte of the stamp, and a flush
+    // arriving after this would otherwise read as writing over a file nobody
+    // here had seen and be refused (see the choke point in flush).
+    this.warm(terminalId, this.hydrate(terminalId, records))
     this.cache(terminalId, this.hydrate(terminalId, records))
     try {
       await this.fsyncDirAsync(this.dir)

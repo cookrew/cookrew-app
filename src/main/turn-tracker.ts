@@ -946,10 +946,50 @@ export class TurnTracker extends EventEmitter {
   applyHistoryDelta(
     terminalId: string,
     delta: HistoryDelta,
-    fullRecords: () => TurnRecord[]
+    fullRecords: () => TurnRecord[],
+    source: { sessionFile?: string } = {}
   ): void {
+    /**
+     * THE PREMISE OF EVERY INCREMENTAL APPLY: MY COPY IS THE RECORD.
+     *
+     * The branches below splice into `histories` — the tracker's in-memory
+     * buffer — and hand that buffer to the store as the whole history. That is
+     * correct exactly while the buffer still agrees with the durable ledger,
+     * and it silently is not after anything writes that ledger from outside
+     * this tracker. A lineage restore did, and this path turned a 542-record
+     * history into 23 forty-five seconds later.
+     *
+     * The other premises here are already checked — positions drifted, foreign
+     * records interleaved, an emitter's tail that is not ours — and each falls
+     * back to the full reconcile rather than guessing. This is the same kind of
+     * check and gets the same answer; it was simply never asked, because the
+     * durable record was assumed rather than consulted.
+     *
+     * TWO QUESTIONS, because there are two ways to be wrong and they have
+     * different answers:
+     *
+     *   - viewIsStale: did the FILE move under this process? That is the
+     *     out-of-process repair tool, and a stat answers it.
+     *   - count: does the durable ledger hold as many records as this tracker
+     *     thinks it does? That catches a writer inside this process — a repair
+     *     wired through the same store, a second tracker — which leaves the
+     *     file's identity perfectly consistent with the store's own view while
+     *     making THIS buffer wrong. O(1) from the store's maintained count.
+     *
+     * Neither is a read of the ledger, so the O(delta) path stays O(delta) in
+     * the case that is always true in steady state: nobody else wrote, both
+     * answers agree, and the delta applies.
+     */
+    const durableCount = this.store?.count(terminalId)
+    if (
+      this.store?.viewIsStale(terminalId) === true ||
+      (durableCount !== undefined && durableCount !== this.liveHistory(terminalId).length)
+    ) {
+      this.replaceHistory(terminalId, fullRecords(), source)
+      return
+    }
     if (delta.kind === 'reset') {
-      this.replaceHistory(terminalId, fullRecords())
+      this.replaceHistory(terminalId, fullRecords(), source)
       return
     }
     const previous = this.liveHistory(terminalId)
@@ -1021,6 +1061,27 @@ export class TurnTracker extends EventEmitter {
    * place (the whole point — no prefix copy), so this only invalidates the
    * point-in-time snapshot, hands the store the same buffer plus the NAMES of
    * the changed records, and runs the shared observers.
+   */
+  /**
+   * AFTERCOMMIT RUNS BEFORE THE WRITE IS DURABLE, and can now outlive it.
+   *
+   * scheduleDelta queues a debounced write; afterCommit publishes immediately.
+   * That gap has always existed — an observer learns about a turn ~300ms before
+   * the bytes land — and was harmless while every queued write eventually
+   * landed. It no longer is: TurnStore.flush may REFUSE a write whose premise
+   * went stale between here and the flush (see the choke point there), so the
+   * activity push can describe a turn that never reached disk.
+   *
+   * Left as it is, deliberately. Publishing after the flush would put the UI
+   * behind the debounce for every turn to make a rare case tidy, and the case
+   * self-heals: the next reconcile finds the premise broken, takes the full
+   * path, merges against the durable ledger and writes. The cost is a turn that
+   * appears, and then appears again correctly numbered. The alternative — the
+   * write that refusal prevents — is every record the writer could not see.
+   *
+   * Named here because this is where the two facts meet, and because the next
+   * person to profile this seam will find afterCommit on the write path and
+   * reasonably assume everything below it succeeded.
    */
   private commitDelta(terminalId: string, changed: TurnRecord[]): void {
     const records = this.liveHistory(terminalId)

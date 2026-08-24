@@ -251,15 +251,50 @@ describe('the write path appends overlays and stays O(changed) — byte-counted'
     expect(reopen().load('t1')[1].reply).toBe('v3')
   })
 
-  it('refuses the overlay when the file no longer ends with the bytes it wrote (hand edit) — full rewrite instead', () => {
-    seed(2)
+  /**
+   * THIS EXPECTATION CHANGED — it used to assert a full REWRITE here.
+   *
+   * The original contract was "an overlay may only be appended onto bytes we
+   * wrote; otherwise rewrite the whole file from our records", and the rewrite
+   * was the safe half of that pair — safe relative to a blind overlay, which
+   * would splice into a file of unknown shape.
+   *
+   * It is not safe in general, and this is the unit-scale version of the
+   * incident: the store's records are only ever a view of the ledger, so
+   * rewriting the file from them discards whatever the external write put
+   * there. At two records that is a stray space. At the same code path with a
+   * lineage restore on the other side it was 519 checkpoints, gone
+   * forty-five seconds after they were written. The tail check had already
+   * noticed the file was not ours; the response was the problem, not the
+   * detection.
+   *
+   * So a changed file now REFUSES the write outright (TurnStore.flush, "the
+   * choke point"). The original intent — never append an overlay onto bytes we
+   * did not write — is preserved and strengthened: nothing is written at all,
+   * and the external bytes survive to be read back.
+   */
+  it('refuses to WRITE AT ALL when the file no longer ends with the bytes it wrote (hand edit)', () => {
+    const seeded = seed(2)
     // Someone edited the ledger under us: the last line is not ours anymore.
     writeFileSync(file(), `${text().trimEnd()} \n`, 'utf8')
+
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     store.scheduleDelta('t1', [rec(1), rec(2, { reply: 'edited-under' })], [rec(2, { reply: 'edited-under' })])
     store.flushAll()
+    expect(spy).toHaveBeenCalled() // refused out loud
+    spy.mockRestore()
 
-    expect(text()).not.toContain('__tail')
-    expect(reopen().load('t1')[1].reply).toBe('edited-under')
+    expect(text()).not.toContain('__tail') // no blind overlay, as before
+    // And no rewrite either: the edit made under us is still there, and our
+    // in-memory 'edited-under' did not replace a file we had stopped reading.
+    expect(reopen().load('t1')[1].reply).toBe(seeded[1].reply)
+
+    // Not wedged: a write built on a fresh read lands normally.
+    const after = reopen()
+    after.load('t1')
+    after.scheduleDelta('t1', [rec(1), rec(2, { reply: 'v9' })], [rec(2, { reply: 'v9' })])
+    after.flushAll()
+    expect(reopen().load('t1')[1].reply).toBe('v9')
   })
 })
 

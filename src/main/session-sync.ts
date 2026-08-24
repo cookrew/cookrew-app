@@ -37,7 +37,8 @@ type DeltaCapableTracker = TurnTracker & {
   applyHistoryDelta?: (
     terminalId: string,
     delta: HistoryDelta,
-    records: () => TurnRecord[]
+    records: () => TurnRecord[],
+    source?: { sessionFile?: string }
   ) => void
 }
 
@@ -622,7 +623,12 @@ export class SessionTurnSync {
         // take syncs the tail cursor, so the loop runs at most twice.
         for (;;) {
           const delta = acc.takeDelta()
-          applyDelta.call(this.turns, terminalId, delta, () => acc.records())
+          // The file travels with the delta so a fallback to the full
+          // reconcile behaves identically to a direct one — including the
+          // rotation licence, which is keyed to the successor transcript.
+          applyDelta.call(this.turns, terminalId, delta, () => acc.records(), {
+            sessionFile: watched.file
+          })
           if (delta.kind !== 'tail') break
         }
       } else {
