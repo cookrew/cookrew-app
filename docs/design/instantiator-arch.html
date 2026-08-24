@@ -60,34 +60,71 @@
 </p>
 
 <div class="ok">
-  <b>What already exists</b>, verified in the tree rather than read off the gap table:
-  <code>SessionRegistry</code> (park/drain, residency), <code>copyTeam</code> (teams.ts:819),
-  <code>VersionPinRecord</code>/<code>nextVersion</code>, per-terminal <code>cwd</code>,
-  <code>deriveSlug</code>/<code>uniqueSlug</code>, and <code>CallsInFlight.cancelWhere</code> — the
-  mid-call cut END reuses. The instantiator composes these. It introduces one genuinely new thing:
-  <b>confinement</b>.
+  <b>THE CORE ALREADY EXISTS. This note is about a WRAPPER.</b>
+  <code>workspaceFromTemplate()</code> — <code>teams.ts:728</code>, "FEATURE 1: create a workspace
+  from a saved team TEMPLATE" — already does the thing I was about to design: it calls
+  <code>forkTeam</code> with <code>fromSavedTeam</code>, retargets the whole snapshot to one
+  directory, and native-restores each terminal's session in the fresh project dir.
+  <code>cookrew workspace create --team</code> has been driving it in production.
+  <br><br>
+  So the instantiator is <b>not a from-scratch build</b>. It is
+  <b>gate + sandbox + per-account keying + admission control</b> wrapped around a call that already
+  works. My earlier note proposed composing <code>copyTeam</code> myself; that was reinventing
+  <code>forkTeam</code> one layer down, and this correction cuts the estimate hard.
+  <br><br>
+  Also already there: <code>SessionRegistry</code> (park/drain, residency),
+  <code>CallsInFlight.cancelWhere</code> (the proven mid-call cut END reuses),
+  <code>deriveSlug</code>/<code>uniqueSlug</code>. What is genuinely new is
+  <b>confinement</b>, <b>env scrubbing</b>, <b>admission</b> — and one seam, below.
 </div>
 
-<h2>1 · First gated call → a session</h2>
+<h2>1 · First gated call → a session (wrapping, not building)</h2>
 <pre><code>onGatedCall(serviceId, accountId, text):
-  admit(serviceId)                      // §5 — may refuse FULL before anything is created
-  session = openSessionFor(serviceId, accountId)
-         ?? mint(serviceId, accountId)  // §4 keying, template read at its LOCAL pin
-  route(session.conductorTerminalId, text)</code></pre>
+  admit(serviceId, accountId)              // NEW  §5 — refuses BEFORE anything is created
+  session = openSessionFor(serviceId, accountId)          // NEW  §4 keying
+         ?? await workspaceFromTemplate(   // EXISTS  teams.ts:728 → forkTeam
+              sessionDeps(sandboxDir),     // NEW  §2 confinement, §3 scrubbed env
+              { name: session.workspaceName,
+                dir:  sandboxDir,          // the sandbox IS the target dir — no new plumbing
+                team: template.savedTeamName })
+  route(conductorOf(session.workspaceId), text)           // NEW  §1b one door</code></pre>
 <p>
-  <b>The version resolves once, at mint, and is never re-read.</b> That is what makes "new sessions
-  get the latest pin, running sessions keep theirs" a property rather than a hope — a running
-  session holds its own pin id, so an owner cutting V2 cannot move it. Reading the pin again on a
-  later turn is the single most likely way to break the promise, so the read happens in
-  <code>mint</code> and nowhere else.
+  Four lines of the five are new; the one that does the heavy lifting is a call that already ships.
+  <code>forkTeam</code> brings fresh ids, remapped cables, per-terminal working directories and
+  native session restore with it — none of which I should be writing.
 </p>
+<div class="ok">
+  <b>The sandbox needs no new plumbing.</b> <code>workspaceFromTemplate</code> already takes a target
+  <code>dir</code> and <code>forkTeam</code> already threads per-terminal cwd through
+  <code>planTeamFork</code> → <code>resolveTerminalContext</code>. Pointing that <code>dir</code> at
+  the session's sandbox is the whole integration. Confinement (§2) is then enforcement on top of a
+  path the machinery already respects, rather than a new concept pushed through it.
+</div>
 <p>
-  <b>Only the Conductor is addressable.</b> <code>conductorOf(sessionWorkspaceId)</code> is the only
+  <b>Only the Conductor is addressable.</b> <code>conductorOf(sessionWorkspaceId)</code> is the sole
   resolution; there is no path from the wire to a non-orch terminal. This also supersedes the
   per-conversation fork for services — the SESSION is the isolation, so no <code>cutVersion</code>
-  per conversation. Door B keeps the fork. Worth stating because the two paths now diverge and the
-  fork is the habit.
+  per conversation. Door B keeps the fork; the two paths now diverge and the fork is the habit.
 </p>
+
+<h2>1b · The pin does not exist yet — an M-A gap, and it blocks the promise</h2>
+<div class="warn">
+  <b>Confirmed: SAVE cuts no version pin.</b> <code>team:save</code> →
+  <code>teamSaveTracked</code>, and a search for <code>cutVersion</code>,
+  <code>VersionPinRecord</code>, <code>nextVersion</code> or a pin store across
+  <code>teams.ts</code>, <code>team-actions.ts</code> and <code>team-clip.ts</code> returns nothing.
+  The Chief's reading is right.
+  <br><br>
+  So "template = workspace at a pin" is <b>not true today</b>: SAVE stores a snapshot with no
+  version identity. Everything R30 hangs on that identity —
+  <em>new sessions get the latest pin, running sessions keep theirs</em>, "tap V1 to see exactly
+  what ana is talking to", "the pin IS the contract" — has nothing to point at.
+  <br><br>
+  <b>The instantiator can be built and tested before the pin exists</b> (a session can pin a
+  snapshot id), but the VERSION PROMISE cannot be honoured until M-A cuts one. I would rather that
+  ordering be explicit than discovered when the first V2 lands and every running session silently
+  follows it.
+</div>
 
 <h2>2 · Confinement — naming the actual mechanism</h2>
 <p>
@@ -243,32 +280,44 @@
 </ol>
 
 <div class="q">
-  <h2 style="border:0;margin:0 0 .5rem">The one question I want ruled</h2>
+  <h2 style="border:0;margin:0 0 .5rem">The one question I want ruled — the gate↔forkTeam seam</h2>
   <p style="margin-top:0">
-    <b>Is SEC-S's confinement a WRITE boundary or a READ boundary?</b>
+    <b><code>forkTeam</code> ends by calling <code>deps.switchWorkspace(meta.id)</code>, and that
+    switch is not cosmetic — the deps comment says "the switch BOOTS the forked terminals".</b>
+    So the mechanism that already works is coupled to making the new workspace <em>active in the
+    owner's app</em>.
   </p>
   <p>
-    I can ship the write boundary in slice 1 — it is proven above, it survives <code>cd ..</code>,
-    and it costs a profile. The read boundary is a different project: denying reads means
-    enumerating every path node, git and the harness binaries touch, brittle in the direction that
-    breaks the agent, with failures surfacing far from their cause. Between sessions it is cheap
-    (deny the sibling sandbox root). Against the <em>owner's</em> files it is not.
-  </p>
-  <p>
-    This is the R30 privacy question arriving with a price tag, and the two answers are:
+    Used as-is, every stranger's first call yanks the owner's screen to that stranger's workspace.
+    Ten callers in a morning is ten hijacks, and the owner cannot work. This is the one place the
+    existing call does not fit the new caller, and it is the seam I want ruled because all three
+    ways out have different costs and only one is mine to choose.
   </p>
   <ul>
-    <li><b>Write boundary (my recommendation for slice 1).</b> A caller's files land only in their
-      sandbox; a caller's agent can read the owner's disk. Cross-session read-blocking included,
-      since it is cheap. The caller-facing copy must then say what is true — this is the same
-      sentence I flagged on R30, still unruled, and it cannot say "never their data" in either
-      direction.</li>
-    <li><b>Read boundary too.</b> Real isolation, and I would want it eventually — but it is not a
-      slice-1 item, it needs a per-harness path allowlist, and I would rather it be scheduled than
-      promised.</li>
+    <li><b>Separate BOOT from FOCUS (my recommendation).</b> Add an explicit
+      <code>bootTerminals(workspaceId)</code> to <code>TeamForkDeps</code>; the owner's path passes
+      one that switches, the session path passes one that boots without focusing. The codebase
+      already knows these are different things — <code>copyTeam</code>'s own comment says "the view
+      does NOT switch… terminals boot on activation" — it has simply never needed them apart. Small,
+      and it makes the coupling explicit rather than incidental.</li>
+    <li><b>Pass a no-op <code>switchWorkspace</code> and boot elsewhere.</b> Cheapest to write and
+      the worst to own: <code>forkTeam</code> would then return a workspace whose terminals are not
+      running, and every future caller of it inherits a silent precondition. This is how a function
+      acquires a second, undocumented contract.</li>
+    <li><b>Let it switch.</b> Only defensible if session workspaces are never really "in" the
+      owner's app — which contradicts R30's whole framing and the Sessions table.</li>
   </ul>
+  <p>
+    <b>The ruling I want:</b> may I add <code>bootTerminals</code> to <code>TeamForkDeps</code> and
+    have <code>forkTeam</code> call that instead of <code>switchWorkspace</code>, with the owner's
+    existing path passing a switching implementation so its behaviour is unchanged? It touches a
+    function <code>cookrew workspace create --team</code> depends on, which is why I am asking
+    rather than doing.
+  </p>
   <p style="margin-bottom:0">
-    Rule this and slice 1 is unblocked. Everything else in this note I can build against as written.
+    Everything else in this note I can build as written. Two questions remain open from earlier and
+    neither blocks slice 1: whether confinement is a WRITE or a READ boundary (§2 — write is proven
+    and is my slice-1 recommendation), and the caller-facing privacy sentence that follows from it.
   </p>
 </div>
 
