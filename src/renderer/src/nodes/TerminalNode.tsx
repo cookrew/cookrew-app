@@ -13,6 +13,7 @@ import { PastTurnView, TurnPagerBar, useTurnPaging } from './TurnPager'
 import type { TerminalNodeData } from '../../../shared/model'
 import type { TerminalActivity } from '../../../shared/turn'
 import { useCanvasUi } from '../canvas-ui'
+import { useActivity } from '../activity-thumb-store'
 
 /**
  * Summary card for a terminal. No xterm and no PTY attach here — the live
@@ -27,12 +28,14 @@ import { useCanvasUi } from '../canvas-ui'
  */
 export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
   const node = (data as { node: TerminalNodeData }).node
-  const { tool, clipping, activities, zoomToNode, picked, togglePick } = useCanvasUi()
+  const { tool, clipping, zoomToNode, picked, togglePick } = useCanvasUi()
   // Quantized subscriptions: these only change when crossing a bucket, so
   // zoom animation frames don't re-render every card.
   const mode = useStore((s) => cardZoomMode(s.transform[2]))
   const invZoom = useStore((s) => cardTypeScale(s.transform[2]))
-  const activity = activities[node.id]
+  // Per-id subscription: this card re-renders only when ITS activity changes,
+  // not on every other terminal's stream (the canvas-wide re-render fix).
+  const activity = useActivity(node.id)
   const agent = activity?.agent ?? node.preset !== 'Shell'
   const phase = activity?.phase ?? 'idle'
   const paging = useTurnPaging(node.id, activity?.turnCount ?? 0)

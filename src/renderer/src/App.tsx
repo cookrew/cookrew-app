@@ -38,6 +38,12 @@ import {
 } from './browser-thumb-policy'
 import { retry } from './retry'
 import { CanvasUiContext, ToolId } from './canvas-ui'
+import {
+  activityStore,
+  thumbStore,
+  useActivitiesSnapshot,
+  useThumbsSnapshot
+} from './activity-thumb-store'
 import { useBrowserEngine } from './browser-engine'
 import { ErrorBoundary } from './ErrorBoundary'
 import { ReauthOverlay } from './ReauthOverlay'
@@ -122,8 +128,12 @@ function Canvas(): React.JSX.Element {
   const [roles, setRoles] = useState<AgentRole[]>([])
   /** Selected saved role for TERMINAL placement, or null for a plain preset. */
   const [role, setRole] = useState<string | null>(null)
-  const [activities, setActivities] = useState<Record<string, TerminalActivity>>({})
-  const [thumbs, setThumbs] = useState<Record<string, string>>({})
+  // Per-terminal activity + per-browser thumbnails live in an external per-id
+  // store (activity-thumb-store), NOT React state on this context — a stream of
+  // activity events must not re-render every card. App reads the whole map via
+  // the snapshot hooks (it needs the aggregate counts); cards subscribe per id.
+  const activities = useActivitiesSnapshot()
+  const thumbs = useThumbsSnapshot()
   /** Alignment guides while a card resize is snapped to a neighbour edge. */
   const [guides, setGuides] = useState<SnapGuide[]>([])
   /** Terminal whose overlay owns the stage — the dock shows its composer. */
@@ -343,15 +353,15 @@ function Canvas(): React.JSX.Element {
     void cookrew()
       .listActivity()
       .then((list) =>
-        // Live events may land before this snapshot resolves — merge under
+        // Live events may land before this snapshot resolves — seed under
         // existing entries so the snapshot never clobbers fresher activity.
-        setActivities((prev) => ({
-          ...Object.fromEntries(list.map((a) => [a.terminalId, a])),
-          ...prev
-        }))
+        activityStore.seed(
+          list.map((a) => [a.terminalId, a] as [string, TerminalActivity]),
+          true
+        )
       )
     return cookrew().onTerminalActivity((activity) => {
-      setActivities((prev) => ({ ...prev, [activity.terminalId]: activity }))
+      activityStore.set(activity.terminalId, activity)
     })
   }, [])
 
@@ -590,7 +600,7 @@ function Canvas(): React.JSX.Element {
 
   const onThumb = useCallback((id: string, dataUrl: string) => {
     if (interactiveBrowser !== false) return
-    setThumbs((prev) => ({ ...prev, [id]: dataUrl }))
+    thumbStore.set(id, dataUrl)
     // Mirror to main so the mobile companion can serve it to the phone.
     cookrew().browserThumb(id, dataUrl)
   }, [interactiveBrowser])
@@ -615,7 +625,7 @@ function Canvas(): React.JSX.Element {
         if (browser.id === zoomedNodeIdRef.current) continue
         const dataUrl = await snapshot(browser.id).catch(() => null)
         if (!disposed && dataUrl) {
-          setThumbs((prev) => (prev[browser.id] === dataUrl ? prev : { ...prev, [browser.id]: dataUrl }))
+          thumbStore.set(browser.id, dataUrl) // set() dedupes identical values
         }
       }
     }
@@ -633,11 +643,8 @@ function Canvas(): React.JSX.Element {
   // those is how its cards went blank.
   useEffect(() => {
     if (!shouldClearLegacyThumbs({ remote: isRemoteMode(), interactive: interactiveBrowser })) return
-    setThumbs((prev) => {
-      for (const src of Object.values(prev)) {
-        if (src.startsWith('blob:')) URL.revokeObjectURL(src)
-      }
-      return Object.keys(prev).length === 0 ? prev : {}
+    thumbStore.clear((src) => {
+      if (src.startsWith('blob:')) URL.revokeObjectURL(src)
     })
   }, [interactiveBrowser])
 
@@ -689,11 +696,9 @@ function Canvas(): React.JSX.Element {
           .then((r) => (r.ok ? r.blob() : null))
           .then((blob) => {
             if (!blob) return
-            setThumbs((prev) => {
-              const old = prev[id]
-              if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
-              return { ...prev, [id]: URL.createObjectURL(blob) }
-            })
+            const old = thumbStore.get(id)
+            if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
+            thumbStore.set(id, URL.createObjectURL(blob))
           })
           .catch(() => undefined)
       }
@@ -720,12 +725,13 @@ function Canvas(): React.JSX.Element {
     return () => window.removeEventListener('keydown', onKey)
   }, [zoomBack])
 
+  // activities/thumbs are NOT here — they live in the per-id store, so this
+  // context value stays stable across the activity stream and the cards that
+  // read it (tool/clipping/picked) don't re-render on every event.
   const ui = useMemo(
     () => ({
       tool,
       clipping,
-      activities,
-      thumbs,
       interactiveBrowser,
       zoomToNode,
       zoomBack,
@@ -733,7 +739,7 @@ function Canvas(): React.JSX.Element {
       picked,
       togglePick
     }),
-    [tool, clipping, activities, thumbs, interactiveBrowser, zoomToNode, zoomBack, requestClose, picked, togglePick]
+    [tool, clipping, interactiveBrowser, zoomToNode, zoomBack, requestClose, picked, togglePick]
   )
 
   // Every change batch routes through the edge snapper: while a card is

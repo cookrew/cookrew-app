@@ -24,6 +24,7 @@ import {
 } from './agent-facets'
 import { TeamForkPicker } from './TeamForkPicker'
 import { useCanvasUi } from './canvas-ui'
+import { useActivitiesSnapshot, useThumbsSnapshot } from './activity-thumb-store'
 import { recoverEligible, recoverErrorToast, recoverToastFor, type RecoverToast } from './recover'
 import { dirLabel } from './workspace-v2'
 import type { BrowserNodeData, NoteNodeData, WorkspaceState } from '../../shared/model'
@@ -86,7 +87,11 @@ export function RosterPanel({
   variant?: 'modal' | 'view'
 }): React.JSX.Element {
   const roster = useRoster()
-  const { activities, thumbs, zoomToNode } = useCanvasUi()
+  const { zoomToNode } = useCanvasUi()
+  // The roster needs the whole map (it lists every agent's live status); it is
+  // one sidebar component, not 91 cards, so a snapshot subscription is right.
+  const activities = useActivitiesSnapshot()
+  const thumbs = useThumbsSnapshot()
   const [showQuiet, setShowQuiet] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
   const [query, setQuery] = useState('')

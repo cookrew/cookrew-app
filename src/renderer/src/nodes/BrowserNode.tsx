@@ -7,6 +7,7 @@ import { CrIcon } from '../icons'
 import type { BrowserNodeData } from '../../../shared/model'
 import { browserTabs } from '../../../shared/model'
 import { useCanvasUi } from '../canvas-ui'
+import { useThumb } from '../activity-thumb-store'
 
 /**
  * Summary card for a browser, with a legacy thumbnail when one is available.
@@ -15,12 +16,15 @@ import { useCanvasUi } from '../canvas-ui'
  */
 export function BrowserNode({ data, selected }: NodeProps): React.JSX.Element {
   const node = (data as { node: BrowserNodeData }).node
-  const { tool, clipping, thumbs, interactiveBrowser, zoomToNode, picked, togglePick } = useCanvasUi()
-  // Either owner can supply the picture now — the legacy webview capture with
-  // the flag off, a still from the headless page with it on (App polls it).
-  // Still nothing while ownership is UNRESOLVED: whatever is in `thumbs` then
-  // is a leftover from the other owner, and a stale frame is worse than none.
-  const thumb = interactiveBrowser === null ? undefined : thumbs[node.id]
+  const { tool, clipping, interactiveBrowser, zoomToNode, picked, togglePick } = useCanvasUi()
+  // Per-id subscription: this card re-renders on its OWN thumbnail, not on
+  // every other browser's. Either owner supplies the picture — the legacy
+  // webview capture with the flag off, a still from the headless page with it
+  // on (App polls it). Still nothing while ownership is UNRESOLVED: whatever is
+  // stored then is a leftover from the other owner, and a stale frame is worse
+  // than none.
+  const storedThumb = useThumb(node.id)
+  const thumb = interactiveBrowser === null ? undefined : storedThumb
 
   const open = (): void => {
     // Clipping: the whole card is a bigger checkbox — no zoom.
