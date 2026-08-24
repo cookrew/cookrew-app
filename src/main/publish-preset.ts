@@ -181,3 +181,167 @@ export async function publishPreset(
     return refuse('push', error instanceof Error ? error.message : String(error))
   }
 }
+
+// ---------------------------------------------------------------------------
+// R29 — publish takes a SAVED PRESET, not live canvas state.
+//
+// Save writes to the local shelf (M0's PresetStore); publish pushes FROM the
+// shelf. That is a better shape than re-deriving a manifest at publish time,
+// and for one specific reason: the bytes that ship are byte-identical to the
+// ones the author reviewed and scrubbed at save. Re-deriving leaves a window
+// in which the canvas moves between approval and departure — the author
+// approves one thing and publishes another, with no diff anywhere.
+//
+// WHO GETS THIS maps onto gate configurations that already exist, so this is a
+// selector over them rather than a new mechanism:
+//   just-me → no registry call AT ALL
+//   free    → registry, identity gate (401)
+//   priced  → registry, payment gate (402), payout checks apply
+// ---------------------------------------------------------------------------
+
+/** The WHO GETS THIS selector, as the backend sees it. */
+export type PresetVisibility = 'just-me' | 'free' | 'priced'
+
+export interface ShelfDeps {
+  hosts: () => string[]
+  hostHelp: () => string
+  /** The saved preset, or null when this id is not on the shelf. */
+  readShelf: (presetId: string) => { manifest: PresetManifest; teamBytes: Buffer } | null
+  push: (input: {
+    manifest: PresetManifest
+    teamBytes: Buffer
+    host: string
+  }) => Promise<{ presetId: string }>
+  /** Record what this preset's visibility now is, locally. */
+  setVisibility: (presetId: string, visibility: PresetVisibility) => void
+}
+
+export type ShelfPublishOutcome =
+  | { ok: true; presetId: string; visibility: PresetVisibility; published: boolean; installUrl?: string }
+  | { ok: false; step: PublishStep | 'shelf'; reason: string; suggestion?: string }
+
+export async function publishFromShelf(
+  deps: ShelfDeps,
+  input: {
+    presetId: string
+    visibility: PresetVisibility
+    pricing?: PresetPricing
+    payout?: PayoutBinding
+  }
+): Promise<ShelfPublishOutcome> {
+  // JUST ME — and this returns BEFORE anything registry-shaped is touched,
+  // including the host list. "No registry call" has to mean the registry is
+  // not consulted in any way, or an unconfigured host could fail a private
+  // save, which would be absurd: nothing is leaving the machine.
+  if (input.visibility === 'just-me') {
+    deps.setVisibility(input.presetId, 'just-me')
+    return { ok: true, presetId: input.presetId, visibility: 'just-me', published: false }
+  }
+
+  const host = deps.hosts()[0]
+  if (host === undefined) return { ok: false, step: 'host', reason: deps.hostHelp() }
+
+  // PRICED — the payout gate, before the shelf is even read. Cheapest refusal
+  // first, and nothing is loaded for a publish that cannot proceed.
+  if (input.visibility === 'priced') {
+    if (input.pricing === undefined) {
+      return {
+        ok: false,
+        step: 'payout',
+        reason: 'This preset is set to be sold but carries no price. Set a price, or choose free.'
+      }
+    }
+    const payout = input.payout
+    if (payout === undefined || payout.chain.trim().length === 0) {
+      return {
+        ok: false,
+        step: 'payout',
+        reason:
+          'A priced preset needs a payout address and the chain it is on. The registry never ' +
+          'holds funds — buyers pay you directly — and the right address on the wrong network ' +
+          'is money gone with a successful receipt.'
+      }
+    }
+    const checked = checkPayoutAddress(payout.address)
+    if (!checked.ok) {
+      return {
+        ok: false,
+        step: 'payout',
+        reason: checked.message,
+        ...(checked.suggestion !== undefined ? { suggestion: checked.suggestion } : {})
+      }
+    }
+  }
+
+  const saved = deps.readShelf(input.presetId)
+  if (saved === null) {
+    return {
+      ok: false,
+      step: 'shelf',
+      reason: `That preset is not saved locally. Save it first — publishing sends the saved copy, not the live canvas.`
+    }
+  }
+
+  try {
+    const receipt = await deps.push({
+      manifest: saved.manifest,
+      teamBytes: saved.teamBytes,
+      host
+    })
+    deps.setVisibility(input.presetId, input.visibility)
+    return {
+      ok: true,
+      presetId: receipt.presetId,
+      visibility: input.visibility,
+      published: true,
+      installUrl: `https://${host}/install/${receipt.presetId}`
+    }
+  } catch (error) {
+    return { ok: false, step: 'push', reason: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+export interface SaveShelfDeps {
+  scrub: (snapshot: unknown) => { ok: boolean; snapshot?: unknown; report: unknown }
+  manifest: (input: {
+    scrub: unknown
+    version: number
+    author: { handle: string }
+    pricing?: PresetPricing
+  }) => { ok: boolean; manifest?: PresetManifest; teamBytes?: Buffer; reason?: string }
+  sign: (manifest: PresetManifest) => PresetManifest
+  install: (preset: { manifest: PresetManifest; teamBytes: Buffer }) => void
+}
+
+/**
+ * SAVE TO PRIVATE — scrub, sign, shelve. No registry, ever.
+ *
+ * This is the step that makes publish honest: the scrub runs here, with the
+ * author present, and what it approved is what a later publish sends.
+ */
+export async function saveToShelf(
+  deps: SaveShelfDeps,
+  input: { snapshot: unknown; handle: string; version?: number; pricing?: PresetPricing }
+): Promise<{ ok: true; presetId: string } | { ok: false; step: PublishStep; reason: string }> {
+  const scrubbed = deps.scrub(input.snapshot)
+  if (!scrubbed.ok) {
+    return {
+      ok: false,
+      step: 'scrub',
+      reason:
+        'This team still contains things that must not leave your machine. Resolve the scrub findings and save again.'
+    }
+  }
+  const built = deps.manifest({
+    scrub: scrubbed,
+    version: input.version ?? 1,
+    author: { handle: input.handle },
+    ...(input.pricing !== undefined ? { pricing: input.pricing } : {})
+  })
+  if (!built.ok || !built.manifest || !built.teamBytes) {
+    return { ok: false, step: 'manifest', reason: built.reason ?? 'The manifest could not be built.' }
+  }
+  const signed = deps.sign(built.manifest)
+  deps.install({ manifest: signed, teamBytes: built.teamBytes })
+  return { ok: true, presetId: signed.id }
+}
