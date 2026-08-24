@@ -11,7 +11,7 @@ import type { VersionPinRecord } from '../../shared/version-pin'
 import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 import type { LodLayout, ScreenRect } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
-import { cookrew } from './api'
+import { cookrew, isRemoteMode } from './api'
 import { useTurnPaging } from './nodes/TurnPager'
 import { CheckpointTimeline } from './CheckpointTimeline'
 import { TranscriptView, type ActiveBlock, type TranscriptHandle } from './TranscriptView'
@@ -230,7 +230,11 @@ function TerminalOverlay({
       fontFamily: 'JetBrains Mono, SF Mono, Menlo, monospace',
       fontSize: 13,
       cursorBlink: true,
-      scrollback: 5000
+      // A phone cannot hold a 5000-line scrollback for a high-output agent
+      // (Conductor) on top of the WebGL/GPU cost — that is the zoom-in OOM.
+      // Keep a small buffer on mobile; the paged transcript above is the real
+      // history, this pane is just the live tail.
+      scrollback: isRemoteMode() ? 600 : 5000
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
@@ -327,12 +331,19 @@ function TerminalOverlay({
       // glyphs (JetBrains Mono has none) can't accumulate horizontal drift
       // the way the DOM renderer lets them. Losing the context falls back
       // to the DOM renderer, which is degraded but functional.
-      try {
-        const webgl = new WebglAddon()
-        webgl.onContextLoss(() => webgl.dispose())
-        term.loadAddon(webgl)
-      } catch {
-        // WebGL unavailable — DOM renderer still works
+      //
+      // NOT on a phone: iOS Safari's WebGL is memory-constrained and unstable —
+      // a live-streaming agent's xterm on a WebGL context is a prime OOM /
+      // context-loss crash (the Conductor zoom-in crash). The DOM renderer is
+      // lighter and does not touch the GPU, so mobile uses it.
+      if (!isRemoteMode()) {
+        try {
+          const webgl = new WebglAddon()
+          webgl.onContextLoss(() => webgl.dispose())
+          term.loadAddon(webgl)
+        } catch {
+          // WebGL unavailable — DOM renderer still works
+        }
       }
 
       // Fit can report bogus dimensions before layout finishes — retry
