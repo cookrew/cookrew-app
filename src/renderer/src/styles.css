@@ -2992,6 +2992,114 @@ a.card-close {
 }
 
 /* Terminal-creation option chip for a saved role, beside preset chips. */
+/* MINE — a template saved but not yet served. Dashed, because the chip is a
+   real chip in every other respect: same footprint, same grammar, same click.
+   What is provisional is the SHARING, not the thing, so the border reports it
+   and nothing else changes. It solidifies when the template starts serving,
+   which is the whole transition the state exists to make visible. */
+.cr-chip.mine {
+  border-style: dashed;
+}
+
+/* LIVE — the same chip, now serving. Solid border is restated explicitly
+   rather than left to the absence of `.mine`, so the two states read as a pair
+   in the stylesheet the way they do on screen. */
+.cr-chip.live {
+  border-style: solid;
+}
+
+.cr-chip-live {
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.04em;
+  color: var(--cream-hi);
+  background: var(--hp);
+  border-radius: 2px;
+  padding: 2px 3px 1px;
+  margin-left: 1px;
+  flex: 0 0 auto;
+}
+
+/* VERSION — which version of a preset you hold.
+   FILLED violet, and that is load-bearing: .cr-ckpt-pin on the rail is a solid
+   violet flag, so the tag on the chip and the pin on the rail are the SAME MARK
+   in two places. A buyer who sees V2 on a dock chip and V2 on a rail is looking
+   at one object and never has to be told so.
+
+   NOTE FOR THE RULING THAT IS STILL OPEN: gate-sheet-unified, e2e-demo and
+   export-ux-demo all draw this OUTLINED, and use filled-violet for the UPDATE
+   state instead. That inverts the rhyme — on the rail, filled violet already
+   means "the version you are on" (.cr-ckpt-pin.current); on an outlined-tag
+   chip it would mean "a version you do NOT have". Shipping the filled form
+   because it is the one the shipped rail agrees with; if the ruling goes the
+   other way this rule and .cr-ckpt-pin.current move together, not separately. */
+.cr-chip-ver {
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.04em;
+  color: var(--cream-hi);
+  background: var(--violet);
+  border-radius: 2px;
+  padding: 1px 3px 0;
+  margin-left: 1px;
+  flex: 0 0 auto;
+}
+
+/* PRICE — a FACT about the preset, so a tag like the version tag, never a
+   badge. Badges say "a state is true of this"; a price says "this is what the
+   thing is", and it belongs in the same slot the version uses.
+
+   ONE SLOT, ONE TRUTH: an UNOWNED chip shows what it would cost you, an OWNED
+   chip shows which version you hold. The tag answers "what would this cost
+   ME", and for an owner the answer is nothing, so the slot has something
+   better to say. The mutual exclusion is enforced in the component, not here —
+   CSS can style two tags but cannot stop a caller rendering both, and a rule
+   that only holds when someone remembers it is not a rule. See the test.
+
+   Amber-deep on cream: an OFFER. Never rose, never the amber-soft used for
+   warnings — a price is not a problem, and the first thing a buyer learns
+   about this product should not be coloured like one. */
+.cr-chip-price {
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.04em;
+  color: var(--amber-deep);
+  background: var(--cream-hi);
+  border: 1.5px solid var(--amber-deep);
+  border-radius: 2px;
+  padding: 1px 3px 0;
+  margin-left: 1px;
+  flex: 0 0 auto;
+}
+
+/* BY — the ENTIRE authority surface for an imported chip. Not a panel, not a
+   hover card: one tag that says whose it is, sitting where the eye already
+   goes for chip metadata. A sprite plus a handle is the smallest thing that
+   answers "who am I trusting" without opening anything. */
+.cr-chip-by {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+  background: var(--cream-lo);
+  border-radius: 2px;
+  padding: 1px 3px 0;
+  margin-left: 1px;
+  flex: 0 0 auto;
+  max-width: 84px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.cr-chip-by .role-avatar {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+}
+
 .cr-chip.role {
   display: inline-flex;
   align-items: center;
@@ -3972,6 +4080,51 @@ body.cookrew-mobile .cookrew-minimap {
 
 /* v100+ carries no label (R8). It keeps the full silhouette — an unlabelled
    flag only LOOKS smaller because the eye reads text as mass. */
+/* IMPORTED PROVENANCE — the whole "whose is this" surface on a version pin.
+   A caller has to tell "my V2" from "drej's V2, authorized" in peripheral
+   vision, on a 19x13 flag, without a second panel to explain it.
+
+   THE CLIP IS THE CONSTRAINT, and it is why this is a corner dot and not a
+   ring, a border or a second flag: .cr-ckpt-pin carries
+   `clip-path: polygon(0 0, 62% 0, 100% 50%, 62% 100%, 0 100%)`, and a
+   clip-path clips the element's PSEUDO-ELEMENTS too. Anything drawn outside
+   that polygon — the obvious outline, a badge hanging off the tip — is sliced
+   by the flag's own silhouette. (0,0) is a polygon vertex, so the top-left
+   corner is the one place a mark is guaranteed whole.
+
+   F6 IS PRESERVED BY CONSTRUCTION, not by retest: `position: absolute` takes
+   the dot out of flow, so the pin's box is byte-identical with and without
+   `.imported`. The pin centres on railAnchorTop via translateY(-50%), and a
+   box that does not change cannot move a centre. The eval still runs, because
+   that is the gate's whole point.
+
+   Cream, not a new hue: it is the label's own colour, so the signal is the
+   PRESENCE of a mark rather than a colour nobody has been taught. At this size
+   peripheral vision resolves presence long before it resolves hue. */
+.cr-ckpt-pin.imported::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 1.5px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--cream-hi);
+  /* The current pin inverts to a dark label, so the dot inverts with it. */
+  box-shadow: 0 0 0 0.5px rgba(20, 17, 10, 0.35);
+}
+
+.cr-ckpt-pin.current.imported::after {
+  background: var(--phos-bg);
+  box-shadow: none;
+}
+
+/* The label shifts clear of the dot rather than sitting under it. Only when
+   imported — a local pin keeps every pixel of its 9.8px label area. */
+.cr-ckpt-pin.imported {
+  padding-left: 6px;
+}
+
 .cr-ckpt-pin.bare {
   padding-left: 0;
 }

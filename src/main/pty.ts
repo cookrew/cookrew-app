@@ -767,9 +767,52 @@ export class PtySession extends EventEmitter {
    *   unbounded, though — history_size caps at the 50k history-limit, past
    *   which the oldest lines trim and pre-window anchors go stale (clamp).
    */
+  private paneStateCache: { scrollRow: number | null; historySize: number | null } = {
+    scrollRow: null,
+    historySize: null
+  }
+  private paneStateAt: number | null = null
+
   paneScrollState(): { scrollRow: number | null; historySize: number | null } {
     if (!this.usesTmux || this.disposed) return { scrollRow: null, historySize: null }
     return activeMux?.scrollState(this.sessionName) ?? { scrollRow: null, historySize: null }
+  }
+
+  /**
+   * The SAME reading, for callers that run on a hot path and can tolerate a
+   * stale one — today that is `activityOf`, which runs once per tracked
+   * terminal per activity push.
+   *
+   * WHY THIS EXISTS. Profiled on the live main process: execFileSync was 5,189ms
+   * of 5,475ms total main-thread JS in a 20s window (94.5%), through
+   *   execFileSync -> herdr -> readPanes -> panes -> paneFor -> scrollState
+   *   -> paneScrollState -> activityOf -> push
+   * The herdr host multiplexer resolves a pane by forking the CLI inline, so
+   * every push forked once per terminal and the main thread was unavailable for
+   * the duration. That is the constant-payload latency Magpie measured from
+   * outside: an identical 1,184-byte response at p50 1403ms and min 94ms — the
+   * bytes were never the cost, the queue behind the fork was.
+   *
+   * WHY NOT CACHE `scrollState` ITSELF, which would fix every caller at once:
+   * `scrollAnchor()` reads the same value and it becomes TurnRecord.scrollLine,
+   * the checkpoint anchor. A stale anchor is a checkpoint that points at the
+   * wrong place in the transcript — a mark that lies, which is worse than a
+   * mark that is slow. Anchors are read at turn boundaries, not per push, so
+   * they keep the exact read and pay the fork.
+   *
+   * The staleness that IS accepted here is bounded to PANE_STATE_TTL_MS and
+   * costs an activity chip that is briefly behind. Tinker verified the axis
+   * that would have made this unacceptable: nothing activityOf returns reaches
+   * a TurnRecord, so a stale read cannot corrupt the ledger.
+   */
+  paneScrollStateCached(): { scrollRow: number | null; historySize: number | null } {
+    const now = Date.now()
+    if (this.paneStateAt !== null && now - this.paneStateAt < PANE_STATE_TTL_MS) {
+      return this.paneStateCache
+    }
+    this.paneStateCache = this.paneScrollState()
+    this.paneStateAt = now
+    return this.paneStateCache
   }
 
   /** Live scroll position only (see paneScrollState). */
@@ -789,6 +832,14 @@ export class PtySession extends EventEmitter {
 // and the prefix key are discoverable. The status bar is deliberately STATIC
 // (no clock, status-interval 0) — a per-second clock would keep the PTY
 // emitting and break `cookrew ask`'s output-quiescence detection.
+/**
+ * How stale an activity-path pane reading may be. 500ms matches the herdr host
+ * multiplexer's own ADMISSION_FRESH_MS, deliberately: that cache already serves
+ * pane RESOLUTION stale for the same reason, and two different staleness
+ * windows on one backend is a second truth to keep in step.
+ */
+const PANE_STATE_TTL_MS = 500
+
 const TMUX_CONF = [
   'set -g status on',
   'set -g status-interval 0',
