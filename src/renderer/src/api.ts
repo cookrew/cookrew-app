@@ -41,6 +41,16 @@ export interface CookrewApi {
     dir: string,
     team?: string,
   ) => Promise<WorkspaceMeta>;
+  /**
+   * Import a template as a SESSION: one workspace, one orch terminal that
+   * reaches the served crew over HTTP. Replaces "paste the whole team" — a
+   * caller enters through the orchestrator. `target` omitted = local import
+   * (the orch points at this app's own listener).
+   */
+  templateImport: (
+    team: string,
+    target?: { origin: string; slug: string },
+  ) => Promise<WorkspaceMeta>;
   switchWorkspace: (id: string) => Promise<WorkspaceList>;
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>;
   /** Workspace v2: remove workspace, multi-directory, per-terminal cwd, git. */

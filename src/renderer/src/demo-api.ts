@@ -121,6 +121,8 @@ export function createDemoApi(): CookrewApi {
       wsBroadcast()
       return Promise.resolve(meta)
     },
+    templateImport: (team) =>
+      Promise.resolve({ id: `demo-ws-${Date.now()}`, name: `${team} · session`, dir: '~', dirs: ['~'], icon: '🗂' }),
     switchWorkspace: (id) => {
       if (states.has(id)) {
         states.set(activeId, state)

@@ -55,6 +55,8 @@ const api = {
   listWorkspaces: () => ipcRenderer.invoke('workspace:list'),
   createWorkspace: (name: string, dir: string, team?: string) =>
     ipcRenderer.invoke('workspace:create', name, dir, team),
+  templateImport: (team: string, target?: { origin: string; slug: string }) =>
+    ipcRenderer.invoke('template:import', team, target),
   switchWorkspace: (id: string) => ipcRenderer.invoke('workspace:switch', id),
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),

@@ -1631,6 +1631,26 @@ interface CreateTerminalOpts {
 function createTerminal(opts: CreateTerminalOpts): CanvasNode {
   const role = opts.roleName ? roles.get(opts.roleName) : undefined
   if (opts.roleName && !role) throw new Error(`No saved role '${opts.roleName}'`)
+
+  // A SAVED TEMPLATE placed as a preset IS the import: drop ONE terminal — the
+  // entry orchestrator — that reaches the crew over HTTP, rather than pasting
+  // the whole team. Checked after harness presets and roles, so a template can
+  // never shadow a built-in, and only when nothing else claimed the name.
+  if (!role && !PRESETS.some((p) => p.name === opts.preset)) {
+    const template = teams.load(opts.preset)
+    if (template) {
+      const plan = planImportSession(template, {
+        origin: `https://127.0.0.1:${MOBILE_HTTPS_PORT}`,
+        slug: 'local'
+      })
+      const orchNode = orchTerminalNode(plan, randomUUID(), store.focusedState.dir, opts.position)
+      const placed = store.addNode(orchNode)
+      spawnTracked(placed as TerminalNodeData)
+      store.recordEvent('session.imported', template.name, plan.orch.name, plan.orch.askUrl)
+      return placed
+    }
+  }
+
   const preset = PRESETS.find((p) => p.name === opts.preset) ?? PRESETS[PRESETS.length - 1]
   // Native restore: a role saved from a checkpoint carries a truncated session
   // copy — materialize it under a fresh id so the booted Claude agent resumes
@@ -2865,7 +2885,13 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('node:connect', (_e, aId: string, bId: string) => store.connectAcross(aId, bId))
   ipcMain.handle('node:disconnect', (_e, connId: string) => store.disconnect(connId))
 
-  ipcMain.handle('preset:list', () => PRESETS)
+  // Harness presets PLUS saved templates: a template is a terminal preset, so
+  // placing it imports the crew as one orch terminal. Templates last, so a
+  // built-in always wins a name clash (and createTerminal checks them last too).
+  ipcMain.handle('preset:list', () => [
+    ...PRESETS,
+    ...teams.list().map((t) => ({ name: t.name, command: `cookrew call · ${t.name}` }))
+  ])
 
   ipcMain.handle('terminal:create', (_e, opts: CreateTerminalOpts) => createTerminal(opts))
 
