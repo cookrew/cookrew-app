@@ -233,6 +233,43 @@ any code — each one because the audit above shows nothing in the tree answers 
 6. How does the orphan reaper keep global visibility without becoming a cross-session read —
 and without being <code>O(resident)</code>, which is PERF-N's problem in the same component?</p>
 
+<h2>Addendum — the IPC boundary is conventional too</h2>
+
+<div class="f no">
+  <div class="fh"><span class="v no">Not enforced</span><span class="ft">7 · No IPC handler carries a principal</span>
+    <span class="loc">src/main/index.ts — 60 <code>ipcMain.handle</code> registrations</span></div>
+  <p>The enumeration the instantiator review asked for. Every handler that acts on a workspace or
+  a terminal takes a <strong>bare id and does the work</strong>. There is no caller identity in any
+  signature, no session argument, no authorization step:</p>
+<pre>terminal:setCwd   (nodeId, dir)        -> enrols an arbitrary dir (§4)
+workspace:dir:add (id, dir)            -> same, directly
+workspace:remove  (id)                 -> any workspace
+workspace:switch  (id)                 -> any workspace
+terminal:create   (opts)               -> caller-supplied opts
+pty:attach        (terminalId)         -> see below
+team:clip:set     (nodeIds[], cut)     -> no workspace argument at all
+team:clip:get / team:clip:paste ()     -> no argument at all</pre>
+  <p>That is <em>correct today</em>. The renderer is the owner's own app, so trusting it completely
+  is the right design for a single-tenant tool. It is also precisely what stops being true the
+  moment a session workspace is, in the note's words, “an ordinary resident”: every one of these
+  becomes reachable against a stranger's session, and none of them can tell.</p>
+  <p><strong><code>pty:attach</code> bypasses the ownership index.</strong> It resolves
+  <code>ptys.get(terminalId)</code> straight out of the shared map and never consults
+  <code>PtyOwnership</code>. So the scope index exists, and the live-output path does not ask it —
+  §2's “index, not a wall” made concrete. A caller's Conductor that can name another session's
+  terminal id gets that terminal's live stream.</p>
+  <p><strong>The team clipboard is a cross-workspace channel by construction.</strong>
+  <code>team:clip:set</code> takes node ids with no workspace argument; <code>get</code> and
+  <code>paste</code> take none at all. Copy from one workspace, paste into another is the feature.
+  Under sessions that is a data channel between callers — and <code>set</code> with
+  <code>cut: true</code> removes from the source.</p>
+  <p><strong>What this means for M-C.</strong> The sandbox cannot be built on top of this surface as
+  it stands. Either a principal is threaded through IPC and every handler above learns to refuse,
+  or session workspaces are never reachable from this surface at all. That is an architectural
+  fork and it belongs in the design note, not in a later hardening pass — it changes what the
+  instantiator is allowed to reuse, and “an ordinary resident” is currently listed only as a saving.</p>
+</div>
+
 <footer>
   Read from source at <code>dev@afb027f</code>; the flat turn-store namespace and the inherited
   env were confirmed against the running install, not inferred. No code changed by this audit.
