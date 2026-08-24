@@ -226,3 +226,72 @@
   padding: 6px 13px;
   cursor: pointer;
 }
+
+/*
+ * THE EXPORT ENTRY POINT, on the agent row.
+ *
+ * Two rules here are Velvet's, not taste. Access is legible AT REST — the
+ * "{n} callers" line is always present, never revealed by hover — because the
+ * question is asked in a glance. And the safety sentence is full-width prose
+ * rather than a tooltip: it is the number-one reason not to export, and a
+ * guarantee you have to hover to find is a guarantee that does no work.
+ */
+.ex-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+}
+.ex-at-rest { color: var(--cr-dim, #8d8577); white-space: nowrap; }
+.ex-at-rest.ex-on { color: var(--cr-ink, #ece6d8); }
+.ex-live { color: var(--cr-accent, #e9b949); }
+
+.ex-invite {
+  font: 600 11px ui-sans-serif, system-ui, sans-serif;
+  background: transparent;
+  border: 1px dashed var(--cr-accent, #e9b949);
+  color: var(--cr-accent, #e9b949);
+  border-radius: 999px;
+  padding: 3px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ex-invite:hover { border-style: solid; }
+.ex-next {
+  font: 700 10px ui-monospace, monospace; letter-spacing: 0.05em;
+  background: none; border: 1px solid var(--cr-line-hard, #4c463a);
+  color: var(--cr-ink, #ece6d8); border-radius: 3px; padding: 3px 8px; cursor: pointer;
+}
+.ex-off {
+  font: 700 10px ui-monospace, monospace; letter-spacing: 0.05em;
+  background: none; border: 1px solid transparent;
+  color: var(--cr-red, #e8867a); border-radius: 3px; padding: 3px 8px; cursor: pointer;
+}
+.ex-off:hover { border-color: var(--cr-red, #e8867a); }
+
+/* Prose, not a tooltip. See the note above. */
+.ex-safety {
+  flex-basis: 100%;
+  color: var(--cr-dim, #8d8577);
+  font-size: 11px;
+  line-height: 1.5;
+  max-width: 62ch;
+}
+.ex-hint { flex-basis: 100%; color: var(--cr-dim, #8d8577); font-size: 11px; }
+.ex-seam {
+  display: block;
+  opacity: 0.75;
+  font-style: italic;
+}
+
+/* A per-row failure, beside the control that produced it. */
+.ex-error {
+  flex-basis: 100%;
+  color: var(--cr-red, #e8867a);
+  font-size: 11px;
+  line-height: 1.5;
+  max-width: 62ch;
+  border-left: 2px solid var(--cr-red, #e8867a);
+  padding-left: 8px;
+}

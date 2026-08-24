@@ -1066,6 +1066,7 @@ function Canvas(): React.JSX.Element {
                 setTool('move')
               }}
               variant="view"
+              onOpenGrants={() => setGrantOpen(true)}
               onClose={() => setView('canvas')}
             />
           )}

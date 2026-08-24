@@ -2790,7 +2790,12 @@ export class TurnTracker extends EventEmitter {
           })()
     const lines = derived.lines
     const pending = t.promptBuffer.trim()
-    const pane = t.session.paneScrollState?.() ?? { scrollRow: null, historySize: null }
+    // The CACHED reading (see PtySession.paneScrollStateCached). On the herdr
+    // host backend the exact one forks the CLI inline, and this line ran once
+    // per tracked terminal per push — 94.5% of all main-thread JS. Anchors keep
+    // the exact read; an activity chip does not need one.
+    const pane = t.session.paneScrollStateCached?.() ??
+      t.session.paneScrollState?.() ?? { scrollRow: null, historySize: null }
     return {
       terminalId,
       agent: t.agent,
