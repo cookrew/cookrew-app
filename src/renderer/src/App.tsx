@@ -840,7 +840,7 @@ function Canvas(): React.JSX.Element {
         // createTerminal. The click that "placed" it is the confirm.
         if (!role && templates.includes(preset)) {
           try {
-            await cookrew().templateImport(preset)
+            await cookrew().templateImport(preset, position)
           } catch (error) {
             console.error('Importing template failed:', error)
           } finally {

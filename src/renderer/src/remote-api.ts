@@ -179,8 +179,8 @@ export function createRemoteApi(): CookrewApi {
     onWorkspaceState: (cb) => subscribe<WorkspaceState>('workspace', cb),
     listWorkspaces: () => req<WorkspaceList>(apiPath('/api/workspaces')),
     createWorkspace: (name, dir, team) => req(apiPath('/api/workspaces'), 'POST', { name, dir, team }),
-    templateImport: (team, target) =>
-      req(apiPath('/api/templates/import'), 'POST', { team, target }),
+    templateImport: (team, position) =>
+      req(apiPath('/api/templates/import'), 'POST', { team, position }),
     switchWorkspace: (id) => req<WorkspaceList>(apiPath('/api/workspaces/switch'), 'POST', { id }),
     renameWorkspace: (id, name) => req<WorkspaceList>(apiPath('/api/workspaces/rename'), 'POST', { id, name }),
     removeWorkspace: (id) => req<WorkspaceList>(apiPath(`/api/workspaces/${id}`), 'DELETE'),

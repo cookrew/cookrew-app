@@ -125,7 +125,7 @@ import {
   entryAgentOf,
   type TeamSnapshot
 } from './teams'
-import { type ServeTarget } from './import-session'
+import { MOBILE_HTTPS_PORT } from './mobile-ports'
 import { PresetStore, isPresetId } from './preset-store'
 import { PinStore } from './pin-store'
 import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
@@ -1855,15 +1855,25 @@ async function createWorkspaceFromTeam(
  * fixture path) the orch still points at 127.0.0.1's own listener, so the flow
  * is exercisable end to end before any public relay exists.
  */
-async function importTemplateAsSession(team: string, target?: ServeTarget): Promise<WorkspaceMeta> {
+/** The proxy terminal's mirror client, resolved for dev and packaged. */
+function orchMirrorScript(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'orch-mirror.mjs')
+    : path.join(dirname, '../../resources/orch-mirror.mjs')
+}
+
+async function importTemplateAsSession(
+  team: string,
+  position?: { x: number; y: number }
+): Promise<WorkspaceMeta> {
   const snapshot = teams.load(team)
   if (!snapshot) throw new Error(`No saved template '${team}' to import`)
+  const callerWs = store.focusedId
 
-  // LOCAL import (your own template, no remote target): a REAL session — a new
-  // workspace forked from the template, the team booted from its saved sessions,
-  // WITH A GIT WORKTREE per repo dir. workspaceFromTemplate hardcodes
-  // worktree:false (that was the "no worktree" bug), so import forks directly
-  // with worktree enabled.
+  // REQ 1 — a REAL session: a new workspace forked from the template, the team
+  // booted from its saved sessions, WITH A GIT WORKTREE per repo dir.
+  // workspaceFromTemplate hardcodes worktree:false (the "no worktree" bug), so
+  // import forks directly with worktree enabled. forkTeam switches to it.
   const dir = snapshot.dir || store.focusedState.dir
   const meta = await forkTeam(teamForkDeps(), {
     name: `${snapshot.name} · session`,
@@ -1873,16 +1883,39 @@ async function importTemplateAsSession(team: string, target?: ServeTarget): Prom
     dirs: dir.length > 0 ? [dir] : undefined,
     worktree: true
   })
-  store.switchWorkspace(meta.id)
-  // VERSION PIN: mark the session with the template version it runs. Cut on
-  // every agent that already carries history from the restored sessions; a
-  // fresh agent pins on its first turn. This is what "version pinned" means —
-  // the rail says which edition of the crew this session is.
-  cutTemplatePins(store.workspaceState(meta.id).nodes
-    .filter((n) => n.kind === 'terminal')
-    .map((n) => n.id))
-  const entry = entryAgentOf(snapshot)
-  store.recordEvent('session.imported', meta.name, entry ?? meta.name, `${snapshot.name}`)
+  // VERSION PIN — the rail says which template edition this session runs.
+  const sessionNodes = store.workspaceState(meta.id).nodes
+  cutTemplatePins(sessionNodes.filter((n) => n.kind === 'terminal').map((n) => n.id))
+
+  // REQ 2 — the PROXY. Find the session's entry orchestrator and place a proxy
+  // terminal back in the CALLER's workspace that mirrors it over the SAME mobile
+  // API the phone uses (resources/orch-mirror.mjs: GET /turns, POST /input). So
+  // the caller talks to the orch from their own canvas; the crew runs in the
+  // session with its worktree.
+  const entryName = entryAgentOf(snapshot)
+  const orch = sessionNodes.find(
+    (n): n is TerminalNodeData => n.kind === 'terminal' && n.name === entryName
+  )
+  store.switchWorkspace(callerWs)
+  if (orch) {
+    const proxy: TerminalNodeData = {
+      kind: 'terminal',
+      id: randomUUID(),
+      name: `${snapshot.name} ▸ ${orch.name}`,
+      preset: 'Shell',
+      command:
+        `NODE_TLS_REJECT_UNAUTHORIZED=0 COOKREW_MOBILE_ORIGIN=https://127.0.0.1:${MOBILE_HTTPS_PORT} ` +
+        `node ${orchMirrorScript()} ${orch.id} --name ${JSON.stringify(orch.name)}`,
+      cwd: store.focusedState.dir,
+      orch: false,
+      role: null,
+      position: position ?? { x: 160, y: 120 },
+      size: DEFAULT_TERMINAL_SIZE
+    }
+    const placed = store.addNode(proxy)
+    spawnTracked(placed as TerminalNodeData)
+    store.recordEvent('session.imported', meta.name, orch.name, `proxy → ${orch.id}`)
+  }
   return meta
 }
 
@@ -2728,8 +2761,8 @@ function registerIpc(handlers: RestoreHandlers): void {
     team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir)
   )
   // Import a template as a session: one workspace, one orch terminal over HTTP.
-  ipcMain.handle('template:import', (_e, team: string, target?: ServeTarget) =>
-    importTemplateAsSession(team, target)
+  ipcMain.handle('template:import', (_e, team: string, position?: { x: number; y: number }) =>
+    importTemplateAsSession(team, position)
   )
   ipcMain.handle('workspace:switch', (_e, id: string) => {
     switchWorkspace(id)

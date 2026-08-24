@@ -49,7 +49,7 @@ export interface CookrewApi {
    */
   templateImport: (
     team: string,
-    target?: { origin: string; slug: string },
+    position?: { x: number; y: number },
   ) => Promise<WorkspaceMeta>;
   switchWorkspace: (id: string) => Promise<WorkspaceList>;
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>;
