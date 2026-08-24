@@ -106,6 +106,11 @@ export interface MobileApiDeps {
   latestCheckpoint?: (
     terminalId: string,
   ) => Promise<{ prompt: string; reply: string; title?: string } | null>;
+  /**
+   * Cold-boot wait window for a stream open (acquireViewWhenReady). Omitted in
+   * production (defaults ~2s in 50ms steps); tests shrink it for determinism.
+   */
+  viewReady?: { attempts?: number; stepMs?: number };
   /** Observability event log (query/count) — spec observability-event-log-spec. */
   events: EventLog;
   /** Durable agent roster cache (~/.cookrew/agents.json). */
@@ -204,6 +209,35 @@ export async function enrichStateWithGit(
  * renderer bundle running in a phone browser (remote-api.ts). Returns true
  * when the request was handled.
  */
+/**
+ * Boot the mirror and hold a viewer once its PTY is resident, tolerating the
+ * cold-boot window. `acquireTerminalView` kicks off the on-demand boot; when a
+ * cold agent's PTY is not registered on the same tick, poll for it (bounded)
+ * rather than 404 immediately — the boot IS in flight, it just needs a beat.
+ * Returns false only when the terminal truly cannot come up (no such node,
+ * spawn failed) within the window, at which point the poll backstop / retry
+ * owns recovery.
+ */
+export async function acquireViewWhenReady(
+  deps: MobileApiDeps,
+  ptys: { get: (id: string) => unknown },
+  terminalId: string,
+  opts: { attempts?: number; stepMs?: number } = {},
+): Promise<boolean> {
+  // No gating hook (embedders/tests): the terminal is whatever ptys says.
+  if (!deps.acquireTerminalView) return true;
+  if (deps.acquireTerminalView(terminalId)) return true;
+  // Booted but not yet resident — wait (default ~2s in 50ms steps). The boot
+  // was kicked off by the acquire above; poll for its PTY without re-booting.
+  const attempts = opts.attempts ?? 40;
+  const stepMs = opts.stepMs ?? 50;
+  for (let i = 0; i < attempts; i++) {
+    await new Promise((r) => setTimeout(r, stepMs));
+    if (ptys.get(terminalId)) return deps.acquireTerminalView(terminalId);
+  }
+  return false;
+}
+
 export async function handleMobileApi(
   request: http.IncomingMessage,
   response: http.ServerResponse,
@@ -768,8 +802,15 @@ export async function handleMobileApi(
   if (ptyMatch) {
     const terminalId = ptyMatch[1];
     const openingStream = method === "GET" && ptyMatch[2] === "stream";
+    // Opening a stream BOOTS the mirror on demand (lazy attach), and a cold
+    // agent's PTY is not resident on the same tick the boot is kicked off — so
+    // an immediate 404 makes a just-opened viewer (the desktop popout, the
+    // phone, the orch-mirror proxy) spam "retrying" through the whole boot
+    // window. Wait briefly for residency instead. This is also what makes a
+    // CROSS-WORKSPACE target work: the boot resolves the node across every
+    // workspace, but that resolution + spawn takes a beat the first time.
     const acquired = openingStream
-      ? (deps.acquireTerminalView?.(terminalId) ?? true)
+      ? await acquireViewWhenReady(deps, ptys, terminalId, deps.viewReady)
       : true;
     if (!acquired) {
       respondJson(response, 404, { error: "Terminal not running" });

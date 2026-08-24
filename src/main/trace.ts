@@ -98,6 +98,23 @@ export class TraceReader {
   /** Derived index memo, keyed by the blocks ARRAY IDENTITY — trace growth
    *  produces a fresh array (blocksOf re-ingests), invalidating for free. */
   private indexCache = new Map<string, { blocks: TraceBlock[]; entries: TraceIndexEntry[] }>()
+  /**
+   * T1 latest-checkpoint cache, stat-guarded. A canvas of mostly-idle agents
+   * polls latestCheckpoint on every card each tick; without this, an idle
+   * agent's unchanged file is re-opened, re-read and re-parsed every time. Keyed
+   * by terminal id → the file's identity (path+size+mtime) it was computed from;
+   * a matching stat returns the cached turn with NO open/read/parse, turning a
+   * fleet poll tick from N reads into N cheap stats.
+   */
+  private latestCache = new Map<
+    string,
+    {
+      file: string
+      size: number
+      mtimeMs: number
+      value: { prompt: string; reply: string; title?: string } | null
+    }
+  >()
 
   constructor(
     private store: WorkspaceStore,
@@ -281,10 +298,26 @@ export class TraceReader {
     const spec = this.watchSpec(terminalId)
     if (!spec || !existsSync(spec.file)) return null
     let size: number
+    let mtimeMs: number
     try {
-      size = (await stat(spec.file)).size
+      const st = await stat(spec.file)
+      size = st.size
+      mtimeMs = st.mtimeMs
     } catch {
       return null
+    }
+    // Stat-guard: an unchanged file (same path, size, mtime) returns the cached
+    // turn with no open/read/parse. This is the fleet-poll fast path — most
+    // agents are idle, so most ticks land here and cost only the stat above.
+    const cached = this.latestCache.get(terminalId)
+    if (cached && cached.file === spec.file && cached.size === size && cached.mtimeMs === mtimeMs) {
+      return cached.value
+    }
+    const remember = (
+      value: { prompt: string; reply: string; title?: string } | null
+    ): { prompt: string; reply: string; title?: string } | null => {
+      this.latestCache.set(terminalId, { file: spec.file, size, mtimeMs, value })
+      return value
     }
     // Escalate the window until it holds a COMPLETE turn. A turn only parses
     // when the window contains its opening user line, so a single heavy turn
@@ -312,19 +345,19 @@ export class TraceReader {
         const usable = start > 0 && lines.length > 1 ? lines.slice(1) : lines
         records = spec.parse(usable)
       } catch {
-        return null
+        return null // a transient read error — do NOT cache, retry next tick
       }
       const last = records[records.length - 1]
       if (last) {
-        return {
+        return remember({
           prompt: last.prompt,
           reply: last.reply,
           ...(last.title ? { title: last.title } : {})
-        }
+        })
       }
       // No complete turn in this window. If we have now read the whole file,
       // there genuinely is none; otherwise grow and retry.
-      if (size - window <= 0) return null
+      if (size - window <= 0) return remember(null)
     }
   }
 
