@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Instantiator — design note (R30)</title>
+<style>
+  :root{--bg:#fbfaf8;--panel:#fff;--ink:#1a1a1c;--dim:#5b5b63;--line:#e3e0da;--code:#f4f2ee;
+    --accent:#6b4fbb;--warn:#b3261e;--warn-bg:#fdeceb;--ok:#2c6e49;--ok-bg:#e9f4ee;
+    --q:#8a6d00;--q-bg:#fbf6e3}
+  @media(prefers-color-scheme:dark){:root{--bg:#131316;--panel:#1a1a1f;--ink:#e9e8e6;--dim:#9d9ca6;
+    --line:#2c2c34;--code:#0e0e11;--accent:#a68cf0;--warn:#ff6b5e;--warn-bg:#2a1614;--ok:#5fc98d;
+    --ok-bg:#12241a;--q:#e0c04a;--q-bg:#262112}}
+  :root[data-theme="dark"]{--bg:#131316;--panel:#1a1a1f;--ink:#e9e8e6;--dim:#9d9ca6;--line:#2c2c34;
+    --code:#0e0e11;--accent:#a68cf0;--warn:#ff6b5e;--warn-bg:#2a1614;--ok:#5fc98d;--ok-bg:#12241a;
+    --q:#e0c04a;--q-bg:#262112}
+  :root[data-theme="light"]{--bg:#fbfaf8;--panel:#fff;--ink:#1a1a1c;--dim:#5b5b63;--line:#e3e0da;
+    --code:#f4f2ee;--accent:#6b4fbb;--warn:#b3261e;--warn-bg:#fdeceb;--ok:#2c6e49;--ok-bg:#e9f4ee;
+    --q:#8a6d00;--q-bg:#fbf6e3}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif;-webkit-text-size-adjust:100%}
+  .wrap{max-width:58rem;margin:0 auto;padding:2.4rem 1.25rem 5rem}
+  h1{font-size:1.65rem;margin:0 0 .35rem;letter-spacing:-.02em}
+  h2{font-size:1.1rem;margin:2.2rem 0 .5rem;padding-bottom:.3rem;border-bottom:1px solid var(--line)}
+  h3{font-size:.98rem;margin:1.3rem 0 .3rem}
+  .meta{color:var(--dim);font-size:.86rem}
+  code{background:var(--code);padding:.1em .36em;border-radius:4px;font-size:.86em;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:.85rem;
+    overflow-x:auto;font-size:.79rem;line-height:1.5;font-family:ui-monospace,Menlo,monospace}
+  table{width:100%;border-collapse:collapse;margin:.7rem 0;font-size:.87rem}
+  th,td{text-align:left;padding:.45rem .5rem;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;color:var(--dim)}
+  .seam{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent);
+    border-radius:8px;padding:.9rem 1.1rem;margin:.9rem 0}
+  .seam h3{margin-top:0}
+  .q{background:var(--q-bg);border:1px solid var(--q);border-left:5px solid var(--q);
+    border-radius:8px;padding:1.1rem 1.3rem;margin:1.4rem 0}
+  .warn{background:var(--warn-bg);border-left:4px solid var(--warn);padding:.7rem .9rem;
+    border-radius:0 6px 6px 0;margin:.6rem 0;font-size:.92rem}
+  .ok{background:var(--ok-bg);border-left:4px solid var(--ok);padding:.7rem .9rem;
+    border-radius:0 6px 6px 0;margin:.6rem 0;font-size:.92rem}
+  ul{margin:.4rem 0;padding-left:1.2rem}li{margin:.25rem 0}
+  svg{width:100%;height:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;margin:1rem 0}
+  svg text{font:11px ui-monospace,monospace;fill:var(--ink)}
+  svg .d{font-size:10px;fill:var(--dim)}
+  svg rect{fill:var(--code);stroke:var(--line)}
+  svg .hot rect{stroke:var(--accent);stroke-width:1.5}
+  svg path{stroke:var(--dim);fill:none}
+  footer{margin-top:2.6rem;padding-top:1rem;border-top:1px solid var(--line);color:var(--dim);font-size:.8rem}
+  .toggle{position:fixed;top:1rem;right:1rem;background:var(--panel);color:var(--ink);
+    border:1px solid var(--line);border-radius:999px;padding:.35rem .8rem;font-size:.78rem;cursor:pointer}
+</style>
+</head>
+<body>
+<button class="toggle" onclick="const r=document.documentElement;r.dataset.theme=(r.dataset.theme==='dark')?'light':'dark'">◐ theme</button>
+<div class="wrap">
+
+<h1>The Instantiator</h1>
+<p class="meta">
+  Design note before code · Ruling R30 · Commander · 2026-08-24<br>
+  First gated call → a WorkspaceSession from the template at its pin, a sandbox workdir,
+  the conversation routed to that session's Conductor.
+</p>
+
+<div class="ok">
+  <b>R30 lands on machinery that shipped.</b> Verified in the tree, not taken from the table:
+  <code>SessionRegistry</code> (get/peek/isLive/resident/drainTick, park + drain),
+  <code>copyTeam</code> (teams.ts:819), <code>VersionPinRecord</code> + <code>nextVersion</code>,
+  per-terminal <code>cwd</code> in pty.ts, and <code>deriveSlug</code>/<code>uniqueSlug</code>.
+  The instantiator is a <em>composer</em> of these, not new subsystems.
+</div>
+
+<h2>What it does, in one path</h2>
+<svg viewBox="0 0 860 132" role="img" aria-label="gated call to running session">
+  <g><rect x="8" y="16" width="132" height="42" rx="6"/><text x="20" y="34">gated call</text><text class="d" x="20" y="49">401/402 passed</text></g>
+  <g class="hot"><rect x="168" y="16" width="150" height="42" rx="6"/><text x="180" y="34">session exists?</text><text class="d" x="180" y="49">by (service, caller)</text></g>
+  <g class="hot"><rect x="346" y="6" width="150" height="42" rx="6"/><text x="358" y="24">mint</text><text class="d" x="358" y="39">workspace + sandbox</text></g>
+  <g><rect x="346" y="70" width="150" height="42" rx="6"/><text x="358" y="88">reuse</text><text class="d" x="358" y="103">keeps its pin</text></g>
+  <g class="hot"><rect x="524" y="16" width="150" height="42" rx="6"/><text x="536" y="34">route</text><text class="d" x="536" y="49">to its Conductor</text></g>
+  <g><rect x="702" y="16" width="146" height="42" rx="6"/><text x="714" y="34">reply</text><text class="d" x="714" y="49">or END cuts it</text></g>
+  <path d="M140 37 L164 37"/><path d="M318 30 L342 27"/><path d="M318 44 L342 88"/>
+  <path d="M496 27 L520 34"/><path d="M496 91 L520 44"/><path d="M674 37 L698 37"/>
+</svg>
+
+<h2>The seams I will cut</h2>
+<p>
+  Five, and each is a place I want to be able to test a decision without a filesystem, a PTY or a
+  network. The security-critical one is <b>S3</b>.
+</p>
+
+<div class="seam">
+  <h3>S1 · <code>TemplateSource</code> — what a template IS to the instantiator</h3>
+  <pre><code>read(templateId): { snapshot: TeamSnapshot; pin: VersionPinRecord; version: number }</code></pre>
+  <p>
+    The instantiator must not know how templates are stored. Today that is <code>TeamStore</code>;
+    R30 adds transcripts-at-pin. Behind this seam, "template" is a value — which is also what makes
+    <em>new sessions get the latest pin, running sessions keep theirs</em> testable: the version is
+    resolved <b>once, at mint</b>, and never re-read.
+  </p>
+</div>
+
+<div class="seam">
+  <h3>S2 · <code>SessionKey</code> — what identity a session has</h3>
+  <pre><code>keyOf(serviceId, callerSub, ordinal): { sessionId; slug; workspaceName }</code></pre>
+  <p>
+    The demo shows <code>ana-1</code> and <code>ana-2</code>: one caller, two sessions, different
+    versions. So the key is <b>not</b> (service, caller) — it is (service, caller, ordinal), and
+    "does a session exist" is really "does an OPEN one exist". Pure, so collisions and slug
+    uniqueness are tested without creating anything.
+  </p>
+</div>
+
+<div class="seam">
+  <h3>S3 · <code>Sandbox</code> — the security-critical one</h3>
+  <pre><code>rootFor(serviceId): string
+dirFor(sessionId): string
+confine(candidate: string, sessionId): string | null   // null = refuse</code></pre>
+  <p>
+    Every terminal in a session gets its <code>cwd</code> through <code>confine</code>, which
+    resolves and refuses anything outside the session dir — the same shape as
+    <code>PresetStore.dirFor</code>, which already refuses a path that would leave its store. A
+    <em>function</em>, not a convention: "we always pass the sandbox dir" is the kind of guarantee
+    this program keeps finding to be decorative.
+  </p>
+  <div class="warn">
+    <b>What confinement does NOT buy, stated now rather than discovered later.</b> It constrains
+    where an agent <em>starts</em>. An agent that runs <code>cd /</code>, or a tool with an absolute
+    path, is not stopped by a cwd — only by an OS boundary we do not have. So the honest claim is
+    "a caller's files land in their folder", not "a caller cannot read yours". Tinker should review
+    this seam specifically, and the caller-facing copy must not over-promise.
+  </div>
+</div>
+
+<div class="seam">
+  <h3>S4 · <code>SessionLifecycle</code> — END, and what it cuts</h3>
+  <pre><code>end(sessionId, reason): { stopped: number }</code></pre>
+  <p>
+    END is the panic button and <b>stops mid-call</b> — which is the revoke semantics already
+    built and proven: <code>CallsInFlight.cancelWhere</code> cuts the running call, the reply never
+    reaches the caller even if it resolves a beat later, and the wire says 403. END reuses that
+    seam rather than growing a second cancellation path. Cleanup runs after the cut, never before:
+    deleting a sandbox out from under a running agent is how a stop becomes a crash.
+  </p>
+</div>
+
+<div class="seam">
+  <h3>S5 · <code>ConductorRoute</code> — one door</h3>
+  <pre><code>conductorOf(sessionWorkspaceId): terminalId | null</code></pre>
+  <p>
+    Only the orch agent answers. This deletes the per-agent grant matrix for services — and it also
+    <b>supersedes the per-conversation fork</b>: under R30 the <em>session</em> is the isolation, so
+    there is one workspace, one Conductor, and no <code>cutVersion</code> per conversation.
+    <code>call-session.ts</code>'s fork discipline stays for Door B (remote teammate) and is not
+    used here. Worth stating because the two paths now diverge and someone will otherwise wire the
+    fork in out of habit.
+  </p>
+</div>
+
+<h2>Where it plugs in</h2>
+<table>
+  <thead><tr><th>Existing</th><th>What the instantiator adds</th></tr></thead>
+  <tbody>
+    <tr><td><code>SessionRegistry.get(workspaceId)</code></td><td>nothing — a session workspace is an ordinary resident, so park/drain applies unchanged</td></tr>
+    <tr><td><code>CallsInFlight</code></td><td>nothing — a session's calls count and cut exactly like any other</td></tr>
+    <tr><td><code>copyTeam</code></td><td>called once per mint, with the pinned snapshot as source</td></tr>
+    <tr><td><code>uniqueSlug</code></td><td>session slugs join the same namespace, so a service cannot shadow the owner's own workspace</td></tr>
+    <tr><td>gate (401/402)</td><td>unchanged; entitlement narrows to one callee — Forge's half</td></tr>
+  </tbody>
+</table>
+
+<h2>What I will build first</h2>
+<ol>
+  <li><b>S2 + S3 pure</b> — keys, slugs, and <code>confine</code>, with mutants: a session id containing
+    <code>..</code>, an absolute cwd, a symlinked sandbox, two callers colliding on a slug.</li>
+  <li><b>Mint</b> against a temp dir — real <code>copyTeam</code>, no PTYs.</li>
+  <li><b>Route + END</b> — first call creates, second reuses, END cuts mid-call.</li>
+</ol>
+<p>
+  No renderer work: the Sessions table is Fresco's, and it reads facts this produces.
+</p>
+
+<div class="q">
+  <h2 style="border:0;margin:0 0 .5rem">The one question I want ruled</h2>
+  <p style="margin-top:0">
+    <b>Under R30 the owner can read every caller's session. What do we tell the caller?</b>
+  </p>
+  <p>
+    The serve sheet says <em>"You see who's on, never their data."</em> Under R29 that was true by
+    construction — the buyer downloaded a copy and their work stayed on their machine. R30 inverts
+    it: the session is a workspace <b>in the owner's app, on the owner's disk, driven by the owner's
+    PTYs</b>. The transcripts are in the owner's store partition; the sandbox is a folder in the
+    owner's home; the owner can open the workspace and read it. Nothing in the design prevents this,
+    and I do not think anything can — it is the same machine.
+  </p>
+  <p>
+    So the sentence is not a property, it is a promise, and it is currently on a screen we are
+    asking strangers to trust. Three ways out, and this is the owner's call, not mine:
+  </p>
+  <ul>
+    <li><b>Say it plainly</b> — "this crew runs on its author's machine; they can see your
+      conversation." Honest, and it may be a fine trade for many services. Costs the sentence.</li>
+    <li><b>Narrow the claim</b> — "Cookrew never sends your conversation anywhere else", which is
+      true and is a different, smaller promise than the one now shown.</li>
+    <li><b>Make it partly true</b> — session workspaces excluded from the owner's switcher and their
+      transcripts not indexed into the owner's search. Real friction against casual reading; no
+      defence at all against an owner who wants to look. I would not ship it as a privacy claim.</li>
+  </ul>
+  <p style="margin-bottom:0">
+    I need the answer before S3, because it decides whether the sandbox is a <em>containment</em>
+    boundary or merely a <em>tidiness</em> one — and that changes what I build and what Tinker
+    reviews it against.
+  </p>
+</div>
+
+<h2>Two smaller things I will assume unless told otherwise</h2>
+<ul>
+  <li><b>END deletes the sandbox.</b> The demo says cleanup on END. I will make deletion the
+    default and log the path, because a caller's files are the caller's and keeping them is a
+    storage decision nobody asked the owner to make. If ended sessions should be recoverable, that
+    is a different feature and I would rather it be asked for than assumed.</li>
+  <li><b>A parked session keeps its sandbox.</b> Park is not end — the demo shows a session parked
+    two hours and still listed, so parking must cost storage and nothing else.</li>
+</ul>
+
+<footer>
+  Design note only — no code, per the ruling's instruction to design first. Seams verified against
+  the tree rather than the gap table. <code>docs/</code> is gitignored; force-added.
+</footer>
+
+</div>
+</body>
+</html>
