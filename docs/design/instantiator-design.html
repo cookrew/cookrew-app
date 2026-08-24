@@ -61,7 +61,9 @@
 <p class="meta">
   Design note before code · Ruling R30 · Commander · 2026-08-24<br>
   First gated call → a WorkspaceSession from the template at its pin, a sandbox workdir,
-  the conversation routed to that session's Conductor.
+  the conversation routed to that session's Conductor.<br>
+  <b>R31 addendum folded in:</b> templates are account-scoped with a local cache; sessions key by
+  account.
 </p>
 
 <div class="ok">
@@ -103,12 +105,64 @@
 
 <div class="seam">
   <h3>S2 · <code>SessionKey</code> — what identity a session has</h3>
-  <pre><code>keyOf(serviceId, callerSub, ordinal): { sessionId; slug; workspaceName }</code></pre>
+  <pre><code>keyOf(serviceId, accountId, ordinal): { sessionId; slug; workspaceName }</code></pre>
   <p>
     The demo shows <code>ana-1</code> and <code>ana-2</code>: one caller, two sessions, different
     versions. So the key is <b>not</b> (service, caller) — it is (service, caller, ordinal), and
     "does a session exist" is really "does an OPEN one exist". Pure, so collisions and slug
     uniqueness are tested without creating anything.
+  </p>
+  <p>
+    <b>R31: keyed by ACCOUNT, not credential-sub</b>, and the Chief is right that it is cleaner —
+    but the reason is worth writing down because it is a correctness gain, not a tidiness one. A
+    credential-sub is per-enrolment: the same person re-enrolling, or arriving from a second device
+    with a second key, is a different <code>sub</code> and would have silently got a fresh session
+    and lost their work. An account survives both. It also makes "one caller, two sessions" mean
+    what the table shows — the same human on V1 and V2 — rather than an artefact of key rotation.
+  </p>
+</div>
+
+<div class="seam">
+  <h3>S1b · <code>TemplateSync</code> — account-scoped, local-first (R31)</h3>
+  <pre><code>saveLocal(template): PinId        // instant, offline, authoritative for serving
+enqueueSync(PinId)               // eventually consistent, never blocks a save
+readLocal(templateId): Template  // what the instantiator reads. Always.</code></pre>
+  <p>
+    Save writes locally and returns; the account push is a queued side effect. The instantiator
+    reads the local copy, which is not a fallback but the <b>correct</b> source: the crew runs on
+    this machine, so a service must serve what this machine actually holds. A template synced from
+    another device but not yet materialised here is a template this machine cannot run.
+  </p>
+  <p>
+    That has one consequence worth stating plainly rather than discovering: <b>"new sessions get the
+    latest pin" means the latest pin ON THE SERVING MACHINE.</b> Cut V2 on a laptop, and the desktop
+    that is serving keeps minting V1 sessions until it syncs. That is right — it cannot run bytes it
+    does not have — but it means the Sessions table's version column is the honest place to see it,
+    and the serve chip should show the version being served rather than the newest one saved.
+  </p>
+</div>
+
+<div class="seam">
+  <h3>S1c · <b>The pin's identity must stop being its number</b></h3>
+  <div class="warn">
+    <b>A hazard R31 introduces, and the one design change I want to make in response.</b>
+    <code>nextVersion()</code> is <code>highest + 1</code> over LOCAL records
+    (<code>version-pin.ts:156</code>). Offline on two machines, both cut "V2" — same number,
+    different content. R30's own sentence is that <em>the pin IS the contract between you and every
+    session on it</em>, and a session pinned to "V2" then means two different things. Sync cannot
+    repair it afterwards: by then sessions are running on both.
+  </div>
+  <p>
+    <b>Proposal: the pin's identity is a content hash; the version number is a LABEL.</b> A session
+    pins the hash, so it can never be ambiguous about what it is running. "V2" stays what the author
+    reads on the rail and the chip. Two offline V2s become a detectable collision at sync — two
+    labels, two hashes — which is a conflict the owner can be shown, rather than a silent
+    substitution nobody can see.
+  </p>
+  <p>
+    This follows the tree's own precedent rather than inventing one: <code>PresetStore</code>
+    already keys by content address and refuses an id that is not one, for the same reason. It is a
+    small change now and an unpickable one after the first service ships.
   </p>
 </div>
 
@@ -172,9 +226,12 @@ confine(candidate: string, sessionId): string | null   // null = refuse</code></
 
 <h2>What I will build first</h2>
 <ol>
-  <li><b>S2 + S3 pure</b> — keys, slugs, and <code>confine</code>, with mutants: a session id containing
-    <code>..</code>, an absolute cwd, a symlinked sandbox, two callers colliding on a slug.</li>
-  <li><b>Mint</b> against a temp dir — real <code>copyTeam</code>, no PTYs.</li>
+  <li><b>S2 + S3 pure</b> — keys, slugs, and <code>confine</code>, with mutants: a session id
+    containing <code>..</code>, an absolute cwd, a symlinked sandbox, two accounts colliding on a
+    slug.</li>
+  <li><b>Pin identity</b> — content hash beside the label, and a test that two offline "V2"s are a
+    detected collision rather than a silent substitution.</li>
+  <li><b>Mint</b> against a temp dir — real <code>copyTeam</code>, reading the LOCAL pin, no PTYs.</li>
   <li><b>Route + END</b> — first call creates, second reuses, END cuts mid-call.</li>
 </ol>
 <p>
@@ -211,6 +268,13 @@ confine(candidate: string, sessionId): string | null   // null = refuse</code></
     I need the answer before S3, because it decides whether the sandbox is a <em>containment</em>
     boundary or merely a <em>tidiness</em> one — and that changes what I build and what Tinker
     reviews it against.
+  </p>
+  <p style="margin-bottom:0">
+    <b>R31 raises the stakes rather than changing the question.</b> Callers now arrive as ACCOUNTS,
+    so a session is attributable to a person across devices and re-enrolments — which is exactly
+    what makes the sessions list useful to the owner, and exactly what makes "we can read it" worth
+    saying out loud. An anonymous credential-sub reading a stranger's transcript is a smaller thing
+    than a named account's conversation history sitting in someone else's app.
   </p>
 </div>
 
