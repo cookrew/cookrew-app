@@ -26,6 +26,8 @@
  * can debug.
  */
 
+import { remoteRefusalBucket, type RemoteRefusal } from './marketplace-copy'
+
 /** Everything an owner must hand a caller for the ceremony to be completable. */
 export interface RemoteCrew {
   /** Origin of the owner's listener, e.g. https://box.tail1234.ts.net:8643 */
@@ -54,14 +56,28 @@ export type CallFetch = (
 ) => Promise<{ status: number; headers: { get(name: string): string | null }; text(): Promise<string> }>
 
 /**
- * The three things a caller can DO about a refusal (question 3 to Velvet).
+ * What a caller can DO about an answer. VELVET'S FOUR BUCKETS, not my three.
  *
- * Five wire answers collapse to three actions, and the collapse is the point:
- * 'wait' is retryable and 'denied' must never be retried — a client that
- * retries a 403 loops forever against a door that will not open. 'broken' is
- * ours to fix, not theirs.
+ * I proposed three and she returned four, correcting me in both directions and
+ * the corrections are load-bearing:
+ *
+ *   401 IS ITS OWN BUCKET. It is retryable, but not by pressing the same
+ *   button — it needs a ceremony first. Folded into "busy, try again" it makes
+ *   the user hammer a control that cannot work; folded into "you cannot" it
+ *   hides a door that is open. I had it in 'denied', which was the second of
+ *   those mistakes.
+ *
+ *   TRANSPORT FAILURE IS A BUCKET. It is not among the five wire answers, so I
+ *   did not have it at all — my client THREW on a network error. The card will
+ *   meet it more often than some of the real refusals, and "unreachable" is
+ *   emphatically not "refused": one is our problem, the other is a decision
+ *   about the caller.
+ *
+ * And 402, which is neither. Under R28 a payment step lights in the same gate
+ * sheet, so it is surfaced distinctly rather than bucketed — see the note on
+ * `outcomeOf`.
  */
-export type CallOutcomeKind = 'ok' | 'wait' | 'denied' | 'broken'
+export type CallOutcomeKind = 'ok' | 'payment' | RemoteRefusal
 
 export interface CallOutcome {
   kind: CallOutcomeKind
@@ -75,25 +91,43 @@ export interface CallOutcome {
   reason?: string
   /** The wire status, kept for diagnosis — never shown raw to a person. */
   status?: number
+  /**
+   * A FRESH credential was minted and the answer was still 401.
+   *
+   * The bucket stays 'identity' because that is what Velvet's function says
+   * about a 401 and her vocabulary is authoritative — but the card must not
+   * offer USE PASSKEY a third time. Two completed ceremonies have already been
+   * refused, so the door her split exists to keep visible is demonstrably not
+   * open, and a passkey button here is the loop the split was meant to prevent.
+   *
+   * Reported to her as a gap: a 401 that survives a fresh ceremony has no
+   * string. Until it does the card shows her identity line without the action.
+   */
+  retried?: boolean
 }
 
 /**
  * Map a wire answer onto what the caller can do about it.
  *
- * 404 IS DELIBERATELY INDISTINCT and must stay that way. An agent that exists
- * but is not exported and a name that never existed are ONE answer, because
- * telling them apart lets a stranger map the room. So it lands in 'denied'
- * with no elaboration rather than in a "not found, try another name" branch
- * that would invite exactly that probing.
+ * DELEGATES TO VELVET'S remoteRefusalBucket rather than restating it. Her
+ * mechanism argument is the whole point and a second copy would defeat it:
+ * 403 scope, 403 entitlement, 403 revoked and 404 all render ONE string, word
+ * for word, and that shared string is what makes an unexported agent and a
+ * nonexistent one indistinguishable. "Vagueness achieved by bucketing survives
+ * a refactor; vagueness achieved by two similar sentences does not." A private
+ * mapping here would be exactly the second similar sentence.
+ *
+ * 402 IS HANDLED BEFORE HER FUNCTION, and reported to her as a gap. Her
+ * bucketing falls 402 through to 'unreachable' — "couldn't reach it, your
+ * access is fine, the connection isn't" — which is wrong in a way that matters:
+ * payment required is a decision about the caller and the connection is
+ * perfect. Under R28 it lights a step in the same gate sheet, so the client
+ * surfaces it distinctly and lets the sheet decide.
  */
 export function outcomeOf(status: number, reason?: string): CallOutcomeKind {
   if (status === 200) return 'ok'
-  // 409 is the only retryable refusal: busy, not_ready, not_running all mean
-  // NOT NOW. Everything else that refuses means stop.
-  if (status === 409) return 'wait'
-  if (status === 401 || status === 403 || status === 404) return 'denied'
-  if (status === 402) return 'denied'
-  return 'broken'
+  if (status === 402) return 'payment'
+  return remoteRefusalBucket(status, reason)
 }
 
 const json = async (
@@ -147,18 +181,39 @@ export class CallClient {
   }
 
   /**
+   * One fetch that cannot throw. `null` means the gate never answered.
+   *
+   * Shared by the ceremony and the ask deliberately: a tunnel that drops during
+   * the ceremony and one that drops during the call are the same fact to the
+   * user, and a client that caught only one of them would report the other as a
+   * refusal — telling somebody their access was taken away when the network
+   * simply blinked.
+   */
+  private async reach(
+    url: string,
+    init: { method: string; headers: Record<string, string>; body?: string }
+  ): Promise<Awaited<ReturnType<CallFetch>> | null> {
+    try {
+      return await this.deps.fetch(url, init)
+    } catch {
+      return null
+    }
+  }
+
+  /**
    * Complete the ceremony and hold the credential.
    *
    * The challenge comes from the dedicated endpoint rather than by provoking a
    * 401, so obtaining one costs no failed call and leaves no refused request
    * in the owner's log for something that was never an attempt.
    */
-  private async ceremony(): Promise<string | null> {
+  private async ceremony(): Promise<string | null | 'unreachable'> {
     const base = `${this.crew.host.replace(/\/+$/, '')}/${this.crew.slug}`
-    const challenged = await this.deps.fetch(`${base}/api/call/challenge`, {
+    const challenged = await this.reach(`${base}/api/call/challenge`, {
       method: 'POST',
       headers: { accept: 'application/json' }
     })
+    if (challenged === null) return 'unreachable'
     if (challenged.status !== 200) return null
     const challenge = (await json(challenged)).challenge
     if (typeof challenge !== 'string' || challenge.length === 0) return null
@@ -166,11 +221,12 @@ export class CallClient {
     const signature = await this.deps.sign(
       assertionPayload(this.crew.workspaceId, this.crew.sub, challenge)
     )
-    const asserted = await this.deps.fetch(`${base}/api/call/assert`, {
+    const asserted = await this.reach(`${base}/api/call/assert`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ sub: this.crew.sub, challenge, signature })
     })
+    if (asserted === null) return 'unreachable'
     if (asserted.status !== 200) return null
     const token = (await json(asserted)).token
     return typeof token === 'string' && token.length > 0 ? token : null
@@ -190,17 +246,19 @@ export class CallClient {
   ): Promise<CallOutcome> {
     const attempt = async (token: string | null): Promise<CallOutcome> => {
       const base = `${this.crew.host.replace(/\/+$/, '')}/${this.crew.slug}`
-      const response = await this.deps.fetch(
-        `${base}/agents/${encodeURIComponent(agent)}/ask`,
-        {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            ...(token ? { authorization: `Bearer ${token}` } : {})
-          },
-          body: JSON.stringify({ text, ...(conversation ? { conversation } : {}) })
-        }
-      )
+      const response = await this.reach(`${base}/agents/${encodeURIComponent(agent)}/ask`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(token ? { authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ text, ...(conversation ? { conversation } : {}) })
+      })
+      // THE BUCKET THIS CLIENT DID NOT HAVE. A DNS failure, a dropped tunnel, a
+      // listener that is not running: the gate never answered, so this is not a
+      // decision about the caller and must not read like one. Left uncaught it
+      // threw out of ask() and took the card with it.
+      if (response === null) return { kind: 'unreachable' }
       const body = await json(response)
       const kind = outcomeOf(response.status, body.reason as string | undefined)
       if (kind === 'ok') {
@@ -220,21 +278,34 @@ export class CallClient {
     }
 
     if (this.token === null) {
-      this.token = await this.ceremony()
+      const minted = await this.ceremony()
+      if (minted === 'unreachable') return { kind: 'unreachable' }
+      this.token = minted
       // A ceremony that could not complete is a call that will not be served.
       // Making it anyway costs the owner a refused request in their log for
       // something that was never an attempt — the same reason the challenge
       // comes from its own endpoint rather than by provoking a 401.
-      if (this.token === null) return { kind: 'denied', status: 401 }
+      // 'identity', not a flat refusal: a ceremony that did not complete is a
+      // door that may well be open, and telling the user they cannot call is
+      // the mistake Velvet split this bucket out to prevent.
+      if (this.token === null) return { kind: 'identity', status: 401 }
     }
     let outcome = await attempt(this.token)
 
     // ONCE. See the class note: a fresh token that is also refused means this
     // caller may not call, and retrying is the loop 403 exists to prevent.
     if (outcome.status === 401) {
-      this.token = await this.ceremony()
-      if (this.token === null) return { kind: 'denied', status: 401 }
+      const reminted = await this.ceremony()
+      if (reminted === 'unreachable') return { kind: 'unreachable' }
+      this.token = reminted
+      // 'identity', not a flat refusal: a ceremony that did not complete is a
+      // door that may well be open, and telling the user they cannot call is
+      // the mistake Velvet split this bucket out to prevent.
+      if (this.token === null) return { kind: 'identity', status: 401, retried: true }
       outcome = await attempt(this.token)
+      // A FRESH credential, still refused. Bucket unchanged — hers is
+      // authoritative — but the card must not offer the passkey a third time.
+      if (outcome.status === 401) return { ...outcome, retried: true }
     }
     return outcome
   }

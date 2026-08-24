@@ -8,6 +8,7 @@ import {
   type CallFetch,
   type RemoteCrew
 } from '../src/shared/call-client'
+import { remoteRefusalBucket } from '../src/shared/marketplace-copy'
 import { callAssertionPayload } from '../src/main/call-ceremony'
 
 /**
@@ -96,25 +97,44 @@ describe('reading the challenge off a 401', () => {
   })
 })
 
-describe('five wire answers, three things a caller can do', () => {
-  it('409 is the ONLY retryable refusal', () => {
-    expect(outcomeOf(409, 'busy')).toBe('wait')
-    expect(outcomeOf(409, 'not_ready')).toBe('wait')
-    expect(outcomeOf(409, 'not_running')).toBe('wait')
+describe("Velvet's four buckets, delegated rather than restated", () => {
+  it('agrees with her function on every wire answer', () => {
+    // The delegation IS the mechanism. Her argument: 403 scope, 403
+    // entitlement, 403 revoked and 404 all render one string word for word,
+    // and the shared string is what makes an unexported agent and a
+    // nonexistent one indistinguishable. A private mapping here would be
+    // exactly the "two similar sentences" that does not survive a refactor.
+    for (const status of [401, 403, 404, 409, 500, 503]) {
+      expect(outcomeOf(status), String(status)).toBe(remoteRefusalBucket(status))
+    }
   })
 
-  it('401, 403 and 404 all mean stop — a retried 403 is a loop', () => {
-    for (const status of [401, 403, 404]) expect(outcomeOf(status)).toBe('denied')
+  it('401 is its OWN bucket — a door that is open, not a refusal', () => {
+    // My three-bucket draft folded this into denied, which hides an open door.
+    expect(outcomeOf(401)).toBe('identity')
+    expect(outcomeOf(401)).not.toBe(outcomeOf(403))
   })
 
-  it('404 carries no elaboration, so the room cannot be mapped', () => {
-    // An unexported agent and a name that never existed are ONE answer.
-    expect(outcomeOf(404)).toBe(outcomeOf(404, 'anything'))
+  it('403 and 404 are ONE bucket, so the room cannot be mapped', () => {
+    expect(outcomeOf(403, 'revoked')).toBe('cannot')
+    expect(outcomeOf(403, 'entitlement')).toBe('cannot')
+    expect(outcomeOf(404)).toBe('cannot')
+    expect(outcomeOf(404, 'anything')).toBe(outcomeOf(404))
   })
 
-  it('a server fault is ours, not theirs', () => {
-    expect(outcomeOf(500)).toBe('broken')
-    expect(outcomeOf(503)).toBe('broken')
+  it('transport failure is unreachable — our problem, not a decision', () => {
+    expect(outcomeOf(500)).toBe('unreachable')
+    expect(outcomeOf(503)).toBe('unreachable')
+  })
+
+  it('402 is surfaced DISTINCTLY, not as unreachable', () => {
+    // Reported to Velvet as a gap: her bucketing falls 402 through to
+    // 'unreachable' — "your access is fine, the connection isn't" — which is
+    // wrong in a way that matters. Payment required is a decision about the
+    // caller and the connection is perfect. Under R28 it lights a step in the
+    // same gate sheet, so the client surfaces it and the sheet decides.
+    expect(outcomeOf(402)).toBe('payment')
+    expect(remoteRefusalBucket(402)).toBe('unreachable')
   })
 })
 
@@ -173,7 +193,11 @@ describe('the ceremony, then the call', () => {
 
     const outcome = await client(fetch).ask('forge', 'hello')
 
-    expect(outcome.kind).toBe('denied')
+    // Her bucket for a 401 is 'identity' and stays so — but `retried` tells the
+    // card two completed ceremonies were already refused, so it must not offer
+    // USE PASSKEY a third time. Flagged to her: a 401 surviving a fresh
+    // ceremony has no string yet.
+    expect(outcome).toMatchObject({ kind: 'identity', retried: true })
     expect(asks, 'exactly two asks: the original and one retry').toBe(2)
     expect(calls.filter((c) => c.url.endsWith('/assert'))).toHaveLength(2)
   })
@@ -182,7 +206,7 @@ describe('the ceremony, then the call', () => {
     const { fetch } = stubFetch((call) =>
       call.url.endsWith('/api/call/challenge') ? { status: 500 } : { status: 200 }
     )
-    expect(await client(fetch).ask('forge', 'hi')).toMatchObject({ kind: 'denied' })
+    expect(await client(fetch).ask('forge', 'hi')).toMatchObject({ kind: 'identity' })
   })
 
   it('a revoked caller is DENIED and its reason survives for the card to word', async () => {
@@ -192,7 +216,7 @@ describe('the ceremony, then the call', () => {
         : { status: 403, body: { reason: 'revoked' } }
     )
     expect(await client(fetch).ask('forge', 'hi')).toMatchObject({
-      kind: 'denied',
+      kind: 'cannot',
       reason: 'revoked'
     })
   })
@@ -204,7 +228,7 @@ describe('the ceremony, then the call', () => {
         : { status: 409, body: { reason: 'not_ready' } }
     )
     expect(await client(fetch).ask('forge', 'hi')).toMatchObject({
-      kind: 'wait',
+      kind: 'busy',
       reason: 'not_ready'
     })
   })
@@ -236,5 +260,31 @@ describe('the ceremony, then the call', () => {
     )
     await client(fetch).ask('forge/../admin', 'hi')
     expect(calls[2].url).toContain('forge%2F..%2Fadmin')
+  })
+})
+
+describe('the transport bucket this client did not have', () => {
+  it('a network throw is UNREACHABLE, not a refusal', async () => {
+    // Before this, a dropped tunnel threw out of ask() and took the card with
+    // it. "Your access is fine — the connection isn't" is a different sentence
+    // from "you cannot call this", and conflating them tells somebody their
+    // access was taken away when the network merely blinked.
+    const fetch = (async () => {
+      throw new Error('ECONNREFUSED')
+    }) as unknown as CallFetch
+    expect(await client(fetch).ask('forge', 'hi')).toEqual({ kind: 'unreachable' })
+  })
+
+  it('a tunnel that drops DURING the ceremony reads the same way', async () => {
+    // Shared reach(): a drop mid-ceremony and one mid-call are the same fact to
+    // the user, and catching only one would report the other as a refusal.
+    let calls = 0
+    const fetch = (async (url: string) => {
+      calls += 1
+      if (url.endsWith('/api/call/challenge')) throw new Error('ETIMEDOUT')
+      return { status: 200, headers: { get: () => null }, text: async () => '{}' }
+    }) as unknown as CallFetch
+    expect(await client(fetch).ask('forge', 'hi')).toEqual({ kind: 'unreachable' })
+    expect(calls, 'no ask is attempted once the gate is unreachable').toBe(1)
   })
 })
