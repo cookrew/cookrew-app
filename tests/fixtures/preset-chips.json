@@ -1,13 +1,14 @@
 {
   "_": "STUB FIXTURE — marketplace dock chips (§8, rulings R2/R3). Real shape, invented data. Magpie drives the chip place/paste gate from `installed`; Fresco designs the badge states against `chips`. Tripwire: tests/preset-chip-fixture.test.ts re-derives `chips` and `actions` from src/shared/preset-chip.ts and fails if they drift.",
-
   "installed": [
     {
       "_": "Owned single agent, current. The plain case: click arms placement.",
       "id": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
       "name": "Deep Research",
       "version": 2,
-      "members": ["Claude Code"],
+      "members": [
+        "Claude Code"
+      ],
       "entitled": true,
       "headVersion": 2
     },
@@ -16,7 +17,11 @@
       "id": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
       "name": "Ship Crew",
       "version": 4,
-      "members": ["Claude Code", "Codex", "Shell"],
+      "members": [
+        "Claude Code",
+        "Codex",
+        "Shell"
+      ],
       "entitled": true,
       "headVersion": 4
     },
@@ -25,7 +30,9 @@
       "id": "sha256:0000000000000000000000000000000000000000000000000000000000000003",
       "name": "Audit Pack",
       "version": 2,
-      "members": ["Codex"],
+      "members": [
+        "Codex"
+      ],
       "entitled": true,
       "headVersion": 3
     },
@@ -34,7 +41,10 @@
       "id": "sha256:0000000000000000000000000000000000000000000000000000000000000004",
       "name": "Pro Toolkit",
       "version": 1,
-      "members": ["Claude Code", "Shell"],
+      "members": [
+        "Claude Code",
+        "Shell"
+      ],
       "entitled": false,
       "headVersion": 1
     },
@@ -43,7 +53,9 @@
       "id": "sha256:0000000000000000000000000000000000000000000000000000000000000005",
       "name": "Locked Legacy",
       "version": 1,
-      "members": ["Pi"],
+      "members": [
+        "Pi"
+      ],
       "entitled": false,
       "headVersion": 2
     },
@@ -52,7 +64,9 @@
       "id": "sha256:0000000000000000000000000000000000000000000000000000000000000006",
       "name": "Fresh Install",
       "version": 1,
-      "members": ["OpenCode"],
+      "members": [
+        "OpenCode"
+      ],
       "entitled": true
     },
     {
@@ -60,7 +74,9 @@
       "id": "sha256:0000000000000000000000000000000000000000000000000000000000000007",
       "name": "Rotated Rig",
       "version": 3,
-      "members": ["Claude Code"],
+      "members": [
+        "Claude Code"
+      ],
       "entitled": true,
       "headVersion": 3,
       "keyChanged": {
@@ -75,7 +91,10 @@
       "id": "sha256:0000000000000000000000000000000000000000000000000000000000000008",
       "name": "Rotated Legacy",
       "version": 4,
-      "members": ["Codex", "Shell"],
+      "members": [
+        "Codex",
+        "Shell"
+      ],
       "entitled": true,
       "headVersion": 5,
       "keyChanged": {
@@ -84,34 +103,171 @@
         "at": 1700000100000,
         "sheetSeen": true
       }
+    },
+    {
+      "_": "IMPORT WITH AUTHORITY: authored elsewhere, you are allowed to run it. Same chip grammar, same click-to-place; it gains exactly one thing — the BY-author tag.",
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000009",
+      "name": "Reviewer",
+      "version": 2,
+      "members": [
+        "Claude Code"
+      ],
+      "entitled": true,
+      "headVersion": 2,
+      "authoredBy": "drej"
     }
   ],
-
   "chips": [
-    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000001", "label": "Deep Research", "kind": "single", "sprites": ["Claude Code"], "badge": "none" },
-    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000002", "label": "Ship Crew", "kind": "team", "sprites": ["Claude Code", "Codex", "Shell"], "badge": "none" },
-    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000003", "label": "Audit Pack", "kind": "single", "sprites": ["Codex"], "badge": "update", "headVersion": 3 },
-    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000004", "label": "Pro Toolkit", "kind": "team", "sprites": ["Claude Code", "Shell"], "badge": "lock" },
-    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000005", "label": "Locked Legacy", "kind": "single", "sprites": ["Pi"], "badge": "lock" },
-    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000006", "label": "Fresh Install", "kind": "single", "sprites": ["OpenCode"], "badge": "none" },
-    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000007", "label": "Rotated Rig", "kind": "single", "sprites": ["Claude Code"], "badge": "key-changed" },
-    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000008", "label": "Rotated Legacy", "kind": "team", "sprites": ["Codex", "Shell"], "badge": "key-changed" }
+    {
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+      "label": "Deep Research",
+      "kind": "single",
+      "sprites": [
+        "Claude Code"
+      ],
+      "badge": "none",
+      "provenance": {
+        "kind": "mine"
+      }
+    },
+    {
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+      "label": "Ship Crew",
+      "kind": "team",
+      "sprites": [
+        "Claude Code",
+        "Codex",
+        "Shell"
+      ],
+      "badge": "none",
+      "provenance": {
+        "kind": "mine"
+      }
+    },
+    {
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000003",
+      "label": "Audit Pack",
+      "kind": "single",
+      "sprites": [
+        "Codex"
+      ],
+      "badge": "update",
+      "headVersion": 3,
+      "provenance": {
+        "kind": "mine"
+      }
+    },
+    {
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000004",
+      "label": "Pro Toolkit",
+      "kind": "team",
+      "sprites": [
+        "Claude Code",
+        "Shell"
+      ],
+      "badge": "lock",
+      "provenance": {
+        "kind": "mine"
+      }
+    },
+    {
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000005",
+      "label": "Locked Legacy",
+      "kind": "single",
+      "sprites": [
+        "Pi"
+      ],
+      "badge": "lock",
+      "provenance": {
+        "kind": "mine"
+      }
+    },
+    {
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000006",
+      "label": "Fresh Install",
+      "kind": "single",
+      "sprites": [
+        "OpenCode"
+      ],
+      "badge": "none",
+      "provenance": {
+        "kind": "mine"
+      }
+    },
+    {
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000007",
+      "label": "Rotated Rig",
+      "kind": "single",
+      "sprites": [
+        "Claude Code"
+      ],
+      "badge": "key-changed",
+      "provenance": {
+        "kind": "mine"
+      }
+    },
+    {
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000008",
+      "label": "Rotated Legacy",
+      "kind": "team",
+      "sprites": [
+        "Codex",
+        "Shell"
+      ],
+      "badge": "key-changed",
+      "provenance": {
+        "kind": "mine"
+      }
+    },
+    {
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000009",
+      "label": "Reviewer",
+      "kind": "single",
+      "sprites": [
+        "Claude Code"
+      ],
+      "badge": "none",
+      "provenance": {
+        "kind": "theirs",
+        "handle": "drej"
+      }
+    }
   ],
-
-  "actions": ["place", "place", "place", "gate", "gate", "place", "place", "place"],
-
+  "actions": [
+    "place",
+    "place",
+    "place",
+    "gate",
+    "gate",
+    "place",
+    "place",
+    "place",
+    "place"
+  ],
   "badgeActions": {
     "_": "R20: what a click on the BADGE opens, as opposed to the chip. The chip always places what the buyer already owns; the badge is where an unresolved decision lives — and after the rotation sheet is dismissed it is the ONLY route back to it.",
-    "actions": ["none", "none", "update", "gate", "gate", "none", "rotation", "rotation"]
+    "actions": [
+      "none",
+      "none",
+      "update",
+      "gate",
+      "gate",
+      "none",
+      "rotation",
+      "rotation",
+      "none"
+    ]
   },
-
   "updateCheckOnOpen": {
     "_": "R3: the ids the dock HEADs when the terminal chip row opens — only the ones not yet answered, so re-rendering does not re-ask.",
-    "ids": ["sha256:0000000000000000000000000000000000000000000000000000000000000006"]
+    "ids": [
+      "sha256:0000000000000000000000000000000000000000000000000000000000000006"
+    ]
   },
-
   "rotationSheetOnOpen": {
     "_": "R20: 'surface it once' means once as a SHEET. Only a rotation the buyer has not been shown raises one; the dismissed one keeps its badge and raises nothing. Assert the ids, not the pixels — a second sheet for the same rotation is the bug.",
-    "ids": ["sha256:0000000000000000000000000000000000000000000000000000000000000007"]
+    "ids": [
+      "sha256:0000000000000000000000000000000000000000000000000000000000000007"
+    ]
   }
 }

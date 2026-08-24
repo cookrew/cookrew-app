@@ -28,9 +28,32 @@ export interface InstalledPreset {
    * and the client refused it. Present until the buyer trusts the new key.
    */
   keyChanged?: KeyRotation
+  /**
+   * The handle in the manifest's author record.
+   *
+   * ABSENT MEANS NEVER LEFT THIS MACHINE — a local save with no author record
+   * came from nowhere, so it is the buyer's own. That is an ANSWER, not a
+   * missing one, which is why absence reads as `mine` rather than as unknown.
+   */
+  authoredBy?: string
 }
 
 export type ChipBadge = 'none' | 'lock' | 'key-changed' | 'update'
+
+/**
+ * WHOSE VERSION IS THIS? — the one question the chips-and-markers spec turns
+ * on, and the only thing distinguishing an exported chip from an imported one.
+ *
+ * EXPORT gives a violet versioned chip that is YOURS; IMPORT WITH AUTHORITY
+ * gives the same chip authored elsewhere, which you are allowed to run. Same
+ * sprites, same click-to-place, same lock idiom — the import gains exactly one
+ * thing, this tag. A caller learns no new interaction, only one new fact.
+ *
+ * `handle` carries the author's OWN spelling. Comparison normalises case;
+ * the label must not, because rendering @tinker for someone who writes
+ * themselves @Tinker is a small lie about a name.
+ */
+export type ChipProvenance = { kind: 'mine' } | { kind: 'theirs'; handle: string }
 
 export interface PresetChip {
   id: string
@@ -41,9 +64,45 @@ export interface PresetChip {
   badge: ChipBadge
   /** Present only with an update badge — the sheet names the exact version. */
   headVersion?: number
+  /**
+   * Mine or theirs. NOT optional: an optional field would push this decision
+   * back out to the dock, the gate sheet and the eval gates, which is exactly
+   * the three-different-answers problem this module exists to prevent. The
+   * rail reads the same value for an imported version pin's provenance dot.
+   */
+  provenance: ChipProvenance
 }
 
-export function presetChips(installed: readonly InstalledPreset[]): PresetChip[] {
+/** Handles compare on trimmed lower case; they render as written. */
+const sameHandle = (a: string, b: string): boolean =>
+  a.trim().toLowerCase() === b.trim().toLowerCase()
+
+/**
+ * Whose crew this is.
+ *
+ * WHEN THE VIEWER IS UNKNOWN we name the author rather than claiming the chip
+ * is yours. Signed out, or before accounts exist, "is this mine?" is genuinely
+ * unanswerable — and the convenient answer here is the one that claims
+ * property. Naming the author is simply true, and at worst redundant when the
+ * viewer IS that author; claiming MINE for a crew that is someone else's is a
+ * false statement about ownership on a surface built to answer exactly that.
+ */
+function provenanceOf(
+  preset: InstalledPreset,
+  viewer: { handle?: string } | undefined
+): ChipProvenance {
+  const authored = preset.authoredBy?.trim() ?? ''
+  if (authored.length === 0) return { kind: 'mine' }
+  const viewing = viewer?.handle?.trim() ?? ''
+  if (viewing.length > 0 && sameHandle(authored, viewing)) return { kind: 'mine' }
+  return { kind: 'theirs', handle: preset.authoredBy as string }
+}
+
+export function presetChips(
+  installed: readonly InstalledPreset[],
+  /** Who is looking. Optional: existing callers predate provenance. */
+  viewer?: { handle?: string }
+): PresetChip[] {
   return installed.map((p) => {
     const hasUpdate = updateAvailable(p.version, p.headVersion ?? null)
     // Three states, ranked by which problem is nearest.
@@ -73,6 +132,7 @@ export function presetChips(installed: readonly InstalledPreset[]): PresetChip[]
       kind: p.members.length > 1 ? 'team' : 'single',
       sprites: p.members,
       badge,
+      provenance: provenanceOf(p, viewer),
       ...(badge === 'update' ? { headVersion: p.headVersion } : {})
     }
   })
