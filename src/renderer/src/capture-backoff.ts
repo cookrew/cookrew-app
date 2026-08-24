@@ -49,3 +49,16 @@ export function shouldCapture(opts: {
   if (opts.documentHidden && !opts.phoneViewing) return false
   return canCapture(opts.backoff, opts.now)
 }
+
+/**
+ * Freshness gate, ABOVE the health gate. A thumbnail is only stale after its
+ * page (re)loads, so a settled page is not re-captured every interval — the fix
+ * for a zoomed-out canvas of many static browsers each doing a GPU readback +
+ * JPEG encode every tick for pixels that never changed. A phone actively
+ * viewing the browser is the exception: it is a LIVE consumer of the thumb and
+ * must keep refreshing even without a navigation. Pure so it unit-tests without
+ * a webview.
+ */
+export function thumbNeedsCapture(opts: { dirty: boolean; phoneViewing: boolean }): boolean {
+  return opts.dirty || opts.phoneViewing
+}
