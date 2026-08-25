@@ -7,6 +7,7 @@ import type { EventLog, CookrewEvent, EventQuery } from "./event-log";
 import { pageTurns } from "../shared/turn";
 import { TRANSLATE_MAX_CHARS } from "../shared/translate";
 import { translateBody } from "./sous-translate";
+import { remoteSousHost } from "./sous-remote-config";
 import type { AgentRegistry } from "./agent-registry";
 import type { TraceReader } from "./trace";
 import {
@@ -756,6 +757,10 @@ export async function handleMobileApi(
   // Translate a checkpoint body with Sous. The phone posts the text it is
   // already showing — same contract as the desktop's IPC handler, so a
   // translation on the phone is the same code path, not a second one.
+  if (p === "/api/translate/host" && method === "GET") {
+    respondJson(response, 200, remoteSousHost());
+    return true;
+  }
   if (p === "/api/translate" && method === "POST") {
     const body = await readJson<{ text?: string; language?: string }>(request);
     if (typeof body.text !== "string" || typeof body.language !== "string") {

@@ -35,6 +35,7 @@ export interface BoardSnapshotLike {
 export interface CookrewApi {
   getWorkspace: () => Promise<WorkspaceState>;
   onWorkspaceState: (cb: (state: WorkspaceState) => void) => () => void;
+  translateHost: () => Promise<string | null>;
   translateCheckpoint: (text: string, language: string) => Promise<TranslateResult>;
   listWorkspaces: () => Promise<WorkspaceList>;
   /** team: create pre-populated from a saved team template (FEATURE 1). */

@@ -729,13 +729,17 @@ function TerminalOverlay({
           role="status"
         >
           {translation.working ? (
-            <span>Translating into {languageName(translation.language)}…</span>
+            <span>
+              Translating into {languageName(translation.language)}
+              {translation.host !== null ? ` via ${translation.host}` : ' on this machine'}…
+            </span>
           ) : translation.error !== null ? (
             <span>{translation.error}</span>
           ) : (
             <span>
               Showing {languageName(translation.language)} — a translation of this checkpoint, not
               the words on disk.
+              {translation.host !== null && ` Translated by ${translation.host}.`}
             </span>
           )}
           {!translation.working && translation.showing !== null && (

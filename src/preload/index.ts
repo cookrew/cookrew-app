@@ -53,6 +53,8 @@ const api = {
   listPins: (terminalId: string) => ipcRenderer.invoke('pins:list', terminalId),
 
   /** Translate a checkpoint body with Sous. Never rejects; see main. */
+  /** Host of the remote translator, or null when Sous is local. */
+  translateHost: () => ipcRenderer.invoke('sous:host'),
   translateCheckpoint: (text: string, language: string) =>
     ipcRenderer.invoke('sous:translate', text, language),
   listWorkspaces: () => ipcRenderer.invoke('workspace:list'),

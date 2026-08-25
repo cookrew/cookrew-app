@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { translateBody } from '../src/main/sous-translate'
+import { resetRemoteSousCache } from '../src/main/sous-remote-config'
 
 /** Stand in for Ollama. `reply` is what /api/generate returns for each call. */
 function ollama(reply: (prompt: string, call: number) => unknown): {
@@ -19,6 +20,13 @@ function ollama(reply: (prompt: string, call: number) => unknown): {
   })
   return { calls, systems }
 }
+
+// Never read the developer's ~/.cookrew/sous.json: these are the LOCAL-path
+// tests, and on a machine with a remote translator configured they would
+// silently exercise the remote one instead.
+process.env.COOKREW_SOUS_CONFIG = '/nonexistent/cookrew-sous-test.json'
+
+beforeEach(() => resetRemoteSousCache())
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -62,7 +70,7 @@ describe('translateBody', () => {
   })
 
   it('sends a long body as several bounded pieces', async () => {
-    const long = Array.from({ length: 40 }, (_, i) => `Paragraph number ${i} of the reply.`).join(
+    const long = Array.from({ length: 400 }, (_, i) => `Paragraph number ${i} of the reply.`).join(
       '\n\n'
     )
     const { calls } = ollama(() => 'PIECE')
@@ -77,7 +85,7 @@ describe('translateBody', () => {
    * no seam to tell them which half is which.
    */
   it('fails the whole body when one piece fails, rather than returning half', async () => {
-    const long = Array.from({ length: 40 }, (_, i) => `Paragraph number ${i} of the reply.`).join(
+    const long = Array.from({ length: 400 }, (_, i) => `Paragraph number ${i} of the reply.`).join(
       '\n\n'
     )
     const { calls } = ollama((_p, call) => (call === 2 ? 500 : 'PIECE'))
@@ -109,10 +117,26 @@ describe('translateBody', () => {
     })
   })
 
-  it('keeps the paragraph breaks of the original body', async () => {
+  it('keeps the paragraph break between two pieces of the same body', async () => {
+    // Two paragraphs big enough that they cannot share a piece, so the seam
+    // between requests is exactly where the blank line was.
+    // Each fits a piece on its own (749 chars); together they do not (1500).
+    const big = 'word '.repeat(150).trim()
     ollama(() => 'TRANSLATED')
-    const result = await translateBody('First para.\n\nSecond para.', 'de')
+    const result = await translateBody(`${big}\n\n${big}`, 'de')
     expect(result.ok && result.text).toBe('TRANSLATED\n\nTRANSLATED')
+  })
+
+  /**
+   * Small paragraphs used to go one-per-request: a forty-paragraph reply meant
+   * forty sequential round trips to a local model for two sentences each.
+   */
+  it('packs small paragraphs together instead of one request each', async () => {
+    const body = Array.from({ length: 40 }, (_, i) => `Paragraph ${i}.`).join('\n\n')
+    const { calls } = ollama(() => 'PIECE')
+    await translateBody(body, 'fr')
+    expect(body.length).toBeLessThan(1200)
+    expect(calls).toHaveLength(1)
   })
 
   it('carries a piece with no letters through untouched instead of asking about it', async () => {

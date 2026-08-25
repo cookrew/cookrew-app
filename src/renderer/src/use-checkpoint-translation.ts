@@ -1,7 +1,7 @@
 // The state behind the translate button: which checkpoint is showing in which
 // language, whether Sous is still working, and what to say when it could not.
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { cookrew } from './api'
 import type { CheckpointTranslation } from './TranscriptView'
 import { TRANSLATE_FAILURE_TEXT, type TranslateFailure } from '../../shared/translate'
@@ -20,6 +20,8 @@ export interface TranslationState {
 const IDLE: TranslationState = { showing: null, language: null, working: false, error: null }
 
 export interface TranslationControls extends TranslationState {
+  /** Host the text is sent to, or null when translation happens on this machine. */
+  host: string | null
   translate: (index: number, body: { prompt: string; reply: string }, language: string) => void
   /** Back to the words as written. */
   clear: () => void
@@ -33,6 +35,26 @@ export interface TranslationControls extends TranslationState {
 
 export function useCheckpointTranslation(): TranslationControls {
   const [state, setState] = useState<TranslationState>(IDLE)
+  /**
+   * Host of the remote translator, or null when Sous is the local Ollama.
+   *
+   * The reader is told this because it is the one thing about the feature they
+   * cannot see: local and remote produce the same-looking Japanese, and only
+   * one of them sent the transcript to somebody else's server.
+   */
+  const [host, setHost] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    void cookrew()
+      .translateHost()
+      .then((h) => {
+        if (alive) setHost(h)
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [])
   /**
    * Only the newest request may write the result. Two clicks in a row — or a
    * click on a second language while the first is still running — would
@@ -98,7 +120,7 @@ export function useCheckpointTranslation(): TranslationControls {
     setState({ showing: null, language: null, working: false, error: message })
   }, [])
 
-  return { ...state, translate, clear, note }
+  return { ...state, host, translate, clear, note }
 }
 
 interface PartResult {

@@ -14,6 +14,7 @@ import {
   SOUS_TRANSLATE_MODEL
 } from './sous-config'
 import {
+  REMOTE_CHUNK_CHARS,
   buildTranslatePrompt,
   buildTranslateSystem,
   languageByCode,
@@ -22,6 +23,8 @@ import {
   type TranslateFailure,
   type TranslateResult
 } from '../shared/translate'
+import { textFromContent, type MessagesResponse } from '../shared/anthropic-content'
+import { remoteSous } from './sous-remote-config'
 
 /**
  * Per-piece budget. Pieces are capped at ~1200 characters, which a 1.5b model
@@ -33,6 +36,10 @@ const COLD_TIMEOUT_MS = 75_000
 
 /** Room for the output. A piece is ~1200 chars in, so this cannot truncate. */
 const NUM_PREDICT = 2048
+
+/** A hosted model answers a big piece in one go; give it room and time. */
+const REMOTE_TIMEOUT_MS = 120_000
+const REMOTE_MAX_TOKENS = 8192
 
 interface OllamaGenerateResponse {
   response?: string
@@ -63,7 +70,12 @@ export async function translateBody(
   const language = languageByCode(languageCode)
   if (!language) return { ok: false, failure: 'unusable-output' }
 
-  const pieces = splitForTranslation(text)
+  // A hosted model has a 200k+ context and one round trip costs a network
+  // hop, so cutting a body into a dozen small pieces there is all cost and no
+  // benefit — the small pieces exist because a 1.5b model cannot finish a big
+  // one. Size the pieces to whoever is answering.
+  const remote = remoteSous()
+  const pieces = splitForTranslation(text, remote ? REMOTE_CHUNK_CHARS : undefined)
   if (pieces.length === 0) return { ok: true, text: '', language: language.code }
 
   const out: string[] = []
@@ -84,6 +96,53 @@ export async function translateBody(
 type PieceResult = { ok: true; text: string } | { ok: false; failure: TranslateFailure }
 
 async function translatePiece(piece: string, label: string): Promise<PieceResult> {
+  const remote = remoteSous()
+  return remote ? translateRemote(piece, label) : translateLocal(piece, label)
+}
+
+/**
+ * A hosted, Anthropic-compatible model. Same contract as the local path: a
+ * named failure rather than an exception, and never a partial answer passed off
+ * as a whole one.
+ */
+async function translateRemote(piece: string, label: string): Promise<PieceResult> {
+  const remote = remoteSous()
+  if (!remote) return { ok: false, failure: 'unreachable' }
+  try {
+    const res = await fetch(`${remote.baseUrl}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': remote.apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      signal: AbortSignal.timeout(REMOTE_TIMEOUT_MS),
+      body: JSON.stringify({
+        model: remote.model,
+        max_tokens: REMOTE_MAX_TOKENS,
+        system: buildTranslateSystem(label),
+        messages: [{ role: 'user', content: buildTranslatePrompt({ text: piece, label }) }]
+      })
+    })
+    if (!res.ok) {
+      // Deliberately not logging the body: an auth failure from a proxy tends
+      // to echo the request, and the request carries the key.
+      console.error(`Sous translate: ${remote.model} returned ${res.status}`)
+      if (res.status === 401 || res.status === 403) return { ok: false, failure: 'unauthorized' }
+      if (res.status === 404) return { ok: false, failure: 'model-missing' }
+      if (res.status === 429) return { ok: false, failure: 'rate-limited' }
+      return { ok: false, failure: 'unreachable' }
+    }
+    const clean = sanitizeTranslation(textFromContent((await res.json()) as MessagesResponse))
+    if (clean === null) return { ok: false, failure: 'unusable-output' }
+    return { ok: true, text: clean }
+  } catch (error) {
+    console.error('Sous translate: remote request failed:', error)
+    return { ok: false, failure: isTimeout(error) ? 'timeout' : 'unreachable' }
+  }
+}
+
+async function translateLocal(piece: string, label: string): Promise<PieceResult> {
   try {
     const res = await fetch(`${SOUS_BASE_URL}/api/generate`, {
       method: 'POST',

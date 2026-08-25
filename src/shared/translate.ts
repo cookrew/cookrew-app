@@ -50,6 +50,16 @@ export function languageByCode(code: string): TranslateLanguage | null {
 export const TRANSLATE_CHUNK_CHARS = 1200
 
 /**
+ * The same job against a hosted model with a 200k+ context. The reason for
+ * small pieces is that a 1.5b model cannot finish a big one; a hosted model
+ * can, and there every extra piece is another network round trip for nothing.
+ * Still bounded rather than unlimited — one enormous request that fails loses
+ * the whole body, and a cap keeps a runaway transcript from becoming one
+ * request the size of a book.
+ */
+export const REMOTE_CHUNK_CHARS = 24_000
+
+/**
  * Cut text into translatable pieces, preferring the seams a reader would
  * recognise: blank lines first, then single newlines, then sentence ends. A
  * piece never splits mid-word, and a run with no seam at all (a minified blob,
@@ -61,17 +71,44 @@ export const TRANSLATE_CHUNK_CHARS = 1200
  */
 export function splitForTranslation(text: string, limit = TRANSLATE_CHUNK_CHARS): string[] {
   if (text.trim().length === 0) return []
-  const pieces: string[] = []
+
+  // First, the smallest units we are willing to send: a fenced block whole, and
+  // otherwise a paragraph — subdivided further only if it exceeds the limit on
+  // its own.
+  const atoms: Segment[] = []
   for (const segment of splitFences(text)) {
     if (segment.fenced) {
-      pieces.push(segment.text)
+      atoms.push(segment)
       continue
     }
     for (const para of splitKeeping(segment.text, /\n{2,}/)) {
       if (para.trim().length === 0) continue
-      pieces.push(...packUnits(para, limit))
+      for (const unit of packUnits(para, limit)) atoms.push({ text: unit, fenced: false })
     }
   }
+
+  // Then PACK them. Emitting one request per paragraph was the original
+  // behaviour and it was badly wrong: a forty-paragraph reply became forty
+  // sequential requests to a local model, each one a fresh round trip for two
+  // sentences, and the button took half a minute on a body that fits in three
+  // requests. Adjacent prose merges up to the limit; a fenced block never
+  // merges with prose, so the translator still sees code as its own piece.
+  const pieces: string[] = []
+  let buf = ''
+  for (const atom of atoms) {
+    if (atom.fenced) {
+      if (buf.length > 0) pieces.push(buf)
+      buf = ''
+      pieces.push(atom.text)
+      continue
+    }
+    if (buf.length > 0 && buf.length + atom.text.length > limit) {
+      pieces.push(buf)
+      buf = ''
+    }
+    buf += atom.text
+  }
+  if (buf.trim().length > 0) pieces.push(buf)
   return pieces
 }
 
@@ -252,6 +289,8 @@ export type TranslateFailure =
   | 'model-missing'
   | 'timeout'
   | 'too-long'
+  | 'unauthorized'
+  | 'rate-limited'
   | 'unusable-output'
 
 export type TranslateResult =
@@ -264,5 +303,7 @@ export const TRANSLATE_FAILURE_TEXT: Record<TranslateFailure, string> = {
   'model-missing': 'Sous is running but the translation model is not pulled.',
   timeout: 'Sous did not finish in time; the transcript is unchanged.',
   'too-long': 'This checkpoint is too long to translate in one go.',
+  unauthorized: 'The translation service rejected the key in ~/.cookrew/sous.json.',
+  'rate-limited': 'The translation service is rate-limiting; try again shortly.',
   'unusable-output': 'Sous replied with something that was not a translation.'
 }

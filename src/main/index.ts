@@ -38,6 +38,7 @@ import { loadOrCreatePairingToken } from './pairing-token'
 import { searchTurns } from '../shared/turn-search'
 import { summarizeTurn } from './sous'
 import { translateBody } from './sous-translate'
+import { remoteSousHost } from './sous-remote-config'
 import { TRANSLATE_MAX_CHARS } from '../shared/translate'
 import { startSocketServer } from './socket-server'
 import { RoutineScheduler } from './routines'
@@ -2827,6 +2828,9 @@ function registerIpc(handlers: RestoreHandlers): void {
    * Error whose message it would have to parse to say anything useful. The
    * failure reasons are a closed set, so they come back as data.
    */
+  // Which Sous is configured — the renderer says "sent to <host>" with it, so
+  // "this text left the machine" is on screen rather than in a config file.
+  ipcMain.handle('sous:host', () => remoteSousHost())
   ipcMain.handle('sous:translate', async (_e, text: unknown, language: unknown) => {
     if (typeof text !== 'string' || typeof language !== 'string') {
       return { ok: false, failure: 'unusable-output' }
