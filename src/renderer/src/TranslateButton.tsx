@@ -8,8 +8,6 @@ export function TranslateButton({
   active,
   working,
   language,
-  disabled,
-  disabledReason,
   onPick,
   onClear,
   onMouseDown
@@ -19,9 +17,6 @@ export function TranslateButton({
   working: boolean
   /** Code of the language being shown, for the tick. */
   language: string | null
-  /** No checkpoint selected, or its text is not loaded yet. */
-  disabled: boolean
-  disabledReason: string
   onPick: (code: string) => void
   onClear: () => void
   onMouseDown?: (e: React.MouseEvent) => void
@@ -77,13 +72,17 @@ export function TranslateButton({
     }
   }, [open])
 
+  /**
+   * Only ever disabled while a translation is in flight. Anything else that
+   * might stop a translation — nothing loaded, nothing to translate — is a
+   * sentence in the status strip when you tap, because a disabled button on a
+   * phone explains itself to nobody: there is no tooltip on touch.
+   */
   const title = working
     ? 'Translating this checkpoint…'
-    : disabled
-      ? disabledReason
-      : active
-        ? 'Showing a translation — pick another language, or show the original'
-        : 'Translate this checkpoint'
+    : active
+      ? 'Showing a translation — pick another language, or show the original'
+      : 'Translate this checkpoint'
 
   return (
     <div className="cr-translate" ref={wrapRef}>
@@ -92,7 +91,7 @@ export function TranslateButton({
         aria-label={title}
         aria-expanded={open}
         title={title}
-        disabled={disabled || working}
+        disabled={working}
         ref={btnRef}
         onMouseDown={onMouseDown}
         onClick={() => setOpen((v) => !v)}

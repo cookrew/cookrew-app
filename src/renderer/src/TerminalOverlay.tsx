@@ -636,21 +636,36 @@ function TerminalOverlay({
             active={translation.showing !== null}
             working={translation.working}
             language={translation.language}
-            disabled={selectedIndex === null}
-            disabledReason="Pick a checkpoint to translate its body"
             onMouseDown={keepFocus}
             onClear={translation.clear}
             onPick={(code) => {
-              if (selectedIndex === null) return
+              /**
+               * NO SELECTION MEANS THE NEWEST, not nothing.
+               *
+               * This used to be disabled whenever selectedIndex was null, which
+               * on a phone is how every card opens — you tap in, you are live,
+               * and the button is dead. The reason it was dead lived in a
+               * `title` tooltip, and touch devices do not show tooltips, so it
+               * was an inert control with an invisible explanation. Live is not
+               * "no checkpoint": it is the latest one, which is exactly the
+               * body someone opening a card wants read back to them.
+               */
+              const target = selectedIndex ?? rows[rows.length - 1]?.index ?? null
+              if (target === null) {
+                translation.note('This card has no checkpoint to translate yet.')
+                return
+              }
               // The text comes from the view that already rendered it. A
               // checkpoint scrolled far out of the loaded window has been
               // evicted, and saying so beats a button that looks broken.
-              const body = transcriptRef.current?.blockText(selectedIndex) ?? null
+              const body = transcriptRef.current?.blockText(target) ?? null
               if (body === null) {
-                translation.note('That checkpoint is not loaded yet — scroll to it and try again.')
+                translation.note(
+                  `Checkpoint T${target} is not loaded yet — scroll to it and try again.`
+                )
                 return
               }
-              translation.translate(selectedIndex, body, code)
+              translation.translate(target, body, code)
             }}
           />
           <button
