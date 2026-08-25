@@ -143,6 +143,26 @@ export function isFullViewEligible(
 }
 
 /**
+ * Final gate on mounting the full view: eligible by geometry, AND the viewport
+ * has stopped moving.
+ *
+ * "Stopped moving" has three sources. `settled` is a SETTLE_MS debounce, which
+ * is all a manual wheel-zoom can offer. `wasActive` keeps an open card tracking
+ * the viewport every frame instead of unmounting mid-pan. `hasArrived` is the
+ * precise one: a zoom-to-card animation reports its own completion, so a
+ * deliberately-tapped card does not have to wait out a debounce guessing at
+ * what the animation already knows.
+ */
+export function admitsFullView(
+  eligible: boolean,
+  settled: boolean,
+  wasActive: boolean,
+  hasArrived: boolean
+): boolean {
+  return eligible && (settled || wasActive || hasArrived)
+}
+
+/**
  * The single node whose full overlay should mount. Only one may mount at a
  * time — several cards cross the coverage threshold when a neighbor is
  * adjacent, and mounting all of them stacks fullscreen overlays so the
@@ -213,7 +233,8 @@ export interface LodLayout {
 export function useLodLayout(
   nodes: LodNode[],
   allowAutoOpen = true,
-  focusedId: string | null = null
+  focusedId: string | null = null,
+  arrivedId: string | null = null
 ): LodLayout {
   const { x: vx, y: vy, zoom } = useViewport()
   const paneWidth = useStore((s) => s.width)
@@ -252,7 +273,8 @@ export function useLodLayout(
     coverages[node.id] = coverage
     const wasActive = prevActive.current.has(node.id)
     const pane = { width: paneWidth, height: paneHeight }
-    if (isFullViewEligible(visible, coverage, pane, wasActive) && (settled || wasActive)) {
+    const eligible = isFullViewEligible(visible, coverage, pane, wasActive)
+    if (admitsFullView(eligible, settled, wasActive, node.id === arrivedId)) {
       activeIds.add(node.id)
     }
   }

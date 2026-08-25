@@ -8,6 +8,20 @@
 export const MINI_ZOOM = 0.28
 
 /**
+ * How long the zoom-to-card animation runs.
+ *
+ * Was 500ms, which put a floor under how fast a card could go live: the full
+ * renderer only mounts once the viewport stops, so the animation is dead time
+ * you cannot use the card during. 280ms still reads as motion rather than a
+ * cut, and is the one number to change if it wants retuning.
+ *
+ * The overview fits (zoom OUT to the whole canvas) keep their own longer
+ * duration — they traverse the entire workspace, not one card, and there is
+ * nothing waiting to mount at the end of them.
+ */
+export const CARD_ZOOM_MS = 280
+
+/**
  * Padding fitView/fitBounds leaves around a card zoomed to the stage: NONE.
  *
  * Zero is not a taste call, it is forced by the layout. Cards sit on a grid

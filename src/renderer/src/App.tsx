@@ -45,7 +45,7 @@ import {
   useThumbsSnapshot
 } from './activity-thumb-store'
 import { reconcileFlowNodes } from './flow-nodes'
-import { CARD_FIT_PADDING, cardZoomMode } from './nodes/card-zoom'
+import { CARD_FIT_PADDING, CARD_ZOOM_MS, cardZoomMode } from './nodes/card-zoom'
 import { useBrowserEngine } from './browser-engine'
 import { ErrorBoundary } from './ErrorBoundary'
 import { ReauthOverlay } from './ReauthOverlay'
@@ -234,6 +234,12 @@ function Canvas(): React.JSX.Element {
   const prevViewportRef = useRef<{ x: number; y: number; zoom: number } | null>(null)
   /** Node currently zoomed into full view — drives layered ⌘W. */
   const zoomedNodeIdRef = useRef<string | null>(null)
+  /**
+   * The card whose zoom animation has FINISHED. Distinct from the zoomed card:
+   * this one says the viewport has come to rest on it, which is what lets its
+   * full view mount without waiting out the LOD's settle debounce.
+   */
+  const [arrivedId, setArrivedId] = useState<string | null>(null)
   /**
    * Did the user DELIBERATELY zoom into a card (tap → zoomToNode)? On mobile the
    * overview is zoomed in to bound rendered-node count (OOM fix), so a large
@@ -554,11 +560,21 @@ function Canvas(): React.JSX.Element {
       // callers that know the node's rect pass it for a fitBounds instead.
       // CARD_FIT_PADDING is 0 on purpose — the grid has no gutter, so any
       // padding here frames the neighbouring card too.
-      if (rect) {
-        void reactFlow.fitBounds(rect, { duration: 500, padding: CARD_FIT_PADDING })
-      } else {
-        void reactFlow.fitView({ nodes: [{ id }], duration: 500, padding: CARD_FIT_PADDING })
-      }
+      const options = { duration: CARD_ZOOM_MS, padding: CARD_FIT_PADDING }
+      // The animation reports its own completion, and that is a better "the
+      // viewport has stopped" signal than the SETTLE_MS debounce the LOD would
+      // otherwise wait out — the debounce exists for wheel-zoom, which has no
+      // end event to offer. Taking it here is what stops a tapped card sitting
+      // as a thumbnail for an extra beat after it has visibly arrived.
+      setArrivedId(null)
+      const arrival = rect
+        ? reactFlow.fitBounds(rect, options)
+        : reactFlow.fitView({ nodes: [{ id }], ...options })
+      void arrival.then(() => {
+        // Guard against a stale arrival: tapping a second card mid-animation
+        // must not hand the full view back to the first one.
+        if (zoomedNodeIdRef.current === id) setArrivedId(id)
+      })
     },
     [reactFlow]
   )
@@ -567,6 +583,7 @@ function Canvas(): React.JSX.Element {
     const previous = prevViewportRef.current
     prevViewportRef.current = null
     zoomedNodeIdRef.current = null
+    setArrivedId(null)
     // Back to the overview: the LOD must not re-open the card we are leaving.
     deliberateOpenRef.current = false
     // Restoring a saved viewport that equals the current one wouldn't move the
@@ -973,7 +990,8 @@ function Canvas(): React.JSX.Element {
   const lod = useLodLayout(
     overlayNodes,
     !isRemoteMode() || deliberateOpenRef.current,
-    zoomedNodeIdRef.current
+    zoomedNodeIdRef.current,
+    arrivedId
   )
   /** Null once the node is gone, which is also how the dialog self-dismisses. */
   const closingNode = closingId
