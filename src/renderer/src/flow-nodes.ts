@@ -1,5 +1,6 @@
 import type { Node } from '@xyflow/react'
 import type { CanvasNode } from '../../shared/model'
+import { DRAG_HANDLE_SELECTOR } from './nodes/drag-surface'
 
 /**
  * ReactFlow nodes derived from the canvas state — with IDENTITY PRESERVED for
@@ -44,7 +45,7 @@ export function toFlowNode(n: CanvasNode): Node {
     position: n.position,
     data: { node: n },
     style: { width: n.size.width, height: n.size.height },
-    dragHandle: '.node-header'
+    dragHandle: DRAG_HANDLE_SELECTOR
   }
 }
 

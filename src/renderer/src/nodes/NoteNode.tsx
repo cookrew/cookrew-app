@@ -5,6 +5,7 @@ import { CardClose } from './CardClose'
 import { CardPick } from './CardPick'
 import { renderNoteMarkdown } from '../note-markdown'
 import { cardTypeScale, cardZoomMode } from './card-zoom'
+import { TILE_DRAG_SURFACE } from './drag-surface'
 import type { NoteNodeData } from '../../../shared/model'
 import { cookrew } from '../api'
 import { useCanvasUi } from '../canvas-ui'
@@ -83,7 +84,7 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
             the empty body below it were card chrome rendered at a size nobody
             can use — a 2px rule and a note-coloured void that said nothing
             about which note this was. */}
-        <div className="node-mini">
+        <div className={TILE_DRAG_SURFACE}>
           <span className="node-title">{node.name}</span>
         </div>
       </div>

@@ -9,6 +9,7 @@ import { browserTabs } from '../../../shared/model'
 import { useCanvasUi } from '../canvas-ui'
 import { useThumb } from '../activity-thumb-store'
 import { cardTypeScale, cardZoomMode } from './card-zoom'
+import { TILE_DRAG_SURFACE } from './drag-surface'
 
 /**
  * Summary card for a browser, with a legacy thumbnail when one is available.
@@ -62,7 +63,7 @@ export function BrowserNode({ data, selected }: NodeProps): React.JSX.Element {
       >
         <NodeHandles />
         <CardPick id={node.id} />
-        <div className="node-mini">
+        <div className={TILE_DRAG_SURFACE}>
           <span className="node-title">{node.name}</span>
         </div>
       </div>

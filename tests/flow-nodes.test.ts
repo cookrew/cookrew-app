@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { Node } from '@xyflow/react'
 import { reconcileFlowNodes, toFlowNode, canvasNodeEqual } from '../src/renderer/src/flow-nodes'
+import {
+  CARD_DRAG_SURFACE,
+  DRAG_HANDLE_SELECTOR,
+  TILE_DRAG_SURFACE
+} from '../src/renderer/src/nodes/drag-surface'
 import type { CanvasNode, TerminalNodeData } from '../src/shared/model'
 
 function term(id: string, patch: Partial<TerminalNodeData> = {}): TerminalNodeData {
@@ -85,9 +90,34 @@ describe('reconcileFlowNodes — identity preservation (the re-render fix)', () 
       type: 'terminal',
       position: { x: 5, y: 6 },
       style: { width: 400, height: 300 },
-      dragHandle: '.node-header'
+      dragHandle: DRAG_HANDLE_SELECTOR
     })
     expect((flow.data as { node: CanvasNode }).node.id).toBe('x')
+  })
+
+  /**
+   * The regression this guards: the handle named only the full card's header,
+   * so when the overview tile stopped rendering one, notes and browsers could
+   * not be dragged at all — at the one zoom where you rearrange a board.
+   *
+   * There is no DOM here, so this cannot press a pointer down on a tile and
+   * watch it move. What it CAN do is hold the two halves together: the
+   * components render TILE_DRAG_SURFACE and the handle is built from the same
+   * constant, so the only way to break the pair is to narrow the selector —
+   * and that is what fails below.
+   */
+  it('the drag handle covers the overview tile, not just the card header', () => {
+    const surfaces = DRAG_HANDLE_SELECTOR.split(',').map((s) => s.trim())
+    expect(surfaces).toContain(`.${CARD_DRAG_SURFACE}`)
+    expect(surfaces).toContain(`.${TILE_DRAG_SURFACE}`)
+    expect(CARD_DRAG_SURFACE).not.toBe(TILE_DRAG_SURFACE)
+  })
+
+  it('every node kind carries the same handle — a tile is draggable whatever it holds', () => {
+    for (const kind of ['terminal', 'note', 'browser'] as const) {
+      const n = { ...term('x'), kind } as unknown as CanvasNode
+      expect(toFlowNode(n).dragHandle).toBe(DRAG_HANDLE_SELECTOR)
+    }
   })
 })
 
