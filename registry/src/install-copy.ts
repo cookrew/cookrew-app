@@ -19,7 +19,7 @@
  *   howto          the one true way to act on this link. It must not imply the
  *                  page can do it.
  *   noapp          where to get Cookrew, said once and without a pitch.
- *   review.note    THE LOad-BEARING ONE: opening a link is not installing. The
+ *   review.note    THE LOAD-BEARING ONE: opening a link is not installing. The
  *                  app checks the signature and shows the contents first, and
  *                  the person decides. If a reader takes one thing from this
  *                  page, it should be that nothing happens without them.
