@@ -38,6 +38,49 @@ export function hasLodGeometry(node: unknown): boolean {
   )
 }
 
+export interface Viewport {
+  x: number
+  y: number
+  zoom: number
+}
+
+export interface Pane {
+  width: number
+  height: number
+}
+
+/**
+ * Project a node onto the stage: the part of it actually on screen, and the
+ * coverage score the overlay arbitration runs on.
+ *
+ * Extracted from useLodLayout unchanged, so a test can see what the hook sees.
+ * Note what `coverage` measures and what it does NOT: it is the node's
+ * PROJECTED SIZE against the pane, so a card panned entirely off the stage
+ * still scores whatever it would score if it were centred. `visible` is the
+ * on-stage part, and the two can disagree completely — see
+ * tests/zoom-lod-focus.test.ts.
+ */
+export function projectToStage(
+  node: LodNode,
+  viewport: Viewport,
+  pane: Pane
+): { visible: ScreenRect | null; coverage: number } {
+  const sx = node.position.x * viewport.zoom + viewport.x
+  const sy = node.position.y * viewport.zoom + viewport.y
+  const sw = node.size.width * viewport.zoom
+  const sh = node.size.height * viewport.zoom
+
+  const left = Math.max(sx, 0)
+  const top = Math.max(sy, 0)
+  const width = Math.min(sx + sw, pane.width) - left
+  const height = Math.min(sy + sh, pane.height) - top
+
+  return {
+    visible: width > 0 && height > 0 ? { x: left, y: top, width, height } : null,
+    coverage: Math.max(Math.min(1, sw / pane.width), Math.min(1, sh / pane.height))
+  }
+}
+
 /** The id with the highest recorded coverage; first wins ties (stable). */
 export function mostCovered(
   ids: Iterable<string>,
@@ -135,19 +178,19 @@ export function useLodLayout(nodes: LodNode[], allowAutoOpen = true): LodLayout 
 
   for (const node of nodes) {
     if (!hasLodGeometry(node)) continue
-    const sx = node.position.x * zoom + vx
-    const sy = node.position.y * zoom + vy
-    const sw = node.size.width * zoom
-    const sh = node.size.height * zoom
+    const { visible, coverage } = projectToStage(
+      node,
+      { x: vx, y: vy, zoom },
+      { width: paneWidth, height: paneHeight }
+    )
+    if (visible === null) continue
+    rects[node.id] = {
+      x: bounds.left + visible.x,
+      y: bounds.top + visible.y,
+      width: visible.width,
+      height: visible.height
+    }
 
-    const left = Math.max(sx, 0)
-    const top = Math.max(sy, 0)
-    const width = Math.min(sx + sw, paneWidth) - left
-    const height = Math.min(sy + sh, paneHeight) - top
-    if (width <= 0 || height <= 0) continue
-    rects[node.id] = { x: bounds.left + left, y: bounds.top + top, width, height }
-
-    const coverage = Math.max(Math.min(1, sw / paneWidth), Math.min(1, sh / paneHeight))
     coverages[node.id] = coverage
     const wasActive = prevActive.current.has(node.id)
     const threshold = wasActive ? EXIT_COVERAGE : ENTER_COVERAGE
