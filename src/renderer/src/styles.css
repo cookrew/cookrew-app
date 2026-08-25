@@ -3284,9 +3284,24 @@ a.card-close {
   font-size: calc(13px * var(--z, 1));
   font-weight: 700;
   color: var(--vi-text);
-  white-space: nowrap;
+  /* Wraps for the same reason a note tile does: the box has height the one
+     line was refusing to use, so a long agent name was cut when it did not
+     have to be. Four lines rather than the note's three — a terminal card is
+     420 tall against 220, and the name sits BESIDE the coin rather than under
+     it, so the whole height is the name's to use.
+
+     min-width: 0 because this is a flex item in .vi-mini: without it the
+     item's automatic minimum is its min-content width, and a long unbroken
+     name would push the row wider instead of wrapping inside it. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  line-height: 1.2;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
   overflow: hidden;
-  text-overflow: ellipsis;
+  max-height: 100%;
 }
 
 /* ---- workspace switcher (header) ---- */
