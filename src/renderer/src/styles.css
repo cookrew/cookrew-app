@@ -1116,7 +1116,15 @@ a.cr-btn {
  */
 .node.mini .node-title {
   font-size: calc(10px * var(--z, 1));
-  letter-spacing: calc(0.06em * var(--z, 1));
+  /* Font-size takes the counter-scale; tracking must NOT, and an earlier
+     version of this rule gave it one anyway. letter-spacing in `em` is already
+     relative to this element's font-size, which is already 10px * --z — so
+     multiplying by --z a second time made tracking grow as --z SQUARED while
+     the glyphs grew linearly, and the name spread further apart the further
+     out you zoomed. .vi-mini-name does the same job by scaling font-size
+     alone. 0.04em, slightly under the 0.06em of a full card, because a tile
+     is trying to fit a whole name into a box and every gap costs a glyph. */
+  letter-spacing: 0.04em;
 }
 
 /* THE MINI TILE, one grammar for every kind.
