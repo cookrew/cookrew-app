@@ -1,6 +1,5 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { writeFileSync } from 'node:fs'
 
 /**
  * WHERE AN AUTHOR'S MONEY GOES (M2-A1).
