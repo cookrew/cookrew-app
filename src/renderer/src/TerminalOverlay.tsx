@@ -29,6 +29,9 @@ import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
 import { handleTerminalPaste } from './terminal-paste'
 import { terminalKeyIntent } from './terminal-key-intent'
 import { CrIcon } from './icons'
+import { TranslateButton } from './TranslateButton'
+import { languageByCode } from '../../shared/translate'
+import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { StatusCoin } from './nodes/AgentAvatar'
 
 const PHOSPHOR_THEME = {
@@ -50,6 +53,12 @@ const PHOSPHOR_THEME = {
  * over the thumbnail. Zooming back out unmounts it — the PTY itself lives
  * in the main process, so nothing is lost between mounts.
  */
+/** Menu name for a code, degrading to the code itself rather than to blank. */
+function languageName(code: string | null): string {
+  if (code === null) return 'another language'
+  return languageByCode(code)?.name ?? code
+}
+
 export function TerminalOverlayLayer({
   terminals,
   activities,
@@ -180,6 +189,7 @@ function TerminalOverlay({
   const rows = mergeCheckpointRows(paging.records ?? [], traceIndex)
 
   const transcriptRef = useRef<TranscriptHandle>(null)
+  const translation = useCheckpointTranslation()
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
   const [activeBlock, setActiveBlock] = useState<ActiveBlock>({ index: null, frac: 1 })
   // A checkpoint whose trace block is still fetching for a jump — the rail/fan
@@ -622,6 +632,27 @@ function TerminalOverlay({
         {node.orch && <span className="cr-chip amber">ORCH</span>}
         <span className={`cr-chip${PHASE_CHIP[phase].cls}`}>{PHASE_CHIP[phase].label}</span>
         <div className="popout-actions">
+          <TranslateButton
+            active={translation.showing !== null}
+            working={translation.working}
+            language={translation.language}
+            disabled={selectedIndex === null}
+            disabledReason="Pick a checkpoint to translate its body"
+            onMouseDown={keepFocus}
+            onClear={translation.clear}
+            onPick={(code) => {
+              if (selectedIndex === null) return
+              // The text comes from the view that already rendered it. A
+              // checkpoint scrolled far out of the loaded window has been
+              // evicted, and saying so beats a button that looks broken.
+              const body = transcriptRef.current?.blockText(selectedIndex) ?? null
+              if (body === null) {
+                translation.note('That checkpoint is not loaded yet — scroll to it and try again.')
+                return
+              }
+              translation.translate(selectedIndex, body, code)
+            }}
+          />
           <button
             className="cr-btn sm icon"
             aria-label={
@@ -685,12 +716,47 @@ function TerminalOverlay({
           )}
         </div>
       )}
+      {/* SAY WHICH WORDS THESE ARE.
+          A translated body is still prose in a card that usually holds the
+          agent's own words, and the difference is invisible once you are
+          reading it. This strip is the only thing that distinguishes "the agent
+          said this" from "a 1.5b model's rendering of what the agent said" —
+          and when Sous fails it is where the reason goes, instead of a button
+          that silently does nothing. */}
+      {(translation.working || translation.error !== null || translation.showing !== null) && (
+        <div
+          className={`popout-translation${translation.error !== null ? ' failed' : ''}`}
+          role="status"
+        >
+          {translation.working ? (
+            <span>Translating into {languageName(translation.language)}…</span>
+          ) : translation.error !== null ? (
+            <span>{translation.error}</span>
+          ) : (
+            <span>
+              Showing {languageName(translation.language)} — a translation of this checkpoint, not
+              the words on disk.
+            </span>
+          )}
+          {!translation.working && translation.showing !== null && (
+            <button className="cr-btn sm" onMouseDown={keepFocus} onClick={translation.clear}>
+              SHOW ORIGINAL
+            </button>
+          )}
+          {!translation.working && translation.error !== null && translation.showing === null && (
+            <button className="cr-btn sm" onMouseDown={keepFocus} onClick={translation.clear}>
+              DISMISS
+            </button>
+          )}
+        </div>
+      )}
       <div className="popout-terminal-wrap">
         <TranscriptView
           ref={transcriptRef}
           terminalId={node.id}
           total={activity?.turnCount ?? 0}
           titleMode={titleMode}
+          translation={translation.showing}
           identities={rows.map((r) => r.index)}
           selectedIndex={selectedIndex}
           jumpToken={jumpToken}

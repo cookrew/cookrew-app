@@ -52,6 +52,9 @@ const api = {
     ipcRenderer.invoke('preset:installed:rotation:trust', id, newKeyId),
   listPins: (terminalId: string) => ipcRenderer.invoke('pins:list', terminalId),
 
+  /** Translate a checkpoint body with Sous. Never rejects; see main. */
+  translateCheckpoint: (text: string, language: string) =>
+    ipcRenderer.invoke('sous:translate', text, language),
   listWorkspaces: () => ipcRenderer.invoke('workspace:list'),
   createWorkspace: (name: string, dir: string, team?: string) =>
     ipcRenderer.invoke('workspace:create', name, dir, team),

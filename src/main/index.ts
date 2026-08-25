@@ -37,6 +37,8 @@ import { loadOrCreateReadOnlyToken } from './readonly-token'
 import { loadOrCreatePairingToken } from './pairing-token'
 import { searchTurns } from '../shared/turn-search'
 import { summarizeTurn } from './sous'
+import { translateBody } from './sous-translate'
+import { TRANSLATE_MAX_CHARS } from '../shared/translate'
 import { startSocketServer } from './socket-server'
 import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
@@ -2814,6 +2816,29 @@ function registerIpc(handlers: RestoreHandlers): void {
       })
     )
   )
+
+  /**
+   * Translate a checkpoint body with Sous. The renderer holds the text already
+   * (it rendered it), so it sends the text rather than a checkpoint id — this
+   * handler never reads a session file and cannot translate a checkpoint the
+   * caller is not already looking at.
+   *
+   * Never throws at the boundary: a rejected invoke gives the renderer an
+   * Error whose message it would have to parse to say anything useful. The
+   * failure reasons are a closed set, so they come back as data.
+   */
+  ipcMain.handle('sous:translate', async (_e, text: unknown, language: unknown) => {
+    if (typeof text !== 'string' || typeof language !== 'string') {
+      return { ok: false, failure: 'unusable-output' }
+    }
+    if (text.length > TRANSLATE_MAX_CHARS) return { ok: false, failure: 'too-long' }
+    try {
+      return await translateBody(text, language)
+    } catch (error) {
+      console.error('sous:translate failed:', error)
+      return { ok: false, failure: 'unreachable' }
+    }
+  })
 
   ipcMain.handle('workspace:list', () => store.list())
   ipcMain.handle('workspace:create', (_e, name: string, dir: string, team?: string) =>

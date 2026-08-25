@@ -29,6 +29,7 @@ export type CrIconName =
   | 'agent'
   | 'dot'
   | 'summary'
+  | 'translate'
   | 'external'
   | 'clipboard'
   /** Gated marketplace preset: the chip's lock badge (§8). */
@@ -206,6 +207,19 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
       <path d="M2.7 6.5 H11" />
       <path d="M2.7 9.6 H8.4" />
       <path d="M2.7 12.7 H6" />
+    </g>
+  ),
+  // Translate: a glyph and a letter with an arrow between them — "this script
+  // becomes that one". Deliberately not a globe; a globe reads as "language
+  // settings" or "the internet", and this button changes THIS body.
+  translate: (
+    <g {...STROKE} strokeWidth={1.6} strokeLinecap="square">
+      <path d="M1.8 3.4 H7.2" />
+      <path d="M4.5 2.2 V3.4" />
+      <path d="M6.2 3.4 C6.2 6.6 4.2 8.6 1.8 9.4" />
+      <path d="M2.9 5.9 C3.4 7.7 5.0 9.0 6.7 9.4" />
+      <path d="M8.6 13.8 L11.4 6.4 L14.2 13.8" />
+      <path d="M9.7 11.4 H13.1" />
     </g>
   )
 }

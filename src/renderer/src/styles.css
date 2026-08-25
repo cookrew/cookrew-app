@@ -4752,3 +4752,124 @@ body.cookrew-mobile .cr-dock .voice-ghost {
     font-size: calc(11px * var(--z, 1));
   }
 }
+
+/* ---- translate: the header control and what it does to a body ---- */
+
+/* The menu is positioned against this, not the action row, so it opens under
+   the button that summoned it however many buttons sit beside it. */
+.cr-translate {
+  position: relative;
+  display: inline-flex;
+}
+
+.cr-translate-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  /* Fifteen languages is longer than a short card is tall. Cap it and scroll
+     rather than letting the menu run off the bottom of the window. */
+  max-height: min(58vh, 420px);
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--paper);
+  border: 2px solid var(--line);
+  box-shadow: 4px 4px 0 var(--line);
+}
+
+.cr-translate-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 8px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: var(--ink);
+  font: inherit;
+}
+
+.cr-translate-item:hover {
+  background: var(--amber-soft);
+}
+
+/* The tick is a filled bar in the gutter rather than a checkmark glyph: the
+   menu is set in the endonym of each language and a glyph beside 简体中文 at
+   this size is mush. */
+.cr-translate-item.picked {
+  box-shadow: inset 3px 0 0 var(--amber-deep);
+  font-weight: 700;
+}
+
+.cr-translate-item.original {
+  border-bottom: 1.5px solid var(--line);
+  margin-bottom: 4px;
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* Endonym leads because that is what a reader scans for; the English name is
+   the quiet second column for anyone who does not read the script. */
+.cr-translate-name {
+  font-size: 13px;
+}
+
+.cr-translate-label {
+  font-size: 10px;
+  opacity: 0.55;
+  white-space: nowrap;
+}
+
+.cr-btn.icon.on {
+  background: var(--amber);
+}
+
+.cr-btn.icon.busy {
+  opacity: 0.65;
+}
+
+/* The strip that says which words you are reading. Same phosphor bed as the
+   checkpoint line above it, so it reads as part of the card's own chrome. */
+.popout-translation {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 12px;
+  background: var(--phos-bg);
+  border-bottom: 1.5px solid var(--phos-dim);
+  color: var(--phos);
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  min-width: 0;
+}
+
+.popout-translation span {
+  min-width: 0;
+  flex: 1;
+}
+
+.popout-translation.failed {
+  color: var(--amber-soft);
+}
+
+.popout-translation .cr-btn {
+  flex: 0 0 auto;
+}
+
+/* A translated body is marked in the margin for as long as it is on screen.
+   Without it, scrolling away from the status strip leaves prose that looks
+   exactly like something the agent wrote. */
+.ctx-block-prompt[data-translated],
+.ctx-block-reply[data-translated] {
+  border-left: 2px solid var(--amber-deep);
+  padding-left: 8px;
+}

@@ -5,6 +5,8 @@ import type { TurnTracker } from "./turn-tracker";
 import type { DispatchService } from "./dispatch";
 import type { EventLog, CookrewEvent, EventQuery } from "./event-log";
 import { pageTurns } from "../shared/turn";
+import { TRANSLATE_MAX_CHARS } from "../shared/translate";
+import { translateBody } from "./sous-translate";
 import type { AgentRegistry } from "./agent-registry";
 import type { TraceReader } from "./trace";
 import {
@@ -748,6 +750,27 @@ export async function handleMobileApi(
       respondJson(response, 400, {
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+    return true;
+  }
+  // Translate a checkpoint body with Sous. The phone posts the text it is
+  // already showing — same contract as the desktop's IPC handler, so a
+  // translation on the phone is the same code path, not a second one.
+  if (p === "/api/translate" && method === "POST") {
+    const body = await readJson<{ text?: string; language?: string }>(request);
+    if (typeof body.text !== "string" || typeof body.language !== "string") {
+      respondJson(response, 200, { ok: false, failure: "unusable-output" });
+      return true;
+    }
+    if (body.text.length > TRANSLATE_MAX_CHARS) {
+      respondJson(response, 200, { ok: false, failure: "too-long" });
+      return true;
+    }
+    try {
+      respondJson(response, 200, await translateBody(body.text, body.language));
+    } catch (error) {
+      console.error("mobile translate failed:", error);
+      respondJson(response, 200, { ok: false, failure: "unreachable" });
     }
     return true;
   }

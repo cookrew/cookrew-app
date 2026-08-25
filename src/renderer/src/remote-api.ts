@@ -231,6 +231,10 @@ export function createRemoteApi(): CookrewApi {
 
     ptyInput: (terminalId, data) => post(apiPath(`/api/terminal/${terminalId}/raw`), { data }),
     ptyJump: (terminalId, text) => post(apiPath(`/api/terminal/${terminalId}/jump`), { text }),
+    // Same contract as the desktop's IPC call: never rejects, the failure
+    // reason comes back as data so the reader is told what to fix.
+    translateCheckpoint: (text, language) =>
+      req(apiPath('/api/translate'), 'POST', { text, language }),
     turnSeen: (terminalId) => post(apiPath(`/api/terminal/${terminalId}/seen`), {}),
     ptyResize: (terminalId, cols, rows) =>
       post(apiPath(`/api/terminal/${terminalId}/resize`), { cols, rows }),

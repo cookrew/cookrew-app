@@ -92,6 +92,9 @@ export function createDemoApi(): CookrewApi {
   }
 
   const api: CookrewApi = {
+    // The demo has no Ollama behind it. Say that, rather than hand back
+    // untranslated text and let it read as a translation that did nothing.
+    translateCheckpoint: () => Promise.resolve({ ok: false as const, failure: 'disabled' as const }),
     getWorkspace: () => Promise.resolve(state),
     onWorkspaceState: (cb) => {
       stateListeners.add(cb)

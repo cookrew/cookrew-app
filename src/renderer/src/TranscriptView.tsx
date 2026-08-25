@@ -43,6 +43,27 @@ export interface ActiveBlock {
 export interface TranscriptHandle {
   /** Scrub to a rail fraction (0 = oldest identity, 1 = live bottom). */
   scrubTo: (fraction: number) => void
+  /**
+   * The text of a loaded checkpoint, or null if that identity is still a
+   * placeholder. The header's translate button needs the body it is about to
+   * translate, and this view is the only thing that has it — blocks are fetched
+   * and evicted here, not held by the overlay.
+   */
+  blockText: (index: number) => { prompt: string; reply: string } | null
+}
+
+/**
+ * A translated body, replacing what is RENDERED for one checkpoint.
+ *
+ * It is a view, never a write: nothing here reaches the trace, the store or the
+ * session file, so the original is one click away and the record on disk is
+ * still what the agent actually said. A null field means that part was not
+ * translated and must keep showing the original.
+ */
+export interface CheckpointTranslation {
+  index: number
+  prompt: string | null
+  reply: string | null
 }
 
 /**
@@ -79,6 +100,8 @@ export const TranscriptView = forwardRef<
     onActiveBlockChange?: (active: ActiveBlock) => void
     /** Reports a checkpoint whose content is FETCHING for a jump, null once filled. */
     onPending?: (index: number | null) => void
+    /** Show this checkpoint's body translated instead of as written. */
+    translation?: CheckpointTranslation | null
     /** The live terminal layer, seamed at the bottom of the transcript. */
     children: React.ReactNode
   }
@@ -93,6 +116,7 @@ export const TranscriptView = forwardRef<
     clipRows,
     onActiveBlockChange,
     onPending,
+    translation,
     children
   },
   ref
@@ -126,6 +150,10 @@ export const TranscriptView = forwardRef<
   loadedSetRef.current = loadedSet
   const spaceIdsRef = useRef(spaceIds)
   spaceIdsRef.current = spaceIds
+  // Same mirroring reason as the two above: the imperative handle is built once
+  // and must read the CURRENT blocks, not the ones closed over at creation.
+  const blocksRef = useRef(blocks)
+  blocksRef.current = blocks
 
   // True while a finger is down (item 2b): a smooth scrollIntoView is canceled by
   // the touch gesture mid-flight, so jumps snap instantly while touching.
@@ -315,6 +343,10 @@ export const TranscriptView = forwardRef<
         if (id === null) return
         scrollToTarget(id, 'auto')
         if (!loadedSetRef.current.has(id)) maybeFill(id)
+      },
+      blockText: (index: number) => {
+        const block = blocksRef.current.find((b) => b.index === index)
+        return block ? { prompt: block.prompt, reply: block.reply } : null
       }
     }),
     [scrollToTarget, maybeFill]
@@ -411,6 +443,9 @@ export const TranscriptView = forwardRef<
       {spaceIds.map((id) => {
         const block = loadedMap.get(id)
         const active = id === selectedIndex
+        // Only the checkpoint that was translated is shown translated; every
+        // other block on the same scroll keeps its own words.
+        const translated = translation && translation.index === id ? translation : null
         return (
           <div
             key={id}
@@ -430,8 +465,14 @@ export const TranscriptView = forwardRef<
                   <span className="ctx-block-idx">T{id}</span>
                   <span className="ctx-block-title">{checkpointTitle(block, titleMode)}</span>
                 </div>
-                {/* Prompt stays VERBATIM (pre-wrap) — the human's exact words. */}
-                <div className="ctx-block-prompt">{block.prompt || '(empty prompt)'}</div>
+                {/* Prompt stays VERBATIM (pre-wrap) — the human's exact words,
+                    unless the reader asked for this checkpoint translated, in
+                    which case the words shown are the translation's. Marked, so
+                    "these are not the words that were typed" is visible rather
+                    than inferred. */}
+                <div className="ctx-block-prompt" data-translated={translated ? '' : undefined}>
+                  {(translated?.prompt ?? block.prompt) || '(empty prompt)'}
+                </div>
                 {block.activity.length > 0 && (
                   <div>
                     {block.activity.map((call, i) => (
@@ -447,8 +488,8 @@ export const TranscriptView = forwardRef<
                 )}
                 {/* Reply renders MARKDOWN as React elements; .md is Fresco's flag. */}
                 {block.reply && (
-                  <div className="ctx-block-reply md">
-                    <MarkdownText source={block.reply} />
+                  <div className="ctx-block-reply md" data-translated={translated ? '' : undefined}>
+                    <MarkdownText source={translated?.reply ?? block.reply} />
                   </div>
                 )}
               </>
