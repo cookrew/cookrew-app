@@ -48,9 +48,31 @@ export function BrowserNode({ data, selected }: NodeProps): React.JSX.Element {
     if (tool === 'move') zoomToNode(node.id)
   }
 
+  // Zoomed OUT: a tile, not a shrunken card. The browser used to render its
+  // whole chrome at the overview — header, url chip, resizer and a body whose
+  // thumbnail is deliberately dropped at this size — so it occupied a card's
+  // worth of canvas to show an empty rectangle. One row of glyph + name says
+  // the only thing that is legible out here anyway: which page this is.
+  if (mode === 'mini') {
+    return (
+      <div
+        className={`node browser-node mini${selected ? ' selected' : ''}${clipping && picked.has(node.id) ? ' picked' : ''}`}
+        style={{ ['--z' as string]: String(invZoom) }}
+        onClick={open}
+      >
+        <NodeHandles />
+        <CardPick id={node.id} />
+        <div className="node-mini">
+          <CrIcon name="browser" />
+          <span className="node-title">{node.name}</span>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div
-      className={`node browser-node${mode === 'mini' ? ' mini' : ''}${selected ? ' selected' : ''}${clipping && picked.has(node.id) ? ' picked' : ''}`}
+      className={`node browser-node${selected ? ' selected' : ''}${clipping && picked.has(node.id) ? ' picked' : ''}`}
       style={{ ['--z' as string]: String(invZoom) }}
     >
       <NodeResizer isVisible={selected} minWidth={220} minHeight={160} />

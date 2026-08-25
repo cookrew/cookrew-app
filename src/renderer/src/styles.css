@@ -1119,6 +1119,45 @@ a.cr-btn {
   letter-spacing: calc(0.06em * var(--z, 1));
 }
 
+/* THE MINI TILE, one grammar for every kind.
+ *
+ * A terminal tile reads as a solid object at the overview because its DARK
+ * FILL carries the shape. A note or browser is cream on a cream canvas and
+ * leans on a 2px border and a 3px offset shadow — both of which live in card
+ * space, so at 0.2 zoom they resolve to sub-pixel and the tile dissolves into
+ * the background. Scaling them keeps the edge a real edge at every zoom.
+ */
+.node.mini {
+  border-width: calc(2px * var(--z, 1));
+  box-shadow: calc(3px * var(--z, 1)) calc(3px * var(--z, 1)) 0 var(--line);
+  cursor: zoom-in;
+}
+
+/* One centred row — the shape .vi-mini gives a terminal. No header rule, no
+ * body: at this size the card's internals are chrome for chrome's sake, and
+ * the empty space they occupied is what made a board of notes unreadable. */
+.node-mini {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--z, 1));
+  padding: 0 calc(12px * var(--z, 1));
+  overflow: hidden;
+}
+
+/* The kind glyph, sized like the terminal's status coin so the three tiles
+ * sit on one optical baseline when they share a row. */
+.node-mini .cr-icon {
+  /* Overrides .cr-icon's flat 14px, which is card-space and therefore
+     sub-pixel out here — the same trap the title was in. Sized to match the
+     terminal's status coin so the three kinds sit on one optical baseline. */
+  width: calc(14px * var(--z, 1));
+  height: calc(14px * var(--z, 1));
+  vertical-align: baseline;
+  color: var(--ink);
+}
+
 .node-title {
   font-family: var(--font-pixel);
   font-size: 10px;

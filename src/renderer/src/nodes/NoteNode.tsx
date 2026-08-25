@@ -8,6 +8,7 @@ import { cardTypeScale, cardZoomMode } from './card-zoom'
 import type { NoteNodeData } from '../../../shared/model'
 import { cookrew } from '../api'
 import { useCanvasUi } from '../canvas-ui'
+import { CrIcon } from '../icons'
 
 export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
   const node = (data as { node: NoteNodeData }).node
@@ -78,9 +79,14 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
       >
         <NodeHandles />
         <CardPick id={node.id} />
-        <div className="node-header note-header">
+        {/* The TILE grammar, not a shrunken card: one centred row of glyph +
+            name, the way a terminal tile reads. The header bar and the empty
+            body below it were card chrome rendered at a size nobody can use —
+            a 2px rule and a note-coloured void that said nothing about which
+            note this was. */}
+        <div className="node-mini">
+          <CrIcon name="note" />
           <span className="node-title">{node.name}</span>
-          {node.locked && <span className="lock-badge">locked</span>}
         </div>
       </div>
     )
