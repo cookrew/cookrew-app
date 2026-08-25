@@ -7,6 +7,22 @@
 /** Below this zoom the card degrades to a minimal tile (dot + name). */
 export const MINI_ZOOM = 0.28
 
+/**
+ * Padding fitView/fitBounds leaves around a card zoomed to the stage: NONE.
+ *
+ * Zero is not a taste call, it is forced by the layout. Cards sit on a grid
+ * whose vertical pitch EQUALS the card height — 560 tall, 560 apart — so a card
+ * and the one below it share an edge with no gutter between them. Any padding
+ * at all is therefore filled by the neighbour: the old 0.02 left 7px of slack
+ * on a 1400x760 stage, and what rendered in those 7px was the next card's
+ * header ("not zoomed in enough to show exactly the chosen card fullview").
+ *
+ * At 0 the card meets the stage edge to edge on its limiting axis, which puts
+ * the neighbour exactly out of frame. It stays a contain-fit, so no part of the
+ * chosen card is ever cropped to achieve that. See tests/zoom-fit.test.ts.
+ */
+export const CARD_FIT_PADDING = 0
+
 /** Zoom at which card type reaches its designed size and stops growing. */
 export const NATURAL_ZOOM = 0.95
 

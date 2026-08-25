@@ -45,7 +45,7 @@ import {
   useThumbsSnapshot
 } from './activity-thumb-store'
 import { reconcileFlowNodes } from './flow-nodes'
-import { cardZoomMode } from './nodes/card-zoom'
+import { CARD_FIT_PADDING, cardZoomMode } from './nodes/card-zoom'
 import { useBrowserEngine } from './browser-engine'
 import { ErrorBoundary } from './ErrorBoundary'
 import { ReauthOverlay } from './ReauthOverlay'
@@ -552,10 +552,12 @@ function Canvas(): React.JSX.Element {
       // A just-created node may not be in the React Flow store yet (its
       // workspace broadcast is still in flight) — fitView can't find it, so
       // callers that know the node's rect pass it for a fitBounds instead.
+      // CARD_FIT_PADDING is 0 on purpose — the grid has no gutter, so any
+      // padding here frames the neighbouring card too.
       if (rect) {
-        void reactFlow.fitBounds(rect, { duration: 500, padding: 0.02 })
+        void reactFlow.fitBounds(rect, { duration: 500, padding: CARD_FIT_PADDING })
       } else {
-        void reactFlow.fitView({ nodes: [{ id }], duration: 500, padding: 0.02 })
+        void reactFlow.fitView({ nodes: [{ id }], duration: 500, padding: CARD_FIT_PADDING })
       }
     },
     [reactFlow]
