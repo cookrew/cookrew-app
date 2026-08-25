@@ -268,7 +268,8 @@ describe('compactDispatchRegistry — the live set survives, the dead weight goe
     appendDispatchRecord(file, row({ state: 'running', updatedAt: NOW - 900 }))
     appendDispatchRecord(file, row({ state: 'done', updatedAt: NOW - 800 }))
     expect(compactDispatchRegistry(file, NOW).rewritten).toBe(true)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    // NTFS has no Unix mode bits — 0600 is a macOS/Linux guarantee (covered there).
+    if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
   })
 })
 
@@ -392,7 +393,8 @@ describe('compaction durability and temp-permission repair (Sol r5 P2)', () => {
 
     const result = compactDispatchRegistry(file, NOW)
     expect(result.rewritten).toBe(true)
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    // NTFS has no Unix mode bits — 0600 is a macOS/Linux guarantee (covered there).
+    if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
     expect(lineCount(file)).toBe(1)
   })
 
@@ -412,7 +414,8 @@ describe('compaction durability and temp-permission repair (Sol r5 P2)', () => {
     const tempOpen = crash.opened.find((open) => open.path === tmp)
     expect(tempOpen).toBeDefined()
     expect(crash.fchmods).toContainEqual({ fd: tempOpen!.fd, mode: 0o600 })
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    // NTFS has no Unix mode bits — 0600 is a macOS/Linux guarantee (covered there).
+    if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
     expect(lineCount(file)).toBe(1)
   })
 

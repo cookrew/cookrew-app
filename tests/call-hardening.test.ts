@@ -131,7 +131,11 @@ describe('MEDIUM-1 · the enrolment oracle is closed in the CLOCK, not just the 
   })
 })
 
-describe('MEDIUM-2 · the signing key\'s mode is checked on READ', () => {
+// Unix file-mode security: NTFS has no 0600 bits, so statSync().mode reports
+// 0o666 on Windows and these mode checks are inapplicable there (macOS/Linux
+// CI covers them). Matches the process.platform guards in readonly-token /
+// pairing-token / codex-bind.
+describe.skipIf(process.platform === 'win32')('MEDIUM-2 · the signing key\'s mode is checked on READ', () => {
   it('refuses a key that became readable by others', () => {
     const service = new CallCredentialService({ base, now: () => clock })
     service.mint('alice', 'ws')
@@ -157,7 +161,7 @@ describe('MEDIUM-2 · the signing key\'s mode is checked on READ', () => {
   })
 })
 
-describe('MEDIUM-3 · the grant record is as protected as the key', () => {
+describe.skipIf(process.platform === 'win32')('MEDIUM-3 · the grant record is as protected as the key', () => {
   it('writes exports.json 0600 — its integrity IS the gate', () => {
     const store = new AgentExportStore(base)
     store.enrol('ws', 'alice', { kty: 'OKP' })

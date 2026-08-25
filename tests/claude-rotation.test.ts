@@ -876,7 +876,9 @@ describe('resolveRotationChain — the RESUME shape (crash recovery)', () => {
 })
 
 describe('the successor probe runs at SPAWN/ADOPT, not only when a pane goes quiet', () => {
-  const indexSource = readFileSync('src/main/index.ts', 'utf8')
+  // Normalise line endings: a Windows checkout carries CRLF, and these
+  // assertions match multi-line source substrings written with \n.
+  const indexSource = readFileSync('src/main/index.ts', 'utf8').replace(/\r\n/g, '\n')
 
   it('is wired into the spawn path for every bound claude terminal', () => {
     // A crash-recovery rotation happens while there is NO pane: the process
