@@ -1133,29 +1133,32 @@ a.cr-btn {
   cursor: zoom-in;
 }
 
-/* One centred row — the shape .vi-mini gives a terminal. No header rule, no
- * body: at this size the card's internals are chrome for chrome's sake, and
- * the empty space they occupied is what made a board of notes unreadable. */
+/* THE TILE'S ONE PIECE OF CONTENT: the name, centred.
+ *
+ * A terminal tile is a status coin plus a name, and the coin is doing real
+ * work — it carries phase. A note and a browser have no equivalent live fact
+ * at this size, so a kind glyph beside the name would be decoration competing
+ * with the only thing worth reading out here. Centred rather than
+ * left-aligned for the same reason: with nothing beside it, the name IS the
+ * tile, and a left edge just makes it look like something is missing.
+ *
+ * `flex: 1` is what puts it in the vertical middle — the row fills the tile
+ * and centres its content, exactly as .vi-mini does for a terminal.
+ */
 .node-mini {
   flex: 1;
   min-height: 0;
   display: flex;
   align-items: center;
-  gap: calc(8px * var(--z, 1));
-  padding: 0 calc(12px * var(--z, 1));
+  justify-content: center;
+  padding: 0 calc(10px * var(--z, 1));
   overflow: hidden;
 }
 
-/* The kind glyph, sized like the terminal's status coin so the three tiles
- * sit on one optical baseline when they share a row. */
-.node-mini .cr-icon {
-  /* Overrides .cr-icon's flat 14px, which is card-space and therefore
-     sub-pixel out here — the same trap the title was in. Sized to match the
-     terminal's status coin so the three kinds sit on one optical baseline. */
-  width: calc(14px * var(--z, 1));
-  height: calc(14px * var(--z, 1));
-  vertical-align: baseline;
-  color: var(--ink);
+/* Centred text wants centred overflow: an ellipsised name that is centred
+   reads as trimmed on both sides, which is the truth of it. */
+.node-mini .node-title {
+  text-align: center;
 }
 
 .node-title {

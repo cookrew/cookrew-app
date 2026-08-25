@@ -63,7 +63,6 @@ export function BrowserNode({ data, selected }: NodeProps): React.JSX.Element {
         <NodeHandles />
         <CardPick id={node.id} />
         <div className="node-mini">
-          <CrIcon name="browser" />
           <span className="node-title">{node.name}</span>
         </div>
       </div>

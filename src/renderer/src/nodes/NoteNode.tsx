@@ -8,7 +8,6 @@ import { cardTypeScale, cardZoomMode } from './card-zoom'
 import type { NoteNodeData } from '../../../shared/model'
 import { cookrew } from '../api'
 import { useCanvasUi } from '../canvas-ui'
-import { CrIcon } from '../icons'
 
 export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
   const node = (data as { node: NoteNodeData }).node
@@ -85,7 +84,6 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
             a 2px rule and a note-coloured void that said nothing about which
             note this was. */}
         <div className="node-mini">
-          <CrIcon name="note" />
           <span className="node-title">{node.name}</span>
         </div>
       </div>
