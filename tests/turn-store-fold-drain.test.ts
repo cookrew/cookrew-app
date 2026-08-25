@@ -136,7 +136,8 @@ const until = async (deadlineMs: number, done: () => boolean): Promise<void> => 
   throw new Error('condition never held')
 }
 
-describe('drainFolds — the interleaving flushAll cannot see (Sol r11 P1)', () => {
+// Windows: directory fsync is a POSIX durability primitive not available on NTFS — macOS/Linux CI covers it.
+describe.skipIf(process.platform === 'win32')('drainFolds — the interleaving flushAll cannot see (Sol r11 P1)', () => {
   it('fold paused before rename → flushAll sweeps clean → rename + dir-fsync failure → the DRAIN settles it', async () => {
     writeFoldableLedger()
     const store = reopen()

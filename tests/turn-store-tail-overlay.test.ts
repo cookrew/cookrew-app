@@ -425,7 +425,8 @@ describe('bounded fold — dead overlay weight is compacted OUTSIDE the hot path
     expect(text()).toBe(before)
   })
 
-  it('a failed fold costs nothing but bytes: the history still reads whole', async () => {
+  // Windows: fault-injection via chmod 0o500 on a directory is ignored by NTFS — macOS/Linux CI covers it.
+  it.skipIf(process.platform === 'win32')('a failed fold costs nothing but bytes: the history still reads whole', async () => {
     seed(2)
     const overlays = Array.from(
       { length: TAIL_OVERLAY_COMPACT_MIN_LINES },

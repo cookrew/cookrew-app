@@ -250,7 +250,8 @@ describe('submitViaHerdr — the two-state ack contract', () => {
 // settled exactly once, from the child's real exit.
 // ---------------------------------------------------------------------------
 
-describe('runCli — abort escalates SIGTERM to SIGKILL (Sol r9 P1-5)', () => {
+// Windows: POSIX signals SIGTERM/SIGKILL do not exist — macOS/Linux CI covers it.
+describe.skipIf(process.platform === 'win32')('runCli — abort escalates SIGTERM to SIGKILL (Sol r9 P1-5)', () => {
   it('a child that TRAPS SIGTERM is SIGKILLed after the bound, and the promise settles', async () => {
     const abort = new AbortController()
     // A real child that ignores the courtesy: traps SIGTERM and spins.

@@ -149,7 +149,8 @@ function sweepFixture(overrides: Record<string, string>): Violation[] {
 
 const kinds = (vs: Violation[]): string[] => [...new Set(vs.map((v) => v.kind))]
 
-describe('the sweep fires on the mutants that defeated its predecessor', () => {
+// Windows: the source import-graph walk depends on POSIX path separators — macOS/Linux CI covers it.
+describe.skipIf(process.platform === 'win32')('the sweep fires on the mutants that defeated its predecessor', () => {
   it('a clean tree passes', () => {
     expect(sweepFixture({})).toEqual([])
   })

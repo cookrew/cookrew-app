@@ -381,7 +381,8 @@ describe('AnnotationStore — updates append ops, never reserialize the snapshot
  * Both paths return success, publish to memory only on success, retain the
  * un-landed work, and retry it on the next flush.
  */
-describe('AnnotationStore — a failed write is retained and retried, never claimed', () => {
+// Windows: chmod/fsync fault-injection does not apply on NTFS — macOS/Linux CI covers it.
+describe.skipIf(process.platform === 'win32')('AnnotationStore — a failed write is retained and retried, never claimed', () => {
   it('save: fails closed once, then the retry lands the same bytes', () => {
     const annotations = new AnnotationStore(annDir)
     chmodSync(annDir, 0o500)
@@ -460,7 +461,8 @@ describe('AnnotationStore — a bad sidecar costs recaps, never history', () => 
  * intermediate disk state (with bytes the real writers produced) and reopening
  * a fresh store, which must read the newest COMPLETE state.
  */
-describe('AnnotationStore — snapshot+log crash consistency via shared epoch', () => {
+// Windows: chmod/fsync fault-injection does not apply on NTFS — macOS/Linux CI covers it.
+describe.skipIf(process.platform === 'win32')('AnnotationStore — snapshot+log crash consistency via shared epoch', () => {
   const annotationLogFile = (id = 't1'): string => path.join(annDir, `${id}.log.jsonl`)
 
   /** Snapshot says A (epoch 1), log later says B (ops on epoch 1). */

@@ -185,7 +185,8 @@ describe('WAL storage faults fail closed (Sol r11 P0-1)', () => {
     vi.restoreAllMocks()
   })
 
-  it('a persist that cannot commit returns false — and the refusal reaches pasteAndSubmit', async () => {
+  // Windows: fault-injection via chmod 0o500 to block the temp-file write does not apply on NTFS — macOS/Linux CI covers it.
+  it.skipIf(process.platform === 'win32')('a persist that cannot commit returns false — and the refusal reaches pasteAndSubmit', async () => {
     const dir = walDir()
     const file = path.join(dir, 'input-provenance.json')
     const store = new InputProvenanceStore(file)

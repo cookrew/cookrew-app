@@ -157,7 +157,8 @@ const until = async (deadlineMs: number, what: string, done: () => boolean): Pro
   throw new Error(`never held within ${deadlineMs}ms: ${what}`)
 }
 
-describe('fold rename → dir-fsync failure → debt-only retry (Sol r10)', () => {
+// Windows: directory fsync is a POSIX durability primitive not available on NTFS — macOS/Linux CI covers it.
+describe.skipIf(process.platform === 'win32')('fold rename → dir-fsync failure → debt-only retry (Sol r10)', () => {
   it('settles the debt from the timer alone — NO new records, NO flush', async () => {
     writeFoldableLedger()
     const store = reopen()

@@ -109,7 +109,8 @@ describe('writeFileAtomic — short writes', () => {
   })
 })
 
-describe('writeFileAtomic — mode preservation', () => {
+// Windows: NTFS has no 0600 mode bits to preserve — macOS/Linux CI covers it.
+describe.skipIf(process.platform === 'win32')('writeFileAtomic — mode preservation', () => {
   it('keeps a tightened mode on the replacement file', () => {
     writeFileSync(target(), 'secret', 'utf8')
     chmodSync(target(), 0o600)
@@ -125,7 +126,8 @@ const errnoError = (code: string): NodeJS.ErrnoException => {
   return error
 }
 
-describe('writeFileAtomic — directory-fsync failure is a FAILURE', () => {
+// Windows: directory fsync is a POSIX durability primitive not available on NTFS — macOS/Linux CI covers it.
+describe.skipIf(process.platform === 'win32')('writeFileAtomic — directory-fsync failure is a FAILURE', () => {
   it('propagates a real dir-fsync error instead of claiming success', () => {
     inject.dirFsyncError = eio()
     expect(() => writeFileAtomic(target(), 'body')).toThrow(/EIO/)
@@ -193,7 +195,8 @@ describe('writeFileAtomic — directory-fsync failure is a FAILURE', () => {
   })
 })
 
-describe('AnnotationStore under dir-fsync failure — retry state is retained', () => {
+// Windows: directory fsync is a POSIX durability primitive not available on NTFS — macOS/Linux CI covers it.
+describe.skipIf(process.platform === 'win32')('AnnotationStore under dir-fsync failure — retry state is retained', () => {
   const rec = (index: number, over: Partial<TurnRecord> = {}): TurnRecord => ({
     index,
     prompt: `ask ${index}`,
@@ -261,7 +264,8 @@ describe('AnnotationStore under dir-fsync failure — retry state is retained', 
  * until it lands, only then may the retained work clear, and a repeat
  * failure says PERSISTENT STORAGE FAULT out loud.
  */
-describe('TurnStore post-rename durability DEBT — the retry must fsync, not declare (Sol r9)', () => {
+// Windows: directory fsync is a POSIX durability primitive not available on NTFS — macOS/Linux CI covers it.
+describe.skipIf(process.platform === 'win32')('TurnStore post-rename durability DEBT — the retry must fsync, not declare (Sol r9)', () => {
   const rec = (index: number): TurnRecord => ({
     index,
     prompt: `ask ${index}`,

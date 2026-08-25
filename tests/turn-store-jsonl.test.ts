@@ -262,7 +262,8 @@ describe('TurnStore — tail replacement is crash-safe and failure retains retry
     expect(new TurnStore(dir).load('t1')[1].reply).toBe('finalized late')
   })
 
-  it('a failed full rewrite also leaves the previous file intact and retries', () => {
+  // Windows: fault-injection via chmod 0o500 on a directory is ignored by NTFS — macOS/Linux CI covers it.
+  it.skipIf(process.platform === 'win32')('a failed full rewrite also leaves the previous file intact and retries', () => {
     save([rec(1), rec(2), rec(3)])
     const before = readFileSync(file(), 'utf8')
 

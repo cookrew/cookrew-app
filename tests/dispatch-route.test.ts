@@ -826,7 +826,8 @@ describe('~/.cookrew/dispatches.jsonl — append only', () => {
 
   // D3 — the file is owner-only, and the reply is not in it at all.
 
-  it('creates the ledger 0600 inside a 0700 directory', () => {
+  // Windows: NTFS has no 0600/0700 mode bits, statSync().mode is inapplicable — macOS/Linux CI covers it.
+  it.skipIf(process.platform === 'win32')('creates the ledger 0600 inside a 0700 directory', () => {
     const dir = path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-dsp-')), 'nested')
     const file = path.join(dir, 'dispatches.jsonl')
     appendDispatchRecord(file, record())
@@ -834,7 +835,8 @@ describe('~/.cookrew/dispatches.jsonl — append only', () => {
     expect(statSync(dir).mode & 0o777).toBe(0o700)
   })
 
-  it('tightens a ledger that already exists — mode applies at CREATE only', () => {
+  // Windows: NTFS has no 0600 mode bits, statSync().mode is inapplicable — macOS/Linux CI covers it.
+  it.skipIf(process.platform === 'win32')('tightens a ledger that already exists — mode applies at CREATE only', () => {
     // Every machine that has already run this has a 0644 file; a mode on the
     // append does nothing for them, so the permissions are re-asserted.
     const file = path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-dsp-')), 'dispatches.jsonl')
