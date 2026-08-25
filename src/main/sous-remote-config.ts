@@ -23,6 +23,8 @@ export interface RemoteSous {
 
 interface SousFile {
   translate?: { baseUrl?: string; apiKey?: string; model?: string }
+  /** Ollama model to translate with, when translation is local. */
+  localModel?: string
 }
 
 /**
@@ -35,15 +37,39 @@ export function sousConfigPath(): string {
   return process.env.COOKREW_SOUS_CONFIG ?? join(homedir(), '.cookrew', 'sous.json')
 }
 
-/** The config file, or null when it is absent or unreadable. */
-function fromFile(): SousFile['translate'] | null {
+/** The whole config file, or null when it is absent or unreadable. */
+function readConfig(): SousFile | null {
   try {
-    const raw = readFileSync(sousConfigPath(), 'utf8')
-    return (JSON.parse(raw) as SousFile).translate ?? null
+    return JSON.parse(readFileSync(sousConfigPath(), 'utf8')) as SousFile
   } catch {
     // Absent is the normal case, not an error: most machines run local Sous.
     return null
   }
+}
+
+function fromFile(): SousFile['translate'] | null {
+  return readConfig()?.translate ?? null
+}
+
+/**
+ * The local Ollama model used for TRANSLATION, which is not necessarily the one
+ * used for titles.
+ *
+ * They are different jobs. A 1.5b model writes a fine six-word title, and on a
+ * body of more than one paragraph it will translate one of them and silently
+ * drop the rest — a shorter body with nothing to say a paragraph is missing,
+ * which is the worst way for this to fail. Bigger models hold the whole piece.
+ *
+ * Read per call for the same reason the remote config is: changing it should
+ * not require restarting the app.
+ */
+export function localTranslateModel(fallback: string): string {
+  const configured = (
+    process.env.COOKREW_SOUS_TRANSLATE_MODEL ??
+    readConfig()?.localModel ??
+    ''
+  ).trim()
+  return configured.length > 0 ? configured : fallback
 }
 
 /**

@@ -24,7 +24,7 @@ import {
   type TranslateResult
 } from '../shared/translate'
 import { textFromContent, type MessagesResponse } from '../shared/anthropic-content'
-import { remoteSous } from './sous-remote-config'
+import { localTranslateModel, remoteSous } from './sous-remote-config'
 
 /**
  * Per-piece budget. Pieces are capped at ~1200 characters, which a 1.5b model
@@ -149,7 +149,7 @@ async function translateLocal(piece: string, label: string): Promise<PieceResult
       headers: { 'content-type': 'application/json' },
       signal: AbortSignal.timeout(warmed ? PIECE_TIMEOUT_MS : COLD_TIMEOUT_MS),
       body: JSON.stringify({
-        model: SOUS_TRANSLATE_MODEL,
+        model: localTranslateModel(SOUS_TRANSLATE_MODEL),
         // Instructions in `system`, content in `prompt`. Same string for both
         // and a small model loses track of which is which — see the note on
         // buildTranslatePrompt.
@@ -163,7 +163,7 @@ async function translateLocal(piece: string, label: string): Promise<PieceResult
       })
     })
     if (!res.ok) {
-      console.error(`Sous translate: Ollama returned ${res.status} for model ${SOUS_TRANSLATE_MODEL}`)
+      console.error(`Sous translate: Ollama returned ${res.status} for model ${localTranslateModel(SOUS_TRANSLATE_MODEL)}`)
       // 404 is Ollama's answer for a model it does not have pulled — a
       // different problem from a server that is not there, and a different fix.
       return { ok: false, failure: res.status === 404 ? 'model-missing' : 'unreachable' }

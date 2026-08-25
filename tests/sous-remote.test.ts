@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { translateBody } from '../src/main/sous-translate'
-import { remoteSous, remoteSousHost, resetRemoteSousCache } from '../src/main/sous-remote-config'
+import {
+  localTranslateModel,
+  remoteSous,
+  remoteSousHost,
+  resetRemoteSousCache
+} from '../src/main/sous-remote-config'
 
 const ENV = ['COOKREW_SOUS_TRANSLATE_URL', 'COOKREW_SOUS_TRANSLATE_KEY', 'COOKREW_SOUS_REMOTE_MODEL']
 
@@ -174,5 +179,36 @@ describe('turning the hosted model off', () => {
     )
     expect(remoteSous()).toBeNull()
     expect(remoteSousHost()).toBeNull()
+  })
+})
+
+describe('the local translation model', () => {
+  /**
+   * Titles and translations are different jobs. The titling model is 1.5b, and
+   * on a body of more than one paragraph it translates one and drops the rest —
+   * a shorter body with nothing to say a paragraph is missing. This is how a
+   * machine asks for a bigger model for translation only.
+   */
+  it('comes from the config file, falling back to the titling model', async () => {
+    const { mkdtempSync, writeFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const { tmpdir } = await import('node:os')
+    const file = join(mkdtempSync(join(tmpdir(), 'sous-')), 'sous.json')
+    process.env.COOKREW_SOUS_CONFIG = file
+
+    writeFileSync(file, JSON.stringify({}))
+    expect(localTranslateModel('qwen2.5:1.5b')).toBe('qwen2.5:1.5b')
+
+    writeFileSync(file, JSON.stringify({ localModel: 'qwen2.5:3b' }))
+    expect(localTranslateModel('qwen2.5:1.5b')).toBe('qwen2.5:3b')
+
+    // Blank is not a choice — it must not produce a request for model "".
+    writeFileSync(file, JSON.stringify({ localModel: '   ' }))
+    expect(localTranslateModel('qwen2.5:1.5b')).toBe('qwen2.5:1.5b')
+  })
+
+  it('an absent config file leaves the titling model in place', () => {
+    process.env.COOKREW_SOUS_CONFIG = '/nonexistent/cookrew-sous-test.json'
+    expect(localTranslateModel('qwen2.5:1.5b')).toBe('qwen2.5:1.5b')
   })
 })
