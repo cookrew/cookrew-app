@@ -112,14 +112,27 @@ export function MobileBrowserFrame({
       setView((current) => (current.w === next.w && current.h === next.h ? current : next))
     }
     const measure = (): void => commit(el.clientWidth, el.clientHeight)
+    // Commit on the NEXT frame, not inside the observation cycle. setView here
+    // re-renders and relays out the frame, which the observer then sees as a
+    // fresh resize before the cycle closes — "ResizeObserver loop completed
+    // with undelivered notifications", once per frame while the overlay rect
+    // tracks a zoom. It converged (commit no-ops on an unchanged size) but paid
+    // an extra layout pass every frame of the animation to get there.
+    let frame = 0
     const ro = new ResizeObserver((entries) => {
-      const entry = entries[0]
-      if (entry) commit(entry.contentRect.width, entry.contentRect.height)
-      else measure()
+      const rect = entries[0]?.contentRect
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        if (rect) commit(rect.width, rect.height)
+        else measure()
+      })
     })
     ro.observe(el)
     measure()
-    return () => ro.disconnect()
+    return () => {
+      cancelAnimationFrame(frame)
+      ro.disconnect()
+    }
   }, [])
 
   // LEGACY FLAG-OFF poll: the /thumb refetch loop, gated on open + visible so
@@ -284,7 +297,21 @@ export function MobileBrowserFrame({
     const point = framePoint(e) ?? mouseLastPoint.current
     if (point) sendFrameInput(pointerMsg('up', point, e.detail))
   }
-  const onWheel = (e: React.WheelEvent): void => {
+  /**
+   * Scroll is forwarded to the remote page, so the local surface must NOT also
+   * scroll — which means preventDefault has to actually land.
+   *
+   * React registers `wheel` on its root as a PASSIVE listener, so calling
+   * preventDefault from an onWheel prop is silently ignored and logs "Unable to
+   * preventDefault inside passive event listener invocation" for every tick of
+   * the wheel. This attaches the real thing with { passive: false } instead.
+   *
+   * Held in a ref and attached once: the handler closes over fit/natural/stream,
+   * which change on almost every render, and re-registering a wheel listener
+   * that often is its own problem.
+   */
+  const onWheelRef = useRef<(e: WheelEvent) => void>(() => {})
+  onWheelRef.current = (e: WheelEvent): void => {
     if (!interactive) return
     const box = boxRef.current
     if (!box || natural.w <= 0) return
@@ -293,6 +320,13 @@ export function MobileBrowserFrame({
     const p = viewToFramePoint(e.clientX - r.left, e.clientY - r.top, fit, natural.w, natural.h)
     sendFrameInput(wheelMsg(p, e.deltaY))
   }
+  useEffect(() => {
+    const box = boxRef.current
+    if (!box) return
+    const onWheel = (e: WheelEvent): void => onWheelRef.current(e)
+    box.addEventListener('wheel', onWheel, { passive: false })
+    return () => box.removeEventListener('wheel', onWheel)
+  }, [])
   const onKeyDown = (e: React.KeyboardEvent): void => {
     if (!interactive) return
     if (e.key === 'Escape') return // let harness shortcuts bubble
@@ -332,7 +366,6 @@ export function MobileBrowserFrame({
       onPointerMove={interactive ? onPointerMove : undefined}
       onPointerUp={interactive ? onPointerUp : undefined}
       onPointerCancel={interactive ? onPointerUp : undefined}
-      onWheel={interactive ? onWheel : undefined}
       onKeyDown={interactive ? onKeyDown : undefined}
     >
       <span className="browser-frame-status" role="status" aria-live="polite" aria-atomic="true">
