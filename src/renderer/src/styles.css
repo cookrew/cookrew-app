@@ -4776,7 +4776,7 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   max-height: min(58vh, 420px);
   overflow-y: auto;
   padding: 4px;
-  background: var(--paper);
+  background: var(--cream-hi);
   border: 2px solid var(--line);
   box-shadow: 4px 4px 0 var(--line);
 }
