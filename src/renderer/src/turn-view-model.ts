@@ -39,6 +39,7 @@ export function isEmptyTurnView(model: TurnViewModel): boolean {
     model.latest === null &&
     model.title === null &&
     model.tools.length === 0 &&
+    model.pendingInput === null &&
     model.tail === null
   )
 }
