@@ -1,4 +1,5 @@
-// FIXTURE — "focus on middle card but active fullview is the corner card".
+// "focus on middle card but active fullview is the corner card" — the fixture
+// for that report, and now the test for its fix.
 //
 // Reported from a canvas where the middle card ("Preset Procedure") is the one
 // zoomed to and centred, while the live full view is mounted on a card pinned
@@ -16,8 +17,14 @@
 // still covered forever, so the overlay never comes back to the card the user
 // actually zoomed to.
 //
-// Nothing here knows which card the user CHOSE. zoomToNode records that in
-// App's zoomedNodeIdRef and the arbiter is never told.
+// Nothing there knew which card the user CHOSE: zoomToNode recorded it in
+// App's zoomedNodeIdRef and the arbiter was never told.
+//
+// Both halves are fixed. pickOverlayWinner now takes the focused id and it
+// outranks the stickiness, and a card must hold a minimum SHARE of the stage to
+// be eligible at all. The ROOT CAUSE cases below still assert the old
+// arithmetic, because that arithmetic is unchanged and is what the new floor
+// exists to compensate for.
 //
 // Geometry is lifted from the live workspace, and the viewport is produced by
 // the same solver zoomToNode drives, so this is the real arithmetic rather than
@@ -26,7 +33,15 @@
 import { getViewportForBounds } from '@xyflow/react'
 import { describe, expect, it } from 'vitest'
 import { CARD_FIT_PADDING } from '../src/renderer/src/nodes/card-zoom'
-import { mostCovered, pickOverlayWinner, projectToStage } from '../src/renderer/src/zoom-lod'
+import {
+  ENTER_STAGE_SHARE,
+  EXIT_STAGE_SHARE,
+  isFullViewEligible,
+  mostCovered,
+  pickOverlayWinner,
+  projectToStage,
+  stageShare as stageShareOf
+} from '../src/renderer/src/zoom-lod'
 
 /** Two real same-row neighbours from the live workspace. */
 const MIDDLE = {
@@ -57,12 +72,9 @@ const focusViewport = (pan = 0) => {
   return { ...v, x: v.x - pan }
 }
 
-/** Share of the STAGE a card actually occupies — what "fullview" should mean. */
-const stageShare = (node: typeof MIDDLE, viewport: ReturnType<typeof focusViewport>): number => {
-  const { visible } = projectToStage(node, viewport, PANE)
-  if (visible === null) return 0
-  return (visible.width * visible.height) / (PANE.width * PANE.height)
-}
+/** Share of the STAGE a card actually occupies — via the production function. */
+const stageShare = (node: typeof MIDDLE, viewport: ReturnType<typeof focusViewport>): number =>
+  stageShareOf(projectToStage(node, viewport, PANE).visible, PANE)
 
 describe('FIXTURE: the focused card and the full-view card disagree', () => {
   it('the middle card is the one zoomed to and the one filling the stage', () => {
@@ -100,24 +112,64 @@ describe('FIXTURE: the focused card and the full-view card disagree', () => {
     expect(mostCovered(['corner', 'middle'], { corner: 1, middle: 1 })).toBe('corner')
   })
 
-  it.fails('THE BUG: the corner card keeps the full view once it has it', () => {
-    // prevPrimary = corner, and corner is still "active" by the size-only
-    // measure, so the arbiter hands it the overlay again — even though the
-    // middle card is the one focused and on screen. This assertion states the
-    // behaviour we want and FAILS today; that failure is the fixture.
-    //
-    // When this starts passing, delete the .fails.
-    expect(pickOverlayWinner(['middle', 'corner'], { middle: 1, corner: 1 }, 'corner')).toBe(
-      'middle'
+  it('FIXED: the focused card takes the full view from the open corner card', () => {
+    // Was the bug: prevPrimary = corner, corner still "active" by the size-only
+    // measure, so the arbiter handed it back the overlay. The focused id now
+    // outranks the stickiness.
+    expect(
+      pickOverlayWinner(['middle', 'corner'], { middle: 1, corner: 1 }, 'corner', 'middle')
+    ).toBe('middle')
+  })
+
+  it('FIXED: a sliver is no longer eligible to hold the full view', () => {
+    // The other half, asserted through the predicate the hook itself calls —
+    // so forgetting to wire the floor in fails here rather than passing on a
+    // number nothing consults. Even with no focused card, and even while it is
+    // the OPEN card (wasActive), the 40px sliver is out.
+    const at = focusViewport()
+    const view = focusViewport(CORNER.position.x * at.zoom + at.x - (PANE.width - 40))
+    const corner = projectToStage(CORNER, view, PANE)
+
+    expect(corner.coverage).toBeGreaterThanOrEqual(ENTER_COVERAGE) // still "big"
+    expect(stageShareOf(corner.visible, PANE)).toBeLessThan(EXIT_STAGE_SHARE) // but not present
+    expect(isFullViewEligible(corner.visible, corner.coverage, PANE, false)).toBe(false)
+    expect(isFullViewEligible(corner.visible, corner.coverage, PANE, true)).toBe(false)
+  })
+
+  it('FIXED: the focused card is eligible, entering and staying', () => {
+    // The floor must reject slivers without rejecting the real thing.
+    const middle = projectToStage(MIDDLE, focusViewport(), PANE)
+    expect(isFullViewEligible(middle.visible, middle.coverage, PANE, false)).toBe(true)
+    expect(isFullViewEligible(middle.visible, middle.coverage, PANE, true)).toBe(true)
+  })
+
+  it('a card fully off the stage is never eligible', () => {
+    const corner = projectToStage(CORNER, focusViewport(), PANE)
+    expect(corner.visible).toBeNull()
+    expect(isFullViewEligible(corner.visible, corner.coverage, PANE, true)).toBe(false)
+  })
+
+  it('the focused card itself clears the stage-share floor, on desktop and phone', () => {
+    // The floor has to reject slivers without rejecting the real thing. A card
+    // fitted to the stage keeps 74% of it here; on a phone, letterboxed by
+    // aspect, 49%. Both are far above the 0.25 entry floor.
+    expect(stageShareOf(projectToStage(MIDDLE, focusViewport(), PANE).visible, PANE)).toBeGreaterThan(
+      ENTER_STAGE_SHARE
+    )
+
+    const phone = { width: 390, height: 620 }
+    const bounds = { ...MIDDLE.position, ...MIDDLE.size }
+    const v = getViewportForBounds(bounds, phone.width, phone.height, 0.1, 8, CARD_FIT_PADDING)
+    expect(stageShareOf(projectToStage(MIDDLE, v, phone).visible, phone)).toBeGreaterThan(
+      ENTER_STAGE_SHARE
     )
   })
 
-  it.fails('THE FIX SHAPE: the arbiter is never told which card was chosen', () => {
-    // zoomToNode(id) is the user's choice, recorded in App's zoomedNodeIdRef and
-    // then dropped on the floor. Until that id reaches pickOverlayWinner, no
-    // coverage rule can distinguish "the card they tapped" from "a card that
-    // happens to be big", because by size alone the two are identical — as the
-    // ROOT CAUSE cases above show.
-    expect(pickOverlayWinner.length).toBeGreaterThanOrEqual(4)
+  it('focus cannot conjure an overlay for a card that is not eligible', () => {
+    // Intent outranks geometry, it does not replace it: a focused card still
+    // has to be in the active set. Otherwise a tap during the zoom animation
+    // would mount a full view over a thumbnail.
+    expect(pickOverlayWinner(['corner'], { corner: 1 }, 'corner', 'middle')).toBe('corner')
+    expect(pickOverlayWinner([], {}, null, 'middle')).toBeNull()
   })
 })

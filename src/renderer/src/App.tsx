@@ -966,7 +966,15 @@ function Canvas(): React.JSX.Element {
   const overlayNodes = useMemo(() => [...terminals, ...browsers], [terminals, browsers])
   // Desktop always allows the passive coverage-open (zoom into a card to open
   // it). On a phone only a deliberate tap opens one — see deliberateOpenRef.
-  const lod = useLodLayout(overlayNodes, !isRemoteMode() || deliberateOpenRef.current)
+  // The zoomed card is passed through so the arbiter can honour the user's
+  // choice: geometry alone cannot tell the card they tapped from a card that
+  // happens to be big, which is how the full view ended up on a card off in the
+  // corner while the focused one filled the stage.
+  const lod = useLodLayout(
+    overlayNodes,
+    !isRemoteMode() || deliberateOpenRef.current,
+    zoomedNodeIdRef.current
+  )
   /** Null once the node is gone, which is also how the dialog self-dismisses. */
   const closingNode = closingId
     ? (workspace?.nodes.find((n) => n.id === closingId) ?? null)

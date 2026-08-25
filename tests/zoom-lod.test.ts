@@ -45,12 +45,12 @@ describe('mostCovered (shared overlay arbitration)', () => {
 // must mount, keyed to the intended (already-open) card.
 describe('pickOverlayWinner (single overlay, intent-stable)', () => {
   it('mounts nothing when no card crosses the threshold', () => {
-    expect(pickOverlayWinner([], {}, null)).toBeNull()
+    expect(pickOverlayWinner([], {}, null, null)).toBeNull()
   })
 
   it('picks the most-covered card on a fresh zoom-in (no prior overlay)', () => {
     // Target is centered/most-covered; the adjacent neighbor is a sliver.
-    expect(pickOverlayWinner(['target', 'neighbor'], { target: 0.95, neighbor: 0.81 }, null)).toBe(
+    expect(pickOverlayWinner(['target', 'neighbor'], { target: 0.95, neighbor: 0.81 }, null, null)).toBe(
       'target'
     )
   })
@@ -58,17 +58,17 @@ describe('pickOverlayWinner (single overlay, intent-stable)', () => {
   it('keeps the already-open card even when a neighbor becomes more covered', () => {
     // Panned so the neighbor now covers more — the open card must NOT flip.
     expect(
-      pickOverlayWinner(['target', 'neighbor'], { target: 0.78, neighbor: 0.9 }, 'target')
+      pickOverlayWinner(['target', 'neighbor'], { target: 0.78, neighbor: 0.9 }, 'target', null)
     ).toBe('target')
   })
 
   it('switches to the new card once the previously-open one leaves the active set', () => {
     // Zoomed away: target dropped below EXIT and is no longer active.
-    expect(pickOverlayWinner(['neighbor'], { neighbor: 0.9 }, 'target')).toBe('neighbor')
+    expect(pickOverlayWinner(['neighbor'], { neighbor: 0.9 }, 'target', null)).toBe('neighbor')
   })
 
   it('never mounts two overlays: only one id is ever returned', () => {
-    const winner = pickOverlayWinner(['a', 'b', 'c'], { a: 0.85, b: 0.9, c: 0.82 }, null)
+    const winner = pickOverlayWinner(['a', 'b', 'c'], { a: 0.85, b: 0.9, c: 0.82 }, null, null)
     expect(['a', 'b', 'c']).toContain(winner)
   })
 })

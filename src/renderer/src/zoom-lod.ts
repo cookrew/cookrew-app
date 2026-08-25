@@ -99,21 +99,75 @@ export function mostCovered(
 }
 
 /**
+ * Share of the stage a card actually occupies. Distinct from `coverage`, which
+ * is the card's projected SIZE and says nothing about where it is: a card
+ * panned to a sliver at the edge keeps full coverage but has a tiny share.
+ */
+export function stageShare(visible: ScreenRect | null, pane: Pane): number {
+  if (visible === null) return 0
+  return (visible.width * visible.height) / (pane.width * pane.height)
+}
+
+/**
+ * A card must hold this much of the stage to take the full view, and keep this
+ * much to hold it. Hysteresis, like ENTER/EXIT_COVERAGE, so panning across the
+ * boundary doesn't flicker.
+ *
+ * Coverage alone cannot express this. It is a max over the two dimensions, so a
+ * card reduced to a 40px full-height sliver still scores 1.0 — the same as the
+ * card filling the stage. The numbers sit in a wide gap: a card fitted to the
+ * stage holds 74% of it on desktop and 49% on a phone (letterboxed by aspect),
+ * while the slivers this rejects hold under 10%.
+ */
+export const ENTER_STAGE_SHARE = 0.25
+export const EXIT_STAGE_SHARE = 0.15
+
+/**
+ * May this card mount the full view? Big enough AND actually on the stage.
+ *
+ * The second half is the one that matters: a card's projected size does not
+ * change as it is panned off, so coverage alone keeps calling it eligible right
+ * up to its last pixel — which is how an off-stage card held the full view
+ * while the focused card filled the screen.
+ */
+export function isFullViewEligible(
+  visible: ScreenRect | null,
+  coverage: number,
+  pane: Pane,
+  wasActive: boolean
+): boolean {
+  if (visible === null) return false
+  const coverageFloor = wasActive ? EXIT_COVERAGE : ENTER_COVERAGE
+  const shareFloor = wasActive ? EXIT_STAGE_SHARE : ENTER_STAGE_SHARE
+  return coverage >= coverageFloor && stageShare(visible, pane) >= shareFloor
+}
+
+/**
  * The single node whose full overlay should mount. Only one may mount at a
  * time — several cards cross the coverage threshold when a neighbor is
  * adjacent, and mounting all of them stacks fullscreen overlays so the
- * neighbor sliver steals interaction (Magpie desktop stacking bug). Prefer
- * the card already open (prevPrimary) while it is still covered, so a
- * deliberate zoom stays put over an incidentally-covered neighbor; otherwise
- * the most-covered card wins. Null when nothing crosses the threshold.
+ * neighbor sliver steals interaction (Magpie desktop stacking bug).
+ *
+ * `focusedId` is the card the user deliberately zoomed to (zoomToNode) and it
+ * outranks everything, because it is the only input here that reflects intent
+ * rather than geometry. Without it the arbiter could not tell the card someone
+ * tapped from a card that merely happens to be big, and the full view would
+ * stay stuck on whatever opened first — the reported bug. It is a required
+ * argument so that no caller can silently forget to say.
+ *
+ * Below that, prefer the card already open (prevPrimary) while it is still
+ * covered, so an incidentally-covered neighbor can't steal an open card;
+ * otherwise the most-covered card wins. Null when nothing is eligible.
  */
 export function pickOverlayWinner(
   activeIds: Iterable<string>,
   coverages: Record<string, number>,
-  prevPrimary: string | null
+  prevPrimary: string | null,
+  focusedId: string | null
 ): string | null {
   const ids = new Set(activeIds)
   if (ids.size === 0) return null
+  if (focusedId !== null && ids.has(focusedId)) return focusedId
   if (prevPrimary !== null && ids.has(prevPrimary)) return prevPrimary
   return mostCovered(ids, coverages)
 }
@@ -156,7 +210,11 @@ export interface LodLayout {
  * a browser view stacked over the terminal overlay and stole every tap).
  * App owns the single call over the combined node list; layers consume it.
  */
-export function useLodLayout(nodes: LodNode[], allowAutoOpen = true): LodLayout {
+export function useLodLayout(
+  nodes: LodNode[],
+  allowAutoOpen = true,
+  focusedId: string | null = null
+): LodLayout {
   const { x: vx, y: vy, zoom } = useViewport()
   const paneWidth = useStore((s) => s.width)
   const paneHeight = useStore((s) => s.height)
@@ -193,8 +251,10 @@ export function useLodLayout(nodes: LodNode[], allowAutoOpen = true): LodLayout 
 
     coverages[node.id] = coverage
     const wasActive = prevActive.current.has(node.id)
-    const threshold = wasActive ? EXIT_COVERAGE : ENTER_COVERAGE
-    if (coverage >= threshold && (settled || wasActive)) activeIds.add(node.id)
+    const pane = { width: paneWidth, height: paneHeight }
+    if (isFullViewEligible(visible, coverage, pane, wasActive) && (settled || wasActive)) {
+      activeIds.add(node.id)
+    }
   }
 
   // Exactly ONE full overlay mounts at a time — BOTH desktop and phone. Several
@@ -212,7 +272,7 @@ export function useLodLayout(nodes: LodNode[], allowAutoOpen = true): LodLayout 
   // the overview would auto-open and trap the view. The caller passes false
   // until the user taps a card (zoomToNode), so the overview never opens one.
   const winner = allowAutoOpen
-    ? pickOverlayWinner(activeIds, coverages, prevPrimary.current)
+    ? pickOverlayWinner(activeIds, coverages, prevPrimary.current, focusedId)
     : null
   if (winner === null) {
     prevActive.current = new Set()
