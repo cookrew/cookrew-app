@@ -340,6 +340,44 @@ export function createAsyncHerdrRunner(env: NodeJS.ProcessEnv): AsyncCliRunner {
     })
 }
 
+/**
+ * Wait between polls instead of spinning.
+ *
+ * Every settle loop below probes herdr by SPAWNING ITS CLI — measured at ~9ms
+ * per `herdr agent get`. Unthrottled, a 1s budget fires ~110 of those and the
+ * 12s boot-verify budget ~1300, all against the one socket the long-lived
+ * `agent attach` clients stream through. Those clients report a socket that
+ * returns EAGAIN as a hard failure:
+ *
+ *     herdr: lost connection to server: Resource temporarily unavailable (os error 35)
+ *
+ * which is what a live pane showed during a workspace switch.
+ *
+ * Atomics.wait rather than a busy Date.now() spin: these callers are
+ * synchronous by contract (attachSpawn hands argv back inline), so the sleep
+ * has to be synchronous too, and this is the one form that does not burn the
+ * main thread. Legal on Node's main thread; it would throw on a renderer's,
+ * and none of this runs there.
+ */
+const SLEEP_LATCH = new Int32Array(new SharedArrayBuffer(4))
+
+export function sleepSync(ms: number): void {
+  if (ms > 0) Atomics.wait(SLEEP_LATCH, 0, 0, ms)
+}
+
+/**
+ * Backoff schedule between herdr probes in the settle loops.
+ *
+ * Backoff rather than a flat gap, because the two cases want opposite things.
+ * The common case resolves in tens of milliseconds and should not be slowed:
+ * the first gap is short. The pathological case runs the whole budget out —
+ * that is where the storm lives, and there a fixed 25ms gap would still fire
+ * ~350 spawns across the 12s boot-verify budget. Doubling to a 100ms ceiling
+ * makes that ~120, while the first few probes stay as prompt as before.
+ */
+const POLL_MIN_MS = 10
+const POLL_MAX_MS = 100
+
 export interface HerdrHostOptions {
   /**
    * Cookrew's herdr SESSION name — the isolation boundary, and tmux's
@@ -372,6 +410,8 @@ export interface HerdrHostOptions {
   startServer?: () => void
   /** Overridable for tests; real waits are a poll against the socket. */
   waitForServerMs?: number
+  /** Gap between settle-loop probes. Injected so tests can assert throttling. */
+  sleep?: (ms: number) => void
   /**
    * How long to let a just-started server restore panes from disk, and a
    * just-restored pane spawn its shell, before acting on their absence.
@@ -435,6 +475,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
   private readonly startServer: () => void
   private readonly waitForServerMs: number
   private readonly settleMs: number
+  private readonly sleep: (ms: number) => void
   private probed: boolean | null = null
   private serverUp = false
   /** One immutable pane-list snapshot while a synchronous attach burst runs. */
@@ -471,6 +512,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
     this.startServer = options.startServer ?? (() => spawnHerdrServer(env))
     this.waitForServerMs = options.waitForServerMs ?? 5000
     this.settleMs = options.settleMs ?? 2000
+    this.sleep = options.sleep ?? sleepSync
   }
 
   /**
@@ -511,8 +553,10 @@ export class HerdrHostMultiplexer implements Multiplexer {
    */
   private waitForRestore(): void {
     const deadline = Date.now() + this.settleMs
+    const waitABeat = this.pollBackoff()
     while (Date.now() < deadline) {
       if (this.panes().length > 0) return
+      waitABeat()
     }
   }
 
@@ -1075,6 +1119,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
     //   window expires -> refuse to act; booting types into the pane, and
     //                     "I could not tell" is not a license to type
     const deadline = Date.now() + this.settleMs
+    const waitABeat = this.pollBackoff()
     for (;;) {
       const seen = this.paneRuns(pane.pane_id, expected, spec.sessionName)
       if (seen === 'agent') return false
@@ -1088,6 +1133,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
       // the positive bare-shell verdict that licenses recovery.
       if (seen === 'other' && pane.agent && pane.agent !== expected) return false
       if (Date.now() >= deadline) return false
+      waitABeat()
     }
   }
 
@@ -1171,9 +1217,11 @@ export class HerdrHostMultiplexer implements Multiplexer {
    */
   private waitForShell(paneId: string): void {
     const deadline = Date.now() + this.settleMs
+    const waitABeat = this.pollBackoff()
     while (Date.now() < deadline) {
       const probe = this.foreground(paneId)
       if (probe.ok && probe.name !== null) return
+      waitABeat()
     }
   }
 
@@ -1230,6 +1278,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // evidence the boot has not begun), a full beat apart, with ctrl+u making
     // each attempt self-cleaning.
     const deadline = Date.now() + this.settleMs * 6
+    const waitABeat = this.pollBackoff()
     type()
     let lastTypedAt = Date.now()
     for (;;) {
@@ -1240,6 +1289,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
         lastTypedAt = Date.now()
       }
       if (Date.now() >= deadline) return
+      waitABeat()
     }
   }
 
@@ -1332,8 +1382,22 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // Registration propagates asynchronously; give it a bounded moment so the
     // attach spawned right after this does not race it.
     const deadline = Date.now() + Math.min(this.settleMs, 1000)
+    const waitABeat = this.pollBackoff()
     while (Date.now() < deadline) {
       if (this.agentResolvable(paneId)) return
+      waitABeat()
+    }
+  }
+
+  /**
+   * One settle loop's worth of backoff. Call the returned function at the end
+   * of each iteration; it waits, then widens the next wait.
+   */
+  private pollBackoff(): () => void {
+    let gap = POLL_MIN_MS
+    return () => {
+      this.sleep(gap)
+      gap = Math.min(gap * 2, POLL_MAX_MS)
     }
   }
 
