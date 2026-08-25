@@ -147,7 +147,20 @@ function piSessionEntries(
           return []
         }
       })
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+      // Newest first, with a DETERMINISTIC tie-break. mtime alone is not a
+      // total order: two sessions written in the same tick carry equal mtimes,
+      // and a bare mtime sort then leaves their order to readdir — stable on
+      // APFS, arbitrary on ext4, so "adopt the newest" picked differently on
+      // macOS vs Linux CI. The session's own start time breaks the tie when
+      // present, and the id last: a pi session id is a UUIDv7, whose leading
+      // bits ARE a timestamp, so descending id is itself a recency order and is
+      // always available.
+      .sort(
+        (a, b) =>
+          b.mtimeMs - a.mtimeMs ||
+          (b.startedAtMs ?? 0) - (a.startedAtMs ?? 0) ||
+          b.id.localeCompare(a.id)
+      )
   } catch {
     return []
   }
