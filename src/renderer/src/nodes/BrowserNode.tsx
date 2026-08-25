@@ -51,7 +51,7 @@ export function BrowserNode({ data, selected }: NodeProps): React.JSX.Element {
   // Zoomed OUT: a tile, not a shrunken card. The browser used to render its
   // whole chrome at the overview — header, url chip, resizer and a body whose
   // thumbnail is deliberately dropped at this size — so it occupied a card's
-  // worth of canvas to show an empty rectangle. One row of glyph + name says
+  // worth of canvas to show an empty rectangle. The centred, wrapped name says
   // the only thing that is legible out here anyway: which page this is.
   if (mode === 'mini') {
     return (

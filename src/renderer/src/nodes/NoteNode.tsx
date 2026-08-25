@@ -78,11 +78,11 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
       >
         <NodeHandles />
         <CardPick id={node.id} />
-        {/* The TILE grammar, not a shrunken card: one centred row of glyph +
-            name, the way a terminal tile reads. The header bar and the empty
-            body below it were card chrome rendered at a size nobody can use —
-            a 2px rule and a note-coloured void that said nothing about which
-            note this was. */}
+        {/* The TILE grammar, not a shrunken card: the name centred and wrapped
+            across the tile, the way a terminal tile reads. The header bar and
+            the empty body below it were card chrome rendered at a size nobody
+            can use — a 2px rule and a note-coloured void that said nothing
+            about which note this was. */}
         <div className="node-mini">
           <span className="node-title">{node.name}</span>
         </div>
