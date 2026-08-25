@@ -1,7 +1,7 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { confinedSpawn, seatbeltProfile, serviceRoot } from './session-sandbox'
-import { sessionEnv } from './session-env'
+import { grantable, sessionEnv } from './session-env'
 
 /**
  * SCRUBBED-ENV-AT-SPAWN — the seam slice 1 built its primitives for.
@@ -24,6 +24,13 @@ import { sessionEnv } from './session-env'
  * file, which `sandbox-exec -f` reads. That write is injected so the transform
  * is tested without disk, and it lands INSIDE the sandbox so END removes it with
  * everything else.
+ *
+ * THE INTEGRATION MUST MERGE, NOT REPLACE — AND IN THE RIGHT DIRECTION. The
+ * returned `env` is an allowlist, so it omits the pane's own infrastructure
+ * (`COOKREW_SOCKET`, `COOKREW_CLI`) that the in-pane CLI needs. `pty.ts` re-adds
+ * those AFTER the scrub, as EXPLICIT keys: `{ ...servedSpawn.env, COOKREW_SOCKET,
+ * COOKREW_CLI, ... }`. It must never spread `process.env` back over this — that
+ * would pour the owner's environment back through the hole this just closed.
  */
 
 /** A terminal's spawn as the pty layer would run it, before confinement. */
@@ -57,9 +64,23 @@ export interface ServedSpawn {
 /** Writes the profile `sandbox-exec -f` will read. Injected for testability. */
 export type ProfileWriter = (profilePath: string, profile: string) => void
 
+/** Per-process write sequence, so two spawns never share a temp path. */
+let writeSeq = 0
+
+/**
+ * Write the profile ATOMICALLY — temp file then rename. Two terminals in one
+ * session share a sandbox and so a profile path; a plain truncate-then-write
+ * lets the second's `sandbox-exec -f` read a half-written file mid-write. The
+ * content is deterministic in {sandbox, siblingRoot}, so both writers produce
+ * identical bytes and the rename just makes the swap indivisible: a reader sees
+ * a whole old profile or a whole new one, never a torn one that would fail to
+ * parse and flake the spawn.
+ */
 const defaultWriter: ProfileWriter = (profilePath, profile) => {
   mkdirSync(path.dirname(profilePath), { recursive: true })
-  writeFileSync(profilePath, profile, { mode: 0o600 })
+  const tmp = `${profilePath}.${writeSeq++}.tmp`
+  writeFileSync(tmp, profile, { mode: 0o600 })
+  renameSync(tmp, profilePath)
 }
 
 /**
@@ -77,17 +98,27 @@ export function servedSpawn(
 ): ServedSpawn {
   const siblingRoot = serviceRoot(ctx.base, ctx.serviceId)
   const profile = seatbeltProfile({ sandbox: ctx.sandbox, siblingRoot })
-  // Inside the sandbox, so END's cleanup removes it. Named per session so two
-  // sessions never share a profile file.
+  // Inside the sandbox (so END's cleanup removes it); the per-session SANDBOX
+  // dir is what keeps two sessions' profiles apart, not this constant filename.
+  // REWRITTEN EVERY SPAWN, and that is load-bearing: the confined agent can
+  // write inside its own sandbox, so it can overwrite this file — harmless while
+  // running (sandbox-exec reads it once at exec) but it means any resume MUST
+  // re-derive the profile through here, never trust an existing session.sb.
   const profilePath = path.join(ctx.sandbox, '.cookrew', 'session.sb')
   writeProfile(profilePath, profile)
 
   const wrapped = confinedSpawn(profilePath, raw.file, raw.args)
+  // Filter the granted names through `grantable` HERE, not only upstream: the
+  // grant loop in sessionEnv runs AFTER HOME/TMPDIR are set, so a granted HOME
+  // or PATH would overwrite the sandbox scrub — the exact confinement this seam
+  // exists to guarantee. A seam whose job is "holds nothing it wasn't given"
+  // cannot depend on an unstated upstream check.
+  const grantedKeys = (ctx.grantedKeys ?? []).filter(grantable)
   const env = sessionEnv({
     parent: ctx.ownerEnv,
     sandbox: ctx.sandbox,
     sessionId: ctx.sessionId,
-    grantedKeys: ctx.grantedKeys
+    grantedKeys
   })
   return { file: wrapped.file, args: wrapped.args, env, profilePath }
 }

@@ -64,6 +64,19 @@ describe('servedSpawn — the env is scrubbed', () => {
     expect(out.env.ANTHROPIC_API_KEY).toBeUndefined()
   })
 
+  it('refuses a granted name that would override the scrub (HOME/PATH/TMPDIR)', () => {
+    // The grant loop runs after HOME is set, so a granted HOME would point at
+    // the owner's real home — reopening ~/.ssh, ~/.aws, ~/.cookrew. grantable()
+    // must filter it out here, not rely on an upstream check.
+    const out = servedSpawn(
+      { file: 'sh', args: [] },
+      ctx({ ownerEnv: { HOME: '/Users/owner', LENT: 'yes' }, grantedKeys: ['HOME', 'LENT'] }),
+      () => undefined
+    )
+    expect(out.env.HOME).toBe('/base/sessions/svc/svc-ana-1') // sandbox, not owner home
+    expect(out.env.LENT).toBe('yes') // a legitimate grant still lands
+  })
+
   it('a session with no granted keys gets no owner credentials at all', () => {
     const out = servedSpawn({ file: 'sh', args: [] }, ctx({ grantedKeys: [] }), () => undefined)
     expect(out.env.LENT).toBeUndefined()
