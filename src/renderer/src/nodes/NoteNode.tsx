@@ -4,7 +4,7 @@ import { NodeHandles } from './NodeHandles'
 import { CardClose } from './CardClose'
 import { CardPick } from './CardPick'
 import { renderNoteMarkdown } from '../note-markdown'
-import { cardZoomMode } from './card-zoom'
+import { cardTypeScale, cardZoomMode } from './card-zoom'
 import type { NoteNodeData } from '../../../shared/model'
 import { cookrew } from '../api'
 import { useCanvasUi } from '../canvas-ui'
@@ -14,6 +14,11 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
   const { tool, clipping, zoomToNode, picked, togglePick } = useCanvasUi()
   // Quantized zoom bucket — only flips crossing MINI_ZOOM.
   const mode = useStore((s) => cardZoomMode(s.transform[2]))
+  // The mini tile's title must survive the zoom that produced it. Type here is
+  // a flat 10px (.node-title), so at a 0.2 canvas it renders at two physical
+  // pixels — a tile whose whole job is to say WHICH note this is, saying
+  // nothing. The terminal tile has always counter-scaled; notes never did.
+  const invZoom = useStore((s) => cardTypeScale(s.transform[2]))
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.content)
   // Single click zooms the note to the stage after a beat; a double click
@@ -68,6 +73,7 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
     return (
       <div
         className={`node note-node mini${selected ? ' selected' : ''}${clipping && picked.has(node.id) ? ' picked' : ''}`}
+        style={{ ['--z' as string]: String(invZoom) }}
         onClick={onBodyClick}
       >
         <NodeHandles />

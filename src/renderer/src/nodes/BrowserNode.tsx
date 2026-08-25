@@ -8,7 +8,7 @@ import type { BrowserNodeData } from '../../../shared/model'
 import { browserTabs } from '../../../shared/model'
 import { useCanvasUi } from '../canvas-ui'
 import { useThumb } from '../activity-thumb-store'
-import { cardZoomMode } from './card-zoom'
+import { cardTypeScale, cardZoomMode } from './card-zoom'
 
 /**
  * Summary card for a browser, with a legacy thumbnail when one is available.
@@ -27,6 +27,11 @@ export function BrowserNode({ data, selected }: NodeProps): React.JSX.Element {
   const storedThumb = useThumb(node.id)
   // Quantized zoom bucket (only flips crossing MINI_ZOOM, so it doesn't churn).
   const mode = useStore((s) => cardZoomMode(s.transform[2]))
+  // Same counter-scale the terminal tile uses. A browser card keeps its full
+  // chrome at every zoom — only the thumbnail drops at mini — so its title is
+  // the only thing identifying it out there, and a flat 10px against a 0.2
+  // canvas is two physical pixels of nothing.
+  const invZoom = useStore((s) => cardTypeScale(s.transform[2]))
   // A zoomed-OUT (mini) tile does not decode its thumbnail. This is the mobile
   // OOM fix: at fit-to-view a phone shows every browser at once, and 41 decoded
   // image bitmaps held simultaneously crashes iOS Safari's WebContent. Off at
@@ -44,7 +49,10 @@ export function BrowserNode({ data, selected }: NodeProps): React.JSX.Element {
   }
 
   return (
-    <div className={`node browser-node${selected ? ' selected' : ''}${clipping && picked.has(node.id) ? ' picked' : ''}`}>
+    <div
+      className={`node browser-node${mode === 'mini' ? ' mini' : ''}${selected ? ' selected' : ''}${clipping && picked.has(node.id) ? ' picked' : ''}`}
+      style={{ ['--z' as string]: String(invZoom) }}
+    >
       <NodeResizer isVisible={selected} minWidth={220} minHeight={160} />
       <NodeHandles />
       <CardPick id={node.id} />

@@ -1102,6 +1102,23 @@ a.cr-btn {
   flex: 0 0 auto;
 }
 
+/* MINI TILES KEEP THEIR NAME READABLE.
+ *
+ * .node-title is a flat 10px, which is right on a card you are reading and
+ * useless on a tile you are scanning: at a 0.2 canvas it renders at two
+ * physical pixels. The terminal tile has always counter-scaled its name
+ * (.vi-mini-name below); notes and browsers rendered a title nobody could see,
+ * so a zoomed-out board showed WHERE things were and never WHICH they were.
+ *
+ * Scoped to .mini so the full card keeps its designed 10px — the inverse
+ * scale is a legibility fix for the degraded tile, not a type change. --z
+ * defaults to 1, so any card that does not publish the zoom is unaffected.
+ */
+.node.mini .node-title {
+  font-size: calc(10px * var(--z, 1));
+  letter-spacing: calc(0.06em * var(--z, 1));
+}
+
 .node-title {
   font-family: var(--font-pixel);
   font-size: 10px;
