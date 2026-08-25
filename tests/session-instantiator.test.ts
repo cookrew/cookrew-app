@@ -19,7 +19,7 @@ class FakeTemplates {
   version = 1
   pinAddress = 'sha256:v1'
   read(serviceId: string): ResolvedTemplate {
-    return { snapshot: { serviceId }, version: this.version, pinAddress: this.pinAddress }
+    return { templateId: `tmpl-${serviceId}`, version: this.version, pinAddress: this.pinAddress }
   }
   bumpTo(version: number, pinAddress: string): void {
     this.version = version
@@ -47,7 +47,11 @@ class FakeMinter {
     this.release?.()
     this.gate = null
   }
-  async mint(input: { identity: SessionIdentity; template: ResolvedTemplate }): Promise<string> {
+  async mint(input: {
+    serviceId: string
+    identity: SessionIdentity
+    template: ResolvedTemplate
+  }): Promise<string> {
     if (this.failNext) {
       this.failNext = false
       throw new Error('mint failed')
@@ -69,12 +73,12 @@ class FakeRoute {
 class FakeEnder {
   readonly order: string[] = []
   stopped = 2
-  cut(sessionId: string): number {
-    this.order.push(`cut:${sessionId}`)
+  cut(target: { sessionId: string; workspaceId: string; serviceId: string }): number {
+    this.order.push(`cut:${target.sessionId}`)
     return this.stopped
   }
-  cleanup(input: { workspaceId: string; sessionId: string }): void {
-    this.order.push(`cleanup:${input.sessionId}`)
+  cleanup(target: { sessionId: string; workspaceId: string; serviceId: string }): void {
+    this.order.push(`cleanup:${target.sessionId}`)
   }
 }
 

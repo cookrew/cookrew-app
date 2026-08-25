@@ -31,8 +31,12 @@ import { nextOrdinal, sessionIdentity, type SessionIdentity } from './session-id
  * the pin is read ONCE so the version cannot shift under a running session.
  */
 export interface ResolvedTemplate {
-  /** The team snapshot copyTeam will materialise. Opaque here; the Minter uses it. */
-  snapshot: unknown
+  /**
+   * The saved-team id the mint engine forks from (`forkTeam`'s `fromSavedTeam`).
+   * Resolved from the service's LOCAL cache — the crew runs on this machine, so
+   * this names bytes this machine actually holds (design S1b).
+   */
+  templateId: string
   /** The version LABEL the owner reads on the rail and the Sessions table. */
   version: number
   /**
@@ -77,12 +81,28 @@ export interface SessionRecord {
  * an async path, so the admission that mints for them is async too.
  */
 export interface Minter {
-  mint(input: { identity: SessionIdentity; template: ResolvedTemplate }): Promise<string>
+  mint(input: {
+    serviceId: string
+    identity: SessionIdentity
+    template: ResolvedTemplate
+  }): Promise<string>
 }
 
 /** Only the orch answers (design S5). Null when the session has no conductor. */
 export interface ConductorRoute {
   conductorOf(workspaceId: string): string | null
+}
+
+/**
+ * What END needs to identify a session to the subsystems it cuts. The workspace
+ * is what `CallsInFlight.cancelWhere` matches on; the service and session ids
+ * are what the sandbox path is built from. Passing the trio rather than a bare
+ * id is why the Ender adapter can be pure plumbing.
+ */
+export interface EndTarget {
+  sessionId: string
+  workspaceId: string
+  serviceId: string
 }
 
 /**
@@ -93,8 +113,8 @@ export interface ConductorRoute {
  * running agent is how a stop becomes a crash.
  */
 export interface Ender {
-  cut(sessionId: string): number
-  cleanup(input: { workspaceId: string; sessionId: string }): void
+  cut(target: EndTarget): number
+  cleanup(target: EndTarget): void
 }
 
 export interface InstantiatorDeps {
@@ -217,9 +237,15 @@ export class SessionInstantiator {
     const record = this.openById.get(sessionId)
     if (!record) return { stopped: 0 }
 
+    const target: EndTarget = {
+      sessionId,
+      workspaceId: record.workspaceId,
+      serviceId: record.serviceId
+    }
+
     // Cut before cleanup — a running agent must be stopped before its sandbox
     // is removed, or the removal races the process still writing into it.
-    const stopped = this.deps.ender.cut(sessionId)
+    const stopped = this.deps.ender.cut(target)
 
     // Forget it. A concurrent admit for the same account now reuses another OPEN
     // session for that account if one exists (startNew's second session), or
@@ -227,7 +253,7 @@ export class SessionInstantiator {
     // one session cannot strand another. The ordinal stays used.
     this.openById.delete(sessionId)
 
-    this.deps.ender.cleanup({ workspaceId: record.workspaceId, sessionId })
+    this.deps.ender.cleanup(target)
     return { stopped }
   }
 
@@ -270,7 +296,7 @@ export class SessionInstantiator {
     const template = this.deps.templates.read(serviceId)
     let workspaceId: string
     try {
-      workspaceId = await this.deps.minter.mint({ identity, template })
+      workspaceId = await this.deps.minter.mint({ serviceId, identity, template })
     } catch (err) {
       this.usedOrdinals.set(
         key,
