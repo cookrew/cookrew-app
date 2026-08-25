@@ -23,12 +23,19 @@ import { renderMobileHelp, renderRotated } from './mobile-cli-text'
 import { readProxyConfig, tailnetProxyGaps } from './proxy-bypass'
 import { AgentRegistry, AgentRegistryEntry } from './agent-registry'
 import { planRecruitTarget } from '../shared/workspace-dirs'
-import { PtyManager } from './pty'
+import { PtyManager, multiplexer, sessionNameFor, type PtySession } from './pty'
 import { askRaw, askTerminal, decodeRawEscapes } from './ask'
+import {
+  DeliveryError,
+  deliverAndConfirm,
+  replyText,
+  terminalDeliveryDeps
+} from './ask-delivery'
 import { PRESETS } from './presets'
 import { RoutineScheduler, parseInterval } from './routines'
 import type { VoiceEngine } from './voice'
 import type { TurnTracker } from './turn-tracker'
+import type { DispatchService } from './dispatch'
 
 export interface SocketServerDeps {
   store: WorkspaceStore
@@ -37,6 +44,13 @@ export interface SocketServerDeps {
   spawnTerminal: (t: { id: string; command: string; cwd: string }) => void
   /** Turn history source for `cookrew fork` validation/output. */
   turns: TurnTracker
+  /**
+   * The attach-free dispatch engine, for `ask --no-wait` and `cookrew
+   * dispatch <id>`. Optional so embedders and tests construct the socket
+   * server without one; absent, --no-wait refuses honestly rather than
+   * silently falling back to a blocking ask the caller did not ask for.
+   */
+  dispatch?: DispatchService
   /** Durable global agent directory (~/.cookrew/agents.json). */
   agents: AgentRegistry
   /** Fork an agent from one of its turns (same path as IPC forking). */
@@ -130,7 +144,11 @@ async function handleLine(
     respond(socket, {
       id: request.id,
       ok: false,
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error ? error.message : String(error),
+      // Per-outcome exit code (delivery contract): a shell caller's next
+      // action differs per outcome, so collapsing every failure to 1 would
+      // rebuild the ambiguity one layer down.
+      ...(error instanceof DeliveryError ? { exitCode: error.exitCode } : {})
     })
   }
 }
@@ -187,6 +205,10 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
       return cmdAsk(request, deps)
     case 'check':
       return cmdCheck(request, deps)
+    case 'status':
+      return cmdStatus(request, deps)
+    case 'dispatch':
+      return cmdDispatch(request, deps)
     case 'note':
       return cmdNote(request, deps)
     case 'connect':
@@ -298,7 +320,7 @@ function terminalFromRegistry(entry: AgentRegistryEntry): TerminalNodeData {
 function connectedOf(store: WorkspaceStore, id: string): WorkspaceNodeHit[] {
   return (
     store.connectedToAcross?.(id) ??
-    store.connectedTo(id).map((node) => ({ node, workspaceId: store.activeId }))
+    store.connectedTo(id).map((node) => ({ node, workspaceId: store.ownerOf(id) ?? store.focusedId }))
   )
 }
 
@@ -344,6 +366,42 @@ export function resolveSelf(
     )
   }
   throw new Error('This shell is not attached to a Cookrew terminal node')
+}
+
+/**
+ * The workspace a CLI command is ABOUT: the one owning the pane it came from.
+ *
+ * Every `cookrew` invocation arrives from inside a terminal, and that terminal
+ * already knows which workspace it lives in — so the CLI never has to consult
+ * what a desktop happens to be showing. This is what lets one global CLI socket
+ * serve N concurrent workspace sessions (marketplace-architecture §11): scope
+ * travels with the caller, not with focus.
+ *
+ * Falls back to focus only when the caller cannot be placed at all — a shell
+ * invoking `cookrew --as "Name"` against a registry entry whose node is gone.
+ */
+export function callerWorkspaceId(request: CliRequest, deps: SocketServerDeps): string {
+  return deps.store.ownerOf(self(request, deps).id) ?? deps.store.focusedId
+}
+
+/**
+ * callerWorkspaceId for commands that must still work WITHOUT a caller.
+ *
+ * self() throws 'not attached to a Cookrew terminal' for a plain shell, which
+ * is right for identity-scoped commands (ask, fork, recruit) and wrong for
+ * commands that merely prefer the caller's scope. `cookrew workspace dir list`
+ * from a normal terminal is a legitimate invocation and used to work; making
+ * scope resolution throw would have regressed it.
+ */
+export function tryCallerWorkspaceId(
+  request: CliRequest,
+  deps: SocketServerDeps
+): string | undefined {
+  try {
+    return deps.store.ownerOf(self(request, deps).id)
+  } catch {
+    return undefined
+  }
 }
 
 function requireOrch(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
@@ -413,7 +471,14 @@ export function browserWorkspaceError(scope: {
 
 export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const me = self(request, deps)
-  const activeId = deps.store.activeId
+  // DELIBERATELY focus, not the caller's workspace. Everything below resolves
+  // through focused-scoped lookups (node/nodeByName) and browserCommand drives
+  // the engine this process actually booted, so `active` here means "where a
+  // browser can be driven", which is boot scope — the same question
+  // bootsTerminalsFor() names in index.ts. Scoping it to the caller would emit
+  // error messages that contradict what the engine then does. It converts when
+  // the browser runtime is scoped per session, not before.
+  const activeId = deps.store.focusedId
   const active = { id: activeId, name: workspaceName(deps, activeId) }
   const [sub, name] = request.args
 
@@ -464,7 +529,10 @@ function workspaceName(deps: SocketServerDeps, id: string): string {
 function cmdList(request: CliRequest, deps: SocketServerDeps): string {
   if (request.flags.all) return cmdListAll(deps)
   const me = self(request, deps)
-  const activeId = deps.store.activeId
+  // Relative to where the CALLER lives. An agent in workspace B asking what it
+  // is connected to must be told "[workspace: X]" against B — its own canvas —
+  // not against whichever workspace a desktop somewhere is displaying.
+  const activeId = deps.store.ownerOf(me.id) ?? deps.store.focusedId
   const wsName = (id: string): string =>
     deps.listWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id
   const connected = connectedOf(deps.store, me.id)
@@ -509,7 +577,7 @@ function cmdList(request: CliRequest, deps: SocketServerDeps): string {
 function cmdListAll(deps: SocketServerDeps): string {
   const entries = deps.agents.list()
   if (entries.length === 0) return 'No agents recorded yet (the registry fills as agents spawn).'
-  const activeId = deps.store.activeId
+  const activeId = deps.store.focusedId
   const byWorkspace = new Map<string, AgentRegistryEntry[]>()
   for (const e of entries) {
     byWorkspace.set(e.workspaceId, [...(byWorkspace.get(e.workspaceId) ?? []), e])
@@ -548,13 +616,148 @@ async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<stri
     return askRaw(session, decodeRawEscapes(String(request.flags.raw)))
   }
   if (!prompt) throw new Error('Missing prompt')
-  const reply = await askTerminal(session, prompt)
+  // No armed-dispatch check here, on purpose (Sol r5 P0-1): a route-level
+  // refusal would only be a fast path with a check-to-submit race behind it.
+  // The load-bearing serialization lives at the submit site — askTerminal
+  // acquires the per-terminal producer lease (Sol r6 P0-1) and holds it
+  // through submission acknowledgement: an armed dispatch is durably
+  // preempted, a dispatch DELIVERING right now is preempted-then-displaced,
+  // and a second concurrent owner ask throws 'another owner submission is in
+  // flight' — surfaced to the CLI caller as this command's error.
+  // --no-wait: hand back a DISPATCH ID instead of blocking.
+  //
+  // The id is the correlation, and that is the whole point. A caller that
+  // waits for "the next turn.completed" matches whatever finishes next —
+  // including the PREVIOUS round's turn replayed by the event stream on
+  // connect, which is how an all-quiet gets declared over agents that never
+  // started. A dispatch id did not exist when the previous turn ended, so it
+  // cannot match it. Correct by construction rather than by careful timing.
+  if (request.flags['no-wait']) {
+    if (!deps.dispatch) throw new Error('--no-wait needs the dispatch engine, which is not wired')
+    const result = await deps.dispatch.dispatch(target.id, { text: prompt })
+    const body = result.body as { dispatchId?: string; error?: string }
+    if (result.status !== 202 || !body.dispatchId) {
+      throw new Error(body.error ?? `dispatch refused (${result.status})`)
+    }
+    return `${body.dispatchId}\n(started — await it with: cookrew dispatch ${body.dispatchId})`
+  }
+
+  // Same verified path the phone uses — the order lives in deliverAndConfirm.
+  const { reply, submitRetries } = await deliverAndConfirm({
+    terminalId: target.id,
+    agentName: target.name,
+    prompt,
+    deliver: () => askTerminal(session, prompt),
+    observe: terminalDeliveryDeps(deps.turns, (data) => session.write(data))
+  })
+
   if (deps.voice.enabled) {
     deps.voice.speakReply(target.name, reply).catch((error) => {
       console.error('Voice reply failed:', error)
     })
   }
-  return reply
+  return replyText(reply, submitRetries)
+}
+
+
+
+/**
+ * The truthful busy/idle fact — from the TURN TRACKER, never herdr.
+ *
+ * herdr's agent_status is a per-pane detector and it flaps: measured stuck at
+ * `idle` under a live 48-second spinner, and the owner watched it report idle
+ * for six actively-working agents. A status that is wrong in the direction of
+ * "done" is the worst one to build an orchestrator on, because the orchestrator
+ * then dispatches into a busy agent or declares an all-quiet that is not.
+ *
+ * The tracker already knows, and its four phases carry a distinction nothing
+ * surfaced before: `replied` means the turn ENDED and nobody has looked at it.
+ * An agent that answered with a plan and stopped is in `replied`, not `idle`
+ * and not `thinking` — which is exactly the state that "looks identical to
+ * still working" from the outside. Every continuation needs a fresh dispatch,
+ * and this is the fact that says so.
+ *
+ * THE LIMIT, STATED: this cannot see a WEDGED pane. A pane that has stopped
+ * reading input produces no output, so the tracker sees quiescence and reports
+ * `idle` — which is exactly how a wedge masquerades as an idle agent and a
+ * lane stops silently for an hour. A wedge is only provable RELATIVE TO A
+ * WRITE (bytes in, nothing painted), so it is detected on the delivery path
+ * and surfaced there as `unresponsive`. Reading `idle` here means "no turn is
+ * running", never "this agent is healthy and available".
+ */
+function cmdStatus(request: CliRequest, deps: SocketServerDeps): string {
+  const [name] = request.args
+  const activities = deps.turns.list()
+  const rows = name
+    ? activities.filter(
+        (entry) =>
+          entry.terminalId === (findConnected(request, deps, name, 'terminal') as TerminalNodeData).id
+      )
+    : activities
+
+  if (rows.length === 0) {
+    // No tracker entry is NOT idle — it is no view at all (a detached pane, a
+    // dormant workspace). Saying "idle" here would be the same lie the
+    // delivery contract refuses: our blindness reported as their state.
+    return name
+      ? `${name}: unverifiable — not tracked in this workspace (detached or dormant); no busy/idle fact available`
+      : 'No tracked terminals in this workspace.'
+  }
+
+  return rows
+    .map((entry) => {
+      const label = deps.store.node(entry.terminalId)?.name ?? entry.terminalId.slice(0, 8)
+      const meaning: Record<string, string> = {
+        thinking: 'working',
+        waiting: 'BLOCKED on a human',
+        replied: 'turn ENDED, unread — a continuation needs a fresh dispatch',
+        idle: 'idle'
+      }
+      const since =
+        entry.turnStartedAt !== null && entry.turnStartedAt !== undefined
+          ? ` (${Math.round((Date.now() - entry.turnStartedAt) / 1000)}s)`
+          : ''
+      return `${label}: ${entry.phase} — ${meaning[entry.phase] ?? entry.phase}${since} · ${entry.turnCount} turns`
+    })
+    .join('\n')
+}
+
+/**
+ * `cookrew dispatch <id>` — what became of THAT dispatch.
+ *
+ * Correlated by identity, never by time. The record walks submitted → running
+ * → done{turnIndex, reply} | failed | interrupted, so a caller polls one id
+ * and can never be handed a different turn's completion. This is the
+ * side-step for the SSE replay trap rather than a documentation of it: the
+ * event stream replays history on connect, so a watcher started AFTER a
+ * dispatch matches the previous round and fires instantly-false.
+ */
+function cmdDispatch(request: CliRequest, deps: SocketServerDeps): string {
+  const [dispatchId] = request.args
+  if (!dispatchId) throw new Error('Usage: cookrew dispatch <dispatchId>')
+  if (!deps.dispatch) throw new Error('The dispatch engine is not wired')
+  const result = deps.dispatch.lookup(dispatchId)
+  if (result.status !== 200) {
+    throw new Error((result.body as { error?: string }).error ?? 'no such dispatch')
+  }
+  const record = result.body as {
+    state: string
+    agentName?: string
+    turnIndex?: number
+    error?: string
+    hasReply?: boolean
+  }
+  const lines = [`${record.agentName ?? dispatchId}: ${record.state}`]
+  if (record.turnIndex !== undefined) lines.push(`turn ${record.turnIndex}`)
+  if (record.hasReply) lines.push('reply recorded')
+  if (record.error) lines.push(record.error)
+  // A dispatch that ENDED without completing must not exit 0 — the same rule
+  // the ask verb follows. `interrupted` is deliberately not `failed`: the work
+  // may well have happened, we simply stopped being able to see it.
+  if (record.state === 'failed' || record.state === 'interrupted') {
+    throw new DeliveryError('unverifiable', record.agentName ?? dispatchId)
+  }
+  return lines.join(' · ')
 }
 
 function cmdCheck(request: CliRequest, deps: SocketServerDeps): string {
@@ -700,8 +903,9 @@ function cmdRecruit(request: CliRequest, deps: SocketServerDeps): string {
   if (plan.autoAddDir) {
     lines.push(`Added ${plan.autoAddDir} to workspace "${home.name}" (no workspace owned it)`)
   }
-  // Layer 4 guard: never let a recruit land somewhere else silently.
-  if (plan.workspaceId !== deps.store.activeId) {
+  // Layer 4 guard: never let a recruit land somewhere else silently. Measured
+  // against the ORCH's own workspace — it is the one being surprised.
+  if (plan.workspaceId !== (deps.store.ownerOf(me.id) ?? deps.store.focusedId)) {
     lines.push(
       `⚠ "${added.name}" lives in workspace "${wsName(plan.workspaceId)}", not the active one — switch with: cookrew workspace switch "${wsName(plan.workspaceId)}"`
     )
@@ -813,10 +1017,14 @@ async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promis
   }
 }
 
-/** Directory subcommands operate on the ACTIVE workspace. */
+/** Directory subcommands operate on the CALLER's workspace. */
 function cmdWorkspaceDir(request: CliRequest, deps: SocketServerDeps): string {
   const [, action, dirPath] = request.args
-  const { activeId } = deps.listWorkspaces()
+  // An agent enrolling a directory means ITS workspace. Reading this from focus
+  // meant a command run in one workspace could silently edit another's dirs the
+  // moment a second seat looked elsewhere. A plain shell has no workspace of
+  // its own, so it keeps the old behaviour rather than being refused.
+  const activeId = tryCallerWorkspaceId(request, deps) ?? deps.listWorkspaces().activeId
   if (action === 'list' || action === undefined) {
     const ws = deps.listWorkspaces().workspaces.find((w) => w.id === activeId)
     return (ws?.dirs ?? [])
@@ -967,9 +1175,12 @@ async function cmdTeam(request: CliRequest, deps: SocketServerDeps): Promise<str
       // canvas ids never match snapshot node ids (BUG 1).
       requireOrch(request, deps)
       const fromSavedTeam = request.flags.from ? String(request.flags.from) : undefined
+      const forkFrom = callerWorkspaceId(request, deps)
       const spec: TeamForkSpec = {
         name: request.flags.name ? String(request.flags.name) : undefined,
-        nodeIds: fromSavedTeam ? [] : deps.store.state.nodes.map((n) => n.id),
+        // Both halves from the SAME workspace: ids and the canvas they index.
+        nodeIds: fromSavedTeam ? [] : deps.store.workspaceState(forkFrom).nodes.map((n) => n.id),
+        fromWorkspaceId: fromSavedTeam ? undefined : forkFrom,
         choices: [],
         fromSavedTeam
       }
@@ -1032,6 +1243,11 @@ Usage:
   cookrew ask "Agent" "prompt"                  Send a prompt to a connected agent, wait for the reply
   cookrew ask "Agent" --raw "bytes"             Send raw input (\\n Enter, \\t Tab, \\e ESC, \\xNN byte)
   cookrew check "Agent"                         Read the agent's current terminal output
+  cookrew ask "Agent" "prompt" --no-wait        Dispatch without blocking; prints a dispatchId
+  cookrew dispatch <dispatchId>                 What became of THAT dispatch (id-correlated)
+  cookrew status ["Agent"]                      Busy/idle from the TURN TRACKER, not herdr:
+                                                thinking | waiting (blocked on you) | replied
+                                                (turn ENDED, needs a fresh dispatch) | idle
   cookrew note create ["content"]               Create a connected note on the canvas
   cookrew note read "Name" [offset] [limit]     Read a note with line numbers
   cookrew note write "Name" "content"           Replace a note's content

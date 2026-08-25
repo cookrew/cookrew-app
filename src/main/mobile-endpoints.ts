@@ -9,7 +9,7 @@
 // This module classifies, de-duplicates and ORDERS them; it decides nothing
 // about auth and opens no sockets.
 
-import { isTailnetAddress, type TailnetIdentity } from './tailscale'
+import { isTailnetAddress, type CertHosts, type TailnetIdentity } from './tailscale'
 import { MOBILE_PORT, MOBILE_HTTPS_PORT } from './mobile-ports'
 
 export type EndpointKind = 'tailscale' | 'lan' | 'other' | 'loopback'
@@ -121,4 +121,38 @@ export function mobileEndpoints(input: EndpointInput): MobileEndpoint[] {
 
   if (endpoints.length === 0) add('localhost', 'loopback')
   return endpoints
+}
+
+/** IPv4 dotted-quad or IPv6 literal; anything else is a name. */
+function isIpLiteral(host: string): boolean {
+  return host.includes(':') || octets(host) !== null
+}
+
+/**
+ * The cert hosts implied by a set of advertised endpoints.
+ *
+ * The cert and the URL list must be derived from ONE source, because a host in
+ * one and not the other is a URL that loads with a warning the phone cannot
+ * wave away — or a cert that churns for no reason.
+ *
+ * Feeding the cert from `os.networkInterfaces()` instead did both. It put
+ * addresses we never advertise into the SAN list (169.254 link-local, the
+ * 198.18 fake-ip a proxy's TUN hands out), and those come and go with every
+ * VPN toggle and VM launch. Each appearance reissued the certificate, which
+ * means every paired phone and the TV wall had to accept a new self-signed
+ * cert again — and each reissue was another chance to write one without the
+ * tailnet SAN (see certPlan).
+ *
+ * Loopback is excluded: ensureCert always emits localhost/127.0.0.1, and the
+ * loopback endpoint only exists as the no-addresses fallback anyway.
+ */
+export function endpointCertHosts(endpoints: readonly MobileEndpoint[]): CertHosts {
+  const ips: string[] = []
+  const dnsNames: string[] = []
+  for (const endpoint of endpoints) {
+    if (endpoint.kind === 'loopback') continue
+    if (isIpLiteral(endpoint.host)) ips.push(endpoint.host)
+    else dnsNames.push(endpoint.host)
+  }
+  return { ips, dnsNames }
 }

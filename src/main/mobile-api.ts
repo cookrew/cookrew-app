@@ -2,6 +2,7 @@ import type http from "node:http";
 import type { WorkspaceStore } from "./store";
 import type { PtyManager } from "./pty";
 import type { TurnTracker } from "./turn-tracker";
+import type { DispatchService } from "./dispatch";
 import type { EventLog, CookrewEvent, EventQuery } from "./event-log";
 import { pageTurns } from "../shared/turn";
 import type { AgentRegistry } from "./agent-registry";
@@ -28,7 +29,9 @@ import type {
   RecoverResult,
   RestoreResult,
 } from "../shared/model";
-import { readJson, respondJson, startSse, pairingAuthorized } from "./mobile-http";
+import { readBytes, readJson, respondJson, startSse, pairingAuthorized } from "./mobile-http";
+import { ownerSubmit } from "./ask";
+import { MAX_ATTACHMENT_BYTES } from "./attachments";
 
 /**
  * Workspace operations shared with the renderer IPC handlers — the mobile
@@ -45,8 +48,8 @@ export interface MobileOps {
   createTerminal: (opts: {
     name: string;
     preset: string;
-    position: { x: number; y: number };
-    orch: boolean;
+    position?: { x: number; y: number };
+    orch?: boolean;
     roleName?: string;
   }) => CanvasNode;
   forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData;
@@ -87,8 +90,27 @@ export interface MobileOps {
 
 export interface MobileApiDeps {
   store: WorkspaceStore;
+  /**
+   * The workspace this request is FOR — a resolved slug, or null at the
+   * unslugged root where the focused session answers as it always has.
+   */
+  scope?: string | null;
   ptys: PtyManager;
   turns: TurnTracker;
+  /**
+   * The LATEST checkpoint for a card, from a bounded tail read of the session
+   * file — no PTY (trace-perf-architecture T1). Lets the phone canvas show an
+   * idle agent's last turn without opening a mirror, matching the desktop card.
+   * Optional so this module serves before it is wired.
+   */
+  latestCheckpoint?: (
+    terminalId: string,
+  ) => Promise<{ prompt: string; reply: string; title?: string } | null>;
+  /**
+   * Cold-boot wait window for a stream open (acquireViewWhenReady). Omitted in
+   * production (defaults ~2s in 50ms steps); tests shrink it for determinism.
+   */
+  viewReady?: { attempts?: number; stepMs?: number };
   /** Observability event log (query/count) — spec observability-event-log-spec. */
   events: EventLog;
   /** Durable agent roster cache (~/.cookrew/agents.json). */
@@ -124,10 +146,38 @@ export interface MobileApiDeps {
    * unauthenticated (loopback-only embedders, tests).
    */
   pairingToken?: string;
+  /**
+   * Attach-free dispatch engine (v4 §3). Optional so this module compiles and
+   * serves before it is wired; absent = the two dispatch routes answer 503
+   * rather than a silent 404 on a route the catalog advertises.
+   */
+  dispatch?: DispatchService;
+  /**
+   * Does this terminal carry an armed dispatch stamp (TurnTracker)? The HTTP
+   * producers (/input, /ask) refuse 409 while one is armed — a second
+   * producer typing into an agent mid-dispatch interleaves two principals'
+   * work in one input box and poisons the prompt-identity correlation for
+   * both. Absent = no serialization (embedders/tests without a tracker).
+   */
+  hasArmedDispatch?: (terminalId: string) => boolean;
+  /** Acquire/release the local PTY mirror for a zoomed phone transcript. */
+  acquireTerminalView?: (terminalId: string) => boolean;
+  releaseTerminalView?: (terminalId: string) => void;
+  /**
+   * A4 subscriber facts: a live terminal stream is a watcher, so its open
+   * must hold (and may start) the session-file observation, and its close
+   * must hand the terminal back to the drain clock. Optional so this module
+   * serves before the sync is wired.
+   */
+  subscribeTerminal?: (terminalId: string) => void;
+  unsubscribeTerminal?: (terminalId: string) => void;
 }
 
 /** Base64 inflates ~4/3, so this admits attachments up to the 20MB save cap. */
 const ATTACH_BODY_LIMIT = 30_000_000;
+
+/** Raw uploads carry no inflation, so the byte cap is the save cap itself. */
+const ATTACH_RAW_LIMIT = MAX_ATTACHMENT_BYTES;
 
 /**
  * Enrich a workspace state with git info for the phone: every terminal node
@@ -159,6 +209,35 @@ export async function enrichStateWithGit(
  * renderer bundle running in a phone browser (remote-api.ts). Returns true
  * when the request was handled.
  */
+/**
+ * Boot the mirror and hold a viewer once its PTY is resident, tolerating the
+ * cold-boot window. `acquireTerminalView` kicks off the on-demand boot; when a
+ * cold agent's PTY is not registered on the same tick, poll for it (bounded)
+ * rather than 404 immediately — the boot IS in flight, it just needs a beat.
+ * Returns false only when the terminal truly cannot come up (no such node,
+ * spawn failed) within the window, at which point the poll backstop / retry
+ * owns recovery.
+ */
+export async function acquireViewWhenReady(
+  deps: MobileApiDeps,
+  ptys: { get: (id: string) => unknown },
+  terminalId: string,
+  opts: { attempts?: number; stepMs?: number } = {},
+): Promise<boolean> {
+  // No gating hook (embedders/tests): the terminal is whatever ptys says.
+  if (!deps.acquireTerminalView) return true;
+  if (deps.acquireTerminalView(terminalId)) return true;
+  // Booted but not yet resident — wait (default ~2s in 50ms steps). The boot
+  // was kicked off by the acquire above; poll for its PTY without re-booting.
+  const attempts = opts.attempts ?? 40;
+  const stepMs = opts.stepMs ?? 50;
+  for (let i = 0; i < attempts; i++) {
+    await new Promise((r) => setTimeout(r, stepMs));
+    if (ptys.get(terminalId)) return deps.acquireTerminalView(terminalId);
+  }
+  return false;
+}
+
 export async function handleMobileApi(
   request: http.IncomingMessage,
   response: http.ServerResponse,
@@ -168,6 +247,11 @@ export async function handleMobileApi(
   const { store, ptys, turns, ops, presets } = deps;
   const method = request.method ?? "GET";
   const p = url.pathname;
+  /** Null at the root; a workspace id under a slug. */
+  const scope = deps.scope ?? null;
+  /** The canvas this request answers for. */
+  const scopedState = (): WorkspaceState =>
+    scope === null ? store.focusedState : store.workspaceState(scope);
 
   // C1 gate: every state-changing route requires the pairing token. This
   // choke point runs BEFORE any route match (and before the mobile server's
@@ -210,13 +294,53 @@ export async function handleMobileApi(
     return true;
   }
 
+  // READS ARE CREDENTIALS TOO.
+  //
+  // The gate above challenged only WRITES, on the reasoning quoted there:
+  // "EventSource cannot set headers, and with the C2 wildcard gone only
+  // same-origin pages can read them cross-site anyway." Both halves are true
+  // and neither defends this listener. Same-origin policy protects a VICTIM'S
+  // BROWSER from a page it did not ask for; it does nothing about a direct
+  // client, and curl has no origin. This process binds 0.0.0.0, so every GET
+  // was answerable by anyone who could reach the port — no token, no pairing,
+  // no browser.
+  //
+  // What that gave away, measured against the routes below rather than
+  // imagined: the workspace roster INCLUDING every slug (the first half of an
+  // exported agent's call address, and an inventory of what the owner is
+  // working on), the full canvas, live pane content, agent transcripts, the
+  // event log, the board, saved teams and roles, and git state for the owner's
+  // directories. /api/board alone was gated — it had noticed the problem and
+  // fixed its own instance of it.
+  //
+  // The EventSource constraint is REAL, and it is why this uses `canRead`
+  // rather than a header check: pairingAuthorized already accepts `?token=`
+  // for clients that cannot set headers, which is exactly what /api/board's
+  // own gate relies on and what the two SSE routes now send.
+  //
+  // Scoped to /api/ deliberately. The renderer bundle and its assets are
+  // served AROUND this delegation, and an unpaired phone has to be able to
+  // load the app in order to be told it is unpaired — a gate that 401s the
+  // JavaScript is a gate that removes the pairing screen.
+  //
+  // /api/auth/status is above this on purpose: it is how an unpaired device
+  // learns it is unpaired, it discloses only whether the caller's OWN token
+  // works, and it never echoes one back.
+  if (method === "GET" && p.startsWith("/api/") && deps.pairingToken && !canRead) {
+    respondJson(response, 401, {
+      error:
+        "Unauthorized — open the pairing URL shown on the desktop (it carries ?token=).",
+    });
+    return true;
+  }
+
   if (method === "GET" && p === "/api/workspace") {
     // Embed git per terminal (node.git) and per workspace dir (dirsGit) so
     // phone cards show branch/dirty without a round-trip (Fresco GitChip).
     respondJson(
       response,
       200,
-      await enrichStateWithGit(store.state, ops.gitInfo),
+      await enrichStateWithGit(scopedState(), ops.gitInfo),
     );
     return true;
   }
@@ -376,8 +500,8 @@ export async function handleMobileApi(
     const opts = await readJson<{
       name: string;
       preset: string;
-      position: { x: number; y: number };
-      orch: boolean;
+      position?: { x: number; y: number };
+      orch?: boolean;
       roleName?: string;
     }>(request);
     try {
@@ -497,20 +621,41 @@ export async function handleMobileApi(
   }
 
   if (method === "POST" && p === "/api/attachments") {
-    const body = await readJson<{ name?: string; data?: string }>(
-      request,
-      ATTACH_BODY_LIMIT,
+    // TWO shapes, and the raw one is the fast path.
+    //
+    // Base64-in-JSON cost 33% more bytes over a link where bytes are the
+    // scarce thing, and cost the MAIN process a 27 MB string concat plus a
+    // JSON.parse of it — the app froze for the length of every upload. Raw
+    // bytes with the name in the query have neither problem.
+    //
+    // The JSON shape stays for a phone still running a cached older bundle;
+    // dropping it would break uploads until every device reloaded.
+    const json = (request.headers["content-type"] ?? "").includes(
+      "application/json",
     );
-    if (typeof body.data !== "string" || body.data.length === 0) {
-      respondJson(response, 400, { error: "Missing data" });
-      return true;
-    }
     try {
-      const saved = deps.saveAttachment(
-        body.name ?? "file",
-        Buffer.from(body.data, "base64"),
-      );
-      respondJson(response, 200, { path: saved });
+      const name = json ? undefined : url.searchParams.get("name");
+      const data = json
+        ? null
+        : await readBytes(request, ATTACH_RAW_LIMIT);
+      const body = json
+        ? await readJson<{ name?: string; data?: string }>(
+            request,
+            ATTACH_BODY_LIMIT,
+          )
+        : null;
+      const bytes =
+        data ??
+        (typeof body?.data === "string" && body.data.length > 0
+          ? Buffer.from(body.data, "base64")
+          : null);
+      if (!bytes || bytes.length === 0) {
+        respondJson(response, 400, { error: "Missing data" });
+        return true;
+      }
+      respondJson(response, 200, {
+        path: deps.saveAttachment(name || body?.name || "file", bytes),
+      });
     } catch (error) {
       respondJson(response, 400, {
         error: error instanceof Error ? error.message : String(error),
@@ -579,6 +724,16 @@ export async function handleMobileApi(
     );
     return true;
   }
+  // Trace-perf T1: the latest checkpoint only, tail-read, no PTY. The phone
+  // canvas asks this for a visible-but-unzoomed agent card.
+  const latestMatch = p.match(/^\/api\/terminal\/([^/]+)\/latest$/);
+  if (latestMatch && method === "GET") {
+    const cp = deps.latestCheckpoint
+      ? await deps.latestCheckpoint(latestMatch[1])
+      : null;
+    respondJson(response, 200, cp);
+    return true;
+  }
   // Workspace v2: repoint a terminal's cwd (respawns the pty).
   const cwdMatch = p.match(/^\/api\/terminal\/([^/]+)\/cwd$/);
   if (cwdMatch && method === "POST") {
@@ -620,18 +775,67 @@ export async function handleMobileApi(
     return true;
   }
 
+  // Producer serialization, not a router: /input and /ask are ANSWERED by the
+  // mobile server (this returns false so its handlers run), but the refusal
+  // lives here with the API deps so every embedder gets it. While a dispatch
+  // stamp is armed on a terminal, a second HTTP producer typing into it would
+  // interleave two principals' work in one input box AND break the
+  // prompt-identity correlation that closes the dispatch — refuse 409 and let
+  // the dispatch close first. /raw is a producer too — it writes arbitrary
+  // bytes (a prompt plus Enter included) straight into the same input box, so
+  // leaving it outside the choke point was a reservation with a side door.
+  // Local canvas typing (IPC) is deliberately NOT serialized: the owner at
+  // the keyboard outranks the machinery.
+  const httpProducerMatch = p.match(/^\/api\/terminal\/([^/]+)\/(input|ask|raw)$/);
+  if (
+    httpProducerMatch &&
+    method === "POST" &&
+    deps.hasArmedDispatch?.(httpProducerMatch[1]) === true
+  ) {
+    respondJson(response, 409, { error: "agent has a dispatch in flight" });
+    return true;
+  }
+
   const ptyMatch = p.match(
     /^\/api\/terminal\/([^/]+)\/(raw|resize|stream|jump)$/,
   );
   if (ptyMatch) {
-    const session = ptys.get(ptyMatch[1]);
+    const terminalId = ptyMatch[1];
+    const openingStream = method === "GET" && ptyMatch[2] === "stream";
+    // Opening a stream BOOTS the mirror on demand (lazy attach), and a cold
+    // agent's PTY is not resident on the same tick the boot is kicked off — so
+    // an immediate 404 makes a just-opened viewer (the desktop popout, the
+    // phone, the orch-mirror proxy) spam "retrying" through the whole boot
+    // window. Wait briefly for residency instead. This is also what makes a
+    // CROSS-WORKSPACE target work: the boot resolves the node across every
+    // workspace, but that resolution + spawn takes a beat the first time.
+    const acquired = openingStream
+      ? await acquireViewWhenReady(deps, ptys, terminalId, deps.viewReady)
+      : true;
+    if (!acquired) {
+      respondJson(response, 404, { error: "Terminal not running" });
+      return true;
+    }
+    const session = ptys.get(terminalId);
     if (!session) {
+      if (openingStream) deps.releaseTerminalView?.(terminalId);
       respondJson(response, 404, { error: "Terminal not running" });
       return true;
     }
     if (method === "POST" && ptyMatch[2] === "raw") {
       const body = await readJson<{ data?: string }>(request);
-      if (typeof body.data === "string") session.write(body.data);
+      if (typeof body.data === "string") {
+        // /raw is a producer (Sol r7 P0-2): its bytes can be a prompt plus
+        // Enter, so they go through THE submit primitive — classified,
+        // leased across paste+CR when submit-capable, ordinarily guarded
+        // when not. A refusal is a 409 the caller can act on, never a
+        // silently dropped write followed by an ok:true.
+        const verdict = await ownerSubmit(session, body.data);
+        if (!verdict.ok) {
+          respondJson(response, 409, { error: verdict.reason });
+          return true;
+        }
+      }
       respondJson(response, 200, { ok: true });
       return true;
     }
@@ -651,6 +855,8 @@ export async function handleMobileApi(
     }
     if (method === "GET" && ptyMatch[2] === "stream") {
       const send = startSse(response);
+      // The viewer is a tracking fact from the first byte (A4).
+      deps.subscribeTerminal?.(terminalId);
       // GEOMETRY FIRST, then the frame. The phone opens its xterm at its own
       // size (measured: 45x24 while the pane was still 100x30) and the resize
       // kick only arrives AFTER the first paint — so a frame applied before
@@ -668,12 +874,15 @@ export async function handleMobileApi(
       session.on("data", onData);
       session.on("replay", onReplay);
       session.on("exit", onExit);
-      const heartbeat = setInterval(() => response.write(":hb\n\n"), 25000);
+      // Keepalive is startSse's job — see mobile-http.ts. Writing to the
+      // response here would land plaintext inside the gzip stream.
       request.on("close", () => {
-        clearInterval(heartbeat);
         session.removeListener("data", onData);
         session.removeListener("replay", onReplay);
         session.removeListener("exit", onExit);
+        // Abrupt closes included — unsubscribe is double-call safe.
+        deps.unsubscribeTerminal?.(terminalId);
+        deps.releaseTerminalView?.(terminalId);
       });
       return true;
     }
@@ -681,13 +890,36 @@ export async function handleMobileApi(
 
   if (method === "GET" && p === "/api/events") {
     const send = startSse(response);
-    send("workspace", store.state);
+    send("workspace", scopedState());
     send("workspaces", ops.listWorkspaces());
-    for (const activity of turns.list()) send("activity", activity);
+    // Activities are keyed by terminal id across every workspace, so a scoped
+    // stream filters them or it leaks other canvases' agents into this one.
+    const inScopedCanvas = (terminalId: string): boolean =>
+      scope === null || scopedState().nodes.some((node) => node.id === terminalId);
+    for (const activity of turns.list()) {
+      if (inScopedCanvas((activity as { terminalId: string }).terminalId)) {
+        send("activity", activity);
+      }
+    }
+    // THE focus-flip channel. Unscoped it stays exactly as it was — 'change'
+    // means "the canvas on screen changed". Scoped, it listens to the tagged
+    // per-workspace signal instead, so a desktop switching workspaces no
+    // longer re-points a phone that arrived by slug, and a background
+    // workspace's own edits still reach it (marketplace §11).
     const onChange = (state: WorkspaceState): void => send("workspace", state);
+    const onScopedChange = (payload: {
+      workspaceId: string;
+      state: WorkspaceState;
+    }): void => {
+      if (payload.workspaceId === scope) send("workspace", payload.state);
+    };
     const onWorkspaces = (list: WorkspaceList): void =>
       send("workspaces", list);
-    const onActivity = (activity: unknown): void => send("activity", activity);
+    const onActivity = (activity: unknown): void => {
+      if (inScopedCanvas((activity as { terminalId: string }).terminalId)) {
+        send("activity", activity);
+      }
+    };
     // Observability stream: every store mutation, cross-workspace (toasts).
     const onOp = (event: CookrewEvent): void => send("event", event);
     // Activity Board stream. A SEPARATE listener on the same signals — the
@@ -703,7 +935,8 @@ export async function handleMobileApi(
       : null;
     const onBoardSignal = (): void => boardNotifier?.schedule();
     if (board) send("board", buildBoard(board));
-    store.on("change", onChange);
+    if (scope === null) store.on("change", onChange);
+    else store.on("workspace-change", onScopedChange);
     store.on("workspaces", onWorkspaces);
     turns.on("activity", onActivity);
     store.on("op", onOp);
@@ -712,10 +945,11 @@ export async function handleMobileApi(
       store.on("change", onBoardSignal);
       store.on("workspaces", onBoardSignal);
     }
-    const heartbeat = setInterval(() => response.write(":hb\n\n"), 25000);
     request.on("close", () => {
-      clearInterval(heartbeat);
-      store.removeListener("change", onChange);
+      // Symmetric with the attach above — an unremoved scoped listener is a
+      // leak per disconnected phone, and phones disconnect constantly.
+      if (scope === null) store.removeListener("change", onChange);
+      else store.removeListener("workspace-change", onScopedChange);
       store.removeListener("workspaces", onWorkspaces);
       turns.removeListener("activity", onActivity);
       store.removeListener("op", onOp);
@@ -769,6 +1003,70 @@ export async function handleMobileApi(
         error: error instanceof Error ? error.message : String(error),
       });
     }
+    return true;
+  }
+  // V4 §3: attach-free dispatch. The one route the protocol lacked — give an
+  // agent work without a terminal open on it. 202 + a dispatch id; the answer
+  // arrives at GET /api/dispatches/:id, correlated through the turn that
+  // answered it. Absent dep = the engine is not wired, which is a 503 rather
+  // than a silent 404 on a route the catalog advertises. Writing, so the C1
+  // choke point above has already demanded the pairing token — the same
+  // admission every other mutating route here gets, nothing extra.
+  const dispatchMatch = p.match(/^\/api\/agents\/([^/]+)\/dispatch$/);
+  if (dispatchMatch && method === "POST") {
+    if (!deps.dispatch) {
+      respondJson(response, 503, { error: "dispatch is not available" });
+      return true;
+    }
+    const body = await readJson<{
+      brief?: string;
+      text?: string;
+      idempotencyKey?: string;
+    }>(request);
+    // The consumer principal comes from the AUTH that admitted this request,
+    // never from the body — a body field would let any admitted caller wear
+    // any tenant's identity, and the principal scopes idempotency and record
+    // visibility. Today the only write credential is the pairing token (the
+    // C1 choke point already refused everything else), so every admitted
+    // producer is the owner; S4 swaps this derivation for per-consumer
+    // credentials, and inherits the seam — inject, never parse.
+    const principal = "owner";
+    const result = await deps.dispatch.dispatch(dispatchMatch[1], {
+      brief: body.brief,
+      text: body.text,
+      idempotencyKey: body.idempotencyKey,
+      consumer: principal,
+    });
+    respondJson(response, result.status, result.body);
+    return true;
+  }
+  const dispatchGetMatch = p.match(/^\/api\/dispatches\/([^/]+)$/);
+  if (dispatchGetMatch && method === "GET") {
+    // The choke point fires on non-GET only, so without this the read would be
+    // open on the 0.0.0.0 listener: any id, from anyone on the LAN, described
+    // commissioned work at a named agent. Same exposure argument as
+    // /api/board, but scoped to the PAIRING token: following a dispatch is
+    // part of commissioning work, and the wall's read-only token covers the
+    // curated projections, not this. 403 rather than 401 when the read-only
+    // token is presented — the credential is known, its scope is not enough.
+    if (deps.pairingToken && !hasPairing) {
+      respondJson(response, hasReadOnly ? 403 : 401, {
+        error: hasReadOnly
+          ? "Forbidden — dispatches require the pairing token."
+          : "Unauthorized — dispatches require the pairing token.",
+      });
+      return true;
+    }
+    if (!deps.dispatch) {
+      respondJson(response, 503, { error: "dispatch is not available" });
+      return true;
+    }
+    // Same derivation as the POST: the requester principal is what the auth
+    // says, and the pairing token is the owner. lookup() 404s a foreign
+    // principal's id — never 403 — so the read cannot confirm that somebody
+    // else's dispatch exists.
+    const result = deps.dispatch.lookup(dispatchGetMatch[1], "owner");
+    respondJson(response, result.status, result.body);
     return true;
   }
   const recoverMatch = p.match(/^\/api\/agents\/([^/]+)\/recover$/);

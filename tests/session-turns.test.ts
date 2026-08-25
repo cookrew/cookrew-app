@@ -13,10 +13,10 @@ function user(content: unknown, ts: string, extra: Record<string, unknown> = {})
   })
 }
 
-function assistant(blocks: unknown[], ts: string): string {
+function assistant(blocks: unknown[], ts: string, stopReason: string | null = null): string {
   return JSON.stringify({
     type: 'assistant',
-    message: { role: 'assistant', content: blocks },
+    message: { role: 'assistant', content: blocks, stop_reason: stopReason },
     timestamp: ts,
     sessionId: 'src-session'
   })
@@ -132,7 +132,9 @@ describe('parseSessionTurns', () => {
       // the same one parseClaudeTrace mints for the block.
       uuid: expect.stringMatching(/^claude-1-[0-9a-f]{8}$/) as unknown as string,
       startedAt: ms('00:00'),
-      endedAt: ms('00:20')
+      endedAt: ms('00:20'),
+      // A later user prompt exists — positive next-user-boundary finality.
+      final: true
     })
     expect(turns[1].index).toBe(2)
     expect(turns[1].prompt).toBe('now add a test')
@@ -209,6 +211,73 @@ describe('parseSessionTurns', () => {
   it('derives the ordinal identity when the prompt entry has no uuid', () => {
     const turns = parseSessionTurns([user('no uuid here', T('00:00'))])
     expect(turns[0].uuid).toMatch(/^claude-1-[0-9a-f]{8}$/)
+  })
+})
+
+// Sol P0: a nonempty reply is NOT completion evidence — parseSessionTurns
+// used to install the latest assistant text immediately and keep extending
+// the same record with later tool/result entries. `final` now requires
+// POSITIVE evidence: a later user prompt, or the closing assistant entry's
+// explicit stop_reason "end_turn" (verified against real session files —
+// mid-turn entries carry "tool_use"/null).
+describe('parseSessionTurns — turn finality evidence', () => {
+  it('marks every non-tail record final (a later user prompt exists)', () => {
+    const turns = parseSessionTurns(TWO_TURNS)
+    expect(turns[0].final).toBe(true)
+  })
+
+  it('leaves the tail non-final without a stop_reason marker (legacy files)', () => {
+    const turns = parseSessionTurns(TWO_TURNS)
+    expect(turns[1].final).toBeUndefined()
+  })
+
+  it('marks the tail final when its closing assistant entry carries stop_reason end_turn', () => {
+    const turns = parseSessionTurns([
+      user('do it', T('00:00')),
+      assistant([toolUse()], T('00:05'), 'tool_use'),
+      user(toolResult(), T('00:06')),
+      assistant([text('done')], T('00:10'), 'end_turn')
+    ])
+    expect(turns).toHaveLength(1)
+    expect(turns[0].final).toBe(true)
+  })
+
+  it('a nonempty reply followed by a tool call is NOT final (the Sol trap)', () => {
+    const turns = parseSessionTurns([
+      user('do it', T('00:00')),
+      assistant([text('Looks done, verifying…')], T('00:05'), 'tool_use'),
+      assistant([toolUse()], T('00:06'), 'tool_use')
+    ])
+    expect(turns[0].reply).toBe('Looks done, verifying…')
+    expect(turns[0].final).toBeUndefined()
+  })
+
+  it('finality tracks the LATEST assistant entry — end_turn then more work reopens', () => {
+    const turns = parseSessionTurns([
+      user('do it', T('00:00')),
+      assistant([text('done')], T('00:05'), 'end_turn'),
+      assistant([toolUse()], T('00:10'), 'tool_use')
+    ])
+    expect(turns[0].final).toBeUndefined()
+  })
+
+  it('a sibling resend reopens a finalized exchange (edit/resend chains)', () => {
+    const turns = parseSessionTurns([
+      user('first wording', T('00:00'), { uuid: 'ua', parentUuid: 'p' }),
+      assistant([text('done')], T('00:05'), 'end_turn'),
+      user('second wording', T('00:10'), { uuid: 'ub', parentUuid: 'p' })
+    ])
+    expect(turns).toHaveLength(1)
+    expect(turns[0].prompt).toBe('second wording')
+    expect(turns[0].final).toBeUndefined()
+  })
+
+  it('a prompt with no reply at all is non-final until the next prompt lands', () => {
+    const open = parseSessionTurns([user('do it', T('00:00'))])
+    expect(open[0].final).toBeUndefined()
+    const bounded = parseSessionTurns([user('do it', T('00:00')), user('next', T('01:00'))])
+    expect(bounded[0].final).toBe(true)
+    expect(bounded[1].final).toBeUndefined()
   })
 })
 

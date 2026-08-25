@@ -1,5 +1,4 @@
 import { createContext, useContext } from 'react'
-import type { TerminalActivity } from '../../shared/turn'
 
 /**
  * There is no dedicated MOVE tool: the resting hand pans, drags cards and
@@ -14,19 +13,21 @@ export type ToolId = 'move' | 'terminal' | 'note' | 'browser' | 'connect'
 
 /**
  * Canvas-wide UI state shared with node components: the active tool (so
- * cards don't hijack clicks while connecting), the clipboard toggle, the
- * latest per-terminal activity snapshots, and the semantic-zoom navigation.
- * Clicking a card zooms the viewport until the card fills the stage; its
- * full view then fades in (see zoom-lod.ts). zoomBack restores the previous
- * viewport.
+ * cards don't hijack clicks while connecting), the clipboard toggle, and the
+ * semantic-zoom navigation. Clicking a card zooms the viewport until the card
+ * fills the stage; its full view then fades in (see zoom-lod.ts). zoomBack
+ * restores the previous viewport.
+ *
+ * Per-terminal ACTIVITY and per-browser THUMBNAILS deliberately live OUTSIDE
+ * this context, in activity-thumb-store (useActivity/useThumb). They change on
+ * a high-frequency stream, and a context value is all-or-nothing: putting them
+ * here re-rendered every card on every event. The store lets each card
+ * subscribe to its own id.
  */
 export interface CanvasUi {
   tool: ToolId
   /** Clipboard selection mode — the board view's toggle, on the canvas. */
   clipping: boolean
-  activities: Record<string, TerminalActivity>
-  /** Latest browser thumbnails as data URLs, keyed by node id. */
-  thumbs: Record<string, string>
   /** Fixed-at-launch browser ownership; null while capability is unresolved. */
   interactiveBrowser: boolean | null
   zoomToNode: (id: string) => void
@@ -46,8 +47,6 @@ export interface CanvasUi {
 export const CanvasUiContext = createContext<CanvasUi>({
   tool: 'move',
   clipping: false,
-  activities: {},
-  thumbs: {},
   interactiveBrowser: null,
   zoomToNode: () => undefined,
   zoomBack: () => undefined,

@@ -1,0 +1,117 @@
+{
+  "_": "STUB FIXTURE — marketplace dock chips (§8, rulings R2/R3). Real shape, invented data. Magpie drives the chip place/paste gate from `installed`; Fresco designs the badge states against `chips`. Tripwire: tests/preset-chip-fixture.test.ts re-derives `chips` and `actions` from src/shared/preset-chip.ts and fails if they drift.",
+
+  "installed": [
+    {
+      "_": "Owned single agent, current. The plain case: click arms placement.",
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+      "name": "Deep Research",
+      "version": 2,
+      "members": ["Claude Code"],
+      "entitled": true,
+      "headVersion": 2
+    },
+    {
+      "_": "Owned team of three — the stacked chip. R2: still one click, no dialog before a team paste.",
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+      "name": "Ship Crew",
+      "version": 4,
+      "members": ["Claude Code", "Codex", "Shell"],
+      "entitled": true,
+      "headVersion": 4
+    },
+    {
+      "_": "Owned, registry ahead — update badge. Placing still works; the update is an offer.",
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000003",
+      "name": "Audit Pack",
+      "version": 2,
+      "members": ["Codex"],
+      "entitled": true,
+      "headVersion": 3
+    },
+    {
+      "_": "Gated — lock badge. The chip is the gate's UI: it stays clickable and opens the sheet.",
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000004",
+      "name": "Pro Toolkit",
+      "version": 1,
+      "members": ["Claude Code", "Shell"],
+      "entitled": false,
+      "headVersion": 1
+    },
+    {
+      "_": "Gated AND behind. The lock outranks the update — v2-available on something you cannot run reads as a bug.",
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000005",
+      "name": "Locked Legacy",
+      "version": 1,
+      "members": ["Pi"],
+      "entitled": false,
+      "headVersion": 2
+    },
+    {
+      "_": "Not yet checked this dock-open (R3): no headVersion, so it is in the HEAD batch and wears no badge yet.",
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000006",
+      "name": "Fresh Install",
+      "version": 1,
+      "members": ["OpenCode"],
+      "entitled": true
+    },
+    {
+      "_": "R20, sheet still owed: the author rotated keys and the buyer has not been told yet. Badge is KEY CHANGED; the sheet is raised once, on the buyer's own click.",
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000007",
+      "name": "Rotated Rig",
+      "version": 3,
+      "members": ["Claude Code"],
+      "entitled": true,
+      "headVersion": 3,
+      "keyChanged": {
+        "oldKeyId": "ed25519:oldkeymaterialaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "newKeyId": "ed25519:newkeymaterialbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "at": 1700000000000,
+        "sheetSeen": false
+      }
+    },
+    {
+      "_": "R20 after dismissal, AND the registry is ahead. KEY CHANGED outranks the update badge because that update is exactly what will be refused — and headVersion is dropped from the chip so no renderer can offer 'v5 available' on it.",
+      "id": "sha256:0000000000000000000000000000000000000000000000000000000000000008",
+      "name": "Rotated Legacy",
+      "version": 4,
+      "members": ["Codex", "Shell"],
+      "entitled": true,
+      "headVersion": 5,
+      "keyChanged": {
+        "oldKeyId": "ed25519:oldkeymaterialccccccccccccccccccccccccccc",
+        "newKeyId": "ed25519:newkeymaterialddddddddddddddddddddddddddd",
+        "at": 1700000100000,
+        "sheetSeen": true
+      }
+    }
+  ],
+
+  "chips": [
+    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000001", "label": "Deep Research", "kind": "single", "sprites": ["Claude Code"], "badge": "none" },
+    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000002", "label": "Ship Crew", "kind": "team", "sprites": ["Claude Code", "Codex", "Shell"], "badge": "none" },
+    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000003", "label": "Audit Pack", "kind": "single", "sprites": ["Codex"], "badge": "update", "headVersion": 3 },
+    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000004", "label": "Pro Toolkit", "kind": "team", "sprites": ["Claude Code", "Shell"], "badge": "lock" },
+    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000005", "label": "Locked Legacy", "kind": "single", "sprites": ["Pi"], "badge": "lock" },
+    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000006", "label": "Fresh Install", "kind": "single", "sprites": ["OpenCode"], "badge": "none" },
+    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000007", "label": "Rotated Rig", "kind": "single", "sprites": ["Claude Code"], "badge": "key-changed" },
+    { "id": "sha256:0000000000000000000000000000000000000000000000000000000000000008", "label": "Rotated Legacy", "kind": "team", "sprites": ["Codex", "Shell"], "badge": "key-changed" }
+  ],
+
+  "actions": ["place", "place", "place", "gate", "gate", "place", "place", "place"],
+
+  "badgeActions": {
+    "_": "R20: what a click on the BADGE opens, as opposed to the chip. The chip always places what the buyer already owns; the badge is where an unresolved decision lives — and after the rotation sheet is dismissed it is the ONLY route back to it.",
+    "actions": ["none", "none", "update", "gate", "gate", "none", "rotation", "rotation"]
+  },
+
+  "updateCheckOnOpen": {
+    "_": "R3: the ids the dock HEADs when the terminal chip row opens — only the ones not yet answered, so re-rendering does not re-ask.",
+    "ids": ["sha256:0000000000000000000000000000000000000000000000000000000000000006"]
+  },
+
+  "rotationSheetOnOpen": {
+    "_": "R20: 'surface it once' means once as a SHEET. Only a rotation the buyer has not been shown raises one; the dismissed one keeps its badge and raises nothing. Assert the ids, not the pixels — a second sheet for the same rotation is the bug.",
+    "ids": ["sha256:0000000000000000000000000000000000000000000000000000000000000007"]
+  }
+}

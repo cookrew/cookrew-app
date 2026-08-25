@@ -4,6 +4,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { RoutineSpec } from '../shared/model'
+import { ownerSubmit } from './ask'
 import type { PtyManager } from './pty'
 import type { WorkspaceStore } from './store'
 
@@ -96,8 +97,21 @@ export class RoutineScheduler {
     if (!targetId) return
     const session = this.ptys.get(targetId)
     if (!session) return
-    session.write(spec.command)
-    session.write('\r')
+    // Routines are a producer like any other (Sol r7 P0-2): the command
+    // submits through THE lease-holding primitive — one owner holder across
+    // paste and CR — instead of two bare writes a competing submission could
+    // interleave with. A refusal (dispatch mid-delivery, owner ask in
+    // flight, contaminated input box) skips this firing and says so; the
+    // schedule fires again next interval.
+    void ownerSubmit(session, `${spec.command}\r`)
+      .then((verdict) => {
+        if (!verdict.ok) {
+          console.error(`Routine '${spec.name}' skipped: ${verdict.reason}`)
+        }
+      })
+      .catch((error) => {
+        console.error(`Routine '${spec.name}' failed to submit:`, error)
+      })
   }
 
   private async persist(): Promise<void> {

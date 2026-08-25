@@ -307,6 +307,10 @@ export function SelectionBar({
         setName('')
         setArmed(false)
         showFlash(`saved template “${meta.name}”`)
+        // The save cut a version pin on each saved agent (main process). Tell
+        // any open rail to re-fetch so the marker appears NOW, not on the next
+        // turn — otherwise a save reads as if it did nothing.
+        window.dispatchEvent(new CustomEvent('cookrew:template-saved'))
       })
       .catch(fail)
   }

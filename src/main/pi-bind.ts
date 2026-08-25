@@ -147,7 +147,20 @@ function piSessionEntries(
           return []
         }
       })
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+      // Newest first, with a DETERMINISTIC tie-break. mtime alone is not a
+      // total order: two sessions written in the same tick carry equal mtimes,
+      // and a bare mtime sort then leaves their order to readdir — stable on
+      // APFS, arbitrary on ext4, so "adopt the newest" picked differently on
+      // macOS vs Linux CI. The session's own start time breaks the tie when
+      // present, and the id last: a pi session id is a UUIDv7, whose leading
+      // bits ARE a timestamp, so descending id is itself a recency order and is
+      // always available.
+      .sort(
+        (a, b) =>
+          b.mtimeMs - a.mtimeMs ||
+          (b.startedAtMs ?? 0) - (a.startedAtMs ?? 0) ||
+          b.id.localeCompare(a.id)
+      )
   } catch {
     return []
   }
@@ -200,6 +213,44 @@ export function piSessionHome(
   if (owned) return { dir: exclusive, file: owned }
   const adopted = piSessionFile(cwd, sessionId, { agentDir: options.agentDir })
   return adopted ? { dir: piSessionDir(cwd, { agentDir: options.agentDir }), file: adopted } : null
+}
+
+/**
+ * The session a node with NO bound id should adopt, or null.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * A Pi node whose id was never captured is stuck in a state nothing could get
+ * it out of. Observed on the Playground "Pi" node: two real conversations
+ * (1.1 MB and 677 KB) sitting in its cwd scope, `piSessionId: null` on the
+ * node, and therefore
+ *
+ *   the gate      refuses to boot it — "exact session couldn't be located"
+ *   the launcher  would boot FRESH, stranding both conversations
+ *
+ * so recovery declined forever and was right to. The session was never
+ * missing; only the pointer to it was.
+ *
+ * OWNERSHIP IS THE WHOLE SAFETY ARGUMENT. Adopting by "most recent in this
+ * cwd" is precisely the cross-agent race the exclusive-dir design exists to
+ * eliminate, so a candidate already claimed by another node is skipped. Two
+ * unbound nodes in one directory then resolve deterministically: the first
+ * takes the newest, which makes it owned, and the second moves on.
+ */
+export function piAdoptableSession(
+  cwd: string,
+  options: {
+    /** True when some OTHER node already claims this session id. */
+    isOwned: (sessionId: string) => boolean
+    agentDir?: string
+  }
+): PiSessionMatch | null {
+  // pi's own cwd-derived dir only: the exclusive dir belongs to a node that
+  // was already binding properly, and latestPiSession covers that path.
+  return (
+    piSessions(cwd, { agentDir: options.agentDir }).find((match) => !options.isOwned(match.id)) ??
+    null
+  )
 }
 
 /** Resolve one node's published-Pi CLI command without consulting other nodes. */

@@ -28,6 +28,7 @@ import { Dock } from './Dock'
 import { CardMenu, type CardMenuAnchor } from './CardMenu'
 import { TerminalOverlayLayer } from './TerminalOverlay'
 import { useLodLayout } from './zoom-lod'
+import type { InstalledPreset } from '../../shared/preset-chip'
 import { browserInFullView } from './dock-target'
 import { BrowserLayer, useInteractiveBrowserCapability } from './BrowserLayer'
 import {
@@ -37,6 +38,14 @@ import {
 } from './browser-thumb-policy'
 import { retry } from './retry'
 import { CanvasUiContext, ToolId } from './canvas-ui'
+import {
+  activityStore,
+  thumbStore,
+  useActivitiesSnapshot,
+  useThumbsSnapshot
+} from './activity-thumb-store'
+import { reconcileFlowNodes } from './flow-nodes'
+import { CARD_FIT_PADDING, CARD_ZOOM_MS, cardZoomMode } from './nodes/card-zoom'
 import { useBrowserEngine } from './browser-engine'
 import { ErrorBoundary } from './ErrorBoundary'
 import { ReauthOverlay } from './ReauthOverlay'
@@ -45,8 +54,11 @@ import { SnapGuides } from './SnapGuides'
 import { EventToastLayer } from './EventToast'
 import { RosterPanel } from './RosterPanel'
 import { MetricsPanel } from './MetricsPanel'
+import { GrantPanel, canGrant } from './GrantPanel'
 import { SelectionBar } from './SelectionBar'
 import { ConfirmClose } from './ConfirmClose'
+import { apiPath } from './api-base'
+import { authHeaders } from './auth-gate'
 
 /** How often a headless browser card refreshes its still. Matches the legacy
  *  webview capture cadence — the same picture, from the page that now owns it. */
@@ -66,16 +78,11 @@ function sameViewport(
 const nodeTypes = { terminal: TerminalNode, note: NoteNode, browser: BrowserNode }
 const edgeTypes = { cable: CableEdge }
 
-function toFlowNodes(state: WorkspaceState): Node[] {
-  return state.nodes.map((n) => ({
-    id: n.id,
-    type: n.kind,
-    position: n.position,
-    data: { node: n },
-    style: { width: n.size.width, height: n.size.height },
-    dragHandle: '.node-header'
-  }))
+/** The ids ReactFlow currently marks selected — carried across a reconcile. */
+function selectedIds(nodes: Node[]): Set<string> {
+  return new Set(nodes.filter((n) => n.selected).map((n) => n.id))
 }
+
 
 function toFlowEdges(state: WorkspaceState): Edge[] {
   return state.connections.map((c) => ({
@@ -114,11 +121,16 @@ function Canvas(): React.JSX.Element {
   const [preset, setPreset] = useState('Shell')
   const [orch, setOrch] = useState(false)
   const [presets, setPresets] = useState<string[]>(['Shell'])
+  const [templates, setTemplates] = useState<string[]>([])
   const [roles, setRoles] = useState<AgentRole[]>([])
   /** Selected saved role for TERMINAL placement, or null for a plain preset. */
   const [role, setRole] = useState<string | null>(null)
-  const [activities, setActivities] = useState<Record<string, TerminalActivity>>({})
-  const [thumbs, setThumbs] = useState<Record<string, string>>({})
+  // Per-terminal activity + per-browser thumbnails live in an external per-id
+  // store (activity-thumb-store), NOT React state on this context — a stream of
+  // activity events must not re-render every card. App reads the whole map via
+  // the snapshot hooks (it needs the aggregate counts); cards subscribe per id.
+  const activities = useActivitiesSnapshot()
+  const thumbs = useThumbsSnapshot()
   /** Alignment guides while a card resize is snapped to a neighbour edge. */
   const [guides, setGuides] = useState<SnapGuide[]>([])
   /** Terminal whose overlay owns the stage — the dock shows its composer. */
@@ -133,6 +145,10 @@ function Canvas(): React.JSX.Element {
   const [view, setView] = useState<MainView>('canvas')
   /** Activity metrics / history panel (opened from the workspace popout). */
   const [metricsOpen, setMetricsOpen] = useState(false)
+  // WHO CAN CALL. Owner-desktop only, and ABSENT rather than disabled anywhere
+  // else — a greyed-out list of who is enrolled still discloses who is
+  // enrolled, on the device most likely to be lying on a table.
+  const [grantOpen, setGrantOpen] = useState(false)
   /** Board selection mode — the dock's slid-in clipboard button drives it. */
   const [boardSelecting, setBoardSelecting] = useState(false)
   /**
@@ -140,6 +156,39 @@ function Canvas(): React.JSX.Element {
    * removeNode, so there is one dialog and no close button can skip it.
    */
   const [closingId, setClosingId] = useState<string | null>(null)
+  /**
+   * Marketplace presets (§8) and the one currently armed. Arming is exclusive
+   * with the harness-preset and role chips: three families, one selection.
+   */
+  const [installedPresets, setInstalledPresets] = useState<InstalledPreset[]>([])
+  const [presetId, setPresetId] = useState<string | null>(null)
+  const refreshPresets = useCallback(() => {
+    void cookrew()
+      .listInstalledPresets()
+      .then(setInstalledPresets)
+      .catch((error) => console.error('listInstalledPresets failed:', error))
+  }, [])
+  useEffect(refreshPresets, [refreshPresets])
+  /**
+   * M3: STABLE identities. Inline arrows here were new objects every render, so
+   * the dock's effect re-fired on each one and the R3 batch never settled.
+   * M5: no console TODOs — the gate sheet and the HEAD request are the
+   * registry's work, and until they exist these are no-ops that change nothing
+   * rather than log lines pretending to.
+   */
+  /**
+   * N4: a locked chip must ACKNOWLEDGE the click. The 401/402/403 sheets land
+   * with the gate, but "nothing happens" is indistinguishable from a broken
+   * chip, so until then the chip answers for itself and says it is locked.
+   */
+  const [gatedId, setGatedId] = useState<string | null>(null)
+  const openPresetGate = useCallback((id: string) => {
+    setGatedId(id)
+    window.setTimeout(() => setGatedId((current) => (current === id ? null : current)), 2400)
+  }, [])
+  const checkPresetUpdates = useCallback((_ids: string[]) => {
+    // A manifest HEAD by version (R3) needs a registry to ask.
+  }, [])
 
   useEffect(() => {
     void cookrew()
@@ -147,6 +196,10 @@ function Canvas(): React.JSX.Element {
       .then((list) => setPresets(list.map((p) => p.name)))
     // Saved roles ride alongside presets as terminal-creation options.
     void cookrew().roleList().then(setRoles).catch(() => undefined)
+    // Saved templates ARE presets too, but placing one imports a session
+    // instead of dropping a terminal — so the placement path must tell them
+    // apart. Kept as a name set, refreshed on save.
+    void cookrew().teamList?.().then((list) => setTemplates(list.map((t) => t.name))).catch(() => undefined)
   }, [])
 
   // Track the active workspace ID — the paste ghosts only show for a
@@ -181,6 +234,21 @@ function Canvas(): React.JSX.Element {
   const prevViewportRef = useRef<{ x: number; y: number; zoom: number } | null>(null)
   /** Node currently zoomed into full view — drives layered ⌘W. */
   const zoomedNodeIdRef = useRef<string | null>(null)
+  /**
+   * The card whose zoom animation has FINISHED. Distinct from the zoomed card:
+   * this one says the viewport has come to rest on it, which is what lets its
+   * full view mount without waiting out the LOD's settle debounce.
+   */
+  const [arrivedId, setArrivedId] = useState<string | null>(null)
+  /**
+   * Did the user DELIBERATELY zoom into a card (tap → zoomToNode)? On mobile the
+   * overview is zoomed in to bound rendered-node count (OOM fix), so a large
+   * card there would passively cross the LOD coverage threshold and auto-open,
+   * trapping the view. Gate the auto-open on this: false in the overview, true
+   * after a tap, false again on Back. Desktop ignores it (allowAutoOpen stays
+   * true there) so its zoom-into-a-card behaviour is unchanged.
+   */
+  const deliberateOpenRef = useRef(false)
   /** Mirror of zoomedTerminalId so callbacks/handlers can read it fresh. */
   const zoomedTerminalIdRef = useRef<string | null>(null)
   zoomedTerminalIdRef.current = zoomedTerminalId
@@ -220,7 +288,7 @@ function Canvas(): React.JSX.Element {
       retry(() => cookrew().getWorkspace())
         .then((state) => {
           setWorkspace(state)
-          setNodes(toFlowNodes(state))
+          setNodes((prev) => reconcileFlowNodes(prev, state.nodes, selectedIds(prev)))
         })
         .catch((error: unknown) => {
           console.error('Could not load the workspace:', error)
@@ -243,18 +311,14 @@ function Canvas(): React.JSX.Element {
     void loadWorkspace()
     return cookrew().onWorkspaceState((state) => {
       setWorkspace(state)
-      // Selection must SURVIVE the rebuild: toFlowNodes carries no
-      // `selected`, so a bare replacement would clear it on every broadcast
-      // — including the N broadcasts a duplicate-in-place itself fires,
-      // unmounting the SelectionBar before its own success can render.
+      // Selection must SURVIVE the rebuild (reconcileFlowNodes carries no
+      // `selected` of its own), so it is re-applied from the previous nodes —
+      // including the N broadcasts a duplicate-in-place itself fires, which
+      // would otherwise unmount the SelectionBar before its own success renders.
+      // reconcileFlowNodes ALSO preserves identity for unchanged nodes, so a
+      // single-node broadcast re-renders a single card, not all 91.
       if (!draggingRef.current) {
-        setNodes((prev) => {
-          const selected = new Set(prev.filter((n) => n.selected).map((n) => n.id))
-          if (selected.size === 0) return toFlowNodes(state)
-          return toFlowNodes(state).map((n) =>
-            selected.has(n.id) ? { ...n, selected: true } : n
-          )
-        })
+        setNodes((prev) => reconcileFlowNodes(prev, state.nodes, selectedIds(prev)))
       }
     })
   }, [loadWorkspace])
@@ -288,6 +352,11 @@ function Canvas(): React.JSX.Element {
     // still costs an animation, so leave the viewport where it is.
     if (nodes.length === 0) return
     const frame = requestAnimationFrame(() => {
+      // Frame the WHOLE board, phone included — the user must be able to see all
+      // their agents at a glance. This is only affordable because every card
+      // renders a LIGHT mini tile when zoomed out (TerminalNode/NoteNode/
+      // BrowserNode mini paths: no markdown, no decoded thumbnails), so 90 tiles
+      // at the overview no longer OOM iOS Safari.
       void reactFlow.fitView({ duration: 450, padding: 0.1 })
     })
     return () => cancelAnimationFrame(frame)
@@ -297,15 +366,15 @@ function Canvas(): React.JSX.Element {
     void cookrew()
       .listActivity()
       .then((list) =>
-        // Live events may land before this snapshot resolves — merge under
+        // Live events may land before this snapshot resolves — seed under
         // existing entries so the snapshot never clobbers fresher activity.
-        setActivities((prev) => ({
-          ...Object.fromEntries(list.map((a) => [a.terminalId, a])),
-          ...prev
-        }))
+        activityStore.seed(
+          list.map((a) => [a.terminalId, a] as [string, TerminalActivity]),
+          true
+        )
       )
     return cookrew().onTerminalActivity((activity) => {
-      setActivities((prev) => ({ ...prev, [activity.terminalId]: activity }))
+      activityStore.set(activity.terminalId, activity)
     })
   }, [])
 
@@ -481,15 +550,31 @@ function Canvas(): React.JSX.Element {
       if (!prevViewportRef.current && !zoomedTerminalIdRef.current) {
         prevViewportRef.current = reactFlow.getViewport()
       }
+      // A deliberate tap: from here the LOD may open the card's full view (see
+      // deliberateOpenRef). The overview does not set this, so it never opens
+      // one passively on the phone.
+      deliberateOpenRef.current = true
       zoomedNodeIdRef.current = id
       // A just-created node may not be in the React Flow store yet (its
       // workspace broadcast is still in flight) — fitView can't find it, so
       // callers that know the node's rect pass it for a fitBounds instead.
-      if (rect) {
-        void reactFlow.fitBounds(rect, { duration: 500, padding: 0.02 })
-      } else {
-        void reactFlow.fitView({ nodes: [{ id }], duration: 500, padding: 0.02 })
-      }
+      // CARD_FIT_PADDING is 0 on purpose — the grid has no gutter, so any
+      // padding here frames the neighbouring card too.
+      const options = { duration: CARD_ZOOM_MS, padding: CARD_FIT_PADDING }
+      // The animation reports its own completion, and that is a better "the
+      // viewport has stopped" signal than the SETTLE_MS debounce the LOD would
+      // otherwise wait out — the debounce exists for wheel-zoom, which has no
+      // end event to offer. Taking it here is what stops a tapped card sitting
+      // as a thumbnail for an extra beat after it has visibly arrived.
+      setArrivedId(null)
+      const arrival = rect
+        ? reactFlow.fitBounds(rect, options)
+        : reactFlow.fitView({ nodes: [{ id }], ...options })
+      void arrival.then(() => {
+        // Guard against a stale arrival: tapping a second card mid-animation
+        // must not hand the full view back to the first one.
+        if (zoomedNodeIdRef.current === id) setArrivedId(id)
+      })
     },
     [reactFlow]
   )
@@ -498,6 +583,9 @@ function Canvas(): React.JSX.Element {
     const previous = prevViewportRef.current
     prevViewportRef.current = null
     zoomedNodeIdRef.current = null
+    setArrivedId(null)
+    // Back to the overview: the LOD must not re-open the card we are leaving.
+    deliberateOpenRef.current = false
     // Restoring a saved viewport that equals the current one wouldn't move the
     // canvas — we'd stay zoomed (the loop). Fall back to fitView so Back always
     // escapes to the overview.
@@ -544,7 +632,7 @@ function Canvas(): React.JSX.Element {
 
   const onThumb = useCallback((id: string, dataUrl: string) => {
     if (interactiveBrowser !== false) return
-    setThumbs((prev) => ({ ...prev, [id]: dataUrl }))
+    thumbStore.set(id, dataUrl)
     // Mirror to main so the mobile companion can serve it to the phone.
     cookrew().browserThumb(id, dataUrl)
   }, [interactiveBrowser])
@@ -569,7 +657,7 @@ function Canvas(): React.JSX.Element {
         if (browser.id === zoomedNodeIdRef.current) continue
         const dataUrl = await snapshot(browser.id).catch(() => null)
         if (!disposed && dataUrl) {
-          setThumbs((prev) => (prev[browser.id] === dataUrl ? prev : { ...prev, [browser.id]: dataUrl }))
+          thumbStore.set(browser.id, dataUrl) // set() dedupes identical values
         }
       }
     }
@@ -587,11 +675,8 @@ function Canvas(): React.JSX.Element {
   // those is how its cards went blank.
   useEffect(() => {
     if (!shouldClearLegacyThumbs({ remote: isRemoteMode(), interactive: interactiveBrowser })) return
-    setThumbs((prev) => {
-      for (const src of Object.values(prev)) {
-        if (src.startsWith('blob:')) URL.revokeObjectURL(src)
-      }
-      return Object.keys(prev).length === 0 ? prev : {}
+    thumbStore.clear((src) => {
+      if (src.startsWith('blob:')) URL.revokeObjectURL(src)
     })
   }, [interactiveBrowser])
 
@@ -630,19 +715,28 @@ function Canvas(): React.JSX.Element {
   useEffect(() => {
     if (!shouldPollThumbs({ remote: isRemoteMode(), interactive: interactiveBrowser })) return
     const tick = (): void => {
+      // Zoomed OUT, no browser card decodes its thumb (BrowserNode mini path),
+      // so fetching + blob-decoding all of them is pure memory churn — and on a
+      // phone at fit-to-view (all cards mini) that churn is what tips iOS Safari
+      // into a WebContent OOM. Skip the whole poll at mini; it resumes when a
+      // card is zoomed in enough to actually show a picture.
+      if (document.hidden || cardZoomMode(reactFlow.getZoom()) === 'mini') return
       const browserIds = (workspaceRef.current?.nodes ?? [])
         .filter((n) => n.kind === 'browser')
         .map((n) => n.id)
       for (const id of browserIds) {
-        void fetch(`/api/browser/${id}/thumb?v=${Date.now()}`)
+        // A HEADER, not ?token=. This is an ordinary fetch and can set one, so
+        // the token stays out of the URL — see tokenParam, which exists only
+        // for the two EventSources that genuinely cannot.
+        void fetch(apiPath(`/api/browser/${id}/thumb?v=${Date.now()}`), {
+          headers: authHeaders()
+        })
           .then((r) => (r.ok ? r.blob() : null))
           .then((blob) => {
             if (!blob) return
-            setThumbs((prev) => {
-              const old = prev[id]
-              if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
-              return { ...prev, [id]: URL.createObjectURL(blob) }
-            })
+            const old = thumbStore.get(id)
+            if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
+            thumbStore.set(id, URL.createObjectURL(blob))
           })
           .catch(() => undefined)
       }
@@ -669,12 +763,13 @@ function Canvas(): React.JSX.Element {
     return () => window.removeEventListener('keydown', onKey)
   }, [zoomBack])
 
+  // activities/thumbs are NOT here — they live in the per-id store, so this
+  // context value stays stable across the activity stream and the cards that
+  // read it (tool/clipping/picked) don't re-render on every event.
   const ui = useMemo(
     () => ({
       tool,
       clipping,
-      activities,
-      thumbs,
       interactiveBrowser,
       zoomToNode,
       zoomBack,
@@ -682,7 +777,7 @@ function Canvas(): React.JSX.Element {
       picked,
       togglePick
     }),
-    [tool, clipping, activities, thumbs, interactiveBrowser, zoomToNode, zoomBack, requestClose, picked, togglePick]
+    [tool, clipping, interactiveBrowser, zoomToNode, zoomBack, requestClose, picked, togglePick]
   )
 
   // Every change batch routes through the edge snapper: while a card is
@@ -764,6 +859,39 @@ function Canvas(): React.JSX.Element {
     async (event: React.MouseEvent) => {
       const position = screenToFlowPosition({ x: event.clientX, y: event.clientY })
       if (tool === 'terminal') {
+        // R2: an armed marketplace chip places HERE — this click is the aimed
+        // confirm, so there is no dialog between the chip and the canvas, not
+        // even for a team paste. It takes precedence over the harness/role
+        // chips because arming one clears the others.
+        if (presetId) {
+          // M4: the reset must survive a throw. Placement now REFUSES loudly
+          // (bad id, missing preset, failed signature), and without this a
+          // refusal left the chip armed and the tool stuck — every later click
+          // on the canvas would try to place the same broken preset again.
+          try {
+            await cookrew().placeInstalledPreset(presetId, position, orch)
+          } catch (error) {
+            console.error('Placing preset failed:', error)
+          } finally {
+            setPresetId(null)
+            setTool('move')
+          }
+          return
+        }
+        // A SAVED TEMPLATE placed as a preset IMPORTS a session: a new
+        // workspace forked from the template — team, worktree, workdir —
+        // switched to. Not a terminal on this canvas, so it returns before
+        // createTerminal. The click that "placed" it is the confirm.
+        if (!role && templates.includes(preset)) {
+          try {
+            await cookrew().templateImport(preset, position)
+          } catch (error) {
+            console.error('Importing template failed:', error)
+          } finally {
+            setTool('move')
+          }
+          return
+        }
         // window.prompt is unsupported in Electron — creation uses the
         // preset (or saved-role) chips in the dock; a role boots its preset
         // with the role prompt injected once the TUI is quiet (roleName path).
@@ -811,7 +939,9 @@ function Canvas(): React.JSX.Element {
         setConnectFrom(null)
       }
     },
-    [tool, preset, role, roles, orch, clipping, screenToFlowPosition, zoomToNode]
+    // presetId belongs here: without it the callback closes over a stale arm
+    // and the click places the PREVIOUSLY armed preset, or nothing at all.
+    [tool, preset, role, roles, orch, clipping, presetId, screenToFlowPosition, zoomToNode]
   )
 
   const onNodesDelete = useCallback((deleted: Node[]) => {
@@ -830,9 +960,20 @@ function Canvas(): React.JSX.Element {
     }
   }, [])
 
-  const terminals = (workspace?.nodes.filter((n) => n.kind === 'terminal') ??
-    []) as TerminalNodeData[]
-  const browsers = (workspace?.nodes.filter((n) => n.kind === 'browser') ?? []) as BrowserNodeData[]
+  // Memoized on the node list, NOT recomputed every render: a fresh .filter()
+  // each render gave overlayNodes' memo new-identity deps (so it recomputed
+  // every frame) and handed TerminalOverlayLayer/BrowserLayer new-identity array
+  // props (so they re-rendered) even during pan/zoom and activity, when the
+  // nodes themselves are unchanged. These now change only on a real workspace
+  // push.
+  const terminals = useMemo(
+    () => (workspace?.nodes.filter((n) => n.kind === 'terminal') ?? []) as TerminalNodeData[],
+    [workspace?.nodes]
+  )
+  const browsers = useMemo(
+    () => (workspace?.nodes.filter((n) => n.kind === 'browser') ?? []) as BrowserNodeData[],
+    [workspace?.nodes]
+  )
   // The snapshot poll reads this instead of `browsers`, so it subscribes once
   // rather than tearing down its interval on every workspace push.
   browsersRef.current = browsers
@@ -840,7 +981,18 @@ function Canvas(): React.JSX.Element {
   // instances each picked their own remote fullscreen winner, stacking a
   // browser view over the zoomed terminal (Magpie E2 HIGH 2).
   const overlayNodes = useMemo(() => [...terminals, ...browsers], [terminals, browsers])
-  const lod = useLodLayout(overlayNodes)
+  // Desktop always allows the passive coverage-open (zoom into a card to open
+  // it). On a phone only a deliberate tap opens one — see deliberateOpenRef.
+  // The zoomed card is passed through so the arbiter can honour the user's
+  // choice: geometry alone cannot tell the card they tapped from a card that
+  // happens to be big, which is how the full view ended up on a card off in the
+  // corner while the focused one filled the stage.
+  const lod = useLodLayout(
+    overlayNodes,
+    !isRemoteMode() || deliberateOpenRef.current,
+    zoomedNodeIdRef.current,
+    arrivedId
+  )
   /** Null once the node is gone, which is also how the dialog self-dismisses. */
   const closingNode = closingId
     ? (workspace?.nodes.find((n) => n.id === closingId) ?? null)
@@ -974,6 +1126,15 @@ function Canvas(): React.JSX.Element {
           {/* Inside the stage on purpose: it covers exactly the canvas and
               leaves the header — which owns the way back — reachable above it.
               The canvas keeps running underneath rather than unmounting. */}
+          {view === 'agents' && canGrant() && (
+            <button
+              className="gs-entry"
+              onClick={() => setGrantOpen(true)}
+              title="Who may call your agents over the internet"
+            >
+              🔑 WHO CAN CALL
+            </button>
+          )}
           {view === 'agents' && (
             <RosterPanel
               workspace={workspace}
@@ -990,6 +1151,7 @@ function Canvas(): React.JSX.Element {
                 setTool('move')
               }}
               variant="view"
+              onOpenGrants={() => setGrantOpen(true)}
               onClose={() => setView('canvas')}
             />
           )}
@@ -1029,10 +1191,24 @@ function Canvas(): React.JSX.Element {
           onPreset={(name) => {
             setPreset(name)
             setRole(null)
+            setPresetId(null)
           }}
           roles={roles}
           role={role}
-          onRole={setRole}
+          onRole={(name) => {
+            setRole(name)
+            setPresetId(null)
+          }}
+          installedPresets={installedPresets}
+          presetId={presetId}
+          onPresetChip={(id) => {
+            // Arm only — the canvas click commits (R2).
+            setPresetId(id)
+            setRole(null)
+          }}
+          gatedPresetId={gatedId}
+          onPresetGate={openPresetGate}
+          onCheckUpdates={checkPresetUpdates}
           orch={orch}
           onOrch={setOrch}
           voiceFor={
@@ -1064,6 +1240,13 @@ function Canvas(): React.JSX.Element {
           onPrimaryChange={setZoomedTerminalId}
         />
         {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
+        {grantOpen && activeWsId && (
+          <GrantPanel
+            workspace={workspace}
+            workspaceId={activeWsId}
+            onClose={() => setGrantOpen(false)}
+          />
+        )}
         {/* One confirmation for every close path. Rendered last so it sits over
             the zoomed overlays the ✕ was clicked in. A node that vanished while
             the dialog was open (⌘W elsewhere, a crash) simply has nothing to

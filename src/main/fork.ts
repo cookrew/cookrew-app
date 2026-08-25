@@ -9,6 +9,7 @@
 //     fresh agent seeded with a plain-text transcript replay.
 
 import { randomUUID } from 'node:crypto'
+import { ownerSubmit } from './ask'
 import { DEFAULT_TERMINAL_SIZE, TerminalNodeData, uniqueName } from '../shared/model'
 import { buildForkPreamble, buildResumeForkNotice } from '../shared/fork'
 import { stripSessionFlags } from '../shared/claude-fork'
@@ -38,9 +39,6 @@ const BOOT_POLL_MS = 300
 const BOOT_QUIET_MS = 1500
 /** Inject anyway after this long, so a chatty TUI can't stall the fork. */
 const BOOT_TIMEOUT_MS = 25000
-/** Pause between pasting the preamble and pressing Enter. */
-const SUBMIT_DELAY_MS = 150
-
 /**
  * Create the fork node (placed beside its source, wired to it with an edge)
  * and kick off context injection. Returns as soon as the card exists — the
@@ -120,19 +118,64 @@ export function forkTerminal(
       })
   const session = deps.ptys.get(added.id)
   if (session) {
-    injectWhenReady(session, firstMessage).catch((error) => {
-      console.error('Fork context injection failed:', error)
-    })
+    trackInjection(
+      added.id,
+      injectWhenReady(session, firstMessage).catch((error) => {
+        console.error('Fork context injection failed:', error)
+      })
+    )
   }
   return added
 }
 
 /**
- * Wait for the agent TUI to boot (first output, then quiescence), then paste
- * the preamble via bracketed paste — multi-line text must arrive as ONE
- * message, not one submit per newline — and press Enter. Shared with the
- * team-fork engine (teams.ts), which injects per-terminal context the same
- * way after a workspace switch boots the forked agents.
+ * Injections still in flight, by fork node id.
+ *
+ * WHY THIS IS OBSERVABLE NOW (④ · S4). This function has always returned as
+ * soon as the CARD exists, with the context landing asynchronously afterwards —
+ * fine for the owner, who sees a card fill in. It is not fine for a remote
+ * call, because the preamble a non-native fork receives CONTAINS A PLAIN-TEXT
+ * REPLAY OF THE SOURCE'S TURNS. A caller whose ask started before that landed
+ * would get the replay back in its own reply diff: the owner's transcript,
+ * handed to the internet, by a path nobody wrote down.
+ *
+ * So the promise stops being discarded. Nothing else about the fork changes,
+ * and no existing caller has to wait — this only makes an already-existing
+ * asynchronous fact askable by the one caller that must not race it.
+ */
+const injections = new Map<string, Promise<void>>()
+
+function trackInjection(nodeId: string, promise: Promise<void>): void {
+  injections.set(nodeId, promise)
+  // Settled entries are dropped, so this cannot grow with fork count.
+  void promise.finally(() => {
+    if (injections.get(nodeId) === promise) injections.delete(nodeId)
+  })
+}
+
+/**
+ * Resolves once this fork's context has landed — immediately if it already has.
+ *
+ * An unknown id resolves rather than rejecting: a fork made before this process
+ * started, or one whose injection already settled, is READY, and the caller
+ * asking cannot tell those apart from a fork that never needed one. Callers
+ * that need a bound must impose their own — this promise is as patient as
+ * injectWhenReady's own 25-second boot ceiling.
+ */
+export function forkContextReady(nodeId: string): Promise<void> {
+  return injections.get(nodeId) ?? Promise.resolve()
+}
+
+/**
+ * Wait for the agent TUI to boot (first output, then quiescence), then submit
+ * the preamble through the owner-submit primitive (Sol r7 P0-2), which
+ * delivers it as ONE bracketed paste plus a delayed Enter — multi-line text
+ * must arrive as one message, not one submit per newline — under a producer
+ * lease held across the whole sequence. A refusal (a dispatch mid-delivery
+ * at the fresh terminal, a contaminated input box) throws, and the caller's
+ * catch reports the failed injection instead of a silent half-delivery.
+ * Shared with the team-fork engine (teams.ts), which injects per-terminal
+ * context the same way after a workspace switch boots the forked agents.
  */
 export async function injectWhenReady(session: PtySession, preamble: string): Promise<void> {
   const startedAt = Date.now()
@@ -146,7 +189,6 @@ export async function injectWhenReady(session: PtySession, preamble: string): Pr
       }
     }, BOOT_POLL_MS)
   })
-  session.write(`\x1b[200~${preamble}\x1b[201~`)
-  await new Promise((resolve) => setTimeout(resolve, SUBMIT_DELAY_MS))
-  session.write('\r')
+  const verdict = await ownerSubmit(session, `${preamble}\r`)
+  if (!verdict.ok) throw new Error(verdict.reason)
 }

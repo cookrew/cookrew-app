@@ -105,13 +105,58 @@ import type {
 /** Wire protocol this module was written against (`herdr api schema`). */
 export const HERDR_PROTOCOL = 19
 
+/**
+ * A workspace switch fires a BURST of herdr calls (PTY teardown + spawn per
+ * terminal). Under that burst the client socket can return EAGAIN — "Resource
+ * temporarily unavailable (os error 35)" — which the CLI surfaces as "lost
+ * connection to server" even though the server is healthy and the pane is alive.
+ * It is transient contention, not a dead server, so the right answer is to
+ * retry the call, not to tear down the attach. Anything else is caught here too
+ * (a real failure) and rethrown after the last attempt.
+ */
+const TRANSIENT = /os error 35|temporarily unavailable|resource temporarily|\beagain\b/i
+
+export function isTransientHerdrError(err: unknown): boolean {
+  const e = err as { code?: string; stderr?: unknown; message?: unknown } | null
+  if (e?.code === 'EAGAIN') return true
+  return TRANSIENT.test(`${String(e?.stderr ?? '')} ${String(e?.message ?? '')}`)
+}
+
+/** Synchronous sleep — execFileSync is sync, so the backoff must be too. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/**
+ * Run `exec`, retrying ONLY a transient EAGAIN with a short growing backoff.
+ * A non-transient failure throws immediately; a transient one that never clears
+ * throws after the last attempt, so a genuinely dead server still surfaces.
+ */
+export function runWithHerdrRetry<T>(exec: () => T, attempts = 4): T {
+  let last: unknown
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return exec()
+    } catch (err) {
+      last = err
+      if (i === attempts - 1 || !isTransientHerdrError(err)) throw err
+      sleepSync(25 * (i + 1))
+    }
+  }
+  throw last
+}
+
 export const herdrRunner: CommandRunner = {
   run: (file, args) =>
-    execFileSync(file, args, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 2000
-    }),
+    runWithHerdrRetry(() =>
+      execFileSync(file, args, {
+        encoding: 'utf8',
+        // stderr PIPED (was ignored) so a thrown error carries the herdr
+        // message, and the EAGAIN retry above can see it.
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 2000
+      })
+    ),
   runQuiet: (file, args) => {
     try {
       execFileSync(file, args, { stdio: 'ignore', timeout: 2000 })
@@ -120,8 +165,19 @@ export const herdrRunner: CommandRunner = {
     }
   },
   probe: (file, args) => {
+    // Retried too: a transient EAGAIN here would report herdr UNAVAILABLE and
+    // trip the tmux fallback — the exact wrong outcome under switch contention.
     try {
-      return spawnSync(file, args, { stdio: 'ignore', timeout: 2000 }).status === 0
+      return runWithHerdrRetry(() => {
+        const r = spawnSync(file, args, { stdio: ['ignore', 'ignore', 'pipe'], timeout: 2000 })
+        if (r.error) throw r.error
+        // A non-zero exit with an EAGAIN message is transient; surface it so the
+        // retry catches it rather than reporting a clean "unavailable".
+        if (r.status !== 0 && isTransientHerdrError({ stderr: r.stderr })) {
+          throw Object.assign(new Error('herdr probe transient'), { stderr: r.stderr })
+        }
+        return r.status === 0
+      })
     } catch {
       return false
     }

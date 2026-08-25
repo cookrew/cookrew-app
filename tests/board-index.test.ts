@@ -120,7 +120,7 @@ describe('boardSourcesFrom — adapting the main-process singletons', () => {
       spawnedAt: 1
     }
     const built = boardSourcesFrom({
-      store: { activeId: 'ws-1' },
+      store: { focusedId: 'ws-1' },
       turns: { list: () => [] },
       turnStore: { loadAll: () => new Map() },
       agents: { list: () => [entry] }
@@ -132,7 +132,7 @@ describe('boardSourcesFrom — adapting the main-process singletons', () => {
 
   it('omits probe entirely when the runtime has no sampler', () => {
     const built = boardSourcesFrom({
-      store: { activeId: 'ws' },
+      store: { focusedId: 'ws' },
       turns: { list: () => [] },
       turnStore: { loadAll: () => new Map() },
       agents: { list: () => [] }
@@ -143,7 +143,7 @@ describe('boardSourcesFrom — adapting the main-process singletons', () => {
   it('reads each layer lazily, so a snapshot always sees current state', () => {
     let calls = 0
     const built = boardSourcesFrom({
-      store: { activeId: 'ws' },
+      store: { focusedId: 'ws' },
       turns: (() => {
         const t = {
           list: (): TerminalActivity[] => {
@@ -200,7 +200,7 @@ describe('createBoardNotifier — debounce', () => {
 
 describe('TurnStore.loadAll — the L3 ledger', () => {
   function storeWith(files: Record<string, unknown>): TurnStore {
-    const dir = mkdtempSync(path.join(tmpdir(), 'turns-'))
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'turns-')), 'turns')
     mkdirSync(dir, { recursive: true })
     for (const [name, body] of Object.entries(files)) {
       writeFileSync(path.join(dir, name), JSON.stringify(body), 'utf8')
@@ -219,7 +219,8 @@ describe('TurnStore.loadAll — the L3 ledger', () => {
   })
 
   it('skips non-JSON files, empty histories and corrupt files', () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'turns-'))
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'turns-')), 'turns')
+    mkdirSync(dir, { recursive: true })
     writeFileSync(path.join(dir, 'good.json'), JSON.stringify([record({ index: 1 })]), 'utf8')
     writeFileSync(path.join(dir, 'empty.json'), '[]', 'utf8')
     writeFileSync(path.join(dir, 'broken.json'), '{not json', 'utf8')
@@ -234,7 +235,8 @@ describe('TurnStore.loadAll — the L3 ledger', () => {
   })
 
   it('caches: a file written behind its back is NOT re-read', () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'turns-'))
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'turns-')), 'turns')
+    mkdirSync(dir, { recursive: true })
     writeFileSync(path.join(dir, 'a.json'), JSON.stringify([record({ index: 1 })]), 'utf8')
     const store = new TurnStore(dir)
     expect(store.loadAll().size).toBe(1)
@@ -244,7 +246,7 @@ describe('TurnStore.loadAll — the L3 ledger', () => {
   })
 
   it('refreshes incrementally on write, so the board sees new turns', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'turns-'))
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'turns-')), 'turns')
     const store = new TurnStore(dir)
     expect(store.loadAll().size).toBe(0)
     store.scheduleSave('t1', [record({ index: 1 })])
@@ -256,7 +258,7 @@ describe('TurnStore.loadAll — the L3 ledger', () => {
   })
 
   it('drops a removed terminal from the cache', () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'turns-'))
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'turns-')), 'turns')
     const store = new TurnStore(dir)
     store.scheduleSave('gone', [record({ index: 1 })])
     store.flushAll()

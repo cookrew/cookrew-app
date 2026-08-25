@@ -22,6 +22,12 @@
   --hp: #6bbe58;
   --rose: #dc2626;
   --violet: #9b8acb;
+  /* Violet is the persona accent (role coins, never a status colour). The HI
+     step is its raised sibling — the marketplace's own surfaces sit on it:
+     version pins on the rail, and the gated-chip lock badge. Promoted to a
+     real token because those two need to agree, and a hand-picked lighter
+     violet in each place is how palettes drift apart. */
+  --violet-hi: #c3b6e6;
   --note-bg: #fff3ad;
   --note-text: #3a3625;
 
@@ -31,6 +37,9 @@
   --vi-line: #2c2c30;
   --vi-text: #f5f5f7;
   --vi-dim: #98989d;
+  /* Focused checkpoint row: a SOLID surface, not an alpha tint over the
+     transcript (F5). Sits between --vi-panel and the amber it carries. */
+  --vi-panel-focus: #2b281c;
   --vi-working: #ff9f0a;
   --vi-wait: #ff453a;
   --vi-done: #32d74b;
@@ -63,6 +72,28 @@ body,
   flex-direction: column;
   width: 100%;
   height: 100%;
+}
+
+/* KEYBOARD AUTO-RISE (the band the keyboard covers). The shell keeps its full
+   height on purpose — shrinking it is what scrambled the PTY and dropped the
+   card out of full view — so the strip under the risen dock still belongs to
+   the stage, and the stage shows the canvas: a dark terminal thumbnail. That
+   matters because the strip is not always fully covered. iOS reports a visual
+   viewport that excludes its form-accessory bar as well as the keyboard, so the
+   dock rises clear of BOTH and the translucent bar is left showing whatever is
+   behind it — a dark card reads as a black stripe between the buttons row and
+   the keyboard. Painting the band in the dock's own cream puts app chrome
+   behind that bar instead. Zero-height (so invisible) with no keyboard up. */
+.cr-app::after {
+  content: '';
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--kb-inset, 0px);
+  background: var(--cream-hi);
+  z-index: 40;
+  pointer-events: none;
 }
 
 .cr-stage {
@@ -1071,6 +1102,105 @@ a.cr-btn {
   flex: 0 0 auto;
 }
 
+/* MINI TILES KEEP THEIR NAME READABLE.
+ *
+ * .node-title is a flat 10px, which is right on a card you are reading and
+ * useless on a tile you are scanning: at a 0.2 canvas it renders at two
+ * physical pixels. The terminal tile has always counter-scaled its name
+ * (.vi-mini-name below); notes and browsers rendered a title nobody could see,
+ * so a zoomed-out board showed WHERE things were and never WHICH they were.
+ *
+ * Scoped to .mini so the full card keeps its designed 10px — the inverse
+ * scale is a legibility fix for the degraded tile, not a type change. --z
+ * defaults to 1, so any card that does not publish the zoom is unaffected.
+ */
+.node.mini .node-title {
+  font-size: calc(10px * var(--z, 1));
+  /* Font-size takes the counter-scale; tracking must NOT, and an earlier
+     version of this rule gave it one anyway. letter-spacing in `em` is already
+     relative to this element's font-size, which is already 10px * --z — so
+     multiplying by --z a second time made tracking grow as --z SQUARED while
+     the glyphs grew linearly, and the name spread further apart the further
+     out you zoomed. .vi-mini-name does the same job by scaling font-size
+     alone. 0.04em, slightly under the 0.06em of a full card, because a tile
+     is trying to fit a whole name into a box and every gap costs a glyph. */
+  letter-spacing: 0.04em;
+}
+
+/* THE MINI TILE, one grammar for every kind.
+ *
+ * A terminal tile reads as a solid object at the overview because its DARK
+ * FILL carries the shape. A note or browser is cream on a cream canvas and
+ * leans on a 2px border and a 3px offset shadow — both of which live in card
+ * space, so at 0.2 zoom they resolve to sub-pixel and the tile dissolves into
+ * the background. Scaling them keeps the edge a real edge at every zoom.
+ */
+.node.mini {
+  border-width: calc(2px * var(--z, 1));
+  box-shadow: calc(3px * var(--z, 1)) calc(3px * var(--z, 1)) 0 var(--line);
+  cursor: zoom-in;
+}
+
+/* THE TILE'S ONE PIECE OF CONTENT: the name, centred.
+ *
+ * A terminal tile is a status coin plus a name, and the coin is doing real
+ * work — it carries phase. A note and a browser have no equivalent live fact
+ * at this size, so a kind glyph beside the name would be decoration competing
+ * with the only thing worth reading out here. Centred rather than
+ * left-aligned for the same reason: with nothing beside it, the name IS the
+ * tile, and a left edge just makes it look like something is missing.
+ *
+ * `flex: 1` is what puts it in the vertical middle — the row fills the tile
+ * and centres its content, exactly as .vi-mini does for a terminal.
+ */
+.node-mini {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(4px * var(--z, 1)) calc(6px * var(--z, 1));
+  overflow: hidden;
+}
+
+/* THE TILE HAS TWO DIMENSIONS; A NAME SHOULD USE BOTH.
+ *
+ * .node-title below is nowrap+ellipsis, which is correct in a header ROW —
+ * one line is all a header has. A tile is not a row: it is mostly empty
+ * vertical space, so honouring nowrap spent the whole name on one line and
+ * ellipsised the rest ("M2 DES…", or a bare "M …" on a small note). Wrapping
+ * turns that same box into three lines, which is enough for most names in
+ * full and a far better prefix for the rest.
+ *
+ * overflow-wrap: anywhere, not break-word: these names are slugs and paths as
+ * often as prose, and a 30-character unbroken token must break somewhere or
+ * it overflows the tile as a single line and we are back where we started.
+ *
+ * Clamped at 3 rather than left unbounded: the row is centred, so text taller
+ * than the tile would overflow BOTH edges and lose its own first line to the
+ * clip. Three lines fit the shortest tile on the board (a note), so the clamp
+ * — not the clip — is always what ends the text, and it ends it with an
+ * ellipsis that says there is more.
+ */
+.node-mini .node-title {
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  max-height: 100%;
+}
+
+/* A browser card is 560 tall against a note's 220, so the same 3-line clamp
+   that fills a note tile leaves most of a browser tile empty — and browser
+   names (page titles, paths) are the longest on the board. Give the taller
+   tile the lines it can actually show. */
+.browser-node .node-mini .node-title {
+  -webkit-line-clamp: 5;
+}
+
 .node-title {
   font-family: var(--font-pixel);
   font-size: 10px;
@@ -1268,6 +1398,28 @@ a.cr-btn {
   word-break: break-word;
   color: var(--phos-glow);
   text-shadow: 0 0 5px rgba(255, 215, 122, 0.25);
+}
+
+/* COPY FROM THE TRANSCRIPT. The trace lives inside a ReactFlow node, and
+   @xyflow/react's stylesheet sets `user-select: none` on nodes — which cascades
+   down and made the transcript text impossible to select, so it could not be
+   copied. Re-enable text selection (and a text cursor) on the readable content;
+   the block head stays chrome. The live xterm handles its own selection. */
+.ctx-transcript {
+  cursor: text;
+}
+.ctx-transcript,
+.ctx-block,
+.ctx-block-prompt,
+.ctx-block-tool,
+.ctx-tool-call,
+.ctx-tool-name,
+.ctx-tool-args,
+.ctx-tool-result,
+.ctx-block-idx,
+.ctx-block-title {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .ctx-block-prompt::before {
@@ -2233,6 +2385,15 @@ a.card-close {
   z-index: 1;
 }
 
+/* KEYBOARD AUTO-RISE (dock half). position:relative above makes a `bottom`
+   offset lift the bar without taking it out of flow or resizing anything. It
+   reads the same `--kb-inset` the zoomed terminal overlay translates by, so the
+   buttons row and the transcript move as one — driving one from JS state and
+   the other from the variable let them drift apart by a frame. */
+.cr-dock {
+  bottom: var(--kb-inset, 0px);
+}
+
 .cr-stage {
   background: var(--cream);
 }
@@ -2264,6 +2425,28 @@ a.card-close {
   background: var(--cream-hi);
   border: 2px solid var(--line);
   overflow: hidden;
+}
+
+/* KEYBOARD AUTO-RISE. The dock already lifts itself by `--kb-inset` (Dock.tsx);
+   this slides the zoomed terminal up by the same amount so its LAST rows — the
+   agent's prompt line — end up just above the risen dock instead of behind the
+   keyboard. The overlay's own top rows pass under the header, which is opaque
+   and sits at a higher z-index.
+
+   It is a TRANSFORM, deliberately, not a height change. Shrinking the overlay
+   (or the stage that sizes it) looks equivalent and is not:
+     - the overlay's ResizeObserver would refit xterm and resize the PTY, and
+       that pane is shared with the desktop viewer, so the two re-assert against
+       each other and the TUI's incremental redraw scatters mid-transcript;
+     - a shorter ReactFlow pane re-scores semantic-zoom coverage, so the card
+       drops out of its full view and the phone lands back on bare canvas;
+     - the vacated strip belongs to no element of ours, and the engine paints
+       its own (black) chrome there.
+   Translating changes what is ON SCREEN and nothing else: no resize event, no
+   SIGWINCH, no coverage change, no vacated band. `--kb-inset` is 0 / unset with
+   no keyboard up, so this is the identity on desktop. */
+.lod-overlay {
+  transform: translateY(calc(-1 * var(--kb-inset, 0px)));
 }
 
 .browser-lod .popout {
@@ -2930,6 +3113,114 @@ a.card-close {
 }
 
 /* Terminal-creation option chip for a saved role, beside preset chips. */
+/* MINE — a template saved but not yet served. Dashed, because the chip is a
+   real chip in every other respect: same footprint, same grammar, same click.
+   What is provisional is the SHARING, not the thing, so the border reports it
+   and nothing else changes. It solidifies when the template starts serving,
+   which is the whole transition the state exists to make visible. */
+.cr-chip.mine {
+  border-style: dashed;
+}
+
+/* LIVE — the same chip, now serving. Solid border is restated explicitly
+   rather than left to the absence of `.mine`, so the two states read as a pair
+   in the stylesheet the way they do on screen. */
+.cr-chip.live {
+  border-style: solid;
+}
+
+.cr-chip-live {
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.04em;
+  color: var(--cream-hi);
+  background: var(--hp);
+  border-radius: 2px;
+  padding: 2px 3px 1px;
+  margin-left: 1px;
+  flex: 0 0 auto;
+}
+
+/* VERSION — which version of a preset you hold.
+   FILLED violet, and that is load-bearing: .cr-ckpt-pin on the rail is a solid
+   violet flag, so the tag on the chip and the pin on the rail are the SAME MARK
+   in two places. A buyer who sees V2 on a dock chip and V2 on a rail is looking
+   at one object and never has to be told so.
+
+   NOTE FOR THE RULING THAT IS STILL OPEN: gate-sheet-unified, e2e-demo and
+   export-ux-demo all draw this OUTLINED, and use filled-violet for the UPDATE
+   state instead. That inverts the rhyme — on the rail, filled violet already
+   means "the version you are on" (.cr-ckpt-pin.current); on an outlined-tag
+   chip it would mean "a version you do NOT have". Shipping the filled form
+   because it is the one the shipped rail agrees with; if the ruling goes the
+   other way this rule and .cr-ckpt-pin.current move together, not separately. */
+.cr-chip-ver {
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.04em;
+  color: var(--cream-hi);
+  background: var(--violet);
+  border-radius: 2px;
+  padding: 1px 3px 0;
+  margin-left: 1px;
+  flex: 0 0 auto;
+}
+
+/* PRICE — a FACT about the preset, so a tag like the version tag, never a
+   badge. Badges say "a state is true of this"; a price says "this is what the
+   thing is", and it belongs in the same slot the version uses.
+
+   ONE SLOT, ONE TRUTH: an UNOWNED chip shows what it would cost you, an OWNED
+   chip shows which version you hold. The tag answers "what would this cost
+   ME", and for an owner the answer is nothing, so the slot has something
+   better to say. The mutual exclusion is enforced in the component, not here —
+   CSS can style two tags but cannot stop a caller rendering both, and a rule
+   that only holds when someone remembers it is not a rule. See the test.
+
+   Amber-deep on cream: an OFFER. Never rose, never the amber-soft used for
+   warnings — a price is not a problem, and the first thing a buyer learns
+   about this product should not be coloured like one. */
+.cr-chip-price {
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.04em;
+  color: var(--amber-deep);
+  background: var(--cream-hi);
+  border: 1.5px solid var(--amber-deep);
+  border-radius: 2px;
+  padding: 1px 3px 0;
+  margin-left: 1px;
+  flex: 0 0 auto;
+}
+
+/* BY — the ENTIRE authority surface for an imported chip. Not a panel, not a
+   hover card: one tag that says whose it is, sitting where the eye already
+   goes for chip metadata. A sprite plus a handle is the smallest thing that
+   answers "who am I trusting" without opening anything. */
+.cr-chip-by {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+  background: var(--cream-lo);
+  border-radius: 2px;
+  padding: 1px 3px 0;
+  margin-left: 1px;
+  flex: 0 0 auto;
+  max-width: 84px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.cr-chip-by .role-avatar {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+}
+
 .cr-chip.role {
   display: inline-flex;
   align-items: center;
@@ -2993,9 +3284,24 @@ a.card-close {
   font-size: calc(13px * var(--z, 1));
   font-weight: 700;
   color: var(--vi-text);
-  white-space: nowrap;
+  /* Wraps for the same reason a note tile does: the box has height the one
+     line was refusing to use, so a long agent name was cut when it did not
+     have to be. Four lines rather than the note's three — a terminal card is
+     420 tall against 220, and the name sits BESIDE the coin rather than under
+     it, so the whole height is the name's to use.
+
+     min-width: 0 because this is a flex item in .vi-mini: without it the
+     item's automatic minimum is its min-content width, and a long unbroken
+     name would push the row wider instead of wrapping inside it. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  line-height: 1.2;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
   overflow: hidden;
-  text-overflow: ellipsis;
+  max-height: 100%;
 }
 
 /* ---- workspace switcher (header) ---- */
@@ -3405,10 +3711,12 @@ body.cookrew-mobile .cookrew-minimap {
          <div class="cr-ckpt-here" style="top:railAnchorTop(frac)"></div>   (you-are-here marker)
          <div class="cr-ckpt-livedot"></div>
        </div>
-       <div class="cr-ckpt-scrub-preview" style="top:railAnchorTop(focused.frac)">   (the FAN, anchored ON the marker Y)
-         <div class="cr-ckpt-fan-up">   … neighbour .cr-ckpt-row … </div>          (grows UP from the focus)
+       <div class="cr-ckpt-list">                          (the full range, laid by fraction)
+         <div class="cr-ckpt-row" style="top:railAnchorTop(row.frac)">…</div>   (T1 … newest)
+         <div class="cr-ckpt-row live" style="top:railAnchorTop(1)">…</div>     (the reserved 1/n)
+       </div>
+       <div class="cr-ckpt-scrub-preview" style="top:railAnchorTop(focused.frac)">   (anchored ON the marker Y)
          <div class="cr-ckpt-fan-focus"><div class="cr-ckpt-row active">…</div></div>  (PINNED on the marker line)
-         <div class="cr-ckpt-fan-down"> … neighbour rows … <div class="cr-ckpt-row live">…</div> </div>   (grows DOWN)
        </div>
      </div>
    Each .cr-ckpt-row: <span class="cr-ckpt-row-actions"><button class="cr-ckpt-action">…ROLE/FORK</button></span>
@@ -3452,10 +3760,35 @@ body.cookrew-mobile .cookrew-minimap {
   transition: background 140ms ease;
 }
 
+/* F4 — the count sits ABOVE the reveal. The stack is list 4, focused tag 5,
+   this badge 6; the list's topmost row lands right under the badge, so at
+   z-index auto the count was simply covered by a row title. The backing plate
+   keeps it legible where a row passes behind it rather than relying on the
+   gap. */
 .cr-ckpt-count {
   position: absolute;
+  z-index: 6;
+  /* A READOUT, never a control. At z-index 6 over the top of the bar it was
+     swallowing taps meant for whatever sits under it: a version pin at frac 0
+     (checkpoint T1) resolved to `.cr-ckpt-count .n` under elementFromPoint and
+     could not be reached at all. Nothing in here has a handler, so nothing in
+     here should take a pointer. */
+  pointer-events: none;
+  padding: 2px 3px;
+  border-radius: 3px;
+  background: radial-gradient(
+    ellipse at center,
+    var(--phos-bg) 0%,
+    var(--phos-bg) 62%,
+    rgba(20, 17, 10, 0) 100%
+  );
   top: 14px;
   right: 7px;
+  /* The component overrides `top` inline when a version pin reaches the badge
+     (see CheckpointTimeline): it steps down past the pin rather than hiding it
+     or fading it, so neither the count nor the pin is lost. Transitioned so a
+     pin arriving or leaving reads as the badge making room, not as a jump. */
+  transition: top 160ms ease;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3539,10 +3872,14 @@ body.cookrew-mobile .cookrew-minimap {
 }
 
 /* --- the SELECT LIST is now the FAN: .cr-ckpt-scrub-preview wraps
-   .cr-ckpt-fan-up / .cr-ckpt-fan-focus / .cr-ckpt-fan-down, styled in
+   .cr-ckpt-list (full range) + .cr-ckpt-fan-focus (the pinned focus), styled in
    agent-roster.css next to its markup. The old full-panel kit
    (.cr-ckpt-full / -head / -list) was removed with the markup. --- */
 
+/* F5 — rows are OPAQUE. With `background: none` the transcript read straight
+   through every checkpoint title: over a dense pane the text of the terminal
+   and the text of the row interleave and neither is legible. The fade that F1
+   asks for is a fade of the whole tag, not a permanent see-through. */
 .cr-ckpt-row {
   display: flex;
   align-items: center;
@@ -3551,7 +3888,7 @@ body.cookrew-mobile .cookrew-minimap {
   padding: 7px 14px 7px 12px;
   cursor: pointer;
   position: relative;
-  background: none;
+  background: var(--vi-panel);
   border: none;
   text-align: left;
 }
@@ -3560,8 +3897,11 @@ body.cookrew-mobile .cookrew-minimap {
   background: rgba(255, 255, 255, 0.05);
 }
 
+/* The focused row's tint must be a SOLID colour, not an alpha wash over
+   whatever happens to be behind it — an alpha tint is how the transcript kept
+   showing through the one row that most needs to be readable (F5). */
 .cr-ckpt-row.active {
-  background: rgba(255, 214, 0, 0.07);
+  background: var(--vi-panel-focus);
 }
 
 .cr-ckpt-row.active::after {
@@ -3825,7 +4165,135 @@ body.cookrew-mobile .cookrew-minimap {
   opacity: 0.95;
 }
 
+/* --- VERSION PINS: the rail's THIRD marker class (marketplace §10, R8/R18) ---
+   Everything else on this bar is AMBER and UNLABELLED and either points
+   (diamond) or cuts (bar). A pin is the opposite on four axes at once, which is
+   what makes it separable in peripheral vision rather than on inspection:
+     hue     violet, not amber       — published identity, not session mechanics
+     shape   flag, not diamond/bar   — the only silhouette the rail was not using
+     label   named (V2), not anonymous
+     fill    opaque hard edge, not glow — permanent, not transient
+   Violet is not a free pick either: it is already this product's persona accent
+   (.role-avatar, .cr-chip.role), so a pin inherits a meaning the UI has been
+   teaching since the first role chip.
+
+   GEOMETRY. The rail is 30px and the line sits 13–16px in from its right edge.
+   right:11 + width:19 puts the flag's LEFT edge flush with the rail's left edge
+   (11 + 19 = 30), and the tip lands 11px from the right edge — so it crosses
+   the full 3px of the line and stops 2px PAST its far side. (The first version
+   of this comment said "2px into the line"; Tinker measured it and the tip is
+   past it, not inside it. The number was right and the sentence was not.)
+   Nothing overhangs the transcript.
+
+   ANCHORING: the component sets `top` from railAnchorTop(frac) and nothing
+   else, so F6 is inherited rather than re-derived. See CheckpointTimeline. */
+.cr-ckpt-pin {
+  position: absolute;
+  right: 11px;
+  width: 19px;
+  height: 13px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  padding-left: 2px;
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: var(--cream-hi);
+  background: var(--violet);
+  clip-path: polygon(0 0, 62% 0, 100% 50%, 62% 100%, 0 100%);
+  /* NO z-index, deliberately. `.cr-ckpt-here` is z-index AUTO, so a positive
+     value here painted the pin ON TOP of the scrub thumb — the exact inversion
+     the old comment claimed to prevent. It said "under the thumb (5)", but the
+     5 was from the design mock; the product's thumb never had one. Painting
+     order for auto/0 positioned siblings is TREE order, and the pins render
+     before the count and the thumb, so the thumb stays on top by construction.
+     A test pins that DOM order, because it is now load-bearing. */
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/* v100+ carries no label (R8). It keeps the full silhouette — an unlabelled
+   flag only LOOKS smaller because the eye reads text as mass. */
+/* IMPORTED PROVENANCE — the whole "whose is this" surface on a version pin.
+   A caller has to tell "my V2" from "drej's V2, authorized" in peripheral
+   vision, on a 19x13 flag, without a second panel to explain it.
+
+   THE CLIP IS THE CONSTRAINT, and it is why this is a corner dot and not a
+   ring, a border or a second flag: .cr-ckpt-pin carries
+   `clip-path: polygon(0 0, 62% 0, 100% 50%, 62% 100%, 0 100%)`, and a
+   clip-path clips the element's PSEUDO-ELEMENTS too. Anything drawn outside
+   that polygon — the obvious outline, a badge hanging off the tip — is sliced
+   by the flag's own silhouette. (0,0) is a polygon vertex, so the top-left
+   corner is the one place a mark is guaranteed whole.
+
+   F6 IS PRESERVED BY CONSTRUCTION, not by retest: `position: absolute` takes
+   the dot out of flow, so the pin's box is byte-identical with and without
+   `.imported`. The pin centres on railAnchorTop via translateY(-50%), and a
+   box that does not change cannot move a centre. The eval still runs, because
+   that is the gate's whole point.
+
+   Cream, not a new hue: it is the label's own colour, so the signal is the
+   PRESENCE of a mark rather than a colour nobody has been taught. At this size
+   peripheral vision resolves presence long before it resolves hue. */
+.cr-ckpt-pin.imported::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 1.5px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--cream-hi);
+  /* The current pin inverts to a dark label, so the dot inverts with it. */
+  box-shadow: 0 0 0 0.5px rgba(20, 17, 10, 0.35);
+}
+
+.cr-ckpt-pin.current.imported::after {
+  background: var(--phos-bg);
+  box-shadow: none;
+}
+
+/* The label shifts clear of the dot rather than sitting under it. Only when
+   imported — a local pin keeps every pixel of its 9.8px label area. */
+.cr-ckpt-pin.imported {
+  padding-left: 6px;
+}
+
+.cr-ckpt-pin.bare {
+  padding-left: 0;
+}
+
+/* The version the buyer is on, in the here-marker's emphasis grammar but the
+   pin's family colour. */
+.cr-ckpt-pin.current {
+  background: var(--violet-hi);
+  color: var(--phos-bg);
+  box-shadow: 0 0 6px rgba(155, 138, 203, 0.75);
+}
+
+/* COINCIDENCE RULE: while scrubbing, the thumb passes over pins. They dim and
+   drop the glow so the handle stays the brightest thing on the line. */
+.cr-ckpt-rail.dragging .cr-ckpt-pin {
+  opacity: 0.55;
+  box-shadow: none;
+}
+
 /* --- cream chrome (light contexts) --- */
+
+/* F5 made rows OPAQUE, which means they now carry a surface colour — and a
+   dark one on a cream rail is a black slab. The dark defaults get cream
+   counterparts here so the opacity fix does not become a theming bug the first
+   time .on-cream is used. */
+.cr-ckpt-rail.on-cream .cr-ckpt-row {
+  background: var(--cream-hi);
+}
+
+.cr-ckpt-rail.on-cream .cr-ckpt-row.active {
+  background: var(--amber-soft);
+}
+
 .cr-ckpt-rail.on-cream .cr-ckpt-line {
   background: linear-gradient(var(--line-soft), var(--dim));
 }
@@ -3833,6 +4301,14 @@ body.cookrew-mobile .cookrew-minimap {
 .cr-ckpt-rail.on-cream .cr-ckpt-count .n {
   color: var(--amber-deep);
   text-shadow: none;
+}
+
+/* `:not(.current)` is load-bearing: this selector is (0,3,0) and beat
+   `.cr-ckpt-pin.current` (0,2,0), repainting the current pin's dark label
+   cream-on-violet-hi at 1.86:1. Light chrome may restate the RESTING label
+   only; the current pin keeps the contrast its own rule gives it. */
+.cr-ckpt-rail.on-cream .cr-ckpt-pin:not(.current) {
+  color: var(--cream-hi);
 }
 
 .cr-ckpt-rail.on-cream .cr-ckpt-here {

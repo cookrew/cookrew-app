@@ -1,6 +1,49 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { askRaw, askTerminal, decodeRawEscapes, diffOutput, submitDelayMs } from '../src/main/ask'
+import {
+  activeAskCount,
+  askRaw,
+  askTerminal,
+  beginShutdown,
+  cancelAllAsks,
+  decodeRawEscapes,
+  diffOutput,
+  pasteAndSubmit,
+  resetShutdownForTests,
+  submitDelayMs
+} from '../src/main/ask'
+import { ProducerLease, ownerHolder } from '../src/main/producer-lease'
 import type { PtySession } from '../src/main/pty'
+
+/**
+ * The ask layer's one runtime dependency on the pty module is multiplexer().
+ * Held in a test-controlled slot: null (the default) exercises the typed
+ * path exactly as before; a fake with agentLifecycle exercises the
+ * herdr-native path and its submit-site guard (Sol r5 P0-1).
+ */
+interface FakeMux {
+  capabilities: { agentLifecycle: boolean }
+  promptAgent?: (
+    sessionName: string,
+    prompt: string,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ) => Promise<'done' | 'submitted' | 'failed'>
+  submitAgent?: (
+    sessionName: string,
+    prompt: string,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ) => Promise<'submitted' | 'failed'>
+  waitUntilIdle?: (
+    sessionName: string,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ) => Promise<boolean>
+}
+const muxHolder = vi.hoisted(() => ({ current: null as unknown }))
+vi.mock('../src/main/pty', () => ({
+  multiplexer: () => muxHolder.current
+}))
 
 /** Wrap text the way the ask layer delivers it: one bracketed-paste unit. */
 const paste = (body: string): string => `\x1b[200~${body}\x1b[201~`
@@ -168,5 +211,781 @@ describe('decodeRawEscapes', () => {
 
   it('decodes ESC sequences', () => {
     expect(decodeRawEscapes('\\e[A')).toBe('\x1b[A')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r5 P0-1 — the one-producer guard runs at the SUBMIT site: a native ask
+// consults the session's owner-input guard synchronously before the
+// irreversible promptAgent call (and the typed path before its paste), so an
+// armed dispatch is durably preempted or the ask is refused — a route-level
+// armed check upstream is a fast path with a check-to-submit race behind it.
+// ---------------------------------------------------------------------------
+
+describe('askTerminal — the one-producer guard at the submit site (Sol r5 P0-1)', () => {
+  afterEach(() => {
+    muxHolder.current = null
+    vi.useRealTimers()
+  })
+
+  const nativeMux = (
+    events: string[],
+    outcome: 'done' | 'submitted' | 'failed' = 'done'
+  ): FakeMux => ({
+    capabilities: { agentLifecycle: true },
+    promptAgent: async () => {
+      events.push('promptAgent')
+      return outcome
+    }
+  })
+
+  it('consults the guard with the SUBMITTING bytes, synchronously before promptAgent', async () => {
+    const events: string[] = []
+    muxHolder.current = nativeMux(events)
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      noteExternalInput: (data: string) => events.push(`announce:${JSON.stringify(data)}`),
+      beforeOwnerInput: (terminalId: string, data: string) => {
+        events.push(`guard:${terminalId}:${JSON.stringify(data)}`)
+        return 'allow' as const
+      }
+    } as unknown as PtySession
+
+    await askTerminal(session, 'fix the bug')
+    // The guard sees prompt + Enter (the bytes that SUBMIT — a bare prompt
+    // reads as typing and would not trigger preemption), the verdict precedes
+    // the submission with nothing in between, and only an accepted
+    // submission is announced as owner work.
+    expect(events).toEqual([
+      'guard:term-1:"fix the bug\\r"',
+      'promptAgent',
+      'announce:"fix the bug\\r"'
+    ])
+  })
+
+  it('REFUSES the ask on preempt-failed: no submission, no announcement', async () => {
+    const events: string[] = []
+    muxHolder.current = nativeMux(events)
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      noteExternalInput: () => events.push('announce'),
+      beforeOwnerInput: () => 'preempt-failed' as const
+    } as unknown as PtySession
+
+    await expect(askTerminal(session, 'fix the bug')).rejects.toThrow(
+      'agent has a dispatch in flight that could not be preempted'
+    )
+    expect(events).toEqual([])
+  })
+
+  it('closes the check-to-submit race: a dispatch arming AFTER route admission is still caught', async () => {
+    // The route's armed check passed with nothing armed; a dispatch arms
+    // while the request is still being read (modeled inside fullText, the
+    // last read before the guard). The submit-site guard — not the stale
+    // route answer — decides, and it refuses.
+    let armed = false
+    const events: string[] = []
+    muxHolder.current = nativeMux(events)
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => {
+        armed = true
+        return ''
+      },
+      noteExternalInput: () => events.push('announce'),
+      beforeOwnerInput: (): 'allow' | 'preempt-failed' =>
+        armed ? 'preempt-failed' : 'allow'
+    } as unknown as PtySession
+
+    await expect(askTerminal(session, 'deploy the release')).rejects.toThrow(
+      'agent has a dispatch in flight that could not be preempted'
+    )
+    expect(events).toEqual([])
+  })
+
+  it('a guard that PREEMPTS (allow after committing the interrupt) lets the ask proceed', async () => {
+    // The armed-dispatch case where preemption CAN commit: the guard
+    // interrupts the dispatch durably and answers allow — the ask then owns
+    // the agent and submits exactly once.
+    const events: string[] = []
+    muxHolder.current = nativeMux(events)
+    let dispatchOpen = true
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      noteExternalInput: () => events.push('announce'),
+      beforeOwnerInput: () => {
+        if (dispatchOpen) {
+          dispatchOpen = false // the durable preemption
+          events.push('preempted')
+        }
+        return 'allow' as const
+      }
+    } as unknown as PtySession
+
+    await askTerminal(session, 'fix the bug')
+    expect(events).toEqual(['preempted', 'promptAgent', 'announce'])
+    expect(dispatchOpen).toBe(false)
+  })
+
+  it('guards the TYPED path too: a refused ask throws instead of silently dropping bytes', async () => {
+    // No native mux → pasteAndSubmit, whose writes cross session.write. That
+    // guard refuses by silently dropping the submit — which here would mean
+    // waiting out quiescence over an agent that never got the prompt and
+    // returning noise as its reply. The ask-level guard makes the refusal an
+    // honest error, before anything reaches the pty.
+    muxHolder.current = null
+    const writes: string[] = []
+    const session = {
+      terminalId: 'term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      write: (data: string) => writes.push(data),
+      beforeOwnerInput: () => 'preempt-failed' as const
+    } as unknown as PtySession
+
+    await expect(askTerminal(session, 'fix the bug')).rejects.toThrow(
+      'agent has a dispatch in flight that could not be preempted'
+    )
+    expect(writes).toEqual([])
+  })
+
+  it('an unwired guard allows — plain sessions and existing tests are untouched', async () => {
+    const events: string[] = []
+    muxHolder.current = nativeMux(events)
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      noteExternalInput: () => events.push('announce')
+      // no beforeOwnerInput: nothing wired, nothing armed — allow.
+    } as unknown as PtySession
+
+    await askTerminal(session, 'fix the bug')
+    expect(events).toEqual(['promptAgent', 'announce'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r6 P0-1 / P0-2 — the ask under the producer lease. The r5 guard was a
+// point-in-time verdict; the lease is the reservation behind it: held through
+// promptAgent resolve (native) or paste+CR completion (typed), refusing a
+// concurrent owner submission honestly, and threading its own validity into
+// the delayed CR so a lost hold never submits.
+// ---------------------------------------------------------------------------
+
+describe('pasteAndSubmit — cancellation awareness (Sol r6 P0-2)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const fakeSession = (writes: string[]): PtySession =>
+    ({
+      write: (data: string) => writes.push(data)
+    }) as unknown as PtySession
+
+  it('a stillValid that goes false during the delay stops the CR (no submit)', async () => {
+    vi.useFakeTimers()
+    const writes: string[] = []
+    let valid = true
+    const promise = pasteAndSubmit(fakeSession(writes), 'the brief', undefined, () => valid)
+    // The paste went out while the delivery was still live…
+    expect(writes).toEqual([paste('the brief')])
+    // …then the dispatch is cancelled inside the delay window.
+    valid = false
+    await vi.advanceTimersByTimeAsync(2000)
+    // No CR: the pasted prompt stays UNSUBMITTED (inert residue in the input
+    // box — documented on pasteAndSubmit), and the caller learns it stopped.
+    expect(writes).toEqual([paste('the brief')])
+    await expect(promise).resolves.toBe('cancelled')
+  })
+
+  it('a stillValid false before ANY write sends nothing at all', async () => {
+    const writes: string[] = []
+    await expect(
+      pasteAndSubmit(fakeSession(writes), 'the brief', undefined, () => false)
+    ).resolves.toBe('cancelled')
+    expect(writes).toEqual([])
+  })
+
+  it('a hold that stays valid submits exactly as before', async () => {
+    vi.useFakeTimers()
+    const writes: string[] = []
+    const promise = pasteAndSubmit(fakeSession(writes), 'the brief', undefined, () => true)
+    await vi.advanceTimersByTimeAsync(2000)
+    await expect(promise).resolves.toBe('submitted')
+    expect(writes).toEqual([paste('the brief'), '\r'])
+  })
+})
+
+describe('askTerminal — the producer lease (Sol r6 P0-1)', () => {
+  afterEach(() => {
+    muxHolder.current = null
+    vi.useRealTimers()
+  })
+
+  it('the native ask HOLDS the lease across promptAgent and releases on resolve', async () => {
+    const lease = new ProducerLease()
+    const during: Array<ReturnType<ProducerLease['holderOf']>> = []
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      promptAgent: async () => {
+        during.push(lease.holderOf('term-1'))
+        return 'done'
+      }
+    } satisfies FakeMux
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      noteExternalInput: () => undefined
+    } as unknown as PtySession
+
+    await askTerminal(session, 'fix the bug', { lease })
+    expect(during).toHaveLength(1)
+    expect(during[0]?.kind).toBe('owner')
+    expect(lease.holderOf('term-1')).toBeNull()
+  })
+
+  it('a second concurrent owner ask is refused honestly — and the first is undisturbed', async () => {
+    const lease = new ProducerLease()
+    let releaseFirst = (): void => undefined
+    const gate = new Promise<'done'>((resolve) => {
+      releaseFirst = () => resolve('done')
+    })
+    let prompts = 0
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      promptAgent: async () => {
+        prompts += 1
+        return gate
+      }
+    } satisfies FakeMux
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      noteExternalInput: () => undefined
+    } as unknown as PtySession
+
+    const first = askTerminal(session, 'first ask', { lease })
+    // Let the first ask reach its blocking promptAgent.
+    await new Promise((resolve) => setImmediate(resolve))
+    await expect(askTerminal(session, 'second ask', { lease })).rejects.toThrow(
+      'another owner submission is in flight'
+    )
+    // The refusal submitted nothing and did not disturb the first ask's hold.
+    expect(prompts).toBe(1)
+    expect(lease.holderOf('term-1')?.kind).toBe('owner')
+    releaseFirst()
+    await first
+    expect(lease.holderOf('term-1')).toBeNull()
+  })
+
+  it('held-by-dispatch: the ask is REFUSED — no takeover past the boundary (Sol r7 P0-1)', async () => {
+    // The r6 flow preempted the dispatch and SEIZED the window here. But an
+    // owner can only observe a dispatch-held lease when promptAgent has
+    // already been invoked (no await sits between acquire and submit), so
+    // the takeover always landed owner bytes beside a submission the ledger
+    // interrupt never actually undid. Conservative rule: refuse and retry.
+    const lease = new ProducerLease()
+    const dispatch = { kind: 'dispatch', dispatchId: 'dsp-1' } as const
+    lease.acquire('term-1', dispatch)
+    const events: string[] = []
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      promptAgent: async () => {
+        events.push('promptAgent')
+        return 'done'
+      }
+    } satisfies FakeMux
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      noteExternalInput: () => undefined,
+      beforeOwnerInput: () => {
+        events.push('preempted')
+        return 'allow' as const
+      }
+    } as unknown as PtySession
+
+    await expect(askTerminal(session, 'take over', { lease })).rejects.toThrow(
+      'a dispatch is being delivered — retry in a moment'
+    )
+    // Nothing was preempted, nothing submitted; the dispatch keeps its
+    // window until its own release.
+    expect(events).toEqual([])
+    expect(lease.holderOf('term-1')).toEqual(dispatch)
+    lease.release('term-1', dispatch)
+    // Once the delivery settles, the same ask goes through.
+    await askTerminal(session, 'take over', { lease })
+    expect(events).toEqual(['preempted', 'promptAgent'])
+    expect(lease.holderOf('term-1')).toBeNull()
+  })
+
+  it('a contaminated input box refuses the ask until the terminal restarts (r8 P0-2)', async () => {
+    const lease = new ProducerLease()
+    lease.markContaminated('term-1')
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      promptAgent: async () => 'done'
+    } satisfies FakeMux
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      noteExternalInput: () => undefined
+    } as unknown as PtySession
+
+    // The refusal names the one real remedy — no control byte clears it.
+    await expect(askTerminal(session, 'fresh work', { lease })).rejects.toThrow(
+      'restart the terminal'
+    )
+    // Only the generation reset (terminal restart) readmits submits.
+    lease.retire('term-1')
+    await expect(askTerminal(session, 'fresh work', { lease })).resolves.toBe('')
+  })
+
+  it('the TYPED path holds the lease across paste → delay → CR', async () => {
+    vi.useFakeTimers()
+    muxHolder.current = null
+    const lease = new ProducerLease()
+    const writes: string[] = []
+    const session = {
+      terminalId: 'term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      write: (data: string) => {
+        writes.push(`${data === '\r' ? 'CR' : 'paste'} holder=${lease.holderOf('term-1')?.kind}`)
+      }
+    } as unknown as PtySession
+
+    const promise = askTerminal(session, 'typed ask', { lease, quiescenceMs: 0, graceMs: 0 })
+    await vi.advanceTimersByTimeAsync(2000)
+    await promise
+    // Both writes happened under the owner hold; released after the CR.
+    expect(writes).toEqual(['paste holder=owner', 'CR holder=owner'])
+    expect(lease.holderOf('term-1')).toBeNull()
+  })
+
+  it('a refusal on the typed path releases the hold before throwing', async () => {
+    muxHolder.current = null
+    const lease = new ProducerLease()
+    const session = {
+      terminalId: 'term-1',
+      fullText: () => '',
+      write: () => undefined,
+      beforeOwnerInput: () => 'preempt-failed' as const
+    } as unknown as PtySession
+
+    await expect(askTerminal(session, 'typed ask', { lease })).rejects.toThrow(
+      'agent has a dispatch in flight that could not be preempted'
+    )
+    // release-on-cancel: the failed acquisition left no orphan hold.
+    expect(lease.holderOf('term-1')).toBeNull()
+  })
+
+  it('an owner ask holding via one shared lease refuses a dispatch-held guard verdict too', async () => {
+    // The guard's mid-delivery 'refused' verdict is terminal for an ask: a
+    // delivery's bytes are in the buffer right now.
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      promptAgent: async () => 'done'
+    } satisfies FakeMux
+    const lease = new ProducerLease()
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      noteExternalInput: () => undefined,
+      beforeOwnerInput: () => 'refused' as const
+    } as unknown as PtySession
+
+    await expect(askTerminal(session, 'fix the bug', { lease })).rejects.toThrow(
+      'a dispatch delivery is mid-submission at this terminal'
+    )
+    expect(lease.holderOf('term-1')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r8 P1 — the native leg's abort seam and the lease-window split.
+// ---------------------------------------------------------------------------
+
+describe('askTerminal — abort on terminal retirement (Sol r8 P1)', () => {
+  afterEach(() => {
+    muxHolder.current = null
+  })
+
+  it('retiring the terminal mid-native-wait aborts the child and the ask throws honestly', async () => {
+    const lease = new ProducerLease()
+    let observed: AbortSignal | undefined
+    const writes: string[] = []
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      // Model execFile with a signal: pending until the abort fires, then
+      // reject the way a TERM-killed child settles its callback.
+      promptAgent: (_name, _prompt, _timeout, signal) =>
+        new Promise((_resolve, reject) => {
+          observed = signal
+          signal?.addEventListener('abort', () => reject(new Error('AbortError')), {
+            once: true
+          })
+        })
+    } satisfies FakeMux
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      write: (data: string) => writes.push(data),
+      noteExternalInput: () => undefined
+    } as unknown as PtySession
+
+    const promise = askTerminal(session, 'doomed ask', { lease })
+    // Let the ask reach its blocking native call, then end the terminal.
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(observed?.aborted).toBe(false)
+    lease.retire('term-1')
+    expect(observed?.aborted).toBe(true)
+    // The promise settles NOW (not at the ask timeout), throws instead of
+    // falling through to type into the reborn terminal, and left no state:
+    // no typed-path writes, no hold, and the dead leg's release no-oped.
+    await expect(promise).rejects.toThrow('retired mid-ask')
+    expect(writes).toEqual([])
+    expect(lease.holderOf('term-1')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r10 P1 — app shutdown cancels owner asks. Retirement aborts a single
+// terminal's asks, but before-quit neither retires the surviving terminals
+// nor otherwise reaches a `herdr agent prompt/wait` child — which could
+// outlive Electron until its ten-minute timeout. cancelAllAsks is the
+// conductor's before-quit primitive: it fires every active controller and
+// awaits the bounded TERM→KILL settlements.
+// ---------------------------------------------------------------------------
+
+describe('cancelAllAsks — the shutdown primitive (Sol r10 P1)', () => {
+  afterEach(() => {
+    muxHolder.current = null
+    // cancelAllAsks latches the shutdown admission gate (Sol r11 P1);
+    // later suites still admit asks.
+    resetShutdownForTests()
+  })
+
+  const askSession = (terminalId: string): PtySession =>
+    ({
+      terminalId,
+      sessionName: `cookrew_${terminalId}`,
+      fullText: () => '',
+      idleFor: () => 99_999,
+      noteExternalInput: () => undefined
+    }) as unknown as PtySession
+
+  it('two active native asks → cancelAll kills both children and resolves within bound', async () => {
+    const lease = new ProducerLease()
+    const signals: AbortSignal[] = []
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      // Model the blocking CLI child: pending until its signal fires, then
+      // settle the way a TERM-killed execFile rejects its callback.
+      promptAgent: (_name, _prompt, _timeout, signal) =>
+        new Promise((_resolve, reject) => {
+          if (signal) signals.push(signal)
+          signal?.addEventListener('abort', () => reject(new Error('AbortError')), {
+            once: true
+          })
+        })
+    } satisfies FakeMux
+
+    const first = askTerminal(askSession('term-1'), 'first ask', { lease })
+    const second = askTerminal(askSession('term-2'), 'second ask', { lease })
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(activeAskCount()).toBe(2)
+    expect(signals.map((s) => s.aborted)).toEqual([false, false])
+
+    const startedAt = Date.now()
+    await cancelAllAsks()
+    // Both controllers fired (each child got its TERM) and the settlements
+    // were awaited — well inside the 3s cap, not at any ask timeout.
+    expect(Date.now() - startedAt).toBeLessThan(3000)
+    expect(signals.map((s) => s.aborted)).toEqual([true, true])
+    await expect(first).rejects.toThrow('cancelled at app shutdown')
+    await expect(second).rejects.toThrow('cancelled at app shutdown')
+    // The registry drained with the settlements — nothing survives the quit.
+    expect(activeAskCount()).toBe(0)
+  })
+
+  it('a child that ignores the signal cannot hold the quit hostage past the cap', async () => {
+    const lease = new ProducerLease()
+    let freeChild: (outcome: 'done') => void = () => undefined
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      // Pathological: ignores its signal entirely; settles only when the
+      // test releases it after the cap has been proven.
+      promptAgent: () =>
+        new Promise((resolve) => {
+          freeChild = resolve
+        })
+    } satisfies FakeMux
+
+    const stuck = askTerminal(askSession('term-stuck'), 'doomed', { lease })
+    stuck.catch(() => undefined) // settles late, past the bounded quit
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(activeAskCount()).toBe(1)
+
+    const startedAt = Date.now()
+    await cancelAllAsks(50)
+    expect(Date.now() - startedAt).toBeLessThan(1000)
+    // Drain the leg so it cannot bleed into later tests: once the child
+    // finally settles, the post-await abort check still refuses the reply
+    // and the registry empties.
+    freeChild('done')
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(activeAskCount()).toBe(0)
+  })
+
+  it('is safe with nothing in flight', async () => {
+    await expect(cancelAllAsks()).resolves.toBeUndefined()
+  })
+})
+
+describe('askTerminal — the submission-ack lease window (Sol r8 P1)', () => {
+  afterEach(() => {
+    muxHolder.current = null
+  })
+
+  it('with submitAgent, the lease covers only the ack; the reply-wait runs outside it', async () => {
+    const lease = new ProducerLease()
+    const holderDuring: Array<string | undefined> = []
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      submitAgent: async () => {
+        holderDuring.push(lease.holderOf('term-1')?.kind)
+        return 'submitted'
+      },
+      waitUntilIdle: async () => {
+        holderDuring.push(lease.holderOf('term-1')?.kind)
+        return true
+      }
+    } satisfies FakeMux
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      noteExternalInput: () => undefined
+    } as unknown as PtySession
+
+    await askTerminal(session, 'quick ask', { lease, quiescenceMs: 0, graceMs: 0 })
+    // Held for the submission acknowledgement, FREE for the minutes-long
+    // reply wait — the desktop's input box is refused for milliseconds, not
+    // the whole turn.
+    expect(holderDuring).toEqual(['owner', undefined])
+    expect(lease.holderOf('term-1')).toBeNull()
+  })
+
+  it('retire AFTER the submission ack aborts the reply-wait and the ask throws retired (Sol r9 P1-4)', async () => {
+    // Distinct from retire-during-submit: the submission already succeeded
+    // and the lease is already free — the ask is inside its reply-wait. The
+    // r8 seam kept the AbortController subscribed but never passed it to
+    // waitUntilIdle, so retirement aborted no active child and the ask could
+    // later return output rendered by the REBORN generation.
+    const lease = new ProducerLease()
+    let idleSignal: AbortSignal | undefined
+    let reachedWait: () => void = () => undefined
+    const waitEntered = new Promise<void>((resolve) => {
+      reachedWait = resolve
+    })
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      submitAgent: async () => 'submitted',
+      // Model the real backend wait: pending until its signal fires, then
+      // settle false the way a killed CLI child resolves the wrapper.
+      waitUntilIdle: (_name, _timeout, signal) =>
+        new Promise((resolve) => {
+          idleSignal = signal
+          reachedWait()
+          signal?.addEventListener('abort', () => resolve(false), { once: true })
+        })
+    } satisfies FakeMux
+    let reads = 0
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => {
+        reads += 1
+        return reads === 1 ? '' : 'OUTPUT OF THE REBORN GENERATION'
+      },
+      idleFor: () => 99_999,
+      noteExternalInput: () => undefined
+    } as unknown as PtySession
+
+    const promise = askTerminal(session, 'slow ask', { lease, quiescenceMs: 0, graceMs: 0 })
+    await waitEntered
+    // The retirement signal reached the backend wait — and had not fired.
+    expect(idleSignal?.aborted).toBe(false)
+    lease.retire('term-1')
+    expect(idleSignal?.aborted).toBe(true)
+    // The wait settles NOW; the generation re-check after the awaited phase
+    // throws instead of reading the reborn terminal's screen as the reply.
+    await expect(promise).rejects.toThrow('retired mid-ask')
+  })
+
+  it('a positively failed submitAgent falls back to the typed path, exactly like promptAgent', async () => {
+    vi.useFakeTimers()
+    const lease = new ProducerLease()
+    const writes: string[] = []
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      submitAgent: async () => 'failed'
+    } satisfies FakeMux
+    const session = {
+      terminalId: 'term-1',
+      sessionName: 'cookrew_term-1',
+      fullText: () => '',
+      idleFor: () => 99_999,
+      write: (data: string) => writes.push(data),
+      noteExternalInput: () => undefined
+    } as unknown as PtySession
+
+    const promise = askTerminal(session, 'typed instead', {
+      lease,
+      quiescenceMs: 0,
+      graceMs: 0
+    })
+    await vi.advanceTimersByTimeAsync(3000)
+    await promise
+    expect(writes).toEqual([paste('typed instead'), '\r'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sol r11 P1 — one cancellation scope per ask, an admission latch, and a
+// drain that returns only when the registry is EMPTY. The r10 registration
+// covered only nativeAsk: a failed native submission fell through to the
+// typed path whose reply-wait no shutdown could reach, and an ask admitted
+// after the one-shot snapshot survived the quit entirely.
+// ---------------------------------------------------------------------------
+
+describe('shutdown latch + whole-ask cancellation scope (Sol r11 P1)', () => {
+  afterEach(() => {
+    muxHolder.current = null
+    resetShutdownForTests()
+    vi.useRealTimers()
+  })
+
+  const typedSession = (writes: string[], terminalId = 'term-1'): PtySession =>
+    ({
+      terminalId,
+      sessionName: `cookrew_${terminalId}`,
+      fullText: () => '',
+      viewportText: () => '',
+      // Never quiet: the typed reply-wait holds until cancelled.
+      idleFor: () => 0,
+      write: (data: string) => {
+        writes.push(data)
+      },
+      noteExternalInput: () => undefined
+    }) as unknown as PtySession
+
+  it('an ask entering after beginShutdown is refused with an honest error', async () => {
+    const lease = new ProducerLease()
+    beginShutdown()
+    await expect(askTerminal(typedSession([]), 'late ask', { lease })).rejects.toThrow(
+      'shutting down'
+    )
+    await expect(askRaw(typedSession([]), 'late raw', { lease })).rejects.toThrow('shutting down')
+    // Nothing registered: the drain has nothing of theirs to own.
+    expect(activeAskCount()).toBe(0)
+  })
+
+  it('the TYPED fallback reply-wait is cancelled at quit — not just the native leg', async () => {
+    vi.useFakeTimers()
+    const lease = new ProducerLease()
+    const writes: string[] = []
+    // No mux at all: the pure typed path, which r10 never registered.
+    const promise = askTerminal(typedSession(writes), 'quit me', { lease })
+    promise.catch(() => undefined)
+    // The paste and its delayed CR go out; the ask is now inside
+    // waitForQuiescence, held open forever by idleFor() === 0.
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(writes).toEqual([paste('quit me'), '\r'])
+    expect(activeAskCount()).toBe(1)
+
+    // before-quit: the whole-ask scope reaches the quiescence wait NOW.
+    await cancelAllAsks()
+    await expect(promise).rejects.toThrow('cancelled at app shutdown')
+    expect(activeAskCount()).toBe(0)
+  })
+
+  it('a quit inside the typed paste delay stops the CR', async () => {
+    vi.useFakeTimers()
+    const lease = new ProducerLease()
+    const writes: string[] = []
+    const promise = askTerminal(typedSession(writes), 'half delivered', { lease })
+    promise.catch(() => undefined)
+    // Only the paste is out; the delayed CR is still pending.
+    await vi.advanceTimersByTimeAsync(1)
+    expect(writes).toEqual([paste('half delivered')])
+
+    const drained = cancelAllAsks()
+    await vi.advanceTimersByTimeAsync(3000)
+    await drained
+    await expect(promise).rejects.toThrow()
+    // The CR never followed the cancelled paste — no submit of a dead ask.
+    expect(writes).toEqual([paste('half delivered')])
+    expect(activeAskCount()).toBe(0)
+  })
+
+  it('cancelAllAsks returns only once the registry is EMPTY (drain, not snapshot)', async () => {
+    const lease = new ProducerLease()
+    muxHolder.current = {
+      capabilities: { agentLifecycle: true },
+      // The child settles a tick AFTER its abort — a one-shot snapshot that
+      // failed to await settlement would return with the entry still live.
+      promptAgent: (_name, _prompt, _timeout, signal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener(
+            'abort',
+            () => setTimeout(() => reject(new Error('AbortError')), 10),
+            { once: true }
+          )
+        })
+    } satisfies FakeMux
+    const first = askTerminal(typedSession([], 'term-a'), 'one', { lease })
+    const second = askTerminal(typedSession([], 'term-b'), 'two', { lease })
+    first.catch(() => undefined)
+    second.catch(() => undefined)
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(activeAskCount()).toBe(2)
+
+    await cancelAllAsks()
+    expect(activeAskCount()).toBe(0)
+    await expect(first).rejects.toThrow('cancelled at app shutdown')
+    await expect(second).rejects.toThrow('cancelled at app shutdown')
+  })
+
+  it('cancelAllAsks latches admission itself — a race with a late caller cannot re-admit', async () => {
+    const lease = new ProducerLease()
+    await cancelAllAsks()
+    await expect(askTerminal(typedSession([]), 'post-drain ask', { lease })).rejects.toThrow(
+      'shutting down'
+    )
   })
 })

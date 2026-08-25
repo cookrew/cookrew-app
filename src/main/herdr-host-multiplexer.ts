@@ -47,10 +47,10 @@
 // The PUSH path (agent status) is a different concern and does not come through
 // this interface; it holds a socket open, because that is what it needs.
 
-import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { promptViaHerdr, waitForAgentState } from './herdr-agent-wait'
+import { promptViaHerdr, submitViaHerdr, waitForAgentState } from './herdr-agent-wait'
 import {
   sanitizeAgentEnv,
   type AttachSpawn,
@@ -68,6 +68,21 @@ export const HERDR_SESSION = 'cookrew'
 
 /** Bare shells — what a restored husk runs, and what a live agent never is. */
 const SHELL_NAMES = /^(sh|bash|zsh|fish|dash|ksh)$/
+
+/**
+ * The admission inventory's freshness contract (Sol r4/I6): a snapshot older
+ * than this kicks one async refresh behind itself. Shared by existence
+ * (sessionExistsCached) and pane RESOLUTION (paneFromInventory) — the same
+ * bounded staleness, the same stale-serve discipline.
+ */
+const ADMISSION_FRESH_MS = 500
+
+/** An unref'd wait — background retries must never hold the app open. */
+const sleepUnref = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    timer.unref?.()
+  })
 
 /** A pane herdr reports in `pane list`. Only the fields Cookrew reads. */
 export interface HerdrPane {
@@ -107,9 +122,51 @@ export function parseEnvelope(raw: string): Record<string, unknown> | null {
 
 /** Panes out of a `pane list` envelope, or [] when herdr said anything else. */
 export function parsePaneList(raw: string): HerdrPane[] {
+  return parsePaneListStrict(raw) ?? []
+}
+
+/**
+ * STRICT pane-list parse for the ADMISSION path (Sol r8 P1): only a
+ * well-formed pane_list envelope — a success result actually carrying a
+ * `panes` array — counts as an answer, and an empty array IS a valid answer
+ * (a fresh session genuinely has zero panes). Malformed JSON, herdr error
+ * envelopes and pane-less results return null so the refresh takes the
+ * failure backoff. The lenient parsePaneList above maps all of those to [],
+ * which was correct for its callers ("no signal" and "no panes" license the
+ * same non-action) but made the refresh's parse-failure backoff unreachable:
+ * an exit-0 bad response was PUBLISHED as a successful empty inventory,
+ * de-admitting every live agent while resetting the very backoff meant to
+ * bound the outage.
+ */
+export function parsePaneListStrict(raw: string): HerdrPane[] | null {
   const result = parseEnvelope(raw)
-  const panes = result?.panes
-  return Array.isArray(panes) ? (panes as HerdrPane[]) : []
+  if (result === null) return null
+  const panes = result.panes
+  if (!Array.isArray(panes)) return null
+  // EVERY element validated, not just the container (Sol r9 P1): malformed
+  // SUCCESSFUL backend output was the round-8 failure model, and a container
+  // check alone still published `{"panes":[null]}` as a healthy inventory —
+  // after which every sessionExistsCached executed `pane.label` and THREW
+  // instead of returning the refusal-safe 503. One invalid element rejects
+  // the whole snapshot into the failure backoff: a list herdr half-mangled
+  // is not evidence about any pane in it.
+  return panes.every(isPaneShaped) ? (panes as HerdrPane[]) : null
+}
+
+/**
+ * One pane element the strict parser will admit: a non-null object carrying
+ * the identity admission consumes — `pane_id` a non-empty string, `label` a
+ * string, null, or absent (an unlabelled pane is a real state; a number or
+ * object where the label should be is corruption).
+ */
+function isPaneShaped(value: unknown): value is HerdrPane {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const pane = value as Record<string, unknown>
+  if (typeof pane.pane_id !== 'string' || pane.pane_id.length === 0) return false
+  if (pane.label !== undefined && pane.label !== null && typeof pane.label !== 'string') {
+    return false
+  }
+  return true
 }
 
 /**
@@ -224,6 +281,103 @@ export function agentKind(command: string): string {
   return base.length > 0 ? base : 'shell'
 }
 
+/**
+ * The ASYNC CLI seam behind the admission-cache refresh and the delivery-leg
+ * reads: run `herdr` with these args, resolve stdout, reject on any
+ * spawn/exit/timeout failure. `signal` is the OWNERSHIP seam (Sol r11 P1):
+ * the multiplexer links every call to its tracked-operation controller, and
+ * a runner that honors it kills the child on abort — TERM first, KILL after
+ * a bound — instead of leaving it to its own timeout. A pre-aborted signal
+ * must refuse WITHOUT spawning.
+ */
+export type AsyncCliRunner = (
+  args: string[],
+  timeoutMs: number,
+  signal?: AbortSignal
+) => Promise<string>
+
+/** How long an aborted async child gets to honor SIGTERM before SIGKILL —
+ *  the same bound herdr-agent-wait's runCli uses, for the same reason. */
+const ASYNC_ABORT_SIGKILL_AFTER_MS = 2000
+
+/**
+ * The default AsyncCliRunner: execFile with the wait handed to libuv, bounded
+ * by a SIGKILL timeout so a hung `pane list` can neither latch the refresh's
+ * single-flight forever nor let its successors amplify forks (Sol r7). The
+ * child is unref'd — an admission probe must never hold the app open.
+ *
+ * Abort handling (Sol r11 P1): a pre-aborted signal rejects before the exec —
+ * refusal cannot lose a spawn-to-kill race — and an abort while the child
+ * runs SIGTERMs it now, SIGKILLs it after the bound. The promise settles
+ * exactly once, from the child's own exit callback.
+ */
+export function createAsyncHerdrRunner(env: NodeJS.ProcessEnv): AsyncCliRunner {
+  return (args, timeoutMs, signal) =>
+    new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new Error('aborted before spawn — no child was started'))
+        return
+      }
+      let killTimer: NodeJS.Timeout | null = null
+      const onAbort = (): void => {
+        child.kill('SIGTERM')
+        killTimer = setTimeout(() => child.kill('SIGKILL'), ASYNC_ABORT_SIGKILL_AFTER_MS)
+        killTimer.unref?.()
+      }
+      const child = execFile(
+        'herdr',
+        args,
+        { encoding: 'utf8', env, timeout: timeoutMs, killSignal: 'SIGKILL' },
+        (error, stdout) => {
+          if (killTimer !== null) clearTimeout(killTimer)
+          signal?.removeEventListener('abort', onAbort)
+          if (error) reject(error)
+          else resolve(typeof stdout === 'string' ? stdout : String(stdout))
+        }
+      )
+      signal?.addEventListener('abort', onAbort, { once: true })
+      child.unref?.()
+    })
+}
+
+/**
+ * Wait between polls instead of spinning.
+ *
+ * Every settle loop below probes herdr by SPAWNING ITS CLI — measured at ~9ms
+ * per `herdr agent get`. Unthrottled, a 1s budget fires ~110 of those and the
+ * 12s boot-verify budget ~1300, all against the one socket the long-lived
+ * `agent attach` clients stream through. Those clients report a socket that
+ * returns EAGAIN as a hard failure:
+ *
+ *     herdr: lost connection to server: Resource temporarily unavailable (os error 35)
+ *
+ * which is what a live pane showed during a workspace switch.
+ *
+ * Atomics.wait rather than a busy Date.now() spin: these callers are
+ * synchronous by contract (attachSpawn hands argv back inline), so the sleep
+ * has to be synchronous too, and this is the one form that does not burn the
+ * main thread. Legal on Node's main thread; it would throw on a renderer's,
+ * and none of this runs there.
+ */
+const SLEEP_LATCH = new Int32Array(new SharedArrayBuffer(4))
+
+export function sleepSync(ms: number): void {
+  if (ms > 0) Atomics.wait(SLEEP_LATCH, 0, 0, ms)
+}
+
+/**
+ * Backoff schedule between herdr probes in the settle loops.
+ *
+ * Backoff rather than a flat gap, because the two cases want opposite things.
+ * The common case resolves in tens of milliseconds and should not be slowed:
+ * the first gap is short. The pathological case runs the whole budget out —
+ * that is where the storm lives, and there a fixed 25ms gap would still fire
+ * ~350 spawns across the 12s boot-verify budget. Doubling to a 100ms ceiling
+ * makes that ~120, while the first few probes stay as prompt as before.
+ */
+const POLL_MIN_MS = 10
+const POLL_MAX_MS = 100
+
 export interface HerdrHostOptions {
   /**
    * Cookrew's herdr SESSION name — the isolation boundary, and tmux's
@@ -240,12 +394,24 @@ export interface HerdrHostOptions {
   configPath: string
   runner?: CommandRunner
   /**
+   * The async refresh behind the admission cache (Sol r8 P1). Defaults to a
+   * bounded execFile against `herdr` with the sanitized env
+   * (createAsyncHerdrRunner). Injectable so tests can drive malformed stdout,
+   * error envelopes, timeouts, fast failures and recovery through the REAL
+   * publish/backoff logic — the previous hard-coded execFile made that path
+   * untestable, which is how a malformed exit-0 response came to publish as
+   * a successful empty inventory.
+   */
+  asyncRunner?: AsyncCliRunner
+  /**
    * Start Cookrew's herdr server. Injected so the backend is testable without
    * spawning a daemon, and so the wait strategy lives in one place.
    */
   startServer?: () => void
   /** Overridable for tests; real waits are a poll against the socket. */
   waitForServerMs?: number
+  /** Gap between settle-loop probes. Injected so tests can assert throttling. */
+  sleep?: (ms: number) => void
   /**
    * How long to let a just-started server restore panes from disk, and a
    * just-restored pane spawn its shell, before acting on their absence.
@@ -264,6 +430,16 @@ export interface HerdrHostOptions {
 export function spawnHerdrServer(env: NodeJS.ProcessEnv): void {
   const child = spawn('herdr', ['server'], { detached: true, stdio: 'ignore', env })
   child.unref()
+}
+
+/**
+ * One tracked async herdr operation (Sol r11 P1): the controller that kills
+ * its child, and a promise that settles when the operation — child, retries,
+ * promise chain — is genuinely over. What cancelAllHerdrOperations drains.
+ */
+interface TrackedOp {
+  abort: AbortController
+  settled: Promise<void>
 }
 
 export class HerdrHostMultiplexer implements Multiplexer {
@@ -293,15 +469,32 @@ export class HerdrHostMultiplexer implements Multiplexer {
   }
 
   private readonly runner: CommandRunner
+  private readonly asyncRunner: AsyncCliRunner
   private readonly session: string
   private readonly configPath: string
   private readonly startServer: () => void
   private readonly waitForServerMs: number
   private readonly settleMs: number
+  private readonly sleep: (ms: number) => void
   private probed: boolean | null = null
   private serverUp = false
   /** One immutable pane-list snapshot while a synchronous attach burst runs. */
   private attachSnapshot: HerdrPane[] | null = null
+  /**
+   * Every async herdr operation this backend currently owns (Sol r11 P1):
+   * captures, deep captures, admission refreshes, registry resolutions,
+   * transcript-binding reports, and the submit/prompt/wait legs. Before this
+   * registry existed, interruptAll/retireAll/cancelAllAsks could not abort or
+   * await these children — a 5-second pane read or a report retry admitted
+   * before teardown survived the final app.quit and ran against stale state.
+   */
+  private readonly liveOps = new Set<TrackedOp>()
+  /**
+   * The shutdown latch: once cancelAllHerdrOperations has run, no new child
+   * may spawn through this backend. Late callers get the refusals they
+   * already classify — 'failed', false, null — never an unowned process.
+   */
+  private opsClosed = false
 
   constructor(options: HerdrHostOptions) {
     // Sanitized: the server is every pane's PARENT, so whatever launched
@@ -315,9 +508,11 @@ export class HerdrHostMultiplexer implements Multiplexer {
     this.session = options.session
     this.configPath = options.configPath
     this.runner = options.runner ?? createHerdrRunner(env)
+    this.asyncRunner = options.asyncRunner ?? createAsyncHerdrRunner(env)
     this.startServer = options.startServer ?? (() => spawnHerdrServer(env))
     this.waitForServerMs = options.waitForServerMs ?? 5000
     this.settleMs = options.settleMs ?? 2000
+    this.sleep = options.sleep ?? sleepSync
   }
 
   /**
@@ -358,8 +553,10 @@ export class HerdrHostMultiplexer implements Multiplexer {
    */
   private waitForRestore(): void {
     const deadline = Date.now() + this.settleMs
+    const waitABeat = this.pollBackoff()
     while (Date.now() < deadline) {
       if (this.panes().length > 0) return
+      waitABeat()
     }
   }
 
@@ -376,11 +573,22 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * until the next full app launch.
    *
    * The timer unrefs so it never holds the app open.
+   *
+   * `onDeath` fires the moment the death is DETECTED — before the restart is
+   * attempted and independent of whether it succeeds — because the two are
+   * different facts: every open dispatch was riding the server that died, and
+   * a restarted server does not resume the turns the dead one dropped. The
+   * dispatch service uses this to interrupt (never fail) its open records.
    */
-  startSupervisor(intervalMs = 15_000): NodeJS.Timeout {
+  startSupervisor(intervalMs = 15_000, onDeath?: (why: string) => void): NodeJS.Timeout {
     const timer = setInterval(() => {
       if (this.serverRunning()) return
       this.serverUp = false
+      try {
+        onDeath?.('herdr server died')
+      } catch (error) {
+        console.error('herdr onDeath handler threw:', error)
+      }
       try {
         this.ensureServer()
         console.error('herdr server died and was restarted by the supervisor')
@@ -390,6 +598,15 @@ export class HerdrHostMultiplexer implements Multiplexer {
     }, intervalMs)
     timer.unref?.()
     return timer
+  }
+
+  /**
+   * Public liveness answer for callers that must CLASSIFY a failure rather
+   * than recover from one: a promptAgent rejection over a dead server is an
+   * interruption, not a delivery failure. Same probe the supervisor trusts.
+   */
+  serverAlive(): boolean {
+    return this.serverRunning()
   }
 
   /**
@@ -417,6 +634,75 @@ export class HerdrHostMultiplexer implements Multiplexer {
     this.runner.runQuiet('herdr', args)
   }
 
+  /**
+   * Open one tracked operation (Sol r11 P1): a controller of our own, linked
+   * to the caller's signal, registered in liveOps until close(). The linked
+   * controller is the point — cancelAllHerdrOperations can fire it without
+   * owning the caller's signal, and the caller's abort still reaches the
+   * child through it. close() is idempotent by construction (Set.delete,
+   * resolve-once promise) and MUST run in the operation's finally.
+   */
+  private openOp(caller?: AbortSignal): { signal: AbortSignal; close: () => void } {
+    const abort = new AbortController()
+    const onCallerAbort = (): void => abort.abort()
+    caller?.addEventListener('abort', onCallerAbort, { once: true })
+    let settle!: () => void
+    const entry: TrackedOp = {
+      abort,
+      settled: new Promise<void>((resolve) => {
+        settle = resolve
+      })
+    }
+    this.liveOps.add(entry)
+    return {
+      signal: abort.signal,
+      close: (): void => {
+        caller?.removeEventListener('abort', onCallerAbort)
+        this.liveOps.delete(entry)
+        settle()
+      }
+    }
+  }
+
+  /**
+   * Every asyncRunner child goes through here (Sol r11 P1): tracked, killable
+   * and latched. A pre-aborted caller or a closed backend rejects WITHOUT
+   * spawning — the callers' existing catch branches classify the rejection as
+   * the refusal they already handle (backoff, null capture, 'failed').
+   */
+  private async runAsync(args: string[], timeoutMs: number, signal?: AbortSignal): Promise<string> {
+    if (this.opsClosed) throw new Error('herdr operations are shut down')
+    if (signal?.aborted) throw new Error('aborted before spawn — no child was started')
+    const op = this.openOp(signal)
+    try {
+      return await this.asyncRunner(args, timeoutMs, op.signal)
+    } finally {
+      op.close()
+    }
+  }
+
+  /**
+   * Shutdown ownership for every async child this backend commissioned
+   * (Sol r11 P1). Aborts each tracked operation's controller — the runner
+   * TERMs its child now and KILLs it after the bound — then awaits their
+   * settlement, capped at `capMs` so a wedged child cannot hold the quit
+   * hostage (its SIGKILL escalation is already running; the cap only stops
+   * the WAIT). Also latches the backend closed: an operation admitted after
+   * this snapshot would be exactly the unowned child the registry exists to
+   * prevent, so late callers are refused before any spawn. The conductor
+   * awaits this in before-quit, before app.quit.
+   */
+  async cancelAllHerdrOperations(capMs: number): Promise<void> {
+    this.opsClosed = true
+    const open = [...this.liveOps]
+    for (const op of open) op.abort.abort()
+    if (open.length === 0) return
+    await Promise.race([
+      Promise.all(open.map((op) => op.settled)).then(() => undefined),
+      sleepUnref(capMs)
+    ])
+  }
+
   /** Read every Cookrew pane from herdr, bypassing an attach-burst snapshot. */
   private readPanes(): HerdrPane[] {
     if (!this.available()) return []
@@ -431,6 +717,122 @@ export class HerdrHostMultiplexer implements Multiplexer {
   /** Every Cookrew pane, stable across a synchronous workspace attach burst. */
   private panes(): HerdrPane[] {
     return this.attachSnapshot ?? this.readPanes()
+  }
+
+  /**
+   * Bounded-staleness pane inventory for ADMISSION questions only (dispatch
+   * acceptance asking "does this session exist?"). 500ms of staleness is the
+   * freshness contract: a pane that died inside the window produces a
+   * delivery failure moments later, which the engine already classifies —
+   * while a fresh fork per concurrent POST serialized the main thread
+   * (Sol r4, I6). Lifecycle decisions (create/kill/reattach) must NEVER read
+   * this — they keep readPanes(), so nothing is created or killed from a
+   * cached answer.
+   */
+  private admissionCache: { at: number; panes: HerdrPane[] } | null = null
+  private admissionRefreshing = false
+  /** Epoch ms before which no new refresh may start (failure backoff). */
+  private admissionBackoffUntil = 0
+
+  /**
+   * Zero forks on the request path (Sol r5): an expired snapshot is SERVED
+   * STALE while one async refresh runs behind it — the admission question
+   * tolerates bounded staleness by contract (a pane that died in the window
+   * becomes a classified delivery failure), and the alternative was one
+   * synchronous CLI round trip blocking Electron main per expiry window.
+   * Cold start is pre-warmed by startSupervisor; a truly cold call answers
+   * from an empty inventory (refusal-safe: 503 unreachable, retryable)
+   * rather than ever forking inline.
+   */
+  private refreshAdmissionCacheSoon(): void {
+    // No synchronous probe here: available() forks. Cold-start coverage is
+    // primeAdmissionCache at supervisor start; a truly cold admission serves
+    // the empty inventory (retryable 503) while the async child answers.
+    if (this.admissionRefreshing || Date.now() < this.admissionBackoffUntil) return
+    this.admissionRefreshing = true
+    // GENUINELY async (Sol r6): a deferred synchronous fork still stalls the
+    // main loop one turn later — the injectable runner (default: execFile
+    // with a 3s SIGKILL bound) hands the wait to libuv and the snapshot
+    // publishes on completion (single-flight). Admission keeps serving the
+    // last snapshot meanwhile; a failed refresh keeps the stale one, which
+    // the delivery leg's own revalidation covers. Tracked (Sol r11 P1): a
+    // refresh in flight at shutdown is aborted and awaited like any child.
+    this.runAsync(['pane', 'list'], 3000)
+      .then((stdout) => {
+        // STRICT (Sol r8 P1): only a well-formed pane_list publishes — zero
+        // panes included. Malformed/error output takes the same backoff as a
+        // failed child; publishing it as an empty inventory would de-admit
+        // every live agent AND reset the backoff during the outage.
+        const panes = parsePaneListStrict(stdout)
+        if (panes === null) {
+          this.admissionBackoffUntil = Date.now() + 5000
+          return
+        }
+        this.admissionCache = { at: Date.now(), panes }
+        this.admissionBackoffUntil = 0
+      })
+      .catch(() => {
+        // Failure publishes a backoff timestamp: fast-failing children must
+        // not respawn once per admission during the very outage the cache
+        // exists to degrade through.
+        this.admissionBackoffUntil = Date.now() + 5000
+      })
+      .finally(() => {
+        this.admissionRefreshing = false
+      })
+  }
+
+  /**
+   * Seed the inventory outside any request (boot / supervisor start).
+   *
+   * Async-safe (Sol r8 P1): this must NOT call the synchronous readPanes — it
+   * runs on Electron's main thread at boot, and a wedged herdr CLI would
+   * freeze app launch indefinitely (neither the sync runner nor the probe has
+   * a timeout). It fires the same bounded single-flight refresh instead,
+   * fire-and-forget; until that publishes, the cold window serves the empty
+   * inventory, which admission classifies as a retryable refusal (503
+   * unreachable) rather than a hard failure.
+   */
+  primeAdmissionCache(): void {
+    this.refreshAdmissionCacheSoon()
+  }
+
+  sessionExistsCached(name: string): boolean {
+    if (this.attachSnapshot) return this.sessionExists(name)
+    if (!this.admissionCache || Date.now() - this.admissionCache.at > ADMISSION_FRESH_MS) {
+      this.refreshAdmissionCacheSoon()
+    }
+    return this.admissionCache?.panes.some((pane) => pane.label === name) ?? false
+  }
+
+  /**
+   * Pane RESOLUTION from the cached inventory — never a synchronous fork
+   * (Sol r10 P1). The DELIVERY paths (submitAgent/promptAgent, the async
+   * captures, the transcript-binding report) used to resolve their pane via
+   * paneFor → panes → readPanes, which forks the CLI inline on Electron main
+   * for every cache miss; concurrent dispatches serialized a per-agent spawn
+   * chain there, against A5's one-inventory rule.
+   *
+   * Stale-serve, exactly as sessionExistsCached: an expired snapshot answers
+   * while one async refresh runs behind it — the id↔label binding is far more
+   * stable than existence, and a pane that died inside the window becomes a
+   * classified delivery failure moments later. Only a truly COLD cache
+   * misses: the refresh is kicked and null is returned, so the caller reports
+   * an honest retryable failure. THE TRADEOFF, STATED: a cold cache turns
+   * into one classified retryable failure ('failed' / null — the engine
+   * already classifies honest delivery failures and retries via sweep and
+   * landing checks) instead of a main-thread stall. Lifecycle decisions
+   * (create/kill/reattach) must NEVER read this — they keep readPanes(), so
+   * nothing is created or killed from a cached answer.
+   */
+  private paneFromInventory(name: string): HerdrPane | null {
+    if (this.attachSnapshot) {
+      return this.attachSnapshot.find((pane) => pane.label === name) ?? null
+    }
+    if (!this.admissionCache || Date.now() - this.admissionCache.at > ADMISSION_FRESH_MS) {
+      this.refreshAdmissionCacheSoon()
+    }
+    return this.admissionCache?.panes.find((pane) => pane.label === name) ?? null
   }
 
   /**
@@ -717,6 +1119,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
     //   window expires -> refuse to act; booting types into the pane, and
     //                     "I could not tell" is not a license to type
     const deadline = Date.now() + this.settleMs
+    const waitABeat = this.pollBackoff()
     for (;;) {
       const seen = this.paneRuns(pane.pane_id, expected, spec.sessionName)
       if (seen === 'agent') return false
@@ -730,6 +1133,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
       // the positive bare-shell verdict that licenses recovery.
       if (seen === 'other' && pane.agent && pane.agent !== expected) return false
       if (Date.now() >= deadline) return false
+      waitABeat()
     }
   }
 
@@ -813,9 +1217,11 @@ export class HerdrHostMultiplexer implements Multiplexer {
    */
   private waitForShell(paneId: string): void {
     const deadline = Date.now() + this.settleMs
+    const waitABeat = this.pollBackoff()
     while (Date.now() < deadline) {
       const probe = this.foreground(paneId)
       if (probe.ok && probe.name !== null) return
+      waitABeat()
     }
   }
 
@@ -872,6 +1278,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // evidence the boot has not begun), a full beat apart, with ctrl+u making
     // each attempt self-cleaning.
     const deadline = Date.now() + this.settleMs * 6
+    const waitABeat = this.pollBackoff()
     type()
     let lastTypedAt = Date.now()
     for (;;) {
@@ -882,6 +1289,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
         lastTypedAt = Date.now()
       }
       if (Date.now() >= deadline) return
+      waitABeat()
     }
   }
 
@@ -974,8 +1382,22 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // Registration propagates asynchronously; give it a bounded moment so the
     // attach spawned right after this does not race it.
     const deadline = Date.now() + Math.min(this.settleMs, 1000)
+    const waitABeat = this.pollBackoff()
     while (Date.now() < deadline) {
       if (this.agentResolvable(paneId)) return
+      waitABeat()
+    }
+  }
+
+  /**
+   * One settle loop's worth of backoff. Call the returned function at the end
+   * of each iteration; it waits, then widens the next wait.
+   */
+  private pollBackoff(): () => void {
+    let gap = POLL_MIN_MS
+    return () => {
+      this.sleep(gap)
+      gap = Math.min(gap * 2, POLL_MAX_MS)
     }
   }
 
@@ -988,8 +1410,35 @@ export class HerdrHostMultiplexer implements Multiplexer {
     }
   }
 
+  /**
+   * The same registry question on the ASYNC runner (Sol r10 P1): the delivery
+   * legs are already async, and the sync `agent get` was one more inline fork
+   * on Electron main per submission. Bounded like the admission refresh; a
+   * spawn/exit/timeout failure reads as unresolvable, which the caller maps
+   * to the honest 'failed'. `signal` (Sol r11 P0-4): a cancellation during
+   * THIS await is the resolution-gap window — the child dies now, the lookup
+   * reads unresolvable, and the caller's own post-await revalidation refuses
+   * the submission.
+   */
+  private async agentResolvableAsync(paneId: string, signal?: AbortSignal): Promise<boolean> {
+    try {
+      return parseEnvelope(await this.runAsync(['agent', 'get', paneId], 3000, signal)) !== null
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Pane resolution rides the cached inventory (Sol r10 P1): a capture on a
+   * cold cache answers null — "no view of the pane", which every caller
+   * already tolerates — while the refresh runs, instead of forking readPanes
+   * inline. The read itself remains one bounded synchronous CLI call for the
+   * Multiplexer interface's synchronous callers (board pane snapshots); the
+   * dispatch engine's delivery legs use captureAsync/captureDeepAsync below,
+   * which fork nothing synchronously at all.
+   */
   capture(name: string): string | null {
-    const pane = this.paneFor(name)
+    const pane = this.paneFromInventory(name)
     if (!pane) return null
     try {
       // recent-unwrapped: scrollback with herdr's soft wrapping undone, which
@@ -1000,8 +1449,85 @@ export class HerdrHostMultiplexer implements Multiplexer {
     }
   }
 
+  /** The same read, reaching `lines` rows back instead of herdr's default. */
+  captureDeep(name: string, lines: number): string | null {
+    const pane = this.paneFromInventory(name)
+    if (!pane) return null
+    try {
+      return this.herdr([
+        'pane', 'read', pane.pane_id,
+        '--source', 'recent-unwrapped',
+        '--lines', String(Math.max(1, lines))
+      ])
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * The DELIVERY-LEG capture (Sol r10 P1): pane resolved from the cached
+   * inventory, the read itself on the async runner — zero synchronous runner
+   * calls on Electron main, which is the structural gate dispatch enforces.
+   * Null on a cold cache or a failed read; the engine classifies both as the
+   * honest "no view of the pane" it already handles (F3: unconfirmed is not
+   * undelivered). The conductor wires the dispatch deps' capture/captureDeep
+   * here for herdr hosts.
+   */
+  async captureAsync(name: string): Promise<string | null> {
+    const pane = this.paneFromInventory(name)
+    if (!pane) return null
+    try {
+      return await this.runAsync(
+        ['pane', 'read', pane.pane_id, '--source', 'recent-unwrapped'],
+        5000
+      )
+    } catch {
+      return null
+    }
+  }
+
+  /** captureAsync, reaching `lines` rows back — the landing-check depth. */
+  async captureDeepAsync(name: string, lines: number): Promise<string | null> {
+    const pane = this.paneFromInventory(name)
+    if (!pane) return null
+    try {
+      return await this.runAsync(
+        [
+          'pane', 'read', pane.pane_id,
+          '--source', 'recent-unwrapped',
+          '--lines', String(Math.max(1, lines))
+        ],
+        5000
+      )
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * EXACT scroll position — a live `herdr pane list` read (paneFor). This stays
+   * synchronous ON PURPOSE: scrollAnchor() reads the same value and it becomes
+   * TurnRecord.scrollLine, a persistent checkpoint anchor into the transcript.
+   * A stale anchor is a mark that points at the wrong place — worse than a slow
+   * one. The hot ACTIVITY path does NOT come through here; it uses the stale
+   * inventory (scrollStateStale) via pty.ts's cached wrapper.
+   */
   scrollState(name: string): ScrollState {
     return toScrollState(this.paneFor(name))
+  }
+
+  /**
+   * Bounded-stale scroll position for the ACTIVITY/LOD readout — served from the
+   * async inventory (paneFromInventory), never a synchronous fork. activityOf
+   * runs per tracked terminal on every output change AND on every /api/state and
+   * /api/activity poll; the exact path above forked `herdr pane list` once per
+   * terminal per 500ms cache miss, measured at 94.5% of main-thread JS. A scroll
+   * indicator tolerates bounded staleness, so the activity path reads this
+   * instead: one async refresh per 500ms shared across ALL terminals, zero forks
+   * on the read path. This must NEVER feed a checkpoint anchor — see scrollState.
+   */
+  scrollStateStale(name: string): ScrollState {
+    return toScrollState(this.paneFromInventory(name))
   }
 
   /**
@@ -1061,22 +1587,108 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * the main process for exactly that long.
    */
   /**
+   * MONOTONIC binding revision per pane name (Sol r11 P1): every
+   * reportAgentSession request mints the next number, and only the body
+   * holding the LATEST revision may publish. Revisions survive entry
+   * completion — they never reset while the process lives.
+   */
+  private readonly sessionReportRevs = new Map<string, number>()
+  /**
+   * The one in-flight transcript-binding report per pane name — its
+   * revision, the path it will publish, and the controller a successor
+   * fires to supersede it. The r10 shape keyed name+path, which prevented
+   * duplicates but let an OLD-path and a rotated NEW-path report race as
+   * independent children: when the newer command landed first and the older
+   * completed last, herdr stayed rebound to the predecessor transcript
+   * indefinitely (Sol r11 P1).
+   */
+  private readonly sessionReports = new Map<
+    string,
+    { rev: number; path: string; abort: AbortController }
+  >()
+
+  /**
    * Report the agent's transcript path to herdr.
    *
    * The `--agent` label is REQUIRED by the CLI, and it is read back off the
    * pane rather than threaded down from the caller: herdr already stores what
    * `report-agent` declared, so the value survives an app restart where the
    * pane exists but Cookrew never re-ran ensureSession for it.
+   *
+   * ASYNC-SAFE (Sol r10 P1): this sits on the dispatch accept path —
+   * beginWork → watchSessionTurns calls it before the 202 — and the old
+   * shape ran paneFor → readPanes plus the `quiet` report as TWO synchronous
+   * forks there. The pane now resolves from the cached inventory and the
+   * report rides the async runner, fire-and-forget. A cold cache SKIPS the
+   * report and retries asynchronously once the kicked refresh publishes
+   * (bounded attempts, unref'd waits) — dropping a beat is safe because the
+   * binding is idempotent and re-reported on every attach and every watch
+   * refresh anyway.
+   *
+   * SERIALIZED PER PANE with a monotonic revision (Sol r11 P1): a request
+   * for the path already in flight is a duplicate and drops; a request for
+   * a DIFFERENT path supersedes — the predecessor's child is aborted, its
+   * body loses the revision race and may not publish, and only the latest
+   * requested path ever reaches herdr. A rotation therefore cannot restore
+   * an obsolete transcript binding however the two completions land.
    */
   reportAgentSession(name: string, sessionPath: string): void {
-    const pane = this.paneFor(name)
-    if (!pane) return
-    this.quiet([
-      'pane', 'report-agent-session', pane.pane_id,
-      '--source', 'cookrew',
-      '--agent', pane.agent && pane.agent.length > 0 ? pane.agent : 'shell',
-      '--agent-session-path', sessionPath
-    ])
+    const held = this.sessionReports.get(name)
+    // The same binding is already the latest request and still in flight:
+    // nothing new to say. (The entry dies when its body settles, so a later
+    // idempotent re-report of the same path goes out as ever.)
+    if (held !== undefined && held.path === sessionPath) return
+    // The successor supersedes (Sol r11 P1): the old child is killed, and
+    // the old body's revision goes stale in the same synchronous stretch
+    // that mints ours — a stale completion can no longer publish anything.
+    held?.abort.abort()
+    const rev = (this.sessionReportRevs.get(name) ?? 0) + 1
+    this.sessionReportRevs.set(name, rev)
+    const entry = { rev, path: sessionPath, abort: new AbortController() }
+    this.sessionReports.set(name, entry)
+    void this.reportAgentSessionAsync(name, sessionPath, rev, entry.abort.signal).finally(() => {
+      if (this.sessionReports.get(name) === entry) this.sessionReports.delete(name)
+    })
+  }
+
+  /**
+   * The async body: resolve from cache, retry briefly across a cold window —
+   * and before EVERY spawn, prove this is still the latest requested binding
+   * (revision and signal both, Sol r11 P1): a superseded body must exit
+   * without publishing, whether it sat mid-retry-sleep or never found a pane.
+   */
+  private async reportAgentSessionAsync(
+    name: string,
+    sessionPath: string,
+    rev: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    // The retry cadence rides settleMs (tests shrink it): paneFromInventory
+    // kicks the refresh on a stale/cold cache, and one publish interval is
+    // all a live pane needs to appear.
+    const retryMs = Math.min(this.settleMs, 1000)
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      if (signal.aborted || this.sessionReportRevs.get(name) !== rev) return
+      const pane = this.paneFromInventory(name)
+      if (pane) {
+        try {
+          await this.runAsync(
+            [
+              'pane', 'report-agent-session', pane.pane_id,
+              '--source', 'cookrew',
+              '--agent', pane.agent && pane.agent.length > 0 ? pane.agent : 'shell',
+              '--agent-session-path', sessionPath
+            ],
+            3000,
+            signal
+          )
+        } catch {
+          // Best effort by contract — the binding re-reports on every attach.
+        }
+        return
+      }
+      await sleepUnref(retryMs)
+    }
   }
 
   /**
@@ -1090,28 +1702,111 @@ export class HerdrHostMultiplexer implements Multiplexer {
   async promptAgent(
     name: string,
     prompt: string,
-    timeoutMs: number
+    timeoutMs: number,
+    signal?: AbortSignal
   ): Promise<'done' | 'submitted' | 'failed'> {
-    const pane = this.paneFor(name)
+    // PRE-ABORTED (or shut down) is REFUSED before anything runs (Sol r11
+    // P0-4): the canceller already owns the outcome, and 'failed' with no
+    // spawn is the only answer that provably wrote nothing.
+    if (this.opsClosed || signal?.aborted) return 'failed'
+    // Cached resolution + async registry check (Sol r10 P1): the delivery
+    // leg forks nothing synchronously. A cold cache is an honest 'failed' —
+    // the engine classifies it and retries — with the refresh already kicked.
+    const pane = this.paneFromInventory(name)
     if (!pane) return 'failed'
-    if (!this.agentResolvable(pane.pane_id)) return 'failed'
-    return promptViaHerdr({
-      session: this.session,
-      configPath: this.configPath,
-      target: pane.pane_id,
-      timeoutMs,
-      prompt
-    })
+    const op = this.openOp(signal)
+    try {
+      if (!(await this.agentResolvableAsync(pane.pane_id, op.signal))) return 'failed'
+      // Revalidated AFTER the awaited resolution, in the same synchronous
+      // stretch as the submission (Sol r11 P0-4): a cancellation that fired
+      // while `agent get` ran must refuse HERE — the r10 shape sailed past
+      // it into promptViaHerdr, and the prompt reached the pane anyway.
+      if (op.signal.aborted) return 'failed'
+      return await promptViaHerdr({
+        session: this.session,
+        configPath: this.configPath,
+        target: pane.pane_id,
+        timeoutMs,
+        prompt,
+        signal: op.signal
+      })
+    } finally {
+      op.close()
+    }
   }
 
-  async waitUntilIdle(name: string, timeoutMs: number): Promise<boolean> {
-    const pane = this.paneFor(name)
+  /**
+   * Submission-acknowledgement mode: returns as soon as the prompt is IN,
+   * without waiting out the turn — the short window a producer lease needs
+   * to cover, nothing more (Sol r8). Ambiguity maps to 'submitted': the
+   * do-not-retype rule applies exactly as in promptAgent.
+   */
+  async submitAgent(
+    name: string,
+    prompt: string,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ): Promise<'submitted' | 'failed'> {
+    // Same discipline as promptAgent (Sol r10 P1): cached resolution, async
+    // registry check, zero synchronous forks on the delivery leg — and the
+    // same refusal-before-spawn on a pre-aborted signal (Sol r11 P0-4).
+    if (this.opsClosed || signal?.aborted) return 'failed'
+    const pane = this.paneFromInventory(name)
+    if (!pane) return 'failed'
+    const op = this.openOp(signal)
+    try {
+      if (!(await this.agentResolvableAsync(pane.pane_id, op.signal))) return 'failed'
+      // The awaited resolution is the round-11 gap: an interrupt, release or
+      // retirement that fired while `agent get` ran left the controller
+      // aborted but the leg marching on — the r10 shape then submitted the
+      // cancelled brief anyway. Revalidate in the same synchronous stretch
+      // as the submission; runCli's own pre-aborted refusal is the backstop.
+      if (op.signal.aborted) return 'failed'
+      return await submitViaHerdr({
+        session: this.session,
+        configPath: this.configPath,
+        target: pane.pane_id,
+        timeoutMs,
+        prompt,
+        signal: op.signal
+      })
+    } finally {
+      op.close()
+    }
+  }
+
+  /**
+   * `signal` rides through to the `herdr agent wait` child (Sol r9 P1): a
+   * terminal retired DURING the post-acknowledgement reply wait must be able
+   * to kill that child now — the same abort seam submitAgent/promptAgent
+   * already thread — instead of holding a stale session for the full ask
+   * timeout. An aborted wait settles as false, which callers already treat
+   * as "no answer".
+   *
+   * Pane resolution rides the BOUNDED ADMISSION INVENTORY (Sol r11 P1),
+   * exactly as submitAgent's: the r10 shape ran paneFor → panes → readPanes,
+   * a synchronous CLI fork on Electron main per acknowledged owner ask —
+   * concurrent asks recreated a per-ask process storm on a user-facing IPC
+   * path, uncancellable while the fork blocked. A truly cold cache answers
+   * false (the caller falls back to the quiescence heuristic it always had)
+   * while the kicked refresh warms; the signal is consulted before any
+   * spawn, so a retired ask never starts the ten-minute wait child at all.
+   */
+  async waitUntilIdle(name: string, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
+    if (this.opsClosed || signal?.aborted) return false
+    const pane = this.paneFromInventory(name)
     if (!pane) return false
-    return waitForAgentState({
-      session: this.session,
-      configPath: this.configPath,
-      target: pane.pane_id,
-      timeoutMs
-    })
+    const op = this.openOp(signal)
+    try {
+      return await waitForAgentState({
+        session: this.session,
+        configPath: this.configPath,
+        target: pane.pane_id,
+        timeoutMs,
+        signal: op.signal
+      })
+    } finally {
+      op.close()
+    }
   }
 }

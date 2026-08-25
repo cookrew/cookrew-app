@@ -37,8 +37,24 @@ export interface WaitOptions {
   /** States that end the wait. */
   until?: HerdrAgentStatus[]
   timeoutMs: number
+  /**
+   * The abort seam (Sol r8 P1, escalation per r9 P1-5). Firing it SIGTERMs
+   * the CLI child, and a child that ignores the courtesy is SIGKILLed after
+   * a small bound — a retired terminal, a backend death or an interrupted
+   * dispatch must not leave `herdr agent prompt` children (pipes, callbacks,
+   * promises) alive for the full caller timeout, TERM-trapping ones
+   * included. The settled promise rejects; callers already classify that
+   * rejection under their own liveness checks, so a late abort changes no
+   * state.
+   */
+  signal?: AbortSignal
   /** Injected for tests; defaults to the real `herdr` CLI. */
-  exec?: (file: string, args: string[], env: NodeJS.ProcessEnv) => Promise<void>
+  exec?: (
+    file: string,
+    args: string[],
+    env: NodeJS.ProcessEnv,
+    signal?: AbortSignal
+  ) => Promise<void>
 }
 
 /** Arguments for `herdr agent wait`, extracted so they are testable alone. */
@@ -78,15 +94,37 @@ export function promptArgs(target: string, prompt: string, timeoutMs: number): s
 }
 
 /**
+ * Arguments for `herdr agent prompt` WITHOUT `--wait`: submit and return at
+ * SUBMISSION ACKNOWLEDGEMENT, not at turn completion (Sol r8 P1 — the lease
+ * split). Measured against the CLI: without `--wait` the command exits as
+ * soon as herdr has typed the prompt into the pane, which is exactly the
+ * bytes-in-flight window the producer lease guards. A caller that only needs
+ * the lease window uses this and runs its reply-wait (agent wait / output
+ * quiescence) OUTSIDE the lease, so owner input is refused for milliseconds
+ * instead of the whole turn. `--timeout` still rides along to bound the CLI
+ * call itself.
+ */
+export function submitArgs(target: string, prompt: string): string[] {
+  // NO --timeout here: the CLI rejects it without --wait ("--timeout
+  // requires --wait" — measured live when the first real ack-mode dispatch
+  // silently delivered nothing), and ack-mode needs no wait bound anyway:
+  // the CLI returns at submission. Hangs are owned by the caller's
+  // AbortSignal (delivery cancellation, shutdown drain).
+  return ['agent', 'prompt', target, prompt]
+}
+
+/**
  * What happened to a prompt handed to herdr. The three-way split is the
  * safety contract, measured the hard way:
  *
  *   'done'      — submitted AND the agent finished; the reply is on screen.
  *   'submitted' — herdr delivered the prompt but could not observe the
- *                 outcome (agent_prompt_stalled: its detector saw no state
- *                 change). The prompt IS in the pane. Typing it again
- *                 double-submits — observed live as a queued duplicate in the
- *                 agent's input box — so the caller must WAIT, never retype.
+ *                 outcome: its detector saw no state change
+ *                 (agent_prompt_stalled), or the wait expired while the agent
+ *                 was still working. The prompt IS in the pane. Typing it
+ *                 again double-submits — observed live as a queued duplicate
+ *                 in the agent's input box — so the caller must WAIT, never
+ *                 retype.
  *   'failed'    — herdr never delivered it (unresolvable agent, server
  *                 down). Typing is the correct fallback.
  */
@@ -98,14 +136,61 @@ export async function promptViaHerdr(
 ): Promise<PromptOutcome> {
   const exec = options.exec ?? runCli
   try {
-    await exec('herdr', promptArgs(options.target, options.prompt, options.timeoutMs), {
-      ...process.env,
-      HERDR_SESSION: options.session,
-      HERDR_CONFIG_PATH: options.configPath
-    })
+    await exec(
+      'herdr',
+      promptArgs(options.target, options.prompt, options.timeoutMs),
+      {
+        ...process.env,
+        HERDR_SESSION: options.session,
+        HERDR_CONFIG_PATH: options.configPath
+      },
+      options.signal
+    )
     return 'done'
   } catch (error) {
-    return isStall(error) ? 'submitted' : 'failed'
+    // A TIMEOUT is 'submitted', not 'failed'. `agent prompt --wait` submits and
+    // THEN waits, so when the wait expires the prompt is in the pane and the
+    // agent is very likely still answering — the only thing that timed out is
+    // our patience. Mapping it to 'failed' told the caller "it never went out"
+    // and every turn longer than the timeout got a second copy of the brief.
+    if (isStall(error) || isTimeout(error)) return 'submitted'
+    return 'failed'
+  }
+}
+
+/**
+ * Submit a prompt via herdr and return at SUBMISSION ACKNOWLEDGEMENT — the
+ * two-state little sibling of promptViaHerdr, for callers that hold the
+ * producer lease only across the bytes-in-flight window (Sol r8 P1).
+ *
+ *   'submitted' — herdr accepted the prompt (exit 0), OR the outcome is
+ *                 ambiguous (stall envelope, killed child, timeout): the
+ *                 prompt may well be in the pane, and the do-not-retype rule
+ *                 applies exactly as in promptViaHerdr — the caller waits it
+ *                 out rather than re-sending.
+ *   'failed'    — herdr positively refused (unresolvable agent, server
+ *                 down): nothing went out, and the typed path is the correct
+ *                 fallback.
+ */
+export async function submitViaHerdr(
+  options: WaitOptions & { prompt: string }
+): Promise<'submitted' | 'failed'> {
+  const exec = options.exec ?? runCli
+  try {
+    await exec(
+      'herdr',
+      submitArgs(options.target, options.prompt),
+      {
+        ...process.env,
+        HERDR_SESSION: options.session,
+        HERDR_CONFIG_PATH: options.configPath
+      },
+      options.signal
+    )
+    return 'submitted'
+  } catch (error) {
+    if (isStall(error) || isTimeout(error)) return 'submitted'
+    return 'failed'
   }
 }
 
@@ -121,9 +206,84 @@ export function isStall(error: unknown): boolean {
   return text.includes('agent_prompt_stalled')
 }
 
-const runCli = (file: string, args: string[], env: NodeJS.ProcessEnv): Promise<void> =>
+/**
+ * Did the WAIT expire rather than the submission fail?
+ *
+ * herdr reports it as an `agent_wait_timeout` envelope; a killed child process
+ * reports it as ETIMEDOUT. Both mean the same thing here — the prompt was
+ * handed over and the outcome is simply unobserved — and both must be kept
+ * away from the retry path.
+ */
+export function isTimeout(error: unknown): boolean {
+  const e = error as { code?: unknown; message?: unknown; stdout?: unknown; stderr?: unknown }
+  if (e?.code === 'ETIMEDOUT') return true
+  const text = `${String(e?.message ?? '')} ${String(e?.stdout ?? '')} ${String(e?.stderr ?? '')}`
+  // A USAGE error is never a timeout, however many times the word appears in
+  // it — "--timeout requires --wait" matched the loose word-regex and turned
+  // an invalid invocation into 'submitted', the do-not-retype rule then
+  // suppressed every retry, and the first real ack-mode dispatch delivered
+  // nothing while reporting success (measured live).
+  if (/requires --wait|invalid|usage:/i.test(text)) return false
+  return /agent_wait_timeout|\btimed?[ _-]?out\b/i.test(text)
+}
+
+/**
+ * How long an aborted child gets to honor SIGTERM before SIGKILL (Sol r9
+ * P1-5). Small on purpose: the caller cancelled because the terminal is gone,
+ * and every second of grace is a second the dead leg keeps its pipes.
+ */
+const ABORT_SIGKILL_AFTER_MS = 2000
+
+/**
+ * Run the CLI, holding the ChildProcess handle ourselves (Sol r9 P1-5).
+ * execFile's own `signal` option sends exactly one SIGTERM and hopes; a
+ * wedged or TERM-trapping herdr child stayed alive with its pipes for the
+ * full caller timeout — the very resource class the abort seam exists to
+ * eliminate. On abort: SIGTERM now, a bounded wait, then SIGKILL. The
+ * promise settles exactly once, from the child's own exit callback, and the
+ * escalation timer dies with it. Exported for the escalation test;
+ * `sigkillAfterMs` is injectable there so the bound itself stays 2s in
+ * production.
+ *
+ * A signal ALREADY ABORTED at call time refuses WITHOUT SPAWNING (Sol r11
+ * P0-4). The previous shape spawned first and then noticed, which left a real
+ * spawn-to-kill race: herdr could type the prompt in the beat between the
+ * exec and the SIGTERM, and a cancelled dispatch or retired ask still reached
+ * the pane. A refusal cannot lose that race — nothing runs, so the rejection
+ * is proof that nothing was written.
+ */
+export const runCli = (
+  file: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  signal?: AbortSignal,
+  sigkillAfterMs: number = ABORT_SIGKILL_AFTER_MS
+): Promise<void> =>
   new Promise((resolve, reject) => {
-    execFile(file, args, { env }, (error) => (error ? reject(error) : resolve()))
+    if (signal?.aborted) {
+      reject(new Error('aborted before spawn — no child was started'))
+      return
+    }
+    let killTimer: NodeJS.Timeout | null = null
+    const onAbort = (): void => {
+      // Ask nicely first — herdr flushes and exits on SIGTERM when healthy —
+      // then stop asking. The callback below is the single settle point.
+      child.kill('SIGTERM')
+      killTimer = setTimeout(() => {
+        child.kill('SIGKILL')
+      }, sigkillAfterMs)
+    }
+    const child = execFile(file, args, { env }, (error) => {
+      // The child exited (or never spawned): settle once, and take the
+      // escalation machinery down with it.
+      if (killTimer !== null) clearTimeout(killTimer)
+      signal?.removeEventListener('abort', onAbort)
+      if (error) reject(error)
+      else resolve()
+    })
+    // The pre-aborted case rejected above, synchronously — by here the only
+    // abort that can arrive is a future one, and the listener owns it.
+    signal?.addEventListener('abort', onAbort, { once: true })
   })
 
 /**
@@ -139,11 +299,16 @@ export async function waitForAgentState(options: WaitOptions): Promise<boolean> 
   const until = options.until ?? ['idle', 'done', 'blocked']
   const exec = options.exec ?? runCli
   try {
-    await exec('herdr', waitArgs(options.target, until, options.timeoutMs), {
-      ...process.env,
-      HERDR_SESSION: options.session,
-      HERDR_CONFIG_PATH: options.configPath
-    })
+    await exec(
+      'herdr',
+      waitArgs(options.target, until, options.timeoutMs),
+      {
+        ...process.env,
+        HERDR_SESSION: options.session,
+        HERDR_CONFIG_PATH: options.configPath
+      },
+      options.signal
+    )
     return true
   } catch {
     return false

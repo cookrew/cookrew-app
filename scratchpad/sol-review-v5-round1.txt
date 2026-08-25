@@ -1,0 +1,91 @@
+[P0] Switched-away human turns can drain while they are still working
+WHERE: scratchpad/v5-export-concurrency.html:82-84 (A4); src/main/session-sync.ts:128-134,209-217; src/main/index.ts:1673-1680
+CLAIM: The derived tracking model does not contain a fact for an ordinary human-started turn after focus leaves, so thirty seconds of transcript silence is treated as completion even when the agent is in a long silent tool call.
+EVIDENCE: Workspace switch calls release() and untracks every outgoing terminal. Only dispatches are pinned. noteDrainQuiet() suspends an unpinned watch after 15 quiet 2-second polls without consulting turn phase or positive herdr working/blocked status. Once suspended, a later transcript append has no poller to notice it. A4's stated union includes dispatch, focus, and subscriber, but not an already-running non-dispatch turn whose focus just lapsed.
+FIX: Make any observed in-flight turn a derived tracking fact independent of its producer: pin at reliable turn start and release only on transcript-final evidence (with status allowed only to hold it open), then apply the drain grace. Add a switch-during-silent-tool-call test that appends the final record after more than 30 seconds.
+
+[P0] Dispatch accepts targets for which A2 provides no completion witness
+WHERE: scratchpad/v5-export-concurrency.html:76-78,180-189 (A2 and dispatch lifecycle); src/main/harness.ts:60-78,107-120; src/main/trace.ts:237-252; src/main/index.ts:536-543,567-602
+CLAIM: A resolvable terminal can receive a 202 even when it is scrape-only or not yet bound to a session file; a detached target then has neither a PTY tracker nor a file observer and cannot complete normally.
+EVIDENCE: OpenCode explicitly declares turns:'scrape', and watchSpec() also returns null for plain, unknown, or unbound file harnesses. watchSessionTurns() silently returns in that case, but beginWork() still pins and dispatch() proceeds. A background workspace has already been untracked/detached, so only the ten-minute stale sweep can end the accepted record. This directly contradicts A2's premise that every agent turn has a file and the lifecycle's claim that the file observer closes every dispatch.
+FIX: Make beginWork return an observed-capability result and fail acceptance before reservation/delivery unless a durable file observer is installed. Alternatively implement a durable observer for every exportable harness and mark non-file agents non-exportable until then; never accept on a pin with no watch.
+
+[P0] Timestamp correlation can assign another producer's turn to a dispatch
+WHERE: src/main/turn-tracker.ts:418-489; src/main/mobile-server.ts:466-486; src/main/dispatch.ts:489-555; scratchpad/v5-export-concurrency.html:79-81 (A3)
+CLAIM: One DispatchService reservation does not serialize all ways of writing to the agent, and armedAt proves only that a turn started later, not that the dispatch caused it.
+EVIDENCE: After noteDispatch() arms a terminal, any user input, POST /terminal/:id/input, POST /terminal/:id/ask, direct herdr prompt, or other producer can start a turn before the dispatched prompt is consumed. emitCompletedTurn() and completeFromHistory() accept that turn solely because startedAt >= armedAt, consume the stamp, and mark the dispatch done with the wrong answer. The dispatch reservation is private to DispatchService; the existing input/ask paths do not consult it.
+FIX: Centralize per-agent admission across dispatch, ask, raw/input, and direct herdr submissions, and correlate with an identity carried from delivery into the durable user turn (nonce/turn token or a parser-confirmed prompt identity). A timestamp may reject old turns but must not be the positive ownership proof.
+
+[P0] Nonempty assistant text plus one quiet poll is not turn completion
+WHERE: src/main/turn-tracker.ts:455-478; src/shared/session-turns.ts:191-249; src/main/index.ts:157-168
+CLAIM: The detached file path can close and bill a dispatch during an intermediate assistant message before a long tool call finishes.
+EVIDENCE: parseSessionTurns() installs the latest assistant text immediately and continues extending the same record with later tool/result entries. completeFromHistory() treats reply.length > 0 as a finished exchange after one unchanged poll. If the status feed is absent, stale, or reports idle, a text preamble followed by a tool call quiet for two seconds emits turn.completed while the agent is still working. The design itself says the status feed may hold but never end; the file test currently substitutes quietness for an explicit final marker.
+FIX: Extend each harness parser/observer to expose explicit finalized-turn evidence (next user boundary, harness lifecycle/final marker, or a stable terminal record known to be final). Keep in-progress text as progress only; do not infer finality from nonempty reply plus quiet time.
+
+[P0] Attached file-backed completion can close against the previous ledger row
+WHERE: src/main/turn-tracker.ts:855-879; src/main/index.ts:1764-1784
+CLAIM: The screen path emits a dispatch completion before the matching file reconciliation is guaranteed to exist, while the consumer blindly reads the current history tail.
+EVIDENCE: emitCompletedTurn() fires at screen-settled time even for writesFromFile terminals, and only afterward checks whether the file owns durable history. The session file is polled every two seconds. index.ts handles that event by reading history[history.length - 1], which can still be the prior turn (or a prompt-only current row), and persists its index/reply as this dispatch's answer. No identity from the completed screen turn is carried to verify the row.
+FIX: For file-backed dispatches, make the screen event progress-only and close only when the matching durable record is present and final, keyed by the dispatch correlation identity. At minimum carry the completed turn's start/identity and refuse completeTurn until the ledger contains that exact record.
+
+[P0] Dispatch durability is fail-open
+WHERE: src/main/dispatch.ts:323-345,526-567,751-773,799-802; scratchpad/v5-export-concurrency.html:69,180-189
+CLAIM: A dispatch can be accepted, delivered, and later billed even though its reservation/idempotency transition was never durably recorded.
+EVIDENCE: appendDispatchRecord() catches every mkdir/append/chmod error and returns success. write() updates memory regardless. dispatch() then reserves, begins tracking, and delivers. A crash after a failed append loses the idempotency key and lifecycle; a retry can execute the work again, and S5 would have no authoritative row on which to settle a receipt.
+FIX: Make persistence return success or throw, append/fsync the accepted reservation before delivery, and fail the request closed with rollback of the tracker stamp/reservation if durability fails. Terminal transition write failures must become a loud recoverable ledger fault, not an invisible state advance.
+
+[P1] Live remote subscribers are absent from the tracking union
+WHERE: scratchpad/v5-export-concurrency.html:82-84,186-189 (A4); src/main/mobile-api.ts:630-685; src/main/index.ts:536-543,1673-1680
+CLAIM: The implementation derives tracking from focus and dispatch only, not from the third A4 fact: a live remote subscriber.
+EVIDENCE: GET /api/terminal/:id/stream only attaches and removes PtySession data/replay/exit listeners. It never watches, pins, releases, or otherwise registers subscriber presence with SessionTurnSync. A workspace switch releases the file watch despite the still-open remote stream, so the observer can drain while A4 says the subscriber should keep it live.
+FIX: Add reference-counted subscribe/unsubscribe facts keyed by terminal, wired to SSE/WS open and close, and derive watch/drain from dispatch + focus + subscriber counts. Cover disconnect, duplicate subscribers, abrupt socket close, and workspace switch.
+
+[P1] The landed observer still reparses the full transcript on every append
+WHERE: scratchpad/v5-export-concurrency.html:88-89,198-203 (A6/I3); src/main/session-sync.ts:1-8,219-248
+CLAIM: I3 is not implemented: observing one appended turn remains O(total transcript bytes), not O(delta bytes).
+EVIDENCE: Every mtime/size change executes readFileSync(watched.file, 'utf8').split('\n') and reparses the entire file. With a 91 MB transcript, every streaming append blocks the main thread on another 91 MB read/parse. The slice table assigns A4/A6 to S2 while also deferring incremental parser hardening to S6, so later concurrency slices would be built on a known violation of their cost model.
+FIX: Land the incremental offset/tail parser and the I3 bytes-read gate before exposing concurrent dispatch. Preserve parser carry state across partial JSONL lines; reset and full-parse only on inode/path rotation or shrink/rewind.
+
+[P1] Node removal and rebind tear down observation without ending the dispatch
+WHERE: src/main/session-sync.ts:156-168; src/main/index.ts:678-697,722-749,908-920,1057-1076; src/main/dispatch.ts:696-729
+CLAIM: Permanent lifecycle paths clear the watch and pin but leave the DispatchService reservation/stamp open.
+EVIDENCE: removeNode, workspace removal, cwd move, and team-cut call sessionSync.unwatch(), which explicitly deletes pinned state, then untrack/kill the terminal. None interrupts an open dispatch for that agent. The record therefore remains submitted/running and busy until the ten-minute sweep, even though its process or binding was deliberately destroyed; a cwd rebind can also let the stale stamp meet a turn from the replacement session.
+FIX: Add one agent-lifecycle interruption hook that atomically interrupts any open dispatch before unwatch/kill/rebind, then clears the stamp and unpins exactly once. A deliberate rebind must either migrate an explicitly identified dispatch observer or interrupt it; it must not silently carry timestamp state across sessions.
+
+[P1] Replay does not actually outrank every refusal
+WHERE: scratchpad/v5-export-concurrency.html:180-183,223; src/main/dispatch.ts:482-507
+CLAIM: The documented replay ordering is false because agent resolution and prompt validation run before the idempotency lookup.
+EVIDENCE: A legitimate retry after its agent was deleted returns 404, and a retry whose body is unavailable/empty returns 400, instead of the promised 200 replay. Only busy and the later reachability/context checks are outranked. This makes network recovery depend on current mutable agent state even though the dispatch identity is already durable.
+FIX: Authenticate and derive the consumer first, then look up the consumer-scoped idempotency key before resolving the agent or validating a new request body. Store and compare a request fingerprint so reuse of a key for materially different work is an explicit conflict rather than an accidental replay.
+
+[P1] Idempotency expires despite the design's replay-always contract
+WHERE: scratchpad/v5-export-concurrency.html:69,223; src/main/dispatch.ts:371-379,777-796
+CLAIM: A previously used consumer key can execute and charge again after seven days or sooner under record pressure.
+EVIDENCE: prune() deletes closed records and their byKey entries after RECORD_RETENTION_MS and also evicts the oldest closed records whenever the map exceeds 5,000. The design says the same idempotency key replays 200 always. S5 cannot provide exactly-once metered dispatch if its dedupe key disappears independently of receipt/accounting retention.
+FIX: Persist a compact consumer+key tombstone/request fingerprint for at least the full billing and dispute lifetime (or define and expose a bounded idempotency TTL in the protocol). Never silently turn a key that has a surviving receipt into fresh work.
+
+[P1] Herdr death is not connected to dispatch interruption
+WHERE: scratchpad/v5-export-concurrency.html:226; src/main/herdr-host-multiplexer.ts:365-392; src/main/dispatch.ts:585-631,685-729
+CLAIM: The design promises that herdr death interrupts every hosted in-flight dispatch, but the supervisor only restarts and logs; it emits no death signal to DispatchService.
+EVIDENCE: A server death can make promptAgent fail or leave a submitted/running dispatch with no status and no future turn. Generic prompt errors are delivery outcomes, not an infrastructure-death classification, and otherwise the record remains open until the ten-minute sweep. That delays capacity release and can classify an outage as failed or merely unconfirmed instead of interrupted, which S5 bills differently.
+FIX: Give the multiplexer supervisor a generation/death event, bind accepted dispatches to that generation, and immediately interrupt all open records hosted by the dead generation. Delivery errors that prove generation loss must take the same interrupted path, never failed.
+
+[P1] Dispatch acceptance performs a serial synchronous herdr and full-file chain on Electron main
+WHERE: src/main/dispatch.ts:489-567,585-594; src/main/index.ts:536-543,567-603; src/main/herdr-host-multiplexer.ts:193-210,412-433,459-465,982-999,1086-1119
+CLAIM: A nominally attach-free 202 path blocks the main thread on multiple process spawns and potentially a full transcript parse before it returns.
+EVIDENCE: Before the first asynchronous wait, acceptance performs sessionExists (synchronous pane list), capture (pane read), synchronous ledger append, beginWork (watch() immediately reconciles the whole file, then report-agent-session), deep capture, another pane lookup, and agent get. createHerdrRunner implements these reads with execFileSync/spawnSync. Concurrent callers serialize this chain on Electron main, undermining A1 and recreating tail latency even though I1 only gates periodic ticks.
+FIX: Cache/batch the inventory for admission with a bounded generation, move pane reads and agent resolution to async child-process APIs, and make initial transcript catch-up incremental/off-main. Keep the 202 admission transaction bounded and add a dispatch-accept P95 plus synchronous-spawn-count gate.
+
+[P1] S4 cannot enforce per-consumer dispatch ownership with the current route seam
+WHERE: src/main/dispatch.ts:85-97,381-383,453-475; src/main/mobile-api.ts:179-218,788-830; scratchpad/v5-export-concurrency.html:211-214 (S4/S5)
+CLAIM: The current routes are safely pairing-only, but they neither inject authenticated consumer identity on POST nor scope GET lookup, so simply landing the S4 gate would expose cross-consumer replay and lifecycle reads.
+EVIDENCE: POST parses only brief/text/idempotencyKey and calls dispatch without consumer, placing every record in the owner/empty scope. GET lookup accepts only a dispatch id and authorizes any pairing token globally. DispatchInput correctly says consumer must be route-injected, but no route/dependency carries it. Once multiple consumer tokens exist, any authorized consumer that learns an id can poll another consumer's record unless the API is reshaped.
+FIX: Have S4 authentication return a non-spoofable consumer principal; inject it into dispatch(), persist it, and require the same principal (or owner/admin scope) in lookup. Keep consumer out of request JSON and test cross-token key collisions and dispatch-id reads before S5.
+
+[P1] Session rotation can leave a pinned dispatch watching the old file forever
+WHERE: scratchpad/v5-export-concurrency.html:88-89,214 (A6/S6); src/main/session-sync.ts:49-60,86-125,219-260; src/main/index.ts:414-520,536-543
+CLAIM: The watch is a fixed pathname with no inode/generation identity and no active rotation/rebind loop once a session reference is set.
+EVIDENCE: WatchedFile stores file, mtime, and size only. reconcile() retries that same path; it does not detect a new session path, and the Codex/Pi bind attempts stop as soon as the node already has a reference. If a harness rotates to a new transcript mid-dispatch, the pin prevents drain but the old file never produces the completion, so the agent stays reserved until sweep. Even same-path replacement with matching mtime/size can be mistaken for the dormant verified source.
+FIX: Land S6 rotation handling before exported dispatch: track dev+inode and harness session generation, discover/rebind the live file on rotation, reset incremental parser state, and preserve the dispatch correlation token only when the new file proves continuity. Otherwise interrupt explicitly.
+
+VERDICT: UNSOUND — P0:6 P1:9 P2:0

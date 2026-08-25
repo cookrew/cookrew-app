@@ -31,6 +31,8 @@ export type CrIconName =
   | 'summary'
   | 'external'
   | 'clipboard'
+  /** Gated marketplace preset: the chip's lock badge (§8). */
+  | 'lock'
 
 const STROKE = {
   fill: 'none',
@@ -99,6 +101,15 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
       <rect x="3.4" y="3.2" width="9.2" height="10.4" />
       <path d="M6 3.2 V1.8 H10 V3.2" />
       <path d="M5.6 7 H10.4 M5.6 9.6 H8.6" />
+    </g>
+  ),
+  // Padlock on the same 16-grid as the rest: square body, square shackle. It
+  // reads at chip-badge size (the body is 8 wide) where a rounded shackle
+  // collapses to a smudge.
+  lock: (
+    <g {...STROKE} strokeWidth={1.8} strokeLinecap="square">
+      <rect x="4" y="7" width="8" height="7" />
+      <path d="M6 7 V4.8 A2 2 0 0 1 10 4.8 V7" />
     </g>
   ),
   collapse: (

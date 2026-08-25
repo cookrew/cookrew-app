@@ -45,7 +45,7 @@ describe('WorkspaceStore cross-workspace identity', () => {
     const { store, orch } = makeStore()
     const hit = store.nodeAcrossWorkspaces(orch.id)
     expect(hit?.node.id).toBe(orch.id)
-    expect(hit?.workspaceId).toBe(store.activeId)
+    expect(hit?.workspaceId).toBe(store.focusedId)
   })
 
   it('unique-names nodes within the target workspace on cross-workspace add', () => {
@@ -60,16 +60,16 @@ describe('WorkspaceStore cross-workspace identity', () => {
 describe('WorkspaceStore mirrored cross-workspace edges', () => {
   it('writes the same connection into both endpoint workspaces', () => {
     const { store, orch } = makeStore()
-    const alpha = store.activeId
+    const alpha = store.focusedId
     const beta = store.createWorkspace('Beta', '/work/beta')
     const coder = store.addNodeToWorkspace(beta.id, terminal('Coder', '/work/beta'))
 
     const conn = store.connectAcross(orch.id, coder.id)
     // Active (alpha) side holds the edge…
-    expect(store.state.connections.some((c) => c.id === conn.id)).toBe(true)
+    expect(store.focusedState.connections.some((c) => c.id === conn.id)).toBe(true)
     // …and the beta file holds the SAME edge (visible once beta is active).
     store.switchWorkspace(beta.id)
-    expect(store.state.connections.some((c) => c.id === conn.id)).toBe(true)
+    expect(store.focusedState.connections.some((c) => c.id === conn.id)).toBe(true)
     store.switchWorkspace(alpha)
   })
 
@@ -81,7 +81,7 @@ describe('WorkspaceStore mirrored cross-workspace edges', () => {
     const first = store.connectAcross(orch.id, coder.id)
     const second = store.connectAcross(orch.id, coder.id)
     expect(second.id).toBe(first.id)
-    expect(store.state.connections.filter((c) => c.a === orch.id || c.b === orch.id)).toHaveLength(1)
+    expect(store.focusedState.connections.filter((c) => c.a === orch.id || c.b === orch.id)).toHaveLength(1)
   })
 
   it('resolves foreign endpoints from either side via connectedToAcross', () => {
@@ -156,7 +156,7 @@ describe('snapshotTerminal — capture before external kill (HIGH-1)', () => {
     expect(captured).not.toBeNull()
     expect(captured!.node.id).toBe(coder.id)
     expect(captured!.peers).toContain(orch.id)
-    expect(captured!.workspaceId).toBe(store.activeId)
+    expect(captured!.workspaceId).toBe(store.focusedId)
   })
 
   it('ignores a non-terminal / unknown id without firing the hook', () => {

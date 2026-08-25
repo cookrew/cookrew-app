@@ -7,10 +7,11 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import type { TerminalNodeData } from '../../shared/model'
+import type { VersionPinRecord } from '../../shared/version-pin'
 import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 import type { LodLayout, ScreenRect } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
-import { cookrew } from './api'
+import { cookrew, isRemoteMode } from './api'
 import { useTurnPaging } from './nodes/TurnPager'
 import { CheckpointTimeline } from './CheckpointTimeline'
 import { TranscriptView, type ActiveBlock, type TranscriptHandle } from './TranscriptView'
@@ -26,6 +27,7 @@ import {
 import { checkpointTitle, useTitleMode } from './checkpoint-sync'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
 import { handleTerminalPaste } from './terminal-paste'
+import { terminalKeyIntent } from './terminal-key-intent'
 import { CrIcon } from './icons'
 import { StatusCoin } from './nodes/AgentAvatar'
 
@@ -148,6 +150,33 @@ function TerminalOverlay({
       alive = false
     }
   }, [node.id, activity?.turnCount])
+
+  // VERSION PINS on the rail. Fetched here and passed to the timeline, which
+  // otherwise received nothing — so a saved template's pin was cut in the main
+  // process and never rendered. Re-fetch on the same turn signal as the trace,
+  // plus a bump when a template is saved (a save adds no turn, so turnCount
+  // alone would miss it). Without the save signal the marker only appeared
+  // after the next turn — which read as "save did nothing".
+  const [pins, setPins] = useState<VersionPinRecord[]>([])
+  const [pinRefresh, setPinRefresh] = useState(0)
+  useEffect(() => {
+    const bump = (): void => setPinRefresh((n) => n + 1)
+    window.addEventListener('cookrew:template-saved', bump)
+    return () => window.removeEventListener('cookrew:template-saved', bump)
+  }, [])
+  useEffect(() => {
+    let alive = true
+    void cookrew()
+      .listPins(node.id)
+      .then((list) => {
+        if (alive) setPins(list)
+      })
+      .catch((error) => console.error('listPins failed:', error))
+    return () => {
+      alive = false
+    }
+  }, [node.id, activity?.turnCount, pinRefresh])
+
   const rows = mergeCheckpointRows(paging.records ?? [], traceIndex)
 
   const transcriptRef = useRef<TranscriptHandle>(null)
@@ -201,7 +230,11 @@ function TerminalOverlay({
       fontFamily: 'JetBrains Mono, SF Mono, Menlo, monospace',
       fontSize: 13,
       cursorBlink: true,
-      scrollback: 5000
+      // A phone cannot hold a 5000-line scrollback for a high-output agent
+      // (Conductor) on top of the WebGL/GPU cost — that is the zoom-in OOM.
+      // Keep a small buffer on mobile; the paged transcript above is the real
+      // history, this pane is just the live tail.
+      scrollback: isRemoteMode() ? 600 : 5000
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
@@ -235,37 +268,31 @@ function TerminalOverlay({
       }, 150)
     })
 
+    // The decision is pure and unit-tested (terminal-key-intent.ts); only the
+    // effects live here. That split is not tidiness: this callback runs inside
+    // xterm's key dispatch, so a throw does not surface as an error — it
+    // swallows the keystroke. A soft keyboard's IME can hand us events with no
+    // `key`, which is what silently ate the digits and punctuation from a CJK
+    // keyboard's secondary layer.
     term.attachCustomKeyEventHandler((event) => {
-      // Shift+Enter inserts a newline in agent TUIs instead of submitting
-      // the prompt: send ESC+CR (the "insert newline" binding of Claude Code
-      // and friends) and swallow the plain CR xterm would otherwise emit.
-      // Plain shells keep the default Enter behavior.
-      if (event.key === 'Enter' && event.shiftKey && agentRef.current) {
-        if (event.type === 'keydown') cookrew().ptyInput(node.id, '\x1b\r')
-        return false
+      const intent = terminalKeyIntent(event, {
+        agent: agentRef.current,
+        hasSelection: term.hasSelection()
+      })
+      switch (intent) {
+        case 'agent-newline':
+          // ESC+CR is the "insert newline" binding of Claude Code and friends;
+          // returning false swallows the plain CR xterm would emit.
+          if (event.type === 'keydown') cookrew().ptyInput(node.id, '\x1b\r')
+          return false
+        case 'copy':
+          if (event.type === 'keydown') void writeClipboardText(term.getSelection())
+          return false
+        case 'swallow-paste':
+          return false
+        default:
+          return true
       }
-      const key = event.key.toLowerCase()
-      // ⌘C (mac) / Ctrl+Shift+C: copy the xterm selection ourselves — the
-      // menu's copy role only sees DOM selections, not xterm's internal one.
-      // Ctrl+C alone stays SIGINT.
-      const wantsCopy =
-        (event.metaKey && !event.ctrlKey && key === 'c') ||
-        (event.ctrlKey && event.shiftKey && key === 'c')
-      if (wantsCopy && term.hasSelection()) {
-        if (event.type === 'keydown') {
-          void writeClipboardText(term.getSelection())
-        }
-        return false
-      }
-      // ⌘V / Ctrl+Shift+V: swallow the accelerator so it isn't sent to the
-      // PTY as raw bytes, but do NOT paste here — the container's single
-      // 'paste' listener below owns paste. Pasting in this key handler too is
-      // exactly what inserted the text twice.
-      const wantsPaste =
-        (event.metaKey && !event.ctrlKey && key === 'v') ||
-        (event.ctrlKey && event.shiftKey && key === 'v')
-      if (wantsPaste) return false
-      return true
     })
 
     // Single paste path (text AND images): reading the text off the event
@@ -304,12 +331,19 @@ function TerminalOverlay({
       // glyphs (JetBrains Mono has none) can't accumulate horizontal drift
       // the way the DOM renderer lets them. Losing the context falls back
       // to the DOM renderer, which is degraded but functional.
-      try {
-        const webgl = new WebglAddon()
-        webgl.onContextLoss(() => webgl.dispose())
-        term.loadAddon(webgl)
-      } catch {
-        // WebGL unavailable — DOM renderer still works
+      //
+      // NOT on a phone: iOS Safari's WebGL is memory-constrained and unstable —
+      // a live-streaming agent's xterm on a WebGL context is a prime OOM /
+      // context-loss crash (the Conductor zoom-in crash). The DOM renderer is
+      // lighter and does not touch the GPU, so mobile uses it.
+      if (!isRemoteMode()) {
+        try {
+          const webgl = new WebglAddon()
+          webgl.onContextLoss(() => webgl.dispose())
+          term.loadAddon(webgl)
+        } catch {
+          // WebGL unavailable — DOM renderer still works
+        }
       }
 
       // Fit can report bogus dimensions before layout finishes — retry
@@ -669,6 +703,7 @@ function TerminalOverlay({
         <CheckpointTimeline
           terminalId={node.id}
           rows={rows}
+          pins={pins}
           markers={traceMarkers}
           titleMode={titleMode}
           activeIndex={activeBlock.index}

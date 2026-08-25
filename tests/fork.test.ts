@@ -6,6 +6,7 @@ import { appendTurnRecord, TurnRecord } from '../src/shared/turn'
 import {
   buildAssembledPreamble,
   buildForkPreamble,
+  COMPLETION_CLAUSE,
   buildRoleBootMessage
 } from '../src/shared/fork'
 import { forkTerminal, type ForkDeps } from '../src/main/fork'
@@ -181,8 +182,24 @@ describe('buildAssembledPreamble', () => {
 
 describe('buildRoleBootMessage', () => {
   it('prefixes the role name and trims the prompt', () => {
-    expect(buildRoleBootMessage('Backend Dev', '  Build APIs.  ')).toBe(
-      '[Cookrew role: Backend Dev] Build APIs.'
+    expect(buildRoleBootMessage('Backend Dev', '  Build APIs.  ')).toMatch(
+      /^\[Cookrew role: Backend Dev\] Build APIs\./
     )
+  })
+
+  it('ships the completion clause, so no orchestrator has to invent one', () => {
+    // The defect is not that agents fail to announce, it is that they answer
+    // with a plan and an orchestrator cannot tell that from still working.
+    expect(buildRoleBootMessage('Backend Dev', 'Build APIs.')).toContain(COMPLETION_CLAUSE)
+  })
+
+  it('tells the agent to STOP, not merely to report', () => {
+    // An agent that continues past its own answer is doing work nobody is
+    // watching, and the polling orchestrator sees the same silence either way.
+    expect(COMPLETION_CLAUSE).toMatch(/\bstop\b/i)
+  })
+
+  it('asks for no FORMAT — a drifted format reads as a missing announcement', () => {
+    expect(COMPLETION_CLAUSE).not.toMatch(/json|prefix|exactly|must (say|write|use)|format/i)
   })
 })

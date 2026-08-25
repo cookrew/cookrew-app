@@ -69,6 +69,10 @@ describe('renderMobileHelp', () => {
     expect(text).toContain('certificate does not cover')
     expect(text).toContain('workbench.example-tailnet.ts.net')
     expect(text).toContain('name mismatch')
+    // The remedy used to be "restart Cookrew". It no longer is: the server
+    // reissues and swaps the cert in place, so telling the user to restart
+    // would cost them every running agent for a problem that fixes itself.
+    expect(text).toContain('reissues within a minute')
   })
 
   it('says nothing about certificates when everything is covered', () => {

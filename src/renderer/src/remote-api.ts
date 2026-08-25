@@ -1,8 +1,9 @@
-import { AuthError, authStore, type AuthScope } from './auth-gate'
+import { AuthError, authStore, tokenParam, type AuthScope } from './auth-gate'
 import { ReconnectingStream } from './live-stream'
 import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
+import { apiPath } from './api-base'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -19,17 +20,8 @@ import type { TerminalActivity, TurnRecord } from '../../shared/turn'
  * lifts it into storage and strips it from the address bar. Mutating routes
  * require it as a bearer header; read-only GETs/SSE stay open.
  */
-async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const options: RequestInit = { method }
-  const headers: Record<string, string> = {}
-  const token = authStore().token()
-  if (token) headers.authorization = `Bearer ${token}`
-  if (body !== undefined) {
-    headers['content-type'] = 'application/json'
-    options.body = JSON.stringify(body)
-  }
-  if (Object.keys(headers).length > 0) options.headers = headers
-  const response = await fetch(path, options)
+/** Turn a server answer into a value, or into the right kind of failure. */
+async function parse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const detail = await response.json().catch(() => ({ error: String(response.status) }))
     const message = (detail as { error?: string }).error ?? `HTTP ${response.status}`
@@ -45,6 +37,69 @@ async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> 
   }
   const text = await response.text()
   return (text ? JSON.parse(text) : undefined) as T
+}
+
+async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  const options: RequestInit = { method }
+  const headers: Record<string, string> = {}
+  const token = authStore().token()
+  if (token) headers.authorization = `Bearer ${token}`
+  if (body !== undefined) {
+    headers['content-type'] = 'application/json'
+    options.body = JSON.stringify(body)
+  }
+  if (Object.keys(headers).length > 0) options.headers = headers
+  return parse<T>(await fetch(path, options))
+}
+
+/**
+ * Send one attachment as RAW BYTES.
+ *
+ * It used to go as base64 inside JSON, which put 33% more bytes on a link
+ * where bytes are the scarce thing, and made the desktop's main process build
+ * a 27 MB string and JSON.parse it — the whole app stalled for the length of
+ * every upload. A Blob goes out as-is and streams.
+ */
+async function upload(name: string, body: Blob): Promise<string> {
+  const headers: Record<string, string> = { 'content-type': 'application/octet-stream' }
+  const token = authStore().token()
+  if (token) headers.authorization = `Bearer ${token}`
+  const result = await parse<{ path: string }>(
+    await fetch(apiPath(`/api/attachments?name=${encodeURIComponent(name)}`), {
+      method: 'POST',
+      headers,
+      body
+    })
+  )
+  return result.path
+}
+
+/**
+ * How many uploads may be in flight together.
+ *
+ * Uploading one at a time cost a full round trip per file, and on a relayed
+ * tailnet a round trip is 300 ms to 2.5 s — five screenshots meant five of
+ * them end to end. A small bound overlaps that latency without letting a
+ * dozen large files fight each other for a thin link.
+ */
+const UPLOAD_CONCURRENCY = 3
+
+/** Map with bounded concurrency, preserving input order in the result. */
+async function mapLimited<T, R>(
+  items: readonly T[],
+  limit: number,
+  run: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const at = next++
+      results[at] = await run(items[at])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
 }
 
 /**
@@ -65,7 +120,7 @@ function post(path: string, body: unknown): void {
  */
 export async function checkAuth(candidate?: string): Promise<AuthScope> {
   const token = candidate ?? authStore().token()
-  const response = await fetch('/api/auth/status', {
+  const response = await fetch(apiPath('/api/auth/status'), {
     headers: token ? { authorization: `Bearer ${token}` } : undefined
   })
   if (!response.ok) throw new Error(`Auth check failed (HTTP ${response.status})`)
@@ -87,32 +142,17 @@ export async function checkAuth(candidate?: string): Promise<AuthScope> {
 let events: ReconnectingStream | null = null
 
 function sharedEvents(): ReconnectingStream {
-  if (!events) events = new ReconnectingStream({ open: () => new EventSource('/api/events') })
+  // tokenParam, not a header: EventSource has none. Reads are gated now, so a
+  // tokenless stream is a 401 the client would retry forever.
+  if (!events)
+    events = new ReconnectingStream({
+      open: () => new EventSource(tokenParam(apiPath('/api/events')))
+    })
   return events
 }
 
 function subscribe<T>(event: string, cb: (data: T) => void): () => void {
   return sharedEvents().on(event, (e) => cb(JSON.parse(e.data) as T))
-}
-
-/** data-URL detour: base64 without blowing the call stack on big files. */
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const url = String(reader.result)
-      resolve(url.slice(url.indexOf(',') + 1))
-    }
-    reader.onerror = () => reject(reader.error ?? new Error('Read failed'))
-    reader.readAsDataURL(file)
-  })
-}
-
-/** Base64-encode raw bytes (pasted clipboard image) for the upload endpoint. */
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = ''
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary)
 }
 
 /**
@@ -135,61 +175,67 @@ function checkAuthOnBoot(): void {
 export function createRemoteApi(): CookrewApi {
   checkAuthOnBoot()
   return {
-    getWorkspace: () => req<WorkspaceState>('/api/workspace'),
+    getWorkspace: () => req<WorkspaceState>(apiPath('/api/workspace')),
     onWorkspaceState: (cb) => subscribe<WorkspaceState>('workspace', cb),
-    listWorkspaces: () => req<WorkspaceList>('/api/workspaces'),
-    createWorkspace: (name, dir, team) => req('/api/workspaces', 'POST', { name, dir, team }),
-    switchWorkspace: (id) => req<WorkspaceList>('/api/workspaces/switch', 'POST', { id }),
-    renameWorkspace: (id, name) => req<WorkspaceList>('/api/workspaces/rename', 'POST', { id, name }),
-    removeWorkspace: (id) => req<WorkspaceList>(`/api/workspaces/${id}`, 'DELETE'),
-    addWorkspaceDir: (id, dir) => req<WorkspaceList>(`/api/workspaces/${id}/dirs`, 'POST', { path: dir }),
+    listWorkspaces: () => req<WorkspaceList>(apiPath('/api/workspaces')),
+    createWorkspace: (name, dir, team) => req(apiPath('/api/workspaces'), 'POST', { name, dir, team }),
+    templateImport: (team, position) =>
+      req(apiPath('/api/templates/import'), 'POST', { team, position }),
+    switchWorkspace: (id) => req<WorkspaceList>(apiPath('/api/workspaces/switch'), 'POST', { id }),
+    renameWorkspace: (id, name) => req<WorkspaceList>(apiPath('/api/workspaces/rename'), 'POST', { id, name }),
+    removeWorkspace: (id) => req<WorkspaceList>(apiPath(`/api/workspaces/${id}`), 'DELETE'),
+    addWorkspaceDir: (id, dir) => req<WorkspaceList>(apiPath(`/api/workspaces/${id}/dirs`), 'POST', { path: dir }),
     removeWorkspaceDir: (id, dir) =>
-      req<WorkspaceList>(`/api/workspaces/${id}/dirs`, 'DELETE', { path: dir }),
+      req<WorkspaceList>(apiPath(`/api/workspaces/${id}/dirs`), 'DELETE', { path: dir }),
     setPrimaryDir: (id, dir) =>
-      req<WorkspaceList>(`/api/workspaces/${id}/primary`, 'POST', { path: dir }),
-    setTerminalCwd: (nodeId, dir) => req<CanvasNode>(`/api/terminal/${nodeId}/cwd`, 'POST', { dir }),
+      req<WorkspaceList>(apiPath(`/api/workspaces/${id}/primary`), 'POST', { path: dir }),
+    setTerminalCwd: (nodeId, dir) => req<CanvasNode>(apiPath(`/api/terminal/${nodeId}/cwd`), 'POST', { dir }),
     // No native picker on the phone — the UI collects a path via text input.
     pickDir: () => Promise.resolve(null),
-    gitInfo: (dir) => req<GitInfo>(`/api/git?dir=${encodeURIComponent(dir)}`, 'GET'),
+    gitInfo: (dir) => req<GitInfo>(apiPath(`/api/git?dir=${encodeURIComponent(dir)}`), 'GET'),
     onWorkspaceList: (cb) => subscribe<WorkspaceList>('workspaces', cb),
 
-    addNode: (node) => req('/api/nodes', 'POST', node),
-    updateNode: (id, patch) => req(`/api/nodes/${id}`, 'POST', patch),
-    removeNode: (id) => req(`/api/nodes/${id}`, 'DELETE'),
-    connectNodes: (a, b) => req('/api/connections', 'POST', { a, b }),
-    disconnect: (connId) => req(`/api/connections/${connId}`, 'DELETE'),
-    listPresets: () => req('/api/presets'),
-    createTerminal: (opts) => req('/api/terminals', 'POST', opts),
+    addNode: (node) => req(apiPath('/api/nodes'), 'POST', node),
+    updateNode: (id, patch) => req(apiPath(`/api/nodes/${id}`), 'POST', patch),
+    removeNode: (id) => req(apiPath(`/api/nodes/${id}`), 'DELETE'),
+    connectNodes: (a, b) => req(apiPath('/api/connections'), 'POST', { a, b }),
+    disconnect: (connId) => req(apiPath(`/api/connections/${connId}`), 'DELETE'),
+    listPresets: () => req(apiPath('/api/presets')),
+    // The phone's marketplace surface is the canvas BROWSER card (R1), not a
+    // native chip row — and installing is a desktop act, since the store lives
+    // on the machine that runs the agents. Empty and inert here until the
+    // companion has a reason to differ.
+    listInstalledPresets: () => Promise.resolve([]),
+    placeInstalledPreset: () => Promise.resolve(),
+    uninstallPreset: () => Promise.resolve(),
+    // Trusting a signing key is a decision about the machine that holds the
+    // store, so the phone does not get to make it either.
+    markPresetRotationSeen: () => Promise.resolve(),
+    trustPresetAuthorKey: () => Promise.resolve(),
+    listPins: () => Promise.resolve([]),
+    // apiPath, not a bare path: step 3 scopes the phone client's routes to the
+    // workspace it is for, and a pin belongs to a transcript inside one.
+    createTerminal: (opts) => req(apiPath('/api/terminals'), 'POST', opts),
 
     // Phones can't hand the desktop a local path — upload the bytes and let
     // the server persist them; the returned path is what gets pasted.
-    attachFiles: async (files) => {
-      const paths: string[] = []
-      for (const file of files) {
-        const uploaded = await req<{ path: string }>('/api/attachments', 'POST', {
-          name: file.name,
-          data: await fileToBase64(file)
-        })
-        paths.push(uploaded.path)
-      }
-      return paths
-    },
-    saveAttachmentBytes: async (name, bytes) => {
-      const uploaded = await req<{ path: string }>('/api/attachments', 'POST', {
-        name,
-        data: bytesToBase64(bytes)
-      })
-      return uploaded.path
-    },
+    // Concurrent, because the paths come back in order either way and the
+    // round trips are the expensive part.
+    attachFiles: (files) =>
+      mapLimited(files, UPLOAD_CONCURRENCY, (file) => upload(file.name, file)),
+    // Copy through a plain ArrayBuffer: a Uint8Array may be backed by a
+    // SharedArrayBuffer, which Blob will not take.
+    saveAttachmentBytes: (name, bytes) =>
+      upload(name, new Blob([new Uint8Array(bytes).slice().buffer])),
     pickFiles: () => Promise.resolve([]),
 
-    ptyInput: (terminalId, data) => post(`/api/terminal/${terminalId}/raw`, { data }),
-    ptyJump: (terminalId, text) => post(`/api/terminal/${terminalId}/jump`, { text }),
-    turnSeen: (terminalId) => post(`/api/terminal/${terminalId}/seen`, {}),
+    ptyInput: (terminalId, data) => post(apiPath(`/api/terminal/${terminalId}/raw`), { data }),
+    ptyJump: (terminalId, text) => post(apiPath(`/api/terminal/${terminalId}/jump`), { text }),
+    turnSeen: (terminalId) => post(apiPath(`/api/terminal/${terminalId}/seen`), {}),
     ptyResize: (terminalId, cols, rows) =>
-      post(`/api/terminal/${terminalId}/resize`, { cols, rows }),
+      post(apiPath(`/api/terminal/${terminalId}/resize`), { cols, rows }),
     ptyAttach: (terminalId, onData, onHello) => {
-      const stream = new EventSource(`/api/terminal/${terminalId}/stream`)
+      const stream = new EventSource(tokenParam(apiPath(`/api/terminal/${terminalId}/stream`)))
       const listener = (e: MessageEvent): void => onData(JSON.parse(e.data) as string)
       // The server sends this before the first frame; sizing the xterm from it
       // is what keeps a 45x24 phone from re-wrapping a frame serialized at the
@@ -201,7 +247,7 @@ export function createRemoteApi(): CookrewApi {
       return () => stream.close()
     },
 
-    listActivity: () => req<TerminalActivity[]>('/api/activity'),
+    listActivity: () => req<TerminalActivity[]>(apiPath('/api/activity')),
     onTerminalActivity: (cb) => subscribe<TerminalActivity>('activity', cb),
     // Observability event log (observability-event-log-spec): the shared SSE
     // stream carries 'event'; queries/roster are plain GETs.
@@ -212,7 +258,7 @@ export function createRemoteApi(): CookrewApi {
       for (const key of ['workspaceId', 'type', 'since', 'until', 'limit']) {
         if (q[key] !== undefined) params.set(key, String(q[key]))
       }
-      const result = await req<{ events: unknown[] }>(`/api/events/query?${params}`)
+      const result = await req<{ events: unknown[] }>(apiPath(`/api/events/query?${params}`))
       return result.events
     },
     countEvents: async (query) => {
@@ -221,32 +267,37 @@ export function createRemoteApi(): CookrewApi {
       for (const key of ['workspaceId', 'type', 'since', 'until']) {
         if (q[key] !== undefined) params.set(key, String(q[key]))
       }
-      const result = await req<{ counts: Record<string, number> }>(`/api/events/query?${params}`)
+      const result = await req<{ counts: Record<string, number> }>(apiPath(`/api/events/query?${params}`))
       return result.counts
     },
     listAgents: async () => {
-      const result = await req<{ agents: unknown[] }>('/api/agents')
+      const result = await req<{ agents: unknown[] }>(apiPath('/api/agents'))
       return result.agents
     },
     listBoard: (window?: string) =>
-      req<BoardSnapshotLike>(`/api/board${window ? `?window=${encodeURIComponent(window)}` : ''}`),
-    recoverAgent: (id) => req(`/api/agents/${id}/recover`, 'POST'),
+      req<BoardSnapshotLike>(
+        apiPath(`/api/board${window ? `?window=${encodeURIComponent(window)}` : ''}`)
+      ),
+    recoverAgent: (id) => req(apiPath(`/api/agents/${id}/recover`), 'POST'),
     restoreCheckpoint: (id, checkpointIndex) =>
-      req(`/api/agents/${id}/restore`, 'POST', { checkpointIndex }),
-    undoRestore: (id) => req(`/api/agents/${id}/restore/undo`, 'POST'),
-    listTurns: (terminalId) => req<TurnRecord[]>(`/api/terminal/${terminalId}/turns`),
+      req(apiPath(`/api/agents/${id}/restore`), 'POST', { checkpointIndex }),
+    undoRestore: (id) => req(apiPath(`/api/agents/${id}/restore/undo`), 'POST'),
+    listTurns: (terminalId) => req<TurnRecord[]>(apiPath(`/api/terminal/${terminalId}/turns`)),
     // Checkpoint search is desktop-only for now: the phone has no /api route
     // for it yet, and a silently-empty result would read as "no matches".
     searchTurns: undefined,
-    listTraceIndex: (terminalId) => req(`/api/terminal/${terminalId}/trace/index`),
-    listTraceMarkers: (terminalId) => req(`/api/terminal/${terminalId}/trace/markers`),
+    listTraceIndex: (terminalId) => req(apiPath(`/api/terminal/${terminalId}/trace/index`)),
+    listTraceMarkers: (terminalId) => req(apiPath(`/api/terminal/${terminalId}/trace/markers`)),
+    // Trace-perf T1: the phone card's latest checkpoint, tail-read on the host.
+    latestCheckpoint: (terminalId) =>
+      req(apiPath(`/api/terminal/${terminalId}/latest`)),
     listTrace: async (terminalId, request) => {
       const params = new URLSearchParams()
       const r = (request ?? {}) as Record<string, unknown>
       for (const key of ['beforeIndex', 'afterIndex', 'aroundIndex', 'limit']) {
         if (r[key] !== undefined) params.set(key, String(r[key]))
       }
-      return req(`/api/terminal/${terminalId}/trace?${params}`)
+      return req(apiPath(`/api/terminal/${terminalId}/trace?${params}`))
     },
     listTurnsPage: async (terminalId, request) => {
       const params = new URLSearchParams()
@@ -256,19 +307,19 @@ export function createRemoteApi(): CookrewApi {
       }
       // At least one param forces the paged shape server-side.
       if ([...params.keys()].length === 0) params.set('limit', '20')
-      return req(`/api/terminal/${terminalId}/turns?${params}`)
+      return req(apiPath(`/api/terminal/${terminalId}/turns?${params}`))
     },
     forkTerminal: (sourceId, turnIndex) =>
-      req(`/api/terminal/${sourceId}/fork`, 'POST', { turnIndex }),
-    teamFork: (spec) => req('/api/team/fork', 'POST', { spec }),
-    teamSave: (name, nodeIds) => req('/api/team/save', 'POST', { name, nodeIds }),
+      req(apiPath(`/api/terminal/${sourceId}/fork`), 'POST', { turnIndex }),
+    teamFork: (spec) => req(apiPath('/api/team/fork'), 'POST', { spec }),
+    teamSave: (name, nodeIds) => req(apiPath('/api/team/save'), 'POST', { name, nodeIds }),
     teamClipSet: (nodeIds, cut, worktree) =>
-      req('/api/team/clip', 'POST', { nodeIds, cut, worktree }),
-    teamClipGet: () => req('/api/team/clip'),
-    teamPaste: () => req('/api/team/paste', 'POST', {}),
-    teamList: () => req('/api/teams'),
-    roleList: () => req('/api/roles'),
-    saveRole: (input) => req('/api/role/save', 'POST', input),
+      req(apiPath('/api/team/clip'), 'POST', { nodeIds, cut, worktree }),
+    teamClipGet: () => req(apiPath('/api/team/clip')),
+    teamPaste: () => req(apiPath('/api/team/paste'), 'POST', {}),
+    teamList: () => req(apiPath('/api/teams')),
+    roleList: () => req(apiPath('/api/roles')),
+    saveRole: (input) => req(apiPath('/api/role/save'), 'POST', input),
 
     // No remote legacy webview bridge, thumbnail publisher, or desktop app chrome.
     // Headless capability is queried here; its phone stream is same-origin/tokenless.
@@ -276,7 +327,7 @@ export function createRemoteApi(): CookrewApi {
     browserResult: () => undefined,
     browserThumb: () => undefined,
     interactiveBrowserEnabled: async () => {
-      const result = await req<{ interactive: boolean }>('/api/browser/capabilities')
+      const result = await req<{ interactive: boolean }>(apiPath('/api/browser/capabilities'))
       return result.interactive
     },
     browserStreamToken: () => Promise.resolve(null),

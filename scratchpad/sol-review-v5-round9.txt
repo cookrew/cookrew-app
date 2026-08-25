@@ -1,0 +1,79 @@
+[P0] Detached owner input is explicitly ignored even though the pane and its dirty input box survive
+WHERE: src/main/index.ts:1947-1959; src/main/turn-tracker.ts:1470-1479,1636-1639; src/main/producer-lease.ts:261-286
+CLAIM: The new owner-editing mark survives an ordinary workspace detach, but `ownerComposing` returns false solely because the PTY view is untracked, making the exact background agents v5 exports dispatchable over owner text still sitting in their live herdr pane.
+EVIDENCE: The switch handler calls `turns.untrack` and `ptys.detach`, deliberately not kill; neither path retires the producer generation or clears `ProducerLease.ownerEditing`. A user can type half a prompt, switch workspaces, and dispatch that now-background agent. `ownerComposing` checks `tracked.has` before the retained mark, returns false, and both admission and delivery accept. The native/fallback prompt is then submitted beside the owner's bytes. The test asserting that any untracked terminal has no composer encodes the false premise: untracked means no attached screen, not no persistent pane or input box.
+FIX: Consult the generation-scoped lease mark regardless of tracker attachment. Preserve it across detach and refuse background dispatch until a positively observed owner submit or terminal retirement resets the buffer; add the type-detach-dispatch and detach-reattach-submit cases.
+
+[P0] Whitespace and multiline control editing falsely release input-box ownership
+WHERE: src/shared/turn.ts:504-524; src/main/turn-tracker.ts:1511-1527; tests/producer-lease.test.ts:417-435
+CLAIM: Ownership is derived from `fed.buffer.trim()` and the prompt model maps every Ctrl-U/Ctrl-C to an entirely empty buffer, so real owner bytes can remain in the TUI while the dispatch gate says the box is clean.
+EVIDENCE: Spaces alone are valid bytes in the shared TUI buffer but `.trim().length` never marks them. More seriously, Shift+Enter creates a multiline buffer, while `feedTypedSegment` maps one Ctrl-U to `line = ''`; the round-8 contamination analysis itself establishes that Ctrl-U proves at most one line was cleared and Ctrl-C may interrupt/quit rather than clear. The owner-editing test blesses this false clear. A dispatch admitted after either sequence appends its prompt and Enter to residual owner bytes, violating exact prompt identity and one-producer ownership.
+FIX: Treat any buffered/held/paste byte state as owned, without trimming. Do not clear a multiline/unknown editing reservation from Ctrl-U/Ctrl-C; clear only on a positively observed submit, a modelled empty buffer whose editing operations are proven for that harness, or retirement. Test whitespace-only, Shift+Enter plus Ctrl-U, Ctrl-C, and split paste markers.
+
+[P1] Dispatch still holds the producer lease for the whole agent turn
+WHERE: src/main/dispatch.ts:1465-1473,1564-1594; src/main/index.ts:753-756; src/main/herdr-agent-wait.ts:79-91,126-151
+CLAIM: The new submission-acknowledgement primitive shortened owner asks only; exported dispatch still calls `promptAgent`, whose CLI arguments include `--wait`, and releases its lease only after turn completion/stall/timeout.
+EVIDENCE: `DispatchDeps` is wired only to `mux.promptAgent`; `deliver` awaits it inside the lease. A minutes-long dispatched tool call therefore refuses every desktop byte for the whole turn, despite the producer-lease contract and commit claim that the hold covers only irreversible delivery. The toast makes the loss visible but does not restore the intended short window or owner-preemption behavior.
+FIX: Wire the herdr `submitAgent` acknowledgement primitive into dispatch delivery, release immediately after acknowledged submission, and let transcript correlation/sweep observe completion outside the lease. Retain the conservative full wait only for backends that cannot acknowledge, with an explicit capability/test.
+
+[P1] Retirement cannot cancel the post-acknowledgement reply wait
+WHERE: src/main/ask.ts:177-240,428-445; src/main/herdr-host-multiplexer.ts:1312-1320; src/main/herdr-agent-wait.ts:241-258
+CLAIM: After `submitAgent` returns, `nativeAsk` keeps its retirement AbortController subscribed but starts a second `agent wait` without passing that signal and never rechecks the terminal generation after the wait.
+EVIDENCE: Retirement during `waitForReply` aborts no active child: `Multiplexer.waitUntilIdle` has no signal parameter, `HerdrHostMultiplexer.waitUntilIdle` calls `waitForAgentState` without one, and the following quiescence interval is also uncancellable. The ask can retain a CLI child and stale session for the full timeout, then return output from a terminal generation that the earlier generation check never covered.
+FIX: Thread the same AbortSignal through `waitUntilIdle` and the quiescence wait, cancel their timers/child on retirement, and recheck generation immediately after every awaited reply phase before reading or returning session output. Add a retire-after-submit-ack test, distinct from retire-during-submit.
+
+[P1] AbortSignal sends only SIGTERM and provides no bounded hard-kill fallback
+WHERE: src/main/herdr-agent-wait.ts:217-230; tests/herdr-agent-wait.test.ts:131-157
+CLAIM: The child-abort fix delegates entirely to `execFile(..., {signal})`; it does not retain the ChildProcess or escalate if the CLI ignores SIGTERM, despite round 8's requested bounded TERM-to-KILL behavior.
+EVIDENCE: Node's AbortSignal path issues the configured/default termination signal once. A wedged or signal-handling `herdr` child can remain alive with its pipes after cancellation; the tests only prove signal threading and a fake rejection, never that a stubborn real child exits. Repeated backend deaths can still accumulate the resource class the fix claims to eliminate.
+FIX: Keep the ChildProcess handle, on abort send SIGTERM, await exit for a small bound, then SIGKILL; settle only once and clear the escalation timer. Test a child that traps/ignores SIGTERM and assert process exit plus callback cleanup.
+
+[P1] A post-rename TurnStore fsync failure is retained once and then silently declared successful
+WHERE: src/main/turn-store.ts:534-556,583-616,656-705; src/main/turn-annotations.ts:308-330
+CLAIM: `writeAll` advances `written` when a rename landed but directory fsync failed, then throws; the flush retains the records, but the retry sees the advanced tail as current, performs no write or directory fsync, and clears the retained work.
+EVIDENCE: On EIO/EACCES after rename, `remember` makes the next `persistConversation` take the extendable/no-change return. `conversed` becomes true, so pending/dirty state is dropped without a second durability attempt and without the repeated failure that emits `PERSISTENT STORAGE FAULT`. A crash can still lose the renamed ledger entry even though the store has now called the retry successful.
+FIX: Track post-rename durability debt separately from logical written-tail state. Before a retry can report success, fsync the parent directory (or redo the atomic replacement) and retain/escalate until that lands. Add the exact rename-landed/dir-fsync-failed/flush-retry/crash-boundary test for TurnStore, not only AnnotationStore.
+
+[P1] setTimeout(0) moves full-ledger compaction to another stack, not off the Electron main thread
+WHERE: src/main/turn-store.ts:313-326,758-795; src/main/turn-store.ts:534-556; scratchpad/v5-export-concurrency.html:I3
+CLAIM: Threshold compaction still synchronously serializes, writes, fsyncs, and renames the entire uncapped ledger on the main thread; a zero-delay timer merely shifts which event-loop turn pays the O(total history) pause.
+EVIDENCE: `scheduleFold` invokes synchronous `foldNow` via `setTimeout(0)`, and `foldNow` calls `load`/`writeAll`; load-time folding does the same inside `load`. Against the motivating 91 MB history, renderer IPC, PTY handling, and other agents still freeze while the rewrite runs. The new test meters only the flush stack and stops metering before the scheduled full rewrite, so it cannot detect the app-level tail spike.
+FIX: Run compaction with asynchronous/worker I/O or a segmented manifest design that never copies the whole ledger on the main thread; make load schedule rather than perform a fold. Gate event-loop delay and bytes/time through completion against a large ledger, not just the threshold-causing flush call.
+
+[P1] Bounded generation tombstones can evict a live rebound terminal's generation
+WHERE: src/main/producer-lease.ts:159-169,310-325; src/main/index.ts:963-989; tests/producer-lease.test.ts:526-539
+CLAIM: Tombstone reclamation protects only ids currently carrying a lease mark/hold, but CWD rebind retires and immediately respawns the same terminal id; while that live generation is idle it has no such entry and can be evicted after 1,024 later retires.
+EVIDENCE: After eviction, `generationOf` falls from (for example) 1 to 0 for a live terminal. Current generation-1 asks falsely report retirement, while an ancient generation-0 async leg can again pass generation checks and mark the live buffer contaminated. The test keeps its rebound generation only by installing a dispatch hold, which omits the ordinary idle-live case and contradicts the comment that retired UUIDs never return.
+FIX: Distinguish live generation records from removable dead tombstones. Register/unregister terminal lifetimes explicitly, or retain generations while the terminal id exists and reclaim only on permanent removal after all generation-scoped async references drain.
+
+[P1] The strict admission parser still accepts malformed pane elements that crash admission
+WHERE: src/main/herdr-host-multiplexer.ts:108-130,551-569,591-596
+CLAIM: `parsePaneListStrict` validates only that `result.panes` is an array, then casts every element to `HerdrPane`; it publishes nulls and non-object entries as a successful inventory.
+EVIDENCE: An exit-0 response `{"result":{"panes":[null]}}` passes the strict parser and resets backoff. Every subsequent `sessionExistsCached` executes `pane.label` and throws instead of returning the refusal-safe 503; other malformed field shapes can be silently trusted. Malformed successful backend output was the explicit round-8 failure model, so checking only the container does not close it.
+FIX: Parse and validate every pane as a non-null object with the fields admission consumes (`label` string/null and a valid pane identity as required), reject the entire snapshot on any invalid element, and test null/mixed/field-invalid arrays plus recovery/backoff.
+
+[P2] Exact count recovery now reparses the full ledger synchronously on every call
+WHERE: src/main/turn-store.ts:371-409
+CLAIM: Fixing count/read equivalence replaced the constant-shape newline scan with `readFileSync`, split, JSON.parse, record validation, and a Set over every line for each `count()` call.
+EVIDENCE: Count is now O(total ledger bytes and records), so exposing it to a pager or activity projection would synchronously parse the motivating 91 MB history on the main thread. There is no cached logical count despite `written` and `all` already tracking store state. Current production has no call site, which keeps this a latent P2 rather than a live P1.
+FIX: Maintain/recover a logical-count index once, update it with appends/overlays, and serve later counts from cache; keep corruption-equivalence tests on the recovery build path and add a no-reread assertion.
+
+[P2] Empty annotation snapshots are deleted without directory durability
+WHERE: src/main/turn-annotations.ts:648-657
+CLAIM: The nonempty snapshot path uses atomic replacement plus parent-directory fsync, but clearing the final annotation directly unlinks snapshot and log without fsyncing the directory or atomically recording the empty epoch.
+EVIDENCE: A crash after the unlinks return can restore the old directory entries, resurrecting a title/seen/scroll annotation that the store reported cleared. The epoch argument protects a crash between snapshot and log deletion only if the directory mutations themselves persist; no helper or retry state covers this branch.
+FIX: Publish an epoch-bumped empty snapshot through the same atomic durable path before reclaiming the log, or fsync the parent after each deletion and retain a pending full clear on failure. Add unlink-success/crash-reopen durability tests.
+
+R8-#1: UNFIXED - The mark exists, but detached panes bypass it and whitespace/multiline control edits create false-clean states, so owner and dispatch bytes can still combine.
+R8-#2: FIXED - Contamination has no control-byte clear and is generation-checked; only terminal retirement removes it.
+R8-#3: PARTIAL - Submission children receive AbortSignal, but the post-ack reply-wait child is uncancellable and SIGTERM has no bounded SIGKILL fallback.
+R8-#4: PARTIAL - Top-level malformed/error outputs now back off through an injectable async seam, but malformed pane elements are still published and can crash admission.
+R8-#5: FIXED - Boot priming now starts the bounded asynchronous single-flight refresh and no longer calls the synchronous inventory reader.
+R8-#6: PARTIAL - The threshold-causing flush is O(delta), but the scheduled zero-delay and load-time folds still perform O(total history) synchronous work on the same main thread.
+R8-#7: FIXED - Post-rename ambiguity resyncs the published epoch and raises a pendingFull barrier before any new op is stamped.
+R8-#8: PARTIAL - EACCES/EPERM propagate from the atomic helper, but TurnStore advances its tail cache and turns the retained retry into a no-op, losing the required durability retry/escalation.
+R8-#9: PARTIAL - Desktop refusals now surface and owner-native asks release on submit acknowledgement, but exported dispatch retains the same lease until `promptAgent --wait` finishes the whole turn.
+R8-#10: PARTIAL - Holds and marks are reclaimed and the map is bounded, but the tombstone policy can reset a same-id live rebound generation because liveness is not represented.
+R8-#11: FIXED - `count()` now matches `readLines` for corrupt/orphan overlays; its new full synchronous parse is a separate latent performance issue.
+
+VERDICT: UNSOUND - P0:2 P1:7 P2:2

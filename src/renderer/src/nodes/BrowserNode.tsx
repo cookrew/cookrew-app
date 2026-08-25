@@ -1,4 +1,4 @@
-import { NodeProps, NodeResizer } from '@xyflow/react'
+import { NodeProps, NodeResizer, useStore } from '@xyflow/react'
 import { NodeHandles } from './NodeHandles'
 import { CardClose } from './CardClose'
 import { CardPick } from './CardPick'
@@ -7,6 +7,9 @@ import { CrIcon } from '../icons'
 import type { BrowserNodeData } from '../../../shared/model'
 import { browserTabs } from '../../../shared/model'
 import { useCanvasUi } from '../canvas-ui'
+import { useThumb } from '../activity-thumb-store'
+import { cardTypeScale, cardZoomMode } from './card-zoom'
+import { TILE_DRAG_SURFACE } from './drag-surface'
 
 /**
  * Summary card for a browser, with a legacy thumbnail when one is available.
@@ -15,12 +18,27 @@ import { useCanvasUi } from '../canvas-ui'
  */
 export function BrowserNode({ data, selected }: NodeProps): React.JSX.Element {
   const node = (data as { node: BrowserNodeData }).node
-  const { tool, clipping, thumbs, interactiveBrowser, zoomToNode, picked, togglePick } = useCanvasUi()
-  // Either owner can supply the picture now — the legacy webview capture with
-  // the flag off, a still from the headless page with it on (App polls it).
-  // Still nothing while ownership is UNRESOLVED: whatever is in `thumbs` then
-  // is a leftover from the other owner, and a stale frame is worse than none.
-  const thumb = interactiveBrowser === null ? undefined : thumbs[node.id]
+  const { tool, clipping, interactiveBrowser, zoomToNode, picked, togglePick } = useCanvasUi()
+  // Per-id subscription: this card re-renders on its OWN thumbnail, not on
+  // every other browser's. Either owner supplies the picture — the legacy
+  // webview capture with the flag off, a still from the headless page with it
+  // on (App polls it). Still nothing while ownership is UNRESOLVED: whatever is
+  // stored then is a leftover from the other owner, and a stale frame is worse
+  // than none.
+  const storedThumb = useThumb(node.id)
+  // Quantized zoom bucket (only flips crossing MINI_ZOOM, so it doesn't churn).
+  const mode = useStore((s) => cardZoomMode(s.transform[2]))
+  // Same counter-scale the terminal tile uses. A browser card keeps its full
+  // chrome at every zoom — only the thumbnail drops at mini — so its title is
+  // the only thing identifying it out there, and a flat 10px against a 0.2
+  // canvas is two physical pixels of nothing.
+  const invZoom = useStore((s) => cardTypeScale(s.transform[2]))
+  // A zoomed-OUT (mini) tile does not decode its thumbnail. This is the mobile
+  // OOM fix: at fit-to-view a phone shows every browser at once, and 41 decoded
+  // image bitmaps held simultaneously crashes iOS Safari's WebContent. Off at
+  // mini, the browser releases those bitmaps; the picture returns the moment the
+  // card is big enough to read it. The glyph placeholder stands in meanwhile.
+  const thumb = interactiveBrowser === null || mode === 'mini' ? undefined : storedThumb
 
   const open = (): void => {
     // Clipping: the whole card is a bigger checkbox — no zoom.
@@ -31,8 +49,32 @@ export function BrowserNode({ data, selected }: NodeProps): React.JSX.Element {
     if (tool === 'move') zoomToNode(node.id)
   }
 
+  // Zoomed OUT: a tile, not a shrunken card. The browser used to render its
+  // whole chrome at the overview — header, url chip, resizer and a body whose
+  // thumbnail is deliberately dropped at this size — so it occupied a card's
+  // worth of canvas to show an empty rectangle. The centred, wrapped name says
+  // the only thing that is legible out here anyway: which page this is.
+  if (mode === 'mini') {
+    return (
+      <div
+        className={`node browser-node mini${selected ? ' selected' : ''}${clipping && picked.has(node.id) ? ' picked' : ''}`}
+        style={{ ['--z' as string]: String(invZoom) }}
+        onClick={open}
+      >
+        <NodeHandles />
+        <CardPick id={node.id} />
+        <div className={TILE_DRAG_SURFACE}>
+          <span className="node-title">{node.name}</span>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className={`node browser-node${selected ? ' selected' : ''}${clipping && picked.has(node.id) ? ' picked' : ''}`}>
+    <div
+      className={`node browser-node${selected ? ' selected' : ''}${clipping && picked.has(node.id) ? ' picked' : ''}`}
+      style={{ ['--z' as string]: String(invZoom) }}
+    >
       <NodeResizer isVisible={selected} minWidth={220} minHeight={160} />
       <NodeHandles />
       <CardPick id={node.id} />

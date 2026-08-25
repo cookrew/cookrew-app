@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyHost, mobileEndpoints } from '../src/main/mobile-endpoints'
+import { classifyHost, endpointCertHosts, mobileEndpoints } from '../src/main/mobile-endpoints'
 import type { TailnetIdentity } from '../src/main/tailscale'
 
 const TAILNET: TailnetIdentity = {
@@ -133,5 +133,39 @@ describe('mobileEndpoints', () => {
     const tailscale = endpoints.find((e) => e.kind === 'tailscale')
     expect(tailscale?.label.toLowerCase()).toContain('tailscale')
     expect(endpoints.find((e) => e.kind === 'lan')?.label.toLowerCase()).toContain('wi-fi')
+  })
+})
+
+describe('endpointCertHosts — the cert covers exactly what we advertise', () => {
+  it('carries every advertised host, split into IPs and DNS names', () => {
+    const hosts = endpointCertHosts(
+      mobileEndpoints({ addresses: MESSY, tailnet: TAILNET, secure: true, token: null })
+    )
+    expect(hosts.dnsNames).toEqual(['workbench.example-tailnet.ts.net'])
+    // Both tailnet families: a phone on a v6-only carrier reaches the v6
+    // address first, and an uncovered v6 SAN is a URL it cannot load.
+    expect(hosts.ips).toContain('100.101.102.103')
+    expect(hosts.ips).toContain('fd7a:115c:a1e0::1234:5678')
+    expect(hosts.ips).toContain('192.168.2.13')
+  })
+
+  it('leaves out the addresses no phone is ever sent to', () => {
+    // These are the churn source: a proxy's TUN and a link-local address come
+    // and go with every VPN toggle. In the cert they forced a reissue — and
+    // every paired phone then had to accept a new self-signed cert again.
+    const hosts = endpointCertHosts(
+      mobileEndpoints({ addresses: MESSY, tailnet: TAILNET, secure: true, token: null })
+    )
+    expect(hosts.ips).not.toContain('198.18.0.1')
+    expect(hosts.ips).not.toContain('169.254.1.6')
+  })
+
+  it('asks for nothing when only the loopback fallback is advertised', () => {
+    // ensureCert always emits localhost/127.0.0.1, so requesting them here
+    // would just be a second spelling of the same guarantee.
+    const hosts = endpointCertHosts(
+      mobileEndpoints({ addresses: [], tailnet: null, secure: false, token: null })
+    )
+    expect(hosts).toEqual({ ips: [], dnsNames: [] })
   })
 })

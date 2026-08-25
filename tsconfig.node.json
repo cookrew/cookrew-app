@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "jsx": "react-jsx",
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
@@ -11,5 +12,8 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "electron.vite.config.ts", "tests/**/*"]
+  // tests/ now includes a renderer component test (grant-panel-render.test.tsx).
+  // The same automatic JSX runtime the app build and vitest use, so a component
+  // is typechecked exactly as it is compiled.
+  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "electron.vite.config.ts", "tests/**/*", "registry/**/*"]
 }

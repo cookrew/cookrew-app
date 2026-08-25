@@ -5,7 +5,8 @@ import {
   canCapture,
   initialBackoff,
   recordFailure,
-  recordSuccess
+  recordSuccess,
+  thumbNeedsCapture
 } from '../src/renderer/src/capture-backoff'
 
 describe('capture backoff', () => {
@@ -53,5 +54,25 @@ describe('capture backoff', () => {
     recordFailure(s1, 0)
     expect(s1).toEqual({ failures: 1, notBefore: 10_000 })
     expect(initialBackoff).toEqual({ failures: 0, notBefore: 0 })
+  })
+})
+
+describe('thumbNeedsCapture (freshness gate)', () => {
+  it('captures a dirty (just-loaded) page', () => {
+    expect(thumbNeedsCapture({ dirty: true, phoneViewing: false })).toBe(true)
+  })
+
+  it('does NOT re-capture a settled page — the whole latency fix', () => {
+    // A static file:// doc that already has a current thumb: no GPU readback on
+    // the next interval tick. 40 of these on a zoomed-out canvas is the flood.
+    expect(thumbNeedsCapture({ dirty: false, phoneViewing: false })).toBe(false)
+  })
+
+  it('keeps capturing a settled page while a phone actively views it (live consumer)', () => {
+    expect(thumbNeedsCapture({ dirty: false, phoneViewing: true })).toBe(true)
+  })
+
+  it('captures a dirty page regardless of phone viewing', () => {
+    expect(thumbNeedsCapture({ dirty: true, phoneViewing: true })).toBe(true)
   })
 })

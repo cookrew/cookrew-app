@@ -1,0 +1,84 @@
+{
+  "_": "STUB FIXTURE — version pins (marketplace §10, rulings R7/R8/R17). Real shape, invented data. Fresco builds the rail marker against this; Magpie asserts B2 against `anchors` and `labels`. Tripwire: tests/version-pin-fixture.test.ts re-derives every expectation from src/shared/version-pin.ts and fails if this file drifts.",
+
+  "contractVersion": 2,
+  "_contractVersion": "v1 anchored pins in transcript-line space (scrollLine/scrollBase). v2 (R17) anchors them in RENDER-POSITION space — array position over row count — because that is the space the rail actually lays rows out in, and it is the space the focus tab already used. A rig reads this field to know which shape it holds; a rig still expecting v1 must not silently consume v2 fracs.",
+
+  "terminalId": "db9b45d0-1793-4ca3-904a-696374e6446a",
+
+  "contiguous": {
+    "_": "The easy ledger: array position i holds T(i+1). Turn-number space and render space AGREE here, which is exactly why the v1 bug went unnoticed.",
+    "rows": [
+      { "index": 1 }, { "index": 2 }, { "index": 3 }, { "index": 4 }, { "index": 5 },
+      { "index": 6 }, { "index": 7 }, { "index": 8 }, { "index": 9 }, { "index": 10 }
+    ],
+    "pins": [
+      { "version": 1, "atIndex": 1, "scrollLine": 10, "cutAt": 1755648000000, "manifestId": "sha256:9f2c1a" },
+      { "version": 2, "atIndex": 5, "scrollLine": 50, "cutAt": 1755734400000, "manifestId": "sha256:41b7de" },
+      { "version": 12, "atIndex": 8, "scrollLine": 80, "cutAt": 1755907200000 },
+      { "version": 100, "atIndex": 10, "scrollLine": 100, "cutAt": 1755993600000 }
+    ],
+    "anchors": [
+      { "version": 1, "frac": 0 },
+      { "version": 2, "frac": 0.4 },
+      { "version": 12, "frac": 0.7 },
+      { "version": 100, "frac": 0.9 }
+    ],
+    "labels": [
+      { "version": 1, "text": "V1", "labelled": true },
+      { "version": 2, "text": "V2", "labelled": true },
+      { "version": 12, "text": "12", "labelled": true },
+      { "version": 100, "text": "", "labelled": false }
+    ]
+  },
+
+  "nonContiguous": {
+    "_": "THE R17 REGRESSION. A real ledger shape — 19 of 125 look like this: turn numbers have gaps, so array position 113 holds T113 while the last index is 124. Render space and turn-number space diverge, and a marker anchored the old way lands where a NUMBER implies instead of on a drawn row. 118 rows: T1..T113 then T116, T118, T119, T121, T124.",
+    "rowCount": 118,
+    "lastIndex": 124,
+    "pins": [
+      { "version": 1, "atIndex": 113, "scrollLine": 1130, "cutAt": 1755648000000 },
+      { "version": 2, "atIndex": 124, "scrollLine": 1240, "cutAt": 1755734400000 }
+    ],
+    "expected": [
+      {
+        "_": "T113 is the 113th row → position 112 of 118. The OLD formula said 113/124 ≈ 0.911; a whole row and more of drift.",
+        "version": 1,
+        "renderPosition": 112,
+        "frac": 0.9491525423728814,
+        "wrongTurnNumberFrac": 0.9112903225806451
+      },
+      {
+        "_": "The last drawn row, whatever number it carries.",
+        "version": 2,
+        "renderPosition": 117,
+        "frac": 0.9915254237288136,
+        "wrongTurnNumberFrac": 1
+      }
+    ],
+    "undrawn": {
+      "_": "A turn number the gaps swallowed. No row carries T117, so a pin naming it is OMITTED — never clamped to a neighbour, because a V-number shown against the wrong checkpoint is a wrong version (R8).",
+      "atIndex": 117,
+      "frac": null
+    }
+  },
+
+  "coLocated": {
+    "_": "ONE space, TWO anchors. A turn row and a pin naming the same checkpoint share a frac — that is the F6 pair to screenshot. A trace boundary does NOT: afterIndex names the checkpoint it comes AFTER, so it sits at the edge below that row. Anchoring it on the row drew every boundary one row early.",
+    "rows": [{ "index": 1 }, { "index": 2 }, { "index": 4 }, { "index": 7 }],
+    "checkpoint": 4,
+    "frac": 0.5,
+    "traceAfterCheckpoint": 0.75,
+    "endMarker": {
+      "_": "A boundary after the LAST row is the bottom of the rail. Render-position anchoring dropped it to (n-1)/n = 0.75 and left the end-of-transcript marker floating one row short; the rail original afterIndex/lastIndex landed on 1, and this is the render-space equivalent.",
+      "afterIndex": 7,
+      "frac": 1
+    }
+  },
+
+  "empty": {
+    "_": "No rows drawn yet (terminal just attached, or a fresh install pinned before its first turn): pins are omitted, never guessed onto the rail.",
+    "rows": [],
+    "anchors": []
+  }
+}

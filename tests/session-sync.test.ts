@@ -1,9 +1,14 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionTurnSync } from '../src/main/session-sync'
-import { parseSessionTurns } from '../src/shared/session-turns'
+import {
+  createSessionTurnAccumulator,
+  parseSessionTurns,
+  type HistoryDelta,
+  type StreamingTurnParser
+} from '../src/shared/session-turns'
 import { TurnTracker } from '../src/main/turn-tracker'
 import { TurnStore } from '../src/main/turn-store'
 import type { TurnRecord } from '../src/shared/turn'
@@ -181,6 +186,187 @@ describe('SessionTurnSync', () => {
   })
 })
 
+/**
+ * A COMPACT MUST NOT DESTROY THE HISTORY IT CONTINUES.
+ *
+ * This is the second half of CRITICAL-1, and it has its own countdown: the
+ * merge fix makes a restored ledger survive live reconciles, but a compact
+ * rotates the agent onto a FRESH transcript whose turns carry uuids the ledger
+ * has never seen. Unanchorable, the run replaces the ledger wholesale — a
+ * restored 613 becomes 1 the first time the owner compacts, which he does often.
+ *
+ * The join is NOT inferred here. rebind() is the rotation migration, reached
+ * only from commitRotatedClaudeSession after resolveRotationChain proved the
+ * chain (declared compact_boundary preferred, replay overlap only as a guarded
+ * fallback, null on ANY ambiguity) and rotationCommitVerdict re-checked the
+ * store. Its own docstring already says what that means: "a rotation is the
+ * SAME conversation continuing in a new file". So the fact exists at the rebind,
+ * and the ledger is allowed to continue across exactly that event and no other.
+ */
+describe('a rotation continues the ledger instead of replacing it', () => {
+  it('keeps the pre-compact history when the successor file has new uuids', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-rotate-'))
+    const before = path.join(dir, 'aaa.jsonl')
+    const after = path.join(dir, 'bbb.jsonl')
+    const tracker = new TurnTracker(async () => null, null)
+    const sync = new SessionTurnSync(tracker, 50)
+
+    writeFileSync(before, [...TURN_1, ...TURN_2].join('\n') + '\n', 'utf8')
+    sync.watch('term-1', before, parseSessionTurns)
+    expect(tracker.history('term-1')).toHaveLength(2)
+
+    // The compact: a fresh transcript, its own turn numbered 1, no shared uuids.
+    const fresh = [
+      user('after the compact', '2026-07-20T11:00:00Z'),
+      assistant('carrying on', '2026-07-20T11:00:10Z')
+    ]
+    writeFileSync(after, fresh.join('\n') + '\n', 'utf8')
+    sync.rebind('term-1', after, parseSessionTurns)
+
+    const history = tracker.history('term-1')
+    expect(history).toHaveLength(3)
+    expect(history.map((r) => r.prompt)).toEqual(['turn one', 'turn two', 'after the compact'])
+    // Numbered continuously across the join — the position in the LINEAGE is
+    // what the rail shows, not the position in the new file.
+    expect(history.map((r) => r.index)).toEqual([1, 2, 3])
+    sync.dispose()
+  })
+
+  it('continues ONLY across the rotation — a later reconcile does not re-append', () => {
+    // The continuation is the rebind, not a standing licence to append. If it
+    // outlived its event, every ordinary reconcile of an agent whose records
+    // carry no uuids (every scraped, non-Claude agent) would concatenate.
+    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-rotate2-'))
+    const before = path.join(dir, 'aaa.jsonl')
+    const after = path.join(dir, 'bbb.jsonl')
+    const tracker = new TurnTracker(async () => null, null)
+    const sync = new SessionTurnSync(tracker, 50)
+
+    writeFileSync(before, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', before, parseSessionTurns)
+
+    const fresh = [
+      user('after the compact', '2026-07-20T11:00:00Z'),
+      assistant('carrying on', '2026-07-20T11:00:10Z')
+    ]
+    writeFileSync(after, fresh.join('\n') + '\n', 'utf8')
+    sync.rebind('term-1', after, parseSessionTurns)
+    expect(tracker.history('term-1')).toHaveLength(2)
+
+    // The SAME successor file, re-read. It must reconcile to the same 2, not 4.
+    sync.suspend('term-1')
+    sync.watch('term-1', after, parseSessionTurns)
+    expect(tracker.history('term-1')).toHaveLength(2)
+    sync.dispose()
+  })
+
+  /**
+   * THE TWO SAFETY PROPERTIES OF THE LICENCE, tested rather than asserted in a
+   * comment. Both of these survived a first round of mutation testing — the
+   * rule was implemented correctly and NOTHING would have caught it being
+   * implemented otherwise, which is the failure mode this whole review has
+   * been about. Driven straight at the tracker because that is where the rule
+   * lives, and because going through the poll would make them depend on which
+   * changes happen to take the delta path.
+   */
+  const rec = (index: number, prompt: string): TurnRecord =>
+    ({ index, prompt, reply: 'r', startedAt: index, endedAt: index + 1 })
+
+  const withUuid = (index: number, prompt: string, uuid: string): TurnRecord =>
+    ({ ...rec(index, prompt), uuid })
+
+  it('SPENDS the licence: a second unanchorable run does not append a second time', () => {
+    // Uuid-less records, so NOTHING can anchor and the licence is the only
+    // thing that could ever make a run continue the ledger. That isolates the
+    // property under test: it must fire once, for the rotation, and never again.
+    const tracker = new TurnTracker(async () => null, null)
+    tracker.replaceHistory('t', [rec(1, 'before')], { sessionFile: '/old.jsonl' })
+    tracker.declareRotation('t', '/new.jsonl')
+
+    const run = [rec(1, 'after the compact')]
+    tracker.replaceHistory('t', run, { sessionFile: '/new.jsonl' })
+    expect(tracker.history('t').map((r) => r.prompt)).toEqual(['before', 'after the compact'])
+
+    // The same run again. A licence that outlived its own event would
+    // concatenate on every reconcile, growing the ledger without bound.
+    tracker.replaceHistory('t', run, { sessionFile: '/new.jsonl' })
+    expect(tracker.history('t').map((r) => r.prompt)).toEqual(['after the compact'])
+  })
+
+  /**
+   * AND WHY THAT REPLACE IS NOT A HOLE — the production shape, stated as a test
+   * because the isolation above deliberately removed the thing that carries it.
+   *
+   * The run in the previous test replaces on its second pass because uuid-less
+   * records can never anchor. Real rotation successors are claude transcripts
+   * and their turns DO carry message uuids, so once the licence has placed the
+   * successor's turns into the ledger, every later reconcile of that file
+   * anchors on them and keeps the pre-rotation prefix by the ordinary merge —
+   * no licence needed, and none available. The continuation is durable because
+   * the ledger it wrote is anchorable, not because the licence persists.
+   *
+   * rebind() is only ever reached for claude commands, so this is the real path
+   * and the one above is the isolated one.
+   */
+  it('the continued ledger is then held by ANCHORING, with no licence left', () => {
+    const tracker = new TurnTracker(async () => null, null)
+    tracker.replaceHistory('t', [withUuid(1, 'before', 'u-before')], { sessionFile: '/old.jsonl' })
+    tracker.declareRotation('t', '/new.jsonl')
+
+    const run = [withUuid(1, 'after the compact', 'u-after')]
+    tracker.replaceHistory('t', run, { sessionFile: '/new.jsonl' })
+    expect(tracker.history('t').map((r) => r.prompt)).toEqual(['before', 'after the compact'])
+
+    // Licence spent. The same run reconciles again and the prefix survives on
+    // the strength of the uuid alone.
+    tracker.replaceHistory('t', run, { sessionFile: '/new.jsonl' })
+    expect(tracker.history('t').map((r) => r.prompt)).toEqual(['before', 'after the compact'])
+    expect(tracker.history('t').map((r) => r.index)).toEqual([1, 2])
+
+    // And it keeps holding as the successor grows.
+    tracker.replaceHistory(
+      't',
+      [withUuid(1, 'after the compact', 'u-after'), withUuid(2, 'next', 'u-next')],
+      { sessionFile: '/new.jsonl' }
+    )
+    expect(tracker.history('t').map((r) => r.prompt)).toEqual([
+      'before',
+      'after the compact',
+      'next'
+    ])
+    expect(tracker.history('t').map((r) => r.index)).toEqual([1, 2, 3])
+  })
+
+  it('KEYS the licence to the successor: a late run from the OLD file cannot spend it', () => {
+    // The hazard is ordering. A reconcile of the transcript we just rotated
+    // AWAY from can land after the rebind; if it spent the licence, the
+    // successor's own run would arrive unlicensed and destroy the ledger —
+    // the exact bug, merely deferred by one reconcile.
+    const tracker = new TurnTracker(async () => null, null)
+    tracker.replaceHistory('t', [rec(1, 'before')], { sessionFile: '/old.jsonl' })
+    tracker.declareRotation('t', '/new.jsonl')
+
+    tracker.replaceHistory('t', [rec(1, 'a late read of the old file')], {
+      sessionFile: '/old.jsonl'
+    })
+    // Unlicensed and unanchorable: it replaces, which is today's behaviour and
+    // not what is under test here. What matters is the licence SURVIVED it.
+    tracker.replaceHistory('t', [rec(1, 'after the compact')], { sessionFile: '/new.jsonl' })
+    expect(tracker.history('t').map((r) => r.prompt)).toEqual([
+      'a late read of the old file',
+      'after the compact'
+    ])
+  })
+
+  it('needs a NAMED source: an unattributed run can never spend a licence', () => {
+    const tracker = new TurnTracker(async () => null, null)
+    tracker.replaceHistory('t', [rec(1, 'before')])
+    tracker.declareRotation('t', '/new.jsonl')
+    tracker.replaceHistory('t', [rec(1, 'unattributed')])
+    expect(tracker.history('t').map((r) => r.prompt)).toEqual(['unattributed'])
+  })
+})
+
 describe('TurnTracker.replaceHistory', () => {
   it('replaces scraped records with session-derived ones', () => {
     const tracker = new TurnTracker(async () => null, null)
@@ -233,19 +419,52 @@ describe('TurnTracker.replaceHistory', () => {
     expect(tracker.history('term-1')[0].title).toBeUndefined()
   })
 
-  it('carries titles by uuid even when the index shifts (a mid-history turn dropped)', () => {
+  /**
+   * THIS TEST'S LENGTH EXPECTATION CHANGED, DELIBERATELY — read before trusting
+   * the old one.
+   *
+   * It used to assert that a reconcile whose run begins PAST the start of the
+   * ledger drops everything in front of it, on the reading that the missing
+   * turn was rewound away. That reading is not available any more, because a
+   * ledger may legitimately span several transcripts (a compact, a lineage
+   * recovery) and a reconcile parses exactly one of them. Under the old rule a
+   * restored 613-record history came back as the newest transcript's 16 — the
+   * indices perfectly renumbered to 598..613, the other 597 erased from the
+   * conversation file and the annotation sidecar. That was measured, not feared.
+   *
+   * Nothing local separates the two readings: in both, the ledger holds records
+   * before the run's head, and in both the run numbers itself from 1. So the
+   * rule is chosen on which way it is safe to be wrong. Keeping records that a
+   * rewind removed leaves stale rows at the head of a rail — visible, and
+   * repairable by a rebuild. Dropping records a compact put there destroys
+   * history no transcript can give back. The asymmetry is not close.
+   *
+   * A REAL /rewind still shrinks, and that is not a concession — a rewind
+   * truncates the END of a transcript, so the run's head never moves and the
+   * drop lands after the anchor, where the run IS the authority. That path is
+   * covered by 'truncates history after a /rewind shrinks the session file'
+   * above, and by the rewind case in annotation-rekey.test.ts.
+   *
+   * What this test was actually written to prove — a title following its turn
+   * by uuid when the index underneath it moves — is unchanged and asserted here.
+   */
+  it('carries titles by uuid when the ledger renumbers the incoming run', () => {
     const tracker = new TurnTracker(async () => null, null)
     tracker.replaceHistory('term-1', [
       { index: 1, prompt: 'a', reply: 'r', uuid: 'u-a', title: 'Title A', startedAt: 1, endedAt: 2 },
       { index: 2, prompt: 'b', reply: 'r', uuid: 'u-b', title: 'Title B', startedAt: 3, endedAt: 4 }
     ])
-    // Turn 'a' was rewound away; 'b' is now index 1 but same uuid.
+    // The run arrives numbering 'b' as its own turn 1, the way a parse of one
+    // transcript always does. The ledger says 'b' is turn 2.
     tracker.replaceHistory('term-1', [
       { index: 1, prompt: 'b', reply: 'r', uuid: 'u-b', startedAt: 3, endedAt: 4 }
     ])
     const history = tracker.history('term-1')
-    expect(history).toHaveLength(1)
-    expect(history[0].title).toBe('Title B')
+    // 'a' is kept: this run is not evidence about a turn it never contained.
+    expect(history).toHaveLength(2)
+    expect(history[0]).toMatchObject({ index: 1, uuid: 'u-a', title: 'Title A' })
+    // The title follows the uuid onto the record's true index, not the run's.
+    expect(history[1]).toMatchObject({ index: 2, uuid: 'u-b', title: 'Title B' })
   })
 
   it('drops a uuid-less phantom echo adjacent to its uuid original on reconcile', () => {
@@ -275,7 +494,7 @@ describe('TurnTracker.replaceHistory', () => {
   // session file and must merge the persisted titles back in and re-persist
   // them — otherwise "titles everywhere" regresses to sparse on every restart.
   it('preserves persisted titles across a simulated restart and re-persists them', () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-restart-'))
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-restart-')), 'turns')
     // Last session's turn-store: titled records (legacy — no uuid yet).
     const before = new TurnStore(dir)
     before.scheduleSave('term-1', [
@@ -392,6 +611,364 @@ describe('TurnTracker.replaceHistory', () => {
       { index: 1, prompt: 'commit and push', reply: 'done longer', uuid: 'u-1', startedAt: 1, endedAt: 2 }
     ])
     expect(tracker.history('term-1')[0].title).toBe('Commit and push')
+  })
+})
+
+// Fix 2 (Sol I3): observing one appended turn costs O(Δbytes) — on growth
+// only the appended span is read and only the NEW lines reach the
+// accumulator; a partial trailing line is carried as bytes until its newline
+// arrives, so UTF-8 split at any byte boundary survives.
+describe('SessionTurnSync incremental observation', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** parseSessionTurns wrapped so every accumulator feed is recorded. */
+  function instrumented(): { parse: StreamingTurnParser; feeds: string[][] } {
+    const feeds: string[][] = []
+    const createAccumulator = (): ReturnType<typeof createSessionTurnAccumulator> => {
+      const inner = createSessionTurnAccumulator()
+      return {
+        feed(lines: string[]): void {
+          feeds.push(lines)
+          inner.feed(lines)
+        },
+        records: () => inner.records()
+      }
+    }
+    const parse = Object.assign(
+      (lines: string[]) => parseSessionTurns(lines),
+      { createAccumulator }
+    )
+    return { parse, feeds }
+  }
+
+  it('feeds ONLY the appended lines on growth — earlier lines are never re-read', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    const { parse, feeds } = instrumented()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parse)
+    expect(tracker.history('term-1')).toHaveLength(1)
+    const feedsAfterInitial = feeds.length
+
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    await vi.advanceTimersByTimeAsync(200)
+    expect(tracker.history('term-1')).toHaveLength(2)
+    const later = feeds.slice(feedsAfterInitial).flat()
+    expect(later.some((line) => line.includes('turn two'))).toBe(true)
+    expect(later.some((line) => line.includes('turn one'))).toBe(false)
+    sync.dispose()
+  })
+
+  it('a shrink resets the accumulator and pays one full re-parse (rewind path)', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    const { parse, feeds } = instrumented()
+    writeFileSync(file, [...TURN_1, ...TURN_2].join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parse)
+    expect(tracker.history('term-1')).toHaveLength(2)
+
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    await vi.advanceTimersByTimeAsync(200)
+    expect(tracker.history('term-1').map((r) => r.prompt)).toEqual(['turn one'])
+    // The re-parse fed 'turn one' again — a fresh accumulator, not a resume.
+    expect(feeds.flat().filter((line) => line.includes('turn one')).length).toBeGreaterThan(1)
+    sync.dispose()
+  })
+
+  it('replacement by a same-size different-inode file is detected, not treated as quiet', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    // Same byte length as TURN_1 so size alone cannot reveal the swap.
+    const swapped = [
+      JSON.stringify({ type: 'user', message: { role: 'user', content: 'turn six' }, timestamp: '2026-07-20T10:00:00Z', sessionId: 'src' }),
+      JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'reply six' }] }, timestamp: '2026-07-20T10:00:10Z', sessionId: 'src' })
+    ]
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parseSessionTurns)
+    expect(tracker.history('term-1')[0].prompt).toBe('turn one')
+
+    const replacement = path.join(path.dirname(file), 'replacement.jsonl')
+    writeFileSync(replacement, swapped.join('\n') + '\n', 'utf8')
+    const { renameSync } = await import('node:fs')
+    renameSync(replacement, file)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(tracker.history('term-1')[0].prompt).toBe('turn six')
+    sync.dispose()
+  })
+
+  // Sol round-2 #4a: dormancy must not forfeit the accumulator. A suspended
+  // terminal whose file only GREW resumes from the retained parser state and
+  // byte offset — reattaching a parked workspace feeds the appended lines
+  // only, never the whole transcript.
+  it('dormant GROWTH resumes the retained accumulator — reattach feeds only the appended lines', async () => {
+    const { file, tracker, sync } = fixture()
+    const { parse, feeds } = instrumented()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parse)
+    sync.suspend('term-1')
+
+    appendFileSync(file, TURN_2.join('\n') + '\n', 'utf8')
+    const feedsBefore = feeds.length
+    sync.watch('term-1', file, parse)
+
+    expect(tracker.history('term-1').map((r) => r.prompt)).toEqual(['turn one', 'turn two'])
+    const later = feeds.slice(feedsBefore).flat()
+    expect(later.some((line) => line.includes('turn two'))).toBe(true)
+    expect(later.some((line) => line.includes('turn one'))).toBe(false)
+    sync.dispose()
+  })
+
+  it('a SHRINK while dormant still resets and re-parses whole (rewind while parked)', async () => {
+    const { file, tracker, sync } = fixture()
+    const { parse, feeds } = instrumented()
+    writeFileSync(file, [...TURN_1, ...TURN_2].join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parse)
+    sync.suspend('term-1')
+
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parse)
+
+    expect(tracker.history('term-1').map((r) => r.prompt)).toEqual(['turn one'])
+    // The re-parse fed 'turn one' again — a fresh accumulator, not a resume.
+    expect(feeds.flat().filter((line) => line.includes('turn one')).length).toBeGreaterThan(1)
+    sync.dispose()
+  })
+
+  it('property: randomized byte-level appends (mid-line, mid-UTF-8) equal the whole-file parse', async () => {
+    vi.useFakeTimers()
+    const lines: string[] = []
+    for (let turn = 0; turn < 8; turn += 1) {
+      lines.push(user(`prompt ${turn} — été 目标 ✓`, `2026-07-20T10:0${turn}:00Z`))
+      lines.push(assistant(`reply ${turn} — naïve 完成`, `2026-07-20T10:0${turn}:10Z`))
+    }
+    const whole = Buffer.from(lines.join('\n') + '\n', 'utf8')
+    // Deterministic LCG: a failing sequence is reproducible from the seed.
+    let state = 42
+    const rand = (): number => {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0
+      return state / 0x100000000
+    }
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, Buffer.alloc(0))
+    sync.watch('t', file, parseSessionTurns)
+    let at = 0
+    while (at < whole.length) {
+      const size = 1 + Math.floor(rand() * 40)
+      appendFileSync(file, whole.subarray(at, Math.min(at + size, whole.length)))
+      at += size
+      await vi.advanceTimersByTimeAsync(50)
+    }
+    await vi.advanceTimersByTimeAsync(200)
+    expect(tracker.history('t')).toEqual(parseSessionTurns(lines))
+    sync.dispose()
+  })
+})
+
+// Sol r4 P1 (end-to-end O(delta)): a growth reconcile hands the tracker a
+// DELTA through applyHistoryDelta — the seam the parallel lane implements on
+// TurnTracker — instead of replaceHistory's whole-history re-projection. The
+// seam is feature-checked BOTH ways and the check is permanent
+// compatibility: no takeDelta (retained-lines fallback) or no
+// applyHistoryDelta (tracker without the seam) falls back to replaceHistory;
+// shrink/rotation/first-contact stay on replaceHistory by design.
+describe('SessionTurnSync delta handoff (Sol r4 P1)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  interface DeltaCall {
+    terminalId: string
+    delta: HistoryDelta
+  }
+
+  type DeltaSeam = TurnTracker & {
+    applyHistoryDelta?: (
+      terminalId: string,
+      delta: HistoryDelta,
+      records: () => TurnRecord[]
+    ) => void
+  }
+
+  /** Arm the tracker's delta seam with a spy. The REAL applyHistoryDelta is
+   *  wrapped when the tracker has one (the cross-lane integration this gate
+   *  exists for); a tracker predating the seam gets an emulation that
+   *  follows the HistoryDelta apply contract, so the handoff assertions
+   *  hold either way. */
+  function armDeltaSeam(tracker: TurnTracker): DeltaCall[] {
+    const calls: DeltaCall[] = []
+    const real = (tracker as DeltaSeam).applyHistoryDelta?.bind(tracker)
+    ;(tracker as DeltaSeam).applyHistoryDelta = (terminalId, delta, records) => {
+      calls.push({ terminalId, delta })
+      if (real !== undefined) {
+        real(terminalId, delta, records)
+        return
+      }
+      if (delta.kind === 'reset') {
+        tracker.replaceHistory(terminalId, records())
+        return
+      }
+      const prior = tracker.history(terminalId)
+      if (delta.kind === 'tail') {
+        tracker.replaceHistory(terminalId, [...prior.slice(0, -1), delta.record])
+        return
+      }
+      if (delta.records.length === 0) return
+      tracker.replaceHistory(terminalId, [...prior, ...delta.records])
+    }
+    return calls
+  }
+
+  /** One END_TURN-closed exchange — the marker keeps the tail settled, so an
+   *  appended turn's delta is exactly one record. */
+  function closedTurn(n: number): string[] {
+    return [
+      user(`prompt ${n}`, `2026-07-20T10:00:${String(n % 60).padStart(2, '0')}Z`),
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: `reply ${n}` }],
+          stop_reason: 'end_turn'
+        },
+        timestamp: `2026-07-20T10:00:${String(n % 60).padStart(2, '0')}Z`,
+        sessionId: 'src'
+      })
+    ]
+  }
+
+  it('a 300-turn file growing by ONE turn hands downstream a one-record append — never the history', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    const backlog = Array.from({ length: 300 }, (_, n) => closedTurn(n)).flat()
+    writeFileSync(file, backlog.join('\n') + '\n', 'utf8')
+    const deltas = armDeltaSeam(tracker)
+    const replace = vi.spyOn(tracker, 'replaceHistory')
+
+    // First contact is a FULL parse and stays on replaceHistory by design.
+    sync.watch('term-1', file, parseSessionTurns)
+    expect(tracker.history('term-1')).toHaveLength(300)
+    expect(deltas).toHaveLength(0)
+    const replacesAfterWatch = replace.mock.calls.length
+
+    appendFileSync(file, closedTurn(300).join('\n') + '\n', 'utf8')
+    await vi.advanceTimersByTimeAsync(200)
+
+    expect(deltas).toHaveLength(1)
+    expect(deltas[0].terminalId).toBe('term-1')
+    const delta = deltas[0].delta
+    expect(delta.kind).toBe('append')
+    if (delta.kind === 'append') {
+      expect(delta.records).toHaveLength(1)
+      expect(delta.records[0].index).toBe(301)
+    }
+    // The applied result is exact — same 301 records a whole parse derives.
+    expect(tracker.history('term-1')).toEqual(
+      parseSessionTurns([...backlog, ...closedTurn(300)])
+    )
+    // And growth itself paid no replaceHistory beyond the seam's own apply.
+    expect(replace.mock.calls.length - replacesAfterWatch).toBeLessThanOrEqual(1)
+    sync.dispose()
+  })
+
+  it('repeated delta growths stay exact — every applied step equals the whole-file parse', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    const lines = closedTurn(0)
+    writeFileSync(file, lines.join('\n') + '\n', 'utf8')
+    armDeltaSeam(tracker)
+    sync.watch('term-1', file, parseSessionTurns)
+
+    for (let n = 1; n <= 4; n += 1) {
+      const next = closedTurn(n)
+      appendFileSync(file, next.join('\n') + '\n', 'utf8')
+      lines.push(...next)
+      await vi.advanceTimersByTimeAsync(200)
+      expect(tracker.history('term-1'), `after turn ${n}`).toEqual(parseSessionTurns(lines))
+    }
+    sync.dispose()
+  })
+
+  it('a tracker WITHOUT applyHistoryDelta keeps the replaceHistory path — the compatibility seam', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    // Pin the seam absent even after the parallel lane lands it on the class.
+    ;(tracker as { applyHistoryDelta?: unknown }).applyHistoryDelta = undefined
+    writeFileSync(file, closedTurn(0).join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parseSessionTurns)
+
+    appendFileSync(file, closedTurn(1).join('\n') + '\n', 'utf8')
+    await vi.advanceTimersByTimeAsync(200)
+    expect(tracker.history('term-1').map((r) => r.prompt)).toEqual(['prompt 0', 'prompt 1'])
+    sync.dispose()
+  })
+
+  it('a shrink stays on replaceHistory even when the delta seam exists (the invalidation path)', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, [...closedTurn(0), ...closedTurn(1)].join('\n') + '\n', 'utf8')
+    const deltas = armDeltaSeam(tracker)
+    sync.watch('term-1', file, parseSessionTurns)
+
+    writeFileSync(file, closedTurn(0).join('\n') + '\n', 'utf8')
+    await vi.advanceTimersByTimeAsync(200)
+    expect(deltas).toHaveLength(0)
+    expect(tracker.history('term-1').map((r) => r.prompt)).toEqual(['prompt 0'])
+    sync.dispose()
+  })
+
+  it('the retained-lines fallback (no createAccumulator) keeps the old path even with the seam armed', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, 'one\n', 'utf8')
+    const deltas = armDeltaSeam(tracker)
+    // A plain parser without takeDelta: its accumulator retains lines and
+    // re-parses — it has no O(delta) story, so it must not pretend to one.
+    const parse = (lines: string[]): TurnRecord[] =>
+      lines.map((line, at) => ({
+        index: at + 1,
+        prompt: line,
+        reply: '',
+        startedAt: at,
+        endedAt: at
+      }))
+    sync.watch('term-1', file, parse)
+    appendFileSync(file, 'two\n', 'utf8')
+    await vi.advanceTimersByTimeAsync(200)
+
+    expect(deltas).toHaveLength(0)
+    expect(tracker.history('term-1').map((r) => r.prompt)).toEqual(['one', 'two'])
+    sync.dispose()
+  })
+})
+
+// Fix 5: the initial watch parse is deferrable off the accept path — the
+// poll timer covers the reconcile within one tick.
+describe('SessionTurnSync deferInitial', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('skips the synchronous reconcile and lets the timer land it', async () => {
+    vi.useFakeTimers()
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parseSessionTurns, { deferInitial: true })
+    // Nothing parsed inline — the accept path paid nothing.
+    expect(tracker.history('term-1')).toEqual([])
+    // The timer is armed: one poll later the reconcile lands.
+    await vi.advanceTimersByTimeAsync(200)
+    expect(tracker.history('term-1').map((r) => r.prompt)).toEqual(['turn one'])
+    sync.dispose()
+  })
+
+  it('default behavior is unchanged — the first reconcile is synchronous', () => {
+    const { file, tracker, sync } = fixture()
+    writeFileSync(file, TURN_1.join('\n') + '\n', 'utf8')
+    sync.watch('term-1', file, parseSessionTurns)
+    expect(tracker.history('term-1')).toHaveLength(1)
+    sync.dispose()
   })
 })
 

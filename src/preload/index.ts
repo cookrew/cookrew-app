@@ -2,6 +2,29 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 const api = {
   getWorkspace: () => ipcRenderer.invoke('workspace:get'),
+  // The owner's grant surface. Main refuses any sender that is not the owner
+  // window's TOP frame, so exposing it here does not hand it to a browser card
+  // or an install page — see owner-grant.ts and grant-surface-shape.test.ts.
+  grantEnrol: (workspaceId: string, sub: string, jwk: unknown) =>
+    ipcRenderer.invoke('grant:enrol', workspaceId, sub, jwk),
+  // REVOKE STOPS CALLS ALREADY RUNNING. Both of these take access away, and
+  // both resolve with `stopped` — how many in-flight calls the decision cut —
+  // so the surface can tell the owner what actually happened rather than only
+  // that the record changed. See owner-grant.ts and call-run.ts.
+  grantRevoke: (workspaceId: string, sub: string) =>
+    ipcRenderer.invoke('grant:revoke', workspaceId, sub),
+  grantExport: (workspaceId: string, nodeId: string, callers: string[]) =>
+    ipcRenderer.invoke('grant:export', workspaceId, nodeId, callers),
+  grantUnexport: (workspaceId: string, nodeId: string) =>
+    ipcRenderer.invoke('grant:unexport', workspaceId, nodeId),
+  // The ROSTER, not the raw record: enrolled callers with what each may call,
+  // exported agents with how many calls are running against them, and the live
+  // calls themselves — see grant-roster.ts.
+  // The deck's 10-second UNDO. Exact by construction: revoking never touched a
+  // grant, so the prior grant set comes back because it never left.
+  grantRestore: (workspaceId: string, sub: string) =>
+    ipcRenderer.invoke('grant:restore', workspaceId, sub),
+  grantList: (workspaceId: string) => ipcRenderer.invoke('grant:list', workspaceId),
   onWorkspaceState: (cb: (state: unknown) => void) => {
     const listener = (_e: unknown, state: unknown): void => cb(state)
     ipcRenderer.on('workspace:state', listener)
@@ -14,10 +37,26 @@ const api = {
   disconnect: (connId: string) => ipcRenderer.invoke('node:disconnect', connId),
   listPresets: () => ipcRenderer.invoke('preset:list'),
   createTerminal: (opts: unknown) => ipcRenderer.invoke('terminal:create', opts),
+  // NOT `preset:list` — that is the HARNESS preset list, a different shape.
+  // Aliasing them made listInstalledPresets return {name, command}[], which
+  // the chip model reads as `members.length` and crashes the dock on.
+  listInstalledPresets: () => ipcRenderer.invoke('preset:installed:list'),
+  placeInstalledPreset: (id: string, position: unknown, orch: boolean) =>
+    ipcRenderer.invoke('preset:installed:place', id, position, orch),
+  uninstallPreset: (id: string) => ipcRenderer.invoke('preset:installed:uninstall', id),
+  // R20: dismissing the rotation sheet and accepting the new key are two
+  // different decisions, so they are two channels. Collapsing them would make
+  // "I have read this" mean "I trust this".
+  markPresetRotationSeen: (id: string) => ipcRenderer.invoke('preset:installed:rotation:seen', id),
+  trustPresetAuthorKey: (id: string, newKeyId: string) =>
+    ipcRenderer.invoke('preset:installed:rotation:trust', id, newKeyId),
+  listPins: (terminalId: string) => ipcRenderer.invoke('pins:list', terminalId),
 
   listWorkspaces: () => ipcRenderer.invoke('workspace:list'),
   createWorkspace: (name: string, dir: string, team?: string) =>
     ipcRenderer.invoke('workspace:create', name, dir, team),
+  templateImport: (team: string, position?: { x: number; y: number }) =>
+    ipcRenderer.invoke('template:import', team, position),
   switchWorkspace: (id: string) => ipcRenderer.invoke('workspace:switch', id),
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),
@@ -60,8 +99,23 @@ const api = {
     // miss both.
     ipcRenderer.on(helloChannel, helloListener)
     ipcRenderer.on(channel, listener)
-    void ipcRenderer.invoke('pty:attach', terminalId)
+    // The lazy mirror may not be resident the instant a transcript opens — a
+    // just-booted pane, a herdr ensureSession race, a transient EAGAIN — and
+    // pty:attach then answers FALSE, sending no frame. Ignoring that left the
+    // live pane BLACK forever. So retry with backoff until it attaches (the
+    // listeners stay up, so the eventual frame paints). Cancelled on detach.
+    let detached = false
+    const tryAttach = (attempt: number): void => {
+      if (detached) return
+      void ipcRenderer.invoke('pty:attach', terminalId).then((ok: unknown) => {
+        if (ok === false && !detached && attempt < 8) {
+          setTimeout(() => tryAttach(attempt + 1), Math.min(300 * (attempt + 1), 1500))
+        }
+      })
+    }
+    tryAttach(0)
     return () => {
+      detached = true
       ipcRenderer.removeListener(channel, listener)
       ipcRenderer.removeListener(helloChannel, helloListener)
       ipcRenderer.send('pty:detach', terminalId)
@@ -88,6 +142,23 @@ const api = {
     ipcRenderer.invoke('trace:page', terminalId, request),
   listTraceIndex: (terminalId: string) => ipcRenderer.invoke('trace:index', terminalId),
   listTraceMarkers: (terminalId: string) => ipcRenderer.invoke('trace:markers', terminalId),
+  // T1: the latest checkpoint for a visible card, no PTY. Returns
+  // {prompt, reply, title?} | null.
+  latestCheckpoint: (terminalId: string) =>
+    ipcRenderer.invoke('trace:latest', terminalId) as Promise<{
+      prompt: string
+      reply: string
+      title?: string
+    } | null>,
+  // T4 push: subscribe/unsubscribe a card's file watch, and listen for the
+  // "your checkpoint changed" nudge (payload = terminalId).
+  watchLatest: (terminalId: string) => ipcRenderer.invoke('trace:latest-watch', terminalId),
+  unwatchLatest: (terminalId: string) => ipcRenderer.invoke('trace:latest-unwatch', terminalId),
+  onLatestChanged: (cb: (terminalId: string) => void) => {
+    const listener = (_e: unknown, terminalId: string): void => cb(terminalId)
+    ipcRenderer.on('trace:latest-changed', listener)
+    return () => ipcRenderer.removeListener('trace:latest-changed', listener)
+  },
   forkTerminal: (sourceId: string, turnIndex?: number) =>
     ipcRenderer.invoke('terminal:fork', sourceId, turnIndex),
   teamFork: (spec: unknown) => ipcRenderer.invoke('team:fork', spec),

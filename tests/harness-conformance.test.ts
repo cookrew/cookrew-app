@@ -45,6 +45,23 @@ describe('harness registry conformance', () => {
     }
   })
 
+  it('goldenClone is ABSENT on every harness — absent means template publishing must refuse (Sol r3 P1)', () => {
+    // The golden-save clone contract (fresh identity, rewritten references,
+    // isolated instance path, resume provenance validation, source
+    // immutability) is pinned in the Harness type BEFORE S7 lands. No
+    // harness implements it yet; a harness without the capability cannot
+    // publish golden-save templates, and NOTHING may degrade to a byte copy
+    // — session formats carry identity/lineage a copy would share. When a
+    // harness earns the capability, it wires `goldenClone` and this list
+    // shrinks deliberately, like the scrape exception list.
+    for (const harness of HARNESSES) {
+      expect(
+        harness.goldenClone,
+        `${harness.id}: goldenClone declared — implement the FULL contract and update this gate consciously`
+      ).toBeUndefined()
+    }
+  })
+
   it('every harness validates its resume key before it can reach a shell command', () => {
     const byId = new Map(HARNESSES.map((h) => [h.id, h]))
     // Closed alphabets reject traversal/metacharacters outright.

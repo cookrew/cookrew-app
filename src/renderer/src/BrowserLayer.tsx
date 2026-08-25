@@ -11,7 +11,13 @@ import {
 import { cookrew, hasNativeWebview, isRemoteMode } from './api'
 import { MobileBrowserFrame } from './MobileBrowserFrame'
 import { OpenExternal } from './nodes/OpenExternal'
-import { initialBackoff, recordFailure, recordSuccess, shouldCapture } from './capture-backoff'
+import {
+  initialBackoff,
+  recordFailure,
+  recordSuccess,
+  shouldCapture,
+  thumbNeedsCapture
+} from './capture-backoff'
 import { isSelfEmbedding } from './self-embed'
 import type { ScreenRect } from './zoom-lod'
 import type { LodLayout } from './zoom-lod'
@@ -469,10 +475,25 @@ function BrowserTabView({
     let disposed = false
     let reported = false
     let backoff = initialBackoff
+    // A thumbnail is only stale after the page (re)loads. `dirty` starts true so
+    // the first tick captures; a successful capture clears it, and a fresh
+    // did-stop-loading (navigation/reload) sets it again. This is the latency
+    // fix: without it, EVERY visible browser re-captured every interval — 40
+    // static file:// docs on a zoomed-out canvas meant 40 GPU readbacks +
+    // JPEG encodes every 5s for pixels that never changed. Now each captures
+    // once per load. capturePage() is a compositor stall; not doing it for an
+    // unchanged page is the whole win.
+    let dirty = true
     const capture = (): void => {
+      // A phone actively viewing this browser is a LIVE consumer of the thumb —
+      // it must keep refreshing even without a navigation, so it bypasses the
+      // dirty gate (matching shouldCapture's phone bypass). Every other browser
+      // captures once per load.
+      const phoneViewing = isPhoneViewing(browserId)
+      if (!thumbNeedsCapture({ dirty, phoneViewing })) return
       const gate = {
         documentHidden: document.hidden,
-        phoneViewing: isPhoneViewing(browserId),
+        phoneViewing,
         backoff,
         now: Date.now()
       }
@@ -490,6 +511,9 @@ function BrowserTabView({
       void pending
         .then((image) => {
           backoff = recordSuccess()
+          // Clear dirty only on a real capture — a failed one (below) leaves it
+          // set so the next tick retries.
+          dirty = false
           if (!disposed) onThumb(browserId, image.resize({ width: THUMB_WIDTH }).toDataURL())
         })
         .catch((error: unknown) => {
@@ -500,7 +524,11 @@ function BrowserTabView({
           }
         })
     }
-    const onStop = (): void => capture()
+    // Navigation/reload = new pixels: mark dirty and grab one now.
+    const onStop = (): void => {
+      dirty = true
+      capture()
+    }
     const onVisibility = (): void => {
       // Back from hidden/occluded: refresh immediately rather than waiting out
       // the interval. (While still hidden, only a phone-viewed browser keeps

@@ -18,6 +18,7 @@ import {
   uniqueName
 } from '../shared/model'
 import { addDir, removeDir, setPrimary } from '../shared/workspace-dirs'
+import { slugFor } from './workspace-slug'
 import type { CookrewEvent, EventActor } from './event-log'
 import { upgradeNode } from './node-upgrades'
 import type { RecoverableSnapshot } from './recoverable'
@@ -55,8 +56,35 @@ const legacyNotesDir = (base: string): string => path.join(base, 'notes')
 
 interface Registry {
   workspaces: WorkspaceMeta[]
+  /**
+   * Last-focused workspace — a BOOT HINT, not the authority it used to be.
+   *
+   * It survives on disk under the old name so an existing registry.json keeps
+   * working, but nothing reads it after construction. Which workspaces are
+   * live is now residency (see `hydrated`); which one a seat is looking at is
+   * focus, and once windows exist (step 3) focus is per-window, so a single
+   * persisted value cannot express it.
+   */
   activeId: string
 }
+
+/** Options a caller may pin; everything else is derived. */
+export interface WorkspaceStoreOptions {
+  /**
+   * Hold more than one workspace hydrated at a time (marketplace §11).
+   * OFF is today's behaviour exactly: switching evicts the workspace you left.
+   */
+  multiInstance?: boolean
+}
+
+/** A workspace the process is holding in memory. */
+interface HydratedSession {
+  state: WorkspaceState
+  /** Debounced save, bound to THIS workspace — never re-resolved at fire time. */
+  saveTimer: NodeJS.Timeout | null
+}
+
+const MULTI_INSTANCE_DEFAULT = process.env.COOKREW_MULTI_INSTANCE === '1'
 
 /** A node found by a cross-workspace lookup, with its owning workspace. */
 export interface WorkspaceNodeHit {
@@ -72,32 +100,146 @@ export interface WorkspaceNodeHit {
  * main process can rebuild PTYs for the new canvas.
  */
 export class WorkspaceStore extends EventEmitter {
-  state: WorkspaceState
-
   private registry: Registry
-  private saveTimer: NodeJS.Timeout | null = null
 
-  constructor(private baseDir = DATA_DIR) {
+  /**
+   * Workspaces held in memory. Was a single `state` field — the one thing
+   * marketplace-architecture §11 calls the singleton, because it made "live"
+   * and "looked at" the same word.
+   */
+  private readonly hydrated = new Map<string, HydratedSession>()
+
+  /** Which resident workspace a seat is looking at. A label, not a lifetime. */
+  private focused: string
+
+  private readonly multiInstance: boolean
+
+  constructor(private baseDir = DATA_DIR, options: WorkspaceStoreOptions = {}) {
     super()
-    this.registry = loadRegistry(this.baseDir)
-    this.state = loadWorkspaceState(this.baseDir, this.activeId)
+    this.multiInstance = options.multiInstance ?? MULTI_INSTANCE_DEFAULT
+    const loaded = loadRegistry(this.baseDir)
+    this.registry = withSlugs(loaded)
+    // Persist a backfill immediately: a slug is FROZEN, and a slug that only
+    // exists in memory would be re-minted on the next boot — which is exactly
+    // the moving address the freeze rule exists to prevent. Cheap and once.
+    if (this.registry.workspaces.some((w, i) => w.slug !== loaded.workspaces[i]?.slug)) {
+      saveRegistry(this.baseDir, this.registry)
+    }
+    // The persisted hint may name a workspace that no longer exists — another
+    // window's registry write, or a hand edit. Focus must still land somewhere.
+    const hint = this.registry.activeId
+    this.focused = this.registry.workspaces.some((w) => w.id === hint)
+      ? hint
+      : this.registry.workspaces[0].id
+    this.hydrate(this.focused)
+  }
+
+  // ---- residency ----
+
+  /**
+   * The session for a workspace, loading it if the store is not already
+   * holding one. Nothing is retained if the load throws.
+   */
+  private hydrate(id: string): HydratedSession {
+    const existing = this.hydrated.get(id)
+    if (existing) return existing
+    const session: HydratedSession = {
+      state: loadWorkspaceState(this.baseDir, id),
+      saveTimer: null
+    }
+    this.hydrated.set(id, session)
+    return session
+  }
+
+  /** Workspace ids currently held in memory. */
+  resident(): string[] {
+    return [...this.hydrated.keys()]
+  }
+
+  private takenSlugs(): string[] {
+    return this.registry.workspaces.map((w) => w.slug).filter((s): s is string => !!s)
+  }
+
+  private isResident(id: string): boolean {
+    return this.hydrated.has(id)
+  }
+
+  /**
+   * Stop holding a workspace, flushing it first — an evicted edit must never
+   * be a lost edit. No-op if it was not resident.
+   */
+  private evict(id: string): void {
+    const session = this.hydrated.get(id)
+    if (!session) return
+    this.flushSession(id, session)
+    this.hydrated.delete(id)
+  }
+
+  /**
+   * Stop holding a workspace, flushing it first. The drain's teardown half —
+   * see session-registry.ts for why nothing may PIN a session, only observe
+   * that nothing is true about it any more.
+   *
+   * Refuses to drop the focused workspace: focus is one of the liveness facts,
+   * so being asked to release it means the caller's facts are wrong, and
+   * dropping it would leave the store with no canvas to render.
+   */
+  releaseSession(workspaceId: string): boolean {
+    if (workspaceId === this.focused) return false
+    if (!this.hydrated.has(workspaceId)) return false
+    this.evict(workspaceId)
+    return true
+  }
+
+  /** Test seam: the data dir this store was built against. */
+  get baseDirForTests(): string {
+    return this.baseDir
   }
 
   // ---- workspace registry ----
 
-  get activeId(): string {
-    return this.registry.activeId
+  /** Whether this store holds more than one workspace at a time. */
+  get isMultiInstance(): boolean {
+    return this.multiInstance
+  }
+
+  /** Which workspace a seat is looking at. */
+  get focusedId(): string {
+    return this.focused
+  }
+
+  /** The focused workspace's canvas. */
+  get focusedState(): WorkspaceState {
+    return this.hydrate(this.focused).state
+  }
+
+  /** Meta of the focused workspace, or undefined if the registry is empty. */
+  focusedMeta(): WorkspaceMeta | undefined {
+    return this.registry.workspaces.find((w) => w.id === this.focused)
   }
 
   list(): WorkspaceList {
-    return { workspaces: this.registry.workspaces, activeId: this.registry.activeId }
+    return { workspaces: this.registry.workspaces, activeId: this.focused }
   }
 
+
   activeMeta(): WorkspaceMeta {
-    return (
-      this.registry.workspaces.find((w) => w.id === this.registry.activeId) ??
-      this.registry.workspaces[0]
-    )
+    return this.focusedMeta() ?? this.registry.workspaces[0]
+  }
+
+  /**
+   * The workspace a URL slug addresses (step 3 route scope). Undefined for an
+   * unknown slug, which the router answers 404 rather than falling back to
+   * focus — silently serving a different workspace than the URL names is the
+   * exact confusion slugs exist to end.
+   */
+  bySlug(slug: string): WorkspaceMeta | undefined {
+    return this.registry.workspaces.find((w) => w.slug === slug)
+  }
+
+  /** A workspace's URL slug. */
+  slugOf(workspaceId: string): string | undefined {
+    return this.registry.workspaces.find((w) => w.id === workspaceId)?.slug
   }
 
   metaByName(name: string): WorkspaceMeta | undefined {
@@ -109,7 +251,14 @@ export class WorkspaceStore extends EventEmitter {
       name.trim() || 'Workspace',
       this.registry.workspaces.map((w) => w.name)
     )
-    const meta: WorkspaceMeta = { id: randomUUID(), name: finalName, dir, dirs: [dir], icon }
+    const meta: WorkspaceMeta = {
+      id: randomUUID(),
+      name: finalName,
+      dir,
+      dirs: [dir],
+      icon,
+      slug: slugFor({ name: finalName }, this.takenSlugs())
+    }
     this.registry = { ...this.registry, workspaces: [...this.registry.workspaces, meta] }
     // Seed an empty canvas file so the switch loads cleanly.
     saveWorkspaceState(this.baseDir, meta.id, { name: meta.name, dir, dirs: [dir], nodes: [], connections: [] })
@@ -138,7 +287,14 @@ export class WorkspaceStore extends EventEmitter {
     )
     const finalDirs = normalizeDirs({ dir, dirs })
     const primary = finalDirs[0] ?? dir
-    const meta: WorkspaceMeta = { id: randomUUID(), name: finalName, dir: primary, dirs: finalDirs, icon }
+    const meta: WorkspaceMeta = {
+      id: randomUUID(),
+      name: finalName,
+      dir: primary,
+      dirs: finalDirs,
+      icon,
+      slug: slugFor({ name: finalName }, this.takenSlugs())
+    }
     this.registry = { ...this.registry, workspaces: [...this.registry.workspaces, meta] }
     saveWorkspaceState(this.baseDir, meta.id, { name: finalName, dir: primary, dirs: finalDirs, nodes, connections })
     try {
@@ -165,7 +321,7 @@ export class WorkspaceStore extends EventEmitter {
   switchWorkspace(id: string): WorkspaceMeta {
     const target = this.registry.workspaces.find((w) => w.id === id)
     if (!target) throw new Error(`Workspace '${id}' not found`)
-    if (id === this.registry.activeId) return target
+    if (id === this.focused) return target
 
     // The clock starts at INITIATION and stops after the 'switch' listener has
     // run, because that listener is the switch: index.ts detaches the outgoing
@@ -174,15 +330,32 @@ export class WorkspaceStore extends EventEmitter {
     // something the user waits seconds on.
     const startedAt = Date.now()
     const previousTerminalIds = this.terminals().map((t) => t.id)
-    this.flushSave()
+    const leaving = this.focused
 
+    // Durability BEFORE bookkeeping. The outgoing canvas may hold up to 300ms
+    // of debounced edits; writing the registry first opens a crash window in
+    // which the app reopens on the new workspace having lost them. The edits
+    // are the user's work, the hint is a convenience — order accordingly.
+    if (this.multiInstance) {
+      const session = this.hydrated.get(leaving)
+      if (session) this.flushSession(leaving, session)
+    } else {
+      // Flag OFF is today's behaviour exactly: one workspace resident, the one
+      // you left dropped — flushed on the way out by evict().
+      this.evict(leaving)
+    }
+
+    this.focused = id
+    // The hint, so the next boot opens where this one left off. Focus itself
+    // stops living on disk here — once windows exist it is per-window, and one
+    // persisted value cannot say what two windows are looking at.
     this.registry = { ...this.registry, activeId: id }
     saveRegistry(this.baseDir, this.registry)
-    this.state = loadWorkspaceState(this.baseDir, id)
+    this.hydrate(id)
 
     this.emit('switch', { previousTerminalIds })
     this.emit('workspaces', this.list())
-    this.emit('change', this.state)
+    this.emit('change', this.focusedState)
     this.emitOp(
       'workspace.switched',
       target.id,
@@ -199,10 +372,12 @@ export class WorkspaceStore extends EventEmitter {
       ...this.registry,
       workspaces: this.registry.workspaces.map((w) => (w.id === id ? { ...w, name } : w))
     }
-    if (id === this.registry.activeId) this.state = { ...this.state, name }
+    // A rename lands on the canvas wherever it is held, focused or not.
+    const session = this.hydrated.get(id)
+    if (session) session.state = { ...session.state, name }
     saveRegistry(this.baseDir, this.registry)
     this.emit('workspaces', this.list())
-    if (id === this.registry.activeId) this.emit('change', this.state)
+    if (id === this.focused) this.emit('change', this.focusedState)
     this.emitOp('workspace.renamed', id, name, id)
   }
 
@@ -220,12 +395,19 @@ export class WorkspaceStore extends EventEmitter {
       throw new Error(`Workspace '${id}' not found`)
     }
     let switchedTo: string | null = null
-    if (id === this.registry.activeId) {
+    if (id === this.focused) {
       const other = this.registry.workspaces.find((w) => w.id !== id)
       if (other) {
         this.switchWorkspace(other.id) // saves current, boots the target
         switchedTo = other.id
       }
+    }
+    // Stop holding it BEFORE the files go: a resident session whose partition
+    // has been deleted would keep rewriting the directory from its save timer.
+    const doomed = this.hydrated.get(id)
+    if (doomed) {
+      if (doomed.saveTimer) clearTimeout(doomed.saveTimer)
+      this.hydrated.delete(id)
     }
     const removedMeta = this.registry.workspaces.find((w) => w.id === id)
     this.registry = {
@@ -247,7 +429,7 @@ export class WorkspaceStore extends EventEmitter {
 
   /** Working directories of the active workspace, primary first. */
   dirs(): string[] {
-    return this.state.dirs
+    return this.focusedState.dirs
   }
 
   private applyDirs(id: string, nextDirs: string[]): WorkspaceList {
@@ -260,12 +442,11 @@ export class WorkspaceStore extends EventEmitter {
         w.id === id ? { ...w, dir: primary, dirs } : w
       )
     }
-    if (id === this.registry.activeId) {
-      this.state = { ...this.state, dir: primary, dirs }
-      this.scheduleSave()
-      this.emit('change', this.state)
+    const session = this.hydrated.get(id)
+    if (session) {
+      this.mutateIn(id, { ...session.state, dir: primary, dirs })
     } else {
-      // Inactive workspace: patch its on-disk state directly.
+      // Not held in memory: patch its on-disk state directly.
       const state = loadWorkspaceState(this.baseDir, id)
       saveWorkspaceState(this.baseDir, id, { ...state, dir: primary, dirs })
     }
@@ -277,7 +458,7 @@ export class WorkspaceStore extends EventEmitter {
   private workspaceDirs(id: string): string[] {
     const meta = this.registry.workspaces.find((w) => w.id === id)
     if (!meta) throw new Error(`Workspace '${id}' not found`)
-    return id === this.registry.activeId ? this.state.dirs : meta.dirs
+    return this.hydrated.get(id)?.state.dirs ?? meta.dirs
   }
 
   addWorkspaceDir(id: string, dir: string): WorkspaceList {
@@ -285,7 +466,9 @@ export class WorkspaceStore extends EventEmitter {
   }
 
   removeWorkspaceDir(id: string, dir: string): WorkspaceList {
-    const inUse = id === this.registry.activeId && this.terminals().some((t) => t.cwd === dir)
+    const inUse =
+      this.hydrated.has(id) &&
+      this.stateOf(id).nodes.some((n) => n.kind === 'terminal' && n.cwd === dir)
     return this.applyDirs(id, removeDir(this.workspaceDirs(id), dir, inUse))
   }
 
@@ -297,53 +480,87 @@ export class WorkspaceStore extends EventEmitter {
   setTerminalCwd(nodeId: string, dir: string): TerminalNodeData {
     const node = this.node(nodeId)
     if (!node || node.kind !== 'terminal') throw new Error('Not a terminal node')
-    if (!this.state.dirs.includes(dir)) {
+    if (!this.focusedState.dirs.includes(dir)) {
       throw new Error(`'${dir}' is not a directory of this workspace`)
     }
     return this.updateNodeUnsafe(nodeId, { cwd: dir }) as TerminalNodeData
   }
 
-  // ---- active-workspace state ----
+  // ---- resident-workspace state ----
 
-  private mutate(next: WorkspaceState): void {
-    this.state = next
-    this.emit('change', this.state)
-    this.scheduleSave()
+  /**
+   * Replace a resident workspace's canvas, emitting 'change' only when it is
+   * the one being looked at — a background edit is real, but no seat is
+   * rendering it.
+   */
+  private mutateIn(workspaceId: string, next: WorkspaceState): void {
+    const session = this.hydrate(workspaceId)
+    session.state = next
+    // 'change' stays FOCUSED-ONLY: the desktop renderer and every unslugged
+    // consumer are built on it meaning "the canvas on screen changed", and
+    // widening it would push background workspaces at them.
+    if (workspaceId === this.focused) this.emit('change', next)
+    // 'workspace-change' is the scoped channel — every resident mutation,
+    // tagged with its workspace. Without it a phone reading /<slug> for a
+    // workspace nobody is looking at receives silence, because the only
+    // change signal that existed was the focused one (marketplace §11).
+    this.emit('workspace-change', { workspaceId, state: next })
+    this.scheduleSave(workspaceId)
   }
 
-  private scheduleSave(): void {
-    if (this.saveTimer) clearTimeout(this.saveTimer)
-    this.saveTimer = setTimeout(() => {
-      saveWorkspaceState(this.baseDir, this.registry.activeId, this.state)
+  private mutate(next: WorkspaceState): void {
+    this.mutateIn(this.focused, next)
+  }
+
+  /**
+   * Debounce a save for ONE workspace.
+   *
+   * The target is captured HERE, at schedule time, rather than read from focus
+   * when the timer fires. The old code did the latter and stayed correct only
+   * because switchWorkspace flushed before moving focus; with N sessions
+   * resident that ordering guarantee is gone, and a save landing under
+   * whichever workspace happened to be focused 300ms later would corrupt both.
+   */
+  private scheduleSave(workspaceId: string): void {
+    const session = this.hydrated.get(workspaceId)
+    if (!session) return
+    if (session.saveTimer) clearTimeout(session.saveTimer)
+    session.saveTimer = setTimeout(() => {
+      session.saveTimer = null
+      saveWorkspaceState(this.baseDir, workspaceId, session.state)
     }, 300)
   }
 
-  private flushSave(): void {
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer)
-      this.saveTimer = null
+  private flushSession(workspaceId: string, session: HydratedSession): void {
+    if (session.saveTimer) {
+      clearTimeout(session.saveTimer)
+      session.saveTimer = null
     }
-    saveWorkspaceState(this.baseDir, this.registry.activeId, this.state)
+    saveWorkspaceState(this.baseDir, workspaceId, session.state)
   }
 
-  /** Write any debounced canvas state now (app quit) — a node change within
-   *  the 300ms save window would otherwise be lost. */
+  /**
+   * Write every resident workspace's debounced state now (app quit) — a node
+   * change within the 300ms save window would otherwise be lost. All of them,
+   * not just the focused one: a background session's work is no less real.
+   */
   flush(): void {
-    this.flushSave()
+    for (const [id, session] of this.hydrated) this.flushSession(id, session)
   }
 
-  private notesDir(): string {
-    return path.join(workspacesDir(this.baseDir), this.registry.activeId, 'notes')
+  /** Notes directory of ANY workspace — resident or not. */
+  notesDirOf(workspaceId: string): string {
+    return path.join(workspacesDir(this.baseDir), workspaceId, 'notes')
   }
 
   // ---- lookups ----
 
   node(id: string): CanvasNode | undefined {
-    return this.state.nodes.find((n) => n.id === id)
+    return this.focusedState.nodes.find((n) => n.id === id)
   }
 
   nodeByName(name: string, kind?: CanvasNode['kind']): CanvasNode | undefined {
-    return this.state.nodes.find(
+    return this.focusedState.nodes.find(
       (n) => n.name.toLowerCase() === name.toLowerCase() && (!kind || n.kind === kind)
     )
   }
@@ -356,9 +573,9 @@ export class WorkspaceStore extends EventEmitter {
    * Returns undefined when no workspace contains the node.
    */
   workspaceOfNode(id: string): WorkspaceMeta | undefined {
-    if (this.state.nodes.some((n) => n.id === id)) return this.activeMeta()
+    if (this.focusedState.nodes.some((n) => n.id === id)) return this.activeMeta()
     for (const meta of this.registry.workspaces) {
-      if (meta.id === this.activeId) continue
+      if (meta.id === this.focused) continue
       try {
         const raw = JSON.parse(
           readFileSync(workspaceFile(this.baseDir, meta.id), 'utf8')
@@ -372,27 +589,27 @@ export class WorkspaceStore extends EventEmitter {
   }
 
   terminals(): TerminalNodeData[] {
-    return this.state.nodes.filter((n): n is TerminalNodeData => n.kind === 'terminal')
+    return this.focusedState.nodes.filter((n): n is TerminalNodeData => n.kind === 'terminal')
   }
 
   notes(): NoteNodeData[] {
-    return this.state.nodes.filter((n): n is NoteNodeData => n.kind === 'note')
+    return this.focusedState.nodes.filter((n): n is NoteNodeData => n.kind === 'note')
   }
 
   browsers(): BrowserNodeData[] {
-    return this.state.nodes.filter((n): n is BrowserNodeData => n.kind === 'browser')
+    return this.focusedState.nodes.filter((n): n is BrowserNodeData => n.kind === 'browser')
   }
 
   /** Everything directly connected to the given node id. */
   connectedTo(id: string): CanvasNode[] {
-    const ids = this.state.connections
+    const ids = this.focusedState.connections
       .filter((c) => c.a === id || c.b === id)
       .map((c) => (c.a === id ? c.b : c.a))
     return ids.map((nid) => this.node(nid)).filter((n): n is CanvasNode => n !== undefined)
   }
 
   isConnected(aId: string, bId: string): boolean {
-    return this.state.connections.some(
+    return this.focusedState.connections.some(
       (c) => (c.a === aId && c.b === bId) || (c.a === bId && c.b === aId)
     )
   }
@@ -481,6 +698,25 @@ export class WorkspaceStore extends EventEmitter {
    * never diverge from state. `durationMs` is how a caller that measured
    * something reports it; omit it and the event is untimed, as before.
    */
+  /**
+   * Ops living outside the store (a rotation rebind, a turn completing in
+   * the tracker) still go through here — one choke-point, so the event
+   * stream can never diverge from state, even for background workspaces.
+   */
+  recordEventIn(
+    workspaceId: string,
+    type: string,
+    entityId: string,
+    entityName: string,
+    details?: string,
+    durationMs?: number
+  ): void {
+    if (!this.registry.workspaces.some((workspace) => workspace.id === workspaceId)) {
+      throw new Error(`Workspace '${workspaceId}' not found`)
+    }
+    this.emitOp(type, entityId, entityName, workspaceId, details, durationMs)
+  }
+
   recordEvent(
     type: string,
     entityId: string,
@@ -488,7 +724,7 @@ export class WorkspaceStore extends EventEmitter {
     details?: string,
     durationMs?: number
   ): void {
-    this.emitOp(type, entityId, entityName, this.registry.activeId, details, durationMs)
+    this.recordEventIn(this.focused, type, entityId, entityName, details, durationMs)
   }
 
   private createdType(kind: CanvasNode['kind']): string {
@@ -516,7 +752,7 @@ export class WorkspaceStore extends EventEmitter {
 
   /** Active workspace state from memory (fresh), inactive from disk. */
   private stateOf(id: string): WorkspaceState {
-    return id === this.registry.activeId ? this.state : loadWorkspaceState(this.baseDir, id)
+    return this.hydrated.get(id)?.state ?? loadWorkspaceState(this.baseDir, id)
   }
 
   /** Read-only state of ANY workspace (active from memory, inactive from disk). */
@@ -554,9 +790,7 @@ export class WorkspaceStore extends EventEmitter {
     const ids: string[] = []
     for (const w of this.registry.workspaces) {
       const state =
-        w.id === this.registry.activeId
-          ? this.state
-          : loadWorkspaceStateStrict(this.baseDir, w.id)
+        this.hydrated.get(w.id)?.state ?? loadWorkspaceStateStrict(this.baseDir, w.id)
       for (const n of state.nodes) {
         if (n.kind === 'terminal') ids.push(n.id)
       }
@@ -566,17 +800,24 @@ export class WorkspaceStore extends EventEmitter {
 
   /** Apply a transform to any workspace: active mutates, inactive patches disk. */
   private patchWorkspace(id: string, fn: (s: WorkspaceState) => WorkspaceState): void {
-    if (id === this.registry.activeId) {
-      this.mutate(fn(this.state))
+    const session = this.hydrated.get(id)
+    if (session) {
+      this.mutateIn(id, fn(session.state))
       return
     }
-    saveWorkspaceState(this.baseDir, id, fn(this.stateOf(id)))
+    const next = fn(this.stateOf(id))
+    saveWorkspaceState(this.baseDir, id, next)
+    // The scoped change signal must NOT depend on residency. A workspace
+    // patched while nobody holds it in memory has still changed, and a phone
+    // reading its slug is entitled to know — silence has to mean "nothing
+    // happened here", never "this stream is dead" (marketplace §11).
+    this.emit('workspace-change', { workspaceId: id, state: next })
   }
 
   /** Workspace metas with the active one first (cheapest, freshest lookup). */
   private metasActiveFirst(): WorkspaceMeta[] {
     return [...this.registry.workspaces].sort((a, b) =>
-      a.id === this.registry.activeId ? -1 : b.id === this.registry.activeId ? 1 : 0
+      this.hydrated.has(a.id) === this.hydrated.has(b.id) ? 0 : this.hydrated.has(a.id) ? -1 : 1
     )
   }
 
@@ -594,6 +835,19 @@ export class WorkspaceStore extends EventEmitter {
       if (node) return { node, workspaceId: meta.id }
     }
     return undefined
+  }
+
+  /**
+   * The workspace that OWNS a node, across every workspace.
+   *
+   * The CLI's resolver. A `cookrew` command arrives from inside a pane, so the
+   * caller's terminal id already says which workspace the command is about —
+   * the process never has to consult what anyone is looking at. That is the
+   * whole reason the CLI socket can stay global while its scope goes
+   * per-session (marketplace-architecture §11).
+   */
+  ownerOf(nodeId: string): string | undefined {
+    return this.nodeAcrossWorkspaces(nodeId)?.workspaceId
   }
 
   workspaceOf(nodeId: string): WorkspaceMeta | undefined {
@@ -635,7 +889,7 @@ export class WorkspaceStore extends EventEmitter {
     const a = this.nodeAcrossWorkspaces(aId)
     const b = this.nodeAcrossWorkspaces(bId)
     if (!a || !b) throw new Error('Cannot connect: node not found in any workspace')
-    if (a.workspaceId === this.registry.activeId && b.workspaceId === this.registry.activeId) {
+    if (a.workspaceId === this.focused && b.workspaceId === this.focused) {
       return this.connect(aId, bId)
     }
     const matches = (c: Connection): boolean =>
@@ -663,16 +917,23 @@ export class WorkspaceStore extends EventEmitter {
 
   /** addNode into any workspace; unique-named within THAT workspace. */
   addNodeToWorkspace(workspaceId: string, node: CanvasNode): CanvasNode {
-    if (workspaceId === this.registry.activeId) return this.addNode(node)
+    if (workspaceId === this.focused) return this.addNode(node)
     if (!this.registry.workspaces.some((w) => w.id === workspaceId)) {
       throw new Error(`Workspace '${workspaceId}' not found`)
     }
     const state = this.stateOf(workspaceId)
+    const upgraded = upgradeNode(node)
     const named: CanvasNode = {
-      ...node,
-      name: uniqueName(node.name, state.nodes.map((n) => n.name))
+      ...upgraded,
+      name: uniqueName(upgraded.name, state.nodes.map((n) => n.name))
     }
-    saveWorkspaceState(this.baseDir, workspaceId, { ...state, nodes: [...state.nodes, named] })
+    // Residency-aware: a workspace held in memory must be patched THERE, or
+    // its next flush writes the pre-add state straight back over this one.
+    this.patchWorkspace(workspaceId, (current) => ({
+      ...current,
+      nodes: [...current.nodes, named]
+    }))
+    if (named.kind === 'note') void this.persistNoteFile(named, workspaceId)
     this.emitOp(
       this.createdType(named.kind),
       named.id,
@@ -704,7 +965,8 @@ export class WorkspaceStore extends EventEmitter {
     this.patchWorkspace(workspaceId, (current) => {
       const names = current.nodes.map((n) => n.name)
       added = nodes.map((node) => {
-        const named = { ...node, name: uniqueName(node.name, names) } as CanvasNode
+        const upgraded = upgradeNode(node)
+        const named = { ...upgraded, name: uniqueName(upgraded.name, names) } as CanvasNode
         names.push(named.name)
         return named
       })
@@ -721,10 +983,8 @@ export class WorkspaceStore extends EventEmitter {
 
     // Preserve addNode's note-file side effect on the active workspace. The
     // JSON state is already durable; these mirrors remain best-effort async.
-    if (workspaceId === this.registry.activeId) {
-      for (const node of added) {
-        if (node.kind === 'note') void this.persistNoteFile(node)
-      }
+    for (const node of added) {
+      if (node.kind === 'note') void this.persistNoteFile(node, workspaceId)
     }
     return added
   }
@@ -751,7 +1011,7 @@ export class WorkspaceStore extends EventEmitter {
     if (!hit) return
     // Active-workspace removals route through removeNode so the op event
     // (and any kind-specific cleanup) is emitted exactly once.
-    if (hit.workspaceId === this.registry.activeId) {
+    if (hit.workspaceId === this.focused) {
       this.removeNode(id)
       return
     }
@@ -767,17 +1027,18 @@ export class WorkspaceStore extends EventEmitter {
   // ---- mutations ----
 
   addNode(node: CanvasNode): CanvasNode {
+    const upgraded = upgradeNode(node)
     const named: CanvasNode = {
-      ...node,
-      name: uniqueName(node.name, this.state.nodes.map((n) => n.name))
+      ...upgraded,
+      name: uniqueName(upgraded.name, this.focusedState.nodes.map((n) => n.name))
     }
-    this.mutate({ ...this.state, nodes: [...this.state.nodes, named] })
+    this.mutate({ ...this.focusedState, nodes: [...this.focusedState.nodes, named] })
     if (named.kind === 'note') void this.persistNoteFile(named)
     this.emitOp(
       this.createdType(named.kind),
       named.id,
       named.name,
-      this.registry.activeId,
+      this.focused,
       named.kind === 'terminal' ? (named as TerminalNodeData).preset : undefined
     )
     return named
@@ -806,53 +1067,87 @@ export class WorkspaceStore extends EventEmitter {
     return this.updateNodeUnsafe(id, safe)
   }
 
-  /** Full-field update for MAIN-PROCESS internals (spawn binds, cwd moves). */
+  /**
+   * Full-field update for MAIN-PROCESS internals (spawn binds, cwd moves).
+   *
+   * Falls through to the owning workspace when the node is not on the focused
+   * canvas. The async harness binds — session rebind after a fork, codex/pi
+   * binding, cwd moves — are keyed by TERMINAL ID alone and land whenever the
+   * probe resolves, which with sessions resident can be long after focus moved
+   * on. Matching against the focused canvas only would drop those patches
+   * silently, and a dropped session rebind is the exact-context failure the
+   * recover gate exists to catch.
+   */
   updateNodeUnsafe(id: string, patch: Partial<CanvasNode>): CanvasNode | undefined {
     let updated: CanvasNode | undefined
-    const nodes = this.state.nodes.map((n) => {
+    const nodes = this.focusedState.nodes.map((n) => {
       if (n.id !== id) return n
       updated = { ...n, ...patch } as CanvasNode
       return updated
     })
-    if (!updated) return undefined
-    this.mutate({ ...this.state, nodes })
+    if (!updated) return this.updateNodeAcrossWorkspacesUnsafe(id, patch)
+    this.mutate({ ...this.focusedState, nodes })
     if (updated.kind === 'note') void this.persistNoteFile(updated)
+    return updated
+  }
+
+  /**
+   * Patch a node wherever it lives — a background workspace's agent rotates
+   * its session too, and the rebind must land on the persisted state the
+   * next switch will load, not silently miss because the canvas looks away.
+   */
+  updateNodeAcrossWorkspacesUnsafe(
+    id: string,
+    patch: Partial<CanvasNode>
+  ): CanvasNode | undefined {
+    const hit = this.nodeAcrossWorkspaces(id)
+    if (!hit) return undefined
+    if (hit.workspaceId === this.focused) return this.updateNodeUnsafe(id, patch)
+    let updated: CanvasNode | undefined
+    this.patchWorkspace(hit.workspaceId, (state) => ({
+      ...state,
+      nodes: state.nodes.map((node) => {
+        if (node.id !== id) return node
+        updated = { ...node, ...patch } as CanvasNode
+        return updated
+      })
+    }))
     return updated
   }
 
   removeNode(id: string): void {
     const node = this.node(id)
-    if (node) this.captureRecoverable(node, this.registry.activeId)
+    if (node) this.captureRecoverable(node, this.focused)
     this.mutate({
-      ...this.state,
-      nodes: this.state.nodes.filter((n) => n.id !== id),
-      connections: this.state.connections.filter((c) => c.a !== id && c.b !== id)
+      ...this.focusedState,
+      nodes: this.focusedState.nodes.filter((n) => n.id !== id),
+      connections: this.focusedState.connections.filter((c) => c.a !== id && c.b !== id)
     })
-    if (node) this.emitOp(this.removedType(node.kind), node.id, node.name, this.registry.activeId)
+    if (node) this.emitOp(this.removedType(node.kind), node.id, node.name, this.focused)
   }
 
   connect(aId: string, bId: string): Connection {
-    const existing = this.state.connections.find(
+    const existing = this.focusedState.connections.find(
       (c) => (c.a === aId && c.b === bId) || (c.a === bId && c.b === aId)
     )
     if (existing) return existing
     const conn: Connection = { id: randomUUID(), a: aId, b: bId }
-    this.mutate({ ...this.state, connections: [...this.state.connections, conn] })
+    this.mutate({ ...this.focusedState, connections: [...this.focusedState.connections, conn] })
     this.emitOp(
       'connection.made',
       conn.id,
       `${this.node(aId)?.name ?? aId} ↔ ${this.node(bId)?.name ?? bId}`,
-      this.registry.activeId
+      this.focused
     )
     return conn
   }
 
   disconnect(connectionId: string): void {
     this.mutate({
-      ...this.state,
-      connections: this.state.connections.filter((c) => c.id !== connectionId)
+      ...this.focusedState,
+      connections: this.focusedState.connections.filter((c) => c.id !== connectionId)
     })
-    this.emitOp('connection.removed', connectionId, '', this.registry.activeId)
+    this.emitOp('connection.removed', connectionId, '', this.focused)
   }
 
   // ---- notes ----
@@ -860,7 +1155,7 @@ export class WorkspaceStore extends EventEmitter {
   createNote(partial: Omit<NoteNodeData, 'kind' | 'id' | 'name'>): NoteNodeData {
     const name = uniqueName(
       noteNameFromContent(partial.content),
-      this.state.nodes.map((n) => n.name)
+      this.focusedState.nodes.map((n) => n.name)
     )
     const note: NoteNodeData = { kind: 'note', id: randomUUID(), name, ...partial }
     return this.addNode(note) as NoteNodeData
@@ -874,14 +1169,14 @@ export class WorkspaceStore extends EventEmitter {
       ? note.name
       : uniqueName(
           noteNameFromContent(content),
-          this.state.nodes.filter((n) => n.id !== id).map((n) => n.name)
+          this.focusedState.nodes.filter((n) => n.id !== id).map((n) => n.name)
         )
     return this.updateNode(id, { content, name }) as NoteNodeData
   }
 
-  private async persistNoteFile(note: NoteNodeData): Promise<void> {
+  private async persistNoteFile(note: NoteNodeData, workspaceId = this.focused): Promise<void> {
     try {
-      const dir = this.notesDir()
+      const dir = this.notesDirOf(workspaceId)
       await fs.mkdir(dir, { recursive: true })
       await fs.writeFile(path.join(dir, `${note.id}.md`), note.content, 'utf8')
     } catch (error) {
@@ -894,6 +1189,25 @@ export class WorkspaceStore extends EventEmitter {
 
 function workspaceFile(base: string, id: string): string {
   return path.join(workspacesDir(base), id, 'workspace.json')
+}
+
+/**
+ * Give every workspace a slug, minting for any that predate step 3.
+ *
+ * Backfill happens in REGISTRY ORDER so it is deterministic: the same set of
+ * workspaces always produces the same slugs, and an older workspace keeps the
+ * unsuffixed one rather than losing it to whichever loaded first. Once minted a
+ * slug is frozen — slugFor returns an existing one untouched.
+ */
+function withSlugs(registry: Registry): Registry {
+  const taken: string[] = registry.workspaces.map((w) => w.slug).filter((s): s is string => !!s)
+  const workspaces = registry.workspaces.map((meta) => {
+    if (meta.slug) return meta
+    const slug = slugFor(meta, taken)
+    taken.push(slug)
+    return { ...meta, slug }
+  })
+  return { ...registry, workspaces }
 }
 
 function loadRegistry(base: string): Registry {

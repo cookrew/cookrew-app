@@ -1,8 +1,15 @@
 import type { ToolId } from './canvas-ui'
 import type { TerminalActivity } from '../../shared/turn'
 import type { AgentRole } from '../../shared/model'
+import { useEffect } from 'react'
 import { VoiceBar } from './VoiceBar'
 import { useKeyboardInset } from './keyboard-inset'
+import {
+  chipAction,
+  presetChips,
+  presetsNeedingUpdateCheck,
+  type InstalledPreset
+} from '../../shared/preset-chip'
 import { CrIcon, type CrIconName } from './icons'
 import { AgentSprite } from './nodes/AgentSprite'
 import { RoleAvatar } from './nodes/RoleAvatar'
@@ -44,6 +51,21 @@ interface DockProps {
   orch: boolean
   onOrch: (on: boolean) => void
   connectHint: string | null
+  /**
+   * Marketplace presets — the third chip family (§8). Defaults to empty, so
+   * the dock is unchanged on a machine that has installed none.
+   */
+  installedPresets?: InstalledPreset[]
+  /** Selected marketplace preset id, or null when a harness/role chip owns it. */
+  presetId?: string | null
+  /** Owned chip: arm placement. The canvas click is the confirm (R2). */
+  onPresetChip?: (id: string) => void
+  /** Locked chip: the chip is the gate's UI — open the 401/402/403 sheet. */
+  onPresetGate?: (id: string) => void
+  /** Chip that just refused a click, so it can say so (N4). */
+  gatedPresetId?: string | null
+  /** R3: ids whose version the dock should HEAD, emitted once on open. */
+  onCheckUpdates?: (ids: string[]) => void
   /** Zoomed-in terminal: the dock swaps the tool group for its composer. */
   voiceFor: { id: string; activity: TerminalActivity | undefined } | null
   /**
@@ -82,6 +104,12 @@ export function Dock({
   orch,
   onOrch,
   connectHint,
+  installedPresets = [],
+  presetId = null,
+  onPresetChip,
+  onPresetGate,
+  gatedPresetId = null,
+  onCheckUpdates,
   voiceFor,
   browserFor,
   boardFor
@@ -89,20 +117,31 @@ export function Dock({
   const hint = tool === 'connect' ? connectHint : (HINTS[tool] ?? null)
   /** Either occupant of the slide-in pane parks the canvas tools. */
   const slidIn = voiceFor !== null || boardFor !== null
-  // Ride above the on-screen keyboard (Defect 2): the dock is position:relative
-  // in normal flow, so a `bottom` offset lifts it by the keyboard inset. 0 (and
-  // no offset) on desktop / when no keyboard is up.
-  const kbInset = useKeyboardInset()
+  const chips = presetChips(installedPresets)
+  // R3: the update check runs when the dock OPENS, not on a timer. "Open" here
+  // is the terminal chip row becoming visible — a background poll would spend
+  // requests on a dock nobody is looking at, and the answer is only ever acted
+  // on while it is. Re-renders do not re-ask: presetsNeedingUpdateCheck returns
+  // only the ones still unanswered.
+  const chipRowOpen = !slidIn && tool === 'terminal'
+  useEffect(() => {
+    if (!chipRowOpen || !onCheckUpdates) return
+    const pending = presetsNeedingUpdateCheck(installedPresets)
+    if (pending.length > 0) onCheckUpdates(pending)
+  }, [chipRowOpen, installedPresets, onCheckUpdates])
+  // Ride above the on-screen keyboard (Defect 2). The lift itself now lives in
+  // CSS (`.cr-dock` reads `--kb-inset`), which this hook publishes; the zoomed
+  // terminal overlay rises off the SAME variable, so the bar and the transcript
+  // cannot drift apart the way a JS offset here and a CSS one there could. The
+  // returned value is unused — the hook is called for its effect.
+  useKeyboardInset()
   // A zoomed browser has no use for ANY of this — every tool places something
   // on a canvas the page is covering — so the bar leaves entirely and gives its
   // height back to the page. The browser's own controls float over the frame.
   // (After every hook: an early return above one breaks the Rules of Hooks.)
   if (browserFor) return <></>
   return (
-    <footer
-      className={`cr-dock${slidIn ? ' zoomed' : ''}`}
-      style={kbInset ? { bottom: kbInset } : undefined}
-    >
+    <footer className={`cr-dock${slidIn ? ' zoomed' : ''}`}>
       <div className="dock-pane dock-canvas" aria-hidden={slidIn}>
         <div className="cr-dock-tools">
           {/* The clipboard toggle leads the tools: it is the one control
@@ -151,6 +190,47 @@ export function Dock({
                 onClick={() => onRole(r.name)}
               >
                 <RoleAvatar name={r.name} className="role-chip-avatar" /> {r.name}
+              </button>
+            ))}
+            {/* THIRD FAMILY (§8): marketplace presets. Same chip grammar as the
+                two groups above — a locked chip is not a disabled chip, it is
+                the gate's own UI, so it stays clickable and opens the sheet. */}
+            {chips.map((chip) => (
+              <button
+                key={chip.id}
+                className={`cr-chip clickable preset-chip${presetId === chip.id ? ' amber' : ''}${
+                  chip.badge === 'lock' ? ' locked' : ''
+                }${gatedPresetId === chip.id ? ' gate-denied' : ''}`}
+                title={
+                  chip.badge === 'lock'
+                    ? `${chip.label} — locked`
+                    : chip.badge === 'update'
+                      ? `${chip.label} — v${chip.headVersion} available`
+                      : chip.label
+                }
+                aria-label={chip.label}
+                onClick={() =>
+                  chipAction(chip) === 'gate' ? onPresetGate?.(chip.id) : onPresetChip?.(chip.id)
+                }
+              >
+                <span className={`preset-chip-sprites${chip.kind === 'team' ? ' stacked' : ''}`}>
+                  {/* A team wears a STACK; more than three would stop reading as
+                      a stack and start reading as a row, so the rest are a count
+                      in the title instead. */}
+                  {chip.sprites.slice(0, 3).map((sprite, i) => (
+                    <AgentSprite key={`${chip.id}-${i}`} preset={sprite} />
+                  ))}
+                </span>
+                {chip.label}
+                {/* The acknowledgement a locked click gets until the gate sheet
+                    exists. aria-live so it is announced, not just drawn. */}
+                {gatedPresetId === chip.id && (
+                  <span className="preset-chip-gate-note" role="status" aria-live="polite">
+                    LOCKED
+                  </span>
+                )}
+                {chip.badge === 'lock' && <CrIcon name="lock" className="preset-chip-badge lock" />}
+                {chip.badge === 'update' && <span className="preset-chip-badge update" />}
               </button>
             ))}
             <label className="cr-check">

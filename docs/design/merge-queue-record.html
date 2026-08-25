@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Merge queue record — five branches against dev @ 2636a36</title>
+<style>
+:root{
+  --bg:#faf8f4; --panel:#fff; --panel-2:#f3efe7; --ink:#2d2a20; --ink-2:#5d5748;
+  --ink-3:#8a8271; --rule:#e2dccf; --amber:#b07d00; --amber-bg:#fdf5e0;
+  --green:#2f7a4d; --green-bg:#e8f5ec; --red:#a32f2f; --red-bg:#fbeceb;
+  --violet:#6b4fa8; --violet-bg:#f1ecfa; --code:#f5f1e8;
+  --shadow:0 1px 2px rgba(45,42,32,.06),0 4px 16px rgba(45,42,32,.05);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#14110a; --panel:#1d1a12; --panel-2:#252017; --ink:#eae4d5; --ink-2:#b6ae9a;
+    --ink-3:#847c69; --rule:#332d21; --amber:#e0a63a; --amber-bg:#2a2113;
+    --green:#6fce97; --green-bg:#14261b; --red:#f08a80; --red-bg:#2a1614;
+    --violet:#c3b0ee; --violet-bg:#221a33; --code:#100e08;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#14110a; --panel:#1d1a12; --panel-2:#252017; --ink:#eae4d5; --ink-2:#b6ae9a;
+  --ink-3:#847c69; --rule:#332d21; --amber:#e0a63a; --amber-bg:#2a2113;
+  --green:#6fce97; --green-bg:#14261b; --red:#f08a80; --red-bg:#2a1614;
+  --violet:#c3b0ee; --violet-bg:#221a33; --code:#100e08;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
+}
+:root[data-theme="light"]{
+  --bg:#faf8f4; --panel:#fff; --panel-2:#f3efe7; --ink:#2d2a20; --ink-2:#5d5748;
+  --ink-3:#8a8271; --rule:#e2dccf; --amber:#b07d00; --amber-bg:#fdf5e0;
+  --green:#2f7a4d; --green-bg:#e8f5ec; --red:#a32f2f; --red-bg:#fbeceb;
+  --violet:#6b4fa8; --violet-bg:#f1ecfa; --code:#f5f1e8;
+  --shadow:0 1px 2px rgba(45,42,32,.06),0 4px 16px rgba(45,42,32,.05);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
+  padding:32px 20px 72px;-webkit-text-size-adjust:100%}
+.wrap{max-width:1080px;margin:0 auto}
+code,kbd,.mono{font-family:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,monospace;font-size:.88em}
+code{background:var(--code);padding:.12em .38em;border-radius:4px;border:1px solid var(--rule)}
+h1{font-size:29px;line-height:1.25;margin:0 0 6px;letter-spacing:-.02em}
+h2{font-size:20px;margin:44px 0 14px;padding-bottom:8px;border-bottom:2px solid var(--rule);letter-spacing:-.01em}
+h3{font-size:16px;margin:26px 0 8px}
+p{margin:.65em 0}
+.sub{color:var(--ink-2);margin:0 0 22px;font-size:15px}
+.theme{position:fixed;top:12px;right:12px;z-index:20;background:var(--panel);color:var(--ink-2);
+  border:1px solid var(--rule);border-radius:999px;padding:6px 13px;cursor:pointer;font-size:12px;
+  box-shadow:var(--shadow)}
+.theme:hover{color:var(--ink)}
+
+/* verdict chips */
+.chip{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;
+  letter-spacing:.06em;text-transform:uppercase;white-space:nowrap;border:1px solid transparent}
+.c-merge{background:var(--green-bg);color:var(--green);border-color:currentColor}
+.c-fix{background:var(--amber-bg);color:var(--amber);border-color:currentColor}
+.c-block{background:var(--red-bg);color:var(--red);border-color:currentColor}
+.c-done{background:var(--violet-bg);color:var(--violet);border-color:currentColor}
+.sev{display:inline-block;min-width:62px;text-align:center;padding:1px 7px;border-radius:4px;
+  font-size:10.5px;font-weight:700;letter-spacing:.05em;border:1px solid transparent}
+.s-high{background:var(--red-bg);color:var(--red);border-color:currentColor}
+.s-med{background:var(--amber-bg);color:var(--amber);border-color:currentColor}
+.s-low{background:var(--panel-2);color:var(--ink-3);border-color:var(--rule)}
+
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.5px}
+th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);font-weight:700}
+tbody tr:hover{background:var(--panel-2)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,Menlo,monospace}
+
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:12px;padding:20px 22px;
+  margin:16px 0;box-shadow:var(--shadow)}
+.card>h3:first-child{margin-top:0}
+.hd{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;margin-bottom:4px}
+.hd .name{font-weight:700;font-size:16.5px;font-family:ui-monospace,Menlo,monospace}
+.hd .hash{color:var(--ink-3);font-size:12.5px;font-family:ui-monospace,Menlo,monospace}
+.tag{color:var(--ink-2);font-size:14px;margin:0 0 10px;font-style:italic}
+
+details{border:1px solid var(--rule);border-radius:9px;margin:9px 0;background:var(--panel-2);overflow:hidden}
+details[open]{background:var(--panel)}
+summary{cursor:pointer;padding:10px 13px;font-size:14.5px;list-style:none;display:flex;gap:10px;
+  align-items:center;flex-wrap:wrap}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"▸";color:var(--ink-3);font-size:12px;flex:none}
+details[open]>summary::before{content:"▾"}
+summary:hover{background:var(--panel-2)}
+.dbody{padding:2px 15px 14px 15px;font-size:14.5px;border-top:1px solid var(--rule)}
+.dbody p:first-child{margin-top:12px}
+
+.callout{border-left:3px solid var(--amber);background:var(--amber-bg);padding:13px 17px;
+  border-radius:0 9px 9px 0;margin:16px 0}
+.callout.good{border-color:var(--green);background:var(--green-bg)}
+.callout.bad{border-color:var(--red);background:var(--red-bg)}
+.callout .lbl{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--ink-2);display:block;margin-bottom:4px}
+pre{background:var(--code);border:1px solid var(--rule);border-radius:8px;padding:12px 14px;
+  overflow-x:auto;font-size:13px;line-height:1.5;margin:11px 0}
+pre code{background:none;border:none;padding:0}
+ul{padding-left:22px;margin:.55em 0}
+li{margin:.3em 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:16px 0}
+.tile{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 16px;
+  box-shadow:var(--shadow)}
+.tile .k{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);font-weight:700}
+.tile .v{font-size:25px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em;
+  margin:3px 0 1px;font-family:ui-monospace,Menlo,monospace}
+.tile .n{font-size:12.5px;color:var(--ink-2);line-height:1.45}
+figure{margin:18px 0}
+figcaption{font-size:12.5px;color:var(--ink-3);margin-top:7px}
+svg{max-width:100%;height:auto;display:block}
+footer{margin-top:52px;padding-top:18px;border-top:1px solid var(--rule);color:var(--ink-3);font-size:13px}
+footer a{color:var(--ink-2)}
+@media(max-width:640px){
+  body{padding:22px 13px 56px} h1{font-size:23px} .card{padding:16px 15px}
+  table{font-size:13px} th,td{padding:7px 6px}
+  .hd{gap:6px}
+}
+</style>
+</head>
+<body>
+<button class="theme" id="t">◐ theme</button>
+<div class="wrap">
+
+<h1>Merge queue record — five branches</h1>
+<p class="sub">Reviewed against <code>dev @ 2636a36</code> · Tinker · 2026-08-22 · three merged, two fixed and awaiting merge</p>
+
+<div class="grid">
+  <div class="tile"><div class="k">Merged</div><div class="v">3</div>
+    <div class="n">vitest-scope, slug-seat-routes, rail-pin-cosmetics</div></div>
+  <div class="tile"><div class="k">Fixed, awaiting merge</div><div class="v">2</div>
+    <div class="n">event-query-bound, f6-refs-capture-scale</div></div>
+  <div class="tile"><div class="k">Findings</div><div class="v">14</div>
+    <div class="n">3 HIGH · 4 MEDIUM · 7 LOW — all resolved or accepted</div></div>
+  <div class="tile"><div class="k">Suite on dev</div><div class="v">38s</div>
+    <div class="n">was 658s; 216 files, 3370 passed, 0 failed</div></div>
+</div>
+
+<h2>Verdicts</h2>
+<table>
+<thead><tr><th>#</th><th>Branch</th><th>Verdict</th><th>Status</th><th>Findings</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>fix/slug-seat-routes</code></td>
+  <td><span class="chip c-fix">merge-with-fix</span></td>
+  <td><span class="chip c-done">merged 8e271e5</span></td>
+  <td><span class="sev s-med">MED</span> ×1 <span class="sev s-low">LOW</span> ×2</td></tr>
+<tr><td>2</td><td><code>fix/vitest-scope</code></td>
+  <td><span class="chip c-merge">merge</span></td>
+  <td><span class="chip c-done">merged 30b6e3b</span></td>
+  <td><span class="sev s-high">HIGH</span> ×1 <span class="sev s-low">LOW</span> ×1</td></tr>
+<tr><td>3</td><td><code>fix/event-query-bound</code></td>
+  <td><span class="chip c-fix">merge-with-fix</span></td>
+  <td><span class="chip c-fix">fixed c11b7ab</span></td>
+  <td><span class="sev s-high">HIGH</span> ×1 <span class="sev s-med">MED</span> ×1</td></tr>
+<tr><td>4</td><td><code>fix/rail-pin-cosmetics</code></td>
+  <td><span class="chip c-merge">merge</span></td>
+  <td><span class="chip c-done">merged 0dca751</span></td>
+  <td><span class="sev s-low">LOW</span> ×3</td></tr>
+<tr><td>5</td><td><code>chore/f6-refs-capture-scale</code></td>
+  <td><span class="chip c-fix">merge-with-fix</span></td>
+  <td><span class="chip c-fix">fixed 93a97ed</span></td>
+  <td><span class="sev s-high">HIGH</span> ×1 <span class="sev s-med">MED</span> ×2 <span class="sev s-low">LOW</span> ×2</td></tr>
+</tbody>
+</table>
+
+<h2>The cross-branch finding</h2>
+<p>Two branches in the same queue touched the same pixels, and the review order made it visible.
+Branch 4 moves the CP badge down whenever a version pin reaches it. Branch 5's reference set was
+captured <em>before</em> that, with the badge resting at <code>top:14px</code> directly over the v1
+pin at T1. Landing 5 first would have shipped a reference set that no longer matched a live render.</p>
+
+<figure>
+<svg viewBox="0 0 940 232" role="img" aria-label="Merge order: branches 3 and 4 land before the reference set is recaptured for branch 5">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <g font-family="ui-monospace,Menlo,monospace" font-size="12.5" color="var(--ink-3)">
+    <!-- lane -->
+    <line x1="28" y1="60" x2="912" y2="60" stroke="var(--rule)" stroke-width="2"/>
+
+    <g fill="var(--green)">
+      <rect x="28" y="40" width="150" height="40" rx="8" fill="var(--green-bg)" stroke="currentColor"/>
+      <text x="103" y="58" text-anchor="middle" fill="var(--green)" font-weight="700">2 vitest-scope</text>
+      <text x="103" y="72" text-anchor="middle" fill="var(--ink-3)">30b6e3b</text>
+    </g>
+    <g>
+      <rect x="204" y="40" width="168" height="40" rx="8" fill="var(--green-bg)" stroke="var(--green)"/>
+      <text x="288" y="58" text-anchor="middle" fill="var(--green)" font-weight="700">1 slug-seat-routes</text>
+      <text x="288" y="72" text-anchor="middle" fill="var(--ink-3)">8e271e5</text>
+    </g>
+    <g>
+      <rect x="398" y="40" width="176" height="40" rx="8" fill="var(--green-bg)" stroke="var(--green)"/>
+      <text x="486" y="58" text-anchor="middle" fill="var(--green)" font-weight="700">4 rail-pin-cosmetics</text>
+      <text x="486" y="72" text-anchor="middle" fill="var(--ink-3)">0dca751</text>
+    </g>
+    <g>
+      <rect x="600" y="40" width="150" height="40" rx="8" fill="var(--amber-bg)" stroke="var(--amber)"/>
+      <text x="675" y="58" text-anchor="middle" fill="var(--amber)" font-weight="700">3 event-query</text>
+      <text x="675" y="72" text-anchor="middle" fill="var(--ink-3)">c11b7ab</text>
+    </g>
+    <g>
+      <rect x="776" y="40" width="136" height="40" rx="8" fill="var(--amber-bg)" stroke="var(--amber)"/>
+      <text x="844" y="58" text-anchor="middle" fill="var(--amber)" font-weight="700">5 f6-refs</text>
+      <text x="844" y="72" text-anchor="middle" fill="var(--ink-3)">93a97ed</text>
+    </g>
+
+    <!-- dependency arc 4 -> 5 -->
+    <path d="M486 88 C 486 168, 844 168, 844 88" fill="none" stroke="var(--violet)"
+          stroke-width="2" stroke-dasharray="5 4" marker-end="url(#a)" color="var(--violet)"/>
+    <text x="665" y="192" text-anchor="middle" fill="var(--violet)" font-size="12.5">
+      badge moves ⇒ the four pin-bearing wide shots must be re-captured
+    </text>
+    <text x="665" y="212" text-anchor="middle" fill="var(--ink-3)" font-size="11.5">
+      5-empty-ledger has no pins and stayed byte-identical — the control that proves it was the badge
+    </text>
+  </g>
+</svg>
+<figcaption>Merge order. The dashed edge is the only hard ordering constraint in the queue.</figcaption>
+</figure>
+
+<h2>Branch detail</h2>
+
+<div class="card">
+  <div class="hd"><span class="name">1 · fix/slug-seat-routes</span><span class="hash">3ad81aa → merged 8e271e5</span>
+    <span class="chip c-fix">merge-with-fix</span></div>
+  <p class="tag">“a slugged phone is a seat, not a reader” — the one auth surface in the queue.</p>
+
+  <div class="callout good"><span class="lbl">The question that mattered</span>
+    <strong>No auth widening, and a phone scoped to workspace A cannot drive a terminal in B.</strong>
+    The slug surface is strictly a <em>subset</em> of what the unslugged path already allowed with the
+    same credential.</div>
+
+  <p>Evidence chain, in the order it has to hold:</p>
+  <ul>
+    <li>The gate sits <em>before</em> <code>handleMobileApi</code> (<code>mobile-server.ts:625-639</code>):
+      allow-list → <code>nodeIdOfRoute</code> → <code>nodeInScope</code> → 404.</li>
+    <li><code>store.ownerOf</code> (<code>store.ts:849</code>) resolves across <em>all</em> workspaces —
+      active first, then each inactive workspace's persisted state. An unknown node yields
+      <code>undefined</code>, which is <code>false</code> when scoped. <strong>Fails closed.</strong></li>
+    <li>Unslugged (<code>scope === null</code>) there is no workspace filter at all:
+      <code>/api/terminal/&lt;any-id&gt;/raw</code> reaches the global <code>PtyManager</code>
+      (<code>index.ts:147</code>) for any resident workspace. So this branch adds a gate where a 501
+      stood, and removes none.</li>
+    <li>Auth untouched — <code>mobile-api.ts:242</code> still 401s every non-GET without the pairing token.</li>
+    <li>Normalization order is right: <code>new URL()</code> resolves <code>..</code> before the slug
+      split, and <code>%2F</code> stays encoded so <code>[^/]+</code> cannot widen.</li>
+  </ul>
+
+  <p><strong>The <code>/fork</code> hole is real and stays closed.</strong>
+  <code>/api/terminal/:id/fork</code> and <code>/api/team/fork</code> are absent from both tables → 501.
+  The reasoning holds: <code>forkTerminal</code> places the new node via focused-workspace state, so a
+  membership check on the <em>source</em> proves nothing about the <em>destination</em>.</p>
+
+  <details><summary><span class="sev s-med">MED</span> <code>/cwd</code> was allow-listed as node-scoped but is focus-bound</summary>
+  <div class="dbody">
+    <p><code>ops.setTerminalCwd</code> → <code>moveTerminalCwd</code> reads <code>store.node(id)</code>
+    (<code>store.ts:558</code> — <code>focusedState.nodes.find</code>), <code>store.dirs()</code>
+    (<code>store.ts:431</code>), <code>activeId = store.focusedId</code>, and validates against
+    <code>this.focusedState.dirs</code> (<code>store.ts:481</code>).</p>
+    <p>So when the scoped workspace is not the focused one, a phone on
+    <code>/A/api/terminal/&lt;A-terminal&gt;/cwd</code> passes the membership gate and then gets
+    <code>400 "Not a terminal node"</code> for a terminal that plainly exists in A. Not exploitable —
+    it fails closed in the dangerous direction — but it is exactly the <code>/api/workspace</code>
+    shape the file's own doctrine says disqualifies a route, and it breaks the “correct by
+    construction” claim made for everything in <code>NODE_ROUTES</code>.</p>
+    <p><strong>Resolved:</strong> commander removed <code>/cwd</code> from <code>NODE_ROUTES</code>
+    before merging (<code>6b475ae</code>), back to an honest 501, with a test pinning both
+    <code>scopedRouteSupported === false</code> and <code>nodeIdOfRoute === null</code>.</p>
+  </div></details>
+
+  <details><summary><span class="sev s-low">LOW</span> the anti-drift test's heuristic is narrower than the invariant</summary>
+  <div class="dbody"><p><code>nodeShaped</code> filters on <code>source.includes('[^/]+')</code>. A
+  node-addressed route added to <code>SCOPE_AWARE</code> directly with <code>(.+)</code> or
+  <code>([\w-]+)</code> is node-shaped, wouldn't be caught, and <code>nodeIdOfRoute</code> would return
+  null → ungated. The drift the test exists to catch can still walk past it.</p></div></details>
+
+  <details><summary><span class="sev s-low">LOW</span> dead query-string alternations hide an asymmetry</summary>
+  <div class="dbody"><p><code>/turns(?:\?.*)?$/</code> and friends can never see a <code>?</code> — the
+  gate is fed <code>url.pathname</code>. Harmless now, but <code>/raw</code> and <code>/resize</code>
+  have no such alternation, so feeding the gate <code>pathname + search</code> would 501 those two
+  while <code>/turns</code> kept working.</p></div></details>
+</div>
+
+<div class="card">
+  <div class="hd"><span class="name">2 · fix/vitest-scope</span><span class="hash">57551f7 → merged 30b6e3b</span>
+    <span class="chip c-merge">merge</span></div>
+  <p class="tag">“the suite is this tree's tests, and the rotation test owns its corpus”</p>
+
+  <p>Premises verified rather than taken on trust: no test files exist outside <code>tests/</code>
+  (so narrowing <code>include</code> disarms nothing — the main risk), there was genuinely no root
+  vite/vitest config, and <code>projectsDir</code> / <code>claudeProjectDir</code> are real APIs already
+  on dev. The diagnosis is right: the old assertion demanded one-successor-per-predecessor, which
+  <code>--fork-session</code> violates by construction, so it reported a product bug that wasn't one.</p>
+
+  <details><summary><span class="sev s-high">HIGH</span> “landing it takes us fully green” was not true</summary>
+  <div class="dbody">
+    <p>Full suite in that worktree: <strong>1 failed | 214 passed | 1 skipped</strong>.
+    <code>claude-rotation</code> did now pass; <code>turn-store-fold-async</code> was the survivor —
+    <code>expected 1375.79 to be less than 250</code>, and <code>766.14</code> on a re-run.</p>
+    <p>Reported without a verdict: the machine was at <strong>load average 216</strong> and this is a
+    wall-clock latency budget, so no honest call was available. It was flagged as a
+    <em>different failure mode</em> than the branch predicted — not the 60s timeout the comment
+    attributes to worktree contention, but a 3× budget miss with worktrees already excluded.</p>
+    <p><strong>Resolved:</strong> see the fold-async section below. It was contention.</p>
+  </div></details>
+
+  <details><summary><span class="sev s-low">LOW</span> the config's “22s” claim doesn't reproduce</summary>
+  <div class="dbody"><p>Test count matched almost exactly (3363 vs the claimed 3361), but the measured
+  wall clock was 658s, not 22s — this suite contains individual tests at 60–72s. The shape of the
+  argument was later vindicated by a factor of 17; the number itself should still be qualified in the
+  comment.</p></div></details>
+</div>
+
+<div class="card">
+  <div class="hd"><span class="name">3 · fix/event-query-bound</span><span class="hash">e7d2314 → fixed c11b7ab</span>
+    <span class="chip c-fix">merge-with-fix</span></div>
+  <p class="tag">“the metrics query stops growing with the log” — and then says when it's showing a slice.</p>
+
+  <p>The central claim holds: the server genuinely supports <code>limit</code>
+  (<code>main/event-log.ts:53</code>, <code>:183-187</code>). Over-fetching by one is a clean truncation
+  detector and <code>createCoalescer</code> is correctly trailing-edge.</p>
+
+  <details open><summary><span class="sev s-high">HIGH</span> the silent truncation the branch warns about is what it shipped</summary>
+  <div class="dbody">
+    <p><code>applyLimit</code>'s own comment: <em>“Exposed rather than swallowed: a panel showing
+    metrics over 'all' while silently holding the newest 2000 is a wrong answer that looks right.”</em>
+    The only caller swallowed it. <code>MetricsPanel</code> used <code>useEventQuery</code> — which
+    discards <code>truncated</code> — set no limit, and derived its counts, its timed-event tally and
+    its P50/P95/P98/MAX from the capped list.</p>
+    <p>Not hypothetical: the owner's session was measured at 3170 events against a 2000 cap, so
+    “all time” already reported percentiles over the newest 63% of the range while labelled as the
+    whole of it.</p>
+    <p><strong>Fixed:</strong> the panel reads the flag and states the cap next to the numbers the cap
+    applies to — a banner, a <code>(capped)</code> marker on the header count, and “in this slice” on
+    the LATENCY tally. <code>useEventQuery</code> keeps working for callers that want the array alone,
+    but now documents that reaching for it around a rollup is how this happened.</p>
+  </div></details>
+
+  <details open><summary><span class="sev s-med">MED</span> the two query paths disagreed about which end was newest</summary>
+  <div class="dbody">
+    <p><code>applyLimit</code> trims by slicing the tail — correct only against an oldest-first list.
+    The server serves oldest-first and limits by keeping the newest. <code>queryEvents</code> documented
+    the <em>opposite</em> and its mock branch sorted descending, so the fallback returned the
+    <strong>oldest</strong> N while reporting a truncation: the right count, trimmed off the wrong end,
+    in the one mode with no server to contradict it. The mock also ignored <code>limit</code> entirely.</p>
+    <p><strong>Fixed:</strong> the mock mirrors <code>main/event-log.ts</code> exactly, limit included.</p>
+    <pre><code>// before                          // after
+sort((a,b) =&gt; b.timestamp - a.timestamp)   sort((a,b) =&gt; a.timestamp - b.timestamp)
+// limit ignored                            + slice(length - limit) when over</code></pre>
+    <p>Three new tests drive the composed path through the real <code>queryEvents</code> rather than
+    restating the sort. Verified RED: all three fail against the previous mock.</p>
+  </div></details>
+</div>
+
+<div class="card">
+  <div class="hd"><span class="name">4 · fix/rail-pin-cosmetics</span><span class="hash">0414a60 → merged 0dca751</span>
+    <span class="chip c-merge">merge</span></div>
+  <p class="tag">“the CP badge steps aside for a pin, and a pin tap closes a revealed row”</p>
+
+  <div class="callout good"><span class="lbl">F6 is structurally safe</span>
+  <code>.cr-ckpt-count</code> is <code>position:absolute; pointer-events:none</code>
+  (<code>styles.css:3524-3532</code>), so an inline <code>top</code> cannot move
+  <code>.cr-ckpt-here</code> or <code>.cr-ckpt-row.active</code>. The marker↔focused-tag Y-alignment
+  has no path to regress through this change. Rail gates green: 63 tests across four files.</div>
+
+  <p><code>countBadgeTop</code> terminates correctly — <code>top</code> strictly increases, a cleared
+  box stays cleared, so the <code>i &lt;= boxes.length</code> bound suffices — and converges regardless
+  of pin order even though <code>find</code> returns first-in-array rather than lowest.</p>
+
+  <details><summary><span class="sev s-low">LOW</span> ×3 — accepted and carried in the merge message</summary>
+  <div class="dbody"><ul>
+    <li><code>COUNT_H = 27</code> duplicates CSS-derived geometry and is the one constant the tests
+      don't import. Change the padding or font-size and the badge quietly stops clearing pins.</li>
+    <li><code>transition: top 160ms</code> means a screenshot gate that doesn't freeze transitions can
+      catch the badge mid-move.</li>
+    <li>Stray blank line after the <code>rail-fill</code> import.</li>
+  </ul></div></details>
+</div>
+
+<div class="card">
+  <div class="hd"><span class="name">5 · chore/f6-refs-capture-scale</span><span class="hash">bdbd773 → fixed 93a97ed</span>
+    <span class="chip c-fix">merge-with-fix</span></div>
+  <p class="tag">“the F6 reference set measures what it claims to measure”</p>
+
+  <div class="callout good"><span class="lbl">Provenance: proven PRODUCT — the BLOCK bar cleared on evidence</span>
+  The harness imports the real <code>CheckpointTimeline</code> and the real <code>styles.css</code>;
+  <code>--phos-bg: #14110a</code> is a genuine product token (<code>styles.css:21</code>), so the stage
+  matches the product rather than guessing; the probe reads real product DOM. F6 was
+  <em>actually measured</em> — <code>f6PairDeltaPx = 0</code> with both marks non-null in every state.
+  Confirmed visually: a real rail, v2 pin with its co-located gold trace chevron, focused row and
+  thumb sharing a Y.</div>
+
+  <details open><summary><span class="sev s-high">HIGH</span> the generator treated an absent mark as a pass</summary>
+  <div class="dbody">
+    <p>The gate read only the two deltas and skipped a null:</p>
+    <pre><code>const over = states.filter(s =&gt;
+  (s.markerClassSpreadPx !== null &amp;&amp; s.markerClassSpreadPx &gt;= 0.5) ||
+  (s.f6PairDeltaPx      !== null &amp;&amp; s.f6PairDeltaPx      &gt;= 0.5))</code></pre>
+    <p>So if <code>.cr-ckpt-here</code> or <code>.cr-ckpt-row.active</code> ever stopped matching, the
+    F6 delta went null, the console printed <code>f6Pair=n/a</code>, and the run <strong>exited 0
+    announcing “All measured states within 0.5px.”</strong> F6 disarmed silently — not by capturing a
+    mock, but by measuring nothing and calling it a pass. <code>absentMarks</code> was recorded the
+    whole time and never read.</p>
+    <p><strong>Fixed:</strong> each state declares <code>requires</code> (and <code>forbids</code>, for
+    the pin <code>5-empty-ledger</code> proves absent). Presence is asserted <em>before</em> any delta
+    is read — per-state, because a blanket rule would need a special case for the empty ledger, and a
+    special case in a gate is where the next silent pass comes from.</p>
+    <p><strong>Verified RED</strong> by renaming the thumb's class: the run that used to print
+    <code>n/a</code> and pass now reports 12 problems and exits 1.</p>
+  </div></details>
+
+  <details open><summary><span class="sev s-med">MED</span> the fixture was claimed, not read</summary>
+  <div class="dbody">
+    <p><code>measurements.json</code> stamped <em>“contract v2”</em> over a harness that hardcoded its
+    own rows and pins under a comment naming the fixture. That copy had already drifted —
+    <code>cutAt</code> held <code>1,2,3,4</code> against the fixture's epoch millis and
+    <code>manifestId</code> was dropped. The fixture has a tripwire
+    (<code>tests/version-pin-fixture.test.ts</code>); a hardcoded copy in <code>scratchpad/</code> has
+    none, so contract v3 could land with these refs still calling themselves v2.</p>
+    <p><strong>Fixed:</strong> the harness imports the fixture and publishes what it read on
+    <code>window.__fixture</code>; the run records it per state and fails on an unexpected version.</p>
+  </div></details>
+
+  <details open><summary><span class="sev s-med">MED</span> the set was blind to its own regression class</summary>
+  <div class="dbody">
+    <p>Every state drew the <em>contiguous</em> ledger, where array position and turn number agree —
+    which the fixture itself calls <em>“exactly why the v1 bug went unnoticed.”</em> So the refs could
+    not distinguish R17 render-position anchoring from the v1 turn-number anchoring
+    <code>c0e6d5f</code> removed, and would have passed a regression to v1 without a pixel moving. The
+    fixture ships a dedicated <code>coLocated</code> case on non-contiguous rows for exactly this, and
+    the set didn't use it.</p>
+    <p><strong>Fixed:</strong> <code>7-colocated-noncontiguous</code> repeats B3r on rows 1,2,4,7,
+    where checkpoint 4 anchors at 2/4 = 0.5 under R17 and near 4/7 under v1. The boundary's checkpoint
+    is <em>derived</em> from <code>traceFraction</code>/<code>pinFraction</code>, so the state throws
+    rather than quietly ceasing to be co-located.</p>
+  </div></details>
+
+  <details><summary><span class="sev s-low">LOW</span> ×2 — capture-environment caveats, left open</summary>
+  <div class="dbody"><ul>
+    <li>The capture depends on a <strong>network font fetch</strong> (Silkscreen / JetBrains Mono /
+      Inter from Google Fonts). An offline re-capture falls back to different glyphs and produces a
+      false diff, and nothing records which fonts a run got.</li>
+    <li><code>RAIL_H = 663</code> is <em>imposed</em> by the stage on Magpie's authority; the script
+      verifies only width. Bands are pin-centred and height-robust, but the wide shots are valid only
+      at exactly 663.</li>
+  </ul></div></details>
+
+  <p style="margin-top:14px"><strong>Re-captured on top of branch 4.</strong> Four wide shots changed;
+  <code>5-empty-ledger</code>, which has no pins, stayed byte-identical — the control proving the badge
+  was the only thing that moved. All 12 images unique, reproducible across runs, every delta 0px.</p>
+</div>
+
+<h2>Fold-async: settled, and why the refusal was right</h2>
+
+<p><code>tests/turn-store-fold-async.test.ts</code> was the last red test on dev and could not honestly
+be called either way while four agents ran suites at once. It was reported as unresolved rather than
+guessed at. On a quiet machine it passes.</p>
+
+<table>
+<thead><tr><th>Condition</th><th class="num">Load avg</th><th class="num">Fold</th><th class="num">Full suite</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td>Fleet busy, worktrees collected (pre-fix)</td><td class="num">—</td><td class="num">timeout</td><td class="num">658 s</td><td>20 failures, mostly other branches'</td></tr>
+<tr><td>Fleet busy, worktrees excluded</td><td class="num">216</td><td class="num">1376 ms</td><td class="num">349 s</td><td><span class="chip c-block">1 failed</span></td></tr>
+<tr><td>Same, near-isolated re-run</td><td class="num">216</td><td class="num">766 ms</td><td class="num">—</td><td><span class="chip c-block">1 failed</span></td></tr>
+<tr><td><strong>Fleet idle</strong></td><td class="num">11</td><td class="num">2055 ms</td><td class="num"><strong>38 s</strong></td><td><span class="chip c-merge">216 files · 3370 passed · 0 failed</span></td></tr>
+</tbody>
+</table>
+
+<p class="sub" style="margin-top:2px">Fold timing is a wall-clock budget assertion, so it measures the
+machine as much as the code. The suite went <strong>658 s → 38 s</strong>, a factor of 17, once the
+worktrees stopped being collected and the fleet went quiet.</p>
+
+<div class="callout good"><span class="lbl">The lesson worth keeping</span>
+A latency budget under load 216 is not a measurement. Reporting “I cannot call this” was the correct
+output, and the eventual number confirmed it — the failure was contention, and a guess in either
+direction would have been wrong for the wrong reasons.</div>
+
+<h2>The species</h2>
+<p>Three of the fourteen findings were the same bug wearing different clothes: <strong>a check that
+passes because it never ran.</strong></p>
+<table>
+<thead><tr><th>Where</th><th>What ran</th><th>What it announced</th></tr></thead>
+<tbody>
+<tr><td>Branch 3 — <code>MetricsPanel</code></td>
+  <td>percentiles over the newest 2000 events</td><td>percentiles over “all time”</td></tr>
+<tr><td>Branch 3 — mock <code>queryEvents</code></td>
+  <td>trimmed the oldest N</td><td><code>truncated: true</code>, as if it kept the newest</td></tr>
+<tr><td>Branch 5 — F6 generator</td>
+  <td>nothing, when a selector stopped matching</td><td>“All measured states within 0.5px”</td></tr>
+</tbody>
+</table>
+<p>Each was fixed the same way: make absence loud. State the cap next to the number it qualifies;
+assert the mark exists before reading its delta; make the mock serve the contract the real thing
+serves. And each fix was verified RED — the new tests and the new gate were confirmed to fail against
+the code they replaced, because a regression test that has never failed is the same species again.</p>
+
+<footer>
+  <p><strong>Merge queue record</strong> · reviewed by Tinker against <code>dev @ 2636a36</code> ·
+  2026-08-22. Merged: <code>30b6e3b</code>, <code>8e271e5</code> (+ <code>6b475ae</code>),
+  <code>0dca751</code>. Awaiting merge: <code>c11b7ab</code> (fix/event-query-bound),
+  <code>93a97ed</code> (chore/f6-refs-capture-scale).</p>
+  <p>Related: <code>marketplace-architecture.html §10–§11</code> · <code>docs/design/m2-seam.html</code> ·
+  rulings R8 / R17 / R25 · <code>c0e6d5f</code> (render-position anchoring).
+  Reference set: <code>scratchpad/f6-reference/</code>.</p>
+</footer>
+</div>
+<script>
+(function(){
+  var b=document.getElementById('t');
+  b.addEventListener('click',function(){
+    var cur=document.documentElement.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}
+    document.documentElement.setAttribute('data-theme',cur==='dark'?'light':'dark');
+  });
+})();
+</script>
+</body>
+</html>

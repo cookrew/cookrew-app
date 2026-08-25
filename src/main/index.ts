@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron'
 import path from 'node:path'
-import { statSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
@@ -8,10 +8,24 @@ import { WorkspaceStore } from './store'
 import { PtyManager, multiplexer, sessionNameFor } from './pty'
 import type { PtySession } from './pty'
 import type { PaneCardInfo } from './multiplexer'
-import { statusFeed, type StatusObservation } from './herdr-agent-status'
+import { agentStatus, statusFeed, type StatusObservation } from './herdr-agent-status'
+import { resolveRotationChain, rotationCommitVerdict } from './claude-rotation'
 import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
 import { TurnTracker, type CompletedTurn } from './turn-tracker'
 import { TurnStore } from './turn-store'
+import {
+  DispatchService,
+  appendDispatchRecord,
+  appendDispatchTombstone,
+  compactDispatchRegistry,
+  defaultDispatchRegistry,
+  readDispatchRecords,
+  readDispatchTombstones,
+  turnDetails
+} from './dispatch'
+import { HerdrHostMultiplexer } from './herdr-host-multiplexer'
+import { askTerminal, beginShutdown, cancelAllAsks, pasteAndSubmit } from './ask'
+import { defaultProducerLease } from './producer-lease'
 import {
   boardSourcesFrom,
   buildBoard,
@@ -40,6 +54,8 @@ import {
   BrowserTab,
   browserTabs,
   CanvasNode,
+  CanvasPosition,
+  DEFAULT_CANVAS_POSITION,
   DEFAULT_TERMINAL_SIZE,
   TeamClipStatus,
   TeamCopyResult,
@@ -51,10 +67,29 @@ import {
   WorkspaceMeta
 } from '../shared/model'
 import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
-import { forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
+import { forkContextReady, forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
 import { AgentRegistry } from './agent-registry'
+import { AgentExportStore } from './agent-export'
+import { OwnerGrant, isOwnerSender } from './owner-grant'
+import { buildGrantRoster } from './grant-roster'
+import { CallCredentialService } from './call-credential'
+import { makeCallCeremony } from './call-ceremony'
+import { makeCallGate } from './call-gate'
+import { CallConversationStore } from './call-conversation'
+import { cutCallVersion } from './call-fork'
+import { makeCallSession } from './call-session'
+import { memoizeBriefly } from './call-cache'
+import { CallsInFlight } from './call-inflight'
+import { makeCallRun } from './call-run'
 import { RecoverableStore, planRecovery } from './recoverable'
 import { EventLog } from './event-log'
+import { installProcessGuards } from './process-guards'
+import { SessionRegistry } from './session-registry'
+import { LazyTerminalAttachments } from './lazy-terminal'
+import { planWorkspaceSwitch } from './workspace-switch'
+import { SwitchRunner } from './switch-runner'
+import { presetIdFromInstallUrl } from './registry-install-link'
+import { terminalHasLiveWork } from './session-liveness'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { canonicalExternalUrl } from '../shared/external-url'
 import {
@@ -67,9 +102,10 @@ import {
 } from './claude-fork'
 import { isCodexCommand, resolveCodexRolloutByPid } from './codex-bind'
 import { isOpenCodeCommand, resolveOpencodeSessionByPid } from './opencode-bind'
-import { isPiCommand, piLaunchBinding, resolvePiSessionByPane } from './pi-bind'
+import { isPiCommand, piAdoptableSession, piLaunchBinding, resolvePiSessionByPane } from './pi-bind'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
+import { blocksResume, holderOf, liveSessionHolders, planHeldSessionFork } from './claude-live-session'
 import { createRestoreHandlers, registerRestoreIpc, RestoreHandlers } from './restore'
 import { withSessionLineage } from './session-lineage'
 import { carrySessionToCwd } from './session-move'
@@ -80,10 +116,23 @@ import { findChrome } from './headless-chrome'
 import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 
-import { TraceReader } from './trace'
+import { TraceReader, type SessionWatchSpec } from './trace'
+import { LatestFileWatcher } from './latest-watch'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
-import { TeamStore, copyTeam, forkTeam, workspaceFromTemplate } from './teams'
+import {
+  TeamStore,
+  copyTeam,
+  forkTeam,
+  workspaceFromTemplate,
+  entryAgentOf,
+  type TeamSnapshot
+} from './teams'
+import { MOBILE_HTTPS_PORT } from './mobile-ports'
+import { PresetStore, isPresetId } from './preset-store'
+import { PinStore } from './pin-store'
+import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
+import { planPresetImport } from './preset-import'
 import { TeamClipboard } from './team-clip'
 import { UNCOPYABLE_PHASES } from '../shared/turn'
 import { GitInfoCache, addWorktree } from './git'
@@ -95,7 +144,35 @@ import { defaultAttachmentsDir, saveAttachment } from './attachments'
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const store = new WorkspaceStore()
+/** Installed marketplace presets — the dock's third chip family (§8). */
+const presetStore = new PresetStore()
+/** Version pins per terminal (§10) — what the rail's third marker class draws. */
+const pinStore = new PinStore()
+
+/**
+ * Record an install's version against every TERMINAL it placed. Teams version
+ * ATOMICALLY (§10): the tuple shares one number, so each member takes the same
+ * pin rather than counting independently. Notes and browsers hold no
+ * transcript, so they hold no pin.
+ */
+function recordPins(nodes: readonly CanvasNode[], pin: VersionPinRecord): void {
+  for (const node of nodes) {
+    if (node.kind !== 'terminal') continue
+    try {
+      pinStore.add(node.id, pin)
+    } catch (error) {
+      // A pin that cannot be written must not undo a placement that already
+      // happened — the agent is on the canvas and working either way.
+      console.error('Recording a version pin failed:', error)
+    }
+  }
+}
 const ptys = new PtyManager()
+// Liveness covers EXISTENCE, not attachment: every terminal node — including
+// inactive-workspace agents this process never spawns an attach for — pins
+// its lease generation against tombstone eviction, and any write-ahead
+// input-provenance fact from the previous process adopts fail-closed here.
+defaultProducerLease().seedLive(store.terminalsAcross().map((node) => node.id))
 /**
  * terminal.booted (p95-p98 spec, wave 3): spawn → the agent is reachable.
  *
@@ -146,13 +223,111 @@ const pairingToken = loadOrCreatePairingToken()
  * detached, so an idle machine pays nothing.
  */
 const turns = new TurnTracker(summarizeTurn, turnStore)
-const sessionSync = new SessionTurnSync(turns)
+const sessionSync = new SessionTurnSync(turns, undefined, {
+  // Settle confirmation for background dispatches: on a quiet poll, let the
+  // file observer close an armed dispatch — unless herdr's push feed says
+  // the agent is still working/blocked. The positive signal may hold a turn
+  // open (its real value through long silent tool calls); per the standing
+  // asymmetry it never ends one, and its absence alone never completes
+  // anything either — completion still needs the settled FINAL tail record.
+  onQuiet: (terminalId) => {
+    // No status veto here (Sol r3): completeFromHistory demands parser
+    // finality plus exact identity, which is STRONGER evidence than any
+    // status claim — a feed stuck at 'working' must never strand a
+    // natively finalized dispatch. Status still holds the DRAIN open
+    // (holdOpen below); it just cannot outrank a durable final row.
+    turns.completeFromHistory(terminalId)
+  },
+  // Sol r1 P0: a switched-away human turn inside a long silent tool call must
+  // not drain — herdr's working/blocked is the positive evidence that holds
+  // the watch open (a hold, not a reset: drain fires on the first quiet tick
+  // after it clears). Its absence is NOT evidence of rest; that asymmetry is
+  // why drain also needs the full quiet window.
+  // Soft hold: third-party status, subject to the 60s trust cap — a stuck
+  // feed must not retain tracking forever (Sol r2/r3).
+  holdOpen: (terminalId) => {
+    const reported = agentStatus(sessionNameFor(terminalId))
+    return reported === 'working' || reported === 'blocked'
+  },
+  // Hard hold: A4's observed-turn fact — first-party evidence the tracker
+  // itself minted (live turn, confirmed delivery, surviving an untrack).
+  // Exempt from the trust cap, like pins and subscribers; cleared only by
+  // finality, interruption, or removal. The status feed supports the fact
+  // but is never its sole representation (Sol r3).
+  holdFact: (terminalId) => turns.hasOpenTurnFact(terminalId),
+  isInTurn: (terminalId) => turns.inTurn(terminalId),
+  onStale: (terminalId) => void rebindRotatedClaudeSession(terminalId),
+  // Lets a subscriber START observation on a never-watched terminal — the
+  // subscription is then the only hold, so a peek leaks nothing.
+  resolveWatch: (terminalId) => traces.watchSpec(terminalId)
+})
 const routines = new RoutineScheduler(store, ptys)
 const voice = new VoiceEngine()
 const roles = new RoleStore()
 const teams = new TeamStore()
+// Bring templates saved before the entry-orchestrator field onto the new logic:
+// stamp each with its orch entry point. Non-destructive; logged once at boot.
+{
+  const migrated = teams.migrateEntryAgents()
+  if (migrated > 0) console.log(`teams: migrated ${migrated} template(s) to the entry-orch logic`)
+}
 const gitCache = new GitInfoCache()
 const agents = new AgentRegistry()
+/**
+ * The internet gate's two stores (§9 · ④). The issuer signs this instance's
+ * call credentials — owner-as-issuer, so nothing here reaches the registry —
+ * and the grant record says who may call what. Both default closed: no agent is
+ * callable until the owner exports it, and no caller holds a credential until
+ * the owner enrols it.
+ */
+const callCredentials = new CallCredentialService()
+const agentExports = new AgentExportStore()
+
+/**
+ * The owner's grant surface. THE WIRE CARRIES THE CEREMONY AND THE CALL, NEVER
+ * THE GRANT — see owner-grant.ts for why this is the one thing that needs no
+ * credential, and tests/grant-surface-shape.test.ts for the sweep that fails
+ * if an HTTP route ever reaches it.
+ *
+ * Every decision lands on the ordinary observability stream. A grant is what
+ * makes an agent reachable from the internet, so the owner should be able to
+ * find out later that they made one without knowing to go looking.
+ */
+const ownerGrant = new OwnerGrant({
+  store: agentExports,
+  // REVOKE STOPS CALLS ALREADY RUNNING. The same set that keeps a workspace
+  // resident while it serves a call is the set a revoke reaches into — one
+  // truth, so a call that is counted is a call that can be stopped.
+  cancelInFlight: (match) => callsInFlight.cancelWhere(match),
+  audit: (line) => {
+    events.append({
+      type: `grant.${line.op}`,
+      entityId: line.subject,
+      entityName: line.subject,
+      workspaceId: line.workspaceId,
+      workspaceName: store.list().workspaces.find((w) => w.id === line.workspaceId)?.name ?? line.workspaceId,
+      actor: 'user',
+      timestamp: line.at,
+      details: line.via
+    })
+  }
+})
+const callConversations = new CallConversationStore()
+/**
+ * The pre-credential lookup, memoized for a beat (Tinker HIGH-2).
+ *
+ * An unauthenticated call resolves a NAME before any credential is examined —
+ * 404 before 401, so a caller cannot map the room — and for a workspace that is
+ * not resident that read comes off disk. Cheap, not reordered: see
+ * call-cache.ts for what the window can and cannot cost.
+ */
+/**
+ * Calls currently being served, per workspace. Liveness fact 3 — see
+ * call-inflight.ts for why the inferred turn-phase signal is not enough on its
+ * own for a call to a PARKED workspace, which is the case §9 exists for.
+ */
+const callsInFlight = new CallsInFlight()
+const callNodesOf = memoizeBriefly((workspaceId: string) => store.workspaceState(workspaceId).nodes)
 const boardProbe = createProbeSampler(
   tmuxProbeDeps({
     knownTerminalIds: () => agents.list().map((entry) => entry.id),
@@ -178,12 +353,80 @@ const recoverable = new RecoverableStore()
 // so recoverAgent can restore it exactly as it was (agent-recover feature).
 store.setTerminalRemovedHook((snapshot) => recoverable.capture(snapshot))
 const traces = new TraceReader(store)
+
+// Trace-perf T4: push a "your checkpoint changed" nudge to the renderer the
+// instant a watched session file grows, so a card reflects a new turn without
+// waiting for its poll. Refcounted per file; the renderer keeps a slow poll as
+// the backstop for anything fs.watch coalesces or drops.
+const latestWatch = new LatestFileWatcher({
+  resolveFile: (terminalId) => traces.watchSpec(terminalId)?.file ?? null,
+  onChange: (terminalId) => mainWindow?.webContents.send('trace:latest-changed', terminalId)
+})
+
+/** Resolve Herdr's sanitized pane label back to the persisted terminal id. */
+function terminalIdForSessionName(sessionName: string): string | null {
+  return (
+    store.terminalsAcross().find((terminal) => sessionNameFor(terminal.id) === sessionName)?.id ??
+    null
+  )
+}
+
+/**
+ * Herdr owns the long-lived agent process. The local PTY mirror is loaded only
+ * for a zoomed transcript, then retained without a viewer only during work.
+ */
+const lazyTerminals = new LazyTerminalAttachments({
+  attach: (terminalId) => ensureTerminalMirror(terminalId),
+  detach: (terminalId) => detachTerminalMirror(terminalId),
+  isWorking: (terminalId) =>
+    agentStatus(sessionNameFor(terminalId)) === 'working' || turns.inTurn(terminalId),
+  watchWorking: (terminalId) => {
+    if (watchSessionTurns(terminalId, { deferInitial: true })) sessionSync.release(terminalId)
+  }
+})
+
+statusFeed()?.on('status', ({ sessionName, status }: StatusObservation) => {
+  const terminalId = terminalIdForSessionName(sessionName)
+  if (terminalId) lazyTerminals.observeStatus(terminalId, status)
+})
+
+// The feed may have seeded its cache before this listener was installed.
+for (const terminal of store.terminalsAcross()) {
+  const status = agentStatus(sessionNameFor(terminal.id))
+  if (status) lazyTerminals.observeStatus(terminal.id, status)
+}
 // Observability: the store's op choke-point feeds the durable event log;
 // the log's live stream broadcasts to the renderer (mobile gets the same
 // stream over the /api/events SSE, subscribed in mobile-api).
 store.on('op', (e) => events.append(e))
 events.on('event', (e) => mainWindow?.webContents.send('event:new', e))
 let mainWindow: BrowserWindow | null = null
+
+// Installed the moment the store and the log exist, and before any boot path
+// can start a background promise. Node ≥15 makes an unhandled rejection fatal,
+// and this process holds every agent's PTY — so a stray promise nobody awaited
+// takes the fleet with it. That is not hypothetical: it is how the app died
+// silently mid-instantiate in August (post-mortem, archive/wave-c-20260816).
+// Rejections are logged and SURVIVED; a genuine uncaught exception still
+// exits, but flushes the durable witnesses on the way out.
+installProcessGuards({
+  append: (event) => events.append(event),
+  workspace: () => {
+    const meta = store.activeMeta()
+    return { id: meta.id, name: meta.name }
+  },
+  // The three things this process is the ONLY witness to. Synchronous by
+  // necessity — there is no awaiting anything on the way out of a fatal.
+  flush: () => {
+    store.flush()
+    events.flush()
+    turns.flushHistories()
+  },
+  // app.exit, not app.quit: the state is already suspect, so this must not
+  // depend on the before-quit drain running to completion. The flush above is
+  // what makes that safe.
+  exit: (code) => app.exit(code)
+})
 
 /**
  * Persisted commands from before a preset default changed, upgraded on
@@ -285,24 +528,99 @@ function paneCard(t: {
     terminalId: t.id,
     title: t.name,
     agent: t.role ?? t.preset,
-    workspace: store.state.name,
+    workspace: store.focusedState.name,
     cwd: t.cwd
   }
 }
 
 /**
+ * Which workspaces this process boots and holds PTYs for.
+ *
+ * Step 2 made this a RESIDENCY question, as commit 2 said it would — and it
+ * changed here, in the one place, rather than in the eight call sites that
+ * each used to spell `store.activeId`. Flag off, exactly one workspace is
+ * resident and the answer is identical to focus; flag on, every resident
+ * session holds its own runtimes.
+ */
+function bootsTerminalsFor(workspaceId: string): boolean {
+  return store.resident().includes(workspaceId)
+}
+
+/**
  * The workspace half of the herdr binding: Cookrew's herdr workspace wears
- * the ACTIVE Cookrew workspace's name and identity tokens. Re-reported on
+ * the FOCUSED Cookrew workspace's name and identity tokens. Re-reported on
  * every switch (and once at boot); a no-op under tmux/direct.
+ *
+ * Commander's ruling (2026-08-20): panes already carry a cookrew_workspace
+ * token, so a WorkspaceSession scopes by TOKEN under this single existing
+ * label. No per-session relabeling — herdr reattach compat is not worth the
+ * risk, and N labels get revisited only if token scoping proves insufficient.
  */
 function reportWorkspaceBinding(): void {
-  const list = store.list()
-  const active = list.workspaces.find((w) => w.id === list.activeId)
-  if (!active) return
+  const focused = store.focusedMeta()
+  if (!focused) return
   multiplexer()?.reportWorkspace?.({
-    label: active.name,
-    tokens: { cookrew_workspace: active.id, cookrew_dir: active.dir }
+    label: focused.name,
+    tokens: { cookrew_workspace: focused.id, cookrew_dir: focused.dir }
   })
+}
+
+/**
+ * How long to wait for a forked session file to appear, and how often to look.
+ * Claude writes it as it boots; a pane that was merely reattached never will,
+ * and that silence is the signal to leave the node's binding alone.
+ */
+const FORK_BIND_TIMEOUT_MS = 30_000
+const FORK_BIND_POLL_MS = 500
+
+/**
+ * Rebind a node to the copy a held-session fork produced — but only once that
+ * copy is really on disk.
+ *
+ * The old id goes onto the lineage, so the checkpoint rail keeps every turn
+ * that happened before the fork and rewind can still reach into it.
+ */
+function bindForkWhenWritten(
+  terminalId: string,
+  from: string,
+  forkedTo: string,
+  cwd: string
+): void {
+  const deadline = Date.now() + FORK_BIND_TIMEOUT_MS
+  const look = (): void => {
+    if (!existsSync(claudeSessionFile(cwd, forkedTo))) {
+      if (Date.now() < deadline) setTimeout(look, FORK_BIND_POLL_MS).unref()
+      return
+    }
+    // Re-read: this lands seconds later and the node may have moved on.
+    const node = store.node(terminalId)
+    if (node?.kind !== 'terminal') return
+    const current = node as TerminalNodeData
+    if (current.claudeSessionId !== from) return
+    store.updateNodeUnsafe(terminalId, withSessionLineage(current, forkedTo))
+    console.error(
+      `${current.name}: session ${from} was held by another claude process — ` +
+        `resumed from a copy as ${forkedTo}`
+    )
+  }
+  setTimeout(look, FORK_BIND_POLL_MS).unref()
+}
+
+/**
+ * The Pi session an UNBOUND node should adopt, or null.
+ *
+ * Both the launcher and the recover gate ask this, and they must agree: a gate
+ * that says "restorable" while the launcher boots fresh would strand the very
+ * conversation the gate promised. Ownership is resolved against every node in
+ * every workspace, so one session can never be handed to two terminals.
+ */
+function adoptablePiSession(terminalId: string, cwd: string): string | null {
+  const peers = store.terminalsAcross()
+  return (
+    piAdoptableSession(cwd, {
+      isOwned: (sessionId) => isRefOwned(peers, terminalId, 'piSessionId', sessionId)
+    })?.id ?? null
+  )
 }
 
 /** Spawn (or reuse) a PTY for a terminal node and register turn tracking. */
@@ -347,7 +665,28 @@ function spawnTracked(t: {
       // earlier segment visible and rewind can still cut into it.
       store.updateNodeUnsafe(t.id, withSessionLineage(t, sessionId))
     }
-    effective = claudeSpawnCommand(command, t.cwd, sessionId)
+    // A session another LIVE claude process still holds cannot be resumed —
+    // claude prints "currently running as a background agent … add
+    // --fork-session" and exits. Nothing here noticed, so the pty booted, died
+    // instantly, and the card reported READY over a black void (observed on
+    // Forge, held by a leftover `claude bg-spare`). Forking branches off a copy
+    // of the whole transcript, so the agent returns knowing what it knew; the
+    // new id is picked up by the spawn-time rotation probe below, which records
+    // the old one on the lineage so the rail keeps its history.
+    const fork = planHeldSessionFork(
+      claudeSpawnCommand(command, t.cwd, sessionId),
+      sessionId,
+      liveSessionHolders(),
+      randomUUID
+    )
+    effective = fork.command
+    // Bind the copy only once it EXISTS. Naming it ourselves is what makes the
+    // binding possible at all, but a still-live tmux session is reattached by
+    // `new-session -A`, which ignores this command entirely — so the fork may
+    // never run. Binding on intent pointed a node at a session file that was
+    // never written, which is worse than the bug it was fixing: the rail had
+    // nothing to read and the exact-context gate could no longer pass.
+    if (fork.forkedTo) bindForkWhenWritten(t.id, sessionId, fork.forkedTo, t.cwd)
   } else if (isCodexCommand(command) && t.codexSessionRef) {
     // Resume the bound Codex rollout as-is (Tinker: `codex resume <uuid>`,
     // uuid from the rollout filename; global opts kept before the subcommand).
@@ -369,7 +708,12 @@ function spawnTracked(t: {
       command,
       cwd: t.cwd,
       terminalId: t.id,
-      storedSessionId: t.piSessionId
+      // An unbound node adopts an UNOWNED session from its own cwd scope
+      // rather than booting fresh beside it. Ownership is checked here, not
+      // in pi-bind, because only the store knows what every other node claims
+      // — and that check is the whole reason this is not the most-recent
+      // guess the exclusive-dir design exists to forbid.
+      storedSessionId: t.piSessionId ?? adoptablePiSession(t.id, t.cwd)
     })
     effective = binding.command
     if (t.piSessionId !== binding.sessionId) {
@@ -383,7 +727,20 @@ function spawnTracked(t: {
   const card = cardNode?.kind === 'terminal' ? paneCard(cardNode) : undefined
   // Before the spawn, because the spawn is what makes the pane exist.
   const timingBoot = beginBootTiming(t.id)
-  const session = ptys.spawn({ terminalId: t.id, command: effective, cwd: t.cwd, card })
+  // Tagged with its owning workspace so the PTY plane can answer per-session
+  // questions (multi-instance step 2). ownerOf resolves across every
+  // workspace; focus is only the fallback for a terminal no canvas claims yet.
+  const session = ptys.spawn(
+    { terminalId: t.id, command: effective, cwd: t.cwd, card },
+    store.ownerOf(t.id) ?? store.focusedId
+  )
+  // One producer per conversation: every owner keystroke consults the
+  // tracker BEFORE the byte reaches the child; a dispatch in flight is
+  // preempted durably or the write is refused (Sol r4 P0-1).
+  session.beforeOwnerInput = (terminalId, data) => turns.guardOwnerInput(terminalId, data)
+  // Liveness: a registered id's lease generation is never tombstone-evicted,
+  // so a rebound terminal cannot be mistaken for a dead one (Sol r9).
+  defaultProducerLease().registerTerminal(t.id)
   // A terminal that dies before it is ready never booted: drop the pending
   // sample rather than leave it to time out. Registered only when a sample is
   // actually open — spawnTracked is called repeatedly for a REUSED session
@@ -394,6 +751,18 @@ function spawnTracked(t: {
   // Codex rollout bind (trace-sourced-context-final): the rollout file
   // appears seconds AFTER boot, so poll on a schedule, then keep a slow
   // retry tail until it binds (BIND_RETRY_TAIL_MS).
+  // SPAWN-TIME successor probe, not only the quiet-pane watcher: a crash
+  // recovery rotates the session while no pane exists, so by the time a pane
+  // exists again the staleness watcher has nothing stale to notice.
+  // resolveClaudeSessionId keeps a stored id merely because its file still
+  // EXISTS — it never asks whether a newer file claims that file's uuids.
+  // Measured on Conductor: 368/368 head uuids replayed into a successor and
+  // the rail sat frozen until the binding was repointed by hand. So every
+  // adopt asks the question too; the probe follows the chain to the newest
+  // hop and refuses on every doubt, exactly as when a watcher raises it.
+  if (isClaudeCommand(command) && t.claudeSessionId) {
+    void rebindRotatedClaudeSession(t.id)
+  }
   if (isCodexCommand(command) && !t.codexSessionRef) {
     // DETERMINISTIC bind (EXACT-CONTEXT gate): the rollout is the file the
     // codex PROCESS holds open (lsof of the pane pid), never a most-recent
@@ -500,6 +869,119 @@ function spawnTracked(t: {
   watchSessionTurns(t.id)
 }
 
+/** Claude sessions owned by OTHER terminals — current bindings AND lineage.
+ *  Lineage counts: an earlier segment of another node's conversation is still
+ *  its history, and adopting one would cross-wire two rails. */
+function claimedClaudeSessions(selfId: string): ReadonlySet<string> {
+  return new Set(
+    store
+      .terminalsAcross()
+      .filter((node) => node.id !== selfId)
+      .flatMap((node) => [
+        ...(node.claudeSessionId ? [node.claudeSessionId] : []),
+        ...(node.sessionLineage ?? [])
+      ])
+  )
+}
+
+const rotationProbes = new Set<string>()
+
+async function rebindRotatedClaudeSession(terminalId: string): Promise<void> {
+  // Single-flight per terminal: never stack probes. The sync reports once per
+  // stale window, but a window can close while the previous probe's bytes are
+  // still in flight, and two probes racing to commit the same chain is a race
+  // with nothing to win.
+  if (rotationProbes.has(terminalId)) return
+  try {
+    const hit = store.nodeAcrossWorkspaces(terminalId)
+    if (!hit || hit.node.kind !== 'terminal') return
+    const node = hit.node as TerminalNodeData
+    if (!isClaudeCommand(node.command)) return
+    const bound = node.claudeSessionId
+    if (!bound) return
+    rotationProbes.add(terminalId)
+    let chain: string[] | null
+    try {
+      chain = await resolveRotationChain({
+        cwd: node.cwd,
+        sessionId: bound,
+        claimed: claimedClaudeSessions(terminalId)
+      })
+    } finally {
+      rotationProbes.delete(terminalId)
+    }
+    if (chain === null) return
+    // ---- last await is above this line; the commit re-reads and lands ----
+    commitRotatedClaudeSession(terminalId, bound, chain)
+  } catch (error) {
+    console.error('Claude session rotation rebind failed:', error)
+  }
+}
+
+/**
+ * Land a proven rotation chain on the node — SYNCHRONOUSLY, and only if the
+ * store still says what the probe assumed. Every fact is re-read here rather
+ * than carried across the await: the node itself (it may have been killed or
+ * repurposed), its binding (it may have been rebound by recover, fork or
+ * another probe) and every other node's claims incl. lineage (a peer may have
+ * taken a hop while we were reading). MUST NOT become async — see
+ * rotationCommitVerdict.
+ */
+function commitRotatedClaudeSession(
+  terminalId: string,
+  bound: string,
+  chain: readonly string[]
+): void {
+  const hit = store.nodeAcrossWorkspaces(terminalId)
+  if (!hit || hit.node.kind !== 'terminal') return
+  const node = hit.node as TerminalNodeData
+  if (!isClaudeCommand(node.command)) return
+  const verdict = rotationCommitVerdict({
+    boundBefore: bound,
+    boundNow: node.claudeSessionId,
+    chain,
+    claimed: claimedClaudeSessions(terminalId)
+  })
+  if (verdict !== 'commit') return
+  const rotated = chain[chain.length - 1]
+  // Folded hop by hop so EVERY session the agent passed through lands on
+  // the lineage: the rail keeps each earlier segment behind its own clear
+  // marker, and cross-clear rewind can still cut into them.
+  const patch = chain.reduce(
+    withSessionLineage,
+    {
+      claudeSessionId: node.claudeSessionId,
+      sessionLineage: node.sessionLineage
+    } as Pick<TerminalNodeData, 'claudeSessionId' | 'sessionLineage'>
+  )
+  store.updateNodeAcrossWorkspacesUnsafe(terminalId, patch)
+  agents.setSessionRef(terminalId, rotated)
+  // The successor file is the durable record now. MIGRATE the observer —
+  // rebind swaps the file while the pin count, subscriber count and drain
+  // state survive (an unwatch would wipe them: a background dispatch would
+  // lose its pin and the fresh watch would never drain — Sol r2).
+  // Deliberately NOT interrupting an open dispatch here: a rotation is the
+  // SAME conversation continuing in a new file — the armed stamp (prompt
+  // identity + armedAt) survives, and the successor's tail is exactly where
+  // the dispatched turn will land. The observer migrates; the record lives.
+  const spec = traces.watchSpec(terminalId)
+  if (spec) {
+    sessionSync.rebind(terminalId, spec.file, spec.parse)
+    multiplexer()?.reportAgentSession?.(sessionNameFor(terminalId), spec.file)
+  } else {
+    sessionSync.unwatch(terminalId)
+  }
+  store.withOpContext({ actor: 'agent' }, () =>
+    store.recordEventIn(
+      hit.workspaceId,
+      'terminal.session-rotated',
+      terminalId,
+      node.name,
+      `${bound.slice(0, 8)} → ${rotated.slice(0, 8)}`
+    )
+  )
+}
+
 /** Pi sessions already bound to OTHER terminals — a shared-dir session is
  *  never reassignable, exactly as for codex rollouts / opencode sessions. */
 function claimedPiSessions(selfId: string): ReadonlySet<string> {
@@ -513,15 +995,242 @@ function claimedPiSessions(selfId: string): ReadonlySet<string> {
 
 /** Start (or refresh) the session-file turn reconcile for a terminal whose
  *  harness carries 'file' turn history; a no-op for scrape-only/plain shells. */
-function watchSessionTurns(terminalId: string): void {
+function watchSessionTurns(
+  terminalId: string,
+  opts: { deferInitial?: boolean } = {}
+): SessionWatchSpec | null {
   const spec = traces.watchSpec(terminalId)
-  if (!spec) return
-  sessionSync.watch(terminalId, spec.file, spec.parse)
+  if (!spec) return null
+  sessionSync.watch(terminalId, spec.file, spec.parse, opts)
   // The multiplexer gets the transcript path too, when it models agents —
   // this is the same fact, and herdr's own detection can use it rather than
   // inferring the agent's state from what it painted.
   multiplexer()?.reportAgentSession?.(sessionNameFor(terminalId), spec.file)
+  return spec
 }
+
+/**
+ * Scrollback rows the dispatch engine reads when it asks "did the prompt land?".
+ * Deep enough that a multi-minute turn's own output cannot bury the echo.
+ */
+const DISPATCH_CAPTURE_LINES = 2000
+
+/**
+ * The attach-free dispatch engine (v4 §3, on v5 tracking). Every dep is a
+ * narrow function so the engine never learns what a PtySession is — the whole
+ * point of the route is that the target has no terminal open on it.
+ *
+ * `beginWork`/`endWork` are the v5 replacement for the serviceState gate: a
+ * dispatch is accepted for ANY resolvable agent, and the acceptance itself
+ * brings up the tracking it needs — the session-file watch plus a drain pin
+ * that holds it open through the longest quiet tool call — then hands the
+ * terminal back to the ordinary drain clock when the record closes.
+ *
+ * `reattachFallback` is the single exception and the single PTY: it runs only
+ * after the transcript has shown the prompt never landed, and it degrades to
+ * "no fallback" whenever the agent has no live session to reattach.
+ */
+const dispatchService = new DispatchService({
+  resolveAgent: (agentId) => {
+    const hit = store.nodeAcrossWorkspaces(agentId)
+    if (!hit || hit.node.kind !== 'terminal') return null
+    return { name: hit.node.name, workspaceId: hit.workspaceId }
+  },
+  sessionNameFor,
+  // Admission reads the bounded-staleness inventory (500ms) — a fresh herdr
+  // fork per concurrent POST serialized the main thread (Sol r4/I6). A pane
+  // that died inside the window becomes a classified delivery failure.
+  sessionExists: (name) => {
+    const mux = multiplexer()
+    if (mux instanceof HerdrHostMultiplexer) return mux.sessionExistsCached(name)
+    return mux?.sessionExists(name) === true
+  },
+  // Async capture for the delivery legs (Sol r10): the pane read rides the
+  // async runner off the main thread; a cold inventory classifies as a
+  // retryable failure instead of a synchronous fork.
+  capture: (name) => {
+    const mux = multiplexer()
+    if (mux instanceof HerdrHostMultiplexer) return mux.captureAsync(name)
+    return mux?.capture(name) ?? null
+  },
+  // The deep read the landing check needs: "is the prompt on screen?" is what
+  // a re-send hangs on, and a viewport-sized capture answers no for every
+  // prompt a long turn has already scrolled past. Backends that cannot go
+  // deeper simply have no captureDeep and the engine uses the plain one.
+  captureDeep: (name) => {
+    const mux = multiplexer()
+    if (mux instanceof HerdrHostMultiplexer) {
+      return mux.captureDeepAsync(name, DISPATCH_CAPTURE_LINES)
+    }
+    return mux?.captureDeep?.(name, DISPATCH_CAPTURE_LINES) ?? null
+  },
+  agentStatus: (name) => agentStatus(name),
+  promptAgent: (name, prompt, timeoutMs, signal) => {
+    const mux = multiplexer()
+    if (!mux?.capabilities.agentLifecycle || !mux.promptAgent) return Promise.resolve('failed')
+    return mux.promptAgent(name, prompt, timeoutMs, signal)
+  },
+  // Submission-acknowledgement mode: the producer lease covers only the
+  // irreversible delivery; the reply is observed by transcript correlation
+  // outside the lease, so a minutes-long dispatched turn never locks the
+  // owner's keyboard (Sol r9).
+  submitAgent: (name, prompt, timeoutMs, signal) => {
+    const mux = multiplexer()
+    if (!mux?.capabilities.agentLifecycle || !mux.submitAgent) return Promise.resolve('failed')
+    return mux.submitAgent(name, prompt, timeoutMs, signal)
+  },
+  noteDispatch: (agentId, dispatchId, prompt) => turns.noteDispatch(agentId, dispatchId, prompt),
+  // Confirmed delivery hands the tracker the EXACT prompt: scrape closure
+  // then correlates on delivered text, never on a truncated screen echo.
+  noteDelivered: (agentId, prompt, gen) => turns.noteDispatchDelivered(agentId, prompt, gen),
+  // Proven non-delivery retracts the attempted fact — and ONLY proven: an
+  // unconfirmed submission keeps its bytes so a settled scrape turn can
+  // still be correlated when they arrive late.
+  retractDelivered: (agentId, prompt, gen) => turns.retractDispatchDelivered(agentId, prompt, gen),
+  clearDispatch: (agentId, dispatchId) => turns.clearDispatch(agentId, dispatchId),
+  // Accept time: the dispatch's turn must land in a watched session file, and
+  // the pin holds that watch open until the record closes (v5 A4). False =
+  // no durable observer could be installed AND no scrape covers the agent —
+  // the engine refuses the dispatch rather than accept work only the sweep
+  // can ever end (A2's exportability precondition). deferInitial: the accept
+  // path must not pay a full-transcript parse inline; the poll covers it.
+  beginWork: (agentId) => {
+    // A2 exportability, sharpened by Sol r2: a 'boundary' harness only ever
+    // finalizes a record when the NEXT one arrives — which a background
+    // dispatch never sends — so a file target must prove NATIVE finality;
+    // otherwise only a live scrape will do. Checked BEFORE any state
+    // change, because false promises acceptance left nothing behind.
+    const spec = traces.watchSpec(agentId)
+    const grade =
+      spec !== null && spec.finality === 'native'
+        ? ('native-file' as const)
+        : turns.isTracked(agentId)
+          ? ('scrape' as const)
+          : false
+    if (grade === false) return false
+    if (spec) watchSessionTurns(agentId, { deferInitial: true })
+    sessionSync.pin(agentId)
+    // A background target was watched BY this dispatch, not by focus, so the
+    // watch must owe its drain from the start: released-but-pinned holds for
+    // the whole dispatch and then drains on the ordinary quiet clock. A
+    // focused target is repinned by presence on the next watch() anyway.
+    // Focus is the conservative predicate here: releasing merely puts the
+    // watch on the ordinary quiet clock, and a seat that IS rendering this
+    // target repins it on the next watch(). With N windows this wants to ask
+    // "is ANY seat watching" rather than "is it focused here" — safe either
+    // way, because the answer only ever costs a repin.
+    if (store.nodeAcrossWorkspaces(agentId)?.workspaceId !== store.focusedId) {
+      sessionSync.release(agentId)
+    }
+    return grade
+  },
+  endWork: (agentId) => sessionSync.unpin(agentId),
+  // The dispatch becomes VISIBLE the moment it exists: accepted and settled
+  // flow through the ordinary event stream — toast layer, event panel and
+  // the phone all get them for free (owner's product-surface rule).
+  announce: ({ kind, record }) => {
+    const node = store.nodeAcrossWorkspaces(record.agentId)
+    const name = node?.node.name ?? record.agentId
+    // Ownership first, focus only as a last resort: the record knows, then
+    // the node knows, and focus is the guess of last resort when neither does.
+    const workspaceId = record.workspaceId ?? node?.workspaceId ?? store.focusedId
+    const type = kind === 'accepted' ? 'dispatch.accepted' : `dispatch.${record.state}`
+    const details =
+      kind === 'accepted'
+        ? `→ ${name}`
+        : record.error !== undefined
+          ? `${name}: ${record.error}`
+          : `→ ${name}`
+    store.withOpContext({ actor: 'agent' }, () => {
+      try {
+        store.recordEventIn(workspaceId, type, record.agentId, name, details)
+      } catch {
+        store.recordEvent(type, record.agentId, name, details)
+      }
+    })
+  },
+  // The sweep must not spare a stuck-working agent whose durable final
+  // answer already exists — status may hold, never outrank the row.
+  hasFinalAnswer: (agentId, prompt, armedAt) => turns.hasFinalAnswer(agentId, prompt, armedAt),
+  // The input box belongs to a composing owner: admission refuses and both
+  // delivery legs stand down rather than pasting under their typing.
+  ownerComposing: (agentId) => turns.ownerComposing(agentId),
+  // Observer probation: a native-file acceptance must see its watch actually
+  // reconcile; a path that never materializes interrupts at 60s, not 10min.
+  observerLive: (agentId) => sessionSync.isVerified(agentId),
+  persist: (record) => appendDispatchRecord(defaultDispatchRegistry(), record),
+  loadRecords: () => readDispatchRecords(defaultDispatchRegistry()),
+  persistTombstone: (tombstone) => appendDispatchTombstone(defaultDispatchRegistry(), tombstone),
+  loadTombstones: () => readDispatchTombstones(defaultDispatchRegistry()),
+  // Hydrate-time atomic compaction: the append-only registry stays bounded
+  // across a commercial lifetime instead of parsing every historical line
+  // on every restart forever.
+  compactRegistry: () => void compactDispatchRegistry(defaultDispatchRegistry()),
+  // "Cannot say" (absent liveness) must never classify a failure as death —
+  // only a positive dead answer routes delivery errors to 'interrupted'.
+  backendAlive: () => {
+    const mux = multiplexer()
+    return mux instanceof HerdrHostMultiplexer ? mux.serverAlive() : true
+  },
+  // The typed path and ONLY the typed path: askTerminal asks the multiplexer
+  // first, so reaching for it here would hand the same prompt back to herdr —
+  // a second identical submission on the exact outcome that means "herdr could
+  // not deliver this". pasteAndSubmit cannot reach herdr by construction.
+  reattachFallback: async (agentId, prompt, stillValid) => {
+    const session = ptys.get(agentId)
+    if (!session) return false
+    // stillValid is checked before EVERY write: a dispatch cancelled during
+    // the paste delay never emits its CR (Sol r6 P0-2).
+    const outcome = await pasteAndSubmit(
+      session,
+      prompt,
+      (data) => session.writeFromDispatch(data),
+      stillValid
+    )
+    return outcome === 'submitted'
+  }
+})
+
+// Backend death reaches the dispatch plane the moment the supervisor sees it:
+// every open record the dead server hosted is stamped interrupted (billed as
+// infrastructure, never as the agent failing), not left to the sweep.
+ptys.onBackendDeath = (why) => {
+  dispatchService.onBackendDeath(why)
+  // Every pane died with the server: no first-party open-turn fact — and no
+  // producer-lease hold — can outlive the process it observed.
+  for (const node of store.terminalsAcross()) {
+    turns.clearOpenTurnFact(node.id)
+    defaultProducerLease().retire(node.id)
+  }
+}
+// Owner typing into an agent mid-dispatch takes the agent over: the dispatch
+// is interrupted BEFORE the owner's turn opens, so exact-bytes identity can
+// never be asked to distinguish two producers on one conversation (Sol r3).
+turns.onOwnerPreempt = (terminalId) => {
+  dispatchService.interruptAgent(terminalId, 'preempted by owner input')
+  // Success = the interrupt actually landed (fail-closed ledger can park it
+  // open); a false verdict refuses the owner's write rather than letting two
+  // producers share one conversation.
+  return !dispatchService.hasOpenDispatch(terminalId)
+}
+
+/**
+ * How often the sweep looks for dispatches nothing will ever close (D1).
+ *
+ * A minute: the sweep is a map scan over records the process already holds, and
+ * the thing it frees is an agent's in-flight slot — an hour of 409 busy on a
+ * dead dispatch is a worse trade than sixty cheap passes.
+ */
+const DISPATCH_SWEEP_MS = 60_000
+
+const dispatchSweep = setInterval(() => {
+  const stamped = dispatchService.sweep()
+  if (stamped.length > 0) {
+    console.error(`Dispatch sweep closed ${stamped.length} abandoned dispatch(es)`)
+  }
+}, DISPATCH_SWEEP_MS)
+// Never hold the process open for a janitor.
+dispatchSweep.unref?.()
 
 /**
  * Give the active workspace an orch terminal when it has none. It opens the
@@ -536,7 +1245,7 @@ function seedConductorIfEmpty(): void {
     name: 'Conductor',
     preset: DEFAULT_ORCH_PRESET.name,
     command: DEFAULT_ORCH_PRESET.command,
-    cwd: store.state.dir,
+    cwd: store.focusedState.dir,
     orch: true,
     role: null,
     position: { x: 240, y: 200 },
@@ -545,15 +1254,15 @@ function seedConductorIfEmpty(): void {
 }
 
 // ---- workspace operations (shared by IPC and the cookrew CLI) ----
-// Switching tears down the outgoing workspace's PTYs and boots the incoming
-// canvas's terminals, so only the active workspace holds live processes.
+// Switching changes focus. Resident mirrors survive; cold terminals stay
+// detached until a transcript viewer asks for them.
 
 function listWorkspaces(): ReturnType<WorkspaceStore['list']> {
   return store.list()
 }
 
 function createWorkspace(name: string, dir: string): WorkspaceMeta {
-  const meta = store.createWorkspace(name, dir || store.state.dir)
+  const meta = store.createWorkspace(name, dir || store.focusedState.dir)
   store.switchWorkspace(meta.id) // fires 'switch' → PTY teardown/spawn
   seedConductorIfEmpty()
   return meta
@@ -578,7 +1287,11 @@ function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
   // by tmux session name, so parked (detached) terminals are reached too.
   for (const id of store.terminalIdsOf(meta.id)) {
     store.snapshotTerminal(id) // HIGH-1: capture recovery snapshot before the kill
-    sessionSync.unwatch(id)
+    // An open dispatch dies WITH its workspace — interrupted (infrastructure),
+    // never left submitted/busy until the sweep (Sol r1 P1).
+    retireTerminal(id, 'workspace removed')
+    defaultProducerLease().forgetTerminal(id)
+    defaultProducerLease().clearProvenanceOnDeath(id)
     ptys.killDetached(id)
     turns.untrack(id)
     // Keep turn history as the recovery signal (see removeNode, R2 fix).
@@ -614,15 +1327,17 @@ async function setTerminalCwd(nodeId: string, dir: string): Promise<CanvasNode> 
   return moveTerminalCwd(
     {
       store: {
-        activeId: store.activeId,
+        activeId: store.focusedId,
         node: (id) => store.node(id),
         dirs: () => store.dirs(),
         addWorkspaceDir: (workspaceId, target) => store.addWorkspaceDir(workspaceId, target),
         setTerminalCwd: (id, target) => store.setTerminalCwd(id, target)
       },
       release: (id) => {
-        sessionSync.unwatch(id)
-        turns.untrack(id)
+        // A deliberate rebind is a permanent ending for the OLD session —
+        // same primitive as remove/cut, so the reborn id can never inherit a
+        // phantom in-turn fact from the dead one (Sol r6).
+        retireTerminal(id, 'terminal rebound')
       },
       kill: (id) => ptys.killAndWait(id),
       spawn: (node) => spawnTracked(node),
@@ -666,9 +1381,115 @@ function deliverPendingInject(t: TerminalNodeData): void {
 }
 
 /** Boot one restored terminal: spawn + any deferred copy context. */
+/**
+ * Every resident session's browsers, not just the focused canvas's.
+ *
+ * replaceNodes() is a replace-the-WORLD call — anything absent is stopped — so
+ * handing it one workspace's browsers while another session is resident would
+ * silently kill that session's pages on every switch. The union is the honest
+ * argument now that more than one canvas can be live.
+ */
+/**
+ * The drain that makes residency bounded (multi-instance step 2, C3).
+ *
+ * Without this, SessionRegistry was a design with no caller: hydrating grew
+ * the resident set monotonically and nothing ever released it — the unbounded
+ * hold of ef5e13c, reinstated by the module written to prevent it. The three
+ * liveness facts are read from where they already live, so there is still
+ * nothing to set and nothing to leak.
+ */
+const sessions = new SessionRegistry<{ id: string }>({
+  // One window today; step 4 turns this into a per-window count.
+  boundWindows: (id) => (id === store.focusedId ? 1 : 0),
+  // A phone or SSE reader watching any of this workspace's terminals.
+  subscribers: (id) =>
+    store.terminalIdsOf(id).reduce((n, tid) => n + sessionSync.subscriberCount(tid), 0),
+  // Work in flight: a terminal mid-turn is work, whoever is looking.
+  // A terminal mid-turn is work, whoever is looking — plus any remote call
+  // this workspace is currently serving, which the inferred signals cannot see
+  // during a cold fork's boot.
+  inFlightWork: (id) =>
+    store.terminalIdsOf(id).filter(hasLiveWork).length + callsInFlight.count(id),
+  hydrate: (id) => ({ id }),
+  release: (id) => {
+    // Order matters, and the comment used to lie about it: detachWorkspace
+    // RETURNS the ids, so releasing inside that loop stopped the watches
+    // AFTER the PTYs had already gone. The switch path has it right — release
+    // and untrack first, then detach — so a watch can never re-arm against a
+    // terminal being torn out from under it. Read the set, then tear down.
+    const held = store.terminalIdsOf(id)
+    for (const tid of held) {
+      sessionSync.release(tid)
+      turns.untrack(tid)
+    }
+    ptys.detachWorkspace(id)
+    store.releaseSession(id)
+  },
+  now: () => Date.now()
+})
+
+/** How often the drain looks; a session must be dead across two of these. */
+const SESSION_DRAIN_TICK_MS = 5_000
+
+const sessionDrain = setInterval(() => {
+  // Materialise whatever the store is holding, then let liveness decide. The
+  // registry never PINS anything — get() deliberately does not clear the death
+  // clock, so a session that is merely resident still drains.
+  for (const id of store.resident()) sessions.get(id)
+  sessions.drainTick()
+}, SESSION_DRAIN_TICK_MS)
+sessionDrain.unref?.()
+
+/**
+ * Runs a switch plan without holding the main thread.
+ *
+ * Yields between boots so the companion server can answer in the gaps. See
+ * switch-runner.ts for why serial order and the single attach batch both
+ * survive that.
+ */
+const switchRunner = new SwitchRunner<TerminalNodeData, BrowserNodeData>({
+  detach: (terminalId) => detachTerminalMirror(terminalId),
+  boot: (terminal) => bootTerminal(terminal),
+  syncBrowsers: (browsers) => {
+    void browserManager.replaceNodes([...browsers]).catch(() => undefined)
+  },
+  // The herdr workspace's chrome follows the focused Cookrew workspace.
+  onBooted: () => reportWorkspaceBinding(),
+  // ONE herdr inventory for the whole reattach. The baseline probe measured
+  // unbatched pane resolution at 44.8x batched and linear in K (34 panes,
+  // 2026-08-20), and a switch is exactly where K is largest.
+  beginBatch: () => multiplexer()?.beginAttachBatch?.(),
+  endBatch: () => multiplexer()?.endAttachBatch?.(),
+  // setImmediate, not a timer: it runs after the poll phase, so pending HTTP
+  // callbacks are served before the next boot rather than after a delay.
+  yieldToLoop: () => new Promise<void>((resolve) => setImmediate(resolve))
+})
+
+function residentBrowsers(): BrowserNodeData[] {
+  return store.resident().flatMap((id) =>
+    store.workspaceState(id).nodes.filter((n): n is BrowserNodeData => n.kind === 'browser')
+  )
+}
+
 function bootTerminal(t: TerminalNodeData): void {
   spawnTracked(t)
   deliverPendingInject(t)
+}
+
+/** Open the local mirror for a zoomed transcript, never for canvas startup. */
+function ensureTerminalMirror(terminalId: string): boolean {
+  if (ptys.get(terminalId)) return true
+  const hit = store.nodeAcrossWorkspaces(terminalId)
+  if (!hit || hit.node.kind !== 'terminal') return false
+  bootTerminal(hit.node as TerminalNodeData)
+  return ptys.get(terminalId) !== undefined
+}
+
+/** Detach the mirror without killing the multiplexer-owned agent process. */
+function detachTerminalMirror(terminalId: string): void {
+  sessionSync.release(terminalId)
+  turns.untrack(terminalId)
+  ptys.detach(terminalId)
 }
 
 function addNode(node: CanvasNode): CanvasNode {
@@ -706,7 +1527,12 @@ function workspaceName(id: string): string {
  * node's exact prior session be restored right now? Wired to live turn history.
  */
 function canRestoreExact(node: TerminalNodeData): boolean {
-  return exactGate(node, { turnsHistory: (id) => turns.history(id) })
+  return exactGate(node, {
+    turnsHistory: (id) => turns.history(id),
+    // Same question the launcher asks, so the two can never disagree about
+    // whether this node's conversation is reachable.
+    piAdoptable: (id, cwd) => adoptablePiSession(id, cwd)
+  })
 }
 
 /** The active workspace's orch terminal, for reachability wiring. */
@@ -728,17 +1554,27 @@ function activeOrch(): TerminalNodeData | undefined {
  *     registry + wire to the current orch.
  */
 function recoverAgent(id: string): RecoverResult {
+  // Asked ONCE per recovery, before anything boots: a session another live
+  // claude process holds cannot be resumed, only forked. Cheap (sub-ms, see
+  // claude-live-session.ts), so it costs nothing to always know.
+  const holders = liveSessionHolders()
+  const heldSession = (node: TerminalNodeData): boolean =>
+    isClaudeCommand(node.command) &&
+    !!node.claudeSessionId &&
+    blocksResume(holderOf(node.claudeSessionId, holders))
+
   // (1) present-but-dead
   const hit = store.nodeAcrossWorkspaces(id)
   if (hit && hit.node.kind === 'terminal') {
     // Only report spawned when we actually (re)booted — an already-live
     // process is a no-op double-recover (LOW).
     const exact = canRestoreExact(hit.node as TerminalNodeData)
-    const didSpawn = hit.workspaceId === store.activeId && !ptys.get(id) && exact
+    const didSpawn = bootsTerminalsFor(hit.workspaceId) && !ptys.get(id) && exact
+    const forked = didSpawn && heldSession(hit.node as TerminalNodeData)
     if (didSpawn) spawnTracked(hit.node)
     return {
       ok: true, id, name: hit.node.name, workspaceId: hit.workspaceId,
-      workspaceName: workspaceName(hit.workspaceId), spawned: didSpawn, legacy: false, exact
+      workspaceName: workspaceName(hit.workspaceId), spawned: didSpawn, legacy: false, exact, forked
     }
   }
 
@@ -746,7 +1582,7 @@ function recoverAgent(id: string): RecoverResult {
   if (snap) {
     const orch = activeOrch()
     const plan = planRecovery(snap, {
-      activeWorkspaceId: store.activeId,
+      activeWorkspaceId: store.focusedId,
       workspaceExists: (wid) => store.list().workspaces.some((w) => w.id === wid),
       nodeExists: (pid) => store.nodeAcrossWorkspaces(pid) !== undefined,
       isOrch: (pid) => {
@@ -762,11 +1598,12 @@ function recoverAgent(id: string): RecoverResult {
     // never a fresh/stray session masquerading as recovery.
     const exact = canRestoreExact(added)
     const didSpawn = plan.spawn && exact
+    const forked = didSpawn && heldSession(added)
     if (didSpawn) spawnTracked(added)
     recoverable.remove(id)
     return {
       ok: true, id, name: added.name, workspaceId: plan.targetWorkspaceId,
-      workspaceName: workspaceName(plan.targetWorkspaceId), spawned: didSpawn, legacy: false, exact
+      workspaceName: workspaceName(plan.targetWorkspaceId), spawned: didSpawn, legacy: false, exact, forked
     }
   }
 
@@ -774,7 +1611,7 @@ function recoverAgent(id: string): RecoverResult {
   const entry = agents.lookup(id)
   if (!entry) throw new Error(`No recoverable agent '${id}'`)
   const wsExists = store.list().workspaces.some((w) => w.id === entry.workspaceId)
-  const targetWs = wsExists ? entry.workspaceId : store.activeId
+  const targetWs = wsExists ? entry.workspaceId : store.focusedId
   const harness = harnessFor(entry.command)
   const node: TerminalNodeData = {
     kind: 'terminal', id, name: entry.name, preset: entry.preset,
@@ -788,17 +1625,40 @@ function recoverAgent(id: string): RecoverResult {
   const orch = activeOrch()
   if (orch && orch.id !== added.id) store.connectAcross(added.id, orch.id)
   const exact = canRestoreExact(added)
-  const didSpawn = targetWs === store.activeId && exact
+  const didSpawn = bootsTerminalsFor(targetWs) && exact
+  const forked = didSpawn && heldSession(added)
   if (didSpawn) spawnTracked(added)
   return {
     ok: true, id, name: added.name, workspaceId: targetWs,
-    workspaceName: workspaceName(targetWs), spawned: didSpawn, legacy: true, exact
+    workspaceName: workspaceName(targetWs), spawned: didSpawn, legacy: true, exact, forked
   }
 }
 
-async function removeNode(id: string): Promise<void> {
+/**
+ * Permanent terminal retirement — ONE primitive for every path that ends a
+ * terminal's life (remove, workspace remove, cut, rebind death). Ordering is
+ * the contract: interrupt the dispatch while its stamp still exists, clear
+ * the first-party facts (untrack deliberately preserves them for ordinary
+ * switches, so an ending MUST clear them or a moved/recovered id inherits a
+ * phantom in-turn veto — Sol r5), then tear down observation. The kill
+ * itself stays with the caller: cut awaits it, remove fire-and-forgets.
+ */
+function retireTerminal(id: string, why: string): void {
+  dispatchService.interruptAgent(id, why)
+  turns.clearOpenTurnFact(id)
+  // A dead generation's lease holder becomes invisible and its late release
+  // a no-op — a reborn id must never inherit a stranded submission window.
+  defaultProducerLease().retire(id)
   sessionSync.unwatch(id)
   turns.untrack(id)
+}
+
+async function removeNode(id: string): Promise<void> {
+  retireTerminal(id, 'terminal removed')
+  defaultProducerLease().forgetTerminal(id)
+  // A permanently removed uuid never returns: its input-provenance fact
+  // protects nothing and would otherwise sit in the WAL forever.
+  defaultProducerLease().clearProvenanceOnDeath(id)
   // NOTE: turn history is deliberately NOT cleared on kill — it is the third
   // recovery net (resolveClaudeSessionId matches it to the real session when
   // no snapshot/registry ref exists). Disk-capped at 100/agent, negligible;
@@ -819,8 +1679,8 @@ function forkTerminal(sourceId: string, turnIndex?: number): TerminalNodeData {
 interface CreateTerminalOpts {
   name: string
   preset: string
-  position: { x: number; y: number }
-  orch: boolean
+  position?: { x: number; y: number }
+  orch?: boolean
   /** Boot a fresh agent from a saved role instead of a bare preset. */
   roleName?: string
 }
@@ -828,6 +1688,7 @@ interface CreateTerminalOpts {
 function createTerminal(opts: CreateTerminalOpts): CanvasNode {
   const role = opts.roleName ? roles.get(opts.roleName) : undefined
   if (opts.roleName && !role) throw new Error(`No saved role '${opts.roleName}'`)
+
   const preset = PRESETS.find((p) => p.name === opts.preset) ?? PRESETS[PRESETS.length - 1]
   // Native restore: a role saved from a checkpoint carries a truncated session
   // copy — materialize it under a fresh id so the booted Claude agent resumes
@@ -838,7 +1699,7 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
       ? resumeRoleSession({
           sessionCopyRef: role.sessionCopyRef,
           copyDir: roleSessionDir(),
-          cwd: store.state.dir
+          cwd: store.focusedState.dir
         })
       : null
   const terminal: TerminalNodeData = {
@@ -847,11 +1708,11 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     name: opts.name || role?.name || preset.name,
     preset: role ? role.preset : preset.name,
     command: role ? role.command : preset.command,
-    cwd: store.state.dir,
-    orch: opts.orch,
+    cwd: store.focusedState.dir,
+    orch: opts.orch ?? false,
     role: role ? role.name : null,
     ...(restoredSessionId ? { claudeSessionId: restoredSessionId } : {}),
-    position: opts.position,
+    position: opts.position ?? { ...DEFAULT_CANVAS_POSITION },
     size: DEFAULT_TERMINAL_SIZE
   }
   const added = store.addNode(terminal)
@@ -927,11 +1788,36 @@ function terminalIsWorking(id: string): boolean {
   return activity !== undefined && UNCOPYABLE_PHASES.has(activity.phase)
 }
 
+/**
+ * Is there live work on this terminal? The rule lives in session-liveness.ts —
+ * imported by this wiring AND by its test, so the two cannot drift. This
+ * function only gathers the facts.
+ */
+/**
+ * Is there live work on this terminal? The rule lives in session-liveness.ts.
+ *
+ * phaseOf, NOT list().find(): list() maps activityOf over every tracked
+ * terminal and activityOf walks the whole xterm buffer, so asking it for one
+ * scalar cost a full fleet walk PER TERMINAL — and the drain asks once per
+ * terminal per resident workspace. That is O(workspaces x terminals^2 x
+ * scrollback) every five seconds on the main thread, which is wave C's
+ * O(attached x panes) wearing a different hat, in the module written to make
+ * that impossible. Measured on the live app under the flag: it put an ~11s
+ * floor under EVERY http route, including /api/workspaces, which does no work
+ * at all.
+ */
+function hasLiveWork(id: string): boolean {
+  return terminalHasLiveWork({
+    phase: turns.phaseOf(id),
+    hasOpenDispatch: dispatchService.hasOpenDispatch(id)
+  })
+}
+
 const teamClipboard = new TeamClipboard({
-  activeId: () => store.activeId,
+  activeId: () => store.focusedId,
   workspaces: () => store.list().workspaces,
   workspaceState: (id) => store.workspaceState(id),
-  activeNodes: () => store.state.nodes,
+  activeNodes: () => store.focusedState.nodes,
   isWorking: terminalIsWorking,
   paste: (spec) => copyTeam(teamForkDeps(), spec),
   // Cut removal is WORKSPACE-SCOPED: identity-moved notes/browsers now
@@ -949,8 +1835,9 @@ const teamClipboard = new TeamClipboard({
     const state = store.workspaceState(fromWorkspaceId)
     for (const node of state.nodes) {
       if (node.kind !== 'terminal' || !nodeIds.includes(node.id)) continue
-      sessionSync.unwatch(node.id)
-      turns.untrack(node.id)
+      retireTerminal(node.id, 'terminal cut')
+      defaultProducerLease().forgetTerminal(node.id)
+      defaultProducerLease().clearProvenanceOnDeath(node.id)
       await ptys.killAndWait(node.id)
     }
   },
@@ -958,8 +1845,9 @@ const teamClipboard = new TeamClipboard({
     const state = store.workspaceState(fromWorkspaceId)
     for (const node of state.nodes) {
       if (node.kind !== 'terminal' || !nodeIds.includes(node.id)) continue
-      sessionSync.unwatch(node.id)
-      turns.untrack(node.id)
+      retireTerminal(node.id, 'terminal cut')
+      defaultProducerLease().forgetTerminal(node.id)
+      defaultProducerLease().clearProvenanceOnDeath(node.id)
       ptys.kill(node.id)
       ptys.killDetached(node.id)
       agents.deactivate(node.id)
@@ -1010,17 +1898,125 @@ async function createWorkspaceFromTeam(
   dir: string,
   team: string
 ): Promise<WorkspaceMeta> {
-  return workspaceFromTemplate(teamForkDeps(), { name, dir: dir || store.state.dir, team })
+  return workspaceFromTemplate(teamForkDeps(), { name, dir: dir || store.focusedState.dir, team })
+}
+
+/**
+ * IMPORT a template as a SESSION: a new workspace holding one terminal — the
+ * entry orchestrator — that reaches the served crew over HTTP. The team runs on
+ * the owner's side; the caller talks to the one door. See import-session.ts.
+ *
+ * `target` is the served origin+slug. With no target (a LOCAL import, the
+ * fixture path) the orch still points at 127.0.0.1's own listener, so the flow
+ * is exercisable end to end before any public relay exists.
+ */
+/** The proxy terminal's mirror client, resolved for dev and packaged. */
+function orchMirrorScript(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'orch-mirror.mjs')
+    : path.join(dirname, '../../resources/orch-mirror.mjs')
+}
+
+async function importTemplateAsSession(
+  team: string,
+  position?: { x: number; y: number }
+): Promise<WorkspaceMeta> {
+  const snapshot = teams.load(team)
+  if (!snapshot) throw new Error(`No saved template '${team}' to import`)
+  const callerWs = store.focusedId
+
+  // REQ 1 — a REAL session: a new workspace forked from the template, the team
+  // booted from its saved sessions, WITH A GIT WORKTREE per repo dir.
+  // workspaceFromTemplate hardcodes worktree:false (the "no worktree" bug), so
+  // import forks directly with worktree enabled. forkTeam switches to it.
+  const dir = snapshot.dir || store.focusedState.dir
+  const meta = await forkTeam(teamForkDeps(), {
+    name: `${snapshot.name} · session`,
+    nodeIds: [],
+    choices: [],
+    fromSavedTeam: team,
+    dirs: dir.length > 0 ? [dir] : undefined,
+    worktree: true
+  })
+  // VERSION PIN — the rail says which template edition this session runs.
+  const sessionNodes = store.workspaceState(meta.id).nodes
+  cutTemplatePins(sessionNodes.filter((n) => n.kind === 'terminal').map((n) => n.id))
+
+  // REQ 2 — the PROXY. Find the session's entry orchestrator and place a proxy
+  // terminal back in the CALLER's workspace that mirrors it over the SAME mobile
+  // API the phone uses (resources/orch-mirror.mjs: GET /turns, POST /input). So
+  // the caller talks to the orch from their own canvas; the crew runs in the
+  // session with its worktree.
+  const entryName = entryAgentOf(snapshot)
+  const orch = sessionNodes.find(
+    (n): n is TerminalNodeData => n.kind === 'terminal' && n.name === entryName
+  )
+  store.switchWorkspace(callerWs)
+  if (orch) {
+    const proxy: TerminalNodeData = {
+      kind: 'terminal',
+      id: randomUUID(),
+      name: `${snapshot.name} ▸ ${orch.name}`,
+      preset: 'Shell',
+      // No env-var prefix: a pane may exec argv without a shell, so the script
+      // sets TLS trust itself and takes the origin as a flag.
+      command:
+        `node ${orchMirrorScript()} ${orch.id} ` +
+        `--origin https://127.0.0.1:${MOBILE_HTTPS_PORT} --name ${JSON.stringify(orch.name)}`,
+      cwd: store.focusedState.dir,
+      orch: false,
+      role: null,
+      position: position ?? { x: 160, y: 120 },
+      size: DEFAULT_TERMINAL_SIZE
+    }
+    const placed = store.addNode(proxy)
+    spawnTracked(placed as TerminalNodeData)
+    store.recordEvent('session.imported', meta.name, orch.name, `proxy → ${orch.id}`)
+  }
+  return meta
 }
 
 function teamSaveTracked(name?: string, nodeIds?: string[]): TeamMeta {
   const meta = teamSaveInner(name, nodeIds)
   store.recordEvent('team.saved', meta.name, meta.name, `${meta.terminalCount} agents`)
+  // A saved template IS a version — so SAVE cuts a version pin on every agent
+  // it snapshotted, at that agent's current checkpoint. Without this the save
+  // was invisible: the template existed but no rail marker said "this is V1",
+  // so nothing on the canvas changed and the author could not see what they
+  // saved. The pin is per-terminal because the rail is per-terminal, and it is
+  // the same cut call the fork/import paths use, so the marker is identical.
+  cutTemplatePins(nodeIds)
   return meta
 }
 
+/**
+ * Cut a version pin on each saved agent's rail at its latest checkpoint.
+ * Silent per-terminal: an agent with no completed turn has nothing to pin, and
+ * a failed cut on one agent must not sink the save of the rest.
+ */
+function cutTemplatePins(nodeIds?: string[]): void {
+  const saved = store
+    .terminals()
+    .filter((t) => !nodeIds || nodeIds.includes(t.id))
+  for (const term of saved) {
+    try {
+      const history = turns.history(term.id)
+      if (history.length === 0) continue
+      const atIndex = history[history.length - 1].index
+      const pin = cutVersionPin(pinStore.list(term.id), {
+        atIndex,
+        scrollLine: ptys.get(term.id)?.paneScrollState().historySize ?? 0,
+        cutAt: Date.now()
+      })
+      pinStore.add(term.id, pin)
+    } catch (error) {
+      console.error(`template save: could not pin ${term.id}:`, error)
+    }
+  }
+}
+
 function teamSaveInner(name?: string, nodeIds?: string[]): TeamMeta {
-  return teams.save(store.state, (id) => turns.history(id), name, nodeIds)
+  return teams.save(store.focusedState, (id) => turns.history(id), name, nodeIds)
 }
 
 interface RoleSaveInput {
@@ -1166,11 +2162,56 @@ function activeBrowserNode(browserId: string): BrowserNodeData | null {
 }
 
 /** Reflect real headless-page navigation/title state into the browser node. */
+/**
+ * Registry hosts whose /install/<presetId> links this app understands (R21).
+ *
+ * Configured, never inferred: the app must not learn to trust a host because a
+ * page it was showing claimed to be one. Empty by default, which recognises
+ * nothing — the marketplace is not shipped yet, and an unconfigured registry
+ * failing closed is the correct posture until it is.
+ */
+const registryHosts = (): string[] =>
+  (process.env.COOKREW_REGISTRY_HOST ?? '')
+    .split(',')
+    .map((host) => host.trim())
+    .filter((host) => host.length > 0)
+
+/**
+ * A browser card navigated to a marketplace install link (R21).
+ *
+ * The id is all that crosses. This does NOT install: main owns download,
+ * signature verification and the review sheet, and the user owns the decision
+ * — a page must never be able to install by being navigated to, only to ask.
+ * The ask is announced on the ordinary event stream, so the toast layer, the
+ * event panel and the phone all see it without a private channel.
+ */
+function noteRegistryInstallLink(browserId: string, url: string): void {
+  const presetId = presetIdFromInstallUrl(url, registryHosts())
+  if (presetId === null) return
+  const node = activeBrowserNode(browserId)
+  store.recordEventIn(
+    store.ownerOf(browserId) ?? store.focusedId,
+    'preset.install.requested',
+    presetId,
+    node?.name ?? browserId,
+    'registry install link'
+  )
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+    // The renderer opens the review sheet. Only the id and where it came from
+    // travel — the URL, its query and the page itself stay on the web side.
+    mainWindow.webContents.send('preset:install-requested', { presetId, browserId })
+  }
+}
+
 function recordHeadlessPageState(
   browserId: string,
   tabId: string,
   state: { url: string; title: string }
 ): void {
+  // BEFORE the early returns below: an install link is worth noticing even
+  // when the tab's recorded url/title have not changed (a re-navigation to the
+  // same link is a fresh ask), and even for a node the canvas has since lost.
+  noteRegistryInstallLink(browserId, state.url)
   const node = activeBrowserNode(browserId)
   if (!node) return
   const tabs = browserTabs(node)
@@ -1377,7 +2418,12 @@ app.whenReady().then(() => {
     spawnTracked,
     // Restore/undo kill the CLI; refuse while a turn is in flight so the
     // session file is never truncated out from under a writing process.
-    phaseOf: (id) => turns.list().find((a) => a.terminalId === id)?.phase ?? null
+    phaseOf: (id) => turns.list().find((a) => a.terminalId === id)?.phase ?? null,
+    // A detached/background target has no tracked phase but may carry an
+    // armed dispatch or an open-turn fact — restore must not kill and rebind
+    // a session mid-commissioned-work (Sol r4).
+    hasArmedDispatch: (id) => turns.hasArmedDispatch(id),
+    hasOpenWork: (id) => turns.hasOpenTurnFact(id)
   })
 
   startSocketServer({
@@ -1386,6 +2432,10 @@ app.whenReady().then(() => {
     spawnTerminal: spawnTracked,
     agents,
     turns,
+    // `ask --no-wait` and `cookrew dispatch <id>`: the SAME engine the HTTP
+    // route uses, so a CLI-minted dispatch and an API-minted one are one
+    // record with one lifecycle.
+    dispatch: dispatchService,
     forkTerminal,
     routines,
     browserCommand,
@@ -1418,6 +2468,66 @@ app.whenReady().then(() => {
 
   startMobileServer({
     store,
+    // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
+    multiInstance: () => store.isMultiInstance,
+    // THE INTERNET GATE (§9 · ④), mounted per workspace session. Reachable only
+    // under a slug, so multi-instance gates it without a second flag: an
+    // exported agent is addressable because the WORKSPACE is.
+    //
+    // Every lookup it is given is workspace-scoped at the call site.
+    // workspaceState() reads the addressed workspace (from memory when it is
+    // the active one, from disk otherwise) — deliberately NOT store.terminals()
+    // or store.nodeByName(), both of which read focusedState and would answer
+    // for whichever canvas the owner is looking at.
+    calls: {
+      decide: makeCallGate({
+        nodesOf: callNodesOf,
+        exportOf: (workspaceId, nodeId) => agentExports.exportOf(workspaceId, nodeId),
+        // Live, at the call: a revoked caller stops being entitled the instant
+        // the record says so, not when its credential expires.
+        enrolled: (workspaceId, sub) => agentExports.enrolledKey(workspaceId, sub) !== null,
+        issuer: callCredentials
+      }),
+      ceremony: makeCallCeremony({
+        issuer: callCredentials,
+        enrolledKey: (workspaceId, sub) => agentExports.enrolledKey(workspaceId, sub)
+      }),
+      slugOf: (workspaceId) => store.slugOf(workspaceId),
+      // §10: a call runs against a fork, never the original — see call-fork.ts
+      // for why that is a safety property and not a tidiness one. The fork
+      // engine and the pin store are the SHIPPING ones (the owner's own ⑂
+      // button and the rail's markers), so a marketplace copy cannot drift
+      // from what the canvas shows.
+      session: makeCallSession({
+        conversations: callConversations,
+        cutVersion: (sourceId) =>
+          cutCallVersion(
+            {
+              fork: (id, turnIndex) => forkTerminal(id, turnIndex),
+              turnsOf: (id) => turns.history(id),
+              scrollLineOf: (id) => ptys.get(id)?.paneScrollState().historySize ?? null,
+              pins: {
+                list: (id) => pinStore.list(id),
+                add: (id, pin) => pinStore.add(id, pin)
+              },
+              now: () => Date.now()
+            },
+            sourceId
+          ),
+        forkAlive: (forkId) => store.nodeAcrossWorkspaces(forkId) !== undefined,
+        now: () => Date.now()
+      }),
+      // The only path from the internet into a pty. askTerminal brings the
+      // producer lease and the 409 vocabulary with it; the fork id comes from
+      // the session above, which cannot produce the original.
+      run: makeCallRun({
+        sessionOf: (forkId) => ptys.get(forkId),
+        ready: (forkId) => forkContextReady(forkId),
+        ask: (session, prompt, signal) => askTerminal(session as PtySession, prompt, { signal }),
+        inFlight: (identity, cancel) => callsInFlight.enter(identity, cancel),
+        wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+      })
+    },
     events,
     agents,
     traces,
@@ -1426,6 +2536,17 @@ app.whenReady().then(() => {
     // probe (L2) is absent until the tmux sampler lands; rows then degrade to
     // their last known task rather than claiming a phase nobody observed.
     board: boardSources(),
+    // Attach-free dispatch (v4 §3): the two /api routes answer 503 without it.
+    dispatch: dispatchService,
+    // While a dispatch is armed, the HTTP input/ask producers refuse 409 —
+    // two writers racing one agent is two answers to one reservation.
+    hasArmedDispatch: (terminalId) => turns.hasArmedDispatch(terminalId),
+    acquireTerminalView: (terminalId) => lazyTerminals.acquire(terminalId),
+    releaseTerminalView: (terminalId) => lazyTerminals.release(terminalId),
+    // A live stream is a watcher (A4): open holds/starts the file watch,
+    // close hands the terminal back to the drain clock.
+    subscribeTerminal: (terminalId) => sessionSync.subscribe(terminalId),
+    unsubscribeTerminal: (terminalId) => sessionSync.unsubscribe(terminalId),
     wallToken,
     pairingToken,
     recoverAgent,
@@ -1471,9 +2592,12 @@ app.whenReady().then(() => {
     browserThumbRequested: noteBrowserViewed,
     onUpgrade: (request, socket) => browserCast.upgrade(request, socket),
     // Built renderer bundle — served to phones so mobile gets the full
-    // desktop canvas UI. Dev proxies Vite so phones cannot load stale out/.
+    // desktop canvas UI. Dev proxies Vite so LAN phones get live code; a
+    // tailnet peer gets this bundle instead, because the unbundled graph is
+    // 159 dependent requests and a relayed link never finishes them.
     rendererDir: path.join(dirname, '../renderer'),
-    rendererDevUrl: process.env.ELECTRON_RENDERER_URL
+    rendererDevUrl: process.env.ELECTRON_RENDERER_URL,
+    rendererSrcDir: path.join(app.getAppPath(), 'src/renderer/src')
   })
   registerIpc({ restoreCheckpoint, undoRestore })
   void browserManager.replaceNodes(store.browsers()).catch(() => undefined)
@@ -1496,10 +2620,9 @@ app.whenReady().then(() => {
     console.error('Skipping orphan reap: could not enumerate all workspace terminals', error)
   }
 
-  // Boot PTYs for terminals restored from the saved workspace — through
-  // bootTerminal, so a pending copy preamble staged before the app quit is
-  // delivered on cold start too, not only on workspace switches.
-  for (const t of store.terminals()) bootTerminal(t)
+  // Terminals stay detached on cold start. Herdr keeps their processes alive;
+  // a settled semantic zoom acquires the local PTY mirror on demand. Working
+  // agents are observed through their session files without opening mirrors.
   reportWorkspaceBinding()
 
   app.on('activate', () => {
@@ -1519,15 +2642,44 @@ app.on('before-quit', (event) => {
   event.preventDefault()
   if (appShutdownStarted) return
   appShutdownStarted = true
+  // Before anything is torn down: an open dispatch is commissioned work whose
+  // outcome this process was the only witness to. Stamping it interrupted is
+  // what separates "we lost sight of it" from "it never happened" for whoever
+  // reads the ledger after the restart.
+  clearInterval(dispatchSweep)
+  clearInterval(sessionDrain)
+  // Latch FIRST: no new ask may register after the drain snapshot begins
+  // (Sol r11) — then interrupt commissioned work and retire the lease
+  // generations, firing the abort seam into everything still in flight.
+  beginShutdown()
+  dispatchService.interruptAll('app quit')
+  // Panes stay alive across a quit, but no herdr CLI child may survive it:
+  // retire every lease generation (fires the abort seam into active asks and
+  // deliveries) and await the bounded TERM→KILL settlements (Sol r10).
+  defaultProducerLease().retireAll()
   browserCast.shutdown()
   store.flush()
   events.flush()
   sessionSync.dispose()
+  latestWatch.dispose()
   turns.flushHistories()
   turns.disposeAll()
   ptys.disposeAll()
-  void browserManager
-    .shutdown()
+  // The bounded drain: asks, then every tracked herdr child, then in-flight
+  // folds with their directory debts — no CLI process and no unproven rename
+  // outlives the app (Sol r11).
+  void cancelAllAsks()
+    .catch(() => undefined)
+    .then(() => {
+      const mux = multiplexer()
+      return mux instanceof HerdrHostMultiplexer
+        ? mux.cancelAllHerdrOperations(4000)
+        : undefined
+    })
+    .catch(() => undefined)
+    .then(() => turnStore.drainFolds(2000))
+    .catch(() => undefined)
+    .then(() => browserManager.shutdown())
     .catch((error) => console.error('Headless browser shutdown failed:', error))
     .finally(() => {
       appShutdownComplete = true
@@ -1541,35 +2693,52 @@ function showNotification(message: string): void {
 
 function broadcast(): void {
   if (mainWindow && !mainWindow.webContents.isDestroyed()) {
-    mainWindow.webContents.send('workspace:state', store.state)
+    mainWindow.webContents.send('workspace:state', store.focusedState)
   }
 }
 
 function registerIpc(handlers: RestoreHandlers): void {
   store.on('change', broadcast)
 
-  // On workspace switch, tear down the outgoing PTYs and boot the incoming
-  // canvas's terminals. Only the active workspace holds live processes.
+  // A workspace switch used to be a teardown: detach every outgoing PTY, boot
+  // the incoming canvas, rebuild the browser runtime from scratch. That is the
+  // singleton showing through — focus deciding what exists.
+  //
+  // With sessions resident (step 2) a switch is a FOCUS CHANGE. The workspace
+  // you left keeps its live screens, so switching back costs nothing and the
+  // work you looked away from was never interrupted. Only what is not resident
+  // is torn down, which flag-off makes the outgoing workspace — today's
+  // behaviour exactly.
   store.on('switch', ({ previousTerminalIds }: { previousTerminalIds: string[] }) => {
-    // Detach (not kill): the outgoing workspace's tmux sessions stay alive so
-    // switching back reattaches them with their agents and scrollback intact.
-    for (const tid of previousTerminalIds) {
-      sessionSync.suspend(tid)
-      turns.untrack(tid)
-      ptys.detach(tid)
-    }
-    const mux = multiplexer()
-    mux?.beginAttachBatch?.()
-    try {
-      // Serial by design: each PTY exists before its pendingInject delivery.
-      // Herdr shares only its pane inventory inside this scope.
-      for (const t of store.terminals()) bootTerminal(t)
-      void browserManager.replaceNodes(store.browsers()).catch(() => undefined)
-      // The herdr workspace's chrome follows the active Cookrew workspace.
-      reportWorkspaceBinding()
-    } finally {
-      mux?.endAttachBatch?.()
-    }
+    // The DECISION lives in workspace-switch.ts and the EXECUTION in
+    // switch-runner.ts; this handler only connects them. Both were once one
+    // synchronous loop here, which is how a 16-terminal switch held the main
+    // thread — and therefore the companion HTTP server — for ~90 seconds.
+    const plan = planWorkspaceSwitch({
+      previousTerminalIds,
+      workspaceOfTerminal: (id) => ptys.workspaceOfTerminal(id),
+      isResident: (workspaceId) => store.resident().includes(workspaceId),
+      focusedTerminals: store.terminals(),
+      residentBrowsers: residentBrowsers()
+    })
+    // Fire-and-forget by necessity: 'switch' is an EventEmitter callback with
+    // nobody to await it.
+    //
+    // A boot that throws ABORTS THE REST OF THE SWITCH. The loop has no
+    // per-iteration catch, so the throw unwinds out of it: the remaining
+    // terminals are not booted, syncBrowsers and the chrome report are skipped,
+    // and it surfaces here as one logged line. What it can no longer do is
+    // strand the attach batch — the runner closes that in a finally — which is
+    // the part the synchronous loop got wrong.
+    //
+    // Whether a failed boot SHOULD abort the rest is a real question and not
+    // this commit's to answer: making it continue changes what a partially
+    // booted workspace looks like to every seat reading it, and wants its own
+    // test. Filed as a follow-up rather than slipped in between review and
+    // merge.
+    void switchRunner.run(plan).catch((error) => {
+      console.error('Workspace switch failed:', error)
+    })
   })
 
   // Push the workspace list to the renderer whenever it changes.
@@ -1582,9 +2751,77 @@ function registerIpc(handlers: RestoreHandlers): void {
   // Renderer resolved a ⌘W to "nothing left to close" → quit.
   ipcMain.on('app:quit', () => app.quit())
 
+  // ---- the owner's grant surface (owner-only IPC, never a route) ----
+  //
+  // Every handler goes through ownerOnly. "Owner-only IPC" is worth nothing if
+  // a page the app merely RENDERS can reach the channel — a browser card hosts
+  // whatever the owner browsed to, an install page comes from a registry, a
+  // preset can ship a URL. So the sender must BE the owner window's top frame,
+  // proved rather than assumed from the fact that IPC is not HTTP.
+  const ownerOnly =
+    <A extends unknown[], R>(op: (...args: A) => R) =>
+    (event: Electron.IpcMainInvokeEvent, ...args: A): R | { ok: false; reason: string } => {
+      if (!isOwnerSender(event.sender, event.senderFrame, mainWindow?.webContents)) {
+        console.error('[cookrew] grant refused: sender is not the owner window top frame')
+        return { ok: false, reason: 'not_owner' }
+      }
+      return op(...args)
+    }
+
+  ipcMain.handle(
+    'grant:enrol',
+    ownerOnly((workspaceId: string, sub: string, jwk: Record<string, unknown>) =>
+      ownerGrant.enrol(workspaceId, sub, jwk)
+    )
+  )
+  ipcMain.handle(
+    'grant:revoke',
+    ownerOnly((workspaceId: string, sub: string) => ownerGrant.revoke(workspaceId, sub))
+  )
+  ipcMain.handle(
+    'grant:export',
+    ownerOnly((workspaceId: string, nodeId: string, callers: string[]) =>
+      ownerGrant.exportAgent(workspaceId, nodeId, callers)
+    )
+  )
+  ipcMain.handle(
+    'grant:unexport',
+    ownerOnly((workspaceId: string, nodeId: string) => ownerGrant.unexport(workspaceId, nodeId))
+  )
+  // The deck's 10-second UNDO toast. A separate channel from enrol because
+  // undoing a revoke and admitting a new caller are different decisions, and
+  // collapsing them would let an undo quietly create someone.
+  ipcMain.handle(
+    'grant:restore',
+    ownerOnly((workspaceId: string, sub: string) => ownerGrant.restore(workspaceId, sub))
+  )
+  // READ paths, so the owner can see what they granted. Same ownership check:
+  // the roster of who may call your agents is not for a rendered page either.
+  //
+  // The ROSTER rather than the raw exports: the record's shape is not the
+  // question's, and the revoke ruling made "is anything running right now" a
+  // thing the surface has to be able to answer — a control that promises to
+  // stop calls already running is unusable if it cannot say whether any are.
+  ipcMain.handle(
+    'grant:list',
+    ownerOnly((workspaceId: string) =>
+      buildGrantRoster({
+        workspaceId,
+        enrolledIn: (id) => agentExports.enrolledIn(id),
+        revokedIn: (id) => agentExports.revokedIn(id),
+        exportsIn: (id) => agentExports.exportsIn(id),
+        callsIn: (id) => callsInFlight.listIn(id)
+      })
+    )
+  )
+
   ipcMain.handle('workspace:list', () => store.list())
   ipcMain.handle('workspace:create', (_e, name: string, dir: string, team?: string) =>
     team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir)
+  )
+  // Import a template as a session: one workspace, one orch terminal over HTTP.
+  ipcMain.handle('template:import', (_e, team: string, position?: { x: number; y: number }) =>
+    importTemplateAsSession(team, position)
   )
   ipcMain.handle('workspace:switch', (_e, id: string) => {
     switchWorkspace(id)
@@ -1593,7 +2830,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('workspace:rename', (_e, id: string, name: string) => {
     store.renameWorkspace(id, name)
     // The active workspace's new name is what the herdr workspace wears.
-    if (id === store.activeId) reportWorkspaceBinding()
+    if (id === store.focusedId) reportWorkspaceBinding()
     return store.list()
   })
   // Workspace v2: remove + multi-directory + per-terminal cwd + git.
@@ -1629,6 +2866,7 @@ function registerIpc(handlers: RestoreHandlers): void {
 
   // Turn/summary activity for the canvas cards.
   turns.on('activity', (activity) => {
+    lazyTerminals.reconsider(activity.terminalId)
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('terminal:activity', activity)
     }
@@ -1641,12 +2879,45 @@ function registerIpc(handlers: RestoreHandlers): void {
   // its work produced it. A terminal whose node has since gone (dismissed
   // between the reply and this tick) still reports — losing the sample would
   // bias the tail toward the agents that survive.
-  turns.on('turn', ({ terminalId, durationMs }: CompletedTurn) => {
-    const node = store.node(terminalId)
-    store.withOpContext({ actor: 'agent' }, () =>
-      store.recordEvent('turn.completed', terminalId, node?.name ?? terminalId, undefined, durationMs)
-    )
-  })
+  turns.on(
+    'turn',
+    ({ terminalId, durationMs, dispatchId, turnIndex, latencyReported, outcome }: CompletedTurn) => {
+      // One latency sample per exchange: an attached file-backed dispatch is
+      // observed by the scrape first (no dispatchId) and closed by the file
+      // path second — the second event carries latencyReported and must not
+      // land a duplicate row in the event log.
+      if (latencyReported !== true) {
+        const node = store.node(terminalId)
+        store.withOpContext({ actor: 'agent' }, () =>
+          store.recordEvent(
+            'turn.completed',
+            terminalId,
+            node?.name ?? terminalId,
+            turnDetails(dispatchId),
+            durationMs
+          )
+        )
+      }
+      // Close the dispatch this turn answered (v4 §3): submitted → running →
+      // done {turnIndex, reply}. The event names the ANSWERING record — a
+      // tail read would bill the follow-up prompt whenever the file closer
+      // fired past a tail-overtake (Sol r2).
+      if (dispatchId !== undefined) {
+        const history = turns.history(terminalId)
+        const completed =
+          turnIndex !== undefined
+            ? history.find((record) => record.index === turnIndex)
+            : history[history.length - 1]
+        dispatchService.completeTurn(dispatchId, {
+          turnIndex: completed?.index ?? 0,
+          ...(completed?.reply !== undefined ? { reply: completed.reply } : {}),
+          ...(outcome !== undefined ? { outcome } : {}),
+          // The answering identity survives rewinds; the ordinal is display.
+          ...(completed?.uuid !== undefined ? { uuid: completed.uuid } : {})
+        })
+      }
+    }
+  )
   ipcMain.handle('activity:list', () => turns.list())
 
   // Acknowledge-on-view: the renderer reports "user is viewing this
@@ -1670,6 +2941,17 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('trace:page', (_e, terminalId: string, request?: unknown) =>
     traces.page(terminalId, (request ?? {}) as Parameters<TraceReader['page']>[1])
   )
+  // T1 card preview (trace-perf-architecture): the LATEST checkpoint only, from
+  // a bounded tail read — no PTY, O(tail). A visible-but-unzoomed card asks this.
+  ipcMain.handle('trace:latest', (_e, terminalId: string) => traces.latestCheckpoint(terminalId))
+  // T4 push: a card subscribes while it shows a checkpoint; the file watch then
+  // nudges it (`trace:latest-changed`) on every append, no poll wait.
+  ipcMain.handle('trace:latest-watch', (_e, terminalId: string) => {
+    latestWatch.subscribe(terminalId)
+  })
+  ipcMain.handle('trace:latest-unwatch', (_e, terminalId: string) => {
+    latestWatch.unsubscribe(terminalId)
+  })
   // Observability event log: filtered history + counts + agent roster.
   ipcMain.handle('events:query', (_e, query) => events.query(query ?? {}))
   ipcMain.handle('events:count', (_e, query) => events.count(query ?? {}))
@@ -1689,7 +2971,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     forkTerminal(sourceId, turnIndex)
   )
 
-  ipcMain.handle('workspace:get', () => store.state)
+  ipcMain.handle('workspace:get', () => store.focusedState)
   ipcMain.handle('browser:interactive-enabled', () => interactiveBrowserEnabled())
   ipcMain.handle('browser:stream-token', () => desktopBrowserStreamToken)
 
@@ -1706,9 +2988,112 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('node:connect', (_e, aId: string, bId: string) => store.connectAcross(aId, bId))
   ipcMain.handle('node:disconnect', (_e, connId: string) => store.disconnect(connId))
 
-  ipcMain.handle('preset:list', () => PRESETS)
+  // Harness presets PLUS saved templates: a template is a terminal preset, so
+  // placing it imports the crew as one orch terminal. Templates last, so a
+  // built-in always wins a name clash (and createTerminal checks them last too).
+  ipcMain.handle('preset:list', () => [
+    ...PRESETS,
+    ...teams.list().map((t) => ({ name: t.name, command: `cookrew call · ${t.name}` }))
+  ])
 
   ipcMain.handle('terminal:create', (_e, opts: CreateTerminalOpts) => createTerminal(opts))
+
+  // ---- marketplace presets (§8): the dock's third chip family ----
+  // `preset:*` was already taken by the HARNESS presets above. These are a
+  // different list with a different shape, so they get their own namespace —
+  // reusing the channel threw on registration (Electron refuses a second
+  // handler) and took every handler after it down with it.
+  ipcMain.handle('preset:installed:list', () => presetStore.list())
+  /**
+   * §10's read path. Asked per terminal, because a pin belongs to a transcript
+   * and not to a workspace.
+   */
+  ipcMain.handle('pins:list', (_e, terminalId: string) => pinStore.list(terminalId))
+  /**
+   * R20 — the buyer's two answers to a key rotation.
+   *
+   * `seen` retires the SHEET and nothing else: the rotation itself stays, so
+   * the chip keeps saying KEY CHANGED until it is resolved. Once as a sheet,
+   * never once as a fact.
+   *
+   * `trust` moves the pin forward — and it can only ever confirm the rotation
+   * the client itself recorded. The key is checked against what is on disk
+   * rather than taken from the renderer, because a channel that accepted any
+   * key id would be a way to pin an attacker's key by IPC alone, which is
+   * precisely the decision the sheet exists to put in front of a person.
+   */
+  ipcMain.handle('preset:installed:rotation:seen', (_e, id: string) => {
+    if (!isPresetId(id)) throw new Error('not a preset id')
+    presetStore.markRotationSheetSeen(id)
+  })
+  ipcMain.handle('preset:installed:rotation:trust', (_e, id: string, newKeyId: string) => {
+    if (!isPresetId(id)) throw new Error('not a preset id')
+    const rotation = presetStore.rotationOf(id)
+    if (rotation === null || rotation.newKeyId !== newKeyId) {
+      throw new Error('no such rotation to trust')
+    }
+    presetStore.trustAuthorKey(id, newKeyId)
+  })
+  ipcMain.handle('preset:installed:uninstall', (_e, id: string) => {
+    // C1: the id crosses from the renderer and ends at a recursive delete.
+    // The store validates it too; this refuses at the boundary so a hostile
+    // string never reaches a filesystem call in the first place.
+    if (!isPresetId(id)) throw new Error('not a preset id')
+    presetStore.uninstall(id)
+  })
+  /**
+   * R2: the canvas click is the aimed confirm, so this both aims and commits.
+   *
+   * Both kinds place through the ordinary node-add path. A team used to be
+   * handed to copyTeam, which is workspace-to-workspace and validates
+   * nodeIds + intoWorkspaceId — so it threw on its first guard EVERY time, and
+   * an `as never` on the argument is what let that compile. Adding the planned
+   * nodes directly is also the only way `command` and `cwd` survive; forwarding
+   * {name, preset, position, orch} to createTerminal dropped both and fell back
+   * to a built-in preset whenever the name was not one of them.
+   */
+  ipcMain.handle(
+    'preset:installed:place',
+    async (_e, id: string, position: CanvasPosition, orch: boolean) => {
+      if (!isPresetId(id)) throw new Error('not a preset id')
+      // N4: THE GATE IS ENFORCED HERE, not in the renderer. The chip's click
+      // handler declining to place a locked preset is presentation; the channel
+      // is reachable without it, so a locked preset was placeable by anyone who
+      // could call the IPC. Refuse where the decision is authoritative.
+      if (presetStore.list().find((p) => p.id === id)?.entitled === false) {
+        throw new Error('preset is not entitled')
+      }
+      const stored = presetStore.read(id)
+      // Null covers absent, a blob that no longer matches its manifest, and a
+      // signature that does not verify against the key pinned at install.
+      if (stored === null) throw new Error('preset is missing or failed verification')
+      const snapshot = JSON.parse(stored.teamBytes.toString('utf8')) as TeamSnapshot
+      const plan = planPresetImport(snapshot, {
+        dirs: store.focusedState.dirs?.length ? store.focusedState.dirs : [store.focusedState.dir],
+        cutAt: Date.now(),
+        position,
+        manifestId: stored.manifest.id
+      })
+      const placed = plan.nodes.map((node) =>
+        // orch is the placer's choice for the agents being placed; notes and
+        // browsers have no such flag.
+        node.kind === 'terminal' ? ({ ...node, orch } as CanvasNode) : node
+      )
+      if (plan.kind === 'single') {
+        recordPins([addNode(placed[0])], plan.pin)
+        return
+      }
+      // N2: ONE write and ONE broadcast for a team. The add-then-connect loop
+      // cost a disk write and a state broadcast per node AND per cable — seven
+      // of each for a four-node preset — and left the canvas legible in
+      // between, so a paste arrived as a stutter of half-teams. This lands the
+      // whole team in a single patch; adoptLiveNode still runs per node
+      // afterwards, because spawning a PTY is inherently per-terminal.
+      const added = store.appendTeamToWorkspace(store.focusedId, placed, plan.connections)
+      for (const node of added) adoptLiveNode(node)
+      recordPins(added, plan.pin)
+    }
+  )
 
   // Team fork / team save / roles (contract in note team-fork-roles-spec-v1).
   ipcMain.handle('team:fork', (_e, spec: TeamForkSpec) => teamFork(spec))
@@ -1745,8 +3130,29 @@ function registerIpc(handlers: RestoreHandlers): void {
   )
 
   // Terminal stream bridging renderer xterm <-> PTY
+  const inputRefusalAnnounced = new Map<string, number>()
   ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {
-    ptys.get(terminalId)?.write(data)
+    const verdict = ptys.get(terminalId)?.write(data)
+    // A refused byte must be VISIBLE (Sol r8): silently vanishing keystrokes
+    // during a delivery window or a contaminated box read as a broken app.
+    // Announced through the ordinary event stream (toast layer + phone),
+    // throttled per terminal so held-down keys make one toast, not fifty.
+    if (verdict && verdict !== 'allow') {
+      const last = inputRefusalAnnounced.get(terminalId) ?? 0
+      if (Date.now() - last > 3000) {
+        inputRefusalAnnounced.set(terminalId, Date.now())
+        const node = store.node(terminalId)
+        store.withOpContext({ actor: 'agent' }, () =>
+          store.recordEvent(
+            'terminal.input-refused',
+            terminalId,
+            node?.name ?? terminalId,
+            turns.refusalReason(terminalId) ??
+              'a dispatch is being delivered — input refused for a moment'
+          )
+        )
+      }
+    }
   })
   ipcMain.on('pty:resize', (_e, terminalId: string, cols: number, rows: number) => {
     ptys.get(terminalId)?.resize(cols, rows)
@@ -1760,55 +3166,100 @@ function registerIpc(handlers: RestoreHandlers): void {
   })
   // One forwarder per terminal: React StrictMode double-mounts (and HMR
   // remounts) call attach repeatedly, and stacked listeners would duplicate
-  // every byte of output in the renderer.
-  const forwarders = new Map<string, (data: string) => void>()
-  /** Replay-frame forwarders, kept beside `forwarders` so detach drops both. */
-  const replayForwarders = new Map<string, (frame: string) => void>()
+  // every byte of output in the renderer. The binding owns the viewer lease so
+  // a renderer reload/crash releases it even when React cannot send pty:detach.
+  interface PtyForwarder {
+    session: PtySession
+    sender: Electron.WebContents
+    onData: (data: string) => void
+    onReplay: (frame: string) => void
+    onDestroyed: () => void
+  }
+  const forwarders = new Map<string, PtyForwarder>()
+  const dropForwarder = (
+    terminalId: string,
+    expected?: PtyForwarder,
+    releaseViewer = true
+  ): void => {
+    const binding = forwarders.get(terminalId)
+    if (!binding || (expected && binding !== expected)) return
+    binding.session.removeListener('data', binding.onData)
+    binding.session.removeListener('replay', binding.onReplay)
+    binding.sender.removeListener('destroyed', binding.onDestroyed)
+    forwarders.delete(terminalId)
+    if (releaseViewer) {
+      sessionSync.unsubscribe(terminalId)
+      lazyTerminals.release(terminalId)
+    }
+  }
   ipcMain.handle('pty:attach', (event, terminalId: string) => {
-    const session = ptys.get(terminalId)
-    if (!session) return false
     const previous = forwarders.get(terminalId)
-    if (previous) session.removeListener('data', previous)
-    const listener = (data: string): void => {
+    try {
+      const ready = previous
+        ? lazyTerminals.ensure(terminalId)
+        : lazyTerminals.acquire(terminalId)
+      if (!ready) return false
+    } catch (error) {
+      console.error(`Lazy terminal attach failed for '${terminalId}':`, error)
+      return false
+    }
+    const session = ptys.get(terminalId)
+    if (!session) {
+      if (!previous) lazyTerminals.release(terminalId)
+      return false
+    }
+    // Replacement keeps the existing viewer + transcript subscription while
+    // dropping both listeners and the old sender's destruction hook.
+    if (previous) dropForwarder(terminalId, previous, false)
+    let binding: PtyForwarder
+    const onData = (data: string): void => {
       // The window can be closed or reloaded while the PTY keeps emitting;
       // sending to a destroyed webContents throws "Object has been destroyed".
       if (event.sender.isDestroyed()) {
-        session.removeListener('data', listener)
-        forwarders.delete(terminalId)
+        dropForwarder(terminalId, binding)
         return
       }
       event.sender.send(`pty:data:${terminalId}`, data)
     }
-    forwarders.set(terminalId, listener)
-    session.on('data', listener)
     // A geometry change re-serializes the mirror; forward that frame to the
     // popout so it never keeps applying herdr's absolute-addressed deltas onto
     // a screen laid out at the previous size. Same listener lifetime as the
     // data forwarder — pty:detach drops both.
     const onReplay = (frame: string): void => {
-      if (event.sender.isDestroyed()) return
+      if (event.sender.isDestroyed()) {
+        dropForwarder(terminalId, binding)
+        return
+      }
       event.sender.send(`pty:data:${terminalId}`, frame)
     }
-    replayForwarders.set(terminalId, onReplay)
+    const onDestroyed = (): void => dropForwarder(terminalId, binding)
+    binding = { session, sender: event.sender, onData, onReplay, onDestroyed }
+    forwarders.set(terminalId, binding)
+    session.on('data', onData)
     session.on('replay', onReplay)
+    event.sender.once('destroyed', onDestroyed)
+    if (!previous) sessionSync.subscribe(terminalId)
     // Geometry BEFORE bytes: the frame's wrapping is baked in at the mirror's
     // columns, so a popout that paints it at its own width re-wraps every long
     // line. The renderer sizes its xterm from this, then sends the resize kick.
-    event.sender.send(`pty:hello:${terminalId}`, session.geometry())
-    // A faithful ANSI frame, not plain text — see PtySession.replayFrame.
-    event.sender.send(`pty:data:${terminalId}`, session.replayFrame())
+    try {
+      event.sender.send(`pty:hello:${terminalId}`, session.geometry())
+      // A faithful ANSI frame, not plain text — see PtySession.replayFrame.
+      event.sender.send(`pty:data:${terminalId}`, session.replayFrame())
+    } catch (error) {
+      dropForwarder(terminalId, binding)
+      console.error(`Terminal replay failed for '${terminalId}':`, error)
+      return false
+    }
     return true
   })
   // The popout detaches on close; without this the forwarder would keep
   // serializing every output chunk to a channel nobody listens on.
-  ipcMain.on('pty:detach', (_e, terminalId: string) => {
-    const listener = forwarders.get(terminalId)
-    const onReplay = replayForwarders.get(terminalId)
-    const session = ptys.get(terminalId)
-    if (listener && session) session.removeListener('data', listener)
-    if (onReplay && session) session.removeListener('replay', onReplay)
-    forwarders.delete(terminalId)
-    replayForwarders.delete(terminalId)
+  ipcMain.on('pty:detach', (event, terminalId: string) => {
+    const binding = forwarders.get(terminalId)
+    // A stale/destroyed renderer must not release a replacement window's view.
+    if (!binding || binding.sender !== event.sender) return
+    dropForwarder(terminalId, binding)
   })
 
   // Thumbnail frames from the renderer's browser capture loop (data URLs).

@@ -50,7 +50,8 @@ export function renderMobileHelp(input: MobileHelpInput): string {
       '',
       `⚠ The certificate does not cover: ${input.uncovered.join(', ')}`,
       '  Those URLs fail with a name mismatch the phone cannot bypass.',
-      '  Restart Cookrew to reissue the certificate with them included.'
+      '  Cookrew reissues within a minute and swaps it on the running server —',
+      '  run this again to confirm, and only restart if it persists.'
     )
   }
 

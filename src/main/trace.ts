@@ -24,9 +24,10 @@ import {
 import { claudeSessionFile } from './claude-fork'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { isCodexCommand, validCodexSessionRef } from './codex-bind'
-import { harnessFor } from './harness'
+import { harnessFor , type TurnFinality } from './harness'
 import { isPiCommand, piSessionHome } from './pi-bind'
 import type { SessionTurnParser } from './session-sync'
+import type { TurnRecord } from '../shared/turn'
 import type { WorkspaceStore } from './store'
 
 export type TraceSource = 'claude' | 'codex' | 'pi' | null
@@ -35,6 +36,13 @@ export type TraceSource = 'claude' | 'codex' | 'pi' | null
 export interface SessionWatchSpec {
   file: string
   parse: SessionTurnParser
+  /**
+   * The harness's declared closure story (see TurnFinality): 'native' can
+   * prove its tail record final, 'boundary' only ever finalizes a record
+   * when the NEXT one arrives — which a background dispatch never sends, so
+   * dispatch acceptance refuses 'boundary' file targets (A2 precondition).
+   */
+  finality: TurnFinality
 }
 
 export interface TraceReaderOptions {
@@ -90,6 +98,23 @@ export class TraceReader {
   /** Derived index memo, keyed by the blocks ARRAY IDENTITY — trace growth
    *  produces a fresh array (blocksOf re-ingests), invalidating for free. */
   private indexCache = new Map<string, { blocks: TraceBlock[]; entries: TraceIndexEntry[] }>()
+  /**
+   * T1 latest-checkpoint cache, stat-guarded. A canvas of mostly-idle agents
+   * polls latestCheckpoint on every card each tick; without this, an idle
+   * agent's unchanged file is re-opened, re-read and re-parsed every time. Keyed
+   * by terminal id → the file's identity (path+size+mtime) it was computed from;
+   * a matching stat returns the cached turn with NO open/read/parse, turning a
+   * fleet poll tick from N reads into N cheap stats.
+   */
+  private latestCache = new Map<
+    string,
+    {
+      file: string
+      size: number
+      mtimeMs: number
+      value: { prompt: string; reply: string; title?: string } | null
+    }
+  >()
 
   constructor(
     private store: WorkspaceStore,
@@ -249,7 +274,91 @@ export class TraceReader {
     const harness = harnessFor(node.command)
     if (!harness?.parseTurns || !harness.watchFile) return null
     const file = harness.watchFile(node, this.options)
-    return file ? { file, parse: harness.parseTurns } : null
+    return file ? { file, parse: harness.parseTurns, finality: harness.turnFinality } : null
+  }
+
+  /**
+   * The LATEST checkpoint only — perf tier T1 (trace-perf-architecture). A card
+   * that is merely VISIBLE needs the last turn, not the whole history and never
+   * a PTY. So this reads a bounded TAIL of the session JSONL and returns the
+   * last complete turn: prompt, reply, title. O(tail), not O(file); a 100 MB
+   * transcript costs the same as a 10 KB one.
+   *
+   * The tail can start mid-turn, so the parser's FIRST record may be partial —
+   * but the LAST record is always complete (the file ends at the newest
+   * append), and that is the only one a card shows. The absolute checkpoint
+   * COUNT is deliberately not computed here: it needs the whole file, which is
+   * the cost this tier exists to avoid. Callers that need a count pay for it on
+   * zoom (the full paged parse) or from a persisted counter.
+   */
+  async latestCheckpoint(
+    terminalId: string,
+    tailBytes = 256 * 1024
+  ): Promise<{ prompt: string; reply: string; title?: string } | null> {
+    const spec = this.watchSpec(terminalId)
+    if (!spec || !existsSync(spec.file)) return null
+    let size: number
+    let mtimeMs: number
+    try {
+      const st = await stat(spec.file)
+      size = st.size
+      mtimeMs = st.mtimeMs
+    } catch {
+      return null
+    }
+    // Stat-guard: an unchanged file (same path, size, mtime) returns the cached
+    // turn with no open/read/parse. This is the fleet-poll fast path — most
+    // agents are idle, so most ticks land here and cost only the stat above.
+    const cached = this.latestCache.get(terminalId)
+    if (cached && cached.file === spec.file && cached.size === size && cached.mtimeMs === mtimeMs) {
+      return cached.value
+    }
+    const remember = (
+      value: { prompt: string; reply: string; title?: string } | null
+    ): { prompt: string; reply: string; title?: string } | null => {
+      this.latestCache.set(terminalId, { file: spec.file, size, mtimeMs, value })
+      return value
+    }
+    // Escalate the window until it holds a COMPLETE turn. A turn only parses
+    // when the window contains its opening user line, so a single heavy turn
+    // (huge tool output — a session mid-flight can exceed 256 KB in one turn)
+    // reads empty from a small tail. Grow 256 KB → 1 MB → 4 MB → whole file
+    // until a record appears; the common case still pays one 256 KB read.
+    for (let window = tailBytes; ; window = Math.min(window * 4, size)) {
+      let records: TurnRecord[]
+      try {
+        const start = Math.max(0, size - window)
+        const len = Math.min(size, window)
+        const fh = await open(spec.file, 'r')
+        let text: string
+        try {
+          const buf = Buffer.alloc(len)
+          await fh.read(buf, 0, len, start)
+          text = buf.toString('utf8')
+        } finally {
+          await fh.close()
+        }
+        // Drop the first line only when we read from mid-file — it is almost
+        // certainly a partial JSONL record the parser cannot use. A window that
+        // reached the start of the file keeps every line.
+        const lines = text.split('\n')
+        const usable = start > 0 && lines.length > 1 ? lines.slice(1) : lines
+        records = spec.parse(usable)
+      } catch {
+        return null // a transient read error — do NOT cache, retry next tick
+      }
+      const last = records[records.length - 1]
+      if (last) {
+        return remember({
+          prompt: last.prompt,
+          reply: last.reply,
+          ...(last.title ? { title: last.title } : {})
+        })
+      }
+      // No complete turn in this window. If we have now read the whole file,
+      // there genuinely is none; otherwise grow and retry.
+      if (size - window <= 0) return remember(null)
+    }
   }
 
   /** Identity-keyed trace window for a terminal (see the contract note). */

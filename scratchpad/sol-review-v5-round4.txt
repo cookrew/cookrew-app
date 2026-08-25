@@ -1,0 +1,104 @@
+[P0] The local-input preemption hook does not establish one producer
+WHERE: src/main/pty.ts:400-404; src/main/turn-tracker.ts:990-1021,1042-1055
+CLAIM: Exact prompt bytes are not a sufficient dispatch identity because the claimed producer serialization is neither source-aware nor fail-closed.
+EVIDENCE: PtySession writes bytes to the child before emitting the input event that reaches preemptOnOwnerSubmit, so preemption cannot stop a competing submission; it only changes bookkeeping after delivery. The tracker then exempts any owner submission whose bytes equal the dispatch prompt because it guesses that it is the PTY fallback, although no source tag proves that. A real owner can submit the same text after arming and before asynchronous delivery, producing two identical turns. It also treats any matching tracked turn as answeredOnScreen without requiring phase === 'replied', so a different owner prompt submitted while the dispatch turn is still thinking/waiting is allowed to overwrite the live tracker state without preemption. Finally, onOwnerPreempt returns no result: if the interrupted-row append faults, the dispatch stamp stays armed while startTurn still opens the owner turn.
+FIX: Put the producer guard before proc.write, tag input with its source/generation, and exempt only the specific dispatch fallback write. Every actual owner submission, identical or not, must durably preempt before delivery is allowed; exempt an existing dispatch turn only when it is settled (`replied`) or has durable finality. Make the preemption result explicit and block/queue input if the terminal transition cannot commit.
+
+[P0] Idempotency aliases byte-distinct work
+WHERE: src/main/dispatch.ts:306,349-361,790-829
+CLAIM: The service's different-work guard hashes a lossy normalized prompt, so one idempotency key can silently replay a result for different code or instructions.
+EVIDENCE: promptFingerprint trims, lowercases, and collapses all whitespace before hashing. Briefs such as `build:\n\tmake all` and `BUILD: make all` are delivered as different bytes but have the same promptHash; reuse of the key returns the first dispatch with 200 instead of the promised 409. Case and indentation are semantic in source, shell, YAML, and Make recipes. dispatch() also trims caller input before delivery, so the ledger does not even fingerprint the original request bytes.
+FIX: Hash a canonical request envelope that preserves the exact delivered prompt bytes (and other work-defining fields). Use normalization only for non-authoritative screen landing. Reject a reused key whenever the exact request fingerprint differs.
+
+[P0] Sweep turns a proven durable outcome into an interruption
+WHERE: src/main/dispatch.ts:1185-1234; tests/dispatch-route.test.ts:817-842
+CLAIM: hasFinalAnswer detects billing-grade durable finality, but sweep uses that fact only to bypass the working-status spare and then records `interrupted`.
+EVIDENCE: A stale running record with a stuck `working` status is excluded until hasFinalAnswer returns true. It then enters `abandoned` and interruptEach commits `interrupted: no outcome within 10 minutes`. The test explicitly expects this inversion. The parser already proved the answering final record; timeout is weaker infrastructure evidence and must not replace its done/failed/interrupted outcome.
+FIX: Replace the boolean probe with the matching completion payload or invoke the authoritative file closer before timeout classification. Commit the parser record's outcome and turn identity; interrupt only when no matching durable terminal record exists.
+
+[P1] Terminal evidence precedence ranks state, not provenance
+WHERE: src/main/dispatch.ts:594-611,1317-1341
+CLAIM: EVIDENCE_STRENGTH cannot distinguish parser-native terminal evidence from infrastructure guesses that map to the same state.
+EVIDENCE: A parser-proven interrupted completion parks an `interrupted` row carrying turnIndex when persistence fails. A later backend-death/app interruption also ranks 1, so equal strength replaces the parked parser row; when the ledger recovers, the generic interruption lands without its direct turn evidence. State ordering is not an evidence lattice: provenance and answering-turn identity are the facts that make one verdict stronger.
+FIX: Store an evidence kind/source with every terminal intent and rank provenance first. A parser-native result must outrank infrastructure interruption even when both project to `interrupted`; equal evidence should be immutable or merge metadata rather than replace it.
+
+[P1] Owned open-turn facts can leak and cannot drive detached rotation
+WHERE: src/main/turn-tracker.ts:594-606,622-676,929-968; src/main/session-sync.ts:472-523; src/main/index.ts:813,1117-1129
+CLAIM: holdFact is now uncapped, but the fact's detection and cleanup lifecycle is incomplete, so it can retain a watch forever or survive removal/recovery.
+EVIDENCE: Detached inTurn() checks a dispatch stamp and herdr status but not openTurnFacts. A switched-away human turn with absent status therefore hard-holds its old file forever while never satisfying the onStale gate after a rotation. Backend death is wired only to dispatchService, so detached human-turn facts are not cleared when all panes disappear. Node removal calls unwatch/untrack but deliberately does not call clearHistory, the only public method that clears openTurnFacts; recovering the same id can inherit the stale fact. The comments claim removal/interruption clear it, but the production call sites do not.
+FIX: Include owned openTurnFacts in detached inTurn(), clear them on backend/session death and permanent removal through a dedicated lifecycle method, and make a failed stale-rebind decision resolve or explicitly transfer the fact rather than latch one failed probe forever. Test no-status rotation, backend death, and remove/recover.
+
+[P1] Dispatch admission still synchronously forks herdr
+WHERE: src/main/index.ts:725-733; src/main/herdr-host-multiplexer.ts:440-484; scratchpad/v5-export-concurrency.html:94-96,222-228
+CLAIM: The 202 path still performs a synchronous global pane inventory on Electron main despite comments saying session existence is cached.
+EVIDENCE: index.ts wires sessionExists directly to multiplexer().sessionExists. HerdrHostMultiplexer resolves that via paneFor -> panes -> readPanes unless an attach batch happens to be active, and readPanes runs the synchronous herdr CLI. Dispatch admission is not an attach batch or a rare lifecycle action. Concurrent POSTs therefore serialize process spawns before returning 202, contrary to A5/I6.
+FIX: Read admission existence from a generation-scoped pushed/cached pane inventory with a bounded freshness contract. Keep an asynchronous lifecycle revalidation in the delivery leg and add a zero-sync-spawn assertion around dispatch().
+
+[P1] The physical dispatch ledger remains unbounded
+WHERE: src/main/dispatch.ts:462-587,687-719,1378-1445
+CLAIM: Duplicate re-burial is fixed in memory, but every transition, expired record, and expired tombstone remains in one append-only file parsed synchronously forever.
+EVIDENCE: readDispatchRecords and readDispatchTombstones each read and JSON-parse the entire registry. prune deletes only in-memory entries; it never rewrites or rotates the file. Hydration's buried map prevents another tombstone append but still scans all historical lines twice on every restart. A commercial S5 workload therefore has unbounded startup time and disk growth despite bounded logical retention.
+FIX: Add crash-safe atomic compaction/checkpoints or bounded immutable segments with an indexed live tail. Preserve audit storage separately if required, and gate file size plus hydrate work across repeated lifetime churn.
+
+[P1] Latency dedupe still uses a five-second timestamp heuristic
+WHERE: src/main/turn-tracker.ts:71-96,313-325,750-811
+CLAIM: scrapeEmitted is multi-valued now, but its keys are not turn identities; a nearby different turn can suppress the dispatch sample.
+EVIDENCE: The set contains only startedAt numbers and consumeScrapeEmitted chooses the first value within DISPATCH_ARM_SLACK_MS (5 seconds). If the dispatch scrape was missed but an owner turn was observed within that window, file closure consumes the owner's timestamp and marks the dispatch event latencyReported. Multiple close starts also depend on insertion order rather than the durable record UUID. The comment calls startedAt an identity even though the code explicitly treats a 10-second-wide interval as equal.
+FIX: Reconcile scrape observations to the durable record UUID/session identity before dedupe, and retain unmatched observations by that identity. If live scrape lacks UUID, match an ordered queue using prompt plus a narrow monotonic generation, never a free timestamp window.
+
+[P1] Attempted-prompt registration can arrive after scrape closure
+WHERE: src/main/herdr-host-multiplexer.ts:1117-1139; src/main/dispatch.ts:1004-1060; src/main/turn-tracker.ts:646-684,826-854
+CLAIM: Recording attempted prompt bytes does not repair a scrape-only dispatch if the blocking native submit returns after the live tracker already settled the turn.
+EVIDENCE: herdr `agent prompt` blocks until the agent leaves working. noteDelivered is called only after promptAgent resolves (or after its timeout and post-captures). An attached scrape can therefore finish and emit first; when a collapsed/absent echo leaves its prompt null or truncated, it cannot consume the stamp. The later noteDispatchDelivered sees no thinking turn and stores bytes for a future turn, but no code replays closure for the turn that already ended. This is especially deterministic on a stalled/timeout result whose prompt actually landed.
+FIX: Register an explicit attempted-delivery fact before awaiting promptAgent, retract it only on positive non-delivery, and bind it to the armed generation. Alternatively replay the already-settled scrape turn when authoritative delivered bytes arrive, with one-shot identity checks.
+
+[P1] Restore and undo can mutate a background dispatched session
+WHERE: src/main/index.ts:1693-1702; src/main/restore.ts:29-35,96-171
+CLAIM: Checkpoint restore's busy guard sees only attached TurnTracker phase and has no dispatch reservation input, so it can kill/rebind a background agent with an armed dispatch.
+EVIDENCE: index.ts supplies phaseOf from turns.list(); a detached/background target is absent and returns null even while pendingDispatch and the file observer say work is open. restoreCheckpoint then passes both busy checks, writes a forked file, and killAndWait()s the CLI. Unlike cwd/remove/cut, this path neither refuses hasArmedDispatch nor calls interruptAgent/rebinds the observer as a non-continuation. Undo uses the same executor contract.
+FIX: Add dispatch/open-turn facts to the restore admission mutex and refuse restore/undo while armed, or durably interrupt the dispatch before any file/PTY mutation. Rebind SessionTurnSync explicitly after a successful restore. Test detached dispatch races at both pre-read and pre-kill checks.
+
+[P1] Dispatches persist a mutable ordinal instead of the answering turn identity
+WHERE: src/main/dispatch.ts:86-97,1124-1150; src/main/index.ts:2002-2016; src/shared/turn.ts:96-104
+CLAIM: A closed dispatch records only turnIndex even though rewinds and Pi branch switches can reuse that index for a different exchange.
+EVIDENCE: CompletedTurn identifies the candidate index, index.ts looks it up, and DispatchRecord persists the ordinal while dropping the reply. TurnRecord already has uuid specifically to survive index shifts/reuse. After rewind/re-root, the current turn ledger can hold different work at the stored index, so the comment "turnIndex says which turn" and any later receipt/audit lookup become false.
+FIX: Persist a stable answering identity (session generation plus TurnRecord.uuid, with a harness-specific stable fallback) alongside the display index. Resolve transcript/receipt references by identity and treat a missing historical record honestly.
+
+[P1] End-to-end observation is still O(total turns) per append
+WHERE: src/shared/session-turns.ts:298-304; src/shared/trace-blocks.ts:876-900; src/main/session-sync.ts:563-603; src/main/turn-tracker.ts:363-405
+CLAIM: Incremental byte reads and the Pi block builder do not satisfy I3 because every append still projects, merges, dedupes, and schedules the complete history.
+EVIDENCE: Codex/Pi records() calls turnRecordsOf(blocks()), which maps every block. Claude records() copies the entire array. SessionTurnSync passes that full array to replaceHistory on every growth; replaceHistory rebuilds UUID/index maps, maps every record, dedupes the whole list, and hands the whole list to TurnStore. Work therefore grows with conversation length even when entriesWalked increases by only two. The Pi ops counter measures only the inner builder and misses the dominant downstream O(N) work.
+FIX: Make accumulators emit record deltas plus explicit rewrite/branch-reset signals. Apply append/tail-update deltas in TurnTracker/TurnStore; reserve full-array replacement for shrink, rotation, or branch switch. Extend the gate through SessionTurnSync and TurnTracker, not just Pi parsing.
+
+[P2] The design still promises synchronous context-full refusal
+WHERE: scratchpad/v5-export-concurrency.html:188-200; src/main/dispatch.ts:951-967,980-997
+CLAIM: The protocol document says context >=98% returns 503 before accept, while implementation deliberately returns 202 and later closes the durable dispatch as failed/context-full.
+EVIDENCE: Context capture moved into deliver() after setImmediate so it cannot block acceptance. That is a defensible API choice, but it changes refusal ordering, whether a dispatch id exists, and how callers retry/bill. The design lifecycle was not amended with the code.
+FIX: Choose one contract and document/test it. Prefer the implemented asynchronous preflight state: 202 with a durable id followed by failed/context-full, explicitly excluded from charge, rather than claiming a synchronous 503.
+
+[P2] Codex abort-only turns can still report zero duration
+WHERE: src/shared/trace-blocks.ts:379-416; tests/turn-outcome.test.ts:24-63
+CLAIM: turn_aborted is terminal but never advances endedAt, so an abort with no prior reply/tool activity retains the prompt timestamp and emits durationMs=0.
+EVIDENCE: The task_complete-only path now adopts its marker timestamp when it is the only closing clock. The analogous abort path unconditionally preserves the previous clock. The fixture happens to include a tool event at +500ms, masking the no-activity shape; a prompt followed directly by turn_aborted at +2s remains a zero-duration interrupted turn.
+FIX: Preserve a real prior activity timestamp for ledger compatibility, but when endedAt still equals startedAt use the turn_aborted timestamp as the only available closing clock. Add the direct prompt -> abort fixture.
+
+R3-#1: FIXED - The product document now makes trusted-local-only an enforced boundary until per-instance OS isolation exists; the current slice exposes no untrusted consumer plane.
+R3-#2: PARTIAL - File closure compares exact delivered bytes and scans oldest-first, but the local producer invariant is false because fallback is inferred from equal text and preemption is late/phase-blind/fail-open.
+R3-#3: PARTIAL - A state-strength gate prevents done/failed from being overwritten by weaker states, but equal-state infrastructure interruption can still replace parser-native interruption and discard provenance.
+R3-#4: FIXED - Hydration reserves every open agent before attempting the restart interruption and retains that reservation through a ledger fault.
+R3-#5: FIXED - Non-owner consumer dispatch now requires native-file finality; focused scrape fallback is owner-only. S7 must apply the same capability at catalog publication.
+R3-#6: PARTIAL - Status no longer vetoes onQuiet completion, but the sweep path now converts the durable final answer it detects into a timeout interruption.
+R3-#7: FIXED - Codex turn_aborted and Pi aborted/error/length are final parser outcomes threaded through CompletedTurn and DispatchService.
+R3-#8: FIXED - Empty final records close with hasReply false rather than stranding.
+R3-#9: PARTIAL - Attempted bytes are registered, but only after blocking native submission returns; a scrape turn that already settled cannot be retroactively correlated.
+R3-#10: PARTIAL - Hard facts are separated from capped status holds, but detached inTurn omits them and backend/removal lifecycles do not reliably clear them.
+R3-#11: FIXED - The Pi active-branch builder extends linear appends incrementally and rebuilds correctly on re-root; the remaining whole-history projection cost is a separate end-to-end I3 finding.
+R3-#12: PARTIAL - Multiple observations no longer overwrite one terminal slot, but dedupe still equates timestamps within a five-second slack rather than using durable turn identity.
+R3-#13: PARTIAL - Hydration no longer re-buries a tombstoned record, but the physical append-only registry is never compacted and startup parsing remains unbounded.
+R3-#14: FIXED - The design now advertises one bounded 90-day idempotency contract and requires future receipts/disputes not to outlive it.
+R3-#15: PARTIAL - Context capture moved behind the 202, but admission's sessionExists remains a synchronous global herdr pane-list fork.
+R3-#16: FIXED - Harness declares the complete goldenClone capability and absence means unsupported; no S7 publication surface exists yet, so S7 must enforce the declared precondition rather than byte-copy.
+R3-#17: FIXED - Native-file dispatches carry observer grade, a fresh/rebound watch resets verification, and unmaterialized observers are interrupted after bounded probation.
+R3-#18: FIXED - task_complete-only Codex turns use the marker timestamp when no reply event supplied a closing clock.
+
+VERDICT: UNSOUND - P0:3 P1:9 P2:2

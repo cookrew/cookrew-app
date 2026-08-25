@@ -45,7 +45,7 @@ function setup(): {
   const store = new WorkspaceStore(
     path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-browser-scope-')), 'data')
   )
-  const home = store.activeId
+  const home = store.focusedId
   store.renameWorkspace(home, 'Home')
   const other = store.createWorkspace('Other', '/tmp').id
   const browserCommand = vi.fn(() => Promise.resolve('delegated'))

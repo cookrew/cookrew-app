@@ -17,6 +17,8 @@ import type { TerminalActivity, TurnRecord } from "../../shared/turn";
 import type { TurnMatch } from "../../shared/turn-search";
 import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
 import type { BoardRow, BoardSummary } from "../../shared/board";
+import type { InstalledPreset } from "../../shared/preset-chip";
+import type { VersionPinRecord } from "../../shared/version-pin";
 
 /**
  * GET /api/board's payload, mirrored here rather than imported from main —
@@ -38,6 +40,16 @@ export interface CookrewApi {
     name: string,
     dir: string,
     team?: string,
+  ) => Promise<WorkspaceMeta>;
+  /**
+   * Import a template as a SESSION: one workspace, one orch terminal that
+   * reaches the served crew over HTTP. Replaces "paste the whole team" — a
+   * caller enters through the orchestrator. `target` omitted = local import
+   * (the orch points at this app's own listener).
+   */
+  templateImport: (
+    team: string,
+    position?: { x: number; y: number },
   ) => Promise<WorkspaceMeta>;
   switchWorkspace: (id: string) => Promise<WorkspaceList>;
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>;
@@ -61,6 +73,40 @@ export interface CookrewApi {
   connectNodes: (a: string, b: string) => Promise<Connection>;
   disconnect: (connId: string) => Promise<void>;
   listPresets: () => Promise<{ name: string; command: string }[]>;
+  /**
+   * Marketplace presets installed on this machine — the dock's third chip
+   * family (§8). Named apart from `listPresets`, which is the HARNESS presets.
+   */
+  listInstalledPresets: () => Promise<InstalledPreset[]>;
+  /**
+   * Place an installed preset at a point on the canvas. R2: the canvas click
+   * IS the confirm, so this both aims and commits — a single agent lands as a
+   * plain terminal, a team pastes through copyTeam.
+   */
+  placeInstalledPreset: (
+    id: string,
+    position: { x: number; y: number },
+    orch: boolean,
+  ) => Promise<void>;
+  /** Remove a preset from the dock. Placed agents are untouched (A2). */
+  uninstallPreset: (id: string) => Promise<void>;
+  /**
+   * R20: the rotation sheet has been shown. Retires the SHEET only — the chip
+   * keeps its KEY CHANGED badge until the buyer trusts the new key or removes
+   * the preset, because a rotation announced once and then forgotten leaves a
+   * preset silently un-updatable.
+   */
+  markPresetRotationSeen: (id: string) => Promise<void>;
+  /**
+   * R20's one forward action. `newKeyId` must be the key main itself recorded
+   * as refused; main re-checks it rather than trusting what the sheet passes.
+   */
+  trustPresetAuthorKey: (id: string, newKeyId: string) => Promise<void>;
+  /**
+   * Version pins for a terminal (§10) — the rail's third marker class. Asked
+   * per terminal because a pin belongs to a transcript, not to a workspace.
+   */
+  listPins: (terminalId: string) => Promise<VersionPinRecord[]>;
   createTerminal: (opts: {
     name: string;
     preset: string;
@@ -181,6 +227,24 @@ export interface CookrewApi {
   listTraceMarkers?: (
     terminalId: string,
   ) => Promise<TraceBoundaryMarker[]>;
+  /**
+   * The LATEST checkpoint for a card, from a bounded tail read of the session
+   * file — no PTY, O(tail) (trace-perf-architecture T1). Lets a visible-but-
+   * unzoomed agent card show its last turn without spawning a mirror. Optional
+   * — feature-detect; the card falls back to "Ready" when absent.
+   */
+  latestCheckpoint?: (
+    terminalId: string,
+  ) => Promise<{ prompt: string; reply: string; title?: string } | null>;
+  /**
+   * Trace-perf T4 push: subscribe a card's session-file watch and listen for
+   * the change nudge, so the checkpoint refreshes the instant the file grows
+   * instead of on the poll. Electron-only; the phone card feature-detects and
+   * stays on the poll. `onLatestChanged` returns an unsubscribe.
+   */
+  watchLatest?: (terminalId: string) => Promise<void>;
+  unwatchLatest?: (terminalId: string) => Promise<void>;
+  onLatestChanged?: (cb: (terminalId: string) => void) => () => void;
   /** Fork a NEW agent card from a past turn; omit turnIndex for the latest. */
   forkTerminal: (sourceId: string, turnIndex?: number) => Promise<CanvasNode>;
   /** Fork a team into a NEW workspace per the spec (switches to it). */

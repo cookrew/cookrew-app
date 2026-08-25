@@ -149,6 +149,14 @@ export interface WorkspaceState {
 export interface WorkspaceMeta {
   id: string
   name: string
+  /**
+   * URL identity — the `<slug>` in https://<host>/<slug> (marketplace §11).
+   * Minted once from the name and FROZEN: a rename never moves it, because a
+   * slug is an address a paired phone has bookmarked and an exported agent is
+   * called at. Optional on the type for registries written before step 3;
+   * the store backfills one at load.
+   */
+  slug?: string
   /** Primary directory; kept === dirs[0] for back-compat. */
   dir: string
   /** Ordered working directories; dirs[0] is primary. */
@@ -238,6 +246,12 @@ export interface TeamForkSpec {
   choices: TeamForkChoice[]
   /** Fork the SAVED snapshot of this team instead of the live canvas. */
   fromSavedTeam?: string
+  /**
+   * Which live canvas the nodeIds belong to. Defaults to the focused one for
+   * callers that are a seat; the CLI passes the calling pane's workspace,
+   * which with sessions resident need not be the focused one (marketplace §11).
+   */
+  fromWorkspaceId?: string
   /** Directory set for the forked workspace; defaults to the source dirs. */
   dirs?: string[]
   /**
@@ -398,6 +412,17 @@ export interface RecoverResult {
    * the toast says so instead of pretending.
    */
   exact: boolean
+  /**
+   * True when the prior session was still HELD by another live claude process
+   * (a leftover background agent, a pane we cannot reach), so recovery had to
+   * branch off a copy of it — `--fork-session`.
+   *
+   * The context is intact; the session id is new. Worth saying out loud
+   * because the old id keeps living somewhere, and because the alternative
+   * this replaced was a pty that booted, printed one error and died while the
+   * card reported READY.
+   */
+  forked?: boolean
 }
 
 /** A reusable agent persona saved from a terminal node. */
@@ -434,8 +459,17 @@ export interface CliResponse {
   ok: boolean
   output?: string
   error?: string
+  /**
+   * Process exit code the CLI must leave with (delivery contract,
+   * shared/ask-outcome.ts). Absent = 1, the ordinary failure. Present when the
+   * caller's next action depends on WHICH failure it was: `unsubmitted` (3)
+   * wants a carriage return, `dropped` (4) wants the brief resent, and
+   * applying either remedy to the other case corrupts the input box.
+   */
+  exitCode?: number
 }
 
+export const DEFAULT_CANVAS_POSITION: CanvasPosition = { x: 240, y: 200 }
 export const DEFAULT_TERMINAL_SIZE: CanvasSize = { width: 640, height: 420 }
 export const DEFAULT_NOTE_SIZE: CanvasSize = { width: 280, height: 220 }
 export const DEFAULT_BROWSER_SIZE: CanvasSize = { width: 720, height: 560 }

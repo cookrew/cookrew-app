@@ -1,0 +1,53 @@
+<!doctype html><meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="bundle.css">
+<style>*{box-sizing:border-box}body{margin:0;background:#14110a}
+/* CAPTURE SCALE. Magpie measured every old reference band at 1120x416 while
+   the live rail renders 30x663 — a diff between those two can only ever be a
+   size mismatch. The stage is therefore the rail's REAL height, and the shots
+   are clipped to the rail's own 30px box. Height is overridable so a future
+   live measurement can move it without editing the generator. */
+#stage{position:relative;width:900px;height:var(--stage-h,663px);
+  /* The rail lives on the terminal's phosphor background in the product. The
+     app's own body rule (cream chrome) wins over the page's here, so the stage
+     states it explicitly — a reference captured on cream cannot be diffed
+     against a live rail on #14110a whatever the geometry does. */
+  background:var(--phos-bg,#14110a)}
+/* `#root` carries `background: var(--cream)` from the app's own stylesheet and
+   paints over the stage — which is why every reference came out on cream while
+   the live rail sits on the terminal's phosphor dark. A diff between those two
+   fails on background before it ever reaches the geometry. */
+#root{background:var(--phos-bg,#14110a);height:100%}</style>
+<div id="stage" style="--stage-h:663px"><div id="root"></div></div>
+<pre id="P"></pre>
+<script>window.__err=[];window.onerror=(m,u,l,c,e)=>{window.__err.push(String(e&&e.stack||m))};
+window.addEventListener('unhandledrejection',ev=>window.__err.push('rej:'+ev.reason));</script>
+<script src="bundle.js"></script>
+<script>
+setTimeout(() => {
+  const b = e => { if(!e) return null; const r = e.getBoundingClientRect();
+    if(!r.width && !r.height) return null;
+    return {cy:+(r.y+r.height/2).toFixed(2), left:+r.left.toFixed(1), right:+r.right.toFixed(1), w:+r.width.toFixed(1), h:+r.height.toFixed(1)} };
+  const rail = document.querySelector('.cr-ckpt-rail');
+  const rb = rail ? rail.getBoundingClientRect() : null;
+  const pins = [...document.querySelectorAll('.cr-ckpt-pin')].map(e => ({
+    v: e.dataset.version, text: e.textContent, bare: e.classList.contains('bare'),
+    current: e.classList.contains('current'), z: getComputedStyle(e).zIndex, ...b(e) }));
+  const tick = b(document.querySelector('.cr-ckpt-tick'));
+  const here = b(document.querySelector('.cr-ckpt-here'));
+  const focus = b(document.querySelector('.cr-ckpt-row.active'));
+  const pinV2 = pins.find(p => p.v === '2');
+  const co = [pinV2, tick].filter(Boolean).map(x => x.cy);
+  document.getElementById('P').textContent = JSON.stringify({
+    errors: (window.__err||[]).slice(0,2),
+    rootHTML: document.getElementById('root').innerHTML.slice(0,160),
+    railMounted: !!rail, railW: rb ? +rb.width.toFixed(1) : null,
+    pins,
+    pinsInsideRail: rb ? pins.every(p => p.left >= rb.left - 0.5 && p.right <= rb.right + 0.5) : null,
+    coLocatedSpreadPx: co.length > 1 ? +(Math.max(...co) - Math.min(...co)).toFixed(3) : null,
+    tick, here, focus,
+    f6PairDeltaPx: here && focus ? +Math.abs(here.cy - focus.cy).toFixed(3) : null
+  }, null, 1);
+}, 1200);
+</script>

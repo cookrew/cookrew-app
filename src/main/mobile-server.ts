@@ -1,17 +1,24 @@
 import http from 'node:http'
 import https from 'node:https'
+import type net from 'node:net'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
 import { MOBILE_PORT, MOBILE_HTTPS_PORT } from './mobile-ports'
+import {
+  nodeIdOfRoute,
+  nodeInScope,
+  resolveScopedRoute,
+  scopedRouteSupported
+} from './mobile-slug-route'
 import { agentStatus } from './herdr-agent-status'
-import { mobileEndpoints, type MobileEndpoint } from './mobile-endpoints'
+import { endpointCertHosts, mobileEndpoints, type MobileEndpoint } from './mobile-endpoints'
 import { loadOrCreatePairingToken, rotatePairingToken } from './pairing-token'
-import { readTailnet, tailnetCertHosts, type TailnetIdentity } from './tailscale'
-import { existsSync, readFileSync } from 'node:fs'
+import { readTailnet, type CertHosts, type TailnetIdentity } from './tailscale'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { powerSaveBlocker } from 'electron'
 import type { WorkspaceStore } from './store'
-import type { RecoverResult, RestoreResult } from '../shared/model'
+import type { RecoverResult, RestoreResult, WorkspaceState } from '../shared/model'
 import type { PtyManager } from './pty'
 import type { VoiceEngine } from './voice'
 import type { TurnTracker } from './turn-tracker'
@@ -19,12 +26,24 @@ import type { EventLog } from './event-log'
 import type { AgentRegistry } from './agent-registry'
 import type { TraceReader } from './trace'
 import type { BoardSources } from './board-index'
+import type { DispatchService } from './dispatch'
 import type { ThumbFrame } from './browser-thumb-cache'
 import { X509Certificate } from 'node:crypto'
-import { askTerminal } from './ask'
+import { askTerminal, ownerSubmit } from './ask'
+import {
+  DeliveryError,
+  deliverAndConfirm,
+  replyText,
+  terminalDeliveryDeps
+} from './ask-delivery'
+import { ASK_HTTP_STATUS, ASK_REMEDY } from '../shared/ask-outcome'
 import { ensureCert, missingHosts, sansOf } from './cert'
 import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps } from './mobile-api'
 import { readJson, respondJson } from './mobile-http'
+import { handleCallRoutes, type CallEndpointDeps } from './call-endpoints'
+import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
+import { sendBody } from './http-compress'
+import { rendererSourceFor, staleBuildNotice } from './renderer-choice'
 import { fetchRendererDevResource } from './renderer-dev-proxy'
 
 // Re-exported so existing importers keep their import path; the constants
@@ -66,6 +85,18 @@ export interface MobileServerDeps {
   traces: TraceReader
   /** Activity Board data plane; absent = /api/board answers 503. */
   board?: BoardSources
+  /** Attach-free dispatch engine (v4 §3); absent = the routes answer 503. */
+  dispatch?: DispatchService
+  /**
+   * TurnTracker.hasArmedDispatch, threaded to handleMobileApi: the /input
+   * and /ask producers refuse 409 while a dispatch stamp is armed on the
+   * terminal, so HTTP producers are serialized against in-flight dispatches.
+   */
+  hasArmedDispatch?: (terminalId: string) => boolean
+  acquireTerminalView?: (terminalId: string) => boolean
+  releaseTerminalView?: (terminalId: string) => void
+  subscribeTerminal?: (terminalId: string) => void
+  unsubscribeTerminal?: (terminalId: string) => void
   recoverAgent: (id: string) => RecoverResult
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
   undoRestore: (id: string) => Promise<RestoreResult>
@@ -77,6 +108,19 @@ export interface MobileServerDeps {
   browserThumb: (browserId: string) => ThumbFrame | undefined
   /** Whether browser nodes are backed by the node-owned headless runtime. */
   interactiveBrowserEnabled: () => boolean
+  /**
+   * Whether workspace sessions are multi-instance. Gates slug routing: off,
+   * /<slug>/... is not a route and every path keeps its existing meaning.
+   */
+  multiInstance: () => boolean
+  /**
+   * The internet gate (§9 · ④). ABSENT means no agent in this app is callable
+   * over the internet and the routes do not exist — a 404, not a 501, because
+   * "nothing is exported" is a true statement about this app rather than a
+   * missing implementation. Nothing else in this server consults it, and it
+   * consults nothing else in this server.
+   */
+  calls?: CallEndpointDeps
   /**
    * A phone polled /thumb. Awaited, because with headless browsers this is
    * what TAKES the picture (the desktop renderer no longer owns the page);
@@ -92,6 +136,11 @@ export interface MobileServerDeps {
   rendererDir: string
   /** electron-vite renderer URL; proxied to phones in development. */
   rendererDevUrl?: string
+  /**
+   * Renderer sources, used only to date the built bundle against them so a
+   * phone served the build can be told it is behind. Absent = no notice.
+   */
+  rendererSrcDir?: string
   /** Override the pairing token (tests); a fresh one is minted per run. */
   pairingToken?: string
   /**
@@ -147,25 +196,121 @@ export function startMobileServer(deps: MobileServerDeps): void {
   // secure context, which the Web Speech / mic APIs require. The tailnet
   // address and MagicDNS name go in the SAN list too — without them the one
   // endpoint that works away from home is the one the phone refuses to load.
-  const tailnet = refreshTailnet()
-  const tailnetHosts = tailnetCertHosts(tailnet)
-  const cert = ensureCert({
-    ips: [...new Set([...localAddresses(), ...tailnetHosts.ips])],
-    dnsNames: tailnetHosts.dnsNames
-  })
+  const cert = ensureCert(advertisedCertHosts())
   if (cert) {
     certSans = sansOf(new X509Certificate(cert.cert).subjectAltName)
     const secure = https.createServer({ key: cert.key, cert: cert.cert }, requestHandler)
-    secure.on('listening', () => {
+    attachUpgrade(secure)
+    // The TLS server does not bind the port itself — the gate does, and hands
+    // it the connections that are actually TLS. See tls-port-gate.ts: a phone
+    // that types the URL without `https://` otherwise gets a blank page and
+    // zero bytes back, which is indistinguishable from the app being down.
+    const gate = createTlsPortGate({ secure, plain: httpsRedirector() })
+    gate.on('listening', () => {
       httpsReady = true
     })
-    attachUpgrade(secure)
-    listenWithRetry(secure, MOBILE_HTTPS_PORT)
+    listenWithRetry(gate, MOBILE_HTTPS_PORT)
+    watchTailnetCert(secure)
   }
 }
 
-function listenWithRetry(server: http.Server | https.Server, port: number): void {
+/**
+ * Answers plaintext requests on the TLS port with a redirect to the same URL
+ * over https — including the `?token=` the pairing URL carries, so a mistyped
+ * scheme costs a round trip rather than a re-pair.
+ */
+function httpsRedirector(): http.Server {
+  return http.createServer((request, response) => {
+    const location = httpsRedirectTarget({
+      hostHeader: request.headers.host,
+      target: request.url,
+      localAddress: request.socket.localAddress,
+      advertisedHosts: mobileEndpointList().map((endpoint) => endpoint.host),
+      port: MOBILE_HTTPS_PORT
+    })
+    if (!location) {
+      respondJson(response, 400, { error: 'This port speaks HTTPS — reconnect with https://' })
+      return
+    }
+    // Temporary and uncached: this is a courtesy for a mistyped scheme, not a
+    // fact about the port that a browser should remember.
+    response.writeHead(307, { location, 'cache-control': 'no-store' })
+    response.end()
+  })
+}
+
+/**
+ * Every host we hand out, as a cert requirement. One source for both, so the
+ * cert can never fail to cover a URL the desktop just printed.
+ */
+function advertisedCertHosts(): CertHosts {
+  return endpointCertHosts(
+    mobileEndpoints({
+      addresses: localAddresses(),
+      tailnet: refreshTailnet(),
+      // Neither affects which HOSTS are advertised, only how they are spelled.
+      secure: false,
+      token: null
+    })
+  )
+}
+
+/**
+ * How often to ask whether the tailnet has appeared. Tailscale is a launch
+ * agent and routinely finishes coming up after the app does; a minute is far
+ * below the "pick up the phone and it fails" timescale and costs one short
+ * `tailscale status` fork.
+ */
+const TAILNET_WATCH_MS = 60_000
+
+/**
+ * Re-issue the cert IN PLACE when the tailnet turns up after startup.
+ *
+ * The old code read Tailscale exactly once, at boot. Start Cookrew before
+ * Tailscale finishes connecting — the ordinary case, since both are launch
+ * agents — and the cert had no tailnet SAN for the rest of the run, while the
+ * URL list (which re-reads on a 15s TTL) cheerfully advertised the tailnet
+ * address anyway. The phone got a name mismatch on the only endpoint that
+ * works off the LAN, and Wi-Fi looked like the only thing that ever worked.
+ *
+ * `setSecureContext` swaps the cert on the RUNNING listener: new handshakes
+ * get the new cert and every open SSE stream survives, so a phone that is
+ * already connected is not knocked off to fix one that is not yet.
+ */
+function watchTailnetCert(secure: https.Server): void {
+  const timer = setInterval(() => {
+    // Past the TTL deliberately: this IS the poll for "has Tailscale come up".
+    tailnetCache.readAt = 0
+    const hosts = advertisedCertHosts()
+    const missing = missingHosts(certSans, hosts)
+    if (missing.length === 0) return
+    const reissued = ensureCert(hosts)
+    if (!reissued) return
+    certSans = sansOf(new X509Certificate(reissued.cert).subjectAltName)
+    secure.setSecureContext({ key: reissued.key, cert: reissued.cert })
+    console.error(`Mobile cert reissued for ${missing.join(', ')} — no restart needed`)
+  }, TAILNET_WATCH_MS)
+  timer.unref()
+}
+
+/**
+ * Bind both address families with one socket. `::` with ipv6Only off accepts
+ * IPv4 as well (as ::ffff:… mapped peers), and nothing here reads the peer
+ * address, so the mapping is invisible to every route.
+ *
+ * `0.0.0.0` alone was IPv4-only, which made the tailnet IPv6 URL — advertised
+ * by mobileEndpoints and covered by the cert — answer ECONNREFUSED. That is
+ * the worst kind of endpoint: printed, trusted, and dead. It matters most on
+ * exactly the network the user is complaining about, since a phone on a
+ * v6-only carrier reaches the v6 address first.
+ */
+function listenWithRetry(server: net.Server, port: number): void {
   let retries = 0
+  let dualStack = true
+  const bind = (): void => {
+    if (dualStack) server.listen({ port, host: '::', ipv6Only: false })
+    else server.listen({ port, host: '0.0.0.0' })
+  }
   server.on('error', (error: NodeJS.ErrnoException) => {
     if (error.code === 'EADDRINUSE') {
       // Another (usually outgoing) app instance still holds the port — keep
@@ -176,12 +321,18 @@ function listenWithRetry(server: http.Server | https.Server, port: number): void
       if (retries % 10 === 1) {
         console.error(`Mobile port :${port} in use — retrying every 3s (attempt ${retries})`)
       }
-      setTimeout(() => server.listen(port, '0.0.0.0'), 3000)
+      setTimeout(bind, 3000)
+    } else if (dualStack) {
+      // A host with IPv6 disabled outright. Fall back rather than leaving the
+      // companion unreachable on both families.
+      dualStack = false
+      console.error(`Mobile port :${port} could not bind IPv6 (${error.code}) — IPv4 only`)
+      bind()
     } else {
       console.error(`Mobile server error on :${port}:`, error)
     }
   })
-  server.listen(port, '0.0.0.0')
+  bind()
 }
 
 function localAddresses(): string[] {
@@ -261,7 +412,28 @@ export function uncoveredCertHosts(): string[] {
  * the IPC bridge for remote-api.ts. Also pins the viewport so browser
  * pinch-zoom doesn't fight the canvas's own pinch gesture.
  */
-const REMOTE_BOOT = `<script>
+/**
+ * Boot script injected into the renderer index served to phones.
+ *
+ * `slug` is the workspace this client is FOR (marketplace §11 step 3). The
+ * bundle issues root-absolute /api/... requests, so without it a client loaded
+ * at /playground would read and write the FOCUSED canvas under a URL naming a
+ * different workspace — which is why / and /index.html were refused under a
+ * slug until this existed. remote-api.ts prefixes every request with it.
+ *
+ * Encoded, not interpolated raw: a slug reaches this from a URL path, and a
+ * value containing `</script>` would break out of the tag. JSON.stringify
+ * alone is NOT enough — it escapes quotes and backslashes but leaves `<` and
+ * `/` untouched, so the closing tag survives it. `<` is escaped to \u003c as
+ * well, which no JS parser cares about and no HTML parser can mistake for a
+ * tag.
+ *
+ * The route splitter already allow-lists the minted slug shape, so this is the
+ * second of two locks rather than the only one — but a lock that only works
+ * because of the other lock is not a second lock.
+ */
+export const remoteBoot = (slug: string | null): string => `<script>
+window.COOKREW_SLUG = ${JSON.stringify(slug ?? '').replace(/</g, '\\u003c')}
 window.COOKREW_MOBILE = 1
 document.addEventListener('DOMContentLoaded', () => {
   document.body.classList.add('cookrew-mobile')
@@ -284,20 +456,83 @@ const STATIC_MIME: Record<string, string> = {
   '.ttf': 'font/ttf'
 }
 
+/**
+ * A banner the phone can read, drawn before any script runs.
+ *
+ * The build served to a tailnet peer may be older than the source. Saying so
+ * on the DESKTOP would be useless — the person looking at the stale UI is
+ * holding a phone. It sits above the app and is dismissible.
+ */
+function staleBanner(notice: string | null): string {
+  if (!notice) return ''
+  return (
+    '<div id="cookrew-stale" style="position:fixed;inset:0 0 auto 0;z-index:99999;' +
+    'background:#4a3a12;color:#f5e6c8;font:12px/1.5 -apple-system,sans-serif;' +
+    'padding:8px 12px" onclick="this.remove()">' +
+    notice.replace(/[<&]/g, (c) => (c === '<' ? '&lt;' : '&amp;')) +
+    '</div>'
+  )
+}
+
+/** Newest mtime under a directory tree, or null when it cannot be read. */
+function newestMtime(dir: string, depth = 4): Date | null {
+  let newest: Date | null = null
+  try {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const child = path.join(dir, entry.name)
+      const at = entry.isDirectory()
+        ? depth > 0
+          ? newestMtime(child, depth - 1)
+          : null
+        : statSync(child).mtime
+      if (at && (!newest || at > newest)) newest = at
+    }
+  } catch {
+    return newest
+  }
+  return newest
+}
+
+/** Whether the built bundle exists, and how far behind the source it is. */
+function builtRenderer(deps: MobileServerDeps): { index: string; notice: string | null } | null {
+  const index = path.join(deps.rendererDir, 'index.html')
+  if (!existsSync(index)) return null
+  // Only meaningful while a dev server is running; a packaged app has no
+  // source tree to be behind.
+  const notice = deps.rendererDevUrl
+    ? staleBuildNotice(statSync(index).mtime, newestMtime(deps.rendererSrcDir ?? ''))
+    : null
+  return { index, notice }
+}
+
 /** Serve the built renderer index with the remote-mode marker injected. */
-function serveRendererIndex(response: http.ServerResponse, deps: MobileServerDeps): boolean {
-  const indexPath = path.join(deps.rendererDir, 'index.html')
-  if (!existsSync(indexPath)) return false
-  const html = readFileSync(indexPath, 'utf8').replace('<head>', `<head>${REMOTE_BOOT}`)
+function serveRendererIndex(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  deps: MobileServerDeps,
+  slug: string | null
+): boolean {
+  const built = builtRenderer(deps)
+  if (!built) return false
+  const html = readFileSync(built.index, 'utf8').replace(
+    '<head>',
+    `<head>${remoteBoot(slug)}${staleBanner(built.notice)}`
+  )
   // no-cache: assets are hash-named, but a cached index.html would keep
   // phones pinned to a stale bundle across app updates.
-  response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' })
-  response.end(html)
+  sendBody(
+    response,
+    200,
+    { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' },
+    Buffer.from(html),
+    request.headers['accept-encoding']
+  )
   return true
 }
 
 /** Static assets of the renderer bundle, with a path-traversal guard. */
 function serveRendererAsset(
+  request: http.IncomingMessage,
   response: http.ServerResponse,
   deps: MobileServerDeps,
   pathname: string
@@ -307,17 +542,35 @@ function serveRendererAsset(
   if (!file.startsWith(root + path.sep) || !existsSync(file)) return false
   const mime = STATIC_MIME[path.extname(file).toLowerCase()]
   if (!mime) return false
-  response.writeHead(200, { 'content-type': mime, 'cache-control': 'no-cache' })
-  response.end(readFileSync(file))
+  // Bundle assets carry a content hash in the name, so the answer can never
+  // change under that URL — let the phone keep it instead of re-fetching a
+  // megabyte of JavaScript over a relay on every reload.
+  const immutable = pathname.startsWith('/assets/')
+  sendBody(
+    response,
+    200,
+    {
+      'content-type': mime,
+      'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache'
+    },
+    readFileSync(file),
+    request.headers['accept-encoding'],
+    // Safe to cache the compressed copy only because the name IS the content
+    // hash — brotli on the 1.6 MB bundle costs 25 ms of main-process time,
+    // which is a visible stall if it happens per request.
+    immutable ? { cacheKey: pathname } : {}
+  )
   return true
 }
 
 /** Serve the current Vite renderer through the phone's companion origin. */
 async function serveRendererDev(
+  request: http.IncomingMessage,
   response: http.ServerResponse,
   deps: MobileServerDeps,
   url: URL,
-  injectRemoteBoot = false
+  injectRemoteBoot = false,
+  slug: string | null = null
 ): Promise<boolean> {
   if (!deps.rendererDevUrl) return false
   const resource = await fetchRendererDevResource(
@@ -327,14 +580,29 @@ async function serveRendererDev(
   )
   if (!resource) return false
   const body = injectRemoteBoot
-    ? Buffer.from(resource.body.toString('utf8').replace('<head>', `<head>${REMOTE_BOOT}`))
+    ? Buffer.from(resource.body.toString('utf8').replace('<head>', `<head>${remoteBoot(slug)}`))
     : resource.body
-  response.writeHead(200, {
-    'content-type': resource.contentType,
-    'cache-control': 'no-cache'
-  })
-  response.end(body)
+  sendBody(
+    response,
+    200,
+    { 'content-type': resource.contentType, 'cache-control': 'no-cache' },
+    body,
+    request.headers['accept-encoding']
+  )
   return true
+}
+
+/**
+ * Where THIS client's renderer comes from. A tailnet peer gets the build; the
+ * LAN and loopback keep Vite's live graph. See renderer-choice.ts — the whole
+ * reason is that 159 dependent requests do not survive a DERP relay.
+ */
+function rendererSource(request: http.IncomingMessage, deps: MobileServerDeps): 'dev' | 'built' {
+  return rendererSourceFor({
+    remoteAddress: request.socket.remoteAddress,
+    devAvailable: !!deps.rendererDevUrl,
+    builtAvailable: existsSync(path.join(deps.rendererDir, 'index.html'))
+  })
 }
 
 async function handle(
@@ -343,6 +611,79 @@ async function handle(
   deps: MobileServerDeps
 ): Promise<void> {
   const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
+
+  // Step 3: /<slug>/... addresses ONE workspace session. The path is rewritten
+  // to what the existing handlers expect, and `scope` carries which session
+  // they are answering for. Unslugged paths keep their meaning exactly — bound
+  // to the focused session — because every paired phone has a bookmark to /.
+  //
+  // An unknown slug is 404, never a fall back to focus: silently serving a
+  // different workspace than the URL names is the confusion slugs exist to end.
+  //
+  // GATED. Flag off, a slug is not a route at all and the path is served
+  // exactly as it always was — the whole surface, unchanged, for every paired
+  // phone. Flag on, a slug scopes the request to one workspace session.
+  const route = deps.multiInstance()
+    ? resolveScopedRoute(url.pathname, (slug) => deps.store.bySlug(slug)?.id)
+    : ({ kind: 'unscoped', pathname: url.pathname } as const)
+  if (route.kind === 'unknown-slug') {
+    respondJson(response, 404, { error: `No workspace at /${route.slug}` })
+    return
+  }
+  const scope = route.kind === 'scoped' ? route.workspaceId : null
+  /** The slug this client was loaded at; '' at the unslugged root. */
+  const servedSlug = route.kind === 'scoped' ? route.slug : null
+  url.pathname = route.pathname
+
+  if (scope !== null) {
+    // FAIL CLOSED. Most of mobile-api still answers for the focused session
+    // whatever the path says, so a slug may only reach the routes proven to
+    // honour it. A wrong answer that looks right is worse than a refusal the
+    // caller can see — see scopedRouteSupported.
+    if (!scopedRouteSupported(url.pathname)) {
+      respondJson(response, 501, {
+        error: 'This route is not workspace-scoped yet — use the unslugged path',
+        route: url.pathname
+      })
+      return
+    }
+    // One check for every scoped node route, so a new one cannot forget it.
+    const nodeId = nodeIdOfRoute(url.pathname)
+    if (nodeId !== null && !nodeInScope(scope, deps.store.ownerOf(nodeId))) {
+      // 404, not 403: a scoped URL must not confirm that nodes exist outside it.
+      respondJson(response, 404, { error: 'Not in this workspace' })
+      return
+    }
+  }
+  /**
+   * THE INTERNET GATE (§9, §11 · ④), mounted per workspace session.
+   *
+   * FIRST, and deliberately ahead of handleMobileApi. Two reasons, and both
+   * would be bugs if this sat below it:
+   *
+   *  1. The pairing gate (C1) is the LAN tier's credential. An internet caller
+   *     holds a call credential and no pairing token, so a call route behind C1
+   *     would demand the very thing §9 exists to replace — "the internet tier
+   *     swaps pairing token → passkey token", not "in addition to".
+   *  2. C1 lets everything through when no pairing token is configured. A route
+   *     below it would inherit that escape. Mounted here, it cannot: the only
+   *     thing that opens this route is a credential this gate verified.
+   *
+   * So the two gates are independent, and this one never asks what the other
+   * decided, never reads the pairing token, and never looks at which listener
+   * the bytes arrived on — the mobile listener binds 0.0.0.0, so the LAN and
+   * the internet are the same socket and a listener tells you nothing.
+   *
+   * `scope === null` is the whole guard for unslugged paths: an exported agent
+   * is addressable because the WORKSPACE is, so a call that named no workspace
+   * has no focused-session reading. It falls through to the 404 at the bottom.
+   */
+  if (deps.calls && scope !== null) {
+    if (await handleCallRoutes(request, response, url, deps.calls, scope)) return
+  }
+  /** The workspace this request is answering for. */
+  const scopedId = scope ?? deps.store.focusedId
+  const scopedState = (): WorkspaceState => deps.store.workspaceState(scopedId)
   /**
    * The renderer bundle is the phone client. When it is missing, say so
    * plainly rather than serving something else that looks like the app — a
@@ -363,16 +704,15 @@ async function handle(
 
   if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
     // Dev uses Vite's current transforms; packaged/preview builds use out/.
-    if (await serveRendererDev(response, deps, url, true)) return
-    if (!serveRendererIndex(response, deps)) rendererMissing()
+    // A tailnet peer is served the build instead — the live graph is 159
+    // dependent requests, which a relayed link never finishes.
+    if (rendererSource(request, deps) === 'dev') {
+      if (await serveRendererDev(request, response, deps, url, true, servedSlug)) return
+    }
+    if (!serveRendererIndex(request, response, deps, servedSlug)) rendererMissing()
     return
   }
 
-
-  if (request.method === 'GET' && url.pathname === '/api/browser/capabilities') {
-    respondJson(response, 200, { interactive: deps.interactiveBrowserEnabled() })
-    return
-  }
 
   // Renderer bundle + full remote API (consumed by remote-api.ts).
   // Hand the API the RESOLVED credentials, not the caller's optional ones.
@@ -389,18 +729,47 @@ async function handle(
   // in-process embedder can do.
   const authed = {
     ...deps,
+    // The resolved workspace travels WITH the request into the API layer,
+    // rather than each handler re-deriving it (or, as before, not deriving it
+    // at all and answering for focus).
+    scope,
+    // Trace-perf T1: the phone card's latest checkpoint, off the TraceReader
+    // this server already holds — tail-read, no PTY.
+    latestCheckpoint: (terminalId: string) => deps.traces.latestCheckpoint(terminalId),
     pairingToken: activePairingToken ?? deps.pairingToken,
     wallToken: activeWallToken ?? deps.wallToken
   }
   if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return
 
+  // MOVED BELOW THE DELEGATION, and that is the whole change to it.
+  //
+  // It used to answer ABOVE handleMobileApi, which meant it was the one /api
+  // route that never reached the C1 choke point at all — not "open because
+  // reads were open", but structurally out of the gate's reach. It leaks
+  // little on its own (a feature flag), and that is exactly why it is worth
+  // moving rather than gating in place: a second copy of the auth check here
+  // is a second thing to keep in step, and one gate in one place is the
+  // property that made the read hole findable in the first place.
+  if (request.method === 'GET' && url.pathname === '/api/browser/capabilities') {
+    respondJson(response, 200, { interactive: deps.interactiveBrowserEnabled() })
+    return
+  }
+
   if (request.method === 'GET' && url.pathname === '/api/state') {
+    // Activities are tracked globally by terminal id, so an unfiltered map
+    // leaks every OTHER workspace's agents into a scoped canvas — the node
+    // list is scoped but the activity map was not, which is the same
+    // wrong-answer-looks-right shape the scope check exists to stop.
+    const scopedNodeIds = new Set(scopedState().nodes.map((node) => node.id))
     const activities = Object.fromEntries(
-      deps.turns.list().map((activity) => [activity.terminalId, activity])
+      deps.turns
+        .list()
+        .filter((activity) => scope === null || scopedNodeIds.has(activity.terminalId))
+        .map((activity) => [activity.terminalId, activity])
     )
     // Git-enriched like /api/workspace (same coalescing cache), so the lite
     // client's git chips light up too — terminals carry node.git.
-    const enriched = await enrichStateWithGit(deps.store.state, deps.ops.gitInfo)
+    const enriched = await enrichStateWithGit(scopedState(), deps.ops.gitInfo)
     respondJson(response, 200, {
       workspace: enriched.name,
       // The full canvas — the mobile client mirrors the desktop layout, so
@@ -473,13 +842,52 @@ async function handle(
       respondJson(response, 400, { error: 'Missing text' })
       return
     }
+    // Producer serialization: mobile-api's 409 while a dispatch stamp is
+    // armed ran BEFORE this handler, but it is a fast-path refusal only, not
+    // load-bearing (Sol r5 P0-1) — a dispatch can arm in the await gaps
+    // between that check and the writes below. The invariant is enforced at
+    // the submit sites (Sol r7 P0-2): /input routes through ownerSubmit — THE
+    // lease-holding submit primitive, one owner holder across paste and CR —
+    // and /ask through askTerminal's own acquisition. Either refusal (a
+    // dispatch mid-delivery, another owner submission, a contaminated input
+    // box) is surfaced as a 409 the phone can show, never a silent byte drop.
     if (inputMatch[2] === 'input') {
-      session.write(text)
-      session.write('\r')
-      respondJson(response, 200, { ok: true })
+      const verdict = await ownerSubmit(session, `${text}\r`)
+      if (verdict.ok) respondJson(response, 200, { ok: true })
+      else respondJson(response, 409, { error: verdict.reason })
     } else {
-      const reply = await askTerminal(session, text, { timeoutMs: 120000 })
-      respondJson(response, 200, { ok: true, reply })
+      try {
+        // ONE CONTRACT, EVERY CALLER: the phone runs the SAME verified path as
+        // the CLI. This route used to return the bare reply, so a dropped
+        // brief came back as 200 with an empty string — and the phone is
+        // exactly where an owner is least able to tell that from a slow agent.
+        const { reply, submitRetries } = await deliverAndConfirm({
+          terminalId: inputMatch[1],
+          agentName: deps.store.node(inputMatch[1])?.name ?? inputMatch[1],
+          prompt: text,
+          deliver: () => askTerminal(session, text, { timeoutMs: 120000 }),
+          observe: terminalDeliveryDeps(deps.turns, (data) => session.write(data))
+        })
+        respondJson(response, 200, { ok: true, reply: replyText(reply, submitRetries) })
+      } catch (error) {
+        if (error instanceof DeliveryError) {
+          // The outcome and its remedy ride the BODY, and a caller MUST NOT
+          // switch on the status alone: `unsubmitted` and `dropped` are both
+          // 502 while their remedies are OPPOSITE — one wants a bare carriage
+          // return, the other wants the whole brief resent, and each corrupts
+          // the input box when applied to the other. HTTP's vocabulary is too
+          // small to carry that distinction; `outcome` is the fact.
+          respondJson(response, ASK_HTTP_STATUS[error.outcome], {
+            error: error.message,
+            outcome: error.outcome,
+            remedy: ASK_REMEDY[error.outcome]
+          })
+          return
+        }
+        respondJson(response, 409, {
+          error: error instanceof Error ? error.message : String(error)
+        })
+      }
     }
     return
   }
@@ -491,9 +899,12 @@ async function handle(
     return
   }
 
-  // Dev module graph first, then packaged renderer assets.
-  if (request.method === 'GET' && (await serveRendererDev(response, deps, url))) return
-  if (request.method === 'GET' && serveRendererAsset(response, deps, url.pathname)) return
+  // Whichever source served this client's index must serve its assets too:
+  // a bundle index asking for /src/main.tsx, or the reverse, loads nothing.
+  if (request.method === 'GET' && rendererSource(request, deps) === 'dev') {
+    if (await serveRendererDev(request, response, deps, url)) return
+  }
+  if (request.method === 'GET' && serveRendererAsset(request, response, deps, url.pathname)) return
 
   respondJson(response, 404, { error: 'Not found' })
 }

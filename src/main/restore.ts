@@ -33,6 +33,23 @@ export interface RestoreExecutorDeps {
    * is being written, so both paths refuse unless the agent is quiet.
    */
   phaseOf?: (id: string) => string | null
+  /**
+   * Is a dispatch armed against this terminal (Sol r4 P1)? phaseOf sees only
+   * the ATTACHED tracker — a detached/background agent mid-dispatch reads as
+   * null there while pendingDispatch says work is in flight, and restore/undo
+   * would kill the CLI and fork the session file out from under a live
+   * commercial reservation. Wired by the conductor to
+   * TurnTracker.hasArmedDispatch; consulted at BOTH guard points (the entry
+   * check and the pre-kill re-check). Absent = cannot say (legacy wiring).
+   */
+  hasArmedDispatch?: (id: string) => boolean
+  /**
+   * Is an OBSERVED turn open here whose finality has not been observed
+   * (Sol r4 P1)? Covers the detached human turn the attached phase cannot
+   * see. Wired by the conductor to TurnTracker.hasOpenTurnFact; consulted at
+   * both guard points alongside hasArmedDispatch.
+   */
+  hasOpenWork?: (id: string) => boolean
   /** Override for tests; defaults to ~/.claude/projects. */
   projectsDir?: string
 }
@@ -263,12 +280,22 @@ async function undoRestore(deps: RestoreExecutorDeps, id: string): Promise<Resto
 /**
  * Refusal reason when the agent is mid-turn, null when it is safe to kill.
  * 'thinking'/'waiting' mean the CLI may be writing the session file right
- * now; 'replied'/'idle'/untracked are quiet.
+ * now; 'replied'/'idle'/untracked are quiet — but quiet ATTACHED state is not
+ * the whole story (Sol r4 P1): a detached/background agent carrying an armed
+ * dispatch or an observed open turn is invisible to phaseOf, and killing +
+ * rebinding it would mutate a session mid-commissioned-work. Consulted at
+ * BOTH guard points (entry and pre-kill re-check) by restore and undo alike.
  */
 function busyReason(deps: RestoreExecutorDeps, id: string): string | null {
   const phase = deps.phaseOf?.(id)
   if (phase === 'thinking' || phase === 'waiting') {
     return `Agent is ${phase} — wait for the turn to finish before rewinding.`
+  }
+  if (deps.hasArmedDispatch?.(id)) {
+    return 'Agent has a dispatch in flight — wait for it to settle before rewinding.'
+  }
+  if (deps.hasOpenWork?.(id)) {
+    return 'Agent has an open turn in flight — wait for it to finish before rewinding.'
   }
   return null
 }

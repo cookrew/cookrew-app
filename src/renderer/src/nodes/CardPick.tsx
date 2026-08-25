@@ -1,5 +1,6 @@
 import { CrIcon } from '../icons'
 import { useCanvasUi } from '../canvas-ui'
+import { useActivity } from '../activity-thumb-store'
 
 /**
  * The clipboard checkbox, top-right on every card. Rendered only while the
@@ -9,9 +10,11 @@ import { useCanvasUi } from '../canvas-ui'
  * through to the card's own click (which would zoom on the resting hand).
  */
 export function CardPick({ id }: { id: string }): React.JSX.Element | null {
-  const { clipping, picked, togglePick, activities } = useCanvasUi()
+  const { clipping, picked, togglePick } = useCanvasUi()
+  // Hooks before any early return (Rules of Hooks); per-id so this card's
+  // checkbox doesn't re-render on other terminals' activity.
+  const activity = useActivity(id)
   if (!clipping) return null
-  const activity = activities[id]
   const working = activity?.phase === 'thinking'
   const shell = activity !== undefined && !activity.agent
   const on = picked.has(id)

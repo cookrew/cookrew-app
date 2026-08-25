@@ -121,6 +121,8 @@ export function createDemoApi(): CookrewApi {
       wsBroadcast()
       return Promise.resolve(meta)
     },
+    templateImport: (team) =>
+      Promise.resolve({ id: `demo-ws-${Date.now()}`, name: `${team} · session`, dir: '~', dirs: ['~'], icon: '🗂' }),
     switchWorkspace: (id) => {
       if (states.has(id)) {
         states.set(activeId, state)
@@ -197,6 +199,15 @@ export function createDemoApi(): CookrewApi {
       broadcast({ ...state, connections: state.connections.filter((c) => c.id !== connId) })
       return Promise.resolve()
     },
+    // The demo backend has no ~/.cookrew to install into, so the marketplace
+    // chip family is simply empty here — the dock renders exactly as it did
+    // before presets existed.
+    listInstalledPresets: () => Promise.resolve([]),
+    placeInstalledPreset: () => Promise.resolve(),
+    uninstallPreset: () => Promise.resolve(),
+    markPresetRotationSeen: () => Promise.resolve(),
+    trustPresetAuthorKey: () => Promise.resolve(),
+    listPins: () => Promise.resolve([]),
     listPresets: () =>
       Promise.resolve([
         { name: 'Claude Code', command: 'claude --permission-mode bypassPermissions' },

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   HerdrHostMultiplexer,
   agentKind,
@@ -6,7 +6,9 @@ import {
   envArgs,
   parseEnvelope,
   parsePaneList,
-  toScrollState
+  parsePaneListStrict,
+  toScrollState,
+  type AsyncCliRunner
 } from '../src/main/herdr-host-multiplexer'
 import { selectMultiplexers } from '../src/main/multiplexer-select'
 import { sanitizeAgentEnv } from '../src/main/multiplexer'
@@ -359,6 +361,210 @@ describe('parsing herdr envelopes', () => {
   it('survives non-JSON output instead of throwing into a call site', () => {
     expect(parseEnvelope('no herdr server is running')).toBeNull()
     expect(parsePaneList('garbage')).toEqual([])
+  })
+})
+
+describe('parsePaneListStrict — admission answers must be POSITIVE (Sol r8)', () => {
+  it('accepts a well-formed pane_list, and zero panes is a VALID answer', () => {
+    expect(parsePaneListStrict(PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc' }])))
+      .toEqual([{ pane_id: 'w1:p1', label: 'cookrew_abc' }])
+    expect(parsePaneListStrict(PANE_LIST([]))).toEqual([])
+  })
+
+  it('rejects everything the lenient parser flattened to [] — the backoff can see it', () => {
+    // Each of these used to publish as a "successful" empty inventory,
+    // de-admitting every live agent and resetting the failure backoff.
+    expect(parsePaneListStrict('garbage')).toBeNull()
+    expect(parsePaneListStrict('')).toBeNull()
+    expect(parsePaneListStrict('{"id":"x","error":{"code":"internal"}}')).toBeNull()
+    expect(parsePaneListStrict('{"id":"x","result":{"type":"pane_list"}}')).toBeNull()
+    expect(parsePaneListStrict('{"id":"x","result":{"panes":"nope"}}')).toBeNull()
+  })
+
+  it('validates EVERY element — one malformed pane rejects the whole snapshot (Sol r9)', () => {
+    // `{"panes":[null]}` used to pass the container check and publish; every
+    // later sessionExistsCached then executed `pane.label` and THREW instead
+    // of answering the refusal-safe 503.
+    expect(parsePaneListStrict(PANE_LIST([null]))).toBeNull()
+    expect(parsePaneListStrict(PANE_LIST(['w1:p1']))).toBeNull()
+    expect(parsePaneListStrict(PANE_LIST([42]))).toBeNull()
+    expect(parsePaneListStrict(PANE_LIST([[]]))).toBeNull()
+    // Mixed valid/invalid: the valid pane does not rescue the snapshot — a
+    // list herdr half-mangled is not evidence about any pane in it.
+    expect(
+      parsePaneListStrict(PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc' }, null]))
+    ).toBeNull()
+    // Field-type corruption on the fields admission consumes.
+    expect(parsePaneListStrict(PANE_LIST([{ label: 'cookrew_abc' }]))).toBeNull() // no identity
+    expect(parsePaneListStrict(PANE_LIST([{ pane_id: 42, label: 'cookrew_abc' }]))).toBeNull()
+    expect(parsePaneListStrict(PANE_LIST([{ pane_id: '', label: 'cookrew_abc' }]))).toBeNull()
+    expect(parsePaneListStrict(PANE_LIST([{ pane_id: 'w1:p1', label: 42 }]))).toBeNull()
+    expect(parsePaneListStrict(PANE_LIST([{ pane_id: 'w1:p1', label: {} }]))).toBeNull()
+    // …while a null or absent label is a REAL pane state, not corruption.
+    expect(parsePaneListStrict(PANE_LIST([{ pane_id: 'w1:p1', label: null }]))).toEqual([
+      { pane_id: 'w1:p1', label: null }
+    ])
+    expect(parsePaneListStrict(PANE_LIST([{ pane_id: 'w1:p1' }]))).toEqual([
+      { pane_id: 'w1:p1' }
+    ])
+  })
+})
+
+describe('admission refresh — injectable async seam, strict publish, real backoff (Sol r8)', () => {
+  // The refresh's clock is Date.now (cache freshness AND backoff); pin it so
+  // the cadence assertions are exact. Timers stay real — the runner resolves
+  // in microtasks and `settle` drains them.
+  let now: number
+  beforeEach(() => {
+    now = 1_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+  /** Scripted async runner: one reply per spawn, last reply repeats. */
+  function admissionHarness(replies: Array<string | Error>): {
+    backend: HerdrHostMultiplexer
+    spawns: () => number
+  } {
+    let spawned = 0
+    const asyncRunner: AsyncCliRunner = (args) => {
+      expect(args).toEqual(['pane', 'list'])
+      const reply = replies[Math.min(spawned, replies.length - 1)]
+      spawned += 1
+      return reply instanceof Error ? Promise.reject(reply) : Promise.resolve(reply)
+    }
+    const backend = new HerdrHostMultiplexer({
+      session: 'cookrewtest',
+      configPath: '/c',
+      runner: fakeRunner(),
+      asyncRunner
+    })
+    return { backend, spawns: () => spawned }
+  }
+
+  it('malformed exit-0 stdout takes the failure backoff — never a published empty inventory', async () => {
+    const { backend, spawns } = admissionHarness(['total garbage, exit 0'])
+    expect(backend.sessionExistsCached('cookrew_abc')).toBe(false)
+    // Single-flight: a second ask while the first is in flight spawns nothing.
+    backend.sessionExistsCached('cookrew_abc')
+    expect(spawns()).toBe(1)
+    await settle()
+
+    // Inside the 5s backoff window: no cache was published, and no amount of
+    // asking respawns the child.
+    now += 4_999
+    for (let i = 0; i < 10; i += 1) expect(backend.sessionExistsCached('cookrew_abc')).toBe(false)
+    expect(spawns()).toBe(1)
+
+    // Past the backoff, the refresh is allowed again.
+    now += 2
+    backend.sessionExistsCached('cookrew_abc')
+    expect(spawns()).toBe(2)
+  })
+
+  it('a malformed pane ELEMENT takes the failure backoff, and recovery publishes the real inventory (Sol r9)', async () => {
+    const { backend, spawns } = admissionHarness([
+      PANE_LIST([null]),
+      PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc' }])
+    ])
+    backend.sessionExistsCached('cookrew_abc')
+    await settle()
+    expect(spawns()).toBe(1)
+
+    // Nothing was published: asking again neither crashes on the null pane
+    // nor respawns inside the 5s failure backoff.
+    now += 4_999
+    for (let i = 0; i < 10; i += 1) expect(backend.sessionExistsCached('cookrew_abc')).toBe(false)
+    expect(spawns()).toBe(1)
+
+    // Past the backoff the refresh recovers and the REAL inventory answers.
+    now += 2
+    backend.sessionExistsCached('cookrew_abc')
+    expect(spawns()).toBe(2)
+    await settle()
+    expect(backend.sessionExistsCached('cookrew_abc')).toBe(true)
+  })
+
+  it('a herdr ERROR envelope is a failure too, and recovery publishes the real inventory', async () => {
+    const { backend, spawns } = admissionHarness([
+      '{"id":"x","error":{"code":"internal"}}',
+      PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc' }])
+    ])
+    backend.sessionExistsCached('cookrew_abc')
+    await settle()
+    expect(spawns()).toBe(1)
+
+    now += 5_001
+    // Served stale-empty while the recovery refresh runs behind it…
+    expect(backend.sessionExistsCached('cookrew_abc')).toBe(false)
+    expect(spawns()).toBe(2)
+    await settle()
+    // …then the publication answers, with no further spawn (fresh cache).
+    expect(backend.sessionExistsCached('cookrew_abc')).toBe(true)
+    expect(spawns()).toBe(2)
+  })
+
+  it('ZERO panes is a valid publication — normal cadence, no failure backoff', async () => {
+    const { backend, spawns } = admissionHarness([PANE_LIST([])])
+    backend.sessionExistsCached('cookrew_abc')
+    await settle()
+    expect(spawns()).toBe(1)
+
+    // Fresh cache: within the 500ms freshness contract nothing respawns.
+    now += 400
+    expect(backend.sessionExistsCached('cookrew_abc')).toBe(false)
+    expect(spawns()).toBe(1)
+
+    // And past it, the refresh runs on the NORMAL cadence — an empty session
+    // is not an outage and must not sit behind the 5s failure backoff.
+    now += 101
+    backend.sessionExistsCached('cookrew_abc')
+    expect(spawns()).toBe(2)
+  })
+
+  it('a fast-failing child (dead CLI / timeout kill) cannot amplify spawns', async () => {
+    const { backend, spawns } = admissionHarness([new Error('spawn herdr ENOENT')])
+    backend.sessionExistsCached('cookrew_abc')
+    await settle()
+    now += 100
+    for (let i = 0; i < 25; i += 1) {
+      backend.sessionExistsCached('cookrew_abc')
+      await settle()
+    }
+    expect(spawns()).toBe(1)
+
+    now += 5_000
+    backend.sessionExistsCached('cookrew_abc')
+    expect(spawns()).toBe(2)
+  })
+
+  it('primeAdmissionCache rides the bounded async refresh — never the sync runner', async () => {
+    // The sync fakeRunner throws on any unscripted `run` and records probes,
+    // so a prime that still called readPanes would either throw or show up
+    // in `calls`. The async seam answers instead.
+    let spawned = 0
+    const runner = fakeRunner()
+    const backend = new HerdrHostMultiplexer({
+      session: 'cookrewtest',
+      configPath: '/c',
+      runner,
+      asyncRunner: () => {
+        spawned += 1
+        return Promise.resolve(PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc' }]))
+      }
+    })
+    backend.primeAdmissionCache()
+    expect(spawned).toBe(1)
+    expect(runner.calls).toEqual([])
+    // Cold window: before publication the empty inventory answers (retryable);
+    // after it, the primed cache answers with no further spawn.
+    await settle()
+    expect(backend.sessionExistsCached('cookrew_abc')).toBe(true)
+    expect(spawned).toBe(1)
   })
 })
 

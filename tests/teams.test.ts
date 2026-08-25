@@ -643,11 +643,11 @@ describe('workspaceFromTemplate (FEATURE 1: workspace from team template)', () =
     })
     expect(meta.name).toBe('Sprint 9')
     // Switched into the new workspace: full team, retargeted dir, edges kept.
-    expect(store.activeId).toBe(meta.id)
+    expect(store.focusedId).toBe(meta.id)
     const terminals = store.terminals()
     expect(terminals).toHaveLength(2)
     expect(terminals.every((t) => t.cwd === '/work/fresh')).toBe(true)
-    expect(store.state.connections).toHaveLength(1)
+    expect(store.focusedState.connections).toHaveLength(1)
   })
 
   it('rejects an unknown template by name', async () => {
@@ -695,7 +695,7 @@ describe('copyTeam (Figma copy into an existing workspace)', () => {
   it('appends copies + inner cables to an INACTIVE workspace without switching or booting', async () => {
     const { deps, store, adopted } = copyDeps()
     const { aId, bId } = seedSelection(store)
-    const sourceWsId = store.activeId
+    const sourceWsId = store.focusedId
     const target = store.createWorkspace('Staging', '/work/staging')
     const events: string[] = []
     store.on('op', (event: { type: string }) => events.push(event.type))
@@ -708,14 +708,14 @@ describe('copyTeam (Figma copy into an existing workspace)', () => {
       copiedCables: 1
     })
     // No switch, no boot: inactive targets come alive on activation.
-    expect(store.activeId).toBe(sourceWsId)
+    expect(store.focusedId).toBe(sourceWsId)
     expect(adopted).toEqual([])
 
     const targetState = store.workspaceState(target.id)
     expect(targetState.nodes).toHaveLength(2)
     // Fresh ids — the source nodes stay untouched on their canvas.
     expect(targetState.nodes.map((n) => n.id)).not.toContain(aId)
-    expect(store.state.nodes).toHaveLength(3)
+    expect(store.focusedState.nodes).toHaveLength(3)
     // The a↔b cable traveled; the cable reaching the unselected note did not.
     expect(targetState.connections).toHaveLength(1)
     // Figma paste nudge, so a copy never lands pixel-exact on its source.
@@ -746,7 +746,7 @@ describe('copyTeam (Figma copy into an existing workspace)', () => {
   it('pastes from an INACTIVE source workspace (fromWorkspaceId, post-switch)', async () => {
     const { deps, store, adopted } = copyDeps()
     const { aId, bId } = seedSelection(store)
-    const sourceWsId = store.activeId
+    const sourceWsId = store.focusedId
     const target = store.createWorkspace('Staging', '/work/staging')
     store.switchWorkspace(target.id)
 
@@ -760,7 +760,7 @@ describe('copyTeam (Figma copy into an existing workspace)', () => {
     // Landed on the now-active canvas: adopted (booted) and re-homed to the
     // target's workdir; the source workspace keeps its originals.
     expect(adopted).toHaveLength(2)
-    const copied = store.state.nodes.filter((n): n is TerminalNodeData => n.kind === 'terminal')
+    const copied = store.focusedState.nodes.filter((n): n is TerminalNodeData => n.kind === 'terminal')
     expect(copied.every((t) => t.cwd === '/work/staging')).toBe(true)
     expect(store.workspaceState(sourceWsId).nodes).toHaveLength(3)
   })
@@ -785,14 +785,14 @@ describe('copyTeam (Figma copy into an existing workspace)', () => {
     store.on('op', (event: { type: string }) => events.push(event.type))
     const result = await copyTeam(deps, {
       nodeIds: [aId, web.id],
-      intoWorkspaceId: store.activeId
+      intoWorkspaceId: store.focusedId
     })
     expect(result.copiedNodes).toBe(2)
     // EVERY kind is adopted (terminals spawn, browsers sync) — not just
     // terminals; a copied browser must not render as a dead card.
     expect(adopted.map((n) => n.kind).sort()).toEqual(['browser', 'terminal'])
     // The duplicate gets a unique name next to its source.
-    const names = store.state.nodes.map((n) => n.name)
+    const names = store.focusedState.nodes.map((n) => n.name)
     expect(new Set(names).size).toBe(names.length)
     expect(changes).toBe(1)
     expect(events).toEqual([])
@@ -946,11 +946,11 @@ describe('copyTeam (Figma copy into an existing workspace)', () => {
       /No workspace 'nope'/
     )
     await expect(
-      copyTeam(deps, { nodeIds: 'evil' as unknown as string[], intoWorkspaceId: store.activeId })
+      copyTeam(deps, { nodeIds: 'evil' as unknown as string[], intoWorkspaceId: store.focusedId })
     ).rejects.toThrow(/string\[\]/)
     // A stale selection speaks copy, not fork.
     await expect(
-      copyTeam(deps, { nodeIds: ['ghost'], intoWorkspaceId: store.activeId })
+      copyTeam(deps, { nodeIds: ['ghost'], intoWorkspaceId: store.focusedId })
     ).rejects.toThrow(/^Team copy needs at least one selected node/)
   })
 })

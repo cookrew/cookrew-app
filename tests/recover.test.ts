@@ -47,6 +47,20 @@ describe('recoverToastFor (result → toast copy, verbatim from the landed contr
   it('ok:false → error toast', () => {
     expect(recoverToastFor({ ...base, ok: false }).tone).toBe('error')
   })
+  it('a forked recovery says the old session is still open elsewhere', () => {
+    // Observed on Forge: a leftover `claude bg-spare` held its session, so
+    // --resume refused and recovery could only branch off a copy. The context
+    // is intact and the id is new — two conversations now share a history,
+    // which the toast has to say rather than report a plain success.
+    const toast = recoverToastFor({ ...base, forked: true })
+    expect(toast.tone).toBe('ok')
+    expect(toast.text).toContain('from a copy')
+    expect(toast.text).toContain('still open elsewhere')
+  })
+  it('a forked flag never outranks an honest failure', () => {
+    expect(recoverToastFor({ ...base, forked: true, exact: false }).tone).toBe('warn')
+    expect(recoverToastFor({ ...base, forked: true, spawned: false }).tone).toBe('defer')
+  })
 })
 
 describe('recoverErrorToast (thrown/rejected recover → honest error toast)', () => {

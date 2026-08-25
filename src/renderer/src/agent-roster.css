@@ -1007,6 +1007,73 @@
   vertical-align: -2px;
 }
 
+/* ==== marketplace preset chips — the THIRD family (§8, Forge structural) ====
+   Same chip grammar as the two groups above, one step up the persona accent:
+   roles are violet, bought presets are --violet-hi, so the row reads as
+   related-but-not-the-same at a glance. Structure only — Fresco owns the
+   finish. */
+
+.cr-dock-presets .preset-chip {
+  border-color: var(--violet-hi);
+  gap: 4px;
+}
+
+.cr-dock-presets .preset-chip.amber {
+  background: var(--violet-hi);
+  color: var(--ink);
+}
+
+/* A team wears its members as an overlapping STACK — the one visual difference
+   between a single-agent chip and a team chip, so the buyer can tell what a
+   click is about to place before it places it. */
+.preset-chip-sprites {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: -2px;
+}
+
+.preset-chip-sprites.stacked > * + * {
+  margin-left: -5px;
+}
+
+/* The lock is NOT a disabled state: a gated chip is the gate's own UI and stays
+   clickable, so it keeps full contrast and only the badge says why. */
+.preset-chip .preset-chip-badge {
+  margin-left: 2px;
+  flex: 0 0 auto;
+}
+
+.preset-chip .preset-chip-badge.lock {
+  width: 11px;
+  height: 11px;
+  vertical-align: -1px;
+}
+
+/* N4: the locked chip's own answer until the gate sheet exists. A refusal the
+   user cannot see is indistinguishable from a broken chip, so the word appears
+   in the chip itself and fades on its own. */
+.preset-chip .preset-chip-gate-note {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--amber-deep);
+  margin-left: 4px;
+}
+
+.preset-chip.gate-denied {
+  border-color: var(--amber-deep);
+}
+
+/* An update is an offer, not a warning — a dot, not a glyph, so it never
+   competes with the lock for attention. */
+.preset-chip .preset-chip-badge.update {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber-deep);
+  display: inline-block;
+}
+
 /* From-team-template list inside the workspace-create form. */
 .cr-ws-template {
   display: flex;
@@ -1112,31 +1179,44 @@
    Velvet wires; the appearance is identical on both platforms. The scrub-preview
    tab below is the one remaining checkpoint-specific style here. */
 
-/* ---- the SELECT-LIST FAN (Fresco visual; Velvet structure) ----
-   The single tab GROWN into a vertical list: the FOCUSED row is pinned on the
-   bar's here-marker line, and neighbours fan UP and DOWN around it and clip at the
-   transcript boundary — the focus never moves off the marker (HIGH-1 fix).
-   Velvet mounts it; both the here-marker `top` and the fan `top` use
-   railAnchorTop(focused.frac), the SAME fraction, so marker-Y == focused-row-Y:
-     <div class="cr-ckpt-scrub-preview" style="top:railAnchorTop(focused.frac)">
-       <div class="cr-ckpt-fan-up">   … neighbour .cr-ckpt-row …            </div>
-       <div class="cr-ckpt-fan-focus"><div class="cr-ckpt-row active">…</div></div>
-       <div class="cr-ckpt-fan-down"> … rows … <div class="cr-ckpt-row live">…</div> </div>
+/* ---- the FULL-RANGE REVEAL (Fresco visual; Velvet structure) ----
+   NOT a fan of neighbours any more. Two siblings, drawn in the same fractional
+   space along the bar:
+     <div class="cr-ckpt-list">                                    (every laid row + LIVE)
+       <div class="cr-ckpt-row" style="top:railAnchorTop(row.frac)">…</div>   (T1 … newest)
+       <div class="cr-ckpt-row live" style="top:railAnchorTop(1)">…</div>     (the reserved 1/n)
      </div>
-   PINNING: fan-up/down are ABSOLUTE (out of flow), so the ONLY in-flow child of
-   .cr-ckpt-scrub-preview is .cr-ckpt-fan-focus — the container's box IS the focus
-   row. So the container's translateY(-50%) centres EXACTLY the focus row on the
-   marker (this is the row-anchor, NOT the old whole-window centring), and it makes
-   the container the transformed containing block, so fan-up (bottom:100%) and
-   fan-down (top:100%) sit FLUSH to the focus's top / bottom edges — no gap, no
-   overlap, no hard-coded row height. */
+     <div class="cr-ckpt-scrub-preview" style="top:railAnchorTop(focused.frac)">
+       <div class="cr-ckpt-fan-focus"><div class="cr-ckpt-row active">…</div></div>
+     </div>
+   PINNING (this is the F6 contract, unchanged): the here-marker `top` and the
+   scrub-preview `top` are BOTH railAnchorTop(focused.frac) — one fraction, so
+   marker-Y == focused-row-Y. .cr-ckpt-fan-focus is the preview's only in-flow
+   child, so the container's box IS the focus row and its translateY(-50%)
+   centres exactly that row on the marker.
+   The focused row is NOT also in .cr-ckpt-list (rail-fill excludes it): two
+   copies at two fractions is the misalignment F6 exists to catch. */
+
 .cr-ckpt-scrub-preview {
   position: absolute;
   top: 0; /* Velvet sets inline = railAnchorTop(focused.frac) — the marker Y */
-  right: 24px; /* leave the bar strip so the line + here-marker stay visible */
+  /* 32px — the SAME lane reservation as .cr-ckpt-list (R18, Fresco's measure).
+     Moving only the list was half the fix and the wrong half: the focused row
+     still overlapped the pin lane by 6.0px, and that is the row on the marker,
+     so the pin a user scrubs TO was the one being covered. It also left the
+     focus row's right edge 8.0px out of line with the list rows — a step in
+     the fan that did not exist before. Horizontal only; F6 anchors on Y. */
+  right: 32px;
   transform: translateY(-50%); /* container box == focus row → pins the FOCUS on the marker */
   z-index: 5;
   pointer-events: none; /* only the rows are interactive; the empty fan passes through */
+  /* F1 lives HERE, in the one block, not in a second one further down. The
+     split is what let `right` drift: R18 was applied to .cr-ckpt-list and to
+     this selector's other copy, and the focused row kept the old 24px. */
+  opacity: 1;
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease;
 }
 
 /* the focus row — the sole in-flow child, so it defines the container box that the
@@ -1144,52 +1224,114 @@
 .cr-ckpt-fan-focus {
   position: relative;
   width: 336px;
-  max-width: calc(100vw - 40px);
+  /* 48px, not 40: the 40 was sized for right:24 (24+16 = a 16px left margin).
+     At right:32 the same arithmetic halves the phone margin to 8px below a
+     ~368px viewport. Both blocks moved, so both budgets move. */
+  max-width: calc(100vw - 48px);
   margin-left: auto; /* hug the right (bar) side */
 }
 
-/* neighbours fan out of flow so they never shift the pinned focus; they clip at
-   the transcript boundary via .popout-terminal-wrap's overflow. */
-.cr-ckpt-fan-up,
-.cr-ckpt-fan-down {
-  position: absolute;
-  right: 0;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-}
-.cr-ckpt-fan-up {
-  bottom: 100%; /* grows UP, flush to the focus row's top edge */
-}
-.cr-ckpt-fan-down {
-  top: 100%; /* grows DOWN, flush to the focus row's bottom edge */
-}
+/* MED-3: .cr-ckpt-fan-up / .cr-ckpt-fan-down are GONE with the neighbour fan.
+   Rows are laid along the bar by fraction now, not stacked out of flow around
+   the focus, so there is nothing to grow up or down and nothing to mask.
 
-/* the panel look: ONE continuous left-fading gradient across the whole fan (a
-   horizontal gradient reads seamless across the contiguous parts), plus a soft
-   fade at the fan's far top / bottom so distant neighbours melt out. */
-.cr-ckpt-fan-up,
-.cr-ckpt-fan-focus,
-.cr-ckpt-fan-down {
-  background: linear-gradient(
-    to left,
-    rgba(20, 20, 23, 0.985),
-    rgba(20, 20, 23, 0.9) 82%,
-    rgba(20, 20, 23, 0.5)
-  );
-}
-.cr-ckpt-fan-up {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 26px);
-  mask-image: linear-gradient(to bottom, transparent 0, #000 26px);
-}
-.cr-ckpt-fan-down {
-  -webkit-mask-image: linear-gradient(to top, transparent 0, #000 26px);
-  mask-image: linear-gradient(to top, transparent 0, #000 26px);
+   Their shared surface went too: a left-fading gradient bottoming out at
+   rgba(...,0.5) is exactly the translucency F5 exists to forbid. The focus row
+   carries its own opaque surface. */
+.cr-ckpt-fan-focus {
+  background: var(--vi-panel);
 }
 
 .cr-ckpt-scrub-preview .cr-ckpt-row {
   width: 100%;
   pointer-events: auto; /* rows tap/hold; the surrounding fan passes through */
+}
+
+/* ---- F1: the tag fades when movement stops, and fades back -----------------
+   A fade, deliberately, not an unmount: unmounting pops, and "the tag vanished"
+   and "the tag faded" look identical in a still but not to the eye. The
+   component keeps the tag MOUNTED and toggles `.idle` on the rail — and only
+   when nothing is revealed and no scrub is paused (see showIdle). */
+.cr-ckpt-rail.idle .cr-ckpt-scrub-preview,
+.cr-ckpt-rail.idle .cr-ckpt-list {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---- F3: the full-range reveal, laid ALONG the bar -------------------------
+   Not a scroll panel and not a fan: a full-height overlay whose rows each sit
+   at their own fraction of T1→newest, so the reveal IS the range. The focused
+   row is NOT in here — it stays in .cr-ckpt-scrub-preview pinned to the marker
+   fraction, which is what keeps F6 exact. */
+.cr-ckpt-list {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* 32px, not the tag's 24px (R18, Fresco): the version PIN marker lands on the
+     bar in the pin lane, and at 24px the list's rows sat over it. The pin wins
+     the occlusion — the list steps in and leaves the lane clear. */
+  right: 32px;
+  width: 336px;
+  /* 48px, not 40: the 40 was sized for right:24 (24+16 = a 16px left margin).
+     At right:32 the same arithmetic halves the phone margin to 8px below a
+     ~368px viewport. Both blocks moved, so both budgets move. */
+  max-width: calc(100vw - 48px);
+  z-index: 4; /* under the focused tag (5) and the count (6) */
+  pointer-events: none; /* HIGH-2: the empty area never steals a drag */
+  transition: opacity 220ms ease;
+}
+
+.cr-ckpt-list .cr-ckpt-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  transform: translateY(-50%); /* same anchoring maths as the here-marker */
+  pointer-events: auto; /* HIGH-2 opt-in — see the register above */
+}
+
+/* ---- F5b: two-element marquee on the focused title -------------------------
+   OUTER (.cr-ckpt-row-title) is the CLIP — overflow:hidden is REQUIRED or
+   scrollWidth-clientWidth measures 0 and nothing ever marquees. INNER
+   (.cr-ckpt-title-text) is the MOVER. The component measures the outer and
+   sets --marquee-shift on it. Non-focused rows keep their ellipsis. */
+.cr-ckpt-row.active .cr-ckpt-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.cr-ckpt-title-text {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.cr-ckpt-title-text.marquee {
+  animation: cr-ckpt-title-marquee 6s linear infinite alternate;
+}
+
+@keyframes cr-ckpt-title-marquee {
+  from {
+    transform: translateX(0px);
+  }
+  to {
+    transform: translateX(var(--marquee-shift, 0));
+  }
+}
+
+/* Reduced motion: no travel at all, and the inner span collapses to inline so
+   the outer clip's ellipsis gives a readable static fallback. */
+@media (prefers-reduced-motion: reduce) {
+  .cr-ckpt-title-text.marquee {
+    animation: none;
+    transform: none;
+    display: inline;
+  }
+
+  .cr-ckpt-row.active .cr-ckpt-row-title {
+    text-overflow: ellipsis;
+  }
 }
 
 /* Inline save-role input inside a checkpoint node's action panel. */

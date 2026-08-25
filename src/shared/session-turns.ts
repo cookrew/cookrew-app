@@ -39,6 +39,7 @@ export interface PromptEntryLike {
 
 interface SessionEntry extends PromptEntryLike {
   timestamp?: string
+  message?: { content?: unknown; stop_reason?: string | null }
 }
 
 interface ContentBlock {
@@ -200,32 +201,107 @@ function assistantText(entry: SessionEntry): string | null {
 }
 
 /**
- * Derive TurnRecords from session JSONL lines: one record per real user
- * prompt, reply = the LAST assistant text of the turn (the conclusion),
- * endedAt = the latest entry timestamp inside the turn. Malformed lines are
- * skipped; assistant entries before any prompt are ignored.
+ * What changed in an accumulator's records() since the last takeDelta() —
+ * the O(delta) handoff that keeps downstream from re-projecting the whole
+ * history on every append (Sol r4 P1: incremental byte READS were not I3;
+ * every growth still handed TurnTracker/TurnStore the complete array). Only
+ * the TAIL record of a history can ever change in place (reply growth,
+ * finality landing, outcome landing, a sibling resend); everything earlier
+ * is immutable, so three kinds cover every legal transition:
+ *
+ *  - 'append': records STRICTLY NEW since the last take, index-contiguous
+ *    past the consumer's tail (a record never emitted before, complete or
+ *    the freshly-opened tail). An empty records array is the no-op take.
+ *  - 'tail': the last-emitted record's in-place rewrite (open turn growing,
+ *    finality landing, outcome landing, a sibling resend).
+ *  - 'reset': prior emissions are invalid (a Pi branch switch re-rooting the
+ *    conversation) — the consumer must re-project from records() whole.
+ *
+ * A take is a PARTIAL-ADVANCE cursor: when the emitted tail was rewritten
+ * AND new records queued behind it in the same span (the next-user boundary
+ * lands finality and the next prompt in one feed), takeDelta hands out the
+ * 'tail' rewrite ALONE and leaves the append for the immediate next call —
+ * so every delta lands on a consumer history of exactly the matching shape
+ * and no record is ever emitted twice. Callers drain: take until the
+ * returned kind is not 'tail' (bounded — a 'tail' take syncs the tail
+ * cursor, so at most two takes drain any span).
+ *
+ * APPLY CONTRACT (the replay tests/history-delta.test.ts property-checks,
+ * and the shape TurnTracker.applyHistoryDelta implements): given history H,
+ *   append → concat after H (records[0].index === |H| + 1);
+ *   tail   → replace H's last record (same index/uuid);
+ *   reset  → discard H, take records() whole.
+ * Draining every take this way reconstructs records() exactly.
  */
-export function parseSessionTurns(lines: string[]): TurnRecord[] {
+export type HistoryDelta =
+  | { kind: 'append'; records: TurnRecord[] }
+  | { kind: 'tail'; record: TurnRecord }
+  | { kind: 'reset' }
+
+/**
+ * Resumable turn parser: feed session JSONL lines in any number of chunks
+ * (split anywhere at LINE granularity — byte-level partial lines are the
+ * caller's carry buffer) and read the records so far. Output is identical to
+ * feeding every line at once; already-fed lines are never re-read, so
+ * observing one appended turn costs the appended lines only.
+ */
+export interface SessionTurnAccumulator {
+  feed(lines: string[]): void
+  records(): TurnRecord[]
+  /**
+   * Consume the change since the previous take (see HistoryDelta). OPTIONAL
+   * — the retained-lines fallback in session-sync has no O(delta) story and
+   * omits it honestly, which keeps it on the full replaceHistory path; the
+   * three harness accumulators (Claude here, Codex/Pi in trace-blocks) all
+   * implement it.
+   */
+  takeDelta?(): HistoryDelta
+}
+
+/**
+ * A turn parser that can also hand out a SessionTurnAccumulator — the
+ * capability SessionTurnSync checks for to reconcile in O(Δbytes). Parsers
+ * without it are re-run over retained lines instead (correct, but O(file)).
+ */
+export interface StreamingTurnParser {
+  (lines: string[]): TurnRecord[]
+  createAccumulator: () => SessionTurnAccumulator
+}
+
+export function createSessionTurnAccumulator(): SessionTurnAccumulator {
   const turns: TurnRecord[] = []
   // Identity (index + sibling collapse + uuid binding) comes from the SHARED
   // assigner so trace-block.index === TurnRecord.index by construction.
   const assigner = new CheckpointAssigner()
-  for (const line of lines) {
-    if (line.trim().length === 0) continue
+  /** takeDelta cursor: how much of `turns` the last take handed out… */
+  let emittedCount = 0
+  /** …and the exact tail object it handed out. Records are REPLACED, never
+   *  mutated (see feedLine), so reference identity IS change detection. */
+  let emittedTail: TurnRecord | undefined
+
+  const feedLine = (line: string): void => {
+    if (line.trim().length === 0) return
     const entry = parseEntry(line)
-    if (entry === null) continue
+    if (entry === null) return
     const step = assigner.feed(entry)
     if (step !== null) {
       const last = turns[turns.length - 1]
       if (step.sibling && last !== undefined) {
         // Same submission — collapse: adopt the continuation prompt/identity,
-        // keep the accumulated reply and timestamps.
+        // keep the accumulated reply and timestamps. A resend REOPENS the
+        // exchange, so any finality the superseded sibling earned is dropped.
+        const { final: _reopened, ...kept } = last
         turns[turns.length - 1] = {
-          ...last,
+          ...kept,
           prompt: step.id.prompt,
           uuid: checkpointIdentity(step.id)
         }
-        continue
+        return
+      }
+      // A later user prompt is POSITIVE evidence the previous exchange is
+      // over — the only finality a record without an end-of-turn marker gets.
+      if (last !== undefined && last.final !== true) {
+        turns[turns.length - 1] = { ...last, final: true }
       }
       const startedAt = entryTimeMs(entry, last?.endedAt ?? 0)
       turns.push({
@@ -236,16 +312,80 @@ export function parseSessionTurns(lines: string[]): TurnRecord[] {
         startedAt,
         endedAt: startedAt
       })
-      continue
+      return
     }
     const current = turns[turns.length - 1]
-    if (current === undefined) continue
-    const reply = assistantText(entry)
-    turns[turns.length - 1] = {
-      ...current,
-      endedAt: Math.max(current.endedAt, entryTimeMs(entry, current.endedAt)),
-      reply: reply !== null ? reply.slice(0, MAX_REPLY_CHARS) : current.reply
+    if (current === undefined) return
+    const endedAt = Math.max(current.endedAt, entryTimeMs(entry, current.endedAt))
+    if (entry.type === 'assistant') {
+      // Tail finality tracks the LATEST assistant entry's stop_reason:
+      // "end_turn" is the explicit end-of-turn marker Claude writes on the
+      // closing entry; "tool_use"/null mean more of this turn is coming — a
+      // nonempty reply text is NOT completion evidence (the same record keeps
+      // extending with later tool/result entries).
+      //
+      // FAILURE outcomes (Sol r3 P1): Claude writes NO marker for an errored
+      // or interrupted turn — the tail simply never gets its end_turn — so
+      // there is no TurnRecord.outcome to set here, deliberately. The turn
+      // stays open until the next-user boundary closes it (finality with
+      // outcome absent, i.e. done: the file holds no failure evidence, and
+      // fabricating one from silence would violate quiet-is-non-terminal).
+      // Codex (`turn_aborted`) and pi ('aborted'/'error'/'length') DO write
+      // native failure markers; theirs are classified in trace-blocks.ts.
+      const reply = assistantText(entry)
+      const closed = entry.message?.stop_reason === 'end_turn'
+      const { final: _open, ...rest } = current
+      turns[turns.length - 1] = {
+        ...rest,
+        endedAt,
+        reply: reply !== null ? reply.slice(0, MAX_REPLY_CHARS) : current.reply,
+        ...(closed ? { final: true } : {})
+      }
+      return
+    }
+    turns[turns.length - 1] = { ...current, endedAt }
+  }
+
+  return {
+    feed(lines: string[]): void {
+      for (const line of lines) feedLine(line)
+    },
+    records(): TurnRecord[] {
+      return [...turns]
+    },
+    takeDelta(): HistoryDelta {
+      // `turns` never shrinks and only its LAST element is ever replaced, so
+      // the change since the last take is fully described by the count and
+      // the tail's identity. A stale tail goes out ALONE — even when new
+      // records queued behind it (the next-user boundary landing finality
+      // and the next prompt in one feed) — advancing only the tail cursor;
+      // the queued records arrive on the immediately following take. Never a
+      // whole-history replay, never a record emitted twice.
+      const tailStale = emittedCount > 0 && turns[emittedCount - 1] !== emittedTail
+      if (tailStale) {
+        emittedTail = turns[emittedCount - 1]
+        return { kind: 'tail', record: emittedTail }
+      }
+      const records = turns.slice(emittedCount)
+      emittedCount = turns.length
+      emittedTail = turns[turns.length - 1]
+      return { kind: 'append', records }
     }
   }
-  return turns
 }
+
+/**
+ * Derive TurnRecords from session JSONL lines: one record per real user
+ * prompt, reply = the LAST assistant text of the turn (the conclusion),
+ * endedAt = the latest entry timestamp inside the turn. Malformed lines are
+ * skipped; assistant entries before any prompt are ignored. Single-feed use
+ * of the accumulator, so whole-file and incremental parsing cannot diverge.
+ */
+export const parseSessionTurns: StreamingTurnParser = Object.assign(
+  function parseSessionTurns(lines: string[]): TurnRecord[] {
+    const accumulator = createSessionTurnAccumulator()
+    accumulator.feed(lines)
+    return accumulator.records()
+  },
+  { createAccumulator: createSessionTurnAccumulator }
+)

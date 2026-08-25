@@ -7,6 +7,7 @@
 // read back whole.
 
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -19,7 +20,7 @@ import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { TurnStore } from '../src/main/turn-store'
-import { AnnotationStore } from '../src/main/turn-annotations'
+import { ANNOTATION_LOG_COMPACT_MIN_OPS, AnnotationStore } from '../src/main/turn-annotations'
 import {
   hasAnnotation,
   mergeAnnotation,
@@ -42,7 +43,14 @@ beforeEach(() => {
   mkdirSync(annDir, { recursive: true })
   store = new TurnStore(dir, annDir)
 })
-afterEach(() => rmSync(path.dirname(dir), { recursive: true, force: true }))
+afterEach(() => {
+  try {
+    chmodSync(annDir, 0o700)
+  } catch {
+    // already gone
+  }
+  rmSync(path.dirname(dir), { recursive: true, force: true })
+})
 
 const rec = (index: number, over: Partial<TurnRecord> = {}): TurnRecord => ({
   index,
@@ -62,6 +70,13 @@ const conversationText = (id = 't1'): string =>
   readFileSync(path.join(dir, `${id}.jsonl`), 'utf8')
 
 const annotationFile = (id = 't1'): string => path.join(annDir, `${id}.json`)
+
+/** The map inside the snapshot envelope (Sol r7 P1: {epoch, annotations}). */
+const snapshotAnnotations = (id = 't1'): unknown =>
+  (JSON.parse(readFileSync(annotationFile(id), 'utf8')) as { annotations: unknown }).annotations
+
+const snapshotEpoch = (id = 't1'): number =>
+  (JSON.parse(readFileSync(annotationFile(id), 'utf8')) as { epoch: number }).epoch
 
 /**
  * THE invariant. Step 3 documents the ledger as derived and safe to delete, so
@@ -112,7 +127,7 @@ describe('annotations live OUTSIDE the ledger, structurally', () => {
     // transcript ever knew is still on disk, keyed by checkpoint index and
     // ready for the rebuild to re-attach.
     expect(new TurnStore(dir, annDir).load('t1')).toEqual([])
-    expect(JSON.parse(readFileSync(annotationFile(), 'utf8'))).toEqual({
+    expect(snapshotAnnotations()).toEqual({
       '1': { title: 'recap', seenAt: 999, scrollLine: 42 },
     })
   })
@@ -171,7 +186,7 @@ describe('TurnStore — the split is real on disk', () => {
 
   it('writes them to a sidecar keyed by CHECKPOINT INDEX, not array position', () => {
     save([rec(7), rec(8, { title: 'recap', seenAt: 999 })])
-    expect(JSON.parse(readFileSync(annotationFile(), 'utf8'))).toEqual({
+    expect(snapshotAnnotations()).toEqual({
       '8': { title: 'recap', seenAt: 999 },
     })
   })
@@ -192,7 +207,7 @@ describe('TurnStore — the split is real on disk', () => {
   it('drops an annotation when its CHECKPOINT disappears, so a rewind takes effect', () => {
     save([rec(1, { title: 'one' }), rec(2, { title: 'two', seenAt: 5 })])
     save([rec(1, { title: 'one' })])
-    expect(JSON.parse(readFileSync(annotationFile(), 'utf8'))).toEqual({ '1': { title: 'one' } })
+    expect(snapshotAnnotations()).toEqual({ '1': { title: 'one' } })
   })
 
   it('clears an annotation the history stopped carrying', () => {
@@ -201,7 +216,10 @@ describe('TurnStore — the split is real on disk', () => {
     save([rec(1, { title: 'recap', seenAt: 5 })])
     save([rec(1)])
     expect(store.load('t1')[0]).toEqual(rec(1))
-    expect(existsSync(annotationFile())).toBe(false)
+    // The clear is PUBLISHED as an epoch-bumped empty snapshot (Sol r9 P2),
+    // never a raw unlink a crash could roll back.
+    expect(snapshotAnnotations()).toEqual({})
+    expect(new TurnStore(dir, annDir).load('t1')[0]).toEqual(rec(1))
   })
 
   it('replaces a changed annotation rather than merging into it', () => {
@@ -297,6 +315,119 @@ describe('TurnStore — annotations survive the same journeys as the history', (
   })
 })
 
+const annotationLog = (id = 't1'): string => path.join(annDir, `${id}.log.jsonl`)
+
+/**
+ * Sol r6 P1: the incremental path must be O(changed) ON DISK, not just in
+ * records visited. The previous persist enumerated, sorted and serialized the
+ * COMPLETE map whenever one annotation changed; now a change is one appended
+ * op line, and the snapshot is only rewritten by the full path or compaction.
+ */
+describe('AnnotationStore — updates append ops, never reserialize the snapshot', () => {
+  it('one changed annotation costs one op line; the snapshot bytes never move', () => {
+    const annotations = new AnnotationStore(annDir)
+    expect(annotations.save('t1', [rec(1, { title: 'one' }), rec(2)])).toBe(true)
+    const snapshotBefore = readFileSync(annotationFile(), 'utf8')
+
+    expect(annotations.update('t1', [rec(2, { seenAt: 5 })])).toBe(true)
+
+    expect(readFileSync(annotationFile(), 'utf8')).toBe(snapshotBefore)
+    expect(readFileSync(annotationLog(), 'utf8').trim().split('\n')).toHaveLength(1)
+  })
+
+  it('a fresh store replays snapshot + log back into one picture', () => {
+    const annotations = new AnnotationStore(annDir)
+    annotations.save('t1', [rec(1, { title: 'one' })])
+    annotations.update('t1', [rec(2, { seenAt: 5 })])
+
+    const replayed = new AnnotationStore(annDir).load('t1')
+    expect(replayed.get(1)).toEqual({ title: 'one' })
+    expect(replayed.get(2)).toEqual({ seenAt: 5 })
+  })
+
+  it('a clear op removes an annotation across a restart, exactly as the rebuild would', () => {
+    const annotations = new AnnotationStore(annDir)
+    annotations.save('t1', [rec(1, { title: 'one' }), rec(2, { seenAt: 5 })])
+    annotations.update('t1', [rec(2)])
+
+    expect(new AnnotationStore(annDir).load('t1').get(2)).toBeUndefined()
+    // The snapshot still holds the stale key — the log's clear op wins.
+    expect(snapshotAnnotations()).toMatchObject({
+      '2': { seenAt: 5 },
+    })
+  })
+
+  it('folds the log into the snapshot once replay weight crosses the threshold', () => {
+    const annotations = new AnnotationStore(annDir)
+    annotations.save('t1', [rec(1, { title: 'recap' })])
+    for (let i = 1; i <= ANNOTATION_LOG_COMPACT_MIN_OPS; i += 1) {
+      expect(annotations.update('t1', [rec(1, { title: 'recap', seenAt: i })])).toBe(true)
+    }
+    // The op that crossed the threshold triggered compaction: log folded away,
+    // snapshot carries the latest value, and a fresh store reads it whole.
+    expect(existsSync(annotationLog())).toBe(false)
+    expect(snapshotAnnotations()).toEqual({
+      '1': { title: 'recap', seenAt: ANNOTATION_LOG_COMPACT_MIN_OPS },
+    })
+    expect(new AnnotationStore(annDir).load('t1').get(1)).toEqual({
+      title: 'recap',
+      seenAt: ANNOTATION_LOG_COMPACT_MIN_OPS,
+    })
+  })
+})
+
+/**
+ * Sol r6 P1: a write that did not land must never be remembered as saved.
+ * Both paths return success, publish to memory only on success, retain the
+ * un-landed work, and retry it on the next flush.
+ */
+// Windows: chmod/fsync fault-injection does not apply on NTFS — macOS/Linux CI covers it.
+describe.skipIf(process.platform === 'win32')('AnnotationStore — a failed write is retained and retried, never claimed', () => {
+  it('save: fails closed once, then the retry lands the same bytes', () => {
+    const annotations = new AnnotationStore(annDir)
+    chmodSync(annDir, 0o500)
+    expect(annotations.save('t1', [rec(1, { title: 'recap' })])).toBe(false)
+    // Nothing on disk — and nothing forgotten: reads still see the candidate.
+    expect(existsSync(annotationFile())).toBe(false)
+    expect(annotations.load('t1').get(1)).toEqual({ title: 'recap' })
+
+    chmodSync(annDir, 0o700)
+    expect(annotations.save('t1', [rec(1, { title: 'recap' })])).toBe(true)
+    expect(snapshotAnnotations()).toEqual({
+      '1': { title: 'recap' },
+    })
+    expect(new AnnotationStore(annDir).load('t1').get(1)).toEqual({ title: 'recap' })
+  })
+
+  it('save: an update after the failure folds into the retried rebuild', () => {
+    const annotations = new AnnotationStore(annDir)
+    chmodSync(annDir, 0o500)
+    expect(annotations.save('t1', [rec(1, { title: 'recap' })])).toBe(false)
+
+    chmodSync(annDir, 0o700)
+    expect(annotations.update('t1', [rec(2, { seenAt: 5 })])).toBe(true)
+    const replayed = new AnnotationStore(annDir).load('t1')
+    expect(replayed.get(1)).toEqual({ title: 'recap' })
+    expect(replayed.get(2)).toEqual({ seenAt: 5 })
+  })
+
+  it('update: fails closed once, then retries WITHOUT duplicating the op', () => {
+    const annotations = new AnnotationStore(annDir)
+    annotations.save('t1', [rec(1, { title: 'one' })])
+    chmodSync(annDir, 0o500)
+    expect(annotations.update('t1', [rec(2, { seenAt: 5 })])).toBe(false)
+    expect(existsSync(annotationLog())).toBe(false)
+    // Retained, not claimed: memory still carries the dirty op…
+    expect(annotations.load('t1').get(2)).toEqual({ seenAt: 5 })
+
+    chmodSync(annDir, 0o700)
+    // …and replaying the SAME record writes it exactly once.
+    expect(annotations.update('t1', [rec(2, { seenAt: 5 })])).toBe(true)
+    expect(readFileSync(annotationLog(), 'utf8').trim().split('\n')).toHaveLength(1)
+    expect(new AnnotationStore(annDir).load('t1').get(2)).toEqual({ seenAt: 5 })
+  })
+})
+
 describe('AnnotationStore — a bad sidecar costs recaps, never history', () => {
   it('reads a corrupt file as no annotations', () => {
     const annotations = new AnnotationStore(annDir)
@@ -320,5 +451,142 @@ describe('AnnotationStore — a bad sidecar costs recaps, never history', () => 
     save([rec(1), rec(2, { title: 'recap' })])
     writeFileSync(annotationFile(), 'garbage', 'utf8')
     expect(new TurnStore(dir).load('t1').map((r) => r.index)).toEqual([1, 2])
+  })
+})
+
+/**
+ * Sol r7 P1: snapshot and log share an epoch, so a crash between "new
+ * snapshot renamed" and "old log unlinked" can never replay stale ops over
+ * the newer snapshot. Each boundary is simulated by CONSTRUCTING the exact
+ * intermediate disk state (with bytes the real writers produced) and reopening
+ * a fresh store, which must read the newest COMPLETE state.
+ */
+// Windows: chmod/fsync fault-injection does not apply on NTFS — macOS/Linux CI covers it.
+describe.skipIf(process.platform === 'win32')('AnnotationStore — snapshot+log crash consistency via shared epoch', () => {
+  const annotationLogFile = (id = 't1'): string => path.join(annDir, `${id}.log.jsonl`)
+
+  /** Snapshot says A (epoch 1), log later says B (ops on epoch 1). */
+  function seedSnapshotPlusLog(): void {
+    const annotations = new AnnotationStore(annDir)
+    expect(annotations.save('t1', [rec(1, { title: 'A' })])).toBe(true)
+    expect(annotations.update('t1', [rec(1, { title: 'B' })])).toBe(true)
+    expect(snapshotEpoch()).toBe(1)
+    expect(existsSync(annotationLogFile())).toBe(true)
+  }
+
+  it('ops carry the snapshot epoch and replay onto it', () => {
+    seedSnapshotPlusLog()
+    const op = JSON.parse(readFileSync(annotationLogFile(), 'utf8').trim()) as { e: number }
+    expect(op.e).toBe(1)
+    expect(new AnnotationStore(annDir).load('t1').get(1)).toEqual({ title: 'B' })
+  })
+
+  it('full-save window: snapshot renamed, stale log survives → reads the SAVE, not the log', () => {
+    seedSnapshotPlusLog()
+    // Keep the epoch-1 log aside, run the full save (epoch 2, log unlinked),
+    // then resurrect the stale log — the exact crash-between-rename-and-unlink
+    // state, byte for byte.
+    const staleLog = readFileSync(annotationLogFile(), 'utf8')
+    const annotations = new AnnotationStore(annDir)
+    expect(annotations.save('t1', [rec(1, { title: 'C' })])).toBe(true)
+    expect(snapshotEpoch()).toBe(2)
+    expect(existsSync(annotationLogFile())).toBe(false)
+    writeFileSync(annotationLogFile(), staleLog, 'utf8')
+
+    // Before the epoch, this replayed to B and silently rolled C back.
+    expect(new AnnotationStore(annDir).load('t1').get(1)).toEqual({ title: 'C' })
+  })
+
+  it('crash BEFORE the rename (temp staged, old snapshot intact) still reads snapshot+log', () => {
+    seedSnapshotPlusLog()
+    writeFileSync(`${annotationFile()}.tmp`, JSON.stringify({ epoch: 2, annotations: {} }), 'utf8')
+    expect(new AnnotationStore(annDir).load('t1').get(1)).toEqual({ title: 'B' })
+  })
+
+  it('legacy empty-save window: snapshot missing, stale log survives → reads EMPTY, no resurrection', () => {
+    seedSnapshotPlusLog()
+    // A pre-r9 empty save unlinked the snapshot first; a crash before the log
+    // unlink leaves only the log. Its ops are epoch 1; a bare directory is
+    // epoch 0 — so they stay inert whatever store version reopens the state.
+    rmSync(annotationFile())
+    const replayed = new AnnotationStore(annDir).load('t1')
+    expect(replayed.size).toBe(0)
+  })
+
+  it('the empty save PUBLISHES an epoch-bumped empty snapshot and reclaims the log (Sol r9)', () => {
+    seedSnapshotPlusLog()
+    const annotations = new AnnotationStore(annDir)
+    expect(annotations.save('t1', [rec(1)])).toBe(true)
+    // Not an unlink: emptiness rides the same temp+fsync+rename+dir-fsync
+    // path as any other save, so it is durable the moment it is claimed.
+    expect(snapshotEpoch()).toBe(2)
+    expect(snapshotAnnotations()).toEqual({})
+    expect(existsSync(annotationLogFile())).toBe(false)
+    expect(new AnnotationStore(annDir).load('t1').size).toBe(0)
+  })
+
+  it('crash boundary: the empty publish holds even when the log unlink never happened', () => {
+    seedSnapshotPlusLog()
+    const staleLog = readFileSync(annotationLogFile(), 'utf8')
+    const annotations = new AnnotationStore(annDir)
+    expect(annotations.save('t1', [rec(1)])).toBe(true)
+    // Crash-sim: the log unlink's directory entry never persisted — the old
+    // epoch-1 ops are back whole. The published snapshot is epoch 2, so they
+    // replay as inert and the clear the store reported SURVIVES the reboot.
+    writeFileSync(annotationLogFile(), staleLog, 'utf8')
+    expect(new AnnotationStore(annDir).load('t1').size).toBe(0)
+  })
+
+  it('a failed empty publish retains the pending clear and the retry lands it', () => {
+    seedSnapshotPlusLog()
+    const annotations = new AnnotationStore(annDir)
+    chmodSync(annDir, 0o500) // the empty snapshot's temp cannot be created
+    expect(annotations.save('t1', [rec(1)])).toBe(false)
+    // Retained, not claimed: reads already see the clear the disk lacks.
+    expect(annotations.load('t1').size).toBe(0)
+    expect(snapshotAnnotations()).toEqual({ '1': { title: 'A' } }) // disk untouched
+
+    chmodSync(annDir, 0o700)
+    expect(annotations.save('t1', [rec(1)])).toBe(true)
+    expect(snapshotAnnotations()).toEqual({})
+    expect(new AnnotationStore(annDir).load('t1').size).toBe(0)
+  })
+
+  it('an agent that never had an annotation still leaves NO file behind', () => {
+    const annotations = new AnnotationStore(annDir)
+    expect(annotations.save('t1', [rec(1), rec(2)])).toBe(true)
+    expect(existsSync(annotationFile())).toBe(false)
+    expect(existsSync(annotationLogFile())).toBe(false)
+  })
+
+  it('after the empty save, a log-only agent writes epoch-0 ops that DO replay', () => {
+    const annotations = new AnnotationStore(annDir)
+    expect(annotations.update('t1', [rec(3, { seenAt: 7 })])).toBe(true)
+    expect(existsSync(annotationFile())).toBe(false)
+    const op = JSON.parse(readFileSync(annotationLogFile(), 'utf8').trim()) as { e: number }
+    expect(op.e).toBe(0)
+    expect(new AnnotationStore(annDir).load('t1').get(3)).toEqual({ seenAt: 7 })
+  })
+
+  it('compaction bumps the epoch too, so its own stale window is covered', () => {
+    const annotations = new AnnotationStore(annDir)
+    annotations.save('t1', [rec(1, { title: 'recap' })])
+    for (let i = 1; i <= ANNOTATION_LOG_COMPACT_MIN_OPS; i += 1) {
+      annotations.update('t1', [rec(1, { title: 'recap', seenAt: i })])
+    }
+    expect(existsSync(annotationLogFile())).toBe(false)
+    expect(snapshotEpoch()).toBe(2)
+    expect(new AnnotationStore(annDir).load('t1').get(1)).toEqual({
+      title: 'recap',
+      seenAt: ANNOTATION_LOG_COMPACT_MIN_OPS,
+    })
+  })
+
+  it('legacy files — bare-map snapshot, ops without e — read as one epoch-0 pair', () => {
+    writeFileSync(annotationFile(), JSON.stringify({ '1': { title: 'legacy' } }), 'utf8')
+    writeFileSync(annotationLogFile(), `${JSON.stringify({ i: 2, a: { seenAt: 5 } })}\n`, 'utf8')
+    const replayed = new AnnotationStore(annDir).load('t1')
+    expect(replayed.get(1)).toEqual({ title: 'legacy' })
+    expect(replayed.get(2)).toEqual({ seenAt: 5 })
   })
 })

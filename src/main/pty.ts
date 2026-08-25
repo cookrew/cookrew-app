@@ -13,6 +13,9 @@ import { HerdrStatusFeed, setStatusFeed, statusFeed } from './herdr-agent-status
 import { DirectMultiplexer } from './direct-multiplexer'
 import { selectMultiplexers } from './multiplexer-select'
 import { harnessFor } from './harness'
+import { defaultProducerLease } from './producer-lease'
+import { PtyOwnership } from './pty-scope'
+import { defaultInputProvenance } from './input-provenance'
 import type { Terminal as HeadlessTerminalType } from '@xterm/headless'
 
 const { Terminal: HeadlessTerminal } = xtermHeadless as unknown as {
@@ -272,6 +275,20 @@ export function migrateForeignSession(
   return 'migrated'
 }
 
+/**
+ * Verdict for one owner write at a possibly-armed terminal (Sol r4 P0-1).
+ * 'preempt-failed' means the armed dispatch's interrupt row could NOT commit
+ * durably (ledger down, intent parked fail-closed) — the owner's bytes are
+ * REFUSED rather than delivered, because delivering them would open a second
+ * producer's turn beside a reservation that is still live.
+ * 'refused' (Sol r6 P0-1) means a dispatch DELIVERY holds the terminal's
+ * producer lease right now — its paste may be sitting half-ingested in the
+ * shared input box — and non-preempting owner bytes must not enter a buffer
+ * containing a partial dispatch delivery. Anything but 'allow' drops the
+ * bytes before they reach the child.
+ */
+export type OwnerInputVerdict = 'allow' | 'preempt-failed' | 'refused'
+
 export interface PtySessionOptions {
   terminalId: string
   command: string
@@ -311,6 +328,32 @@ export class PtySession extends EventEmitter {
    * agent to go idle — need to name it.
    */
   readonly sessionName: string
+
+  /**
+   * The local-producer guard (Sol r4 P0-1a), consulted BEFORE proc.write —
+   * which is the only place a guard can actually stop a competing submission;
+   * a hook that fires after delivery only changes bookkeeping. Wired by the
+   * conductor to the tracker's preemption (TurnTracker.guardOwnerInput): when
+   * the write would submit a NEW prompt into a terminal carrying an armed
+   * dispatch, the guard preempts the dispatch synchronously-durably first.
+   * 'preempt-failed' (the interrupt row could not commit) REFUSES the write,
+   * fail-closed: the bytes never reach the child and no input event fires.
+   * Null (unwired) allows everything — the plain write path of tests and
+   * shells.
+   */
+  beforeOwnerInput: ((terminalId: string, data: string) => OwnerInputVerdict) | null = null
+
+  /**
+   * The most recent refused owner write, while the refusal is CURRENT (Sol
+   * r8 P1 — desktop refusals were silent): cleared by the next allowed
+   * write. write() returns the verdict per call, but the renderer's
+   * fire-and-forget IPC discards returns — this is the pull-side record the
+   * conductor exposes (PtyManager.lastRefusal → IPC) so the UI can explain a
+   * dead keystroke after the fact. The refusal REASON lives with the state
+   * that refused: TurnTracker.refusalReason names it from the lease.
+   */
+  private lastRefusalInfo: { verdict: Exclude<OwnerInputVerdict, 'allow'>; at: number } | null =
+    null
 
   constructor(options: PtySessionOptions) {
     super()
@@ -397,11 +440,99 @@ export class PtySession extends EventEmitter {
     })
   }
 
-  write(data: string): void {
+  write(data: string): OwnerInputVerdict {
+    // The producer guard runs BEFORE the bytes reach the child (Sol r4 P0-1a):
+    // preemption after proc.write cannot stop a competing submission, only
+    // relabel it. A refused write — failed preemption OR a producer holding
+    // the lease (Sol r6 P0-1, extended to owner holders per r7 P0-2) —
+    // delivers nothing and announces nothing. The verdict is RETURNED (r7
+    // P0-2): a refusal used to vanish into a void return, so HTTP/CLI callers
+    // waited out quiescence over bytes that never landed. Legacy callers that
+    // ignore the return lose nothing.
+    //
+    // A submitting canvas Enter needs no async lease hold here: the guard
+    // verdict and proc.write share one synchronous stretch, so the classify →
+    // submit sequence IS an acquire-submit-release with no window a second
+    // producer could enter.
+    const verdict = this.beforeOwnerInput?.(this.terminalId, data) ?? 'allow'
+    if (verdict !== 'allow') {
+      this.lastRefusalInfo = { verdict, at: Date.now() }
+      return verdict
+    }
+    // WRITE-AHEAD provenance (Sol r10 P0-1), after the verdict — refused
+    // bytes never cross, so they never dirty — and BEFORE proc.write: the
+    // pane outlives this process, and the durable dirty fact must land first
+    // so a crash mid-keystroke leaves at worst a false-dirty the normal
+    // clears (downstream witness, proven clear, proven pane death) resolve,
+    // never a false-clean box the next process would dispatch into. `data`
+    // rides along so pure navigation (mouse, arrows) does not mark. A mark
+    // that CANNOT COMMIT refuses the write outright (Sol r11 P0-1): an
+    // unprotected byte in a pane that outlives us is the false-clean crash
+    // window itself, so the WAL failing must fail the keystroke, not the
+    // guarantee.
+    if (!defaultProducerLease().noteBytesEntering(this.terminalId, data)) {
+      this.lastRefusalInfo = { verdict: 'refused', at: Date.now() }
+      return 'refused'
+    }
+    this.lastRefusalInfo = null
     this.proc.write(data)
     // Every input path (renderer keystrokes, `cookrew ask`, routines) funnels
     // through here, so turn tracking can observe prompts uniformly.
     this.emit('input', data)
+    return 'allow'
+  }
+
+  /**
+   * The still-current refusal of the most recent owner write, or null once a
+   * write has flowed again. See lastRefusalInfo for why this exists beside
+   * write()'s own return.
+   */
+  lastRefusal(): { verdict: Exclude<OwnerInputVerdict, 'allow'>; at: number } | null {
+    return this.lastRefusalInfo
+  }
+
+  /**
+   * The owner-submit primitive's OWN delivery through this PTY (Sol r7 P0-2)
+   * — `ownerSubmit` in ask.ts, and nothing else. The primitive has already
+   * performed everything the guard would: it holds the producer lease as the
+   * owner, refused if any other producer held it, and ran the armed-dispatch
+   * preemption. Routing its bytes back through the guard would make the
+   * holder refuse itself (the guard refuses ALL untagged bytes while a lease
+   * is held). The input event stays untagged: these ARE owner bytes, and the
+   * tracker must learn the prompt from them exactly as it does from typing.
+   */
+  writeFromOwner(data: string): boolean {
+    // Tagged paths mark too (Sol r10 P0-1): the WAL cares that bytes entered
+    // the box, not which producer's door they came through. A mark that
+    // cannot commit refuses the write (Sol r11 P0-1) — false, no byte, no
+    // input event — and ownerSubmit surfaces the refusal.
+    if (!defaultProducerLease().noteBytesEntering(this.terminalId, data)) return false
+    this.proc.write(data)
+    this.emit('input', data)
+    return true
+  }
+
+  /**
+   * The dispatch engine's OWN delivery through this PTY — the reattach
+   * fallback, and nothing else (Sol r4 P0-1a/b). Bypasses the owner guard
+   * (the dispatch must not preempt itself) and tags the input event with its
+   * source, so the tracker's fallback exemption keys on PROVENANCE, never on
+   * byte equality — an owner typing the identical bytes is still an owner.
+   */
+  writeFromDispatch(data: string): boolean {
+    // The dispatch's paste marks with its PRODUCER IDENTITY and body (Sol
+    // r11 P0-3) before the paste crosses: a crash between paste and CR must
+    // adopt as everyone-blocking delivery residue — an owner Enter beside a
+    // dead dispatch's brief is the combined submit this plane forbids — and
+    // only the transcript witnessing the delivered prompt consumed (or
+    // proven pane death) clears it. A mark that cannot commit refuses the
+    // write (Sol r11 P0-1): the caller's stillValid/landing checks read the
+    // undelivered paste honestly, and its later bare CR submits an empty
+    // box, which every hosted TUI treats as a no-op.
+    if (!defaultProducerLease().noteDispatchBytesEntering(this.terminalId, data)) return false
+    this.proc.write(data)
+    this.emit('input', data, 'dispatch')
+    return true
   }
 
   /**
@@ -636,9 +767,70 @@ export class PtySession extends EventEmitter {
    *   unbounded, though — history_size caps at the 50k history-limit, past
    *   which the oldest lines trim and pre-window anchors go stale (clamp).
    */
+  private paneStateCache: { scrollRow: number | null; historySize: number | null } = {
+    scrollRow: null,
+    historySize: null
+  }
+  private paneStateAt: number | null = null
+
   paneScrollState(): { scrollRow: number | null; historySize: number | null } {
     if (!this.usesTmux || this.disposed) return { scrollRow: null, historySize: null }
     return activeMux?.scrollState(this.sessionName) ?? { scrollRow: null, historySize: null }
+  }
+
+  /**
+   * Same reading for the hot ACTIVITY path — the backend's STALE, fork-free
+   * scroll state when it offers one (the herdr host mux serves it from its async
+   * inventory instead of forking `herdr pane list`). Falls back to the exact
+   * read for backends whose scrollState is already cheap. NEVER feeds an anchor.
+   */
+  private paneScrollStateStale(): { scrollRow: number | null; historySize: number | null } {
+    if (!this.usesTmux || this.disposed) return { scrollRow: null, historySize: null }
+    const mux = activeMux
+    if (!mux) return { scrollRow: null, historySize: null }
+    return (mux.scrollStateStale?.(this.sessionName) ?? mux.scrollState(this.sessionName))
+  }
+
+  /**
+   * The SAME reading, for callers that run on a hot path and can tolerate a
+   * stale one — today that is `activityOf`, which runs once per tracked
+   * terminal per activity push.
+   *
+   * WHY THIS EXISTS. Profiled on the live main process: execFileSync was 5,189ms
+   * of 5,475ms total main-thread JS in a 20s window (94.5%), through
+   *   execFileSync -> herdr -> readPanes -> panes -> paneFor -> scrollState
+   *   -> paneScrollState -> activityOf -> push
+   * The herdr host multiplexer resolves a pane by forking the CLI inline, so
+   * every push forked once per terminal and the main thread was unavailable for
+   * the duration. That is the constant-payload latency Magpie measured from
+   * outside: an identical 1,184-byte response at p50 1403ms and min 94ms — the
+   * bytes were never the cost, the queue behind the fork was.
+   *
+   * WHY NOT CACHE `scrollState` ITSELF, which would fix every caller at once:
+   * `scrollAnchor()` reads the same value and it becomes TurnRecord.scrollLine,
+   * the checkpoint anchor. A stale anchor is a checkpoint that points at the
+   * wrong place in the transcript — a mark that lies, which is worse than a
+   * mark that is slow. Anchors are read at turn boundaries, not per push, so
+   * they keep the exact read and pay the fork.
+   *
+   * The staleness that IS accepted here is bounded to PANE_STATE_TTL_MS and
+   * costs an activity chip that is briefly behind. Tinker verified the axis
+   * that would have made this unacceptable: nothing activityOf returns reaches
+   * a TurnRecord, so a stale read cannot corrupt the ledger.
+   */
+  paneScrollStateCached(): { scrollRow: number | null; historySize: number | null } {
+    const now = Date.now()
+    if (this.paneStateAt !== null && now - this.paneStateAt < PANE_STATE_TTL_MS) {
+      return this.paneStateCache
+    }
+    // The cache MISS reads the STALE, fork-free inventory — not the exact
+    // paneScrollState, which forks `herdr pane list` inline. That inline fork on
+    // every 500ms miss, once per tracked terminal, was 94.5% of main-thread JS.
+    // Anchors keep the exact read (scrollAnchor → paneScrollState); the activity
+    // chip a stale reading feeds never reaches a TurnRecord.
+    this.paneStateCache = this.paneScrollStateStale()
+    this.paneStateAt = now
+    return this.paneStateCache
   }
 
   /** Live scroll position only (see paneScrollState). */
@@ -658,6 +850,14 @@ export class PtySession extends EventEmitter {
 // and the prefix key are discoverable. The status bar is deliberately STATIC
 // (no clock, status-interval 0) — a per-second clock would keep the PTY
 // emitting and break `cookrew ask`'s output-quiescence detection.
+/**
+ * How stale an activity-path pane reading may be. 500ms matches the herdr host
+ * multiplexer's own ADMISSION_FRESH_MS, deliberately: that cache already serves
+ * pane RESOLUTION stale for the same reason, and two different staleness
+ * windows on one backend is a second truth to keep in step.
+ */
+const PANE_STATE_TTL_MS = 500
+
 const TMUX_CONF = [
   'set -g status on',
   'set -g status-interval 0',
@@ -740,12 +940,35 @@ export function multiplexerOrder(
 
 export class PtyManager {
   private sessions = new Map<string, PtySession>()
+
+  /**
+   * Which workspace holds each live PTY (multi-instance step 2). ONE map, one
+   * index over it — see pty-scope.ts for why sharding would break both the
+   * orphan reaper's fail-safe and the flat pane-inventory cost curve.
+   */
+  private readonly ownership = new PtyOwnership()
   readonly runtimeDir: string
   readonly socketPath: string
   private tmuxConf: string
   private herdrConf: string
 
+  /**
+   * Backend death fan-out (Sol r1 P1): the supervisor's detection must reach
+   * the dispatch plane so every open record its panes hosted is stamped
+   * interrupted — never left to the ten-minute sweep. Late-bound because the
+   * dispatch service is constructed after the manager; called only long
+   * after both exist.
+   */
+  onBackendDeath: ((why: string) => void) | null = null
+
   constructor() {
+    // Wire the durable input-provenance WAL into the process-wide producer
+    // lease (Sol r10 P0-1). Done HERE — the PTY plane's boot, before any
+    // session exists or any terminal id is queried — so every write path's
+    // WAL-first mark and every first-sight adoption consult the same store.
+    // Tests never construct a PtyManager, so their leases stay pure memory
+    // unless they inject a store themselves.
+    defaultProducerLease().attachProvenance(defaultInputProvenance())
     // Fixed (pid-independent) so a tmux session's baked-in COOKREW_SOCKET /
     // COOKREW_CLI paths stay valid across app restarts — the whole point of
     // persisting terminals in tmux.
@@ -772,7 +995,12 @@ export class PtyManager {
     setBackends(candidates)
     // A dead herdr server means every agent is dead until it returns; the
     // supervisor turns that from "until the next app launch" into ~15s.
-    if (roles.host instanceof HerdrHostMultiplexer) roles.host.startSupervisor()
+    if (roles.host instanceof HerdrHostMultiplexer) {
+      roles.host.startSupervisor(undefined, (why) => this.onBackendDeath?.(why))
+      // Seed the admission inventory at boot so the first dispatch never
+      // answers from an empty snapshot (and never forks inline either).
+      roles.host.primeAdmissionCache()
+    }
 
     // Push-fed agent state, when the backend has it. Subscriptions are
     // per-pane, so the feed is refreshed whenever the terminal set changes —
@@ -824,7 +1052,11 @@ export class PtyManager {
     activeMux?.reloadConfig()
   }
 
-  spawn(options: Omit<PtySessionOptions, 'socketPath' | 'cliDir' | 'tmuxConf'>): PtySession {
+  spawn(
+    options: Omit<PtySessionOptions, 'socketPath' | 'cliDir' | 'tmuxConf'>,
+    workspaceId?: string
+  ): PtySession {
+    if (workspaceId) this.ownership.claim(options.terminalId, workspaceId)
     const existing = this.sessions.get(options.terminalId)
     if (existing) return existing
     const session = new PtySession({
@@ -841,6 +1073,7 @@ export class PtyManager {
     session.on('exit', () => {
       if (this.sessions.get(options.terminalId) === session) {
         this.sessions.delete(options.terminalId)
+        this.ownership.release(options.terminalId)
       }
     })
     this.sessions.set(options.terminalId, session)
@@ -853,6 +1086,17 @@ export class PtyManager {
 
   get(terminalId: string): PtySession | undefined {
     return this.sessions.get(terminalId)
+  }
+
+  /**
+   * The still-current refusal of a terminal's most recent owner write (Sol
+   * r8 P1). The conductor exposes this over IPC beside the tracker's
+   * refusalReason, so the renderer can explain a swallowed keystroke instead
+   * of leaving the desktop the one surface where refusals are silent. Null:
+   * no session, or the last write flowed.
+   */
+  lastRefusal(terminalId: string): { verdict: OwnerInputVerdict; at: number } | null {
+    return this.sessions.get(terminalId)?.lastRefusal() ?? null
   }
 
   /**
@@ -884,6 +1128,36 @@ export class PtyManager {
       session.dispose()
       this.sessions.delete(terminalId)
     }
+    this.ownership.release(terminalId)
+  }
+
+  // ---- per-session scope (multi-instance step 2) ----
+
+  /** The workspace holding a terminal's PTY, if any holds it. */
+  workspaceOfTerminal(terminalId: string): string | undefined {
+    return this.ownership.workspaceOf(terminalId)
+  }
+
+  /** Does this process hold a live PTY for that terminal? */
+  isLive(terminalId: string): boolean {
+    return this.sessions.has(terminalId)
+  }
+
+  /**
+   * Detach every PTY one workspace holds, returning the ids detached. The
+   * per-session teardown: used when a session drains, where the old code
+   * detached whatever the outgoing canvas happened to list.
+   */
+  detachWorkspace(workspaceId: string): string[] {
+    const ids = this.ownership.releaseWorkspace(workspaceId)
+    for (const id of ids) {
+      const session = this.sessions.get(id)
+      if (session) {
+        session.dispose()
+        this.sessions.delete(id)
+      }
+    }
+    return ids
   }
 
   /** Close for good: end the tmux session, then drop the PTY. */
@@ -894,6 +1168,7 @@ export class PtyManager {
       session.dispose()
       this.sessions.delete(terminalId)
     }
+    this.ownership.release(terminalId)
   }
 
   /**
@@ -920,7 +1195,20 @@ export class PtyManager {
     // when the terminal has no tracked PTY — `kill` alone no-ops there and
     // the respawn would reattach to the old session instead of rebooting.
     this.killDetached(terminalId)
-    await waitForTmuxDeath(sessionNameFor(terminalId), timeoutMs)
+    try {
+      await waitForTmuxDeath(sessionNameFor(terminalId), timeoutMs)
+    } catch (error) {
+      // The pane SURVIVED the kill deadline: its input box is still real, so
+      // the WAL fact protecting it must stand — and an unconfirmed dispatch
+      // delivery hardens to contamination, fail-closed (Sol r11 P1).
+      defaultProducerLease().noteKillFailed(terminalId)
+      throw error
+    }
+    // POSITIVELY proven pane death — the one event that may clear the box's
+    // durable provenance (Sol r11 P1): the input box the fact described no
+    // longer exists anywhere. Logical retirement (lease.retire) happened at
+    // the caller before the kill and deliberately kept the fact until now.
+    defaultProducerLease().clearProvenanceOnDeath(terminalId)
   }
 
   killDetached(terminalId: string): void {
@@ -949,5 +1237,6 @@ export class PtyManager {
   disposeAll(): void {
     for (const session of this.sessions.values()) session.dispose()
     this.sessions.clear()
+    for (const id of this.ownership.all()) this.ownership.release(id)
   }
 }

@@ -1,0 +1,60 @@
+[P0] The owner guard is a point-in-time check, not a one-producer lease
+WHERE: src/main/ask.ts:75-92,111-117; src/main/dispatch.ts:1261-1287; src/main/turn-tracker.ts:1520-1536
+CLAIM: The submit-site guard preempts a dispatch that was already armed, but it does not reserve the terminal for owner work, so a later dispatch or a second owner submission can race an owner ask that is already inside promptAgent.
+EVIDENCE: askTerminal calls guardOwnerSubmit and then awaits the blocking promptAgent without installing an owner reservation or open-turn fact until noteExternalInput after promptAgent returns. Dispatch admission checks only its own reserved/pending-dispatch state, so it can arm and invoke another promptAgent during that await; two concurrent owner asks likewise both pass while no dispatch is armed. The PTY guard also deliberately allows every non-submitting byte while a dispatch is armed, so owner typing can mutate the shared input box before the eventual submit preempts the ledger record. Interrupting that record does not abort an agent turn that the consumer prompt already started. The implementation therefore serializes "owner submits after an armed dispatch" only, not all producers of the single-threaded agent required by A3.
+FIX: Add one per-terminal producer lease shared by native asks, typed asks/raw input, dispatch native delivery, and fallback. Acquire it before the first irreversible byte and hold it through submission acknowledgement. Dispatch must refuse while owner work holds it; owner takeover must explicitly abort the active consumer turn before acquiring, or refuse/wait. Non-submit owner bytes must not enter a consumer-owned input buffer.
+
+[P0] Delayed paste-and-submit can deliver after its dispatch is cancelled
+WHERE: src/main/ask.ts:40-50; src/main/dispatch.ts:1569-1596; src/main/index.ts:822-826; src/main/pty.ts:434-443
+CLAIM: deliveryLive is checked before entering the fallback, but the fallback's two writes are separated by up to 1.5 seconds and neither write is cancellation-aware, so cancellation after the paste cannot stop the later Enter from submitting it.
+EVIDENCE: pasteAndSubmit writes bracketed prompt bytes, awaits a timer, then writes CR. The injected reattachFallback calls it with writeFromDispatch, which bypasses the owner guard and has no delivery token. If interrupt, release, backend death, or sweep cancels the dispatch during the timer, fallback still emits CR and returns true; an owner can also type into the same input box between the paste and CR. The new pre-fallback deliveryLive check therefore does not cover the irreversible sequence it authorizes. Typed ask has the symmetric race: its one guard can pass, then a dispatch can arm during the paste delay.
+FIX: Hold the shared producer lease across paste, delay, and submit, or replace the split PTY sequence with one atomic backend submission. Thread a cancellation/generation check through every fallback write and never allow owner bytes into a buffer containing a partial dispatch delivery.
+
+[P1] CWD rebind still bypasses permanent terminal retirement
+WHERE: src/main/index.ts:958-974,1146-1160; src/main/terminal-cwd.ts:69-84
+CLAIM: The centralized retireTerminal cleanup covers remove, workspace removal, and cuts, but moveTerminalCwd still uses a bespoke release that omits clearOpenTurnFact before killing and respawning the same terminal id.
+EVIDENCE: the rebind release interrupts the dispatch, unwatches, and untracks; unlike retireTerminal it never clears the detached terminal-owned open-turn fact. moveTerminalCwd then kills and spawns under the same node id. A fact preserved deliberately across ordinary untrack can consequently attach to the new session/cwd and keep inTurn, drain, restore, or rotation decisions pinned by work that belonged to the dead session.
+FIX: Route the CWD rebind release through retireTerminal(id, 'terminal rebound'), or centralize the equivalent interrupt, fact clear, unwatch, and untrack ordering in the dependency.
+
+[P1] Deferred admission refresh still synchronously forks on Electron main
+WHERE: src/main/herdr-host-multiplexer.ts:440-448,479-501
+CLAIM: An expired request now serves stale without forking inline, but the deferred refresh runs synchronous herdr pane list on the same main thread on the next event-loop turn.
+EVIDENCE: refreshAdmissionCacheSoon uses setImmediate, whose callback calls readPanes; readPanes calls runner.run synchronously. This improves HTTP response latency but merely moves the process-spawn stall to the next main-loop turn, where it can delay unrelated PTY, IPC, and renderer work once per expired cache window. It does not meet A5's pushed-or-batched inventory model or the broader main-thread tail-latency purpose of I1/I6.
+FIX: Refresh pane inventory through a genuinely asynchronous runner or a pushed supervisor snapshot, with single-flight publication on completion. Add a structural gate that no synchronous runner call occurs in either admission or its deferred refresh.
+
+[P1] The persistence pipeline is not O(delta) across restart or annotations
+WHERE: src/main/turn-store.ts:131-135,180-190,370-418; src/main/turn-annotations.ts:164-205; src/main/turn-tracker.ts:1918-1932
+CLAIM: The hot conversation append path is incremental, but cold load does not seed its written-tail metadata, annotation updates still sort and serialize all annotations, and asynchronous title completion re-maps and full-saves all turns.
+EVIDENCE: TurnStore.load hydrates records without calling remember, so the first scheduleDelta after a restart sees known undefined and falls through to writeAll, rewriting the whole ledger. AnnotationStore.update visits only changed records but persist enumerates, sorts, and JSON-serializes the complete map whenever one annotation changes; focused turns commonly add title/seen/scroll annotations. finalizeTitle maps the complete history and calls scheduleSave, which also chooses the full persistence path. The new 300+1 test starts from a store written in the same process and spies on update's input length, so it misses cold-start rewrite, persist's O(N) traversal, and the normal title path.
+FIX: Seed count/last-line metadata while loading, use a delta-capable annotation representation or bounded append log with compaction, and update titles/seen markers by indexed delta rather than whole-array map/full save. Gate records visited and bytes serialized after process restart and after a title/annotation update.
+
+[P1] Annotation write failure poisons the in-memory success state
+WHERE: src/main/turn-annotations.ts:142-149,164-181,200-225
+CLAIM: AnnotationStore commits mutations to its in-memory state before persistence, while persist swallows errors, so a failed write can be treated as successfully saved forever.
+EVIDENCE: save installs next in state before persist; update mutates the held map in place before persist. If writeFileSync or renameSync fails, persist logs and returns without restoring state or marking it dirty. Replaying the same update then finds no difference in memory and performs no write, silently losing title, seenAt, or scrollLine until some unrelated later mutation happens to rewrite the file.
+FIX: Build and persist a cloned candidate, publishing it as current only after success, or retain an explicit dirty candidate and retry it. Make persist return success/failure and add a fail-once/retry test for both save and update.
+
+[P2] Scrape latency dedupe remains restart-local
+WHERE: src/main/turn-tracker.ts:453-474,1219-1292,1349,1467
+CLAIM: observedAt and exact-byte FIFO matching fix the long-turn and collision errors, but the dedupe observations remain memory-only and are lost on restart.
+EVIDENCE: scrapeEmitted has no durable backing and dispose/removal clears it. A restart after scrape emission but before the file-backed record reconciles forgets that the turn's latency was already reported; the later durable closer emits it again. This is telemetry rather than dispatch correctness, but restart can still double-count the tail metric used to validate the design.
+FIX: Persist a reported marker keyed by durable turn UUID/event identity, or explicitly document restart-local at-most-once as the metric contract and exclude that window from claims.
+
+[P2] Tail replacement has a truncate-before-append crash window
+WHERE: src/main/turn-store.ts:404-418,430-445
+CLAIM: The one-line tail optimization destructively truncates the only ledger file before replacement bytes are durable, and a failure is not retained for retry.
+EVIDENCE: rewriteTail verifies the suffix, closes the read descriptor, calls truncateSync, then appendFileSync. A crash or append failure between those calls removes the prior tail. flush has already deleted pending and dirty state before entering this path and only logs the error, so a live-process write failure also loses the retry. Native files may reconstruct this derived ledger later, but until that happens history and correlation are incomplete; expanding this path to scrape-only authority would make the loss irrecoverable.
+FIX: Replace the tail through an atomic temp/segment strategy, or keep old bytes durable until the replacement is fsynced and retain dirty state on failure. Add injected truncate/append failure and restart-recovery tests.
+
+R5-#1: PARTIAL - Native ask now consults the owner guard before promptAgent, but the check does not reserve owner work against a later dispatch, a second owner ask, or non-submit owner bytes.
+R5-#2: PARTIAL - Queued/native delivery cancellation is revalidated, but the delayed fallback paste and CR are an uncancellable multi-write sequence after the last check.
+R5-#3: FIXED - Cross-version, missing, and otherwise incomparable fingerprints now fail closed with 409; only proven same-version equality replays.
+R5-#4: FIXED - Attempt, confirmation, and retraction carry a dispatch generation and settled/successor generations no-op in the tracker.
+R5-#5: PARTIAL - Standard removal, workspace removal, and both cut phases use retireTerminal, but CWD rebind still omits open-fact cleanup.
+R5-#6: FIXED - compareTerminalIntents ranks evidence authority before state and preserves parser identity while merging metadata.
+R5-#7: PARTIAL - Admission returns without an inline fork, but its setImmediate refresh still executes a synchronous herdr CLI call on Electron main.
+R5-#8: PARTIAL - The warm conversation append/tail path and tracker buffer are incremental, but cold restart, annotation serialization, title updates, and failure retry still violate the end-to-end claim.
+R5-#9: PARTIAL - Long-turn expiry uses observedAt and prompt fallback is exact FIFO, but dedupe state remains restart-local.
+R5-#10: FIXED - Registry compaction repairs mode, handles stale temp, fsyncs temp and parent directory, and unlinks temp on failure.
+
+VERDICT: UNSOUND - P0:2 P1:4 P2:2

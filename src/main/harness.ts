@@ -39,6 +39,68 @@ export type SessionField =
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/**
+ * How a harness's session FILE proves that a turn ENDED (Sol round-2 P0 —
+ * dispatch closure must know whether a file observer can ever close it):
+ *
+ * 'native'   — the parser marks the TAIL record `final: true` from a positive
+ *              end-of-turn marker the harness itself writes (claude:
+ *              assistant `stop_reason: 'end_turn'`; codex: the per-turn
+ *              `task_complete` event, present in both rollout generations;
+ *              pi: assistant `stopReason: 'stop'` — each verified against
+ *              real session files). A background dispatch's turn — always
+ *              the tail — closes from the file alone.
+ *
+ * 'boundary' — only a LATER user prompt (the next-user boundary) finalizes a
+ *              record, so the tail can never prove completion and a
+ *              file-backed background dispatch would strand until sweep.
+ *              Dispatch acceptance must refuse file-backed background
+ *              dispatch for such a harness (the conductor reads this off the
+ *              watchSpec). Scrape-only harnesses declare 'boundary' too:
+ *              with no file there is no tail to prove anything.
+ */
+export type TurnFinality = 'native' | 'boundary'
+
+/**
+ * Golden-save cloning contract (Sol r3 P1; S7, see
+ * scratchpad/v5-instance-economy.html): how a harness turns a published
+ * golden session file into a FRESH runnable instance. A generic byte copy is
+ * NOT a clone — session formats carry identity and lineage (Claude sessionId
+ * fields, Codex session_meta + rollout paths, Pi id/parent graphs), and a
+ * copy that keeps them can share identity with the golden source, resume the
+ * ORIGINAL conversation, break parent links, or leave the golden file open
+ * to mutation. Only Claude has format-aware restamping today (claude-fork's
+ * saveRoleSessionCopy/resumeRoleSession, which refuse non-Claude).
+ *
+ * An implementation MUST guarantee, per clone:
+ *  - FRESH IDENTITY: a newly minted session id/ref, never the golden one;
+ *  - REWRITTEN REFERENCES: every format-specific self-reference (embedded
+ *    session ids, file paths, parent/graph links) restamped to the fresh
+ *    identity — nothing in the clone names the source;
+ *  - ISOLATED INSTANCE PATH: the clone lands in the instance's own session
+ *    tree, never beside (or over) the golden file;
+ *  - RESUME PROVENANCE VALIDATION: the resume key the clone yields is
+ *    verified to resolve to the CLONE's file before it is handed to a
+ *    launch command — a clone that would resume the source is a failure;
+ *  - SOURCE IMMUTABILITY: the golden file is opened read-only and is
+ *    byte-identical after the clone, verified, not assumed.
+ *
+ * No harness implements this yet — the field exists so the contract is
+ * pinned in the type BEFORE S7 lands, and so absence is checkable: a harness
+ * without goldenClone cannot publish golden-save templates (template
+ * publishing must REFUSE, exactly like turnFinality 'boundary' refuses
+ * file-backed background dispatch). tests/harness-conformance.test.ts pins
+ * the absent-means-unsupported semantics.
+ */
+export interface GoldenCloneCapability {
+  /**
+   * Clone `goldenFile` into `instanceSessionDir`, returning the fresh
+   * session reference (in the harness's own sessionField format) that
+   * resumes the CLONE. Must throw rather than fall back to a byte copy.
+   */
+  clone(goldenFile: string, instanceSessionDir: string): Promise<{ sessionRef: string }>
+}
+
 export interface Harness {
   id: HarnessId
   /** True when a launch command runs this harness. */
@@ -66,6 +128,12 @@ export interface Harness {
    *            ships (tests/harness-conformance.test.ts pins this).
    */
   turns: 'file' | 'scrape'
+  /**
+   * Whether this harness's parser can prove END-OF-TURN on the tail record
+   * (see TurnFinality). Required so a new harness DECLARES its closure story
+   * rather than inheriting a strand-until-sweep default.
+   */
+  turnFinality: TurnFinality
   /** Session-file lines → TurnRecords; present exactly when turns === 'file'. */
   parseTurns?: (lines: string[]) => TurnRecord[]
   /**
@@ -76,6 +144,12 @@ export interface Harness {
    * when turns === 'file'.
    */
   watchFile?: (node: TerminalNodeData, options: HarnessWatchOptions) => string | null
+  /**
+   * Golden-save clone capability (see GoldenCloneCapability). ABSENT on
+   * every harness today — absent means golden-save template publishing must
+   * refuse this harness; it must never degrade to a byte copy.
+   */
+  goldenClone?: GoldenCloneCapability
 }
 
 const CLAUDE: Harness = {
@@ -85,6 +159,8 @@ const CLAUDE: Harness = {
   resumeKey: (ref) => (ref ? ref : null),
   resumeCommand: (command, key) => `${stripSessionFlags(command)} --resume ${key}`,
   turns: 'file',
+  // Tail proof: assistant stop_reason 'end_turn' (session-turns accumulator).
+  turnFinality: 'native',
   parseTurns: parseSessionTurns,
   watchFile: claudeWatchFile
 }
@@ -100,6 +176,10 @@ const CODEX: Harness = {
   resumeCommand: (command, key) =>
     `${command.replace(/\s+resume\b.*$/, '').trim()} resume ${key}`,
   turns: 'file',
+  // Tail proof: the rollout's own per-turn `task_complete` event (verified on
+  // real ~/.codex/sessions files, both rollout generations; an interrupted
+  // turn writes `turn_aborted` instead and stays non-final — correct).
+  turnFinality: 'native',
   parseTurns: parseCodexTurns,
   watchFile: codexWatchFile
 }
@@ -116,7 +196,9 @@ const OPENCODE: Harness = {
   resumeCommand: (command, key) =>
     `${command.replace(OPENCODE_SESSION_FLAG_RE, '').trim()} --session ${key}`,
   // OpenCode has no session-file trace/turn parser yet — declared limitation.
-  turns: 'scrape'
+  turns: 'scrape',
+  // No file, no tail, no proof: a file-backed dispatch can never close here.
+  turnFinality: 'boundary'
 }
 
 const PI: Harness = {
@@ -138,6 +220,10 @@ const PI: Harness = {
         piNodeSessionDir(context.terminalId)
     ),
   turns: 'file',
+  // Tail proof: pi's assistant `stopReason: 'stop'` (verified on real
+  // ~/.cookrew/pi-sessions files; 'toolUse' is mid-turn, 'aborted'/'error'/
+  // 'length' are not completion and stay non-final).
+  turnFinality: 'native',
   parseTurns: parsePiTurns,
   watchFile: piWatchFile
 }
