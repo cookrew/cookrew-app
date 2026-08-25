@@ -46,26 +46,31 @@ function fromFile(): SousFile['translate'] | null {
   }
 }
 
-let cached: RemoteSous | null | undefined
-
 /**
  * The remote translator, or null for "use the local one".
  *
- * Requires BOTH a URL and a key. A URL without a key would be sent unauthorized
- * and fail on every click; treating half a configuration as configured turns a
- * typo into a feature that is broken rather than a feature that is local.
+ * Requires ALL THREE of url, key and model. A URL without a key would be sent
+ * unauthorized and fail on every click; treating half a configuration as
+ * configured turns a typo into a feature that is broken rather than a feature
+ * that is local.
+ *
+ * READ EVERY TIME, not memoised. It was memoised, and that made turning the
+ * hosted model off require restarting the whole app — the config said local,
+ * the running process still said remote, and the only way to reconcile them was
+ * a restart in the middle of the thing going wrong. This is a small file read
+ * once per click, so the cache was buying nothing and costing that.
  */
 export function remoteSous(): RemoteSous | null {
-  if (cached !== undefined) return cached
   const file = fromFile()
   const baseUrl = (process.env.COOKREW_SOUS_TRANSLATE_URL ?? file?.baseUrl ?? '').trim()
   const apiKey = (process.env.COOKREW_SOUS_TRANSLATE_KEY ?? file?.apiKey ?? '').trim()
-  const model = (process.env.COOKREW_SOUS_TRANSLATE_MODEL ?? file?.model ?? '').trim()
-  cached =
-    baseUrl.length > 0 && apiKey.length > 0 && model.length > 0
-      ? { baseUrl: baseUrl.replace(/\/+$/, ''), apiKey, model }
-      : null
-  return cached
+  // NOT COOKREW_SOUS_TRANSLATE_MODEL: that one already names the local Ollama
+  // model to translate with, and one variable meaning two different models
+  // means asking for a better local model silently renames the hosted one.
+  const model = (process.env.COOKREW_SOUS_REMOTE_MODEL ?? file?.model ?? '').trim()
+  return baseUrl.length > 0 && apiKey.length > 0 && model.length > 0
+    ? { baseUrl: baseUrl.replace(/\/+$/, ''), apiKey, model }
+    : null
 }
 
 /** Host only — for telling the reader where their text is going. Never the key. */
@@ -79,7 +84,8 @@ export function remoteSousHost(): string | null {
   }
 }
 
-/** Tests only: forget the memoised configuration. */
-export function resetRemoteSousCache(): void {
-  cached = undefined
-}
+/**
+ * Kept as a no-op so callers that used to clear the cache still read. There is
+ * no cache now; the configuration is read on every call.
+ */
+export function resetRemoteSousCache(): void {}

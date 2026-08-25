@@ -742,6 +742,16 @@ function TerminalOverlay({
               {translation.host !== null && ` Translated by ${translation.host}.`}
             </span>
           )}
+          {/* A way out of a long one. It abandons the RESULT rather than
+              aborting the request — the model keeps going and the reply is
+              discarded — but "stop waiting" is the thing the reader actually
+              wants, and having no exit at all is what makes a slow translation
+              feel like a broken one. */}
+          {translation.working && (
+            <button className="cr-btn sm" onMouseDown={keepFocus} onClick={translation.clear}>
+              STOP
+            </button>
+          )}
           {!translation.working && translation.showing !== null && (
             <button className="cr-btn sm" onMouseDown={keepFocus} onClick={translation.clear}>
               SHOW ORIGINAL

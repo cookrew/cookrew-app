@@ -2,12 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { translateBody } from '../src/main/sous-translate'
 import { remoteSous, remoteSousHost, resetRemoteSousCache } from '../src/main/sous-remote-config'
 
-const ENV = ['COOKREW_SOUS_TRANSLATE_URL', 'COOKREW_SOUS_TRANSLATE_KEY', 'COOKREW_SOUS_TRANSLATE_MODEL']
+const ENV = ['COOKREW_SOUS_TRANSLATE_URL', 'COOKREW_SOUS_TRANSLATE_KEY', 'COOKREW_SOUS_REMOTE_MODEL']
 
 function configureRemote(): void {
   process.env.COOKREW_SOUS_TRANSLATE_URL = 'https://example.invalid/'
   process.env.COOKREW_SOUS_TRANSLATE_KEY = 'secret-key-value'
-  process.env.COOKREW_SOUS_TRANSLATE_MODEL = 'qwen3.8-27b-q8'
+  process.env.COOKREW_SOUS_REMOTE_MODEL = 'qwen3.8-27b-q8'
   resetRemoteSousCache()
 }
 
@@ -36,7 +36,7 @@ describe('choosing a backend', () => {
    */
   it('is local when the key is missing, rather than sending unauthorized requests', () => {
     process.env.COOKREW_SOUS_TRANSLATE_URL = 'https://example.invalid'
-    process.env.COOKREW_SOUS_TRANSLATE_MODEL = 'm'
+    process.env.COOKREW_SOUS_REMOTE_MODEL = 'm'
     resetRemoteSousCache()
     expect(remoteSous()).toBeNull()
   })
@@ -141,5 +141,38 @@ describe('the remote request', () => {
     await translateBody('Hello', 'ja')
     expect(errors.join('\n')).not.toContain('secret-key-value')
     expect(errors.join('\n')).toContain('401')
+  })
+})
+
+describe('turning the hosted model off', () => {
+  /**
+   * The revert path. Disabling used to mean editing this file AND restarting
+   * the app, because the configuration was read once per process — so the file
+   * said local while the running app kept talking to the host.
+   */
+  it('a config file with no active translate block reads as local, with no restart', async () => {
+    const { mkdtempSync, writeFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const { tmpdir } = await import('node:os')
+    const dir = mkdtempSync(join(tmpdir(), 'sous-'))
+    const file = join(dir, 'sous.json')
+    process.env.COOKREW_SOUS_CONFIG = file
+
+    writeFileSync(
+      file,
+      JSON.stringify({ translate: { baseUrl: 'https://h.invalid', apiKey: 'k', model: 'm' } })
+    )
+    expect(remoteSous()).not.toBeNull()
+
+    // Same process, no restart, no cache to clear: rename the block and the
+    // very next call is local again.
+    writeFileSync(
+      file,
+      JSON.stringify({
+        translateDisabled: { baseUrl: 'https://h.invalid', apiKey: 'k', model: 'm' }
+      })
+    )
+    expect(remoteSous()).toBeNull()
+    expect(remoteSousHost()).toBeNull()
   })
 })
