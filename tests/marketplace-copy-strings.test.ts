@@ -88,7 +88,7 @@ describe('every protocol moment has words', () => {
     const groups = [mod.MKT_AUTH, mod.MKT_PAY, mod.MKT_DENIED_REASONS, mod.MKT_BLOCKED,
                     mod.MKT_EXPORT, mod.MKT_ENROL, mod.MKT_SAVE, mod.MKT_INSTALL_PRICE,
                     mod.MKT_TEMPLATE, mod.MKT_SERVE, mod.MKT_SESSIONS, mod.MKT_SVC,
-                    mod.MKT_CHIP]
+                    mod.MKT_CHIP, mod.MKT_GATE]
     for (const group of groups) {
       for (const id of Object.keys(group)) {
         expect(Object.keys(MKT_ALL), `${id} is not reachable through MKT_ALL`).toContain(id)
