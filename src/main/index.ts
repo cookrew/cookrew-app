@@ -118,6 +118,10 @@ import { TraceReader, type SessionWatchSpec } from './trace'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
 import { TeamStore, copyTeam, forkTeam, workspaceFromTemplate, type TeamSnapshot } from './teams'
+import { wireServing, type Serving } from './session-serving'
+import { bootWorkspaceInPlace } from './session-boot'
+import { servedConfinement } from './session-spawn'
+import { makeEntryTerminalLookup, rmSandbox } from './session-instantiator-mount'
 import { PresetStore, isPresetId } from './preset-store'
 import { PinStore } from './pin-store'
 import type { VersionPinRecord } from '../shared/version-pin'
@@ -311,6 +315,67 @@ const callConversations = new CallConversationStore()
  */
 const callsInFlight = new CallsInFlight()
 const callNodesOf = memoizeBriefly((workspaceId: string) => store.workspaceState(workspaceId).nodes)
+
+// ── R30 SERVING — the instantiator subsystem, assembled once ─────────────────
+//
+// This constructs the machinery; the call path consults it (mobile-server) and
+// the spawn path reads `servedSpawnContexts` to confine a served terminal. All
+// side effects stay behind seams the composition root wires — see
+// session-serving.ts. NOTE (app-verified): the mint→serve call at the listener
+// and the per-backend Seatbelt wrap for herdr are the remaining live-tested
+// steps; everything here compiles and is unit-tested.
+const sessionsBase = path.join(homedir(), '.cookrew')
+/** workspaceId → the served context its terminals spawn under. Set at boot. */
+const servedSpawnContexts = new Map<
+  string,
+  { serviceId: string; sessionId: string; sandbox: string }
+>()
+// M1: the owner lends a service no keys by default, so a served session cannot
+// spend the owner's tokens until a per-service grant is configured (R30 budget).
+const grantedKeysForService = (_serviceId: string): readonly string[] => []
+
+const serving: Serving = wireServing({
+  base: sessionsBase,
+  teams,
+  // M1 PLACEHOLDER: a template's pin resolves to v1 addressed by its id. Real
+  // S1c resolution reads the template's rail pins (the pinId content hash); this
+  // stub lets serving compile ahead of that lookup and is flagged for the wire.
+  pins: { resolve: (templateId) => ({ version: 1, pinAddress: templateId }) },
+  forkEngine: {
+    fork: async ({ name, templateId, dir, serviceId, sessionId }) => {
+      const meta = await forkTeam(
+        {
+          ...teamForkDeps(),
+          // Boot in place (no focus switch), and register the served context
+          // FIRST so each terminal's spawn (spawnTracked) confines and scrubs.
+          bootTerminals: (id) => {
+            servedSpawnContexts.set(id, { serviceId, sessionId, sandbox: dir })
+            bootWorkspaceInPlace(
+              {
+                nodesOf: (wid) => callNodesOf(wid),
+                boot: (node) => bootTerminal(node as TerminalNodeData)
+              },
+              id
+            )
+          }
+        },
+        { name, nodeIds: [], choices: [], fromSavedTeam: templateId, dirs: [dir], worktree: true }
+      )
+      return meta.id
+    }
+  },
+  entry: makeEntryTerminalLookup({
+    nodesOf: (wid) =>
+      callNodesOf(wid).map((n) => ({
+        id: n.id,
+        kind: n.kind,
+        orch: (n as { orch?: boolean }).orch
+      }))
+  }),
+  callsInFlight: { cancelWhere: (match) => callsInFlight.cancelWhere(match) },
+  remover: rmSandbox,
+  liveWorkspaceId: (slug) => store.bySlug(slug)?.id ?? null
+})
 const boardProbe = createProbeSampler(
   tmuxProbeDeps({
     knownTerminalIds: () => agents.list().map((entry) => entry.id),
@@ -664,16 +729,33 @@ function spawnTracked(t: {
   // The herdr pane wears the card's display info (no-op elsewhere). Resolved
   // from the store rather than threaded through every caller — the node is
   // always persisted before it spawns, so the store is the freshest source.
-  const cardNode = store.node(t.id)
+  // nodeAcrossWorkspaces, not store.node (focused-scoped): a served session's
+  // terminal is in a non-focused workspace, so the focused lookup would drop its
+  // card metadata (R30 boot-in-place nit).
+  const cardNode = store.nodeAcrossWorkspaces(t.id)
   const card = cardNode?.kind === 'terminal' ? paneCard(cardNode) : undefined
   // Before the spawn, because the spawn is what makes the pane exist.
   const timingBoot = beginBootTiming(t.id)
   // Tagged with its owning workspace so the PTY plane can answer per-session
   // questions (multi-instance step 2). ownerOf resolves across every
   // workspace; focus is only the fallback for a terminal no canvas claims yet.
+  const owner = store.ownerOf(t.id) ?? store.focusedId
+  // A served session's terminal spawns confined and scrubbed; the owner's own
+  // spawns exactly as before (servedCtx is undefined).
+  const servedCtx = servedSpawnContexts.get(owner)
+  const served = servedCtx
+    ? servedConfinement({
+        base: sessionsBase,
+        serviceId: servedCtx.serviceId,
+        sessionId: servedCtx.sessionId,
+        sandbox: servedCtx.sandbox,
+        ownerEnv: process.env,
+        grantedKeys: grantedKeysForService(servedCtx.serviceId)
+      })
+    : undefined
   const session = ptys.spawn(
-    { terminalId: t.id, command: effective, cwd: t.cwd, card },
-    store.ownerOf(t.id) ?? store.focusedId
+    { terminalId: t.id, command: effective, cwd: t.cwd, card, served },
+    owner
   )
   // One producer per conversation: every owner keystroke consults the
   // tracker BEFORE the byte reaches the child; a dispatch in flight is
@@ -2639,6 +2721,22 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('workspace:create', (_e, name: string, dir: string, team?: string) =>
     team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir)
   )
+
+  // R30 serving — owner IPC ONLY, never on the listener (the grant-surface rule:
+  // this decides what is callable, so it is strictly above the gate it feeds).
+  ipcMain.handle('serving:serve', (_e, serviceId: string, templateId: string, slug: string) => {
+    // A serve slug shares the workspace-slug namespace; refuse one a live
+    // workspace already holds rather than let it be shadowed (session-served.ts).
+    if (store.bySlug(slug)) return { ok: false, reason: 'slug-taken' as const }
+    if (!teams.load(templateId)) return { ok: false, reason: 'no-template' as const }
+    serving.serve({ serviceId, templateId, slug })
+    return { ok: true as const }
+  })
+  ipcMain.handle('serving:stop', (_e, serviceId: string) => {
+    serving.stop(serviceId)
+    return { ok: true as const }
+  })
+  ipcMain.handle('serving:list', () => serving.served.list())
   ipcMain.handle('workspace:switch', (_e, id: string) => {
     switchWorkspace(id)
     return store.list()

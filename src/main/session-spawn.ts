@@ -61,6 +61,13 @@ export interface ServedSpawn {
   profilePath: string
 }
 
+/** The env + written profile a served spawn needs, without wrapping a command. */
+export interface ServedConfinement {
+  env: Record<string, string>
+  /** The written Seatbelt profile the spawn should be wrapped under. */
+  profilePath: string
+}
+
 /** Writes the profile `sandbox-exec -f` will read. Injected for testability. */
 export type ProfileWriter = (profilePath: string, profile: string) => void
 
@@ -91,11 +98,10 @@ const defaultWriter: ProfileWriter = (profilePath, profile) => {
  * that ran the returned (file, args, env) is a served agent that starts confined
  * and holds nothing of the owner's it was not given.
  */
-export function servedSpawn(
-  raw: RawSpawn,
+export function servedConfinement(
   ctx: ServedSpawnContext,
   writeProfile: ProfileWriter = defaultWriter
-): ServedSpawn {
+): ServedConfinement {
   const siblingRoot = serviceRoot(ctx.base, ctx.serviceId)
   const profile = seatbeltProfile({ sandbox: ctx.sandbox, siblingRoot })
   // Inside the sandbox (so END's cleanup removes it); the per-session SANDBOX
@@ -107,7 +113,6 @@ export function servedSpawn(
   const profilePath = path.join(ctx.sandbox, '.cookrew', 'session.sb')
   writeProfile(profilePath, profile)
 
-  const wrapped = confinedSpawn(profilePath, raw.file, raw.args)
   // Filter the granted names through `grantable` HERE, not only upstream: the
   // grant loop in sessionEnv runs AFTER HOME/TMPDIR are set, so a granted HOME
   // or PATH would overwrite the sandbox scrub — the exact confinement this seam
@@ -120,5 +125,15 @@ export function servedSpawn(
     sessionId: ctx.sessionId,
     grantedKeys
   })
+  return { env, profilePath }
+}
+
+export function servedSpawn(
+  raw: RawSpawn,
+  ctx: ServedSpawnContext,
+  writeProfile: ProfileWriter = defaultWriter
+): ServedSpawn {
+  const { env, profilePath } = servedConfinement(ctx, writeProfile)
+  const wrapped = confinedSpawn(profilePath, raw.file, raw.args)
   return { file: wrapped.file, args: wrapped.args, env, profilePath }
 }

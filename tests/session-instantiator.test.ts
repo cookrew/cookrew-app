@@ -260,6 +260,21 @@ describe('a failed mint burns nothing', () => {
   })
 })
 
+describe('sessionForWorkspace — the spawn path asks if a workspace is served', () => {
+  it('maps a minted workspace back to its session, and null for an unknown one', async () => {
+    const ana = await inst.admit('svc', 'ana')
+    const found = inst.sessionForWorkspace(ana.session.workspaceId)
+    expect(found?.identity.sessionId).toBe(ana.session.identity.sessionId)
+    expect(inst.sessionForWorkspace('ws-owner-canvas')).toBeNull()
+  })
+
+  it('stops mapping a workspace once its session ends', async () => {
+    const ana = await inst.admit('svc', 'ana')
+    inst.end(ana.session.identity.sessionId)
+    expect(inst.sessionForWorkspace(ana.session.workspaceId)).toBeNull()
+  })
+})
+
 describe('conductorFor — only the orch answers (design S5)', () => {
   it('routes an open session to its conductor', async () => {
     const ana = await inst.admit('svc', 'ana')

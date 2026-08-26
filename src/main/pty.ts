@@ -13,6 +13,7 @@ import { HerdrStatusFeed, setStatusFeed, statusFeed } from './herdr-agent-status
 import { DirectMultiplexer } from './direct-multiplexer'
 import { selectMultiplexers } from './multiplexer-select'
 import { harnessFor } from './harness'
+import { confinedSpawn } from './session-sandbox'
 import { defaultProducerLease } from './producer-lease'
 import { PtyOwnership } from './pty-scope'
 import { defaultInputProvenance } from './input-provenance'
@@ -305,6 +306,21 @@ export interface PtySessionOptions {
    * backends with no UI of their own.
    */
   card?: PaneCardInfo
+  /**
+   * Present ONLY for a served session's terminal (R30). `env` REPLACES the
+   * inherited owner environment — the scrub, so the pane holds no owner secret
+   * it was not lent — and `profilePath` is the Seatbelt profile the spawn is
+   * wrapped under. Absent for the owner's own terminals, which spawn exactly as
+   * before, so this option cannot change any existing behaviour.
+   *
+   * NOTE (per-backend correctness, app-verified): wrapping the attach argv here
+   * confines the created process for the direct backend and tmux's own
+   * `new-session`; herdr's pane is created by its server (`ensureSession`), so
+   * the wrap for herdr belongs there. This applies the env everywhere and the
+   * profile at the attach — correct for direct/tmux, and the herdr wrap point is
+   * the one remaining integration.
+   */
+  served?: { env: Record<string, string>; profilePath: string }
 }
 
 /**
@@ -371,16 +387,26 @@ export class PtySession extends EventEmitter {
     this.serializer = new SerializeAddon()
     this.screen.loadAddon(this.serializer)
 
+    // A served session's env is the scrub (session-env.ts), never the owner's
+    // process env; the infra keys below are re-added explicitly ON TOP, never by
+    // spreading process.env back over the scrub. An ordinary terminal keeps the
+    // exact prior behaviour.
+    const baseEnv = options.served
+      ? { ...options.served.env }
+      : {
+          // Sanitized: under tmux/direct the pane (or the tmux SERVER on its
+          // first start) inherits this env, and a launcher-session marker turns
+          // off the agent's transcript saving (see sanitizeAgentEnv).
+          ...sanitizeAgentEnv(process.env)
+        }
+    const infraPath = options.served ? (options.served.env.PATH ?? '') : (process.env.PATH ?? '')
     const env = {
-      // Sanitized: under tmux/direct the pane (or the tmux SERVER on its
-      // first start) inherits this env, and a launcher-session marker turns
-      // off the agent's transcript saving (see sanitizeAgentEnv).
-      ...sanitizeAgentEnv(process.env),
+      ...baseEnv,
       TERM_PROGRAM: 'Cookrew',
       COOKREW_TERMINAL_ID: options.terminalId,
       COOKREW_SOCKET: options.socketPath,
       COOKREW_CLI: path.join(options.cliDir, 'cookrew'),
-      PATH: `${options.cliDir}:${process.env.PATH ?? ''}`
+      PATH: `${options.cliDir}:${infraPath}`
     }
 
     // One path for every backend. The direct backend returns a plain login
@@ -406,7 +432,12 @@ export class PtySession extends EventEmitter {
     // where the server owns the pane — need the pane to exist first.
     activeMux!.ensureSession(attachSpec)
     const spawnSpec = activeMux!.attachSpawn(attachSpec)
-    this.proc = pty.spawn(spawnSpec.file, spawnSpec.args, {
+    // A served terminal runs under the Seatbelt profile; the owner's own runs
+    // exactly as before. See the `served` option note for the per-backend wrap.
+    const launch = options.served
+      ? confinedSpawn(options.served.profilePath, spawnSpec.file, spawnSpec.args)
+      : { file: spawnSpec.file, args: spawnSpec.args }
+    this.proc = pty.spawn(launch.file, launch.args, {
       name: 'xterm-256color',
       cols,
       rows,

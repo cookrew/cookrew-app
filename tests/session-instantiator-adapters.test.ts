@@ -60,8 +60,8 @@ describe('makeTemplateSource', () => {
   })
 })
 
-describe('makeMinter — sandbox first, then scrubbed env, then fork', () => {
-  it('creates the sandbox, makes it HOME, and forks the template rooted there', async () => {
+describe('makeMinter — lays down the sandbox, then forks rooted there', () => {
+  it('creates the sandbox dir and forks the template into it with the session identity', async () => {
     const forked: Parameters<ForkEngine['fork']>[0][] = []
     const engine: ForkEngine = {
       fork: async (input) => {
@@ -69,12 +69,7 @@ describe('makeMinter — sandbox first, then scrubbed env, then fork', () => {
         return `ws-${input.name}`
       }
     }
-    const minter = makeMinter({
-      base,
-      engine,
-      ownerEnv: { ANTHROPIC_API_KEY: 'sk-secret', LENT: 'yes', PWD: '/somewhere' },
-      grantedKeysOf: () => ['LENT']
-    })
+    const minter = makeMinter({ base, engine })
     const identity = sessionIdentity('svc', 'ana', 1)
     const workspaceId = await minter.mint({
       serviceId: 'svc',
@@ -85,14 +80,13 @@ describe('makeMinter — sandbox first, then scrubbed env, then fork', () => {
     expect(workspaceId).toBe(`ws-${identity.workspaceName}`)
     expect(forked).toHaveLength(1)
     const [input] = forked
-    // The sandbox exists, is the fork's cwd, and is HOME.
+    // The sandbox exists and is the fork's cwd; the identity rides along so the
+    // spawn-time confinement (servedConfinement) has the service + session it
+    // needs. The env itself is applied at spawn, not here.
     expect(existsSync(input.dir)).toBe(true)
-    expect(input.env.HOME).toBe(input.dir)
     expect(input.templateId).toBe('tmpl-svc')
-    // The owner's key is NOT lent; the granted one is; the flag is set.
-    expect(input.env.ANTHROPIC_API_KEY).toBeUndefined()
-    expect(input.env.LENT).toBe('yes')
-    expect(input.env.COOKREW_SERVED).toBe('1')
+    expect(input.serviceId).toBe('svc')
+    expect(input.sessionId).toBe(identity.sessionId)
   })
 })
 
@@ -102,8 +96,6 @@ describe('makeMinter — cleans up on failure', () => {
     const minter = makeMinter({
       base,
       engine: { fork: async () => { throw new Error('fork boom') } },
-      ownerEnv: {},
-      grantedKeysOf: () => [],
       remover: { remove: (dir) => removed.push(dir) }
     })
     const identity = sessionIdentity('svc', 'ana', 1)
@@ -173,9 +165,7 @@ describe('makeEnder — cut by workspace, remove the right sandbox', () => {
           sandboxDir = input.dir
           return 'ws-ana'
         }
-      },
-      ownerEnv: {},
-      grantedKeysOf: () => []
+      }
     })
     await minter.mint({
       serviceId: 'svc',

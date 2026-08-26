@@ -1,6 +1,5 @@
 import path from 'node:path'
 import { safeSegment, sandboxRoot, serviceRoot } from './session-sandbox'
-import { sessionEnv } from './session-env'
 import type {
   ConductorRoute,
   Ender,
@@ -76,22 +75,23 @@ export interface ForkEngine {
     name: string
     templateId: string
     dir: string
-    env: Record<string, string>
+    serviceId: string
+    sessionId: string
   }): Promise<string>
 }
 
 /**
- * Mint a sandboxed session. The order is the security order: create and resolve
- * the sandbox dir FIRST (slice 1's `sandboxRoot` realpaths it, so the Seatbelt
- * profile the engine writes can match after macOS resolves `/tmp` → `/private`),
- * scrub the env against it (HOME → sandbox, allowlist only, plus the keys the
- * owner lent this service), then fork the template rooted there.
+ * Mint a sandboxed session. Create and resolve the sandbox dir FIRST (slice 1's
+ * `sandboxRoot` realpaths it, so a Seatbelt profile written for it matches after
+ * macOS resolves `/tmp` → `/private`), then fork the template rooted there. The
+ * scrubbed ENV is NOT applied here — it is applied when each served terminal
+ * spawns (`servedConfinement`, via the boot the fork engine drives), because
+ * that is the moment the env reaches a process; minting only lays down the dir
+ * the spawn confines into.
  */
 export function makeMinter(config: {
   base: string
   engine: ForkEngine
-  ownerEnv: Readonly<Record<string, string | undefined>>
-  grantedKeysOf: (serviceId: string) => readonly string[]
   /**
    * Remove the sandbox if the fork fails. Symmetric with the orchestrator's
    * ordinal rollback: a mint that throws leaves NOTHING behind — no consumed
@@ -103,18 +103,13 @@ export function makeMinter(config: {
   return {
     async mint({ serviceId, identity, template }) {
       const sandbox = sandboxRoot(config.base, serviceId, identity.sessionId)
-      const env = sessionEnv({
-        parent: config.ownerEnv,
-        sandbox,
-        sessionId: identity.sessionId,
-        grantedKeys: config.grantedKeysOf(serviceId)
-      })
       try {
         return await config.engine.fork({
           name: identity.workspaceName,
           templateId: template.templateId,
           dir: sandbox,
-          env
+          serviceId,
+          sessionId: identity.sessionId
         })
       } catch (err) {
         config.remover?.remove(sandbox)

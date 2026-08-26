@@ -1,0 +1,89 @@
+import { describe, expect, it, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { wireServing, type ServingDeps } from '../src/main/session-serving'
+
+/**
+ * THE COMPOSITION ROOT resolves an inbound call the way the app will: a live
+ * workspace as-is, a served slug into a freshly-minted (or reused) session, an
+ * unknown slug as a 404. All four subsystems are faked; this proves the wiring,
+ * not the subsystems (each of those is tested on its own).
+ */
+
+let base = ''
+const deps = (over: Partial<ServingDeps> = {}): ServingDeps => ({
+  base,
+  teams: { load: (id) => (id === 'research-crew' ? { name: id } : undefined) },
+  pins: { resolve: () => ({ version: 1, pinAddress: 'sha256:v1' }) },
+  forkEngine: { fork: async (input) => `ws-${input.name}` },
+  entry: { entryTerminalOf: (wid) => `orch-${wid}` },
+  callsInFlight: { cancelWhere: () => 0 },
+  remover: { remove: () => undefined },
+  liveWorkspaceId: () => null,
+  ...over
+})
+
+beforeEach(() => {
+  base = mkdtempSync(path.join(tmpdir(), 'serving-'))
+})
+afterEach(() => rmSync(base, { recursive: true, force: true }))
+
+const CREW = { serviceId: 'svc-research', templateId: 'research-crew', slug: 'research' }
+
+describe('wireServing — resolveInboundCall', () => {
+  it('answers a live workspace slug as a workspace, no mint', async () => {
+    const s = wireServing(deps({ liveWorkspaceId: (slug) => (slug === 'mine' ? 'ws-owner' : null) }))
+    expect(await s.resolveInboundCall('mine', 'ana')).toEqual({ kind: 'workspace', workspaceId: 'ws-owner' })
+  })
+
+  it('mints a session for a served slug and routes to its conductor', async () => {
+    const s = wireServing(deps())
+    s.serve(CREW)
+    const call = await s.resolveInboundCall('research', 'ana')
+    expect(call.kind).toBe('served')
+    if (call.kind !== 'served') return
+    expect(call.created).toBe(true)
+    expect(call.conductorId).toBe(`orch-${call.workspaceId}`)
+    expect(s.instantiator.sessions()).toHaveLength(1)
+  })
+
+  it('reuses the same caller session on a second call', async () => {
+    const s = wireServing(deps())
+    s.serve(CREW)
+    const first = await s.resolveInboundCall('research', 'ana')
+    const second = await s.resolveInboundCall('research', 'ana')
+    if (first.kind !== 'served' || second.kind !== 'served') throw new Error('expected served')
+    expect(second.created).toBe(false)
+    expect(second.workspaceId).toBe(first.workspaceId)
+  })
+
+  it('gives two callers their own sessions', async () => {
+    const s = wireServing(deps())
+    s.serve(CREW)
+    const ana = await s.resolveInboundCall('research', 'ana')
+    const bob = await s.resolveInboundCall('research', 'bob')
+    if (ana.kind !== 'served' || bob.kind !== 'served') throw new Error('expected served')
+    expect(ana.workspaceId).not.toBe(bob.workspaceId)
+    expect(s.instantiator.sessions()).toHaveLength(2)
+  })
+
+  it('answers an unknown slug as none — a 404, never a mint', async () => {
+    const s = wireServing(deps())
+    expect(await s.resolveInboundCall('nope', 'ana')).toEqual({ kind: 'none' })
+  })
+
+  it('gives a live workspace precedence over a served slug', async () => {
+    const s = wireServing(deps({ liveWorkspaceId: (slug) => (slug === 'research' ? 'ws-owner' : null) }))
+    s.serve(CREW)
+    const call = await s.resolveInboundCall('research', 'ana')
+    expect(call).toEqual({ kind: 'workspace', workspaceId: 'ws-owner' })
+  })
+
+  it('stop() makes a served slug unresolvable again', async () => {
+    const s = wireServing(deps())
+    s.serve(CREW)
+    s.stop('svc-research')
+    expect(await s.resolveInboundCall('research', 'ana')).toEqual({ kind: 'none' })
+  })
+})

@@ -263,6 +263,19 @@ export class SessionInstantiator {
   }
 
   /**
+   * The session a minted workspace belongs to, or null if the workspace is not a
+   * served session (the owner's own). The spawn path asks this to decide whether
+   * a terminal must start confined and scrubbed — an ordinary workspace answers
+   * null and spawns exactly as it always did.
+   */
+  sessionForWorkspace(workspaceId: string): SessionRecord | null {
+    for (const record of this.openById.values()) {
+      if (record.workspaceId === workspaceId) return record
+    }
+    return null
+  }
+
+  /**
    * The account's OPEN session to reuse on this service, or null. When an
    * account has more than one open (it started a second with `startNew`), the
    * NEWEST — highest ordinal — is the one a plain call lands on, so "start
