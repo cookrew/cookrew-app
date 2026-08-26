@@ -111,7 +111,8 @@ describe('turn-store partition — a directory, not a filter', () => {
     // their search returns them, their board counts them, a fold folds them.
     const dir = sessionTurnDir('/base', 'svc', 'svc-ana-1')
     expect(dir).not.toContain('/.cookrew/turns'.replace('/.cookrew', '/base/.cookrew'))
-    expect(dir.startsWith('/base/sessions/svc/svc-ana-1/')).toBe(true)
+    // Short segment: the service prefix is not repeated (sun_path headroom).
+    expect(dir.startsWith('/base/sessions/svc/ana-1/')).toBe(true)
     expect(dir.endsWith('/turns')).toBe(true)
   })
 

@@ -39,10 +39,15 @@ export interface WorkspaceNodesLookup {
 export function makeEntryTerminalLookup(store: WorkspaceNodesLookup): EntryTerminalLookup {
   return {
     entryTerminalOf(workspaceId) {
-      const orch = store
-        .nodesOf(workspaceId)
-        .find((n) => n.kind === 'terminal' && n.orch === true)
-      return orch?.id ?? null
+      // The orch is the door. A team SAVED without one still serves: the first
+      // terminal answers, which is EXACTLY the door the share sheet promised —
+      // SelectionBar derives its "Callers talk to {orch} only" line as
+      // orch-among-picked, else first terminal. Requiring a literal orch flag
+      // here made the UI promise a door the backend then refused (503 on a
+      // crew the owner had just been told was taking calls).
+      const terminals = store.nodesOf(workspaceId).filter((n) => n.kind === 'terminal')
+      const door = terminals.find((n) => n.orch === true) ?? terminals[0]
+      return door?.id ?? null
     }
   }
 }

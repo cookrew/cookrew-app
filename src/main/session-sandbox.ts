@@ -64,6 +64,26 @@ export function safeSegment(raw: string): string {
 }
 
 /**
+ * The DIRECTORY segment for one session, shortened.
+ *
+ * A sessionId carries its serviceId as a prefix (`svc-x-ana-1`), and repeating
+ * that prefix under the service's own directory pushed real paths past
+ * sun_path (104 bytes on macOS): claude inside a minted pane died at boot with
+ * "local socket name length exceeds capacity of sun_path" — observed live, and
+ * silent from the caller's side but for a garbled reply. The service directory
+ * already names the service, so the segment keeps only what remains.
+ *
+ * EVERY lexical constructor of a session path must use this (sandboxRoot, the
+ * Ender's dirFor, the turn/annotation dirs) — a second spelling of the rule is
+ * how a cleanup deletes the wrong directory.
+ */
+export function sessionSegment(serviceId: string, sessionId: string): string {
+  const service = safeSegment(serviceId)
+  const session = safeSegment(sessionId)
+  return session.startsWith(`${service}-`) ? session.slice(service.length + 1) : session
+}
+
+/**
  * Create and resolve a session's sandbox directory.
  *
  * Created BEFORE resolving, because realpathSync throws on a path that does not
@@ -71,7 +91,7 @@ export function safeSegment(raw: string): string {
  * returned value is the only one that may be stored.
  */
 export function sandboxRoot(base: string, serviceId: string, sessionId: string): string {
-  const dir = path.join(serviceRoot(base, serviceId), safeSegment(sessionId))
+  const dir = path.join(serviceRoot(base, serviceId), sessionSegment(serviceId, sessionId))
   mkdirSync(dir, { recursive: true })
   return realpathSync(dir)
 }

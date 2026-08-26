@@ -137,6 +137,7 @@ import { readJson, respondJson } from './mobile-http'
 import { deriveSlug, uniqueSlug } from './workspace-slug'
 import { networkInterfaces } from 'node:os'
 import { wireServing, type Serving } from './session-serving'
+import { servedTemplateFile } from './served-persist'
 import { bootWorkspaceInPlace } from './session-boot'
 import { servedConfinement } from './session-spawn'
 import { makeEntryTerminalLookup, rmSandbox } from './session-instantiator-mount'
@@ -378,13 +379,19 @@ const serving: Serving = wireServing({
           // FIRST so each terminal's spawn (spawnTracked) confines and scrubs.
           bootTerminals: (id) => {
             servedSpawnContexts.set(id, { serviceId, sessionId, sandbox: dir })
-            bootWorkspaceInPlace(
+            const booted = bootWorkspaceInPlace(
               {
                 nodesOf: (wid) => callNodesOf(wid),
-                boot: (node) => bootTerminal(node as TerminalNodeData)
+                boot: (node) => bootTerminal(node as TerminalNodeData),
+                // A partial boot must be LOUD: a served crew whose door never
+                // spawned answers every ask with "no live door" and nothing
+                // else says why.
+                onError: (node, error) =>
+                  console.error(`served boot failed for ${node.id}:`, error)
               },
               id
             )
+            console.error(`served session ${sessionId}: booted ${booted} terminal(s) in ${id}`)
           }
         },
         { name, nodeIds: [], choices: [], fromSavedTeam: templateId, dirs: [dir], worktree: true }
@@ -402,7 +409,9 @@ const serving: Serving = wireServing({
   }),
   callsInFlight: { cancelWhere: (match) => callsInFlight.cancelWhere(match) },
   remover: rmSandbox,
-  liveWorkspaceId: (slug) => store.bySlug(slug)?.id ?? null
+  liveWorkspaceId: (slug) => store.bySlug(slug)?.id ?? null,
+  // Serving survives a restart — an owner stops serving by saying stop.
+  persist: servedTemplateFile(sessionsBase)
 })
 /** Who has signed in to each served crew (TOFU accounts, M1). */
 const servedCallers = new ServedCallers()
@@ -470,6 +479,12 @@ async function handleServedSlug(
           .some((s) => s.serviceId === serviceId && s.accountId === sub),
       conductorFor: (sessionId) => serving.instantiator.conductorFor(sessionId),
       ask: async (conductorId, prompt) => {
+        // The pty here is a MIRROR of the multiplexer pane, and it can be
+        // absent while the agent itself is alive (the attach exited; observed
+        // live: herdr held the minted Fresco pane, ptys.get() missed, every
+        // ask 500'd). Re-attach exactly the way the zoomed transcript does
+        // rather than refuse a crew that is actually standing there.
+        if (!ptys.get(conductorId)) ensureTerminalMirror(conductorId)
         const session = ptys.get(conductorId)
         if (!session) throw new Error('the crew has no live door')
         return askTerminal(session, prompt)

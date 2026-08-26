@@ -19,6 +19,7 @@ import {
   type TeamLoad
 } from './session-instantiator-adapters'
 import { ServedTemplates, resolveCallScope, type ServedTemplate } from './session-served'
+import type { ServedPersistence } from './served-persist'
 
 /**
  * THE COMPOSITION ROOT for R30 serving. index.ts calls `wireServing` ONCE with
@@ -52,6 +53,12 @@ export interface ServingDeps {
   remover: SandboxRemover
   /** The owner's own live workspace for a slug, or null — `store.bySlug(slug)?.id`. */
   liveWorkspaceId(slug: string): string | null
+  /**
+   * Disk persistence for the served registry. Serving must survive a restart —
+   * an owner stops serving by saying stop, never by rebooting. Optional so unit
+   * wirings that only exercise the call path need not fake a filesystem.
+   */
+  persist?: ServedPersistence
 }
 
 /** What an inbound call resolves to once the caller is known. */
@@ -81,6 +88,17 @@ export interface Serving {
 
 export function wireServing(deps: ServingDeps): Serving {
   const served = new ServedTemplates()
+  // Rehydrate: what was serving when the app died is still being served. A
+  // record serve() refuses (price-shape rules may have tightened since it was
+  // written) is dropped rather than allowed to stop the boot.
+  for (const template of deps.persist?.load() ?? []) {
+    try {
+      served.serve(template)
+    } catch {
+      // dropped — an invalid door stays closed
+    }
+  }
+  const saveServed = (): void => deps.persist?.save(served.list())
 
   // A service's template id is the one it was served with; asking for a service
   // that is not served is a bug, not a caller state, so it throws.
@@ -122,7 +140,13 @@ export function wireServing(deps: ServingDeps): Serving {
     served,
     instantiator,
     resolveInboundCall,
-    serve: (input) => served.serve(input),
-    stop: (serviceId) => served.stop(serviceId)
+    serve: (input) => {
+      served.serve(input)
+      saveServed()
+    },
+    stop: (serviceId) => {
+      served.stop(serviceId)
+      saveServed()
+    }
   }
 }

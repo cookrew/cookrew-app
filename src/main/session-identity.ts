@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { safeSegment, serviceRoot } from './session-sandbox'
+import { safeSegment, serviceRoot, sessionSegment } from './session-sandbox'
 
 /**
  * WHO A SESSION IS, AND WHERE ITS LEDGER LIVES.
@@ -87,7 +87,7 @@ export function nextOrdinal(usedOrdinals: readonly number[]): number {
  * the owner's.
  */
 export function sessionTurnDir(base: string, serviceId: string, sessionId: string): string {
-  return path.join(serviceRoot(base, serviceId), safeSegment(sessionId), '.cookrew', 'turns')
+  return path.join(serviceRoot(base, serviceId), sessionSegment(serviceId, sessionId), '.cookrew', 'turns')
 }
 
 /**
@@ -105,7 +105,7 @@ export function sessionAnnotationDir(
 ): string {
   return path.join(
     serviceRoot(base, serviceId),
-    safeSegment(sessionId),
+    sessionSegment(serviceId, sessionId),
     '.cookrew',
     'checkpoint-annotations'
   )

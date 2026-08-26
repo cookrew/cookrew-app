@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { safeSegment, sandboxRoot, serviceRoot } from './session-sandbox'
+import { sandboxRoot, serviceRoot, sessionSegment } from './session-sandbox'
 import type {
   ConductorRoute,
   Ender,
@@ -164,7 +164,7 @@ export function makeEnder(config: {
   remover: SandboxRemover
 }): Ender {
   const dirFor = (serviceId: string, sessionId: string): string =>
-    path.join(serviceRoot(config.base, serviceId), safeSegment(sessionId))
+    path.join(serviceRoot(config.base, serviceId), sessionSegment(serviceId, sessionId))
   return {
     cut: (target) => config.cutter.cancelWhere((id) => id.workspaceId === target.workspaceId),
     cleanup: (target) => config.remover.remove(dirFor(target.serviceId, target.sessionId))

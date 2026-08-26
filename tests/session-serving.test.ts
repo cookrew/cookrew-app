@@ -2,7 +2,9 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { writeFileSync } from 'node:fs'
 import { wireServing, type ServingDeps } from '../src/main/session-serving'
+import { servedTemplateFile } from '../src/main/served-persist'
 
 /**
  * THE COMPOSITION ROOT resolves an inbound call the way the app will: a live
@@ -85,5 +87,47 @@ describe('wireServing — resolveInboundCall', () => {
     s.serve(CREW)
     s.stop('svc-research')
     expect(await s.resolveInboundCall('research', 'ana')).toEqual({ kind: 'none' })
+  })
+})
+
+describe('serving survives a restart — the persistence seam', () => {
+  // The user-reported failure this pins: save a paid team, be told it is
+  // taking calls, restart the app — and the address 404s with no signal.
+  it('a new wiring over the same file still serves what the old one served', async () => {
+    const persist = servedTemplateFile(base)
+    const before = wireServing(deps({ persist }))
+    before.serve({ ...CREW, access: 'paid', priceUsd: '2.50' })
+
+    const after = wireServing(deps({ persist }))
+    expect(after.served.bySlug('research')).toMatchObject({
+      serviceId: 'svc-research',
+      access: 'paid',
+      priceUsd: '2.50'
+    })
+    expect((await after.resolveInboundCall('research', 'ana')).kind).toBe('served')
+  })
+
+  it('stop() is durable too — a reboot must not resurrect a closed door', () => {
+    const persist = servedTemplateFile(base)
+    const before = wireServing(deps({ persist }))
+    before.serve(CREW)
+    before.stop('svc-research')
+    expect(wireServing(deps({ persist })).served.list()).toHaveLength(0)
+  })
+
+  it('boots with nothing served over a corrupt or missing file', () => {
+    expect(servedTemplateFile(base).load()).toEqual([])
+    writeFileSync(path.join(base, 'served-templates.json'), 'not json{{')
+    expect(servedTemplateFile(base).load()).toEqual([])
+  })
+
+  it('drops a half-shaped record instead of opening a door it cannot describe', () => {
+    writeFileSync(
+      path.join(base, 'served-templates.json'),
+      JSON.stringify([CREW, { serviceId: 'svc-x', slug: 'x' }, 42])
+    )
+    const s = wireServing(deps({ persist: servedTemplateFile(base) }))
+    expect(s.served.list()).toHaveLength(1)
+    expect(s.served.bySlug('research')).not.toBeNull()
   })
 })

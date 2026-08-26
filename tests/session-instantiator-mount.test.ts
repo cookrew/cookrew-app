@@ -28,8 +28,11 @@ describe('makeEntryTerminalLookup — the conductor is the workspace OWN orch', 
     expect(lookup.entryTerminalOf('ws-served')).toBe('t-orch')
   })
 
-  it('is null when the workspace has no orch terminal — never guesses one', () => {
-    expect(lookup.entryTerminalOf('ws-empty')).toBeNull()
+  it('answers with the FIRST terminal when no orch exists — the door the share sheet promised', () => {
+    // SelectionBar's door line is orch-among-picked, else first terminal; a
+    // lookup that refused an orch-less crew made the UI promise a door the
+    // backend then 503'd. The two derivations must agree.
+    expect(lookup.entryTerminalOf('ws-empty')).toBe('t-plain')
   })
 
   it('is null for a workspace it has no nodes for', () => {

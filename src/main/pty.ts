@@ -96,6 +96,17 @@ export function modeReplay(modes: HeadlessTerminalType['modes']): string {
 let activeMux: Multiplexer | null = null
 
 /**
+ * The one backend a SERVED terminal may use. Under a host multiplexer the
+ * agent process lives in the host's SERVER with the owner's environment —
+ * outside both the env scrub and the Seatbelt profile this spawn applies, and
+ * (observed live under herdr) the attach client cannot even resolve the
+ * server's socket from the scrubbed HOME. The direct backend makes the pty
+ * child THE agent process, so the confinement lands on the process it was
+ * written for. Served sessions do not outlive the app; neither does this.
+ */
+const servedMux = new DirectMultiplexer()
+
+/**
  * Every constructed backend, host or not. The migration check needs to ask
  * the NON-host backends whether they still hold a live session — the fork
  * that produced two populations of the same agents happened precisely because
@@ -330,6 +341,12 @@ export interface PtySessionOptions {
  */
 export class PtySession extends EventEmitter {
   readonly terminalId: string
+  /**
+   * Does this session ride the HOST multiplexer? A served session is pinned to
+   * the direct backend (see servedMux), so host-native features — herdr's
+   * native ask above all — must not be aimed at a pane the host does not hold.
+   */
+  readonly hostBacked: boolean
   private proc: IPty
   private screen: HeadlessTerminalType
   /** Turns the mirror back into ANSI for replayFrame(); see it for why. */
@@ -377,10 +394,13 @@ export class PtySession extends EventEmitter {
     const shell = process.env.SHELL ?? '/bin/zsh'
     const cols = options.cols ?? 100
     const rows = options.rows ?? 30
+    // A served terminal is pinned to the direct backend — see servedMux.
+    const mux = options.served ? servedMux : activeMux
+    this.hostBacked = !options.served
     // Now a CAPABILITY question, not an identity one: "does my session
     // outlive the app?" rather than "am I tmux?". The direct backend answers
     // false and everything downstream degrades on that fact.
-    this.usesTmux = activeMux?.capabilities.persistsAcrossRestart ?? false
+    this.usesTmux = mux?.capabilities.persistsAcrossRestart ?? false
     this.sessionName = sessionNameFor(options.terminalId)
 
     this.screen = new HeadlessTerminal({ cols, rows, scrollback: 5000, allowProposedApi: true })
@@ -426,12 +446,12 @@ export class PtySession extends EventEmitter {
     // agent alive under a non-host multiplexer is killed there first and
     // resumed here — see migrateForeignSession. Without this, switching
     // hosts forked the whole agent population.
-    migrateForeignSession(attachSpec, activeMux!, allBackends, (c) => harnessFor(c)?.turns ?? null)
+    migrateForeignSession(attachSpec, mux!, allBackends, (c) => harnessFor(c)?.turns ?? null)
     // Idempotent, and a no-op for tmux (whose `new-session -A` does it inside
     // the attach). Backends that cannot create-and-attach in one step — herdr,
     // where the server owns the pane — need the pane to exist first.
-    activeMux!.ensureSession(attachSpec)
-    const spawnSpec = activeMux!.attachSpawn(attachSpec)
+    mux!.ensureSession(attachSpec)
+    const spawnSpec = mux!.attachSpawn(attachSpec)
     // A served terminal runs under the Seatbelt profile; the owner's own runs
     // exactly as before. See the `served` option note for the per-backend wrap.
     const launch = options.served

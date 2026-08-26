@@ -186,8 +186,17 @@ export async function askTerminal(
     // reply still comes out of the mirror diff, so the shape callers see is
     // identical. Null = herdr could not deliver at all; fall through to the
     // typed path exactly as before this existed.
+    // Host-native delivery is only for sessions the HOST actually holds: a
+    // served session rides the direct backend, and aiming herdr's native ask
+    // at a pane herdr does not have returned an empty "reply" (observed live).
     const mux = multiplexer()
-    if (mux?.capabilities.agentLifecycle && (mux.submitAgent ?? mux.promptAgent) !== undefined) {
+    // `!== false`, not truthy: only a session that EXPLICITLY says it is off
+    // the host (served/direct) opts out — duck-typed sessions keep the old path.
+    if (
+      session.hostBacked !== false &&
+      mux?.capabilities.agentLifecycle &&
+      (mux.submitAgent ?? mux.promptAgent) !== undefined
+    ) {
       const native = await nativeAsk(
         session,
         prompt,

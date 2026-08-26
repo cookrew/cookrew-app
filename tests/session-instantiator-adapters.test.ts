@@ -109,7 +109,8 @@ describe('makeMinter — cleans up on failure', () => {
     // The dir sandboxRoot made is the dir the remover was handed (realpathed, so
     // compare by suffix rather than the pre-symlink base).
     expect(removed).toHaveLength(1)
-    expect(removed[0].endsWith(path.join('sessions', 'svc', 'svc-ana-1'))).toBe(true)
+    // The service prefix is NOT repeated in the segment (sun_path headroom).
+    expect(removed[0].endsWith(path.join('sessions', 'svc', 'ana-1'))).toBe(true)
   })
 })
 
@@ -150,7 +151,7 @@ describe('makeEnder — cut by workspace, remove the right sandbox', () => {
       remover: { remove: (dir) => removed.push(dir) }
     })
     ender.cleanup({ sessionId: 'svc-ana-1', workspaceId: 'ws-ana', serviceId: 'svc' })
-    expect(removed).toEqual([path.join(base, 'sessions', 'svc', 'svc-ana-1')])
+    expect(removed).toEqual([path.join(base, 'sessions', 'svc', 'ana-1')])
   })
 
   it('removes the very dir the minter created — round-trip through a real rm', async () => {
@@ -184,7 +185,7 @@ describe('makeEnder — cut by workspace, remove the right sandbox', () => {
   })
 
   it('cleanup does not first re-create the directory it is removing', () => {
-    const dir = path.join(base, 'sessions', 'svc', 'svc-ana-1')
+    const dir = path.join(base, 'sessions', 'svc', 'ana-1')
     const ender = makeEnder({
       base,
       cutter: { cancelWhere: () => 0 },
