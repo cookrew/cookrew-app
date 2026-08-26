@@ -99,3 +99,48 @@ than the milestone wants; the owner asked for real USD either way.
   prefix pushed socket paths past `sun_path` (104B) and claude died at boot.
 - A fix is DONE when it is tappable on the real product surface, not when the
   API answers.
+
+---
+
+## ESCALATION (added 2026-08-26, after Magpie's baseline QA)
+
+**G1 is a security issue, not only a UX gap.** Magpie proved the caller's
+prompt is not echoed — it is **executed**. Sending `pwd > proof.txt` as the
+`/ask` prompt created that file inside the minted session dir. Any signed-in
+caller gets arbitrary command execution behind a "talk to the crew"
+affordance. The Seatbelt profile contains it to the session's own folder, so
+this is serious-but-bounded, but a shell must never be reachable as a door.
+
+G1 therefore has TWO requirements:
+1. Refuse to SERVE a team with no orch (serve-time + save-time, in words).
+2. **Defence in depth at the gate**: even if a non-orch terminal somehow is
+   the door, `/ask` must refuse rather than deliver caller text to a plain
+   shell. Gate on the door being an orch-flagged terminal at ASK time too. A
+   shell has no turn semantics and no prompt boundary; delivering to one is a
+   refusal (503-style), never a silent execution.
+
+**G2 addendum — the reply must be the agent's turn, not the terminal buffer.**
+On the paid door, Fresco *does* boot Claude, and `/ask` returns the raw PTY
+scrape: bracketed-paste markers `^[[200~…^[[201~` wrapping the echoed prompt,
+then the `Welcome to Claude Code v2.1.241` banner. Someone who paid $2.50 gets
+the boot screen back. A3 means *the agent's answer*. Add a test that fails on a
+reply containing the boot banner or paste markers.
+
+Full evidence: `docs/design/served-crew-qa-baseline.html`.
+
+## Rail status (Atlas, branch `feat/served-x402-rail` @ 0d20026)
+
+Real x402 replaces `devSettle`: 402 quotes real `PaymentRequirements`; verify
+and settle go to the public Base Sepolia facilitator (keyless — no secret at
+rest). Verified against the live facilitator doing real signature checking.
+`settle()` is async now and `paymentTerms()` builds the 402 body, so the gate
+no longer knows the rail. A bogus reference is refused **before** `admit()` —
+test asserts `sessions.size === 0`. 24 new tests; suite 4,454 green.
+
+One item outstanding: the *settled-payment-admits* half needs a funded testnet
+wallet and a signer. Atlas correctly declined to create or handle keys —
+**owner decision on wallet provisioning.**
+
+Atlas also found `npm run typecheck` was **already red on the base commit**
+(`index.ts` passed `listPins`, `MobileServerDeps` never declared it) and fixed
+it. A red baseline hides every later break.
