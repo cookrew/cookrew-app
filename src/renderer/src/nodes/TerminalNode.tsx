@@ -68,7 +68,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
   if (mode === 'mini') {
     return (
       <div
-        className={`node vi-card mini${selected ? ' selected' : ''}${pickedOn ? ' picked' : ''}${phase === 'thinking' ? ' working' : ''}${phase === 'waiting' ? ' attention' : ''}`}
+        className={`node vi-card mini${node.orch ? ' orch' : ''}${selected ? ' selected' : ''}${pickedOn ? ' picked' : ''}${phase === 'thinking' ? ' working' : ''}${phase === 'waiting' ? ' attention' : ''}`}
         style={{ ['--z' as string]: String(invZoom) }}
         onClick={open}
       >
@@ -84,7 +84,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
 
   if (!agent) {
     return (
-      <div className={`node terminal-card${selected ? ' selected' : ''}${pickedOn ? ' picked' : ''}`}>
+      <div className={`node terminal-card${node.orch ? ' orch' : ''}${selected ? ' selected' : ''}${pickedOn ? ' picked' : ''}`}>
         <NodeResizer isVisible={selected} minWidth={240} minHeight={160} />
         <NodeHandles />
         <CardPick id={node.id} />
@@ -110,7 +110,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
 
   return (
     <div
-      className={`node vi-card${selected ? ' selected' : ''}${pickedOn ? ' picked' : ''}${phase === 'thinking' ? ' working' : ''}${phase === 'waiting' ? ' attention' : ''}`}
+      className={`node vi-card${node.orch ? ' orch' : ''}${selected ? ' selected' : ''}${pickedOn ? ' picked' : ''}${phase === 'thinking' ? ' working' : ''}${phase === 'waiting' ? ' attention' : ''}`}
       style={{ ['--z' as string]: String(invZoom) }}
     >
       <NodeResizer isVisible={selected} minWidth={240} minHeight={140} />

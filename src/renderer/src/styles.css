@@ -4912,3 +4912,29 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
   z-index: 40;
 }
+
+/* ── THE ORCH IS THE DOOR — findable at a glance, at any zoom ──
+   The orch is what a served crew exposes and what routing resolves to, so on a
+   busy canvas it must be the one card you can find without reading. An amber
+   ring (the product's "this one" colour, same as the ORCH chip) rather than a
+   different shape: it stays a terminal card, it is just the one that answers. */
+.node.terminal-card.orch,
+.node.vi-card.orch {
+  box-shadow:
+    0 0 0 2px var(--amber),
+    0 0 14px 2px rgba(255, 214, 0, 0.28);
+}
+/* Zoomed out, the ring is most of what is left of the card — keep it legible
+   without letting the glow bleed into neighbours at mini scale. */
+.node.vi-card.mini.orch {
+  box-shadow:
+    0 0 0 2px var(--amber),
+    0 0 8px 1px rgba(255, 214, 0, 0.35);
+}
+/* Selection still wins: an orch you have picked must read as picked first. */
+.node.terminal-card.orch.selected,
+.node.vi-card.orch.selected {
+  box-shadow:
+    0 0 0 2px var(--amber),
+    0 0 0 4px var(--violet);
+}
