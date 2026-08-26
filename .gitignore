@@ -13,3 +13,7 @@ coverage/
 docs/
 release/
 registry/data/
+
+# Probe scripts, QA drivers and one-off harnesses — useful locally,
+# noise in history. Kept on disk, out of the repo.
+scratchpad/
