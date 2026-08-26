@@ -30,9 +30,47 @@ export function saveButtonLabel(access: ShareAccess, busy: boolean): string {
   return access === 'just-me' ? 'SAVE' : 'SAVE · START SERVING'
 }
 
-/** Can the sheet be submitted? A paid door with no price cannot quote at 402. */
-export function canSubmitShare(access: ShareAccess, priceUsd: string): boolean {
+/**
+ * Can the sheet be submitted?
+ *
+ * A paid door with no price cannot quote at 402, and a PUBLIC door with no orch
+ * cannot answer anybody — the crew would save, start serving, and hand the
+ * first caller's prompt to a bare shell (owner ruling, 2026-08-26). Both are
+ * refused HERE, at the moment of the act, rather than by the gate a caller
+ * meets later: a silent save that 503s a stranger is a failure the owner never
+ * sees and the caller cannot explain.
+ *
+ * `door` is null when nothing in the selection is flagged as the orch. A
+ * private save is unaffected — `just-me` publishes nothing, so it needs no
+ * door.
+ */
+export function canSubmitShare(
+  access: ShareAccess,
+  priceUsd: string,
+  door: string | null
+): boolean {
+  if (access === 'just-me') return true
+  if (door === null) return false
   return access !== 'paid' || priceLooksGood(priceUsd)
+}
+
+/**
+ * A refusal from the main process, in the owner's words.
+ *
+ * The sheet blocks every reason it can see before the save, so anything that
+ * reaches here is a reason it could NOT see — a template deleted underneath it,
+ * an orch flag cleared between the sheet opening and the button — and the raw
+ * `no-orch` the IPC returns is a token, not a sentence. Unknown reasons keep
+ * their own text rather than being flattened to "unknown": a code we have not
+ * met yet is still more useful than a word that means nothing.
+ */
+export function serveRefusalText(reason: string | undefined): string {
+  if (reason === undefined) return 'the reason was not reported'
+  if (reason === 'no-orch') return MKT_SERVE['mkt.serve.no-orch']
+  if (reason === 'bad-price') return MKT_SERVE['mkt.serve.refused.bad-price']
+  if (reason === 'priced-free-door') return MKT_SERVE['mkt.serve.refused.priced-free-door']
+  if (reason === 'no-template') return 'that template is no longer on this machine.'
+  return reason
 }
 
 export function ShareOnSave({
@@ -44,8 +82,14 @@ export function ShareOnSave({
 }: {
   access: ShareAccess
   priceUsd: string
-  /** The orch's name — the one door a caller ever reaches. */
-  door: string
+  /**
+   * The orch's name — the one door a caller ever reaches — or null when the
+   * selection flags no orch. Null is a refusal, never a placeholder: this used
+   * to fall back to the first picked terminal (and then to the word
+   * 'Conductor'), which is how the sheet came to promise a door that did not
+   * exist.
+   */
+  door: string | null
   onAccess: (next: ShareAccess) => void
   onPrice: (next: string) => void
 }): React.JSX.Element {
@@ -105,12 +149,26 @@ export function ShareOnSave({
         fear that arrives at that exact moment ("which of my agents are
         exposed?"). Before then it is noise.
       */}
-      {access !== 'just-me' && (
+      {access !== 'just-me' && door !== null && (
         <div className="sos-door">
           <span className="sos-door-g">◫</span>
           <span className="sos-door-s">
             {MKT_SERVE['mkt.serve.door'].replace('{orch}', door)}
           </span>
+        </div>
+      )}
+
+      {/*
+        THE REFUSAL, in the same slot the door fact would have occupied — the
+        answer to "which of my agents are exposed?" is "none of them, and that
+        is the problem". Rendered beside a disabled primary so the button and
+        the sentence arrive together; a disabled button with no sentence is the
+        touch-invisible dead end this product keeps having to fix.
+      */}
+      {access !== 'just-me' && door === null && (
+        <div className="sos-door sos-door-bad" role="alert">
+          <span className="sos-door-g">◆</span>
+          <span className="sos-door-s">{MKT_SERVE['mkt.serve.no-orch']}</span>
         </div>
       )}
       <span className="sos-note">{MKT_SERVE['mkt.serve.reversible']}</span>

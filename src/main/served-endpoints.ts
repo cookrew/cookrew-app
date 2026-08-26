@@ -60,6 +60,16 @@ export interface ServedEndpointDeps {
   ask(conductorId: string, prompt: string): Promise<string>
   /** M1 dev facilitator. 'bad-…' refuses, 'iffy-…' is unverifiable, else ok. */
   settle(txRef: string, amountUsd: string): Settle
+  /**
+   * May this service mint ANOTHER session under the owner's grant (R30 G2)?
+   *
+   * The owner's budget, not the caller's payment — a paid door and a lent key
+   * bound two different people's spending, and collapsing them would let a
+   * caller buy their way past a limit the owner set on their own credential.
+   * True when nothing was lent: a crew that needs no key has no budget to
+   * exceed.
+   */
+  grantBudget: { allowsNewSession(serviceId: string): boolean }
   crewFace(template: ServedTemplate): CrewFace
 }
 
@@ -135,6 +145,29 @@ async function askRoute(
   // A genuine token for another service is 403, never 401 — re-authenticating
   // with the same key cannot fix a scope, and a client must not loop.
   if (claims.workspace !== serviceId) return json(403, { reason: 'workspace' })
+
+  // ── the owner's grant budget — BEFORE the money, deliberately ──
+  //
+  // A crew that cannot mint must not quote and must not settle. Checking this
+  // after the 402 reads fine and takes a caller's payment for a session that
+  // was never going to exist; the order is the whole correctness of it.
+  //
+  // Only a MINT spends the grant, so only a mint is bounded: a caller with an
+  // open session is asking their existing crew a second question, and cutting
+  // them off would end a conversation over a limit their message did not move.
+  if (
+    !deps.hasOpenSession(serviceId, claims.sub) &&
+    !deps.grantBudget.allowsNewSession(serviceId)
+  ) {
+    // 429, not 503: nothing is broken. The owner lent this crew a fixed number
+    // of sessions and they are gone — a limit a caller can understand and an
+    // owner can raise, so it is named rather than hidden behind "try again
+    // shortly", which would be a lie about a wait that never ends.
+    return json(429, {
+      reason: 'budget',
+      error: 'this crew has used up what its owner lent it — ask them to raise it'
+    })
+  }
 
   // ── the 402, at session START only ──
   if (template.access === 'paid' && !deps.hasOpenSession(serviceId, claims.sub)) {

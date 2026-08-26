@@ -81,6 +81,15 @@ export interface ForkEngine {
 }
 
 /**
+ * Lay the owner's per-service grant down inside a fresh sandbox and spend one
+ * session of its budget. A narrow handle over `ServiceGrants.provision` — the
+ * adapter must not learn what a credential is.
+ */
+export interface SessionProvisioner {
+  provision(serviceId: string, sandbox: string): void
+}
+
+/**
  * Mint a sandboxed session. Create and resolve the sandbox dir FIRST (slice 1's
  * `sandboxRoot` realpaths it, so a Seatbelt profile written for it matches after
  * macOS resolves `/tmp` → `/private`), then fork the template rooted there. The
@@ -99,11 +108,22 @@ export function makeMinter(config: {
    * the same `rm -rf` remover the Ender uses.
    */
   remover?: SandboxRemover
+  /**
+   * Put what the owner LENT this service into the sandbox, and spend one of the
+   * grant's sessions (R30 G2). Runs after the dir exists and before the fork,
+   * because a harness reads its config at boot and the fork is what boots it.
+   *
+   * Throwing is how an exhausted budget stops a mint: the rollback below is
+   * already the path for "this session must leave nothing behind", so an
+   * over-budget mint reuses it rather than inventing a second cleanup.
+   */
+  provision?: SessionProvisioner
 }): Minter {
   return {
     async mint({ serviceId, identity, template }) {
       const sandbox = sandboxRoot(config.base, serviceId, identity.sessionId)
       try {
+        config.provision?.provision(serviceId, sandbox)
         return await config.engine.fork({
           name: identity.workspaceName,
           templateId: template.templateId,

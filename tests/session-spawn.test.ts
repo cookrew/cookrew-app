@@ -40,13 +40,34 @@ describe('servedSpawn — the command is wrapped under Seatbelt', () => {
     expect(out.profilePath.startsWith('/base/sessions/svc/svc-ana-1/')).toBe(true)
   })
 
-  it('the profile confines writes to this sandbox and denies the siblings', () => {
+  it('the profile confines writes to this sandbox and denies EVERY other session', () => {
     const cap = capture()
     servedSpawn({ file: 'sh', args: [] }, ctx(), cap.write)
     const profile = cap.writes[0].profile
     expect(profile).toContain('file-write* (subpath "/base/sessions/svc/svc-ana-1")')
-    // The sibling deny is what makes sessions mutually invisible.
-    expect(profile).toContain('deny file-read* (subpath "/base/sessions/svc")')
+    // The deny covers the whole sessions root, not just this service's
+    // siblings: a probe against the earlier per-service deny read ANOTHER
+    // service's sandbox straight out.
+    expect(profile).toContain('deny file-read* (subpath "/base/sessions")')
+    // …and Seatbelt takes the LAST matching rule, so this session's own
+    // subtree — which lives inside the denied root — is re-allowed after it.
+    const denyAt = profile.indexOf('deny file-read* (subpath "/base/sessions")')
+    const allowOwnAt = profile.indexOf('allow file-read* (subpath "/base/sessions/svc/svc-ana-1")')
+    expect(allowOwnAt).toBeGreaterThan(denyAt)
+  })
+
+  it('denies the owner credential stores a served agent was never lent', () => {
+    const cap = capture()
+    servedSpawn({ file: 'sh', args: [] }, ctx(), cap.write)
+    const profile = cap.writes[0].profile
+    // file-read* is allowed across the disk on purpose, so without these an
+    // agent could read the owner's OAuth refresh token unlent. The paths are
+    // the real owner's (owner-secrets.ts reads homedir), so match the tails.
+    for (const secret of ['.credentials.json', '.ssh', '.aws']) {
+      expect(profile).toMatch(
+        new RegExp(`deny file-read\\* \\(subpath "[^"]*${secret.replace('.', '\\.')}"`)
+      )
+    }
   })
 })
 

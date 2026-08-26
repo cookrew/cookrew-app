@@ -114,6 +114,80 @@ describe('makeMinter — cleans up on failure', () => {
   })
 })
 
+describe('makeMinter — the owner’s grant lands before the harness boots', () => {
+  it('provisions the sandbox BEFORE the fork, and hands it the real dir', async () => {
+    const order: string[] = []
+    const seen: { serviceId: string; sandbox: string }[] = []
+    const minter = makeMinter({
+      base,
+      engine: {
+        fork: async (input) => {
+          order.push('fork')
+          return `ws-${input.name}`
+        }
+      },
+      provision: {
+        provision: (serviceId, sandbox) => {
+          order.push('provision')
+          seen.push({ serviceId, sandbox })
+        }
+      }
+    })
+    await minter.mint({
+      serviceId: 'svc',
+      identity: sessionIdentity('svc', 'ana', 1),
+      template: { templateId: 't', version: 1, pinAddress: 'x' }
+    })
+    // A harness reads its config at boot and the fork is what boots it, so a
+    // grant laid down afterwards is a grant the agent never sees.
+    expect(order).toEqual(['provision', 'fork'])
+    expect(seen[0].serviceId).toBe('svc')
+    expect(existsSync(seen[0].sandbox)).toBe(true)
+  })
+
+  it('an exhausted budget stops the mint and leaves NOTHING behind', async () => {
+    const removed: string[] = []
+    let forked = 0
+    const minter = makeMinter({
+      base,
+      engine: {
+        fork: async () => {
+          forked++
+          return 'ws'
+        }
+      },
+      remover: { remove: (dir) => removed.push(dir) },
+      provision: {
+        provision: () => {
+          throw new Error('spent its grant')
+        }
+      }
+    })
+    await expect(
+      minter.mint({
+        serviceId: 'svc',
+        identity: sessionIdentity('svc', 'ana', 1),
+        template: { templateId: 't', version: 1, pinAddress: 'x' }
+      })
+    ).rejects.toThrow('spent its grant')
+    // No fork, and the dir it had already made is cleaned up — the same
+    // rollback a failed fork gets, reused rather than a second cleanup path.
+    expect(forked).toBe(0)
+    expect(removed).toHaveLength(1)
+  })
+
+  it('mints exactly as before when nothing is provisioned', async () => {
+    const minter = makeMinter({ base, engine: { fork: async () => 'ws-plain' } })
+    await expect(
+      minter.mint({
+        serviceId: 'svc',
+        identity: sessionIdentity('svc', 'ana', 1),
+        template: { templateId: 't', version: 1, pinAddress: 'x' }
+      })
+    ).resolves.toBe('ws-plain')
+  })
+})
+
 describe('makeConductorRoute', () => {
   it('routes a workspace to its entry terminal', () => {
     const route = makeConductorRoute({ entryTerminalOf: (id) => (id === 'ws-1' ? 'term-orch' : null) })

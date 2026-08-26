@@ -97,6 +97,33 @@ export function entryAgentOf(snapshot: TeamSnapshot): string | null {
   return (orch ?? terminals[0]).name
 }
 
+/**
+ * The door of a SERVED crew — the orch, or nothing.
+ *
+ * Deliberately not `entryAgentOf`. That one answers "which agent do I enter
+ * this template through" for a LOCAL import, where falling back to the first
+ * terminal is a kindness to the owner opening their own crew. Serving asks the
+ * same-shaped question with a stranger on the other end, and the owner ruled
+ * (2026-08-26) that a crew without an orch must be refused rather than
+ * answered: `QA Shell Door` — one terminal, no orch, empty command — served
+ * happily and "replied" by running the caller's prompt at a zsh prompt.
+ *
+ * `entryAgent` MAY NOT PROMOTE. It looks like an explicit designation, but
+ * `TeamStore.save` computes it as orch-else-first-terminal, so honouring it
+ * here would restore the fallback by another route — every orch-less team on
+ * disk has it set. It breaks a tie between orchs and does nothing else.
+ */
+export function orchAgentOf(snapshot: TeamSnapshot): string | null {
+  const orchs = snapshot.nodes.filter(
+    (n): n is Extract<CanvasNode, { kind: 'terminal' }> => n.kind === 'terminal' && n.orch === true
+  )
+  if (orchs.length === 0) return null
+  const named = snapshot.entryAgent
+    ? orchs.find((t) => t.name === snapshot.entryAgent)
+    : undefined
+  return (named ?? orchs[0]).name
+}
+
 function isSnapshot(value: unknown): value is TeamSnapshot {
   const s = value as TeamSnapshot
   return (

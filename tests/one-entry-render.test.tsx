@@ -79,12 +79,21 @@ describe('the primary says everything the click does', () => {
   })
 
   it('cannot submit a paid door that could not quote at 402', () => {
-    expect(canSubmitShare('paid', '')).toBe(false)
-    expect(canSubmitShare('paid', '0')).toBe(false)
-    expect(canSubmitShare('paid', '2.50')).toBe(true)
+    expect(canSubmitShare('paid', '', 'Conductor')).toBe(false)
+    expect(canSubmitShare('paid', '0', 'Conductor')).toBe(false)
+    expect(canSubmitShare('paid', '2.50', 'Conductor')).toBe(true)
     // A free door never blocks on a price it does not have.
-    expect(canSubmitShare('just-me', '')).toBe(true)
-    expect(canSubmitShare('account', '')).toBe(true)
+    expect(canSubmitShare('just-me', '', 'Conductor')).toBe(true)
+    expect(canSubmitShare('account', '', 'Conductor')).toBe(true)
+  })
+
+  it('cannot submit a PUBLIC door with no orch — the save is where that is caught', () => {
+    // Owner ruling 2026-08-26. The crew used to save, serve, and hand the first
+    // caller's prompt to a bare shell; the refusal belongs at the act.
+    expect(canSubmitShare('account', '', null)).toBe(false)
+    expect(canSubmitShare('paid', '2.50', null)).toBe(false)
+    // Private is untouched: just-me publishes nothing, so it needs no door.
+    expect(canSubmitShare('just-me', '', null)).toBe(true)
   })
 
   it('agrees with the backend on what a price is', () => {

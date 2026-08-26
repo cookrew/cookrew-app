@@ -139,6 +139,19 @@ export interface ProfileInput {
   sandbox: string
   /** Resolved service root — every sibling session lives under it. */
   siblingRoot: string
+  /**
+   * Every session sandbox on the machine (`<base>/sessions`). Denied whole, so
+   * a service cannot read ANOTHER service's sessions — the sibling deny below
+   * only ever covered its own, and a live probe confirmed the gap.
+   */
+  sessionsRoot: string
+  /**
+   * The owner's credential stores, denied outright. Required rather than
+   * optional: this is the list that makes the per-service grant mean something,
+   * and a call site that forgot it would silently hand every served agent the
+   * owner's refresh token. See owner-secrets.ts for why it is a denylist.
+   */
+  secretPaths: readonly string[]
 }
 
 /**
@@ -156,6 +169,7 @@ export interface ProfileInput {
 export function seatbeltProfile(input: ProfileInput): string {
   const sandbox = quote(input.sandbox)
   const siblings = quote(input.siblingRoot)
+  const sessions = quote(input.sessionsRoot)
   return [
     '(version 1)',
     '(deny default)',
@@ -166,15 +180,29 @@ export function seatbeltProfile(input: ProfileInput): string {
     '(allow file-write-data (literal "/dev/null") (literal "/dev/stdout") (literal "/dev/stderr"))',
     '(allow file-ioctl (literal "/dev/dtracehelper"))',
     '(allow network*)',
-    // LAST WINS. Sessions are mutually invisible; this session's own subtree is
-    // re-allowed beneath the sibling deny because it lives inside it.
-    `(deny file-read* (subpath ${siblings}))`,
+    // LAST WINS, and the ordering below IS the enforcement — a deny written
+    // above the blanket read allow would be silently overridden.
+    //
+    // EVERY session, not just the siblings. This denied `siblingRoot` alone,
+    // which is one service's sessions; a probe run against the real profile
+    // read another service's sandbox straight out. One subpath covers both, and
+    // this session's own subtree is re-allowed last because it lives inside it.
+    `(deny file-read* (subpath ${sessions}))`,
+    // The owner's credential stores. `file-read*` is allowed across the disk on
+    // purpose (denying it means enumerating everything a toolchain touches), so
+    // without these lines a served agent could read the owner's OAuth refresh
+    // token without being lent anything — see owner-secrets.ts. Both filters:
+    // `subpath` catches a directory, `literal` a single file.
+    ...input.secretPaths.map(
+      (secret) => `(deny file-read* (subpath ${quote(secret)}) (literal ${quote(secret)}))`
+    ),
     // TRAVERSAL. Found by running it: denying the service root outright made a
     // session unable to reach its OWN sandbox — `cd` into it failed with "Not a
     // directory", because reaching a child means traversing the parent. The
-    // metadata allow is on the root as a LITERAL, so the directory node can be
-    // walked through while its other children stay unreadable. A subpath allow
-    // here would have re-opened every sibling.
+    // metadata allows are LITERALS, so those directory nodes can be walked
+    // through while their other children stay unreadable. A subpath allow here
+    // would have re-opened every sibling.
+    `(allow file-read-metadata (literal ${sessions}))`,
     `(allow file-read-metadata (literal ${siblings}))`,
     `(allow file-read* (subpath ${sandbox}))`
   ].join('\n')

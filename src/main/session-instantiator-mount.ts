@@ -39,15 +39,21 @@ export interface WorkspaceNodesLookup {
 export function makeEntryTerminalLookup(store: WorkspaceNodesLookup): EntryTerminalLookup {
   return {
     entryTerminalOf(workspaceId) {
-      // The orch is the door. A team SAVED without one still serves: the first
-      // terminal answers, which is EXACTLY the door the share sheet promised —
-      // SelectionBar derives its "Callers talk to {orch} only" line as
-      // orch-among-picked, else first terminal. Requiring a literal orch flag
-      // here made the UI promise a door the backend then refused (503 on a
-      // crew the owner had just been told was taking calls).
-      const terminals = store.nodesOf(workspaceId).filter((n) => n.kind === 'terminal')
-      const door = terminals.find((n) => n.orch === true) ?? terminals[0]
-      return door?.id ?? null
+      // THE ORCH IS THE DOOR, and nothing else is (owner ruling, 2026-08-26).
+      //
+      // This used to fall back to the first terminal so the backend would agree
+      // with a share sheet that promised orch-else-first. It made the two agree
+      // in the worst direction: `QA Shell Door` — one terminal, no orch, no
+      // command — served happily, and the caller's prompt was typed at a zsh
+      // prompt and RUN (a sandbox holds `pwd > qa-door-executes-caller-text.txt`
+      // from a probe). The agreement is restored the other way now: serve()
+      // refuses an orch-less crew and the share sheet refuses to save one, so
+      // by the time a workspace is minted an orch exists. A null here is a
+      // session whose orch died — our fault, and the 503 says so.
+      const orch = store
+        .nodesOf(workspaceId)
+        .find((n) => n.kind === 'terminal' && n.orch === true)
+      return orch?.id ?? null
     }
   }
 }

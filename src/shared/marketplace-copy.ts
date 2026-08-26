@@ -612,7 +612,21 @@ export const MKT_SERVE = {
   'mkt.serve.stop.action': 'STOP SERVING',
   'mkt.serve.stop.confirm':
     'Stop serving {templateName}? {n} workspaces end now, including any mid-call. The template stays on your shelf.',
-  'mkt.serve.error': "Couldn't start serving — {templateName} is still private and nobody can call it."
+  'mkt.serve.error': "Couldn't start serving — {templateName} is still private and nobody can call it.",
+  /**
+   * THE NO-ORCH REFUSAL, said at save rather than discovered at the gate.
+   *
+   * A crew with no orch used to save and serve, and the first caller's prompt
+   * was typed at a bare zsh prompt. The sentence has to do two jobs: name the
+   * missing thing in the owner's own vocabulary (the ◆ orch badge on a card),
+   * and say what it is FOR — otherwise "pick an orch" reads as a form field
+   * rather than the reason the crew cannot answer anybody.
+   */
+  'mkt.serve.no-orch':
+    'Pick an orch before you serve this — callers talk to exactly one agent, and this crew has none. Mark one card as the orch and it becomes the door.',
+  /** The gate's reasons, in the owner's words. Keyed by ServeRefusal. */
+  'mkt.serve.refused.bad-price': 'A paid door needs a price above zero.',
+  'mkt.serve.refused.priced-free-door': 'A free door cannot carry a price.'
 } as const
 
 /** The SESSIONS table. Owner-side; the word lives here and nowhere else. */

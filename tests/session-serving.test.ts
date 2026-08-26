@@ -18,6 +18,7 @@ const deps = (over: Partial<ServingDeps> = {}): ServingDeps => ({
   base,
   teams: { load: (id) => (id === 'research-crew' ? { name: id } : undefined) },
   pins: { resolve: () => ({ version: 1, pinAddress: 'sha256:v1' }) },
+  door: { orchOf: () => 'Conductor' },
   forkEngine: { fork: async (input) => `ws-${input.name}` },
   entry: { entryTerminalOf: (wid) => `orch-${wid}` },
   callsInFlight: { cancelWhere: () => 0 },
@@ -129,5 +130,43 @@ describe('serving survives a restart — the persistence seam', () => {
     const s = wireServing(deps({ persist: servedTemplateFile(base) }))
     expect(s.served.list()).toHaveLength(1)
     expect(s.served.bySlug('research')).not.toBeNull()
+  })
+
+  it('a crew that LOST its orch comes back not-serving, rather than serving a 503', () => {
+    // The rule tightened while the record sat on disk — which is the whole
+    // reason the rehydrate loop refuses rather than trusts the file. The door
+    // this reopens is the one the ruling closed, so a stale record must not be
+    // able to walk it back in through a restart.
+    writeFileSync(path.join(base, 'served-templates.json'), JSON.stringify([CREW]))
+    const s = wireServing(deps({ persist: servedTemplateFile(base), door: { orchOf: () => null } }))
+    expect(s.served.list()).toHaveLength(0)
+    expect(s.served.bySlug('research')).toBeNull()
+  })
+})
+
+describe('the orch is required to serve at all', () => {
+  it('refuses serve() for a crew with no orch and does not persist it', () => {
+    const persist = servedTemplateFile(base)
+    const s = wireServing(deps({ persist, door: { orchOf: () => null } }))
+    expect(() => s.serve(CREW)).toThrow(/needs an orch/)
+    expect(s.served.list()).toHaveLength(0)
+    // Nothing reached disk either — a refused serve that still wrote the file
+    // would serve on the NEXT boot if the rule ever relaxed again.
+    expect(persist.load()).toEqual([])
+  })
+
+  it('refusalFor answers the same verdict before the act, for the save sheet', () => {
+    const withOrch = wireServing(deps())
+    const without = wireServing(deps({ door: { orchOf: () => null } }))
+    expect(withOrch.refusalFor(CREW)).toBeNull()
+    expect(without.refusalFor(CREW)).toBe('no-orch')
+  })
+
+  it('an inbound call to an orch-less crew is a 404, not a mint', async () => {
+    // The end-to-end consequence: refusing at serve means the slug never
+    // resolves, so no sandbox is created and no prompt reaches a shell.
+    const s = wireServing(deps({ door: { orchOf: () => null } }))
+    expect(() => s.serve(CREW)).toThrow()
+    expect(await s.resolveInboundCall('research', 'ana')).toEqual({ kind: 'none' })
   })
 })

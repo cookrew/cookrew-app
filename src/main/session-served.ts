@@ -62,6 +62,61 @@ export function validPrice(value: string): boolean {
 }
 
 /**
+ * The template's ORCH, by name, or null when it has none (`orchAgentOf`).
+ *
+ * A seam rather than a `TeamStore` import: this module is the pure routing
+ * decision and must stay testable without a snapshot on disk. It is required,
+ * not optional — a default that answered "sure, it has a door" is exactly how
+ * the orch-less serve got in, and an unwired construction site should fail to
+ * compile rather than fail open.
+ */
+export interface TemplateDoor {
+  orchOf(templateId: string): string | null
+}
+
+/**
+ * Why a serve was refused. Each value names something the OWNER can fix, and is
+ * what the share sheet turns into a sentence — a reason a UI cannot phrase is a
+ * reason that becomes "unknown" on a bar.
+ */
+export type ServeRefusal = 'no-orch' | 'bad-price' | 'priced-free-door'
+
+/** Thrown by `serve`. Carries the machine-readable reason, not just prose. */
+export class ServeRefused extends Error {
+  readonly reason: ServeRefusal
+  constructor(reason: ServeRefusal) {
+    super(REFUSAL_TEXT[reason])
+    this.reason = reason
+    this.name = 'ServeRefused'
+  }
+}
+
+const REFUSAL_TEXT: Record<ServeRefusal, string> = {
+  'no-orch': 'a served crew needs an orch — callers talk to one agent',
+  'bad-price': 'a paid door needs a price',
+  'priced-free-door': 'a free door cannot carry a price'
+}
+
+/**
+ * The refusal for this serve, or null when it may go ahead. Pure, and separate
+ * from `serve` so the owner surface can ask BEFORE the act — the save sheet
+ * needs the answer while the button is still unpressed.
+ *
+ * The orch is checked first because it is the structural refusal: a priced door
+ * is a crew configured wrong, an orch-less one is a crew that cannot work at
+ * all, and that is the sentence worth showing.
+ */
+export function serveRefusal(template: ServedTemplate, door: TemplateDoor): ServeRefusal | null {
+  if (door.orchOf(template.templateId) === null) return 'no-orch'
+  // The two deceptive shapes, refused rather than normalised: a paid door with
+  // no price quotes nothing at 402, and a price on a free door charges for what
+  // the owner said was free.
+  if (template.access === 'paid' && !validPrice(template.priceUsd ?? '')) return 'bad-price'
+  if (template.access !== 'paid' && template.priceUsd !== undefined) return 'priced-free-door'
+  return null
+}
+
+/**
  * The set of templates currently taking calls. Owner-only writes (serve/stop
  * are IPC, never on the listener — the same rule the grant surface follows);
  * the reads below are what the call path consults.
@@ -69,22 +124,25 @@ export function validPrice(value: string): boolean {
 export class ServedTemplates {
   private readonly templatesByService = new Map<string, ServedTemplate>()
   private readonly serviceIdBySlug = new Map<string, string>()
+  private readonly door: TemplateDoor
+
+  constructor(door: TemplateDoor) {
+    this.door = door
+  }
 
   /**
    * Start serving, or replace an existing entry for the same service (a
    * re-serve under a new slug, say). Replacing drops the old slug so a stale one
    * cannot linger and resolve after the owner moved the service.
+   *
+   * Throws `ServeRefused` on any shape the gate would have to apologise for
+   * later. That is also the rehydrate filter: `wireServing` drops what this
+   * refuses, so a crew that lost its orch since the app last ran comes back
+   * NOT SERVED rather than serving a door that 503s.
    */
   serve(template: ServedTemplate): void {
-    // The two deceptive shapes, refused rather than normalised: a paid door
-    // with no price quotes nothing at 402, and a price on a free door charges
-    // for what the owner said was free.
-    if (template.access === 'paid' && !validPrice(template.priceUsd ?? '')) {
-      throw new Error('a paid door needs a price')
-    }
-    if (template.access !== 'paid' && template.priceUsd !== undefined) {
-      throw new Error('a free door cannot carry a price')
-    }
+    const refusal = serveRefusal(template, this.door)
+    if (refusal !== null) throw new ServeRefused(refusal)
     const prior = this.templatesByService.get(template.serviceId)
     if (prior && prior.slug !== template.slug) this.serviceIdBySlug.delete(prior.slug)
     // Frozen, and this is the only copy the readers hand back — so a caller that
