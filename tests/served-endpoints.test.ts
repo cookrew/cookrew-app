@@ -3,12 +3,33 @@ import { generateKeyPairSync, sign } from 'node:crypto'
 import { ServedCallers } from '../src/main/served-callers'
 import { callAssertionPayload } from '../src/main/call-ceremony'
 import { CallCredentialService } from '../src/main/call-credential'
-import { devSettle, handleServedRoute, type ServedEndpointDeps } from '../src/main/served-endpoints'
+import { handleServedRoute, type ServedEndpointDeps } from '../src/main/served-endpoints'
 import type { ServedTemplate } from '../src/main/session-served'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach } from 'vitest'
+
+/**
+ * The payment rail, stubbed at the seam.
+ *
+ * devSettle used to live in production and be imported here; it admitted any
+ * 'tx-' string, so the paid door was decorative. The real rail is x402-rail.ts
+ * and has its own suite. What THIS suite still needs is the three answers, so
+ * the gate's own branches (the two voices, mint-or-not) stay covered without a
+ * chain — which is exactly what the seam is for.
+ */
+const stubSettle = async (payment: string): Promise<'ok' | 'refused' | 'unverifiable'> => {
+  if (payment.startsWith('bad-')) return 'refused'
+  if (payment.startsWith('iffy-')) return 'unverifiable'
+  return payment.length > 0 ? 'ok' : 'refused'
+}
+
+/** Terms are behind the seam too; their real shape is x402-rail's business. */
+const stubTerms = (t: { priceUsd?: string }): unknown =>
+  t.priceUsd ? { x402Version: 1, accepts: [{ maxAmountRequired: t.priceUsd }] } : null
+
+
 
 /**
  * THE SERVED GATE, walked over the wire shapes — sign-up (TOFU), sign-in, the
@@ -62,10 +83,11 @@ beforeEach(() => {
       asked.push(`${conductorId}:${prompt}`)
       return 'the answer'
     },
-    settle: (txRef) => {
-      settled.push(txRef)
-      return devSettle(txRef)
+    settle: async (payment) => {
+      settled.push(payment)
+      return stubSettle(payment)
     },
+    paymentTerms: stubTerms,
     crewFace: (t) => ({
       name: 'Research Crew',
       serviceId: t.serviceId,
@@ -246,7 +268,10 @@ describe('the per-session 402 (paid door)', () => {
     const token = await signIn(PAID)
     const res = await ask(PAID, { authorization: `Bearer ${token}` })
     expect(res!.status).toBe(402)
-    expect(res!.body).toMatchObject({ terms: { amount: '2.50', asset: 'USDC' } })
+    // The gate hands back whatever the RAIL quoted and inspects none of it.
+    // This used to assert {amount, asset:'USDC', chain:'dev'} — terms the gate
+    // built itself, which is the coupling that made the rail unswappable.
+    expect(res!.body).toMatchObject({ terms: stubTerms(PAID) as object })
   })
 
   it('a settling payment mints; the SAME session then asks free — R5 by construction', async () => {
@@ -257,6 +282,25 @@ describe('the per-session 402 (paid door)', () => {
     const again = await ask(PAID, { authorization: `Bearer ${token}` })
     expect(again!.status).toBe(200)
     expect((again!.body as { created: boolean }).created).toBe(false)
+  })
+
+  it('a payment that does not settle MINTS NOTHING and never wakes the crew', async () => {
+    // Gate A5's safety half, and the property the old 'tx-' stub could not
+    // have: refusal must happen BEFORE admit(), or a caller who paid nothing
+    // still costs a session boot — and, once minted, hasOpenSession would let
+    // their next ask through for free.
+    const token = await signIn(PAID)
+    for (const payment of ['bad-tx', 'iffy-tx', '']) {
+      const res = await ask(PAID, { authorization: `Bearer ${token}`, 'x-payment': payment })
+      expect(res!.status).toBe(402)
+    }
+    expect(sessions.size).toBe(0)
+    expect(asked).toEqual([])
+
+    // And the door is not poisoned: a settling payment still works afterwards.
+    const good = await ask(PAID, { authorization: `Bearer ${token}`, 'x-payment': 'tx-abc' })
+    expect(good!.status).toBe(200)
+    expect(sessions.size).toBe(1)
   })
 
   it('speaks the two payment voices apart: refused accuses, unverifiable apologises', async () => {

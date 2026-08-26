@@ -163,6 +163,16 @@ export interface MobileServerDeps {
    * phones get ws:// on localhost and wss:// on the LAN.
    */
   onUpgrade?: (request: http.IncomingMessage, socket: import('node:stream').Duplex) => void
+  /**
+   * Version pins for one terminal.
+   *
+   * NOT PART OF THE PAYMENT WORK — index.ts already passed this and the type
+   * never declared it, so `npm run typecheck` was red on the base commit for
+   * everyone (TS2353 plus an implicit-any on the parameter it could not infer).
+   * Declared here rather than routed around, because gate A7 is a clean
+   * typecheck and a red baseline makes every later break invisible.
+   */
+  listPins?: (terminalId: string) => import('../shared/version-pin').VersionPinRecord[]
 }
 
 /**
