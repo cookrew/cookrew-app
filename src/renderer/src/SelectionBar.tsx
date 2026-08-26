@@ -7,6 +7,7 @@ import {
   ShareOnSave,
   canSubmitShare,
   saveButtonLabel,
+  serveRefusalText,
   type ShareAccess
 } from './ShareOnSave'
 import { TeamGraphThumb } from './TeamGraphThumb'
@@ -213,13 +214,19 @@ export function SelectionBar({
 
   const summary = selectionSummary(workspace, [...picked])
   const clash = naming ? saveClash(teams, name, workspace.name) : null
-  /** The one door a caller reaches: the orch among the PICKED cards. */
+  /**
+   * The one door a caller reaches: the orch among the PICKED cards, or null.
+   *
+   * No fallback. This used to answer first-picked-terminal, else the word
+   * 'Conductor' — so a selection with no orch showed a confident "Callers talk
+   * to Shell (2) only", saved, served, and handed the first stranger's prompt
+   * to a zsh prompt. The backend's matching fallback is gone too; both sides
+   * now agree that no orch means no door (owner ruling, 2026-08-26).
+   */
   const orchName =
     workspace.nodes.find(
       (n) => picked.has(n.id) && n.kind === 'terminal' && (n as { orch?: boolean }).orch
-    )?.name ??
-    workspace.nodes.find((n) => picked.has(n.id) && n.kind === 'terminal')?.name ??
-    'Conductor'
+    )?.name ?? null
   const canClip = cookrew().teamClipSet !== undefined
 
   const showFlash = (text: string): void => {
@@ -316,6 +323,10 @@ export function SelectionBar({
     // Autofocus + Enter can beat the teamList fetch; an unknown list must
     // block (the guard would otherwise wave through a silent overwrite).
     if (!teamsLoaded) return
+    // The same refusal the disabled button carries. Enter in the name field
+    // reaches here without touching the button, and a save that published an
+    // orch-less crew by keyboard would be the bug with an extra step.
+    if (!canSubmitShare(access, priceUsd, orchName)) return
     if (clash && !armed) {
       setArmed(true)
       return
@@ -339,7 +350,11 @@ export function SelectionBar({
             setServedName(meta.name)
             setCopied(false)
           } else {
-            setError(`Saved, but couldn't start serving — ${served?.reason ?? 'unknown'}`)
+            // In words. The sheet already refuses every reason it can see, so a
+            // refusal that still arrives is one it could not — a template that
+            // vanished, or an orch removed between the sheet and the save — and
+            // a bare `no-orch` on the bar teaches the owner nothing.
+            setError(`Saved, but couldn't start serving — ${serveRefusalText(served?.reason)}`)
           }
         }
         setBusy(null)
@@ -490,7 +505,9 @@ export function SelectionBar({
           />
           <button
             className="cr-btn sm"
-            disabled={busy !== null || !teamsLoaded || !canSubmitShare(access, priceUsd)}
+            disabled={
+              busy !== null || !teamsLoaded || !canSubmitShare(access, priceUsd, orchName)
+            }
             onClick={runSave}
           >
             {armed && clash ? 'SAVE AGAIN?' : saveButtonLabel(access, busy === 'save')}

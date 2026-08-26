@@ -2,6 +2,7 @@ import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { confinedSpawn, seatbeltProfile, serviceRoot } from './session-sandbox'
 import { grantable, sessionEnv } from './session-env'
+import { ownerSecretPaths, sessionsRootOf } from './owner-secrets'
 
 /**
  * SCRUBBED-ENV-AT-SPAWN — the seam slice 1 built its primitives for.
@@ -103,7 +104,14 @@ export function servedConfinement(
   writeProfile: ProfileWriter = defaultWriter
 ): ServedConfinement {
   const siblingRoot = serviceRoot(ctx.base, ctx.serviceId)
-  const profile = seatbeltProfile({ sandbox: ctx.sandbox, siblingRoot })
+  const profile = seatbeltProfile({
+    sandbox: ctx.sandbox,
+    siblingRoot,
+    sessionsRoot: sessionsRootOf(ctx.base),
+    // What the owner did NOT lend, made unreachable. Without this the grant in
+    // service-grants.ts is a formality — the agent could read the originals.
+    secretPaths: ownerSecretPaths(ctx.base)
+  })
   // Inside the sandbox (so END's cleanup removes it); the per-session SANDBOX
   // dir is what keeps two sessions' profiles apart, not this constant filename.
   // REWRITTEN EVERY SPAWN, and that is load-bearing: the confined agent can

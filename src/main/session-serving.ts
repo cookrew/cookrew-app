@@ -16,9 +16,17 @@ import {
   type ForkEngine,
   type PinResolver,
   type SandboxRemover,
+  type SessionProvisioner,
   type TeamLoad
 } from './session-instantiator-adapters'
-import { ServedTemplates, resolveCallScope, type ServedTemplate } from './session-served'
+import {
+  ServedTemplates,
+  resolveCallScope,
+  serveRefusal,
+  type ServedTemplate,
+  type ServeRefusal,
+  type TemplateDoor
+} from './session-served'
 import type { ServedPersistence } from './served-persist'
 
 /**
@@ -43,6 +51,11 @@ export interface ServingDeps {
   teams: TeamLoad
   /** Resolves a template id to its pinned {version, pinAddress} (S1c). */
   pins: PinResolver
+  /**
+   * A template's ORCH by name, or null. The one fact that decides whether a
+   * crew may be served at all — `orchAgentOf` over the saved snapshot.
+   */
+  door: TemplateDoor
   /** Mints a sandboxed workspace from a template — index wraps forkTeam. */
   forkEngine: ForkEngine
   /** A live workspace's entry/orch terminal — the scoped lookup, never focused. */
@@ -51,6 +64,11 @@ export interface ServingDeps {
   callsInFlight: CallCutter
   /** rm -rf the sandbox. */
   remover: SandboxRemover
+  /**
+   * The owner's per-service grant, laid into each new sandbox (R30 G2).
+   * Optional: a wiring that lends nothing mints exactly as it did before.
+   */
+  provision?: SessionProvisioner
   /** The owner's own live workspace for a slug, or null — `store.bySlug(slug)?.id`. */
   liveWorkspaceId(slug: string): string | null
   /**
@@ -82,20 +100,30 @@ export interface Serving {
   resolveInboundCall(slug: string, accountId: string): Promise<InboundCall>
   /** Serve a template under a slug (owner IPC only). Clones defensively. */
   serve(input: ServedTemplate): void
+  /**
+   * Would this serve be refused, and why? The owner surface asks BEFORE it
+   * acts, so the save sheet can say "pick an orch first" while the button is
+   * still unpressed instead of saving and then reporting a failure.
+   */
+  refusalFor(input: ServedTemplate): ServeRefusal | null
   /** Stop serving (owner IPC only). */
   stop(serviceId: string): void
 }
 
 export function wireServing(deps: ServingDeps): Serving {
-  const served = new ServedTemplates()
+  const served = new ServedTemplates(deps.door)
   // Rehydrate: what was serving when the app died is still being served. A
-  // record serve() refuses (price-shape rules may have tightened since it was
-  // written) is dropped rather than allowed to stop the boot.
+  // record serve() refuses (the rules may have tightened since it was written —
+  // the orch requirement did exactly that) is dropped rather than allowed to
+  // stop the boot. Dropped LOUDLY: a crew that silently stopped serving across
+  // a restart is the same invisible failure served-persist.ts exists to end,
+  // so the owner gets a line naming the crew and the reason.
   for (const template of deps.persist?.load() ?? []) {
     try {
       served.serve(template)
-    } catch {
-      // dropped — an invalid door stays closed
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      console.error(`not serving '${template.slug}' — ${reason}`)
     }
   }
   const saveServed = (): void => deps.persist?.save(served.list())
@@ -112,7 +140,8 @@ export function wireServing(deps: ServingDeps): Serving {
   const minter: Minter = makeMinter({
     base: deps.base,
     engine: deps.forkEngine,
-    remover: deps.remover
+    remover: deps.remover,
+    ...(deps.provision ? { provision: deps.provision } : {})
   })
   const route: ConductorRoute = makeConductorRoute(deps.entry)
   const ender: Ender = makeEnder({ base: deps.base, cutter: deps.callsInFlight, remover: deps.remover })
@@ -144,6 +173,7 @@ export function wireServing(deps: ServingDeps): Serving {
       served.serve(input)
       saveServed()
     },
+    refusalFor: (input) => serveRefusal(input, deps.door),
     stop: (serviceId) => {
       served.stop(serviceId)
       saveServed()

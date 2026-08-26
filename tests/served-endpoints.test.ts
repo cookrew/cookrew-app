@@ -29,6 +29,7 @@ let issuer: CallCredentialService
 let callers: ServedCallers
 let sessions: Map<string, { sessionId: string; workspaceId: string }>
 let asked: string[]
+let settled: string[]
 let deps: ServedEndpointDeps
 
 const { publicKey, privateKey } = generateKeyPairSync('ed25519')
@@ -40,6 +41,7 @@ beforeEach(() => {
   callers = new ServedCallers()
   sessions = new Map()
   asked = []
+  settled = []
   deps = {
     issuer,
     callers,
@@ -52,12 +54,18 @@ beforeEach(() => {
       return { ...made, created: true }
     },
     hasOpenSession: (serviceId, sub) => sessions.has(`${serviceId}/${sub}`),
+    // Lent nothing, so nothing to exceed — the default every crew served
+    // before grants existed still gets.
+    grantBudget: { allowsNewSession: () => true },
     conductorFor: (sessionId) => `orch-${sessionId}`,
     ask: async (conductorId, prompt) => {
       asked.push(`${conductorId}:${prompt}`)
       return 'the answer'
     },
-    settle: devSettle,
+    settle: (txRef) => {
+      settled.push(txRef)
+      return devSettle(txRef)
+    },
     crewFace: (t) => ({
       name: 'Research Crew',
       serviceId: t.serviceId,
@@ -179,6 +187,57 @@ describe('the ask gate', () => {
     expect((second!.body as { sessionId: string }).sessionId).toBe(
       (first!.body as { sessionId: string }).sessionId
     )
+  })
+})
+
+describe("the owner's grant budget", () => {
+  it('refuses a NEW session with 429 and a reason, once the lend is spent', async () => {
+    deps.grantBudget = { allowsNewSession: () => false }
+    const token = await signIn(FREE)
+    const res = await ask(FREE, { authorization: `Bearer ${token}` })
+    // 429, not 503: nothing is broken, and "try again shortly" would be a lie
+    // about a wait that never ends.
+    expect(res!.status).toBe(429)
+    expect(res!.body).toMatchObject({ reason: 'budget' })
+    // Nothing was minted and nothing was asked of a crew.
+    expect(asked).toHaveLength(0)
+  })
+
+  it('never interrupts a session that is already OPEN', async () => {
+    // The grant was spent on this caller when their session minted. Cutting
+    // them off mid-conversation would end a call for a limit that has nothing
+    // to do with the message they just sent.
+    const token = await signIn(FREE)
+    expect((await ask(FREE, { authorization: `Bearer ${token}` }))!.status).toBe(200)
+    deps.grantBudget = { allowsNewSession: () => false }
+    const again = await ask(FREE, { authorization: `Bearer ${token}` })
+    expect(again!.status).toBe(200)
+    expect((again!.body as { created: boolean }).created).toBe(false)
+  })
+
+  it('is the OWNER’s limit, so paying cannot buy past it — and is NOT charged for', async () => {
+    // A caller's payment and an owner's lend bound two different people's
+    // spending; collapsing them would let a stranger purchase more of the
+    // owner's credential than the owner lent.
+    //
+    // The order is the real assertion. A budget checked after the 402 reads
+    // correct and takes the money for a session that was never going to exist,
+    // so the settle spy — not the status — is what makes this test worth having.
+    deps.grantBudget = { allowsNewSession: () => false }
+    const token = await signIn(PAID)
+    const res = await ask(PAID, { authorization: `Bearer ${token}`, 'x-payment': 'tx-abc' })
+    expect(res!.status).toBe(429)
+    expect(settled).toEqual([])
+    expect(asked).toHaveLength(0)
+  })
+
+  it('does not even QUOTE a paid crew it cannot mint', async () => {
+    deps.grantBudget = { allowsNewSession: () => false }
+    const token = await signIn(PAID)
+    const res = await ask(PAID, { authorization: `Bearer ${token}` })
+    // Never 402: quoting a price for a session that cannot be created is an
+    // offer we cannot keep.
+    expect(res!.status).toBe(429)
   })
 })
 

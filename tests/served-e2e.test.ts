@@ -37,7 +37,7 @@ async function ownerApp(access: 'account' | 'paid', priceUsd?: string): Promise<
   dirs.push(base)
   const issuer = new CallCredentialService({ base })
   const callers = new ServedCallers()
-  const served = new ServedTemplates()
+  const served = new ServedTemplates({ orchOf: () => 'Conductor' })
   served.serve({
     serviceId: 'svc-research',
     templateId: 'research-crew',
@@ -77,6 +77,7 @@ async function ownerApp(access: 'account' | 'paid', priceUsd?: string): Promise<
             verifyToken: (t) => issuer.verifyToken(t)
           },
           callers,
+          grantBudget: { allowsNewSession: () => true },
           admit: async (serviceId, sub) => {
             const key = `${serviceId}/${sub}`
             const open = sessions.get(key)

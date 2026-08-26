@@ -4,6 +4,7 @@ import { ServedTeamCard, type ServedTeam } from './ServedTeamCard'
 import {
   ShareOnSave,
   canSubmitShare,
+  serveRefusalText,
   saveButtonLabel,
   type ShareAccess
 } from './ShareOnSave'
@@ -54,11 +55,14 @@ export function TeamForkPicker({
   onClose: () => void
 }): React.JSX.Element {
   const nodes = workspace.nodes
-  /** The one door a caller reaches — the orch, else the first terminal. */
+  /**
+   * The one door a caller reaches: the orch, or NULL. No first-terminal
+   * fallback — the same ruling SelectionBar follows (2026-08-26). This surface
+   * publishes too, so leaving the fallback here would just move the orch-less
+   * serve to the other button.
+   */
   const orchName =
-    nodes.find((n) => n.kind === 'terminal' && (n as { orch?: boolean }).orch)?.name ??
-    nodes.find((n) => n.kind === 'terminal')?.name ??
-    'Conductor'
+    nodes.find((n) => n.kind === 'terminal' && (n as { orch?: boolean }).orch)?.name ?? null
   const [included, setIncluded] = useState<ReadonlySet<string>>(() =>
     seed && seed.size > 0
       ? new Set(nodes.filter((n) => seed.has(n.id)).map((n) => n.id))
@@ -231,6 +235,9 @@ export function TeamForkPicker({
 
   const runSave = (): void => {
     if (busy) return
+    // Enter in the name field reaches here without touching the button, so the
+    // button's refusal has to be repeated on the path that skips it.
+    if (!canSubmitShare(access, priceUsd, orchName)) return
     setBusy('save')
     setError(null)
     void cookrew()
@@ -247,7 +254,7 @@ export function TeamForkPicker({
             setServedAt(served.address)
             refreshServed()
           }
-          else setError(`Couldn't start serving — ${served?.reason ?? 'unknown'}`)
+          else setError(`Couldn't start serving — ${serveRefusalText(served?.reason)}`)
         }
         setBusy(null)
         setSavedFlash(meta.name)
@@ -491,7 +498,7 @@ export function TeamForkPicker({
               />
               <button
                 className="cr-btn sm"
-                disabled={busy !== null || !canSubmitShare(access, priceUsd)}
+                disabled={busy !== null || !canSubmitShare(access, priceUsd, orchName)}
                 onClick={runSave}
               >
                 {saveButtonLabel(access, busy === 'save')}

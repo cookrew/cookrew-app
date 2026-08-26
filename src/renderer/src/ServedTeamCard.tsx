@@ -42,8 +42,14 @@ export function ServedTeamCard({
   onClose
 }: {
   team: ServedTeam
-  /** The orch's name — the one door a caller reaches. */
-  door: string
+  /**
+   * The orch's name — the one door a caller reaches — or null when the canvas
+   * this card was opened over flags no orch. A served crew always HAS an orch
+   * (serve refuses otherwise), but this name is derived from the open
+   * workspace rather than the served template, so the two can differ and the
+   * honest answer to "which one?" is sometimes "not from here".
+   */
+  door: string | null
   onStopped: () => void
   onClose: () => void
 }): React.JSX.Element {
@@ -91,7 +97,9 @@ export function ServedTeamCard({
           </button>
         </section>
         <p className="gs-sub">
-          {fillCopy(MKT_SERVE['mkt.serve.live.address'], { orch: door, priceLine })}
+          {door === null
+            ? priceLine
+            : fillCopy(MKT_SERVE['mkt.serve.live.address'], { orch: door, priceLine })}
         </p>
 
         <section className="stc-sessions">

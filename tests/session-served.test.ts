@@ -1,9 +1,12 @@
 import { describe, expect, it, beforeEach } from 'vitest'
 import {
+  ServeRefused,
   ServedTemplates,
   resolveCallScope,
+  serveRefusal,
   type ScopeLookup,
-  type ServedTemplate
+  type ServedTemplate,
+  type TemplateDoor
 } from '../src/main/session-served'
 
 /**
@@ -20,10 +23,14 @@ const crew = (over: Partial<ServedTemplate> = {}): ServedTemplate => ({
   ...over
 })
 
+/** Every template has an orch unless a test says otherwise. */
+const hasOrch: TemplateDoor = { orchOf: () => 'Conductor' }
+const noOrch: TemplateDoor = { orchOf: () => null }
+
 describe('ServedTemplates — the registry', () => {
   let served: ServedTemplates
   beforeEach(() => {
-    served = new ServedTemplates()
+    served = new ServedTemplates(hasOrch)
   })
 
   it('serves a template and finds it by slug and by service', () => {
@@ -61,6 +68,41 @@ describe('ServedTemplates — the registry', () => {
     expect(served.bySlug('research')?.priceUsd).toBe('2.50')
   })
 
+  it('REFUSES a crew with no orch — the door a stranger would have got is a zsh prompt', () => {
+    const shellTeam = new ServedTemplates(noOrch)
+    expect(() => shellTeam.serve(crew())).toThrow(ServeRefused)
+    expect(() => shellTeam.serve(crew())).toThrow(/needs an orch/)
+    // And nothing is registered: a refused serve must not leave a half-open
+    // door that resolves by slug.
+    expect(shellTeam.bySlug('research')).toBeNull()
+    expect(shellTeam.list()).toHaveLength(0)
+  })
+
+  it('carries the reason on the error, so a UI does not parse prose', () => {
+    const shellTeam = new ServedTemplates(noOrch)
+    try {
+      shellTeam.serve(crew())
+      expect.unreachable('serve should have refused')
+    } catch (error) {
+      expect(error).toBeInstanceOf(ServeRefused)
+      expect((error as ServeRefused).reason).toBe('no-orch')
+    }
+  })
+
+  it('re-serving an orch-less crew cannot displace the entry that IS serving', () => {
+    // The replace path deletes the prior slug before writing the new record;
+    // refusing after that would leave the service unreachable at both names.
+    served.serve(crew({ slug: 'research' }))
+    const strict = new ServedTemplates({
+      orchOf: (id) => (id === 'research-crew' ? 'Conductor' : null)
+    })
+    strict.serve(crew({ slug: 'research' }))
+    expect(() => strict.serve(crew({ templateId: 'shell-only', slug: 'lab' }))).toThrow(
+      /needs an orch/
+    )
+    expect(strict.bySlug('research')?.templateId).toBe('research-crew')
+  })
+
   it('stopping something never served is a no-op', () => {
     expect(() => served.stop('svc-nobody')).not.toThrow()
     expect(served.list()).toHaveLength(0)
@@ -83,6 +125,38 @@ describe('ServedTemplates — the registry', () => {
       ;(got as { slug: string }).slug = 'x'
     }).toThrow()
     expect(served.bySlug('research')?.slug).toBe('research')
+  })
+})
+
+describe('serveRefusal — the same verdict, askable before the act', () => {
+  it('is null for a crew that may be served', () => {
+    expect(serveRefusal(crew(), hasOrch)).toBeNull()
+    expect(serveRefusal(crew({ access: 'paid', priceUsd: '2.50' }), hasOrch)).toBeNull()
+  })
+
+  it('names no-orch, bad-price and priced-free-door', () => {
+    expect(serveRefusal(crew(), noOrch)).toBe('no-orch')
+    expect(serveRefusal(crew({ access: 'paid' }), hasOrch)).toBe('bad-price')
+    expect(serveRefusal(crew({ access: 'account', priceUsd: '1' }), hasOrch)).toBe(
+      'priced-free-door'
+    )
+  })
+
+  it('reports the missing orch first when a crew is wrong twice over', () => {
+    // A priced door is a crew configured wrong; an orch-less one cannot work at
+    // all. Fixing the price on a crew that has no orch teaches nothing.
+    expect(serveRefusal(crew({ access: 'paid' }), noOrch)).toBe('no-orch')
+  })
+
+  it('asks the door about THIS template, not some ambient current one', () => {
+    const asked: string[] = []
+    serveRefusal(crew({ templateId: 'research-crew' }), {
+      orchOf: (id) => {
+        asked.push(id)
+        return 'Conductor'
+      }
+    })
+    expect(asked).toEqual(['research-crew'])
   })
 })
 

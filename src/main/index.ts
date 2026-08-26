@@ -129,6 +129,7 @@ import {
   forkTeam,
   workspaceFromTemplate,
   entryAgentOf,
+  orchAgentOf,
   type TeamSnapshot
 } from './teams'
 import http from 'node:http'
@@ -142,9 +143,10 @@ import { bootWorkspaceInPlace } from './session-boot'
 import { servedConfinement } from './session-spawn'
 import { makeEntryTerminalLookup, rmSandbox } from './session-instantiator-mount'
 import { ServedCallers } from './served-callers'
+import { serviceGrants } from './service-grants-store'
 import { devSettle, handleServedRoute } from './served-endpoints'
 import { RemoteCrewStore, parseCrewLink } from './remote-crews'
-import { validPrice, type ServeAccess } from './session-served'
+import { ServeRefused, type ServeAccess } from './session-served'
 import { PresetStore, isPresetId } from './preset-store'
 import { PinStore } from './pin-store'
 import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
@@ -369,9 +371,16 @@ const servedSpawnContexts = new Map<
   string,
   { serviceId: string; sessionId: string; sandbox: string }
 >()
-// M1: the owner lends a service no keys by default, so a served session cannot
-// spend the owner's tokens until a per-service grant is configured (R30 budget).
-const grantedKeysForService = (_serviceId: string): readonly string[] => []
+/**
+ * THE LEND (R30 G2). The owner's per-service grant file, read per call.
+ *
+ * Still nothing by default — an unlisted service is lent no key, no file and no
+ * budget, exactly as before. What changed is that there is now a way to lend on
+ * purpose: `~/.cookrew/service-grants.json`, one entry per service, each with a
+ * session budget it cannot exceed. See service-grants.ts for why the budget
+ * counts sessions rather than dollars.
+ */
+const grants = serviceGrants(sessionsBase)
 
 const serving: Serving = wireServing({
   base: sessionsBase,
@@ -409,6 +418,12 @@ const serving: Serving = wireServing({
       return meta.id
     }
   },
+  // The one fact that decides whether a crew may be served at all: does its
+  // saved snapshot flag an orch? Never the first terminal — see orchAgentOf.
+  door: { orchOf: (templateId) => {
+    const snapshot = teams.load(templateId)
+    return snapshot ? orchAgentOf(snapshot) : null
+  } },
   entry: makeEntryTerminalLookup({
     nodesOf: (wid) =>
       callNodesOf(wid).map((n) => ({
@@ -419,6 +434,9 @@ const serving: Serving = wireServing({
   }),
   callsInFlight: { cancelWhere: (match) => callsInFlight.cancelWhere(match) },
   remover: rmSandbox,
+  // The grant lands in the sandbox before the fork boots the harness that
+  // reads it, and spends one session of the owner's budget.
+  provision: { provision: (serviceId, sandbox) => grants.provision(serviceId, sandbox) },
   liveWorkspaceId: (slug) => store.bySlug(slug)?.id ?? null,
   // Serving survives a restart — an owner stops serving by saying stop.
   persist: servedTemplateFile(sessionsBase)
@@ -500,6 +518,7 @@ async function handleServedSlug(
         return askTerminal(session, prompt)
       },
       settle: devSettle,
+      grantBudget: { allowsNewSession: (serviceId) => grants.allowsNewSession(serviceId) },
       crewFace: (t) => {
         const snapshot = teams.load(t.templateId)
         const nodes = snapshot?.nodes ?? []
@@ -510,8 +529,12 @@ async function handleServedSlug(
           version: 1,
           access: t.access,
           ...(t.priceUsd !== undefined ? { priceUsd: t.priceUsd } : {}),
-          // The door's NAME only — the roster behind it is never listed.
-          door: (snapshot ? entryAgentOf(snapshot) : null) ?? 'Conductor',
+          // The door's NAME only — the roster behind it is never listed. The
+          // ORCH's name, and never an invented 'Conductor': a face that names a
+          // door the mint cannot produce is the promise the 503 then breaks.
+          // serve() refuses an orch-less crew, so a served template always has
+          // one; the empty string is the unreachable branch said out loud.
+          door: (snapshot ? orchAgentOf(snapshot) : null) ?? '',
           agents: nodes.filter((n) => n.kind === 'terminal').length
         }
       }
@@ -945,8 +968,11 @@ function spawnTracked(t: {
         serviceId: servedCtx.serviceId,
         sessionId: servedCtx.sessionId,
         sandbox: servedCtx.sandbox,
-        ownerEnv: process.env,
-        grantedKeys: grantedKeysForService(servedCtx.serviceId)
+        // The owner's own environment PLUS whatever this service was lent by
+        // name; `sessionEnv` still allowlists on top, so a value here reaches
+        // nothing that grantedKeys does not name.
+        ownerEnv: grants.ownerEnvFor(servedCtx.serviceId),
+        grantedKeys: grants.envKeysFor(servedCtx.serviceId)
       })
     : undefined
   const session = ptys.spawn(
@@ -3096,9 +3122,6 @@ function registerIpc(handlers: RestoreHandlers): void {
       input: { templateId: string; access: ServeAccess; priceUsd?: string }
     ) => {
       if (!teams.load(input.templateId)) return { ok: false, reason: 'no-template' as const }
-      if (input.access === 'paid' && !validPrice(input.priceUsd ?? '')) {
-        return { ok: false, reason: 'bad-price' as const }
-      }
       // The slug is derived from the team's own name and made unique against
       // the workspace namespace it shares — a service must not shadow a
       // workspace the owner named, and a live workspace wins the slug anyway.
@@ -3110,13 +3133,22 @@ function registerIpc(handlers: RestoreHandlers): void {
       // One service per template: re-serving replaces its own entry rather
       // than minting a second identity for the same crew.
       const serviceId = `svc-${deriveSlug(input.templateId)}`
-      serving.serve({
-        serviceId,
-        templateId: input.templateId,
-        slug,
-        access: input.access,
-        ...(input.access === 'paid' ? { priceUsd: input.priceUsd } : {})
-      })
+      // ONE refusal path. The price shape used to be re-checked here beside the
+      // registry's own copy; now every reason — including the orch — comes back
+      // from serve() itself, so the owner surface and the gate can never
+      // disagree about what is servable.
+      try {
+        serving.serve({
+          serviceId,
+          templateId: input.templateId,
+          slug,
+          access: input.access,
+          ...(input.access === 'paid' ? { priceUsd: input.priceUsd } : {})
+        })
+      } catch (error) {
+        if (error instanceof ServeRefused) return { ok: false as const, reason: error.reason }
+        throw error
+      }
       return { ok: true as const, serviceId, slug, address: servedAddress(slug) }
     }
   )

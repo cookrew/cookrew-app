@@ -28,11 +28,15 @@ describe('makeEntryTerminalLookup — the conductor is the workspace OWN orch', 
     expect(lookup.entryTerminalOf('ws-served')).toBe('t-orch')
   })
 
-  it('answers with the FIRST terminal when no orch exists — the door the share sheet promised', () => {
-    // SelectionBar's door line is orch-among-picked, else first terminal; a
-    // lookup that refused an orch-less crew made the UI promise a door the
-    // backend then 503'd. The two derivations must agree.
-    expect(lookup.entryTerminalOf('ws-empty')).toBe('t-plain')
+  it('is NULL when the workspace has terminals but no orch — never the first one', () => {
+    // REVERSED on the owner's ruling (2026-08-26). This asserted the
+    // first-terminal fallback, to keep the backend agreeing with a share sheet
+    // that promised orch-else-first. The two did agree — on serving `QA Shell
+    // Door`, a single orch-less zsh, which "answered" by RUNNING the caller's
+    // text. The agreement now runs the other way: serve() refuses an orch-less
+    // crew, so no workspace minted from a served template can reach this line
+    // without an orch, and a null here means the orch died.
+    expect(lookup.entryTerminalOf('ws-empty')).toBeNull()
   })
 
   it('is null for a workspace it has no nodes for', () => {
