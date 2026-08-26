@@ -656,6 +656,14 @@ a.cr-btn {
   display: flex;
   align-items: center;
   gap: 6px;
+  /* The row WRAPS on desktop: with enough presets + saved teams the tail —
+     which is exactly where the CREWS family and + ADD BY LINK live — used to
+     run off the screen edge with no scroll, making the import entry
+     undiscoverable. The dock grows upward instead; chips stay tappable. */
+  flex-wrap: wrap;
+  min-width: 0;
+  max-height: 30vh;
+  overflow-y: auto;
 }
 
 .cr-check {
@@ -2846,6 +2854,19 @@ a.card-close {
   color: #e8c9a0;
 }
 
+/* The orch wears gold — identity, not state, so it never yields to status. */
+.vi-chip.orch {
+  background: var(--amber);
+  color: #221a00;
+}
+
+.vi-mini-orch {
+  color: var(--amber);
+  font-size: calc(11px * var(--z, 1));
+  line-height: 1;
+  text-shadow: 0 0 calc(4px * var(--z, 1)) rgba(255, 214, 0, 0.6);
+}
+
 .vi-chip.dim {
   color: #98989d;
 }
@@ -4911,6 +4932,27 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   border-radius: 8px;
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
   z-index: 40;
+}
+
+/* A serving save's receipt: the address card, cream like the bar it grew from. */
+.cr-selbar-served {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--cream-hi);
+  border: 2px solid var(--violet);
+  border-radius: 0;
+  box-shadow: 3px 3px 0 var(--line);
+}
+.cr-selbar-served .sos-note {
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--ink-soft);
+  margin: 0;
+}
+.cr-selbar-served-acts {
+  display: flex;
+  justify-content: flex-end;
 }
 
 /* ── THE ORCH IS THE DOOR — a golden frame ──

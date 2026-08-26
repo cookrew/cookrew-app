@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { cookrew } from './api'
 import type { RemoteCrewView } from './api'
+// The gs-* sheet primitives. This import used to arrive via GrantPanel; when
+// that panel was retired its CSS left the bundle and this sheet went naked —
+// so the dependency is stated HERE, by the component that actually wears it.
+import './grant-surface.css'
 
 /**
  * ADD A CREW — the import side's one entry (owner ruling, 2026-08-26).

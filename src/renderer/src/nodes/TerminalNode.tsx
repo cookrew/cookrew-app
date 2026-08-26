@@ -77,6 +77,13 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
         <div className="vi-mini node-header">
           <StatusCoin phase={phase} preset={node.preset} />
           <span className="vi-mini-name">{node.name}</span>
+          {/* The door is findable at ANY zoom — the frame alone is a hairline
+              out here, so the orch also wears its mark. */}
+          {node.orch && (
+            <span className="vi-mini-orch" title="Orch — the team's door" aria-label="Orch">
+              ★
+            </span>
+          )}
         </div>
       </div>
     )
@@ -124,7 +131,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
           {node.name}
         </div>
         <span className="vi-chip tan">{node.preset}</span>
-        {node.orch && <span className="vi-chip">Orch</span>}
+        {node.orch && <span className="vi-chip orch">★ ORCH</span>}
         {node.forkOf && (
           <span
             className="vi-chip fork"

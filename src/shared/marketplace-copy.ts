@@ -606,6 +606,9 @@ export const MKT_SERVE = {
     "Callers never touch your workspace. Each one gets a fresh copy of the template you pinned, in its own folder. Keep working exactly as you did before — they can't see it, and nothing you do now reaches them.",
   'mkt.serve.live': '{templateName} is taking calls.',
   'mkt.serve.live.address': 'Callers land on {orch} · {priceLine}',
+  /** The hand-off: what the owner DOES with the address they were just shown. */
+  'mkt.serve.live.handoff':
+    'Hand this address to a caller — in their Cookrew it goes under TERMINAL → + ADD BY LINK.',
   'mkt.serve.stop.action': 'STOP SERVING',
   'mkt.serve.stop.confirm':
     'Stop serving {templateName}? {n} workspaces end now, including any mid-call. The template stays on your shelf.',

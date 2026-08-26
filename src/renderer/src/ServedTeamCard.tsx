@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { cookrew } from './api'
 import { MKT_SERVE, MKT_SESSIONS, fillCopy } from '../../shared/marketplace-copy'
+// The gs-* sheet primitives — stated by the wearer, not inherited from the
+// (retired) GrantPanel that used to carry this import.
+import './grant-surface.css'
 
 /**
  * A SERVED TEAM's card — the address, who is on, and the way to stop.

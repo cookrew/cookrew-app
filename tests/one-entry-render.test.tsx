@@ -145,6 +145,22 @@ describe('AddCrewSheet — adding is free and inert', () => {
   })
 })
 
+describe('a serving save SHOWS the address it minted', () => {
+  // The user-reported gap: SAVE · START SERVING succeeded and the address was
+  // set in state — and never rendered. These pin the receipt to the source.
+  it('SelectionBar renders the address card, held until DONE', () => {
+    const bar = src('SelectionBar.tsx')
+    expect(bar).toContain('cr-selbar-served')
+    expect(bar).toContain('COPY LINK')
+    expect(bar).toMatch(/servedAt && !naming/)
+  })
+
+  it('a serving save does not bury the address under a transient flash', () => {
+    const bar = src('SelectionBar.tsx')
+    expect(bar).toMatch(/if \(access === 'just-me'\) showFlash/)
+  })
+})
+
 describe('the retirements are real, not merely unmounted', () => {
   it('no per-agent export toggle survives on a roster row', () => {
     const row = src('AgentRow.tsx')

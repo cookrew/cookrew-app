@@ -965,7 +965,10 @@ function Canvas(): React.JSX.Element {
     },
     // presetId belongs here: without it the callback closes over a stale arm
     // and the click places the PREVIOUSLY armed preset, or nothing at all.
-    [tool, preset, role, roles, orch, clipping, presetId, screenToFlowPosition, zoomToNode]
+    // crewId and templates are CONSULTED above; leaving them out froze the
+    // closure at crewId=null, so an armed crew chip fell through to plain
+    // terminal creation — the canvas click placed a Shell instead of the crew.
+    [tool, preset, role, roles, orch, clipping, presetId, crewId, templates, screenToFlowPosition, zoomToNode]
   )
 
   const onNodesDelete = useCallback((deleted: Node[]) => {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { GitInfo, TeamClipStatus, TeamMeta, WorkspaceState } from '../../shared/model'
 import { saveClash, selectionSummary } from '../../shared/team-actions'
 import { cookrew, isDemoMode } from './api'
+import { MKT_SERVE, fillCopy } from '../../shared/marketplace-copy'
 import {
   ShareOnSave,
   canSubmitShare,
@@ -56,7 +57,12 @@ export function SelectionBar({
   // team is NAMED — this is THE publish entry, not a parallel admin panel.
   const [access, setAccess] = useState<ShareAccess>('just-me')
   const [priceUsd, setPriceUsd] = useState('')
+  /** THE PAYOFF of a serving save: the address, held on screen until DONE.
+   *  A 3-second flash was the original sin here — the user saved a paid team
+   *  and never saw the link they were supposed to hand out. */
   const [servedAt, setServedAt] = useState<string | null>(null)
+  const [servedName, setServedName] = useState('')
+  const [copied, setCopied] = useState(false)
   const [name, setName] = useState('')
   const [teams, setTeams] = useState<TeamMeta[]>([])
   /** The overwrite guard is only trustworthy once the list has ARRIVED —
@@ -328,18 +334,21 @@ export function SelectionBar({
             ...(access === 'paid' ? { priceUsd: priceUsd.trim() } : {})
           })
           if (!alive.current) return
-          if (served?.ok) setServedAt(served.address)
-          else setError(`Saved, but couldn't start serving — ${served?.reason ?? 'unknown'}`)
+          if (served?.ok) {
+            setServedAt(served.address)
+            setServedName(meta.name)
+            setCopied(false)
+          } else {
+            setError(`Saved, but couldn't start serving — ${served?.reason ?? 'unknown'}`)
+          }
         }
         setBusy(null)
         setNaming(false)
         setName('')
         setArmed(false)
-        showFlash(
-          access === 'just-me'
-            ? `saved template “${meta.name}”`
-            : `“${meta.name}” is taking calls`
-        )
+        // A private save flashes; a serving save gets the ADDRESS CARD instead —
+        // the address is the deliverable, and it must outlive a 3-second flash.
+        if (access === 'just-me') showFlash(`saved template “${meta.name}”`)
         // The save cut a version pin on each saved agent (main process). Tell
         // any open rail to re-fetch so the marker appears NOW, not on the next
         // turn — otherwise a save reads as if it did nothing.
@@ -391,6 +400,34 @@ export function SelectionBar({
 
   return (
     <div className="cr-selbar" ref={rootRef}>
+      {/* THE ADDRESS CARD — a serving save's receipt. It stays until DONE:
+          the whole point of a serving save is handing this link to someone,
+          and a surface that closed itself is exactly the bug being fixed. */}
+      {servedAt && !naming && (
+        <div className="cr-selbar-share cr-selbar-served" role="status" aria-live="polite">
+          <span className="sos-live-t">
+            {fillCopy(MKT_SERVE['mkt.serve.live'], { templateName: servedName })}
+          </span>
+          <div className="sos-live">
+            <code className="sos-addr">{servedAt}</code>
+            <button
+              className="cr-btn sm"
+              onClick={() => {
+                void navigator.clipboard?.writeText(servedAt)
+                setCopied(true)
+              }}
+            >
+              {copied ? 'COPIED ✓' : 'COPY LINK'}
+            </button>
+          </div>
+          <p className="sos-note">{MKT_SERVE['mkt.serve.live.handoff']}</p>
+          <div className="cr-selbar-served-acts">
+            <button className="cr-btn sm" onClick={() => setServedAt(null)}>
+              DONE
+            </button>
+          </div>
+        </div>
+      )}
       {/* What the clipboard holds, as ONE picture — the element chips laid
           out by their real relative positions with the cables drawn between
           them. ✂ marks stateful identity moves (a cut browser carries its
