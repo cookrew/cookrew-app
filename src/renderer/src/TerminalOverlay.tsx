@@ -746,7 +746,14 @@ function TerminalOverlay({
           {translation.working ? (
             <span>
               Translating into {languageName(translation.language)}
-              {translation.host !== null ? ` via ${translation.host}` : ' on this machine'}…
+              {translation.host !== null ? ` via ${translation.host}` : ' on this machine'}
+              {/* The count is the whole point of the strip on a long body: a
+                  local model runs about 19s per 3000 characters, so without a
+                  number that moves there is no way to tell working from hung. */}
+              {translation.progress !== null &&
+                translation.progress.total > 1 &&
+                ` — ${translation.progress.done} of ${translation.progress.total}`}
+              …
             </span>
           ) : translation.error !== null ? (
             <span>{translation.error}</span>

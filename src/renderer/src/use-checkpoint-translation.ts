@@ -1,10 +1,37 @@
 // The state behind the translate button: which checkpoint is showing in which
-// language, whether Sous is still working, and what to say when it could not.
+// language, how far along Sous is, and what to say when it could not.
+//
+// WHY THE PIECES ARE CUT HERE AND NOT IN MAIN.
+//
+// They used to be cut behind the IPC call: one invoke went in, one finished
+// body came back, and everything in between was silence. A local 1.5b–3b model
+// runs about 19 seconds per 3000 characters and cannot be parallelised (Ollama
+// serialises: measured 1.2x across four concurrent requests), so a long
+// checkpoint is minutes of a card that says "Translating…" and does nothing
+// observable. That is indistinguishable from broken, and it was reported as
+// broken.
+//
+// Cutting them here makes each piece its own round trip, which buys three
+// things that no amount of work behind the call could: a count that advances,
+// text that appears as it arrives, and a STOP that actually stops — the loop
+// simply does not ask for the next piece.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { cookrew } from './api'
 import type { CheckpointTranslation } from './TranscriptView'
-import { TRANSLATE_FAILURE_TEXT, type TranslateFailure } from '../../shared/translate'
+import {
+  REMOTE_CHUNK_CHARS,
+  TRANSLATE_CHUNK_CHARS,
+  TRANSLATE_FAILURE_TEXT,
+  splitForTranslation,
+  type TranslateFailure
+} from '../../shared/translate'
+import { looksUntranslated } from '../../shared/translate-check'
+
+export interface TranslationProgress {
+  done: number
+  total: number
+}
 
 export interface TranslationState {
   /** The body being shown translated, or null for "as written". */
@@ -13,11 +40,19 @@ export interface TranslationState {
   language: string | null
   /** True while Sous is working — the button is busy, not broken. */
   working: boolean
+  /** How many pieces are done, so a long body shows movement. */
+  progress: TranslationProgress | null
   /** Reader-facing sentence for the last failure, cleared by the next attempt. */
   error: string | null
 }
 
-const IDLE: TranslationState = { showing: null, language: null, working: false, error: null }
+const IDLE: TranslationState = {
+  showing: null,
+  language: null,
+  working: false,
+  progress: null,
+  error: null
+}
 
 export interface TranslationControls extends TranslationState {
   /** Host the text is sent to, or null when translation happens on this machine. */
@@ -40,7 +75,9 @@ export function useCheckpointTranslation(): TranslationControls {
    *
    * The reader is told this because it is the one thing about the feature they
    * cannot see: local and remote produce the same-looking Japanese, and only
-   * one of them sent the transcript to somebody else's server.
+   * one of them sent the transcript to somebody else's server. It also sets the
+   * piece size — a hosted model swallows a whole body, a local one must not be
+   * asked to.
    */
   const [host, setHost] = useState<string | null>(null)
   useEffect(() => {
@@ -55,11 +92,13 @@ export function useCheckpointTranslation(): TranslationControls {
       alive = false
     }
   }, [])
+
   /**
-   * Only the newest request may write the result. Two clicks in a row — or a
-   * click on a second language while the first is still running — would
-   * otherwise race, and the slower one would win and label the body with the
-   * language nobody asked for last.
+   * Only the newest request may write. Two clicks in a row — or a click on a
+   * second language while the first is still running — would otherwise race,
+   * and the slower one would win and label the body with the language nobody
+   * asked for last. It is also what STOP bumps, which is why STOP ends the loop
+   * rather than merely hiding it.
    */
   const runId = useRef(0)
 
@@ -68,78 +107,102 @@ export function useCheckpointTranslation(): TranslationControls {
     setState(IDLE)
   }, [])
 
+  const note = useCallback((message: string) => {
+    runId.current += 1
+    setState({ ...IDLE, error: message })
+  }, [])
+
   const translate = useCallback(
     (index: number, body: { prompt: string; reply: string }, language: string) => {
       const run = ++runId.current
-      setState({ showing: null, language, working: true, error: null })
+      const limit = host === null ? TRANSLATE_CHUNK_CHARS : REMOTE_CHUNK_CHARS
+      const prompt = splitForTranslation(body.prompt, limit)
+      const reply = splitForTranslation(body.reply, limit)
+      const total = prompt.length + reply.length
+      if (total === 0) {
+        setState({ ...IDLE, error: 'There is nothing to translate in this checkpoint.' })
+        return
+      }
+
+      setState({
+        showing: null,
+        language,
+        working: true,
+        progress: { done: 0, total },
+        error: null
+      })
+
       void (async () => {
-        try {
-          // The prompt and the reply go separately: they are different kinds of
-          // text (verbatim human words vs the agent's markdown) and one failing
-          // should not throw away the other.
-          const [prompt, reply] = await Promise.all([
-            translatePart(body.prompt, language),
-            translatePart(body.reply, language)
-          ])
-          if (run !== runId.current) return
-          if (prompt.failure !== null && reply.failure !== null) {
+        const out = { prompt: [] as string[], reply: [] as string[] }
+        let done = 0
+        // Prompt first: it is short and it is the line at the top of the block,
+        // so the reader sees the translation start where they are looking.
+        const work = [
+          ...prompt.map((text) => ({ text, part: 'prompt' as const })),
+          ...reply.map((text) => ({ text, part: 'reply' as const }))
+        ]
+
+        for (const piece of work) {
+          if (run !== runId.current) return // stopped, or superseded
+          let failure: TranslateFailure | null = null
+          try {
+            const res = await cookrew().translateCheckpoint(piece.text, language)
+            if (run !== runId.current) return
+            if (!res.ok) failure = res.failure
+            else if (looksUntranslated(piece.text, res.text, language)) failure = 'unusable-output'
+            else out[piece.part].push(res.text)
+          } catch (error) {
+            console.error('translate failed:', error)
+            failure = 'unreachable'
+          }
+
+          if (failure !== null) {
+            // Stop where it stopped and SAY where. The alternative — carry on
+            // and splice the untranslated original in — produces a body that
+            // is half one language with no seam marked, which reads as a bad
+            // translation rather than a stalled one.
             setState({
-              showing: null,
+              showing: partial(index, out, done > 0),
               language,
               working: false,
-              error: TRANSLATE_FAILURE_TEXT[prompt.failure]
+              progress: { done, total },
+              error:
+                done === 0
+                  ? TRANSLATE_FAILURE_TEXT[failure]
+                  : `Stopped after ${done} of ${total} pieces — ${TRANSLATE_FAILURE_TEXT[failure]} The rest is unchanged.`
             })
             return
           }
+
+          done += 1
+          // Show what has arrived. On a long body this is the difference
+          // between watching it fill in and watching nothing.
           setState({
-            showing: { index, prompt: prompt.text, reply: reply.text },
+            showing: partial(index, out, true),
             language,
-            working: false,
-            // A half-success is reported as one: the part that came back is
-            // shown, and the part that did not is named rather than quietly
-            // left in the original language for the reader to puzzle over.
-            error: partialNote(prompt.failure, reply.failure)
-          })
-        } catch (error) {
-          if (run !== runId.current) return
-          console.error('translate failed:', error)
-          setState({
-            showing: null,
-            language,
-            working: false,
-            error: TRANSLATE_FAILURE_TEXT.unreachable
+            working: done < total,
+            progress: { done, total },
+            error: null
           })
         }
       })()
     },
-    []
+    [host]
   )
-
-  const note = useCallback((message: string) => {
-    runId.current += 1
-    setState({ showing: null, language: null, working: false, error: message })
-  }, [])
 
   return { ...state, host, translate, clear, note }
 }
 
-interface PartResult {
-  text: string | null
-  failure: TranslateFailure | null
-}
-
-/** Empty text is nothing to translate — not a failure and not a request. */
-async function translatePart(text: string, language: string): Promise<PartResult> {
-  if (text.trim().length === 0) return { text: null, failure: null }
-  const result = await cookrew().translateCheckpoint(text, language)
-  return result.ok ? { text: result.text, failure: null } : { text: null, failure: result.failure }
-}
-
-function partialNote(
-  prompt: TranslateFailure | null,
-  reply: TranslateFailure | null
-): string | null {
-  if (prompt === null && reply === null) return null
-  const which = prompt !== null ? 'The prompt' : 'The reply'
-  return `${which} did not translate — ${TRANSLATE_FAILURE_TEXT[(prompt ?? reply) as TranslateFailure]}`
+/** What has arrived so far, or null before anything has. */
+function partial(
+  index: number,
+  out: { prompt: string[]; reply: string[] },
+  any: boolean
+): CheckpointTranslation | null {
+  if (!any) return null
+  return {
+    index,
+    prompt: out.prompt.length > 0 ? out.prompt.join('') : null,
+    reply: out.reply.length > 0 ? out.reply.join('') : null
+  }
 }
