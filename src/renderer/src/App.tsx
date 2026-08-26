@@ -54,7 +54,9 @@ import { SnapGuides } from './SnapGuides'
 import { EventToastLayer } from './EventToast'
 import { RosterPanel } from './RosterPanel'
 import { MetricsPanel } from './MetricsPanel'
-import { GrantPanel, canGrant } from './GrantPanel'
+import { AddCrewSheet } from './AddCrewSheet'
+import { GateSheet } from './GateSheet'
+import type { RemoteCrewView } from './api'
 import { SelectionBar } from './SelectionBar'
 import { ConfirmClose } from './ConfirmClose'
 import { apiPath } from './api-base'
@@ -145,10 +147,6 @@ function Canvas(): React.JSX.Element {
   const [view, setView] = useState<MainView>('canvas')
   /** Activity metrics / history panel (opened from the workspace popout). */
   const [metricsOpen, setMetricsOpen] = useState(false)
-  // WHO CAN CALL. Owner-desktop only, and ABSENT rather than disabled anywhere
-  // else — a greyed-out list of who is enrolled still discloses who is
-  // enrolled, on the device most likely to be lying on a table.
-  const [grantOpen, setGrantOpen] = useState(false)
   /** Board selection mode — the dock's slid-in clipboard button drives it. */
   const [boardSelecting, setBoardSelecting] = useState(false)
   /**
@@ -162,6 +160,11 @@ function Canvas(): React.JSX.Element {
    */
   const [installedPresets, setInstalledPresets] = useState<InstalledPreset[]>([])
   const [presetId, setPresetId] = useState<string | null>(null)
+  // R30 import side: crews added by link, the armed one, and the two sheets.
+  const [crews, setCrews] = useState<readonly RemoteCrewView[]>([])
+  const [crewId, setCrewId] = useState<string | null>(null)
+  const [addCrewOpen, setAddCrewOpen] = useState(false)
+  const [crewGate, setCrewGate] = useState<RemoteCrewView | null>(null)
   const refreshPresets = useCallback(() => {
     void cookrew()
       .listInstalledPresets()
@@ -169,6 +172,13 @@ function Canvas(): React.JSX.Element {
       .catch((error) => console.error('listInstalledPresets failed:', error))
   }, [])
   useEffect(refreshPresets, [refreshPresets])
+  const refreshCrews = useCallback(() => {
+    void cookrew()
+      .crewList()
+      .then(setCrews)
+      .catch((error) => console.error('crewList failed:', error))
+  }, [])
+  useEffect(refreshCrews, [refreshCrews])
   /**
    * M3: STABLE identities. Inline arrows here were new objects every render, so
    * the dock's effect re-fired on each one and the R3 batch never settled.
@@ -878,6 +888,20 @@ function Canvas(): React.JSX.Element {
           }
           return
         }
+        // AN ARMED CREW places ONE orch card: the whole crew answers through
+        // it, running at the author's app. The canvas click is the confirm,
+        // exactly as it is for every other chip (R2).
+        if (crewId) {
+          try {
+            await cookrew().crewPlace(crewId, position)
+          } catch (error) {
+            console.error('Placing crew failed:', error)
+          } finally {
+            setCrewId(null)
+            setTool('move')
+          }
+          return
+        }
         // A SAVED TEMPLATE placed as a preset IMPORTS a session: a new
         // workspace forked from the template — team, worktree, workdir —
         // switched to. Not a terminal on this canvas, so it returns before
@@ -1126,15 +1150,11 @@ function Canvas(): React.JSX.Element {
           {/* Inside the stage on purpose: it covers exactly the canvas and
               leaves the header — which owns the way back — reachable above it.
               The canvas keeps running underneath rather than unmounting. */}
-          {view === 'agents' && canGrant() && (
-            <button
-              className="gs-entry"
-              onClick={() => setGrantOpen(true)}
-              title="Who may call your agents over the internet"
-            >
-              🔑 WHO CAN CALL
-            </button>
-          )}
+          {/* RETIRED (owner ruling 2026-08-26): the WHO CAN CALL entry opened
+              a parallel admin panel onto a dead end ("no agents are
+              exportable"). Sharing now happens once, where saving happens —
+              the save sheet's share section — and who-is-on lives on the
+              served team itself. */}
           {view === 'agents' && (
             <RosterPanel
               workspace={workspace}
@@ -1151,7 +1171,6 @@ function Canvas(): React.JSX.Element {
                 setTool('move')
               }}
               variant="view"
-              onOpenGrants={() => setGrantOpen(true)}
               onClose={() => setView('canvas')}
             />
           )}
@@ -1206,6 +1225,23 @@ function Canvas(): React.JSX.Element {
             setPresetId(id)
             setRole(null)
           }}
+          crews={crews}
+          crewId={crewId}
+          onCrew={(id) => {
+            const crew = crews.find((c) => c.id === id)
+            if (!crew) return
+            // A locked chip is the gate's UI, never a disabled button: clicking
+            // it opens the sheet rather than arming a placement it can't do.
+            if (crew.access === 'paid' && !crew.payRef) {
+              setCrewGate(crew)
+              return
+            }
+            setCrewId(id)
+            setPresetId(null)
+            setRole(null)
+            setTool('terminal')
+          }}
+          onAddCrew={() => setAddCrewOpen(true)}
           gatedPresetId={gatedId}
           onPresetGate={openPresetGate}
           onCheckUpdates={checkPresetUpdates}
@@ -1240,11 +1276,51 @@ function Canvas(): React.JSX.Element {
           onPrimaryChange={setZoomedTerminalId}
         />
         {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
-        {grantOpen && activeWsId && (
-          <GrantPanel
-            workspace={workspace}
-            workspaceId={activeWsId}
-            onClose={() => setGrantOpen(false)}
+        {/* The dock's + ADD BY LINK — adding is free and inert; commitment
+            happens at the gate, money at the sheet, connection at placement. */}
+        {/* A locked crew chip opens the GATE, never a placement it cannot do.
+            M1 settles against the dev facilitator, so "pay" mints a reference
+            the placed card presents once, at session start (R5). */}
+        {crewGate && (
+          <GateSheet
+            scene={{
+              door: 'install',
+              phase: { kind: 'pay' },
+              pricing: {
+                model: 'one-time',
+                terms: {
+                  price: crewGate.priceUsd ?? '0',
+                  asset: 'USDC',
+                  chain: 'dev',
+                  author: `@${crewGate.slug}`,
+                  expiry: 0
+                }
+              }
+            }}
+            title={crewGate.name}
+            version={`V${crewGate.version}`}
+            agentCount={crewGate.agents}
+            bannerLine={`${crewGate.priceUsd} USDC · per session — paid directly to @${crewGate.slug}`}
+            wallets={[{ id: 'dev', label: 'DEV FACILITATOR', icon: '◈' }]}
+            selectedWallet="dev"
+            onDismiss={() => setCrewGate(null)}
+            onPay={() => {
+              const crew = crewGate
+              setCrewGate(null)
+              void cookrew()
+                .crewUnlock(crew.id, `dev-${Date.now()}`)
+                .then(() => refreshCrews())
+                .catch((error) => console.error('crewUnlock failed:', error))
+            }}
+          />
+        )}
+        {addCrewOpen && (
+          <AddCrewSheet
+            onClose={() => setAddCrewOpen(false)}
+            onAdded={() => {
+              setAddCrewOpen(false)
+              refreshCrews()
+            }}
           />
         )}
         {/* One confirmation for every close path. Rendered last so it sits over

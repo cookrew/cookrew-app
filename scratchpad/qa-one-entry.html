@@ -1,3 +1,1104 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>QA — share on save (real components)</title>
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen&family=JetBrains+Mono&family=Inter&display=swap" rel="stylesheet">
+<style>:root {
+  --cream: #faf8f4;
+  --cream-hi: #fffef5;
+  --cream-md: #f5f0e8;
+  --cream-lo: #ece6da;
+  --ink: #2d2a20;
+  --ink-soft: #5c4a1f;
+  --muted: #78716c;
+  --dim: #a8a29e;
+  --line: #2d2a20;
+  --line-soft: #d9d3c5;
+  --amber: #ffd600;
+  --amber-soft: #fff3ad;
+  --amber-deep: #d97706;
+  --phos: #e9b949;
+  --phos-dim: #8a6d1c;
+  --phos-glow: #ffd77a;
+  --phos-bg: #14110a;
+  --hp: #6bbe58;
+  --rose: #dc2626;
+  --violet: #9b8acb;
+  /* Violet is the persona accent (role coins, never a status colour). The HI
+     step is its raised sibling — the marketplace's own surfaces sit on it:
+     version pins on the rail, and the gated-chip lock badge. Promoted to a
+     real token because those two need to agree, and a hand-picked lighter
+     violet in each place is how palettes drift apart. */
+  --violet-hi: #c3b6e6;
+  --note-bg: #fff3ad;
+  --note-text: #3a3625;
+
+  /* vibe-island palette: macOS notch dark + SF system font + state accents */
+  --vi-bg: #121214;
+  --vi-panel: #1c1c1f;
+  --vi-line: #2c2c30;
+  --vi-text: #f5f5f7;
+  --vi-dim: #98989d;
+  /* Focused checkpoint row: a SOLID surface, not an alpha tint over the
+     transcript (F5). Sits between --vi-panel and the amber it carries. */
+  --vi-panel-focus: #2b281c;
+  --vi-working: #ff9f0a;
+  --vi-wait: #ff453a;
+  --vi-done: #32d74b;
+
+  --font-pixel: 'Silkscreen', 'Courier New', monospace;
+  --font-screen: 'VT323', 'Courier New', monospace;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}/* Team-fork picker overlay (TeamForkPicker.tsx). Owned by the picker-UX
+   lane; visual polish welcome from Fresco — tokens all come from the
+   arcade theme in styles.css. */
+
+.tf-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(45, 42, 32, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 90;
+  animation: cr-fadein 140ms ease-out;
+}
+
+.tf-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(82vh, 760px);
+  padding: 14px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 6px 6px 0 var(--amber-deep);
+}
+
+.tf-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tf-title {
+  font-family: var(--font-pixel);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  flex: 1;
+}
+
+.tf-banner {
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  padding: 5px 8px;
+  background: var(--amber-soft);
+  border: 1.5px dashed var(--line);
+}
+
+.tf-label {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.tf-source,
+.tf-save {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tf-list {
+  flex: 1;
+  min-height: 80px;
+  overflow-y: auto;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream);
+}
+
+.tf-row {
+  border-bottom: 1.5px solid var(--line-soft);
+}
+
+.tf-row.excluded .tf-name,
+.tf-row.excluded .tf-kind {
+  opacity: 0.4;
+}
+
+.tf-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  min-height: 36px;
+}
+
+.tf-include {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  cursor: pointer;
+  padding: 0;
+  color: var(--ink);
+}
+
+.tf-include.on {
+  background: var(--amber);
+}
+
+.tf-kind {
+  display: inline-flex;
+  color: var(--ink-soft);
+}
+
+.tf-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tf-mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tf-chooser {
+  padding: 4px 10px 10px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tf-modes {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.tf-role-note {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.tf-turns {
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream-hi);
+}
+
+.tf-turn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.tf-turn.readonly {
+  cursor: default;
+}
+
+.tf-turn.selected {
+  background: var(--amber-soft);
+}
+
+.tf-turn:disabled {
+  opacity: 0.75;
+}
+
+.tf-turn-mark {
+  width: 14px;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.tf-turn-box {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--line-soft);
+  display: inline-block;
+}
+
+.tf-turn-index {
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  color: var(--amber-deep);
+  flex: 0 0 auto;
+}
+
+.tf-turn-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tf-saved-summary {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 10px;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream);
+}
+
+.tf-input {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  padding: 5px 8px;
+  outline: none;
+  min-width: 0;
+  flex: 1;
+}
+
+.tf-input:focus {
+  border-color: var(--amber-deep);
+}
+
+.tf-saved-flash {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--hp);
+}
+
+.tf-error {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--rose);
+  border: 1.5px dashed var(--rose);
+  padding: 5px 8px;
+}
+
+.tf-hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--amber-deep);
+}
+
+.tf-preview summary {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tf-preview pre {
+  max-height: 140px;
+  overflow: auto;
+  font-size: 10px;
+  background: var(--cream);
+  border: 1.5px solid var(--line-soft);
+  padding: 6px;
+  margin: 4px 0 0;
+}
+
+.tf-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Phone: full-screen sheet, 44px touch targets. */
+@media (max-width: 700px) {
+  .tf-scrim {
+    align-items: stretch;
+    justify-content: stretch;
+  }
+
+  .tf-panel {
+    width: 100vw;
+    max-height: none;
+    border: none;
+    box-shadow: none;
+    padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+  }
+
+  .tf-row-main {
+    min-height: 44px;
+  }
+
+  .tf-turn {
+    min-height: 40px;
+  }
+
+  .tf-include {
+    width: 24px;
+    height: 24px;
+  }
+
+  .tf-foot {
+    flex-wrap: wrap;
+  }
+
+  .tf-foot .tf-fork-name {
+    flex-basis: 100%;
+  }
+}
+
+/* ---- Fresco polish: role accent, hover/press affordances ---- */
+
+/* FROM ROLE mode chip: persona accent — violet frame, violet fill when
+   active, RoleAvatar riding inside. Never a status color. */
+.tf-mode-chip.role {
+  border-color: var(--violet);
+}
+
+.tf-mode-chip.role.amber {
+  background: var(--violet);
+  color: var(--cream-hi);
+}
+
+.tf-mode-chip .role-avatar {
+  width: 12px;
+  height: 12px;
+  vertical-align: -2px;
+}
+
+.tf-mode-chip.role.amber .role-avatar {
+  color: var(--cream-hi);
+}
+
+/* Row + turn hover affordances (skip readonly/excluded). */
+.tf-row:not(.excluded) .tf-row-main:hover {
+  background: var(--amber-soft);
+}
+
+.tf-turn:not(.readonly):not(:disabled):hover {
+  background: var(--amber-soft);
+}
+
+/* Include checkbox presses like every other bevel control. */
+.tf-include:hover {
+  background: var(--amber-soft);
+}
+
+.tf-include.on:hover {
+  background: var(--amber);
+}
+
+.tf-include:active {
+  transform: translate(1px, 1px);
+}
+
+/* Assembled-turn checks read amber-deep like the turn indexes. */
+.tf-turn .cr-icon {
+  color: var(--amber-deep);
+}
+
+/* ==== workspace v2: directory manager + fork dir chooser (Velvet lane) ==== */
+
+/* --- workspace switcher add/remove row (styles bundled globally) --- */
+.cr-ws-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.cr-ws-row.active {
+  background: var(--amber-soft);
+}
+
+.cr-ws-row .cr-ws-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.cr-ws-mini {
+  flex: 0 0 auto;
+  width: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.cr-ws-mini:hover:not(:disabled) {
+  background: var(--cream-lo);
+  color: var(--ink);
+}
+
+.cr-ws-mini.danger:hover {
+  background: var(--rose);
+  color: var(--cream-hi);
+}
+
+.cr-ws-mini:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+/* --- directory manager panel --- */
+.dm-panel {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.dm-section-label {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.dm-list {
+  display: flex;
+  flex-direction: column;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream);
+}
+
+.dm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1.5px solid var(--line-soft);
+  min-height: 36px;
+}
+
+.dm-row:last-child {
+  border-bottom: none;
+}
+
+.dm-star {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: none;
+  color: var(--amber-deep);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dm-star:disabled {
+  cursor: default;
+}
+
+.dm-star:not(.on):hover {
+  color: var(--amber);
+}
+
+.dm-dir-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.dm-dir-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dm-dir-path {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Fresco fills this per-dir git-chip slot; reserve inline space. */
+.dm-git-slot {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+}
+
+.dm-primary-chip {
+  flex: 0 0 auto;
+}
+
+.dm-remove {
+  flex: 0 0 auto;
+}
+
+.dm-term-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--ink-soft);
+}
+
+.dm-cwd-select {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  padding: 3px 6px;
+  max-width: 45%;
+}
+
+.dm-cwd-select:disabled {
+  opacity: 0.5;
+}
+
+.dm-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dm-foot-note {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* --- team-fork directory chooser + worktree toggle --- */
+.tf-target-dir {
+  flex: 0 0 auto;
+  max-width: 130px;
+}
+
+.tf-dirs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream);
+}
+
+.tf-dirs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tf-worktree {
+  margin-left: 0;
+}
+
+.tf-dirs-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tf-dir-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 2px;
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+}
+
+.tf-dir-chip.primary {
+  border-color: var(--amber-deep);
+}
+
+.tf-dir-star {
+  background: transparent;
+  border: none;
+  color: var(--amber-deep);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.tf-dir-star:disabled {
+  cursor: default;
+}
+
+.tf-dir-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+  max-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tf-dir-x {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.tf-dir-x:hover {
+  color: var(--rose);
+}
+
+.tf-dirs-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tf-dirs-note {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  flex: 1 1 100%;
+}
+
+@media (max-width: 700px) {
+  .dm-row {
+    min-height: 44px;
+  }
+
+  .dm-cwd-select,
+  .tf-target-dir {
+    min-height: 36px;
+    max-width: 42%;
+  }
+
+  .cr-ws-mini {
+    width: 40px;
+  }
+}
+
+/* ── SHARE ON SAVE (R30) — the one publish entry, inside the save sheet ──
+   The share question is a section, not a second sheet: one breath, one act. */
+.sos {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0 4px;
+  border-top: 1px solid var(--line-soft);
+}
+.sos-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream-hi);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+}
+.sos-opt.sel {
+  border-color: var(--line);
+  background: var(--amber-soft);
+}
+.sos-dot {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+  margin-top: 2px;
+  flex: 0 0 auto;
+  background: var(--cream-hi);
+}
+.sos-opt.sel .sos-dot {
+  background: var(--amber);
+  box-shadow: inset 0 0 0 2px var(--cream-hi);
+}
+.sos-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sos-t { font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
+.sos-s { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-soft); line-height: 1.45; }
+.sos-price { display: flex; align-items: center; gap: 8px; padding: 2px 0 2px 30px; flex-wrap: wrap; }
+.sos-price-input { max-width: 90px; }
+.sos-unit { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-soft); }
+.sos-bad { font-family: var(--font-mono); font-size: 10px; color: var(--rose); }
+/* The door fact — shown only once a public option is picked. */
+.sos-door {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  background: var(--cream-md);
+  border: 1.5px solid var(--line);
+}
+.sos-door-g {
+  width: 22px; height: 22px; flex: 0 0 auto;
+  display: grid; place-items: center;
+  border: 1.5px solid var(--line); border-radius: 50%;
+  background: var(--cream-hi); font-size: 11px;
+}
+.sos-door-s { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-soft); line-height: 1.45; }
+.sos-note { font-family: var(--font-body); font-size: 11px; color: var(--muted); }
+/* The payoff: an address you can hand to someone. */
+.sos-live {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 10px; margin-top: 6px;
+  border: 1.5px solid var(--violet); background: var(--cream-hi);
+}
+.sos-live-t { font-family: var(--font-pixel); font-size: 8px; letter-spacing: .06em; text-transform: uppercase; color: var(--violet); }
+.sos-addr { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink); }
+
+/* The shelf's standing state: a team quietly serving must be visible at rest. */
+.tf-team-chip { display: inline-flex; align-items: center; gap: 4px; }
+.cr-chip.tf-serving {
+  background: var(--hp); color: #fff; border-color: var(--line);
+  font-size: 7.5px; letter-spacing: .05em;
+}
+/* The served team's card: address, sessions, and the consequence-first END. */
+.stc-addr { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; }
+.stc-addr-url {
+  font-family: var(--font-mono); font-size: 12px; padding: 5px 8px;
+  border: 1.5px solid var(--violet); flex: 1; min-width: 0; word-break: break-all;
+}
+.stc-sessions { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; }
+.stc-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border: 1px solid var(--cr-line, #4c463a);
+  font-family: var(--font-mono); font-size: 11.5px;
+}
+.stc-caller { font-weight: 600; flex: 1; min-width: 0; }
+.stc-ver { color: var(--violet); font-size: 10px; }
+.stc-state { color: var(--cr-dim, #a8a29e); font-size: 10.5px; }
+.stc-confirm {
+  margin-top: 10px; padding: 10px 12px;
+  border: 1.5px solid var(--rose); background: rgba(220, 38, 38, 0.08);
+}
+.stc-confirm-t { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.stc-confirm-b { margin: 0; font-size: 12px; color: var(--cr-dim, #a8a29e); }
+.stc-confirm-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.stc-danger { background: var(--rose); border-color: var(--rose); }
+.stc-danger-text { color: var(--rose); }
+/*
+ * The granting surface. Structure and hierarchy here; Fresco owns treatment.
+ *
+ * The one visual rule that is a security decision rather than taste: REVOKE is
+ * never the most prominent thing on a row, and the fingerprint is the largest
+ * type on the enrol sheet. The comparison is the only defence against a
+ * well-formed key from the wrong party, so it gets the emphasis that usually
+ * goes to a primary button.
+ */
+
+.gs-panel {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 24px 28px 96px;
+  background: var(--cr-bg, #14130f);
+  color: var(--cr-ink, #ece6d8);
+  font: 14px/1.6 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  z-index: 40;
+}
+
+.gs-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  border-bottom: 2px solid var(--cr-line, #332f27);
+  padding-bottom: 14px;
+  margin-bottom: 20px;
+}
+.gs-head h1 { font-size: 20px; margin: 0 0 2px; letter-spacing: -0.01em; }
+.gs-head-actions { display: flex; gap: 10px; align-items: center; }
+.gs-sub { margin: 0; color: var(--cr-dim, #8d8577); font-size: 12.5px; }
+.gs-dim { color: var(--cr-dim, #8d8577); }
+.gs-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+.gs-enrol {
+  font: 700 11px ui-monospace, monospace;
+  letter-spacing: 0.06em;
+  background: transparent;
+  border: 1px solid var(--cr-accent, #e9b949);
+  color: var(--cr-accent, #e9b949);
+  border-radius: 3px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.gs-x {
+  background: none; border: none; color: var(--cr-dim, #8d8577);
+  font-size: 16px; cursor: pointer; padding: 4px 8px;
+}
+
+.gs-table { width: 100%; border-collapse: collapse; }
+.gs-table th {
+  text-align: left; font: 600 10.5px ui-monospace, monospace;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--cr-dim, #8d8577);
+  border-bottom: 2px solid var(--cr-line, #332f27); padding: 8px 9px;
+}
+.gs-table td { padding: 10px 9px; border-bottom: 1px solid var(--cr-line, #332f27); vertical-align: top; }
+.gs-row.gs-open { background: rgba(255, 255, 255, 0.03); }
+.gs-caller {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: inherit; font: 600 14px inherit; text-align: left; display: block;
+}
+.gs-caller:hover { text-decoration: underline; }
+.gs-row td .gs-dim { display: block; font-size: 11.5px; }
+
+/* Never the loudest thing on the row — but always one click, never a confirm. */
+.gs-revoke {
+  font: 700 10.5px ui-monospace, monospace; letter-spacing: 0.06em;
+  background: none; border: 1px solid transparent;
+  color: var(--cr-red, #e8867a); border-radius: 3px; padding: 4px 8px; cursor: pointer;
+}
+.gs-revoke:hover { border-color: var(--cr-red, #e8867a); }
+
+.gs-drawer td { background: rgba(0, 0, 0, 0.18); }
+.gs-ticks { list-style: none; margin: 4px 0 12px; padding: 0; display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px; }
+.gs-ticks label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+
+.gs-commit { margin-top: 10px; }
+.gs-consequence { margin: 6px 0 0; color: var(--cr-ink, #ece6d8); font-size: 13px; }
+
+.gs-primary {
+  font: 700 11.5px ui-monospace, monospace; letter-spacing: 0.06em;
+  background: var(--cr-accent, #e9b949); color: #14130f;
+  border: none; border-radius: 4px; padding: 9px 16px; cursor: pointer;
+}
+.gs-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+.gs-ghost {
+  background: none; border: 1px solid var(--cr-line-hard, #4c463a);
+  color: var(--cr-dim, #8d8577); border-radius: 4px; padding: 8px 14px;
+  font-size: 12px; cursor: pointer;
+}
+
+.gs-empty {
+  border: 1px solid var(--cr-line, #332f27); border-radius: 6px;
+  padding: 20px 22px; margin: 16px 0; max-width: 62ch;
+}
+.gs-empty h2 { font-size: 15px; margin: 0 0 6px; }
+.gs-empty p { margin: 0 0 12px; color: var(--cr-dim, #8d8577); }
+
+.gs-agents, .gs-revoked { margin-top: 28px; }
+.gs-agents h2, .gs-revoked h2 {
+  font: 600 10.5px ui-monospace, monospace; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--cr-dim, #8d8577); margin: 0 0 8px;
+}
+.gs-agents ul, .gs-revoked ul { list-style: none; margin: 0; padding: 0; }
+.gs-agents li, .gs-revoked li {
+  display: flex; align-items: center; gap: 14px;
+  padding: 9px 0; border-bottom: 1px solid var(--cr-line, #332f27);
+}
+.gs-agents li > span:first-child, .gs-revoked li > span:first-child { flex: 1; }
+.gs-live { color: var(--cr-accent, #e9b949); }
+
+/* ---- sheets ---- */
+.gs-scrim {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.gs-sheet {
+  background: var(--cr-panel, #1c1a16); border: 1px solid var(--cr-line-hard, #4c463a);
+  border-radius: 8px; padding: 22px 24px; width: min(560px, 100%);
+  max-height: 90vh; overflow: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.gs-sheet.gs-small { width: min(420px, 100%); }
+.gs-sheet-head { display: flex; justify-content: space-between; align-items: baseline; }
+.gs-sheet-head h2 { font-size: 17px; margin: 0; }
+.gs-sheet-foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; align-items: center; }
+
+.gs-label {
+  display: block; margin: 16px 0 5px;
+  font: 600 10.5px ui-monospace, monospace; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--cr-dim, #8d8577);
+}
+.gs-input {
+  width: 100%; background: var(--cr-code-bg, #221f19);
+  border: 1px solid var(--cr-line-hard, #4c463a); border-radius: 4px;
+  color: var(--cr-ink, #ece6d8); padding: 9px 11px; font-size: 13px;
+  font-family: inherit;
+}
+.gs-key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; resize: vertical; }
+.gs-input.gs-bad { border-color: var(--cr-red, #e8867a); }
+.gs-hint { margin: 5px 0 0; font-size: 11.5px; color: var(--cr-dim, #8d8577); }
+
+.gs-paste-error {
+  margin: 8px 0 0; font-size: 12.5px; color: var(--cr-red, #e8867a);
+  border-left: 3px solid var(--cr-red, #e8867a); padding-left: 10px;
+}
+.gs-paste-error.gs-loud {
+  background: rgba(232, 134, 122, 0.1); padding: 10px 12px; border-radius: 0 4px 4px 0;
+  font-weight: 600;
+}
+
+/*
+ * THE FINGERPRINT. The largest type on the sheet, because the spoken
+ * comparison is the only defence against a well-formed key from the wrong
+ * party — every other wrong paste is caught by the parser.
+ */
+.gs-fp {
+  margin-top: 18px; border: 1px solid var(--cr-line-hard, #4c463a);
+  border-radius: 5px; padding: 14px 16px; background: var(--cr-panel-2, #242019);
+}
+.gs-fp-cap {
+  margin: 0 0 10px; font: 600 10px ui-monospace, monospace;
+  letter-spacing: 0.11em; color: var(--cr-dim, #8d8577);
+}
+.gs-fp-body { display: flex; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.gs-fp-words {
+  margin: 0; font: 700 17px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.02em;
+}
+.gs-fp-words span { display: block; }
+.gs-fp-hex {
+  margin: 0; font: 12px/1.5 ui-monospace, monospace; color: var(--cr-dim, #8d8577);
+  text-align: right;
+}
+.gs-fp-hex span { display: block; }
+.gs-fp-hexcap { font-size: 10.5px; opacity: 0.8; }
+
+.gs-foot-note { margin: 10px 0 0; font-size: 11.5px; color: var(--cr-dim, #8d8577); }
+
+/* ---- toasts ---- */
+.gs-toast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+  z-index: 70; display: flex; align-items: center; gap: 16px;
+  background: var(--cr-panel, #1c1a16); border: 1px solid var(--cr-line-hard, #4c463a);
+  border-radius: 6px; padding: 12px 16px; font-size: 13px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45); max-width: min(680px, 92vw);
+}
+.gs-toast-bad { border-color: var(--cr-red, #e8867a); }
+.gs-undo {
+  font: 700 11px ui-monospace, monospace; letter-spacing: 0.06em;
+  background: none; border: 1px solid var(--cr-accent, #e9b949);
+  color: var(--cr-accent, #e9b949); border-radius: 3px; padding: 5px 11px; cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .gs-panel { padding: 16px 14px 90px; }
+  .gs-table thead { display: none; }
+  .gs-table td { display: block; border: none; padding: 3px 0; }
+  .gs-row { display: block; border-bottom: 1px solid var(--cr-line, #332f27); padding: 12px 0; }
+  .gs-fp-body { flex-direction: column; }
+  .gs-fp-hex { text-align: left; }
+}
+
+/*
+ * The entry point. Rendered ONLY when the owner bridge is present — see
+ * canGrant(). On a phone companion or a read-only wall this element does not
+ * exist, which is the deck's requirement: not a disabled panel, not a message,
+ * absent. A Magpie gate asserts the absence rather than a disabled state.
+ */
+.gs-entry {
+  position: absolute;
+  top: 14px;
+  right: 18px;
+  z-index: 45;
+  font: 700 10.5px ui-monospace, monospace;
+  letter-spacing: 0.07em;
+  background: var(--cr-panel, #1c1a16);
+  border: 1px solid var(--cr-accent, #e9b949);
+  color: var(--cr-accent, #e9b949);
+  border-radius: 999px;
+  padding: 6px 13px;
+  cursor: pointer;
+}
+
+/*
+ * THE EXPORT ENTRY POINT, on the agent row.
+ *
+ * Two rules here are Velvet's, not taste. Access is legible AT REST — the
+ * "{n} callers" line is always present, never revealed by hover — because the
+ * question is asked in a glance. And the safety sentence is full-width prose
+ * rather than a tooltip: it is the number-one reason not to export, and a
+ * guarantee you have to hover to find is a guarantee that does no work.
+ */
+.ex-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+}
+.ex-at-rest { color: var(--cr-dim, #8d8577); white-space: nowrap; }
+.ex-at-rest.ex-on { color: var(--cr-ink, #ece6d8); }
+.ex-live { color: var(--cr-accent, #e9b949); }
+
+.ex-invite {
+  font: 600 11px ui-sans-serif, system-ui, sans-serif;
+  background: transparent;
+  border: 1px dashed var(--cr-accent, #e9b949);
+  color: var(--cr-accent, #e9b949);
+  border-radius: 999px;
+  padding: 3px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ex-invite:hover { border-style: solid; }
+.ex-next {
+  font: 700 10px ui-monospace, monospace; letter-spacing: 0.05em;
+  background: none; border: 1px solid var(--cr-line-hard, #4c463a);
+  color: var(--cr-ink, #ece6d8); border-radius: 3px; padding: 3px 8px; cursor: pointer;
+}
+.ex-off {
+  font: 700 10px ui-monospace, monospace; letter-spacing: 0.05em;
+  background: none; border: 1px solid transparent;
+  color: var(--cr-red, #e8867a); border-radius: 3px; padding: 3px 8px; cursor: pointer;
+}
+.ex-off:hover { border-color: var(--cr-red, #e8867a); }
+
+/* Prose, not a tooltip. See the note above. */
+.ex-safety {
+  flex-basis: 100%;
+  color: var(--cr-dim, #8d8577);
+  font-size: 11px;
+  line-height: 1.5;
+  max-width: 62ch;
+}
+.ex-hint { flex-basis: 100%; color: var(--cr-dim, #8d8577); font-size: 11px; }
+.ex-seam {
+  display: block;
+  opacity: 0.75;
+  font-style: italic;
+}
+
+/* A per-row failure, beside the control that produced it. */
+.ex-error {
+  flex-basis: 100%;
+  color: var(--cr-red, #e8867a);
+  font-size: 11px;
+  line-height: 1.5;
+  max-width: 62ch;
+  border-left: 2px solid var(--cr-red, #e8867a);
+  padding-left: 8px;
+}
 /* Cookrew-beta inspired arcade theme: cream chrome, hard bevel shadows,
    square corners, phosphor CRT screens for terminal summaries. */
 
@@ -4753,126 +5854,6 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   }
 }
 
-/* ---- translate: the header control and what it does to a body ---- */
-
-/* The menu is positioned against this, not the action row, so it opens under
-   the button that summoned it however many buttons sit beside it. */
-.cr-translate {
-  position: relative;
-  display: inline-flex;
-}
-
-/* Fixed, and placed from the button's rect by TranslateButton: the card root is
-   overflow:hidden, so an absolute menu is clipped the moment it leaves the
-   header. .cr-cardmenu is fixed for the same reason. */
-.cr-translate-menu {
-  position: fixed;
-  z-index: 60;
-  display: flex;
-  flex-direction: column;
-  min-width: 190px;
-  /* Fifteen languages is longer than a short card is tall. Cap it and scroll
-     rather than letting the menu run off the bottom of the window. */
-  max-height: min(58vh, 420px);
-  overflow-y: auto;
-  padding: 4px;
-  background: var(--cream-hi);
-  border: 2px solid var(--line);
-  box-shadow: 4px 4px 0 var(--line);
-}
-
-.cr-translate-item {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 5px 8px;
-  background: none;
-  border: 0;
-  cursor: pointer;
-  text-align: left;
-  color: var(--ink);
-  font: inherit;
-}
-
-.cr-translate-item:hover {
-  background: var(--amber-soft);
-}
-
-/* The tick is a filled bar in the gutter rather than a checkmark glyph: the
-   menu is set in the endonym of each language and a glyph beside 简体中文 at
-   this size is mush. */
-.cr-translate-item.picked {
-  box-shadow: inset 3px 0 0 var(--amber-deep);
-  font-weight: 700;
-}
-
-.cr-translate-item.original {
-  border-bottom: 1.5px solid var(--line);
-  margin-bottom: 4px;
-  font-family: var(--font-pixel);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-/* Endonym leads because that is what a reader scans for; the English name is
-   the quiet second column for anyone who does not read the script. */
-.cr-translate-name {
-  font-size: 13px;
-}
-
-.cr-translate-label {
-  font-size: 10px;
-  opacity: 0.55;
-  white-space: nowrap;
-}
-
-.cr-btn.icon.on {
-  background: var(--amber);
-}
-
-.cr-btn.icon.busy {
-  opacity: 0.65;
-}
-
-/* The strip that says which words you are reading. Same phosphor bed as the
-   checkpoint line above it, so it reads as part of the card's own chrome. */
-.popout-translation {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 5px 12px;
-  background: var(--phos-bg);
-  border-bottom: 1.5px solid var(--phos-dim);
-  color: var(--phos);
-  font-family: var(--font-pixel);
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  min-width: 0;
-}
-
-.popout-translation span {
-  min-width: 0;
-  flex: 1;
-}
-
-.popout-translation.failed {
-  color: var(--amber-soft);
-}
-
-.popout-translation .cr-btn {
-  flex: 0 0 auto;
-}
-
-/* A translated body is marked in the margin for as long as it is on screen.
-   Without it, scrolling away from the status strip leaves prose that looks
-   exactly like something the agent wrote. */
-.ctx-block-prompt[data-translated],
-.ctx-block-reply[data-translated] {
-  border-left: 2px solid var(--amber-deep);
-  padding-left: 8px;
 /* ── CREWS: the dock's fourth chip family (R30 import side) ──
    Someone else's team, reached through its orch. Violet marks "not yours". */
 .cr-chip.crew-chip { border-color: var(--violet); }
@@ -4896,19 +5877,28 @@ body.cookrew-mobile .cr-dock .voice-ghost {
 .acs-name { font-weight: 600; }
 .acs-dim { color: var(--cr-dim, #a8a29e); font-size: 10.5px; }
 
-/* Share-on-save inside the selection bar's naming step: the bar is a row, so
-   the section lifts into a popover above it rather than stretching it. */
-.cr-selbar-share {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 12px;
-  width: min(420px, calc(100vw - 40px));
-  max-height: 60vh;
-  overflow: auto;
-  padding: 10px 12px;
-  background: var(--cr-panel, #1c1a16);
-  border: 1.5px solid var(--cr-line-hard, #4c463a);
-  border-radius: 8px;
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
-  z-index: 40;
-}
+body{margin:0;background:#2b2822;color:#eee;font-family:var(--font-body,system-ui);padding:24px}
+h1{font-family:var(--font-pixel,monospace);font-size:15px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:20px}
+.qa h2{font-family:var(--font-pixel,monospace);font-size:10px;color:#d9d3c5;text-transform:uppercase}
+.stage{background:var(--cream-lo,#ece6da);padding:18px;border-radius:8px}
+.tf-panel{background:var(--cream-hi);border:2px solid var(--line);box-shadow:5px 5px 0 var(--amber-deep);color:var(--ink)}
+.note{color:#aaa;font-size:12px;max-width:52ch}
+</style></head><body>
+<h1>QA — served card · add crew · dock crews · shelf (shipped components)</h1>
+<div class="grid"><section class="qa"><h2>A · the served team card (state C)</h2><div class="stage"><div class="gs-scrim" role="dialog" aria-modal="true" aria-label="Research Crew — serving"><div class="gs-sheet"><header class="gs-sheet-head"><h2>Research Crew is taking calls.</h2><button class="gs-x" aria-label="Close">✕</button></header><section class="stc-addr"><code class="stc-addr-url">http://192.168.1.20:8639/research-crew</code><button class="cr-btn sm">COPY LINK</button></section><p class="gs-sub">Callers land on Conductor · 2.50 USDC · per session</p><section class="stc-sessions"><span class="gs-label">CALLER</span><p class="gs-foot-note">Nobody has called this yet.</p></section><p class="gs-foot-note">Callers never touch your workspace. Each one gets a fresh copy of the template you pinned, in its own folder. Keep working exactly as you did before — they can&#x27;t see it, and nothing you do now reaches them.</p><footer class="gs-sheet-foot"><button class="gs-ghost stc-danger-text">STOP SERVING</button><button class="gs-primary">DONE</button></footer></div></div></div><p class="note">The address leads — it is the thing you hand over. Sessions live HERE, on the thing you published; that is what let WHO CAN CALL be retired rather than moved.</p></section>
+<section class="qa"><h2>B · add a crew (import entry)</h2><div class="stage"><div class="gs-scrim" role="dialog" aria-modal="true" aria-label="Add a crew"><div class="gs-sheet gs-small"><header class="gs-sheet-head"><h2>Add a crew</h2><button class="gs-x" aria-label="Close">✕</button></header><p class="gs-sub">Paste the address whoever runs it gave you.</p><input class="gs-input" spellcheck="false" autoComplete="off" placeholder="192.168.1.20:8639/research-crew" aria-label="Crew address" value=""/><footer class="gs-sheet-foot"><button class="gs-ghost">Cancel</button><button class="gs-primary" disabled="">ADD TO DOCK</button></footer></div></div></div><p class="note">Adding is free and inert: the primary is disabled until an address is pasted.</p></section>
+<section class="qa"><h2>C · the dock — CREWS, the fourth family</h2><div class="stage"><div class="cr-dock-presets qa-dock">
+  <button class="cr-chip clickable amber">CLAUDE CODE</button>
+  <button class="cr-chip clickable">CODEX</button>
+  <button class="cr-chip clickable crew-chip"><span class="crew-chip-dot"></span>Triage · @ana</button>
+  <button class="cr-chip clickable crew-chip locked"><span class="crew-chip-dot"></span>Research Crew<span class="crew-chip-price">2.50</span></button>
+  <button class="cr-chip clickable crew-chip ended" disabled><span class="crew-chip-dot"></span>Old Crew</button>
+  <button class="cr-chip clickable crew-add">+ ADD BY LINK</button>
+</div></div><p class="note">Granted (plain) · locked (dashed + price → opens the gate) · ended (dimmed, disabled, never vanishes).</p></section>
+<section class="qa"><h2>D · the shelf — the standing state</h2><div class="stage"><div class="tf-source" style="padding:10px">
+  <span class="tf-label">SOURCE</span>
+  <button class="cr-chip clickable amber">LIVE CANVAS</button>
+  <span class="tf-team-chip"><button class="cr-chip clickable">Research Crew</button><button class="cr-chip clickable tf-serving">TAKING CALLS · 2</button></span>
+  <span class="tf-team-chip"><button class="cr-chip clickable">Daily Standup</button></span>
+</div></div><p class="note">A team quietly serving must be visible at rest: TAKING CALLS · n, clickable into its card.</p></section></div></body></html>

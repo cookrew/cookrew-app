@@ -4,6 +4,7 @@ import type { AgentRole } from '../../shared/model'
 import { useEffect } from 'react'
 import { VoiceBar } from './VoiceBar'
 import { useKeyboardInset } from './keyboard-inset'
+import type { RemoteCrewView } from './api'
 import {
   chipAction,
   presetChips,
@@ -58,6 +59,14 @@ interface DockProps {
   installedPresets?: InstalledPreset[]
   /** Selected marketplace preset id, or null when a harness/role chip owns it. */
   presetId?: string | null
+  /** R30: crews added by link — the fourth chip family (import side). */
+  crews?: readonly RemoteCrewView[]
+  /** The armed crew, or null. */
+  crewId?: string | null
+  /** A crew chip was clicked: gate it if locked, else arm placement. */
+  onCrew?: (id: string) => void
+  /** The + ADD BY LINK chip. */
+  onAddCrew?: () => void
   /** Owned chip: arm placement. The canvas click is the confirm (R2). */
   onPresetChip?: (id: string) => void
   /** Locked chip: the chip is the gate's UI — open the 401/402/403 sheet. */
@@ -110,6 +119,10 @@ export function Dock({
   onPresetGate,
   gatedPresetId = null,
   onCheckUpdates,
+  crews = [],
+  crewId = null,
+  onCrew,
+  onAddCrew,
   voiceFor,
   browserFor,
   boardFor
@@ -233,6 +246,41 @@ export function Dock({
                 {chip.badge === 'update' && <span className="preset-chip-badge update" />}
               </button>
             ))}
+            {/* FOURTH FAMILY (R30): CREWS — someone else's team, reached
+                through its orch. "Add a crew" IS "add an agent", so it lives
+                here rather than behind a store page. Same grammar again: a
+                locked chip opens the gate, a granted one arms placement, an
+                ended one dims but never vanishes (a chip that disappeared
+                would gaslight the dock). */}
+            {crews.map((crew) => (
+              <button
+                key={crew.id}
+                className={`cr-chip clickable crew-chip${crewId === crew.id ? ' amber' : ''}${
+                  crew.ended ? ' ended' : ''
+                }${crew.access === 'paid' && !crew.payRef ? ' locked' : ''}`}
+                title={
+                  crew.ended
+                    ? `${crew.name} — @${crew.slug} is no longer serving`
+                    : `${crew.name} · by ${crew.slug} — you talk to ${crew.door}`
+                }
+                aria-label={crew.name}
+                disabled={crew.ended}
+                onClick={() => onCrew?.(crew.id)}
+              >
+                <span className="crew-chip-dot" aria-hidden="true" />
+                {crew.name}
+                {crew.access === 'paid' && !crew.payRef && (
+                  <span className="crew-chip-price">{crew.priceUsd}</span>
+                )}
+              </button>
+            ))}
+            <button
+              className="cr-chip clickable crew-add"
+              title="Add someone's crew by its address"
+              onClick={() => onAddCrew?.()}
+            >
+              + ADD BY LINK
+            </button>
             <label className="cr-check">
               <input type="checkbox" checked={orch} onChange={(e) => onOrch(e.target.checked)} />
               ORCH

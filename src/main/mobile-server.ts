@@ -97,6 +97,17 @@ export interface MobileServerDeps {
   releaseTerminalView?: (terminalId: string) => void
   subscribeTerminal?: (terminalId: string) => void
   unsubscribeTerminal?: (terminalId: string) => void
+  /**
+   * Answer a request whose slug names a SERVED CREW rather than a live
+   * workspace (share-on-save). Returns true when the route was handled;
+   * false falls through to the 404. Absent = nothing is served.
+   */
+  servedSlug?: (
+    request: http.IncomingMessage,
+    response: http.ServerResponse,
+    url: URL,
+    slug: string
+  ) => Promise<boolean>
   recoverAgent: (id: string) => RecoverResult
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
   undoRestore: (id: string) => Promise<RestoreResult>
@@ -627,6 +638,11 @@ async function handle(
     ? resolveScopedRoute(url.pathname, (slug) => deps.store.bySlug(slug)?.id)
     : ({ kind: 'unscoped', pathname: url.pathname } as const)
   if (route.kind === 'unknown-slug') {
+    // A slug no live workspace holds may name a SERVED CREW (share-on-save):
+    // the one place a stranger's sign-in, 402 and ask are answered. The
+    // adapter owns its own gate; a live workspace always wins the slug above,
+    // so a served crew can never shadow the owner's own canvas.
+    if (deps.servedSlug && (await deps.servedSlug(request, response, url, route.slug))) return
     respondJson(response, 404, { error: `No workspace at /${route.slug}` })
     return
   }

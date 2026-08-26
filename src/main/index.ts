@@ -131,7 +131,19 @@ import {
   entryAgentOf,
   type TeamSnapshot
 } from './teams'
-import { MOBILE_HTTPS_PORT } from './mobile-ports'
+import http from 'node:http'
+import { MOBILE_HTTPS_PORT, MOBILE_PORT } from './mobile-ports'
+import { readJson, respondJson } from './mobile-http'
+import { deriveSlug, uniqueSlug } from './workspace-slug'
+import { networkInterfaces } from 'node:os'
+import { wireServing, type Serving } from './session-serving'
+import { bootWorkspaceInPlace } from './session-boot'
+import { servedConfinement } from './session-spawn'
+import { makeEntryTerminalLookup, rmSandbox } from './session-instantiator-mount'
+import { ServedCallers } from './served-callers'
+import { devSettle, handleServedRoute } from './served-endpoints'
+import { RemoteCrewStore, parseCrewLink } from './remote-crews'
+import { validPrice, type ServeAccess } from './session-served'
 import { PresetStore, isPresetId } from './preset-store'
 import { PinStore } from './pin-store'
 import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
@@ -331,6 +343,168 @@ const callConversations = new CallConversationStore()
  */
 const callsInFlight = new CallsInFlight()
 const callNodesOf = memoizeBriefly((workspaceId: string) => store.workspaceState(workspaceId).nodes)
+
+// ── R30 SERVING — the instantiator subsystem, assembled once ─────────────────
+//
+// This constructs the machinery; the call path consults it (mobile-server) and
+// the spawn path reads `servedSpawnContexts` to confine a served terminal. All
+// side effects stay behind seams the composition root wires — see
+// session-serving.ts. NOTE (app-verified): the mint→serve call at the listener
+// and the per-backend Seatbelt wrap for herdr are the remaining live-tested
+// steps; everything here compiles and is unit-tested.
+const sessionsBase = path.join(homedir(), '.cookrew')
+/** workspaceId → the served context its terminals spawn under. Set at boot. */
+const servedSpawnContexts = new Map<
+  string,
+  { serviceId: string; sessionId: string; sandbox: string }
+>()
+// M1: the owner lends a service no keys by default, so a served session cannot
+// spend the owner's tokens until a per-service grant is configured (R30 budget).
+const grantedKeysForService = (_serviceId: string): readonly string[] => []
+
+const serving: Serving = wireServing({
+  base: sessionsBase,
+  teams,
+  // M1 PLACEHOLDER: a template's pin resolves to v1 addressed by its id. Real
+  // S1c resolution reads the template's rail pins (the pinId content hash); this
+  // stub lets serving compile ahead of that lookup and is flagged for the wire.
+  pins: { resolve: (templateId) => ({ version: 1, pinAddress: templateId }) },
+  forkEngine: {
+    fork: async ({ name, templateId, dir, serviceId, sessionId }) => {
+      const meta = await forkTeam(
+        {
+          ...teamForkDeps(),
+          // Boot in place (no focus switch), and register the served context
+          // FIRST so each terminal's spawn (spawnTracked) confines and scrubs.
+          bootTerminals: (id) => {
+            servedSpawnContexts.set(id, { serviceId, sessionId, sandbox: dir })
+            bootWorkspaceInPlace(
+              {
+                nodesOf: (wid) => callNodesOf(wid),
+                boot: (node) => bootTerminal(node as TerminalNodeData)
+              },
+              id
+            )
+          }
+        },
+        { name, nodeIds: [], choices: [], fromSavedTeam: templateId, dirs: [dir], worktree: true }
+      )
+      return meta.id
+    }
+  },
+  entry: makeEntryTerminalLookup({
+    nodesOf: (wid) =>
+      callNodesOf(wid).map((n) => ({
+        id: n.id,
+        kind: n.kind,
+        orch: (n as { orch?: boolean }).orch
+      }))
+  }),
+  callsInFlight: { cancelWhere: (match) => callsInFlight.cancelWhere(match) },
+  remover: rmSandbox,
+  liveWorkspaceId: (slug) => store.bySlug(slug)?.id ?? null
+})
+/** Who has signed in to each served crew (TOFU accounts, M1). */
+const servedCallers = new ServedCallers()
+/** The crews this user added by link — the dock's third chip family. */
+const remoteCrews = new RemoteCrewStore(sessionsBase)
+
+/**
+ * The address an owner hands out for a served crew — a LAN URL, because M1 has
+ * no public domain and the honest thing to give someone is a link that actually
+ * works from where they are. Loopback only when nothing else is up.
+ */
+function servedAddress(slug: string): string {
+  const lan = Object.values(networkInterfaces())
+    .flatMap((list) => list ?? [])
+    .find((net) => net.family === 'IPv4' && !net.internal)?.address
+  return `http://${lan ?? '127.0.0.1'}:${MOBILE_PORT}/${slug}`
+}
+
+/**
+ * THE SERVED-CREW ADAPTER — HTTP ⇄ the gate (share-on-save, caller side).
+ *
+ * Mounted at the mobile server's unknown-slug fall-through, so a live workspace
+ * always wins a slug and a served crew can never shadow the owner's own canvas.
+ * Everything decided lives in `handleServedRoute`; this only moves bytes and
+ * supplies the four app-side facts (admit, conductor, ask, the crew's face).
+ */
+async function handleServedSlug(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  url: URL,
+  slug: string
+): Promise<boolean> {
+  const template = serving.served.bySlug(slug)
+  if (!template) return false
+  const method = (request.method ?? 'GET').toUpperCase()
+  const pathname = url.pathname.slice(`/${slug}`.length) || '/'
+  const headers: Record<string, string | undefined> = {}
+  for (const [key, value] of Object.entries(request.headers)) {
+    headers[key.toLowerCase()] = Array.isArray(value) ? value[0] : value
+  }
+  let body: unknown = null
+  if (method === 'POST') {
+    try {
+      body = await readJson<unknown>(request)
+    } catch {
+      body = null
+    }
+  }
+  const answer = await handleServedRoute(
+    {
+      issuer: {
+        challenge: (binding) => callCredentials.challenge(binding),
+        consumeChallenge: (value, binding) => callCredentials.consumeChallenge(value, binding),
+        mint: (sub, scope) => callCredentials.mint(sub, scope),
+        verifyToken: (token) => callCredentials.verifyToken(token)
+      },
+      callers: servedCallers,
+      admit: async (serviceId, sub) => {
+        const { session, created } = await serving.instantiator.admit(serviceId, sub)
+        return { workspaceId: session.workspaceId, sessionId: session.identity.sessionId, created }
+      },
+      hasOpenSession: (serviceId, sub) =>
+        serving.instantiator
+          .sessions()
+          .some((s) => s.serviceId === serviceId && s.accountId === sub),
+      conductorFor: (sessionId) => serving.instantiator.conductorFor(sessionId),
+      ask: async (conductorId, prompt) => {
+        const session = ptys.get(conductorId)
+        if (!session) throw new Error('the crew has no live door')
+        return askTerminal(session, prompt)
+      },
+      settle: devSettle,
+      crewFace: (t) => {
+        const snapshot = teams.load(t.templateId)
+        const nodes = snapshot?.nodes ?? []
+        return {
+          name: snapshot?.name ?? t.templateId,
+          serviceId: t.serviceId,
+          slug: t.slug,
+          version: 1,
+          access: t.access,
+          ...(t.priceUsd !== undefined ? { priceUsd: t.priceUsd } : {}),
+          // The door's NAME only — the roster behind it is never listed.
+          door: (snapshot ? entryAgentOf(snapshot) : null) ?? 'Conductor',
+          agents: nodes.filter((n) => n.kind === 'terminal').length
+        }
+      }
+    },
+    template,
+    method,
+    pathname,
+    { headers, body }
+  )
+  if (answer === null) return false
+  // The 401's www-authenticate carries the ceremony's challenge, so it is set
+  // before the body goes out (respondJson writes the head itself).
+  for (const [key, value] of Object.entries(answer.headers ?? {})) {
+    response.setHeader(key, value)
+  }
+  respondJson(response, answer.status, answer.body)
+  return true
+}
 const boardProbe = createProbeSampler(
   tmuxProbeDeps({
     knownTerminalIds: () => agents.list().map((entry) => entry.id),
@@ -726,16 +900,33 @@ function spawnTracked(t: {
   // The herdr pane wears the card's display info (no-op elsewhere). Resolved
   // from the store rather than threaded through every caller — the node is
   // always persisted before it spawns, so the store is the freshest source.
-  const cardNode = store.node(t.id)
+  // nodeAcrossWorkspaces, not store.node (focused-scoped): a served session's
+  // terminal is in a non-focused workspace, so the focused lookup would drop its
+  // card metadata (R30 boot-in-place nit).
+  const cardNode = store.nodeAcrossWorkspaces(t.id)?.node
   const card = cardNode?.kind === 'terminal' ? paneCard(cardNode) : undefined
   // Before the spawn, because the spawn is what makes the pane exist.
   const timingBoot = beginBootTiming(t.id)
   // Tagged with its owning workspace so the PTY plane can answer per-session
   // questions (multi-instance step 2). ownerOf resolves across every
   // workspace; focus is only the fallback for a terminal no canvas claims yet.
+  const owner = store.ownerOf(t.id) ?? store.focusedId
+  // A served session's terminal spawns confined and scrubbed; the owner's own
+  // spawns exactly as before (servedCtx is undefined).
+  const servedCtx = servedSpawnContexts.get(owner)
+  const served = servedCtx
+    ? servedConfinement({
+        base: sessionsBase,
+        serviceId: servedCtx.serviceId,
+        sessionId: servedCtx.sessionId,
+        sandbox: servedCtx.sandbox,
+        ownerEnv: process.env,
+        grantedKeys: grantedKeysForService(servedCtx.serviceId)
+      })
+    : undefined
   const session = ptys.spawn(
-    { terminalId: t.id, command: effective, cwd: t.cwd, card },
-    store.ownerOf(t.id) ?? store.focusedId
+    { terminalId: t.id, command: effective, cwd: t.cwd, card, served },
+    owner
   )
   // One producer per conversation: every owner keystroke consults the
   // tracker BEFORE the byte reaches the child; a dispatch in flight is
@@ -1686,6 +1877,11 @@ interface CreateTerminalOpts {
   orch?: boolean
   /** Boot a fresh agent from a saved role instead of a bare preset. */
   roleName?: string
+  /**
+   * Run THIS instead of the preset's command. Used by a placed remote crew,
+   * whose card is a line to someone else's orch rather than a local harness.
+   */
+  command?: string
 }
 
 function createTerminal(opts: CreateTerminalOpts): CanvasNode {
@@ -1710,7 +1906,7 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     id: randomUUID(),
     name: opts.name || role?.name || preset.name,
     preset: role ? role.preset : preset.name,
-    command: role ? role.command : preset.command,
+    command: opts.command ?? (role ? role.command : preset.command),
     cwd: store.focusedState.dir,
     orch: opts.orch ?? false,
     role: role ? role.name : null,
@@ -1914,6 +2110,12 @@ async function createWorkspaceFromTeam(
  * is exercisable end to end before any public relay exists.
  */
 /** The proxy terminal's mirror client, resolved for dev and packaged. */
+function crewLineScript(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'crew-line.mjs')
+    : path.join(dirname, '../../resources/crew-line.mjs')
+}
+
 function orchMirrorScript(): string {
   return app.isPackaged
     ? path.join(process.resourcesPath, 'orch-mirror.mjs')
@@ -2470,6 +2672,7 @@ app.whenReady().then(() => {
   routines.start()
 
   startMobileServer({
+    servedSlug: handleServedSlug,
     store,
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,
@@ -2855,6 +3058,124 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('template:import', (_e, team: string, position?: { x: number; y: number }) =>
     importTemplateAsSession(team, position)
   )
+
+  // R30 serving — owner IPC ONLY, never on the listener (the grant-surface rule:
+  // this decides what is callable, so it is strictly above the gate it feeds).
+  ipcMain.handle(
+    'serving:serve',
+    (
+      _e,
+      input: { templateId: string; access: ServeAccess; priceUsd?: string }
+    ) => {
+      if (!teams.load(input.templateId)) return { ok: false, reason: 'no-template' as const }
+      if (input.access === 'paid' && !validPrice(input.priceUsd ?? '')) {
+        return { ok: false, reason: 'bad-price' as const }
+      }
+      // The slug is derived from the team's own name and made unique against
+      // the workspace namespace it shares — a service must not shadow a
+      // workspace the owner named, and a live workspace wins the slug anyway.
+      const taken = [
+        ...store.list().workspaces.map((w) => w.slug),
+        ...serving.served.list().map((s) => s.slug)
+      ].filter((s): s is string => typeof s === 'string')
+      const slug = uniqueSlug(deriveSlug(input.templateId), taken)
+      // One service per template: re-serving replaces its own entry rather
+      // than minting a second identity for the same crew.
+      const serviceId = `svc-${deriveSlug(input.templateId)}`
+      serving.serve({
+        serviceId,
+        templateId: input.templateId,
+        slug,
+        access: input.access,
+        ...(input.access === 'paid' ? { priceUsd: input.priceUsd } : {})
+      })
+      return { ok: true as const, serviceId, slug, address: servedAddress(slug) }
+    }
+  )
+  ipcMain.handle('serving:stop', (_e, serviceId: string) => {
+    serving.stop(serviceId)
+    return { ok: true as const }
+  })
+  ipcMain.handle('serving:list', () =>
+    serving.served.list().map((t) => ({ ...t, address: servedAddress(t.slug) }))
+  )
+  /** The owner's Sessions table: who is on, on which version. */
+  ipcMain.handle('serving:sessions', () =>
+    serving.instantiator.sessions().map((s) => ({
+      sessionId: s.identity.sessionId,
+      serviceId: s.serviceId,
+      caller: s.accountId,
+      workspaceName: s.identity.workspaceName,
+      version: s.version
+    }))
+  )
+  /** END destroys someone else's workspace, so it is the owner's act alone. */
+  ipcMain.handle('serving:end', (_e, sessionId: string) => serving.instantiator.end(sessionId))
+
+  // ---- the dock's crews (import side): add is free and inert ----
+  ipcMain.handle('crew:list', () => remoteCrews.list())
+  ipcMain.handle('crew:remove', (_e, id: string) => {
+    remoteCrews.remove(id)
+    return { ok: true as const }
+  })
+  ipcMain.handle('crew:unlock', (_e, id: string, payRef: string) => {
+    // The gate sheet settled a payment; the chip stops being locked.
+    const crew = remoteCrews.patch(id, { payRef })
+    return crew ? { ok: true as const, crew } : { ok: false as const, reason: 'gone' as const }
+  })
+  ipcMain.handle('crew:add', async (_e, link: string) => {
+    const parsed = parseCrewLink(link)
+    if (!parsed) return { ok: false as const, reason: 'bad-link' as const }
+    // Read the public face — what the owner chose to publish, nothing more.
+    try {
+      const res = await fetch(`${parsed.origin}/${parsed.slug}/crew`)
+      if (!res.ok) return { ok: false as const, reason: 'not-serving' as const }
+      const face = (await res.json()) as {
+        name: string
+        door: string
+        access: 'account' | 'paid'
+        priceUsd?: string
+        version: number
+        agents: number
+      }
+      const crew = remoteCrews.add({
+        origin: parsed.origin,
+        slug: parsed.slug,
+        name: face.name,
+        door: face.door,
+        access: face.access,
+        ...(face.priceUsd !== undefined ? { priceUsd: face.priceUsd } : {}),
+        version: face.version,
+        agents: face.agents
+      })
+      return { ok: true as const, crew }
+    } catch {
+      return { ok: false as const, reason: 'unreachable' as const }
+    }
+  })
+  /**
+   * Place a crew: ONE orch card on the caller's own canvas, running the line
+   * script. The card is the door — the crew behind it runs at the author's app.
+   */
+  ipcMain.handle('crew:place', (_e, id: string, position?: { x: number; y: number }) => {
+    const crew = remoteCrews.get(id)
+    if (!crew) return { ok: false as const, reason: 'gone' as const }
+    const args = [
+      crewLineScript(),
+      '--origin',
+      crew.origin,
+      '--slug',
+      crew.slug,
+      ...(crew.payRef ? ['--pay', crew.payRef] : [])
+    ]
+    const node = createTerminal({
+      name: `${crew.name} · ${crew.slug}`,
+      preset: PRESETS[PRESETS.length - 1].name,
+      position,
+      command: `node ${args.map((a) => JSON.stringify(a)).join(' ')}`
+    })
+    return { ok: true as const, node }
+  })
   ipcMain.handle('workspace:switch', (_e, id: string) => {
     switchWorkspace(id)
     return store.list()

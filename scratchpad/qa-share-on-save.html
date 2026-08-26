@@ -1,4 +1,54 @@
-/* Team-fork picker overlay (TeamForkPicker.tsx). Owned by the picker-UX
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>QA — share on save (real components)</title>
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen&family=JetBrains+Mono&family=Inter&display=swap" rel="stylesheet">
+<style>:root {
+  --cream: #faf8f4;
+  --cream-hi: #fffef5;
+  --cream-md: #f5f0e8;
+  --cream-lo: #ece6da;
+  --ink: #2d2a20;
+  --ink-soft: #5c4a1f;
+  --muted: #78716c;
+  --dim: #a8a29e;
+  --line: #2d2a20;
+  --line-soft: #d9d3c5;
+  --amber: #ffd600;
+  --amber-soft: #fff3ad;
+  --amber-deep: #d97706;
+  --phos: #e9b949;
+  --phos-dim: #8a6d1c;
+  --phos-glow: #ffd77a;
+  --phos-bg: #14110a;
+  --hp: #6bbe58;
+  --rose: #dc2626;
+  --violet: #9b8acb;
+  /* Violet is the persona accent (role coins, never a status colour). The HI
+     step is its raised sibling — the marketplace's own surfaces sit on it:
+     version pins on the rail, and the gated-chip lock badge. Promoted to a
+     real token because those two need to agree, and a hand-picked lighter
+     violet in each place is how palettes drift apart. */
+  --violet-hi: #c3b6e6;
+  --note-bg: #fff3ad;
+  --note-text: #3a3625;
+
+  /* vibe-island palette: macOS notch dark + SF system font + state accents */
+  --vi-bg: #121214;
+  --vi-panel: #1c1c1f;
+  --vi-line: #2c2c30;
+  --vi-text: #f5f5f7;
+  --vi-dim: #98989d;
+  /* Focused checkpoint row: a SOLID surface, not an alpha tint over the
+     transcript (F5). Sits between --vi-panel and the amber it carries. */
+  --vi-panel-focus: #2b281c;
+  --vi-working: #ff9f0a;
+  --vi-wait: #ff453a;
+  --vi-done: #32d74b;
+
+  --font-pixel: 'Silkscreen', 'Courier New', monospace;
+  --font-screen: 'VT323', 'Courier New', monospace;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}/* Team-fork picker overlay (TeamForkPicker.tsx). Owned by the picker-UX
    lane; visual polish welcome from Fresco — tokens all come from the
    arcade theme in styles.css. */
 
@@ -722,33 +772,52 @@
 .sos-live-t { font-family: var(--font-pixel); font-size: 8px; letter-spacing: .06em; text-transform: uppercase; color: var(--violet); }
 .sos-addr { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink); }
 
-/* The shelf's standing state: a team quietly serving must be visible at rest. */
-.tf-team-chip { display: inline-flex; align-items: center; gap: 4px; }
-.cr-chip.tf-serving {
-  background: var(--hp); color: #fff; border-color: var(--line);
-  font-size: 7.5px; letter-spacing: .05em;
-}
-/* The served team's card: address, sessions, and the consequence-first END. */
-.stc-addr { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; }
-.stc-addr-url {
-  font-family: var(--font-mono); font-size: 12px; padding: 5px 8px;
-  border: 1.5px solid var(--violet); flex: 1; min-width: 0; word-break: break-all;
-}
-.stc-sessions { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; }
-.stc-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 8px; border: 1px solid var(--cr-line, #4c463a);
-  font-family: var(--font-mono); font-size: 11.5px;
-}
-.stc-caller { font-weight: 600; flex: 1; min-width: 0; }
-.stc-ver { color: var(--violet); font-size: 10px; }
-.stc-state { color: var(--cr-dim, #a8a29e); font-size: 10.5px; }
-.stc-confirm {
-  margin-top: 10px; padding: 10px 12px;
-  border: 1.5px solid var(--rose); background: rgba(220, 38, 38, 0.08);
-}
-.stc-confirm-t { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
-.stc-confirm-b { margin: 0; font-size: 12px; color: var(--cr-dim, #a8a29e); }
-.stc-confirm-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
-.stc-danger { background: var(--rose); border-color: var(--rose); }
-.stc-danger-text { color: var(--rose); }
+body{margin:0;background:#2b2822;color:#eee;font-family:var(--font-body,system-ui);padding:24px}
+h1{font-family:var(--font-pixel,monospace);font-size:15px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:20px}
+.qa h2{font-family:var(--font-pixel,monospace);font-size:10px;color:#d9d3c5;text-transform:uppercase}
+.stage{background:var(--cream-lo,#ece6da);padding:18px;border-radius:8px}
+.tf-panel{background:var(--cream-hi);border:2px solid var(--line);box-shadow:5px 5px 0 var(--amber-deep);color:var(--ink)}
+.note{color:#aaa;font-size:12px;max-width:52ch}
+</style></head><body>
+<h1>QA — SHARE ON SAVE · rendered from the shipped ShareOnSave component</h1>
+<div class="grid"><section class="qa"><h2>A · default — Just me (publishes nothing)</h2><div class="stage"><div class="tf-panel">
+  <div class="tf-head"><span class="tf-title">SAVE TEAM</span><span class="tf-spacer"></span><span class="cr-chip">4 AGENTS</span></div>
+  <div style="padding:10px 12px">
+    <div class="tf-save">
+      <span class="tf-label">SAVE TEAM</span>
+      <input class="tf-input" value="Research Crew" readonly>
+      <button class="cr-btn sm">SAVE</button>
+    </div>
+    <div class="sos"><span class="tf-label">WHO CAN CALL IT?</span><button type="button" class="sos-opt sel" aria-pressed="true"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Just me</span><span class="sos-s">Stays on your shelf. That&#x27;s where it is now.</span></span></button><button type="button" class="sos-opt" aria-pressed="false"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Anyone with a Cookrew account — free</span><span class="sos-s">They sign in, then start.</span></span></button><button type="button" class="sos-opt" aria-pressed="false"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Anyone who pays</span><span class="sos-s">Set a price. Callers pay you directly — Cookrew never holds the money and takes nothing.</span></span></button><span class="sos-note">Change this any time, including back to Just me — which stops new callers. Anyone already working keeps going until you end them.</span></div>
+  </div></div></div><p class="note">The primary stays plain SAVE. No door fact, because no door is opening.</p></section>
+<section class="qa"><h2>B · free — anyone with an account</h2><div class="stage"><div class="tf-panel">
+  <div class="tf-head"><span class="tf-title">SAVE TEAM</span><span class="tf-spacer"></span><span class="cr-chip">4 AGENTS</span></div>
+  <div style="padding:10px 12px">
+    <div class="tf-save">
+      <span class="tf-label">SAVE TEAM</span>
+      <input class="tf-input" value="Research Crew" readonly>
+      <button class="cr-btn sm">SAVE · START SERVING</button>
+    </div>
+    <div class="sos"><span class="tf-label">WHO CAN CALL IT?</span><button type="button" class="sos-opt" aria-pressed="false"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Just me</span><span class="sos-s">Stays on your shelf. That&#x27;s where it is now.</span></span></button><button type="button" class="sos-opt sel" aria-pressed="true"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Anyone with a Cookrew account — free</span><span class="sos-s">They sign in, then start.</span></span></button><button type="button" class="sos-opt" aria-pressed="false"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Anyone who pays</span><span class="sos-s">Set a price. Callers pay you directly — Cookrew never holds the money and takes nothing.</span></span></button><div class="sos-door"><span class="sos-door-g">◫</span><span class="sos-door-s">Callers talk to Conductor only. It runs the rest of the team the way it always has — the others are never exposed.</span></div><span class="sos-note">Change this any time, including back to Just me — which stops new callers. Anyone already working keeps going until you end them.</span></div>
+  </div></div></div><p class="note">The DOOR FACT appears the moment a public option is picked, and the primary renames: the button says everything the click does.</p></section>
+<section class="qa"><h2>C · paid — price + door fact</h2><div class="stage"><div class="tf-panel">
+  <div class="tf-head"><span class="tf-title">SAVE TEAM</span><span class="tf-spacer"></span><span class="cr-chip">4 AGENTS</span></div>
+  <div style="padding:10px 12px">
+    <div class="tf-save">
+      <span class="tf-label">SAVE TEAM</span>
+      <input class="tf-input" value="Research Crew" readonly>
+      <button class="cr-btn sm">SAVE · START SERVING</button>
+    </div>
+    <div class="sos"><span class="tf-label">WHO CAN CALL IT?</span><button type="button" class="sos-opt" aria-pressed="false"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Just me</span><span class="sos-s">Stays on your shelf. That&#x27;s where it is now.</span></span></button><button type="button" class="sos-opt" aria-pressed="false"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Anyone with a Cookrew account — free</span><span class="sos-s">They sign in, then start.</span></span></button><button type="button" class="sos-opt sel" aria-pressed="true"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Anyone who pays</span><span class="sos-s">Set a price. Callers pay you directly — Cookrew never holds the money and takes nothing.</span></span></button><div class="sos-price"><input class="tf-input sos-price-input" inputMode="decimal" placeholder="2.50" aria-label="Price in USDC per session" value="2.50"/><span class="sos-unit">USDC · per session</span></div><div class="sos-door"><span class="sos-door-g">◫</span><span class="sos-door-s">Callers talk to Conductor only. It runs the rest of the team the way it always has — the others are never exposed.</span></div><span class="sos-note">Change this any time, including back to Just me — which stops new callers. Anyone already working keeps going until you end them.</span></div>
+  </div></div></div><p class="note">Price is per SESSION (the instantiator's unit). An empty or zero price disables the primary — a paid door that cannot quote at 402 is a caller deception.</p></section>
+<section class="qa"><h2>D · paid, bad price — refused</h2><div class="stage"><div class="tf-panel">
+  <div class="tf-head"><span class="tf-title">SAVE TEAM</span><span class="tf-spacer"></span><span class="cr-chip">4 AGENTS</span></div>
+  <div style="padding:10px 12px">
+    <div class="tf-save">
+      <span class="tf-label">SAVE TEAM</span>
+      <input class="tf-input" value="Research Crew" readonly>
+      <button class="cr-btn sm">SAVE · START SERVING</button>
+    </div>
+    <div class="sos"><span class="tf-label">WHO CAN CALL IT?</span><button type="button" class="sos-opt" aria-pressed="false"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Just me</span><span class="sos-s">Stays on your shelf. That&#x27;s where it is now.</span></span></button><button type="button" class="sos-opt" aria-pressed="false"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Anyone with a Cookrew account — free</span><span class="sos-s">They sign in, then start.</span></span></button><button type="button" class="sos-opt sel" aria-pressed="true"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Anyone who pays</span><span class="sos-s">Set a price. Callers pay you directly — Cookrew never holds the money and takes nothing.</span></span></button><div class="sos-price"><input class="tf-input sos-price-input" inputMode="decimal" placeholder="2.50" aria-label="Price in USDC per session" value="abc"/><span class="sos-unit">USDC · per session</span><span class="sos-bad">a price has to be a number above zero</span></div><div class="sos-door"><span class="sos-door-g">◫</span><span class="sos-door-s">Callers talk to Conductor only. It runs the rest of the team the way it always has — the others are never exposed.</span></div><span class="sos-note">Change this any time, including back to Just me — which stops new callers. Anyone already working keeps going until you end them.</span></div>
+  </div></div></div><p class="note">The primary is disabled and the reason is said, not hidden.</p></section></div></body></html>
