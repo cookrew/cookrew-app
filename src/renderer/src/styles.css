@@ -4913,28 +4913,25 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   z-index: 40;
 }
 
-/* ── THE ORCH IS THE DOOR — findable at a glance, at any zoom ──
-   The orch is what a served crew exposes and what routing resolves to, so on a
-   busy canvas it must be the one card you can find without reading. An amber
-   ring (the product's "this one" colour, same as the ORCH chip) rather than a
-   different shape: it stays a terminal card, it is just the one that answers. */
-.node.terminal-card.orch,
-.node.vi-card.orch {
-  box-shadow:
-    0 0 0 2px var(--amber),
-    0 0 14px 2px rgba(255, 214, 0, 0.28);
+/* ── THE ORCH IS THE DOOR — a golden frame ──
+   The orch answers for the whole team (R30's one door), so it must be the card
+   you find without reading — at any zoom, where the ORCH chip is not even
+   drawn. WIDTH as well as colour: .vi-card's border is 1px, and a 1px gold
+   hairline on a dark card reads as nothing zoomed out, which is exactly when
+   this matters most. The glow rides on top of the card's own drop shadow so
+   the frame separates from neighbours; state (working / attention / selected)
+   still overrides the shadow, because live state must read first. */
+.node.orch {
+  border-color: var(--amber);
+  border-width: 3px;
 }
-/* Zoomed out, the ring is most of what is left of the card — keep it legible
-   without letting the glow bleed into neighbours at mini scale. */
-.node.vi-card.mini.orch {
+.node.orch:not(.working):not(.attention):not(.selected) {
   box-shadow:
-    0 0 0 2px var(--amber),
-    0 0 8px 1px rgba(255, 214, 0, 0.35);
+    0 0 0 1px var(--amber-deep),
+    0 10px 28px rgba(0, 0, 0, 0.45),
+    0 0 18px 2px rgba(255, 214, 0, 0.35);
 }
-/* Selection still wins: an orch you have picked must read as picked first. */
-.node.terminal-card.orch.selected,
-.node.vi-card.orch.selected {
-  box-shadow:
-    0 0 0 2px var(--amber),
-    0 0 0 4px var(--violet);
+/* The header rule sits on the same gold, so the frame reads as one piece. */
+.node.orch .node-header {
+  border-bottom-color: var(--amber);
 }
