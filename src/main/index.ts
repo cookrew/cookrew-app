@@ -157,6 +157,16 @@ import { pageTurns } from '../shared/turn'
 import type { TurnPageRequest } from '../shared/turn'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
 
+// ── COMPOSITOR BUDGET — the golden-frame flicker ─────────────────────────────
+// Chromium sizes its raster-tile budget from a conservative GPU-memory guess.
+// A 3.5K retina window full of layers (canvas cards, a zoomed WebGL terminal,
+// half a dozen cr-blink animations invalidating every 500ms) exceeds it, the
+// log floods with "tile memory limits exceeded, some content may not draw",
+// and whole regions of chrome — header, dock, the zoom frame — blink in and
+// out in step with the animations. Observed live 2026-08-26. Must be set
+// before app ready; a real budget stops the tile drops at the source.
+app.commandLine.appendSwitch('force-gpu-mem-available-mb', '2048')
+
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const store = new WorkspaceStore()
@@ -2689,6 +2699,9 @@ app.whenReady().then(() => {
   startMobileServer({
     servedSlug: handleServedSlug,
     store,
+    // §10: the same pin store the desktop rail reads — the phone's rail must
+    // not drift from what the canvas shows.
+    listPins: (terminalId) => pinStore.list(terminalId),
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,
     // THE INTERNET GATE (§9 · ④), mounted per workspace session. Reachable only
