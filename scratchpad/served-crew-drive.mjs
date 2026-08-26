@@ -6,8 +6,9 @@
  * crew card does (public face → challenge → ed25519 assert → /ask), so a gate
  * regression shows up here in one command instead of a twenty-click UI drive.
  *
- *   node scratchpad/served-crew-drive.mjs <slug> [--pay REF] [--sub NAME]
- *                                        [--prompt TEXT] [--origin URL] [--twice]
+ *   node scratchpad/served-crew-drive.mjs <slug> [--rail x402|stripe] [--pay REF]
+ *                                        [--sub NAME] [--prompt TEXT]
+ *                                        [--origin URL] [--twice]
  *
  * A paid x402 door signs from ~/.cookrew/x402-caller.env unless --pay supplies
  * an already-built header. The file must be private to the owner and contain:
@@ -18,9 +19,11 @@
  * 200 is the shell-echo bug (see G1 in served-crew-brief.md) and must fail.
  */
 import { generateKeyPairSync, randomBytes, sign } from 'node:crypto'
-import { readFileSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { readFileSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { spawnSync } from 'node:child_process'
 import { isAddress } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 
@@ -34,10 +37,21 @@ const origin = flag('origin', 'http://127.0.0.1:8639')
 const sub = flag('sub', `drive-${process.pid}`)
 const prompt = flag('prompt', 'Reply with exactly: CREW LINE OK')
 const payRef = flag('pay', null)
+const rail = flag('rail', 'x402')
 const twice = args.includes('--twice')
 
 if (!slug) {
-  console.error('usage: served-crew-drive.mjs <slug> [--pay REF] [--sub NAME] [--prompt TEXT] [--twice]')
+  console.error(
+    'usage: served-crew-drive.mjs <slug> [--rail x402|stripe] [--pay REF] [--sub NAME] [--prompt TEXT] [--twice]'
+  )
+  process.exit(2)
+}
+if (!['x402', 'stripe'].includes(rail)) {
+  console.error('FAIL: --rail must be x402 or stripe')
+  process.exit(2)
+}
+if (rail === 'stripe' && payRef) {
+  console.error('FAIL: --pay is x402-only; Stripe Checkout is driven through QA Chrome')
   process.exit(2)
 }
 
@@ -201,6 +215,36 @@ const buildX402Payment = async (requirements) => {
   return Buffer.from(JSON.stringify(payment)).toString('base64')
 }
 
+const stripeSessionFromUrl = (raw) => {
+  try {
+    const url = new URL(raw)
+    if (url.protocol !== 'https:' || url.hostname !== 'checkout.stripe.com') return null
+    return decodeURIComponent(url.pathname).match(/\bcs_[A-Za-z0-9_]+\b/)?.[0] ?? null
+  } catch {
+    return null
+  }
+}
+
+const driveStripeCheckout = (checkoutUrl) => {
+  const session = stripeSessionFromUrl(checkoutUrl)
+  if (!session) fail('Stripe returned a Checkout URL without a valid session id')
+
+  const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-checkout-'))
+  const urlFile = path.join(dir, 'url')
+  const runner = fileURLToPath(new URL('../scripts/qa-stripe-checkout.mjs', import.meta.url))
+  try {
+    writeFileSync(urlFile, `${checkoutUrl}\n`, { mode: 0o600 })
+    const result = spawnSync(process.execPath, [runner, '--url-file', urlFile], {
+      stdio: 'inherit'
+    })
+    if (result.error) fail('the hosted Checkout driver could not start')
+    if (result.status !== 0) fail('the hosted Checkout did not complete')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+  return session
+}
+
 const face = await api('/crew', { method: 'GET' })
 if (face.status !== 200) {
   step('face', face.status, JSON.stringify(face.body))
@@ -219,34 +263,56 @@ const ask = (text, extra = {}) => askWith(token, text, extra)
 let answer = await ask(prompt)
 if (answer.status === 402) {
   const terms = answer.body?.terms
-  const requirements = Array.isArray(terms?.accepts)
-    ? terms.accepts.find((candidate) => candidate?.scheme === 'exact')
-    : null
-  if (!requirements) fail('the paid door did not offer an x402 payment option')
-  const tokenName = requirements.extra?.name ?? 'token'
-  step(
-    'quote',
-    402,
-    `${requirements.maxAmountRequired} atomic ${tokenName} on ${requirements.network} → ${requirements.payTo}`
-  )
-  const payment = payRef ?? (await buildX402Payment(requirements))
-  answer = await ask(prompt, { 'x-payment': payment })
-  if (answer.status !== 200 || answer.body?.created !== true) {
-    step('settle', answer.status, `reason=${answer.body?.reason ?? 'not admitted'}`)
-    fail('a settled payment did not admit a new session')
-  }
-  step('settle', 200, 'payment accepted; new session admitted')
+  const accepts = Array.isArray(terms?.accepts) ? terms.accepts : []
+  if (rail === 'x402') {
+    const requirements = accepts.find((candidate) => candidate?.scheme === 'exact')
+    if (!requirements) fail('the paid door did not offer an x402 payment option')
+    const tokenName = requirements.extra?.name ?? 'token'
+    step(
+      'quote',
+      402,
+      `${requirements.maxAmountRequired} atomic ${tokenName} on ${requirements.network} → ${requirements.payTo}`
+    )
+    const payment = payRef ?? (await buildX402Payment(requirements))
+    answer = await ask(prompt, { 'x-payment': payment })
+    if (answer.status !== 200 || answer.body?.created !== true) {
+      step('settle', answer.status, `reason=${answer.body?.reason ?? 'not admitted'}`)
+      fail('a settled payment did not admit a new session')
+    }
+    step('settle', 200, 'payment accepted; new session admitted')
 
-  // The first caller now owns an open session and would skip the gate. A fresh
-  // authenticated caller reaches settlement again and proves the nonce is dead.
-  const replaySub = `${sub}-replay`
-  const replayToken = await signIn(replaySub, 'sign-in-replay')
-  const replay = await askWith(replayToken, prompt, { 'x-payment': payment })
-  if (replay.status !== 402 || replay.body?.reason !== 'invalid' || replay.body?.retryable !== false) {
-    step('replay', replay.status, `reason=${replay.body?.reason ?? 'unexpected'}`)
-    fail('the same x402 authorization was not refused on replay')
+    // The first caller now owns an open session and would skip the gate. A
+    // fresh authenticated caller reaches settlement and proves the nonce dead.
+    const replaySub = `${sub}-replay`
+    const replayToken = await signIn(replaySub, 'sign-in-replay')
+    const replay = await askWith(replayToken, prompt, { 'x-payment': payment })
+    if (
+      replay.status !== 402 ||
+      replay.body?.reason !== 'invalid' ||
+      replay.body?.retryable !== false
+    ) {
+      step('replay', replay.status, `reason=${replay.body?.reason ?? 'unexpected'}`)
+      fail('the same x402 authorization was not refused on replay')
+    }
+    step('replay', 402, 'reused authorization refused before admission')
+  } else {
+    const stripeTerms = accepts.find((candidate) => candidate?.scheme === 'stripe-checkout')
+    if (!stripeTerms) fail('the paid door did not offer card payment')
+    step('quote', 402, `${stripeTerms.amountUsd} ${stripeTerms.currency} by card`)
+    const checkout = await api('/api/call/pay', { headers: { authorization: `Bearer ${token}` } })
+    if (checkout.status !== 200 || typeof checkout.body?.url !== 'string') {
+      step('checkout', checkout.status, 'card checkout unavailable')
+      fail('the card checkout session was not created')
+    }
+    const session = driveStripeCheckout(checkout.body.url)
+    const payment = Buffer.from(JSON.stringify({ rail: 'stripe', session })).toString('base64')
+    answer = await ask(prompt, { 'x-payment': payment })
+    if (answer.status !== 200 || answer.body?.created !== true) {
+      step('settle', answer.status, `reason=${answer.body?.reason ?? 'not admitted'}`)
+      fail('the paid card session did not admit a new crew session')
+    }
+    step('settle', 200, 'card payment accepted; new session admitted')
   }
-  step('replay', 402, 'reused authorization refused before admission')
 }
 
 const reply = (answer.body?.reply ?? '').trim()
