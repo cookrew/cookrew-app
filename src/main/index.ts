@@ -403,6 +403,8 @@ const serving: Serving = wireServing({
 })
 /** Who has signed in to each served crew (TOFU accounts, M1). */
 const servedCallers = new ServedCallers()
+/** The crews this user added by link — the dock's third chip family. */
+const remoteCrews = new RemoteCrewStore(sessionsBase)
 
 /**
  * The address an owner hands out for a served crew — a LAN URL, because M1 has
@@ -1872,6 +1874,11 @@ interface CreateTerminalOpts {
   orch?: boolean
   /** Boot a fresh agent from a saved role instead of a bare preset. */
   roleName?: string
+  /**
+   * Run THIS instead of the preset's command. Used by a placed remote crew,
+   * whose card is a line to someone else's orch rather than a local harness.
+   */
+  command?: string
 }
 
 function createTerminal(opts: CreateTerminalOpts): CanvasNode {
@@ -1896,7 +1903,7 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     id: randomUUID(),
     name: opts.name || role?.name || preset.name,
     preset: role ? role.preset : preset.name,
-    command: role ? role.command : preset.command,
+    command: opts.command ?? (role ? role.command : preset.command),
     cwd: store.focusedState.dir,
     orch: opts.orch ?? false,
     role: role ? role.name : null,
@@ -2100,6 +2107,12 @@ async function createWorkspaceFromTeam(
  * is exercisable end to end before any public relay exists.
  */
 /** The proxy terminal's mirror client, resolved for dev and packaged. */
+function crewLineScript(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'crew-line.mjs')
+    : path.join(dirname, '../../resources/crew-line.mjs')
+}
+
 function orchMirrorScript(): string {
   return app.isPackaged
     ? path.join(process.resourcesPath, 'orch-mirror.mjs')
@@ -3051,7 +3064,86 @@ function registerIpc(handlers: RestoreHandlers): void {
     serving.stop(serviceId)
     return { ok: true as const }
   })
-  ipcMain.handle('serving:list', () => serving.served.list())
+  ipcMain.handle('serving:list', () =>
+    serving.served.list().map((t) => ({ ...t, address: servedAddress(t.slug) }))
+  )
+  /** The owner's Sessions table: who is on, on which version. */
+  ipcMain.handle('serving:sessions', () =>
+    serving.instantiator.sessions().map((s) => ({
+      sessionId: s.identity.sessionId,
+      serviceId: s.serviceId,
+      caller: s.accountId,
+      workspaceName: s.identity.workspaceName,
+      version: s.version
+    }))
+  )
+  /** END destroys someone else's workspace, so it is the owner's act alone. */
+  ipcMain.handle('serving:end', (_e, sessionId: string) => serving.instantiator.end(sessionId))
+
+  // ---- the dock's crews (import side): add is free and inert ----
+  ipcMain.handle('crew:list', () => remoteCrews.list())
+  ipcMain.handle('crew:remove', (_e, id: string) => {
+    remoteCrews.remove(id)
+    return { ok: true as const }
+  })
+  ipcMain.handle('crew:unlock', (_e, id: string, payRef: string) => {
+    // The gate sheet settled a payment; the chip stops being locked.
+    const crew = remoteCrews.patch(id, { payRef })
+    return crew ? { ok: true as const, crew } : { ok: false as const, reason: 'gone' as const }
+  })
+  ipcMain.handle('crew:add', async (_e, link: string) => {
+    const parsed = parseCrewLink(link)
+    if (!parsed) return { ok: false as const, reason: 'bad-link' as const }
+    // Read the public face — what the owner chose to publish, nothing more.
+    try {
+      const res = await fetch(`${parsed.origin}/${parsed.slug}/crew`)
+      if (!res.ok) return { ok: false as const, reason: 'not-serving' as const }
+      const face = (await res.json()) as {
+        name: string
+        door: string
+        access: 'account' | 'paid'
+        priceUsd?: string
+        version: number
+        agents: number
+      }
+      const crew = remoteCrews.add({
+        origin: parsed.origin,
+        slug: parsed.slug,
+        name: face.name,
+        door: face.door,
+        access: face.access,
+        ...(face.priceUsd !== undefined ? { priceUsd: face.priceUsd } : {}),
+        version: face.version,
+        agents: face.agents
+      })
+      return { ok: true as const, crew }
+    } catch {
+      return { ok: false as const, reason: 'unreachable' as const }
+    }
+  })
+  /**
+   * Place a crew: ONE orch card on the caller's own canvas, running the line
+   * script. The card is the door — the crew behind it runs at the author's app.
+   */
+  ipcMain.handle('crew:place', (_e, id: string, position?: { x: number; y: number }) => {
+    const crew = remoteCrews.get(id)
+    if (!crew) return { ok: false as const, reason: 'gone' as const }
+    const args = [
+      crewLineScript(),
+      '--origin',
+      crew.origin,
+      '--slug',
+      crew.slug,
+      ...(crew.payRef ? ['--pay', crew.payRef] : [])
+    ]
+    const node = createTerminal({
+      name: `${crew.name} · ${crew.slug}`,
+      preset: PRESETS[PRESETS.length - 1].name,
+      position,
+      command: `node ${args.map((a) => JSON.stringify(a)).join(' ')}`
+    })
+    return { ok: true as const, node }
+  })
   ipcMain.handle('workspace:switch', (_e, id: string) => {
     switchWorkspace(id)
     return store.list()

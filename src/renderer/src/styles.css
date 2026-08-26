@@ -4752,3 +4752,26 @@ body.cookrew-mobile .cr-dock .voice-ghost {
     font-size: calc(11px * var(--z, 1));
   }
 }
+
+/* ── CREWS: the dock's fourth chip family (R30 import side) ──
+   Someone else's team, reached through its orch. Violet marks "not yours". */
+.cr-chip.crew-chip { border-color: var(--violet); }
+.cr-chip.crew-chip.locked { border-style: dashed; }
+.cr-chip.crew-chip.ended { opacity: 0.45; border-style: dashed; cursor: default; }
+.crew-chip-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--violet); display: inline-block; margin-right: 5px;
+}
+.crew-chip-price {
+  font-size: 7px; margin-left: 5px; padding: 0 3px;
+  background: var(--amber-soft); border: 1px solid var(--line); color: var(--ink);
+}
+.cr-chip.crew-add { border-style: dashed; border-color: var(--dim); color: var(--muted); }
+/* The add sheet's preview of a crew's public face. */
+.acs-face {
+  border: 1.5px solid var(--line-soft); background: var(--cr-panel, transparent);
+  padding: 9px 11px; margin-top: 10px; display: flex; flex-direction: column; gap: 4px;
+}
+.acs-row { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11.5px; }
+.acs-name { font-weight: 600; }
+.acs-dim { color: var(--cr-dim, #a8a29e); font-size: 10.5px; }
