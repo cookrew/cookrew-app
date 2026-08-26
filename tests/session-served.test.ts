@@ -16,6 +16,7 @@ const crew = (over: Partial<ServedTemplate> = {}): ServedTemplate => ({
   serviceId: 'svc-research',
   templateId: 'research-crew',
   slug: 'research',
+  access: 'account',
   ...over
 })
 
@@ -48,6 +49,16 @@ describe('ServedTemplates — the registry', () => {
     expect(served.bySlug('research')).toBeNull()
     expect(served.bySlug('lab')?.serviceId).toBe('svc-research')
     expect(served.list()).toHaveLength(1)
+  })
+
+  it('refuses a paid door without a price, and a price on a free door', () => {
+    expect(() => served.serve(crew({ access: 'paid' }))).toThrow(/needs a price/)
+    expect(() => served.serve(crew({ access: 'paid', priceUsd: '0' }))).toThrow(/needs a price/)
+    expect(() => served.serve(crew({ access: 'paid', priceUsd: 'free' }))).toThrow(/needs a price/)
+    expect(() => served.serve(crew({ access: 'account', priceUsd: '2.50' }))).toThrow(/cannot carry/)
+    // The honest shapes both land.
+    served.serve(crew({ access: 'paid', priceUsd: '2.50' }))
+    expect(served.bySlug('research')?.priceUsd).toBe('2.50')
   })
 
   it('stopping something never served is a no-op', () => {

@@ -1,5 +1,9 @@
 import { nextOrdinal, sessionIdentity, type SessionIdentity } from './session-identity'
 
+// Re-exported: the seams below name it in their signatures, so an adapter or a
+// test that implements one must be able to import it from here.
+export type { SessionIdentity }
+
 /**
  * THE INSTANTIATOR (R30) — first gated call → a live WorkspaceSession.
  *

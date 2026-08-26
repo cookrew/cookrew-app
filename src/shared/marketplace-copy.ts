@@ -589,7 +589,10 @@ export const MKT_SERVE = {
   /** R31 makes the plain label the true one; my earlier objection to "signs in"
    *  is withdrawn — it was right for facts that have since changed. */
   'mkt.serve.who.free': 'Anyone with a Cookrew account — free',
-  'mkt.serve.who.free.sub': 'They sign in, then start. You see who is on, never what they are doing.',
+  /** The R30 privacy ruling narrowed the claim: identity only. The old tail —
+   *  "never what they are doing" — promised privacy-from-owner, which the
+   *  architecture cannot keep (their session runs in the owner's app). */
+  'mkt.serve.who.free.sub': 'They sign in, then start.',
   'mkt.serve.who.paid': 'Anyone who pays',
   'mkt.serve.who.paid.sub':
     'Set a price. Callers pay you directly — Cookrew never holds the money and takes nothing.',

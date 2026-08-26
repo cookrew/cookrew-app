@@ -29,7 +29,7 @@ beforeEach(() => {
 })
 afterEach(() => rmSync(base, { recursive: true, force: true }))
 
-const CREW = { serviceId: 'svc-research', templateId: 'research-crew', slug: 'research' }
+const CREW = { serviceId: 'svc-research', templateId: 'research-crew', slug: 'research', access: 'account' as const }
 
 describe('wireServing — resolveInboundCall', () => {
   it('answers a live workspace slug as a workspace, no mint', async () => {
