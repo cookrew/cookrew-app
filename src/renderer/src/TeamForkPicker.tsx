@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { AgentRole, TeamForkSpec, TeamMeta, WorkspaceState } from '../../shared/model'
+import { ServedTeamCard, type ServedTeam } from './ServedTeamCard'
 import {
   ShareOnSave,
   canSubmitShare,
@@ -74,6 +75,25 @@ export function TeamForkPicker({
   const [access, setAccess] = useState<ShareAccess>('just-me')
   const [priceUsd, setPriceUsd] = useState('')
   const [servedAt, setServedAt] = useState<string | null>(null)
+  /** Which saved teams are taking calls — the shelf's standing state. */
+  const [servedTeams, setServedTeams] = useState<readonly ServedTeam[]>([])
+  const [sessionCounts, setSessionCounts] = useState<Record<string, number>>({})
+  const [openCard, setOpenCard] = useState<ServedTeam | null>(null)
+  const refreshServed = useCallback(() => {
+    void cookrew()
+      .servingList()
+      .then(setServedTeams)
+      .catch(() => undefined)
+    void cookrew()
+      .servingSessions()
+      .then((all) => {
+        const counts: Record<string, number> = {}
+        for (const s of all) counts[s.serviceId] = (counts[s.serviceId] ?? 0) + 1
+        setSessionCounts(counts)
+      })
+      .catch(() => undefined)
+  }, [])
+  useEffect(refreshServed, [refreshServed])
   const [forkName, setForkName] = useState('')
   const [saveName, setSaveName] = useState('')
   const [savedFlash, setSavedFlash] = useState<string | null>(null)
@@ -223,7 +243,10 @@ export function TeamForkPicker({
             access,
             ...(access === 'paid' ? { priceUsd: priceUsd.trim() } : {})
           })
-          if (served?.ok) setServedAt(served.address)
+          if (served?.ok) {
+            setServedAt(served.address)
+            refreshServed()
+          }
           else setError(`Couldn't start serving — ${served?.reason ?? 'unknown'}`)
         }
         setBusy(null)
@@ -269,16 +292,31 @@ export function TeamForkPicker({
             >
               LIVE CANVAS
             </button>
-            {teams.map((team) => (
-              <button
-                key={team.name}
-                className={`cr-chip clickable${source === team.name ? ' amber' : ''}`}
-                title={`Saved ${dateLabel(team.savedAt)} · ${team.nodeCount} nodes`}
-                onClick={() => setSource(team.name)}
-              >
-                {team.name}
-              </button>
-            ))}
+            {teams.map((team) => {
+              // A team quietly serving with no indicator is how an owner
+              // forgets they opened a door: the standing state shows at rest.
+              const serving = servedTeams.find((t) => t.templateId === team.name)
+              return (
+                <span key={team.name} className="tf-team-chip">
+                  <button
+                    className={`cr-chip clickable${source === team.name ? ' amber' : ''}`}
+                    title={`Saved ${dateLabel(team.savedAt)} · ${team.nodeCount} nodes`}
+                    onClick={() => setSource(team.name)}
+                  >
+                    {team.name}
+                  </button>
+                  {serving && (
+                    <button
+                      className="cr-chip clickable tf-serving"
+                      title="Taking calls — open its card"
+                      onClick={() => setOpenCard(serving)}
+                    >
+                      TAKING CALLS · {sessionCounts[serving.serviceId] ?? 0}
+                    </button>
+                  )}
+                </span>
+              )
+            })}
           </div>
         )}
 
@@ -480,6 +518,18 @@ export function TeamForkPicker({
               </div>
             )}
           </>
+        )}
+
+        {openCard && (
+          <ServedTeamCard
+            team={openCard}
+            door={orchName}
+            onStopped={() => {
+              setOpenCard(null)
+              refreshServed()
+            }}
+            onClose={() => setOpenCard(null)}
+          />
         )}
 
         {error && <div className="tf-error">{error}</div>}

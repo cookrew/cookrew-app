@@ -18,10 +18,10 @@ process.stdout.write = real
 const css = (f) => readFileSync(path.join(root, 'src/renderer/src', f), 'utf8')
 const styles = css('styles.css')
 const rootBlock = styles.match(/:root\s*\{[\s\S]*?\}/)?.[0] ?? ''
-writeFileSync(path.join(root, 'scratchpad/qa-share-on-save.html'), `<!DOCTYPE html><html><head><meta charset="utf-8">
+writeFileSync(path.join(root, 'scratchpad/qa-one-entry.html'), `<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>QA — share on save (real components)</title>
 <link href="https://fonts.googleapis.com/css2?family=Silkscreen&family=JetBrains+Mono&family=Inter&display=swap" rel="stylesheet">
-<style>${rootBlock}${css('team-fork.css')}
+<style>${rootBlock}${css('team-fork.css')}${css('grant-surface.css')}${css('styles.css')}
 body{margin:0;background:#2b2822;color:#eee;font-family:var(--font-body,system-ui);padding:24px}
 h1{font-family:var(--font-pixel,monospace);font-size:15px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:20px}
@@ -30,6 +30,6 @@ h1{font-family:var(--font-pixel,monospace);font-size:15px}
 .tf-panel{background:var(--cream-hi);border:2px solid var(--line);box-shadow:5px 5px 0 var(--amber-deep);color:var(--ink)}
 .note{color:#aaa;font-size:12px;max-width:52ch}
 </style></head><body>
-<h1>QA — SHARE ON SAVE · rendered from the shipped ShareOnSave component</h1>
+<h1>QA — served card · add crew · dock crews · shelf (shipped components)</h1>
 <div class="grid">${captured}</div></body></html>`)
 console.log('ok')

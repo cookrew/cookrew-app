@@ -2,6 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import type { GitInfo, TeamClipStatus, TeamMeta, WorkspaceState } from '../../shared/model'
 import { saveClash, selectionSummary } from '../../shared/team-actions'
 import { cookrew, isDemoMode } from './api'
+import {
+  ShareOnSave,
+  canSubmitShare,
+  saveButtonLabel,
+  type ShareAccess
+} from './ShareOnSave'
 import { TeamGraphThumb } from './TeamGraphThumb'
 
 /** gitInfo is bridge-only today; feature-detect like GitChip does. */
@@ -46,6 +52,11 @@ export function SelectionBar({
 }): React.JSX.Element | null {
   const [clip, setClip] = useState<TeamClipStatus | null>(null)
   const [naming, setNaming] = useState(false)
+  // SHARE ON SAVE (owner ruling 2026-08-26): the share question lives where the
+  // team is NAMED — this is THE publish entry, not a parallel admin panel.
+  const [access, setAccess] = useState<ShareAccess>('just-me')
+  const [priceUsd, setPriceUsd] = useState('')
+  const [servedAt, setServedAt] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [teams, setTeams] = useState<TeamMeta[]>([])
   /** The overwrite guard is only trustworthy once the list has ARRIVED —
@@ -196,6 +207,13 @@ export function SelectionBar({
 
   const summary = selectionSummary(workspace, [...picked])
   const clash = naming ? saveClash(teams, name, workspace.name) : null
+  /** The one door a caller reaches: the orch among the PICKED cards. */
+  const orchName =
+    workspace.nodes.find(
+      (n) => picked.has(n.id) && n.kind === 'terminal' && (n as { orch?: boolean }).orch
+    )?.name ??
+    workspace.nodes.find((n) => picked.has(n.id) && n.kind === 'terminal')?.name ??
+    'Conductor'
   const canClip = cookrew().teamClipSet !== undefined
 
   const showFlash = (text: string): void => {
@@ -300,13 +318,28 @@ export function SelectionBar({
     setError(null)
     void cookrew()
       .teamSave(name.trim() || undefined, [...picked])
-      .then((meta) => {
+      .then(async (meta) => {
         if (!alive.current) return
+        // Saving names the thing; the same breath decides who may call it.
+        if (access !== 'just-me') {
+          const served = await cookrew().servingServe({
+            templateId: meta.name,
+            access,
+            ...(access === 'paid' ? { priceUsd: priceUsd.trim() } : {})
+          })
+          if (!alive.current) return
+          if (served?.ok) setServedAt(served.address)
+          else setError(`Saved, but couldn't start serving — ${served?.reason ?? 'unknown'}`)
+        }
         setBusy(null)
         setNaming(false)
         setName('')
         setArmed(false)
-        showFlash(`saved template “${meta.name}”`)
+        showFlash(
+          access === 'just-me'
+            ? `saved template “${meta.name}”`
+            : `“${meta.name}” is taking calls`
+        )
         // The save cut a version pin on each saved agent (main process). Tell
         // any open rail to re-fetch so the marker appears NOW, not on the next
         // turn — otherwise a save reads as if it did nothing.
@@ -418,9 +451,23 @@ export function SelectionBar({
               if (e.key === 'Escape') dismissTransients()
             }}
           />
-          <button className="cr-btn sm" disabled={busy !== null || !teamsLoaded} onClick={runSave}>
-            {busy === 'save' ? 'SAVING…' : armed && clash ? 'SAVE AGAIN?' : 'SAVE'}
+          <button
+            className="cr-btn sm"
+            disabled={busy !== null || !teamsLoaded || !canSubmitShare(access, priceUsd)}
+            onClick={runSave}
+          >
+            {armed && clash ? 'SAVE AGAIN?' : saveButtonLabel(access, busy === 'save')}
           </button>
+          {/* The share question, in the same breath as the name. */}
+          <div className="cr-selbar-share">
+            <ShareOnSave
+              access={access}
+              priceUsd={priceUsd}
+              door={orchName}
+              onAccess={setAccess}
+              onPrice={setPriceUsd}
+            />
+          </div>
         </>
       ) : (
         <>
