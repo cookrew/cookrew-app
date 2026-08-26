@@ -145,6 +145,18 @@ import { makeEntryTerminalLookup, rmSandbox } from './session-instantiator-mount
 import { ServedCallers } from './served-callers'
 import { serviceGrants } from './service-grants-store'
 import { handleServedRoute } from './served-endpoints'
+import { handleServedPayRoute } from './served-pay-route'
+import { combinePaymentTerms, railSettle } from './payment-rails'
+import { loadStripeSecret } from './stripe-config'
+import {
+  createStripeRedemptionStore,
+  stripeCreateCheckout,
+  stripeGet,
+  stripePaymentTerms,
+  stripePost,
+  stripeSettle,
+  type StripeConfig
+} from './stripe-rail'
 import {
   BASE_SEPOLIA,
   createNonceLedger,
@@ -375,6 +387,12 @@ const callNodesOf = memoizeBriefly((workspaceId: string) => store.workspaceState
 // and the per-backend Seatbelt wrap for herdr are the remaining live-tested
 // steps; everything here compiles and is unit-tested.
 const sessionsBase = path.join(homedir(), '.cookrew')
+const stripeSecret = loadStripeSecret({ base: sessionsBase })
+const servedStripeConfig: StripeConfig | null =
+  stripeSecret === null ? null : { secretKey: stripeSecret }
+const servedStripeRedemptions = createStripeRedemptionStore(
+  path.join(sessionsBase, 'stripe-redemptions.json')
+)
 /** workspaceId → the served context its terminals spawn under. Set at boot. */
 const servedSpawnContexts = new Map<
   string,
@@ -467,6 +485,12 @@ function servedAddress(slug: string): string {
   return `http://${lan ?? '127.0.0.1'}:${MOBILE_PORT}/${slug}`
 }
 
+function servedPaymentReturn(slug: string): string {
+  const url = new URL(servedAddress(slug))
+  url.searchParams.set('payment', 'received')
+  return url.toString()
+}
+
 /**
  * Nonces already settled, for this process's lifetime.
  *
@@ -524,14 +548,56 @@ async function handleServedSlug(
       body = null
     }
   }
+  const issuer = {
+    challenge: (binding: string) => callCredentials.challenge(binding),
+    consumeChallenge: (value: string, binding?: string) =>
+      callCredentials.consumeChallenge(value, binding),
+    mint: (sub: string, scope: string) => callCredentials.mint(sub, scope),
+    verifyToken: (token: string) => callCredentials.verifyToken(token)
+  }
+  const checkout = await handleServedPayRoute(
+    {
+      issuer,
+      createCheckout: servedStripeConfig === null
+        ? null
+        : async (input) => {
+            const result = await stripeCreateCheckout(
+              { config: servedStripeConfig, post: stripePost },
+              {
+                priceUsd: input.amountUsd,
+                serviceId: input.serviceId,
+                sub: input.sub,
+                slug: input.slug,
+                successUrl: input.successUrl
+              }
+            )
+            return result.ok ? result.url : null
+          },
+      successUrl: (t) => servedPaymentReturn(t.slug)
+    },
+    template,
+    method,
+    pathname,
+    headers
+  )
+  if (checkout !== null) {
+    for (const [key, value] of Object.entries(checkout.headers ?? {})) {
+      response.setHeader(key, value)
+    }
+    respondJson(response, checkout.status, checkout.body)
+    return true
+  }
+
+  // The gate verifies this again before it can call settle. Capturing the same
+  // claims here gives the Stripe rail the expected subject without widening
+  // the gate's two-argument settle seam.
+  const authorization = headers.authorization ?? ''
+  const settlementClaims = authorization.startsWith('Bearer ')
+    ? issuer.verifyToken(authorization.slice(7))
+    : null
   const answer = await handleServedRoute(
     {
-      issuer: {
-        challenge: (binding) => callCredentials.challenge(binding),
-        consumeChallenge: (value, binding) => callCredentials.consumeChallenge(value, binding),
-        mint: (sub, scope) => callCredentials.mint(sub, scope),
-        verifyToken: (token) => callCredentials.verifyToken(token)
-      },
+      issuer,
       callers: servedCallers,
       admit: async (serviceId, sub) => {
         const { session, created } = await serving.instantiator.admit(serviceId, sub)
@@ -558,26 +624,61 @@ async function handleServedSlug(
       // must be charged exactly what we asked for. Both read the same config
       // and the same template, so they cannot drift apart into a door that
       // quotes a dollar and accepts a cent.
-      paymentTerms: (t) =>
-        paymentRequirements(
+      paymentTerms: (t) => {
+        const x402 = paymentRequirements(
           servedX402Config(),
           t.priceUsd ?? '',
           `/${t.slug}/ask`,
           `One session with the ${t.slug} crew`
-        ),
-      settle: async (payment, amountUsd) => {
-        const config = servedX402Config()
-        const quoted = paymentRequirements(config, amountUsd, '', '')
-        // No quotable price means no settlement to check against. Refusing to
-        // VERIFY is our fault, so it apologises rather than accuses.
-        if (quoted === null) return 'unverifiable'
-        const requirements: PaymentRequirements = quoted.accepts[0]
-        return x402Settle(
-          { config, post: postJson, seen: servedNonces },
-          payment,
-          requirements
         )
+        const stripe = stripePaymentTerms(
+          servedStripeConfig,
+          t.priceUsd ?? '',
+          `/${t.slug}/api/call/pay`
+        )
+        return combinePaymentTerms(x402, stripe)
       },
+      settle: (payment, amountUsd) =>
+        railSettle(
+          {
+            x402: async (x402Payment) => {
+              const config = servedX402Config()
+              const quoted = paymentRequirements(config, amountUsd, '', '')
+              // No quotable price means no settlement to check against. Refusing to
+              // VERIFY is our fault, so it apologises rather than accuses.
+              if (quoted === null) return 'unverifiable'
+              const requirements: PaymentRequirements = quoted.accepts[0]
+              return x402Settle(
+                { config, post: postJson, seen: servedNonces },
+                x402Payment,
+                requirements
+              )
+            },
+            stripe: async (stripePayment) => {
+              if (
+                servedStripeConfig === null ||
+                settlementClaims === null ||
+                settlementClaims.workspace !== template.serviceId
+              ) {
+                return 'refused'
+              }
+              return stripeSettle(
+                {
+                  config: servedStripeConfig,
+                  get: stripeGet,
+                  redemptions: servedStripeRedemptions
+                },
+                stripePayment,
+                {
+                  amountUsd,
+                  serviceId: template.serviceId,
+                  sub: settlementClaims.sub
+                }
+              )
+            }
+          },
+          payment
+        ),
       crewFace: (t) => {
         const snapshot = teams.load(t.templateId)
         const nodes = snapshot?.nodes ?? []
