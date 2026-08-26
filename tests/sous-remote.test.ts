@@ -120,7 +120,8 @@ describe('the remote request', () => {
       [403, 'unauthorized'],
       [404, 'model-missing'],
       [429, 'rate-limited'],
-      [500, 'unreachable']
+      // A server that ANSWERS is reachable; 5xx is most often the model loading.
+      [500, 'server-error']
     ]
     for (const [status, failure] of cases) {
       it(`${status} → ${failure}`, async () => {

@@ -153,6 +153,17 @@ export function useCheckpointTranslation(): TranslationControls {
         for (const piece of work) {
           if (run !== runId.current) return // stopped, or superseded
           let failure: TranslateFailure | null = null
+          /**
+           * The transport's own words, when the transport is what failed.
+           *
+           * A throw here is OUR side refusing — a route the served client
+           * cannot call, a stale credential — and it says nothing about Sous.
+           * Reporting it as 'unreachable' told people to go and check whether
+           * Ollama was running while Ollama was running and answering; the
+           * real reason ("this route is not workspace-scoped yet") was sitting
+           * in the error nobody showed.
+           */
+          let detail: string | null = null
           try {
             const res = await cookrew().translateCheckpoint(piece.text, language)
             if (run !== runId.current) return
@@ -161,7 +172,8 @@ export function useCheckpointTranslation(): TranslationControls {
             else out[piece.part].push(res.text)
           } catch (error) {
             console.error('translate failed:', error)
-            failure = 'unreachable'
+            failure = 'request-failed'
+            detail = error instanceof Error ? error.message : String(error)
           }
 
           if (failure === 'unusable-output') {
@@ -192,8 +204,8 @@ export function useCheckpointTranslation(): TranslationControls {
               progress: { done, total },
               error:
                 done === 0
-                  ? TRANSLATE_FAILURE_TEXT[failure]
-                  : `Stopped after ${done} of ${total} pieces — ${TRANSLATE_FAILURE_TEXT[failure]} The rest is unchanged.`
+                  ? reasonText(failure, detail)
+                  : `Stopped after ${done} of ${total} pieces — ${reasonText(failure, detail)} The rest is unchanged.`
             })
             return
           }
@@ -220,6 +232,12 @@ export function useCheckpointTranslation(): TranslationControls {
   )
 
   return { ...state, host, translate, clear, note }
+}
+
+/** The reason, carrying the transport's own message when there is one. */
+function reasonText(failure: TranslateFailure, detail: string | null): string {
+  const base = TRANSLATE_FAILURE_TEXT[failure]
+  return detail === null || detail.trim().length === 0 ? base : `${base} (${detail.trim()})`
 }
 
 /** What has arrived so far, or null before anything has. */

@@ -141,7 +141,7 @@ async function translateRemote(piece: string, label: string): Promise<PieceResul
       if (res.status === 401 || res.status === 403) return { ok: false, failure: 'unauthorized' }
       if (res.status === 404) return { ok: false, failure: 'model-missing' }
       if (res.status === 429) return { ok: false, failure: 'rate-limited' }
-      return { ok: false, failure: 'unreachable' }
+      return { ok: false, failure: 'server-error' }
     }
     const clean = sanitizeTranslation(textFromContent((await res.json()) as MessagesResponse))
     if (clean === null) return { ok: false, failure: 'unusable-output' }
@@ -182,7 +182,9 @@ async function translateLocal(piece: string, label: string): Promise<PieceResult
       console.error(`Sous translate: Ollama returned ${res.status} for model ${localTranslateModel(SOUS_TRANSLATE_MODEL)}`)
       // 404 is Ollama's answer for a model it does not have pulled — a
       // different problem from a server that is not there, and a different fix.
-      return { ok: false, failure: res.status === 404 ? 'model-missing' : 'unreachable' }
+      // Answered, so it is reachable — a 5xx here is most often the model
+      // still loading, which is a different sentence and a different wait.
+      return { ok: false, failure: res.status === 404 ? 'model-missing' : 'server-error' }
     }
     const body = (await res.json()) as OllamaGenerateResponse
     warmed = true

@@ -101,6 +101,17 @@ describe('translateBody', () => {
       expect(await translateBody('Hello', 'ja')).toEqual({ ok: false, failure: 'model-missing' })
     })
 
+    /**
+     * The distinction that matters: a refused CONNECTION means the server is
+     * not there. A server that answers with a status is there, and telling
+     * someone to check whether Ollama is running while it is running and
+     * answering costs them the actual diagnosis.
+     */
+    it('a server that answers with an error is not "unreachable"', async () => {
+      ollama(() => 500)
+      expect(await translateBody('Hello', 'ja')).toEqual({ ok: false, failure: 'server-error' })
+    })
+
     it('a refused connection is unreachable', async () => {
       ollama(() => Object.assign(new Error('ECONNREFUSED'), { name: 'TypeError' }))
       expect(await translateBody('Hello', 'ja')).toEqual({ ok: false, failure: 'unreachable' })

@@ -298,6 +298,8 @@ export type TranslateFailure =
   | 'too-long'
   | 'unauthorized'
   | 'rate-limited'
+  | 'server-error'
+  | 'request-failed'
   | 'unusable-output'
 
 export type TranslateResult =
@@ -312,5 +314,14 @@ export const TRANSLATE_FAILURE_TEXT: Record<TranslateFailure, string> = {
   'too-long': 'This checkpoint is too long to translate in one go.',
   unauthorized: 'The translation service rejected the key in ~/.cookrew/sous.json.',
   'rate-limited': 'The translation service is rate-limiting; try again shortly.',
+  // A SERVER THAT ANSWERS IS A SERVER THAT IS REACHABLE. Every non-specific
+  // error status used to be reported as "could not be reached", which sent
+  // people to check whether Ollama was running while it was running and
+  // answering — most often mid model-load, which is the one moment it errors.
+  'server-error': 'Sous answered with an error — the model may still be loading. Try again shortly.',
+  // Not a statement about Sous at all: the request never got that far. Said
+  // separately because "is Ollama running?" is a wrong and expensive question
+  // when the truth is that this view could not make the call.
+  'request-failed': 'This view could not make the translation request.',
   'unusable-output': 'Sous replied with something that was not a translation.'
 }

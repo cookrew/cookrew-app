@@ -146,6 +146,11 @@ describe('scopedRouteSupported — fail closed (review C2)', () => {
       '/api/terminal/t1/output',
       '/api/terminal/t1/input',
       '/api/terminal/t1/ask',
+      // Magpie's retest finding: absent from the table, a slug-served phone
+      // got 501 for a button that has nothing to do with workspaces — and the
+      // reader was told "is Ollama running?" while Ollama was running fine.
+      '/api/translate',
+      '/api/translate/host',
       '/api/browser/b1/thumb'
     ]) {
       expect(scopedRouteSupported(p)).toBe(true)

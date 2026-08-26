@@ -177,6 +177,14 @@ export const SCOPE_AWARE: RegExp[] = [
   /^\/api\/presets$/,
   /^\/api\/git(?:\?.*)?$/,
   /^\/api\/browser\/capabilities$/,
+  // Translation carries its own subject: the text to translate is in the
+  // request body and the answer depends on nothing a workspace holds, so
+  // every scope answers it identically. Being absent here did not make it
+  // scope-safe, it made it 501 — a phone served from a slug got "not
+  // workspace-scoped yet" for a button that has nothing to do with workspaces,
+  // and the failure surfaced to the reader as "is Ollama running?".
+  /^\/api\/translate$/,
+  /^\/api\/translate\/host$/,
   // THE INTERNET GATE (§9, §11 · ④). An exported agent is addressable because
   // the workspace instance is addressable, so this is the one route family
   // that is MEANINGLESS unslugged — there is no focused-session reading of it,
