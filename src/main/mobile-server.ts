@@ -45,6 +45,7 @@ import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
 import { sendBody } from './http-compress'
 import { rendererSourceFor, staleBuildNotice } from './renderer-choice'
 import { fetchRendererDevResource } from './renderer-dev-proxy'
+import { isViteHmrUpgrade, proxyViteHmrUpgrade } from './hmr-proxy'
 
 // Re-exported so existing importers keep their import path; the constants
 // themselves live in an Electron-free module so pure code can use them.
@@ -182,8 +183,17 @@ export function startMobileServer(deps: MobileServerDeps): void {
     })
   }
 
+  // Vite's HMR socket is claimed BEFORE the product handler. A phone loads the
+  // renderer from this origin, so Vite dials this origin's root — and an
+  // unanswered dial is not inert: the client reads the abnormal close as a dev
+  // server restart and reloads the page, forever. See hmr-proxy.ts.
   const attachUpgrade = (server: http.Server | https.Server): void => {
-    if (deps.onUpgrade) server.on('upgrade', (request, socket) => deps.onUpgrade?.(request, socket))
+    server.on('upgrade', (request, socket, head) => {
+      if (isViteHmrUpgrade(request) && proxyViteHmrUpgrade(deps.rendererDevUrl, request, socket, head)) {
+        return
+      }
+      deps.onUpgrade?.(request, socket)
+    })
   }
 
   // Plain HTTP: fine for the Mac's own localhost (a secure context) and as a
