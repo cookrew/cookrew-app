@@ -65,6 +65,7 @@ export function ownerSecretPaths(base: string, home: string = homedir()): readon
     // A granted copy lands inside the sandbox and stays readable; the original
     // is what a service that was lent nothing must not be able to go and take.
     path.join(base, 'sous.json'),
-    path.join(base, 'qwen.env')
+    path.join(base, 'qwen.env'),
+    path.join(base, 'stripe.env')
   ]
 }

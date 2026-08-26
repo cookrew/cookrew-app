@@ -68,6 +68,9 @@ describe('servedSpawn — the command is wrapped under Seatbelt', () => {
         new RegExp(`deny file-read\\* \\(subpath "[^"]*${secret.replace('.', '\\.')}"`)
       )
     }
+    // The main process may hold this key, but a served crew may never read the
+    // source file even when it knows the binding path by name.
+    expect(profile).toContain('deny file-read* (subpath "/base/stripe.env")')
   })
 })
 
