@@ -8,9 +8,30 @@ import { generateKeyPairSync, sign } from 'node:crypto'
 import { CallCredentialService } from '../src/main/call-credential'
 import { callAssertionPayload } from '../src/main/call-ceremony'
 import { ServedCallers } from '../src/main/served-callers'
-import { devSettle, handleServedRoute } from '../src/main/served-endpoints'
+import { handleServedRoute } from '../src/main/served-endpoints'
 import { ServedTemplates } from '../src/main/session-served'
 import { RemoteCrewStore, parseCrewLink } from '../src/main/remote-crews'
+
+/**
+ * The payment rail, stubbed at the seam.
+ *
+ * devSettle used to live in production and be imported here; it admitted any
+ * 'tx-' string, so the paid door was decorative. The real rail is x402-rail.ts
+ * and has its own suite. What THIS suite still needs is the three answers, so
+ * the gate's own branches (the two voices, mint-or-not) stay covered without a
+ * chain — which is exactly what the seam is for.
+ */
+const stubSettle = async (payment: string): Promise<'ok' | 'refused' | 'unverifiable'> => {
+  if (payment.startsWith('bad-')) return 'refused'
+  if (payment.startsWith('iffy-')) return 'unverifiable'
+  return payment.length > 0 ? 'ok' : 'refused'
+}
+
+/** Terms are behind the seam too; their real shape is x402-rail's business. */
+const stubTerms = (t: { priceUsd?: string }): unknown =>
+  t.priceUsd ? { x402Version: 1, accepts: [{ maxAmountRequired: t.priceUsd }] } : null
+
+
 
 /**
  * THE WHOLE EXCHANGE, OVER A REAL SOCKET — the acceptance the ruling implies:
@@ -90,7 +111,8 @@ async function ownerApp(access: 'account' | 'paid', priceUsd?: string): Promise<
           conductorFor: (sessionId) => `orch-${sessionId}`,
           // The crew's one door, faked: the only thing a unit run cannot own.
           ask: async (_orch, prompt) => `Conductor heard: ${prompt}`,
-          settle: devSettle,
+          settle: stubSettle,
+          paymentTerms: stubTerms,
           crewFace: (t) => ({
             name: 'Research Crew',
             serviceId: t.serviceId,
@@ -198,7 +220,8 @@ describe('end to end: an owner serves, a stranger calls', () => {
     // The gate quotes at session START.
     const quoted = await api('/ask', { headers: auth, body: JSON.stringify({ prompt: 'hi' }) })
     expect(quoted.status).toBe(402)
-    expect(quoted.body.terms).toMatchObject({ amount: '2.50', asset: 'USDC' })
+    // Terms come from the rail now, not the gate — the gate only relays them.
+    expect(quoted.body.terms).toMatchObject({ x402Version: 1 })
 
     // A bad reference accuses the payment; nothing is charged, nothing minted.
     const bad = await api('/ask', {

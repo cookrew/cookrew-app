@@ -144,7 +144,16 @@ import { servedConfinement } from './session-spawn'
 import { makeEntryTerminalLookup, rmSandbox } from './session-instantiator-mount'
 import { ServedCallers } from './served-callers'
 import { serviceGrants } from './service-grants-store'
-import { devSettle, handleServedRoute } from './served-endpoints'
+import { handleServedRoute } from './served-endpoints'
+import {
+  BASE_SEPOLIA,
+  createNonceLedger,
+  paymentRequirements,
+  postJson,
+  x402Settle,
+  type PaymentRequirements,
+  type X402Config
+} from './x402-rail'
 import { RemoteCrewStore, parseCrewLink } from './remote-crews'
 import { ServeRefused, type ServeAccess } from './session-served'
 import { PresetStore, isPresetId } from './preset-store'
@@ -459,6 +468,33 @@ function servedAddress(slug: string): string {
 }
 
 /**
+ * Nonces already settled, for this process's lifetime.
+ *
+ * Not the durable guard — an EIP-3009 authorization is single-use ON CHAIN, so
+ * a replay fails at the facilitator whether or not we remember it. This just
+ * refuses the second attempt for free, before a network round trip.
+ */
+const servedNonces = createNonceLedger()
+
+/**
+ * Where a served crew's money goes.
+ *
+ * COOKREW_PAY_TO is an ADDRESS, not a key — public by nature, and the whole
+ * reason x402 was chosen over Stripe: nothing secret has to live here. Without
+ * it there is no destination, so `paymentRequirements` cannot quote and the
+ * paid door answers 503 rather than admitting anyone for free.
+ */
+function servedX402Config(): X402Config {
+  return {
+    ...BASE_SEPOLIA,
+    payTo: process.env.COOKREW_PAY_TO ?? '',
+    facilitator: process.env.COOKREW_X402_FACILITATOR ?? BASE_SEPOLIA.facilitator,
+    network: process.env.COOKREW_X402_NETWORK ?? BASE_SEPOLIA.network,
+    asset: process.env.COOKREW_X402_ASSET ?? BASE_SEPOLIA.asset
+  }
+}
+
+/**
  * THE SERVED-CREW ADAPTER — HTTP ⇄ the gate (share-on-save, caller side).
  *
  * Mounted at the mobile server's unknown-slug fall-through, so a live workspace
@@ -517,8 +553,31 @@ async function handleServedSlug(
         if (!session) throw new Error('the crew has no live door')
         return askTerminal(session, prompt)
       },
-      settle: devSettle,
       grantBudget: { allowsNewSession: (serviceId) => grants.allowsNewSession(serviceId) },
+      // The quote and the settle are ONE decision expressed twice: the caller
+      // must be charged exactly what we asked for. Both read the same config
+      // and the same template, so they cannot drift apart into a door that
+      // quotes a dollar and accepts a cent.
+      paymentTerms: (t) =>
+        paymentRequirements(
+          servedX402Config(),
+          t.priceUsd ?? '',
+          `/${t.slug}/ask`,
+          `One session with the ${t.slug} crew`
+        ),
+      settle: async (payment, amountUsd) => {
+        const config = servedX402Config()
+        const quoted = paymentRequirements(config, amountUsd, '', '')
+        // No quotable price means no settlement to check against. Refusing to
+        // VERIFY is our fault, so it apologises rather than accuses.
+        if (quoted === null) return 'unverifiable'
+        const requirements: PaymentRequirements = quoted.accepts[0]
+        return x402Settle(
+          { config, post: postJson, seen: servedNonces },
+          payment,
+          requirements
+        )
+      },
       crewFace: (t) => {
         const snapshot = teams.load(t.templateId)
         const nodes = snapshot?.nodes ?? []

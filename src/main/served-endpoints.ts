@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import { validateCallPrompt } from './call-prompt'
 import { safeCallReply } from './call-reply'
 import type { ServedTemplate } from './session-served'
@@ -58,8 +57,6 @@ export interface ServedEndpointDeps {
   conductorFor(sessionId: string): string | null
   /** Run the prompt against the conductor's terminal; resolves to raw output. */
   ask(conductorId: string, prompt: string): Promise<string>
-  /** M1 dev facilitator. 'bad-…' refuses, 'iffy-…' is unverifiable, else ok. */
-  settle(txRef: string, amountUsd: string): Settle
   /**
    * May this service mint ANOTHER session under the owner's grant (R30 G2)?
    *
@@ -70,18 +67,40 @@ export interface ServedEndpointDeps {
    * exceed.
    */
   grantBudget: { allowsNewSession(serviceId: string): boolean }
+  /**
+   * The payment rail, behind a seam the gate never sees through.
+   *
+   * ASYNC because a real rail is: verifying money has moved means asking
+   * something outside this process. The three answers are all this surface
+   * knows, and they are about FAULT, not mechanism — see x402-rail.ts.
+   */
+  settle(payment: string, amountUsd: string): Promise<Settle>
+  /**
+   * The 402 body: what this crew costs, in whatever shape the rail speaks.
+   *
+   * Also behind the seam. The quote used to be built here with `chain: 'dev'`
+   * baked in, which meant the gate DID know the rail — swapping x402 for
+   * anything else would have edited gate logic. Returns null when the price
+   * cannot be quoted, which is a 503: our misconfiguration, not the caller's
+   * problem, and admitting free would be worse.
+   */
+  paymentTerms(template: ServedTemplate): unknown | null
   crewFace(template: ServedTemplate): CrewFace
 }
 
 const json = (status: number, body: unknown, headers?: Record<string, string>): ServedResponse =>
   headers ? { status, headers, body } : { status, body }
 
-/** The dev facilitator, importable so index and tests agree on the prefixes. */
-export function devSettle(txRef: string): Settle {
-  if (txRef.startsWith('bad-')) return 'refused'
-  if (txRef.startsWith('iffy-')) return 'unverifiable'
-  return txRef.length > 0 ? 'ok' : 'refused'
-}
+/*
+ * devSettle USED TO LIVE HERE, and it is deliberately gone rather than merely
+ * unwired: it admitted any string starting 'tx-', so anything that could reach
+ * the gate could buy a crew with a word. Leaving it exported would leave that
+ * one line — `settle: devSettle` — available to anyone wiring this surface in a
+ * hurry, and the failure would be silent and free.
+ *
+ * The real rail is x402-rail.ts. Tests supply their own stub against the
+ * `settle` seam, which is what a seam is for.
+ */
 
 /**
  * Handle one request addressed at a served slug. Returns null for a path this
@@ -173,18 +192,14 @@ async function askRoute(
   if (template.access === 'paid' && !deps.hasOpenSession(serviceId, claims.sub)) {
     const payment = input.headers['x-payment']
     if (payment === undefined || payment.length === 0) {
-      return json(402, {
-        terms: {
-          amount: template.priceUsd,
-          asset: 'USDC',
-          chain: 'dev',
-          payTo: `@${template.slug}`,
-          nonce: randomUUID(),
-          expiry: Date.now() + 5 * 60 * 1000
-        }
-      })
+      const terms = deps.paymentTerms(template)
+      // A crew we cannot price is not a crew a stranger may use for free.
+      if (terms === null) {
+        return json(503, { error: 'this crew is not taking payment right now' })
+      }
+      return json(402, { terms })
     }
-    const settled = deps.settle(payment, template.priceUsd ?? '')
+    const settled = await deps.settle(payment, template.priceUsd ?? '')
     if (settled === 'refused') {
       // The accusation voice: the payment is at fault, nothing was charged here.
       return json(402, { reason: 'invalid', retryable: false })
