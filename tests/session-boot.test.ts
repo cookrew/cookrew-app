@@ -82,7 +82,7 @@ describe('bootWorkspaceInPlace — boots the addressed workspace, nothing else',
   it('boots nothing for a workspace it has no nodes for', () => {
     const booted: string[] = []
     const n = bootWorkspaceInPlace(
-      { nodesOf: () => [], boot: (node) => booted.push(node.id) },
+      { nodesOf: (): Node[] => [], boot: (node) => booted.push(node.id) },
       'ws-gone'
     )
     expect(n).toBe(0)

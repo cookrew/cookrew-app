@@ -32,6 +32,13 @@
  */
 
 /** A template the owner is serving under a public slug. */
+/**
+ * Who may start a session (the share-on-save choice). `just-me` is deliberately
+ * NOT a value here: a private team simply is not served, so the registry cannot
+ * hold an entry that means "nobody" — absence is the private state.
+ */
+export type ServeAccess = 'account' | 'paid'
+
 export interface ServedTemplate {
   /** Stable id the gate and the instantiator key on — the export's identity. */
   serviceId: string
@@ -39,6 +46,19 @@ export interface ServedTemplate {
   templateId: string
   /** The public slug callers address. Unique in the workspace-slug namespace. */
   slug: string
+  /** The door: sign in (free) or sign in + pay per session. */
+  access: ServeAccess
+  /**
+   * USDC per SESSION, as a decimal string ('2.50'). Present iff `access` is
+   * 'paid' — an unpriced paid door or a priced free one is a caller deception,
+   * so `serve` refuses both shapes rather than normalising them.
+   */
+  priceUsd?: string
+}
+
+/** A well-formed price: digits with an optional 1–2 decimal places, > 0. */
+export function validPrice(value: string): boolean {
+  return /^\d+(\.\d{1,2})?$/.test(value) && Number(value) > 0
 }
 
 /**
@@ -56,6 +76,15 @@ export class ServedTemplates {
    * cannot linger and resolve after the owner moved the service.
    */
   serve(template: ServedTemplate): void {
+    // The two deceptive shapes, refused rather than normalised: a paid door
+    // with no price quotes nothing at 402, and a price on a free door charges
+    // for what the owner said was free.
+    if (template.access === 'paid' && !validPrice(template.priceUsd ?? '')) {
+      throw new Error('a paid door needs a price')
+    }
+    if (template.access !== 'paid' && template.priceUsd !== undefined) {
+      throw new Error('a free door cannot carry a price')
+    }
     const prior = this.templatesByService.get(template.serviceId)
     if (prior && prior.slug !== template.slug) this.serviceIdBySlug.delete(prior.slug)
     // Frozen, and this is the only copy the readers hand back — so a caller that

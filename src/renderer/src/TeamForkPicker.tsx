@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { AgentRole, TeamForkSpec, TeamMeta, WorkspaceState } from '../../shared/model'
+import {
+  ShareOnSave,
+  canSubmitShare,
+  saveButtonLabel,
+  type ShareAccess
+} from './ShareOnSave'
 import { cookrew, isRemoteMode } from './api'
 import { CrIcon, type CrIconName } from './icons'
 import { RoleAvatar } from './nodes/RoleAvatar'
@@ -47,6 +53,11 @@ export function TeamForkPicker({
   onClose: () => void
 }): React.JSX.Element {
   const nodes = workspace.nodes
+  /** The one door a caller reaches — the orch, else the first terminal. */
+  const orchName =
+    nodes.find((n) => n.kind === 'terminal' && (n as { orch?: boolean }).orch)?.name ??
+    nodes.find((n) => n.kind === 'terminal')?.name ??
+    'Conductor'
   const [included, setIncluded] = useState<ReadonlySet<string>>(() =>
     seed && seed.size > 0
       ? new Set(nodes.filter((n) => seed.has(n.id)).map((n) => n.id))
@@ -58,6 +69,11 @@ export function TeamForkPicker({
   const [roles, setRoles] = useState<AgentRole[]>([])
   const [apiMissing, setApiMissing] = useState(false)
   const [source, setSource] = useState<'live' | string>('live')
+  // Share-on-save: the default publishes nothing, so saving without reading
+  // the section cannot open a door.
+  const [access, setAccess] = useState<ShareAccess>('just-me')
+  const [priceUsd, setPriceUsd] = useState('')
+  const [servedAt, setServedAt] = useState<string | null>(null)
   const [forkName, setForkName] = useState('')
   const [saveName, setSaveName] = useState('')
   const [savedFlash, setSavedFlash] = useState<string | null>(null)
@@ -199,7 +215,17 @@ export function TeamForkPicker({
     setError(null)
     void cookrew()
       .teamSave(saveName.trim() || undefined)
-      .then((meta) => {
+      .then(async (meta) => {
+        // Saving names the thing; the same breath decides who may call it.
+        if (access !== 'just-me') {
+          const served = await cookrew().servingServe({
+            templateId: meta.name,
+            access,
+            ...(access === 'paid' ? { priceUsd: priceUsd.trim() } : {})
+          })
+          if (served?.ok) setServedAt(served.address)
+          else setError(`Couldn't start serving — ${served?.reason ?? 'unknown'}`)
+        }
         setBusy(null)
         setSavedFlash(meta.name)
         setSaveName('')
@@ -415,20 +441,45 @@ export function TeamForkPicker({
         </div>
 
         {source === 'live' && (
-          <div className="tf-save">
-            <span className="tf-label">SAVE TEAM</span>
-            <input
-              className="tf-input"
-              placeholder={workspace.name}
-              value={saveName}
-              onChange={(e) => setSaveName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && runSave()}
+          <>
+            <div className="tf-save">
+              <span className="tf-label">SAVE TEAM</span>
+              <input
+                className="tf-input"
+                placeholder={workspace.name}
+                value={saveName}
+                onChange={(e) => setSaveName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && runSave()}
+              />
+              <button
+                className="cr-btn sm"
+                disabled={busy !== null || !canSubmitShare(access, priceUsd)}
+                onClick={runSave}
+              >
+                {saveButtonLabel(access, busy === 'save')}
+              </button>
+              {savedFlash && <span className="tf-saved-flash">saved “{savedFlash}” ✓</span>}
+            </div>
+            <ShareOnSave
+              access={access}
+              priceUsd={priceUsd}
+              door={orchName}
+              onAccess={setAccess}
+              onPrice={setPriceUsd}
             />
-            <button className="cr-btn sm" disabled={busy !== null} onClick={runSave}>
-              {busy === 'save' ? 'SAVING…' : 'SAVE'}
-            </button>
-            {savedFlash && <span className="tf-saved-flash">saved “{savedFlash}” ✓</span>}
-          </div>
+            {servedAt && (
+              <div className="sos-live">
+                <span className="sos-live-t">Taking calls</span>
+                <code className="sos-addr">{servedAt}</code>
+                <button
+                  className="cr-btn sm"
+                  onClick={() => void navigator.clipboard?.writeText(servedAt)}
+                >
+                  COPY LINK
+                </button>
+              </div>
+            )}
+          </>
         )}
 
         {error && <div className="tf-error">{error}</div>}
