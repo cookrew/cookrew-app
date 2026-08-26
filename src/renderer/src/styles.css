@@ -2854,19 +2854,6 @@ a.card-close {
   color: #e8c9a0;
 }
 
-/* The orch wears gold — identity, not state, so it never yields to status. */
-.vi-chip.orch {
-  background: var(--amber);
-  color: #221a00;
-}
-
-.vi-mini-orch {
-  color: var(--amber);
-  font-size: calc(11px * var(--z, 1));
-  line-height: 1;
-  text-shadow: 0 0 calc(4px * var(--z, 1)) rgba(255, 214, 0, 0.6);
-}
-
 .vi-chip.dim {
   color: #98989d;
 }
@@ -4955,25 +4942,6 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   justify-content: flex-end;
 }
 
-/* ── THE ORCH IS THE DOOR — a golden frame ──
-   The orch answers for the whole team (R30's one door), so it must be the card
-   you find without reading — at any zoom, where the ORCH chip is not even
-   drawn. WIDTH as well as colour: .vi-card's border is 1px, and a 1px gold
-   hairline on a dark card reads as nothing zoomed out, which is exactly when
-   this matters most. The glow rides on top of the card's own drop shadow so
-   the frame separates from neighbours; state (working / attention / selected)
-   still overrides the shadow, because live state must read first. */
-.node.orch {
-  border-color: var(--amber);
-  border-width: 3px;
-}
-.node.orch:not(.working):not(.attention):not(.selected) {
-  box-shadow:
-    0 0 0 1px var(--amber-deep),
-    0 10px 28px rgba(0, 0, 0, 0.45),
-    0 0 18px 2px rgba(255, 214, 0, 0.35);
-}
-/* The header rule sits on the same gold, so the frame reads as one piece. */
-.node.orch .node-header {
-  border-bottom-color: var(--amber);
-}
+/* The orch is marked by its header chip alone — the golden frame was tried
+   and reverted (owner call, 2026-08-26): a permanent gold border read as a
+   state, competing with working/attention instead of sitting under them. */
