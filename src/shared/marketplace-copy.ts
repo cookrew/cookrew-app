@@ -589,7 +589,10 @@ export const MKT_SERVE = {
   /** R31 makes the plain label the true one; my earlier objection to "signs in"
    *  is withdrawn — it was right for facts that have since changed. */
   'mkt.serve.who.free': 'Anyone with a Cookrew account — free',
-  'mkt.serve.who.free.sub': 'They sign in, then start. You see who is on, never what they are doing.',
+  /** The R30 privacy ruling narrowed the claim: identity only. The old tail —
+   *  "never what they are doing" — promised privacy-from-owner, which the
+   *  architecture cannot keep (their session runs in the owner's app). */
+  'mkt.serve.who.free.sub': 'They sign in, then start.',
   'mkt.serve.who.paid': 'Anyone who pays',
   'mkt.serve.who.paid.sub':
     'Set a price. Callers pay you directly — Cookrew never holds the money and takes nothing.',
@@ -749,8 +752,64 @@ export function importedPinTip(
 }
 
 
+/**
+ * THE GATE SHEET's own receipts and step labels (R28). The deck already owns
+ * the FORM strings for each moment — MKT_AUTH asks identity, MKT_PAY asks money,
+ * MKT_ENROL runs the ceremony. What the one sheet added is the COLLAPSED line: a
+ * step you have cleared becomes a one-line receipt, and those short lines had no
+ * home until the sheet existed. They live here so the sheet reads no prose of
+ * its own.
+ *
+ * The two doors keep separate strings so the R31 wall holds by construction: the
+ * install receipt speaks accounts, the call receipt speaks the ceremony, and
+ * because they are different ids no sheet can render both.
+ */
+export const MKT_GATE = {
+  /** Cleared identity, install door — account vocabulary only. */
+  'mkt.gate.identify.install.done': "You're signed in.",
+  'mkt.gate.identify.install.why': 'Your Cookrew account, on this device.',
+  /** Cleared identity, call door — ceremony vocabulary only. */
+  'mkt.gate.identify.call.done': 'You compared the words.',
+  'mkt.gate.identify.call.why':
+    'Same words, same key — enrolled out loud, never over this connection.',
+  /** Served, install door — the copy is placed. */
+  'mkt.gate.open.install.title': 'Yours. Placing it on your canvas…',
+  'mkt.gate.open.install.why': 'Their originals are untouched — your copy runs against a fork.',
+  /** Served, call door — the line is up. */
+  'mkt.gate.open.call.title': 'Connected.',
+  'mkt.gate.open.call.why': 'Calls run against a fork — their original is never touched.',
+  /** Acknowledge the served state and close — the copy is already placed. */
+  'mkt.gate.open.action': 'DONE',
+  /** The pin you leave with — the violet mark, said in words. */
+  'mkt.gate.pin': 'Pinned to your rail',
+  'mkt.gate.pin.why': 'Update from the chip when a new version ships — never pushed, always offered.',
+  /** Door B's honest wait — a first reply is slow while the line warms. */
+  'mkt.gate.warming':
+    'First reply can take a moment while the line warms — the card says so; it never just spins.',
+  /** The 402 terms block — door-neutral labels, so the sheet reads no prose. */
+  'mkt.gate.terms.head': 'Terms — what the gate quoted',
+  'mkt.gate.terms.price': 'price',
+  'mkt.gate.terms.chain': 'chain',
+  'mkt.gate.terms.paidto': 'paid to',
+  'mkt.gate.terms.quoteends': 'quote ends',
+  /** The AUTHOR chip beside the payee. Uppercased by .cr-chip. */
+  'mkt.gate.terms.author': 'author',
+  /** The head chip — agent count. */
+  'mkt.gate.agents': '{n} agents',
+  /** 404 — the resource is not here. Door-neutral; never enrolment prose. */
+  'mkt.gate.gone.title': "This isn't here anymore.",
+  'mkt.gate.gone.why': 'It may have been unpublished, or the link is wrong. Nothing was installed.',
+  /** 5xx / unusable answer — our fault, not theirs. Fails closed to a retry. */
+  'mkt.gate.error.title': "Couldn't reach the gate.",
+  'mkt.gate.error.why':
+    'Something failed on the way — try again in a moment. Nothing was installed or charged.'
+} as const
+
+export type MktGateId = keyof typeof MKT_GATE
+
 /** Every group, so a renderer can resolve any id without knowing its family. */
 export const MKT_ALL = {
+  ...MKT_GATE,
   ...MKT_ROTATION,
   ...MKT_DENIED,
   ...MKT_AUTH,

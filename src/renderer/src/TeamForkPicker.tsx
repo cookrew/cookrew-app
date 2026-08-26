@@ -1,5 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { AgentRole, TeamForkSpec, TeamMeta, WorkspaceState } from '../../shared/model'
+import { ServedTeamCard, type ServedTeam } from './ServedTeamCard'
+import {
+  ShareOnSave,
+  canSubmitShare,
+  saveButtonLabel,
+  type ShareAccess
+} from './ShareOnSave'
 import { cookrew, isRemoteMode } from './api'
 import { CrIcon, type CrIconName } from './icons'
 import { RoleAvatar } from './nodes/RoleAvatar'
@@ -47,6 +54,11 @@ export function TeamForkPicker({
   onClose: () => void
 }): React.JSX.Element {
   const nodes = workspace.nodes
+  /** The one door a caller reaches — the orch, else the first terminal. */
+  const orchName =
+    nodes.find((n) => n.kind === 'terminal' && (n as { orch?: boolean }).orch)?.name ??
+    nodes.find((n) => n.kind === 'terminal')?.name ??
+    'Conductor'
   const [included, setIncluded] = useState<ReadonlySet<string>>(() =>
     seed && seed.size > 0
       ? new Set(nodes.filter((n) => seed.has(n.id)).map((n) => n.id))
@@ -58,6 +70,30 @@ export function TeamForkPicker({
   const [roles, setRoles] = useState<AgentRole[]>([])
   const [apiMissing, setApiMissing] = useState(false)
   const [source, setSource] = useState<'live' | string>('live')
+  // Share-on-save: the default publishes nothing, so saving without reading
+  // the section cannot open a door.
+  const [access, setAccess] = useState<ShareAccess>('just-me')
+  const [priceUsd, setPriceUsd] = useState('')
+  const [servedAt, setServedAt] = useState<string | null>(null)
+  /** Which saved teams are taking calls — the shelf's standing state. */
+  const [servedTeams, setServedTeams] = useState<readonly ServedTeam[]>([])
+  const [sessionCounts, setSessionCounts] = useState<Record<string, number>>({})
+  const [openCard, setOpenCard] = useState<ServedTeam | null>(null)
+  const refreshServed = useCallback(() => {
+    void cookrew()
+      .servingList()
+      .then(setServedTeams)
+      .catch(() => undefined)
+    void cookrew()
+      .servingSessions()
+      .then((all) => {
+        const counts: Record<string, number> = {}
+        for (const s of all) counts[s.serviceId] = (counts[s.serviceId] ?? 0) + 1
+        setSessionCounts(counts)
+      })
+      .catch(() => undefined)
+  }, [])
+  useEffect(refreshServed, [refreshServed])
   const [forkName, setForkName] = useState('')
   const [saveName, setSaveName] = useState('')
   const [savedFlash, setSavedFlash] = useState<string | null>(null)
@@ -199,7 +235,20 @@ export function TeamForkPicker({
     setError(null)
     void cookrew()
       .teamSave(saveName.trim() || undefined)
-      .then((meta) => {
+      .then(async (meta) => {
+        // Saving names the thing; the same breath decides who may call it.
+        if (access !== 'just-me') {
+          const served = await cookrew().servingServe({
+            templateId: meta.name,
+            access,
+            ...(access === 'paid' ? { priceUsd: priceUsd.trim() } : {})
+          })
+          if (served?.ok) {
+            setServedAt(served.address)
+            refreshServed()
+          }
+          else setError(`Couldn't start serving — ${served?.reason ?? 'unknown'}`)
+        }
         setBusy(null)
         setSavedFlash(meta.name)
         setSaveName('')
@@ -243,16 +292,31 @@ export function TeamForkPicker({
             >
               LIVE CANVAS
             </button>
-            {teams.map((team) => (
-              <button
-                key={team.name}
-                className={`cr-chip clickable${source === team.name ? ' amber' : ''}`}
-                title={`Saved ${dateLabel(team.savedAt)} · ${team.nodeCount} nodes`}
-                onClick={() => setSource(team.name)}
-              >
-                {team.name}
-              </button>
-            ))}
+            {teams.map((team) => {
+              // A team quietly serving with no indicator is how an owner
+              // forgets they opened a door: the standing state shows at rest.
+              const serving = servedTeams.find((t) => t.templateId === team.name)
+              return (
+                <span key={team.name} className="tf-team-chip">
+                  <button
+                    className={`cr-chip clickable${source === team.name ? ' amber' : ''}`}
+                    title={`Saved ${dateLabel(team.savedAt)} · ${team.nodeCount} nodes`}
+                    onClick={() => setSource(team.name)}
+                  >
+                    {team.name}
+                  </button>
+                  {serving && (
+                    <button
+                      className="cr-chip clickable tf-serving"
+                      title="Taking calls — open its card"
+                      onClick={() => setOpenCard(serving)}
+                    >
+                      TAKING CALLS · {sessionCounts[serving.serviceId] ?? 0}
+                    </button>
+                  )}
+                </span>
+              )
+            })}
           </div>
         )}
 
@@ -415,20 +479,57 @@ export function TeamForkPicker({
         </div>
 
         {source === 'live' && (
-          <div className="tf-save">
-            <span className="tf-label">SAVE TEAM</span>
-            <input
-              className="tf-input"
-              placeholder={workspace.name}
-              value={saveName}
-              onChange={(e) => setSaveName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && runSave()}
+          <>
+            <div className="tf-save">
+              <span className="tf-label">SAVE TEAM</span>
+              <input
+                className="tf-input"
+                placeholder={workspace.name}
+                value={saveName}
+                onChange={(e) => setSaveName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && runSave()}
+              />
+              <button
+                className="cr-btn sm"
+                disabled={busy !== null || !canSubmitShare(access, priceUsd)}
+                onClick={runSave}
+              >
+                {saveButtonLabel(access, busy === 'save')}
+              </button>
+              {savedFlash && <span className="tf-saved-flash">saved “{savedFlash}” ✓</span>}
+            </div>
+            <ShareOnSave
+              access={access}
+              priceUsd={priceUsd}
+              door={orchName}
+              onAccess={setAccess}
+              onPrice={setPriceUsd}
             />
-            <button className="cr-btn sm" disabled={busy !== null} onClick={runSave}>
-              {busy === 'save' ? 'SAVING…' : 'SAVE'}
-            </button>
-            {savedFlash && <span className="tf-saved-flash">saved “{savedFlash}” ✓</span>}
-          </div>
+            {servedAt && (
+              <div className="sos-live">
+                <span className="sos-live-t">Taking calls</span>
+                <code className="sos-addr">{servedAt}</code>
+                <button
+                  className="cr-btn sm"
+                  onClick={() => void navigator.clipboard?.writeText(servedAt)}
+                >
+                  COPY LINK
+                </button>
+              </div>
+            )}
+          </>
+        )}
+
+        {openCard && (
+          <ServedTeamCard
+            team={openCard}
+            door={orchName}
+            onStopped={() => {
+              setOpenCard(null)
+              refreshServed()
+            }}
+            onClose={() => setOpenCard(null)}
+          />
         )}
 
         {error && <div className="tf-error">{error}</div>}

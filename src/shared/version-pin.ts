@@ -37,6 +37,25 @@ export interface VersionPinRecord {
   /** 1-based, monotonic, never reused. V1, V2, … */
   version: number
   /**
+   * THE PIN'S IDENTITY — a content address of what this version IS (S1c / R31).
+   *
+   * The version NUMBER is a label the author reads; it is not identity, because
+   * `nextVersion` is `highest + 1` over LOCAL records, so two machines offline
+   * both cut "V2" with different content and a session pinned to "V2" then means
+   * two different things. The content address cannot collide that way: a session
+   * pins THIS, so it is never ambiguous about the bytes it runs, and two offline
+   * "V2"s become a DETECTABLE collision at sync (two labels, two ids) rather than
+   * a silent substitution nobody can see.
+   *
+   * Optional, and this file computes none of it: the hash is of the pinned
+   * content, which lives in main (the transcript / manifest), and `version-pin`
+   * is renderer-imported and stays free of `node:crypto`. A record without it is
+   * a legacy pin from before S1c; the comparisons below fall back to the number,
+   * which is exactly the ambiguous behaviour S1c replaces — so absence is
+   * tolerated, never preferred.
+   */
+  pinId?: string
+  /**
    * The checkpoint IDENTITY (T-number) the pin was cut at. This is what the
    * pin means; where it lands is derived from the rows actually drawn.
    */
@@ -166,6 +185,8 @@ export interface CutOptions {
   scrollLine: number
   cutAt: number
   manifestId?: string
+  /** The content address of this version (S1c). Computed by main, stored here. */
+  pinId?: string
 }
 
 /**
@@ -184,7 +205,8 @@ export function cutVersionPin(
     atIndex: options.atIndex,
     scrollLine: options.scrollLine,
     cutAt: options.cutAt,
-    ...(options.manifestId !== undefined ? { manifestId: options.manifestId } : {})
+    ...(options.manifestId !== undefined ? { manifestId: options.manifestId } : {}),
+    ...(options.pinId !== undefined ? { pinId: options.pinId } : {})
   }
 }
 
@@ -216,7 +238,7 @@ export interface TeamVersionCut {
  */
 export function cutTeamVersion(
   members: readonly TeamCutMember[],
-  options: { cutAt: number; manifestId?: string }
+  options: { cutAt: number; manifestId?: string; pinId?: string }
 ): TeamVersionCut {
   if (members.length === 0) throw new Error('cannot cut a team version for an empty team')
   let version = 1
@@ -233,10 +255,62 @@ export function cutTeamVersion(
         atIndex: m.atIndex,
         scrollLine: m.scrollLine,
         cutAt: options.cutAt,
-        ...(options.manifestId !== undefined ? { manifestId: options.manifestId } : {})
+        ...(options.manifestId !== undefined ? { manifestId: options.manifestId } : {}),
+        // The team version is one tuple, so every member carries the SAME
+        // content id — the tuple's identity, not each member's own bytes.
+        ...(options.pinId !== undefined ? { pinId: options.pinId } : {})
       }
     }))
   }
+}
+
+/**
+ * A pin's IDENTITY — its content address if it has one, else the version label
+ * as a fallback (`v3`). Everything that must not be fooled by two offline "V2"s
+ * — the instantiator's `pinAddress`, a session's "am I still on the same
+ * edition" — keys on this, not the number. A legacy pin with no `pinId` falls
+ * back to the number, which is the ambiguous behaviour S1c exists to replace, so
+ * the fallback is a bridge for old records, never the intended path.
+ */
+export function pinIdentity(pin: VersionPinRecord): string {
+  return pin.pinId ?? `v${pin.version}`
+}
+
+/** Two pins address the SAME content — the question a session actually asks. */
+export function samePinIdentity(a: VersionPinRecord, b: VersionPinRecord): boolean {
+  return pinIdentity(a) === pinIdentity(b)
+}
+
+/** A version number that names more than one content id — the sync collision. */
+export interface VersionCollision {
+  version: number
+  /** The distinct content ids seen under this one number. */
+  pinIds: string[]
+}
+
+/**
+ * Find the collisions S1c makes detectable: version NUMBERS that, across the
+ * merged records of two machines, carry more than one content id. This is the
+ * conflict the owner is shown at sync — "you and your laptop both cut V2, and
+ * they are different" — instead of one silently substituting the other. Only
+ * records that HAVE a `pinId` participate: a legacy record cannot be proven to
+ * collide, and guessing it does would raise a conflict that is not one.
+ */
+export function detectVersionCollisions(
+  records: readonly VersionPinRecord[]
+): VersionCollision[] {
+  const byVersion = new Map<number, Set<string>>()
+  for (const r of records) {
+    if (r.pinId === undefined) continue
+    const ids = byVersion.get(r.version) ?? new Set<string>()
+    ids.add(r.pinId)
+    byVersion.set(r.version, ids)
+  }
+  const out: VersionCollision[] = []
+  for (const [version, ids] of byVersion) {
+    if (ids.size > 1) out.push({ version, pinIds: [...ids].sort() })
+  }
+  return out.sort((a, b) => a.version - b.version)
 }
 
 /**
