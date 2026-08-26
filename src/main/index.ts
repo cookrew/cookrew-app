@@ -2603,6 +2603,9 @@ app.whenReady().then(() => {
     rendererSrcDir: path.join(app.getAppPath(), 'src/renderer/src')
   })
   registerIpc({ restoreCheckpoint, undoRestore })
+  // Restore browser cards as cold metadata. replaceNodes preserves any live
+  // node-owned instances, but startup does not spend one Chromium process (and
+  // profile) per saved reference card; a stream or agent command starts it.
   void browserManager.replaceNodes(store.browsers()).catch(() => undefined)
   createWindow()
 

@@ -1,14 +1,5 @@
-// Flag-off equivalence at the index.ts seam (review L5).
-//
-// I claimed "flag off is behaviour-identical" through three steps and it was
-// not true — the reviewer opened round 1 with that. The claim was unfalsifiable
-// because the switch handler lived inline in index.ts, tangled with Electron
-// and a dozen singletons, so nothing could call it.
-//
-// These are the assertions that would have caught H1 without a reviewer: with
-// one resident workspace the plan must equal the pre-refactor teardown exactly,
-// and EVERY focused terminal must be re-registered whether or not its PTY is
-// already live.
+// Workspace focus must preserve live mirrors without eagerly attaching cold
+// terminals. The plan is pure so both sides of that boundary stay testable.
 
 import { describe, expect, it } from 'vitest'
 import { planWorkspaceSwitch, type SwitchFacts } from '../src/main/workspace-switch'
@@ -45,7 +36,14 @@ describe('flag OFF is the pre-refactor teardown, exactly', () => {
     expect(plan.detach).toEqual(['old-1', 'old-2'])
   })
 
-  it('boots every incoming terminal', () => {
+  it('leaves cold incoming terminals detached for transcript zoom', () => {
+    const plan = planWorkspaceSwitch(
+      flagOff({ workspaceOfTerminal: (id) => (id.startsWith('old') ? 'ws-out' : undefined) })
+    )
+    expect(plan.boot).toEqual([])
+  })
+
+  it('re-registers an incoming terminal that is already attached', () => {
     const plan = planWorkspaceSwitch(flagOff())
     expect(plan.boot.map((t) => t.id)).toEqual(['new-1', 'new-2'])
   })
@@ -55,37 +53,35 @@ describe('flag OFF is the pre-refactor teardown, exactly', () => {
     expect(plan.browsers.map((b) => b.id)).toEqual(['b-in'])
   })
 
-  it('detaches nothing when there was nothing to leave (first boot)', () => {
-    const plan = planWorkspaceSwitch(flagOff({ previousTerminalIds: [] }))
+  it('detaches and boots nothing when the first focused canvas is cold', () => {
+    const plan = planWorkspaceSwitch(
+      flagOff({ previousTerminalIds: [], workspaceOfTerminal: () => undefined })
+    )
     expect(plan.detach).toEqual([])
-    expect(plan.boot).toHaveLength(2)
+    expect(plan.boot).toEqual([])
   })
 })
 
-describe('the H1 invariant — registration is not the spawn', () => {
-  it('boots a focused terminal whose PTY is ALREADY live', () => {
-    // H1 exactly: an `if (ptys.isLive) continue` looked like it skipped a
-    // redundant spawn. It skipped owner-input hooks, the producer lease, turn
-    // tracking, registry recording and pending-inject delivery with it.
+describe('lazy attachment preserves already-live registration', () => {
+  it('re-registers an attached terminal without booting a cold neighbor', () => {
     const plan = planWorkspaceSwitch(
       flagOff({
         focusedTerminals: [term('already-live'), term('cold')],
-        // Cut into this workspace with its PTY still held — the reachable
-        // flag-off path, via a TeamClipboard cut plus a switch.
-        workspaceOfTerminal: (id) => (id === 'already-live' ? 'ws-in' : 'ws-out')
+        workspaceOfTerminal: (id) => (id === 'already-live' ? 'ws-in' : undefined)
       })
     )
-    expect(plan.boot.map((t) => t.id)).toEqual(['already-live', 'cold'])
+    expect(plan.boot.map((t) => t.id)).toEqual(['already-live'])
   })
 
-  it('boot is the focused set verbatim — never filtered by liveness', () => {
+  it('boots only terminals held by a resident workspace', () => {
     const focusedTerminals = [term('a'), term('b'), term('c')]
-    for (const holder of ['ws-in', 'ws-out', undefined]) {
-      const plan = planWorkspaceSwitch(
-        flagOff({ focusedTerminals, workspaceOfTerminal: () => holder })
-      )
-      expect(plan.boot).toBe(focusedTerminals)
-    }
+    const plan = planWorkspaceSwitch(
+      flagOff({
+        focusedTerminals,
+        workspaceOfTerminal: (id) => (id === 'a' ? 'ws-in' : id === 'b' ? 'ws-out' : undefined)
+      })
+    )
+    expect(plan.boot.map((t) => t.id)).toEqual(['a'])
   })
 })
 
@@ -103,7 +99,7 @@ describe('flag ON — a switch stops being a teardown', () => {
     expect(plan.detach).toEqual([])
   })
 
-  it('still re-registers the incoming canvas', () => {
+  it('re-registers the already-attached incoming canvas', () => {
     const plan = planWorkspaceSwitch(flagOn())
     expect(plan.boot.map((t) => t.id)).toEqual(['new-1', 'new-2'])
   })

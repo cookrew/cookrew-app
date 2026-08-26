@@ -44,16 +44,29 @@ export class HeadlessBrowserManager {
 
   constructor(private readonly deps: HeadlessBrowserManagerDeps) {}
 
-  /** Replace the live-node set, used at boot and active-workspace switches. */
+  /**
+   * Replace the desired node set, used at boot and workspace switches.
+   *
+   * Restoring a canvas must not launch one Chromium process per saved browser
+   * card. A large workspace can contain hundreds of reference pages, and each
+   * headless instance owns a full profile plus several helper processes. Keep
+   * cold nodes as metadata only; instances start through get()/syncNode() when
+   * a viewer or command actually needs one. Already-live instances remain
+   * node-owned and are synchronized to the restored model.
+   */
   async replaceNodes(nodes: BrowserNodeData[]): Promise<void> {
     const ids = new Set(nodes.map((node) => node.id))
     const stopping: Promise<void>[] = []
     for (const id of [...this.desired.keys()]) {
       if (!ids.has(id)) stopping.push(this.remove(id))
     }
+    const live = nodes.filter(
+      (node) => this.instances.has(node.id) || this.starting.has(node.id)
+    )
+    for (const node of nodes) this.desired.set(node.id, node)
     await Promise.all(stopping)
     await Promise.all(
-      nodes.map((node) => this.syncNode(node).then(() => undefined).catch(() => undefined))
+      live.map((node) => this.syncNode(node).then(() => undefined).catch(() => undefined))
     )
   }
 

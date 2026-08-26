@@ -43,6 +43,34 @@ function managerWith(instanceFactory: (options: HeadlessOptions) => HeadlessInst
 }
 
 describe('HeadlessBrowserManager node ownership', () => {
+  it('restores cold browser cards without launching Chromium', async () => {
+    const makeInstance = vi.fn(() => fakeInstance())
+    const manager = managerWith(makeInstance)
+
+    await manager.replaceNodes([browser(), browser('browser-2')])
+
+    expect(makeInstance).not.toHaveBeenCalled()
+    expect(manager.activeCount()).toBe(0)
+    expect(manager.startingCount()).toBe(0)
+  })
+
+  it('keeps an already-live instance synchronized across restoration', async () => {
+    const instance = fakeInstance()
+    const makeInstance = vi.fn(() => instance)
+    const manager = managerWith(makeInstance)
+    await manager.get(browser().id)
+    const restored = { ...browser(), size: { width: 900, height: 700 } }
+    vi.mocked(instance.syncTabs).mockClear()
+    vi.mocked(instance.resize).mockClear()
+
+    await manager.replaceNodes([restored, browser('browser-2')])
+
+    expect(makeInstance).toHaveBeenCalledTimes(1)
+    expect(instance.syncTabs).toHaveBeenCalledTimes(1)
+    expect(instance.resize).toHaveBeenCalledWith(900, 700)
+    expect(manager.activeCount()).toBe(1)
+  })
+
   it('starts one instance for a node and reuses it across syncs', async () => {
     const instance = fakeInstance()
     const makeInstance = vi.fn(() => instance)

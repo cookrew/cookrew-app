@@ -72,7 +72,8 @@ export class SwitchRunner<T, B> {
     // snapshot is as old as that run, and a switch that has been waiting
     // through another switch's boots must not reattach against stale panes.
     this.deps.endBatch()
-    this.deps.beginBatch()
+    const openedBatch = plan.boot.length > 0
+    if (openedBatch) this.deps.beginBatch()
     try {
       for (const terminal of plan.boot) {
         // A newer switch has taken over. Stop; it owns the batch now, so
@@ -86,7 +87,7 @@ export class SwitchRunner<T, B> {
       this.deps.onBooted()
     } finally {
       // Only the CURRENT run closes. A superseded one leaving here must not.
-      if (generation === this.generation) this.deps.endBatch()
+      if (generation === this.generation && openedBatch) this.deps.endBatch()
     }
   }
 }
