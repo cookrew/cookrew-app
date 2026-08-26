@@ -1,4 +1,9 @@
-import { MKT_SERVE } from '../../shared/marketplace-copy'
+import {
+  MKT_SERVE,
+  fillCopy,
+  servedPaymentRailsLabel
+} from '../../shared/marketplace-copy'
+import type { ServedPaymentRail } from '../../shared/served-payment-rails'
 
 /**
  * SHARE ON SAVE — the one publish entry (owner ruling, 2026-08-26).
@@ -76,12 +81,14 @@ export function serveRefusalText(reason: string | undefined): string {
 export function ShareOnSave({
   access,
   priceUsd,
+  paymentRails,
   door,
   onAccess,
   onPrice
 }: {
   access: ShareAccess
   priceUsd: string
+  paymentRails: readonly ServedPaymentRail[]
   /**
    * The orch's name — the one door a caller ever reaches — or null when the
    * selection flags no orch. Null is a refusal, never a placeholder: this used
@@ -134,10 +141,17 @@ export function ShareOnSave({
             value={priceUsd}
             inputMode="decimal"
             placeholder="2.50"
-            aria-label="Price in USDC per session"
+            aria-label={MKT_SERVE['mkt.serve.price.label']}
             onChange={(e) => onPrice(e.target.value)}
           />
-          <span className="sos-unit">USDC · per session</span>
+          <span className="sos-unit">{MKT_SERVE['mkt.serve.price.unit']}</span>
+          <span className="sos-rails">
+            {paymentRails.length > 0
+              ? fillCopy(MKT_SERVE['mkt.serve.rails.live'], {
+                  rails: servedPaymentRailsLabel(paymentRails)
+                })
+              : MKT_SERVE['mkt.serve.rails.none']}
+          </span>
           {priceUsd.length > 0 && !priceLooksGood(priceUsd) && (
             <span className="sos-bad">a price has to be a number above zero</span>
           )}

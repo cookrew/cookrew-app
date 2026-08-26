@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { cookrew } from './api'
-import { MKT_SERVE, MKT_SESSIONS, fillCopy } from '../../shared/marketplace-copy'
+import {
+  MKT_SERVE,
+  MKT_SESSIONS,
+  fillCopy,
+  servedPaymentRailsLabel
+} from '../../shared/marketplace-copy'
+import type { ServedPaymentRail } from '../../shared/served-payment-rails'
 // The gs-* sheet primitives — stated by the wearer, not inherited from the
 // (retired) GrantPanel that used to carry this import.
 import './grant-surface.css'
@@ -33,6 +39,7 @@ export interface ServedTeam {
   access: 'account' | 'paid'
   priceUsd?: string
   address: string
+  paymentRails: readonly ServedPaymentRail[]
 }
 
 export function ServedTeamCard({
@@ -66,7 +73,15 @@ export function ServedTeamCard({
   useEffect(refresh, [refresh])
 
   const priceLine =
-    team.access === 'paid' ? `${team.priceUsd} USDC · per session` : 'free · sign in to start'
+    team.access === 'paid'
+      ? fillCopy(MKT_SERVE['mkt.serve.price.paid'], {
+          price: team.priceUsd ?? '',
+          rails:
+            team.paymentRails.length > 0
+              ? servedPaymentRailsLabel(team.paymentRails)
+              : MKT_SERVE['mkt.serve.rails.none.short']
+        })
+      : MKT_SERVE['mkt.serve.price.free']
 
   return (
     <div className="gs-scrim" role="dialog" aria-modal="true" aria-label={`${team.templateId} — serving`}>

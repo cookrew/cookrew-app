@@ -27,7 +27,12 @@ const stubSettle = async (payment: string): Promise<'ok' | 'refused' | 'unverifi
 
 /** Terms are behind the seam too; their real shape is x402-rail's business. */
 const stubTerms = (t: { priceUsd?: string }): unknown =>
-  t.priceUsd ? { x402Version: 1, accepts: [{ maxAmountRequired: t.priceUsd }] } : null
+  t.priceUsd
+    ? {
+        x402Version: 1,
+        accepts: [{ scheme: 'exact', network: 'base-sepolia', maxAmountRequired: t.priceUsd }]
+      }
+    : null
 
 
 
@@ -133,7 +138,40 @@ describe('the public face', () => {
   it('answers /crew with what the owner published, and nothing else', async () => {
     const res = await handleServedRoute(deps, PAID, 'GET', '/crew', { headers: {}, body: null })
     expect(res!.status).toBe(200)
-    expect(res!.body).toMatchObject({ door: 'Conductor', priceUsd: '2.50', access: 'paid' })
+    expect(res!.body).toMatchObject({
+      door: 'Conductor',
+      priceUsd: '2.50',
+      access: 'paid',
+      paymentRails: ['x402']
+    })
+  })
+
+  it('renders the crew address with price and every live way to pay', async () => {
+    deps.paymentTerms = () => ({
+      x402Version: 1,
+      accepts: [
+        { scheme: 'exact', network: 'base-sepolia' },
+        { scheme: 'stripe-checkout', network: 'stripe' }
+      ]
+    })
+    const res = await handleServedRoute(deps, PAID, 'GET', '/', { headers: {}, body: null })
+    expect(res!.headers?.['content-type']).toContain('text/html')
+    expect(res!.headers?.['content-security-policy']).toContain("default-src 'none'")
+    expect(res!.body).toMatch(/^<!doctype html>/)
+    expect(res!.body).toContain('2.50 USD to start')
+    expect(res!.body).toContain('Pay with USDC on Base')
+    expect(res!.body).toContain('Open Stripe Checkout from Cookrew')
+  })
+
+  it('shows the Stripe return note only on the payment-received URL', async () => {
+    const ordinary = await handleServedRoute(deps, PAID, 'GET', '/', { headers: {}, body: null })
+    const returned = await handleServedRoute(deps, PAID, 'GET', '/', {
+      headers: {},
+      body: null,
+      query: { payment: 'received' }
+    })
+    expect(ordinary!.body).not.toContain('Payment received')
+    expect(returned!.body).toContain('Payment received — retry your call in Cookrew.')
   })
 
   it('returns null for a path this surface does not own', async () => {

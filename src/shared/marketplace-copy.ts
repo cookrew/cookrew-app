@@ -1,4 +1,5 @@
 import type { RotationSheetPayload } from './preset-rotation'
+import type { ServedPaymentRail } from './served-payment-rails'
 
 /**
  * MARKETPLACE COPY — Velvet's deck (docs/design/marketplace-copy-deck.html),
@@ -596,6 +597,15 @@ export const MKT_SERVE = {
   'mkt.serve.who.paid': 'Anyone who pays',
   'mkt.serve.who.paid.sub':
     'Set a price. Callers pay you directly — Cookrew never holds the money and takes nothing.',
+  'mkt.serve.price.unit': 'USD · per session',
+  'mkt.serve.price.label': 'Price in USD per session',
+  'mkt.serve.price.paid': '{price} USD · per session · {rails}',
+  'mkt.serve.price.free': 'free · sign in to start',
+  'mkt.serve.rails.live': 'Offers {rails}',
+  'mkt.serve.rails.none': 'No payment rail is configured yet.',
+  'mkt.serve.rails.none.short': 'no payment rail configured',
+  'mkt.serve.rail.x402': 'USDC',
+  'mkt.serve.rail.stripe': 'card',
   /** The bound the reversibility promise needs, or it reads as a recall. */
   'mkt.serve.reversible':
     'Change this any time, including back to Just me — which stops new callers. Anyone already working keeps going until you end them.',
@@ -663,15 +673,28 @@ export const MKT_SESSIONS = {
  * it cost, what happens if I start. Then the Gate Sheet.
  */
 export const MKT_SVC = {
+  'mkt.svc.document.title': '{templateName} · Cookrew',
+  'mkt.svc.eyebrow': 'SERVED CREW',
   'mkt.svc.title': '{templateName}',
   'mkt.svc.byline': 'run by {author} · {n} agents · {version}',
+  'mkt.svc.byline.served': '{n} agents · {version}',
   'mkt.svc.what':
     'A crew of AI agents that works on what you ask. You talk to one of them — {orch} — and it runs the others.',
   'mkt.svc.yours':
     'You get your own private workspace. It is created when you start, it belongs to you, and the files you make stay in it. Nobody else’s work touches yours.',
   'mkt.svc.price.paid':
     '{price} {asset} to start. Paid directly to {author} — Cookrew never holds the money and takes nothing.',
+  'mkt.svc.price.usd': '{price} USD to start. Choose any payment method offered below.',
   'mkt.svc.price.free': 'Free to start. Sign in with your Cookrew account first — one tap, no password.',
+  'mkt.svc.pay.title': 'Ways to pay',
+  'mkt.svc.pay.x402.title': 'USDC',
+  'mkt.svc.pay.x402.body':
+    'Pay with USDC on Base. Cookrew sends the payment proof when you retry your call.',
+  'mkt.svc.pay.stripe.title': 'Card',
+  'mkt.svc.pay.stripe.body':
+    'Open Stripe Checkout from Cookrew and pay by card. Return here after Stripe confirms it, then retry your call.',
+  'mkt.svc.pay.none': 'This crew is not taking payment right now.',
+  'mkt.svc.payment.received': 'Payment received — retry your call in Cookrew.',
   /**
    * FLAGGED FOR ATLAS. "They can't see inside it" is a claim about what the
    * product surfaces, not about what is reachable on a machine the author owns.
@@ -697,6 +720,17 @@ export const MKT_SVC = {
   'mkt.svc.ended.paid': 'You paid to start this. Contact {author} if that was not expected.',
   'mkt.svc.unavailable': '{templateName} is not taking calls right now.'
 } as const
+
+/** Human labels for structured rail identifiers; prose stays in this module. */
+export function servedPaymentRailLabel(rail: ServedPaymentRail): string {
+  return rail === 'x402'
+    ? MKT_SERVE['mkt.serve.rail.x402']
+    : MKT_SERVE['mkt.serve.rail.stripe']
+}
+
+export function servedPaymentRailsLabel(rails: readonly ServedPaymentRail[]): string {
+  return rails.map(servedPaymentRailLabel).join(' · ')
+}
 
 export type MktTemplateId = keyof typeof MKT_TEMPLATE
 export type MktServeId = keyof typeof MKT_SERVE

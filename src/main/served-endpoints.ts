@@ -2,6 +2,14 @@ import { validateCallPrompt } from './call-prompt'
 import { safeCallReply } from './call-reply'
 import type { ServedTemplate } from './session-served'
 import type { ServedCallers } from './served-callers'
+import {
+  MKT_SVC,
+  fillCopy
+} from '../shared/marketplace-copy'
+import {
+  servedPaymentRails,
+  type ServedPaymentRail
+} from '../shared/served-payment-rails'
 
 /**
  * THE SERVED CREW's public face and gate, over HTTP — the caller side of
@@ -39,6 +47,8 @@ export interface CrewFace {
   /** The door — the orch's display name. The roster behind it is never listed. */
   door: string
   agents: number
+  /** Stable identifiers only; quote/config details never enter surface data. */
+  paymentRails: readonly ServedPaymentRail[]
 }
 
 export type Settle = 'ok' | 'refused' | 'unverifiable'
@@ -85,11 +95,92 @@ export interface ServedEndpointDeps {
    * problem, and admitting free would be worse.
    */
   paymentTerms(template: ServedTemplate): unknown | null
-  crewFace(template: ServedTemplate): CrewFace
+  crewFace(template: ServedTemplate): Omit<CrewFace, 'paymentRails'>
 }
 
 const json = (status: number, body: unknown, headers?: Record<string, string>): ServedResponse =>
   headers ? { status, headers, body } : { status, body }
+
+const html = (body: string): ServedResponse => ({
+  status: 200,
+  headers: {
+    'content-type': 'text/html; charset=utf-8',
+    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+    'x-content-type-options': 'nosniff'
+  },
+  body
+})
+
+const escapeHtml = (value: string | number): string =>
+  String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+
+function publicCrewFace(deps: ServedEndpointDeps, template: ServedTemplate): CrewFace {
+  const paymentRails =
+    template.access === 'paid' ? servedPaymentRails(deps.paymentTerms(template)) : []
+  return { ...deps.crewFace(template), paymentRails }
+}
+
+/** Static public face at the address the owner hands to a caller. */
+export function renderServedCrewFace(face: CrewFace, paymentReceived: boolean): string {
+  const copy = (template: string, vars: Readonly<Record<string, string | number>> = {}): string =>
+    escapeHtml(fillCopy(template, vars))
+  const railRows = face.paymentRails
+    .map((rail) => {
+      const title =
+        rail === 'x402'
+          ? MKT_SVC['mkt.svc.pay.x402.title']
+          : MKT_SVC['mkt.svc.pay.stripe.title']
+      const body =
+        rail === 'x402'
+          ? MKT_SVC['mkt.svc.pay.x402.body']
+          : MKT_SVC['mkt.svc.pay.stripe.body']
+      return `<li><strong>${escapeHtml(title)}</strong><span>${escapeHtml(body)}</span></li>`
+    })
+    .join('')
+  const price =
+    face.access === 'paid'
+      ? copy(MKT_SVC['mkt.svc.price.usd'], { price: face.priceUsd ?? '' })
+      : copy(MKT_SVC['mkt.svc.price.free'])
+  const ways =
+    face.access !== 'paid'
+      ? ''
+      : `<section class="ways"><h2>${copy(MKT_SVC['mkt.svc.pay.title'])}</h2>${
+          railRows.length > 0
+            ? `<ul>${railRows}</ul>`
+            : `<p class="unavailable">${copy(MKT_SVC['mkt.svc.pay.none'])}</p>`
+        }</section>`
+  const received = paymentReceived
+    ? `<p class="received" role="status">${copy(MKT_SVC['mkt.svc.payment.received'])}</p>`
+    : ''
+
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${copy(MKT_SVC['mkt.svc.document.title'], { templateName: face.name })}</title>
+<style>
+:root{color-scheme:light dark;--bg:#f3f4f1;--paper:#fff;--ink:#181b1e;--muted:#60676f;--line:#d8dadd;--accent:#146c43;--mark:#f1b84b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{width:min(680px,calc(100% - 32px));margin:clamp(28px,8vh,88px) auto;padding:0 0 48px}header{border-top:5px solid var(--ink);padding:22px 0 20px;border-bottom:1px solid var(--line)}
+.eyebrow{margin:0 0 8px;color:var(--accent);font:700 12px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace}.eyebrow,.meta{text-transform:uppercase}
+h1{margin:0;font-size:clamp(30px,7vw,50px);line-height:1.08;letter-spacing:0}.meta{margin:10px 0 0;color:var(--muted);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+.received{margin:18px 0 0;padding:12px 14px;border-left:4px solid var(--accent);background:color-mix(in srgb,var(--accent) 9%,var(--paper));font-weight:700}
+.intro,.ways{padding:24px 0;border-bottom:1px solid var(--line)}.intro p{margin:0 0 12px}.intro p:last-child{margin:0}.price{font-weight:700}
+h2{margin:0 0 12px;font-size:15px}ul{list-style:none;margin:0;padding:0}li{display:grid;grid-template-columns:minmax(74px,110px) 1fr;gap:18px;padding:14px 0;border-top:1px solid var(--line)}
+li strong{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--accent)}li span{color:var(--muted)}.unavailable{margin:0;color:var(--muted)}
+@media(prefers-color-scheme:dark){:root{--bg:#111416;--paper:#191d20;--ink:#f1f2ee;--muted:#a9b0b6;--line:#353a3e;--accent:#61c996;--mark:#edbd60}}
+@media(max-width:460px){li{grid-template-columns:1fr;gap:4px}}
+</style></head><body><main><header><p class="eyebrow">${copy(MKT_SVC['mkt.svc.eyebrow'])}</p>
+<h1>${escapeHtml(face.name)}</h1><p class="meta">${copy(MKT_SVC['mkt.svc.byline.served'], {
+    n: face.agents,
+    version: `V${face.version}`
+  })}</p>${received}</header>
+<section class="intro"><p>${copy(MKT_SVC['mkt.svc.what'], { orch: face.door })}</p><p>${copy(MKT_SVC['mkt.svc.yours'])}</p><p class="price">${price}</p></section>
+${ways}</main></body></html>`
+}
 
 /*
  * devSettle USED TO LIVE HERE, and it is deliberately gone rather than merely
@@ -111,14 +202,24 @@ export async function handleServedRoute(
   template: ServedTemplate,
   method: string,
   pathname: string,
-  input: { headers: Record<string, string | undefined>; body: unknown }
+  input: {
+    headers: Record<string, string | undefined>
+    body: unknown
+    query?: Readonly<Record<string, string | undefined>>
+  }
 ): Promise<ServedResponse | null> {
   const { serviceId } = template
+
+  if (method === 'GET' && pathname === '/') {
+    return html(
+      renderServedCrewFace(publicCrewFace(deps, template), input.query?.payment === 'received')
+    )
+  }
 
   if (method === 'GET' && pathname === '/crew') {
     // The public face — the ADD BY LINK preview. Free to read: it is exactly
     // what the owner chose to publish, and nothing else.
-    return json(200, deps.crewFace(template))
+    return json(200, publicCrewFace(deps, template))
   }
 
   if (method === 'POST' && pathname === '/api/call/challenge') {

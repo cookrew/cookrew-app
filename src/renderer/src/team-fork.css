@@ -695,6 +695,7 @@
 .sos-price { display: flex; align-items: center; gap: 8px; padding: 2px 0 2px 30px; flex-wrap: wrap; }
 .sos-price-input { max-width: 90px; }
 .sos-unit { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-soft); }
+.sos-rails { font-family: var(--font-mono); font-size: 10.5px; color: var(--violet); }
 .sos-bad { font-family: var(--font-mono); font-size: 10px; color: var(--rose); }
 /* The door fact — shown only once a public option is picked. */
 .sos-door {

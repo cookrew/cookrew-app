@@ -3,6 +3,7 @@ import type { GitInfo, TeamClipStatus, TeamMeta, WorkspaceState } from '../../sh
 import { saveClash, selectionSummary } from '../../shared/team-actions'
 import { cookrew, isDemoMode } from './api'
 import { MKT_SERVE, fillCopy } from '../../shared/marketplace-copy'
+import type { ServedPaymentRail } from '../../shared/served-payment-rails'
 import {
   ShareOnSave,
   canSubmitShare,
@@ -58,6 +59,7 @@ export function SelectionBar({
   // team is NAMED — this is THE publish entry, not a parallel admin panel.
   const [access, setAccess] = useState<ShareAccess>('just-me')
   const [priceUsd, setPriceUsd] = useState('')
+  const [paymentRails, setPaymentRails] = useState<readonly ServedPaymentRail[]>([])
   /** THE PAYOFF of a serving save: the address, held on screen until DONE.
    *  A 3-second flash was the original sin here — the user saved a paid team
    *  and never saw the link they were supposed to hand out. */
@@ -97,6 +99,10 @@ export function SelectionBar({
     onClipChangeRef.current = onClipChange
     onPastedRef.current = onPasted
   })
+
+  useEffect(() => {
+    void cookrew().servingPaymentRails().then(setPaymentRails).catch(() => undefined)
+  }, [])
 
   /** Every clip update ALSO lifts to App (paste ghosts live up there). */
   const updateClip = (status: TeamClipStatus | null): void => {
@@ -517,6 +523,7 @@ export function SelectionBar({
             <ShareOnSave
               access={access}
               priceUsd={priceUsd}
+              paymentRails={paymentRails}
               door={orchName}
               onAccess={setAccess}
               onPrice={setPriceUsd}

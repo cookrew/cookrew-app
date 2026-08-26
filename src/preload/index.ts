@@ -67,6 +67,7 @@ const api = {
   servingServe: (input: { templateId: string; access: 'account' | 'paid'; priceUsd?: string }) =>
     ipcRenderer.invoke('serving:serve', input),
   servingStop: (serviceId: string) => ipcRenderer.invoke('serving:stop', serviceId),
+  servingPaymentRails: () => ipcRenderer.invoke('serving:rails'),
   servingList: () => ipcRenderer.invoke('serving:list'),
   servingSessions: () => ipcRenderer.invoke('serving:sessions'),
   servingEnd: (sessionId: string) => ipcRenderer.invoke('serving:end', sessionId),
