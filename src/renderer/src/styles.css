@@ -4775,3 +4775,20 @@ body.cookrew-mobile .cr-dock .voice-ghost {
 .acs-row { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11.5px; }
 .acs-name { font-weight: 600; }
 .acs-dim { color: var(--cr-dim, #a8a29e); font-size: 10.5px; }
+
+/* Share-on-save inside the selection bar's naming step: the bar is a row, so
+   the section lifts into a popover above it rather than stretching it. */
+.cr-selbar-share {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 12px;
+  width: min(420px, calc(100vw - 40px));
+  max-height: 60vh;
+  overflow: auto;
+  padding: 10px 12px;
+  background: var(--cr-panel, #1c1a16);
+  border: 1.5px solid var(--cr-line-hard, #4c463a);
+  border-radius: 8px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+  z-index: 40;
+}
