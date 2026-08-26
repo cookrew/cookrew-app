@@ -139,6 +139,43 @@ describe('translateBody', () => {
     expect(calls).toHaveLength(1)
   })
 
+  /**
+   * The model obeys "do not translate fenced code" by copying the block out
+   * character for character — 18.5 seconds, measured, for a byte-identical
+   * answer. A checkpoint with a few command transcripts in it spends minutes
+   * that way and hits the per-piece timeout.
+   */
+  it('never sends a fenced code block to the model', async () => {
+    const code = '```bash\nnpm run build\n# then check out/renderer\n```'
+    const { calls } = ollama(() => 'SHOULD NOT BE USED')
+    const result = await translateBody(code, 'ja')
+    expect(calls).toHaveLength(0)
+    expect(result.ok && result.text).toBe(code)
+  })
+
+  it('still translates the prose around a code block', async () => {
+    const body = 'Do this first.\n\n```\nnpm run build\n```\n\nThen check it.'
+    const { calls } = ollama(() => 'TRANSLATED')
+    const result = await translateBody(body, 'ja')
+    expect(calls).toHaveLength(2)
+    for (const c of calls) expect(c).not.toContain('npm run build')
+    expect(result.ok && result.text).toContain('npm run build')
+    expect(result.ok && result.text).toContain('TRANSLATED')
+  })
+
+  it('scales the token budget to the piece instead of a flat cap', async () => {
+    let opts: { num_predict: number; repeat_penalty: number } | null = null
+    vi.stubGlobal('fetch', async (_u: string, init: { body: string }) => {
+      opts = (JSON.parse(init.body) as { options: typeof opts }).options
+      return { ok: true, json: async () => ({ response: 'T' }) }
+    })
+    await translateBody('word '.repeat(120).trim(), 'ja')
+    // A flat 2048 is a licence to loop on repetitive input.
+    expect(opts!.num_predict).toBeLessThan(2048)
+    expect(opts!.num_predict).toBeGreaterThanOrEqual(256)
+    expect(opts!.repeat_penalty).toBeGreaterThan(1)
+  })
+
   it('carries a piece with no letters through untouched instead of asking about it', async () => {
     const { calls } = ollama(() => 'SHOULD NOT BE USED')
     const result = await translateBody('```\n---\n```', 'ja')

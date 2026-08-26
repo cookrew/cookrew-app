@@ -34,9 +34,6 @@ import { localTranslateModel, remoteSous } from './sous-remote-config'
 const PIECE_TIMEOUT_MS = 45_000
 const COLD_TIMEOUT_MS = 75_000
 
-/** Room for the output. A piece is ~1200 chars in, so this cannot truncate. */
-const NUM_PREDICT = 2048
-
 /** A hosted model answers a big piece in one go; give it room and time. */
 const REMOTE_TIMEOUT_MS = 120_000
 const REMOTE_MAX_TOKENS = 8192
@@ -83,6 +80,19 @@ export async function translateBody(
     // A piece that is only whitespace or punctuation has nothing to translate
     // and would just invite the model to narrate. Carry it through verbatim.
     if (!/\p{L}/u.test(piece)) {
+      out.push(piece)
+      continue
+    }
+    // NEVER SEND A CODE BLOCK.
+    //
+    // The system prompt tells the model not to translate fenced code, and the
+    // model obeys — it copies it out, character for character, which on a real
+    // block measured 18.5 SECONDS to return a byte-identical answer. A
+    // checkpoint with a few command transcripts in it spends minutes that way
+    // and hits the per-piece timeout, which is what a long translation dying
+    // halfway actually was. The splitter already keeps a fence whole and
+    // separate, so the right answer is not to ask.
+    if (isFencedCode(piece)) {
       out.push(piece)
       continue
     }
@@ -159,7 +169,13 @@ async function translateLocal(piece: string, label: string): Promise<PieceResult
         keep_alive: SOUS_KEEP_ALIVE,
         // Low but not zero: greedy decoding on a small model loops on
         // repetitive input, and a transcript is full of repetitive input.
-        options: { temperature: 0.1, num_predict: NUM_PREDICT }
+        // repeat_penalty for the same reason — it is the setting that actually
+        // ends a loop rather than waiting for the token cap to end it.
+        options: {
+          temperature: 0.1,
+          repeat_penalty: 1.1,
+          num_predict: predictFor(piece)
+        }
       })
     })
     if (!res.ok) {
@@ -177,6 +193,24 @@ async function translateLocal(piece: string, label: string): Promise<PieceResult
     console.error('Sous translate: request failed:', error)
     return { ok: false, failure: isTimeout(error) ? 'timeout' : 'unreachable' }
   }
+}
+
+/** A piece the splitter cut at a ``` fence: code, not prose. */
+function isFencedCode(piece: string): boolean {
+  return piece.trimStart().startsWith('```')
+}
+
+/**
+ * Room for the answer, scaled to the question.
+ *
+ * A flat 2048 is a licence to loop: given repetitive input — and a transcript
+ * is full of it — a small model will happily generate to the cap, which is 20+
+ * seconds spent on an answer that is already wrong. A translation is not many
+ * times longer than its source, and CJK is denser than English, so half the
+ * source length in tokens is generous. The floor keeps short pieces workable.
+ */
+function predictFor(piece: string): number {
+  return Math.min(2048, Math.max(256, Math.ceil(piece.length / 2)))
 }
 
 function isTimeout(error: unknown): boolean {
