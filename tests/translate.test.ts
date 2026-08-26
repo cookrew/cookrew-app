@@ -155,3 +155,44 @@ describe('failure reasons', () => {
     }
   })
 })
+
+describe('the splitter must not alter the document', () => {
+  /**
+   * THE PROPERTY THAT WOULD HAVE CAUGHT IT.
+   *
+   * Magpie's FAIL 7: the blank line after a closing fence was dropped, so the
+   * next paragraph was glued to the ``` — and the renderer's fence parser
+   * needs a closing fence alone on its line, so every paragraph after the first
+   * code block was swallowed INTO the code block. The model was never
+   * involved; the damage was done by cutting the text up.
+   *
+   * "Rejoins modulo blank runs" was the old assertion, and it is exactly the
+   * assertion that let this through. The pieces must rejoin EXACTLY.
+   */
+  const bodies = [
+    'Intro line.\n\n```bash\nnpm test\n```\n\nAfterwards it is green.\n\nAnd this last one matters.\n',
+    'No code here at all, just prose.',
+    '```\njust a fence\n```',
+    '```\nlead fence\n```\n\nthen prose.',
+    'prose\n\n```js\nconst a = 1\n```\n\nmore\n\n```sh\nls -la\n```\n\nend\n',
+    'trailing blank lines matter too\n\n\n',
+    'a\n\nb\n\nc'
+  ]
+
+  for (const [i, body] of bodies.entries()) {
+    it(`rejoins byte-for-byte: case ${i}`, () => {
+      expect(splitForTranslation(body).join('')).toBe(body)
+    })
+  }
+
+  it('keeps a closing fence alone on its line, which is what the renderer parses', () => {
+    const body = 'Intro.\n\n```bash\nnpm test\n```\n\nAfterwards.\n'
+    const joined = splitForTranslation(body).join('')
+    // The failure looked like "```Afterwards": a closing fence with the next
+    // paragraph welded on. An opening fence legitimately carries a language
+    // tag, so the check is the specific seam, not a general "``` followed by
+    // text" rule that would flag ```bash too.
+    expect(joined).toContain('npm test\n```\n\nAfterwards')
+    expect(joined).not.toContain('```Afterwards')
+  })
+})

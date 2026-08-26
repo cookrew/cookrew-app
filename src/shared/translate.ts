@@ -82,7 +82,14 @@ export function splitForTranslation(text: string, limit = TRANSLATE_CHUNK_CHARS)
       continue
     }
     for (const para of splitKeeping(segment.text, /\n{2,}/)) {
-      if (para.trim().length === 0) continue
+      // A whitespace-only run is NOT nothing. splitKeeping emits the separator
+      // as its own leading piece, so the blank line that follows a closing
+      // fence arrives here as "\n\n" — and discarding it glued the next
+      // paragraph onto the ```. The renderer's parser needs a closing fence
+      // alone on its line, so from there every remaining paragraph was
+      // swallowed into the code block. The model never touched it; the damage
+      // was done by cutting the text up. Keep it: the packer merges it into a
+      // neighbour, and main passes a letterless piece through untranslated.
       for (const unit of packUnits(para, limit)) atoms.push({ text: unit, fenced: false })
     }
   }
@@ -108,7 +115,7 @@ export function splitForTranslation(text: string, limit = TRANSLATE_CHUNK_CHARS)
     }
     buf += atom.text
   }
-  if (buf.trim().length > 0) pieces.push(buf)
+  if (buf.length > 0) pieces.push(buf)
   return pieces
 }
 
@@ -167,7 +174,7 @@ function packUnits(text: string, limit: number): string[] {
     }
     buf += u
   }
-  if (buf.trim().length > 0) out.push(buf)
+  if (buf.length > 0) out.push(buf)
   return out
 }
 

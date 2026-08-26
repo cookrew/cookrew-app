@@ -135,6 +135,14 @@ export function useCheckpointTranslation(): TranslationControls {
       void (async () => {
         const out = { prompt: [] as string[], reply: [] as string[] }
         let done = 0
+        /**
+         * Pieces the model handed back untranslated. Magpie measured roughly
+         * one long body in four dying on this, and killing eight pieces of
+         * work because the sixth echoed is a bad trade — an echo is a fact
+         * about ONE piece, not about the server. Keep the original for it,
+         * carry on, and say how many at the end.
+         */
+        let echoed = 0
         // Prompt first: it is short and it is the line at the top of the block,
         // so the reader sees the translation start where they are looking.
         const work = [
@@ -154,6 +162,22 @@ export function useCheckpointTranslation(): TranslationControls {
           } catch (error) {
             console.error('translate failed:', error)
             failure = 'unreachable'
+          }
+
+          if (failure === 'unusable-output') {
+            // The original, verbatim, so the body stays whole and the words
+            // are still the agent's own rather than a guess at them.
+            out[piece.part].push(piece.text)
+            echoed += 1
+            done += 1
+            setState({
+              showing: partial(index, out, true),
+              language,
+              working: done < total,
+              progress: { done, total },
+              error: null
+            })
+            continue
           }
 
           if (failure !== null) {
@@ -182,7 +206,12 @@ export function useCheckpointTranslation(): TranslationControls {
             language,
             working: done < total,
             progress: { done, total },
-            error: null
+            // Reported at the end rather than on every piece, so the count is
+            // final and not a number that jitters while you read it.
+            error:
+              done < total || echoed === 0
+                ? null
+                : `${echoed} of ${total} ${echoed === 1 ? 'piece' : 'pieces'} came back untranslated and ${echoed === 1 ? 'is' : 'are'} shown as written.`
           })
         }
       })()
