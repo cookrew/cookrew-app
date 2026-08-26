@@ -14,6 +14,7 @@ import {
 import { agentStatus } from './herdr-agent-status'
 import { endpointCertHosts, mobileEndpoints, type MobileEndpoint } from './mobile-endpoints'
 import { loadOrCreatePairingToken, rotatePairingToken } from './pairing-token'
+import type { VersionPinRecord } from '../shared/version-pin'
 import { readTailnet, type CertHosts, type TailnetIdentity } from './tailscale'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { powerSaveBlocker } from 'electron'
@@ -108,6 +109,8 @@ export interface MobileServerDeps {
     url: URL,
     slug: string
   ) => Promise<boolean>
+  /** Version pins (§10) for the rail's third marker class; absent = []. */
+  listPins?: (terminalId: string) => readonly VersionPinRecord[]
   recoverAgent: (id: string) => RecoverResult
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
   undoRestore: (id: string) => Promise<RestoreResult>
