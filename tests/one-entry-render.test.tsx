@@ -11,6 +11,7 @@ import {
 } from '../src/renderer/src/ShareOnSave'
 import { ServedTeamCard, type ServedTeam } from '../src/renderer/src/ServedTeamCard'
 import { AddCrewSheet } from '../src/renderer/src/AddCrewSheet'
+import type { ServedPaymentRail } from '../src/shared/served-payment-rails'
 
 /**
  * THE ONE-ENTRY SURFACES render, and say the things the ruling requires.
@@ -25,9 +26,20 @@ const noop = (): void => undefined
 const src = (file: string): string =>
   readFileSync(path.join(__dirname, '..', 'src/renderer/src', file), 'utf8')
 
-const paint = (access: ShareAccess, priceUsd = ''): string =>
+const paint = (
+  access: ShareAccess,
+  priceUsd = '',
+  paymentRails: readonly ServedPaymentRail[] = ['x402', 'stripe']
+): string =>
   renderToStaticMarkup(
-    <ShareOnSave access={access} priceUsd={priceUsd} door="Conductor" onAccess={noop} onPrice={noop} />
+    <ShareOnSave
+      access={access}
+      priceUsd={priceUsd}
+      paymentRails={paymentRails}
+      door="Conductor"
+      onAccess={noop}
+      onPrice={noop}
+    />
   )
 
 describe('ShareOnSave — the share question inside the save sheet', () => {
@@ -51,7 +63,15 @@ describe('ShareOnSave — the share question inside the save sheet', () => {
 
   it('asks for a price only on the paid door, per SESSION', () => {
     expect(paint('account')).not.toContain('per session')
-    expect(paint('paid', '2.50')).toContain('USDC · per session')
+    expect(paint('paid', '2.50')).toContain('USD · per session')
+  })
+
+  it('names only the payment rails the door will actually offer', () => {
+    expect(paint('paid', '2.50', ['x402', 'stripe'])).toContain('Offers USDC · card')
+    const x402Only = paint('paid', '2.50', ['x402'])
+    expect(x402Only).toContain('Offers USDC')
+    expect(x402Only).not.toContain('card')
+    expect(paint('paid', '2.50', [])).toContain('No payment rail is configured yet.')
   })
 
   it('says why a bad price is bad rather than silently refusing', () => {
@@ -112,6 +132,7 @@ describe('ServedTeamCard — who is on, on the thing you published', () => {
     slug: 'research-crew',
     access: 'paid',
     priceUsd: '2.50',
+    paymentRails: ['x402', 'stripe'],
     address: 'http://192.168.1.20:8639/research-crew'
   }
 
@@ -129,7 +150,7 @@ describe('ServedTeamCard — who is on, on the thing you published', () => {
       <ServedTeamCard team={team} door="Conductor" onStopped={noop} onClose={noop} />
     )
     expect(html).toContain('Callers land on Conductor')
-    expect(html).toContain('2.50 USDC · per session')
+    expect(html).toContain('2.50 USD · per session · USDC · card')
   })
 
   it('offers STOP SERVING and reassures the owner they can carry on', () => {

@@ -349,6 +349,7 @@ export function createRemoteApi(): CookrewApi {
     // nothing while telling the user it had. It refuses, visibly.
     servingServe: async () => ({ ok: false as const, reason: 'desktop-only' }),
     servingStop: async () => ({ ok: false }),
+    servingPaymentRails: async () => [],
     servingList: async () => [],
     servingSessions: async () => [],
     servingEnd: async () => ({ stopped: 0 }),

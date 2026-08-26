@@ -20,6 +20,7 @@ import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
 import type { BoardRow, BoardSummary } from "../../shared/board";
 import type { InstalledPreset } from "../../shared/preset-chip";
 import type { VersionPinRecord } from "../../shared/version-pin";
+import type { ServedPaymentRail } from "../../shared/served-payment-rails";
 
 /**
  * GET /api/board's payload, mirrored here rather than imported from main —
@@ -83,6 +84,7 @@ export interface CookrewApi {
     | { ok: false; reason: string }
   >;
   servingStop: (serviceId: string) => Promise<{ ok: boolean }>;
+  servingPaymentRails: () => Promise<readonly ServedPaymentRail[]>;
   servingList: () => Promise<
     readonly {
       serviceId: string;
@@ -91,6 +93,7 @@ export interface CookrewApi {
       access: 'account' | 'paid';
       priceUsd?: string;
       address: string;
+      paymentRails: readonly ServedPaymentRail[];
     }[]
   >;
   servingSessions: () => Promise<

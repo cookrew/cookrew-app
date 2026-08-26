@@ -167,7 +167,8 @@ import {
   type X402Config
 } from './x402-rail'
 import { RemoteCrewStore, parseCrewLink } from './remote-crews'
-import { ServeRefused, type ServeAccess } from './session-served'
+import { ServeRefused, type ServeAccess, type ServedTemplate } from './session-served'
+import { servedPaymentRails } from '../shared/served-payment-rails'
 import { PresetStore, isPresetId } from './preset-store'
 import { PinStore } from './pin-store'
 import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
@@ -519,6 +520,32 @@ function servedX402Config(): X402Config {
 }
 
 /**
+ * One quote composer for the gate and every surface that names its live rails.
+ * Stripe extends this function's `accepts` list; no surface reads config itself.
+ */
+function servedPaymentTerms(
+  template: Pick<ServedTemplate, 'priceUsd' | 'slug'>
+): unknown | null {
+  const x402 = paymentRequirements(
+    servedX402Config(),
+    template.priceUsd ?? '',
+    `/${template.slug}/ask`,
+    `One session with the ${template.slug} crew`
+  )
+  const stripe = stripePaymentTerms(
+    servedStripeConfig,
+    template.priceUsd ?? '',
+    `/${template.slug}/api/call/pay`
+  )
+  return combinePaymentTerms(x402, stripe)
+}
+
+/** Stable identifiers only. No quote details or config cross owner IPC. */
+function configuredServedPaymentRails(): ReturnType<typeof servedPaymentRails> {
+  return servedPaymentRails(servedPaymentTerms({ priceUsd: '1', slug: 'payment-preview' }))
+}
+
+/**
  * THE SERVED-CREW ADAPTER — HTTP ⇄ the gate (share-on-save, caller side).
  *
  * Mounted at the mobile server's unknown-slug fall-through, so a live workspace
@@ -624,20 +651,7 @@ async function handleServedSlug(
       // must be charged exactly what we asked for. Both read the same config
       // and the same template, so they cannot drift apart into a door that
       // quotes a dollar and accepts a cent.
-      paymentTerms: (t) => {
-        const x402 = paymentRequirements(
-          servedX402Config(),
-          t.priceUsd ?? '',
-          `/${t.slug}/ask`,
-          `One session with the ${t.slug} crew`
-        )
-        const stripe = stripePaymentTerms(
-          servedStripeConfig,
-          t.priceUsd ?? '',
-          `/${t.slug}/api/call/pay`
-        )
-        return combinePaymentTerms(x402, stripe)
-      },
+      paymentTerms: servedPaymentTerms,
       settle: (payment, amountUsd) =>
         railSettle(
           {
@@ -702,7 +716,11 @@ async function handleServedSlug(
     template,
     method,
     pathname,
-    { headers, body }
+    {
+      headers,
+      body,
+      query: { payment: url.searchParams.get('payment') ?? undefined }
+    }
   )
   if (answer === null) return false
   // The 401's www-authenticate carries the ceremony's challenge, so it is set
@@ -710,7 +728,12 @@ async function handleServedSlug(
   for (const [key, value] of Object.entries(answer.headers ?? {})) {
     response.setHeader(key, value)
   }
-  respondJson(response, answer.status, answer.body)
+  if (answer.headers?.['content-type']?.startsWith('text/html')) {
+    response.writeHead(answer.status)
+    response.end(typeof answer.body === 'string' ? answer.body : '')
+  } else {
+    respondJson(response, answer.status, answer.body)
+  }
   return true
 }
 const boardProbe = createProbeSampler(
@@ -3316,8 +3339,13 @@ function registerIpc(handlers: RestoreHandlers): void {
     serving.stop(serviceId)
     return { ok: true as const }
   })
+  ipcMain.handle('serving:rails', () => configuredServedPaymentRails())
   ipcMain.handle('serving:list', () =>
-    serving.served.list().map((t) => ({ ...t, address: servedAddress(t.slug) }))
+    serving.served.list().map((t) => ({
+      ...t,
+      address: servedAddress(t.slug),
+      paymentRails: t.access === 'paid' ? servedPaymentRails(servedPaymentTerms(t)) : []
+    }))
   )
   /** The owner's Sessions table: who is on, on which version. */
   ipcMain.handle('serving:sessions', () =>

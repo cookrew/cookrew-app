@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { AgentRole, TeamForkSpec, TeamMeta, WorkspaceState } from '../../shared/model'
+import type { ServedPaymentRail } from '../../shared/served-payment-rails'
 import { ServedTeamCard, type ServedTeam } from './ServedTeamCard'
 import {
   ShareOnSave,
@@ -78,12 +79,17 @@ export function TeamForkPicker({
   // the section cannot open a door.
   const [access, setAccess] = useState<ShareAccess>('just-me')
   const [priceUsd, setPriceUsd] = useState('')
+  const [paymentRails, setPaymentRails] = useState<readonly ServedPaymentRail[]>([])
   const [servedAt, setServedAt] = useState<string | null>(null)
   /** Which saved teams are taking calls — the shelf's standing state. */
   const [servedTeams, setServedTeams] = useState<readonly ServedTeam[]>([])
   const [sessionCounts, setSessionCounts] = useState<Record<string, number>>({})
   const [openCard, setOpenCard] = useState<ServedTeam | null>(null)
   const refreshServed = useCallback(() => {
+    void cookrew()
+      .servingPaymentRails()
+      .then(setPaymentRails)
+      .catch(() => undefined)
     void cookrew()
       .servingList()
       .then(setServedTeams)
@@ -508,6 +514,7 @@ export function TeamForkPicker({
             <ShareOnSave
               access={access}
               priceUsd={priceUsd}
+              paymentRails={paymentRails}
               door={orchName}
               onAccess={setAccess}
               onPrice={setPriceUsd}
