@@ -273,21 +273,26 @@ export const TranscriptView = forwardRef<
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terminalId, total])
 
-  // offsetParent-safe identity tops: relative to the scroll container via rects,
-  // over EVERY identity div (loaded blocks + placeholders).
-  const identityTops = useCallback((): { index: number; top: number }[] => {
-    const el = scrollRef.current
-    if (!el) return []
-    const base = el.getBoundingClientRect().top - el.scrollTop
-    return [...blockRefs.current.entries()]
-      .map(([index, node]) => ({ index, top: node.getBoundingClientRect().top - base }))
+  // Identity tops, measured ONCE per content commit — never in the scroll
+  // path. The old version called getBoundingClientRect on EVERY identity div
+  // on EVERY scroll frame: at 355 checkpoints that is 355 forced layouts per
+  // frame, which is what wedged iOS 26's layout engine into the 1.5 GB
+  // jetsam kill the moment a big-session overlay opened (phone black box,
+  // 2026-08-27). offsetTop is layout-cached between commits and resolves
+  // against the scroller, which is the offsetParent chain root here.
+  const topsRef = useRef<{ index: number; top: number }[]>([])
+  useLayoutEffect(() => {
+    topsRef.current = [...blockRefs.current.entries()]
+      .map(([index, node]) => ({ index, top: node.offsetTop }))
       .sort((a, b) => a.top - b.top)
-  }, [])
+  }, [blocks, estHeight, spaceIds.length])
+  const identityTops = useCallback((): { index: number; top: number }[] => topsRef.current, [])
 
   // One scroll pass per frame (coalesced): find the identity at the viewport top,
   // lazily fill it if it's a placeholder, and report the marker fraction linearly
   // in identity space. isAtBottom is now true ONLY at the real live seam.
   const scrollRaf = useRef(0)
+  const lastActiveRef = useRef<ActiveBlock | null>(null)
   useEffect(
     () => () => {
       if (scrollRaf.current) cancelAnimationFrame(scrollRaf.current)
@@ -307,10 +312,14 @@ export const TranscriptView = forwardRef<
       anchorIndexRef.current = topId ?? Number.MAX_SAFE_INTEGER
       activeInViewRef.current = topId
       if (topId !== null && !loadedSetRef.current.has(topId)) maybeFill(topId)
-      onActiveBlockChange?.({
-        index: topId,
-        frac: topId === null ? 1 : fractionOfIdentity(spaceIdsRef.current, topId)
-      })
+      const frac = topId === null ? 1 : fractionOfIdentity(spaceIdsRef.current, topId)
+      // Only a CHANGED active block reaches the rail. Every scroll frame used
+      // to re-render the whole 355-row timeline through this callback.
+      const prior = lastActiveRef.current
+      if (prior === null || prior.index !== topId || Math.abs(prior.frac - frac) > 0.005) {
+        lastActiveRef.current = { index: topId, frac }
+        onActiveBlockChange?.({ index: topId, frac })
+      }
     })
   }, [identityTops, maybeFill, onActiveBlockChange])
 
