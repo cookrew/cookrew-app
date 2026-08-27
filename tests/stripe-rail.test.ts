@@ -109,6 +109,9 @@ describe('Checkout creation', () => {
       'billing_address_collection': 'required',
       'tax_id_collection[enabled]': 'true',
       customer_creation: 'always',
+      // Card statements: COOKREW* AI SESSION — 19 chars against the 22 limit,
+      // so the reader can tell an agent session from a website invoice.
+      'payment_intent_data[statement_descriptor_suffix]': 'AI SESSION',
       mode: 'payment',
       'line_items[0][price_data][currency]': 'usd',
       'line_items[0][price_data][unit_amount]': '250',

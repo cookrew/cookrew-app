@@ -16,6 +16,18 @@ const STRIPE_VERSION = '2025-08-27.basil'
  * delivery/customer distinction this code carries (Stripe Tax for AI).
  */
 const AI_SERVICE_TAX_CODE = 'txcd_10105002'
+/**
+ * What a caller sees on their card statement, after the account's shortened
+ * prefix and `* `. A $2.50 agent session and a five-figure website invoice
+ * land on the same statement months apart; a single brand string leaves the
+ * reader unable to tell which is which, and not recognising a line is the
+ * first cause of chargebacks. Card payments only — non-card charges use the
+ * account's static descriptor.
+ *
+ * Budget: prefix + '* ' + suffix must be <= 22. With the recommended
+ * 7-character prefix (COOKREW) that leaves 13; this is 10.
+ */
+const STATEMENT_SUFFIX = 'AI SESSION'
 const CHECKOUT_TTL_SECONDS = 30 * 60
 const HTTP_TIMEOUT_MS = 10_000
 
@@ -176,6 +188,7 @@ export async function stripeCreateCheckout(
   // A Customer makes the sale attributable — it is what tax reports, receipts
   // and any later invoice for the same buyer hang off.
   form.set('customer_creation', 'always')
+  form.set('payment_intent_data[statement_descriptor_suffix]', STATEMENT_SUFFIX)
 
   let response: StripeHttpResponse
   try {
