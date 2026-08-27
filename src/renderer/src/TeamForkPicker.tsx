@@ -1,19 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { AgentRole, TeamForkSpec, TeamMeta, WorkspaceState } from '../../shared/model'
-import {
-  EMPTY_SERVED_PAYMENT_STATUS,
-  readyPaymentRails,
-  type ServedPaymentStatus
-} from '../../shared/served-payment-config'
-import { ServedTeamCard, type ServedTeam } from './ServedTeamCard'
-import { PaymentSettingsSheet } from './PaymentSettingsSheet'
-import {
-  ShareOnSave,
-  canSubmitShare,
-  serveRefusalText,
-  saveButtonLabel,
-  type ShareAccess
-} from './ShareOnSave'
+import type { ServedTeam } from './ServedTeamCard'
 import { cookrew, isRemoteMode } from './api'
 import { CrIcon, type CrIconName } from './icons'
 import { RoleAvatar } from './nodes/RoleAvatar'
@@ -40,9 +27,7 @@ function dateLabel(epochMs: number): string {
 /**
  * Team fork picker: choose which canvas elements travel into a forked
  * workspace and, per terminal, which turn context they carry (latest /
- * first / assembled selection / fresh from role). Also hosts team save —
- * snapshotting the live canvas so later forks can start from the saved
- * version instead of live state. Fork executes the team:fork contract
+ * first / assembled selection / fresh from role). Fork executes the team:fork contract
  * (see the team-fork-roles-spec note); if the API is unavailable the spec
  * preview still shows what would be sent and errors surface inline.
  */
@@ -61,14 +46,6 @@ export function TeamForkPicker({
   onClose: () => void
 }): React.JSX.Element {
   const nodes = workspace.nodes
-  /**
-   * The one door a caller reaches: the orch, or NULL. No first-terminal
-   * fallback — the same ruling SelectionBar follows (2026-08-26). This surface
-   * publishes too, so leaving the fallback here would just move the orch-less
-   * serve to the other button.
-   */
-  const orchName =
-    nodes.find((n) => n.kind === 'terminal' && (n as { orch?: boolean }).orch)?.name ?? null
   const [included, setIncluded] = useState<ReadonlySet<string>>(() =>
     seed && seed.size > 0
       ? new Set(nodes.filter((n) => seed.has(n.id)).map((n) => n.id))
@@ -80,25 +57,10 @@ export function TeamForkPicker({
   const [roles, setRoles] = useState<AgentRole[]>([])
   const [apiMissing, setApiMissing] = useState(false)
   const [source, setSource] = useState<'live' | string>('live')
-  // Share-on-save: the default publishes nothing, so saving without reading
-  // the section cannot open a door.
-  const [access, setAccess] = useState<ShareAccess>('just-me')
-  const [priceUsd, setPriceUsd] = useState('')
-  const [paymentStatus, setPaymentStatus] = useState<ServedPaymentStatus>(
-    EMPTY_SERVED_PAYMENT_STATUS
-  )
-  const [paymentSettingsOpen, setPaymentSettingsOpen] = useState(false)
-  const paymentRails = readyPaymentRails(paymentStatus)
-  const [servedAt, setServedAt] = useState<string | null>(null)
   /** Which saved teams are taking calls — the shelf's standing state. */
   const [servedTeams, setServedTeams] = useState<readonly ServedTeam[]>([])
   const [sessionCounts, setSessionCounts] = useState<Record<string, number>>({})
-  const [openCard, setOpenCard] = useState<ServedTeam | null>(null)
   const refreshServed = useCallback(() => {
-    void cookrew()
-      .servingPaymentStatus()
-      .then(setPaymentStatus)
-      .catch(() => undefined)
     void cookrew()
       .servingList()
       .then(setServedTeams)
@@ -114,9 +76,7 @@ export function TeamForkPicker({
   }, [])
   useEffect(refreshServed, [refreshServed])
   const [forkName, setForkName] = useState('')
-  const [saveName, setSaveName] = useState('')
-  const [savedFlash, setSavedFlash] = useState<string | null>(null)
-  const [busy, setBusy] = useState<'fork' | 'save' | null>(null)
+  const [busy, setBusy] = useState<'fork' | null>(null)
   const [error, setError] = useState<string | null>(null)
   // GOAL 3/5: dirs the forked workspace gets, per-terminal cwd, worktree mode.
   const [forkDirs, setForkDirs] = useState<string[]>(() => stateDirs(workspace))
@@ -248,43 +208,6 @@ export function TeamForkPicker({
       })
   }
 
-  const runSave = (): void => {
-    if (busy) return
-    // Enter in the name field reaches here without touching the button, so the
-    // button's refusal has to be repeated on the path that skips it.
-    if (!canSubmitShare(access, priceUsd, orchName, paymentRails)) return
-    setBusy('save')
-    setError(null)
-    void cookrew()
-      .teamSave(saveName.trim() || undefined)
-      .then(async (meta) => {
-        // Saving names the thing; the same breath decides who may call it.
-        if (access !== 'just-me') {
-          const served = await cookrew().servingServe({
-            templateId: meta.name,
-            access,
-            ...(access === 'paid' ? { priceUsd: priceUsd.trim() } : {})
-          })
-          if (served?.ok) {
-            setServedAt(served.address)
-            refreshServed()
-          }
-          else setError(`Couldn't start serving — ${serveRefusalText(served?.reason)}`)
-        }
-        setBusy(null)
-        setSavedFlash(meta.name)
-        setSaveName('')
-        void cookrew()
-          .teamList()
-          .then(setTeams)
-          .catch(() => undefined)
-      })
-      .catch((err: unknown) => {
-        setBusy(null)
-        setError(err instanceof Error ? err.message : String(err))
-      })
-  }
-
   const sourceTeam = teams.find((t) => t.name === source)
 
   return (
@@ -328,13 +251,9 @@ export function TeamForkPicker({
                     {team.name}
                   </button>
                   {serving && (
-                    <button
-                      className="cr-chip clickable tf-serving"
-                      title="Taking calls — open its card"
-                      onClick={() => setOpenCard(serving)}
-                    >
+                    <span className="cr-chip cr-serving-badge" title="Taking calls">
                       TAKING CALLS · {sessionCounts[serving.serviceId] ?? 0}
-                    </button>
+                    </span>
                   )}
                 </span>
               )
@@ -499,77 +418,6 @@ export function TeamForkPicker({
             </span>
           </div>
         </div>
-
-        {source === 'live' && (
-          <>
-            <div className="tf-save">
-              <span className="tf-label">SAVE TEAM</span>
-              <input
-                className="tf-input"
-                placeholder={workspace.name}
-                value={saveName}
-                onChange={(e) => setSaveName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && runSave()}
-              />
-              <button
-                className="cr-btn sm"
-                disabled={
-                  busy !== null || !canSubmitShare(access, priceUsd, orchName, paymentRails)
-                }
-                onClick={runSave}
-              >
-                {saveButtonLabel(access, busy === 'save')}
-              </button>
-              {savedFlash && <span className="tf-saved-flash">saved “{savedFlash}” ✓</span>}
-            </div>
-            <ShareOnSave
-              access={access}
-              priceUsd={priceUsd}
-              paymentRails={paymentRails}
-              door={orchName}
-              onAccess={setAccess}
-              onPrice={setPriceUsd}
-              onConfigurePayments={() => setPaymentSettingsOpen(true)}
-            />
-            {servedAt && (
-              <div className="sos-live">
-                <span className="sos-live-t">Taking calls</span>
-                <code className="sos-addr">{servedAt}</code>
-                <button
-                  className="cr-btn sm"
-                  onClick={() => void navigator.clipboard?.writeText(servedAt)}
-                >
-                  COPY LINK
-                </button>
-              </div>
-            )}
-          </>
-        )}
-
-        {openCard && (
-          <ServedTeamCard
-            team={openCard}
-            door={orchName}
-            paymentStatus={paymentStatus}
-            onConfigurePayments={() => setPaymentSettingsOpen(true)}
-            onStopped={() => {
-              setOpenCard(null)
-              refreshServed()
-            }}
-            onClose={() => setOpenCard(null)}
-          />
-        )}
-
-        {paymentSettingsOpen && (
-          <PaymentSettingsSheet
-            status={paymentStatus}
-            onStatus={(next) => {
-              setPaymentStatus(next)
-              refreshServed()
-            }}
-            onClose={() => setPaymentSettingsOpen(false)}
-          />
-        )}
 
         {error && <div className="tf-error">{error}</div>}
         {incompleteAssembly && (

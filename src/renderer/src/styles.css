@@ -4941,6 +4941,19 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   display: flex;
   justify-content: flex-end;
 }
+.cr-selbar-serving {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cr-chip.cr-serving-badge {
+  background: var(--hp);
+  color: #fff;
+  border-color: var(--line);
+  font-size: 7.5px;
+  letter-spacing: .05em;
+}
 
 /* The orch is marked by its header chip alone — the golden frame was tried
    and reverted (owner call, 2026-08-26): a permanent gold border read as a

@@ -333,6 +333,33 @@ describe('a serving save SHOWS the address it minted', () => {
   })
 })
 
+describe('save and fork are separate product acts', () => {
+  it('keeps FORK TEAM pure while retaining passive serving state', () => {
+    const fork = src('TeamForkPicker.tsx')
+    expect(fork).toContain('teamFork(spec)')
+    expect(fork).toContain('TAKING CALLS ·')
+    expect(fork).toContain('<span className="cr-chip cr-serving-badge"')
+    expect(fork).not.toContain('<ShareOnSave')
+    expect(fork).not.toContain('<ServedTeamCard')
+    expect(fork).not.toContain('<PaymentSettingsSheet')
+    expect(fork).not.toContain('.teamSave(')
+    expect(fork).not.toContain('.servingServe(')
+    expect(fork).not.toContain('SAVE TEAM')
+    expect(fork).not.toContain('COPY LINK')
+  })
+
+  it('keeps every publication and serve-management capability on SAVE', () => {
+    const save = src('SelectionBar.tsx')
+    expect(save).toContain('.teamSave(')
+    expect(save).toContain('.servingServe(')
+    expect(save).toContain('<ShareOnSave')
+    expect(save).toContain('<PaymentSettingsSheet')
+    expect(save).toContain('<ServedTeamCard')
+    expect(save).toContain('COPY LINK')
+    expect(save).toContain('setOpenServedTeam(team)')
+  })
+})
+
 describe('the retirements are real, not merely unmounted', () => {
   it('no per-agent export toggle survives on a roster row', () => {
     const row = src('AgentRow.tsx')

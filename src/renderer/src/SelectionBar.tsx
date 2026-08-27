@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { GitInfo, TeamClipStatus, TeamMeta, WorkspaceState } from '../../shared/model'
 import { saveClash, selectionSummary } from '../../shared/team-actions'
 import { cookrew, isDemoMode } from './api'
@@ -17,6 +17,7 @@ import {
 } from './ShareOnSave'
 import { TeamGraphThumb } from './TeamGraphThumb'
 import { PaymentSettingsSheet } from './PaymentSettingsSheet'
+import { ServedTeamCard, type ServedTeam } from './ServedTeamCard'
 
 /** gitInfo is bridge-only today; feature-detect like GitChip does. */
 type GitApi = { gitInfo?: (dir: string) => Promise<GitInfo | null> }
@@ -69,6 +70,9 @@ export function SelectionBar({
   )
   const [paymentSettingsOpen, setPaymentSettingsOpen] = useState(false)
   const paymentRails = readyPaymentRails(paymentStatus)
+  const [servedTeams, setServedTeams] = useState<readonly ServedTeam[]>([])
+  const [sessionCounts, setSessionCounts] = useState<Record<string, number>>({})
+  const [openServedTeam, setOpenServedTeam] = useState<ServedTeam | null>(null)
   /** THE PAYOFF of a serving save: the address, held on screen until DONE.
    *  A 3-second flash was the original sin here — the user saved a paid team
    *  and never saw the link they were supposed to hand out. */
@@ -109,9 +113,21 @@ export function SelectionBar({
     onPastedRef.current = onPasted
   })
 
-  useEffect(() => {
+  const refreshServing = useCallback((): void => {
     void cookrew().servingPaymentStatus().then(setPaymentStatus).catch(() => undefined)
+    void cookrew().servingList().then(setServedTeams).catch(() => undefined)
+    void cookrew()
+      .servingSessions()
+      .then((sessions) => {
+        const counts: Record<string, number> = {}
+        for (const session of sessions) {
+          counts[session.serviceId] = (counts[session.serviceId] ?? 0) + 1
+        }
+        setSessionCounts(counts)
+      })
+      .catch(() => undefined)
   }, [])
+  useEffect(refreshServing, [refreshServing])
 
   /** Every clip update ALSO lifts to App (paste ghosts live up there). */
   const updateClip = (status: TeamClipStatus | null): void => {
@@ -364,6 +380,7 @@ export function SelectionBar({
             setServedAt(served.address)
             setServedName(meta.name)
             setCopied(false)
+            refreshServing()
           } else {
             // In words. The sheet already refuses every reason it can see, so a
             // refusal that still arrives is one it could not — a template that
@@ -456,6 +473,22 @@ export function SelectionBar({
               DONE
             </button>
           </div>
+        </div>
+      )}
+      {/* Ongoing serve management lives with SAVE, never inside FORK TEAM. */}
+      {servedTeams.length > 0 && !naming && (
+        <div className="cr-selbar-serving" aria-label="Teams taking calls">
+          <span className="sos-live-t">TAKING CALLS</span>
+          {servedTeams.map((team) => (
+            <button
+              key={team.serviceId}
+              className="cr-chip clickable cr-serving-badge"
+              title={`Manage ${team.templateId}`}
+              onClick={() => setOpenServedTeam(team)}
+            >
+              {team.templateId} · {sessionCounts[team.serviceId] ?? 0}
+            </button>
+          ))}
         </div>
       )}
       {/* What the clipboard holds, as ONE picture — the element chips laid
@@ -625,8 +658,24 @@ export function SelectionBar({
       {paymentSettingsOpen && (
         <PaymentSettingsSheet
           status={paymentStatus}
-          onStatus={setPaymentStatus}
+          onStatus={(next) => {
+            setPaymentStatus(next)
+            refreshServing()
+          }}
           onClose={() => setPaymentSettingsOpen(false)}
+        />
+      )}
+      {openServedTeam && (
+        <ServedTeamCard
+          team={openServedTeam}
+          door={orchName}
+          paymentStatus={paymentStatus}
+          onConfigurePayments={() => setPaymentSettingsOpen(true)}
+          onStopped={() => {
+            setOpenServedTeam(null)
+            refreshServing()
+          }}
+          onClose={() => setOpenServedTeam(null)}
         />
       )}
     </div>

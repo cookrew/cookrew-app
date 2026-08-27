@@ -56,8 +56,7 @@
   flex: 0 0 auto;
 }
 
-.tf-source,
-.tf-save {
+.tf-source {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -231,12 +230,6 @@
 
 .tf-input:focus {
   border-color: var(--amber-deep);
-}
-
-.tf-saved-flash {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--hp);
 }
 
 .tf-error {
@@ -730,10 +723,6 @@
 
 /* The shelf's standing state: a team quietly serving must be visible at rest. */
 .tf-team-chip { display: inline-flex; align-items: center; gap: 4px; }
-.cr-chip.tf-serving {
-  background: var(--hp); color: #fff; border-color: var(--line);
-  font-size: 7.5px; letter-spacing: .05em;
-}
 /* The served team's card: address, sessions, and the consequence-first END. */
 .stc-addr { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; }
 .stc-addr-url {
