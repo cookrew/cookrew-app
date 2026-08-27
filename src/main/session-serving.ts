@@ -21,6 +21,7 @@ import {
 } from './session-instantiator-adapters'
 import {
   ServedTemplates,
+  ServeRefused,
   resolveCallScope,
   serveRefusal,
   type ServedTemplate,
@@ -28,6 +29,7 @@ import {
   type TemplateDoor
 } from './session-served'
 import type { ServedPersistence } from './served-persist'
+import type { ServedGrantPreflight } from './served-grant-preflight'
 
 /**
  * THE COMPOSITION ROOT for R30 serving. index.ts calls `wireServing` ONCE with
@@ -69,6 +71,8 @@ export interface ServingDeps {
    * Optional: a wiring that lends nothing mints exactly as it did before.
    */
   provision?: SessionProvisioner
+  /** One native, tool-free completion before a new door is registered. */
+  grantPreflight: ServedGrantPreflight
   /** The owner's own live workspace for a slug, or null — `store.bySlug(slug)?.id`. */
   liveWorkspaceId(slug: string): string | null
   /**
@@ -99,11 +103,12 @@ export interface Serving {
    */
   resolveInboundCall(slug: string, accountId: string): Promise<InboundCall>
   /** Serve a template under a slug (owner IPC only). Clones defensively. */
-  serve(input: ServedTemplate): void
+  serve(input: ServedTemplate): Promise<void>
   /**
-   * Would this serve be refused, and why? The owner surface asks BEFORE it
-   * acts, so the save sheet can say "pick an orch first" while the button is
-   * still unpressed instead of saving and then reporting a failure.
+   * Would this serve be structurally refused, and why? The owner surface asks
+   * BEFORE it acts, so the save sheet can say "pick an orch first" while the
+   * button is still unpressed. The external grant check belongs to async
+   * `serve()` and returns through the same ServeRefused reason channel.
    */
   refusalFor(input: ServedTemplate): ServeRefusal | null
   /** Stop serving (owner IPC only). */
@@ -169,7 +174,17 @@ export function wireServing(deps: ServingDeps): Serving {
     served,
     instantiator,
     resolveInboundCall,
-    serve: (input) => {
+    serve: async (input) => {
+      // Existing structural reasons remain authoritative and avoid a request.
+      const structural = serveRefusal(input, deps.door)
+      if (structural !== null) throw new ServeRefused(structural)
+      if (!(await deps.grantPreflight.check(input))) {
+        // A failed re-serve must not leave the old door taking callers with the
+        // now-known-bad combination. No session or budget has been spent here.
+        served.stop(input.serviceId)
+        saveServed()
+        throw new ServeRefused('grant-unusable')
+      }
       served.serve(input)
       saveServed()
     },

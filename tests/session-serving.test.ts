@@ -23,6 +23,7 @@ const deps = (over: Partial<ServingDeps> = {}): ServingDeps => ({
   entry: { entryTerminalOf: (wid) => `orch-${wid}` },
   callsInFlight: { cancelWhere: () => 0 },
   remover: { remove: () => undefined },
+  grantPreflight: { check: async () => true },
   liveWorkspaceId: () => null,
   ...over
 })
@@ -42,7 +43,7 @@ describe('wireServing — resolveInboundCall', () => {
 
   it('mints a session for a served slug and routes to its conductor', async () => {
     const s = wireServing(deps())
-    s.serve(CREW)
+    await s.serve(CREW)
     const call = await s.resolveInboundCall('research', 'ana')
     expect(call.kind).toBe('served')
     if (call.kind !== 'served') return
@@ -53,7 +54,7 @@ describe('wireServing — resolveInboundCall', () => {
 
   it('reuses the same caller session on a second call', async () => {
     const s = wireServing(deps())
-    s.serve(CREW)
+    await s.serve(CREW)
     const first = await s.resolveInboundCall('research', 'ana')
     const second = await s.resolveInboundCall('research', 'ana')
     if (first.kind !== 'served' || second.kind !== 'served') throw new Error('expected served')
@@ -63,7 +64,7 @@ describe('wireServing — resolveInboundCall', () => {
 
   it('gives two callers their own sessions', async () => {
     const s = wireServing(deps())
-    s.serve(CREW)
+    await s.serve(CREW)
     const ana = await s.resolveInboundCall('research', 'ana')
     const bob = await s.resolveInboundCall('research', 'bob')
     if (ana.kind !== 'served' || bob.kind !== 'served') throw new Error('expected served')
@@ -78,14 +79,14 @@ describe('wireServing — resolveInboundCall', () => {
 
   it('gives a live workspace precedence over a served slug', async () => {
     const s = wireServing(deps({ liveWorkspaceId: (slug) => (slug === 'research' ? 'ws-owner' : null) }))
-    s.serve(CREW)
+    await s.serve(CREW)
     const call = await s.resolveInboundCall('research', 'ana')
     expect(call).toEqual({ kind: 'workspace', workspaceId: 'ws-owner' })
   })
 
   it('stop() makes a served slug unresolvable again', async () => {
     const s = wireServing(deps())
-    s.serve(CREW)
+    await s.serve(CREW)
     s.stop('svc-research')
     expect(await s.resolveInboundCall('research', 'ana')).toEqual({ kind: 'none' })
   })
@@ -97,7 +98,7 @@ describe('serving survives a restart — the persistence seam', () => {
   it('a new wiring over the same file still serves what the old one served', async () => {
     const persist = servedTemplateFile(base)
     const before = wireServing(deps({ persist }))
-    before.serve({ ...CREW, access: 'paid', priceUsd: '2.50' })
+    await before.serve({ ...CREW, access: 'paid', priceUsd: '2.50' })
 
     const after = wireServing(deps({ persist }))
     expect(after.served.bySlug('research')).toMatchObject({
@@ -108,10 +109,10 @@ describe('serving survives a restart — the persistence seam', () => {
     expect((await after.resolveInboundCall('research', 'ana')).kind).toBe('served')
   })
 
-  it('stop() is durable too — a reboot must not resurrect a closed door', () => {
+  it('stop() is durable too — a reboot must not resurrect a closed door', async () => {
     const persist = servedTemplateFile(base)
     const before = wireServing(deps({ persist }))
-    before.serve(CREW)
+    await before.serve(CREW)
     before.stop('svc-research')
     expect(wireServing(deps({ persist })).served.list()).toHaveLength(0)
   })
@@ -145,10 +146,10 @@ describe('serving survives a restart — the persistence seam', () => {
 })
 
 describe('the orch is required to serve at all', () => {
-  it('refuses serve() for a crew with no orch and does not persist it', () => {
+  it('refuses serve() for a crew with no orch and does not persist it', async () => {
     const persist = servedTemplateFile(base)
     const s = wireServing(deps({ persist, door: { orchOf: () => null } }))
-    expect(() => s.serve(CREW)).toThrow(/needs an orch/)
+    await expect(s.serve(CREW)).rejects.toThrow(/needs an orch/)
     expect(s.served.list()).toHaveLength(0)
     // Nothing reached disk either — a refused serve that still wrote the file
     // would serve on the NEXT boot if the rule ever relaxed again.
@@ -166,7 +167,96 @@ describe('the orch is required to serve at all', () => {
     // The end-to-end consequence: refusing at serve means the slug never
     // resolves, so no sandbox is created and no prompt reaches a shell.
     const s = wireServing(deps({ door: { orchOf: () => null } }))
-    expect(() => s.serve(CREW)).toThrow()
+    await expect(s.serve(CREW)).rejects.toThrow()
     expect(await s.resolveInboundCall('research', 'ana')).toEqual({ kind: 'none' })
+  })
+})
+
+describe('grant preflight runs before the door exists', () => {
+  it('serves a usable harness/grant combination without minting or spending', async () => {
+    let checks = 0
+    let provisions = 0
+    let forks = 0
+    const s = wireServing(
+      deps({
+        grantPreflight: {
+          check: async (template) => {
+            checks++
+            expect(template).toEqual(CREW)
+            return true
+          }
+        },
+        provision: {
+          provision: () => {
+            provisions++
+          }
+        },
+        forkEngine: {
+          fork: async () => {
+            forks++
+            return 'ws'
+          }
+        }
+      })
+    )
+
+    await expect(s.serve(CREW)).resolves.toBeUndefined()
+    expect(s.served.bySlug(CREW.slug)).toEqual(CREW)
+    expect(checks).toBe(1)
+    expect(provisions).toBe(0)
+    expect(forks).toBe(0)
+  })
+
+  it('refuses an unusable combination before registry, persistence, mint, or budget spend', async () => {
+    const persist = servedTemplateFile(base)
+    let provisions = 0
+    let forks = 0
+    const s = wireServing(
+      deps({
+        persist,
+        grantPreflight: { check: async () => false },
+        provision: { provision: () => void provisions++ },
+        forkEngine: {
+          fork: async () => {
+            forks++
+            return 'ws-never'
+          }
+        }
+      })
+    )
+
+    await expect(s.serve(CREW)).rejects.toMatchObject({ reason: 'grant-unusable' })
+    expect(s.served.list()).toEqual([])
+    expect(persist.load()).toEqual([])
+    expect(s.instantiator.sessions()).toEqual([])
+    expect(provisions).toBe(0)
+    expect(forks).toBe(0)
+  })
+
+  it('takes an existing door down when re-serve proves its grant unusable', async () => {
+    const persist = servedTemplateFile(base)
+    let usable = true
+    const s = wireServing(
+      deps({ persist, grantPreflight: { check: async () => usable } })
+    )
+    await s.serve(CREW)
+    expect(s.served.bySlug(CREW.slug)).not.toBeNull()
+
+    usable = false
+    await expect(s.serve(CREW)).rejects.toMatchObject({ reason: 'grant-unusable' })
+    expect(s.served.bySlug(CREW.slug)).toBeNull()
+    expect(persist.load()).toEqual([])
+  })
+
+  it('keeps structural refusals first and makes no external request', async () => {
+    let checks = 0
+    const s = wireServing(
+      deps({
+        door: { orchOf: () => null },
+        grantPreflight: { check: async () => (checks++, true) }
+      })
+    )
+    await expect(s.serve(CREW)).rejects.toMatchObject({ reason: 'no-orch' })
+    expect(checks).toBe(0)
   })
 })

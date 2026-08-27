@@ -79,7 +79,7 @@ export interface TemplateDoor {
  * what the share sheet turns into a sentence — a reason a UI cannot phrase is a
  * reason that becomes "unknown" on a bar.
  */
-export type ServeRefusal = 'no-orch' | 'bad-price' | 'priced-free-door'
+export type ServeRefusal = 'no-orch' | 'bad-price' | 'priced-free-door' | 'grant-unusable'
 
 /** Thrown by `serve`. Carries the machine-readable reason, not just prose. */
 export class ServeRefused extends Error {
@@ -94,7 +94,8 @@ export class ServeRefused extends Error {
 const REFUSAL_TEXT: Record<ServeRefusal, string> = {
   'no-orch': 'a served crew needs an orch — callers talk to one agent',
   'bad-price': 'a paid door needs a price',
-  'priced-free-door': 'a free door cannot carry a price'
+  'priced-free-door': 'a free door cannot carry a price',
+  'grant-unusable': 'the orch cannot complete a request with this grant'
 }
 
 /**

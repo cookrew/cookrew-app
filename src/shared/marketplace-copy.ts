@@ -636,7 +636,9 @@ export const MKT_SERVE = {
     'Pick an orch before you serve this — callers talk to exactly one agent, and this crew has none. Mark one card as the orch and it becomes the door.',
   /** The gate's reasons, in the owner's words. Keyed by ServeRefusal. */
   'mkt.serve.refused.bad-price': 'A paid door needs a price above zero.',
-  'mkt.serve.refused.priced-free-door': 'A free door cannot carry a price.'
+  'mkt.serve.refused.priced-free-door': 'A free door cannot carry a price.',
+  'mkt.serve.refused.grant-unusable':
+    'Not taking callers — this crew’s orch could not answer one check with the credential it was lent. Match the grant to the orch, or fix the endpoint’s request template.'
 } as const
 
 /** The SESSIONS table. Owner-side; the word lives here and nowhere else. */

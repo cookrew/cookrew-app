@@ -10,7 +10,12 @@ import {
 } from 'node:fs'
 import path from 'node:path'
 import { confine } from './session-sandbox'
-import { parseEnvFile, readGrant, type ServiceGrant } from './service-grants'
+import {
+  parseEnvFile,
+  readGrant,
+  type GrantedFile,
+  type ServiceGrant
+} from './service-grants'
 
 /**
  * THE LEND, ON DISK — the owner's grant file, the budget ledger, and the one
@@ -58,6 +63,8 @@ export interface ServiceGrants {
   ownerEnvFor(serviceId: string): Record<string, string | undefined>
   /** The names to forward — the grant's own, plus every key of its envFile. */
   envKeysFor(serviceId: string): readonly string[]
+  /** Declared files to stage for a compatibility probe. Read-only: spends nothing. */
+  filesFor(serviceId: string): readonly GrantedFile[]
   /**
    * May this service mint ANOTHER session? True when it was lent nothing (there
    * is no budget to exceed) and while a grant has budget left.
@@ -151,6 +158,10 @@ export function serviceGrants(base: string, log = console.error): ServiceGrants 
       return [...new Set([...grant.env, ...Object.keys(envFileValues(grant))])]
     },
 
+    filesFor(serviceId) {
+      return resolve(serviceId)?.files ?? []
+    },
+
     allowsNewSession(serviceId) {
       const grant = resolve(serviceId)
       // Nothing lent, nothing to bound. A crew that needs no credential — a
@@ -168,7 +179,7 @@ export function serviceGrants(base: string, log = console.error): ServiceGrants 
             `Raise maxSessions in ${grantConfigPath(base)} to lend more.`
         )
       }
-      for (const file of grant.files) copyGranted(file.from, sandbox, file.to)
+      stageGrantedFiles(grant.files, sandbox)
       // Spent AFTER the copies, so a grant whose files are missing does not
       // silently burn a session the caller never got.
       spendOne(serviceId)
@@ -195,6 +206,15 @@ function copyGranted(from: string, sandbox: string, to: string): void {
   mkdirSync(path.dirname(target), { recursive: true })
   copyFileSync(from, target)
   chmodSync(target, 0o600)
+}
+
+/**
+ * Stage declared grant files with the exact confinement/mode rules provisioning
+ * uses, but without touching the session budget ledger. Preflight calls this in
+ * a disposable HOME; successful mint provisioning calls it before spendOne().
+ */
+export function stageGrantedFiles(files: readonly GrantedFile[], sandbox: string): void {
+  for (const file of files) copyGranted(file.from, sandbox, file.to)
 }
 
 /**
