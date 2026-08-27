@@ -884,8 +884,32 @@ function TerminalOverlay({
         </div>
       )}
       <div className="popout-terminal-wrap">
-        {LAB_CUT === 'xterm' || LAB_CUT === 'notrans' ? (
-          <div ref={containerRef} className="popout-terminal" />
+        {LAB_CUT === 'xterm' || LAB_CUT === 'notrans' || isRemoteMode() ? (
+          <>
+            {LAB_CUT !== 'xterm' && LAB_CUT !== 'notrans' && (
+              <TranscriptView
+                ref={transcriptRef}
+                terminalId={node.id}
+                total={activity?.turnCount ?? 0}
+                titleMode={titleMode}
+                translation={translation.showing}
+                identities={rows.map((r) => r.index)}
+                selectedIndex={selectedIndex}
+                jumpToken={jumpToken}
+                clipRows={clipRows}
+                onActiveBlockChange={onActiveBlockChange}
+                onPending={setPendingIndex}
+              >
+                {/* PHONE: the live xterm is NOT the scroller's live seam. The
+                    dissection truth table (2026-08-27) killed every theory but
+                    this one: transcript+xterm-inside-the-scroller dies
+                    randomly on iOS 26; xterm as a plain sibling survives.
+                    The seam stays a desktop experience. */}
+                {null}
+              </TranscriptView>
+            )}
+            <div ref={containerRef} className="popout-terminal" />
+          </>
         ) : (
         <TranscriptView
           ref={transcriptRef}
