@@ -89,11 +89,13 @@ function parseLine(line: string): Record<string, unknown> | null {
 
 interface ClaudeEntry {
   type?: string
+  subtype?: string
   isMeta?: boolean
   uuid?: string
   parentUuid?: string
   timestamp?: string
   message?: { content?: unknown }
+  compactMetadata?: { preTokens?: number; postTokens?: number }
 }
 
 interface ClaudeContentBlock {
@@ -148,8 +150,12 @@ function claudeResultText(content: unknown): string {
  * two are no longer independent positional counters). block.id stays the
  * bound message uuid so records-union-trace pairs by real identity.
  */
-export function parseClaudeTrace(lines: string[]): TraceBlock[] {
+export function parseClaudeTraceDocument(lines: string[]): {
+  blocks: TraceBlock[]
+  markers: TraceBoundaryMarker[]
+} {
   const blocks: TraceBlock[] = []
+  const markers: TraceBoundaryMarker[] = []
   let current: TraceBlock | null = null
   const assigner = new CheckpointAssigner()
   // tool_use id → its call object, for filling results (tool_use_id match).
@@ -159,6 +165,15 @@ export function parseClaudeTrace(lines: string[]): TraceBlock[] {
     if (entry === null || typeof entry.type !== 'string') continue
     const content = entry.message?.content
     const step = assigner.feed(entry)
+    if (entry.type === 'system' && entry.subtype === 'compact_boundary') {
+      const meta = entry.compactMetadata
+      markers.push({
+        kind: 'compact',
+        afterIndex: assigner.assigned,
+        ...(typeof meta?.preTokens === 'number' ? { preTokens: meta.preTokens } : {}),
+        ...(typeof meta?.postTokens === 'number' ? { postTokens: meta.postTokens } : {})
+      })
+    }
     if (step !== null) {
       if (step.sibling && current !== null) {
         // Same submission — collapse: adopt the continuation identity/prompt,
@@ -218,7 +233,12 @@ export function parseClaudeTrace(lines: string[]): TraceBlock[] {
     }
     current.endedAt = timeMs(entry.timestamp, current.endedAt)
   }
-  return blocks
+  return { blocks, markers }
+}
+
+/** Whole-file compatibility projection; TraceReader keeps the markers too. */
+export function parseClaudeTrace(lines: string[]): TraceBlock[] {
+  return parseClaudeTraceDocument(lines).blocks
 }
 
 // ---- Codex rollout trace ----

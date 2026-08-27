@@ -15,9 +15,8 @@ import {
   TraceIndexRequest,
   TracePage,
   TracePageRequest,
-  compactMarkersOf,
   pageTraceBlocks,
-  parseClaudeTrace,
+  parseClaudeTraceDocument,
   parseCodexTrace,
   parsePiTrace,
   traceIndexOf
@@ -92,6 +91,7 @@ interface CacheEntry {
   remainder: Buffer
   lines: string[]
   blocks: TraceBlock[]
+  compactMarkers: TraceBoundaryMarker[]
 }
 
 export class TraceReader {
@@ -260,7 +260,7 @@ export class TraceReader {
     const memo = this.segmentMemo.get(file)
     if (memo && memo.blocks === blocks) return { refs: memo.refs, markers: memo.markers }
     const refs = blocks.map((b) => ({ index: b.index, id: b.id }))
-    const markers = compactMarkersOf(this.cache.get(file)?.lines ?? [])
+    const markers = this.cache.get(file)?.compactMarkers ?? []
     TraceReader.cappedSet(this.segmentMemo, file, { blocks, refs, markers })
     return { refs, markers }
   }
@@ -461,7 +461,8 @@ export class TraceReader {
         bytesRead: 0,
         remainder: Buffer.alloc(0),
         lines: [],
-        blocks: []
+        blocks: [],
+        compactMarkers: []
       }
       return this.ingest(file, kind, fresh, whole, info.size)
     } catch (error) {
@@ -488,8 +489,9 @@ export class TraceReader {
         if (line.length > 0) lines.push(line)
       }
     }
-    const blocks = kind === 'claude'
-      ? parseClaudeTrace(lines)
+    const parsedClaude = kind === 'claude' ? parseClaudeTraceDocument(lines) : null
+    const blocks = parsedClaude
+      ? parsedClaude.blocks
       : kind === 'codex'
         ? parseCodexTrace(lines)
         : parsePiTrace(lines)
@@ -498,7 +500,8 @@ export class TraceReader {
       bytesRead,
       remainder: Buffer.from(remainder),
       lines,
-      blocks
+      blocks,
+      compactMarkers: parsedClaude?.markers ?? []
     })
     return blocks
   }
