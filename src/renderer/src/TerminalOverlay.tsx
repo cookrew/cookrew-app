@@ -105,6 +105,18 @@ const PHASE_CHIP: Record<TurnPhase, { label: string; cls: string }> = {
   replied: { label: 'CHECKPOINT SAVED', cls: ' done' }
 }
 
+/**
+ * DISSECTION SWITCH (phone-crash lab, 2026-08-27): ?labcut=xterm renders the
+ * overlay with the terminal alone — no TranscriptView, no CheckpointTimeline.
+ * The captured delta bytes are innocent in a bare xterm (lab v1/v2 survived
+ * on-device with the same font and resize dance), so the killer sits in the
+ * organs around it. Remote-only, read once; remove after the hunt.
+ */
+const LAB_CUT =
+  typeof window !== 'undefined' && isRemoteMode()
+    ? new URLSearchParams(window.location.search).get('labcut')
+    : null
+
 function TerminalOverlay({
   node,
   activity,
@@ -858,6 +870,9 @@ function TerminalOverlay({
         </div>
       )}
       <div className="popout-terminal-wrap">
+        {LAB_CUT === 'xterm' ? (
+          <div ref={containerRef} className="popout-terminal" />
+        ) : (
         <TranscriptView
           ref={transcriptRef}
           terminalId={node.id}
@@ -873,6 +888,8 @@ function TerminalOverlay({
         >
           <div ref={containerRef} className="popout-terminal" />
         </TranscriptView>
+        )}
+        {LAB_CUT === 'xterm' ? null : (
         <CheckpointTimeline
           terminalId={node.id}
           rows={rows}
@@ -886,6 +903,7 @@ function TerminalOverlay({
           onLive={goLive}
           onScrub={(fraction) => transcriptRef.current?.scrubTo(fraction)}
         />
+        )}
       </div>
       {dropReady && (
         <div className="attach-drop-hint">
