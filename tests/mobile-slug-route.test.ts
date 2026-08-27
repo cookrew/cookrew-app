@@ -289,6 +289,15 @@ describe('a slugged phone is a full SEAT, not a reader (Magpie)', () => {
     }
   })
 
+  it('can show each card its last turn — /latest is scope-aware', () => {
+    // The gap the owner's Web Inspector found (2026-08-27): every phone card
+    // polls /latest each tick, and under a slug all of them answered 501 —
+    // a console flood of "not workspace-scoped yet" on a page that looked
+    // dead. latestCheckpoint resolves by terminal id end to end (watchSpec →
+    // that terminal's own session file), so it is scope-safe by construction.
+    expect(scopedRouteSupported('/api/terminal/t1/latest')).toBe(true)
+  })
+
   it('does NOT claim /cwd — it reads node-addressed but resolves through focus', () => {
     // moveTerminalCwd goes through store.node() and validates against
     // store.focusedState.dirs, so a scoped call for a terminal in a

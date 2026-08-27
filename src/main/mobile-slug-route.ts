@@ -136,6 +136,12 @@ export const NODE_ROUTES: RegExp[] = [
   /^\/api\/terminal\/[^/]+\/seen$/,
   /^\/api\/terminal\/[^/]+\/turns(?:\?.*)?$/,
   /^\/api\/terminal\/[^/]+\/pins$/,
+  // T1 latest-checkpoint: terminal-id-addressed end to end (watchSpec → the
+  // terminal's own session file, stat-guarded cache keyed by id) — no focus
+  // resolution anywhere, so it is scope-safe under a slug. Every phone card
+  // polls it; leaving it 501 flooded the slug-served companion with
+  // "not workspace-scoped yet" rejections on every tick.
+  /^\/api\/terminal\/[^/]+\/latest$/,
   /^\/api\/terminal\/[^/]+\/trace(?:\?.*)?$/,
   /^\/api\/terminal\/[^/]+\/trace\/index$/,
   /^\/api\/terminal\/[^/]+\/trace\/markers$/,
