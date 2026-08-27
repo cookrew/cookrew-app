@@ -10,5 +10,6 @@ describe('transcript content-visibility scope', () => {
       /body\.cookrew-mobile \.ctx-block,\s*body\.cookrew-mobile \.ctx-placeholder\s*\{[^}]*content-visibility:\s*auto/s,
     )
     expect(css).not.toMatch(/\n\.ctx-block,\s*\n\.ctx-placeholder\s*\{[^}]*content-visibility/s)
+    expect(css).toMatch(/\.ctx-block,\s*\.ctx-placeholder\s*\{[^}]*flex:\s*0 0 auto/s)
   })
 })
