@@ -649,7 +649,9 @@ function TerminalOverlay({
     return () => {
       disposed = true
       // dispose in reverse: detach stream/observers before killing the term
+      markStage('overlay:cleanup-start')
       for (const cleanup of cleanups.reverse()) cleanup()
+      markStage('overlay:cleanup-done')
     }
   }, [node.id])
 
@@ -870,7 +872,7 @@ function TerminalOverlay({
         </div>
       )}
       <div className="popout-terminal-wrap">
-        {LAB_CUT === 'xterm' ? (
+        {LAB_CUT === 'xterm' || LAB_CUT === 'notrans' ? (
           <div ref={containerRef} className="popout-terminal" />
         ) : (
         <TranscriptView
@@ -889,7 +891,7 @@ function TerminalOverlay({
           <div ref={containerRef} className="popout-terminal" />
         </TranscriptView>
         )}
-        {LAB_CUT === 'xterm' ? null : (
+        {LAB_CUT === 'xterm' || LAB_CUT === 'norail' ? null : (
         <CheckpointTimeline
           terminalId={node.id}
           rows={rows}
