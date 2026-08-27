@@ -32,9 +32,13 @@ import type { InstalledPreset } from '../../shared/preset-chip'
 import { browserInFullView } from './dock-target'
 import { BrowserLayer, useInteractiveBrowserCapability } from './BrowserLayer'
 import {
+  recordThumbFailure,
+  recordThumbSuccess,
   shouldClearLegacyThumbs,
   shouldPollThumbs,
-  shouldSnapshotLocally
+  shouldSnapshotLocally,
+  thumbPollList,
+  type ThumbBackoffs
 } from './browser-thumb-policy'
 import { retry } from './retry'
 import { CanvasUiContext, ToolId } from './canvas-ui'
@@ -722,6 +726,8 @@ function Canvas(): React.JSX.Element {
   // canvas sat on its placeholder.
   const workspaceRef = useRef(workspace)
   workspaceRef.current = workspace
+  // Lives in a ref: backoff bookkeeping must not re-render the canvas.
+  const thumbBackoffsRef = useRef<ThumbBackoffs>({})
   useEffect(() => {
     if (!shouldPollThumbs({ remote: isRemoteMode(), interactive: interactiveBrowser })) return
     const tick = (): void => {
@@ -734,21 +740,43 @@ function Canvas(): React.JSX.Element {
       const browserIds = (workspaceRef.current?.nodes ?? [])
         .filter((n) => n.kind === 'browser')
         .map((n) => n.id)
-      for (const id of browserIds) {
+      // Per-id failure backoff — the desktop's capture-storm lesson, applied to
+      // the polling side. After an app restart NO engine is booted, so 40+
+      // cards 404 at once; re-asking them all every 5s was a sustained TLS
+      // storm on the phone (owner's Web Inspector, 2026-08-27).
+      const now = Date.now()
+      for (const id of thumbPollList(browserIds, thumbBackoffsRef.current, now)) {
         // A HEADER, not ?token=. This is an ordinary fetch and can set one, so
         // the token stays out of the URL — see tokenParam, which exists only
         // for the two EventSources that genuinely cannot.
-        void fetch(apiPath(`/api/browser/${id}/thumb?v=${Date.now()}`), {
+        void fetch(apiPath(`/api/browser/${id}/thumb?v=${now}`), {
           headers: authHeaders()
         })
-          .then((r) => (r.ok ? r.blob() : null))
+          .then((r) => {
+            if (!r.ok) {
+              thumbBackoffsRef.current = recordThumbFailure(
+                thumbBackoffsRef.current,
+                id,
+                Date.now()
+              )
+              return null
+            }
+            thumbBackoffsRef.current = recordThumbSuccess(thumbBackoffsRef.current, id)
+            return r.blob()
+          })
           .then((blob) => {
             if (!blob) return
             const old = thumbStore.get(id)
             if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
             thumbStore.set(id, URL.createObjectURL(blob))
           })
-          .catch(() => undefined)
+          .catch(() => {
+            thumbBackoffsRef.current = recordThumbFailure(
+              thumbBackoffsRef.current,
+              id,
+              Date.now()
+            )
+          })
       }
     }
     tick()
