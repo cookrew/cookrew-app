@@ -17,6 +17,7 @@ import {
   x402Settle,
   type X402Config
 } from '../src/main/x402-rail'
+import { MKT_GATE } from '../src/shared/marketplace-copy'
 
 const PAID: ServedTemplate = Object.freeze({
   serviceId: 'svc-payments',
@@ -66,6 +67,13 @@ function gate(settle: ServedEndpointDeps['settle']): {
       hasOpenSession: () => false,
       conductorFor: () => 'orch-1',
       ask: async () => 'crew answer',
+      sessionForCaller: () => null,
+      turns: { history: () => [] },
+      traces: {
+        index: async () => [],
+        boundaryMarkers: async () => [],
+        page: async () => ({ blocks: [], total: 0, source: null })
+      },
       grantBudget: { allowsNewSession: () => true },
       settle,
       paymentTerms: () => ({ accepts: [] }),
@@ -103,6 +111,28 @@ const stripeReply = (paymentStatus: 'paid' | 'unpaid') => ({
 })
 
 describe('payment rails at the admission boundary', () => {
+  it('distinguishes a door with no quote from a sent-but-unverifiable payment', async () => {
+    const unquotable = gate(async () => {
+      throw new Error('settle must not run without X-Payment')
+    })
+    unquotable.deps.paymentTerms = () => null
+    const noQuote = await handleServedRoute(unquotable.deps, PAID, 'POST', '/ask', {
+      headers: { authorization: 'Bearer valid' },
+      body: { prompt: 'answer safely' }
+    })
+    expect(noQuote?.status).toBe(503)
+    expect(noQuote?.body).toEqual({
+      reason: 'payment_unavailable',
+      error: MKT_GATE['mkt.gate.payment.unavailable']
+    })
+    expect(unquotable.admissions).toEqual([])
+
+    const unverifiable = gate(async () => 'unverifiable')
+    const sent = await ask(unverifiable.deps, 'sent-payment-proof')
+    expect(sent?.body).toEqual({ reason: 'unverifiable', retryable: true })
+    expect(sent?.body).not.toEqual(noQuote?.body)
+  })
+
   it('refuses an unpaid Stripe session before admission', async () => {
     const file = ledgerPath()
     const get: StripeGet = async () => stripeReply('unpaid')

@@ -152,6 +152,10 @@ describe('reuse targets the newest open session, and END never strands another',
     expect(reuse.created).toBe(false)
     expect(reuse.session.ordinal).toBe(2)
     expect(reuse.session.identity.sessionId).toBe(ana2.identity.sessionId)
+    expect(inst.sessionForCaller('svc', 'ana')?.identity.sessionId).toBe(
+      ana2.identity.sessionId
+    )
+    expect(inst.sessionForCaller('svc', 'somebody-else')).toBeNull()
   })
 
   it('ending the newer session falls back to reusing the older OPEN one, not a fresh mint', async () => {

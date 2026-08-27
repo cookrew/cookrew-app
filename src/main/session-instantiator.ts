@@ -267,6 +267,15 @@ export class SessionInstantiator {
   }
 
   /**
+   * The caller's current session, resolved by the same newest-open rule admit
+   * uses. Served read routes use this instead of accepting a session id from
+   * the wire, so a credential can never select another caller's transcript.
+   */
+  sessionForCaller(serviceId: string, accountId: string): SessionRecord | null {
+    return this.openFor(serviceId, accountId)
+  }
+
+  /**
    * The session a minted workspace belongs to, or null if the workspace is not a
    * served session (the owner's own). The spawn path asks this to decide whether
    * a terminal must start confined and scrubbed — an ordinary workspace answers

@@ -166,6 +166,7 @@ import {
   type PaymentRequirements
 } from './x402-rail'
 import { RemoteCrewStore, parseCrewLink } from './remote-crews'
+import { crewLineCommand } from './crew-line-command'
 import { ServeRefused, type ServeAccess, type ServedTemplate } from './session-served'
 import { servedPaymentRails } from '../shared/served-payment-rails'
 import { PresetStore, isPresetId } from './preset-store'
@@ -655,6 +656,15 @@ async function handleServedSlug(
           prompt
         )
       },
+      sessionForCaller: (serviceId, sub) => {
+        const session = serving.instantiator.sessionForCaller(serviceId, sub)
+        if (session === null) return null
+        return {
+          conductorId: serving.instantiator.conductorFor(session.identity.sessionId)
+        }
+      },
+      turns,
+      traces,
       grantBudget: { allowsNewSession: (serviceId) => grants.allowsNewSession(serviceId) },
       // The quote and the settle are ONE decision expressed twice: the caller
       // must be charged exactly what we asked for. Both read the same config
@@ -730,7 +740,7 @@ async function handleServedSlug(
     {
       headers,
       body,
-      query: { payment: url.searchParams.get('payment') ?? undefined }
+      query: Object.fromEntries(url.searchParams.entries())
     }
   )
   if (answer === null) return false
@@ -3447,19 +3457,11 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('crew:place', (_e, id: string, position?: { x: number; y: number }) => {
     const crew = remoteCrews.get(id)
     if (!crew) return { ok: false as const, reason: 'gone' as const }
-    const args = [
-      crewLineScript(),
-      '--origin',
-      crew.origin,
-      '--slug',
-      crew.slug,
-      ...(crew.payRef ? ['--pay', crew.payRef] : [])
-    ]
     const node = createTerminal({
       name: `${crew.name} · ${crew.slug}`,
       preset: PRESETS[PRESETS.length - 1].name,
       position,
-      command: `node ${args.map((a) => JSON.stringify(a)).join(' ')}`
+      command: crewLineCommand(crewLineScript(), crew)
     })
     return { ok: true as const, node }
   })

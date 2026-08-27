@@ -2,7 +2,20 @@ import { validateCallPrompt } from './call-prompt'
 import { safeCallReply } from './call-reply'
 import type { ServedTemplate } from './session-served'
 import type { ServedCallers } from './served-callers'
+import { pageTurns, type TurnPageRequest, type TurnRecord } from '../shared/turn'
+import type {
+  TraceBoundaryMarker,
+  TraceIndexEntry,
+  TracePageRequest
+} from '../shared/trace-blocks'
 import {
+  SERVED_TRANSCRIPT_PATHS,
+  type ServedTracePage,
+  type ServedTranscriptPath,
+  type ServedTurnsWireResponse
+} from '../shared/served-transcript'
+import {
+  MKT_GATE,
   MKT_SVC,
   fillCopy
 } from '../shared/marketplace-copy'
@@ -23,11 +36,13 @@ import {
  *                               conductor answers. 402 fires only at session
  *                               START (per-session price), so R5 holds — no
  *                               conversation is ever interrupted for money.
+ *   GET  /turns + /trace/*    → that credential subject's own open session;
+ *                               no session or terminal id is accepted.
  *
  * PURE OVER ITS DEPS. No http types here: the mobile-server adapter feeds
  * (method, path, headers, body) and writes the returned descriptor, so every
- * branch is testable without a socket. The dev facilitator settles X-Payment in
- * M1 (no chain); its refuse/unverifiable prefixes drive the two error voices.
+ * branch is testable without a socket. Payment and transcript reads both stay
+ * behind narrow seams so the gate knows neither rail nor harness format.
  */
 
 export interface ServedResponse {
@@ -69,6 +84,19 @@ export interface ServedEndpointDeps {
   conductorFor(sessionId: string): string | null
   /** Run the prompt against the conductor's terminal; resolves to raw output. */
   ask(conductorId: string, prompt: string): Promise<string>
+  /** Resolve from verified subject only; no session id ever arrives over HTTP. */
+  sessionForCaller(
+    serviceId: string,
+    sub: string
+  ): { conductorId: string | null } | null
+  /** Real parser-derived turns for the resolved session's orch. */
+  turns: { history(terminalId: string): TurnRecord[] }
+  /** Registry-driven trace blocks for that same orch/session file. */
+  traces: {
+    index(terminalId: string): Promise<TraceIndexEntry[]>
+    boundaryMarkers(terminalId: string): Promise<TraceBoundaryMarker[]>
+    page(terminalId: string, request?: TracePageRequest): Promise<ServedTracePage>
+  }
   /**
    * May this service mint ANOTHER session under the owner's grant (R30 G2)?
    *
@@ -259,7 +287,102 @@ export async function handleServedRoute(
     return askRoute(deps, template, input)
   }
 
+  if (
+    method === 'GET' &&
+    Object.values(SERVED_TRANSCRIPT_PATHS).includes(pathname as ServedTranscriptPath)
+  ) {
+    return transcriptRoute(deps, template, pathname as ServedTranscriptPath, input)
+  }
+
   return null
+}
+
+type CallerClaims = { sub: string; workspace: string }
+
+function authorizeCaller(
+  deps: ServedEndpointDeps,
+  template: ServedTemplate,
+  headers: Record<string, string | undefined>
+): { ok: true; claims: CallerClaims } | { ok: false; response: ServedResponse } {
+  const auth = headers.authorization ?? ''
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null
+  const claims = token === null ? null : deps.issuer.verifyToken(token)
+  if (claims === null) {
+    return {
+      ok: false,
+      response: json(401, {}, {
+        'www-authenticate': `Cookrew realm="${template.slug}", challenge=${deps.issuer.challenge(template.serviceId)}`
+      })
+    }
+  }
+  if (claims.workspace !== template.serviceId) {
+    return { ok: false, response: json(403, { reason: 'workspace' }) }
+  }
+  return { ok: true, claims }
+}
+
+const queryNumber = (
+  query: Readonly<Record<string, string | undefined>> | undefined,
+  key: string
+): number | undefined => {
+  const raw = query?.[key]
+  const parsed = raw === undefined ? NaN : Number(raw)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+async function transcriptRoute(
+  deps: ServedEndpointDeps,
+  template: ServedTemplate,
+  pathname: ServedTranscriptPath,
+  input: {
+    headers: Record<string, string | undefined>
+    query?: Readonly<Record<string, string | undefined>>
+  }
+): Promise<ServedResponse> {
+  const auth = authorizeCaller(deps, template, input.headers)
+  if (!auth.ok) return auth.response
+
+  const session = deps.sessionForCaller(template.serviceId, auth.claims.sub)
+  // The route never accepts a session id. A caller without an open session and
+  // a caller guessing somebody else's id therefore receive the same absence.
+  if (session === null) return json(404, {})
+  if (session.conductorId === null) {
+    return json(503, { error: 'the crew transcript is not available — try again shortly' })
+  }
+
+  const terminalId = session.conductorId
+  if (pathname === SERVED_TRANSCRIPT_PATHS.traceIndex) {
+    return json(200, await deps.traces.index(terminalId))
+  }
+  if (pathname === SERVED_TRANSCRIPT_PATHS.traceMarkers) {
+    return json(200, await deps.traces.boundaryMarkers(terminalId))
+  }
+  if (pathname === SERVED_TRANSCRIPT_PATHS.trace) {
+    return json(
+      200,
+      await deps.traces.page(terminalId, {
+        beforeIndex: queryNumber(input.query, 'beforeIndex'),
+        afterIndex: queryNumber(input.query, 'afterIndex'),
+        aroundIndex: queryNumber(input.query, 'aroundIndex'),
+        limit: queryNumber(input.query, 'limit')
+      })
+    )
+  }
+
+  const request: TurnPageRequest = {
+    offset: queryNumber(input.query, 'offset'),
+    limit: queryNumber(input.query, 'limit'),
+    aroundIndex: queryNumber(input.query, 'aroundIndex'),
+    beforeIndex: queryNumber(input.query, 'beforeIndex')
+  }
+  const paged =
+    request.offset !== undefined ||
+    request.limit !== undefined ||
+    request.aroundIndex !== undefined ||
+    request.beforeIndex !== undefined
+  const history = deps.turns.history(terminalId)
+  const response: ServedTurnsWireResponse = paged ? pageTurns(history, request) : history
+  return json(200, response)
 }
 
 async function askRoute(
@@ -269,19 +392,10 @@ async function askRoute(
 ): Promise<ServedResponse> {
   const { serviceId } = template
 
-  // ── identity ──
-  const auth = input.headers['authorization'] ?? ''
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null
-  const claims = token === null ? null : deps.issuer.verifyToken(token)
-  if (claims === null) {
-    // Absence and forgery are one answer; the header names the ceremony.
-    return json(401, {}, {
-      'www-authenticate': `Cookrew realm="${template.slug}", challenge=${deps.issuer.challenge(serviceId)}`
-    })
-  }
-  // A genuine token for another service is 403, never 401 — re-authenticating
-  // with the same key cannot fix a scope, and a client must not loop.
-  if (claims.workspace !== serviceId) return json(403, { reason: 'workspace' })
+  // ── identity: shared byte-for-byte with the caller transcript reads ──
+  const auth = authorizeCaller(deps, template, input.headers)
+  if (!auth.ok) return auth.response
+  const { claims } = auth
 
   // ── the owner's grant budget — BEFORE the money, deliberately ──
   //
@@ -313,7 +427,10 @@ async function askRoute(
       const terms = deps.paymentTerms(template)
       // A crew we cannot price is not a crew a stranger may use for free.
       if (terms === null) {
-        return json(503, { error: 'this crew is not taking payment right now' })
+        return json(503, {
+          reason: 'payment_unavailable',
+          error: MKT_GATE['mkt.gate.payment.unavailable']
+        })
       }
       return json(402, { terms })
     }

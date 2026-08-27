@@ -9,6 +9,10 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach } from 'vitest'
+import type { TurnRecord } from '../src/shared/turn'
+import type { TraceBlock } from '../src/shared/trace-blocks'
+import { SERVED_TRANSCRIPT_PATHS } from '../src/shared/served-transcript'
+import { MKT_GATE } from '../src/shared/marketplace-copy'
 
 /**
  * The payment rail, stubbed at the seam.
@@ -56,6 +60,9 @@ let callers: ServedCallers
 let sessions: Map<string, { sessionId: string; workspaceId: string }>
 let asked: string[]
 let settled: string[]
+let turnHistory: Map<string, TurnRecord[]>
+let traceHistory: Map<string, TraceBlock[]>
+let transcriptReads: string[]
 let deps: ServedEndpointDeps
 
 const { publicKey, privateKey } = generateKeyPairSync('ed25519')
@@ -68,6 +75,9 @@ beforeEach(() => {
   sessions = new Map()
   asked = []
   settled = []
+  turnHistory = new Map()
+  traceHistory = new Map()
+  transcriptReads = []
   deps = {
     issuer,
     callers,
@@ -87,6 +97,36 @@ beforeEach(() => {
     ask: async (conductorId, prompt) => {
       asked.push(`${conductorId}:${prompt}`)
       return 'the answer'
+    },
+    sessionForCaller: (serviceId, sub) => {
+      const session = sessions.get(`${serviceId}/${sub}`)
+      return session
+        ? { conductorId: `orch-${session.sessionId}` }
+        : null
+    },
+    turns: {
+      history: (terminalId) => {
+        transcriptReads.push(`turns:${terminalId}`)
+        return turnHistory.get(terminalId) ?? []
+      }
+    },
+    traces: {
+      index: async (terminalId) => {
+        transcriptReads.push(`index:${terminalId}`)
+        return (traceHistory.get(terminalId) ?? []).map((block) => ({
+          index: block.index,
+          title: block.prompt
+        }))
+      },
+      boundaryMarkers: async (terminalId) => {
+        transcriptReads.push(`markers:${terminalId}`)
+        return []
+      },
+      page: async (terminalId, request) => {
+        transcriptReads.push(`trace:${terminalId}:${JSON.stringify(request)}`)
+        const blocks = traceHistory.get(terminalId) ?? []
+        return { blocks, total: blocks.length, source: 'claude' as const }
+      }
     },
     settle: async (payment) => {
       settled.push(payment)
@@ -134,6 +174,35 @@ const ask = (
   prompt = 'what is 2+2?'
 ): ReturnType<typeof handleServedRoute> =>
   handleServedRoute(deps, template, 'POST', '/ask', { headers, body: { prompt } })
+
+const get = (
+  template: ServedTemplate,
+  pathname: string,
+  headers: Record<string, string | undefined>,
+  query?: Record<string, string>
+): ReturnType<typeof handleServedRoute> =>
+  handleServedRoute(deps, template, 'GET', pathname, { headers, body: null, query })
+
+const record = (index: number, prompt = `prompt ${index}`): TurnRecord => ({
+  index,
+  uuid: `turn-${index}`,
+  prompt,
+  reply: `reply ${index}`,
+  startedAt: index * 100,
+  endedAt: index * 100 + 50,
+  final: true
+})
+
+const block = (index: number, prompt = `prompt ${index}`): TraceBlock => ({
+  id: `turn-${index}`,
+  index,
+  prompt,
+  reply: `reply ${index}`,
+  activity: [],
+  startedAt: index * 100,
+  endedAt: index * 100 + 50,
+  final: true
+})
 
 describe('the public face', () => {
   it('answers /crew with what the owner published, and nothing else', async () => {
@@ -251,6 +320,93 @@ describe('the ask gate', () => {
   })
 })
 
+describe("the caller's own transcript surface", () => {
+  const paths = Object.values(SERVED_TRANSCRIPT_PATHS)
+
+  it('uses the same 401 and wrong-service 403 bearer scope as /ask', async () => {
+    for (const pathname of paths) {
+      const missing = await get(FREE, pathname, {})
+      const junk = await get(FREE, pathname, { authorization: 'Bearer nonsense' })
+      for (const response of [missing, junk]) {
+        expect(response!.status, pathname).toBe(401)
+        expect(response!.headers?.['www-authenticate'], pathname).toMatch(/challenge=/)
+      }
+
+      const wrong = issuer.mint('ana', 'svc-other')
+      const scoped = await get(FREE, pathname, { authorization: `Bearer ${wrong}` })
+      expect(scoped!.status, pathname).toBe(403)
+      expect(scoped!.body, pathname).toEqual({ reason: 'workspace' })
+    }
+  })
+
+  it('404s every transcript read until this caller has their own open session', async () => {
+    const token = await signIn(FREE, 'bob')
+    for (const pathname of paths) {
+      const response = await get(
+        FREE,
+        pathname,
+        { authorization: `Bearer ${token}` },
+        // Supplying somebody else's known id cannot influence resolution.
+        { sessionId: 'ana-1', terminalId: 'orch-ana-1' }
+      )
+      expect(response!.status, pathname).toBe(404)
+      expect(response!.body, pathname).toEqual({})
+    }
+    expect(transcriptReads).toEqual([])
+  })
+
+  it('serves turns and trace blocks only from the credential subject’s orch', async () => {
+    const anaToken = await signIn(FREE, 'ana')
+    await ask(FREE, { authorization: `Bearer ${anaToken}` }, 'open ana')
+    const bobToken = await signIn(FREE, 'bob')
+    await ask(FREE, { authorization: `Bearer ${bobToken}` }, 'open bob')
+
+    turnHistory.set('orch-ana-1', [record(1), record(2)])
+    turnHistory.set('orch-bob-1', [record(1, 'bob only')])
+    traceHistory.set('orch-ana-1', [block(1), block(2)])
+    traceHistory.set('orch-bob-1', [block(1, 'bob only')])
+
+    const auth = { authorization: `Bearer ${anaToken}` }
+    const turns = await get(FREE, '/turns', auth)
+    expect((turns!.body as TurnRecord[]).map((turn) => turn.prompt)).toEqual([
+      'prompt 1',
+      'prompt 2'
+    ])
+
+    const page = await get(FREE, '/turns', auth, { offset: '1', limit: '1' })
+    expect(page!.body).toMatchObject({
+      turns: [{ index: 2, prompt: 'prompt 2' }],
+      total: 2,
+      offset: 1
+    })
+
+    const older = await get(FREE, '/turns', auth, { beforeIndex: '2', limit: '1' })
+    expect(older!.body).toMatchObject({
+      turns: [{ index: 1, prompt: 'prompt 1' }],
+      total: 2,
+      offset: 0
+    })
+
+    const trace = await get(FREE, '/trace', auth, { aroundIndex: '2', limit: '5' })
+    expect(trace!.body).toMatchObject({
+      blocks: [{ id: 'turn-1' }, { id: 'turn-2' }],
+      total: 2,
+      source: 'claude'
+    })
+    expect((await get(FREE, '/trace/index', auth))!.body).toEqual([
+      { index: 1, title: 'prompt 1' },
+      { index: 2, title: 'prompt 2' }
+    ])
+    expect((await get(FREE, '/trace/markers', auth))!.body).toEqual([])
+
+    expect(transcriptReads.every((read) => read.includes('orch-ana-1'))).toBe(true)
+    expect(transcriptReads.some((read) => read.includes('orch-bob-1'))).toBe(false)
+    expect(transcriptReads).toContain(
+      'trace:orch-ana-1:{"aroundIndex":2,"limit":5}'
+    )
+  })
+})
+
 describe("the owner's grant budget", () => {
   it('refuses a NEW session with 429 and a reason, once the lend is spent', async () => {
     deps.grantBudget = { allowsNewSession: () => false }
@@ -303,6 +459,18 @@ describe("the owner's grant budget", () => {
 })
 
 describe('the per-session 402 (paid door)', () => {
+  it('names an unquotable door without claiming a payment was checked', async () => {
+    deps.paymentTerms = () => null
+    const token = await signIn(PAID)
+    const res = await ask(PAID, { authorization: `Bearer ${token}` })
+    expect(res!.status).toBe(503)
+    expect(res!.body).toEqual({
+      reason: 'payment_unavailable',
+      error: MKT_GATE['mkt.gate.payment.unavailable']
+    })
+    expect(settled).toEqual([])
+  })
+
   it('quotes terms at session START, and only then', async () => {
     const token = await signIn(PAID)
     const res = await ask(PAID, { authorization: `Bearer ${token}` })

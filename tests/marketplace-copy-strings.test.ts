@@ -45,6 +45,17 @@ describe('every protocol moment has words', () => {
     expect(copy('mkt.pay.receipt')).toMatch(/free/i)
   })
 
+  it('keeps cannot-take-payment distinct from a real unverifiable payment', () => {
+    const unavailable = copy('mkt.gate.payment.unavailable')
+    const unverifiable = copy('mkt.gate.payment.unverifiable')
+    expect(unavailable).toBe(
+      "this crew can't take payment right now — nothing was charged; try later"
+    )
+    expect(unavailable).not.toMatch(/checker|payment may be fine/i)
+    expect(unverifiable).toMatch(/checker is unreachable|payment may be fine/i)
+    expect(unavailable).not.toBe(unverifiable)
+  })
+
   it('tells an author their original session is untouched', () => {
     expect(copy('mkt.export.safety')).toMatch(/never touched/)
   })
