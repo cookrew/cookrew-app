@@ -18,6 +18,12 @@ import { defaultProducerLease } from './producer-lease'
 import { PtyOwnership } from './pty-scope'
 import { defaultInputProvenance } from './input-provenance'
 import type { Terminal as HeadlessTerminalType } from '@xterm/headless'
+import {
+  decideReattach,
+  freshReattachState,
+  MAX_REATTACHES,
+  type ReattachState
+} from './herdr-attach-recovery'
 
 const { Terminal: HeadlessTerminal } = xtermHeadless as unknown as {
   Terminal: typeof HeadlessTerminalType
@@ -1103,6 +1109,9 @@ export class PtyManager {
     activeMux?.reloadConfig()
   }
 
+  /** Reattach budget per terminal — see herdr-attach-recovery. */
+  private readonly reattachState = new Map<string, ReattachState>()
+
   spawn(
     options: Omit<PtySessionOptions, 'socketPath' | 'cliDir' | 'tmuxConf'>,
     workspaceId?: string
@@ -1121,11 +1130,49 @@ export class PtyManager {
     // can land AFTER its replacement registered — an instance-blind delete
     // would clobber the live session from the map (the restore "running
     // flag" bug: pane alive, ptys.get() undefined, kill() then no-ops).
-    session.on('exit', () => {
-      if (this.sessions.get(options.terminalId) === session) {
-        this.sessions.delete(options.terminalId)
-        this.ownership.release(options.terminalId)
+    session.on('exit', (exitCode: number) => {
+      if (this.sessions.get(options.terminalId) !== session) return
+      // Read the tail BEFORE dispose drops the screen — this is the only place
+      // the attach client's parting words are still available.
+      let tail = ''
+      try {
+        tail = session.viewportText()
+      } catch {
+        // A disposed screen has nothing to say; treat it as not transient.
       }
+      this.sessions.delete(options.terminalId)
+      this.ownership.release(options.terminalId)
+
+      // A herdr attach can drop on a transient socket EAGAIN while the server
+      // and the pane are both healthy. Left alone the card keeps the client's
+      // "lost connection to server" line forever and the agent is unreachable.
+      // Reattaching restores the view; the bounds in decideReattach keep a
+      // genuinely dead pane from becoming a respawn loop.
+      const decision = decideReattach(
+        { exitCode, tail },
+        this.reattachState.get(options.terminalId) ?? freshReattachState(),
+        Date.now()
+      )
+      if (!decision.reattach) {
+        this.reattachState.delete(options.terminalId)
+        return
+      }
+      this.reattachState.set(options.terminalId, decision.state)
+      console.error(
+        `Terminal ${options.terminalId}: herdr attach dropped — reattaching ` +
+          `(attempt ${decision.attempt}/${MAX_REATTACHES}) in ${decision.delayMs}ms`
+      )
+      // OUT of the node-pty exit callback. A JS exception escaping it becomes a
+      // C++ exception on the NAPI thread and aborts the app (see onData), and
+      // respawning is far too much work to do inside that window.
+      setTimeout(() => {
+        try {
+          if (this.sessions.has(options.terminalId)) return // someone beat us to it
+          this.spawn(options, workspaceId)
+        } catch (error) {
+          console.error(`Terminal ${options.terminalId}: reattach failed:`, error)
+        }
+      }, decision.delayMs)
     })
     this.sessions.set(options.terminalId, session)
     // A pane created after the subscription was made is not covered by it.
