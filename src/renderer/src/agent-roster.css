@@ -1694,8 +1694,9 @@
   box-shadow: 3px 3px 0 var(--rose);
 }
 
-/* Quiet disclosure — one row instead of two hundred. */
-.roster-quiet {
+/* Bounded phone-page and quiet disclosures — one row instead of a full fleet. */
+.roster-quiet,
+.roster-more {
   display: block;
   width: 100%;
   padding: 9px;
@@ -1709,7 +1710,8 @@
   border-bottom: 1px solid var(--line-soft);
 }
 
-.roster-quiet:hover {
+.roster-quiet:hover,
+.roster-more:hover {
   background: var(--amber-soft);
   color: var(--ink);
 }
@@ -1888,4 +1890,3 @@
 .ags-el-url-dim {
   color: var(--ink-soft);
 }
-
