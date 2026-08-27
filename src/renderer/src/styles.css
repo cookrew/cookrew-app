@@ -1319,7 +1319,13 @@ a.cr-btn {
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
+  /* NOT -webkit-overflow-scrolling: touch. The legacy momentum property
+     makes iOS rasterize the ENTIRE scroll extent as one compositing layer:
+     the overlay xterm's 600-row scrollback is ~12,000 CSS px tall, and at
+     DPR3 that is ~1.6 GB of backing store — precisely the 1536 MB jetsam
+     cap that killed WebContent the moment a terminal was zoomed
+     (kernel-verified, 2026-08-27). iOS 13+ scrolls with momentum by
+     default; the property bought nothing and cost the phone its life. */
   /* ONE scrollbar total: the checkpoint rail scrubs this — hide the native
      bar on the trace surface (the redundant gray bar in the screenshot). */
   scrollbar-width: none;
@@ -3563,7 +3569,13 @@ body.cookrew-mobile .cr-dock-presets {
   min-width: 0;
   max-width: 100%;
   overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+  /* NOT -webkit-overflow-scrolling: touch. The legacy momentum property
+     makes iOS rasterize the ENTIRE scroll extent as one compositing layer:
+     the overlay xterm's 600-row scrollback is ~12,000 CSS px tall, and at
+     DPR3 that is ~1.6 GB of backing store — precisely the 1536 MB jetsam
+     cap that killed WebContent the moment a terminal was zoomed
+     (kernel-verified, 2026-08-27). iOS 13+ scrolls with momentum by
+     default; the property bought nothing and cost the phone its life. */
   scrollbar-width: none;
   /* breathing room so the buttons' hard drop shadow survives the clip */
   padding: 2px 2px 4px 0;
@@ -4670,7 +4682,13 @@ body.cookrew-mobile .cr-dock .voice-bar {
   gap: 6px;
   min-width: 0;
   overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+  /* NOT -webkit-overflow-scrolling: touch. The legacy momentum property
+     makes iOS rasterize the ENTIRE scroll extent as one compositing layer:
+     the overlay xterm's 600-row scrollback is ~12,000 CSS px tall, and at
+     DPR3 that is ~1.6 GB of backing store — precisely the 1536 MB jetsam
+     cap that killed WebContent the moment a terminal was zoomed
+     (kernel-verified, 2026-08-27). iOS 13+ scrolls with momentum by
+     default; the property bought nothing and cost the phone its life. */
   scrollbar-width: none;
 }
 
@@ -4702,7 +4720,13 @@ body.cookrew-mobile .cr-dock .voice-ghost {
     gap: 6px;
     padding: 4px 8px;
     overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
+    /* NOT -webkit-overflow-scrolling: touch. The legacy momentum property
+     makes iOS rasterize the ENTIRE scroll extent as one compositing layer:
+     the overlay xterm's 600-row scrollback is ~12,000 CSS px tall, and at
+     DPR3 that is ~1.6 GB of backing store — precisely the 1536 MB jetsam
+     cap that killed WebContent the moment a terminal was zoomed
+     (kernel-verified, 2026-08-27). iOS 13+ scrolls with momentum by
+     default; the property bought nothing and cost the phone its life. */
     scrollbar-width: none;
   }
 
@@ -4752,7 +4776,13 @@ body.cookrew-mobile .cr-dock .voice-ghost {
 
   .popout-terminal .xterm-viewport {
     overflow-y: auto !important;
-    -webkit-overflow-scrolling: touch;
+    /* NOT -webkit-overflow-scrolling: touch. The legacy momentum property
+     makes iOS rasterize the ENTIRE scroll extent as one compositing layer:
+     the overlay xterm's 600-row scrollback is ~12,000 CSS px tall, and at
+     DPR3 that is ~1.6 GB of backing store — precisely the 1536 MB jetsam
+     cap that killed WebContent the moment a terminal was zoomed
+     (kernel-verified, 2026-08-27). iOS 13+ scrolls with momentum by
+     default; the property bought nothing and cost the phone its life. */
   }
 
 
@@ -4762,7 +4792,13 @@ body.cookrew-mobile .cr-dock .voice-ghost {
      generous flow-unit tap minimums; the row scrolls sideways if crowded. */
   .vi-pager {
     overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
+    /* NOT -webkit-overflow-scrolling: touch. The legacy momentum property
+     makes iOS rasterize the ENTIRE scroll extent as one compositing layer:
+     the overlay xterm's 600-row scrollback is ~12,000 CSS px tall, and at
+     DPR3 that is ~1.6 GB of backing store — precisely the 1536 MB jetsam
+     cap that killed WebContent the moment a terminal was zoomed
+     (kernel-verified, 2026-08-27). iOS 13+ scrolls with momentum by
+     default; the property bought nothing and cost the phone its life. */
     scrollbar-width: none;
   }
 
