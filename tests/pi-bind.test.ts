@@ -58,6 +58,19 @@ describe.skipIf(process.platform === 'win32')('Pi command binding', () => {
     expect(isPiCommand('bash')).toBe(false)
   })
 
+  it('recognizes a wrapper — a path whose basename is pi or *-pi', () => {
+    // ~/.cookrew/bin/qwen-pi IS the pi harness; matching only a literal
+    // leading `pi` left wrapper terminals with scrape rails and empty
+    // transcript slots (Pilot, 2026-08-27).
+    expect(isPiCommand('/Users/drej/.cookrew/bin/qwen-pi')).toBe(true)
+    expect(isPiCommand('qwen-pi --no-session')).toBe(true)
+    expect(isPiCommand('/usr/local/bin/pi --model x')).toBe(true)
+    // The injection shape stays refused, wrapper or not.
+    expect(isPiCommand('qwen-pi; touch /tmp/nope')).toBe(false)
+    expect(isPiCommand('okapi')).toBe(false)
+    expect(isPiCommand('spi')).toBe(false)
+  })
+
   it('strips every competing session selector and builds deterministic commands', () => {
     expect(stripPiSessionFlags('pi --model sonnet --session old -c')).toBe('pi --model sonnet')
     expect(stripPiSessionFlags('pi --session-id=old --resume --no-session')).toBe('pi')

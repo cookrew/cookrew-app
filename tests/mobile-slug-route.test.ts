@@ -298,6 +298,12 @@ describe('a slugged phone is a full SEAT, not a reader (Magpie)', () => {
     expect(scopedRouteSupported('/api/terminal/t1/latest')).toBe(true)
   })
 
+  it('can seed card statuses — /api/activity is scope-aware', () => {
+    // turns.list() is global and terminal-id-keyed; refusing it made the very
+    // first fetch of every phone session an unhandled rejection.
+    expect(scopedRouteSupported('/api/activity')).toBe(true)
+  })
+
   it('does NOT claim /cwd — it reads node-addressed but resolves through focus', () => {
     // moveTerminalCwd goes through store.node() and validates against
     // store.focusedState.dirs, so a scoped call for a terminal in a
