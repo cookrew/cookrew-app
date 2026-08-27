@@ -179,6 +179,14 @@ export function seatbeltProfile(input: ProfileInput): string {
     `(allow file-write* (subpath ${sandbox}))`,
     '(allow file-write-data (literal "/dev/null") (literal "/dev/stdout") (literal "/dev/stderr"))',
     '(allow file-ioctl (literal "/dev/dtracehelper"))',
+    // The pane is a PTY and an interactive harness NEEDS its terminal:
+    // setRawMode is an ioctl on the controlling tty, and without these an
+    // interactive pi died at boot with EPERM (InteractiveMode.run) before
+    // writing a single session record — the served crew answered nothing,
+    // ever, and the caller's ask 500'd as "no file-backed agent turn"
+    // (2026-08-27, the last broken link of the serve-a-session line).
+    // Device nodes only; no filesystem reach.
+    '(allow file-read* file-write* file-ioctl (regex #"^/dev/ttys[0-9]+$") (literal "/dev/tty") (literal "/dev/ptmx"))',
     '(allow network*)',
     // LAST WINS, and the ordering below IS the enforcement — a deny written
     // above the blanket read allow would be silently overridden.
