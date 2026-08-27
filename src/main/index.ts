@@ -23,7 +23,8 @@ import {
   readDispatchTombstones,
   turnDetails
 } from './dispatch'
-import { HerdrHostMultiplexer } from './herdr-host-multiplexer'
+import { HerdrHostMultiplexer, HERDR_SESSION } from './herdr-host-multiplexer'
+import { selfHostedLaunch, selfHostRefusalMessage } from './self-host-guard'
 import { askTerminal, beginShutdown, cancelAllAsks, pasteAndSubmit } from './ask'
 import { defaultProducerLease } from './producer-lease'
 import {
@@ -2848,6 +2849,16 @@ function createWindow(): void {
 // corrupt each other" into "the second instance exits immediately".
 if (!app.requestSingleInstanceLock()) {
   console.error('Another Cookrew instance is already running — exiting.')
+  app.exit(1)
+}
+
+// See self-host-guard.ts. Same medicine as the single-instance lock above:
+// launching from a Cookrew card hands this instance the identity of the session
+// it is about to adopt, so it takes over its own launcher's pane and dies by
+// SIGTERM a minute later with nothing in the log to explain it.
+const selfHosted = selfHostedLaunch(process.env, HERDR_SESSION)
+if (selfHosted) {
+  console.error(selfHostRefusalMessage(selfHosted))
   app.exit(1)
 }
 
