@@ -167,7 +167,8 @@ const api = {
     ipcRenderer.invoke('turn:page', terminalId, request),
   listTrace: (terminalId: string, request?: unknown) =>
     ipcRenderer.invoke('trace:page', terminalId, request),
-  listTraceIndex: (terminalId: string) => ipcRenderer.invoke('trace:index', terminalId),
+  listTraceIndex: (terminalId: string, request?: unknown) =>
+    ipcRenderer.invoke('trace:index', terminalId, request),
   listTraceMarkers: (terminalId: string) => ipcRenderer.invoke('trace:markers', terminalId),
   // T1: the latest checkpoint for a visible card, no PTY. Returns
   // {prompt, reply, title?} | null.

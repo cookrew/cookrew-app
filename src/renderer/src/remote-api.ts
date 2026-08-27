@@ -329,7 +329,12 @@ export function createRemoteApi(): CookrewApi {
     // Checkpoint search is desktop-only for now: the phone has no /api route
     // for it yet, and a silently-empty result would read as "no matches".
     searchTurns: undefined,
-    listTraceIndex: (terminalId) => req(apiPath(`/api/terminal/${terminalId}/trace/index`)),
+    listTraceIndex: (terminalId, request) => {
+      const params = new URLSearchParams()
+      if (request?.afterIndex !== undefined) params.set('afterIndex', String(request.afterIndex))
+      const query = params.size > 0 ? `?${params}` : ''
+      return req(apiPath(`/api/terminal/${terminalId}/trace/index${query}`))
+    },
     listTraceMarkers: (terminalId) => req(apiPath(`/api/terminal/${terminalId}/trace/markers`)),
     // Trace-perf T1: the phone card's latest checkpoint, tail-read on the host.
     latestCheckpoint: (terminalId) =>

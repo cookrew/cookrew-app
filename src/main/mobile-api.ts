@@ -696,7 +696,15 @@ export async function handleMobileApi(
 
   const traceIndexMatch = p.match(/^\/api\/terminal\/([^/]+)\/trace\/index$/);
   if (traceIndexMatch && method === "GET") {
-    respondJson(response, 200, await deps.traces.index(traceIndexMatch[1]));
+    const raw = url.searchParams.get("afterIndex");
+    const parsed = raw === null ? undefined : Number(raw);
+    respondJson(
+      response,
+      200,
+      await deps.traces.index(traceIndexMatch[1], {
+        afterIndex: parsed !== undefined && Number.isFinite(parsed) ? parsed : undefined,
+      }),
+    );
     return true;
   }
 

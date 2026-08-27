@@ -135,7 +135,10 @@ export interface TraceIndexEntry {
 }
 
 interface TraceIndexBridge {
-  listTraceIndex?: (terminalId: string) => Promise<TraceIndexEntry[]>
+  listTraceIndex?: (
+    terminalId: string,
+    request?: { afterIndex?: number }
+  ) => Promise<TraceIndexEntry[]>
 }
 
 /** True once Forge's cheap identity-range/title listing is present. */
@@ -149,13 +152,26 @@ export function hasTraceIndexApi(): boolean {
  * record store. Empty when the API is absent — the timeline then falls back to
  * the records alone (today's behavior). Coordinated with Forge as listTraceIndex.
  */
-export async function fetchTraceIndex(terminalId: string): Promise<TraceIndexEntry[]> {
+export async function fetchTraceIndex(
+  terminalId: string,
+  request: { afterIndex?: number } = {}
+): Promise<TraceIndexEntry[]> {
   const fn = (cookrew() as unknown as TraceIndexBridge).listTraceIndex
   if (!fn) {
     warnAbsentBridge('listTraceIndex')
     return []
   }
-  return fn(terminalId)
+  return fn(terminalId, request)
+}
+
+/** Merge a full or cursor page by checkpoint identity; incoming wins. */
+export function mergeTraceIndex(
+  current: readonly TraceIndexEntry[],
+  incoming: readonly TraceIndexEntry[]
+): TraceIndexEntry[] {
+  const byIndex = new Map(current.map((entry) => [entry.index, entry]))
+  for (const entry of incoming) byIndex.set(entry.index, entry)
+  return [...byIndex.values()].sort((a, b) => a.index - b.index)
 }
 
 /** Boundary marker as the rail renders it (mirrors TraceBoundaryMarker). */

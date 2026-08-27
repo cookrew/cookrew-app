@@ -12,13 +12,13 @@ import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 import type { LodLayout, ScreenRect } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
 import { cookrew, isRemoteMode } from './api'
-import { useTurnPaging } from './nodes/TurnPager'
 import { CheckpointTimeline } from './CheckpointTimeline'
 import { TranscriptView, type ActiveBlock, type TranscriptHandle } from './TranscriptView'
 import {
   fetchTraceIndex,
   fetchTraceMarkers,
   mergeCheckpointRows,
+  mergeTraceIndex,
   tailClipRows,
   traceRowLabel,
   type TraceIndexEntry,
@@ -129,31 +129,25 @@ function TerminalOverlay({
   const agentRef = useRef(false)
   agentRef.current = activity?.agent ?? node.preset !== 'Shell'
 
-  // Turn switching: ◀ ▶ page through past asks; picking one scrolls the
-  // terminal to that ask's line (tmux copy-mode search), and returning to
-  // live exits copy-mode so the tail streams again.
-  const paging = useTurnPaging(node.id, activity?.turnCount ?? 0, {
-    eager: metadataReady,
-    forkable: !remoteCrew
-  })
   const [titleMode, toggleTitleMode] = useTitleMode()
 
   // FULL-TRACE SELECTION (item 3): the fan/timeline spans the WHOLE trace range
-  // — Forge's cheap identity listing merged with the capped record store — so
-  // every traced checkpoint, INCLUDING identities below the record cap (e.g.
-  // T1..T7 when the store starts at T8), is a selectable row. Selection is an
-  // explicit identity, decoupled from the record cursor (which can't represent
-  // sub-cap identities); the trace is the only target (no tmux copy-mode), and
-  // the record-based pager is kept in sync best-effort for the header/fork.
+  // — Forge's cheap identity listing, without the full prompt/reply ledger — so
+  // every traced checkpoint is selectable while bodies stay in trace windows.
   const [traceIndex, setTraceIndex] = useState<TraceIndexEntry[]>([])
+  const [traceIndexReady, setTraceIndexReady] = useState(false)
   const [traceMarkers, setTraceMarkers] = useState<TraceMarkerRow[]>([])
   const [traceRefresh, setTraceRefresh] = useState(0)
   useEffect(() => {
     if (!metadataReady) return
     let alive = true
+    setTraceIndexReady(false)
     void fetchTraceIndex(node.id)
       .then((list) => {
-        if (alive) setTraceIndex(list)
+        if (alive) {
+          setTraceIndex(list)
+          setTraceIndexReady(true)
+        }
       })
       .catch((error) => {
         // Absent bridge already warned once inside fetchTraceIndex; a present
@@ -179,6 +173,33 @@ function TerminalOverlay({
     node.servedTranscript?.slug,
     metadataReady
   ])
+
+  const traceCeiling = traceIndex[traceIndex.length - 1]?.index ?? 0
+  const signaledTurns = activity?.turnCount ?? 0
+  useEffect(() => {
+    if (!traceIndexReady) return
+    if (!remoteCrew && signaledTurns <= traceCeiling) return
+    if (remoteCrew && traceRefresh === 0 && signaledTurns <= traceCeiling) return
+    let alive = true
+    let retry: number | null = null
+    const readDelta = (attempt: number): void => {
+      void fetchTraceIndex(node.id, { afterIndex: traceCeiling })
+        .then((delta) => {
+          if (!alive) return
+          if (delta.length > 0) {
+            setTraceIndex((current) => mergeTraceIndex(current, delta))
+          } else if (signaledTurns > traceCeiling && attempt < 2) {
+            retry = window.setTimeout(() => readDelta(attempt + 1), 120 * (attempt + 1))
+          }
+        })
+        .catch((error) => console.error('listTraceIndex delta failed:', error))
+    }
+    readDelta(0)
+    return () => {
+      alive = false
+      if (retry !== null) window.clearTimeout(retry)
+    }
+  }, [node.id, remoteCrew, signaledTurns, traceCeiling, traceIndexReady, traceRefresh])
 
   // A served trace grows while /ask is still waiting, before the local
   // crew-line process can complete its own turn counter. Refresh that SAME
@@ -221,7 +242,7 @@ function TerminalOverlay({
     }
   }, [node.id, pinRefresh, remoteCrew, metadataReady])
 
-  const rows = mergeCheckpointRows(paging.records ?? [], traceIndex)
+  const rows = mergeCheckpointRows([], traceIndex)
   const remoteTotal = remoteCrew ? (traceIndex[traceIndex.length - 1]?.index ?? 0) : 0
 
   const transcriptRef = useRef<TranscriptHandle>(null)
@@ -239,12 +260,10 @@ function TerminalOverlay({
   const gotoCheckpoint = (index: number): void => {
     setSelectedIndex(index)
     setJumpToken((t) => t + 1)
-    paging.goto(index) // best-effort: syncs the record-backed header/fork
   }
   const goLive = (): void => {
     setSelectedIndex(null)
     setJumpToken((t) => t + 1)
-    paging.live()
   }
   // Scrolling the transcript reports the block in view (onActiveBlockChange),
   // which steps the active checkpoint; the click/scrub → selectedIndex direction
@@ -254,8 +273,6 @@ function TerminalOverlay({
     setActiveBlock(active)
     if (active.index === selectedIndex) return
     setSelectedIndex(active.index)
-    if (active.index === null) paging.live()
-    else paging.goto(active.index)
   }
   const selectedRow = selectedIndex !== null ? (rows.find((r) => r.index === selectedIndex) ?? null) : null
   const selectedTitle =
@@ -778,14 +795,8 @@ function TerminalOverlay({
       {(selectedIndex !== null || activity?.prompt) && (
         <div className="popout-ask" title={selectedRow?.record?.prompt ?? selectedTitle ?? activity?.prompt ?? ''}>
           <span className="popout-ask-label">
-            {/* Identity, not position: T-number matches the transcript + rail
-                labels. A record-backed pick adds its "of N"; a sub-cap trace-only
-                pick shows the identity alone (it has no record position). */}
-            {selectedIndex === null
-              ? 'YOU ❯'
-              : selectedRow?.record
-                ? `CHECKPOINT T${selectedIndex} · ${paging.position} of ${paging.count} ❯`
-                : `CHECKPOINT T${selectedIndex} ❯`}
+            {/* Identity, not array position: T-number matches transcript + rail. */}
+            {selectedIndex === null ? 'YOU ❯' : `CHECKPOINT T${selectedIndex} ❯`}
           </span>
           <span className="popout-ask-text">
             {selectedIndex !== null ? clip(selectedTitle, 300) : clip(activity?.prompt ?? '', 300)}

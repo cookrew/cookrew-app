@@ -293,6 +293,7 @@ export interface CookrewApi {
    */
   listTraceIndex?: (
     terminalId: string,
+    request?: { afterIndex?: number },
   ) => Promise<{ index: number; title: string }[]>;
   /**
    * Boundary markers for the checkpoint rail: ◆ compact (in-file) and ⇥ clear

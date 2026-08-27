@@ -824,9 +824,12 @@ const turnPageFor = async (terminalId: string, request: TurnPageRequest = {}) =>
   return remote ? remote.listTurns(request) : pageTurns(turns.history(terminalId), request)
 }
 
-const traceIndexFor = async (terminalId: string) => {
+const traceIndexFor = async (
+  terminalId: string,
+  request: Parameters<TraceReader['index']>[1] = {}
+) => {
   const remote = servedTranscriptFor(terminalId)
-  return remote ? remote.listTraceIndex() : traces.index(terminalId)
+  return remote ? remote.listTraceIndex(request) : traces.index(terminalId, request)
 }
 
 const traceMarkersFor = async (terminalId: string) => {
@@ -3678,7 +3681,9 @@ function registerIpc(handlers: RestoreHandlers): void {
     turnPageFor(terminalId, request ?? {})
   )
   // Trace-sourced context: identity-keyed windows straight from agent files.
-  ipcMain.handle('trace:index', (_e, terminalId: string) => traceIndexFor(terminalId))
+  ipcMain.handle('trace:index', (_e, terminalId: string, request?: unknown) =>
+    traceIndexFor(terminalId, (request ?? {}) as Parameters<TraceReader['index']>[1])
+  )
   ipcMain.handle('trace:markers', (_e, terminalId: string) => traceMarkersFor(terminalId))
   ipcMain.handle('trace:page', (_e, terminalId: string, request?: unknown) =>
     tracePageFor(terminalId, (request ?? {}) as Parameters<TraceReader['page']>[1])

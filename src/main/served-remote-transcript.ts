@@ -201,9 +201,9 @@ export class ServedRemoteTranscriptClient implements ServedRemoteTurnSource {
     }
   }
 
-  async listTraceIndex(): Promise<TraceIndexEntry[]> {
+  async listTraceIndex(request: { afterIndex?: number } = {}): Promise<TraceIndexEntry[]> {
     try {
-      const response = await this.get(SERVED_TRANSCRIPT_PATHS.traceIndex)
+      const response = await this.get(SERVED_TRANSCRIPT_PATHS.traceIndex, request)
       return response.status === 404 ? [] : (response.body as TraceIndexEntry[])
     } catch (error) {
       if (error instanceof CallerKeyPending) return []

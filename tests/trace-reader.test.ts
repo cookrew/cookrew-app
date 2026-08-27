@@ -279,6 +279,7 @@ describe('TraceReader.index (fan listing — the missing producer)', () => {
     const index = await reader.index(node.id)
     expect(index.map((e) => e.index)).toEqual([1, 2, 3, 4, 5, 6, 7])
     expect(index[0]).toEqual({ index: 1, title: 'ask number 1' })
+    expect((await reader.index(node.id, { afterIndex: 5 })).map((e) => e.index)).toEqual([6, 7])
 
     // Cached: same listing object while the trace is unchanged…
     expect(await reader.index(node.id)).toBe(index)
@@ -286,6 +287,9 @@ describe('TraceReader.index (fan listing — the missing producer)', () => {
     writeFileSync(file, [1, 2, 3, 4, 5, 6, 7, 8].map(entry).join('\n') + '\n')
     const grown = await reader.index(node.id)
     expect(grown.map((e) => e.index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+    expect(await reader.index(node.id, { afterIndex: 7 })).toEqual([
+      { index: 8, title: 'ask number 8' }
+    ])
   })
 
   it('is empty for unbound terminals', async () => {

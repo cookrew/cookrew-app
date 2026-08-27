@@ -21,6 +21,7 @@ import {
   mergeTrace,
   pruneToTotal,
   refineEstimate,
+  type TraceAnchor,
   type TracePage,
   type TraceBlock
 } from './transcript'
@@ -81,7 +82,7 @@ export const TranscriptView = forwardRef<
   TranscriptHandle,
   {
     terminalId: string
-    /** Total completed checkpoints (activity.turnCount) — the growth trigger. */
+    /** Total completed checkpoints (activity.turnCount) — the growth signal. */
     total: number
     /**
      * Full ordered checkpoint identity list (Forge's trace index) — defines the
@@ -234,8 +235,8 @@ export const TranscriptView = forwardRef<
   }, [])
 
   const fetchWindow = useCallback(
-    async (req: 'tail' | { aroundIndex: number }): Promise<TracePage> => {
-      const request = req === 'tail' ? { limit: WINDOW } : { ...req, limit: WINDOW }
+    async (req: 'tail' | TraceAnchor): Promise<TracePage> => {
+      const request = req === 'tail' ? { limit: WINDOW } : { limit: WINDOW, ...req }
       const page = await fetchTracePage(terminalId, request)
       ingest(page)
       return page
@@ -271,18 +272,83 @@ export const TranscriptView = forwardRef<
     [fill]
   )
 
-  // Newest window on mount and on any growth (turnCount change); a rewind is
-  // handled by pruneToTotal inside ingest.
+  // Tail reconcile is a coalesced single-flight. Mount reads one 20-block tail;
+  // ordinary growth asks only for identities after the prior ceiling. A remote
+  // in-flight turn can rewrite the current tail without changing its identity,
+  // so refreshToken falls back to one aroundIndex block when no newer one exists.
+  const tailSignalRef = useRef({ terminalId, total, refreshToken })
+  tailSignalRef.current = { terminalId, total, refreshToken }
+  const tailStateRef = useRef({
+    terminalId: '',
+    knownTotal: 0,
+    refreshToken: 0,
+    initialized: false
+  })
+  const tailSequenceRef = useRef(0)
+  const tailFlight = useMemo(
+    () =>
+      coalescingSingleFlight(async () => {
+        const desired = tailSignalRef.current
+        const state = tailStateRef.current
+        if (state.terminalId !== desired.terminalId) {
+          state.terminalId = desired.terminalId
+          state.knownTotal = 0
+          state.refreshToken = desired.refreshToken
+          state.initialized = false
+          setBlocks([])
+        }
+        const refreshChanged = state.refreshToken !== desired.refreshToken
+        state.refreshToken = desired.refreshToken
+        if (desired.total <= 0 && desired.refreshToken === 0) {
+          state.knownTotal = 0
+          state.initialized = false
+          setBlocks([])
+          onTailLoadedRef.current?.()
+          return
+        }
+
+        const rewound =
+          desired.total > 0 && state.knownTotal > 0 && desired.total < state.knownTotal
+        const request: 'tail' | TraceAnchor | null =
+          !state.initialized || rewound
+            ? 'tail'
+            : desired.total > state.knownTotal || refreshChanged
+              ? { afterIndex: state.knownTotal }
+              : null
+        if (request === null) return
+        state.initialized = true
+
+        try {
+          let page = await fetchWindow(request)
+          const newest = page.blocks[page.blocks.length - 1]?.index
+          if (
+            refreshChanged &&
+            page.blocks.length === 0 &&
+            page.total > 0 &&
+            state.knownTotal > 0
+          ) {
+            page = await fetchWindow({ aroundIndex: page.total, limit: 1 })
+          } else if (newest !== undefined && newest < page.total) {
+            // A long hidden interval can jump by more than WINDOW. The delta
+            // proves growth; a final tail window lands on the actual newest.
+            page = await fetchWindow('tail')
+          }
+          state.knownTotal = page.total
+        } catch (error) {
+          state.initialized = false
+          console.error('trace tail failed:', error)
+        } finally {
+          onTailLoadedRef.current?.()
+        }
+      }),
+    [fetchWindow]
+  )
+
   useEffect(() => {
-    if (total <= 0) {
-      setBlocks([])
-      onTailLoadedRef.current?.()
-      return
-    }
     anchorIndexRef.current = Number.MAX_SAFE_INTEGER
-    void fetchWindow('tail').finally(() => onTailLoadedRef.current?.())
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [terminalId, total, refreshToken])
+    tailSequenceRef.current += 1
+    tailFlight.request(tailSequenceRef.current)
+  }, [terminalId, total, refreshToken, tailFlight])
 
   // One scroll pass per frame (coalesced): find the identity at the viewport top,
   // lazily fill it if it's a placeholder, and report the marker fraction linearly

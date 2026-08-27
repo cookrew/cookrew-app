@@ -387,11 +387,15 @@ export function CheckpointTimeline({
             {rewindError.reason}
           </span>
         )}
-        {savingIndex === index && row.record ? (
-          <SaveRoleInline terminalId={terminalId} record={row.record} onDone={closeActions} />
+        {savingIndex === index ? (
+          <SaveRoleInline
+            terminalId={terminalId}
+            checkpoint={row.record ?? row.index}
+            onDone={closeActions}
+          />
         ) : (
           <>
-            {row.record !== null && hasRoleFromCheckpoint() && (
+            {hasRoleFromCheckpoint() && (
               <button className="cr-ckpt-action" onClick={() => setSavingIndex(index)}>
                 <CrIcon name="agent" /> ROLE
               </button>
@@ -780,22 +784,27 @@ function fmtTokens(n: number): string {
 
 function SaveRoleInline({
   terminalId,
-  record,
+  checkpoint,
   onDone
 }: {
   terminalId: string
-  record: TurnRecord
+  checkpoint: TurnRecord | number
   onDone: () => void
 }): React.JSX.Element {
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const submit = (): void => {
     const trimmed = name.trim()
     if (!trimmed || busy) return
     setBusy(true)
-    void saveRoleFromCheckpoint({ terminalId, checkpoint: record, name: trimmed })
+    setError(null)
+    void saveRoleFromCheckpoint({ terminalId, checkpoint, name: trimmed })
       .then(() => onDone())
-      .catch(() => setBusy(false))
+      .catch((cause: unknown) => {
+        setError(cause instanceof Error ? cause.message : String(cause))
+        setBusy(false)
+      })
   }
   return (
     <div className="cr-ckpt-saverole">
@@ -813,6 +822,7 @@ function SaveRoleInline({
       <button className="cr-btn sm" disabled={busy || !name.trim()} onClick={submit}>
         {busy ? '…' : 'SAVE'}
       </button>
+      {error && <span className="cr-ckpt-rewind-error">{error}</span>}
     </div>
   )
 }

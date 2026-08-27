@@ -58,6 +58,9 @@ describe('placed crew transcript parity', () => {
     expect(overlay).toContain("liveClassName={remoteCrew ? 'served' : undefined}")
     expect(overlay).toContain('allowActions={!remoteCrew}')
     expect(overlay).toContain('cookrew().ptyAttach(node.id, () => undefined)')
+    expect(overlay).toContain("fetchTraceIndex(node.id, { afterIndex: traceCeiling })")
+    expect(overlay).not.toContain('useTurnPaging')
+    expect(overlay).not.toContain('.listTurns(node.id)')
     expect(overlay).not.toContain('fetch(`${node.servedTranscript')
   })
 

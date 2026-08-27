@@ -12,6 +12,7 @@ import {
   TraceBlock,
   TraceBoundaryMarker,
   TraceIndexEntry,
+  TraceIndexRequest,
   TracePage,
   TracePageRequest,
   compactMarkersOf,
@@ -98,6 +99,8 @@ export class TraceReader {
    *  one incremental cache, so boundaryMarkers never re-reads a file the
    *  pager already ingested. */
   private cache = new Map<string, CacheEntry>()
+  /** Concurrent index/marker/page calls for one file share one stat/read/parse. */
+  private blockReads = new Map<string, Promise<TraceBlock[]>>()
   /** Derived index memo, keyed by the blocks ARRAY IDENTITY — trace growth
    *  produces a fresh array (blocksOf re-ingests), invalidating for free. */
   private indexCache = new Map<string, { blocks: TraceBlock[]; entries: TraceIndexEntry[] }>()
@@ -130,7 +133,7 @@ export class TraceReader {
    * the same cached block index the pager uses; lazy and re-derived only
    * when the trace grows.
    */
-  async index(terminalId: string): Promise<TraceIndexEntry[]> {
+  async index(terminalId: string, request: TraceIndexRequest = {}): Promise<TraceIndexEntry[]> {
     const hit = this.store.nodeAcrossWorkspaces(terminalId)
     if (!hit || hit.node.kind !== 'terminal') return []
     const node = hit.node
@@ -142,10 +145,10 @@ export class TraceReader {
     const kind = claude ? 'claude' : codex ? 'codex' : 'pi'
     const blocks = await this.blocksOf(file, kind)
     const memo = this.indexCache.get(terminalId)
-    if (memo && memo.blocks === blocks) return memo.entries
-    const entries = traceIndexOf(blocks)
-    this.indexCache.set(terminalId, { blocks, entries })
-    return entries
+    const entries = memo && memo.blocks === blocks ? memo.entries : traceIndexOf(blocks)
+    if (!memo || memo.blocks !== blocks) this.indexCache.set(terminalId, { blocks, entries })
+    const afterIndex = request.afterIndex
+    return afterIndex === undefined ? entries : entries.filter((entry) => entry.index > afterIndex)
   }
 
   /**
@@ -424,6 +427,19 @@ export class TraceReader {
   }
 
   private async blocksOf(
+    file: string,
+    kind: 'claude' | 'codex' | 'pi'
+  ): Promise<TraceBlock[]> {
+    const pending = this.blockReads.get(file)
+    if (pending) return pending
+    const read = this.readBlocksOf(file, kind).finally(() => {
+      if (this.blockReads.get(file) === read) this.blockReads.delete(file)
+    })
+    this.blockReads.set(file, read)
+    return read
+  }
+
+  private async readBlocksOf(
     file: string,
     kind: 'claude' | 'codex' | 'pi'
   ): Promise<TraceBlock[]> {

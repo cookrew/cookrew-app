@@ -6,6 +6,7 @@ import { pageTurns, type TurnPageRequest, type TurnRecord } from '../shared/turn
 import type {
   TraceBoundaryMarker,
   TraceIndexEntry,
+  TraceIndexRequest,
   TracePageRequest
 } from '../shared/trace-blocks'
 import {
@@ -93,7 +94,7 @@ export interface ServedEndpointDeps {
   turns: { history(terminalId: string): TurnRecord[] }
   /** Registry-driven trace blocks for that same orch/session file. */
   traces: {
-    index(terminalId: string): Promise<TraceIndexEntry[]>
+    index(terminalId: string, request?: TraceIndexRequest): Promise<TraceIndexEntry[]>
     boundaryMarkers(terminalId: string): Promise<TraceBoundaryMarker[]>
     page(terminalId: string, request?: TracePageRequest): Promise<ServedTracePage>
   }
@@ -352,7 +353,12 @@ async function transcriptRoute(
 
   const terminalId = session.conductorId
   if (pathname === SERVED_TRANSCRIPT_PATHS.traceIndex) {
-    return json(200, await deps.traces.index(terminalId))
+    return json(
+      200,
+      await deps.traces.index(terminalId, {
+        afterIndex: queryNumber(input.query, 'afterIndex')
+      })
+    )
   }
   if (pathname === SERVED_TRANSCRIPT_PATHS.traceMarkers) {
     return json(200, await deps.traces.boundaryMarkers(terminalId))

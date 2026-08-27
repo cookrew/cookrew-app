@@ -1311,7 +1311,7 @@ a.cr-btn {
          <div class="ctx-block-reply">recorded reply</div>
        </div>
        …
-       <div class="ctx-live"><…popout-terminal xterm…></div>  (seam auto-drawn via ::before; grows to hold the live tail)
+       <div class="ctx-live"><…popout-terminal xterm…></div>  (fixed live viewport; seam auto-drawn via ::before)
      </div> */
 
 .ctx-transcript {
@@ -1701,18 +1701,25 @@ a.cr-btn {
   color: var(--phos-glow);
 }
 
-/* SEAM + LIVE tail: where the durable trace meets the live terminal. A dashed
-   phosphor rule with a centered LIVE badge — one stream, legible transition.
-   The .ctx-live grows to hold the real xterm (.popout-terminal) at the bottom. */
+/* SEAM + LIVE tail: the owner-set split keeps 28% of the visible card for the
+   recorded transcript and 72% for live work. Sticky + a hard min/max prevents
+   output from moving the seam; xterm/served content scrolls inside this box. */
 .ctx-live {
-  flex: 0 0 auto;
-  min-height: 55%;
+  flex: 0 0 72%;
+  height: 72%;
+  min-height: 72%;
+  max-height: 72%;
   display: flex;
   flex-direction: column;
-  position: relative;
-  margin-top: 6px;
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
   padding-top: 12px;
   border-top: 1px dashed rgba(50, 215, 75, 0.4);
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--phos-bg);
+  z-index: 2;
 }
 
 .ctx-live::before {
@@ -1732,10 +1739,11 @@ a.cr-btn {
 .ctx-live .popout-terminal {
   flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 
 .ctx-live.served {
-  flex-grow: 1;
+  flex-grow: 0;
 }
 
 /* Placed crews keep crew-line as transport, never as pixels. The streamed
@@ -1748,6 +1756,7 @@ a.cr-btn {
   gap: 8px;
   padding: 14px 16px 12px;
   color: var(--phos);
+  overflow-y: auto;
 }
 
 .served-live-prompt,

@@ -111,12 +111,14 @@ beforeEach(() => {
       }
     },
     traces: {
-      index: async (terminalId) => {
-        transcriptReads.push(`index:${terminalId}`)
-        return (traceHistory.get(terminalId) ?? []).map((block) => ({
+      index: async (terminalId, request) => {
+        transcriptReads.push(`index:${terminalId}:${JSON.stringify(request)}`)
+        return (traceHistory.get(terminalId) ?? [])
+          .filter((block) => request?.afterIndex === undefined || block.index > request.afterIndex)
+          .map((block) => ({
           index: block.index,
           title: block.prompt
-        }))
+          }))
       },
       boundaryMarkers: async (terminalId) => {
         transcriptReads.push(`markers:${terminalId}`)
@@ -395,6 +397,9 @@ describe("the caller's own transcript surface", () => {
     })
     expect((await get(FREE, '/trace/index', auth))!.body).toEqual([
       { index: 1, title: 'prompt 1' },
+      { index: 2, title: 'prompt 2' }
+    ])
+    expect((await get(FREE, '/trace/index', auth, { afterIndex: '1' }))!.body).toEqual([
       { index: 2, title: 'prompt 2' }
     ])
     expect((await get(FREE, '/trace/markers', auth))!.body).toEqual([])

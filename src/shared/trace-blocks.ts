@@ -765,6 +765,10 @@ export function compactMarkersOf(lines: string[]): TraceBoundaryMarker[] {
   const markers: TraceBoundaryMarker[] = []
   const assigner = new CheckpointAssigner()
   for (const line of lines) {
+    // Assistant/tool-result lines dominate large sessions and can carry tens of
+    // kilobytes each. Neither can move the checkpoint assigner or add a compact
+    // marker, so reject them before JSON.parse.
+    if (!/"type"\s*:\s*"user"/.test(line) && !line.includes('compact_boundary')) continue
     const entry = parseLine(line) as (ClaudeEntry & {
       subtype?: string
       compactMetadata?: { preTokens?: number; postTokens?: number }
@@ -788,6 +792,12 @@ export function compactMarkersOf(lines: string[]): TraceBoundaryMarker[] {
 export interface TraceIndexEntry {
   index: number
   title: string
+}
+
+/** Cursor for the cheap identity/title listing. Omitted returns the full index. */
+export interface TraceIndexRequest {
+  /** Return only identities newer than this checkpoint. */
+  afterIndex?: number
 }
 
 /** Snippet length for index titles (one row in the fan). */

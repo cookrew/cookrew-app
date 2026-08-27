@@ -1,4 +1,10 @@
-import type { TraceBoundaryMarker, TraceIndexEntry, TracePage, TracePageRequest } from './trace-blocks'
+import type {
+  TraceBoundaryMarker,
+  TraceIndexEntry,
+  TraceIndexRequest,
+  TracePage,
+  TracePageRequest
+} from './trace-blocks'
 import type { TurnPage, TurnPageRequest, TurnRecord } from './turn'
 
 /** Public address of the served transcript behind one placed crew card. */
@@ -31,6 +37,6 @@ export type ServedTurnsWireResponse = TurnRecord[] | TurnPage
 export interface ServedRemoteTurnSource {
   listTurns(request: TurnPageRequest): Promise<TurnPage>
   listTrace(request: TracePageRequest): Promise<ServedTracePage>
-  listTraceIndex(): Promise<TraceIndexEntry[]>
+  listTraceIndex(request?: TraceIndexRequest): Promise<TraceIndexEntry[]>
   listTraceMarkers(): Promise<TraceBoundaryMarker[]>
 }

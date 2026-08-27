@@ -13,6 +13,7 @@ import {
   focusedCheckpoint,
   fanLayout,
   mergeCheckpointRows,
+  mergeTraceIndex,
   mergeTrace,
   neighborWindow,
   railAnchorTop,
@@ -27,6 +28,21 @@ import {
   type TraceBlock
 } from '../src/renderer/src/transcript'
 import type { TurnRecord } from '../src/shared/turn'
+
+describe('mergeTraceIndex (incremental live listing)', () => {
+  it('appends cursor pages by identity and lets newer metadata win', () => {
+    expect(
+      mergeTraceIndex(
+        [{ index: 1, title: 'one' }, { index: 2, title: 'old' }],
+        [{ index: 2, title: 'two' }, { index: 3, title: 'three' }]
+      )
+    ).toEqual([
+      { index: 1, title: 'one' },
+      { index: 2, title: 'two' },
+      { index: 3, title: 'three' }
+    ])
+  })
+})
 // Identity-keyed blocks (integration round 2): pos is GONE — TraceBlock.index
 // (1-based, from the trace parsers) is both identity and layout ordinal.
 const block = (index: number, over: Partial<TraceBlock> = {}): TraceBlock => ({
