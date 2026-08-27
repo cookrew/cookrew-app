@@ -5119,8 +5119,8 @@ body.cookrew-mobile .cr-dock .voice-ghost {
    estimate refinement relaid ALL of them out at DPR3 — the wedge that fed
    the iOS jetsam kill. Offscreen blocks now cost nothing to lay out or
    paint; the intrinsic size keeps scroll geometry and scrollIntoView exact. */
-.ctx-block,
-.ctx-placeholder {
+body.cookrew-mobile .ctx-block,
+body.cookrew-mobile .ctx-placeholder {
   content-visibility: auto;
   contain-intrinsic-size: auto 88px;
 }
