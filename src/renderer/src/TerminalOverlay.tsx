@@ -415,7 +415,17 @@ function TerminalOverlay({
         if (reassertTimer) clearTimeout(reassertTimer)
       })
       const inputSub = term.onData((input) => cookrew().ptyInput(node.id, input))
-      term.focus()
+      // Focus pops the software keyboard AND (with a small-font textarea)
+      // iOS's page auto-zoom — on a phone that fired the zoom/resize loop the
+      // moment the overlay opened. Desktop keeps instant focus; the phone
+      // focuses on the first deliberate tap of the pane.
+      if (!isRemoteMode()) {
+        term.focus()
+      } else {
+        const focusOnTap = (): void => term.focus()
+        container.addEventListener('pointerup', focusOnTap, { once: true })
+        cleanups.push(() => container.removeEventListener('pointerup', focusOnTap))
+      }
 
       // The attach replay is plain text and cannot reconstruct a TUI's
       // internal screen state — incremental redraws (ink/Claude Code) then
