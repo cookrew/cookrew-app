@@ -542,12 +542,16 @@ function serveRendererIndex(
     '<head>',
     `<head>${remoteBoot(slug)}${staleBanner(built.notice)}`
   )
-  // no-cache: assets are hash-named, but a cached index.html would keep
-  // phones pinned to a stale bundle across app updates.
+  // no-store, not no-cache: assets are hash-named, but iOS Safari's
+  // crash-recovery reload ("因为出现问题,此网页已重新载入") reuses a cached
+  // index REGARDLESS of no-cache — measured 2026-08-27: the phone kept
+  // booting a two-builds-old bundle through an entire crash loop, so every
+  // fix shipped and none of them ever reached the device. no-store forbids
+  // the copy that made that possible; the index is ~6 KB, the price is noise.
   sendBody(
     response,
     200,
-    { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' },
+    { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
     Buffer.from(html),
     request.headers['accept-encoding']
   )
