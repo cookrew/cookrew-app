@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { AgentRole, TeamForkSpec, TeamMeta, WorkspaceState } from '../../shared/model'
-import type { ServedPaymentRail } from '../../shared/served-payment-rails'
+import {
+  EMPTY_SERVED_PAYMENT_STATUS,
+  readyPaymentRails,
+  type ServedPaymentStatus
+} from '../../shared/served-payment-config'
 import { ServedTeamCard, type ServedTeam } from './ServedTeamCard'
+import { PaymentSettingsSheet } from './PaymentSettingsSheet'
 import {
   ShareOnSave,
   canSubmitShare,
@@ -79,7 +84,11 @@ export function TeamForkPicker({
   // the section cannot open a door.
   const [access, setAccess] = useState<ShareAccess>('just-me')
   const [priceUsd, setPriceUsd] = useState('')
-  const [paymentRails, setPaymentRails] = useState<readonly ServedPaymentRail[]>([])
+  const [paymentStatus, setPaymentStatus] = useState<ServedPaymentStatus>(
+    EMPTY_SERVED_PAYMENT_STATUS
+  )
+  const [paymentSettingsOpen, setPaymentSettingsOpen] = useState(false)
+  const paymentRails = readyPaymentRails(paymentStatus)
   const [servedAt, setServedAt] = useState<string | null>(null)
   /** Which saved teams are taking calls — the shelf's standing state. */
   const [servedTeams, setServedTeams] = useState<readonly ServedTeam[]>([])
@@ -87,8 +96,8 @@ export function TeamForkPicker({
   const [openCard, setOpenCard] = useState<ServedTeam | null>(null)
   const refreshServed = useCallback(() => {
     void cookrew()
-      .servingPaymentRails()
-      .then(setPaymentRails)
+      .servingPaymentStatus()
+      .then(setPaymentStatus)
       .catch(() => undefined)
     void cookrew()
       .servingList()
@@ -243,7 +252,7 @@ export function TeamForkPicker({
     if (busy) return
     // Enter in the name field reaches here without touching the button, so the
     // button's refusal has to be repeated on the path that skips it.
-    if (!canSubmitShare(access, priceUsd, orchName)) return
+    if (!canSubmitShare(access, priceUsd, orchName, paymentRails)) return
     setBusy('save')
     setError(null)
     void cookrew()
@@ -504,7 +513,9 @@ export function TeamForkPicker({
               />
               <button
                 className="cr-btn sm"
-                disabled={busy !== null || !canSubmitShare(access, priceUsd, orchName)}
+                disabled={
+                  busy !== null || !canSubmitShare(access, priceUsd, orchName, paymentRails)
+                }
                 onClick={runSave}
               >
                 {saveButtonLabel(access, busy === 'save')}
@@ -518,6 +529,7 @@ export function TeamForkPicker({
               door={orchName}
               onAccess={setAccess}
               onPrice={setPriceUsd}
+              onConfigurePayments={() => setPaymentSettingsOpen(true)}
             />
             {servedAt && (
               <div className="sos-live">
@@ -538,11 +550,24 @@ export function TeamForkPicker({
           <ServedTeamCard
             team={openCard}
             door={orchName}
+            paymentStatus={paymentStatus}
+            onConfigurePayments={() => setPaymentSettingsOpen(true)}
             onStopped={() => {
               setOpenCard(null)
               refreshServed()
             }}
             onClose={() => setOpenCard(null)}
+          />
+        )}
+
+        {paymentSettingsOpen && (
+          <PaymentSettingsSheet
+            status={paymentStatus}
+            onStatus={(next) => {
+              setPaymentStatus(next)
+              refreshServed()
+            }}
+            onClose={() => setPaymentSettingsOpen(false)}
           />
         )}
 

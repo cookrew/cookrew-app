@@ -331,7 +331,9 @@ export function createDemoApi(): CookrewApi {
     // nothing while telling the user it had. It refuses, visibly.
     servingServe: async () => ({ ok: false as const, reason: 'desktop-only' }),
     servingStop: async () => ({ ok: false }),
-    servingPaymentRails: async () => [],
+    servingPaymentStatus: async () => ({ x402: { ready: false }, stripe: { ready: false } }),
+    servingSetPayTo: async () => ({ ok: false as const, reason: 'write-failed' as const }),
+    servingSetStripeSecret: async () => ({ ok: false as const, reason: 'write-failed' as const }),
     servingList: async () => [],
     servingSessions: async () => [],
     servingEnd: async () => ({ stopped: 0 }),

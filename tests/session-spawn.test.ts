@@ -71,6 +71,9 @@ describe('servedSpawn — the command is wrapped under Seatbelt', () => {
     // The main process may hold this key, but a served crew may never read the
     // source file even when it knows the binding path by name.
     expect(profile).toContain('deny file-read* (subpath "/base/stripe.env")')
+    // Public but still owner configuration: the fixture explicitly keeps the
+    // payment destination inside the same denied ~/.cookrew boundary.
+    expect(profile).toContain('deny file-read* (subpath "/base/payment.json")')
   })
 })
 

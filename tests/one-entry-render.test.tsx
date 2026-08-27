@@ -14,6 +14,8 @@ import { ServedTeamCard, type ServedTeam } from '../src/renderer/src/ServedTeamC
 import { AddCrewSheet } from '../src/renderer/src/AddCrewSheet'
 import { renderServedCrewFace, type CrewFace } from '../src/main/served-endpoints'
 import type { ServedPaymentRail } from '../src/shared/served-payment-rails'
+import { EMPTY_SERVED_PAYMENT_STATUS } from '../src/shared/served-payment-config'
+import { PaymentSettingsSheet } from '../src/renderer/src/PaymentSettingsSheet'
 
 /**
  * THE ONE-ENTRY SURFACES render, and say the things the ruling requires.
@@ -41,6 +43,7 @@ const paint = (
       door="Conductor"
       onAccess={noop}
       onPrice={noop}
+      onConfigurePayments={noop}
     />
   )
 
@@ -101,21 +104,22 @@ describe('the primary says everything the click does', () => {
   })
 
   it('cannot submit a paid door that could not quote at 402', () => {
-    expect(canSubmitShare('paid', '', 'Conductor')).toBe(false)
-    expect(canSubmitShare('paid', '0', 'Conductor')).toBe(false)
-    expect(canSubmitShare('paid', '2.50', 'Conductor')).toBe(true)
+    expect(canSubmitShare('paid', '', 'Conductor', ['x402'])).toBe(false)
+    expect(canSubmitShare('paid', '0', 'Conductor', ['x402'])).toBe(false)
+    expect(canSubmitShare('paid', '2.50', 'Conductor', [])).toBe(false)
+    expect(canSubmitShare('paid', '2.50', 'Conductor', ['x402'])).toBe(true)
     // A free door never blocks on a price it does not have.
-    expect(canSubmitShare('just-me', '', 'Conductor')).toBe(true)
-    expect(canSubmitShare('account', '', 'Conductor')).toBe(true)
+    expect(canSubmitShare('just-me', '', 'Conductor', [])).toBe(true)
+    expect(canSubmitShare('account', '', 'Conductor', [])).toBe(true)
   })
 
   it('cannot submit a PUBLIC door with no orch — the save is where that is caught', () => {
     // Owner ruling 2026-08-26. The crew used to save, serve, and hand the first
     // caller's prompt to a bare shell; the refusal belongs at the act.
-    expect(canSubmitShare('account', '', null)).toBe(false)
-    expect(canSubmitShare('paid', '2.50', null)).toBe(false)
+    expect(canSubmitShare('account', '', null, [])).toBe(false)
+    expect(canSubmitShare('paid', '2.50', null, ['x402'])).toBe(false)
     // Private is untouched: just-me publishes nothing, so it needs no door.
-    expect(canSubmitShare('just-me', '', null)).toBe(true)
+    expect(canSubmitShare('just-me', '', null, [])).toBe(true)
   })
 
   it('agrees with the backend on what a price is', () => {
@@ -136,6 +140,55 @@ describe('serve refusal copy', () => {
   })
 })
 
+describe('Ways to get paid — the missing paid-door affordance', () => {
+  it('renders both setup paths while exposing no Stripe value', () => {
+    const html = renderToStaticMarkup(
+      <PaymentSettingsSheet
+        status={EMPTY_SERVED_PAYMENT_STATUS}
+        onStatus={noop}
+        onClose={noop}
+      />
+    )
+    expect(html).toContain('Ways to get paid')
+    expect(html).toContain('USDC receiving address')
+    expect(html).toContain('Stripe secret key')
+    expect(html).toMatch(/write-only/i)
+    expect(html).not.toContain('sk_test_')
+  })
+
+  it('paid plus zero rails shows the fix beside a disabled submit decision', () => {
+    const html = paint('paid', '2.50', [])
+    expect(html).toContain('Set up ways to get paid')
+    expect(html).toContain('A paid door needs at least one way to pay you.')
+    expect(canSubmitShare('paid', '2.50', 'Conductor', [])).toBe(false)
+  })
+
+  it('configured status names the actual rails and only the Stripe mode', () => {
+    const html = renderToStaticMarkup(
+      <PaymentSettingsSheet
+        status={{
+          x402: { ready: true, payTo: '0x1111111111111111111111111111111111111111' },
+          stripe: { ready: true, mode: 'test' }
+        }}
+        onStatus={noop}
+        onClose={noop}
+      />
+    )
+    expect(html).toContain('USDC rail: configured')
+    expect(html).toContain('0x1111111111111111111111111111111111111111')
+    expect(html).toContain('Card rail: configured (test)')
+    expect(html).not.toContain('sk_test_')
+    expect(html).not.toContain('Paste secret key')
+  })
+
+  it('the Stripe input never becomes React state and is cleared before the reply', () => {
+    const sheet = src('PaymentSettingsSheet.tsx')
+    expect(sheet).not.toMatch(/\[\s*stripe(?:Secret|Key|Value)\s*,/i)
+    expect(sheet.indexOf("field.value = ''")).toBeGreaterThan(-1)
+    expect(sheet.indexOf("field.value = ''")).toBeLessThan(sheet.indexOf('void write'))
+  })
+})
+
 describe('ServedTeamCard — who is on, on the thing you published', () => {
   const team: ServedTeam = {
     serviceId: 'svc-research-crew',
@@ -149,7 +202,14 @@ describe('ServedTeamCard — who is on, on the thing you published', () => {
 
   it('leads with the address, because that is the thing you hand over', () => {
     const html = renderToStaticMarkup(
-      <ServedTeamCard team={team} door="Conductor" onStopped={noop} onClose={noop} />
+      <ServedTeamCard
+        team={team}
+        door="Conductor"
+        paymentStatus={EMPTY_SERVED_PAYMENT_STATUS}
+        onConfigurePayments={noop}
+        onStopped={noop}
+        onClose={noop}
+      />
     )
     expect(html).toContain('http://192.168.1.20:8639/research-crew')
     expect(html).toContain('COPY LINK')
@@ -158,7 +218,14 @@ describe('ServedTeamCard — who is on, on the thing you published', () => {
 
   it('names the door and the price on one line', () => {
     const html = renderToStaticMarkup(
-      <ServedTeamCard team={team} door="Conductor" onStopped={noop} onClose={noop} />
+      <ServedTeamCard
+        team={team}
+        door="Conductor"
+        paymentStatus={EMPTY_SERVED_PAYMENT_STATUS}
+        onConfigurePayments={noop}
+        onStopped={noop}
+        onClose={noop}
+      />
     )
     expect(html).toContain('Callers land on Conductor')
     expect(html).toContain('2.50 USD · per session · USDC · card')
@@ -166,10 +233,33 @@ describe('ServedTeamCard — who is on, on the thing you published', () => {
 
   it('offers STOP SERVING and reassures the owner they can carry on', () => {
     const html = renderToStaticMarkup(
-      <ServedTeamCard team={team} door="Conductor" onStopped={noop} onClose={noop} />
+      <ServedTeamCard
+        team={team}
+        door="Conductor"
+        paymentStatus={EMPTY_SERVED_PAYMENT_STATUS}
+        onConfigurePayments={noop}
+        onStopped={noop}
+        onClose={noop}
+      />
     )
     expect(html).toContain('STOP SERVING')
     expect(html).toContain('Keep working exactly as you did before')
+  })
+
+  it('an existing paid door with no rail offers the same setup sheet', () => {
+    const html = renderToStaticMarkup(
+      <ServedTeamCard
+        team={{ ...team, paymentRails: [] }}
+        door="Conductor"
+        paymentStatus={EMPTY_SERVED_PAYMENT_STATUS}
+        onConfigurePayments={noop}
+        onStopped={noop}
+        onClose={noop}
+      />
+    )
+    expect(html).toContain('Research Crew needs a way to get paid.')
+    expect(html).toContain('A paid door needs at least one way to pay you.')
+    expect(html).toContain('Set up ways to get paid')
   })
 })
 

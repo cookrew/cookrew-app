@@ -21,6 +21,10 @@ import type { BoardRow, BoardSummary } from "../../shared/board";
 import type { InstalledPreset } from "../../shared/preset-chip";
 import type { VersionPinRecord } from "../../shared/version-pin";
 import type { ServedPaymentRail } from "../../shared/served-payment-rails";
+import type {
+  PaymentConfigReply,
+  ServedPaymentStatus,
+} from "../../shared/served-payment-config";
 
 /**
  * GET /api/board's payload, mirrored here rather than imported from main —
@@ -84,7 +88,9 @@ export interface CookrewApi {
     | { ok: false; reason: string }
   >;
   servingStop: (serviceId: string) => Promise<{ ok: boolean }>;
-  servingPaymentRails: () => Promise<readonly ServedPaymentRail[]>;
+  servingPaymentStatus: () => Promise<ServedPaymentStatus>;
+  servingSetPayTo: (payTo: string) => Promise<PaymentConfigReply>;
+  servingSetStripeSecret: (secret: string) => Promise<PaymentConfigReply>;
   servingList: () => Promise<
     readonly {
       serviceId: string;

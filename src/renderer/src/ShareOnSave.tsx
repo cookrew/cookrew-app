@@ -38,9 +38,9 @@ export function saveButtonLabel(access: ShareAccess, busy: boolean): string {
 /**
  * Can the sheet be submitted?
  *
- * A paid door with no price cannot quote at 402, and a PUBLIC door with no orch
- * cannot answer anybody — the crew would save, start serving, and hand the
- * first caller's prompt to a bare shell (owner ruling, 2026-08-26). Both are
+ * A paid door with no price or ready rail cannot quote at 402, and a PUBLIC
+ * door with no orch cannot answer anybody — the crew would save, start serving,
+ * and hand the first caller's prompt to a bare shell (owner ruling, 2026-08-26). All are
  * refused HERE, at the moment of the act, rather than by the gate a caller
  * meets later: a silent save that 503s a stranger is a failure the owner never
  * sees and the caller cannot explain.
@@ -52,11 +52,12 @@ export function saveButtonLabel(access: ShareAccess, busy: boolean): string {
 export function canSubmitShare(
   access: ShareAccess,
   priceUsd: string,
-  door: string | null
+  door: string | null,
+  paymentRails: readonly ServedPaymentRail[]
 ): boolean {
   if (access === 'just-me') return true
   if (door === null) return false
-  return access !== 'paid' || priceLooksGood(priceUsd)
+  return access !== 'paid' || (priceLooksGood(priceUsd) && paymentRails.length > 0)
 }
 
 /**
@@ -75,6 +76,7 @@ export function serveRefusalText(reason: string | undefined): string {
   if (reason === 'bad-price') return MKT_SERVE['mkt.serve.refused.bad-price']
   if (reason === 'priced-free-door') return MKT_SERVE['mkt.serve.refused.priced-free-door']
   if (reason === 'grant-unusable') return MKT_SERVE['mkt.serve.refused.grant-unusable']
+  if (reason === 'no-payment-rail') return MKT_SERVE['mkt.serve.payment.required']
   if (reason === 'no-template') return 'that template is no longer on this machine.'
   return reason
 }
@@ -85,7 +87,8 @@ export function ShareOnSave({
   paymentRails,
   door,
   onAccess,
-  onPrice
+  onPrice,
+  onConfigurePayments
 }: {
   access: ShareAccess
   priceUsd: string
@@ -100,6 +103,7 @@ export function ShareOnSave({
   door: string | null
   onAccess: (next: ShareAccess) => void
   onPrice: (next: string) => void
+  onConfigurePayments: () => void
 }): React.JSX.Element {
   const option = (
     value: ShareAccess,
@@ -153,9 +157,21 @@ export function ShareOnSave({
                 })
               : MKT_SERVE['mkt.serve.rails.none']}
           </span>
+          {paymentRails.length === 0 && (
+            <button type="button" className="sos-setup" onClick={onConfigurePayments}>
+              {MKT_SERVE['mkt.serve.payment.setup']}
+            </button>
+          )}
           {priceUsd.length > 0 && !priceLooksGood(priceUsd) && (
             <span className="sos-bad">a price has to be a number above zero</span>
           )}
+        </div>
+      )}
+
+      {access === 'paid' && paymentRails.length === 0 && (
+        <div className="sos-door sos-door-bad" role="alert">
+          <span className="sos-door-g">◆</span>
+          <span className="sos-door-s">{MKT_SERVE['mkt.serve.payment.required']}</span>
         </div>
       )}
 

@@ -67,7 +67,12 @@ const api = {
   servingServe: (input: { templateId: string; access: 'account' | 'paid'; priceUsd?: string }) =>
     ipcRenderer.invoke('serving:serve', input),
   servingStop: (serviceId: string) => ipcRenderer.invoke('serving:stop', serviceId),
-  servingPaymentRails: () => ipcRenderer.invoke('serving:rails'),
+  servingPaymentStatus: () => ipcRenderer.invoke('serving:payment-status'),
+  servingSetPayTo: (payTo: string) => ipcRenderer.invoke('serving:payment-pay-to', payTo),
+  // Write-only by construction: the bridge exposes a setter and sanitized
+  // status, never a method capable of reading STRIPE_SECRET_KEY back.
+  servingSetStripeSecret: (secret: string) =>
+    ipcRenderer.invoke('serving:payment-stripe', secret),
   servingList: () => ipcRenderer.invoke('serving:list'),
   servingSessions: () => ipcRenderer.invoke('serving:sessions'),
   servingEnd: (sessionId: string) => ipcRenderer.invoke('serving:end', sessionId),

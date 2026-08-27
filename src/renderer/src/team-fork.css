@@ -697,6 +697,11 @@
 .sos-unit { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-soft); }
 .sos-rails { font-family: var(--font-mono); font-size: 10.5px; color: var(--violet); }
 .sos-bad { font-family: var(--font-mono); font-size: 10px; color: var(--rose); }
+.sos-setup {
+  border: 1px dashed var(--violet); background: transparent; color: var(--violet);
+  padding: 4px 7px; font: 700 10px var(--font-mono); cursor: pointer;
+}
+.sos-door-bad { border-color: var(--rose); background: rgba(220, 38, 38, 0.08); }
 /* The door fact — shown only once a public option is picked. */
 .sos-door {
   display: flex;
@@ -736,6 +741,8 @@
   border: 1.5px solid var(--violet); flex: 1; min-width: 0; word-break: break-all;
 }
 .stc-sessions { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; }
+.stc-payment-gap { margin-top: 12px; padding: 10px 12px; border-left: 3px solid var(--rose); background: rgba(220, 38, 38, 0.08); }
+.stc-payment-gap p { margin: 0 0 8px; font-size: 12px; }
 .stc-row {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 8px; border: 1px solid var(--cr-line, #4c463a);

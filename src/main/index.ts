@@ -149,25 +149,21 @@ import { servedSessionProvisioner } from './served-onboarding'
 import { handleServedRoute } from './served-endpoints'
 import { servedTurnReply } from './served-turn-reply'
 import { handleServedPayRoute } from './served-pay-route'
-import { combinePaymentTerms, railSettle } from './payment-rails'
-import { loadStripeSecret } from './stripe-config'
+import { railSettle } from './payment-rails'
+import { createServedPaymentConfig } from './served-payment-config'
 import {
   createStripeRedemptionStore,
   stripeCreateCheckout,
   stripeGet,
-  stripePaymentTerms,
   stripePost,
-  stripeSettle,
-  type StripeConfig
+  stripeSettle
 } from './stripe-rail'
 import {
-  BASE_SEPOLIA,
   createNonceLedger,
   paymentRequirements,
   postJson,
   x402Settle,
-  type PaymentRequirements,
-  type X402Config
+  type PaymentRequirements
 } from './x402-rail'
 import { RemoteCrewStore, parseCrewLink } from './remote-crews'
 import { ServeRefused, type ServeAccess, type ServedTemplate } from './session-served'
@@ -391,9 +387,7 @@ const callNodesOf = memoizeBriefly((workspaceId: string) => store.workspaceState
 // and the per-backend Seatbelt wrap for herdr are the remaining live-tested
 // steps; everything here compiles and is unit-tested.
 const sessionsBase = path.join(homedir(), '.cookrew')
-const stripeSecret = loadStripeSecret({ base: sessionsBase })
-const servedStripeConfig: StripeConfig | null =
-  stripeSecret === null ? null : { secretKey: stripeSecret }
+const servedPayments = createServedPaymentConfig({ base: sessionsBase })
 const servedStripeRedemptions = createStripeRedemptionStore(
   path.join(sessionsBase, 'stripe-redemptions.json')
 )
@@ -531,14 +525,12 @@ const servedNonces = createNonceLedger()
  * it there is no destination, so `paymentRequirements` cannot quote and the
  * paid door answers 503 rather than admitting anyone for free.
  */
-function servedX402Config(): X402Config {
-  return {
-    ...BASE_SEPOLIA,
-    payTo: process.env.COOKREW_PAY_TO ?? '',
-    facilitator: process.env.COOKREW_X402_FACILITATOR ?? BASE_SEPOLIA.facilitator,
-    network: process.env.COOKREW_X402_NETWORK ?? BASE_SEPOLIA.network,
-    asset: process.env.COOKREW_X402_ASSET ?? BASE_SEPOLIA.asset
-  }
+function servedX402Config(): ReturnType<typeof servedPayments.x402Config> {
+  return servedPayments.x402Config()
+}
+
+function servedStripeConfig(): ReturnType<typeof servedPayments.stripeConfig> {
+  return servedPayments.stripeConfig()
 }
 
 /**
@@ -548,23 +540,12 @@ function servedX402Config(): X402Config {
 function servedPaymentTerms(
   template: Pick<ServedTemplate, 'priceUsd' | 'slug'>
 ): unknown | null {
-  const x402 = paymentRequirements(
-    servedX402Config(),
-    template.priceUsd ?? '',
-    `/${template.slug}/ask`,
-    `One session with the ${template.slug} crew`
-  )
-  const stripe = stripePaymentTerms(
-    servedStripeConfig,
-    template.priceUsd ?? '',
-    `/${template.slug}/api/call/pay`
-  )
-  return combinePaymentTerms(x402, stripe)
+  return servedPayments.terms(template)
 }
 
-/** Stable identifiers only. No quote details or config cross owner IPC. */
-function configuredServedPaymentRails(): ReturnType<typeof servedPaymentRails> {
-  return servedPaymentRails(servedPaymentTerms({ priceUsd: '1', slug: 'payment-preview' }))
+/** Public address + presence/mode only. The Stripe value has no read path. */
+function configuredServedPaymentStatus(): ReturnType<typeof servedPayments.status> {
+  return servedPayments.status()
 }
 
 /**
@@ -607,11 +588,11 @@ async function handleServedSlug(
   const checkout = await handleServedPayRoute(
     {
       issuer,
-      createCheckout: servedStripeConfig === null
-        ? null
-        : async (input) => {
+      createCheckout: async (input) => {
+            const config = servedStripeConfig()
+            if (config === null) return null
             const result = await stripeCreateCheckout(
-              { config: servedStripeConfig, post: stripePost },
+              { config, post: stripePost },
               {
                 priceUsd: input.amountUsd,
                 serviceId: input.serviceId,
@@ -697,8 +678,9 @@ async function handleServedSlug(
               )
             },
             stripe: async (stripePayment) => {
+              const config = servedStripeConfig()
               if (
-                servedStripeConfig === null ||
+                config === null ||
                 settlementClaims === null ||
                 settlementClaims.workspace !== template.serviceId
               ) {
@@ -706,7 +688,7 @@ async function handleServedSlug(
               }
               return stripeSettle(
                 {
-                  config: servedStripeConfig,
+                  config,
                   get: stripeGet,
                   redemptions: servedStripeRedemptions
                 },
@@ -3351,6 +3333,9 @@ function registerIpc(handlers: RestoreHandlers): void {
       input: { templateId: string; access: ServeAccess; priceUsd?: string }
     ) => {
       if (!teams.load(input.templateId)) return { ok: false, reason: 'no-template' as const }
+      if (input.access === 'paid' && servedPayments.rails().length === 0) {
+        return { ok: false, reason: 'no-payment-rail' as const }
+      }
       // The slug is derived from the team's own name and made unique against
       // the workspace namespace it shares — a service must not shadow a
       // workspace the owner named, and a live workspace wins the slug anyway.
@@ -3385,7 +3370,15 @@ function registerIpc(handlers: RestoreHandlers): void {
     serving.stop(serviceId)
     return { ok: true as const }
   })
-  ipcMain.handle('serving:rails', () => configuredServedPaymentRails())
+  ipcMain.handle('serving:payment-status', () => configuredServedPaymentStatus())
+  ipcMain.handle('serving:payment-pay-to', (_e, value: unknown) => {
+    const result = servedPayments.setPayTo(typeof value === 'string' ? value : '')
+    return result.ok ? { ...result, status: configuredServedPaymentStatus() } : result
+  })
+  ipcMain.handle('serving:payment-stripe', (_e, value: unknown) => {
+    const result = servedPayments.setStripeSecret(typeof value === 'string' ? value : '')
+    return result.ok ? { ...result, status: configuredServedPaymentStatus() } : result
+  })
   ipcMain.handle('serving:list', () =>
     serving.served.list().map((t) => ({
       ...t,

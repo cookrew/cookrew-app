@@ -66,6 +66,9 @@ export function ownerSecretPaths(base: string, home: string = homedir()): readon
     // is what a service that was lent nothing must not be able to go and take.
     path.join(base, 'sous.json'),
     path.join(base, 'qwen.env'),
-    path.join(base, 'stripe.env')
+    path.join(base, 'stripe.env'),
+    // Public data, but still owner payment configuration. The fixture binds it
+    // to the same served-sandbox deny as the write-only Stripe source.
+    path.join(base, 'payment.json')
   ]
 }

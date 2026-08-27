@@ -7,6 +7,7 @@ import {
   servedPaymentRailsLabel
 } from '../../shared/marketplace-copy'
 import type { ServedPaymentRail } from '../../shared/served-payment-rails'
+import { readyPaymentRails, type ServedPaymentStatus } from '../../shared/served-payment-config'
 // The gs-* sheet primitives — stated by the wearer, not inherited from the
 // (retired) GrantPanel that used to carry this import.
 import './grant-surface.css'
@@ -45,6 +46,8 @@ export interface ServedTeam {
 export function ServedTeamCard({
   team,
   door,
+  paymentStatus,
+  onConfigurePayments,
   onStopped,
   onClose
 }: {
@@ -57,6 +60,8 @@ export function ServedTeamCard({
    * honest answer to "which one?" is sometimes "not from here".
    */
   door: string | null
+  paymentStatus: ServedPaymentStatus
+  onConfigurePayments: () => void
   onStopped: () => void
   onClose: () => void
 }): React.JSX.Element {
@@ -72,13 +77,16 @@ export function ServedTeamCard({
   }, [team.serviceId])
   useEffect(refresh, [refresh])
 
+  const paymentRails = Array.from(
+    new Set([...team.paymentRails, ...readyPaymentRails(paymentStatus)])
+  )
   const priceLine =
     team.access === 'paid'
       ? fillCopy(MKT_SERVE['mkt.serve.price.paid'], {
           price: team.priceUsd ?? '',
           rails:
-            team.paymentRails.length > 0
-              ? servedPaymentRailsLabel(team.paymentRails)
+            paymentRails.length > 0
+              ? servedPaymentRailsLabel(paymentRails)
               : MKT_SERVE['mkt.serve.rails.none.short']
         })
       : MKT_SERVE['mkt.serve.price.free']
@@ -92,7 +100,14 @@ export function ServedTeamCard({
         }}
       >
         <header className="gs-sheet-head">
-          <h2>{fillCopy(MKT_SERVE['mkt.serve.live'], { templateName: team.templateId })}</h2>
+          <h2>
+            {fillCopy(
+              team.access === 'paid' && paymentRails.length === 0
+                ? MKT_SERVE['mkt.serve.payment.live-blocked']
+                : MKT_SERVE['mkt.serve.live'],
+              { templateName: team.templateId }
+            )}
+          </h2>
           <button className="gs-x" onClick={onClose} aria-label="Close">
             ✕
           </button>
@@ -116,6 +131,14 @@ export function ServedTeamCard({
             ? priceLine
             : fillCopy(MKT_SERVE['mkt.serve.live.address'], { orch: door, priceLine })}
         </p>
+        {team.access === 'paid' && paymentRails.length === 0 && (
+          <section className="stc-payment-gap" role="alert">
+            <p>{MKT_SERVE['mkt.serve.payment.required']}</p>
+            <button className="gs-primary" onClick={onConfigurePayments}>
+              {MKT_SERVE['mkt.serve.payment.setup']}
+            </button>
+          </section>
+        )}
 
         <section className="stc-sessions">
           <span className="gs-label">{MKT_SESSIONS['mkt.sessions.col.caller'].toUpperCase()}</span>

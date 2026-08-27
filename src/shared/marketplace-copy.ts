@@ -604,6 +604,29 @@ export const MKT_SERVE = {
   'mkt.serve.rails.live': 'Offers {rails}',
   'mkt.serve.rails.none': 'No payment rail is configured yet.',
   'mkt.serve.rails.none.short': 'no payment rail configured',
+  'mkt.serve.payment.required': 'A paid door needs at least one way to pay you.',
+  'mkt.serve.payment.live-blocked': '{templateName} needs a way to get paid.',
+  'mkt.serve.payment.setup': 'Set up ways to get paid',
+  'mkt.serve.payment.title': 'Ways to get paid',
+  'mkt.serve.payment.subtitle':
+    'Choose either one or both. Callers pay you directly — Cookrew never holds the money.',
+  'mkt.serve.payment.usdc.title': 'USDC on Base',
+  'mkt.serve.payment.usdc.label': 'USDC receiving address',
+  'mkt.serve.payment.usdc.hint':
+    'This 0x address is public and appears in the payment request shown to callers.',
+  'mkt.serve.payment.usdc.ready': 'USDC rail: configured',
+  'mkt.serve.payment.usdc.save': 'SAVE ADDRESS',
+  'mkt.serve.payment.stripe.title': 'Card with Stripe',
+  'mkt.serve.payment.stripe.label': 'Stripe secret key',
+  'mkt.serve.payment.stripe.hint':
+    'Write-only: Cookrew stores this at 0600, clears this field, and never shows the key again.',
+  'mkt.serve.payment.stripe.ready': 'Card rail: configured ({mode})',
+  'mkt.serve.payment.stripe.save': 'SAVE KEY',
+  'mkt.serve.payment.invalid-pay-to': 'Enter a 0x address with 40 hexadecimal characters.',
+  'mkt.serve.payment.invalid-stripe-key':
+    'Paste a Stripe secret key beginning sk_test_ or sk_live_.',
+  'mkt.serve.payment.write-failed':
+    "Couldn't save that on this machine. The previous payment setup is unchanged.",
   'mkt.serve.rail.x402': 'USDC',
   'mkt.serve.rail.stripe': 'card',
   /** The bound the reversibility promise needs, or it reads as a recall. */
