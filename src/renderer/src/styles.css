@@ -5028,3 +5028,16 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   content-visibility: auto;
   contain-intrinsic-size: auto 88px;
 }
+
+
+/* Phone memory diet: with a terminal overlay owning the stage, the canvas
+   underneath is invisible ballast — drop its render objects and iOS layer
+   backing entirely. State lives in React; closing the overlay restores it. */
+body.cookrew-mobile.cr-overlay-owns-stage .react-flow__viewport,
+body.cookrew-mobile.cr-overlay-owns-stage .react-flow__minimap,
+body.cookrew-mobile.cr-overlay-owns-stage .react-flow__controls,
+body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
+  /* The .react-flow CONTAINER keeps its size — the overlay's rect and the
+     LOD pane measurements read it — while every heavy inner layer drops. */
+  display: none;
+}

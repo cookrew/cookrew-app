@@ -141,6 +141,17 @@ function Canvas(): React.JSX.Element {
   const [guides, setGuides] = useState<SnapGuide[]>([])
   /** Terminal whose overlay owns the stage — the dock shows its composer. */
   const [zoomedTerminalId, setZoomedTerminalId] = useState<string | null>(null)
+  // PHONE MEMORY DIET (2026-08-27): while an overlay owns the stage, the
+  // canvas underneath it is pure ballast — 39 cards, edges and a minimap of
+  // iOS layer backing pressing against the same 1536 MB jetsam cap the
+  // overlay's own weight needs. display:none (via this body class) drops
+  // their render objects and backing stores; React state is untouched and
+  // the canvas reappears the instant the overlay closes. Remote only.
+  useEffect(() => {
+    if (!isRemoteMode()) return
+    document.body.classList.toggle('cr-overlay-owns-stage', zoomedTerminalId !== null)
+    return () => document.body.classList.remove('cr-overlay-owns-stage')
+  }, [zoomedTerminalId])
   /** Global agent roster panel (opened from the header). */
   /**
    * Which of the two main views the stage shows. The agents view renders as a
