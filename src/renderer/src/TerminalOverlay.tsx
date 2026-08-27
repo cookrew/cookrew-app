@@ -407,7 +407,18 @@ function TerminalOverlay({
       // size. Idle viewers adopt and stay quiet, so two viewers cannot fight.
       let reassertTimer: ReturnType<typeof setTimeout> | null = null
       markStage('overlay:attach-start')
+      // The replay is ~11 bytes on a cold mirror — the real payload is the
+      // DELTA FLOOD that follows (the busy TUI's full redraw). Three healthy
+      // mounts died seconds later inside that flood, so it gets counted:
+      // a marker every 25 chunks and a 2s heartbeat with totals; the last
+      // count before death is the dose that killed.
       let firstChunk = true
+      let deltaChunks = 0
+      let deltaBytes = 0
+      const deltaBeat = setInterval(() => {
+        if (deltaChunks > 0) markStage(`overlay:delta-beat c=${deltaChunks} b=${deltaBytes}`)
+      }, 2000)
+      cleanups.push(() => clearInterval(deltaBeat))
       const detach = cookrew().ptyAttach(
         node.id,
         (chunk) => {
@@ -416,6 +427,11 @@ function TerminalOverlay({
             markStage(`overlay:replay-write-start len=${chunk.length}`)
             term.write(chunk, () => markStage('overlay:replay-write-done'))
             return
+          }
+          deltaChunks += 1
+          deltaBytes += chunk.length
+          if (deltaChunks % 25 === 0) {
+            markStage(`overlay:delta c=${deltaChunks} b=${deltaBytes}`)
           }
           term.write(chunk)
         },
