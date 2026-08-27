@@ -31,11 +31,14 @@ Owner ruling that scopes this work:
 ## Reproduce the current state
 
 ```
-node scratchpad/served-crew-drive.mjs qa-shell-door          # free door
-node scratchpad/served-crew-drive.mjs <slug> --pay tx-ok     # paid door
+node scratchpad/served-crew-drive.mjs qa-orch-door --sub qa-$(date +%s) --twice
 ```
 
-Prints: public face → challenge → ed25519 assert → /ask (402 if paid) → reply.
+Use a fresh subject so a prior session cannot hide a cold-boot failure. The
+driver exits zero only for a non-empty agent reply and then proves the second
+ask reused the session. `qa-serve-demo` and `qa-shell-door` are intentionally
+not acceptance fixtures: their persisted no-orch records remain refused, as a
+stale unsafe template should, and are not repaired in place.
 
 ## KNOWN GAPS (the work)
 

@@ -145,6 +145,7 @@ import { makeEntryTerminalLookup, rmSandbox } from './session-instantiator-mount
 import { ServedCallers } from './served-callers'
 import { serviceGrants } from './service-grants-store'
 import { handleServedRoute } from './served-endpoints'
+import { servedTurnReply } from './served-turn-reply'
 import { handleServedPayRoute } from './served-pay-route'
 import { combinePaymentTerms, railSettle } from './payment-rails'
 import { loadStripeSecret } from './stripe-config'
@@ -644,7 +645,13 @@ async function handleServedSlug(
         if (!ptys.get(conductorId)) ensureTerminalMirror(conductorId)
         const session = ptys.get(conductorId)
         if (!session) throw new Error('the crew has no live door')
-        return askTerminal(session, prompt)
+        return servedTurnReply(
+          {
+            history: () => turns.history(conductorId),
+            deliver: () => askTerminal(session, prompt)
+          },
+          prompt
+        )
       },
       grantBudget: { allowsNewSession: (serviceId) => grants.allowsNewSession(serviceId) },
       // The quote and the settle are ONE decision expressed twice: the caller
