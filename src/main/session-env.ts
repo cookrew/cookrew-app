@@ -63,12 +63,29 @@ export interface SessionEnvInput {
  * `process.env.ANTHROPIC_API_KEY` is undefined rather than a decoy an injected
  * agent could still probe the shape of.
  */
+/**
+ * Directories a served harness is guaranteed to find its binary in.
+ *
+ * PATH used to be inherited verbatim from the app process, which made a
+ * stranger's crew depend on HOW COOKREW WAS LAUNCHED: a Dock launch gets a
+ * minimal PATH with no /opt/homebrew/bin, and `npm run dev` prepends
+ * node_modules/.bin from whatever directory it ran in. A served pi then died
+ * at posix_spawnp — no binary, no process, no session file — and the caller
+ * saw "no file-backed agent turn" three layers later (2026-08-28). These
+ * standard locations are appended, never substituted, so an owner's own PATH
+ * still wins for anything it does provide.
+ */
+const HARNESS_PATH_DIRS = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']
+
 export function sessionEnv(input: SessionEnvInput): Record<string, string> {
   const env: Record<string, string> = {}
   for (const key of SAFE_KEYS) {
     const value = input.parent[key]
     if (typeof value === 'string' && value.length > 0) env[key] = value
   }
+  const inherited = (env.PATH ?? '').split(':').filter((dir) => dir.length > 0)
+  const missing = HARNESS_PATH_DIRS.filter((dir) => !inherited.includes(dir))
+  env.PATH = [...inherited, ...missing].join(':')
   // The sandbox is HOME. See the header — this is a whole class of secret
   // locations closed without naming any of them.
   env.HOME = input.sandbox

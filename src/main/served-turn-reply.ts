@@ -41,8 +41,13 @@ export async function servedTurnReply(
   const timeoutMs = options.finalityTimeoutMs ?? DEFAULT_FINALITY_TIMEOUT_MS
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS
 
-  // Deliberately discarded. The session file below is the reply authority.
-  await deps.deliver()
+  // The session file below is the reply AUTHORITY, but the delivery verdict
+  // is still evidence: a cancelled delivery means no CR was ever written, so
+  // waiting out the finality timeout would blame the agent for a prompt it
+  // was never asked. Log it — a served caller's failure must name its layer
+  // (2026-08-28).
+  const verdict = await deps.deliver()
+  console.error(`served delivery verdict: ${JSON.stringify(verdict)?.slice(0, 200)}`)
 
   const deadline = now() + timeoutMs
   for (;;) {

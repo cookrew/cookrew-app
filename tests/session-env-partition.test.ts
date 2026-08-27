@@ -61,7 +61,10 @@ describe('env scrubbing — an allowlist, because a denylist ages badly', () => 
 
   it('keeps only what a harness needs to run', () => {
     const out = env()
-    expect(out.PATH).toBe(parent.PATH)
+    // PATH is the owner's, EXTENDED — it must still start with what they had,
+    // but a served harness cannot depend on how the app was launched (see the
+    // harness-directories test below).
+    expect(out.PATH.startsWith(parent.PATH)).toBe(true)
     expect(out.TERM).toBe(parent.TERM)
     expect(out.COOKREW_SESSION).toBe('svc-ana-1')
     expect(out.COOKREW_SERVED).toBe('1')
@@ -168,5 +171,26 @@ describe('session identity — keyed by account, ordinal never reused', () => {
     const b = sessionIdentity('svc', 'ana', 1)
     expect(a.sessionId).toBe(b.sessionId)
     expect(a.workspaceName).not.toBe(b.workspaceName)
+  })
+
+  it('guarantees the harness directories a served agent needs to exec', () => {
+    // The failure this pins: PATH was inherited verbatim, so a served crew
+    // depended on HOW the app was launched — a Dock launch carries no
+    // /opt/homebrew/bin, pi never spawned (posix_spawnp failed), and the
+    // caller saw "no file-backed agent turn" three layers from the cause.
+    const env = sessionEnv({
+      parent: { PATH: '/custom/tools:/usr/bin' },
+      sandbox: '/base/sessions/svc/ana-1',
+      sessionId: 'svc-ana-1',
+      grantedKeys: []
+    })
+    const dirs = env.PATH.split(':')
+    for (const required of ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']) {
+      expect(dirs, required).toContain(required)
+    }
+    // The owner's own entries keep PRECEDENCE — appended, never substituted.
+    expect(dirs[0]).toBe('/custom/tools')
+    // …and a directory already present is not duplicated.
+    expect(dirs.filter((d) => d === '/usr/bin')).toHaveLength(1)
   })
 })

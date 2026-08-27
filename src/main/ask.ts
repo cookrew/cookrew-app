@@ -671,7 +671,15 @@ async function waitForReply(
   timing: { quiescenceMs: number; timeoutMs: number; graceMs: number },
   signal?: AbortSignal
 ): Promise<void> {
-  const mux = multiplexer()
+  // The session's OWN backend decides, not the global one. A served session
+  // runs on the direct backend while the app's global multiplexer is herdr,
+  // so asking herdr to waitUntilIdle on a pane it has never heard of blocked
+  // for the full 10-minute timeout: the caller's ask 500'd long before, and
+  // the delivery verdict never printed because deliver() had not returned
+  // (2026-08-28). hostBacked is false exactly for served sessions.
+  // `!== false`, matching the native-ask path above: a duck-typed test fake
+  // without the field keeps the host-backed behaviour it was written for.
+  const mux = session.hostBacked !== false ? multiplexer() : null
   if (mux?.capabilities.agentLifecycle && mux.waitUntilIdle) {
     // The grace period still applies: an agent that has not started working
     // yet is idle, and returning on that would report the PREVIOUS turn's

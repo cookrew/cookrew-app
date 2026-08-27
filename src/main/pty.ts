@@ -484,6 +484,24 @@ export class PtySession extends EventEmitter {
     })
     this.proc.onExit(({ exitCode }) => {
       try {
+        // A SERVED agent dying is a paying caller's crew going silent, and it
+        // used to happen in total silence: the direct backend has no exit
+        // handling of its own, so "booted 2 terminal(s)" was the last word
+        // and the ask failed minutes later with "no file-backed agent turn"
+        // — a symptom three layers from the cause (2026-08-28). Name the
+        // death, with the tail the agent printed on its way out.
+        if (options.served && exitCode !== 0) {
+          const tail = this.serializer
+            .serialize({ scrollback: 0 })
+            .split('\n')
+            .filter((line: string) => line.trim().length > 0)
+            .slice(-6)
+            .join(' ⏎ ')
+            .slice(0, 600)
+          console.error(
+            `served agent ${this.terminalId} exited ${exitCode}: ${tail}`
+          )
+        }
         this.emit('exit', exitCode)
       } catch (error) {
         console.error('PTY exit handling failed:', error)
@@ -1173,11 +1191,28 @@ export class PtyManager {
   }
 
   /** Detach: drop the PTY but keep the tmux session alive for reattach. */
+  /**
+   * Release a mirror WITHOUT killing the agent behind it.
+   *
+   * That promise only holds when something else owns the process. Under tmux
+   * or herdr the pane survives and dispose() merely drops our view; under the
+   * direct backend the PTY IS the agent, so the same call closes its master,
+   * the child takes SIGHUP, and a served crew dies mid-conversation — exit
+   * 129, no session file, and a caller told "no file-backed agent turn"
+   * (2026-08-28, paid door). `persistsAcrossRestart` already states exactly
+   * this property, so the guard reads the capability instead of testing for a
+   * backend by name.
+   */
   detach(terminalId: string): void {
     const session = this.sessions.get(terminalId)
     if (session) {
-      session.dispose()
-      this.sessions.delete(terminalId)
+      // usesTmux is set from mux.capabilities.persistsAcrossRestart (line ~403).
+      if (session.usesTmux) {
+        session.dispose()
+        this.sessions.delete(terminalId)
+      }
+      // Otherwise the mirror IS the agent: leave it running and let close()
+      // (a deliberate end) be the only thing that stops it.
     }
     this.ownership.release(terminalId)
   }
