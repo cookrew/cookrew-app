@@ -112,10 +112,22 @@ const PHASE_CHIP: Record<TurnPhase, { label: string; cls: string }> = {
  * on-device with the same font and resize dance), so the killer sits in the
  * organs around it. Remote-only, read once; remove after the hunt.
  */
-const LAB_CUT =
-  typeof window !== 'undefined' && isRemoteMode()
-    ? new URLSearchParams(window.location.search).get('labcut')
-    : null
+const LAB_CUT = ((): string | null => {
+  if (typeof window === 'undefined' || !isRemoteMode()) return null
+  const explicit = new URLSearchParams(window.location.search).get('labcut')
+  if (explicit) return explicit
+  // AUTO-DISCRIMINATOR: no parameter typing on a phone mid-crash-loop. Each
+  // page load advances the dissection plan — norail, notrans, full — and the
+  // black box logs which plan each death happened under. Three reloads from
+  // the owner replace three hand-typed URLs.
+  try {
+    const n = (parseInt(localStorage.getItem('cr-labcycle') ?? '0', 10) || 0) + 1
+    localStorage.setItem('cr-labcycle', String(n))
+    return ['norail', 'notrans', null][(n - 1) % 3] as string | null
+  } catch {
+    return null
+  }
+})()
 
 function TerminalOverlay({
   node,
@@ -250,7 +262,7 @@ function TerminalOverlay({
     // Stage markers: the phone dies within ~1.3s of this effect on iOS 26.6
     // with every volume gauge innocent — the last stage that lands in the
     // black box names the killing line. No-ops on desktop.
-    markStage('overlay:effect-start')
+    markStage(`overlay:effect-start mode=${LAB_CUT ?? 'full'}`)
 
     const term = new Terminal({
       theme: PHOSPHOR_THEME,
