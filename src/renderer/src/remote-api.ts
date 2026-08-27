@@ -152,8 +152,43 @@ function sharedEvents(): ReconnectingStream {
   return events
 }
 
+/**
+ * One event, parsed ONCE, however many listeners want it.
+ *
+ * This used to be `cb(JSON.parse(e.data))` — inside the per-listener callback,
+ * so the parse ran once PER SUBSCRIBER. Three components subscribe to
+ * 'workspace' (App, EventToast, DirectoryManager) and that payload is 520 KB on
+ * the owner's board, so every broadcast cost about 2 MB of JSON parsing and
+ * left FOUR independent object graphs of the whole board alive at once —
+ * measured on the phone, where the memory ceiling is real.
+ *
+ * The waste is worst where the need is smallest: EventToast parses half a
+ * megabyte to read `s.name`, one string.
+ *
+ * A WeakMap keyed on the MessageEvent is what makes this safe. Every listener
+ * for one event receives the SAME event object, so the first parse wins and the
+ * rest are lookups; a different event is a different key, so nothing stale can
+ * be served. Keeping it weak means the parsed board dies with the event rather
+ * than being pinned by this cache — the opposite of the leak it would otherwise
+ * introduce.
+ *
+ * Listeners still share one object instead of getting private copies. That was
+ * already true of every IPC consumer on the desktop path, and these consumers
+ * only read — a subscriber that mutated its payload was already broken.
+ */
+const parsedEvents = new WeakMap<MessageEvent, unknown>()
+
+/** Exported for the test that pins "N listeners, one parse". */
+export function parseOnce<T>(e: MessageEvent): T {
+  const hit = parsedEvents.get(e)
+  if (hit !== undefined) return hit as T
+  const parsed = JSON.parse(e.data) as T
+  parsedEvents.set(e, parsed)
+  return parsed
+}
+
 function subscribe<T>(event: string, cb: (data: T) => void): () => void {
-  return sharedEvents().on(event, (e) => cb(JSON.parse(e.data) as T))
+  return sharedEvents().on(event, (e) => cb(parseOnce<T>(e)))
 }
 
 /**
