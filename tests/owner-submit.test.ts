@@ -99,6 +99,19 @@ describe('ownerSubmit — classification and delivery', () => {
     expect(lease.holderOf('os-2')).toBeNull()
   })
 
+  it('uses LF for a served direct Pi composer without changing other harnesses', async () => {
+    vi.useFakeTimers()
+    const lease = new ProducerLease()
+    const { session, owned } = fakeSession('os-pi', {
+      hostBacked: false,
+      command: '/opt/homebrew/bin/pi --session-dir /tmp/pi'
+    })
+    const promise = ownerSubmit(session, 'answer this\r', { lease })
+    await vi.advanceTimersByTimeAsync(2000)
+    await expect(promise).resolves.toEqual({ ok: true, submitted: true })
+    expect(owned).toEqual([paste('answer this'), '\n'])
+  })
+
   it('non-submitting bytes go through the ordinary guarded write and report ok', async () => {
     const lease = new ProducerLease()
     const { session, writes, owned } = fakeSession('os-3')

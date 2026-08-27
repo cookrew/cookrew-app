@@ -341,6 +341,8 @@ export interface PtySessionOptions {
  */
 export class PtySession extends EventEmitter {
   readonly terminalId: string
+  /** Harness launch command; submission policy may key on the proven adapter. */
+  readonly command: string
   /**
    * Does this session ride the HOST multiplexer? A served session is pinned to
    * the direct backend (see servedMux), so host-native features — herdr's
@@ -391,6 +393,7 @@ export class PtySession extends EventEmitter {
   constructor(options: PtySessionOptions) {
     super()
     this.terminalId = options.terminalId
+    this.command = options.command
     const shell = process.env.SHELL ?? '/bin/zsh'
     const cols = options.cols ?? 100
     const rows = options.rows ?? 30

@@ -1,6 +1,7 @@
 import { feedPromptBuffer } from '../shared/turn'
 import { multiplexer, type PtySession } from './pty'
 import type { Multiplexer } from './multiplexer'
+import { isPiCommand } from './pi-bind'
 import {
   CONTAMINATED_REFUSAL,
   DISPATCH_RESIDUE_REFUSAL,
@@ -96,7 +97,8 @@ export async function pasteAndSubmit(
   write: (data: string) => void = (data) => session.write(data),
   stillValid?: () => boolean,
   lease: ProducerLease = defaultProducerLease(),
-  phase?: (name: string) => void
+  phase?: (name: string) => void,
+  submitBytes = '\r'
 ): Promise<'submitted' | 'cancelled'> {
   const generation = lease.generationOf(session.terminalId)
   if (stillValid !== undefined && !stillValid()) return 'cancelled'
@@ -134,7 +136,7 @@ export async function pasteAndSubmit(
   }
   phase?.('validity:live')
   phase?.('submit-write:start')
-  write('\r')
+  write(submitBytes)
   phase?.('submit-write:end')
   return 'submitted'
 }
@@ -638,13 +640,17 @@ export async function ownerSubmit(
     const trailing = /[\r\n]+$/.exec(bytes)
     const body = trailing ? bytes.slice(0, trailing.index) : bytes
     if (trailing !== null && body.length > 0) {
+      const submitBytes =
+        session.hostBacked === false && isPiCommand(session.command) ? '\n' : '\r'
+      trace?.(`submit-key:${submitBytes === '\n' ? 'lf' : 'cr'}`)
       const outcome = await pasteAndSubmit(
         session,
         body,
         writeOwner,
         () => holdsLease(lease, terminalId, holder) && options.signal?.aborted !== true,
         lease,
-        trace
+        trace,
+        submitBytes
       )
       trace?.(`paste-outcome:${outcome}`)
       return outcome === 'submitted'
