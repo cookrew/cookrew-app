@@ -709,6 +709,7 @@ async function handleServedSlug(
           name: snapshot?.name ?? t.templateId,
           serviceId: t.serviceId,
           slug: t.slug,
+          address: servedAddress(t.slug),
           version: 1,
           access: t.access,
           ...(t.priceUsd !== undefined ? { priceUsd: t.priceUsd } : {}),

@@ -684,8 +684,8 @@ export const MKT_SVC = {
     'You get your own private workspace. It is created when you start, it belongs to you, and the files you make stay in it. Nobody else’s work touches yours.',
   'mkt.svc.price.paid':
     '{price} {asset} to start. Paid directly to {author} — Cookrew never holds the money and takes nothing.',
-  'mkt.svc.price.usd': '{price} USD to start. Choose any payment method offered below.',
-  'mkt.svc.price.free': 'Free to start. Sign in with your Cookrew account first — one tap, no password.',
+  'mkt.svc.price.usd': '{price} USD to start.',
+  'mkt.svc.price.free': 'Free to start.',
   'mkt.svc.pay.title': 'Ways to pay',
   'mkt.svc.pay.x402.title': 'USDC',
   'mkt.svc.pay.x402.body':
@@ -693,8 +693,15 @@ export const MKT_SVC = {
   'mkt.svc.pay.stripe.title': 'Card',
   'mkt.svc.pay.stripe.body':
     'Open Stripe Checkout from Cookrew and pay by card. Return here after Stripe confirms it, then retry your call.',
-  'mkt.svc.pay.none': 'This crew is not taking payment right now.',
+  'mkt.svc.pay.none': 'This crew is not taking new callers right now.',
   'mkt.svc.payment.received': 'Payment received — retry your call in Cookrew.',
+  'mkt.svc.open.title': 'Start in Cookrew',
+  'mkt.svc.open.account':
+    'In Cookrew, choose + ADD BY LINK and paste the address below. The crew card signs you in when you start.',
+  'mkt.svc.open.paid':
+    'In Cookrew, choose + ADD BY LINK and paste the address below. The crew card walks you through sign-in and payment when you start.',
+  'mkt.svc.open.address': 'Crew address',
+  'mkt.svc.availability.title': 'Availability',
   /**
    * FLAGGED FOR ATLAS. "They can't see inside it" is a claim about what the
    * product surfaces, not about what is reachable on a machine the author owns.

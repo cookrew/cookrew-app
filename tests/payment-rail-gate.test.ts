@@ -73,6 +73,7 @@ function gate(settle: ServedEndpointDeps['settle']): {
         name: 'Payments Crew',
         serviceId: PAID.serviceId,
         slug: PAID.slug,
+        address: `http://127.0.0.1:8639/${PAID.slug}`,
         version: 1,
         access: 'paid',
         priceUsd: PAID.priceUsd,

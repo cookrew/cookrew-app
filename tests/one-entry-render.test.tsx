@@ -11,6 +11,7 @@ import {
 } from '../src/renderer/src/ShareOnSave'
 import { ServedTeamCard, type ServedTeam } from '../src/renderer/src/ServedTeamCard'
 import { AddCrewSheet } from '../src/renderer/src/AddCrewSheet'
+import { renderServedCrewFace, type CrewFace } from '../src/main/served-endpoints'
 import type { ServedPaymentRail } from '../src/shared/served-payment-rails'
 
 /**
@@ -172,6 +173,47 @@ describe('AddCrewSheet — adding is free and inert', () => {
 
   it('the primary is disabled until something is pasted', () => {
     expect(renderToStaticMarkup(<AddCrewSheet onClose={noop} onAdded={noop} />)).toContain('disabled')
+  })
+})
+
+describe('served caller face — the page tells a caller what they can actually do', () => {
+  const face = (
+    access: CrewFace['access'],
+    paymentRails: readonly ServedPaymentRail[]
+  ): CrewFace => ({
+    name: 'Research Crew',
+    serviceId: 'svc-research-crew',
+    slug: 'research-crew',
+    address: 'http://192.168.1.20:8639/research-crew',
+    version: 1,
+    access,
+    ...(access === 'paid' ? { priceUsd: '2.50' } : {}),
+    door: 'Conductor',
+    agents: 4,
+    paymentRails
+  })
+
+  it('a paid face with no rails makes no promise of price or payment methods', () => {
+    const html = renderServedCrewFace(face('paid', []), false)
+    expect(html).toContain('This crew is not taking new callers right now.')
+    expect(html).not.toContain('Choose any payment method')
+    expect(html).not.toContain('2.50 USD to start')
+  })
+
+  it('an account face sends the caller through ADD BY LINK with a copy-ready address', () => {
+    const html = renderServedCrewFace(face('account', []), false)
+    expect(html).toContain('+ ADD BY LINK')
+    expect(html).toContain('http://192.168.1.20:8639/research-crew')
+    expect(html).toContain('The crew card signs you in when you start.')
+    expect(html).not.toContain('one tap')
+  })
+
+  it('a paid face with live rails explains that ADD BY LINK walks through payment', () => {
+    const html = renderServedCrewFace(face('paid', ['x402']), false)
+    expect(html).toContain('2.50 USD to start')
+    expect(html).toContain('Pay with USDC on Base')
+    expect(html).toContain('+ ADD BY LINK')
+    expect(html).toContain('walks you through sign-in and payment')
   })
 })
 

@@ -97,6 +97,7 @@ beforeEach(() => {
       name: 'Research Crew',
       serviceId: t.serviceId,
       slug: t.slug,
+      address: `http://127.0.0.1:8639/${t.slug}`,
       version: 1,
       access: t.access,
       ...(t.priceUsd ? { priceUsd: t.priceUsd } : {}),

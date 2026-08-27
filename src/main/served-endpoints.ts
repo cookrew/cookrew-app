@@ -41,6 +41,8 @@ export interface CrewFace {
   /** The identity the sign-in payload binds to. Public — it IS the address. */
   serviceId: string
   slug: string
+  /** The public address the caller pastes into Cookrew's + ADD BY LINK. */
+  address: string
   version: number
   access: 'account' | 'paid'
   priceUsd?: string
@@ -142,18 +144,32 @@ export function renderServedCrewFace(face: CrewFace, paymentReceived: boolean): 
       return `<li><strong>${escapeHtml(title)}</strong><span>${escapeHtml(body)}</span></li>`
     })
     .join('')
-  const price =
-    face.access === 'paid'
-      ? copy(MKT_SVC['mkt.svc.price.usd'], { price: face.priceUsd ?? '' })
-      : copy(MKT_SVC['mkt.svc.price.free'])
+  const paidReady = face.access === 'paid' && railRows.length > 0
   const ways =
     face.access !== 'paid'
       ? ''
-      : `<section class="ways"><h2>${copy(MKT_SVC['mkt.svc.pay.title'])}</h2>${
-          railRows.length > 0
-            ? `<ul>${railRows}</ul>`
-            : `<p class="unavailable">${copy(MKT_SVC['mkt.svc.pay.none'])}</p>`
-        }</section>`
+      : paidReady
+        ? `<section class="ways"><h2>${copy(MKT_SVC['mkt.svc.pay.title'])}</h2><p class="price">${copy(
+            MKT_SVC['mkt.svc.price.usd'],
+            { price: face.priceUsd ?? '' }
+          )}</p><ul>${railRows}</ul></section>`
+        : `<section class="availability"><h2>${copy(
+            MKT_SVC['mkt.svc.availability.title']
+          )}</h2><p class="unavailable">${copy(MKT_SVC['mkt.svc.pay.none'])}</p></section>`
+  const open =
+    face.access === 'account' || paidReady
+      ? `<section class="open"><h2>${copy(MKT_SVC['mkt.svc.open.title'])}</h2>${
+          face.access === 'account'
+            ? `<p class="price">${copy(MKT_SVC['mkt.svc.price.free'])}</p>`
+            : ''
+        }<p>${copy(
+          face.access === 'account'
+            ? MKT_SVC['mkt.svc.open.account']
+            : MKT_SVC['mkt.svc.open.paid']
+        )}</p><span class="address-label">${copy(
+          MKT_SVC['mkt.svc.open.address']
+        )}</span><code class="address">${escapeHtml(face.address)}</code></section>`
+      : ''
   const received = paymentReceived
     ? `<p class="received" role="status">${copy(MKT_SVC['mkt.svc.payment.received'])}</p>`
     : ''
@@ -168,9 +184,10 @@ main{width:min(680px,calc(100% - 32px));margin:clamp(28px,8vh,88px) auto;padding
 .eyebrow{margin:0 0 8px;color:var(--accent);font:700 12px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace}.eyebrow,.meta{text-transform:uppercase}
 h1{margin:0;font-size:clamp(30px,7vw,50px);line-height:1.08;letter-spacing:0}.meta{margin:10px 0 0;color:var(--muted);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
 .received{margin:18px 0 0;padding:12px 14px;border-left:4px solid var(--accent);background:color-mix(in srgb,var(--accent) 9%,var(--paper));font-weight:700}
-.intro,.ways{padding:24px 0;border-bottom:1px solid var(--line)}.intro p{margin:0 0 12px}.intro p:last-child{margin:0}.price{font-weight:700}
+.intro,.ways,.availability,.open{padding:24px 0;border-bottom:1px solid var(--line)}.intro p,.open p{margin:0 0 12px}.intro p:last-child,.open p:last-of-type{margin-bottom:0}.price{font-weight:700}
 h2{margin:0 0 12px;font-size:15px}ul{list-style:none;margin:0;padding:0}li{display:grid;grid-template-columns:minmax(74px,110px) 1fr;gap:18px;padding:14px 0;border-top:1px solid var(--line)}
 li strong{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--accent)}li span{color:var(--muted)}.unavailable{margin:0;color:var(--muted)}
+.address-label{display:block;margin-top:18px;color:var(--muted);font:700 11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase}.address{display:block;margin-top:6px;padding:12px 14px;border:1px solid var(--line);background:var(--paper);font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere;user-select:all}
 @media(prefers-color-scheme:dark){:root{--bg:#111416;--paper:#191d20;--ink:#f1f2ee;--muted:#a9b0b6;--line:#353a3e;--accent:#61c996;--mark:#edbd60}}
 @media(max-width:460px){li{grid-template-columns:1fr;gap:4px}}
 </style></head><body><main><header><p class="eyebrow">${copy(MKT_SVC['mkt.svc.eyebrow'])}</p>
@@ -178,8 +195,8 @@ li strong{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ac
     n: face.agents,
     version: `V${face.version}`
   })}</p>${received}</header>
-<section class="intro"><p>${copy(MKT_SVC['mkt.svc.what'], { orch: face.door })}</p><p>${copy(MKT_SVC['mkt.svc.yours'])}</p><p class="price">${price}</p></section>
-${ways}</main></body></html>`
+<section class="intro"><p>${copy(MKT_SVC['mkt.svc.what'], { orch: face.door })}</p><p>${copy(MKT_SVC['mkt.svc.yours'])}</p></section>
+${ways}${open}</main></body></html>`
 }
 
 /*
