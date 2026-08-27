@@ -2795,6 +2795,43 @@ a.card-close {
   background: var(--amber-soft);
 }
 
+.canvas-visual-toggle {
+  position: relative;
+  color: var(--ink);
+}
+
+.canvas-visual-toggle.mode-no-cables {
+  background: var(--amber-soft);
+}
+
+.canvas-visual-toggle.mode-agents {
+  background: var(--amber);
+}
+
+.canvas-visual-glyph {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+}
+
+.canvas-visual-glyph .cr-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.canvas-visual-toggle.mode-no-cables .canvas-visual-glyph::after {
+  content: '';
+  position: absolute;
+  width: 18px;
+  height: 2px;
+  background: var(--rose);
+  border: 1px solid var(--cream-hi);
+  transform: rotate(-45deg);
+  pointer-events: none;
+}
+
 .cookrew-minimap {
   background: var(--cream-md) !important;
   border: 2px solid var(--line);

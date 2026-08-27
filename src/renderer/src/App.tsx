@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Background,
   BackgroundVariant,
+  ControlButton,
   Controls,
   MiniMap,
   Node,
@@ -65,10 +66,39 @@ import { SelectionBar } from './SelectionBar'
 import { ConfirmClose } from './ConfirmClose'
 import { apiPath } from './api-base'
 import { authHeaders } from './auth-gate'
+import { CrIcon } from './icons'
+import {
+  canvasVisualModeOf,
+  nextCanvasVisualMode,
+  visibleCanvasEdges,
+  visibleCanvasNodes,
+  type CanvasVisualMode
+} from './canvas-visual-mode'
 
 /** How often a headless browser card refreshes its still. Matches the legacy
  *  webview capture cadence — the same picture, from the page that now owns it. */
 const BROWSER_SNAPSHOT_MS = 5000
+const CANVAS_VISUAL_MODE_KEY = 'cookrew-canvas-visual-mode'
+
+const VISUAL_MODE_LABEL: Record<CanvasVisualMode, string> = {
+  all: 'All',
+  'no-cables': 'Cables hidden',
+  agents: 'Agents only'
+}
+
+const VISUAL_MODE_ICON: Record<CanvasVisualMode, 'canvas' | 'connect' | 'agent'> = {
+  all: 'canvas',
+  'no-cables': 'connect',
+  agents: 'agent'
+}
+
+function storedCanvasVisualMode(): CanvasVisualMode {
+  try {
+    return canvasVisualModeOf(window.localStorage.getItem(CANVAS_VISUAL_MODE_KEY))
+  } catch {
+    return 'all'
+  }
+}
 
 /** Phone companion parity: widen the snap magnet for finger-driven gestures. */
 const snapRadiusPx = window.matchMedia('(pointer: coarse)').matches ? TOUCH_SNAP_PX : MOUSE_SNAP_PX
@@ -104,6 +134,7 @@ function Canvas(): React.JSX.Element {
   const interactiveBrowser = interactiveCapability?.enabled ?? null
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null)
   const [nodes, setNodes] = useState<Node[]>([])
+  const [canvasVisualMode, setCanvasVisualMode] = useState<CanvasVisualMode>(storedCanvasVisualMode)
   const [tool, setTool] = useState<ToolId>('move')
   /**
    * Clipboard selection mode — a TOGGLE over the resting hand (the board
@@ -439,6 +470,24 @@ function Canvas(): React.JSX.Element {
       e.source === hoverId || e.target === hoverId ? { ...e, data: { hot: true } } : e
     )
   }, [baseEdges, clipping, hoverId])
+  const renderedNodes = useMemo(
+    () => visibleCanvasNodes(nodes, canvasVisualMode),
+    [nodes, canvasVisualMode]
+  )
+  const renderedEdges = useMemo(
+    () => visibleCanvasEdges(edges, canvasVisualMode),
+    [edges, canvasVisualMode]
+  )
+  const cycleCanvasVisualMode = useCallback((): void => {
+    const next = nextCanvasVisualMode(canvasVisualMode)
+    setCanvasVisualMode(next)
+    setCardMenu(null)
+    try {
+      window.localStorage.setItem(CANVAS_VISUAL_MODE_KEY, next)
+    } catch {
+      // The view still works when browser storage is unavailable.
+    }
+  }, [canvasVisualMode])
 
   const togglePick = useCallback((id: string): void => {
     setPicked((prev) => {
@@ -1152,8 +1201,8 @@ function Canvas(): React.JSX.Element {
         />
         <div className="cr-stage" ref={stageRef}>
           <ReactFlow
-            nodes={nodes}
-            edges={edges}
+            nodes={renderedNodes}
+            edges={renderedEdges}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             onNodesChange={onNodesChange}
@@ -1195,7 +1244,19 @@ function Canvas(): React.JSX.Element {
             <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="#D9D3C5" />
             <SnapGuides guides={guides} />
             <MiniMap pannable zoomable className="cookrew-minimap" />
-            <Controls position="bottom-right" />
+            <Controls position="bottom-right" showInteractive={false}>
+              <ControlButton
+                className={`canvas-visual-toggle mode-${canvasVisualMode}`}
+                data-mode={canvasVisualMode}
+                aria-label={`Canvas view: ${VISUAL_MODE_LABEL[canvasVisualMode]}`}
+                title={`Canvas view: ${VISUAL_MODE_LABEL[canvasVisualMode]}. Next: ${VISUAL_MODE_LABEL[nextCanvasVisualMode(canvasVisualMode)]}`}
+                onClick={cycleCanvasVisualMode}
+              >
+                <span className="canvas-visual-glyph">
+                  <CrIcon name={VISUAL_MODE_ICON[canvasVisualMode]} />
+                </span>
+              </ControlButton>
+            </Controls>
             {/* Cross-workspace paste preview: dashed ghosts at the exact
                 spots the staged elements would land (moves keep their
                 position, copies nudge +32). Flow coordinates via the
