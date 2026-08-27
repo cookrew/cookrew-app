@@ -8,12 +8,11 @@
  * this terminal is the door.
  *
  *   node crew-line.mjs --origin http://host:8639 --slug research-crew \
- *        [--sub name] [--pay tx-ref]
+ *        [--sub name]
  *
  * The sign-in keypair lives at ~/.cookrew/crew-keys/<host>-<slug>.json (0600),
  * created on first boot — your account at that crew survives restarts. On a
- * 402 the terms print and `/pay <tx-ref>` retries with X-Payment (M1 dev
- * facilitator; a `--pay` flag from the gate sheet skips the dance).
+ * 402 the terms print and `/pay <tx-ref>` applies X-Payment to the next ask.
  */
 import { createInterface } from 'node:readline'
 import { generateKeyPairSync, createPrivateKey, sign } from 'node:crypto'
@@ -32,7 +31,15 @@ if (!origin || !slug) {
   process.exit(2)
 }
 const sub = arg('sub', userInfo().username || 'caller')
-let payRef = arg('pay', '')
+let payRef = ''
+const paymentUnavailableCopy = arg(
+  'payment-unavailable-copy',
+  "this crew can't take payment right now — nothing was charged; try later"
+)
+const paymentUnverifiableCopy = arg(
+  'payment-unverifiable-copy',
+  'our checker is unreachable — your payment may be fine; try again shortly.'
+)
 
 const keyDir = path.join(homedir(), '.cookrew', 'crew-keys')
 const keyFile = path.join(keyDir, `${new URL(origin).host.replace(/[^a-z0-9.-]/gi, '_')}-${slug}.json`)
@@ -114,8 +121,14 @@ async function main() {
         process.stdout.write(`✕ that payment didn't verify — nothing was charged. Check the reference.\n> `)
         payRef = ''
       } else {
-        process.stdout.write(`◔ our checker is unreachable — your payment may be fine; try again shortly.\n> `)
+        process.stdout.write(`◔ ${paymentUnverifiableCopy}\n> `)
       }
+      continue
+    }
+    if (res.status === 503 && res.body?.reason === 'payment_unavailable') {
+      // No quote existed, so no payment was sent and no checker was involved.
+      process.stdout.write(`✕ ${paymentUnavailableCopy}\n> `)
+      payRef = ''
       continue
     }
     if (res.status !== 200) {

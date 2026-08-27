@@ -23,6 +23,7 @@ import type { RecoverResult, RestoreResult, WorkspaceState } from '../shared/mod
 import type { PtyManager } from './pty'
 import type { VoiceEngine } from './voice'
 import type { TurnTracker } from './turn-tracker'
+import type { TurnRecord } from '../shared/turn'
 import type { EventLog } from './event-log'
 import type { AgentRegistry } from './agent-registry'
 import type { TraceReader } from './trace'
@@ -84,7 +85,9 @@ export interface MobileServerDeps {
   /** Observability event log + agent roster (mobile query endpoints). */
   events: EventLog
   agents: AgentRegistry
-  traces: TraceReader
+  traces: Pick<TraceReader, 'index' | 'boundaryMarkers' | 'page' | 'latestCheckpoint'>
+  /** Capability-routed history for local terminals and placed crews. */
+  turnHistory?: (terminalId: string) => Promise<TurnRecord[]>
   /** Activity Board data plane; absent = /api/board answers 503. */
   board?: BoardSources
   /** Attach-free dispatch engine (v4 §3); absent = the routes answer 503. */

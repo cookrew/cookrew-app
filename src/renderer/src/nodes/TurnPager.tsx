@@ -26,6 +26,7 @@ export interface TurnPaging {
   /** Fork from the viewed turn (or the latest turn when live). */
   fork: () => void
   forking: boolean
+  forkable: boolean
 }
 
 /**
@@ -36,9 +37,10 @@ export interface TurnPaging {
 export function useTurnPaging(
   terminalId: string,
   turnCount: number,
-  opts?: { eager?: boolean }
+  opts?: { eager?: boolean; forkable?: boolean }
 ): TurnPaging {
   const eager = opts?.eager ?? false
+  const forkable = opts?.forkable ?? true
   const [records, setRecords] = useState<TurnRecord[] | null>(null)
   const [cursor, setCursor] = useState<number | null>(null)
   const [forking, setForking] = useState(false)
@@ -98,14 +100,14 @@ export function useTurnPaging(
   )
 
   const fork = useCallback(() => {
-    if (forking) return
+    if (forking || !forkable) return
     const index = cursor !== null && records ? records[cursor]?.index : undefined
     setForking(true)
     void cookrew()
       .forkTerminal(terminalId, index)
       .catch((error) => console.error('Fork failed:', error))
       .finally(() => setForking(false))
-  }, [terminalId, records, cursor, forking])
+  }, [terminalId, records, cursor, forking, forkable])
 
   const viewing = cursor !== null && records ? (records[cursor] ?? null) : null
   return {
@@ -118,7 +120,8 @@ export function useTurnPaging(
     live,
     goto,
     fork,
-    forking
+    forking,
+    forkable
   }
 }
 
@@ -158,18 +161,20 @@ export function TurnPagerBar({ paging }: { paging: TurnPaging }): React.JSX.Elem
           LIVE
         </button>
       )}
-      <button
-        className="vi-pager-btn wide fork"
-        title={
-          paging.viewing
-            ? `Fork a new agent from checkpoint ${paging.viewing.index}`
-            : 'Fork a new agent from the latest checkpoint'
-        }
-        disabled={paging.count === 0 || paging.forking}
-        onClick={paging.fork}
-      >
-        <CrIcon name="fork" /> {paging.forking ? '…' : 'FORK'}
-      </button>
+      {paging.forkable && (
+        <button
+          className="vi-pager-btn wide fork"
+          title={
+            paging.viewing
+              ? `Fork a new agent from checkpoint ${paging.viewing.index}`
+              : 'Fork a new agent from the latest checkpoint'
+          }
+          disabled={paging.count === 0 || paging.forking}
+          onClick={paging.fork}
+        >
+          <CrIcon name="fork" /> {paging.forking ? '…' : 'FORK'}
+        </button>
+      )}
     </div>
   )
 }

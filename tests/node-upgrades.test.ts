@@ -102,6 +102,20 @@ describe('upgradeNode', () => {
     expect(upgradeNode(custom)).toEqual(custom)
   })
 
+  it('adds a durable served transcript target and strips stale launch payment state', () => {
+    const legacy = terminal({
+      command:
+        'node "/app/crew-line.mjs" "--origin" "http://crew.example:8639" "--slug" "research" "--pay" "stale"'
+    })
+    const upgraded = upgradeNode(legacy) as TerminalNodeData
+    expect(upgraded.servedTranscript).toEqual({
+      origin: 'http://crew.example:8639',
+      slug: 'research'
+    })
+    expect(upgraded.command).not.toMatch(/"--pay"/)
+    expect(upgraded.command).not.toContain('stale')
+  })
+
   it('repairs terminal geometry omitted by an unvalidated API write', () => {
     const malformed = terminal() as TerminalNodeData
     delete (malformed as unknown as Record<string, unknown>).position

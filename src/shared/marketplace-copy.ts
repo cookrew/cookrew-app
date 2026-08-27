@@ -869,6 +869,12 @@ export const MKT_GATE = {
   /** Door B's honest wait — a first reply is slow while the line warms. */
   'mkt.gate.warming':
     'First reply can take a moment while the line warms — the card says so; it never just spins.',
+  /** No quote existed, so no payment could have been sent or checked. */
+  'mkt.gate.payment.unavailable':
+    "this crew can't take payment right now — nothing was charged; try later",
+  /** A payment was sent, but our facilitator could not give a verdict. */
+  'mkt.gate.payment.unverifiable':
+    'our checker is unreachable — your payment may be fine; try again shortly.',
   /** The 402 terms block — door-neutral labels, so the sheet reads no prose. */
   'mkt.gate.terms.head': 'Terms — what the gate quoted',
   'mkt.gate.terms.price': 'price',

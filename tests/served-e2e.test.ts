@@ -11,6 +11,7 @@ import { ServedCallers } from '../src/main/served-callers'
 import { handleServedRoute } from '../src/main/served-endpoints'
 import { ServedTemplates } from '../src/main/session-served'
 import { RemoteCrewStore, parseCrewLink } from '../src/main/remote-crews'
+import type { TurnRecord } from '../src/shared/turn'
 
 /**
  * The payment rail, stubbed at the seam.
@@ -67,6 +68,7 @@ async function ownerApp(access: 'account' | 'paid', priceUsd?: string): Promise<
     ...(access === 'paid' ? { priceUsd } : {})
   })
   const sessions = new Map<string, string>()
+  const histories = new Map<string, TurnRecord[]>()
 
   const server = http.createServer((req, res) => {
     void (async () => {
@@ -110,7 +112,51 @@ async function ownerApp(access: 'account' | 'paid', priceUsd?: string): Promise<
           hasOpenSession: (serviceId, sub) => sessions.has(`${serviceId}/${sub}`),
           conductorFor: (sessionId) => `orch-${sessionId}`,
           // The crew's one door, faked: the only thing a unit run cannot own.
-          ask: async (_orch, prompt) => `Conductor heard: ${prompt}`,
+          ask: async (orch, prompt) => {
+            const history = histories.get(orch) ?? []
+            const index = history.length + 1
+            histories.set(orch, [
+              ...history,
+              {
+                index,
+                uuid: `${orch}-turn-${index}`,
+                prompt,
+                reply: `Conductor heard: ${prompt}`,
+                startedAt: index * 100,
+                endedAt: index * 100 + 50,
+                final: true
+              }
+            ])
+            return `Conductor heard: ${prompt}`
+          },
+          sessionForCaller: (serviceId, sub) => {
+            const sessionId = sessions.get(`${serviceId}/${sub}`)
+            return sessionId
+              ? { conductorId: `orch-${sessionId}` }
+              : null
+          },
+          turns: { history: (terminalId) => histories.get(terminalId) ?? [] },
+          traces: {
+            index: async (terminalId) =>
+              (histories.get(terminalId) ?? []).map((turn) => ({
+                index: turn.index,
+                title: turn.prompt
+              })),
+            boundaryMarkers: async () => [],
+            page: async (terminalId) => {
+              const blocks = (histories.get(terminalId) ?? []).map((turn) => ({
+                id: turn.uuid!,
+                index: turn.index,
+                prompt: turn.prompt,
+                reply: turn.reply,
+                activity: [],
+                startedAt: turn.startedAt,
+                endedAt: turn.endedAt,
+                final: turn.final
+              }))
+              return { blocks, total: blocks.length, source: 'claude' as const }
+            }
+          },
           settle: stubSettle,
           paymentTerms: stubTerms,
           crewFace: (t) => ({
@@ -128,7 +174,7 @@ async function ownerApp(access: 'account' | 'paid', priceUsd?: string): Promise<
         template,
         (req.method ?? 'GET').toUpperCase(),
         url.pathname.slice(`/${slug}`.length) || '/',
-        { headers, body }
+        { headers, body, query: Object.fromEntries(url.searchParams.entries()) }
       )
       if (answer === null) {
         res.writeHead(404).end('{}')
@@ -259,5 +305,44 @@ describe('end to end: an owner serves, a stranger calls', () => {
     })
     expect(a.body.sessionId).not.toBe(b.body.sessionId)
     expect(a.body.created && b.body.created).toBe(true)
+  })
+
+  it('serves one caller’s turns and trace while another caller gets 404', async () => {
+    const origin = await ownerApp('account')
+    const ana = await caller(origin, 'research-crew', 'ana')
+    const bob = await caller(origin, 'research-crew', 'bob')
+    const anaToken = await ana.signIn()
+    const bobToken = await bob.signIn()
+    await ana.api('/ask', {
+      headers: { authorization: `Bearer ${anaToken}` },
+      body: JSON.stringify({ prompt: 'ana transcript' })
+    })
+
+    const turns = await ana.api('/turns?limit=1', {
+      method: 'GET',
+      headers: { authorization: `Bearer ${anaToken}` }
+    })
+    expect(turns.status).toBe(200)
+    expect(turns.body).toMatchObject({
+      turns: [{ prompt: 'ana transcript', reply: 'Conductor heard: ana transcript' }],
+      total: 1
+    })
+
+    const trace = await ana.api('/trace?aroundIndex=1', {
+      method: 'GET',
+      headers: { authorization: `Bearer ${anaToken}` }
+    })
+    expect(trace.status).toBe(200)
+    expect(trace.body).toMatchObject({
+      blocks: [{ id: 'orch-ana-1-turn-1', prompt: 'ana transcript' }],
+      source: 'claude'
+    })
+
+    const other = await bob.api('/turns?sessionId=ana-1', {
+      method: 'GET',
+      headers: { authorization: `Bearer ${bobToken}` }
+    })
+    expect(other.status).toBe(404)
+    expect(other.body).toEqual({})
   })
 })

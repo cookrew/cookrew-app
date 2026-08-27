@@ -34,6 +34,7 @@ import { languageByCode } from '../../shared/translate'
 import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { StatusCoin } from './nodes/AgentAvatar'
 import { markStage } from './phone-beacon'
+import { ServedCrewLive } from './ServedCrewLive'
 
 const PHOSPHOR_THEME = {
   background: '#14110A',
@@ -139,6 +140,8 @@ function TerminalOverlay({
   rect: ScreenRect
 }): React.JSX.Element {
   const { zoomBack, requestClose } = useCanvasUi()
+  const remoteCrew = node.servedTranscript != null
+  const phase = activity?.phase ?? 'idle'
   const containerRef = useRef<HTMLDivElement>(null)
   // Drag-in attachments: dragenter/leave bubble from every child of the
   // overlay, so a plain boolean would flicker — count enters vs leaves.
@@ -152,7 +155,10 @@ function TerminalOverlay({
   // Turn switching: ◀ ▶ page through past asks; picking one scrolls the
   // terminal to that ask's line (tmux copy-mode search), and returning to
   // live exits copy-mode so the tail streams again.
-  const paging = useTurnPaging(node.id, activity?.turnCount ?? 0, { eager: true })
+  const paging = useTurnPaging(node.id, activity?.turnCount ?? 0, {
+    eager: true,
+    forkable: !remoteCrew
+  })
   const [titleMode, toggleTitleMode] = useTitleMode()
 
   // FULL-TRACE SELECTION (item 3): the fan/timeline spans the WHOLE trace range
@@ -164,6 +170,7 @@ function TerminalOverlay({
   // the record-based pager is kept in sync best-effort for the header/fork.
   const [traceIndex, setTraceIndex] = useState<TraceIndexEntry[]>([])
   const [traceMarkers, setTraceMarkers] = useState<TraceMarkerRow[]>([])
+  const [traceRefresh, setTraceRefresh] = useState(0)
   useEffect(() => {
     let alive = true
     void fetchTraceIndex(node.id)
@@ -183,7 +190,17 @@ function TerminalOverlay({
     return () => {
       alive = false
     }
-  }, [node.id, activity?.turnCount])
+  }, [node.id, activity?.turnCount, traceRefresh])
+
+  // A served trace grows while /ask is still waiting, before the local
+  // crew-line process can complete its own turn counter. Refresh that SAME
+  // capability on a bounded cadence so the existing TranscriptView streams it.
+  useEffect(() => {
+    if (!remoteCrew || (phase !== 'thinking' && phase !== 'waiting')) return
+    setTraceRefresh((value) => value + 1)
+    const timer = window.setInterval(() => setTraceRefresh((value) => value + 1), 800)
+    return () => window.clearInterval(timer)
+  }, [remoteCrew, phase, node.id])
 
   // VERSION PINS on the rail. Fetched here and passed to the timeline, which
   // otherwise received nothing — so a saved template's pin was cut in the main
@@ -199,6 +216,10 @@ function TerminalOverlay({
     return () => window.removeEventListener('cookrew:template-saved', bump)
   }, [])
   useEffect(() => {
+    if (remoteCrew) {
+      setPins([])
+      return
+    }
     let alive = true
     void cookrew()
       .listPins(node.id)
@@ -209,9 +230,10 @@ function TerminalOverlay({
     return () => {
       alive = false
     }
-  }, [node.id, activity?.turnCount, pinRefresh])
+  }, [node.id, activity?.turnCount, pinRefresh, remoteCrew])
 
   const rows = mergeCheckpointRows(paging.records ?? [], traceIndex)
+  const remoteTotal = remoteCrew ? (traceIndex[traceIndex.length - 1]?.index ?? 0) : 0
 
   const transcriptRef = useRef<TranscriptHandle>(null)
   const translation = useCheckpointTranslation()
@@ -256,7 +278,16 @@ function TerminalOverlay({
 
   const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
 
+  // Remote cards still need the PTY lifecycle: on cold start, attach is what
+  // acquires/boots crew-line. Its bytes are transport only and are deliberately
+  // discarded; the rendered body comes from the caller-scoped trace capability.
   useEffect(() => {
+    if (!remoteCrew) return
+    return cookrew().ptyAttach(node.id, () => undefined)
+  }, [node.id, remoteCrew])
+
+  useEffect(() => {
+    if (remoteCrew) return
     const container = containerRef.current
     if (!container) return
     // Stage markers: the phone dies within ~1.3s of this effect on iOS 26.6
@@ -665,14 +696,12 @@ function TerminalOverlay({
       for (const cleanup of cleanups.reverse()) cleanup()
       markStage('overlay:cleanup-done')
     }
-  }, [node.id])
-
-  const phase = activity?.phase ?? 'idle'
+  }, [node.id, remoteCrew])
 
   // Live-tail-only clip (unified-scroll item 1): when the turn is at rest, keep
   // only Forge's tail boundary in the live layer; the trace owns older
   // scrollback. Null (no clip) while a turn runs or when no boundary was found.
-  const clipRows = tailClipRows(phase, activity?.tailLines ?? null)
+  const clipRows = remoteCrew ? null : tailClipRows(phase, activity?.tailLines ?? null)
 
   // Acknowledge-on-view: a mounted overlay means the user is LOOKING at this
   // terminal (desktop zoom / phone popout), so a completed turn is read the
@@ -727,6 +756,7 @@ function TerminalOverlay({
           {node.name}
         </span>
         {node.orch && <span className="cr-chip amber">ORCH</span>}
+        {remoteCrew && <span className="cr-chip">CREW</span>}
         <span className={`cr-chip${PHASE_CHIP[phase].cls}`}>{PHASE_CHIP[phase].label}</span>
         <div className="popout-actions">
           <TranslateButton
@@ -884,7 +914,7 @@ function TerminalOverlay({
         </div>
       )}
       <div className="popout-terminal-wrap">
-        {LAB_CUT === 'xterm' || LAB_CUT === 'notrans' || isRemoteMode() ? (
+        {!remoteCrew && (LAB_CUT === 'xterm' || LAB_CUT === 'notrans' || isRemoteMode()) ? (
           <>
             {LAB_CUT !== 'xterm' && LAB_CUT !== 'notrans' && (
               <TranscriptView
@@ -914,7 +944,7 @@ function TerminalOverlay({
         <TranscriptView
           ref={transcriptRef}
           terminalId={node.id}
-          total={activity?.turnCount ?? 0}
+          total={remoteCrew ? remoteTotal : (activity?.turnCount ?? 0)}
           titleMode={titleMode}
           translation={translation.showing}
           identities={rows.map((r) => r.index)}
@@ -923,11 +953,21 @@ function TerminalOverlay({
           clipRows={clipRows}
           onActiveBlockChange={onActiveBlockChange}
           onPending={setPendingIndex}
+          refreshToken={remoteCrew ? traceRefresh : 0}
+          liveClassName={remoteCrew ? 'served' : undefined}
         >
-          <div ref={containerRef} className="popout-terminal" />
+          {remoteCrew ? (
+            <ServedCrewLive
+              terminalId={node.id}
+              activity={activity}
+              hasTranscript={rows.length > 0}
+            />
+          ) : (
+            <div ref={containerRef} className="popout-terminal" />
+          )}
         </TranscriptView>
         )}
-        {LAB_CUT === 'xterm' || LAB_CUT === 'norail' ? null : (
+        {!remoteCrew && (LAB_CUT === 'xterm' || LAB_CUT === 'norail') ? null : (
         <CheckpointTimeline
           terminalId={node.id}
           rows={rows}
@@ -937,6 +977,14 @@ function TerminalOverlay({
           activeIndex={activeBlock.index}
           loadingIndex={pendingIndex}
           markerFrac={activeBlock.frac}
+          waitingLabel={
+            remoteCrew &&
+            (phase === 'thinking' || phase === 'waiting') &&
+            rows.length === 0
+              ? 'LIVE · LINE WARMING'
+              : null
+          }
+          allowActions={!remoteCrew}
           onGoto={gotoCheckpoint}
           onLive={goLive}
           onScrub={(fraction) => transcriptRef.current?.scrubTo(fraction)}
