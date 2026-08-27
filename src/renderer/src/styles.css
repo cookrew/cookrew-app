@@ -3500,6 +3500,28 @@ a.card-close {
 /* ---- remote (phone) mode tweaks ----
    Served by the mobile server: no macOS traffic lights, no drag regions,
    tighter chrome for small screens. */
+
+/* iOS jetsam guard (2026-08-27, kernel-verified): WebContent hit the 1536 MB
+   ActiveSoft cap ~10s after first paint — a memory-highwater kill, with no
+   equivalent on macOS WebKit (77–165 MB flat on the same board). The delta is
+   layer backing store: the canvas world spans ~15k CSS px and iOS rasterizes
+   composited subtrees it believes will transform, where desktop engines tile.
+   Two dials:
+   - content-visibility on cards: an offscreen card's subtree is neither laid
+     out nor painted, so its backing never exists. intrinsic-size keeps
+     scrollbar/minimap geometry honest.
+   - will-change:auto on the pane: react-flow hints transform for pan speed;
+     on iOS that hint is what pins a world-sized raster. Panning on a phone
+     re-rasterizes per frame instead — slower, alive. */
+body.cookrew-mobile .react-flow__node {
+  content-visibility: auto;
+  contain-intrinsic-size: 340px 220px;
+}
+body.cookrew-mobile .react-flow__viewport,
+body.cookrew-mobile .react-flow__pane {
+  will-change: auto !important;
+}
+
 body.cookrew-mobile .cr-header {
   padding-left: max(14px, env(safe-area-inset-left));
   padding-top: max(10px, env(safe-area-inset-top));
