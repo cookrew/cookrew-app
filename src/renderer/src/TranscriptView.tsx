@@ -215,11 +215,6 @@ export const TranscriptView = forwardRef<
     // to real heights (WARNING). Skip when pinned — autoscroll owns the bottom.
     const el = scrollRef.current
     const anchorId = pendingJumpRef.current ?? activeInViewRef.current
-    console.error(
-      `[transcript-fill] phase=ingest anchor=${anchorId ?? 'none'} pending=${pendingJumpRef.current ?? 'none'} ` +
-        `active=${activeInViewRef.current ?? 'none'} pinned=${pinnedRef.current} ` +
-        `scrollTop=${Math.round(el?.scrollTop ?? -1)} incoming=${page.blocks.length}`,
-    )
     if (el && !pinnedRef.current && anchorId !== null) {
       const node = blockRefs.current.get(anchorId)
       anchorRef.current = node ? { id: anchorId, top: node.getBoundingClientRect().top } : null
@@ -317,10 +312,6 @@ export const TranscriptView = forwardRef<
       anchorIndexRef.current = topId ?? Number.MAX_SAFE_INTEGER
       activeInViewRef.current = topId
       if (topId !== null && !loadedSetRef.current.has(topId)) {
-        console.error(
-          `[transcript-fill] phase=request id=${topId} pinned=${pinnedRef.current} ` +
-            `scrollTop=${Math.round(el.scrollTop)}`,
-        )
         maybeFill(topId)
       }
       const frac = topId === null ? 1 : fractionOfIdentity(spaceIdsRef.current, topId)
@@ -432,10 +423,6 @@ export const TranscriptView = forwardRef<
       const node = blockRefs.current.get(anchor.id)
       if (node) {
         const delta = node.getBoundingClientRect().top - anchor.top
-        console.error(
-          `[transcript-fill] phase=correct id=${anchor.id} delta=${Math.round(delta)} ` +
-            `scrollTop=${Math.round(el.scrollTop)}`,
-        )
         if (delta !== 0) el.scrollTop += delta
       }
       anchorRef.current = null
