@@ -5,6 +5,7 @@ import type { TurnTracker } from "./turn-tracker";
 import type { DispatchService } from "./dispatch";
 import type { EventLog, CookrewEvent, EventQuery } from "./event-log";
 import { pageTurns } from "../shared/turn";
+import type { VersionPinRecord } from "../shared/version-pin";
 import { TRANSLATE_MAX_CHARS } from "../shared/translate";
 import { translateBody } from "./sous-translate";
 import { remoteSousHost } from "./sous-remote-config";
@@ -109,6 +110,12 @@ export interface MobileApiDeps {
   latestCheckpoint?: (
     terminalId: string,
   ) => Promise<{ prompt: string; reply: string; title?: string } | null>;
+  /**
+   * Version pins (§10) — the rail's third marker class. Optional so this
+   * module serves before it is wired; absent answers [], same as a terminal
+   * that has never been exported.
+   */
+  listPins?: (terminalId: string) => readonly VersionPinRecord[];
   /**
    * Cold-boot wait window for a stream open (acquireViewWhenReady). Omitted in
    * production (defaults ~2s in 50ms steps); tests shrink it for determinism.
@@ -697,6 +704,14 @@ export async function handleMobileApi(
         limit: num("limit"),
       }),
     );
+    return true;
+  }
+
+  // Version pins for the rail — the phone drew the rail without its third
+  // marker class until this existed (remote-api.ts stubbed listPins to []).
+  const pinsMatch = p.match(/^\/api\/terminal\/([^/]+)\/pins$/);
+  if (pinsMatch && method === "GET") {
+    respondJson(response, 200, deps.listPins ? deps.listPins(pinsMatch[1]) : []);
     return true;
   }
 

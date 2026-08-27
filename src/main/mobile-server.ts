@@ -14,6 +14,7 @@ import {
 import { agentStatus } from './herdr-agent-status'
 import { endpointCertHosts, mobileEndpoints, type MobileEndpoint } from './mobile-endpoints'
 import { loadOrCreatePairingToken, rotatePairingToken } from './pairing-token'
+import type { VersionPinRecord } from '../shared/version-pin'
 import { readTailnet, type CertHosts, type TailnetIdentity } from './tailscale'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { powerSaveBlocker } from 'electron'
@@ -44,7 +45,7 @@ import { handleCallRoutes, type CallEndpointDeps } from './call-endpoints'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
 import { sendBody } from './http-compress'
 import { rendererSourceFor, staleBuildNotice } from './renderer-choice'
-import { fetchRendererDevResource } from './renderer-dev-proxy'
+import { fetchRendererDevResource, rendererDevPathAllowed } from './renderer-dev-proxy'
 
 // Re-exported so existing importers keep their import path; the constants
 // themselves live in an Electron-free module so pure code can use them.
@@ -108,6 +109,8 @@ export interface MobileServerDeps {
     url: URL,
     slug: string
   ) => Promise<boolean>
+  /** Version pins (§10) for the rail's third marker class; absent = []. */
+  listPins?: (terminalId: string) => readonly VersionPinRecord[]
   recoverAgent: (id: string) => RecoverResult
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
   undoRestore: (id: string) => Promise<RestoreResult>
@@ -604,15 +607,23 @@ async function serveRendererDev(
 }
 
 /**
- * Where THIS client's renderer comes from. A tailnet peer gets the build; the
- * LAN and loopback keep Vite's live graph. See renderer-choice.ts — the whole
- * reason is that 159 dependent requests do not survive a DERP relay.
+ * Where THIS client's renderer comes from. Loopback (desktop QA) keeps
+ * Vite's live graph; every remote client — LAN phones included — gets the
+ * build, with `?renderer=dev` as the explicit opt-in for phone-dev loops.
+ * See renderer-choice.ts for why (DERP relays choke on the module graph, and
+ * real iPhones crash-loop on dev-mode weight + restart-stale graphs).
  */
-function rendererSource(request: http.IncomingMessage, deps: MobileServerDeps): 'dev' | 'built' {
+function rendererSource(
+  request: http.IncomingMessage,
+  deps: MobileServerDeps,
+  url?: URL
+): 'dev' | 'built' {
+  const raw = url?.searchParams.get('renderer')
   return rendererSourceFor({
     remoteAddress: request.socket.remoteAddress,
     devAvailable: !!deps.rendererDevUrl,
-    builtAvailable: existsSync(path.join(deps.rendererDir, 'index.html'))
+    builtAvailable: existsSync(path.join(deps.rendererDir, 'index.html')),
+    requested: raw === 'dev' || raw === 'built' ? raw : null
   })
 }
 
@@ -719,10 +730,9 @@ async function handle(
   }
 
   if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
-    // Dev uses Vite's current transforms; packaged/preview builds use out/.
-    // A tailnet peer is served the build instead — the live graph is 159
-    // dependent requests, which a relayed link never finishes.
-    if (rendererSource(request, deps) === 'dev') {
+    // Loopback (and ?renderer=dev) uses Vite's current transforms; every
+    // other client gets the build — see rendererSource.
+    if (rendererSource(request, deps, url) === 'dev') {
       if (await serveRendererDev(request, response, deps, url, true, servedSlug)) return
     }
     if (!serveRendererIndex(request, response, deps, servedSlug)) rendererMissing()
@@ -915,9 +925,11 @@ async function handle(
     return
   }
 
-  // Whichever source served this client's index must serve its assets too:
-  // a bundle index asking for /src/main.tsx, or the reverse, loads nothing.
-  if (request.method === 'GET' && rendererSource(request, deps) === 'dev') {
+  // Whichever source served this client's index must serve its assets too.
+  // Module requests carry no ?renderer=, so route by PATH SHAPE: only a
+  // dev-served index ever asks for /src, /@… or /node_modules paths — a
+  // choice-based check here would strand a ?renderer=dev client's modules.
+  if (request.method === 'GET' && deps.rendererDevUrl && rendererDevPathAllowed(url.pathname)) {
     if (await serveRendererDev(request, response, deps, url)) return
   }
   if (request.method === 'GET' && serveRendererAsset(request, response, deps, url.pathname)) return

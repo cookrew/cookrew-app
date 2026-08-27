@@ -28,17 +28,38 @@ describe('rendererSourceFor', () => {
     expect(rendererSourceFor({ ...BOTH, remoteAddress: 'fd7a:115c:a1e0::1234' })).toBe('built')
   })
 
-  it('leaves the LAN and loopback on the live module graph', () => {
-    // This is where the edit-reload loop happens and where the link can pay
-    // for it. Diverting these would cost live code for no benefit.
-    expect(rendererSourceFor({ ...BOTH, remoteAddress: '192.168.2.13' })).toBe('dev')
-    expect(rendererSourceFor({ ...BOTH, remoteAddress: '::ffff:127.0.0.1' })).toBe('dev')
-    expect(rendererSourceFor({ ...BOTH, remoteAddress: '10.0.0.4' })).toBe('dev')
+  it('sends LAN phones to the build too — real WebKit cannot afford dev mode', () => {
+    // The live graph is React in DEV MODE and goes stale on every dev-server
+    // restart; a real iPhone holding the tab across a day of edits reloads
+    // into broken half-graphs until Safari declares the page broken.
+    expect(rendererSourceFor({ ...BOTH, remoteAddress: '192.168.2.13' })).toBe('built')
+    expect(rendererSourceFor({ ...BOTH, remoteAddress: '10.0.0.4' })).toBe('built')
+    expect(rendererSourceFor({ ...BOTH, remoteAddress: '100.12.0.1' })).toBe('built')
   })
 
-  it('does not mistake ordinary 100.x space for the tailnet', () => {
-    // 100.64.0.0/10 is the tailnet; 100.12.x is public internet space.
-    expect(rendererSourceFor({ ...BOTH, remoteAddress: '100.12.0.1' })).toBe('dev')
+  it('keeps loopback on the live module graph — the desktop QA/edit loop', () => {
+    expect(rendererSourceFor({ ...BOTH, remoteAddress: '::ffff:127.0.0.1' })).toBe('dev')
+    expect(rendererSourceFor({ ...BOTH, remoteAddress: '::1' })).toBe('dev')
+  })
+
+  it('honours an explicit ?renderer= override in both directions', () => {
+    // The phone-dev loop opts back into live code; a loopback QA run can
+    // pin the build it is about to ship.
+    expect(rendererSourceFor({ ...BOTH, remoteAddress: '192.168.2.13', requested: 'dev' })).toBe(
+      'dev'
+    )
+    expect(
+      rendererSourceFor({ ...BOTH, remoteAddress: '::ffff:127.0.0.1', requested: 'built' })
+    ).toBe('built')
+    // An override can only choose between sources that exist.
+    expect(
+      rendererSourceFor({
+        devAvailable: false,
+        builtAvailable: true,
+        remoteAddress: '192.168.2.13',
+        requested: 'dev'
+      })
+    ).toBe('built')
   })
 
   it('falls back rather than serving nothing when one source is absent', () => {
@@ -52,8 +73,8 @@ describe('rendererSourceFor', () => {
     ).toBe('dev')
   })
 
-  it('keeps today’s behaviour for a peer with no address', () => {
-    expect(rendererSourceFor({ ...BOTH, remoteAddress: undefined })).toBe('dev')
+  it('treats a peer with no address as remote — the safe default is the build', () => {
+    expect(rendererSourceFor({ ...BOTH, remoteAddress: undefined })).toBe('built')
   })
 })
 

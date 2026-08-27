@@ -135,6 +135,7 @@ export const NODE_ROUTES: RegExp[] = [
   /^\/api\/terminal\/[^/]+\/jump$/,
   /^\/api\/terminal\/[^/]+\/seen$/,
   /^\/api\/terminal\/[^/]+\/turns(?:\?.*)?$/,
+  /^\/api\/terminal\/[^/]+\/pins$/,
   /^\/api\/terminal\/[^/]+\/trace(?:\?.*)?$/,
   /^\/api\/terminal\/[^/]+\/trace\/index$/,
   /^\/api\/terminal\/[^/]+\/trace\/markers$/,

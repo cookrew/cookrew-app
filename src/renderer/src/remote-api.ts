@@ -3,6 +3,7 @@ import { ReconnectingStream } from './live-stream'
 import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
+import type { VersionPinRecord } from '../../shared/version-pin'
 import { apiPath } from './api-base'
 
 /**
@@ -212,7 +213,9 @@ export function createRemoteApi(): CookrewApi {
     // store, so the phone does not get to make it either.
     markPresetRotationSeen: () => Promise.resolve(),
     trustPresetAuthorKey: () => Promise.resolve(),
-    listPins: () => Promise.resolve([]),
+    // The rail's third marker class travels to the phone now — same store the
+    // desktop reads, over the scoped route, so the two rails cannot disagree.
+    listPins: (terminalId) => req<VersionPinRecord[]>(apiPath(`/api/terminal/${terminalId}/pins`)),
     // apiPath, not a bare path: step 3 scopes the phone client's routes to the
     // workspace it is for, and a pin belongs to a transcript inside one.
     createTerminal: (opts) => req(apiPath('/api/terminals'), 'POST', opts),
