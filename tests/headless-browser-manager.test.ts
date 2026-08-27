@@ -28,7 +28,10 @@ function fakeInstance(start: () => Promise<void> = () => Promise.resolve()): Hea
   } as unknown as HeadlessInstance
 }
 
-function managerWith(instanceFactory: (options: HeadlessOptions) => HeadlessInstance) {
+function managerWith(
+  instanceFactory: (options: HeadlessOptions) => HeadlessInstance,
+  deleteProfile?: (browserId: string) => void | Promise<void>
+) {
   const nodes = new Map([[browser().id, browser()]])
   return new HeadlessBrowserManager({
     enabled: () => true,
@@ -38,6 +41,7 @@ function managerWith(instanceFactory: (options: HeadlessOptions) => HeadlessInst
     onPageState: vi.fn(),
     onTabOpened: vi.fn(),
     onTabClosed: vi.fn(),
+    deleteProfile,
     makeInstance: instanceFactory
   })
 }
@@ -94,6 +98,51 @@ describe('HeadlessBrowserManager node ownership', () => {
 
     expect(instance.stop).toHaveBeenCalledTimes(1)
     expect(manager.activeCount()).toBe(0)
+  })
+
+  it('keeps a profile when a workspace switch only deactivates its node', async () => {
+    const deleteProfile = vi.fn()
+    const manager = managerWith(() => fakeInstance(), deleteProfile)
+    await manager.replaceNodes([browser()])
+
+    await manager.replaceNodes([])
+
+    expect(deleteProfile).not.toHaveBeenCalled()
+  })
+
+  it('deletes a profile only after permanent node discard', async () => {
+    const instance = fakeInstance()
+    const deleteProfile = vi.fn()
+    const manager = managerWith(() => instance, deleteProfile)
+    await manager.syncNode(browser())
+
+    await manager.discard(browser().id)
+
+    expect(instance.stop).toHaveBeenCalledTimes(1)
+    expect(deleteProfile).toHaveBeenCalledWith(browser().id)
+  })
+
+  it('waits for an in-flight workspace deactivation before deleting the profile', async () => {
+    let finishStop!: () => void
+    const instance = fakeInstance()
+    instance.stop = vi.fn(
+      () => new Promise<{ pid: number | null; forced: boolean }>((resolve) => {
+        finishStop = () => resolve({ pid: 1, forced: false })
+      }),
+    )
+    const deleteProfile = vi.fn()
+    const manager = managerWith(() => instance, deleteProfile)
+    await manager.syncNode(browser())
+
+    const deactivating = manager.remove(browser().id)
+    const discarding = manager.discard(browser().id)
+    await Promise.resolve()
+    expect(instance.stop).toHaveBeenCalledTimes(1)
+    expect(deleteProfile).not.toHaveBeenCalled()
+
+    finishStop()
+    await Promise.all([deactivating, discarding])
+    expect(deleteProfile).toHaveBeenCalledWith(browser().id)
   })
 
   it('cancels a starting instance on node removal without promoting it', async () => {

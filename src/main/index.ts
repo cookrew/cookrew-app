@@ -118,6 +118,7 @@ import { BrowserThumbCache } from './browser-thumb-cache'
 import { findChrome } from './headless-chrome'
 import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine } from './headless-browser-command'
+import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profile-store'
 
 import { TraceReader, type SessionWatchSpec } from './trace'
 import { LatestFileWatcher } from './latest-watch'
@@ -1814,6 +1815,7 @@ function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
   const meta =
     store.list().workspaces.find((w) => w.id === nameOrId) ?? store.metaByName(nameOrId)
   if (!meta) throw new Error(`Workspace '${nameOrId}' not found`)
+  const browserIds = store.browserIdsOf(meta.id)
   // Kill this workspace's terminals BEFORE deleting it — store.removeWorkspace
   // only switches away (detach) and rm's the state dir, so without this each
   // terminal's tmux session (a claude CLI, bypassPermissions) would leak
@@ -1833,6 +1835,9 @@ function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
     agents.deactivate(id)
   }
   store.removeWorkspace(meta.id) // switches away first if active (fires 'switch')
+  void Promise.all(browserIds.map((id) => browserManager.discard(id))).catch((error) =>
+    console.error('Failed to discard removed workspace browser profiles:', error)
+  )
   return store.list()
 }
 
@@ -2189,6 +2194,7 @@ function retireTerminal(id: string, why: string): void {
 }
 
 async function removeNode(id: string): Promise<void> {
+  const node = store.node(id)
   retireTerminal(id, 'terminal removed')
   defaultProducerLease().forgetTerminal(id)
   // A permanently removed uuid never returns: its input-provenance fact
@@ -2200,7 +2206,9 @@ async function removeNode(id: string): Promise<void> {
   // clearing it destroyed a recovery signal for nothing (R2 fix).
   ptys.kill(id)
   browserThumbs.forget(id)
-  const browserStopped = browserManager.remove(id)
+  const browserStopped = node?.kind === 'browser'
+    ? browserManager.discard(id)
+    : browserManager.remove(id)
   store.removeNode(id)
   agents.deactivate(id)
   await browserStopped
@@ -2813,6 +2821,8 @@ const browserManager = new HeadlessBrowserManager({
   enabled: interactiveBrowserEnabled,
   chromePath: findChrome,
   profileRoot: () => path.join(app.getPath('userData'), 'interactive-browser'),
+  deleteProfile: (browserId) =>
+    void removeBrowserProfile(path.join(app.getPath('userData'), 'interactive-browser'), browserId),
   resolveNode: activeBrowserNode,
   onPageState: recordHeadlessPageState,
   onTabOpened: recordHeadlessTabOpened,
@@ -3159,6 +3169,17 @@ app.whenReady().then(() => {
     rendererSrcDir: path.join(app.getAppPath(), 'src/renderer/src')
   })
   registerIpc({ restoreCheckpoint, undoRestore })
+  // Profiles outlive crashes, but not their browser nodes. Enumerate every
+  // workspace strictly so corrupt parked state makes this fail closed.
+  try {
+    const reaped = reapOrphanBrowserProfiles(
+      path.join(app.getPath('userData'), 'interactive-browser'),
+      store.allBrowserIdsStrict(),
+    )
+    if (reaped.length > 0) console.error(`Reaped ${reaped.length} orphaned browser profile(s)`)
+  } catch (error) {
+    console.error('Skipping browser profile reap: could not enumerate all workspace browsers', error)
+  }
   // Restore browser cards as cold metadata. replaceNodes preserves any live
   // node-owned instances, but startup does not spend one Chromium process (and
   // profile) per saved reference card; a stream or agent command starts it.

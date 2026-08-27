@@ -11,7 +11,16 @@
 // preserved, and every node gets a fresh id.
 
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import {
+  constants as fsConstants,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import type {
@@ -218,26 +227,43 @@ export class TeamStore {
     }
     mkdirSync(this.dir, { recursive: true })
     writeFileSync(this.fileFor(teamName), JSON.stringify(snapshot, null, 2), 'utf8')
+    this.pruneSessionSidecars(teamName, new Set(Object.values(sessions)))
     return metaOf(snapshot)
   }
 
   private snapshotSessions(teamName: string, state: WorkspaceState): Record<string, string> {
     const sessions: Record<string, string> = {}
+    const sidecar = this.sessionsDirFor(teamName)
     for (const node of state.nodes) {
       if (node.kind !== 'terminal' || !node.claudeSessionId) continue
       try {
         const source = claudeSessionFile(node.cwd, node.claudeSessionId, this.projectsDir)
         if (!existsSync(source)) continue
-        const sidecar = this.sessionsDirFor(teamName)
         mkdirSync(sidecar, { recursive: true })
         const fileName = `${node.id}.jsonl`
-        writeFileSync(path.join(sidecar, fileName), readFileSync(source, 'utf8'), 'utf8')
+        // APFS clones share unchanged blocks with the source while remaining a
+        // real immutable snapshot. Other filesystems transparently fall back.
+        copyFileSync(source, path.join(sidecar, fileName), fsConstants.COPYFILE_FICLONE)
         sessions[node.id] = fileName
       } catch (error) {
         console.error('Team save session snapshot failed (preamble fallback):', error)
       }
     }
     return sessions
+  }
+
+  /** Remove stale files only AFTER the new snapshot JSON commits successfully. */
+  private pruneSessionSidecars(teamName: string, keep: ReadonlySet<string>): void {
+    const sidecar = this.sessionsDirFor(teamName)
+    if (!existsSync(sidecar)) return
+    if (keep.size === 0) {
+      rmSync(sidecar, { recursive: true, force: true })
+      return
+    }
+    for (const entry of readdirSync(sidecar, { withFileTypes: true })) {
+      if (!entry.isFile() || keep.has(entry.name)) continue
+      rmSync(path.join(sidecar, entry.name), { force: true })
+    }
   }
 
   /** Snapshot session lines for a saved team's terminal, or null. */

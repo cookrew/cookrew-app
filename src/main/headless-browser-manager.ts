@@ -27,6 +27,7 @@ export interface HeadlessBrowserManagerDeps {
   onPageState: (browserId: string, tabId: string, state: HeadlessPageState) => void
   onTabOpened: (browserId: string, tab: BrowserTab) => void
   onTabClosed: (browserId: string, tabId: string) => void
+  deleteProfile?: (browserId: string) => void | Promise<void>
   makeInstance?: (options: HeadlessOptions) => HeadlessInstance
 }
 
@@ -38,6 +39,7 @@ interface StartingEntry {
 export class HeadlessBrowserManager {
   private readonly instances = new Map<string, HeadlessInstance>()
   private readonly starting = new Map<string, StartingEntry>()
+  private readonly stopping = new Map<string, Promise<void>>()
   private readonly desired = new Map<string, BrowserNodeData>()
   private shuttingDown = false
   private shutdownPromise: Promise<void> | null = null
@@ -169,20 +171,36 @@ export class HeadlessBrowserManager {
   }
 
   async remove(browserId: string): Promise<void> {
+    const pending = this.stopping.get(browserId)
+    if (pending) return pending
     this.desired.delete(browserId)
-    const stopping: Array<Promise<unknown>> = []
-    const starting = this.starting.get(browserId)
-    if (starting) {
-      this.starting.delete(browserId)
-      stopping.push(starting.instance.stop())
-      stopping.push(starting.promise.then(() => undefined))
+    const operation = (async (): Promise<void> => {
+      const stopping: Array<Promise<unknown>> = []
+      const starting = this.starting.get(browserId)
+      if (starting) {
+        this.starting.delete(browserId)
+        stopping.push(starting.instance.stop())
+        stopping.push(starting.promise.then(() => undefined))
+      }
+      const instance = this.instances.get(browserId)
+      if (instance) {
+        this.instances.delete(browserId)
+        stopping.push(instance.stop())
+      }
+      await Promise.all(stopping)
+    })()
+    this.stopping.set(browserId, operation)
+    try {
+      await operation
+    } finally {
+      if (this.stopping.get(browserId) === operation) this.stopping.delete(browserId)
     }
-    const instance = this.instances.get(browserId)
-    if (instance) {
-      this.instances.delete(browserId)
-      stopping.push(instance.stop())
-    }
-    await Promise.all(stopping)
+  }
+
+  /** Permanent node deletion: stop first, then remove its persistent profile. */
+  async discard(browserId: string): Promise<void> {
+    await this.remove(browserId)
+    await this.deps.deleteProfile?.(browserId)
   }
 
   shutdown(): Promise<void> {

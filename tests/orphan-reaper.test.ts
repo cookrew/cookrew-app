@@ -4,7 +4,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { orphanSessionNames, sessionNameFor } from '../src/main/pty'
 import { WorkspaceStore } from '../src/main/store'
-import { DEFAULT_TERMINAL_SIZE } from '../src/shared/model'
+import { DEFAULT_BROWSER_SIZE, DEFAULT_TERMINAL_SIZE } from '../src/shared/model'
 
 describe('orphanSessionNames', () => {
   const owned = ['aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', 'ffffffff-1111-2222-3333-444444444444']
@@ -47,6 +47,14 @@ describe('WorkspaceStore terminal enumeration (delete-leak kill list)', () => {
     position: { x: 0, y: 0 },
     size: DEFAULT_TERMINAL_SIZE
   })
+  const browser = (id: string): Parameters<WorkspaceStore['addNode']>[0] => ({
+    kind: 'browser',
+    id,
+    name: id,
+    url: 'about:blank',
+    position: { x: 0, y: 0 },
+    size: DEFAULT_BROWSER_SIZE
+  })
 
   it('terminalIdsOf lists a workspace terminals — active AND after switching away', () => {
     const store = freshStore()
@@ -71,6 +79,15 @@ describe('WorkspaceStore terminal enumeration (delete-leak kill list)', () => {
     expect(new Set(store.allTerminalIds())).toEqual(new Set(['t-home', 't-b']))
   })
 
+  it('allBrowserIdsStrict spans every workspace', () => {
+    const store = freshStore()
+    store.addNode(browser('b-home'))
+    const other = store.createWorkspace('B', store.focusedState.dir)
+    store.switchWorkspace(other.id)
+    store.addNode(browser('b-other'))
+    expect(new Set(store.allBrowserIdsStrict())).toEqual(new Set(['b-home', 'b-other']))
+  })
+
   it('allTerminalIdsStrict THROWS on a corrupt parked workspace.json (reaper aborts, fail-safe)', () => {
     const base = mkdtempSync(path.join(tmpdir(), 'cookrew-del-'))
     // multiInstance OFF is what makes 'parked' mean 'on disk only' — the
@@ -91,6 +108,7 @@ describe('WorkspaceStore terminal enumeration (delete-leak kill list)', () => {
     )
     expect(new Set(store.allTerminalIds())).toEqual(new Set(['t-home']))
     expect(() => store.allTerminalIdsStrict()).toThrow()
+    expect(() => store.allBrowserIdsStrict()).toThrow()
   })
 
   it('a RESIDENT workspace is enumerated from memory, corrupt file or not', () => {

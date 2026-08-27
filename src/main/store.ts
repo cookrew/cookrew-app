@@ -767,6 +767,13 @@ export class WorkspaceStore extends EventEmitter {
       .map((n) => n.id)
   }
 
+  /** Browser node ids of ONE workspace, including a parked workspace on disk. */
+  browserIdsOf(workspaceId: string): string[] {
+    return this.stateOf(workspaceId)
+      .nodes.filter((n) => n.kind === 'browser')
+      .map((n) => n.id)
+  }
+
   /** Terminal node ids across ALL workspaces — the sessions the app owns. */
   allTerminalIds(): string[] {
     const ids: string[] = []
@@ -793,6 +800,19 @@ export class WorkspaceStore extends EventEmitter {
         this.hydrated.get(w.id)?.state ?? loadWorkspaceStateStrict(this.baseDir, w.id)
       for (const n of state.nodes) {
         if (n.kind === 'terminal') ids.push(n.id)
+      }
+    }
+    return ids
+  }
+
+  /** Strict ownership set for browser-profile reaping; corrupt state aborts. */
+  allBrowserIdsStrict(): string[] {
+    const ids: string[] = []
+    for (const w of this.registry.workspaces) {
+      const state =
+        this.hydrated.get(w.id)?.state ?? loadWorkspaceStateStrict(this.baseDir, w.id)
+      for (const n of state.nodes) {
+        if (n.kind === 'browser') ids.push(n.id)
       }
     }
     return ids
