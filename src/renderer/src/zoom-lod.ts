@@ -201,12 +201,19 @@ const SETTLE_MS = 120
 /** True while the viewport has been still for SETTLE_MS. */
 function useViewportSettled(): boolean {
   const { x, y, zoom } = useViewport()
+  // A pane-size flap is motion too. Watching only x/y/zoom left a
+  // zero-cooldown hole (Pilot's phone-crash hunt, 2026-08-27): a one-render
+  // geometry change dropped the overlay winner AND re-admitted it on the very
+  // next render, because the drop itself never re-armed this debounce — each
+  // cycle a full xterm mount, six transcript fetches and a resize burst.
+  const paneWidth = useStore((s) => s.width)
+  const paneHeight = useStore((s) => s.height)
   const [settled, setSettled] = useState(true)
   useEffect(() => {
     setSettled(false)
     const timer = setTimeout(() => setSettled(true), SETTLE_MS)
     return () => clearTimeout(timer)
-  }, [x, y, zoom])
+  }, [x, y, zoom, paneWidth, paneHeight])
   return settled
 }
 

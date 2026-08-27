@@ -285,6 +285,12 @@ function Canvas(): React.JSX.Element {
     // the overview rather than restore a dead frame.
     prevViewportRef.current = null
     zoomedNodeIdRef.current = null
+    // …and so do the auto-open credentials. Left armed, the switch's fitView
+    // settling would passively mount whatever card crosses the coverage floor
+    // on the NEW canvas — the exact trap deliberateOpenRef exists to prevent
+    // (Pilot's phone-crash hunt, 2026-08-27, section 3).
+    deliberateOpenRef.current = false
+    setArrivedId(null)
   }
 
   useBrowserEngine()
@@ -1056,6 +1062,27 @@ function Canvas(): React.JSX.Element {
     zoomedNodeIdRef.current,
     arrivedId
   )
+  // The arrival bypass is ONE-SHOT: once the arrived card has actually held
+  // primary and then lost it, the bypass must not re-admit it on the very
+  // next render after a drop — that zero-cooldown remount was the loop engine
+  // (Pilot's phone-crash hunt, 2026-08-27, section 2). Consumption is tracked
+  // so a slow first admission can't burn the bypass before it ever lands: the
+  // clear fires only after primaryId has EQUALLED arrivedId at least once.
+  const arrivalConsumedRef = useRef(false)
+  useEffect(() => {
+    if (arrivedId === null) {
+      arrivalConsumedRef.current = false
+      return
+    }
+    if (lod.primaryId === arrivedId) {
+      arrivalConsumedRef.current = true
+      return
+    }
+    if (arrivalConsumedRef.current) {
+      arrivalConsumedRef.current = false
+      setArrivedId(null)
+    }
+  }, [lod.primaryId, arrivedId])
   /** Null once the node is gone, which is also how the dialog self-dismisses. */
   const closingNode = closingId
     ? (workspace?.nodes.find((n) => n.id === closingId) ?? null)

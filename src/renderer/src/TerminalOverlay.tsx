@@ -357,13 +357,21 @@ function TerminalOverlay({
       }
 
       // Fit can report bogus dimensions before layout finishes — retry
-      // until the measured size settles.
+      // until the measured size settles. Each POST resizes the SHARED mirror
+      // PTY and forces a full TUI repaint broadcast to every viewer, so a
+      // retry that measured the same size must not re-send it (Pilot's
+      // phone-crash hunt, 2026-08-27 — the mount burst was 4–13 identical
+      // resizes, each reflowing the desktop viewer too).
+      let lastSent: { cols: number; rows: number } | null = null
       const fitUntilStable = (attempt = 0): void => {
         if (disposed) return
         try {
           if (container.offsetWidth > 40) {
             fit.fit()
-            cookrew().ptyResize(node.id, term.cols, term.rows)
+            if (lastSent?.cols !== term.cols || lastSent?.rows !== term.rows) {
+              lastSent = { cols: term.cols, rows: term.rows }
+              cookrew().ptyResize(node.id, term.cols, term.rows)
+            }
           }
         } catch {
           // ignore; retried below
