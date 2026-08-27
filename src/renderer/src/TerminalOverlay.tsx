@@ -33,6 +33,7 @@ import { TranslateButton } from './TranslateButton'
 import { languageByCode } from '../../shared/translate'
 import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { StatusCoin } from './nodes/AgentAvatar'
+import { markStage } from './phone-beacon'
 
 const PHOSPHOR_THEME = {
   background: '#14110A',
@@ -234,6 +235,10 @@ function TerminalOverlay({
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
+    // Stage markers: the phone dies within ~1.3s of this effect on iOS 26.6
+    // with every volume gauge innocent — the last stage that lands in the
+    // black box names the killing line. No-ops on desktop.
+    markStage('overlay:effect-start')
 
     const term = new Terminal({
       theme: PHOSPHOR_THEME,
@@ -333,9 +338,12 @@ function TerminalOverlay({
     // and every row drifts — so the font must be resolved before open().
     const fontReady = document.fonts.load('13px "JetBrains Mono"').catch(() => undefined)
 
+    markStage('overlay:font-wait')
     void fontReady.then(() => {
       if (disposed) return
+      markStage('overlay:term-open-start')
       term.open(container)
+      markStage('overlay:term-open-done')
 
       // WebGL renderer pins every glyph to its grid cell, so CJK fallback
       // glyphs (JetBrains Mono has none) can't accumulate horizontal drift
@@ -398,11 +406,22 @@ function TerminalOverlay({
       // focused one and the pane's size is not its own — re-assert its fitted
       // size. Idle viewers adopt and stay quiet, so two viewers cannot fight.
       let reassertTimer: ReturnType<typeof setTimeout> | null = null
+      markStage('overlay:attach-start')
+      let firstChunk = true
       const detach = cookrew().ptyAttach(
         node.id,
-        (chunk) => term.write(chunk),
+        (chunk) => {
+          if (firstChunk) {
+            firstChunk = false
+            markStage(`overlay:replay-write-start len=${chunk.length}`)
+            term.write(chunk, () => markStage('overlay:replay-write-done'))
+            return
+          }
+          term.write(chunk)
+        },
         ({ cols, rows }) => {
           if (disposed || cols <= 0 || rows <= 0) return
+          markStage(`overlay:hello-resize ${cols}x${rows}`)
           term.resize(cols, rows)
           if (document.visibilityState !== 'visible' || !document.hasFocus()) return
           if (reassertTimer) clearTimeout(reassertTimer)

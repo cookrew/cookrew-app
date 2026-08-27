@@ -82,6 +82,26 @@ function vitals(): Record<string, unknown> {
   }
 }
 
+/**
+ * Stage marker: an IMMEDIATE keepalive POST, for instrumenting a code path
+ * that kills the page in under a second — the last stage that lands in the
+ * log names the killer's exact neighbourhood. keepalive lets the request
+ * survive the page's own death.
+ */
+export function markStage(stage: string): void {
+  if (!isRemoteMode()) return
+  try {
+    void fetch(apiPath('/api/beacon'), {
+      method: 'POST',
+      headers: { ...authHeaders(), 'content-type': 'application/json' },
+      body: JSON.stringify({ stage, t: Date.now() }),
+      keepalive: true
+    }).catch(() => undefined)
+  } catch {
+    // never the crash
+  }
+}
+
 /** Start the black box. Remote (phone) clients only; desktop pays nothing. */
 export function startPhoneBeacon(): void {
   if (!isRemoteMode()) return
