@@ -51,6 +51,7 @@ import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { promptViaHerdr, submitViaHerdr, waitForAgentState } from './herdr-agent-wait'
+import { isTransientHerdrError, runWithHerdrRetry } from './herdr-retry'
 import {
   sanitizeAgentEnv,
   type AttachSpawn,
@@ -248,9 +249,20 @@ export function envArgs(spec: AttachSpec): string[] {
  * would create panes in whatever herdr session the user happens to be running.
  */
 export function createHerdrRunner(env: NodeJS.ProcessEnv): CommandRunner {
+  const run = (file: string, args: string[]): string =>
+    execFileSync(file, args, {
+      encoding: 'utf8',
+      // The transient classifier needs the CLI's error text. Ignoring stderr
+      // made os error 35 indistinguishable from a dead server.
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env
+    })
+
   return {
     run: (file, args) =>
-      execFileSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env }),
+      retrySafeHerdrCommand(args)
+        ? runWithHerdrRetry(() => run(file, args))
+        : run(file, args),
     runQuiet: (file, args) => {
       try {
         execFileSync(file, args, { stdio: 'ignore', env })
@@ -260,12 +272,39 @@ export function createHerdrRunner(env: NodeJS.ProcessEnv): CommandRunner {
     },
     probe: (file, args) => {
       try {
-        return spawnSync(file, args, { stdio: 'ignore', env }).status === 0
+        return runWithHerdrRetry(() => {
+          const result = spawnSync(file, args, {
+            stdio: ['ignore', 'ignore', 'pipe'],
+            env
+          })
+          if (result.error) throw result.error
+          if (result.status !== 0 && isTransientHerdrError({ stderr: result.stderr })) {
+            throw Object.assign(new Error('transient herdr probe failure'), {
+              stderr: result.stderr
+            })
+          }
+          return result.status === 0
+        })
       } catch {
         return false
       }
     }
   }
+}
+
+/**
+ * A lost reply is ambiguous for a mutation: `pane split` or `send-text` may
+ * already have landed, and repeating it can create a second pane or duplicate
+ * input. Reads are side-effect free, so only they use the connection retry.
+ */
+export function retrySafeHerdrCommand(args: readonly string[]): boolean {
+  if (args[0] === '--version') return true
+  if (args[0] === 'agent' && args[1] === 'get') return true
+  if (args[0] === 'workspace' && args[1] === 'list') return true
+  return (
+    args[0] === 'pane' &&
+    (args[1] === 'list' || args[1] === 'read' || args[1] === 'process-info')
+  )
 }
 
 /**
