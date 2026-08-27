@@ -1,4 +1,7 @@
 import type http from "node:http";
+import { appendFile } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { WorkspaceStore } from "./store";
 import type { PtyManager } from "./pty";
 import type { TurnTracker } from "./turn-tracker";
@@ -360,6 +363,21 @@ export async function handleMobileApi(
   }
   if (method === "GET" && p === "/api/activity") {
     respondJson(response, 200, turns.list());
+    return true;
+  }
+  // The phone's BLACK BOX (phone-beacon.ts): self-reported page vitals,
+  // appended to a file because no Apple inspection channel works against
+  // iOS 26.6 and the kernel autopsy gives a weight with no allocator. The
+  // last line before a crash is the only profile of the dying page anyone
+  // can take. Bounded body, fire-and-forget append, never throws.
+  if (method === "POST" && p === "/api/beacon") {
+    void readJson(request, 16 * 1024)
+      .then((body) => {
+        const line = `${new Date().toISOString()} ${JSON.stringify(body)}\n`;
+        appendFile(join(tmpdir(), "cookrew-phone-beacon.log"), line, () => undefined);
+      })
+      .catch(() => undefined);
+    respondJson(response, 204, {});
     return true;
   }
   // Activity Board: the cross-workspace, task-first view. Strictly ADDITIVE —

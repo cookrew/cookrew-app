@@ -187,6 +187,9 @@ export const SCOPE_AWARE: RegExp[] = [
   // statuses; refusing it under a slug made the very first fetch of every
   // session an unhandled "not workspace-scoped yet" rejection.
   /^\/api\/activity$/,
+  // The phone black box POSTs its vitals here; scope-free by nature (the
+  // payload carries everything, the answer is 204 either way).
+  /^\/api\/beacon$/,
   /^\/api\/git(?:\?.*)?$/,
   /^\/api\/browser\/capabilities$/,
   // Translation carries its own subject: the text to translate is in the
