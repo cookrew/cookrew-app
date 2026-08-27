@@ -35,9 +35,13 @@ describe('reconcileFlowNodes — identity preservation (the re-render fix)', () 
     const b = term('b')
     const prev = reconcileFlowNodes([], [a, b], new Set())
     // A broadcast arrives: same content, but fresh objects (IPC serialized).
-    const next = reconcileFlowNodes(prev, ipc([a, b]), new Set())
+    const incoming = ipc([a, b])
+    const next = reconcileFlowNodes(prev, incoming, new Set())
     expect(next[0]).toBe(prev[0]) // identity preserved → ReactFlow skips the card
     expect(next[1]).toBe(prev[1])
+    // The wrapper must not keep the old workspace payload graph alive.
+    expect((next[0].data as { node: CanvasNode }).node).toBe(incoming[0])
+    expect((next[1].data as { node: CanvasNode }).node).toBe(incoming[1])
   })
 
   it('rebuilds ONLY the node that changed; others keep identity', () => {

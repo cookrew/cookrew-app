@@ -15,9 +15,11 @@ import { searchAgents } from './agent-search'
 import type { TurnMatch } from '../../shared/turn-search'
 import {
   EMPTY_FILTER,
+  MAX_RETAINED_FACET_EVENTS,
   applyFilter,
   buildFacets,
   eventClock,
+  retainFacetEvents,
   type AgentFacets,
   type AgentFilter,
   type FacetEvent,
@@ -301,11 +303,11 @@ export function RosterPanel({
   useEffect(() => {
     const query = cookrew().queryEvents
     if (typeof query !== 'function') return
-    void query({ limit: 4000 })
-      .then((list) => setEvents(list as FacetEvent[]))
+    void query({ limit: MAX_RETAINED_FACET_EVENTS })
+      .then((list) => setEvents(retainFacetEvents(list as FacetEvent[])))
       .catch(() => undefined)
     const off = cookrew().onEvent?.((event) =>
-      setEvents((prior) => [...prior, event as FacetEvent]),
+      setEvents((prior) => retainFacetEvents([...prior, event as FacetEvent])),
     )
     return () => off?.()
   }, [])

@@ -3,6 +3,7 @@ import {
   applyFilter,
   buildFacets,
   eventClock,
+  retainFacetEvents,
   normalizePreset,
   type AgentFilter,
   type FacetEvent,
@@ -175,5 +176,17 @@ describe('eventClock', () => {
 
   it('survives an empty log', () => {
     expect(eventClock([])).toEqual({})
+  })
+})
+
+describe('retainFacetEvents', () => {
+  it('keeps the newest events in their original order', () => {
+    const events = [1, 2, 3, 4, 5].map((timestamp) => ev({ timestamp }))
+    expect(retainFacetEvents(events, 3).map((event) => event.timestamp)).toEqual([3, 4, 5])
+  })
+
+  it('does not allocate a replacement while the window is within its bound', () => {
+    const events = [ev({ timestamp: 1 }), ev({ timestamp: 2 })]
+    expect(retainFacetEvents(events, 2)).toBe(events)
   })
 })

@@ -24,6 +24,7 @@ import type { LodLayout } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
 import { CrIcon } from './icons'
 import { browserRenderMode, type StreamClient } from './browser-stream'
+import { browserHostsToRender } from './browser-host-policy'
 
 const THUMB_INTERVAL_MS = 5000
 const THUMB_WIDTH = 512
@@ -69,10 +70,11 @@ export function BrowserLayer({
   const interactiveBrowser = interactiveCapability?.enabled ?? null
   // SHARED arbitration with terminal overlays (Magpie E2: a per-kind hook
   // let a browser view stack over the zoomed terminal and steal every tap).
-  const { activeIds, rects } = lod
+  const { activeIds, rects, primaryId } = lod
+  const renderedBrowsers = browserHostsToRender(browsers, isRemoteMode(), primaryId)
   return (
     <>
-      {browsers.map((p) => (
+      {renderedBrowsers.map((p) => (
         <BrowserHost
           key={p.id}
           node={p}
