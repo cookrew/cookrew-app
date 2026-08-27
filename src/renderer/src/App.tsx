@@ -387,6 +387,10 @@ function Canvas(): React.JSX.Element {
           true
         )
       )
+      // A refused snapshot (route scoping, transient network) must stay a
+      // missing seed, never an unhandled rejection — live events still fill
+      // the store.
+      .catch(() => undefined)
     return cookrew().onTerminalActivity((activity) => {
       activityStore.set(activity.terminalId, activity)
     })
@@ -745,7 +749,11 @@ function Canvas(): React.JSX.Element {
       // cards 404 at once; re-asking them all every 5s was a sustained TLS
       // storm on the phone (owner's Web Inspector, 2026-08-27).
       const now = Date.now()
-      for (const id of thumbPollList(browserIds, thumbBackoffsRef.current, now)) {
+      // Cap the sweep: a fresh boot knows nothing, and this canvas holds 60+
+      // browser cards — an uncapped first tick was a 60-request TLS burst on
+      // every reload of a crash-looping phone. Eight per tick; the backoff
+      // retires dead ones, so live thumbs still fill within a few ticks.
+      for (const id of thumbPollList(browserIds, thumbBackoffsRef.current, now).slice(0, 8)) {
         // A HEADER, not ?token=. This is an ordinary fetch and can set one, so
         // the token stays out of the URL — see tokenParam, which exists only
         // for the two EventSources that genuinely cannot.

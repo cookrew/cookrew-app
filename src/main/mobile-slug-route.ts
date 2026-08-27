@@ -182,6 +182,11 @@ export const SCOPE_AWARE: RegExp[] = [
   /^\/api\/workspaces$/,
   /^\/api\/auth\/status$/,
   /^\/api\/presets$/,
+  // turns.list(): global and terminal-id-keyed, no focus resolution — the
+  // same class as /api/workspaces. Every phone boot calls it for the card
+  // statuses; refusing it under a slug made the very first fetch of every
+  // session an unhandled "not workspace-scoped yet" rejection.
+  /^\/api\/activity$/,
   /^\/api\/git(?:\?.*)?$/,
   /^\/api\/browser\/capabilities$/,
   // Translation carries its own subject: the text to translate is in the
