@@ -430,7 +430,16 @@ function TerminalOverlay({
           }
           deltaChunks += 1
           deltaBytes += chunk.length
-          if (deltaChunks % 25 === 0) {
+          // 17,320 bytes killed the page (delta-beat c=24, 2026-08-27) — a
+          // CONTENT kill, not volume. Ship the first 64 chunks verbatim so
+          // the poison itself lands in the black box before it detonates:
+          // the chunk logged last (or first missing) is the murder weapon.
+          if (deltaChunks <= 64) {
+            markStage(
+              `overlay:chunk ${deltaChunks} ` +
+                btoa(String.fromCharCode(...new TextEncoder().encode(chunk).slice(0, 4096)))
+            )
+          } else if (deltaChunks % 25 === 0) {
             markStage(`overlay:delta c=${deltaChunks} b=${deltaBytes}`)
           }
           term.write(chunk)
