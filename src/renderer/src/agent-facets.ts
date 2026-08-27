@@ -20,18 +20,6 @@ export interface FacetEvent {
   timestamp: number
 }
 
-/** Match the event-query contract while preventing a long-open board leak. */
-export const MAX_RETAINED_FACET_EVENTS = 4000
-
-/** Keep the newest event window; query results and live appends share this gate. */
-export function retainFacetEvents(
-  events: readonly FacetEvent[],
-  limit = MAX_RETAINED_FACET_EVENTS,
-): FacetEvent[] {
-  if (events.length <= limit) return events as FacetEvent[]
-  return events.slice(events.length - limit)
-}
-
 export interface Facet {
   value: string
   count: number
