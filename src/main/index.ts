@@ -167,6 +167,7 @@ import {
 } from './x402-rail'
 import { RemoteCrewStore, parseCrewLink } from './remote-crews'
 import { crewLineCommand } from './crew-line-command'
+import { ServedRemoteTranscriptClient } from './served-remote-transcript'
 import { ServeRefused, type ServeAccess, type ServedTemplate } from './session-served'
 import { servedPaymentRails } from '../shared/served-payment-rails'
 import { PresetStore, isPresetId } from './preset-store'
@@ -793,6 +794,62 @@ const traces = new TraceReader(store, {
     return servedCtx ? path.join(servedCtx.sandbox, '.pi', 'agent') : undefined
   }
 })
+
+/**
+ * Local and served cards share one transcript capability surface. A served
+ * client holds its Bearer in main memory; node data contains only origin+slug.
+ */
+const servedTranscriptClients = new Map<string, ServedRemoteTranscriptClient>()
+
+function servedTranscriptFor(terminalId: string): ServedRemoteTranscriptClient | null {
+  const node = store.nodeAcrossWorkspaces(terminalId)?.node
+  if (node?.kind !== 'terminal' || !node.servedTranscript) return null
+  const key = JSON.stringify([node.servedTranscript.origin, node.servedTranscript.slug])
+  let client = servedTranscriptClients.get(key)
+  if (!client) {
+    client = new ServedRemoteTranscriptClient(node.servedTranscript)
+    servedTranscriptClients.set(key, client)
+  }
+  return client
+}
+
+const turnHistoryFor = async (terminalId: string) => {
+  const remote = servedTranscriptFor(terminalId)
+  return remote ? (await remote.listTurns({})).turns : turns.history(terminalId)
+}
+
+const turnPageFor = async (terminalId: string, request: TurnPageRequest = {}) => {
+  const remote = servedTranscriptFor(terminalId)
+  return remote ? remote.listTurns(request) : pageTurns(turns.history(terminalId), request)
+}
+
+const traceIndexFor = async (terminalId: string) => {
+  const remote = servedTranscriptFor(terminalId)
+  return remote ? remote.listTraceIndex() : traces.index(terminalId)
+}
+
+const traceMarkersFor = async (terminalId: string) => {
+  const remote = servedTranscriptFor(terminalId)
+  return remote ? remote.listTraceMarkers() : traces.boundaryMarkers(terminalId)
+}
+
+const tracePageFor = async (
+  terminalId: string,
+  request: Parameters<TraceReader['page']>[1] = {}
+) => {
+  const remote = servedTranscriptFor(terminalId)
+  return remote ? remote.listTrace(request) : traces.page(terminalId, request)
+}
+
+const latestCheckpointFor = async (terminalId: string) => {
+  const remote = servedTranscriptFor(terminalId)
+  if (!remote) return traces.latestCheckpoint(terminalId)
+  const page = await remote.listTurns({ limit: 1 })
+  const turn = page.turns[page.turns.length - 1]
+  return turn
+    ? { prompt: turn.prompt, reply: turn.reply, ...(turn.title ? { title: turn.title } : {}) }
+    : null
+}
 
 // Trace-perf T4: push a "your checkpoint changed" nudge to the renderer the
 // instant a watched session file grows, so a card reflects a new turn without
@@ -2154,6 +2211,8 @@ interface CreateTerminalOpts {
    * whose card is a line to someone else's orch rather than a local harness.
    */
   command?: string
+  /** Public transcript address for a placed remote crew. */
+  servedTranscript?: TerminalNodeData['servedTranscript']
 }
 
 function createTerminal(opts: CreateTerminalOpts): CanvasNode {
@@ -2182,6 +2241,7 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     cwd: store.focusedState.dir,
     orch: opts.orch ?? false,
     role: role ? role.name : null,
+    ...(opts.servedTranscript ? { servedTranscript: opts.servedTranscript } : {}),
     ...(restoredSessionId ? { claudeSessionId: restoredSessionId } : {}),
     position: opts.position ?? { ...DEFAULT_CANVAS_POSITION },
     size: DEFAULT_TERMINAL_SIZE
@@ -2948,7 +3008,7 @@ app.whenReady().then(() => {
     store,
     // §10: the same pin store the desktop rail reads — the phone's rail must
     // not drift from what the canvas shows.
-    listPins: (terminalId) => pinStore.list(terminalId),
+    listPins: (terminalId) => (servedTranscriptFor(terminalId) ? [] : pinStore.list(terminalId)),
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,
     // THE INTERNET GATE (§9 · ④), mounted per workspace session. Reachable only
@@ -3011,7 +3071,13 @@ app.whenReady().then(() => {
     },
     events,
     agents,
-    traces,
+    traces: {
+      index: traceIndexFor,
+      boundaryMarkers: traceMarkersFor,
+      page: tracePageFor,
+      latestCheckpoint: latestCheckpointFor
+    },
+    turnHistory: turnHistoryFor,
     // Activity Board data plane. Without this /api/board answers 503 —
     // deliberately, so a missing wire-up is loud instead of an empty board.
     // probe (L2) is absent until the tmux sampler lands; rows then degrade to
@@ -3461,7 +3527,8 @@ function registerIpc(handlers: RestoreHandlers): void {
       name: `${crew.name} · ${crew.slug}`,
       preset: PRESETS[PRESETS.length - 1].name,
       position,
-      command: crewLineCommand(crewLineScript(), crew)
+      command: crewLineCommand(crewLineScript(), crew),
+      servedTranscript: { origin: crew.origin, slug: crew.slug }
     })
     return { ok: true as const, node }
   })
@@ -3567,7 +3634,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.on('turn:seen', (_e, terminalId: string) => turns.seen(terminalId))
 
   // Turn history + fork-from-turn for the canvas cards.
-  ipcMain.handle('turn:history', (_e, terminalId: string) => turns.history(terminalId))
+  ipcMain.handle('turn:history', (_e, terminalId: string) => turnHistoryFor(terminalId))
   // Checkpoint search: scan the whole ledger in MAIN and return matches with a
   // capped snippet. Turn bodies never cross the wire.
   ipcMain.handle('turn:search', (_e, query: string, limit?: number) =>
@@ -3575,17 +3642,17 @@ function registerIpc(handlers: RestoreHandlers): void {
   )
   // Context-view v2: paged transcript windows with full prompt+reply bodies.
   ipcMain.handle('turn:page', (_e, terminalId: string, request?: TurnPageRequest) =>
-    pageTurns(turns.history(terminalId), request ?? {})
+    turnPageFor(terminalId, request ?? {})
   )
   // Trace-sourced context: identity-keyed windows straight from agent files.
-  ipcMain.handle('trace:index', (_e, terminalId: string) => traces.index(terminalId))
-  ipcMain.handle('trace:markers', (_e, terminalId: string) => traces.boundaryMarkers(terminalId))
+  ipcMain.handle('trace:index', (_e, terminalId: string) => traceIndexFor(terminalId))
+  ipcMain.handle('trace:markers', (_e, terminalId: string) => traceMarkersFor(terminalId))
   ipcMain.handle('trace:page', (_e, terminalId: string, request?: unknown) =>
-    traces.page(terminalId, (request ?? {}) as Parameters<TraceReader['page']>[1])
+    tracePageFor(terminalId, (request ?? {}) as Parameters<TraceReader['page']>[1])
   )
   // T1 card preview (trace-perf-architecture): the LATEST checkpoint only, from
   // a bounded tail read — no PTY, O(tail). A visible-but-unzoomed card asks this.
-  ipcMain.handle('trace:latest', (_e, terminalId: string) => traces.latestCheckpoint(terminalId))
+  ipcMain.handle('trace:latest', (_e, terminalId: string) => latestCheckpointFor(terminalId))
   // T4 push: a card subscribes while it shows a checkpoint; the file watch then
   // nudges it (`trace:latest-changed`) on every append, no poll wait.
   ipcMain.handle('trace:latest-watch', (_e, terminalId: string) => {

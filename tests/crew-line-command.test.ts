@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { crewLineCommand } from '../src/main/crew-line-command'
+import { crewLineCommand, parseCrewLineCommand } from '../src/main/crew-line-command'
 import { MKT_GATE } from '../src/shared/marketplace-copy'
 
 describe('placed crew-line payment state', () => {
@@ -24,5 +24,17 @@ describe('placed crew-line payment state', () => {
     expect(source).toContain("if (payRef) headers['x-payment'] = payRef")
     expect(source).toContain("if (payRef) payRef = '' // spent at session start")
     expect(source).toContain("res.body?.reason === 'payment_unavailable'")
+  })
+
+  it('recovers only the public transcript target from an exact placed-card command', () => {
+    const command = crewLineCommand('/app/crew-line.mjs', {
+      origin: 'https://crew.example:8643',
+      slug: 'research-crew'
+    })
+    expect(parseCrewLineCommand(command)).toEqual({
+      script: '/app/crew-line.mjs',
+      target: { origin: 'https://crew.example:8643', slug: 'research-crew' }
+    })
+    expect(parseCrewLineCommand('node "/tmp/not-crew-line.mjs" "--origin" "http://crew.example"')).toBeNull()
   })
 })

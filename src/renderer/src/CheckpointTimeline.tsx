@@ -65,6 +65,8 @@ export function CheckpointTimeline({
   activeIndex,
   loadingIndex,
   markerFrac,
+  waitingLabel,
+  allowActions = true,
   onGoto,
   onLive,
   onScrub
@@ -87,6 +89,10 @@ export function CheckpointTimeline({
   loadingIndex?: number | null
   /** Exact marker fraction (true position over the combined trace+tail extent). */
   markerFrac?: number
+  /** Honest LIVE state before a remote session has written its first trace row. */
+  waitingLabel?: string | null
+  /** Remote caller transcripts are readable but cannot mutate the owner's session. */
+  allowActions?: boolean
   /** Select a checkpoint by IDENTITY (works for trace-only sub-cap rows too). */
   onGoto: (index: number) => void
   /** Return to the live tail. */
@@ -235,7 +241,18 @@ export function CheckpointTimeline({
     return () => clearTimeout(timeout)
   }, [rewindError])
 
-  if (rows.length === 0) return null
+  if (rows.length === 0) {
+    if (!waitingLabel) return null
+    return (
+      <div className="cr-ckpt-rail warming" role="status" aria-label={waitingLabel}>
+        <div className="cr-ckpt-mini">
+          <div className="cr-ckpt-line" />
+          <div className="cr-ckpt-livedot" />
+          <span className="cr-ckpt-warming-label">{waitingLabel}</span>
+        </div>
+      </div>
+    )
+  }
 
   const closeActions = (): void => {
     setActing(null)
@@ -245,6 +262,7 @@ export function CheckpointTimeline({
   // HOLD to reveal actions — same gesture for mouse and touch. A short release is
   // a plain tap; `held` swallows the click that fires after a completed hold.
   const startHold = (index: number): void => {
+    if (!allowActions) return
     held.current = false
     hold.start(index)
   }
@@ -361,42 +379,43 @@ export function CheckpointTimeline({
 
   const rowLabel = (row: CheckpointRow): string => checkpointRowTitle(row, titleMode)
 
-  const rowActions = (row: CheckpointRow, index: number): React.JSX.Element => (
-    <span className="cr-ckpt-row-actions" onMouseDown={stop} onClick={stop}>
-      {rewindError?.index === index && (
-        <span className="cr-ckpt-rewind-error" role="alert">
-          {rewindError.reason}
-        </span>
-      )}
-      {savingIndex === index && row.record ? (
-        <SaveRoleInline terminalId={terminalId} record={row.record} onDone={closeActions} />
-      ) : (
-        <>
-          {row.record !== null && hasRoleFromCheckpoint() && (
-            <button className="cr-ckpt-action" onClick={() => setSavingIndex(index)}>
-              <CrIcon name="agent" /> ROLE
-            </button>
-          )}
-          <button
-            className="cr-ckpt-action"
-            disabled={forkingIndex !== null}
-            onClick={() => fork(index)}
-          >
-            <CrIcon name="fork" /> {forkingIndex === index ? '…' : 'FORK'}
-          </button>
-          {typeof cookrew().restoreCheckpoint === 'function' && (
+  const rowActions = (row: CheckpointRow, index: number): React.JSX.Element | null =>
+    allowActions ? (
+      <span className="cr-ckpt-row-actions" onMouseDown={stop} onClick={stop}>
+        {rewindError?.index === index && (
+          <span className="cr-ckpt-rewind-error" role="alert">
+            {rewindError.reason}
+          </span>
+        )}
+        {savingIndex === index && row.record ? (
+          <SaveRoleInline terminalId={terminalId} record={row.record} onDone={closeActions} />
+        ) : (
+          <>
+            {row.record !== null && hasRoleFromCheckpoint() && (
+              <button className="cr-ckpt-action" onClick={() => setSavingIndex(index)}>
+                <CrIcon name="agent" /> ROLE
+              </button>
+            )}
             <button
-              className={`cr-ckpt-action rewind${rewindArmed === index ? ' armed' : ''}`}
-              disabled={rewindingIndex !== null}
-              onClick={() => rewind(index)}
+              className="cr-ckpt-action"
+              disabled={forkingIndex !== null}
+              onClick={() => fork(index)}
             >
-              {rewindingIndex === index ? '…' : rewindArmed === index ? 'SURE?' : '⟲ REWIND'}
+              <CrIcon name="fork" /> {forkingIndex === index ? '…' : 'FORK'}
             </button>
-          )}
-        </>
-      )}
-    </span>
-  )
+            {typeof cookrew().restoreCheckpoint === 'function' && (
+              <button
+                className={`cr-ckpt-action rewind${rewindArmed === index ? ' armed' : ''}`}
+                disabled={rewindingIndex !== null}
+                onClick={() => rewind(index)}
+              >
+                {rewindingIndex === index ? '…' : rewindArmed === index ? 'SURE?' : '⟲ REWIND'}
+              </button>
+            )}
+          </>
+        )}
+      </span>
+    ) : null
 
   // Boundary dividers (◆ compact / ⇥ clear) sit BETWEEN checkpoint rows, keyed
   // to the row they follow — a compact reads as "context was squeezed here",

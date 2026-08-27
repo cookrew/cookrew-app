@@ -4,7 +4,7 @@ import type { PtyManager } from "./pty";
 import type { TurnTracker } from "./turn-tracker";
 import type { DispatchService } from "./dispatch";
 import type { EventLog, CookrewEvent, EventQuery } from "./event-log";
-import { pageTurns } from "../shared/turn";
+import { pageTurns, type TurnRecord } from "../shared/turn";
 import type { VersionPinRecord } from "../shared/version-pin";
 import { TRANSLATE_MAX_CHARS } from "../shared/translate";
 import { translateBody } from "./sous-translate";
@@ -101,6 +101,8 @@ export interface MobileApiDeps {
   scope?: string | null;
   ptys: PtyManager;
   turns: TurnTracker;
+  /** Capability-routed history for local terminals and placed crews. */
+  turnHistory?: (terminalId: string) => Promise<TurnRecord[]>;
   /**
    * The LATEST checkpoint for a card, from a bounded tail read of the session
    * file — no PTY (trace-perf-architecture T1). Lets the phone canvas show an
@@ -131,7 +133,7 @@ export interface MobileApiDeps {
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>;
   undoRestore: (id: string) => Promise<RestoreResult>;
   /** Trace-sourced context reader (identity-keyed windows over agent files). */
-  traces: TraceReader;
+  traces: Pick<TraceReader, 'index' | 'boundaryMarkers' | 'page'>;
   /**
    * Activity Board data plane (cross-workspace task view). Optional so this
    * module compiles and serves before the collectors are wired in index.ts;
@@ -728,17 +730,22 @@ export async function handleMobileApi(
       offset: num("offset"),
       limit: num("limit"),
       aroundIndex: num("aroundIndex"),
+      beforeIndex: num("beforeIndex"),
     };
     const paged =
       request.offset !== undefined ||
       request.limit !== undefined ||
-      request.aroundIndex !== undefined;
+      request.aroundIndex !== undefined ||
+      request.beforeIndex !== undefined;
+    const history = deps.turnHistory
+      ? await deps.turnHistory(turnsMatch[1])
+      : turns.history(turnsMatch[1]);
     respondJson(
       response,
       200,
       paged
-        ? pageTurns(turns.history(turnsMatch[1]), request)
-        : turns.history(turnsMatch[1]),
+        ? pageTurns(history, request)
+        : history,
     );
     return true;
   }

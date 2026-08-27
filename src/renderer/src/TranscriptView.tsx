@@ -104,6 +104,10 @@ export const TranscriptView = forwardRef<
     translation?: CheckpointTranslation | null
     /** The live terminal layer, seamed at the bottom of the transcript. */
     children: React.ReactNode
+    /** Bump to refresh a growing block whose identity count has not changed. */
+    refreshToken?: number
+    /** Optional live-seam modifier; transcript blocks and scroll model stay shared. */
+    liveClassName?: string
   }
 >(function TranscriptView(
   {
@@ -117,7 +121,9 @@ export const TranscriptView = forwardRef<
     onActiveBlockChange,
     onPending,
     translation,
-    children
+    children,
+    refreshToken = 0,
+    liveClassName
   },
   ref
 ): React.JSX.Element {
@@ -271,7 +277,7 @@ export const TranscriptView = forwardRef<
     anchorIndexRef.current = Number.MAX_SAFE_INTEGER
     void fetchWindow('tail')
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [terminalId, total])
+  }, [terminalId, total, refreshToken])
 
   // offsetParent-safe identity tops: relative to the scroll container via rects,
   // over EVERY identity div (loaded blocks + placeholders).
@@ -436,7 +442,7 @@ export const TranscriptView = forwardRef<
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
-  }, [blocks.length, total, estHeight])
+  }, [blocks, total, estHeight])
 
   return (
     <div className="ctx-transcript" ref={scrollRef} onScroll={onScroll}>
@@ -503,7 +509,7 @@ export const TranscriptView = forwardRef<
           turn is at rest, the seam clips to the tail (item 1). */}
       <div
         ref={liveRef}
-        className="ctx-live"
+        className={`ctx-live${liveClassName ? ` ${liveClassName}` : ''}`}
         data-clip={clipRows !== null ? '' : undefined}
         style={clipRows !== null ? ({ ['--tail-rows']: clipRows } as React.CSSProperties) : undefined}
       >

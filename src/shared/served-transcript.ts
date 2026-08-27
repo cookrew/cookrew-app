@@ -1,6 +1,12 @@
 import type { TraceBoundaryMarker, TraceIndexEntry, TracePage, TracePageRequest } from './trace-blocks'
 import type { TurnPage, TurnPageRequest, TurnRecord } from './turn'
 
+/** Public address of the served transcript behind one placed crew card. */
+export interface ServedTranscriptTarget {
+  origin: string
+  slug: string
+}
+
 /** Stable caller-scoped routes. None accepts a terminal, workspace, or session id. */
 export const SERVED_TRANSCRIPT_PATHS = Object.freeze({
   turns: '/turns',

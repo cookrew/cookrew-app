@@ -10,6 +10,7 @@ import {
   TerminalNodeData
 } from '../shared/model'
 import { DEFAULT_ORCH_PRESET } from './presets'
+import { crewLineCommand, parseCrewLineCommand } from './crew-line-command'
 
 /**
  * Upgrades persisted nodes saved by older builds to the current shape:
@@ -30,7 +31,17 @@ export function upgradeNode(node: CanvasNode): CanvasNode {
   }
   upgraded = upgradeGeometry(upgraded)
   if (upgraded.kind !== 'terminal') return upgraded
-  return upgradeLegacyOrchMirrorCommand(upgradeConductorSeed(upgradeMaestroField(upgraded)))
+  return upgradeCrewLineCommand(
+    upgradeLegacyOrchMirrorCommand(upgradeConductorSeed(upgradeMaestroField(upgraded)))
+  )
+}
+
+function upgradeCrewLineCommand(node: TerminalNodeData): TerminalNodeData {
+  const parsed = parseCrewLineCommand(node.command)
+  if (!parsed) return node
+  const command = crewLineCommand(parsed.script, parsed.target)
+  if (node.servedTranscript && command === node.command) return node
+  return { ...node, command, servedTranscript: parsed.target }
 }
 
 const LEGACY_ORCH_MIRROR_COMMAND =
