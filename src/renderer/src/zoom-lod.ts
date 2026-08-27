@@ -300,6 +300,30 @@ export function useLodLayout(
   // coverage alone is indistinguishable from a deliberate tap, so a big card in
   // the overview would auto-open and trap the view. The caller passes false
   // until the user taps a card (zoomToNode), so the overview never opens one.
+  // PHONE PIN (black-box round 4, 2026-08-27): a deliberately-zoomed card is
+  // held open until the user leaves — eligibility flaps have no vote. The
+  // canvas is ALIVE under the overlay (agents move cards, broadcasts
+  // reposition them), so a one-render geometry dip kept evicting the card
+  // mid-read: with the remount bypass it was the crash loop, without it the
+  // owner was dumped back to the canvas nine seconds into reading. There is
+  // no wheel on a phone — the ONLY honest exits are Back/ESC (zoomBack
+  // clears focusedId) and the card ceasing to exist. Desktop keeps coverage
+  // exits: wheel-zoom-out closing the overlay is its normal gesture.
+  if (
+    isRemoteMode() &&
+    allowAutoOpen &&
+    focusedId !== null &&
+    nodes.some((n) => n.id === focusedId)
+  ) {
+    // Existence, not visibility: a broadcast can move the card off-viewport
+    // while the owner is reading it, and the pinned overlay fills the whole
+    // pane regardless of where the card itself sits.
+    const only = new Set([focusedId])
+    rects[focusedId] = { x: bounds.left, y: bounds.top, width: paneWidth, height: paneHeight }
+    prevActive.current = only
+    prevPrimary.current = focusedId
+    return { activeIds: only, rects, primaryId: focusedId }
+  }
   const winner = allowAutoOpen
     ? pickOverlayWinner(activeIds, coverages, prevPrimary.current, focusedId)
     : null
