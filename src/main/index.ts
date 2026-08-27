@@ -144,6 +144,7 @@ import { servedConfinement } from './session-spawn'
 import { makeEntryTerminalLookup, rmSandbox } from './session-instantiator-mount'
 import { ServedCallers } from './served-callers'
 import { serviceGrants } from './service-grants-store'
+import { servedSessionProvisioner } from './served-onboarding'
 import { handleServedRoute } from './served-endpoints'
 import { servedTurnReply } from './served-turn-reply'
 import { handleServedPayRoute } from './served-pay-route'
@@ -463,9 +464,10 @@ const serving: Serving = wireServing({
   }),
   callsInFlight: { cancelWhere: (match) => callsInFlight.cancelWhere(match) },
   remover: rmSandbox,
-  // The grant lands in the sandbox before the fork boots the harness that
-  // reads it, and spends one session of the owner's budget.
-  provision: { provision: (serviceId, sandbox) => grants.provision(serviceId, sandbox) },
+  // First-run choices and the owner's grant land before the fork boots the
+  // harness. The provisioner seeds only non-secret Claude state; credentials
+  // still arrive exclusively through the grant.
+  provision: servedSessionProvisioner(grants),
   liveWorkspaceId: (slug) => store.bySlug(slug)?.id ?? null,
   // Serving survives a restart — an owner stops serving by saying stop.
   persist: servedTemplateFile(sessionsBase)
