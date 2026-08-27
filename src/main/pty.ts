@@ -1191,11 +1191,28 @@ export class PtyManager {
   }
 
   /** Detach: drop the PTY but keep the tmux session alive for reattach. */
+  /**
+   * Release a mirror WITHOUT killing the agent behind it.
+   *
+   * That promise only holds when something else owns the process. Under tmux
+   * or herdr the pane survives and dispose() merely drops our view; under the
+   * direct backend the PTY IS the agent, so the same call closes its master,
+   * the child takes SIGHUP, and a served crew dies mid-conversation — exit
+   * 129, no session file, and a caller told "no file-backed agent turn"
+   * (2026-08-28, paid door). `persistsAcrossRestart` already states exactly
+   * this property, so the guard reads the capability instead of testing for a
+   * backend by name.
+   */
   detach(terminalId: string): void {
     const session = this.sessions.get(terminalId)
     if (session) {
-      session.dispose()
-      this.sessions.delete(terminalId)
+      // usesTmux is set from mux.capabilities.persistsAcrossRestart (line ~403).
+      if (session.usesTmux) {
+        session.dispose()
+        this.sessions.delete(terminalId)
+      }
+      // Otherwise the mirror IS the agent: leave it running and let close()
+      // (a deliberate end) be the only thing that stops it.
     }
     this.ownership.release(terminalId)
   }
