@@ -484,6 +484,24 @@ export class PtySession extends EventEmitter {
     })
     this.proc.onExit(({ exitCode }) => {
       try {
+        // A SERVED agent dying is a paying caller's crew going silent, and it
+        // used to happen in total silence: the direct backend has no exit
+        // handling of its own, so "booted 2 terminal(s)" was the last word
+        // and the ask failed minutes later with "no file-backed agent turn"
+        // — a symptom three layers from the cause (2026-08-28). Name the
+        // death, with the tail the agent printed on its way out.
+        if (options.served && exitCode !== 0) {
+          const tail = this.serializer
+            .serialize({ scrollback: 0 })
+            .split('\n')
+            .filter((line: string) => line.trim().length > 0)
+            .slice(-6)
+            .join(' ⏎ ')
+            .slice(0, 600)
+          console.error(
+            `served agent ${this.terminalId} exited ${exitCode}: ${tail}`
+          )
+        }
         this.emit('exit', exitCode)
       } catch (error) {
         console.error('PTY exit handling failed:', error)
