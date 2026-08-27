@@ -92,9 +92,23 @@ describe('Checkout creation', () => {
     expect(call!.url).toBe('https://api.stripe.com/v1/checkout/sessions')
     expect(call!.headers).toEqual({
       authorization: 'Bearer injected-test-value',
-      'content-type': 'application/x-www-form-urlencoded'
+      'content-type': 'application/x-www-form-urlencoded',
+      // Pinned, so a Stripe API upgrade cannot change response shapes under a
+      // shipped desktop app; keyed by the caller's INTENT, so a retry after a
+      // timeout replays the first session instead of charging twice.
+      'stripe-version': '2025-08-27.basil',
+      'idempotency-key': 'checkout:svc-1:ana:250'
     })
+    // Tax is computed by Stripe, never by us: the AI-service tax code, an
+    // address to locate the buyer, and a tax ID so a cross-border B2B sale can
+    // take reverse charge. Hong Kong levies no VAT itself — the obligation, if
+    // any, lives in the CUSTOMER's country.
     expect(Object.fromEntries(call!.form)).toMatchObject({
+      'line_items[0][price_data][product_data][tax_code]': 'txcd_10105002',
+      'automatic_tax[enabled]': 'true',
+      'billing_address_collection': 'required',
+      'tax_id_collection[enabled]': 'true',
+      customer_creation: 'always',
       mode: 'payment',
       'line_items[0][price_data][currency]': 'usd',
       'line_items[0][price_data][unit_amount]': '250',
@@ -183,7 +197,12 @@ describe('settlement', () => {
     expect(get).toHaveBeenCalledTimes(1)
     expect(get.mock.calls[0]).toEqual([
       `https://api.stripe.com/v1/checkout/sessions/${SESSION}`,
-      { headers: { authorization: 'Bearer injected-test-value' } }
+      {
+        headers: {
+          authorization: 'Bearer injected-test-value',
+          'stripe-version': '2025-08-27.basil'
+        }
+      }
     ])
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual([SESSION])
     expect(statSync(file).mode & 0o777).toBe(0o600)

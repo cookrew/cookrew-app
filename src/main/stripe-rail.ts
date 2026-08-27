@@ -3,6 +3,19 @@ import path from 'node:path'
 import type { Settle } from './x402-rail'
 
 const STRIPE_API = 'https://api.stripe.com/v1'
+/**
+ * PINNED API version. Without it every call rides the account's default,
+ * which Stripe moves — so an upgrade could change response shapes under a
+ * shipped desktop app that nobody redeploys. Raise this deliberately.
+ */
+const STRIPE_VERSION = '2025-08-27.basil'
+/**
+ * Product tax code: AI-as-a-Service, cloud-delivered, business use. A served
+ * crew session IS this. The generic electronically-supplied-services code is
+ * explicitly discouraged for US sales, where taxability turns on exactly the
+ * delivery/customer distinction this code carries (Stripe Tax for AI).
+ */
+const AI_SERVICE_TAX_CODE = 'txcd_10105002'
 const CHECKOUT_TTL_SECONDS = 30 * 60
 const HTTP_TIMEOUT_MS = 10_000
 
@@ -151,11 +164,30 @@ export async function stripeCreateCheckout(
   form.set('metadata[sub]', input.sub)
   form.set('metadata[slug]', input.slug)
   form.set('success_url', successUrl)
+  // Tax, not guesswork. Hong Kong levies no VAT/GST, so a domestic sale is
+  // simply untaxed — but a cross-border sale can create an obligation in the
+  // CUSTOMER's country, and only Stripe Tax tracks which. It needs three
+  // things: the product's tax code, an address to locate the buyer, and (for
+  // B2B) a tax ID, without which cross-border reverse charge cannot apply.
+  form.set('line_items[0][price_data][product_data][tax_code]', AI_SERVICE_TAX_CODE)
+  form.set('automatic_tax[enabled]', 'true')
+  form.set('billing_address_collection', 'required')
+  form.set('tax_id_collection[enabled]', 'true')
+  // A Customer makes the sale attributable — it is what tax reports, receipts
+  // and any later invoice for the same buyer hang off.
+  form.set('customer_creation', 'always')
 
   let response: StripeHttpResponse
   try {
     response = await deps.post(`${STRIPE_API}/checkout/sessions`, {
-      headers: stripeHeaders(deps.config, true),
+      // Keyed by the CALLER'S INTENT, not by the attempt: the same buyer
+      // asking the same crew for the same price is one purchase however many
+      // times the request is retried.
+      headers: stripeHeaders(
+        deps.config,
+        true,
+        `checkout:${input.serviceId}:${input.sub}:${amount}`
+      ),
       body: form.toString()
     })
   } catch {
@@ -337,10 +369,19 @@ export async function stripeSettle(
   }
 }
 
-function stripeHeaders(config: StripeConfig, form: boolean): Record<string, string> {
+function stripeHeaders(
+  config: StripeConfig,
+  form: boolean,
+  idempotencyKey?: string
+): Record<string, string> {
   return {
     authorization: `Bearer ${config.secretKey}`,
-    ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {})
+    'stripe-version': STRIPE_VERSION,
+    ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}),
+    // Stripe replays the FIRST response for a repeated key, so a retry after a
+    // timeout returns the session we already made instead of minting a second
+    // one and charging the caller twice.
+    ...(idempotencyKey ? { 'idempotency-key': idempotencyKey } : {})
   }
 }
 
