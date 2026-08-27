@@ -40,6 +40,7 @@ export interface AskOptions {
 const SUBMIT_DELAY_BASE_MS = 150
 const SUBMIT_DELAY_PER_KB_MS = 100
 const SUBMIT_DELAY_MAX_MS = 1500
+const DIRECT_PI_CONFIRM_DELAY_MS = 600
 
 /** Bracketed-paste markers (DECSET 2004): a paste's explicit start/end. */
 const BRACKETED_PASTE_START = '\x1b[200~'
@@ -98,7 +99,8 @@ export async function pasteAndSubmit(
   stillValid?: () => boolean,
   lease: ProducerLease = defaultProducerLease(),
   phase?: (name: string) => void,
-  submitBytes = '\r'
+  submitBytes = '\r',
+  confirm?: { bytes: string; delayMs: number }
 ): Promise<'submitted' | 'cancelled'> {
   const generation = lease.generationOf(session.terminalId)
   if (stillValid !== undefined && !stillValid()) return 'cancelled'
@@ -138,6 +140,21 @@ export async function pasteAndSubmit(
   phase?.('submit-write:start')
   write(submitBytes)
   phase?.('submit-write:end')
+  if (confirm) {
+    phase?.(`confirm-delay:start:${confirm.delayMs}`)
+    await new Promise((resolve) => setTimeout(resolve, confirm.delayMs))
+    phase?.('confirm-delay:end')
+    if (stillValid !== undefined && !stillValid()) {
+      phase?.('confirm-validity:cancelled')
+      if (typeof session.terminalId === 'string') {
+        lease.markContaminated(session.terminalId, generation)
+      }
+      return 'cancelled'
+    }
+    phase?.('confirm-write:start')
+    write(confirm.bytes)
+    phase?.('confirm-write:end')
+  }
   return 'submitted'
 }
 
@@ -642,6 +659,9 @@ export async function ownerSubmit(
     if (trailing !== null && body.length > 0) {
       const submitBytes =
         session.hostBacked === false && isPiCommand(session.command) ? '\n' : '\r'
+      const confirmation = submitBytes === '\n'
+        ? { bytes: '\r', delayMs: DIRECT_PI_CONFIRM_DELAY_MS }
+        : undefined
       trace?.(`submit-key:${submitBytes === '\n' ? 'lf' : 'cr'}`)
       const outcome = await pasteAndSubmit(
         session,
@@ -650,7 +670,8 @@ export async function ownerSubmit(
         () => holdsLease(lease, terminalId, holder) && options.signal?.aborted !== true,
         lease,
         trace,
-        submitBytes
+        submitBytes,
+        confirmation
       )
       trace?.(`paste-outcome:${outcome}`)
       return outcome === 'submitted'

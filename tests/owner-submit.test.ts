@@ -109,7 +109,26 @@ describe('ownerSubmit — classification and delivery', () => {
     const promise = ownerSubmit(session, 'answer this\r', { lease })
     await vi.advanceTimersByTimeAsync(2000)
     await expect(promise).resolves.toEqual({ ok: true, submitted: true })
+    expect(owned).toEqual([paste('answer this'), '\n', '\r'])
+  })
+
+  it('cancels a direct Pi confirmation without leaking the pending composer', async () => {
+    vi.useFakeTimers()
+    const lease = new ProducerLease()
+    const abort = new AbortController()
+    const { session, owned } = fakeSession('os-pi-cancel', {
+      hostBacked: false,
+      command: 'pi'
+    })
+    const promise = ownerSubmit(session, 'answer this\r', { lease, signal: abort.signal })
+    await vi.advanceTimersByTimeAsync(200)
     expect(owned).toEqual([paste('answer this'), '\n'])
+    abort.abort()
+    await vi.advanceTimersByTimeAsync(1000)
+    const verdict = await promise
+    expect(verdict.ok).toBe(false)
+    expect(owned).toEqual([paste('answer this'), '\n'])
+    expect(lease.isContaminated('os-pi-cancel')).toBe(true)
   })
 
   it('non-submitting bytes go through the ordinary guarded write and report ok', async () => {
