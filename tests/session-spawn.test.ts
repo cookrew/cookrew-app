@@ -80,6 +80,9 @@ describe('servedSpawn — the env is scrubbed', () => {
     expect(out.env.HOME).toBe('/base/sessions/svc/svc-ana-1')
     expect(out.env.COOKREW_SERVED).toBe('1')
     expect(out.env.COOKREW_SESSION).toBe('svc-ana-1')
+    expect(out.env.PI_CODING_AGENT_DIR).toBe(
+      '/base/sessions/svc/svc-ana-1/.pi/agent'
+    )
   })
 
   it("carries only the lent key, never the owner's secret", () => {

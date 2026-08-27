@@ -120,7 +120,12 @@ describe('file grants', () => {
     writeConfig({
       'svc-x': { files: [{ from: source, to: '.pi/agent/models.json' }], maxSessions: 1 }
     })
-    serviceGrants(base, log).provision('svc-x', sandbox)
+    const grants = serviceGrants(base, log)
+    expect(grants.filesFor('svc-x')).toEqual([
+      { from: source, to: '.pi/agent/models.json' }
+    ])
+    expect(existsSync(grantLedgerPath(base))).toBe(false)
+    grants.provision('svc-x', sandbox)
     const landed = path.join(sandbox, '.pi', 'agent', 'models.json')
     expect(readFileSync(landed, 'utf8')).toBe('{"providers":{}}')
     // Forced, not preserved: the copy is a credential by assumption, even when

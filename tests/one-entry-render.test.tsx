@@ -7,6 +7,7 @@ import {
   canSubmitShare,
   priceLooksGood,
   saveButtonLabel,
+  serveRefusalText,
   type ShareAccess
 } from '../src/renderer/src/ShareOnSave'
 import { ServedTeamCard, type ServedTeam } from '../src/renderer/src/ServedTeamCard'
@@ -123,6 +124,15 @@ describe('the primary says everything the click does', () => {
     expect(priceLooksGood('2.50')).toBe(true)
     expect(priceLooksGood('10')).toBe(true)
     expect(['0', '-1', 'abc', '', '1.234'].every((v) => !priceLooksGood(v))).toBe(true)
+  })
+})
+
+describe('serve refusal copy', () => {
+  it('states that an unusable grant is not taking callers and names both owner fixes', () => {
+    const text = serveRefusalText('grant-unusable')
+    expect(text).toContain('Not taking callers')
+    expect(text).toContain('Match the grant to the orch')
+    expect(text).toContain('endpoint’s request template')
   })
 })
 

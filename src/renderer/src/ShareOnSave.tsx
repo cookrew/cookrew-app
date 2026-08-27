@@ -74,6 +74,7 @@ export function serveRefusalText(reason: string | undefined): string {
   if (reason === 'no-orch') return MKT_SERVE['mkt.serve.no-orch']
   if (reason === 'bad-price') return MKT_SERVE['mkt.serve.refused.bad-price']
   if (reason === 'priced-free-door') return MKT_SERVE['mkt.serve.refused.priced-free-door']
+  if (reason === 'grant-unusable') return MKT_SERVE['mkt.serve.refused.grant-unusable']
   if (reason === 'no-template') return 'that template is no longer on this machine.'
   return reason
 }

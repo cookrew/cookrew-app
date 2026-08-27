@@ -144,6 +144,7 @@ import { servedConfinement } from './session-spawn'
 import { makeEntryTerminalLookup, rmSandbox } from './session-instantiator-mount'
 import { ServedCallers } from './served-callers'
 import { serviceGrants } from './service-grants-store'
+import { requestHarnessCompletion, servedGrantPreflight } from './served-grant-preflight'
 import { servedSessionProvisioner } from './served-onboarding'
 import { handleServedRoute } from './served-endpoints'
 import { servedTurnReply } from './served-turn-reply'
@@ -411,6 +412,23 @@ const servedSpawnContexts = new Map<
  * counts sessions rather than dollars.
  */
 const grants = serviceGrants(sessionsBase)
+const grantPreflight = servedGrantPreflight({
+  grants,
+  orch: {
+    commandOf(templateId) {
+      const snapshot = teams.load(templateId)
+      if (!snapshot) return null
+      const orch = orchAgentOf(snapshot)
+      if (orch === null) return null
+      const node = snapshot.nodes.find(
+        (candidate) =>
+          candidate.kind === 'terminal' && candidate.orch === true && candidate.name === orch
+      )
+      return node?.kind === 'terminal' ? node.command : null
+    }
+  },
+  request: requestHarnessCompletion
+})
 
 const serving: Serving = wireServing({
   base: sessionsBase,
@@ -468,6 +486,7 @@ const serving: Serving = wireServing({
   // harness. The provisioner seeds only non-secret Claude state; credentials
   // still arrive exclusively through the grant.
   provision: servedSessionProvisioner(grants),
+  grantPreflight,
   liveWorkspaceId: (slug) => store.bySlug(slug)?.id ?? null,
   // Serving survives a restart — an owner stops serving by saying stop.
   persist: servedTemplateFile(sessionsBase)
@@ -3327,7 +3346,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   // this decides what is callable, so it is strictly above the gate it feeds).
   ipcMain.handle(
     'serving:serve',
-    (
+    async (
       _e,
       input: { templateId: string; access: ServeAccess; priceUsd?: string }
     ) => {
@@ -3348,7 +3367,7 @@ function registerIpc(handlers: RestoreHandlers): void {
       // from serve() itself, so the owner surface and the gate can never
       // disagree about what is servable.
       try {
-        serving.serve({
+        await serving.serve({
           serviceId,
           templateId: input.templateId,
           slug,

@@ -133,6 +133,10 @@ export function servedConfinement(
     sessionId: ctx.sessionId,
     grantedKeys
   })
+  // Pi treats an explicit agent directory as host-managed configuration and
+  // skips its interactive first-run theme/analytics wizard. The directory is
+  // inside HOME and is also where explicit provider-file grants land.
+  env.PI_CODING_AGENT_DIR = path.join(ctx.sandbox, '.pi', 'agent')
   return { env, profilePath }
 }
 
