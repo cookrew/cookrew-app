@@ -1303,7 +1303,19 @@ function spawnTracked(t: {
             terminalId: t.id,
             command: pane?.command ?? null,
             paneStartedAtMs: pane?.startedAtMs ?? null,
-            exclude: claimedPiSessions(t.id)
+            exclude: claimedPiSessions(t.id),
+            // A SERVED pi writes its session under the SANDBOX roots (the
+            // spawn passes them at line ~1145); scanning the owner's default
+            // root here meant a served orch could answer forever and never
+            // bind — no piSessionId, no file-backed turns, and every caller
+            // ask died as "completed no file-backed agent turn" (the final
+            // broken link of the paid-session line, 2026-08-27).
+            ...(servedCtx
+              ? {
+                  sessionsRoot: path.join(servedCtx.sandbox, '.cookrew', 'pi-sessions'),
+                  agentDir: path.join(servedCtx.sandbox, '.pi', 'agent')
+                }
+              : {})
           })
           if (!session) return void attempt(delays.length === 0 ? [] : delays.slice(1))
           store.updateNodeUnsafe(t.id, { piSessionId: session.id })
