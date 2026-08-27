@@ -95,7 +95,8 @@ export async function pasteAndSubmit(
   // an untagged fallback write would preempt the very dispatch it serves.
   write: (data: string) => void = (data) => session.write(data),
   stillValid?: () => boolean,
-  lease: ProducerLease = defaultProducerLease()
+  lease: ProducerLease = defaultProducerLease(),
+  phase?: (name: string) => void
 ): Promise<'submitted' | 'cancelled'> {
   const generation = lease.generationOf(session.terminalId)
   if (stillValid !== undefined && !stillValid()) return 'cancelled'
@@ -111,12 +112,18 @@ export async function pasteAndSubmit(
   if (typeof session.terminalId === 'string') {
     if (!lease.noteBytesEntering(session.terminalId)) return 'cancelled'
   }
+  phase?.('paste-write:start')
   write(`${BRACKETED_PASTE_START}${body}${BRACKETED_PASTE_END}`)
-  await new Promise((resolve) => setTimeout(resolve, submitDelayMs(body.length)))
+  phase?.('paste-write:end')
+  const delayMs = submitDelayMs(body.length)
+  phase?.(`delay:start:${delayMs}`)
+  await new Promise((resolve) => setTimeout(resolve, delayMs))
+  phase?.('delay:end')
   // The check that matters most: cancellation during the delay means the CR
   // is never written — and the paste ALREADY went out, so the input box now
   // holds a cancelled producer's text: contaminated (see above).
   if (stillValid !== undefined && !stillValid()) {
+    phase?.('validity:cancelled')
     if (typeof session.terminalId === 'string') {
       // Durable through the lease (Sol r10 P0-1): a provenance-wired lease
       // upgrades the write-ahead dirty fact to 'contaminated' on disk, so a
@@ -125,7 +132,10 @@ export async function pasteAndSubmit(
     }
     return 'cancelled'
   }
+  phase?.('validity:live')
+  phase?.('submit-write:start')
   write('\r')
+  phase?.('submit-write:end')
   return 'submitted'
 }
 
@@ -581,7 +591,12 @@ export async function ownerSubmit(
 ): Promise<OwnerSubmitResult> {
   const lease = options.lease ?? defaultProducerLease()
   const terminalId = session.terminalId
+  const trace = session.hostBacked === false
+    ? (phase: string): void => console.error(`[owner-submit] terminal=${terminalId} phase=${phase}`)
+    : undefined
+  trace?.('classify:start')
   if (feedPromptBuffer('', bytes).submitted.length === 0) {
+    trace?.('classify:non-submitting')
     // Not submit-capable. The guard still arbitrates (it refuses ALL untagged
     // bytes while any producer holds the window); a void-returning legacy
     // fake reads as allow, matching the unwired-guard convention.
@@ -590,13 +605,18 @@ export async function ownerSubmit(
       ? { ok: true, submitted: false }
       : { ok: false, reason: refusalReason(verdict) }
   }
+  trace?.('classify:submitting')
   if (options.signal?.aborted === true) {
+    trace?.('signal:already-aborted')
     return { ok: false, reason: 'the submission was cancelled at app shutdown' }
   }
   let holder: ProducerHolder
   try {
+    trace?.('lease:start')
     holder = acquireOwnerLease(lease, session, bytes)
+    trace?.('lease:acquired')
   } catch (error) {
+    trace?.('lease:refused')
     return { ok: false, reason: error instanceof Error ? error.message : String(error) }
   }
   // The holder's own bytes travel the TAGGED path the guard exempts — a
@@ -623,8 +643,10 @@ export async function ownerSubmit(
         body,
         writeOwner,
         () => holdsLease(lease, terminalId, holder) && options.signal?.aborted !== true,
-        lease
+        lease,
+        trace
       )
+      trace?.(`paste-outcome:${outcome}`)
       return outcome === 'submitted'
         ? { ok: true, submitted: true }
         : {
@@ -642,7 +664,9 @@ export async function ownerSubmit(
     }
     return { ok: true, submitted: true }
   } finally {
+    trace?.('lease:release-start')
     lease.release(terminalId, holder)
+    trace?.('lease:release-end')
   }
 }
 
