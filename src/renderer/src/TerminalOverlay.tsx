@@ -407,6 +407,15 @@ function TerminalOverlay({
       // size. Idle viewers adopt and stay quiet, so two viewers cannot fight.
       let reassertTimer: ReturnType<typeof setTimeout> | null = null
       markStage('overlay:attach-start')
+      // THE MURDER WEAPON (black box, 2026-08-27): both kills ended at the
+      // redraw's final chunk — Claude Code's composer line, whose U+23F5 ⏵
+      // is an EMOJI-PRESENTATION candidate on Apple platforms. iOS 26.6's
+      // text engine dies resolving that fallback inside xterm's DOM-renderer
+      // grid. VS15 (U+FE0E, zero width) pins every media-control symbol to
+      // TEXT presentation — same glyph, same cell width, no emoji path.
+      // Remote only: desktop WebKit shapes these fine.
+      const detoxify = (raw: string): string =>
+        isRemoteMode() ? raw.replace(/[\u23E9-\u23FA]/g, (m) => `${m}\uFE0E`) : raw
       // The replay is ~11 bytes on a cold mirror — the real payload is the
       // DELTA FLOOD that follows (the busy TUI's full redraw). Three healthy
       // mounts died seconds later inside that flood, so it gets counted:
@@ -425,7 +434,7 @@ function TerminalOverlay({
           if (firstChunk) {
             firstChunk = false
             markStage(`overlay:replay-write-start len=${chunk.length}`)
-            term.write(chunk, () => markStage('overlay:replay-write-done'))
+            term.write(detoxify(chunk), () => markStage('overlay:replay-write-done'))
             return
           }
           deltaChunks += 1
@@ -442,7 +451,7 @@ function TerminalOverlay({
           } else if (deltaChunks % 25 === 0) {
             markStage(`overlay:delta c=${deltaChunks} b=${deltaBytes}`)
           }
-          term.write(chunk)
+          term.write(detoxify(chunk))
         },
         ({ cols, rows }) => {
           if (disposed || cols <= 0 || rows <= 0) return
