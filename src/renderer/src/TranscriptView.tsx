@@ -442,6 +442,10 @@ export const TranscriptView = forwardRef<
   // Refine the placeholder estimate from measured block heights (skips zero
   // heights so a layout-less environment keeps the default).
   useLayoutEffect(() => {
+    // Changing one global estimate resizes every unloaded identity. At the
+    // live tail autoscroll owns that shift; while reading history it would be
+    // a second layout jump after the fill anchor was already corrected.
+    if (!pinnedRef.current) return
     const measured: number[] = []
     for (const b of blocks) {
       const node = blockRefs.current.get(b.index)
