@@ -47,7 +47,7 @@ export async function servedTurnReply(
   // was never asked. Log it — a served caller's failure must name its layer
   // (2026-08-28).
   const verdict = await deps.deliver()
-  console.error(`served delivery verdict: ${JSON.stringify(verdict)?.slice(0, 200)}`)
+  console.error(`served delivery completed: terminal-diff-bytes=${verdict.length}`)
 
   const deadline = now() + timeoutMs
   for (;;) {

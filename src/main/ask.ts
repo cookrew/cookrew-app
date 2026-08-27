@@ -610,7 +610,7 @@ export async function ownerSubmit(
 ): Promise<OwnerSubmitResult> {
   const lease = options.lease ?? defaultProducerLease()
   const terminalId = session.terminalId
-  const trace = session.hostBacked === false
+  const trace = session.hostBacked === false && process.env.COOKREW_TRACE_OWNER_SUBMIT === '1'
     ? (phase: string): void => console.error(`[owner-submit] terminal=${terminalId} phase=${phase}`)
     : undefined
   trace?.('classify:start')
