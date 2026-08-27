@@ -33,7 +33,6 @@ import { TranslateButton } from './TranslateButton'
 import { languageByCode } from '../../shared/translate'
 import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { StatusCoin } from './nodes/AgentAvatar'
-import { markStage } from './phone-beacon'
 import { ServedCrewLive } from './ServedCrewLive'
 
 const PHOSPHOR_THEME = {
@@ -106,30 +105,6 @@ const PHASE_CHIP: Record<TurnPhase, { label: string; cls: string }> = {
   replied: { label: 'CHECKPOINT SAVED', cls: ' done' }
 }
 
-/**
- * DISSECTION SWITCH (phone-crash lab, 2026-08-27): ?labcut=xterm renders the
- * overlay with the terminal alone — no TranscriptView, no CheckpointTimeline.
- * The captured delta bytes are innocent in a bare xterm (lab v1/v2 survived
- * on-device with the same font and resize dance), so the killer sits in the
- * organs around it. Remote-only, read once; remove after the hunt.
- */
-const LAB_CUT = ((): string | null => {
-  if (typeof window === 'undefined' || !isRemoteMode()) return null
-  const explicit = new URLSearchParams(window.location.search).get('labcut')
-  if (explicit) return explicit
-  // AUTO-DISCRIMINATOR: no parameter typing on a phone mid-crash-loop. Each
-  // page load advances the dissection plan — norail, notrans, full — and the
-  // black box logs which plan each death happened under. Three reloads from
-  // the owner replace three hand-typed URLs.
-  try {
-    const n = (parseInt(localStorage.getItem('cr-labcycle') ?? '0', 10) || 0) + 1
-    localStorage.setItem('cr-labcycle', String(n))
-    return ['norail', 'notrans', null][(n - 1) % 3] as string | null
-  } catch {
-    return null
-  }
-})()
-
 function TerminalOverlay({
   node,
   activity,
@@ -142,6 +117,8 @@ function TerminalOverlay({
   const { zoomBack, requestClose } = useCanvasUi()
   const remoteCrew = node.servedTranscript != null
   const phase = activity?.phase ?? 'idle'
+  const [tailReady, setTailReady] = useState(remoteCrew)
+  const metadataReady = remoteCrew || tailReady
   const containerRef = useRef<HTMLDivElement>(null)
   // Drag-in attachments: dragenter/leave bubble from every child of the
   // overlay, so a plain boolean would flicker — count enters vs leaves.
@@ -156,7 +133,7 @@ function TerminalOverlay({
   // terminal to that ask's line (tmux copy-mode search), and returning to
   // live exits copy-mode so the tail streams again.
   const paging = useTurnPaging(node.id, activity?.turnCount ?? 0, {
-    eager: true,
+    eager: metadataReady,
     forkable: !remoteCrew
   })
   const [titleMode, toggleTitleMode] = useTitleMode()
@@ -172,6 +149,7 @@ function TerminalOverlay({
   const [traceMarkers, setTraceMarkers] = useState<TraceMarkerRow[]>([])
   const [traceRefresh, setTraceRefresh] = useState(0)
   useEffect(() => {
+    if (!metadataReady) return
     let alive = true
     void fetchTraceIndex(node.id)
       .then((list) => {
@@ -190,7 +168,17 @@ function TerminalOverlay({
     return () => {
       alive = false
     }
-  }, [node.id, activity?.turnCount, traceRefresh])
+  }, [
+    node.id,
+    node.claudeSessionId,
+    node.codexSessionRef,
+    node.opencodeSessionId,
+    node.piSessionId,
+    node.sessionLineage?.join('\0'),
+    node.servedTranscript?.origin,
+    node.servedTranscript?.slug,
+    metadataReady
+  ])
 
   // A served trace grows while /ask is still waiting, before the local
   // crew-line process can complete its own turn counter. Refresh that SAME
@@ -216,6 +204,7 @@ function TerminalOverlay({
     return () => window.removeEventListener('cookrew:template-saved', bump)
   }, [])
   useEffect(() => {
+    if (!metadataReady) return
     if (remoteCrew) {
       setPins([])
       return
@@ -230,7 +219,7 @@ function TerminalOverlay({
     return () => {
       alive = false
     }
-  }, [node.id, activity?.turnCount, pinRefresh, remoteCrew])
+  }, [node.id, pinRefresh, remoteCrew, metadataReady])
 
   const rows = mergeCheckpointRows(paging.records ?? [], traceIndex)
   const remoteTotal = remoteCrew ? (traceIndex[traceIndex.length - 1]?.index ?? 0) : 0
@@ -290,10 +279,6 @@ function TerminalOverlay({
     if (remoteCrew) return
     const container = containerRef.current
     if (!container) return
-    // Stage markers: the phone dies within ~1.3s of this effect on iOS 26.6
-    // with every volume gauge innocent — the last stage that lands in the
-    // black box names the killing line. No-ops on desktop.
-    markStage(`overlay:effect-start mode=${LAB_CUT ?? 'full'}`)
 
     const term = new Terminal({
       theme: PHOSPHOR_THEME,
@@ -393,12 +378,9 @@ function TerminalOverlay({
     // and every row drifts — so the font must be resolved before open().
     const fontReady = document.fonts.load('13px "JetBrains Mono"').catch(() => undefined)
 
-    markStage('overlay:font-wait')
     void fontReady.then(() => {
       if (disposed) return
-      markStage('overlay:term-open-start')
       term.open(container)
-      markStage('overlay:term-open-done')
 
       // WebGL renderer pins every glyph to its grid cell, so CJK fallback
       // glyphs (JetBrains Mono has none) can't accumulate horizontal drift
@@ -461,7 +443,6 @@ function TerminalOverlay({
       // focused one and the pane's size is not its own — re-assert its fitted
       // size. Idle viewers adopt and stay quiet, so two viewers cannot fight.
       let reassertTimer: ReturnType<typeof setTimeout> | null = null
-      markStage('overlay:attach-start')
       // THE MURDER WEAPON (black box, 2026-08-27): both kills ended at the
       // redraw's final chunk — Claude Code's composer line, whose U+23F5 ⏵
       // is an EMOJI-PRESENTATION candidate on Apple platforms. iOS 26.6's
@@ -471,46 +452,11 @@ function TerminalOverlay({
       // Remote only: desktop WebKit shapes these fine.
       const detoxify = (raw: string): string =>
         isRemoteMode() ? raw.replace(/[\u23E9-\u23FA]/g, (m) => `${m}\uFE0E`) : raw
-      // The replay is ~11 bytes on a cold mirror — the real payload is the
-      // DELTA FLOOD that follows (the busy TUI's full redraw). Three healthy
-      // mounts died seconds later inside that flood, so it gets counted:
-      // a marker every 25 chunks and a 2s heartbeat with totals; the last
-      // count before death is the dose that killed.
-      let firstChunk = true
-      let deltaChunks = 0
-      let deltaBytes = 0
-      const deltaBeat = setInterval(() => {
-        if (deltaChunks > 0) markStage(`overlay:delta-beat c=${deltaChunks} b=${deltaBytes}`)
-      }, 2000)
-      cleanups.push(() => clearInterval(deltaBeat))
       const detach = cookrew().ptyAttach(
         node.id,
-        (chunk) => {
-          if (firstChunk) {
-            firstChunk = false
-            markStage(`overlay:replay-write-start len=${chunk.length}`)
-            term.write(detoxify(chunk), () => markStage('overlay:replay-write-done'))
-            return
-          }
-          deltaChunks += 1
-          deltaBytes += chunk.length
-          // 17,320 bytes killed the page (delta-beat c=24, 2026-08-27) — a
-          // CONTENT kill, not volume. Ship the first 64 chunks verbatim so
-          // the poison itself lands in the black box before it detonates:
-          // the chunk logged last (or first missing) is the murder weapon.
-          if (deltaChunks <= 64) {
-            markStage(
-              `overlay:chunk ${deltaChunks} ` +
-                btoa(String.fromCharCode(...new TextEncoder().encode(chunk).slice(0, 4096)))
-            )
-          } else if (deltaChunks % 25 === 0) {
-            markStage(`overlay:delta c=${deltaChunks} b=${deltaBytes}`)
-          }
-          term.write(detoxify(chunk))
-        },
+        (chunk) => term.write(detoxify(chunk)),
         ({ cols, rows }) => {
           if (disposed || cols <= 0 || rows <= 0) return
-          markStage(`overlay:hello-resize ${cols}x${rows}`)
           term.resize(cols, rows)
           if (document.visibilityState !== 'visible' || !document.hasFocus()) return
           if (reassertTimer) clearTimeout(reassertTimer)
@@ -692,9 +638,7 @@ function TerminalOverlay({
     return () => {
       disposed = true
       // dispose in reverse: detach stream/observers before killing the term
-      markStage('overlay:cleanup-start')
       for (const cleanup of cleanups.reverse()) cleanup()
-      markStage('overlay:cleanup-done')
     }
   }, [node.id, remoteCrew])
 
@@ -914,33 +858,6 @@ function TerminalOverlay({
         </div>
       )}
       <div className="popout-terminal-wrap">
-        {!remoteCrew && (LAB_CUT === 'xterm' || LAB_CUT === 'notrans' || isRemoteMode()) ? (
-          <>
-            {LAB_CUT !== 'xterm' && LAB_CUT !== 'notrans' && (
-              <TranscriptView
-                ref={transcriptRef}
-                terminalId={node.id}
-                total={activity?.turnCount ?? 0}
-                titleMode={titleMode}
-                translation={translation.showing}
-                identities={rows.map((r) => r.index)}
-                selectedIndex={selectedIndex}
-                jumpToken={jumpToken}
-                clipRows={clipRows}
-                onActiveBlockChange={onActiveBlockChange}
-                onPending={setPendingIndex}
-              >
-                {/* PHONE: the live xterm is NOT the scroller's live seam. The
-                    dissection truth table (2026-08-27) killed every theory but
-                    this one: transcript+xterm-inside-the-scroller dies
-                    randomly on iOS 26; xterm as a plain sibling survives.
-                    The seam stays a desktop experience. */}
-                {null}
-              </TranscriptView>
-            )}
-            <div ref={containerRef} className="popout-terminal" />
-          </>
-        ) : (
         <TranscriptView
           ref={transcriptRef}
           terminalId={node.id}
@@ -953,6 +870,7 @@ function TerminalOverlay({
           clipRows={clipRows}
           onActiveBlockChange={onActiveBlockChange}
           onPending={setPendingIndex}
+          onTailLoaded={() => setTailReady(true)}
           refreshToken={remoteCrew ? traceRefresh : 0}
           liveClassName={remoteCrew ? 'served' : undefined}
         >
@@ -966,8 +884,6 @@ function TerminalOverlay({
             <div ref={containerRef} className="popout-terminal" />
           )}
         </TranscriptView>
-        )}
-        {!remoteCrew && (LAB_CUT === 'xterm' || LAB_CUT === 'norail') ? null : (
         <CheckpointTimeline
           terminalId={node.id}
           rows={rows}
@@ -989,7 +905,6 @@ function TerminalOverlay({
           onLive={goLive}
           onScrub={(fraction) => transcriptRef.current?.scrubTo(fraction)}
         />
-        )}
       </div>
       {dropReady && (
         <div className="attach-drop-hint">

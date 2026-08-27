@@ -100,6 +100,8 @@ export const TranscriptView = forwardRef<
     onActiveBlockChange?: (active: ActiveBlock) => void
     /** Reports a checkpoint whose content is FETCHING for a jump, null once filled. */
     onPending?: (index: number | null) => void
+    /** Tail fetch settled; parent may now load lower-priority rail metadata. */
+    onTailLoaded?: () => void
     /** Show this checkpoint's body translated instead of as written. */
     translation?: CheckpointTranslation | null
     /** The live terminal layer, seamed at the bottom of the transcript. */
@@ -120,6 +122,7 @@ export const TranscriptView = forwardRef<
     clipRows,
     onActiveBlockChange,
     onPending,
+    onTailLoaded,
     translation,
     children,
     refreshToken = 0,
@@ -132,6 +135,8 @@ export const TranscriptView = forwardRef<
   const blockRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   const [blocks, setBlocks] = useState<TraceBlock[]>([])
   const [estHeight, setEstHeight] = useState(DEFAULT_EST)
+  const onTailLoadedRef = useRef(onTailLoaded)
+  onTailLoadedRef.current = onTailLoaded
   const pinnedRef = useRef(true)
   const clipRef = useRef(clipRows)
   clipRef.current = clipRows
@@ -151,7 +156,7 @@ export const TranscriptView = forwardRef<
   // scrub callbacks (bound once) always read the latest without re-binding.
   const loadedMap = new Map(blocks.map((b) => [b.index, b]))
   const loadedSet = new Set(blocks.map((b) => b.index))
-  const spaceIds = identities.length > 0 ? identities : blocks.map((b) => b.index)
+  const spaceIds = transcriptIdentitySpace(identities, blocks)
   const loadedSetRef = useRef(loadedSet)
   loadedSetRef.current = loadedSet
   const spaceIdsRef = useRef(spaceIds)
@@ -272,10 +277,11 @@ export const TranscriptView = forwardRef<
   useEffect(() => {
     if (total <= 0) {
       setBlocks([])
+      onTailLoadedRef.current?.()
       return
     }
     anchorIndexRef.current = Number.MAX_SAFE_INTEGER
-    void fetchWindow('tail')
+    void fetchWindow('tail').finally(() => onTailLoadedRef.current?.())
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terminalId, total, refreshToken])
 
@@ -527,3 +533,11 @@ export const TranscriptView = forwardRef<
     </div>
   )
 })
+
+/** Keep newly loaded tail identities visible even when metadata lags behind. */
+export function transcriptIdentitySpace(
+  identities: readonly number[],
+  blocks: readonly { index: number }[],
+): number[] {
+  return [...new Set([...identities, ...blocks.map((block) => block.index)])].sort((a, b) => a - b)
+}
