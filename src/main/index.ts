@@ -770,7 +770,18 @@ const recoverable = new RecoverableStore()
 // Snapshot every killed terminal (node + position + session refs + edges)
 // so recoverAgent can restore it exactly as it was (agent-recover feature).
 store.setTerminalRemovedHook((snapshot) => recoverable.capture(snapshot))
-const traces = new TraceReader(store)
+const traces = new TraceReader(store, {
+  piSessionsRootFor: (node) => {
+    const owner = store.ownerOf(node.id)
+    const servedCtx = owner ? servedSpawnContexts.get(owner) : undefined
+    return servedCtx ? path.join(servedCtx.sandbox, '.cookrew', 'pi-sessions') : undefined
+  },
+  piAgentDirFor: (node) => {
+    const owner = store.ownerOf(node.id)
+    const servedCtx = owner ? servedSpawnContexts.get(owner) : undefined
+    return servedCtx ? path.join(servedCtx.sandbox, '.pi', 'agent') : undefined
+  }
+})
 
 // Trace-perf T4: push a "your checkpoint changed" nudge to the renderer the
 // instant a watched session file grows, so a card reflects a new turn without
@@ -1052,6 +1063,8 @@ function spawnTracked(t: {
   piSessionId?: string | null
   sessionLineage?: string[]
 }): void {
+  const owner = store.ownerOf(t.id) ?? store.focusedId
+  const servedCtx = servedSpawnContexts.get(owner)
   const upgraded = LEGACY_COMMANDS[t.command.trim()]
   const command = upgraded ?? t.command
   if (upgraded) store.updateNodeUnsafe(t.id, { command })
@@ -1126,12 +1139,18 @@ function spawnTracked(t: {
       command,
       cwd: t.cwd,
       terminalId: t.id,
+      ...(servedCtx
+        ? {
+            sessionsRoot: path.join(servedCtx.sandbox, '.cookrew', 'pi-sessions'),
+            agentDir: path.join(servedCtx.sandbox, '.pi', 'agent')
+          }
+        : {}),
       // An unbound node adopts an UNOWNED session from its own cwd scope
       // rather than booting fresh beside it. Ownership is checked here, not
       // in pi-bind, because only the store knows what every other node claims
       // — and that check is the whole reason this is not the most-recent
       // guess the exclusive-dir design exists to forbid.
-      storedSessionId: t.piSessionId ?? adoptablePiSession(t.id, t.cwd)
+      storedSessionId: t.piSessionId ?? (servedCtx ? null : adoptablePiSession(t.id, t.cwd))
     })
     effective = binding.command
     if (t.piSessionId !== binding.sessionId) {
@@ -1151,10 +1170,8 @@ function spawnTracked(t: {
   // Tagged with its owning workspace so the PTY plane can answer per-session
   // questions (multi-instance step 2). ownerOf resolves across every
   // workspace; focus is only the fallback for a terminal no canvas claims yet.
-  const owner = store.ownerOf(t.id) ?? store.focusedId
   // A served session's terminal spawns confined and scrubbed; the owner's own
   // spawns exactly as before (servedCtx is undefined).
-  const servedCtx = servedSpawnContexts.get(owner)
   const served = servedCtx
     ? servedConfinement({
         base: sessionsBase,

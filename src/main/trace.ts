@@ -51,6 +51,9 @@ export interface TraceReaderOptions {
   codexSessionsDir?: string
   piSessionsRoot?: string
   piAgentDir?: string
+  /** Per-node overrides for confined served Pi sessions. */
+  piSessionsRootFor?: (node: TerminalNodeData) => string | undefined
+  piAgentDirFor?: (node: TerminalNodeData) => string | undefined
 }
 
 const READ_CHUNK_BYTES = 256 * 1024
@@ -273,7 +276,11 @@ export class TraceReader {
     const node = hit.node
     const harness = harnessFor(node.command)
     if (!harness?.parseTurns || !harness.watchFile) return null
-    const file = harness.watchFile(node, this.options)
+    const file = harness.watchFile(node, {
+      ...this.options,
+      piSessionsRoot: this.options.piSessionsRootFor?.(node) ?? this.options.piSessionsRoot,
+      piAgentDir: this.options.piAgentDirFor?.(node) ?? this.options.piAgentDir
+    })
     return file ? { file, parse: harness.parseTurns, finality: harness.turnFinality } : null
   }
 
@@ -410,8 +417,8 @@ export class TraceReader {
     // for exactly the terminals whose rail works.
     return (
       piSessionHome(node.cwd, node.piSessionId, node.id, {
-        sessionsRoot: this.options.piSessionsRoot,
-        agentDir: this.options.piAgentDir
+        sessionsRoot: this.options.piSessionsRootFor?.(node) ?? this.options.piSessionsRoot,
+        agentDir: this.options.piAgentDirFor?.(node) ?? this.options.piAgentDir
       })?.file ?? null
     )
   }
