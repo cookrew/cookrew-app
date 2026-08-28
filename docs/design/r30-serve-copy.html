@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>R30 — three words, the /svc/ page, and the two reassurances</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🛎️</text></svg>">
+<style>
+  :root { --bg:#f7f4ec; --panel:#fffdf7; --panel-2:#f1ece0; --ink:#1b1a17; --ink-soft:#45413a;
+    --muted:#7a736a; --line:#ddd5c6; --line-hard:#b9ae9a; --amber:#b8770a; --amber-soft:#fbf0d8;
+    --green:#2f7d4f; --red:#a8362b; --blue:#2b5fa8; --violet:#6b3fa0; --code-bg:#efeade;
+    --shadow:0 1px 0 var(--line), 0 8px 24px rgba(30,25,15,.06); }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14130f; --panel:#1c1a16; --panel-2:#242019;
+    --ink:#ece6d8; --ink-soft:#c2bbab; --muted:#8d8577; --line:#332f27; --line-hard:#4c463a;
+    --amber:#e9b949; --amber-soft:#2a2213; --green:#6fca92; --red:#e8867a; --blue:#7fadf0;
+    --violet:#b795e8; --code-bg:#221f19; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(0,0,0,.35); } }
+  :root[data-theme="dark"] { --bg:#14130f; --panel:#1c1a16; --panel-2:#242019; --ink:#ece6d8;
+    --ink-soft:#c2bbab; --muted:#8d8577; --line:#332f27; --line-hard:#4c463a; --amber:#e9b949;
+    --amber-soft:#2a2213; --green:#6fca92; --red:#e8867a; --blue:#7fadf0; --violet:#b795e8;
+    --code-bg:#221f19; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(0,0,0,.35); }
+  :root[data-theme="light"] { --bg:#f7f4ec; --panel:#fffdf7; --panel-2:#f1ece0; --ink:#1b1a17;
+    --ink-soft:#45413a; --muted:#7a736a; --line:#ddd5c6; --line-hard:#b9ae9a; --amber:#b8770a;
+    --amber-soft:#fbf0d8; --green:#2f7d4f; --red:#a8362b; --blue:#2b5fa8; --violet:#6b3fa0;
+    --code-bg:#efeade; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(30,25,15,.06); }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.62 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; -webkit-text-size-adjust:100%; }
+  .wrap { max-width:1120px; margin:0 auto; padding:32px 20px 96px; }
+  header.top { border-bottom:2px solid var(--line-hard); padding-bottom:18px; margin-bottom:24px; }
+  .kicker { font:600 11px/1 ui-monospace,monospace; letter-spacing:.16em; text-transform:uppercase; color:var(--amber); }
+  h1 { font-size:clamp(23px,4.2vw,32px); line-height:1.15; margin:10px 0 8px; letter-spacing:-.015em; }
+  .sub { color:var(--muted); max-width:72ch; margin:0; }
+  .meta { margin-top:12px; font:12px/1.5 ui-monospace,monospace; color:var(--muted); }
+  h2 { font-size:19px; margin:38px 0 6px; letter-spacing:-.01em; }
+  h2 .num { color:var(--amber); font:600 13px/1 ui-monospace,monospace; margin-right:8px; }
+  h3 { font-size:14.5px; margin:22px 0 4px; }
+  p { margin:8px 0; } .lede { color:var(--ink-soft); max-width:78ch; }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86em;
+    background:var(--code-bg); padding:1px 5px; border-radius:3px; }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:13px; }
+  th,td { text-align:left; padding:8px 9px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font:600 10.5px/1.3 ui-monospace,monospace; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--muted); border-bottom:2px solid var(--line-hard); }
+  tbody tr:hover { background:var(--panel-2); }
+  .id { font:600 11.5px ui-monospace,monospace; color:var(--violet); white-space:nowrap; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:4px;
+    padding:14px 16px; margin:14px 0; box-shadow:var(--shadow); }
+  .warn { border-left:4px solid var(--red); background:color-mix(in srgb, var(--red) 8%, transparent); }
+  .ok { border-left:4px solid var(--green); }
+  .page { border:1.5px solid var(--line-hard); border-radius:6px; background:var(--panel);
+    padding:18px 20px; margin:14px 0; max-width:640px; }
+  .page h4 { margin:0 0 2px; font-size:19px; }
+  .page .by { color:var(--muted); font-size:13px; margin:0 0 14px; }
+  .page p { font-size:14.5px; margin:9px 0; }
+  .page .cta { display:inline-block; margin-top:12px; background:var(--amber); color:#14130f;
+    font:700 12px ui-monospace,monospace; letter-spacing:.06em; padding:8px 16px; border-radius:4px; }
+  .page .fine { color:var(--muted); font-size:12.5px; }
+  ul.tight { padding-left:20px; margin:8px 0; } ul.tight li { margin:4px 0; }
+  footer { margin-top:52px; padding-top:18px; border-top:2px solid var(--line-hard);
+    font-size:12.5px; color:var(--muted); }
+  .toggle { position:fixed; top:12px; right:12px; z-index:10; font:600 11px ui-monospace,monospace;
+    background:var(--panel); color:var(--ink); border:1px solid var(--line-hard); border-radius:999px;
+    padding:6px 12px; cursor:pointer; box-shadow:var(--shadow); }
+  @media print { .toggle { display:none; } }
+</style>
+</head>
+<body>
+<button class="toggle" id="theme">◐ theme</button>
+<div class="wrap">
+
+<header class="top">
+  <div class="kicker">Cookrew · R30 · vocabulary audit + caller copy</div>
+  <h1>Three words, and the one that must never reach a caller</h1>
+  <p class="sub">Auditing TEMPLATE · SERVE · SESSION against the no-glossary bar, then the
+  <code>/svc/</code> page copy and the two owner reassurances that carry the feature.</p>
+  <p class="meta">Velvet (UX Optimizer) · 2026-08-24 · reviewing R30
+  <code>docs/design/export-ux-demo.html</code></p>
+</header>
+
+<div class="card ok">
+  <b>R30 is the clearest of the three, and the reason is that it stopped describing a protocol and
+  started describing a place.</b> "Their own workspace, in your app, on your version" is a thing a
+  person can picture. Nothing in R28 or R29 was picturable.
+  <br><br>The vocabulary survives with one deletion, one confinement and one correction. Then the copy.
+</div>
+
+<h2><span class="num">1</span>The three words, tested</h2>
+<table>
+  <thead><tr><th>Word</th><th>Verdict</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td><b>TEMPLATE</b></td><td style="color:var(--green)"><b>survives as-is</b></td>
+      <td>Universal, and a stranger's guess — "a starting point you make copies from" — is exactly
+      right. The pin gloss is for us; nobody needs it to use the button.</td></tr>
+    <tr><td><b>SERVE</b></td><td style="color:var(--amber)"><b>survives, taught by its own success
+      state</b></td>
+      <td>"Serve" alone is server jargon and a stranger would not bet on its meaning. But the demo
+      already teaches it in the right place: press START SERVING and the next thing you read is
+      <em>"Research Crew is taking calls."</em> A term introduced by the sentence beside it is a
+      legitimate way to introduce a term. <b>Keep SERVE; make every surface carry "takes calls"
+      alongside it</b>, not only the LIVE state.</td></tr>
+    <tr><td><b>SESSION</b></td><td style="color:var(--red)"><b>owner-side only — never show it to a
+      caller</b></td>
+      <td>Two problems. A stranger's "session" is a login: ephemeral, weightless. This one is a
+      workspace with a folder that parks for hours and survives your V2 — their model will be far too
+      small. And it <b>collides with our own code</b>, where "session" is a transcript
+      (<code>claudeSessionId</code>, <code>sessionLineage</code>). Owner-side it is fine as a plural for
+      the table — "who's using it right now". Caller-side it must never appear: <b>a caller has a
+      workspace, not a session</b>, and mostly they need no noun at all.</td></tr>
+  </tbody>
+</table>
+<div class="card warn">
+  <b>Delete the fourth word.</b> The demo says "publish it as a SERVICE" and the route is
+  <code>/svc/</code>. That is a fourth term the bar does not budget for, and it is the vaguest of the
+  four — "service" is what every piece of software calls itself. The author <em>serves</em> a
+  <em>template</em>; there is no separate object called a service. Keep <code>/svc/</code> as a URL
+  (nobody reads a path as vocabulary) and strike "service" from prose.
+</div>
+
+<h2><span class="num">2</span>A privacy promise R30 breaks, and it is mine</h2>
+<div class="card warn">
+  <p class="lede" style="margin-top:0">The demo says "You see who's on, never their data" — and the
+  sessions table shows <code>ana@studio</code> by name. Under R30 <b>the author does see caller
+  identities</b>, and that is defensible: they are hosting real work on their machine and END is their
+  panic button, which they cannot aim at a person they cannot see.</p>
+  <p class="lede"><b>But my landed string says the opposite.</b>
+  <span class="id">mkt.auth.why</span> = "Authors can see how many people installed a preset, never who
+  you are." That was true for a download. It is false for a session, and it is shown to the caller at
+  the moment they identify themselves.</p>
+  <p class="lede"><b>Fix, and it must be the caller-facing one:</b> a new string for services that tells
+  the truth before they commit, not after.
+  <br><span class="id">mkt.svc.privacy</span> — "{author} can see that you're here and can end your
+  workspace. They can't see inside it."
+  <br>That last clause is the part worth having, and it needs Atlas to confirm it: the author hosts the
+  workspace, so "can't see inside it" is a claim about what the product surfaces, not about what is
+  technically reachable. <b>If the author can read a caller's transcript, this sentence must say so
+  instead.</b> I will not ship a privacy promise I cannot stand behind.</p>
+</div>
+
+<h2><span class="num">3</span>Still unfixed from R29, second time of asking</h2>
+<p class="lede"><b>"ANYONE WHO SIGNS IN — FREE"</b> is unchanged. There is no account and no sign-in;
+the sub-line still says "passkey" one line below the label that contradicts it. The fix is the same as
+last time and costs one word: <b>ANYONE, FREE</b>, with the passkey fact in the sub-line. Raising it
+again because it is the row a stranger meets first, and because a label that survives two reviews
+becomes the product.</p>
+
+<h2><span class="num">4</span>The <code>/svc/</code> page — what a stranger meets cold</h2>
+<p class="lede">They arrived from a link with no app, no account and no idea what Cookrew is. The page
+answers four questions in order — <em>what is this, who runs it, what does it cost, what happens if I
+start</em> — and only then hands off to the Gate Sheet. Nothing here may say "session".</p>
+<div class="page">
+  <h4>Research Crew</h4>
+  <p class="by">run by @drej · 4 agents · v1</p>
+  <p><b>A crew of AI agents that works on what you ask.</b> You talk to one of them — Conductor — and it
+  runs the others.</p>
+  <p><b>You get your own private workspace.</b> It's created when you start, it belongs to you, and the
+  files you make stay in it. Nobody else's work touches yours.</p>
+  <p><b>$2.50 to start.</b> Paid directly to @drej — Cookrew never holds the money and takes nothing.</p>
+  <p class="fine">@drej can see that you're here and can end your workspace. They can't see inside it.</p>
+  <span class="cta">START — $2.50</span>
+  <p class="fine" style="margin-top:12px">Starting opens a passkey check first, then payment. Nothing is
+  charged until you approve it in your wallet.</p>
+</div>
+<table>
+  <thead><tr><th>ID</th><th>String</th></tr></thead>
+  <tbody>
+    <tr><td class="id">mkt.svc.title</td><td>{serviceName}</td></tr>
+    <tr><td class="id">mkt.svc.byline</td><td>run by {author} · {n} agents · {version}</td></tr>
+    <tr><td class="id">mkt.svc.what</td><td>A crew of AI agents that works on what you ask. You talk to
+      one of them — {orch} — and it runs the others.</td></tr>
+    <tr><td class="id">mkt.svc.yours</td><td>You get your own private workspace. It's created when you
+      start, it belongs to you, and the files you make stay in it. Nobody else's work touches yours.</td></tr>
+    <tr><td class="id">mkt.svc.price.paid</td><td>{price} {asset} to start. Paid directly to {author} —
+      Cookrew never holds the money and takes nothing.</td></tr>
+    <tr><td class="id">mkt.svc.price.free</td><td>Free to start. You'll be asked for a passkey first —
+      no password, and no account to create.</td></tr>
+    <tr><td class="id">mkt.svc.privacy</td><td>{author} can see that you're here and can end your
+      workspace. They can't see inside it.</td></tr>
+    <tr><td class="id">mkt.svc.start</td><td>START — {price} {asset} &nbsp;·&nbsp; free variant: START</td></tr>
+    <tr><td class="id">mkt.svc.start.note</td><td>Starting opens a passkey check first, then payment.
+      Nothing is charged until you approve it in your wallet.</td></tr>
+  </tbody>
+</table>
+
+<h3>After the Gate Sheet — the chat, and its three moments</h3>
+<table>
+  <thead><tr><th>Moment</th><th>ID</th><th>String</th></tr></thead>
+  <tbody>
+    <tr><td>First message, cold start</td><td class="id">mkt.svc.waking</td>
+      <td>reuse <span class="id">mkt.remote.waking.*</span> verbatim — "Waking {orch} up. The first
+      call to a sleeping agent takes up to half a minute — after that it's quick." The wait is the same
+      wait and deserves the same words</td></tr>
+    <tr><td>Workspace ready</td><td class="id">mkt.svc.ready</td>
+      <td>Your workspace is ready. Files you create land in your own folder.</td></tr>
+    <tr><td>Author cut a new version</td><td class="id">mkt.svc.frozen</td>
+      <td>{author} released {newVersion}. You're on {version}, the one you started with, and it stays
+      that way until you finish.</td></tr>
+    <tr><td><b>Author ended it</b></td><td class="id">mkt.svc.ended</td>
+      <td><b>{author} ended this workspace.</b> Anything running stopped. Your files were in the
+      workspace and are gone with it.</td></tr>
+    <tr><td>Ended, and money moved</td><td class="id">mkt.svc.ended.paid</td>
+      <td>append: You paid to start this. Contact {author} if that wasn't expected.</td></tr>
+  </tbody>
+</table>
+<div class="card warn">
+  <b><code>mkt.svc.ended</code> is the hardest string on the page and I have written it as bluntly as I
+  can.</b> A stranger paid money, did work, and someone else's button deleted it. Softening that is the
+  temptation and it would be the lie: "your files were in the workspace and are gone with it" is the
+  sentence they need, and if the sandbox is retained after END then it must say <em>that</em> instead.
+  <b>Atlas: which is it?</b> The copy is one clause different depending on the answer, and the caller's
+  next action — panic, or not — depends entirely on which we ship.
+</div>
+
+<h2><span class="num">5</span>The two owner reassurances</h2>
+<h3>Your workspace is never touched</h3>
+<p class="lede">The landed <span class="id">mkt.export.safety</span> is about <em>conversations</em>,
+which was the R28/R29 object. R30's object is a <em>workspace</em>, so this is a new string rather than
+an edit — and the strongest version does not stop at "safe", it says <b>you can carry on</b>, because
+the fear is not really about damage, it is about having to be careful.</p>
+<table>
+  <tbody>
+    <tr><td class="id">mkt.serve.safety</td>
+      <td><b>Callers never touch your workspace.</b> Each one gets a fresh copy of the template you
+      pinned, in its own folder. Keep working exactly as you did before — they can't see it, and nothing
+      you do now reaches them.</td></tr>
+  </tbody>
+</table>
+<p class="lede">That final clause is doing the second half of the job: it tells the author their
+<em>ongoing</em> work is invisible to callers, which is the question they ask on day two. The version
+pin is what makes it true, so the sentence and the architecture agree by construction.</p>
+
+<h3>END stops a session mid-call</h3>
+<p class="lede">Same shape as revoke, and the same rules: no confirm on the <em>safe</em> direction is
+wrong here — END destroys a caller's work, so it is the one control in the serving surface that
+<b>must</b> confirm, and the confirm carries the consequence rather than asking "are you sure".</p>
+<table>
+  <tbody>
+    <tr><td class="id">mkt.serve.end.confirm.title</td><td>End {caller}'s workspace?</td></tr>
+    <tr><td class="id">mkt.serve.end.confirm.body</td>
+      <td>Anything it's doing right now stops, and their folder is removed. They'll be told you ended
+      it. Your own workspace and template are untouched.</td></tr>
+    <tr><td class="id">mkt.serve.end.confirm.action</td><td>END IT</td></tr>
+    <tr><td class="id">mkt.serve.end.done</td><td>{caller}'s workspace ended.</td></tr>
+    <tr><td class="id">mkt.serve.end.error</td>
+      <td><b>Couldn't end {caller}'s workspace — it's still running and they can still work.</b> Try
+      again, or stop serving to end every workspace at once.</td></tr>
+    <tr><td class="id">mkt.serve.stop.confirm</td>
+      <td>Stop serving Research Crew? {n} workspaces end now, including any mid-call. The template
+      stays on your shelf.</td></tr>
+  </tbody>
+</table>
+<div class="card ok">
+  <b>Three rules carried into these, none of them new:</b> the failure leads with the frightening half
+  ("they can still work") because a soft failure on a kill switch is where a calming tone becomes a lie;
+  the failure offers the <em>second remedy</em> (stop serving) because the first one just failed; and
+  the confirm names what survives ("your own workspace and template are untouched"), because an author
+  reaching for END at speed needs to know the blast radius stops at the caller.
+</div>
+
+<h2><span class="num">6</span>What I could not answer without Atlas</h2>
+<ul class="tight">
+  <li><b>Does the author see inside a caller's workspace?</b> <code>mkt.svc.privacy</code> claims not.
+  If they can read a caller's transcript, that string must say so — it is shown before payment, so it is
+  the most consequential sentence on the page.</li>
+  <li><b>Does the sandbox survive END?</b> <code>mkt.svc.ended</code> currently says the files are gone.
+  One clause changes if they are retained, and the caller's reaction changes with it.</li>
+  <li><b>Does a parked workspace keep its files?</b> The table shows "parked 2h" and parking is
+  described as costing nothing. If parking is lossless, callers should be told — it is the difference
+  between "come back tomorrow" and "finish tonight or lose it".</li>
+</ul>
+
+<footer>
+  <b>R30 — vocabulary audit and caller copy.</b> Velvet (UX Optimizer), 2026-08-24 · series:
+  <code>gate-sheet-review</code> · <code>export-walk-review</code> · <code>r29-copy-review</code> · this.
+</footer>
+
+</div>
+<script>
+  (function(){var b=document.getElementById('theme');b.addEventListener('click',function(){
+    var n=document.documentElement.getAttribute('data-theme');
+    var d=n?n==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.setAttribute('data-theme',d?'light':'dark');});})();
+</script>
+</body>
+</html>
