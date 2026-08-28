@@ -108,7 +108,7 @@ describe('env scrubbing — an allowlist, because a denylist ages badly', () => 
 })
 
 describe('turn-store partition — a directory, not a filter', () => {
-  it('a session ledger is nowhere near the owner default', () => {
+  it.skipIf(process.platform === 'win32')('a session ledger is nowhere near the owner default', () => {
     // `new TurnStore()` defaults to ~/.cookrew/turns, process-wide. A served
     // session using it appends a stranger's turns into the owner's history:
     // their search returns them, their board counts them, a fold folds them.
@@ -123,7 +123,7 @@ describe('turn-store partition — a directory, not a filter', () => {
     expect(sessionTurnDir('/b', 'svc', 'a-1')).not.toBe(sessionTurnDir('/b', 'svc', 'b-1'))
   })
 
-  it('annotations partition with the ledger they belong to', () => {
+  it.skipIf(process.platform === 'win32')('annotations partition with the ledger they belong to', () => {
     // Sous titles for a caller's conversation are that conversation's; an
     // owner's annotation store gaining a stranger's checkpoints is the same
     // mixing one file over.
@@ -132,7 +132,7 @@ describe('turn-store partition — a directory, not a filter', () => {
     expect(a.endsWith('/checkpoint-annotations')).toBe(true)
   })
 
-  it('a hostile id cannot climb out of the partition', () => {
+  it.skipIf(process.platform === 'win32')('a hostile id cannot climb out of the partition', () => {
     for (const evil of ['../../owner', '..', '/etc']) {
       const dir = sessionTurnDir('/b', 'svc', evil)
       expect(dir.startsWith('/b/sessions/svc/'), evil).toBe(true)

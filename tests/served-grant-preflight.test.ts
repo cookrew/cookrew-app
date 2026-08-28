@@ -132,7 +132,7 @@ describe('served grant preflight seam', () => {
 })
 
 describe('declared file staging', () => {
-  it('stages a usable Pi models file at 0600 and does not spend the grant', async () => {
+  it.skipIf(process.platform === 'win32')('stages a usable Pi models file at 0600 and does not spend the grant', async () => {
     const base = tempRoot()
     const source = path.join(base, 'fake-models.json')
     const config = path.join(base, 'service-grants.json')

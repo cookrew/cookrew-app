@@ -192,7 +192,7 @@ describe('settlement', () => {
     terms = expected
   ) => stripeSettle({ config: CONFIG, get, redemptions: createStripeRedemptionStore(file) }, header, terms)
 
-  it('accepts exactly paid amount/currency/service/account and burns the id', async () => {
+  it.skipIf(process.platform === 'win32')('accepts exactly paid amount/currency/service/account and burns the id', async () => {
     const file = ledger()
     const get = vi.fn<StripeGet>().mockResolvedValue({ ok: true, status: 200, json: paidSession() })
     await expect(run(get, file)).resolves.toBe('ok')

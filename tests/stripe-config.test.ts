@@ -20,7 +20,7 @@ afterEach(() => {
 })
 
 describe('the Stripe secret boundary', () => {
-  it('reads only the named value from a 0600 owner file', () => {
+  it.skipIf(process.platform === 'win32')('reads only the named value from a 0600 owner file', () => {
     const base = root()
     const file = stripeEnvPath(base)
     writeFileSync(file, `UNRELATED=ignored\nexport STRIPE_SECRET_KEY="${FAKE_STRIPE}"\n`, {

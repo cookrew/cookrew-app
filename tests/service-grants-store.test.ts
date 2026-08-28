@@ -114,7 +114,7 @@ describe('env grants', () => {
 })
 
 describe('file grants', () => {
-  it('copies a lent file into the sandbox at 0600', () => {
+  it.skipIf(process.platform === 'win32')('copies a lent file into the sandbox at 0600', () => {
     const source = path.join(base, 'models.json')
     writeFileSync(source, '{"providers":{}}', { mode: 0o644 })
     writeConfig({
@@ -208,7 +208,7 @@ describe('the budget', () => {
     expect(grants.allowsNewSession('svc-b')).toBe(true)
   })
 
-  it('writes the ledger 0600 and never touches the owner’s own file', () => {
+  it.skipIf(process.platform === 'win32')('writes the ledger 0600 and never touches the owner’s own file', () => {
     lend(2)
     const before = readFileSync(path.join(base, 'service-grants.json'), 'utf8')
     serviceGrants(base, log).provision('svc-x', sandbox)

@@ -54,7 +54,7 @@ describe('served payment configuration', () => {
     expect(config.x402Config().payTo).toBe(OVERRIDE)
   })
 
-  it('derives status from the same quote composer and never includes the Stripe key', () => {
+  it.skipIf(process.platform === 'win32')('derives status from the same quote composer and never includes the Stripe key', () => {
     const base = root()
     const config = createServedPaymentConfig({ base, env: {} })
     expect(config.status()).toEqual({

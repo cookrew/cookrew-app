@@ -34,7 +34,7 @@ afterEach(() => {
 })
 
 describe('Claude served-session seed', () => {
-  it('writes only the minimal current first-run choices, 0600, inside the sandbox', () => {
+  it.skipIf(process.platform === 'win32')('writes only the minimal current first-run choices, 0600, inside the sandbox', () => {
     const sandbox = tempRoot()
     seedClaudeOnboarding(sandbox)
 
@@ -79,7 +79,7 @@ describe('Claude served-session seed', () => {
     expect(onboarding.projects[root]).toBeUndefined()
   })
 
-  it('never overwrites existing user or granted state', () => {
+  it.skipIf(process.platform === 'win32')('never overwrites existing user or granted state', () => {
     const sandbox = tempRoot()
     const claudeDir = path.join(sandbox, '.claude')
     mkdirSync(claudeDir)

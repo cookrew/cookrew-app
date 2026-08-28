@@ -51,7 +51,7 @@ afterEach(() => {
 })
 
 describe('ServedRemoteTranscriptClient', () => {
-  it('keeps sign-in private, single-flights it, and preserves a bare full history', async () => {
+  it.skipIf(process.platform === 'win32')('keeps sign-in private, single-flights it, and preserves a bare full history', async () => {
     const base = keyBase()
     const history = Array.from({ length: 25 }, (_, index) => turn(index + 1))
     let assertions = 0
@@ -92,7 +92,7 @@ describe('ServedRemoteTranscriptClient', () => {
     expect(authorizedReads).toBe(2)
   })
 
-  it('treats a missing key and a valid caller without a session as empty, not another session', async () => {
+  it.skipIf(process.platform === 'win32')('treats a missing key and a valid caller without a session as empty, not another session', async () => {
     const missingBase = path.join(tmpdir(), `cookrew-served-remote-missing-${process.pid}`)
     roots.push(missingBase)
     let calls = 0

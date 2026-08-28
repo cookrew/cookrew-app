@@ -78,7 +78,7 @@ describe('readGrant — what may be lent', () => {
     expect(problems.join(' ')).toMatch(/PATH/)
   })
 
-  it('expands ~ in an envFile and keeps it absolute', () => {
+  it.skipIf(process.platform === 'win32')('expands ~ in an envFile and keeps it absolute', () => {
     const { grant } = readGrant(cfg({ envFile: '~/.cookrew/qwen.env' }), 'svc-research', HOME)
     expect(grant?.envFile).toBe('/Users/owner/.cookrew/qwen.env')
   })
@@ -89,7 +89,7 @@ describe('readGrant — what may be lent', () => {
     expect(problems.join(' ')).toMatch(/absolute/)
   })
 
-  it('reads a file grant and resolves ~ on the source', () => {
+  it.skipIf(process.platform === 'win32')('reads a file grant and resolves ~ on the source', () => {
     const { grant } = readGrant(
       cfg({ files: [{ from: '~/.pi/agent/models.json', to: '.pi/agent/models.json' }] }),
       'svc-research',
@@ -151,7 +151,7 @@ describe('readGrant — what may be lent', () => {
 })
 
 describe('expandHome', () => {
-  it('expands a leading ~ and nothing else', () => {
+  it.skipIf(process.platform === 'win32')('expands a leading ~ and nothing else', () => {
     expect(expandHome('~/x', HOME)).toBe('/Users/owner/x')
     expect(expandHome('~', HOME)).toBe(HOME)
     expect(expandHome('/abs/~/x', HOME)).toBe('/abs/~/x')

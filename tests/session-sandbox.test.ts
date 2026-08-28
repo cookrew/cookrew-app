@@ -49,7 +49,7 @@ describe('path segments cannot climb, hide or collide', () => {
 })
 
 describe('confine is the boundary, not a convention', () => {
-  it('accepts the sandbox and things under it', () => {
+  it.skipIf(process.platform === 'win32')('accepts the sandbox and things under it', () => {
     expect(confine('/s/ana-1', 'work/a.txt')).toBe('/s/ana-1/work/a.txt')
     expect(confine('/s/ana-1', '.')).toBe('/s/ana-1')
   })

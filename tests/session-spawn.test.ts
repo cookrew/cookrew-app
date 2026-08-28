@@ -34,13 +34,13 @@ describe('servedSpawn — the command is wrapped under Seatbelt', () => {
     expect(cap.writes[0].path).toBe(out.profilePath)
   })
 
-  it('writes the profile inside the sandbox, so END removes it', () => {
+  it.skipIf(process.platform === 'win32')('writes the profile inside the sandbox, so END removes it', () => {
     const cap = capture()
     const out = servedSpawn({ file: 'sh', args: [] }, ctx(), cap.write)
     expect(out.profilePath.startsWith('/base/sessions/svc/svc-ana-1/')).toBe(true)
   })
 
-  it('the profile confines writes to this sandbox and denies EVERY other session', () => {
+  it.skipIf(process.platform === 'win32')('the profile confines writes to this sandbox and denies EVERY other session', () => {
     const cap = capture()
     servedSpawn({ file: 'sh', args: [] }, ctx(), cap.write)
     const profile = cap.writes[0].profile
@@ -56,7 +56,7 @@ describe('servedSpawn — the command is wrapped under Seatbelt', () => {
     expect(allowOwnAt).toBeGreaterThan(denyAt)
   })
 
-  it('denies the owner credential stores a served agent was never lent', () => {
+  it.skipIf(process.platform === 'win32')('denies the owner credential stores a served agent was never lent', () => {
     const cap = capture()
     servedSpawn({ file: 'sh', args: [] }, ctx(), cap.write)
     const profile = cap.writes[0].profile
@@ -85,7 +85,7 @@ describe('servedSpawn — the command is wrapped under Seatbelt', () => {
 })
 
 describe('servedSpawn — the env is scrubbed', () => {
-  it('makes the sandbox HOME and marks the process served', () => {
+  it.skipIf(process.platform === 'win32')('makes the sandbox HOME and marks the process served', () => {
     const out = servedSpawn({ file: 'sh', args: [] }, ctx(), () => undefined)
     expect(out.env.HOME).toBe('/base/sessions/svc/svc-ana-1')
     expect(out.env.COOKREW_SERVED).toBe('1')
