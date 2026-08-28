@@ -1,3 +1,4 @@
+import { homedir } from 'node:os'
 import type { CanvasNode } from '../shared/model'
 import type { ScrubReport, SecretFinding } from '../shared/preset-manifest'
 import type { TeamSnapshot } from './teams'
@@ -17,15 +18,40 @@ import { isPiCommand, stripPiSessionFlags } from './pi-bind'
  * by placeholders the installer maps to the buyer's workdirs, and a secret scan
  * that BLOCKS rather than warns.
  *
- * Pure: the input snapshot is never mutated, nothing is read from disk, and the
- * report it returns is the `scrub` object embedded in the manifest and rendered
- * by the install review sheet.
+ * The input snapshot is never mutated and nothing is read from disk; the only
+ * ambient value it reads is the owner's home directory, which it needs in order
+ * to remove (see homeMask). The report it returns is the `scrub` object embedded
+ * in the manifest and rendered by the install review sheet.
  */
 
 /** Placeholder token base; `{{dir0}}` is always the team's primary workdir. */
 export const PLACEHOLDER_PREFIX = '{{dir'
 
 const placeholder = (index: number): string => `${PLACEHOLDER_PREFIX}${index}}}`
+
+/**
+ * The owner's home directory, masked to a token the installer maps to the
+ * BUYER's home.
+ *
+ * P1: the workdir table only covers directories the snapshot REGISTERS. Every
+ * other mention of a home-relative path — in a note, in a command the paste
+ * engine runs verbatim, in a card name — travelled untouched under a signed
+ * `paths: 'placeholders'`, carrying the owner's username and the shape of their
+ * home directory. The signature is what a buyer trusts instead of looking, so a
+ * false claim there is worse than no claim.
+ */
+export const HOME_PLACEHOLDER = '{{home}}'
+
+/**
+ * Applied AFTER the workdir table, so a registered workdir still lands as
+ * `{{dirN}}` and only the leftovers become `{{home}}`. Skipped for a degenerate
+ * home (`/`), which would otherwise rewrite every absolute path on the machine.
+ */
+function homeMask(text: string): string {
+  const home = homedir()
+  if (home.length < 2) return text
+  return text.split(home).join(HOME_PLACEHOLDER)
+}
 
 export interface ScrubOptions {
   /**
@@ -136,9 +162,14 @@ export function scrubForPublish(snapshot: TeamSnapshot, options: ScrubOptions = 
   const table = pathTable(snapshot)
   // Longest path first: /a/b/c must be rewritten before /a/b.
   const ordered: [string, string][] = [...table.entries()].sort((a, b) => b[0].length - a[0].length)
-  const mask = (text: string): string => replaceAll(text, ordered)
+  const mask = (text: string): string => homeMask(replaceAll(text, ordered))
 
   const findings: SecretFinding[] = []
+
+  // P3: the team's own NAME is author-written text like any other field. M8
+  // established that for a card's name and stopped there, so a credential typed
+  // into the team name shipped under `secretScan: 'clean'`.
+  scanSecrets('name', snapshot.name, findings)
 
   const nodes: CanvasNode[] = snapshot.nodes.map((node) => {
     // M8: a card's NAME is author-written text like any other field, and a
@@ -180,7 +211,7 @@ export function scrubForPublish(snapshot: TeamSnapshot, options: ScrubOptions = 
       name: mask(node.name),
       ...(node.role !== null ? { role: mask(node.role) } : {}),
       command: mask(stripped),
-      cwd: table.get(node.cwd) ?? node.cwd,
+      cwd: table.get(node.cwd) ?? mask(node.cwd),
       // No session binding leaves the machine: an inherited id would make the
       // buyer's copy resume a session file that is not theirs and does not
       // exist. Same field list planTerminal clears on a fork.
@@ -243,8 +274,9 @@ export function scrubForPublish(snapshot: TeamSnapshot, options: ScrubOptions = 
 
   const scrubbed: TeamSnapshot = {
     ...snapshot,
-    dir: table.get(snapshot.dir) ?? snapshot.dir,
-    ...(snapshot.dirs ? { dirs: snapshot.dirs.map((d) => table.get(d) ?? d) } : {}),
+    name: mask(snapshot.name),
+    dir: table.get(snapshot.dir) ?? mask(snapshot.dir),
+    ...(snapshot.dirs ? { dirs: snapshot.dirs.map((d) => table.get(d) ?? mask(d)) } : {}),
     nodes,
     turns: includeSessions ? (maskedTurns as TeamSnapshot['turns']) : {},
     ...(includeSessions && snapshot.sessions ? { sessions: snapshot.sessions } : {})

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
 import type { CanvasNode, CanvasPosition, Connection, TerminalNodeData } from '../shared/model'
-import { PLACEHOLDER_PREFIX } from './preset-scrub'
+import { HOME_PLACEHOLDER, PLACEHOLDER_PREFIX } from './preset-scrub'
 import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
 import type { TeamSnapshot } from './teams'
 
@@ -79,10 +80,14 @@ const placeholderAt = (index: number): string => `${PLACEHOLDER_PREFIX}${index}}
  */
 export function applyWorkdirs(snapshot: TeamSnapshot, dirs: string[]): TeamSnapshot {
   if (dirs.length === 0) throw new Error('cannot install a preset without a target workdir')
+  const home = homedir()
   const resolve = (text: string): string => {
     // Every placeholder the scrubber could have written, including ones inside
     // commands and note bodies.
-    return text.replace(/\{\{dir(\d+)\}\}/g, (_m, n: string) => dirs[Number(n)] ?? dirs[0])
+    const withDirs = text.replace(/\{\{dir(\d+)\}\}/g, (_m, n: string) => dirs[Number(n)] ?? dirs[0])
+    // The other half of the scrubber's home mask. Without this a buyer receives
+    // a literal `{{home}}/deploy.sh` in a command the paste engine runs.
+    return withDirs.split(HOME_PLACEHOLDER).join(home)
   }
   const nodes: CanvasNode[] = snapshot.nodes.map((node) => {
     if (node.kind === 'note') return { ...node, content: resolve(node.content) }
