@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>S7 定稿 — 实例工厂(简洁可扩展版)</title>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --ink:#1a2233; --muted:#5b6472; --line:#dde2ea;
+    --accent:#0e7490; --good:#047857; --warn:#b45309; --bad:#be123c; --code-bg:#eef1f5; --chip:#e8edf4; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0b1120; --panel:#111a2e; --ink:#e2e8f0; --muted:#94a3b8;
+    --line:#24314d; --accent:#22d3ee; --good:#34d399; --warn:#fbbf24; --bad:#fb7185; --code-bg:#0f172a; --chip:#1c2946; } }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,"PingFang SC",Segoe UI,sans-serif}
+  main{max-width:1000px;margin:0 auto;padding:28px 20px 60px}
+  h1{font-size:22px;margin:0 0 4px} h2{font-size:17px;margin:26px 0 8px;border-bottom:1px solid var(--line);padding-bottom:5px}
+  p{margin:7px 0} .sub{color:var(--muted);font-size:13px;margin:0 0 14px}
+  code{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;background:var(--code-bg);padding:1px 5px;border-radius:4px}
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto;font-size:12.5px;line-height:1.55}
+  table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13px}
+  th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+  th{background:var(--chip);font-weight:600}
+  .d{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;padding:11px 15px;margin:12px 0}
+  .cut{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--bad);border-radius:10px;padding:11px 15px;margin:12px 0;font-size:13px}
+  footer{margin-top:36px;padding-top:12px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+</style>
+</head>
+<body>
+<main>
+<h1>S7 定稿 — 实例工厂</h1>
+<p class="sub">owner 裁定(2026-08-17):停止对抗循环,以简洁与可扩展为纲整理定稿。四轮设计评审的<b>结构性收获保留</b>,
+增生的证明机器<b>剪除</b>。原则:效果全部可观测时,现实就是回执;受信本地的数十实例规模,不配拥有百万级机器。</p>
+
+<h2>1 · 保留的骨架(四轮买来的,每条一句话)</h2>
+<table>
+  <tr><td>① <b>D0 双闸</b>:<code>COOKREW_INSTANCE_FACTORY=1</code> 门公共路由(关=404);caretaker(hydrate+清理)永远启动。受信本地专属,OS 隔离前不对外</td></tr>
+  <tr><td>② <b>v1 单 agent,恰一不变量</b>:manifest 恰含一个 terminal = entry = 唯一 scope/boot;多余即拒</td></tr>
+  <tr><td>③ <b>计划先行</b>:创建前预分配全部 id(instance/workspace/完整UUID herdrSession/node),先落一行 intent,再做效果</td></tr>
+  <tr><td>④ <b>克隆规格</b>:保留 uuid/parentUuid 图、只重写 session/路径身份、摘要校验、黄金源在扫描树外、resume 后 rebind 后继</td></tr>
+  <tr><td>⑤ <b>manifest 内容寻址</b>:digest 定版(含 worktree commit+tree SHA、专属保留 ref、价卡);发布门:compact 水位、单档≤5MB、禁 submodule/LFS/filter</td></tr>
+  <tr><td>⑥ <b>阻塞 201 + 幂等 key</b>;token = keyId+secret 索引鉴权;scope 只含实例 agent</td></tr>
+  <tr><td>⑦ <b>屏障先于意图</b>:destroy 先同步关准入再落盘意图;回滚走 v5 原语序,疑则留债,永不删活资源最后所有者</td></tr>
+  <tr><td>⑧ <b>泄漏矩阵门</b>:创建失败/销毁后零工件(进程/凭据/worktree/放置/流);TTFT 双指标探针;克隆摘要门</td></tr>
+</table>
+
+<h2>2 · 剪除的机器(及其替代)</h2>
+<div class="cut">
+<b>✂ 持久日志引擎抽取 + 逐效果 prepared/committed 回执</b> → 效果全部可观测(workspace 在不在、worktree 在不在、pane 活没活),
+<b>启动 reconcile 直接拿现实对 PLAN 核账</b>;注册表 = 单 JSON 文件 + 现成 writeFileAtomic。数十实例,O(实例) 自动成立。<br>
+<b>✂ bootInstance 三模式框架</b> → 两个 async 函数(ensure server / spawn pane);半成品创建<b>一律回滚重来</b>(Q4 整次原则),
+recoverAttempt 模式随之消失;golden 的 resume 见证复用现成 rotation/rebind 机械。<br>
+<b>✂ 凭据 generation/在途合并/claimed 记账/15min 租约</b> → 同 key 重试到未认领行 = 轮换新 token(旧作废,一行 CAS);
+并发同 key POST = 409 稍后重试;丢 token = destroy + 重建(受信本地,调用方就是 owner 自己的工具)。<br>
+<b>✂ SESSION SKU 全套</b>(park/resume/stopped 态/park 凭据语义)→ v1 只有 RUN:create → dispatch → destroy。
+状态 = <code>creating → active → destroyed | failed</code>,四个,完。<br>
+<b>✂ 实例内编排 RPC</b> → v1 单 agent 无内部编排;缝留作一段文档说明的扩展点(团队版=扩展不重写)。<br>
+<b>✂ 1/100/10k 鉴权门、G8 词禁门、100MB/聚合帽探针矩阵</b> → 发布门的尺寸帽已构造性排除大输入;规模门随规模来。
+</div>
+
+<h2>3 · 创建流程(全文)</h2>
+<pre><code>POST /api/instances {manifestDigest, idempotencyKey}       [flag 开 + owner principal]
+ 1 PLAN     预分配全部 id;manifest 校验(恰一 terminal · finality='native' · goldenClone 就位)
+ 2 INTENT   注册表落 {plan, key, 请求指纹} (writeFileAtomic)
+ 3 EFFECTS  mint(存hash) → workspace(预分配id) → worktree(按 SHA detach,禁hook,失败=回滚)
+            → clone(§1-④,摘要校验) → ensure server + spawn pane(async) → verify(克隆绑定+watch就位)
+ 4 ACTIVE   注册表更新 → 201 {instanceId, entryAgentId, token}
+失败任意一步:回滚(v5 原语序)→ failed 行含失败相;清不掉的留 cleanup 债 + owner 事件 + 退避重试。
+重启 reconcile:creating 行 = 现实对 PLAN 核账后整体回滚;active 行 = 重建放置(实例 pane fail-closed 属权)。
+重试同 key:active 未认领 → 轮换 token 返回;failed → 重放失败;不同指纹 → 409。</code></pre>
+
+<h2>4 · PR(三个,顺序 S4 → S5 → S7)</h2>
+<table>
+  <tr><td>PR-1</td><td>注册表 + 创建/回滚/reconcile + caretaker(flag 关 inert)≈ 核心 800 行</td></tr>
+  <tr><td>PR-2</td><td>goldenClone(claude)+ manifest/发布门 ≈ 600 行</td></tr>
+  <tr><td>PR-3</td><td>路由 + 凭据(keyId 索引)+ 泄漏矩阵/TTFT/克隆门 ≈ 600 行</td></tr>
+</table>
+
+<h2>5 · 扩展点(N7,各一句话,现在不建)</h2>
+<table>
+  <tr><td>团队版</td><td>manifest 放开恰一约束 + §2 被剪的编排缝(parent 操作 id + 去重 + 结果回执,无计费)</td></tr>
+  <tr><td>SESSION SKU</td><td>加 stopped 态 + park/resume 动词 + 凭据保留语义</td></tr>
+  <tr><td>202 进度句柄</td><td>随 SESSION;GET status-by-handle 从注册表行派生</td></tr>
+  <tr><td>不受信消费者</td><td>OS 级隔离(容器/独立 uid)作为前置件,重开 D0 边界讨论</td></tr>
+  <tr><td>温池</td><td>TTFT 数据触发,独立清洁性评审</td></tr>
+</table>
+
+<footer>定稿依据:S7 设计评审 r1-r4(scratchpad/sol-s7-design-round*.txt,存证)+ owner 简化裁定。
+上游:v5-export-concurrency.html · v5-instance-economy.html。本文取代 v1-v4,为唯一规范文本;
+被剪机器的完整规格保存在 git 历史(v4 = f148f51),需要时按扩展点取回。</footer>
+</main>
+</body>
+</html>

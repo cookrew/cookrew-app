@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>v5.1 — 双平面并发与工作流实例经济</title>
+<style>
+  :root {
+    --bg:#f6f7f9; --panel:#fff; --ink:#1a2233; --muted:#5b6472; --line:#dde2ea;
+    --accent:#0e7490; --accent2:#7c3aed; --good:#047857; --warn:#b45309; --bad:#be123c;
+    --code-bg:#eef1f5; --chip:#e8edf4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0b1120; --panel:#111a2e; --ink:#e2e8f0; --muted:#94a3b8; --line:#24314d;
+      --accent:#22d3ee; --accent2:#a78bfa; --good:#34d399; --warn:#fbbf24; --bad:#fb7185;
+      --code-bg:#0f172a; --chip:#1c2946; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 -apple-system,"SF Pro Text","PingFang SC",Segoe UI,Roboto,sans-serif}
+  main{max-width:1080px;margin:0 auto;padding:28px 20px 60px}
+  h1{font-size:23px;margin:0 0 4px;letter-spacing:-.02em}
+  h2{font-size:18px;margin:34px 0 10px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  h3{font-size:15.5px;margin:18px 0 6px}
+  p{margin:8px 0}
+  .sub{color:var(--muted);margin:0 0 14px;font-size:13.5px}
+  code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px;background:var(--code-bg);padding:1px 5px;border-radius:4px}
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto;font-size:12.5px;line-height:1.6}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--chip);font-weight:600;white-space:nowrap}
+  .axiom{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;padding:12px 16px;margin:14px 0}
+  .axiom b:first-child{color:var(--accent)}
+  .danger{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--bad);border-radius:10px;padding:12px 16px;margin:14px 0}
+  .good{color:var(--good);font-weight:700}.bad{color:var(--bad);font-weight:700}.warn{color:var(--warn);font-weight:700}
+  .num{font-variant-numeric:tabular-nums}
+  svg text{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+  footer{margin-top:44px;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+</style>
+</head>
+<body>
+<main>
+
+<h1>v5.1 — 双平面并发与工作流实例经济</h1>
+<p class="sub">对 v5 设计的关键补全(owner 裁定):同一 agent 上的并发会污染 owner 的上下文;消费者调用的对象必须是
+<b>agent team template 的实例</b>。本文从第一性原理推演其性能与实用性,并建立盈利模型:<b>卖工作流实例,不卖 agent 使用权</b>。
+Conductor · 2026-08-16 · 补全 scratchpad/v5-export-concurrency.html 的 A3/S7</p>
+
+<h2>1 · 为什么"租用 agent"在物理上就是错的</h2>
+<div class="danger">
+<b>Agent = 进程 + 上下文,而上下文是 owner 的资产。</b>往一个活着的 agent 注入外部任务,三重事故同时发生:
+<br>① <b>污染</b> — 外部 turn 永久进入 owner 的对话史(转写是 append-only 的,rail 上抹不掉);
+<br>② <b>泄漏</b> — 回答是<i>从 owner 的全部上下文</i>生成的,机密沿回复流向消费者;反向,消费者的数据也进入 owner 的档案;
+<br>③ <b>串行</b> — 一个对话一次只能回答一个问题(这是 LLM 会话的物理属性,v5 的每 agent 单飞行槽只是承认了它)。同一 agent 的"并发"不存在,只有排队。
+</div>
+<p>所以并发的正确来源从来不是"让一个 agent 同时干几件事",而是<b>多开几个 agent</b>。消费者平面上,这个"多开"必须是
+<b>模板实例化</b>:干净的上下文、干净的目录、干净的凭据——每一单都从同一个已知起点出发。这正是上一版
+workspace template / instance factory 的根本动机;它当年败于 serviceState 旗标泄漏(38× 事故),而不是败于模型本身。</p>
+
+<h2>2 · 双平面并发模型</h2>
+<svg viewBox="0 0 1040 400" role="img" aria-label="双平面">
+  <defs><marker id="ar" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/></marker></defs>
+  <!-- owner plane -->
+  <rect x="30" y="40" width="460" height="320" rx="12" fill="none" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="8,4"/>
+  <text x="260" y="66" fill="#22d3ee" font-size="12" font-weight="600" text-anchor="middle">OWNER 平面(私有,永不出售)</text>
+  <rect x="60" y="90" width="180" height="54" rx="6" fill="#0f172a"/>
+  <rect x="60" y="90" width="180" height="54" rx="6" fill="rgba(8,51,68,.4)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="150" y="113" fill="#e2e8f0" font-size="11" font-weight="600" text-anchor="middle">活的工作团队</text>
+  <text x="150" y="130" fill="#94a3b8" font-size="9" text-anchor="middle">Sol · Tinker · Velvet … 上下文=资产</text>
+  <rect x="280" y="90" width="180" height="54" rx="6" fill="#0f172a"/>
+  <rect x="280" y="90" width="180" height="54" rx="6" fill="rgba(8,51,68,.4)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="370" y="113" fill="#e2e8f0" font-size="11" font-weight="600" text-anchor="middle">owner dispatch</text>
+  <text x="370" y="130" fill="#94a3b8" font-size="9" text-anchor="middle">自己的上下文,自己的风险</text>
+  <rect x="60" y="180" width="400" height="70" rx="6" fill="#0f172a"/>
+  <rect x="60" y="180" width="400" height="70" rx="6" fill="rgba(76,29,149,.4)" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="260" y="205" fill="#e2e8f0" font-size="11" font-weight="600" text-anchor="middle">TEAM TEMPLATE(产品 IP)</text>
+  <text x="260" y="222" fill="#a78bfa" font-size="9" text-anchor="middle">角色 · 提示词 · 技能 · 编排剧本 · 版本号 · 价卡</text>
+  <text x="260" y="238" fill="#94a3b8" font-size="9" text-anchor="middle">从活团队沉淀,templateVersion 定价的依据</text>
+  <text x="260" y="290" fill="#94a3b8" font-size="10" text-anchor="middle">经营:每个实例的转写 = 改进模板的数据</text>
+  <text x="260" y="308" fill="#94a3b8" font-size="10" text-anchor="middle">模板升级 → 版本涨价(IP 复利)</text>
+
+  <!-- instantiate arrow -->
+  <line x1="490" y1="215" x2="560" y2="215" stroke="#64748b" stroke-width="1.5" marker-end="url(#ar)"/>
+  <text x="525" y="205" fill="#64748b" font-size="9" text-anchor="middle">实例化</text>
+
+  <!-- consumer plane -->
+  <rect x="560" y="40" width="450" height="320" rx="12" fill="none" stroke="#34d399" stroke-width="1.5" stroke-dasharray="8,4"/>
+  <text x="785" y="66" fill="#34d399" font-size="12" font-weight="600" text-anchor="middle">CONSUMER 平面(实例,按单隔离)</text>
+  <rect x="585" y="90" width="120" height="90" rx="6" fill="#0f172a"/>
+  <rect x="585" y="90" width="120" height="90" rx="6" fill="rgba(6,78,59,.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="645" y="112" fill="#e2e8f0" font-size="10" font-weight="600" text-anchor="middle">实例 #1</text>
+  <text x="645" y="128" fill="#94a3b8" font-size="8" text-anchor="middle">消费者 A · run</text>
+  <text x="645" y="144" fill="#94a3b8" font-size="8" text-anchor="middle">独立 HERDR_SESSION</text>
+  <text x="645" y="160" fill="#94a3b8" font-size="8" text-anchor="middle">worktree + 净化 env</text>
+  <rect x="725" y="90" width="120" height="90" rx="6" fill="#0f172a"/>
+  <rect x="725" y="90" width="120" height="90" rx="6" fill="rgba(6,78,59,.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="785" y="112" fill="#e2e8f0" font-size="10" font-weight="600" text-anchor="middle">实例 #2</text>
+  <text x="785" y="128" fill="#94a3b8" font-size="8" text-anchor="middle">消费者 A · session</text>
+  <text x="785" y="144" fill="#94a3b8" font-size="8" text-anchor="middle">park/resume</text>
+  <text x="785" y="160" fill="#94a3b8" font-size="8" text-anchor="middle">转写=持久化</text>
+  <rect x="865" y="90" width="120" height="90" rx="6" fill="#0f172a"/>
+  <rect x="865" y="90" width="120" height="90" rx="6" fill="rgba(6,78,59,.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="925" y="112" fill="#e2e8f0" font-size="10" font-weight="600" text-anchor="middle">实例 #3</text>
+  <text x="925" y="128" fill="#94a3b8" font-size="8" text-anchor="middle">消费者 B · 专属</text>
+  <text x="925" y="144" fill="#94a3b8" font-size="8" text-anchor="middle">月费驻留</text>
+  <rect x="585" y="210" width="400" height="60" rx="6" fill="#0f172a"/>
+  <rect x="585" y="210" width="400" height="60" rx="6" fill="rgba(120,53,15,.3)" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="785" y="233" fill="#e2e8f0" font-size="11" font-weight="600" text-anchor="middle">温池(warm pool)</text>
+  <text x="785" y="250" fill="#fbbf24" font-size="9" text-anchor="middle">进程活着 · 上下文已清 · /clear 语义回收 · 亚秒交付</text>
+  <text x="785" y="300" fill="#94a3b8" font-size="10" text-anchor="middle">消费者并发 = 付费实例数(每实例内部,团队各 agent 天然并行)</text>
+  <text x="785" y="320" fill="#94a3b8" font-size="10" text-anchor="middle">凭据 scope 只含实例自己的 agents — 结构上摸不到 owner 平面</text>
+</svg>
+
+<div class="axiom"><b>A8 — 并发出自实例化,永不出自共享。</b>owner 平面:dispatch 打到自己的活团队(自己的上下文、自己的风险),每 agent 单飞行槽——这是编排工具。consumer 平面:请求实例化一个 team template,工作发生在实例<i>自己的</i> agents 上;消费者的凭据 scope 从铸造起就只包含实例的 agents,owner 的 agent 对它<b>不是被拒绝,而是不存在</b>(404,不确认存在性——r1 修复已落)。</div>
+
+<h2>3 · 性能第一性:实例的成本结构与三温层</h2>
+<p>实例贵在哪?进程(每个 claude/codex CLI 约 150–400MB 常驻)+ 冷启动(每 pane 的 herdr ensureSession 约 1–2s
++ CLI 自身 boot 数秒;8-pane 团队在 42× 修复后仍是秒级总账)。<b>便宜在哪?这一版的两个新事实改变了经济学:</b></p>
+<table>
+  <tr><th>v5 新事实</th><th>对实例经济的意义</th></tr>
+  <tr><td>派生 tracking:无 dispatch、无订阅者、无焦点的实例<b>观察成本恰好为零</b></td><td>可以持有<b>很多</b>实例而 app 不付税。38× 事故的"孤儿 hot 工作区"类在结构上不存在——上一版 factory 的死因被移除,模型可行了</td></tr>
+  <tr><td>A2:转写文件就是全部持久状态;O(Δbytes) 观察</td><td><b>park = 杀进程留文件,resume = --resume 从文件复活</b>。持久化免费获得,停着的实例内存为零</td></tr>
+</table>
+<h3>三温层生命周期(成本 ↔ 延迟的显式菜单)</h3>
+<table>
+  <tr><th>层</th><th>状态</th><th>交付延迟</th><th>驻留成本</th><th>适用</th></tr>
+  <tr><td><b>WARM</b></td><td>进程活着,上下文已回收(/clear 语义:新 session 文件,进程不重启;worktree 重置 + env/cwd/shell 史净化)</td><td class="num">亚秒~1s</td><td>内存(每实例 = Σ agent 进程)</td><td>热门模板的 run SKU;池深 K 按到达率定</td></tr>
+  <tr><td><b>COLD</b></td><td>无进程;模板即配方,现场 boot</td><td class="num">秒级(≈ pane 数 × 1-2s + CLI boot,批量 attach 已 42×)</td><td>0</td><td>长尾模板;溢出</td></tr>
+  <tr><td><b>PARKED</b></td><td>无进程;转写保留(实例状态 = <code>stopped</code>,商业事实)</td><td class="num">秒级(--resume,上下文从文件回来)</td><td>磁盘(MB 级)</td><td>session/专属 SKU 的中断期;计费停表</td></tr>
+</table>
+<div class="axiom"><b>温池回收的红线:回收 ≠ 复用上下文。</b>/clear 给的是<i>对话级</i>隔离(recovery 弧实测:新文件开写、旧文件原地保留)。回收协议必须同时净化进程级状态:cwd、env、worktree、shell 历史、凭据缓存——wave-C 的 sandbox scrub(archive)整套照搬;<b>净化失败的实例销毁,绝不入池</b>。同一实例的前后两单来自不同消费者时,旧转写文件在回收时归档并脱离实例可达域(它属于上一单的审计记录,不属于下一单的环境)。威胁模型照抄 wave-C 的诚实声明:worktree+scrub+独立 HERDR_SESSION 限制的是<i>事故</i>半径,<b>不是安全边界</b>(同 uid:实例进程能读到 owner 的转写、凭据、SSH 密钥与同 uid 套接字 — 路由层 404 约束不了子进程)。<b>因此(Sol r3 裁定,采纳):在按实例的 OS 级隔离(容器/独立账户 + 白名单挂载 + 隔离 IPC/herdr 套接字 + 网络策略)落地之前,产品边界是"仅受信的本地消费者",且必须被强制执行 — 强隔离是面向不受信消费者开卖的<i>前置条件</i>,不是可选付费层级。</b>catalog 发布门(S7)必须体现这条。</div>
+<h3>实用性核对</h3>
+<table>
+  <tr><th>问题</th><th>第一性答案</th></tr>
+  <tr><td>可复现吗?</td><td>模板版本 + 固定起始上下文 ⇒ 同一 brief 的行为方差只来自模型本身。这是"租 owner 的 agent"永远给不了的<b>可保证性</b>,也是能开价的原因</td></tr>
+  <tr><td>清理失败怎么办?(38× 的原委)</td><td>rollback 阶梯从 archive 原样继承(顺序约束逐条注释);但 v5 下失败的最坏结果是"一个安静的零成本工作区 + 一条 cleanup 报告",不再是隐形性能税</td></tr>
+  <tr><td>实例内部并发?</td><td>团队的 N 个 agent 天然并行(每个单飞行槽);编排在实例内由 entry agent(conductor 角色)完成——这就是把"我今天怎么带 crew"产品化</td></tr>
+  <tr><td>观察/计费复用?</td><td>dispatch 面原封不动:实例的 entry agent 就是一个普通 dispatch 目标;finality+prompt 身份+fail-closed 账本全部继承。<b>工作流 run = 对 entry agent 的一次 dispatch</b>,只是价卡不同</td></tr>
+</table>
+
+<h2>4 · 盈利模型:卖工作流实例,不卖 agent 使用权</h2>
+<div class="axiom"><b>A9 — 商品是结果的信封,不是机器的时钟。</b>消费者买的是"这个 brief 交给这个<i>版本</i>的工作流,产出这类 artifact"。定价对象是 run/驻留,而不是 tokens 转售——tokens 是成本侧,信封是收入侧,差额就是模板 IP 的定价权。</div>
+<h3>SKU 阶梯</h3>
+<table>
+  <tr><th>SKU</th><th>形态</th><th>价卡(quote.ts 原生支持)</th><th>成本侧</th><th>毛利来源</th></tr>
+  <tr><td><b>RUN</b></td><td>一次性:brief 进 → artifact 出 → 实例回收/销毁</td><td><code>base + perTurn</code>,quoteHash 锁定报价单,cap 封顶</td><td>tokens + 温池摊销</td><td>模板剧本的成功率/质量溢价</td></tr>
+  <tr><td><b>SESSION</b></td><td>有界租期:实例专属,park/resume,上下文跨 run 延续</td><td><code>base(时段) + perTurn 计量</code>;parked 停表</td><td>tokens + 驻留内存时段</td><td>连续性(上下文积累归消费者这单所有)</td></tr>
+  <tr><td><b>DEDICATED</b></td><td>常驻团队:月费 + 用量;消费者自己的持久工作区</td><td>月费 + 计量;SLA(温池保活)</td><td>常驻内存 + tokens</td><td>可用性承诺 + 深度定制模板</td></tr>
+</table>
+<h3>为什么这个模型在经济上成立</h3>
+<table>
+  <tr><th>结构</th><th>机制</th></tr>
+  <tr><td><b>IP 复利</b></td><td>模板(角色+提示词+技能+编排剧本)一次沉淀,边际复制成本≈0;每次 run 的转写是改进模板的养料 → templateVersion 迭代 → 同一 SKU 提价或开新档。卖使用权是卖工时;卖实例是卖<b>被验证的剧本</b></td></tr>
+  <tr><td><b>成本对齐</b></td><td>三温层让驻留成本是显式旋钮:温池深度 K = f(到达率, 内存价, SLA)。派生 tracking 保证闲置实例零观察税——供给可以远大于并发需求而不烧钱</td></tr>
+  <tr><td><b>结算可信</b></td><td>r1 修完的机器就是收银台:完成=转写终局性+prompt 身份(不多收);replay+tombstone(不重复收);interrupted≠failed(平台故障不按 agent 失败收);quoteHash(报价即合同);fail-closed 账本(收了必有据)。x402 receipts(S5)直接落在这些语义上</td></tr>
+  <tr><td><b>护城河</b></td><td>可保证的隔离与可复现性——"租 owner 的 agent"模式在物理上给不了(§1 的三重事故),纯 API 转售商给不了工作流剧本,这两样恰好是本产品的正交优势</td></tr>
+</table>
+<pre><code>单笔 RUN 的账(示意):
+  收入  = quote(base + perTurn × turns)         ← quoteHash 锁定
+  成本  = tokens(实例自己的计量通道) + warm 摊销 + 存储(MB)
+  毛利  = 剧本溢价 — 即模板把"会用 agent 的人"的判断力装进了可复制的信封
+风险闸: cap(spend-cap) · pending-limit · 幂等 tombstone · interrupted 退让</code></pre>
+
+<h2>5 · 存档模型:卖的是地图 + 存档,不只是地图(owner 裁定,2026-08-16)</h2>
+<div class="axiom"><b>A10 — 模板 = 地图;黄金上下文 = 存档;实例 = 一局游戏。</b>转写文件就是存档文件(A2 的直接推论):
+owner 的团队在干净房间里"打通"准备阶段 — 读透代码库、建立约定、沉淀判断 — 这份<b>已经工作过的上下文</b>连同
+session 文件一起封存为<b>黄金存档(golden save)</b>。消费者实例化 = 复制存档文件、铸新 session id、<code>--resume</code>
+复活 — 每个消费者从存档点继续,而不是从零开荒。</div>
+<table>
+  <tr><th>游戏语汇</th><th>系统对应物</th><th>商业含义</th></tr>
+  <tr><td>地图(从 0 构建)</td><td>team template:角色 · 提示词 · 技能 · 编排剧本</td><td>基础 IP;可被模仿,单独卖护城河浅</td></tr>
+  <tr><td><b>存档</b></td><td>黄金上下文:每 agent 一份策划过的 session 文件(+ worktree 快照)</td><td><b>真正的护城河</b> — 数小时/天的真实探索劳动,提示词抄得走,存档抄不走</td></tr>
+  <tr><td>存档点分档</td><td>存档随 templateVersion 演进:浅档(刚开荒)→ 深档(领域吃透)</td><td>天然价格阶梯;深档提价</td></tr>
+  <tr><td>一局游戏</td><td>实例:copy-on-write 分支 — 消费者的分支归其所有,黄金存档永不变异</td><td>SESSION SKU 即"继续我这局";隔离承诺不变</td></tr>
+  <tr><td>读档时间</td><td>copy 文件 + resume boot(秒级;上下文从文件回来,A2 免费给的)</td><td>比温池更便宜的"预热":深上下文不占驻留内存</td></tr>
+</table>
+<div class="danger"><b>存档的三条红线。</b>
+① <b>为售而建</b>:存档里是完整对话内容 — 在 owner 私有环境里长出的上下文永远不可售;可售存档必须在净化房间里、以出售为目的从零构建(与 §3 的回收净化同族,但这里是构建期约束);
+② <b>上下文预算</b>:深存档吃掉实例的 context window — 存档发布前必须 compact 到一个"留足工作空间"的水位(compact 就是存档压缩,recovery 弧已实证其语义:同文件边界记录,573.9K→20.3K);
+③ <b>模型漂移</b>:同一存档在新模型上行为会变 — 存档与 templateVersion 绑定发布,升级需回归(журney gate 是现成的验收器)。</div>
+
+<h2>6 · 对 v5 切片计划的修订</h2>
+<table>
+  <tr><th>修订</th><th>内容</th></tr>
+  <tr><td><b>S7 升格为产品主线</b></td><td>factory 不是"可选重建",它就是 consumer 平面本身。顺序改为:S4(gate,门)→ S5(receipts,收银台)→ <b>S7(实例,商品)</b>;S6(guards/rotation 已提前落地于 r1)</td></tr>
+  <tr><td><b>新增温池与回收协议</b></td><td>/clear 语义回收 + 全套 scrub + 回收自检(净化失败即销毁);池深可配,默认 0(冷启动亦是秒级,先卖 RUN 再谈 SLA)</td></tr>
+  <tr><td><b>实例词汇定案</b></td><td><code>instance.status = active | stopped</code>(商业事实);工作区无状态词(派生 working/quiet)——与 v5 主文档一致,archive 的 <code>InstanceState 'hot'</code> 更名</td></tr>
+  <tr><td><b>consumer 永不触达 owner agents</b></td><td>凭据铸造时 scope 即实例 agents(wave-C consumer-credentials 原样继承);manifest 层面 owner 平面路由对 consumer principal 一律 404</td></tr>
+</table>
+
+<footer>
+  Cookrew Dev · Conductor · 2026-08-16 · 补全 v5(scratchpad/v5-export-concurrency.html)· 继承:archive 的 instance-factory 路由/registry/credential mint/rollback 阶梯、quote/receipts 纯模块、agent-services-export-v2 + Sol 对其的 8-HIGH 裁定 · 上下文污染红线由 owner 于本日裁定
+</footer>
+</main>
+</body>
+</html>

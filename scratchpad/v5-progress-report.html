@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>v5 重构战报 — 回退 · 重设计 · Sol 十轮对抗循环</title>
+<style>
+  :root {
+    --bg:#f6f7f9; --panel:#fff; --ink:#1a2233; --muted:#5b6472; --line:#dde2ea;
+    --accent:#0e7490; --accent2:#7c3aed; --good:#047857; --warn:#b45309; --bad:#be123c;
+    --code-bg:#eef1f5; --chip:#e8edf4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0b1120; --panel:#111a2e; --ink:#e2e8f0; --muted:#94a3b8; --line:#24314d;
+      --accent:#22d3ee; --accent2:#a78bfa; --good:#34d399; --warn:#fbbf24; --bad:#fb7185;
+      --code-bg:#0f172a; --chip:#1c2946; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,"SF Pro Text","PingFang SC",Segoe UI,Roboto,sans-serif}
+  main{max-width:1080px;margin:0 auto;padding:28px 20px 60px}
+  h1{font-size:23px;margin:0 0 4px;letter-spacing:-.02em}
+  h2{font-size:18px;margin:34px 0 10px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  p{margin:8px 0}
+  .sub{color:var(--muted);margin:0 0 14px;font-size:13.5px}
+  code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px;background:var(--code-bg);padding:1px 5px;border-radius:4px}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}
+  th{background:var(--chip);font-weight:600;white-space:nowrap}
+  .ok{color:var(--good);font-weight:700}.no{color:var(--bad);font-weight:700}.mid{color:var(--warn);font-weight:700}
+  .num{font-variant-numeric:tabular-nums}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:16px 0}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .kpi b{display:block;font-size:21px;letter-spacing:-.02em}
+  .kpi span{color:var(--muted);font-size:12px}
+  .saga{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent2);border-radius:10px;padding:12px 16px;margin:14px 0;font-size:13.5px}
+  svg text{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+  footer{margin-top:44px;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+</style>
+</head>
+<body>
+<main>
+
+<h1>v5 重构战报 — 回退、重设计、Sol 十轮对抗循环</h1>
+<p class="sub">Cookrew Dev · Conductor · 2026-08-16 → 08-17 · 指令:"进入 loop 直到 Sol 不再报 P0/P1" · 当前:<b>round 10 复审中</b></p>
+
+<div class="kpis">
+  <div class="kpi"><b class="num">10 轮</b><span>对抗复审(全部经由新 dispatch 面派单 — 实战即验证)</span></div>
+  <div class="kpi"><b class="num">P0: 6 → 2</b><span>裁定轨迹 6·6·3·3·2·2·2·2·2·?(r10 待判)</span></div>
+  <div class="kpi"><b class="num">~110+</b><span>累计发现;每轮 FIXED 累积、发现面持续变窄变深</span></div>
+  <div class="kpi"><b class="num">2,482</b><span>测试全绿(基线 1,862,+620)</span></div>
+  <div class="kpi"><b class="num">19 commits</b><span>dev 上 +27,861 行(净)、98 文件</span></div>
+</div>
+
+<h2>1 · 裁定轨迹</h2>
+<svg viewBox="0 0 1020 180" role="img" aria-label="verdict trajectory">
+  <line x1="50" y1="150" x2="990" y2="150" stroke="var(--line)" stroke-width="1"/>
+  <!-- P0 bars -->
+  <g font-size="10">
+    <rect x="70"  y="60"  width="26" height="90" fill="#fb7185"/><text x="83"  y="52"  text-anchor="middle" fill="#fb7185">6</text><text x="83"  y="166" text-anchor="middle" fill="#94a3b8">r1</text>
+    <rect x="170" y="60"  width="26" height="90" fill="#fb7185"/><text x="183" y="52"  text-anchor="middle" fill="#fb7185">6</text><text x="183" y="166" text-anchor="middle" fill="#94a3b8">r2</text>
+    <rect x="270" y="105" width="26" height="45" fill="#fb7185"/><text x="283" y="97"  text-anchor="middle" fill="#fb7185">3</text><text x="283" y="166" text-anchor="middle" fill="#94a3b8">r3</text>
+    <rect x="370" y="105" width="26" height="45" fill="#fb7185"/><text x="383" y="97"  text-anchor="middle" fill="#fb7185">3</text><text x="383" y="166" text-anchor="middle" fill="#94a3b8">r4</text>
+    <rect x="470" y="120" width="26" height="30" fill="#fb7185"/><text x="483" y="112" text-anchor="middle" fill="#fb7185">2</text><text x="483" y="166" text-anchor="middle" fill="#94a3b8">r5</text>
+    <rect x="570" y="120" width="26" height="30" fill="#fb7185"/><text x="583" y="112" text-anchor="middle" fill="#fb7185">2</text><text x="583" y="166" text-anchor="middle" fill="#94a3b8">r6</text>
+    <rect x="670" y="120" width="26" height="30" fill="#fb7185"/><text x="683" y="112" text-anchor="middle" fill="#fb7185">2</text><text x="683" y="166" text-anchor="middle" fill="#94a3b8">r7</text>
+    <rect x="770" y="120" width="26" height="30" fill="#fb7185"/><text x="783" y="112" text-anchor="middle" fill="#fb7185">2</text><text x="783" y="166" text-anchor="middle" fill="#94a3b8">r8</text>
+    <rect x="870" y="120" width="26" height="30" fill="#fb7185"/><text x="883" y="112" text-anchor="middle" fill="#fb7185">2</text><text x="883" y="166" text-anchor="middle" fill="#94a3b8">r9</text>
+    <text x="953" y="140" text-anchor="middle" fill="#94a3b8" font-size="13">r10 ?</text>
+    <!-- P1 dots -->
+    <g fill="#fbbf24"><circle cx="110" cy="150" r="0"/><text x="110" y="45" text-anchor="middle">P1:9</text><text x="210" y="45" text-anchor="middle">12</text><text x="310" y="45" text-anchor="middle">11</text><text x="410" y="45" text-anchor="middle">9</text><text x="510" y="45" text-anchor="middle">6</text><text x="610" y="45" text-anchor="middle">4</text><text x="710" y="45" text-anchor="middle">5</text><text x="810" y="45" text-anchor="middle">7</text><text x="910" y="45" text-anchor="middle">7</text></g>
+  </g>
+  <text x="50" y="20" fill="#94a3b8" font-size="11">红柱 = P0 · 黄字 = P1 · 每轮全部修复后再审下一轮;发现从架构级一路收窄到共享输入框的字节级物理</text>
+</svg>
+
+<h2>2 · 五条主题线 — 起点与现在</h2>
+<table>
+  <tr><th>主题</th><th>r1 时的问题</th><th>r9 后的保证</th></tr>
+  <tr><td><b>完成 = 证据</b></td><td>"安静了"就算完成;工具调用前奏能提前计费</td><td class="ok">parser 终局标记(claude end_turn / codex task_complete / pi stopReason,全语料实证)+ 持久行 + 空回复/失败/中止各有诚实终态;卡死的 status 永远压不过持久终局行</td></tr>
+  <tr><td><b>归因 = 身份</b></td><td>时间戳窗口归因;24 字符前缀哈希;7 天幂等静默过期</td><td class="ok">精确字节身份 + 单一生产者使之充分;turnUuid 持久防 rewind 复用;90 天带终态 tombstone;跨版本 key fail-closed 409</td></tr>
+  <tr><td><b>单一生产者</b></td><td>无任何生产者约束(dispatch 与人可同写一个会话)</td><td class="ok">生产者租约(见 §3)—— 十轮打磨出的完整所有权模型</td></tr>
+  <tr><td><b>fail-closed 持久化</b></td><td>账本 append 吞错误;重启即计费事故;崩溃窗口丢标题</td><td class="ok">先落盘后可见;证据优先格(parser>infra);hydrate 预约;原子压缩+父目录 fsync;epoch 崩溃一致;fsync 债务追偿</td></tr>
+  <tr><td><b>O(Δ) 性能</b></td><td>91MB 转写每 2s 全量重解析;每 append O(N) 落盘;主线程同步 fork</td><td class="ok">增量字节读→delta 管线→append-only 落盘全链 O(Δ);tail overlay;折叠分块让出事件循环;admission 零 fork(异步单飞+退避+严格校验)</td></tr>
+</table>
+
+<h2>3 · 聚光灯:生产者租约的十轮演化</h2>
+<div class="saga">
+<b>r3</b> 时间戳归因被打穿 → prompt 身份 + HTTP 409 → <b>r4</b> "写前卫兵":owner 键入在字节到达子进程前咨询 tracker,fallback 走来源标记 → <b>r5</b> 卫兵前移到每个提交位(ask 的 promptAgent 前零 await)+ 投递代际令牌 → <b>r6</b> 点检查升级为<b>租约</b>:所有提交路径共享、跨提交窗口持有;粘贴逐字节可取消 → <b>r7</b> 删除跨界夺取(保守规则)+ 全生产者统一 ownerSubmit 原语 + 代际退役 → <b>r8</b> <b>输入框所有权</b>:第一个有效字节起 dispatch 让位;污染 fail-closed 到终端重启;发现 herdr submit-ack 短模式,租约缩到不可逆窗口 → <b>r9</b> 标记跨 detach 存活、零 trim、溯源标志(Ctrl-U 只证明一行)、SIGKILL 升级、活性注册。<br>
+<b>终点形态:一个会话在任一时刻至多一个生产者,且这个事实由机器在字节层强制,不靠任何点检查。</b>这正是 A3("dispatch 是并发单元")在物理层的完整证明。
+</div>
+
+<h2>4 · dev 提交轴(19)</h2>
+<table>
+  <tr><th>阶段</th><th>提交</th></tr>
+  <tr><td>回退</td><td><code>53f3edc</code> waves A/B/C 全退回 <code>5f5f511</code> 基线</td></tr>
+  <tr><td>设计</td><td><code>3c78e44</code> v5 六公理 · <code>66ec7e1</code> 双平面实例经济 · <code>2c4f658</code> 存档模型(地图/存档/一局游戏)</td></tr>
+  <tr><td>核心切片</td><td><code>44cb5e1/cbbc6fc/6b9a2af</code> S1 性能三连(42×)· <code>d3cfb57</code> S2 工作驱动排水 · <code>b191b58</code> S3 attach-free dispatch · <code>994fc1e</code> rotation rebind</td></tr>
+  <tr><td>Sol 循环</td><td><code>cdf051e</code> r1 · <code>b40f16f</code> r2 · <code>10f0150</code> r3 · <code>9147702</code> r4 · <code>44cb495</code> r5 · <code>836109d</code> r6 · <code>f1aeb54</code> r7 · <code>f7f7e55</code> r8 · <code>54792a5</code> r9</td></tr>
+</table>
+
+<h2>5 · 值得记录的副产物</h2>
+<table>
+  <tr><td>Codex 新版 rollout 格式(0.147)支持 —— 旧 parser 在现装 codex 上产出 <b>0 个 turn</b>,r2 语料实证时发现</td></tr>
+  <tr><td>herdr 无 <code>--wait</code> 的 submit-ack 模式 —— r8 调查发现,直接把租约窗口从"整个 turn"缩到"投递确认"</td></tr>
+  <tr><td>测试基建缺陷:所有 TurnStore 测试的注解兄弟目录坍缩到同一 <code>/tmp/checkpoint-annotations</code>,并发 worker 静默互写多时 —— epoch 语义让它现形,沙箱已真隔离</td></tr>
+  <tr><td>10 条历史零时长 ledger 行迁移(旧 parser 的 abort-only 形状;备份于 scratchpad/ledger-backup-*)</td></tr>
+  <tr><td>全部 10 轮 review 经由 v5 自己的 dispatch 面派给 Sol —— 每轮派单/轮询/关单本身就是产线验证</td></tr>
+</table>
+
+<h2>6 · 影响评估与收官裁定(2026-08-17,owner 拍板)</h2>
+<table>
+  <tr><th>剩余类</th><th>平面</th><th>实际严重度</th><th>处置</th></tr>
+  <tr><td>输入框崩溃窗口的进一步精化(WAL 见证语义边角、scrape-only 见证时机)</td><td>仅 owner</td><td>最坏 = 误拒(fail-closed)或一条拼错的 prompt 重发一次;<b>永不错计费</b></td><td class="no">冻结 — 不再进循环;11 轮已到金库门标准,厨房门不再加固</td></tr>
+  <tr><td>非折叠路径上超大单行 JSON.parse(trace 读取等)</td><td>双平面</td><td>P2 级尾延迟,预存在</td><td class="mid">监控;S 切片顺带</td></tr>
+  <tr><td>fold worker 的 eval-source 在打包构建下的解析</td><td>双平面</td><td>dev 模式已验证;打包时需一次检查</td><td class="mid">打包门待办</td></tr>
+  <tr><td>herdr 服务器故障期</td><td>双平面</td><td>降级为退避 + 已分类可重试失败;子进程 TERM→KILL 有界</td><td class="ok">已接受(上游缺陷另案)</td></tr>
+  <tr><td><b>整个共享输入框类</b></td><td class="ok">消费者平面不存在</td><td>实例无键盘,结构性免疫</td><td class="ok">S7 即产品答案</td></tr>
+</table>
+<p class="sub">裁定:计费级不变量(I7)作用域收束至消费者平面;owner 平面 r4-r8 的租约/抢占/可见拒绝为体验必需保留,r10-r11 的 WAL 层保留但冻结。资源全部转向 S4→S5→S7。</p>
+
+<h2>7 · 接下来</h2>
+<table>
+  <tr><td>Sol round 10 裁定(→ P0=P1=0 收官,否则继续)</td><td class="mid">复审中</td></tr>
+  <tr><td>app 重启到 v5 树(当前运行的是 08-16 晚的中间版本)+ 重跑 ledger 迁移脚本</td><td>待收官</td></tr>
+  <tr><td>S4 gate → S5 receipts → S7 实例工厂(产品主线,含存档实例化与受信边界门)</td><td>排队</td></tr>
+  <tr><td>456 checkpoint 轨道从 archive 重落 · renderer working/quiet 徽章</td><td>排队</td></tr>
+</table>
+
+<footer>
+  设计:scratchpad/v5-export-concurrency.html · v5-instance-economy.html(canvas 卡片同名)· 裁定:scratchpad/sol-review-v5-round1..9.txt ·
+  archive/wave-c-20260816 · 测试 2,482 绿 / tsc node+web 干净 · 未 push
+</footer>
+</main>
+</body>
+</html>

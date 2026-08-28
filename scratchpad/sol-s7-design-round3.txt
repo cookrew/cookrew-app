@@ -1,0 +1,83 @@
+[P0] The arbitration table does not replace the contradictory normative plan
+WHERE: scratchpad/s7-instance-factory-plan.html:57-70,91,101-118,123-130,178-193
+CLAIM: V3 appends corrected rulings but leaves the implementation sections directing the opposite behavior, so there is no single implementable contract.
+EVIDENCE: Section 2 still advances a bare phase cursor rather than prepared/committed receipts; section 7 still persists stop intent before installing the synchronous admission barrier; section 8 still requires a 202 handle, progress SSE, and credential exchange despite POS-2 and the explicit rejection; sections 4/9 still require a worker pipeline and a 100MB gate despite POS-3; and section 6 still specifies a bounded parallel boot transaction despite POS-4. These are load-bearing ordering, API, and performance choices, not editorial synonyms. A PR author following sections 2-10 will violate section 13 while still following the plan.
+FIX: Rewrite sections 2, 4, 6, 7, 8, and 9 so they state the arbitrated V3 contracts directly, make section 13 historical disposition only, and add a consistency gate that searches for the retired 202/SSE, cursor-only, intent-first, worker/100MB, and parallel-v1 contracts.
+
+[P0] The dispatch registry is not the durable generic log engine the saga ruling assumes
+WHERE: scratchpad/s7-instance-factory-plan.html:178; src/main/dispatch.ts:768-828,862-1011
+CLAIM: Reusing the present dispatch registry cannot provide the fsynced prepared/committed ownership root required by the instance saga, and literal file sharing would erase saga rows during compaction.
+EVIDENCE: A normal dispatch append is appendFileSync followed by success without fd/file fsync; hydrate skips every malformed/torn line and converts a whole-file read error to an empty ledger. Only hydrate-time compaction fsyncs its temporary file, its directory-fsync failure is merely logged, and its parser/compactor recognizes only DispatchRecord and DispatchTombstone rows. Factory receipt envelopes in the same file would be ignored and then dropped; copying these helpers to another file still loses acknowledged intents on power loss and violates the request-path main-thread discipline. There is currently domain code, not a reusable proven append/fsync engine.
+FIX: Make PR-0/1 first extract a domain-neutral, separately-filed durable transition-log primitive: serialized async append, complete-write loop, file fdatasync/fsync before acknowledgement, checksum/schema envelope, fail-closed hydrate, explicit torn-tail recovery, parent-dir durability for creation/compaction, and consumer-supplied retention/compaction. Prove dispatch parity, then use a distinct factory log through that engine and fault-inject every prepared/effect/committed boundary.
+
+[P0] Fresh-only does not constructively remove D6 restoration races
+WHERE: scratchpad/s7-instance-factory-plan.html:62-65,83-90,100-103,181
+CLAIM: Deferring resume-mode boot to the SESSION SKU removes a witness needed by V1 itself.
+EVIDENCE: V1 explicitly materializes Claude golden saves and section 4 requires --resume plus successor discovery/rebind, so that path is not fresh. Independently, a genuinely fresh saga can crash after the named herdr server or pane was created but before its committed receipt. Startup reconcile then sees the same session with a pane being restored asynchronously; proving an empty session and spawning a substitute recreates the original duplicate-pane race. Product resume and recovery of a partially landed fresh boot are different concerns, but both need positive existing-pane/adoption evidence.
+FIX: Keep D6 one-pane, but define bootInstance modes new, recoverAttempt, and goldenResume. Under one per-session single-flight and revision, new may prove a never-used empty session; recoverAttempt must wait for/adopt the preallocated pane or prove the prepared effect absent; goldenResume must positively witness the expected cloned session and successor rebind. All modes retain AbortSignal, bounded child teardown, receipts, and stale-revision suppression.
+
+[P0] Retry-rotates-credential is storage-atomic but not response-linearizable
+WHERE: scratchpad/s7-instance-factory-plan.html:54-70,162-165,180,184-185
+CLAIM: Concurrent or delayed retries can return a bearer that was already revoked, and the plan has no terminal policy for an active-unclaimed RUN whose response is permanently lost.
+EVIDENCE: Retry A can persist generation 2 and stall before its response; retry B persists generation 3 and returns it; then A returns generation 2 after it has been revoked. Atomic CAS of the row does not order bytes delivered on two HTTP connections, so "the last retry's token is the only live one" does not ensure that the token a caller receives is live. The text also never defines the first-use claimed transition or expiry/billing/cleanup of an active-unclaimed hot instance when no retry arrives, recreating an unowned resource tax.
+FIX: Add same-principal/key in-flight coalescing so concurrent POSTs share one generation/token, include the monotonic credential generation in the response and define stale-response handling, mark claimed on the first successful authenticated use, and define a bounded active-unclaimed lease with honest billing and cleanup behavior. Gate response reordering, disconnect-before/after row commit, process crash, first-use racing retry, and no-retry expiry. If these cannot be made a one-endpoint contract, the rejected creation-secret exchange is required.
+
+[P0] The flag-off caretaker still has no policy for active durable rows
+WHERE: scratchpad/s7-instance-factory-plan.html:35-39,177-179
+CLAIM: Always starting hydration and cleanup authority prevents total amnesia, but it does not say whether an already-active instance remains serviceable or is parked/destroyed when the public factory flag is off.
+EVIDENCE: D0 says the whole S7 route family is 404 while the arbitration says the flag gates only exposure and the caretaker always starts. An active row is not cleanup debt. Its herdr server/pane can therefore remain live and billable with no consumer lifecycle surface, or its pre-existing credential can continue through S4 routes despite the claimed flag boundary, depending on implementation. Merely rebuilding placement makes either outcome possible and does not close the original flag-on to flag-off orphan case.
+FIX: Choose one explicit transition before general dispatch exposure: either existing instances remain fully serviced by a narrow pre-existing-instance plane while create/catalog stay off, or flag-off synchronously closes their admission and the caretaker parks/destroys them with durable debt on failure. Gate flag-on create followed by flag-off restart for active, unclaimed, stopped, and cleanup-pending rows, including zero hot orphan processes.
+
+[P1] The adopted state lattice is still only a promise, not a transition contract
+WHERE: scratchpad/s7-instance-factory-plan.html:68-81,105-112,184
+CLAIM: Naming four orthogonal fields does not define legal combinations, terminality, or the CAS decisions reconcile and HTTP handlers must make.
+EVIDENCE: The amendment says a field table will define every combination, but no table appears. Active-unclaimed, active-claimed, failed-with-cleanup, destroyed-with-debt, and a stop operation whose barrier installed but intent append failed still have no stated visibility, billing clock, dispatch eligibility, retry result, or next transition. The credential reshape and blocking-201 contract depend directly on those distinctions.
+FIX: Put the actual finite transition table in V3 before PR-1: legal field tuples, operation revisions/phases, barriers, API projection, billing, idempotent retry result, and reconcile action. Reject impossible tuples on hydrate instead of allowing implementation-defined repair.
+
+[P1] A mutable repository tag is not yet the promised immutable worktree artifact
+WHERE: scratchpad/s7-instance-factory-plan.html:94-98,188
+CLAIM: Pinning a commit SHA is the right economy, but an ordinary tag in the owner's live repository does not by itself guarantee retention or hook/filter-free materialization.
+EVIDENCE: Tags can be force-moved or deleted, after which GC may remove the pinned object before a later instance is created. git worktree add can run checkout hooks and configured smudge filters; refusing submodules/LFS does not refuse arbitrary filter drivers, so "no hooks, zero network" is not established. The main manifest still says only worktree snapshot digest rather than the commit/tree SHA and owned retention ref.
+FIX: Use a reserved Cookrew-owned ref created by compare-and-swap and never moved, pin both commit and tree digest in the manifest, reference-count that ref through catalog-version and instance lifetimes, and verify object/tree identity immediately before and after materialization. Disable hooks and filters mechanically or reject templates that require filters, and gate forced-ref deletion, GC, custom filter, dirty/untracked, mode, symlink, and offline cases.
+
+[P1] Instance-level billing does not eliminate worker execution idempotency
+WHERE: scratchpad/s7-instance-factory-plan.html:42-44,155-161
+CLAIM: POS-1 correctly removes per-worker pricing and financial receipts, but incorrectly removes the idempotency and execution receipt needed to retry an internal worker RPC safely.
+EVIDENCE: parentRunId records ancestry and a producer lease serializes current input; neither tells an entry agent whether a timed-out child submission landed. Retrying can perform irreversible work twice, while not retrying can silently lose it. This is a correctness fact even when only the outer instance envelope is billable, and deferring it makes the promised single-agent-to-team seam a rewrite rather than an extension.
+FIX: Keep quoteHash, charge, and consumer receipt only on the instance RUN, but give each internal child operation a parent-scoped operation id, dedupe reservation, and terminal execution outcome in the same server-side orchestration seam. It need not be a consumer API or a second billing ledger.
+
+[P1] Blocking 201 needs an explicit disconnect ownership contract
+WHERE: scratchpad/s7-instance-factory-plan.html:46-70,162-165,180,186
+CLAIM: POS-2 is product-simple only if HTTP connection lifetime is not accidentally the saga's cancellation authority.
+EVIDENCE: The plan now requires AbortSignal in bootInstance but never says whether it comes from request close, app shutdown, lifecycle revision, or rollback. If a client/proxy times out at 10 seconds, request-close cancellation can roll back work that startup reconcile or the idempotent retry expected to join; ignoring every signal can instead leave children running through shutdown. With progress/status intentionally absent, same-POST retry is the only consumer recovery path and must have one deterministic owner.
+FIX: Make the durable attempt/lifecycle authority own the saga after INTENT. A socket disconnect only detaches the response waiter; a same-key retry joins/replays that attempt. App quit, rollback, and a newer lifecycle revision own cancellation. Publish the minimum client timeout and gate disconnect at every phase, retry while running, and bounded shutdown.
+
+[P1] The size cap removes the 100MB path, not the need to prove accepted concurrency
+WHERE: scratchpad/s7-instance-factory-plan.html:90-92,123-130,166-169
+CLAIM: POS-3 can avoid a worker, but a per-save 5MB cap alone does not prove the main process stays responsive under the maximum legal manifest and concurrent creates.
+EVIDENCE: The amendment does not cap aggregate golden bytes, record size, skill/assets transform size, or simultaneous clone transforms. Streaming controls retained memory but a single large JSON record and synchronous canonical hashing/parsing still monopolize the event loop; N concurrent legal creates multiply it. The stale G2 text tests an unreachable 100MB case instead of the actual accepted boundary.
+FIX: Set per-record, per-save, aggregate-manifest, and global clone-concurrency caps at publish time; make the in-thread transform asynchronous/yield-bounded; and replace the 100MB gate with event-loop/RSS/read-write probes at exactly the largest accepted manifest times maximum admitted concurrency. Workerization remains unnecessary unless those gates fail or the cap grows.
+
+POS-1: DISAGREE - The outer instance is the only billing boundary, but internal worker delivery still needs a lightweight parent-scoped idempotency key and execution outcome; removing financial receipts does not make duplicate/lost work safe.
+POS-2: AGREE - A blocking 201 is the simplest V1 RUN contract for an 8-15 second programmatic caller, provided the durable saga outlives socket disconnects and same-key retries/credential rotation are made deterministic.
+POS-3: AGREE - Constructively capping published inputs is preferable to a worker and unreachable 100MB machinery, but the gate must bound aggregate bytes/records/concurrency and prove the exact maximum accepted workload on the event loop.
+POS-4: AGREE - D6 should grow only to the one-pane V1 consumption area; that narrow primitive still must handle golden resume and crash recovery of a partially landed fresh boot rather than treating both as future team machinery.
+
+R2-#1: PARTIAL - The caretaker now starts independently of the flag, but V3 never decides what it does with active rows while every S7 route is off.
+R2-#2: PARTIAL - Prepared/committed is named, but the selected dispatch registry is neither a generic nor per-append-fsynced engine and the effect receipt/recovery table is absent.
+R2-#3: FIXED - Section 13 adds the required all-row bootstrap barrier, active placement hydration, fail-closed instance ownership index, and ordering before multiplexer/dispatch exposure.
+R2-#4: PARTIAL - Retry rotation removes raw-token persistence and a new endpoint, but concurrent response ordering, claim transition, and active-unclaimed expiry remain unsound.
+R2-#5: PARTIAL - Signal/single-flight/revision/receipt are adopted, but the claimed absence of restore mode is false for golden saves and crash-recovered fresh attempts.
+R2-#6: FIXED - PLAN now requires exactly one terminal that is simultaneously entry, sole required/scoped/booted agent and rejects extra terminals.
+R2-#7: PARTIAL - Section 13 states barrier-before-intent correctly, but the normative lifecycle section still mandates intent-before-barrier.
+R2-#8: PARTIAL - The orthogonal fields are named, but the promised state/transition/CAS table is not present.
+R2-#9: FIXED - Creator principal plus key, canonical request fingerprint, mismatch 409, lifetime retention, and tombstone are all specified.
+R2-#10: PARTIAL - Rejecting consumer progress SSE is sound under blocking 201, but the normative metric section still mandates 202, SSE, and credential exchange.
+R2-#11: FIXED - Golden and fresh observer evidence are separated, with deferred watch and first-dispatch probation explicitly allowed for fresh.
+R2-#12: PARTIAL - Commit SHA plus offline detached materialization is a sound reshape, but the retention ref, hooks/filters, and manifest identity are not mechanically immutable yet.
+R2-#13: FIXED - V3 specifies a versioned record parser/transform, enumerated identity replacements, order/count/stream/graph digests, and fail-closed unknown fields.
+R2-#14: FIXED - Hydration is external-work-free and reconciliation is bounded globally and per instance with durable backoff and affected-instance-only quarantine.
+R2-#15: FIXED - Random keyId indexing, one-row secret comparison, dummy unknown comparison, and 1/100/10k gates remove the request-path fleet scan.
+R2-#16: FIXED - The lattice ruling retains lifecycle identity while stopped, rejects dispatch by status, and permanently revokes only on destroy.
+
+VERDICT: UNSOUND - P0:5 P1:5 P2:0

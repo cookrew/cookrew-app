@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>v5 — Exported-Agent Concurrency, Perf First</title>
+<style>
+  :root {
+    --bg:#f6f7f9; --panel:#fff; --ink:#1a2233; --muted:#5b6472; --line:#dde2ea;
+    --accent:#0e7490; --accent2:#7c3aed; --good:#047857; --warn:#b45309; --bad:#be123c;
+    --code-bg:#eef1f5; --chip:#e8edf4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0b1120; --panel:#111a2e; --ink:#e2e8f0; --muted:#94a3b8; --line:#24314d;
+      --accent:#22d3ee; --accent2:#a78bfa; --good:#34d399; --warn:#fbbf24; --bad:#fb7185;
+      --code-bg:#0f172a; --chip:#1c2946; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,"SF Pro Text",Segoe UI,Roboto,sans-serif}
+  main{max-width:1100px;margin:0 auto;padding:28px 20px 60px}
+  h1{font-size:24px;margin:0 0 4px;letter-spacing:-.02em}
+  h2{font-size:19px;margin:36px 0 10px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  h3{font-size:15.5px;margin:20px 0 6px}
+  p{margin:8px 0}
+  .sub{color:var(--muted);margin:0 0 14px}
+  code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px;background:var(--code-bg);padding:1px 5px;border-radius:4px}
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto;font-size:12.5px;line-height:1.55}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--chip);font-weight:600}
+  .axiom{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;padding:12px 16px;margin:14px 0}
+  .axiom b:first-child{color:var(--accent)}
+  .fail{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--bad);border-radius:10px;padding:12px 16px;margin:14px 0}
+  .keep{color:var(--good);font-weight:700}.cut{color:var(--bad);font-weight:700}.redo{color:var(--warn);font-weight:700}
+  .num{font-variant-numeric:tabular-nums}
+  svg text{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+  footer{margin-top:44px;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+</style>
+</head>
+<body>
+<main>
+
+<h1>v5 — exported-agent concurrency, perf first</h1>
+<p class="sub">First-principles redesign after the full revert. Goal: <b>exported agents do dispatched tasks concurrently</b>,
+and the app's cost scales with in-flight work — never with fleet size. Conductor · 2026-08-16 · base <code>53f3edc</code> (all ten wave A/B/C commits reverted; sources archived on <code>archive/wave-c-20260816</code>).</p>
+
+<h2>1 · What the base actually costs (measured, file:line-verified)</h2>
+<p>Every "cheap read" against herdr is a <b>synchronous process spawn on the Electron main thread</b>
+(<code>herdr-host-multiplexer.ts</code> shells out for the sync <code>Multiplexer</code> interface; every by-name
+lookup runs a full fleet-wide <code>herdr pane list</code> first).</p>
+<table>
+  <tr><th>Hot path</th><th>Cost on the base</th><th>Scales with</th></tr>
+  <tr><td>Activity push (<code>turn-tracker.ts:886</code>)</td><td>1 <code>pane list</code> fork <b>per push per terminal, ≤4 Hz</b> + full 5000-line buffer serialize</td><td>streaming terminals × total panes</td></tr>
+  <tr><td>Session-file reconcile (<code>session-sync.ts</code>, 2s timer)</td><td><code>readFileSync</code> + <b>full re-parse of the whole JSONL</b> on every append</td><td>file size (owner's trunk: 91 MB)</td></tr>
+  <tr><td>Workspace switch (<code>index.ts:1490</code>)</td><td>serial per-pane: 10–20 forks + up to seconds of busy-wait each, UI frozen</td><td>panes in the workspace</td></tr>
+  <tr><td>Board SSE (<code>board-index.ts</code>)</td><td>full-fleet recompute at 2 Hz while anything streams; probe forks 2 spawns per unknown detached pane every 3s</td><td>all agents ever registered</td></tr>
+  <tr><td>Prompting an agent</td><td><b>No attach-free route exists.</b> <code>askTerminal</code> needs a live PtySession; <code>cmdAsk</code> on a background agent silently spawns a PTY that then <b>leaks</b> (the next switch only detaches the active workspace's ids)</td><td>—</td></tr>
+</table>
+<p>Concurrency on the base is therefore <b>1</b>: exactly one workspace is observable, promptable, and recordable — the focused one.</p>
+
+<h2>2 · Evidence carried from the waves (what we paid to learn)</h2>
+<table>
+  <tr><th>Fact</th><th>Number</th><th>Design consequence</th></tr>
+  <tr><td>Per-pane settle polling compounds</td><td class="num">16,538 ms → 395 ms switch P95 (42×) via early verdict + one-snapshot attach batch</td><td>Never ask a global question per pane; ambiguity gets an instant verdict when herdr already names a different agent</td></tr>
+  <tr><td>Repeated pane inventory is O(A×P)</td><td class="num">legacy P50 rises 44→130 ms as A:5→14; one-snapshot flat at ~9 ms (14.5×)</td><td>One inventory per herdr server per tick: <b>O(Σ P<sub>server</sub> + A)</b>, cached ≤500 ms for the activity path only — never for lifecycle</td></tr>
+  <tr><td>Transcript re-parse on switch</td><td class="num">357 MB per workspace return → 0 (stat + history identity)</td><td>Suspend retains the verified signature; a byte is only re-read when the file actually changed</td></tr>
+  <tr><td>A manual tracking flag leaks</td><td class="num">two forgotten <code>hot</code> flags = 38× activity tax (190 ms → 6.85 s), herdr at 74% CPU, looked like ten unrelated bugs</td><td><b>No flags.</b> Tracking is derived from facts; drain is automatic</td></tr>
+  <tr><td>herdr's detector lies</td><td>reported <code>stalled</code> on both prompts that landed; an agent at 100% context reported <code>idle</code> and swallowed a brief with exit 0</td><td>Delivery is confirmed by <b>transcript evidence</b>, refusal only on <i>proven</i> non-delivery; context-full is checked pre-submit</td></tr>
+  <tr><td>Billing correctness</td><td colspan="2">consumer-scoped idempotency; replay outranks busy; <code>interrupted ≠ failed</code>; reply text never re-served from a dispatch id; restart closes every open record as <code>interrupted</code></td></tr>
+  <tr><td>Upstream herdr 0.8.0 self-shutdown</td><td>SIGHUPs every pane; ~24-pane blast with one shared session</td><td>Per-instance <code>HERDR_SESSION</code> is the containment; the app must survive its multiplexer dying</td></tr>
+</table>
+
+<h2>3 · First principles</h2>
+<div class="axiom"><b>A1 — The app is a control plane.</b> Work happens inside the agent's process under herdr. The app only
+delivers, observes, records, and bills. Its cost must be proportional to <b>in-flight work</b>, with an idle fleet costing zero.</div>
+<div class="axiom"><b>A2 — The transcript is the ground truth; the screen is for humans.</b> Every agent turn lands in an
+append-only session file. Turn state, completion, and history come from that file. Screen scrape (attach, capture, spinner
+regexes) exists only for the workspace a human is looking at.
+<br><b>Exportability precondition (Sol r1):</b> an agent is dispatchable only while a durable observer exists for it — a
+file watch, or a live scrape for scrape-only harnesses in the focused workspace. A dispatch that cannot be observed is
+refused at acceptance (503), never accepted into a state only the sweep can end.</div>
+<div class="axiom"><b>A3 — The dispatch is the unit of concurrency.</b> An exported agent takes work only through a dispatch:
+an identified, reserved, idempotent, billable record. One in-flight dispatch per agent (the agent process is single-threaded);
+N agents run N dispatches in parallel. Capacity = number of agents, not a tunable cap.</div>
+<div class="axiom"><b>A4 — Tracking derives from work ∪ watchers; nothing is a flag.</b>
+<code>tracked = {agents with an in-flight dispatch} ∪ {agents with an observed in-flight turn} ∪ {focused workspace's agents}
+∪ {agents with a live remote subscriber}</code>.
+Enter on accept/observation, leave by debounced drain when the last fact lapses. There is nothing to forget, so the 38× class cannot exist.
+<br><b>Drain ≠ completion (Sol r1):</b> the two decisions carry different stakes and use different evidence. <i>Drain</i> is
+cheap and recoverable (a re-watch reconciles everything), so it may fire on a quiet window — but never against a pin, a
+subscriber, or a positive working/blocked signal from the status feed. <i>Completion</i> is billing-grade and irreversible,
+so it requires positive finality evidence from the parser (an end-of-turn marker or a next-user boundary) plus prompt
+identity — quiet time alone closes nothing.</div>
+<div class="axiom"><b>A5 — One inventory, pushed or batched — never per-pane forks.</b> All herdr questions on periodic paths are
+answered from the push status feed or one batched snapshot per server per tick. Sync process spawns are reserved for
+lifecycle actions (create/kill/attach), which are rare and human-initiated.</div>
+<div class="axiom"><b>A6 — Reads are incremental.</b> Session files only append, except rewind/rotation. Observe with
+<code>stat</code>; on growth read only the delta; full re-parse only when the file shrank or rotated. Cost per turn is
+O(bytes of that turn), independent of history size.</div>
+
+<h2>4 · The model</h2>
+<svg viewBox="0 0 1060 560" role="img" aria-label="v5 architecture">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+    </marker>
+  </defs>
+  <!-- arrows first (behind boxes) -->
+  <line x1="150" y1="105" x2="150" y2="150" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="150" y1="230" x2="150" y2="275" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="260" y1="315" x2="420" y2="315" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="530" y1="355" x2="530" y2="410" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="640" y1="440" x2="760" y2="440" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="860" y1="410" x2="860" y2="250" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="860" y1="180" x2="860" y2="120" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="760" y1="215" x2="640" y2="215" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arr)"/>
+  <line x1="420" y1="215" x2="260" y2="200" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arr)"/>
+  <line x1="640" y1="315" x2="760" y2="230" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- consumer -->
+  <rect x="40" y="40" width="220" height="65" rx="6" fill="#0f172a"/>
+  <rect x="40" y="40" width="220" height="65" rx="6" fill="rgba(30,41,59,.5)" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="150" y="66" fill="#e2e8f0" font-size="12" font-weight="600" text-anchor="middle">CONSUMER</text>
+  <text x="150" y="84" fill="#94a3b8" font-size="9" text-anchor="middle">phone · wall · MCP/A2A sidecar (one token)</text>
+
+  <!-- gate -->
+  <rect x="40" y="150" width="220" height="80" rx="6" fill="#0f172a"/>
+  <rect x="40" y="150" width="220" height="80" rx="6" fill="rgba(136,19,55,.4)" stroke="#fb7185" stroke-width="1.5"/>
+  <text x="150" y="176" fill="#e2e8f0" font-size="12" font-weight="600" text-anchor="middle">AUTH GATE</text>
+  <text x="150" y="193" fill="#fb7185" font-size="9" text-anchor="middle">deny-by-default · 401→403→429→402</text>
+  <text x="150" y="208" fill="#fb7185" font-size="9" text-anchor="middle">route manifest · scoped DTOs · stream revoke</text>
+
+  <!-- dispatch -->
+  <rect x="40" y="275" width="220" height="80" rx="6" fill="#0f172a"/>
+  <rect x="40" y="275" width="220" height="80" rx="6" fill="rgba(6,78,59,.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="150" y="301" fill="#e2e8f0" font-size="12" font-weight="600" text-anchor="middle">DISPATCH PLANE</text>
+  <text x="150" y="318" fill="#94a3b8" font-size="9" text-anchor="middle">reserve · idempotency · quote/receipt</text>
+  <text x="150" y="333" fill="#94a3b8" font-size="9" text-anchor="middle">submitted → running → done|failed|interrupted</text>
+
+  <!-- delivery -->
+  <rect x="420" y="275" width="220" height="80" rx="6" fill="#0f172a"/>
+  <rect x="420" y="275" width="220" height="80" rx="6" fill="rgba(120,53,15,.3)" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="530" y="301" fill="#e2e8f0" font-size="12" font-weight="600" text-anchor="middle">ATTACH-FREE DELIVERY</text>
+  <text x="530" y="318" fill="#fbbf24" font-size="9" text-anchor="middle">promptAgent (herdr) · no PtySession by import</text>
+  <text x="530" y="333" fill="#fbbf24" font-size="9" text-anchor="middle">transcript-confirmed · refuse only on proof</text>
+
+  <!-- agent -->
+  <rect x="420" y="410" width="220" height="60" rx="6" fill="#0f172a"/>
+  <rect x="420" y="410" width="220" height="60" rx="6" fill="rgba(30,41,59,.5)" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="530" y="436" fill="#e2e8f0" font-size="12" font-weight="600" text-anchor="middle">AGENT (herdr pane)</text>
+  <text x="530" y="452" fill="#94a3b8" font-size="9" text-anchor="middle">per-instance HERDR_SESSION · never stopped by tracking</text>
+
+  <!-- transcript -->
+  <rect x="760" y="410" width="200" height="60" rx="6" fill="#0f172a"/>
+  <rect x="760" y="410" width="200" height="60" rx="6" fill="rgba(76,29,149,.4)" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="860" y="436" fill="#e2e8f0" font-size="12" font-weight="600" text-anchor="middle">SESSION FILE</text>
+  <text x="860" y="452" fill="#a78bfa" font-size="9" text-anchor="middle">append-only JSONL · ground truth</text>
+
+  <!-- observer -->
+  <rect x="760" y="180" width="200" height="70" rx="6" fill="#0f172a"/>
+  <rect x="760" y="180" width="200" height="70" rx="6" fill="rgba(76,29,149,.4)" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="860" y="204" fill="#e2e8f0" font-size="12" font-weight="600" text-anchor="middle">FILE OBSERVER</text>
+  <text x="860" y="220" fill="#a78bfa" font-size="9" text-anchor="middle">stat → tail delta → append records</text>
+  <text x="860" y="234" fill="#a78bfa" font-size="9" text-anchor="middle">O(Δbytes) per turn · full parse only on shrink</text>
+
+  <!-- projections -->
+  <rect x="760" y="55" width="200" height="65" rx="6" fill="#0f172a"/>
+  <rect x="760" y="55" width="200" height="65" rx="6" fill="rgba(8,51,68,.4)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="860" y="80" fill="#e2e8f0" font-size="12" font-weight="600" text-anchor="middle">PROJECTIONS</text>
+  <text x="860" y="97" fill="#22d3ee" font-size="9" text-anchor="middle">rail · board · activity · receipts · SSE</text>
+
+  <!-- tracking set -->
+  <rect x="330" y="55" width="330" height="150" rx="12" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4"/>
+  <text x="495" y="80" fill="#fbbf24" font-size="11" font-weight="600" text-anchor="middle">TRACKED (derived, no flags)</text>
+  <text x="495" y="102" fill="#e2e8f0" font-size="9" text-anchor="middle">{ in-flight dispatch } ∪ { focused workspace } ∪ { live subscriber }</text>
+  <text x="495" y="122" fill="#94a3b8" font-size="9" text-anchor="middle">enter on accept · leave by debounced drain</text>
+  <text x="495" y="142" fill="#94a3b8" font-size="9" text-anchor="middle">tracked ⇒ file observer runs · untracked ⇒ zero cost</text>
+  <text x="495" y="162" fill="#94a3b8" font-size="9" text-anchor="middle">focused ⇒ additionally: PTY attach + screen scrape</text>
+  <text x="495" y="182" fill="#94a3b8" font-size="9" text-anchor="middle">drain never kills a pane — it only stops watching</text>
+
+  <!-- closure label -->
+  <text x="700" y="205" fill="#fb7185" font-size="9" text-anchor="middle">turn correlation closes the dispatch</text>
+  <text x="340" y="207" fill="#fb7185" font-size="9" text-anchor="middle">reply + receipt</text>
+  <text x="700" y="330" fill="#64748b" font-size="9" text-anchor="middle">prompt</text>
+  <text x="875" y="530" fill="#64748b" font-size="9">herdr push status feed = evidence only, may hold a turn open, never ends one</text>
+</svg>
+
+<h3>Dispatch lifecycle (the only thing that creates tracking)</h3>
+<pre><code>POST /api/agents/:id/dispatch
+  → idempotency replay?  200 FIRST — before agent resolution and body validation
+                         (a retry must replay even if the agent was deleted since;
+                          same key + different promptHash = 409 conflict, never silent reuse)
+  → reserved?            409 busy          (one in-flight dispatch per agent; HTTP input/ask
+                                            producers also refuse 409 while a dispatch is armed)
+  → observable?          503 no-observer   (file watch installs, or scrape covers — else refuse)
+  → context ≥98%?        ASYNC preflight (Sol r4): acceptance never blocks on a pane
+                         read — the dispatch gets its durable 202 id, the check runs in
+                         the delivery leg, and a full agent closes failed/context-full
+                         (excluded from charge; the prompt is never submitted). The
+                         old synchronous 503 traded main-thread stalls for a refusal
+                         nobody could bill anyway.
+  → metered &amp; unfunded?  402 {challenge}   (quoteHash is the contract — S5)
+  → accept: submitted row DURABLY APPENDED (fail-closed: ledger write failure = 503 + rollback),
+            reservation held, agent ENTERS tracked, 202 {dispatchId, state:'submitted'}
+  deliver: promptAgent (attach-free) → transcript-confirm → running
+  close:   ONE closer per authority — file-backed agents close ONLY from the durable row
+           (tail record final + prompt identity + armedAt), scrape-only agents close from
+           the scrape with the same prompt-identity rule. Timestamps reject old turns;
+           they are never the ownership proof.
+  drain:   no pin + no subscriber + no positive working signal + quiet window
+           ⇒ debounced leave; observer stops; cost returns to zero
+restart:     every open record → interrupted (≠ failed — billed differently)
+herdr death: supervisor signals; every open record it hosted → interrupted, immediately
+idempotency: ONE bounded contract (Sol r3) — a key replays for exactly the
+             advertised 90-day window (durable tombstones carry the true
+             terminal state); S5 receipts MUST expire no later than their
+             dedupe key, so a surviving receipt and a forgotten key can
+             never coexist. "Always" was a lie; a bounded window kept is
+             better than an unbounded one leaked.</code></pre>
+<p><b>The inversion that kills the flag:</b> wave C refused dispatch to non-<code>hot</code> workspaces because an untracked
+turn could never be correlated or billed. In v5 the dispatch <i>itself</i> makes the agent tracked — the reason the flag
+existed is served by the record that replaces it.</p>
+
+<h2>5 · Perf invariants (structural, gated — not wall-clock vibes)</h2>
+<table>
+  <tr><th>#</th><th>Invariant</th><th>Gate</th></tr>
+  <tr><td>I1</td><td>Periodic paths (activity, board, tracking) issue <b>zero</b> herdr process spawns per tick; they read the push feed or one ≤500 ms-cached snapshot per server. Lifecycle never reads the cache.</td><td>spawn-count assertion in the eval gate</td></tr>
+  <tr><td>I2</td><td>Pane discovery is O(Σ P<sub>server</sub> + A), never O(A×P)</td><td>flat-curve probe (Gauge FIX1 harness)</td></tr>
+  <tr><td>I3</td><td>Observing one appended turn costs O(Δbytes), independent of transcript size; full re-parse only on shrink/rotation</td><td>bytes-read assertion with a 91 MB fixture-shaped file</td></tr>
+  <tr><td>I4</td><td>An idle fleet costs zero: no dispatches + nothing focused + no subscribers ⇒ no timers doing per-agent work</td><td>tick-cost probe at N=0</td></tr>
+  <tr><td>I5</td><td>A failed instantiate/boot leaves <b>nothing</b> tracked; activity latency returns to baseline within one drain interval</td><td>the test that would have caught the 38× incident</td></tr>
+  <tr><td>I6</td><td>The main thread never runs an unbounded spawn/busy-wait storm inside an event handler; attach bursts use the one-snapshot batch</td><td>switch-latency probe (P95 budget 500 ms at 8 panes)</td></tr>
+  <tr><td>I6b</td><td>Latency telemetry dedupe is restart-local at-most-once BY CONTRACT: a restart between scrape emission and durable closure may double-count one sample. Telemetry, never billing state — billing identity lives on the dispatch record (turnUuid), which is durable.</td><td>documented contract (Sol r6 P2)</td></tr>
+  <tr><td>I7</td><td>Billing-grade decisions (dispatch completion, receipt settle) require positive evidence — parser finality plus prompt identity plus a durable ledger row. Quiet time, herdr's word, and timestamps may hold or reject, never prove. Fail-closed: if the ledger cannot append, the dispatch is refused.</td><td>finality + fail-open tests (Sol r1 P0 set)</td></tr>
+</table>
+
+<h2>6 · Disposition — what returns, in what order</h2>
+<table>
+  <tr><th>Slice</th><th>Content</th><th>Source</th><th>Call</th></tr>
+  <tr><td>S1</td><td>Perf substrate: one-snapshot attach batch, early ambiguity verdict, status-feed refresh coalescing, suspend/resume by stat+identity; batch <code>scrollStates</code> + 500 ms activity cache</td><td><code>a1e0dd6</code> + Gauge FIX1 (archive)</td><td class="keep">RE-LAND first</td></tr>
+  <tr><td>S2</td><td>Work-driven tracking module + session-file observer drain (A4/A6); dispatch-driven watch</td><td>new</td><td class="keep">BUILD</td></tr>
+  <tr><td>S3</td><td>Dispatch plane, PTY-free, <code>isHot</code> deleted (tracking replaces it); <code>captureDeep</code>; sweeps/hydrate</td><td>archive <code>dispatch.ts</code>, reshaped</td><td class="keep">RE-LAND on v5</td></tr>
+  <tr><td>S4</td><td>Route manifest + pure gate + auth wiring (the export door)</td><td><code>2d94ff5</code> + archive auth-gate</td><td class="keep">RE-LAND</td></tr>
+  <tr><td>S5</td><td>Quote/receipts/credentials + receipt ledger (metered dispatch)</td><td><code>d110aff</code> + archive pure modules</td><td class="keep">RE-LAND</td></tr>
+  <tr><td>S6</td><td>Process guards; rotation rebind (with spawn-time probe); incremental tail parser hardening</td><td>archive</td><td class="keep">RE-LAND</td></tr>
+  <tr><td>S7</td><td>Instance factory: catalog → mint → place → verify, on derived tracking; <code>instance.status = active|stopped</code>; rollback ladder kept verbatim; per-instance herdr session</td><td>archive, rebuilt</td><td class="redo">REBUILD (dev flag)</td></tr>
+  <tr><td>—</td><td><code>serviceState hot|dormant|parked</code>, its routes, events, badges, capacity cap, orphan reconcile</td><td>—</td><td class="cut">STAYS CUT (derived instead)</td></tr>
+</table>
+<p>User-facing vocabulary: a workspace is <b>working</b> or <b>quiet</b> (derived); an instance is <b>active</b> or
+<b>stopped</b> (a commercial fact). Nothing else to learn.</p>
+
+<h2>7 · Concurrency semantics, stated precisely</h2>
+<ul>
+  <li><b>Per agent:</b> one in-flight dispatch (the agent process is a single conversation). Second dispatch → 409 busy; replay of the same idempotency key → 200 always.</li>
+  <li><b>Per fleet:</b> N agents run N dispatches concurrently. No workspace cap, no scheduler mode. The only global limits are billing-side (pending-quote caps, spend caps).</li>
+  <li><b>Observation under concurrency:</b> tracked agents are observed from their files (I3) — concurrent turns cost ΔS each, not fleet inventories. The one shared snapshot per server serves everyone's pane questions (I2).</li>
+  <li><b>Failure:</b> herdr dying interrupts (never fails) every in-flight dispatch it hosted; the app survives (process guards) and hydrate closes honestly on restart. Panes are never killed by tracking decisions.</li>
+</ul>
+
+<footer>
+  Cookrew Dev · Conductor · v5 redesign on base 53f3edc · inputs: base cost map (file:line-verified), archive mining of
+  0306793..5224198 + wave-C surface, Gauge FIX1 curve, a1e0dd6 eval gates, 38× incident post-mortem ·
+  supersedes scratchpad/v5-concurrency-redesign.html (archive branch) · r1: Sol adversarial review returned UNSOUND (P0:6 P1:9) — A2/A4 amended, lifecycle rewritten (finality, prompt identity, fail-closed ledger, tombstones, death-interrupt), fixes landed in the same round
+</footer>
+</main>
+</body>
+</html>
