@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SEC-S — what is enforced vs conventional today</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔒</text></svg>">
+<style>
+  :root{--bg:#fbfaf8;--panel:#fff;--ink:#1b1a18;--muted:#6b6660;--line:#e5e1da;
+    --no:#b3261e;--part:#a16207;--yes:#15803d;--chip:#f3f0eb;--code:#f6f4f0}
+  @media (prefers-color-scheme:dark){:root{--bg:#14140f;--panel:#1c1c18;--ink:#ece8e1;--muted:#9c968c;
+    --line:#2f2e29;--no:#f87171;--part:#fbbf24;--yes:#4ade80;--chip:#26261f;--code:#221f1b}}
+  :root[data-theme="dark"]{--bg:#14140f;--panel:#1c1c18;--ink:#ece8e1;--muted:#9c968c;--line:#2f2e29;
+    --no:#f87171;--part:#fbbf24;--yes:#4ade80;--chip:#26261f;--code:#221f1b}
+  :root[data-theme="light"]{--bg:#fbfaf8;--panel:#fff;--ink:#1b1a18;--muted:#6b6660;--line:#e5e1da;
+    --no:#b3261e;--part:#a16207;--yes:#15803d;--chip:#f3f0eb;--code:#f6f4f0}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 ui-serif,Georgia,serif}
+  .wrap{max-width:880px;margin:0 auto;padding:40px 22px 80px}
+  h1{font-size:1.85rem;margin:0 0 6px;line-height:1.2}
+  h2{font-size:1.2rem;margin:42px 0 12px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+  .sub{color:var(--muted);font-size:.93rem;margin:0 0 24px}
+  code{background:var(--code);padding:.12em .38em;border-radius:4px;
+    font:.86em ui-monospace,SFMono-Regular,Menlo,monospace}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+    overflow-x:auto;font:.82rem/1.5 ui-monospace,Menlo,monospace}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:.9rem}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font:600 .71rem/1.3 ui-sans-serif,system-ui;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .v{font:600 .68rem/1 ui-sans-serif,system-ui;letter-spacing:.08em;text-transform:uppercase;
+    padding:5px 8px;border-radius:5px;background:var(--chip);white-space:nowrap}
+  .v.no{color:var(--no)} .v.part{color:var(--part)} .v.yes{color:var(--yes)}
+  .f{background:var(--panel);border:1px solid var(--line);border-left-width:4px;border-radius:9px;
+    padding:16px 19px;margin:15px 0}
+  .f.no{border-left-color:var(--no)} .f.part{border-left-color:var(--part)} .f.yes{border-left-color:var(--yes)}
+  .fh{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:7px}
+  .ft{font-weight:600;font-size:1.01rem}
+  .loc{font:.75rem ui-monospace,monospace;color:var(--muted)}
+  .f p{margin:.55em 0} .f p:last-child{margin-bottom:0}
+  .lede{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:17px 20px}
+  .lede p{margin:.5em 0}
+  footer{margin-top:52px;padding-top:15px;border-top:1px solid var(--line);color:var(--muted);font-size:.81rem}
+  .toggle{position:fixed;top:14px;right:14px;background:var(--panel);color:var(--ink);
+    border:1px solid var(--line);border-radius:7px;padding:7px 11px;cursor:pointer;font:.75rem ui-sans-serif,system-ui}
+  @media(max-width:700px){.wrap{padding:26px 15px 60px}h1{font-size:1.45rem}}
+</style>
+</head>
+<body>
+<button class="toggle" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark'">◐ theme</button>
+<div class="wrap">
+
+<h1>SEC-S — what is enforced vs merely conventional</h1>
+<p class="sub">Audit of the existing confinement primitives (<code>terminal-cwd.ts</code>,
+<code>pty-scope.ts</code>, <code>pty.ts</code>) ahead of Atlas's instantiator note ·
+Commander · against <code>dev@afb027f</code></p>
+
+<div class="lede">
+  <p><strong>Of the five SEC-S requirements, none are enforced today.</strong> That is the
+  expected answer for a feature that has not been built — the useful part is which
+  primitives <em>look</em> like they already help and do not, because those are what a
+  design note will be written on top of.</p>
+  <p>Two do exactly that. <code>sanitizeAgentEnv</code> is named like env scrubbing and is a
+  three-key denylist for a different purpose entirely. <code>PtyOwnership</code> reads like
+  session isolation and is a bookkeeping index. And one premise stated in the R31 section
+  — “store partitions already separate” — <strong>is not true of the turn store</strong>.</p>
+</div>
+
+<h2>Scoreboard</h2>
+<table>
+  <thead><tr><th>SEC-S requirement</th><th>Today</th><th>What exists</th></tr></thead>
+  <tbody>
+    <tr><td>Scrubbed env — none of the owner's keys</td><td><span class="v no">Not enforced</span></td><td>A denylist of 3 keys, written for transcript suppression</td></tr>
+    <tr><td>Confined to sandbox dir — <em>enforced</em>, not conventional</td><td><span class="v no">Not enforced</span></td><td>Nothing. And the cwd path <em>widens</em> the trust set</td></tr>
+    <tr><td>No cross-session reads</td><td><span class="v no">Not enforced</span></td><td>An index that grants views, not walls; turn store is flat</td></tr>
+    <tr><td>Orch agent's tools hit the same walls</td><td><span class="v no">Not enforced</span></td><td>No walls to hit — the tools are the walls' absence</td></tr>
+    <tr><td>END destroys the sandbox</td><td><span class="v no">Does not exist</span></td><td>In-memory index cleanup only; no sandbox concept</td></tr>
+    <tr><td colspan="3" style="padding-top:14px"><em>Primitives that ARE real and worth building on — see the last section</em></td></tr>
+  </tbody>
+</table>
+
+<h2>The two that look like help</h2>
+
+<div class="f no">
+  <div class="fh"><span class="v no">Trap</span><span class="ft">1 · <code>sanitizeAgentEnv</code> is not env scrubbing</span>
+    <span class="loc">src/main/pty.ts:374</span></div>
+<pre>export function sanitizeAgentEnv(env) {
+  const clean = {}
+  for (const [key, value] of Object.entries(env)) {
+    if (key === 'CLAUDECODE' || key === 'CLAUDE_PID' || key === 'CLAUDE_EFFORT') continue
+    if (key.startsWith('CLAUDE_CODE_')) continue
+    clean[key] = value              // <-- everything else, verbatim
+  }
+  return clean
+}</pre>
+  <p>Its own comment says what it is for: <em>“a launcher-session marker turns off the agent's
+  transcript saving”</em>. It exists to defeat Claude Code's nested-session detection. It is not
+  a secrets boundary and was never claimed to be one.</p>
+  <p>So every spawned harness inherits the owner's whole environment —
+  <code>ANTHROPIC_API_KEY</code>, <code>GITHUB_TOKEN</code>, <code>AWS_*</code>,
+  <code>SSH_AUTH_SOCK</code>, <code>HOME</code>. Observable on the running fleet right now:
+  the pi processes carry <code>KREWCLI_KREWHUB_URL</code>, <code>BUB_API_FORMAT</code> and
+  <code>INIT_CWD</code> straight through.</p>
+  <p><strong>For the instantiator:</strong> a denylist cannot be completed, and this one is not
+  even aimed at the right target. The env must be <em>constructed</em> — start from <code>{}</code>,
+  add the handful of variables the harness needs, and never enumerate what to remove. The
+  danger is the name: someone reading <code>sanitizeAgentEnv(process.env)</code> at the spawn
+  site has every reason to think this box is ticked.</p>
+</div>
+
+<div class="f no">
+  <div class="fh"><span class="v no">Trap</span><span class="ft">2 · <code>PtyOwnership</code> is an index, not a wall</span>
+    <span class="loc">src/main/pty-scope.ts</span></div>
+  <p>It maps terminal id → workspace id so a scope can take a filtered <em>view</em> of one
+  shared PTY map. Its docstring is explicit that the sharing is deliberate — the orphan reaper
+  needs to see every terminal the app owns, and N managers each doing discovery is the
+  <code>O(attached × panes)</code> shape that cost 190ms → 6.85s in August.</p>
+  <p>Two consequences for sessions:</p>
+  <p>• <code>claim()</code> <strong>moves</strong> a terminal between workspaces on demand — that is
+  the cut-and-paste-across-workspaces feature. Under a session model it is a cross-session
+  transfer primitive with no authorization step in front of it.</p>
+  <p>• The reaper's completeness requirement (<code>allTerminalIdsStrict</code> must see
+  <em>everything</em>) is in direct tension with per-session isolation, and separately with
+  PERF-N: a global inventory is <code>O(resident)</code> by construction. Worth naming in the
+  note before the design assumes both.</p>
+</div>
+
+<h2>The premise that is false</h2>
+
+<div class="f no">
+  <div class="fh"><span class="v no">Correction</span><span class="ft">3 · The turn store is not partitioned</span>
+    <span class="loc">src/main/turn-store.ts — <code>fileFor()</code></span></div>
+  <p>R31 says <em>“sandbox dirs mutually invisible, store partitions already separate.”</em>
+  Workspaces do get their own directory under <code>~/.cookrew/workspaces/&lt;id&gt;/</code>.
+  The checkpoint ledger does not:</p>
+<pre>private fileFor(terminalId) {
+  return path.join(this.dir, `${this.safeId(terminalId)}.jsonl`)   // flat
+}
+
+~/.cookrew/turns/&lt;terminalId&gt;.jsonl                  399 files, one namespace
+~/.cookrew/checkpoint-annotations/&lt;terminalId&gt;.json  same shape</pre>
+  <p>Conversation transcripts and their Sous titles are keyed by terminal id in one flat
+  namespace with no workspace or session segment. Anything that can name a terminal id can read
+  any session's conversation — and a terminal id is not a secret, it is on the canvas and in
+  every IPC payload. A caller's prompt-injected orch agent that can reach a read of this store
+  reads the owner's history and every other caller's.</p>
+  <p><strong>For the instantiator:</strong> partitioning this is not a path prefix bolted on later.
+  <code>TurnStore</code> is documented as the ONLY reader of these files, so the partition can be
+  introduced inside it — but <code>loadAll()</code> walks the whole directory and is what the
+  board and checkpoint search run on, so a partition changes those call sites too.</p>
+</div>
+
+<h2>Confinement: nothing, and it widens</h2>
+
+<div class="f no">
+  <div class="fh"><span class="v no">Not enforced</span><span class="ft">4 · <code>moveTerminalCwd</code> takes any path and enrols it</span>
+    <span class="loc">src/main/terminal-cwd.ts:60 · ipc <code>workspace:dir:add</code></span></div>
+  <p>The only check on the target is that it exists:</p>
+<pre>if (!deps.store.dirs().includes(target)) {
+  if (!deps.dirExists(target)) throw new Error(...)
+  deps.store.addWorkspaceDir(deps.store.activeId, target)   // <-- enrols it
+}</pre>
+  <p>There is no containment root. A directory outside the workspace is not refused — it is
+  <em>added to the workspace</em>, so the operation grows the trust set rather than being checked
+  against it. It is renderer-reachable (<code>addWorkspaceDir</code> is on the preload bridge,
+  and the file browser drives the move).</p>
+  <p>This is the week-one <code>rmSync</code> traversal family, with one difference that makes it
+  worse rather than better: that bug read or deleted outside the root, this one <strong>relocates
+  the root</strong>. A traversal fix that normalises the path does not touch it.</p>
+  <p>Every containment check in <code>src/main</code> — all three of them:</p>
+<pre>mobile-server.ts:540   !file.startsWith(root + path.sep)     static file serving
+pin-store.ts:45        !file.startsWith(root + path.sep)     pin store
+preset-store.ts:70     dir !== root && !dir.startsWith(...)  preset store</pre>
+  <p>None guard terminal cwd or spawn. And the shape itself is the fragile one: a
+  <code>startsWith</code> on an un-normalised path is only sound after <code>realpath</code> —
+  <code>/root/../etc</code> and a symlink both defeat it. Do not let the instantiator copy this
+  pattern; give it one audited helper and make these three use it.</p>
+</div>
+
+<div class="f no">
+  <div class="fh"><span class="v no">Structural</span><span class="ft">5 · cwd cannot be the boundary, at any quality of check</span></div>
+  <p>Worth stating plainly before the note is written, because it bounds what a review can
+  approve. The thing being confined is a <strong>PTY running a shell</strong>. The caller types
+  <code>cd ..</code>. Validating the cwd at spawn constrains where the agent <em>starts</em> and
+  nothing about where it goes one keystroke later; the same is true of every tool the harness
+  can call, which is the whole filesystem by default.</p>
+  <p>Confinement therefore has to be OS-enforced — a sandbox profile
+  (<code>sandbox-exec</code>/seatbelt on macOS), a container, or a separate user — and the design
+  note needs to name which, because “the sandbox is the product” is a claim about process
+  isolation, not about a path string. A note that proposes cwd-plus-validation should not pass
+  SEC-S however carefully the validation is written.</p>
+</div>
+
+<h2>END and teardown</h2>
+<div class="f no">
+  <div class="fh"><span class="v no">Does not exist</span><span class="ft">6 · Nothing destroys anything</span></div>
+  <p><code>releaseWorkspace()</code> returns the ids it forgets — an in-memory index cleanup, no
+  filesystem teardown, and no sandbox directory to tear down. <code>TurnStore.remove()</code>
+  does delete a terminal's ledger and annotations (and is careful about it), so the
+  <em>mechanism</em> for destroying per-terminal durable state exists and is tested; nothing ties
+  it to a session lifecycle.</p>
+  <p>One ordering hazard to carry into the note: END must destroy the sandbox <em>and</em> the
+  transcripts, and the transcripts currently live in a flat global namespace (§3). Deleting by
+  terminal id from a session that no longer has an authoritative membership list is how a
+  teardown either misses files or deletes a neighbour's.</p>
+</div>
+
+<h2>What is real, and worth building on</h2>
+<div class="f yes">
+  <div class="fh"><span class="v yes">Enforced</span><span class="ft">Primitives that hold</span></div>
+  <p><strong>One live process per terminal across all backends.</strong>
+  <code>migrateForeignSession</code> kills a copy of the agent living under another multiplexer
+  before resuming it here. That is a genuine single-instance invariant and the right base for
+  “a session's agents cannot be doubled”.</p>
+  <p><strong>One holder per terminal.</strong> <code>PtyOwnership</code> does guarantee that no
+  scope tears down a PTY another scope is holding. That is real isolation — for
+  <em>teardown</em> only, not for reads.</p>
+  <p><strong>Atomic write, fail-closed read.</strong> <code>RegistryHostSettings</code> writes
+  sibling-then-rename and treats an unparseable trust list as empty rather than degrading
+  permissive. That is the shape a sandbox registry should copy verbatim.</p>
+  <p><strong>Refuse rather than infer.</strong> The lineage walk and the registry host resolution
+  both decline on ambiguity and say why. The instantiator will need the same posture for
+  admission control, and the vocabulary already exists in this codebase.</p>
+</div>
+
+<h2>What I will hold the note to</h2>
+<p>Concretely, when Atlas's design note lands, these are the questions it has to answer before
+any code — each one because the audit above shows nothing in the tree answers it today:</p>
+<p>1. Which OS mechanism enforces the sandbox, given a shell can <code>cd ..</code>?
+2. Is the spawn env <em>constructed</em> from empty, and what is the allowlist?
+3. How is the turn store partitioned, and what happens to <code>loadAll()</code>?
+4. What authorizes <code>claim()</code> moving a terminal across sessions?
+5. What does END delete, in what order, and how does it enumerate membership authoritatively?
+6. How does the orphan reaper keep global visibility without becoming a cross-session read —
+and without being <code>O(resident)</code>, which is PERF-N's problem in the same component?</p>
+
+<h2>Addendum — the IPC boundary is conventional too</h2>
+
+<div class="f no">
+  <div class="fh"><span class="v no">Not enforced</span><span class="ft">7 · No IPC handler carries a principal</span>
+    <span class="loc">src/main/index.ts — 60 <code>ipcMain.handle</code> registrations</span></div>
+  <p>The enumeration the instantiator review asked for. Every handler that acts on a workspace or
+  a terminal takes a <strong>bare id and does the work</strong>. There is no caller identity in any
+  signature, no session argument, no authorization step:</p>
+<pre>terminal:setCwd   (nodeId, dir)        -> enrols an arbitrary dir (§4)
+workspace:dir:add (id, dir)            -> same, directly
+workspace:remove  (id)                 -> any workspace
+workspace:switch  (id)                 -> any workspace
+terminal:create   (opts)               -> caller-supplied opts
+pty:attach        (terminalId)         -> see below
+team:clip:set     (nodeIds[], cut)     -> no workspace argument at all
+team:clip:get / team:clip:paste ()     -> no argument at all</pre>
+  <p>That is <em>correct today</em>. The renderer is the owner's own app, so trusting it completely
+  is the right design for a single-tenant tool. It is also precisely what stops being true the
+  moment a session workspace is, in the note's words, “an ordinary resident”: every one of these
+  becomes reachable against a stranger's session, and none of them can tell.</p>
+  <p><strong><code>pty:attach</code> bypasses the ownership index.</strong> It resolves
+  <code>ptys.get(terminalId)</code> straight out of the shared map and never consults
+  <code>PtyOwnership</code>. So the scope index exists, and the live-output path does not ask it —
+  §2's “index, not a wall” made concrete. A caller's Conductor that can name another session's
+  terminal id gets that terminal's live stream.</p>
+  <p><strong>The team clipboard is a cross-workspace channel by construction.</strong>
+  <code>team:clip:set</code> takes node ids with no workspace argument; <code>get</code> and
+  <code>paste</code> take none at all. Copy from one workspace, paste into another is the feature.
+  Under sessions that is a data channel between callers — and <code>set</code> with
+  <code>cut: true</code> removes from the source.</p>
+  <p><strong>What this means for M-C.</strong> The sandbox cannot be built on top of this surface as
+  it stands. Either a principal is threaded through IPC and every handler above learns to refuse,
+  or session workspaces are never reachable from this surface at all. That is an architectural
+  fork and it belongs in the design note, not in a later hardening pass — it changes what the
+  instantiator is allowed to reuse, and “an ordinary resident” is currently listed only as a saving.</p>
+</div>
+
+<footer>
+  Read from source at <code>dev@afb027f</code>; the flat turn-store namespace and the inherited
+  env were confirmed against the running install, not inferred. No code changed by this audit.
+</footer>
+</div>
+</body>
+</html>

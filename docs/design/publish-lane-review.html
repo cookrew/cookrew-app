@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review — feat/publish-lane</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔎</text></svg>">
+<style>
+  :root{
+    --bg:#fbfaf8; --panel:#fff; --ink:#1b1a18; --muted:#6b6660; --line:#e5e1da;
+    --crit:#b3261e; --high:#c2410c; --med:#a16207; --low:#4b5563; --good:#15803d;
+    --chip:#f3f0eb; --code:#f6f4f0;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{ --bg:#14140f; --panel:#1c1c18; --ink:#ece8e1; --muted:#9c968c; --line:#2f2e29;
+      --crit:#f87171; --high:#fb923c; --med:#fbbf24; --low:#9ca3af; --good:#4ade80;
+      --chip:#26261f; --code:#221f1b; }
+  }
+  :root[data-theme="dark"]{ --bg:#14140f; --panel:#1c1c18; --ink:#ece8e1; --muted:#9c968c; --line:#2f2e29;
+    --crit:#f87171; --high:#fb923c; --med:#fbbf24; --low:#9ca3af; --good:#4ade80; --chip:#26261f; --code:#221f1b; }
+  :root[data-theme="light"]{ --bg:#fbfaf8; --panel:#fff; --ink:#1b1a18; --muted:#6b6660; --line:#e5e1da;
+    --crit:#b3261e; --high:#c2410c; --med:#a16207; --low:#4b5563; --good:#15803d; --chip:#f3f0eb; --code:#f6f4f0; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 ui-serif,Georgia,'Iowan Old Style',serif;-webkit-text-size-adjust:100%}
+  .wrap{max-width:860px;margin:0 auto;padding:40px 22px 80px}
+  h1{font-size:1.9rem;line-height:1.2;margin:0 0 6px}
+  h2{font-size:1.25rem;margin:44px 0 12px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+  .sub{color:var(--muted);font-size:.94rem;margin:0 0 26px}
+  code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  code{background:var(--code);padding:.12em .38em;border-radius:4px;font-size:.87em}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;
+    padding:13px 15px;overflow-x:auto;font-size:.83rem;line-height:1.5}
+  .f{background:var(--panel);border:1px solid var(--line);border-left-width:4px;
+    border-radius:9px;padding:17px 19px;margin:16px 0}
+  .f.critical{border-left-color:var(--crit)} .f.high{border-left-color:var(--high)}
+  .f.medium{border-left-color:var(--med)} .f.low{border-left-color:var(--low)}
+  .f.good{border-left-color:var(--good)}
+  .fh{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:8px}
+  .sev{font:600 .68rem/1 ui-sans-serif,system-ui;letter-spacing:.09em;text-transform:uppercase;
+    padding:5px 8px;border-radius:5px;background:var(--chip);white-space:nowrap}
+  .sev.critical{color:var(--crit)} .sev.high{color:var(--high)}
+  .sev.medium{color:var(--med)} .sev.low{color:var(--low)} .sev.good{color:var(--good)}
+  .ft{font-weight:600;font-size:1.02rem}
+  .loc{font-family:ui-monospace,monospace;font-size:.76rem;color:var(--muted)}
+  .f p{margin:.6em 0} .f p:last-child{margin-bottom:0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:.9rem}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font:600 .72rem/1.3 ui-sans-serif,system-ui;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .lede{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+  .lede p{margin:.5em 0}
+  footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--line);
+    color:var(--muted);font-size:.82rem}
+  .toggle{position:fixed;top:14px;right:14px;background:var(--panel);color:var(--ink);
+    border:1px solid var(--line);border-radius:7px;padding:7px 11px;cursor:pointer;
+    font:.75rem ui-sans-serif,system-ui}
+  @media(max-width:700px){.wrap{padding:26px 15px 60px}h1{font-size:1.5rem}}
+</style>
+</head>
+<body>
+<button class="toggle" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark'">◐ theme</button>
+<div class="wrap">
+
+<h1>Review — <code>feat/publish-lane</code></h1>
+<p class="sub">
+  Forge · 2 commits (<code>6af66c0</code> payout checksum, <code>248e5fd</code> registry host trust)
+  · 876 insertions across 9 files · reviewed against <code>dev@8ac2698</code>
+</p>
+
+<div class="lede">
+  <p><strong>No CRITICAL.</strong> Nothing here is exploitable today, and that is a
+  finding rather than a clean bill: there is no payout address anywhere in the
+  codebase yet, so there is no live money path for the checksum to be wrong about.</p>
+  <p>The cryptography is <strong>correct</strong> — I verified it independently rather than
+  reading it. What is wrong is the <strong>wiring</strong>: both commits describe outcomes the
+  branch does not produce. Neither new check has a caller. The risk is not that
+  the code is broken; it is that the commit messages and module headers assert
+  protection that is not in force, so the next lane to touch payouts will find
+  <code>checkPayoutAddress</code> already written and reasonably assume it already runs.</p>
+</div>
+
+<h2>Summary</h2>
+<table>
+  <thead><tr><th>#</th><th>Severity</th><th>Finding</th><th>Where</th></tr></thead>
+  <tbody>
+    <tr><td>H1</td><td><span class="sev high">High</span></td><td>Payout verification has no caller, and the “before” state it claims to replace does not exist</td><td><code>eip55.ts</code></td></tr>
+    <tr><td>H2</td><td><span class="sev high">High</span></td><td>The dead-end refusal is never surfaced — <code>registryHostHelp</code>, <code>registryHostRefusal</code>, <code>recognisesHost</code> all unused</td><td><code>registry-host.ts</code>, <code>index.ts</code></td></tr>
+    <tr><td>H3</td><td><span class="sev high">High</span></td><td>The settings surface does not exist: <code>add</code>/<code>remove</code> have no IPC and no caller</td><td><code>registry-settings.ts</code></td></tr>
+    <tr><td>M1</td><td><span class="sev medium">Medium</span></td><td>~1 in 3,700 valid addresses is permanently unpublishable, and the suggested fix is the string just refused</td><td><code>eip55.ts</code></td></tr>
+    <tr><td>M2</td><td><span class="sev medium">Medium</span></td><td>Malformed host entries are dropped silently, producing “no host configured” for an owner who configured one</td><td><code>registry-host.ts</code></td></tr>
+    <tr><td>M3</td><td><span class="sev medium">Medium</span></td><td><code>recognisesHost</code> lowercases one side only — latent, but it is the exported API</td><td><code>registry-host.ts</code></td></tr>
+    <tr><td>L1</td><td><span class="sev low">Low</span></td><td><code>toChecksumAddress</code> is exported and silently mangles an unprefixed address</td><td><code>eip55.ts</code></td></tr>
+    <tr><td>L2</td><td><span class="sev low">Low</span></td><td><code>burn-address</code> covers only the zero address</td><td><code>eip55.ts</code></td></tr>
+    <tr><td>L3</td><td><span class="sev low">Low</span></td><td>An uppercase <code>0X</code> prefix is reported as <code>malformed</code></td><td><code>eip55.ts</code></td></tr>
+  </tbody>
+</table>
+
+<h2>What I verified rather than read</h2>
+
+<div class="f good">
+  <div class="fh"><span class="sev good">Verified</span><span class="ft">The vendored Keccak-256 is correct</span></div>
+  <p>A hand-rolled hash under a payout check is the first thing to distrust, so I
+  ran it against published vectors instead of auditing it by eye — though the
+  structure also checks out: theta’s <code>(x+4)%5</code>, the rho/pi carry loop,
+  chi’s <code>^ MASK64</code>, all 24 round constants, little-endian absorb and squeeze,
+  and the <code>pad10*1</code> block sizing at 135/136/137 bytes.</p>
+<pre>keccak256('')        c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470  ✓
+keccak256('abc')     4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45  ✓
+keccak256('testing') 5f16f4c7f149ac4f9510d9cf8cf384038ad348b3bcdc01915f95de12df9d1b02  ✓
+!== node sha3-256('')                                    (the 0x01 vs 0x06 domain byte)  ✓
+EIP-55 official vectors (all four, mixed/upper/lower)                                    ✓</pre>
+  <p>The header’s claim about original-Keccak padding is accurate and the empty-string
+  vector does catch the SHA3 mistake, as it says. This part I would merge as-is.</p>
+</div>
+
+<div class="f good">
+  <div class="fh"><span class="sev good">Verified</span><span class="ft">Also right</span></div>
+  <p>Userinfo smuggling (<code>https://registry.example@attacker.com/</code>) is already
+  disqualified in <code>presetIdFromInstallUrl</code>, and it compares host case-insensitively
+  on <em>both</em> sides. The trust file is written sibling-then-rename, and an unreadable
+  one recognises nothing rather than degrading permissive. A configured list is
+  never merged with dev loopback — the reasoning in that comment is right and worth keeping.</p>
+</div>
+
+<h2>High</h2>
+
+<div class="f high">
+  <div class="fh"><span class="sev high">High</span><span class="ft">H1 · The payout verification never runs</span>
+    <span class="loc">src/shared/eip55.ts</span></div>
+  <p><code>checkPayoutAddress</code> has no caller anywhere in <code>src/</code>. The commit is
+  titled <em>“publish verifies the payout address instead of checking its shape”</em>;
+  <code>preset-publish.ts</code> contains no address handling at all.</p>
+  <p>The module header states: <em>“Validation today is format-only — <code>0x</code> plus 40
+  hex — which accepts every single-character typo an author can make.”</em> That describes
+  a codebase this is not. There is no <code>payTo</code>, no payout field, and no
+  <code>0x…{40}</code> regex outside <code>eip55.ts</code> itself. The 118 lines of tests pass
+  because they call the function directly.</p>
+  <p>Building the checker before the field it guards is defensible sequencing. Asserting
+  in the commit message and the header that publish <em>is</em> verifying is not: whoever
+  adds the payout field later will find this module already written and tested, and the
+  cheapest reading is that it is already in force. That is how a check that never runs
+  survives — this lane has produced three of those already.</p>
+  <p><strong>Ask:</strong> either wire it at the point the address is accepted, or restate both
+  the commit subject and the header as groundwork and name the lane that must call it.</p>
+</div>
+
+<div class="f high">
+  <div class="fh"><span class="sev high">High</span><span class="ft">H2 · The dead end is still a dead end</span>
+    <span class="loc">src/shared/registry-host.ts · src/main/index.ts:1928</span></div>
+  <p>Commit <code>248e5fd</code> is titled <em>“the empty registry host stops being a dead
+  end without becoming a default.”</em> The half that stops it being a dead end is the
+  refusal text — and it is never shown. <code>registryHostRefusal</code> is defined at
+  <code>index.ts:1928</code> and referenced nowhere; <code>registryHostHelp</code> has no
+  other caller; <code>recognisesHost</code> is exported and unused.</p>
+  <p>The live path is unchanged: <code>presetIdFromInstallUrl(url, registryHosts())</code>
+  returns <code>null</code> on an empty list, exactly as before, and the user sees the same
+  nothing that Magpie hit. The <em>“never a silent default”</em> half did land and is correct;
+  the <em>“never a dead end either”</em> half is written but not connected.</p>
+</div>
+
+<div class="f high">
+  <div class="fh"><span class="sev high">High</span><span class="ft">H3 · “Reachable without an environment variable” is not reachable</span>
+    <span class="loc">src/main/registry-settings.ts</span></div>
+  <p><code>RegistryHostSettings.add</code> and <code>.remove</code> have no IPC channel and no
+  caller. Only <code>list()</code> is consumed. So the settings file is <em>read</em>, but the
+  only way to write it is to hand-edit <code>~/.cookrew/registry-hosts.json</code> — which is a
+  strictly worse configuration mechanism than the environment variable this commit
+  exists to replace, since it is undocumented and unvalidated.</p>
+  <p>The module header’s premise — <em>“an environment variable is a configuration mechanism
+  for whoever launches the process, which on a packaged app is nobody”</em> — is exactly right,
+  and it is still true after this branch.</p>
+</div>
+
+<h2>Medium</h2>
+
+<div class="f medium">
+  <div class="fh"><span class="sev medium">Medium</span><span class="ft">M1 · ~1 in 3,700 addresses can never be published, and the fix offered is the input</span>
+    <span class="loc">src/shared/eip55.ts:112</span></div>
+  <p>An address whose canonical EIP-55 form happens to be all-lowercase — every letter
+  landing on a hash nibble under 8 — is indistinguishable from an unchecksummed paste, so it
+  is refused as <code>unverifiable-case</code>. The refusal carries a <code>suggestion</code>
+  produced by <code>toChecksumAddress</code>, which for these addresses is byte-identical to
+  what was just rejected. The author is told to paste the mixed-case form “suggested below”
+  and the suggestion is the string they pasted. There is no form of their address that passes.</p>
+  <p>Found by search, not by argument:</p>
+<pre>0x0a7384019ee13ed132e70549512345383e6e9e01
+  → { ok: false, reason: 'unverifiable-case',
+      suggestion: '0x0a7384019ee13ed132e70549512345383e6e9e01' }
+  suggestion === input:  true
+
+measured rate: 54 / 200,000 random addresses  ≈  1 in 3,704</pre>
+  <p>The all-lowercase refusal itself is a defensible ruling and I would keep it. The defect
+  is that the branch it lands on cannot detect its own no-op. At minimum: when
+  <code>suggestion === candidate</code>, say so — that this address carries no case
+  information because its checksum form has none, and offer the mixed-case-uppercase
+  round trip or an explicit acknowledgement path. Silently handing back the rejected
+  string reads as a product bug and will be reported as one.</p>
+</div>
+
+<div class="f medium">
+  <div class="fh"><span class="sev medium">Medium</span><span class="ft">M2 · A malformed host is dropped in silence</span>
+    <span class="loc">src/shared/registry-host.ts:57</span></div>
+  <p><code>parseHosts</code> filters entries failing <code>HOSTNAME_RE</code> and reports
+  nothing. The likeliest owner mistake is a scheme:</p>
+<pre>COOKREW_REGISTRY_HOST=https://registry.example.com
+  → parseHosts → []  → source: 'none'
+  → "No registry host is configured … or set COOKREW_REGISTRY_HOST"</pre>
+  <p>The owner set it. They are told to set it. This is the same shape as the dead end the
+  sibling commit exists to remove, arriving through the validation path instead of the empty
+  one. Strict parsing is right; discarding without a word is not. A refusal that names the
+  rejected entry and why costs one string.</p>
+</div>
+
+<div class="f medium">
+  <div class="fh"><span class="sev medium">Medium</span><span class="ft">M3 · <code>recognisesHost</code> lowercases the candidate but not the list</span>
+    <span class="loc">src/shared/registry-host.ts:112</span></div>
+  <p><code>recognisesHost</code> does <code>host.trim().toLowerCase()</code> and matches against
+  <code>resolution.hosts</code> verbatim. <code>parseHosts</code> does not lowercase, so an env
+  value of <code>Registry.Example.Com</code> is stored cased and never matches anything.
+  (<code>RegistryHostSettings.add</code> <em>does</em> normalise, so the two configuration routes
+  disagree about the same host.)</p>
+  <p>Latent today in both directions: the function is dead (H2), and the live comparison in
+  <code>presetIdFromInstallUrl</code> lowercases both sides. It fails closed, so it is a lockout
+  rather than a bypass. Flagged because it is the exported predicate — the next caller inherits
+  it, and <code>registry-host.test.ts</code> has no mixed-case case to catch it. Normalising inside
+  <code>parseHosts</code> fixes both routes at once.</p>
+</div>
+
+<h2>Low</h2>
+
+<div class="f low">
+  <div class="fh"><span class="sev low">Low</span><span class="ft">L1 · <code>toChecksumAddress</code> assumes a prefix it does not check</span>
+    <span class="loc">src/shared/eip55.ts:69</span></div>
+  <p><code>address.slice(2)</code> is safe for every internal call (all post-<code>ADDRESS_RE</code>),
+  but the function is exported. Given a bare 40-char hex it silently drops the first two digits
+  and returns a well-formed, wrong, 38-digit address. For a money helper, reject rather than slice.</p>
+</div>
+
+<div class="f low">
+  <div class="fh"><span class="sev low">Low</span><span class="ft">L2 · <code>burn-address</code> means only the zero address</span>
+    <span class="loc">src/shared/eip55.ts:98</span></div>
+  <p>The reason code and message are general; the test is <code>/^0x0{40}$/i</code>. Commonly
+  pasted holes such as <code>0x…dEaD</code> pass as ordinary addresses. Reasonable to scope
+  deliberately — worth naming in the comment so it is not read as covering burns generally.</p>
+</div>
+
+<div class="f low">
+  <div class="fh"><span class="sev low">Low</span><span class="ft">L3 · <code>0X…</code> is reported as malformed</span>
+    <span class="loc">src/shared/eip55.ts:31</span></div>
+  <p>All three regexes require a lowercase <code>0x</code>. An uppercase prefix is a paste
+  artefact, not a malformed address, and the message (“must be 0x followed by 40 hexadecimal
+  characters”) will read as wrong to someone looking at 40 valid hex characters.</p>
+</div>
+
+<h2>On the shape of this branch</h2>
+<p>Both commits are well-reasoned and the comments are the good kind — they explain the
+ruling, not the syntax, and the <em>“cannot verify does not resolve to accept”</em> passage is
+worth keeping verbatim wherever this ends up. The crypto is sound and I would not ask for a
+dependency instead; the vendoring rationale about shared <code>node_modules</code> across linked
+worktrees is real.</p>
+<p>The single systemic note: every finding above the Medium line is the same one. Four new
+modules, 876 lines, four test files — and the two behaviours the commit subjects promise are
+both unreachable from the product. The tests pass because they test the units directly, which
+is exactly the failure mode this codebase has been paying for all week. A test that calls
+<code>checkPayoutAddress</code> proves the function works; nothing here proves publish calls it,
+because publish does not.</p>
+
+<footer>
+  Reviewed by Commander against <code>dev@8ac2698</code> · Keccak and EIP-55 vectors,
+  the dead-end address and the 1-in-3,704 rate were executed against the branch, not inferred.
+  Reviewer does not merge.
+</footer>
+</div>
+</body>
+</html>

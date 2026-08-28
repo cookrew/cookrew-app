@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SEC-S gate — instantiator slice 1</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚦</text></svg>">
+<style>
+ :root{--bg:#fbfaf8;--panel:#fff;--ink:#1b1a18;--muted:#6b6660;--line:#e5e1da;
+   --no:#b3261e;--warn:#a16207;--ok:#15803d;--chip:#f3f0eb;--code:#f6f4f0}
+ @media(prefers-color-scheme:dark){:root{--bg:#14140f;--panel:#1c1c18;--ink:#ece8e1;--muted:#9c968c;
+   --line:#2f2e29;--no:#f87171;--warn:#fbbf24;--ok:#4ade80;--chip:#26261f;--code:#221f1b}}
+ :root[data-theme="dark"]{--bg:#14140f;--panel:#1c1c18;--ink:#ece8e1;--muted:#9c968c;--line:#2f2e29;
+   --no:#f87171;--warn:#fbbf24;--ok:#4ade80;--chip:#26261f;--code:#221f1b}
+ :root[data-theme="light"]{--bg:#fbfaf8;--panel:#fff;--ink:#1b1a18;--muted:#6b6660;--line:#e5e1da;
+   --no:#b3261e;--warn:#a16207;--ok:#15803d;--chip:#f3f0eb;--code:#f6f4f0}
+ *{box-sizing:border-box}
+ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 ui-serif,Georgia,serif}
+ .wrap{max-width:880px;margin:0 auto;padding:40px 22px 80px}
+ h1{font-size:1.8rem;margin:0 0 6px;line-height:1.2}
+ h2{font-size:1.18rem;margin:40px 0 12px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+ .sub{color:var(--muted);font-size:.92rem;margin:0 0 24px}
+ code{background:var(--code);padding:.12em .38em;border-radius:4px;
+   font:.86em ui-monospace,SFMono-Regular,Menlo,monospace}
+ pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+   overflow-x:auto;font:.8rem/1.5 ui-monospace,Menlo,monospace}
+ .f{background:var(--panel);border:1px solid var(--line);border-left-width:4px;border-radius:9px;
+   padding:16px 19px;margin:15px 0}
+ .f.no{border-left-color:var(--no)} .f.warn{border-left-color:var(--warn)} .f.ok{border-left-color:var(--ok)}
+ .fh{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:7px}
+ .v{font:600 .67rem/1 ui-sans-serif,system-ui;letter-spacing:.08em;text-transform:uppercase;
+   padding:5px 8px;border-radius:5px;background:var(--chip);white-space:nowrap}
+ .v.no{color:var(--no)} .v.warn{color:var(--warn)} .v.ok{color:var(--ok)}
+ .ft{font-weight:600;font-size:1.01rem}
+ .f p{margin:.55em 0} .f p:last-child{margin-bottom:0}
+ .lede{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:17px 20px}
+ .lede p{margin:.5em 0}
+ footer{margin-top:50px;padding-top:15px;border-top:1px solid var(--line);color:var(--muted);font-size:.81rem}
+ .toggle{position:fixed;top:14px;right:14px;background:var(--panel);color:var(--ink);
+   border:1px solid var(--line);border-radius:7px;padding:7px 11px;cursor:pointer;font:.75rem ui-sans-serif,system-ui}
+ @media(max-width:700px){.wrap{padding:26px 15px 60px}h1{font-size:1.42rem}}
+</style>
+</head>
+<body>
+<button class="toggle" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark'">◐ theme</button>
+<div class="wrap">
+
+<h1>SEC-S gate — instantiator slice 1</h1>
+<p class="sub">The acceptance, fixed before the diff exists · Commander · measured against the
+running install, <code>dev@afb027f</code></p>
+
+<div class="lede">
+  <p><strong>Two structural findings that change slice 1, before a line is written.</strong>
+  Both were probed against the live app, not read.</p>
+  <p>The ruling says Seatbelt wraps <code>ensureSession</code> rather than
+  <code>attachSpawn</code>. In this tree that is <strong>backwards for tmux and unimplementable
+  for herdr</strong> — and, more seriously, per-session confinement is not reachable at
+  <em>either</em> seam while the tmux server is shared. The same shared server defeats env
+  scrubbing done at spawn time.</p>
+  <p>Neither is a reason to slow slice 1 down. Both are reasons to point it somewhere it can
+  actually work, now, rather than after a wrapper ships that reviews as correct and confines
+  nothing.</p>
+</div>
+
+<h2>Finding 1 — Seatbelt cannot go where the ruling puts it</h2>
+
+<div class="f no">
+  <div class="fh"><span class="v no">Blocks</span><span class="ft">tmux's <code>ensureSession</code> is an empty function</span></div>
+<pre>// tmux-multiplexer.ts:143
+ensureSession(): void {}          // "new-session -A in attachSpawn IS the create-or-reattach"
+
+attachSpawn(spec) {               // ...and this is what actually starts the agent
+  return { file: 'tmux', args: ['-L','cookrew', ..., 'new-session','-A','-s',spec.sessionName,
+                                'sh','-c', bootScript(spec)] }
+}</pre>
+  <p>Wrapping <code>ensureSession</code> on the default backend wraps a no-op. The agent is
+  launched by <code>attachSpawn</code>'s boot script — observable in the live process table right
+  now, ending in <code>exec claude --permission-mode bypassPermissions</code>.</p>
+  <p>For herdr the same wrapper is not merely empty but impossible: its <code>ensureSession</code>
+  creates the pane <em>over a socket</em>, so the process that becomes the agent is a child of the
+  herdr server. A sandbox profile applied inside Cookrew cannot constrain a process another daemon
+  forks.</p>
+</div>
+
+<div class="f no">
+  <div class="fh"><span class="v no">Blocks</span><span class="ft">…and <code>attachSpawn</code> is not right either, because the server is shared</span></div>
+<pre>$ pgrep -fl 'tmux.*cookrew'
+63499 tmux -L cookrew -f …/cookrew.tmux.conf new-session -A -s cookrew_6aaaca9d… sh -c …</pre>
+  <p>One server, label <code>cookrew</code>, every pane a child of it. Two consequences:</p>
+  <p>• <strong>Reattach runs no boot script.</strong> <code>new-session -A</code> attaches to a
+  surviving session — which is the behaviour this layer exists to protect. Sandboxing the attach
+  therefore sandboxes the tmux <em>client</em> while the agent carries on inside the server,
+  unconfined, exactly as it was.</p>
+  <p>• <strong>A pane cannot be confined separately from its server.</strong> The agent's parent
+  predates the session and serves every other session too. <code>sandbox-exec</code> constrains a
+  process and its descendants; there is no seam here that owns only this session's descendants.</p>
+  <p><strong>So the honest options are two, and both are architectural:</strong> a per-session tmux
+  server — its own label and socket, spawned under <code>sandbox-exec</code>, torn down by END —
+  or sessions do not use tmux at all. Slice 1 should pick one explicitly. A Seatbelt call at either
+  existing seam is decorative, and it will pass code review.</p>
+</div>
+
+<h2>Finding 2 — the same server defeats env scrubbing at spawn</h2>
+
+<div class="f no">
+  <div class="fh"><span class="v no">Blocks</span><span class="ft">Panes inherit the server's environment, not the spawn call's</span></div>
+<pre>$ tmux -L cookrew show-environment -g | grep -iE '^(SSH_AUTH|HOME|KREWCLI|PATH)'
+HOME=…
+SSH_AUTH_SOCK=…            <-- the owner's agent socket, in the shared server
+KREWCLI_KREWHUB_URL=…
+KREWCLI_KREW_AUTH_URL=…</pre>
+  <p><code>pty.ts</code>'s own comment already says it: <em>“under tmux/direct the pane (or the
+  tmux SERVER on its first start) inherits this env.”</em> First start. The server here has been up
+  since long before any session; a scrubbed env handed to <code>pty.spawn</code> for session N sets
+  the environment of the tmux <em>client</em>, and the agent in the pane inherits the server's.</p>
+  <p>An <code>envFor(sessionId)</code> that is perfectly written, unit-tested, and applied at the
+  spawn site therefore <strong>passes every test and leaks every key</strong> — which is why the
+  ruling's word for this gate is “probe it, do not read the comment”, and why the probe must read
+  the environment <em>inside the agent's pane</em>.</p>
+  <p><code>SSH_AUTH_SOCK</code> is the one to look at first: it is not a secret that can be
+  rotated, it is a live handle to the owner's loaded keys.</p>
+</div>
+
+<h2>The gate — four probes, and what each must show</h2>
+
+<div class="f warn">
+  <div class="fh"><span class="v warn">P1</span><span class="ft">Env scrub — read the pane, not the call</span></div>
+<pre>tmux -L &lt;session-label&gt; show-environment -g          # server global
+cookrew ask &lt;session Conductor&gt; "print env | sort"   # what the AGENT actually holds
+
+MUST be absent: ANTHROPIC_*, OPENAI_*, GITHUB_*, AWS_*, SSH_AUTH_SOCK,
+                KREWCLI_*, and any path under the owner's HOME
+MUST be present: only the allowlist slice 1 declares</pre>
+  <p>Fails if the assertion is made against the object passed to <code>spawn</code>. The env is
+  scrubbed when the agent cannot see the keys, not when the call site cannot.</p>
+</div>
+
+<div class="f warn">
+  <div class="fh"><span class="v warn">P2</span><span class="ft">Turn-store partition — the session cannot write the owner's ledger</span></div>
+<pre>before=$(shasum ~/.cookrew/turns/&lt;OWNER_TERMINAL&gt;.jsonl)
+# drive a session turn, then:
+after=$(shasum ~/.cookrew/turns/&lt;OWNER_TERMINAL&gt;.jsonl)   # MUST be unchanged
+
+ls ~/.cookrew/turns/                 # MUST NOT contain the session's terminal id flat
+# the session's ledger MUST live under its own partition, and
+TurnStore.loadAll()                  # MUST NOT return the session's records to owner surfaces</pre>
+  <p>Read as well as write: <code>loadAll()</code> is what the board and checkpoint search run on,
+  so a partition that only fixes the write path leaves caller-reads-caller open.</p>
+</div>
+
+<div class="f warn">
+  <div class="fh"><span class="v warn">P3</span><span class="ft">Seatbelt — confines the agent, and the symlink is closed</span></div>
+<pre>ps -o ppid= -p &lt;agent pid&gt;           # parent MUST NOT be the shared cookrew tmux server
+cookrew ask &lt;Conductor&gt; "cat ~/.ssh/id_ed25519"        # MUST be denied
+cookrew ask &lt;Conductor&gt; "cat /etc/passwd"              # MUST be denied
+ln -s / $SANDBOX/esc && cat $SANDBOX/esc/etc/passwd    # MUST be denied  (/tmp-symlink family)
+cookrew ask &lt;Conductor&gt; "cd / && ls"                   # allowed to cd, MUST NOT read</pre>
+  <p>The parent check is the one that catches a decorative wrapper: if the agent's parent is still
+  the shared server, no profile was applied to it whatever the diff says.</p>
+</div>
+
+<div class="f warn">
+  <div class="fh"><span class="v warn">P4</span><span class="ft">cwd confinement — enforced, and not bypassable</span></div>
+<pre>confine('../../etc', s)              -> null
+confine('/etc', s)                   -> null
+confine(symlink-out-of-sandbox, s)   -> null      # realpath BOTH sides, then compare
+confine(nonexistent, s)              -> null      # refuse, never resolve optimistically
+
+ipcRenderer.invoke('terminal:setCwd', &lt;session terminal&gt;, '/etc')   -> MUST refuse
+ipcRenderer.invoke('workspace:dir:add', &lt;session ws&gt;, '/etc')       -> MUST refuse</pre>
+  <p>The last two are the gate that the audit's §4 predicts will be missed: <code>confine</code>
+  at mint is not confinement if <code>moveTerminalCwd</code> still enrols an arbitrary directory
+  afterwards. A <code>startsWith</code> on an unresolved path fails the symlink case — do not copy
+  <code>PresetStore.dirFor</code>, fix it.</p>
+</div>
+
+<h2>Two more I will check that were not in the brief</h2>
+<div class="f warn">
+  <div class="fh"><span class="v warn">P5/P6</span><span class="ft">Reachability and permissions</span></div>
+  <p><strong>P5 — the IPC surface.</strong> Per the audit addendum, <code>pty:attach</code>
+  resolves out of the shared <code>ptys</code> map without consulting <code>PtyOwnership</code>,
+  and the team clipboard takes no workspace argument. Probe: attach to another session's terminal
+  id, and clipboard-copy across sessions. Both must refuse.</p>
+  <p><strong>P6 — <code>bypassPermissions</code>.</strong> The live boot script ends
+  <code>exec claude --permission-mode bypassPermissions</code>. For the owner's own agents that is
+  a deliberate choice. For a stranger's Conductor it means every tool call is auto-approved inside
+  whatever the sandbox permits — so the sandbox is the <em>only</em> boundary, with no second line.
+  Slice 1 should say whether sessions inherit that flag; if they do, P3 stops being one gate among
+  four and becomes the whole of SEC-S.</p>
+</div>
+
+<footer>
+  Written before the diff so the acceptance cannot be argued afterwards. The tmux server
+  environment, the shared-server process tree and the boot script were read from the running
+  install; the seam bodies from the tree. Reviewer does not merge.
+</footer>
+</div>
+</body>
+</html>

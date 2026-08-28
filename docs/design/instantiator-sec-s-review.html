@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SEC-S review — the instantiator note</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+<style>
+ :root{--bg:#fbfaf8;--panel:#fff;--ink:#1b1a18;--muted:#6b6660;--line:#e5e1da;
+   --block:#b3261e;--fix:#a16207;--ok:#15803d;--chip:#f3f0eb;--code:#f6f4f0}
+ @media(prefers-color-scheme:dark){:root{--bg:#14140f;--panel:#1c1c18;--ink:#ece8e1;--muted:#9c968c;
+   --line:#2f2e29;--block:#f87171;--fix:#fbbf24;--ok:#4ade80;--chip:#26261f;--code:#221f1b}}
+ :root[data-theme="dark"]{--bg:#14140f;--panel:#1c1c18;--ink:#ece8e1;--muted:#9c968c;--line:#2f2e29;
+   --block:#f87171;--fix:#fbbf24;--ok:#4ade80;--chip:#26261f;--code:#221f1b}
+ :root[data-theme="light"]{--bg:#fbfaf8;--panel:#fff;--ink:#1b1a18;--muted:#6b6660;--line:#e5e1da;
+   --block:#b3261e;--fix:#a16207;--ok:#15803d;--chip:#f3f0eb;--code:#f6f4f0}
+ *{box-sizing:border-box}
+ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 ui-serif,Georgia,serif}
+ .wrap{max-width:880px;margin:0 auto;padding:40px 22px 80px}
+ h1{font-size:1.8rem;margin:0 0 6px;line-height:1.2}
+ h2{font-size:1.18rem;margin:40px 0 12px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+ .sub{color:var(--muted);font-size:.92rem;margin:0 0 24px}
+ code{background:var(--code);padding:.12em .38em;border-radius:4px;
+   font:.86em ui-monospace,SFMono-Regular,Menlo,monospace}
+ pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+   overflow-x:auto;font:.81rem/1.5 ui-monospace,Menlo,monospace}
+ table{width:100%;border-collapse:collapse;margin:14px 0;font-size:.89rem}
+ th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+ th{font:600 .7rem/1.3 ui-sans-serif,system-ui;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+ .v{font:600 .67rem/1 ui-sans-serif,system-ui;letter-spacing:.08em;text-transform:uppercase;
+   padding:5px 8px;border-radius:5px;background:var(--chip);white-space:nowrap}
+ .v.block{color:var(--block)} .v.fix{color:var(--fix)} .v.ok{color:var(--ok)}
+ .f{background:var(--panel);border:1px solid var(--line);border-left-width:4px;border-radius:9px;
+   padding:16px 19px;margin:15px 0}
+ .f.block{border-left-color:var(--block)} .f.fix{border-left-color:var(--fix)} .f.ok{border-left-color:var(--ok)}
+ .fh{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:7px}
+ .ft{font-weight:600;font-size:1.01rem}
+ .f p{margin:.55em 0} .f p:last-child{margin-bottom:0}
+ .lede{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:17px 20px}
+ .lede p{margin:.5em 0}
+ footer{margin-top:50px;padding-top:15px;border-top:1px solid var(--line);color:var(--muted);font-size:.81rem}
+ .toggle{position:fixed;top:14px;right:14px;background:var(--panel);color:var(--ink);
+   border:1px solid var(--line);border-radius:7px;padding:7px 11px;cursor:pointer;font:.75rem ui-sans-serif,system-ui}
+ @media(max-width:700px){.wrap{padding:26px 15px 60px}h1{font-size:1.42rem}}
+</style>
+</head>
+<body>
+<button class="toggle" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark'">◐ theme</button>
+<div class="wrap">
+
+<h1>SEC-S review — the instantiator design note</h1>
+<p class="sub">Atlas · <code>docs/instantiator-design</code> @ <code>a0bc83e</code> · reviewed before
+code, against SEC-S · companion to the
+<a href="sec-s-confinement-audit.html">enforced-vs-conventional audit</a></p>
+
+<div class="lede">
+  <p><strong>Verdict: BLOCK on two, approve the rest.</strong> This is a good note and S3 is
+  more honest than most security sections ever get — it says what confinement does <em>not</em>
+  buy, unprompted, and it is right.</p>
+  <p>It fails SEC-S on one omission and one false premise. <strong>Env scrubbing is absent
+  entirely</strong> — not a seam, not in the build order, not in the assumptions — and R31 names
+  it as first-slice. And <strong>cross-session isolation rests on “the transcripts are in the
+  owner's store partition”, which is not true</strong>: the turn store is flat and keyed by
+  terminal id. That second one changes the note's own privacy question, because the exposure is
+  not only owner-reads-caller. It is caller-reads-caller.</p>
+</div>
+
+<h2>Against the four SEC-S axes</h2>
+<table>
+ <thead><tr><th>Axis</th><th>Note</th><th>Verdict</th></tr></thead>
+ <tbody>
+  <tr><td>Env scrubbing</td><td>Not mentioned anywhere</td><td><span class="v block">Blocks</span></td></tr>
+  <tr><td>cwd is not a jail</td><td>S3 states the limit correctly and unprompted</td><td><span class="v ok">Approved</span></td></tr>
+  <tr><td>Cross-session isolation</td><td>Sandbox dir confined; transcripts assumed partitioned</td><td><span class="v block">Blocks</span></td></tr>
+  <tr><td>END destroys the sandbox</td><td>Default delete, cleanup after the cut, reuses cancelWhere</td><td><span class="v ok">Approved</span></td></tr>
+ </tbody>
+</table>
+
+<h2>Blocking</h2>
+
+<div class="f block">
+  <div class="fh"><span class="v block">Blocks</span><span class="ft">B1 · Env scrubbing is not in the note at all</span></div>
+  <p>Four axes in SEC-S; the note addresses three. There is no env seam, and “What I will build
+  first” lists neither env scrubbing nor admission control nor per-session budgets — all three of
+  which R31 puts in the first slice by name, for the stated reason that bolting them on later is
+  how the wave-C class happens.</p>
+  <p>This is not theoretical. Every session terminal spawns through the ordinary path, which does:</p>
+<pre>env: { ...sanitizeAgentEnv(process.env), TERM_PROGRAM, COOKREW_*, PATH }
+
+sanitizeAgentEnv = drop CLAUDECODE, CLAUDE_PID, CLAUDE_EFFORT, CLAUDE_CODE_*
+                   keep everything else, verbatim</pre>
+  <p>A three-key denylist whose own comment says it exists to suppress transcript saving. So a
+  stranger's Conductor is spawned holding the owner's <code>ANTHROPIC_API_KEY</code>,
+  <code>GITHUB_TOKEN</code>, <code>AWS_*</code> and <code>SSH_AUTH_SOCK</code>. The name is the
+  trap — it reads at the spawn site like this box is already ticked.</p>
+  <p><strong>Wanted before code:</strong> a seam beside S3, same shape —
+  <code>envFor(sessionId): NodeJS.ProcessEnv</code>, <em>constructed from <code>{}</code></em> with
+  an explicit allowlist, never a denylist. Pure, so the mutant list can include “owner's key is
+  set in <code>process.env</code>” and assert it is absent. A denylist cannot be completed and this
+  one is not even aimed at secrets.</p>
+</div>
+
+<div class="f block">
+  <div class="fh"><span class="v block">Blocks</span><span class="ft">B2 · “The transcripts are in the owner's store partition” — there is no partition</span></div>
+  <p>The note leans on this twice: once under “Where it plugs in”, and once in the privacy
+  question. Verified against the tree and the running install:</p>
+<pre>TurnStore.fileFor(terminalId) =>
+  path.join(this.dir, `${safeId(terminalId)}.jsonl`)     // flat
+
+~/.cookrew/turns/&lt;terminalId&gt;.jsonl                     399 files, one namespace
+~/.cookrew/checkpoint-annotations/&lt;terminalId&gt;.json      same</pre>
+  <p>No workspace segment, no session segment. S3 confines the sandbox <em>directory</em>; nothing
+  confines the <em>ledger</em>. Every session's conversation and every Sous title lands in one
+  namespace keyed by an id that is not a secret — it is on the canvas and in every IPC payload.
+  <code>loadAll()</code> walks the whole directory, and it is what the board and checkpoint search
+  run on.</p>
+  <p><strong>This changes the note's own question.</strong> It is framed as owner-reads-caller,
+  and all three proposed answers are about what to tell the caller about the owner. The finding
+  here is a fourth thing none of them cover: a <em>caller's</em> Conductor that reaches checkpoint
+  search reads <em>other callers'</em> conversations. That is not a promise to reword — it is a
+  partition bug, and it must be fixed whichever answer the owner picks.</p>
+  <p><strong>Wanted before code:</strong> the partition, named as a seam, with
+  <code>loadAll()</code>'s call sites (board, search, rebuild-diff) enumerated, because the
+  partition changes them. <code>TurnStore</code> is documented as the only reader of these files,
+  which is what makes this tractable now and expensive after the first service ships.</p>
+</div>
+
+<h2>Fix before building, not blocking</h2>
+
+<div class="f fix">
+  <div class="fh"><span class="v fix">Fix</span><span class="ft">F1 · The precedent <code>confine()</code> cites fails <code>confine()</code>'s own mutants</span></div>
+  <p>S3 says it follows “the same shape as <code>PresetStore.dirFor</code>”. That shape is:</p>
+<pre>preset-store.ts:70   dir !== root && !dir.startsWith(root + path.sep)
+pin-store.ts:45      !file.startsWith(root + path.sep)
+mobile-server.ts:540 !file.startsWith(root + path.sep)</pre>
+  <p>An un-normalised <code>startsWith</code>. It is defeated by <code>..</code> unless the path was
+  resolved first, and by a symlink always. Atlas's own mutant list has “a session id containing
+  <code>..</code>” and “a symlinked sandbox” — so copying the cited precedent fails his own tests,
+  which is the good outcome, but only if he does not reach for the precedent to make them pass.</p>
+  <p><strong>Wanted:</strong> <code>realpath</code> both sides, then compare, and refuse when the
+  candidate does not exist rather than resolving optimistically. One audited helper, and the three
+  sites above switched to it — they are the only containment checks in <code>src/main</code> and
+  they currently each have their own copy.</p>
+</div>
+
+<div class="f fix">
+  <div class="fh"><span class="v fix">Fix</span><span class="ft">F2 · <code>confine()</code> is bypassed by an existing renderer-reachable path</span></div>
+  <p>S3: “Every terminal in a session gets its cwd through <code>confine</code>.” True at mint.
+  Not true afterwards — <code>moveTerminalCwd</code> sets a terminal's cwd on a different path,
+  reachable from the renderer, and it does not merely permit an outside directory:</p>
+<pre>if (!deps.store.dirs().includes(target)) {
+  if (!deps.dirExists(target)) throw ...
+  deps.store.addWorkspaceDir(deps.store.activeId, target)   // enrols it
+}</pre>
+  <p>The only check is that the path exists. An out-of-sandbox directory is not refused, it is
+  <strong>added to the workspace</strong> — the operation widens the trust set. This is the
+  renderer-reachable <code>rmSync</code> traversal family with the twist that a traversal fix does
+  not touch it: it does not read outside the root, it relocates the root.</p>
+  <p>The note's own sentence is aimed one function too far left — <em>“'we always pass the sandbox
+  dir' is the kind of guarantee this program keeps finding to be decorative.”</em> Exactly right,
+  and the decorative guarantee is <code>moveTerminalCwd</code>, which never calls
+  <code>confine</code>.</p>
+</div>
+
+<div class="f fix">
+  <div class="fh"><span class="v fix">Fix</span><span class="ft">F3 · “An ordinary resident” is the win and the attack surface, and only the win is written down</span></div>
+  <p>Under “Where it plugs in”, a session workspace being an ordinary resident is listed four times
+  as <em>nothing to do</em> — park/drain, CallsInFlight, uniqueSlug, the gate. That is genuinely
+  good reuse. It also means every existing IPC that acts on “a workspace” now acts on a stranger's
+  session, including <code>workspace:dir:add</code>, the cwd move above, and
+  <code>PtyOwnership.claim</code>, which <em>moves</em> a terminal between workspaces with no
+  authorization step (per the audit, it is an index, not a wall).</p>
+  <p><strong>Wanted:</strong> a short enumeration of which existing IPCs become reachable against a
+  session workspace, and what refuses them. Not a redesign — a list, so the reuse is a decision
+  rather than an inheritance.</p>
+</div>
+
+<h2>Approved, and worth saying so</h2>
+
+<div class="f ok">
+  <div class="fh"><span class="v ok">Approved</span><span class="ft">S3's honesty, END's ordering, and the pin hash</span></div>
+  <p><strong>S3 states its own limit.</strong> “It constrains where an agent starts. An agent that
+  runs <code>cd /</code>… is not stopped by a cwd — only by an OS boundary we do not have. So the
+  honest claim is 'a caller's files land in their folder', not 'a caller cannot read yours'.”
+  That is the correct claim, reached without being asked, and it is the sentence I would otherwise
+  have written this review to force. Keep it in the code, not only the note.</p>
+  <p><strong>END.</strong> Reusing <code>CallsInFlight.cancelWhere</code> rather than growing a
+  second cancellation path is right, and “cleanup runs after the cut, never before” is the ordering
+  a teardown gets wrong exactly once. Deleting the sandbox by default is the correct posture —
+  keeping a caller's files is a decision nobody asked the owner to make.</p>
+  <p><strong>S1c, the pin content hash.</strong> Outside SEC-S and I want it on record anyway: two
+  offline machines both cutting “V2” is a real R31-introduced hazard, sync cannot repair it after
+  sessions are running on both, and content-addressing follows <code>PresetStore</code>'s existing
+  precedent rather than inventing one. Small now, unpickable after the first service ships. Yes.</p>
+</div>
+
+<h2>On the question he wants ruled</h2>
+<div class="f fix">
+  <div class="fh"><span class="v fix">Answer</span><span class="ft">The part that is mine</span></div>
+  <p>Atlas is right that it is the owner's call and right to want it before S3. One correction to
+  its shape: the choice is between three <em>promises</em>, and B2 means there is a
+  <em>property</em> underneath that has to be fixed regardless. Partitioning the turn store is not
+  option 3 — it is a precondition for any of the three being truthful about callers to each other.</p>
+  <p>With that separated, my read: option 1 (say it plainly) is the only one that survives hostile
+  QA, because options 2 and 3 both describe a boundary that does not exist and SEC-S's whole
+  premise is enforced-not-conventional. He is also right that option 3 is not a privacy claim; it
+  is friction, and worth doing on its own merits once the partition is real.</p>
+</div>
+
+<footer>
+  Reviewed against <code>docs/instantiator-design@a0bc83e</code>. The flat turn store and the
+  inherited env were confirmed against the running install; the confinement precedents were read
+  from the tree. No code changed by this review. Reviewer does not merge.
+</footer>
+</div>
+</body>
+</html>
