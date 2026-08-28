@@ -404,10 +404,21 @@ function TerminalOverlay({
       // the way the DOM renderer lets them. Losing the context falls back
       // to the DOM renderer, which is degraded but functional.
       //
-      // NOT on a phone: iOS Safari's WebGL is memory-constrained and unstable —
-      // a live-streaming agent's xterm on a WebGL context is a prime OOM /
-      // context-loss crash (the Conductor zoom-in crash). The DOM renderer is
-      // lighter and does not touch the GPU, so mobile uses it.
+      // NOT on a phone. There it is not one context — it is one per PAN. On a
+      // phone stage every card clears the LOD coverage threshold at any normal
+      // zoom (a 640-wide terminal covers 0.82 of a 390pt stage at zoom 0.5,
+      // 1.00 at 0.75), so an overlay is always mounted, and panning off one
+      // card onto the next flips the single overlay winner: unmount, dispose a
+      // WebGL context, mount, create another. iOS Safari reclaims GPU-process
+      // memory lazily, so that churn walks the web process into a jetsam kill
+      // — Safari reports it as a repeating problem and then reproduces it on
+      // reload, because the restored viewport mounts an overlay again.
+      //
+      // The DOM renderer is the documented fallback above and costs CJK grid
+      // drift on phone terminals. That is a real loss and it is the smaller
+      // one: the alternative is a canvas that cannot be panned. Removing the
+      // drift properly means not churning overlays on pan at all (LOD
+      // hysteresis in zoom-lod.ts), which is a UX decision, not a one-liner.
       if (!isRemoteMode()) {
         try {
           const webgl = new WebglAddon()
