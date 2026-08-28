@@ -40,13 +40,39 @@ describe('servedSpawn — the command is wrapped under Seatbelt', () => {
     expect(out.profilePath.startsWith('/base/sessions/svc/svc-ana-1/')).toBe(true)
   })
 
-  it('the profile confines writes to this sandbox and denies the siblings', () => {
+  it('the profile confines writes to this sandbox and denies EVERY other session', () => {
     const cap = capture()
     servedSpawn({ file: 'sh', args: [] }, ctx(), cap.write)
     const profile = cap.writes[0].profile
     expect(profile).toContain('file-write* (subpath "/base/sessions/svc/svc-ana-1")')
-    // The sibling deny is what makes sessions mutually invisible.
-    expect(profile).toContain('deny file-read* (subpath "/base/sessions/svc")')
+    // WIDENED, not weakened. This asserted the deny on `/base/sessions/svc` —
+    // one service's own sessions — and a probe against the real profile read
+    // another service's sandbox straight out, because nothing denied it. The
+    // deny is on the sessions root now, so it covers the siblings this test
+    // was written for AND the services it was not.
+    expect(profile).toContain('deny file-read* (subpath "/base/sessions")')
+    // And this session's own subtree is re-allowed after it, or the deny would
+    // have blinded a session to itself.
+    expect(profile.lastIndexOf('(allow file-read* (subpath "/base/sessions/svc/svc-ana-1"))'))
+      .toBeGreaterThan(profile.indexOf('(deny file-read* (subpath "/base/sessions"))'))
+  })
+
+  it('denies the owner’s credential stores, so an un-granted key cannot be read', () => {
+    // The per-service grant is only a lend if the original is out of reach:
+    // `file-read*` is allowed across the disk, so without these a served agent
+    // could read the owner's OAuth refresh token without being lent anything.
+    const cap = capture()
+    servedSpawn({ file: 'sh', args: [] }, ctx(), cap.write)
+    const profile = cap.writes[0].profile
+    expect(profile).toMatch(/deny file-read\* \(subpath "[^"]*\.claude\/\.credentials\.json"\)/)
+    expect(profile).toMatch(/deny file-read\* \(subpath "[^"]*\.ssh"\)/)
+    // Every deny sits below the blanket read allow — last rule wins, so one
+    // written above it would be silently overridden.
+    for (const line of profile.split('\n')) {
+      if (line.startsWith('(deny file-read*')) {
+        expect(profile.indexOf(line)).toBeGreaterThan(profile.indexOf('(allow file-read*)'))
+      }
+    }
   })
 })
 
