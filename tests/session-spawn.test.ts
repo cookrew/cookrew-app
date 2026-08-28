@@ -74,6 +74,13 @@ describe('servedSpawn — the command is wrapped under Seatbelt', () => {
     // Public but still owner configuration: the fixture explicitly keeps the
     // payment destination inside the same denied ~/.cookrew boundary.
     expect(profile).toContain('deny file-read* (subpath "/base/payment.json")')
+    // Every deny sits below the blanket read allow — Seatbelt takes the last
+    // matching rule, so one written above it would be silently overridden.
+    for (const line of profile.split('\n')) {
+      if (line.startsWith('(deny file-read*')) {
+        expect(profile.indexOf(line)).toBeGreaterThan(profile.indexOf('(allow file-read*)'))
+      }
+    }
   })
 })
 
