@@ -163,6 +163,13 @@ export function scrubForPublish(snapshot: TeamSnapshot, options: ScrubOptions = 
   // Longest path first: /a/b/c must be rewritten before /a/b.
   const ordered: [string, string][] = [...table.entries()].sort((a, b) => b[0].length - a[0].length)
   const mask = (text: string): string => homeMask(replaceAll(text, ordered))
+  /**
+   * For the snapshot-level fields the type declares but real snapshots omit —
+   * a team saved before `dir` existed has none, and the scrub must not be the
+   * thing that throws on it.
+   */
+  const maskMaybe = <T>(text: T): T =>
+    (typeof text === 'string' ? (mask(text) as unknown as T) : text)
 
   const findings: SecretFinding[] = []
 
@@ -211,7 +218,7 @@ export function scrubForPublish(snapshot: TeamSnapshot, options: ScrubOptions = 
       name: mask(node.name),
       ...(node.role !== null ? { role: mask(node.role) } : {}),
       command: mask(stripped),
-      cwd: table.get(node.cwd) ?? mask(node.cwd),
+      cwd: table.get(node.cwd) ?? maskMaybe(node.cwd),
       // No session binding leaves the machine: an inherited id would make the
       // buyer's copy resume a session file that is not theirs and does not
       // exist. Same field list planTerminal clears on a fork.
@@ -274,9 +281,9 @@ export function scrubForPublish(snapshot: TeamSnapshot, options: ScrubOptions = 
 
   const scrubbed: TeamSnapshot = {
     ...snapshot,
-    name: mask(snapshot.name),
-    dir: table.get(snapshot.dir) ?? mask(snapshot.dir),
-    ...(snapshot.dirs ? { dirs: snapshot.dirs.map((d) => table.get(d) ?? mask(d)) } : {}),
+    name: maskMaybe(snapshot.name),
+    dir: table.get(snapshot.dir) ?? maskMaybe(snapshot.dir),
+    ...(snapshot.dirs ? { dirs: snapshot.dirs.map((d) => table.get(d) ?? maskMaybe(d)) } : {}),
     nodes,
     turns: includeSessions ? (maskedTurns as TeamSnapshot['turns']) : {},
     ...(includeSessions && snapshot.sessions ? { sessions: snapshot.sessions } : {})
