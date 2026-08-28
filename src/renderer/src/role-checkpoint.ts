@@ -34,12 +34,54 @@ export async function saveRoleFromCheckpoint(
 ): Promise<AgentRole> {
   const save = cookrew().saveRole
   if (!save) throw new Error('Role saving is unavailable in this mode')
-  const record =
-    typeof input.checkpoint === 'number'
-      ? (await cookrew().listTurns(input.terminalId)).find(
-          (t) => t.index === input.checkpoint
-        )
-      : input.checkpoint
+  let record = typeof input.checkpoint === 'number' ? undefined : input.checkpoint
+  if (typeof input.checkpoint === 'number') {
+    const api = cookrew()
+    if (api.listTurnsPage) {
+      const page = await api.listTurnsPage(input.terminalId, {
+        aroundIndex: input.checkpoint,
+        limit: 1
+      })
+      record = page.turns.find((turn) => turn.index === input.checkpoint)
+    } else {
+      record = (await api.listTurns(input.terminalId)).find((turn) => turn.index === input.checkpoint)
+    }
+    // A capped ledger can omit an old trace identity. The trace window still
+    // owns its exact prompt and stable id, so one explicit ROLE action may read
+    // that single body without restoring the overlay's full-history fetch.
+    if (!record && api.listTrace) {
+      const page = await api.listTrace(input.terminalId, {
+        aroundIndex: input.checkpoint,
+        limit: 1
+      })
+      const block = page.blocks.find(
+        (candidate): candidate is {
+          id: string
+          index: number
+          prompt: string
+          startedAt: number
+          endedAt: number
+        } =>
+          typeof candidate === 'object' &&
+          candidate !== null &&
+          (candidate as { index?: unknown }).index === input.checkpoint &&
+          typeof (candidate as { id?: unknown }).id === 'string' &&
+          typeof (candidate as { prompt?: unknown }).prompt === 'string' &&
+          typeof (candidate as { startedAt?: unknown }).startedAt === 'number' &&
+          typeof (candidate as { endedAt?: unknown }).endedAt === 'number'
+      )
+      if (block) {
+        record = {
+          index: block.index,
+          prompt: block.prompt,
+          reply: '',
+          uuid: block.id,
+          startedAt: block.startedAt,
+          endedAt: block.endedAt
+        }
+      }
+    }
+  }
   if (!record) throw new Error(`No checkpoint T${String(input.checkpoint)} recorded for this agent`)
   return save({
     nodeId: input.terminalId,

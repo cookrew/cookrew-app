@@ -93,6 +93,7 @@
 // HerdrHostMultiplexer is the tmux replacement.
 
 import { execFileSync, spawnSync } from 'node:child_process'
+import { isTransientHerdrError, runWithHerdrRetry } from './herdr-retry'
 import type {
   AttachSpawn,
   CommandRunner,
@@ -105,46 +106,9 @@ import type {
 /** Wire protocol this module was written against (`herdr api schema`). */
 export const HERDR_PROTOCOL = 19
 
-/**
- * A workspace switch fires a BURST of herdr calls (PTY teardown + spawn per
- * terminal). Under that burst the client socket can return EAGAIN — "Resource
- * temporarily unavailable (os error 35)" — which the CLI surfaces as "lost
- * connection to server" even though the server is healthy and the pane is alive.
- * It is transient contention, not a dead server, so the right answer is to
- * retry the call, not to tear down the attach. Anything else is caught here too
- * (a real failure) and rethrown after the last attempt.
- */
-const TRANSIENT = /os error 35|temporarily unavailable|resource temporarily|\beagain\b/i
-
-export function isTransientHerdrError(err: unknown): boolean {
-  const e = err as { code?: string; stderr?: unknown; message?: unknown } | null
-  if (e?.code === 'EAGAIN') return true
-  return TRANSIENT.test(`${String(e?.stderr ?? '')} ${String(e?.message ?? '')}`)
-}
-
-/** Synchronous sleep — execFileSync is sync, so the backoff must be too. */
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
-}
-
-/**
- * Run `exec`, retrying ONLY a transient EAGAIN with a short growing backoff.
- * A non-transient failure throws immediately; a transient one that never clears
- * throws after the last attempt, so a genuinely dead server still surfaces.
- */
-export function runWithHerdrRetry<T>(exec: () => T, attempts = 4): T {
-  let last: unknown
-  for (let i = 0; i < attempts; i++) {
-    try {
-      return exec()
-    } catch (err) {
-      last = err
-      if (i === attempts - 1 || !isTransientHerdrError(err)) throw err
-      sleepSync(25 * (i + 1))
-    }
-  }
-  throw last
-}
+// Kept on this module's public surface for existing callers and tests. The
+// implementation is shared with the production host backend below.
+export { isTransientHerdrError, runWithHerdrRetry } from './herdr-retry'
 
 export const herdrRunner: CommandRunner = {
   run: (file, args) =>

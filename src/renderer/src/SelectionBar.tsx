@@ -1,8 +1,23 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { GitInfo, TeamClipStatus, TeamMeta, WorkspaceState } from '../../shared/model'
 import { saveClash, selectionSummary } from '../../shared/team-actions'
 import { cookrew, isDemoMode } from './api'
+import { MKT_SERVE, fillCopy } from '../../shared/marketplace-copy'
+import {
+  EMPTY_SERVED_PAYMENT_STATUS,
+  readyPaymentRails,
+  type ServedPaymentStatus
+} from '../../shared/served-payment-config'
+import {
+  ShareOnSave,
+  canSubmitShare,
+  saveButtonLabel,
+  serveRefusalText,
+  type ShareAccess
+} from './ShareOnSave'
 import { TeamGraphThumb } from './TeamGraphThumb'
+import { PaymentSettingsSheet } from './PaymentSettingsSheet'
+import { ServedTeamCard, type ServedTeam } from './ServedTeamCard'
 
 /** gitInfo is bridge-only today; feature-detect like GitChip does. */
 type GitApi = { gitInfo?: (dir: string) => Promise<GitInfo | null> }
@@ -46,6 +61,24 @@ export function SelectionBar({
 }): React.JSX.Element | null {
   const [clip, setClip] = useState<TeamClipStatus | null>(null)
   const [naming, setNaming] = useState(false)
+  // SHARE ON SAVE (owner ruling 2026-08-26): the share question lives where the
+  // team is NAMED — this is THE publish entry, not a parallel admin panel.
+  const [access, setAccess] = useState<ShareAccess>('just-me')
+  const [priceUsd, setPriceUsd] = useState('')
+  const [paymentStatus, setPaymentStatus] = useState<ServedPaymentStatus>(
+    EMPTY_SERVED_PAYMENT_STATUS
+  )
+  const [paymentSettingsOpen, setPaymentSettingsOpen] = useState(false)
+  const paymentRails = readyPaymentRails(paymentStatus)
+  const [servedTeams, setServedTeams] = useState<readonly ServedTeam[]>([])
+  const [sessionCounts, setSessionCounts] = useState<Record<string, number>>({})
+  const [openServedTeam, setOpenServedTeam] = useState<ServedTeam | null>(null)
+  /** THE PAYOFF of a serving save: the address, held on screen until DONE.
+   *  A 3-second flash was the original sin here — the user saved a paid team
+   *  and never saw the link they were supposed to hand out. */
+  const [servedAt, setServedAt] = useState<string | null>(null)
+  const [servedName, setServedName] = useState('')
+  const [copied, setCopied] = useState(false)
   const [name, setName] = useState('')
   const [teams, setTeams] = useState<TeamMeta[]>([])
   /** The overwrite guard is only trustworthy once the list has ARRIVED —
@@ -79,6 +112,22 @@ export function SelectionBar({
     onClipChangeRef.current = onClipChange
     onPastedRef.current = onPasted
   })
+
+  const refreshServing = useCallback((): void => {
+    void cookrew().servingPaymentStatus().then(setPaymentStatus).catch(() => undefined)
+    void cookrew().servingList().then(setServedTeams).catch(() => undefined)
+    void cookrew()
+      .servingSessions()
+      .then((sessions) => {
+        const counts: Record<string, number> = {}
+        for (const session of sessions) {
+          counts[session.serviceId] = (counts[session.serviceId] ?? 0) + 1
+        }
+        setSessionCounts(counts)
+      })
+      .catch(() => undefined)
+  }, [])
+  useEffect(refreshServing, [refreshServing])
 
   /** Every clip update ALSO lifts to App (paste ghosts live up there). */
   const updateClip = (status: TeamClipStatus | null): void => {
@@ -196,6 +245,19 @@ export function SelectionBar({
 
   const summary = selectionSummary(workspace, [...picked])
   const clash = naming ? saveClash(teams, name, workspace.name) : null
+  /**
+   * The one door a caller reaches: the orch among the PICKED cards, or null.
+   *
+   * No fallback. This used to answer first-picked-terminal, else the word
+   * 'Conductor' — so a selection with no orch showed a confident "Callers talk
+   * to Shell (2) only", saved, served, and handed the first stranger's prompt
+   * to a zsh prompt. The backend's matching fallback is gone too; both sides
+   * now agree that no orch means no door (owner ruling, 2026-08-26).
+   */
+  const orchName =
+    workspace.nodes.find(
+      (n) => picked.has(n.id) && n.kind === 'terminal' && (n as { orch?: boolean }).orch
+    )?.name ?? null
   const canClip = cookrew().teamClipSet !== undefined
 
   const showFlash = (text: string): void => {
@@ -292,6 +354,10 @@ export function SelectionBar({
     // Autofocus + Enter can beat the teamList fetch; an unknown list must
     // block (the guard would otherwise wave through a silent overwrite).
     if (!teamsLoaded) return
+    // The same refusal the disabled button carries. Enter in the name field
+    // reaches here without touching the button, and a save that published an
+    // orch-less crew by keyboard would be the bug with an extra step.
+    if (!canSubmitShare(access, priceUsd, orchName, paymentRails)) return
     if (clash && !armed) {
       setArmed(true)
       return
@@ -300,13 +366,36 @@ export function SelectionBar({
     setError(null)
     void cookrew()
       .teamSave(name.trim() || undefined, [...picked])
-      .then((meta) => {
+      .then(async (meta) => {
         if (!alive.current) return
+        // Saving names the thing; the same breath decides who may call it.
+        if (access !== 'just-me') {
+          const served = await cookrew().servingServe({
+            templateId: meta.name,
+            access,
+            ...(access === 'paid' ? { priceUsd: priceUsd.trim() } : {})
+          })
+          if (!alive.current) return
+          if (served?.ok) {
+            setServedAt(served.address)
+            setServedName(meta.name)
+            setCopied(false)
+            refreshServing()
+          } else {
+            // In words. The sheet already refuses every reason it can see, so a
+            // refusal that still arrives is one it could not — a template that
+            // vanished, or an orch removed between the sheet and the save — and
+            // a bare `no-orch` on the bar teaches the owner nothing.
+            setError(`Saved, but couldn't start serving — ${serveRefusalText(served?.reason)}`)
+          }
+        }
         setBusy(null)
         setNaming(false)
         setName('')
         setArmed(false)
-        showFlash(`saved template “${meta.name}”`)
+        // A private save flashes; a serving save gets the ADDRESS CARD instead —
+        // the address is the deliverable, and it must outlive a 3-second flash.
+        if (access === 'just-me') showFlash(`saved template “${meta.name}”`)
         // The save cut a version pin on each saved agent (main process). Tell
         // any open rail to re-fetch so the marker appears NOW, not on the next
         // turn — otherwise a save reads as if it did nothing.
@@ -358,6 +447,50 @@ export function SelectionBar({
 
   return (
     <div className="cr-selbar" ref={rootRef}>
+      {/* THE ADDRESS CARD — a serving save's receipt. It stays until DONE:
+          the whole point of a serving save is handing this link to someone,
+          and a surface that closed itself is exactly the bug being fixed. */}
+      {servedAt && !naming && (
+        <div className="cr-selbar-share cr-selbar-served" role="status" aria-live="polite">
+          <span className="sos-live-t">
+            {fillCopy(MKT_SERVE['mkt.serve.live'], { templateName: servedName })}
+          </span>
+          <div className="sos-live">
+            <code className="sos-addr">{servedAt}</code>
+            <button
+              className="cr-btn sm"
+              onClick={() => {
+                void navigator.clipboard?.writeText(servedAt)
+                setCopied(true)
+              }}
+            >
+              {copied ? 'COPIED ✓' : 'COPY LINK'}
+            </button>
+          </div>
+          <p className="sos-note">{MKT_SERVE['mkt.serve.live.handoff']}</p>
+          <div className="cr-selbar-served-acts">
+            <button className="cr-btn sm" onClick={() => setServedAt(null)}>
+              DONE
+            </button>
+          </div>
+        </div>
+      )}
+      {/* Ongoing serve management lives with SAVE, never inside FORK TEAM. */}
+      {servedTeams.length > 0 && !naming && (
+        <div className="cr-selbar-serving" aria-label="Teams taking calls">
+          <span className="sos-live-t">TAKING CALLS</span>
+          {servedTeams.map((team) => (
+            <button
+              key={team.serviceId}
+              className="cr-chip clickable cr-serving-badge"
+              title={`Manage ${team.templateId}`}
+              onClick={() => setOpenServedTeam(team)}
+            >
+              {team.templateId} · {sessionCounts[team.serviceId] ?? 0}
+            </button>
+          ))}
+        </div>
+      )}
       {/* What the clipboard holds, as ONE picture — the element chips laid
           out by their real relative positions with the cables drawn between
           them. ✂ marks stateful identity moves (a cut browser carries its
@@ -418,9 +551,29 @@ export function SelectionBar({
               if (e.key === 'Escape') dismissTransients()
             }}
           />
-          <button className="cr-btn sm" disabled={busy !== null || !teamsLoaded} onClick={runSave}>
-            {busy === 'save' ? 'SAVING…' : armed && clash ? 'SAVE AGAIN?' : 'SAVE'}
+          <button
+            className="cr-btn sm"
+            disabled={
+              busy !== null ||
+              !teamsLoaded ||
+              !canSubmitShare(access, priceUsd, orchName, paymentRails)
+            }
+            onClick={runSave}
+          >
+            {armed && clash ? 'SAVE AGAIN?' : saveButtonLabel(access, busy === 'save')}
           </button>
+          {/* The share question, in the same breath as the name. */}
+          <div className="cr-selbar-share">
+            <ShareOnSave
+              access={access}
+              priceUsd={priceUsd}
+              paymentRails={paymentRails}
+              door={orchName}
+              onAccess={setAccess}
+              onPrice={setPriceUsd}
+              onConfigurePayments={() => setPaymentSettingsOpen(true)}
+            />
+          </div>
         </>
       ) : (
         <>
@@ -501,6 +654,29 @@ export function SelectionBar({
             </button>
           )}
         </>
+      )}
+      {paymentSettingsOpen && (
+        <PaymentSettingsSheet
+          status={paymentStatus}
+          onStatus={(next) => {
+            setPaymentStatus(next)
+            refreshServing()
+          }}
+          onClose={() => setPaymentSettingsOpen(false)}
+        />
+      )}
+      {openServedTeam && (
+        <ServedTeamCard
+          team={openServedTeam}
+          door={orchName}
+          paymentStatus={paymentStatus}
+          onConfigurePayments={() => setPaymentSettingsOpen(true)}
+          onStopped={() => {
+            setOpenServedTeam(null)
+            refreshServing()
+          }}
+          onClose={() => setOpenServedTeam(null)}
+        />
       )}
     </div>
   )

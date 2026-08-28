@@ -1,6 +1,6 @@
 {
   "name": "cookrew",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Cookrew — an open-source spatial canvas for AI agents. Terminals, notes, browsers and physics cables on an infinite canvas, orchestrated through a Unix-socket CLI.",
   "main": "out/main/index.js",
   "type": "module",
@@ -44,6 +44,7 @@
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "typescript": "^5.7.0",
+    "viem": "^2.55.19",
     "vitest": "^2.1.0"
   }
 }

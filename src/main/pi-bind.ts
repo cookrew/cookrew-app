@@ -30,7 +30,17 @@ const PI_VALUE_SESSION_FLAGS_RE =
 const PI_SWITCH_SESSION_FLAGS_RE = /\s+(?:--continue|--resume|--no-session|-c|-r)(?=\s|$)/g
 
 export function isPiCommand(command: string): boolean {
-  return /^\s*pi(?=\s|$)/.test(command)
+  // The first token's BASENAME: a bare `pi`, or a wrapper named `*-pi`
+  // (~/.cookrew/bin/qwen-pi). A wrapper IS the pi harness, and every gate on
+  // the pi path — the exclusive --session-dir spawn flag, session binding,
+  // trace blocks, resume — keys off this one predicate. Matching only a
+  // literal leading `pi` left wrapper terminals half-alive (Pilot,
+  // 2026-08-27): the rail showed PTY-scraped turns, the transcript slots
+  // were EMPTY (no session file bound, so no trace blocks), and the session
+  // itself landed in pi's shared cwd store instead of the exclusive dir.
+  const first = command.trim().split(/\s+/)[0] ?? ''
+  const base = first.slice(first.lastIndexOf('/') + 1)
+  return base === 'pi' || base.endsWith('-pi')
 }
 
 export function validPiSessionId(value: string): boolean {

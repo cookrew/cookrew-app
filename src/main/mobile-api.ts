@@ -1,10 +1,17 @@
 import type http from "node:http";
+import { appendFile } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { WorkspaceStore } from "./store";
 import type { PtyManager } from "./pty";
 import type { TurnTracker } from "./turn-tracker";
 import type { DispatchService } from "./dispatch";
 import type { EventLog, CookrewEvent, EventQuery } from "./event-log";
-import { pageTurns } from "../shared/turn";
+import { pageTurns, type TurnRecord } from "../shared/turn";
+import type { VersionPinRecord } from "../shared/version-pin";
+import { TRANSLATE_MAX_CHARS } from "../shared/translate";
+import { translateBody } from "./sous-translate";
+import { remoteSousHost } from "./sous-remote-config";
 import type { AgentRegistry } from "./agent-registry";
 import type { TraceReader } from "./trace";
 import {
@@ -97,6 +104,8 @@ export interface MobileApiDeps {
   scope?: string | null;
   ptys: PtyManager;
   turns: TurnTracker;
+  /** Capability-routed history for local terminals and placed crews. */
+  turnHistory?: (terminalId: string) => Promise<TurnRecord[]>;
   /**
    * The LATEST checkpoint for a card, from a bounded tail read of the session
    * file — no PTY (trace-perf-architecture T1). Lets the phone canvas show an
@@ -106,6 +115,12 @@ export interface MobileApiDeps {
   latestCheckpoint?: (
     terminalId: string,
   ) => Promise<{ prompt: string; reply: string; title?: string } | null>;
+  /**
+   * Version pins (§10) — the rail's third marker class. Optional so this
+   * module serves before it is wired; absent answers [], same as a terminal
+   * that has never been exported.
+   */
+  listPins?: (terminalId: string) => readonly VersionPinRecord[];
   /**
    * Cold-boot wait window for a stream open (acquireViewWhenReady). Omitted in
    * production (defaults ~2s in 50ms steps); tests shrink it for determinism.
@@ -121,7 +136,7 @@ export interface MobileApiDeps {
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>;
   undoRestore: (id: string) => Promise<RestoreResult>;
   /** Trace-sourced context reader (identity-keyed windows over agent files). */
-  traces: TraceReader;
+  traces: Pick<TraceReader, 'index' | 'boundaryMarkers' | 'page'>;
   /**
    * Activity Board data plane (cross-workspace task view). Optional so this
    * module compiles and serves before the collectors are wired in index.ts;
@@ -350,6 +365,21 @@ export async function handleMobileApi(
   }
   if (method === "GET" && p === "/api/activity") {
     respondJson(response, 200, turns.list());
+    return true;
+  }
+  // The phone's BLACK BOX (phone-beacon.ts): self-reported page vitals,
+  // appended to a file because no Apple inspection channel works against
+  // iOS 26.6 and the kernel autopsy gives a weight with no allocator. The
+  // last line before a crash is the only profile of the dying page anyone
+  // can take. Bounded body, fire-and-forget append, never throws.
+  if (method === "POST" && p === "/api/beacon") {
+    void readJson(request, 16 * 1024)
+      .then((body) => {
+        const line = `${new Date().toISOString()} ${JSON.stringify(body)}\n`;
+        appendFile(join(tmpdir(), "cookrew-phone-beacon.log"), line, () => undefined);
+      })
+      .catch(() => undefined);
+    respondJson(response, 204, {});
     return true;
   }
   // Activity Board: the cross-workspace, task-first view. Strictly ADDITIVE —
@@ -666,7 +696,15 @@ export async function handleMobileApi(
 
   const traceIndexMatch = p.match(/^\/api\/terminal\/([^/]+)\/trace\/index$/);
   if (traceIndexMatch && method === "GET") {
-    respondJson(response, 200, await deps.traces.index(traceIndexMatch[1]));
+    const raw = url.searchParams.get("afterIndex");
+    const parsed = raw === null ? undefined : Number(raw);
+    respondJson(
+      response,
+      200,
+      await deps.traces.index(traceIndexMatch[1], {
+        afterIndex: parsed !== undefined && Number.isFinite(parsed) ? parsed : undefined,
+      }),
+    );
     return true;
   }
 
@@ -697,6 +735,14 @@ export async function handleMobileApi(
     return true;
   }
 
+  // Version pins for the rail — the phone drew the rail without its third
+  // marker class until this existed (remote-api.ts stubbed listPins to []).
+  const pinsMatch = p.match(/^\/api\/terminal\/([^/]+)\/pins$/);
+  if (pinsMatch && method === "GET") {
+    respondJson(response, 200, deps.listPins ? deps.listPins(pinsMatch[1]) : []);
+    return true;
+  }
+
   const turnsMatch = p.match(/^\/api\/terminal\/([^/]+)\/turns$/);
   if (turnsMatch && method === "GET") {
     // Context-view v2: any page param present → TurnPage window; bare call
@@ -710,17 +756,22 @@ export async function handleMobileApi(
       offset: num("offset"),
       limit: num("limit"),
       aroundIndex: num("aroundIndex"),
+      beforeIndex: num("beforeIndex"),
     };
     const paged =
       request.offset !== undefined ||
       request.limit !== undefined ||
-      request.aroundIndex !== undefined;
+      request.aroundIndex !== undefined ||
+      request.beforeIndex !== undefined;
+    const history = deps.turnHistory
+      ? await deps.turnHistory(turnsMatch[1])
+      : turns.history(turnsMatch[1]);
     respondJson(
       response,
       200,
       paged
-        ? pageTurns(turns.history(turnsMatch[1]), request)
-        : turns.history(turnsMatch[1]),
+        ? pageTurns(history, request)
+        : history,
     );
     return true;
   }
@@ -748,6 +799,31 @@ export async function handleMobileApi(
       respondJson(response, 400, {
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+    return true;
+  }
+  // Translate a checkpoint body with Sous. The phone posts the text it is
+  // already showing — same contract as the desktop's IPC handler, so a
+  // translation on the phone is the same code path, not a second one.
+  if (p === "/api/translate/host" && method === "GET") {
+    respondJson(response, 200, remoteSousHost());
+    return true;
+  }
+  if (p === "/api/translate" && method === "POST") {
+    const body = await readJson<{ text?: string; language?: string }>(request);
+    if (typeof body.text !== "string" || typeof body.language !== "string") {
+      respondJson(response, 200, { ok: false, failure: "unusable-output" });
+      return true;
+    }
+    if (body.text.length > TRANSLATE_MAX_CHARS) {
+      respondJson(response, 200, { ok: false, failure: "too-long" });
+      return true;
+    }
+    try {
+      respondJson(response, 200, await translateBody(body.text, body.language));
+    } catch (error) {
+      console.error("mobile translate failed:", error);
+      respondJson(response, 200, { ok: false, failure: "unreachable" });
     }
     return true;
   }

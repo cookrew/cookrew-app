@@ -35,3 +35,49 @@ export function shouldSnapshotLocally({ remote, interactive }: ThumbSource): boo
 export function shouldClearLegacyThumbs({ remote, interactive }: ThumbSource): boolean {
   return !remote && interactive === true
 }
+
+/**
+ * Per-id backoff after a failed thumb fetch — the DESKTOP's capture storm fix
+ * (capture-backoff.ts: 10s doubling to a 5min cap, reset on success), applied
+ * to the phone's polling side. One policy, two surfaces, no drift.
+ *
+ * The owner's Web Inspector (2026-08-27) caught the failure mode this exists
+ * for: after an app restart no browser engine is booted, so every one of 40+
+ * browser cards 404s — and the poller re-asked all of them every 5s tick,
+ * forever. A phone paid a sustained TLS 404 storm for pictures that could not
+ * exist yet; the desktop had already learned this lesson for capturePage()
+ * and the polling path never inherited it.
+ */
+import {
+  canCapture,
+  initialBackoff,
+  recordFailure,
+  type CaptureBackoff
+} from './capture-backoff'
+
+/** id → its failure backoff. Immutable updates only. */
+export type ThumbBackoffs = Readonly<Record<string, CaptureBackoff>>
+
+/** The ids worth asking this tick: everything whose backoff window has passed. */
+export function thumbPollList(
+  ids: readonly string[],
+  backoffs: ThumbBackoffs,
+  now: number
+): string[] {
+  return ids.filter((id) => canCapture(backoffs[id] ?? initialBackoff, now))
+}
+
+export function recordThumbFailure(
+  backoffs: ThumbBackoffs,
+  id: string,
+  now: number
+): ThumbBackoffs {
+  return { ...backoffs, [id]: recordFailure(backoffs[id] ?? initialBackoff, now) }
+}
+
+/** A success ends the backoff so a recovered browser refreshes normally. */
+export function recordThumbSuccess(backoffs: ThumbBackoffs, id: string): ThumbBackoffs {
+  if (!(id in backoffs)) return backoffs
+  const { [id]: _gone, ...rest } = backoffs
+  return rest
+}

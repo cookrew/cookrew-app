@@ -12,11 +12,11 @@ import {
   TraceBlock,
   TraceBoundaryMarker,
   TraceIndexEntry,
+  TraceIndexRequest,
   TracePage,
   TracePageRequest,
-  compactMarkersOf,
   pageTraceBlocks,
-  parseClaudeTrace,
+  parseClaudeTraceDocument,
   parseCodexTrace,
   parsePiTrace,
   traceIndexOf
@@ -51,6 +51,9 @@ export interface TraceReaderOptions {
   codexSessionsDir?: string
   piSessionsRoot?: string
   piAgentDir?: string
+  /** Per-node overrides for confined served Pi sessions. */
+  piSessionsRootFor?: (node: TerminalNodeData) => string | undefined
+  piAgentDirFor?: (node: TerminalNodeData) => string | undefined
 }
 
 const READ_CHUNK_BYTES = 256 * 1024
@@ -88,6 +91,7 @@ interface CacheEntry {
   remainder: Buffer
   lines: string[]
   blocks: TraceBlock[]
+  compactMarkers: TraceBoundaryMarker[]
 }
 
 export class TraceReader {
@@ -95,6 +99,8 @@ export class TraceReader {
    *  one incremental cache, so boundaryMarkers never re-reads a file the
    *  pager already ingested. */
   private cache = new Map<string, CacheEntry>()
+  /** Concurrent index/marker/page calls for one file share one stat/read/parse. */
+  private blockReads = new Map<string, Promise<TraceBlock[]>>()
   /** Derived index memo, keyed by the blocks ARRAY IDENTITY — trace growth
    *  produces a fresh array (blocksOf re-ingests), invalidating for free. */
   private indexCache = new Map<string, { blocks: TraceBlock[]; entries: TraceIndexEntry[] }>()
@@ -127,7 +133,7 @@ export class TraceReader {
    * the same cached block index the pager uses; lazy and re-derived only
    * when the trace grows.
    */
-  async index(terminalId: string): Promise<TraceIndexEntry[]> {
+  async index(terminalId: string, request: TraceIndexRequest = {}): Promise<TraceIndexEntry[]> {
     const hit = this.store.nodeAcrossWorkspaces(terminalId)
     if (!hit || hit.node.kind !== 'terminal') return []
     const node = hit.node
@@ -139,10 +145,10 @@ export class TraceReader {
     const kind = claude ? 'claude' : codex ? 'codex' : 'pi'
     const blocks = await this.blocksOf(file, kind)
     const memo = this.indexCache.get(terminalId)
-    if (memo && memo.blocks === blocks) return memo.entries
-    const entries = traceIndexOf(blocks)
-    this.indexCache.set(terminalId, { blocks, entries })
-    return entries
+    const entries = memo && memo.blocks === blocks ? memo.entries : traceIndexOf(blocks)
+    if (!memo || memo.blocks !== blocks) this.indexCache.set(terminalId, { blocks, entries })
+    const afterIndex = request.afterIndex
+    return afterIndex === undefined ? entries : entries.filter((entry) => entry.index > afterIndex)
   }
 
   /**
@@ -254,7 +260,7 @@ export class TraceReader {
     const memo = this.segmentMemo.get(file)
     if (memo && memo.blocks === blocks) return { refs: memo.refs, markers: memo.markers }
     const refs = blocks.map((b) => ({ index: b.index, id: b.id }))
-    const markers = compactMarkersOf(this.cache.get(file)?.lines ?? [])
+    const markers = this.cache.get(file)?.compactMarkers ?? []
     TraceReader.cappedSet(this.segmentMemo, file, { blocks, refs, markers })
     return { refs, markers }
   }
@@ -273,7 +279,11 @@ export class TraceReader {
     const node = hit.node
     const harness = harnessFor(node.command)
     if (!harness?.parseTurns || !harness.watchFile) return null
-    const file = harness.watchFile(node, this.options)
+    const file = harness.watchFile(node, {
+      ...this.options,
+      piSessionsRoot: this.options.piSessionsRootFor?.(node) ?? this.options.piSessionsRoot,
+      piAgentDir: this.options.piAgentDirFor?.(node) ?? this.options.piAgentDir
+    })
     return file ? { file, parse: harness.parseTurns, finality: harness.turnFinality } : null
   }
 
@@ -410,13 +420,26 @@ export class TraceReader {
     // for exactly the terminals whose rail works.
     return (
       piSessionHome(node.cwd, node.piSessionId, node.id, {
-        sessionsRoot: this.options.piSessionsRoot,
-        agentDir: this.options.piAgentDir
+        sessionsRoot: this.options.piSessionsRootFor?.(node) ?? this.options.piSessionsRoot,
+        agentDir: this.options.piAgentDirFor?.(node) ?? this.options.piAgentDir
       })?.file ?? null
     )
   }
 
   private async blocksOf(
+    file: string,
+    kind: 'claude' | 'codex' | 'pi'
+  ): Promise<TraceBlock[]> {
+    const pending = this.blockReads.get(file)
+    if (pending) return pending
+    const read = this.readBlocksOf(file, kind).finally(() => {
+      if (this.blockReads.get(file) === read) this.blockReads.delete(file)
+    })
+    this.blockReads.set(file, read)
+    return read
+  }
+
+  private async readBlocksOf(
     file: string,
     kind: 'claude' | 'codex' | 'pi'
   ): Promise<TraceBlock[]> {
@@ -438,7 +461,8 @@ export class TraceReader {
         bytesRead: 0,
         remainder: Buffer.alloc(0),
         lines: [],
-        blocks: []
+        blocks: [],
+        compactMarkers: []
       }
       return this.ingest(file, kind, fresh, whole, info.size)
     } catch (error) {
@@ -465,8 +489,9 @@ export class TraceReader {
         if (line.length > 0) lines.push(line)
       }
     }
-    const blocks = kind === 'claude'
-      ? parseClaudeTrace(lines)
+    const parsedClaude = kind === 'claude' ? parseClaudeTraceDocument(lines) : null
+    const blocks = parsedClaude
+      ? parsedClaude.blocks
       : kind === 'codex'
         ? parseCodexTrace(lines)
         : parsePiTrace(lines)
@@ -475,7 +500,8 @@ export class TraceReader {
       bytesRead,
       remainder: Buffer.from(remainder),
       lines,
-      blocks
+      blocks,
+      compactMarkers: parsedClaude?.markers ?? []
     })
     return blocks
   }

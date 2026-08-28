@@ -656,6 +656,14 @@ a.cr-btn {
   display: flex;
   align-items: center;
   gap: 6px;
+  /* The row WRAPS on desktop: with enough presets + saved teams the tail —
+     which is exactly where the CREWS family and + ADD BY LINK live — used to
+     run off the screen edge with no scroll, making the import entry
+     undiscoverable. The dock grows upward instead; chips stay tappable. */
+  flex-wrap: wrap;
+  min-width: 0;
+  max-height: 30vh;
+  overflow-y: auto;
 }
 
 .cr-check {
@@ -1311,7 +1319,13 @@ a.cr-btn {
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
+  /* NOT -webkit-overflow-scrolling: touch. The legacy momentum property
+     makes iOS rasterize the ENTIRE scroll extent as one compositing layer:
+     the overlay xterm's 600-row scrollback is ~12,000 CSS px tall, and at
+     DPR3 that is ~1.6 GB of backing store — precisely the 1536 MB jetsam
+     cap that killed WebContent the moment a terminal was zoomed
+     (kernel-verified, 2026-08-27). iOS 13+ scrolls with momentum by
+     default; the property bought nothing and cost the phone its life. */
   /* ONE scrollbar total: the checkpoint rail scrubs this — hide the native
      bar on the trace surface (the redundant gray bar in the screenshot). */
   scrollbar-width: none;
@@ -1355,6 +1369,13 @@ a.cr-btn {
 
 /* one checkpoint = one turn block. A faint rule keeps blocks legible without
    cards/gaps — it stays a single stream. */
+.ctx-block,
+.ctx-placeholder {
+  /* Transcript is a flex column. Estimated placeholder heights are scroll
+     geometry, not spare space the flex algorithm may shrink to fit. */
+  flex: 0 0 auto;
+}
+
 .ctx-block {
   flex: 0 0 auto;
   padding: 7px 6px 8px;
@@ -1711,6 +1732,102 @@ a.cr-btn {
 .ctx-live .popout-terminal {
   flex: 1;
   min-height: 0;
+}
+
+.ctx-live.served {
+  flex-grow: 1;
+}
+
+/* Placed crews keep crew-line as transport, never as pixels. The streamed
+   remote trace stays in ctx-blocks; this is only the LIVE status + composer. */
+.served-live-turn {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px 12px;
+  color: var(--phos);
+}
+
+.served-live-prompt,
+.served-live-reply {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.served-live-prompt {
+  color: var(--phos-glow);
+}
+
+.served-live-prompt::before {
+  content: '❯ ';
+  color: var(--amber);
+}
+
+.served-live-state {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--vi-done);
+  font-family: var(--font-pixel);
+  font-size: 8px;
+}
+
+.served-live-dot {
+  width: 7px;
+  height: 7px;
+  background: currentColor;
+  border-radius: 50%;
+}
+
+.served-live-state.busy .served-live-dot {
+  animation: vi-pulse 1.2s ease-in-out infinite;
+}
+
+.served-live-input {
+  flex: 1;
+  width: 100%;
+  min-height: 72px;
+  resize: none;
+  border: 1px solid var(--phos-dim);
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--phos-glow);
+  padding: 9px 10px;
+  font: 12px/1.45 var(--font-mono);
+  outline: none;
+}
+
+.served-live-input:focus {
+  border-color: var(--amber);
+}
+
+.served-live-send {
+  width: 36px;
+  height: 32px;
+}
+
+.served-live-compose-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.cr-ckpt-warming-label {
+  position: absolute;
+  right: 14px;
+  bottom: 10px;
+  width: max-content;
+  color: var(--vi-waiting);
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  pointer-events: none;
+  transform: rotate(-90deg);
+  transform-origin: right bottom;
 }
 
 .turn {
@@ -2678,6 +2795,43 @@ a.card-close {
   background: var(--amber-soft);
 }
 
+.canvas-visual-toggle {
+  position: relative;
+  color: var(--ink);
+}
+
+.canvas-visual-toggle.mode-no-cables {
+  background: var(--amber-soft);
+}
+
+.canvas-visual-toggle.mode-agents {
+  background: var(--amber);
+}
+
+.canvas-visual-glyph {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+}
+
+.canvas-visual-glyph .cr-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.canvas-visual-toggle.mode-no-cables .canvas-visual-glyph::after {
+  content: '';
+  position: absolute;
+  width: 18px;
+  height: 2px;
+  background: var(--rose);
+  border: 1px solid var(--cream-hi);
+  transform: rotate(-45deg);
+  pointer-events: none;
+}
+
 .cookrew-minimap {
   background: var(--cream-md) !important;
   border: 2px solid var(--line);
@@ -3492,6 +3646,28 @@ a.card-close {
 /* ---- remote (phone) mode tweaks ----
    Served by the mobile server: no macOS traffic lights, no drag regions,
    tighter chrome for small screens. */
+
+/* iOS jetsam guard (2026-08-27, kernel-verified): WebContent hit the 1536 MB
+   ActiveSoft cap ~10s after first paint — a memory-highwater kill, with no
+   equivalent on macOS WebKit (77–165 MB flat on the same board). The delta is
+   layer backing store: the canvas world spans ~15k CSS px and iOS rasterizes
+   composited subtrees it believes will transform, where desktop engines tile.
+   Two dials:
+   - content-visibility on cards: an offscreen card's subtree is neither laid
+     out nor painted, so its backing never exists. intrinsic-size keeps
+     scrollbar/minimap geometry honest.
+   - will-change:auto on the pane: react-flow hints transform for pan speed;
+     on iOS that hint is what pins a world-sized raster. Panning on a phone
+     re-rasterizes per frame instead — slower, alive. */
+body.cookrew-mobile .react-flow__node {
+  content-visibility: auto;
+  contain-intrinsic-size: 340px 220px;
+}
+body.cookrew-mobile .react-flow__viewport,
+body.cookrew-mobile .react-flow__pane {
+  will-change: auto !important;
+}
+
 body.cookrew-mobile .cr-header {
   padding-left: max(14px, env(safe-area-inset-left));
   padding-top: max(10px, env(safe-area-inset-top));
@@ -3533,7 +3709,13 @@ body.cookrew-mobile .cr-dock-presets {
   min-width: 0;
   max-width: 100%;
   overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+  /* NOT -webkit-overflow-scrolling: touch. The legacy momentum property
+     makes iOS rasterize the ENTIRE scroll extent as one compositing layer:
+     the overlay xterm's 600-row scrollback is ~12,000 CSS px tall, and at
+     DPR3 that is ~1.6 GB of backing store — precisely the 1536 MB jetsam
+     cap that killed WebContent the moment a terminal was zoomed
+     (kernel-verified, 2026-08-27). iOS 13+ scrolls with momentum by
+     default; the property bought nothing and cost the phone its life. */
   scrollbar-width: none;
   /* breathing room so the buttons' hard drop shadow survives the clip */
   padding: 2px 2px 4px 0;
@@ -4640,7 +4822,13 @@ body.cookrew-mobile .cr-dock .voice-bar {
   gap: 6px;
   min-width: 0;
   overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+  /* NOT -webkit-overflow-scrolling: touch. The legacy momentum property
+     makes iOS rasterize the ENTIRE scroll extent as one compositing layer:
+     the overlay xterm's 600-row scrollback is ~12,000 CSS px tall, and at
+     DPR3 that is ~1.6 GB of backing store — precisely the 1536 MB jetsam
+     cap that killed WebContent the moment a terminal was zoomed
+     (kernel-verified, 2026-08-27). iOS 13+ scrolls with momentum by
+     default; the property bought nothing and cost the phone its life. */
   scrollbar-width: none;
 }
 
@@ -4672,7 +4860,13 @@ body.cookrew-mobile .cr-dock .voice-ghost {
     gap: 6px;
     padding: 4px 8px;
     overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
+    /* NOT -webkit-overflow-scrolling: touch. The legacy momentum property
+     makes iOS rasterize the ENTIRE scroll extent as one compositing layer:
+     the overlay xterm's 600-row scrollback is ~12,000 CSS px tall, and at
+     DPR3 that is ~1.6 GB of backing store — precisely the 1536 MB jetsam
+     cap that killed WebContent the moment a terminal was zoomed
+     (kernel-verified, 2026-08-27). iOS 13+ scrolls with momentum by
+     default; the property bought nothing and cost the phone its life. */
     scrollbar-width: none;
   }
 
@@ -4722,7 +4916,13 @@ body.cookrew-mobile .cr-dock .voice-ghost {
 
   .popout-terminal .xterm-viewport {
     overflow-y: auto !important;
-    -webkit-overflow-scrolling: touch;
+    /* NOT -webkit-overflow-scrolling: touch. The legacy momentum property
+     makes iOS rasterize the ENTIRE scroll extent as one compositing layer:
+     the overlay xterm's 600-row scrollback is ~12,000 CSS px tall, and at
+     DPR3 that is ~1.6 GB of backing store — precisely the 1536 MB jetsam
+     cap that killed WebContent the moment a terminal was zoomed
+     (kernel-verified, 2026-08-27). iOS 13+ scrolls with momentum by
+     default; the property bought nothing and cost the phone its life. */
   }
 
 
@@ -4732,7 +4932,13 @@ body.cookrew-mobile .cr-dock .voice-ghost {
      generous flow-unit tap minimums; the row scrolls sideways if crowded. */
   .vi-pager {
     overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
+    /* NOT -webkit-overflow-scrolling: touch. The legacy momentum property
+     makes iOS rasterize the ENTIRE scroll extent as one compositing layer:
+     the overlay xterm's 600-row scrollback is ~12,000 CSS px tall, and at
+     DPR3 that is ~1.6 GB of backing store — precisely the 1536 MB jetsam
+     cap that killed WebContent the moment a terminal was zoomed
+     (kernel-verified, 2026-08-27). iOS 13+ scrolls with momentum by
+     default; the property bought nothing and cost the phone its life. */
     scrollbar-width: none;
   }
 
@@ -4751,4 +4957,227 @@ body.cookrew-mobile .cr-dock .voice-ghost {
     flex: 0 0 auto;
     font-size: calc(11px * var(--z, 1));
   }
+}
+
+/* ---- translate: the header control and what it does to a body ---- */
+
+/* The menu is positioned against this, not the action row, so it opens under
+   the button that summoned it however many buttons sit beside it. */
+.cr-translate {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Fixed, and placed from the button's rect by TranslateButton: the card root is
+   overflow:hidden, so an absolute menu is clipped the moment it leaves the
+   header. .cr-cardmenu is fixed for the same reason. */
+.cr-translate-menu {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  /* Fifteen languages is longer than a short card is tall. Cap it and scroll
+     rather than letting the menu run off the bottom of the window. */
+  max-height: min(58vh, 420px);
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 4px 4px 0 var(--line);
+}
+
+.cr-translate-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 8px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: var(--ink);
+  font: inherit;
+}
+
+.cr-translate-item:hover {
+  background: var(--amber-soft);
+}
+
+/* The tick is a filled bar in the gutter rather than a checkmark glyph: the
+   menu is set in the endonym of each language and a glyph beside 简体中文 at
+   this size is mush. */
+.cr-translate-item.picked {
+  box-shadow: inset 3px 0 0 var(--amber-deep);
+  font-weight: 700;
+}
+
+.cr-translate-item.original {
+  border-bottom: 1.5px solid var(--line);
+  margin-bottom: 4px;
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* Endonym leads because that is what a reader scans for; the English name is
+   the quiet second column for anyone who does not read the script. */
+.cr-translate-name {
+  font-size: 13px;
+}
+
+.cr-translate-label {
+  font-size: 10px;
+  opacity: 0.55;
+  white-space: nowrap;
+}
+
+.cr-btn.icon.on {
+  background: var(--amber);
+}
+
+.cr-btn.icon.busy {
+  opacity: 0.65;
+}
+
+/* The strip that says which words you are reading. Same phosphor bed as the
+   checkpoint line above it, so it reads as part of the card's own chrome. */
+.popout-translation {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 12px;
+  background: var(--phos-bg);
+  border-bottom: 1.5px solid var(--phos-dim);
+  color: var(--phos);
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  min-width: 0;
+}
+
+.popout-translation span {
+  min-width: 0;
+  flex: 1;
+}
+
+.popout-translation.failed {
+  color: var(--amber-soft);
+}
+
+.popout-translation .cr-btn {
+  flex: 0 0 auto;
+}
+
+/* A translated body is marked in the margin for as long as it is on screen.
+   Without it, scrolling away from the status strip leaves prose that looks
+   exactly like something the agent wrote. */
+.ctx-block-prompt[data-translated],
+.ctx-block-reply[data-translated] {
+  border-left: 2px solid var(--amber-deep);
+  padding-left: 8px;
+/* ── CREWS: the dock's fourth chip family (R30 import side) ──
+   Someone else's team, reached through its orch. Violet marks "not yours". */
+.cr-chip.crew-chip { border-color: var(--violet); }
+.cr-chip.crew-chip.locked { border-style: dashed; }
+.cr-chip.crew-chip.ended { opacity: 0.45; border-style: dashed; cursor: default; }
+.crew-chip-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--violet); display: inline-block; margin-right: 5px;
+}
+.crew-chip-price {
+  font-size: 7px; margin-left: 5px; padding: 0 3px;
+  background: var(--amber-soft); border: 1px solid var(--line); color: var(--ink);
+}
+.cr-chip.crew-add { border-style: dashed; border-color: var(--dim); color: var(--muted); }
+/* The add sheet's preview of a crew's public face. */
+.acs-face {
+  border: 1.5px solid var(--line-soft); background: var(--cr-panel, transparent);
+  padding: 9px 11px; margin-top: 10px; display: flex; flex-direction: column; gap: 4px;
+}
+.acs-row { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11.5px; }
+.acs-name { font-weight: 600; }
+.acs-dim { color: var(--cr-dim, #a8a29e); font-size: 10.5px; }
+
+/* Share-on-save inside the selection bar's naming step: the bar is a row, so
+   the section lifts into a popover above it rather than stretching it. */
+.cr-selbar-share {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 12px;
+  width: min(420px, calc(100vw - 40px));
+  max-height: 60vh;
+  overflow: auto;
+  padding: 10px 12px;
+  background: var(--cr-panel, #1c1a16);
+  border: 1.5px solid var(--cr-line-hard, #4c463a);
+  border-radius: 8px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+  z-index: 40;
+}
+
+/* A serving save's receipt: the address card, cream like the bar it grew from. */
+.cr-selbar-served {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--cream-hi);
+  border: 2px solid var(--violet);
+  border-radius: 0;
+  box-shadow: 3px 3px 0 var(--line);
+}
+.cr-selbar-served .sos-note {
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--ink-soft);
+  margin: 0;
+}
+.cr-selbar-served-acts {
+  display: flex;
+  justify-content: flex-end;
+}
+.cr-selbar-serving {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cr-chip.cr-serving-badge {
+  background: var(--hp);
+  color: #fff;
+  border-color: var(--line);
+  font-size: 7.5px;
+  letter-spacing: .05em;
+}
+
+/* The orch is marked by its header chip alone — the golden frame was tried
+   and reverted (owner call, 2026-08-26): a permanent gold border read as a
+   state, competing with working/attention instead of sitting under them. */
+
+
+/* Transcript virtualization at the ENGINE level (phone-crash root fix,
+   2026-08-27): a 355-checkpoint session mounts 355 identity divs, and every
+   estimate refinement relaid ALL of them out at DPR3 — the wedge that fed
+   the iOS jetsam kill. Offscreen blocks now cost nothing to lay out or
+   paint; the intrinsic size keeps scroll geometry and scrollIntoView exact. */
+body.cookrew-mobile .ctx-block,
+body.cookrew-mobile .ctx-placeholder {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 88px;
+}
+
+
+/* Phone memory diet: with a terminal overlay owning the stage, the canvas
+   underneath is invisible ballast — drop its render objects and iOS layer
+   backing entirely. State lives in React; closing the overlay restores it. */
+body.cookrew-mobile.cr-overlay-owns-stage .react-flow__viewport,
+body.cookrew-mobile.cr-overlay-owns-stage .react-flow__minimap,
+body.cookrew-mobile.cr-overlay-owns-stage .react-flow__controls,
+body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
+  /* The .react-flow CONTAINER keeps its size — the overlay's rect and the
+     LOD pane measurements read it — while every heavy inner layer drops. */
+  display: none;
 }

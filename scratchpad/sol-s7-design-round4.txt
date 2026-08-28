@@ -1,0 +1,66 @@
+[P0] Park is not closed under either the state lattice or bootInstance
+WHERE: scratchpad/s7-instance-factory-plan.html:39-41,62-73,95-100,109-120
+CLAIM: V4 mandates park transitions that produce an unlisted state and cannot resume every V1 instance it parks.
+EVIDENCE: D0 parks every active row when the flag is off, and the unclaimed lease explicitly maps active-unclaimed to stopped. The lattice contains stopped/claimed only, while hydrate rejects illegal tuples, so the caretaker creates stopped/unclaimed and the next hydrate must quarantine it. Separately, a claimed fresh Codex/Pi instance parked by D0 is an existing consumer session: it is neither new, a partially landed creation attempt, nor a Claude golden clone. None of the three bootInstance modes can resume it, although D0 promises resume on re-enable and the stopped/claimed row permits resume. The closure solved create-time restoration but introduced an uncovered lifecycle restoration mode.
+FIX: For never-used active-unclaimed RUNs, prefer revoke plus rollback/destroy at lease expiry and flag-off instead of preserving an unusable stopped row; if preservation is intentional, add stopped/unclaimed visibility, retry, expiry, and credential transitions. Add a narrow resumeExisting mode (or generalize goldenResume to positive expected-session resume) for every harness that V1 can park, with the same single-flight/revision/cancellation/receipt rules. Gate flag-off/re-enable and lease expiry for Claude golden, Codex fresh, Pi fresh, claimed, and unclaimed rows.
+
+[P1] First authenticated use and post-claim create replay lack decisive credential semantics
+WHERE: scratchpad/s7-instance-factory-plan.html:92-101,115-117,124
+CLAIM: The credential generation protocol still does not define when claim becomes durable relative to route effects or what the idempotent create endpoint returns after the credential is claimed.
+EVIDENCE: The lattice rejects dispatch while unclaimed, so the first authenticated POST must transition the row before its handler can act. "claimed = first successful authenticated use (written to registry)" does not state append-before-effect or fail-closed behavior; accepting the route then losing the claim append can leave durable work attached to an unclaimed row whose next create retry rotates the token. After claim, a same-key create retry must replay by section 9, but the raw token is deliberately unavailable and section 7 specifies rotation only for active-unclaimed. credentialGeneration also has no explicit client rule for a delayed lower-generation response arriving after a higher one.
+FIX: Make first-use authentication a durable CAS that must fsync claimed before any protected handler effect and fails closed on ledger fault. Specify the claimed replay projection without reminting or duplicating the instance, and require callers/SDKs to retain the highest observed generation and retry any stale-token response. Gate claim-append failure, authenticated dispatch racing retry, delayed generation ordering, and same-key replay after claim.
+
+[P1] The transition table still omits the operation and cleanup dimensions it declares
+WHERE: scratchpad/s7-instance-factory-plan.html:109-126
+CLAIM: The table is a status/credential table, not the promised lattice over status, operation, credentialState, and cleanup.
+EVIDENCE: During stop, status can remain active/claimed while operation is closing and the generation barrier rejects dispatch; the table nevertheless says active/claimed permits dispatch and runs the billing clock. It does not define API visibility/billing while stop intent is prepared, after its append fails, during resume verification, or for destroyed/failed rows with cleanup debt. "destroyed is terminal" while cleanup debt may still run also needs an explicit commercial-terminal versus operational-terminal distinction. The owner panel's "abandon" action is undefined and could conflict with never deleting the last cleanup owner.
+FIX: Add a small operation-overlay table rather than a Cartesian explosion: closing/recovering operations override status for admission, billing, visibility, and retry; define rollback-on-intent-fault and cleanup-debt terminality; define abandon as stop-retrying/quarantine while retaining ownership, never row deletion. Hydrate validates the combined rules.
+
+[P1] Published golden-save bytes still have only a digest, not an immutable retention root
+WHERE: scratchpad/s7-instance-factory-plan.html:75-90
+CLAIM: V4 makes the Git worktree materializable, but a published Claude golden save can still be edited or deleted from its external source after catalog publication.
+EVIDENCE: The manifest records each golden digest and the source sits outside Claude's scanned tree, but only the Git commit/tree receives a Cookrew-owned retained ref. A hash detects a missing or changed golden file; it cannot reconstruct it. A catalog version can therefore remain visible and correctly pinned while every create deterministically fails because the product's most valuable accepted artifact disappeared.
+FIX: At publish, copy each accepted golden save into an owner-only immutable catalog asset addressed by its digest (or create an equivalently CAS-protected retention reference), fsync it, and reference-count it by catalog version plus instance lifetime. PLAN resolves only that retained artifact and re-verifies its digest; the mutable authoring source is never a creation dependency.
+
+[P1] The accepted-size gate does not bound the worktree it checks out
+WHERE: scratchpad/s7-instance-factory-plan.html:83-90,136
+CLAIM: Record/save/manifest caps bound clone transformation, but an arbitrarily large Git tree can still violate the 15-second TTFT and I/O guarantees.
+EVIDENCE: commit and tree digests provide identity, not size. A manifest with a tiny golden save can point at a commit containing millions of paths or many gigabytes of blobs; detached worktree materialization then dominates child time, disk, file descriptors, and cleanup. The maximum-legal-manifest probe is not a maximum legal materialization unless the expanded tree also has file-count, total-blob-byte, and maximum-blob limits.
+FIX: Add publish-time expanded Git tree caps (file count, total regular-blob bytes, maximum blob, and explicit symlink/submodule/filter rules), pin the measured values into the manifest, and include that maximum tree in the two-concurrent-instance G2 probe. Keep the caps small enough that the in-process approach remains justified.
+
+[P1] A per-row unclaimed lease is not a global hot-resource bound
+WHERE: scratchpad/s7-instance-factory-plan.html:92-101,136
+CLAIM: A burst of valid create calls can hold an unbounded number of unpaid, hot agent processes for fifteen minutes even though each row eventually parks.
+EVIDENCE: active-unclaimed stops the billing clock, but each instance has already created a workspace, worktree, server, pane, and harness. The token auth scale gate and eventual per-row lease do not cap simultaneous provisioning or active-unclaimed rows. A buggy trusted client can recreate the exact spawn/adopt and tracking pressure the 38x invariant is meant to keep dead, just for a bounded interval instead of forever.
+FIX: Admission must replay an existing idempotency key before limits, then enforce per-principal and global creating-plus-unclaimed capacity and creation-rate limits before PLAN/EFFECTS. Persist enough reservation state to survive restart, release exactly once on claim/failure/destroy, and gate burst admission plus expiry without O(fleet) scans.
+
+[P1] Flag-off reconciliation wording can reintroduce a startup-wide external-work storm
+WHERE: scratchpad/s7-instance-factory-plan.html:39-41,121-123,130-136
+CLAIM: V4 does not clearly preserve the earlier separation between synchronous fail-closed hydration and bounded background lifecycle work.
+EVIDENCE: D0 says the caretaker drives cleanup before multiplexer/reaper/auth/SSE/dispatch exposure, then parks every active row. With many persisted rows, reading that literally blocks the owner app on N herdr stop operations or launches an external-work burst. Section 9 supplies bounded cleanup queues, but it does not explicitly classify flag-off park work into them. PR-1 also says flag-off is "inert", contradicting the always-live caretaker and mandatory park policy.
+FIX: Before exposure, do only O(instances) local hydrate/index/admission-barrier work. Queue park/cleanup through the bounded global and per-instance scheduler; expose the owner plane once gates are installed while affected instance routes remain closed. Rewrite PR-1 as "public surface inert; caretaker always live" and gate startup child count and owner-plane readiness with many active rows.
+
+[P2] G8 is self-matching and checks words rather than contracts
+WHERE: scratchpad/s7-instance-factory-plan.html:30-33,135-136
+CLAIM: The stated whole-document banned-word gate fails on its own declaration and is both over- and under-inclusive.
+EVIDENCE: Lines 32-33 contain every retired phrase that G8 says may not appear anywhere in the document. Excluding that paragraph makes the gate ad hoc, while a synonym can reintroduce the same unsafe ordering without matching. Conversely, a legitimate sentence explaining that a worker is absent can fail a literal grep.
+FIX: Make G8 structural: assert the canonical API status/body, receipt transition ordering, barrier ordering, V1 boot cardinality, accepted-size fixture, and absence of consumer progress routes in the plan schema or implementation tests. If a textual lint remains, keep retired tokens in a separate fixture/history file and scan only normative contract blocks.
+
+[P2] G7 does not test the full single-agent publication invariant
+WHERE: scratchpad/s7-instance-factory-plan.html:43-45,135-136
+CLAIM: The plan rejects every extra terminal, but the summarized gate checks only required equals entry and one required agent.
+EVIDENCE: A manifest with entry as the sole required agent plus a disconnected optional terminal satisfies "required=entry exactly one" while violating section 1. This is the exact hidden-terminal shape the invariant was introduced to reject.
+FIX: Make G7 assert terminalNodes.length === 1 and that the same id is entry, sole required, sole scoped, and sole booted; include optional, disconnected, hidden-session-reference, and non-required terminal fixtures.
+
+R3-#1: FIXED - V4 removes the historical disposition overlay and rewrites the normative sections into one contract; the remaining G8 issue is a new test-shape defect, not a split source of truth.
+R3-#2: FIXED - The plan now requires a real domain-neutral async durable log, distinct consumer files, fail-closed hydration, full durability, parity migration, and boundary fault injection.
+R3-#3: FIXED - Create-time new, recoverAttempt, and goldenResume now carry the required single-flight, positive evidence, cancellation, revision, and receipt semantics; resume after later park is the new uncovered mode above.
+R3-#4: PARTIAL - Coalescing, generations, first-use claim, lease, and adversarial gates landed, but durable claim ordering, stale-generation client behavior, and post-claim replay remain unspecified.
+R3-#5: PARTIAL - Flag-off now has an explicit close-and-park policy, but it produces an illegal unclaimed state, lacks a fresh-session resume path, and can be read as startup-blocking external work.
+R3-#6: PARTIAL - A status/credential table exists, but operation and cleanup precedence are still not defined and stopped/unclaimed is missing.
+R3-#7: FIXED - The worktree now has a CAS-created never-moved retained ref, commit/tree digests, offline detached materialization, mechanical hook/filter rejection, and identity verification.
+R3-#8: FIXED - The orchestration seam now distinguishes non-billing child-operation dedupe/outcomes from the one instance-level financial receipt.
+R3-#9: FIXED - After durable INTENT the attempt owns the saga, socket close only detaches a waiter, same-key retry joins it, and lifecycle/app shutdown own cancellation.
+R3-#10: FIXED - Per-record, per-save, aggregate clone, and global concurrency caps plus maximum-accepted-load probes close the clone-transform issue; the unbounded Git checkout is a distinct artifact class.
+
+VERDICT: UNSOUND - P0:1 P1:6 P2:2

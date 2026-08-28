@@ -14,6 +14,7 @@ import {
 import { agentStatus } from './herdr-agent-status'
 import { endpointCertHosts, mobileEndpoints, type MobileEndpoint } from './mobile-endpoints'
 import { loadOrCreatePairingToken, rotatePairingToken } from './pairing-token'
+import type { VersionPinRecord } from '../shared/version-pin'
 import { readTailnet, type CertHosts, type TailnetIdentity } from './tailscale'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { powerSaveBlocker } from 'electron'
@@ -22,6 +23,7 @@ import type { RecoverResult, RestoreResult, WorkspaceState } from '../shared/mod
 import type { PtyManager } from './pty'
 import type { VoiceEngine } from './voice'
 import type { TurnTracker } from './turn-tracker'
+import type { TurnRecord } from '../shared/turn'
 import type { EventLog } from './event-log'
 import type { AgentRegistry } from './agent-registry'
 import type { TraceReader } from './trace'
@@ -44,7 +46,8 @@ import { handleCallRoutes, type CallEndpointDeps } from './call-endpoints'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
 import { sendBody } from './http-compress'
 import { rendererSourceFor, staleBuildNotice } from './renderer-choice'
-import { fetchRendererDevResource } from './renderer-dev-proxy'
+import { fetchRendererDevResource, rendererDevPathAllowed } from './renderer-dev-proxy'
+import { isViteHmrUpgrade, proxyViteHmrUpgrade } from './hmr-proxy'
 
 // Re-exported so existing importers keep their import path; the constants
 // themselves live in an Electron-free module so pure code can use them.
@@ -82,7 +85,9 @@ export interface MobileServerDeps {
   /** Observability event log + agent roster (mobile query endpoints). */
   events: EventLog
   agents: AgentRegistry
-  traces: TraceReader
+  traces: Pick<TraceReader, 'index' | 'boundaryMarkers' | 'page' | 'latestCheckpoint'>
+  /** Capability-routed history for local terminals and placed crews. */
+  turnHistory?: (terminalId: string) => Promise<TurnRecord[]>
   /** Activity Board data plane; absent = /api/board answers 503. */
   board?: BoardSources
   /** Attach-free dispatch engine (v4 §3); absent = the routes answer 503. */
@@ -97,6 +102,19 @@ export interface MobileServerDeps {
   releaseTerminalView?: (terminalId: string) => void
   subscribeTerminal?: (terminalId: string) => void
   unsubscribeTerminal?: (terminalId: string) => void
+  /**
+   * Answer a request whose slug names a SERVED CREW rather than a live
+   * workspace (share-on-save). Returns true when the route was handled;
+   * false falls through to the 404. Absent = nothing is served.
+   */
+  servedSlug?: (
+    request: http.IncomingMessage,
+    response: http.ServerResponse,
+    url: URL,
+    slug: string
+  ) => Promise<boolean>
+  /** Version pins (§10) for the rail's third marker class; absent = []. */
+  listPins?: (terminalId: string) => readonly VersionPinRecord[]
   recoverAgent: (id: string) => RecoverResult
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
   undoRestore: (id: string) => Promise<RestoreResult>
@@ -182,8 +200,17 @@ export function startMobileServer(deps: MobileServerDeps): void {
     })
   }
 
+  // Vite's HMR socket is claimed BEFORE the product handler. A phone loads the
+  // renderer from this origin, so Vite dials this origin's root — and an
+  // unanswered dial is not inert: the client reads the abnormal close as a dev
+  // server restart and reloads the page, forever. See hmr-proxy.ts.
   const attachUpgrade = (server: http.Server | https.Server): void => {
-    if (deps.onUpgrade) server.on('upgrade', (request, socket) => deps.onUpgrade?.(request, socket))
+    server.on('upgrade', (request, socket, head) => {
+      if (isViteHmrUpgrade(request) && proxyViteHmrUpgrade(deps.rendererDevUrl, request, socket, head)) {
+        return
+      }
+      deps.onUpgrade?.(request, socket)
+    })
   }
 
   // Plain HTTP: fine for the Mac's own localhost (a secure context) and as a
@@ -518,12 +545,16 @@ function serveRendererIndex(
     '<head>',
     `<head>${remoteBoot(slug)}${staleBanner(built.notice)}`
   )
-  // no-cache: assets are hash-named, but a cached index.html would keep
-  // phones pinned to a stale bundle across app updates.
+  // no-store, not no-cache: assets are hash-named, but iOS Safari's
+  // crash-recovery reload ("因为出现问题,此网页已重新载入") reuses a cached
+  // index REGARDLESS of no-cache — measured 2026-08-27: the phone kept
+  // booting a two-builds-old bundle through an entire crash loop, so every
+  // fix shipped and none of them ever reached the device. no-store forbids
+  // the copy that made that possible; the index is ~6 KB, the price is noise.
   sendBody(
     response,
     200,
-    { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' },
+    { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
     Buffer.from(html),
     request.headers['accept-encoding']
   )
@@ -593,15 +624,23 @@ async function serveRendererDev(
 }
 
 /**
- * Where THIS client's renderer comes from. A tailnet peer gets the build; the
- * LAN and loopback keep Vite's live graph. See renderer-choice.ts — the whole
- * reason is that 159 dependent requests do not survive a DERP relay.
+ * Where THIS client's renderer comes from. Loopback (desktop QA) keeps
+ * Vite's live graph; every remote client — LAN phones included — gets the
+ * build, with `?renderer=dev` as the explicit opt-in for phone-dev loops.
+ * See renderer-choice.ts for why (DERP relays choke on the module graph, and
+ * real iPhones crash-loop on dev-mode weight + restart-stale graphs).
  */
-function rendererSource(request: http.IncomingMessage, deps: MobileServerDeps): 'dev' | 'built' {
+function rendererSource(
+  request: http.IncomingMessage,
+  deps: MobileServerDeps,
+  url?: URL
+): 'dev' | 'built' {
+  const raw = url?.searchParams.get('renderer')
   return rendererSourceFor({
     remoteAddress: request.socket.remoteAddress,
     devAvailable: !!deps.rendererDevUrl,
-    builtAvailable: existsSync(path.join(deps.rendererDir, 'index.html'))
+    builtAvailable: existsSync(path.join(deps.rendererDir, 'index.html')),
+    requested: raw === 'dev' || raw === 'built' ? raw : null
   })
 }
 
@@ -627,6 +666,11 @@ async function handle(
     ? resolveScopedRoute(url.pathname, (slug) => deps.store.bySlug(slug)?.id)
     : ({ kind: 'unscoped', pathname: url.pathname } as const)
   if (route.kind === 'unknown-slug') {
+    // A slug no live workspace holds may name a SERVED CREW (share-on-save):
+    // the one place a stranger's sign-in, 402 and ask are answered. The
+    // adapter owns its own gate; a live workspace always wins the slug above,
+    // so a served crew can never shadow the owner's own canvas.
+    if (deps.servedSlug && (await deps.servedSlug(request, response, url, route.slug))) return
     respondJson(response, 404, { error: `No workspace at /${route.slug}` })
     return
   }
@@ -703,10 +747,9 @@ async function handle(
   }
 
   if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
-    // Dev uses Vite's current transforms; packaged/preview builds use out/.
-    // A tailnet peer is served the build instead — the live graph is 159
-    // dependent requests, which a relayed link never finishes.
-    if (rendererSource(request, deps) === 'dev') {
+    // Loopback (and ?renderer=dev) uses Vite's current transforms; every
+    // other client gets the build — see rendererSource.
+    if (rendererSource(request, deps, url) === 'dev') {
       if (await serveRendererDev(request, response, deps, url, true, servedSlug)) return
     }
     if (!serveRendererIndex(request, response, deps, servedSlug)) rendererMissing()
@@ -899,9 +942,11 @@ async function handle(
     return
   }
 
-  // Whichever source served this client's index must serve its assets too:
-  // a bundle index asking for /src/main.tsx, or the reverse, loads nothing.
-  if (request.method === 'GET' && rendererSource(request, deps) === 'dev') {
+  // Whichever source served this client's index must serve its assets too.
+  // Module requests carry no ?renderer=, so route by PATH SHAPE: only a
+  // dev-served index ever asks for /src, /@… or /node_modules paths — a
+  // choice-based check here would strand a ?renderer=dev client's modules.
+  if (request.method === 'GET' && deps.rendererDevUrl && rendererDevPathAllowed(url.pathname)) {
     if (await serveRendererDev(request, response, deps, url)) return
   }
   if (request.method === 'GET' && serveRendererAsset(request, response, deps, url.pathname)) return

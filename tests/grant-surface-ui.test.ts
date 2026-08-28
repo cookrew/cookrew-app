@@ -260,11 +260,17 @@ describe('§2 · the surface is desktop-owner-only, and ABSENT elsewhere', () =>
     expect(canGrant({ grantList: () => undefined, grantEnrol: () => undefined })).toBe(true)
   })
 
-  it('the entry point is gated on it at the call site', () => {
-    // A canGrant() that nothing consults would be a check that never runs.
-    expect(code('App.tsx').replace(/\s+/g, ' ')).toContain(
-      "view === 'agents' && canGrant()"
-    )
+  it('the WHO CAN CALL entry is RETIRED, and the guard still holds the panel', () => {
+    // Owner ruling 2026-08-26: the top-level entry opened a parallel admin
+    // panel onto a dead end ("no agents are exportable"). Sharing now happens
+    // once, where saving happens. The entry is gone from App…
+    const app = code('App.tsx').replace(/\s+/g, ' ')
+    expect(app).not.toContain('WHO CAN CALL')
+    expect(app).not.toContain("view === 'agents' && canGrant()")
+    // …but the guard did NOT become decorative: the panel itself refuses to
+    // render without the owner bridge, so the disclosure rule survives the
+    // entry that used to enforce it.
+    expect(code('GrantPanel.tsx')).toContain('if (!canGrant()) return null')
   })
 })
 

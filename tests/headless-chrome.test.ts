@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { STATIC_FRAME_HEARTBEAT_MS, shouldEmitFrame } from '../src/main/headless-chrome'
+import {
+  STATIC_FRAME_HEARTBEAT_MS,
+  headlessLaunchArgs,
+  shouldEmitFrame
+} from '../src/main/headless-chrome'
+
+describe('headless profile storage flags', () => {
+  it('disables background components and on-device model downloads per profile', () => {
+    const args = headlessLaunchArgs('/profiles/browser-1', 720, 560, 'https://example.test')
+    expect(args).toContain('--disable-background-networking')
+    expect(args).toContain('--disable-component-update')
+    expect(args).toContain('--disable-sync')
+    const features = args.find((arg) => arg.startsWith('--disable-features=')) ?? ''
+    expect(features).toContain('OptimizationGuideModelDownloading')
+    expect(features).toContain('OnDeviceModel')
+  })
+})
 
 describe('headless static-frame liveness', () => {
   it('deduplicates rapid repeats but emits a heartbeat before the UI stale window', () => {

@@ -224,14 +224,11 @@ describe('a switch arriving mid-flight supersedes', () => {
 })
 
 describe('degenerate plans', () => {
-  it('an empty boot list opens one batch and leaves none open', async () => {
-    // `end` is called BEFORE `begin` on purpose — to close whatever a
-    // superseded run left behind — so counting ends is the wrong assertion.
-    // What must hold is that exactly one batch is opened and none is left open.
+  it('an empty boot list closes a stale batch without opening a new one', async () => {
     const { runner, log } = harness()
     await runner.run(plan([]))
-    expect(log.events.filter((e) => e === 'begin').length).toBe(1)
-    expect(log.events[log.events.length - 1]).toBe('end')
+    expect(log.events.filter((e) => e === 'begin')).toEqual([])
+    expect(log.events.filter((e) => e === 'end')).toHaveLength(1)
     expect(log.yields).toBe(0)
   })
 })

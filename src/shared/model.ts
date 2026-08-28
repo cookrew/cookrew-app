@@ -1,5 +1,7 @@
 // Shared data model between main, renderer and CLI protocol.
 
+import type { ServedTranscriptTarget } from './served-transcript'
+
 export type NodeKind = 'terminal' | 'note' | 'browser'
 
 export interface CanvasPosition {
@@ -48,6 +50,11 @@ export interface TerminalNodeData {
   cwd: string
   orch: boolean
   role: string | null
+  /**
+   * Public served address for a placed crew card. The main process uses it to
+   * resolve the caller-scoped transcript; credentials never enter node data.
+   */
+  servedTranscript?: ServedTranscriptTarget | null
   /** Set when this agent was forked from another agent's turn. */
   forkOf?: ForkOrigin | null
   /**

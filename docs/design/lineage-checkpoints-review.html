@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review — fix/lineage-checkpoints @ 36bf6a8</title>
+<style>
+  :root {
+    --bg: #fbfaf8;      --panel: #ffffff;   --ink: #1a1a1c;     --dim: #5b5b63;
+    --line: #e3e0da;    --code-bg: #f4f2ee; --accent: #6b4fbb;
+    --crit: #b3261e;    --high: #c2620a;    --med: #8a6d00;     --low: #4a6b8a;
+    --ok: #2c6e49;      --crit-bg: #fdeceb; --high-bg: #fdf1e5; --med-bg: #fbf6e3;
+    --low-bg: #eef3f8;  --ok-bg: #e9f4ee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131316;    --panel: #1a1a1f;   --ink: #e9e8e6;     --dim: #9d9ca6;
+      --line: #2c2c34;  --code-bg: #0e0e11; --accent: #a68cf0;
+      --crit: #ff6b5e;  --high: #ffa14a;    --med: #e0c04a;     --low: #7fb0d8;
+      --ok: #5fc98d;    --crit-bg: #2a1614; --high-bg: #2a1f12; --med-bg: #262112;
+      --low-bg: #141d26; --ok-bg: #12241a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #131316;      --panel: #1a1a1f;   --ink: #e9e8e6;     --dim: #9d9ca6;
+    --line: #2c2c34;    --code-bg: #0e0e11; --accent: #a68cf0;
+    --crit: #ff6b5e;    --high: #ffa14a;    --med: #e0c04a;     --low: #7fb0d8;
+    --ok: #5fc98d;      --crit-bg: #2a1614; --high-bg: #2a1f12; --med-bg: #262112;
+    --low-bg: #141d26;  --ok-bg: #12241a;
+  }
+  :root[data-theme="light"] {
+    --bg: #fbfaf8;      --panel: #ffffff;   --ink: #1a1a1c;     --dim: #5b5b63;
+    --line: #e3e0da;    --code-bg: #f4f2ee; --accent: #6b4fbb;
+    --crit: #b3261e;    --high: #c2620a;    --med: #8a6d00;     --low: #4a6b8a;
+    --ok: #2c6e49;      --crit-bg: #fdeceb; --high-bg: #fdf1e5; --med-bg: #fbf6e3;
+    --low-bg: #eef3f8;  --ok-bg: #e9f4ee;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.65 ui-sans-serif, -apple-system, "Segoe UI", Inter, system-ui, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 62rem; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
+  header.top { border-bottom: 1px solid var(--line); padding-bottom: 1.5rem; margin-bottom: 2rem; }
+  h1 { font-size: 1.75rem; margin: 0 0 .4rem; letter-spacing: -.02em; }
+  h2 { font-size: 1.2rem; margin: 2.75rem 0 .85rem; letter-spacing: -.01em;
+       padding-bottom: .35rem; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 1rem; margin: 1.5rem 0 .5rem; }
+  p { margin: .7rem 0; }
+  .meta { color: var(--dim); font-size: .875rem; }
+  .meta code { font-size: .85em; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  code { background: var(--code-bg); padding: .12em .38em; border-radius: 4px; font-size: .875em; }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 1rem; overflow-x: auto; font-size: .8125rem; line-height: 1.55; margin: .85rem 0;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .verdict {
+    background: var(--crit-bg); border: 1px solid var(--crit); border-left-width: 5px;
+    border-radius: 8px; padding: 1.1rem 1.25rem; margin: 1.5rem 0;
+  }
+  .verdict strong { color: var(--crit); font-size: 1.05rem; letter-spacing: .01em; }
+  .pill {
+    display: inline-block; font-size: .7rem; font-weight: 700; letter-spacing: .06em;
+    padding: .18em .55em; border-radius: 4px; vertical-align: middle; text-transform: uppercase;
+  }
+  .p-crit { background: var(--crit-bg); color: var(--crit); border: 1px solid var(--crit); }
+  .p-high { background: var(--high-bg); color: var(--high); border: 1px solid var(--high); }
+  .p-med  { background: var(--med-bg);  color: var(--med);  border: 1px solid var(--med); }
+  .p-low  { background: var(--low-bg);  color: var(--low);  border: 1px solid var(--low); }
+  .p-ok   { background: var(--ok-bg);   color: var(--ok);   border: 1px solid var(--ok); }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9rem; }
+  th, td { text-align: left; padding: .55rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); font-weight: 600; }
+  tbody tr:hover { background: var(--code-bg); }
+  .finding {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 1.15rem 1.35rem; margin: 1.25rem 0;
+  }
+  .finding.crit { border-left: 5px solid var(--crit); }
+  .finding.high { border-left: 5px solid var(--high); }
+  .finding.med  { border-left: 5px solid var(--med); }
+  .finding.low  { border-left: 5px solid var(--low); }
+  .finding h3 { margin-top: 0; display: flex; gap: .6rem; align-items: baseline; flex-wrap: wrap; }
+  .lbl { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--dim);
+         font-weight: 700; margin: 1rem 0 .3rem; }
+  details { border: 1px solid var(--line); border-radius: 8px; padding: .7rem .9rem;
+            margin: 1rem 0; background: var(--panel); }
+  details[open] { padding-bottom: 1rem; }
+  summary { cursor: pointer; font-weight: 600; font-size: .9rem; }
+  summary::marker { color: var(--accent); }
+  .out { color: var(--ok); }
+  .bad { color: var(--crit); }
+  footer { margin-top: 3.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line);
+           color: var(--dim); font-size: .8125rem; }
+  .toggle {
+    position: fixed; top: 1rem; right: 1rem; background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 999px; padding: .4rem .85rem;
+    font-size: .8rem; cursor: pointer; z-index: 10;
+  }
+  .flow { width: 100%; height: auto; margin: 1rem 0; }
+  .flow text { font: 12px ui-monospace, monospace; fill: var(--ink); }
+  .flow .sub { fill: var(--dim); font-size: 11px; }
+  .flow rect { fill: var(--panel); stroke: var(--line); }
+  .flow .danger rect { stroke: var(--crit); }
+  .flow path, .flow line { stroke: var(--dim); fill: none; }
+  ul { margin: .6rem 0; padding-left: 1.3rem; }
+  li { margin: .3rem 0; }
+  @media (max-width: 640px) {
+    .wrap { padding: 1.75rem 1rem 4rem; }
+    h1 { font-size: 1.4rem; }
+    table { font-size: .82rem; }
+    th, td { padding: .45rem .4rem; }
+  }
+</style>
+</head>
+<body>
+<button class="toggle" onclick="const r=document.documentElement;r.dataset.theme=(r.dataset.theme==='dark')?'light':'dark'">◐ theme</button>
+<div class="wrap">
+
+<header class="top">
+  <h1>Review — <code>fix/lineage-checkpoints</code></h1>
+  <p class="meta">
+    <strong>Round 1</strong> head <code>36bf6a8</code> · 6 files, +889 −1 · branch suite 97 passed<br>
+    <strong>Round 2</strong> head <code>fe03817</code> · C1 fix attempted · re-checked by probe<br>
+    Reviewed against <code>dev</code> · author Tinker · reviewer Commander · requested by the
+    Chief · 2026-08-23 · this branch writes to the owner's real checkpoint history
+  </p>
+</header>
+
+<div class="verdict">
+  <strong>DO NOT MERGE — C1 attempted at <code>fe03817</code>, still open.</strong>
+  <p>
+    <b>Round 1.</b> The counter fix is the right idea and genuinely half-done. It fixes the
+    <em>numbering</em> and not the <em>truncation</em>, so
+    <strong>the reported symptom recurs on this branch</strong>: a restored 613-checkpoint
+    history still collapses to 16 on the next live reconcile.
+  </p>
+  <p style="margin-bottom:0">
+    <b>Round 2.</b> <code>fe03817</code> fixes a real and necessary second bug — the alignment
+    was reading a cache of the record rather than the record — but it does not address the
+    cause. Re-run against a real store: disk holds 613 after the restore, <strong>16 after the
+    next reconcile</strong>. The accompanying regression test passes because it asserts the
+    numbering and never the length. See <a href="#round2">Round 2</a>.
+  </p>
+</div>
+
+<p>
+  This corrects a sequencing explanation that was given to the owner. The 613 did not vanish
+  merely because the fix was unmerged — the fix does not hold either. That is proven below by
+  a probe against the real <code>TurnTracker</code>, not inferred from where the code lives.
+</p>
+
+<h2>Findings</h2>
+
+<table>
+  <thead>
+    <tr><th>#</th><th>Severity</th><th>Finding</th><th>Live today?</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>C1</td><td><span class="pill p-crit">Critical</span></td>
+      <td>The counter is fixed; the truncation is not. 613 → 16 on the next reconcile, on disk too.
+        <br><span class="pill p-crit">Round 2</span> attempted at <code>fe03817</code> —
+        <strong>still open</strong>, cause untouched.</td>
+      <td>Yes — production path</td>
+    </tr>
+    <tr>
+      <td>S1</td><td><span class="pill p-high">High</span></td>
+      <td><b>Species</b> — a guard that passes because it never looks at the thing it is named
+        for. Third instance this week. <a href="#species">Named below</a>.</td>
+      <td>Yes — process</td>
+    </tr>
+    <tr>
+      <td>M5</td><td><span class="pill p-med">Medium</span></td>
+      <td><code>store.load()</code> now runs on every reconcile — 64.7 ms at 5,000 records, main
+        thread. Same class as this lane's Tinker HIGH-2. Not a blocker.</td>
+      <td>New in <code>fe03817</code></td>
+    </tr>
+    <tr>
+      <td>H1</td><td><span class="pill p-high">High</span></td>
+      <td><code>rekeyByUuid</code> silently overwrites an annotation at a collided index.</td>
+      <td>Latent — no caller</td>
+    </tr>
+    <tr>
+      <td>H2</td><td><span class="pill p-high">High</span></td>
+      <td><code>rekeyByUuid</code> is not idempotent on overlapping ranges; a re-run corrupts and persists.</td>
+      <td>Latent — no caller</td>
+    </tr>
+    <tr>
+      <td>M1</td><td><span class="pill p-med">Medium</span></td>
+      <td><code>walkRefusals()</code> is module-global; concurrent walks clobber it, hiding a decline.</td>
+      <td>Latent — <code>planRecovery</code> unwired</td>
+    </tr>
+    <tr>
+      <td>M2</td><td><span class="pill p-med">Medium</span></td>
+      <td>Two silent stops in the walk: missing predecessor file, and the depth cap.</td>
+      <td>Yes</td>
+    </tr>
+    <tr>
+      <td>M3</td><td><span class="pill p-med">Medium</span></td>
+      <td>Pin refusal is real but guards only the unwired path; the live renumber has no pin check.</td>
+      <td>Yes</td>
+    </tr>
+    <tr>
+      <td>M4</td><td><span class="pill p-med">Medium</span></td>
+      <td><code>planRecovery</code> — the tool this incident depends on — has zero tests and no caller.</td>
+      <td>Yes</td>
+    </tr>
+    <tr>
+      <td>L1–L3</td><td><span class="pill p-low">Low</span></td>
+      <td>O(n²) ambiguity scan; duplicate-index overwrite unflagged; false <code>unmatched</code> on re-run.</td>
+      <td>Latent</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  <strong>Blocking set:</strong> C1, H1, H2. Those three are the ones that write bad data to
+  Commander's history. The MEDIUMs can follow, but M3 should at least be written down at the
+  place that actually renumbers.
+</p>
+
+<h2 id="c1">C1 — the counter is fixed; the truncation is not <span class="pill p-crit">Critical</span></h2>
+
+<div class="finding crit">
+<p>
+  <code>alignToLedger</code> correctly <em>renumbers</em> the incoming run against the ledger.
+  But <code>replaceHistory</code> then <strong>replaces the entire history with only that
+  run</strong> — the 597 earlier records are never carried forward. <code>alignToLedger</code>
+  already computes the join position <code>at</code>; it throws it away.
+</p>
+
+<svg class="flow" viewBox="0 0 700 168" role="img" aria-label="Restored history is replaced by the aligned incoming run">
+  <g><rect x="8" y="18" width="200" height="46" rx="6"/>
+     <text x="20" y="38">ledger (restored)</text><text class="sub" x="20" y="54">613 records · 1…613</text></g>
+  <g><rect x="8" y="98" width="200" height="46" rx="6"/>
+     <text x="20" y="118">bound session file</text><text class="sub" x="20" y="134">16 records · 1…16</text></g>
+  <g><rect x="258" y="58" width="180" height="46" rx="6"/>
+     <text x="270" y="78">alignToLedger</text><text class="sub" x="270" y="94">shift +597 → 598…613</text></g>
+  <g class="danger"><rect x="488" y="58" width="200" height="46" rx="6"/>
+     <text x="500" y="78">replaceHistory</text><text class="sub" x="500" y="94">history := 16 records</text></g>
+  <path d="M208 41 C 234 41 234 74 256 78"/><path d="M208 121 C 234 121 234 88 256 84"/>
+  <path d="M438 81 L 484 81"/>
+  <path d="M480 81 l -8 -4 l 0 8 z" fill="currentColor" stroke="none"/>
+  <path d="M252 80 l -8 -4 l 0 8 z" fill="currentColor" stroke="none"/>
+</svg>
+
+<div class="lbl">Probe result — real <code>TurnTracker</code>, no mocks</div>
+<pre><code>after restore:          613
+<span class="bad">after live reconcile:    16     index range: 598 -> 613</span></code></pre>
+
+<div class="lbl">Why it is destructive, not cosmetic</div>
+<p>
+  <code>commitReconciled</code> → <code>store.scheduleSave(id, records)</code> marks
+  <code>'all'</code> dirty, and an <code>'all'</code> flush treats those records as the whole
+  truth: <code>annotations.save</code> rebuilds the sidecar from them
+  (<code>turn-annotations.ts:602-607</code>) and <code>persistConversation</code> rewrites the
+  file. <strong>The 597 die on disk too, along with their Sous titles.</strong>
+</p>
+
+<div class="lbl">It is the production path, not a synthetic one</div>
+<p>
+  <code>session-sync.ts:620</code> calls
+  <code>this.turns.replaceHistory(terminalId, acc.records())</code>, and the accumulator covers
+  the <em>bound session file only</em>. That is exactly the 16. After this merge Commander gets
+  16 checkpoints numbered 598–613 instead of 16 numbered 1–16: better numbers, same loss.
+</p>
+
+<div class="lbl">Fix shape</div>
+<p>
+  Preserve <code>previous[0 … at-1]</code> — the prefix before the aligned run — and concat the
+  aligned incoming. The join position is already known inside <code>alignToLedger</code>; the
+  cheapest correct change is to return it (or the joined array) rather than only the shifted
+  tail. Note the store's <code>'all'</code> semantics mean a partial history must never reach
+  <code>scheduleSave</code>.
+</p>
+
+<details open>
+<summary>Re-runnable probe for C1 — drop in as <code>tests/zz-lineage-probe.test.ts</code>, watch it go red</summary>
+<pre><code>import { describe, expect, it } from 'vitest'
+import { TurnTracker } from '../src/main/turn-tracker'
+import type { TurnRecord } from '../src/shared/turn'
+
+const rec = (index: number, uuid: string): TurnRecord =>
+  ({ index, uuid, prompt: `p${index}`, reply: 'r', startedAt: index, endedAt: index + 1 }) as TurnRecord
+
+describe('PROBE: does a restored 613 survive the next live reconcile?', () => {
+  it('restore 613, then the live session (16 turns) reconciles', () => {
+    const t = new TurnTracker()
+    // The restore: 613 checkpoints across the whole lineage.
+    const restored = Array.from({ length: 613 }, (_, i) => rec(i + 1, `u-${i + 1}`))
+    t.replaceHistory('term-1', restored)
+    console.log('after restore:', t.history('term-1').length)
+
+    // The live tracker's next reconcile: the BOUND session file alone holds
+    // the last 16 turns, which parseSessionTurns numbers 1..16.
+    const live = Array.from({ length: 16 }, (_, i) => rec(i + 1, `u-${598 + i}`))
+    t.replaceHistory('term-1', live)
+
+    const after = t.history('term-1')
+    console.log('after live reconcile:', after.length)
+    console.log('index range:', after[0]?.index, '-&gt;', after[after.length - 1]?.index)
+    expect(after.length).toBe(613)
+  })
+})</code></pre>
+<p class="meta" style="margin-bottom:0">
+  Run: <code>npx vitest run tests/zz-lineage-probe.test.ts</code>. Red on 36bf6a8. It should go
+  green on the fix without any change to the probe — the assertion is the requirement.
+</p>
+</details>
+</div>
+
+<h2 id="h1">H1 — <code>rekeyByUuid</code> silently overwrites a collided annotation <span class="pill p-high">High</span></h2>
+
+<div class="finding high">
+<p>
+  A moved annotation and an unmatched one can land on the same target index.
+  <code>next.set(target, annotation)</code> has no collision check, so last write wins.
+</p>
+<div class="lbl">Probe result</div>
+<pre><code>report: {"moved":1,"unmatched":[2]}
+titles kept: <span class="bad">['2:TITLE-B']</span>      ← TITLE-A is gone, and the report claims success</code></pre>
+<p>
+  Setup: record 1 has a uuid and moves to index 2; record 2 has no uuid, so it is "unmatched"
+  and kept where it is — at index 2. This is precisely the <em>wrong, not orphaned</em> failure
+  the function was written to prevent, occurring inside the function written to prevent it.
+</p>
+<div class="lbl">Fix shape</div>
+<p>
+  Refuse on collision: if <code>next.has(target)</code>, leave <em>both</em> where they are and
+  report both in <code>unmatched</code>. Losing one loudly beats moving it quietly — the
+  function's own stated rule, applied to its own output map.
+</p>
+</div>
+
+<h2 id="h2">H2 — not idempotent on overlapping ranges; a re-run corrupts <span class="pill p-high">High</span></h2>
+
+<div class="finding high">
+<div class="lbl">Probe result — identical arguments both times</div>
+<pre><code>first:  {"moved":2,"unmatched":[]}   ['7:TITLE-C', '3:TITLE-E']
+second: {"moved":1,"unmatched":[7]}  <span class="bad">['7:TITLE-E']</span>   ← TITLE-C destroyed, TITLE-E on the wrong turn</code></pre>
+<p>
+  <code>oldByIndex</code> is keyed by <em>old</em> indices while <code>current</code> now holds
+  <em>new</em> ones. Where the two ranges overlap, a second pass re-resolves through a stale
+  mapping and moves an already-moved annotation again. <code>moved &gt; 0</code> then
+  <code>persistSnapshot</code>s the damage.
+</p>
+<p>
+  The branch's <em>"is idempotent — running it twice changes nothing"</em> test passes only
+  because its fixture uses disjoint ranges (index 400). A <strong>rewind</strong> — one of the
+  three renumber causes the docstring itself names — produces exactly the overlapping case that
+  breaks. The test's premise is narrower than its claim.
+</p>
+<div class="lbl">Fix shape</div>
+<p>
+  Make the operation self-describing rather than positional: stamp the applied state (or key the
+  sidecar by uuid outright, which is the stated destination anyway), so a second run has a fact
+  to check instead of re-deriving through a mapping that is no longer true.
+</p>
+</div>
+
+<details>
+<summary>Re-runnable probe for H1 + H2</summary>
+<pre><code>import { describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { AnnotationStore } from '../src/main/turn-annotations'
+import type { TurnRecord } from '../src/shared/turn'
+
+const rec = (index: number, uuid?: string): TurnRecord =>
+  ({ index, uuid, prompt: `p${index}`, reply: 'r', startedAt: index, endedAt: index + 1 }) as TurnRecord
+const titled = (index: number, uuid: string | undefined, title: string): TurnRecord =>
+  ({ ...rec(index, uuid), title }) as TurnRecord
+
+describe('PROBE: rekeyByUuid collision + double-apply', () => {
+  let dir = ''
+  const store = (): AnnotationStore =&gt; {
+    dir = mkdtempSync(path.join(tmpdir(), 'rekey-probe-'))
+    return new AnnotationStore(dir)
+  }
+
+  it('A: a moved annotation can silently OVERWRITE an unmatched one', () =&gt; {
+    const s = store()
+    s.save('agent', [titled(1, 'u-a', 'TITLE-A'), titled(2, undefined, 'TITLE-B')])
+    const before = [rec(1, 'u-a'), rec(2, undefined)]
+    const after = [rec(2, 'u-a')]
+
+    const report = s.rekeyByUuid('agent', before, after)
+    const state = s.load('agent')
+    console.log('A report:', JSON.stringify(report))
+    console.log('A titles kept:', [...state.entries()].map(([i, a]) =&gt; `${i}:${(a as any).title}`))
+    rmSync(dir, { recursive: true, force: true })
+    const titles = [...state.values()].map((a) =&gt; (a as any).title)
+    expect(titles).toContain('TITLE-A')
+  })
+
+  it('B: a SECOND run with the same arguments destroys a title', () =&gt; {
+    const s = store()
+    s.save('agent', [titled(3, 'u-c', 'TITLE-C'), titled(5, 'u-e', 'TITLE-E')])
+    const before = [rec(3, 'u-c'), rec(5, 'u-e')]
+    const after = [rec(7, 'u-c'), rec(3, 'u-e')]
+
+    const first = s.rekeyByUuid('agent', before, after)
+    const afterFirst = [...s.load('agent').entries()].map(([i, a]) =&gt; `${i}:${(a as any).title}`)
+    const second = s.rekeyByUuid('agent', before, after)
+    const afterSecond = [...s.load('agent').entries()].map(([i, a]) =&gt; `${i}:${(a as any).title}`)
+    console.log('B first: ', JSON.stringify(first), afterFirst)
+    console.log('B second:', JSON.stringify(second), afterSecond)
+    rmSync(dir, { recursive: true, force: true })
+    expect(afterSecond).toEqual(afterFirst)
+  })
+})</code></pre>
+<p class="meta" style="margin-bottom:0">
+  Both red on 36bf6a8. <code>rekeyByUuid</code> has no caller in <code>src/</code> today, so
+  these are latent — they fire the moment the repair tool is wired, which is the next thing
+  anyone does here.
+</p>
+</details>
+
+<h2 id="round2">Round 2 — <code>fe03817</code>, and why C1 is still open</h2>
+
+<div class="finding crit">
+<p>
+  <span class="pill p-ok">Real, necessary, not the cause</span>
+  The fix moves the alignment source from <code>liveHistory()</code> to
+  <code>store.load()</code>. That corrects a <strong>genuine second bug</strong>, and one Round 1
+  did not separately name: after the restore, disk held 613 while the running tracker's memory
+  still held the pre-restore 16, so the incoming head matched at index 1 and nothing shifted.
+  Without this change even a correct <code>replaceHistory</code> would compute the wrong join.
+  It is necessary. It is not sufficient.
+</p>
+
+<div class="lbl">Re-run against the real incident — real store, real tracker</div>
+<pre><code>app holds:            16
+disk after restore:  613
+<span class="bad">DISK after reconcile:  16    range 598 -&gt; 613</span></code></pre>
+<p>
+  The numbering is now right. The 597 records are still destroyed, in the ledger and in the
+  annotation sidecar together.
+</p>
+
+<div class="lbl">The cause, untouched</div>
+<p>
+  <code>alignToLedger</code> still returns <em>only the incoming run</em>, shifted:
+</p>
+<pre><code>return incoming.map((record) =&gt; ({ ...record, index: record.index + shift }))</code></pre>
+<p>
+  Everything before the join is discarded, <code>replaceHistory</code> commits the 16 as the
+  whole history, and <code>scheduleSave</code> with <code>'all'</code> rewrites the file. Round 1
+  named this and gave the fix shape; <code>fe03817</code> changed which array is passed as
+  <code>existing</code> instead.
+</p>
+
+<div class="lbl">The fix, concretely — <code>at</code> is already computed</div>
+<pre><code>const shifted = incoming.map((r) =&gt; ({ ...r, index: r.index + shift }))
+return [...existing.slice(0, at), ...shifted]</code></pre>
+<p>
+  <code>at === 0</code> degenerates to today's behaviour, so the existing fixture keeps passing.
+  A head uuid the ledger has never seen still returns <code>incoming</code> unchanged —
+  alignment must never be invented, which Round 1 agreed with and this preserves.
+</p>
+
+<details open>
+<summary>Re-runnable probe for Round 2 — the incident with a real <code>TurnStore</code></summary>
+<pre><code>import { describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { TurnTracker } from '../src/main/turn-tracker'
+import { TurnStore } from '../src/main/turn-store'
+import type { TurnRecord } from '../src/shared/turn'
+
+const rec = (index: number, uuid: string): TurnRecord =&gt;
+  ({ index, uuid, prompt: `p${index}`, reply: 'r', startedAt: index, endedAt: index + 1 }) as TurnRecord
+
+describe('RE-CHECK C1 — the real incident, with a real store', () =&gt; {
+  it('restore 613 to disk while the app holds 16, then the live reconcile', async () =&gt; {
+    const dir = mkdtempSync(path.join(tmpdir(), 'c1-recheck-'))
+    try {
+      const store = new TurnStore(dir)
+      const tracker = new TurnTracker(undefined, store)
+
+      // The running app: 16 live turns, in memory and on disk.
+      const live = Array.from({ length: 16 }, (_, i) =&gt; rec(i + 1, `u-${598 + i}`))
+      tracker.replaceHistory('t1', live)
+      await store.flushAll()
+
+      // THE RESTORE, as the recovery tool does it: 613 written to the ledger
+      // behind the running tracker's back.
+      const restored = Array.from({ length: 613 }, (_, i) =&gt; rec(i + 1, `u-${i + 1}`))
+      store.scheduleSave('t1', restored)
+      await store.flushAll()
+      console.log('disk after restore:', store.load('t1').length)
+
+      // The very next turn: the tracker reconciles the BOUND session file,
+      // which holds only the last 16 turns, numbered 1..16.
+      const nextTurn = Array.from({ length: 16 }, (_, i) =&gt; rec(i + 1, `u-${598 + i}`))
+      tracker.replaceHistory('t1', nextTurn)
+      await store.flushAll()
+
+      const disk = store.load('t1')
+      console.log('DISK after:', disk.length,
+                  'range', disk[0]?.index, '-&gt;', disk[disk.length - 1]?.index)
+      expect(disk.length).toBe(613)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})</code></pre>
+<p class="meta" style="margin-bottom:0">
+  Red on <code>fe03817</code>. The assertion is the requirement — it needs no editing to become
+  the regression test C1 has been missing.
+</p>
+</details>
+</div>
+
+<h2 id="species">S1 — the species: a guard that never looks at the thing it guards</h2>
+
+<div class="finding high">
+<p>
+  This is the third instance this week, and it deserves a name rather than another footnote,
+  because it has now cost three review rounds and each time it looked like green.
+</p>
+
+<div class="lbl">The instance in <code>fe03817</code></div>
+<p>
+  The new regression test is named
+  <em>"does not shrink a restored 613-record ledger back to the parsed 16"</em>. It asserts:
+</p>
+<pre><code>expect(history?.map((r) =&gt; r.index)).toEqual([611, 612, 613])</code></pre>
+<p>
+  It checks the <b>numbering</b> and never the <b>length</b> — so it passes while the exact bug
+  it is named for is still live. Its fixture compounds this: disk is
+  <code>[611:u-a, 612:u-b, 613:u-c]</code> and the incoming run is
+  <code>[1:u-a, 2:u-b, 3:u-c]</code>, so the run <em>spans the entire ledger</em>,
+  <code>at === 0</code>, and there is <b>no prefix that could be lost</b>. The test is not weak
+  against the bug; it is structurally incapable of seeing it.
+</p>
+<pre><code>aligned length: 16  range 598 -&gt; 613     <span class="bad">← expected 613</span></code></pre>
+<p>
+  One line closes it: <code>expect(out).toHaveLength(613)</code>, against a fixture where the
+  incoming run is a <em>suffix</em> of the ledger. Fails today, passes on the real fix.
+</p>
+
+<div class="lbl">The same species, three times</div>
+<table>
+  <thead><tr><th>Guard</th><th>What it claimed</th><th>What it actually looked at</th></tr></thead>
+  <tbody>
+    <tr><td>The grant-surface sweep <span class="svgdim">(Commander's own)</span></td>
+      <td>No listener reaches a grant mutator</td>
+      <td>The <em>spelling</em> of four names — so a rename walked straight past it</td></tr>
+    <tr><td><code>rekeyByUuid</code> idempotency test <span class="svgdim">(H2)</span></td>
+      <td>Running it twice changes nothing</td>
+      <td>A fixture with <em>disjoint</em> index ranges — the overlapping case corrupts</td></tr>
+    <tr><td>C1 regression test <span class="svgdim">(this round)</span></td>
+      <td>Does not shrink a 613-record ledger to 16</td>
+      <td>Three <em>index values</em> — never the length, on a fixture with no prefix</td></tr>
+  </tbody>
+</table>
+<p class="meta">
+  A fourth, older, already cited in this branch's own test file: the <code>/api</code>
+  conformance sweep that was blind to <code>streamUrl</code>.
+</p>
+
+<div class="lbl">Why it keeps happening, and the one question that catches it</div>
+<p>
+  Every instance has the same shape. The <b>name</b> carries the requirement, the
+  <b>assertion</b> carries something weaker and adjacent, and the gap between them is invisible
+  because the test is green — green is the colour both a working guard and a decorative one
+  come in. Nobody reads an assertion sceptically when it passes.
+</p>
+<div class="card warn">
+  <b>The check, and it takes ten seconds.</b> For any guard, ask:
+  <b>what is the ONE observation that would have to change for this to fail?</b> Then compare
+  that answer to the guard's own name. If they are not the same thing, the guard is decorative
+  — and the more precisely it is named, the more convincingly it lies. A test that asserts
+  indices cannot fail on a length. A sweep that asserts spellings cannot fail on a rename.
+  <br><br>
+  Its counterpart is the rule this branch already follows elsewhere and should follow here:
+  <b>a conformance test that cannot be shown to fail is decoration.</b> Mutate the source,
+  watch it go red, and only then believe the green. Every finding in this document was
+  established that way, including the one that overturned the reviewer's own first reading.
+</div>
+</div>
+
+<h2>M1–M5 and the LOWs</h2>
+
+<div class="finding med">
+<h3>M5 — <code>store.load()</code> on every reconcile <span class="pill p-med">Medium</span> <span class="pill p-low">New in fe03817</span></h3>
+<p>
+  The Round 2 fix reads the durable ledger on the reconcile path. Measured cold — with
+  <code>pending</code> empty, i.e. just after a flush — on the Electron main thread:
+</p>
+<table>
+  <thead><tr><th>Ledger</th><th><code>load()</code></th></tr></thead>
+  <tbody>
+    <tr><td>613 records</td><td><b>18.4 ms</b></td></tr>
+    <tr><td>5,000 records</td><td><b>64.7 ms</b></td></tr>
+  </tbody>
+</table>
+<p>
+  <b>Not a blocker</b>, and cheap whenever <code>pending</code> is warm — which it is during
+  active work, because <code>scheduleSave</code> keeps it populated. The exposed window is a
+  reconcile arriving after a flush and before the next save.
+</p>
+<p>
+  Flagged because it is the <b>same class as this lane's existing Tinker HIGH-2</b>: a file read
+  and parse landing on a hot path. It will bite <b>Conductor first</b> — that agent carries
+  thousands of checkpoints, and 5,000 is where this measures 64.7 ms per reconcile. Worth a look
+  before merge; not worth holding the merge for.
+</p>
+</div>
+
+<div class="finding med">
+<h3>M1 — <code>walkRefusals()</code> is module-global <span class="pill p-med">Medium</span></h3>
+<p>
+  <code>sessionChain</code> is async and assigns <code>lastRefusals</code> only at the end of the
+  walk. Two terminals walking concurrently means a walk that <em>did</em> refuse can report
+  <code>refusals: []</code> — turning an honest decline into a silent truncation, the exact
+  failure <code>lineage-ledger.ts</code>'s own docstring says must not happen.
+  <strong>Fix:</strong> return the refusals from <code>sessionChain</code> instead of parking
+  them in module state.
+</p>
+</div>
+
+<div class="finding med">
+<h3>M2 — two silent stops in the walk <span class="pill p-med">Medium</span></h3>
+<p>
+  A missing predecessor file and the <code>MAX_LINEAGE_DEPTH</code> cap both
+  <code>break</code> <strong>without recording a refusal</strong>. Only the <code>/clear</code>
+  inference reports one. A chain truncated by a deleted transcript is therefore
+  indistinguishable from a complete one — "quietly partial", by the file's own standard.
+</p>
+</div>
+
+<div class="finding med">
+<h3>M3 — the pin refusal does not cover the path that renumbers
+  <span class="pill p-med">Medium</span> <span class="pill p-ok">Round 2: addressed as agreed</span></h3>
+<p class="meta">
+  <code>fe03817</code> writes this hazard down in the live renumber path itself, which is what
+  Round 1 asked for. The comment is accurate. The guard itself is still future work, correctly
+  deferred: no node carries a pin today.
+</p>
+<p>
+  <span class="pill p-ok">Confirmed stated, not hidden</span> — this was review item 4.
+  <code>refuseRenumber</code> is real, well-argued, and correctly wired into
+  <code>planRecovery</code>. But <code>planRecovery</code> is unwired, and the <em>live</em>
+  renumber — <code>alignToLedger</code> inside <code>replaceHistory</code> — shifts indices with
+  <strong>no pin check at all</strong>. So a node carrying pins is renumbered silently today,
+  which is the thing the refusal exists to prevent. Stated, but narrower than it reads.
+</p>
+</div>
+
+<div class="finding med">
+<h3>M4 — <code>planRecovery</code> has zero tests and no caller <span class="pill p-med">Medium</span></h3>
+<p>
+  The tool this incident depends on — "planRecovery reproduces it from the transcripts" — has no
+  test file (<code>tests/</code> gains only <code>lineage-ledger</code> and
+  <code>annotation-rekey</code>) and nothing in <code>src/</code> imports
+  <code>lineage-recover</code>. The recovery is currently a manual, unproven path.
+</p>
+</div>
+
+<div class="finding low">
+<h3>LOW <span class="pill p-low">Low</span></h3>
+<ul>
+  <li><code>ambiguousOld</code> uses <code>[...oldByIndex.values()].includes(...)</code> per
+      record — O(n²); ~188k comparisons at 613 records, worse on larger histories.</li>
+  <li><code>oldByIndex.set(record.index, …)</code> silently overwrites on a duplicate index in
+      <code>before</code>; not flagged as ambiguity.</li>
+  <li>Re-running a <em>disjoint</em> re-key reports <code>unmatched: [newIndex]</code> — a false
+      alarm on every re-run (probe B's second run reported <code>unmatched:[7]</code>).</li>
+</ul>
+</div>
+
+<h2>Item 5 — <code>rebuildLedgerInto</code>: not one-line-shaped</h2>
+
+<div class="finding high">
+<p>
+  Tinker's parting hazard is real and confirmed: <code>rebuildLedger</code> resolves a single
+  <code>harness.watchFile(node)</code> — the bound session only — renumbers from 1, and
+  <code>rebuildLedgerInto</code> <code>scheduleSave</code>s <code>'all'</code>. Pointed at
+  Commander it would rewrite 613 back to 16.
+</p>
+<p>
+  <strong>But it is not a one-line change, and that should not be promised.</strong> The blocker
+  is sync/async: <code>sessionChain</code> and <code>readHeadLines</code> are async;
+  <code>rebuildLedger</code> and <code>rebuildLedgerInto</code> are sync. Walking the chain
+  forces a sync → async conversion of both plus their callers.
+</p>
+<p>
+  <strong>What is small, sync, and worth doing before merge:</strong> make
+  <code>rebuildLedgerInto</code> <em>refuse to write a rebuild shorter than the ledger it would
+  replace</em>. A few lines, no async, and it converts a data-destroying tool into a refusing
+  one — which is this branch's own stated philosophy. The lineage-aware rebuild is a follow-up.
+</p>
+<p class="meta">
+  Mitigating: <code>rebuildLedger</code> / <code>rebuildLedgerInto</code> have no production
+  callers today — <code>tests/ledger-rebuild.test.ts</code> only.
+</p>
+</div>
+
+<h2>What is right, and worth keeping</h2>
+<ul>
+  <li><strong>The diagnosis.</strong> "The durable record is the truth and the parse is a cache
+      of it that can silently disagree" is the correct framing, and deriving the base from the
+      ledger closes the class rather than the instance.</li>
+  <li><strong>Reading the boundary instead of inferring it.</strong> <code>compact_boundary</code>
+      is a fact; <code>/clear</code> is a heuristic; the two are kept apart, and the inferred
+      join is opt-in and refuses on ambiguity, weak overlap, or no candidate.</li>
+  <li><strong><code>LINEAGE_HEAD_LINES = 256</code>.</strong> The reasoning — that 24 read
+      Commander's own edge as absent at lines 26–27 and silently dropped a 119 MB ancestor — is
+      exactly the kind of measured justification this lane should hold.</li>
+  <li><strong>Choosing transcripts over <code>node.sessionLineage</code></strong> because the
+      array is not demonstrably complete, and a partial lineage fails like a wrong one.</li>
+  <li><strong>The uuid identity claim was verified</strong>, not assumed: 2,327 checkpoint uuids
+      across 36 agents, ledger vs. rebuild, identical.</li>
+</ul>
+
+<footer>
+  Review of <code>fix/lineage-checkpoints</code> against <code>dev</code>.
+  <b>Round 1</b> @ <code>36bf6a8</code>; <b>Round 2</b> @ <code>fe03817</code>, C1 attempted and
+  still open. Findings C1, H1, H2 and the Round 2 re-check were each reproduced by probe against
+  the real classes; probe sources are inlined above so they can be re-run rather than believed.
+  Branch suite green in both rounds — and in both rounds the green did not cover C1, which is
+  the point of <a href="#species">S1</a>.
+  <br><br>
+  Reviewed in a worktree of the reviewer's own. Round 2 was not: it ran inside the author's
+  worktree while he had uncommitted work in it, which is how a review accidentally becomes an
+  edit. No harm done, recorded so it is not repeated.
+  <br><br>
+  Author does not fix, reviewer does not merge — the Chief merges.
+</footer>
+
+</div>
+</body>
+</html>

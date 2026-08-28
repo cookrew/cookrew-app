@@ -1,5 +1,4 @@
 import { AgentAvatar } from './nodes/AgentAvatar'
-import { ExportToggle } from './ExportToggle'
 import type { AgentExportState } from './grant-state'
 import { TurnView } from './nodes/TurnView'
 import { RoleAvatar } from './nodes/RoleAvatar'
@@ -144,25 +143,10 @@ export function AgentRow({
             <span className="ags-ago" title={new Date(row.lastActivityAt).toLocaleString()}>
               {agoLabel(row.lastActivityAt, now)}
             </span>
-            {/*
-              THE EXPORT ENTRY POINT, on the row and not behind a panel.
-              Velvet's §6: "who can call this right now" is asked in a glance,
-              so the answer lives here at rest. Magpie's audit found zero of
-              forty controls mentioning export at all — this is that gap's
-              first inch, and it stops the click from reaching the row
-              underneath (which would zoom to the canvas card).
-            */}
-            {exportState && (
-              <ExportToggle
-                agentName={row.name}
-                state={exportState}
-                busy={exportBusy}
-                error={exportError}
-                onExport={() => onExport?.(row)}
-                onUnexport={() => onUnexport?.(row)}
-                onOpenGrants={() => onOpenGrants?.()}
-              />
-            )}
+            {/* RETIRED (owner ruling 2026-08-26): the per-agent export toggle.
+                R30 deleted the per-agent grant matrix server-side — a caller
+                talks to a TEAM through its orch — so sharing is decided once,
+                in the save sheet, not agent by agent on a roster row. */}
             <span className="ags-spacer" />
             {/* RECOVER is the one action that cannot hand off to the canvas:
                 for an inactive agent the card to zoom to does not exist yet.

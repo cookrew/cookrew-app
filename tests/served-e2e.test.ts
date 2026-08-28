@@ -1,0 +1,348 @@
+import { describe, expect, it, afterEach } from 'vitest'
+import http from 'node:http'
+import { AddressInfo } from 'node:net'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { generateKeyPairSync, sign } from 'node:crypto'
+import { CallCredentialService } from '../src/main/call-credential'
+import { callAssertionPayload } from '../src/main/call-ceremony'
+import { ServedCallers } from '../src/main/served-callers'
+import { handleServedRoute } from '../src/main/served-endpoints'
+import { ServedTemplates } from '../src/main/session-served'
+import { RemoteCrewStore, parseCrewLink } from '../src/main/remote-crews'
+import type { TurnRecord } from '../src/shared/turn'
+
+/**
+ * The payment rail, stubbed at the seam.
+ *
+ * devSettle used to live in production and be imported here; it admitted any
+ * 'tx-' string, so the paid door was decorative. The real rail is x402-rail.ts
+ * and has its own suite. What THIS suite still needs is the three answers, so
+ * the gate's own branches (the two voices, mint-or-not) stay covered without a
+ * chain — which is exactly what the seam is for.
+ */
+const stubSettle = async (payment: string): Promise<'ok' | 'refused' | 'unverifiable'> => {
+  if (payment.startsWith('bad-')) return 'refused'
+  if (payment.startsWith('iffy-')) return 'unverifiable'
+  return payment.length > 0 ? 'ok' : 'refused'
+}
+
+/** Terms are behind the seam too; their real shape is x402-rail's business. */
+const stubTerms = (t: { priceUsd?: string }): unknown =>
+  t.priceUsd ? { x402Version: 1, accepts: [{ maxAmountRequired: t.priceUsd }] } : null
+
+
+
+/**
+ * THE WHOLE EXCHANGE, OVER A REAL SOCKET — the acceptance the ruling implies:
+ * an owner serves a saved crew, a stranger adds it by link, meets the gate,
+ * pays once, and gets an answer; a second ask reuses the session and is never
+ * charged again.
+ *
+ * Real http.Server, real fetch, real ed25519 — only the crew's own PTY is
+ * faked, because a live agent is the one thing a unit run cannot own.
+ */
+
+let servers: http.Server[] = []
+let dirs: string[] = []
+afterEach(async () => {
+  await Promise.all(servers.map((s) => new Promise((r) => s.close(r))))
+  servers = []
+  dirs.forEach((d) => rmSync(d, { recursive: true, force: true }))
+  dirs = []
+})
+
+/** Stand up an owner's app serving one crew, exactly as index.ts mounts it. */
+async function ownerApp(access: 'account' | 'paid', priceUsd?: string): Promise<string> {
+  const base = mkdtempSync(path.join(tmpdir(), 'e2e-owner-'))
+  dirs.push(base)
+  const issuer = new CallCredentialService({ base })
+  const callers = new ServedCallers()
+  const served = new ServedTemplates({ orchOf: () => 'Conductor' })
+  served.serve({
+    serviceId: 'svc-research',
+    templateId: 'research-crew',
+    slug: 'research-crew',
+    access,
+    ...(access === 'paid' ? { priceUsd } : {})
+  })
+  const sessions = new Map<string, string>()
+  const histories = new Map<string, TurnRecord[]>()
+
+  const server = http.createServer((req, res) => {
+    void (async () => {
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      const slug = url.pathname.split('/').filter(Boolean)[0] ?? ''
+      const template = served.bySlug(slug)
+      if (!template) {
+        res.writeHead(404).end('{}')
+        return
+      }
+      const chunks: Buffer[] = []
+      for await (const c of req) chunks.push(c as Buffer)
+      let body: unknown = null
+      try {
+        body = chunks.length > 0 ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null
+      } catch {
+        body = null
+      }
+      const headers: Record<string, string | undefined> = {}
+      for (const [k, v] of Object.entries(req.headers)) {
+        headers[k.toLowerCase()] = Array.isArray(v) ? v[0] : v
+      }
+      const answer = await handleServedRoute(
+        {
+          issuer: {
+            challenge: (b) => issuer.challenge(b),
+            consumeChallenge: (v, b) => issuer.consumeChallenge(v, b),
+            mint: (sub, scope) => issuer.mint(sub, scope),
+            verifyToken: (t) => issuer.verifyToken(t)
+          },
+          callers,
+          grantBudget: { allowsNewSession: () => true },
+          admit: async (serviceId, sub) => {
+            const key = `${serviceId}/${sub}`
+            const open = sessions.get(key)
+            if (open) return { workspaceId: `ws-${open}`, sessionId: open, created: false }
+            const sessionId = `${sub}-1`
+            sessions.set(key, sessionId)
+            return { workspaceId: `ws-${sessionId}`, sessionId, created: true }
+          },
+          hasOpenSession: (serviceId, sub) => sessions.has(`${serviceId}/${sub}`),
+          conductorFor: (sessionId) => `orch-${sessionId}`,
+          // The crew's one door, faked: the only thing a unit run cannot own.
+          ask: async (orch, prompt) => {
+            const history = histories.get(orch) ?? []
+            const index = history.length + 1
+            histories.set(orch, [
+              ...history,
+              {
+                index,
+                uuid: `${orch}-turn-${index}`,
+                prompt,
+                reply: `Conductor heard: ${prompt}`,
+                startedAt: index * 100,
+                endedAt: index * 100 + 50,
+                final: true
+              }
+            ])
+            return `Conductor heard: ${prompt}`
+          },
+          sessionForCaller: (serviceId, sub) => {
+            const sessionId = sessions.get(`${serviceId}/${sub}`)
+            return sessionId
+              ? { conductorId: `orch-${sessionId}` }
+              : null
+          },
+          turns: { history: (terminalId) => histories.get(terminalId) ?? [] },
+          traces: {
+            index: async (terminalId) =>
+              (histories.get(terminalId) ?? []).map((turn) => ({
+                index: turn.index,
+                title: turn.prompt
+              })),
+            boundaryMarkers: async () => [],
+            page: async (terminalId) => {
+              const blocks = (histories.get(terminalId) ?? []).map((turn) => ({
+                id: turn.uuid!,
+                index: turn.index,
+                prompt: turn.prompt,
+                reply: turn.reply,
+                activity: [],
+                startedAt: turn.startedAt,
+                endedAt: turn.endedAt,
+                final: turn.final
+              }))
+              return { blocks, total: blocks.length, source: 'claude' as const }
+            }
+          },
+          settle: stubSettle,
+          paymentTerms: stubTerms,
+          crewFace: (t) => ({
+            name: 'Research Crew',
+            serviceId: t.serviceId,
+            slug: t.slug,
+            address: `http://127.0.0.1:8639/${t.slug}`,
+            version: 1,
+            access: t.access,
+            ...(t.priceUsd !== undefined ? { priceUsd: t.priceUsd } : {}),
+            door: 'Conductor',
+            agents: 4
+          })
+        },
+        template,
+        (req.method ?? 'GET').toUpperCase(),
+        url.pathname.slice(`/${slug}`.length) || '/',
+        { headers, body, query: Object.fromEntries(url.searchParams.entries()) }
+      )
+      if (answer === null) {
+        res.writeHead(404).end('{}')
+        return
+      }
+      res.writeHead(answer.status, { 'content-type': 'application/json', ...(answer.headers ?? {}) })
+      res.end(JSON.stringify(answer.body))
+    })()
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  servers.push(server)
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+}
+
+/** The caller's half: sign in with a real key, then ask. */
+async function caller(origin: string, slug: string, sub = 'bear') {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+  const jwk = publicKey.export({ format: 'jwk' })
+  const api = async (p: string, init: RequestInit = {}) => {
+    const res = await fetch(`${origin}/${slug}${p}`, {
+      method: init.method ?? 'POST',
+      headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
+      body: init.body
+    })
+    return { status: res.status, headers: res.headers, body: await res.json().catch(() => null) }
+  }
+  const face = await api('/crew', { method: 'GET' })
+  const signIn = async (): Promise<string> => {
+    const ch = await api('/api/call/challenge')
+    const challenge = (ch.body as { challenge: string }).challenge
+    const signature = sign(
+      null,
+      Buffer.from(callAssertionPayload(face.body.serviceId, sub, challenge), 'utf8'),
+      privateKey
+    ).toString('base64url')
+    const res = await api('/api/call/assert', {
+      body: JSON.stringify({ sub, challenge, signature, jwk })
+    })
+    return (res.body as { token: string }).token
+  }
+  return { api, face, signIn }
+}
+
+describe('end to end: an owner serves, a stranger calls', () => {
+  it('a free crew: add by link → sign in → ask → the crew answers', async () => {
+    const origin = await ownerApp('account')
+
+    // The caller pastes the address into ADD A CREW.
+    const link = parseCrewLink(`${origin.replace('http://', '')}/research-crew`)
+    expect(link).not.toBeNull()
+    const store = new RemoteCrewStore(mkdtempSync(path.join(tmpdir(), 'e2e-dock-')))
+    const { api, face, signIn } = await caller(origin, 'research-crew')
+    expect(face.status).toBe(200)
+    expect(face.body).toMatchObject({ name: 'Research Crew', door: 'Conductor', agents: 4 })
+
+    // The chip lands in the dock — free and inert.
+    const crew = store.add({
+      origin,
+      slug: 'research-crew',
+      name: face.body.name,
+      door: face.body.door,
+      access: face.body.access,
+      version: face.body.version,
+      agents: face.body.agents
+    })
+    expect(store.list()).toHaveLength(1)
+    expect(crew.payRef).toBeUndefined()
+
+    // Placing it starts the line: 401 first…
+    const cold = await api('/ask', { body: JSON.stringify({ prompt: 'hello' }) })
+    expect(cold.status).toBe(401)
+    expect(cold.headers.get('www-authenticate')).toMatch(/challenge=/)
+
+    // …then sign in and ask.
+    const token = await signIn()
+    const answer = await api('/ask', {
+      headers: { authorization: `Bearer ${token}` },
+      body: JSON.stringify({ prompt: 'what is 2+2?' })
+    })
+    expect(answer.status).toBe(200)
+    expect(answer.body).toMatchObject({ reply: 'Conductor heard: what is 2+2?', created: true })
+  })
+
+  it('a paid crew: 402 quotes once, payment mints, the session then asks free', async () => {
+    const origin = await ownerApp('paid', '2.50')
+    const { api, signIn } = await caller(origin, 'research-crew')
+    const token = await signIn()
+    const auth = { authorization: `Bearer ${token}` }
+
+    // The gate quotes at session START.
+    const quoted = await api('/ask', { headers: auth, body: JSON.stringify({ prompt: 'hi' }) })
+    expect(quoted.status).toBe(402)
+    // Terms come from the rail now, not the gate — the gate only relays them.
+    expect(quoted.body.terms).toMatchObject({ x402Version: 1 })
+
+    // A bad reference accuses the payment; nothing is charged, nothing minted.
+    const bad = await api('/ask', {
+      headers: { ...auth, 'x-payment': 'bad-tx' },
+      body: JSON.stringify({ prompt: 'hi' })
+    })
+    expect(bad.body).toMatchObject({ reason: 'invalid', retryable: false })
+
+    // A settling one mints the session and answers.
+    const paid = await api('/ask', {
+      headers: { ...auth, 'x-payment': 'tx-ok' },
+      body: JSON.stringify({ prompt: 'hi' })
+    })
+    expect(paid.status).toBe(200)
+    expect(paid.body.created).toBe(true)
+
+    // R5, proven over the wire: mid-conversation there is no 402 left to hit.
+    const second = await api('/ask', { headers: auth, body: JSON.stringify({ prompt: 'again' }) })
+    expect(second.status).toBe(200)
+    expect(second.body).toMatchObject({ reply: 'Conductor heard: again', created: false })
+  })
+
+  it('two callers get two sessions; one cannot reach the other', async () => {
+    const origin = await ownerApp('account')
+    const bear = await caller(origin, 'research-crew', 'bear')
+    const kestrel = await caller(origin, 'research-crew', 'kestrel')
+    const a = await bear.api('/ask', {
+      headers: { authorization: `Bearer ${await bear.signIn()}` },
+      body: JSON.stringify({ prompt: 'mine' })
+    })
+    const b = await kestrel.api('/ask', {
+      headers: { authorization: `Bearer ${await kestrel.signIn()}` },
+      body: JSON.stringify({ prompt: 'mine' })
+    })
+    expect(a.body.sessionId).not.toBe(b.body.sessionId)
+    expect(a.body.created && b.body.created).toBe(true)
+  })
+
+  it('serves one caller’s turns and trace while another caller gets 404', async () => {
+    const origin = await ownerApp('account')
+    const ana = await caller(origin, 'research-crew', 'ana')
+    const bob = await caller(origin, 'research-crew', 'bob')
+    const anaToken = await ana.signIn()
+    const bobToken = await bob.signIn()
+    await ana.api('/ask', {
+      headers: { authorization: `Bearer ${anaToken}` },
+      body: JSON.stringify({ prompt: 'ana transcript' })
+    })
+
+    const turns = await ana.api('/turns?limit=1', {
+      method: 'GET',
+      headers: { authorization: `Bearer ${anaToken}` }
+    })
+    expect(turns.status).toBe(200)
+    expect(turns.body).toMatchObject({
+      turns: [{ prompt: 'ana transcript', reply: 'Conductor heard: ana transcript' }],
+      total: 1
+    })
+
+    const trace = await ana.api('/trace?aroundIndex=1', {
+      method: 'GET',
+      headers: { authorization: `Bearer ${anaToken}` }
+    })
+    expect(trace.status).toBe(200)
+    expect(trace.body).toMatchObject({
+      blocks: [{ id: 'orch-ana-1-turn-1', prompt: 'ana transcript' }],
+      source: 'claude'
+    })
+
+    const other = await bob.api('/turns?sessionId=ana-1', {
+      method: 'GET',
+      headers: { authorization: `Bearer ${bobToken}` }
+    })
+    expect(other.status).toBe(404)
+    expect(other.body).toEqual({})
+  })
+})

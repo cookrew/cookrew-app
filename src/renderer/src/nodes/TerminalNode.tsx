@@ -36,9 +36,10 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
   // Per-id subscription: this card re-renders only when ITS activity changes,
   // not on every other terminal's stream (the canvas-wide re-render fix).
   const activity = useActivity(node.id)
-  const agent = activity?.agent ?? node.preset !== 'Shell'
+  const remoteCrew = node.servedTranscript != null
+  const agent = remoteCrew || (activity?.agent ?? node.preset !== 'Shell')
   const phase = activity?.phase ?? 'idle'
-  const paging = useTurnPaging(node.id, activity?.turnCount ?? 0)
+  const paging = useTurnPaging(node.id, activity?.turnCount ?? 0, { forkable: !remoteCrew })
 
   // Trace-perf T1: when the live tracker has nothing to show (no PTY, never
   // zoomed), the card renders its LATEST checkpoint from a tail read instead of
@@ -68,7 +69,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
   if (mode === 'mini') {
     return (
       <div
-        className={`node vi-card mini${selected ? ' selected' : ''}${pickedOn ? ' picked' : ''}${phase === 'thinking' ? ' working' : ''}${phase === 'waiting' ? ' attention' : ''}`}
+        className={`node vi-card mini${node.orch ? ' orch' : ''}${selected ? ' selected' : ''}${pickedOn ? ' picked' : ''}${phase === 'thinking' ? ' working' : ''}${phase === 'waiting' ? ' attention' : ''}`}
         style={{ ['--z' as string]: String(invZoom) }}
         onClick={open}
       >
@@ -84,7 +85,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
 
   if (!agent) {
     return (
-      <div className={`node terminal-card${selected ? ' selected' : ''}${pickedOn ? ' picked' : ''}`}>
+      <div className={`node terminal-card${node.orch ? ' orch' : ''}${selected ? ' selected' : ''}${pickedOn ? ' picked' : ''}`}>
         <NodeResizer isVisible={selected} minWidth={240} minHeight={160} />
         <NodeHandles />
         <CardPick id={node.id} />
@@ -110,7 +111,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
 
   return (
     <div
-      className={`node vi-card${selected ? ' selected' : ''}${pickedOn ? ' picked' : ''}${phase === 'thinking' ? ' working' : ''}${phase === 'waiting' ? ' attention' : ''}`}
+      className={`node vi-card${node.orch ? ' orch' : ''}${selected ? ' selected' : ''}${pickedOn ? ' picked' : ''}${phase === 'thinking' ? ' working' : ''}${phase === 'waiting' ? ' attention' : ''}`}
       style={{ ['--z' as string]: String(invZoom) }}
     >
       <NodeResizer isVisible={selected} minWidth={240} minHeight={140} />
@@ -123,7 +124,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
         <div className="vi-title" title={node.name}>
           {node.name}
         </div>
-        <span className="vi-chip tan">{node.preset}</span>
+        <span className="vi-chip tan">{remoteCrew ? 'Crew' : node.preset}</span>
         {node.orch && <span className="vi-chip">Orch</span>}
         {node.forkOf && (
           <span

@@ -3,6 +3,7 @@ import {
   compactMarkersOf,
   pageTraceBlocks,
   parseClaudeTrace,
+  parseClaudeTraceDocument,
   parseCodexSessionMeta,
   parseCodexTrace,
   parsePiTrace,
@@ -300,9 +301,11 @@ describe('compactMarkersOf (◆ rail markers from compact_boundary entries)', ()
       boundary(999600, 11200),
       prompt('u3', 'third', T0 + 2000)
     ]
-    expect(compactMarkersOf(lines)).toEqual([
+    const expected = [
       { kind: 'compact', afterIndex: 2, preTokens: 999600, postTokens: 11200 }
-    ])
+    ]
+    expect(compactMarkersOf(lines)).toEqual(expected)
+    expect(parseClaudeTraceDocument(lines).markers).toEqual(expected)
   })
 
   it('a boundary before any checkpoint gets afterIndex 0; missing metadata is omitted', () => {

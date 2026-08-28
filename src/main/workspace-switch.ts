@@ -10,13 +10,12 @@
  * could call.
  *
  * So the decision is a pure function over facts and the handler performs what
- * it returns. Flag-off equivalence — that one resident workspace produces
- * exactly the pre-refactor behaviour — becomes something a test can assert
- * rather than something a commit message can claim.
+ * it returns. Lazy attachment adds one invariant: focus may re-register a PTY
+ * already held by a resident workspace, but it must never boot a cold one.
  */
 
 /** Facts the decision is made from. All read-only. */
-export interface SwitchFacts<T, B> {
+export interface SwitchFacts<T extends { id: string }, B> {
   /** Terminals that were on the outgoing canvas. */
   previousTerminalIds: readonly string[]
   /** Which workspace holds a terminal's PTY, if any holds it. */
@@ -36,9 +35,8 @@ export interface SwitchPlan<T, B> {
    */
   detach: string[]
   /**
-   * Terminals to (re)register. EVERY focused terminal, whether or not its PTY
-   * is already live: registration is far more than the spawn, and the spawn
-   * itself short-circuits. This is the H1 invariant.
+   * Already-attached terminals to re-register. Cold terminals stay cold until
+   * their transcript is zoomed; a focus change must not defeat lazy loading.
    */
   boot: readonly T[]
   /**
@@ -60,7 +58,9 @@ export interface SwitchPlan<T, B> {
  * A terminal whose PTY belongs to no workspace at all is detached: it is held
  * by nothing that can be responsible for it later.
  */
-export function planWorkspaceSwitch<T, B>(facts: SwitchFacts<T, B>): SwitchPlan<T, B> {
+export function planWorkspaceSwitch<T extends { id: string }, B>(
+  facts: SwitchFacts<T, B>
+): SwitchPlan<T, B> {
   const detach = facts.previousTerminalIds.filter((terminalId) => {
     const holder = facts.workspaceOfTerminal(terminalId)
     return holder === undefined || !facts.isResident(holder)
@@ -68,7 +68,10 @@ export function planWorkspaceSwitch<T, B>(facts: SwitchFacts<T, B>): SwitchPlan<
 
   return {
     detach,
-    boot: facts.focusedTerminals,
+    boot: facts.focusedTerminals.filter((terminal) => {
+      const holder = facts.workspaceOfTerminal(terminal.id)
+      return holder !== undefined && facts.isResident(holder)
+    }),
     browsers: facts.residentBrowsers
   }
 }

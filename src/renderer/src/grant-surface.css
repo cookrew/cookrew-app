@@ -145,6 +145,12 @@
 .gs-input.gs-bad { border-color: var(--cr-red, #e8867a); }
 .gs-hint { margin: 5px 0 0; font-size: 11.5px; color: var(--cr-dim, #8d8577); }
 
+.payment-sheet .gs-sub { margin-top: 5px; }
+.payment-rail-section { padding: 16px 0; border-bottom: 1px solid var(--cr-line, #332f27); }
+.payment-rail-section h3 { margin: 0; font-size: 14px; }
+.payment-ready { margin: 5px 0 0; color: var(--cr-accent, #e9b949); font: 700 11px ui-monospace, monospace; }
+.payment-save { margin-top: 10px; }
+
 .gs-paste-error {
   margin: 8px 0 0; font-size: 12.5px; color: var(--cr-red, #e8867a);
   border-left: 3px solid var(--cr-red, #e8867a); padding-left: 10px;

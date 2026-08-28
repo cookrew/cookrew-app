@@ -8,10 +8,11 @@
 //   COOKREW_SOUS_MODEL        model name       (default qwen2.5:1.5b)
 
 import { buildTitlePrompt, sanitizeTitle, TitleInput } from '../shared/sous'
+import { SOUS_BASE_URL, SOUS_DISABLED, SOUS_KEEP_ALIVE, SOUS_MODEL } from './sous-config'
 
-const BASE_URL = process.env.COOKREW_SOUS_URL ?? 'http://127.0.0.1:11434'
-const MODEL = process.env.COOKREW_SOUS_MODEL ?? 'qwen2.5:1.5b'
-const DISABLED = process.env.COOKREW_SOUS === '0'
+const BASE_URL = SOUS_BASE_URL
+const MODEL = SOUS_MODEL
+const DISABLED = SOUS_DISABLED
 
 /** Per-request budget — a stuck local server must not pile up requests. */
 const REQUEST_TIMEOUT_MS = 8000
@@ -26,7 +27,7 @@ const COLD_TIMEOUT_MS = 30_000
  * unloads after 5 idle minutes and pays the ~10s cold start on the next
  * title (covered by COLD_TIMEOUT_MS). Override with COOKREW_SOUS_KEEPALIVE.
  */
-const KEEP_ALIVE = process.env.COOKREW_SOUS_KEEPALIVE ?? '5m'
+const KEEP_ALIVE = SOUS_KEEP_ALIVE
 /** After a failed request, stop trying for this long (server likely down). */
 const DOWN_COOLDOWN_MS = 60_000
 

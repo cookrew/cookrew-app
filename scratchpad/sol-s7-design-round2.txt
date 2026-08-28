@@ -1,0 +1,116 @@
+[P0] Turning the flag off abandons the durable resources the flag previously created
+WHERE: scratchpad/s7-instance-factory-plan.html:35-39,68-78; archive/wave-c-20260816:src/main/herdr-session-router.ts:332-335
+CLAIM: D0 makes factory construction disappear with the flag, but registry rows, cleanup debts, herdr servers, panes, credentials, and worktrees survive an enabled run; the next default-off launch then has no owner capable of reconciling or stopping them.
+EVIDENCE: The archived router deliberately lets herdr servers outlive app/router disposal. V2 assigns cleanup authority to the durable saga, but also says the factory constructor does not exist while the flag is off. STARTUP RECONCILE can therefore never run in exactly the flag-on -> restart-flag-off transition a rollout gate must support. Routes being 404 does not stop processes or revoke already-minted credentials loaded by S4.
+FIX: Split the internal caretaker from the public factory. The flag gates catalog/create/exchange/lifecycle exposure, never hydration of existing registry rows. If any rows exist, startup must always load a minimal reconciler/router authority, close consumer dispatch admission, restore or quarantine placement, and drive cleanup; alternatively refuse normal startup loudly until the owner resolves them. Add flag-on create -> flag-off restart gates for active and cleanup-pending rows.
+
+[P0] A phase cursor is not a write-ahead effect receipt
+WHERE: scratchpad/s7-instance-factory-plan.html:53-70,127
+CLAIM: The saga does not say whether each cursor is persisted before or after its effect, what evidence identifies a completed effect, or what durability primitive makes the creating row the ownership root; every choice leaves a crash window that can duplicate or lose an effect.
+EVIDENCE: Cursor-after-effect repeats mint/workspace/worktree/boot after a crash between effect and append. Cursor-before-effect skips an effect after a crash between append and execution. Some effects are externally visible and not inherently idempotent. "Async persistent writes" says nothing about single-writer ordering, short writes, file+directory fsync, corrupt-tail recovery, or compaction publication. If the INTENT append is acknowledged but not durable, effects can exist with no root at all.
+FIX: Specify a durable per-effect protocol: fsynced `prepared(effect,generation,expectedArtifact)` before execution; an idempotent operation addressed by preallocated identity; observed artifact validation against the plan; then fsynced `committed(effect,receipt)`. Reconcile from receipts plus observed reality, never a cursor alone. Pin a single-writer append log, checksum/schema, file and parent-dir fsync, atomic compaction, fail-closed hydrate, and crash gates at every boundary.
+
+[P0] Startup reconciliation still excludes active routing and the general consumer plane
+WHERE: scratchpad/s7-instance-factory-plan.html:61,68-70,105-112; archive/wave-c-20260816:src/main/herdr-session-router.ts:94-125,265-290
+CLAIM: V2 reconciles only nonterminal rows and blocks only factory requests, so an active/stopped row can reach dispatch, reaper, supervisor, or owner boot before its persisted placement is hydrated; the archived router then routes its unknown pane name to the owner backend.
+EVIDENCE: Persisting herdrSession in a row does not populate the router's volatile `placement` map. Active rows are terminal under the stated reconcile condition. S4 dispatch routes and generic multiplexer startup are not "factory requests." The text also omits the round-1 requirement that a known instance terminal with missing placement fail closed. An app restart can therefore cross the owner/instance boundary before any factory call occurs.
+FIX: Add one application bootstrap barrier: hydrate and validate every registry row; reconstruct placement for active rows and quarantine stopped/cleanup rows; register all instance terminal ids in a fail-closed ownership index; only then expose the multiplexer, reaper, dynamic-credential auth, SSE, or dispatch. Unknown ordinary owner panes may use the owner backend; a pane claimed by any instance row may never fall through. Gate active, stopped, corrupt, and missing-workspace restarts.
+
+[P0] The 202 credential exchange loses the only bearer after active publication
+WHERE: scratchpad/s7-instance-factory-plan.html:54,57-70,79-81,114-118
+CLAIM: The effects phase mints a hash while holding the raw token only in memory, then publishes active before a later one-time exchange; a crash or lost response after active strands an accepted credential that neither the caller nor startup reconcile can recover.
+EVIDENCE: The raw bearer cannot be reconstructed from its hash. STARTUP RECONCILE is limited to nonterminal rows, so an active-but-unclaimed row does not execute the stated revoke/remint rule. Exactly-once response delivery is impossible: the server cannot know whether a disconnected exchange response reached the caller. Replaying the create idempotency key can find the active row but cannot return its token.
+FIX: Do not mint the consumer bearer during creation. Persist `credentialState=unclaimed` and authorize redemption with the authenticated creator plus an unguessable, hashed creation secret. At exchange, CAS a generation, mint/persist the hash before response, and on a same-handle retry atomically revoke and replace the prior generation so the returned token is the only live one. Treat active-unclaimed as reconcilable, bound redemption lifetime/attempts, and gate response-loss, concurrent-redemption, and crash-before/after-persist cases.
+
+[P0] D6 lacks the restore witness and cancellation authority needed to create panes safely
+WHERE: scratchpad/s7-instance-factory-plan.html:64-65,100-103,105-110; src/main/herdr-host-multiplexer.ts:476-517,794-803,837-905
+CLAIM: "Ensure server, take one immutable snapshot, boot" is unsafe on resume and under cancellation: herdr answers pane-list before persisted panes finish restoring, while the contract has no per-session single-flight, AbortSignal, revision ownership, or late-completion rule.
+EVIDENCE: The current implementation documents the restore race: an early empty inventory causes a duplicate pane with the label the server is about to restore. Its workaround busy-polls, which D6 correctly bans, but v2 supplies no positive async replacement. A stop/destroy/app-quit or saga rollback during async ensure/snapshot/boot can leave CLI children and a late boot writing into a retired revision. Concurrent startup reconcile, supervisor, and resume can also ensure the same server independently.
+FIX: Define `bootInstance({session, revision, mode, expectedPanes, signal})` under a per-session single-flight. Fresh mode may prove an empty new session; resume mode must await positive restoration of the plan's expected pane identities or fail without creating substitutes. Track and abort every server/CLI/boot child with bounded TERM->KILL, re-check revision after every await, suppress all stale publication, and return durable per-pane receipts. Gate cancel at every await, concurrent ensure, app quit, delayed restore, and untouched non-target backends.
+
+[P0] "Single-agent" is a label, not a publication or materialization invariant
+WHERE: scratchpad/s7-instance-factory-plan.html:41-44,48-50,62-65,94-98,130
+CLAIM: The manifest and plan still permit multiple remapped/required/optional terminal nodes; G7 verifies only required agents, so a template can be sold as single-agent while hidden optional workers are materialized or booted.
+EVIDENCE: D1 says only single-agent instances are published, but there is no exact-cardinality assertion. The manifest retains plural `entry/required agents`, PLAN allocates every node id, and EFFECTS materializes the graph. An optional terminal can carry owner context, consume memory, appear in observe DTOs, or be reached through a non-dispatch route even if the credential's agent scope names only entry.
+FIX: Make v1 publication and PLAN validation require exactly one terminal node total, that terminal equals entry and the sole required/credential-scoped/booted agent, and no other node or asset contains a session/agent reference. Reject rather than ignore extra terminals. Add adversarial manifests with optional, disconnected, hidden, and non-required terminals plus DTO/route scope gates.
+
+[P0] Stop intent and dispatch admission are not serialized at the decisive boundary
+WHERE: scratchpad/s7-instance-factory-plan.html:105-112; scratchpad/v5-export-concurrency.html:82-93
+CLAIM: The written order persists stop/destroy intent and only then synchronously closes admission, leaving an await window in which DispatchService can durably accept a new dispatch against the revision being stopped.
+EVIDENCE: A per-instance lifecycle queue does not serialize an independent dispatch admission path unless both share the same synchronous barrier. Registry persistence is asynchronous by the plan's own G3'. A dispatch accepted after stop intent was prepared but before the in-memory gate flips can arm a producer lease and write its submitted row; the subsequent interrupt then turns a successfully accepted request into an avoidable platform interruption. Re-checking revision after later awaits is too late.
+FIX: Under one shared admission/lifecycle authority, synchronously install a generation-scoped closing barrier first, then durably persist stop intent; if persistence fails, roll the barrier back only if its revision still owns it. Dispatch admission must synchronously read that barrier and bind its row to the same active instance revision. Add deterministic interleavings for stop-persist, dispatch-accept, resume, destroy, and ledger failure.
+
+[P1] The saga has no complete state lattice for reconciliation or API truth
+WHERE: scratchpad/s7-instance-factory-plan.html:53-80,105-112; scratchpad/v5-instance-economy.html:184-187
+CLAIM: V2 uses creating, active, stopped, destroyed, failed, cleanup-pending, phase, debt, and revision without defining which are commercial status, operation phase, desired state, or terminal state.
+EVIDENCE: STARTUP RECONCILE depends on "nonterminal" but never enumerates it. cleanup-pending is sometimes a row/status and sometimes a cleanup result; active-unclaimed is not represented; stopped may still hold a lifecycle credential; destroyed may retain debt. Conflating these dimensions invites illegal combinations and makes list/progress/dispatch decisions implementation-dependent.
+FIX: Specify orthogonal fields and a transition table: commercial `status=creating|active|stopped|destroyed|failed`, durable `operation={kind,revision,phase}`, `credentialState`, and `cleanup={pending actions,lastError,nextAttempt}`. Define terminality, visibility, dispatch eligibility, billing clock, and allowed CAS transitions for every combination; derive API DTOs rather than exposing raw internal states.
+
+[P1] Factory idempotency is unscoped, unfingerprinted, and unbounded
+WHERE: scratchpad/s7-instance-factory-plan.html:53-55,68-70,140-141
+CLAIM: Storing an idempotencyKey does not say who owns it, what request it represents, or how long it prevents a duplicate instance.
+EVIDENCE: Two trusted principals can reuse the same key; one principal can reuse it with a different manifest/SKU/consumer/price; a key forgotten while its instance or receipt survives converts a retry into a second purchase. Cleanup/recreate also needs a defined answer while the original key names failed or cleanup-pending work. These are the exact replay ambiguities the dispatch ledger already had to solve.
+FIX: Key by authenticated creator principal + exact opaque key, store an exact canonical request fingerprint (manifest digest, SKU, consumer identity, terms), return 409 on mismatch, and replay the same handle/result before any fresh validation. Retain the binding for at least the instance/receipt/dispute lifetime, with a tombstone after destroy; specify failed and cleanup-pending replay semantics.
+
+[P1] Progress SSE is neither durable, race-free, nor scoped in the plan
+WHERE: scratchpad/s7-instance-factory-plan.html:79-81,114-118; src/main/mobile-api.ts:742-789
+CLAIM: A 202 handle plus "progress SSE" does not ensure the creator sees every stage or only its own stage, especially when events occur before subscription or the connection drops.
+EVIDENCE: The current event stream sends an in-memory snapshot plus live events but has no creation handle sequence, Last-Event-ID replay, or durable phase history. A client subscribes only after receiving 202, so early PLAN/INTENT events are already gone. Generic event DTOs risk leaking template/consumer/failure details to other observers; a transient owner toast is not the durable cleanup report promised in section 3.
+FIX: Make GET creation-status by handle the authority, derived from the saga row and scoped to the authenticated creator/owner. Give each phase update a monotonic sequence; SSE is a filtered hint with snapshot-first and resumable sequence semantics, never the sole record. Define handle entropy/auth, foreign 404, reconnect, event-before-subscribe, cleanup-pending, and credential-ready observables.
+
+[P1] Fresh-session verification still asks for an observer that cannot yet be verified
+WHERE: scratchpad/s7-instance-factory-plan.html:62-66,120,129-130; src/main/session-sync.ts:425-430
+CLAIM: Verify requires "native observation in place" before active, but a truly fresh Claude/Codex/Pi session file normally does not exist until the first prompt; the plan does not distinguish capability/binding from a reconciled file.
+EVIDENCE: sessionSync.isVerified means a real stat/read reconcile landed, not merely that watchSpec computed a path. V2 correctly moves observer probation after dispatch, yet G7 can still be read as requiring pre-active verification and deadlock every fresh SKU, or as accepting an unproven path without stating the weaker evidence. Golden and fresh paths require different gates.
+FIX: For golden Claude, require clone-file reconcile and exact binding before active. For fresh, require native-finality capability, a safe harness-native session id/path binding, and an installed deferred watch; explicitly permit `isVerified=false` until first delivery and apply the existing 60-second post-dispatch probation. Gate both paths separately.
+
+[P1] A worktree digest is not a materializable immutable worktree
+WHERE: scratchpad/s7-instance-factory-plan.html:60,94-98
+CLAIM: The manifest pins only a worktree snapshot digest, without pinning or storing the bytes/object graph from which EFFECTS must create the required unique worktree.
+EVIDENCE: `git worktree add` against the owner's current repository is mutable and can disappear or move between PLAN and EFFECTS. A matching digest known at publication cannot reconstruct missing content, and submodules/LFS/network checkout can introduce unpinned effects. Falling back is banned, so the first real implementation otherwise has only a mutable owner repo as its source.
+FIX: Publish a content-addressed local bundle/tree artifact outside the live repo, including submodule/LFS policy and executable modes, and pin its digest in the manifest. Materialize without network/hooks into the unique instance root, verify the resulting tree against the manifest before boot, and retain artifact references while any instance/version depends on them.
+
+[P1] "Normalized byte-for-byte" clone fidelity has no canonical comparison
+WHERE: scratchpad/s7-instance-factory-plan.html:83-91
+CLAIM: The source and clone cannot be byte-identical after session/path fields are rewritten, while an unspecified normalization can accidentally ignore fields or malformed records that should fail publication.
+EVIDENCE: The text simultaneously says normalized content/graph digest and source-to-clone byte-for-byte. Preserved uuid/parentUuid is precise, but session ids, cwd/path fields, and possibly metadata must differ. A permissive JSON parser that passes malformed lines through can satisfy a weak content hash while retaining source identity; a semantic object hash can erase record ordering or duplicate keys that Claude consumes.
+FIX: Define a versioned canonical transform and verifier: parse every supported record or fail; preserve record order and exact non-identity bytes; replace only an enumerated set of identity/path fields with typed placeholders; compare record count, canonical stream digest, uuid/parentUuid graph, and source manifest digest. Unknown identity-bearing fields fail closed until the format version is reviewed.
+
+[P1] Cleanup reconciliation can become a global availability and startup storm
+WHERE: scratchpad/s7-instance-factory-plan.html:68-81,123-127
+CLAIM: "Every nonterminal row before factory requests" makes one permanent cleanup debt block all unrelated creation, while eagerly reconciling many rows can launch an O(fleet) burst of filesystem and herdr lifecycle work at startup.
+EVIDENCE: Cleanup is explicitly allowed to remain pending and retry. With no scheduler/cap/next-at field, startup can either wait forever, retry every debt concurrently, or silently skip the promised ordering. Rows are excluded from normal lists, so the owner also lacks a specified durable surface to inspect/retry/abandon them.
+FIX: Hydrate/quarantine all rows synchronously without external work, then run reconciliation through a bounded global and per-instance queue with persisted backoff/jitter. Block only the affected instance/credential and enforce a capacity/debt ceiling on new creates; do not block the owner app. Expose an owner-only cleanup queue/status/action surface and gate N-debt startup child count and event-loop delay.
+
+[P1] Per-instance bearer authentication inherits an O(fleet) request tax
+WHERE: scratchpad/s7-instance-factory-plan.html:123-127,136-138; archive/wave-c-20260816:src/main/consumer-credentials.ts:111-149
+CLAIM: G3' constrains registry operations but not S4 authentication; the archived credential design compares every dynamic token hash on every request, so one credential per instance makes every API/SSE request O(fleet).
+EVIDENCE: identifyDynamicConsumer deliberately loops through all credentials for timing-safe lookup. S7 adds one row per instance and long-lived SSE reconnects, turning fleet growth into request latency even when the requested instance is idle. Reloading/reparsing the full credential table on every mint/revoke compounds lifecycle bursts.
+FIX: Give tokens a random non-secret key id plus secret, use the id to select one indexed row, then timing-safe compare the secret hash (with a dummy compare for unknown ids); keep rate limiting before expensive work. Persist/index incrementally and gate constant auth comparisons and latency at 1, 100, and 10,000 instances.
+
+[P1] Park can revoke the credential needed to resume itself
+WHERE: scratchpad/s7-instance-factory-plan.html:105-112
+CLAIM: The lifecycle contract says stop/destroy revoke streams and admission, while SESSION consumers authenticate park/resume with their narrow credential; it does not distinguish disabling dispatch from revoking the bearer.
+EVIDENCE: If stop means credential revocation, the consumer receives 401/404 on resume and only owner/admin can restore it, contradicting consumer-owned one-click SESSION lifecycle. If stop leaves the credential fully admitted, dispatch may still reach a stopped agent. Destroy and park need different credential outcomes.
+FIX: On park/stopped, retain the credential's observe/lifecycle identity but make dispatch admission consult instance status/revision and return the specified stopped response; close active data streams if required and allow scoped status/resume. On destroy, revoke the bearer and all streams permanently. Pin both behaviors and concurrent park/dispatch/resume tests.
+
+R1-#1: FIXED - D0 now makes the trusted-local, default-off boundary explicit and gates construction/routes/catalog; the flag-off caretaker problem above is a new durable-state transition gap.
+R1-#2: FIXED - PLAN preallocates workspace, instance, herdr, and remapped node ids before the creating intent and rejects remap drift.
+R1-#3: PARTIAL - A durable saga/root and startup reconcile are now designed, but cursor durability, effect receipts, active-unclaimed credential recovery, and startup barriers remain unsound.
+R1-#4: FIXED - The archive serviceState ladder is discarded; rollback uses v5 revoke/interrupt/retire/stop/remove/release and retains cleanup authority on doubt.
+R1-#5: PARTIAL - Full routing identity is persisted and collision-checked, but active placement hydration and fail-closed known-instance routing before general multiplexer use are absent.
+R1-#6: PARTIAL - D6 is targeted and async and excludes attach-batch, but lacks restoration proof, per-session single-flight, cancellation ownership, and stale-revision suppression.
+R1-#7: FIXED - The plan preserves the uuid/parentUuid graph, separates canonical fidelity from successor replayOverlap, isolates the golden source, and requires post-resume rebind.
+R1-#8: FIXED - Fresh materialization strips context/provenance and requires an isolated worktree with no in-place fallback; immutable worktree artifact supply is a new detail still needed.
+R1-#9: PARTIAL - Multi-agent orchestration is correctly deferred and its future RPC constraints are sound, but v1 publication does not mechanically reject extra optional/hidden terminals.
+R1-#10: PARTIAL - A serialized revisioned lifecycle and same-revision verification are specified, but dispatch does not share the synchronous barrier at stop-intent admission.
+R1-#11: PARTIAL - Metrics are split and probation moved post-dispatch, but the 202 progress and one-time credential exchange protocol is not crash/retry sound.
+R1-#12: PARTIAL - G7 verifies the v1 entry/required agent, but pre-active observer evidence is still ambiguous for a fresh file that does not exist yet.
+R1-#13: PARTIAL - The manifest is content-addressed and pinned end-to-end, but a digest alone does not preserve/materialize immutable worktree bytes.
+R1-#14: FIXED - Streaming worker/child transformation, clone concurrency caps, async indexed registry persistence, and event-loop/RSS/bytes probes are explicit.
+R1-#15: FIXED - G1' now covers the full artifact matrix and treats tracked/activity as only two assertions, with durable debt for intentionally pending cleanup.
+R1-#16: FIXED - Lifecycle authorization is narrowed and checks registry consumer ownership with foreign ids returning 404; park credential semantics need the clarification above.
+R1-#17: FIXED - Failure returns durable rolledBack versus cleanupPending truth with bounded synchronous cleanup and owner-only details.
+R1-#18: FIXED - Warm-pool TTFT is removed and destroy-recreate is the only certified v1 recycle path.
+
+VERDICT: UNSOUND - P0:7 P1:9 P2:0

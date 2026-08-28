@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Background,
   BackgroundVariant,
+  ControlButton,
   Controls,
   MiniMap,
   Node,
@@ -32,9 +33,13 @@ import type { InstalledPreset } from '../../shared/preset-chip'
 import { browserInFullView } from './dock-target'
 import { BrowserLayer, useInteractiveBrowserCapability } from './BrowserLayer'
 import {
+  recordThumbFailure,
+  recordThumbSuccess,
   shouldClearLegacyThumbs,
   shouldPollThumbs,
-  shouldSnapshotLocally
+  shouldSnapshotLocally,
+  thumbPollList,
+  type ThumbBackoffs
 } from './browser-thumb-policy'
 import { retry } from './retry'
 import { CanvasUiContext, ToolId } from './canvas-ui'
@@ -54,15 +59,46 @@ import { SnapGuides } from './SnapGuides'
 import { EventToastLayer } from './EventToast'
 import { RosterPanel } from './RosterPanel'
 import { MetricsPanel } from './MetricsPanel'
-import { GrantPanel, canGrant } from './GrantPanel'
+import { AddCrewSheet } from './AddCrewSheet'
+import { GateSheet } from './GateSheet'
+import type { RemoteCrewView } from './api'
 import { SelectionBar } from './SelectionBar'
 import { ConfirmClose } from './ConfirmClose'
 import { apiPath } from './api-base'
 import { authHeaders } from './auth-gate'
+import { CrIcon } from './icons'
+import {
+  canvasVisualModeOf,
+  nextCanvasVisualMode,
+  visibleCanvasEdges,
+  visibleCanvasNodes,
+  type CanvasVisualMode
+} from './canvas-visual-mode'
 
 /** How often a headless browser card refreshes its still. Matches the legacy
  *  webview capture cadence — the same picture, from the page that now owns it. */
 const BROWSER_SNAPSHOT_MS = 5000
+const CANVAS_VISUAL_MODE_KEY = 'cookrew-canvas-visual-mode'
+
+const VISUAL_MODE_LABEL: Record<CanvasVisualMode, string> = {
+  all: 'All',
+  'no-cables': 'Cables hidden',
+  agents: 'Agents only'
+}
+
+const VISUAL_MODE_ICON: Record<CanvasVisualMode, 'canvas' | 'connect' | 'agent'> = {
+  all: 'canvas',
+  'no-cables': 'connect',
+  agents: 'agent'
+}
+
+function storedCanvasVisualMode(): CanvasVisualMode {
+  try {
+    return canvasVisualModeOf(window.localStorage.getItem(CANVAS_VISUAL_MODE_KEY))
+  } catch {
+    return 'all'
+  }
+}
 
 /** Phone companion parity: widen the snap magnet for finger-driven gestures. */
 const snapRadiusPx = window.matchMedia('(pointer: coarse)').matches ? TOUCH_SNAP_PX : MOUSE_SNAP_PX
@@ -98,6 +134,7 @@ function Canvas(): React.JSX.Element {
   const interactiveBrowser = interactiveCapability?.enabled ?? null
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null)
   const [nodes, setNodes] = useState<Node[]>([])
+  const [canvasVisualMode, setCanvasVisualMode] = useState<CanvasVisualMode>(storedCanvasVisualMode)
   const [tool, setTool] = useState<ToolId>('move')
   /**
    * Clipboard selection mode — a TOGGLE over the resting hand (the board
@@ -135,6 +172,17 @@ function Canvas(): React.JSX.Element {
   const [guides, setGuides] = useState<SnapGuide[]>([])
   /** Terminal whose overlay owns the stage — the dock shows its composer. */
   const [zoomedTerminalId, setZoomedTerminalId] = useState<string | null>(null)
+  // PHONE MEMORY DIET (2026-08-27): while an overlay owns the stage, the
+  // canvas underneath it is pure ballast — 39 cards, edges and a minimap of
+  // iOS layer backing pressing against the same 1536 MB jetsam cap the
+  // overlay's own weight needs. display:none (via this body class) drops
+  // their render objects and backing stores; React state is untouched and
+  // the canvas reappears the instant the overlay closes. Remote only.
+  useEffect(() => {
+    if (!isRemoteMode()) return
+    document.body.classList.toggle('cr-overlay-owns-stage', zoomedTerminalId !== null)
+    return () => document.body.classList.remove('cr-overlay-owns-stage')
+  }, [zoomedTerminalId])
   /** Global agent roster panel (opened from the header). */
   /**
    * Which of the two main views the stage shows. The agents view renders as a
@@ -145,10 +193,6 @@ function Canvas(): React.JSX.Element {
   const [view, setView] = useState<MainView>('canvas')
   /** Activity metrics / history panel (opened from the workspace popout). */
   const [metricsOpen, setMetricsOpen] = useState(false)
-  // WHO CAN CALL. Owner-desktop only, and ABSENT rather than disabled anywhere
-  // else — a greyed-out list of who is enrolled still discloses who is
-  // enrolled, on the device most likely to be lying on a table.
-  const [grantOpen, setGrantOpen] = useState(false)
   /** Board selection mode — the dock's slid-in clipboard button drives it. */
   const [boardSelecting, setBoardSelecting] = useState(false)
   /**
@@ -162,6 +206,11 @@ function Canvas(): React.JSX.Element {
    */
   const [installedPresets, setInstalledPresets] = useState<InstalledPreset[]>([])
   const [presetId, setPresetId] = useState<string | null>(null)
+  // R30 import side: crews added by link, the armed one, and the two sheets.
+  const [crews, setCrews] = useState<readonly RemoteCrewView[]>([])
+  const [crewId, setCrewId] = useState<string | null>(null)
+  const [addCrewOpen, setAddCrewOpen] = useState(false)
+  const [crewGate, setCrewGate] = useState<RemoteCrewView | null>(null)
   const refreshPresets = useCallback(() => {
     void cookrew()
       .listInstalledPresets()
@@ -169,6 +218,13 @@ function Canvas(): React.JSX.Element {
       .catch((error) => console.error('listInstalledPresets failed:', error))
   }, [])
   useEffect(refreshPresets, [refreshPresets])
+  const refreshCrews = useCallback(() => {
+    void cookrew()
+      .crewList()
+      .then(setCrews)
+      .catch((error) => console.error('crewList failed:', error))
+  }, [])
+  useEffect(refreshCrews, [refreshCrews])
   /**
    * M3: STABLE identities. Inline arrows here were new objects every render, so
    * the dock's effect re-fired on each one and the R3 batch never settled.
@@ -271,6 +327,12 @@ function Canvas(): React.JSX.Element {
     // the overview rather than restore a dead frame.
     prevViewportRef.current = null
     zoomedNodeIdRef.current = null
+    // …and so do the auto-open credentials. Left armed, the switch's fitView
+    // settling would passively mount whatever card crosses the coverage floor
+    // on the NEW canvas — the exact trap deliberateOpenRef exists to prevent
+    // (Pilot's phone-crash hunt, 2026-08-27, section 3).
+    deliberateOpenRef.current = false
+    setArrivedId(null)
   }
 
   useBrowserEngine()
@@ -373,6 +435,10 @@ function Canvas(): React.JSX.Element {
           true
         )
       )
+      // A refused snapshot (route scoping, transient network) must stay a
+      // missing seed, never an unhandled rejection — live events still fill
+      // the store.
+      .catch(() => undefined)
     return cookrew().onTerminalActivity((activity) => {
       activityStore.set(activity.terminalId, activity)
     })
@@ -404,6 +470,24 @@ function Canvas(): React.JSX.Element {
       e.source === hoverId || e.target === hoverId ? { ...e, data: { hot: true } } : e
     )
   }, [baseEdges, clipping, hoverId])
+  const renderedNodes = useMemo(
+    () => visibleCanvasNodes(nodes, canvasVisualMode),
+    [nodes, canvasVisualMode]
+  )
+  const renderedEdges = useMemo(
+    () => visibleCanvasEdges(edges, canvasVisualMode),
+    [edges, canvasVisualMode]
+  )
+  const cycleCanvasVisualMode = useCallback((): void => {
+    const next = nextCanvasVisualMode(canvasVisualMode)
+    setCanvasVisualMode(next)
+    setCardMenu(null)
+    try {
+      window.localStorage.setItem(CANVAS_VISUAL_MODE_KEY, next)
+    } catch {
+      // The view still works when browser storage is unavailable.
+    }
+  }, [canvasVisualMode])
 
   const togglePick = useCallback((id: string): void => {
     setPicked((prev) => {
@@ -712,6 +796,8 @@ function Canvas(): React.JSX.Element {
   // canvas sat on its placeholder.
   const workspaceRef = useRef(workspace)
   workspaceRef.current = workspace
+  // Lives in a ref: backoff bookkeeping must not re-render the canvas.
+  const thumbBackoffsRef = useRef<ThumbBackoffs>({})
   useEffect(() => {
     if (!shouldPollThumbs({ remote: isRemoteMode(), interactive: interactiveBrowser })) return
     const tick = (): void => {
@@ -724,21 +810,47 @@ function Canvas(): React.JSX.Element {
       const browserIds = (workspaceRef.current?.nodes ?? [])
         .filter((n) => n.kind === 'browser')
         .map((n) => n.id)
-      for (const id of browserIds) {
+      // Per-id failure backoff — the desktop's capture-storm lesson, applied to
+      // the polling side. After an app restart NO engine is booted, so 40+
+      // cards 404 at once; re-asking them all every 5s was a sustained TLS
+      // storm on the phone (owner's Web Inspector, 2026-08-27).
+      const now = Date.now()
+      // Cap the sweep: a fresh boot knows nothing, and this canvas holds 60+
+      // browser cards — an uncapped first tick was a 60-request TLS burst on
+      // every reload of a crash-looping phone. Eight per tick; the backoff
+      // retires dead ones, so live thumbs still fill within a few ticks.
+      for (const id of thumbPollList(browserIds, thumbBackoffsRef.current, now).slice(0, 8)) {
         // A HEADER, not ?token=. This is an ordinary fetch and can set one, so
         // the token stays out of the URL — see tokenParam, which exists only
         // for the two EventSources that genuinely cannot.
-        void fetch(apiPath(`/api/browser/${id}/thumb?v=${Date.now()}`), {
+        void fetch(apiPath(`/api/browser/${id}/thumb?v=${now}`), {
           headers: authHeaders()
         })
-          .then((r) => (r.ok ? r.blob() : null))
+          .then((r) => {
+            if (!r.ok) {
+              thumbBackoffsRef.current = recordThumbFailure(
+                thumbBackoffsRef.current,
+                id,
+                Date.now()
+              )
+              return null
+            }
+            thumbBackoffsRef.current = recordThumbSuccess(thumbBackoffsRef.current, id)
+            return r.blob()
+          })
           .then((blob) => {
             if (!blob) return
             const old = thumbStore.get(id)
             if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
             thumbStore.set(id, URL.createObjectURL(blob))
           })
-          .catch(() => undefined)
+          .catch(() => {
+            thumbBackoffsRef.current = recordThumbFailure(
+              thumbBackoffsRef.current,
+              id,
+              Date.now()
+            )
+          })
       }
     }
     tick()
@@ -878,6 +990,20 @@ function Canvas(): React.JSX.Element {
           }
           return
         }
+        // AN ARMED CREW places ONE orch card: the whole crew answers through
+        // it, running at the author's app. The canvas click is the confirm,
+        // exactly as it is for every other chip (R2).
+        if (crewId) {
+          try {
+            await cookrew().crewPlace(crewId, position)
+          } catch (error) {
+            console.error('Placing crew failed:', error)
+          } finally {
+            setCrewId(null)
+            setTool('move')
+          }
+          return
+        }
         // A SAVED TEMPLATE placed as a preset IMPORTS a session: a new
         // workspace forked from the template — team, worktree, workdir —
         // switched to. Not a terminal on this canvas, so it returns before
@@ -941,7 +1067,10 @@ function Canvas(): React.JSX.Element {
     },
     // presetId belongs here: without it the callback closes over a stale arm
     // and the click places the PREVIOUSLY armed preset, or nothing at all.
-    [tool, preset, role, roles, orch, clipping, presetId, screenToFlowPosition, zoomToNode]
+    // crewId and templates are CONSULTED above; leaving them out froze the
+    // closure at crewId=null, so an armed crew chip fell through to plain
+    // terminal creation — the canvas click placed a Shell instead of the crew.
+    [tool, preset, role, roles, orch, clipping, presetId, crewId, templates, screenToFlowPosition, zoomToNode]
   )
 
   const onNodesDelete = useCallback((deleted: Node[]) => {
@@ -993,6 +1122,27 @@ function Canvas(): React.JSX.Element {
     zoomedNodeIdRef.current,
     arrivedId
   )
+  // The arrival bypass is ONE-SHOT: once the arrived card has actually held
+  // primary and then lost it, the bypass must not re-admit it on the very
+  // next render after a drop — that zero-cooldown remount was the loop engine
+  // (Pilot's phone-crash hunt, 2026-08-27, section 2). Consumption is tracked
+  // so a slow first admission can't burn the bypass before it ever lands: the
+  // clear fires only after primaryId has EQUALLED arrivedId at least once.
+  const arrivalConsumedRef = useRef(false)
+  useEffect(() => {
+    if (arrivedId === null) {
+      arrivalConsumedRef.current = false
+      return
+    }
+    if (lod.primaryId === arrivedId) {
+      arrivalConsumedRef.current = true
+      return
+    }
+    if (arrivalConsumedRef.current) {
+      arrivalConsumedRef.current = false
+      setArrivedId(null)
+    }
+  }, [lod.primaryId, arrivedId])
   /** Null once the node is gone, which is also how the dialog self-dismisses. */
   const closingNode = closingId
     ? (workspace?.nodes.find((n) => n.id === closingId) ?? null)
@@ -1051,8 +1201,8 @@ function Canvas(): React.JSX.Element {
         />
         <div className="cr-stage" ref={stageRef}>
           <ReactFlow
-            nodes={nodes}
-            edges={edges}
+            nodes={renderedNodes}
+            edges={renderedEdges}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             onNodesChange={onNodesChange}
@@ -1094,7 +1244,19 @@ function Canvas(): React.JSX.Element {
             <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="#D9D3C5" />
             <SnapGuides guides={guides} />
             <MiniMap pannable zoomable className="cookrew-minimap" />
-            <Controls position="bottom-right" />
+            <Controls position="bottom-right" showInteractive={false}>
+              <ControlButton
+                className={`canvas-visual-toggle mode-${canvasVisualMode}`}
+                data-mode={canvasVisualMode}
+                aria-label={`Canvas view: ${VISUAL_MODE_LABEL[canvasVisualMode]}`}
+                title={`Canvas view: ${VISUAL_MODE_LABEL[canvasVisualMode]}. Next: ${VISUAL_MODE_LABEL[nextCanvasVisualMode(canvasVisualMode)]}`}
+                onClick={cycleCanvasVisualMode}
+              >
+                <span className="canvas-visual-glyph">
+                  <CrIcon name={VISUAL_MODE_ICON[canvasVisualMode]} />
+                </span>
+              </ControlButton>
+            </Controls>
             {/* Cross-workspace paste preview: dashed ghosts at the exact
                 spots the staged elements would land (moves keep their
                 position, copies nudge +32). Flow coordinates via the
@@ -1126,15 +1288,11 @@ function Canvas(): React.JSX.Element {
           {/* Inside the stage on purpose: it covers exactly the canvas and
               leaves the header — which owns the way back — reachable above it.
               The canvas keeps running underneath rather than unmounting. */}
-          {view === 'agents' && canGrant() && (
-            <button
-              className="gs-entry"
-              onClick={() => setGrantOpen(true)}
-              title="Who may call your agents over the internet"
-            >
-              🔑 WHO CAN CALL
-            </button>
-          )}
+          {/* RETIRED (owner ruling 2026-08-26): the WHO CAN CALL entry opened
+              a parallel admin panel onto a dead end ("no agents are
+              exportable"). Sharing now happens once, where saving happens —
+              the save sheet's share section — and who-is-on lives on the
+              served team itself. */}
           {view === 'agents' && (
             <RosterPanel
               workspace={workspace}
@@ -1151,7 +1309,6 @@ function Canvas(): React.JSX.Element {
                 setTool('move')
               }}
               variant="view"
-              onOpenGrants={() => setGrantOpen(true)}
               onClose={() => setView('canvas')}
             />
           )}
@@ -1206,6 +1363,23 @@ function Canvas(): React.JSX.Element {
             setPresetId(id)
             setRole(null)
           }}
+          crews={crews}
+          crewId={crewId}
+          onCrew={(id) => {
+            const crew = crews.find((c) => c.id === id)
+            if (!crew) return
+            // A locked chip is the gate's UI, never a disabled button: clicking
+            // it opens the sheet rather than arming a placement it can't do.
+            if (crew.access === 'paid' && !crew.payRef) {
+              setCrewGate(crew)
+              return
+            }
+            setCrewId(id)
+            setPresetId(null)
+            setRole(null)
+            setTool('terminal')
+          }}
+          onAddCrew={() => setAddCrewOpen(true)}
           gatedPresetId={gatedId}
           onPresetGate={openPresetGate}
           onCheckUpdates={checkPresetUpdates}
@@ -1240,11 +1414,51 @@ function Canvas(): React.JSX.Element {
           onPrimaryChange={setZoomedTerminalId}
         />
         {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
-        {grantOpen && activeWsId && (
-          <GrantPanel
-            workspace={workspace}
-            workspaceId={activeWsId}
-            onClose={() => setGrantOpen(false)}
+        {/* The dock's + ADD BY LINK — adding is free and inert; commitment
+            happens at the gate, money at the sheet, connection at placement. */}
+        {/* A locked crew chip opens the GATE, never a placement it cannot do.
+            M1 settles against the dev facilitator, so "pay" mints a reference
+            the placed card presents once, at session start (R5). */}
+        {crewGate && (
+          <GateSheet
+            scene={{
+              door: 'install',
+              phase: { kind: 'pay' },
+              pricing: {
+                model: 'one-time',
+                terms: {
+                  price: crewGate.priceUsd ?? '0',
+                  asset: 'USDC',
+                  chain: 'dev',
+                  author: `@${crewGate.slug}`,
+                  expiry: 0
+                }
+              }
+            }}
+            title={crewGate.name}
+            version={`V${crewGate.version}`}
+            agentCount={crewGate.agents}
+            bannerLine={`${crewGate.priceUsd} USDC · per session — paid directly to @${crewGate.slug}`}
+            wallets={[{ id: 'dev', label: 'DEV FACILITATOR', icon: '◈' }]}
+            selectedWallet="dev"
+            onDismiss={() => setCrewGate(null)}
+            onPay={() => {
+              const crew = crewGate
+              setCrewGate(null)
+              void cookrew()
+                .crewUnlock(crew.id, `dev-${Date.now()}`)
+                .then(() => refreshCrews())
+                .catch((error) => console.error('crewUnlock failed:', error))
+            }}
+          />
+        )}
+        {addCrewOpen && (
+          <AddCrewSheet
+            onClose={() => setAddCrewOpen(false)}
+            onAdded={() => {
+              setAddCrewOpen(false)
+              refreshCrews()
+            }}
           />
         )}
         {/* One confirmation for every close path. Rendered last so it sits over

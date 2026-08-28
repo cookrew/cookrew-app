@@ -1,0 +1,823 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>QA — share on save (real components)</title>
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen&family=JetBrains+Mono&family=Inter&display=swap" rel="stylesheet">
+<style>:root {
+  --cream: #faf8f4;
+  --cream-hi: #fffef5;
+  --cream-md: #f5f0e8;
+  --cream-lo: #ece6da;
+  --ink: #2d2a20;
+  --ink-soft: #5c4a1f;
+  --muted: #78716c;
+  --dim: #a8a29e;
+  --line: #2d2a20;
+  --line-soft: #d9d3c5;
+  --amber: #ffd600;
+  --amber-soft: #fff3ad;
+  --amber-deep: #d97706;
+  --phos: #e9b949;
+  --phos-dim: #8a6d1c;
+  --phos-glow: #ffd77a;
+  --phos-bg: #14110a;
+  --hp: #6bbe58;
+  --rose: #dc2626;
+  --violet: #9b8acb;
+  /* Violet is the persona accent (role coins, never a status colour). The HI
+     step is its raised sibling — the marketplace's own surfaces sit on it:
+     version pins on the rail, and the gated-chip lock badge. Promoted to a
+     real token because those two need to agree, and a hand-picked lighter
+     violet in each place is how palettes drift apart. */
+  --violet-hi: #c3b6e6;
+  --note-bg: #fff3ad;
+  --note-text: #3a3625;
+
+  /* vibe-island palette: macOS notch dark + SF system font + state accents */
+  --vi-bg: #121214;
+  --vi-panel: #1c1c1f;
+  --vi-line: #2c2c30;
+  --vi-text: #f5f5f7;
+  --vi-dim: #98989d;
+  /* Focused checkpoint row: a SOLID surface, not an alpha tint over the
+     transcript (F5). Sits between --vi-panel and the amber it carries. */
+  --vi-panel-focus: #2b281c;
+  --vi-working: #ff9f0a;
+  --vi-wait: #ff453a;
+  --vi-done: #32d74b;
+
+  --font-pixel: 'Silkscreen', 'Courier New', monospace;
+  --font-screen: 'VT323', 'Courier New', monospace;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}/* Team-fork picker overlay (TeamForkPicker.tsx). Owned by the picker-UX
+   lane; visual polish welcome from Fresco — tokens all come from the
+   arcade theme in styles.css. */
+
+.tf-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(45, 42, 32, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 90;
+  animation: cr-fadein 140ms ease-out;
+}
+
+.tf-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(82vh, 760px);
+  padding: 14px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 6px 6px 0 var(--amber-deep);
+}
+
+.tf-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tf-title {
+  font-family: var(--font-pixel);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  flex: 1;
+}
+
+.tf-banner {
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  padding: 5px 8px;
+  background: var(--amber-soft);
+  border: 1.5px dashed var(--line);
+}
+
+.tf-label {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.tf-source,
+.tf-save {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tf-list {
+  flex: 1;
+  min-height: 80px;
+  overflow-y: auto;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream);
+}
+
+.tf-row {
+  border-bottom: 1.5px solid var(--line-soft);
+}
+
+.tf-row.excluded .tf-name,
+.tf-row.excluded .tf-kind {
+  opacity: 0.4;
+}
+
+.tf-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  min-height: 36px;
+}
+
+.tf-include {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  cursor: pointer;
+  padding: 0;
+  color: var(--ink);
+}
+
+.tf-include.on {
+  background: var(--amber);
+}
+
+.tf-kind {
+  display: inline-flex;
+  color: var(--ink-soft);
+}
+
+.tf-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tf-mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tf-chooser {
+  padding: 4px 10px 10px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tf-modes {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.tf-role-note {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.tf-turns {
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream-hi);
+}
+
+.tf-turn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.tf-turn.readonly {
+  cursor: default;
+}
+
+.tf-turn.selected {
+  background: var(--amber-soft);
+}
+
+.tf-turn:disabled {
+  opacity: 0.75;
+}
+
+.tf-turn-mark {
+  width: 14px;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.tf-turn-box {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--line-soft);
+  display: inline-block;
+}
+
+.tf-turn-index {
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  color: var(--amber-deep);
+  flex: 0 0 auto;
+}
+
+.tf-turn-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tf-saved-summary {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 10px;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream);
+}
+
+.tf-input {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  padding: 5px 8px;
+  outline: none;
+  min-width: 0;
+  flex: 1;
+}
+
+.tf-input:focus {
+  border-color: var(--amber-deep);
+}
+
+.tf-saved-flash {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--hp);
+}
+
+.tf-error {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--rose);
+  border: 1.5px dashed var(--rose);
+  padding: 5px 8px;
+}
+
+.tf-hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--amber-deep);
+}
+
+.tf-preview summary {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tf-preview pre {
+  max-height: 140px;
+  overflow: auto;
+  font-size: 10px;
+  background: var(--cream);
+  border: 1.5px solid var(--line-soft);
+  padding: 6px;
+  margin: 4px 0 0;
+}
+
+.tf-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Phone: full-screen sheet, 44px touch targets. */
+@media (max-width: 700px) {
+  .tf-scrim {
+    align-items: stretch;
+    justify-content: stretch;
+  }
+
+  .tf-panel {
+    width: 100vw;
+    max-height: none;
+    border: none;
+    box-shadow: none;
+    padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+  }
+
+  .tf-row-main {
+    min-height: 44px;
+  }
+
+  .tf-turn {
+    min-height: 40px;
+  }
+
+  .tf-include {
+    width: 24px;
+    height: 24px;
+  }
+
+  .tf-foot {
+    flex-wrap: wrap;
+  }
+
+  .tf-foot .tf-fork-name {
+    flex-basis: 100%;
+  }
+}
+
+/* ---- Fresco polish: role accent, hover/press affordances ---- */
+
+/* FROM ROLE mode chip: persona accent — violet frame, violet fill when
+   active, RoleAvatar riding inside. Never a status color. */
+.tf-mode-chip.role {
+  border-color: var(--violet);
+}
+
+.tf-mode-chip.role.amber {
+  background: var(--violet);
+  color: var(--cream-hi);
+}
+
+.tf-mode-chip .role-avatar {
+  width: 12px;
+  height: 12px;
+  vertical-align: -2px;
+}
+
+.tf-mode-chip.role.amber .role-avatar {
+  color: var(--cream-hi);
+}
+
+/* Row + turn hover affordances (skip readonly/excluded). */
+.tf-row:not(.excluded) .tf-row-main:hover {
+  background: var(--amber-soft);
+}
+
+.tf-turn:not(.readonly):not(:disabled):hover {
+  background: var(--amber-soft);
+}
+
+/* Include checkbox presses like every other bevel control. */
+.tf-include:hover {
+  background: var(--amber-soft);
+}
+
+.tf-include.on:hover {
+  background: var(--amber);
+}
+
+.tf-include:active {
+  transform: translate(1px, 1px);
+}
+
+/* Assembled-turn checks read amber-deep like the turn indexes. */
+.tf-turn .cr-icon {
+  color: var(--amber-deep);
+}
+
+/* ==== workspace v2: directory manager + fork dir chooser (Velvet lane) ==== */
+
+/* --- workspace switcher add/remove row (styles bundled globally) --- */
+.cr-ws-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.cr-ws-row.active {
+  background: var(--amber-soft);
+}
+
+.cr-ws-row .cr-ws-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.cr-ws-mini {
+  flex: 0 0 auto;
+  width: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.cr-ws-mini:hover:not(:disabled) {
+  background: var(--cream-lo);
+  color: var(--ink);
+}
+
+.cr-ws-mini.danger:hover {
+  background: var(--rose);
+  color: var(--cream-hi);
+}
+
+.cr-ws-mini:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+/* --- directory manager panel --- */
+.dm-panel {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.dm-section-label {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.dm-list {
+  display: flex;
+  flex-direction: column;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream);
+}
+
+.dm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1.5px solid var(--line-soft);
+  min-height: 36px;
+}
+
+.dm-row:last-child {
+  border-bottom: none;
+}
+
+.dm-star {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: none;
+  color: var(--amber-deep);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dm-star:disabled {
+  cursor: default;
+}
+
+.dm-star:not(.on):hover {
+  color: var(--amber);
+}
+
+.dm-dir-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.dm-dir-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dm-dir-path {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Fresco fills this per-dir git-chip slot; reserve inline space. */
+.dm-git-slot {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+}
+
+.dm-primary-chip {
+  flex: 0 0 auto;
+}
+
+.dm-remove {
+  flex: 0 0 auto;
+}
+
+.dm-term-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--ink-soft);
+}
+
+.dm-cwd-select {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+  padding: 3px 6px;
+  max-width: 45%;
+}
+
+.dm-cwd-select:disabled {
+  opacity: 0.5;
+}
+
+.dm-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dm-foot-note {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* --- team-fork directory chooser + worktree toggle --- */
+.tf-target-dir {
+  flex: 0 0 auto;
+  max-width: 130px;
+}
+
+.tf-dirs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream);
+}
+
+.tf-dirs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tf-worktree {
+  margin-left: 0;
+}
+
+.tf-dirs-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tf-dir-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 2px;
+  background: var(--cream-hi);
+  border: 1.5px solid var(--line);
+}
+
+.tf-dir-chip.primary {
+  border-color: var(--amber-deep);
+}
+
+.tf-dir-star {
+  background: transparent;
+  border: none;
+  color: var(--amber-deep);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.tf-dir-star:disabled {
+  cursor: default;
+}
+
+.tf-dir-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+  max-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tf-dir-x {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.tf-dir-x:hover {
+  color: var(--rose);
+}
+
+.tf-dirs-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tf-dirs-note {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  flex: 1 1 100%;
+}
+
+@media (max-width: 700px) {
+  .dm-row {
+    min-height: 44px;
+  }
+
+  .dm-cwd-select,
+  .tf-target-dir {
+    min-height: 36px;
+    max-width: 42%;
+  }
+
+  .cr-ws-mini {
+    width: 40px;
+  }
+}
+
+/* ── SHARE ON SAVE (R30) — the one publish entry, inside the save sheet ──
+   The share question is a section, not a second sheet: one breath, one act. */
+.sos {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0 4px;
+  border-top: 1px solid var(--line-soft);
+}
+.sos-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream-hi);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+}
+.sos-opt.sel {
+  border-color: var(--line);
+  background: var(--amber-soft);
+}
+.sos-dot {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+  margin-top: 2px;
+  flex: 0 0 auto;
+  background: var(--cream-hi);
+}
+.sos-opt.sel .sos-dot {
+  background: var(--amber);
+  box-shadow: inset 0 0 0 2px var(--cream-hi);
+}
+.sos-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sos-t { font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
+.sos-s { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-soft); line-height: 1.45; }
+.sos-price { display: flex; align-items: center; gap: 8px; padding: 2px 0 2px 30px; flex-wrap: wrap; }
+.sos-price-input { max-width: 90px; }
+.sos-unit { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-soft); }
+.sos-bad { font-family: var(--font-mono); font-size: 10px; color: var(--rose); }
+/* The door fact — shown only once a public option is picked. */
+.sos-door {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  background: var(--cream-md);
+  border: 1.5px solid var(--line);
+}
+.sos-door-g {
+  width: 22px; height: 22px; flex: 0 0 auto;
+  display: grid; place-items: center;
+  border: 1.5px solid var(--line); border-radius: 50%;
+  background: var(--cream-hi); font-size: 11px;
+}
+.sos-door-s { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-soft); line-height: 1.45; }
+.sos-note { font-family: var(--font-body); font-size: 11px; color: var(--muted); }
+/* The payoff: an address you can hand to someone. */
+.sos-live {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 10px; margin-top: 6px;
+  border: 1.5px solid var(--violet); background: var(--cream-hi);
+}
+.sos-live-t { font-family: var(--font-pixel); font-size: 8px; letter-spacing: .06em; text-transform: uppercase; color: var(--violet); }
+.sos-addr { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink); }
+
+body{margin:0;background:#2b2822;color:#eee;font-family:var(--font-body,system-ui);padding:24px}
+h1{font-family:var(--font-pixel,monospace);font-size:15px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:20px}
+.qa h2{font-family:var(--font-pixel,monospace);font-size:10px;color:#d9d3c5;text-transform:uppercase}
+.stage{background:var(--cream-lo,#ece6da);padding:18px;border-radius:8px}
+.tf-panel{background:var(--cream-hi);border:2px solid var(--line);box-shadow:5px 5px 0 var(--amber-deep);color:var(--ink)}
+.note{color:#aaa;font-size:12px;max-width:52ch}
+</style></head><body>
+<h1>QA — SHARE ON SAVE · rendered from the shipped ShareOnSave component</h1>
+<div class="grid"><section class="qa"><h2>A · default — Just me (publishes nothing)</h2><div class="stage"><div class="tf-panel">
+  <div class="tf-head"><span class="tf-title">SAVE TEAM</span><span class="tf-spacer"></span><span class="cr-chip">4 AGENTS</span></div>
+  <div style="padding:10px 12px">
+    <div class="tf-save">
+      <span class="tf-label">SAVE TEAM</span>
+      <input class="tf-input" value="Research Crew" readonly>
+      <button class="cr-btn sm">SAVE</button>
+    </div>
+    <div class="sos"><span class="tf-label">WHO CAN CALL IT?</span><button type="button" class="sos-opt sel" aria-pressed="true"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Just me</span><span class="sos-s">Stays on your shelf. That&#x27;s where it is now.</span></span></button><button type="button" class="sos-opt" aria-pressed="false"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Anyone with a Cookrew account — free</span><span class="sos-s">They sign in, then start.</span></span></button><button type="button" class="sos-opt" aria-pressed="false"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Anyone who pays</span><span class="sos-s">Set a price. Callers pay you directly — Cookrew never holds the money and takes nothing.</span></span></button><span class="sos-note">Change this any time, including back to Just me — which stops new callers. Anyone already working keeps going until you end them.</span></div>
+  </div></div></div><p class="note">The primary stays plain SAVE. No door fact, because no door is opening.</p></section>
+<section class="qa"><h2>B · free — anyone with an account</h2><div class="stage"><div class="tf-panel">
+  <div class="tf-head"><span class="tf-title">SAVE TEAM</span><span class="tf-spacer"></span><span class="cr-chip">4 AGENTS</span></div>
+  <div style="padding:10px 12px">
+    <div class="tf-save">
+      <span class="tf-label">SAVE TEAM</span>
+      <input class="tf-input" value="Research Crew" readonly>
+      <button class="cr-btn sm">SAVE · START SERVING</button>
+    </div>
+    <div class="sos"><span class="tf-label">WHO CAN CALL IT?</span><button type="button" class="sos-opt" aria-pressed="false"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Just me</span><span class="sos-s">Stays on your shelf. That&#x27;s where it is now.</span></span></button><button type="button" class="sos-opt sel" aria-pressed="true"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Anyone with a Cookrew account — free</span><span class="sos-s">They sign in, then start.</span></span></button><button type="button" class="sos-opt" aria-pressed="false"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Anyone who pays</span><span class="sos-s">Set a price. Callers pay you directly — Cookrew never holds the money and takes nothing.</span></span></button><div class="sos-door"><span class="sos-door-g">◫</span><span class="sos-door-s">Callers talk to Conductor only. It runs the rest of the team the way it always has — the others are never exposed.</span></div><span class="sos-note">Change this any time, including back to Just me — which stops new callers. Anyone already working keeps going until you end them.</span></div>
+  </div></div></div><p class="note">The DOOR FACT appears the moment a public option is picked, and the primary renames: the button says everything the click does.</p></section>
+<section class="qa"><h2>C · paid — price + door fact</h2><div class="stage"><div class="tf-panel">
+  <div class="tf-head"><span class="tf-title">SAVE TEAM</span><span class="tf-spacer"></span><span class="cr-chip">4 AGENTS</span></div>
+  <div style="padding:10px 12px">
+    <div class="tf-save">
+      <span class="tf-label">SAVE TEAM</span>
+      <input class="tf-input" value="Research Crew" readonly>
+      <button class="cr-btn sm">SAVE · START SERVING</button>
+    </div>
+    <div class="sos"><span class="tf-label">WHO CAN CALL IT?</span><button type="button" class="sos-opt" aria-pressed="false"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Just me</span><span class="sos-s">Stays on your shelf. That&#x27;s where it is now.</span></span></button><button type="button" class="sos-opt" aria-pressed="false"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Anyone with a Cookrew account — free</span><span class="sos-s">They sign in, then start.</span></span></button><button type="button" class="sos-opt sel" aria-pressed="true"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Anyone who pays</span><span class="sos-s">Set a price. Callers pay you directly — Cookrew never holds the money and takes nothing.</span></span></button><div class="sos-price"><input class="tf-input sos-price-input" inputMode="decimal" placeholder="2.50" aria-label="Price in USDC per session" value="2.50"/><span class="sos-unit">USDC · per session</span></div><div class="sos-door"><span class="sos-door-g">◫</span><span class="sos-door-s">Callers talk to Conductor only. It runs the rest of the team the way it always has — the others are never exposed.</span></div><span class="sos-note">Change this any time, including back to Just me — which stops new callers. Anyone already working keeps going until you end them.</span></div>
+  </div></div></div><p class="note">Price is per SESSION (the instantiator's unit). An empty or zero price disables the primary — a paid door that cannot quote at 402 is a caller deception.</p></section>
+<section class="qa"><h2>D · paid, bad price — refused</h2><div class="stage"><div class="tf-panel">
+  <div class="tf-head"><span class="tf-title">SAVE TEAM</span><span class="tf-spacer"></span><span class="cr-chip">4 AGENTS</span></div>
+  <div style="padding:10px 12px">
+    <div class="tf-save">
+      <span class="tf-label">SAVE TEAM</span>
+      <input class="tf-input" value="Research Crew" readonly>
+      <button class="cr-btn sm">SAVE · START SERVING</button>
+    </div>
+    <div class="sos"><span class="tf-label">WHO CAN CALL IT?</span><button type="button" class="sos-opt" aria-pressed="false"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Just me</span><span class="sos-s">Stays on your shelf. That&#x27;s where it is now.</span></span></button><button type="button" class="sos-opt" aria-pressed="false"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Anyone with a Cookrew account — free</span><span class="sos-s">They sign in, then start.</span></span></button><button type="button" class="sos-opt sel" aria-pressed="true"><span class="sos-dot"></span><span class="sos-text"><span class="sos-t">Anyone who pays</span><span class="sos-s">Set a price. Callers pay you directly — Cookrew never holds the money and takes nothing.</span></span></button><div class="sos-price"><input class="tf-input sos-price-input" inputMode="decimal" placeholder="2.50" aria-label="Price in USDC per session" value="abc"/><span class="sos-unit">USDC · per session</span><span class="sos-bad">a price has to be a number above zero</span></div><div class="sos-door"><span class="sos-door-g">◫</span><span class="sos-door-s">Callers talk to Conductor only. It runs the rest of the team the way it always has — the others are never exposed.</span></div><span class="sos-note">Change this any time, including back to Just me — which stops new callers. Anyone already working keeps going until you end them.</span></div>
+  </div></div></div><p class="note">The primary is disabled and the reason is said, not hidden.</p></section></div></body></html>

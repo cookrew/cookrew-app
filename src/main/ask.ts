@@ -1,6 +1,7 @@
 import { feedPromptBuffer } from '../shared/turn'
 import { multiplexer, type PtySession } from './pty'
 import type { Multiplexer } from './multiplexer'
+import { isPiCommand } from './pi-bind'
 import {
   CONTAMINATED_REFUSAL,
   DISPATCH_RESIDUE_REFUSAL,
@@ -39,6 +40,7 @@ export interface AskOptions {
 const SUBMIT_DELAY_BASE_MS = 150
 const SUBMIT_DELAY_PER_KB_MS = 100
 const SUBMIT_DELAY_MAX_MS = 1500
+const DIRECT_PI_CONFIRM_DELAY_MS = 600
 
 /** Bracketed-paste markers (DECSET 2004): a paste's explicit start/end. */
 const BRACKETED_PASTE_START = '\x1b[200~'
@@ -95,7 +97,10 @@ export async function pasteAndSubmit(
   // an untagged fallback write would preempt the very dispatch it serves.
   write: (data: string) => void = (data) => session.write(data),
   stillValid?: () => boolean,
-  lease: ProducerLease = defaultProducerLease()
+  lease: ProducerLease = defaultProducerLease(),
+  phase?: (name: string) => void,
+  submitBytes = '\r',
+  confirm?: { bytes: string; delayMs: number }
 ): Promise<'submitted' | 'cancelled'> {
   const generation = lease.generationOf(session.terminalId)
   if (stillValid !== undefined && !stillValid()) return 'cancelled'
@@ -111,12 +116,18 @@ export async function pasteAndSubmit(
   if (typeof session.terminalId === 'string') {
     if (!lease.noteBytesEntering(session.terminalId)) return 'cancelled'
   }
+  phase?.('paste-write:start')
   write(`${BRACKETED_PASTE_START}${body}${BRACKETED_PASTE_END}`)
-  await new Promise((resolve) => setTimeout(resolve, submitDelayMs(body.length)))
+  phase?.('paste-write:end')
+  const delayMs = submitDelayMs(body.length)
+  phase?.(`delay:start:${delayMs}`)
+  await new Promise((resolve) => setTimeout(resolve, delayMs))
+  phase?.('delay:end')
   // The check that matters most: cancellation during the delay means the CR
   // is never written — and the paste ALREADY went out, so the input box now
   // holds a cancelled producer's text: contaminated (see above).
   if (stillValid !== undefined && !stillValid()) {
+    phase?.('validity:cancelled')
     if (typeof session.terminalId === 'string') {
       // Durable through the lease (Sol r10 P0-1): a provenance-wired lease
       // upgrades the write-ahead dirty fact to 'contaminated' on disk, so a
@@ -125,7 +136,25 @@ export async function pasteAndSubmit(
     }
     return 'cancelled'
   }
-  write('\r')
+  phase?.('validity:live')
+  phase?.('submit-write:start')
+  write(submitBytes)
+  phase?.('submit-write:end')
+  if (confirm) {
+    phase?.(`confirm-delay:start:${confirm.delayMs}`)
+    await new Promise((resolve) => setTimeout(resolve, confirm.delayMs))
+    phase?.('confirm-delay:end')
+    if (stillValid !== undefined && !stillValid()) {
+      phase?.('confirm-validity:cancelled')
+      if (typeof session.terminalId === 'string') {
+        lease.markContaminated(session.terminalId, generation)
+      }
+      return 'cancelled'
+    }
+    phase?.('confirm-write:start')
+    write(confirm.bytes)
+    phase?.('confirm-write:end')
+  }
   return 'submitted'
 }
 
@@ -186,8 +215,17 @@ export async function askTerminal(
     // reply still comes out of the mirror diff, so the shape callers see is
     // identical. Null = herdr could not deliver at all; fall through to the
     // typed path exactly as before this existed.
+    // Host-native delivery is only for sessions the HOST actually holds: a
+    // served session rides the direct backend, and aiming herdr's native ask
+    // at a pane herdr does not have returned an empty "reply" (observed live).
     const mux = multiplexer()
-    if (mux?.capabilities.agentLifecycle && (mux.submitAgent ?? mux.promptAgent) !== undefined) {
+    // `!== false`, not truthy: only a session that EXPLICITLY says it is off
+    // the host (served/direct) opts out — duck-typed sessions keep the old path.
+    if (
+      session.hostBacked !== false &&
+      mux?.capabilities.agentLifecycle &&
+      (mux.submitAgent ?? mux.promptAgent) !== undefined
+    ) {
       const native = await nativeAsk(
         session,
         prompt,
@@ -572,7 +610,12 @@ export async function ownerSubmit(
 ): Promise<OwnerSubmitResult> {
   const lease = options.lease ?? defaultProducerLease()
   const terminalId = session.terminalId
+  const trace = session.hostBacked === false && process.env.COOKREW_TRACE_OWNER_SUBMIT === '1'
+    ? (phase: string): void => console.error(`[owner-submit] terminal=${terminalId} phase=${phase}`)
+    : undefined
+  trace?.('classify:start')
   if (feedPromptBuffer('', bytes).submitted.length === 0) {
+    trace?.('classify:non-submitting')
     // Not submit-capable. The guard still arbitrates (it refuses ALL untagged
     // bytes while any producer holds the window); a void-returning legacy
     // fake reads as allow, matching the unwired-guard convention.
@@ -581,13 +624,18 @@ export async function ownerSubmit(
       ? { ok: true, submitted: false }
       : { ok: false, reason: refusalReason(verdict) }
   }
+  trace?.('classify:submitting')
   if (options.signal?.aborted === true) {
+    trace?.('signal:already-aborted')
     return { ok: false, reason: 'the submission was cancelled at app shutdown' }
   }
   let holder: ProducerHolder
   try {
+    trace?.('lease:start')
     holder = acquireOwnerLease(lease, session, bytes)
+    trace?.('lease:acquired')
   } catch (error) {
+    trace?.('lease:refused')
     return { ok: false, reason: error instanceof Error ? error.message : String(error) }
   }
   // The holder's own bytes travel the TAGGED path the guard exempts — a
@@ -609,13 +657,23 @@ export async function ownerSubmit(
     const trailing = /[\r\n]+$/.exec(bytes)
     const body = trailing ? bytes.slice(0, trailing.index) : bytes
     if (trailing !== null && body.length > 0) {
+      const submitBytes =
+        session.hostBacked === false && isPiCommand(session.command) ? '\n' : '\r'
+      const confirmation = submitBytes === '\n'
+        ? { bytes: '\r', delayMs: DIRECT_PI_CONFIRM_DELAY_MS }
+        : undefined
+      trace?.(`submit-key:${submitBytes === '\n' ? 'lf' : 'cr'}`)
       const outcome = await pasteAndSubmit(
         session,
         body,
         writeOwner,
         () => holdsLease(lease, terminalId, holder) && options.signal?.aborted !== true,
-        lease
+        lease,
+        trace,
+        submitBytes,
+        confirmation
       )
+      trace?.(`paste-outcome:${outcome}`)
       return outcome === 'submitted'
         ? { ok: true, submitted: true }
         : {
@@ -633,7 +691,9 @@ export async function ownerSubmit(
     }
     return { ok: true, submitted: true }
   } finally {
+    trace?.('lease:release-start')
     lease.release(terminalId, holder)
+    trace?.('lease:release-end')
   }
 }
 
@@ -662,7 +722,15 @@ async function waitForReply(
   timing: { quiescenceMs: number; timeoutMs: number; graceMs: number },
   signal?: AbortSignal
 ): Promise<void> {
-  const mux = multiplexer()
+  // The session's OWN backend decides, not the global one. A served session
+  // runs on the direct backend while the app's global multiplexer is herdr,
+  // so asking herdr to waitUntilIdle on a pane it has never heard of blocked
+  // for the full 10-minute timeout: the caller's ask 500'd long before, and
+  // the delivery verdict never printed because deliver() had not returned
+  // (2026-08-28). hostBacked is false exactly for served sessions.
+  // `!== false`, matching the native-ask path above: a duck-typed test fake
+  // without the field keeps the host-backed behaviour it was written for.
+  const mux = session.hostBacked !== false ? multiplexer() : null
   if (mux?.capabilities.agentLifecycle && mux.waitUntilIdle) {
     // The grace period still applies: an agent that has not started working
     // yet is idle, and returning on that would report the PREVIOUS turn's

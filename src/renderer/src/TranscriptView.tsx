@@ -11,7 +11,6 @@ import {
 import { checkpointTitle, type TitleMode } from './checkpoint-sync'
 import { MarkdownText } from './MarkdownText'
 import {
-  activeBlockForScroll,
   coalescingSingleFlight,
   evictTrace,
   fetchTracePage,
@@ -22,6 +21,7 @@ import {
   mergeTrace,
   pruneToTotal,
   refineEstimate,
+  type TraceAnchor,
   type TracePage,
   type TraceBlock
 } from './transcript'
@@ -43,6 +43,27 @@ export interface ActiveBlock {
 export interface TranscriptHandle {
   /** Scrub to a rail fraction (0 = oldest identity, 1 = live bottom). */
   scrubTo: (fraction: number) => void
+  /**
+   * The text of a loaded checkpoint, or null if that identity is still a
+   * placeholder. The header's translate button needs the body it is about to
+   * translate, and this view is the only thing that has it — blocks are fetched
+   * and evicted here, not held by the overlay.
+   */
+  blockText: (index: number) => { prompt: string; reply: string } | null
+}
+
+/**
+ * A translated body, replacing what is RENDERED for one checkpoint.
+ *
+ * It is a view, never a write: nothing here reaches the trace, the store or the
+ * session file, so the original is one click away and the record on disk is
+ * still what the agent actually said. A null field means that part was not
+ * translated and must keep showing the original.
+ */
+export interface CheckpointTranslation {
+  index: number
+  prompt: string | null
+  reply: string | null
 }
 
 /**
@@ -61,7 +82,7 @@ export const TranscriptView = forwardRef<
   TranscriptHandle,
   {
     terminalId: string
-    /** Total completed checkpoints (activity.turnCount) — the growth trigger. */
+    /** Total completed checkpoints (activity.turnCount) — the growth signal. */
     total: number
     /**
      * Full ordered checkpoint identity list (Forge's trace index) — defines the
@@ -79,8 +100,16 @@ export const TranscriptView = forwardRef<
     onActiveBlockChange?: (active: ActiveBlock) => void
     /** Reports a checkpoint whose content is FETCHING for a jump, null once filled. */
     onPending?: (index: number | null) => void
+    /** Tail fetch settled; parent may now load lower-priority rail metadata. */
+    onTailLoaded?: () => void
+    /** Show this checkpoint's body translated instead of as written. */
+    translation?: CheckpointTranslation | null
     /** The live terminal layer, seamed at the bottom of the transcript. */
     children: React.ReactNode
+    /** Bump to refresh a growing block whose identity count has not changed. */
+    refreshToken?: number
+    /** Optional live-seam modifier; transcript blocks and scroll model stay shared. */
+    liveClassName?: string
   }
 >(function TranscriptView(
   {
@@ -93,7 +122,11 @@ export const TranscriptView = forwardRef<
     clipRows,
     onActiveBlockChange,
     onPending,
-    children
+    onTailLoaded,
+    translation,
+    children,
+    refreshToken = 0,
+    liveClassName
   },
   ref
 ): React.JSX.Element {
@@ -102,6 +135,8 @@ export const TranscriptView = forwardRef<
   const blockRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   const [blocks, setBlocks] = useState<TraceBlock[]>([])
   const [estHeight, setEstHeight] = useState(DEFAULT_EST)
+  const onTailLoadedRef = useRef(onTailLoaded)
+  onTailLoadedRef.current = onTailLoaded
   const pinnedRef = useRef(true)
   const clipRef = useRef(clipRows)
   clipRef.current = clipRows
@@ -121,11 +156,15 @@ export const TranscriptView = forwardRef<
   // scrub callbacks (bound once) always read the latest without re-binding.
   const loadedMap = new Map(blocks.map((b) => [b.index, b]))
   const loadedSet = new Set(blocks.map((b) => b.index))
-  const spaceIds = identities.length > 0 ? identities : blocks.map((b) => b.index)
+  const spaceIds = transcriptIdentitySpace(identities, blocks)
   const loadedSetRef = useRef(loadedSet)
   loadedSetRef.current = loadedSet
   const spaceIdsRef = useRef(spaceIds)
   spaceIdsRef.current = spaceIds
+  // Same mirroring reason as the two above: the imperative handle is built once
+  // and must read the CURRENT blocks, not the ones closed over at creation.
+  const blocksRef = useRef(blocks)
+  blocksRef.current = blocks
 
   // True while a finger is down (item 2b): a smooth scrollIntoView is canceled by
   // the touch gesture mid-flight, so jumps snap instantly while touching.
@@ -196,8 +235,8 @@ export const TranscriptView = forwardRef<
   }, [])
 
   const fetchWindow = useCallback(
-    async (req: 'tail' | { aroundIndex: number }): Promise<TracePage> => {
-      const request = req === 'tail' ? { limit: WINDOW } : { ...req, limit: WINDOW }
+    async (req: 'tail' | TraceAnchor): Promise<TracePage> => {
+      const request = req === 'tail' ? { limit: WINDOW } : { limit: WINDOW, ...req }
       const page = await fetchTracePage(terminalId, request)
       ingest(page)
       return page
@@ -233,33 +272,89 @@ export const TranscriptView = forwardRef<
     [fill]
   )
 
-  // Newest window on mount and on any growth (turnCount change); a rewind is
-  // handled by pruneToTotal inside ingest.
-  useEffect(() => {
-    if (total <= 0) {
-      setBlocks([])
-      return
-    }
-    anchorIndexRef.current = Number.MAX_SAFE_INTEGER
-    void fetchWindow('tail')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [terminalId, total])
+  // Tail reconcile is a coalesced single-flight. Mount reads one 20-block tail;
+  // ordinary growth asks only for identities after the prior ceiling. A remote
+  // in-flight turn can rewrite the current tail without changing its identity,
+  // so refreshToken falls back to one aroundIndex block when no newer one exists.
+  const tailSignalRef = useRef({ terminalId, total, refreshToken })
+  tailSignalRef.current = { terminalId, total, refreshToken }
+  const tailStateRef = useRef({
+    terminalId: '',
+    knownTotal: 0,
+    refreshToken: 0,
+    initialized: false
+  })
+  const tailSequenceRef = useRef(0)
+  const tailFlight = useMemo(
+    () =>
+      coalescingSingleFlight(async () => {
+        const desired = tailSignalRef.current
+        const state = tailStateRef.current
+        if (state.terminalId !== desired.terminalId) {
+          state.terminalId = desired.terminalId
+          state.knownTotal = 0
+          state.refreshToken = desired.refreshToken
+          state.initialized = false
+          setBlocks([])
+        }
+        const refreshChanged = state.refreshToken !== desired.refreshToken
+        state.refreshToken = desired.refreshToken
+        if (desired.total <= 0 && desired.refreshToken === 0) {
+          state.knownTotal = 0
+          state.initialized = false
+          setBlocks([])
+          onTailLoadedRef.current?.()
+          return
+        }
 
-  // offsetParent-safe identity tops: relative to the scroll container via rects,
-  // over EVERY identity div (loaded blocks + placeholders).
-  const identityTops = useCallback((): { index: number; top: number }[] => {
-    const el = scrollRef.current
-    if (!el) return []
-    const base = el.getBoundingClientRect().top - el.scrollTop
-    return [...blockRefs.current.entries()]
-      .map(([index, node]) => ({ index, top: node.getBoundingClientRect().top - base }))
-      .sort((a, b) => a.top - b.top)
-  }, [])
+        const rewound =
+          desired.total > 0 && state.knownTotal > 0 && desired.total < state.knownTotal
+        const request: 'tail' | TraceAnchor | null =
+          !state.initialized || rewound
+            ? 'tail'
+            : desired.total > state.knownTotal || refreshChanged
+              ? { afterIndex: state.knownTotal }
+              : null
+        if (request === null) return
+        state.initialized = true
+
+        try {
+          let page = await fetchWindow(request)
+          const newest = page.blocks[page.blocks.length - 1]?.index
+          if (
+            refreshChanged &&
+            page.blocks.length === 0 &&
+            page.total > 0 &&
+            state.knownTotal > 0
+          ) {
+            page = await fetchWindow({ aroundIndex: page.total, limit: 1 })
+          } else if (newest !== undefined && newest < page.total) {
+            // A long hidden interval can jump by more than WINDOW. The delta
+            // proves growth; a final tail window lands on the actual newest.
+            page = await fetchWindow('tail')
+          }
+          state.knownTotal = page.total
+        } catch (error) {
+          state.initialized = false
+          console.error('trace tail failed:', error)
+        } finally {
+          onTailLoadedRef.current?.()
+        }
+      }),
+    [fetchWindow]
+  )
+
+  useEffect(() => {
+    anchorIndexRef.current = Number.MAX_SAFE_INTEGER
+    tailSequenceRef.current += 1
+    tailFlight.request(tailSequenceRef.current)
+  }, [terminalId, total, refreshToken, tailFlight])
 
   // One scroll pass per frame (coalesced): find the identity at the viewport top,
   // lazily fill it if it's a placeholder, and report the marker fraction linearly
   // in identity space. isAtBottom is now true ONLY at the real live seam.
   const scrollRaf = useRef(0)
+  const lastActiveRef = useRef<ActiveBlock | null>(null)
   useEffect(
     () => () => {
       if (scrollRaf.current) cancelAnimationFrame(scrollRaf.current)
@@ -275,16 +370,26 @@ export const TranscriptView = forwardRef<
       pinnedRef.current = isAtBottom(el.scrollTop, el.scrollHeight, el.clientHeight)
       const topId = pinnedRef.current
         ? null
-        : activeBlockForScroll(identityTops(), el.scrollTop + 8)
+        : activeIdentityForOffsets(
+            spaceIdsRef.current,
+            (id) => blockRefs.current.get(id)?.offsetTop,
+            el.scrollTop + 8,
+          )
       anchorIndexRef.current = topId ?? Number.MAX_SAFE_INTEGER
       activeInViewRef.current = topId
-      if (topId !== null && !loadedSetRef.current.has(topId)) maybeFill(topId)
-      onActiveBlockChange?.({
-        index: topId,
-        frac: topId === null ? 1 : fractionOfIdentity(spaceIdsRef.current, topId)
-      })
+      if (topId !== null && !loadedSetRef.current.has(topId)) {
+        maybeFill(topId)
+      }
+      const frac = topId === null ? 1 : fractionOfIdentity(spaceIdsRef.current, topId)
+      // Only a CHANGED active block reaches the rail. Every scroll frame used
+      // to re-render the whole 355-row timeline through this callback.
+      const prior = lastActiveRef.current
+      if (prior === null || prior.index !== topId || Math.abs(prior.frac - frac) > 0.005) {
+        lastActiveRef.current = { index: topId, frac }
+        onActiveBlockChange?.({ index: topId, frac })
+      }
     })
-  }, [identityTops, maybeFill, onActiveBlockChange])
+  }, [maybeFill, onActiveBlockChange])
 
   const jumpBehavior = useCallback(
     (): 'auto' | 'smooth' =>
@@ -315,6 +420,10 @@ export const TranscriptView = forwardRef<
         if (id === null) return
         scrollToTarget(id, 'auto')
         if (!loadedSetRef.current.has(id)) maybeFill(id)
+      },
+      blockText: (index: number) => {
+        const block = blocksRef.current.find((b) => b.index === index)
+        return block ? { prompt: block.prompt, reply: block.reply } : null
       }
     }),
     [scrollToTarget, maybeFill]
@@ -389,6 +498,10 @@ export const TranscriptView = forwardRef<
   // Refine the placeholder estimate from measured block heights (skips zero
   // heights so a layout-less environment keeps the default).
   useLayoutEffect(() => {
+    // Changing one global estimate resizes every unloaded identity. At the
+    // live tail autoscroll owns that shift; while reading history it would be
+    // a second layout jump after the fill anchor was already corrected.
+    if (!pinnedRef.current) return
     const measured: number[] = []
     for (const b of blocks) {
       const node = blockRefs.current.get(b.index)
@@ -404,13 +517,16 @@ export const TranscriptView = forwardRef<
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
-  }, [blocks.length, total, estHeight])
+  }, [blocks, total, estHeight])
 
   return (
     <div className="ctx-transcript" ref={scrollRef} onScroll={onScroll}>
       {spaceIds.map((id) => {
         const block = loadedMap.get(id)
         const active = id === selectedIndex
+        // Only the checkpoint that was translated is shown translated; every
+        // other block on the same scroll keeps its own words.
+        const translated = translation && translation.index === id ? translation : null
         return (
           <div
             key={id}
@@ -430,8 +546,14 @@ export const TranscriptView = forwardRef<
                   <span className="ctx-block-idx">T{id}</span>
                   <span className="ctx-block-title">{checkpointTitle(block, titleMode)}</span>
                 </div>
-                {/* Prompt stays VERBATIM (pre-wrap) — the human's exact words. */}
-                <div className="ctx-block-prompt">{block.prompt || '(empty prompt)'}</div>
+                {/* Prompt stays VERBATIM (pre-wrap) — the human's exact words,
+                    unless the reader asked for this checkpoint translated, in
+                    which case the words shown are the translation's. Marked, so
+                    "these are not the words that were typed" is visible rather
+                    than inferred. */}
+                <div className="ctx-block-prompt" data-translated={translated ? '' : undefined}>
+                  {(translated?.prompt ?? block.prompt) || '(empty prompt)'}
+                </div>
                 {block.activity.length > 0 && (
                   <div>
                     {block.activity.map((call, i) => (
@@ -447,8 +569,8 @@ export const TranscriptView = forwardRef<
                 )}
                 {/* Reply renders MARKDOWN as React elements; .md is Fresco's flag. */}
                 {block.reply && (
-                  <div className="ctx-block-reply md">
-                    <MarkdownText source={block.reply} />
+                  <div className="ctx-block-reply md" data-translated={translated ? '' : undefined}>
+                    <MarkdownText source={translated?.reply ?? block.reply} />
                   </div>
                 )}
               </>
@@ -462,7 +584,7 @@ export const TranscriptView = forwardRef<
           turn is at rest, the seam clips to the tail (item 1). */}
       <div
         ref={liveRef}
-        className="ctx-live"
+        className={`ctx-live${liveClassName ? ` ${liveClassName}` : ''}`}
         data-clip={clipRows !== null ? '' : undefined}
         style={clipRows !== null ? ({ ['--tail-rows']: clipRows } as React.CSSProperties) : undefined}
       >
@@ -471,3 +593,35 @@ export const TranscriptView = forwardRef<
     </div>
   )
 })
+
+/** Keep newly loaded tail identities visible even when metadata lags behind. */
+export function transcriptIdentitySpace(
+  identities: readonly number[],
+  blocks: readonly { index: number }[],
+): number[] {
+  return [...new Set([...identities, ...blocks.map((block) => block.index)])].sort((a, b) => a - b)
+}
+
+/** Current-layout lookup in O(log n), avoiding both stale tables and full scans. */
+export function activeIdentityForOffsets(
+  identities: readonly number[],
+  offsetOf: (id: number) => number | undefined,
+  scrollTop: number,
+): number | null {
+  let low = 0
+  let high = identities.length - 1
+  let active: number | null = null
+  while (low <= high) {
+    const mid = (low + high) >>> 1
+    const id = identities[mid]
+    const top = offsetOf(id)
+    if (top === undefined) return active
+    if (top <= scrollTop) {
+      active = id
+      low = mid + 1
+    } else {
+      high = mid - 1
+    }
+  }
+  return active
+}

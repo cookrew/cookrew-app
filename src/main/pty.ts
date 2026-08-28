@@ -13,10 +13,17 @@ import { HerdrStatusFeed, setStatusFeed, statusFeed } from './herdr-agent-status
 import { DirectMultiplexer } from './direct-multiplexer'
 import { selectMultiplexers } from './multiplexer-select'
 import { harnessFor } from './harness'
+import { confinedSpawn } from './session-sandbox'
 import { defaultProducerLease } from './producer-lease'
 import { PtyOwnership } from './pty-scope'
 import { defaultInputProvenance } from './input-provenance'
 import type { Terminal as HeadlessTerminalType } from '@xterm/headless'
+import {
+  decideReattach,
+  freshReattachState,
+  MAX_REATTACHES,
+  type ReattachState
+} from './herdr-attach-recovery'
 
 const { Terminal: HeadlessTerminal } = xtermHeadless as unknown as {
   Terminal: typeof HeadlessTerminalType
@@ -93,6 +100,17 @@ export function modeReplay(modes: HeadlessTerminalType['modes']): string {
  * reaper keeps working without threading an instance through every call.
  */
 let activeMux: Multiplexer | null = null
+
+/**
+ * The one backend a SERVED terminal may use. Under a host multiplexer the
+ * agent process lives in the host's SERVER with the owner's environment —
+ * outside both the env scrub and the Seatbelt profile this spawn applies, and
+ * (observed live under herdr) the attach client cannot even resolve the
+ * server's socket from the scrubbed HOME. The direct backend makes the pty
+ * child THE agent process, so the confinement lands on the process it was
+ * written for. Served sessions do not outlive the app; neither does this.
+ */
+const servedMux = new DirectMultiplexer()
 
 /**
  * Every constructed backend, host or not. The migration check needs to ask
@@ -305,6 +323,21 @@ export interface PtySessionOptions {
    * backends with no UI of their own.
    */
   card?: PaneCardInfo
+  /**
+   * Present ONLY for a served session's terminal (R30). `env` REPLACES the
+   * inherited owner environment — the scrub, so the pane holds no owner secret
+   * it was not lent — and `profilePath` is the Seatbelt profile the spawn is
+   * wrapped under. Absent for the owner's own terminals, which spawn exactly as
+   * before, so this option cannot change any existing behaviour.
+   *
+   * NOTE (per-backend correctness, app-verified): wrapping the attach argv here
+   * confines the created process for the direct backend and tmux's own
+   * `new-session`; herdr's pane is created by its server (`ensureSession`), so
+   * the wrap for herdr belongs there. This applies the env everywhere and the
+   * profile at the attach — correct for direct/tmux, and the herdr wrap point is
+   * the one remaining integration.
+   */
+  served?: { env: Record<string, string>; profilePath: string }
 }
 
 /**
@@ -314,6 +347,14 @@ export interface PtySessionOptions {
  */
 export class PtySession extends EventEmitter {
   readonly terminalId: string
+  /** Harness launch command; submission policy may key on the proven adapter. */
+  readonly command: string
+  /**
+   * Does this session ride the HOST multiplexer? A served session is pinned to
+   * the direct backend (see servedMux), so host-native features — herdr's
+   * native ask above all — must not be aimed at a pane the host does not hold.
+   */
+  readonly hostBacked: boolean
   private proc: IPty
   private screen: HeadlessTerminalType
   /** Turns the mirror back into ANSI for replayFrame(); see it for why. */
@@ -358,29 +399,43 @@ export class PtySession extends EventEmitter {
   constructor(options: PtySessionOptions) {
     super()
     this.terminalId = options.terminalId
+    this.command = options.command
     const shell = process.env.SHELL ?? '/bin/zsh'
     const cols = options.cols ?? 100
     const rows = options.rows ?? 30
+    // A served terminal is pinned to the direct backend — see servedMux.
+    const mux = options.served ? servedMux : activeMux
+    this.hostBacked = !options.served
     // Now a CAPABILITY question, not an identity one: "does my session
     // outlive the app?" rather than "am I tmux?". The direct backend answers
     // false and everything downstream degrades on that fact.
-    this.usesTmux = activeMux?.capabilities.persistsAcrossRestart ?? false
+    this.usesTmux = mux?.capabilities.persistsAcrossRestart ?? false
     this.sessionName = sessionNameFor(options.terminalId)
 
     this.screen = new HeadlessTerminal({ cols, rows, scrollback: 5000, allowProposedApi: true })
     this.serializer = new SerializeAddon()
     this.screen.loadAddon(this.serializer)
 
+    // A served session's env is the scrub (session-env.ts), never the owner's
+    // process env; the infra keys below are re-added explicitly ON TOP, never by
+    // spreading process.env back over the scrub. An ordinary terminal keeps the
+    // exact prior behaviour.
+    const baseEnv = options.served
+      ? { ...options.served.env }
+      : {
+          // Sanitized: under tmux/direct the pane (or the tmux SERVER on its
+          // first start) inherits this env, and a launcher-session marker turns
+          // off the agent's transcript saving (see sanitizeAgentEnv).
+          ...sanitizeAgentEnv(process.env)
+        }
+    const infraPath = options.served ? (options.served.env.PATH ?? '') : (process.env.PATH ?? '')
     const env = {
-      // Sanitized: under tmux/direct the pane (or the tmux SERVER on its
-      // first start) inherits this env, and a launcher-session marker turns
-      // off the agent's transcript saving (see sanitizeAgentEnv).
-      ...sanitizeAgentEnv(process.env),
+      ...baseEnv,
       TERM_PROGRAM: 'Cookrew',
       COOKREW_TERMINAL_ID: options.terminalId,
       COOKREW_SOCKET: options.socketPath,
       COOKREW_CLI: path.join(options.cliDir, 'cookrew'),
-      PATH: `${options.cliDir}:${process.env.PATH ?? ''}`
+      PATH: `${options.cliDir}:${infraPath}`
     }
 
     // One path for every backend. The direct backend returns a plain login
@@ -400,13 +455,18 @@ export class PtySession extends EventEmitter {
     // agent alive under a non-host multiplexer is killed there first and
     // resumed here — see migrateForeignSession. Without this, switching
     // hosts forked the whole agent population.
-    migrateForeignSession(attachSpec, activeMux!, allBackends, (c) => harnessFor(c)?.turns ?? null)
+    migrateForeignSession(attachSpec, mux!, allBackends, (c) => harnessFor(c)?.turns ?? null)
     // Idempotent, and a no-op for tmux (whose `new-session -A` does it inside
     // the attach). Backends that cannot create-and-attach in one step — herdr,
     // where the server owns the pane — need the pane to exist first.
-    activeMux!.ensureSession(attachSpec)
-    const spawnSpec = activeMux!.attachSpawn(attachSpec)
-    this.proc = pty.spawn(spawnSpec.file, spawnSpec.args, {
+    mux!.ensureSession(attachSpec)
+    const spawnSpec = mux!.attachSpawn(attachSpec)
+    // A served terminal runs under the Seatbelt profile; the owner's own runs
+    // exactly as before. See the `served` option note for the per-backend wrap.
+    const launch = options.served
+      ? confinedSpawn(options.served.profilePath, spawnSpec.file, spawnSpec.args)
+      : { file: spawnSpec.file, args: spawnSpec.args }
+    this.proc = pty.spawn(launch.file, launch.args, {
       name: 'xterm-256color',
       cols,
       rows,
@@ -433,6 +493,24 @@ export class PtySession extends EventEmitter {
     })
     this.proc.onExit(({ exitCode }) => {
       try {
+        // A SERVED agent dying is a paying caller's crew going silent, and it
+        // used to happen in total silence: the direct backend has no exit
+        // handling of its own, so "booted 2 terminal(s)" was the last word
+        // and the ask failed minutes later with "no file-backed agent turn"
+        // — a symptom three layers from the cause (2026-08-28). Name the
+        // death, with the tail the agent printed on its way out.
+        if (options.served && exitCode !== 0) {
+          const tail = this.serializer
+            .serialize({ scrollback: 0 })
+            .split('\n')
+            .filter((line: string) => line.trim().length > 0)
+            .slice(-6)
+            .join(' ⏎ ')
+            .slice(0, 600)
+          console.error(
+            `served agent ${this.terminalId} exited ${exitCode}: ${tail}`
+          )
+        }
         this.emit('exit', exitCode)
       } catch (error) {
         console.error('PTY exit handling failed:', error)
@@ -1052,6 +1130,9 @@ export class PtyManager {
     activeMux?.reloadConfig()
   }
 
+  /** Reattach budget per terminal — see herdr-attach-recovery. */
+  private readonly reattachState = new Map<string, ReattachState>()
+
   spawn(
     options: Omit<PtySessionOptions, 'socketPath' | 'cliDir' | 'tmuxConf'>,
     workspaceId?: string
@@ -1070,11 +1151,49 @@ export class PtyManager {
     // can land AFTER its replacement registered — an instance-blind delete
     // would clobber the live session from the map (the restore "running
     // flag" bug: pane alive, ptys.get() undefined, kill() then no-ops).
-    session.on('exit', () => {
-      if (this.sessions.get(options.terminalId) === session) {
-        this.sessions.delete(options.terminalId)
-        this.ownership.release(options.terminalId)
+    session.on('exit', (exitCode: number) => {
+      if (this.sessions.get(options.terminalId) !== session) return
+      // Read the tail BEFORE dispose drops the screen — this is the only place
+      // the attach client's parting words are still available.
+      let tail = ''
+      try {
+        tail = session.viewportText()
+      } catch {
+        // A disposed screen has nothing to say; treat it as not transient.
       }
+      this.sessions.delete(options.terminalId)
+      this.ownership.release(options.terminalId)
+
+      // A herdr attach can drop on a transient socket EAGAIN while the server
+      // and the pane are both healthy. Left alone the card keeps the client's
+      // "lost connection to server" line forever and the agent is unreachable.
+      // Reattaching restores the view; the bounds in decideReattach keep a
+      // genuinely dead pane from becoming a respawn loop.
+      const decision = decideReattach(
+        { exitCode, tail },
+        this.reattachState.get(options.terminalId) ?? freshReattachState(),
+        Date.now()
+      )
+      if (!decision.reattach) {
+        this.reattachState.delete(options.terminalId)
+        return
+      }
+      this.reattachState.set(options.terminalId, decision.state)
+      console.error(
+        `Terminal ${options.terminalId}: herdr attach dropped — reattaching ` +
+          `(attempt ${decision.attempt}/${MAX_REATTACHES}) in ${decision.delayMs}ms`
+      )
+      // OUT of the node-pty exit callback. A JS exception escaping it becomes a
+      // C++ exception on the NAPI thread and aborts the app (see onData), and
+      // respawning is far too much work to do inside that window.
+      setTimeout(() => {
+        try {
+          if (this.sessions.has(options.terminalId)) return // someone beat us to it
+          this.spawn(options, workspaceId)
+        } catch (error) {
+          console.error(`Terminal ${options.terminalId}: reattach failed:`, error)
+        }
+      }, decision.delayMs)
     })
     this.sessions.set(options.terminalId, session)
     // A pane created after the subscription was made is not covered by it.
@@ -1122,11 +1241,28 @@ export class PtyManager {
   }
 
   /** Detach: drop the PTY but keep the tmux session alive for reattach. */
+  /**
+   * Release a mirror WITHOUT killing the agent behind it.
+   *
+   * That promise only holds when something else owns the process. Under tmux
+   * or herdr the pane survives and dispose() merely drops our view; under the
+   * direct backend the PTY IS the agent, so the same call closes its master,
+   * the child takes SIGHUP, and a served crew dies mid-conversation — exit
+   * 129, no session file, and a caller told "no file-backed agent turn"
+   * (2026-08-28, paid door). `persistsAcrossRestart` already states exactly
+   * this property, so the guard reads the capability instead of testing for a
+   * backend by name.
+   */
   detach(terminalId: string): void {
     const session = this.sessions.get(terminalId)
     if (session) {
-      session.dispose()
-      this.sessions.delete(terminalId)
+      // usesTmux is set from mux.capabilities.persistsAcrossRestart (line ~403).
+      if (session.usesTmux) {
+        session.dispose()
+        this.sessions.delete(terminalId)
+      }
+      // Otherwise the mirror IS the agent: leave it running and let close()
+      // (a deliberate end) be the only thing that stops it.
     }
     this.ownership.release(terminalId)
   }

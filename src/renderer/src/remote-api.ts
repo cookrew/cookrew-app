@@ -3,6 +3,7 @@ import { ReconnectingStream } from './live-stream'
 import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
+import type { VersionPinRecord } from '../../shared/version-pin'
 import { apiPath } from './api-base'
 
 /**
@@ -151,8 +152,43 @@ function sharedEvents(): ReconnectingStream {
   return events
 }
 
+/**
+ * One event, parsed ONCE, however many listeners want it.
+ *
+ * This used to be `cb(JSON.parse(e.data))` — inside the per-listener callback,
+ * so the parse ran once PER SUBSCRIBER. Three components subscribe to
+ * 'workspace' (App, EventToast, DirectoryManager) and that payload is 520 KB on
+ * the owner's board, so every broadcast cost about 2 MB of JSON parsing and
+ * left FOUR independent object graphs of the whole board alive at once —
+ * measured on the phone, where the memory ceiling is real.
+ *
+ * The waste is worst where the need is smallest: EventToast parses half a
+ * megabyte to read `s.name`, one string.
+ *
+ * A WeakMap keyed on the MessageEvent is what makes this safe. Every listener
+ * for one event receives the SAME event object, so the first parse wins and the
+ * rest are lookups; a different event is a different key, so nothing stale can
+ * be served. Keeping it weak means the parsed board dies with the event rather
+ * than being pinned by this cache — the opposite of the leak it would otherwise
+ * introduce.
+ *
+ * Listeners still share one object instead of getting private copies. That was
+ * already true of every IPC consumer on the desktop path, and these consumers
+ * only read — a subscriber that mutated its payload was already broken.
+ */
+const parsedEvents = new WeakMap<MessageEvent, unknown>()
+
+/** Exported for the test that pins "N listeners, one parse". */
+export function parseOnce<T>(e: MessageEvent): T {
+  const hit = parsedEvents.get(e)
+  if (hit !== undefined) return hit as T
+  const parsed = JSON.parse(e.data) as T
+  parsedEvents.set(e, parsed)
+  return parsed
+}
+
 function subscribe<T>(event: string, cb: (data: T) => void): () => void {
-  return sharedEvents().on(event, (e) => cb(JSON.parse(e.data) as T))
+  return sharedEvents().on(event, (e) => cb(parseOnce<T>(e)))
 }
 
 /**
@@ -212,7 +248,9 @@ export function createRemoteApi(): CookrewApi {
     // store, so the phone does not get to make it either.
     markPresetRotationSeen: () => Promise.resolve(),
     trustPresetAuthorKey: () => Promise.resolve(),
-    listPins: () => Promise.resolve([]),
+    // The rail's third marker class travels to the phone now — same store the
+    // desktop reads, over the scoped route, so the two rails cannot disagree.
+    listPins: (terminalId) => req<VersionPinRecord[]>(apiPath(`/api/terminal/${terminalId}/pins`)),
     // apiPath, not a bare path: step 3 scopes the phone client's routes to the
     // workspace it is for, and a pin belongs to a transcript inside one.
     createTerminal: (opts) => req(apiPath('/api/terminals'), 'POST', opts),
@@ -231,6 +269,11 @@ export function createRemoteApi(): CookrewApi {
 
     ptyInput: (terminalId, data) => post(apiPath(`/api/terminal/${terminalId}/raw`), { data }),
     ptyJump: (terminalId, text) => post(apiPath(`/api/terminal/${terminalId}/jump`), { text }),
+    // Same contract as the desktop's IPC call: never rejects, the failure
+    // reason comes back as data so the reader is told what to fix.
+    translateHost: () => req(apiPath('/api/translate/host')),
+    translateCheckpoint: (text, language) =>
+      req(apiPath('/api/translate'), 'POST', { text, language }),
     turnSeen: (terminalId) => post(apiPath(`/api/terminal/${terminalId}/seen`), {}),
     ptyResize: (terminalId, cols, rows) =>
       post(apiPath(`/api/terminal/${terminalId}/resize`), { cols, rows }),
@@ -286,7 +329,12 @@ export function createRemoteApi(): CookrewApi {
     // Checkpoint search is desktop-only for now: the phone has no /api route
     // for it yet, and a silently-empty result would read as "no matches".
     searchTurns: undefined,
-    listTraceIndex: (terminalId) => req(apiPath(`/api/terminal/${terminalId}/trace/index`)),
+    listTraceIndex: (terminalId, request) => {
+      const params = new URLSearchParams()
+      if (request?.afterIndex !== undefined) params.set('afterIndex', String(request.afterIndex))
+      const query = params.size > 0 ? `?${params}` : ''
+      return req(apiPath(`/api/terminal/${terminalId}/trace/index${query}`))
+    },
     listTraceMarkers: (terminalId) => req(apiPath(`/api/terminal/${terminalId}/trace/markers`)),
     // Trace-perf T1: the phone card's latest checkpoint, tail-read on the host.
     latestCheckpoint: (terminalId) =>
@@ -335,6 +383,23 @@ export function createRemoteApi(): CookrewApi {
     onBrowserOpenTab: () => () => undefined,
     onBrowserPhoneViewing: () => () => undefined,
     onCmdW: () => () => undefined,
+
+    // R30 serving + the dock's crews. Owner-desktop surfaces: this transport
+    // cannot mount them, and a stub that pretended to succeed would publish
+    // nothing while telling the user it had. It refuses, visibly.
+    servingServe: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    servingStop: async () => ({ ok: false }),
+    servingPaymentStatus: async () => ({ x402: { ready: false }, stripe: { ready: false } }),
+    servingSetPayTo: async () => ({ ok: false as const, reason: 'write-failed' as const }),
+    servingSetStripeSecret: async () => ({ ok: false as const, reason: 'write-failed' as const }),
+    servingList: async () => [],
+    servingSessions: async () => [],
+    servingEnd: async () => ({ stopped: 0 }),
+    crewList: async () => [],
+    crewAdd: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    crewRemove: async () => ({ ok: false }),
+    crewUnlock: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    crewPlace: async () => ({ ok: false as const, reason: 'desktop-only' }),
     quitApp: () => undefined
   }
 }

@@ -13,17 +13,23 @@
 // The phone shows white. The desktop is fine, the cert is fine, the server
 // answers instantly; the link simply cannot carry that shape of payload.
 //
-// So the shape changes for the clients that cannot carry it. A tailnet peer
-// gets the built bundle: three requests instead of 159, one level deep. The
-// LAN keeps the live graph, because the LAN can afford it and that is where
-// the edit-reload loop actually happens.
+// So the shape changes for the clients that cannot carry it. A remote peer
+// gets the built bundle: three requests instead of 159, one level deep.
+//
+// LAN LEARNED THE SAME LESSON THE HARD WAY. The live graph is also React in
+// DEV MODE — StrictMode double-renders, unminified deps — and its module
+// graph goes stale on every dev-server restart. A real iPhone on the LAN,
+// holding the tab across a day of edits and restarts, reloads into broken
+// half-graphs and dev-mode weight until Safari reports "this page has
+// repeatedly encountered a problem". So the default flipped: EVERY non-
+// loopback client gets the build. Loopback keeps the live graph — that is
+// the desktop QA emulators and the edit-reload loop — and any client can
+// still ask for it explicitly with ?renderer=dev.
 //
 // The cost is honesty: a build can be old. buildAge() exists so the phone can
 // be TOLD, rather than quietly shown last week's UI.
 //
 // SCOPE — a decision function. It opens nothing and reads nothing.
-
-import { isTailnetAddress } from './tailscale'
 
 export type RendererSource = 'dev' | 'built'
 
@@ -34,6 +40,8 @@ export interface RendererChoice {
   devAvailable: boolean
   /** True when out/renderer holds an index.html. */
   builtAvailable: boolean
+  /** Explicit `?renderer=` override from the client, when present. */
+  requested?: RendererSource | null
 }
 
 /** `::ffff:100.68.81.64` → `100.68.81.64`; dual-stack peers arrive mapped. */
@@ -42,18 +50,21 @@ function unmap(address: string): string {
   return mapped ? mapped[1] : address
 }
 
+function isLoopback(address: string): boolean {
+  return address === '::1' || address.startsWith('127.')
+}
+
 /**
- * Where this client's renderer should come from.
- *
- * Only ONE case diverts to the build: a tailnet peer while both are available.
- * Everything else keeps today's behaviour exactly — with no build there is
- * nothing to divert to, and with no dev server the build is all there is.
+ * Where this client's renderer should come from. With only one source there
+ * is no choice; with both, an explicit request wins, then loopback keeps the
+ * live graph and everyone else gets the build.
  */
 export function rendererSourceFor(choice: RendererChoice): RendererSource {
   if (!choice.devAvailable) return 'built'
   if (!choice.builtAvailable) return 'dev'
+  if (choice.requested === 'dev' || choice.requested === 'built') return choice.requested
   const peer = choice.remoteAddress ? unmap(choice.remoteAddress) : ''
-  return isTailnetAddress(peer) ? 'built' : 'dev'
+  return isLoopback(peer) ? 'dev' : 'built'
 }
 
 /**

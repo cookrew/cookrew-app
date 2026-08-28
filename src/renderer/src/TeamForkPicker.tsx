@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { AgentRole, TeamForkSpec, TeamMeta, WorkspaceState } from '../../shared/model'
+import type { ServedTeam } from './ServedTeamCard'
 import { cookrew, isRemoteMode } from './api'
 import { CrIcon, type CrIconName } from './icons'
 import { RoleAvatar } from './nodes/RoleAvatar'
@@ -26,9 +27,7 @@ function dateLabel(epochMs: number): string {
 /**
  * Team fork picker: choose which canvas elements travel into a forked
  * workspace and, per terminal, which turn context they carry (latest /
- * first / assembled selection / fresh from role). Also hosts team save —
- * snapshotting the live canvas so later forks can start from the saved
- * version instead of live state. Fork executes the team:fork contract
+ * first / assembled selection / fresh from role). Fork executes the team:fork contract
  * (see the team-fork-roles-spec note); if the API is unavailable the spec
  * preview still shows what would be sent and errors surface inline.
  */
@@ -58,10 +57,26 @@ export function TeamForkPicker({
   const [roles, setRoles] = useState<AgentRole[]>([])
   const [apiMissing, setApiMissing] = useState(false)
   const [source, setSource] = useState<'live' | string>('live')
+  /** Which saved teams are taking calls — the shelf's standing state. */
+  const [servedTeams, setServedTeams] = useState<readonly ServedTeam[]>([])
+  const [sessionCounts, setSessionCounts] = useState<Record<string, number>>({})
+  const refreshServed = useCallback(() => {
+    void cookrew()
+      .servingList()
+      .then(setServedTeams)
+      .catch(() => undefined)
+    void cookrew()
+      .servingSessions()
+      .then((all) => {
+        const counts: Record<string, number> = {}
+        for (const s of all) counts[s.serviceId] = (counts[s.serviceId] ?? 0) + 1
+        setSessionCounts(counts)
+      })
+      .catch(() => undefined)
+  }, [])
+  useEffect(refreshServed, [refreshServed])
   const [forkName, setForkName] = useState('')
-  const [saveName, setSaveName] = useState('')
-  const [savedFlash, setSavedFlash] = useState<string | null>(null)
-  const [busy, setBusy] = useState<'fork' | 'save' | null>(null)
+  const [busy, setBusy] = useState<'fork' | null>(null)
   const [error, setError] = useState<string | null>(null)
   // GOAL 3/5: dirs the forked workspace gets, per-terminal cwd, worktree mode.
   const [forkDirs, setForkDirs] = useState<string[]>(() => stateDirs(workspace))
@@ -193,27 +208,6 @@ export function TeamForkPicker({
       })
   }
 
-  const runSave = (): void => {
-    if (busy) return
-    setBusy('save')
-    setError(null)
-    void cookrew()
-      .teamSave(saveName.trim() || undefined)
-      .then((meta) => {
-        setBusy(null)
-        setSavedFlash(meta.name)
-        setSaveName('')
-        void cookrew()
-          .teamList()
-          .then(setTeams)
-          .catch(() => undefined)
-      })
-      .catch((err: unknown) => {
-        setBusy(null)
-        setError(err instanceof Error ? err.message : String(err))
-      })
-  }
-
   const sourceTeam = teams.find((t) => t.name === source)
 
   return (
@@ -243,16 +237,27 @@ export function TeamForkPicker({
             >
               LIVE CANVAS
             </button>
-            {teams.map((team) => (
-              <button
-                key={team.name}
-                className={`cr-chip clickable${source === team.name ? ' amber' : ''}`}
-                title={`Saved ${dateLabel(team.savedAt)} · ${team.nodeCount} nodes`}
-                onClick={() => setSource(team.name)}
-              >
-                {team.name}
-              </button>
-            ))}
+            {teams.map((team) => {
+              // A team quietly serving with no indicator is how an owner
+              // forgets they opened a door: the standing state shows at rest.
+              const serving = servedTeams.find((t) => t.templateId === team.name)
+              return (
+                <span key={team.name} className="tf-team-chip">
+                  <button
+                    className={`cr-chip clickable${source === team.name ? ' amber' : ''}`}
+                    title={`Saved ${dateLabel(team.savedAt)} · ${team.nodeCount} nodes`}
+                    onClick={() => setSource(team.name)}
+                  >
+                    {team.name}
+                  </button>
+                  {serving && (
+                    <span className="cr-chip cr-serving-badge" title="Taking calls">
+                      TAKING CALLS · {sessionCounts[serving.serviceId] ?? 0}
+                    </span>
+                  )}
+                </span>
+              )
+            })}
           </div>
         )}
 
@@ -413,23 +418,6 @@ export function TeamForkPicker({
             </span>
           </div>
         </div>
-
-        {source === 'live' && (
-          <div className="tf-save">
-            <span className="tf-label">SAVE TEAM</span>
-            <input
-              className="tf-input"
-              placeholder={workspace.name}
-              value={saveName}
-              onChange={(e) => setSaveName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && runSave()}
-            />
-            <button className="cr-btn sm" disabled={busy !== null} onClick={runSave}>
-              {busy === 'save' ? 'SAVING…' : 'SAVE'}
-            </button>
-            {savedFlash && <span className="tf-saved-flash">saved “{savedFlash}” ✓</span>}
-          </div>
-        )}
 
         {error && <div className="tf-error">{error}</div>}
         {incompleteAssembly && (

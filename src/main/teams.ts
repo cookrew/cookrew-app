@@ -11,7 +11,16 @@
 // preserved, and every node gets a fresh id.
 
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import {
+  constants as fsConstants,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import type {
@@ -95,6 +104,33 @@ export function entryAgentOf(snapshot: TeamSnapshot): string | null {
   }
   const orch = terminals.find((t) => t.orch)
   return (orch ?? terminals[0]).name
+}
+
+/**
+ * The door of a SERVED crew — the orch, or nothing.
+ *
+ * Deliberately not `entryAgentOf`. That one answers "which agent do I enter
+ * this template through" for a LOCAL import, where falling back to the first
+ * terminal is a kindness to the owner opening their own crew. Serving asks the
+ * same-shaped question with a stranger on the other end, and the owner ruled
+ * (2026-08-26) that a crew without an orch must be refused rather than
+ * answered: `QA Shell Door` — one terminal, no orch, empty command — served
+ * happily and "replied" by running the caller's prompt at a zsh prompt.
+ *
+ * `entryAgent` MAY NOT PROMOTE. It looks like an explicit designation, but
+ * `TeamStore.save` computes it as orch-else-first-terminal, so honouring it
+ * here would restore the fallback by another route — every orch-less team on
+ * disk has it set. It breaks a tie between orchs and does nothing else.
+ */
+export function orchAgentOf(snapshot: TeamSnapshot): string | null {
+  const orchs = snapshot.nodes.filter(
+    (n): n is Extract<CanvasNode, { kind: 'terminal' }> => n.kind === 'terminal' && n.orch === true
+  )
+  if (orchs.length === 0) return null
+  const named = snapshot.entryAgent
+    ? orchs.find((t) => t.name === snapshot.entryAgent)
+    : undefined
+  return (named ?? orchs[0]).name
 }
 
 function isSnapshot(value: unknown): value is TeamSnapshot {
@@ -191,26 +227,43 @@ export class TeamStore {
     }
     mkdirSync(this.dir, { recursive: true })
     writeFileSync(this.fileFor(teamName), JSON.stringify(snapshot, null, 2), 'utf8')
+    this.pruneSessionSidecars(teamName, new Set(Object.values(sessions)))
     return metaOf(snapshot)
   }
 
   private snapshotSessions(teamName: string, state: WorkspaceState): Record<string, string> {
     const sessions: Record<string, string> = {}
+    const sidecar = this.sessionsDirFor(teamName)
     for (const node of state.nodes) {
       if (node.kind !== 'terminal' || !node.claudeSessionId) continue
       try {
         const source = claudeSessionFile(node.cwd, node.claudeSessionId, this.projectsDir)
         if (!existsSync(source)) continue
-        const sidecar = this.sessionsDirFor(teamName)
         mkdirSync(sidecar, { recursive: true })
         const fileName = `${node.id}.jsonl`
-        writeFileSync(path.join(sidecar, fileName), readFileSync(source, 'utf8'), 'utf8')
+        // APFS clones share unchanged blocks with the source while remaining a
+        // real immutable snapshot. Other filesystems transparently fall back.
+        copyFileSync(source, path.join(sidecar, fileName), fsConstants.COPYFILE_FICLONE)
         sessions[node.id] = fileName
       } catch (error) {
         console.error('Team save session snapshot failed (preamble fallback):', error)
       }
     }
     return sessions
+  }
+
+  /** Remove stale files only AFTER the new snapshot JSON commits successfully. */
+  private pruneSessionSidecars(teamName: string, keep: ReadonlySet<string>): void {
+    const sidecar = this.sessionsDirFor(teamName)
+    if (!existsSync(sidecar)) return
+    if (keep.size === 0) {
+      rmSync(sidecar, { recursive: true, force: true })
+      return
+    }
+    for (const entry of readdirSync(sidecar, { withFileTypes: true })) {
+      if (!entry.isFile() || keep.has(entry.name)) continue
+      rmSync(path.join(sidecar, entry.name), { force: true })
+    }
   }
 
   /** Snapshot session lines for a saved team's terminal, or null. */
@@ -689,6 +742,26 @@ export interface TeamForkDeps {
   /** index.ts switch wrapper — the switch boots the forked terminals. */
   switchWorkspace: (id: string) => void
   /**
+   * Bring a freshly forked workspace's terminals ALIVE, without focusing it.
+   *
+   * BOOT AND FOCUS WERE ONE ACT, and only because nothing had ever needed them
+   * apart. `switchWorkspace` was called at the end of a fork for its side
+   * effect — the switch is what boots the terminals — which is correct for the
+   * owner forking on their own canvas and wrong for anything created on their
+   * behalf: a SERVED session would yank the owner's screen to a stranger's
+   * workspace on that stranger's first call, once per caller, forever.
+   *
+   * The codebase already knew these were different. copyTeam's own note says
+   * "the view does NOT switch: nodes come alive now only when the target is the
+   * live canvas; otherwise terminals boot on activation" — a deferred boot that
+   * a served session can never reach, because it is never activated.
+   *
+   * So the fork asks for BOOT and the caller decides whether that includes
+   * focus. The owner's path passes a switching implementation and is
+   * byte-unchanged; a served session passes one that boots in place.
+   */
+  bootTerminals?: (id: string) => void
+  /**
    * Bring one just-added node alive on the ACTIVE canvas — the same per-kind
    * side effects index.ts addNode owns (spawn terminals, sync browsers).
    * copyTeam uses it when the copy lands on the live workspace; copies into
@@ -839,7 +912,9 @@ export async function forkTeam(deps: TeamForkDeps, spec: TeamForkSpec): Promise<
     undefined,
     plan.dirs
   )
-  deps.switchWorkspace(meta.id)
+  // Default is the switch, so every existing caller — `cookrew workspace create
+  // --team` included — behaves exactly as before.
+  ;(deps.bootTerminals ?? deps.switchWorkspace)(meta.id)
 
   for (const t of plan.terminals) {
     const inject = contexts.get(t.newId)?.inject

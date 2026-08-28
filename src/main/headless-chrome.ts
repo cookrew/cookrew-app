@@ -78,6 +78,38 @@ const THROTTLE_FLAGS = [
   '--disable-background-timer-throttling'
 ]
 
+const DISABLED_BACKGROUND_FEATURES = [
+  'Translate',
+  'OptimizationHints',
+  'OptimizationGuideModelDownloading',
+  'OptimizationTargetPrediction',
+  'OnDeviceModel',
+  'OnDeviceModelService'
+]
+
+/** One profile must never download browser components or multi-GB local models. */
+export function headlessLaunchArgs(
+  profileDir: string,
+  width: number,
+  height: number,
+  url: string,
+): string[] {
+  return [
+    '--headless=new',
+    `--user-data-dir=${profileDir}`,
+    '--remote-debugging-port=0',
+    `--window-size=${width},${height}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-background-networking',
+    '--disable-component-update',
+    '--disable-sync',
+    `--disable-features=${DISABLED_BACKGROUND_FEATURES.join(',')}`,
+    ...THROTTLE_FLAGS,
+    url
+  ]
+}
+
 export interface HeadlessOptions {
   executablePath: string
   profileDir: string
@@ -192,17 +224,7 @@ export class HeadlessInstance {
       }
     }
 
-    const args = [
-      '--headless=new',
-      `--user-data-dir=${this.opts.profileDir}`,
-      '--remote-debugging-port=0',
-      `--window-size=${this.width},${this.height}`,
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-features=Translate',
-      ...THROTTLE_FLAGS,
-      active.url
-    ]
+    const args = headlessLaunchArgs(this.opts.profileDir, this.width, this.height, active.url)
     this.proc = spawn(this.opts.executablePath, args, { stdio: 'ignore' })
     this.proc.on('exit', () => {
       if (!this.closed) this.onExit()

@@ -217,6 +217,8 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
       return cmdRecruit(request, deps)
     case 'dismiss':
       return cmdDismiss(request, deps)
+    case 'orch':
+      return cmdOrch(request, deps)
     case 'fork':
       return cmdFork(request, deps)
     case 'preset':
@@ -931,6 +933,34 @@ function cmdFork(request: CliRequest, deps: SocketServerDeps): string {
   return `Forked "${target.name}" at turn ${fork.forkOf?.turnIndex} → "${fork.name}" (context is being replayed to it now)`
 }
 
+/**
+ * Promote one terminal to ORCH — the workspace's door.
+ *
+ * Exactly one per workspace: the orch is what a served crew exposes and what
+ * routing resolves to, so promoting demotes whoever held it. Without this the
+ * flag could only be set at creation, which made "make X the orch" impossible
+ * without destroying and recreating the card (and its session with it).
+ */
+function cmdOrch(request: CliRequest, deps: SocketServerDeps): string {
+  const name = request.args[0]
+  if (!name) throw new Error('Usage: cookrew orch "Agent"')
+  const node = deps.store.nodeByName(name, 'terminal')
+  if (!node) throw new Error(`No terminal named '${name}' on the canvas`)
+  const workspaceId = (deps.store.workspaceOfNode(node.id) ?? deps.store.activeMeta()).id
+  const demoted: string[] = []
+  for (const other of deps.store.workspaceState(workspaceId).nodes) {
+    if (other.kind !== 'terminal' || other.id === node.id) continue
+    if ((other as TerminalNodeData).orch) {
+      deps.store.updateNodeUnsafe(other.id, { orch: false })
+      demoted.push(other.name)
+    }
+  }
+  deps.store.updateNodeUnsafe(node.id, { orch: true })
+  return demoted.length > 0
+    ? `"${name}" is now the orch (was ${demoted.map((d) => `"${d}"`).join(', ')})`
+    : `"${name}" is now the orch`
+}
+
 function cmdDismiss(request: CliRequest, deps: SocketServerDeps): string {
   requireOrch(request, deps)
   const target = findConnected(request, deps, request.args[0], 'terminal')
@@ -1261,6 +1291,7 @@ Usage:
   cookrew connect "From" "To"                   (Orch) Wire two nodes together
   cookrew recruit "Name" [--preset P] [--role R] [--dir PATH]   (Orch) Spawn a teammate
   cookrew dismiss "Name"                        (Orch) Remove a teammate
+  cookrew orch "Name"                           Make this agent the workspace's orch (the door)
   cookrew fork "Agent" [--turn N]               (Orch) Fork a NEW agent from a past turn (original untouched)
   cookrew preset list                           List agent presets
   cookrew voice on|off|status                   Spoken replies when an ask completes (macOS say)

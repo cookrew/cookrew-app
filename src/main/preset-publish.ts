@@ -1,4 +1,15 @@
-import { createHash, createPublicKey, sign, verify, type KeyObject } from 'node:crypto'
+import {
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  generateKeyPairSync,
+  sign,
+  verify,
+  type KeyObject
+} from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import path from 'node:path'
 import {
   PRESET_SCHEMA,
   canonicalJson,
@@ -149,4 +160,49 @@ export function verifyManifest(manifest: PresetManifest, publicKey: KeyObject): 
 export interface PublishingKey {
   publicKey: KeyObject
   privateKey: KeyObject
+}
+
+/**
+ * The author's publishing identity, persisted, created on first publish.
+ *
+ * An author signs with a stable key or their presets have no continuous
+ * identity — every publish would look like a different author, and the update
+ * channel (§10) has nothing to bind a new version to. So it lives on disk
+ * rather than being minted per call.
+ *
+ * 0600 and private-key-only on disk: the public half is derivable, and a
+ * signing key that a stray backup can read is a signing key someone else can
+ * publish as. Generated on first use rather than at install, so an owner who
+ * never publishes never has one to leak.
+ *
+ * NOT the payout binding. R27 keys payout to the publishing IDENTITY and not
+ * to this key precisely so a rotation does not re-point money; keep them
+ * separate here too.
+ */
+export function loadPublishingKey(file = defaultPublishingKeyFile()): PublishingKey {
+  try {
+    if (existsSync(file)) {
+      const privateKey = createPrivateKey(readFileSync(file, 'utf8'))
+      return { privateKey, publicKey: createPublicKey(privateKey) }
+    }
+  } catch (error) {
+    // A key we cannot read is not a key we may silently replace: overwriting
+    // it would orphan every preset already published under it, and the update
+    // channel would break with no way back.
+    throw new Error(
+      `The publishing key at ${file} exists but could not be read (${
+        error instanceof Error ? error.message : String(error)
+      }). Publishing is refused rather than minting a new identity, which would orphan anything already published under the old one.`
+    )
+  }
+  const pair = generateKeyPairSync('ed25519')
+  const pem = pair.privateKey.export({ type: 'pkcs8', format: 'pem' }) as string
+  mkdirSync(path.dirname(file), { recursive: true })
+  writeFileSync(file, pem, { encoding: 'utf8', mode: 0o600 })
+  return { privateKey: pair.privateKey, publicKey: pair.publicKey }
+}
+
+/** Where the publishing identity lives. */
+export function defaultPublishingKeyFile(): string {
+  return path.join(homedir(), '.cookrew', 'publishing-key.pem')
 }

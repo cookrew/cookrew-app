@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { cookrew } from './api'
+import { cookrew, isRemoteMode } from './api'
 import { CrIcon } from './icons'
 import { AgentAvatar } from './nodes/AgentAvatar'
 import { RoleAvatar } from './nodes/RoleAvatar'
@@ -28,6 +28,13 @@ import { useActivitiesSnapshot, useThumbsSnapshot } from './activity-thumb-store
 import { recoverEligible, recoverErrorToast, recoverToastFor, type RecoverToast } from './recover'
 import { dirLabel } from './workspace-v2'
 import type { BrowserNodeData, NoteNodeData, WorkspaceState } from '../../shared/model'
+import {
+  PHONE_BOARD_PAGE_SIZE,
+  appendBoardEvent,
+  boardEventLimit,
+  nextPhoneBoardLimit,
+  phoneBoardWindow,
+} from './phone-board-window'
 import './agent-roster.css'
 
 /** Once-only loud warn when the bridge lacks recoverAgent. */
@@ -93,6 +100,13 @@ export function RosterPanel({
   const activities = useActivitiesSnapshot()
   const thumbs = useThumbsSnapshot()
   const [showQuiet, setShowQuiet] = useState(false)
+  // WebKit does not return the Board's eager row allocations to the OS after
+  // unmount. A phone therefore mounts one screen plus overscan, then widens the
+  // window explicitly; leaving Board drops a bounded subtree instead of the
+  // full cross-workspace list's allocation high-water.
+  const phoneWindowed = isRemoteMode()
+  const [phoneRowLimit, setPhoneRowLimit] = useState(PHONE_BOARD_PAGE_SIZE)
+  const eventLimit = boardEventLimit(phoneWindowed)
   const [selected, setSelected] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   /** Edit mode: rows become checkboxes and the footer becomes team actions. */
@@ -301,14 +315,14 @@ export function RosterPanel({
   useEffect(() => {
     const query = cookrew().queryEvents
     if (typeof query !== 'function') return
-    void query({ limit: 4000 })
+    void query({ limit: eventLimit })
       .then((list) => setEvents(list as FacetEvent[]))
       .catch(() => undefined)
     const off = cookrew().onEvent?.((event) =>
-      setEvents((prior) => [...prior, event as FacetEvent]),
+      setEvents((prior) => appendBoardEvent(prior, event as FacetEvent, eventLimit)),
     )
     return () => off?.()
-  }, [])
+  }, [eventLimit])
 
   useEffect(() => {
     if (!toast) return
@@ -424,6 +438,37 @@ export function RosterPanel({
     />
   )
 
+  type BoardEntry =
+    | { kind: 'agent'; row: Row }
+    | { kind: 'element'; node: NoteNodeData | BrowserNodeData }
+  const boardEntries: BoardEntry[] = [
+    ...(searching ? results : live).map((row): BoardEntry => ({ kind: 'agent', row })),
+    ...elements.map((node): BoardEntry => ({ kind: 'element', node })),
+    ...(!searching && showQuiet
+      ? quiet.map((row): BoardEntry => ({ kind: 'agent', row }))
+      : []),
+  ]
+  const boardWindow = phoneBoardWindow(boardEntries, phoneRowLimit, phoneWindowed)
+  const renderEntry = (entry: BoardEntry): React.JSX.Element =>
+    entry.kind === 'agent' ? renderRow(entry.row) : renderElement(entry.node)
+
+  // A new query/facet starts at the top of its own result set. Board remounts
+  // reset naturally because this state belongs to the Board surface.
+  useEffect(() => setPhoneRowLimit(PHONE_BOARD_PAGE_SIZE), [query, filter])
+
+  const showMore = (): void => {
+    setPhoneRowLimit((current) => nextPhoneBoardLimit(boardEntries.length, current))
+  }
+
+  const toggleQuiet = (): void => {
+    if (phoneWindowed && !showQuiet) {
+      // The disclosure is reached only after the live/element rows. Mount the
+      // first quiet page immediately instead of making the press look inert.
+      setPhoneRowLimit((current) => current + PHONE_BOARD_PAGE_SIZE)
+    }
+    setShowQuiet((current) => !current)
+  }
+
   return (
     <div
       className={variant === 'view' ? 'roster-view' : 'tf-scrim'}
@@ -503,29 +548,31 @@ export function RosterPanel({
                 history.
               </div>
             ) : (
-              <>
-                {results.map(renderRow)}
-                {elements.map(renderElement)}
-              </>
+              boardWindow.visible.map(renderEntry)
+            )}
+            {boardWindow.remaining > 0 && (
+              <button className="roster-more" onClick={showMore}>
+                + {boardWindow.remaining} MORE · SHOW
+              </button>
             )}
           </div>
         ) : (
           <div className="roster-list">
-            {live.map(renderRow)}
-            {/* Notes & browsers of the active workspace — each kind binds
-                its own canvas-card source (NoteRow / BrowserRow). */}
-            {elements.map(renderElement)}
+            {boardWindow.visible.map(renderEntry)}
+
+            {boardWindow.remaining > 0 && (
+              <button className="roster-more" onClick={showMore}>
+                + {boardWindow.remaining} MORE · SHOW
+              </button>
+            )}
 
             {/* The 228 collapse: agents that have never run a turn carry no
                 information, so they fold behind one row instead of filling
                 the panel. */}
-            {quiet.length > 0 && (
-              <>
-                {showQuiet && quiet.map(renderRow)}
-                <button className="roster-quiet" onClick={() => setShowQuiet(!showQuiet)}>
-                  {showQuiet ? `HIDE ${quiet.length} QUIET` : `+ ${quiet.length} QUIET · SHOW`}
-                </button>
-              </>
+            {quiet.length > 0 && (showQuiet || boardWindow.remaining === 0) && (
+              <button className="roster-quiet" onClick={toggleQuiet}>
+                {showQuiet ? `HIDE ${quiet.length} QUIET` : `+ ${quiet.length} QUIET · SHOW`}
+              </button>
             )}
           </div>
         )}

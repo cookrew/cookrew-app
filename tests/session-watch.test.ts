@@ -84,6 +84,29 @@ describe('TraceReader.watchSpec', () => {
     void turns
   })
 
+  it('pi: a confined node resolves its injected per-node session root', () => {
+    const globalRoot = mkdtempSync(path.join(tmpdir(), 'watch-pi-global-'))
+    const servedRoot = mkdtempSync(path.join(tmpdir(), 'watch-pi-served-'))
+    const { store, node } = storeWith(
+      terminal({
+        command: 'pi --model qwen-local/qwen',
+        claudeSessionId: null,
+        piSessionId: 'sess-served'
+      })
+    )
+    const dir = piNodeSessionDir(node.id, { rootDir: servedRoot })
+    mkdirSync(dir, { recursive: true })
+    const file = path.join(dir, '2026-08-27_sess-served.jsonl')
+    writeFileSync(file, `${JSON.stringify({ type: 'session', id: 'sess-served', cwd: node.cwd })}\n`)
+
+    const spec = new TraceReader(store, {
+      piSessionsRoot: globalRoot,
+      piSessionsRootFor: (candidate) => candidate.id === node.id ? servedRoot : undefined
+    }).watchSpec(node.id)
+
+    expect(spec?.file).toBe(file)
+  })
+
   it('pi: a session adopted from a LEGACY pane is watched in pi\'s own cwd dir', () => {
     // Regression, live '(recovered turn)' rail: a pane launched before the
     // exclusive-dir wiring is reattached as-is by `new-session -A`, so its pi

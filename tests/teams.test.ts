@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -568,6 +568,33 @@ describe('TeamStore session snapshots (item 2b save path)', () => {
     expect(lines?.join('\n')).toContain('bound-id')
     // Terminals without a bound session simply have no sidecar entry.
     expect(store.sessionLines(snap!, 'missing')).toBeNull()
+  })
+
+  it('removes stale sidecars when the same team is saved with fewer agents', () => {
+    const teamsDir = mkdtempSync(path.join(tmpdir(), 'cookrew-teams-'))
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'cookrew-teamsproj-'))
+    const projectDir = path.join(projectsDir, claudeProjectSlug('/work/repo'))
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(path.join(projectDir, 'session-a.jsonl'), '{"sessionId":"session-a"}\n')
+    writeFileSync(path.join(projectDir, 'session-b.jsonl'), '{"sessionId":"session-b"}\n')
+    const store = new TeamStore(teamsDir, projectsDir)
+    const a = terminal('a', { claudeSessionId: 'session-a' })
+    const b = terminal('b', { claudeSessionId: 'session-b' })
+    const state = (nodes: TerminalNodeData[]): WorkspaceState => ({
+      name: 'Core',
+      dir: '/work/repo',
+      dirs: ['/work/repo'],
+      nodes,
+      connections: []
+    })
+
+    store.save(state([a, b]), () => [], 'Core')
+    const sidecar = path.join(teamsDir, 'core-sessions')
+    expect(existsSync(path.join(sidecar, 'b.jsonl'))).toBe(true)
+
+    store.save(state([a]), () => [], 'Core')
+    expect(existsSync(path.join(sidecar, 'a.jsonl'))).toBe(true)
+    expect(existsSync(path.join(sidecar, 'b.jsonl'))).toBe(false)
   })
 })
 

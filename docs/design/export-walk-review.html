@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Author's Walk — review findings</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🔎</text></svg>">
+<style>
+  :root { --bg:#f7f4ec; --panel:#fffdf7; --panel-2:#f1ece0; --ink:#1b1a17; --ink-soft:#45413a;
+    --muted:#7a736a; --line:#ddd5c6; --line-hard:#b9ae9a; --amber:#b8770a; --amber-soft:#fbf0d8;
+    --green:#2f7d4f; --red:#a8362b; --blue:#2b5fa8; --violet:#6b3fa0; --code-bg:#efeade;
+    --shadow:0 1px 0 var(--line), 0 8px 24px rgba(30,25,15,.06); }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14130f; --panel:#1c1a16; --panel-2:#242019;
+    --ink:#ece6d8; --ink-soft:#c2bbab; --muted:#8d8577; --line:#332f27; --line-hard:#4c463a;
+    --amber:#e9b949; --amber-soft:#2a2213; --green:#6fca92; --red:#e8867a; --blue:#7fadf0;
+    --violet:#b795e8; --code-bg:#221f19; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(0,0,0,.35); } }
+  :root[data-theme="dark"] { --bg:#14130f; --panel:#1c1a16; --panel-2:#242019; --ink:#ece6d8;
+    --ink-soft:#c2bbab; --muted:#8d8577; --line:#332f27; --line-hard:#4c463a; --amber:#e9b949;
+    --amber-soft:#2a2213; --green:#6fca92; --red:#e8867a; --blue:#7fadf0; --violet:#b795e8;
+    --code-bg:#221f19; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(0,0,0,.35); }
+  :root[data-theme="light"] { --bg:#f7f4ec; --panel:#fffdf7; --panel-2:#f1ece0; --ink:#1b1a17;
+    --ink-soft:#45413a; --muted:#7a736a; --line:#ddd5c6; --line-hard:#b9ae9a; --amber:#b8770a;
+    --amber-soft:#fbf0d8; --green:#2f7d4f; --red:#a8362b; --blue:#2b5fa8; --violet:#6b3fa0;
+    --code-bg:#efeade; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(30,25,15,.06); }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.62 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; -webkit-text-size-adjust:100%; }
+  .wrap { max-width:1120px; margin:0 auto; padding:32px 20px 96px; }
+  header.top { border-bottom:2px solid var(--line-hard); padding-bottom:18px; margin-bottom:24px; }
+  .kicker { font:600 11px/1 ui-monospace,monospace; letter-spacing:.16em; text-transform:uppercase; color:var(--amber); }
+  h1 { font-size:clamp(23px,4.2vw,32px); line-height:1.15; margin:10px 0 8px; letter-spacing:-.015em; }
+  .sub { color:var(--muted); max-width:72ch; margin:0; }
+  .meta { margin-top:12px; font:12px/1.5 ui-monospace,monospace; color:var(--muted); }
+  h2 { font-size:19px; margin:38px 0 6px; letter-spacing:-.01em; }
+  h2 .num { color:var(--amber); font:600 13px/1 ui-monospace,monospace; margin-right:8px; }
+  p { margin:8px 0; } .lede { color:var(--ink-soft); max-width:78ch; }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86em;
+    background:var(--code-bg); padding:1px 5px; border-radius:3px; }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:13px; }
+  th,td { text-align:left; padding:8px 9px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font:600 10.5px/1.3 ui-monospace,monospace; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--muted); border-bottom:2px solid var(--line-hard); }
+  tbody tr:hover { background:var(--panel-2); }
+  .id { font:600 11.5px ui-monospace,monospace; color:var(--violet); white-space:nowrap; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:4px;
+    padding:14px 16px; margin:14px 0; box-shadow:var(--shadow); }
+  .warn { border-left:4px solid var(--red); background:color-mix(in srgb, var(--red) 8%, transparent); }
+  .ok { border-left:4px solid var(--green); }
+  ul.tight { padding-left:20px; margin:8px 0; } ul.tight li { margin:4px 0; }
+  footer { margin-top:52px; padding-top:18px; border-top:2px solid var(--line-hard);
+    font-size:12.5px; color:var(--muted); }
+  .toggle { position:fixed; top:12px; right:12px; z-index:10; font:600 11px ui-monospace,monospace;
+    background:var(--panel); color:var(--ink); border:1px solid var(--line-hard); border-radius:999px;
+    padding:6px 12px; cursor:pointer; box-shadow:var(--shadow); }
+  @media print { .toggle { display:none; } }
+</style>
+</head>
+<body>
+<button class="toggle" id="theme">◐ theme</button>
+<div class="wrap">
+
+<header class="top">
+  <div class="kicker">Cookrew · review gate · the author's walk</div>
+  <h1>Three judgements, and one strip that contradicts itself</h1>
+  <p class="sub">Reviewing <code>docs/design/export-ux-demo.html</code> against
+  <code>grant-sheet-flows.html</code>, <code>marketplace-copy-deck.html</code> and
+  <code>shared/marketplace-copy.ts</code>.</p>
+  <p class="meta">Velvet (UX Optimizer) · 2026-08-24 · companion to
+  <code>gate-sheet-review.html</code></p>
+</header>
+
+<div class="card ok">
+  <b>Verdict: the walk is right and two of its ideas are better than mine.</b> "The refusal happens
+  here, to the person who can fix it" is a principle I did not have and am adopting. "Author and buyer
+  read one truth" — the same scrub list on both sides of the wire — is the strongest single idea in any
+  of these decks, because it makes the author's honesty and the buyer's safety the same artifact rather
+  than two documents that can drift.
+  <br><br>Four findings. <b>One is a contradiction in the surroundings you asked me to check</b> (E3).
+</div>
+
+<h2><span class="num">1</span>E1 — the toggle's safety sentence: placement right, words weaker</h2>
+<p class="lede"><b>Placement: endorse, and it is better than my deck had it.</b> Beside the switch, always
+visible, before the flip — the fear is what stops the action, so the answer must precede it. And
+"the entry point, not a settings checkbox: flipping it reveals the two doors" is a better model of what
+that control is than anything I wrote.</p>
+<table>
+  <thead><tr><th></th><th>Sentence</th><th>Fears answered</th></tr></thead>
+  <tbody>
+    <tr><td><b>Draft</b></td><td>"Exporting never shares your conversations. Calls and copies run
+      against a fork — your original session is never touched."</td>
+      <td>exfiltration · mutation</td></tr>
+    <tr><td><b>Landed</b><br><span class="id">mkt.export.safety</span></td>
+      <td>"Callers get a copy. Your original conversation is never touched, never sent, and never
+      resumed by anyone else."</td>
+      <td>mutation · exfiltration · <b>impersonation</b></td></tr>
+  </tbody>
+</table>
+<p class="lede"><b>Use the landed string.</b> The three verbs are not decoration — they answer three
+different questions, and the draft drops the third. "Never resumed by anyone else" is the
+agent-specific fear: not <em>can they read my conversation</em> but <em>can someone pick it up and
+carry on as me</em>. For an exported <em>agent</em> that is the sharpest worry of the three, and it is
+the one a paraphrase loses first because it sounds redundant until you notice it is a different verb.</p>
+
+<h2><span class="num">2</span>E2 — the payout-checksum refusal: blocking is right, two copy fixes</h2>
+<p class="lede"><b>The behaviour is correct and the principle is a keeper.</b> Refusing at publish
+rather than at the buyer's 402 puts the failure in front of the only person who can fix it, and
+"PUBLISH — FIX PAYOUT FIRST" says why instead of greying out mutely, which is my own never-a-silently-
+dead-control rule applied better than I applied it.</p>
+<div class="card warn">
+  <b>Fix 1 — "one character is wrong" is a claim the checker cannot support.</b> A failed checksum tells
+  you the address is invalid. It does not tell you <em>how many</em> characters are wrong, or which; it
+  could be two, or a truncation, or a paste from the wrong wallet entirely. This is the same class of
+  defect as my own seats string: copy asserting a fact the code does not have. It will read as precise
+  and be wrong, and an author who "fixes one character" and fails again has been misled by us.
+  <br><b>→</b> "This address doesn't verify. Check it against your wallet — a single wrong character is
+  enough to break it."
+  <br><br><b>Fix 2 — name the actor.</b> "Money sent here is gone" is true but reads as a warning about
+  the author's own money. The risk is that <b>buyers</b> pay this address. That is both scarier and
+  more accurate, and it explains why we block rather than warn.
+  <br><b>→</b> "Your buyers would pay this address, and money sent to a bad address is not recoverable."
+</div>
+
+<h2><span class="num">3</span>E3 — the revoke failure strip: rule carried, surroundings contradict it</h2>
+<p class="lede">The strip itself is <b>right and improved</b>: "They still have access — revoke didn't
+complete." leads with the frightening half, and naming the specific pair ("ana@studio can still call
+Tinker") is better than my generic <span class="id">{name}</span>. That part I would ship as drawn.</p>
+<div class="card warn">
+  <b>But you asked me to check the surroundings, and they undo it twice.</b>
+  <br><br><b>(a) The second remedy is missing.</b> The landed string is "Couldn't revoke {name} — they
+  still have access. <b>Try again, or un-export the agents to cut it off now.</b>" The draft keeps
+  "Retry now" and drops the second clause. That clause is the whole point of the asymmetry: a failed
+  revoke is exactly when you want the panic control, and un-export is the one-switch kill that still
+  works when per-caller revoke is the thing failing. Offering only "retry" against a mechanism that just
+  failed is offering the author the button that did not work.
+  <br><br><b>(b) The explainer beneath it contradicts the strip.</b> Directly under the failure sits
+  "Revoke stops calls already running. Their conversations were forks — your originals were never
+  touched." Read in place, that says <em>revoke didn't complete</em> and then <em>revoke stops calls
+  already running</em> — a description of success sitting under a message saying it did not happen. Both
+  sentences are true in general and the pair is misleading exactly where it is drawn. An author skimming
+  reads the reassuring one and walks away believing the line is cut.
+  <br><b>→</b> That explainer belongs on the revoke control at rest, or on success. Never under a
+  failure. Under a failure, the only thing that may appear is what is still true right now — and right
+  now the caller still has access.
+</div>
+
+<h2><span class="num">4</span>E4 — the attestation and the key-paste are both absent</h2>
+<p class="lede">Step 5 shows the six words and "Same six words on both screens = same key. Different
+words = STOP" — good, and the STOP line is better than my original. But two things from the grant deck
+are missing from the author's own walk:</p>
+<ul class="tight">
+  <li><b>The attestation button.</b> <code>I COMPARED THESE · ENROL</code> does not appear; the panel
+  ends at "ENROL NEW CALLER". The label <em>is</em> the mechanism — it collects a statement rather than
+  a reflex — so a walk that shows the words without the claim shows the theatre without the guarantee.</li>
+  <li><b>The key ever arriving.</b> Six words are derived from a key, and no step pastes one. The
+  wrong-paste taxonomy — six cases, including the private-key refusal that must clear the field and tell
+  the author to rotate — has no home in either this walk or the gate sheet. It is the same gap in both
+  documents, which is how a gap becomes permanent.</li>
+</ul>
+
+<h2><span class="num">5</span>Carried intact — verified, not assumed</h2>
+<ul class="tight">
+  <li><b>No select-all</b> — the matrix is per-cell. ✓ The single most important line in my grant deck,
+  respected without being mentioned.</li>
+  <li><b>Shell commands verbatim</b> — "2 terminals carry a command — shown verbatim below". ✓ Matches
+  the no-clipping rule, which exists because the clipped tail is where the dangerous part lives.</li>
+  <li><b>M3 on the same surfaces</b> — "seats become a column in WHO CAN CALL". ✓ Exactly the
+  grow-a-column design.</li>
+  <li><b>R24</b> — "buyers' chips light V2↑ and nobody is interrupted". ✓</li>
+  <li><b>The scrub review is the same list on both sides.</b> ✓ — and it <b>corroborates F1 of my gate
+  sheet review</b>: this doc assumes a buyer-side install review sheet that the unified gate sheet does
+  not draw. Two docs now depend on a step that exists in neither. That raises F1 from blocking to
+  urgent.</li>
+  <li><b>"Your conversations are not in this list because they are never in the package."</b> New, mine
+  to steal, and the best sentence in the walk — it answers the fear by pointing at an absence the author
+  can see for themselves, which beats any promise.</li>
+</ul>
+<div class="card">
+  <b>Minor, noted not blocking:</b> no R14 doc-annotation banner; the desktop-owner-only rule for WHO
+  CAN CALL is not restated; the two <code>EXPORT_ERROR</code> strings (toggle failure) do not appear in
+  the walk, so a failed flip has no drawn state.
+</div>
+
+<footer>
+  <b>The Author's Walk — review.</b> Velvet (UX Optimizer), 2026-08-24 · reviewing
+  <code>docs/design/export-ux-demo.html</code> · companion to <code>gate-sheet-review.html</code>.
+</footer>
+
+</div>
+<script>
+  (function(){var b=document.getElementById('theme');b.addEventListener('click',function(){
+    var n=document.documentElement.getAttribute('data-theme');
+    var d=n?n==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.setAttribute('data-theme',d?'light':'dark');});})();
+</script>
+</body>
+</html>

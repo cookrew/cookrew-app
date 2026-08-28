@@ -63,12 +63,18 @@ export function reconcileFlowNodes(
   const prevById = new Map(prev.map((n) => [n.id, n]))
   return nodes.map((node) => {
     const existing = prevById.get(node.id)
+    const existingData = existing?.data as { node: CanvasNode } | undefined
     const isSelected = selected.has(node.id)
     if (
       existing &&
+      existingData &&
       (existing.selected ?? false) === isSelected &&
-      canvasNodeEqual((existing.data as { node: CanvasNode }).node, node)
+      canvasNodeEqual(existingData.node, node)
     ) {
+      // Preserve ReactFlow's wrapper identity without pinning the previous
+      // deserialized workspace graph. App stores the same incoming node in
+      // `workspace`, so adopting it here leaves one shared payload object.
+      existingData.node = node
       return existing // unchanged — identity preserved, no re-render
     }
     const flow = toFlowNode(node)

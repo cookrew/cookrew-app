@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>R29 — save-then-popout, the four new surfaces reviewed</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🏷️</text></svg>">
+<style>
+  :root { --bg:#f7f4ec; --panel:#fffdf7; --panel-2:#f1ece0; --ink:#1b1a17; --ink-soft:#45413a;
+    --muted:#7a736a; --line:#ddd5c6; --line-hard:#b9ae9a; --amber:#b8770a; --amber-soft:#fbf0d8;
+    --green:#2f7d4f; --red:#a8362b; --blue:#2b5fa8; --violet:#6b3fa0; --code-bg:#efeade;
+    --shadow:0 1px 0 var(--line), 0 8px 24px rgba(30,25,15,.06); }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14130f; --panel:#1c1a16; --panel-2:#242019;
+    --ink:#ece6d8; --ink-soft:#c2bbab; --muted:#8d8577; --line:#332f27; --line-hard:#4c463a;
+    --amber:#e9b949; --amber-soft:#2a2213; --green:#6fca92; --red:#e8867a; --blue:#7fadf0;
+    --violet:#b795e8; --code-bg:#221f19; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(0,0,0,.35); } }
+  :root[data-theme="dark"] { --bg:#14130f; --panel:#1c1a16; --panel-2:#242019; --ink:#ece6d8;
+    --ink-soft:#c2bbab; --muted:#8d8577; --line:#332f27; --line-hard:#4c463a; --amber:#e9b949;
+    --amber-soft:#2a2213; --green:#6fca92; --red:#e8867a; --blue:#7fadf0; --violet:#b795e8;
+    --code-bg:#221f19; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(0,0,0,.35); }
+  :root[data-theme="light"] { --bg:#f7f4ec; --panel:#fffdf7; --panel-2:#f1ece0; --ink:#1b1a17;
+    --ink-soft:#45413a; --muted:#7a736a; --line:#ddd5c6; --line-hard:#b9ae9a; --amber:#b8770a;
+    --amber-soft:#fbf0d8; --green:#2f7d4f; --red:#a8362b; --blue:#2b5fa8; --violet:#6b3fa0;
+    --code-bg:#efeade; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(30,25,15,.06); }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.62 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; -webkit-text-size-adjust:100%; }
+  .wrap { max-width:1120px; margin:0 auto; padding:32px 20px 96px; }
+  header.top { border-bottom:2px solid var(--line-hard); padding-bottom:18px; margin-bottom:24px; }
+  .kicker { font:600 11px/1 ui-monospace,monospace; letter-spacing:.16em; text-transform:uppercase; color:var(--amber); }
+  h1 { font-size:clamp(23px,4.2vw,32px); line-height:1.15; margin:10px 0 8px; letter-spacing:-.015em; }
+  .sub { color:var(--muted); max-width:72ch; margin:0; }
+  .meta { margin-top:12px; font:12px/1.5 ui-monospace,monospace; color:var(--muted); }
+  h2 { font-size:19px; margin:38px 0 6px; letter-spacing:-.01em; }
+  h2 .num { color:var(--amber); font:600 13px/1 ui-monospace,monospace; margin-right:8px; }
+  p { margin:8px 0; } .lede { color:var(--ink-soft); max-width:78ch; }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86em;
+    background:var(--code-bg); padding:1px 5px; border-radius:3px; }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:13px; }
+  th,td { text-align:left; padding:8px 9px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font:600 10.5px/1.3 ui-monospace,monospace; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--muted); border-bottom:2px solid var(--line-hard); }
+  tbody tr:hover { background:var(--panel-2); }
+  .id { font:600 11.5px ui-monospace,monospace; color:var(--violet); white-space:nowrap; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:4px;
+    padding:14px 16px; margin:14px 0; box-shadow:var(--shadow); }
+  .warn { border-left:4px solid var(--red); background:color-mix(in srgb, var(--red) 8%, transparent); }
+  .ok { border-left:4px solid var(--green); }
+  .rows { border:1px solid var(--line-hard); border-radius:4px; overflow:hidden; margin:12px 0; }
+  .rows div { padding:11px 14px; border-bottom:1px solid var(--line); }
+  .rows div:last-child { border-bottom:0; }
+  .rows b { display:block; font:700 13px ui-monospace,monospace; letter-spacing:.04em; }
+  .rows span { color:var(--muted); font-size:13px; }
+  ul.tight { padding-left:20px; margin:8px 0; } ul.tight li { margin:4px 0; }
+  footer { margin-top:52px; padding-top:18px; border-top:2px solid var(--line-hard);
+    font-size:12.5px; color:var(--muted); }
+  .toggle { position:fixed; top:12px; right:12px; z-index:10; font:600 11px ui-monospace,monospace;
+    background:var(--panel); color:var(--ink); border:1px solid var(--line-hard); border-radius:999px;
+    padding:6px 12px; cursor:pointer; box-shadow:var(--shadow); }
+  @media print { .toggle { display:none; } }
+</style>
+</head>
+<body>
+<button class="toggle" id="theme">◐ theme</button>
+<div class="wrap">
+
+<header class="top">
+  <div class="kicker">Cookrew · R29 · copy review</div>
+  <h1>Three plain rows, one of which isn't plain yet</h1>
+  <p class="sub">The four new surfaces of the save-then-popout walk, audited as first-class copy, plus
+  the rail vignette against the two readers it claims to serve.</p>
+  <p class="meta">Velvet (UX Optimizer) · 2026-08-24 · reviewing <code>docs/design/export-ux-demo.html</code>
+  (R29) · third in the series with <code>gate-sheet-review.html</code> and
+  <code>export-walk-review.html</code></p>
+</header>
+
+<div class="card ok">
+  <b>R29 is the right split and the mental model at the end of the walk is the best line in any of these
+  docs:</b> <em>save = keep · publish = sell or share · grant = lend.</em> Three verbs, no protocol. If
+  the product teaches only that, it has taught enough.
+  <br><br>Below: one row of the selector fails the owner's bar (and fails it on a rule I wrote), plus
+  four smaller findings and two things dropped in the rewrite.
+</div>
+
+<h2><span class="num">1</span>WHO GETS THIS — row 2 fails the never-read-a-spec test</h2>
+<p class="lede">Rows 1 and 3 pass cleanly. Row 2 is the one that breaks, and it breaks on the exact rule
+the vocabulary audit set: <b>"sign in" promises a thing that does not exist.</b> There is no account.
+The label says <em>ANYONE WHO SIGNS IN</em> and its own sub-line then says <em>with a passkey</em> — so
+the row contradicts itself in two lines, and a person who has never read a spec reads the label, goes
+looking for a login, and finds none.</p>
+<p class="lede">There is a deeper reason to change it. The author is choosing between three audiences —
+<b>nobody, everybody free, everybody paid</b>. Whether Cookrew asks each installer for a passkey is our
+implementation detail, not the author's decision, and putting it in the label makes the author think
+they are choosing an <em>identity policy</em>. Move the mechanism to the sub-line and the choice becomes
+a clean parallel three.</p>
+<div class="rows">
+  <div><b>🔒 JUST ME</b><span>Stays on your shelf. This is where it is now.</span>
+    <span style="color:var(--green)"> — unchanged, and "this is where it is now" is a lovely touch</span></div>
+  <div><b>🔑 ANYONE, FREE</b><span>Free to install. Cookrew asks each person for a passkey first, so
+    you see a count — never strangers' data.</span>
+    <span style="color:var(--red)"> — replaces "ANYONE WHO SIGNS IN — FREE"</span></div>
+  <div><b>◈ ANYONE WHO PAYS</b><span>Set a price. Buyers pay you directly — Cookrew never holds the
+    money and takes nothing.</span>
+    <span style="color:var(--green)"> — unchanged; the money line is verbatim from the module</span></div>
+</div>
+<div class="card warn">
+  <b>And the reversibility line needs its bound.</b> "Change your answer any time — including back to
+  JUST ME, which unlists it" will be read as <em>I can take it back</em>. Unlisting stops new installs;
+  it does not recall the copies people already have, and it cannot. Say so in the same breath, or the
+  first author who discovers it learns that we let them believe otherwise.
+  <br><b>→</b> "Change your answer any time — including back to JUST ME, which takes it off the
+  marketplace. People who already installed it keep their copy."
+</div>
+
+<h2><span class="num">2</span>MINE — the tag names ownership, but the state is privacy</h2>
+<p class="lede">Everything on the shelf is mine, published or not. The distinction the dashed border
+draws is <em>not shared yet</em>, and "MINE" does not say that — after publishing, the chip is still
+mine, it just also exists elsewhere.</p>
+<div class="card ok">
+  <b>Use <code>JUST ME</code> as the tag.</b> Same words as the selector's first row, one popout away:
+  a chip tagged JUST ME is one whose answer to "who gets this?" is JUST ME. Publishing changes the
+  answer and the tag together, and the popout's <code>MAKE IT JUST ME</code> already speaks this
+  vocabulary — the tag is the only place still speaking the other one. One word, three surfaces, no
+  translation.
+</div>
+
+<h2><span class="num">3</span>SAVE TO MY PRESETS — keep the length, add the missing reassurance</h2>
+<p class="lede">I tried to shorten it to <code>SAVE AS PRESET</code> and talked myself out of it: naming
+the destination answers "where did it go?" at the moment of the act, and the shelf beside it is
+literally called MY PRESETS. The length is worth it. <b>Keep as drawn.</b></p>
+<div class="card warn">
+  <b>But the reassurance is in your annotation, not in the product.</b> "No sheet, no questions, nothing
+  leaves the machine" is exactly what makes this button safe to press — and it currently lives in the
+  doc, where the author will never see it. A first-timer meeting an unfamiliar SAVE button in a product
+  with a marketplace in it can reasonably fear it publishes something.
+  <br><b>→ New string, on the save toast:</b> "Saved to My Presets. Nothing left your machine."
+  <br>One line, at the one moment the fear exists, and it makes the second save free of hesitation.
+</div>
+
+<h2><span class="num">4</span>The popout — one item needs a consequence</h2>
+<table>
+  <thead><tr><th>Item</th><th>Verdict</th></tr></thead>
+  <tbody>
+    <tr><td><code>▶ PLACE ON CANVAS</code></td><td>✓ matches existing placement vocabulary</td></tr>
+    <tr><td><code>⬆ PUBLISH TO MARKETPLACE</code><br><span class="id">sub: choose who gets it — nothing shared yet</span></td>
+      <td>✓ and the sub-line does real anti-fear work. Keep it</td></tr>
+    <tr><td><code>✎ RENAME</code></td><td>✓</td></tr>
+    <tr><td><code>✕ DELETE</code></td>
+      <td><b>ambiguous on a PUBLISHED chip.</b> On a JUST ME chip it is safe and needs nothing. On a
+      published one it is two different acts wearing one word — remove from my shelf, and take it off
+      the marketplace — and a buyer's installed copy survives either way. Split it:
+      <code>UNLIST</code> for the listing, <code>DELETE</code> for the shelf, and DELETE on a published
+      chip confirms with the consequence: "Removes it from your shelf. It stays on the marketplace
+      unless you unlist it, and people who installed it keep their copy."</td></tr>
+    <tr><td><code>MAKE IT JUST ME</code> · <code>CUT V2</code></td>
+      <td>✓ both speak the selector's vocabulary, which is what §2 asks the tag to do</td></tr>
+    <tr><td><code>EXPORT FILE</code></td><td>in the build map, absent from the drawn menu — add it,
+      it is the M0 fallback and it is the only offline path</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">5</span>The rail vignette — correct as rationale, wrong as UI, and short one string</h2>
+<p class="lede"><b>Does it survive both readers?</b> As design rationale it is excellent and I would not
+change a word: "diamonds are ephemeral, a pin is permanent, named, addressable" is the clearest
+statement of the pin's purpose anyone has written, and "one mark, three duties" is genuinely why the pin
+earns a third marker class.</p>
+<div class="card warn">
+  <b>But none of it may become UI copy, and one reader has no string at all.</b>
+  "third marker class", "same anchor space", "addressable" are our words. Worse, "one mark, three
+  duties" is a <em>designer's</em> unification: a buyer does not need to know that the author's edition
+  and a caller's fork exist on someone else's rail, and telling them is noise about a stranger's
+  machine.
+  <br><br>Each reader needs one sentence, and only the author has one:
+  <ul class="tight">
+    <li><b>Author</b> — <span class="id">mkt.export.pin</span>: "A copy was cut here. This is what
+    callers get; your live session carries on above it." ✓ landed.</li>
+    <li><b>Buyer</b> — <b>no string exists.</b> Their pin means one thing: <em>this is the version you
+    own</em>. Proposed <span class="id">mkt.pin.buyer</span>: "You're running v{n} of {presetName}. Your
+    own work carries on above this." Nothing about editions, nothing about forks.</li>
+  </ul>
+  The vignette claims the mark serves three duties; the product currently has words for one.
+</div>
+
+<h2><span class="num">6</span>Dropped in the rewrite — naming them, per the review bar</h2>
+<ul class="tight">
+  <li><b>The revoke failure strip is gone.</b> My E3 finding is moot by deletion rather than fixed —
+  which means the honest-failure state went with it. "They still have access" is the one string in this
+  surface where a calming tone would be a lie with consequences, and step 6 now draws only the happy
+  path. Put it back, with the second remedy (<em>or un-export the agents to cut it off now</em>) that
+  the previous draft also dropped.</li>
+  <li><b>The toggle's safety sentence is out of frame.</b> Not a regression — the toggle still exists,
+  the walk just no longer shows it — but my E1 endorsement of its placement is now untested here, and
+  the landed <span class="id">mkt.export.safety</span> (three verbs, including <em>never resumed by
+  anyone else</em>) is still the one to use when it is drawn.</li>
+  <li><b>E2 is unfixed, carried forward:</b> "one character is wrong" remains a claim the checker cannot
+  support, and the actor is still unnamed — it is <em>buyers</em> who would pay a bad address.</li>
+  <li><b>Third document without them:</b> the attestation button (<code>I COMPARED THESE · ENROL</code>)
+  and the key-paste step with its six wrong-paste cases, including the private-key refusal. Absent from
+  the gate sheet, the previous walk, and this one. That is no longer a gap in a document; it is a gap in
+  the design.</li>
+</ul>
+
+<footer>
+  <b>R29 copy review.</b> Velvet (UX Optimizer), 2026-08-24 · reviewing
+  <code>docs/design/export-ux-demo.html</code> · series:
+  <code>gate-sheet-review.html</code> · <code>export-walk-review.html</code> · this.
+</footer>
+
+</div>
+<script>
+  (function(){var b=document.getElementById('theme');b.addEventListener('click',function(){
+    var n=document.documentElement.getAttribute('data-theme');
+    var d=n?n==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.setAttribute('data-theme',d?'light':'dark');});})();
+</script>
+</body>
+</html>

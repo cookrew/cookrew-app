@@ -1,4 +1,5 @@
 import type { RotationSheetPayload } from './preset-rotation'
+import type { ServedPaymentRail } from './served-payment-rails'
 
 /**
  * MARKETPLACE COPY — Velvet's deck (docs/design/marketplace-copy-deck.html),
@@ -392,6 +393,10 @@ export const MKT_EXPORT = {
   'mkt.export.pin':
     'A copy was cut here. This is what callers get; your live session carries on above it.',
   'mkt.export.access.none': 'Nobody can call this',
+  /** Singular has its own key. My own §7 rule bans "(s)" and mandates "1 agent /
+   *  4 agents"; shipping only the plural made one caller read "1 callers" and
+   *  forced every call site to branch locally. Use accessLabel(). */
+  'mkt.export.access.one': '1 caller',
   'mkt.export.access.some': '{n} callers',
   /** R23 bounds this claim: hash-chained, unwitnessed. Say exactly that. */
   'mkt.export.log':
@@ -589,10 +594,45 @@ export const MKT_SERVE = {
   /** R31 makes the plain label the true one; my earlier objection to "signs in"
    *  is withdrawn — it was right for facts that have since changed. */
   'mkt.serve.who.free': 'Anyone with a Cookrew account — free',
-  'mkt.serve.who.free.sub': 'They sign in, then start. You see who is on, never what they are doing.',
+  /** The R30 privacy ruling narrowed the claim: identity only. The old tail —
+   *  "never what they are doing" — promised privacy-from-owner, which the
+   *  architecture cannot keep (their session runs in the owner's app). */
+  'mkt.serve.who.free.sub': 'They sign in, then start.',
   'mkt.serve.who.paid': 'Anyone who pays',
   'mkt.serve.who.paid.sub':
     'Set a price. Callers pay you directly — Cookrew never holds the money and takes nothing.',
+  'mkt.serve.price.unit': 'USD · per session',
+  'mkt.serve.price.label': 'Price in USD per session',
+  'mkt.serve.price.paid': '{price} USD · per session · {rails}',
+  'mkt.serve.price.free': 'free · sign in to start',
+  'mkt.serve.rails.live': 'Offers {rails}',
+  'mkt.serve.rails.none': 'No payment rail is configured yet.',
+  'mkt.serve.rails.none.short': 'no payment rail configured',
+  'mkt.serve.payment.required': 'A paid door needs at least one way to pay you.',
+  'mkt.serve.payment.live-blocked': '{templateName} needs a way to get paid.',
+  'mkt.serve.payment.setup': 'Set up ways to get paid',
+  'mkt.serve.payment.title': 'Ways to get paid',
+  'mkt.serve.payment.subtitle':
+    'Choose either one or both. Callers pay you directly — Cookrew never holds the money.',
+  'mkt.serve.payment.usdc.title': 'USDC on Base',
+  'mkt.serve.payment.usdc.label': 'USDC receiving address',
+  'mkt.serve.payment.usdc.hint':
+    'This 0x address is public and appears in the payment request shown to callers.',
+  'mkt.serve.payment.usdc.ready': 'USDC rail: configured',
+  'mkt.serve.payment.usdc.save': 'SAVE ADDRESS',
+  'mkt.serve.payment.stripe.title': 'Card with Stripe',
+  'mkt.serve.payment.stripe.label': 'Stripe secret key',
+  'mkt.serve.payment.stripe.hint':
+    'Write-only: Cookrew stores this at 0600, clears this field, and never shows the key again.',
+  'mkt.serve.payment.stripe.ready': 'Card rail: configured ({mode})',
+  'mkt.serve.payment.stripe.save': 'SAVE KEY',
+  'mkt.serve.payment.invalid-pay-to': 'Enter a 0x address with 40 hexadecimal characters.',
+  'mkt.serve.payment.invalid-stripe-key':
+    'Paste a Stripe secret key beginning sk_test_ or sk_live_.',
+  'mkt.serve.payment.write-failed':
+    "Couldn't save that on this machine. The previous payment setup is unchanged.",
+  'mkt.serve.rail.x402': 'USDC',
+  'mkt.serve.rail.stripe': 'card',
   /** The bound the reversibility promise needs, or it reads as a recall. */
   'mkt.serve.reversible':
     'Change this any time, including back to Just me — which stops new callers. Anyone already working keeps going until you end them.',
@@ -603,10 +643,29 @@ export const MKT_SERVE = {
     "Callers never touch your workspace. Each one gets a fresh copy of the template you pinned, in its own folder. Keep working exactly as you did before — they can't see it, and nothing you do now reaches them.",
   'mkt.serve.live': '{templateName} is taking calls.',
   'mkt.serve.live.address': 'Callers land on {orch} · {priceLine}',
+  /** The hand-off: what the owner DOES with the address they were just shown. */
+  'mkt.serve.live.handoff':
+    'Hand this address to a caller — in their Cookrew it goes under TERMINAL → + ADD BY LINK.',
   'mkt.serve.stop.action': 'STOP SERVING',
   'mkt.serve.stop.confirm':
     'Stop serving {templateName}? {n} workspaces end now, including any mid-call. The template stays on your shelf.',
-  'mkt.serve.error': "Couldn't start serving — {templateName} is still private and nobody can call it."
+  'mkt.serve.error': "Couldn't start serving — {templateName} is still private and nobody can call it.",
+  /**
+   * THE NO-ORCH REFUSAL, said at save rather than discovered at the gate.
+   *
+   * A crew with no orch used to save and serve, and the first caller's prompt
+   * was typed at a bare zsh prompt. The sentence has to do two jobs: name the
+   * missing thing in the owner's own vocabulary (the ◆ orch badge on a card),
+   * and say what it is FOR — otherwise "pick an orch" reads as a form field
+   * rather than the reason the crew cannot answer anybody.
+   */
+  'mkt.serve.no-orch':
+    'Pick an orch before you serve this — callers talk to exactly one agent, and this crew has none. Mark one card as the orch and it becomes the door.',
+  /** The gate's reasons, in the owner's words. Keyed by ServeRefusal. */
+  'mkt.serve.refused.bad-price': 'A paid door needs a price above zero.',
+  'mkt.serve.refused.priced-free-door': 'A free door cannot carry a price.',
+  'mkt.serve.refused.grant-unusable':
+    'Not taking callers — this crew’s orch could not answer one check with the credential it was lent. Match the grant to the orch, or fix the endpoint’s request template.'
 } as const
 
 /** The SESSIONS table. Owner-side; the word lives here and nowhere else. */
@@ -643,15 +702,35 @@ export const MKT_SESSIONS = {
  * it cost, what happens if I start. Then the Gate Sheet.
  */
 export const MKT_SVC = {
+  'mkt.svc.document.title': '{templateName} · Cookrew',
+  'mkt.svc.eyebrow': 'SERVED CREW',
   'mkt.svc.title': '{templateName}',
   'mkt.svc.byline': 'run by {author} · {n} agents · {version}',
+  'mkt.svc.byline.served': '{n} agents · {version}',
   'mkt.svc.what':
     'A crew of AI agents that works on what you ask. You talk to one of them — {orch} — and it runs the others.',
   'mkt.svc.yours':
     'You get your own private workspace. It is created when you start, it belongs to you, and the files you make stay in it. Nobody else’s work touches yours.',
   'mkt.svc.price.paid':
     '{price} {asset} to start. Paid directly to {author} — Cookrew never holds the money and takes nothing.',
-  'mkt.svc.price.free': 'Free to start. Sign in with your Cookrew account first — one tap, no password.',
+  'mkt.svc.price.usd': '{price} USD to start.',
+  'mkt.svc.price.free': 'Free to start.',
+  'mkt.svc.pay.title': 'Ways to pay',
+  'mkt.svc.pay.x402.title': 'USDC',
+  'mkt.svc.pay.x402.body':
+    'Pay with USDC on Base. Cookrew sends the payment proof when you retry your call.',
+  'mkt.svc.pay.stripe.title': 'Card',
+  'mkt.svc.pay.stripe.body':
+    'Open Stripe Checkout from Cookrew and pay by card. Return here after Stripe confirms it, then retry your call.',
+  'mkt.svc.pay.none': 'This crew is not taking new callers right now.',
+  'mkt.svc.payment.received': 'Payment received — retry your call in Cookrew.',
+  'mkt.svc.open.title': 'Start in Cookrew',
+  'mkt.svc.open.account':
+    'In Cookrew, choose + ADD BY LINK and paste the address below. The crew card signs you in when you start.',
+  'mkt.svc.open.paid':
+    'In Cookrew, choose + ADD BY LINK and paste the address below. The crew card walks you through sign-in and payment when you start.',
+  'mkt.svc.open.address': 'Crew address',
+  'mkt.svc.availability.title': 'Availability',
   /**
    * FLAGGED FOR ATLAS. "They can't see inside it" is a claim about what the
    * product surfaces, not about what is reachable on a machine the author owns.
@@ -677,6 +756,17 @@ export const MKT_SVC = {
   'mkt.svc.ended.paid': 'You paid to start this. Contact {author} if that was not expected.',
   'mkt.svc.unavailable': '{templateName} is not taking calls right now.'
 } as const
+
+/** Human labels for structured rail identifiers; prose stays in this module. */
+export function servedPaymentRailLabel(rail: ServedPaymentRail): string {
+  return rail === 'x402'
+    ? MKT_SERVE['mkt.serve.rail.x402']
+    : MKT_SERVE['mkt.serve.rail.stripe']
+}
+
+export function servedPaymentRailsLabel(rails: readonly ServedPaymentRail[]): string {
+  return rails.map(servedPaymentRailLabel).join(' · ')
+}
 
 export type MktTemplateId = keyof typeof MKT_TEMPLATE
 export type MktServeId = keyof typeof MKT_SERVE
@@ -748,9 +838,223 @@ export function importedPinTip(
   return fillCopy(MKT_CHIP[id], { handle: authorLabel(handle), version })
 }
 
+/**
+ * ── THE REMOTE TEAMMATE CARD (Door B) ────────────────────────────────────────
+ *
+ * A normal terminal card whose binding is a gated remote ask. The design is
+ * right and the risk is the same fact: a remote teammate inherits every
+ * affordance of a local one, and four of them mean something untrue.
+ *
+ * Answering the Commander's four questions. Where I differ from the fallbacks,
+ * the reason is in the comment — the differences are small in words and load-
+ * bearing in what they disclose.
+ */
+
+/**
+ * Q1 — the rail, where a local card shows checkpoints.
+ *
+ * The CONTROLS ARE ABSENT, not present-and-refusing: the grant deck's rule
+ * holds, a disabled row invites a fight with the wrong control. But absence
+ * explains nothing, so the rail is not empty either — it carries the reason the
+ * expected thing is missing, and says what the user DOES have. Naming the
+ * mechanism ("runs on its owner's machine") is what stops this reading as a
+ * missing feature.
+ */
+export const MKT_REMOTE_RAIL = {
+  'mkt.remote.rail.title': 'No checkpoints here',
+  'mkt.remote.rail.body':
+    "{agent} runs on its owner's machine and keeps its history there. This card holds your calls and the replies you got — nothing before them, and nothing to rewind."
+} as const
+
+/**
+ * Q2 — access withdrawn mid-turn.
+ *
+ * NAMING THE OWNER: no. Three reasons, and the third is the one that decided
+ * it. The caller was enrolled by the owner, so in the legitimate case they
+ * already know who that is and the name adds nothing. In the illegitimate case
+ * — a key enrolled by mistake, or a caller who should never have had access —
+ * the name is disclosed to precisely the person access was just taken from, and
+ * a revocation is often adversarial. And the grant deck's asymmetry says
+ * information flows toward LESS exposure on the way out.
+ *
+ * But "you cannot call this" with no recourse is a dead end, so the copy keeps
+ * the channel without the identity: whoever gave you access is a relationship
+ * the caller already has, and naming the relationship costs nothing.
+ */
+export const MKT_REMOTE_REVOKED = {
+  /**
+   * In flight. This one may be specific: the caller demonstrably had access a
+   * second ago, so nothing is disclosed they did not already know. The last
+   * clause exists because a card that stops mid-answer reads as a card that
+   * lost everything.
+   */
+  'mkt.remote.revoked.inflight':
+    "Your access to {agent} was withdrawn while it was answering. That reply was stopped and won't arrive. Everything above is still here.",
+  /**
+   * Next attempt. DELIBERATELY IDENTICAL to the generic refusal below — see the
+   * note on mkt.remote.refused.cannot. A distinct "you can no longer" line
+   * would tell a prober that this agent exists, which is the disclosure Q3's
+   * 404 rule exists to prevent.
+   */
+  'mkt.remote.revoked.recourse': 'If you think that is a mistake, ask whoever gave you access.'
+} as const
+
+/**
+ * Q3 — five wire answers, FOUR buckets.
+ *
+ * Not the Commander's three, and the difference matters in both directions.
+ *
+ * SPLIT OUT: 401 is retryable but NOT by pressing the same button — it needs a
+ * ceremony first. Folded into "busy, try again" it makes the user hammer a
+ * control that cannot work; folded into "you cannot" it hides a door that is
+ * open. It is its own bucket.
+ *
+ * ADDED: transport failure is not in the five, but the card will meet it more
+ * often than some of them, and "unreachable" is emphatically not "refused" —
+ * one is our problem and the other is a decision about the caller.
+ *
+ * MERGED, ON PURPOSE: 403 scope, 403 entitlement/revoked and 404 all render
+ * mkt.remote.refused.cannot, WORD FOR WORD. This is the mechanism that makes an
+ * unexported agent and a nonexistent one indistinguishable — not careful
+ * wording, but a shared string. Vagueness achieved by bucketing survives a
+ * refactor; vagueness achieved by two similar sentences does not.
+ */
+export const MKT_REMOTE_REFUSED = {
+  /** 409 busy / not_ready / not_running — retry now, and it may just work. */
+  'mkt.remote.refused.busy': '{agent} is busy right now. Try again in a moment.',
+  /** 401 — retryable, but only after the ceremony. */
+  'mkt.remote.refused.identity': "Prove it's you before calling {agent} — one passkey gesture.",
+  'mkt.remote.refused.identity.action': 'USE PASSKEY',
+  /**
+   * 403 scope · 403 entitlement · 403 revoked · 404. ONE STRING FOR ALL FOUR.
+   * It names no cause because every cause it could name is a disclosure.
+   */
+  'mkt.remote.refused.cannot': 'You cannot call {agent}.',
+  /** Not a refusal at all. Ours to fix, and it must not read like a decision. */
+  'mkt.remote.refused.unreachable': "Couldn't reach {agent}. Your access is fine — the connection isn't."
+} as const
+
+/**
+ * Q4 — the cold fork, up to DEFAULT_READY_TIMEOUT_MS before a first byte.
+ *
+ * YES, say it is one-time: it is true, and it converts a bad first impression
+ * into an explained one. The wait is not the problem; an unexplained wait is.
+ *
+ * The line CHANGES ONCE, and the second stage repeats the one-time fact rather
+ * than adding urgency — fifteen seconds in is the moment of maximum doubt, and
+ * it is exactly when the reassurance is worth spending again. No countdown: a
+ * timer counting toward a failure we are not certain of manufactures dread, and
+ * we do not know the real duration, only the ceiling.
+ */
+export const MKT_REMOTE_WAKING = {
+  'mkt.remote.waking.first':
+    "Waking {agent} up. The first call to a sleeping agent takes up to half a minute — after that it's quick.",
+  'mkt.remote.waking.still': 'Still waking up. This is the slow part, and it only happens once.',
+  'mkt.remote.waking.timeout': "{agent} didn't wake up in time. Try again."
+} as const
+
+export type MktRemoteRailId = keyof typeof MKT_REMOTE_RAIL
+export type MktRemoteRevokedId = keyof typeof MKT_REMOTE_REVOKED
+export type MktRemoteRefusedId = keyof typeof MKT_REMOTE_REFUSED
+export type MktRemoteWakingId = keyof typeof MKT_REMOTE_WAKING
+
+/** Which of the four buckets a wire answer falls in. The merge IS the privacy. */
+export type RemoteRefusal = 'busy' | 'identity' | 'cannot' | 'unreachable'
+
+export function remoteRefusalBucket(status: number, reason?: string): RemoteRefusal {
+  if (status === 409) return 'busy'
+  if (status === 401) return 'identity'
+  if (status === 403 || status === 404) return 'cannot'
+  // 5xx, network, timeout — anything that is not the gate answering.
+  return 'unreachable'
+}
+
+/** The sentence for a refusal. `reason` is accepted and deliberately unused for
+ *  the cannot bucket: a call site that passes it must still get one string. */
+export function remoteRefusalCopy(
+  status: number,
+  agent: string,
+  reason?: string
+): { text: string; retryable: boolean } {
+  const bucket = remoteRefusalBucket(status, reason)
+  const text = fillCopy(
+    MKT_REMOTE_REFUSED[`mkt.remote.refused.${bucket}` as MktRemoteRefusedId],
+    { agent }
+  )
+  return { text, retryable: bucket === 'busy' || bucket === 'identity' }
+}
+
+/** Callers, counted without "(s)". */
+export function accessLabel(n: number): string {
+  if (n <= 0) return MKT_EXPORT['mkt.export.access.none']
+  if (n === 1) return MKT_EXPORT['mkt.export.access.one']
+  return fillCopy(MKT_EXPORT['mkt.export.access.some'], { n })
+}
+
+/**
+ * THE GATE SHEET's own receipts and step labels (R28). The deck already owns
+ * the FORM strings for each moment — MKT_AUTH asks identity, MKT_PAY asks money,
+ * MKT_ENROL runs the ceremony. What the one sheet added is the COLLAPSED line: a
+ * step you have cleared becomes a one-line receipt, and those short lines had no
+ * home until the sheet existed. They live here so the sheet reads no prose of
+ * its own.
+ *
+ * The two doors keep separate strings so the R31 wall holds by construction: the
+ * install receipt speaks accounts, the call receipt speaks the ceremony, and
+ * because they are different ids no sheet can render both.
+ */
+export const MKT_GATE = {
+  /** Cleared identity, install door — account vocabulary only. */
+  'mkt.gate.identify.install.done': "You're signed in.",
+  'mkt.gate.identify.install.why': 'Your Cookrew account, on this device.',
+  /** Cleared identity, call door — ceremony vocabulary only. */
+  'mkt.gate.identify.call.done': 'You compared the words.',
+  'mkt.gate.identify.call.why':
+    'Same words, same key — enrolled out loud, never over this connection.',
+  /** Served, install door — the copy is placed. */
+  'mkt.gate.open.install.title': 'Yours. Placing it on your canvas…',
+  'mkt.gate.open.install.why': 'Their originals are untouched — your copy runs against a fork.',
+  /** Served, call door — the line is up. */
+  'mkt.gate.open.call.title': 'Connected.',
+  'mkt.gate.open.call.why': 'Calls run against a fork — their original is never touched.',
+  /** Acknowledge the served state and close — the copy is already placed. */
+  'mkt.gate.open.action': 'DONE',
+  /** The pin you leave with — the violet mark, said in words. */
+  'mkt.gate.pin': 'Pinned to your rail',
+  'mkt.gate.pin.why': 'Update from the chip when a new version ships — never pushed, always offered.',
+  /** Door B's honest wait — a first reply is slow while the line warms. */
+  'mkt.gate.warming':
+    'First reply can take a moment while the line warms — the card says so; it never just spins.',
+  /** No quote existed, so no payment could have been sent or checked. */
+  'mkt.gate.payment.unavailable':
+    "this crew can't take payment right now — nothing was charged; try later",
+  /** A payment was sent, but our facilitator could not give a verdict. */
+  'mkt.gate.payment.unverifiable':
+    'our checker is unreachable — your payment may be fine; try again shortly.',
+  /** The 402 terms block — door-neutral labels, so the sheet reads no prose. */
+  'mkt.gate.terms.head': 'Terms — what the gate quoted',
+  'mkt.gate.terms.price': 'price',
+  'mkt.gate.terms.chain': 'chain',
+  'mkt.gate.terms.paidto': 'paid to',
+  'mkt.gate.terms.quoteends': 'quote ends',
+  /** The AUTHOR chip beside the payee. Uppercased by .cr-chip. */
+  'mkt.gate.terms.author': 'author',
+  /** The head chip — agent count. */
+  'mkt.gate.agents': '{n} agents',
+  /** 404 — the resource is not here. Door-neutral; never enrolment prose. */
+  'mkt.gate.gone.title': "This isn't here anymore.",
+  'mkt.gate.gone.why': 'It may have been unpublished, or the link is wrong. Nothing was installed.',
+  /** 5xx / unusable answer — our fault, not theirs. Fails closed to a retry. */
+  'mkt.gate.error.title': "Couldn't reach the gate.",
+  'mkt.gate.error.why':
+    'Something failed on the way — try again in a moment. Nothing was installed or charged.'
+} as const
+
+export type MktGateId = keyof typeof MKT_GATE
 
 /** Every group, so a renderer can resolve any id without knowing its family. */
 export const MKT_ALL = {
+  ...MKT_GATE,
   ...MKT_ROTATION,
   ...MKT_DENIED,
   ...MKT_AUTH,
@@ -765,7 +1069,11 @@ export const MKT_ALL = {
   ...MKT_SERVE,
   ...MKT_SESSIONS,
   ...MKT_SVC,
-  ...MKT_CHIP
+  ...MKT_CHIP,
+  ...MKT_REMOTE_RAIL,
+  ...MKT_REMOTE_REVOKED,
+  ...MKT_REMOTE_REFUSED,
+  ...MKT_REMOTE_WAKING
 } as const
 
 export type MktId = keyof typeof MKT_ALL

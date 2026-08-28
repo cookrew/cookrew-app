@@ -135,6 +135,13 @@ export const NODE_ROUTES: RegExp[] = [
   /^\/api\/terminal\/[^/]+\/jump$/,
   /^\/api\/terminal\/[^/]+\/seen$/,
   /^\/api\/terminal\/[^/]+\/turns(?:\?.*)?$/,
+  /^\/api\/terminal\/[^/]+\/pins$/,
+  // T1 latest-checkpoint: terminal-id-addressed end to end (watchSpec → the
+  // terminal's own session file, stat-guarded cache keyed by id) — no focus
+  // resolution anywhere, so it is scope-safe under a slug. Every phone card
+  // polls it; leaving it 501 flooded the slug-served companion with
+  // "not workspace-scoped yet" rejections on every tick.
+  /^\/api\/terminal\/[^/]+\/latest$/,
   /^\/api\/terminal\/[^/]+\/trace(?:\?.*)?$/,
   /^\/api\/terminal\/[^/]+\/trace\/index$/,
   /^\/api\/terminal\/[^/]+\/trace\/markers$/,
@@ -175,8 +182,24 @@ export const SCOPE_AWARE: RegExp[] = [
   /^\/api\/workspaces$/,
   /^\/api\/auth\/status$/,
   /^\/api\/presets$/,
+  // turns.list(): global and terminal-id-keyed, no focus resolution — the
+  // same class as /api/workspaces. Every phone boot calls it for the card
+  // statuses; refusing it under a slug made the very first fetch of every
+  // session an unhandled "not workspace-scoped yet" rejection.
+  /^\/api\/activity$/,
+  // The phone black box POSTs its vitals here; scope-free by nature (the
+  // payload carries everything, the answer is 204 either way).
+  /^\/api\/beacon$/,
   /^\/api\/git(?:\?.*)?$/,
   /^\/api\/browser\/capabilities$/,
+  // Translation carries its own subject: the text to translate is in the
+  // request body and the answer depends on nothing a workspace holds, so
+  // every scope answers it identically. Being absent here did not make it
+  // scope-safe, it made it 501 — a phone served from a slug got "not
+  // workspace-scoped yet" for a button that has nothing to do with workspaces,
+  // and the failure surfaced to the reader as "is Ollama running?".
+  /^\/api\/translate$/,
+  /^\/api\/translate\/host$/,
   // THE INTERNET GATE (§9, §11 · ④). An exported agent is addressable because
   // the workspace instance is addressable, so this is the one route family
   // that is MEANINGLESS unslugged — there is no focused-session reading of it,

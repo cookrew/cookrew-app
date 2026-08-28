@@ -52,11 +52,38 @@ const api = {
     ipcRenderer.invoke('preset:installed:rotation:trust', id, newKeyId),
   listPins: (terminalId: string) => ipcRenderer.invoke('pins:list', terminalId),
 
+  /** Translate a checkpoint body with Sous. Never rejects; see main. */
+  /** Host of the remote translator, or null when Sous is local. */
+  translateHost: () => ipcRenderer.invoke('sous:host'),
+  translateCheckpoint: (text: string, language: string) =>
+    ipcRenderer.invoke('sous:translate', text, language),
   listWorkspaces: () => ipcRenderer.invoke('workspace:list'),
   createWorkspace: (name: string, dir: string, team?: string) =>
     ipcRenderer.invoke('workspace:create', name, dir, team),
   templateImport: (team: string, position?: { x: number; y: number }) =>
     ipcRenderer.invoke('template:import', team, position),
+
+  // ── R30 share-on-save (export side) ──
+  servingServe: (input: { templateId: string; access: 'account' | 'paid'; priceUsd?: string }) =>
+    ipcRenderer.invoke('serving:serve', input),
+  servingStop: (serviceId: string) => ipcRenderer.invoke('serving:stop', serviceId),
+  servingPaymentStatus: () => ipcRenderer.invoke('serving:payment-status'),
+  servingSetPayTo: (payTo: string) => ipcRenderer.invoke('serving:payment-pay-to', payTo),
+  // Write-only by construction: the bridge exposes a setter and sanitized
+  // status, never a method capable of reading STRIPE_SECRET_KEY back.
+  servingSetStripeSecret: (secret: string) =>
+    ipcRenderer.invoke('serving:payment-stripe', secret),
+  servingList: () => ipcRenderer.invoke('serving:list'),
+  servingSessions: () => ipcRenderer.invoke('serving:sessions'),
+  servingEnd: (sessionId: string) => ipcRenderer.invoke('serving:end', sessionId),
+
+  // ── the dock's crews (import side) ──
+  crewList: () => ipcRenderer.invoke('crew:list'),
+  crewAdd: (link: string) => ipcRenderer.invoke('crew:add', link),
+  crewRemove: (id: string) => ipcRenderer.invoke('crew:remove', id),
+  crewUnlock: (id: string, payRef: string) => ipcRenderer.invoke('crew:unlock', id, payRef),
+  crewPlace: (id: string, position?: { x: number; y: number }) =>
+    ipcRenderer.invoke('crew:place', id, position),
   switchWorkspace: (id: string) => ipcRenderer.invoke('workspace:switch', id),
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),
@@ -140,7 +167,8 @@ const api = {
     ipcRenderer.invoke('turn:page', terminalId, request),
   listTrace: (terminalId: string, request?: unknown) =>
     ipcRenderer.invoke('trace:page', terminalId, request),
-  listTraceIndex: (terminalId: string) => ipcRenderer.invoke('trace:index', terminalId),
+  listTraceIndex: (terminalId: string, request?: unknown) =>
+    ipcRenderer.invoke('trace:index', terminalId, request),
   listTraceMarkers: (terminalId: string) => ipcRenderer.invoke('trace:markers', terminalId),
   // T1: the latest checkpoint for a visible card, no PTY. Returns
   // {prompt, reply, title?} | null.

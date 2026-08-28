@@ -12,13 +12,13 @@ import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 import type { LodLayout, ScreenRect } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
 import { cookrew, isRemoteMode } from './api'
-import { useTurnPaging } from './nodes/TurnPager'
 import { CheckpointTimeline } from './CheckpointTimeline'
 import { TranscriptView, type ActiveBlock, type TranscriptHandle } from './TranscriptView'
 import {
   fetchTraceIndex,
   fetchTraceMarkers,
   mergeCheckpointRows,
+  mergeTraceIndex,
   tailClipRows,
   traceRowLabel,
   type TraceIndexEntry,
@@ -29,7 +29,11 @@ import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
 import { handleTerminalPaste } from './terminal-paste'
 import { terminalKeyIntent } from './terminal-key-intent'
 import { CrIcon } from './icons'
+import { TranslateButton } from './TranslateButton'
+import { languageByCode } from '../../shared/translate'
+import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { StatusCoin } from './nodes/AgentAvatar'
+import { ServedCrewLive } from './ServedCrewLive'
 
 const PHOSPHOR_THEME = {
   background: '#14110A',
@@ -50,6 +54,12 @@ const PHOSPHOR_THEME = {
  * over the thumbnail. Zooming back out unmounts it — the PTY itself lives
  * in the main process, so nothing is lost between mounts.
  */
+/** Menu name for a code, degrading to the code itself rather than to blank. */
+function languageName(code: string | null): string {
+  if (code === null) return 'another language'
+  return languageByCode(code)?.name ?? code
+}
+
 export function TerminalOverlayLayer({
   terminals,
   activities,
@@ -105,6 +115,10 @@ function TerminalOverlay({
   rect: ScreenRect
 }): React.JSX.Element {
   const { zoomBack, requestClose } = useCanvasUi()
+  const remoteCrew = node.servedTranscript != null
+  const phase = activity?.phase ?? 'idle'
+  const [tailReady, setTailReady] = useState(remoteCrew)
+  const metadataReady = remoteCrew || tailReady
   const containerRef = useRef<HTMLDivElement>(null)
   // Drag-in attachments: dragenter/leave bubble from every child of the
   // overlay, so a plain boolean would flicker — count enters vs leaves.
@@ -115,26 +129,25 @@ function TerminalOverlay({
   const agentRef = useRef(false)
   agentRef.current = activity?.agent ?? node.preset !== 'Shell'
 
-  // Turn switching: ◀ ▶ page through past asks; picking one scrolls the
-  // terminal to that ask's line (tmux copy-mode search), and returning to
-  // live exits copy-mode so the tail streams again.
-  const paging = useTurnPaging(node.id, activity?.turnCount ?? 0, { eager: true })
   const [titleMode, toggleTitleMode] = useTitleMode()
 
   // FULL-TRACE SELECTION (item 3): the fan/timeline spans the WHOLE trace range
-  // — Forge's cheap identity listing merged with the capped record store — so
-  // every traced checkpoint, INCLUDING identities below the record cap (e.g.
-  // T1..T7 when the store starts at T8), is a selectable row. Selection is an
-  // explicit identity, decoupled from the record cursor (which can't represent
-  // sub-cap identities); the trace is the only target (no tmux copy-mode), and
-  // the record-based pager is kept in sync best-effort for the header/fork.
+  // — Forge's cheap identity listing, without the full prompt/reply ledger — so
+  // every traced checkpoint is selectable while bodies stay in trace windows.
   const [traceIndex, setTraceIndex] = useState<TraceIndexEntry[]>([])
+  const [traceIndexReady, setTraceIndexReady] = useState(false)
   const [traceMarkers, setTraceMarkers] = useState<TraceMarkerRow[]>([])
+  const [traceRefresh, setTraceRefresh] = useState(0)
   useEffect(() => {
+    if (!metadataReady) return
     let alive = true
+    setTraceIndexReady(false)
     void fetchTraceIndex(node.id)
       .then((list) => {
-        if (alive) setTraceIndex(list)
+        if (alive) {
+          setTraceIndex(list)
+          setTraceIndexReady(true)
+        }
       })
       .catch((error) => {
         // Absent bridge already warned once inside fetchTraceIndex; a present
@@ -149,7 +162,54 @@ function TerminalOverlay({
     return () => {
       alive = false
     }
-  }, [node.id, activity?.turnCount])
+  }, [
+    node.id,
+    node.claudeSessionId,
+    node.codexSessionRef,
+    node.opencodeSessionId,
+    node.piSessionId,
+    node.sessionLineage?.join('\0'),
+    node.servedTranscript?.origin,
+    node.servedTranscript?.slug,
+    metadataReady
+  ])
+
+  const traceCeiling = traceIndex[traceIndex.length - 1]?.index ?? 0
+  const signaledTurns = activity?.turnCount ?? 0
+  useEffect(() => {
+    if (!traceIndexReady) return
+    if (!remoteCrew && signaledTurns <= traceCeiling) return
+    if (remoteCrew && traceRefresh === 0 && signaledTurns <= traceCeiling) return
+    let alive = true
+    let retry: number | null = null
+    const readDelta = (attempt: number): void => {
+      void fetchTraceIndex(node.id, { afterIndex: traceCeiling })
+        .then((delta) => {
+          if (!alive) return
+          if (delta.length > 0) {
+            setTraceIndex((current) => mergeTraceIndex(current, delta))
+          } else if (signaledTurns > traceCeiling && attempt < 2) {
+            retry = window.setTimeout(() => readDelta(attempt + 1), 120 * (attempt + 1))
+          }
+        })
+        .catch((error) => console.error('listTraceIndex delta failed:', error))
+    }
+    readDelta(0)
+    return () => {
+      alive = false
+      if (retry !== null) window.clearTimeout(retry)
+    }
+  }, [node.id, remoteCrew, signaledTurns, traceCeiling, traceIndexReady, traceRefresh])
+
+  // A served trace grows while /ask is still waiting, before the local
+  // crew-line process can complete its own turn counter. Refresh that SAME
+  // capability on a bounded cadence so the existing TranscriptView streams it.
+  useEffect(() => {
+    if (!remoteCrew || (phase !== 'thinking' && phase !== 'waiting')) return
+    setTraceRefresh((value) => value + 1)
+    const timer = window.setInterval(() => setTraceRefresh((value) => value + 1), 800)
+    return () => window.clearInterval(timer)
+  }, [remoteCrew, phase, node.id])
 
   // VERSION PINS on the rail. Fetched here and passed to the timeline, which
   // otherwise received nothing — so a saved template's pin was cut in the main
@@ -165,6 +225,11 @@ function TerminalOverlay({
     return () => window.removeEventListener('cookrew:template-saved', bump)
   }, [])
   useEffect(() => {
+    if (!metadataReady) return
+    if (remoteCrew) {
+      setPins([])
+      return
+    }
     let alive = true
     void cookrew()
       .listPins(node.id)
@@ -175,11 +240,13 @@ function TerminalOverlay({
     return () => {
       alive = false
     }
-  }, [node.id, activity?.turnCount, pinRefresh])
+  }, [node.id, pinRefresh, remoteCrew, metadataReady])
 
-  const rows = mergeCheckpointRows(paging.records ?? [], traceIndex)
+  const rows = mergeCheckpointRows([], traceIndex)
+  const remoteTotal = remoteCrew ? (traceIndex[traceIndex.length - 1]?.index ?? 0) : 0
 
   const transcriptRef = useRef<TranscriptHandle>(null)
+  const translation = useCheckpointTranslation()
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
   const [activeBlock, setActiveBlock] = useState<ActiveBlock>({ index: null, frac: 1 })
   // A checkpoint whose trace block is still fetching for a jump — the rail/fan
@@ -193,12 +260,10 @@ function TerminalOverlay({
   const gotoCheckpoint = (index: number): void => {
     setSelectedIndex(index)
     setJumpToken((t) => t + 1)
-    paging.goto(index) // best-effort: syncs the record-backed header/fork
   }
   const goLive = (): void => {
     setSelectedIndex(null)
     setJumpToken((t) => t + 1)
-    paging.live()
   }
   // Scrolling the transcript reports the block in view (onActiveBlockChange),
   // which steps the active checkpoint; the click/scrub → selectedIndex direction
@@ -208,8 +273,6 @@ function TerminalOverlay({
     setActiveBlock(active)
     if (active.index === selectedIndex) return
     setSelectedIndex(active.index)
-    if (active.index === null) paging.live()
-    else paging.goto(active.index)
   }
   const selectedRow = selectedIndex !== null ? (rows.find((r) => r.index === selectedIndex) ?? null) : null
   const selectedTitle =
@@ -221,7 +284,16 @@ function TerminalOverlay({
 
   const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
 
+  // Remote cards still need the PTY lifecycle: on cold start, attach is what
+  // acquires/boots crew-line. Its bytes are transport only and are deliberately
+  // discarded; the rendered body comes from the caller-scoped trace capability.
   useEffect(() => {
+    if (!remoteCrew) return
+    return cookrew().ptyAttach(node.id, () => undefined)
+  }, [node.id, remoteCrew])
+
+  useEffect(() => {
+    if (remoteCrew) return
     const container = containerRef.current
     if (!container) return
 
@@ -332,10 +404,21 @@ function TerminalOverlay({
       // the way the DOM renderer lets them. Losing the context falls back
       // to the DOM renderer, which is degraded but functional.
       //
-      // NOT on a phone: iOS Safari's WebGL is memory-constrained and unstable —
-      // a live-streaming agent's xterm on a WebGL context is a prime OOM /
-      // context-loss crash (the Conductor zoom-in crash). The DOM renderer is
-      // lighter and does not touch the GPU, so mobile uses it.
+      // NOT on a phone. There it is not one context — it is one per PAN. On a
+      // phone stage every card clears the LOD coverage threshold at any normal
+      // zoom (a 640-wide terminal covers 0.82 of a 390pt stage at zoom 0.5,
+      // 1.00 at 0.75), so an overlay is always mounted, and panning off one
+      // card onto the next flips the single overlay winner: unmount, dispose a
+      // WebGL context, mount, create another. iOS Safari reclaims GPU-process
+      // memory lazily, so that churn walks the web process into a jetsam kill
+      // — Safari reports it as a repeating problem and then reproduces it on
+      // reload, because the restored viewport mounts an overlay again.
+      //
+      // The DOM renderer is the documented fallback above and costs CJK grid
+      // drift on phone terminals. That is a real loss and it is the smaller
+      // one: the alternative is a canvas that cannot be panned. Removing the
+      // drift properly means not churning overlays on pan at all (LOD
+      // hysteresis in zoom-lod.ts), which is a UX decision, not a one-liner.
       if (!isRemoteMode()) {
         try {
           const webgl = new WebglAddon()
@@ -347,13 +430,21 @@ function TerminalOverlay({
       }
 
       // Fit can report bogus dimensions before layout finishes — retry
-      // until the measured size settles.
+      // until the measured size settles. Each POST resizes the SHARED mirror
+      // PTY and forces a full TUI repaint broadcast to every viewer, so a
+      // retry that measured the same size must not re-send it (Pilot's
+      // phone-crash hunt, 2026-08-27 — the mount burst was 4–13 identical
+      // resizes, each reflowing the desktop viewer too).
+      let lastSent: { cols: number; rows: number } | null = null
       const fitUntilStable = (attempt = 0): void => {
         if (disposed) return
         try {
           if (container.offsetWidth > 40) {
             fit.fit()
-            cookrew().ptyResize(node.id, term.cols, term.rows)
+            if (lastSent?.cols !== term.cols || lastSent?.rows !== term.rows) {
+              lastSent = { cols: term.cols, rows: term.rows }
+              cookrew().ptyResize(node.id, term.cols, term.rows)
+            }
           }
         } catch {
           // ignore; retried below
@@ -380,9 +471,18 @@ function TerminalOverlay({
       // focused one and the pane's size is not its own — re-assert its fitted
       // size. Idle viewers adopt and stay quiet, so two viewers cannot fight.
       let reassertTimer: ReturnType<typeof setTimeout> | null = null
+      // THE MURDER WEAPON (black box, 2026-08-27): both kills ended at the
+      // redraw's final chunk — Claude Code's composer line, whose U+23F5 ⏵
+      // is an EMOJI-PRESENTATION candidate on Apple platforms. iOS 26.6's
+      // text engine dies resolving that fallback inside xterm's DOM-renderer
+      // grid. VS15 (U+FE0E, zero width) pins every media-control symbol to
+      // TEXT presentation — same glyph, same cell width, no emoji path.
+      // Remote only: desktop WebKit shapes these fine.
+      const detoxify = (raw: string): string =>
+        isRemoteMode() ? raw.replace(/[\u23E9-\u23FA]/g, (m) => `${m}\uFE0E`) : raw
       const detach = cookrew().ptyAttach(
         node.id,
-        (chunk) => term.write(chunk),
+        (chunk) => term.write(detoxify(chunk)),
         ({ cols, rows }) => {
           if (disposed || cols <= 0 || rows <= 0) return
           term.resize(cols, rows)
@@ -405,7 +505,17 @@ function TerminalOverlay({
         if (reassertTimer) clearTimeout(reassertTimer)
       })
       const inputSub = term.onData((input) => cookrew().ptyInput(node.id, input))
-      term.focus()
+      // Focus pops the software keyboard AND (with a small-font textarea)
+      // iOS's page auto-zoom — on a phone that fired the zoom/resize loop the
+      // moment the overlay opened. Desktop keeps instant focus; the phone
+      // focuses on the first deliberate tap of the pane.
+      if (!isRemoteMode()) {
+        term.focus()
+      } else {
+        const focusOnTap = (): void => term.focus()
+        container.addEventListener('pointerup', focusOnTap, { once: true })
+        cleanups.push(() => container.removeEventListener('pointerup', focusOnTap))
+      }
 
       // The attach replay is plain text and cannot reconstruct a TUI's
       // internal screen state — incremental redraws (ink/Claude Code) then
@@ -558,14 +668,12 @@ function TerminalOverlay({
       // dispose in reverse: detach stream/observers before killing the term
       for (const cleanup of cleanups.reverse()) cleanup()
     }
-  }, [node.id])
-
-  const phase = activity?.phase ?? 'idle'
+  }, [node.id, remoteCrew])
 
   // Live-tail-only clip (unified-scroll item 1): when the turn is at rest, keep
   // only Forge's tail boundary in the live layer; the trace owns older
   // scrollback. Null (no clip) while a turn runs or when no boundary was found.
-  const clipRows = tailClipRows(phase, activity?.tailLines ?? null)
+  const clipRows = remoteCrew ? null : tailClipRows(phase, activity?.tailLines ?? null)
 
   // Acknowledge-on-view: a mounted overlay means the user is LOOKING at this
   // terminal (desktop zoom / phone popout), so a completed turn is read the
@@ -620,8 +728,45 @@ function TerminalOverlay({
           {node.name}
         </span>
         {node.orch && <span className="cr-chip amber">ORCH</span>}
+        {remoteCrew && <span className="cr-chip">CREW</span>}
         <span className={`cr-chip${PHASE_CHIP[phase].cls}`}>{PHASE_CHIP[phase].label}</span>
         <div className="popout-actions">
+          <TranslateButton
+            active={translation.showing !== null}
+            working={translation.working}
+            language={translation.language}
+            onMouseDown={keepFocus}
+            onClear={translation.clear}
+            onPick={(code) => {
+              /**
+               * NO SELECTION MEANS THE NEWEST, not nothing.
+               *
+               * This used to be disabled whenever selectedIndex was null, which
+               * on a phone is how every card opens — you tap in, you are live,
+               * and the button is dead. The reason it was dead lived in a
+               * `title` tooltip, and touch devices do not show tooltips, so it
+               * was an inert control with an invisible explanation. Live is not
+               * "no checkpoint": it is the latest one, which is exactly the
+               * body someone opening a card wants read back to them.
+               */
+              const target = selectedIndex ?? rows[rows.length - 1]?.index ?? null
+              if (target === null) {
+                translation.note('This card has no checkpoint to translate yet.')
+                return
+              }
+              // The text comes from the view that already rendered it. A
+              // checkpoint scrolled far out of the loaded window has been
+              // evicted, and saying so beats a button that looks broken.
+              const body = transcriptRef.current?.blockText(target) ?? null
+              if (body === null) {
+                translation.note(
+                  `Checkpoint T${target} is not loaded yet — scroll to it and try again.`
+                )
+                return
+              }
+              translation.translate(target, body, code)
+            }}
+          />
           <button
             className="cr-btn sm icon"
             aria-label={
@@ -661,14 +806,8 @@ function TerminalOverlay({
       {(selectedIndex !== null || activity?.prompt) && (
         <div className="popout-ask" title={selectedRow?.record?.prompt ?? selectedTitle ?? activity?.prompt ?? ''}>
           <span className="popout-ask-label">
-            {/* Identity, not position: T-number matches the transcript + rail
-                labels. A record-backed pick adds its "of N"; a sub-cap trace-only
-                pick shows the identity alone (it has no record position). */}
-            {selectedIndex === null
-              ? 'YOU ❯'
-              : selectedRow?.record
-                ? `CHECKPOINT T${selectedIndex} · ${paging.position} of ${paging.count} ❯`
-                : `CHECKPOINT T${selectedIndex} ❯`}
+            {/* Identity, not array position: T-number matches transcript + rail. */}
+            {selectedIndex === null ? 'YOU ❯' : `CHECKPOINT T${selectedIndex} ❯`}
           </span>
           <span className="popout-ask-text">
             {selectedIndex !== null ? clip(selectedTitle, 300) : clip(activity?.prompt ?? '', 300)}
@@ -685,20 +824,87 @@ function TerminalOverlay({
           )}
         </div>
       )}
+      {/* SAY WHICH WORDS THESE ARE.
+          A translated body is still prose in a card that usually holds the
+          agent's own words, and the difference is invisible once you are
+          reading it. This strip is the only thing that distinguishes "the agent
+          said this" from "a 1.5b model's rendering of what the agent said" —
+          and when Sous fails it is where the reason goes, instead of a button
+          that silently does nothing. */}
+      {(translation.working || translation.error !== null || translation.showing !== null) && (
+        <div
+          className={`popout-translation${translation.error !== null ? ' failed' : ''}`}
+          role="status"
+        >
+          {translation.working ? (
+            <span>
+              Translating into {languageName(translation.language)}
+              {translation.host !== null ? ` via ${translation.host}` : ' on this machine'}
+              {/* The count is the whole point of the strip on a long body: a
+                  local model runs about 19s per 3000 characters, so without a
+                  number that moves there is no way to tell working from hung. */}
+              {translation.progress !== null &&
+                translation.progress.total > 1 &&
+                ` — ${translation.progress.done} of ${translation.progress.total}`}
+              …
+            </span>
+          ) : translation.error !== null ? (
+            <span>{translation.error}</span>
+          ) : (
+            <span>
+              Showing {languageName(translation.language)} — a translation of this checkpoint, not
+              the words on disk.
+              {translation.host !== null && ` Translated by ${translation.host}.`}
+            </span>
+          )}
+          {/* A way out of a long one. It abandons the RESULT rather than
+              aborting the request — the model keeps going and the reply is
+              discarded — but "stop waiting" is the thing the reader actually
+              wants, and having no exit at all is what makes a slow translation
+              feel like a broken one. */}
+          {translation.working && (
+            <button className="cr-btn sm" onMouseDown={keepFocus} onClick={translation.clear}>
+              STOP
+            </button>
+          )}
+          {!translation.working && translation.showing !== null && (
+            <button className="cr-btn sm" onMouseDown={keepFocus} onClick={translation.clear}>
+              SHOW ORIGINAL
+            </button>
+          )}
+          {!translation.working && translation.error !== null && translation.showing === null && (
+            <button className="cr-btn sm" onMouseDown={keepFocus} onClick={translation.clear}>
+              DISMISS
+            </button>
+          )}
+        </div>
+      )}
       <div className="popout-terminal-wrap">
         <TranscriptView
           ref={transcriptRef}
           terminalId={node.id}
-          total={activity?.turnCount ?? 0}
+          total={remoteCrew ? remoteTotal : (activity?.turnCount ?? 0)}
           titleMode={titleMode}
+          translation={translation.showing}
           identities={rows.map((r) => r.index)}
           selectedIndex={selectedIndex}
           jumpToken={jumpToken}
           clipRows={clipRows}
           onActiveBlockChange={onActiveBlockChange}
           onPending={setPendingIndex}
+          onTailLoaded={() => setTailReady(true)}
+          refreshToken={remoteCrew ? traceRefresh : 0}
+          liveClassName={remoteCrew ? 'served' : undefined}
         >
-          <div ref={containerRef} className="popout-terminal" />
+          {remoteCrew ? (
+            <ServedCrewLive
+              terminalId={node.id}
+              activity={activity}
+              hasTranscript={rows.length > 0}
+            />
+          ) : (
+            <div ref={containerRef} className="popout-terminal" />
+          )}
         </TranscriptView>
         <CheckpointTimeline
           terminalId={node.id}
@@ -709,6 +915,14 @@ function TerminalOverlay({
           activeIndex={activeBlock.index}
           loadingIndex={pendingIndex}
           markerFrac={activeBlock.frac}
+          waitingLabel={
+            remoteCrew &&
+            (phase === 'thinking' || phase === 'waiting') &&
+            rows.length === 0
+              ? 'LIVE · LINE WARMING'
+              : null
+          }
+          allowActions={!remoteCrew}
           onGoto={gotoCheckpoint}
           onLive={goLive}
           onScrub={(fraction) => transcriptRef.current?.scrubTo(fraction)}

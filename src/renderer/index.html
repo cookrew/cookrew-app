@@ -2,7 +2,12 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
+    <!-- maximum-scale=1: iOS auto-zooms the PAGE when focusing an input with a
+         small font — xterm's hidden textarea qualifies, so zooming into a
+         terminal bounced the whole page zoom in/out through a focus→zoom→
+         resize→fit→refocus loop until WebContent died (jetsam, 2026-08-27).
+         The canvas has its own zoom; page pinch is not the product surface. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, interactive-widget=resizes-content" />
     <title>Cookrew</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

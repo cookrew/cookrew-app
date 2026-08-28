@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Acceptance checklist — the two doors, judged as a person</title>
+<style>
+:root{color-scheme:light dark;
+ --bg:#fbfaf8;--fg:#1a1a1a;--dim:#6b6b6b;--line:#e4e1dc;--panel:#fff;
+ --clear:#1b7f4b;--clear-bg:#e8f5ed;--confusing:#9a6700;--confusing-bg:#fdf6e3;
+ --wall:#b3261e;--wall-bg:#fdecea;--broken:#6b21a8;--broken-bg:#f4ecfd;
+ --armed:#1f6feb;--armed-bg:#e7f0fe;--accent:#1f6feb;}
+@media (prefers-color-scheme:dark){:root{
+ --bg:#17171a;--fg:#ececec;--dim:#9a9a9a;--line:#2e2e33;--panel:#1e1e22;
+ --clear:#5fd39b;--clear-bg:#12301f;--confusing:#e3b341;--confusing-bg:#332905;
+ --wall:#ff7b72;--wall-bg:#3a1512;--broken:#d2a8ff;--broken-bg:#2a1a3d;
+ --armed:#58a6ff;--armed-bg:#10243e;--accent:#58a6ff;}}
+:root[data-theme="dark"]{--bg:#17171a;--fg:#ececec;--dim:#9a9a9a;--line:#2e2e33;--panel:#1e1e22;
+ --clear:#5fd39b;--clear-bg:#12301f;--confusing:#e3b341;--confusing-bg:#332905;
+ --wall:#ff7b72;--wall-bg:#3a1512;--broken:#d2a8ff;--broken-bg:#2a1a3d;--armed:#58a6ff;--armed-bg:#10243e;--accent:#58a6ff;}
+:root[data-theme="light"]{--bg:#fbfaf8;--fg:#1a1a1a;--dim:#6b6b6b;--line:#e4e1dc;--panel:#fff;
+ --clear:#1b7f4b;--clear-bg:#e8f5ed;--confusing:#9a6700;--confusing-bg:#fdf6e3;
+ --wall:#b3261e;--wall-bg:#fdecea;--broken:#6b21a8;--broken-bg:#f4ecfd;--armed:#1f6feb;--armed-bg:#e7f0fe;--accent:#1f6feb;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Inter,system-ui,sans-serif}
+main{max-width:1140px;margin:0 auto;padding:2.5rem 1.25rem 5rem}
+h1{font-size:1.95rem;line-height:1.2;margin:0 0 .35rem}
+h2{font-size:1.28rem;margin:2.8rem 0 .5rem;padding-bottom:.4rem;border-bottom:2px solid var(--line)}
+h3{font-size:1.02rem;margin:1.8rem 0 .4rem}
+.sub{color:var(--dim);margin:0 0 1.4rem}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86em;background:color-mix(in srgb,var(--fg) 8%,transparent);padding:.1em .35em;border-radius:4px}
+pre{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--dim);border-radius:6px;padding:.8rem 1rem;overflow-x:auto;font-size:.83rem;line-height:1.5}
+pre code{background:none;padding:0}
+.v{display:inline-block;font-size:.68rem;font-weight:700;letter-spacing:.06em;padding:.18em .5em;border-radius:4px;text-transform:uppercase;white-space:nowrap}
+.v-clear{color:var(--clear);background:var(--clear-bg)}
+.v-confusing{color:var(--confusing);background:var(--confusing-bg)}
+.v-wall{color:var(--wall);background:var(--wall-bg)}
+.v-broken{color:var(--broken);background:var(--broken-bg)}
+.v-armed{color:var(--armed);background:var(--armed-bg)}
+table{width:100%;border-collapse:collapse;margin:1rem 0;font-size:.875rem}
+th,td{text-align:left;padding:.5rem .55rem;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:600}
+tbody tr:hover{background:color-mix(in srgb,var(--fg) 3%,transparent)}
+td.id{font-family:ui-monospace,monospace;font-size:.8rem;white-space:nowrap;font-weight:700}
+.step{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:.9rem 1.05rem;margin:.7rem 0}
+.step-h{display:flex;gap:.55rem;align-items:baseline;flex-wrap:wrap;margin-bottom:.3rem}
+.step-h .n{font-family:ui-monospace,monospace;font-size:.76rem;color:var(--dim);font-weight:700}
+.step-h .t{font-weight:650;flex:1;min-width:11rem}
+.lbl{font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);font-weight:600;margin:.6rem 0 .15rem}
+.callout{border-left:3px solid var(--accent);background:color-mix(in srgb,var(--accent) 7%,transparent);padding:.75rem .95rem;border-radius:0 6px 6px 0;margin:1.1rem 0;font-size:.92rem}
+.callout.warn{border-left-color:var(--confusing);background:var(--confusing-bg)}
+footer{margin-top:3.5rem;padding-top:1.1rem;border-top:1px solid var(--line);color:var(--dim);font-size:.84rem}
+#tt{position:fixed;top:1rem;right:1rem;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:.32rem .65rem;cursor:pointer;font-size:.78rem}
+@media(max-width:640px){main{padding:1.5rem 1rem 3rem}h1{font-size:1.45rem}#tt{display:none}}
+</style>
+</head>
+<body>
+<button id="tt" onclick="const r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark'">◐ theme</button>
+<main>
+
+<h1>Acceptance checklist — both sides of the contract</h1>
+<p class="sub">Two replay scripts: <code>e2e-demo.html</code> (buyer — chip → sheet → pay → canvas → update) and <code>export-ux-demo.html</code> (author — flip → price → sign → share → enrol → revoke); scope from <code>connected-product.html</code> §02–05 · same vocabulary as
+<code>user-journey-audit.html</code>, so before/after is one diff · harness armed 2026-08-23 · Magpie</p>
+
+<div class="callout">
+  <strong>The contract.</strong> The same auditor who wrote the give-up list judges whether it is gone, with real
+  input, against a harness that is already armed. Verdicts use the audit's four words —
+  <span class="v v-clear">Clear</span> <span class="v v-confusing">Confusing</span>
+  <span class="v v-wall">Wall</span> <span class="v v-broken">Broken</span> — plus
+  <span class="v v-armed">Armed</span> for a fixture that is ready and waiting on a surface.
+</div>
+
+<h2>Harness status — armed now</h2>
+<pre><code>node scratchpad/acceptance-harness.mjs --arm | --status | --down
+
+ARMED  registry       localhost:8860 · payments served · custody: none — funds move buyer to author
+ARMED  freePublic     "Deep Research" v2 — the ungated control
+ARMED  freeGated      "Pro Toolkit" v1 — the 401 leg
+ARMED  priced         "Research Crew" v4 · Scout · Digger · Librarian · Editor · $2.50 one-time
+                      published via POST /v1/presets with a real countersignature + payout
+ARMED  update         v5 on the SAME lineage — the V5↑ step
+ARMED  updateFree     a v4 buyer fetches v5 with NO payment and gets 200 — "update free,
+                      you already own this" is true on the wire TODAY
+ARMED  author         publish-scoped credential
+ARMED  buyer          download-scoped credential — a genuinely separate passkey
+ARMED  terms          402 quotes 2.50 USDC on base
+ARMED  wallet         pays the 402; re-fetch with NO header is 200 (the receipt holds)
+ARMED  failureVoices  invalid (retryable false) AND unverifiable (retryable true), on demand
+ARMED  callerKey      caller key + a DECOY key, so B-1's discrimination control is constructible
+ARMED  callSurface    merged into dev at 8ac2698
+MISSING fingerprint   no six-word derivation exists in the product
+MISSING walletSheet   no wallet code anywhere in src, on any ref (gap #1)
+MISSING remoteCard    no surface fronts a granted line (gap #6)
+
+ARMED  payoutPair     correct + MISTYPED EIP-55 pair (spec test vector, one letter's case flipped)
+                      BASELINE: the registry ACCEPTED the mistyped address today — format-only
+ARMED  revokeMidCall  call-run.ts holds an inFlight lease for the whole call, so revoke-during
+                      -a-call is constructible
+
+ARMED 16 · MISSING 3 · BLOCKED 0</code></pre>
+
+<div class="callout warn">
+  <strong>Two fixtures are deliberately not faked.</strong> The six-word fingerprint and the wallet sheet do not
+  exist. The harness supplies the <em>inputs</em> they will consume and names them as missing — it does not invent a
+  wordlist or a sheet. A fixture for a behaviour the product does not have is theatre, and it would let the
+  acceptance run pass against nothing. The wallet fixture pays the 402 so the <em>rest</em> of Door A is judgeable
+  today; <strong>A-3 is scored against the rendered sheet, never against the fixture.</strong>
+</div>
+
+<h3>What has landed since the audit — re-measured, not assumed</h3>
+<p><code>feat/gate-per-session</code> merged at <code>8ac2698</code>. The call route is mounted in
+<code>mobile-server.ts</code>, and the renderer now carries <code>GrantPanel.tsx</code>, <code>EnrolSheet.tsx</code>
+and <code>grant-copy.ts</code>. Door B moved from "entirely absent" to "backend merged, surfaces arriving". My own
+harness reported this before I did, which is the argument for verifying fixtures rather than declaring them.</p>
+
+<h2>The replay — six steps, in the product's own chrome</h2>
+<p><code>e2e-demo.html</code> is the contract, and it is more specific than the storyboards: it walks
+<strong>chip → sheet → pay → canvas → update</strong> in real chrome. This is the script I execute with real input.
+The fixture now matches it exactly — <em>Research Crew</em> at <strong>v4</strong> with Scout · Digger · Librarian ·
+Editor, and a <strong>v5 on the same lineage</strong> for step 6.</p>
+
+<div class="callout">
+  <strong>Give-up #4 now has two death certificates, and I check both.</strong> The demo moves the price onto the
+  <code>.cr-chip-price</code> tag, so the cost is visible <em>in the dock, before the first click</em> — earlier than
+  the link. The audit found it missing on the link; it must now be present in <strong>both</strong> places, and the
+  two must agree. A chip that says <code>$2.50</code> over a link that says nothing is still a buyer learning the
+  price late.
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">D-1</span><span class="t">THE CHIP — cost before the first click</span><span class="v v-armed">Fixture ready</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li><strong>One slot, one truth.</strong> An unowned priced chip shows <code>$2.50</code>; an owned chip shows
+    <code>V4</code>. The slot <em>flips</em> — an owned chip must never show a price, because for an owner the answer
+    to "what would this cost me" is nothing.</li>
+    <li>A free chip shows <strong>no price tag at all</strong>, not <code>$0</code>.</li>
+    <li>Amber-deep, <strong>never rose</strong> — computed style, not class name. It is an offer, not a warning; the
+    audit's lesson from B1 is that a colour saying "danger" over a price is copy, and wrong copy.</li>
+    <li>Tapping a gated chip <strong>opens the sheet</strong> and is never a dead end — and places no node. Control:
+    <code>/api/state</code> node count unchanged.</li>
+    <li>Marketplace is the <strong>third</strong> chip family, after harness presets and roles.</li>
+  </ul>
+  <div class="lbl">Kills</div><p>Give-up #4 (at the dock) and #1's downstream half.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">D-2</span><span class="t">THE SHEET — "First: you're you"</span><span class="v v-wall">Wall until the Gate Sheet lands</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>One sheet mirrors <code>authorize()</code> (R28): steps for identity → entitlement → price.</li>
+    <li>Copy: <em>"passkey · this device · never a password"</em> and <em>"Opening this sheet installed nothing. You
+    decide, at every step."</em></li>
+    <li>Both exits present — <strong>NOT NOW</strong> as well as <strong>USE PASSKEY</strong>. A sheet with only a
+    forward door is a trap.</li>
+    <li>Audit baseline: the 401 was <code>{}</code> and a 43-char header blob. Ceremony measured at 147 ms, so the
+    sheet has no latency excuse.</li>
+  </ul>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">D-3</span><span class="t">PAY — the cleared step collapses</span><span class="v v-wall">Wall until the wallet lands</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>The cleared 401 <strong>collapses to one line</strong> (<em>"✓ You're you."</em>); skipped steps go dashed.
+    Assert the collapse, not just the presence — an accumulating sheet is a different design.</li>
+    <li><em>"This crew costs $2.50, once. Pay and it's yours — reinstall and update free."</em></li>
+    <li>price · chain (<strong>Base</strong>, named separately) · <strong>paid to @drej AUTHOR</strong>.</li>
+    <li><em>"Cookrew never holds your money and takes nothing."</em></li>
+    <li>Wallets render as <strong>chips in the dock's own grammar</strong> (EIP-6963 discovery), not a bespoke list.</li>
+    <li>The two failure voices must not share a tone — <code>invalid</code> accuses, <code>unverifiable</code>
+    apologises. Both constructible from the armed harness on demand.</li>
+  </ul>
+  <div class="lbl">Kills</div><p>Give-up #5.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">D-4</span><span class="t">LANDING — the receipt is the pin</span><span class="v v-clear">Backend already true</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li><em>"their originals untouched — your copy runs against a fork"</em> — the §10 invariant, finally said out loud.</li>
+    <li><em>"V4 Pinned to your rail — this is your receipt"</em>, and the pin is really on the rail.</li>
+    <li><em>"Reinstall or update any time. You won't be asked to pay again."</em> — <strong>verified true on the wire
+    today</strong> by the armed harness.</li>
+  </ul>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">D-5</span><span class="t">THE CANVAS — normal terminals, plus one violet card</span><span class="v v-armed">Fixture ready</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>Four cards land <strong>named and connected</strong> — Scout, Digger, Librarian, Editor. The fixture ships
+    cables precisely so a cable-less paste is detectable.</li>
+    <li>They are <strong>ordinary harness terminals</strong> — no new node kind, and they survive an uninstall.</li>
+    <li><strong>One</strong> paste operation, not N.</li>
+    <li>The V4 pin sits on the rail like any checkpoint, and <strong>F6 alignment still holds with it present</strong>.</li>
+    <li>Door B's card is the same card in violet, with the warm-up stated (<em>"warms ~30s"</em>) rather than a
+    spinner — and the first message forks and cuts <strong>one</strong> pin.</li>
+  </ul>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">D-6</span><span class="t">THE UPDATE — offered, never pushed</span><span class="v v-armed">Backend verified</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>The chip shows <code>V5↑</code> — and the update tag stays <strong>loud on locked chips</strong>. A new
+    version behind a gate is the one thing a buyer must act on.</li>
+    <li><strong>A background HEAD check raises no sheet</strong> (R24). Already gated and mutation-killed as C21 —
+    12 HEADs mint 0 quotes — so this asserts the <em>surface</em> honours what the protocol already guarantees.</li>
+    <li><em>"↑ V5 is out. Update free — you already own this."</em> — <strong>the harness verifies this is true</strong>:
+    a v4 buyer fetches v5 with no payment and gets 200.</li>
+    <li><strong>No 402 step lights.</strong> The gate remembers; the sheet must show that it remembered.</li>
+    <li><em>"your V4 stays pinned; updating adds V5 beside it, never over it"</em> — assert V4 is still on the rail
+    after updating. Versions accumulate as pins, so going back is a tap.</li>
+    <li>Both exits: <strong>STAY ON V4</strong> as well as <strong>UPDATE TO V5</strong>.</li>
+  </ul>
+</div>
+
+<h2>The author's walk — six steps (<code>export-ux-demo.html</code>)</h2>
+<p>The mirror of the buyer's demo, and the answer to give-up #1. The rule carrying every screen: <em>the author risks
+nothing by flipping the switch</em> — exporting shares no conversation, publishing shares a scrubbed copy, granting
+shares a revocable line.</p>
+
+<div class="callout warn">
+  <strong>Precondition, and it is not optional. <code>out/renderer</code> is six days stale.</strong> The build the
+  remote surface serves is dated Aug 18; source is Aug 24, and the built bundle contains <strong>none</strong> of the
+  grant strings — <code>WHO CAN CALL</code>, <code>EXPORTABLE</code>, <code>mkt.grant</code> and
+  <code>I COMPARED THESE</code> all return zero hits. So "steps 1 and 5 are merged and tappable" is true of the
+  <em>source</em> and false of the <em>running app</em>. Replaying against it today would score two correct,
+  landed surfaces as <span class="v v-wall">Wall</span> — a wrong finding about working code. <strong>The replay
+  runs after a fresh build, and the harness asserts bundle freshness before it measures anything.</strong>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">E-1</span><span class="t">THE TOGGLE — exportable, on the agent row</span><span class="v v-armed">Merged in source</span></div>
+  <ul>
+    <li>It is an <strong>entry point, not a settings checkbox</strong>: flipping it reveals the two doors — SELL A
+    COPY and GRANT A LINE. Assert the doors appear on flip; a toggle that only records state is a different design.</li>
+    <li>The safety sentence sits <strong>beside the switch</strong>, not in a help link: <em>"Exporting never shares
+    your conversations. Calls and copies run against a fork — your original session is never touched."</em> That fear
+    is the #1 reason not to flip it, so its placement is the assertion.</li>
+    <li>Found without being told it exists — the audit's scan found 0 of 40 controls mentioning export.</li>
+  </ul>
+  <div class="lbl">Kills</div><p>Give-up #1.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">E-2</span><span class="t">PUBLISH — and the mistyped payout</span><span class="v v-wall">Wall until the sheet lands</span></div>
+  <div class="lbl">The headline assertion</div>
+  <p>Type the <strong>deliberately mistyped</strong> payout — an EIP-55 test vector with one letter's case flipped,
+  still 40 hex digits, still passing any format check. The sheet must refuse it:</p>
+  <ul>
+    <li><em>"This address fails its checksum — one character is wrong. Money sent here is gone."</em></li>
+    <li>The button reads <strong>PUBLISH — FIX PAYOUT FIRST</strong>, not a mute greyed-out control. A disabled button
+    with no reason is the same dead end as a 403 that says only <code>scope</code>.</li>
+    <li><strong>Positive control, same pass:</strong> the correctly checksummed address publishes. A sheet that
+    refuses everything would score perfectly on the refusal alone.</li>
+    <li>The refusal happens <strong>here, to the person who can fix it</strong> — never at the buyer's 402.</li>
+  </ul>
+  <div class="lbl">Baseline, measured today</div>
+  <p>The registry <strong>accepted</strong> a publish carrying the mistyped address. Format-only validation, exactly
+  as the audit flagged — so this step currently has nothing to beat but itself.</p>
+  <ul>
+    <li>Registry host <strong>configured, never inferred</strong> — the other half of give-up #2.</li>
+    <li>Price empty ⇒ publishes free; chain named separately; <em>"Cookrew never holds the money and takes nothing."</em></li>
+    <li>R27: payout is keyed to the publishing identity, not the rotating key.</li>
+  </ul>
+  <div class="lbl">Kills</div><p>Give-up #2; closes the checksum gap.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">E-3</span><span class="t">REVIEW BEFORE SIGNING</span><span class="v v-armed">Scrub engine landed</span></div>
+  <ul>
+    <li>TEAM · PATHS · CMD · NOTES · SCAN · SIG, with commands shown <strong>verbatim</strong> — the M1 review lesson:
+    a sheet that filtered by preset hid every non-Shell command.</li>
+    <li><strong>The author's list and the buyer's install list are the SAME list.</strong> Assert them equal, not
+    merely similar — one truth read from both sides, or the author is signing something the buyer does not see.</li>
+    <li><em>"Your conversations are not in this list because they are never in the package."</em></li>
+    <li>A dirty secret scan blocks <strong>here</strong>, loudly, on the author's side of the wire.</li>
+  </ul>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">E-4</span><span class="t">PUBLISHED — one link, and your own chip</span><span class="v v-armed">Fixture ready</span></div>
+  <ul>
+    <li>The link renders price · agent count · author before anything is touched — <strong>this is give-up #4's third
+    checkpoint</strong>, and it must agree with the chip and the buyer's page.</li>
+    <li>The author's own dock chip shows the violet V-tag — <em>the same mark buyers see</em>. Assert they match.</li>
+    <li>COPY LINK actually copies.</li>
+  </ul>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">E-5</span><span class="t">WHO CAN CALL — enrol, and revoke mid-call</span><span class="v v-armed">Merged in source</span></div>
+  <ul>
+    <li>Six words read aloud: <em>"Same six words on both screens = same key. Different words = STOP."</em>
+    <strong>Discrimination control required</strong> — the decoy key must render different words, or a constant passes.</li>
+    <li>The matrix is per-caller × per-agent with an explicit <code>—</code> for "may not reach". Default is none.</li>
+    <li><strong>REVOKE MID-CALL, the step this whole fixture exists for.</strong> Start a call, revoke while it is
+    running, assert it <em>stops</em> — <code>call-run.ts</code> holds an inFlight lease for the whole call, so this
+    is constructible. <em>"Revoke stops calls already running. Their conversations were forks — your originals were
+    never touched."</em></li>
+    <li><strong>The direction rule.</strong> On failure the string must lead with the frightening half:
+    <em>"They still have access — revoke didn't complete. Retry now. Until it succeeds, ana@studio can still call
+    Tinker."</em> It names <em>who</em> and <em>what they can still reach</em>. Construct both directions and assert
+    the strings differ — structurally the same defect as collapsing <code>invalid</code> into
+    <code>unverifiable</code>, and gated the same way.</li>
+  </ul>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">E-6</span><span class="t">CUT V2 — and read what your agent said</span><span class="v v-armed">Backend verified</span></div>
+  <ul>
+    <li>The author's chip shows <strong>both</strong> tags — version and price — because the author sees what buyers
+    see.</li>
+    <li>CUT V2 re-runs the same review sheet; buyers' chips light <code>V2↑</code> and <strong>nobody is
+    interrupted</strong> (R24, already gated as C21).</li>
+    <li>Every remote conversation is a pin on the <strong>agent's</strong> rail, and the author can open any fork and
+    read what their agent said on their behalf. This is the author-side proof of R4's one-pin-per-conversation.</li>
+  </ul>
+</div>
+
+<h2>The author — one sheet (3 steps)</h2>
+
+<div class="step">
+  <div class="step-h"><span class="n">AU-1</span><span class="t">EXPORTABLE toggle on the agent row</span><span class="v v-armed">Fixture ready</span></div>
+  <div class="lbl">Pass looks like</div>
+  <p>A control on the agent row, findable without being told it exists, that carries the export-safety sentence.</p>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>The word <em>exportable</em> (or its shipped equivalent) appears in <strong>product chrome</strong>, not only
+    in a rendered design doc. <em>The audit's scan found 0 of 40 controls mentioning it — this is give-up reason #1.</em></li>
+    <li>The sentence is present at the toggle: <em>"Exporting never shares your conversations. Calls and copies run
+    against a fork — your original session is never touched."</em></li>
+    <li>Toggling off an agent that has live grants says what happens to them.</li>
+  </ul>
+  <div class="lbl">Kills</div><p>Give-up #1 (author has no entry point).</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">AU-2</span><span class="t">PUBLISH sheet — price, chain, payout</span><span class="v v-armed">Fixture ready</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>Publishing is reachable as <strong>one owner action</strong>. Baseline to beat: ~140 hand-written lines, two
+    cryptographic ceremonies, two POSTs.</li>
+    <li>The payout address is <strong>checksum-validated at publish</strong>. Today it is format-only — a mistyped but
+    well-formed address passes and the money is unrecoverable. Control: a valid-format address with one character
+    changed must be refused, and a correct one accepted <em>in the same pass</em>.</li>
+    <li>Chain is named separately from amount, and the sheet says the registry never holds the money.</li>
+    <li>Registry host is <strong>configured, never inferred</strong> — <code>COOKREW_REGISTRY_HOST</code> is empty by
+    default today, which is why the shared link is currently a dead click (give-up #2).</li>
+  </ul>
+  <div class="lbl">Kills</div><p>Give-up #1 and #2; closes the checksum gap from the audit.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">AU-3</span><span class="t">GRANT panel — WHO CAN CALL</span><span class="v v-confusing">Partly landed</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>Enrol by six-word fingerprint. <strong>Discrimination control required:</strong> the same key renders the same
+    six words on both sides <em>and a different key renders different words</em> — without the second half a constant
+    passes.</li>
+    <li>Paste refusals are specific, not "invalid": <code>mkt.grant.paste.notakey</code>,
+    <code>…wrongtype</code> (names the algorithm), <code>…malformed</code>, <code>…private</code>.</li>
+    <li>A pasted <strong>private</strong> key clears the field — the only refusal that does. Leaving it on screen is
+    the harm continuing after we have named it.</li>
+    <li>Revoke says honestly when it did not complete.</li>
+  </ul>
+</div>
+
+<h2>Door A — pay, own a copy (5 steps)</h2>
+
+<div class="step">
+  <div class="step-h"><span class="n">A-1</span><span class="t">The link is a page</span><span class="v v-confusing">Was: price missing</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>The crew is visible — <strong>4 agents by role</strong>, not just a name. Fixture: Scout · Analyst · Critic · Runner.</li>
+    <li><strong>The price is on the page.</strong> Audit baseline: a $2.50 preset's link never mentioned money — the
+    only tokens were the substring inside the name "Priced Toolkit". This is give-up #4.</li>
+    <li>§05 sentence: <em>"$2.50 · one-time · paid directly to @author. Cookrew never holds your money and takes nothing."</em></li>
+    <li>Keep the trust line that already works: <em>"Opening a link installs nothing… and you decide."</em></li>
+  </ul>
+  <div class="lbl">Kills</div><p>Give-up #4.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">A-2</span><span class="t">Tap Install → intercept → review sheet</span><span class="v v-wall">Was: dead click</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>The app <strong>intercepts</strong> the link. Today it recognises no host, so the page's only call to action
+    does nothing (give-up #2).</li>
+    <li>Review sheet shows scrub report, signature and author identity <em>before</em> anything is placed.</li>
+    <li>A page cannot install by being navigated to — only ask. Control: navigate a browser card to the link and
+    assert the canvas node count is <strong>unchanged</strong>.</li>
+  </ul>
+  <div class="lbl">Kills</div><p>Give-up #2.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">A-3</span><span class="t">The price moment — a sheet, not a 402</span><span class="v v-wall">Wall until the sheet lands</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>Words, not JSON. Audit baseline: <code>{"terms":{…,"expiry":1787493905811}}</code> — a raw epoch integer and
+    no sentence anywhere (give-up #5).</li>
+    <li>Says <strong>what it buys</strong>: v1 <em>and every later version</em>. True today, and invisible.</li>
+    <li>Says <strong>where the money goes</strong> and that Cookrew takes nothing.</li>
+    <li>Expiry rendered as a duration a human reads, never an epoch.</li>
+    <li><strong>The two failure voices must not share a tone.</strong> <code>invalid</code> = <em>"Check your wallet
+    — this payment didn't verify."</em> <code>unverifiable</code> = <em>"Our checker is unreachable. Your payment may
+    be fine — retry in a moment."</em> One is an accusation, one is an apology. My C19 proved these distinct as
+    <em>protocol</em>; this asks whether they are distinct as <em>voice</em>. Both are constructible on demand from
+    the armed harness.</li>
+  </ul>
+  <div class="lbl">Kills</div><p>Give-up #5.</p>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">A-4</span><span class="t">Pay once — and be told the receipt is yours</span><span class="v v-clear">Backend already true</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>Re-fetch, reinstall and reboot never ask again — <strong>already true and already proven</strong> (C20, and
+    re-verified live in the audit).</li>
+    <li>§05 sentence after paying: <em>"Yours now. Reinstall or update any time — you won't be asked to pay again."</em></li>
+  </ul>
+  <div class="callout">This is the one step whose <em>machine</em> half is finished. The whole of A-4 is making a
+  true thing visible — the audit's single strongest "good, and invisible" finding.</div>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">A-5</span><span class="t">The crew lands on your canvas</span><span class="v v-armed">Fixture ready</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>Chip appears in the dock as a <strong>third family, after</strong> harness presets and roles — order is the
+    assertion; a group rendered first reorders muscle memory for everyone.</li>
+    <li>Paste places the team <strong>with its connections</strong>. The fixture publishes 3 cables precisely so a
+    cable-less paste is detectable; a crew without its cables is not the crew that was published.</li>
+    <li><strong>One</strong> paste operation, not N — the O(n²)/N-toast regression must not return.</li>
+    <li>A version pin appears on the rail, and F6 alignment still holds with it present.</li>
+    <li>The placed agents are ordinary terminal cards — no new node kind.</li>
+  </ul>
+</div>
+
+<h2>Door B — authority, a live line (3 steps)</h2>
+
+<div class="step">
+  <div class="step-h"><span class="n">B-1</span><span class="t">Enrolment, out of band</span><span class="v v-confusing">Partly landed</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>Both humans see the <strong>same six words</strong> for the same key — <em>and different words for a
+    different key</em>. Decoy key armed for exactly this.</li>
+    <li>The confirm control collects a <strong>statement, not a reflex</strong>: "I COMPARED THESE · ENROL", not
+    "Confirm".</li>
+    <li>The owner ticks <em>which agents</em> this caller may reach; the default is none.</li>
+    <li>An empty state that teaches: <code>mkt.grant.empty.noexport</code> — <em>"Mark one in the agents list
+    first."</em></li>
+  </ul>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">B-2</span><span class="t">The remote teammate card</span><span class="v v-wall">Wall until the card lands</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>It looks like <strong>a normal terminal card</strong>; the gating is backend-only.</li>
+    <li>First message forks the owner's agent and cuts <strong>exactly one</strong> pin.</li>
+    <li><strong>One pin per caller-conversation, never per request</strong> — R4, already proven at the seam and
+    mutation-killed. Acceptance re-asserts it end to end: three messages on one conversation cut one pin, and an
+    unnamed conversation is one per caller.</li>
+    <li>The owner's original transcript is byte-identical afterwards.</li>
+  </ul>
+</div>
+
+<div class="step">
+  <div class="step-h"><span class="n">B-3</span><span class="t">The owner stays in control</span><span class="v v-confusing">Partly landed</span></div>
+  <div class="lbl">Assertions</div>
+  <ul>
+    <li>WHO CAN CALL lists live grants.</li>
+    <li>Revoke stops a call <strong>mid-sentence</strong>, and says so: <em>"Any call in progress stops."</em></li>
+    <li><strong>The direction rule — the highest-value copy assertion on this surface.</strong> On failure the
+    message must branch on whether the staged change <em>added</em> or <em>removed</em> access. "Access is unchanged"
+    is reassurance when access was being added, and buries the only fact that matters when it was being taken away:
+    <em>"They still have access — revoke didn't complete."</em> Same event, two voices. This is structurally the same
+    defect as collapsing <code>invalid</code> into <code>unverifiable</code>, and it must be gated the same way:
+    construct both directions and assert the strings differ.</li>
+  </ul>
+</div>
+
+<h2>Scoring — how the before/after reads as one diff</h2>
+<table>
+  <thead><tr><th>Give-up reason (audit)</th><th>Killed by</th><th>Dies when</th></tr></thead>
+  <tbody>
+    <tr><td class="id">#1</td><td><strong>E-1</strong>, E-2, D-1</td><td>a person finds publishing without being told it exists</td></tr>
+    <tr><td class="id">#2</td><td>E-2, A-2</td><td>the shared link's own instruction works on a default install</td></tr>
+    <tr><td class="id">#3</td><td>—</td><td>Fresco's lane; re-measured here as p50/p95 on the same 1,184-byte call</td></tr>
+    <tr><td class="id">#4</td><td><strong>D-1</strong> + A-1 + E-4</td><td>the price agrees in all three places it now appears — the buyer's chip before the first click, the link a stranger opens, and the author's own chip</td></tr>
+    <tr><td class="id">#5</td><td>D-3, D-4, D-6, A-3, B-3</td><td>no human decision point renders raw JSON</td></tr>
+  </tbody>
+</table>
+<p>Perf is re-measured with the audit's exact instrument — 20 samples of <code>/api/workspaces</code>, an identical
+1,184-byte response, reported as percentiles. Baseline to beat: <strong>p50 1403 ms · p95 3357 ms · 36× spread</strong>.
+Fresco's target is &lt;10 ms on the reconcile tick; the acceptance number is what a person waits, not what the
+profiler says.</p>
+
+<h2>Rules this run inherits</h2>
+<ul>
+  <li><strong>A wall is a finding, not a failure of mine.</strong> Missing surfaces are recorded exactly as a user
+  meets them — a dead click, a raw body, a silent nothing.</li>
+  <li><strong>Verify the surface before judging it.</strong> Two traps already cost a wrong reading: a "Not paired"
+  modal that eats every click and is <em>not</em> <code>.cr-reauth</code>, and a remote bundle silently days behind
+  source. Both are asserted before any measurement, and a screenshot is taken — not just a DOM query.</li>
+  <li><strong>Scope every vocabulary scan to product chrome.</strong> This canvas renders the specs that define the
+  feature; a document-wide grep finds the document, not the product.</li>
+  <li><strong>Positive controls everywhere.</strong> Every "X is refused" runs beside a "Y is accepted" in the same
+  pass, or a surface broken into refusing everything scores perfectly.</li>
+  <li><strong>My own wrong readings go into the report</strong>, not into a quiet fix.</li>
+</ul>
+
+<footer>
+  <p><strong>Harness.</strong> <code>scratchpad/acceptance-harness.mjs</code> — registry on :8860 from merged dev,
+  free + priced presets published through the real routes, two independent passkey identities, a wallet fixture that
+  pays and proves the receipt holds, both §05 failure voices constructible on demand, and a caller key plus decoy for
+  the fingerprint's discrimination control. State in <code>/tmp/acceptance-state.json</code>; the acceptance run reads
+  it instead of re-arming.</p>
+  <p>Sources: <code>connected-product.html</code> §02–05 · <code>user-journey-audit.html</code> ·
+  <code>grant-copy.ts</code> (Velvet's ids, verbatim) · rulings R3, R4, R14, R24, R26 · gates C16–C21, R-G1–R-G5, R4.</p>
+  <p>Magpie · QA lane · 2026-08-23 · <code>docs/design/acceptance-checklist.html</code></p>
+</footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The wallet sheet — connect, terms, pay, receipt</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>💳</text></svg>">
+<style>
+  :root { --bg:#f7f4ec; --panel:#fffdf7; --panel-2:#f1ece0; --ink:#1b1a17; --ink-soft:#45413a;
+    --muted:#7a736a; --line:#ddd5c6; --line-hard:#b9ae9a; --amber:#b8770a; --amber-soft:#fbf0d8;
+    --green:#2f7d4f; --red:#a8362b; --blue:#2b5fa8; --violet:#6b3fa0; --code-bg:#efeade;
+    --shadow:0 1px 0 var(--line), 0 8px 24px rgba(30,25,15,.06); }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14130f; --panel:#1c1a16; --panel-2:#242019;
+    --ink:#ece6d8; --ink-soft:#c2bbab; --muted:#8d8577; --line:#332f27; --line-hard:#4c463a;
+    --amber:#e9b949; --amber-soft:#2a2213; --green:#6fca92; --red:#e8867a; --blue:#7fadf0;
+    --violet:#b795e8; --code-bg:#221f19; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(0,0,0,.35); } }
+  :root[data-theme="dark"] { --bg:#14130f; --panel:#1c1a16; --panel-2:#242019; --ink:#ece6d8;
+    --ink-soft:#c2bbab; --muted:#8d8577; --line:#332f27; --line-hard:#4c463a; --amber:#e9b949;
+    --amber-soft:#2a2213; --green:#6fca92; --red:#e8867a; --blue:#7fadf0; --violet:#b795e8;
+    --code-bg:#221f19; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(0,0,0,.35); }
+  :root[data-theme="light"] { --bg:#f7f4ec; --panel:#fffdf7; --panel-2:#f1ece0; --ink:#1b1a17;
+    --ink-soft:#45413a; --muted:#7a736a; --line:#ddd5c6; --line-hard:#b9ae9a; --amber:#b8770a;
+    --amber-soft:#fbf0d8; --green:#2f7d4f; --red:#a8362b; --blue:#2b5fa8; --violet:#6b3fa0;
+    --code-bg:#efeade; --shadow:0 1px 0 var(--line), 0 8px 24px rgba(30,25,15,.06); }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.62 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; -webkit-text-size-adjust:100%; }
+  .wrap { max-width:1140px; margin:0 auto; padding:32px 20px 96px; }
+  header.top { border-bottom:2px solid var(--line-hard); padding-bottom:18px; margin-bottom:26px; }
+  .kicker { font:600 11px/1 ui-monospace,monospace; letter-spacing:.16em; text-transform:uppercase; color:var(--amber); }
+  h1 { font-size:clamp(24px,4.4vw,34px); line-height:1.15; margin:10px 0 8px; letter-spacing:-.015em; }
+  .sub { color:var(--muted); max-width:72ch; margin:0; }
+  .meta { margin-top:12px; font:12px/1.5 ui-monospace,monospace; color:var(--muted); }
+  h2 { font-size:20px; margin:42px 0 6px; letter-spacing:-.01em; }
+  h2 .num { color:var(--amber); font:600 13px/1 ui-monospace,monospace; margin-right:8px; }
+  h3 { font-size:14.5px; margin:24px 0 4px; }
+  p { margin:8px 0; } .lede { color:var(--ink-soft); max-width:78ch; }
+  code,kbd { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86em;
+    background:var(--code-bg); padding:1px 5px; border-radius:3px; }
+  a { color:var(--blue); }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:13px; }
+  th,td { text-align:left; padding:8px 9px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font:600 10.5px/1.3 ui-monospace,monospace; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--muted); border-bottom:2px solid var(--line-hard); }
+  tbody tr:hover { background:var(--panel-2); }
+  .id { font:600 11.5px ui-monospace,monospace; color:var(--violet); white-space:nowrap; }
+  .st { font:700 11px ui-monospace,monospace; color:var(--blue); white-space:nowrap; }
+  .btn { font:700 11px ui-monospace,monospace; letter-spacing:.06em; background:var(--amber-soft);
+    border:1px solid var(--amber); color:var(--amber); border-radius:3px; padding:1px 7px; white-space:nowrap; }
+  .rule { display:grid; grid-template-columns:auto 1fr; gap:10px 14px; align-items:start;
+    background:var(--amber-soft); border:1px solid var(--line-hard); border-left:4px solid var(--amber);
+    padding:14px 16px; margin:18px 0; border-radius:3px; }
+  .rule b { display:block; font-size:13px; letter-spacing:.04em; text-transform:uppercase; color:var(--amber); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:4px;
+    padding:14px 16px; margin:14px 0; box-shadow:var(--shadow); }
+  .warn { border-left:4px solid var(--red); background:color-mix(in srgb, var(--red) 8%, transparent); }
+  .ok { border-left:4px solid var(--green); }
+  ul.tight { padding-left:20px; margin:8px 0; } ul.tight li { margin:4px 0; }
+  ol.steps { padding-left:22px; margin:8px 0; } ol.steps li { margin:7px 0; }
+  figure { margin:18px 0; }
+  figure svg { display:block; width:100%; height:auto; background:var(--panel);
+    border:1px solid var(--line); border-radius:4px; }
+  figcaption { font-size:12.5px; color:var(--muted); margin-top:7px; }
+  .svgmono { font:11px ui-monospace,monospace; fill:var(--ink-soft); }
+  .svgdim { font:10.5px ui-sans-serif,sans-serif; fill:var(--muted); }
+  .svgttl { font:600 12px ui-sans-serif,sans-serif; fill:var(--ink); }
+  .svgbox { fill:var(--panel-2); stroke:var(--line-hard); }
+  .svgline { stroke:var(--line-hard); fill:none; }
+  footer { margin-top:56px; padding-top:18px; border-top:2px solid var(--line-hard);
+    font-size:12.5px; color:var(--muted); }
+  .toggle { position:fixed; top:12px; right:12px; z-index:10; font:600 11px ui-monospace,monospace;
+    background:var(--panel); color:var(--ink); border:1px solid var(--line-hard); border-radius:999px;
+    padding:6px 12px; cursor:pointer; box-shadow:var(--shadow); }
+  @media print { .toggle { display:none; } }
+</style>
+</head>
+<body>
+<button class="toggle" id="theme">◐ theme</button>
+<div class="wrap">
+
+<header class="top">
+  <div class="kicker">Cookrew · marketplace · wallet sheet</div>
+  <h1>Connect, terms, pay, receipt</h1>
+  <p class="sub">Door A's last step: the states, sheets and copy for paying for a preset, and the
+  refusals around them. Forge builds the plumbing to these states; every string already exists in
+  <code>src/shared/marketplace-copy.ts</code>.</p>
+  <p class="meta">Velvet (UX Optimizer) · 2026-08-22 · prior art
+  <code>scratchpad/s8-goat-hitl-design.html</code> @ <code>20d8e25</code> ·
+  binding: R5, R24, R12 · sibling decks: flows · copy · interaction · granting</p>
+</header>
+
+<div class="card">
+  <b>Doc annotation (R14).</b> <code>402</code> and the reason tokens are design labels here. No buyer
+  sees them.
+</div>
+
+<h2><span class="num">0</span>The constraint S8 already proved, which corrects my earlier spec</h2>
+<div class="rule">
+  <span style="font-size:22px">🧩</span>
+  <div>
+    <b>A wallet extension can never reach the canvas browser card</b>
+    Electron has no MV3 action popup, so an injected wallet is simply <em>not there</em> inside an
+    embedded browser — S8 established this from a month of real migration traffic. My earlier flow deck
+    drew an EIP-6963 picker inside the 402 sheet; <b>that is unbuildable as drawn.</b> The wallet lives
+    in the person's real browser or on their phone, and the sheet's job is to hand off cleanly and wait,
+    not to host a connection it cannot make.
+  </div>
+</div>
+<p class="lede">S8's three laws carry over intact, and two of them decide states below: <b>a receipt is a
+probe, not prose</b> (never trust the wallet's success callback — read the chain), and <b>the safe path
+must be the easiest path</b> (so the QR fallback is always present, never a punishment for not having an
+extension).</p>
+
+<h2><span class="num">1</span>Where this sheet may and may not appear</h2>
+<table>
+  <thead><tr><th>Moment</th><th>Wallet sheet?</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>Chip click on a gated preset</td><td><b>yes</b></td><td>the buyer asked to install</td></tr>
+    <tr><td>Install-link / market card INSTALL</td><td><b>yes</b></td><td>same act, different surface</td></tr>
+    <tr><td>Update to a paid version</td><td><b>yes</b></td><td>the buyer tapped the badge</td></tr>
+    <tr><td>Top up a prepaid balance from the chip</td><td><b>yes</b></td><td>R5's sanctioned top-up surface</td></tr>
+    <tr><td><b>A live call runs out of credit</b></td><td><b>NEVER</b></td>
+      <td><b>R5.</b> The call path answers 200 or 403 only. A dry meter is an inline notice on the
+      terminal card whose action opens the balance sheet <em>on the chip</em> — a wallet modal over a
+      running conversation is a bug, and it is testable as one.</td></tr>
+    <tr><td>Dock-open update check</td><td><b>NEVER</b></td>
+      <td><b>R24.</b> A background check may set a badge; it may never raise a sheet. Nobody's dock
+      should open a payment window.</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">2</span>The state machine</h2>
+<figure>
+<svg viewBox="0 0 980 260" role="img" aria-label="Wallet sheet states from terms through pay to receipt">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="var(--line-hard)"/></marker></defs>
+  <rect x="16" y="90" width="140" height="54" rx="4" class="svgbox"/>
+  <text x="86" y="112" text-anchor="middle" class="svgttl">TERMS</text>
+  <text x="86" y="130" text-anchor="middle" class="svgdim">price · what · where</text>
+
+  <rect x="188" y="90" width="140" height="54" rx="4" class="svgbox"/>
+  <text x="258" y="112" text-anchor="middle" class="svgttl">CONNECT</text>
+  <text x="258" y="130" text-anchor="middle" class="svgdim">3 transports</text>
+
+  <rect x="360" y="90" width="150" height="54" rx="4" class="svgbox"/>
+  <text x="435" y="112" text-anchor="middle" class="svgttl">AWAITING</text>
+  <text x="435" y="130" text-anchor="middle" class="svgdim">approve in wallet</text>
+
+  <rect x="542" y="90" width="150" height="54" rx="4" class="svgbox"/>
+  <text x="617" y="112" text-anchor="middle" class="svgttl">VERIFYING</text>
+  <text x="617" y="130" text-anchor="middle" class="svgdim">read the chain</text>
+
+  <rect x="724" y="90" width="150" height="54" rx="4" class="svgbox" style="stroke:var(--green)"/>
+  <text x="799" y="112" text-anchor="middle" class="svgttl" style="fill:var(--green)">ENTITLED</text>
+  <text x="799" y="130" text-anchor="middle" class="svgdim">receipt line shown</text>
+
+  <line x1="160" y1="117" x2="184" y2="117" class="svgline" marker-end="url(#a)"/>
+  <line x1="332" y1="117" x2="356" y2="117" class="svgline" marker-end="url(#a)"/>
+  <line x1="514" y1="117" x2="538" y2="117" class="svgline" marker-end="url(#a)"/>
+  <line x1="696" y1="117" x2="720" y2="117" class="svgline" marker-end="url(#a)"/>
+
+  <text x="258" y="176" text-anchor="middle" class="svgdim">no wallet → QR</text>
+  <text x="435" y="176" text-anchor="middle" class="svgdim">declined · wrong chain</text>
+  <text x="617" y="176" text-anchor="middle" class="svgdim">pending is DISMISSIBLE</text>
+  <text x="799" y="176" text-anchor="middle" class="svgdim">→ review sheet → placed</text>
+
+  <path d="M86 88 C86 40 435 40 435 86" class="svgline" stroke-dasharray="4 3" marker-end="url(#a)"/>
+  <text x="260" y="36" text-anchor="middle" class="svgdim">wallet already connected — CONNECT is skipped entirely</text>
+
+  <rect x="16" y="196" width="858" height="46" rx="4" class="svgbox" style="stroke:var(--green)"/>
+  <text x="36" y="216" class="svgttl" style="fill:var(--green)">Entitlement is minted once.</text>
+  <text x="36" y="234" class="svgmono">Every later download of this preset is a plain success — new machine, reinstall, update. The sheet says so at ENTITLED.</text>
+</svg>
+<figcaption>Five states. A buyer with a connected wallet sees three of them, and the middle one is a
+hand-off to software we don't control.</figcaption>
+</figure>
+
+<h2><span class="num">3</span>State by state</h2>
+<table>
+  <thead><tr><th>State</th><th>Shows</th><th>One action</th><th>Strings</th></tr></thead>
+  <tbody>
+    <tr><td class="st">TERMS</td>
+      <td>price in the title · what you're buying (one-time / per-call) · <b>where the money goes</b> ·
+      chain · held-for countdown · optional prepaid credit</td>
+      <td><span class="btn">CONNECT WALLET</span> — or <span class="btn">PAY</span> if already connected</td>
+      <td class="id">mkt.pay.title · .model.* · .destination · .chain · .expires · .credit.*</td></tr>
+    <tr><td class="st">CONNECT</td>
+      <td>the three transports, in this order: <b>open in my browser</b> (EIP-6963 runs there, not here) ·
+      <b>open my phone wallet</b> (universal link carrying the <code>wc:</code> URI) · <b>scan this QR</b></td>
+      <td>picking a transport <em>is</em> the action</td>
+      <td class="id">mkt.pay.choose · .choose.qr · .choose.none</td></tr>
+    <tr><td class="st">AWAITING</td>
+      <td>the amount and destination again, unchanged, plus where the approval is happening</td>
+      <td>Cancel only — <b>the primary is gone</b>; there is nothing for it to do while a wallet is open</td>
+      <td class="id">mkt.pay.custody</td></tr>
+    <tr><td class="st">VERIFYING</td>
+      <td>"Payment sent — waiting for confirmation" and that it is safe to close</td>
+      <td><b>dismissible.</b> Closing does not cancel anything</td>
+      <td class="id">mkt.pay.pending.title · .pending.body</td></tr>
+    <tr><td class="st">ENTITLED</td>
+      <td>the purchase confirmed <b>and the receipt line</b>, then straight into the review sheet</td>
+      <td>continues automatically</td>
+      <td class="id">mkt.pay.receipt</td></tr>
+  </tbody>
+</table>
+
+<div class="rule">
+  <span style="font-size:22px">🧾</span>
+  <div>
+    <b>The receipt line is shown at ENTITLED, and this is the one addition I would fight for</b>
+    <em>"Pay once. Re-downloading it later — new machine, reinstall, update — is free."</em> It has been
+    true since the gate was written and no buyer has ever been told. It belongs at the moment of
+    success, not in a help page: this is the only instant where someone is thinking about what their
+    money bought, and it is the difference between "I rented a download" and "I own this".
+  </div>
+</div>
+
+<h3>Why AWAITING has no primary button</h3>
+<p class="lede">Once the transaction is in the wallet, our sheet can do exactly nothing to advance it —
+the next event comes from software we do not control. A live-looking PAY button there would be a lie
+about who is in charge, and pressing it again is how a person double-pays. The sheet becomes a
+<em>status</em>, and the only control left is the one that was always honest: Cancel, which cancels our
+waiting and not their transaction. The copy says which.</p>
+
+<h2><span class="num">4</span>Refusals and errors</h2>
+<table>
+  <thead><tr><th>Case</th><th>State</th><th>Copy</th><th>Action</th></tr></thead>
+  <tbody>
+    <tr><td>No wallet found</td><td class="st">CONNECT</td>
+      <td class="id">mkt.pay.choose.none<br><span style="font-weight:400">No wallet on this device — scan the QR with one on your phone.</span></td>
+      <td>the QR <em>is</em> the action — never a dead end, never a nag to install anything</td></tr>
+    <tr><td>Wrong chain</td><td class="st">AWAITING</td>
+      <td class="id">mkt.pay.error.chain<br><span style="font-weight:400">Your wallet is on {current}. This costs {price} {asset} on {chain}.</span></td>
+      <td><span class="btn">SWITCH TO {chain}</span> — one action, and it is the fix</td></tr>
+    <tr><td>Insufficient funds</td><td class="st">AWAITING</td>
+      <td class="id">mkt.pay.error.funds<br><span style="font-weight:400">You have {balance} {asset}. This costs {price} {asset}.</span></td>
+      <td>two numbers, no advice — the buyer knows what to do with them</td></tr>
+    <tr><td>User declined</td><td class="st">AWAITING → TERMS</td>
+      <td class="id">mkt.pay.error.rejected<br><span style="font-weight:400">You declined the transfer in your wallet. Nothing was charged.</span></td>
+      <td>PAY re-arms. <b>Declining is not an error state</b> — it is a decision, and the sheet returns
+      to where it was without a red frame</td></tr>
+    <tr><td>Terms expired</td><td class="st">TERMS</td>
+      <td class="id">mkt.pay.error.expired.body<br><span style="font-weight:400">These terms expired. Prices are quoted for five minutes.</span></td>
+      <td><span class="btn">GET NEW TERMS</span> — which is just the retry that produces a fresh quote</td></tr>
+    <tr><td>Confirmation slow</td><td class="st">VERIFYING</td>
+      <td class="id">mkt.pay.pending.body<br><span style="font-weight:400">This usually takes seconds. You can close this; it unlocks itself.</span></td>
+      <td>Close. No retry — retrying is free but pointless, and offering it implies something is stuck</td></tr>
+  </tbody>
+</table>
+
+<h3>invalid vs unverifiable — after the money, and this is the case nobody has specified</h3>
+<p class="lede">These two are <b>not wallet errors</b>. They are the <em>review sheet's</em> refusals, and
+they land <b>after</b> a successful payment — the buyer paid, the download arrived, and verification
+failed. The right words already exist; what has never been decided is what the sheet says about the
+money.</p>
+<table>
+  <thead><tr><th>Case</th><th>What the buyer sees</th><th>What it must add after payment</th></tr></thead>
+  <tbody>
+    <tr><td><b>INVALID</b><br><span class="id">…signature_invalid</span></td>
+      <td>This preset doesn't match its signature. It may have been altered since {author} published
+      it. Nothing was installed.</td>
+      <td rowspan="2"><b>"You were charged, and the preset is yours — retrying costs nothing."</b>
+      Entitlement was minted at settlement, so a failed verification is a bad <em>download</em>, not a
+      lost purchase. Without this sentence the buyer reasonably assumes their money is gone, and that
+      assumption is both wrong and the worst possible first impression of a marketplace.</td></tr>
+    <tr><td><b>UNVERIFIABLE</b><br><span class="id">…schema_unsupported</span></td>
+      <td>This preset needs a newer Cookrew. It was built for a later preset format, so this version
+      can't check it. Nothing was installed.</td></tr>
+  </tbody>
+</table>
+<div class="card warn">
+  <b>Flagging this as a gap in the strings, not a design choice I can make alone.</b> Both blocked
+  strings currently end "Nothing was installed" — true, and dangerously incomplete when money has just
+  moved. I propose one shared additional line, <code>mkt.review.blocked.paid</code>: <em>"You were
+  charged and this preset is yours. Trying again costs nothing."</em> — rendered only when an
+  entitlement exists for the preset that just failed. I have not added it to the module, because
+  whether entitlement really survives a failed verification is Forge's fact to confirm, not mine to
+  assert. If it does not survive, the sentence has to be the opposite one, and that is a refund
+  conversation rather than a copy one.
+</div>
+
+<h2><span class="num">5</span>Interaction rules carried from the interaction deck</h2>
+<ul class="tight">
+  <li><b><kbd>Enter</kbd> is inert</b> on every state of this sheet. Money is the canonical case for the
+  rule: convenience that can charge by muscle memory is not convenience.</li>
+  <li><b>The scrim is inert once a wallet is connected</b>, and drag-dismiss is disabled on phone for the
+  same reason — a mis-tap must not discard live terms.</li>
+  <li><b>Focus opens on the dialog, never on PAY.</b> The button is the last tab stop.</li>
+  <li><b>Nothing blocks the canvas.</b> Agents keep working behind this sheet; it is never a modal
+  spinner over a workspace.</li>
+  <li><b>No success interstitial between ENTITLED and the review sheet</b> — the receipt line rides the
+  transition rather than costing a click to dismiss.</li>
+</ul>
+
+<h2><span class="num">6</span>Gates</h2>
+<ol class="steps">
+  <li><b>[MAGPIE]</b> No wallet sheet can mount over a terminal card — drive a call to a dry meter and
+  assert an inline notice, not a modal (R5).</li>
+  <li><b>[MAGPIE]</b> Opening the dock with an expired token raises no sheet (R24).</li>
+  <li><b>[MAGPIE]</b> <kbd>Enter</kbd> and scrim-click cannot pay.</li>
+  <li><b>[MAGPIE]</b> The receipt line is present in the DOM at ENTITLED — this is the one success-path
+  assertion, and success paths are where copy quietly goes missing.</li>
+  <li><b>[FORGE]</b> AWAITING renders no primary control while a transaction is outstanding.</li>
+  <li><b>[FORGE]</b> Dismissing at VERIFYING does not cancel settlement; the chip unlocks on its own.</li>
+  <li><b>[FORGE]</b> Settlement is confirmed by reading the chain, never by trusting the wallet's
+  callback (S8: a receipt is a probe, not prose).</li>
+</ol>
+
+<footer>
+  <b>The wallet sheet — connect, terms, pay, receipt.</b> Velvet (UX Optimizer), 2026-08-22.<br>
+  Strings: <code>src/shared/marketplace-copy.ts</code> (<code>MKT_PAY</code>, <code>MKT_BLOCKED</code>).
+  Prior art: <code>scratchpad/s8-goat-hitl-design.html</code> @ <code>20d8e25</code> — EIP-6963 in the
+  real browser, universal link on phone, QR as the always-present floor.
+</footer>
+
+</div>
+<script>
+  (function(){var b=document.getElementById('theme');b.addEventListener('click',function(){
+    var n=document.documentElement.getAttribute('data-theme');
+    var d=n?n==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.setAttribute('data-theme',d?'light':'dark');});})();
+</script>
+</body>
+</html>

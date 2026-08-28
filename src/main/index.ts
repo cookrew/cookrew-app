@@ -23,7 +23,8 @@ import {
   readDispatchTombstones,
   turnDetails
 } from './dispatch'
-import { HerdrHostMultiplexer } from './herdr-host-multiplexer'
+import { HerdrHostMultiplexer, HERDR_SESSION } from './herdr-host-multiplexer'
+import { selfHostedLaunch, selfHostRefusalMessage } from './self-host-guard'
 import { askTerminal, beginShutdown, cancelAllAsks, pasteAndSubmit } from './ask'
 import { defaultProducerLease } from './producer-lease'
 import {
@@ -37,6 +38,9 @@ import { loadOrCreateReadOnlyToken } from './readonly-token'
 import { loadOrCreatePairingToken } from './pairing-token'
 import { searchTurns } from '../shared/turn-search'
 import { summarizeTurn } from './sous'
+import { translateBody } from './sous-translate'
+import { remoteSousHost } from './sous-remote-config'
+import { TRANSLATE_MAX_CHARS } from '../shared/translate'
 import { startSocketServer } from './socket-server'
 import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
@@ -88,7 +92,7 @@ import { SessionRegistry } from './session-registry'
 import { LazyTerminalAttachments } from './lazy-terminal'
 import { planWorkspaceSwitch } from './workspace-switch'
 import { SwitchRunner } from './switch-runner'
-import { presetIdFromInstallUrl } from './registry-install-link'
+import { looksLikeInstallLink, presetIdFromInstallUrl } from './registry-install-link'
 import { terminalHasLiveWork } from './session-liveness'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { canonicalExternalUrl } from '../shared/external-url'
@@ -108,6 +112,13 @@ import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
 import { blocksResume, holderOf, liveSessionHolders, planHeldSessionFork } from './claude-live-session'
 import { createRestoreHandlers, registerRestoreIpc, RestoreHandlers } from './restore'
 import { withSessionLineage } from './session-lineage'
+import { registryHostHelp, resolveRegistryHosts } from '../shared/registry-host'
+import { RegistryHostSettings } from './registry-settings'
+import { publishPreset, type PayoutBinding, type PublishOutcome } from './publish-preset'
+import { pushToRegistry } from './registry-client'
+import { buildManifest, loadPublishingKey, signManifest } from './preset-publish'
+import { scrubForPublish } from './preset-scrub'
+import type { PresetPricing } from '../shared/preset-manifest'
 import { carrySessionToCwd } from './session-move'
 import { moveTerminalCwd } from './terminal-cwd'
 import { createBrowserCast } from './browser-cast'
@@ -115,6 +126,7 @@ import { BrowserThumbCache } from './browser-thumb-cache'
 import { findChrome } from './headless-chrome'
 import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine } from './headless-browser-command'
+import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profile-store'
 
 import { TraceReader, type SessionWatchSpec } from './trace'
 import { LatestFileWatcher } from './latest-watch'
@@ -126,9 +138,47 @@ import {
   forkTeam,
   workspaceFromTemplate,
   entryAgentOf,
+  orchAgentOf,
   type TeamSnapshot
 } from './teams'
-import { MOBILE_HTTPS_PORT } from './mobile-ports'
+import http from 'node:http'
+import { MOBILE_HTTPS_PORT, MOBILE_PORT } from './mobile-ports'
+import { readJson, respondJson } from './mobile-http'
+import { deriveSlug, uniqueSlug } from './workspace-slug'
+import { networkInterfaces } from 'node:os'
+import { wireServing, type Serving } from './session-serving'
+import { servedTemplateFile } from './served-persist'
+import { bootWorkspaceInPlace } from './session-boot'
+import { servedConfinement } from './session-spawn'
+import { makeEntryTerminalLookup, rmSandbox } from './session-instantiator-mount'
+import { ServedCallers } from './served-callers'
+import { serviceGrants } from './service-grants-store'
+import { requestHarnessCompletion, servedGrantPreflight } from './served-grant-preflight'
+import { servedSessionProvisioner } from './served-onboarding'
+import { handleServedRoute } from './served-endpoints'
+import { servedTurnReply } from './served-turn-reply'
+import { handleServedPayRoute } from './served-pay-route'
+import { railSettle } from './payment-rails'
+import { createServedPaymentConfig } from './served-payment-config'
+import {
+  createStripeRedemptionStore,
+  stripeCreateCheckout,
+  stripeGet,
+  stripePost,
+  stripeSettle
+} from './stripe-rail'
+import {
+  createNonceLedger,
+  paymentRequirements,
+  postJson,
+  x402Settle,
+  type PaymentRequirements
+} from './x402-rail'
+import { RemoteCrewStore, parseCrewLink } from './remote-crews'
+import { crewLineCommand } from './crew-line-command'
+import { ServedRemoteTranscriptClient } from './served-remote-transcript'
+import { ServeRefused, type ServeAccess, type ServedTemplate } from './session-served'
+import { servedPaymentRails } from '../shared/served-payment-rails'
 import { PresetStore, isPresetId } from './preset-store'
 import { PinStore } from './pin-store'
 import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
@@ -140,6 +190,16 @@ import { buildRoleBootMessage } from '../shared/fork'
 import { pageTurns } from '../shared/turn'
 import type { TurnPageRequest } from '../shared/turn'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
+
+// ── COMPOSITOR BUDGET — the golden-frame flicker ─────────────────────────────
+// Chromium sizes its raster-tile budget from a conservative GPU-memory guess.
+// A 3.5K retina window full of layers (canvas cards, a zoomed WebGL terminal,
+// half a dozen cr-blink animations invalidating every 500ms) exceeds it, the
+// log floods with "tile memory limits exceeded, some content may not draw",
+// and whole regions of chrome — header, dock, the zoom frame — blink in and
+// out in step with the animations. Observed live 2026-08-26. Must be set
+// before app ready; a real budget stops the tile drops at the source.
+app.commandLine.appendSwitch('force-gpu-mem-available-mb', '2048')
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -328,6 +388,385 @@ const callConversations = new CallConversationStore()
  */
 const callsInFlight = new CallsInFlight()
 const callNodesOf = memoizeBriefly((workspaceId: string) => store.workspaceState(workspaceId).nodes)
+
+// ── R30 SERVING — the instantiator subsystem, assembled once ─────────────────
+//
+// This constructs the machinery; the call path consults it (mobile-server) and
+// the spawn path reads `servedSpawnContexts` to confine a served terminal. All
+// side effects stay behind seams the composition root wires — see
+// session-serving.ts. NOTE (app-verified): the mint→serve call at the listener
+// and the per-backend Seatbelt wrap for herdr are the remaining live-tested
+// steps; everything here compiles and is unit-tested.
+const sessionsBase = path.join(homedir(), '.cookrew')
+const servedPayments = createServedPaymentConfig({ base: sessionsBase })
+const servedStripeRedemptions = createStripeRedemptionStore(
+  path.join(sessionsBase, 'stripe-redemptions.json')
+)
+/** workspaceId → the served context its terminals spawn under. Set at boot. */
+const servedSpawnContexts = new Map<
+  string,
+  { serviceId: string; sessionId: string; sandbox: string }
+>()
+/**
+ * THE LEND (R30 G2). The owner's per-service grant file, read per call.
+ *
+ * Still nothing by default — an unlisted service is lent no key, no file and no
+ * budget, exactly as before. What changed is that there is now a way to lend on
+ * purpose: `~/.cookrew/service-grants.json`, one entry per service, each with a
+ * session budget it cannot exceed. See service-grants.ts for why the budget
+ * counts sessions rather than dollars.
+ */
+const grants = serviceGrants(sessionsBase)
+const grantPreflight = servedGrantPreflight({
+  grants,
+  orch: {
+    commandOf(templateId) {
+      const snapshot = teams.load(templateId)
+      if (!snapshot) return null
+      const orch = orchAgentOf(snapshot)
+      if (orch === null) return null
+      const node = snapshot.nodes.find(
+        (candidate) =>
+          candidate.kind === 'terminal' && candidate.orch === true && candidate.name === orch
+      )
+      return node?.kind === 'terminal' ? node.command : null
+    }
+  },
+  request: requestHarnessCompletion
+})
+
+const serving: Serving = wireServing({
+  base: sessionsBase,
+  teams,
+  // M1 PLACEHOLDER: a template's pin resolves to v1 addressed by its id. Real
+  // S1c resolution reads the template's rail pins (the pinId content hash); this
+  // stub lets serving compile ahead of that lookup and is flagged for the wire.
+  pins: { resolve: (templateId) => ({ version: 1, pinAddress: templateId }) },
+  forkEngine: {
+    fork: async ({ name, templateId, dir, serviceId, sessionId }) => {
+      const meta = await forkTeam(
+        {
+          ...teamForkDeps(),
+          // Boot in place (no focus switch), and register the served context
+          // FIRST so each terminal's spawn (spawnTracked) confines and scrubs.
+          bootTerminals: (id) => {
+            servedSpawnContexts.set(id, { serviceId, sessionId, sandbox: dir })
+            const booted = bootWorkspaceInPlace(
+              {
+                nodesOf: (wid) => callNodesOf(wid),
+                boot: (node) => bootTerminal(node as TerminalNodeData),
+                // A partial boot must be LOUD: a served crew whose door never
+                // spawned answers every ask with "no live door" and nothing
+                // else says why.
+                onError: (node, error) =>
+                  console.error(`served boot failed for ${node.id}:`, error)
+              },
+              id
+            )
+            console.error(`served session ${sessionId}: booted ${booted} terminal(s) in ${id}`)
+          }
+        },
+        { name, nodeIds: [], choices: [], fromSavedTeam: templateId, dirs: [dir], worktree: true }
+      )
+      return meta.id
+    }
+  },
+  // The one fact that decides whether a crew may be served at all: does its
+  // saved snapshot flag an orch? Never the first terminal — see orchAgentOf.
+  door: { orchOf: (templateId) => {
+    const snapshot = teams.load(templateId)
+    return snapshot ? orchAgentOf(snapshot) : null
+  } },
+  entry: makeEntryTerminalLookup({
+    nodesOf: (wid) =>
+      callNodesOf(wid).map((n) => ({
+        id: n.id,
+        kind: n.kind,
+        orch: (n as { orch?: boolean }).orch
+      }))
+  }),
+  callsInFlight: { cancelWhere: (match) => callsInFlight.cancelWhere(match) },
+  remover: rmSandbox,
+  // First-run choices and the owner's grant land before the fork boots the
+  // harness. The provisioner seeds only non-secret Claude state; credentials
+  // still arrive exclusively through the grant.
+  provision: servedSessionProvisioner(grants),
+  grantPreflight,
+  liveWorkspaceId: (slug) => store.bySlug(slug)?.id ?? null,
+  // Serving survives a restart — an owner stops serving by saying stop.
+  persist: servedTemplateFile(sessionsBase)
+})
+/** Who has signed in to each served crew (TOFU accounts, M1). */
+const servedCallers = new ServedCallers()
+/** The crews this user added by link — the dock's third chip family. */
+const remoteCrews = new RemoteCrewStore(sessionsBase)
+
+/**
+ * The address an owner hands out for a served crew — a LAN URL, because M1 has
+ * no public domain and the honest thing to give someone is a link that actually
+ * works from where they are. Loopback only when nothing else is up.
+ */
+function servedAddress(slug: string): string {
+  const lan = Object.values(networkInterfaces())
+    .flatMap((list) => list ?? [])
+    .find((net) => net.family === 'IPv4' && !net.internal)?.address
+  return `http://${lan ?? '127.0.0.1'}:${MOBILE_PORT}/${slug}`
+}
+
+function servedPaymentReturn(slug: string): string {
+  const url = new URL(servedAddress(slug))
+  url.searchParams.set('payment', 'received')
+  return url.toString()
+}
+
+/**
+ * Nonces already settled, for this process's lifetime.
+ *
+ * Not the durable guard — an EIP-3009 authorization is single-use ON CHAIN, so
+ * a replay fails at the facilitator whether or not we remember it. This just
+ * refuses the second attempt for free, before a network round trip.
+ */
+const servedNonces = createNonceLedger()
+
+/**
+ * Where a served crew's money goes.
+ *
+ * COOKREW_PAY_TO is an ADDRESS, not a key — public by nature, and the whole
+ * reason x402 was chosen over Stripe: nothing secret has to live here. Without
+ * it there is no destination, so `paymentRequirements` cannot quote and the
+ * paid door answers 503 rather than admitting anyone for free.
+ */
+function servedX402Config(): ReturnType<typeof servedPayments.x402Config> {
+  return servedPayments.x402Config()
+}
+
+function servedStripeConfig(): ReturnType<typeof servedPayments.stripeConfig> {
+  return servedPayments.stripeConfig()
+}
+
+/**
+ * One quote composer for the gate and every surface that names its live rails.
+ * Stripe extends this function's `accepts` list; no surface reads config itself.
+ */
+function servedPaymentTerms(
+  template: Pick<ServedTemplate, 'priceUsd' | 'slug'>
+): unknown | null {
+  return servedPayments.terms(template)
+}
+
+/** Public address + presence/mode only. The Stripe value has no read path. */
+function configuredServedPaymentStatus(): ReturnType<typeof servedPayments.status> {
+  return servedPayments.status()
+}
+
+/**
+ * THE SERVED-CREW ADAPTER — HTTP ⇄ the gate (share-on-save, caller side).
+ *
+ * Mounted at the mobile server's unknown-slug fall-through, so a live workspace
+ * always wins a slug and a served crew can never shadow the owner's own canvas.
+ * Everything decided lives in `handleServedRoute`; this only moves bytes and
+ * supplies the four app-side facts (admit, conductor, ask, the crew's face).
+ */
+async function handleServedSlug(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  url: URL,
+  slug: string
+): Promise<boolean> {
+  const template = serving.served.bySlug(slug)
+  if (!template) return false
+  const method = (request.method ?? 'GET').toUpperCase()
+  const pathname = url.pathname.slice(`/${slug}`.length) || '/'
+  const headers: Record<string, string | undefined> = {}
+  for (const [key, value] of Object.entries(request.headers)) {
+    headers[key.toLowerCase()] = Array.isArray(value) ? value[0] : value
+  }
+  let body: unknown = null
+  if (method === 'POST') {
+    try {
+      body = await readJson<unknown>(request)
+    } catch {
+      body = null
+    }
+  }
+  const issuer = {
+    challenge: (binding: string) => callCredentials.challenge(binding),
+    consumeChallenge: (value: string, binding?: string) =>
+      callCredentials.consumeChallenge(value, binding),
+    mint: (sub: string, scope: string) => callCredentials.mint(sub, scope),
+    verifyToken: (token: string) => callCredentials.verifyToken(token)
+  }
+  const checkout = await handleServedPayRoute(
+    {
+      issuer,
+      createCheckout: async (input) => {
+            const config = servedStripeConfig()
+            if (config === null) return null
+            const result = await stripeCreateCheckout(
+              { config, post: stripePost },
+              {
+                priceUsd: input.amountUsd,
+                serviceId: input.serviceId,
+                sub: input.sub,
+                slug: input.slug,
+                successUrl: input.successUrl
+              }
+            )
+            return result.ok ? result.url : null
+          },
+      successUrl: (t) => servedPaymentReturn(t.slug)
+    },
+    template,
+    method,
+    pathname,
+    headers
+  )
+  if (checkout !== null) {
+    for (const [key, value] of Object.entries(checkout.headers ?? {})) {
+      response.setHeader(key, value)
+    }
+    respondJson(response, checkout.status, checkout.body)
+    return true
+  }
+
+  // The gate verifies this again before it can call settle. Capturing the same
+  // claims here gives the Stripe rail the expected subject without widening
+  // the gate's two-argument settle seam.
+  const authorization = headers.authorization ?? ''
+  const settlementClaims = authorization.startsWith('Bearer ')
+    ? issuer.verifyToken(authorization.slice(7))
+    : null
+  const answer = await handleServedRoute(
+    {
+      issuer,
+      callers: servedCallers,
+      admit: async (serviceId, sub) => {
+        const { session, created } = await serving.instantiator.admit(serviceId, sub)
+        return { workspaceId: session.workspaceId, sessionId: session.identity.sessionId, created }
+      },
+      hasOpenSession: (serviceId, sub) =>
+        serving.instantiator
+          .sessions()
+          .some((s) => s.serviceId === serviceId && s.accountId === sub),
+      conductorFor: (sessionId) => serving.instantiator.conductorFor(sessionId),
+      ask: async (conductorId, prompt) => {
+        // The pty here is a MIRROR of the multiplexer pane, and it can be
+        // absent while the agent itself is alive (the attach exited; observed
+        // live: herdr held the minted Fresco pane, ptys.get() missed, every
+        // ask 500'd). Re-attach exactly the way the zoomed transcript does
+        // rather than refuse a crew that is actually standing there.
+        if (!ptys.get(conductorId)) ensureTerminalMirror(conductorId)
+        const session = ptys.get(conductorId)
+        if (!session) throw new Error('the crew has no live door')
+        return servedTurnReply(
+          {
+            history: () => turns.history(conductorId),
+            deliver: () => askTerminal(session, prompt)
+          },
+          prompt
+        )
+      },
+      sessionForCaller: (serviceId, sub) => {
+        const session = serving.instantiator.sessionForCaller(serviceId, sub)
+        if (session === null) return null
+        return {
+          conductorId: serving.instantiator.conductorFor(session.identity.sessionId)
+        }
+      },
+      turns,
+      traces,
+      grantBudget: { allowsNewSession: (serviceId) => grants.allowsNewSession(serviceId) },
+      // The quote and the settle are ONE decision expressed twice: the caller
+      // must be charged exactly what we asked for. Both read the same config
+      // and the same template, so they cannot drift apart into a door that
+      // quotes a dollar and accepts a cent.
+      paymentTerms: servedPaymentTerms,
+      settle: (payment, amountUsd) =>
+        railSettle(
+          {
+            x402: async (x402Payment) => {
+              const config = servedX402Config()
+              const quoted = paymentRequirements(config, amountUsd, '', '')
+              // No quotable price means no settlement to check against. Refusing to
+              // VERIFY is our fault, so it apologises rather than accuses.
+              if (quoted === null) return 'unverifiable'
+              const requirements: PaymentRequirements = quoted.accepts[0]
+              return x402Settle(
+                { config, post: postJson, seen: servedNonces },
+                x402Payment,
+                requirements
+              )
+            },
+            stripe: async (stripePayment) => {
+              const config = servedStripeConfig()
+              if (
+                config === null ||
+                settlementClaims === null ||
+                settlementClaims.workspace !== template.serviceId
+              ) {
+                return 'refused'
+              }
+              return stripeSettle(
+                {
+                  config,
+                  get: stripeGet,
+                  redemptions: servedStripeRedemptions
+                },
+                stripePayment,
+                {
+                  amountUsd,
+                  serviceId: template.serviceId,
+                  sub: settlementClaims.sub
+                }
+              )
+            }
+          },
+          payment
+        ),
+      crewFace: (t) => {
+        const snapshot = teams.load(t.templateId)
+        const nodes = snapshot?.nodes ?? []
+        return {
+          name: snapshot?.name ?? t.templateId,
+          serviceId: t.serviceId,
+          slug: t.slug,
+          address: servedAddress(t.slug),
+          version: 1,
+          access: t.access,
+          ...(t.priceUsd !== undefined ? { priceUsd: t.priceUsd } : {}),
+          // The door's NAME only — the roster behind it is never listed. The
+          // ORCH's name, and never an invented 'Conductor': a face that names a
+          // door the mint cannot produce is the promise the 503 then breaks.
+          // serve() refuses an orch-less crew, so a served template always has
+          // one; the empty string is the unreachable branch said out loud.
+          door: (snapshot ? orchAgentOf(snapshot) : null) ?? '',
+          agents: nodes.filter((n) => n.kind === 'terminal').length
+        }
+      }
+    },
+    template,
+    method,
+    pathname,
+    {
+      headers,
+      body,
+      query: Object.fromEntries(url.searchParams.entries())
+    }
+  )
+  if (answer === null) return false
+  // The 401's www-authenticate carries the ceremony's challenge, so it is set
+  // before the body goes out (respondJson writes the head itself).
+  for (const [key, value] of Object.entries(answer.headers ?? {})) {
+    response.setHeader(key, value)
+  }
+  if (answer.headers?.['content-type']?.startsWith('text/html')) {
+    response.writeHead(answer.status)
+    response.end(typeof answer.body === 'string' ? answer.body : '')
+  } else {
+    respondJson(response, answer.status, answer.body)
+  }
+  return true
+}
 const boardProbe = createProbeSampler(
   tmuxProbeDeps({
     knownTerminalIds: () => agents.list().map((entry) => entry.id),
@@ -352,7 +791,77 @@ const recoverable = new RecoverableStore()
 // Snapshot every killed terminal (node + position + session refs + edges)
 // so recoverAgent can restore it exactly as it was (agent-recover feature).
 store.setTerminalRemovedHook((snapshot) => recoverable.capture(snapshot))
-const traces = new TraceReader(store)
+const traces = new TraceReader(store, {
+  piSessionsRootFor: (node) => {
+    const owner = store.ownerOf(node.id)
+    const servedCtx = owner ? servedSpawnContexts.get(owner) : undefined
+    return servedCtx ? path.join(servedCtx.sandbox, '.cookrew', 'pi-sessions') : undefined
+  },
+  piAgentDirFor: (node) => {
+    const owner = store.ownerOf(node.id)
+    const servedCtx = owner ? servedSpawnContexts.get(owner) : undefined
+    return servedCtx ? path.join(servedCtx.sandbox, '.pi', 'agent') : undefined
+  }
+})
+
+/**
+ * Local and served cards share one transcript capability surface. A served
+ * client holds its Bearer in main memory; node data contains only origin+slug.
+ */
+const servedTranscriptClients = new Map<string, ServedRemoteTranscriptClient>()
+
+function servedTranscriptFor(terminalId: string): ServedRemoteTranscriptClient | null {
+  const node = store.nodeAcrossWorkspaces(terminalId)?.node
+  if (node?.kind !== 'terminal' || !node.servedTranscript) return null
+  const key = JSON.stringify([node.servedTranscript.origin, node.servedTranscript.slug])
+  let client = servedTranscriptClients.get(key)
+  if (!client) {
+    client = new ServedRemoteTranscriptClient(node.servedTranscript)
+    servedTranscriptClients.set(key, client)
+  }
+  return client
+}
+
+const turnHistoryFor = async (terminalId: string) => {
+  const remote = servedTranscriptFor(terminalId)
+  return remote ? (await remote.listTurns({})).turns : turns.history(terminalId)
+}
+
+const turnPageFor = async (terminalId: string, request: TurnPageRequest = {}) => {
+  const remote = servedTranscriptFor(terminalId)
+  return remote ? remote.listTurns(request) : pageTurns(turns.history(terminalId), request)
+}
+
+const traceIndexFor = async (
+  terminalId: string,
+  request: Parameters<TraceReader['index']>[1] = {}
+) => {
+  const remote = servedTranscriptFor(terminalId)
+  return remote ? remote.listTraceIndex(request) : traces.index(terminalId, request)
+}
+
+const traceMarkersFor = async (terminalId: string) => {
+  const remote = servedTranscriptFor(terminalId)
+  return remote ? remote.listTraceMarkers() : traces.boundaryMarkers(terminalId)
+}
+
+const tracePageFor = async (
+  terminalId: string,
+  request: Parameters<TraceReader['page']>[1] = {}
+) => {
+  const remote = servedTranscriptFor(terminalId)
+  return remote ? remote.listTrace(request) : traces.page(terminalId, request)
+}
+
+const latestCheckpointFor = async (terminalId: string) => {
+  const remote = servedTranscriptFor(terminalId)
+  if (!remote) return traces.latestCheckpoint(terminalId)
+  const page = await remote.listTurns({ limit: 1 })
+  const turn = page.turns[page.turns.length - 1]
+  return turn
+    ? { prompt: turn.prompt, reply: turn.reply, ...(turn.title ? { title: turn.title } : {}) }
+    : null
+}
 
 // Trace-perf T4: push a "your checkpoint changed" nudge to the renderer the
 // instant a watched session file grows, so a card reflects a new turn without
@@ -634,6 +1143,8 @@ function spawnTracked(t: {
   piSessionId?: string | null
   sessionLineage?: string[]
 }): void {
+  const owner = store.ownerOf(t.id) ?? store.focusedId
+  const servedCtx = servedSpawnContexts.get(owner)
   const upgraded = LEGACY_COMMANDS[t.command.trim()]
   const command = upgraded ?? t.command
   if (upgraded) store.updateNodeUnsafe(t.id, { command })
@@ -708,12 +1219,18 @@ function spawnTracked(t: {
       command,
       cwd: t.cwd,
       terminalId: t.id,
+      ...(servedCtx
+        ? {
+            sessionsRoot: path.join(servedCtx.sandbox, '.cookrew', 'pi-sessions'),
+            agentDir: path.join(servedCtx.sandbox, '.pi', 'agent')
+          }
+        : {}),
       // An unbound node adopts an UNOWNED session from its own cwd scope
       // rather than booting fresh beside it. Ownership is checked here, not
       // in pi-bind, because only the store knows what every other node claims
       // — and that check is the whole reason this is not the most-recent
       // guess the exclusive-dir design exists to forbid.
-      storedSessionId: t.piSessionId ?? adoptablePiSession(t.id, t.cwd)
+      storedSessionId: t.piSessionId ?? (servedCtx ? null : adoptablePiSession(t.id, t.cwd))
     })
     effective = binding.command
     if (t.piSessionId !== binding.sessionId) {
@@ -723,16 +1240,34 @@ function spawnTracked(t: {
   // The herdr pane wears the card's display info (no-op elsewhere). Resolved
   // from the store rather than threaded through every caller — the node is
   // always persisted before it spawns, so the store is the freshest source.
-  const cardNode = store.node(t.id)
+  // nodeAcrossWorkspaces, not store.node (focused-scoped): a served session's
+  // terminal is in a non-focused workspace, so the focused lookup would drop its
+  // card metadata (R30 boot-in-place nit).
+  const cardNode = store.nodeAcrossWorkspaces(t.id)?.node
   const card = cardNode?.kind === 'terminal' ? paneCard(cardNode) : undefined
   // Before the spawn, because the spawn is what makes the pane exist.
   const timingBoot = beginBootTiming(t.id)
   // Tagged with its owning workspace so the PTY plane can answer per-session
   // questions (multi-instance step 2). ownerOf resolves across every
   // workspace; focus is only the fallback for a terminal no canvas claims yet.
+  // A served session's terminal spawns confined and scrubbed; the owner's own
+  // spawns exactly as before (servedCtx is undefined).
+  const served = servedCtx
+    ? servedConfinement({
+        base: sessionsBase,
+        serviceId: servedCtx.serviceId,
+        sessionId: servedCtx.sessionId,
+        sandbox: servedCtx.sandbox,
+        // The owner's own environment PLUS whatever this service was lent by
+        // name; `sessionEnv` still allowlists on top, so a value here reaches
+        // nothing that grantedKeys does not name.
+        ownerEnv: grants.ownerEnvFor(servedCtx.serviceId),
+        grantedKeys: grants.envKeysFor(servedCtx.serviceId)
+      })
+    : undefined
   const session = ptys.spawn(
-    { terminalId: t.id, command: effective, cwd: t.cwd, card },
-    store.ownerOf(t.id) ?? store.focusedId
+    { terminalId: t.id, command: effective, cwd: t.cwd, card, served },
+    owner
   )
   // One producer per conversation: every owner keystroke consults the
   // tracker BEFORE the byte reaches the child; a dispatch in flight is
@@ -847,7 +1382,19 @@ function spawnTracked(t: {
             terminalId: t.id,
             command: pane?.command ?? null,
             paneStartedAtMs: pane?.startedAtMs ?? null,
-            exclude: claimedPiSessions(t.id)
+            exclude: claimedPiSessions(t.id),
+            // A SERVED pi writes its session under the SANDBOX roots (the
+            // spawn passes them at line ~1145); scanning the owner's default
+            // root here meant a served orch could answer forever and never
+            // bind — no piSessionId, no file-backed turns, and every caller
+            // ask died as "completed no file-backed agent turn" (the final
+            // broken link of the paid-session line, 2026-08-27).
+            ...(servedCtx
+              ? {
+                  sessionsRoot: path.join(servedCtx.sandbox, '.cookrew', 'pi-sessions'),
+                  agentDir: path.join(servedCtx.sandbox, '.pi', 'agent')
+                }
+              : {})
           })
           if (!session) return void attempt(delays.length === 0 ? [] : delays.slice(1))
           store.updateNodeUnsafe(t.id, { piSessionId: session.id })
@@ -1279,6 +1826,7 @@ function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
   const meta =
     store.list().workspaces.find((w) => w.id === nameOrId) ?? store.metaByName(nameOrId)
   if (!meta) throw new Error(`Workspace '${nameOrId}' not found`)
+  const browserIds = store.browserIdsOf(meta.id)
   // Kill this workspace's terminals BEFORE deleting it — store.removeWorkspace
   // only switches away (detach) and rm's the state dir, so without this each
   // terminal's tmux session (a claude CLI, bypassPermissions) would leak
@@ -1298,6 +1846,9 @@ function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
     agents.deactivate(id)
   }
   store.removeWorkspace(meta.id) // switches away first if active (fires 'switch')
+  void Promise.all(browserIds.map((id) => browserManager.discard(id))).catch((error) =>
+    console.error('Failed to discard removed workspace browser profiles:', error)
+  )
   return store.list()
 }
 
@@ -1654,6 +2205,7 @@ function retireTerminal(id: string, why: string): void {
 }
 
 async function removeNode(id: string): Promise<void> {
+  const node = store.node(id)
   retireTerminal(id, 'terminal removed')
   defaultProducerLease().forgetTerminal(id)
   // A permanently removed uuid never returns: its input-provenance fact
@@ -1665,7 +2217,9 @@ async function removeNode(id: string): Promise<void> {
   // clearing it destroyed a recovery signal for nothing (R2 fix).
   ptys.kill(id)
   browserThumbs.forget(id)
-  const browserStopped = browserManager.remove(id)
+  const browserStopped = node?.kind === 'browser'
+    ? browserManager.discard(id)
+    : browserManager.remove(id)
   store.removeNode(id)
   agents.deactivate(id)
   await browserStopped
@@ -1683,6 +2237,13 @@ interface CreateTerminalOpts {
   orch?: boolean
   /** Boot a fresh agent from a saved role instead of a bare preset. */
   roleName?: string
+  /**
+   * Run THIS instead of the preset's command. Used by a placed remote crew,
+   * whose card is a line to someone else's orch rather than a local harness.
+   */
+  command?: string
+  /** Public transcript address for a placed remote crew. */
+  servedTranscript?: TerminalNodeData['servedTranscript']
 }
 
 function createTerminal(opts: CreateTerminalOpts): CanvasNode {
@@ -1707,10 +2268,11 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     id: randomUUID(),
     name: opts.name || role?.name || preset.name,
     preset: role ? role.preset : preset.name,
-    command: role ? role.command : preset.command,
+    command: opts.command ?? (role ? role.command : preset.command),
     cwd: store.focusedState.dir,
     orch: opts.orch ?? false,
     role: role ? role.name : null,
+    ...(opts.servedTranscript ? { servedTranscript: opts.servedTranscript } : {}),
     ...(restoredSessionId ? { claudeSessionId: restoredSessionId } : {}),
     position: opts.position ?? { ...DEFAULT_CANVAS_POSITION },
     size: DEFAULT_TERMINAL_SIZE
@@ -1911,6 +2473,12 @@ async function createWorkspaceFromTeam(
  * is exercisable end to end before any public relay exists.
  */
 /** The proxy terminal's mirror client, resolved for dev and packaged. */
+function crewLineScript(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'crew-line.mjs')
+    : path.join(dirname, '../../resources/crew-line.mjs')
+}
+
 function orchMirrorScript(): string {
   return app.isPackaged
     ? path.join(process.resourcesPath, 'orch-mirror.mjs')
@@ -2170,11 +2738,73 @@ function activeBrowserNode(browserId: string): BrowserNodeData | null {
  * nothing — the marketplace is not shipped yet, and an unconfigured registry
  * failing closed is the correct posture until it is.
  */
-const registryHosts = (): string[] =>
-  (process.env.COOKREW_REGISTRY_HOST ?? '')
-    .split(',')
-    .map((host) => host.trim())
-    .filter((host) => host.length > 0)
+/**
+ * Publish a saved team — the one owner action, wired to the real primitives.
+ *
+ * This is the caller Tinker's H1 found missing. `checkPayoutAddress` runs
+ * inside publishPreset, and publishPreset is reached from here, so the payout
+ * verification is in force rather than merely written.
+ *
+ * The transport posts the shape registry/src/publish-routes.ts actually reads
+ * — {manifest, team, teamName} — rather than a shape invented from the commit
+ * message. The registry lives in this tree now, so there is no excuse for a
+ * guessed contract.
+ */
+async function publishSavedTeam(input: {
+  team: string
+  handle: string
+  pricing?: unknown
+  payout?: unknown
+}): Promise<PublishOutcome> {
+  const snapshot = teams.load(input.team)
+  if (!snapshot) {
+    return { ok: false, step: 'scrub', reason: `No saved team called '${input.team}'.` }
+  }
+  const key = loadPublishingKey()
+  return publishPreset(
+    {
+      hosts: registryHosts,
+      hostHelp: () => registryHostHelp(resolveRegistryHosts(registryHostInput()).rejected),
+      scrub: (team) => scrubForPublish(team as TeamSnapshot),
+      manifest: (built) => buildManifest(built as Parameters<typeof buildManifest>[0]),
+      sign: (manifest) => signManifest(manifest, key.privateKey),
+      push: (pushed) => pushToRegistry(pushed)
+    },
+    {
+      snapshot,
+      handle: input.handle,
+      ...(input.pricing !== undefined ? { pricing: input.pricing as PresetPricing } : {}),
+      ...(input.payout !== undefined ? { payout: input.payout as PayoutBinding } : {})
+    }
+  )
+}
+
+/** Installation-wide trust list; not workspace state, so it has its own file. */
+const registryHostSettings = new RegistryHostSettings()
+
+const registryHosts = (): string[] => resolveRegistryHosts(registryHostInput()).hosts
+
+/**
+ * The inputs the host resolution reads. Split out so the refusal path and the
+ * recognition path can never disagree about what is configured.
+ */
+const registryHostInput = (): Parameters<typeof resolveRegistryHosts>[0] => ({
+  configured: process.env.COOKREW_REGISTRY_HOST ?? '',
+  settings: registryHostSettings.list(),
+  // A PACKAGED build recognises nothing it was not told to. Loopback exists
+  // only where a shipped app cannot carry it, so the journey is walkable in
+  // dev without the product ever trusting a host nobody chose.
+  packaged: app.isPackaged
+})
+
+/**
+ * Why nothing is recognised, in words an owner can act on.
+ *
+ * The empty default was always deliberate; what was missing is that it never
+ * said so. An install link whose only instruction cannot work is a dead end,
+ * and a refusal without the fix is the same dead end with better manners.
+ */
+const registryHostRefusal = (): string => registryHostHelp()
 
 /**
  * A browser card navigated to a marketplace install link (R21).
@@ -2186,8 +2816,30 @@ const registryHosts = (): string[] =>
  * event panel and the phone all see it without a private channel.
  */
 function noteRegistryInstallLink(browserId: string, url: string): void {
-  const presetId = presetIdFromInstallUrl(url, registryHosts())
-  if (presetId === null) return
+  const hosts = registryHosts()
+  const presetId = presetIdFromInstallUrl(url, hosts)
+  if (presetId === null) {
+    // H2: the refusal that makes this NOT a dead end has to reach a human.
+    //
+    // A link that looks like an install link and is not recognised because NO
+    // host is configured is precisely Magpie's give-up #2 — the shared link's
+    // only instruction cannot work. Saying nothing here reproduces it exactly:
+    // the owner sees a page, nothing happens, and there is no way to learn why.
+    //
+    // Only for links SHAPED like install links, and only when the list is
+    // empty. An unrecognised host on a populated list is a deliberate refusal
+    // and announcing it would teach the owner to add whatever host asked.
+    if (hosts.length === 0 && looksLikeInstallLink(url)) {
+      store.recordEventIn(
+        store.ownerOf(browserId) ?? store.focusedId,
+        'preset.install.refused',
+        url,
+        activeBrowserNode(browserId)?.name ?? browserId,
+        registryHostHelp(resolveRegistryHosts(registryHostInput()).rejected)
+      )
+    }
+    return
+  }
   const node = activeBrowserNode(browserId)
   store.recordEventIn(
     store.ownerOf(browserId) ?? store.focusedId,
@@ -2264,6 +2916,8 @@ const browserManager = new HeadlessBrowserManager({
   enabled: interactiveBrowserEnabled,
   chromePath: findChrome,
   profileRoot: () => path.join(app.getPath('userData'), 'interactive-browser'),
+  deleteProfile: (browserId) =>
+    void removeBrowserProfile(path.join(app.getPath('userData'), 'interactive-browser'), browserId),
   resolveNode: activeBrowserNode,
   onPageState: recordHeadlessPageState,
   onTabOpened: recordHeadlessTabOpened,
@@ -2384,6 +3038,16 @@ if (!app.requestSingleInstanceLock()) {
   app.exit(1)
 }
 
+// See self-host-guard.ts. Same medicine as the single-instance lock above:
+// launching from a Cookrew card hands this instance the identity of the session
+// it is about to adopt, so it takes over its own launcher's pane and dies by
+// SIGTERM a minute later with nothing in the log to explain it.
+const selfHosted = selfHostedLaunch(process.env, HERDR_SESSION)
+if (selfHosted) {
+  console.error(selfHostRefusalMessage(selfHosted))
+  app.exit(1)
+}
+
 app.whenReady().then(() => {
   // Dock icon must be set at runtime in dev; packaged builds also bundle
   // resources/icon.icns via the packager config when one is added.
@@ -2467,7 +3131,11 @@ app.whenReady().then(() => {
   routines.start()
 
   startMobileServer({
+    servedSlug: handleServedSlug,
     store,
+    // §10: the same pin store the desktop rail reads — the phone's rail must
+    // not drift from what the canvas shows.
+    listPins: (terminalId) => (servedTranscriptFor(terminalId) ? [] : pinStore.list(terminalId)),
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,
     // THE INTERNET GATE (§9 · ④), mounted per workspace session. Reachable only
@@ -2530,7 +3198,13 @@ app.whenReady().then(() => {
     },
     events,
     agents,
-    traces,
+    traces: {
+      index: traceIndexFor,
+      boundaryMarkers: traceMarkersFor,
+      page: tracePageFor,
+      latestCheckpoint: latestCheckpointFor
+    },
+    turnHistory: turnHistoryFor,
     // Activity Board data plane. Without this /api/board answers 503 —
     // deliberately, so a missing wire-up is loud instead of an empty board.
     // probe (L2) is absent until the tmux sampler lands; rows then degrade to
@@ -2600,6 +3274,20 @@ app.whenReady().then(() => {
     rendererSrcDir: path.join(app.getAppPath(), 'src/renderer/src')
   })
   registerIpc({ restoreCheckpoint, undoRestore })
+  // Profiles outlive crashes, but not their browser nodes. Enumerate every
+  // workspace strictly so corrupt parked state makes this fail closed.
+  try {
+    const reaped = reapOrphanBrowserProfiles(
+      path.join(app.getPath('userData'), 'interactive-browser'),
+      store.allBrowserIdsStrict(),
+    )
+    if (reaped.length > 0) console.error(`Reaped ${reaped.length} orphaned browser profile(s)`)
+  } catch (error) {
+    console.error('Skipping browser profile reap: could not enumerate all workspace browsers', error)
+  }
+  // Restore browser cards as cold metadata. replaceNodes preserves any live
+  // node-owned instances, but startup does not spend one Chromium process (and
+  // profile) per saved reference card; a stream or agent command starts it.
   void browserManager.replaceNodes(store.browsers()).catch(() => undefined)
   createWindow()
 
@@ -2815,6 +3503,65 @@ function registerIpc(handlers: RestoreHandlers): void {
     )
   )
 
+  /**
+   * Translate a checkpoint body with Sous. The renderer holds the text already
+   * (it rendered it), so it sends the text rather than a checkpoint id — this
+   * handler never reads a session file and cannot translate a checkpoint the
+   * caller is not already looking at.
+   *
+   * Never throws at the boundary: a rejected invoke gives the renderer an
+   * Error whose message it would have to parse to say anything useful. The
+   * failure reasons are a closed set, so they come back as data.
+   */
+  // Which Sous is configured — the renderer says "sent to <host>" with it, so
+  // "this text left the machine" is on screen rather than in a config file.
+  ipcMain.handle('sous:host', () => remoteSousHost())
+  ipcMain.handle('sous:translate', async (_e, text: unknown, language: unknown) => {
+    if (typeof text !== 'string' || typeof language !== 'string') {
+      return { ok: false, failure: 'unusable-output' }
+    }
+    if (text.length > TRANSLATE_MAX_CHARS) return { ok: false, failure: 'too-long' }
+    try {
+      return await translateBody(text, language)
+    } catch (error) {
+      console.error('sous:translate failed:', error)
+      return { ok: false, failure: 'unreachable' }
+    }
+  })
+
+  // ---- the author journey (Door A), reachable at last -------------------
+  //
+  // H1/H2/H3 of Tinker's review were ONE bug wearing three faces: the payout
+  // check, the host refusal and the settings surface were all written, tested
+  // and called by nothing. A check with no caller is not protection, and a
+  // commit message that says it is will be believed by the next lane. These
+  // handlers are the callers.
+
+  /** The trust list, and the two ways an owner changes it. H3. */
+  ipcMain.handle('registry:hosts', () => ({
+    hosts: registryHosts(),
+    configured: registryHostSettings.list(),
+    source: resolveRegistryHosts(registryHostInput()).source,
+    help: registryHostHelp(resolveRegistryHosts(registryHostInput()).rejected),
+    rejected: resolveRegistryHosts(registryHostInput()).rejected
+  }))
+  ipcMain.handle('registry:host:add', (_e, host: string) => registryHostSettings.add(host))
+  ipcMain.handle('registry:host:remove', (_e, host: string) =>
+    registryHostSettings.remove(host)
+  )
+
+  /**
+   * Publish a saved team. ONE owner action — the thing that did not exist.
+   *
+   * Every refusal comes back named, because the author has to act on it: a
+   * bare failure sends them to the ~140 hand-written lines this replaces.
+   */
+  ipcMain.handle(
+    'publish:preset',
+    async (_e, input: { team: string; handle: string; pricing?: unknown; payout?: unknown }) =>
+      publishSavedTeam(input)
+  )
+
   ipcMain.handle('workspace:list', () => store.list())
   ipcMain.handle('workspace:create', (_e, name: string, dir: string, team?: string) =>
     team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir)
@@ -2823,6 +3570,139 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('template:import', (_e, team: string, position?: { x: number; y: number }) =>
     importTemplateAsSession(team, position)
   )
+
+  // R30 serving — owner IPC ONLY, never on the listener (the grant-surface rule:
+  // this decides what is callable, so it is strictly above the gate it feeds).
+  ipcMain.handle(
+    'serving:serve',
+    async (
+      _e,
+      input: { templateId: string; access: ServeAccess; priceUsd?: string }
+    ) => {
+      if (!teams.load(input.templateId)) return { ok: false, reason: 'no-template' as const }
+      if (input.access === 'paid' && servedPayments.rails().length === 0) {
+        return { ok: false, reason: 'no-payment-rail' as const }
+      }
+      // The slug is derived from the team's own name and made unique against
+      // the workspace namespace it shares — a service must not shadow a
+      // workspace the owner named, and a live workspace wins the slug anyway.
+      const taken = [
+        ...store.list().workspaces.map((w) => w.slug),
+        ...serving.served.list().map((s) => s.slug)
+      ].filter((s): s is string => typeof s === 'string')
+      const slug = uniqueSlug(deriveSlug(input.templateId), taken)
+      // One service per template: re-serving replaces its own entry rather
+      // than minting a second identity for the same crew.
+      const serviceId = `svc-${deriveSlug(input.templateId)}`
+      // ONE refusal path. The price shape used to be re-checked here beside the
+      // registry's own copy; now every reason — including the orch — comes back
+      // from serve() itself, so the owner surface and the gate can never
+      // disagree about what is servable.
+      try {
+        await serving.serve({
+          serviceId,
+          templateId: input.templateId,
+          slug,
+          access: input.access,
+          ...(input.access === 'paid' ? { priceUsd: input.priceUsd } : {})
+        })
+      } catch (error) {
+        if (error instanceof ServeRefused) return { ok: false as const, reason: error.reason }
+        throw error
+      }
+      return { ok: true as const, serviceId, slug, address: servedAddress(slug) }
+    }
+  )
+  ipcMain.handle('serving:stop', (_e, serviceId: string) => {
+    serving.stop(serviceId)
+    return { ok: true as const }
+  })
+  ipcMain.handle('serving:payment-status', () => configuredServedPaymentStatus())
+  ipcMain.handle('serving:payment-pay-to', (_e, value: unknown) => {
+    const result = servedPayments.setPayTo(typeof value === 'string' ? value : '')
+    return result.ok ? { ...result, status: configuredServedPaymentStatus() } : result
+  })
+  ipcMain.handle('serving:payment-stripe', (_e, value: unknown) => {
+    const result = servedPayments.setStripeSecret(typeof value === 'string' ? value : '')
+    return result.ok ? { ...result, status: configuredServedPaymentStatus() } : result
+  })
+  ipcMain.handle('serving:list', () =>
+    serving.served.list().map((t) => ({
+      ...t,
+      address: servedAddress(t.slug),
+      paymentRails: t.access === 'paid' ? servedPaymentRails(servedPaymentTerms(t)) : []
+    }))
+  )
+  /** The owner's Sessions table: who is on, on which version. */
+  ipcMain.handle('serving:sessions', () =>
+    serving.instantiator.sessions().map((s) => ({
+      sessionId: s.identity.sessionId,
+      serviceId: s.serviceId,
+      caller: s.accountId,
+      workspaceName: s.identity.workspaceName,
+      version: s.version
+    }))
+  )
+  /** END destroys someone else's workspace, so it is the owner's act alone. */
+  ipcMain.handle('serving:end', (_e, sessionId: string) => serving.instantiator.end(sessionId))
+
+  // ---- the dock's crews (import side): add is free and inert ----
+  ipcMain.handle('crew:list', () => remoteCrews.list())
+  ipcMain.handle('crew:remove', (_e, id: string) => {
+    remoteCrews.remove(id)
+    return { ok: true as const }
+  })
+  ipcMain.handle('crew:unlock', (_e, id: string, payRef: string) => {
+    // The gate sheet settled a payment; the chip stops being locked.
+    const crew = remoteCrews.patch(id, { payRef })
+    return crew ? { ok: true as const, crew } : { ok: false as const, reason: 'gone' as const }
+  })
+  ipcMain.handle('crew:add', async (_e, link: string) => {
+    const parsed = parseCrewLink(link)
+    if (!parsed) return { ok: false as const, reason: 'bad-link' as const }
+    // Read the public face — what the owner chose to publish, nothing more.
+    try {
+      const res = await fetch(`${parsed.origin}/${parsed.slug}/crew`)
+      if (!res.ok) return { ok: false as const, reason: 'not-serving' as const }
+      const face = (await res.json()) as {
+        name: string
+        door: string
+        access: 'account' | 'paid'
+        priceUsd?: string
+        version: number
+        agents: number
+      }
+      const crew = remoteCrews.add({
+        origin: parsed.origin,
+        slug: parsed.slug,
+        name: face.name,
+        door: face.door,
+        access: face.access,
+        ...(face.priceUsd !== undefined ? { priceUsd: face.priceUsd } : {}),
+        version: face.version,
+        agents: face.agents
+      })
+      return { ok: true as const, crew }
+    } catch {
+      return { ok: false as const, reason: 'unreachable' as const }
+    }
+  })
+  /**
+   * Place a crew: ONE orch card on the caller's own canvas, running the line
+   * script. The card is the door — the crew behind it runs at the author's app.
+   */
+  ipcMain.handle('crew:place', (_e, id: string, position?: { x: number; y: number }) => {
+    const crew = remoteCrews.get(id)
+    if (!crew) return { ok: false as const, reason: 'gone' as const }
+    const node = createTerminal({
+      name: `${crew.name} · ${crew.slug}`,
+      preset: PRESETS[PRESETS.length - 1].name,
+      position,
+      command: crewLineCommand(crewLineScript(), crew),
+      servedTranscript: { origin: crew.origin, slug: crew.slug }
+    })
+    return { ok: true as const, node }
+  })
   ipcMain.handle('workspace:switch', (_e, id: string) => {
     switchWorkspace(id)
     return store.list()
@@ -2925,7 +3805,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.on('turn:seen', (_e, terminalId: string) => turns.seen(terminalId))
 
   // Turn history + fork-from-turn for the canvas cards.
-  ipcMain.handle('turn:history', (_e, terminalId: string) => turns.history(terminalId))
+  ipcMain.handle('turn:history', (_e, terminalId: string) => turnHistoryFor(terminalId))
   // Checkpoint search: scan the whole ledger in MAIN and return matches with a
   // capped snippet. Turn bodies never cross the wire.
   ipcMain.handle('turn:search', (_e, query: string, limit?: number) =>
@@ -2933,17 +3813,19 @@ function registerIpc(handlers: RestoreHandlers): void {
   )
   // Context-view v2: paged transcript windows with full prompt+reply bodies.
   ipcMain.handle('turn:page', (_e, terminalId: string, request?: TurnPageRequest) =>
-    pageTurns(turns.history(terminalId), request ?? {})
+    turnPageFor(terminalId, request ?? {})
   )
   // Trace-sourced context: identity-keyed windows straight from agent files.
-  ipcMain.handle('trace:index', (_e, terminalId: string) => traces.index(terminalId))
-  ipcMain.handle('trace:markers', (_e, terminalId: string) => traces.boundaryMarkers(terminalId))
+  ipcMain.handle('trace:index', (_e, terminalId: string, request?: unknown) =>
+    traceIndexFor(terminalId, (request ?? {}) as Parameters<TraceReader['index']>[1])
+  )
+  ipcMain.handle('trace:markers', (_e, terminalId: string) => traceMarkersFor(terminalId))
   ipcMain.handle('trace:page', (_e, terminalId: string, request?: unknown) =>
-    traces.page(terminalId, (request ?? {}) as Parameters<TraceReader['page']>[1])
+    tracePageFor(terminalId, (request ?? {}) as Parameters<TraceReader['page']>[1])
   )
   // T1 card preview (trace-perf-architecture): the LATEST checkpoint only, from
   // a bounded tail read — no PTY, O(tail). A visible-but-unzoomed card asks this.
-  ipcMain.handle('trace:latest', (_e, terminalId: string) => traces.latestCheckpoint(terminalId))
+  ipcMain.handle('trace:latest', (_e, terminalId: string) => latestCheckpointFor(terminalId))
   // T4 push: a card subscribes while it shows a checkpoint; the file watch then
   // nudges it (`trace:latest-changed`) on every append, no poll wait.
   ipcMain.handle('trace:latest-watch', (_e, terminalId: string) => {

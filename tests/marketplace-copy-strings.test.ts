@@ -45,6 +45,17 @@ describe('every protocol moment has words', () => {
     expect(copy('mkt.pay.receipt')).toMatch(/free/i)
   })
 
+  it('keeps cannot-take-payment distinct from a real unverifiable payment', () => {
+    const unavailable = copy('mkt.gate.payment.unavailable')
+    const unverifiable = copy('mkt.gate.payment.unverifiable')
+    expect(unavailable).toBe(
+      "this crew can't take payment right now — nothing was charged; try later"
+    )
+    expect(unavailable).not.toMatch(/checker|payment may be fine/i)
+    expect(unverifiable).toMatch(/checker is unreachable|payment may be fine/i)
+    expect(unavailable).not.toBe(unverifiable)
+  })
+
   it('tells an author their original session is untouched', () => {
     expect(copy('mkt.export.safety')).toMatch(/never touched/)
   })
@@ -88,7 +99,7 @@ describe('every protocol moment has words', () => {
     const groups = [mod.MKT_AUTH, mod.MKT_PAY, mod.MKT_DENIED_REASONS, mod.MKT_BLOCKED,
                     mod.MKT_EXPORT, mod.MKT_ENROL, mod.MKT_SAVE, mod.MKT_INSTALL_PRICE,
                     mod.MKT_TEMPLATE, mod.MKT_SERVE, mod.MKT_SESSIONS, mod.MKT_SVC,
-                    mod.MKT_CHIP]
+                    mod.MKT_CHIP, mod.MKT_GATE]
     for (const group of groups) {
       for (const id of Object.keys(group)) {
         expect(Object.keys(MKT_ALL), `${id} is not reachable through MKT_ALL`).toContain(id)
@@ -191,5 +202,51 @@ describe('chip provenance and the imported pin', () => {
   it('normalises the handle exactly once', async () => {
     const { importedPinTip } = await import('../src/shared/marketplace-copy')
     expect(importedPinTip('bought', '@drej', 'V2')).not.toContain('@@')
+  })
+})
+
+/**
+ * Door B — the remote teammate card. The two properties that are privacy
+ * decisions rather than wording preferences.
+ */
+describe('remote card refusals', () => {
+  it('renders 403-scope, 403-revoked and 404 with the IDENTICAL sentence', async () => {
+    const { remoteRefusalCopy } = await import('../src/shared/marketplace-copy')
+    const scope = remoteRefusalCopy(403, 'Tinker', 'scope').text
+    const revoked = remoteRefusalCopy(403, 'Tinker', 'revoked').text
+    const missing = remoteRefusalCopy(404, 'Tinker').text
+    // The merge IS the privacy: an unexported agent and one that never existed
+    // must be indistinguishable, and a shared string survives a refactor where
+    // two carefully-similar sentences do not.
+    expect(scope).toBe(revoked)
+    expect(revoked).toBe(missing)
+  })
+
+  it('splits identity from busy — both retryable, only one by pressing again', async () => {
+    const { remoteRefusalCopy } = await import('../src/shared/marketplace-copy')
+    expect(remoteRefusalCopy(409, 'Tinker').retryable).toBe(true)
+    expect(remoteRefusalCopy(401, 'Tinker').retryable).toBe(true)
+    expect(remoteRefusalCopy(401, 'Tinker').text).not.toBe(remoteRefusalCopy(409, 'Tinker').text)
+    expect(remoteRefusalCopy(403, 'Tinker').retryable).toBe(false)
+  })
+
+  it('never names the owner in a revocation', async () => {
+    const { MKT_REMOTE_REVOKED } = await import('../src/shared/marketplace-copy')
+    for (const value of Object.values(MKT_REMOTE_REVOKED)) {
+      expect(value).not.toMatch(/\{owner\}|\{author\}/)
+    }
+  })
+
+  it('counts callers without "(s)"', async () => {
+    const { accessLabel } = await import('../src/shared/marketplace-copy')
+    expect(accessLabel(0)).toBe('Nobody can call this')
+    expect(accessLabel(1)).toBe('1 caller')
+    expect(accessLabel(4)).toBe('4 callers')
+  })
+
+  it('says the cold wait is one-time, at both stages', async () => {
+    const { MKT_REMOTE_WAKING } = await import('../src/shared/marketplace-copy')
+    expect(MKT_REMOTE_WAKING['mkt.remote.waking.first']).toMatch(/after that/i)
+    expect(MKT_REMOTE_WAKING['mkt.remote.waking.still']).toMatch(/only happens once/i)
   })
 })
