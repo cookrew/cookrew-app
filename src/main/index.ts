@@ -190,6 +190,7 @@ import { buildRoleBootMessage } from '../shared/fork'
 import { pageTurns } from '../shared/turn'
 import type { TurnPageRequest } from '../shared/turn'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
+import { sweepStorage } from './storage-gc-scan'
 
 // ── COMPOSITOR BUDGET — the golden-frame flicker ─────────────────────────────
 // Chromium sizes its raster-tile budget from a conservative GPU-memory guess.
@@ -3073,6 +3074,26 @@ app.whenReady().then(() => {
   // Push the current tmux config to sessions that survived a previous run,
   // so reattached terminals show the (possibly updated) status bar.
   ptys.reloadTmuxConfig()
+
+  // Reclaim what the stores leaked. Deferred rather than awaited: it walks
+  // ~/.cookrew and must never sit between the user and a window. It is also
+  // deliberately quiet on the happy path — a sweep that frees nothing is the
+  // normal case and does not deserve a line in the log.
+  setTimeout(() => {
+    try {
+      const swept = sweepStorage({ apply: true })
+      if (swept.remove.length > 0) {
+        const mb = (swept.bytes / 1024 / 1024).toFixed(1)
+        console.error(`storage sweep: reclaimed ${swept.remove.length} files (${mb}MB)`)
+      }
+      if (swept.failed.length > 0) {
+        console.error(`storage sweep: ${swept.failed.length} file(s) could not be removed`)
+      }
+    } catch (error) {
+      // Reclaiming disk is never worth a failed launch.
+      console.error('storage sweep failed:', error)
+    }
+  }, 30_000)
 
   // Endpoint restore handlers: rewind a live agent to a checkpoint + undo.
   const { restoreCheckpoint, undoRestore } = createRestoreHandlers({
