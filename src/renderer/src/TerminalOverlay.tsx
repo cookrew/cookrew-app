@@ -28,6 +28,7 @@ import { checkpointTitle, useTitleMode } from './checkpoint-sync'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
 import { handleTerminalPaste } from './terminal-paste'
 import { terminalKeyIntent } from './terminal-key-intent'
+import { imeTextToForward } from './ime-input-bridge'
 import { CrIcon } from './icons'
 import { TranslateButton } from './TranslateButton'
 import { languageByCode } from '../../shared/translate'
@@ -504,7 +505,41 @@ function TerminalOverlay({
       cleanups.push(() => {
         if (reassertTimer) clearTimeout(reassertTimer)
       })
-      const inputSub = term.onData((input) => cookrew().ptyInput(node.id, input))
+      // Counts every byte xterm emits, so the IME bridge below can tell whether
+      // xterm already claimed an input event.
+      let xtermDataCount = 0
+      const inputSub = term.onData((input) => {
+        xtermDataCount += 1
+        cookrew().ptyInput(node.id, input)
+      })
+
+      // iOS IME rescue — see ime-input-bridge.ts. xterm drops a committed
+      // insertText whenever a keydown preceded it, which is always true for an
+      // iOS soft keyboard, so the CJK keyboard's digits and punctuation and
+      // Typeless's dictated phrase never reached the PTY.
+      //
+      // The ORDERING is what makes "never double-send" true, and it is why both
+      // listeners sit on the container rather than the textarea. Capture runs
+      // ancestor-first, so ours fires BEFORE xterm's own capture listener on the
+      // textarea and can snapshot the count. Bubble runs last, after xterm has
+      // had its turn — and if xterm did handle the event it calls cancel(),
+      // whose stopPropagation means our bubble listener never runs at all.
+      let countBeforeInput = 0
+      const onInputCapture = (): void => {
+        countBeforeInput = xtermDataCount
+      }
+      const onInputBubble = (event: Event): void => {
+        const ie = event as InputEvent
+        const text = imeTextToForward(ie.inputType, ie.data, xtermDataCount !== countBeforeInput)
+        if (text === null) return
+        cookrew().ptyInput(node.id, text)
+      }
+      container.addEventListener('input', onInputCapture, true)
+      container.addEventListener('input', onInputBubble, false)
+      cleanups.push(() => {
+        container.removeEventListener('input', onInputCapture, true)
+        container.removeEventListener('input', onInputBubble, false)
+      })
       // Focus pops the software keyboard AND (with a small-font textarea)
       // iOS's page auto-zoom — on a phone that fired the zoom/resize loop the
       // moment the overlay opened. Desktop keeps instant focus; the phone
