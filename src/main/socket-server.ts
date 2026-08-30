@@ -516,7 +516,14 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
       })
       if (error) throw new Error(error)
     }
-    return deps.browserCommand(request.args, request.terminalId)
+    // me.id, NOT request.terminalId. The raw id is the env the caller's process
+    // INHERITED — for an agent the harness spawned in the background that is
+    // the host pane, in another workspace entirely. self() is what repairs it
+    // (ac57f2b), and the guard three lines up already trusts the repair. Handing
+    // the raw id onward meant create()'s `store.node(terminalId)` missed, so the
+    // card was anchored nowhere, owned no edge, and announced itself as "not
+    // connected" — the caller's own browser, disowned by its caller.
+    return deps.browserCommand(request.args, me.id)
   }
 
   // Fast path (this runs per snapshot/click/type): an in-memory scan of the
@@ -540,7 +547,9 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
       : null
     if (error) throw new Error(error)
   }
-  return deps.browserCommand(request.args, request.terminalId)
+  // Same repair for every other subcommand. These do not anchor a node, but the
+  // id still names who is driving, and one identity per command beats two.
+  return deps.browserCommand(request.args, me.id)
 }
 
 function workspaceName(deps: SocketServerDeps, id: string): string {

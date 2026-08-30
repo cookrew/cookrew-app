@@ -134,4 +134,99 @@ describe('cmdBrowser — workspace scope', () => {
     await expect(cmdBrowser(request(['info', 'Nope'], me.id), deps)).resolves.toBe('delegated')
     expect(browserCommand).toHaveBeenCalled()
   })
+
+  // Probe's P0, 2026-08-30. ac57f2b repaired WHO the caller is, but cmdBrowser
+  // went on handing browserCommand the raw env id, so create() looked up a
+  // terminal that is not a node here, anchored nothing, wrote no edge, and
+  // reported "not connected" — the caller's own card, disowned by its caller.
+  // The repair has to reach the delegate, not just the guard above it.
+  it('delegates the REPAIRED caller id, not the env id it was spawned under', async () => {
+    const { store, deps, browserCommand, home, other } = setup()
+    // The host pane the background agent inherited its environment from — a
+    // real terminal, in a different workspace.
+    store.switchWorkspace(other)
+    store.addNode(terminal('host-pane', 'GOAT Conductor'))
+    // The agent's OWN card, in the focused workspace, bound to its session.
+    store.switchWorkspace(home)
+    const mine = store.addNode({
+      ...terminal('my-card', 'Probe'),
+      claudeSessionId: 'sess-413c8c39'
+    } as TerminalNodeData) as TerminalNodeData
+
+    const req: CliRequest = {
+      ...request(['create', 'https://example.test', 'Report'], 'host-pane'),
+      sessionId: 'sess-413c8c39'
+    }
+    await expect(cmdBrowser(req, deps)).resolves.toBe('delegated')
+
+    // The whole point: 'my-card', never 'host-pane'. With the raw id the card
+    // is created unconnected in the wrong caller's name.
+    expect(browserCommand).toHaveBeenCalledWith(
+      ['create', 'https://example.test', 'Report'],
+      mine.id
+    )
+    expect(browserCommand).not.toHaveBeenCalledWith(expect.anything(), 'host-pane')
+    expect(home).not.toBe(other)
+  })
+
+  // Tinker's review said the non-create site is "untested and untestable
+  // through behaviour", because no engine reads the argument for those
+  // subcommands. True of the ENGINES — and the reason I kept the change was
+  // the next subcommand that does read it. But the delegation itself is a
+  // contract, and a contract is observable at this seam even when the far side
+  // ignores it. So it is testable after all, and now it is tested: revert that
+  // site and this goes red while every behavioural test stays green.
+  it('delegates the repaired id for NON-create subcommands too', async () => {
+    const { store, deps, browserCommand } = setup()
+    store.addNode(browser('b1', 'Docs'))
+    store.addNode({
+      ...terminal('my-card', 'Probe'),
+      claudeSessionId: 'sess-413c8c39'
+    } as TerminalNodeData)
+
+    const req: CliRequest = {
+      ...request(['info', 'Docs'], 'host-pane-elsewhere'),
+      sessionId: 'sess-413c8c39'
+    }
+    await expect(cmdBrowser(req, deps)).resolves.toBe('delegated')
+    expect(browserCommand).toHaveBeenCalledWith(['info', 'Docs'], 'my-card')
+  })
+
+  // Also from the review, and a consequence my commit message did not name:
+  // --as is a real behaviour change on create. A plain shell used to pass an
+  // empty id, so the card anchored at 0,0 and connected nothing; it now anchors
+  // beside the named agent and owns an edge. That is what --as means everywhere
+  // else, so it is intended — and intended behaviour with no test is how it
+  // gets "fixed" back by someone reading only the diff.
+  it('--as anchors the new card to the NAMED agent, not to nothing', async () => {
+    const { store, deps, browserCommand } = setup()
+    const named = store.addNode(terminal('agent-1', 'Probe')) as TerminalNodeData
+
+    const req: CliRequest = {
+      id: 'r1',
+      cmd: 'browser',
+      args: ['create', 'https://example.test', 'Report'],
+      flags: { as: 'Probe' },
+      terminalId: ''
+    }
+    await expect(cmdBrowser(req, deps)).resolves.toBe('delegated')
+    expect(browserCommand).toHaveBeenCalledWith(
+      ['create', 'https://example.test', 'Report'],
+      named.id
+    )
+  })
+
+  it('leaves an ordinary pane agent alone — no session, no repair', async () => {
+    // The negative Probe named: seeing a repair for a NORMAL pane agent is
+    // itself the regression, since those were all measured aligned.
+    const { store, deps, browserCommand } = setup()
+    const me = store.addNode(terminal('t1', 'Conductor')) as TerminalNodeData
+    await expect(
+      cmdBrowser(request(['create', 'https://example.test', 'X'], me.id), deps)
+    ).resolves.toBe('delegated')
+    expect(browserCommand).toHaveBeenCalledWith(
+      ['create', 'https://example.test', 'X'],
+      me.id
+    )
+  })
 })
