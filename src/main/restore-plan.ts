@@ -67,6 +67,12 @@ export function planCheckpointRestore(input: {
   if (!input.sessionId) {
     return { ok: false, harness: harness.id, reason: 'No bound session file for this agent yet.' }
   }
+  // AUDITED for the two-index-space bug (checkpoint-session-alignment,
+  // 2026-08-30) and found CORRECT by construction: the index resolves against
+  // the TRACE blocks — the current file's own numbering, the space the rail
+  // shows — and the cut binds to the block's uuid below. This is the shape
+  // forkClaudeSession had to be repaired INTO; a rewind never consulted the
+  // ledger, so a compact's continued numbering cannot misdirect it.
   const block = input.blocks.find((b) => b.index === input.checkpointIndex)
   if (!block) {
     return { ok: false, harness: harness.id, reason: `No checkpoint ${input.checkpointIndex} in this session.` }
