@@ -70,8 +70,14 @@ export interface ImeBridgeTarget {
  * listeners sit on the container rather than the textarea. Capture runs
  * ancestor-first, so ours fires BEFORE xterm's own capture listener on the
  * textarea and can snapshot the emit count. Bubble runs last, after xterm has
- * had its turn — and if xterm did handle the event it calls cancel(), whose
- * stopPropagation means our bubble listener never runs at all.
+ * had its turn.
+ *
+ * The bubble listener ALWAYS runs — xterm's cancel() is a no-op unless
+ * options.cancelEvents is set (it defaults false and the overlay does not set
+ * it), so there is no stopPropagation shielding us. The emit-count comparison
+ * is the ONLY thing preventing a double-send on the synchronous path; nothing
+ * can interleave mid-dispatch, which is what makes it sound. Do not remove it
+ * on the strength of an imagined event-cancellation defense.
  */
 export function attachImeBridge(
   container: ImeBridgeTarget,

@@ -18,6 +18,15 @@
 // insertText with no composition in flight is ours to rescue — that second half
 // is the original dropped-punctuation bug and must keep working.
 
+// What this harness can NOT express (verified by reading xterm 5.5.0 source
+// instead — CompositionHelper.ts): the cancelled/empty-commit case is safe
+// because _finalizeComposition(true) reads textarea.value.substring(start) at
+// timer time, so a declined bare insertText has already mutated the textarea
+// and xterm's queued send picks it up. fakeXterm has no textarea, so that
+// self-healing property is asserted by source-reading, not by these tests.
+// Likewise the keydown-229-without-composition path (_handleAnyTextareaChanges)
+// is not modeled here; it is a phone-QA case.
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { attachImeBridge } from '../src/renderer/src/ime-input-bridge'
 
