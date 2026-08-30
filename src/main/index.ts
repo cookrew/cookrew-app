@@ -127,6 +127,7 @@ import { findChrome } from './headless-chrome'
 import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profile-store'
+import { purgeRegenerableProfileData, reapOrphanPartitions } from './browser-storage-gc'
 
 import { TraceReader, type SessionWatchSpec } from './trace'
 import { LatestFileWatcher } from './latest-watch'
@@ -190,6 +191,7 @@ import { buildRoleBootMessage } from '../shared/fork'
 import { pageTurns } from '../shared/turn'
 import type { TurnPageRequest } from '../shared/turn'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
+import { sweepStorage } from './storage-gc-scan'
 
 // ── COMPOSITOR BUDGET — the golden-frame flicker ─────────────────────────────
 // Chromium sizes its raster-tile budget from a conservative GPU-memory guess.
@@ -2910,19 +2912,43 @@ function recordHeadlessTabClosed(browserId: string, tabId: string): void {
   if (updated?.kind === 'browser') void browserManager.syncNode(updated).catch(() => undefined)
 }
 
+/** Application Support half of a headless browser profile. */
+const browserProfileRoot = (): string =>
+  path.join(app.getPath('userData'), 'interactive-browser')
+
+/**
+ * Caches half of the same profile — `~/Library/Caches/<app>/interactive-browser`
+ * on macOS, where Chrome splits a user-data-dir in two.
+ *
+ * Derived as the sibling of appData (Electron's path list has no 'cache' key)
+ * and keyed by userData's own basename, because the app NAME differs in case
+ * from the directory on disk. Anywhere the profile is not split this resolves
+ * to a path that does not exist, and every caller reads that as nothing to do.
+ */
+const browserCacheRoot = (): string =>
+  path.join(
+    path.dirname(app.getPath('appData')),
+    'Caches',
+    path.basename(app.getPath('userData')),
+    'interactive-browser'
+  )
+
 // C-2 ownership: one headless process/profile per active browser node. Cast
 // viewers and trusted agent commands both resolve through this manager.
 const browserManager = new HeadlessBrowserManager({
   enabled: interactiveBrowserEnabled,
   chromePath: findChrome,
-  profileRoot: () => path.join(app.getPath('userData'), 'interactive-browser'),
+  profileRoot: browserProfileRoot,
   // Chromium's own layout keeps downloaded components at INSTALLATION scope,
   // beside the profiles rather than inside each one. Cookrew gives every card a
   // whole user-data-dir, so without this every card downloads its own copy.
-  sharedInstallationRoot: () =>
-    path.join(app.getPath('userData'), 'browser-shared'),
-  deleteProfile: (browserId) =>
-    void removeBrowserProfile(path.join(app.getPath('userData'), 'interactive-browser'), browserId),
+  sharedInstallationRoot: () => path.join(app.getPath('userData'), 'browser-shared'),
+  deleteProfile: (browserId) => {
+    // BOTH halves. macOS Chrome splits a profile across Application Support and
+    // Caches; removing one left 110 orphaned cache directories behind.
+    removeBrowserProfile(browserProfileRoot(), browserId)
+    removeBrowserProfile(browserCacheRoot(), browserId)
+  },
   resolveNode: activeBrowserNode,
   onPageState: recordHeadlessPageState,
   onTabOpened: recordHeadlessTabOpened,
@@ -3078,6 +3104,26 @@ app.whenReady().then(() => {
   // Push the current tmux config to sessions that survived a previous run,
   // so reattached terminals show the (possibly updated) status bar.
   ptys.reloadTmuxConfig()
+
+  // Reclaim what the stores leaked. Deferred rather than awaited: it walks
+  // ~/.cookrew and must never sit between the user and a window. It is also
+  // deliberately quiet on the happy path — a sweep that frees nothing is the
+  // normal case and does not deserve a line in the log.
+  setTimeout(() => {
+    try {
+      const swept = sweepStorage({ apply: true })
+      if (swept.remove.length > 0) {
+        const mb = (swept.bytes / 1024 / 1024).toFixed(1)
+        console.error(`storage sweep: reclaimed ${swept.remove.length} files (${mb}MB)`)
+      }
+      if (swept.failed.length > 0) {
+        console.error(`storage sweep: ${swept.failed.length} file(s) could not be removed`)
+      }
+    } catch (error) {
+      // Reclaiming disk is never worth a failed launch.
+      console.error('storage sweep failed:', error)
+    }
+  }, 30_000)
 
   // Endpoint restore handlers: rewind a live agent to a checkpoint + undo.
   const { restoreCheckpoint, undoRestore } = createRestoreHandlers({
@@ -3282,11 +3328,33 @@ app.whenReady().then(() => {
   // Profiles outlive crashes, but not their browser nodes. Enumerate every
   // workspace strictly so corrupt parked state makes this fail closed.
   try {
-    const reaped = reapOrphanBrowserProfiles(
-      path.join(app.getPath('userData'), 'interactive-browser'),
-      store.allBrowserIdsStrict(),
-    )
+    const owned = store.allBrowserIdsStrict()
+    const reaped = reapOrphanBrowserProfiles(browserProfileRoot(), owned)
     if (reaped.length > 0) console.error(`Reaped ${reaped.length} orphaned browser profile(s)`)
+    // The two halves the profile reaper never knew about: the canvas webview's
+    // own partition, and — on macOS — the Caches side of a Chrome profile.
+    // Deleting only userData left every retired card half-resident.
+    const partitions = reapOrphanPartitions(
+      path.join(app.getPath('userData'), 'Partitions'),
+      owned
+    )
+    const cached = reapOrphanBrowserProfiles(browserCacheRoot(), owned)
+    if (partitions.length + cached.length > 0) {
+      console.error(
+        `Reaped ${partitions.length} orphaned partition(s), ${cached.length} orphaned cache dir(s)`
+      )
+    }
+    // Chrome downloads its component and model stores per profile however many
+    // flags say otherwise, so they are deleted rather than argued with. Safe
+    // here specifically because startup has not spawned a browser yet: nothing
+    // holds these files open. Site state is never touched.
+    let freed = 0
+    for (const id of owned) {
+      freed += purgeRegenerableProfileData(path.join(browserProfileRoot(), id))
+    }
+    if (freed > 0) {
+      console.error(`Browser caches: reclaimed ${(freed / 1024 ** 3).toFixed(2)}GB`)
+    }
   } catch (error) {
     console.error('Skipping browser profile reap: could not enumerate all workspace browsers', error)
   }
