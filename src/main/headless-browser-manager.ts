@@ -23,6 +23,8 @@ export interface HeadlessBrowserManagerDeps {
   enabled: () => boolean
   chromePath: () => string | null
   profileRoot: () => string
+  /** One store for installation-scope Chrome data shared by every profile. */
+  sharedInstallationRoot?: () => string
   resolveNode: (browserId: string) => BrowserNodeData | null
   onPageState: (browserId: string, tabId: string, state: HeadlessPageState) => void
   onTabOpened: (browserId: string, tab: BrowserTab) => void
@@ -122,6 +124,9 @@ export class HeadlessBrowserManager {
     const options: HeadlessOptions = {
       executablePath,
       profileDir: path.join(this.deps.profileRoot(), browserId),
+      ...(this.deps.sharedInstallationRoot
+        ? { sharedInstallationDir: this.deps.sharedInstallationRoot() }
+        : {}),
       width: clampSize(node.size.width, 800),
       height: clampSize(node.size.height, 600),
       tabs,

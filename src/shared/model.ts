@@ -456,6 +456,14 @@ export interface AgentRole {
 export interface CliRequest {
   id: string
   terminalId: string
+  /**
+   * The claude session the caller's own process tree says it is, when it could
+   * be read. A CLAIM the app checks against its bindings — see caller-identity:
+   * a background-spawned agent inherits its host pane's COOKREW_TERMINAL_ID, so
+   * the env alone attributes its commands to the wrong card. Absent for
+   * non-claude harnesses and for CLIs older than this field.
+   */
+  sessionId?: string | null
   cmd: string
   args: string[]
   flags: Record<string, string | boolean>

@@ -17,6 +17,7 @@ import {
   WorkspaceList,
   WorkspaceMeta
 } from '../shared/model'
+import { resolveCallerTerminalId } from '../shared/caller-identity'
 import { WorkspaceStore, WorkspaceNodeHit } from './store'
 import type { MobileEndpoint } from './mobile-endpoints'
 import { renderMobileHelp, renderRotated } from './mobile-cli-text'
@@ -263,7 +264,25 @@ function self(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
   if (!request.terminalId && typeof request.flags.as === 'string') {
     return resolveSelfByName(request.flags.as, deps.store, deps.agents)
   }
-  return resolveSelf(request.terminalId, deps.store, deps.agents)
+  // A pane's exported COOKREW_TERMINAL_ID is right for that pane's own agent
+  // and wrong for one the harness spawned in the background under it, which
+  // inherits the environment wholesale. The session→node binding is the fact
+  // that travels with the agent, so it outranks the env when the two disagree.
+  // Optional-call for the same reason `nodeAcrossWorkspaces?.()` is below: a
+  // fake store in a test need not implement the global walk, and an identity
+  // repair that cannot see the bindings simply does not repair.
+  const identity = resolveCallerTerminalId({
+    envTerminalId: request.terminalId,
+    sessionId: request.sessionId ?? null,
+    terminals: deps.store.terminalsAcross?.() ?? []
+  })
+  if (identity.repairedFrom !== null) {
+    console.error(
+      `cli identity repaired: env claimed ${identity.repairedFrom}, ` +
+        `session binds to ${identity.terminalId}`
+    )
+  }
+  return resolveSelf(identity.terminalId, deps.store, deps.agents)
 }
 
 /**

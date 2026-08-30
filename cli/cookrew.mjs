@@ -6,6 +6,7 @@ import net from 'node:net'
 import path from 'node:path'
 import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { homedir, tmpdir } from 'node:os'
 import process from 'node:process'
 
@@ -64,6 +65,46 @@ if (!cmd) fail("No command given. Run 'cookrew help'.")
  */
 const terminalId = process.env.COOKREW_TERMINAL_ID ?? ''
 
+/**
+ * The claude session this process is running inside, read from its own process
+ * ancestry, or null.
+ *
+ * WHY THIS EXISTS. The env var above is exported into a pane's shell once at
+ * boot, which is right for the pane's own agent and wrong for an agent the
+ * harness spawns in the BACKGROUND: it runs under the process tree of whichever
+ * pane hosts the daemon and inherits that pane's environment, so its CLI calls
+ * act as another card in another workspace and succeed. The session id is the
+ * one fact that travels with the AGENT rather than with the pane, and it is in
+ * its argv.
+ *
+ * Best effort by design. A failure here (no ps, an exotic harness, a shell with
+ * no claude ancestor) yields null, and the app keeps using the env value — the
+ * behaviour every non-claude caller already has. Bounded to a few hops so a
+ * deep tree cannot make the CLI slow.
+ */
+function ancestorSessionId() {
+  const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+  const flag = new RegExp(`--(?:session-id|resume)[= ](${uuid})\\b`, 'i')
+  try {
+    let pid = process.pid
+    for (let hop = 0; hop < 6 && pid > 1; hop += 1) {
+      const out = execFileSync('ps', ['-o', 'ppid=,command=', '-p', String(pid)], {
+        encoding: 'utf8',
+        timeout: 1000
+      }).trim()
+      if (!out) return null
+      const match = flag.exec(out)
+      if (match) return match[1].toLowerCase()
+      const next = Number.parseInt(out.trimStart().split(/\s+/)[0] ?? '', 10)
+      if (!Number.isFinite(next) || next === pid) return null
+      pid = next
+    }
+  } catch {
+    // Identity repair is a nicety; never let it break a command.
+  }
+  return null
+}
+
 // `preset list` / `note read` style subcommands stay in args; flags are --key [value].
 function parseArgv(argv) {
   const args = []
@@ -89,7 +130,10 @@ function parseArgv(argv) {
   return { cmd, args, flags }
 }
 
-const request = { id: randomUUID(), terminalId, cmd, args, flags }
+// sessionId is a CLAIM the app verifies against its own bindings, not a
+// replacement for terminalId: when the two disagree the binding wins, and when
+// the session is unknown the env value stands.
+const request = { id: randomUUID(), terminalId, sessionId: ancestorSessionId(), cmd, args, flags }
 
 // `cookrew mobile` also renders a QR code locally for the returned URL.
 const wantQr = cmd === 'mobile'
