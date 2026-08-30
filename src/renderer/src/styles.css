@@ -4347,6 +4347,171 @@ body.cookrew-mobile .cookrew-minimap {
   opacity: 0.95;
 }
 
+/* The SEGMENT boundary tick is a tap target (it opens the earlier-sessions
+   panel), so it reads as one: full opacity, a ring, and a pointer. The ring is
+   what separates "information" from "control" at 8px — same rule that gives
+   the version pins their hard edge. */
+.cr-ckpt-tick.lineage {
+  cursor: pointer;
+  opacity: 1;
+  box-shadow:
+    0 0 0 2px rgba(184, 119, 10, 0.35),
+    0 0 6px var(--amber);
+}
+
+.cr-ckpt-tick.lineage:hover {
+  box-shadow:
+    0 0 0 3px rgba(184, 119, 10, 0.55),
+    0 0 8px var(--amber);
+}
+
+/* ---- LINEAGE REACH: the earlier-sessions panel -----------------------------
+   Where the checkpoints an auto-compact rotation (or /clear) moved out of the
+   current file live now. A floating panel beside the rail — the identity list
+   and its fraction math never learn it exists. */
+.cr-lineage-panel {
+  position: absolute;
+  top: 8px;
+  right: 32px;
+  width: 336px;
+  max-width: calc(100vw - 48px);
+  max-height: min(72vh, 560px);
+  display: flex;
+  flex-direction: column;
+  z-index: 7; /* above the fan (4), the focused tag (5) and the count (6) */
+  background: var(--vi-panel);
+  border: 1px solid var(--vi-line);
+  border-radius: 10px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--vi-text);
+}
+
+.cr-lineage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--vi-line);
+}
+
+.cr-lineage-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+}
+
+.cr-lineage-total {
+  font-weight: 400;
+  letter-spacing: normal;
+  color: var(--vi-dim);
+  font-size: 11px;
+}
+
+.cr-lineage-close {
+  background: none;
+  border: none;
+  color: var(--vi-dim);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.cr-lineage-close:hover {
+  color: var(--vi-text);
+}
+
+.cr-lineage-refusal {
+  padding: 6px 10px;
+  color: var(--vi-wait);
+  border-bottom: 1px solid var(--vi-line);
+}
+
+.cr-lineage-empty {
+  padding: 14px 10px;
+  color: var(--vi-dim);
+}
+
+.cr-lineage-segment {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.cr-lineage-seghead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--vi-line);
+  color: var(--vi-text);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.cr-lineage-seghead:hover,
+.cr-lineage-seghead.open {
+  background: var(--vi-panel-focus);
+}
+
+.cr-lineage-sig {
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--amber);
+}
+
+.cr-lineage-count {
+  color: var(--vi-dim);
+  font-size: 11px;
+}
+
+.cr-lineage-rows {
+  overflow-y: auto;
+  min-height: 0;
+  /* Each expanded segment scrolls ITSELF, so a 265-checkpoint predecessor
+     never pushes the other segment headers (or the footer) out of the panel. */
+  max-height: min(44vh, 340px);
+  border-bottom: 1px solid var(--vi-line);
+}
+
+.cr-lineage-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+}
+
+.cr-lineage-row:hover {
+  background: var(--vi-panel-focus);
+}
+
+.cr-lineage-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vi-text);
+}
+
+.cr-lineage-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  color: var(--vi-dim);
+  font-size: 10.5px;
+}
+
 /* --- VERSION PINS: the rail's THIRD marker class (marketplace §10, R8/R18) ---
    Everything else on this bar is AMBER and UNLABELLED and either points
    (diamond) or cuts (bar). A pin is the opposite on four axes at once, which is

@@ -170,6 +170,7 @@ const api = {
   listTraceIndex: (terminalId: string, request?: unknown) =>
     ipcRenderer.invoke('trace:index', terminalId, request),
   listTraceMarkers: (terminalId: string) => ipcRenderer.invoke('trace:markers', terminalId),
+  listLineageSegments: (terminalId: string) => ipcRenderer.invoke('trace:lineage', terminalId),
   // T1: the latest checkpoint for a visible card, no PTY. Returns
   // {prompt, reply, title?} | null.
   latestCheckpoint: (terminalId: string) =>
@@ -209,8 +210,8 @@ const api = {
   listAgents: () => ipcRenderer.invoke('agents:list'),
   listBoard: (window?: string) => ipcRenderer.invoke('board:list', window),
   recoverAgent: (id: string) => ipcRenderer.invoke('agent:recover', id),
-  restoreCheckpoint: (id: string, checkpointIndex: number) =>
-    ipcRenderer.invoke('agent:restore-checkpoint', id, checkpointIndex),
+  restoreCheckpoint: (id: string, checkpointIndex: number, targetSessionId?: string) =>
+    ipcRenderer.invoke('agent:restore-checkpoint', id, checkpointIndex, targetSessionId),
   undoRestore: (id: string) => ipcRenderer.invoke('agent:undo-restore', id),
   saveRole: (input: unknown) => ipcRenderer.invoke('role:save', input),
   onTerminalActivity: (cb: (activity: unknown) => void) => {
