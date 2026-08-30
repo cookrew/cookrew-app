@@ -4,9 +4,11 @@ import { cookrew } from './api'
 import { CrIcon } from './icons'
 import { type TitleMode } from './checkpoint-sync'
 import { hasRoleFromCheckpoint, saveRoleFromCheckpoint } from './role-checkpoint'
+import { LineagePanel } from './LineagePanel'
 import {
   checkpointRowTitle,
   createHoldReveal,
+  hasLineageSegmentsApi,
   railAnchorTop,
   railPointerFraction,
   scrollFocusState,
@@ -118,6 +120,8 @@ export function CheckpointTimeline({
   /** M3: a refused rewind, surfaced INLINE on the row (never window.alert — a
    * native modal freezes the whole Electron UI). Scoped by row index. */
   const [rewindError, setRewindError] = useState<{ index: number; reason: string } | null>(null)
+  /** Earlier-sessions panel (lineage reach) — opened from the segment-boundary tick. */
+  const [lineageOpen, setLineageOpen] = useState(false)
   /** F1: true once movement has stopped for IDLE_AFTER_MS. The tag stays
    *  MOUNTED and fades via CSS — unmounting it pops, which is the thing the
    *  gate distinguishes. Cleared by any scroll, scrub or approach. */
@@ -556,7 +560,9 @@ export function CheckpointTimeline({
    *
    * So: never while a row's actions are open, never mid-scrub.
    */
-  const showIdle = idle && acting === null && !scrubbing
+  // …and never while the earlier-sessions panel is open: it is a modal-ish
+  // reading surface, and fading it mid-read is the touch bug all over again.
+  const showIdle = idle && acting === null && !scrubbing && !lineageOpen
 
   return (
     <div
@@ -603,18 +609,35 @@ export function CheckpointTimeline({
           // duplication; deleting it is what the guard was waiting for.
           const frac = traceFraction(m.afterIndex, rows)
           if (frac === null) return null
+          // The SEGMENT boundary (a marker naming its previous session) is a
+          // TAP TARGET: it opens the earlier-sessions panel, which is where
+          // the checkpoints an auto-compact moved out of this file now live.
+          // Same pointer discipline as the version pins below: stop the
+          // press before .cr-ckpt-mini captures it, or the click never fires.
+          const reachable = m.previousSessionId !== undefined && hasLineageSegmentsApi()
           return (
             <div
               key={`tick-${m.kind}-${m.afterIndex}-${i}`}
-              className={`cr-ckpt-tick ${m.kind}`}
+              className={`cr-ckpt-tick ${m.kind}${reachable ? ' lineage' : ''}`}
               style={{ top: railAnchorTop(frac) }}
               // MED-4 says the bar ticks CARRY the boundaries that no longer
               // render inline. That is only true for a screen reader if they
               // announce themselves, so they take the separator role and the
               // same wording as the divider they replaced.
-              role="separator"
+              role={reachable ? 'button' : 'separator'}
               title={tickLabel(m)}
               aria-label={tickLabel(m)}
+              {...(reachable
+                ? {
+                    onPointerDown: (e: React.PointerEvent) => e.stopPropagation(),
+                    onClick: (e: React.MouseEvent) => {
+                      e.stopPropagation()
+                      setActing(null)
+                      setSavingIndex(null)
+                      setLineageOpen(true)
+                    }
+                  }
+                : {})}
             />
           )
         })}
@@ -758,22 +781,37 @@ export function CheckpointTimeline({
           </div>
         </div>
       )}
+
+      {/* LINEAGE REACH: the earlier sessions an auto-compact/clear moved out
+          of the current file — opened from the segment-boundary tick. A
+          floating panel like the fan, so the identity list, its fractions and
+          the F6 anchor math are untouched by however many segments exist. */}
+      {lineageOpen && (
+        <LineagePanel
+          terminalId={terminalId}
+          allowActions={allowActions}
+          onClose={() => setLineageOpen(false)}
+        />
+      )}
     </div>
   )
 }
 
 /** What a boundary tick says — as a tooltip AND to a screen reader, one string
- *  so the two can never drift. Same wording the inline divider used. */
+ *  so the two can never drift. Same wording the inline divider used. A marker
+ *  carrying previousSessionId is the SEGMENT boundary — tapping it opens the
+ *  earlier sessions, and the label has to say so or nobody ever taps. */
 function tickLabel(m: TraceMarkerRow): string {
+  const reach = m.previousSessionId !== undefined ? ' — tap for earlier checkpoints' : ''
   if (m.kind === 'compact') {
     const size =
       m.preTokens !== undefined && m.postTokens !== undefined
         ? ` · ${fmtTokens(m.preTokens)} → ${fmtTokens(m.postTokens)}`
         : ''
-    return `compact here${size}`
+    return `compact here${size}${reach}`
   }
   if (m.kind === 'rewind') return `rewound to T${m.toIndex} here`
-  return 'session cleared here — earlier endpoints via lineage'
+  return `session cleared here${reach || ' — earlier endpoints via lineage'}`
 }
 
 /** 999600 → "999.6k", 11200000 → "11.2M" — compact marker compression readout. */

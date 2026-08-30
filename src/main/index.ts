@@ -848,6 +848,14 @@ const traceMarkersFor = async (terminalId: string) => {
   return remote ? remote.listTraceMarkers() : traces.boundaryMarkers(terminalId)
 }
 
+/** Earlier lineage segments (pre-compact/pre-clear checkpoints). Local files
+ *  only: a served transcript's lineage lives on the author's machine, and an
+ *  empty listing is the honest answer here. */
+const lineageSegmentsFor = async (terminalId: string) => {
+  const remote = servedTranscriptFor(terminalId)
+  return remote ? [] : traces.lineageSegments(terminalId)
+}
+
 const tracePageFor = async (
   terminalId: string,
   request: Parameters<TraceReader['page']>[1] = {}
@@ -3923,6 +3931,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     traceIndexFor(terminalId, (request ?? {}) as Parameters<TraceReader['index']>[1])
   )
   ipcMain.handle('trace:markers', (_e, terminalId: string) => traceMarkersFor(terminalId))
+  ipcMain.handle('trace:lineage', (_e, terminalId: string) => lineageSegmentsFor(terminalId))
   ipcMain.handle('trace:page', (_e, terminalId: string, request?: unknown) =>
     tracePageFor(terminalId, (request ?? {}) as Parameters<TraceReader['page']>[1])
   )

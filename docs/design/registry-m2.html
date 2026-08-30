@@ -409,6 +409,72 @@ case reachable only by mocking is a case nobody has seen the server answer.
   </tr>
 </table>
 
+<h2><span class="num">9</span>What a green suite cannot prove</h2>
+
+<p>
+For the reviewer. 103 M2 tests pass and 3,497 in the suite, and none of the six below would go red for
+the change that breaks them. Each one is load-bearing on money, so each is a thing to check by reading,
+not by running. The order is worst-consequence first.
+</p>
+
+<table>
+  <tr><th>The property</th><th>Why green stays green</th><th>Check by hand</th></tr>
+  <tr>
+    <td><strong>Payout follows the IDENTITY, not the key.</strong> A rotated author key must not
+    re-point the payouts of presets already published.</td>
+    <td>The fixtures publish under one identity whose key never rotates, so identity-keyed and
+    key-keyed are indistinguishable to every assertion we have.</td>
+    <td>Read the rotation path against the publish capture. A wrong answer pays a stranger and returns
+    a successful receipt — the buyer is satisfied and the author is simply not paid.</td>
+  </tr>
+  <tr>
+    <td><strong>A new caller on <span class="mono">authorize()</span> is priced deliberately.</strong></td>
+    <td>The method sweep pins the methods that exist today. A call site added next month is not a
+    method, and nothing in the suite knows it appeared.</td>
+    <td>Grep every <span class="mono">authorize()</span> call and ask of each: may this path cost money?
+    HEAD is in the sweep because it already answered 402 once and opening the dock would have demanded
+    payment.</td>
+  </tr>
+  <tr>
+    <td><strong>The chain in the terms is the chain that settles.</strong></td>
+    <td>The double echoes whatever chain we hand it, so the assertion is that our own string survives a
+    round trip — not that money moves on that network.</td>
+    <td>Confirm the real facilitator takes the chain from the terms rather than a config default. Right
+    address on the wrong chain is money gone WITH a successful receipt.</td>
+  </tr>
+  <tr>
+    <td><strong>Four reasons stay four at the boundary.</strong> <span class="mono">unverifiable</span>
+    means retry, your payment may be fine; <span class="mono">invalid</span> means stop and check your
+    wallet.</td>
+    <td>The double returns the reason the test asked for. Whether a real facilitator distinguishes them
+    is untested by construction.</td>
+    <td>Check the mapping is TOTAL and that an unrecognised facilitator answer becomes
+    <span class="mono">unverifiable</span>. Defaulting the unknown to <span class="mono">invalid</span>
+    accuses a buyer who paid, which is the lie the fourth reason exists to prevent.</td>
+  </tr>
+  <tr>
+    <td><strong>Durability survives a real crash, not a simulated one.</strong></td>
+    <td>Tests reopen a store over the same tmpdir files. No test kills a process mid-write, and
+    sibling-plus-rename is only atomic within one filesystem.</td>
+    <td>Confirm the production store directory and its sibling are the same mount, and that no write
+    path reaches the file without going through the rename.</td>
+  </tr>
+  <tr>
+    <td><strong>One payment buys once — on the chain.</strong></td>
+    <td>Every settlement is counted against a fake. Idempotency is proven at OUR layer only: five
+    retries, eight concurrent, one receipt.</td>
+    <td>Nothing here says a chain rejects the same proof twice. Treat our defence as the only one until
+    a real facilitator is behind the seam.</td>
+  </tr>
+</table>
+
+<p>
+One more that is judgement rather than a check: the reasons are deliberately distinct because the
+caller's next action differs, and distinctness is exactly what lets a stranger enumerate. Each reason
+is defensible alone. Whether the SET of them, probed in bulk, reveals which presets are priced is a
+property no single test can hold — it needs someone to look at all four together and decide.
+</p>
+
 <footer>
   Forge · Registry M2 design note · <span class="mono">docs/design/registry-m2.html</span> ·
   branch <span class="mono">feat/registry-m2</span> (A1 <span class="mono">7d618ab</span> ·

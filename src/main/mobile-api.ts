@@ -132,8 +132,13 @@ export interface MobileApiDeps {
   agents: AgentRegistry;
   /** Recover an inactive teammate as it was (agent-recover feature). */
   recoverAgent: (id: string) => RecoverResult;
-  /** Endpoint restore: rewind an agent to a checkpoint (+ undo). */
-  restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>;
+  /** Endpoint restore: rewind an agent to a checkpoint (+ undo). The optional
+   *  target names an EARLIER lineage segment the index is counted in. */
+  restoreCheckpoint: (
+    id: string,
+    checkpointIndex: number,
+    targetSessionId?: string,
+  ) => Promise<RestoreResult>;
   undoRestore: (id: string) => Promise<RestoreResult>;
   /** Trace-sourced context reader (identity-keyed windows over agent files). */
   traces: Pick<TraceReader, 'index' | 'boundaryMarkers' | 'page'>;
@@ -1055,14 +1060,19 @@ export async function handleMobileApi(
   // ENDPOINT RESTORE: rewind an agent in place to any checkpoint (+ undo).
   const restoreMatch = p.match(/^\/api\/agents\/([^/]+)\/restore$/);
   if (restoreMatch && method === "POST") {
-    const body = await readJson<{ checkpointIndex?: number }>(request);
+    const body = await readJson<{ checkpointIndex?: number; targetSessionId?: string }>(request);
     const index = Number(body.checkpointIndex);
     if (!Number.isInteger(index) || index < 1) {
       respondJson(response, 400, { error: "checkpointIndex must be a positive integer" });
       return true;
     }
+    // Lineage reach: the segment the index is counted in. Accepted here from
+    // day one so a phone client sending it can never be silently rewound in
+    // the WRONG segment by a server that dropped the field; the executor
+    // validates the shape and refuses malformed ids.
+    const target = typeof body.targetSessionId === "string" ? body.targetSessionId : undefined;
     try {
-      respondJson(response, 200, await deps.restoreCheckpoint(restoreMatch[1], index));
+      respondJson(response, 200, await deps.restoreCheckpoint(restoreMatch[1], index, target));
     } catch (error) {
       respondJson(response, 400, {
         error: error instanceof Error ? error.message : String(error),

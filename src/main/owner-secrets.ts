@@ -70,6 +70,42 @@ export function browserStatePaths(home: string, appDir: string): readonly string
 }
 
 /**
+ * The Electron DEFAULT session's storage — the app's own origin state.
+ *
+ * Ruled 2026-08-30 (P2 residual). This state does not live in a profile
+ * directory: Electron writes the default session's Cookies, Local Storage and
+ * IndexedDB DIRECTLY under the app-support dir, beside settings a harness
+ * legitimately reads — which is exactly why the tree-level deny was declined
+ * (see the note below ownerSecretPaths) and why these are FILE-LEVEL entries.
+ * Today it holds only what the app's own UI persists, but "only app data" is
+ * a fact about today: the moment a pairing or auth token lands in the default
+ * session, a served agent could read it under the blanket file-read* allow.
+ * Deny the entries by name; the parent stays readable.
+ *
+ * The list is the entries the default session was OBSERVED writing on a live
+ * install (2026-08-30), not a guess at Chromium's schema. A new entry Electron
+ * starts writing is a patch here — same caveat as the top of this file: this
+ * is a denylist, treat additions as patches, not as the mechanism.
+ */
+export function defaultSessionStatePaths(home: string, appDir: string): readonly string[] {
+  const app = path.join(home, 'Library', 'Application Support', appDir)
+  return [
+    'Cookies',
+    'Cookies-journal',
+    'Local Storage',
+    'IndexedDB',
+    'Session Storage',
+    'SharedStorage',
+    'SharedStorage-wal',
+    'Trust Tokens',
+    'Trust Tokens-journal',
+    'Network Persistent State',
+    'WebStorage',
+    'blob_storage'
+  ].map((entry) => path.join(app, entry))
+}
+
+/**
  * The app-support directory name. Lowercase on disk while the product name is
  * capitalised, which is exactly the mismatch that would make a hand-written
  * path silently deny nothing — so callers pass what they observe.
@@ -87,6 +123,9 @@ export function ownerSecretPaths(
     // logged into. `file-read*` is allowed across the disk, so without these a
     // served agent reads every site session the owner holds, lent nothing.
     ...browserStatePaths(home, appDir),
+    // …and the app's OWN origin state, entry by entry (the default session
+    // writes it beside the settings, so the tree cannot be taken).
+    ...defaultSessionStatePaths(home, appDir),
     // The one the ruling names by hand.
     at('.claude', '.credentials.json'),
     at('.claude.json'),

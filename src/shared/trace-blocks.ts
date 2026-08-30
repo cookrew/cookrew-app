@@ -769,7 +769,11 @@ export interface TraceBoundaryMarker {
   /** compact_metadata when the boundary record carries it. */
   preTokens?: number
   postTokens?: number
-  /** 'clear' only: session id the previous segment ran on. */
+  /**
+   * Session id the previous lineage segment ran on. On a 'clear' marker, and
+   * on the root 'compact' of a rotation-born file (an auto-compact starts a
+   * NEW file whose own ◆ IS the segment boundary — no duplicate ⇥ beside it).
+   */
   previousSessionId?: string
   /** 'rewind' only: checkpoint the agent was rewound TO. */
   toIndex?: number

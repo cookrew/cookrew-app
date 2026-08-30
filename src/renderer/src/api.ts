@@ -239,8 +239,16 @@ export interface CookrewApi {
    * the node bound to its session and resume. Optional — feature-detect.
    */
   recoverAgent?: (id: string) => Promise<RecoverResult>;
-  /** ENDPOINT RESTORE: rewind this agent in place to one of its checkpoints. */
-  restoreCheckpoint?: (id: string, checkpointIndex: number) => Promise<RestoreResult>;
+  /**
+   * ENDPOINT RESTORE: rewind this agent in place to one of its checkpoints.
+   * `targetSessionId` names an EARLIER lineage segment when the index is
+   * counted in one (each segment numbers its own T1..Tn); absent = current.
+   */
+  restoreCheckpoint?: (
+    id: string,
+    checkpointIndex: number,
+    targetSessionId?: string
+  ) => Promise<RestoreResult>;
   /** Undo the last endpoint restore (rebind to the pre-restore session). */
   undoRestore?: (id: string) => Promise<RestoreResult>;
   /** Completed turns of a terminal (oldest first) for the card pager. */
@@ -303,6 +311,15 @@ export interface CookrewApi {
   listTraceMarkers?: (
     terminalId: string,
   ) => Promise<TraceBoundaryMarker[]>;
+  /**
+   * EARLIER lineage segments of this agent's session chain (the checkpoints
+   * an auto-compact rotation or /clear moved out of the current file), oldest
+   * first, each in its own T1..Tn space. Optional — feature-detect; the
+   * boundary expander hides when absent.
+   */
+  listLineageSegments?: (
+    terminalId: string,
+  ) => Promise<{ sessionId: string; count: number; entries: { index: number; title: string; id?: string }[] }[]>;
   /**
    * The LATEST checkpoint for a card, from a bounded tail read of the session
    * file — no PTY, O(tail) (trace-perf-architecture T1). Lets a visible-but-

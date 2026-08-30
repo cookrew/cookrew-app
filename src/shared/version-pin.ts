@@ -169,9 +169,18 @@ export function pinRowFraction(pin: VersionPinRecord, rows: readonly RailRow[]):
  * for that case; this is the render-space equivalent, not a new rule.
  *
  * Null when the checkpoint is not drawn — omitted, never guessed (R17).
+ *
+ * EXCEPT afterIndex 0, which is not a sparse-row omission: it is the ROOT
+ * boundary, "before the first checkpoint" — a rotation/clear-born file's own
+ * segment edge. No row carries index 0, so the old rule silently dropped it
+ * and the rail never showed the one marker that leads anywhere (the lineage
+ * reach into the earlier sessions). Same virtual-slot arithmetic as the `+ 1`
+ * above: the row before position 0 is position −1, and (−1 + 1) / n = 0 —
+ * the top edge, which this boundary has an exact claim to.
  */
 export function traceFraction(afterIndex: number, rows: readonly RailRow[]): number | null {
   if (rows.length === 0) return null
+  if (afterIndex === 0) return 0
   const at = rows.findIndex((r) => r.index === afterIndex)
   if (at < 0) return null
   return (at + 1) / rows.length

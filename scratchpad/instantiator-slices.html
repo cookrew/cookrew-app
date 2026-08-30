@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Instantiator (R30) — slice ledger &amp; the one path</title>
+<style>
+  :root{
+    --bg:#faf8f4; --fg:#2d2a20; --dim:#6b6455; --rule:#e2dccf; --card:#fffdf9;
+    --accent:#b4531a; --good:#2f6b3a; --bad:#9b2c2c; --amber:#d97706; --violet:#7c5cff;
+    --code:#f2ede3;
+  }
+  @media (prefers-color-scheme: dark){:root{
+    --bg:#17150f; --fg:#ece6d8; --dim:#9a917f; --rule:#322d22; --card:#1e1b14;
+    --accent:#e08a4a; --good:#7fbc8c; --bad:#e08585; --amber:#e3ad4e; --violet:#b9a6ef;
+    --code:#241f17;}}
+  :root[data-theme="dark"]{--bg:#17150f;--fg:#ece6d8;--dim:#9a917f;--rule:#322d22;--card:#1e1b14;--accent:#e08a4a;--good:#7fbc8c;--bad:#e08585;--amber:#e3ad4e;--violet:#b9a6ef;--code:#241f17;}
+  :root[data-theme="light"]{--bg:#faf8f4;--fg:#2d2a20;--dim:#6b6455;--rule:#e2dccf;--card:#fffdf9;--accent:#b4531a;--good:#2f6b3a;--bad:#9b2c2c;--amber:#d97706;--violet:#7c5cff;--code:#f2ede3;}
+  *{box-sizing:border-box}
+  body{margin:0;padding:36px 22px 80px;background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  main{max-width:940px;margin:0 auto}
+  h1{font-size:25px;margin:0 0 4px;letter-spacing:-.01em}
+  .sub{color:var(--dim);font-size:14px;margin:0 0 28px}
+  h2{font-size:14px;text-transform:uppercase;letter-spacing:.07em;color:var(--accent);margin:38px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--rule)}
+  code{background:var(--code);padding:1px 5px;border-radius:4px;font:13px/1.5 ui-monospace,"SF Mono",Menlo,monospace}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--rule);vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+  .st{font-weight:700;font-size:12px;white-space:nowrap}
+  .s-done{color:var(--good)} .s-now{color:var(--amber)} .s-next{color:var(--dim)}
+  .badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;border:1px solid currentColor}
+  .theme{position:fixed;top:12px;right:12px;font:11px ui-monospace,monospace;background:var(--card);border:1px solid var(--rule);border-radius:5px;padding:5px 9px;cursor:pointer;color:var(--fg)}
+  .note{background:var(--card);border:1px solid var(--rule);border-left:3px solid var(--accent);border-radius:8px;padding:12px 16px;margin:14px 0;font-size:14px}
+  .note b{color:var(--fg)}
+  .foot{margin-top:40px;padding-top:14px;border-top:1px solid var(--rule);color:var(--dim);font-size:13px}
+</style>
+</head>
+<body>
+<button class="theme" onclick="var r=document.documentElement,d=(r.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));r.dataset.theme=d==='dark'?'light':'dark'">theme</button>
+<main>
+  <h1>The Instantiator <span class="badge" style="color:var(--violet)">R30</span></h1>
+  <p class="sub">First gated call → a live WorkspaceSession from the template at its pin, in a sandbox, routed to its Conductor. A <b>composer</b> of machinery that ships — not new subsystems. · branches <code>feat/instantiator-slice1..2</code></p>
+
+  <h2>The one path</h2>
+  <svg viewBox="0 0 920 128" role="img" aria-label="gated call, session exists, reuse or mint, route to conductor, reply or END" style="width:100%;height:auto;margin:6px 0 2px">
+    <defs>
+      <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>
+    </defs>
+    <g font-family="ui-monospace,Menlo,monospace" font-size="12.5" color="currentColor">
+      <g stroke="currentColor" stroke-width="1.3" opacity="0.5" marker-end="url(#a)" fill="none">
+        <line x1="132" y1="40" x2="176" y2="40"/>
+        <line x1="300" y1="40" x2="344" y2="40"/>
+        <line x1="300" y1="40" x2="344" y2="88"/>
+        <line x1="486" y1="40" x2="560" y2="40"/>
+        <line x1="720" y1="40" x2="764" y2="40"/>
+      </g>
+      <g fill="none" stroke="currentColor" stroke-width="1.2">
+        <rect x="8" y="24" width="124" height="32" rx="6" opacity="0.85"/>
+        <rect x="176" y="24" width="124" height="32" rx="6" opacity="0.85"/>
+        <rect x="344" y="24" width="142" height="32" rx="6" stroke="var(--amber)"/>
+        <rect x="344" y="72" width="142" height="32" rx="6" stroke="var(--good)"/>
+        <rect x="560" y="24" width="160" height="32" rx="6" opacity="0.85"/>
+        <rect x="764" y="24" width="148" height="32" rx="6" opacity="0.85"/>
+      </g>
+      <g fill="currentColor" text-anchor="middle">
+        <text x="70" y="44">gated call ✓</text>
+        <text x="238" y="44">open session?</text>
+        <text x="415" y="44" fill="var(--amber)">mint + sandbox</text>
+        <text x="415" y="92" fill="var(--good)">reuse · keep pin</text>
+        <text x="640" y="44">route → Conductor</text>
+        <text x="838" y="44">reply · END cuts</text>
+      </g>
+      <g fill="currentColor" text-anchor="middle" font-size="10.5" opacity="0.62">
+        <text x="238" y="70">by (service, account)</text>
+        <text x="415" y="16">no</text>
+        <text x="470" y="70" fill="var(--good)">yes</text>
+      </g>
+    </g>
+  </svg>
+  <div class="note">The pin is resolved <b>once, at mint</b>. A running session keeps the version it started on; only a new one gets the latest — which is what makes <code>ana-1 on V1</code> and <code>ana-2 on V2</code> a fact of the data, not a race. END reuses the revoke seam (<code>CallsInFlight.cancelWhere</code>): it cuts the running call <b>before</b> it deletes the sandbox, because a stop that races a live agent is a crash.</div>
+
+  <h2>The five seams — and where they stand</h2>
+  <table>
+    <tr><th>Seam</th><th>What it decides</th><th>Status</th></tr>
+    <tr><td><code>SessionKey</code> (S2)</td><td>account-keyed id + ordinal; slug that can't shadow the owner's own</td><td class="st s-done">slice 1 ✓</td></tr>
+    <tr><td><code>Sandbox</code> (S3)</td><td>Seatbelt confinement + <b>scrubbed env</b> (allowlist, HOME→sandbox); the security-critical one</td><td class="st s-done">slice 1 ✓</td></tr>
+    <tr><td>the boot seam</td><td><code>bootTerminals</code> — a served session boots in place, never yanks the owner's screen</td><td class="st s-done">slice 1 ✓</td></tr>
+    <tr><td><b>the orchestrator</b></td><td>reuse-or-mint, ordinal reservation, route, END — the decision core, behind seams</td><td class="st s-done">slice 2 ✓</td></tr>
+    <tr><td><code>TemplateSource</code> (S1/S1b)</td><td>the LOCAL template at its pin, resolved once — wired to <code>TeamStore.load</code></td><td class="st s-now">slice 3 ✓</td></tr>
+    <tr><td><code>Minter</code> (mint)</td><td>the real <code>forkTeam</code> — worktree, native session restore, context inject</td><td class="st s-now">slice 3 ✓ adapter</td></tr>
+    <tr><td><code>ConductorRoute</code> (S5)</td><td><code>entryAgentOf</code> → the orch terminal; only the orch answers</td><td class="st s-now">slice 3 ✓</td></tr>
+    <tr><td><code>Ender</code> (S4)</td><td>wired to <code>CallsInFlight.cancelWhere</code> + sandbox rm</td><td class="st s-now">slice 3 ✓</td></tr>
+    <tr><td>the inbound trigger</td><td>a slug naming a <b>served template</b> (not a live workspace) mints on first call — at <code>mobile-server.handle</code> / <code>call-endpoints</code></td><td class="st s-now">slice 3 ✓</td></tr>
+    <tr><td><code>pin = content hash</code> (S1c)</td><td>the pin's identity stops being its number; two offline "V2"s become a detected collision</td><td class="st s-next">slice 3b</td></tr>
+  </table>
+
+  <h2>Slice 2 — the invariants, pinned as tests (17)</h2>
+  <table>
+    <tr><th>Invariant</th><th>The hazard it forecloses</th></tr>
+    <tr><td>pin resolved once</td><td>a running session's version shifting under it when the author cuts a new one</td></tr>
+    <tr><td>ordinal never reused after END</td><td>re-minting onto a just-deleted sandbox path</td></tr>
+    <tr><td>END cuts before cleanup, idempotent</td><td>a stop racing a live agent into a crash; a panic button that can fail</td></tr>
+    <tr><td>failed mint burns nothing</td><td>a consumed ordinal / half-record from a throw</td></tr>
+    <tr><td>concurrent first-calls join one mint</td><td>two workspaces forked for one account (TOCTOU) — caught by review, fixed + tested</td></tr>
+    <tr><td>reuse from one index, newest wins</td><td>starting/ending a 2nd session stranding the 1st's reuse pointer</td></tr>
+  </table>
+
+  <div class="note"><b>What confinement does NOT buy</b>, stated rather than discovered: it constrains where an agent <i>starts</i>, not an OS boundary. The honest claim is "a caller's files land in their folder," not "a caller cannot read yours" — and the R30 privacy ruling already narrowed the promise to <b>"Cookrew never sends your conversation anywhere else."</b></div>
+
+  <div class="foot">
+    Cookrew · Instantiator R30 · <code>src/main/session-instantiator.ts</code> (+ slice 1: <code>session-identity</code>, <code>session-sandbox</code>, <code>session-env</code>, the <code>teams.ts</code> boot seam) · 73 tests green · design: <code>docs/design/instantiator-design.html</code> + <code>gate-per-session.html</code>. ✅ MERGED to origin/dev 1d311cf — full suite green (4251 passed).
+  </div>
+</main>
+</body>
+</html>

@@ -229,6 +229,41 @@ export async function fetchTraceMarkers(terminalId: string): Promise<TraceMarker
 }
 
 /**
+ * An EARLIER lineage segment: the checkpoints an auto-compact rotation (or a
+ * /clear) moved out of the current session file. Each segment keeps its own
+ * T1..Tn numbering — a rewind into one is addressed as (sessionId, index).
+ */
+export interface LineageSegmentRow {
+  sessionId: string
+  count: number
+  entries: TraceIndexEntry[]
+}
+
+interface LineageSegmentsBridge {
+  listLineageSegments?: (terminalId: string) => Promise<LineageSegmentRow[]>
+}
+
+/** True when the earlier-segments expansion can be offered at all. */
+export function hasLineageSegmentsApi(): boolean {
+  return typeof (cookrew() as unknown as LineageSegmentsBridge).listLineageSegments === 'function'
+}
+
+/**
+ * Earlier segments of the agent's session chain, oldest first — fetched on
+ * demand (the expansion tap), never on every rail poll: a predecessor can be
+ * tens of MB and is parsed only when someone actually looks. Empty when the
+ * bridge predates the endpoint (remote crews, older servers).
+ */
+export async function fetchLineageSegments(terminalId: string): Promise<LineageSegmentRow[]> {
+  const fn = (cookrew() as unknown as LineageSegmentsBridge).listLineageSegments
+  if (!fn) {
+    warnAbsentBridge('listLineageSegments')
+    return []
+  }
+  return fn(terminalId)
+}
+
+/**
  * scrollIntoView behavior for a checkpoint jump (item 2b): a coarse pointer or
  * an in-flight touch CANCELS a smooth scroll mid-animation (the finger's own
  * gesture interrupts it), leaving the jump half-done and feeling stuck — so snap
