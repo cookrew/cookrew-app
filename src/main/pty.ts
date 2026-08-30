@@ -6,6 +6,7 @@ import pty, { IPty } from 'node-pty'
 import xtermHeadless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { sanitizeAgentEnv } from './multiplexer'
+import { paneEnv } from './pane-env'
 import type { Multiplexer, PaneCardInfo } from './multiplexer'
 import { TmuxMultiplexer, sessionNameFor as tmuxSessionNameFor, TMUX_LABEL as TMUX_LABEL_CONST } from './tmux-multiplexer'
 import { HerdrHostMultiplexer, HERDR_SESSION } from './herdr-host-multiplexer'
@@ -417,46 +418,17 @@ export class PtySession extends EventEmitter {
     this.screen.loadAddon(this.serializer)
 
     // A served session's env is the scrub (session-env.ts), never the owner's
-    // process env; the infra keys below are re-added explicitly ON TOP, never by
-    // spreading process.env back over the scrub. An ordinary terminal keeps the
-    // exact prior behaviour.
-    const baseEnv = options.served
-      ? { ...options.served.env }
-      : {
-          // Sanitized: under tmux/direct the pane (or the tmux SERVER on its
-          // first start) inherits this env, and a launcher-session marker turns
-          // off the agent's transcript saving (see sanitizeAgentEnv).
-          ...sanitizeAgentEnv(process.env)
-        }
-    const infraPath = options.served ? (options.served.env.PATH ?? '') : (process.env.PATH ?? '')
-    // THE CLI CONTROL PLANE IS THE OWNER'S ALONE.
-    //
-    // COOKREW_SOCKET + COOKREW_CLI + cliDir-on-PATH hand a pane the app's unix
-    // socket, and that socket takes commands with NO credential: `list --all`
-    // returns every agent in every workspace, and `--as "<name>"` lets a
-    // caller with no pane identity speak AS any agent (socket-server.ts self()).
-    // From a served session that is a full escape — `recruit --dir <owner dir>
-    // --command …` spawns OUTSIDE the sandbox with the owner's environment,
-    // because a node created that way has no served spawn context. The Seatbelt
-    // profile cannot stop it: it allows process-exec and network* by design,
-    // and the socket lives in the shared runtime dir.
-    //
-    // A served session has no legitimate use for it either — its agents work
-    // for a stranger, inside a sandbox, and must not see (let alone drive) the
-    // owner's canvas. So the infra keys are OWNER-PANE ONLY.
-    const controlPlane = options.served
-      ? {}
-      : {
-          COOKREW_SOCKET: options.socketPath,
-          COOKREW_CLI: path.join(options.cliDir, 'cookrew')
-        }
-    const env = {
-      ...baseEnv,
-      TERM_PROGRAM: 'Cookrew',
-      COOKREW_TERMINAL_ID: options.terminalId,
-      ...controlPlane,
-      PATH: options.served ? infraPath : `${options.cliDir}:${infraPath}`
-    }
+    // process env, and it is NOT given the CLI control plane — see pane-env.ts,
+    // where that boundary lives so a test can assert it. An ordinary terminal
+    // keeps the exact prior behaviour (sanitizeAgentEnv turns off the agent's
+    // transcript saving under a launcher session).
+    const env = paneEnv({
+      terminalId: options.terminalId,
+      socketPath: options.socketPath,
+      cliDir: options.cliDir,
+      ...(options.served ? { servedEnv: options.served.env } : {}),
+      ownerEnv: sanitizeAgentEnv(process.env)
+    })
 
     // One path for every backend. The direct backend returns a plain login
     // shell here, which is exactly what the old `else` branch spawned by hand.
