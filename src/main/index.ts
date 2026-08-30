@@ -3857,7 +3857,11 @@ function registerIpc(handlers: RestoreHandlers): void {
     try {
       const checkout = await startStripeCheckout(target, token)
       await shell.openExternal(checkout.url)
-      return { ok: true as const, session: checkout.session }
+      // The URL comes back too: a hand-off that silently failed to raise a
+      // browser would otherwise leave the person waiting on a page they never
+      // saw, with no way to reach it. It is a capability — the sheet keeps it
+      // to re-open, and never prints it.
+      return { ok: true as const, session: checkout.session, url: checkout.url }
     } catch (error) {
       return {
         ok: false as const,
