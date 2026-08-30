@@ -11,7 +11,6 @@ import {
   type ShareAccess
 } from '../src/renderer/src/ShareOnSave'
 import { ServedTeamCard, type ServedTeam } from '../src/renderer/src/ServedTeamCard'
-import { AddCrewSheet } from '../src/renderer/src/AddCrewSheet'
 import { renderServedCrewFace, type CrewFace } from '../src/main/served-endpoints'
 import type { ServedPaymentRail } from '../src/shared/served-payment-rails'
 import { EMPTY_SERVED_PAYMENT_STATUS } from '../src/shared/served-payment-config'
@@ -263,19 +262,6 @@ describe('ServedTeamCard — who is on, on the thing you published', () => {
   })
 })
 
-describe('AddCrewSheet — adding is free and inert', () => {
-  it('paints, and asks only for the address', () => {
-    const html = renderToStaticMarkup(<AddCrewSheet onClose={noop} onAdded={noop} />)
-    expect(html).toContain('Add a crew')
-    expect(html).toContain('ADD TO DOCK')
-    expect(html).toContain('Paste the address')
-  })
-
-  it('the primary is disabled until something is pasted', () => {
-    expect(renderToStaticMarkup(<AddCrewSheet onClose={noop} onAdded={noop} />)).toContain('disabled')
-  })
-})
-
 describe('served caller face — the page tells a caller what they can actually do', () => {
   const face = (
     access: CrewFace['access'],
@@ -367,9 +353,9 @@ describe('the retirements are real, not merely unmounted', () => {
     expect(row).not.toContain("from './ExportToggle'")
   })
 
-  it('the dock offers crews and a way to add one', () => {
+  it('no crew chip family survives in the dock', () => {
     const dock = src('Dock.tsx')
-    expect(dock).toContain('crew-chip')
-    expect(dock).toContain('+ ADD BY LINK')
+    expect(dock).not.toContain('crew-chip')
+    expect(dock).not.toContain('+ ADD BY LINK')
   })
 })

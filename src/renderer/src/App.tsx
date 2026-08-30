@@ -59,9 +59,7 @@ import { SnapGuides } from './SnapGuides'
 import { EventToastLayer } from './EventToast'
 import { RosterPanel } from './RosterPanel'
 import { MetricsPanel } from './MetricsPanel'
-import { AddCrewSheet } from './AddCrewSheet'
 import { GateSheet } from './GateSheet'
-import type { RemoteCrewView } from './api'
 import { SelectionBar } from './SelectionBar'
 import { ConfirmClose } from './ConfirmClose'
 import { apiPath } from './api-base'
@@ -206,11 +204,6 @@ function Canvas(): React.JSX.Element {
    */
   const [installedPresets, setInstalledPresets] = useState<InstalledPreset[]>([])
   const [presetId, setPresetId] = useState<string | null>(null)
-  // R30 import side: crews added by link, the armed one, and the two sheets.
-  const [crews, setCrews] = useState<readonly RemoteCrewView[]>([])
-  const [crewId, setCrewId] = useState<string | null>(null)
-  const [addCrewOpen, setAddCrewOpen] = useState(false)
-  const [crewGate, setCrewGate] = useState<RemoteCrewView | null>(null)
   const refreshPresets = useCallback(() => {
     void cookrew()
       .listInstalledPresets()
@@ -218,13 +211,6 @@ function Canvas(): React.JSX.Element {
       .catch((error) => console.error('listInstalledPresets failed:', error))
   }, [])
   useEffect(refreshPresets, [refreshPresets])
-  const refreshCrews = useCallback(() => {
-    void cookrew()
-      .crewList()
-      .then(setCrews)
-      .catch((error) => console.error('crewList failed:', error))
-  }, [])
-  useEffect(refreshCrews, [refreshCrews])
   /**
    * M3: STABLE identities. Inline arrows here were new objects every render, so
    * the dock's effect re-fired on each one and the R3 batch never settled.
@@ -990,20 +976,6 @@ function Canvas(): React.JSX.Element {
           }
           return
         }
-        // AN ARMED CREW places ONE orch card: the whole crew answers through
-        // it, running at the author's app. The canvas click is the confirm,
-        // exactly as it is for every other chip (R2).
-        if (crewId) {
-          try {
-            await cookrew().crewPlace(crewId, position)
-          } catch (error) {
-            console.error('Placing crew failed:', error)
-          } finally {
-            setCrewId(null)
-            setTool('move')
-          }
-          return
-        }
         // A SAVED TEMPLATE placed as a preset IMPORTS a session: a new
         // workspace forked from the template — team, worktree, workdir —
         // switched to. Not a terminal on this canvas, so it returns before
@@ -1067,10 +1039,9 @@ function Canvas(): React.JSX.Element {
     },
     // presetId belongs here: without it the callback closes over a stale arm
     // and the click places the PREVIOUSLY armed preset, or nothing at all.
-    // crewId and templates are CONSULTED above; leaving them out froze the
-    // closure at crewId=null, so an armed crew chip fell through to plain
-    // terminal creation — the canvas click placed a Shell instead of the crew.
-    [tool, preset, role, roles, orch, clipping, presetId, crewId, templates, screenToFlowPosition, zoomToNode]
+    // templates is CONSULTED above; leaving it out freezes the closure and a
+    // template placement falls through to plain terminal creation.
+    [tool, preset, role, roles, orch, clipping, presetId, templates, screenToFlowPosition, zoomToNode]
   )
 
   const onNodesDelete = useCallback((deleted: Node[]) => {
@@ -1363,23 +1334,6 @@ function Canvas(): React.JSX.Element {
             setPresetId(id)
             setRole(null)
           }}
-          crews={crews}
-          crewId={crewId}
-          onCrew={(id) => {
-            const crew = crews.find((c) => c.id === id)
-            if (!crew) return
-            // A locked chip is the gate's UI, never a disabled button: clicking
-            // it opens the sheet rather than arming a placement it can't do.
-            if (crew.access === 'paid' && !crew.payRef) {
-              setCrewGate(crew)
-              return
-            }
-            setCrewId(id)
-            setPresetId(null)
-            setRole(null)
-            setTool('terminal')
-          }}
-          onAddCrew={() => setAddCrewOpen(true)}
           gatedPresetId={gatedId}
           onPresetGate={openPresetGate}
           onCheckUpdates={checkPresetUpdates}
@@ -1414,53 +1368,6 @@ function Canvas(): React.JSX.Element {
           onPrimaryChange={setZoomedTerminalId}
         />
         {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
-        {/* The dock's + ADD BY LINK — adding is free and inert; commitment
-            happens at the gate, money at the sheet, connection at placement. */}
-        {/* A locked crew chip opens the GATE, never a placement it cannot do.
-            M1 settles against the dev facilitator, so "pay" mints a reference
-            the placed card presents once, at session start (R5). */}
-        {crewGate && (
-          <GateSheet
-            scene={{
-              door: 'install',
-              phase: { kind: 'pay' },
-              pricing: {
-                model: 'one-time',
-                terms: {
-                  price: crewGate.priceUsd ?? '0',
-                  asset: 'USDC',
-                  chain: 'dev',
-                  author: `@${crewGate.slug}`,
-                  expiry: 0
-                }
-              }
-            }}
-            title={crewGate.name}
-            version={`V${crewGate.version}`}
-            agentCount={crewGate.agents}
-            bannerLine={`${crewGate.priceUsd} USDC · per session — paid directly to @${crewGate.slug}`}
-            wallets={[{ id: 'dev', label: 'DEV FACILITATOR', icon: '◈' }]}
-            selectedWallet="dev"
-            onDismiss={() => setCrewGate(null)}
-            onPay={() => {
-              const crew = crewGate
-              setCrewGate(null)
-              void cookrew()
-                .crewUnlock(crew.id, `dev-${Date.now()}`)
-                .then(() => refreshCrews())
-                .catch((error) => console.error('crewUnlock failed:', error))
-            }}
-          />
-        )}
-        {addCrewOpen && (
-          <AddCrewSheet
-            onClose={() => setAddCrewOpen(false)}
-            onAdded={() => {
-              setAddCrewOpen(false)
-              refreshCrews()
-            }}
-          />
-        )}
         {/* One confirmation for every close path. Rendered last so it sits over
             the zoomed overlays the ✕ was clicked in. A node that vanished while
             the dialog was open (⌘W elsewhere, a crash) simply has nothing to

@@ -11,7 +11,7 @@ import type { ServedTemplate } from './session-served'
  * 404ing with no signal on either side. An owner stops serving by SAYING stop,
  * never by rebooting.
  *
- * Same shape and file discipline as RemoteCrewStore next door: JSON under
+ * File discipline: JSON under
  * ~/.cookrew, atomic tmp+rename writes. Sessions are deliberately NOT here — a
  * minted session's terminals die with the app, so on reboot a caller starts a
  * fresh session (and on a paid door is quoted again, for a session they will

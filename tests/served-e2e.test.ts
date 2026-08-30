@@ -10,7 +10,6 @@ import { callAssertionPayload } from '../src/main/call-ceremony'
 import { ServedCallers } from '../src/main/served-callers'
 import { handleServedRoute } from '../src/main/served-endpoints'
 import { ServedTemplates } from '../src/main/session-served'
-import { RemoteCrewStore, parseCrewLink } from '../src/main/remote-crews'
 import type { TurnRecord } from '../src/shared/turn'
 
 /**
@@ -219,31 +218,15 @@ async function caller(origin: string, slug: string, sub = 'bear') {
 }
 
 describe('end to end: an owner serves, a stranger calls', () => {
-  it('a free crew: add by link → sign in → ask → the crew answers', async () => {
+  it('a free crew: read the face → sign in → ask → the crew answers', async () => {
     const origin = await ownerApp('account')
 
-    // The caller pastes the address into ADD A CREW.
-    const link = parseCrewLink(`${origin.replace('http://', '')}/research-crew`)
-    expect(link).not.toBeNull()
-    const store = new RemoteCrewStore(mkdtempSync(path.join(tmpdir(), 'e2e-dock-')))
+    // The caller reads the public face at the served address.
     const { api, face, signIn } = await caller(origin, 'research-crew')
     expect(face.status).toBe(200)
     expect(face.body).toMatchObject({ name: 'Research Crew', door: 'Conductor', agents: 4 })
 
-    // The chip lands in the dock — free and inert.
-    const crew = store.add({
-      origin,
-      slug: 'research-crew',
-      name: face.body.name,
-      door: face.body.door,
-      access: face.body.access,
-      version: face.body.version,
-      agents: face.body.agents
-    })
-    expect(store.list()).toHaveLength(1)
-    expect(crew.payRef).toBeUndefined()
-
-    // Placing it starts the line: 401 first…
+    // The first call starts the line: 401 first…
     const cold = await api('/ask', { body: JSON.stringify({ prompt: 'hello' }) })
     expect(cold.status).toBe(401)
     expect(cold.headers.get('www-authenticate')).toMatch(/challenge=/)

@@ -326,9 +326,9 @@ export function createDemoApi(): CookrewApi {
     onBrowserPhoneViewing: () => () => undefined,
     onCmdW: () => () => undefined,
 
-    // R30 serving + the dock's crews. Owner-desktop surfaces: this transport
-    // cannot mount them, and a stub that pretended to succeed would publish
-    // nothing while telling the user it had. It refuses, visibly.
+    // R30 serving. Owner-desktop surfaces: this transport cannot mount them,
+    // and a stub that pretended to succeed would publish nothing while telling
+    // the user it had. It refuses, visibly.
     servingServe: async () => ({ ok: false as const, reason: 'desktop-only' }),
     servingStop: async () => ({ ok: false }),
     servingPaymentStatus: async () => ({ x402: { ready: false }, stripe: { ready: false } }),
@@ -337,11 +337,6 @@ export function createDemoApi(): CookrewApi {
     servingList: async () => [],
     servingSessions: async () => [],
     servingEnd: async () => ({ stopped: 0 }),
-    crewList: async () => [],
-    crewAdd: async () => ({ ok: false as const, reason: 'desktop-only' }),
-    crewRemove: async () => ({ ok: false }),
-    crewUnlock: async () => ({ ok: false as const, reason: 'desktop-only' }),
-    crewPlace: async () => ({ ok: false as const, reason: 'desktop-only' }),
     quitApp: () => undefined
   }
   return api

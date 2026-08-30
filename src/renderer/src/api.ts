@@ -37,22 +37,6 @@ export interface BoardSnapshotLike {
   activeWorkspaceId: string;
 }
 
-/** A crew added to the dock by link — the import side's chip. */
-export interface RemoteCrewView {
-  id: string;
-  origin: string;
-  slug: string;
-  name: string;
-  door: string;
-  access: 'account' | 'paid';
-  priceUsd?: string;
-  version: number;
-  agents: number;
-  addedAt: number;
-  payRef?: string;
-  ended?: boolean;
-}
-
 export interface CookrewApi {
   getWorkspace: () => Promise<WorkspaceState>;
   onWorkspaceState: (cb: (state: WorkspaceState) => void) => () => void;
@@ -112,20 +96,6 @@ export interface CookrewApi {
     }[]
   >;
   servingEnd: (sessionId: string) => Promise<{ stopped: number }>;
-  /** The dock's crews (import side). Adding is free and inert. */
-  crewList: () => Promise<readonly RemoteCrewView[]>;
-  crewAdd: (
-    link: string,
-  ) => Promise<{ ok: true; crew: RemoteCrewView } | { ok: false; reason: string }>;
-  crewRemove: (id: string) => Promise<{ ok: boolean }>;
-  crewUnlock: (
-    id: string,
-    payRef: string,
-  ) => Promise<{ ok: true; crew: RemoteCrewView } | { ok: false; reason: string }>;
-  crewPlace: (
-    id: string,
-    position?: { x: number; y: number },
-  ) => Promise<{ ok: true; node: unknown } | { ok: false; reason: string }>;
   switchWorkspace: (id: string) => Promise<WorkspaceList>;
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>;
   /** Workspace v2: remove workspace, multi-directory, per-terminal cwd, git. */
