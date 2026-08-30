@@ -34,6 +34,7 @@ interface Harness {
   view: FakeView
   writes: string[]
   minted: string[]
+  settled: string[]
   close: () => Promise<void>
 }
 
@@ -41,14 +42,30 @@ function harness(overrides: Partial<ServedLineDeps> = {}): Promise<Harness> {
   const view = new FakeView()
   const writes: string[] = []
   const minted: string[] = []
+  // The money rung, observable: gate() runs it, identify() must not.
+  const settled: string[] = []
+  const identify = (
+    headers: Record<string, string | undefined>
+  ): ReturnType<ServedLineDeps['identify']> =>
+    headers.authorization === 'Bearer good'
+      ? { ok: true, claims: { sub: 'alice' } }
+      : {
+          ok: false,
+          response: {
+            status: 401,
+            headers: { 'www-authenticate': 'Cookrew challenge=x' },
+            body: {}
+          }
+        }
   const deps: ServedLineDeps = {
-    gate: async (headers) =>
-      headers.authorization === 'Bearer good'
-        ? { ok: true, claims: { sub: 'alice' } }
-        : {
-            ok: false,
-            response: { status: 401, headers: { 'www-authenticate': 'Cookrew challenge=x' }, body: {} }
-          },
+    gate: async (headers) => {
+      const identified = identify(headers)
+      if (!identified.ok) return identified
+      const payment = headers['x-payment']
+      if (payment !== undefined) settled.push(payment)
+      return identified
+    },
+    identify,
     admit: async (serviceId, sub) => {
       minted.push(`${serviceId}/${sub}`)
       return { sessionId: 'sess-1', created: true }
@@ -56,6 +73,7 @@ function harness(overrides: Partial<ServedLineDeps> = {}): Promise<Harness> {
     conductorFor: () => 'term-conductor',
     openConductorFor: (_service, sub) => (sub === 'alice' ? 'term-conductor' : null),
     attach: async () => view,
+    resident: () => view,
     write: async (_id, data) => {
       writes.push(data)
       return { ok: true }
@@ -99,7 +117,12 @@ function harness(overrides: Partial<ServedLineDeps> = {}): Promise<Harness> {
         view,
         writes,
         minted,
-        close: () => new Promise((done) => server.close(() => done()))
+        settled,
+        close: () =>
+          new Promise((done) => {
+            server.closeAllConnections?.()
+            server.close(() => done())
+          })
       })
     })
   })
@@ -181,6 +204,90 @@ describe('the caller line — served PTY over the door', () => {
     expect(open.writes).toEqual([])
   })
 
+  it('a payment presented on the input path is NEVER settled — 404 first, no charge', async () => {
+    open = await harness({ openConductorFor: () => null })
+    const res = await fetch(`${open.origin}/line/raw`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer good',
+        'x-payment': 'tx-real-money',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ data: 'ls\r' })
+    })
+    expect(res.status).toBe(404)
+    // The whole point: the money rung is out of reach on the input routes.
+    expect(open.settled).toEqual([])
+    expect(open.minted).toEqual([])
+  })
+
+  it('the line, which DOES admit, runs the money rung', async () => {
+    open = await harness()
+    const res = await fetch(`${open.origin}/line`, {
+      headers: {
+        authorization: 'Bearer good',
+        'x-payment': 'tx-real-money',
+        'accept-encoding': 'identity'
+      }
+    })
+    expect(res.status).toBe(200)
+    expect(open.settled).toEqual(['tx-real-money'])
+    await res.body!.cancel()
+  })
+
+  it('a second line supersedes the first: one live stream per caller', async () => {
+    open = await harness()
+    const first = await fetch(`${open.origin}/line`, {
+      headers: { authorization: 'Bearer good', 'accept-encoding': 'identity' }
+    })
+    expect(first.status).toBe(200)
+    const firstReader = first.body!.getReader()
+    await firstReader.read()
+    expect(open.view.listenerCount('data')).toBe(1)
+
+    const second = await fetch(`${open.origin}/line`, {
+      headers: { authorization: 'Bearer good', 'accept-encoding': 'identity' }
+    })
+    expect(second.status).toBe(200)
+    const secondReader = second.body!.getReader()
+    await secondReader.read()
+
+    // The first line was detached rather than left doubling every byte.
+    for (let i = 0; i < 40 && open.view.listenerCount('data') > 1; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    expect(open.view.listenerCount('data')).toBe(1)
+    await secondReader.cancel()
+  })
+
+  it('the orch exiting ends the stream, so the caller is not parked on a corpse', async () => {
+    open = await harness()
+    const res = await fetch(`${open.origin}/line`, {
+      headers: { authorization: 'Bearer good', 'accept-encoding': 'identity' }
+    })
+    const reader = res.body!.getReader()
+    const decoder = new TextDecoder()
+    let text = ''
+    while (!text.includes('FRAME<initial>')) {
+      const { value, done } = await reader.read()
+      if (done) break
+      text += decoder.decode(value, { stream: true })
+    }
+    open.view.emit('exit')
+    let ended = false
+    for (let i = 0; i < 40; i += 1) {
+      const { value, done } = await reader.read()
+      if (value) text += decoder.decode(value, { stream: true })
+      if (done) {
+        ended = true
+        break
+      }
+    }
+    expect(text).toContain('event: exit')
+    expect(ended).toBe(true)
+    expect(open.view.listenerCount('data')).toBe(0)
+  })
+
   it('keystrokes ride the submit primitive; a refusal is a 409, not a drop', async () => {
     open = await harness()
     const ok = await fetch(`${open.origin}/line/raw`, {
@@ -221,5 +328,25 @@ describe('the caller line — served PTY over the door', () => {
     })
     expect(res.status).toBe(200)
     expect(open.view.resized).toEqual([[500, 42]])
+  })
+
+  it('resize never boots a mirror — a dead line answers without a 2s stall', async () => {
+    let attached = 0
+    open = await harness({
+      attach: async () => {
+        attached += 1
+        return null
+      },
+      resident: () => null
+    })
+    const started = Date.now()
+    const res = await fetch(`${open.origin}/line/resize`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer good', 'content-type': 'application/json' },
+      body: JSON.stringify({ cols: 80, rows: 24 })
+    })
+    expect(res.status).toBe(200)
+    expect(attached).toBe(0)
+    expect(Date.now() - started).toBeLessThan(1000)
   })
 })

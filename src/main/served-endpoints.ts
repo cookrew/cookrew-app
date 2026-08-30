@@ -301,6 +301,20 @@ export async function handleServedRoute(
 
 export type CallerClaims = { sub: string; workspace: string }
 
+/**
+ * Identity alone: the 401/403 rungs, no budget and no money. The caller's
+ * input routes gate on THIS — they prove their session with an open-session
+ * lookup, and running the money rung there would settle a presented payment
+ * for a session those routes never mint.
+ */
+export function identifyCaller(
+  deps: ServedEndpointDeps,
+  template: ServedTemplate,
+  headers: Record<string, string | undefined>
+): { ok: true; claims: CallerClaims } | { ok: false; response: ServedResponse } {
+  return authorizeCaller(deps, template, headers)
+}
+
 function authorizeCaller(
   deps: ServedEndpointDeps,
   template: ServedTemplate,

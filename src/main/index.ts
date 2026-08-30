@@ -156,11 +156,17 @@ import { ServedCallers } from './served-callers'
 import { serviceGrants } from './service-grants-store'
 import { requestHarnessCompletion, servedGrantPreflight } from './served-grant-preflight'
 import { servedSessionProvisioner } from './served-onboarding'
-import { gateCaller, handleServedRoute, type ServedEndpointDeps } from './served-endpoints'
+import {
+  gateCaller,
+  handleServedRoute,
+  identifyCaller,
+  type ServedEndpointDeps
+} from './served-endpoints'
 import { handleServedLineRoute, type LinePtyView } from './served-line'
 import {
   orchTerminalNode,
   parseServeAddress,
+  validateFace,
   type ImportFace,
   type ServeTarget
 } from './import-session'
@@ -754,6 +760,7 @@ async function handleServedSlug(
   const lineHandled = await handleServedLineRoute(
     {
       gate: (lineHeaders) => gateCaller(servedDeps, template, lineHeaders),
+      identify: (lineHeaders) => identifyCaller(servedDeps, template, lineHeaders),
       admit: async (serviceId, sub) => {
         const { sessionId, created } = await servedDeps.admit(serviceId, sub)
         return { sessionId, created }
@@ -762,6 +769,7 @@ async function handleServedSlug(
       openConductorFor: (serviceId, sub) =>
         servedDeps.sessionForCaller(serviceId, sub)?.conductorId ?? null,
       attach: attachServedLine,
+      resident: (conductorId) => ptys.get(conductorId) ?? null,
       write: async (conductorId, data) => {
         const session = ptys.get(conductorId)
         if (!session) return { ok: false, reason: 'the line is not up' }
@@ -1271,7 +1279,10 @@ function spawnTracked(t: {
         // name; `sessionEnv` still allowlists on top, so a value here reaches
         // nothing that grantedKeys does not name.
         ownerEnv: grants.ownerEnvFor(servedCtx.serviceId),
-        grantedKeys: grants.envKeysFor(servedCtx.serviceId)
+        grantedKeys: grants.envKeysFor(servedCtx.serviceId),
+        // The canvas control plane is the owner's alone: pty.ts withholds the
+        // env keys that name this socket, and the profile denies the connect.
+        controlSocketPath: ptys.socketPath
       })
     : undefined
   const session = ptys.spawn(
@@ -2491,7 +2502,18 @@ function orchLineScript(): string {
     : path.join(dirname, '../../resources/orch-line.mjs')
 }
 
-/** Read a served door's public face — what the owner chose to publish. */
+/** A public face is small; anything larger is not a face we should parse. */
+const MAX_FACE_BYTES = 64 * 1024
+
+/**
+ * Read a served door's public face — what the owner chose to publish.
+ *
+ * Hostile until proven otherwise: this fetches an address a user pasted, from
+ * the MAIN process, and what comes back becomes a card's command. So the
+ * request does not follow redirects (a public-looking address must not bounce
+ * the probe onto loopback), is time- and size-bounded, and the body is
+ * validated into a known shape before any consumer sees it.
+ */
 async function inspectServeAddress(
   link: string
 ): Promise<
@@ -2501,9 +2523,15 @@ async function inspectServeAddress(
   const target = parseServeAddress(link)
   if (!target) return { ok: false, reason: 'bad-address' }
   try {
-    const res = await fetch(`${target.origin}/${target.slug}/crew`)
+    const res = await fetch(`${target.origin}/${target.slug}/crew`, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(5000)
+    })
     if (!res.ok) return { ok: false, reason: 'not-serving' }
-    const face = (await res.json()) as ImportFace
+    const body = await res.arrayBuffer()
+    if (body.byteLength > MAX_FACE_BYTES) return { ok: false, reason: 'not-serving' }
+    const face = validateFace(JSON.parse(new TextDecoder().decode(body)))
+    if (face === null) return { ok: false, reason: 'not-serving' }
     return { ok: true, target, face }
   } catch {
     return { ok: false, reason: 'unreachable' }

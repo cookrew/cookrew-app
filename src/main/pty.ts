@@ -429,13 +429,33 @@ export class PtySession extends EventEmitter {
           ...sanitizeAgentEnv(process.env)
         }
     const infraPath = options.served ? (options.served.env.PATH ?? '') : (process.env.PATH ?? '')
+    // THE CLI CONTROL PLANE IS THE OWNER'S ALONE.
+    //
+    // COOKREW_SOCKET + COOKREW_CLI + cliDir-on-PATH hand a pane the app's unix
+    // socket, and that socket takes commands with NO credential: `list --all`
+    // returns every agent in every workspace, and `--as "<name>"` lets a
+    // caller with no pane identity speak AS any agent (socket-server.ts self()).
+    // From a served session that is a full escape — `recruit --dir <owner dir>
+    // --command …` spawns OUTSIDE the sandbox with the owner's environment,
+    // because a node created that way has no served spawn context. The Seatbelt
+    // profile cannot stop it: it allows process-exec and network* by design,
+    // and the socket lives in the shared runtime dir.
+    //
+    // A served session has no legitimate use for it either — its agents work
+    // for a stranger, inside a sandbox, and must not see (let alone drive) the
+    // owner's canvas. So the infra keys are OWNER-PANE ONLY.
+    const controlPlane = options.served
+      ? {}
+      : {
+          COOKREW_SOCKET: options.socketPath,
+          COOKREW_CLI: path.join(options.cliDir, 'cookrew')
+        }
     const env = {
       ...baseEnv,
       TERM_PROGRAM: 'Cookrew',
       COOKREW_TERMINAL_ID: options.terminalId,
-      COOKREW_SOCKET: options.socketPath,
-      COOKREW_CLI: path.join(options.cliDir, 'cookrew'),
-      PATH: `${options.cliDir}:${infraPath}`
+      ...controlPlane,
+      PATH: options.served ? infraPath : `${options.cliDir}:${infraPath}`
     }
 
     // One path for every backend. The direct backend returns a plain login

@@ -102,7 +102,7 @@ describe('upgradeNode', () => {
     expect(upgradeNode(custom)).toEqual(custom)
   })
 
-  it('a retired crew-line card becomes the orch interface card at the same door', () => {
+  it('a retired crew-line card is neutralized, keeping its name', () => {
     const legacy = terminal({
       name: 'Research Crew · research',
       command:
@@ -114,13 +114,27 @@ describe('upgradeNode', () => {
     } as TerminalNodeData
     const upgraded = upgradeNode(persisted) as TerminalNodeData
     expect('servedTranscript' in upgraded).toBe(false)
-    expect(upgraded.orch).toBe(true)
-    expect(upgraded.preset).toBe('Remote')
-    expect(upgraded.command).toContain('orch-line.mjs')
-    expect(upgraded.command).toContain('"--origin" "http://crew.example:8639"')
-    expect(upgraded.command).toContain('"--slug" "research"')
-    expect(upgraded.command).not.toContain('crew-line.mjs')
-    expect(upgraded.command).not.toContain('payment')
+    expect(upgraded.name).toBe('Research Crew · research')
+    expect(upgraded.preset).toBe('Shell')
+    expect(upgraded.command).toBe('')
+  })
+
+  it('NOTHING from a retired crew card is rebuilt into a command at boot', () => {
+    // The old lane took the door's face verbatim, so its persisted command and
+    // name are remote data. A migration that rebuilt a command from them would
+    // execute an attacker's string at app start, with no user action.
+    const hostile = {
+      ...terminal({
+        name: 'Team $(touch /tmp/pwned)',
+        command:
+          'node "/tmp/evil/crew-line.mjs" "--origin" "http://$(id)" "--slug" "`whoami`"'
+      }),
+      servedTranscript: { origin: 'http://x', slug: 's' }
+    } as TerminalNodeData
+    const upgraded = upgradeNode(hostile) as TerminalNodeData
+    expect(upgraded.command).toBe('')
+    expect(upgraded.command).not.toContain('/tmp/evil')
+    expect(upgraded.command).not.toContain('$(')
   })
 
   it('a stale servedTranscript key is dropped even without a crew-line command', () => {
