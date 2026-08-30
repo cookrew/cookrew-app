@@ -31,6 +31,7 @@ import { WorkspaceStore } from '../src/main/store'
 import { TraceReader } from '../src/main/trace'
 import { planCheckpointRestore } from '../src/main/restore-plan'
 import { claudeProjectSlug } from '../src/shared/claude-fork'
+import { traceFraction } from '../src/shared/version-pin'
 import type { TerminalNodeData } from '../src/shared/model'
 
 const T0 = Date.parse('2026-08-30T10:00:00.000Z')
@@ -283,6 +284,15 @@ describe('boundaryMarkers — one boundary per rotation, carrying the lineage po
     expect(atRoot).toHaveLength(1)
     expect(atRoot[0].kind).toBe('compact')
     expect(atRoot[0].previousSessionId).toBe(SID_A)
+  })
+
+  it('the ROOT boundary (afterIndex 0) draws at the top edge — it was silently dropped before', () => {
+    const rows = [{ index: 1 }, { index: 2 }, { index: 3 }]
+    expect(traceFraction(0, rows)).toBe(0)
+    // Sparse-row omission is untouched: a checkpoint that is not drawn still
+    // yields null rather than a guessed position.
+    expect(traceFraction(9, rows)).toBeNull()
+    expect(traceFraction(0, [])).toBeNull()
   })
 
   it('a /clear-born file (no in-file boundary) still gets its ⇥ clear marker', async () => {
