@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Export &amp; import an agent — the user journey</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --cream:#faf8f4;--cream-hi:#fffef5;--cream-md:#f5f0e8;--cream-lo:#ece6da;
+    --ink:#2d2a20;--ink-soft:#5c4a1f;--muted:#78716c;--dim:#a8a29e;
+    --line:#2d2a20;--line-soft:#d9d3c5;--amber:#ffd600;--amber-soft:#fff3ad;--amber-deep:#d97706;
+    --hp:#6bbe58;--rose:#dc2626;--violet:#9b8acb;
+    --pixel:'Silkscreen','Courier New',monospace;--mono:'JetBrains Mono',Menlo,monospace;--body:'Inter',system-ui,sans-serif;
+    --bg:#f3efe7;--fg:#2d2a20;--panel:#fffef5;--edge:#d9d3c5;--soft:#78716c;
+  }
+  @media (prefers-color-scheme: dark){:root{--bg:#141118;--fg:#ece7dc;--panel:#1d1a22;--edge:#332f3b;--soft:#9a94a6;--cream:#1d1a15;--cream-hi:#242018;--cream-md:#201c15;--cream-lo:#181510;--ink:#ece7dc;--ink-soft:#d8c79a;--line:#4a4436;--line-soft:#3a3428;}}
+  :root[data-theme="dark"]{--bg:#141118;--fg:#ece7dc;--panel:#1d1a22;--edge:#332f3b;--soft:#9a94a6;--cream:#1d1a15;--cream-hi:#242018;--cream-md:#201c15;--cream-lo:#181510;--ink:#ece7dc;--ink-soft:#d8c79a;--line:#4a4436;--line-soft:#3a3428;}
+  :root[data-theme="light"]{--bg:#f3efe7;--fg:#2d2a20;--panel:#fffef5;--edge:#d9d3c5;--soft:#78716c;--cream:#faf8f4;--cream-hi:#fffef5;--cream-md:#f5f0e8;--cream-lo:#ece6da;--ink:#2d2a20;--ink-soft:#5c4a1f;--line:#2d2a20;--line-soft:#d9d3c5;}
+  *{box-sizing:border-box}
+  body{margin:0;padding:30px 18px 90px;background:var(--bg);color:var(--fg);font-family:var(--body);line-height:1.5}
+  main{max-width:1180px;margin:0 auto}
+  h1{font-size:24px;margin:0 0 3px;letter-spacing:-.01em}
+  .sub{color:var(--soft);font-size:14px;margin:0 0 8px}
+  .acts{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px}
+  .acts a{font-family:var(--pixel);font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--fg);border:1.5px solid var(--edge);border-radius:5px;padding:6px 9px;text-decoration:none;background:var(--panel)}
+  h2{font-family:var(--pixel);font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--amber-deep);margin:40px 0 4px;display:flex;align-items:center;gap:10px}
+  h2 .who{font-family:var(--body);font-size:12px;color:var(--soft);text-transform:none;letter-spacing:0;font-weight:500}
+  .lane{display:flex;gap:0;align-items:stretch;overflow-x:auto;padding:14px 2px 6px}
+  .step{flex:0 0 232px;display:flex;flex-direction:column}
+  .arrow{flex:0 0 30px;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:20px}
+  .cap{font-family:var(--mono);font-size:11.5px;color:var(--ink-soft);margin:8px 4px 2px;min-height:32px}
+  .cap b{color:var(--fg)}
+  .feel{font-family:var(--pixel);font-size:7.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--violet);margin:0 4px}
+
+  /* ── mini product screen (tf-panel) ── */
+  .scr{background:var(--cream-hi);border:2px solid var(--line);box-shadow:4px 4px 0 var(--amber-deep);color:var(--ink);display:flex;flex-direction:column;min-height:150px}
+  .scr.plain{box-shadow:4px 4px 0 var(--line-soft)}
+  .hd{display:flex;align-items:center;gap:6px;padding:7px 9px;border-bottom:2px solid var(--line)}
+  .ttl{font-family:var(--pixel);font-size:8.5px;letter-spacing:.06em;text-transform:uppercase}
+  .sp{flex:1}
+  .chip{font-family:var(--pixel);font-size:7px;letter-spacing:.05em;text-transform:uppercase;background:var(--cream-md);border:1.5px solid var(--line);padding:2px 4px;white-space:nowrap}
+  .chip.am{background:var(--amber)}
+  .chip.sel{background:var(--amber);box-shadow:1.5px 1.5px 0 var(--amber-deep)}
+  .chip.ver{color:var(--violet);border-color:var(--violet);background:transparent}
+  .bd{padding:8px 9px;flex:1;display:flex;flex-direction:column;gap:6px}
+  .band{display:flex;align-items:center;gap:7px;padding:6px 7px;border:1.5px solid var(--line)}
+  .band .g{width:20px;height:20px;flex:0 0 auto;display:grid;place-items:center;border:1.5px solid var(--line);border-radius:50%;background:var(--cream-hi);font-size:10px}
+  .band .s{font-family:var(--mono);font-size:10.5px;font-weight:600;line-height:1.2}
+  .band.ok{background:#e7f0e2}.band.ok .g{color:var(--hp)}
+  .band.k{background:var(--cream-md)}
+  .band.pay{background:var(--amber-soft)}
+  .band.stop{background:#f1e4e4}.band.stop .g{color:var(--rose);border-color:var(--rose)}
+  .band.warn{background:var(--amber-soft)}.band.warn .g{color:var(--amber-deep)}
+  .six{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
+  .six span{font-family:var(--pixel);font-size:8px;text-align:center;border:1.5px solid var(--line);background:var(--cream-md);padding:5px 1px;text-transform:lowercase}
+  .row{display:flex;gap:6px;font-family:var(--mono);font-size:10px;color:var(--ink)}
+  .row .k{color:var(--ink-soft);min-width:52px}
+  .row .v{font-weight:600}
+  .chips{display:flex;gap:5px;flex-wrap:wrap}
+  .ft{display:flex;gap:6px;align-items:center;padding:7px 9px;border-top:2px solid var(--line)}
+  .btn{font-family:var(--pixel);font-size:8px;letter-spacing:.05em;text-transform:uppercase;background:var(--cream-md);border:1.5px solid var(--line);box-shadow:2px 2px 0 var(--line);padding:6px 8px}
+  .btn.pri{background:var(--amber);box-shadow:2px 2px 0 var(--amber-deep)}
+  .btn.gho{background:transparent;box-shadow:none;color:var(--muted)}
+  .hint{font-family:var(--mono);font-size:9px;color:var(--muted)}
+  .rcpt{border:1.5px solid var(--violet);background:var(--cream-hi);padding:6px 7px;font-family:var(--mono);font-size:10px;display:flex;align-items:center;gap:6px}
+  .pin{font-family:var(--pixel);font-size:7px;color:var(--violet);border:1.5px solid var(--violet);padding:1px 3px}
+  /* rail */
+  .rail{display:flex;flex-direction:column;align-items:center;gap:0;padding:2px 6px 2px 0;border-right:1.5px solid var(--line-soft)}
+  .tick{width:8px;height:8px;border:1.5px solid var(--line);transform:rotate(45deg);background:var(--cream-hi)}
+  .tick.done{background:var(--hp)}.tick.now{background:var(--amber);box-shadow:0 0 0 2px var(--amber-soft)}.tick.skip{border-style:dashed;border-color:var(--dim);background:transparent}
+  .lnk{width:1.5px;height:12px;background:var(--line-soft)}
+  .split{display:flex}
+  /* canvas mini */
+  .canvas{background:var(--cream-lo);border:2px solid var(--line);padding:8px;display:flex;gap:6px;flex-wrap:wrap;min-height:96px;align-content:flex-start}
+  .node{background:#14110a;border:1.5px solid var(--line);width:60px;height:38px;position:relative}
+  .node .lbl{position:absolute;top:2px;left:3px;font-family:var(--pixel);font-size:6px;color:var(--hp)}
+  .node.orch{box-shadow:0 0 0 2px var(--amber)}
+  .prov{position:absolute;top:-4px;right:-4px;width:9px;height:9px;border-radius:50%;background:var(--violet);border:1.5px solid var(--cream-hi)}
+  .theme{position:fixed;top:12px;right:12px;font:11px var(--mono);background:var(--panel);border:1px solid var(--edge);border-radius:5px;padding:5px 9px;cursor:pointer;color:var(--fg)}
+  .spine{margin:22px 0 0;background:var(--panel);border:1px solid var(--edge);border-radius:10px;padding:14px 16px}
+  .spine h3{font-family:var(--pixel);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--amber-deep);margin:0 0 10px}
+  .spine .arc{display:flex;gap:0;align-items:center;overflow-x:auto}
+  .beat{flex:0 0 auto;text-align:center;padding:0 14px}
+  .beat .em{font-size:20px}
+  .beat .lb{font-family:var(--mono);font-size:11px;color:var(--fg);margin-top:2px}
+  .beat .sb{font-family:var(--mono);font-size:9.5px;color:var(--soft)}
+  .beat.big .lb{font-weight:700;color:var(--amber-deep)}
+  .spine .to{color:var(--dim);font-size:16px}
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--edge);color:var(--soft);font-size:12px}
+</style>
+</head>
+<body>
+<button class="theme" onclick="var r=document.documentElement,d=(r.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));r.dataset.theme=d==='dark'?'light':'dark'">theme</button>
+<main>
+  <h1>Export &amp; import an agent — the journey</h1>
+  <p class="sub">Two people, one exchange. What they tap, what they see, what they feel — not the copy deck.</p>
+  <div class="acts">
+    <a href="#owner">① The owner shares</a>
+    <a href="#copy">②ᴬ A stranger buys a copy</a>
+    <a href="#call">②ᴮ A friend calls a live line</a>
+    <a href="#spine">The emotional spine</a>
+  </div>
+
+  <!-- ═══════════ ACT 1 — OWNER ═══════════ -->
+  <h2 id="owner">① The owner shares <span class="who">— Ana, at her own keyboard, decides to let others use her crew</span></h2>
+  <div class="lane">
+    <div class="step">
+      <div class="scr plain">
+        <div class="hd"><span class="ttl">Research Crew</span><span class="sp"></span><span class="chip">4 agents</span></div>
+        <div class="bd"><div class="canvas">
+          <div class="node orch"><span class="lbl">CONDUCTOR</span></div>
+          <div class="node"><span class="lbl">SCOUT</span></div>
+          <div class="node"><span class="lbl">WRITER</span></div>
+          <div class="node"><span class="lbl">CRITIC</span></div>
+        </div></div>
+      </div>
+      <div class="cap">Ana has a crew that's genuinely useful. <b>She wants to let a teammate use it</b> — without handing over her machine.</div>
+      <div class="feel">curiosity</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="scr">
+        <div class="hd"><span class="ttl">Conductor</span><span class="sp"></span><span class="chip am">⋯ share</span></div>
+        <div class="bd">
+          <div class="row"><span class="k">Serve this crew</span></div>
+          <div class="hint">only the Conductor answers · the others stay hidden</div>
+          <div class="band k"><span class="g">◫</span><div class="s">One door, one workspace</div></div>
+        </div>
+      </div>
+      <div class="cap">She opens <b>Serve</b> on the crew's Conductor. A caller only ever talks to that one door.</div>
+      <div class="feel">intent</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="scr">
+        <div class="hd"><span class="ttl">Who can call it?</span></div>
+        <div class="bd">
+          <div class="band k"><span class="g">🔒</span><div class="s">Just me</div></div>
+          <div class="band ok"><span class="g">◔</span><div class="s">Anyone with an account — free</div></div>
+          <div class="band pay"><span class="g">◈</span><div class="s">Anyone who pays</div></div>
+        </div>
+        <div class="ft"><span class="hint">change any time</span><span class="sp"></span><span class="btn pri">Start serving</span></div>
+      </div>
+      <div class="cap">She picks the <b>door</b>: keep private, open free, or set a price. This is the whole choice.</div>
+      <div class="feel">control</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="scr">
+        <div class="hd"><span class="ttl">Enrol a caller</span></div>
+        <div class="bd">
+          <div class="hint">read these to each other · out loud</div>
+          <div class="six"><span>corgi</span><span>lantern</span><span>fifty</span><span>maple</span><span>orbit</span><span>true</span></div>
+        </div>
+        <div class="ft"><span class="btn gho">cancel</span><span class="sp"></span><span class="btn pri">I compared these</span></div>
+      </div>
+      <div class="cap">For a private grant: <b>six words, read aloud on a call.</b> Same words = the right key. The button states the claim, not a reflex.</div>
+      <div class="feel">the trust moment</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="scr">
+        <div class="hd"><span class="ttl">Research Crew · sessions</span><span class="sp"></span><span class="chip am">live</span></div>
+        <div class="bd">
+          <div class="row"><span class="k">Ana · 1</span><span class="v">working</span></div>
+          <div class="row"><span class="k">Bear · 1</span><span class="v" style="color:var(--muted)">parked · free</span></div>
+          <div class="hint">each one is its own workspace, in its own folder</div>
+        </div>
+      </div>
+      <div class="cap"><b>It's taking calls.</b> Ana keeps working; she sees who's on, never inside their session. Nothing they do reaches her.</div>
+      <div class="feel">carry on</div>
+    </div>
+  </div>
+
+  <!-- ═══════════ ACT 2a — BUY A COPY ═══════════ -->
+  <h2 id="copy">②ᴬ A stranger buys a copy <span class="who">— the classic marketplace: download it, run it on your own machine</span></h2>
+  <div class="lane">
+    <div class="step">
+      <div class="scr plain">
+        <div class="hd"><span class="ttl">Research Crew</span><span class="sp"></span><span class="chip ver">V4</span></div>
+        <div class="bd">
+          <div class="row"><span class="k">by</span><span class="v">@drej</span></div>
+          <div class="band pay"><span class="g">◈</span><div class="s">$2.50 · one-time</div></div>
+          <div class="hint">paid directly to the author</div>
+        </div>
+        <div class="ft"><span class="sp"></span><span class="btn pri">Get it</span></div>
+      </div>
+      <div class="cap">A stranger opens a link. A crew, a price, an author. <b>Do I trust this?</b></div>
+      <div class="feel">hesitation</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="scr">
+        <div class="hd"><span class="ttl">Research Crew</span><span class="sp"></span><span class="chip ver">V4</span><span class="chip">4 agents</span></div>
+        <div class="split">
+          <div class="rail"><div class="tick done"></div><div class="lnk"></div><div class="tick now"></div><div class="lnk"></div><div class="pin">V4</div></div>
+          <div class="bd" style="flex:1">
+            <div class="band ok"><span class="g">✓</span><div class="s">You're you</div></div>
+            <div class="band pay"><span class="g">◈</span><div class="s">$2.50, once</div></div>
+            <div class="row"><span class="k">chain</span><span class="v">Base</span></div>
+            <div class="chips"><span class="chip sel">🦊 metamask</span><span class="chip">▣ qr</span></div>
+          </div>
+        </div>
+        <div class="ft"><span class="btn gho">not now</span><span class="sp"></span><span class="btn pri">Pay 2.50</span></div>
+      </div>
+      <div class="cap">One sheet walks the gate: <b>signed in ✓ → pay</b>. The finished step is a receipt; the rail shows where you are.</div>
+      <div class="feel">friction, made legible</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="scr">
+        <div class="hd"><span class="ttl">Research Crew</span><span class="sp"></span><span class="chip ver">V4</span></div>
+        <div class="split">
+          <div class="rail"><div class="tick done"></div><div class="lnk"></div><div class="tick done"></div><div class="lnk"></div><div class="pin">V4</div></div>
+          <div class="bd" style="flex:1">
+            <div class="band ok"><span class="g">▶</span><div class="s">Yours. Placing it…</div></div>
+            <div class="rcpt"><span class="pin">V4</span> Pinned to your rail</div>
+          </div>
+        </div>
+      </div>
+      <div class="cap">Paid. <b>It's placed on their own canvas.</b> Reinstall, new machine, update — all free. The author's original is never touched.</div>
+      <div class="feel">relief · payoff</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="scr plain">
+        <div class="hd"><span class="ttl">My canvas</span></div>
+        <div class="bd"><div class="canvas">
+          <div class="node orch"><span class="lbl">CONDUCTOR</span><span class="prov"></span></div>
+          <div class="node"><span class="lbl">SCOUT</span></div>
+          <div class="node"><span class="lbl">WRITER</span></div>
+          <div class="node"><span class="lbl">CRITIC</span></div>
+        </div>
+        <div class="hint">● V4 · @drej's — the version you installed. Stays yours.</div>
+        </div>
+      </div>
+      <div class="cap">The crew is <b>theirs</b>, running locally. The violet dot marks its provenance; a hover tells the honest story — bought, not borrowed.</div>
+      <div class="feel">ownership</div>
+    </div>
+  </div>
+
+  <!-- ═══════════ ACT 2b — CALL A LIVE LINE ═══════════ -->
+  <h2 id="call">②ᴮ A friend calls a live line <span class="who">— don't copy it: talk to the one running in the author's app</span></h2>
+  <div class="lane">
+    <div class="step">
+      <div class="scr plain">
+        <div class="hd"><span class="ttl">Tinker @ cookrew-dev</span><span class="sp"></span><span class="chip am">live line</span></div>
+        <div class="bd">
+          <div class="row"><span class="k">@drej granted you this line</span></div>
+          <div class="hint">calls run against a fork — their original is never touched</div>
+        </div>
+      </div>
+      <div class="cap">Bear was granted a line to Ana's agent. <b>It'll show up as an ordinary teammate</b> — but is it really her key?</div>
+      <div class="feel">is this safe?</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="scr">
+        <div class="hd"><span class="ttl">Call Tinker</span><span class="sp"></span><span class="chip">live line</span></div>
+        <div class="split">
+          <div class="rail"><div class="tick now"></div><div class="lnk"></div><div class="tick"></div><div class="lnk"></div><div class="pin">V1</div></div>
+          <div class="bd" style="flex:1">
+            <div class="band k"><span class="g">🔑</span><div class="s">Read these to @drej</div></div>
+            <div class="six"><span>corgi</span><span>lantern</span><span>fifty</span><span>maple</span><span>orbit</span><span>true</span></div>
+            <div class="hint">first reply warms ~30s · it never just spins</div>
+          </div>
+        </div>
+        <div class="ft"><span class="btn gho">cancel</span><span class="sp"></span><span class="btn pri">I read these aloud</span></div>
+      </div>
+      <div class="cap">The SAME six words, the other side of Ana's screen. <b>Match = the key is real.</b> No payment here — authority replaces it (a live call never charges mid-turn).</div>
+      <div class="feel">the trust moment</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="scr plain">
+        <div class="hd"><span class="ttl">My canvas</span></div>
+        <div class="bd"><div class="canvas">
+          <div class="node orch" style="width:80px"><span class="lbl">TINKER · @drej</span><span class="prov"></span></div>
+        </div>
+        <div class="hint">● @drej's V1 — the line you were granted</div>
+        <div class="row" style="margin-top:4px"><span class="v" style="color:var(--muted)">“On it — spinning up…”</span></div>
+        </div>
+      </div>
+      <div class="cap"><b>Connected.</b> Tinker sits on Bear's canvas like any teammate — but it's Ana's agent, on Ana's machine, answering across the wire.</div>
+      <div class="feel">it just works</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="scr">
+        <div class="hd"><span class="ttl">Call Tinker</span></div>
+        <div class="bd">
+          <div class="band warn"><span class="g">◔</span><div class="s">Your call credit ran out</div></div>
+          <div class="hint">your conversation is safe · resumes on the same fork</div>
+        </div>
+        <div class="ft"><span class="sp"></span><span class="btn pri">Top up</span></div>
+      </div>
+      <div class="cap">If prepaid credit runs dry, the line stops in <b>amber, not rose</b> — a thing to do, not a wall. Top up and the same conversation resumes.</div>
+      <div class="feel">reassured, not blocked</div>
+    </div>
+  </div>
+
+  <!-- ═══════════ THE SPINE ═══════════ -->
+  <div class="spine" id="spine">
+    <h3>The emotional spine — every journey bends through one moment</h3>
+    <div class="arc">
+      <div class="beat"><div class="em">👀</div><div class="lb">Curiosity</div><div class="sb">a crew, an author, a price</div></div>
+      <div class="to">→</div>
+      <div class="beat"><div class="em">😬</div><div class="lb">Hesitation</div><div class="sb">is this safe? who sees my data?</div></div>
+      <div class="to">→</div>
+      <div class="beat big"><div class="em">🤝</div><div class="lb">The trust moment</div><div class="sb">six words aloud · “never sent anywhere else”</div></div>
+      <div class="to">→</div>
+      <div class="beat"><div class="em">✨</div><div class="lb">Payoff</div><div class="sb">it's mine / it answers</div></div>
+      <div class="to">→</div>
+      <div class="beat"><div class="em">🌱</div><div class="lb">Kept</div><div class="sb">a pinned version, provenance, updates offered not pushed</div></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    Cookrew · export/import an agent · the one sheet is the Gate Sheet (401 identify · 402 pay · open); the two doors are “buy a copy” (R29) and “a live line” (R30). Every screen here is the product's real surface language — tf-panel chrome, gate-bands, the six words, the version pin — arranged as the path, not the spec.
+  </div>
+</main>
+</body>
+</html>

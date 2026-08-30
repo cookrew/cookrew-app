@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Import via the agent selector — the one import entry</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* TOKENS — verbatim from styles.css :root */
+:root{
+  --cream:#faf8f4;--cream-hi:#fffef5;--cream-md:#f5f0e8;--cream-lo:#ece6da;
+  --ink:#2d2a20;--ink-soft:#5c4a1f;--muted:#78716c;--dim:#a8a29e;
+  --line:#2d2a20;--line-soft:#d9d3c5;--amber:#ffd600;--amber-soft:#fff3ad;--amber-deep:#d97706;
+  --phos-bg:#14110a;--hp:#6bbe58;--rose:#dc2626;--violet:#9b8acb;
+  --font-pixel:'Silkscreen','Courier New',monospace;--font-mono:'JetBrains Mono',Menlo,monospace;--font-body:'Inter',system-ui,sans-serif;
+  --doc-bg:#faf8f4;--doc-fg:#2d2a20;--doc-panel:#fffef5;--doc-edge:#d9d3c5;--doc-soft:#78716c;
+}
+@media (prefers-color-scheme: dark){:root{--doc-bg:#131217;--doc-fg:#ececf1;--doc-panel:#1c1b21;--doc-edge:#33313c;--doc-soft:#a5a2b3;}}
+:root[data-theme="dark"]{--doc-bg:#131217;--doc-fg:#ececf1;--doc-panel:#1c1b21;--doc-edge:#33313c;--doc-soft:#a5a2b3;}
+:root[data-theme="light"]{--doc-bg:#faf8f4;--doc-fg:#2d2a20;--doc-panel:#fffef5;--doc-edge:#d9d3c5;--doc-soft:#78716c;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--doc-bg);color:var(--doc-fg);font-family:var(--font-body);line-height:1.55;font-size:15px}
+.wrap{max-width:1120px;margin:0 auto;padding:28px 20px 80px}
+h1{font-size:25px;margin:0}
+h1 small{display:block;font-size:13px;font-weight:400;color:var(--doc-soft);margin-top:4px}
+p{margin:8px 0}.lede{color:var(--doc-soft);font-size:14px}
+code{font-family:var(--font-mono);font-size:.87em;background:color-mix(in srgb,var(--doc-fg) 8%,transparent);padding:1px 5px;border-radius:3px}
+.caption{font-size:12.5px;color:var(--doc-soft);margin-top:8px;max-width:74ch}
+h2{font-size:18px;margin:42px 0 6px;padding-top:14px;border-top:1px solid var(--doc-edge)}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--doc-edge);vertical-align:top}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--doc-soft);font-weight:600}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
+.toolbar button{font-family:var(--font-pixel);font-size:9px;letter-spacing:.06em;text-transform:uppercase;background:var(--doc-panel);color:var(--doc-fg);border:1.5px solid var(--doc-edge);border-radius:4px;padding:6px 10px;cursor:pointer}
+.toolbar button[aria-pressed="true"]{background:var(--amber);color:#2d2a20;border-color:#2d2a20}
+.themer{position:fixed;top:12px;right:12px;z-index:50}
+.stage{background:var(--cream-lo);border-radius:8px;padding:24px;display:grid;place-items:center;gap:14px}
+
+/* THE DOCK — the selector, verbatim grammar */
+.dock{background:var(--cream-hi);border:2px solid var(--line);box-shadow:4px 4px 0 var(--amber-deep);padding:8px 10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;width:min(660px,100%)}
+.dock .grp{font-family:var(--font-pixel);font-size:7px;color:var(--muted);letter-spacing:.06em;margin-right:2px}
+.cr-chip{font-family:var(--font-pixel);font-size:8.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink);background:var(--cream-md);border:1.5px solid var(--line);padding:3px 7px;white-space:nowrap;cursor:pointer;position:relative}
+.cr-chip.amber{background:var(--amber);box-shadow:1.5px 1.5px 0 var(--amber-deep)}
+.cr-chip .by{font-size:7px;color:var(--ink-soft);margin-left:4px;text-transform:none}
+.cr-chip .lock{margin-left:4px}
+.cr-chip.remote{border-color:var(--violet)}
+.cr-chip.dimmed{opacity:.45;border-style:dashed;cursor:default}
+.cr-chip .price{font-size:7px;background:var(--amber-soft);border:1px solid var(--line);padding:0 3px;margin-left:4px}
+.dock .plus{font-family:var(--font-pixel);font-size:9px;border:1.5px dashed var(--dim);color:var(--muted);padding:3px 7px;cursor:pointer;background:transparent}
+.hintline{font-family:var(--font-mono);font-size:10.5px;color:var(--muted)}
+
+/* panels */
+.tf-panel{color:var(--ink);width:min(440px,100%);background:var(--cream-hi);border:2px solid var(--line);box-shadow:6px 6px 0 var(--amber-deep);display:flex;flex-direction:column}
+.tf-head{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:2px solid var(--line)}
+.tf-title{font-family:var(--font-pixel);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink)}
+.tf-spacer{flex:1}
+.tf-input{font-family:var(--font-mono);font-size:12px;color:var(--ink);background:var(--cream-hi);border:1.5px solid var(--line);padding:6px 8px;flex:1;min-width:0}
+.tf-foot{display:flex;gap:8px;align-items:center;padding:10px 12px;border-top:2px solid var(--line)}
+.tf-hint{font-family:var(--font-body);font-size:11.5px;color:var(--muted);padding:2px 12px 10px}
+.cr-btn{font-family:var(--font-pixel);font-size:9px;letter-spacing:.06em;text-transform:uppercase;background:var(--cream-md);color:var(--ink);border:1.5px solid var(--line);box-shadow:2px 2px 0 var(--line);padding:7px 11px;cursor:pointer}
+.cr-btn.primary{background:var(--amber);box-shadow:2px 2px 0 var(--amber-deep)}
+.cr-btn.ghost{background:transparent;box-shadow:none}
+.sec{padding:10px 12px;border-bottom:1px solid var(--line-soft)}
+.row{display:flex;align-items:center;gap:8px;padding:4px 0;font-family:var(--font-mono);font-size:11.5px;color:var(--ink)}
+.row .k{color:var(--ink-soft);min-width:64px;font-size:10.5px}
+.row .v{font-weight:600}
+.cr-chip-ver{font-family:var(--font-pixel);font-size:7px;color:var(--violet);border:1.5px solid var(--violet);padding:0 3px}
+.band{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1.5px solid var(--line)}
+.band .g{width:22px;height:22px;display:grid;place-items:center;border:1.5px solid var(--line);border-radius:50%;background:var(--cream-hi);font-size:10px;flex:0 0 auto}
+.band .s{font-family:var(--font-mono);font-size:10.5px;font-weight:600}
+.band .w{font-family:var(--font-mono);font-size:9.5px;color:var(--ink-soft);font-weight:400}
+.band.ok{background:#e7f0e2}.band.ok .g{color:var(--hp)}
+.band.warn{background:var(--amber-soft)}.band.warn .g{color:var(--amber-deep)}
+.band.stop{background:#f1e4e4}.band.stop .g{color:var(--rose);border-color:var(--rose)}
+
+/* canvas */
+.canvas{background:var(--cream-lo);border:2px solid var(--line);padding:12px;min-height:150px;position:relative;width:min(660px,100%)}
+.node{background:var(--phos-bg);border:1.5px solid var(--line);width:120px;height:56px;position:absolute}
+.node .lbl{position:absolute;top:3px;left:5px;font-family:var(--font-pixel);font-size:7px;color:var(--hp)}
+.node .st8{position:absolute;bottom:3px;left:5px;font-family:var(--font-mono);font-size:8px;color:var(--dim)}
+.node.orch{box-shadow:0 0 0 2px var(--amber)}
+.node.remote{box-shadow:0 0 0 2px var(--violet)}
+.prov{position:absolute;top:-5px;right:-5px;width:10px;height:10px;border-radius:50%;background:var(--violet);border:1.5px solid var(--cream-hi)}
+.ghost{border:1.5px dashed var(--violet);background:transparent;width:120px;height:56px;position:absolute;display:grid;place-items:center;font-family:var(--font-pixel);font-size:7px;color:var(--violet)}
+.stateview{display:none}.stateview.on{display:block}
+</style>
+</head>
+<body>
+<div class="themer toolbar"><button onclick="var r=document.documentElement,d=(r.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));r.dataset.theme=d==='dark'?'light':'dark'">theme</button></div>
+<div class="wrap">
+
+<header>
+  <h1>Import via the agent selector<small>The one import entry. A remote crew is just another chip in the dock — beside Claude Code and your saved roles — because "add someone's crew" IS "add an agent". Chip grammar verbatim from <code>shared/preset-chip.ts</code> (<code>chipAction: 'place' | 'gate'</code>); the gate is the LGTM'd Gate Sheet.</small></h1>
+</header>
+
+<p class="lede">No marketplace page, no import wizard. You meet other people's crews exactly where you meet your own presets: <b>the dock</b>. A chip you own places; a chip behind a gate opens the sheet; the placed thing is <b>one orch card</b> — their whole crew answers through it.</p>
+
+<div class="toolbar" role="tablist">
+  <button aria-pressed="true"  data-st="s-dock">A · the dock — chips</button>
+  <button aria-pressed="false" data-st="s-add">B · add by link</button>
+  <button aria-pressed="false" data-st="s-gate">C · the gate on click</button>
+  <button aria-pressed="false" data-st="s-place">D · place the orch</button>
+  <button aria-pressed="false" data-st="s-card">E · the card's life</button>
+</div>
+
+<!-- A — the dock -->
+<section class="stateview on" id="s-dock">
+<div class="stage">
+  <div class="dock">
+    <span class="grp">AGENTS</span>
+    <span class="cr-chip amber">CLAUDE CODE</span>
+    <span class="cr-chip">CODEX</span>
+    <span class="cr-chip">REVIEWER<span class="by">role</span></span>
+    <span class="grp" style="margin-left:8px">CREWS</span>
+    <span class="cr-chip remote">RESEARCH CREW<span class="by">@drej</span><span class="lock">🔒</span><span class="price">$2.50</span></span>
+    <span class="cr-chip remote">TRIAGE<span class="by">@ana</span></span>
+    <span class="cr-chip remote dimmed">OLD CREW<span class="by">@sam</span></span>
+    <span class="plus">+ ADD BY LINK</span>
+  </div>
+  <div class="hintline">click a chip, then click the canvas to place · 🔒 opens the gate · dashed = no longer serving</div>
+</div>
+<p class="caption"><b>One new chip family: CREWS</b> — violet-edged, carrying the author handle. Three states, same grammar as marketplace preset chips: <b>gated</b> (🔒 + price — click opens the Gate Sheet, not placement), <b>granted/owned</b> (click arms placement like any preset), <b>ended</b> (dashed, dimmed — the author stopped serving; it stays visible so your history doesn't gaslight you). The <code>+ ADD BY LINK</code> ghost chip is how a crew enters your dock.</p>
+</section>
+
+<!-- B — add by link -->
+<section class="stateview" id="s-add">
+<div class="stage"><div class="tf-panel">
+  <div class="tf-head"><span class="tf-title">ADD A CREW</span></div>
+  <div class="sec">
+    <div class="row"><input class="tf-input" placeholder="cookrew.dev/drej/research-crew" value="cookrew.dev/drej/research-crew"></div>
+  </div>
+  <div class="sec">
+    <div class="row"><span class="v">Research Crew</span><span class="cr-chip-ver">V1</span><span class="tf-spacer"></span><span class="cr-chip">BY @DREJ</span></div>
+    <div class="row"><span class="k">price</span><span class="v">$2.50 USDC · per session</span></div>
+    <div class="row"><span class="k">door</span><span class="v">Conductor</span><span style="font-family:var(--font-mono);font-size:9.5px;color:var(--muted)">— you talk to one agent; it runs the rest</span></div>
+  </div>
+  <div class="tf-hint">Adding puts the chip in your dock. Nothing is paid and nothing connects until you place it.</div>
+  <div class="tf-foot"><button class="cr-btn ghost">CANCEL</button><span class="tf-spacer"></span><button class="cr-btn primary">ADD TO DOCK</button></div>
+</div></div>
+<p class="caption">Paste the address the owner copied from their serving card (state C of the export design). The panel previews the crew — name, version, price, the door — by reading the public face of the served slug. <b>ADD is free and inert</b>: it only puts the chip in the dock, so adding is never a commitment.</p>
+</section>
+
+<!-- C — gate on click -->
+<section class="stateview" id="s-gate">
+<div class="stage">
+  <div class="dock" style="width:min(440px,100%)">
+    <span class="grp">CREWS</span>
+    <span class="cr-chip remote amber">RESEARCH CREW<span class="by">@drej</span><span class="lock">🔒</span></span>
+  </div>
+  <div style="font-family:var(--font-pixel);font-size:9px;color:var(--muted)">▼ click opens the Gate Sheet (already designed &amp; built)</div>
+  <div class="tf-panel">
+    <div class="tf-head"><span class="tf-title">RESEARCH CREW</span><span class="cr-chip-ver">V1</span><span class="tf-spacer"></span><span class="cr-chip">4 AGENTS</span></div>
+    <div class="sec" style="display:flex;gap:10px">
+      <div style="display:flex;flex-direction:column;align-items:center;padding-top:2px">
+        <span style="width:9px;height:9px;border:1.5px solid var(--line);background:var(--hp);transform:rotate(45deg)"></span>
+        <span style="width:1.5px;height:14px;background:var(--line-soft)"></span>
+        <span style="width:9px;height:9px;border:1.5px solid var(--line);background:var(--amber);box-shadow:0 0 0 2px var(--amber-soft);transform:rotate(45deg)"></span>
+        <span style="width:1.5px;height:14px;background:var(--line-soft)"></span>
+        <span class="cr-chip-ver">V1</span>
+      </div>
+      <div style="flex:1">
+        <div class="band ok" style="margin-bottom:6px"><span class="g">✓</span><div><div class="s">You're signed in.</div></div></div>
+        <div class="band warn"><span class="g">◈</span><div><div class="s">$2.50, once per session</div><div class="w">Paid directly to @drej — Cookrew never holds your money and takes nothing.</div></div></div>
+      </div>
+    </div>
+    <div class="tf-foot"><button class="cr-btn ghost">NOT NOW</button><span class="tf-spacer"></span><button class="cr-btn primary">PAY 2.50 · METAMASK</button></div>
+  </div>
+</div>
+<p class="caption">Clicking a 🔒 chip does NOT arm placement — it opens the <b>Gate Sheet</b> (the component already built: identify → pay, rail + bands, finished steps collapse). On success the chip's lock disappears and the click becomes a plain place. Same sheet, mounted at the selector — no new payment UI invented here.</p>
+</section>
+
+<!-- D — place -->
+<section class="stateview" id="s-place">
+<div class="stage">
+  <div class="canvas">
+    <div class="node orch" style="left:16px;top:16px"><span class="lbl">MY CONDUCTOR</span></div>
+    <div class="node" style="left:156px;top:16px"><span class="lbl">SCOUT</span></div>
+    <div class="ghost" style="left:330px;top:60px">RESEARCH CREW ▾</div>
+  </div>
+  <div class="hintline">chip armed · the canvas click is the confirm — same rule as every preset (R2)</div>
+</div>
+<p class="caption">After the gate, placement is byte-identical to placing any preset: chip armed, <b>the canvas click is the confirm</b>. What lands is one violet-ringed orch card. First placement mints your session at the author's app (the instantiator); the card says it's warming rather than spinning silently.</p>
+</section>
+
+<!-- E — card life -->
+<section class="stateview" id="s-card">
+<div class="stage">
+  <div class="canvas" style="min-height:120px">
+    <div class="node remote" style="left:16px;top:16px;width:150px"><span class="lbl">RESEARCH CREW · @drej</span><span class="st8">warming the line…</span><span class="prov"></span></div>
+    <div class="node remote" style="left:196px;top:16px;width:150px"><span class="lbl">RESEARCH CREW · @drej</span><span class="st8" style="color:var(--hp)">● live · V1</span><span class="prov"></span></div>
+    <div class="node remote" style="left:376px;top:16px;width:150px;box-shadow:0 0 0 2px var(--amber-deep)"><span class="lbl">RESEARCH CREW · @drej</span><span class="st8" style="color:var(--amber-deep)">◔ out of credit — top up</span><span class="prov"></span></div>
+  </div>
+  <div class="tf-panel" style="width:min(440px,100%)">
+    <div class="tf-head"><span class="tf-title">RESEARCH CREW</span><span class="tf-spacer"></span><span class="cr-chip">ENDED BY @DREJ</span></div>
+    <div class="sec"><div class="band stop"><span class="g">✕</span><div><div class="s">@drej ended this workspace.</div><div class="w">Your transcript stays readable here. Place the chip again to start fresh — if the crew is still serving.</div></div></div></div>
+  </div>
+</div>
+<p class="caption">The card's honest states: <b>warming</b> (first byte can take ~30s — said, not spun), <b>live</b> (with the version you started on: <code>@drej's V1 — the version you started on; you stay here until you finish</code>), <b>out of credit</b> (amber — a thing to do, top up resumes the same session), and <b>ended by the author</b> (rose — the one thing that can be taken away; your transcript survives locally). The violet dot + hover carries provenance everywhere.</p>
+</section>
+
+<h2>Design decisions of record</h2>
+<table>
+  <tr><th>Decision</th><th>Why</th></tr>
+  <tr><td>Import lives in the dock, as a chip family — not a store page</td><td>"Add someone's crew" is the same act as "add an agent". One selector, one mental model; the marketplace becomes a place chips come FROM, not a place you go</td></tr>
+  <tr><td>ADD BY LINK is free and inert</td><td>Adding ≠ buying. The dock is a shelf; commitment happens at the gate, money at the sheet, connection at placement — three distinct, visible acts</td></tr>
+  <tr><td>🔒 click opens the gate, never placement</td><td>Verbatim <code>chipAction: 'place' | 'gate'</code> — the model already shipped for marketplace presets; a locked chip that placed would hide the toll behind the click</td></tr>
+  <tr><td>The canvas click is the confirm</td><td>R2, unchanged from every preset. No "are you sure" modal after a gate the user just walked deliberately</td></tr>
+  <tr><td>One orch card, violet ring + provenance dot</td><td>The ruling: the orch is the team's interface. The caller never sees the roster behind it — matching what the server actually exposes</td></tr>
+  <tr><td>An ended crew dims but stays</td><td>A vanished chip would gaslight the dock; a dimmed one tells the truth ("no longer serving") and keeps the transcript reachable</td></tr>
+</table>
+
+<h2>What this reuses (nothing new invented)</h2>
+<table>
+  <tr><th>Piece</th><th>Source</th></tr>
+  <tr><td>Chip states + gate-on-click</td><td><code>shared/preset-chip.ts</code> — <code>PresetChip</code>, <code>chipAction</code>, badges</td></tr>
+  <tr><td>The gate UI</td><td><code>GateSheet.tsx</code> + <code>gateWalk</code> — built, tested, unmounted until now</td></tr>
+  <tr><td>Placement → one proxy orch card</td><td><code>importTemplateAsSession</code> / orch-mirror — shipping</td></tr>
+  <tr><td>Session mint on first contact</td><td><code>SessionInstantiator.admit</code> — merged</td></tr>
+  <tr><td>Card strings</td><td><code>MKT_CHIP</code> pin tips (<code>session</code> kind), <code>MKT_DENIED balance_empty</code>, warming line (<code>MKT_GATE</code>)</td></tr>
+</table>
+
+<footer style="margin-top:40px;padding-top:14px;border-top:1px solid var(--doc-edge);color:var(--doc-soft);font-size:12px">
+Owner ruling 2026-08-26 · companion to <code>share-on-save-design.html</code> (export, LGTM) + <code>marketplace-arch-plan.html</code> · chip grammar from <code>shared/preset-chip.ts</code> · gate from the built <code>GateSheet</code> · strings from <code>shared/marketplace-copy.ts</code>.
+</footer>
+</div>
+<script>
+document.querySelectorAll('.toolbar [data-st]').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('.toolbar [data-st]').forEach(x=>x.setAttribute('aria-pressed', x===b?'true':'false'));
+  document.querySelectorAll('.stateview').forEach(s=>s.classList.toggle('on', s.id===b.dataset.st));
+}));
+</script>
+</body>
+</html>
