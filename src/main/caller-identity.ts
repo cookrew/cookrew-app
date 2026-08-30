@@ -19,16 +19,39 @@ import { callAssertionPayload } from './call-ceremony'
  * the card then opens.
  */
 
-/** Where a door's account key lives. 0600, one per (host, slug). */
-export function callerKeyFile(origin: string, slug: string): string {
-  const host = new URL(origin).host.replace(/[^a-z0-9.-]/gi, '_')
-  return path.join(homedir(), '.cookrew', 'caller-keys', `${host}-${slug}.json`)
+const keyDir = (): string => path.join(homedir(), '.cookrew', 'caller-keys')
+
+/**
+ * Where a door's account key lives — filed by the DOOR'S IDENTITY.
+ *
+ * It used to be filed by network address, and that was a real lockout: the
+ * account is bound at the door to (serviceId, sub), so reaching the same team
+ * by loopback, by its LAN address, or later by a domain minted a DIFFERENT key
+ * for the same account name — and TOFU exists precisely to refuse a second key
+ * for a known name. The first address you ever used owned your account and
+ * every other one was refused forever. The serviceId is the thing that does
+ * not move, so it is the thing the file is named for.
+ */
+export function callerKeyFile(serviceId: string): string {
+  const safe = serviceId.replace(/[^a-z0-9._-]/gi, '_').slice(0, 96) || 'unknown-service'
+  return path.join(keyDir(), `${safe}.json`)
 }
 
-/** The retired path, still read so an account made before the rename survives. */
-function legacyKeyFile(origin: string, slug: string): string {
+/**
+ * Keys this device may already hold for a door, newest scheme first.
+ *
+ * The address-named files are the retired scheme (and `crew-keys/` the one
+ * before that). They are still offered because an account enrolled under one
+ * of them is a real account with real sessions — dropping them would strand
+ * people behind a naming change they never made.
+ */
+export function callerKeyCandidates(origin: string, slug: string, serviceId: string): string[] {
   const host = new URL(origin).host.replace(/[^a-z0-9.-]/gi, '_')
-  return path.join(homedir(), '.cookrew', 'crew-keys', `${host}-${slug}.json`)
+  return [
+    callerKeyFile(serviceId),
+    path.join(keyDir(), `${host}-${slug}.json`),
+    path.join(homedir(), '.cookrew', 'crew-keys', `${host}-${slug}.json`)
+  ]
 }
 
 /**
@@ -51,37 +74,53 @@ export function callerSub(raw?: string): string {
   return cleaned.length > 0 ? cleaned : 'caller'
 }
 
-interface CallerKey {
+export interface CallerKey {
   priv: ReturnType<typeof createPrivateKey>
   jwk: Record<string, unknown>
 }
 
-/** Load this door's account key, or mint one (that mint IS the sign-up). */
-export function loadOrCreateCallerKey(origin: string, slug: string): CallerKey {
-  const file = callerKeyFile(origin, slug)
-  for (const candidate of [file, legacyKeyFile(origin, slug)]) {
-    try {
-      // A key another user can read is not this account's key.
-      if ((statSync(candidate).mode & 0o077) !== 0) {
-        throw new Error(`${candidate} is readable by others — chmod 600 it`)
-      }
-      const parsed = JSON.parse(readFileSync(candidate, 'utf8')) as {
-        priv: Record<string, unknown>
-        pub: Record<string, unknown>
-      }
-      return { priv: createPrivateKey({ key: parsed.priv, format: 'jwk' }), jwk: parsed.pub }
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error
+/** Read one key file, or null when it is absent or unusable. Throws only on
+ *  a file this user should not trust — one others can read. */
+export function readCallerKey(file: string): CallerKey | null {
+  try {
+    if ((statSync(file).mode & 0o077) !== 0) {
+      throw new Error(`${file} is readable by others — chmod 600 it`)
     }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
   }
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as {
+      priv: Record<string, unknown>
+      pub: Record<string, unknown>
+    }
+    return { priv: createPrivateKey({ key: parsed.priv, format: 'jwk' }), jwk: parsed.pub }
+  } catch {
+    return null
+  }
+}
+
+/** Write a key file privately. `mode` applies at creation only, so the chmod
+ *  is unconditional — an existing file keeps whatever it had otherwise. */
+export function writeKeyFile(file: string, key: { pub: unknown; priv: unknown }): void {
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  writeFileSync(file, JSON.stringify(key), { mode: 0o600 })
+  chmodSync(file, 0o600)
+}
+
+/** Write a key under the door's identity — the canonical home. */
+export function saveCallerKey(serviceId: string, key: { pub: unknown; priv: unknown }): void {
+  writeKeyFile(callerKeyFile(serviceId), key)
+}
+
+/** Mint a fresh account key. Minting IS the sign-up, at a door that has no
+ *  account for this name yet. */
+export function mintCallerKey(): CallerKey & { raw: { pub: unknown; priv: unknown } } {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519')
   const pub = publicKey.export({ format: 'jwk' }) as Record<string, unknown>
   const priv = privateKey.export({ format: 'jwk' }) as Record<string, unknown>
-  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  writeFileSync(file, JSON.stringify({ pub, priv }), { mode: 0o600 })
-  chmodSync(file, 0o600)
-  return { priv: createPrivateKey({ key: priv, format: 'jwk' }), jwk: pub }
+  return { priv: createPrivateKey({ key: priv, format: 'jwk' }), jwk: pub, raw: { pub, priv } }
 }
 
 /** Sign the door's challenge with this account's key. */

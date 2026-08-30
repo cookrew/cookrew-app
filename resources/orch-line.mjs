@@ -54,40 +54,60 @@ const agent = new transport.Agent({
   ...(transport === https && insecureTls ? { rejectUnauthorized: false } : {})
 })
 
-// The account key: one per door, created on first boot, survives restarts.
-// Falls back to reading the retired crew-keys path so an account made before
-// the rename keeps its name at the door (the pubkey IS the account).
+// THE ACCOUNT KEY IS FILED BY THE DOOR'S IDENTITY, not by its address.
+//
+// The account is bound at the door to (serviceId, sub). Filing the key by
+// address — as this did — mints a DIFFERENT key for the same account name the
+// moment the same team is reached by loopback instead of its LAN address, or
+// later by a domain; TOFU then refuses that second key forever, and the card
+// can never sign in again. The serviceId is the part that does not move.
+// The address-named files are still tried (see signIn) so an account enrolled
+// under the old scheme keeps working, and is promoted on first success.
+// MUST match src/main/caller-identity.ts — the app and this card sign in as
+// the same account, or the session paid for is not the session opened.
 const host = base.host.replace(/[^a-z0-9.-]/gi, '_')
 const keyDir = path.join(homedir(), '.cookrew', 'caller-keys')
-const keyFile = path.join(keyDir, `${host}-${slug}.json`)
-const legacyKeyFile = path.join(homedir(), '.cookrew', 'crew-keys', `${host}-${slug}.json`)
+const keyFileFor = (serviceId) =>
+  path.join(keyDir, `${(serviceId.replace(/[^a-z0-9._-]/gi, '_').slice(0, 96) || 'unknown-service')}.json`)
+const legacyKeyFiles = [
+  path.join(keyDir, `${host}-${slug}.json`),
+  path.join(homedir(), '.cookrew', 'crew-keys', `${host}-${slug}.json`)
+]
 
-function loadOrCreateKey() {
-  for (const file of [keyFile, legacyKeyFile]) {
-    try {
-      // A key another user can read is not this account's key. Refuse it out
-      // loud rather than signing with it (the same rule the app's own
-      // credential store keeps).
-      const mode = statSync(file).mode & 0o077
-      if (mode !== 0) {
-        throw new Error(`${file} is readable by others — fix its permissions (chmod 600)`)
-      }
-      const parsed = JSON.parse(readFileSync(file, 'utf8'))
-      return { priv: createPrivateKey({ key: parsed.priv, format: 'jwk' }), jwk: parsed.pub }
-    } catch (error) {
-      if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error
-      /* absent or corrupt: try the next location, or mint */
+function readKey(file) {
+  try {
+    // A key another user can read is not this account's key. Refuse it out
+    // loud rather than signing with it (the same rule the app's own
+    // credential store keeps).
+    if ((statSync(file).mode & 0o077) !== 0) {
+      throw new Error(`${file} is readable by others — fix its permissions (chmod 600)`)
     }
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    throw error
   }
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'))
+    return { priv: createPrivateKey({ key: parsed.priv, format: 'jwk' }), jwk: parsed.pub }
+  } catch {
+    return null
+  }
+}
+
+function saveKey(serviceId, raw) {
+  mkdirSync(keyDir, { recursive: true, mode: 0o700 })
+  const file = keyFileFor(serviceId)
+  writeFileSync(file, JSON.stringify(raw), { mode: 0o600 })
+  // `mode` on writeFileSync applies at CREATION only — an existing file keeps
+  // whatever it had, so the private half is chmod'd unconditionally.
+  chmodSync(file, 0o600)
+}
+
+function mintKey() {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519')
   const pub = publicKey.export({ format: 'jwk' })
   const priv = privateKey.export({ format: 'jwk' })
-  mkdirSync(keyDir, { recursive: true, mode: 0o700 })
-  writeFileSync(keyFile, JSON.stringify({ pub, priv }), { mode: 0o600 })
-  // `mode` on writeFileSync applies at CREATION only — an existing file keeps
-  // whatever it had, so the private half is chmod'd unconditionally.
-  chmodSync(keyFile, 0o600)
-  return { priv: createPrivateKey({ key: priv, format: 'jwk' }), jwk: pub }
+  return { priv: createPrivateKey({ key: priv, format: 'jwk' }), jwk: pub, raw: { pub, priv } }
 }
 
 function request(method, pathname, { headers = {}, body } = {}) {
@@ -128,18 +148,41 @@ function request(method, pathname, { headers = {}, body } = {}) {
 }
 
 async function signIn() {
-  const { priv, jwk } = loadOrCreateKey()
-  const ch = await request('POST', '/api/call/challenge')
-  if (ch.status !== 200) throw new Error(`no challenge (${ch.status}) — is the team still serving?`)
   const face = await request('GET', '/crew')
   const serviceId = face.body?.serviceId ?? ''
-  const payload = Buffer.from(`cookrew-call/1\n${serviceId}\n${sub}\n${ch.body.challenge}`, 'utf8')
-  const signature = sign(null, payload, priv).toString('base64url')
-  const res = await request('POST', '/api/call/assert', {
-    body: { sub, challenge: ch.body.challenge, signature, jwk }
-  })
-  if (res.status !== 200) throw new Error('sign-in refused — this name may belong to another key')
-  return res.body.token
+  if (!serviceId) throw new Error('this door did not say who it is')
+
+  // One attempt with one key. A fresh challenge each time — they are spent.
+  const attempt = async ({ priv, jwk }) => {
+    const ch = await request('POST', '/api/call/challenge')
+    if (ch.status !== 200) throw new Error(`no challenge (${ch.status}) — is the team still serving?`)
+    const payload = Buffer.from(`cookrew-call/1\n${serviceId}\n${sub}\n${ch.body.challenge}`, 'utf8')
+    const signature = sign(null, payload, priv).toString('base64url')
+    const res = await request('POST', '/api/call/assert', {
+      body: { sub, challenge: ch.body.challenge, signature, jwk }
+    })
+    return res.status === 200 ? res.body.token : null
+  }
+
+  const canonical = keyFileFor(serviceId)
+  for (const file of [canonical, ...legacyKeyFiles]) {
+    const key = readKey(file)
+    if (!key) continue
+    const token = await attempt(key)
+    if (token === null) continue
+    // Promote whichever key this account actually is, so the address-named
+    // file is never consulted again.
+    if (file !== canonical) saveKey(serviceId, { pub: key.jwk, priv: key.priv.export({ format: 'jwk' }) })
+    return token
+  }
+
+  const minted = mintKey()
+  const token = await attempt(minted)
+  if (token === null) {
+    throw new Error('sign-in refused — this name already belongs to another key at this door')
+  }
+  saveKey(serviceId, minted.raw)
+  return token
 }
 
 let token = ''
