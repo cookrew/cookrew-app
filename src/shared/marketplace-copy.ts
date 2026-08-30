@@ -281,7 +281,35 @@ export const MKT_PAY = {
   'mkt.pay.credit.head': 'Prepaid calls',
   'mkt.pay.credit.add': 'Add {amount} {asset} for remote calls',
   'mkt.pay.credit.estimate': '≈ {n} calls at today’s rate',
-  'mkt.pay.credit.skip': 'Top up any time from the chip.'
+  'mkt.pay.credit.skip': 'Top up any time from the chip.',
+
+  /**
+   * ── THE RAILS, as chips ───────────────────────────────────────────────────
+   * A door may take a card, USDC, or both. The chip row is the choice, so each
+   * label says the instrument, and the wallet one says WHOSE wallet — a person
+   * about to sign should never wonder which key is about to move money.
+   */
+  'mkt.pay.rail.card': 'CARD',
+  'mkt.pay.rail.usdc': 'USDC · {wallet}',
+  'mkt.pay.rail.usdc.nowallet': 'USDC — NO WALLET HERE',
+  /** The card hand-off. It leaves the app on purpose; say so before it does. */
+  'mkt.pay.card.handoff':
+    'Your card is entered on Stripe’s own page, in your browser — never in Cookrew.',
+  'mkt.pay.card.waiting.title': 'Waiting for your card payment',
+  'mkt.pay.card.waiting.body':
+    'Finish on the Stripe page that just opened. This unlocks itself when it lands — you can leave it.',
+  /** A settle the door refused: the accusation voice, per R-two-voices. */
+  'mkt.pay.error.invalid.title': "That payment didn't verify",
+  'mkt.pay.error.invalid.body':
+    'The door checked it and would not take it, so no session was started. Nothing was charged by us.',
+  /** Our checker could not answer: the apology voice. Never "declined". */
+  'mkt.pay.error.unverifiable.title': "We couldn't check that payment",
+  'mkt.pay.error.unverifiable.body':
+    'Your payment may be perfectly fine — our checker could not reach a verdict. Trying again will not charge you twice.',
+  /** No wallet provisioned on this device. Not a refusal — a missing tool. */
+  'mkt.pay.error.nowallet.title': 'No wallet on this device',
+  'mkt.pay.error.nowallet.body':
+    'Cookrew never holds keys, so it can only sign with a wallet you set up here. Pay by card instead, or set one up and come back.'
 } as const
 
 /**
@@ -337,7 +365,39 @@ export const MKT_DENIED_REASONS = {
   'mkt.denied.scope.title': "Cookrew couldn't get permission for that",
   'mkt.denied.scope.body':
     'It asked twice and was refused both times, so it stopped rather than keep asking. Nothing was installed and nothing was charged.',
-  'mkt.denied.scope.action': 'COPY DETAILS'
+  'mkt.denied.scope.action': 'COPY DETAILS',
+
+  /**
+   * ── A SERVED DOOR's refusals ──────────────────────────────────────────────
+   * Someone else's team, on their machine, on their terms. Each of these is a
+   * state the served gate can actually answer with, and each says the same two
+   * things the rest of this block says: what did NOT happen to your money, and
+   * the one move that is yours.
+   */
+
+  /** 429 — the OWNER's lent budget, not the caller's payment. Nothing to buy. */
+  'mkt.denied.budget.title': 'This team is out of sessions',
+  'mkt.denied.budget.body':
+    'Its owner lends it a fixed number and they are used up. Nothing was charged — a payment now would buy a session that cannot start.',
+  'mkt.denied.budget.action': 'ASK ITS OWNER',
+
+  /** 503 — a paid door with no working rail. Refusing to quote, not to serve. */
+  'mkt.denied.payment_unavailable.title': "This team can't take payment right now",
+  'mkt.denied.payment_unavailable.body':
+    'It asks to be paid but has no working way to accept it, so nothing was charged and no session was started.',
+  'mkt.denied.payment_unavailable.action': 'TRY LATER',
+
+  /** 403 — the credential is for another door. Ours to explain, not theirs. */
+  'mkt.denied.workspace.title': "That sign-in isn't for this door",
+  'mkt.denied.workspace.body':
+    'The credential belongs to a different team. Nothing was charged. Opening the address again signs you in to the right one.',
+  'mkt.denied.workspace.action': 'START AGAIN',
+
+  /** 503 — admitted, but the team did not come up. Never the caller's fault. */
+  'mkt.denied.not_answering.title': 'This team is not answering',
+  'mkt.denied.not_answering.body':
+    'The door is up but its orch did not start, so no session began. Nothing was charged.',
+  'mkt.denied.not_answering.action': 'TRY AGAIN'
 } as const
 
 /**
@@ -728,7 +788,7 @@ export const MKT_SVC = {
   'mkt.svc.open.account':
     'In Cookrew, choose + IMPORT and paste the address below. You get one card — {orch}’s terminal — and it signs you in when it starts.',
   'mkt.svc.open.paid':
-    'In Cookrew, choose + IMPORT and paste the address below. You get one card — {orch}’s terminal — and it asks for payment once, when you start.',
+    'In Cookrew, choose + IMPORT and paste the address below. It shows the terms and takes the payment once, before anything is placed — then you get one card, {orch}’s terminal.',
   'mkt.svc.open.address': 'Address',
   'mkt.svc.availability.title': 'Availability',
   /**

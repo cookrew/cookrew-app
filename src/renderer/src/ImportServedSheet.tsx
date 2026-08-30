@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { cookrew, type ServeFacePreview } from './api'
+import { ImportGate } from './ImportGate'
 // The gs-* sheet primitives — stated here, by the component that wears them.
 import './grant-surface.css'
 
@@ -26,6 +27,8 @@ export function ImportServedSheet({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [preview, setPreview] = useState<ServeFacePreview | null>(null)
+  /** A paid door hands off to the gate sheet; this is that hand-off. */
+  const [gating, setGating] = useState(false)
   const field = useRef<HTMLInputElement>(null)
 
   // The first field, never the primary — the same rule the enrol sheet keeps.
@@ -57,7 +60,7 @@ export function ImportServedSheet({
       })
   }
 
-  const importTeam = (): void => {
+  const place = (): void => {
     if (busy) return
     setBusy(true)
     setError(null)
@@ -72,6 +75,31 @@ export function ImportServedSheet({
         setBusy(false)
         setError(err instanceof Error ? err.message : String(err))
       })
+  }
+
+  /**
+   * A PAID door is met at the gate sheet, never in the card's terminal. The
+   * money is settled before anything is placed, so the card that lands opens
+   * into a session already paid for.
+   */
+  const importTeam = (): void => {
+    if (busy) return
+    if (preview?.access === 'paid') {
+      setGating(true)
+      return
+    }
+    place()
+  }
+
+  if (gating && preview) {
+    return (
+      <ImportGate
+        link={link.trim()}
+        face={preview}
+        onOpen={place}
+        onDismiss={() => setGating(false)}
+      />
+    )
   }
 
   return (
@@ -120,7 +148,7 @@ export function ImportServedSheet({
             <div className="isv-row isv-dim">
               <span>
                 {preview.access === 'paid'
-                  ? `${preview.priceUsd} USD · per session — asked for in the line, at start`
+                  ? `${preview.priceUsd} USD · per session — the next step shows the terms`
                   : 'Free — the card signs you in when it boots'}
               </span>
             </div>
@@ -139,7 +167,11 @@ export function ImportServedSheet({
           </button>
           {preview ? (
             <button className="gs-primary" disabled={busy} onClick={importTeam}>
-              {busy ? 'PLACING…' : 'IMPORT — PLACE THE ORCH CARD'}
+              {busy
+                ? 'PLACING…'
+                : preview.access === 'paid'
+                  ? 'CONTINUE — REVIEW THE TERMS'
+                  : 'IMPORT — PLACE THE ORCH CARD'}
             </button>
           ) : (
             <button

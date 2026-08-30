@@ -47,7 +47,29 @@ export interface ServeFacePreview {
   priceUsd?: string;
   version: number;
   agents: number;
+  /** Which rails this door takes money on. Empty means it cannot sell today. */
+  paymentRails: readonly ('x402' | 'stripe')[];
 }
+
+/** One way a door will take money, with the terms it quoted for that rail. */
+export type ServeRail =
+  | {
+      rail: 'x402';
+      price: string;
+      asset: string;
+      chain: string;
+      payTo: string;
+      expiry: number;
+    }
+  | { rail: 'stripe'; price: string; asset: 'USD'; chain: 'Stripe'; expiry: number };
+
+/** What a door is saying, in the gate sheet's vocabulary. */
+export type ServePhase =
+  | { kind: 'open' }
+  | { kind: 'pay'; rails: ServeRail[] }
+  | { kind: 'denied'; reason: string; retryable: boolean }
+  | { kind: 'gone' }
+  | { kind: 'error'; status: number };
 
 export interface CookrewApi {
   getWorkspace: () => Promise<WorkspaceState>;
@@ -120,6 +142,25 @@ export interface CookrewApi {
     link: string,
     position?: { x: number; y: number },
   ) => Promise<{ ok: true; node: unknown } | { ok: false; reason: string }>;
+  /** Sign in to the door and ask what it wants. The Bearer stays in main. */
+  serveGate: (
+    link: string,
+  ) => Promise<
+    | { ok: true; phase: ServePhase; wallet: { address: string } | null }
+    | { ok: false; reason: string; detail?: string }
+  >;
+  /** Start a card payment: opens hosted Checkout in the real browser. */
+  serveCheckout: (
+    link: string,
+  ) => Promise<{ ok: true; session: string } | { ok: false; reason: string; detail?: string }>;
+  /** Present a payment on one rail and be admitted. */
+  serveSettle: (
+    link: string,
+    rail: 'x402' | 'stripe',
+    session?: string,
+  ) => Promise<
+    { ok: true; phase: ServePhase } | { ok: false; reason: string; detail?: string }
+  >;
   switchWorkspace: (id: string) => Promise<WorkspaceList>;
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>;
   /** Workspace v2: remove workspace, multi-directory, per-terminal cwd, git. */

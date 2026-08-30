@@ -33,6 +33,12 @@ export interface ImportFace {
   priceUsd?: string
   version: number
   agents: number
+  /**
+   * Which rails this door will take money on. Stable identifiers only — the
+   * import sheet needs them to offer a choice before anyone is charged, and a
+   * paid door advertising none is a door that cannot currently sell.
+   */
+  paymentRails: readonly ('x402' | 'stripe')[]
 }
 
 /**
@@ -98,6 +104,7 @@ export function validateFace(value: unknown): ImportFace | null {
   const serviceId = typeof raw.serviceId === 'string' ? raw.serviceId.slice(0, 128) : ''
   const slug = typeof raw.slug === 'string' ? raw.slug.slice(0, 128) : ''
   const priceUsd = typeof raw.priceUsd === 'string' ? raw.priceUsd.slice(0, 32) : undefined
+  const rails = Array.isArray(raw.paymentRails) ? raw.paymentRails : []
   return {
     name,
     serviceId,
@@ -106,7 +113,8 @@ export function validateFace(value: unknown): ImportFace | null {
     access: raw.access,
     ...(priceUsd !== undefined ? { priceUsd } : {}),
     version: Number.isFinite(raw.version) ? (raw.version as number) : 1,
-    agents: Number.isFinite(raw.agents) ? (raw.agents as number) : 0
+    agents: Number.isFinite(raw.agents) ? (raw.agents as number) : 0,
+    paymentRails: rails.filter((rail): rail is 'x402' | 'stripe' => rail === 'x402' || rail === 'stripe')
   }
 }
 

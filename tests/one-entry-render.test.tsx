@@ -316,7 +316,7 @@ describe('served caller face — the page tells a caller what they can actually 
     expect(html).toContain('2.50 USD to start')
     expect(html).toContain('Pay with USDC on Base')
     expect(html).toContain('+ IMPORT')
-    expect(html).toContain('asks for payment once, when you start')
+    expect(html).toContain('takes the payment once, before anything is placed')
   })
 })
 

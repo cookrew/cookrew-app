@@ -170,6 +170,13 @@ import {
   type ImportFace,
   type ServeTarget
 } from './import-session'
+import {
+  openAdmission,
+  signInToDoor,
+  startStripeCheckout,
+  stripePaymentHeader
+} from './served-admission'
+import { buildX402Payment, deviceWallet } from './x402-caller'
 import { servedTurnReply } from './served-turn-reply'
 import { handleServedPayRoute } from './served-pay-route'
 import { railSettle } from './payment-rails'
@@ -2506,6 +2513,15 @@ function orchLineScript(): string {
 const MAX_FACE_BYTES = 64 * 1024
 
 /**
+ * Bearers held for doors this app has signed in to, while an import is being
+ * decided. MAIN-ONLY BY CONSTRUCTION: the gate sheet drives the ceremony over
+ * IPC by naming the door, never by holding its credential, so a renderer bug
+ * cannot leak one. Keyed by origin+slug; a token outlives the sheet only until
+ * the app quits (they expire on their own at the door).
+ */
+const callerTokens = new Map<string, string>()
+
+/**
  * Read a served door's public face — what the owner chose to publish.
  *
  * Hostile until proven otherwise: this fetches an address a user pasted, from
@@ -3801,6 +3817,98 @@ function registerIpc(handlers: RestoreHandlers): void {
 
   // ---- import a served team (caller side): one address, one orch card ----
   ipcMain.handle('serve:inspect', (_e, link: string) => inspectServeAddress(link))
+
+  /**
+   * THE GATE, asked. Sign in as the account the card will use, then open the
+   * line once to hear what the door wants. Free doors answer `open` and the
+   * import proceeds; a paid one answers `pay` with the terms it quoted, which
+   * is what the gate sheet paints.
+   *
+   * The Bearer never leaves the main process — the renderer drives the sheet,
+   * it does not hold the credential.
+   */
+  ipcMain.handle('serve:gate', async (_e, link: string) => {
+    const target = parseServeAddress(link)
+    if (!target) return { ok: false as const, reason: 'bad-address' as const }
+    try {
+      const token = await signInToDoor(target)
+      callerTokens.set(`${target.origin}/${target.slug}`, token)
+      const phase = await openAdmission(target, token)
+      return { ok: true as const, phase, wallet: deviceWallet() }
+    } catch (error) {
+      return {
+        ok: false as const,
+        reason: 'sign-in' as const,
+        detail: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  /**
+   * Start a card payment: the door mints a hosted Checkout session and we open
+   * it in the user's REAL browser. It cannot be paid inside the app — an
+   * embedded page has no wallet and no autofill — and a hosted page is where
+   * Stripe wants the card, so the hand-off is the honest move.
+   */
+  ipcMain.handle('serve:checkout', async (_e, link: string) => {
+    const target = parseServeAddress(link)
+    const token = target ? callerTokens.get(`${target.origin}/${target.slug}`) : undefined
+    if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
+    try {
+      const checkout = await startStripeCheckout(target, token)
+      await shell.openExternal(checkout.url)
+      return { ok: true as const, session: checkout.session }
+    } catch (error) {
+      return {
+        ok: false as const,
+        reason: 'unavailable' as const,
+        detail: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  /**
+   * Present a payment and be admitted. For a card that is the Checkout session
+   * id; for x402 it is a transfer authorization signed HERE, by the wallet the
+   * owner of this device provisioned — the key never reaches the renderer.
+   *
+   * On success the session is open at the author's app, so the card placed
+   * next opens its line into it and never meets the money.
+   */
+  ipcMain.handle(
+    'serve:settle',
+    async (_e, link: string, rail: 'x402' | 'stripe', session?: string) => {
+      const target = parseServeAddress(link)
+      const token = target ? callerTokens.get(`${target.origin}/${target.slug}`) : undefined
+      if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
+      try {
+        let payment: string
+        if (rail === 'stripe') {
+          if (!session) return { ok: false as const, reason: 'no-session' as const }
+          payment = stripePaymentHeader(session)
+        } else {
+          const quoted = await openAdmission(target, token)
+          const terms =
+            quoted.kind === 'pay'
+              ? quoted.rails.find((entry) => entry.rail === 'x402')
+              : undefined
+          if (!terms || terms.rail !== 'x402') {
+            // Already open, or this door stopped quoting USDC. Either way there
+            // is nothing to sign, and signing a stale quote is money gone.
+            return { ok: true as const, phase: quoted }
+          }
+          payment = await buildX402Payment(terms.requirements)
+        }
+        return { ok: true as const, phase: await openAdmission(target, token, payment) }
+      } catch (error) {
+        return {
+          ok: false as const,
+          reason: 'refused' as const,
+          detail: error instanceof Error ? error.message : String(error)
+        }
+      }
+    }
+  )
   /**
    * Place the imported team's interface: ONE orch card on the caller's own
    * canvas, running the line script. The card is the door — the team behind it
