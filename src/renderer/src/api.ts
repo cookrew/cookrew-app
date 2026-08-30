@@ -152,7 +152,9 @@ export interface CookrewApi {
   /** Start a card payment: opens hosted Checkout in the real browser. */
   serveCheckout: (
     link: string,
-  ) => Promise<{ ok: true; session: string } | { ok: false; reason: string; detail?: string }>;
+  ) => Promise<
+    { ok: true; session: string; url: string } | { ok: false; reason: string; detail?: string }
+  >;
   /** Present a payment on one rail and be admitted. */
   serveSettle: (
     link: string,
