@@ -28,6 +28,7 @@ import { checkpointTitle, useTitleMode } from './checkpoint-sync'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
 import { handleTerminalPaste } from './terminal-paste'
 import { terminalKeyIntent } from './terminal-key-intent'
+import { attachImeBridge } from './ime-input-bridge'
 import { CrIcon } from './icons'
 import { TranslateButton } from './TranslateButton'
 import { languageByCode } from '../../shared/translate'
@@ -504,7 +505,20 @@ function TerminalOverlay({
       cleanups.push(() => {
         if (reassertTimer) clearTimeout(reassertTimer)
       })
-      const inputSub = term.onData((input) => cookrew().ptyInput(node.id, input))
+      // Counts every emit so the IME bridge can tell whether xterm already
+      // claimed an input event — see ime-input-bridge.ts for why iOS needs one.
+      let xtermDataCount = 0
+      const inputSub = term.onData((input) => {
+        xtermDataCount += 1
+        cookrew().ptyInput(node.id, input)
+      })
+      cleanups.push(
+        attachImeBridge(
+          container,
+          () => xtermDataCount,
+          (text) => cookrew().ptyInput(node.id, text)
+        )
+      )
       // Focus pops the software keyboard AND (with a small-font textarea)
       // iOS's page auto-zoom — on a phone that fired the zoom/resize loop the
       // moment the overlay opened. Desktop keeps instant focus; the phone
