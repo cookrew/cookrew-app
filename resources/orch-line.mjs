@@ -143,7 +143,6 @@ async function signIn() {
 }
 
 let token = ''
-let payRef = ''
 let closed = false
 let lineUp = false
 let signInAttempts = 0
@@ -152,34 +151,13 @@ const cols = () => process.stdout.columns || 100
 const rows = () => process.stdout.rows || 30
 const dim = (text) => `\x1b[2m${text}\x1b[0m\r\n`
 
-function authHeaders() {
-  return { authorization: `Bearer ${token}`, ...(payRef ? { 'x-payment': payRef } : {}) }
-}
-
 /**
- * One line of the caller's answer while the line is DOWN (the pay flow).
- * Drops to cooked mode to read it and restores whatever mode was in force —
- * leaving the terminal line-buffered would cost the agent TUI every arrow
- * key, Ctrl-C and Ctrl-] for the rest of the card's life.
+ * THIS CARD CARRIES NO MONEY. There is no x-payment here and no way to put one
+ * here: a session is paid for in the gate sheet before the card is placed, so
+ * everything this process needs is the account credential.
  */
-function readLine(prompt) {
-  return new Promise((resolve) => {
-    process.stdout.write(prompt)
-    const stdin = process.stdin
-    const wasRaw = stdin.isTTY ? stdin.isRaw : false
-    if (stdin.isTTY) stdin.setRawMode(false)
-    stdin.resume()
-    stdin.once('data', (data) => {
-      if (stdin.isTTY && wasRaw) {
-        try {
-          stdin.setRawMode(true)
-        } catch {
-          /* ignore */
-        }
-      }
-      resolve(String(data).trim())
-    })
-  })
+function authHeaders() {
+  return { authorization: `Bearer ${token}` }
 }
 
 function connectLine() {
@@ -201,8 +179,6 @@ function connectLine() {
         return
       }
       lineUp = true
-      // The x-payment reference is spent at session start, never resent.
-      payRef = ''
       wireRawInput()
       res.setEncoding('utf8')
       let buf = ''
@@ -279,28 +255,17 @@ async function handleLineRefusal(status, rawBody) {
   // fresh problem, not a continuation of this one.
   signInAttempts = 0
   if (status === 402) {
-    if (body?.terms) {
-      const accepts = Array.isArray(body.terms?.accepts) ? body.terms.accepts[0] : null
-      const price = accepts ? `${accepts.maxAmountRequired ?? ''} ${accepts.asset ?? ''}` : ''
-      process.stdout.write(dim(`◈ this team charges per session${price ? ` — ${price}` : ''}`))
-      const answer = await readLine('  paste a payment reference (or Enter to retry): ')
-      if (answer) payRef = answer
-      connectLine()
-      return
-    }
-    process.stdout.write(
-      body?.reason === 'invalid'
-        ? dim("✕ that payment didn't verify — nothing was charged. Check the reference.")
-        : dim('◔ our checker is unreachable — your payment may be fine; try again shortly.')
-    )
-    if (body?.reason === 'invalid') payRef = ''
-    scheduleReconnect(3000)
+    // MONEY IS NEVER ASKED FOR HERE. A terminal prompt for a pasted payment
+    // reference is not the product: paying is one surface, the gate sheet,
+    // where the terms, the rails and the wallet are laid out before anything
+    // is approved (docs/design/gate-sheet-unified.html). This card is reached
+    // only AFTER a session is paid for, so a 402 here means the session ended
+    // or was never admitted — say so plainly and keep trying, because the app
+    // can re-admit and this line will simply come up.
+    process.stdout.write(dim('◈ this team charges per session — import it again in Cookrew to pay'))
+    scheduleReconnect(15000)
     return
   }
-  // Anything below is not a payment outcome, so a reference held from an
-  // earlier quote is stale. Resending it on every reconnect would put a
-  // payment identifier on the wire over and over for no possible benefit.
-  payRef = ''
   if (status === 429) {
     process.stdout.write(dim(`✕ ${body?.error ?? 'the door is over its budget'}`))
     scheduleReconnect(5000)

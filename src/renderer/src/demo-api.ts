@@ -339,6 +339,9 @@ export function createDemoApi(): CookrewApi {
     servingEnd: async () => ({ stopped: 0 }),
     serveInspect: async () => ({ ok: false as const, reason: 'desktop-only' }),
     serveImport: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    serveGate: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    serveCheckout: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    serveSettle: async () => ({ ok: false as const, reason: 'desktop-only' }),
     quitApp: () => undefined
   }
   return api
