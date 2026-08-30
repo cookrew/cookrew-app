@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { ownerSecretPaths, browserStatePaths } from '../src/main/owner-secrets'
+import { ownerSecretPaths, browserStatePaths, defaultSessionStatePaths } from '../src/main/owner-secrets'
 
 const HOME = '/Users/owner'
 const BASE = '/Users/owner/.cookrew'
@@ -66,5 +66,41 @@ describe('ownerSecretPaths — a served agent may not read the owner browsing id
     // Denying the parent would take the app's own settings with it; the point
     // is the browsing identity, not everything Cookrew stores.
     expect(paths).not.toContain(path.join(HOME, 'Library', 'Application Support', 'Cookrew'))
+  })
+})
+
+describe('defaultSessionStatePaths — the app own origin state (P2 residual ruling)', () => {
+  it('denies each storage entry by name, never the tree', () => {
+    // The Electron DEFAULT session writes its storage directly under the
+    // app-support dir — Cookies, Local Storage, IndexedDB sitting beside
+    // settings a harness legitimately reads. So the denies are file-level:
+    // every entry the default session is known to write, and not the parent.
+    const paths = defaultSessionStatePaths(HOME, 'cookrew')
+    const app = path.join(HOME, 'Library', 'Application Support', 'cookrew')
+    for (const entry of [
+      'Cookies',
+      'Cookies-journal',
+      'Local Storage',
+      'IndexedDB',
+      'Session Storage',
+      'SharedStorage',
+      'SharedStorage-wal',
+      'Trust Tokens',
+      'Trust Tokens-journal',
+      'Network Persistent State',
+      'WebStorage',
+      'blob_storage'
+    ]) {
+      expect(paths).toContain(path.join(app, entry))
+    }
+    expect(paths).not.toContain(app)
+  })
+
+  it('rides into ownerSecretPaths', () => {
+    const paths = ownerSecretPaths(BASE, HOME)
+    const app = path.join(HOME, 'Library', 'Application Support', 'cookrew')
+    expect(paths).toContain(path.join(app, 'Cookies'))
+    expect(paths).toContain(path.join(app, 'Local Storage'))
+    expect(paths).not.toContain(app)
   })
 })

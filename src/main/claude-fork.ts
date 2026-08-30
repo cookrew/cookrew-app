@@ -440,6 +440,16 @@ export function forkClaudeSessionAssembled(
     const source = readSourceLines(dir, { ...options, turnIndex: 0 })
     if (source === null || !source.exact) return null
 
+    // TODO(checkpoint-session-alignment, ruled 2026-08-30): keepUuids resolves
+    // through the LEDGER by index, the exact wrong-space join forkClaudeSession
+    // above was cured of — on a compacted terminal a rail-selected "T5" is the
+    // ledger's fifth turn, which can be a pre-compact turn from another file.
+    // Deliberately left as-is (owner ruling: implement when the multi-select
+    // fork is actually used). The fix is the same shape as above: resolve each
+    // selected index against parseClaudeTrace(source.lines) first, ledger
+    // record second. The coverage check below at least refuses a fork whose
+    // resolved uuid is absent from the source file, so the failure is an
+    // honest null (preamble fallback), never a silently wrong assembly.
     const byIndex = new Map(options.turns.map((t) => [t.index, t]))
     const keepUuids = options.turnIndexes.map((i) => byIndex.get(i)?.uuid)
     if (keepUuids.length === 0 || keepUuids.some((u) => u === undefined)) return null
