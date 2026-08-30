@@ -67,7 +67,6 @@ export function CheckpointTimeline({
   activeIndex,
   loadingIndex,
   markerFrac,
-  waitingLabel,
   allowActions = true,
   onGoto,
   onLive,
@@ -91,9 +90,7 @@ export function CheckpointTimeline({
   loadingIndex?: number | null
   /** Exact marker fraction (true position over the combined trace+tail extent). */
   markerFrac?: number
-  /** Honest LIVE state before a remote session has written its first trace row. */
-  waitingLabel?: string | null
-  /** Remote caller transcripts are readable but cannot mutate the owner's session. */
+  /** Guards the mutating rail actions (rewind); read-only embedders opt out. */
   allowActions?: boolean
   /** Select a checkpoint by IDENTITY (works for trace-only sub-cap rows too). */
   onGoto: (index: number) => void
@@ -245,18 +242,7 @@ export function CheckpointTimeline({
     return () => clearTimeout(timeout)
   }, [rewindError])
 
-  if (rows.length === 0) {
-    if (!waitingLabel) return null
-    return (
-      <div className="cr-ckpt-rail warming" role="status" aria-label={waitingLabel}>
-        <div className="cr-ckpt-mini">
-          <div className="cr-ckpt-line" />
-          <div className="cr-ckpt-livedot" />
-          <span className="cr-ckpt-warming-label">{waitingLabel}</span>
-        </div>
-      </div>
-    )
-  }
+  if (rows.length === 0) return null
 
   const closeActions = (): void => {
     setActing(null)

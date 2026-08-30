@@ -77,13 +77,11 @@ const api = {
   servingSessions: () => ipcRenderer.invoke('serving:sessions'),
   servingEnd: (sessionId: string) => ipcRenderer.invoke('serving:end', sessionId),
 
-  // ── the dock's crews (import side) ──
-  crewList: () => ipcRenderer.invoke('crew:list'),
-  crewAdd: (link: string) => ipcRenderer.invoke('crew:add', link),
-  crewRemove: (id: string) => ipcRenderer.invoke('crew:remove', id),
-  crewUnlock: (id: string, payRef: string) => ipcRenderer.invoke('crew:unlock', id, payRef),
-  crewPlace: (id: string, position?: { x: number; y: number }) =>
-    ipcRenderer.invoke('crew:place', id, position),
+  // ── import a served team (caller side) ──
+  serveInspect: (link: string) => ipcRenderer.invoke('serve:inspect', link),
+  serveImport: (link: string, position?: { x: number; y: number }) =>
+    ipcRenderer.invoke('serve:import', link, position),
+
   switchWorkspace: (id: string) => ipcRenderer.invoke('workspace:switch', id),
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),

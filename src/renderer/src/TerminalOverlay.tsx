@@ -114,10 +114,9 @@ function TerminalOverlay({
   rect: ScreenRect
 }): React.JSX.Element {
   const { zoomBack, requestClose } = useCanvasUi()
-  const remoteCrew = node.servedTranscript != null
   const phase = activity?.phase ?? 'idle'
-  const [tailReady, setTailReady] = useState(remoteCrew)
-  const metadataReady = remoteCrew || tailReady
+  const [tailReady, setTailReady] = useState(false)
+  const metadataReady = tailReady
   const containerRef = useRef<HTMLDivElement>(null)
   // Drag-in attachments: dragenter/leave bubble from every child of the
   // overlay, so a plain boolean would flicker — count enters vs leaves.
@@ -136,7 +135,6 @@ function TerminalOverlay({
   const [traceIndex, setTraceIndex] = useState<TraceIndexEntry[]>([])
   const [traceIndexReady, setTraceIndexReady] = useState(false)
   const [traceMarkers, setTraceMarkers] = useState<TraceMarkerRow[]>([])
-  const [traceRefresh, setTraceRefresh] = useState(0)
   useEffect(() => {
     if (!metadataReady) return
     let alive = true
@@ -168,8 +166,6 @@ function TerminalOverlay({
     node.opencodeSessionId,
     node.piSessionId,
     node.sessionLineage?.join('\0'),
-    node.servedTranscript?.origin,
-    node.servedTranscript?.slug,
     metadataReady
   ])
 
@@ -177,8 +173,7 @@ function TerminalOverlay({
   const signaledTurns = activity?.turnCount ?? 0
   useEffect(() => {
     if (!traceIndexReady) return
-    if (!remoteCrew && signaledTurns <= traceCeiling) return
-    if (remoteCrew && traceRefresh === 0 && signaledTurns <= traceCeiling) return
+    if (signaledTurns <= traceCeiling) return
     let alive = true
     let retry: number | null = null
     const readDelta = (attempt: number): void => {
@@ -198,17 +193,7 @@ function TerminalOverlay({
       alive = false
       if (retry !== null) window.clearTimeout(retry)
     }
-  }, [node.id, remoteCrew, signaledTurns, traceCeiling, traceIndexReady, traceRefresh])
-
-  // A served trace grows while /ask is still waiting, before the local
-  // crew-line process can complete its own turn counter. Refresh that SAME
-  // capability on a bounded cadence so the existing TranscriptView streams it.
-  useEffect(() => {
-    if (!remoteCrew || (phase !== 'thinking' && phase !== 'waiting')) return
-    setTraceRefresh((value) => value + 1)
-    const timer = window.setInterval(() => setTraceRefresh((value) => value + 1), 800)
-    return () => window.clearInterval(timer)
-  }, [remoteCrew, phase, node.id])
+  }, [node.id, signaledTurns, traceCeiling, traceIndexReady])
 
   // VERSION PINS on the rail. Fetched here and passed to the timeline, which
   // otherwise received nothing — so a saved template's pin was cut in the main
@@ -225,10 +210,6 @@ function TerminalOverlay({
   }, [])
   useEffect(() => {
     if (!metadataReady) return
-    if (remoteCrew) {
-      setPins([])
-      return
-    }
     let alive = true
     void cookrew()
       .listPins(node.id)
@@ -239,10 +220,9 @@ function TerminalOverlay({
     return () => {
       alive = false
     }
-  }, [node.id, pinRefresh, remoteCrew, metadataReady])
+  }, [node.id, pinRefresh, metadataReady])
 
   const rows = mergeCheckpointRows([], traceIndex)
-  const remoteTotal = remoteCrew ? (traceIndex[traceIndex.length - 1]?.index ?? 0) : 0
 
   const transcriptRef = useRef<TranscriptHandle>(null)
   const translation = useCheckpointTranslation()
@@ -283,13 +263,7 @@ function TerminalOverlay({
 
   const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
 
-  // Owner ruling 2026-08-30: the zoomed view is PTY-DIRECT for every card,
-  // crew cards included. aa3198a replaced crew-line's stdout REPL with a
-  // transcript+composer surface and the live area went black on real cards;
-  // the xterm below attaches the same PTY that render swap used to discard,
-  // so the crew-line REPL is simply visible again. The served-transcript
-  // BACKEND (rail rows, phone pager, remote trace) stays — only the render
-  // swap is reverted.
+  // Owner ruling 2026-08-30: the zoomed view is PTY-DIRECT for every card.
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -665,12 +639,12 @@ function TerminalOverlay({
       // dispose in reverse: detach stream/observers before killing the term
       for (const cleanup of cleanups.reverse()) cleanup()
     }
-  }, [node.id, remoteCrew])
+  }, [node.id])
 
   // Live-tail-only clip (unified-scroll item 1): when the turn is at rest, keep
   // only Forge's tail boundary in the live layer; the trace owns older
   // scrollback. Null (no clip) while a turn runs or when no boundary was found.
-  const clipRows = remoteCrew ? null : tailClipRows(phase, activity?.tailLines ?? null)
+  const clipRows = tailClipRows(phase, activity?.tailLines ?? null)
 
   // Acknowledge-on-view: a mounted overlay means the user is LOOKING at this
   // terminal (desktop zoom / phone popout), so a completed turn is read the
@@ -725,7 +699,6 @@ function TerminalOverlay({
           {node.name}
         </span>
         {node.orch && <span className="cr-chip amber">ORCH</span>}
-        {remoteCrew && <span className="cr-chip">CREW</span>}
         <span className={`cr-chip${PHASE_CHIP[phase].cls}`}>{PHASE_CHIP[phase].label}</span>
         <div className="popout-actions">
           <TranslateButton
@@ -880,7 +853,7 @@ function TerminalOverlay({
         <TranscriptView
           ref={transcriptRef}
           terminalId={node.id}
-          total={remoteCrew ? remoteTotal : (activity?.turnCount ?? 0)}
+          total={activity?.turnCount ?? 0}
           titleMode={titleMode}
           translation={translation.showing}
           identities={rows.map((r) => r.index)}
@@ -890,10 +863,9 @@ function TerminalOverlay({
           onActiveBlockChange={onActiveBlockChange}
           onPending={setPendingIndex}
           onTailLoaded={() => setTailReady(true)}
-          refreshToken={remoteCrew ? traceRefresh : 0}
+          refreshToken={0}
 >
-          {/* PTY-direct for every card (owner ruling 2026-08-30): crew cards
-              show crew-line's own REPL here, not a composer replacement. */}
+          {/* PTY-direct for every card (owner ruling 2026-08-30). */}
           <div ref={containerRef} className="popout-terminal" />
         </TranscriptView>
         <CheckpointTimeline
@@ -905,14 +877,6 @@ function TerminalOverlay({
           activeIndex={activeBlock.index}
           loadingIndex={pendingIndex}
           markerFrac={activeBlock.frac}
-          waitingLabel={
-            remoteCrew &&
-            (phase === 'thinking' || phase === 'waiting') &&
-            rows.length === 0
-              ? 'LIVE · LINE WARMING'
-              : null
-          }
-          allowActions={!remoteCrew}
           onGoto={gotoCheckpoint}
           onLive={goLive}
           onScrub={(fraction) => transcriptRef.current?.scrubTo(fraction)}

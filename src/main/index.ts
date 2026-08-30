@@ -25,7 +25,7 @@ import {
 } from './dispatch'
 import { HerdrHostMultiplexer, HERDR_SESSION } from './herdr-host-multiplexer'
 import { selfHostedLaunch, selfHostRefusalMessage } from './self-host-guard'
-import { askTerminal, beginShutdown, cancelAllAsks, pasteAndSubmit } from './ask'
+import { askTerminal, beginShutdown, cancelAllAsks, ownerSubmit, pasteAndSubmit } from './ask'
 import { defaultProducerLease } from './producer-lease'
 import {
   boardSourcesFrom,
@@ -156,7 +156,20 @@ import { ServedCallers } from './served-callers'
 import { serviceGrants } from './service-grants-store'
 import { requestHarnessCompletion, servedGrantPreflight } from './served-grant-preflight'
 import { servedSessionProvisioner } from './served-onboarding'
-import { handleServedRoute } from './served-endpoints'
+import {
+  gateCaller,
+  handleServedRoute,
+  identifyCaller,
+  type ServedEndpointDeps
+} from './served-endpoints'
+import { handleServedLineRoute, type LinePtyView } from './served-line'
+import {
+  orchTerminalNode,
+  parseServeAddress,
+  validateFace,
+  type ImportFace,
+  type ServeTarget
+} from './import-session'
 import { servedTurnReply } from './served-turn-reply'
 import { handleServedPayRoute } from './served-pay-route'
 import { railSettle } from './payment-rails'
@@ -175,9 +188,6 @@ import {
   x402Settle,
   type PaymentRequirements
 } from './x402-rail'
-import { RemoteCrewStore, parseCrewLink } from './remote-crews'
-import { crewLineCommand } from './crew-line-command'
-import { ServedRemoteTranscriptClient } from './served-remote-transcript'
 import { ServeRefused, type ServeAccess, type ServedTemplate } from './session-served'
 import { servedPaymentRails } from '../shared/served-payment-rails'
 import { PresetStore, isPresetId } from './preset-store'
@@ -501,8 +511,6 @@ const serving: Serving = wireServing({
 })
 /** Who has signed in to each served crew (TOFU accounts, M1). */
 const servedCallers = new ServedCallers()
-/** The crews this user added by link — the dock's third chip family. */
-const remoteCrews = new RemoteCrewStore(sessionsBase)
 
 /**
  * The address an owner hands out for a served crew — a LAN URL, because M1 has
@@ -639,8 +647,7 @@ async function handleServedSlug(
   const settlementClaims = authorization.startsWith('Bearer ')
     ? issuer.verifyToken(authorization.slice(7))
     : null
-  const answer = await handleServedRoute(
-    {
+  const servedDeps: ServedEndpointDeps = {
       issuer,
       callers: servedCallers,
       admit: async (serviceId, sub) => {
@@ -746,16 +753,41 @@ async function handleServedSlug(
           agents: nodes.filter((n) => n.kind === 'terminal').length
         }
       }
+  }
+
+  // The caller's PTY line (SSE + raw + resize) writes the response itself, so
+  // it mounts beside the value-shaped routes rather than through them.
+  const lineHandled = await handleServedLineRoute(
+    {
+      gate: (lineHeaders) => gateCaller(servedDeps, template, lineHeaders),
+      identify: (lineHeaders) => identifyCaller(servedDeps, template, lineHeaders),
+      admit: async (serviceId, sub) => {
+        const { sessionId, created } = await servedDeps.admit(serviceId, sub)
+        return { sessionId, created }
+      },
+      conductorFor: (sessionId) => serving.instantiator.conductorFor(sessionId),
+      openConductorFor: (serviceId, sub) =>
+        servedDeps.sessionForCaller(serviceId, sub)?.conductorId ?? null,
+      attach: attachServedLine,
+      resident: (conductorId) => ptys.get(conductorId) ?? null,
+      write: async (conductorId, data) => {
+        const session = ptys.get(conductorId)
+        if (!session) return { ok: false, reason: 'the line is not up' }
+        return ownerSubmit(session, data)
+      }
     },
     template,
     method,
     pathname,
-    {
-      headers,
-      body,
-      query: Object.fromEntries(url.searchParams.entries())
-    }
+    { headers, body, request, response }
   )
+  if (lineHandled) return true
+
+  const answer = await handleServedRoute(servedDeps, template, method, pathname, {
+    headers,
+    body,
+    query: Object.fromEntries(url.searchParams.entries())
+  })
   if (answer === null) return false
   // The 401's www-authenticate carries the ceremony's challenge, so it is set
   // before the body goes out (respondJson writes the head itself).
@@ -770,6 +802,22 @@ async function handleServedSlug(
   }
   return true
 }
+/**
+ * Boot the conductor's PTY mirror and wait (bounded, ~2s) for residency — the
+ * served-line analogue of acquireViewWhenReady. ensureTerminalMirror is the
+ * same primitive the /ask path re-attaches with, so a line and an ask can
+ * never disagree about whether the crew is standing there.
+ */
+async function attachServedLine(conductorId: string): Promise<LinePtyView | null> {
+  if (!ptys.get(conductorId)) ensureTerminalMirror(conductorId)
+  for (let i = 0; i < 40; i += 1) {
+    const session = ptys.get(conductorId)
+    if (session) return session
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  return ptys.get(conductorId) ?? null
+}
+
 const boardProbe = createProbeSampler(
   tmuxProbeDeps({
     knownTerminalIds: () => agents.list().map((entry) => entry.id),
@@ -807,72 +855,30 @@ const traces = new TraceReader(store, {
   }
 })
 
-/**
- * Local and served cards share one transcript capability surface. A served
- * client holds its Bearer in main memory; node data contains only origin+slug.
- */
-const servedTranscriptClients = new Map<string, ServedRemoteTranscriptClient>()
+// Transcript reads are local-file reads. (The R30 crew lane briefly split each
+// of these behind a remote-transcript client; that lane was reverted — a
+// caller's card now mirrors the orch's PTY over the served door instead.)
+const turnHistoryFor = async (terminalId: string) => turns.history(terminalId)
 
-function servedTranscriptFor(terminalId: string): ServedRemoteTranscriptClient | null {
-  const node = store.nodeAcrossWorkspaces(terminalId)?.node
-  if (node?.kind !== 'terminal' || !node.servedTranscript) return null
-  const key = JSON.stringify([node.servedTranscript.origin, node.servedTranscript.slug])
-  let client = servedTranscriptClients.get(key)
-  if (!client) {
-    client = new ServedRemoteTranscriptClient(node.servedTranscript)
-    servedTranscriptClients.set(key, client)
-  }
-  return client
-}
-
-const turnHistoryFor = async (terminalId: string) => {
-  const remote = servedTranscriptFor(terminalId)
-  return remote ? (await remote.listTurns({})).turns : turns.history(terminalId)
-}
-
-const turnPageFor = async (terminalId: string, request: TurnPageRequest = {}) => {
-  const remote = servedTranscriptFor(terminalId)
-  return remote ? remote.listTurns(request) : pageTurns(turns.history(terminalId), request)
-}
+const turnPageFor = async (terminalId: string, request: TurnPageRequest = {}) =>
+  pageTurns(turns.history(terminalId), request)
 
 const traceIndexFor = async (
   terminalId: string,
   request: Parameters<TraceReader['index']>[1] = {}
-) => {
-  const remote = servedTranscriptFor(terminalId)
-  return remote ? remote.listTraceIndex(request) : traces.index(terminalId, request)
-}
+) => traces.index(terminalId, request)
 
-const traceMarkersFor = async (terminalId: string) => {
-  const remote = servedTranscriptFor(terminalId)
-  return remote ? remote.listTraceMarkers() : traces.boundaryMarkers(terminalId)
-}
+const traceMarkersFor = async (terminalId: string) => traces.boundaryMarkers(terminalId)
 
-/** Earlier lineage segments (pre-compact/pre-clear checkpoints). Local files
- *  only: a served transcript's lineage lives on the author's machine, and an
- *  empty listing is the honest answer here. */
-const lineageSegmentsFor = async (terminalId: string) => {
-  const remote = servedTranscriptFor(terminalId)
-  return remote ? [] : traces.lineageSegments(terminalId)
-}
+/** Earlier lineage segments (pre-compact/pre-clear checkpoints). */
+const lineageSegmentsFor = async (terminalId: string) => traces.lineageSegments(terminalId)
 
 const tracePageFor = async (
   terminalId: string,
   request: Parameters<TraceReader['page']>[1] = {}
-) => {
-  const remote = servedTranscriptFor(terminalId)
-  return remote ? remote.listTrace(request) : traces.page(terminalId, request)
-}
+) => traces.page(terminalId, request)
 
-const latestCheckpointFor = async (terminalId: string) => {
-  const remote = servedTranscriptFor(terminalId)
-  if (!remote) return traces.latestCheckpoint(terminalId)
-  const page = await remote.listTurns({ limit: 1 })
-  const turn = page.turns[page.turns.length - 1]
-  return turn
-    ? { prompt: turn.prompt, reply: turn.reply, ...(turn.title ? { title: turn.title } : {}) }
-    : null
-}
+const latestCheckpointFor = async (terminalId: string) => traces.latestCheckpoint(terminalId)
 
 // Trace-perf T4: push a "your checkpoint changed" nudge to the renderer the
 // instant a watched session file grows, so a card reflects a new turn without
@@ -1273,7 +1279,10 @@ function spawnTracked(t: {
         // name; `sessionEnv` still allowlists on top, so a value here reaches
         // nothing that grantedKeys does not name.
         ownerEnv: grants.ownerEnvFor(servedCtx.serviceId),
-        grantedKeys: grants.envKeysFor(servedCtx.serviceId)
+        grantedKeys: grants.envKeysFor(servedCtx.serviceId),
+        // The canvas control plane is the owner's alone: pty.ts withholds the
+        // env keys that name this socket, and the profile denies the connect.
+        controlSocketPath: ptys.socketPath
       })
     : undefined
   const session = ptys.spawn(
@@ -2249,12 +2258,10 @@ interface CreateTerminalOpts {
   /** Boot a fresh agent from a saved role instead of a bare preset. */
   roleName?: string
   /**
-   * Run THIS instead of the preset's command. Used by a placed remote crew,
-   * whose card is a line to someone else's orch rather than a local harness.
+   * Run THIS instead of the preset's command. Used by a placed remote-orch
+   * card, whose command is a line to someone else's orch, not a local harness.
    */
   command?: string
-  /** Public transcript address for a placed remote crew. */
-  servedTranscript?: TerminalNodeData['servedTranscript']
 }
 
 function createTerminal(opts: CreateTerminalOpts): CanvasNode {
@@ -2283,7 +2290,6 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     cwd: store.focusedState.dir,
     orch: opts.orch ?? false,
     role: role ? role.name : null,
-    ...(opts.servedTranscript ? { servedTranscript: opts.servedTranscript } : {}),
     ...(restoredSessionId ? { claudeSessionId: restoredSessionId } : {}),
     position: opts.position ?? { ...DEFAULT_CANVAS_POSITION },
     size: DEFAULT_TERMINAL_SIZE
@@ -2483,17 +2489,53 @@ async function createWorkspaceFromTeam(
  * fixture path) the orch still points at 127.0.0.1's own listener, so the flow
  * is exercisable end to end before any public relay exists.
  */
-/** The proxy terminal's mirror client, resolved for dev and packaged. */
-function crewLineScript(): string {
-  return app.isPackaged
-    ? path.join(process.resourcesPath, 'crew-line.mjs')
-    : path.join(dirname, '../../resources/crew-line.mjs')
-}
-
 function orchMirrorScript(): string {
   return app.isPackaged
     ? path.join(process.resourcesPath, 'orch-mirror.mjs')
     : path.join(dirname, '../../resources/orch-mirror.mjs')
+}
+
+/** The remote-import card's transport, resolved for dev and packaged. */
+function orchLineScript(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'orch-line.mjs')
+    : path.join(dirname, '../../resources/orch-line.mjs')
+}
+
+/** A public face is small; anything larger is not a face we should parse. */
+const MAX_FACE_BYTES = 64 * 1024
+
+/**
+ * Read a served door's public face — what the owner chose to publish.
+ *
+ * Hostile until proven otherwise: this fetches an address a user pasted, from
+ * the MAIN process, and what comes back becomes a card's command. So the
+ * request does not follow redirects (a public-looking address must not bounce
+ * the probe onto loopback), is time- and size-bounded, and the body is
+ * validated into a known shape before any consumer sees it.
+ */
+async function inspectServeAddress(
+  link: string
+): Promise<
+  | { ok: true; target: ServeTarget; face: ImportFace }
+  | { ok: false; reason: 'bad-address' | 'not-serving' | 'unreachable' }
+> {
+  const target = parseServeAddress(link)
+  if (!target) return { ok: false, reason: 'bad-address' }
+  try {
+    const res = await fetch(`${target.origin}/${target.slug}/crew`, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(5000)
+    })
+    if (!res.ok) return { ok: false, reason: 'not-serving' }
+    const body = await res.arrayBuffer()
+    if (body.byteLength > MAX_FACE_BYTES) return { ok: false, reason: 'not-serving' }
+    const face = validateFace(JSON.parse(new TextDecoder().decode(body)))
+    if (face === null) return { ok: false, reason: 'not-serving' }
+    return { ok: true, target, face }
+  } catch {
+    return { ok: false, reason: 'unreachable' }
+  }
 }
 
 async function importTemplateAsSession(
@@ -3224,7 +3266,7 @@ app.whenReady().then(() => {
     store,
     // §10: the same pin store the desktop rail reads — the phone's rail must
     // not drift from what the canvas shows.
-    listPins: (terminalId) => (servedTranscriptFor(terminalId) ? [] : pinStore.list(terminalId)),
+    listPins: (terminalId) => pinStore.list(terminalId),
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,
     // THE INTERNET GATE (§9 · ④), mounted per workspace session. Reachable only
@@ -3757,63 +3799,33 @@ function registerIpc(handlers: RestoreHandlers): void {
   /** END destroys someone else's workspace, so it is the owner's act alone. */
   ipcMain.handle('serving:end', (_e, sessionId: string) => serving.instantiator.end(sessionId))
 
-  // ---- the dock's crews (import side): add is free and inert ----
-  ipcMain.handle('crew:list', () => remoteCrews.list())
-  ipcMain.handle('crew:remove', (_e, id: string) => {
-    remoteCrews.remove(id)
-    return { ok: true as const }
-  })
-  ipcMain.handle('crew:unlock', (_e, id: string, payRef: string) => {
-    // The gate sheet settled a payment; the chip stops being locked.
-    const crew = remoteCrews.patch(id, { payRef })
-    return crew ? { ok: true as const, crew } : { ok: false as const, reason: 'gone' as const }
-  })
-  ipcMain.handle('crew:add', async (_e, link: string) => {
-    const parsed = parseCrewLink(link)
-    if (!parsed) return { ok: false as const, reason: 'bad-link' as const }
-    // Read the public face — what the owner chose to publish, nothing more.
-    try {
-      const res = await fetch(`${parsed.origin}/${parsed.slug}/crew`)
-      if (!res.ok) return { ok: false as const, reason: 'not-serving' as const }
-      const face = (await res.json()) as {
-        name: string
-        door: string
-        access: 'account' | 'paid'
-        priceUsd?: string
-        version: number
-        agents: number
-      }
-      const crew = remoteCrews.add({
-        origin: parsed.origin,
-        slug: parsed.slug,
-        name: face.name,
-        door: face.door,
-        access: face.access,
-        ...(face.priceUsd !== undefined ? { priceUsd: face.priceUsd } : {}),
-        version: face.version,
-        agents: face.agents
-      })
-      return { ok: true as const, crew }
-    } catch {
-      return { ok: false as const, reason: 'unreachable' as const }
-    }
-  })
+  // ---- import a served team (caller side): one address, one orch card ----
+  ipcMain.handle('serve:inspect', (_e, link: string) => inspectServeAddress(link))
   /**
-   * Place a crew: ONE orch card on the caller's own canvas, running the line
-   * script. The card is the door — the crew behind it runs at the author's app.
+   * Place the imported team's interface: ONE orch card on the caller's own
+   * canvas, running the line script. The card is the door — the team behind it
+   * runs in the session workspace the author's app mints for this caller.
    */
-  ipcMain.handle('crew:place', (_e, id: string, position?: { x: number; y: number }) => {
-    const crew = remoteCrews.get(id)
-    if (!crew) return { ok: false as const, reason: 'gone' as const }
-    const node = createTerminal({
-      name: `${crew.name} · ${crew.slug}`,
-      preset: PRESETS[PRESETS.length - 1].name,
-      position,
-      command: crewLineCommand(crewLineScript(), crew),
-      servedTranscript: { origin: crew.origin, slug: crew.slug }
-    })
-    return { ok: true as const, node }
-  })
+  ipcMain.handle(
+    'serve:import',
+    async (_e, link: string, position?: { x: number; y: number }) => {
+      const inspected = await inspectServeAddress(link)
+      if (!inspected.ok) return inspected
+      const node = orchTerminalNode(
+        inspected.face,
+        inspected.target,
+        orchLineScript(),
+        randomUUID(),
+        store.focusedState.dir,
+        position ?? { x: 160, y: 120 }
+      )
+      const placed = store.addNode(node)
+      spawnTracked(placed as TerminalNodeData)
+      store.recordEvent('session.imported', inspected.face.name, inspected.face.door, link.trim())
+      return { ok: true as const, node: placed }
+    }
+  )
+
   ipcMain.handle('workspace:switch', (_e, id: string) => {
     switchWorkspace(id)
     return store.list()

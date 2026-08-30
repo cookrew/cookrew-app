@@ -26,6 +26,15 @@ export interface ServedAssertInput {
 
 export type ServedAssertFailure = 'malformed' | 'unknown_challenge' | 'bad_signature' | 'no_key'
 
+/**
+ * The only shape a sub may take: exactly what `safeSegment` leaves unchanged
+ * (lowercase, digits, `_`, `-`, no leading/trailing `-`), bounded well under
+ * its 64-char truncation. See the assert() comment for what collapsing subs
+ * costs — this regex is the whole defence, so widening it needs the same
+ * reasoning re-done.
+ */
+const SAFE_SUB = /^[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?$/
+
 export class ServedCallers {
   /** serviceId → sub → jwk. In-memory M1; persistence rides the accounts work. */
   private readonly byService = new Map<string, Map<string, Record<string, unknown>>>()
@@ -52,6 +61,18 @@ export class ServedCallers {
     ) {
       return { ok: false, reason: 'malformed' }
     }
+    // THE SUB IS A PATH SEGMENT DOWNSTREAM, so it is constrained HERE.
+    //
+    // The instantiator's contract says accountId is an opaque, already-safe
+    // identifier; the wire is where that stops being true. `safeSegment`
+    // lowercases and folds anything else to '-', so 'Ana', 'ana' and 'a.n.a'
+    // all become one directory: two accounts that both sign in would share a
+    // sandbox (mutual read/write of each other's session files), evict each
+    // other's open-session record — a paid door then charges the evicted
+    // caller AGAIN — and END would delete the other's data. Accepting only
+    // subs that survive safeSegment unchanged makes the raw id and the segment
+    // one value, so distinct accounts cannot collapse into one path.
+    if (!SAFE_SUB.test(input.sub)) return { ok: false, reason: 'malformed' }
     if (!consumeChallenge(input.challenge)) return { ok: false, reason: 'unknown_challenge' }
 
     const known = this.keyOf(serviceId, input.sub)

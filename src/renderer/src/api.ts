@@ -37,20 +37,16 @@ export interface BoardSnapshotLike {
   activeWorkspaceId: string;
 }
 
-/** A crew added to the dock by link — the import side's chip. */
-export interface RemoteCrewView {
-  id: string;
-  origin: string;
-  slug: string;
+/** A served door's public face, as the import sheet previews it. */
+export interface ServeFacePreview {
   name: string;
+  serviceId: string;
+  slug: string;
   door: string;
   access: 'account' | 'paid';
   priceUsd?: string;
   version: number;
   agents: number;
-  addedAt: number;
-  payRef?: string;
-  ended?: boolean;
 }
 
 export interface CookrewApi {
@@ -112,18 +108,16 @@ export interface CookrewApi {
     }[]
   >;
   servingEnd: (sessionId: string) => Promise<{ stopped: number }>;
-  /** The dock's crews (import side). Adding is free and inert. */
-  crewList: () => Promise<readonly RemoteCrewView[]>;
-  crewAdd: (
+  /** Read a served door's public face — free, commits nothing. */
+  serveInspect: (
     link: string,
-  ) => Promise<{ ok: true; crew: RemoteCrewView } | { ok: false; reason: string }>;
-  crewRemove: (id: string) => Promise<{ ok: boolean }>;
-  crewUnlock: (
-    id: string,
-    payRef: string,
-  ) => Promise<{ ok: true; crew: RemoteCrewView } | { ok: false; reason: string }>;
-  crewPlace: (
-    id: string,
+  ) => Promise<
+    | { ok: true; target: { origin: string; slug: string }; face: ServeFacePreview }
+    | { ok: false; reason: string }
+  >;
+  /** Import: place ONE orch interface card for the served team. */
+  serveImport: (
+    link: string,
     position?: { x: number; y: number },
   ) => Promise<{ ok: true; node: unknown } | { ok: false; reason: string }>;
   switchWorkspace: (id: string) => Promise<WorkspaceList>;

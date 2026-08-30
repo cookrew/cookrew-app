@@ -10,7 +10,6 @@ import {
   TerminalNodeData
 } from '../shared/model'
 import { DEFAULT_ORCH_PRESET } from './presets'
-import { crewLineCommand, parseCrewLineCommand } from './crew-line-command'
 
 /**
  * Upgrades persisted nodes saved by older builds to the current shape:
@@ -31,17 +30,39 @@ export function upgradeNode(node: CanvasNode): CanvasNode {
   }
   upgraded = upgradeGeometry(upgraded)
   if (upgraded.kind !== 'terminal') return upgraded
-  return upgradeCrewLineCommand(
+  return upgradeCrewLineCard(
     upgradeLegacyOrchMirrorCommand(upgradeConductorSeed(upgradeMaestroField(upgraded)))
   )
 }
 
-function upgradeCrewLineCommand(node: TerminalNodeData): TerminalNodeData {
-  const parsed = parseCrewLineCommand(node.command)
-  if (!parsed) return node
-  const command = crewLineCommand(parsed.script, parsed.target)
-  if (node.servedTranscript && command === node.command) return node
-  return { ...node, command, servedTranscript: parsed.target }
+/**
+ * A card placed by the retired crew import lane is NEUTRALIZED, not rewired.
+ *
+ * The temptation was to rebuild it as an orch-line card from the origin, slug
+ * and script path in its persisted command. Every one of those is data the
+ * REMOTE DOOR supplied (the old lane took the face's name verbatim and never
+ * validated the link beyond a parse), and rebuilding a command out of it would
+ * execute attacker-influenced strings at app start, with no user action — a
+ * worse position than the lane we are reverting. The script path is the
+ * sharpest edge: `/tmp/x/crew-line.mjs` would have become `/tmp/x/orch-line.mjs`
+ * and been run by node.
+ *
+ * So the card becomes an ordinary inert shell that keeps its name. Its door is
+ * reachable again in one deliberate act — + IMPORT, which validates the
+ * address and the face before anything is built. The stale `servedTranscript`
+ * key goes in every case: the field left the model with the lane.
+ */
+function upgradeCrewLineCard(node: TerminalNodeData): TerminalNodeData {
+  const persisted = node as TerminalNodeData & { servedTranscript?: unknown }
+  const stripped =
+    'servedTranscript' in persisted
+      ? (({ servedTranscript, ...rest }): TerminalNodeData => {
+          void servedTranscript
+          return rest as TerminalNodeData
+        })(persisted)
+      : node
+  if (!/[\\/]crew-line\.mjs["']?\s/.test(stripped.command)) return stripped
+  return { ...stripped, preset: 'Shell', command: '' }
 }
 
 const LEGACY_ORCH_MIRROR_COMMAND =

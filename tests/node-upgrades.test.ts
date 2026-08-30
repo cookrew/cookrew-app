@@ -102,18 +102,49 @@ describe('upgradeNode', () => {
     expect(upgradeNode(custom)).toEqual(custom)
   })
 
-  it('adds a durable served transcript target and strips stale launch payment state', () => {
+  it('a retired crew-line card is neutralized, keeping its name', () => {
     const legacy = terminal({
+      name: 'Research Crew · research',
       command:
-        'node "/app/crew-line.mjs" "--origin" "http://crew.example:8639" "--slug" "research" "--pay" "stale"'
+        'node "/app/crew-line.mjs" "--origin" "http://crew.example:8639" "--slug" "research" "--payment-unavailable-copy" "x"'
     })
-    const upgraded = upgradeNode(legacy) as TerminalNodeData
-    expect(upgraded.servedTranscript).toEqual({
-      origin: 'http://crew.example:8639',
-      slug: 'research'
-    })
-    expect(upgraded.command).not.toMatch(/"--pay"/)
-    expect(upgraded.command).not.toContain('stale')
+    const persisted = {
+      ...legacy,
+      servedTranscript: { origin: 'http://crew.example:8639', slug: 'research' }
+    } as TerminalNodeData
+    const upgraded = upgradeNode(persisted) as TerminalNodeData
+    expect('servedTranscript' in upgraded).toBe(false)
+    expect(upgraded.name).toBe('Research Crew · research')
+    expect(upgraded.preset).toBe('Shell')
+    expect(upgraded.command).toBe('')
+  })
+
+  it('NOTHING from a retired crew card is rebuilt into a command at boot', () => {
+    // The old lane took the door's face verbatim, so its persisted command and
+    // name are remote data. A migration that rebuilt a command from them would
+    // execute an attacker's string at app start, with no user action.
+    const hostile = {
+      ...terminal({
+        name: 'Team $(touch /tmp/pwned)',
+        command:
+          'node "/tmp/evil/crew-line.mjs" "--origin" "http://$(id)" "--slug" "`whoami`"'
+      }),
+      servedTranscript: { origin: 'http://x', slug: 's' }
+    } as TerminalNodeData
+    const upgraded = upgradeNode(hostile) as TerminalNodeData
+    expect(upgraded.command).toBe('')
+    expect(upgraded.command).not.toContain('/tmp/evil')
+    expect(upgraded.command).not.toContain('$(')
+  })
+
+  it('a stale servedTranscript key is dropped even without a crew-line command', () => {
+    const persisted = {
+      ...terminal({ command: 'claude' }),
+      servedTranscript: { origin: 'http://x:1', slug: 's' }
+    } as TerminalNodeData
+    const upgraded = upgradeNode(persisted) as TerminalNodeData
+    expect('servedTranscript' in upgraded).toBe(false)
+    expect(upgraded.command).toBe('claude')
   })
 
   it('repairs terminal geometry omitted by an unvalidated API write', () => {

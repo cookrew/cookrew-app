@@ -11,7 +11,7 @@ import {
   type ShareAccess
 } from '../src/renderer/src/ShareOnSave'
 import { ServedTeamCard, type ServedTeam } from '../src/renderer/src/ServedTeamCard'
-import { AddCrewSheet } from '../src/renderer/src/AddCrewSheet'
+import { ImportServedSheet } from '../src/renderer/src/ImportServedSheet'
 import { renderServedCrewFace, type CrewFace } from '../src/main/served-endpoints'
 import type { ServedPaymentRail } from '../src/shared/served-payment-rails'
 import { EMPTY_SERVED_PAYMENT_STATUS } from '../src/shared/served-payment-config'
@@ -263,16 +263,18 @@ describe('ServedTeamCard — who is on, on the thing you published', () => {
   })
 })
 
-describe('AddCrewSheet — adding is free and inert', () => {
+describe('ImportServedSheet — one address, one orch card', () => {
   it('paints, and asks only for the address', () => {
-    const html = renderToStaticMarkup(<AddCrewSheet onClose={noop} onAdded={noop} />)
-    expect(html).toContain('Add a crew')
-    expect(html).toContain('ADD TO DOCK')
+    const html = renderToStaticMarkup(<ImportServedSheet onClose={noop} onImported={noop} />)
+    expect(html).toContain('Import a team')
+    expect(html).toContain('LOOK UP')
     expect(html).toContain('Paste the address')
   })
 
   it('the primary is disabled until something is pasted', () => {
-    expect(renderToStaticMarkup(<AddCrewSheet onClose={noop} onAdded={noop} />)).toContain('disabled')
+    expect(renderToStaticMarkup(<ImportServedSheet onClose={noop} onImported={noop} />)).toContain(
+      'disabled'
+    )
   })
 })
 
@@ -300,20 +302,21 @@ describe('served caller face — the page tells a caller what they can actually 
     expect(html).not.toContain('2.50 USD to start')
   })
 
-  it('an account face sends the caller through ADD BY LINK with a copy-ready address', () => {
+  it('an account face sends the caller through + IMPORT with a copy-ready address', () => {
     const html = renderServedCrewFace(face('account', []), false)
-    expect(html).toContain('+ ADD BY LINK')
+    expect(html).toContain('+ IMPORT')
     expect(html).toContain('http://192.168.1.20:8639/research-crew')
-    expect(html).toContain('The crew card signs you in when you start.')
+    expect(html).toContain('signs you in when it starts')
+    expect(html).toContain('Conductor')
     expect(html).not.toContain('one tap')
   })
 
-  it('a paid face with live rails explains that ADD BY LINK walks through payment', () => {
+  it('a paid face with live rails explains that the card asks for payment at start', () => {
     const html = renderServedCrewFace(face('paid', ['x402']), false)
     expect(html).toContain('2.50 USD to start')
     expect(html).toContain('Pay with USDC on Base')
-    expect(html).toContain('+ ADD BY LINK')
-    expect(html).toContain('walks you through sign-in and payment')
+    expect(html).toContain('+ IMPORT')
+    expect(html).toContain('asks for payment once, when you start')
   })
 })
 
@@ -367,9 +370,10 @@ describe('the retirements are real, not merely unmounted', () => {
     expect(row).not.toContain("from './ExportToggle'")
   })
 
-  it('the dock offers crews and a way to add one', () => {
+  it('no crew chip family survives in the dock — the one entry is + IMPORT', () => {
     const dock = src('Dock.tsx')
-    expect(dock).toContain('crew-chip')
-    expect(dock).toContain('+ ADD BY LINK')
+    expect(dock).not.toContain('crew-chip')
+    expect(dock).not.toContain('+ ADD BY LINK')
+    expect(dock).toContain('+ IMPORT')
   })
 })

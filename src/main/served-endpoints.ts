@@ -57,7 +57,7 @@ export interface CrewFace {
   /** The identity the sign-in payload binds to. Public — it IS the address. */
   serviceId: string
   slug: string
-  /** The public address the caller pastes into Cookrew's + ADD BY LINK. */
+  /** The public address the caller pastes into Cookrew's + IMPORT. */
   address: string
   version: number
   access: 'account' | 'paid'
@@ -194,7 +194,8 @@ export function renderServedCrewFace(face: CrewFace, paymentReceived: boolean): 
         }<p>${copy(
           face.access === 'account'
             ? MKT_SVC['mkt.svc.open.account']
-            : MKT_SVC['mkt.svc.open.paid']
+            : MKT_SVC['mkt.svc.open.paid'],
+          { orch: face.door }
         )}</p><span class="address-label">${copy(
           MKT_SVC['mkt.svc.open.address']
         )}</span><code class="address">${escapeHtml(face.address)}</code></section>`
@@ -263,7 +264,7 @@ export async function handleServedRoute(
   }
 
   if (method === 'GET' && pathname === '/crew') {
-    // The public face — the ADD BY LINK preview. Free to read: it is exactly
+    // The public face — the import sheet's preview. Free to read: it is exactly
     // what the owner chose to publish, and nothing else.
     return json(200, publicCrewFace(deps, template))
   }
@@ -298,7 +299,21 @@ export async function handleServedRoute(
   return null
 }
 
-type CallerClaims = { sub: string; workspace: string }
+export type CallerClaims = { sub: string; workspace: string }
+
+/**
+ * Identity alone: the 401/403 rungs, no budget and no money. The caller's
+ * input routes gate on THIS — they prove their session with an open-session
+ * lookup, and running the money rung there would settle a presented payment
+ * for a session those routes never mint.
+ */
+export function identifyCaller(
+  deps: ServedEndpointDeps,
+  template: ServedTemplate,
+  headers: Record<string, string | undefined>
+): { ok: true; claims: CallerClaims } | { ok: false; response: ServedResponse } {
+  return authorizeCaller(deps, template, headers)
+}
 
 function authorizeCaller(
   deps: ServedEndpointDeps,
@@ -391,16 +406,22 @@ async function transcriptRoute(
   return json(200, response)
 }
 
-async function askRoute(
+/**
+ * The whole admission ladder short of the prompt: identity (401/403), the
+ * owner's grant budget (429, BEFORE the money), the 402 at session start.
+ * Shared by /ask and the caller's PTY line — one gate, two doors, so the
+ * ladder cannot drift between them.
+ */
+export async function gateCaller(
   deps: ServedEndpointDeps,
   template: ServedTemplate,
-  input: { headers: Record<string, string | undefined>; body: unknown }
-): Promise<ServedResponse> {
+  headers: Record<string, string | undefined>
+): Promise<{ ok: true; claims: CallerClaims } | { ok: false; response: ServedResponse }> {
   const { serviceId } = template
 
   // ── identity: shared byte-for-byte with the caller transcript reads ──
-  const auth = authorizeCaller(deps, template, input.headers)
-  if (!auth.ok) return auth.response
+  const auth = authorizeCaller(deps, template, headers)
+  if (!auth.ok) return auth
   const { claims } = auth
 
   // ── the owner's grant budget — BEFORE the money, deliberately ──
@@ -420,36 +441,56 @@ async function askRoute(
     // of sessions and they are gone — a limit a caller can understand and an
     // owner can raise, so it is named rather than hidden behind "try again
     // shortly", which would be a lie about a wait that never ends.
-    return json(429, {
-      reason: 'budget',
-      error: 'this crew has used up what its owner lent it — ask them to raise it'
-    })
+    return {
+      ok: false,
+      response: json(429, {
+        reason: 'budget',
+        error: 'this crew has used up what its owner lent it — ask them to raise it'
+      })
+    }
   }
 
   // ── the 402, at session START only ──
   if (template.access === 'paid' && !deps.hasOpenSession(serviceId, claims.sub)) {
-    const payment = input.headers['x-payment']
+    const payment = headers['x-payment']
     if (payment === undefined || payment.length === 0) {
       const terms = deps.paymentTerms(template)
       // A crew we cannot price is not a crew a stranger may use for free.
       if (terms === null) {
-        return json(503, {
-          reason: 'payment_unavailable',
-          error: MKT_GATE['mkt.gate.payment.unavailable']
-        })
+        return {
+          ok: false,
+          response: json(503, {
+            reason: 'payment_unavailable',
+            error: MKT_GATE['mkt.gate.payment.unavailable']
+          })
+        }
       }
-      return json(402, { terms })
+      return { ok: false, response: json(402, { terms }) }
     }
     const settled = await deps.settle(payment, template.priceUsd ?? '')
     if (settled === 'refused') {
       // The accusation voice: the payment is at fault, nothing was charged here.
-      return json(402, { reason: 'invalid', retryable: false })
+      return { ok: false, response: json(402, { reason: 'invalid', retryable: false }) }
     }
     if (settled === 'unverifiable') {
       // The apology voice: WE could not check; retrying will not double-charge.
-      return json(402, { reason: 'unverifiable', retryable: true })
+      return { ok: false, response: json(402, { reason: 'unverifiable', retryable: true }) }
     }
   }
+
+  return { ok: true, claims }
+}
+
+async function askRoute(
+  deps: ServedEndpointDeps,
+  template: ServedTemplate,
+  input: { headers: Record<string, string | undefined>; body: unknown }
+): Promise<ServedResponse> {
+  const { serviceId } = template
+
+  const gate = await gateCaller(deps, template, input.headers)
+  if (!gate.ok) return gate.response
+  const { claims } = gate
 
   // ── the prompt, refused not stripped ──
   const body = (input.body ?? {}) as Record<string, unknown>
