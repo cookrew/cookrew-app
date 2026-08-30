@@ -79,14 +79,39 @@ export interface ImeBridgeTarget {
  * can interleave mid-dispatch, which is what makes it sound. Do not remove it
  * on the strength of an imagined event-cancellation defense.
  */
+/**
+ * How long the just-committed window may stay open.
+ *
+ * The window used to be "one macrotask", which is a scheduling event and not a
+ * duration: under a blocked main thread — and the overlay blocks it, xterm
+ * renders and fits on this thread — the clearing timer is delayed by the length
+ * of the blocking task, and every insertText arriving meanwhile is dropped. A
+ * dropped character is the ORIGINAL bug, so the window is bounded in wall clock
+ * as well. 50ms is far below the gap between human keystrokes and far above the
+ * same-tick commit follow-up this exists to swallow.
+ */
+const COMMIT_WINDOW_MS = 50
+
 export function attachImeBridge(
   container: ImeBridgeTarget,
   xtermEmitCount: () => number,
-  send: (text: string) => void
+  send: (text: string) => void,
+  now: () => number = () => Date.now()
 ): () => void {
   let countBeforeInput = 0
   let inComposition = false
   let commitPending = false
+  let commitAt = 0
+  let countAtCommit = 0
+  const timers = new Set<ReturnType<typeof setTimeout>>()
+
+  const later = (fn: () => void): void => {
+    const timer = setTimeout(() => {
+      timers.delete(timer)
+      fn()
+    }, 0)
+    timers.add(timer)
+  }
 
   const onCompositionStart = (): void => {
     inComposition = true
@@ -97,30 +122,70 @@ export function attachImeBridge(
     // setTimeout(0), so a synchronous emit-count comparison cannot see it —
     // the send is scheduled, not made. Any insertText in this window is the
     // same commit arriving through the second door; forwarding it is the
-    // first-character doubling that got b08fbb6 reverted. xterm's handler ran
-    // in the target phase, before this bubble listener, so its timer is
-    // already queued and this one fires after it.
+    // first-character doubling that got b08fbb6 reverted.
     commitPending = true
-    setTimeout(() => {
-      commitPending = false
-    }, 0)
+    commitAt = now()
+    countAtCommit = xtermEmitCount()
   }
+
+  /**
+   * Is the commit still undelivered? Two ways to answer no, because "one
+   * macrotask" was not an answer at all (MEDIUM-1):
+   *   - xterm has emitted since the commit, so the text is already out; or
+   *   - the window has simply been open too long.
+   * Closing on the emit is the precise signal; the clock is the backstop for a
+   * commit that never arrives.
+   */
+  const stillAwaitingCommit = (): boolean => {
+    if (!commitPending) return false
+    if (xtermEmitCount() !== countAtCommit) {
+      commitPending = false
+      return false
+    }
+    if (now() - commitAt >= COMMIT_WINDOW_MS) {
+      commitPending = false
+      return false
+    }
+    return true
+  }
+
   const onInputCapture = (): void => {
     countBeforeInput = xtermEmitCount()
   }
   const onInputBubble = (event: Event): void => {
     const ie = event as InputEvent
     // A composition owns its text, open or just-committed; xterm delivers it.
-    if (inComposition || commitPending) return
+    if (inComposition || stillAwaitingCommit()) return
     const text = imeTextToForward(ie.inputType, ie.data, xtermEmitCount() !== countBeforeInput)
     if (text === null) return
-    send(text)
+
+    // DEFER, then re-check. The synchronous comparison above catches only a
+    // send xterm makes DURING dispatch, and xterm has two paths that merely
+    // SCHEDULE one: _finalizeComposition(true) at compositionend, and
+    // _handleAnyTextareaChanges() from the keyCode-229 keydown — the latter with
+    // no composition at all, so no window covers it. Both were measured to
+    // double a synchronous bridge (CDP harness, digit case 3/3).
+    //
+    // The ordering that makes this sound is FIFO: xterm queues its timer at
+    // keydown or at compositionend, both strictly BEFORE the input event where
+    // this one is queued, so xterm's callback runs first and this re-check sees
+    // its emit. Honest caveat: that argument assumes compositionend never
+    // arrives AFTER the insertText it belongs to. No trace has shown that
+    // ordering, but it is not proven impossible — if it happens, the commit is
+    // forwarded twice and this comment is where to start.
+    const countAtQueue = xtermEmitCount()
+    later(() => {
+      if (xtermEmitCount() !== countAtQueue) return
+      send(text)
+    })
   }
   container.addEventListener('compositionstart', onCompositionStart, false)
   container.addEventListener('compositionend', onCompositionEnd, false)
   container.addEventListener('input', onInputCapture, true)
   container.addEventListener('input', onInputBubble, false)
   return () => {
+    for (const timer of timers) clearTimeout(timer)
+    timers.clear()
     container.removeEventListener('compositionstart', onCompositionStart, false)
     container.removeEventListener('compositionend', onCompositionEnd, false)
     container.removeEventListener('input', onInputCapture, true)

@@ -18,14 +18,20 @@
 // insertText with no composition in flight is ours to rescue — that second half
 // is the original dropped-punctuation bug and must keep working.
 
-// What this harness can NOT express (verified by reading xterm 5.5.0 source
-// instead — CompositionHelper.ts): the cancelled/empty-commit case is safe
-// because _finalizeComposition(true) reads textarea.value.substring(start) at
-// timer time, so a declined bare insertText has already mutated the textarea
-// and xterm's queued send picks it up. fakeXterm has no textarea, so that
-// self-healing property is asserted by source-reading, not by these tests.
-// Likewise the keydown-229-without-composition path (_handleAnyTextareaChanges)
-// is not modeled here; it is a phone-QA case.
+// The empty-commit case USED to be explained here as "safe because
+// _finalizeComposition(true) re-reads textarea.value at timer time". That
+// explanation is wrong and would have become load-bearing. Terminal.ts:1067
+// clears the textarea on Enter, so the deferred read returns '' and would send
+// NOTHING. What actually saves it is CompositionHelper.keydown: a non-229 key
+// arriving while _isComposing || _isSendingComposition calls
+// _finalizeComposition(FALSE), which sends synchronously and clears
+// _isSendingComposition, so the queued timer finds nothing left to do. That
+// mechanism is now pinned by a test below rather than by a paragraph.
+//
+// The keydown-229-without-composition path IS modeled now (it was the CRITICAL
+// this branch was blocked on): _handleAnyTextareaChanges() schedules its send on
+// a setTimeout(0) with no composition anywhere, so no window covers it and only
+// the deferred re-check does.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { attachImeBridge } from '../src/renderer/src/ime-input-bridge'
@@ -93,8 +99,11 @@ function fakeXterm(pty: string[]): {
   emitCount: () => number
   emit: (text: string) => void
   scheduleCommitSend: (text: string) => void
+  scheduleTextareaDiffSend: (text: string) => void
+  finalizeNow: (text: string) => void
 } {
   let count = 0
+  let pendingCommit: string | null = null
   const emit = (text: string): void => {
     count += 1
     pty.push(text)
@@ -102,8 +111,25 @@ function fakeXterm(pty: string[]): {
   return {
     emitCount: () => count,
     emit,
+    // _finalizeComposition(true): the commit goes out on a timer, NOT now.
     scheduleCommitSend: (text: string) => {
+      pendingCommit = text
+      setTimeout(() => {
+        if (pendingCommit === null) return // _isSendingComposition was cleared
+        pendingCommit = null
+        emit(text)
+      }, 0)
+    },
+    // _handleAnyTextareaChanges(): the keyCode-229 branch. ALSO a timer, and
+    // with no composition in flight — the gap that doubled the previous tip.
+    scheduleTextareaDiffSend: (text: string) => {
       setTimeout(() => emit(text), 0)
+    },
+    // _finalizeComposition(false): a non-229 keydown during the send window
+    // flushes synchronously and cancels the queued timer.
+    finalizeNow: (text: string) => {
+      pendingCommit = null
+      emit(text)
     }
   }
 }
@@ -118,12 +144,19 @@ describe('composition commit — the doubling that got b08fbb6 reverted', () => 
     xterm: ReturnType<typeof fakeXterm>
     detach: () => void
     listenerCount: () => number
+    clock: { t: number }
   } {
     const pty: string[] = []
     const { target, dispatch, listenerCount } = fakeContainer()
     const xterm = fakeXterm(pty)
-    const detach = attachImeBridge(target, xterm.emitCount, (text) => pty.push(text))
-    return { pty, dispatch, xterm, detach, listenerCount }
+    const clock = { t: 1_000_000 }
+    const detach = attachImeBridge(
+      target,
+      xterm.emitCount,
+      (text) => pty.push(text),
+      () => clock.t
+    )
+    return { pty, dispatch, xterm, detach, listenerCount, clock }
   }
 
   /** One committed composition, in the order iOS + xterm produce the events. */
@@ -182,6 +215,10 @@ describe('composition commit — the doubling that got b08fbb6 reverted', () => 
     attachImeBridge(c.target, x.emitCount, (text) => pty.push(text))
     c.target.addEventListener('input', () => x.emit('a'), true)
     c.dispatch('input', { inputType: 'insertText', data: 'a' })
+    // MUST flush: the bridge's send is deferred, so asserting before the timers
+    // run makes this pass whether or not it would double. It did exactly that
+    // for one revision of this branch.
+    vi.runAllTimers()
     expect(pty).toEqual(['a'])
   })
 
@@ -192,6 +229,76 @@ describe('composition commit — the doubling that got b08fbb6 reverted', () => 
     // composition later commits through xterm's own path
     r.xterm.scheduleCommitSend('端')
     r.dispatch('compositionend')
+    vi.runAllTimers()
+    expect(r.pty).toEqual(['端'])
+  })
+
+  it('CRITICAL-1: keydown 229 with NO composition is not doubled', () => {
+    // The path that blocked the previous tip. CompositionHelper.keydown sees
+    // keyCode 229 outside a composition and calls _handleAnyTextareaChanges(),
+    // whose whole body is inside setTimeout(0). No compositionstart, no
+    // compositionend, so neither window applies — a synchronous emit-count check
+    // sees nothing sent and forwards, then xterm's timer forwards again.
+    const r = rig()
+    r.xterm.scheduleTextareaDiffSend('7')
+    r.dispatch('input', { inputType: 'insertText', data: '7' })
+    vi.runAllTimers()
+    expect(r.pty).toEqual(['7'])
+  })
+
+  it('CRITICAL-1: the same for CJK punctuation', () => {
+    const r = rig()
+    r.xterm.scheduleTextareaDiffSend('，')
+    r.dispatch('input', { inputType: 'insertText', data: '，' })
+    vi.runAllTimers()
+    expect(r.pty).toEqual(['，'])
+  })
+
+  it('CRITICAL-1: and still rescues when xterm schedules NOTHING', () => {
+    // The other half — if the deferred re-check declined unconditionally it
+    // would pass the two cases above by dropping every character instead.
+    const r = rig()
+    r.dispatch('input', { inputType: 'insertText', data: '7' })
+    vi.runAllTimers()
+    expect(r.pty).toEqual(['7'])
+  })
+
+  it('MEDIUM-1: the commit window closes as soon as xterm delivers', () => {
+    // Precise signal: once the commit is out, a following insertText is a NEW
+    // character and must be rescued, not swallowed as part of the commit.
+    const r = rig()
+    r.xterm.scheduleCommitSend('端')
+    r.dispatch('compositionend')
+    vi.runAllTimers() // xterm's commit lands, closing the window
+    r.dispatch('input', { inputType: 'insertText', data: '。' })
+    vi.runAllTimers()
+    expect(r.pty).toEqual(['端', '。'])
+  })
+
+  it('MEDIUM-1: the window is bounded in wall clock, not by a macrotask', () => {
+    // A blocked main thread used to hold the window open for the length of the
+    // blocking task, silently eating real keystrokes — the ORIGINAL bug. Here
+    // xterm never delivers and the clock advances past the cap; the character
+    // must still be rescued.
+    const r = rig()
+    r.dispatch('compositionend') // commit pending, nothing scheduled
+    r.clock.t += 500 // main thread blocked half a second
+    r.dispatch('input', { inputType: 'insertText', data: '。' })
+    vi.runAllTimers()
+    expect(r.pty).toEqual(['。'])
+  })
+
+  it('MEDIUM-2: Enter during the send window flushes xterm synchronously', () => {
+    // The REAL empty-commit mechanism, pinned. Terminal.ts clears the textarea
+    // on Enter, so _finalizeComposition(true)'s deferred re-read would send ''.
+    // What saves the text is CompositionHelper.keydown calling
+    // _finalizeComposition(FALSE) — synchronous — and cancelling the timer.
+    // The bridge must stay out of it either way: exactly one copy.
+    const r = rig()
+    r.xterm.scheduleCommitSend('端')
+    r.dispatch('compositionend')
+    r.dispatch('input', { inputType: 'insertText', data: '端' })
+    r.xterm.finalizeNow('端') // Enter arrives; xterm flushes now, cancels timer
     vi.runAllTimers()
     expect(r.pty).toEqual(['端'])
   })
