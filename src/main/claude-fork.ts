@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSyn
 import { homedir } from 'node:os'
 import path from 'node:path'
 import type { TurnRecord } from '../shared/turn'
+import { parseClaudeTrace } from '../shared/trace-blocks'
 import {
   buildForkedSessionLinesAtTurn,
   buildForkedSessionLinesAtUuid,
@@ -271,22 +272,37 @@ export function forkClaudeSession(options: ClaudeForkOptions): ClaudeForkResult 
     if (source === null) return null
 
     // Cutoff per the session-binding contract (team-fork-roles-spec-v1):
-    // the fork turn's message uuid binds the cut to the precise session
-    // entry whenever the record carries one AND the file was resolved
-    // exactly by sessionId; otherwise cut by prompt position. Never by
-    // timestamp — scrape timing drifts from session write times.
+    // the cut binds to a precise session entry by message uuid whenever the
+    // source was resolved exactly (stored sessionId / snapshot lines);
+    // otherwise cut by prompt position. Never by timestamp — scrape timing
+    // drifts from session write times.
+    //
+    // TWO INDEX SPACES meet here (checkpoint-session-alignment). The rail and
+    // drawer number the CURRENT session file from T1 (file space), while the
+    // durable ledger deliberately CONTINUES its numbering across a /compact
+    // rotation (ledger space, bca5ed2) — so after a compact the same
+    // turnIndex names DIFFERENT turns in the two spaces. The file's OWN block
+    // at turnIndex wins: a rail-originated fork means "this row of the file I
+    // am looking at", and the block's id is that row's message uuid. A
+    // ledger-space caller (call-fork passes the chain's latest index, which
+    // can exceed the file's block count) finds no such block and falls back
+    // to the ledger record's uuid — the latest turn's uuid is identical in
+    // both spaces, so that caller still cuts at the right entry.
+    const fileBlock = source.exact
+      ? parseClaudeTrace(source.lines).find((b) => b.index === options.turnIndex)
+      : undefined
     const cutRecord = options.turns.find((t) => t.index === options.turnIndex)
+    const cutoffUuid = fileBlock?.id ?? (source.exact ? cutRecord?.uuid : undefined)
     const sessionId = randomUUID()
-    const forked =
-      source.exact && cutRecord?.uuid
-        ? buildForkedSessionLinesAtUuid(source.lines, {
-            newSessionId: sessionId,
-            cutoffUuid: cutRecord.uuid
-          })
-        : buildForkedSessionLinesAtTurn(source.lines, {
-            newSessionId: sessionId,
-            keepPrompts: options.turnIndex
-          })
+    const forked = cutoffUuid
+      ? buildForkedSessionLinesAtUuid(source.lines, {
+          newSessionId: sessionId,
+          cutoffUuid
+        })
+      : buildForkedSessionLinesAtTurn(source.lines, {
+          newSessionId: sessionId,
+          keepPrompts: options.turnIndex
+        })
     if (forked.length === 0) return null
 
     writeForkedSession(options, sessionId, forked)

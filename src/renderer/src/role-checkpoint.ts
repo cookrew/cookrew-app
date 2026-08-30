@@ -13,6 +13,16 @@ export interface SaveRoleFromCheckpointInput {
   terminalId: string
   /** The checkpoint: its TurnRecord, or its index (resolved via listTurns). */
   checkpoint: TurnRecord | number
+  /**
+   * The checkpoint row's trace identity (its block's message uuid), when the
+   * caller knows it. A numeric `checkpoint` is a TRACE-space index (the rail's
+   * T-number for the current file), but the ledger it is resolved against
+   * CONTINUES its numbering across a /compact — so the ledger record found at
+   * that index can be a different turn entirely. When provided, a mismatched
+   * ledger record is discarded and the trace fallback (which matches by trace
+   * index — always the right space) resolves the checkpoint instead.
+   */
+  expectedUuid?: string
   /** Role name typed by the user. */
   name: string
   /** Role prompt; defaults to the checkpoint's prompt text. */
@@ -45,6 +55,13 @@ export async function saveRoleFromCheckpoint(
       record = page.turns.find((turn) => turn.index === input.checkpoint)
     } else {
       record = (await api.listTurns(input.terminalId)).find((turn) => turn.index === input.checkpoint)
+    }
+    // The wrong-space join (checkpoint-session-alignment): the lookups above
+    // searched the LEDGER by a trace-space index. When the caller supplied the
+    // row's real identity and the ledger's record at that index is a different
+    // turn, drop it — the trace fallback below resolves in the right space.
+    if (record && input.expectedUuid !== undefined && record.uuid !== input.expectedUuid) {
+      record = undefined
     }
     // A capped ledger can omit an old trace identity. The trace window still
     // owns its exact prompt and stable id, so one explicit ROLE action may read

@@ -391,6 +391,7 @@ export function CheckpointTimeline({
           <SaveRoleInline
             terminalId={terminalId}
             checkpoint={row.record ?? row.index}
+            expectedUuid={row.id}
             onDone={closeActions}
           />
         ) : (
@@ -785,10 +786,14 @@ function fmtTokens(n: number): string {
 function SaveRoleInline({
   terminalId,
   checkpoint,
+  expectedUuid,
   onDone
 }: {
   terminalId: string
   checkpoint: TurnRecord | number
+  /** The row's trace identity — guards the numeric-checkpoint ledger lookup
+   *  against the post-compact index divergence (see role-checkpoint.ts). */
+  expectedUuid?: string
   onDone: () => void
 }): React.JSX.Element {
   const [name, setName] = useState('')
@@ -799,7 +804,7 @@ function SaveRoleInline({
     if (!trimmed || busy) return
     setBusy(true)
     setError(null)
-    void saveRoleFromCheckpoint({ terminalId, checkpoint, name: trimmed })
+    void saveRoleFromCheckpoint({ terminalId, checkpoint, expectedUuid, name: trimmed })
       .then(() => onDone())
       .catch((cause: unknown) => {
         setError(cause instanceof Error ? cause.message : String(cause))

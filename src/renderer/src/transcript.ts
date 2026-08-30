@@ -99,6 +99,25 @@ function warnClamped(dropped: number, ceiling: number): void {
 }
 
 /**
+ * Once per session, same discipline as warnClamped: a record whose uuid the
+ * current trace does not hold belongs to an EARLIER session segment (the
+ * ledger continues across a /compact; the trace shows only the current file).
+ * Leaving it off the rail is correct — pairing it by index would name a
+ * different turn — but the volume is worth seeing: a large count means the
+ * rail shows a short tail of a much longer chain.
+ */
+let warnedSegment = false
+function warnEarlierSegment(dropped: number): void {
+  if (warnedSegment) return
+  warnedSegment = true
+  console.warn(
+    `[rail] ${dropped} ledger record(s) carry uuids from an earlier session segment ` +
+      `(pre-compact / pre-clear) and were left off the rail — the trace lists only the ` +
+      `current file's turns, and an index pairing would attach them to the wrong rows.`,
+  )
+}
+
+/**
  * Cap the loaded set to `max` blocks around an anchor identity (BLOCK 3 real
  * windowing — off-screen blocks are evicted so memory is bounded under a
  * 100+ checkpoint history). Keeps a contiguous window; the anchor (the block
@@ -132,6 +151,14 @@ export function pruneToTotal(blocks: readonly TraceBlock[], total: number): Trac
 export interface TraceIndexEntry {
   index: number
   title: string
+  /**
+   * The block's stable identity (message uuid). The T-number restarts at 1 on
+   * every /compact file rotation while the ledger's numbering continues, so
+   * the uuid — carried by both sides — is the only join that cannot pair a row
+   * with a turn from another session segment. Absent on listings from an older
+   * remote server; consumers then fall back to index pairing.
+   */
+  id?: string
 }
 
 interface TraceIndexBridge {
@@ -323,6 +350,12 @@ export function refineEstimate(prev: number, measured: readonly number[]): numbe
 /** A selectable checkpoint row: full record when in the cap, else trace-only. */
 export interface CheckpointRow {
   index: number
+  /**
+   * The row's trace identity (the block's message uuid) when the listing
+   * carries one. This is what uuid-keyed consumers (version pins, role-save)
+   * anchor on — the index is a display ordinal that a /compact renumbers.
+   */
+  id?: string
   /** Full record when within the (capped) record store; null for trace-only. */
   record: TurnRecord | null
   /** Fallback label for trace-only rows (a trace prompt snippet / title). */
@@ -359,6 +392,20 @@ export interface CheckpointRow {
  * warns once per session, because silently masking a coordinate divergence is
  * exactly how the original bug survived long enough to need a clamp.
  * Pure apart from that warning — unit-tested.
+ *
+ * THE UUID JOIN (checkpoint-session-alignment). Index pairing has a failure
+ * the clamp cannot catch: a /compact rotates the session file, the trace
+ * restarts at T1, and the ledger deliberately CONTINUES its numbering — so
+ * ledger record 2 and trace row T2 can be entirely different turns, both
+ * comfortably under the ceiling. The trace listing is therefore the BACKBONE
+ * (its rows ARE the file the user is looking at, carrying each block's uuid
+ * as `id`), and whenever the listing carries ids, a record's uuid decides
+ * which row it attaches to: match → that row (record wins on data, the row
+ * keeps its trace index); a uuid the trace does not hold → the record belongs
+ * to an earlier session segment and is left off the rail (warned once, never
+ * mispaired); no uuid at all (legacy scrape records) → the old index pairing
+ * with its ceiling clamp. A listing with NO ids (older remote server, legacy
+ * fixtures) keeps the historical index merge unchanged.
  */
 export function mergeCheckpointRows(
   records: readonly TurnRecord[],
@@ -370,18 +417,51 @@ export function mergeCheckpointRows(
       ? traceIndex.reduce((max, e) => Math.max(max, e.index), -Infinity)
       : Infinity
   for (const entry of traceIndex) {
-    byIndex.set(entry.index, { index: entry.index, record: null, traceTitle: entry.title })
+    byIndex.set(entry.index, {
+      index: entry.index,
+      ...(entry.id !== undefined ? { id: entry.id } : {}),
+      record: null,
+      traceTitle: entry.title,
+    })
+  }
+  // uuid → the trace row that IS that turn. Non-empty only when the listing
+  // carries ids; empty keeps every record on the historical index path.
+  const rowIndexById = new Map<string, number>()
+  for (const entry of traceIndex) {
+    if (entry.id !== undefined) rowIndexById.set(entry.id, entry.index)
   }
   let dropped = 0
+  let droppedSegment = 0
   for (const record of records) {
+    if (rowIndexById.size > 0 && record.uuid !== undefined) {
+      const at = rowIndexById.get(record.uuid)
+      if (at === undefined) {
+        droppedSegment++
+        continue // an earlier session segment's turn — no row of this file is it
+      }
+      const prior = byIndex.get(at)
+      byIndex.set(at, {
+        index: at,
+        ...(prior?.id !== undefined ? { id: prior.id } : {}),
+        record,
+        traceTitle: prior?.traceTitle ?? '',
+      })
+      continue
+    }
     if (record.index > ceiling) {
       dropped++
       continue // phantom record beyond the trace ceiling
     }
     const prior = byIndex.get(record.index)
-    byIndex.set(record.index, { index: record.index, record, traceTitle: prior?.traceTitle ?? '' })
+    byIndex.set(record.index, {
+      index: record.index,
+      ...(prior?.id !== undefined ? { id: prior.id } : {}),
+      record,
+      traceTitle: prior?.traceTitle ?? '',
+    })
   }
   if (dropped > 0) warnClamped(dropped, ceiling)
+  if (droppedSegment > 0) warnEarlierSegment(droppedSegment)
   return [...byIndex.values()].sort((a, b) => a.index - b.index)
 }
 

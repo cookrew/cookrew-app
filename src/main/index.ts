@@ -182,6 +182,7 @@ import { ServeRefused, type ServeAccess, type ServedTemplate } from './session-s
 import { servedPaymentRails } from '../shared/served-payment-rails'
 import { PresetStore, isPresetId } from './preset-store'
 import { PinStore } from './pin-store'
+import { rekeyPinsByUuid } from './pin-rekey'
 import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
 import { planPresetImport } from './preset-import'
 import { TeamClipboard } from './team-clip'
@@ -2575,6 +2576,9 @@ function cutTemplatePins(nodeIds?: string[]): void {
       const atIndex = history[history.length - 1].index
       const pin = cutVersionPin(pinStore.list(term.id), {
         atIndex,
+        // The latest record's uuid — identical in ledger and file space, so
+        // the pin anchors compaction-proof (checkpoint-session-alignment).
+        atUuid: history[history.length - 1].uuid,
         scrollLine: ptys.get(term.id)?.paneScrollState().historySize ?? 0,
         cutAt: Date.now()
       })
@@ -3122,6 +3126,32 @@ app.whenReady().then(() => {
     } catch (error) {
       // Reclaiming disk is never worth a failed launch.
       console.error('storage sweep failed:', error)
+    }
+  }, 30_000)
+
+  // Re-key legacy version pins by checkpoint uuid (pin-rekey.ts — the re-key
+  // lineage-ledger's refuseRenumber demands). A pin cut before atUuid existed
+  // is anchored by index alone, and a /compact renumbers that index out from
+  // under it; the durable ledger still holds the uuid for the turn the pin
+  // was cut at, so backfill it once per boot. Deferred like the storage sweep
+  // above — a maintenance walk over ~/.cookrew must never sit between the
+  // user and a window — and quiet unless a file actually changed.
+  setTimeout(() => {
+    try {
+      for (const terminalId of pinStore.listIds()) {
+        const { pins: rekeyed, changed } = rekeyPinsByUuid(
+          pinStore.list(terminalId),
+          turns.history(terminalId)
+        )
+        if (changed > 0) {
+          pinStore.replace(terminalId, rekeyed)
+          console.error(`pin re-key: ${changed} pin(s) on ${terminalId} gained checkpoint uuids`)
+        }
+      }
+    } catch (error) {
+      // A failed re-key leaves legacy pins on their index anchoring — worse
+      // than keyed, never worse than yesterday.
+      console.error('pin re-key failed:', error)
     }
   }, 30_000)
 
