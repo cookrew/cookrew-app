@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Testing the 401/402 gate — export &amp; import an agent</title>
+<style>
+  :root{--bg:#faf8f4;--fg:#2d2a20;--dim:#6b6455;--rule:#e2dccf;--card:#fffdf9;--accent:#b4531a;--good:#2f6b3a;--bad:#9b2c2c;--amber:#d97706;--violet:#7c5cff;--code:#f2ede3;}
+  @media (prefers-color-scheme: dark){:root{--bg:#17150f;--fg:#ece6d8;--dim:#9a917f;--rule:#322d22;--card:#1e1b14;--accent:#e08a4a;--good:#7fbc8c;--bad:#e08585;--amber:#e3ad4e;--violet:#b9a6ef;--code:#241f17;}}
+  :root[data-theme="dark"]{--bg:#17150f;--fg:#ece6d8;--dim:#9a917f;--rule:#322d22;--card:#1e1b14;--accent:#e08a4a;--good:#7fbc8c;--bad:#e08585;--amber:#e3ad4e;--violet:#b9a6ef;--code:#241f17;}
+  :root[data-theme="light"]{--bg:#faf8f4;--fg:#2d2a20;--dim:#6b6455;--rule:#e2dccf;--card:#fffdf9;--accent:#b4531a;--good:#2f6b3a;--bad:#9b2c2c;--amber:#d97706;--violet:#7c5cff;--code:#f2ede3;}
+  *{box-sizing:border-box}
+  body{margin:0;padding:34px 22px 80px;background:var(--bg);color:var(--fg);font:15.5px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  main{max-width:1000px;margin:0 auto}
+  h1{font-size:24px;margin:0 0 4px}
+  .sub{color:var(--dim);font-size:14px;margin:0 0 24px}
+  h2{font-size:14px;text-transform:uppercase;letter-spacing:.07em;color:var(--accent);margin:34px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--rule)}
+  h3{font-size:16px;margin:18px 0 4px}
+  code{background:var(--code);padding:1px 5px;border-radius:4px;font:12.5px/1.5 ui-monospace,"SF Mono",Menlo,monospace}
+  pre{background:var(--code);border:1px solid var(--rule);border-radius:8px;padding:12px 14px;overflow:auto;font:12.5px/1.55 ui-monospace,Menlo,monospace;margin:8px 0}
+  pre .c{color:var(--dim)}
+  table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--rule);vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em}
+  .badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px}
+  .b401{background:#f5ecd8;color:var(--amber)} .b402{background:#e6e0f7;color:var(--violet)} .b403{background:#f6e2e2;color:var(--bad)} .b200{background:#e2efe2;color:var(--good)}
+  @media(prefers-color-scheme:dark){.b401{background:#2b2410} .b402{background:#211b33} .b403{background:#2c1616} .b200{background:#152915}}
+  .card{background:var(--card);border:1px solid var(--rule);border-radius:9px;padding:14px 17px;margin:14px 0}
+  .card.a{border-left:3px solid var(--violet)} .card.b{border-left:3px solid var(--good)} .card.warn{border-left:3px solid var(--amber)}
+  .theme{position:fixed;top:12px;right:12px;font:11px ui-monospace,monospace;background:var(--card);border:1px solid var(--rule);border-radius:5px;padding:5px 9px;cursor:pointer;color:var(--fg)}
+  ol{padding-left:20px} ol li{margin:9px 0}
+  .foot{margin-top:38px;padding-top:14px;border-top:1px solid var(--rule);color:var(--dim);font-size:13px}
+  kbd{font:11px ui-monospace,monospace;background:var(--code);border:1px solid var(--rule);border-radius:3px;padding:1px 4px}
+</style>
+</head>
+<body>
+<button class="theme" onclick="var r=document.documentElement,d=(r.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));r.dataset.theme=d==='dark'?'light':'dark'">theme</button>
+<main>
+  <h1>Testing the 401/402 gate — export &amp; import an agent</h1>
+  <p class="sub">There are <b>two doors</b>, and the status codes split between them. 401 lives on both; <b>402 lives only on the download door</b>; the live-call door never charges (R5).</p>
+
+  <table>
+    <tr><th>Door</th><th>What "import" means</th><th>Server / port</th><th>Codes</th></tr>
+    <tr>
+      <td class="card a" style="border-radius:0;border:0;border-left:3px solid var(--violet)"><b>A · Download a copy</b><br><span style="color:var(--dim)">R29 marketplace</span></td>
+      <td>fetch a signed preset and install it locally</td>
+      <td>the <b>registry</b> · <code>:8790</code></td>
+      <td><span class="badge b200">200</span> <span class="badge b401">401</span> <span class="badge b402">402</span> <span class="badge b403">403</span></td>
+    </tr>
+    <tr>
+      <td class="card b" style="border-radius:0;border:0;border-left:3px solid var(--good)"><b>B · Call a live agent</b><br><span style="color:var(--dim)">R30 / gate-per-session</span></td>
+      <td>talk to an exported agent running in the owner's app</td>
+      <td>the owner's <b>app</b> · <code>:8639</code> http / <code>:8643</code> https</td>
+      <td><span class="badge b200">200</span> <span class="badge b401">401</span> <span class="badge b403">403</span> <span style="color:var(--dim)">(never 402 — R5)</span></td>
+    </tr>
+  </table>
+
+  <div class="card warn">
+    <b>Fastest check — no app needed.</b> The gate logic is fully covered by the suite; run these to see every 200/401/402/403 branch pass:
+    <pre>npx vitest run tests/registry-a1.test.ts tests/registry-a2.test.ts tests/registry-a3-http.test.ts \
+  tests/registry-m2-a1.test.ts tests/registry-m2-a2.test.ts tests/registry-m2-a3.test.ts tests/registry-m2-a4.test.ts \
+  tests/call-endpoints.test.ts tests/call-address.test.ts tests/call-credential.test.ts</pre>
+    Those prove the <b>decision</b>. The steps below prove it <b>on the wire</b>, which is what "on the product app" means.
+  </div>
+
+  <h2>Door B — the live call gate (fully wired, test this end-to-end)</h2>
+  <p>This is the 401 door that works today. Export is <b>owner IPC only</b> (never on the listener — the grant-surface rule); the caller side is HTTP.</p>
+  <ol>
+    <li><b>Run the app with slugs on.</b> A slug is only a route when multi-instance is enabled:
+      <pre>COOKREW_MULTI_INSTANCE=1 <span class="c"># launch the desktop app with this set</span></pre>
+      Note the target workspace's <b>slug</b> (rail/dock chip) and the agent terminal's <b>name</b>.</li>
+    <li><b>Make a caller keypair</b> (the "other machine"):
+      <pre>node -e "const c=require('crypto');const{publicKey,privateKey}=c.generateKeyPairSync('ed25519');\
+require('fs').writeFileSync('caller.jwk.json',JSON.stringify({pub:publicKey.export({format:'jwk'}),priv:privateKey.export({format:'jwk'})}))"</pre></li>
+    <li><b>Export + enrol (owner, in the desktop UI).</b> Open the agent's <b>Grant</b> panel (<code>GrantPanel</code> / <code>ExportToggle</code>): paste the caller's <b>public</b> key, compare the six-word fingerprint, enrol it, then tick the agent to export it to that caller. Enrolment grants nothing until you tick the agent — that is by design.</li>
+    <li><b>Hit the address with no credential →</b> <span class="badge b401">401</span>:
+      <pre>curl -i -X POST http://&lt;host&gt;:8639/&lt;slug&gt;/agents/&lt;name&gt;/ask -d '{"prompt":"hi"}'
+<span class="c"># → HTTP/1.1 401  ·  www-authenticate: Cookrew realm="&lt;realm&gt;", challenge=&lt;c&gt;</span></pre></li>
+    <li><b>Get a fresh nonce</b> (unauthenticated, discloses nothing):
+      <pre>curl -s -X POST http://&lt;host&gt;:8639/&lt;slug&gt;/api/call/challenge   <span class="c"># → {"challenge":"&lt;c&gt;"}</span></pre></li>
+    <li><b>Sign the workspace-bound payload</b> with the caller's private key. The bytes are exact:
+      <pre>cookrew-call/1\n&lt;workspaceId&gt;\n&lt;sub&gt;\n&lt;challenge&gt;</pre>
+      <span style="color:var(--dim)">(<code>workspaceId</code> = the served workspace's id, <code>sub</code> = the name you enrolled the key under; signature is <b>ed25519, base64url</b>.)</span></li>
+    <li><b>Assert → get a Bearer token:</b>
+      <pre>curl -s -X POST http://&lt;host&gt;:8639/&lt;slug&gt;/api/call/assert \
+  -d '{"sub":"&lt;sub&gt;","challenge":"&lt;c&gt;","signature":"&lt;base64url-sig&gt;"}'   <span class="c"># → {"ok":true,"token":"&lt;bearer&gt;"}</span></pre></li>
+    <li><b>Call with the token →</b> <span class="badge b200">200</span> (the agent answers) or <span class="badge b403">403</span>:
+      <pre>curl -i -X POST http://&lt;host&gt;:8639/&lt;slug&gt;/agents/&lt;name&gt;/ask \
+  -H "Authorization: Bearer &lt;bearer&gt;" -d '{"prompt":"what is 2+2?"}'</pre></li>
+  </ol>
+  <p><b>Force each refusal to prove the gate:</b></p>
+  <table>
+    <tr><th>Do this</th><th>Expect</th></tr>
+    <tr><td>token minted for a <i>different</i> workspace</td><td><span class="badge b403">403</span> <code>workspace</code> — re-auth can't fix it, so it's 403 not 401</td></tr>
+    <tr><td>a valid token, wrong scope</td><td><span class="badge b403">403</span> <code>scope</code></td>
+    <tr><td>call an agent nobody exported</td><td><span class="badge b403">403</span>/404 — an unexported agent doesn't exist to the internet</td></tr>
+    <tr><td>junk or missing credential</td><td><span class="badge b401">401</span> — absence and forgery are one answer</td></tr>
+  </table>
+
+  <h2>Door A — the download gate (401 + the only 402)</h2>
+  <p>This is where <b>402</b> lives: a <i>priced</i> preset quotes terms and takes a payment proof.</p>
+  <ol>
+    <li><b>Run the registry:</b>
+      <pre>cd registry &amp;&amp; npm run build &amp;&amp; node dist/main.js --port 8790
+<span class="c"># it ships a DEV facilitator (registry/src/facilitator-dev.ts) so the whole 402 handshake runs with no chain</span></pre></li>
+    <li><b>Publish a preset</b> at each visibility: <i>public</i> (free, 200), <i>identified</i> (needs a passkey, 401), <i>priced</i> (needs payment, 402). Publish is <code>POST /v1/presets</code> (author-signed).</li>
+    <li><b>Fetch the manifest and read the code:</b>
+      <pre>curl -i http://localhost:8790/v1/presets/&lt;id&gt;/manifest</pre>
+      <table>
+        <tr><th>Preset</th><th>Header sent</th><th>Result</th></tr>
+        <tr><td>public</td><td>none</td><td><span class="badge b200">200</span> — discovery costs no identity</td></tr>
+        <tr><td>identified</td><td>none</td><td><span class="badge b401">401</span> · <code>www-authenticate: WebAuthn realm="market", challenge=…</code></td></tr>
+        <tr><td>priced</td><td>none</td><td><span class="badge b402">402</span> · body <code>{terms:{amount,asset:"USDC",chain,payTo,nonce,expiry}}</code></td></tr>
+        <tr><td>priced</td><td><code>X-Payment: &lt;proof&gt;</code></td><td><span class="badge b200">200</span> — the dev facilitator settles it</td></tr>
+        <tr><td>identified, bought</td><td><code>Authorization: Bearer &lt;token&gt;</code></td><td><span class="badge b200">200</span></td></tr>
+      </table></li>
+    <li><b>Test the two payment error voices</b> with the dev facilitator's magic tx prefixes: a ref that settles <b>REFUSED</b> vs one that settles <b>UNVERIFIABLE</b> (see <code>facilitator-dev.ts</code>) — the sheet must accuse the payment for one and apologise for us on the other.</li>
+    <li><b>In the app,</b> the download client (<code>src/main/preset-download.ts</code>) turns each of these into a Gate Sheet step (<code>gateWalk</code>): 401 → identify, 402 → pay, 200 → install. The Gate Sheet component renders that picture.</li>
+  </ol>
+
+  <div class="card warn">
+    <h3 style="margin-top:0">What is NOT yet testable on the wire (app-verified pending)</h3>
+    <p style="margin-bottom:0">The R30 <b>"import an agent as a live SESSION"</b> path — serving a whole template so a caller's first gated call <i>mints a sandboxed session</i> — is wired and unit-green but <b>not yet called from the listener</b>: admission must sit post-auth inside <code>handleCallRoutes</code> (the caller's account id is the verified credential <code>sub</code>). So today you can test the <b>per-agent call gate</b> (Door B) and the <b>download gate</b> (Door A) end-to-end; serving a whole session needs that last mint-after-auth wire. Owner-side you can already <kbd>serving:serve</kbd> / <kbd>serving:stop</kbd> a template over IPC.</p>
+  </div>
+
+  <div class="foot">
+    Cookrew · gate on <code>origin/dev 1d311cf</code> · Door A: <code>registry/src/server.ts</code> + <code>authorize.ts</code> + <code>facilitator-dev.ts</code> · Door B: <code>src/main/call-endpoints.ts</code> + <code>call-ceremony.ts</code> + <code>call-route.ts</code> · gate decision: <code>src/shared/gate.ts decideGate</code> · sheet: <code>gateWalk</code> + <code>GateSheet.tsx</code> (feat/gate-sheet). 401 realm/ceremony verbatim from the code.
+  </div>
+</main>
+</body>
+</html>

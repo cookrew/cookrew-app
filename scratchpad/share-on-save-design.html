@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Share on save — the one publish entry</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* TOKENS — verbatim from src/renderer/src/styles.css :root. Nothing invented. */
+:root {
+  --cream:#faf8f4; --cream-hi:#fffef5; --cream-md:#f5f0e8; --cream-lo:#ece6da;
+  --ink:#2d2a20; --ink-soft:#5c4a1f; --muted:#78716c; --dim:#a8a29e;
+  --line:#2d2a20; --line-soft:#d9d3c5;
+  --amber:#ffd600; --amber-soft:#fff3ad; --amber-deep:#d97706;
+  --phos-bg:#14110a; --hp:#6bbe58; --rose:#dc2626; --violet:#9b8acb;
+  --font-pixel:'Silkscreen','Courier New',monospace;
+  --font-mono:'JetBrains Mono','SF Mono',Menlo,monospace;
+  --font-body:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+  --doc-bg:#faf8f4; --doc-fg:#2d2a20; --doc-panel:#fffef5; --doc-edge:#d9d3c5; --doc-soft:#78716c;
+}
+@media (prefers-color-scheme: dark){ :root{--doc-bg:#131217;--doc-fg:#ececf1;--doc-panel:#1c1b21;--doc-edge:#33313c;--doc-soft:#a5a2b3;} }
+:root[data-theme="dark"]{--doc-bg:#131217;--doc-fg:#ececf1;--doc-panel:#1c1b21;--doc-edge:#33313c;--doc-soft:#a5a2b3;}
+:root[data-theme="light"]{--doc-bg:#faf8f4;--doc-fg:#2d2a20;--doc-panel:#fffef5;--doc-edge:#d9d3c5;--doc-soft:#78716c;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--doc-bg);color:var(--doc-fg);font-family:var(--font-body);line-height:1.55;font-size:15px}
+.wrap{max-width:1120px;margin:0 auto;padding:28px 20px 80px}
+h1{font-size:25px;margin:0;letter-spacing:-.01em}
+h1 small{display:block;font-size:13px;font-weight:400;color:var(--doc-soft);margin-top:4px}
+h2{font-size:18px;margin:42px 0 6px;padding-top:14px;border-top:1px solid var(--doc-edge)}
+p{margin:8px 0}.lede{color:var(--doc-soft);font-size:14px}
+code{font-family:var(--font-mono);font-size:.87em;background:color-mix(in srgb,var(--doc-fg) 8%,transparent);padding:1px 5px;border-radius:3px}
+.caption{font-size:12.5px;color:var(--doc-soft);margin-top:8px;max-width:70ch}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--doc-edge);vertical-align:top}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--doc-soft);font-weight:600}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:14px 0}
+.toolbar button{font-family:var(--font-pixel);font-size:9px;letter-spacing:.06em;text-transform:uppercase;background:var(--doc-panel);color:var(--doc-fg);border:1.5px solid var(--doc-edge);border-radius:4px;padding:6px 10px;cursor:pointer}
+.toolbar button[aria-pressed="true"]{background:var(--amber);color:#2d2a20;border-color:#2d2a20}
+.themer{position:fixed;top:12px;right:12px;z-index:50}
+.rule{border-left:3px solid var(--amber-deep);padding:6px 0 6px 12px;margin:12px 0;color:var(--doc-soft);font-size:13.5px}
+.rule strong{color:var(--doc-fg)}
+.dead{border-left:3px solid var(--rose)}
+
+/* ═══ product chrome — tf-panel family, verbatim skeleton ═══ */
+.stage{background:var(--cream-lo);border-radius:8px;padding:26px;display:grid;place-items:center}
+.tf-panel{color:var(--ink);width:min(480px,100%);background:var(--cream-hi);border:2px solid var(--line);box-shadow:6px 6px 0 var(--amber-deep);display:flex;flex-direction:column}
+.tf-head{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:2px solid var(--line)}
+.tf-title{font-family:var(--font-pixel);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink)}
+.tf-spacer{flex:1}
+.tf-label{font-family:var(--font-pixel);font-size:8px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft)}
+.tf-input{font-family:var(--font-mono);font-size:12px;color:var(--ink);background:var(--cream-hi);border:1.5px solid var(--line);padding:6px 8px;flex:1;min-width:0}
+.tf-hint{font-family:var(--font-body);font-size:11.5px;color:var(--muted);padding:2px 12px 10px}
+.tf-foot{display:flex;gap:8px;align-items:center;padding:10px 12px;border-top:2px solid var(--line)}
+.cr-btn{font-family:var(--font-pixel);font-size:9px;letter-spacing:.06em;text-transform:uppercase;background:var(--cream-md);color:var(--ink);border:1.5px solid var(--line);box-shadow:2px 2px 0 var(--line);padding:7px 11px;cursor:pointer}
+.cr-btn.primary{background:var(--amber);box-shadow:2px 2px 0 var(--amber-deep)}
+.cr-btn.ghost{background:transparent;box-shadow:none}
+.cr-btn.danger{background:#f1e4e4;border-color:var(--rose);box-shadow:2px 2px 0 var(--rose);color:var(--rose)}
+.cr-chip{font-family:var(--font-pixel);font-size:8.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink);background:var(--cream-md);border:1.5px solid var(--line);padding:2px 6px;white-space:nowrap}
+.cr-chip.amber{background:var(--amber)}
+.cr-chip.live{background:var(--hp);color:#fff}
+.cr-chip-ver{font-family:var(--font-pixel);font-size:7px;color:var(--violet);border:1.5px solid var(--violet);padding:0 3px}
+.sec{padding:10px 12px;border-bottom:1px solid var(--line-soft)}
+.row{display:flex;align-items:center;gap:8px;padding:4px 0;font-family:var(--font-mono);font-size:11.5px;color:var(--ink)}
+.row .k{color:var(--ink-soft);min-width:70px;font-size:10.5px}
+.row .v{font-weight:600}
+
+/* the three share options — radio bands, gate-band family */
+.opt{display:flex;align-items:flex-start;gap:9px;padding:9px 10px;border:1.5px solid var(--line-soft);margin:6px 0;cursor:pointer;background:var(--cream-hi)}
+.opt .dot{width:12px;height:12px;border:1.5px solid var(--line);border-radius:50%;margin-top:2px;flex:0 0 auto;background:var(--cream-hi)}
+.opt.sel{border-color:var(--line);background:var(--amber-soft)}
+.opt.sel .dot{background:var(--amber);box-shadow:inset 0 0 0 2px var(--cream-hi)}
+.opt .t{font-family:var(--font-mono);font-size:12px;font-weight:600;color:var(--ink)}
+.opt .s{font-family:var(--font-mono);font-size:10.5px;color:var(--ink-soft);line-height:1.45}
+.price{display:flex;align-items:center;gap:6px;margin:6px 0 0 30px}
+.price input{width:70px}
+.price .unit{font-family:var(--font-mono);font-size:10.5px;color:var(--ink-soft)}
+
+/* the door fact — orch as interface */
+.door{display:flex;align-items:center;gap:9px;padding:9px 10px;background:var(--cream-md);border:1.5px solid var(--line);margin-top:8px}
+.door .g{width:24px;height:24px;display:grid;place-items:center;border:1.5px solid var(--line);border-radius:50%;background:var(--cream-hi);font-size:11px;flex:0 0 auto}
+.door .s{font-family:var(--font-mono);font-size:10.5px;color:var(--ink-soft);line-height:1.45}
+.door .s b{color:var(--ink)}
+
+/* live serving state */
+.addr{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1.5px solid var(--violet);background:var(--cream-hi);margin:8px 0;font-family:var(--font-mono);font-size:11.5px}
+.addr .u{font-weight:600;color:var(--ink)}
+.mini-sessions .row{border-bottom:1px dashed var(--line-soft)}
+
+/* shelf */
+.shelf{display:flex;flex-direction:column;gap:6px;padding:10px 12px}
+.team{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1.5px solid var(--line);background:var(--cream-hi)}
+.team .nm{font-family:var(--font-mono);font-size:12px;font-weight:600;color:var(--ink)}
+.team .meta{font-family:var(--font-mono);font-size:10px;color:var(--muted)}
+
+/* canvas mini for importer beat */
+.mini-canvas{background:var(--cream-lo);border:2px solid var(--line);padding:12px;min-height:110px;position:relative}
+.node{background:var(--phos-bg);border:1.5px solid var(--line);width:110px;height:52px;position:absolute}
+.node .lbl{position:absolute;top:3px;left:5px;font-family:var(--font-pixel);font-size:7px;color:var(--hp)}
+.node.orch{box-shadow:0 0 0 2px var(--amber)}
+.prov{position:absolute;top:-5px;right:-5px;width:10px;height:10px;border-radius:50%;background:var(--violet);border:1.5px solid var(--cream-hi)}
+.ghost{border:1.5px dashed var(--dim);background:transparent;width:110px;height:52px;position:absolute;display:grid;place-items:center;font-family:var(--font-pixel);font-size:7px;color:var(--muted)}
+
+.stateview{display:none}.stateview.on{display:block}
+.strike{color:var(--doc-soft)}
+.strike s{color:var(--rose)}
+</style>
+</head>
+<body>
+<div class="themer toolbar"><button onclick="var r=document.documentElement,d=(r.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));r.dataset.theme=d==='dark'?'light':'dark'">theme</button></div>
+<div class="wrap">
+
+<header>
+  <h1>Share on save — the one publish entry<small>Owner ruling 2026-08-26 · retires the WHO CAN CALL button + per-agent export toggles · publishing happens where saving happens · the orch is the team's interface. Strings verbatim from <code>shared/marketplace-copy.ts</code> (MKT_SERVE).</small></h1>
+</header>
+
+<p class="lede">The old entry was a parallel admin panel that opened onto an empty dead-end. The new rule: <b>you meet sharing exactly once — at the moment you save a team.</b> Saving names the thing; the same breath decides who can call it. Everything downstream (the orch as the one door, sessions, the importer placing one card) follows from choices the backend already made.</p>
+
+<div class="toolbar" role="tablist" aria-label="states">
+  <button aria-pressed="true"  data-st="s-save">A · save sheet — default private</button>
+  <button aria-pressed="false" data-st="s-paid">B · “anyone who pays”</button>
+  <button aria-pressed="false" data-st="s-live">C · saved &amp; serving</button>
+  <button aria-pressed="false" data-st="s-shelf">D · the shelf</button>
+  <button aria-pressed="false" data-st="s-place">E · the importer places the orch</button>
+</div>
+
+<!-- ═══ A — the save sheet grows the share section ═══ -->
+<section class="stateview on" id="s-save">
+<div class="stage"><div class="tf-panel">
+  <div class="tf-head"><span class="tf-title">SAVE TEAM</span><span class="tf-spacer"></span><span class="cr-chip">4 AGENTS</span></div>
+  <div class="sec">
+    <div class="row"><span class="tf-label">NAME</span></div>
+    <div class="row"><input class="tf-input" value="Research Crew"></div>
+  </div>
+  <div class="sec">
+    <div class="row"><span class="tf-label">WHO CAN CALL IT?</span></div>
+    <div class="opt sel"><span class="dot"></span><div><div class="t">Just me</div><div class="s">Stays on your shelf. That's where it is now.</div></div></div>
+    <div class="opt"><span class="dot"></span><div><div class="t">Anyone with a Cookrew account — free</div><div class="s">They sign in, then start.</div></div></div>
+    <div class="opt"><span class="dot"></span><div><div class="t">Anyone who pays</div><div class="s">Set a price. Callers pay you directly — Cookrew never holds the money and takes nothing.</div></div></div>
+    <div class="tf-hint" style="padding:6px 0 0">Change this any time, including back to Just me — which stops new callers. Anyone already working keeps going until you end them.</div>
+  </div>
+  <div class="tf-foot"><button class="cr-btn ghost">CANCEL</button><span class="tf-spacer"></span><button class="cr-btn primary">SAVE</button></div>
+</div></div>
+<p class="caption">The share section rides INSIDE the existing save sheet — same panel, one extra question. Default is <b>Just me</b>, so saving without reading anything publishes nothing. With the default selected the primary stays plain <b>SAVE</b>: no share choice, no share consequence.</p>
+</section>
+
+<!-- ═══ B — paid selected ═══ -->
+<section class="stateview" id="s-paid">
+<div class="stage"><div class="tf-panel">
+  <div class="tf-head"><span class="tf-title">SAVE TEAM</span><span class="tf-spacer"></span><span class="cr-chip">4 AGENTS</span></div>
+  <div class="sec">
+    <div class="row"><span class="tf-label">NAME</span></div>
+    <div class="row"><input class="tf-input" value="Research Crew"></div>
+  </div>
+  <div class="sec">
+    <div class="row"><span class="tf-label">WHO CAN CALL IT?</span></div>
+    <div class="opt"><span class="dot"></span><div><div class="t">Just me</div><div class="s">Stays on your shelf.</div></div></div>
+    <div class="opt"><span class="dot"></span><div><div class="t">Anyone with a Cookrew account — free</div><div class="s">They sign in, then start.</div></div></div>
+    <div class="opt sel"><span class="dot"></span><div><div class="t">Anyone who pays</div><div class="s">Set a price. Callers pay you directly — Cookrew never holds the money and takes nothing.</div>
+      <div class="price"><input class="tf-input" value="2.50"><span class="unit">USDC · per session</span></div>
+    </div></div>
+    <div class="door"><span class="g">◫</span><div class="s">Callers talk to <b>Conductor</b> only. It runs the rest of the team the way it always has — the others are never exposed.</div></div>
+  </div>
+  <div class="tf-foot"><button class="cr-btn ghost">CANCEL</button><span class="tf-spacer"></span><button class="cr-btn primary">SAVE · START SERVING</button></div>
+</div></div>
+<p class="caption">Picking a public option does two honest things: the <b>door fact appears</b> — the orch is the interface, stated as a fact rather than a setting — and the primary renames itself to <b>SAVE · START SERVING</b>, because the click now does both. Nothing is hidden inside the button.</p>
+</section>
+
+<!-- ═══ C — saved & serving ═══ -->
+<section class="stateview" id="s-live">
+<div class="stage"><div class="tf-panel">
+  <div class="tf-head"><span class="tf-title">RESEARCH CREW</span><span class="cr-chip-ver">V1</span><span class="tf-spacer"></span><span class="cr-chip live">TAKING CALLS</span></div>
+  <div class="sec">
+    <div class="row"><span class="v">Research Crew is taking calls.</span></div>
+    <div class="addr"><span class="u">cookrew.dev/drej/research-crew</span><span class="tf-spacer"></span><button class="cr-btn" style="padding:4px 8px">COPY LINK</button></div>
+    <div class="row"><span class="k">callers land on</span><span class="v">Conductor</span><span class="cr-chip">$2.50 / SESSION</span></div>
+    <div class="row"><span class="k">serving</span><span class="v">V1</span><span style="font-family:var(--font-mono);font-size:10px;color:var(--muted)">— new sessions get the latest pin on this machine</span></div>
+  </div>
+  <div class="sec mini-sessions">
+    <div class="row"><span class="tf-label">SESSIONS</span></div>
+    <div class="row"><span class="k">bear · 1</span><span class="v">working</span><span class="tf-spacer"></span><button class="cr-btn" style="padding:3px 7px;font-size:7px">END</button></div>
+    <div class="row"><span class="k">kestrel · 1</span><span class="v" style="color:var(--muted)">parked 2h · costs you nothing</span><span class="tf-spacer"></span><button class="cr-btn" style="padding:3px 7px;font-size:7px">END</button></div>
+  </div>
+  <div class="tf-hint">Callers never touch your workspace. Each one gets a fresh copy of the template you pinned, in its own folder.</div>
+  <div class="tf-foot"><button class="cr-btn danger">STOP SERVING</button><span class="tf-spacer"></span><button class="cr-btn primary">DONE</button></div>
+</div></div>
+<p class="caption">After SAVE · START SERVING, the payoff is a thing you can hand to someone: <b>the address</b>. The sessions table lives here too — same surface, because "who's on my crew" is a question about the thing you just published, not a separate admin area. Parked says it costs nothing, so nobody ends a session to save money they aren't spending.</p>
+</section>
+
+<!-- ═══ D — the shelf ═══ -->
+<section class="stateview" id="s-shelf">
+<div class="stage"><div class="tf-panel">
+  <div class="tf-head"><span class="tf-title">SAVED TEAMS</span></div>
+  <div class="shelf">
+    <div class="team"><span class="nm">Research Crew</span><span class="cr-chip-ver">V1</span><span class="tf-spacer"></span><span class="cr-chip live">TAKING CALLS · 2</span><span class="meta">saved today</span></div>
+    <div class="team"><span class="nm">Daily Standup</span><span class="cr-chip-ver">V3</span><span class="tf-spacer"></span><span class="meta">just me · saved 2d ago</span></div>
+    <div class="team"><span class="nm">Bug Triage</span><span class="tf-spacer"></span><span class="meta">just me · saved 1w ago</span></div>
+  </div>
+  <div class="tf-hint">Click a serving team to open its card (state C). Sharing is managed where the team lives — there is no other door.</div>
+</div></div>
+<p class="caption">The shelf (the existing saved-teams list in the fork picker) wears the standing state: a green <b>TAKING CALLS · n</b> chip with the live session count. One entry, one place to manage it, forever.</p>
+</section>
+
+<!-- ═══ E — importer places the orch ═══ -->
+<section class="stateview" id="s-place">
+<div class="stage"><div style="width:min(560px,100%)">
+  <div class="mini-canvas">
+    <div class="node orch" style="left:20px;top:18px"><span class="lbl">MY CONDUCTOR</span></div>
+    <div class="node" style="left:160px;top:18px"><span class="lbl">SCOUT</span></div>
+    <div class="node orch" style="left:300px;top:44px;border-color:var(--violet)"><span class="lbl">RESEARCH CREW · @drej</span><span class="prov"></span></div>
+    <div class="ghost" style="left:430px;top:14px">DROP ANYWHERE</div>
+  </div>
+  <div class="tf-hint" style="background:var(--cream-hi);border:1.5px solid var(--line-soft);padding:8px 10px;margin-top:8px;font-family:var(--font-mono)">● @drej's V1 — the version you started on. One card: their whole crew answers through it.</div>
+</div></div>
+<p class="caption">The importer's side, after the gate (sign in → pay, the Gate Sheet): the team arrives as <b>one orch card</b> they drop anywhere on their own canvas — the machinery already shipped as <code>importTemplateAsSession</code> (a proxy orch terminal at a position). The crew behind it runs at the author's app; the violet dot carries provenance.</p>
+</section>
+
+<h2>What gets retired</h2>
+<table>
+  <tr><th>Surface</th><th>Today</th><th>Ruling</th></tr>
+  <tr><td class="strike"><s>🔑 WHO CAN CALL</s> button</td><td>Board view, top-right → opens a panel whose empty state points elsewhere</td><td><b>Removed.</b> Its useful content (callers, revoke) survives inside state C — attached to the served team, not floating</td></tr>
+  <tr><td class="strike"><s>Per-agent EXPORT toggle</s></td><td>On every roster row</td><td><b>Removed.</b> R30 already deleted the per-agent grant matrix server-side — you share a TEAM through its orch, never agent-by-agent</td></tr>
+  <tr><td>Enrol ceremony (six words)</td><td>EnrolSheet component</td><td><b>Kept as machinery</b> — a private line still authenticates by it — but no top-level entry; it appears only where a flow needs it</td></tr>
+</table>
+
+<div class="rule dead"><strong>Copy fix required:</strong> <code>mkt.serve.who.free.sub</code> still says <i>"You see who is on, never what they are doing"</i> — the exact claim the R30 privacy ruling narrowed (the owner CAN read a caller's session). It must reword to the ruled promise: identity only, e.g. <i>"They sign in, then start."</i> The states above already show the corrected line.</div>
+
+<h2>Design decisions of record</h2>
+<table>
+  <tr><th>Decision</th><th>Why</th></tr>
+  <tr><td>The share question lives INSIDE the save sheet, not a second sheet after it</td><td>One breath, one act. A follow-up sheet is a place to abandon; a section is a place to glance past. Default answers it safely.</td></tr>
+  <tr><td>Primary renames to <code>SAVE · START SERVING</code> when a public option is picked</td><td>The button says everything the click does. A plain SAVE that also published would be the quiet-consequence bug this product refuses everywhere.</td></tr>
+  <tr><td>The door fact (<code>mkt.serve.door</code>) appears only when a public option is selected</td><td>It is the answer to the fear that appears at that moment ("which of my agents are exposed?"). Before that it is noise.</td></tr>
+  <tr><td>Sessions table lives on the served team's card (state C), not a global panel</td><td>"Who is on?" is a question about a thing you published. Attaching it to the thing is what lets WHO CAN CALL die.</td></tr>
+  <tr><td>The shelf chip shows <code>TAKING CALLS · n</code>, green</td><td>The standing state must be visible at rest — a team quietly serving with no indicator is how an owner forgets they opened a door.</td></tr>
+  <tr><td>Price is per SESSION in M1</td><td>Matches the instantiator's unit (a session is the thing minted); per-call metering (R12) layers on later without changing this sheet.</td></tr>
+</table>
+
+<h2>Build plan (after this design is approved)</h2>
+<table>
+  <tr><th>#</th><th>Change</th><th>Where</th></tr>
+  <tr><td>1</td><td>Share section (3 options + price + door fact) in the save flow; primary renames; wire to <code>serving:serve</code></td><td><code>TeamForkPicker.tsx</code> + one preload line (<code>serving:*</code> is already in main)</td></tr>
+  <tr><td>2</td><td>State C card (address, sessions, END, STOP SERVING) fed by <code>serving:list</code> + instantiator sessions</td><td>new <code>ServedTeamCard.tsx</code>, mounted from the shelf</td></tr>
+  <tr><td>3</td><td>Shelf chip <code>TAKING CALLS · n</code></td><td><code>TeamForkPicker.tsx</code> saved-teams list</td></tr>
+  <tr><td>4</td><td>Retire the WHO CAN CALL button + ExportToggle rows</td><td><code>App.tsx:1129</code>, <code>AgentRow.tsx:156</code></td></tr>
+  <tr><td>5</td><td>Copy fix: <code>mkt.serve.who.free.sub</code></td><td><code>marketplace-copy.ts</code> (+ its pinned test)</td></tr>
+</table>
+
+<footer style="margin-top:40px;padding-top:14px;border-top:1px solid var(--doc-edge);color:var(--doc-soft);font-size:12px">
+Owner ruling 2026-08-26 · supersedes the WHO CAN CALL / ExportToggle entries · chrome verbatim from styles.css + team-fork.css · strings from shared/marketplace-copy.ts (MKT_SERVE) · importer beat = shipping <code>importTemplateAsSession</code> · backend: serving IPC merged @ dev 1d311cf.
+</footer>
+</div>
+<script>
+document.querySelectorAll('.toolbar [data-st]').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('.toolbar [data-st]').forEach(x=>x.setAttribute('aria-pressed', x===b?'true':'false'));
+  document.querySelectorAll('.stateview').forEach(s=>s.classList.toggle('on', s.id===b.dataset.st));
+}));
+document.querySelectorAll('.opt').forEach(o=>o.addEventListener('click',()=>{
+  const sec=o.parentElement; sec.querySelectorAll('.opt').forEach(x=>x.classList.remove('sel')); o.classList.add('sel');
+}));
+</script>
+</body>
+</html>
