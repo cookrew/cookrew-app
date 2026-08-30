@@ -41,8 +41,9 @@ export interface CallForkDeps {
    * one nobody noticed had drifted.
    */
   fork: (sourceId: string, turnIndex: number) => { id: string; name: string }
-  /** Completed turns of a terminal, in order. */
-  turnsOf: (terminalId: string) => readonly { index: number }[]
+  /** Completed turns of a terminal, in order. The uuid rides along so the pin
+   *  can be cut with its compaction-proof anchor (VersionPinRecord.atUuid). */
+  turnsOf: (terminalId: string) => readonly { index: number; uuid?: string }[]
   /**
    * tmux history_size for a terminal right now, or null when it cannot be
    * read (no tmux, detached, disposed). Null becomes 0 — a jump coordinate
@@ -83,6 +84,10 @@ export function cutCallVersion(deps: CallForkDeps, sourceId: string): CallVersio
   // itself or the write, and neither can leave a half-formed record.
   const pin = cutVersionPin(deps.pins.list(sourceId), {
     atIndex,
+    // The LATEST record's uuid is the same turn in ledger space and file
+    // space (the two diverge only for older indices after a /compact —
+    // checkpoint-session-alignment), so no trace plumbing is needed here.
+    atUuid: history[history.length - 1].uuid,
     // The jump coordinate, not the rail anchor (R17). Unknown reads as 0.
     scrollLine: deps.scrollLineOf(sourceId) ?? 0,
     cutAt: deps.now()

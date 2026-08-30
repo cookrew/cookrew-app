@@ -812,6 +812,15 @@ export function compactMarkersOf(lines: string[]): TraceBoundaryMarker[] {
 export interface TraceIndexEntry {
   index: number
   title: string
+  /**
+   * The block's stable identity (TraceBlock.id — the prompt entry's message
+   * uuid). This is the join key that survives compaction renumbering: after a
+   * /compact the ledger continues its indices while the trace restarts at T1
+   * (checkpoint-session-alignment), so any consumer pairing records to rows
+   * needs the uuid, not the number. Optional so listings from an older remote
+   * server still typecheck; consumers fall back to index pairing when absent.
+   */
+  id?: string
 }
 
 /** Cursor for the cheap identity/title listing. Omitted returns the full index. */
@@ -831,7 +840,11 @@ const INDEX_TITLE_CHARS = 80
 export function traceIndexOf(blocks: readonly TraceBlock[]): TraceIndexEntry[] {
   return blocks.map((block) => {
     const line = block.prompt.split('\n').find((l) => l.trim().length > 0)?.trim() ?? ''
-    return { index: block.index, title: line.length > 0 ? head(line, INDEX_TITLE_CHARS) : '(empty prompt)' }
+    return {
+      index: block.index,
+      id: block.id,
+      title: line.length > 0 ? head(line, INDEX_TITLE_CHARS) : '(empty prompt)'
+    }
   })
 }
 
