@@ -1,9 +1,14 @@
 import { describe, expect, it, afterEach } from 'vitest'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { generateKeyPairSync } from 'node:crypto'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import {
   atomicToUsd,
   openAdmission,
+  signInToDoor,
   startStripeCheckout,
   stripePaymentHeader
 } from '../src/main/served-admission'
@@ -23,17 +28,34 @@ interface Door {
   close: () => Promise<void>
 }
 
-function door(answer: (path: string, payment?: string) => { status: number; body?: unknown }): Promise<Door> {
+function door(
+  answer: (
+    path: string,
+    payment?: string,
+    requestBody?: unknown
+  ) => { status: number; body?: unknown }
+): Promise<Door> {
   const seen: Door['seen'] = []
   return new Promise((resolve) => {
     const server = http.createServer((request, response) => {
-      request.resume()
+      let raw = ''
+      request.on('data', (chunk) => (raw += chunk))
       request.on('end', () => {
         const url = new URL(request.url ?? '/', 'http://x')
         const path = url.pathname.replace('/team', '')
         const payment = request.headers['x-payment']
         seen.push({ path, ...(typeof payment === 'string' ? { payment } : {}) })
-        const { status, body } = answer(path, typeof payment === 'string' ? payment : undefined)
+        let parsed: unknown = null
+        try {
+          parsed = JSON.parse(raw)
+        } catch {
+          parsed = null
+        }
+        const { status, body } = answer(
+          path,
+          typeof payment === 'string' ? payment : undefined,
+          parsed
+        )
         if (status === 200 && path === '/line') {
           response.writeHead(200, { 'content-type': 'text/event-stream' })
           response.write(': ok\n\n')
@@ -188,5 +210,62 @@ describe('the card rail', () => {
       rail: 'stripe',
       session: 'cs_test_9'
     })
+  })
+})
+
+describe('one account, however you reach the door', () => {
+  /**
+   * THE LOCKOUT THIS PINS.
+   *
+   * A door binds an account to (serviceId, sub) and TOFU refuses a second key
+   * for a known name — that is the whole point of TOFU. The caller's key used
+   * to be filed by network ADDRESS, so reaching the same team by loopback
+   * instead of its LAN address minted a DIFFERENT key for the same name and
+   * the door refused it forever. Observed live: a placed card died with
+   * "sign-in refused" and left a frozen terminal on the canvas.
+   */
+  it('signs in with a key filed under an old address, and promotes it', async () => {
+    const enrolled: Array<Record<string, unknown>> = []
+    let known: string | null = null
+    open = await door((path, _payment, body) => {
+      if (path === '/crew') return { status: 200, body: { serviceId: 'svc-team' } }
+      if (path === '/api/call/challenge') return { status: 200, body: { challenge: 'nonce' } }
+      if (path === '/api/call/assert') {
+        const jwk = JSON.stringify((body as { jwk?: unknown })?.jwk ?? null)
+        // TOFU: first key wins the name; any other key is refused.
+        if (known === null) known = jwk
+        if (jwk !== known) return { status: 401, body: {} }
+        enrolled.push({ jwk })
+        return { status: 200, body: { token: 'tok' } }
+      }
+      return { status: 404 }
+    })
+
+    const dir = mkdtempSync(path.join(tmpdir(), 'caller-keys-'))
+    // Pretend this device already holds a key under the OLD address-shaped
+    // name, and that it is the key the door knows.
+    const legacy = path.join(dir, 'legacy.json')
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+    writeFileSync(
+      legacy,
+      JSON.stringify({ pub: publicKey.export({ format: 'jwk' }), priv: privateKey.export({ format: 'jwk' }) }),
+      { mode: 0o600 }
+    )
+    known = JSON.stringify(publicKey.export({ format: 'jwk' }))
+
+    const canonical = path.join(dir, 'svc-team.json')
+    const token = await signInToDoor(open.target, {
+      sub: 'ana',
+      candidates: () => [canonical, legacy],
+      canonical: () => canonical
+    })
+    expect(token).toBe('tok')
+    // The winning key now lives under the door's identity, so the address
+    // file is never needed again.
+    expect(existsSync(canonical)).toBe(true)
+    expect(JSON.parse(readFileSync(canonical, 'utf8')).pub).toEqual(
+      publicKey.export({ format: 'jwk' })
+    )
+    rmSync(dir, { recursive: true, force: true })
   })
 })
