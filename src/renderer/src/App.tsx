@@ -60,6 +60,7 @@ import { EventToastLayer } from './EventToast'
 import { RosterPanel } from './RosterPanel'
 import { MetricsPanel } from './MetricsPanel'
 import { GateSheet } from './GateSheet'
+import { ImportServedSheet } from './ImportServedSheet'
 import { SelectionBar } from './SelectionBar'
 import { ConfirmClose } from './ConfirmClose'
 import { apiPath } from './api-base'
@@ -204,6 +205,8 @@ function Canvas(): React.JSX.Element {
    */
   const [installedPresets, setInstalledPresets] = useState<InstalledPreset[]>([])
   const [presetId, setPresetId] = useState<string | null>(null)
+  // R30 import side: the one entry for a served team's address.
+  const [importServedOpen, setImportServedOpen] = useState(false)
   const refreshPresets = useCallback(() => {
     void cookrew()
       .listInstalledPresets()
@@ -1337,6 +1340,7 @@ function Canvas(): React.JSX.Element {
           gatedPresetId={gatedId}
           onPresetGate={openPresetGate}
           onCheckUpdates={checkPresetUpdates}
+          onImportServed={() => setImportServedOpen(true)}
           orch={orch}
           onOrch={setOrch}
           voiceFor={
@@ -1368,6 +1372,12 @@ function Canvas(): React.JSX.Element {
           onPrimaryChange={setZoomedTerminalId}
         />
         {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
+        {importServedOpen && (
+          <ImportServedSheet
+            onClose={() => setImportServedOpen(false)}
+            onImported={() => setImportServedOpen(false)}
+          />
+        )}
         {/* One confirmation for every close path. Rendered last so it sits over
             the zoomed overlays the ✕ was clicked in. A node that vanished while
             the dialog was open (⌘W elsewhere, a crash) simply has nothing to

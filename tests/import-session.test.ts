@@ -1,63 +1,58 @@
 import { describe, expect, it } from 'vitest'
 import {
-  planImportSession,
-  orchAskUrl,
+  parseServeAddress,
+  orchLineCommand,
   orchTerminalNode,
+  type ImportFace,
   type ServeTarget
 } from '../src/main/import-session'
-import type { TeamSnapshot } from '../src/main/teams'
-import type { CanvasNode } from '../src/shared/model'
 
-const term = (name: string, orch = false): CanvasNode =>
-  ({
-    kind: 'terminal', id: `t-${name}`, name, preset: 'Claude Code',
-    command: 'claude', cwd: '/work', orch, role: null,
-    position: { x: 0, y: 0 }, size: { width: 400, height: 300 }
-  }) as CanvasNode
-
-// The fixture: a two-agent crew with a designated orchestrator, served at drej's.
-const FIXTURE: TeamSnapshot = {
-  name: 'Research Crew', savedAt: 1, dir: '/work',
-  nodes: [term('Scout'), term('Conductor', true)],
-  connections: [], turns: {}, entryAgent: 'Conductor'
+const TARGET: ServeTarget = { origin: 'http://192.168.1.20:8639', slug: 'research-crew' }
+const FACE: ImportFace = {
+  name: 'Research Crew',
+  serviceId: 'svc-research-crew',
+  slug: 'research-crew',
+  door: 'Conductor',
+  access: 'account',
+  version: 1,
+  agents: 4
 }
-const TARGET: ServeTarget = { origin: 'https://drej.cookrew.dev', slug: 'research' }
 
-describe('import a template as a session — the caller enters through one door', () => {
-  it('reaches the entry orch at /<slug>/agents/<orch>/ask', () => {
-    expect(orchAskUrl(TARGET, 'Conductor')).toBe(
-      'https://drej.cookrew.dev/research/agents/Conductor/ask'
+describe('import a served team — the caller enters through one door', () => {
+  it('parses the address an owner hands out, with or without a scheme', () => {
+    expect(parseServeAddress('http://192.168.1.20:8639/research-crew')).toEqual(TARGET)
+    expect(parseServeAddress('192.168.1.20:8639/research-crew')).toEqual(TARGET)
+    expect(parseServeAddress('  http://192.168.1.20:8639/research-crew  ')).toEqual(TARGET)
+  })
+
+  it('refuses addresses that claim more than one door', () => {
+    expect(parseServeAddress('')).toBeNull()
+    expect(parseServeAddress('http://a.example/')).toBeNull()
+    expect(parseServeAddress('http://a.example/two/deep')).toBeNull()
+    expect(parseServeAddress('http://user:pw@a.example/slug')).toBeNull()
+    expect(parseServeAddress('http://a.example/slug?x=1')).toBeNull()
+    expect(parseServeAddress('http://a.example/UPPER')).toBeNull()
+    expect(parseServeAddress('ftp://a.example/slug')).toBeNull()
+  })
+
+  it('the placed command is JSON-quoted argv with no payment state', () => {
+    const command = orchLineCommand('/app/orch-line.mjs', TARGET, 'Research Crew')
+    expect(command).toBe(
+      'node "/app/orch-line.mjs" "--origin" "http://192.168.1.20:8639" "--slug" "research-crew" "--name" "Research Crew"'
     )
+    expect(command).not.toContain('pay')
   })
 
-  it('plans ONE session workspace, not a copy of the team', () => {
-    const plan = planImportSession(FIXTURE, TARGET)
-    expect(plan.workspaceName).toBe('Research Crew · session')
-    expect(plan.orch.name).toBe('Conductor')
-    expect(plan.orch.askUrl).toContain('/research/agents/Conductor/ask')
-    expect(plan.orch.command).toBe('cookrew call https://drej.cookrew.dev/research/agents/Conductor/ask')
-  })
-
-  it('places exactly ONE terminal — the orch, marked orch, over HTTP', () => {
-    const plan = planImportSession(FIXTURE, TARGET)
-    const node = orchTerminalNode(plan, 'term_x', '/work', { x: 10, y: 10 })
+  it('places exactly ONE terminal — the orch, marked orch, named for the team', () => {
+    const node = orchTerminalNode(FACE, TARGET, '/app/orch-line.mjs', 'term_x', '/work', {
+      x: 10,
+      y: 10
+    })
     expect(node.kind).toBe('terminal')
-    expect(node.name).toBe('Conductor')
+    expect(node.name).toBe('Research Crew')
     expect(node.orch).toBe(true)
-    expect(node.command).toContain('/research/agents/Conductor/ask')
-  })
-
-  it('enters an older template through its first terminal (no orch flag)', () => {
-    const legacy: TeamSnapshot = { ...FIXTURE, entryAgent: undefined, nodes: [term('Scout'), term('Editor')] }
-    expect(planImportSession(legacy, TARGET).orch.name).toBe('Scout')
-  })
-
-  it('refuses a template with no agent to enter', () => {
-    const empty: TeamSnapshot = { ...FIXTURE, nodes: [], entryAgent: undefined }
-    expect(() => planImportSession(empty, TARGET)).toThrow(/no agent to enter/)
-  })
-
-  it('a slug with special chars is encoded in the ask path', () => {
-    expect(orchAskUrl(TARGET, 'Code Reviewer')).toContain('agents/Code%20Reviewer/ask')
+    expect(node.preset).toBe('Remote')
+    expect(node.command).toContain('orch-line.mjs')
+    expect(node.command).toContain('research-crew')
   })
 })

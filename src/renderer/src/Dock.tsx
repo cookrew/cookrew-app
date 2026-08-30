@@ -58,6 +58,8 @@ interface DockProps {
   installedPresets?: InstalledPreset[]
   /** Selected marketplace preset id, or null when a harness/role chip owns it. */
   presetId?: string | null
+  /** Import a served team by its address — places ONE orch interface card. */
+  onImportServed?: () => void
   /** Owned chip: arm placement. The canvas click is the confirm (R2). */
   onPresetChip?: (id: string) => void
   /** Locked chip: the chip is the gate's UI — open the 401/402/403 sheet. */
@@ -110,6 +112,7 @@ export function Dock({
   onPresetGate,
   gatedPresetId = null,
   onCheckUpdates,
+  onImportServed,
   voiceFor,
   browserFor,
   boardFor
@@ -233,6 +236,18 @@ export function Dock({
                 {chip.badge === 'update' && <span className="preset-chip-badge update" />}
               </button>
             ))}
+            {/* The import side's ONE entry: a served team arrives as its orch
+                card, not a chip family. The sheet reads the public face first,
+                so nothing commits from the dock itself. */}
+            {onImportServed && (
+              <button
+                className="cr-chip clickable import-served"
+                title="Import a served team by its address"
+                onClick={() => onImportServed()}
+              >
+                + IMPORT
+              </button>
+            )}
             <label className="cr-check">
               <input type="checkbox" checked={orch} onChange={(e) => onOrch(e.target.checked)} />
               ORCH

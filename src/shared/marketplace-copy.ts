@@ -645,7 +645,7 @@ export const MKT_SERVE = {
   'mkt.serve.live.address': 'Callers land on {orch} · {priceLine}',
   /** The hand-off: what the owner DOES with the address they were just shown. */
   'mkt.serve.live.handoff':
-    'Hand this address to a caller — in their Cookrew it goes under TERMINAL → + ADD BY LINK.',
+    'Hand this address to a caller — in their Cookrew it goes under TERMINAL → + IMPORT.',
   'mkt.serve.stop.action': 'STOP SERVING',
   'mkt.serve.stop.confirm':
     'Stop serving {templateName}? {n} workspaces end now, including any mid-call. The template stays on your shelf.',
@@ -726,10 +726,10 @@ export const MKT_SVC = {
   'mkt.svc.payment.received': 'Payment received — retry your call in Cookrew.',
   'mkt.svc.open.title': 'Start in Cookrew',
   'mkt.svc.open.account':
-    'In Cookrew, choose + ADD BY LINK and paste the address below. The crew card signs you in when you start.',
+    'In Cookrew, choose + IMPORT and paste the address below. You get one card — {orch}’s terminal — and it signs you in when it starts.',
   'mkt.svc.open.paid':
-    'In Cookrew, choose + ADD BY LINK and paste the address below. The crew card walks you through sign-in and payment when you start.',
-  'mkt.svc.open.address': 'Crew address',
+    'In Cookrew, choose + IMPORT and paste the address below. You get one card — {orch}’s terminal — and it asks for payment once, when you start.',
+  'mkt.svc.open.address': 'Address',
   'mkt.svc.availability.title': 'Availability',
   /**
    * FLAGGED FOR ATLAS. "They can't see inside it" is a claim about what the

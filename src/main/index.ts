@@ -25,7 +25,7 @@ import {
 } from './dispatch'
 import { HerdrHostMultiplexer, HERDR_SESSION } from './herdr-host-multiplexer'
 import { selfHostedLaunch, selfHostRefusalMessage } from './self-host-guard'
-import { askTerminal, beginShutdown, cancelAllAsks, pasteAndSubmit } from './ask'
+import { askTerminal, beginShutdown, cancelAllAsks, ownerSubmit, pasteAndSubmit } from './ask'
 import { defaultProducerLease } from './producer-lease'
 import {
   boardSourcesFrom,
@@ -156,7 +156,14 @@ import { ServedCallers } from './served-callers'
 import { serviceGrants } from './service-grants-store'
 import { requestHarnessCompletion, servedGrantPreflight } from './served-grant-preflight'
 import { servedSessionProvisioner } from './served-onboarding'
-import { handleServedRoute } from './served-endpoints'
+import { gateCaller, handleServedRoute, type ServedEndpointDeps } from './served-endpoints'
+import { handleServedLineRoute, type LinePtyView } from './served-line'
+import {
+  orchTerminalNode,
+  parseServeAddress,
+  type ImportFace,
+  type ServeTarget
+} from './import-session'
 import { servedTurnReply } from './served-turn-reply'
 import { handleServedPayRoute } from './served-pay-route'
 import { railSettle } from './payment-rails'
@@ -634,8 +641,7 @@ async function handleServedSlug(
   const settlementClaims = authorization.startsWith('Bearer ')
     ? issuer.verifyToken(authorization.slice(7))
     : null
-  const answer = await handleServedRoute(
-    {
+  const servedDeps: ServedEndpointDeps = {
       issuer,
       callers: servedCallers,
       admit: async (serviceId, sub) => {
@@ -741,16 +747,39 @@ async function handleServedSlug(
           agents: nodes.filter((n) => n.kind === 'terminal').length
         }
       }
+  }
+
+  // The caller's PTY line (SSE + raw + resize) writes the response itself, so
+  // it mounts beside the value-shaped routes rather than through them.
+  const lineHandled = await handleServedLineRoute(
+    {
+      gate: (lineHeaders) => gateCaller(servedDeps, template, lineHeaders),
+      admit: async (serviceId, sub) => {
+        const { sessionId, created } = await servedDeps.admit(serviceId, sub)
+        return { sessionId, created }
+      },
+      conductorFor: (sessionId) => serving.instantiator.conductorFor(sessionId),
+      openConductorFor: (serviceId, sub) =>
+        servedDeps.sessionForCaller(serviceId, sub)?.conductorId ?? null,
+      attach: attachServedLine,
+      write: async (conductorId, data) => {
+        const session = ptys.get(conductorId)
+        if (!session) return { ok: false, reason: 'the line is not up' }
+        return ownerSubmit(session, data)
+      }
     },
     template,
     method,
     pathname,
-    {
-      headers,
-      body,
-      query: Object.fromEntries(url.searchParams.entries())
-    }
+    { headers, body, request, response }
   )
+  if (lineHandled) return true
+
+  const answer = await handleServedRoute(servedDeps, template, method, pathname, {
+    headers,
+    body,
+    query: Object.fromEntries(url.searchParams.entries())
+  })
   if (answer === null) return false
   // The 401's www-authenticate carries the ceremony's challenge, so it is set
   // before the body goes out (respondJson writes the head itself).
@@ -765,6 +794,22 @@ async function handleServedSlug(
   }
   return true
 }
+/**
+ * Boot the conductor's PTY mirror and wait (bounded, ~2s) for residency — the
+ * served-line analogue of acquireViewWhenReady. ensureTerminalMirror is the
+ * same primitive the /ask path re-attaches with, so a line and an ask can
+ * never disagree about whether the crew is standing there.
+ */
+async function attachServedLine(conductorId: string): Promise<LinePtyView | null> {
+  if (!ptys.get(conductorId)) ensureTerminalMirror(conductorId)
+  for (let i = 0; i < 40; i += 1) {
+    const session = ptys.get(conductorId)
+    if (session) return session
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  return ptys.get(conductorId) ?? null
+}
+
 const boardProbe = createProbeSampler(
   tmuxProbeDeps({
     knownTerminalIds: () => agents.list().map((entry) => entry.id),
@@ -2439,6 +2484,32 @@ function orchMirrorScript(): string {
     : path.join(dirname, '../../resources/orch-mirror.mjs')
 }
 
+/** The remote-import card's transport, resolved for dev and packaged. */
+function orchLineScript(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'orch-line.mjs')
+    : path.join(dirname, '../../resources/orch-line.mjs')
+}
+
+/** Read a served door's public face — what the owner chose to publish. */
+async function inspectServeAddress(
+  link: string
+): Promise<
+  | { ok: true; target: ServeTarget; face: ImportFace }
+  | { ok: false; reason: 'bad-address' | 'not-serving' | 'unreachable' }
+> {
+  const target = parseServeAddress(link)
+  if (!target) return { ok: false, reason: 'bad-address' }
+  try {
+    const res = await fetch(`${target.origin}/${target.slug}/crew`)
+    if (!res.ok) return { ok: false, reason: 'not-serving' }
+    const face = (await res.json()) as ImportFace
+    return { ok: true, target, face }
+  } catch {
+    return { ok: false, reason: 'unreachable' }
+  }
+}
+
 async function importTemplateAsSession(
   team: string,
   position?: { x: number; y: number }
@@ -3699,6 +3770,33 @@ function registerIpc(handlers: RestoreHandlers): void {
   )
   /** END destroys someone else's workspace, so it is the owner's act alone. */
   ipcMain.handle('serving:end', (_e, sessionId: string) => serving.instantiator.end(sessionId))
+
+  // ---- import a served team (caller side): one address, one orch card ----
+  ipcMain.handle('serve:inspect', (_e, link: string) => inspectServeAddress(link))
+  /**
+   * Place the imported team's interface: ONE orch card on the caller's own
+   * canvas, running the line script. The card is the door — the team behind it
+   * runs in the session workspace the author's app mints for this caller.
+   */
+  ipcMain.handle(
+    'serve:import',
+    async (_e, link: string, position?: { x: number; y: number }) => {
+      const inspected = await inspectServeAddress(link)
+      if (!inspected.ok) return inspected
+      const node = orchTerminalNode(
+        inspected.face,
+        inspected.target,
+        orchLineScript(),
+        randomUUID(),
+        store.focusedState.dir,
+        position ?? { x: 160, y: 120 }
+      )
+      const placed = store.addNode(node)
+      spawnTracked(placed as TerminalNodeData)
+      store.recordEvent('session.imported', inspected.face.name, inspected.face.door, link.trim())
+      return { ok: true as const, node: placed }
+    }
+  )
 
   ipcMain.handle('workspace:switch', (_e, id: string) => {
     switchWorkspace(id)

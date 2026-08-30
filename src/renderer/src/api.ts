@@ -37,6 +37,18 @@ export interface BoardSnapshotLike {
   activeWorkspaceId: string;
 }
 
+/** A served door's public face, as the import sheet previews it. */
+export interface ServeFacePreview {
+  name: string;
+  serviceId: string;
+  slug: string;
+  door: string;
+  access: 'account' | 'paid';
+  priceUsd?: string;
+  version: number;
+  agents: number;
+}
+
 export interface CookrewApi {
   getWorkspace: () => Promise<WorkspaceState>;
   onWorkspaceState: (cb: (state: WorkspaceState) => void) => () => void;
@@ -96,6 +108,18 @@ export interface CookrewApi {
     }[]
   >;
   servingEnd: (sessionId: string) => Promise<{ stopped: number }>;
+  /** Read a served door's public face — free, commits nothing. */
+  serveInspect: (
+    link: string,
+  ) => Promise<
+    | { ok: true; target: { origin: string; slug: string }; face: ServeFacePreview }
+    | { ok: false; reason: string }
+  >;
+  /** Import: place ONE orch interface card for the served team. */
+  serveImport: (
+    link: string,
+    position?: { x: number; y: number },
+  ) => Promise<{ ok: true; node: unknown } | { ok: false; reason: string }>;
   switchWorkspace: (id: string) => Promise<WorkspaceList>;
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>;
   /** Workspace v2: remove workspace, multi-directory, per-terminal cwd, git. */

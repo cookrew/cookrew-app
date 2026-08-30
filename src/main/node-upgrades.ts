@@ -10,6 +10,7 @@ import {
   TerminalNodeData
 } from '../shared/model'
 import { DEFAULT_ORCH_PRESET } from './presets'
+import { orchLineCommand } from './import-session'
 
 /**
  * Upgrades persisted nodes saved by older builds to the current shape:
@@ -30,7 +31,61 @@ export function upgradeNode(node: CanvasNode): CanvasNode {
   }
   upgraded = upgradeGeometry(upgraded)
   if (upgraded.kind !== 'terminal') return upgraded
-  return upgradeLegacyOrchMirrorCommand(upgradeConductorSeed(upgradeMaestroField(upgraded)))
+  return upgradeCrewLineCard(
+    upgradeLegacyOrchMirrorCommand(upgradeConductorSeed(upgradeMaestroField(upgraded)))
+  )
+}
+
+/** Parse only the JSON-quoted argv format the retired crew-line builder emitted. */
+function legacyCrewLineTarget(
+  command: string
+): { script: string; origin: string; slug: string } | null {
+  if (!command.startsWith('node ')) return null
+  const args: string[] = []
+  for (const match of command.slice(5).matchAll(/"(?:[^"\\]|\\.)*"/g)) {
+    try {
+      const value: unknown = JSON.parse(match[0])
+      if (typeof value !== 'string') return null
+      args.push(value)
+    } catch {
+      return null
+    }
+  }
+  if (!/[\\/]crew-line\.mjs$/.test(args[0] ?? '')) return null
+  const origin = args[args.indexOf('--origin') + 1]
+  const slug = args[args.indexOf('--slug') + 1]
+  if (!origin || !slug || args.indexOf('--origin') < 1 || args.indexOf('--slug') < 1) return null
+  return { script: args[0], origin, slug }
+}
+
+/**
+ * A card placed by the retired crew import lane becomes the orch interface
+ * card: same door, same origin+slug, now the PTY line over the served door.
+ * The stale `servedTranscript` key is dropped either way — the field left the
+ * model with the lane, and a command that spawns the deleted crew-line.mjs
+ * would otherwise sit on the canvas and ENOENT at boot.
+ */
+function upgradeCrewLineCard(node: TerminalNodeData): TerminalNodeData {
+  const persisted = node as TerminalNodeData & { servedTranscript?: unknown }
+  const stripped =
+    'servedTranscript' in persisted
+      ? (({ servedTranscript, ...rest }): TerminalNodeData => {
+          void servedTranscript
+          return rest as TerminalNodeData
+        })(persisted)
+      : node
+  const parsed = legacyCrewLineTarget(stripped.command)
+  if (!parsed) return stripped
+  return {
+    ...stripped,
+    orch: true,
+    preset: 'Remote',
+    command: orchLineCommand(
+      parsed.script.replace(/crew-line\.mjs$/, 'orch-line.mjs'),
+      { origin: parsed.origin, slug: parsed.slug },
+      stripped.name
+    )
+  }
 }
 
 const LEGACY_ORCH_MIRROR_COMMAND =

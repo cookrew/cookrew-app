@@ -102,6 +102,37 @@ describe('upgradeNode', () => {
     expect(upgradeNode(custom)).toEqual(custom)
   })
 
+  it('a retired crew-line card becomes the orch interface card at the same door', () => {
+    const legacy = terminal({
+      name: 'Research Crew · research',
+      command:
+        'node "/app/crew-line.mjs" "--origin" "http://crew.example:8639" "--slug" "research" "--payment-unavailable-copy" "x"'
+    })
+    const persisted = {
+      ...legacy,
+      servedTranscript: { origin: 'http://crew.example:8639', slug: 'research' }
+    } as TerminalNodeData
+    const upgraded = upgradeNode(persisted) as TerminalNodeData
+    expect('servedTranscript' in upgraded).toBe(false)
+    expect(upgraded.orch).toBe(true)
+    expect(upgraded.preset).toBe('Remote')
+    expect(upgraded.command).toContain('orch-line.mjs')
+    expect(upgraded.command).toContain('"--origin" "http://crew.example:8639"')
+    expect(upgraded.command).toContain('"--slug" "research"')
+    expect(upgraded.command).not.toContain('crew-line.mjs')
+    expect(upgraded.command).not.toContain('payment')
+  })
+
+  it('a stale servedTranscript key is dropped even without a crew-line command', () => {
+    const persisted = {
+      ...terminal({ command: 'claude' }),
+      servedTranscript: { origin: 'http://x:1', slug: 's' }
+    } as TerminalNodeData
+    const upgraded = upgradeNode(persisted) as TerminalNodeData
+    expect('servedTranscript' in upgraded).toBe(false)
+    expect(upgraded.command).toBe('claude')
+  })
+
   it('repairs terminal geometry omitted by an unvalidated API write', () => {
     const malformed = terminal() as TerminalNodeData
     delete (malformed as unknown as Record<string, unknown>).position

@@ -657,9 +657,9 @@ a.cr-btn {
   align-items: center;
   gap: 6px;
   /* The row WRAPS on desktop: with enough presets + saved teams the tail —
-     which is exactly where the CREWS family and + ADD BY LINK live — used to
-     run off the screen edge with no scroll, making the import entry
-     undiscoverable. The dock grows upward instead; chips stay tappable. */
+     which is exactly where + IMPORT lives — used to run off the screen edge
+     with no scroll, making the import entry undiscoverable. The dock grows
+     upward instead; chips stay tappable. */
   flex-wrap: wrap;
   min-width: 0;
   max-height: 30vh;
@@ -5149,6 +5149,17 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   border-left: 2px solid var(--amber-deep);
   padding-left: 8px;
 }
+
+/* ── IMPORT A SERVED TEAM: the import side's one entry ── */
+.cr-chip.import-served { border-style: dashed; border-color: var(--dim); color: var(--muted); }
+/* The import sheet's preview of a team's public face. */
+.isv-face {
+  border: 1.5px solid var(--line-soft); background: var(--cr-panel, transparent);
+  padding: 9px 11px; margin-top: 10px; display: flex; flex-direction: column; gap: 4px;
+}
+.isv-row { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11.5px; }
+.isv-name { font-weight: 600; }
+.isv-dim { color: var(--cr-dim, #a8a29e); font-size: 10.5px; }
 
 /* Share-on-save inside the selection bar's naming step: the bar is a row, so
    the section lifts into a popover above it rather than stretching it. */

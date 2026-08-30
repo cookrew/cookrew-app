@@ -77,6 +77,11 @@ const api = {
   servingSessions: () => ipcRenderer.invoke('serving:sessions'),
   servingEnd: (sessionId: string) => ipcRenderer.invoke('serving:end', sessionId),
 
+  // ── import a served team (caller side) ──
+  serveInspect: (link: string) => ipcRenderer.invoke('serve:inspect', link),
+  serveImport: (link: string, position?: { x: number; y: number }) =>
+    ipcRenderer.invoke('serve:import', link, position),
+
   switchWorkspace: (id: string) => ipcRenderer.invoke('workspace:switch', id),
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),
