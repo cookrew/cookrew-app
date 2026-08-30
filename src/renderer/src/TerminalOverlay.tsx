@@ -33,7 +33,6 @@ import { TranslateButton } from './TranslateButton'
 import { languageByCode } from '../../shared/translate'
 import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { StatusCoin } from './nodes/AgentAvatar'
-import { ServedCrewLive } from './ServedCrewLive'
 
 const PHOSPHOR_THEME = {
   background: '#14110A',
@@ -284,16 +283,14 @@ function TerminalOverlay({
 
   const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
 
-  // Remote cards still need the PTY lifecycle: on cold start, attach is what
-  // acquires/boots crew-line. Its bytes are transport only and are deliberately
-  // discarded; the rendered body comes from the caller-scoped trace capability.
+  // Owner ruling 2026-08-30: the zoomed view is PTY-DIRECT for every card,
+  // crew cards included. aa3198a replaced crew-line's stdout REPL with a
+  // transcript+composer surface and the live area went black on real cards;
+  // the xterm below attaches the same PTY that render swap used to discard,
+  // so the crew-line REPL is simply visible again. The served-transcript
+  // BACKEND (rail rows, phone pager, remote trace) stays — only the render
+  // swap is reverted.
   useEffect(() => {
-    if (!remoteCrew) return
-    return cookrew().ptyAttach(node.id, () => undefined)
-  }, [node.id, remoteCrew])
-
-  useEffect(() => {
-    if (remoteCrew) return
     const container = containerRef.current
     if (!container) return
 
@@ -894,17 +891,10 @@ function TerminalOverlay({
           onPending={setPendingIndex}
           onTailLoaded={() => setTailReady(true)}
           refreshToken={remoteCrew ? traceRefresh : 0}
-          liveClassName={remoteCrew ? 'served' : undefined}
-        >
-          {remoteCrew ? (
-            <ServedCrewLive
-              terminalId={node.id}
-              activity={activity}
-              hasTranscript={rows.length > 0}
-            />
-          ) : (
-            <div ref={containerRef} className="popout-terminal" />
-          )}
+>
+          {/* PTY-direct for every card (owner ruling 2026-08-30): crew cards
+              show crew-line's own REPL here, not a composer replacement. */}
+          <div ref={containerRef} className="popout-terminal" />
         </TranscriptView>
         <CheckpointTimeline
           terminalId={node.id}
