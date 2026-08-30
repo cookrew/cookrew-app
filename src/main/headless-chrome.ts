@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import http from 'node:http'
 import path from 'node:path'
+import { shareInstallationDirs } from './browser-scope'
 import type { BrowserTab } from '../shared/model'
 import type { CdpInputCommand } from '../shared/cast-input'
 import type { ViewportMetrics } from '../shared/cast-viewport'
@@ -113,6 +114,11 @@ export function headlessLaunchArgs(
 export interface HeadlessOptions {
   executablePath: string
   profileDir: string
+  /**
+   * One store for the installation-scope directories every profile would
+   * otherwise download for itself. Absent means each profile keeps its own.
+   */
+  sharedInstallationDir?: string
   width: number
   height: number
   tabs: BrowserTab[]
@@ -221,6 +227,18 @@ export class HeadlessInstance {
         rmSync(path.join(this.opts.profileDir, file), { force: true })
       } catch {
         // Best effort. Profile data itself is never removed.
+      }
+    }
+    // Installation-scope state belongs to the installation. Done HERE because
+    // this is the one moment the profile is provably unattached — the same
+    // reason the singleton files are cleared on the line above — and Chrome
+    // holds these directories open while it runs.
+    if (this.opts.sharedInstallationDir) {
+      const freed = shareInstallationDirs(this.opts.profileDir, this.opts.sharedInstallationDir)
+      if (freed > 0) {
+        console.error(
+          `browser scope: shared ${(freed / 1024 ** 2).toFixed(0)}MB of components for this profile`
+        )
       }
     }
 

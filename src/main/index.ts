@@ -2916,6 +2916,11 @@ const browserManager = new HeadlessBrowserManager({
   enabled: interactiveBrowserEnabled,
   chromePath: findChrome,
   profileRoot: () => path.join(app.getPath('userData'), 'interactive-browser'),
+  // Chromium's own layout keeps downloaded components at INSTALLATION scope,
+  // beside the profiles rather than inside each one. Cookrew gives every card a
+  // whole user-data-dir, so without this every card downloads its own copy.
+  sharedInstallationRoot: () =>
+    path.join(app.getPath('userData'), 'browser-shared'),
   deleteProfile: (browserId) =>
     void removeBrowserProfile(path.join(app.getPath('userData'), 'interactive-browser'), browserId),
   resolveNode: activeBrowserNode,
