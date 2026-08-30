@@ -22,6 +22,7 @@ import {
   traceIndexOf
 } from '../shared/trace-blocks'
 import { claudeSessionFile } from './claude-fork'
+import { sessionChain } from './lineage-ledger'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { isCodexCommand, validCodexSessionRef } from './codex-bind'
 import { harnessFor , type TurnFinality } from './harness'
@@ -156,8 +157,17 @@ export class TraceReader {
    * file. The rail, rewind picker, and executor all operate in this coordinate
    * space. Pre-clear / pre-rewind endpoints are exposed via a separate lineage
    * expansion (not mixed into the main timeline) so indices never drift.
+   *
+   * `includeLineage` is that expansion's supply side, OPT-IN because segments
+   * share index numbers (every file counts its own T1..Tn): the union is only
+   * safe for a caller that disambiguates by sessionId, which today is the
+   * restore executor resolving a rewind INTO an earlier segment. Earlier
+   * segments come first (oldest first), each ref tagged with its segment.
    */
-  async checkpointRefs(terminalId: string): Promise<{ index: number; id: string; sessionId?: string }[]> {
+  async checkpointRefs(
+    terminalId: string,
+    options: { includeLineage?: boolean } = {}
+  ): Promise<{ index: number; id: string; sessionId?: string }[]> {
     const hit = this.store.nodeAcrossWorkspaces(terminalId)
     if (!hit || hit.node.kind !== 'terminal') return []
     const node = hit.node
@@ -168,7 +178,58 @@ export class TraceReader {
     if (!file) return []
     const kind = claude ? 'claude' : codex ? 'codex' : 'pi'
     const blocks = await this.blocksOf(file, kind)
-    return blocks.map((b) => ({ index: b.index, id: b.id, sessionId: node.claudeSessionId ?? undefined }))
+    const current = blocks.map((b) => ({
+      index: b.index,
+      id: b.id,
+      sessionId: node.claudeSessionId ?? undefined
+    }))
+    if (options.includeLineage !== true || !claude) return current
+    const segments = await this.lineageSegments(terminalId)
+    const earlier = segments.flatMap((segment) =>
+      segment.entries.flatMap((entry) =>
+        entry.id ? [{ index: entry.index, id: entry.id, sessionId: segment.sessionId }] : []
+      )
+    )
+    return [...earlier, ...current]
+  }
+
+  /**
+   * The EARLIER segments of this node's session chain, oldest first — the
+   * checkpoints an auto-compact rotation moved out of the current file.
+   *
+   * Derived from the transcripts' own declared predecessor edges
+   * (lineage-ledger.sessionChain), never from `node.sessionLineage` alone:
+   * the array records what the app happened to witness, while every rotation
+   * durably names its predecessor in the successor's head. A session nothing
+   * declares is honestly absent — a shorter true history beats a guessed one.
+   *
+   * Each segment stays in its OWN T1..Tn coordinate space (mixing lineage
+   * files into one numbering produced offset drift — see boundaryMarkers).
+   * Reached on demand (an expansion tap, a cross-segment rewind), so a
+   * many-MB predecessor is parsed only when someone actually looks, then
+   * cached like any other file.
+   */
+  async lineageSegments(
+    terminalId: string
+  ): Promise<{ sessionId: string; count: number; entries: TraceIndexEntry[] }[]> {
+    const hit = this.store.nodeAcrossWorkspaces(terminalId)
+    if (!hit || hit.node.kind !== 'terminal') return []
+    const node = hit.node
+    if (!isClaudeCommand(node.command) || !node.claudeSessionId) return []
+    const chain = await sessionChain(node.cwd, node.claudeSessionId, {
+      projectsDir: this.options.projectsDir
+    })
+    const earlier = chain.filter((step) => step.sessionId !== node.claudeSessionId)
+    const segments: { sessionId: string; count: number; entries: TraceIndexEntry[] }[] = []
+    for (const step of earlier) {
+      const blocks = await this.blocksOf(step.file, 'claude')
+      segments.push({
+        sessionId: step.sessionId,
+        count: blocks.length,
+        entries: traceIndexOf(blocks)
+      })
+    }
+    return segments
   }
 
   /**
@@ -193,9 +254,14 @@ export class TraceReader {
       markers.push(...seg.markers)
     }
 
-    // 2) clear marker at the root of the current session file if it was born
-    // from a /clear (the lineage has a predecessor AND the current file's
-    // first checkpoint is T1, i.e. it started fresh rather than by restore).
+    // 2) the SEGMENT BOUNDARY at the root of the current session file, when a
+    // lineage predecessor exists and the file started fresh (first checkpoint
+    // is T1, i.e. not a restore copy resuming mid-history). Two shapes:
+    //  - a rotation-born file already carries claude's own ◆ compact at the
+    //    root (step 1 parsed it) — attach the lineage pointer to THAT marker
+    //    instead of standing a duplicate ⇥ clear beside it;
+    //  - a /clear-born file has nothing in-file, so the ⇥ clear is emitted
+    //    here as before.
     const currentSid = node.claudeSessionId
     const lineage = node.sessionLineage ?? []
     if (currentSid && lineage.length > 0) {
@@ -205,7 +271,15 @@ export class TraceReader {
         const firstCurrentIndex = seg.refs[0]?.index ?? 1
         if (firstCurrentIndex === 1) {
           const previousSid = lineage[lineage.length - 1]
-          markers.push({ kind: 'clear', afterIndex: 0, previousSessionId: previousSid })
+          const rootCompactAt = markers.findIndex(
+            (m) => m.kind === 'compact' && m.afterIndex === 0
+          )
+          if (rootCompactAt >= 0) {
+            // New object, never a mutation: seg.markers are shared cache state.
+            markers[rootCompactAt] = { ...markers[rootCompactAt], previousSessionId: previousSid }
+          } else {
+            markers.push({ kind: 'clear', afterIndex: 0, previousSessionId: previousSid })
+          }
         }
       }
     }

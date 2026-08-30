@@ -322,8 +322,11 @@ export function createRemoteApi(): CookrewApi {
         apiPath(`/api/board${window ? `?window=${encodeURIComponent(window)}` : ''}`)
       ),
     recoverAgent: (id) => req(apiPath(`/api/agents/${id}/recover`), 'POST'),
-    restoreCheckpoint: (id, checkpointIndex) =>
-      req(apiPath(`/api/agents/${id}/restore`), 'POST', { checkpointIndex }),
+    restoreCheckpoint: (id, checkpointIndex, targetSessionId) =>
+      req(apiPath(`/api/agents/${id}/restore`), 'POST', {
+        checkpointIndex,
+        ...(targetSessionId !== undefined ? { targetSessionId } : {})
+      }),
     undoRestore: (id) => req(apiPath(`/api/agents/${id}/restore/undo`), 'POST'),
     listTurns: (terminalId) => req<TurnRecord[]>(apiPath(`/api/terminal/${terminalId}/turns`)),
     // Checkpoint search is desktop-only for now: the phone has no /api route

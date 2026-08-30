@@ -54,6 +54,13 @@ export function planCheckpointRestore(input: {
   sessionId?: string | null
   checkpointIndex: number
   blocks: readonly CheckpointRef[]
+  /**
+   * Segment the index is counted IN, for a rewind into an earlier lineage
+   * segment (blocks then hold the union, where every file numbers its own
+   * T1..Tn and indices collide). Absent = the current session, which is also
+   * how legacy untagged blocks resolve — by index alone.
+   */
+  targetSessionId?: string
 }): RestorePlan {
   const harness = harnessFor(input.command)
   if (!harness) return { ok: false, reason: 'This is a plain shell — there is no session to restore.' }
@@ -73,9 +80,24 @@ export function planCheckpointRestore(input: {
   // shows — and the cut binds to the block's uuid below. This is the shape
   // forkClaudeSession had to be repaired INTO; a rewind never consulted the
   // ledger, so a compact's continued numbering cannot misdirect it.
-  const block = input.blocks.find((b) => b.index === input.checkpointIndex)
+  // Segment-aware resolution: index numbers collide across a lineage union
+  // (every file counts its own T1..Tn), so a TARGETED restore requires the
+  // block to sit in the named segment — never the oldest file that happens
+  // to share the number. Without a target the refs are current-file-only (or
+  // a caller-curated set), and index-alone matching stays the contract.
+  const inSegment = (b: CheckpointRef): boolean =>
+    input.targetSessionId === undefined || b.sessionId === input.targetSessionId
+  const block = input.blocks.find((b) => b.index === input.checkpointIndex && inSegment(b))
   if (!block) {
-    return { ok: false, harness: harness.id, reason: `No checkpoint ${input.checkpointIndex} in this session.` }
+    const where =
+      input.targetSessionId !== undefined
+        ? `segment ${input.targetSessionId.slice(0, 8)}`
+        : 'this session'
+    return {
+      ok: false,
+      harness: harness.id,
+      reason: `No checkpoint ${input.checkpointIndex} in ${where}.`
+    }
   }
   // Cut ONLY on a real message uuid — never on a positional guess.
   if (!UUID_RE.test(block.id)) {

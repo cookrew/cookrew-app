@@ -21,7 +21,10 @@ export interface RestoreExecutorDeps {
     killAndWait(terminalId: string, timeoutMs?: number): Promise<void>
   }
   traces: {
-    checkpointRefs(terminalId: string): Promise<{ index: number; id: string }[]>
+    checkpointRefs(
+      terminalId: string,
+      options?: { includeLineage?: boolean }
+    ): Promise<{ index: number; id: string; sessionId?: string }[]>
   }
   spawnTracked: (
     node: Pick<TerminalNodeData, 'id' | 'command' | 'cwd' | 'claudeSessionId' | 'codexSessionRef' | 'opencodeSessionId'>
@@ -55,7 +58,11 @@ export interface RestoreExecutorDeps {
 }
 
 export function createRestoreHandlers(deps: RestoreExecutorDeps): {
-  restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
+  restoreCheckpoint: (
+    id: string,
+    checkpointIndex: number,
+    targetSessionId?: string
+  ) => Promise<RestoreResult>
   undoRestore: (id: string) => Promise<RestoreResult>
 } {
   // H3: per-terminal async mutex. IPC (desktop) and HTTP (phone) both reach
@@ -77,8 +84,8 @@ export function createRestoreHandlers(deps: RestoreExecutorDeps): {
     return next
   }
   return {
-    restoreCheckpoint: (id, checkpointIndex) =>
-      serialized(id, () => restoreCheckpoint(deps, id, checkpointIndex)),
+    restoreCheckpoint: (id, checkpointIndex, targetSessionId) =>
+      serialized(id, () => restoreCheckpoint(deps, id, checkpointIndex, targetSessionId)),
     undoRestore: (id) => serialized(id, () => undoRestore(deps, id))
   }
 }
@@ -104,8 +111,12 @@ export function registerRestoreIpc(handle: IpcHandleFn, handlers: RestoreHandler
   // Renderer-supplied args arrive untyped; the handlers validate the id and
   // index themselves (unknown terminal / out-of-range checkpoint both fail
   // closed with a RestoreResult), so this boundary only restores the shapes.
-  handle('agent:restore-checkpoint', (_e, id, checkpointIndex) =>
-    handlers.restoreCheckpoint(id as string, checkpointIndex as number)
+  handle('agent:restore-checkpoint', (_e, id, checkpointIndex, targetSessionId) =>
+    handlers.restoreCheckpoint(
+      id as string,
+      checkpointIndex as number,
+      targetSessionId as string | undefined
+    )
   )
   handle('agent:undo-restore', (_e, id) => handlers.undoRestore(id as string))
 }
@@ -113,7 +124,8 @@ export function registerRestoreIpc(handle: IpcHandleFn, handlers: RestoreHandler
 async function restoreCheckpoint(
   deps: RestoreExecutorDeps,
   id: string,
-  checkpointIndex: number
+  checkpointIndex: number,
+  targetSessionId?: string
 ): Promise<RestoreResult> {
   const hit = deps.store.nodeAcrossWorkspaces(id)
   if (!hit || hit.node.kind !== 'terminal') {
@@ -140,15 +152,27 @@ async function restoreCheckpoint(
     return fail(id, node.name, checkpointIndex, 'The bound session id is malformed — refusing to restore.')
   }
 
+  // M1 again, for the renderer-supplied target: it reaches claudeSessionFile
+  // via the plan's cutoffSessionId, so a non-UUID shape fails closed here.
+  if (targetSessionId !== undefined && !isSessionUuid(targetSessionId)) {
+    return fail(id, node.name, checkpointIndex, 'The target segment id is malformed — refusing to restore.')
+  }
+
   const busy = busyReason(deps, id)
   if (busy) return fail(id, node.name, checkpointIndex, busy)
 
-  const blocks = await deps.traces.checkpointRefs(id)
+  // The lineage union is fetched ONLY for a targeted rewind: a plain rewind
+  // stays a current-file read, never paying to parse every earlier segment.
+  const blocks = await deps.traces.checkpointRefs(
+    id,
+    targetSessionId !== undefined ? { includeLineage: true } : undefined
+  )
   const plan = planCheckpointRestore({
     command: node.command,
     sessionId: node.claudeSessionId,
     checkpointIndex,
-    blocks
+    blocks,
+    ...(targetSessionId !== undefined ? { targetSessionId } : {})
   })
   if (!plan.ok) {
     return fail(id, node.name, checkpointIndex, plan.reason ?? 'Restore not possible.')
