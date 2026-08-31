@@ -75,6 +75,17 @@ export interface DoorRecord {
   priceUsd?: string
   /** Stable rail identifiers only; no quote or config detail is stored. */
   rails: readonly ('x402' | 'stripe')[]
+  /**
+   * THE DOOR'S SEAL KEY — required for `relay`, absent otherwise.
+   *
+   * A caller pins this on import and every byte it sends is sealed to it, so
+   * the relay carrying the conversation cannot read it. That makes this the
+   * one field a registry must publish faithfully and can never usefully
+   * change: substituting its own key produces a channel the real door cannot
+   * read, and the call fails at the first frame instead of succeeding as a man
+   * in the middle. Public by nature — it is the half meant to be handed out.
+   */
+  sealKey?: string
   /** Epoch ms of the last registration. A door nobody refreshes goes stale. */
   seenAt: number
 }
@@ -110,6 +121,28 @@ export function validDoorAddress(value: string): boolean {
 }
 
 /**
+ * A RELAYED DOOR'S ADDRESS IS ITS NAME, and that is a privacy rule rather than
+ * a formatting one.
+ *
+ * The owner's app is on a laptop behind a router. Recording where it actually
+ * is would publish their home network's address in a public directory, to be
+ * read by anyone who lists doors — for a machine nobody can dial anyway. So a
+ * relayed door records the relay's own URL, and it must be exactly the one
+ * this door's handle and name produce: nothing else about the owner is here to
+ * leak.
+ */
+export function validRelayAddress(value: string, handle: string, name: string): boolean {
+  try {
+    const url = new URL(value)
+    if (!['http:', 'https:'].includes(url.protocol)) return false
+    if (url.username || url.password || url.search || url.hash) return false
+    return url.pathname === doorPath(handle, name)
+  } catch {
+    return false
+  }
+}
+
+/**
  * Is this host one only the owner's own network can route to?
  *
  * Loopback, RFC1918, link-local and .local. Not a security boundary — the
@@ -130,17 +163,29 @@ export function isPrivateAddress(value: string): boolean {
   return seventeen !== null && Number(seventeen[1]) >= 16 && Number(seventeen[1]) <= 31
 }
 
-function validFace(input: DoorInput): boolean {
+function validFace(input: DoorInput, allowPrivate: boolean): boolean {
   if (!(input.transport in DOOR_REACH)) return false
+  // A relayed door without a seal key is a door a caller cannot pin, and an
+  // unpinned relayed door is one the relay could impersonate. Refused rather
+  // than listed as something callers would then have to trust blindly.
+  if (input.transport === 'relay' && !isSealKey(input.sealKey)) return false
   // A private address cannot be reached by "anyone", and a listing that said
   // so would be handing out a link that fails for everyone it was shared with.
-  if (input.transport !== 'lan' && isPrivateAddress(input.address)) return false
+  if (!allowPrivate && input.transport !== 'lan' && isPrivateAddress(input.address)) return false
   if (input.title.trim().length === 0 || input.title.length > 64) return false
   if (input.door.trim().length === 0 || input.door.length > 64) return false
   if (!Number.isInteger(input.agents) || input.agents < 0 || input.agents > 999) return false
   if (input.access !== 'account' && input.access !== 'paid') return false
   if (input.access === 'paid' && !/^\d+(\.\d{1,2})?$/.test(input.priceUsd ?? '')) return false
   return input.rails.every((rail) => rail === 'x402' || rail === 'stripe')
+}
+
+/**
+ * A published X25519 key, as base64url SPKI. Shape only — the registry cannot
+ * and should not judge whether it is the RIGHT key; that is the caller's pin.
+ */
+function isSealKey(value: unknown): boolean {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{40,120}$/.test(value)
 }
 
 /** The canonical path a door is published at — one owner, one name. */
@@ -158,9 +203,21 @@ export function doorPath(handle: string, name: string): string {
  */
 export class DoorStore {
   private readonly file: string
+  private readonly allowPrivate: boolean
   private doors = new Map<string, DoorRecord>()
 
-  constructor(dataDir: string) {
+  /**
+   * `allowPrivate` lists doors whose address only this machine can reach.
+   *
+   * It exists because a development registry runs on localhost, and a relay on
+   * localhost genuinely is not reachable by "anyone" — so the honesty rule
+   * below correctly refuses it, and correctly makes the whole path untestable
+   * without an escape. This is the same distinction the server already draws
+   * with `dev`: a deployment either was started for development or it was not,
+   * and this is never a runtime toggle.
+   */
+  constructor(dataDir: string, options: { allowPrivate?: boolean } = {}) {
+    this.allowPrivate = options.allowPrivate === true
     this.file = path.join(dataDir, 'doors.json')
     try {
       const parsed: unknown = JSON.parse(readFileSync(this.file, 'utf8'))
@@ -185,8 +242,12 @@ export class DoorStore {
     if (!HANDLE.test(caller) || !HANDLE.test(input.handle)) return { ok: false, reason: 'bad-handle' }
     if (caller !== input.handle) return { ok: false, reason: 'not-yours' }
     if (!NAME.test(input.name)) return { ok: false, reason: 'bad-name' }
-    if (!validDoorAddress(input.address)) return { ok: false, reason: 'bad-address' }
-    if (!validFace(input)) return { ok: false, reason: 'bad-face' }
+    const addressed =
+      input.transport === 'relay'
+        ? validRelayAddress(input.address, input.handle, input.name)
+        : validDoorAddress(input.address)
+    if (!addressed) return { ok: false, reason: 'bad-address' }
+    if (!validFace(input, this.allowPrivate)) return { ok: false, reason: 'bad-face' }
     const door: DoorRecord = { ...input, rails: [...input.rails], seenAt: Date.now() }
     this.doors.set(doorPath(door.handle, door.name), door)
     this.flush()

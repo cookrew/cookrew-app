@@ -426,6 +426,29 @@ describe('the card says who can open the link it just gave you', () => {
     expect(html).not.toContain('turn on Tailscale')
   })
 
+  it('a relayed door hands out a name, and nothing about this machine', () => {
+    // What a person copies and sends. It must be openable by whoever they send
+    // it to, and it must not carry their home network's address to get there.
+    const html = renderToStaticMarkup(
+      <ServedTeamCard
+        team={{
+          ...served('relay'),
+          slug: 'cookrew-alpha',
+          address: 'https://cookrew.dev/@drej/cookrew-alpha'
+        }}
+        door="Pilot"
+        paymentStatus={EMPTY_SERVED_PAYMENT_STATUS}
+        onConfigurePayments={noop}
+        onStopped={noop}
+        onClose={noop}
+      />
+    )
+    expect(html).toContain('https://cookrew.dev/@drej/cookrew-alpha')
+    expect(html).toContain('Anyone with the link can open it.')
+    expect(html).not.toContain('192.168')
+    expect(html).not.toContain('8639')
+  })
+
   it('reach is about reaching, never about being let in', () => {
     // The gate — sign-in, price, the owner's lending limit — is a different
     // sentence in a different place; this line must not imply entitlement.

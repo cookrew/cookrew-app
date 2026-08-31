@@ -89,7 +89,20 @@ export function identityConfigFor(input: {
     return { ok: false, reason: `--origin ${raw} must be scheme://host[:port] with no path` }
   }
   const statedPort = url.port === '' ? (url.protocol === 'https:' ? 443 : 80) : Number(url.port)
-  if (statedPort !== input.port) {
+  /**
+   * The port check applies ONLY when the origin names this machine.
+   *
+   * It exists to catch `--origin http://localhost:8790 --port 8791`: a typo
+   * that turns every ceremony into a blanket 401 reading like a broken
+   * passkey. But behind a reverse proxy the two ports differ on purpose —
+   * the process binds 8791 while the world reaches https://cookrew.dev — and
+   * refusing that made the only real deployment shape unbootable.
+   *
+   * A non-local hostname means something else is terminating the connection,
+   * so the bound port says nothing about what a browser will send.
+   */
+  const localOrigin = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)
+  if (localOrigin && statedPort !== input.port) {
     return {
       ok: false,
       reason: `--origin ${raw} names port ${statedPort} but --port is ${input.port}; a browser would be refused on both`

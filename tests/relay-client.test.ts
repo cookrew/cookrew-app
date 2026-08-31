@@ -6,6 +6,7 @@ import {
   type RelaySocket
 } from '../src/main/relay-client'
 import { decodeFrame, encodeFrame, type RelayFrame } from '../src/shared/relay-frame'
+import { generateSealKeyPair } from '../src/shared/relay-seal'
 
 /**
  * THE DOOR SIDE OF THE RELAY, over a socket that is not a network.
@@ -54,11 +55,13 @@ describe('the seal guard', () => {
     ).not.toThrow()
   })
 
-  it('allows a remote relay once the channel is sealed', () => {
+  it('allows a remote relay once the door holds a seal key', () => {
+    // Keys, not a flag: a boolean would have let someone promise a seal that
+    // no key existed for, which is exactly the mistake the guard exists to stop.
     expect(() =>
       attachDoorToRelay(fakeSocket(), 'wss://cookrew.dev/relay', {
         slug: 'x',
-        sealed: true,
+        seal: { privateKey: generateSealKeyPair().privateKey, name: '@drej/x' },
         handle: async () => ({ status: 200, headers: {} })
       })
     ).not.toThrow()

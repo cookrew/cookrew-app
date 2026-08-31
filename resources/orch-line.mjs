@@ -32,10 +32,45 @@ const arg = (name, fallback = undefined) => {
   const at = process.argv.indexOf(`--${name}`)
   return at >= 0 ? process.argv[at + 1] : fallback
 }
-const origin = arg('origin')
-const slug = arg('slug')
+/**
+ * A DOOR REACHED THROUGH THE RELAY, rather than dialled directly.
+ *
+ * `--door @handle/team` means this team is served from a machine that cannot
+ * be dialled, and Cookrew is carrying the call. The app runs the caller's end
+ * on loopback and everything below is unchanged — the same sign-in, the same
+ * line, the same keystrokes — because the relay is a transport and not a
+ * second protocol.
+ *
+ * THE PORT IS RESOLVED HERE, not stored in this card's command. It changes
+ * every time the app restarts, so a command that pinned one would be a card
+ * that silently stopped working the next morning. A missing file means Cookrew
+ * is not running, which is worth saying plainly rather than as a refused
+ * connection.
+ */
+const door = arg('door')
+let origin = arg('origin')
+let slug = arg('slug')
+if (door) {
+  if (!/^@[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]*$/.test(door)) {
+    console.error(`not a door name: ${door}`)
+    process.exit(2)
+  }
+  let port = 0
+  try {
+    port = JSON.parse(readFileSync(path.join(homedir(), '.cookrew', 'relay-proxy.json'), 'utf8')).port
+  } catch {
+    port = 0
+  }
+  if (!port) {
+    console.error('Cookrew is not running, so this team cannot be reached right now.')
+    process.exit(3)
+  }
+  origin = `http://127.0.0.1:${port}`
+  slug = door
+}
 if (!origin || !slug) {
   console.error('usage: orch-line --origin <http://host:port> --slug <slug> [--name label]')
+  console.error('   or: orch-line --door @handle/team [--name label]')
   process.exit(2)
 }
 const label = arg('name', slug)
@@ -69,9 +104,12 @@ const host = base.host.replace(/[^a-z0-9.-]/gi, '_')
 const keyDir = path.join(homedir(), '.cookrew', 'caller-keys')
 const keyFileFor = (serviceId) =>
   path.join(keyDir, `${(serviceId.replace(/[^a-z0-9._-]/gi, '_').slice(0, 96) || 'unknown-service')}.json`)
+// Sanitised, because a relayed door's slug is `@handle/team` — a raw slash
+// here would name a directory that does not exist instead of a file.
+const legacyName = `${host}-${slug.replace(/[^a-z0-9._-]/gi, '_')}.json`
 const legacyKeyFiles = [
-  path.join(keyDir, `${host}-${slug}.json`),
-  path.join(homedir(), '.cookrew', 'crew-keys', `${host}-${slug}.json`)
+  path.join(keyDir, legacyName),
+  path.join(homedir(), '.cookrew', 'crew-keys', legacyName)
 ]
 
 function readKey(file) {

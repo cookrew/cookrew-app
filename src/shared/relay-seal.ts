@@ -217,6 +217,145 @@ export function acceptSeal(
   }
 }
 
+/**
+ * A REQUEST BODY, sealed with no round trip.
+ *
+ * The handshake above rides open→head and costs nothing extra for a GET,
+ * because a GET has nothing to send first. A POST does: its body would have to
+ * wait for the door's ephemeral to arrive, and that wait is a round trip added
+ * to every prompt someone submits. So a body is sealed to the door's LONG-TERM
+ * key instead, which needs nothing from the door.
+ *
+ * THE HONEST COST, stated where it is paid: this half is NOT forward secret.
+ * Someone who steals a door's long-term key later, and who also recorded the
+ * traffic, can read the prompts — not the replies, which use the ephemeral
+ * channel. The upgrade is a rotating pre-key published in the door record;
+ * until then the asymmetry is real and is the price of not making every ask
+ * wait for a round trip.
+ */
+export function sealToDoor(
+  doorKey: SealPublicKey,
+  info: string,
+  plaintext: string
+): { e: SealPublicKey; sealed: string } {
+  const ephemeral = generateSealKeyPair()
+  const shared = diffieHellman({
+    privateKey: privateOf(ephemeral.privateKey),
+    publicKey: publicOf(doorKey)
+  })
+  return {
+    e: ephemeral.publicKey,
+    // Sequence 0 and thrown away: this key seals exactly one message, so a
+    // counter would have nothing to count.
+    sealed: channel(bodyKey(shared, info)).seal(plaintext)
+  }
+}
+
+/** Open a body sealed to this door. Null on anything that does not verify. */
+export function openFromCaller(
+  doorPrivateKey: string,
+  info: string,
+  e: SealPublicKey,
+  sealed: string
+): string | null {
+  try {
+    const shared = diffieHellman({
+      privateKey: privateOf(doorPrivateKey),
+      publicKey: publicOf(e)
+    })
+    return channel(bodyKey(shared, info)).open(sealed, 0)
+  } catch {
+    return null
+  }
+}
+
+/** Separate label from the channel keys: one secret must never do two jobs. */
+function bodyKey(shared: Buffer, info: string): Buffer {
+  return Buffer.from(
+    hkdfSync('sha256', shared, Buffer.alloc(0), Buffer.from(`cookrew-relay/1 body ${info}`), KEY_BYTES)
+  )
+}
+
+/**
+ * THE REQUEST ENVELOPE — the wire names, in one place, for both sides.
+ *
+ * WHAT THE RELAY STILL SEES, said plainly so nobody has to infer it: the shape
+ * of an exchange. Method, path, status, byte sizes and timing. It does NOT see
+ * headers — which carry the caller's Bearer and the payment header — nor
+ * request bodies, nor a single byte of the reply.
+ *
+ * The path stays readable on purpose: the relay refuses anything that is not a
+ * door path, and giving up that containment to hide a route name from our own
+ * hub would be a bad trade. A route name is not a conversation.
+ */
+export const SEAL_EPHEMERAL = 'x-seal-e'
+export const SEAL_KEY = 'x-seal-k'
+export const SEAL_HEADERS = 'x-seal-h'
+
+/**
+ * Seal a request's headers to the door, and carry the handshake's ephemeral.
+ *
+ * Two public values, doing two different jobs: `SEAL_EPHEMERAL` starts the
+ * forward-secret channel the REPLY will use, and `SEAL_KEY` is a throwaway that
+ * seals these headers right now — because there is nothing to wait for and
+ * waiting is what would be felt.
+ */
+export function packRequest(
+  doorKey: SealPublicKey,
+  info: string,
+  ephemeral: SealPublicKey,
+  headers: Record<string, string>
+): Record<string, string> {
+  const sealed = sealToDoor(doorKey, info, JSON.stringify(headers))
+  return {
+    [SEAL_EPHEMERAL]: ephemeral,
+    [SEAL_KEY]: sealed.e,
+    [SEAL_HEADERS]: sealed.sealed
+  }
+}
+
+/** Door side: the caller's real headers, and the hello to answer. */
+export function openRequest(
+  doorPrivateKey: string,
+  info: string,
+  wire: Record<string, string>
+): { headers: Record<string, string>; hello: SealHello } | null {
+  const e = wire[SEAL_EPHEMERAL]
+  const key = wire[SEAL_KEY]
+  const sealed = wire[SEAL_HEADERS]
+  if (!e || !key || !sealed) return null
+  const headers = asHeaders(openFromCaller(doorPrivateKey, info, key, sealed))
+  return headers === null ? null : { headers, hello: { e } }
+}
+
+/** A request body, sealed to the door. Same no-round-trip bargain as above. */
+export function packBody(doorKey: SealPublicKey, info: string, body: string): string {
+  const sealed = sealToDoor(doorKey, info, body)
+  return `${sealed.e}.${sealed.sealed}`
+}
+
+export function openBody(doorPrivateKey: string, info: string, wire: string): string | null {
+  const dot = wire.indexOf('.')
+  if (dot < 1) return null
+  return openFromCaller(doorPrivateKey, info, wire.slice(0, dot), wire.slice(dot + 1))
+}
+
+function asHeaders(value: string | null): Record<string, string> | null {
+  if (value === null) return null
+  try {
+    const parsed: unknown = JSON.parse(value)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
+    const out: Record<string, string> = {}
+    for (const [key, val] of Object.entries(parsed)) {
+      if (typeof val !== 'string') return null
+      out[key.toLowerCase()] = val
+    }
+    return out
+  } catch {
+    return null
+  }
+}
+
 /** Do two channels hold the same key? For tests and for a health probe. */
 export function sameSecret(a: SealedPair, b: SealedPair): boolean {
   const probe = a.tx.seal('probe')

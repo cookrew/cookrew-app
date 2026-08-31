@@ -33,6 +33,7 @@ import { DEFAULT_TERMS_CONFIG } from './terms'
 import { FilePaymentNonces } from './payment-nonces'
 import { devFacilitator } from './facilitator-dev'
 import { ReceiptStore } from './receipts'
+import { DoorStore } from './doors'
 import { buildManifest, signManifest } from '../../src/main/preset-publish'
 import { scrubForPublish } from '../../src/main/preset-scrub'
 import type { TeamSnapshot } from '../../src/main/teams'
@@ -180,6 +181,14 @@ createRegistry({
   identity,
   pricing,
   dev: true,
+  // R30. The directory of teams someone is SERVING, and the relay that carries
+  // calls to the ones that cannot be dialled. Both on in the dev binary because
+  // the whole point of it is to drive the real path end to end.
+  // Dev: it lists doors on a localhost relay, which a production registry
+  // refuses because "anyone with the link" would not be true of them.
+  doors: new DoorStore(DATA, { allowPrivate: true }),
+  relay: true,
+  note: (message) => console.error(message),
   authorize: makeAuthorize(store, identity, pricing)
 }).listen(PORT, () => {
   // Print the ORIGIN, not a different spelling of the same port. The old banner

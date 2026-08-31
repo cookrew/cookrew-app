@@ -8,6 +8,7 @@ import {
   doorPath,
   isPrivateAddress,
   validDoorAddress,
+  validRelayAddress,
   type DoorInput
 } from '../registry/src/doors'
 
@@ -188,12 +189,19 @@ describe('a door says who can actually open its link', () => {
 
   it('refuses to list a private address as reachable by anyone', () => {
     const store = new DoorStore(dir)
-    for (const transport of ['public', 'relay', 'tailnet'] as const) {
+    for (const transport of ['public', 'tailnet'] as const) {
       expect(store.register('drej', door({ transport })), transport).toEqual({
         ok: false,
         reason: 'bad-face'
       })
     }
+    // A RELAYED door is refused earlier and harder: its address may only ever
+    // be its own published name, so there is no address of the owner's to
+    // record — private or otherwise.
+    expect(store.register('drej', door({ transport: 'relay' }))).toEqual({
+      ok: false,
+      reason: 'bad-address'
+    })
     // The same address IS listable when it says what it is.
     expect(store.register('drej', door({ transport: 'lan' })).ok).toBe(true)
   })
@@ -218,5 +226,74 @@ describe('a door says who can actually open its link', () => {
     ]) {
       expect(isPrivateAddress(pub), pub).toBe(false)
     }
+  })
+})
+
+describe('a relayed door publishes a name, not a place', () => {
+  const relayed = (over: Partial<DoorInput> = {}): DoorInput => ({
+    handle: 'drej',
+    name: 'cookrew-alpha',
+    title: 'COOKREW Alpha',
+    door: 'Pilot',
+    agents: 3,
+    address: 'https://cookrew.dev/@drej/cookrew-alpha',
+    transport: 'relay',
+    access: 'paid',
+    priceUsd: '2.50',
+    rails: ['x402'],
+    sealKey: 'MCowBQYDK2VuAyEApz6yO0AbCdEfGhIjKlMnOpQrStUvWxYz0123456789ab',
+    ...over
+  })
+
+  it('records the relay’s own URL and nothing about the owner', () => {
+    const store = new DoorStore(dir)
+    const out = store.register('drej', relayed())
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    // The owner is on a laptop behind a router. Publishing where that laptop
+    // actually is would put their home network in a public directory, for a
+    // machine nobody can dial anyway.
+    const recorded = JSON.stringify(out.door)
+    expect(recorded).not.toContain('192.168')
+    expect(recorded).not.toContain('8639')
+    expect(out.door.address).toBe('https://cookrew.dev/@drej/cookrew-alpha')
+  })
+
+  it('refuses an address that is not exactly this door’s name', () => {
+    const store = new DoorStore(dir)
+    for (const address of [
+      'https://cookrew.dev/@ana/cookrew-alpha',
+      'https://cookrew.dev/@drej/other-team',
+      'https://cookrew.dev/cookrew-alpha',
+      'http://192.168.2.40:8639/cookrew-alpha',
+      'https://cookrew.dev/@drej/cookrew-alpha?x=1'
+    ]) {
+      expect(store.register('drej', relayed({ address })), address).toEqual({
+        ok: false,
+        reason: 'bad-address'
+      })
+    }
+  })
+
+  it('refuses a relayed door with no key to pin', () => {
+    // Unpinned, the relay carrying the conversation could stand in the middle
+    // of it. A listing without the key would ask callers to trust that blindly.
+    const store = new DoorStore(dir)
+    expect(store.register('drej', relayed({ sealKey: undefined }))).toEqual({
+      ok: false,
+      reason: 'bad-face'
+    })
+    expect(store.register('drej', relayed({ sealKey: 'short' }))).toEqual({
+      ok: false,
+      reason: 'bad-face'
+    })
+  })
+
+  it('a relay address is this door’s path, on any origin', () => {
+    expect(validRelayAddress('https://cookrew.dev/@drej/alpha', 'drej', 'alpha')).toBe(true)
+    // A local registry is a legitimate origin; the PATH is what is pinned.
+    expect(validRelayAddress('http://localhost:8791/@drej/alpha', 'drej', 'alpha')).toBe(true)
+    expect(validRelayAddress('https://cookrew.dev/@drej/beta', 'drej', 'alpha')).toBe(false)
+    expect(validRelayAddress('not a url', 'drej', 'alpha')).toBe(false)
   })
 })

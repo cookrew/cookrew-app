@@ -11,6 +11,7 @@ import type { IdentityService, TokenScope } from './identity'
 import type { Terms } from './terms'
 import type { PaymentFailure } from './payment'
 import { DoorStore, doorPath, type DoorInput } from './doors'
+import { createRelayHttp, type RelayHttp } from './relay-http'
 import type { ServerResponse } from 'node:http'
 
 /**
@@ -68,6 +69,18 @@ export interface RegistryDeps {
    * away in production.
    */
   dev?: boolean
+  /**
+   * THE RELAY. Present → this deployment also CARRIES calls to doors that
+   * cannot be dialled, instead of only listing where they are.
+   *
+   * Separate from `doors` on purpose: a directory that merely publishes
+   * addresses holds nothing of anyone's, while a relay holds live connections
+   * and other people's traffic. Those are different things to operate and
+   * different things to be trusted with, so they are different flags.
+   */
+  relay?: boolean
+  /** Operational notes — a refused stream, a name already held. Never a body. */
+  note?: (message: string) => void
 }
 
 function defaultAuthorize(store: RegistryStore): (id: string) => Verdict {
@@ -115,10 +128,21 @@ export function createRegistry(deps: RegistryDeps): Server {
     }
   }
 
+  const relay: RelayHttp | null = deps.relay
+    ? createRelayHttp({ identity: deps.identity, log: deps.note })
+    : null
+
   return createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://registry.local')
     const method = request.method ?? 'GET'
     const parts = url.pathname.split('/').filter(Boolean)
+
+    // ── THE RELAY, first ──────────────────────────────────────────────────
+    //
+    // Ahead of every other route because its connections are long-lived and
+    // must not be delayed behind anything, and because it owns its whole path
+    // prefix: nothing under /v1/relay is served by the rest of this file.
+    if (relay && relay.handle(request, response, parts, url)) return
 
     // GET /install/:presetId — R21 Option A, the page for a reader with no app.
     //
@@ -199,7 +223,13 @@ export function createRegistry(deps: RegistryDeps): Server {
       parts[0] === 'v1' &&
       parts[1] === 'doors'
     ) {
-      const found = deps.doors.get(decodeURIComponent(parts[2]), decodeURIComponent(parts[3]))
+      // The @ is optional here because the canonical path a door is PUBLISHED
+      // at carries one — /@drej/alpha — and a client that looked up the thing
+      // it was handed would otherwise be told it does not exist.
+      const found = deps.doors.get(
+        decodeURIComponent(parts[2]).replace(/^@/, ''),
+        decodeURIComponent(parts[3])
+      )
       // A door nobody registered and a handle that never existed answer the
       // same, so the directory cannot be used to enumerate owners.
       if (!found) {
@@ -486,10 +516,24 @@ async function handleDoorRegistration(
     json(response, 400, { error: 'malformed' })
     return
   }
-  const input = body.value as { assertion?: unknown; door?: unknown }
+  const input = body.value as { assertion?: unknown; door?: unknown; withdraw?: unknown }
+  // No assertion → a challenge, the same ladder every other gated route here
+  // climbs. Without it a client had to go and get one from an unrelated route,
+  // which is how a ceremony ends up being started in two different places.
+  if (input.assertion === undefined) {
+    json(response, 401, { error: 'unidentified', challenge: identity.challenge() })
+    return
+  }
   const asserted = identity.assert(input.assertion as never, 'download')
   if (!asserted.ok) {
     json(response, 401, { error: 'unidentified' })
+    return
+  }
+  // WITHDRAWING is a listing decision, not a lock: the door keeps working for
+  // anyone holding its address. Only the handle that registered it may make it.
+  if (typeof input.withdraw === 'string') {
+    const gone = doors.withdraw(asserted.sub, input.withdraw)
+    json(response, gone ? 200 : 404, gone ? { ok: true } : { error: 'not_found' })
     return
   }
   const result = doors.register(asserted.sub, input.door as DoorInput)

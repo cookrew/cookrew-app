@@ -5,6 +5,14 @@ import {
   type RelayFrame,
   type StreamId
 } from '../shared/relay-frame'
+import {
+  acceptSeal,
+  openBody,
+  openRequest,
+  SEAL_EPHEMERAL,
+  SEAL_HEADERS,
+  type SealedPair
+} from '../shared/relay-seal'
 
 /**
  * THE DOOR SIDE OF THE RELAY.
@@ -62,20 +70,32 @@ export interface RelayDoorDeps {
     body: string
   }): Promise<RelayResponse>
   /**
-   * THE SEAL, and the reason this is a parameter rather than a default.
+   * THE SEAL, and the reason it is keys rather than a flag.
    *
-   * These frames are plaintext. Inside the door's own process that is fine;
-   * on cookrew.dev it is not, because the product already promises "Cookrew
-   * never sends your conversation anywhere else". Slice 2 puts an end-to-end
-   * channel between the caller and the door — both of which are Cookrew — and
-   * the relay keeps working unchanged while carrying bytes it cannot read.
+   * A relay terminates TLS on both hops, so HTTPS alone protects the
+   * conversation from the network and not from the relay — while the product
+   * promises "Cookrew never sends your conversation anywhere else". With these
+   * keys the relay carries bytes it cannot read, and that sentence stays true.
    *
-   * Until then `sealed` is false and this client refuses any relay that is not
-   * loopback, so the transport cannot be pointed at a public host by
-   * configuration alone and quietly break the claim.
+   * Without them this client REFUSES any relay that is not loopback, so the
+   * transport cannot be pointed at a public host by configuration alone and
+   * quietly break the claim. A boolean would have let it: someone could promise
+   * a seal that no key existed for.
    */
-  sealed?: boolean
+  seal?: {
+    /** The door's long-term X25519 private key. Never leaves this process. */
+    privateKey: string
+    /** The published name the caller sealed to. Binds a channel to one door. */
+    name: string
+  }
   log?: (message: string) => void
+}
+
+/** One relayed request, after the seal comes off. */
+interface DoorRequest {
+  method: string
+  path: string
+  headers: Record<string, string>
 }
 
 /** Is this relay one where plaintext frames stay on this machine? */
@@ -102,7 +122,7 @@ export function attachDoorToRelay(
   relayUrl: string,
   deps: RelayDoorDeps
 ): () => void {
-  if (deps.sealed !== true && !isLoopbackRelay(relayUrl)) {
+  if (deps.seal === undefined && !isLoopbackRelay(relayUrl)) {
     throw new RelayRefused(
       'refusing to relay through a remote host without an end-to-end sealed channel'
     )
@@ -111,6 +131,8 @@ export function attachDoorToRelay(
   /** Request bodies still arriving, and stream cancels for answers going out. */
   const pendingBody = new Map<StreamId, string>()
   const cancels = new Map<StreamId, () => void>()
+  /** One sealed channel per exchange, torn down with it. */
+  const seals = new Map<StreamId, { channel: SealedPair; accept: string }>()
   let closed = false
 
   const send = (frame: RelayFrame): void => {
@@ -118,20 +140,62 @@ export function attachDoorToRelay(
     socket.send(encodeFrame(frame))
   }
 
-  const abort = (id: StreamId, reason: string): void => {
+  const forget = (id: StreamId): void => {
     pendingBody.delete(id)
+    openRequests.delete(id)
+    seals.delete(id)
+  }
+
+  const abort = (id: StreamId, reason: string): void => {
     cancels.get(id)?.()
     cancels.delete(id)
+    forget(id)
     send({ t: 'abort', id, reason })
   }
 
-  const answer = async (
-    id: StreamId,
-    method: string,
-    path: string,
-    headers: Record<string, string>,
-    body: string
-  ): Promise<void> => {
+  /**
+   * Take the seal off a request, and start the channel its answer will use.
+   *
+   * Null means the caller could not seal to this door's key — which is what a
+   * relay standing in the middle looks like from here, and also what an
+   * outdated pinned key looks like. Neither may be answered.
+   */
+  const unwrap = (frame: Extract<RelayFrame, { t: 'open' }>): DoorRequest | null => {
+    if (!deps.seal) return { method: frame.method, path: frame.path, headers: frame.headers }
+    const opened = openRequest(deps.seal.privateKey, deps.seal.name, frame.headers)
+    if (!opened) return null
+    const answered = acceptSeal(deps.seal.privateKey, opened.hello, deps.seal.name)
+    seals.set(frame.id, { channel: answered.channel, accept: answered.accept.e })
+    return { method: frame.method, path: frame.path, headers: opened.headers }
+  }
+
+  const sendHead = (id: StreamId, status: number, headers: Record<string, string>): void => {
+    const sealed = seals.get(id)
+    if (!sealed) {
+      send({ t: 'head', id, status, headers })
+      return
+    }
+    // The status stays readable — the relay already sees the path, and hiding
+    // one without the other buys nothing. The headers do not: they carry the
+    // session the caller was just granted.
+    send({
+      t: 'head',
+      id,
+      status,
+      headers: {
+        [SEAL_EPHEMERAL]: sealed.accept,
+        [SEAL_HEADERS]: sealed.channel.tx.seal(JSON.stringify(headers))
+      }
+    })
+  }
+
+  const sendChunk = (id: StreamId, data: string): void => {
+    const sealed = seals.get(id)
+    send({ t: 'chunk', id, data: sealed ? sealed.channel.tx.seal(data) : data })
+  }
+
+  const answer = async (id: StreamId, request: DoorRequest, body: string): Promise<void> => {
+    const { method, path, headers } = request
     let result: RelayResponse
     try {
       result = await deps.handle({ method, path: `/${deps.slug}${path}`, headers, body })
@@ -142,19 +206,21 @@ export function attachDoorToRelay(
       abort(id, 'door-error')
       return
     }
-    send({ t: 'head', id, status: result.status, headers: result.headers })
+    sendHead(id, result.status, result.headers)
     if (result.stream) {
       const cancel = result.stream(
-        (chunk) => send({ t: 'chunk', id, data: chunk }),
+        (chunk) => sendChunk(id, chunk),
         () => {
           cancels.delete(id)
+          forget(id)
           send({ t: 'end', id })
         }
       )
       cancels.set(id, cancel)
       return
     }
-    if (result.body) send({ t: 'chunk', id, data: result.body })
+    if (result.body) sendChunk(id, result.body)
+    forget(id)
     send({ t: 'end', id })
   }
 
@@ -172,14 +238,19 @@ export function attachDoorToRelay(
           abort(frame.id, 'not-a-door-path')
           return
         }
-        pendingBody.set(frame.id, '')
+        const request = unwrap(frame)
+        if (!request) {
+          log('relay: refused a request that was not sealed to this door')
+          abort(frame.id, 'unsealable')
+          return
+        }
         // A body-less request answers immediately; anything with a body waits
         // for its `done`. GET is the common case and must not wait.
         if (frame.method === 'GET' || frame.method === 'HEAD') {
-          pendingBody.delete(frame.id)
-          void answer(frame.id, frame.method, frame.path, frame.headers, '')
+          void answer(frame.id, request, '')
         } else {
-          openRequests.set(frame.id, frame)
+          openRequests.set(frame.id, request)
+          pendingBody.set(frame.id, '')
         }
         return
       }
@@ -190,14 +261,19 @@ export function attachDoorToRelay(
         const next = so_far + frame.data
         if (next.length > MAX_BODY) {
           abort(frame.id, 'body-too-large')
-          openRequests.delete(frame.id)
           return
         }
         pendingBody.set(frame.id, next)
         if (frame.done) {
           openRequests.delete(frame.id)
           pendingBody.delete(frame.id)
-          void answer(frame.id, open.method, open.path, open.headers, next)
+          const body = deps.seal ? openBody(deps.seal.privateKey, deps.seal.name, next) : next
+          if (body === null) {
+            log('relay: refused a body that was not sealed to this door')
+            abort(frame.id, 'unsealable')
+            return
+          }
+          void answer(frame.id, open, body)
         }
         return
       }
@@ -207,8 +283,7 @@ export function attachDoorToRelay(
         // how closing a card stops the line rather than leaking it.
         cancels.get(frame.id)?.()
         cancels.delete(frame.id)
-        openRequests.delete(frame.id)
-        pendingBody.delete(frame.id)
+        forget(frame.id)
         return
       }
       default:
@@ -216,7 +291,7 @@ export function attachDoorToRelay(
     }
   })
 
-  const openRequests = new Map<StreamId, Extract<RelayFrame, { t: 'open' }>>()
+  const openRequests = new Map<StreamId, DoorRequest>()
 
   socket.onClose(() => {
     closed = true
@@ -224,12 +299,14 @@ export function attachDoorToRelay(
     cancels.clear()
     openRequests.clear()
     pendingBody.clear()
+    seals.clear()
   })
 
   return () => {
     closed = true
     for (const cancel of cancels.values()) cancel()
     cancels.clear()
+    seals.clear()
     socket.close()
   }
 }
