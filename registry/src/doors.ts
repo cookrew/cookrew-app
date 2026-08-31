@@ -23,6 +23,33 @@ import path from 'node:path'
  * second place to be refused, with a different answer.
  */
 
+/**
+ * HOW a door is reachable — the pluggable seam, named.
+ *
+ * The transport is recorded rather than inferred because it is the answer to
+ * the only question an owner should ever be asked about serving: WHO CAN OPEN
+ * THIS LINK. A door on a laptop's own network and a door behind a relay are
+ * both "serving", and telling a person they are the same is how someone shares
+ * a link that cannot possibly work for the person they sent it to.
+ *
+ *   lan      this network only — the address is a private one
+ *   tailnet  the owner's tailnet; the caller must be on it
+ *   public   the owner made it reachable themselves (their name, their cert)
+ *   relay    reached through cookrew.dev, which carries the bytes
+ *
+ * `relay` is the one the product will hand out by default; the rest exist so
+ * the ones we do not build first are not a special case when they arrive.
+ */
+export type DoorTransport = 'lan' | 'tailnet' | 'public' | 'relay'
+
+/** Who a door's link actually works for. Ordered widest-last. */
+export const DOOR_REACH: Record<DoorTransport, string> = {
+  lan: 'People on the same network as you',
+  tailnet: 'People on your tailnet',
+  public: 'Anyone with the link',
+  relay: 'Anyone with the link'
+}
+
 /** How a caller reaches a door, and what it costs to knock. */
 export interface DoorRecord {
   /** The owner's registry handle, without the @. */
@@ -42,6 +69,8 @@ export interface DoorRecord {
    * able to point a caller's payment at a door of its choosing.
    */
   address: string
+  /** Which of the four ways this address became reachable. */
+  transport: DoorTransport
   access: 'account' | 'paid'
   priceUsd?: string
   /** Stable rail identifiers only; no quote or config detail is stored. */
@@ -80,7 +109,32 @@ export function validDoorAddress(value: string): boolean {
   }
 }
 
+/**
+ * Is this host one only the owner's own network can route to?
+ *
+ * Loopback, RFC1918, link-local and .local. Not a security boundary — the
+ * registry stores addresses it is given — but a claim check: it is what stops
+ * a door from being listed as reachable by anyone while pointing at 192.168.
+ */
+export function isPrivateAddress(value: string): boolean {
+  let host = ''
+  try {
+    host = new URL(value).hostname.toLowerCase()
+  } catch {
+    return true
+  }
+  if (host === 'localhost' || host.endsWith('.local')) return true
+  if (/^127\./.test(host) || host === '::1' || host === '[::1]') return true
+  if (/^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) return true
+  const seventeen = /^172\.(\d{1,3})\./.exec(host)
+  return seventeen !== null && Number(seventeen[1]) >= 16 && Number(seventeen[1]) <= 31
+}
+
 function validFace(input: DoorInput): boolean {
+  if (!(input.transport in DOOR_REACH)) return false
+  // A private address cannot be reached by "anyone", and a listing that said
+  // so would be handing out a link that fails for everyone it was shared with.
+  if (input.transport !== 'lan' && isPrivateAddress(input.address)) return false
   if (input.title.trim().length === 0 || input.title.length > 64) return false
   if (input.door.trim().length === 0 || input.door.length > 64) return false
   if (!Number.isInteger(input.agents) || input.agents < 0 || input.agents > 999) return false

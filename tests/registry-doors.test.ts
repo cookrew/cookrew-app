@@ -2,7 +2,14 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { DoorStore, doorPath, validDoorAddress, type DoorInput } from '../registry/src/doors'
+import {
+  DOOR_REACH,
+  DoorStore,
+  doorPath,
+  isPrivateAddress,
+  validDoorAddress,
+  type DoorInput
+} from '../registry/src/doors'
 
 /**
  * THE DIRECTORY OF SERVED TEAMS (R30 step 1).
@@ -29,6 +36,7 @@ const door = (over: Partial<DoorInput> = {}): DoorInput => ({
   door: 'Pilot',
   agents: 3,
   address: 'http://192.168.2.40:8639/cookrew-alpha',
+  transport: 'lan',
   access: 'paid',
   priceUsd: '2.50',
   rails: ['x402', 'stripe'],
@@ -157,5 +165,58 @@ describe('the directory', () => {
 
   it('the canonical path is one owner, one name', () => {
     expect(doorPath('drej', 'cookrew-alpha')).toBe('/@drej/cookrew-alpha')
+  })
+})
+
+describe('a door says who can actually open its link', () => {
+  /**
+   * The transport is not bookkeeping. It is the answer to the only question an
+   * owner should be asked about serving, and the card that hands out a link
+   * has to be able to say it — a person who shares a 192.168 address believing
+   * it is public has been told something false by the product.
+   */
+  it('every transport has a reach sentence, in the reader’s words not ours', () => {
+    for (const [transport, reach] of Object.entries(DOOR_REACH)) {
+      expect(reach.length, transport).toBeGreaterThan(8)
+      // OUR tokens must not surface. "tailnet" is deliberately NOT banned: to
+      // someone who turned Tailscale on it is their own product's noun and the
+      // most precise word available, where "lan" and "relay" are ours.
+      expect(reach, transport).not.toMatch(/\b(lan|relay|transport|nat|proxy)\b/i)
+    }
+    expect(DOOR_REACH.lan).not.toBe(DOOR_REACH.public)
+  })
+
+  it('refuses to list a private address as reachable by anyone', () => {
+    const store = new DoorStore(dir)
+    for (const transport of ['public', 'relay', 'tailnet'] as const) {
+      expect(store.register('drej', door({ transport })), transport).toEqual({
+        ok: false,
+        reason: 'bad-face'
+      })
+    }
+    // The same address IS listable when it says what it is.
+    expect(store.register('drej', door({ transport: 'lan' })).ok).toBe(true)
+  })
+
+  it('knows which hosts only the owner can route to', () => {
+    for (const priv of [
+      'http://127.0.0.1:8639/x',
+      'http://192.168.2.40:8639/x',
+      'http://10.0.0.4:8639/x',
+      'http://172.16.5.5:8639/x',
+      'http://172.31.0.1:8639/x',
+      'http://169.254.1.1:8639/x',
+      'http://mac.local:8639/x',
+      'http://localhost:8639/x'
+    ]) {
+      expect(isPrivateAddress(priv), priv).toBe(true)
+    }
+    for (const pub of [
+      'https://cookrew.dev/x',
+      'https://tenonworkspace-1994.tailc542fb.ts.net/x',
+      'http://172.32.0.1:8639/x'
+    ]) {
+      expect(isPrivateAddress(pub), pub).toBe(false)
+    }
   })
 })
