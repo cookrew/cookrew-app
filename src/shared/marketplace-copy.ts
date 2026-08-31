@@ -650,6 +650,27 @@ export const MKT_SERVE = {
   /** The hand-off: what the owner DOES with the address they were just shown. */
   'mkt.serve.live.handoff':
     'Hand this address to a caller — in their Cookrew it goes under TERMINAL → + IMPORT.',
+  /**
+   * WHO CAN OPEN THIS LINK — the one question an owner should be asked about
+   * serving, and the one the card could not answer.
+   *
+   * It is about REACHING the door, never about getting in: the sign-in, the
+   * price and the owner's own lending limit are all still ahead. Blurring the
+   * two would tell someone their paid door is open to anyone, which is a
+   * sentence about entitlement wearing the clothes of a sentence about
+   * networks.
+   *
+   * These say who, not how. The transport is ours to solve; "who can reach
+   * this?" is the owner's whole concern.
+   */
+  'mkt.serve.reach.lan': 'Only people on this network can open it.',
+  'mkt.serve.reach.tailnet': 'Only people on your tailnet can open it.',
+  'mkt.serve.reach.public': 'Anyone with the link can open it.',
+  'mkt.serve.reach.relay': 'Anyone with the link can open it.',
+  /** Said beside the reach line when the door is not reachable from outside —
+   *  the fix, not a scolding, because the owner did nothing wrong. */
+  'mkt.serve.reach.narrow.why':
+    'Sending it further needs a way in from outside — turn on Tailscale, or serve it through cookrew.dev.',
   'mkt.serve.stop.action': 'STOP SERVING',
   'mkt.serve.stop.confirm':
     'Stop serving {templateName}? {n} workspaces end now, including any mid-call. The template stays on your shelf.',

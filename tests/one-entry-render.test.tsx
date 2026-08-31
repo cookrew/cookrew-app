@@ -15,6 +15,7 @@ import { ImportServedSheet } from '../src/renderer/src/ImportServedSheet'
 import { renderServedCrewFace, type CrewFace } from '../src/main/served-endpoints'
 import type { ServedPaymentRail } from '../src/shared/served-payment-rails'
 import { EMPTY_SERVED_PAYMENT_STATUS } from '../src/shared/served-payment-config'
+import { MKT_SERVE } from '../src/shared/marketplace-copy'
 import { PaymentSettingsSheet } from '../src/renderer/src/PaymentSettingsSheet'
 
 /**
@@ -197,6 +198,7 @@ describe('ServedTeamCard — who is on, on the thing you published', () => {
     access: 'paid',
     priceUsd: '2.50',
     paymentRails: ['x402', 'stripe'],
+    transport: 'lan' as const,
     address: 'http://192.168.1.20:8639/research-crew'
   }
 
@@ -375,5 +377,61 @@ describe('the retirements are real, not merely unmounted', () => {
     expect(dock).not.toContain('crew-chip')
     expect(dock).not.toContain('+ ADD BY LINK')
     expect(dock).toContain('+ IMPORT')
+  })
+})
+
+describe('the card says who can open the link it just gave you', () => {
+  /**
+   * The address was handed out with no indication of how far it carries, so a
+   * person could copy a 192.168 link and send it to another city. Reach is a
+   * fact ABOUT the link, and the moment it matters is the moment it is copied.
+   */
+  const served = (transport: ServedTeam['transport']): ServedTeam => ({
+    serviceId: 'svc-research-crew',
+    templateId: 'Research Crew',
+    slug: 'research-crew',
+    access: 'account',
+    address: 'http://192.168.1.20:8639/research-crew',
+    transport,
+    paymentRails: []
+  })
+
+  const render = (transport: ServedTeam['transport']): string =>
+    renderToStaticMarkup(
+      <ServedTeamCard
+        team={served(transport)}
+        door="Conductor"
+        paymentStatus={EMPTY_SERVED_PAYMENT_STATUS}
+        onConfigurePayments={noop}
+        onStopped={noop}
+        onClose={noop}
+      />
+    )
+
+  it('a private door says so, and says what would widen it', () => {
+    const html = render('lan')
+    expect(html).toContain('Only people on this network can open it.')
+    expect(html).toContain('turn on Tailscale')
+  })
+
+  it('a tailnet door names the tailnet, not the network', () => {
+    const html = render('tailnet')
+    expect(html).toContain('Only people on your tailnet can open it.')
+    expect(html).not.toContain('Only people on this network')
+  })
+
+  it('a door anyone can reach needs no explanation beside it', () => {
+    const html = render('relay')
+    expect(html).toContain('Anyone with the link can open it.')
+    expect(html).not.toContain('turn on Tailscale')
+  })
+
+  it('reach is about reaching, never about being let in', () => {
+    // The gate — sign-in, price, the owner's lending limit — is a different
+    // sentence in a different place; this line must not imply entitlement.
+    for (const transport of ['lan', 'tailnet', 'public', 'relay'] as const) {
+      const line = MKT_SERVE[`mkt.serve.reach.${transport}` as const]
+      expect(line, transport).not.toMatch(/free|pay|paid|price|sign in|account/i)
+    }
   })
 })
