@@ -407,8 +407,14 @@ function refreshTailnetNow(force = false): Promise<TailnetIdentity | null> {
   return pending
 }
 
-/** Return immediately from the last snapshot and refresh stale data behind it. */
-function cachedTailnet(): TailnetIdentity | null {
+/**
+ * Return immediately from the last snapshot and refresh stale data behind it.
+ *
+ * Exported because the SERVED address needs the same answer the phone gets: a
+ * door advertised on the LAN while a tailnet is up would hand out the narrower
+ * of two links the owner already has.
+ */
+export function cachedTailnet(): TailnetIdentity | null {
   if (Date.now() - tailnetCache.readAt >= TAILNET_TTL_MS) {
     void refreshTailnetNow().catch(() => undefined)
   }

@@ -7,6 +7,7 @@ import {
   servedPaymentRailsLabel
 } from '../../shared/marketplace-copy'
 import type { ServedPaymentRail } from '../../shared/served-payment-rails'
+import { reachesOutsiders, type ServeTransport } from '../../shared/serve-transport'
 import { readyPaymentRails, type ServedPaymentStatus } from '../../shared/served-payment-config'
 // The gs-* sheet primitives — stated by the wearer, not inherited from the
 // (retired) GrantPanel that used to carry this import.
@@ -40,6 +41,8 @@ export interface ServedTeam {
   access: 'account' | 'paid'
   priceUsd?: string
   address: string
+  /** How far that address carries — the card must be able to say. */
+  transport: ServeTransport
   paymentRails: readonly ServedPaymentRail[]
 }
 
@@ -126,6 +129,17 @@ export function ServedTeamCard({
             {copied ? 'COPIED ✓' : 'COPY LINK'}
           </button>
         </section>
+        {/* WHO CAN OPEN IT — beside the link, because it is a fact ABOUT the
+            link and the moment it matters is the moment someone copies it.
+            Reach only: the sign-in, the price and the lending limit are all
+            still ahead, and saying "anyone can open it" about a paid door
+            would be an entitlement claim wearing a network claim's clothes. */}
+        <p className="stc-reach">
+          {MKT_SERVE[`mkt.serve.reach.${team.transport}` as const]}
+          {!reachesOutsiders(team.transport) && (
+            <span className="stc-reach-why"> {MKT_SERVE['mkt.serve.reach.narrow.why']}</span>
+          )}
+        </p>
         <p className="gs-sub">
           {door === null
             ? priceLine

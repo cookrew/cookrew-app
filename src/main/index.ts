@@ -45,6 +45,7 @@ import { startSocketServer } from './socket-server'
 import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
 import {
+  cachedTailnet,
   startMobileServer,
   mobileUrls,
   mobileEndpointList,
@@ -191,6 +192,7 @@ import {
 } from './x402-rail'
 import { ServeRefused, type ServeAccess, type ServedTemplate } from './session-served'
 import { servedPaymentRails } from '../shared/served-payment-rails'
+import type { ServeTransport } from '../shared/serve-transport'
 import { PinStore } from './pin-store'
 import { rekeyPinsByUuid } from './pin-rekey'
 import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
@@ -510,15 +512,36 @@ const serving: Serving = wireServing({
 const servedCallers = new ServedCallers()
 
 /**
- * The address an owner hands out for a served crew — a LAN URL, because M1 has
- * no public domain and the honest thing to give someone is a link that actually
- * works from where they are. Loopback only when nothing else is up.
+ * The address an owner hands out for a served team, AND how far it carries.
+ *
+ * The two are one answer, which is why they are returned together. The card
+ * hands this string to a person who will send it to someone else, so the card
+ * has to be able to say who that someone can be — a LAN address shared with a
+ * colleague in another city is a link that cannot work, and the product used
+ * to give it out with no indication of that.
+ *
+ * The tailnet wins when it is up, for the same reason the phone's endpoint
+ * list puts it first: the owner already has the wider of two links, and
+ * advertising the narrower one would be choosing worse on their behalf. The
+ * relay (cookrew.dev) joins this function when it exists; nothing else has to
+ * change, because everything downstream reads the transport rather than
+ * guessing from the shape of the URL.
  */
-function servedAddress(slug: string): string {
+function servedReach(slug: string): { address: string; transport: ServeTransport } {
+  // MagicDNS name, never a raw tailnet IP: it survives re-auth, and it is the
+  // one a caller can actually type back to us.
+  const magic = cachedTailnet()?.magicDnsName
+  if (magic) {
+    return { address: `https://${magic}:${MOBILE_HTTPS_PORT}/${slug}`, transport: 'tailnet' }
+  }
   const lan = Object.values(networkInterfaces())
     .flatMap((list) => list ?? [])
     .find((net) => net.family === 'IPv4' && !net.internal)?.address
-  return `http://${lan ?? '127.0.0.1'}:${MOBILE_PORT}/${slug}`
+  return { address: `http://${lan ?? '127.0.0.1'}:${MOBILE_PORT}/${slug}`, transport: 'lan' }
+}
+
+function servedAddress(slug: string): string {
+  return servedReach(slug).address
 }
 
 function servedPaymentReturn(slug: string): string {
@@ -3630,7 +3653,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('serving:list', () =>
     serving.served.list().map((t) => ({
       ...t,
-      address: servedAddress(t.slug),
+      ...servedReach(t.slug),
       paymentRails: t.access === 'paid' ? servedPaymentRails(servedPaymentTerms(t)) : []
     }))
   )

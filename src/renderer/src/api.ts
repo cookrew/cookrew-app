@@ -20,6 +20,7 @@ import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
 import type { BoardRow, BoardSummary } from "../../shared/board";
 import type { VersionPinRecord } from "../../shared/version-pin";
 import type { ServedPaymentRail } from "../../shared/served-payment-rails";
+import type { ServeTransport } from "../../shared/serve-transport";
 import type {
   PaymentConfigReply,
   ServedPaymentStatus,
@@ -116,6 +117,8 @@ export interface CookrewApi {
       access: 'account' | 'paid';
       priceUsd?: string;
       address: string;
+      /** How far that address carries — see shared/serve-transport. */
+      transport: ServeTransport;
       paymentRails: readonly ServedPaymentRail[];
     }[]
   >;

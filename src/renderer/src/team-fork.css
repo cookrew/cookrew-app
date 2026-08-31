@@ -729,6 +729,16 @@
   font-family: var(--font-mono); font-size: 12px; padding: 5px 8px;
   border: 1.5px solid var(--violet); flex: 1; min-width: 0; word-break: break-all;
 }
+/* WHO CAN OPEN IT — a fact about the link, directly under the link. Quiet by
+   default; the "why" half only appears when the answer is narrow, because a
+   door anyone can reach needs no explanation. */
+.stc-reach {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.stc-reach-why { color: var(--dim); }
 .stc-sessions { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; }
 .stc-payment-gap { margin-top: 12px; padding: 10px 12px; border-left: 3px solid var(--rose); background: rgba(220, 38, 38, 0.08); }
 .stc-payment-gap p { margin: 0 0 8px; font-size: 12px; }
