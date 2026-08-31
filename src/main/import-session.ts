@@ -21,7 +21,29 @@ export interface ServeTarget {
   origin: string
   /** The slug the service is mounted under. */
   slug: string
+  /**
+   * The published name, `@handle/team`, when this door is REACHED THROUGH THE
+   * RELAY rather than dialled.
+   *
+   * The two are not variants of one address. A dialled door is a machine the
+   * caller can reach and its address says where; a relayed door is a machine
+   * nobody can reach and its name says who. Keeping them as separate fields
+   * rather than one clever string is what stops a relayed name from being
+   * pasted somewhere that will try to open a socket to it.
+   */
+  door?: string
 }
+
+/**
+ * Where a bare `@handle/team` is assumed to live.
+ *
+ * A name with no origin is not ambiguous in practice — it came from the one
+ * registry the product ships pointing at — but it IS a default, so it is
+ * written down once here instead of being spelled out at each call site.
+ */
+export const COOKREW_REGISTRY = 'https://cookrew.dev'
+
+const DOOR_NAME = /^@([a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?)\/([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)$/
 
 /** The public face `GET /<slug>/crew` answers with — what the owner published. */
 export interface ImportFace {
@@ -49,12 +71,31 @@ export interface ImportFace {
 export function parseServeAddress(link: string): ServeTarget | null {
   const trimmed = link.trim()
   if (trimmed.length === 0) return null
+  // A bare published name, which is what an owner says out loud and what the
+  // card on their canvas offers to copy.
+  if (trimmed.startsWith('@')) {
+    const bare = DOOR_NAME.exec(trimmed)
+    // Refused here rather than falling through, because falling through is not
+    // harmless: `@DREJ/alpha` parses as a URL with empty credentials and a host
+    // called DREJ, so a malformed NAME would quietly become an ADDRESS and the
+    // app would open a socket to whatever answers there.
+    return bare ? { origin: COOKREW_REGISTRY, slug: bare[2], door: trimmed } : null
+  }
+
   const candidate = /^https?:\/\//.test(trimmed) ? trimmed : `http://${trimmed}`
   try {
     const url = new URL(candidate)
     if (!['http:', 'https:'].includes(url.protocol)) return null
     if (url.username || url.password || url.search || url.hash) return null
     const segments = url.pathname.split('/').filter((part) => part.length > 0)
+    // https://cookrew.dev/@drej/alpha — a link someone was sent. The @ is what
+    // distinguishes it from a two-deep path on a door that IS dialable, and a
+    // dialled door is refused at exactly one segment.
+    if (segments.length === 2 && segments[0].startsWith('@')) {
+      const name = `${decodeURIComponent(segments[0])}/${decodeURIComponent(segments[1])}`
+      const parsed = DOOR_NAME.exec(name)
+      return parsed ? { origin: url.origin, slug: parsed[2], door: name } : null
+    }
     if (segments.length !== 1) return null
     const slug = segments[0]
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null
@@ -124,7 +165,13 @@ export function validateFace(value: unknown): ImportFace | null {
  * is supplied interactively in the live line, never persisted into node data.
  */
 export function orchLineCommand(script: string, target: ServeTarget, name: string): string {
-  const args = [script, '--origin', target.origin, '--slug', target.slug, '--name', name]
+  // A RELAYED DOOR CARRIES NO ADDRESS, and that is deliberate. The caller's end
+  // of the relay runs on a loopback port that changes with every app restart,
+  // so a command with a port baked into it is a card that works today and is
+  // dead tomorrow. The name is the durable thing; the card resolves the rest.
+  const args = target.door
+    ? [script, '--door', target.door, '--name', name]
+    : [script, '--origin', target.origin, '--slug', target.slug, '--name', name]
   return `node ${args.map(shellQuote).join(' ')}`
 }
 
