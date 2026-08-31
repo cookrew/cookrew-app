@@ -92,7 +92,6 @@ import { SessionRegistry } from './session-registry'
 import { LazyTerminalAttachments } from './lazy-terminal'
 import { planWorkspaceSwitch } from './workspace-switch'
 import { SwitchRunner } from './switch-runner'
-import { looksLikeInstallLink, presetIdFromInstallUrl } from './registry-install-link'
 import { terminalHasLiveWork } from './session-liveness'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { canonicalExternalUrl } from '../shared/external-url'
@@ -112,12 +111,7 @@ import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
 import { blocksResume, holderOf, liveSessionHolders, planHeldSessionFork } from './claude-live-session'
 import { createRestoreHandlers, registerRestoreIpc, RestoreHandlers } from './restore'
 import { withSessionLineage } from './session-lineage'
-import { registryHostHelp, resolveRegistryHosts } from '../shared/registry-host'
-import { RegistryHostSettings } from './registry-settings'
-import { publishPreset, type PayoutBinding, type PublishOutcome } from './publish-preset'
-import { pushToRegistry } from './registry-client'
 import { buildManifest, loadPublishingKey, signManifest } from './preset-publish'
-import { scrubForPublish } from './preset-scrub'
 import type { PresetPricing } from '../shared/preset-manifest'
 import { carrySessionToCwd } from './session-move'
 import { moveTerminalCwd } from './terminal-cwd'
@@ -197,11 +191,9 @@ import {
 } from './x402-rail'
 import { ServeRefused, type ServeAccess, type ServedTemplate } from './session-served'
 import { servedPaymentRails } from '../shared/served-payment-rails'
-import { PresetStore, isPresetId } from './preset-store'
 import { PinStore } from './pin-store'
 import { rekeyPinsByUuid } from './pin-rekey'
 import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
-import { planPresetImport } from './preset-import'
 import { TeamClipboard } from './team-clip'
 import { UNCOPYABLE_PHASES } from '../shared/turn'
 import { GitInfoCache, addWorktree } from './git'
@@ -224,8 +216,6 @@ app.commandLine.appendSwitch('force-gpu-mem-available-mb', '2048')
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const store = new WorkspaceStore()
-/** Installed marketplace presets — the dock's third chip family (§8). */
-const presetStore = new PresetStore()
 /** Version pins per terminal (§10) — what the rail's third marker class draws. */
 const pinStore = new PinStore()
 
@@ -2802,140 +2792,12 @@ function activeBrowserNode(browserId: string): BrowserNodeData | null {
 }
 
 /** Reflect real headless-page navigation/title state into the browser node. */
-/**
- * Registry hosts whose /install/<presetId> links this app understands (R21).
- *
- * Configured, never inferred: the app must not learn to trust a host because a
- * page it was showing claimed to be one. Empty by default, which recognises
- * nothing — the marketplace is not shipped yet, and an unconfigured registry
- * failing closed is the correct posture until it is.
- */
-/**
- * Publish a saved team — the one owner action, wired to the real primitives.
- *
- * This is the caller Tinker's H1 found missing. `checkPayoutAddress` runs
- * inside publishPreset, and publishPreset is reached from here, so the payout
- * verification is in force rather than merely written.
- *
- * The transport posts the shape registry/src/publish-routes.ts actually reads
- * — {manifest, team, teamName} — rather than a shape invented from the commit
- * message. The registry lives in this tree now, so there is no excuse for a
- * guessed contract.
- */
-async function publishSavedTeam(input: {
-  team: string
-  handle: string
-  pricing?: unknown
-  payout?: unknown
-}): Promise<PublishOutcome> {
-  const snapshot = teams.load(input.team)
-  if (!snapshot) {
-    return { ok: false, step: 'scrub', reason: `No saved team called '${input.team}'.` }
-  }
-  const key = loadPublishingKey()
-  return publishPreset(
-    {
-      hosts: registryHosts,
-      hostHelp: () => registryHostHelp(resolveRegistryHosts(registryHostInput()).rejected),
-      scrub: (team) => scrubForPublish(team as TeamSnapshot),
-      manifest: (built) => buildManifest(built as Parameters<typeof buildManifest>[0]),
-      sign: (manifest) => signManifest(manifest, key.privateKey),
-      push: (pushed) => pushToRegistry(pushed)
-    },
-    {
-      snapshot,
-      handle: input.handle,
-      ...(input.pricing !== undefined ? { pricing: input.pricing as PresetPricing } : {}),
-      ...(input.payout !== undefined ? { payout: input.payout as PayoutBinding } : {})
-    }
-  )
-}
-
-/** Installation-wide trust list; not workspace state, so it has its own file. */
-const registryHostSettings = new RegistryHostSettings()
-
-const registryHosts = (): string[] => resolveRegistryHosts(registryHostInput()).hosts
-
-/**
- * The inputs the host resolution reads. Split out so the refusal path and the
- * recognition path can never disagree about what is configured.
- */
-const registryHostInput = (): Parameters<typeof resolveRegistryHosts>[0] => ({
-  configured: process.env.COOKREW_REGISTRY_HOST ?? '',
-  settings: registryHostSettings.list(),
-  // A PACKAGED build recognises nothing it was not told to. Loopback exists
-  // only where a shipped app cannot carry it, so the journey is walkable in
-  // dev without the product ever trusting a host nobody chose.
-  packaged: app.isPackaged
-})
-
-/**
- * Why nothing is recognised, in words an owner can act on.
- *
- * The empty default was always deliberate; what was missing is that it never
- * said so. An install link whose only instruction cannot work is a dead end,
- * and a refusal without the fix is the same dead end with better manners.
- */
-const registryHostRefusal = (): string => registryHostHelp()
-
-/**
- * A browser card navigated to a marketplace install link (R21).
- *
- * The id is all that crosses. This does NOT install: main owns download,
- * signature verification and the review sheet, and the user owns the decision
- * — a page must never be able to install by being navigated to, only to ask.
- * The ask is announced on the ordinary event stream, so the toast layer, the
- * event panel and the phone all see it without a private channel.
- */
-function noteRegistryInstallLink(browserId: string, url: string): void {
-  const hosts = registryHosts()
-  const presetId = presetIdFromInstallUrl(url, hosts)
-  if (presetId === null) {
-    // H2: the refusal that makes this NOT a dead end has to reach a human.
-    //
-    // A link that looks like an install link and is not recognised because NO
-    // host is configured is precisely Magpie's give-up #2 — the shared link's
-    // only instruction cannot work. Saying nothing here reproduces it exactly:
-    // the owner sees a page, nothing happens, and there is no way to learn why.
-    //
-    // Only for links SHAPED like install links, and only when the list is
-    // empty. An unrecognised host on a populated list is a deliberate refusal
-    // and announcing it would teach the owner to add whatever host asked.
-    if (hosts.length === 0 && looksLikeInstallLink(url)) {
-      store.recordEventIn(
-        store.ownerOf(browserId) ?? store.focusedId,
-        'preset.install.refused',
-        url,
-        activeBrowserNode(browserId)?.name ?? browserId,
-        registryHostHelp(resolveRegistryHosts(registryHostInput()).rejected)
-      )
-    }
-    return
-  }
-  const node = activeBrowserNode(browserId)
-  store.recordEventIn(
-    store.ownerOf(browserId) ?? store.focusedId,
-    'preset.install.requested',
-    presetId,
-    node?.name ?? browserId,
-    'registry install link'
-  )
-  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
-    // The renderer opens the review sheet. Only the id and where it came from
-    // travel — the URL, its query and the page itself stay on the web side.
-    mainWindow.webContents.send('preset:install-requested', { presetId, browserId })
-  }
-}
 
 function recordHeadlessPageState(
   browserId: string,
   tabId: string,
   state: { url: string; title: string }
 ): void {
-  // BEFORE the early returns below: an install link is worth noticing even
-  // when the tab's recorded url/title have not changed (a re-navigation to the
-  // same link is a fresh ask), and even for a node the canvas has since lost.
-  noteRegistryInstallLink(browserId, state.url)
   const node = activeBrowserNode(browserId)
   if (!node) return
   const tabs = browserTabs(node)
@@ -3701,37 +3563,6 @@ function registerIpc(handlers: RestoreHandlers): void {
 
   // ---- the author journey (Door A), reachable at last -------------------
   //
-  // H1/H2/H3 of Tinker's review were ONE bug wearing three faces: the payout
-  // check, the host refusal and the settings surface were all written, tested
-  // and called by nothing. A check with no caller is not protection, and a
-  // commit message that says it is will be believed by the next lane. These
-  // handlers are the callers.
-
-  /** The trust list, and the two ways an owner changes it. H3. */
-  ipcMain.handle('registry:hosts', () => ({
-    hosts: registryHosts(),
-    configured: registryHostSettings.list(),
-    source: resolveRegistryHosts(registryHostInput()).source,
-    help: registryHostHelp(resolveRegistryHosts(registryHostInput()).rejected),
-    rejected: resolveRegistryHosts(registryHostInput()).rejected
-  }))
-  ipcMain.handle('registry:host:add', (_e, host: string) => registryHostSettings.add(host))
-  ipcMain.handle('registry:host:remove', (_e, host: string) =>
-    registryHostSettings.remove(host)
-  )
-
-  /**
-   * Publish a saved team. ONE owner action — the thing that did not exist.
-   *
-   * Every refusal comes back named, because the author has to act on it: a
-   * bare failure sends them to the ~140 hand-written lines this replaces.
-   */
-  ipcMain.handle(
-    'publish:preset',
-    async (_e, input: { team: string; handle: string; pricing?: unknown; payout?: unknown }) =>
-      publishSavedTeam(input)
-  )
-
   ipcMain.handle('workspace:list', () => store.list())
   ipcMain.handle('workspace:create', (_e, name: string, dir: string, team?: string) =>
     team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir)
@@ -4124,103 +3955,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   ])
 
   ipcMain.handle('terminal:create', (_e, opts: CreateTerminalOpts) => createTerminal(opts))
-
-  // ---- marketplace presets (§8): the dock's third chip family ----
-  // `preset:*` was already taken by the HARNESS presets above. These are a
-  // different list with a different shape, so they get their own namespace —
-  // reusing the channel threw on registration (Electron refuses a second
-  // handler) and took every handler after it down with it.
-  ipcMain.handle('preset:installed:list', () => presetStore.list())
-  /**
-   * §10's read path. Asked per terminal, because a pin belongs to a transcript
-   * and not to a workspace.
-   */
   ipcMain.handle('pins:list', (_e, terminalId: string) => pinStore.list(terminalId))
-  /**
-   * R20 — the buyer's two answers to a key rotation.
-   *
-   * `seen` retires the SHEET and nothing else: the rotation itself stays, so
-   * the chip keeps saying KEY CHANGED until it is resolved. Once as a sheet,
-   * never once as a fact.
-   *
-   * `trust` moves the pin forward — and it can only ever confirm the rotation
-   * the client itself recorded. The key is checked against what is on disk
-   * rather than taken from the renderer, because a channel that accepted any
-   * key id would be a way to pin an attacker's key by IPC alone, which is
-   * precisely the decision the sheet exists to put in front of a person.
-   */
-  ipcMain.handle('preset:installed:rotation:seen', (_e, id: string) => {
-    if (!isPresetId(id)) throw new Error('not a preset id')
-    presetStore.markRotationSheetSeen(id)
-  })
-  ipcMain.handle('preset:installed:rotation:trust', (_e, id: string, newKeyId: string) => {
-    if (!isPresetId(id)) throw new Error('not a preset id')
-    const rotation = presetStore.rotationOf(id)
-    if (rotation === null || rotation.newKeyId !== newKeyId) {
-      throw new Error('no such rotation to trust')
-    }
-    presetStore.trustAuthorKey(id, newKeyId)
-  })
-  ipcMain.handle('preset:installed:uninstall', (_e, id: string) => {
-    // C1: the id crosses from the renderer and ends at a recursive delete.
-    // The store validates it too; this refuses at the boundary so a hostile
-    // string never reaches a filesystem call in the first place.
-    if (!isPresetId(id)) throw new Error('not a preset id')
-    presetStore.uninstall(id)
-  })
-  /**
-   * R2: the canvas click is the aimed confirm, so this both aims and commits.
-   *
-   * Both kinds place through the ordinary node-add path. A team used to be
-   * handed to copyTeam, which is workspace-to-workspace and validates
-   * nodeIds + intoWorkspaceId — so it threw on its first guard EVERY time, and
-   * an `as never` on the argument is what let that compile. Adding the planned
-   * nodes directly is also the only way `command` and `cwd` survive; forwarding
-   * {name, preset, position, orch} to createTerminal dropped both and fell back
-   * to a built-in preset whenever the name was not one of them.
-   */
-  ipcMain.handle(
-    'preset:installed:place',
-    async (_e, id: string, position: CanvasPosition, orch: boolean) => {
-      if (!isPresetId(id)) throw new Error('not a preset id')
-      // N4: THE GATE IS ENFORCED HERE, not in the renderer. The chip's click
-      // handler declining to place a locked preset is presentation; the channel
-      // is reachable without it, so a locked preset was placeable by anyone who
-      // could call the IPC. Refuse where the decision is authoritative.
-      if (presetStore.list().find((p) => p.id === id)?.entitled === false) {
-        throw new Error('preset is not entitled')
-      }
-      const stored = presetStore.read(id)
-      // Null covers absent, a blob that no longer matches its manifest, and a
-      // signature that does not verify against the key pinned at install.
-      if (stored === null) throw new Error('preset is missing or failed verification')
-      const snapshot = JSON.parse(stored.teamBytes.toString('utf8')) as TeamSnapshot
-      const plan = planPresetImport(snapshot, {
-        dirs: store.focusedState.dirs?.length ? store.focusedState.dirs : [store.focusedState.dir],
-        cutAt: Date.now(),
-        position,
-        manifestId: stored.manifest.id
-      })
-      const placed = plan.nodes.map((node) =>
-        // orch is the placer's choice for the agents being placed; notes and
-        // browsers have no such flag.
-        node.kind === 'terminal' ? ({ ...node, orch } as CanvasNode) : node
-      )
-      if (plan.kind === 'single') {
-        recordPins([addNode(placed[0])], plan.pin)
-        return
-      }
-      // N2: ONE write and ONE broadcast for a team. The add-then-connect loop
-      // cost a disk write and a state broadcast per node AND per cable — seven
-      // of each for a four-node preset — and left the canvas legible in
-      // between, so a paste arrived as a stutter of half-teams. This lands the
-      // whole team in a single patch; adoptLiveNode still runs per node
-      // afterwards, because spawning a PTY is inherently per-terminal.
-      const added = store.appendTeamToWorkspace(store.focusedId, placed, plan.connections)
-      for (const node of added) adoptLiveNode(node)
-      recordPins(added, plan.pin)
-    }
-  )
 
   // Team fork / team save / roles (contract in note team-fork-roles-spec-v1).
   ipcMain.handle('team:fork', (_e, spec: TeamForkSpec) => teamFork(spec))

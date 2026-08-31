@@ -237,17 +237,6 @@ export function createRemoteApi(): CookrewApi {
     connectNodes: (a, b) => req(apiPath('/api/connections'), 'POST', { a, b }),
     disconnect: (connId) => req(apiPath(`/api/connections/${connId}`), 'DELETE'),
     listPresets: () => req(apiPath('/api/presets')),
-    // The phone's marketplace surface is the canvas BROWSER card (R1), not a
-    // native chip row — and installing is a desktop act, since the store lives
-    // on the machine that runs the agents. Empty and inert here until the
-    // companion has a reason to differ.
-    listInstalledPresets: () => Promise.resolve([]),
-    placeInstalledPreset: () => Promise.resolve(),
-    uninstallPreset: () => Promise.resolve(),
-    // Trusting a signing key is a decision about the machine that holds the
-    // store, so the phone does not get to make it either.
-    markPresetRotationSeen: () => Promise.resolve(),
-    trustPresetAuthorKey: () => Promise.resolve(),
     // The rail's third marker class travels to the phone now — same store the
     // desktop reads, over the scoped route, so the two rails cannot disagree.
     listPins: (terminalId) => req<VersionPinRecord[]>(apiPath(`/api/terminal/${terminalId}/pins`)),

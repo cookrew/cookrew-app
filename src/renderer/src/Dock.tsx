@@ -1,15 +1,8 @@
 import type { ToolId } from './canvas-ui'
 import type { TerminalActivity } from '../../shared/turn'
 import type { AgentRole } from '../../shared/model'
-import { useEffect } from 'react'
 import { VoiceBar } from './VoiceBar'
 import { useKeyboardInset } from './keyboard-inset'
-import {
-  chipAction,
-  presetChips,
-  presetsNeedingUpdateCheck,
-  type InstalledPreset
-} from '../../shared/preset-chip'
 import { CrIcon, type CrIconName } from './icons'
 import { AgentSprite } from './nodes/AgentSprite'
 import { RoleAvatar } from './nodes/RoleAvatar'
@@ -44,7 +37,6 @@ const DOCK_FAMILY = {
   harness: 'AGENT',
   roles: 'ROLE',
   teams: 'YOUR TEAMS',
-  installed: 'INSTALLED',
   import: '+ IMPORT A TEAM'
 } as const
 
@@ -67,23 +59,8 @@ interface DockProps {
   orch: boolean
   onOrch: (on: boolean) => void
   connectHint: string | null
-  /**
-   * Marketplace presets — the third chip family (§8). Defaults to empty, so
-   * the dock is unchanged on a machine that has installed none.
-   */
-  installedPresets?: InstalledPreset[]
-  /** Selected marketplace preset id, or null when a harness/role chip owns it. */
-  presetId?: string | null
   /** Import a served team by its address — places ONE orch interface card. */
   onImportServed?: () => void
-  /** Owned chip: arm placement. The canvas click is the confirm (R2). */
-  onPresetChip?: (id: string) => void
-  /** Locked chip: the chip is the gate's UI — open the 401/402/403 sheet. */
-  onPresetGate?: (id: string) => void
-  /** Chip that just refused a click, so it can say so (N4). */
-  gatedPresetId?: string | null
-  /** R3: ids whose version the dock should HEAD, emitted once on open. */
-  onCheckUpdates?: (ids: string[]) => void
   /** Zoomed-in terminal: the dock swaps the tool group for its composer. */
   voiceFor: { id: string; activity: TerminalActivity | undefined } | null
   /**
@@ -123,12 +100,6 @@ export function Dock({
   orch,
   onOrch,
   connectHint,
-  installedPresets = [],
-  presetId = null,
-  onPresetChip,
-  onPresetGate,
-  gatedPresetId = null,
-  onCheckUpdates,
   onImportServed,
   voiceFor,
   browserFor,
@@ -137,24 +108,12 @@ export function Dock({
   const hint = tool === 'connect' ? connectHint : (HINTS[tool] ?? null)
   /** Either occupant of the slide-in pane parks the canvas tools. */
   const slidIn = voiceFor !== null || boardFor !== null
-  const chips = presetChips(installedPresets)
   // `presets` arrives as harnesses AND saved teams in one list, because a
   // saved team IS a terminal preset to the placement path. To a person they
   // are not the same act at all — one boots an agent here, the other opens a
   // session of a team — so the row tells them apart by name.
   const savedTeams = presets.filter((name) => templates.includes(name))
   const harnesses = presets.filter((name) => !templates.includes(name))
-  // R3: the update check runs when the dock OPENS, not on a timer. "Open" here
-  // is the terminal chip row becoming visible — a background poll would spend
-  // requests on a dock nobody is looking at, and the answer is only ever acted
-  // on while it is. Re-renders do not re-ask: presetsNeedingUpdateCheck returns
-  // only the ones still unanswered.
-  const chipRowOpen = !slidIn && tool === 'terminal'
-  useEffect(() => {
-    if (!chipRowOpen || !onCheckUpdates) return
-    const pending = presetsNeedingUpdateCheck(installedPresets)
-    if (pending.length > 0) onCheckUpdates(pending)
-  }, [chipRowOpen, installedPresets, onCheckUpdates])
   // Ride above the on-screen keyboard (Defect 2). The lift itself now lives in
   // CSS (`.cr-dock` reads `--kb-inset`), which this hook publishes; the zoomed
   // terminal overlay rises off the SAME variable, so the bar and the transcript
@@ -237,48 +196,6 @@ export function Dock({
                 onClick={() => onPreset(name)}
               >
                 <AgentSprite preset={name} /> {name}
-              </button>
-            ))}
-            {/* THIRD FAMILY (§8): marketplace presets. Same chip grammar as the
-                two groups above — a locked chip is not a disabled chip, it is
-                the gate's own UI, so it stays clickable and opens the sheet. */}
-            {chips.length > 0 && <span className="cr-dock-family">{DOCK_FAMILY.installed}</span>}
-            {chips.map((chip) => (
-              <button
-                key={chip.id}
-                className={`cr-chip clickable preset-chip${presetId === chip.id ? ' amber' : ''}${
-                  chip.badge === 'lock' ? ' locked' : ''
-                }${gatedPresetId === chip.id ? ' gate-denied' : ''}`}
-                title={
-                  chip.badge === 'lock'
-                    ? `${chip.label} — locked`
-                    : chip.badge === 'update'
-                      ? `${chip.label} — v${chip.headVersion} available`
-                      : chip.label
-                }
-                aria-label={chip.label}
-                onClick={() =>
-                  chipAction(chip) === 'gate' ? onPresetGate?.(chip.id) : onPresetChip?.(chip.id)
-                }
-              >
-                <span className={`preset-chip-sprites${chip.kind === 'team' ? ' stacked' : ''}`}>
-                  {/* A team wears a STACK; more than three would stop reading as
-                      a stack and start reading as a row, so the rest are a count
-                      in the title instead. */}
-                  {chip.sprites.slice(0, 3).map((sprite, i) => (
-                    <AgentSprite key={`${chip.id}-${i}`} preset={sprite} />
-                  ))}
-                </span>
-                {chip.label}
-                {/* The acknowledgement a locked click gets until the gate sheet
-                    exists. aria-live so it is announced, not just drawn. */}
-                {gatedPresetId === chip.id && (
-                  <span className="preset-chip-gate-note" role="status" aria-live="polite">
-                    LOCKED
-                  </span>
-                )}
-                {chip.badge === 'lock' && <CrIcon name="lock" className="preset-chip-badge lock" />}
-                {chip.badge === 'update' && <span className="preset-chip-badge update" />}
               </button>
             ))}
             {/* THE TAIL IS FIXED FURNITURE, not another chip.

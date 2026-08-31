@@ -1,4 +1,3 @@
-import type { RotationSheetPayload } from './preset-rotation'
 import type { ServedPaymentRail } from './served-payment-rails'
 
 /**
@@ -17,34 +16,6 @@ import type { ServedPaymentRail } from './served-payment-rails'
  * tests/preset-rotation.test.ts pins each one so the drift cannot be quiet.
  */
 
-/** Section 5d — the author key rotation sheet (R20). Eleven strings. */
-export const MKT_ROTATION = {
-  /** The event, named plainly. Never "security alert". */
-  'mkt.rotation.title': '{author} changed signing keys',
-  /** The what-survived clause — the first thing read after the title. */
-  'mkt.rotation.survived': 'Your installed version keeps working. Nothing changed on your canvas.',
-  /** The refusal as a standing state, not a failure. */
-  'mkt.rotation.refused': "Cookrew won't install updates signed with the new key until you accept it.",
-  'mkt.rotation.evidence.old': 'previously signed by {oldKeyId}',
-  'mkt.rotation.evidence.new': 'now signing with {newKeyId}',
-  /**
-   * "Same account" is the one fact that makes this ordinary rather than
-   * alarming — it is the countersignature, said in buyer's English.
-   */
-  'mkt.rotation.evidence.when': 'rotated {date} · countersigned by the same account',
-  /** The link — the buyer can verify without trusting us. */
-  'mkt.rotation.evidence.log': 'view in the transparency log',
-  /** The one forward action. */
-  'mkt.rotation.action': 'TRUST THE NEW KEY',
-  /** Names the safe state, which is already true — not "Cancel". */
-  'mkt.rotation.dismiss': 'Keep v{current}',
-  /** Where the decision lives after the sheet is dismissed (R20's "once"). */
-  'mkt.rotation.chip': 'KEY CHANGED',
-  /** Toast; the update badge appears normally afterwards. */
-  'mkt.rotation.trusted': 'Now trusting {newKeyId} for {presetName}.'
-} as const
-
-export type MktRotationId = keyof typeof MKT_ROTATION
 
 /**
  * Section 5 — the denial sheet's FORWARD-COMPATIBILITY contract.
@@ -161,33 +132,6 @@ export function versionLabel(version: number): string {
  */
 export function authorLabel(handle: string): string {
   return handle.startsWith('@') ? handle : `@${handle}`
-}
-
-/**
- * The rotation sheet's strings, rendered from the payload.
- *
- * The DATE arrives already formatted. Absolute dates are the deck's rule (§7)
- * but their spelling is a locale decision, and a formatter frozen in a shared
- * module would be the wrong one for somebody. The caller formats `payload.at`
- * and passes the result.
- */
-export function rotationSheetCopy(
-  payload: RotationSheetPayload,
-  options: { date: string }
-): Record<MktRotationId, string> {
-  const vars = {
-    author: payload.authorHandle,
-    presetName: payload.presetName,
-    current: payload.currentVersion,
-    oldKeyId: shortKeyId(payload.oldKeyId),
-    newKeyId: shortKeyId(payload.newKeyId),
-    date: options.date
-  }
-  const out = {} as Record<MktRotationId, string>
-  for (const [id, template] of Object.entries(MKT_ROTATION) as [MktRotationId, string][]) {
-    out[id] = fillCopy(template, vars)
-  }
-  return out
 }
 
 /**
@@ -1115,7 +1059,6 @@ export type MktGateId = keyof typeof MKT_GATE
 /** Every group, so a renderer can resolve any id without knowing its family. */
 export const MKT_ALL = {
   ...MKT_GATE,
-  ...MKT_ROTATION,
   ...MKT_DENIED,
   ...MKT_AUTH,
   ...MKT_PAY,

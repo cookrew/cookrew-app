@@ -18,7 +18,6 @@ import type { TerminalActivity, TurnRecord } from "../../shared/turn";
 import type { TurnMatch } from "../../shared/turn-search";
 import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
 import type { BoardRow, BoardSummary } from "../../shared/board";
-import type { InstalledPreset } from "../../shared/preset-chip";
 import type { VersionPinRecord } from "../../shared/version-pin";
 import type { ServedPaymentRail } from "../../shared/served-payment-rails";
 import type {
@@ -188,35 +187,6 @@ export interface CookrewApi {
   connectNodes: (a: string, b: string) => Promise<Connection>;
   disconnect: (connId: string) => Promise<void>;
   listPresets: () => Promise<{ name: string; command: string }[]>;
-  /**
-   * Marketplace presets installed on this machine — the dock's third chip
-   * family (§8). Named apart from `listPresets`, which is the HARNESS presets.
-   */
-  listInstalledPresets: () => Promise<InstalledPreset[]>;
-  /**
-   * Place an installed preset at a point on the canvas. R2: the canvas click
-   * IS the confirm, so this both aims and commits — a single agent lands as a
-   * plain terminal, a team pastes through copyTeam.
-   */
-  placeInstalledPreset: (
-    id: string,
-    position: { x: number; y: number },
-    orch: boolean,
-  ) => Promise<void>;
-  /** Remove a preset from the dock. Placed agents are untouched (A2). */
-  uninstallPreset: (id: string) => Promise<void>;
-  /**
-   * R20: the rotation sheet has been shown. Retires the SHEET only — the chip
-   * keeps its KEY CHANGED badge until the buyer trusts the new key or removes
-   * the preset, because a rotation announced once and then forgotten leaves a
-   * preset silently un-updatable.
-   */
-  markPresetRotationSeen: (id: string) => Promise<void>;
-  /**
-   * R20's one forward action. `newKeyId` must be the key main itself recorded
-   * as refused; main re-checks it rather than trusting what the sheet passes.
-   */
-  trustPresetAuthorKey: (id: string, newKeyId: string) => Promise<void>;
   /**
    * Version pins for a terminal (§10) — the rail's third marker class. Asked
    * per terminal because a pin belongs to a transcript, not to a workspace.

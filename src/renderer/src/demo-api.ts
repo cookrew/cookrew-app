@@ -203,14 +203,6 @@ export function createDemoApi(): CookrewApi {
       broadcast({ ...state, connections: state.connections.filter((c) => c.id !== connId) })
       return Promise.resolve()
     },
-    // The demo backend has no ~/.cookrew to install into, so the marketplace
-    // chip family is simply empty here — the dock renders exactly as it did
-    // before presets existed.
-    listInstalledPresets: () => Promise.resolve([]),
-    placeInstalledPreset: () => Promise.resolve(),
-    uninstallPreset: () => Promise.resolve(),
-    markPresetRotationSeen: () => Promise.resolve(),
-    trustPresetAuthorKey: () => Promise.resolve(),
     listPins: () => Promise.resolve([]),
     listPresets: () =>
       Promise.resolve([

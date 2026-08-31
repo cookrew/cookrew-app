@@ -37,19 +37,6 @@ const api = {
   disconnect: (connId: string) => ipcRenderer.invoke('node:disconnect', connId),
   listPresets: () => ipcRenderer.invoke('preset:list'),
   createTerminal: (opts: unknown) => ipcRenderer.invoke('terminal:create', opts),
-  // NOT `preset:list` — that is the HARNESS preset list, a different shape.
-  // Aliasing them made listInstalledPresets return {name, command}[], which
-  // the chip model reads as `members.length` and crashes the dock on.
-  listInstalledPresets: () => ipcRenderer.invoke('preset:installed:list'),
-  placeInstalledPreset: (id: string, position: unknown, orch: boolean) =>
-    ipcRenderer.invoke('preset:installed:place', id, position, orch),
-  uninstallPreset: (id: string) => ipcRenderer.invoke('preset:installed:uninstall', id),
-  // R20: dismissing the rotation sheet and accepting the new key are two
-  // different decisions, so they are two channels. Collapsing them would make
-  // "I have read this" mean "I trust this".
-  markPresetRotationSeen: (id: string) => ipcRenderer.invoke('preset:installed:rotation:seen', id),
-  trustPresetAuthorKey: (id: string, newKeyId: string) =>
-    ipcRenderer.invoke('preset:installed:rotation:trust', id, newKeyId),
   listPins: (terminalId: string) => ipcRenderer.invoke('pins:list', terminalId),
 
   /** Translate a checkpoint body with Sous. Never rejects; see main. */
