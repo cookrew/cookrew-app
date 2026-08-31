@@ -160,7 +160,16 @@ export class RelayCaller {
     // The label is ours. The relay answers under it and assigns its own id
     // toward the door, so we never see an id belonging to anybody else.
     const id = `c${this.nextLocal++}`
-    const handshake = startSeal(this.doorKey, this.doorName)
+    let handshake: ReturnType<typeof startSeal>
+    try {
+      handshake = startSeal(this.doorKey, this.doorName)
+    } catch {
+      // A pinned key that is not a key. It came from a directory over the
+      // network, so this is data — and it must fail THIS exchange rather than
+      // throw out of whatever was moving bytes at the time.
+      hooks.fail?.(new RelayCallFailed('this door published a key that cannot be used'))
+      return null
+    }
     this.pending.set(id, {
       seal: null,
       finishSeal: handshake.finish,

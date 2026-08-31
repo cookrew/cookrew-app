@@ -223,7 +223,13 @@ export function createRegistry(deps: RegistryDeps): Server {
       parts[0] === 'v1' &&
       parts[1] === 'doors'
     ) {
-      const found = deps.doors.get(decodeURIComponent(parts[2]), decodeURIComponent(parts[3]))
+      // The @ is optional here because the canonical path a door is PUBLISHED
+      // at carries one — /@drej/alpha — and a client that looked up the thing
+      // it was handed would otherwise be told it does not exist.
+      const found = deps.doors.get(
+        decodeURIComponent(parts[2]).replace(/^@/, ''),
+        decodeURIComponent(parts[3])
+      )
       // A door nobody registered and a handle that never existed answer the
       // same, so the directory cannot be used to enumerate owners.
       if (!found) {
@@ -510,10 +516,24 @@ async function handleDoorRegistration(
     json(response, 400, { error: 'malformed' })
     return
   }
-  const input = body.value as { assertion?: unknown; door?: unknown }
+  const input = body.value as { assertion?: unknown; door?: unknown; withdraw?: unknown }
+  // No assertion → a challenge, the same ladder every other gated route here
+  // climbs. Without it a client had to go and get one from an unrelated route,
+  // which is how a ceremony ends up being started in two different places.
+  if (input.assertion === undefined) {
+    json(response, 401, { error: 'unidentified', challenge: identity.challenge() })
+    return
+  }
   const asserted = identity.assert(input.assertion as never, 'download')
   if (!asserted.ok) {
     json(response, 401, { error: 'unidentified' })
+    return
+  }
+  // WITHDRAWING is a listing decision, not a lock: the door keeps working for
+  // anyone holding its address. Only the handle that registered it may make it.
+  if (typeof input.withdraw === 'string') {
+    const gone = doors.withdraw(asserted.sub, input.withdraw)
+    json(response, gone ? 200 : 404, gone ? { ok: true } : { error: 'not_found' })
     return
   }
   const result = doors.register(asserted.sub, input.door as DoorInput)

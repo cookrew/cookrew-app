@@ -184,7 +184,9 @@ createRegistry({
   // R30. The directory of teams someone is SERVING, and the relay that carries
   // calls to the ones that cannot be dialled. Both on in the dev binary because
   // the whole point of it is to drive the real path end to end.
-  doors: new DoorStore(DATA),
+  // Dev: it lists doors on a localhost relay, which a production registry
+  // refuses because "anyone with the link" would not be true of them.
+  doors: new DoorStore(DATA, { allowPrivate: true }),
   relay: true,
   note: (message) => console.error(message),
   authorize: makeAuthorize(store, identity, pricing)

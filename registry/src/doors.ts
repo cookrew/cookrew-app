@@ -163,7 +163,7 @@ export function isPrivateAddress(value: string): boolean {
   return seventeen !== null && Number(seventeen[1]) >= 16 && Number(seventeen[1]) <= 31
 }
 
-function validFace(input: DoorInput): boolean {
+function validFace(input: DoorInput, allowPrivate: boolean): boolean {
   if (!(input.transport in DOOR_REACH)) return false
   // A relayed door without a seal key is a door a caller cannot pin, and an
   // unpinned relayed door is one the relay could impersonate. Refused rather
@@ -171,7 +171,7 @@ function validFace(input: DoorInput): boolean {
   if (input.transport === 'relay' && !isSealKey(input.sealKey)) return false
   // A private address cannot be reached by "anyone", and a listing that said
   // so would be handing out a link that fails for everyone it was shared with.
-  if (input.transport !== 'lan' && isPrivateAddress(input.address)) return false
+  if (!allowPrivate && input.transport !== 'lan' && isPrivateAddress(input.address)) return false
   if (input.title.trim().length === 0 || input.title.length > 64) return false
   if (input.door.trim().length === 0 || input.door.length > 64) return false
   if (!Number.isInteger(input.agents) || input.agents < 0 || input.agents > 999) return false
@@ -203,9 +203,21 @@ export function doorPath(handle: string, name: string): string {
  */
 export class DoorStore {
   private readonly file: string
+  private readonly allowPrivate: boolean
   private doors = new Map<string, DoorRecord>()
 
-  constructor(dataDir: string) {
+  /**
+   * `allowPrivate` lists doors whose address only this machine can reach.
+   *
+   * It exists because a development registry runs on localhost, and a relay on
+   * localhost genuinely is not reachable by "anyone" — so the honesty rule
+   * below correctly refuses it, and correctly makes the whole path untestable
+   * without an escape. This is the same distinction the server already draws
+   * with `dev`: a deployment either was started for development or it was not,
+   * and this is never a runtime toggle.
+   */
+  constructor(dataDir: string, options: { allowPrivate?: boolean } = {}) {
+    this.allowPrivate = options.allowPrivate === true
     this.file = path.join(dataDir, 'doors.json')
     try {
       const parsed: unknown = JSON.parse(readFileSync(this.file, 'utf8'))
@@ -235,7 +247,7 @@ export class DoorStore {
         ? validRelayAddress(input.address, input.handle, input.name)
         : validDoorAddress(input.address)
     if (!addressed) return { ok: false, reason: 'bad-address' }
-    if (!validFace(input)) return { ok: false, reason: 'bad-face' }
+    if (!validFace(input, this.allowPrivate)) return { ok: false, reason: 'bad-face' }
     const door: DoorRecord = { ...input, rails: [...input.rails], seenAt: Date.now() }
     this.doors.set(doorPath(door.handle, door.name), door)
     this.flush()
