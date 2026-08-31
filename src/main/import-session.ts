@@ -13,7 +13,7 @@
 // terminal runs. The wiring (fetch the face, place the node) lives in
 // index.ts. Kept pure so the plan is testable with no app, no network, no pty.
 
-import type { CanvasNode, TerminalNodeData } from '../shared/model'
+import type { CanvasNode, ServedSessionFacts, TerminalNodeData } from '../shared/model'
 
 /** Where a team is served — the origin and slug from the author's address. */
 export interface ServeTarget {
@@ -140,7 +140,9 @@ export function orchTerminalNode(
   script: string,
   id: string,
   cwd: string,
-  position: CanvasNode['position']
+  position: CanvasNode['position'],
+  /** What the caller was told and paid at the gate. See ServedSessionFacts. */
+  session?: Omit<ServedSessionFacts, 'origin' | 'slug'>
 ): TerminalNodeData {
   return {
     kind: 'terminal',
@@ -151,6 +153,9 @@ export function orchTerminalNode(
     cwd,
     orch: true,
     role: null,
+    ...(session
+      ? { servedSession: { origin: target.origin, slug: target.slug, ...session } }
+      : {}),
     position,
     size: { width: 420, height: 300 }
   }

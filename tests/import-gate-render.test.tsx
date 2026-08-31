@@ -124,3 +124,35 @@ describe('the terminal never asks for money again', () => {
     expect(sheet).toContain("preview?.access === 'paid'")
   })
 })
+
+describe('the card remembers what it cost', () => {
+  it('the session line states the receipt, or says free — never a zero', () => {
+    const overlay = src('TerminalOverlay.tsx')
+    expect(overlay).toContain('popout-session')
+    expect(overlay).toContain('THIS SESSION')
+    expect(overlay).toContain('once, at the start')
+    // "free" and "0.00" are different statements; only one is true.
+    expect(overlay).toContain('this team charges nothing')
+  })
+
+  it('the line tells an ended session from a door that stopped', () => {
+    const line = readFileSync(
+      path.join(__dirname, '..', 'resources', 'orch-line.mjs'),
+      'utf8'
+    )
+    // Two tenses on the ended path: what survived, and the way forward.
+    expect(line).toContain('the session ended at')
+    expect(line).toContain('Nothing you typed was lost')
+    expect(line).toContain('is not serving this team')
+    expect(line).toContain('Nothing was charged')
+    // And it stops knocking rather than retrying a door that is not there.
+    expect(line).toContain('stopRetrying')
+  })
+
+  it('only a settled rail is recorded as paid', () => {
+    const gate = src('ImportGate.tsx')
+    expect(gate).toContain('settledOn')
+    // Arriving at `open` on an already-running session is not a purchase.
+    expect(gate).toContain('onOpen(settledOn ?? undefined)')
+  })
+})

@@ -39,6 +39,21 @@ export function restorePointIndex(point: RestorePoint): number {
   return point.rewoundToIndex ?? point.fromIndex ?? 0
 }
 
+/** What a caller was told, and paid, when a served session was admitted. */
+export interface ServedSessionFacts {
+  /** The door's public origin and slug — the address, never a credential. */
+  origin: string
+  slug: string
+  /** Epoch ms the session was admitted. */
+  openedAt: number
+  /**
+   * What was paid, verbatim from the quote the caller approved. Absent on a
+   * free door — and absent is not zero: "free" and "nothing yet" are
+   * different statements, and only one of them is true here.
+   */
+  paid?: { price: string; asset: string; rail: 'x402' | 'stripe' }
+}
+
 export interface TerminalNodeData {
   kind: 'terminal'
   id: string
@@ -48,6 +63,19 @@ export interface TerminalNodeData {
   cwd: string
   orch: boolean
   role: string | null
+  /**
+   * WHAT THIS CARD WAS ADMITTED WITH — a placed orch card only.
+   *
+   * A caller pays once, at admission, for a session; after that the product
+   * used to say nothing, and closing the card threw the session away in
+   * silence. These are the facts they were shown at the gate, kept so the card
+   * can state them and so the close prompt can quote a real price rather than
+   * re-deriving one (a re-derived price would drift from what was charged).
+   *
+   * NO CREDENTIAL LIVES HERE. The Bearer and the account key stay in the main
+   * process; this is the receipt, not the key.
+   */
+  servedSession?: ServedSessionFacts | null
   /** Set when this agent was forked from another agent's turn. */
   forkOf?: ForkOrigin | null
   /**

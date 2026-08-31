@@ -83,8 +83,11 @@ const api = {
   serveCheckout: (link: string) => ipcRenderer.invoke('serve:checkout', link),
   serveSettle: (link: string, rail: 'x402' | 'stripe', session?: string) =>
     ipcRenderer.invoke('serve:settle', link, rail, session),
-  serveImport: (link: string, position?: { x: number; y: number }) =>
-    ipcRenderer.invoke('serve:import', link, position),
+  serveImport: (
+    link: string,
+    position?: { x: number; y: number },
+    paid?: { price: string; asset: string; rail: 'x402' | 'stripe' }
+  ) => ipcRenderer.invoke('serve:import', link, position, paid),
 
   switchWorkspace: (id: string) => ipcRenderer.invoke('workspace:switch', id),
   renameWorkspace: (id: string, name: string) =>

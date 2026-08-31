@@ -3920,7 +3920,12 @@ function registerIpc(handlers: RestoreHandlers): void {
    */
   ipcMain.handle(
     'serve:import',
-    async (_e, link: string, position?: { x: number; y: number }) => {
+    async (
+      _e,
+      link: string,
+      position?: { x: number; y: number },
+      paid?: { price: string; asset: string; rail: 'x402' | 'stripe' }
+    ) => {
       const inspected = await inspectServeAddress(link)
       if (!inspected.ok) return inspected
       const node = orchTerminalNode(
@@ -3929,7 +3934,10 @@ function registerIpc(handlers: RestoreHandlers): void {
         orchLineScript(),
         randomUUID(),
         store.focusedState.dir,
-        position ?? { x: 160, y: 120 }
+        position ?? { x: 160, y: 120 },
+        // The receipt, taken at the moment of admission — not re-derived
+        // later, when the door may be quoting a different price.
+        { openedAt: Date.now(), ...(paid ? { paid } : {}) }
       )
       const placed = store.addNode(node)
       spawnTracked(placed as TerminalNodeData)
