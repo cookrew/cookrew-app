@@ -34,6 +34,20 @@ const HINTS: Partial<Record<ToolId, string>> = {
   browser: 'CLICK THE CANVAS TO PLACE A BROWSER'
 }
 
+/**
+ * What each run of chips IS. Four different acts wore one chip: booting a
+ * harness here, opening a session of a team you saved, placing something you
+ * installed, and reaching a team that runs on someone else's machine. Naming
+ * the families is the whole change — the chips themselves keep their grammar.
+ */
+const DOCK_FAMILY = {
+  harness: 'AGENT',
+  roles: 'ROLE',
+  teams: 'YOUR TEAMS',
+  installed: 'INSTALLED',
+  import: '+ IMPORT A TEAM'
+} as const
+
 interface DockProps {
   tool: ToolId
   onSelect: (tool: ToolId) => void
@@ -41,6 +55,8 @@ interface DockProps {
   clipping: boolean
   onToggleClipping: () => void
   presets: string[]
+  /** Which of `presets` are saved TEAMS — placing one opens a session. */
+  templates?: readonly string[]
   preset: string
   onPreset: (name: string) => void
   /** Saved roles offered alongside presets for TERMINAL placement. */
@@ -98,6 +114,7 @@ export function Dock({
   clipping,
   onToggleClipping,
   presets,
+  templates = [],
   preset,
   onPreset,
   roles,
@@ -121,6 +138,12 @@ export function Dock({
   /** Either occupant of the slide-in pane parks the canvas tools. */
   const slidIn = voiceFor !== null || boardFor !== null
   const chips = presetChips(installedPresets)
+  // `presets` arrives as harnesses AND saved teams in one list, because a
+  // saved team IS a terminal preset to the placement path. To a person they
+  // are not the same act at all — one boots an agent here, the other opens a
+  // session of a team — so the row tells them apart by name.
+  const savedTeams = presets.filter((name) => templates.includes(name))
+  const harnesses = presets.filter((name) => !templates.includes(name))
   // R3: the update check runs when the dock OPENS, not on a timer. "Open" here
   // is the terminal chip row becoming visible — a background poll would spend
   // requests on a dock nobody is looking at, and the answer is only ever acted
@@ -176,7 +199,16 @@ export function Dock({
         </div>
         {!slidIn && tool === 'terminal' && (
           <div className="cr-dock-presets">
-            {presets.map((name) => (
+            {/* FAMILIES, SAID OUT LOUD.
+                The row had grown to twenty-odd identical chips in which a
+                harness (boots ONE agent here), a saved team (imports a whole
+                session), an installed preset (someone else's, possibly locked)
+                and the import entry were indistinguishable — and the entry, at
+                the tail, moved every time a team was saved. The chips keep
+                their grammar; what changes is that each family says what it is
+                and holds its own place. */}
+            <span className="cr-dock-family">{DOCK_FAMILY.harness}</span>
+            {harnesses.map((name) => (
               <button
                 key={name}
                 className={`cr-chip clickable${role === null && preset === name ? ' amber' : ''}`}
@@ -185,6 +217,7 @@ export function Dock({
                 <AgentSprite preset={name} /> {name}
               </button>
             ))}
+            {roles.length > 0 && <span className="cr-dock-family">{DOCK_FAMILY.roles}</span>}
             {roles.map((r) => (
               <button
                 key={r.name}
@@ -195,9 +228,21 @@ export function Dock({
                 <RoleAvatar name={r.name} className="role-chip-avatar" /> {r.name}
               </button>
             ))}
+            {savedTeams.length > 0 && <span className="cr-dock-family">{DOCK_FAMILY.teams}</span>}
+            {savedTeams.map((name) => (
+              <button
+                key={name}
+                className={`cr-chip clickable team-chip${role === null && preset === name ? ' amber' : ''}`}
+                title={`${name} — placing it opens a session of this team`}
+                onClick={() => onPreset(name)}
+              >
+                <AgentSprite preset={name} /> {name}
+              </button>
+            ))}
             {/* THIRD FAMILY (§8): marketplace presets. Same chip grammar as the
                 two groups above — a locked chip is not a disabled chip, it is
                 the gate's own UI, so it stays clickable and opens the sheet. */}
+            {chips.length > 0 && <span className="cr-dock-family">{DOCK_FAMILY.installed}</span>}
             {chips.map((chip) => (
               <button
                 key={chip.id}
@@ -236,22 +281,26 @@ export function Dock({
                 {chip.badge === 'update' && <span className="preset-chip-badge update" />}
               </button>
             ))}
-            {/* The import side's ONE entry: a served team arrives as its orch
-                card, not a chip family. The sheet reads the public face first,
-                so nothing commits from the dock itself. */}
-            {onImportServed && (
-              <button
-                className="cr-chip clickable import-served"
-                title="Import a served team by its address"
-                onClick={() => onImportServed()}
-              >
-                + IMPORT
-              </button>
-            )}
-            <label className="cr-check">
-              <input type="checkbox" checked={orch} onChange={(e) => onOrch(e.target.checked)} />
-              ORCH
-            </label>
+            {/* THE TAIL IS FIXED FURNITURE, not another chip.
+                The import entry and the orch switch are not things you own a
+                growing number of — they are the two acts available whatever
+                the row contains — so they sit apart, at the end, and do not
+                drift as teams are saved. */}
+            <span className="cr-dock-tail">
+              {onImportServed && (
+                <button
+                  className="cr-chip clickable import-served"
+                  title="Import someone else's served team by its address"
+                  onClick={() => onImportServed()}
+                >
+                  {DOCK_FAMILY.import}
+                </button>
+              )}
+              <label className="cr-check">
+                <input type="checkbox" checked={orch} onChange={(e) => onOrch(e.target.checked)} />
+                ORCH
+              </label>
+            </span>
           </div>
         )}
         {!slidIn && hint && <div className="cr-dock-hint">{hint}</div>}      </div>

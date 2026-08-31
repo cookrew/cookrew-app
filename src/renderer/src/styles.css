@@ -5150,8 +5150,44 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   padding-left: 8px;
 }
 
+/* ── THE DOCK ROW'S FAMILIES ──
+   A quiet caption before each run of chips. It is a label, not a control:
+   no border, no hover, and it never takes a click — the chips are the row's
+   only targets. `flex-basis:100%` would break the row; these sit inline so a
+   short family costs one label's width, not a whole line. */
+.cr-dock-family {
+  align-self: center;
+  padding: 0 2px 0 6px;
+  color: var(--dim);
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  user-select: none;
+}
+.cr-dock-family:first-child { padding-left: 0; }
+/* The two acts that are always available, parked at the end so saving a team
+   never moves them. `margin-left:auto` pushes them to the row's far edge when
+   there is room, and they wrap together when there is not. */
+.cr-dock-tail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding-left: 10px;
+  border-left: 1px solid var(--line-soft);
+}
+/* A saved team is not a harness: placing it opens a whole session. Violet
+   marks "not a plain agent", the same way the rail marks a version pin. */
+.cr-chip.team-chip { border-color: var(--violet); }
+
 /* ── IMPORT A SERVED TEAM: the import side's one entry ── */
-.cr-chip.import-served { border-style: dashed; border-color: var(--dim); color: var(--muted); }
+.cr-chip.import-served {
+  border-style: dashed;
+  border-color: var(--amber);
+  color: var(--ink);
+  font-weight: 600;
+}
 /* The import sheet's preview of a team's public face. */
 .isv-face {
   border: 1.5px solid var(--line-soft); background: var(--cr-panel, transparent);
