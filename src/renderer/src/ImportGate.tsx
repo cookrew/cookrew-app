@@ -47,8 +47,12 @@ export function ImportGate({
 }: {
   link: string
   face: ServeFacePreview
-  /** The door admitted us: place the card. */
-  onOpen: () => void
+  /**
+   * The door admitted us: place the card, carrying what was actually paid so
+   * the card can state it and the close prompt can quote it. Undefined when
+   * the door let us in without charging (an already-open session).
+   */
+  onOpen: (paid?: { price: string; asset: string; rail: 'x402' | 'stripe' }) => void
   onDismiss: () => void
 }): React.JSX.Element {
   const [phase, setPhase] = useState<ServePhase | null>(null)
@@ -57,6 +61,12 @@ export function ImportGate({
   const [busy, setBusy] = useState(true)
   const [fault, setFault] = useState<PayFault | null>(null)
   const [now, setNow] = useState(() => Date.now())
+  /** The rail and terms a payment actually settled on, or null if none did. */
+  const [settledOn, setSettledOn] = useState<{
+    price: string
+    asset: string
+    rail: 'x402' | 'stripe'
+  } | null>(null)
   const polling = useRef<number | null>(null)
 
   // Ask the door what it wants. This signs in as the account the card will
@@ -162,6 +172,9 @@ export function ImportGate({
             if (polling.current !== null) window.clearInterval(polling.current)
             setBusy(false)
             setFault(null)
+            if (selected?.rail === 'stripe') {
+              setSettledOn({ price: selected.price, asset: selected.asset, rail: 'stripe' })
+            }
             applyPhase(result.phase)
           })
           .catch(() => undefined)
@@ -207,8 +220,12 @@ export function ImportGate({
       .serveSettle(link, 'x402')
       .then((result) => {
         setBusy(false)
-        if (result.ok) applyPhase(result.phase)
-        else {
+        if (result.ok) {
+          if (result.phase.kind === 'open') {
+            setSettledOn({ price: selected.price, asset: selected.asset, rail: 'x402' })
+          }
+          applyPhase(result.phase)
+        } else {
           setFault({
             voice: 'apolog',
             title: MKT_PAY['mkt.pay.error.unverifiable.title'],
@@ -281,7 +298,10 @@ export function ImportGate({
         setFault(null)
       }}
       onPay={pay}
-      onServe={onOpen}
+      // Only a rail we actually SETTLED on counts as paid. Arriving at `open`
+      // because a session was already running is not a purchase, and a card
+      // that claimed one would be inventing a receipt.
+      onServe={() => onOpen(settledOn ?? undefined)}
       onRemedy={onDismiss}
     />
   )

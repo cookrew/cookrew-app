@@ -188,6 +188,8 @@ async function signIn() {
 let token = ''
 let closed = false
 let lineUp = false
+/** Were we EVER admitted? Decides which refusal a later 402 actually is. */
+let everUp = false
 let signInAttempts = 0
 
 const cols = () => process.stdout.columns || 100
@@ -222,6 +224,9 @@ function connectLine() {
         return
       }
       lineUp = true
+      // Sticky: it is what lets a later refusal tell "your session ended"
+      // from "this door charges and you never had one".
+      everUp = true
       wireRawInput()
       res.setEncoding('utf8')
       let buf = ''
@@ -301,12 +306,31 @@ async function handleLineRefusal(status, rawBody) {
     // MONEY IS NEVER ASKED FOR HERE. A terminal prompt for a pasted payment
     // reference is not the product: paying is one surface, the gate sheet,
     // where the terms, the rails and the wallet are laid out before anything
-    // is approved (docs/design/gate-sheet-unified.html). This card is reached
-    // only AFTER a session is paid for, so a 402 here means the session ended
-    // or was never admitted — say so plainly and keep trying, because the app
-    // can re-admit and this line will simply come up.
+    // is approved (docs/design/gate-sheet-unified.html).
+    //
+    // WHICH 402 THIS IS depends on whether we were ever admitted. Having been
+    // up and now being asked to pay means the session ENDED at the author's
+    // app — and that is a different sentence from "this door charges", said
+    // in two tenses so the person knows what survived.
+    if (everUp) {
+      process.stdout.write(dim(`— the session ended at @${slug}'s app`))
+      process.stdout.write(dim('  Nothing you typed was lost — the reply before it completed.'))
+      process.stdout.write(dim('  Import it again in Cookrew to start a new one.'))
+      stopRetrying()
+      return
+    }
     process.stdout.write(dim('◈ this team charges per session — import it again in Cookrew to pay'))
     scheduleReconnect(15000)
+    return
+  }
+  if (status === 404) {
+    // The door is not there. Not an error and not the caller's fault, so it
+    // is said plainly and the line stops knocking — an address that starts
+    // serving again is something a person re-imports, not something this
+    // process should poll for forever.
+    process.stdout.write(dim(`— @${slug} is not serving this team`))
+    process.stdout.write(dim('  Nothing was charged. The address works again if they start it.'))
+    stopRetrying()
     return
   }
   if (status === 429) {
@@ -316,6 +340,18 @@ async function handleLineRefusal(status, rawBody) {
   }
   process.stdout.write(dim(`✕ line refused (${status})${body?.error ? `: ${body.error}` : ''} — retrying`))
   scheduleReconnect(3000)
+}
+
+/**
+ * Stop reconnecting, and stay on screen.
+ *
+ * A card that vanished — or one that silently retried forever — would leave
+ * someone who paid unable to tell "ended" from "flaky network". The process
+ * stays alive so the last words remain readable in the card.
+ */
+function stopRetrying() {
+  closed = true
+  lineUp = false
 }
 
 let reconnectPending = false

@@ -110,3 +110,56 @@ describe('closePrompt — a confirm that says what is lost, not just "are you su
     expect(closePrompt(browser()).danger).toBe(false)
   })
 })
+
+describe('closing a placed orch card is a spending decision', () => {
+  /**
+   * A card you paid for is the one case the roster CANNOT recover: the
+   * session lives at the author's app, and re-importing admits a new one.
+   * Before this, the ordinary terminal prompt promised "you can recover the
+   * agent from Agents" — an offer nothing here can keep.
+   */
+  const served = (paid?: { price: string; asset: string; rail: 'x402' | 'stripe' }): TerminalNodeData =>
+    terminal({
+      name: 'COOKREW Alpha',
+      preset: 'Remote',
+      orch: true,
+      servedSession: {
+        origin: 'http://127.0.0.1:8639',
+        slug: 'cookrew-alpha',
+        openedAt: 1_700_000_000_000,
+        ...(paid ? { paid } : {})
+      }
+    })
+
+  it('quotes what was actually paid, and warns that starting again costs again', () => {
+    const prompt = closePrompt(served({ price: '2.50', asset: 'USD', rail: 'stripe' }))
+    expect(prompt.title).toBe('End this session?')
+    expect(prompt.subject).toBe('COOKREW Alpha')
+    expect(prompt.consequence).toContain('2.50 USD')
+    expect(prompt.consequence).toContain('new session at the same price')
+    // Whose machine the work stayed on — the caller keeps none of it.
+    expect(prompt.consequence).toContain("@cookrew-alpha's machine")
+    expect(prompt.confirmLabel).toBe('End session')
+    expect(prompt.danger).toBe(true)
+  })
+
+  it('never promises a recovery that does not exist for a served session', () => {
+    for (const node of [served({ price: '1', asset: 'USDC', rail: 'x402' }), served()]) {
+      expect(closePrompt(node).consequence).not.toMatch(/recover/i)
+    }
+  })
+
+  it('a free session is not danger, and says why re-opening may not work', () => {
+    const prompt = closePrompt(served())
+    expect(prompt.danger).toBe(false)
+    expect(prompt.consequence).toContain('limited number')
+    // No price is invented for a door that charged nothing.
+    expect(prompt.consequence).not.toMatch(/\d\.\d\d/)
+  })
+
+  it('an ordinary agent card is untouched by any of this', () => {
+    const prompt = closePrompt(terminal())
+    expect(prompt.title).toBe('Close this agent?')
+    expect(prompt.consequence).toContain('recover')
+  })
+})

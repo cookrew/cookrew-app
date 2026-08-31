@@ -60,12 +60,14 @@ export function ImportServedSheet({
       })
   }
 
-  const place = (): void => {
+  /** `paid` comes from the gate; a free door places with none, and none is
+   *  not zero — the card must be able to say "free", not "0.00". */
+  const place = (paid?: { price: string; asset: string; rail: 'x402' | 'stripe' }): void => {
     if (busy) return
     setBusy(true)
     setError(null)
     void cookrew()
-      .serveImport(link.trim())
+      .serveImport(link.trim(), undefined, paid)
       .then((result) => {
         setBusy(false)
         if (result.ok) onImported()
@@ -91,12 +93,15 @@ export function ImportServedSheet({
     place()
   }
 
+  const onGateOpen = (paid?: { price: string; asset: string; rail: 'x402' | 'stripe' }): void =>
+    place(paid)
+
   if (gating && preview) {
     return (
       <ImportGate
         link={link.trim()}
         face={preview}
-        onOpen={place}
+        onOpen={onGateOpen}
         onDismiss={() => setGating(false)}
       />
     )

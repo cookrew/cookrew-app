@@ -97,6 +97,25 @@ function clip(text: string, max: number): string {
 }
 
 /** The header line carries the agent's live status, not its name. */
+/**
+ * When a served session was admitted, said the way a person would.
+ *
+ * "today 09:14" while it is today, then the date — a bare timestamp on a
+ * three-day-old session reads as if it just happened.
+ */
+function openedLabel(at: number): string {
+  const when = new Date(at)
+  const time = when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  const today = new Date()
+  const sameDay =
+    when.getFullYear() === today.getFullYear() &&
+    when.getMonth() === today.getMonth() &&
+    when.getDate() === today.getDate()
+  return sameDay
+    ? `today ${time}`
+    : `${when.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${time}`
+}
+
 const PHASE_CHIP: Record<TurnPhase, { label: string; cls: string }> = {
   idle: { label: 'READY', cls: '' },
   thinking: { label: 'WORKING', cls: ' busy' },
@@ -847,6 +866,25 @@ function TerminalOverlay({
               DISMISS
             </button>
           )}
+        </div>
+      )}
+      {/* WHAT THIS CARD IS ON. A placed orch card is a line into a session at
+          someone else's app, bought once at admission; without this the caller
+          is told nothing after the money moves — not what they got, not whose
+          machine it runs on. One dim line, not a badge: it answers a question
+          people ask occasionally, and must not compete with the agent. */}
+      {node.servedSession && (
+        <div className="popout-session" role="note">
+          <span className="k">THIS SESSION</span>
+          <span>opened {openedLabel(node.servedSession.openedAt)}</span>
+          <span className="sep">·</span>
+          <span>
+            {node.servedSession.paid
+              ? `paid ${node.servedSession.paid.price} ${node.servedSession.paid.asset} once, at the start`
+              : 'free — this team charges nothing'}
+          </span>
+          <span className="sep">·</span>
+          <span>runs at @{node.servedSession.slug}</span>
         </div>
       )}
       <div className="popout-terminal-wrap">

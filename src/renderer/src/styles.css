@@ -5150,6 +5150,32 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   padding-left: 8px;
 }
 
+/* ── A PLACED ORCH CARD'S SESSION LINE ──
+   The facts of an admission, kept quiet: one dim strip under the header, in
+   the terminal's own voice rather than the canvas's. It must read as a note
+   about the card, never as a control on it — so no border box, no hover, and
+   it is out of the tab order. */
+.popout-session {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 12px 6px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--cream-md);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+.popout-session .k {
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.07em;
+  color: var(--dim);
+}
+.popout-session .sep { color: var(--line-soft); }
+
 /* ── THE DOCK ROW'S FAMILIES ──
    A quiet caption before each run of chips. It is a label, not a control:
    no border, no hover, and it never takes a click — the chips are the row's

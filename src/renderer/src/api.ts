@@ -141,6 +141,9 @@ export interface CookrewApi {
   serveImport: (
     link: string,
     position?: { x: number; y: number },
+    /** What was paid at the gate, so the card can say so and the close
+     *  prompt can quote it back. Absent on a free door. */
+    paid?: { price: string; asset: string; rail: 'x402' | 'stripe' },
   ) => Promise<{ ok: true; node: unknown } | { ok: false; reason: string }>;
   /** Sign in to the door and ask what it wants. The Bearer stays in main. */
   serveGate: (
