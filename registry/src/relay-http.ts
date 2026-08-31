@@ -96,6 +96,13 @@ export function createRelayHttp(deps: {
       json(response, 400, { error: 'bad_name' })
       return
     }
+    // No assertion → a challenge, which is the same ladder every other gated
+    // route here climbs. A separate challenge endpoint would be a second way
+    // to start a ceremony, and two ways is how one of them drifts.
+    if (input.assertion === undefined) {
+      json(response, 401, { error: 'unidentified', challenge: deps.identity.challenge() })
+      return
+    }
     const asserted = deps.identity.assert(input.assertion as never, 'download')
     if (!asserted.ok) {
       json(response, 401, { error: 'unidentified' })
