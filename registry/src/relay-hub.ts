@@ -17,12 +17,12 @@ import { decodeFrame, encodeFrame, type RelayFrame, type StreamId } from '../../
  * would be a second gate with different rules, and the first person to notice
  * would be someone who paid.
  *
- * THE PLAINTEXT PROBLEM, stated where it lives. Frames pass through here as
- * they arrive. On loopback that is fine; on cookrew.dev it is not, because
- * the product promises Cookrew never sends your conversation anywhere else.
- * The seal is an END-TO-END layer between caller and door — this file does not
- * change when it lands, which is the point: the hub already treats a payload
- * as opaque, so sealing it changes nothing here.
+ * WHAT IT CANNOT READ. The seal is an end-to-end layer between caller and door,
+ * and it needed no cooperation from this file — the hub already treated every
+ * payload as opaque, so sealing them changed nothing here. Headers, request
+ * bodies and replies arrive encrypted and leave encrypted. What remains visible
+ * is the shape of an exchange: which door, which method and path, how many
+ * bytes, and when.
  */
 
 /** The socket this hub speaks over, reduced to what it uses. */
@@ -32,7 +32,7 @@ export interface HubSocket {
 }
 
 /** Why a connection was turned away. For the log; never a rendered sentence. */
-export type HubRefusal = 'name-taken' | 'no-such-door' | 'bad-name'
+export type HubRefusal = 'name-taken' | 'no-such-door' | 'bad-name' | 'id-in-use'
 
 const NAME = /^@[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
 
@@ -53,7 +53,20 @@ export interface HubDoor {
 export class RelayHub {
   private readonly doors = new Map<string, HubDoor>()
   /** streamId → the caller waiting on it, and which door it rides. */
-  private readonly callers = new Map<StreamId, { socket: HubSocket; door: string }>()
+  private readonly callers = new Map<
+    StreamId,
+    { socket: HubSocket; door: string; theirId: StreamId }
+  >()
+  /**
+   * Each caller's own ids, translated.
+   *
+   * A caller opens an exchange before it can know what the hub will call it, so
+   * it labels the exchange itself and the hub answers under that label. The id
+   * that reaches the DOOR is still the hub's, which is what keeps two callers
+   * from ever naming the same stream — and it means a caller never learns an id
+   * belonging to anyone else, so there is nothing to guess at.
+   */
+  private readonly theirIds = new WeakMap<HubSocket, Map<StreamId, StreamId>>()
   private nextId = 1
 
   constructor(private readonly log: (message: string) => void = () => undefined) {}
@@ -82,8 +95,10 @@ export class RelayHub {
     if (!door) return
     for (const id of door.streams) {
       const caller = this.callers.get(id)
-      caller?.socket.send(encodeFrame({ t: 'abort', id, reason: 'door-gone' }))
-      caller?.socket.close()
+      if (!caller) continue
+      caller.socket.send(encodeFrame({ t: 'abort', id: caller.theirId, reason: 'door-gone' }))
+      caller.socket.close()
+      this.theirIds.get(caller.socket)?.delete(caller.theirId)
       this.callers.delete(id)
     }
     this.doors.delete(name)
@@ -97,12 +112,23 @@ export class RelayHub {
   openStream(
     name: string,
     caller: HubSocket,
-    request: { method: string; path: string; headers: Record<string, string> }
+    request: { method: string; path: string; headers: Record<string, string> },
+    theirId?: StreamId
   ): { ok: true; id: StreamId } | { ok: false; reason: HubRefusal } {
     const door = this.doors.get(name)
     if (!door) return { ok: false, reason: 'no-such-door' }
     const id = `s${this.nextId++}`
-    this.callers.set(id, { socket: caller, door: name })
+    const mine = theirId ?? id
+    let owned = this.theirIds.get(caller)
+    if (!owned) {
+      owned = new Map()
+      this.theirIds.set(caller, owned)
+    }
+    // Reusing a label it already has open would leave the caller unable to tell
+    // its own two exchanges apart. Refuse rather than pick one.
+    if (owned.has(mine)) return { ok: false, reason: 'id-in-use' }
+    owned.set(mine, id)
+    this.callers.set(id, { socket: caller, door: name, theirId: mine })
     door.streams.add(id)
     door.socket.send(
       encodeFrame({ t: 'open', id, method: request.method, path: request.path, headers: request.headers })
@@ -118,10 +144,11 @@ export class RelayHub {
    * touch, and it is refused by not being possible — a caller may only speak
    * about ids this hub handed it.
    */
-  fromCaller(id: StreamId, socket: HubSocket, raw: string): void {
-    const entry = this.callers.get(id)
-    if (!entry || entry.socket !== socket) {
-      this.log(`relay: a caller spoke about a stream that is not theirs (${id})`)
+  fromCaller(theirId: StreamId, socket: HubSocket, raw: string): void {
+    const id = this.theirIds.get(socket)?.get(theirId)
+    const entry = id === undefined ? undefined : this.callers.get(id)
+    if (id === undefined || !entry || entry.socket !== socket) {
+      this.log(`relay: a caller spoke about a stream that is not theirs (${theirId})`)
       return
     }
     const frame = decodeFrame(raw)
@@ -140,7 +167,7 @@ export class RelayHub {
     const entry = this.callers.get(frame.id)
     // A door answering a stream it was never given is not routed anywhere.
     if (!entry || entry.door !== name) return
-    entry.socket.send(encodeFrame(frame))
+    entry.socket.send(encodeFrame({ ...frame, id: entry.theirId }))
     if (frame.t === 'end' || frame.t === 'abort') this.endStream(frame.id)
   }
 
@@ -156,6 +183,7 @@ export class RelayHub {
     const entry = this.callers.get(id)
     if (!entry) return
     this.doors.get(entry.door)?.streams.delete(id)
+    this.theirIds.get(entry.socket)?.delete(entry.theirId)
     this.callers.delete(id)
   }
 
