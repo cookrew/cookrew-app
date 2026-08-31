@@ -1318,6 +1318,7 @@ function Canvas(): React.JSX.Element {
           clipping={clipping}
           onToggleClipping={toggleClipping}
           presets={presets}
+          templates={templates}
           preset={preset}
           onPreset={(name) => {
             setPreset(name)
