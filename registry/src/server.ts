@@ -11,6 +11,7 @@ import type { IdentityService, TokenScope } from './identity'
 import type { Terms } from './terms'
 import type { PaymentFailure } from './payment'
 import { DoorStore, doorPath, type DoorInput } from './doors'
+import { createRelayHttp, type RelayHttp } from './relay-http'
 import type { ServerResponse } from 'node:http'
 
 /**
@@ -68,6 +69,18 @@ export interface RegistryDeps {
    * away in production.
    */
   dev?: boolean
+  /**
+   * THE RELAY. Present → this deployment also CARRIES calls to doors that
+   * cannot be dialled, instead of only listing where they are.
+   *
+   * Separate from `doors` on purpose: a directory that merely publishes
+   * addresses holds nothing of anyone's, while a relay holds live connections
+   * and other people's traffic. Those are different things to operate and
+   * different things to be trusted with, so they are different flags.
+   */
+  relay?: boolean
+  /** Operational notes — a refused stream, a name already held. Never a body. */
+  note?: (message: string) => void
 }
 
 function defaultAuthorize(store: RegistryStore): (id: string) => Verdict {
@@ -115,10 +128,21 @@ export function createRegistry(deps: RegistryDeps): Server {
     }
   }
 
+  const relay: RelayHttp | null = deps.relay
+    ? createRelayHttp({ identity: deps.identity, log: deps.note })
+    : null
+
   return createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://registry.local')
     const method = request.method ?? 'GET'
     const parts = url.pathname.split('/').filter(Boolean)
+
+    // ── THE RELAY, first ──────────────────────────────────────────────────
+    //
+    // Ahead of every other route because its connections are long-lived and
+    // must not be delayed behind anything, and because it owns its whole path
+    // prefix: nothing under /v1/relay is served by the rest of this file.
+    if (relay && relay.handle(request, response, parts, url)) return
 
     // GET /install/:presetId — R21 Option A, the page for a reader with no app.
     //
