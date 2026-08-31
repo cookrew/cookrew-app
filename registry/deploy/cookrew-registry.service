@@ -1,0 +1,39 @@
+# The registry and relay, as a service.
+#
+#   sudo cp cookrew-registry.service /etc/systemd/system/
+#   sudo systemctl enable --now cookrew-registry
+#
+# The bundle is built with:
+#   npx esbuild --bundle registry/src/main.ts --format=esm --platform=node \
+#     --outfile=registry.mjs
+#
+# --origin is the address a BROWSER will send, not the port this binds. The
+# ceremony compares it exactly, so it must be the public https origin even
+# though Caddy is what listens on 443.
+
+[Unit]
+Description=Cookrew registry and relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cookrew
+Group=cookrew
+WorkingDirectory=/opt/cookrew
+ExecStart=/usr/bin/node /opt/cookrew/registry.mjs --port 8791 --data /var/lib/cookrew --origin https://cookrew.dev
+Restart=always
+RestartSec=2
+
+# It holds other people's door records and its own token key. Nothing else on
+# the machine needs to read either.
+UMask=0077
+StateDirectory=cookrew
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/cookrew
+
+[Install]
+WantedBy=multi-user.target
