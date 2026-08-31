@@ -29,7 +29,6 @@ import { Dock } from './Dock'
 import { CardMenu, type CardMenuAnchor } from './CardMenu'
 import { TerminalOverlayLayer } from './TerminalOverlay'
 import { useLodLayout } from './zoom-lod'
-import type { InstalledPreset } from '../../shared/preset-chip'
 import { browserInFullView } from './dock-target'
 import { BrowserLayer, useInteractiveBrowserCapability } from './BrowserLayer'
 import {
@@ -199,42 +198,8 @@ function Canvas(): React.JSX.Element {
    * removeNode, so there is one dialog and no close button can skip it.
    */
   const [closingId, setClosingId] = useState<string | null>(null)
-  /**
-   * Marketplace presets (§8) and the one currently armed. Arming is exclusive
-   * with the harness-preset and role chips: three families, one selection.
-   */
-  const [installedPresets, setInstalledPresets] = useState<InstalledPreset[]>([])
-  const [presetId, setPresetId] = useState<string | null>(null)
   // R30 import side: the one entry for a served team's address.
   const [importServedOpen, setImportServedOpen] = useState(false)
-  const refreshPresets = useCallback(() => {
-    void cookrew()
-      .listInstalledPresets()
-      .then(setInstalledPresets)
-      .catch((error) => console.error('listInstalledPresets failed:', error))
-  }, [])
-  useEffect(refreshPresets, [refreshPresets])
-  /**
-   * M3: STABLE identities. Inline arrows here were new objects every render, so
-   * the dock's effect re-fired on each one and the R3 batch never settled.
-   * M5: no console TODOs — the gate sheet and the HEAD request are the
-   * registry's work, and until they exist these are no-ops that change nothing
-   * rather than log lines pretending to.
-   */
-  /**
-   * N4: a locked chip must ACKNOWLEDGE the click. The 401/402/403 sheets land
-   * with the gate, but "nothing happens" is indistinguishable from a broken
-   * chip, so until then the chip answers for itself and says it is locked.
-   */
-  const [gatedId, setGatedId] = useState<string | null>(null)
-  const openPresetGate = useCallback((id: string) => {
-    setGatedId(id)
-    window.setTimeout(() => setGatedId((current) => (current === id ? null : current)), 2400)
-  }, [])
-  const checkPresetUpdates = useCallback((_ids: string[]) => {
-    // A manifest HEAD by version (R3) needs a registry to ask.
-  }, [])
-
   useEffect(() => {
     void cookrew()
       .listPresets()
@@ -960,25 +925,6 @@ function Canvas(): React.JSX.Element {
     async (event: React.MouseEvent) => {
       const position = screenToFlowPosition({ x: event.clientX, y: event.clientY })
       if (tool === 'terminal') {
-        // R2: an armed marketplace chip places HERE — this click is the aimed
-        // confirm, so there is no dialog between the chip and the canvas, not
-        // even for a team paste. It takes precedence over the harness/role
-        // chips because arming one clears the others.
-        if (presetId) {
-          // M4: the reset must survive a throw. Placement now REFUSES loudly
-          // (bad id, missing preset, failed signature), and without this a
-          // refusal left the chip armed and the tool stuck — every later click
-          // on the canvas would try to place the same broken preset again.
-          try {
-            await cookrew().placeInstalledPreset(presetId, position, orch)
-          } catch (error) {
-            console.error('Placing preset failed:', error)
-          } finally {
-            setPresetId(null)
-            setTool('move')
-          }
-          return
-        }
         // A SAVED TEMPLATE placed as a preset IMPORTS a session: a new
         // workspace forked from the template — team, worktree, workdir —
         // switched to. Not a terminal on this canvas, so it returns before
@@ -1040,11 +986,9 @@ function Canvas(): React.JSX.Element {
         setConnectFrom(null)
       }
     },
-    // presetId belongs here: without it the callback closes over a stale arm
-    // and the click places the PREVIOUSLY armed preset, or nothing at all.
     // templates is CONSULTED above; leaving it out freezes the closure and a
     // template placement falls through to plain terminal creation.
-    [tool, preset, role, roles, orch, clipping, presetId, templates, screenToFlowPosition, zoomToNode]
+    [tool, preset, role, roles, orch, clipping, templates, screenToFlowPosition, zoomToNode]
   )
 
   const onNodesDelete = useCallback((deleted: Node[]) => {
@@ -1323,24 +1267,12 @@ function Canvas(): React.JSX.Element {
           onPreset={(name) => {
             setPreset(name)
             setRole(null)
-            setPresetId(null)
           }}
           roles={roles}
           role={role}
           onRole={(name) => {
             setRole(name)
-            setPresetId(null)
           }}
-          installedPresets={installedPresets}
-          presetId={presetId}
-          onPresetChip={(id) => {
-            // Arm only — the canvas click commits (R2).
-            setPresetId(id)
-            setRole(null)
-          }}
-          gatedPresetId={gatedId}
-          onPresetGate={openPresetGate}
-          onCheckUpdates={checkPresetUpdates}
           onImportServed={() => setImportServedOpen(true)}
           orch={orch}
           onOrch={setOrch}
