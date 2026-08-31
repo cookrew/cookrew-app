@@ -10,6 +10,8 @@ import { publicKeyFromId, verifyManifest } from '../../src/main/preset-publish'
 import type { IdentityService, TokenScope } from './identity'
 import type { Terms } from './terms'
 import type { PaymentFailure } from './payment'
+import { DoorStore, doorPath, type DoorInput } from './doors'
+import type { ServerResponse } from 'node:http'
 
 /**
  * REGISTRY SERVER (P2-A1) — routes only. Every answer is chosen by a decision
@@ -46,6 +48,12 @@ export interface RegistryDeps {
   authorize?: (presetId: string, request: IncomingMessage) => Verdict
   /** Present from A2: enrolment and assertion routes mount only when it is. */
   identity?: IdentityService
+  /**
+   * R30. Present → this registry is a DIRECTORY of served teams as well as a
+   * store of artifacts. Absent → the /v1/doors routes do not exist, so a
+   * deployment that only serves manifests is byte-identical to before.
+   */
+  doors?: DoorStore
   /**
    * M2-A1. Present → this deployment can price presets and the gate can answer
    * 402. Absent → it sells nothing and behaves exactly as M1 did, which is what
@@ -171,6 +179,38 @@ export function createRegistry(deps: RegistryDeps): Server {
       parts[3] === 'rotate'
     ) {
       void handleRotate(decodeURIComponent(parts[2]), request, response, writeDeps)
+      return
+    }
+
+    // ── DOORS (R30) — teams someone is SERVING, not artifacts to download ──
+    //
+    // Mounted only when this deployment keeps a door store, the same way
+    // pricing and identity mount: a registry that lists nothing behaves
+    // exactly as it did before, which is what keeps the older tests meaningful
+    // rather than merely still-passing.
+    if (deps.doors && method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'doors') {
+      json(response, 200, { doors: deps.doors.list(url.searchParams.get('q') ?? '') })
+      return
+    }
+    if (
+      deps.doors &&
+      method === 'GET' &&
+      parts.length === 4 &&
+      parts[0] === 'v1' &&
+      parts[1] === 'doors'
+    ) {
+      const found = deps.doors.get(decodeURIComponent(parts[2]), decodeURIComponent(parts[3]))
+      // A door nobody registered and a handle that never existed answer the
+      // same, so the directory cannot be used to enumerate owners.
+      if (!found) {
+        json(response, 404, { error: 'not_found' })
+        return
+      }
+      json(response, 200, found)
+      return
+    }
+    if (deps.doors && method === 'POST' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'doors') {
+      void handleDoorRegistration(deps.doors, deps.identity, request, response)
       return
     }
 
@@ -417,4 +457,45 @@ export function createRegistry(deps: RegistryDeps): Server {
 
     json(response, 404, { error: 'not_found' })
   })
+}
+
+/**
+ * REGISTERING A DOOR — the write side of the directory.
+ *
+ * The handle is taken from the ASSERTION, never from the body: a listing that
+ * let a caller name its own owner would let anyone park a team under someone
+ * else's handle, which is the one thing a directory of other people's
+ * addresses must not allow. The identity layer already mints a token for a
+ * present authenticator; this reuses it rather than inventing a second way to
+ * prove who is calling.
+ */
+async function handleDoorRegistration(
+  doors: DoorStore,
+  identity: IdentityService | undefined,
+  request: IncomingMessage,
+  response: ServerResponse
+): Promise<void> {
+  if (!identity) {
+    // No identity service means nobody can prove a handle, and an unowned
+    // listing is worse than no listing.
+    json(response, 503, { error: 'identity_unavailable' })
+    return
+  }
+  const body = await readJsonBody(request, 16 * 1024)
+  if (!body.ok || typeof body.value !== 'object' || body.value === null) {
+    json(response, 400, { error: 'malformed' })
+    return
+  }
+  const input = body.value as { assertion?: unknown; door?: unknown }
+  const asserted = identity.assert(input.assertion as never, 'download')
+  if (!asserted.ok) {
+    json(response, 401, { error: 'unidentified' })
+    return
+  }
+  const result = doors.register(asserted.sub, input.door as DoorInput)
+  if (!result.ok) {
+    json(response, 400, { error: result.reason })
+    return
+  }
+  json(response, 200, { door: result.door, path: doorPath(result.door.handle, result.door.name) })
 }
