@@ -16,6 +16,9 @@ import type { RelaySocket } from './relay-client'
  * would be refused for a reason that reads like a credential problem.
  */
 
+/** Well under the minute-or-two an idle connection survives at a CDN. */
+const HEARTBEAT_MS = 25_000
+
 export interface RelayDial {
   socket: RelaySocket
   /** The name the relay confirmed. Resolves when the door is live. */
@@ -124,6 +127,16 @@ export function dialRelay(options: RelayDialOptions): RelayDial {
     uplink = request
     for (const line of queued) request.write(`${line}\n`)
     queued.length = 0
+    // A door with no callers sends nothing for hours, and an idle connection
+    // is dropped by every proxy between here and the relay. An empty line is
+    // skipped by the parser at the other end, so the heartbeat needs no place
+    // in the protocol — and without it the door goes quietly offline.
+    const beat = setInterval(() => {
+      if (!closed && uplink) uplink.write('\n')
+      else clearInterval(beat)
+    }, HEARTBEAT_MS)
+    beat.unref?.()
+    request.on('close', () => clearInterval(beat))
   }
 
   const socket: RelaySocket = {

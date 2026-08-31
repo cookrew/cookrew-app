@@ -30,6 +30,13 @@ import type { IdentityService } from './identity'
  * question of who may call is answered at the door, on the author's machine.
  */
 
+/**
+ * How often a quiet stream says something.
+ *
+ * Well under the minute-or-two an idle connection typically survives at a CDN,
+ * and far too rare to be a cost: one byte.
+ */
+const HEARTBEAT_MS = 25_000
 /** How long a ticket stands between being minted and being used. */
 const TICKET_TTL_MS = 60_000
 /** A caller's whole request body. The gate takes small JSON posts. */
@@ -144,6 +151,22 @@ export function createRelayHttp(deps: {
       // which would hold a terminal's output until the session was over.
       'x-accel-buffering': 'no'
     })
+    /**
+     * A HEARTBEAT, because the streams here are quiet for long stretches.
+     *
+     * An agent that is thinking says nothing, and a door with no callers says
+     * nothing at all — while every CDN and load balancer between here and them
+     * drops an idle connection after a minute or two. That drop would read as
+     * the team having gone away, moments after someone paid to reach it.
+     *
+     * An empty line, because the parsers on both ends already skip one: the
+     * heartbeat needs no place in the protocol.
+     */
+    const beat = setInterval(() => {
+      if (!response.writableEnded) response.write('\n')
+    }, HEARTBEAT_MS)
+    beat.unref?.()
+    response.on('close', () => clearInterval(beat))
     return (line) => {
       if (!response.writableEnded) response.write(`${line}\n`)
     }
