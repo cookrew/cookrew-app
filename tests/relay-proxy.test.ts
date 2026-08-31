@@ -73,8 +73,8 @@ async function wholePath(
   await dial.ready
   shut.push(() => dial.close())
 
-  const proxy = await startRelayProxy({ relayOrigin: origin })
-  proxy.serve({ name: NAME, key: keys.publicKey })
+  const proxy = await startRelayProxy({})
+  proxy.serve({ name: NAME, key: keys.publicKey, relayOrigin: origin })
   shut.push(() => proxy.close())
   return { proxy }
 }

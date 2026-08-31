@@ -31,9 +31,19 @@ export interface ProxiedDoor {
   name: string
   /** The door's seal key, as published in its registry record. */
   key: string
+  /**
+   * WHICH RELAY CARRIES IT — per door, not per proxy.
+   *
+   * A caller can hold cards from more than one registry at once, and one
+   * listener per registry would mean several processes competing to write the
+   * single file a card reads its port from. The door knows where it is; this
+   * does not have to.
+   */
+  relayOrigin: string
 }
 
 export interface RelayProxy {
+  /** Assigned when the listener binds; 0 before that. */
   port: number
   /** The interface it bound. Loopback, and asserted rather than assumed. */
   address: string
@@ -70,18 +80,24 @@ const HOP = new Set([
   'content-length'
 ])
 
-export function startRelayProxy(options: {
-  /** The relay, e.g. https://cookrew.dev */
-  relayOrigin: string
-  log?: (message: string) => void
-}): Promise<RelayProxy> {
+export function startRelayProxy(
+  options: {
+    log?: (message: string) => void
+    /**
+     * Look a door up the first time a card asks for it.
+     *
+     * WITHOUT THIS, only doors imported during THIS run would work: a card
+     * placed yesterday would start, find the proxy reaching nothing, and read
+     * as a team that had gone away. The card is durable, so resolution has to
+     * be too.
+     */
+    resolve?: (name: string) => Promise<ProxiedDoor | null>
+  } = {}
+): Promise<RelayProxy> {
   const log = options.log ?? ((): void => undefined)
-  const doors = new Map<string, { key: string; caller: RelayCaller }>()
-
-  const callerFor = (name: string): RelayCaller | null => {
-    const door = doors.get(name)
-    return door ? door.caller : null
-  }
+  const doors = new Map<string, { key: string; origin: string; caller: RelayCaller }>()
+  /** Lookups in flight, so ten cards starting at once make one request. */
+  const finding = new Map<string, Promise<void>>()
 
   const server = createServer((request, response) => {
     const asked = read(request)
@@ -89,52 +105,72 @@ export function startRelayProxy(options: {
       response.writeHead(404).end()
       return
     }
-    const caller = callerFor(asked.name)
-    if (!caller) {
-      // A door this app is not reaching. Answered like any unknown path — the
-      // card's own retry loop handles it, and it says nothing about what
-      // other doors exist.
-      response.writeHead(404).end()
-      return
-    }
-    void carry(caller, asked, request, response, log)
+    void (async () => {
+      if (!doors.has(asked.name) && options.resolve) {
+        let lookup = finding.get(asked.name)
+        if (!lookup) {
+          lookup = options
+            .resolve(asked.name)
+            .then((found) => {
+              if (found) proxy.serve(found)
+            })
+            .catch(() => undefined)
+            .finally(() => finding.delete(asked.name))
+          finding.set(asked.name, lookup)
+        }
+        await lookup
+      }
+      const door = doors.get(asked.name)
+      if (!door) {
+        // A door this app is not reaching. Answered like any unknown path — the
+        // card's own retry loop handles it, and it says nothing about what
+        // other doors exist.
+        response.writeHead(404).end()
+        return
+      }
+      await carry(door.caller, asked, request, response, log)
+    })()
   })
 
-  return new Promise((resolve) => {
+  const proxy: RelayProxy = {
+    port: 0,
+    address: '',
+    serve: (door) => {
+      const existing = doors.get(door.name)
+      if (existing?.key === door.key && existing.origin === door.relayOrigin) return
+      existing?.caller.close()
+      doors.set(door.name, {
+        key: door.key,
+        origin: door.relayOrigin,
+        caller: new RelayCaller(
+          reachOverHttp({ origin: door.relayOrigin, name: door.name, log }),
+          door.name,
+          door.key
+        )
+      })
+    },
+    withdraw: (name) => {
+      doors.get(name)?.caller.close()
+      doors.delete(name)
+    },
+    close: () => {
+      for (const door of doors.values()) door.caller.close()
+      doors.clear()
+      clearPort()
+      server.close()
+    }
+  }
+
+  return new Promise((settle) => {
     // LOOPBACK ONLY, stated as an address rather than a firewall rule: this
     // listener must not be reachable from the network under any configuration.
     server.listen(0, '127.0.0.1', () => {
       const address = server.address()
-      const port = typeof address === 'object' && address ? address.port : 0
-      writePort(port)
-      log(`relay proxy on 127.0.0.1:${port} for ${options.relayOrigin}`)
-      resolve({
-        port,
-        address: typeof address === 'object' && address ? address.address : '',
-        serve: (door) => {
-          const existing = doors.get(door.name)
-          if (existing?.key === door.key) return
-          existing?.caller.close()
-          doors.set(door.name, {
-            key: door.key,
-            caller: new RelayCaller(
-              reachOverHttp({ origin: options.relayOrigin, name: door.name, log }),
-              door.name,
-              door.key
-            )
-          })
-        },
-        withdraw: (name) => {
-          doors.get(name)?.caller.close()
-          doors.delete(name)
-        },
-        close: () => {
-          for (const door of doors.values()) door.caller.close()
-          doors.clear()
-          clearPort()
-          server.close()
-        }
-      })
+      proxy.port = typeof address === 'object' && address ? address.port : 0
+      proxy.address = typeof address === 'object' && address ? address.address : ''
+      writePort(proxy.port)
+      log(`relay proxy on 127.0.0.1:${proxy.port}`)
+      settle(proxy)
     })
   })
 }

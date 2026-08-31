@@ -139,6 +139,9 @@ import {
 } from './teams'
 import http from 'node:http'
 import { MOBILE_HTTPS_PORT, MOBILE_PORT } from './mobile-ports'
+import { createRelayServing } from './relay-serving'
+import { startRelayProxy, type RelayProxy } from './relay-proxy'
+import { importedDoors, rememberDoor, resolveDoor } from './relay-doorbook'
 import { readJson, respondJson } from './mobile-http'
 import { deriveSlug, uniqueSlug } from './workspace-slug'
 import { networkInterfaces } from 'node:os'
@@ -527,7 +530,31 @@ const servedCallers = new ServedCallers()
  * change, because everything downstream reads the transport rather than
  * guessing from the shape of the URL.
  */
+/**
+ * THE RELAY, and why it is opt-in rather than the default it will become.
+ *
+ * Turning this on hands a team's door to a machine we operate, and until
+ * cookrew.dev is actually standing there that would be a promise the product
+ * cannot keep. Configured → the card offers a cookrew.dev name; not configured
+ * → everything below behaves exactly as it did, which is what keeps every
+ * existing test about reach meaningful rather than merely still-passing.
+ */
+const RELAY_ORIGIN = process.env.COOKREW_REGISTRY ?? ''
+const RELAY_HANDLE = process.env.COOKREW_HANDLE ?? ''
+const relayServing =
+  RELAY_ORIGIN && RELAY_HANDLE
+    ? createRelayServing({
+        origin: RELAY_ORIGIN,
+        loopbackPort: () => MOBILE_PORT,
+        log: (message) => console.error(message)
+      })
+    : null
+
 function servedReach(slug: string): { address: string; transport: ServeTransport } {
+  // THE RELAY WINS when it is carrying this door, because it is the only
+  // address that works for the person an owner is most likely to send it to.
+  const relayed = relayServing?.addressFor(slug)
+  if (relayed) return { address: relayed.address, transport: 'relay' }
   // MagicDNS name, never a raw tailnet IP: it survives re-auth, and it is the
   // one a caller can actually type back to us.
   const magic = cachedTailnet()?.magicDnsName
@@ -2535,6 +2562,66 @@ const MAX_FACE_BYTES = 64 * 1024
 const callerTokens = new Map<string, string>()
 
 /**
+ * One key per door, and NOT its wire address.
+ *
+ * A relayed door is reached through a loopback port that changes with every
+ * restart, so keying a token by where it was reached would lose it the moment
+ * the app came back. A published name is the durable identity; a dialled
+ * door's address is its own.
+ */
+function targetKey(target: ServeTarget): string {
+  return target.door ?? `${target.origin}/${target.slug}`
+}
+
+/**
+ * ONE PROXY for every relayed door this app is reaching.
+ *
+ * Started the first time one is needed rather than at boot: a caller who never
+ * imports a relayed team never has a listener they did not ask for.
+ */
+let callerProxy: RelayProxy | null = null
+
+/**
+ * Where to actually send a request for this target.
+ *
+ * A dialled door is its own address. A RELAYED door is a name, so the door
+ * record is fetched from the directory it names — for its seal key, which the
+ * caller pins from this moment on — and the request goes to the loopback end
+ * of the relay instead.
+ */
+async function reachable(target: ServeTarget): Promise<ServeTarget | null> {
+  if (!target.door) return target
+  try {
+    const found = await fetch(new URL(`/v1/doors/${target.door}`, target.origin), {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(5000)
+    })
+    if (!found.ok) return null
+    const record = (await found.json()) as { sealKey?: unknown; transport?: unknown }
+    // No key means nothing to pin, and an unpinned relayed door is one the
+    // relay could stand in the middle of. Refused rather than reached.
+    if (typeof record.sealKey !== 'string' || record.transport !== 'relay') return null
+    if (!callerProxy) {
+      callerProxy = await startRelayProxy({
+        log: (message) => console.error(message),
+        // A card placed months ago starts with nothing in memory. This is how
+        // it finds its door again without being imported a second time.
+        resolve: resolveDoor
+      })
+    }
+    // Which directory this door came from, kept — a name alone does not say,
+    // and guessing would look a team up on a registry it was never on.
+    rememberDoor(target.door, target.origin)
+    callerProxy.serve({ name: target.door, key: record.sealKey, relayOrigin: target.origin })
+    // The SAME shape as a dialled door, so everything downstream — the
+    // sign-in, the 402, the settle — is unchanged and unaware.
+    return { origin: `http://127.0.0.1:${callerProxy.port}`, slug: target.door, door: target.door }
+  } catch {
+    return null
+  }
+}
+
+/**
  * Read a served door's public face — what the owner chose to publish.
  *
  * Hostile until proven otherwise: this fetches an address a user pasted, from
@@ -2552,7 +2639,9 @@ async function inspectServeAddress(
   const target = parseServeAddress(link)
   if (!target) return { ok: false, reason: 'bad-address' }
   try {
-    const res = await fetch(`${target.origin}/${target.slug}/crew`, {
+    const at = await reachable(target)
+    if (!at) return { ok: false, reason: 'not-serving' }
+    const res = await fetch(`${at.origin}/${at.slug}/crew`, {
       redirect: 'manual',
       signal: AbortSignal.timeout(5000)
     })
@@ -3163,6 +3252,21 @@ app.whenReady().then(() => {
   })
   routines.start()
 
+  // THE CALLER'S END OF THE RELAY, up before any card can ask for it.
+  //
+  // Started whenever this app has ever imported a relayed team, because those
+  // cards start with the app and go looking for a loopback port. Left lazy,
+  // they would find the PREVIOUS run's port number in a file and dial a socket
+  // nobody is holding — which reads as the team having gone away.
+  if (importedDoors()) {
+    void startRelayProxy({
+      log: (message) => console.error(message),
+      resolve: resolveDoor
+    }).then((proxy) => {
+      callerProxy = proxy
+    })
+  }
+
   startMobileServer({
     servedSlug: handleServedSlug,
     store,
@@ -3634,11 +3738,37 @@ function registerIpc(handlers: RestoreHandlers): void {
         if (error instanceof ServeRefused) return { ok: false as const, reason: error.reason }
         throw error
       }
+      // THE RELAY, when it is configured. Its refusal is not the serve's:
+      // the team IS being served on this network either way, so a relay that
+      // could not be joined narrows the reach rather than undoing the act.
+      if (relayServing) {
+        const snapshot = teams.load(input.templateId)
+        const joined = await relayServing.serve({
+          slug,
+          team: slug,
+          handle: RELAY_HANDLE,
+          face: {
+            title: snapshot?.name ?? input.templateId,
+            door: (snapshot ? orchAgentOf(snapshot) : null) ?? '',
+            agents: (snapshot?.nodes ?? []).filter((n) => n.kind === 'terminal').length,
+            access: input.access,
+            ...(input.access === 'paid' && input.priceUsd !== undefined
+              ? { priceUsd: input.priceUsd }
+              : {}),
+            rails: servedPaymentRails(
+              servedPaymentTerms({ slug, ...(input.priceUsd !== undefined ? { priceUsd: input.priceUsd } : {}) })
+            )
+          }
+        })
+        if (!joined.ok) console.error(`serving ${slug}: not on the relay (${joined.reason})`)
+      }
       return { ok: true as const, serviceId, slug, address: servedAddress(slug) }
     }
   )
-  ipcMain.handle('serving:stop', (_e, serviceId: string) => {
+  ipcMain.handle('serving:stop', async (_e, serviceId: string) => {
+    const stopping = serving.served.list().find((t) => t.serviceId === serviceId)
     serving.stop(serviceId)
+    if (stopping) await relayServing?.withdraw(stopping.slug)
     return { ok: true as const }
   })
   ipcMain.handle('serving:payment-status', () => configuredServedPaymentStatus())
@@ -3686,9 +3816,11 @@ function registerIpc(handlers: RestoreHandlers): void {
     const target = parseServeAddress(link)
     if (!target) return { ok: false as const, reason: 'bad-address' as const }
     try {
-      const token = await signInToDoor(target)
-      callerTokens.set(`${target.origin}/${target.slug}`, token)
-      const phase = await openAdmission(target, token)
+      const at = await reachable(target)
+      if (!at) return { ok: false as const, reason: 'sign-in' as const, detail: 'not serving' }
+      const token = await signInToDoor(at)
+      callerTokens.set(targetKey(target), token)
+      const phase = await openAdmission(at, token)
       return { ok: true as const, phase, wallet: deviceWallet() }
     } catch (error) {
       return {
@@ -3707,10 +3839,12 @@ function registerIpc(handlers: RestoreHandlers): void {
    */
   ipcMain.handle('serve:checkout', async (_e, link: string) => {
     const target = parseServeAddress(link)
-    const token = target ? callerTokens.get(`${target.origin}/${target.slug}`) : undefined
+    const token = target ? callerTokens.get(targetKey(target)) : undefined
     if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
     try {
-      const checkout = await startStripeCheckout(target, token)
+      const at = await reachable(target)
+      if (!at) return { ok: false as const, reason: 'unavailable' as const }
+      const checkout = await startStripeCheckout(at, token)
       await shell.openExternal(checkout.url)
       // The URL comes back too: a hand-off that silently failed to raise a
       // browser would otherwise leave the person waiting on a page they never
@@ -3738,15 +3872,17 @@ function registerIpc(handlers: RestoreHandlers): void {
     'serve:settle',
     async (_e, link: string, rail: 'x402' | 'stripe', session?: string) => {
       const target = parseServeAddress(link)
-      const token = target ? callerTokens.get(`${target.origin}/${target.slug}`) : undefined
+      const token = target ? callerTokens.get(targetKey(target)) : undefined
       if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
       try {
+        const at = await reachable(target)
+        if (!at) return { ok: false as const, reason: 'refused' as const }
         let payment: string
         if (rail === 'stripe') {
           if (!session) return { ok: false as const, reason: 'no-session' as const }
           payment = stripePaymentHeader(session)
         } else {
-          const quoted = await openAdmission(target, token)
+          const quoted = await openAdmission(at, token)
           const terms =
             quoted.kind === 'pay'
               ? quoted.rails.find((entry) => entry.rail === 'x402')
@@ -3758,7 +3894,7 @@ function registerIpc(handlers: RestoreHandlers): void {
           }
           payment = await buildX402Payment(terms.requirements)
         }
-        return { ok: true as const, phase: await openAdmission(target, token, payment) }
+        return { ok: true as const, phase: await openAdmission(at, token, payment) }
       } catch (error) {
         return {
           ok: false as const,

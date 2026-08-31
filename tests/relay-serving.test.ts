@@ -154,9 +154,9 @@ describe('serve here, import there', () => {
     expect(JSON.stringify(listed)).not.toContain(String(app.port))
 
     // ── THE OTHER END, which knows only the name ────────────────────────
-    const proxy = await startRelayProxy({ relayOrigin: origin })
+    const proxy = await startRelayProxy({})
     shut.push(() => proxy.close())
-    proxy.serve({ name: NAME, key: listed.sealKey ?? '' })
+    proxy.serve({ name: NAME, key: listed.sealKey ?? '', relayOrigin: origin })
 
     const face = await card(proxy.port, 'GET', '/crew')
     expect(face.status).toBe(200)
@@ -181,9 +181,9 @@ describe('serve here, import there', () => {
     const listed = (await (
       await fetch(`${origin}/v1/doors/@${HANDLE}/${TEAM}`)
     ).json()) as DoorRecord
-    const proxy = await startRelayProxy({ relayOrigin: origin })
+    const proxy = await startRelayProxy({})
     shut.push(() => proxy.close())
-    proxy.serve({ name: NAME, key: listed.sealKey ?? '' })
+    proxy.serve({ name: NAME, key: listed.sealKey ?? '', relayOrigin: origin })
 
     const got: string[] = []
     let status = 0
