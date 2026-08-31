@@ -209,7 +209,7 @@ import { buildRoleBootMessage } from '../shared/fork'
 import { pageTurns } from '../shared/turn'
 import type { TurnPageRequest } from '../shared/turn'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
-import { sweepStorage } from './storage-gc-scan'
+import { sweepStorageInWorker } from './storage-gc-worker'
 
 // ── COMPOSITOR BUDGET — the golden-frame flicker ─────────────────────────────
 // Chromium sizes its raster-tile budget from a conservative GPU-memory guess.
@@ -3180,19 +3180,20 @@ app.whenReady().then(() => {
   // deliberately quiet on the happy path — a sweep that frees nothing is the
   // normal case and does not deserve a line in the log.
   setTimeout(() => {
-    try {
-      const swept = sweepStorage({ apply: true })
-      if (swept.remove.length > 0) {
-        const mb = (swept.bytes / 1024 / 1024).toFixed(1)
-        console.error(`storage sweep: reclaimed ${swept.remove.length} files (${mb}MB)`)
-      }
-      if (swept.failed.length > 0) {
-        console.error(`storage sweep: ${swept.failed.length} file(s) could not be removed`)
-      }
-    } catch (error) {
-      // Reclaiming disk is never worth a failed launch.
-      console.error('storage sweep failed:', error)
-    }
+    void sweepStorageInWorker(path.join(dirname, 'storage-gc-worker.js'), { apply: true })
+      .then((swept) => {
+        if (swept.remove.length > 0) {
+          const mb = (swept.bytes / 1024 / 1024).toFixed(1)
+          console.error(`storage sweep: reclaimed ${swept.remove.length} files (${mb}MB)`)
+        }
+        if (swept.failed.length > 0) {
+          console.error(`storage sweep: ${swept.failed.length} file(s) could not be removed`)
+        }
+      })
+      .catch((error) => {
+        // Reclaiming disk is never worth freezing or failing the app.
+        console.error('storage sweep worker failed:', error)
+      })
   }, 30_000)
 
   // Re-key legacy version pins by checkpoint uuid (pin-rekey.ts — the re-key
