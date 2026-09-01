@@ -55,6 +55,19 @@ const PORT = Number(flag('port', '8790'))
 const TERMS_TTL_MS = Number(flag('terms-ttl', String(DEFAULT_TERMS_CONFIG.ttlMs)))
 const CHAIN = flag('chain', DEFAULT_TERMS_CONFIG.chain)
 const DATA = path.resolve(flag('data', path.join(process.cwd(), 'registry', 'data')))
+/**
+ * DEVELOPMENT MODE, and it is OFF unless asked for.
+ *
+ * It was `true` here, unconditionally, because this file began as a dev-only
+ * entry point. The moment the same binary was deployed at cookrew.dev that
+ * constant published `/v1/dev/identities` — a list of every enrolled
+ * credential, and a DELETE that forgets all of them — to the open internet.
+ *
+ * A deployment either was started for development or it was not. That is a
+ * decision made at boot by whoever ran it, never a default, and never
+ * something a reader has to infer from which file the flag lives in.
+ */
+const DEV = args.includes('--dev')
 
 const store = new RegistryStore(DATA)
 const log = new TransparencyLog(DATA)
@@ -180,21 +193,24 @@ createRegistry({
   log,
   identity,
   pricing,
-  dev: true,
+  dev: DEV,
   // R30. The directory of teams someone is SERVING, and the relay that carries
   // calls to the ones that cannot be dialled. Both on in the dev binary because
   // the whole point of it is to drive the real path end to end.
-  // Dev: it lists doors on a localhost relay, which a production registry
+  // Dev only: it lists doors on a localhost relay, which a production registry
   // refuses because "anyone with the link" would not be true of them.
-  doors: new DoorStore(DATA, { allowPrivate: true }),
+  doors: new DoorStore(DATA, { allowPrivate: DEV }),
   relay: true,
+  // The address printed on a team's page is something a person copies, so it
+  // is the configured origin rather than whatever Host a caller sent.
+  origin: resolved.config.origin,
   note: (message) => console.error(message),
   authorize: makeAuthorize(store, identity, pricing)
 }).listen(PORT, () => {
   // Print the ORIGIN, not a different spelling of the same port. The old banner
   // said 127.0.0.1 while identity accepted only localhost, so the server was
   // advertising the one address on which nobody could authenticate.
-  console.log(`registry on ${resolved.config.origin}  data=${DATA}`)
+  console.log(`registry on ${resolved.config.origin}  data=${DATA}${DEV ? '  [DEV]' : ''}`)
   for (const p of store.list()) {
     console.log(`  ${p.name.padEnd(16)} v${String(p.version).padEnd(3)} ${p.visibility.padEnd(11)} ${p.id}`)
   }
