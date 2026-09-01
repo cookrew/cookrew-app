@@ -1,6 +1,18 @@
 import type { DoorRecord } from './doors'
 
 /**
+ * A door as a PAGE sees it: the record, plus whether anyone is actually
+ * holding it open right now.
+ *
+ * The two are genuinely different facts and the pages used to show only the
+ * first, which meant a team stayed advertised while its author's laptop had
+ * been shut since Tuesday. `live` is computed per request from the relay's own
+ * connection table — never stored, because a stored one would be the same
+ * stale claim with an extra step.
+ */
+export type ListedDoor = DoorRecord & { live?: boolean }
+
+/**
  * THE PUBLIC FACE OF cookrew.dev.
  *
  * Three documents, all generated from what the registry already knows: the
@@ -128,6 +140,9 @@ overflow-x:auto;white-space:nowrap;margin:14px 0}
 .rails li{font:600 11.5px ui-monospace,Menlo,monospace;letter-spacing:.06em;
 border:1px solid var(--line);border-radius:6px;padding:4px 9px;color:var(--dim)}
 .empty{color:var(--dim);font-style:italic}
+.off{color:#a4682b;font-weight:600}
+@media (prefers-color-scheme:dark){.off{color:#e0a565}}
+.off-note{border-color:#d8b483;margin:18px 0}
 footer{margin-top:64px;padding-top:20px;border-top:1px solid var(--line);
 color:var(--dim);font-size:13.5px}
 `
@@ -153,7 +168,7 @@ ${main}
  * comparison because that is how anybody arrives here: they already have a
  * chat tab, and the question is why they would want anything else.
  */
-export function homePage(doors: readonly DoorRecord[]): Page {
+export function homePage(doors: readonly ListedDoor[]): Page {
   const serving = doors.length
   const live =
     serving === 0
@@ -218,24 +233,25 @@ ${live}
 }
 
 /** One line in a list of doors — used by the front page and an owner's page. */
-function doorRow(door: DoorRecord): string {
+function doorRow(door: ListedDoor): string {
   const at = `/${esc(door.handle)}/${esc(door.name)}`
   return `<li>
 <p class="door"><a class="name" href="${at}">${esc(door.title)}</a>
 ${priceChip(door)}</p>
 <p class="meta">by <a href="/${esc(door.handle)}">${esc(door.handle)}</a> ·
-one door: ${esc(door.door)} · ${door.agents} agent${door.agents === 1 ? '' : 's'}</p>
+one door: ${esc(door.door)} · ${door.agents} agent${door.agents === 1 ? '' : 's'}
+${door.live === false ? '· <span class="off">offline</span>' : ''}</p>
 </li>`
 }
 
-function priceChip(door: DoorRecord): string {
+function priceChip(door: ListedDoor): string {
   return door.access === 'paid' && door.priceUsd
     ? `<span class="price">${esc(door.priceUsd)} USD · per session</span>`
     : `<span class="price free">free · account needed</span>`
 }
 
 /** AN OWNER'S PAGE — who they are, and what they are serving. */
-export function handlePage(handle: string, doors: readonly DoorRecord[]): Page {
+export function handlePage(handle: string, doors: readonly ListedDoor[]): Page {
   if (doors.length === 0) {
     return page(
       404,
@@ -264,7 +280,7 @@ who has an account.</p>`,
  * to click, because clicking it lands back here — the team is not on the web,
  * it is on its author's machine, and this page is only the sign that says so.
  */
-export function doorPage(door: DoorRecord | null, origin: string): Page {
+export function doorPage(door: ListedDoor | null, origin: string): Page {
   if (!door) {
     return page(
       404,
@@ -292,6 +308,15 @@ answer the same, so the directory cannot be used to enumerate what is here.</p>`
 <h1>${esc(door.title)}</h1>
 <p class="lede">${esc(door.door)} answers, on behalf of
 ${door.agents} agent${door.agents === 1 ? '' : 's'} standing behind it.</p>
+
+${
+  door.live === false
+    ? `<div class="card off-note"><p class="door"><strong>Not taking calls right now.</strong></p>
+<p class="meta">This team is listed, but the machine it runs on is not
+connected at the moment. The address below stays valid — it will work again
+when its author is back.</p></div>`
+    : ''
+}
 
 <h2>How to reach it</h2>
 <p>Paste this into Cookrew — Import a served team.</p>

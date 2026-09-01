@@ -105,9 +105,57 @@ export function parseServeAddress(link: string): ServeTarget | null {
       return parsed ? { origin: url.origin, slug: parsed[2], door: name } : null
     }
     if (segments.length !== 1) return null
+    // ONE SEGMENT ON THE REGISTRY IS AN OWNER, never a door.
+    //
+    // A dialled door is somebody's own machine answering at /slug, and the
+    // registry is not that — it is a directory. Without this, cookrew.dev/drej
+    // read as both an owner and a door, and which one you got depended on the
+    // order the sheet happened to try them in.
+    if (url.origin === COOKREW_REGISTRY) return null
     const slug = segments[0]
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null
     return { origin: url.origin, slug }
+  } catch {
+    return null
+  }
+}
+
+/** An owner, rather than one of their teams. */
+export interface AccountTarget {
+  /** The registry that knows them. */
+  origin: string
+  /** Their handle, without the @. */
+  handle: string
+}
+
+const HANDLE_ONLY = /^@?([a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?)$/
+
+/**
+ * Parse an OWNER's address — `@drej`, or a link to their page.
+ *
+ * Separate from parseServeAddress because the two answer different questions
+ * and one function returning either would make every call site ask "which did
+ * I get". A one-segment path is genuinely ambiguous — on a dialled door it is
+ * a team's slug — so a bare handle must carry its @, and a link is only read
+ * as an account on a registry we know.
+ */
+export function parseAccountAddress(link: string): AccountTarget | null {
+  const trimmed = link.trim()
+  if (trimmed.length === 0) return null
+  if (trimmed.startsWith('@')) {
+    const bare = HANDLE_ONLY.exec(trimmed)
+    return bare ? { origin: COOKREW_REGISTRY, handle: bare[1] } : null
+  }
+  const candidate = /^https?:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`
+  try {
+    const url = new URL(candidate)
+    if (!['http:', 'https:'].includes(url.protocol)) return null
+    if (url.username || url.password || url.search || url.hash) return null
+    if (url.origin !== COOKREW_REGISTRY) return null
+    const segments = url.pathname.split('/').filter((part) => part.length > 0)
+    if (segments.length !== 1) return null
+    const parsed = HANDLE_ONLY.exec(decodeURIComponent(segments[0]))
+    return parsed ? { origin: url.origin, handle: parsed[1] } : null
   } catch {
     return null
   }
