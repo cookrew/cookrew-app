@@ -32,6 +32,7 @@ const alwaysDrej = {
 interface Stood {
   origin: string
   server: Server
+  hub: { has(name: string): boolean }
   close: () => Promise<void>
 }
 
@@ -49,6 +50,7 @@ async function standUp(identity: IdentityService = alwaysDrej): Promise<Stood> {
   return {
     origin: `http://127.0.0.1:${port}`,
     server,
+    hub: relay.hub,
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections()
@@ -211,6 +213,40 @@ describe('a door that dialled out, reached from outside', () => {
     const dial = dialRelay({ origin: relay.origin, ticket: 'not-a-ticket' })
     await expect(dial.ready).rejects.toThrow(/refused the door/)
     dial.close()
+  })
+
+  it('a door that loses its uplink stops being listed as serving', async () => {
+    /**
+     * THE ZOMBIE. Found in production: nginx timed out the door's idle uplink,
+     * and because the DOWNLINK is what claims the name, the relay went on
+     * saying the door was there. It received every call and answered none —
+     * which reads to a caller as the address being unreachable, and to the
+     * owner as nothing at all.
+     */
+    const relay = await standUp()
+    open.push(relay.close)
+    const keys = generateSealKeyPair()
+    const ticket = await ticketFor(relay.origin, NAME)
+    const dial = dialRelay({ origin: relay.origin, ticket })
+    attachDoorToRelay(dial.socket, relay.origin, {
+      slug: SLUG,
+      seal: { privateKey: keys.privateKey, name: NAME },
+      handle: async () => ({ status: 200, headers: {}, body: 'ok' })
+    })
+    await dial.ready
+    // It is up, and answering.
+    expect((await callerFor(relay.origin, keys.publicKey).request('GET', '/crew', {})).status).toBe(
+      200
+    )
+
+    // The uplink dies on its own — a proxy's idle timeout, not a withdrawal.
+    let ended = ''
+    dial.onEnded((why) => (ended = why))
+    relay.server.closeAllConnections()
+    await until(() => ended.length > 0, 'the dial to notice')
+
+    // The door must no longer be claimed, so nothing can be told it is live.
+    expect(relay.hub.has(NAME)).toBe(false)
   })
 
   it('two exchanges at once do not cross', async () => {

@@ -16,13 +16,25 @@ import type { RelaySocket } from './relay-client'
  * would be refused for a reason that reads like a credential problem.
  */
 
-/** Well under the minute-or-two an idle connection survives at a CDN. */
-const HEARTBEAT_MS = 25_000
+/**
+ * Well under the minute-or-two an idle connection survives at a CDN, and well
+ * under nginx's own 60-second client_body_timeout — which is what killed the
+ * uplink in production, since a door with no callers writes nothing at all.
+ */
+const HEARTBEAT_MS = 15_000
 
 export interface RelayDial {
   socket: RelaySocket
   /** The name the relay confirmed. Resolves when the door is live. */
   ready: Promise<string>
+  /**
+   * Called once when this dial is over, for any reason.
+   *
+   * A door is a long-lived INTENT — somebody meant to serve their team — and a
+   * connection is not. Without this the two were the same thing, so a dropped
+   * uplink ended the serving silently and permanently.
+   */
+  onEnded(listener: (why: string) => void): void
   close(): void
 }
 
@@ -43,6 +55,8 @@ export function dialRelay(options: RelayDialOptions): RelayDial {
   const listeners: ((data: string) => void)[] = []
   const closers: (() => void)[] = []
   let uplink: http.ClientRequest | null = null
+  /** Assigned below; held so a shutdown can tear it down too. */
+  let downlink: http.ClientRequest | null = null
   let closed = false
   /** Frames produced before the uplink exists, in order. */
   const queued: string[] = []
@@ -57,14 +71,21 @@ export function dialRelay(options: RelayDialOptions): RelayDial {
   // rejection would take the process down rather than the connection.
   ready.catch(() => undefined)
 
+  const endedListeners: ((why: string) => void)[] = []
   const shutDown = (why: string): void => {
     if (closed) return
     closed = true
     log(`relay: the line to ${base.host} ended (${why})`)
-    uplink?.end()
+    uplink?.destroy()
     uplink = null
+    // THE DOWNLINK TOO. Left open, it kept delivering requests to a door that
+    // could no longer answer them: every call was received and none returned,
+    // which reads to a caller as the address being unreachable and to the
+    // owner as nothing at all.
+    downlink?.destroy()
     refuse(new RelayDialFailed(why))
     closers.forEach((c) => c())
+    endedListeners.forEach((l) => l(why))
   }
 
   const url = (path: string): string =>
@@ -105,6 +126,7 @@ export function dialRelay(options: RelayDialOptions): RelayDial {
     res.on('end', () => shutDown('the relay closed the line'))
     res.on('error', (error) => shutDown(String(error)))
   })
+  downlink = down
   down.on('error', (error) => shutDown(String(error)))
   down.end()
 
@@ -154,10 +176,8 @@ export function dialRelay(options: RelayDialOptions): RelayDial {
   return {
     socket,
     ready,
-    close: () => {
-      shutDown('the door withdrew')
-      down.destroy()
-    }
+    onEnded: (listener) => endedListeners.push(listener),
+    close: () => shutDown('the door withdrew')
   }
 }
 
