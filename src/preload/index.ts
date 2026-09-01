@@ -66,6 +66,7 @@ const api = {
 
   // ── import a served team (caller side) ──
   serveInspect: (link: string) => ipcRenderer.invoke('serve:inspect', link),
+  serveBrowse: (link: string) => ipcRenderer.invoke('serve:browse', link),
   serveGate: (link: string) => ipcRenderer.invoke('serve:gate', link),
   serveCheckout: (link: string) => ipcRenderer.invoke('serve:checkout', link),
   serveSettle: (link: string, rail: 'x402' | 'stripe', session?: string) =>

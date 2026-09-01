@@ -38,6 +38,17 @@ export interface BoardSnapshotLike {
 }
 
 /** A served door's public face, as the import sheet previews it. */
+/** One team in an owner's list. `link` is what Import takes, built by main. */
+export interface BrowsedTeam {
+  title: string;
+  door: string;
+  agents: number;
+  access: 'account' | 'paid';
+  priceUsd?: string;
+  live: boolean;
+  link: string;
+}
+
 export interface ServeFacePreview {
   name: string;
   serviceId: string;
@@ -137,6 +148,19 @@ export interface CookrewApi {
     link: string,
   ) => Promise<
     | { ok: true; target: { origin: string; slug: string }; face: ServeFacePreview }
+    | { ok: false; reason: string }
+  >;
+  /**
+   * Browse an OWNER — the teams one account is serving.
+   *
+   * The sheet takes a team's address, which assumes you already have one. A
+   * person is handed a name at least as often, and this is the path from one
+   * to the other without copying a second address out of a web page by hand.
+   */
+  serveBrowse: (
+    link: string,
+  ) => Promise<
+    | { ok: true; handle: string; teams: BrowsedTeam[] }
     | { ok: false; reason: string }
   >;
   /** Import: place ONE orch interface card for the served team. */

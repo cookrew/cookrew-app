@@ -388,6 +388,9 @@ export function createRemoteApi(): CookrewApi {
     servingSessions: async () => [],
     servingEnd: async () => ({ stopped: 0 }),
     serveInspect: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    // Same refusal as inspect: importing a served team places a terminal, and
+    // a phone has none to place.
+    serveBrowse: async () => ({ ok: false as const, reason: 'desktop-only' }),
     serveImport: async () => ({ ok: false as const, reason: 'desktop-only' }),
     serveGate: async () => ({ ok: false as const, reason: 'desktop-only' }),
     serveCheckout: async () => ({ ok: false as const, reason: 'desktop-only' }),

@@ -10,7 +10,7 @@ import { publicKeyFromId, verifyManifest } from '../../src/main/preset-publish'
 import type { IdentityService, TokenScope } from './identity'
 import type { Terms } from './terms'
 import type { PaymentFailure } from './payment'
-import { DoorStore, doorPath, type DoorInput } from './doors'
+import { DoorStore, doorPath, type DoorInput, type DoorRecord } from './doors'
 import { createRelayHttp, type RelayHttp } from './relay-http'
 import { RESERVED_HANDLES, doorPage, handlePage, homePage, type Page } from './site'
 import type { ServerResponse } from 'node:http'
@@ -142,6 +142,26 @@ export function createRegistry(deps: RegistryDeps): Server {
     ? createRelayHttp({ identity: deps.identity, log: deps.note })
     : null
 
+  /**
+   * IS THIS DOOR ACTUALLY THERE?
+   *
+   * A record and a connection are different things, and the directory used to
+   * know only the first. So a team stayed listed as though it were available
+   * for as long as its record lasted, while its author's laptop had been shut
+   * since Tuesday — somebody would paste the address, be told nobody was
+   * serving it, and reasonably conclude the address was wrong.
+   *
+   * The relay already knows: it is holding the connection or it is not. This
+   * is that answer, computed per response and never stored, because a stored
+   * one would be the same lie with an extra step.
+   */
+  const live = (handle: string, name: string): boolean =>
+    relay?.hub.has(`@${handle}/${name}`) ?? false
+  const withLive = (door: DoorRecord): DoorRecord & { live: boolean } => ({
+    ...door,
+    live: live(door.handle, door.name)
+  })
+
   return createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://registry.local')
     const method = request.method ?? 'GET'
@@ -223,7 +243,20 @@ export function createRegistry(deps: RegistryDeps): Server {
     // exactly as it did before, which is what keeps the older tests meaningful
     // rather than merely still-passing.
     if (deps.doors && method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'doors') {
-      json(response, 200, { doors: deps.doors.list(url.searchParams.get('q') ?? '') })
+      json(response, 200, {
+        doors: deps.doors.list(url.searchParams.get('q') ?? '').map(withLive)
+      })
+      return
+    }
+    // GET /v1/doors/@handle — everything one owner is serving. The account
+    // page and the import sheet both need it, and both used to have to fetch
+    // the whole directory and filter it themselves.
+    if (deps.doors && method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'doors') {
+      const handle = decodeURIComponent(parts[2]).replace(/^@/, '')
+      json(response, 200, {
+        handle,
+        doors: deps.doors.list().filter((d) => d.handle === handle).map(withLive)
+      })
       return
     }
     if (
@@ -246,7 +279,7 @@ export function createRegistry(deps: RegistryDeps): Server {
         json(response, 404, { error: 'not_found' })
         return
       }
-      json(response, 200, found)
+      json(response, 200, withLive(found))
       return
     }
     if (deps.doors && method === 'POST' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'doors') {
@@ -508,17 +541,21 @@ export function createRegistry(deps: RegistryDeps): Server {
       const bare = (value: string): string => decodeURIComponent(value).replace(/^@/, '')
 
       if (parts.length === 0) {
-        respondPage(response, homePage(site.list()))
+        respondPage(response, homePage(site.list().map(withLive)))
         return
       }
       if (parts.length === 1 && !RESERVED_HANDLES.has(parts[0].toLowerCase())) {
         const handle = bare(parts[0])
-        respondPage(response, handlePage(handle, site.list().filter((d) => d.handle === handle)))
+        respondPage(
+          response,
+          handlePage(handle, site.list().filter((d) => d.handle === handle).map(withLive))
+        )
         return
       }
       if (parts.length === 2 && !RESERVED_HANDLES.has(parts[0].toLowerCase())) {
         const at = deps.origin ?? originOf(request.headers.host) ?? ''
-        respondPage(response, doorPage(site.get(bare(parts[0]), bare(parts[1])), at))
+        const found = site.get(bare(parts[0]), bare(parts[1]))
+        respondPage(response, doorPage(found === null ? null : withLive(found), at))
         return
       }
     }

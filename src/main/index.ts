@@ -163,7 +163,9 @@ import {
 import { handleServedLineRoute, type LinePtyView } from './served-line'
 import {
   orchTerminalNode,
+  parseAccountAddress,
   parseServeAddress,
+  safeFaceName,
   validateFace,
   type ImportFace,
   type ServeTarget
@@ -2573,6 +2575,45 @@ function targetKey(target: ServeTarget): string {
   return target.door ?? `${target.origin}/${target.slug}`
 }
 
+/** One team, as a directory listing describes it. Validated, like any face. */
+interface BrowsedTeam {
+  title: string
+  door: string
+  agents: number
+  access: 'account' | 'paid'
+  priceUsd?: string
+  live: boolean
+  /** The address to import — built here so the sheet never assembles one. */
+  link: string
+}
+
+/**
+ * A directory entry, validated before anything renders it.
+ *
+ * This is a stranger's registry answering over the network, so it is treated
+ * exactly like a door's face: a known shape, bounded, or nothing.
+ */
+function publicTeam(value: unknown): BrowsedTeam | null {
+  if (typeof value !== 'object' || value === null) return null
+  const raw = value as Record<string, unknown>
+  const title = safeFaceName(raw.title)
+  const door = safeFaceName(raw.door)
+  const handle = typeof raw.handle === 'string' ? raw.handle : ''
+  const name = typeof raw.name === 'string' ? raw.name : ''
+  if (title === null || door === null || !handle || !name) return null
+  if (raw.access !== 'account' && raw.access !== 'paid') return null
+  const priceUsd = typeof raw.priceUsd === 'string' ? raw.priceUsd.slice(0, 32) : undefined
+  return {
+    title,
+    door,
+    agents: Number.isFinite(raw.agents) ? (raw.agents as number) : 0,
+    access: raw.access,
+    ...(priceUsd !== undefined ? { priceUsd } : {}),
+    live: raw.live !== false,
+    link: `@${handle}/${name}`
+  }
+}
+
 /**
  * ONE PROXY for every relayed door this app is reaching.
  *
@@ -2589,15 +2630,21 @@ let callerProxy: RelayProxy | null = null
  * caller pins from this moment on — and the request goes to the loopback end
  * of the relay instead.
  */
-async function reachable(target: ServeTarget): Promise<ServeTarget | null> {
-  if (!target.door) return target
+async function reachable(
+  target: ServeTarget
+): Promise<{ at: ServeTarget; listed: boolean; live: boolean } | null> {
+  if (!target.door) return { at: target, listed: false, live: true }
   try {
     const found = await fetch(new URL(`/v1/doors/${target.door}`, target.origin), {
       redirect: 'manual',
       signal: AbortSignal.timeout(5000)
     })
     if (!found.ok) return null
-    const record = (await found.json()) as { sealKey?: unknown; transport?: unknown }
+    const record = (await found.json()) as {
+      sealKey?: unknown
+      transport?: unknown
+      live?: unknown
+    }
     // No key means nothing to pin, and an unpinned relayed door is one the
     // relay could stand in the middle of. Refused rather than reached.
     if (typeof record.sealKey !== 'string' || record.transport !== 'relay') return null
@@ -2615,7 +2662,11 @@ async function reachable(target: ServeTarget): Promise<ServeTarget | null> {
     callerProxy.serve({ name: target.door, key: record.sealKey, relayOrigin: target.origin })
     // The SAME shape as a dialled door, so everything downstream — the
     // sign-in, the 402, the settle — is unchanged and unaware.
-    return { origin: `http://127.0.0.1:${callerProxy.port}`, slug: target.door, door: target.door }
+    return {
+      at: { origin: `http://127.0.0.1:${callerProxy.port}`, slug: target.door, door: target.door },
+      listed: true,
+      live: record.live !== false
+    }
   } catch {
     return null
   }
@@ -2634,18 +2685,24 @@ async function inspectServeAddress(
   link: string
 ): Promise<
   | { ok: true; target: ServeTarget; face: ImportFace }
-  | { ok: false; reason: 'bad-address' | 'not-serving' | 'unreachable' }
+  | { ok: false; reason: 'bad-address' | 'not-serving' | 'unreachable' | 'offline' }
 > {
   const target = parseServeAddress(link)
   if (!target) return { ok: false, reason: 'bad-address' }
   try {
-    const at = await reachable(target)
-    if (!at) return { ok: false, reason: 'not-serving' }
+    const reached = await reachable(target)
+    if (!reached) return { ok: false, reason: 'not-serving' }
+    const { at, listed, live } = reached
+    // LISTED BUT NOT THERE is its own answer. A team whose record exists and
+    // whose author's machine is simply shut is not a wrong address, and being
+    // told "nobody is serving a team at that address" sends a person off to
+    // check a link that was right all along.
+    if (listed && !live) return { ok: false, reason: 'offline' }
     const res = await fetch(`${at.origin}/${at.slug}/crew`, {
       redirect: 'manual',
       signal: AbortSignal.timeout(5000)
     })
-    if (!res.ok) return { ok: false, reason: 'not-serving' }
+    if (!res.ok) return { ok: false, reason: listed ? 'offline' : 'not-serving' }
     const body = await res.arrayBuffer()
     if (body.byteLength > MAX_FACE_BYTES) return { ok: false, reason: 'not-serving' }
     const face = validateFace(JSON.parse(new TextDecoder().decode(body)))
@@ -3804,6 +3861,38 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('serve:inspect', (_e, link: string) => inspectServeAddress(link))
 
   /**
+   * BROWSE AN OWNER — what one account is serving.
+   *
+   * The import sheet takes a team's address, which assumes the person already
+   * has one. An owner hands out their own name at least as often, and until
+   * now that was a dead end: you could read their page in a browser and then
+   * had to copy a second address out of it by hand.
+   *
+   * Free and commits nothing, like inspect: it reads a directory, and the door
+   * still decides everything when you actually knock.
+   */
+  ipcMain.handle('serve:browse', async (_e, link: string) => {
+    const account = parseAccountAddress(link)
+    if (!account) return { ok: false as const, reason: 'bad-address' as const }
+    try {
+      const found = await fetch(new URL(`/v1/doors/@${account.handle}`, account.origin), {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(5000)
+      })
+      if (!found.ok) return { ok: false as const, reason: 'not-serving' as const }
+      const body = (await found.json()) as { doors?: unknown }
+      const doors = Array.isArray(body.doors) ? body.doors : []
+      return {
+        ok: true as const,
+        handle: account.handle,
+        teams: doors.map(publicTeam).filter((t): t is BrowsedTeam => t !== null)
+      }
+    } catch {
+      return { ok: false as const, reason: 'unreachable' as const }
+    }
+  })
+
+  /**
    * THE GATE, asked. Sign in as the account the card will use, then open the
    * line once to hear what the door wants. Free doors answer `open` and the
    * import proceeds; a paid one answers `pay` with the terms it quoted, which
@@ -3816,8 +3905,9 @@ function registerIpc(handlers: RestoreHandlers): void {
     const target = parseServeAddress(link)
     if (!target) return { ok: false as const, reason: 'bad-address' as const }
     try {
-      const at = await reachable(target)
-      if (!at) return { ok: false as const, reason: 'sign-in' as const, detail: 'not serving' }
+      const reached = await reachable(target)
+      if (!reached) return { ok: false as const, reason: 'sign-in' as const, detail: 'not serving' }
+      const at = reached.at
       const token = await signInToDoor(at)
       callerTokens.set(targetKey(target), token)
       const phase = await openAdmission(at, token)
@@ -3842,9 +3932,9 @@ function registerIpc(handlers: RestoreHandlers): void {
     const token = target ? callerTokens.get(targetKey(target)) : undefined
     if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
     try {
-      const at = await reachable(target)
-      if (!at) return { ok: false as const, reason: 'unavailable' as const }
-      const checkout = await startStripeCheckout(at, token)
+      const reached = await reachable(target)
+      if (!reached) return { ok: false as const, reason: 'unavailable' as const }
+      const checkout = await startStripeCheckout(reached.at, token)
       await shell.openExternal(checkout.url)
       // The URL comes back too: a hand-off that silently failed to raise a
       // browser would otherwise leave the person waiting on a page they never
@@ -3875,8 +3965,9 @@ function registerIpc(handlers: RestoreHandlers): void {
       const token = target ? callerTokens.get(targetKey(target)) : undefined
       if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
       try {
-        const at = await reachable(target)
-        if (!at) return { ok: false as const, reason: 'refused' as const }
+        const reached = await reachable(target)
+        if (!reached) return { ok: false as const, reason: 'refused' as const }
+        const at = reached.at
         let payment: string
         if (rail === 'stripe') {
           if (!session) return { ok: false as const, reason: 'no-session' as const }

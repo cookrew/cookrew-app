@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { cookrew, type ServeFacePreview } from './api'
+import { cookrew, type BrowsedTeam, type ServeFacePreview } from './api'
 import { ImportGate } from './ImportGate'
 // The gs-* sheet primitives — stated here, by the component that wears them.
 import './grant-surface.css'
@@ -29,6 +29,8 @@ export function ImportServedSheet({
   const [preview, setPreview] = useState<ServeFacePreview | null>(null)
   /** A paid door hands off to the gate sheet; this is that hand-off. */
   const [gating, setGating] = useState(false)
+  /** An OWNER was pasted rather than a team: their teams, to choose from. */
+  const [account, setAccount] = useState<{ handle: string; teams: BrowsedTeam[] } | null>(null)
   const field = useRef<HTMLInputElement>(null)
 
   // The first field, never the primary — the same rule the enrol sheet keeps.
@@ -39,16 +41,59 @@ export function ImportServedSheet({
   const REASONS: Record<string, string> = {
     'bad-address': "That doesn't look like a served address.",
     'not-serving': 'Nobody is serving a team at that address.',
+    // NOT the same as a wrong address, and saying so sends people off to check
+    // a link that was right all along. The team exists; its machine is shut.
+    offline: 'That team is listed, but the machine it runs on is offline right now.',
     unreachable: "Couldn't reach that address — is the app running and on your network?",
     'desktop-only': 'Served teams can only be imported from the desktop app.'
   }
 
+  /**
+   * ONE FIELD, two kinds of address.
+   *
+   * An owner hands out their own name at least as often as one team's address,
+   * and the sheet used to be a dead end for the first — you had to open their
+   * page in a browser and copy a second address out of it by hand. So an
+   * account is tried first, and only what it cannot read is looked up as a team.
+   */
   const lookUp = (): void => {
     if (busy || link.trim().length === 0) return
     setBusy(true)
     setError(null)
+    setAccount(null)
     void cookrew()
-      .serveInspect(link.trim())
+      .serveBrowse(link.trim())
+      .then((browsed) => {
+        if (browsed.ok) {
+          setBusy(false)
+          setAccount({ handle: browsed.handle, teams: browsed.teams })
+          if (browsed.teams.length === 0) {
+            setError(`@${browsed.handle} is not serving anything right now.`)
+          }
+          return
+        }
+        return cookrew()
+          .serveInspect(link.trim())
+          .then((result) => {
+            setBusy(false)
+            if (result.ok) setPreview(result.face)
+            else setError(REASONS[result.reason] ?? "Couldn't read that address.")
+          })
+      })
+      .catch((err: unknown) => {
+        setBusy(false)
+        setError(err instanceof Error ? err.message : String(err))
+      })
+  }
+
+  /** Chose a team from an owner's list: fill the field and read its face. */
+  const choose = (team: BrowsedTeam): void => {
+    setLink(team.link)
+    setAccount(null)
+    setError(null)
+    setBusy(true)
+    void cookrew()
+      .serveInspect(team.link)
       .then((result) => {
         setBusy(false)
         if (result.ok) setPreview(result.face)
@@ -142,6 +187,37 @@ export function ImportServedSheet({
           <p className="gs-paste-error" role="alert">
             {error}
           </p>
+        )}
+
+        {account && account.teams.length > 0 && (
+          <section className="isv-account" aria-label={`Teams @${account.handle} is serving`}>
+            <p className="gs-sub">
+              @{account.handle} is serving {account.teams.length}{' '}
+              {account.teams.length === 1 ? 'team' : 'teams'}. Pick one.
+            </p>
+            <ul className="isv-teams">
+              {account.teams.map((team) => (
+                <li key={team.link}>
+                  <button
+                    className="isv-team"
+                    disabled={busy || !team.live}
+                    onClick={() => choose(team)}
+                  >
+                    <span className="isv-team-name">{team.title}</span>
+                    <span className="isv-team-meta">
+                      {team.door} · {team.agents} agent{team.agents === 1 ? '' : 's'}
+                      {' · '}
+                      {team.access === 'paid' ? `${team.priceUsd} USD` : 'free'}
+                    </span>
+                    {/* OFFLINE IS NOT UNAVAILABLE FOREVER — the address stays
+                        good. It is said here so nobody spends a click finding
+                        out, and so a shut laptop never reads as a bad link. */}
+                    {!team.live && <span className="isv-team-off">offline right now</span>}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
         )}
 
         {preview && (

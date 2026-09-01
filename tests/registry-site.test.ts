@@ -106,6 +106,36 @@ describe('what a team’s page says', () => {
   })
 })
 
+describe('a listing is not a connection', () => {
+  /**
+   * The bug this exists for: a team stayed advertised as available while the
+   * laptop it runs on had been shut for days. Somebody pasted the address,
+   * was told nobody was serving it, and reasonably went to check the link.
+   */
+  it('says so when a listed team is not actually there', () => {
+    const page = doorPage(door({ live: false }), 'https://cookrew.dev')
+    expect(page.body).toContain('Not taking calls right now')
+    // And the address is NOT withdrawn — it will work again.
+    expect(page.body).toContain('stays valid')
+    expect(page.body).toContain('https://cookrew.dev/drej/cookrew-alpha')
+  })
+
+  it('says nothing extra when it IS there', () => {
+    const page = doorPage(door({ live: true }), 'https://cookrew.dev')
+    expect(page.body).not.toContain('Not taking calls')
+  })
+
+  it('marks the offline ones in a list', () => {
+    const page = handlePage('drej', [
+      door({ live: true }),
+      door({ name: 'research', title: 'Research Crew', live: false })
+    ])
+    expect(page.body).toContain('offline')
+    // Exactly one of the two, not both.
+    expect(page.body.match(/offline/g)).toHaveLength(1)
+  })
+})
+
 describe('an owner’s page', () => {
   it('lists what they serve, and links each one', () => {
     const page = handlePage('drej', [door(), door({ name: 'research', title: 'Research Crew' })])
