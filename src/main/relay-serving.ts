@@ -57,7 +57,20 @@ interface Held {
   team: string
   dial: RelayDial
   detach: () => void
+  /** Set when the owner stops serving, so a redial knows not to bother. */
+  withdrawn: boolean
 }
+
+/**
+ * How long to wait before dialling again, growing to a minute.
+ *
+ * A connection can end for reasons that are nobody's fault — a proxy's idle
+ * timeout, a laptop's wifi, a relay restart — and serving is an INTENT that
+ * outlives all of them. What must not happen is what did happen: the dial
+ * ended, nothing redialled, and the door sat listed and unreachable while its
+ * owner believed it was up.
+ */
+const REDIAL_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000]
 
 export function createRelayServing(options: {
   /** The registry and relay, e.g. https://cookrew.dev */
@@ -88,13 +101,15 @@ export function createRelayServing(options: {
       })
       if (!joined.ok) return { ok: false, reason: joined.reason }
 
-      const detach = attachDoorToRelay(joined.dial.socket, options.origin, {
-        slug: input.slug,
-        seal: { privateKey: keys.privateKey, name: joined.name },
-        handle: (request) => askOurselves(options.loopbackPort(), request),
-        log
-      })
       const address = `${new URL(options.origin).origin}/${joined.name}`
+      const attach = (dial: RelayDial): (() => void) =>
+        attachDoorToRelay(dial.socket, options.origin, {
+          slug: input.slug,
+          seal: { privateKey: keys.privateKey, name: joined.name },
+          handle: (request) => askOurselves(options.loopbackPort(), request),
+          log
+        })
+      const detach = attach(joined.dial)
 
       const listed = await list(options.origin, input, {
         address,
@@ -109,14 +124,47 @@ export function createRelayServing(options: {
         return { ok: false, reason: 'not-listed' }
       }
 
-      held.set(input.slug, {
+      const entry: Held = {
         name: joined.name,
         address,
         handle: input.handle,
         team: input.team,
         dial: joined.dial,
-        detach
+        detach,
+        withdrawn: false
+      }
+      held.set(input.slug, entry)
+
+      /** Dial again, and keep the door's identity and listing as they were. */
+      const redial = (attempt: number): void => {
+        if (entry.withdrawn || held.get(input.slug) !== entry) return
+        const wait = REDIAL_MS[Math.min(attempt, REDIAL_MS.length - 1)]
+        setTimeout(() => {
+          if (entry.withdrawn || held.get(input.slug) !== entry) return
+          void joinRelay({ origin: options.origin, handle: input.handle, team: input.team, log })
+            .then((again) => {
+              if (entry.withdrawn || held.get(input.slug) !== entry) {
+                if (again.ok) again.dial.close()
+                return
+              }
+              if (!again.ok) {
+                log(`relay: ${joined.name} could not redial (${again.reason})`)
+                redial(attempt + 1)
+                return
+              }
+              entry.dial = again.dial
+              entry.detach = attach(again.dial)
+              again.dial.onEnded(() => redial(0))
+              log(`relay: ${joined.name} is back`)
+            })
+            .catch(() => redial(attempt + 1))
+        }, wait).unref?.()
+      }
+      joined.dial.onEnded((why) => {
+        log(`relay: ${joined.name} dropped (${why}) — dialling again`)
+        redial(0)
       })
+
       log(`serving ${joined.name} through ${new URL(options.origin).host}`)
       return { ok: true, address, name: joined.name }
     },
@@ -124,6 +172,7 @@ export function createRelayServing(options: {
     async withdraw(slug) {
       const door = held.get(slug)
       if (!door) return
+      door.withdrawn = true
       held.delete(slug)
       door.detach()
       door.dial.close()
@@ -132,6 +181,7 @@ export function createRelayServing(options: {
 
     closeAll() {
       for (const door of held.values()) {
+        door.withdrawn = true
         door.detach()
         door.dial.close()
       }

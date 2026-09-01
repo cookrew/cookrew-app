@@ -224,6 +224,8 @@ export function createRelayHttp(deps: {
       return
     }
     const name = ticket.name
+    /** The downlink this uplink belongs to, so ending one ends the pair. */
+    const socket = live.get(name)
     let buffer = ''
     request.on('data', (chunk: Buffer) => {
       buffer += chunk.toString('utf8')
@@ -241,10 +243,29 @@ export function createRelayHttp(deps: {
         request.destroy()
       }
     })
+    /**
+     * NO UPLINK MEANS NOT SERVING, and the door must stop being listed as
+     * though it were.
+     *
+     * The downlink is what claims the name, so a door whose uplink died kept
+     * the claim while being unable to answer a single call. It received every
+     * request and replied to none; the directory said "live"; a caller was
+     * told the address was unreachable. Ending the uplink now ends the door,
+     * which is the only version of this that is true.
+     */
+    const gone = (): void => {
+      if (live.get(name) === socket) {
+        live.delete(name)
+        hub.closeDoor(name)
+        log(`relay: ${name} lost its uplink`)
+      }
+    }
     request.on('end', () => {
+      gone()
       if (!response.writableEnded) json(response, 200, { ok: true })
     })
-    request.on('error', () => undefined)
+    request.on('close', gone)
+    request.on('error', gone)
   }
 
   /**
