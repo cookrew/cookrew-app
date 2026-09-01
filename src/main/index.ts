@@ -2621,6 +2621,32 @@ function publicTeam(value: unknown): BrowsedTeam | null {
  * imports a relayed team never has a listener they did not ask for.
  */
 let callerProxy: RelayProxy | null = null
+/**
+ * The one in-flight start, so two callers cannot each begin one.
+ *
+ * A boot-time start and a first import raced: both saw `callerProxy` null,
+ * both started a listener, and both wrote the file a card reads its port from.
+ * Whichever lost still held a socket, and the first call through the loser
+ * failed with nothing in any log to say why. A promise is the whole fix —
+ * everybody waits on the same start.
+ */
+let callerProxyStarting: Promise<RelayProxy> | null = null
+
+function relayProxy(): Promise<RelayProxy> {
+  if (callerProxy) return Promise.resolve(callerProxy)
+  if (!callerProxyStarting) {
+    callerProxyStarting = startRelayProxy({
+      log: (message) => console.error(message),
+      // A card placed months ago starts with nothing in memory. This is how it
+      // finds its door again without being imported a second time.
+      resolve: resolveDoor
+    }).then((proxy) => {
+      callerProxy = proxy
+      return proxy
+    })
+  }
+  return callerProxyStarting
+}
 
 /**
  * Where to actually send a request for this target.
@@ -2648,22 +2674,15 @@ async function reachable(
     // No key means nothing to pin, and an unpinned relayed door is one the
     // relay could stand in the middle of. Refused rather than reached.
     if (typeof record.sealKey !== 'string' || record.transport !== 'relay') return null
-    if (!callerProxy) {
-      callerProxy = await startRelayProxy({
-        log: (message) => console.error(message),
-        // A card placed months ago starts with nothing in memory. This is how
-        // it finds its door again without being imported a second time.
-        resolve: resolveDoor
-      })
-    }
+    const proxy = await relayProxy()
     // Which directory this door came from, kept — a name alone does not say,
     // and guessing would look a team up on a registry it was never on.
     rememberDoor(target.door, target.origin)
-    callerProxy.serve({ name: target.door, key: record.sealKey, relayOrigin: target.origin })
+    proxy.serve({ name: target.door, key: record.sealKey, relayOrigin: target.origin })
     // The SAME shape as a dialled door, so everything downstream — the
     // sign-in, the 402, the settle — is unchanged and unaware.
     return {
-      at: { origin: `http://127.0.0.1:${callerProxy.port}`, slug: target.door, door: target.door },
+      at: { origin: `http://127.0.0.1:${proxy.port}`, slug: target.door, door: target.door },
       listed: true,
       live: record.live !== false
     }
@@ -3315,14 +3334,7 @@ app.whenReady().then(() => {
   // cards start with the app and go looking for a loopback port. Left lazy,
   // they would find the PREVIOUS run's port number in a file and dial a socket
   // nobody is holding — which reads as the team having gone away.
-  if (importedDoors()) {
-    void startRelayProxy({
-      log: (message) => console.error(message),
-      resolve: resolveDoor
-    }).then((proxy) => {
-      callerProxy = proxy
-    })
-  }
+  if (importedDoors()) void relayProxy()
 
   startMobileServer({
     servedSlug: handleServedSlug,

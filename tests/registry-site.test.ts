@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { RESERVED_HANDLES, doorPage, handlePage, homePage } from '../registry/src/site'
-import type { DoorRecord } from '../registry/src/doors'
+import type { ListedDoor } from '../registry/src/site'
 
 /**
  * THE PUBLIC FACE OF cookrew.dev.
@@ -12,7 +12,7 @@ import type { DoorRecord } from '../registry/src/doors'
  * granted yet.
  */
 
-const door = (over: Partial<DoorRecord> = {}): DoorRecord => ({
+const door = (over: Partial<ListedDoor> = {}): ListedDoor => ({
   handle: 'drej',
   name: 'cookrew-alpha',
   title: 'COOKREW Alpha',
