@@ -21,7 +21,14 @@ export function ImportServedSheet({
   onImported
 }: {
   onClose: () => void
-  onImported: () => void
+  /**
+   * The card that was placed, so the canvas can go and show it.
+   *
+   * Without it the button said PLACE THE ORCH CARD and the canvas did not
+   * visibly change — the card landed wherever its coordinates fell, often off
+   * screen — and the honest read of that is that the import failed.
+   */
+  onImported: (placed?: { id: string; position: { x: number; y: number }; size?: { width: number; height: number } }) => void
 }): React.JSX.Element {
   const [link, setLink] = useState('')
   const [busy, setBusy] = useState(false)
@@ -44,6 +51,10 @@ export function ImportServedSheet({
     // NOT the same as a wrong address, and saying so sends people off to check
     // a link that was right all along. The team exists; its machine is shut.
     offline: 'That team is listed, but the machine it runs on is offline right now.',
+    // The team IS live — we just read its record. Blaming the reader's own app
+    // and network here is the most damaging thing this flow can say: a correct
+    // address, a working setup, and a message sending them to check both.
+    flaky: "That team is live, but it didn't answer just now. Try again.",
     unreachable: "Couldn't reach that address — is the app running and on your network?",
     'desktop-only': 'Served teams can only be imported from the desktop app.'
   }
@@ -115,7 +126,7 @@ export function ImportServedSheet({
       .serveImport(link.trim(), undefined, paid)
       .then((result) => {
         setBusy(false)
-        if (result.ok) onImported()
+        if (result.ok) onImported(result.node)
         else setError(REASONS[result.reason] ?? "Couldn't import that team.")
       })
       .catch((err: unknown) => {

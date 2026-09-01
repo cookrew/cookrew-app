@@ -125,6 +125,29 @@ describe('a listing is not a connection', () => {
     expect(page.body).not.toContain('Not taking calls')
   })
 
+  it('the header never contradicts the list under it', () => {
+    // Two answers to one question on one screen, and the reader cannot know
+    // which to believe: the old header said "1 team taking calls" above a team
+    // marked offline.
+    const none = handlePage('drej', [door({ live: false })])
+    expect(none.body).toContain('none taking calls right now')
+    expect(none.body).not.toContain('1 team taking calls')
+
+    const some = handlePage('drej', [
+      door({ live: true }),
+      door({ name: 'research', title: 'Research Crew', live: false })
+    ])
+    expect(some.body).toContain('2 teams listed · 1 taking calls right now')
+
+    const all = handlePage('drej', [door({ live: true })])
+    expect(all.body).toContain('1 team taking calls')
+  })
+
+  it('the front page counts what is up, not what is listed', () => {
+    const page = homePage([door({ live: true }), door({ name: 'b', live: false })])
+    expect(page.body).toContain('Serving right now · 1')
+  })
+
   it('marks the offline ones in a list', () => {
     const page = handlePage('drej', [
       door({ live: true }),

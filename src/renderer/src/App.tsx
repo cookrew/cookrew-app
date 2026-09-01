@@ -1308,7 +1308,25 @@ function Canvas(): React.JSX.Element {
         {importServedOpen && (
           <ImportServedSheet
             onClose={() => setImportServedOpen(false)}
-            onImported={() => setImportServedOpen(false)}
+            onImported={(placed) => {
+              setImportServedOpen(false)
+              // GO AND SHOW IT. The card is placed at canvas coordinates that
+              // have nothing to do with where the person is looking, so
+              // without this the button's promise — place the orch card — was
+              // kept somewhere they could not see, which reads as a failure.
+              if (!placed) return
+              const size = placed.size ?? { width: 420, height: 300 }
+              window.setTimeout(
+                () =>
+                  zoomToNode(placed.id, {
+                    x: placed.position.x,
+                    y: placed.position.y,
+                    width: size.width,
+                    height: size.height
+                  }),
+                60
+              )
+            }}
           />
         )}
         {/* One confirmation for every close path. Rendered last so it sits over
