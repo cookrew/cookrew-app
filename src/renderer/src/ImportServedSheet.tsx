@@ -93,7 +93,11 @@ export function ImportServedSheet({
       })
       .catch((err: unknown) => {
         setBusy(false)
-        setError(err instanceof Error ? err.message : String(err))
+        // NEVER THE RAW MESSAGE. What reaches here is an internal failure —
+        // an IPC rejection, a stack — and printing it tells a person nothing
+        // they can act on while implying they broke something.
+        console.error('import sheet:', err)
+        setError('Something went wrong on this side. Try again.')
       })
   }
 
@@ -112,7 +116,11 @@ export function ImportServedSheet({
       })
       .catch((err: unknown) => {
         setBusy(false)
-        setError(err instanceof Error ? err.message : String(err))
+        // NEVER THE RAW MESSAGE. What reaches here is an internal failure —
+        // an IPC rejection, a stack — and printing it tells a person nothing
+        // they can act on while implying they broke something.
+        console.error('import sheet:', err)
+        setError('Something went wrong on this side. Try again.')
       })
   }
 
@@ -131,7 +139,11 @@ export function ImportServedSheet({
       })
       .catch((err: unknown) => {
         setBusy(false)
-        setError(err instanceof Error ? err.message : String(err))
+        // NEVER THE RAW MESSAGE. What reaches here is an internal failure —
+        // an IPC rejection, a stack — and printing it tells a person nothing
+        // they can act on while implying they broke something.
+        console.error('import sheet:', err)
+        setError('Something went wrong on this side. Try again.')
       })
   }
 

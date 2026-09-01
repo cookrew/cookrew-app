@@ -4061,7 +4061,22 @@ function registerIpc(handlers: RestoreHandlers): void {
         { openedAt: Date.now(), ...(paid ? { paid } : {}) }
       )
       const placed = store.addNode(node)
-      spawnTracked(placed as TerminalNodeData)
+      /**
+       * PLACING IS THE COMMITMENT; booting the terminal is not.
+       *
+       * A throw here used to reject the whole call, so the sheet showed a raw
+       * internal error — no herdr pane labelled … ensureSession first — while
+       * the card sat on the canvas anyway. The person was told it failed and
+       * given the thing at the same time, which is the worst of both.
+       *
+       * The card is placed. If its terminal could not start this second it
+       * starts when the card is opened, like every other card that boots late.
+       */
+      try {
+        spawnTracked(placed as TerminalNodeData)
+      } catch (error) {
+        console.error(`import: ${inspected.face.name} was placed but did not boot: ${String(error)}`)
+      }
       store.recordEvent('session.imported', inspected.face.name, inspected.face.door, link.trim())
       return { ok: true as const, node: placed }
     }
