@@ -169,9 +169,11 @@ ${main}
  * chat tab, and the question is why they would want anything else.
  */
 export function homePage(doors: readonly ListedDoor[]): Page {
-  const serving = doors.length
+  // Counted the same way, for the same reason: the heading and the rows under
+  // it are one answer, and an offline team is not "serving right now".
+  const serving = doors.filter((d) => d.live !== false).length
   const live =
-    serving === 0
+    doors.length === 0
       ? `<p class="empty">Nobody is serving a team here yet.</p>`
       : `<ul class="doors">${doors.slice(0, 8).map(doorRow).join('')}</ul>`
 
@@ -264,11 +266,22 @@ who has an account.</p>`,
       0
     )
   }
+  // THE HEADER MUST NOT CONTRADICT THE LIST BELOW IT. "1 team taking calls"
+  // over a team marked offline is two answers to one question on one screen,
+  // and the reader has no way to know which to believe.
+  const up = doors.filter((d) => d.live !== false).length
+  const total = doors.length
+  const line =
+    up === total
+      ? `${total} team${total === 1 ? '' : 's'} taking calls.`
+      : up === 0
+        ? `${total} team${total === 1 ? '' : 's'} listed · none taking calls right now.`
+        : `${total} teams listed · ${up} taking calls right now.`
   return page(
     200,
     `${handle} — Cookrew`,
     `<h1>@${esc(handle)}</h1>
-<p class="lede">${doors.length} team${doors.length === 1 ? '' : 's'} taking calls.</p>
+<p class="lede">${line}</p>
 <ul class="doors">${doors.map(doorRow).join('')}</ul>`
   )
 }

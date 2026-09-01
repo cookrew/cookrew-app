@@ -170,7 +170,16 @@ export interface CookrewApi {
     /** What was paid at the gate, so the card can say so and the close
      *  prompt can quote it back. Absent on a free door. */
     paid?: { price: string; asset: string; rail: 'x402' | 'stripe' },
-  ) => Promise<{ ok: true; node: unknown } | { ok: false; reason: string }>;
+    // `node` is narrowed to what the canvas needs to go and FRAME it: the
+    // card is placed at coordinates unrelated to where the person is looking,
+    // and a placement they cannot see reads as a failure.
+  ) => Promise<
+    | {
+        ok: true;
+        node: { id: string; position: { x: number; y: number }; size?: { width: number; height: number } };
+      }
+    | { ok: false; reason: string }
+  >;
   /** Sign in to the door and ask what it wants. The Bearer stays in main. */
   serveGate: (
     link: string,

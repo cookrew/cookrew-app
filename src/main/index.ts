@@ -2704,14 +2704,26 @@ async function inspectServeAddress(
   link: string
 ): Promise<
   | { ok: true; target: ServeTarget; face: ImportFace }
-  | { ok: false; reason: 'bad-address' | 'not-serving' | 'unreachable' | 'offline' }
+  | {
+      ok: false
+      reason: 'bad-address' | 'not-serving' | 'unreachable' | 'offline' | 'flaky'
+    }
 > {
   const target = parseServeAddress(link)
   if (!target) return { ok: false, reason: 'bad-address' }
+  /**
+   * WHAT WE ALREADY KNOW when the face fetch fails.
+   *
+   * A door we just read a record for is not an address that might not exist,
+   * and it is certainly not evidence that the person's own app is down. Held
+   * out here so the catch can say something true instead of the worst guess.
+   */
+  let known: { listed: boolean; live: boolean } = { listed: false, live: false }
   try {
     const reached = await reachable(target)
     if (!reached) return { ok: false, reason: 'not-serving' }
     const { at, listed, live } = reached
+    known = { listed, live }
     // LISTED BUT NOT THERE is its own answer. A team whose record exists and
     // whose author's machine is simply shut is not a wrong address, and being
     // told "nobody is serving a team at that address" sends a person off to
@@ -2721,15 +2733,30 @@ async function inspectServeAddress(
       redirect: 'manual',
       signal: AbortSignal.timeout(5000)
     })
-    if (!res.ok) return { ok: false, reason: listed ? 'offline' : 'not-serving' }
+    if (!res.ok) return { ok: false, reason: failedButKnown(known) }
     const body = await res.arrayBuffer()
     if (body.byteLength > MAX_FACE_BYTES) return { ok: false, reason: 'not-serving' }
     const face = validateFace(JSON.parse(new TextDecoder().decode(body)))
     if (face === null) return { ok: false, reason: 'not-serving' }
     return { ok: true, target, face }
   } catch {
-    return { ok: false, reason: 'unreachable' }
+    // The SAME judgement as above. Thrown or refused, the question is what we
+    // knew before we asked — not which line of ours noticed.
+    return { ok: false, reason: known.listed ? failedButKnown(known) : 'unreachable' }
   }
+}
+
+/**
+ * A door we know exists did not answer. Which is it?
+ *
+ * `flaky` matters because the alternative sentence blames the reader's own
+ * machine for a team the app had just been told was live, which is the most
+ * damaging thing this flow can say: a correct address, a working setup, and a
+ * message sending them to check both.
+ */
+function failedButKnown(known: { listed: boolean; live: boolean }): 'offline' | 'flaky' | 'not-serving' {
+  if (!known.listed) return 'not-serving'
+  return known.live ? 'flaky' : 'offline'
 }
 
 async function importTemplateAsSession(
