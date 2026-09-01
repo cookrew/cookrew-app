@@ -215,6 +215,21 @@ describe('a door that dialled out, reached from outside', () => {
     dial.close()
   })
 
+  it('a door that just connected stays connected', async () => {
+    // The regression this exists for: the uplink's liveness was read from
+    // request.on('close'), which on a streaming request fires at once — so a
+    // door was un-registered the moment it arrived and reported offline while
+    // holding a perfectly good line.
+    const relay = await standUp()
+    open.push(relay.close)
+    const { key } = await serve(relay.origin, () => ({ status: 200, headers: {}, body: 'ok' }))
+    expect(relay.hub.has(NAME)).toBe(true)
+    // Still there a moment later, having done nothing at all.
+    await new Promise((r) => setTimeout(r, 250))
+    expect(relay.hub.has(NAME)).toBe(true)
+    expect((await callerFor(relay.origin, key).request('GET', '/crew', {})).status).toBe(200)
+  })
+
   it('a door that loses its uplink stops being listed as serving', async () => {
     /**
      * THE ZOMBIE. Found in production: nginx timed out the door's idle uplink,

@@ -260,12 +260,22 @@ export function createRelayHttp(deps: {
         log(`relay: ${name} lost its uplink`)
       }
     }
+    // NOT request.on('close'). THE SAME TRAP AS THE CALLER SIDE, and it bit
+    // twice: on a streaming request that event does not mean "the client went
+    // away", and here it fired immediately — so a door that had just connected
+    // was un-registered on the spot and reported offline while it sat holding
+    // a perfectly good line.
+    //
+    // The two honest signals: the body ENDED (the door stopped sending), or
+    // the RESPONSE closed before we wrote it (the connection died under us).
     request.on('end', () => {
       gone()
       if (!response.writableEnded) json(response, 200, { ok: true })
     })
-    request.on('close', gone)
     request.on('error', gone)
+    response.on('close', () => {
+      if (!response.writableEnded) gone()
+    })
   }
 
   /**
