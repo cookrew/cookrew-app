@@ -88,11 +88,19 @@ export function parseServeAddress(link: string): ServeTarget | null {
     if (!['http:', 'https:'].includes(url.protocol)) return null
     if (url.username || url.password || url.search || url.hash) return null
     const segments = url.pathname.split('/').filter((part) => part.length > 0)
-    // https://cookrew.dev/@drej/alpha — a link someone was sent. The @ is what
-    // distinguishes it from a two-deep path on a door that IS dialable, and a
-    // dialled door is refused at exactly one segment.
-    if (segments.length === 2 && segments[0].startsWith('@')) {
-      const name = `${decodeURIComponent(segments[0])}/${decodeURIComponent(segments[1])}`
+    // https://cookrew.dev/@drej/alpha — a link someone was sent.
+    //
+    // The @ may be dropped ONLY on a registry we know, because that is the one
+    // place two segments is unambiguous: it is what the team's own page prints
+    // and what a person reads out. Anywhere else `/two/deep` is an address
+    // claiming more than one door, and refusing it is the older, better rule —
+    // a name that silently became an address is how the app ends up opening a
+    // socket to whatever answers there.
+    if (segments.length === 2) {
+      const first = decodeURIComponent(segments[0])
+      const known = url.origin === COOKREW_REGISTRY
+      if (!first.startsWith('@') && !known) return null
+      const name = `${first.startsWith('@') ? first : `@${first}`}/${decodeURIComponent(segments[1])}`
       const parsed = DOOR_NAME.exec(name)
       return parsed ? { origin: url.origin, slug: parsed[2], door: name } : null
     }

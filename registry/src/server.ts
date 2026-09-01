@@ -12,6 +12,7 @@ import type { Terms } from './terms'
 import type { PaymentFailure } from './payment'
 import { DoorStore, doorPath, type DoorInput } from './doors'
 import { createRelayHttp, type RelayHttp } from './relay-http'
+import { RESERVED_HANDLES, doorPage, handlePage, homePage, type Page } from './site'
 import type { ServerResponse } from 'node:http'
 
 /**
@@ -81,6 +82,15 @@ export interface RegistryDeps {
   relay?: boolean
   /** Operational notes — a refused stream, a name already held. Never a body. */
   note?: (message: string) => void
+  /**
+   * The canonical public origin, for addresses printed on a page.
+   *
+   * Taken from the request's Host header when absent — which is right for a
+   * dev registry reached by several names, and wrong for a deployment behind a
+   * proxy, where Host is whatever the caller sent. A published address is
+   * something a person will copy, so it is configured rather than reflected.
+   */
+  origin?: string
 }
 
 function defaultAuthorize(store: RegistryStore): (id: string) => Verdict {
@@ -485,8 +495,46 @@ export function createRegistry(deps: RegistryDeps): Server {
       return
     }
 
+    // ── THE PUBLIC FACE, last ────────────────────────────────────────────
+    //
+    // Last because an owner's page lives at /<handle>, which would otherwise
+    // shadow every route above it. Reaching here means nothing more specific
+    // claimed the path — and RESERVED_HANDLES keeps that true even for a route
+    // added tomorrow, so a handle can never capture one.
+    if (deps.doors && method === 'GET') {
+      const site = deps.doors
+      // The @ is optional everywhere a person types a name. `@drej/alpha` is
+      // what the app passes around; `/drej/alpha` is what somebody reads out.
+      const bare = (value: string): string => decodeURIComponent(value).replace(/^@/, '')
+
+      if (parts.length === 0) {
+        respondPage(response, homePage(site.list()))
+        return
+      }
+      if (parts.length === 1 && !RESERVED_HANDLES.has(parts[0].toLowerCase())) {
+        const handle = bare(parts[0])
+        respondPage(response, handlePage(handle, site.list().filter((d) => d.handle === handle)))
+        return
+      }
+      if (parts.length === 2 && !RESERVED_HANDLES.has(parts[0].toLowerCase())) {
+        const at = deps.origin ?? originOf(request.headers.host) ?? ''
+        respondPage(response, doorPage(site.get(bare(parts[0]), bare(parts[1])), at))
+        return
+      }
+    }
+
     json(response, 404, { error: 'not_found' })
   })
+}
+
+/** A generated document, with the headers that make it inert. */
+function respondPage(response: ServerResponse, rendered: Page): void {
+  const payload = Buffer.from(rendered.body, 'utf8')
+  response.writeHead(rendered.status, {
+    ...rendered.headers,
+    'content-length': String(payload.byteLength)
+  })
+  response.end(payload)
 }
 
 /**
