@@ -36,8 +36,11 @@ interface Stood {
   close: () => Promise<void>
 }
 
-async function standUp(identity: IdentityService = alwaysDrej): Promise<Stood> {
-  const relay = createRelayHttp({ identity })
+async function standUp(
+  identity: IdentityService = alwaysDrej,
+  pulse: { pulseMs?: number; pulseDeadlineMs?: number } = {}
+): Promise<Stood> {
+  const relay = createRelayHttp({ identity, ...pulse })
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://relay.local')
     const parts = url.pathname.split('/').filter(Boolean)
@@ -262,6 +265,58 @@ describe('a door that dialled out, reached from outside', () => {
 
     // The door must no longer be claimed, so nothing can be told it is live.
     expect(relay.hub.has(NAME)).toBe(false)
+  })
+
+  it('a door that stops answering pings is dropped — sockets open or not', async () => {
+    /**
+     * THE THIRD ZOMBIE (2026-09-02). Through a proxy, both halves of a door
+     * stayed ESTABLISHED at both ends while carrying nothing: every call hung,
+     * nothing was logged anywhere. No socket event will ever say so; only a
+     * missed pong can.
+     */
+    const relay = await standUp(alwaysDrej, { pulseMs: 40, pulseDeadlineMs: 120 })
+    open.push(relay.close)
+    // A door that opens its downlink and never an uplink: it hears every ping
+    // and can answer none — exactly what a dead uplink looks like from here.
+    const ticket = await ticketFor(relay.origin, NAME)
+    let ended = false
+    const res = await fetch(`${relay.origin}/v1/relay/door?ticket=${encodeURIComponent(ticket)}`)
+    const reader = res.body!.getReader()
+    void (async () => {
+      for (;;) {
+        const { done } = await reader.read()
+        if (done) break
+      }
+      ended = true
+    })()
+    await until(() => relay.hub.has(NAME), 'the door to be claimed')
+    await until(() => !relay.hub.has(NAME), 'the pulse to drop it', 2000)
+    // And the door is TOLD: its downlink ends, which is what makes it redial.
+    await until(() => ended, 'the downlink to end')
+  })
+
+  it('a door that answers its pings stays; one whose relay goes quiet gives up and says so', async () => {
+    const relay = await standUp(alwaysDrej, { pulseMs: 40, pulseDeadlineMs: 120 })
+    open.push(relay.close)
+    const { key } = await serve(relay.origin, () => ({ status: 200, headers: {}, body: 'ok' }))
+    // Well past the deadline, still there: the pongs are arriving.
+    await new Promise((r) => setTimeout(r, 400))
+    expect(relay.hub.has(NAME)).toBe(true)
+    expect((await callerFor(relay.origin, key).request('GET', '/crew', {})).status).toBe(200)
+
+    // A relay that never pings (a proxy eating the downlink) is given up on.
+    const silent = await standUp(alwaysDrej, { pulseMs: 60_000 })
+    open.push(silent.close)
+    const dial = dialRelay({
+      origin: silent.origin,
+      ticket: await ticketFor(silent.origin, '@drej/quiet'),
+      quietMs: 200
+    })
+    let why = ''
+    dial.onEnded((reason) => (why = reason))
+    await dial.ready
+    await until(() => why.length > 0, 'the dial to give up', 2000)
+    expect(why).toBe('the relay went quiet')
   })
 
   it('two exchanges at once do not cross', async () => {

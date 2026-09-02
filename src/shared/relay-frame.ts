@@ -47,6 +47,17 @@ export type RelayFrame =
   | { t: 'end'; id: StreamId }
   /** Given up on. `reason` is for logs; it never reaches a rendered sheet. */
   | { t: 'abort'; id: StreamId; reason: string }
+  /**
+   * THE PULSE. Relay → door on the downlink every heartbeat; door → relay on
+   * the uplink in answer. A door's two halves are long-lived streams through
+   * proxies that drop one side without telling the other: a downlink that
+   * still delivers requests to an uplink nobody is reading is a door that
+   * receives every call and answers none, and NEITHER end can see it — every
+   * socket looks open. The pong is the only proof that both halves carry
+   * bytes end to end, and a missed one is what closes the door.
+   */
+  | { t: 'ping'; at: number }
+  | { t: 'pong'; at: number }
 
 /**
  * The biggest frame either side will accept.
@@ -124,6 +135,10 @@ export function decodeFrame(raw: string): RelayFrame | null {
       return id && typeof frame.reason === 'string'
         ? { t: 'abort', id: frame.id as string, reason: frame.reason.slice(0, 200) }
         : null
+    case 'ping':
+      return typeof frame.at === 'number' && Number.isFinite(frame.at) ? { t: 'ping', at: frame.at } : null
+    case 'pong':
+      return typeof frame.at === 'number' && Number.isFinite(frame.at) ? { t: 'pong', at: frame.at } : null
     default:
       return null
   }

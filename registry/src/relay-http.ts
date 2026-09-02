@@ -62,13 +62,45 @@ export function createRelayHttp(deps: {
   identity?: IdentityService
   now?: () => number
   log?: (message: string) => void
+  /** How often a door is pinged on its downlink. */
+  pulseMs?: number
+  /** How long without a pong before the door is declared gone. */
+  pulseDeadlineMs?: number
 }): RelayHttp {
   const now = deps.now ?? ((): number => Date.now())
   const log = deps.log ?? ((): void => undefined)
+  const pulseMs = deps.pulseMs ?? HEARTBEAT_MS
+  const pulseDeadlineMs = deps.pulseDeadlineMs ?? pulseMs * 3
   const hub = new RelayHub(log)
   const tickets = new Map<string, Ticket>()
   /** Which door name each live downlink serves, so an uplink can find it. */
   const live = new Map<string, HubSocket>()
+  /**
+   * When each live door last PROVED both its halves: the moment its pong
+   * arrived on the uplink. A door is dropped after pulseDeadlineMs without
+   * one, whatever its sockets look like — through a proxy they look open long
+   * after they stopped carrying anything (the third zombie door, 2026-09-02:
+   * both ends held open sockets, every call hung, nothing was logged).
+   */
+  const pulse = new Map<string, number>()
+
+  const dropDoor = (name: string, why: string): void => {
+    const socket = live.get(name)
+    live.delete(name)
+    pulse.delete(name)
+    hub.closeDoor(name)
+    // The downlink is ended too, so the door LEARNS: a response ending is the
+    // one signal a client reliably observes, and it is what makes it redial.
+    socket?.close()
+    log(`relay: ${name} ${why}`)
+  }
+  const pulseCheck = setInterval(() => {
+    const at = now()
+    for (const [name, last] of pulse) {
+      if (at - last > pulseDeadlineMs) dropDoor(name, 'lost its pulse')
+    }
+  }, pulseMs)
+  pulseCheck.unref?.()
 
   const sweep = (): void => {
     const at = now()
@@ -199,12 +231,22 @@ export function createRelayHttp(deps: {
       return
     }
     live.set(ticket.name, socket)
+    // The door has until the first deadline to answer its first ping; a door
+    // that never opens an uplink at all is dropped by the same rule.
+    pulse.set(ticket.name, now())
+    const ping = setInterval(() => {
+      if (live.get(ticket.name) === socket) write(encodeFrame({ t: 'ping', at: now() }))
+      else clearInterval(ping)
+    }, pulseMs)
+    ping.unref?.()
     // THE RESPONSE, not the request. A GET's request stream completes the
     // moment its (empty) body has arrived, so listening there would drop the
     // door immediately — see the same trap, and the same fix, in `call`.
     response.on('close', () => {
+      clearInterval(ping)
       if (live.get(ticket.name) === socket) {
         live.delete(ticket.name)
+        pulse.delete(ticket.name)
         hub.closeDoor(ticket.name)
       }
     })
@@ -233,7 +275,14 @@ export function createRelayHttp(deps: {
       while (at >= 0) {
         const line = buffer.slice(0, at)
         buffer = buffer.slice(at + 1)
-        if (line.length > 0) hub.fromDoor(name, line)
+        if (line.length > 0) {
+          // The pong is for the relay, not for any caller.
+          if (line.startsWith('{"t":"pong"')) {
+            if (live.has(name)) pulse.set(name, now())
+          } else {
+            hub.fromDoor(name, line)
+          }
+        }
         at = buffer.indexOf('\n')
       }
       // A line that never ends is not a frame, it is someone making us
@@ -254,11 +303,7 @@ export function createRelayHttp(deps: {
      * which is the only version of this that is true.
      */
     const gone = (): void => {
-      if (live.get(name) === socket) {
-        live.delete(name)
-        hub.closeDoor(name)
-        log(`relay: ${name} lost its uplink`)
-      }
+      if (live.get(name) === socket) dropDoor(name, 'lost its uplink')
     }
     // NOT request.on('close'). THE SAME TRAP AS THE CALLER SIDE, and it bit
     // twice: on a streaming request that event does not mean "the client went
@@ -336,6 +381,7 @@ export function createRelayHttp(deps: {
         return
       }
       write = openNdjson(response)
+      log(`relay: ${name} ← ${op.method} ${op.path} as ${opened.id}${body.length > 0 ? ' +body' : ''}`)
       // The hub told the door about this exchange the moment it opened; the
       // body follows as its own frame, exactly as the frame protocol says.
       if (body.length > 0) {
