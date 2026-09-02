@@ -13,6 +13,7 @@ import {
   completionRequest,
   createHarnessCompletionRequester,
   explicitGrantEnv,
+  requestHarnessCompletion,
   servedGrantPreflight,
   type HarnessCompletionRequest
 } from '../src/main/served-grant-preflight'
@@ -65,6 +66,22 @@ describe('explicit grant environment', () => {
       )
     ).toEqual({})
     expect(ownerEnvFor).not.toHaveBeenCalled()
+  })
+})
+
+describe('the production runner', () => {
+  it('closes the probe\'s stdin — a harness that reads stdin to EOF answers, instead of timing out', async () => {
+    // A stand-in harness that behaves like pi/claude on a pipe: it reads
+    // stdin until EOF and only then prints. With stdin left open this never
+    // returns (the bug: 60s, then 'grant-unusable' for a perfectly good grant).
+    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-probe-'))
+    const fake = path.join(dir, 'fake-pi')
+    writeFileSync(fake, '#!/bin/sh\ncat >/dev/null\necho OK\n', { mode: 0o755 })
+    const started = Date.now()
+    const ok = await requestHarnessCompletion({ harness: 'pi', file: fake, args: [], env: {}, files: [] })
+    expect(ok).toBe(true)
+    expect(Date.now() - started).toBeLessThan(5000)
+    rmSync(dir, { recursive: true, force: true })
   })
 })
 
