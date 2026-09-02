@@ -162,7 +162,13 @@ export function createRegistry(deps: RegistryDeps): Server {
     live: live(door.handle, door.name)
   })
 
-  return createServer((request, response) => {
+  // NO REQUEST TIMEOUT. Node's default (300s) sends 408 to any request whose
+  // body has not finished — and a door's uplink is a POST whose body never
+  // finishes by design. Under the default, every door lost its uplink at
+  // 312s on the dot (nginx: upstream_status 408), redialled, and every
+  // exchange in flight died 'door-gone' — a five-minute zombie metronome.
+  // Header parsing keeps its own bound; only the body may take forever.
+  return createServer({ requestTimeout: 0, headersTimeout: 60_000 }, (request, response) => {
     const url = new URL(request.url ?? '/', 'http://registry.local')
     const method = request.method ?? 'GET'
     const parts = url.pathname.split('/').filter(Boolean)

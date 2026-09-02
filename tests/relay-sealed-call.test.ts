@@ -170,6 +170,22 @@ describe('a sealed call, end to end', () => {
     expect(answer.headers['x-cookrew-session']).toBe('sess_9f2')
   })
 
+  it('a POST with NO body is answered — the door does not wait for a frame that never comes', async () => {
+    // The sign-in challenge is every card's first request and carries no
+    // body. The door answers a GET on sight and waits for `done` on anything
+    // else, so this hung forever while the same POST with `{}` answered.
+    const w = wire(() => ({ status: 200, headers: {}, body: '{"challenge":"n1"}' }))
+    const answer = await Promise.race([
+      w.caller.request('POST', '/api/call/challenge', {}, ''),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('hung: empty POST never answered')), 2000))
+    ])
+    expect(answer.status).toBe(200)
+    expect(answer.body).toBe('{"challenge":"n1"}')
+    expect(w.asked).toEqual([
+      { method: 'POST', path: '/cookrew-alpha/api/call/challenge', headers: {}, body: '' }
+    ])
+  })
+
   it('the relay carries the whole exchange and can read none of it', async () => {
     const w = wire(() => ({
       status: 200,
