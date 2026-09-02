@@ -58,23 +58,49 @@ if (process.argv[2] === '--print-sub') {
 const door = arg('door')
 let origin = arg('origin')
 let slug = arg('slug')
+/** Door mode: re-read where the proxy is before a reconnect. A no-op otherwise. */
+let reresolve = () => undefined
 if (door) {
   if (!/^@[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]*$/.test(door)) {
     console.error(`not a door name: ${door}`)
     process.exit(2)
   }
-  let port = 0
-  try {
-    port = JSON.parse(readFileSync(path.join(homedir(), '.cookrew', 'relay-proxy.json'), 'utf8')).port
-  } catch {
-    port = 0
+  // THE PORT CHANGES WITH EVERY APP RESTART, so it is read again whenever
+  // this card reconnects — not once at start. A card that kept the port it
+  // was born with outlived the app that owned it, retried a socket nobody
+  // held, and read as "the team went away" until somebody re-opened it.
+  // And at start it WAITS: this process is spawned while the app is still
+  // bringing the proxy up, and exiting then left a dead pane behind.
+  const proxyOrigin = () => {
+    try {
+      const port = JSON.parse(readFileSync(path.join(homedir(), '.cookrew', 'relay-proxy.json'), 'utf8')).port
+      return port ? `http://127.0.0.1:${port}` : null
+    } catch {
+      return null
+    }
   }
-  if (!port) {
+  let found = proxyOrigin()
+  if (!found) {
+    process.stdout.write('\x1b[2mCookrew is starting — waiting for the relay…\x1b[0m\r\n')
+    for (let waited = 0; !found && waited < 90; waited += 1) {
+      await new Promise((r) => setTimeout(r, 1000))
+      found = proxyOrigin()
+    }
+  }
+  if (!found) {
     console.error('Cookrew is not running, so this team cannot be reached right now.')
     process.exit(3)
   }
-  origin = `http://127.0.0.1:${port}`
+  origin = found
   slug = door
+  reresolve = () => {
+    const now = proxyOrigin()
+    if (now && now !== origin) {
+      origin = now
+      base = new URL(origin)
+      process.stdout.write(dim(`— reconnecting through ${base.host} —`))
+    }
+  }
 }
 if (!origin || !slug) {
   console.error('usage: orch-line --origin <http://host:port> --slug <slug> [--name label]')
@@ -103,7 +129,7 @@ function safeSub(raw) {
   return cleaned.length > 0 ? cleaned : 'caller'
 }
 const sub = safeSub(arg('sub', userInfo().username || 'caller'))
-const base = new URL(origin)
+let base = new URL(origin)
 const transport = base.protocol === 'https:' ? https : http
 // TLS IS VERIFIED. This lane carries a stranger's Bearer token, their typed
 // prompts and their payment reference to another person's machine over the
@@ -427,6 +453,7 @@ function scheduleReconnect(delay = 1200) {
   lineUp = false
   setTimeout(() => {
     reconnectPending = false
+    reresolve()
     connectLine()
   }, delay)
 }
