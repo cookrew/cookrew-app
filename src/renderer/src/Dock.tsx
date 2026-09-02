@@ -62,7 +62,7 @@ interface DockProps {
   /** Import a served team by its address — places ONE orch interface card. */
   onImportServed?: () => void
   /** Zoomed-in terminal: the dock swaps the tool group for its composer. */
-  voiceFor: { id: string; activity: TerminalActivity | undefined } | null
+  voiceFor: { id: string; activity: TerminalActivity | undefined; remote: boolean } | null
   /**
    * Zoomed-in browser: the whole bar stands down so the page keeps its height.
    * The controls that DO apply there (viewport fit, keyboard, open in browser)
@@ -223,7 +223,12 @@ export function Dock({
         {!slidIn && hint && <div className="cr-dock-hint">{hint}</div>}      </div>
       <div className="dock-pane dock-send" aria-hidden={!slidIn}>
         {voiceFor && (
-          <VoiceBar key={voiceFor.id} terminalId={voiceFor.id} activity={voiceFor.activity} />
+          <VoiceBar
+            key={voiceFor.id}
+            terminalId={voiceFor.id}
+            activity={voiceFor.activity}
+            remote={voiceFor.remote}
+          />
         )}
         {!voiceFor && boardFor && (
           <button

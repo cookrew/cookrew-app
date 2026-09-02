@@ -12,6 +12,8 @@ import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 import type { LodLayout, ScreenRect } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
 import { cookrew, isRemoteMode } from './api'
+import { subscribeLatestChanged } from './latest-changed-bus'
+import { doorStateSentence, type DoorTranscriptState } from '../../shared/door-transcript-state'
 import { CheckpointTimeline } from './CheckpointTimeline'
 import { TranscriptView, type ActiveBlock, type TranscriptHandle } from './TranscriptView'
 import {
@@ -136,6 +138,13 @@ function TerminalOverlay({
   const phase = activity?.phase ?? 'idle'
   const [tailReady, setTailReady] = useState(false)
   const metadataReady = tailReady
+  /**
+   * AN IMPORTED CARD: a line into a session at someone else's app. Same rail,
+   * same pager, same preview — its record is read from the door — but nothing
+   * here may rewrite that record (no fork, rewind, role, attach), so those are
+   * absent rather than rendered dead (remote-card parity §3, P11).
+   */
+  const remote = node.servedSession != null
   const containerRef = useRef<HTMLDivElement>(null)
   // Drag-in attachments: dragenter/leave bubble from every child of the
   // overlay, so a plain boolean would flicker — count enters vs leaves.
@@ -213,6 +222,95 @@ function TerminalOverlay({
       if (retry !== null) window.clearTimeout(retry)
     }
   }, [node.id, signaledTurns, traceCeiling, traceIndexReady])
+
+  // THE SAME NUDGE THE CARD GETS, heard in the overlay: the file watch (local)
+  // or the door poll (remote) says "the record changed", and the rail re-reads
+  // the delta at once — instead of waiting for the PTY scrape to decide a turn
+  // ended, which on a remote card is the only other signal there is (P3).
+  const [nudge, setNudge] = useState(0)
+  useEffect(() => {
+    const api = cookrew()
+    if (!api.watchLatest || !api.onLatestChanged) return
+    void api.watchLatest(node.id)
+    const off = subscribeLatestChanged(node.id, () => setNudge((n) => n + 1))
+    return () => {
+      off()
+      void api.unwatchLatest?.(node.id)
+    }
+  }, [node.id])
+  // A nudge that lands before the first listing is ready is not lost: it is
+  // read the moment the listing is — on an ended session it may be the last.
+  const missedNudge = useRef(false)
+  useEffect(() => {
+    if (nudge === 0) return
+    if (!traceIndexReady) {
+      missedNudge.current = true
+      return
+    }
+    missedNudge.current = false
+    let alive = true
+    void fetchTraceIndex(node.id, { afterIndex: traceCeiling })
+      .then((delta) => {
+        if (alive && delta.length > 0) setTraceIndex((current) => mergeTraceIndex(current, delta))
+      })
+      .catch((error) => console.error('listTraceIndex nudge failed:', error))
+    void fetchTraceMarkers(node.id)
+      .then((list) => {
+        if (alive) setTraceMarkers(list)
+      })
+      .catch((error) => console.error('listTraceMarkers nudge failed:', error))
+    return () => {
+      alive = false
+    }
+    // The ceiling is read at nudge time on purpose: a nudge means "read past
+    // whatever you have now", and re-running on every ceiling change would
+    // re-read the delta the nudge itself just merged.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nudge, node.id])
+  useEffect(() => {
+    if (traceIndexReady && missedNudge.current) setNudge((n) => n + 1)
+  }, [traceIndexReady])
+
+  // WHY the rail is empty or stale, for a remote card — a named state from
+  // the door, rendered as a sentence in the session strip (P10). Re-read on
+  // every nudge: a state change is part of the door poll's fingerprint.
+  const [doorState, setDoorState] = useState<DoorTranscriptState | null>(null)
+  useEffect(() => {
+    if (!remote) return
+    const read = cookrew().traceStatus
+    if (!read) return
+    let alive = true
+    void read(node.id)
+      .then((state) => {
+        if (alive) setDoorState(state)
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [remote, node.id, nudge, traceIndexReady])
+  // A refused attach says so where the strip already speaks, then clears.
+  const [attachRefusal, setAttachRefusal] = useState<string | null>(null)
+  const refusalTimer = useRef<number | null>(null)
+  const refuseAttach = (): void => {
+    setAttachRefusal(
+      `Attachments stay on this machine — this team runs at @${node.servedSession?.slug ?? '?'}.`
+    )
+    if (refusalTimer.current !== null) window.clearTimeout(refusalTimer.current)
+    refusalTimer.current = window.setTimeout(() => {
+      refusalTimer.current = null
+      setAttachRefusal(null)
+    }, 5000)
+  }
+  useEffect(
+    () => () => {
+      if (refusalTimer.current !== null) window.clearTimeout(refusalTimer.current)
+    },
+    []
+  )
+  const doorSentence = remote
+    ? (attachRefusal ?? doorStateSentence(doorState, node.servedSession?.slug ?? '?'))
+    : null
 
   // VERSION PINS on the rail. Fetched here and passed to the timeline, which
   // otherwise received nothing — so a saved template's pin was cut in the main
@@ -365,9 +463,11 @@ function TerminalOverlay({
       handleTerminalPaste(event, {
         pasteText: (text) => term.paste(text),
         pasteImages: (images) =>
-          void pasteClipboardImages(node.id, images).catch((error) =>
-            console.error('Image paste failed:', error)
-          )
+          remote
+            ? refuseAttach()
+            : void pasteClipboardImages(node.id, images).catch((error) =>
+                console.error('Image paste failed:', error)
+              )
       })
     }
     container.addEventListener('paste', onPaste, true)
@@ -683,6 +783,10 @@ function TerminalOverlay({
     e.preventDefault()
     dragDepth.current = 0
     setDropReady(false)
+    if (remote) {
+      refuseAttach()
+      return
+    }
     void attachFilesToTerminal(node.id, Array.from(e.dataTransfer.files)).catch((error) =>
       console.error('Attachment drop failed:', error)
     )
@@ -885,6 +989,14 @@ function TerminalOverlay({
           </span>
           <span className="sep">·</span>
           <span>runs at @{node.servedSession.slug}</span>
+          {doorSentence && (
+            <>
+              <span className="sep">·</span>
+              <span className="popout-session-note" role="status">
+                {doorSentence}
+              </span>
+            </>
+          )}
         </div>
       )}
       <div className="popout-terminal-wrap">
@@ -915,6 +1027,9 @@ function TerminalOverlay({
           activeIndex={activeBlock.index}
           loadingIndex={pendingIndex}
           markerFrac={activeBlock.frac}
+          allowActions={!remote}
+          lineageReach={!remote}
+          ended={doorState?.kind === 'ended'}
           onGoto={gotoCheckpoint}
           onLive={goLive}
           onScrub={(fraction) => transcriptRef.current?.scrubTo(fraction)}
@@ -923,7 +1038,8 @@ function TerminalOverlay({
       {dropReady && (
         <div className="attach-drop-hint">
           <span>
-            <CrIcon name="attach" /> DROP TO ATTACH
+            <CrIcon name="attach" />{' '}
+            {remote ? 'ATTACHMENTS STAY HERE — THIS TEAM RUNS ELSEWHERE' : 'DROP TO ATTACH'}
           </span>
         </div>
       )}

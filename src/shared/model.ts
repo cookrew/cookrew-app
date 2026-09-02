@@ -52,6 +52,12 @@ export interface ServedSessionFacts {
    * different statements, and only one of them is true here.
    */
   paid?: { price: string; asset: string; rail: 'x402' | 'stripe' }
+  /**
+   * The published `@handle/team` name, when the door is reached THROUGH THE
+   * RELAY rather than dialled. The record behind the card is read from this
+   * name's loopback end; a dialled door's record is read at `origin`.
+   */
+  door?: string
 }
 
 export interface TerminalNodeData {

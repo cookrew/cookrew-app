@@ -72,6 +72,10 @@ describe('minimal native harness requests', () => {
   it.each([
     ['claude --permission-mode bypassPermissions', 'claude', 'claude', '--print'],
     ['pi --model qwen-local/fake-model', 'pi', 'pi', '--no-tools'],
+    // A wrapper IS the pi harness (isPiCommand): the probe runs the wrapper,
+    // so the provider/model the wrapper bakes in are what gets probed.
+    ['/Users/x/.cookrew/bin/qwen-pi', 'pi', '/Users/x/.cookrew/bin/qwen-pi', '--no-tools'],
+    ['pi --provider qwen-local --model qwen3.8-27b-q8', 'pi', 'pi', '--provider'],
     ['codex --model fake-model', 'codex', 'codex', 'exec'],
     ['opencode --model fake/model', 'opencode', 'opencode', 'run']
   ] as const)('builds %s without replaying the saved shell command', (command, harness, file, flag) => {
@@ -87,6 +91,15 @@ describe('minimal native harness requests', () => {
       'qwen-local/fake:model'
     )
     expect(completionRequest('pi --model "bad model"', {})?.args).not.toContain('bad model')
+    // A wrapper path with shell syntax is never the executable.
+    expect(completionRequest('/tmp/x;y-pi', {})?.file).toBe('pi')
+    expect(completionRequest('/tmp/$(id)-pi', {})?.file).toBe('pi')
+    // Relative and traversing paths are never the executable; `~` is the
+    // shell's and is expanded to the real home, not handed to execFile.
+    expect(completionRequest('./x-pi', {})?.file).toBe('pi')
+    expect(completionRequest('/a/../../tmp/x-pi', {})?.file).toBe('pi')
+    expect(completionRequest('~/.cookrew/bin/qwen-pi', {})?.file).toMatch(/^\/.*\/\.cookrew\/bin\/qwen-pi$/)
+    expect(completionRequest('pi --provider "a b"', {})?.args).not.toContain('--provider')
     expect(completionRequest('bash -lc anything', {})).toBeNull()
   })
 })

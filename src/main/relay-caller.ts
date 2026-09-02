@@ -58,6 +58,8 @@ interface Pending {
   rx: number
   head?: { status: number; headers: Record<string, string> }
   chunks: string[]
+  /** Characters held in `chunks` so far, against MAX_HELD_CHARS. */
+  held: number
   onHead?: (status: number, headers: Record<string, string>) => void
   onChunk?: (chunk: string) => void
   settle?: (answer: RelayAnswer) => void
@@ -65,6 +67,9 @@ interface Pending {
 }
 
 export class RelayCallFailed extends Error {}
+
+/** The most a buffered (non-streaming) relayed answer may hold. */
+const MAX_HELD_CHARS = 8 * 1024 * 1024
 
 /**
  * A caller's connection to one door through the relay.
@@ -175,6 +180,7 @@ export class RelayCaller {
       finishSeal: handshake.finish,
       rx: 0,
       chunks: [],
+      held: 0,
       ...hooks
     })
     this.send({
@@ -214,7 +220,17 @@ export class RelayCaller {
           return
         }
         if (entry.onChunk) entry.onChunk(opened)
-        else entry.chunks.push(opened)
+        else {
+          // A buffered answer has a ceiling. A stream is delivered as it comes
+          // and the consumer decides; a request that waits for the whole body
+          // must not be made to wait for gigabytes of it.
+          entry.held += opened.length
+          if (entry.held > MAX_HELD_CHARS) {
+            this.abandon(frame.id, entry, 'the relayed answer is larger than a request may hold')
+            return
+          }
+          entry.chunks.push(opened)
+        }
         return
       }
       case 'end':

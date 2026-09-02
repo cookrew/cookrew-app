@@ -187,6 +187,9 @@ export function safeFaceName(name: unknown): string | null {
   if (trimmed.length === 0 || trimmed.length > 64) return null
   // eslint-disable-next-line no-control-regex
   if (/[\x00-\x1F\x7F]/.test(trimmed)) return null
+  // A name that begins like a flag becomes argv of the line script; refused
+  // rather than letting a door's choice of name read as an option.
+  if (trimmed.startsWith('-')) return null
   return trimmed
 }
 
@@ -257,7 +260,14 @@ export function orchTerminalNode(
     orch: true,
     role: null,
     ...(session
-      ? { servedSession: { origin: target.origin, slug: target.slug, ...session } }
+      ? {
+          servedSession: {
+            origin: target.origin,
+            slug: target.slug,
+            ...(target.door ? { door: target.door } : {}),
+            ...session
+          }
+        }
       : {}),
     position,
     size: { width: 420, height: 300 }

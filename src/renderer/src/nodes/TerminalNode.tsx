@@ -133,7 +133,10 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
             <CrIcon name="fork" /> T{node.forkOf.turnIndex}
           </span>
         )}
-        <GitChip dir={node.cwd} />
+        {/* A git chip on a card about somebody ELSE's process would show the
+            caller's own directory — a lie. The cwd of an imported card is at
+            the author's app; nothing here is on a branch. */}
+        {!node.servedSession && <GitChip dir={node.cwd} />}
         {phase === 'idle' && activity && (
           <span className="vi-chip dim">{agoLabel(activity.updatedAt)}</span>
         )}

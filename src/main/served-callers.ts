@@ -33,7 +33,7 @@ export type ServedAssertFailure = 'malformed' | 'unknown_challenge' | 'bad_signa
  * costs — this regex is the whole defence, so widening it needs the same
  * reasoning re-done.
  */
-const SAFE_SUB = /^[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?$/
+export const SAFE_SUB = /^[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?$/
 
 export class ServedCallers {
   /** serviceId → sub → jwk. In-memory M1; persistence rides the accounts work. */

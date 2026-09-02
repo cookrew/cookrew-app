@@ -3947,6 +3947,17 @@ body.cookrew-mobile .cookrew-minimap {
   animation: cr-ckpt-pulse 1.6s ease-in-out infinite;
 }
 
+/* The session behind the rail is over. Still, not pulsing, not green — a dot
+   that keeps glowing after the door said 402 is a lie (remote-card P10c). */
+.cr-ckpt-livedot.ended {
+  background: var(--dim);
+  animation: none;
+}
+.cr-ckpt-row.live.ended .cr-ckpt-dot i {
+  background: var(--dim);
+  animation: none;
+}
+
 @keyframes cr-ckpt-pulse {
   0%,
   100% {
@@ -5175,6 +5186,9 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   color: var(--dim);
 }
 .popout-session .sep { color: var(--line-soft); }
+/* A sentence about the record — why the rail is empty or stale, or why a
+   drop did nothing. Same voice as the strip, not an alert. */
+.popout-session .popout-session-note { color: var(--ink); }
 
 /* ── THE DOCK ROW'S FAMILIES ──
    A quiet caption before each run of chips. It is a label, not a control:

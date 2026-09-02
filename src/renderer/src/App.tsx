@@ -1278,7 +1278,13 @@ function Canvas(): React.JSX.Element {
           onOrch={setOrch}
           voiceFor={
             zoomedTerminalId && terminals.some((t) => t.id === zoomedTerminalId)
-              ? { id: zoomedTerminalId, activity: activities[zoomedTerminalId] }
+              ? {
+                  id: zoomedTerminalId,
+                  activity: activities[zoomedTerminalId],
+                  // An imported card runs at someone else's app: the dock's
+                  // attach button would paste THIS machine's paths into it.
+                  remote: terminals.find((t) => t.id === zoomedTerminalId)?.servedSession != null
+                }
               : null
           }
           browserFor={browserInFullView(lod.primaryId, browsers)}

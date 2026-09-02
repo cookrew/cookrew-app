@@ -32,6 +32,14 @@ const arg = (name, fallback = undefined) => {
   const at = process.argv.indexOf(`--${name}`)
   return at >= 0 ? process.argv[at + 1] : fallback
 }
+// The sub this card would sign in as, and nothing else — what the parity
+// test compares against the app's own normalisation. Honoured ONLY as the
+// first argument: `--name` carries a name a DOOR chose, and a door must not
+// be able to pick this script's control flow by publishing one.
+if (process.argv[2] === '--print-sub') {
+  process.stdout.write(`${safeSub(arg('sub', userInfo().username || 'caller'))}\n`)
+  process.exit(0)
+}
 /**
  * A DOOR REACHED THROUGH THE RELAY, rather than dialled directly.
  *
@@ -74,7 +82,27 @@ if (!origin || !slug) {
   process.exit(2)
 }
 const label = arg('name', slug)
-const sub = arg('sub', userInfo().username || 'caller')
+/**
+ * THE ACCOUNT NAME, in the one shape a door accepts.
+ *
+ * A door refuses any sub its path-segment normalisation would change, so a
+ * raw system username like `Drej.Smith` is refused outright. The app already
+ * normalises (src/main/caller-identity.ts callerSub); this card used to send
+ * the raw name, so the app signed in as one account and the card as another —
+ * the door then refused one of them with "belongs to another key", and the
+ * rail stayed blank forever while the pixels flowed. ONE rule, in both places,
+ * pinned by tests/remote-card-gates.test.ts (P13) through --print-sub.
+ */
+function safeSub(raw) {
+  const cleaned = String(raw ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '-')
+    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, '')
+    .slice(0, 32)
+    .replace(/[^a-z0-9]+$/, '')
+  return cleaned.length > 0 ? cleaned : 'caller'
+}
+const sub = safeSub(arg('sub', userInfo().username || 'caller'))
 const base = new URL(origin)
 const transport = base.protocol === 'https:' ? https : http
 // TLS IS VERIFIED. This lane carries a stranger's Bearer token, their typed

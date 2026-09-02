@@ -122,10 +122,12 @@ export function startRelayProxy(
       }
       const door = doors.get(asked.name)
       if (!door) {
-        // A door this app is not reaching. Answered like any unknown path — the
-        // card's own retry loop handles it, and it says nothing about what
-        // other doors exist.
-        response.writeHead(404).end()
+        // A door this app is not reaching. The refusal NAMES ITSELF, because
+        // the door's own 404 is a bare `{}` and a caller reading the record
+        // must be able to tell "nobody is serving this" from "your session is
+        // over". It still says nothing about what other doors exist.
+        response.writeHead(404, { 'content-type': 'application/json' })
+        response.end('{"error":"not-serving"}')
         return
       }
       await carry(door.caller, asked, request, response, log)
@@ -243,7 +245,15 @@ async function carry(
     // 502, not 500: the failure is between here and the door, and the card's
     // refusal handling already knows what to do with a gateway that could not
     // deliver — it retries, rather than telling someone their session ended.
-    if (!response.headersSent) response.writeHead(502)
+    if (!response.headersSent) {
+      response.writeHead(502, { 'content-type': 'application/json' })
+      response.end(
+        error instanceof Error && error.message === 'not-serving'
+          ? '{"error":"not-serving"}'
+          : '{"error":"relay"}'
+      )
+      return
+    }
     response.end()
   }
 }
