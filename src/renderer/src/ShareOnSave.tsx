@@ -78,6 +78,7 @@ export function serveRefusalText(reason: string | undefined): string {
   if (reason === 'grant-unusable') return MKT_SERVE['mkt.serve.refused.grant-unusable']
   if (reason === 'no-payment-rail') return MKT_SERVE['mkt.serve.payment.required']
   if (reason === 'no-template') return 'that template is no longer on this machine.'
+  if (reason === 'desktop-only') return MKT_SERVE['mkt.serve.refused.desktop-only']
   return reason
 }
 

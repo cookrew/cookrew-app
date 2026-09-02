@@ -139,6 +139,58 @@ describe('serve refusal copy', () => {
     expect(text).toContain('Match the grant to the orch')
     expect(text).toContain('endpoint’s request template')
   })
+
+  it('sends the phone owner to the desktop instead of showing the raw token', () => {
+    // The remote transport refuses servingServe with `desktop-only` (publish is
+    // owner-IPC only, the grant-surface rule). That word reached the bar as-is.
+    const text = serveRefusalText('desktop-only')
+    expect(text).not.toBe('desktop-only')
+    expect(text).toContain('desktop')
+  })
+})
+
+describe('the share popover survives a phone-width bar', () => {
+  /**
+   * The user saved a team on the phone and the share chooser never appeared:
+   * under ≤700px the bar became a scroll container (overflow-x: auto), and a
+   * scroll container clips the absolutely positioned popovers it contains —
+   * the share sheet, the clipboard tray, the address receipt. The scroll must
+   * live on a NON-positioned inner row instead: absolute children escape the
+   * overflow of an ancestor that is not their containing block.
+   */
+  it('keeps every popover a direct child of the positioned bar, outside the row', () => {
+    const bar = src('SelectionBar.tsx')
+    expect(bar).toContain('className="cr-selbar-row"')
+    const row = bar.indexOf('className="cr-selbar-row"')
+    for (const popover of [
+      'cr-selbar-share cr-selbar-served',
+      'className="cr-selbar-tray"'
+    ]) {
+      expect(bar.indexOf(popover), popover).toBeLessThan(row)
+    }
+    // The share sheet sits at the bar's own indent (6 spaces), one level
+    // above row content — nesting it back inside the row would deepen this.
+    expect(bar).toMatch(/\n {6}\{naming && \(\n {8}<div className="cr-selbar-share">/)
+  })
+
+  it('narrow screens scroll the row, never the bar the popovers hang from', () => {
+    const css = readFileSync(
+      path.join(__dirname, '..', 'src/renderer/src', 'styles.css'),
+      'utf8'
+    )
+    // The base rule must stay overflow-free too — clipping there brings the
+    // bug back at EVERY width, not just phones.
+    const base = css.indexOf('\n.cr-selbar {')
+    expect(base).toBeGreaterThan(-1)
+    expect(css.slice(base, css.indexOf('}', base))).not.toContain('overflow')
+    const start = css.indexOf('Narrow screens: the bar hugs the width')
+    expect(start).toBeGreaterThan(-1)
+    const end = css.indexOf('}\n\n/* ----', start)
+    expect(end).toBeGreaterThan(-1)
+    const block = css.slice(start, end)
+    expect(block).toMatch(/\.cr-selbar-row[^{]*\{[^}]*overflow-x:\s*auto/)
+    expect(block).not.toMatch(/\.cr-selbar\s*\{[^}]*overflow/)
+  })
 })
 
 describe('Ways to get paid — the missing paid-door affordance', () => {
