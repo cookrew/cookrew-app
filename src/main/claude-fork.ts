@@ -157,10 +157,12 @@ function findExistingClaudeSession(options: ResolveSessionOptions): string | nul
       SESSION_UUID_RE.test(storedId) &&
       existsSync(claudeSessionFile(cwd, storedId, projectsDir))
     ) {
-      return storedId
+      return followContinuedIn(cwd, storedId, projectsDir)
     }
     const flagged = extractSessionFlag(command)
-    if (flagged && existsSync(claudeSessionFile(cwd, flagged, projectsDir))) return flagged
+    if (flagged && existsSync(claudeSessionFile(cwd, flagged, projectsDir))) {
+      return followContinuedIn(cwd, flagged, projectsDir)
+    }
     const dir = claudeProjectDir(cwd, projectsDir)
     if (turns.length > 0 && existsSync(dir)) {
       // readCandidates sorts newest-first; the strict-greater reduce keeps the
@@ -175,6 +177,73 @@ function findExistingClaudeSession(options: ResolveSessionOptions): string | nul
     console.error('Claude session resolution failed:', error)
   }
   return null
+}
+
+/** How much of a session file's tail is read for claude's continuation marker. */
+const CONTINUED_IN_TAIL_BYTES = 64 * 1024
+const CONTINUED_IN_MAX_HOPS = 8
+
+/**
+ * Claude's OWN statement that a conversation moved to another file.
+ *
+ * `{"type":"continued-in","continuedInSessionId":"…"}` is appended to a
+ * session file when claude carries the conversation on in a new one (the
+ * continuation after a compaction). From that line on, the old file is
+ * history and every new turn lands in the named successor.
+ *
+ * The rotation scan in claude-rotation.ts could not see this shape: it looks
+ * for a NEWER file whose head names the old one, and a continuation file was
+ * created hours earlier (at the compaction) with a head that names nothing —
+ * so the node stayed bound to the old id, and a recover resumed a
+ * conversation that had ended at the marker (Conductor, 2026-09-02 21:36:
+ * 74 minutes of turns "disappeared" into a file nothing was reading).
+ */
+export function continuedInOf(lines: readonly string[]): string | null {
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]
+    if (!line.includes('"continued-in"')) continue
+    try {
+      const entry = JSON.parse(line) as { type?: unknown; continuedInSessionId?: unknown }
+      if (entry.type !== 'continued-in') continue
+      const next = entry.continuedInSessionId
+      return typeof next === 'string' && SESSION_UUID_RE.test(next) ? next : null
+    } catch {
+      continue
+    }
+  }
+  return null
+}
+
+/** The last complete lines of a file, from a bounded tail read. Sync: the spawn path is. */
+function tailLinesSync(file: string, maxBytes = CONTINUED_IN_TAIL_BYTES): string[] {
+  try {
+    const size = statSync(file).size
+    const start = Math.max(0, size - maxBytes)
+    const text = readFileSync(file, 'utf8').slice(start > 0 ? -maxBytes : 0)
+    const lines = text.split('\n')
+    // A tail that starts mid-line begins with a fragment; drop it.
+    if (start > 0) lines.shift()
+    return lines.filter((line) => line.length > 0)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Follow `continued-in` markers from a session to the file claude is actually
+ * writing now — bounded, and only onto files that exist here. Returns the
+ * starting id when there is nothing to follow.
+ */
+export function followContinuedIn(cwd: string, sessionId: string, projectsDir?: string): string {
+  let current = sessionId
+  const seen = new Set<string>([current])
+  for (let hop = 0; hop < CONTINUED_IN_MAX_HOPS; hop += 1) {
+    const next = continuedInOf(tailLinesSync(claudeSessionFile(cwd, current, projectsDir)))
+    if (!next || seen.has(next) || !existsSync(claudeSessionFile(cwd, next, projectsDir))) break
+    seen.add(next)
+    current = next
+  }
+  return current
 }
 
 export function resolveClaudeSessionId(options: ResolveSessionOptions): string {

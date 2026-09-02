@@ -55,7 +55,7 @@
 
 import { open, readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
-import { claudeProjectDir, isSessionUuid, realCwd } from './claude-fork'
+import { claudeProjectDir, continuedInOf, isSessionUuid, realCwd } from './claude-fork'
 
 /** Head window per candidate file, in bytes and in lines (first hit wins). */
 export const ROTATION_HEAD_BYTES = 1024 * 1024
@@ -294,6 +294,12 @@ export interface RotationFs {
    * existing fakes keep passing.
    */
   readHead(file: string, maxLines?: number): Promise<string[]>
+  /**
+   * Complete lines from the TAIL of a file, where claude appends its own
+   * `continued-in` marker. Optional so existing fakes keep passing; without
+   * it the scan has only the heuristic shapes.
+   */
+  readTail?(file: string, maxBytes?: number): Promise<string[]>
 }
 
 export interface RotationScanOptions {
@@ -347,10 +353,32 @@ export async function resolveRotationChain(
 
   const entries = await fs.listSessions(dir)
   const stale = entries.find((entry) => entry.sessionId === options.sessionId)
-  // No stale file at all means there is no rotation to follow — a missing
-  // binding is a different repair (resolveClaudeSessionId owns that one).
   if (!stale) return null
 
+  // CLAUDE'S OWN STATEMENT FIRST. A `continued-in` marker at the tail of the
+  // bound file names the successor outright, and it is the one shape the
+  // heuristics below cannot see: a continuation file is created at the
+  // compaction, hours before the switch, with a head that names nothing —
+  // so it is neither newer than the stale file nor a declared successor.
+  if (fs.readTail) {
+    const byId = new Map(entries.map((entry) => [entry.sessionId, entry]))
+    const declared: string[] = []
+    const seen = new Set<string>([options.sessionId])
+    let at: SessionFileEntry | undefined = stale
+    while (at && declared.length <= ROTATION_MAX_HOPS) {
+      const next = continuedInOf(await fs.readTail(at.file))
+      if (!next || seen.has(next)) break
+      const file = byId.get(next)
+      if (!file) break
+      if (options.claimed?.has(next)) return null // another node owns it
+      seen.add(next)
+      declared.push(next)
+      at = file
+    }
+    if (declared.length > 0) return declared
+  }
+  // No stale file at all means there is no rotation to follow — a missing
+  // binding is a different repair (resolveClaudeSessionId owns that one).
   const candidates = entries
     .filter(
       (entry) =>
@@ -661,5 +689,26 @@ const defaultRotationFs: RotationFs = {
     })
     return entries.flat()
   },
-  readHead: (file, maxLines) => readHeadLines(file, maxLines)
+  readHead: (file, maxLines) => readHeadLines(file, maxLines),
+  readTail: (file, maxBytes) => readTailLines(file, maxBytes ?? 64 * 1024)
+}
+
+/** The last complete lines of a file, from one bounded read at its end. */
+export async function readTailLines(file: string, maxBytes: number): Promise<string[]> {
+  let handle: Awaited<ReturnType<typeof open>> | null = null
+  try {
+    handle = await open(file, 'r')
+    const size = (await handle.stat()).size
+    const start = Math.max(0, size - maxBytes)
+    const length = size - start
+    const buffer = Buffer.alloc(length)
+    await handle.read(buffer, 0, length, start)
+    const lines = buffer.toString('utf8').split('\n')
+    if (start > 0) lines.shift()
+    return lines.filter((line) => line.length > 0)
+  } catch {
+    return []
+  } finally {
+    await handle?.close()
+  }
 }
