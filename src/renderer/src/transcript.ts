@@ -697,3 +697,34 @@ export function tailClipRows(phase: TurnPhase, tailLines: number | null): number
   if (tailLines === null || tailLines <= 0) return null
   return phase === 'idle' || phase === 'replied' ? tailLines : null
 }
+
+/**
+ * WHERE A WHEEL OVER THE LIVE LAYER GOES — the one combined scroll space, or
+ * xterm.
+ *
+ * While a turn RUNS, the live layer is the thing to read and the wheel drives
+ * xterm (tmux copy-mode) as it always has. At REST the live layer is a tail:
+ * scrolling it should move through the transcript above it. That used to be
+ * true only when a tail clip had been found, and a clip is found by scraping
+ * the PTY for a reply boundary — which a TUI never shows. An imported card
+ * mirrors pi's full-screen TUI, so no clip was ever found, the wheel went to
+ * xterm, xterm turned it into arrow keys for a remote alt-screen, and the
+ * transcript above a finished reply could not be reached at all. Rest is the
+ * rule now; the clip is only how the tail is drawn.
+ *
+ * `up` = deltaY < 0. The transcript takes an upward wheel while there is
+ * anything above, and a downward one while it is not yet at the bottom, so
+ * the live layer is a pass-through scroller at rest and never a dead zone.
+ */
+export function wheelGoesToTranscript(input: {
+  atRest: boolean
+  clipped: boolean
+  deltaY: number
+  scrollTop: number
+  atBottom: boolean
+}): boolean {
+  if (!input.atRest && !input.clipped) return false
+  if (input.deltaY < 0) return input.scrollTop > 0
+  if (input.deltaY > 0) return !input.atBottom
+  return false
+}

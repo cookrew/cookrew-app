@@ -23,7 +23,8 @@ import {
   refineEstimate,
   type TraceAnchor,
   type TracePage,
-  type TraceBlock
+  type TraceBlock,
+  wheelGoesToTranscript
 } from './transcript'
 
 /** Blocks fetched per lazy page, and the cap of FULL blocks kept in memory. */
@@ -96,6 +97,12 @@ export const TranscriptView = forwardRef<
     jumpToken: number
     /** Live-tail clip (unified-scroll item 1): rows of the idle TUI tail, or null. */
     clipRows: number | null
+    /**
+     * The turn is at rest (idle / replied): a wheel over the live layer moves
+     * through the combined space whether or not a clip was found. See
+     * wheelGoesToTranscript for why the clip alone was not enough.
+     */
+    atRest?: boolean
     /** Reports the identity in view (+ marker fraction) for the timeline. */
     onActiveBlockChange?: (active: ActiveBlock) => void
     /** Reports a checkpoint whose content is FETCHING for a jump, null once filled. */
@@ -120,6 +127,7 @@ export const TranscriptView = forwardRef<
     selectedIndex,
     jumpToken,
     clipRows,
+    atRest = false,
     onActiveBlockChange,
     onPending,
     onTailLoaded,
@@ -140,6 +148,8 @@ export const TranscriptView = forwardRef<
   const pinnedRef = useRef(true)
   const clipRef = useRef(clipRows)
   clipRef.current = clipRows
+  const restRef = useRef(atRest)
+  restRef.current = atRest
   // Eviction anchor (the identity in view) so the cap keeps the visible window.
   const anchorIndexRef = useRef<number>(Number.MAX_SAFE_INTEGER)
   // The identity currently at the viewport top — tells a genuine jump from a
@@ -196,12 +206,17 @@ export const TranscriptView = forwardRef<
     const scroller = scrollRef.current
     if (!live || !scroller) return
     const onWheel = (e: WheelEvent): void => {
-      if (clipRef.current === null) return
-      if (e.deltaY < 0 && scroller.scrollTop > 0) {
-        e.preventDefault()
-        e.stopPropagation()
-        scroller.scrollTop += e.deltaY
-      }
+      const takes = wheelGoesToTranscript({
+        atRest: restRef.current,
+        clipped: clipRef.current !== null,
+        deltaY: e.deltaY,
+        scrollTop: scroller.scrollTop,
+        atBottom: isAtBottom(scroller.scrollTop, scroller.scrollHeight, scroller.clientHeight)
+      })
+      if (!takes) return
+      e.preventDefault()
+      e.stopPropagation()
+      scroller.scrollTop += e.deltaY
     }
     live.addEventListener('wheel', onWheel, { capture: true, passive: false })
     return () => live.removeEventListener('wheel', onWheel, { capture: true } as EventListenerOptions)

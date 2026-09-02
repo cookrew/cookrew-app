@@ -1010,6 +1010,7 @@ function TerminalOverlay({
           selectedIndex={selectedIndex}
           jumpToken={jumpToken}
           clipRows={clipRows}
+          atRest={phase === 'idle' || phase === 'replied'}
           onActiveBlockChange={onActiveBlockChange}
           onPending={setPendingIndex}
           onTailLoaded={() => setTailReady(true)}
