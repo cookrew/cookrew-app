@@ -65,6 +65,18 @@ describe('continued-in', () => {
     expect(followContinuedIn(CWD, OLD, loop)).toBe(NEW)
   })
 
+  it('finds a marker buried under a stray branch far past the last few KB', () => {
+    // The accident itself: the old file was resumed after its marker and
+    // grew 520 KB of a branch nothing should keep. The marker still says
+    // where the conversation went.
+    const filler = Array.from({ length: 3000 }, (_, i) => record(OLD, `stray ${i} ${'x'.repeat(200)}`))
+    const projectsDir = project({
+      [OLD]: [record(OLD, 'morning'), marker(OLD, NEW), ...filler],
+      [NEW]: [record(NEW, 'evening')]
+    })
+    expect(followContinuedIn(CWD, OLD, projectsDir)).toBe(NEW)
+  })
+
   it('a file with no marker resolves to itself', () => {
     const projectsDir = project({ [OLD]: [record(OLD, 'only')] })
     expect(resolveClaudeSessionId({ command: 'claude', cwd: CWD, storedId: OLD, turns: [], projectsDir })).toBe(OLD)

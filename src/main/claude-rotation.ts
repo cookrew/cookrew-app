@@ -690,22 +690,35 @@ const defaultRotationFs: RotationFs = {
     return entries.flat()
   },
   readHead: (file, maxLines) => readHeadLines(file, maxLines),
-  readTail: (file, maxBytes) => readTailLines(file, maxBytes ?? 64 * 1024)
+  readTail: (file, maxBytes) => readTailLines(file, maxBytes ?? 16 * 1024 * 1024)
 }
 
-/** The last complete lines of a file, from one bounded read at its end. */
+/**
+ * Lines from the tail of a file that hold a continuation marker, searching
+ * backwards in chunks and stopping at the first chunk that has one — a file
+ * resumed after its marker carries a stray branch past it (520 KB on the
+ * day this was written), so the last few KB are not enough.
+ */
 export async function readTailLines(file: string, maxBytes: number): Promise<string[]> {
   let handle: Awaited<ReturnType<typeof open>> | null = null
   try {
     handle = await open(file, 'r')
     const size = (await handle.stat()).size
-    const start = Math.max(0, size - maxBytes)
-    const length = size - start
-    const buffer = Buffer.alloc(length)
-    await handle.read(buffer, 0, length, start)
-    const lines = buffer.toString('utf8').split('\n')
-    if (start > 0) lines.shift()
-    return lines.filter((line) => line.length > 0)
+    const floor = Math.max(0, size - maxBytes)
+    const chunk = 256 * 1024
+    let end = size
+    let carry = ''
+    while (end > floor) {
+      const start = Math.max(floor, end - chunk)
+      const buffer = Buffer.alloc(end - start)
+      await handle.read(buffer, 0, end - start, start)
+      const lines = (buffer.toString('utf8') + carry).split('\n')
+      carry = start > floor ? (lines.shift() ?? '') : ''
+      const whole = lines.filter((line) => line.length > 0)
+      if (whole.some((line) => line.includes('"continued-in"'))) return whole
+      end = start
+    }
+    return []
   } catch {
     return []
   } finally {

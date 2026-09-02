@@ -8,7 +8,19 @@
 // fall back to matching their scraped turn history against candidate files.
 
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import type { TurnRecord } from '../shared/turn'
@@ -179,8 +191,14 @@ function findExistingClaudeSession(options: ResolveSessionOptions): string | nul
   return null
 }
 
-/** How much of a session file's tail is read for claude's continuation marker. */
-const CONTINUED_IN_TAIL_BYTES = 64 * 1024
+/**
+ * How far back a session file is searched for claude's continuation marker.
+ * Not just the last few KB: a file that was RESUMED after its marker (the
+ * exact accident this exists to end) carries megabytes of a stray branch
+ * past it — Conductor's sat 520 KB from the end after one such resume.
+ */
+const CONTINUED_IN_SCAN_BYTES = 16 * 1024 * 1024
+const CONTINUED_IN_CHUNK_BYTES = 256 * 1024
 const CONTINUED_IN_MAX_HOPS = 8
 
 /**
@@ -214,18 +232,37 @@ export function continuedInOf(lines: readonly string[]): string | null {
   return null
 }
 
-/** The last complete lines of a file, from a bounded tail read. Sync: the spawn path is. */
-function tailLinesSync(file: string, maxBytes = CONTINUED_IN_TAIL_BYTES): string[] {
+/**
+ * The LAST continuation marker in a file, searching backwards in chunks and
+ * stopping at the first chunk that holds one — a file with no marker (the
+ * common case) costs at most the scan budget, a file with one costs little.
+ * Sync, because the spawn path is.
+ */
+function lastContinuedInSync(file: string): string | null {
+  let fd: number | null = null
   try {
-    const size = statSync(file).size
-    const start = Math.max(0, size - maxBytes)
-    const text = readFileSync(file, 'utf8').slice(start > 0 ? -maxBytes : 0)
-    const lines = text.split('\n')
-    // A tail that starts mid-line begins with a fragment; drop it.
-    if (start > 0) lines.shift()
-    return lines.filter((line) => line.length > 0)
+    fd = openSync(file, 'r')
+    const size = fstatSync(fd).size
+    const floor = Math.max(0, size - CONTINUED_IN_SCAN_BYTES)
+    let end = size
+    let carry = ''
+    while (end > floor) {
+      const start = Math.max(floor, end - CONTINUED_IN_CHUNK_BYTES)
+      const buffer = Buffer.alloc(end - start)
+      readSync(fd, buffer, 0, end - start, start)
+      const lines = (buffer.toString('utf8') + carry).split('\n')
+      // The first piece may be a fragment of a line that began in the chunk
+      // before; it is carried into that chunk's read rather than parsed here.
+      carry = start > floor ? (lines.shift() ?? '') : ''
+      const found = continuedInOf(lines)
+      if (found) return found
+      end = start
+    }
+    return null
   } catch {
-    return []
+    return null
+  } finally {
+    if (fd !== null) closeSync(fd)
   }
 }
 
@@ -238,7 +275,7 @@ export function followContinuedIn(cwd: string, sessionId: string, projectsDir?: 
   let current = sessionId
   const seen = new Set<string>([current])
   for (let hop = 0; hop < CONTINUED_IN_MAX_HOPS; hop += 1) {
-    const next = continuedInOf(tailLinesSync(claudeSessionFile(cwd, current, projectsDir)))
+    const next = lastContinuedInSync(claudeSessionFile(cwd, current, projectsDir))
     if (!next || seen.has(next) || !existsSync(claudeSessionFile(cwd, next, projectsDir))) break
     seen.add(next)
     current = next
