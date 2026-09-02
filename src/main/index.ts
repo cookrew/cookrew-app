@@ -576,6 +576,40 @@ function servedAddress(slug: string): string {
   return servedReach(slug).address
 }
 
+/**
+ * Put a served team on the relay — the same door, whether it was just served
+ * or is being served again after a restart. Serving is an INTENT that
+ * survives the app dying (served-persist); the relay connection does not, so
+ * boot re-dials every template it rehydrates. Without this a restart left
+ * the registry saying `live: false` and every imported card saying "Nobody
+ * is serving", while the owner's surface said the team was up.
+ */
+async function joinRelayFor(template: ServedTemplate): Promise<void> {
+  if (!relayServing) return
+  const snapshot = teams.load(template.templateId)
+  const joined = await relayServing.serve({
+    slug: template.slug,
+    team: template.slug,
+    handle: RELAY_HANDLE,
+    face: {
+      title: snapshot?.name ?? template.templateId,
+      door: (snapshot ? orchAgentOf(snapshot) : null) ?? '',
+      agents: (snapshot?.nodes ?? []).filter((n) => n.kind === 'terminal').length,
+      access: template.access,
+      ...(template.access === 'paid' && template.priceUsd !== undefined
+        ? { priceUsd: template.priceUsd }
+        : {}),
+      rails: servedPaymentRails(
+        servedPaymentTerms({
+          slug: template.slug,
+          ...(template.priceUsd !== undefined ? { priceUsd: template.priceUsd } : {})
+        })
+      )
+    }
+  })
+  if (!joined.ok) console.error(`serving ${template.slug}: not on the relay (${joined.reason})`)
+}
+
 function servedPaymentReturn(slug: string): string {
   const url = new URL(servedAddress(slug))
   url.searchParams.set('payment', 'received')
@@ -3470,6 +3504,10 @@ app.whenReady().then(() => {
   // nobody is holding — which reads as the team having gone away.
   if (importedDoors()) void relayProxy()
 
+  // THE OWNER'S END OF THE RELAY, for every team still being served. The
+  // templates came back from disk; their doors have to be dialled again.
+  for (const template of serving.served.list()) void joinRelayFor(template)
+
   startMobileServer({
     servedSlug: handleServedSlug,
     store,
@@ -3945,27 +3983,13 @@ function registerIpc(handlers: RestoreHandlers): void {
       // THE RELAY, when it is configured. Its refusal is not the serve's:
       // the team IS being served on this network either way, so a relay that
       // could not be joined narrows the reach rather than undoing the act.
-      if (relayServing) {
-        const snapshot = teams.load(input.templateId)
-        const joined = await relayServing.serve({
-          slug,
-          team: slug,
-          handle: RELAY_HANDLE,
-          face: {
-            title: snapshot?.name ?? input.templateId,
-            door: (snapshot ? orchAgentOf(snapshot) : null) ?? '',
-            agents: (snapshot?.nodes ?? []).filter((n) => n.kind === 'terminal').length,
-            access: input.access,
-            ...(input.access === 'paid' && input.priceUsd !== undefined
-              ? { priceUsd: input.priceUsd }
-              : {}),
-            rails: servedPaymentRails(
-              servedPaymentTerms({ slug, ...(input.priceUsd !== undefined ? { priceUsd: input.priceUsd } : {}) })
-            )
-          }
-        })
-        if (!joined.ok) console.error(`serving ${slug}: not on the relay (${joined.reason})`)
-      }
+      await joinRelayFor({
+        serviceId,
+        templateId: input.templateId,
+        slug,
+        access: input.access,
+        ...(input.access === 'paid' ? { priceUsd: input.priceUsd } : {})
+      })
       return { ok: true as const, serviceId, slug, address: servedAddress(slug) }
     }
   )
