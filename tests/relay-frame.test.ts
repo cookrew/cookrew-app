@@ -113,7 +113,8 @@ describe('a relayed request may only address the door', () => {
       '/trace/markers',
       '/line',
       '/line/raw',
-      '/line/resize'
+      '/line/resize',
+      '/session/end'
     ]) {
       expect(isDoorPath(path), path).toBe(true)
     }

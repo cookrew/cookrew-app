@@ -181,7 +181,11 @@ const DOOR_PATHS = new Set([
   '/trace/markers',
   '/line',
   '/line/raw',
-  '/line/resize'
+  '/line/resize',
+  // The caller ending their own session (served-endpoints). Caller-scoped
+  // behind the bearer like the transcript; the one destructive verb a door
+  // exposes, and it destroys only the caller's own seat.
+  '/session/end'
 ])
 
 export function isDoorPath(path: string): boolean {
