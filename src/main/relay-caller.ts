@@ -208,6 +208,7 @@ export class RelayCaller {
   private receive(raw: string): void {
     const frame = decodeFrame(raw)
     if (!frame || frame.t === 'ready' || frame.t === 'open' || frame.t === 'body') return
+    if (frame.t === 'ping' || frame.t === 'pong') return
     const entry = this.pending.get(frame.id)
     if (!entry) return
 

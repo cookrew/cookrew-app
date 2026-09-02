@@ -1,6 +1,6 @@
 import http from 'node:http'
 import https from 'node:https'
-import { decodeFrame } from '../shared/relay-frame'
+import { decodeFrame, encodeFrame } from '../shared/relay-frame'
 import type { RelaySocket } from './relay-client'
 
 /**
@@ -46,7 +46,15 @@ export interface RelayDialOptions {
   /** From POST /v1/relay/ticket. Short-lived, and never put in a log line. */
   ticket: string
   log?: (message: string) => void
+  /**
+   * How long the downlink may go without a ping before this dial gives up
+   * and ends — so the owner redials. The relay pings every 25s; three missed
+   * is a line that stopped carrying, whatever the socket says.
+   */
+  quietMs?: number
 }
+
+const QUIET_MS = 75_000
 
 export function dialRelay(options: RelayDialOptions): RelayDial {
   const log = options.log ?? ((): void => undefined)
@@ -72,9 +80,17 @@ export function dialRelay(options: RelayDialOptions): RelayDial {
   ready.catch(() => undefined)
 
   const endedListeners: ((why: string) => void)[] = []
+  /** When the relay last said anything on the downlink; 0 until `ready`. */
+  let lastHeard = 0
+  const quietMs = options.quietMs ?? QUIET_MS
+  const watchdog = setInterval(() => {
+    if (lastHeard > 0 && Date.now() - lastHeard > quietMs) shutDown('the relay went quiet')
+  }, Math.max(250, Math.floor(quietMs / 3)))
+  watchdog.unref?.()
   const shutDown = (why: string): void => {
     if (closed) return
     closed = true
+    clearInterval(watchdog)
     log(`relay: the line to ${base.host} ended (${why})`)
     uplink?.destroy()
     uplink = null
@@ -112,8 +128,16 @@ export function dialRelay(options: RelayDialOptions): RelayDial {
         // `ready` is the relay confirming the name; it is answered here rather
         // than handed on, because relay-client has no use for it.
         if (frame?.t === 'ready') {
+          lastHeard = Date.now()
           openUplink()
           settle(frame.name)
+          continue
+        }
+        // THE PULSE: answered on the uplink, which is the whole point — the
+        // pong proves to the relay that this door's answers still arrive.
+        if (frame?.t === 'ping') {
+          lastHeard = Date.now()
+          sendUp(encodeFrame({ t: 'pong', at: frame.at }))
           continue
         }
         if (frame?.t === 'abort' && frame.id === 'x') {
@@ -161,13 +185,14 @@ export function dialRelay(options: RelayDialOptions): RelayDial {
     request.on('close', () => clearInterval(beat))
   }
 
+  const sendUp = (data: string): void => {
+    if (closed) return
+    // Answers can be ready before the uplink is, on the very first request.
+    if (!uplink) queued.push(data)
+    else uplink.write(`${data}\n`)
+  }
   const socket: RelaySocket = {
-    send: (data) => {
-      if (closed) return
-      // Answers can be ready before the uplink is, on the very first request.
-      if (!uplink) queued.push(data)
-      else uplink.write(`${data}\n`)
-    },
+    send: sendUp,
     close: () => shutDown('the door withdrew'),
     onMessage: (listener) => listeners.push(listener),
     onClose: (listener) => closers.push(listener)

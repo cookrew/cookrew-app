@@ -137,3 +137,12 @@ describe('a relayed request may only address the door', () => {
     }
   })
 })
+
+describe('the pulse', () => {
+  it('ping and pong decode, and refuse a non-numeric clock', () => {
+    expect(decodeFrame('{"t":"ping","at":1725000000000}')).toEqual({ t: 'ping', at: 1725000000000 })
+    expect(decodeFrame('{"t":"pong","at":5}')).toEqual({ t: 'pong', at: 5 })
+    expect(decodeFrame('{"t":"ping","at":"now"}')).toBeNull()
+    expect(decodeFrame('{"t":"pong"}')).toBeNull()
+  })
+})

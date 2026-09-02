@@ -110,7 +110,7 @@ function wire(
         )
         return
       }
-      if (frame.t !== 'ready') hub.fromCaller(frame.id, callerAtHub, data)
+      if (frame.t !== 'ready' && frame.t !== 'ping' && frame.t !== 'pong') hub.fromCaller(frame.id, callerAtHub, data)
     },
     close: () => callerClosed.forEach((c) => c()),
     onMessage: (listener) => toCaller.push(listener),
@@ -329,7 +329,7 @@ describe('two callers on one door', () => {
 
     // The caller only ever sees labels it chose. The hub's own ids (s1, s2)
     // went to the door and stopped there.
-    expect(w.delivered.map((f) => (f.t === 'ready' ? f.name : f.id))).toEqual([
+    expect(w.delivered.map((f) => (f.t === 'ready' ? f.name : 'id' in f ? f.id : f.t))).toEqual([
       'c1',
       'c1',
       'c1',

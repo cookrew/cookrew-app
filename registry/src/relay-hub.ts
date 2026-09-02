@@ -163,7 +163,7 @@ export class RelayHub {
   /** A frame from the DOOR, forwarded to the one caller waiting on that id. */
   fromDoor(name: string, raw: string): void {
     const frame = decodeFrame(raw)
-    if (!frame || frame.t === 'ready' || frame.t === 'open') return
+    if (!frame || frame.t === 'ready' || frame.t === 'open' || frame.t === 'ping' || frame.t === 'pong') return
     const entry = this.callers.get(frame.id)
     // A door answering a stream it was never given is not routed anywhere.
     if (!entry || entry.door !== name) return
