@@ -690,12 +690,17 @@ a.cr-btn {
 
 /* ---- selection bar (Figma model: selected elements grow actions) ---- */
 
-/* Floats over the canvas just above the dock, centered. */
+/* Floats over the canvas just above the dock, centered — by auto margins,
+   NEVER by transform: the payment sheet renders inside this bar with a
+   position: fixed scrim, and a transform here becomes its containing block,
+   gluing the "viewport-covering" scrim to the bar instead of the screen. */
 .cr-selbar {
   position: absolute;
   bottom: 14px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: fit-content;
   z-index: 20;
   display: flex;
   align-items: center;
@@ -5276,10 +5281,9 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   max-height: 60vh;
   overflow: auto;
   padding: 10px 12px;
-  background: var(--cr-panel, #1c1a16);
-  border: 1.5px solid var(--cr-line-hard, #4c463a);
-  border-radius: 8px;
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 3px 3px 0 var(--line);
   z-index: 40;
 }
 
@@ -5290,7 +5294,6 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   gap: 6px;
   background: var(--cream-hi);
   border: 2px solid var(--violet);
-  border-radius: 0;
   box-shadow: 3px 3px 0 var(--line);
 }
 .cr-selbar-served .sos-note {

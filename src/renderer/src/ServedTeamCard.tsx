@@ -95,9 +95,9 @@ export function ServedTeamCard({
       : MKT_SERVE['mkt.serve.price.free']
 
   return (
-    <div className="gs-scrim" role="dialog" aria-modal="true" aria-label={`${team.templateId} — serving`}>
+    <div className="gs-scrim cr-sheet" role="dialog" aria-modal="true" aria-label={`${team.templateId} — serving`}>
       <div
-        className="gs-sheet"
+        className="gs-sheet cr-sheet"
         onKeyDown={(e) => {
           if (e.key === 'Escape') onClose()
         }}

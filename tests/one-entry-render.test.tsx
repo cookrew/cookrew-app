@@ -193,6 +193,89 @@ describe('the share popover survives a phone-width bar', () => {
   })
 })
 
+describe('the save-flow overlays wear the house dress', () => {
+  /**
+   * The payment sheet and the served-team card reuse the grant surface's gs-*
+   * skeleton, whose --cr-* tokens are defined nowhere in this app — every
+   * surface wearing them fell back to a foreign dark theme, with the app's
+   * own ink invisible on it (the phone screenshot: a near-black sheet whose
+   * headings could not be read). cr-sheet re-dresses the skeleton in house
+   * materials; these pin the class to the two sheets and the tokens to the
+   * treatment.
+   */
+  const css = (): string =>
+    readFileSync(path.join(__dirname, '..', 'src/renderer/src', 'team-fork.css'), 'utf8')
+
+  it('both sheets carry the cr-sheet treatment', () => {
+    const paymentHtml = renderToStaticMarkup(
+      <PaymentSettingsSheet status={EMPTY_SERVED_PAYMENT_STATUS} onStatus={noop} onClose={noop} />
+    )
+    expect(paymentHtml).toContain('cr-sheet')
+    const servedHtml = renderToStaticMarkup(
+      <ServedTeamCard
+        team={{
+          serviceId: 'svc',
+          templateId: 'Crew',
+          slug: 'crew',
+          access: 'account',
+          address: 'http://192.168.1.20:8639/crew',
+          transport: 'lan',
+          paymentRails: []
+        }}
+        door="Conductor"
+        paymentStatus={EMPTY_SERVED_PAYMENT_STATUS}
+        onConfigurePayments={noop}
+        onStopped={noop}
+        onClose={noop}
+      />
+    )
+    expect(servedHtml).toContain('cr-sheet')
+    const importHtml = renderToStaticMarkup(<ImportServedSheet onClose={noop} onImported={noop} />)
+    expect(importHtml).toContain('cr-sheet')
+  })
+
+  it('the treatment speaks house tokens, not the undefined dark ones', () => {
+    const sheet = css()
+    const start = sheet.indexOf('.cr-sheet.gs-sheet {')
+    expect(start).toBeGreaterThan(-1)
+    const block = sheet.slice(start, sheet.indexOf('}', start))
+    expect(block).toContain('var(--cream-hi)')
+    expect(block).toContain('var(--ink)')
+    expect(block).not.toContain('--cr-panel')
+  })
+
+  it('the share popover container is cream, no longer the foreign dark panel', () => {
+    const styles = readFileSync(
+      path.join(__dirname, '..', 'src/renderer/src', 'styles.css'),
+      'utf8'
+    )
+    const start = styles.indexOf('.cr-selbar-share {')
+    expect(start).toBeGreaterThan(-1)
+    const block = styles.slice(start, styles.indexOf('}', start))
+    expect(block).toContain('background: var(--cream-hi)')
+    expect(block).toContain('border: 2px solid var(--line)')
+    expect(block).toContain('box-shadow: 3px 3px 0 var(--line)')
+    expect(block).not.toContain('--cr-panel')
+  })
+
+  it('the bar carries no transform — a fixed scrim inside would anchor to it', () => {
+    // position: fixed resolves against a transformed ancestor, not the
+    // viewport. The payment sheet renders INSIDE the bar; a transform here
+    // glued its scrim to the bar instead of covering the screen.
+    const styles = readFileSync(
+      path.join(__dirname, '..', 'src/renderer/src', 'styles.css'),
+      'utf8'
+    )
+    const base = styles.indexOf('\n.cr-selbar {')
+    expect(base).toBeGreaterThan(-1)
+    const bar = styles.slice(base, styles.indexOf('}', base))
+    expect(bar).not.toContain('transform')
+    // …and pin the replacement centering, so deleting it outright fails too.
+    expect(bar).toContain('margin-inline: auto')
+    expect(bar).toContain('width: fit-content')
+  })
+})
+
 describe('Ways to get paid — the missing paid-door affordance', () => {
   it('renders both setup paths while exposing no Stripe value', () => {
     const html = renderToStaticMarkup(
