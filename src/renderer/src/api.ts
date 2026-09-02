@@ -17,6 +17,7 @@ import type {
 import type { TerminalActivity, TurnRecord } from "../../shared/turn";
 import type { TurnMatch } from "../../shared/turn-search";
 import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
+import type { DoorTranscriptState } from "../../shared/door-transcript-state";
 import type { BoardRow, BoardSummary } from "../../shared/board";
 import type { VersionPinRecord } from "../../shared/version-pin";
 import type { ServedPaymentRail } from "../../shared/served-payment-rails";
@@ -366,6 +367,13 @@ export interface CookrewApi {
   listLineageSegments?: (
     terminalId: string,
   ) => Promise<{ sessionId: string; count: number; entries: { index: number; title: string; id?: string }[] }[]>;
+  /**
+   * What the record behind a REMOTE card is doing (remote-card parity P10):
+   * null for a local card, a named state for an imported one so the rail can
+   * say why it is empty or stale instead of just being so. Optional: an older
+   * main or the phone bridge has no remote cards.
+   */
+  traceStatus?: (terminalId: string) => Promise<DoorTranscriptState | null>;
   /**
    * The LATEST checkpoint for a card, from a bounded tail read of the session
    * file — no PTY, O(tail) (trace-perf-architecture T1). Lets a visible-but-

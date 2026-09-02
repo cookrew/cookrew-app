@@ -412,6 +412,39 @@ describe("the caller's own transcript surface", () => {
   })
 })
 
+describe('the transcript is never a second seat (remote-card parity Q5)', () => {
+  it('a paid door charges at session start and NEVER for reading the record', async () => {
+    const token = await signIn(PAID)
+    const auth = { authorization: `Bearer ${token}` }
+    // Before any session: the record does not exist, and the answer is the
+    // deliberately ambiguous 404 — not a quote. Reading cannot open a seat.
+    for (const pathname of Object.values(SERVED_TRANSCRIPT_PATHS)) {
+      const before = await get(PAID, pathname, auth)
+      expect(before!.status, pathname).toBe(404)
+    }
+    expect(settled).toEqual([])
+    // The one 402 there is: at the ask that opens the session.
+    const quoted = await ask(PAID, auth)
+    expect(quoted!.status).toBe(402)
+    const opened = await ask(PAID, { ...auth, 'x-payment': 'tx-abc' })
+    expect(opened!.status).toBe(200)
+    expect(settled).toEqual(['tx-abc'])
+    turnHistory.set('orch-ana-1', [record(1)])
+    traceHistory.set('orch-ana-1', [block(1)])
+    // Every transcript read on the open session: 200, no x-payment asked for,
+    // nothing settled a second time — however many times the rail polls.
+    for (let poll = 0; poll < 3; poll += 1) {
+      for (const pathname of Object.values(SERVED_TRANSCRIPT_PATHS)) {
+        const read = await get(PAID, pathname, auth)
+        expect(read!.status, pathname).toBe(200)
+        expect(read!.headers?.['www-authenticate'], pathname).toBeUndefined()
+      }
+    }
+    expect(settled).toEqual(['tx-abc'])
+    expect(asked).toHaveLength(1)
+  })
+})
+
 describe("the owner's grant budget", () => {
   it('refuses a NEW session with 429 and a reason, once the lend is spent', async () => {
     deps.grantBudget = { allowsNewSession: () => false }

@@ -68,6 +68,8 @@ export function CheckpointTimeline({
   loadingIndex,
   markerFrac,
   allowActions = true,
+  lineageReach = true,
+  ended = false,
   onGoto,
   onLive,
   onScrub
@@ -92,6 +94,19 @@ export function CheckpointTimeline({
   markerFrac?: number
   /** Guards the mutating rail actions (rewind); read-only embedders opt out. */
   allowActions?: boolean
+  /**
+   * May a segment boundary open the earlier-sessions panel? False for a card
+   * whose earlier session files live at someone else's app: the ◆ marker
+   * still renders (it is a fact about the record), it just is not a button
+   * that opens an empty panel (remote-card parity §3).
+   */
+  lineageReach?: boolean
+  /**
+   * The session behind this rail is OVER — nothing new will arrive. The tail
+   * reads ENDED, not LIVE: a live dot that outlives the session is the lie
+   * P10(c) exists to catch.
+   */
+  ended?: boolean
   /** Select a checkpoint by IDENTITY (works for trace-only sub-cap rows too). */
   onGoto: (index: number) => void
   /** Return to the live tail. */
@@ -600,7 +615,8 @@ export function CheckpointTimeline({
           // the checkpoints an auto-compact moved out of this file now live.
           // Same pointer discipline as the version pins below: stop the
           // press before .cr-ckpt-mini captures it, or the click never fires.
-          const reachable = m.previousSessionId !== undefined && hasLineageSegmentsApi()
+          const reachable =
+            lineageReach && m.previousSessionId !== undefined && hasLineageSegmentsApi()
           return (
             <div
               key={`tick-${m.kind}-${m.afterIndex}-${i}`}
@@ -700,7 +716,10 @@ export function CheckpointTimeline({
           <span className="l">CP</span>
         </div>
         <div className="cr-ckpt-here" style={{ top: railAnchorTop(anchorFrac) }} />
-        <div className="cr-ckpt-livedot" />
+        <div
+          className={`cr-ckpt-livedot${ended ? ' ended' : ''}`}
+          title={ended ? 'session ended' : undefined}
+        />
       </div>
 
       {/* F3 — the full-range reveal, laid ALONG the bar. Every row sits at its
@@ -716,16 +735,16 @@ export function CheckpointTimeline({
                  newest checkpoint on a full bar, and covered it. */
               <div
                 key="live"
-                className={`cr-ckpt-row live${here === null ? ' active' : ''}`}
+                className={`cr-ckpt-row live${ended ? ' ended' : ''}${here === null ? ' active' : ''}`}
                 role="listitem"
-                aria-label="Live"
+                aria-label={ended ? 'Ended' : 'Live'}
                 style={{ top: railAnchorTop(entry.fraction) }}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => onTap(() => onLive())}
               >
                 <span className="cr-ckpt-row-label">
-                  <span className="cr-ckpt-row-idx">LIVE</span>
-                  <span className="cr-ckpt-row-title">running now</span>
+                  <span className="cr-ckpt-row-idx">{ended ? 'ENDED' : 'LIVE'}</span>
+                  <span className="cr-ckpt-row-title">{ended ? 'session ended' : 'running now'}</span>
                 </span>
                 <span className="cr-ckpt-dot">
                   <i />

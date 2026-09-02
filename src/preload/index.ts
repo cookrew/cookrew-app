@@ -174,6 +174,8 @@ const api = {
     } | null>,
   // T4 push: subscribe/unsubscribe a card's file watch, and listen for the
   // "your checkpoint changed" nudge (payload = terminalId).
+  // Why a remote card's record is empty or stale — null for every local card.
+  traceStatus: (terminalId: string) => ipcRenderer.invoke('trace:status', terminalId),
   watchLatest: (terminalId: string) => ipcRenderer.invoke('trace:latest-watch', terminalId),
   unwatchLatest: (terminalId: string) => ipcRenderer.invoke('trace:latest-unwatch', terminalId),
   onLatestChanged: (cb: (terminalId: string) => void) => {

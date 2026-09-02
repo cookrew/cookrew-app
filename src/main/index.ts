@@ -142,6 +142,9 @@ import { MOBILE_HTTPS_PORT, MOBILE_PORT } from './mobile-ports'
 import { createRelayServing } from './relay-serving'
 import { startRelayProxy, type RelayProxy } from './relay-proxy'
 import { importedDoors, rememberDoor, resolveDoor } from './relay-doorbook'
+import { DoorTranscript } from './door-transcript'
+import { DoorWatch } from './door-watch'
+import { doorNameOf, transcriptSourceFor } from './transcript-source'
 import { readJson, respondJson } from './mobile-http'
 import { deriveSlug, uniqueSlug } from './workspace-slug'
 import { networkInterfaces } from 'node:os'
@@ -904,30 +907,117 @@ const traces = new TraceReader(store, {
   }
 })
 
-// Transcript reads are local-file reads. (The R30 crew lane briefly split each
-// of these behind a remote-transcript client; that lane was reverted — a
-// caller's card now mirrors the orch's PTY over the served door instead.)
-const turnHistoryFor = async (terminalId: string) => turns.history(terminalId)
+/**
+ * THE RECORD BEHIND A CARD comes from one of three places (transcript-source):
+ * the harness's session file, the PTY scrape, or — for an imported card — the
+ * DOOR the card is a line into. The five reads below are the only seam: the
+ * renderer asks the same questions over the same IPC for every card, and the
+ * rail, pager and idle preview are the same components. A remote card differs
+ * from a preset card in where its record lives, and nowhere else.
+ *
+ * (The R30 crew lane once threaded a remote client through seven seams and a
+ * second card type; the owner reverted it. This is one seam and no new card.)
+ */
+const doorTranscripts = new Map<string, Promise<DoorTranscript | null>>()
 
-const turnPageFor = async (terminalId: string, request: TurnPageRequest = {}) =>
-  pageTurns(turns.history(terminalId), request)
+function doorTranscriptFor(terminalId: string): Promise<DoorTranscript | null> {
+  const hit = store.nodeAcrossWorkspaces(terminalId)
+  if (!hit || hit.node.kind !== 'terminal' || transcriptSourceFor(hit.node) !== 'door') {
+    return Promise.resolve(null)
+  }
+  const existing = doorTranscripts.get(terminalId)
+  if (existing) return existing
+  const node = hit.node
+  const facts = node.servedSession as NonNullable<TerminalNodeData['servedSession']>
+  const name = doorNameOf(node)
+  const made = (async (): Promise<DoorTranscript | null> => {
+    // A relayed door is read at the relay's loopback end, exactly where the
+    // card's own line goes; a dialled door at its address. Same sign-in
+    // either way — the same key file and the same sub the line uses.
+    const target = name
+      ? { origin: `http://127.0.0.1:${(await relayProxy()).port}`, slug: name }
+      : { origin: facts.origin, slug: facts.slug }
+    return new DoorTranscript(target, { signIn: (at) => signInToDoor(at) })
+  })().catch((error) => {
+    console.error(`door transcript for ${terminalId}: ${String(error)}`)
+    // NEVER the local file. A door card whose door cannot be reached is a
+    // door card with a refusal to show, not a local card — so the answer is
+    // a client that says 'not-serving' on every read, forgotten at once so
+    // the next read tries the relay again.
+    doorTranscripts.delete(terminalId)
+    return new DoorTranscript(
+      { origin: facts.origin, slug: facts.slug },
+      {
+        signIn: async () => {
+          throw error instanceof Error ? error : new Error(String(error))
+        }
+      }
+    )
+  })
+  doorTranscripts.set(terminalId, made)
+  return made
+}
+
+/** Sync form, for the seams that must not await (pins, watch routing). The
+ *  focused workspace is in memory and answers almost every call; the
+ *  cross-workspace scan (which can read parked workspaces off disk) is only
+ *  for a card that is not here. */
+function isDoorCard(terminalId: string): boolean {
+  const here = store.focusedState.nodes.find((node) => node.id === terminalId)
+  const node = here ?? store.nodeAcrossWorkspaces(terminalId)?.node
+  return node?.kind === 'terminal' && transcriptSourceFor(node) === 'door'
+}
+
+const turnHistoryFor = async (terminalId: string) => {
+  const door = await doorTranscriptFor(terminalId)
+  return door ? door.turns() : turns.history(terminalId)
+}
+
+const turnPageFor = async (terminalId: string, request: TurnPageRequest = {}) => {
+  const door = await doorTranscriptFor(terminalId)
+  return door ? door.turnsPage(request) : pageTurns(turns.history(terminalId), request)
+}
 
 const traceIndexFor = async (
   terminalId: string,
   request: Parameters<TraceReader['index']>[1] = {}
-) => traces.index(terminalId, request)
+) => {
+  const door = await doorTranscriptFor(terminalId)
+  return door ? door.traceIndex(request) : traces.index(terminalId, request)
+}
 
-const traceMarkersFor = async (terminalId: string) => traces.boundaryMarkers(terminalId)
+const traceMarkersFor = async (terminalId: string) => {
+  const door = await doorTranscriptFor(terminalId)
+  return door ? door.traceMarkers() : traces.boundaryMarkers(terminalId)
+}
 
-/** Earlier lineage segments (pre-compact/pre-clear checkpoints). */
-const lineageSegmentsFor = async (terminalId: string) => traces.lineageSegments(terminalId)
+/** Earlier lineage segments (pre-compact/pre-clear checkpoints). Local files
+ *  only: a remote card's earlier session files exist at the author's app, and
+ *  an empty listing is the honest answer — the ◆ markers themselves still
+ *  render, they just do not open anything (parity contract §3). */
+const lineageSegmentsFor = async (terminalId: string) =>
+  isDoorCard(terminalId) ? [] : traces.lineageSegments(terminalId)
 
 const tracePageFor = async (
   terminalId: string,
   request: Parameters<TraceReader['page']>[1] = {}
-) => traces.page(terminalId, request)
+) => {
+  const door = await doorTranscriptFor(terminalId)
+  return door ? door.tracePage(request) : traces.page(terminalId, request)
+}
 
-const latestCheckpointFor = async (terminalId: string) => traces.latestCheckpoint(terminalId)
+const latestCheckpointFor = async (terminalId: string) => {
+  const door = await doorTranscriptFor(terminalId)
+  return door ? door.latest() : traces.latestCheckpoint(terminalId)
+}
+
+/** What the record behind a remote card is doing; null for every local card. */
+const transcriptStatusFor = async (terminalId: string) =>
+  (await doorTranscriptFor(terminalId))?.state() ?? null
+
+/** Version pins are caller-side annotations of a LOCAL session; a remote rail
+ *  draws none (parity contract Q4: absent-and-not-rendering). */
+const pinsFor = (terminalId: string) => (isDoorCard(terminalId) ? [] : pinStore.list(terminalId))
 
 // Trace-perf T4: push a "your checkpoint changed" nudge to the renderer the
 // instant a watched session file grows, so a card reflects a new turn without
@@ -935,6 +1025,20 @@ const latestCheckpointFor = async (terminalId: string) => traces.latestCheckpoin
 // the backstop for anything fs.watch coalesces or drops.
 const latestWatch = new LatestFileWatcher({
   resolveFile: (terminalId) => traces.watchSpec(terminalId)?.file ?? null,
+  onChange: (terminalId) => mainWindow?.webContents.send('trace:latest-changed', terminalId)
+})
+// The same nudge for a record that lives at somebody else's app: while a
+// remote card is subscribed, its door is asked on a short interval and the
+// card is pushed when the answer changes (door-watch). Routed by source below.
+const doorWatch = new DoorWatch({
+  probe: async (terminalId) => {
+    // Network traffic through the relay, unattended: not while nobody can
+    // see the card. Null means "nothing new", and the poll simply resumes.
+    if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible() || mainWindow.isMinimized()) {
+      return null
+    }
+    return (await doorTranscriptFor(terminalId))?.fingerprint() ?? null
+  },
   onChange: (terminalId) => mainWindow?.webContents.send('trace:latest-changed', terminalId)
 })
 
@@ -2274,6 +2378,9 @@ function retireTerminal(id: string, why: string): void {
 }
 
 async function removeNode(id: string): Promise<void> {
+  // A removed remote card forgets its door; a re-import signs in afresh.
+  doorTranscripts.delete(id)
+  doorWatch.forget(id)
   const node = store.node(id)
   retireTerminal(id, 'terminal removed')
   defaultProducerLease().forgetTerminal(id)
@@ -3368,7 +3475,7 @@ app.whenReady().then(() => {
     store,
     // §10: the same pin store the desktop rail reads — the phone's rail must
     // not drift from what the canvas shows.
-    listPins: (terminalId) => pinStore.list(terminalId),
+    listPins: (terminalId) => pinsFor(terminalId),
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,
     // THE INTERNET GATE (§9 · ④), mounted per workspace session. Reachable only
@@ -3605,6 +3712,7 @@ app.on('before-quit', (event) => {
   events.flush()
   sessionSync.dispose()
   latestWatch.dispose()
+  doorWatch.dispose()
   turns.flushHistories()
   turns.disposeAll()
   ptys.disposeAll()
@@ -3890,7 +3998,10 @@ function registerIpc(handlers: RestoreHandlers): void {
       serviceId: s.serviceId,
       caller: s.accountId,
       workspaceName: s.identity.workspaceName,
-      version: s.version
+      version: s.version,
+      // The door's own card for this session — what a caller's imported card
+      // is a line into. Owner-only; the twin-census gate diffs the two.
+      conductorId: serving.instantiator.conductorFor(s.identity.sessionId)
     }))
   )
   /** END destroys someone else's workspace, so it is the owner's act alone. */
@@ -4209,11 +4320,18 @@ function registerIpc(handlers: RestoreHandlers): void {
   // T4 push: a card subscribes while it shows a checkpoint; the file watch then
   // nudges it (`trace:latest-changed`) on every append, no poll wait.
   ipcMain.handle('trace:latest-watch', (_e, terminalId: string) => {
-    latestWatch.subscribe(terminalId)
+    if (isDoorCard(terminalId)) doorWatch.subscribe(terminalId)
+    else latestWatch.subscribe(terminalId)
   })
   ipcMain.handle('trace:latest-unwatch', (_e, terminalId: string) => {
+    // Both, unconditionally: by the time a removed card's view unmounts the
+    // node no longer resolves, and routing by source here would strand the
+    // door poll forever. Each is a no-op when it holds nothing.
+    doorWatch.unsubscribe(terminalId)
     latestWatch.unsubscribe(terminalId)
   })
+  // A remote card's rail says WHY it is empty or stale, in a sentence (P10).
+  ipcMain.handle('trace:status', (_e, terminalId: string) => transcriptStatusFor(terminalId))
   // Observability event log: filtered history + counts + agent roster.
   ipcMain.handle('events:query', (_e, query) => events.query(query ?? {}))
   ipcMain.handle('events:count', (_e, query) => events.count(query ?? {}))
@@ -4259,7 +4377,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   ])
 
   ipcMain.handle('terminal:create', (_e, opts: CreateTerminalOpts) => createTerminal(opts))
-  ipcMain.handle('pins:list', (_e, terminalId: string) => pinStore.list(terminalId))
+  ipcMain.handle('pins:list', (_e, terminalId: string) => pinsFor(terminalId))
 
   // Team fork / team save / roles (contract in note team-fork-roles-spec-v1).
   ipcMain.handle('team:fork', (_e, spec: TeamForkSpec) => teamFork(spec))
