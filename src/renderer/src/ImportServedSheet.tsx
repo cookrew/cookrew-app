@@ -176,9 +176,9 @@ export function ImportServedSheet({
   }
 
   return (
-    <div className="gs-scrim" role="dialog" aria-modal="true" aria-label="Import a served team">
+    <div className="gs-scrim cr-sheet" role="dialog" aria-modal="true" aria-label="Import a served team">
       <div
-        className="gs-sheet gs-small"
+        className="gs-sheet gs-small cr-sheet"
         onKeyDown={(e) => {
           if (e.key === 'Escape') onClose()
         }}

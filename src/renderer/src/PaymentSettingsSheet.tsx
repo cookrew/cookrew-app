@@ -77,9 +77,9 @@ export function PaymentSettingsSheet({
   }
 
   return (
-    <div className="gs-scrim" role="dialog" aria-modal="true" aria-label={MKT_SERVE['mkt.serve.payment.title']}>
+    <div className="gs-scrim cr-sheet" role="dialog" aria-modal="true" aria-label={MKT_SERVE['mkt.serve.payment.title']}>
       <div
-        className="gs-sheet gs-small payment-sheet"
+        className="gs-sheet gs-small payment-sheet cr-sheet"
         onKeyDown={(event) => {
           event.stopPropagation()
           if (event.key === 'Escape') onClose()
