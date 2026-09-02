@@ -765,6 +765,15 @@ async function handleServedSlug(
       sessionForCaller: (serviceId, sub) => {
         const session = serving.instantiator.sessionForCaller(serviceId, sub)
         if (session === null) return null
+        // A SESSION WHOSE WORKSPACE IS GONE IS OVER. The owner removed it from
+        // the canvas; the record outlived it and answered every read with 503
+        // ("not available right now — usually is again shortly") forever,
+        // while the caller's line hung on "opening". Ended here, so the
+        // caller is told 404 — no session — and their next line mints afresh.
+        if (!store.list().workspaces.some((w) => w.id === session.workspaceId)) {
+          serving.instantiator.end(session.identity.sessionId)
+          return null
+        }
         return {
           conductorId: serving.instantiator.conductorFor(session.identity.sessionId)
         }
@@ -2041,6 +2050,10 @@ function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
     store.list().workspaces.find((w) => w.id === nameOrId) ?? store.metaByName(nameOrId)
   if (!meta) throw new Error(`Workspace '${nameOrId}' not found`)
   const browserIds = store.browserIdsOf(meta.id)
+  // A served session's workspace: the session ends WITH it. Otherwise the
+  // record lingers open with no conductor and every caller read is a 503.
+  const servedHere = serving.instantiator.sessionForWorkspace(meta.id)
+  if (servedHere) serving.instantiator.end(servedHere.identity.sessionId)
   // Kill this workspace's terminals BEFORE deleting it — store.removeWorkspace
   // only switches away (detach) and rm's the state dir, so without this each
   // terminal's tmux session (a claude CLI, bypassPermissions) would leak
