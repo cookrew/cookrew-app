@@ -1046,8 +1046,15 @@ const latestCheckpointFor = async (terminalId: string) => {
 }
 
 /** What the record behind a remote card is doing; null for every local card. */
-const transcriptStatusFor = async (terminalId: string) =>
-  (await doorTranscriptFor(terminalId))?.state() ?? null
+const transcriptStatusFor = async (terminalId: string) => {
+  const door = await doorTranscriptFor(terminalId)
+  if (!door) return null
+  // A FRESH answer, not the last one: the state is re-read from the door
+  // (one record, memoised for a second) so a card asked "why is the rail
+  // empty" is not told about a refusal from before the door came up.
+  await door.fingerprint().catch(() => undefined)
+  return door.state()
+}
 
 /** Version pins are caller-side annotations of a LOCAL session; a remote rail
  *  draws none (parity contract Q4: absent-and-not-rendering). */
