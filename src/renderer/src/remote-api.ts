@@ -387,14 +387,28 @@ export function createRemoteApi(): CookrewApi {
     servingList: async () => [],
     servingSessions: async () => [],
     servingEnd: async () => ({ stopped: 0 }),
-    serveInspect: async () => ({ ok: false as const, reason: 'desktop-only' }),
-    // Same refusal as inspect: importing a served team places a terminal, and
-    // a phone has none to place.
-    serveBrowse: async () => ({ ok: false as const, reason: 'desktop-only' }),
-    serveImport: async () => ({ ok: false as const, reason: 'desktop-only' }),
-    serveGate: async () => ({ ok: false as const, reason: 'desktop-only' }),
-    serveCheckout: async () => ({ ok: false as const, reason: 'desktop-only' }),
-    serveSettle: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    // IMPORTING A SERVED TEAM FROM THE PHONE. These used to refuse with
+    // "desktop-only" on the reasoning that a phone has no terminal to place —
+    // but the card is placed and spawned at the desktop this phone is a view
+    // of, exactly as placing a preset from here already works. The desktop
+    // does the work; the phone asks for it over the same API as everything
+    // else. Every Bearer and key stays at the desktop.
+    serveInspect: (link) => req(apiPath('/api/serve/inspect'), 'POST', { link }),
+    serveBrowse: (link) => req(apiPath('/api/serve/browse'), 'POST', { link }),
+    serveImport: (link, position, paid) =>
+      req(apiPath('/api/serve/import'), 'POST', { link, position, paid }),
+    serveGate: (link) => req(apiPath('/api/serve/gate'), 'POST', { link }),
+    serveCheckout: async (link) => {
+      const checkout = await req<
+        { ok: true; session: string; url: string } | { ok: false; reason: string; detail?: string }
+      >(apiPath('/api/serve/checkout'), 'POST', { link })
+      // The hosted page opens HERE, on the phone — the desktop must not raise
+      // a browser on a machine the person is not sitting at.
+      if (checkout.ok) window.open(checkout.url, '_blank', 'noopener')
+      return checkout
+    },
+    serveSettle: (link, rail, session) =>
+      req(apiPath('/api/serve/settle'), 'POST', { link, rail, session }),
     quitApp: () => undefined
   }
 }

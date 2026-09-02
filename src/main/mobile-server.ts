@@ -40,7 +40,7 @@ import {
 } from './ask-delivery'
 import { ASK_HTTP_STATUS, ASK_REMEDY } from '../shared/ask-outcome'
 import { ensureCert, missingHosts, sansOf } from './cert'
-import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps } from './mobile-api'
+import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps, type ServeOps } from './mobile-api'
 import { readJson, respondJson } from './mobile-http'
 import { handleCallRoutes, type CallEndpointDeps } from './call-endpoints'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
@@ -90,6 +90,8 @@ export interface MobileServerDeps {
   turnHistory?: (terminalId: string) => Promise<TurnRecord[]>
   /** Activity Board data plane; absent = /api/board answers 503. */
   board?: BoardSources
+  /** Importing a served team from the phone (mobile-api ServeOps). */
+  serve?: ServeOps
   /** Attach-free dispatch engine (v4 §3); absent = the routes answer 503. */
   dispatch?: DispatchService
   /**

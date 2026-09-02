@@ -2763,6 +2763,154 @@ function orchMirrorScript(): string {
 }
 
 /** The remote-import card's transport, resolved for dev and packaged. */
+/**
+ * THE CALLER'S SIDE OF IMPORTING A SERVED TEAM — one set of operations,
+ * reached from the desktop over IPC and from the phone over the mobile API.
+ *
+ * The phone used to be refused ("served teams can only be imported from the
+ * desktop app") on the reasoning that a phone has no terminal to place. It
+ * never needed one: the card is placed and spawned HERE, at the desktop, and
+ * the phone is a remote view of this canvas — placing a preset from the phone
+ * already works that way. The refusal was a missing route, not a rule.
+ *
+ * Every Bearer and every key stays in this process either way.
+ */
+const serveOps = {
+  inspect: (link: string) => inspectServeAddress(link),
+  browse: async (link: string) => {
+    const account = parseAccountAddress(link)
+    if (!account) return { ok: false as const, reason: 'bad-address' as const }
+    try {
+      const found = await fetch(new URL(`/v1/doors/@${account.handle}`, account.origin), {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(5000)
+      })
+      if (!found.ok) return { ok: false as const, reason: 'not-serving' as const }
+      const body = (await found.json()) as { doors?: unknown }
+      const doors = Array.isArray(body.doors) ? body.doors : []
+      return {
+        ok: true as const,
+        handle: account.handle,
+        teams: doors.map(publicTeam).filter((t): t is BrowsedTeam => t !== null)
+      }
+    } catch {
+      return { ok: false as const, reason: 'unreachable' as const }
+    }
+  },
+  gate: async (link: string) => {
+    const target = parseServeAddress(link)
+    if (!target) return { ok: false as const, reason: 'bad-address' as const }
+    try {
+      const reached = await reachable(target)
+      if (!reached) return { ok: false as const, reason: 'sign-in' as const, detail: 'not serving' }
+      const at = reached.at
+      const token = await signInToDoor(at)
+      callerTokens.set(targetKey(target), token)
+      const phase = await openAdmission(at, token)
+      return { ok: true as const, phase, wallet: deviceWallet() }
+    } catch (error) {
+      return {
+        ok: false as const,
+        reason: 'sign-in' as const,
+        detail: error instanceof Error ? error.message : String(error)
+      }
+    }
+  },
+  checkout: async (link: string) => {
+    const target = parseServeAddress(link)
+    const token = target ? callerTokens.get(targetKey(target)) : undefined
+    if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
+    try {
+      const reached = await reachable(target)
+      if (!reached) return { ok: false as const, reason: 'unavailable' as const }
+      const checkout = await startStripeCheckout(reached.at, token)
+      // The URL comes back too: a hand-off that silently failed to raise a
+      // browser would otherwise leave the person waiting on a page they never
+      // saw, with no way to reach it. It is a capability — the sheet keeps it
+      // to re-open, and never prints it.
+      return { ok: true as const, session: checkout.session, url: checkout.url }
+    } catch (error) {
+      return {
+        ok: false as const,
+        reason: 'unavailable' as const,
+        detail: error instanceof Error ? error.message : String(error)
+      }
+    }
+  },
+  settle: async (link: string, rail: 'x402' | 'stripe', session?: string) => {
+      const target = parseServeAddress(link)
+      const token = target ? callerTokens.get(targetKey(target)) : undefined
+      if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
+      try {
+        const reached = await reachable(target)
+        if (!reached) return { ok: false as const, reason: 'refused' as const }
+        const at = reached.at
+        let payment: string
+        if (rail === 'stripe') {
+          if (!session) return { ok: false as const, reason: 'no-session' as const }
+          payment = stripePaymentHeader(session)
+        } else {
+          const quoted = await openAdmission(at, token)
+          const terms =
+            quoted.kind === 'pay'
+              ? quoted.rails.find((entry) => entry.rail === 'x402')
+              : undefined
+          if (!terms || terms.rail !== 'x402') {
+            // Already open, or this door stopped quoting USDC. Either way there
+            // is nothing to sign, and signing a stale quote is money gone.
+            return { ok: true as const, phase: quoted }
+          }
+          payment = await buildX402Payment(terms.requirements)
+        }
+        return { ok: true as const, phase: await openAdmission(at, token, payment) }
+      } catch (error) {
+        return {
+          ok: false as const,
+          reason: 'refused' as const,
+          detail: error instanceof Error ? error.message : String(error)
+        }
+      }
+  },
+  import: async (
+    link: string,
+    position?: { x: number; y: number },
+    paid?: { price: string; asset: string; rail: 'x402' | 'stripe' }
+  ) => {
+      const inspected = await inspectServeAddress(link)
+      if (!inspected.ok) return inspected
+      const node = orchTerminalNode(
+        inspected.face,
+        inspected.target,
+        orchLineScript(),
+        randomUUID(),
+        store.focusedState.dir,
+        position ?? { x: 160, y: 120 },
+        // The receipt, taken at the moment of admission — not re-derived
+        // later, when the door may be quoting a different price.
+        { openedAt: Date.now(), ...(paid ? { paid } : {}) }
+      )
+      const placed = store.addNode(node)
+      /**
+       * PLACING IS THE COMMITMENT; booting the terminal is not.
+       *
+       * A throw here used to reject the whole call, so the sheet showed a raw
+       * internal error — no herdr pane labelled … ensureSession first — while
+       * the card sat on the canvas anyway. The person was told it failed and
+       * given the thing at the same time, which is the worst of both.
+       *
+       * The card is placed. If its terminal could not start this second it
+       * starts when the card is opened, like every other card that boots late.
+       */
+      try {
+        spawnTracked(placed as TerminalNodeData)
+      } catch (error) {
+        console.error(`import: ${inspected.face.name} was placed but did not boot: ${String(error)}`)
+      }
+      store.recordEvent('session.imported', inspected.face.name, inspected.face.door, link.trim())
+      return { ok: true as const, node: placed }
+  }
+}
+
 function orchLineScript(): string {
   return app.isPackaged
     ? path.join(process.resourcesPath, 'orch-line.mjs')
@@ -3588,6 +3736,9 @@ app.whenReady().then(() => {
   startMobileServer({
     servedSlug: handleServedSlug,
     store,
+    // Importing a served team from the phone: the same operations the desktop
+    // sheet drives, over the mobile API.
+    serve: serveOps,
     // §10: the same pin store the desktop rail reads — the phone's rail must
     // not drift from what the canvas shows.
     listPins: (terminalId) => pinsFor(terminalId),
@@ -4109,7 +4260,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('serving:end', (_e, sessionId: string) => endServedSession(sessionId))
 
   // ---- import a served team (caller side): one address, one orch card ----
-  ipcMain.handle('serve:inspect', (_e, link: string) => inspectServeAddress(link))
+  ipcMain.handle('serve:inspect', (_e, link: string) => serveOps.inspect(link))
 
   /**
    * BROWSE AN OWNER — what one account is serving.
@@ -4122,26 +4273,7 @@ function registerIpc(handlers: RestoreHandlers): void {
    * Free and commits nothing, like inspect: it reads a directory, and the door
    * still decides everything when you actually knock.
    */
-  ipcMain.handle('serve:browse', async (_e, link: string) => {
-    const account = parseAccountAddress(link)
-    if (!account) return { ok: false as const, reason: 'bad-address' as const }
-    try {
-      const found = await fetch(new URL(`/v1/doors/@${account.handle}`, account.origin), {
-        redirect: 'manual',
-        signal: AbortSignal.timeout(5000)
-      })
-      if (!found.ok) return { ok: false as const, reason: 'not-serving' as const }
-      const body = (await found.json()) as { doors?: unknown }
-      const doors = Array.isArray(body.doors) ? body.doors : []
-      return {
-        ok: true as const,
-        handle: account.handle,
-        teams: doors.map(publicTeam).filter((t): t is BrowsedTeam => t !== null)
-      }
-    } catch {
-      return { ok: false as const, reason: 'unreachable' as const }
-    }
-  })
+  ipcMain.handle('serve:browse', (_e, link: string) => serveOps.browse(link))
 
   /**
    * THE GATE, asked. Sign in as the account the card will use, then open the
@@ -4152,25 +4284,7 @@ function registerIpc(handlers: RestoreHandlers): void {
    * The Bearer never leaves the main process — the renderer drives the sheet,
    * it does not hold the credential.
    */
-  ipcMain.handle('serve:gate', async (_e, link: string) => {
-    const target = parseServeAddress(link)
-    if (!target) return { ok: false as const, reason: 'bad-address' as const }
-    try {
-      const reached = await reachable(target)
-      if (!reached) return { ok: false as const, reason: 'sign-in' as const, detail: 'not serving' }
-      const at = reached.at
-      const token = await signInToDoor(at)
-      callerTokens.set(targetKey(target), token)
-      const phase = await openAdmission(at, token)
-      return { ok: true as const, phase, wallet: deviceWallet() }
-    } catch (error) {
-      return {
-        ok: false as const,
-        reason: 'sign-in' as const,
-        detail: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
+  ipcMain.handle('serve:gate', (_e, link: string) => serveOps.gate(link))
 
   /**
    * Start a card payment: the door mints a hosted Checkout session and we open
@@ -4179,26 +4293,11 @@ function registerIpc(handlers: RestoreHandlers): void {
    * Stripe wants the card, so the hand-off is the honest move.
    */
   ipcMain.handle('serve:checkout', async (_e, link: string) => {
-    const target = parseServeAddress(link)
-    const token = target ? callerTokens.get(targetKey(target)) : undefined
-    if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
-    try {
-      const reached = await reachable(target)
-      if (!reached) return { ok: false as const, reason: 'unavailable' as const }
-      const checkout = await startStripeCheckout(reached.at, token)
-      await shell.openExternal(checkout.url)
-      // The URL comes back too: a hand-off that silently failed to raise a
-      // browser would otherwise leave the person waiting on a page they never
-      // saw, with no way to reach it. It is a capability — the sheet keeps it
-      // to re-open, and never prints it.
-      return { ok: true as const, session: checkout.session, url: checkout.url }
-    } catch (error) {
-      return {
-        ok: false as const,
-        reason: 'unavailable' as const,
-        detail: error instanceof Error ? error.message : String(error)
-      }
-    }
+    const checkout = await serveOps.checkout(link)
+    // The desktop opens the hosted page in the user's REAL browser itself; a
+    // phone opens the URL it is handed, in its own.
+    if (checkout.ok) await shell.openExternal(checkout.url)
+    return checkout
   })
 
   /**
@@ -4209,42 +4308,8 @@ function registerIpc(handlers: RestoreHandlers): void {
    * On success the session is open at the author's app, so the card placed
    * next opens its line into it and never meets the money.
    */
-  ipcMain.handle(
-    'serve:settle',
-    async (_e, link: string, rail: 'x402' | 'stripe', session?: string) => {
-      const target = parseServeAddress(link)
-      const token = target ? callerTokens.get(targetKey(target)) : undefined
-      if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
-      try {
-        const reached = await reachable(target)
-        if (!reached) return { ok: false as const, reason: 'refused' as const }
-        const at = reached.at
-        let payment: string
-        if (rail === 'stripe') {
-          if (!session) return { ok: false as const, reason: 'no-session' as const }
-          payment = stripePaymentHeader(session)
-        } else {
-          const quoted = await openAdmission(at, token)
-          const terms =
-            quoted.kind === 'pay'
-              ? quoted.rails.find((entry) => entry.rail === 'x402')
-              : undefined
-          if (!terms || terms.rail !== 'x402') {
-            // Already open, or this door stopped quoting USDC. Either way there
-            // is nothing to sign, and signing a stale quote is money gone.
-            return { ok: true as const, phase: quoted }
-          }
-          payment = await buildX402Payment(terms.requirements)
-        }
-        return { ok: true as const, phase: await openAdmission(at, token, payment) }
-      } catch (error) {
-        return {
-          ok: false as const,
-          reason: 'refused' as const,
-          detail: error instanceof Error ? error.message : String(error)
-        }
-      }
-    }
+  ipcMain.handle('serve:settle', (_e, link: string, rail: 'x402' | 'stripe', session?: string) =>
+    serveOps.settle(link, rail, session)
   )
   /**
    * Place the imported team's interface: ONE orch card on the caller's own
@@ -4253,45 +4318,8 @@ function registerIpc(handlers: RestoreHandlers): void {
    */
   ipcMain.handle(
     'serve:import',
-    async (
-      _e,
-      link: string,
-      position?: { x: number; y: number },
-      paid?: { price: string; asset: string; rail: 'x402' | 'stripe' }
-    ) => {
-      const inspected = await inspectServeAddress(link)
-      if (!inspected.ok) return inspected
-      const node = orchTerminalNode(
-        inspected.face,
-        inspected.target,
-        orchLineScript(),
-        randomUUID(),
-        store.focusedState.dir,
-        position ?? { x: 160, y: 120 },
-        // The receipt, taken at the moment of admission — not re-derived
-        // later, when the door may be quoting a different price.
-        { openedAt: Date.now(), ...(paid ? { paid } : {}) }
-      )
-      const placed = store.addNode(node)
-      /**
-       * PLACING IS THE COMMITMENT; booting the terminal is not.
-       *
-       * A throw here used to reject the whole call, so the sheet showed a raw
-       * internal error — no herdr pane labelled … ensureSession first — while
-       * the card sat on the canvas anyway. The person was told it failed and
-       * given the thing at the same time, which is the worst of both.
-       *
-       * The card is placed. If its terminal could not start this second it
-       * starts when the card is opened, like every other card that boots late.
-       */
-      try {
-        spawnTracked(placed as TerminalNodeData)
-      } catch (error) {
-        console.error(`import: ${inspected.face.name} was placed but did not boot: ${String(error)}`)
-      }
-      store.recordEvent('session.imported', inspected.face.name, inspected.face.door, link.trim())
-      return { ok: true as const, node: placed }
-    }
+    (_e, link: string, position?: { x: number; y: number }, paid?: { price: string; asset: string; rail: 'x402' | 'stripe' }) =>
+      serveOps.import(link, position, paid)
   )
 
   ipcMain.handle('workspace:switch', (_e, id: string) => {
