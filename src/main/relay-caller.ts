@@ -190,7 +190,12 @@ export class RelayCaller {
       path,
       headers: packRequest(this.doorKey, this.doorName, handshake.hello.e, headers)
     })
-    if (body.length > 0) {
+    // THE BODY FRAME IS SENT FOR EVERY METHOD THAT MAY CARRY ONE, empty or
+    // not. The door answers a GET on its open frame and waits for `done` on
+    // anything else — so a POST with no body (the sign-in challenge, which is
+    // every card's first request) was a request the door waited on forever
+    // while the same POST with `{}` in it answered in a second.
+    if (body.length > 0 || (method !== 'GET' && method !== 'HEAD')) {
       this.send({ t: 'body', id, data: packBody(this.doorKey, this.doorName, body), done: true })
     }
     return id
