@@ -690,7 +690,11 @@ export const MKT_SERVE = {
   'mkt.serve.refused.bad-price': 'A paid door needs a price above zero.',
   'mkt.serve.refused.priced-free-door': 'A free door cannot carry a price.',
   'mkt.serve.refused.grant-unusable':
-    'Not taking callers — this crew’s orch could not answer one check with the credential it was lent. Match the grant to the orch, or fix the endpoint’s request template.'
+    'Not taking callers — this crew’s orch could not answer one check with the credential it was lent. Match the grant to the orch, or fix the endpoint’s request template.',
+  /** The remote transport's standing refusal: publish is owner-IPC only (the
+   *  grant-surface rule), so a phone can save a team but never open a door. */
+  'mkt.serve.refused.desktop-only':
+    'a door opens from the desktop app, never from this remote screen. Save the team again on the desktop to start taking callers.'
 } as const
 
 /** The SESSIONS table. Owner-side; the word lives here and nowhere else. */

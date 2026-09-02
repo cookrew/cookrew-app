@@ -708,6 +708,20 @@ a.cr-btn {
   animation: cr-fadein 160ms ease-out;
 }
 
+/* The in-flow controls, boxed as their own row: narrow screens put the
+   sideways scroll HERE, never on .cr-selbar itself. The bar is the containing
+   block of the popovers floated above it (.cr-selbar-share, .cr-selbar-tray,
+   the served receipt) — overflow on the bar clips them all, which is exactly
+   how the share sheet vanished on phones. This row must stay UNPOSITIONED:
+   give it position/transform and it becomes the popovers' containing block,
+   and its narrow-screen overflow clips them all over again. */
+.cr-selbar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .cr-selbar-count {
   font-family: var(--font-pixel);
   font-size: 9px;
@@ -1045,27 +1059,42 @@ a.cr-btn {
   outline-style: solid;
 }
 
-/* Narrow screens: the bar hugs the width and scrolls sideways rather than
-   overflowing the stage (same strip treatment as the dock rows). */
+/* Narrow screens: the bar hugs the width and its ROW scrolls sideways rather
+   than overflowing the stage (same strip treatment as the dock rows). The
+   overflow must not sit on .cr-selbar — see .cr-selbar-row. */
 @media (max-width: 700px) {
   .cr-selbar {
     bottom: 10px;
     gap: 8px;
+  }
+  .cr-selbar-row {
+    gap: 8px;
     overflow-x: auto;
     scrollbar-width: none;
+    /* The bar's padding used to give focus rings their slack; the scroll box
+       (overflow-y computes to auto here) would eat it — carve it back. */
+    padding-block: 2px;
+    margin-block: -2px;
   }
-  .cr-selbar::-webkit-scrollbar {
+  .cr-selbar-row::-webkit-scrollbar {
     display: none;
   }
-  .cr-selbar > * {
+  .cr-selbar-row > * {
     flex: 0 0 auto;
   }
   .cr-selbar-name {
     width: 110px;
   }
+  /* A refusal must be readable, not an ellipsis whose full text hides behind
+     a hover title no finger can reach — wrap it, up to three lines. */
   .cr-selbar-flash,
   .cr-selbar-error {
-    max-width: 40vw;
+    max-width: 60vw;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 }
 

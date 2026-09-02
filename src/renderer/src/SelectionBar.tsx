@@ -475,22 +475,6 @@ export function SelectionBar({
           </div>
         </div>
       )}
-      {/* Ongoing serve management lives with SAVE, never inside FORK TEAM. */}
-      {servedTeams.length > 0 && !naming && (
-        <div className="cr-selbar-serving" aria-label="Teams taking calls">
-          <span className="sos-live-t">TAKING CALLS</span>
-          {servedTeams.map((team) => (
-            <button
-              key={team.serviceId}
-              className="cr-chip clickable cr-serving-badge"
-              title={`Manage ${team.templateId}`}
-              onClick={() => setOpenServedTeam(team)}
-            >
-              {team.templateId} · {sessionCounts[team.serviceId] ?? 0}
-            </button>
-          ))}
-        </div>
-      )}
       {/* What the clipboard holds, as ONE picture — the element chips laid
           out by their real relative positions with the cables drawn between
           them. ✂ marks stateful identity moves (a cut browser carries its
@@ -506,154 +490,182 @@ export function SelectionBar({
           <span className="cr-selbar-tray-from">FROM {clip.fromWorkspaceName.toUpperCase()}</span>
         </div>
       )}
-      <span className="cr-selbar-count">
-        {picked.size === 0
-          ? COARSE_POINTER
-            ? 'TAP CARDS TO SELECT'
-            : 'CLICK CARDS TO SELECT · ⌘A FOR ALL'
-          : `${summary.nodes} SELECTED${summary.cables > 0 ? ` · ${summary.cables} CABLE${summary.cables === 1 ? '' : 'S'}` : ''}`}
-      </span>
-
-      {error && (
-        <span className="cr-selbar-error" role="status" aria-live="assertive" title={error}>
-          {error}
-        </span>
-      )}
-      {flash && !error && (
-        <span className="cr-selbar-flash" role="status" aria-live="polite">
-          {flash} ✓
-        </span>
-      )}
-
-      {naming ? (
-        <>
-          {armed && clash && !error && (
-            <span className="cr-selbar-warn" role="status" aria-live="assertive">
-              replaces “{clash.name}”
-            </span>
-          )}
-          <input
-            className="cr-selbar-name"
-            aria-label="Template name"
-            placeholder={workspace.name}
-            value={name}
-            autoFocus
-            disabled={busy === 'save'}
-            onChange={(e) => {
-              setName(e.target.value)
-              setArmed(false)
-            }}
-            onKeyDown={(e) => {
-              // Typing must never reach canvas hotkeys, and Escape must not
-              // also deselect or zoom-back.
-              e.stopPropagation()
-              if (e.key === 'Enter') runSave()
-              if (e.key === 'Escape') dismissTransients()
-            }}
-          />
-          <button
-            className="cr-btn sm"
-            disabled={
-              busy !== null ||
-              !teamsLoaded ||
-              !canSubmitShare(access, priceUsd, orchName, paymentRails)
-            }
-            onClick={runSave}
-          >
-            {armed && clash ? 'SAVE AGAIN?' : saveButtonLabel(access, busy === 'save')}
-          </button>
-          {/* The share question, in the same breath as the name. */}
-          <div className="cr-selbar-share">
-            <ShareOnSave
-              access={access}
-              priceUsd={priceUsd}
-              paymentRails={paymentRails}
-              door={orchName}
-              onAccess={setAccess}
-              onPrice={setPriceUsd}
-              onConfigurePayments={() => setPaymentSettingsOpen(true)}
-            />
+      {/* The in-flow controls, boxed as their own row: narrow screens put the
+          sideways scroll HERE. The bar itself must never scroll — it is the
+          containing block of the popovers floated above it, and overflow on
+          it clips them all (how the share sheet vanished on phones). The
+          popovers also stay OUT of this row, belt and braces: the row cannot
+          clip them while it is unpositioned, but one future position/
+          transform on the scroll strip would recapture them. */}
+      <div className="cr-selbar-row">
+        {/* Ongoing serve management lives with SAVE, never inside FORK TEAM. */}
+        {servedTeams.length > 0 && !naming && (
+          <div className="cr-selbar-serving" aria-label="Teams taking calls">
+            <span className="sos-live-t">TAKING CALLS</span>
+            {servedTeams.map((team) => (
+              <button
+                key={team.serviceId}
+                className="cr-chip clickable cr-serving-badge"
+                title={`Manage ${team.templateId}`}
+                onClick={() => setOpenServedTeam(team)}
+              >
+                {team.templateId} · {sessionCounts[team.serviceId] ?? 0}
+              </button>
+            ))}
           </div>
-        </>
-      ) : (
-        <>
-          {canClip && repoDir !== null && (
-            <label
-              className="cr-check cr-selbar-wt"
-              title={`Paste spawns the copies in a FRESH git worktree of ${repoDir} — isolated branch, no stepping on the originals`}
-            >
-              <input
-                type="checkbox"
-                checked={wtOn}
-                onChange={(e) => setWtOn(e.target.checked)}
-              />
-              WORKTREE
-            </label>
-          )}
-          {canClip && wtStaged && (
+        )}
+        <span className="cr-selbar-count">
+          {picked.size === 0
+            ? COARSE_POINTER
+              ? 'TAP CARDS TO SELECT'
+              : 'CLICK CARDS TO SELECT · ⌘A FOR ALL'
+            : `${summary.nodes} SELECTED${summary.cables > 0 ? ` · ${summary.cables} CABLE${summary.cables === 1 ? '' : 'S'}` : ''}`}
+        </span>
+
+        {error && (
+          <span className="cr-selbar-error" role="status" aria-live="assertive" title={error}>
+            {error}
+          </span>
+        )}
+        {flash && !error && (
+          <span className="cr-selbar-flash" role="status" aria-live="polite">
+            {flash} ✓
+          </span>
+        )}
+
+        {naming ? (
+          <>
+            {armed && clash && !error && (
+              <span className="cr-selbar-warn" role="status" aria-live="assertive">
+                replaces “{clash.name}”
+              </span>
+            )}
             <input
               className="cr-selbar-name"
-              aria-label="Fresh worktree name"
-              placeholder="fresh worktree name"
-              value={wtName}
+              aria-label="Template name"
+              placeholder={workspace.name}
+              value={name}
               autoFocus
-              onChange={(e) => setWtName(e.target.value)}
-              onKeyDown={(e) => e.stopPropagation()}
+              disabled={busy === 'save'}
+              onChange={(e) => {
+                setName(e.target.value)
+                setArmed(false)
+              }}
+              onKeyDown={(e) => {
+                // Typing must never reach canvas hotkeys, and Escape must not
+                // also deselect or zoom-back.
+                e.stopPropagation()
+                if (e.key === 'Enter') runSave()
+                if (e.key === 'Escape') dismissTransients()
+              }}
             />
-          )}
-          {canClip && (
             <button
               className="cr-btn sm"
-              title={
-                wtBlocking
-                  ? 'Name the worktree first'
-                  : 'Copy the selection to the clipboard (⌘C) — paste in any workspace'
+              disabled={
+                busy !== null ||
+                !teamsLoaded ||
+                !canSubmitShare(access, priceUsd, orchName, paymentRails)
               }
-              disabled={busy !== null || picked.size === 0 || wtBlocking}
-              onClick={() => runClip(false)}
+              onClick={runSave}
             >
-              {busy === 'copy' ? 'COPYING…' : 'COPY'}
+              {armed && clash ? 'SAVE AGAIN?' : saveButtonLabel(access, busy === 'save')}
             </button>
-          )}
-          {canClip && (
+          </>
+        ) : (
+          <>
+            {canClip && repoDir !== null && (
+              <label
+                className="cr-check cr-selbar-wt"
+                title={`Paste spawns the copies in a FRESH git worktree of ${repoDir} — isolated branch, no stepping on the originals`}
+              >
+                <input
+                  type="checkbox"
+                  checked={wtOn}
+                  onChange={(e) => setWtOn(e.target.checked)}
+                />
+                WORKTREE
+              </label>
+            )}
+            {canClip && wtStaged && (
+              <input
+                className="cr-selbar-name"
+                aria-label="Fresh worktree name"
+                placeholder="fresh worktree name"
+                value={wtName}
+                autoFocus
+                onChange={(e) => setWtName(e.target.value)}
+                onKeyDown={(e) => e.stopPropagation()}
+              />
+            )}
+            {canClip && (
+              <button
+                className="cr-btn sm"
+                title={
+                  wtBlocking
+                    ? 'Name the worktree first'
+                    : 'Copy the selection to the clipboard (⌘C) — paste in any workspace'
+                }
+                disabled={busy !== null || picked.size === 0 || wtBlocking}
+                onClick={() => runClip(false)}
+              >
+                {busy === 'copy' ? 'COPYING…' : 'COPY'}
+              </button>
+            )}
+            {canClip && (
+              <button
+                className="cr-btn sm"
+                title={
+                  wtBlocking
+                    ? 'Name the worktree first'
+                    : 'Cut the selection (⌘X) — pasting moves it out of this workspace'
+                }
+                disabled={busy !== null || picked.size === 0 || wtBlocking}
+                onClick={() => runClip(true)}
+              >
+                {busy === 'cut' ? 'CUTTING…' : 'CUT'}
+              </button>
+            )}
             <button
               className="cr-btn sm"
-              title={
-                wtBlocking
-                  ? 'Name the worktree first'
-                  : 'Cut the selection (⌘X) — pasting moves it out of this workspace'
-              }
-              disabled={busy !== null || picked.size === 0 || wtBlocking}
-              onClick={() => runClip(true)}
+              title="Save the selection as a reusable team template (⌘S) — cables included"
+              disabled={busy !== null || picked.size === 0}
+              onClick={runSave}
             >
-              {busy === 'cut' ? 'CUTTING…' : 'CUT'}
+              SAVE
             </button>
-          )}
-          <button
-            className="cr-btn sm"
-            title="Save the selection as a reusable team template (⌘S) — cables included"
-            disabled={busy !== null || picked.size === 0}
-            onClick={runSave}
-          >
-            SAVE
-          </button>
-          {/* PASTE exists only once something is staged — an unpressable
-              button teaches nothing; the empty state teaches copy/cut. */}
-          {canClip && clip && (
-            <button
-              className="cr-btn sm primary"
-              title={
-                `Paste ${clip.count} from “${clip.fromWorkspaceName}” here (⌘V)` +
-                `${clip.worktreeName ? ` into worktree “${clip.worktreeName}”` : ''}` +
-                `${clip.cut ? ' — moves them' : ''}`
-              }
-              disabled={busy !== null}
-              onClick={runPaste}
-            >
-              {busy === 'paste' ? 'PASTING…' : `PASTE ${clip.count}${clip.cut ? ' ✂' : ''}`}
-            </button>
-          )}
-        </>
+            {/* PASTE exists only once something is staged — an unpressable
+                button teaches nothing; the empty state teaches copy/cut. */}
+            {canClip && clip && (
+              <button
+                className="cr-btn sm primary"
+                title={
+                  `Paste ${clip.count} from “${clip.fromWorkspaceName}” here (⌘V)` +
+                  `${clip.worktreeName ? ` into worktree “${clip.worktreeName}”` : ''}` +
+                  `${clip.cut ? ' — moves them' : ''}`
+                }
+                disabled={busy !== null}
+                onClick={runPaste}
+              >
+                {busy === 'paste' ? 'PASTING…' : `PASTE ${clip.count}${clip.cut ? ' ✂' : ''}`}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+      {/* The share question, in the same breath as the name — floated above
+          the bar as a popover, so it sits OUTSIDE the scrollable row. */}
+      {naming && (
+        <div className="cr-selbar-share">
+          <ShareOnSave
+            access={access}
+            priceUsd={priceUsd}
+            paymentRails={paymentRails}
+            door={orchName}
+            onAccess={setAccess}
+            onPrice={setPriceUsd}
+            onConfigurePayments={() => setPaymentSettingsOpen(true)}
+          />
+        </div>
       )}
       {paymentSettingsOpen && (
         <PaymentSettingsSheet
