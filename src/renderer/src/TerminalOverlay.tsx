@@ -146,8 +146,16 @@ function TerminalOverlay({
    */
   const remote = node.servedSession != null
   const containerRef = useRef<HTMLDivElement>(null)
-  /** The live xterm, so the transcript can ask where its viewport is. */
-  const termRef = useRef<Terminal | null>(null)
+  /**
+   * The live layer's scroll position is TMUX's, not xterm's. The mirror
+   * replays the current frame only; the scrollback lives in the pane, and a
+   * wheel over the terminal drives tmux copy-mode through the mouse
+   * sequences tmux turned on. The tracker reports where that is (scrollRow =
+   * lines above the bottom, scrollBase = history size) with every activity
+   * push; read through a ref so the wheel handler sees the newest reading.
+   */
+  const activityRef = useRef(activity)
+  activityRef.current = activity
   // Drag-in attachments: dragenter/leave bubble from every child of the
   // overlay, so a plain boolean would flicker — count enters vs leaves.
   const [dropReady, setDropReady] = useState(false)
@@ -398,7 +406,6 @@ function TerminalOverlay({
       // history, this pane is just the live tail.
       scrollback: isRemoteMode() ? 600 : 5000
     })
-    termRef.current = term
     const fit = new FitAddon()
     term.loadAddon(fit)
 
@@ -758,7 +765,6 @@ function TerminalOverlay({
 
     return () => {
       disposed = true
-      termRef.current = null
       // dispose in reverse: detach stream/observers before killing the term
       for (const cleanup of cleanups.reverse()) cleanup()
     }
@@ -1016,10 +1022,14 @@ function TerminalOverlay({
           clipRows={clipRows}
           atRest={phase === 'idle' || phase === 'replied'}
           liveEdges={() => {
-            const buffer = termRef.current?.buffer.active
-            return buffer
-              ? { atTop: buffer.viewportY <= 0, atBottom: buffer.viewportY >= buffer.baseY }
-              : { atTop: true, atBottom: true }
+            const row = activityRef.current?.scrollRow ?? null
+            const base = activityRef.current?.scrollBase ?? null
+            return {
+              // Not in copy-mode (null) is the bottom; copy-mode at history
+              // size is the top — every line the pane remembers is on screen.
+              atTop: row !== null && base !== null && row >= base,
+              atBottom: row === null || row === 0
+            }
           }}
           onActiveBlockChange={onActiveBlockChange}
           onPending={setPendingIndex}
