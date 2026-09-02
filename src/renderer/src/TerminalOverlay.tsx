@@ -146,6 +146,8 @@ function TerminalOverlay({
    */
   const remote = node.servedSession != null
   const containerRef = useRef<HTMLDivElement>(null)
+  /** The live xterm, so the transcript can ask where its viewport is. */
+  const termRef = useRef<Terminal | null>(null)
   // Drag-in attachments: dragenter/leave bubble from every child of the
   // overlay, so a plain boolean would flicker — count enters vs leaves.
   const [dropReady, setDropReady] = useState(false)
@@ -396,6 +398,7 @@ function TerminalOverlay({
       // history, this pane is just the live tail.
       scrollback: isRemoteMode() ? 600 : 5000
     })
+    termRef.current = term
     const fit = new FitAddon()
     term.loadAddon(fit)
 
@@ -755,6 +758,7 @@ function TerminalOverlay({
 
     return () => {
       disposed = true
+      termRef.current = null
       // dispose in reverse: detach stream/observers before killing the term
       for (const cleanup of cleanups.reverse()) cleanup()
     }
@@ -1011,6 +1015,12 @@ function TerminalOverlay({
           jumpToken={jumpToken}
           clipRows={clipRows}
           atRest={phase === 'idle' || phase === 'replied'}
+          liveEdges={() => {
+            const buffer = termRef.current?.buffer.active
+            return buffer
+              ? { atTop: buffer.viewportY <= 0, atBottom: buffer.viewportY >= buffer.baseY }
+              : { atTop: true, atBottom: true }
+          }}
           onActiveBlockChange={onActiveBlockChange}
           onPending={setPendingIndex}
           onTailLoaded={() => setTailReady(true)}

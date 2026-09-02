@@ -601,4 +601,17 @@ describe('wheelGoesToTranscript — the live layer at rest is a pass-through scr
     expect(at({ deltaY: 40, atBottom: true })).toBe(false)
     expect(at({ deltaY: 0 })).toBe(false)
   })
+
+  it('NESTED: the live terminal scrolls its own scrollback first; the transcript only at its edges', () => {
+    // The live transcript after a reply — the reply as the terminal drew it —
+    // must be readable in place. While the terminal can still scroll up, an
+    // upward wheel is the terminal's; at its top, the transcript's.
+    expect(at({ live: { atTop: false, atBottom: true } })).toBe(false)
+    expect(at({ live: { atTop: true, atBottom: true } })).toBe(true)
+    // Coming back down: the terminal first until it is at its bottom.
+    expect(at({ deltaY: 40, live: { atTop: true, atBottom: false } })).toBe(false)
+    expect(at({ deltaY: 40, live: { atTop: true, atBottom: true }, atBottom: false })).toBe(true)
+    // A clipped tail with a terminal scrolled up still belongs to the terminal.
+    expect(at({ clipped: true, atRest: false, live: { atTop: false, atBottom: true } })).toBe(false)
+  })
 })

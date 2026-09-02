@@ -103,6 +103,12 @@ export const TranscriptView = forwardRef<
      * wheelGoesToTranscript for why the clip alone was not enough.
      */
     atRest?: boolean
+    /**
+     * Where the live terminal's viewport is in its own scrollback. The wheel
+     * over the live layer scrolls THAT first and hands off to the transcript
+     * only at its edges (wheelGoesToTranscript).
+     */
+    liveEdges?: () => { atTop: boolean; atBottom: boolean }
     /** Reports the identity in view (+ marker fraction) for the timeline. */
     onActiveBlockChange?: (active: ActiveBlock) => void
     /** Reports a checkpoint whose content is FETCHING for a jump, null once filled. */
@@ -128,6 +134,7 @@ export const TranscriptView = forwardRef<
     jumpToken,
     clipRows,
     atRest = false,
+    liveEdges,
     onActiveBlockChange,
     onPending,
     onTailLoaded,
@@ -150,6 +157,8 @@ export const TranscriptView = forwardRef<
   clipRef.current = clipRows
   const restRef = useRef(atRest)
   restRef.current = atRest
+  const liveEdgesRef = useRef(liveEdges)
+  liveEdgesRef.current = liveEdges
   // Eviction anchor (the identity in view) so the cap keeps the visible window.
   const anchorIndexRef = useRef<number>(Number.MAX_SAFE_INTEGER)
   // The identity currently at the viewport top — tells a genuine jump from a
@@ -211,7 +220,8 @@ export const TranscriptView = forwardRef<
         clipped: clipRef.current !== null,
         deltaY: e.deltaY,
         scrollTop: scroller.scrollTop,
-        atBottom: isAtBottom(scroller.scrollTop, scroller.scrollHeight, scroller.clientHeight)
+        atBottom: isAtBottom(scroller.scrollTop, scroller.scrollHeight, scroller.clientHeight),
+        live: liveEdgesRef.current?.()
       })
       if (!takes) return
       e.preventDefault()

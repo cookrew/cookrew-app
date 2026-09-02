@@ -712,9 +712,15 @@ export function tailClipRows(phase: TurnPhase, tailLines: number | null): number
  * transcript above a finished reply could not be reached at all. Rest is the
  * rule now; the clip is only how the tail is drawn.
  *
- * `up` = deltaY < 0. The transcript takes an upward wheel while there is
- * anything above, and a downward one while it is not yet at the bottom, so
- * the live layer is a pass-through scroller at rest and never a dead zone.
+ * NESTED, like any scroller inside a scroller: the live layer's OWN
+ * scrollback comes first. An upward wheel scrolls the terminal until its
+ * viewport is at the top of its buffer, and only then moves the transcript
+ * above; a downward one scrolls the terminal back until it is at its bottom,
+ * and only then the transcript. The live transcript — the reply as the
+ * terminal drew it — is therefore always readable in place after a reply,
+ * which it was not while the clip rule took every wheel at rest for the
+ * checkpoint blocks. `live` is the terminal's edges; absent (no terminal yet)
+ * it is treated as having none, so the transcript takes the wheel.
  */
 export function wheelGoesToTranscript(input: {
   atRest: boolean
@@ -722,9 +728,11 @@ export function wheelGoesToTranscript(input: {
   deltaY: number
   scrollTop: number
   atBottom: boolean
+  live?: { atTop: boolean; atBottom: boolean }
 }): boolean {
   if (!input.atRest && !input.clipped) return false
-  if (input.deltaY < 0) return input.scrollTop > 0
-  if (input.deltaY > 0) return !input.atBottom
+  const live = input.live ?? { atTop: true, atBottom: true }
+  if (input.deltaY < 0) return live.atTop && input.scrollTop > 0
+  if (input.deltaY > 0) return live.atBottom && !input.atBottom
   return false
 }
