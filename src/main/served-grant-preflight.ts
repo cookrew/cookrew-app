@@ -235,7 +235,7 @@ export function createHarnessCompletionRequester(
 
 const runHarnessCompletion: HarnessCompletionRunner = (request, context) =>
   new Promise<boolean>((resolve) => {
-    execFile(
+    const child = execFile(
       request.file,
       [...request.args],
       {
@@ -247,6 +247,12 @@ const runHarnessCompletion: HarnessCompletionRunner = (request, context) =>
       },
       (error, stdout) => resolve(error === null && String(stdout).trim().length > 0)
     )
+    // EVERY SHIPPED HARNESS READS A PIPED STDIN TO EOF before it answers, and
+    // execFile hands the child an open pipe. The probe therefore sat at its
+    // 60s timeout and every serve was refused as 'grant-unusable' — with the
+    // wrapper, the key and the provider all correct. Nothing is ever written
+    // here; the pipe is closed so the prompt on argv is the whole input.
+    child.stdin?.end()
   })
 
 export const requestHarnessCompletion: HarnessCompletionRequester =
