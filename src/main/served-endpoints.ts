@@ -10,6 +10,7 @@ import type {
   TracePageRequest
 } from '../shared/trace-blocks'
 import {
+  SERVED_SESSION_END_PATH,
   SERVED_TRANSCRIPT_PATHS,
   type ServedTracePage,
   type ServedTranscriptPath,
@@ -82,6 +83,14 @@ export interface ServedEndpointDeps {
   admit(serviceId: string, sub: string): Promise<{ workspaceId: string; sessionId: string; created: boolean }>
   /** Does this account hold an OPEN session? Open = already paid for. */
   hasOpenSession(serviceId: string, sub: string): boolean
+  /**
+   * END the caller's open session and DESTROY what was minted for it — the
+   * workspace on the owner's canvas, its terminals, its sandbox. The caller
+   * said "end this session"; a workspace that outlives that is a stranger's
+   * agents left running on the owner's machine with nobody to talk to.
+   * Returns false when the caller has no open session.
+   */
+  endSession(serviceId: string, sub: string): boolean
   conductorFor(sessionId: string): string | null
   /** Run the prompt against the conductor's terminal; resolves to raw output. */
   ask(conductorId: string, prompt: string): Promise<string>
@@ -287,6 +296,14 @@ export async function handleServedRoute(
 
   if (method === 'POST' && pathname === '/ask') {
     return askRoute(deps, template, input)
+  }
+
+  if (method === 'POST' && pathname === SERVED_SESSION_END_PATH) {
+    // The same 401/403 bearer scope as every caller route; the session is
+    // the credential subject's own, never one named on the wire.
+    const auth = authorizeCaller(deps, template, input.headers)
+    if (!auth.ok) return auth.response
+    return deps.endSession(serviceId, auth.claims.sub) ? json(200, { ended: true }) : json(404, {})
   }
 
   if (

@@ -109,6 +109,7 @@ async function ownerApp(access: 'account' | 'paid', priceUsd?: string): Promise<
             return { workspaceId: `ws-${sessionId}`, sessionId, created: true }
           },
           hasOpenSession: (serviceId, sub) => sessions.has(`${serviceId}/${sub}`),
+          endSession: (serviceId, sub) => sessions.delete(`${serviceId}/${sub}`),
           conductorFor: (sessionId) => `orch-${sessionId}`,
           // The crew's one door, faked: the only thing a unit run cannot own.
           ask: async (orch, prompt) => {

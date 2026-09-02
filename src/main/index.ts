@@ -142,6 +142,7 @@ import { MOBILE_HTTPS_PORT, MOBILE_PORT } from './mobile-ports'
 import { createRelayServing } from './relay-serving'
 import { startRelayProxy, type RelayProxy } from './relay-proxy'
 import { importedDoors, rememberDoor, resolveDoor } from './relay-doorbook'
+import { SERVED_SESSION_END_PATH } from '../shared/served-transcript'
 import { DoorTranscript } from './door-transcript'
 import { DoorWatch } from './door-watch'
 import { doorNameOf, transcriptSourceFor } from './transcript-source'
@@ -762,6 +763,12 @@ async function handleServedSlug(
           prompt
         )
       },
+      endSession: (serviceId, sub) => {
+        const session = serving.instantiator.sessionForCaller(serviceId, sub)
+        if (session === null) return false
+        endServedSession(session.identity.sessionId)
+        return true
+      },
       sessionForCaller: (serviceId, sub) => {
         const session = serving.instantiator.sessionForCaller(serviceId, sub)
         if (session === null) return null
@@ -999,6 +1006,30 @@ function doorTranscriptFor(terminalId: string): Promise<DoorTranscript | null> {
   })
   doorTranscripts.set(terminalId, made)
   return made
+}
+
+/** Tell the door this card's session is over — as the same caller the card is. */
+async function endSessionAtDoor(node: TerminalNodeData): Promise<void> {
+  const facts = node.servedSession
+  if (!facts) return
+  try {
+    const name = doorNameOf(node)
+    const target = name
+      ? { origin: `http://127.0.0.1:${(await relayProxy()).port}`, slug: name }
+      : { origin: facts.origin, slug: facts.slug }
+    const token = await signInToDoor(target)
+    const res = await fetch(`${target.origin}/${target.slug}${SERVED_SESSION_END_PATH}`, {
+      method: 'POST',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(15000),
+      headers: { authorization: `Bearer ${token}` }
+    })
+    if (res.status !== 200 && res.status !== 404) {
+      console.error(`ending the session behind ${node.name}: the door answered ${res.status}`)
+    }
+  } catch (error) {
+    console.error(`ending the session behind ${node.name}: ${String(error)}`)
+  }
 }
 
 /** Sync form, for the seams that must not await (pins, watch routing). The
@@ -2045,6 +2076,26 @@ function switchWorkspace(nameOrId: string): WorkspaceMeta {
   return store.switchWorkspace(meta.id)
 }
 
+/**
+ * END A SERVED SESSION, ALL OF IT. The instantiator forgets the record and
+ * removes the sandbox; the WORKSPACE it minted — the terminals a stranger's
+ * session was running on this machine — is destroyed with it. Whether the
+ * owner ended it from the Sessions table or the caller ended it from their
+ * card, nothing of the session is left running afterwards.
+ */
+function endServedSession(sessionId: string): { stopped: number } {
+  const record = serving.instantiator.sessions().find((s) => s.identity.sessionId === sessionId)
+  const stopped = serving.instantiator.end(sessionId)
+  if (record && store.list().workspaces.some((w) => w.id === record.workspaceId)) {
+    try {
+      removeWorkspace(record.workspaceId)
+    } catch (error) {
+      console.error(`ending ${sessionId}: its workspace could not be removed: ${String(error)}`)
+    }
+  }
+  return stopped
+}
+
 function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
   const meta =
     store.list().workspaces.find((w) => w.id === nameOrId) ?? store.metaByName(nameOrId)
@@ -2436,6 +2487,12 @@ async function removeNode(id: string): Promise<void> {
   doorTranscripts.delete(id)
   doorWatch.forget(id)
   const node = store.node(id)
+  // "END THIS SESSION" means at the door, too. The card is the caller's only
+  // handle on a session running at someone else's app; closing it without
+  // telling the door left that session — its workspace, its agents — running
+  // there for nobody. Best effort and off the critical path: the card goes
+  // whatever the door says, and a door that cannot be reached is logged.
+  if (node?.kind === 'terminal' && node.servedSession) void endSessionAtDoor(node)
   retireTerminal(id, 'terminal removed')
   defaultProducerLease().forgetTerminal(id)
   // A permanently removed uuid never returns: its input-provenance fact
@@ -4049,7 +4106,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     }))
   )
   /** END destroys someone else's workspace, so it is the owner's act alone. */
-  ipcMain.handle('serving:end', (_e, sessionId: string) => serving.instantiator.end(sessionId))
+  ipcMain.handle('serving:end', (_e, sessionId: string) => endServedSession(sessionId))
 
   // ---- import a served team (caller side): one address, one orch card ----
   ipcMain.handle('serve:inspect', (_e, link: string) => inspectServeAddress(link))
