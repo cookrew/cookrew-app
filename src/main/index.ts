@@ -870,6 +870,7 @@ async function handleServedSlug(
       conductorFor: (sessionId) => serving.instantiator.conductorFor(sessionId),
       openConductorFor: (serviceId, sub) =>
         servedDeps.sessionForCaller(serviceId, sub)?.conductorId ?? null,
+      hadSession: (serviceId, sub) => serving.instantiator.hadSession(serviceId, sub),
       attach: attachServedLine,
       resident: (conductorId) => ptys.get(conductorId) ?? null,
       write: async (conductorId, data) => {

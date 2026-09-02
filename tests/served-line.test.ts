@@ -134,6 +134,41 @@ afterEach(async () => {
   open = null
 })
 
+describe('an ended session is not silently a new one', () => {
+  it('a caller who HAD a session and has none open is told 410, and nothing is minted', async () => {
+    open = await harness({ openConductorFor: () => null, hadSession: () => true })
+    const res = await fetch(`${open.origin}/line`, { headers: { authorization: 'Bearer good' } })
+    expect(res.status).toBe(410)
+    expect(await res.json()).toMatchObject({ reason: 'ended' })
+    expect(open.minted).toEqual([])
+  })
+
+  it('the same caller saying "new" is admitted and a session is minted', async () => {
+    open = await harness({ openConductorFor: () => null, hadSession: () => true })
+    const controller = new AbortController()
+    const res = await fetch(`${open.origin}/line`, {
+      headers: { authorization: 'Bearer good', 'x-cookrew-session': 'new' },
+      signal: controller.signal
+    })
+    expect(res.status).toBe(200)
+    expect(open.minted).toEqual([`${TEMPLATE.serviceId}/alice`])
+    controller.abort()
+  })
+
+  it('a first visit is still a mint — no memory of a session, no refusal', async () => {
+    open = await harness({ openConductorFor: () => null, hadSession: () => false })
+    const controller = new AbortController()
+    const res = await fetch(`${open.origin}/line`, {
+      headers: { authorization: 'Bearer good' },
+      signal: controller.signal
+    })
+    expect(res.status).toBe(200)
+    expect(open.minted).toHaveLength(1)
+    controller.abort()
+  })
+})
+
+
 describe('the caller line — served PTY over the door', () => {
   it('a path outside the line surface falls through', async () => {
     open = await harness()

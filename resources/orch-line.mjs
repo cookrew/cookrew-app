@@ -282,6 +282,10 @@ async function signIn() {
 let token = ''
 let closed = false
 let lineUp = false
+/** The door said the session ended; the next knock waits for Enter. */
+let awaitingNewSession = false
+/** The next line carries the person's intent to start another session. */
+let startNewSession = false
 /** Were we EVER admitted? Decides which refusal a later 402 actually is. */
 let everUp = false
 let signInAttempts = 0
@@ -307,10 +311,17 @@ function connectLine() {
       path: `/${slug}/line`,
       method: 'GET',
       agent,
-      headers: { ...authHeaders(), accept: 'text/event-stream', 'accept-encoding': 'identity' }
+      headers: {
+        ...authHeaders(),
+        accept: 'text/event-stream',
+        'accept-encoding': 'identity',
+        // Said ONCE, by a person: the reconnect loop never carries it.
+        ...(startNewSession ? { 'x-cookrew-session': 'new' } : {})
+      }
     },
     (res) => {
       lineOpening = false
+      startNewSession = false
       if (res.statusCode !== 200) {
         let buf = ''
         res.setEncoding('utf8')
@@ -425,6 +436,18 @@ async function handleLineRefusal(status, rawBody) {
     scheduleReconnect(15000)
     return
   }
+  if (status === 410) {
+    // THE SESSION ENDED AT THE DOOR — its owner closed it, or it was ended
+    // from another device. The line does not knock again on its own: for a
+    // free door a knock is a new session, and a card that kept knocking
+    // minted one workspace after another for nobody. It waits for a person.
+    process.stdout.write(dim(`— this session ended at @${slug}'s app`))
+    process.stdout.write(dim('  Press Enter here to start a new one, or close the card.'))
+    awaitingNewSession = true
+    lineUp = false
+    closed = true
+    return
+  }
   if (status === 404) {
     // The door is not there. Not an error and not the caller's fault, so it
     // is said plainly and the line stops knocking — an address that starts
@@ -533,6 +556,18 @@ function wireRawInput() {
     if (data === '\x1d') {
       cleanup()
       process.exit(0)
+    }
+    // The one keystroke that starts a NEW session after the door ended the
+    // last one: a person pressing Enter on the sentence that said so.
+    if (awaitingNewSession) {
+      if (data.includes('\r') || data.includes('\n')) {
+        awaitingNewSession = false
+        startNewSession = true
+        closed = false
+        process.stdout.write(dim('— starting a new session…'))
+        scheduleReconnect(0)
+      }
+      return
     }
     if (lineUp) void post('/line/raw', { data })
   })
