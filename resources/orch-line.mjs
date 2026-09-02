@@ -234,6 +234,8 @@ function request(method, pathname, { headers = {}, body } = {}) {
       }
     )
     req.on('error', () => resolve({ status: 0, headers: {}, body: null }))
+    // Bounded: a sign-in that never answers must not park the card forever.
+    req.setTimeout(30_000, () => req.destroy(new Error('timeout')))
     if (data) req.write(data)
     req.end()
   })
@@ -308,6 +310,7 @@ function connectLine() {
       headers: { ...authHeaders(), accept: 'text/event-stream', 'accept-encoding': 'identity' }
     },
     (res) => {
+      lineOpening = false
       if (res.statusCode !== 200) {
         let buf = ''
         res.setEncoding('utf8')
@@ -358,7 +361,14 @@ function connectLine() {
       res.on('close', () => scheduleReconnect())
     }
   )
-  req.on('error', () => scheduleReconnect())
+  req.on('error', () => {
+    lineOpening = false
+    scheduleReconnect()
+  })
+  // A head that never comes is a door that is not going to answer this line;
+  // the door mints and boots a workspace inside this window, so it is long.
+  lineOpening = true
+  req.setTimeout(90_000, () => req.destroy(new Error('no answer')))
   req.end()
 }
 
@@ -447,6 +457,19 @@ function stopRetrying() {
 }
 
 let reconnectPending = false
+/**
+ * THE LINE MUST NEVER JUST SIT THERE. A card was found parked with no
+ * sockets, no timers and "opening the line…" on screen: the app that owned
+ * its proxy had restarted under it, and whatever the last request became, it
+ * became it without an 'error' or an 'end' — so nothing ever scheduled the
+ * reconnect. This does not try to know why. If the line is not up and no
+ * reconnect is pending, one is scheduled, every few seconds, forever.
+ */
+let lineOpening = false
+setInterval(() => {
+  if (!closed && !lineUp && !reconnectPending && !lineOpening) scheduleReconnect(0)
+}, 5000).unref()
+
 function scheduleReconnect(delay = 1200) {
   if (closed || reconnectPending) return
   reconnectPending = true
