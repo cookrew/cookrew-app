@@ -100,6 +100,9 @@ export interface RegistryDeps {
   releases?: ReleaseCache
 }
 
+/** An account name: the same shape a handle has everywhere else on this site. */
+const HANDLE_SHAPE = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/
+
 function defaultAuthorize(store: RegistryStore): (id: string) => Verdict {
   return (id) => {
     const visibility = store.visibilityOf(id)
@@ -186,11 +189,12 @@ export function createRegistry(deps: RegistryDeps): Server {
    * service's own token, verified here, never trusted from its shape. A
    * `call` token is for one door, not for this registry, and does not count.
    */
-  const accountOf = (request: IncomingMessage): string | null => {
+  const accountOf = (request: IncomingMessage, mode: 'any' | 'bearer' = 'any'): string | null => {
     const identity = deps.identity
     if (!identity) return null
     const auth = request.headers.authorization ?? ''
-    const cookie = /(?:^|;\s*)cr_account=([A-Za-z0-9_.-]+)/.exec(request.headers.cookie ?? '')?.[1]
+    const cookie =
+      mode === 'bearer' ? undefined : /(?:^|;\s*)cr_account=([A-Za-z0-9_.-]+)/.exec(request.headers.cookie ?? '')?.[1]
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : cookie
     if (!token) return null
     const claims = identity.verifyToken(token)
@@ -198,8 +202,32 @@ export function createRegistry(deps: RegistryDeps): Server {
     return claims.sub
   }
   const starsOf = (handle: string, name: string): number => deps.stars?.count(handle, name) ?? 0
+  /** Headers for an answer that depends on who asked: never shared, never cached. */
+  const PRIVATE: Record<string, string> = { 'cache-control': 'private, no-store', vary: 'cookie, authorization' }
+
+  /** decodeURIComponent that answers null instead of throwing on a bad escape. */
+  const decode = (value: string): string | null => {
+    try {
+      return decodeURIComponent(value)
+    } catch {
+      return null
+    }
+  }
 
   return createServer({ requestTimeout: 0, headersTimeout: 60_000 }, (request, response) => {
+    try {
+      route(request, response)
+    } catch (error) {
+      // A request that throws is a malformed request, not a dead registry:
+      // the process holds every door's downlink, and one bad path segment
+      // must never take those down.
+      deps.note?.(`request failed: ${error instanceof Error ? error.message : String(error)}`)
+      if (!response.headersSent) json(response, 400, { error: 'malformed' })
+      else response.end()
+    }
+  })
+
+  function route(request: IncomingMessage, response: ServerResponse): void {
     const url = new URL(request.url ?? '/', 'http://registry.local')
     const method = request.method ?? 'GET'
     const parts = url.pathname.split('/').filter(Boolean)
@@ -289,29 +317,34 @@ export function createRegistry(deps: RegistryDeps): Server {
     // starred it), POST to toggle. One per account per team; a sort key for
     // the market and nothing more, so it never gates and never prices.
     if (deps.doors && deps.stars && parts.length === 5 && parts[0] === 'v1' && parts[1] === 'doors' && parts[4] === 'star') {
-      const handle = decodeURIComponent(parts[2]).replace(/^@/, '')
-      const name = decodeURIComponent(parts[3])
+      if (method !== 'GET' && method !== 'POST') {
+        json(response, 405, { error: 'method_not_allowed' }, { allow: 'GET, POST' })
+        return
+      }
+      const handle = (decode(parts[2]) ?? '').replace(/^@/, '')
+      const name = decode(parts[3]) ?? ''
       if (!deps.doors.get(handle, name)) {
         json(response, 404, { error: 'not_found' })
         return
       }
-      const account = accountOf(request)
       if (method === 'GET') {
+        const account = accountOf(request)
         json(response, 200, {
           stars: deps.stars.count(handle, name),
           starred: account !== null && deps.stars.starred(account, handle, name)
-        })
+        }, PRIVATE)
         return
       }
-      if (method === 'POST') {
-        if (account === null) {
-          json(response, 401, { error: 'unidentified' })
-          return
-        }
-        const out = deps.stars.toggle(account, handle, name)
-        json(response, out === null ? 400 : 200, out ?? { error: 'malformed' })
+      // A state change takes the Bearer only — never the cookie, so a page on
+      // another origin cannot star on a reader's behalf.
+      const account = accountOf(request, 'bearer')
+      if (account === null) {
+        json(response, 401, { error: 'unidentified' }, PRIVATE)
         return
       }
+      const out = deps.stars.toggle(account, handle, name)
+      json(response, out === null ? 400 : 200, out ?? { error: 'malformed' }, PRIVATE)
+      return
     }
     // GET /v1/doors/@handle — everything one owner is serving. The account
     // page and the import sheet both need it, and both used to have to fetch
@@ -348,7 +381,10 @@ export function createRegistry(deps: RegistryDeps): Server {
       return
     }
     if (deps.doors && method === 'POST' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'doors') {
-      void handleDoorRegistration(deps.doors, deps.identity, request, response)
+      handleDoorRegistration(deps.doors, deps.identity, request, response).catch((error: unknown) => {
+        deps.note?.(`door registration failed: ${error instanceof Error ? error.message : String(error)}`)
+        if (!response.headersSent) json(response, 400, { error: 'malformed' })
+      })
       return
     }
 
@@ -454,7 +490,7 @@ export function createRegistry(deps: RegistryDeps): Server {
     // GET /v1/identity/whoami — the account a Bearer (or the site cookie) names.
     if (deps.identity && method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'identity' && parts[2] === 'whoami') {
       const sub = accountOf(request)
-      json(response, sub === null ? 401 : 200, sub === null ? {} : { sub })
+      json(response, sub === null ? 401 : 200, sub === null ? {} : { sub }, PRIVATE)
       return
     }
 
@@ -481,7 +517,19 @@ export function createRegistry(deps: RegistryDeps): Server {
           return
         }
         if (parts[2] === 'register') {
-          const out = identity.register(parsed.credentialId, parsed.publicKeyJwk ?? {})
+          // The credential id becomes an ACCOUNT — the handle the market
+          // prints and stars key on — so it is held to the handle's shape
+          // here, not only by the page that offered it.
+          if (
+            typeof parsed.credentialId !== 'string' ||
+            !HANDLE_SHAPE.test(parsed.credentialId) ||
+            typeof parsed.publicKeyJwk !== 'object' ||
+            parsed.publicKeyJwk === null
+          ) {
+            json(response, 400, { error: 'bad_request' })
+            return
+          }
+          const out = identity.register(parsed.credentialId, parsed.publicKeyJwk)
           json(response, out.ok ? 201 : 409, out.ok ? { ok: true } : { error: out.reason })
           return
         }
@@ -626,12 +674,14 @@ export function createRegistry(deps: RegistryDeps): Server {
     // has not answered yet). A redirect, so the link people share is ours and
     // keeps working when the version moves on.
     if (method === 'GET' && parts.length === 1 && parts[0] === 'download') {
-      void (deps.releases?.latest() ?? Promise.resolve<Release | null>(null)).then((release) => {
-        const platform = url.searchParams.get('platform') ?? request.headers['user-agent'] ?? ''
-        const asset = release ? pickAsset(release, platform) : null
-        response.writeHead(302, { location: asset?.url ?? release?.url ?? RELEASES_PAGE, 'cache-control': 'no-store' })
-        response.end()
-      })
+      void (deps.releases?.latest() ?? Promise.resolve<Release | null>(null))
+        .catch(() => null)
+        .then((release) => {
+          const platform = url.searchParams.get('platform') ?? request.headers['user-agent'] ?? ''
+          const asset = release ? pickAsset(release, platform) : null
+          response.writeHead(302, { location: asset?.url ?? release?.url ?? RELEASES_PAGE, 'cache-control': 'no-store' })
+          response.end()
+        })
       return
     }
 
@@ -645,12 +695,14 @@ export function createRegistry(deps: RegistryDeps): Server {
       const site = deps.doors
       // The @ is optional everywhere a person types a name. `@drej/alpha` is
       // what the app passes around; `/drej/alpha` is what somebody reads out.
-      const bare = (value: string): string => decodeURIComponent(value).replace(/^@/, '')
+      const bare = (value: string): string => (decode(value) ?? '').replace(/^@/, '')
 
       if (parts.length === 0) {
-        void (deps.releases?.latest() ?? Promise.resolve<Release | null>(null)).then((release) => {
-          respondPage(response, homePage({ doors: site.list().map(withLive), release, stars: starsOf }))
-        })
+        void (deps.releases?.latest() ?? Promise.resolve<Release | null>(null))
+          .catch(() => null)
+          .then((release) => {
+            respondPage(response, homePage({ doors: site.list().map(withLive), release, stars: starsOf }))
+          })
         return
       }
       if (parts.length === 1 && parts[0] === 'market') {
@@ -697,7 +749,7 @@ export function createRegistry(deps: RegistryDeps): Server {
     }
 
     json(response, 404, { error: 'not_found' })
-  })
+  }
 }
 
 

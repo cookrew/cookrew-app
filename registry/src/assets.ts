@@ -11,7 +11,9 @@ import { ASSETS } from './assets-bundle'
  * that load it are cached briefly or not at all.
  */
 export function serveAsset(response: ServerResponse, name: string): boolean {
-  const asset = ASSETS[name]
+  // Own property only: `toString` and `constructor` are not assets, and a
+  // prototype member here is an unauthenticated crash.
+  const asset = Object.prototype.hasOwnProperty.call(ASSETS, name) ? ASSETS[name] : undefined
   if (!asset) return false
   const payload = Buffer.from(asset.body, 'utf8')
   response.writeHead(200, {
@@ -22,8 +24,4 @@ export function serveAsset(response: ServerResponse, name: string): boolean {
   })
   response.end(payload)
   return true
-}
-
-export function hasAsset(name: string): boolean {
-  return Object.prototype.hasOwnProperty.call(ASSETS, name)
 }

@@ -1,4 +1,5 @@
 import type { ServerResponse } from 'node:http'
+import { ASSET_VERSION } from './assets-bundle'
 
 /**
  * THE SITE'S ONE SHELL — cookrew.dev in the app's own dress.
@@ -62,7 +63,10 @@ export interface ShellOptions {
   scripts?: string[]
   /** Stylesheets from /assets, app pages only. */
   styles?: string[]
-  /** Cache lifetime in seconds; 0 for pages that must not be cached. */
+  /**
+   * Cache lifetime in seconds; 0 for pages that must not be cached. A page
+   * rendered for a signed-in reader is never shared: 0 means private/no-store.
+   */
   cache?: number
   status?: number
 }
@@ -77,7 +81,9 @@ export function page(options: ShellOptions, main: string): Page {
       'referrer-policy': 'no-referrer',
       // Everything here describes mutable state — a team can be served or
       // withdrawn between two refreshes — so it is cached briefly or not at all.
-      'cache-control': `public, max-age=${options.cache ?? 60}`
+      ...(options.cache === 0
+        ? { 'cache-control': 'private, no-store', vary: 'cookie' }
+        : { 'cache-control': `public, max-age=${options.cache ?? 60}` })
     },
     body: shell(options, main)
   }
@@ -113,10 +119,10 @@ function shell(options: ShellOptions, main: string): string {
       ? `<button class="btn sm" id="signin" data-signin>🔑 Sign in</button>`
       : `<a class="btn sm" href="/market#account">🔑 Sign in</a>`
   const scripts = (options.kind === 'app' ? options.scripts ?? [] : [])
-    .map((s) => `<script src="/assets/${esc(s)}" defer></script>`)
+    .map((s) => `<script src="/assets/${esc(s)}?v=${ASSET_VERSION}" defer></script>`)
     .join('')
   const styles = (options.kind === 'app' ? options.styles ?? [] : [])
-    .map((s) => `<link rel="stylesheet" href="/assets/${esc(s)}">`)
+    .map((s) => `<link rel="stylesheet" href="/assets/${esc(s)}?v=${ASSET_VERSION}">`)
     .join('')
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

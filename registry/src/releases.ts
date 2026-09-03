@@ -29,33 +29,47 @@ export interface Release {
 export const RELEASES_API = 'https://api.github.com/repos/cookrew/cookrew-app/releases/latest'
 export const RELEASES_PAGE = 'https://github.com/cookrew/cookrew-app/releases/latest'
 
+/** GitHub's URLs are emitted into a Location header and a page; only https ones are. */
+const HTTPS = /^https:\/\/[a-z0-9.-]+\//i
 const INSTALLABLE = /\.(dmg|zip|exe|AppImage|deb|rpm|msi)$/i
 
 export class ReleaseCache {
   private readonly fetchImpl: (url: string, init?: RequestInit) => Promise<Response>
   private readonly ttlMs: number
+  /** How long a failed read is remembered before GitHub is asked again. */
+  private readonly missTtlMs: number
   private last: Release | null = null
   private readAt = 0
   private inflight: Promise<Release | null> | null = null
 
-  constructor(options: { fetch?: typeof fetch; ttlMs?: number } = {}) {
+  constructor(options: { fetch?: typeof fetch; ttlMs?: number; missTtlMs?: number } = {}) {
     this.fetchImpl = options.fetch ?? fetch
     this.ttlMs = options.ttlMs ?? 60 * 60 * 1000
+    this.missTtlMs = options.missTtlMs ?? Math.min(this.ttlMs, 60 * 1000)
   }
 
-  /** The latest release, or null when nothing has ever been read. */
+  /**
+   * The latest release, or null when nothing has ever been read.
+   *
+   * A stale answer is served at once while a refresh runs behind it; only a
+   * cold cache waits on GitHub. The ATTEMPT is what is timestamped, so an
+   * outage or a rate limit is asked again after the (shorter) miss interval,
+   * not on every page view — a page must not block on a third party.
+   */
   async latest(): Promise<Release | null> {
-    const fresh = this.last !== null && Date.now() - this.readAt < this.ttlMs
-    if (fresh) return this.last
+    const age = Date.now() - this.readAt
+    const due = this.last === null ? age >= this.missTtlMs : age >= this.ttlMs
+    if (!due) return this.last
     if (!this.inflight) {
       this.inflight = this.read().finally(() => {
         this.inflight = null
       })
     }
-    return this.inflight
+    return this.last === null ? this.inflight : this.last
   }
 
   private async read(): Promise<Release | null> {
+    this.readAt = Date.now()
     try {
       const res = await this.fetchImpl(RELEASES_API, {
         headers: { accept: 'application/vnd.github+json', 'user-agent': 'cookrew-registry' },
@@ -65,7 +79,6 @@ export class ReleaseCache {
       const parsed = parseRelease(await res.json())
       if (!parsed) return this.last
       this.last = parsed
-      this.readAt = Date.now()
       return parsed
     } catch {
       return this.last
@@ -85,7 +98,7 @@ function parseRelease(body: unknown): Release | null {
   const assets: ReleaseAsset[] = []
   for (const asset of raw.assets as { name?: unknown; browser_download_url?: unknown; size?: unknown }[]) {
     if (typeof asset.name !== 'string' || typeof asset.browser_download_url !== 'string') continue
-    if (!INSTALLABLE.test(asset.name)) continue
+    if (!INSTALLABLE.test(asset.name) || !HTTPS.test(asset.browser_download_url)) continue
     assets.push({
       name: asset.name,
       url: asset.browser_download_url,
@@ -96,7 +109,7 @@ function parseRelease(body: unknown): Release | null {
     version: raw.tag_name.replace(/^v/, ''),
     tag: raw.tag_name,
     publishedAt: typeof raw.published_at === 'string' ? raw.published_at : '',
-    url: typeof raw.html_url === 'string' ? raw.html_url : RELEASES_PAGE,
+    url: typeof raw.html_url === 'string' && HTTPS.test(raw.html_url) ? raw.html_url : RELEASES_PAGE,
     assets
   }
 }

@@ -36,6 +36,12 @@
   if (!Seal) return
 
   /* ── one exchange through the relay ────────────────────────────────────── */
+  /** A buffered answer's ceiling — the same as the app's relay caller. */
+  const MAX_HELD_CHARS = 8 * 1024 * 1024
+  /** Reconnects back off from ~1 s to a minute and give up after this many in a row. */
+  const RECONNECT_MAX_MS = 60_000
+  const RECONNECT_LIMIT = 40
+  const STRIPE_CHECKOUT = /^https:\/\/checkout\.stripe\.com\//
   let seq = 0
   const [handle, team] = door.replace(/^@/, '').split('/')
   const callPath = `/v1/relay/call/${encodeURIComponent(`@${handle}`)}/${encodeURIComponent(team)}`
@@ -50,10 +56,14 @@
     const seal = await Seal.seal(doorKey, door)
     const packed = await seal.pack(headers, body ?? '')
     const op = { id, method, path, headers: packed.headers }
+    // A GET carries no body frame — the reference caller (relay-caller.ts)
+    // sends one only for methods that have a body, and the relay forwards a
+    // frame only when there are bytes.
+    const bodiless = method === 'GET' || method === 'HEAD'
     const res = await fetch(callPath, {
       method: 'POST',
       headers: { 'x-relay-op': b64u(enc.encode(JSON.stringify(op))), 'content-type': 'application/octet-stream' },
-      body: packed.body,
+      body: bodiless ? '' : packed.body,
       signal
     })
     if (res.status === 404) throw new LineError('not-serving', `${door} is not serving right now`)
@@ -63,6 +73,7 @@
     let head = null
     let rx = null
     let n = 0
+    let held = 0
     const chunks = []
     for (;;) {
       const { value, done } = await reader.read()
@@ -93,7 +104,11 @@
           const opened = await rx.open(frame.data, n++)
           if (opened === null) throw new LineError('seal', 'a relayed frame did not verify')
           if (onChunk) onChunk(opened)
-          else chunks.push(opened)
+          else {
+            held += opened.length
+            if (held > MAX_HELD_CHARS) throw new LineError('relay', 'the door answered with more than this page will hold')
+            chunks.push(opened)
+          }
         } else if (frame.t === 'end') {
           return { status: head?.status ?? 0, headers: head?.headers ?? {}, body: chunks.join('') }
         } else if (frame.t === 'abort') {
@@ -205,6 +220,7 @@
           if (status === 200) {
             lineUp = true
             everUp = true
+            reconnects = 0
             gate(null)
             $('btn-end').hidden = false
             $('prompt').disabled = false
@@ -343,6 +359,10 @@
             toast(`Card payment is not available right now (${res.status}).`, 5000)
             return
           }
+          if (!STRIPE_CHECKOUT.test(out.url)) {
+            toast('The door offered a checkout that is not Stripe’s; refusing to open it.', 6000)
+            return
+          }
           const session = /\/(cs_[A-Za-z0-9_]+)/.exec(out.url)?.[1]
           window.open(out.url, '_blank', 'noopener')
           if (session) {
@@ -400,6 +420,12 @@
     }
   })
 
+  const span = (cls, text) => {
+    const el = document.createElement('span')
+    el.className = cls
+    el.textContent = text
+    return el
+  }
   async function rail() {
     let res
     try {
@@ -419,11 +445,12 @@
     const tail = $('rail-tail')
     list.querySelectorAll('li[data-index]').forEach((li) => li.remove())
     for (const t of turns) {
+      // The door's JSON is untrusted: numbers are checked, strings become text.
+      if (!Number.isInteger(t?.index) || t.index < 0) continue
       const li = document.createElement('li')
       li.dataset.index = String(t.index)
-      const title = (t.title || t.prompt || '(empty prompt)').split('\n')[0].slice(0, 80)
-      li.innerHTML = `<span class="n">${t.index}</span><span class="t"></span>`
-      li.querySelector('.t').textContent = title
+      const title = String(t.title || t.prompt || '(empty prompt)').split('\n')[0].slice(0, 80)
+      li.append(span('n', String(t.index)), span('t', title))
       li.addEventListener('click', () => void showBlock(t.index, li))
       list.insertBefore(li, tail)
     }
@@ -459,13 +486,22 @@
 
   /* ── lifecycle ─────────────────────────────────────────────────────────── */
   let reconnectPending = false
+  let reconnects = 0
   function scheduleReconnect(delay) {
     if (closed || reconnectPending) return
+    if (reconnects >= RECONNECT_LIMIT) {
+      note('— the line stayed down; not retrying on its own. Open it again when you are back. —')
+      setPhase('DOWN', 'The line stayed down.')
+      stop()
+      return
+    }
+    reconnects += 1
     reconnectPending = true
+    const wait = Math.min(RECONNECT_MAX_MS, delay * 2 ** Math.min(reconnects - 1, 6))
     setTimeout(() => {
       reconnectPending = false
       void connectLine()
-    }, delay)
+    }, wait)
   }
   function stop() {
     closed = true
@@ -479,6 +515,7 @@
   }
   async function open() {
     if (!relayed) return toast('This door is not on the relay; open it in Cookrew.')
+    reconnects = 0
     const acct = account()
     if (!(await acct?.handle())) {
       toast('Sign in to cookrew.dev first — the door lends to accounts.')

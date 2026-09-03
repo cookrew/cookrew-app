@@ -148,8 +148,10 @@
   }
   const setCookie = (token) => {
     const claims = claimsOf(token)
-    const maxAge = claims ? Math.max(0, Math.floor((claims.exp - Date.now()) / 1000)) : 0
+    const maxAge = claims ? Math.floor((claims.exp - Date.now()) / 1000) : 0
+    if (maxAge <= 0) return false
     document.cookie = `cr_account=${token}; Path=/; Max-Age=${maxAge}; SameSite=Strict${location.protocol === 'https:' ? '; Secure' : ''}`
+    return /(^|; )cr_account=/.test(document.cookie)
   }
 
   /** A token for a scope (and a door, for `call`), minted on demand, reused while fresh. */
@@ -163,6 +165,7 @@
     if (out.status !== 200 || !out.body?.token) throw new Error('sign-in was refused — is this handle enrolled from another device?')
     tokens.set(key, out.body.token)
     if (scope === 'download') setCookie(out.body.token)
+    else sessionStorage.removeItem('cr_refreshed')
     return out.body.token
   }
 
@@ -197,7 +200,23 @@
     const account = await loadAccount()
     if (account) {
       const dialog = sheet()
-      dialog.querySelector('#signin-form').innerHTML = `<div class="row"><span class="chip amber">@${account.handle}</span><button class="btn" value="out">Forget this browser's key</button><button class="btn" value="cancel">Close</button></div>`
+      const form = dialog.querySelector('#signin-form')
+      form.replaceChildren()
+      const row = document.createElement('div')
+      row.className = 'row'
+      const who = document.createElement('span')
+      who.className = 'chip amber'
+      who.textContent = `@${account.handle}`
+      const out = document.createElement('button')
+      out.className = 'btn'
+      out.value = 'out'
+      out.textContent = "Forget this browser's key"
+      const cancel = document.createElement('button')
+      cancel.className = 'btn'
+      cancel.value = 'cancel'
+      cancel.textContent = 'Close'
+      row.append(who, out, cancel)
+      form.append(row)
       dialog.querySelector('#signin-note').textContent = 'Stars and the line use this account. Forgetting the key here does not release the handle.'
       dialog.showModal()
       dialog.onclose = async () => {
@@ -291,7 +310,16 @@
     if (button && account) button.textContent = `@${account.handle}`
     // Keep the page's idea of "who is reading" fresh: the cookie is how the
     // server renders stars and the starred tab, and it expires with the token.
-    if (account && !/(^|; )cr_account=/.test(document.cookie)) token('download').then(() => location.reload()).catch(() => undefined)
+    // Once per page load, and only when the cookie actually took: a browser
+    // that refuses cookies must not reload forever.
+    if (account && !/(^|; )cr_account=/.test(document.cookie) && !sessionStorage.getItem('cr_refreshed')) {
+      sessionStorage.setItem('cr_refreshed', '1')
+      token('download')
+        .then(() => {
+          if (/(^|; )cr_account=/.test(document.cookie)) location.reload()
+        })
+        .catch(() => undefined)
+    }
   })
 
   window.cookrewAccount = { token, handle: async () => (await loadAccount())?.handle ?? null, signIn: signInFlow, toast }

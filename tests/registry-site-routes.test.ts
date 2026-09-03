@@ -226,6 +226,6 @@ describe('the face on the wire', () => {
     expect(doors.register('drej', { ...base, name: 'x', tags: ['Bad Tag'] })).toMatchObject({ ok: false, reason: 'bad-face' })
     expect(doors.register('drej', { ...base, name: 'x', tags: ['a', 'b', 'c', 'd', 'e', 'f'] })).toMatchObject({ ok: false, reason: 'bad-face' })
     expect(doors.register('drej', { ...base, name: 'x', harnesses: ['x'.repeat(33)] })).toMatchObject({ ok: false, reason: 'bad-face' })
-    expect(doors.register('drej', { ...base, name: 'x', summary: 'fine ' })).toMatchObject({ ok: false, reason: 'bad-face' })
+    expect(doors.register('drej', { ...base, name: 'x', summary: 'fine\u0000' })).toMatchObject({ ok: false, reason: 'bad-face' })
   })
 })

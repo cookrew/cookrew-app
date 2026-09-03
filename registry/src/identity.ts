@@ -438,7 +438,9 @@ export class IdentityService {
    */
   verifyToken(token: string): TokenClaims | null {
     try {
-      const [body, signature] = token.split('.')
+      const parts = token.split('.')
+      if (parts.length !== 2) return null
+      const [body, signature] = parts
       if (!body || !signature) return null
       if (!verify(null, Buffer.from(body, 'utf8'), this.keys().publicKey, fromB64url(signature))) {
         return null

@@ -175,6 +175,12 @@ export function isPrivateAddress(value: string): boolean {
 }
 
 function validFace(input: DoorInput, allowPrivate: boolean): boolean {
+  // The body is a stranger's JSON cast to this shape: every field is checked
+  // for TYPE before it is checked for value, or `.trim()` on a number throws.
+  if (typeof input.title !== 'string' || typeof input.door !== 'string') return false
+  if (typeof input.address !== 'string' || typeof input.transport !== 'string') return false
+  if (!Array.isArray(input.rails)) return false
+  if (input.priceUsd !== undefined && typeof input.priceUsd !== 'string') return false
   if (!(input.transport in DOOR_REACH)) return false
   // A relayed door without a seal key is a door a caller cannot pin, and an
   // unpinned relayed door is one the relay could impersonate. Refused rather
