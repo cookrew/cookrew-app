@@ -215,6 +215,21 @@ export const FEATURES: FeatureSpec[] = [
   }
 ]
 
+/** The six steps on /start, and the questions asked there and nowhere else. */
+export const START_HOWTO: { name: string; text: string }[] = [
+  { name: 'Install Cookrew', text: 'Download the build for your platform, or clone the repository and run npm install && npm run dev. Cookrew needs Node 20 or newer and tmux or herdr to host terminals.' },
+  { name: 'Place your first agent', text: 'Pick a preset in the dock — Claude Code, Codex, OpenCode, Pi or Shell — and click the canvas. The teammate boots in its own terminal and the card opens.' },
+  { name: 'Recruit a crew from the CLI', text: 'From any terminal: cookrew recruit "Forge" --preset "Claude Code" --role "builder", then cookrew connect to wire teammates, and cookrew orch to name the door.' },
+  { name: 'Ask, and read the reply', text: 'cookrew ask "Forge" "…" waits for the turn to end and returns the reply; cookrew status reports thinking, waiting, replied or idle. Every turn lands on the card’s rail as a checkpoint.' },
+  { name: 'Save the team', text: 'cookrew team save "MY CREW" snapshots nodes, wires and turn histories. cookrew workspace create "New project" --team "MY CREW" puts the formation to work in a new directory.' },
+  { name: 'Serve it, or open someone’s', text: 'SERVE lists a saved team at cookrew.dev/@you/team; anyone with the link opens a sandboxed session from a browser or the app. Or paste an address into Import a team, or click Open in Cookrew on a team page.' }
+]
+
+export const START_FAQ: Faq[] = [
+  { q: 'What do I need before installing Cookrew?', a: 'A Mac with Apple Silicon or Windows (preview), Node 20+ if you build from source, tmux or herdr to host terminals, and the agent CLIs you want to run (Claude Code, Codex, OpenCode, Pi) with their own logins.' },
+  { q: 'Do I need an account to use Cookrew?', a: 'No. The app runs entirely on your machine. A cookrew.dev account is needed only to serve a team on the marketplace or to open someone else’s.' }
+]
+
 /** Everything a crawler or a model needs, as plain text: /llms.txt. */
 export function llmsText(): string {
   return [

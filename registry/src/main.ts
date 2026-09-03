@@ -43,6 +43,12 @@ import { scrubForPublish } from '../../src/main/preset-scrub'
 import type { TeamSnapshot } from '../../src/main/teams'
 import type { CanvasNode } from '../../src/shared/model'
 
+// This process holds every served door's downlink. A promise nobody awaited
+// must be a log line, never the end of the process.
+process.on('unhandledRejection', (reason) => {
+  console.error(`unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`)
+})
+
 const args = process.argv.slice(2)
 const flag = (name: string, fallback: string): string => {
   const at = args.indexOf(`--${name}`)

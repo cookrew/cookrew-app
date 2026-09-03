@@ -62,10 +62,7 @@ export const RESERVED_HANDLES = new Set([
   'market',
   'download',
   'features',
-  'start',
-  'llms.txt',
-  'site.webmanifest',
-  'favicon.svg'
+  'start'
 ])
 
 /** AN OWNER'S PAGE — who they are, and what they are serving. */

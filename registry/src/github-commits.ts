@@ -55,14 +55,20 @@ export class CommitsCache {
         headers: { accept: 'application/vnd.github+json', 'user-agent': 'cookrew-registry' },
         signal: AbortSignal.timeout(8000)
       })
-      if (!res.ok) return this.last
+      if (!res.ok) return this.miss()
       const parsed = parseCommits(await res.json())
-      if (parsed.length === 0) return this.last
+      if (parsed.length === 0) return this.miss()
       this.last = parsed
       return parsed
     } catch {
-      return this.last
+      return this.miss()
     }
+  }
+
+  /** After a miss there is an answer — an empty one — so no render ever waits on GitHub again. */
+  private miss(): Commit[] {
+    this.last ??= []
+    return this.last
   }
 }
 

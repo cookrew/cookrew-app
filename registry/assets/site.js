@@ -350,6 +350,7 @@
         .map((r) => r.trim())
         .filter(Boolean)
       const n = Math.max(harnesses.length, roles.length, 1)
+      const q = (v) => `"${String(v).replace(/[\\"]/g, '\\$&')}"`
       const lines = []
       const names = []
       for (let i = 0; i < n; i++) {
@@ -357,7 +358,7 @@
         names.push(name)
         const preset = harnesses[i % Math.max(harnesses.length, 1)] ?? 'Claude Code'
         const role = roles[i % Math.max(roles.length, 1)] ?? 'teammate'
-        lines.push(`$ cookrew recruit "${name}" --preset "${preset}" --role "${role}"`)
+        lines.push(`$ cookrew recruit ${q(name)} --preset ${q(preset)} --role ${q(role)}`)
       }
       for (let i = 1; i < names.length; i++) lines.push(`$ cookrew connect "${names[0]}" "${names[i]}"`)
       if ($('crew-orch')?.checked) lines.push(`$ cookrew orch "${names[0]}"`)

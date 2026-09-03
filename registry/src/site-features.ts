@@ -16,8 +16,6 @@ import { breadcrumbs, faqPage, organization, webPage } from './site-seo'
  * the product and finds the next page.
  */
 
-export const FEATURE_SLUGS = FEATURES.map((f) => f.slug)
-
 function stepFigure(step: Step, index: number): string {
   const frame: Frame = { file: step.file, alt: step.title, caption: step.caption, width: step.width, height: step.height }
   return `<li class="step"><div class="step-no">${index + 1}</div><div><h3>${esc(step.title)}</h3><figure class="shot">${frameImg(frame, { sizes: '(max-width: 860px) 100vw, 70vw' })}<figcaption><span class="rec">● REC</span>${esc(step.caption)}</figcaption></figure></div></li>`

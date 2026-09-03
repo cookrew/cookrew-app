@@ -34,12 +34,13 @@ describe('structured data', () => {
     const product = teamProduct(door, 4) as { offers: Record<string, unknown>; aggregateRating: Record<string, unknown>; description: string }
     expect(product.offers.price).toBe('2.50')
     expect(product.offers.availability).toBe('https://schema.org/InStock')
-    expect(product.aggregateRating.ratingCount).toBe(4)
+    expect((product as unknown as { interactionStatistic: { userInteractionCount: number } }).interactionStatistic.userInteractionCount).toBe(4)
+    expect('aggregateRating' in product).toBe(false)
     expect(product.description).toBe('The crew that builds Cookrew.')
     const off = teamProduct({ ...door, live: false, access: 'account', priceUsd: undefined }, 0) as { offers: Record<string, unknown> }
     expect(off.offers.price).toBe('0')
     expect(off.offers.availability).toBe('https://schema.org/OutOfStock')
-    expect('aggregateRating' in off).toBe(false)
+    expect('interactionStatistic' in off).toBe(false)
   })
 
   it('the application carries the definition and the real version', () => {
@@ -71,7 +72,8 @@ describe('the crawl files', () => {
     expect(xml).toContain('<loc>https://cookrew.dev/market</loc>')
     expect(xml).toContain('<loc>https://cookrew.dev/start</loc>')
     for (const f of FEATURES) expect(xml).toContain(`<loc>https://cookrew.dev/features/${f.slug}</loc>`)
-    expect(xml).toContain('<loc>https://cookrew.dev/drej/cookrew-alpha</loc><lastmod>2026-09-03</lastmod>')
+    expect(xml).toContain('<loc>https://cookrew.dev/drej/cookrew-alpha</loc><priority>0.8</priority>')
+    expect(xml).not.toContain('lastmod')
     expect(xml).toContain('<loc>https://cookrew.dev/drej</loc>')
     expect(xml).toContain('b&lt;c')
     expect(xml).not.toContain('b<c')

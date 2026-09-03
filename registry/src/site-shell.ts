@@ -1,5 +1,7 @@
 import type { ServerResponse } from 'node:http'
 import { ASSET_VERSION } from './assets-bundle'
+import { GITHUB_REPO, SITE_ORIGIN } from './site-content'
+import { jsonLd } from './site-seo'
 
 /**
  * THE SITE'S ONE SHELL — cookrew.dev in the app's own dress.
@@ -20,9 +22,11 @@ import { ASSET_VERSION } from './assets-bundle'
  *             Everything a link may never do (install, pay, open a session)
  *             is still one deliberate click after the facts are on screen.
  *
- * Fonts are the app's four (Silkscreen, VT323, JetBrains Mono, Inter), from
- * Google Fonts as the app itself loads them; recorded frames come from this
- * repository on GitHub so the bundle stays small enough for its ConfigMap.
+ * Fonts are the app's four (Silkscreen, VT323, JetBrains Mono, Inter), served
+ * from this origin out of the bundle; recorded frames come from this
+ * repository on GitHub, pinned to the commit the bundle was built from, so the
+ * bundle stays small enough for its ConfigMap and no third party is in the
+ * critical path.
  */
 
 declare const __SITE_REF__: string | undefined
@@ -36,15 +40,15 @@ const SITE_REF = typeof __SITE_REF__ === 'string' && /^[0-9a-f]{7,40}$/.test(__S
  */
 export const SITE_ASSETS = `https://raw.githubusercontent.com/cookrew/cookrew-app/${SITE_REF}/registry/assets/`
 export const SITE_FRAMES = `${SITE_ASSETS}site/`
-export const SITE_FONTS = `${SITE_ASSETS}fonts/`
-export const GITHUB_REPO = 'https://github.com/cookrew/cookrew-app'
-export const SITE_ORIGIN = 'https://cookrew.dev'
+/** The fonts are small enough to travel inside the bundle; they are served from here. */
+export const SITE_FONTS = '/assets/'
+export { GITHUB_REPO, SITE_ORIGIN } from './site-content'
 
 export type PageKind = 'document' | 'app'
 
 const CSP: Record<PageKind, string> = {
-  document: `default-src 'none'; style-src 'unsafe-inline'; font-src ${SITE_FONTS}; img-src 'self' ${SITE_FRAMES} data:; script-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'`,
-  app: `default-src 'none'; style-src 'self' 'unsafe-inline'; font-src ${SITE_FONTS}; img-src 'self' ${SITE_FRAMES} data:; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
+  document: `default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self' ${SITE_FRAMES} data:; script-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'`,
+  app: `default-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' ${SITE_FRAMES} data:; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
 }
 
 export interface Page {
@@ -110,6 +114,14 @@ export function page(options: ShellOptions, main: string): Page {
   }
 }
 
+/** A 404 that is a document: a crawler following a stale link reads a page, not JSON. */
+export function notFoundPage(what: string): Page {
+  return page(
+    { title: 'Not found — Cookrew', kind: 'document', cache: 0, status: 404, noindex: true },
+    `<div class="wrap" style="padding-top:44px"><h1>Not found</h1><p class="lede">There is no ${esc(what)} at that address.</p><p class="row"><a class="btn" href="/">Home</a><a class="btn" href="/market">Marketplace</a><a class="btn" href="/features">Features</a></p></div>`
+  )
+}
+
 /** A generated document, with the headers that make it inert. */
 export function respondPage(response: ServerResponse, rendered: Page): void {
   const payload = Buffer.from(rendered.body, 'utf8')
@@ -124,12 +136,12 @@ const LOGO = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" widt
 
 /** The app's four fonts, self-hosted from the repository; the variable ones cover every weight. */
 const FONT_FACES = `
-@font-face{font-family:'Inter';font-style:normal;font-weight:400 700;font-display:swap;src:url(${SITE_FONTS}inter.woff2) format('woff2')}
-@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 700;font-display:swap;src:url(${SITE_FONTS}jetbrains-mono.woff2) format('woff2')}
-@font-face{font-family:'Silkscreen';font-style:normal;font-weight:400;font-display:swap;src:url(${SITE_FONTS}silkscreen-400.woff2) format('woff2')}
-@font-face{font-family:'Silkscreen';font-style:normal;font-weight:700;font-display:swap;src:url(${SITE_FONTS}silkscreen-700.woff2) format('woff2')}
-@font-face{font-family:'VT323';font-style:normal;font-weight:400;font-display:swap;src:url(${SITE_FONTS}vt323-400.woff2) format('woff2')}`
-const PRECONNECT = `<link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin><link rel="preload" as="font" type="font/woff2" href="${SITE_FONTS}inter.woff2" crossorigin><link rel="preload" as="font" type="font/woff2" href="${SITE_FONTS}silkscreen-700.woff2" crossorigin>`
+@font-face{font-family:'Inter';font-style:normal;font-weight:400 700;font-display:swap;src:url(${SITE_FONTS}inter.woff2?v=${ASSET_VERSION}) format('woff2')}
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 700;font-display:swap;src:url(${SITE_FONTS}jetbrains-mono.woff2?v=${ASSET_VERSION}) format('woff2')}
+@font-face{font-family:'Silkscreen';font-style:normal;font-weight:400;font-display:swap;src:url(${SITE_FONTS}silkscreen-400.woff2?v=${ASSET_VERSION}) format('woff2')}
+@font-face{font-family:'Silkscreen';font-style:normal;font-weight:700;font-display:swap;src:url(${SITE_FONTS}silkscreen-700.woff2?v=${ASSET_VERSION}) format('woff2')}
+@font-face{font-family:'VT323';font-style:normal;font-weight:400;font-display:swap;src:url(${SITE_FONTS}vt323-400.woff2?v=${ASSET_VERSION}) format('woff2')}`
+const PRECONNECT = `<link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin><link rel="preload" as="font" type="font/woff2" href="${SITE_FONTS}inter.woff2?v=${ASSET_VERSION}" crossorigin><link rel="preload" as="font" type="font/woff2" href="${SITE_FONTS}silkscreen-700.woff2?v=${ASSET_VERSION}" crossorigin>`
 
 function head(options: ShellOptions): string {
   const url = options.path === undefined ? null : `${SITE_ORIGIN}${options.path}`
@@ -154,9 +166,7 @@ function head(options: ShellOptions): string {
     `<link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt">`,
     PRECONNECT,
     (options.preload ?? []).map((href) => `<link rel="preload" as="image" href="${esc(href)}">`).join(''),
-    options.jsonLd && options.jsonLd.length > 0
-      ? `<script type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', '@graph': options.jsonLd }).replace(/</g, '\\u003c')}</script>`
-      : ''
+    options.jsonLd && options.jsonLd.length > 0 ? jsonLd(options.jsonLd) : ''
   ].join('')
 }
 

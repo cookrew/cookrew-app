@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
+import { rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 /**
@@ -18,6 +19,9 @@ import path from 'node:path'
  */
 
 const KEEP_DAYS = 30
+/** Distinct keys a day may hold, per kind. A stranger cannot grow the file by inventing names. */
+const MAX_KEYS = 500
+const FLUSH_MS = 10_000
 
 interface Day {
   doors: Record<string, { lines: number; calls: number }>
@@ -54,13 +58,16 @@ export class Pulse {
   /** A call carried to a door; a line is the one that opens the caller's terminal. */
   door(name: string, kind: 'line' | 'call'): void {
     const today = this.today()
+    if (!(name in today.doors) && Object.keys(today.doors).length >= MAX_KEYS) return
     const entry = today.doors[name] ?? { lines: 0, calls: 0 }
     today.doors[name] = { lines: entry.lines + (kind === 'line' ? 1 : 0), calls: entry.calls + 1 }
     this.schedule()
   }
 
+  /** Only paths the router resolved are counted — never a raw request line. */
   page(pathname: string): void {
     const today = this.today()
+    if (!(pathname in today.pages) && Object.keys(today.pages).length >= MAX_KEYS) return
     today.pages[pathname] = (today.pages[pathname] ?? 0) + 1
     this.schedule()
   }
@@ -74,10 +81,6 @@ export class Pulse {
     return Object.values(this.today().doors).reduce((n, d) => n + d.lines, 0)
   }
 
-  pagesToday(): Record<string, number> {
-    return { ...this.today().pages }
-  }
-
   private today(): Day {
     const key = new Date(this.now()).toISOString().slice(0, 10)
     const existing = this.days.get(key)
@@ -87,29 +90,39 @@ export class Pulse {
     return fresh
   }
 
-  /** Counts arrive on every request; the file is written at most once a second. */
+  /** Counts arrive on every request; the file is written at most every ten seconds, off the loop. */
   private schedule(): void {
     this.dirty = true
     if (this.flushTimer) return
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null
-      this.flush()
-    }, 1000)
+      void this.flush()
+    }, FLUSH_MS)
     this.flushTimer.unref?.()
   }
 
-  flush(): void {
-    if (!this.dirty) return
+  private writing: Promise<void> | null = null
+
+  /** Written whole and renamed, asynchronously, one write in flight at a time. */
+  flush(): Promise<void> {
+    if (!this.dirty) return this.writing ?? Promise.resolve()
+    if (this.writing) return this.writing.then(() => this.flush())
     this.dirty = false
     const cutoff = new Date(this.now() - KEEP_DAYS * 86_400_000).toISOString().slice(0, 10)
     for (const day of [...this.days.keys()]) if (day < cutoff) this.days.delete(day)
-    try {
-      mkdirSync(path.dirname(this.file), { recursive: true })
-      const tmp = `${this.file}.${process.pid}.tmp`
-      writeFileSync(tmp, JSON.stringify(Object.fromEntries(this.days)), { mode: 0o600 })
-      renameSync(tmp, this.file)
-    } catch {
-      // A count that could not be written is a count lost, never a request failed.
-    }
+    const snapshot = JSON.stringify(Object.fromEntries(this.days))
+    const tmp = `${this.file}.${process.pid}.tmp`
+    this.writing = (async () => {
+      try {
+        mkdirSync(path.dirname(this.file), { recursive: true })
+        await writeFile(tmp, snapshot, { mode: 0o600 })
+        await rename(tmp, this.file)
+      } catch {
+        // A count that could not be written is a count lost, never a request failed.
+      } finally {
+        this.writing = null
+      }
+    })()
+    return this.writing
   }
 }

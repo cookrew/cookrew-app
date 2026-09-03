@@ -337,7 +337,7 @@ describe('the market', () => {
 
 describe('a handle cannot capture a route', () => {
   it('reserves every top-level name the registry answers on', () => {
-    for (const taken of ['v1', 'install', 'api', '.well-known', 'robots.txt', 'market', 'download', 'assets', 'features', 'start', 'llms.txt']) {
+    for (const taken of ['v1', 'install', 'api', '.well-known', 'robots.txt', 'market', 'download', 'assets', 'features', 'start']) {
       expect(RESERVED_HANDLES.has(taken), taken).toBe(true)
     }
   })

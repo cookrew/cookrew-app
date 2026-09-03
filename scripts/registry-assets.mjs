@@ -21,12 +21,17 @@ const FILES = [
   ['addon-fit.js', 'vendor/addon-fit.js.txt', 'text/javascript; charset=utf-8'],
   ['site.js', 'site.js', 'text/javascript; charset=utf-8'],
   ['seal.js', 'seal.js', 'text/javascript; charset=utf-8'],
-  ['line.js', 'line.js', 'text/javascript; charset=utf-8']
+  ['line.js', 'line.js', 'text/javascript; charset=utf-8'],
+  ['inter.woff2', 'fonts/inter.woff2', 'font/woff2', 'base64'],
+  ['jetbrains-mono.woff2', 'fonts/jetbrains-mono.woff2', 'font/woff2', 'base64'],
+  ['silkscreen-400.woff2', 'fonts/silkscreen-400.woff2', 'font/woff2', 'base64'],
+  ['silkscreen-700.woff2', 'fonts/silkscreen-700.woff2', 'font/woff2', 'base64'],
+  ['vt323-400.woff2', 'fonts/vt323-400.woff2', 'font/woff2', 'base64']
 ]
 
-const entries = FILES.map(([name, file, type]) => {
-  const body = readFileSync(path.join(assets, file), 'utf8')
-  return `  ${JSON.stringify(name)}: { type: ${JSON.stringify(type)}, body: ${JSON.stringify(body)} }`
+const entries = FILES.map(([name, file, type, encoding]) => {
+  const body = encoding === 'base64' ? readFileSync(path.join(assets, file)).toString('base64') : readFileSync(path.join(assets, file), 'utf8')
+  return `  ${JSON.stringify(name)}: { type: ${JSON.stringify(type)}, body: ${JSON.stringify(body)}${encoding === 'base64' ? ", encoding: 'base64'" : ''} }`
 })
 
 const version = createHash('sha256').update(entries.join('\n')).digest('hex').slice(0, 12)
@@ -37,6 +42,8 @@ export const ASSET_VERSION = ${JSON.stringify(version)}
 export interface BundledAsset {
   type: string
   body: string
+  /** Binary assets travel as base64; text ones as they are. */
+  encoding?: 'base64'
 }
 
 export const ASSETS: Readonly<Record<string, BundledAsset>> = {

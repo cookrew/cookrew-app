@@ -38,27 +38,40 @@ describe('counting a door', () => {
   })
 })
 
+describe('a stranger cannot grow the file', () => {
+  it('stops taking new keys at the cap, but keeps counting known ones', () => {
+    const pulse = new Pulse(dir)
+    for (let i = 0; i < 600; i++) pulse.page(`/p${i}`)
+    pulse.page('/p0')
+    pulse.door('@x/y', 'line')
+    for (let i = 0; i < 600; i++) pulse.door(`@a/b${i}`, 'call')
+    expect(pulse.doorToday('@x/y')).toEqual({ lines: 1, calls: 1 })
+    expect(pulse.doorToday('@a/b599')).toEqual({ lines: 0, calls: 0 })
+    expect(pulse.linesToday()).toBe(1)
+  })
+})
+
 describe('counting pages', () => {
-  it('per path, per day, and it survives a restart', () => {
+  it('per path, per day, and it survives a restart', async () => {
     const pulse = new Pulse(dir)
     pulse.page('/')
     pulse.page('/')
     pulse.page('/market')
-    pulse.flush()
-    expect(new Pulse(dir).pagesToday()).toEqual({ '/': 2, '/market': 1 })
-    const raw = JSON.parse(readFileSync(path.join(dir, 'pulse.json'), 'utf8')) as Record<string, unknown>
+    await pulse.flush()
+    const raw = JSON.parse(readFileSync(path.join(dir, 'pulse.json'), 'utf8')) as Record<string, { pages: Record<string, number> }>
     expect(Object.keys(raw)).toHaveLength(1)
+    expect(Object.values(raw)[0].pages).toEqual({ '/': 2, '/market': 1 })
     expect(JSON.stringify(raw)).not.toMatch(/cookie|token|sub/)
   })
 
-  it('drops days older than thirty on write', () => {
+  it('drops days older than thirty on write', async () => {
     let now = Date.UTC(2026, 6, 1)
     const pulse = new Pulse(dir, () => now)
     pulse.page('/old')
-    pulse.flush()
+    await pulse.flush()
     now = Date.UTC(2026, 8, 3)
     pulse.page('/new')
-    pulse.flush()
+    await pulse.flush()
     const raw = JSON.parse(readFileSync(path.join(dir, 'pulse.json'), 'utf8')) as Record<string, unknown>
     expect(Object.keys(raw)).toEqual(['2026-09-03'])
   })

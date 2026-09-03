@@ -1,6 +1,6 @@
 import { esc, page, type Page } from './site-shell'
 import { RELEASES_PAGE, pickAsset, type Release } from './releases'
-import { DEFINITION, FACTS, GITHUB_REPO } from './site-content'
+import { DEFINITION, FACTS, GITHUB_REPO, START_FAQ, START_HOWTO as HOWTO } from './site-content'
 import { breadcrumbs, faqPage, organization, webPage } from './site-seo'
 
 /**
@@ -10,21 +10,6 @@ import { breadcrumbs, faqPage, organization, webPage } from './site-seo'
  * doing, and doing needs an install. An app page, because the builder is a
  * few lines of script; everything else on it is plain HTML.
  */
-
-const HOWTO = [
-  { name: 'Install Cookrew', text: 'Download the build for your platform, or clone the repository and run npm install && npm run dev. Cookrew needs Node 20 or newer and tmux or herdr to host terminals.' },
-  { name: 'Place your first agent', text: 'Pick a preset in the dock — Claude Code, Codex, OpenCode, Pi or Shell — and click the canvas. The teammate boots in its own terminal and the card opens.' },
-  { name: 'Recruit a crew from the CLI', text: 'From any terminal: cookrew recruit "Forge" --preset "Claude Code" --role "builder", then cookrew connect to wire teammates, and cookrew orch to name the door.' },
-  { name: 'Ask, and read the reply', text: 'cookrew ask "Forge" "…" waits for the turn to end and returns the reply; cookrew status reports thinking, waiting, replied or idle. Every turn lands on the card’s rail as a checkpoint.' },
-  { name: 'Save the team', text: 'cookrew team save "MY CREW" snapshots nodes, wires and turn histories. cookrew workspace create "New project" --team "MY CREW" puts the formation to work in a new directory.' },
-  { name: 'Serve it, or open someone’s', text: 'SERVE lists a saved team at cookrew.dev/@you/team; anyone with the link opens a sandboxed session from a browser or the app. Or paste an address into Import a team, or click Open in Cookrew on a team page.' }
-]
-
-const START_FAQ = [
-  { q: 'What do I need before installing Cookrew?', a: 'A Mac with Apple Silicon or Windows (preview), Node 20+ if you build from source, tmux or herdr to host terminals, and the agent CLIs you want to run (Claude Code, Codex, OpenCode, Pi) with their own logins.' },
-  { q: 'Do I need an account to use Cookrew?', a: 'No. The app runs entirely on your machine. A cookrew.dev account is needed only to serve a team on the marketplace or to open someone else’s.' },
-  { q: 'How do I open a team someone shared?', a: 'Click Open in Cookrew on its team page, or paste the address (cookrew.dev/@handle/team) into Cookrew → Import a team. The app shows the team’s face and asks before placing the card.' }
-]
 
 export function startPage(release: Release | null): Page {
   const mac = release ? pickAsset(release, 'mac') : null

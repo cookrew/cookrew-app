@@ -13,16 +13,12 @@ import type { PaymentFailure } from './payment'
 import { DoorStore, doorPath, type DoorInput, type DoorRecord } from './doors'
 import { createRelayHttp, type RelayHttp } from './relay-http'
 import { RESERVED_HANDLES, handlePage, homePage, marketPage, marketQuery, teamPage } from './site'
-import { featurePage, featuresIndexPage } from './site-features'
-import { startPage } from './site-start'
-import { FAVICON_SVG, robotsTxt, sitemapXml, webManifest } from './site-seo'
-import { llmsText } from './site-content'
+import { handleSiteRoute } from './site-routes'
 import type { Pulse } from './pulse'
 import type { CommitsCache } from './github-commits'
 import { respondPage } from './site-shell'
-import { serveAsset } from './assets'
 import type { StarStore } from './stars'
-import { RELEASES_PAGE, pickAsset, type Release, type ReleaseCache } from './releases'
+import type { Release, ReleaseCache } from './releases'
 
 /**
  * REGISTRY SERVER (P2-A1) — routes only. Every answer is chosen by a decision
@@ -162,8 +158,10 @@ export function createRegistry(deps: RegistryDeps): Server {
     ? createRelayHttp({
         identity: deps.identity,
         log: deps.note,
-        onCall: (name, method, path) =>
-          deps.pulse?.door(name, method === 'GET' && (path === '/line' || path.startsWith('/line?')) ? 'line' : 'call')
+        onAnswer: (name, method, path, status) => {
+          if (status >= 400) return
+          deps.pulse?.door(name, method === 'GET' && status === 200 && (path === '/line' || path.startsWith('/line?')) ? 'line' : 'call')
+        }
       })
     : null
 
@@ -193,11 +191,6 @@ export function createRegistry(deps: RegistryDeps): Server {
   })
   const pulseOf = (handle: string, name: string): { lines: number; calls: number } =>
     deps.pulse?.doorToday(`@${handle}/${name}`) ?? { lines: 0, calls: 0 }
-  const text = (response: ServerResponse, type: string, body: string, cache = 3600): void => {
-    const payload = Buffer.from(body, 'utf8')
-    response.writeHead(200, { 'content-type': type, 'content-length': String(payload.byteLength), 'cache-control': `public, max-age=${cache}`, 'x-content-type-options': 'nosniff' })
-    response.end(payload)
-  }
 
   // NO REQUEST TIMEOUT. Node's default (300s) sends 408 to any request whose
   // body has not finished — and a door's uplink is a POST whose body never
@@ -686,57 +679,22 @@ export function createRegistry(deps: RegistryDeps): Server {
       return
     }
 
-    // ── THE CRAWL FILES — what a machine reads first ──────────────────────
-    if (method === 'GET' && parts.length === 1) {
-      if (parts[0] === 'robots.txt') return text(response, 'text/plain; charset=utf-8', robotsTxt())
-      if (parts[0] === 'sitemap.xml') return text(response, 'application/xml; charset=utf-8', sitemapXml((deps.doors?.list() ?? []).map(withLive)), 600)
-      if (parts[0] === 'llms.txt') return text(response, 'text/plain; charset=utf-8', llmsText())
-      if (parts[0] === 'favicon.svg') return text(response, 'image/svg+xml', FAVICON_SVG, 86400)
-      if (parts[0] === 'favicon.ico') {
-        response.writeHead(302, { location: '/favicon.svg', 'cache-control': 'public, max-age=86400' })
-        response.end()
-        return
-      }
-      if (parts[0] === 'site.webmanifest') return text(response, 'application/manifest+json', webManifest(), 86400)
-    }
-    // ── FEATURES and START — the long tail, and the first ten minutes ─────
-    if (method === 'GET' && parts[0] === 'features' && parts.length <= 2) {
-      deps.pulse?.page(url.pathname)
-      if (parts.length === 1) return respondPage(response, featuresIndexPage())
-      const rendered = featurePage(decode(parts[1]) ?? '')
-      if (rendered) return respondPage(response, rendered)
-      json(response, 404, { error: 'not_found' })
+    // ── THE SITE'S OWN ROUTES — crawl files, features, start, assets, /download ──
+    if (
+      handleSiteRoute({
+        method,
+        parts,
+        url,
+        request,
+        response,
+        decode,
+        doors: () => (deps.doors?.list() ?? []).map(withLive),
+        release: () => (deps.releases?.latest() ?? Promise.resolve<Release | null>(null)).catch(() => null),
+        pulse: deps.pulse,
+        note: deps.note
+      })
+    )
       return
-    }
-    if (method === 'GET' && parts.length === 1 && parts[0] === 'start') {
-      deps.pulse?.page('/start')
-      void (deps.releases?.latest() ?? Promise.resolve<Release | null>(null))
-        .catch(() => null)
-        .then((release) => respondPage(response, startPage(release)))
-      return
-    }
-
-    // ── STATIC ASSETS and /download — named, never walked ─────────────────
-    if (method === 'GET' && parts.length === 2 && parts[0] === 'assets') {
-      if (serveAsset(response, parts[1])) return
-      json(response, 404, { error: 'not_found' })
-      return
-    }
-    // GET /download[?platform=mac|windows] — the current build for the reader's
-    // platform, or the release page when there is no build for it (or GitHub
-    // has not answered yet). A redirect, so the link people share is ours and
-    // keeps working when the version moves on.
-    if (method === 'GET' && parts.length === 1 && parts[0] === 'download') {
-      void (deps.releases?.latest() ?? Promise.resolve<Release | null>(null))
-        .catch(() => null)
-        .then((release) => {
-          const platform = url.searchParams.get('platform') ?? request.headers['user-agent'] ?? ''
-          const asset = release ? pickAsset(release, platform) : null
-          response.writeHead(302, { location: asset?.url ?? release?.url ?? RELEASES_PAGE, 'cache-control': 'no-store' })
-          response.end()
-        })
-      return
-    }
 
     // ── THE PUBLIC FACE, last ────────────────────────────────────────────
     //
@@ -755,19 +713,24 @@ export function createRegistry(deps: RegistryDeps): Server {
         void Promise.all([
           (deps.releases?.latest() ?? Promise.resolve<Release | null>(null)).catch(() => null),
           (deps.commits?.latest() ?? Promise.resolve(null)).catch(() => null)
-        ]).then(([release, commits]) => {
-          respondPage(
-            response,
-            homePage({
-              doors: site.list().map(withLive),
-              release,
-              stars: starsOf,
-              pulse: pulseOf,
-              linesToday: deps.pulse?.linesToday() ?? 0,
-              commits
-            })
-          )
-        })
+        ])
+          .then(([release, commits]) => {
+            respondPage(
+              response,
+              homePage({
+                doors: site.list().map(withLive),
+                release,
+                stars: starsOf,
+                pulse: pulseOf,
+                linesToday: deps.pulse?.linesToday() ?? 0,
+                commits
+              })
+            )
+          })
+          .catch((error: unknown) => {
+            deps.note?.(`render failed: ${error instanceof Error ? error.message : String(error)}`)
+            if (!response.headersSent) json(response, 500, { error: 'server' })
+          })
         return
       }
       if (parts.length === 1 && parts[0] === 'market') {

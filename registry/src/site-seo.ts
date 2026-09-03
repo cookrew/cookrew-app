@@ -1,6 +1,6 @@
 import type { ListedDoor } from './site'
 import type { Release } from './releases'
-import { DEFINITION, FACTS, FAQ, FEATURES, GITHUB_REPO, SITE_NAME, SITE_ORIGIN, type Faq } from './site-content'
+import { DEFINITION, FACTS, FEATURES, GITHUB_REPO, SITE_NAME, SITE_ORIGIN, type Faq } from './site-content'
 
 /**
  * WHAT A MACHINE READS — structured data and the crawl files.
@@ -107,8 +107,9 @@ export function teamProduct(door: ListedDoor, stars: number): Record<string, unk
       availability: door.live === false ? 'https://schema.org/OutOfStock' : 'https://schema.org/InStock',
       seller: { '@type': 'Person', name: `@${door.handle}`, url: `${SITE_ORIGIN}/${door.handle}` }
     },
+    // Stars are a count of likes, said as one — never a rating nobody gave.
     ...(stars > 0
-      ? { aggregateRating: { '@type': 'AggregateRating', ratingValue: 5, bestRating: 5, ratingCount: stars } }
+      ? { interactionStatistic: { '@type': 'InteractionCounter', interactionType: 'https://schema.org/LikeAction', userInteractionCount: stars } }
       : {})
   }
 }
@@ -146,8 +147,11 @@ export interface SitemapEntry {
   priority?: number
 }
 
-export function sitemapXml(doors: readonly ListedDoor[]): string {
-  const iso = (ms: number): string => new Date(ms).toISOString().slice(0, 10)
+/** A sitemap file holds at most 50,000 URLs; this one stops well short. */
+const SITEMAP_MAX = 5000
+
+export function sitemapXml(allDoors: readonly ListedDoor[]): string {
+  const doors = allDoors.slice(0, SITEMAP_MAX)
   const handles = [...new Set(doors.map((d) => d.handle))]
   const entries: SitemapEntry[] = [
     { path: '/', priority: 1 },
@@ -156,7 +160,9 @@ export function sitemapXml(doors: readonly ListedDoor[]): string {
     { path: '/features', priority: 0.7 },
     ...FEATURES.map((f) => ({ path: `/features/${f.slug}`, priority: 0.7 })),
     ...handles.map((h) => ({ path: `/${h}`, priority: 0.5 })),
-    ...doors.map((d) => ({ path: `/${d.handle}/${d.name}`, lastmod: iso(d.seenAt), priority: 0.8 }))
+    // No lastmod on a team: its heartbeat is not a change, and a date that
+    // moves every minute tells a crawler nothing.
+    ...doors.map((d) => ({ path: `/${d.handle}/${d.name}`, priority: 0.8 }))
   ]
   const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
   return [
@@ -187,5 +193,3 @@ export function webManifest(): string {
   })
 }
 
-/** The FAQ every page may reuse, so an engine sees one set of answers. */
-export const SITE_FAQ = FAQ
