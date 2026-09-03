@@ -1,5 +1,5 @@
 import { AuthError, authStore, tokenParam, type AuthScope } from './auth-gate'
-import { ReconnectingStream } from './live-stream'
+import { ReconnectingStream, attachTerminalStream } from './live-stream'
 import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
@@ -267,16 +267,25 @@ export function createRemoteApi(): CookrewApi {
     ptyResize: (terminalId, cols, rows) =>
       post(apiPath(`/api/terminal/${terminalId}/resize`), { cols, rows }),
     ptyAttach: (terminalId, onData, onHello) => {
-      const stream = new EventSource(tokenParam(apiPath(`/api/terminal/${terminalId}/stream`)))
-      const listener = (e: MessageEvent): void => onData(JSON.parse(e.data) as string)
-      // The server sends this before the first frame; sizing the xterm from it
-      // is what keeps a 45x24 phone from re-wrapping a frame serialized at the
-      // pane's 100x30 and then misplacing every absolute-addressed delta.
-      const helloListener = (e: MessageEvent): void =>
-        onHello?.(JSON.parse(e.data) as { cols: number; rows: number })
-      stream.addEventListener('hello', helloListener)
-      stream.addEventListener('data', listener)
-      return () => stream.close()
+      // Healing, not hoping — see attachTerminalStream for why a bare
+      // EventSource left the live pane black on the first open of an idle
+      // card. iOS also reaps a backgrounded page's connections and leaves the
+      // corpse in CONNECTING, which the backoff deliberately leaves alone —
+      // so a foreground return revives the link the way the canvas stream's
+      // resync does.
+      const stream = attachTerminalStream(
+        { open: () => new EventSource(tokenParam(apiPath(`/api/terminal/${terminalId}/stream`))) },
+        onData,
+        onHello
+      )
+      const onVisible = (): void => {
+        if (document.visibilityState === 'visible') stream.revive()
+      }
+      document.addEventListener('visibilitychange', onVisible)
+      return () => {
+        document.removeEventListener('visibilitychange', onVisible)
+        stream.close()
+      }
     },
 
     listActivity: () => req<TerminalActivity[]>(apiPath('/api/activity')),

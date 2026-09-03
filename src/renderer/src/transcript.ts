@@ -667,6 +667,23 @@ export function isAtBottom(scrollTop: number, scrollHeight: number, clientHeight
 }
 
 /**
+ * Should the pin-keeper re-stick the bottom? Growth the React effects cannot
+ * see (a content-visibility block rendering to its real height, the live seam
+ * growing under an xterm fit, placeholders inserted above the viewport) opens
+ * a gap while the reader is still notionally pinned. Shares isAtBottom's
+ * slack so a reader resting a few px off the bottom is never snapped.
+ * Pure — unit-tested.
+ */
+export function shouldStick(
+  pinned: boolean,
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number
+): boolean {
+  return pinned && !isAtBottom(scrollTop, scrollHeight, clientHeight)
+}
+
+/**
  * Rail drag → fraction (unified-scroll item 4): where a pointer sits along the
  * rail track as a fraction (0 top → 1 bottom). The track is the rail height
  * minus an equal inset top and bottom (the marker's own padding), so a drag to

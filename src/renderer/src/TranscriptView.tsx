@@ -17,6 +17,7 @@ import {
   fractionOfIdentity,
   identityAtFraction,
   isAtBottom,
+  shouldStick,
   jumpScrollBehavior,
   mergeTrace,
   pruneToTotal,
@@ -431,6 +432,13 @@ export const TranscriptView = forwardRef<
   const scrollToTarget = useCallback((index: number, behavior: 'auto' | 'smooth'): boolean => {
     const node = blockRefs.current.get(index)
     if (!node) return false
+    // The pin is dropped AT the jump, not one frame later in onScroll's rAF:
+    // the pin-keeper's MutationObserver stick() is a microtask and its
+    // ResizeObserver stick() beats the scroll event, so a stale-true pin
+    // would re-write scrollTop to the bottom and eat this jump (measured —
+    // the tap silently reverted to the live tail). onScroll re-derives the
+    // truth a frame later, so a jump that lands at the bottom re-pins.
+    pinnedRef.current = false
     node.scrollIntoView({ block: 'start', behavior })
     return true
   }, [])
@@ -543,6 +551,44 @@ export const TranscriptView = forwardRef<
     const el = scrollRef.current
     if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
   }, [blocks, total, estHeight])
+
+  // The pin, ENFORCED. The effect above fires only when React knows the
+  // content changed; on the phone the scroller grows behind React's back —
+  // a content-visibility block renders and its 88px intrinsic estimate
+  // becomes hundreds of real ones, the live seam grows as the xterm fit
+  // settles, the trace index inserts placeholders above the viewport.
+  // Chromium's scroll anchoring absorbed all of that on desktop; WebKit
+  // implements none of it, so an open on the phone landed mid-history with
+  // the pin still notionally set. While pinned, any child that resizes or
+  // mounts re-sticks the bottom; the moment the reader scrolls away,
+  // onScroll drops the pin and this goes quiet.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || typeof ResizeObserver !== 'function') return
+    const stick = (): void => {
+      if (shouldStick(pinnedRef.current, el.scrollTop, el.scrollHeight, el.clientHeight)) {
+        el.scrollTop = el.scrollHeight
+      }
+    }
+    const ro = new ResizeObserver(stick)
+    for (const child of Array.from(el.children)) ro.observe(child)
+    const mo = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of Array.from(record.addedNodes)) {
+          if (node instanceof Element) ro.observe(node)
+        }
+        for (const node of Array.from(record.removedNodes)) {
+          if (node instanceof Element) ro.unobserve(node)
+        }
+      }
+      stick()
+    })
+    mo.observe(el, { childList: true })
+    return () => {
+      mo.disconnect()
+      ro.disconnect()
+    }
+  }, [])
 
   return (
     <div className="ctx-transcript" ref={scrollRef} onScroll={onScroll}>

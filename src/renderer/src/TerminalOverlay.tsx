@@ -493,7 +493,22 @@ function TerminalOverlay({
     // xterm measures cell width once at open(). If the webfont swaps in
     // afterwards, rendered glyph width no longer matches the measured cell
     // and every row drifts — so the font must be resolved before open().
-    const fontReady = document.fonts.load('13px "JetBrains Mono"').catch(() => undefined)
+    // Resolved, or GIVEN UP ON: the font file comes from Google's CDN, and a
+    // phone whose cached stylesheet names the face but whose woff2 fetch
+    // hangs (tailnet up, internet down) leaves fonts.load() pending forever
+    // (pending, not rejected — the catch never fires), which held term.open
+    // AND ptyAttach hostage: a black live pane with no error anywhere. Past
+    // the budget the fallback mono opens the terminal. ACCEPTED trade: with
+    // display=swap the real face can still land later and drift the grid
+    // until the next fit — a drifted terminal beats no terminal.
+    let fontTimer: ReturnType<typeof setTimeout> | undefined
+    const fontReady = Promise.race([
+      document.fonts.load('13px "JetBrains Mono"').catch(() => undefined),
+      new Promise((resolve) => {
+        fontTimer = setTimeout(resolve, 1500)
+      })
+    ])
+    cleanups.push(() => clearTimeout(fontTimer))
 
     void fontReady.then(() => {
       if (disposed) return
