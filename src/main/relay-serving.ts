@@ -47,6 +47,43 @@ export interface ServeThroughRelay {
     access: 'account' | 'paid'
     priceUsd?: string
     rails: readonly ('x402' | 'stripe')[]
+    /** The owner's words and the harness names — see served-face.ts. */
+    summary?: string
+    tags?: readonly string[]
+    harnesses?: readonly string[]
+  }
+}
+
+/** The door record a registration POSTs — see registry/src/doors.ts `DoorInput`. */
+export type DoorRegistration = Record<string, unknown>
+
+/**
+ * THE REGISTRATION BODY, pure. Optional face words are present when given and
+ * ABSENT otherwise — an empty summary or an empty list is not a face the owner
+ * wrote, and the registry would refuse or show it as one.
+ */
+export function doorRegistration(
+  input: ServeThroughRelay,
+  where: { address: string; sealKey: string }
+): DoorRegistration {
+  const { face } = input
+  return {
+    handle: input.handle,
+    name: input.team,
+    title: face.title,
+    door: face.door,
+    agents: face.agents,
+    address: where.address,
+    transport: 'relay',
+    access: face.access,
+    ...(face.priceUsd !== undefined ? { priceUsd: face.priceUsd } : {}),
+    rails: [...face.rails],
+    sealKey: where.sealKey,
+    ...(face.summary !== undefined ? { summary: face.summary } : {}),
+    ...(face.tags !== undefined && face.tags.length > 0 ? { tags: [...face.tags] } : {}),
+    ...(face.harnesses !== undefined && face.harnesses.length > 0
+      ? { harnesses: [...face.harnesses] }
+      : {})
   }
 }
 
@@ -323,19 +360,7 @@ async function list(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       assertion: account.assert(challenge),
-      door: {
-        handle: input.handle,
-        name: input.team,
-        title: input.face.title,
-        door: input.face.door,
-        agents: input.face.agents,
-        address: where.address,
-        transport: 'relay',
-        access: input.face.access,
-        ...(input.face.priceUsd !== undefined ? { priceUsd: input.face.priceUsd } : {}),
-        rails: [...input.face.rails],
-        sealKey: where.sealKey
-      }
+      door: doorRegistration(input, where)
     })
   })
   return registered.ok

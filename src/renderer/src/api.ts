@@ -1,3 +1,4 @@
+import type { DeepLink } from '../../shared/deep-link'
 import type { TranslateResult } from '../../shared/translate'
 import type {
   AgentRole,
@@ -113,6 +114,9 @@ export interface CookrewApi {
     templateId: string;
     access: 'account' | 'paid';
     priceUsd?: string;
+    /** The face's words — see shared/served-face-shape.ts for the bounds. */
+    summary?: string;
+    tags?: readonly string[];
   }) => Promise<
     | { ok: true; serviceId: string; slug: string; address: string }
     | { ok: false; reason: string }
@@ -448,6 +452,11 @@ export interface CookrewApi {
   onBrowserPhoneViewing: (cb: (browserId: string) => void) => () => void;
   /** Main routes ⌘W here so the renderer can close the topmost layer first. */
   onCmdW: (cb: () => void) => () => void;
+  /**
+   * A `cookrew://` link the OS handed to the app, already parsed by main —
+   * one of three verbs, never a raw URL (shared/deep-link.ts).
+   */
+  onDeepLink: (cb: (link: DeepLink) => void) => () => void;
   /**
    * Open a WEB URL in the system's default browser. Desktop bridge only —
    * the phone/demo fallbacks render a real anchor instead (see OpenExternal:

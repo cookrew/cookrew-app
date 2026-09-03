@@ -1,7 +1,8 @@
 import { validateCallPrompt } from './call-prompt'
 import { safeCallReply } from './call-reply'
 import type { ServedTemplate } from './session-served'
-import type { ServedCallers } from './served-callers'
+import { ACCOUNT_SUB_PREFIX, type ServedCallers } from './served-callers'
+import type { RegistryTokenVerifier } from './registry-token'
 import { pageTurns, type TurnPageRequest, type TurnRecord } from '../shared/turn'
 import type {
   TraceBoundaryMarker,
@@ -80,6 +81,14 @@ export interface ServedEndpointDeps {
     verifyToken(token: string): { sub: string; workspace: string } | null
   }
   callers: ServedCallers
+  /**
+   * THE DOOR'S PUBLISHED NAME — `@handle/team` — or null when this door is
+   * not on the relay. A registry token is minted for exactly one name, so a
+   * door without one has nothing a token could be for and refuses them all.
+   */
+  doorName?(template: ServedTemplate): string | null
+  /** Sign-in with a cookrew.dev token; absent means the door takes keys only. */
+  registryTokens?: RegistryTokenVerifier
   admit(serviceId: string, sub: string): Promise<{ workspaceId: string; sessionId: string; created: boolean }>
   /** Does this account hold an OPEN session? Open = already paid for. */
   hasOpenSession(serviceId: string, sub: string): boolean
@@ -283,6 +292,8 @@ export async function handleServedRoute(
   }
 
   if (method === 'POST' && pathname === '/api/call/assert') {
+    const body = (input.body ?? {}) as Record<string, unknown>
+    if ('registryToken' in body) return registryAssert(deps, template, body)
     const result = deps.callers.assert(
       serviceId,
       (input.body ?? {}) as Record<string, unknown>,
@@ -314,6 +325,32 @@ export async function handleServedRoute(
   }
 
   return null
+}
+
+/**
+ * The second sign-in: a registry token, no key. The body is that ONE field —
+ * a token beside a sub or a challenge is two claims about who is knocking,
+ * and a gate that picked one would be choosing which story to believe.
+ * The seated sub is `acct-<handle>`, the namespace served-callers refuses to
+ * the key path, so a registry caller and a key caller can never share a
+ * session directory.
+ */
+async function registryAssert(
+  deps: ServedEndpointDeps,
+  template: ServedTemplate,
+  body: Record<string, unknown>
+): Promise<ServedResponse> {
+  const token = body.registryToken
+  const name = deps.doorName?.(template) ?? null
+  if (Object.keys(body).length !== 1 || typeof token !== 'string' || name === null) {
+    return json(401, {})
+  }
+  const verified = (await deps.registryTokens?.verify(token, name)) ?? null
+  if (verified === null) return json(401, {})
+  return json(200, {
+    ok: true,
+    token: deps.issuer.mint(`${ACCOUNT_SUB_PREFIX}${verified.sub}`, template.serviceId)
+  })
 }
 
 export type CallerClaims = { sub: string; workspace: string }

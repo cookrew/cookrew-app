@@ -18,9 +18,18 @@ import './grant-surface.css'
  */
 export function ImportServedSheet({
   onClose,
-  onImported
+  onImported,
+  prefill
 }: {
   onClose: () => void
+  /**
+   * An address that arrived by LINK (`cookrew://import/@handle/team`, or the
+   * team's page on cookrew.dev). It fills the field and is looked up at once —
+   * the same two steps a person would take — and nothing more: the face is
+   * shown and the sheet still asks before a card is placed. A link is a
+   * shortcut to the question, never past it.
+   */
+  prefill?: string
   /**
    * The card that was placed, so the canvas can go and show it.
    *
@@ -30,7 +39,7 @@ export function ImportServedSheet({
    */
   onImported: (placed?: { id: string; position: { x: number; y: number }; size?: { width: number; height: number } }) => void
 }): React.JSX.Element {
-  const [link, setLink] = useState('')
+  const [link, setLink] = useState(prefill ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [preview, setPreview] = useState<ServeFacePreview | null>(null)
@@ -100,6 +109,16 @@ export function ImportServedSheet({
         setError('Something went wrong on this side. Try again.')
       })
   }
+
+  // Looked up ONCE, on mount, when the address came by link. `lookUp` reads
+  // the field state, which was seeded above; nothing here re-fires it.
+  const lookedUpPrefill = useRef(false)
+  useEffect(() => {
+    if (!prefill || lookedUpPrefill.current) return
+    lookedUpPrefill.current = true
+    lookUp()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   /** Chose a team from an owner's list: fill the field and read its face. */
   const choose = (team: BrowsedTeam): void => {

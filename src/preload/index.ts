@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
+let deepLinkSubscriber: ((link: unknown) => void) | null = null
+let heldDeepLinks: readonly unknown[] = []
+ipcRenderer.on('app:deep-link', (_e, link: unknown) => {
+  if (deepLinkSubscriber) deepLinkSubscriber(link)
+  else heldDeepLinks = [...heldDeepLinks, link]
+})
+
 const api = {
   getWorkspace: () => ipcRenderer.invoke('workspace:get'),
   // The owner's grant surface. Main refuses any sender that is not the owner
@@ -51,8 +58,13 @@ const api = {
     ipcRenderer.invoke('template:import', team, position),
 
   // ── R30 share-on-save (export side) ──
-  servingServe: (input: { templateId: string; access: 'account' | 'paid'; priceUsd?: string }) =>
-    ipcRenderer.invoke('serving:serve', input),
+  servingServe: (input: {
+    templateId: string
+    access: 'account' | 'paid'
+    priceUsd?: string
+    summary?: string
+    tags?: readonly string[]
+  }) => ipcRenderer.invoke('serving:serve', input),
   servingStop: (serviceId: string) => ipcRenderer.invoke('serving:stop', serviceId),
   servingPaymentStatus: () => ipcRenderer.invoke('serving:payment-status'),
   servingSetPayTo: (payTo: string) => ipcRenderer.invoke('serving:payment-pay-to', payTo),
@@ -233,6 +245,20 @@ const api = {
     return () => ipcRenderer.removeListener('app:cmd-w', listener)
   },
   quitApp: () => ipcRenderer.send('app:quit'),
+  // A `cookrew://` link, already parsed by main (src/main/deep-link.ts) —
+  // the renderer only ever sees one of the three verbs, never a raw URL.
+  // Held here until App subscribes: main sends on did-finish-load, and React's
+  // effects can run a beat after that, so a link the app was LAUNCHED with
+  // would otherwise land on nobody.
+  onDeepLink: (cb: (link: unknown) => void) => {
+    deepLinkSubscriber = cb
+    const held = heldDeepLinks
+    heldDeepLinks = []
+    held.forEach(cb)
+    return () => {
+      if (deepLinkSubscriber === cb) deepLinkSubscriber = null
+    }
+  },
   onBrowserOpenTab: (cb: (req: { webContentsId: number; url: string }) => void) => {
     const listener = (_e: unknown, req: { webContentsId: number; url: string }): void => cb(req)
     ipcRenderer.on('browser:open-tab', listener)

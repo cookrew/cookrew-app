@@ -35,6 +35,15 @@ export type ServedAssertFailure = 'malformed' | 'unknown_challenge' | 'bad_signa
  */
 export const SAFE_SUB = /^[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?$/
 
+/**
+ * THE ACCOUNT NAMESPACE. A caller who signed in with a cookrew.dev token
+ * (registry-token.ts) is seated as `acct-<handle>`; a key-based sign-in may
+ * never claim a sub with this prefix, so the two kinds of caller cannot
+ * collapse onto one session directory — 'acct-ana' the key-holder and
+ * @ana the account would otherwise share a sandbox and evict each other.
+ */
+export const ACCOUNT_SUB_PREFIX = 'acct-'
+
 export class ServedCallers {
   /** serviceId → sub → jwk. In-memory M1; persistence rides the accounts work. */
   private readonly byService = new Map<string, Map<string, Record<string, unknown>>>()
@@ -73,6 +82,7 @@ export class ServedCallers {
     // subs that survive safeSegment unchanged makes the raw id and the segment
     // one value, so distinct accounts cannot collapse into one path.
     if (!SAFE_SUB.test(input.sub)) return { ok: false, reason: 'malformed' }
+    if (input.sub.startsWith(ACCOUNT_SUB_PREFIX)) return { ok: false, reason: 'malformed' }
     if (!consumeChallenge(input.challenge)) return { ok: false, reason: 'unknown_challenge' }
 
     const known = this.keyOf(serviceId, input.sub)
