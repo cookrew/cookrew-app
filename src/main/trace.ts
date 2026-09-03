@@ -62,6 +62,71 @@ const READ_CHUNK_BYTES = 256 * 1024
 /** M8: cap on per-file memoized trace state (block cache + segmentMemo). */
 const TRACE_FILE_MEMO_CAP = 128
 
+/**
+ * M8b: byte budget across cached files. A CacheEntry retains the parsed
+ * LINES of the whole file (the parsers re-run over them on every append —
+ * incremental I/O, not incremental parse), so its heap cost scales with FILE
+ * bytes — and session files run to 90MB. A count cap alone let a reader who
+ * browsed a dozen heavyweight transcripts pin gigabytes that nothing
+ * released: the "application memory" exhaustion. bytesRead is the honest
+ * proxy for what an entry retains.
+ */
+const TRACE_MEMO_BYTE_BUDGET = 256 * 1024 * 1024
+/**
+ * The newest entries always survive the budget. NOTE the honest bound: this
+ * floor is unconditional, so worst-case retention is
+ * max(TRACE_MEMO_BYTE_BUDGET, keepNewest × largest file) of FILE bytes —
+ * and heap is a multiple of that (lines are UTF-16, blocks ride along).
+ * The budget binds in the typical case; the floor exists because evicting a
+ * live polled file would turn every rail tick into a full re-read of the
+ * biggest file on the machine, the exact O(n²) this cache prevents.
+ */
+const TRACE_MEMO_KEEP_NEWEST = 8
+/**
+ * The anti-thrash guard. Round-robin polling is precisely anti-LRU: with a
+ * polled set over budget, reading f0 evicts f1..fk — the files the SAME
+ * tick is about to poll — and every poll becomes a full re-read (measured
+ * in review: 20×30MB files, 100 full reads in 5 ticks, zero cache hits).
+ * An entry touched within this window is not an eviction candidate; the
+ * budget goes soft (an overrun) instead of converting into main-process
+ * stalls, and browsed-then-abandoned transcripts still age out.
+ */
+const TRACE_MEMO_MIN_RESIDENCY_MS = 10_000
+
+export interface MemoEvictionPolicy {
+  maxCount: number
+  maxBytes: number
+  keepNewest: number
+}
+
+/**
+ * Evict oldest-first (Map insertion order is the recency order — setters
+ * refresh by delete+set) until the map fits both the count cap and the byte
+ * budget, but never below keepNewest entries and never past a pinned entry:
+ * order IS recency, so a pinned oldest means everything newer is pinned
+ * harder — stop and accept the overrun. Pure — unit-tested.
+ */
+export function evictOverBudget<V>(
+  map: Map<string, V>,
+  sizeOf: (value: V) => number,
+  policy: MemoEvictionPolicy,
+  pinned?: (value: V) => boolean
+): void {
+  let total = 0
+  for (const value of map.values()) total += sizeOf(value)
+  while (
+    (map.size > policy.maxCount || total > policy.maxBytes) &&
+    map.size > policy.keepNewest
+  ) {
+    const oldest = map.keys().next()
+    if (oldest.done === true) break
+    const value = map.get(oldest.value) as V
+    if (pinned?.(value) === true) break
+    total -= sizeOf(value)
+    map.delete(oldest.value)
+  }
+}
+
 /** Async chunked read of [start, start+length) — never the whole file at once. */
 async function readWindow(file: string, start: number, length: number): Promise<Buffer> {
   const handle = await open(file, 'r')
@@ -88,6 +153,8 @@ interface CacheEntry {
   file: string
   /** Bytes consumed from the file (complete + partial lines). */
   bytesRead: number
+  /** Last read or ingest — the min-residency eviction pin reads this. */
+  touchedAt: number
   /** Trailing partial line, kept as BYTES so multibyte chars never tear. */
   remainder: Buffer
   lines: string[]
@@ -147,7 +214,11 @@ export class TraceReader {
     const blocks = await this.blocksOf(file, kind)
     const memo = this.indexCache.get(terminalId)
     const entries = memo && memo.blocks === blocks ? memo.entries : traceIndexOf(blocks)
-    if (!memo || memo.blocks !== blocks) this.indexCache.set(terminalId, { blocks, entries })
+    // cappedSet, not a bare set: this map held blocks for every terminal
+    // ever indexed and was the one memo M8 forgot to bound.
+    if (!memo || memo.blocks !== blocks) {
+      TraceReader.cappedSet(this.indexCache, terminalId, { blocks, entries })
+    }
     const afterIndex = request.afterIndex
     return afterIndex === undefined ? entries : entries.filter((entry) => entry.index > afterIndex)
   }
@@ -308,19 +379,36 @@ export class TraceReader {
    *  repeat calls within one poll are cache hits. */
   private segmentMemo = new Map<string, { blocks: TraceBlock[]; refs: { index: number; id: string }[]; markers: TraceBoundaryMarker[] }>()
 
-  /** M8: both per-file maps (block cache + segmentMemo) are insertion-order
-   *  capped — otherwise they grew one entry per session file for the whole
-   *  process lifetime. FIFO suffices: a polled LIVE file is re-touched
-   *  constantly so it never reaches the eviction tail; an evicted file just
-   *  re-reads fully once on next access, then goes incremental again. */
+  /** M8: the per-file memo maps are insertion-order capped — otherwise they
+   *  grew one entry per session file for the whole process lifetime. An
+   *  evicted file just re-reads fully once on next access, then goes
+   *  incremental again. */
   private static cappedSet<V>(map: Map<string, V>, key: string, value: V): void {
     if (map.has(key)) map.delete(key) // refresh recency
     map.set(key, value)
-    while (map.size > TRACE_FILE_MEMO_CAP) {
-      const oldest = map.keys().next().value
-      if (oldest === undefined) break
-      map.delete(oldest)
-    }
+    evictOverBudget(map, () => 0, {
+      maxCount: TRACE_FILE_MEMO_CAP,
+      maxBytes: Infinity,
+      keepNewest: 1
+    })
+  }
+
+  /** M8b: the BLOCK cache is additionally byte-budgeted — see
+   *  TRACE_MEMO_BYTE_BUDGET — with the min-residency pin against poll
+   *  round-robins (see TRACE_MEMO_MIN_RESIDENCY_MS). */
+  private static cappedSetSized(map: Map<string, CacheEntry>, key: string, value: CacheEntry): void {
+    if (map.has(key)) map.delete(key) // refresh recency
+    map.set(key, value)
+    evictOverBudget(
+      map,
+      (entry) => entry.bytesRead,
+      {
+        maxCount: TRACE_FILE_MEMO_CAP,
+        maxBytes: TRACE_MEMO_BYTE_BUDGET,
+        keepNewest: TRACE_MEMO_KEEP_NEWEST
+      },
+      (entry) => Date.now() - entry.touchedAt < TRACE_MEMO_MIN_RESIDENCY_MS
+    )
   }
 
   /**
@@ -400,7 +488,9 @@ export class TraceReader {
     const remember = (
       value: { prompt: string; reply: string; title?: string } | null
     ): { prompt: string; reply: string; title?: string } | null => {
-      this.latestCache.set(terminalId, { file: spec.file, size, mtimeMs, value })
+      // cappedSet: a turn's prompt+reply can run hundreds of KB, keyed by
+      // every terminal ever polled — the OTHER map M8 forgot.
+      TraceReader.cappedSet(this.latestCache, terminalId, { file: spec.file, size, mtimeMs, value })
       return value
     }
     // Escalate the window until it holds a COMPLETE turn. A turn only parses
@@ -521,7 +611,13 @@ export class TraceReader {
       const info = await stat(file)
       const cached = this.cache.get(file)
       if (cached && info.size === cached.bytesRead) {
-        return cached.blocks // unchanged: zero I/O
+        // Unchanged: zero I/O — but still a TOUCH. The old FIFO only
+        // refreshed recency on growth, so an idle-but-viewed file aged
+        // toward the eviction tail exactly as if nobody was looking at it.
+        const touched = { ...cached, touchedAt: Date.now() }
+        this.cache.delete(file)
+        this.cache.set(file, touched)
+        return touched.blocks
       }
       if (cached && info.size > cached.bytesRead) {
         // Append-only growth: read ONLY the new bytes.
@@ -533,6 +629,7 @@ export class TraceReader {
       const fresh: CacheEntry = {
         file,
         bytesRead: 0,
+        touchedAt: 0,
         remainder: Buffer.alloc(0),
         lines: [],
         blocks: [],
@@ -569,9 +666,10 @@ export class TraceReader {
       : kind === 'codex'
         ? parseCodexTrace(lines)
         : parsePiTrace(lines)
-    TraceReader.cappedSet(this.cache, file, {
+    TraceReader.cappedSetSized(this.cache, file, {
       file,
       bytesRead,
+      touchedAt: Date.now(),
       remainder: Buffer.from(remainder),
       lines,
       blocks,
