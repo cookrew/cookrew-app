@@ -11,10 +11,12 @@ import {
 import {
   ShareOnSave,
   canSubmitShare,
+  faceWordsLookGood,
   saveButtonLabel,
   serveRefusalText,
   type ShareAccess
 } from './ShareOnSave'
+import { parseTagInput } from '../../shared/served-face-shape'
 import { TeamGraphThumb } from './TeamGraphThumb'
 import { PaymentSettingsSheet } from './PaymentSettingsSheet'
 import { ServedTeamCard, type ServedTeam } from './ServedTeamCard'
@@ -65,6 +67,9 @@ export function SelectionBar({
   // team is NAMED — this is THE publish entry, not a parallel admin panel.
   const [access, setAccess] = useState<ShareAccess>('just-me')
   const [priceUsd, setPriceUsd] = useState('')
+  // The face's words — optional, bounded, refused before the button (ShareOnSave).
+  const [faceSummary, setFaceSummary] = useState('')
+  const [tagsRaw, setTagsRaw] = useState('')
   const [paymentStatus, setPaymentStatus] = useState<ServedPaymentStatus>(
     EMPTY_SERVED_PAYMENT_STATUS
   )
@@ -258,6 +263,9 @@ export function SelectionBar({
     workspace.nodes.find(
       (n) => picked.has(n.id) && n.kind === 'terminal' && (n as { orch?: boolean }).orch
     )?.name ?? null
+  const submittable =
+    canSubmitShare(access, priceUsd, orchName, paymentRails) &&
+    faceWordsLookGood(access, faceSummary, tagsRaw)
   const canClip = cookrew().teamClipSet !== undefined
 
   const showFlash = (text: string): void => {
@@ -357,7 +365,7 @@ export function SelectionBar({
     // The same refusal the disabled button carries. Enter in the name field
     // reaches here without touching the button, and a save that published an
     // orch-less crew by keyboard would be the bug with an extra step.
-    if (!canSubmitShare(access, priceUsd, orchName, paymentRails)) return
+    if (!submittable) return
     if (clash && !armed) {
       setArmed(true)
       return
@@ -370,10 +378,13 @@ export function SelectionBar({
         if (!alive.current) return
         // Saving names the thing; the same breath decides who may call it.
         if (access !== 'just-me') {
+          const tags = parseTagInput(tagsRaw)
           const served = await cookrew().servingServe({
             templateId: meta.name,
             access,
-            ...(access === 'paid' ? { priceUsd: priceUsd.trim() } : {})
+            ...(access === 'paid' ? { priceUsd: priceUsd.trim() } : {}),
+            ...(faceSummary.trim().length > 0 ? { summary: faceSummary.trim() } : {}),
+            ...(tags.length > 0 ? { tags } : {})
           })
           if (!alive.current) return
           if (served?.ok) {
@@ -392,6 +403,8 @@ export function SelectionBar({
         setBusy(null)
         setNaming(false)
         setName('')
+        setFaceSummary('')
+        setTagsRaw('')
         setArmed(false)
         // A private save flashes; a serving save gets the ADDRESS CARD instead —
         // the address is the deliverable, and it must outlive a 3-second flash.
@@ -408,6 +421,8 @@ export function SelectionBar({
     if (busy === 'save') return
     setNaming(false)
     setName('')
+    setFaceSummary('')
+    setTagsRaw('')
     setArmed(false)
   }
 
@@ -564,7 +579,7 @@ export function SelectionBar({
               disabled={
                 busy !== null ||
                 !teamsLoaded ||
-                !canSubmitShare(access, priceUsd, orchName, paymentRails)
+                !submittable
               }
               onClick={runSave}
             >
@@ -661,8 +676,12 @@ export function SelectionBar({
             priceUsd={priceUsd}
             paymentRails={paymentRails}
             door={orchName}
+            summary={faceSummary}
+            tagsRaw={tagsRaw}
             onAccess={setAccess}
             onPrice={setPriceUsd}
+            onSummary={setFaceSummary}
+            onTags={setTagsRaw}
             onConfigurePayments={() => setPaymentSettingsOpen(true)}
           />
         </div>

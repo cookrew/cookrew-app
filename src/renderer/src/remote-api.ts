@@ -375,6 +375,9 @@ export function createRemoteApi(): CookrewApi {
     onBrowserOpenTab: () => () => undefined,
     onBrowserPhoneViewing: () => () => undefined,
     onCmdW: () => () => undefined,
+    // No OS hands this surface a link: the phone and the demo are reached by
+    // one, never launched by one.
+    onDeepLink: () => () => undefined,
 
     // R30 serving. Owner-desktop surfaces: this transport cannot mount them,
     // and a stub that pretended to succeed would publish nothing while telling

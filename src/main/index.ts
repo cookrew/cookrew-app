@@ -25,6 +25,10 @@ import {
 } from './dispatch'
 import { HerdrHostMultiplexer, HERDR_SESSION } from './herdr-host-multiplexer'
 import { selfHostedLaunch, selfHostRefusalMessage } from './self-host-guard'
+import { DEEP_LINK_SCHEME, createDeepLinkQueue, deepLinkInArgv, parseDeepLink } from './deep-link'
+import { DEEP_LINK_CHANNEL } from '../shared/deep-link'
+import { createRegistryTokenVerifier, registryKeyOverHttp } from './registry-token'
+import { faceWords, harnessesOf } from './served-face'
 import { askTerminal, beginShutdown, cancelAllAsks, ownerSubmit, pasteAndSubmit } from './ask'
 import { defaultProducerLease } from './producer-lease'
 import {
@@ -556,6 +560,15 @@ const relayServing =
       })
     : null
 
+/**
+ * Sign-in with a cookrew.dev token needs the registry's public key, and only
+ * a door on the relay has a name a token could be minted for — so the verifier
+ * exists exactly when the relay does. See registry-token.ts.
+ */
+const registryTokens = RELAY_ORIGIN
+  ? createRegistryTokenVerifier({ keys: registryKeyOverHttp(RELAY_ORIGIN) })
+  : null
+
 function servedReach(slug: string): { address: string; transport: ServeTransport } {
   // THE RELAY WINS when it is carrying this door, because it is the only
   // address that works for the person an owner is most likely to send it to.
@@ -605,7 +618,12 @@ async function joinRelayFor(template: ServedTemplate): Promise<void> {
           slug: template.slug,
           ...(template.priceUsd !== undefined ? { priceUsd: template.priceUsd } : {})
         })
-      )
+      ),
+      // The owner's words, verbatim, and the harness NAMES behind the door —
+      // products, never the roster (served-face.ts).
+      ...(template.summary !== undefined ? { summary: template.summary } : {}),
+      ...(template.tags !== undefined ? { tags: template.tags } : {}),
+      ...(snapshot ? { harnesses: harnessesOf(snapshot) } : {})
     }
   })
   if (!joined.ok) console.error(`serving ${template.slug}: not on the relay (${joined.reason})`)
@@ -737,6 +755,10 @@ async function handleServedSlug(
   const servedDeps: ServedEndpointDeps = {
       issuer,
       callers: servedCallers,
+      // A registry token is minted for ONE published name; a door that is not
+      // on the relay has none, and refuses every such token.
+      doorName: (template) => relayServing?.addressFor(template.slug)?.name ?? null,
+      ...(registryTokens ? { registryTokens } : {}),
       admit: async (serviceId, sub) => {
         const { session, created } = await serving.instantiator.admit(serviceId, sub)
         return { workspaceId: session.workspaceId, sessionId: session.identity.sessionId, created }
@@ -1162,6 +1184,55 @@ for (const terminal of store.terminalsAcross()) {
 store.on('op', (e) => events.append(e))
 events.on('event', (e) => mainWindow?.webContents.send('event:new', e))
 let mainWindow: BrowserWindow | null = null
+
+/**
+ * DEEP LINKS — `cookrew://import/@handle/team` and its kin (deep-link.ts).
+ *
+ * A link can arrive before the window exists (the app was launched BY it),
+ * so it is queued until the renderer has loaded and delivered on
+ * `app:deep-link` as the PARSED object; a link that does not parse goes
+ * nowhere. Main never acts on a link itself — the renderer opens the same
+ * sheet a person would, and the sheet still asks before anything is placed.
+ */
+const deepLinks = createDeepLinkQueue((link) => {
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send(DEEP_LINK_CHANNEL, link)
+  }
+})
+
+function acceptDeepLink(raw: string): void {
+  const link = parseDeepLink(raw)
+  if (link === null) {
+    // The link itself is not logged: it is whatever a stranger's page put in
+    // an href, and a log line is not the place to reproduce it.
+    console.error('deep link refused: not a shape this app acts on')
+    return
+  }
+  deepLinks.push(link)
+}
+
+/** A link's arrival is the person asking for this window. */
+function focusMainWindow(): void {
+  if (!mainWindow) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.focus()
+}
+
+/**
+ * Claim the `cookrew://` scheme. A packaged app registers its own bundle; in
+ * development the running Electron binary has to be told which script it
+ * launches with, or the OS would open a bare Electron shell on the link
+ * (the form Electron's own docs prescribe).
+ */
+function registerDeepLinkScheme(): void {
+  const claimed = app.isPackaged
+    ? app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME)
+    : process.argv.length >= 2 &&
+      app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME, process.execPath, [
+        path.resolve(process.argv[1])
+      ])
+  if (!claimed) console.error(`could not register ${DEEP_LINK_SCHEME}:// with the OS`)
+}
 
 // Installed the moment the store and the log exist, and before any boot path
 // can start a background promise. Node ≥15 makes an unhandled rejection fatal,
@@ -3546,8 +3617,12 @@ function createWindow(): void {
   } else {
     void mainWindow.loadFile(path.join(dirname, '../renderer/index.html'))
   }
+  // A deep link waits for the renderer, not for the window: the subscriber
+  // lives in App.tsx, which does not exist until the page has loaded.
+  mainWindow.webContents.on('did-finish-load', () => deepLinks.ready())
   mainWindow.on('closed', () => {
     mainWindow = null
+    deepLinks.gone()
   })
   // Browser webviews: window.open / target=_blank must become a tab in the
   // same browser, never a detached native window. The renderer maps the
@@ -3581,6 +3656,26 @@ function createWindow(): void {
 if (!app.requestSingleInstanceLock()) {
   console.error('Another Cookrew instance is already running — exiting.')
   app.exit(1)
+} else {
+  // THE FIRST INSTANCE HEARS THE SECOND. On Windows and Linux a protocol link
+  // launches a fresh process, which exits above — but not before the OS hands
+  // its argv to the instance holding the lock, and that argv carries the link.
+  app.on('second-instance', (_event, argv) => {
+    focusMainWindow()
+    const link = deepLinkInArgv(argv)
+    if (link) deepLinks.push(link)
+  })
+  // macOS hands a link to the running app as an event instead.
+  app.on('open-url', (event, url) => {
+    event.preventDefault()
+    acceptDeepLink(url)
+    focusMainWindow()
+  })
+  registerDeepLinkScheme()
+  // The link this very launch was started with, on the platforms that pass it
+  // as an argument.
+  const launchedWith = deepLinkInArgv(process.argv)
+  if (launchedWith) deepLinks.push(launchedWith)
 }
 
 // See self-host-guard.ts. Same medicine as the single-instance lock above:
@@ -4176,12 +4271,21 @@ function registerIpc(handlers: RestoreHandlers): void {
     'serving:serve',
     async (
       _e,
-      input: { templateId: string; access: ServeAccess; priceUsd?: string }
+      input: {
+        templateId: string
+        access: ServeAccess
+        priceUsd?: string
+        summary?: string
+        tags?: readonly string[]
+      }
     ) => {
       if (!teams.load(input.templateId)) return { ok: false, reason: 'no-template' as const }
       if (input.access === 'paid' && servedPayments.rails().length === 0) {
         return { ok: false, reason: 'no-payment-rail' as const }
       }
+      // The owner's words, bounded — refused, never trimmed (served-face.ts).
+      const words = faceWords({ summary: input.summary, tags: input.tags })
+      if (!words.ok) return { ok: false as const, reason: words.reason }
       // The slug is derived from the team's own name and made unique against
       // the workspace namespace it shares — a service must not shadow a
       // workspace the owner named, and a live workspace wins the slug anyway.
@@ -4197,14 +4301,16 @@ function registerIpc(handlers: RestoreHandlers): void {
       // registry's own copy; now every reason — including the orch — comes back
       // from serve() itself, so the owner surface and the gate can never
       // disagree about what is servable.
+      const template: ServedTemplate = {
+        serviceId,
+        templateId: input.templateId,
+        slug,
+        access: input.access,
+        ...(input.access === 'paid' ? { priceUsd: input.priceUsd } : {}),
+        ...words.words
+      }
       try {
-        await serving.serve({
-          serviceId,
-          templateId: input.templateId,
-          slug,
-          access: input.access,
-          ...(input.access === 'paid' ? { priceUsd: input.priceUsd } : {})
-        })
+        await serving.serve(template)
       } catch (error) {
         if (error instanceof ServeRefused) return { ok: false as const, reason: error.reason }
         throw error
@@ -4212,13 +4318,7 @@ function registerIpc(handlers: RestoreHandlers): void {
       // THE RELAY, when it is configured. Its refusal is not the serve's:
       // the team IS being served on this network either way, so a relay that
       // could not be joined narrows the reach rather than undoing the act.
-      await joinRelayFor({
-        serviceId,
-        templateId: input.templateId,
-        slug,
-        access: input.access,
-        ...(input.access === 'paid' ? { priceUsd: input.priceUsd } : {})
-      })
+      await joinRelayFor(template)
       return { ok: true as const, serviceId, slug, address: servedAddress(slug) }
     }
   )

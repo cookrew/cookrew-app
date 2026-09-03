@@ -36,7 +36,9 @@ const isServedTemplate = (v: unknown): v is ServedTemplate => {
     typeof t.templateId === 'string' &&
     typeof t.slug === 'string' &&
     isServeAccess(t.access) &&
-    (t.priceUsd === undefined || typeof t.priceUsd === 'string')
+    (t.priceUsd === undefined || typeof t.priceUsd === 'string') &&
+    (t.summary === undefined || typeof t.summary === 'string') &&
+    (t.tags === undefined || (Array.isArray(t.tags) && t.tags.every((tag) => typeof tag === 'string')))
   )
 }
 

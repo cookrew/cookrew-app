@@ -3,9 +3,9 @@
 #   sudo cp cookrew-registry.service /etc/systemd/system/
 #   sudo systemctl enable --now cookrew-registry
 #
-# The bundle is built with:
-#   npx esbuild --bundle registry/src/main.ts --format=esm --platform=node \
-#     --outfile=registry.mjs
+# The bundle is built with (assets first — xterm.js and the site's scripts
+# travel inside the bundle as strings, see scripts/registry-assets.mjs):
+#   npm run registry:build          # → /tmp/registry.mjs
 #
 # --origin is the address a BROWSER will send, not the port this binds. The
 # ceremony compares it exactly, so it must be the public https origin even

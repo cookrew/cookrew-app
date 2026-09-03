@@ -200,6 +200,12 @@ function Canvas(): React.JSX.Element {
   const [closingId, setClosingId] = useState<string | null>(null)
   // R30 import side: the one entry for a served team's address.
   const [importServedOpen, setImportServedOpen] = useState(false)
+  /** An address that arrived by `cookrew://` link, for the sheet to look up. */
+  const [importPrefill, setImportPrefill] = useState<string | null>(null)
+  const closeImportServed = useCallback((): void => {
+    setImportServedOpen(false)
+    setImportPrefill(null)
+  }, [])
   useEffect(() => {
     void cookrew()
       .listPresets()
@@ -400,6 +406,31 @@ function Canvas(): React.JSX.Element {
 
   // ⌘W from the main process, resolved against the latest layer state.
   useEffect(() => cookrew().onCmdW(() => cmdWRef.current()), [])
+
+  // A `cookrew://` link the OS handed to the app, parsed by main
+  // (src/main/deep-link.ts). Every verb lands on a sheet a person could have
+  // opened themselves, and the sheet still asks before anything is placed.
+  useEffect(
+    () =>
+      cookrew().onDeepLink((link) => {
+        if (link.verb === 'import') {
+          // `session=new` is read and set aside: the import path has no such
+          // option (a session is minted per caller at the door, every time).
+          setImportPrefill(link.address)
+          setImportServedOpen(true)
+          return
+        }
+        if (link.verb === 'install') {
+          // No in-app surface takes a preset id yet; the marketplace entry
+          // the app does have is the import sheet, so the link opens that.
+          setImportPrefill(null)
+          setImportServedOpen(true)
+        }
+        // 'serve' would open the share sheet for a saved template; that sheet
+        // exists only on a selection today, so the link is set aside.
+      }),
+    []
+  )
 
   // A file dropped outside a terminal overlay would make Chromium navigate
   // to it, killing the app — swallow drags at the window level so only the
@@ -1313,9 +1344,13 @@ function Canvas(): React.JSX.Element {
         {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
         {importServedOpen && (
           <ImportServedSheet
-            onClose={() => setImportServedOpen(false)}
+            /* A second link while the sheet is open is a new question: remount
+               so the field and the lookup start from the new address. */
+            key={importPrefill ?? ''}
+            {...(importPrefill !== null ? { prefill: importPrefill } : {})}
+            onClose={closeImportServed}
             onImported={(placed) => {
-              setImportServedOpen(false)
+              closeImportServed()
               // GO AND SHOW IT. The card is placed at canvas coordinates that
               // have nothing to do with where the person is looking, so
               // without this the button's promise — place the orch card — was

@@ -42,8 +42,12 @@ const paint = (
       priceUsd={priceUsd}
       paymentRails={paymentRails}
       door="Conductor"
+      summary=""
+      tagsRaw=""
       onAccess={noop}
       onPrice={noop}
+      onSummary={noop}
+      onTags={noop}
       onConfigurePayments={noop}
     />
   )

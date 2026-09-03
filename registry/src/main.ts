@@ -34,6 +34,8 @@ import { FilePaymentNonces } from './payment-nonces'
 import { devFacilitator } from './facilitator-dev'
 import { ReceiptStore } from './receipts'
 import { DoorStore } from './doors'
+import { StarStore } from './stars'
+import { ReleaseCache } from './releases'
 import { buildManifest, signManifest } from '../../src/main/preset-publish'
 import { scrubForPublish } from '../../src/main/preset-scrub'
 import type { TeamSnapshot } from '../../src/main/teams'
@@ -204,6 +206,10 @@ createRegistry({
   // The address printed on a team's page is something a person copies, so it
   // is the configured origin rather than whatever Host a caller sent.
   origin: resolved.config.origin,
+  // The market's sort key and the homepage's download buttons — both real:
+  // stars are a file beside the doors, the build is whatever GitHub says.
+  stars: new StarStore(DATA),
+  releases: new ReleaseCache(),
   note: (message) => console.error(message),
   authorize: makeAuthorize(store, identity, pricing)
 }).listen(PORT, () => {
