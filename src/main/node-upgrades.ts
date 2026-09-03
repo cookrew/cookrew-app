@@ -9,6 +9,7 @@ import {
   DEFAULT_TERMINAL_SIZE,
   TerminalNodeData
 } from '../shared/model'
+import { BLANK_BROWSER_PAGE, isChromiumErrorPage } from '../shared/browser-navigation'
 import { DEFAULT_ORCH_PRESET } from './presets'
 
 /**
@@ -29,10 +30,33 @@ export function upgradeNode(node: CanvasNode): CanvasNode {
     upgraded = { ...(node as unknown as BrowserNodeData), kind: 'browser' }
   }
   upgraded = upgradeGeometry(upgraded)
+  if (upgraded.kind === 'browser') return upgradeBrowserErrorPages(upgraded)
   if (upgraded.kind !== 'terminal') return upgraded
   return upgradeCrewLineCard(
     upgradeLegacyOrchMirrorCommand(upgradeConductorSeed(upgradeMaestroField(upgraded)))
   )
+}
+
+/**
+ * Older webview builds persisted Chromium's private navigation-failure page as
+ * the user's address. Loading the workspace then explicitly loaded that URL
+ * again, which macOS tried to hand to an application. The attempted address is
+ * no longer recoverable once both copies were overwritten, so repair to a
+ * neutral blank tab and let the user navigate deliberately.
+ */
+function upgradeBrowserErrorPages(node: BrowserNodeData): BrowserNodeData {
+  let tabsChanged = false
+  const tabs = node.tabs?.map((tab) => {
+    if (!isChromiumErrorPage(tab.url)) return tab
+    tabsChanged = true
+    return { ...tab, url: BLANK_BROWSER_PAGE, title: '' }
+  })
+  const active = tabs?.find((tab) => tab.id === node.activeTabId) ?? tabs?.[0]
+  const url = isChromiumErrorPage(node.url)
+    ? (active?.url ?? BLANK_BROWSER_PAGE)
+    : node.url
+  if (!tabsChanged && url === node.url) return node
+  return { ...node, url, ...(tabs ? { tabs } : {}) }
 }
 
 /**

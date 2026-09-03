@@ -459,6 +459,20 @@ export interface HerdrHostOptions {
   settleMs?: number
 }
 
+export interface HerdrServerSpawnSpec {
+  file: string
+  args: string[]
+}
+
+/** Process launch that gives a long-lived server enough descriptor headroom. */
+export function herdrServerSpawnSpec(platform = process.platform): HerdrServerSpawnSpec {
+  if (platform === 'win32') return { file: 'herdr', args: ['server'] }
+  return {
+    file: '/bin/sh',
+    args: ['-c', 'ulimit -n 4096 2>/dev/null || true; exec "$0" server', 'herdr']
+  }
+}
+
 /**
  * Start a detached `herdr server` on Cookrew's socket.
  *
@@ -467,7 +481,13 @@ export interface HerdrHostOptions {
  * make `persistsAcrossRestart` a lie.
  */
 export function spawnHerdrServer(env: NodeJS.ProcessEnv): void {
-  const child = spawn('herdr', ['server'], { detached: true, stdio: 'ignore', env })
+  // A Finder-launched macOS app can inherit a 256-descriptor soft limit. Each
+  // herdr pane permanently owns one PTY plus two pipes, so a 44-pane workspace
+  // consumes 132 descriptors before attach/status/API sockets. Raise the child
+  // limit while staying below the ordinary macOS hard limit; if the host does
+  // not permit it, retain its existing limit and still start normally.
+  const spec = herdrServerSpawnSpec()
+  const child = spawn(spec.file, spec.args, { detached: true, stdio: 'ignore', env })
   child.unref()
 }
 
@@ -646,6 +666,21 @@ export class HerdrHostMultiplexer implements Multiplexer {
    */
   serverAlive(): boolean {
     return this.serverRunning()
+  }
+
+  /**
+   * Re-establish the path needed by a replacement `agent attach` client.
+   *
+   * A transient EAGAIN normally leaves the server and pane alive; the probe
+   * succeeds and ensureSession only refreshes herdr's runtime-only agent
+   * registration. If the server really died, invalidate the optimistic
+   * `serverUp` latch so ensureSession starts it and restores/reboots the pane.
+   * Restarting a healthy server would kill every hosted agent, so liveness is
+   * checked first rather than treating every dropped client as server death.
+   */
+  recoverAttach(spec: AttachSpec): void {
+    this.serverUp = this.serverRunning()
+    this.ensureSession(spec)
   }
 
   /**

@@ -6,9 +6,8 @@
 // and stopped there, so the card kept that sentence and the agent behind it
 // went unreachable until someone recovered the terminal by hand.
 //
-// These pin the reattach decision, and they lean on the REFUSALS: a respawn
-// loop against a genuinely dead pane is worse than a dead card, because a dead
-// card at least says what happened.
+// These pin the reattach decision. The live-session wiring that keeps existing
+// transcript subscribers connected is covered in herdr-live-transcript-recovery.
 
 import { describe, expect, it } from 'vitest'
 import {
@@ -75,11 +74,11 @@ describe('what it refuses to resurrect', () => {
     if (!d.reattach) expect(d.reason).toBe('clean-exit')
   })
 
-  it('a clean exit even when the screen happens to hold the words', () => {
-    // Scrollback can contain an OLD disconnect notice from earlier in the
-    // session. Exit code 0 still means this one was deliberate.
+  it('the exact disconnect wins even when herdr maps it to exit zero', () => {
+    // Deliberate disposal is filtered by PtySession before this decision. An
+    // exit-zero disconnect from the client is still a dead live transcript.
     const d = decideReattach({ exitCode: 0, tail: EAGAIN }, freshReattachState(), T0)
-    expect(d.reattach).toBe(false)
+    expect(d.reattach).toBe(true)
   })
 
   it('a pane that is genuinely gone', () => {

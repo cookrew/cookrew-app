@@ -36,6 +36,30 @@ describe('upgradeNode', () => {
     expect(upgradeNode(portal).kind).toBe('browser')
   })
 
+  it('repairs persisted Chromium error pages before a webview can reload them', () => {
+    const poisoned: BrowserNodeData = {
+      kind: 'browser',
+      id: 'b1',
+      name: 'Failed page',
+      url: 'chrome-error://chromewebdata/',
+      tabs: [
+        { id: 'bad', url: 'CHROME-ERROR://chromewebdata/', title: 'Not the page title' },
+        { id: 'good', url: 'https://example.com/', title: 'Example' }
+      ],
+      activeTabId: 'bad',
+      position: { x: 0, y: 0 },
+      size: { width: 720, height: 560 }
+    }
+
+    expect(upgradeNode(poisoned)).toMatchObject({
+      url: 'about:blank',
+      tabs: [
+        { id: 'bad', url: 'about:blank', title: '' },
+        { id: 'good', url: 'https://example.com/', title: 'Example' }
+      ]
+    })
+  })
+
   it('migrates legacy maestro field to orch', () => {
     const legacy = { ...terminal(), maestro: true } as unknown as TerminalNodeData
     delete (legacy as unknown as Record<string, unknown>).orch

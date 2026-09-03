@@ -3,6 +3,10 @@ import type { BrowserNodeData, BrowserTab } from '../../shared/model'
 import { activeBrowserTab, browserTabs } from '../../shared/model'
 import { resolveAddress } from '../../shared/address-bar'
 import {
+  browserUrlForLoad,
+  observedBrowserUrl
+} from '../../shared/browser-navigation'
+import {
   findBrowserTabByWebContentsId,
   registerBrowserTab,
   setBrowserActiveTab,
@@ -428,10 +432,11 @@ function BrowserTabView({
     if (interactiveBrowser !== false) return
     const webview = webviewRef.current
     if (!webview) return
+    const target = browserUrlForLoad(tab.url)
     try {
       // getURL/loadURL throw until the webview reaches dom-ready.
-      if (webview.getURL() !== tab.url) {
-        void webview.loadURL(tab.url).catch(() => undefined)
+      if (webview.getURL() !== target) {
+        void webview.loadURL(target).catch(() => undefined)
       }
     } catch {
       // not attached yet — the src attribute already points at tab.url
@@ -446,7 +451,9 @@ function BrowserTabView({
     if (!webview) return
     const onNavigate = (event: Event): void => {
       const url = (event as Event & { url?: string }).url
-      if (url) patchTab(tab.id, { url })
+      if (!url) return
+      const observed = observedBrowserUrl(tab.url, url)
+      if (observed !== tab.url) patchTab(tab.id, { url: observed })
     }
     const onTitle = (event: Event): void => {
       const title = (event as Event & { title?: string }).title
@@ -460,7 +467,7 @@ function BrowserTabView({
       webview.removeEventListener('did-navigate-in-page', onNavigate)
       webview.removeEventListener('page-title-updated', onTitle)
     }
-  }, [tab.id, patchTab, interactiveBrowser])
+  }, [tab.id, tab.url, patchTab, interactiveBrowser])
 
   // Thumbnail loop for the active tab: after loads and on a slow interval.
   // capturePage() only exists on real <webview>s (Electron renderer).
@@ -600,7 +607,7 @@ function BrowserTabView({
           ref={(el: unknown) => {
             webviewRef.current = el as WebviewElement | null
           }}
-          src={tab.url}
+          src={browserUrlForLoad(tab.url)}
           className={visible ? 'browser-body' : 'browser-body browser-body-hidden'}
           partition={`persist:browser-${browserId}`}
           allowpopups="true"

@@ -100,6 +100,7 @@ import { SwitchRunner } from './switch-runner'
 import { terminalHasLiveWork } from './session-liveness'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { canonicalExternalUrl } from '../shared/external-url'
+import { isChromiumErrorPage } from '../shared/browser-navigation'
 import {
   claudeSessionFile,
   claudeSpawnCommand,
@@ -3455,6 +3456,10 @@ function recordHeadlessPageState(
   if (!node) return
   const tabs = browserTabs(node)
   const tab = tabs.find((candidate) => candidate.id === tabId)
+  // Chrome's private failure document is an implementation detail, not the
+  // address the user or agent requested. Persisting it makes a later sync try
+  // to navigate to chrome-error:// explicitly.
+  if (isChromiumErrorPage(state.url)) return
   if (!tab || (tab.url === state.url && tab.title === state.title)) return
   const nextTabs = tabs.map((candidate) =>
     candidate.id === tabId ? { ...candidate, url: state.url, title: state.title } : candidate

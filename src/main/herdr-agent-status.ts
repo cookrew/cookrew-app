@@ -42,6 +42,8 @@ export interface StatusSocket {
   on(event: 'close' | 'error', cb: () => void): void
   write(line: string): void
   end(): void
+  /** net.Socket's immediate close; optional for small test/embedding adapters. */
+  destroy?(): void
 }
 
 export interface StatusFeedOptions {
@@ -218,8 +220,8 @@ export class HerdrStatusFeed extends EventEmitter {
     this.stopped = true
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
     this.reconnectTimer = null
-    this.socket?.end()
-    this.socket = null
+    this.replaceSocket(null)
+    this.status.clear()
   }
 
   /**
@@ -231,9 +233,26 @@ export class HerdrStatusFeed extends EventEmitter {
    */
   refresh(): void {
     if (this.stopped) return
-    this.socket?.end()
-    this.socket = null
-    this.connect()
+    const panes = this.listPanes()
+    if (panes.length === 0) {
+      this.replaceSocket(null)
+      this.labels.clear()
+      this.status.clear()
+      this.scheduleReconnect()
+      return
+    }
+
+    const sameSubscriptions =
+      this.socket !== null &&
+      panes.length === this.labels.size &&
+      panes.every((pane) => this.labels.has(pane.paneId))
+
+    this.seed(panes)
+    if (sameSubscriptions) return
+    // Free the old descriptor BEFORE asking the pressured server for another.
+    // Its late callbacks are identity-scoped and cannot affect the replacement.
+    this.replaceSocket(null)
+    this.connect(panes)
   }
 
   /**
@@ -260,26 +279,19 @@ export class HerdrStatusFeed extends EventEmitter {
     })
   }
 
-  private connect(): void {
-    if (this.stopped) return
+  private connect(knownPanes?: FeedPane[]): void {
+    if (this.stopped || this.socket !== null) return
     const socketPath = this.resolveSocketPath()
     if (!socketPath) {
       this.scheduleReconnect()
       return
     }
-    const panes = this.listPanes()
+    const panes = knownPanes ?? this.listPanes()
     if (panes.length === 0) {
       this.scheduleReconnect()
       return
     }
 
-    this.labels = new Map(panes.map((p) => [p.paneId, p.label]))
-    // Seed from the CURRENT state before subscribing. Events fire only on
-    // change, so without this a pane that never transitions again is invisible
-    // to the feed for the whole run.
-    for (const pane of panes) {
-      if (pane.status) this.record(pane.label, pane.status)
-    }
     let socket: StatusSocket
     try {
       socket = (this.options.connect ?? defaultConnect)(socketPath)
@@ -287,11 +299,22 @@ export class HerdrStatusFeed extends EventEmitter {
       this.scheduleReconnect()
       return
     }
-    this.socket = socket
+    this.seed(panes)
+    this.replaceSocket(socket)
     this.buffer = ''
 
-    socket.on('data', (chunk) => this.ingest(chunk))
-    socket.on('close', () => {
+    socket.on('data', (chunk) => {
+      // A retiring socket can drain one last frame after its replacement is
+      // current. That frame belongs to the old subscription inventory and must
+      // not overwrite the freshly seeded state.
+      if (this.socket === socket) this.ingest(chunk)
+    })
+    const disconnected = (): void => {
+      // A refresh installs the replacement before the old socket's asynchronous
+      // close callback arrives. Only the socket that is STILL current may clear
+      // the field or schedule a reconnect; otherwise one old callback loses the
+      // replacement and every refresh leaks another live subscription.
+      if (this.socket !== socket) return
       this.socket = null
       // A dead subscription makes every cached status a GUESS about a world
       // that has moved on — and the server dying mid-`working` is precisely
@@ -300,25 +323,52 @@ export class HerdrStatusFeed extends EventEmitter {
       // fact. The reconnect re-seeds from the live pane list.
       this.status.clear()
       this.scheduleReconnect()
-    })
-    socket.on('error', () => {
-      this.socket = null
-      this.status.clear()
-      this.scheduleReconnect()
-    })
+    }
+    socket.on('close', disconnected)
+    socket.on('error', disconnected)
 
-    socket.write(
-      JSON.stringify({
-        id: 'cookrew-status',
-        method: 'events.subscribe',
-        params: {
-          subscriptions: panes.map((p) => ({
-            type: 'pane.agent_status_changed',
-            pane_id: p.paneId
-          }))
-        }
-      }) + '\n'
-    )
+    try {
+      socket.write(
+        JSON.stringify({
+          id: 'cookrew-status',
+          method: 'events.subscribe',
+          params: {
+            subscriptions: panes.map((p) => ({
+              type: 'pane.agent_status_changed',
+              pane_id: p.paneId
+            }))
+          }
+        }) + '\n'
+      )
+    } catch {
+      disconnected()
+      this.closeSocket(socket)
+    }
+  }
+
+  /**
+   * Publish the current pane inventory without changing the subscription.
+   * Unknown/missing states retract old cache entries; known states are emitted
+   * so boot timers retain the existing "observation arrived" contract.
+   */
+  private seed(panes: FeedPane[]): void {
+    this.labels = new Map(panes.map((pane) => [pane.paneId, pane.label]))
+    this.status.clear()
+    for (const pane of panes) {
+      if (pane.status) this.record(pane.label, pane.status)
+    }
+  }
+
+  /** End the prior socket after removing its authority over this feed. */
+  private replaceSocket(next: StatusSocket | null): void {
+    const previous = this.socket
+    this.socket = next
+    if (previous && previous !== next) this.closeSocket(previous)
+  }
+
+  private closeSocket(socket: StatusSocket): void {
+    if (socket.destroy) socket.destroy()
+    else socket.end()
   }
 
   /** Line-delimited JSON; a chunk may split or join lines. */
@@ -348,7 +398,11 @@ export class HerdrStatusFeed extends EventEmitter {
     if (this.stopped || this.reconnectTimer) return
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
-      this.connect()
+      // A failed replacement deliberately leaves the prior healthy socket in
+      // place. Retry the inventory-aware refresh in that case; a genuinely
+      // disconnected feed has no socket and performs a cold connect.
+      if (this.socket) this.refresh()
+      else this.connect()
     }, this.options.reconnectMs ?? 2000)
     // Never hold the app open for a reconnect.
     this.reconnectTimer.unref?.()

@@ -7,7 +7,7 @@ import xtermHeadless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { sanitizeAgentEnv } from './multiplexer'
 import { paneEnv } from './pane-env'
-import type { Multiplexer, PaneCardInfo } from './multiplexer'
+import type { AttachSpec, Multiplexer, PaneCardInfo } from './multiplexer'
 import { TmuxMultiplexer, sessionNameFor as tmuxSessionNameFor, TMUX_LABEL as TMUX_LABEL_CONST } from './tmux-multiplexer'
 import { HerdrHostMultiplexer, HERDR_SESSION } from './herdr-host-multiplexer'
 import { HerdrStatusFeed, setStatusFeed, statusFeed } from './herdr-agent-status'
@@ -356,12 +356,23 @@ export class PtySession extends EventEmitter {
    * native ask above all — must not be aimed at a pane the host does not hold.
    */
   readonly hostBacked: boolean
-  private proc: IPty
+  private proc!: IPty
   private screen: HeadlessTerminalType
   /** Turns the mirror back into ANSI for replayFrame(); see it for why. */
   private serializer: SerializeAddon
   private lastOutputAt = 0
   private disposed = false
+  /** Backend/spec are retained so a dropped herdr client can reattach in place. */
+  private readonly mux: Multiplexer
+  private readonly attachSpec: AttachSpec
+  private readonly paneEnvironment: Record<string, string>
+  private readonly served: boolean
+  private readonly servedProfilePath: string | null
+  private readonly cwd: string
+  /** Raw child output is synchronous; xterm's parsed mirror drains later. */
+  private attachOutputTail = ''
+  private reattachState: ReattachState = freshReattachState()
+  private reattachTimer: NodeJS.Timeout | null = null
 
   readonly usesTmux: boolean
   /**
@@ -406,12 +417,17 @@ export class PtySession extends EventEmitter {
     const rows = options.rows ?? 30
     // A served terminal is pinned to the direct backend — see servedMux.
     const mux = options.served ? servedMux : activeMux
+    if (!mux) throw new Error('terminal multiplexer is not configured')
+    this.mux = mux
     this.hostBacked = !options.served
     // Now a CAPABILITY question, not an identity one: "does my session
     // outlive the app?" rather than "am I tmux?". The direct backend answers
     // false and everything downstream degrades on that fact.
     this.usesTmux = mux?.capabilities.persistsAcrossRestart ?? false
     this.sessionName = sessionNameFor(options.terminalId)
+    this.cwd = options.cwd
+    this.served = options.served !== undefined
+    this.servedProfilePath = options.served?.profilePath ?? null
 
     this.screen = new HeadlessTerminal({ cols, rows, scrollback: 5000, allowProposedApi: true })
     this.serializer = new SerializeAddon()
@@ -422,7 +438,7 @@ export class PtySession extends EventEmitter {
     // where that boundary lives so a test can assert it. An ordinary terminal
     // keeps the exact prior behaviour (sanitizeAgentEnv turns off the agent's
     // transcript saving under a launcher session).
-    const env = paneEnv({
+    this.paneEnvironment = paneEnv({
       terminalId: options.terminalId,
       socketPath: options.socketPath,
       cliDir: options.cliDir,
@@ -432,7 +448,7 @@ export class PtySession extends EventEmitter {
 
     // One path for every backend. The direct backend returns a plain login
     // shell here, which is exactly what the old `else` branch spawned by hand.
-    const attachSpec = {
+    this.attachSpec = {
       sessionName: this.sessionName,
       command: options.command,
       shell,
@@ -447,35 +463,53 @@ export class PtySession extends EventEmitter {
     // agent alive under a non-host multiplexer is killed there first and
     // resumed here — see migrateForeignSession. Without this, switching
     // hosts forked the whole agent population.
-    migrateForeignSession(attachSpec, mux!, allBackends, (c) => harnessFor(c)?.turns ?? null)
+    migrateForeignSession(this.attachSpec, mux, allBackends, (c) => harnessFor(c)?.turns ?? null)
+    this.startAttach(false)
+  }
+
+  /** Spawn one attach client and bind it to this stable session object. */
+  private startAttach(recovering: boolean): void {
     // Idempotent, and a no-op for tmux (whose `new-session -A` does it inside
-    // the attach). Backends that cannot create-and-attach in one step — herdr,
-    // where the server owns the pane — need the pane to exist first.
-    mux!.ensureSession(attachSpec)
-    const spawnSpec = mux!.attachSpawn(attachSpec)
-    // A served terminal runs under the Seatbelt profile; the owner's own runs
-    // exactly as before. See the `served` option note for the per-backend wrap.
-    const launch = options.served
-      ? confinedSpawn(options.served.profilePath, spawnSpec.file, spawnSpec.args)
+    // the attach). On recovery herdr also verifies the server and refreshes
+    // runtime-only agent registration before resolving a new attach argv.
+    if (recovering && this.mux.recoverAttach) this.mux.recoverAttach(this.attachSpec)
+    else this.mux.ensureSession(this.attachSpec)
+
+    const spawnSpec = this.mux.attachSpawn(this.attachSpec)
+    const launch = this.servedProfilePath !== null
+      ? confinedSpawn(this.servedProfilePath, spawnSpec.file, spawnSpec.args)
       : { file: spawnSpec.file, args: spawnSpec.args }
-    this.proc = pty.spawn(launch.file, launch.args, {
+    const proc = pty.spawn(launch.file, launch.args, {
       name: 'xterm-256color',
-      cols,
-      rows,
-      cwd: options.cwd,
+      cols: this.screen.cols,
+      rows: this.screen.rows,
+      cwd: this.cwd,
       // The backend's own env last: it knows which server the attach must
       // talk to (herdr's HERDR_SESSION), and nothing else does.
-      env: { ...env, ...spawnSpec.env }
+      env: { ...this.paneEnvironment, ...spawnSpec.env }
     })
+    this.proc = proc
+    this.attachOutputTail = ''
+
+    if (recovering) {
+      // Remove the dead client's error from both mirrors before the new attach
+      // paints. `replay`, not `data`, keeps this synthetic clear out of turn
+      // activity while preserving every existing desktop/mobile subscriber.
+      this.screen.write(CLEAR_SCREEN)
+      this.emit('replay', CLEAR_SCREEN)
+    }
 
     // A JS exception escaping these callbacks crosses back into node-pty's
     // NAPI thread-safe function, becomes a C++ exception and ABORTS the whole
     // app (SIGABRT) — nothing here may throw. Late chunks routinely arrive
     // after dispose() (node-pty drains its queue), when the headless screen
     // is already disposed and would throw on write.
-    this.proc.onData((data) => {
-      if (this.disposed) return
+    proc.onData((data) => {
+      if (this.disposed || this.proc !== proc) return
       try {
+        // Keep the raw tail because xterm parses writes asynchronously: the
+        // process exit can arrive before viewportText contains its final error.
+        this.attachOutputTail = (this.attachOutputTail + data).slice(-8192)
         this.lastOutputAt = Date.now()
         this.screen.write(data)
         this.emit('data', data)
@@ -483,15 +517,21 @@ export class PtySession extends EventEmitter {
         console.error('PTY data handling failed:', error)
       }
     })
-    this.proc.onExit(({ exitCode }) => {
+    proc.onExit(({ exitCode }) => {
+      if (this.proc !== proc) return
       try {
+        if (!this.disposed && this.scheduleAttachRecovery({
+          exitCode,
+          tail: this.attachOutputTail
+        }, proc)) return
+
         // A SERVED agent dying is a paying caller's crew going silent, and it
         // used to happen in total silence: the direct backend has no exit
         // handling of its own, so "booted 2 terminal(s)" was the last word
         // and the ask failed minutes later with "no file-backed agent turn"
         // — a symptom three layers from the cause (2026-08-28). Name the
         // death, with the tail the agent printed on its way out.
-        if (options.served && exitCode !== 0) {
+        if (this.served && exitCode !== 0) {
           const tail = this.serializer
             .serialize({ scrollback: 0 })
             .split('\n')
@@ -508,6 +548,45 @@ export class PtySession extends EventEmitter {
         console.error('PTY exit handling failed:', error)
       }
     })
+  }
+
+  /**
+   * Schedule a bounded in-place herdr reattach. Keeping this PtySession object
+   * is load-bearing: renderer streams, mobile SSE, turn tracking, input guards
+   * and registry listeners are all subscribed to its EventEmitter identity.
+   */
+  private scheduleAttachRecovery(exit: { exitCode: number; tail: string }, failed: IPty): boolean {
+    if (this.mux.id !== 'herdr') return false
+    const decision = decideReattach(exit, this.reattachState, Date.now())
+    if (!decision.reattach) return false
+
+    this.reattachState = decision.state
+    console.error(
+      `Terminal ${this.terminalId}: herdr attach dropped — reattaching ` +
+        `(attempt ${decision.attempt}/${MAX_REATTACHES}) in ${decision.delayMs}ms`
+    )
+    const timer = setTimeout(() => {
+      if (this.reattachTimer === timer) this.reattachTimer = null
+      if (this.disposed || this.proc !== failed) return
+      try {
+        this.startAttach(true)
+      } catch (error) {
+        console.error(`Terminal ${this.terminalId}: reattach attempt failed:`, error)
+        // The original disconnect established that this recovery is safe to
+        // retry. Preparation/spawn can fail before a child exists to emit the
+        // next exit, so explicitly spend the next bounded attempt here.
+        if (!this.scheduleAttachRecovery(exit, failed)) {
+          try {
+            this.emit('exit', exit.exitCode)
+          } catch (listenerError) {
+            console.error('PTY final recovery exit handling failed:', listenerError)
+          }
+        }
+      }
+    }, decision.delayMs)
+    timer.unref?.()
+    this.reattachTimer = timer
+    return true
   }
 
   write(data: string): OwnerInputVerdict {
@@ -727,6 +806,10 @@ export class PtySession extends EventEmitter {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    if (this.reattachTimer !== null) {
+      clearTimeout(this.reattachTimer)
+      this.reattachTimer = null
+    }
     try {
       this.proc.kill()
     } catch (error) {
@@ -1122,9 +1205,6 @@ export class PtyManager {
     activeMux?.reloadConfig()
   }
 
-  /** Reattach budget per terminal — see herdr-attach-recovery. */
-  private readonly reattachState = new Map<string, ReattachState>()
-
   spawn(
     options: Omit<PtySessionOptions, 'socketPath' | 'cliDir' | 'tmuxConf'>,
     workspaceId?: string
@@ -1143,49 +1223,10 @@ export class PtyManager {
     // can land AFTER its replacement registered — an instance-blind delete
     // would clobber the live session from the map (the restore "running
     // flag" bug: pane alive, ptys.get() undefined, kill() then no-ops).
-    session.on('exit', (exitCode: number) => {
+    session.on('exit', () => {
       if (this.sessions.get(options.terminalId) !== session) return
-      // Read the tail BEFORE dispose drops the screen — this is the only place
-      // the attach client's parting words are still available.
-      let tail = ''
-      try {
-        tail = session.viewportText()
-      } catch {
-        // A disposed screen has nothing to say; treat it as not transient.
-      }
       this.sessions.delete(options.terminalId)
       this.ownership.release(options.terminalId)
-
-      // A herdr attach can drop on a transient socket EAGAIN while the server
-      // and the pane are both healthy. Left alone the card keeps the client's
-      // "lost connection to server" line forever and the agent is unreachable.
-      // Reattaching restores the view; the bounds in decideReattach keep a
-      // genuinely dead pane from becoming a respawn loop.
-      const decision = decideReattach(
-        { exitCode, tail },
-        this.reattachState.get(options.terminalId) ?? freshReattachState(),
-        Date.now()
-      )
-      if (!decision.reattach) {
-        this.reattachState.delete(options.terminalId)
-        return
-      }
-      this.reattachState.set(options.terminalId, decision.state)
-      console.error(
-        `Terminal ${options.terminalId}: herdr attach dropped — reattaching ` +
-          `(attempt ${decision.attempt}/${MAX_REATTACHES}) in ${decision.delayMs}ms`
-      )
-      // OUT of the node-pty exit callback. A JS exception escaping it becomes a
-      // C++ exception on the NAPI thread and aborts the app (see onData), and
-      // respawning is far too much work to do inside that window.
-      setTimeout(() => {
-        try {
-          if (this.sessions.has(options.terminalId)) return // someone beat us to it
-          this.spawn(options, workspaceId)
-        } catch (error) {
-          console.error(`Terminal ${options.terminalId}: reattach failed:`, error)
-        }
-      }, decision.delayMs)
     })
     this.sessions.set(options.terminalId, session)
     // A pane created after the subscription was made is not covered by it.
@@ -1363,6 +1404,10 @@ export class PtyManager {
 
   /** App quit: detach everything so sessions survive for the next launch. */
   disposeAll(): void {
+    // Close the singleton status subscription immediately. Shutdown can spend
+    // several seconds draining asks/folds after this method returns; relying on
+    // process exit would keep a herdr socket alive throughout that whole tail.
+    setStatusFeed(null)
     for (const session of this.sessions.values()) session.dispose()
     this.sessions.clear()
     for (const id of this.ownership.all()) this.ownership.release(id)

@@ -217,6 +217,16 @@ export interface Multiplexer {
    */
   ensureSession(spec: AttachSpec): void
 
+  /**
+   * Prepare an existing session for a fresh attach after its client dropped.
+   *
+   * Optional because tmux/direct attach failures are ordinary process exits.
+   * A backend with a separate server can use this to re-check that server and
+   * restore any runtime-only attachment metadata before a replacement client
+   * is spawned. It must remain idempotent: the pane may still be healthy.
+   */
+  recoverAttach?(spec: AttachSpec): void
+
   attachSpawn(spec: AttachSpec): AttachSpawn
 
   /** Optional scope for sharing a backend's global session snapshot. */
