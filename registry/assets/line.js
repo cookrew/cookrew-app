@@ -30,81 +30,12 @@
     for (const b of new Uint8Array(bytes)) s += String.fromCharCode(b)
     return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
   }
-  const unb64u = (text) => {
-    const pad = text.length % 4 === 0 ? '' : '='.repeat(4 - (text.length % 4))
-    const bin = atob(text.replace(/-/g, '+').replace(/_/g, '/') + pad)
-    const out = new Uint8Array(bin.length)
-    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
-    return out
-  }
-  const concat = (a, b) => {
-    const out = new Uint8Array(a.byteLength + b.byteLength)
-    out.set(new Uint8Array(a), 0)
-    out.set(new Uint8Array(b), a.byteLength)
-    return out
-  }
 
-  /* ── the seal (relay-seal.ts, in WebCrypto) ────────────────────────────── */
-  const importDoorKey = (spki) => crypto.subtle.importKey('spki', unb64u(spki), { name: 'X25519' }, true, [])
-  const ephemeral = async () => {
-    const pair = await crypto.subtle.generateKey({ name: 'X25519' }, true, ['deriveBits'])
-    return { pair, pub: b64u(await crypto.subtle.exportKey('spki', pair.publicKey)) }
-  }
-  const dh = async (priv, pub) => new Uint8Array(await crypto.subtle.deriveBits({ name: 'X25519', public: pub }, priv, 256))
-  const hkdf = async (ikm, info, bytes) => {
-    const key = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits'])
-    return new Uint8Array(
-      await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: enc.encode(info) }, key, bytes * 8)
-    )
-  }
-  const nonceOf = (seq) => {
-    const n = new Uint8Array(12)
-    new DataView(n.buffer).setUint32(0, Math.floor(seq / 0x100000000))
-    new DataView(n.buffer).setUint32(4, seq >>> 0)
-    return n
-  }
-  async function channel(keyBytes) {
-    const key = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt', 'decrypt'])
-    let seq = 0
-    return {
-      seal: async (plaintext) => {
-        const sealed = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonceOf(seq++), tagLength: 128 }, key, enc.encode(plaintext))
-        return b64u(sealed)
-      },
-      open: async (sealed, at) => {
-        try {
-          const raw = unb64u(sealed)
-          if (raw.byteLength < 16) return null
-          return dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonceOf(at), tagLength: 128 }, key, raw))
-        } catch {
-          return null
-        }
-      }
-    }
-  }
-  /** One-shot seal to the door's long-term key: `{ e, sealed }` at sequence 0. */
-  async function sealToDoor(doorPub, info, plaintext) {
-    const e = await ephemeral()
-    const shared = await dh(e.pair.privateKey, doorPub)
-    const ch = await channel(await hkdf(shared, `cookrew-relay/1 body ${info}`, 32))
-    return { e: e.pub, sealed: await ch.seal(plaintext) }
-  }
-  /** The forward-secret reply channel: our ephemeral now, the door's on the head. */
-  async function startSeal(doorPub, info) {
-    const e = await ephemeral()
-    const toStatic = await dh(e.pair.privateKey, doorPub)
-    return {
-      hello: e.pub,
-      finish: async (doorEphemeralSpki) => {
-        const toEphemeral = await dh(e.pair.privateKey, await importDoorKey(doorEphemeralSpki))
-        const material = await hkdf(concat(toStatic, toEphemeral), `cookrew-relay/1 ${info}`, 64)
-        return { tx: await channel(material.slice(0, 32)), rx: await channel(material.slice(32, 64)) }
-      }
-    }
-  }
+  /* ── the seal lives in seal.js (CookrewSeal), tested against the Node one ── */
+  const Seal = globalThis.CookrewSeal
+  if (!Seal) return
 
   /* ── one exchange through the relay ────────────────────────────────────── */
-  let doorPub = null
   let seq = 0
   const [handle, team] = door.replace(/^@/, '').split('/')
   const callPath = `/v1/relay/call/${encodeURIComponent(`@${handle}`)}/${encodeURIComponent(team)}`
@@ -115,16 +46,14 @@
    * answer for everything else.
    */
   async function exchange(method, path, headers, body, onHead, onChunk, signal) {
-    if (!doorPub) doorPub = await importDoorKey(doorKey)
     const id = `w${++seq}`
-    const seal = await startSeal(doorPub, door)
-    const packedHeaders = await sealToDoor(doorPub, door, JSON.stringify(headers))
-    const op = { id, method, path, headers: { 'x-seal-e': seal.hello, 'x-seal-k': packedHeaders.e, 'x-seal-h': packedHeaders.sealed } }
-    const sealedBody = await sealToDoor(doorPub, door, body ?? '')
+    const seal = await Seal.seal(doorKey, door)
+    const packed = await seal.pack(headers, body ?? '')
+    const op = { id, method, path, headers: packed.headers }
     const res = await fetch(callPath, {
       method: 'POST',
       headers: { 'x-relay-op': b64u(enc.encode(JSON.stringify(op))), 'content-type': 'application/octet-stream' },
-      body: `${sealedBody.e}.${sealedBody.sealed}`,
+      body: packed.body,
       signal
     })
     if (res.status === 404) throw new LineError('not-serving', `${door} is not serving right now`)
@@ -155,7 +84,7 @@
           const e = frame.headers?.['x-seal-e']
           const h = frame.headers?.['x-seal-h']
           if (typeof e !== 'string' || typeof h !== 'string') throw new LineError('seal', 'the door answered without the seal')
-          rx = (await seal.finish(e)).rx
+          rx = await seal.finish(e)
           const opened = await rx.open(h, n++)
           if (opened === null) throw new LineError('seal', "the door's headers did not verify")
           head = { status: frame.status, headers: JSON.parse(opened) }

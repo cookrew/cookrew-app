@@ -59,7 +59,7 @@ answer the same, so the directory cannot be used to enumerate what is here.</p><
       title: `${door.title} — @${door.handle} · Cookrew`,
       kind: 'app',
       active: 'market',
-      scripts: ['xterm.js', 'addon-fit.js', 'site.js', 'line.js'],
+      scripts: ['xterm.js', 'addon-fit.js', 'site.js', 'seal.js', 'line.js'],
       styles: ['xterm.css'],
       cache: 0
     },

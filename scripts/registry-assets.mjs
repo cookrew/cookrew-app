@@ -19,6 +19,7 @@ const FILES = [
   ['xterm.css', 'vendor/xterm.css.txt', 'text/css; charset=utf-8'],
   ['addon-fit.js', 'vendor/addon-fit.js.txt', 'text/javascript; charset=utf-8'],
   ['site.js', 'site.js', 'text/javascript; charset=utf-8'],
+  ['seal.js', 'seal.js', 'text/javascript; charset=utf-8'],
   ['line.js', 'line.js', 'text/javascript; charset=utf-8']
 ]
 
