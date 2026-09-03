@@ -12,7 +12,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "registry:assets": "node scripts/registry-assets.mjs",
-    "registry:build": "node scripts/registry-assets.mjs && esbuild --bundle registry/src/main.ts --format=esm --platform=node --outfile=/tmp/registry.mjs",
+    "registry:build": "node scripts/registry-assets.mjs && esbuild --bundle registry/src/main.ts --format=esm --platform=node --define:__SITE_REF__=\\\"$(git rev-parse HEAD)\\\" --outfile=/tmp/registry.mjs",
     "start": "electron-vite preview",
     "postinstall": "electron-rebuild -f -w node-pty; node scripts/ensure-node-pty.mjs",
     "test": "vitest run",

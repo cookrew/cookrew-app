@@ -191,8 +191,22 @@
     const handleName = await acct.handle()
     if (!handleName) throw new LineError('account', 'sign in to cookrew.dev first')
     const registryToken = await acct.token('call', door)
-    const res = await exchange('POST', '/api/call/assert', { 'content-type': 'application/json' }, JSON.stringify({ registryToken }))
-    if (res.status !== 200) throw new LineError('refused', `the door refused this account (${res.status}) — is the owner's app up to date?`)
+    const JSON_HEADERS = { 'content-type': 'application/json' }
+    let res = await exchange('POST', '/api/call/assert', JSON_HEADERS, JSON.stringify({ registryToken }))
+    if (res.status === 401) {
+      // A door whose app predates registry tokens still takes the ceremony
+      // orch-line.mjs performs: sign its challenge with this account's own key.
+      const key = await acct.doorKey()
+      if (!key) throw new LineError('refused', "the door does not take cookrew.dev accounts yet — the owner's app needs updating")
+      const face = jsonOf((await exchange('GET', '/crew', {}, '')).body)
+      const serviceId = face?.serviceId
+      if (typeof serviceId !== 'string' || !serviceId) throw new LineError('refused', 'this door did not say who it is')
+      const challenge = jsonOf((await exchange('POST', '/api/call/challenge', JSON_HEADERS, '{}')).body)?.challenge
+      if (typeof challenge !== 'string') throw new LineError('refused', 'no challenge — is the team still serving?')
+      const signature = await key.sign(`cookrew-call/1\n${serviceId}\n${key.sub}\n${challenge}`)
+      res = await exchange('POST', '/api/call/assert', JSON_HEADERS, JSON.stringify({ sub: key.sub, challenge, signature, jwk: key.jwk }))
+    }
+    if (res.status !== 200) throw new LineError('refused', `the door refused this account (${res.status}) — this name may belong to another key there`)
     const body = jsonOf(res.body)
     if (!body?.token) throw new LineError('refused', 'the door minted no token')
     doorToken = body.token

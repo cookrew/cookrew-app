@@ -28,7 +28,10 @@ import { ASSET_VERSION } from './assets-bundle'
 export const SITE_FONTS_CSS = 'https://fonts.googleapis.com'
 export const SITE_FONTS_FILES = 'https://fonts.gstatic.com'
 /** Where the homepage's recorded frames live: the repository, on the branch the registry is built from. */
-export const SITE_FRAMES = 'https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/'
+declare const __SITE_REF__: string | undefined
+/** The git ref the bundle was built from (esbuild --define), else the dev branch. */
+const SITE_REF = typeof __SITE_REF__ === 'string' && /^[0-9a-f]{7,40}$/.test(__SITE_REF__) ? __SITE_REF__ : 'dev'
+export const SITE_FRAMES = `https://raw.githubusercontent.com/cookrew/cookrew-app/${SITE_REF}/registry/assets/site/`
 export const GITHUB_REPO = 'https://github.com/cookrew/cookrew-app'
 
 export type PageKind = 'document' | 'app'

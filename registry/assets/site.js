@@ -322,5 +322,22 @@
     }
   })
 
-  window.cookrewAccount = { token, handle: async () => (await loadAccount())?.handle ?? null, signIn: signInFlow, toast }
+  /**
+   * The door's own key-based sign-in, for a door whose app predates registry
+   * tokens: the same Ed25519 key signs the door's challenge directly, and the
+   * public half is enrolled there on first sight (TOFU, as orch-line.mjs does).
+   * Only an Ed25519 account can do this — a P-256 key is not what the door
+   * verifies with.
+   */
+  const doorKey = async () => {
+    const account = await loadAccount()
+    if (!account || account.alg !== 'Ed25519') return null
+    const jwk = await crypto.subtle.exportKey('jwk', account.pair.publicKey)
+    return {
+      sub: account.handle,
+      jwk: { kty: jwk.kty, crv: jwk.crv, x: jwk.x },
+      sign: async (text) => b64u(await sign(account, enc.encode(text)))
+    }
+  }
+  window.cookrewAccount = { token, handle: async () => (await loadAccount())?.handle ?? null, signIn: signInFlow, toast, doorKey }
 })()
