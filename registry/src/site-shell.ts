@@ -47,8 +47,8 @@ export { GITHUB_REPO, SITE_ORIGIN } from './site-content'
 export type PageKind = 'document' | 'app'
 
 const CSP: Record<PageKind, string> = {
-  document: `default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self' ${SITE_FRAMES} data:; script-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'`,
-  app: `default-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' ${SITE_FRAMES} data:; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
+  document: `default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; manifest-src 'self'; img-src 'self' ${SITE_FRAMES} data:; script-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'`,
+  app: `default-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self'; manifest-src 'self'; img-src 'self' ${SITE_FRAMES} data:; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
 }
 
 export interface Page {
@@ -134,13 +134,13 @@ export function respondPage(response: ServerResponse, rendered: Page): void {
 
 const LOGO = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="20" height="20" fill="#14110a" stroke="currentColor" stroke-width="2"/><rect x="5" y="6" width="6" height="2" fill="#e9b949"/><rect x="5" y="10" width="10" height="2" fill="#e9b949"/><rect x="5" y="14" width="4" height="2" fill="#e9b949"/><rect x="11" y="14" width="2" height="2" fill="#ffd600"><animate attributeName="opacity" values="1;0;1" dur="1.1s" repeatCount="indefinite"/></rect></svg>`
 
-/** The app's four fonts, self-hosted from the repository; the variable ones cover every weight. */
+/** The app's four fonts, from the bundle; `optional` because a font that arrives late must not shift the page — they are preloaded, so it rarely does. */
 const FONT_FACES = `
-@font-face{font-family:'Inter';font-style:normal;font-weight:400 700;font-display:swap;src:url(${SITE_FONTS}inter.woff2?v=${ASSET_VERSION}) format('woff2')}
-@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 700;font-display:swap;src:url(${SITE_FONTS}jetbrains-mono.woff2?v=${ASSET_VERSION}) format('woff2')}
-@font-face{font-family:'Silkscreen';font-style:normal;font-weight:400;font-display:swap;src:url(${SITE_FONTS}silkscreen-400.woff2?v=${ASSET_VERSION}) format('woff2')}
-@font-face{font-family:'Silkscreen';font-style:normal;font-weight:700;font-display:swap;src:url(${SITE_FONTS}silkscreen-700.woff2?v=${ASSET_VERSION}) format('woff2')}
-@font-face{font-family:'VT323';font-style:normal;font-weight:400;font-display:swap;src:url(${SITE_FONTS}vt323-400.woff2?v=${ASSET_VERSION}) format('woff2')}`
+@font-face{font-family:'Inter';font-style:normal;font-weight:400 700;font-display:optional;src:url(${SITE_FONTS}inter.woff2?v=${ASSET_VERSION}) format('woff2')}
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 700;font-display:optional;src:url(${SITE_FONTS}jetbrains-mono.woff2?v=${ASSET_VERSION}) format('woff2')}
+@font-face{font-family:'Silkscreen';font-style:normal;font-weight:400;font-display:optional;src:url(${SITE_FONTS}silkscreen-400.woff2?v=${ASSET_VERSION}) format('woff2')}
+@font-face{font-family:'Silkscreen';font-style:normal;font-weight:700;font-display:optional;src:url(${SITE_FONTS}silkscreen-700.woff2?v=${ASSET_VERSION}) format('woff2')}
+@font-face{font-family:'VT323';font-style:normal;font-weight:400;font-display:optional;src:url(${SITE_FONTS}vt323-400.woff2?v=${ASSET_VERSION}) format('woff2')}`
 const PRECONNECT = `<link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin><link rel="preload" as="font" type="font/woff2" href="${SITE_FONTS}inter.woff2?v=${ASSET_VERSION}" crossorigin><link rel="preload" as="font" type="font/woff2" href="${SITE_FONTS}silkscreen-700.woff2?v=${ASSET_VERSION}" crossorigin>`
 
 function head(options: ShellOptions): string {

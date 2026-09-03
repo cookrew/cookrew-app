@@ -262,6 +262,8 @@ describe('the front page', () => {
     expect(page.body).toContain('<table class="cmp">')
     expect(page.body).toContain('width="1400" height="875"')
     expect(page.body).toContain('qa-canvas-800.jpg 800w')
+    expect(page.body).toContain('rel="preload" as="image" href="https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/qa-canvas-800.jpg"')
+    expect(page.headers['content-security-policy']).toContain("manifest-src 'self'")
     expect(page.body).toContain('fetchpriority="high"')
   })
 

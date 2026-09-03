@@ -56,7 +56,7 @@ $ cookrew recruit "Magpie" --preset "Claude Code" --role "QA"`
 ]
 
 export function figure(frame: Frame, options: { eager?: boolean; style?: string } = {}): string {
-  return `<figure class="shot"${options.style ? ` style="${options.style}"` : ''}>${frameImg(frame, { eager: options.eager })}<figcaption><span class="rec">● REC</span>${esc(frame.caption)}</figcaption></figure>`
+  return `<figure class="shot"${options.style ? ` style="${options.style}"` : ''}>${frameImg(frame, { eager: options.eager, sizes: '(max-width: 900px) 100vw, 44vw' })}<figcaption><span class="rec">● REC</span>${esc(frame.caption)}</figcaption></figure>`
 }
 
 function tourSection(t: (typeof TOUR)[number]): string {
@@ -169,7 +169,7 @@ export function homePage(input: HomeInput): Page {
       active: 'home',
       description: DESCRIPTION,
       path: '/',
-      preload: [frameUrl(FRAMES.canvas)],
+      preload: [`${frameUrl(FRAMES.canvas).replace(/\.jpg$/, '-800.jpg')}`],
       jsonLd: [
         organization(),
         softwareApplication(release),

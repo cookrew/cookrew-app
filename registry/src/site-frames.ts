@@ -40,6 +40,8 @@ const frame = (file: string, alt: string, caption: string): Frame => {
 
 /** An <img> with its size known up front (no layout shift) and a smaller twin for narrow screens. */
 export function frameImg(frame: Frame, options: { eager?: boolean; sizes?: string } = {}): string {
+  // The hero column is under 600px on a desktop, so the 800px twin is the
+  // right file there; only a feature page's wide figure needs the 1400.
   const small = `${SITE_FRAMES}${frame.file.replace(/\.jpg$/, '-800.jpg')}`
   const large = frameUrl(frame)
   const esc = (v: string): string => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
