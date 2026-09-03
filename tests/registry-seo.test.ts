@@ -106,8 +106,10 @@ describe('the feature and start pages', () => {
   })
 
   it('the index links every feature', () => {
-    const index = featuresIndexPage()
+    const index = featuresIndexPage({ commits: [{ sha: 'a7e1d0b', title: 'feat: the web line', date: '2026-09-03', url: 'https://github.com/cookrew/cookrew-app/commit/a7e1d0b' }] })
     for (const f of FEATURES) expect(index.body).toContain(`href="/features/${f.slug}"`)
+    expect(index.body).toContain('"@type":"FAQPage"')
+    expect(index.body).toContain('feat: the web line')
   })
 
   it('the start page is a HowTo with the crew builder', () => {

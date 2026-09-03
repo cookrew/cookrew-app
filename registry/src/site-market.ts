@@ -1,6 +1,6 @@
 import type { ListedDoor } from './site'
 import type { PresetSummary } from './store'
-import { priceChip } from './site-home'
+import { presetCard, priceChip } from './site-home'
 import { esc, page, type Page } from './site-shell'
 import { MARKET_DEFINITION } from './site-content'
 import { breadcrumbs, organization, teamList, webPage } from './site-seo'
@@ -96,15 +96,6 @@ function teamCard(d: ListedDoor, stars: number, starred: boolean): string {
 <div class="screen crt"><div class="l d">$ cookrew.dev/@${esc(d.handle)}/${esc(d.name)}</div><div class="l">${esc(d.door)}&gt; ${off ? 'offline — address stays valid' : `ready — one door, ${d.agents} behind it`}</div><div class="l d">${harnesses.length > 0 ? esc(harnesses.map((h) => h.toLowerCase()).join(' · ')) : `via ${esc(d.transport)}`}</div></div>
 <div class="body">${d.summary ? `<p>${esc(d.summary)}</p>` : `<p class="dim">The owner has not written a summary.</p>`}<div class="row">${tags.map((t) => `<span class="chip">${esc(t)}</span>`).join('')}<span class="chip violet">${esc(d.door)} answers</span><span class="chip">${esc(d.transport)}</span></div><div class="meta">by <a href="/${esc(d.handle)}">@${esc(d.handle)}</a>${d.access === 'paid' ? ' · ' + d.rails.map((r) => (r === 'x402' ? 'USDC · wallet' : 'card')).join(', ') : ''}</div></div>
 <div class="foot">${priceChip(d)}<span class="sp"></span><button class="star${starred ? ' on' : ''}" data-star="${esc(d.handle)}/${esc(d.name)}" title="one star per account">★ <span>${stars}</span></button><a class="btn sm" href="${at}">Page</a><a class="btn sm primary" href="${at}#open" data-open="cookrew://import/@${esc(d.handle)}/${esc(d.name)}">Open in Cookrew</a></div>
-</article>`
-}
-
-function presetCard(p: PresetSummary): string {
-  return `<article class="team">
-<div class="head"><span class="led off" style="background:var(--violet-hi)"></span><a class="ttl" href="/install/${esc(p.id)}">${esc(p.name)}</a><span class="chip">V${p.version}</span></div>
-<div class="screen crt"><div class="l d">$ cookrew.dev/install/${esc(p.id.slice(0, 18))}…</div><div class="l">preset — a signed, immutable team file</div><div class="l d">${p.visibility === 'identified' ? 'account needed to download' : 'public'}</div></div>
-<div class="body"><p class="dim">Reviewed in the app before anything is installed; the app checks the signature itself.</p><div class="meta">by <a href="/${esc(p.author)}">@${esc(p.author)}</a>${p.latestVersion > p.version ? ` · newer: V${p.latestVersion}` : ''}</div></div>
-<div class="foot"><span class="price free">download · review first</span><span class="sp"></span><a class="btn sm" href="/install/${esc(p.id)}">Page</a><a class="btn sm primary" href="/install/${esc(p.id)}" data-open="cookrew://install/${esc(p.id)}">Review in Cookrew</a></div>
 </article>`
 }
 

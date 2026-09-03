@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { RESERVED_HANDLES, handlePage, homePage, marketPage, marketQuery, teamPage } from '../registry/src/site'
+import { featuresIndexPage } from '../registry/src/site-features'
 import type { ListedDoor } from '../registry/src/site'
 import type { Release } from '../registry/src/releases'
 
@@ -43,7 +44,14 @@ const release: Release = {
 
 const stars = (): number => 0
 const home = (doors: ListedDoor[], rel: Release | null = release) =>
-  homePage({ doors, release: rel, stars, pulse: () => ({ lines: 2, calls: 9 }), linesToday: 2, commits: [{ sha: 'a7e1d0b', title: 'feat: the web line', date: '2026-09-03', url: 'https://github.com/cookrew/cookrew-app/commit/a7e1d0b' }] })
+  homePage({
+    doors,
+    presets: [{ id: 'sha256:' + 'a'.repeat(64), name: 'Ship Crew', version: 4, author: 'drej', visibility: 'public', lineage: 'x', latestVersion: 4 }],
+    release: rel,
+    stars,
+    pulse: () => ({ lines: 2, calls: 9 }),
+    linesToday: 2
+  })
 const team = (d: ListedDoor | null, over: Partial<Parameters<typeof teamPage>[0]> = {}) =>
   teamPage({ door: d, origin: 'https://cookrew.dev', stars: 0, starred: false, account: null, ...over })
 const market = (doors: ListedDoor[], params = '', over: Partial<Parameters<typeof marketPage>[0]> = {}) =>
@@ -189,7 +197,7 @@ describe('a listing is not a connection', () => {
 
   it('the front page counts what is up, not what is listed', () => {
     const page = home([door({ live: true }), door({ name: 'b', live: false })])
-    expect(page.body).toContain('Serving right now · 1')
+    expect(page.body).toContain('1 serving now')
   })
 
   it('marks the offline ones in a list', () => {
@@ -220,7 +228,7 @@ describe('the front page', () => {
     const page = home([door()])
     expect(page.body).toContain('Run a team of AI coding agents on one canvas')
     expect(page.body).toContain('COOKREW Alpha')
-    expect(page.body).toContain('Serving right now')
+    expect(page.body).toContain('Teams you can open right now')
   })
 
   it('says so plainly when nobody is serving', () => {
@@ -230,7 +238,6 @@ describe('the front page', () => {
   it('names the real build, and says so when GitHub has not answered', () => {
     const page = home([door()])
     expect(page.body).toContain('https://x/dmg')
-    expect(page.body).toContain('Cookrew-0.1.2-arm64.dmg')
     expect(page.body).toContain('v0.1.2')
     const cold = home([door()], null)
     expect(cold.body).not.toContain('v0.1.2')
@@ -242,7 +249,6 @@ describe('the front page', () => {
     const page = home([])
     expect(page.body).toContain('raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/qa-canvas.jpg')
     expect(page.body).toContain('● REC')
-    expect(page.body).toContain('Dragged the Conductor rail up to checkpoint T13')
     expect(page.headers['content-security-policy']).toContain("img-src 'self' https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/")
     expect(page.headers['content-security-policy']).not.toContain('googleapis')
   })
@@ -255,11 +261,17 @@ describe('the front page', () => {
     expect(page.body).toContain('<link rel="canonical" href="https://cookrew.dev/">')
     expect(page.body).toContain('property="og:image" content="https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/og-site.jpg"')
     expect(page.body).toContain('"@type":"SoftwareApplication"')
-    expect(page.body).toContain('"@type":"FAQPage"')
+    expect(page.body).toContain('"@type":"ItemList"')
     expect(page.body).toContain('2 lines opened today')
-    expect(page.body).toContain('1 team serving now')
-    expect(page.body).toContain('feat: the web line')
-    expect(page.body).toContain('<table class="cmp">')
+    expect(page.body).toContain('1 serving now')
+    // Short on purpose: the presets, one line per feature, and nothing longer.
+    expect(page.body).toContain('Ship Crew')
+    expect(page.body).toContain('href="/install/sha256:' + 'a'.repeat(64) + '"')
+    expect(page.body).toContain('class="one-liners"')
+    expect(page.body).not.toContain('<table class="cmp">')
+    expect(page.body).not.toContain('<details>')
+    const prose = page.body.replace(/<(script|style)[\s\S]*?<\/\1>/g, ' ').replace(/<[^>]+>/g, ' ')
+    expect(prose.split(/\s+/).filter(Boolean).length).toBeLessThan(700)
     expect(page.body).toContain('width="1400" height="875"')
     expect(page.body).toContain('qa-canvas-800.jpg 800w')
     expect(page.body).toContain('rel="preload" as="image" href="https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/qa-canvas-800.jpg"')
@@ -268,9 +280,10 @@ describe('the front page', () => {
   })
 
   it('never claims a cut of anyone’s money', () => {
-    const flat = home([door()]).body.replace(/\s+/g, ' ')
+    const flat = featuresIndexPage().body.replace(/\s+/g, ' ')
     expect(flat).toContain('directly from caller to author')
     expect(flat).toContain('cookrew.dev takes no cut')
+    expect(flat).toContain('<table class="cmp">')
   })
 })
 

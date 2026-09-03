@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { json } from './http'
 import { serveAsset } from './assets'
 import { RELEASES_PAGE, pickAsset, type Release } from './releases'
+import type { Commit } from './github-commits'
 import { featurePage, featuresIndexPage } from './site-features'
 import { startPage } from './site-start'
 import { FAVICON_SVG, robotsTxt, sitemapXml, webManifest } from './site-seo'
@@ -27,6 +28,7 @@ export interface SiteRouteContext {
   decode: (value: string) => string | null
   doors: () => ListedDoor[]
   release: () => Promise<Release | null>
+  commits: () => Promise<readonly Commit[] | null>
   pulse?: Pulse
   note?: (message: string) => void
 }
@@ -45,7 +47,10 @@ export function handleSiteRoute(ctx: SiteRouteContext): boolean {
   if (parts[0] === 'features' && parts.length <= 2) {
     if (parts.length === 1) {
       ctx.pulse?.page('/features')
-      respondPage(response, featuresIndexPage())
+      void ctx
+        .commits()
+        .then((commits) => respondPage(response, featuresIndexPage({ commits })))
+        .catch((error: unknown) => failed(ctx, error))
       return true
     }
     // Resolve before counting: only a page that exists is a page viewed.
