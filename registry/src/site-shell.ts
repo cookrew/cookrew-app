@@ -225,7 +225,8 @@ a{color:inherit}
 .wrap{max-width:1180px;margin:0 auto;padding:0 22px}
 /* header — the app's own chrome: cream-hi, 2px ink rule */
 .hdr{position:sticky;top:0;z-index:50;background:var(--cream-hi);border-bottom:2px solid var(--line)}
-.hdr .wrap{display:flex;align-items:center;gap:18px;height:56px}
+.hdr .wrap{display:flex;align-items:center;gap:14px;min-height:56px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}
+@media (max-width:760px){.hdr .wrap>.chip{display:none}.hdr nav.top{margin-left:0;width:100%}}
 .mark{display:flex;align-items:center;gap:9px;text-decoration:none;font:700 15px var(--font-pixel);letter-spacing:.12em}
 .mark svg{width:24px;height:24px}
 .mark b{color:var(--amber-deep)}
