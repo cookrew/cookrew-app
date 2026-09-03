@@ -13,6 +13,12 @@ import type { PaymentFailure } from './payment'
 import { DoorStore, doorPath, type DoorInput, type DoorRecord } from './doors'
 import { createRelayHttp, type RelayHttp } from './relay-http'
 import { RESERVED_HANDLES, handlePage, homePage, marketPage, marketQuery, teamPage } from './site'
+import { featurePage, featuresIndexPage } from './site-features'
+import { startPage } from './site-start'
+import { FAVICON_SVG, robotsTxt, sitemapXml, webManifest } from './site-seo'
+import { llmsText } from './site-content'
+import type { Pulse } from './pulse'
+import type { CommitsCache } from './github-commits'
 import { respondPage } from './site-shell'
 import { serveAsset } from './assets'
 import type { StarStore } from './stars'
@@ -98,6 +104,10 @@ export interface RegistryDeps {
   stars?: StarStore
   /** The current build, from GitHub — the homepage's download buttons and /download. */
   releases?: ReleaseCache
+  /** Today's counts — lines opened per door, pages viewed. Never who. */
+  pulse?: Pulse
+  /** The dev branch's latest commits, for the homepage's built-in-the-open feed. */
+  commits?: CommitsCache
 }
 
 /** An account name: the same shape a handle has everywhere else on this site. */
@@ -149,7 +159,12 @@ export function createRegistry(deps: RegistryDeps): Server {
   }
 
   const relay: RelayHttp | null = deps.relay
-    ? createRelayHttp({ identity: deps.identity, log: deps.note })
+    ? createRelayHttp({
+        identity: deps.identity,
+        log: deps.note,
+        onCall: (name, method, path) =>
+          deps.pulse?.door(name, method === 'GET' && (path === '/line' || path.startsWith('/line?')) ? 'line' : 'call')
+      })
     : null
 
   /**
@@ -171,10 +186,18 @@ export function createRegistry(deps: RegistryDeps): Server {
     ...door,
     live: live(door.handle, door.name)
   })
-  const withStars = (door: DoorRecord): DoorRecord & { live: boolean; stars: number } => ({
+  const withStars = (door: DoorRecord): DoorRecord & { live: boolean; stars: number; today: { lines: number; calls: number } } => ({
     ...withLive(door),
-    stars: deps.stars?.count(door.handle, door.name) ?? 0
+    stars: deps.stars?.count(door.handle, door.name) ?? 0,
+    today: deps.pulse?.doorToday(`@${door.handle}/${door.name}`) ?? { lines: 0, calls: 0 }
   })
+  const pulseOf = (handle: string, name: string): { lines: number; calls: number } =>
+    deps.pulse?.doorToday(`@${handle}/${name}`) ?? { lines: 0, calls: 0 }
+  const text = (response: ServerResponse, type: string, body: string, cache = 3600): void => {
+    const payload = Buffer.from(body, 'utf8')
+    response.writeHead(200, { 'content-type': type, 'content-length': String(payload.byteLength), 'cache-control': `public, max-age=${cache}`, 'x-content-type-options': 'nosniff' })
+    response.end(payload)
+  }
 
   // NO REQUEST TIMEOUT. Node's default (300s) sends 408 to any request whose
   // body has not finished — and a door's uplink is a POST whose body never
@@ -663,6 +686,36 @@ export function createRegistry(deps: RegistryDeps): Server {
       return
     }
 
+    // ── THE CRAWL FILES — what a machine reads first ──────────────────────
+    if (method === 'GET' && parts.length === 1) {
+      if (parts[0] === 'robots.txt') return text(response, 'text/plain; charset=utf-8', robotsTxt())
+      if (parts[0] === 'sitemap.xml') return text(response, 'application/xml; charset=utf-8', sitemapXml((deps.doors?.list() ?? []).map(withLive)), 600)
+      if (parts[0] === 'llms.txt') return text(response, 'text/plain; charset=utf-8', llmsText())
+      if (parts[0] === 'favicon.svg') return text(response, 'image/svg+xml', FAVICON_SVG, 86400)
+      if (parts[0] === 'favicon.ico') {
+        response.writeHead(302, { location: '/favicon.svg', 'cache-control': 'public, max-age=86400' })
+        response.end()
+        return
+      }
+      if (parts[0] === 'site.webmanifest') return text(response, 'application/manifest+json', webManifest(), 86400)
+    }
+    // ── FEATURES and START — the long tail, and the first ten minutes ─────
+    if (method === 'GET' && parts[0] === 'features' && parts.length <= 2) {
+      deps.pulse?.page(url.pathname)
+      if (parts.length === 1) return respondPage(response, featuresIndexPage())
+      const rendered = featurePage(decode(parts[1]) ?? '')
+      if (rendered) return respondPage(response, rendered)
+      json(response, 404, { error: 'not_found' })
+      return
+    }
+    if (method === 'GET' && parts.length === 1 && parts[0] === 'start') {
+      deps.pulse?.page('/start')
+      void (deps.releases?.latest() ?? Promise.resolve<Release | null>(null))
+        .catch(() => null)
+        .then((release) => respondPage(response, startPage(release)))
+      return
+    }
+
     // ── STATIC ASSETS and /download — named, never walked ─────────────────
     if (method === 'GET' && parts.length === 2 && parts[0] === 'assets') {
       if (serveAsset(response, parts[1])) return
@@ -698,14 +751,27 @@ export function createRegistry(deps: RegistryDeps): Server {
       const bare = (value: string): string => (decode(value) ?? '').replace(/^@/, '')
 
       if (parts.length === 0) {
-        void (deps.releases?.latest() ?? Promise.resolve<Release | null>(null))
-          .catch(() => null)
-          .then((release) => {
-            respondPage(response, homePage({ doors: site.list().map(withLive), release, stars: starsOf }))
-          })
+        deps.pulse?.page('/')
+        void Promise.all([
+          (deps.releases?.latest() ?? Promise.resolve<Release | null>(null)).catch(() => null),
+          (deps.commits?.latest() ?? Promise.resolve(null)).catch(() => null)
+        ]).then(([release, commits]) => {
+          respondPage(
+            response,
+            homePage({
+              doors: site.list().map(withLive),
+              release,
+              stars: starsOf,
+              pulse: pulseOf,
+              linesToday: deps.pulse?.linesToday() ?? 0,
+              commits
+            })
+          )
+        })
         return
       }
       if (parts.length === 1 && parts[0] === 'market') {
+        deps.pulse?.page('/market')
         const account = accountOf(request)
         respondPage(
           response,
@@ -734,6 +800,7 @@ export function createRegistry(deps: RegistryDeps): Server {
         const name = bare(parts[1])
         const found = site.get(handle, name)
         const account = accountOf(request)
+        if (found) deps.pulse?.page(`/${handle}/${name}`)
         respondPage(
           response,
           teamPage({

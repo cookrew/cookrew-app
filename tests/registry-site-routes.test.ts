@@ -11,6 +11,8 @@ import { IdentityService } from '../registry/src/identity'
 import { DoorStore } from '../registry/src/doors'
 import { StarStore } from '../registry/src/stars'
 import { ReleaseCache } from '../registry/src/releases'
+import { Pulse } from '../registry/src/pulse'
+import { CommitsCache } from '../registry/src/github-commits'
 
 /**
  * THE SITE OVER HTTP — pages, stars, the token key, the download redirect,
@@ -60,7 +62,9 @@ beforeAll(async () => {
     relay: true,
     origin: 'https://cookrew.dev',
     stars: new StarStore(dir),
-    releases: new ReleaseCache({ fetch: async () => new Response(JSON.stringify(RELEASE), { status: 200 }), ttlMs: 60_000 })
+    releases: new ReleaseCache({ fetch: async () => new Response(JSON.stringify(RELEASE), { status: 200 }), ttlMs: 60_000 }),
+    pulse: new Pulse(dir),
+    commits: new CommitsCache({ fetch: async () => new Response('[]', { status: 200 }), ttlMs: 60_000 })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
@@ -110,7 +114,7 @@ describe('the pages', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('content-security-policy')).toContain("script-src 'none'")
     const body = await res.text()
-    expect(body).toContain('Cookrew gives you a team')
+    expect(body).toContain('Run a team of AI coding agents on one canvas')
     expect(body).toContain('https://dl.example/dmg')
     expect(body).toContain('COOKREW Alpha')
   })
@@ -138,6 +142,36 @@ describe('the pages', () => {
   it('a reserved name is a route, never a handle', async () => {
     expect((await get('/market')).status).toBe(200)
     expect((await get('/download')).status).toBe(302)
+  })
+})
+
+describe('the crawl files and the long tail', () => {
+  it('serves robots, sitemap, llms.txt, the favicon and the manifest', async () => {
+    expect(await (await get('/robots.txt')).text()).toContain('Sitemap: https://cookrew.dev/sitemap.xml')
+    const sitemap = await get('/sitemap.xml')
+    expect(sitemap.headers.get('content-type')).toContain('application/xml')
+    expect(await sitemap.text()).toContain('<loc>https://cookrew.dev/drej/cookrew-alpha</loc>')
+    expect(await (await get('/llms.txt')).text()).toContain('# Cookrew')
+    expect((await get('/favicon.svg')).headers.get('content-type')).toContain('image/svg+xml')
+    expect((await get('/favicon.ico')).status).toBe(302)
+    expect((await get('/site.webmanifest')).headers.get('content-type')).toContain('manifest')
+  })
+
+  it('serves every feature page, the index and the start page', async () => {
+    expect((await get('/features')).status).toBe(200)
+    const canvas = await get('/features/canvas')
+    expect(canvas.status).toBe(200)
+    expect(await canvas.text()).toContain('"@type":"BreadcrumbList"')
+    expect((await get('/features/nope')).status).toBe(404)
+    expect((await get('/features/%E0%A4%A')).status).toBe(404)
+    const start = await get('/start')
+    expect(start.status).toBe(200)
+    expect(await start.text()).toContain('id="crew-builder"')
+  })
+
+  it('a door on the wire carries today’s counts', async () => {
+    const one = (await (await get('/v1/doors/@drej/cookrew-alpha')).json()) as { today: { lines: number; calls: number } }
+    expect(one.today).toEqual({ lines: 0, calls: 0 })
   })
 })
 

@@ -42,7 +42,8 @@ const release: Release = {
 }
 
 const stars = (): number => 0
-const home = (doors: ListedDoor[], rel: Release | null = release) => homePage({ doors, release: rel, stars })
+const home = (doors: ListedDoor[], rel: Release | null = release) =>
+  homePage({ doors, release: rel, stars, pulse: () => ({ lines: 2, calls: 9 }), linesToday: 2, commits: [{ sha: 'a7e1d0b', title: 'feat: the web line', date: '2026-09-03', url: 'https://github.com/cookrew/cookrew-app/commit/a7e1d0b' }] })
 const team = (d: ListedDoor | null, over: Partial<Parameters<typeof teamPage>[0]> = {}) =>
   teamPage({ door: d, origin: 'https://cookrew.dev', stars: 0, starred: false, account: null, ...over })
 const market = (doors: ListedDoor[], params = '', over: Partial<Parameters<typeof marketPage>[0]> = {}) =>
@@ -59,7 +60,8 @@ const market = (doors: ListedDoor[], params = '', over: Partial<Parameters<typeo
 describe('a document can express nothing at all', () => {
   it('the front page and an owner’s page: no script, no form, no handler', () => {
     for (const page of [home([door()]), handlePage('drej', [door()])]) {
-      expect(page.body).not.toMatch(/<script/i)
+      // One script is allowed on a document: the JSON-LD graph, which runs nothing.
+      expect(page.body).not.toMatch(/<script(?! type="application\/ld\+json")/i)
       expect(page.body).not.toMatch(/<form/i)
       expect(page.body).not.toMatch(/\son[a-z]+=/i)
       expect(page.body).not.toMatch(/javascript:/i)
@@ -216,7 +218,7 @@ describe('an owner’s page', () => {
 describe('the front page', () => {
   it('leads with the claim, and shows what is actually serving', () => {
     const page = home([door()])
-    expect(page.body).toContain('Cookrew gives you a team')
+    expect(page.body).toContain('Run a team of AI coding agents on one canvas')
     expect(page.body).toContain('COOKREW Alpha')
     expect(page.body).toContain('Serving right now')
   })
@@ -233,7 +235,7 @@ describe('the front page', () => {
     const cold = home([door()], null)
     expect(cold.body).not.toContain('v0.1.2')
     expect(cold.body).toContain('releases/latest')
-    expect(cold.body).toContain('not available right now')
+    expect(cold.body).toContain('href="/download"')
   })
 
   it('shows the recorded cases, from the repository, with what was actually done', () => {
@@ -241,13 +243,32 @@ describe('the front page', () => {
     expect(page.body).toContain('raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/qa-canvas.jpg')
     expect(page.body).toContain('● REC')
     expect(page.body).toContain('Dragged the Conductor rail up to checkpoint T13')
-    expect(page.headers['content-security-policy']).toContain('img-src https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/')
+    expect(page.headers['content-security-policy']).toContain("img-src 'self' https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/")
+    expect(page.headers['content-security-policy']).not.toContain('googleapis')
+  })
+
+  it('opens with the definition, carries the machine-readable head, and shows the live board', () => {
+    const page = home([door({ live: true, harnesses: ['Pi'] })])
+    expect(page.body).toContain('<h1>Run a team of AI coding agents on one canvas')
+    expect(page.body).toContain('Cookrew is an open-source desktop workspace')
+    expect(page.body).toContain('<meta name="description" content="Cookrew is an open-source desktop workspace')
+    expect(page.body).toContain('<link rel="canonical" href="https://cookrew.dev/">')
+    expect(page.body).toContain('property="og:image" content="https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/og-site.jpg"')
+    expect(page.body).toContain('"@type":"SoftwareApplication"')
+    expect(page.body).toContain('"@type":"FAQPage"')
+    expect(page.body).toContain('2 lines opened today')
+    expect(page.body).toContain('1 team serving now')
+    expect(page.body).toContain('feat: the web line')
+    expect(page.body).toContain('<table class="cmp">')
+    expect(page.body).toContain('width="1400" height="875"')
+    expect(page.body).toContain('qa-canvas-800.jpg 800w')
+    expect(page.body).toContain('fetchpriority="high"')
   })
 
   it('never claims a cut of anyone’s money', () => {
     const flat = home([door()]).body.replace(/\s+/g, ' ')
-    expect(flat).toContain('straight to the author')
-    expect(flat).toContain('this registry never holds it')
+    expect(flat).toContain('directly from caller to author')
+    expect(flat).toContain('cookrew.dev takes no cut')
   })
 })
 
@@ -316,7 +337,7 @@ describe('the market', () => {
 
 describe('a handle cannot capture a route', () => {
   it('reserves every top-level name the registry answers on', () => {
-    for (const taken of ['v1', 'install', 'api', '.well-known', 'robots.txt', 'market', 'download', 'assets']) {
+    for (const taken of ['v1', 'install', 'api', '.well-known', 'robots.txt', 'market', 'download', 'assets', 'features', 'start', 'llms.txt']) {
       expect(RESERVED_HANDLES.has(taken), taken).toBe(true)
     }
   })

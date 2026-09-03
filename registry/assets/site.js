@@ -339,5 +339,35 @@
       sign: async (text) => b64u(await sign(account, enc.encode(text)))
     }
   }
+  /* ── the crew builder (/start) ─────────────────────────────────────────── */
+  const builder = $('crew-builder')
+  if (builder) {
+    const NAMES = ['Forge', 'Bench', 'Atlas', 'Magpie', 'Fresco', 'Velvet', 'Tinker', 'Sol']
+    const render = () => {
+      const harnesses = [...builder.querySelectorAll('input[name=h]:checked')].map((i) => i.value)
+      const roles = ($('crew-roles')?.value ?? '')
+        .split(',')
+        .map((r) => r.trim())
+        .filter(Boolean)
+      const n = Math.max(harnesses.length, roles.length, 1)
+      const lines = []
+      const names = []
+      for (let i = 0; i < n; i++) {
+        const name = NAMES[i % NAMES.length]
+        names.push(name)
+        const preset = harnesses[i % Math.max(harnesses.length, 1)] ?? 'Claude Code'
+        const role = roles[i % Math.max(roles.length, 1)] ?? 'teammate'
+        lines.push(`$ cookrew recruit "${name}" --preset "${preset}" --role "${role}"`)
+      }
+      for (let i = 1; i < names.length; i++) lines.push(`$ cookrew connect "${names[0]}" "${names[i]}"`)
+      if ($('crew-orch')?.checked) lines.push(`$ cookrew orch "${names[0]}"`)
+      $('crew-script').textContent = lines.join('\n')
+      return lines.map((l) => l.replace(/^\$ /, '')).join('\n')
+    }
+    builder.addEventListener('input', render)
+    $('crew-copy')?.addEventListener('click', () => navigator.clipboard.writeText(render()).then(() => toast('Commands copied. Paste them into a terminal with Cookrew running.')))
+    render()
+  }
+
   window.cookrewAccount = { token, handle: async () => (await loadAccount())?.handle ?? null, signIn: signInFlow, toast, doorKey }
 })()

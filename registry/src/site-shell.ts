@@ -25,20 +25,26 @@ import { ASSET_VERSION } from './assets-bundle'
  * repository on GitHub so the bundle stays small enough for its ConfigMap.
  */
 
-export const SITE_FONTS_CSS = 'https://fonts.googleapis.com'
-export const SITE_FONTS_FILES = 'https://fonts.gstatic.com'
-/** Where the homepage's recorded frames live: the repository, on the branch the registry is built from. */
 declare const __SITE_REF__: string | undefined
 /** The git ref the bundle was built from (esbuild --define), else the dev branch. */
 const SITE_REF = typeof __SITE_REF__ === 'string' && /^[0-9a-f]{7,40}$/.test(__SITE_REF__) ? __SITE_REF__ : 'dev'
-export const SITE_FRAMES = `https://raw.githubusercontent.com/cookrew/cookrew-app/${SITE_REF}/registry/assets/site/`
+/**
+ * Where the site's heavy assets live: this repository, at the exact commit
+ * the bundle was built from. Frames and fonts never enter the bundle (the
+ * ConfigMap has a ceiling) and never come from a third party's origin — one
+ * origin besides our own, and it is ours.
+ */
+export const SITE_ASSETS = `https://raw.githubusercontent.com/cookrew/cookrew-app/${SITE_REF}/registry/assets/`
+export const SITE_FRAMES = `${SITE_ASSETS}site/`
+export const SITE_FONTS = `${SITE_ASSETS}fonts/`
 export const GITHUB_REPO = 'https://github.com/cookrew/cookrew-app'
+export const SITE_ORIGIN = 'https://cookrew.dev'
 
 export type PageKind = 'document' | 'app'
 
 const CSP: Record<PageKind, string> = {
-  document: `default-src 'none'; style-src 'unsafe-inline' ${SITE_FONTS_CSS}; font-src ${SITE_FONTS_FILES}; img-src ${SITE_FRAMES} data:; script-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'`,
-  app: `default-src 'none'; style-src 'self' 'unsafe-inline' ${SITE_FONTS_CSS}; font-src ${SITE_FONTS_FILES}; img-src ${SITE_FRAMES} data:; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
+  document: `default-src 'none'; style-src 'unsafe-inline'; font-src ${SITE_FONTS}; img-src 'self' ${SITE_FRAMES} data:; script-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'`,
+  app: `default-src 'none'; style-src 'self' 'unsafe-inline'; font-src ${SITE_FONTS}; img-src 'self' ${SITE_FRAMES} data:; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
 }
 
 export interface Page {
@@ -60,8 +66,20 @@ export function esc(value: string | number): string {
 export interface ShellOptions {
   title: string
   kind: PageKind
+  /** One sentence for the snippet and the share card; ≤ 160 characters is what engines show. */
+  description?: string
+  /** The canonical path of this page, e.g. `/market`. Absent means no canonical. */
+  path?: string
+  /** An absolute image URL for the share card; the site's own when absent. */
+  image?: string
+  /** schema.org blocks for one JSON-LD graph. */
+  jsonLd?: readonly Record<string, unknown>[]
+  /** Images to preload (the hero's), absolute or site-relative. */
+  preload?: readonly string[]
+  /** Pages that must not be indexed — a 404, a page rendered for one reader. */
+  noindex?: boolean
   /** Which header button is lit. */
-  active?: 'home' | 'market' | 'download'
+  active?: 'home' | 'market' | 'features' | 'start' | 'download'
   /** Scripts from /assets, app pages only. */
   scripts?: string[]
   /** Stylesheets from /assets, app pages only. */
@@ -104,12 +122,50 @@ export function respondPage(response: ServerResponse, rendered: Page): void {
 
 const LOGO = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="20" height="20" fill="#14110a" stroke="currentColor" stroke-width="2"/><rect x="5" y="6" width="6" height="2" fill="#e9b949"/><rect x="5" y="10" width="10" height="2" fill="#e9b949"/><rect x="5" y="14" width="4" height="2" fill="#e9b949"/><rect x="11" y="14" width="2" height="2" fill="#ffd600"><animate attributeName="opacity" values="1;0;1" dur="1.1s" repeatCount="indefinite"/></rect></svg>`
 
-const FONTS = `<link rel="preconnect" href="${SITE_FONTS_CSS}"><link rel="preconnect" href="${SITE_FONTS_FILES}" crossorigin><link href="${SITE_FONTS_CSS}/css2?family=VT323&family=Silkscreen:wght@400;700&family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">`
+/** The app's four fonts, self-hosted from the repository; the variable ones cover every weight. */
+const FONT_FACES = `
+@font-face{font-family:'Inter';font-style:normal;font-weight:400 700;font-display:swap;src:url(${SITE_FONTS}inter.woff2) format('woff2')}
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 700;font-display:swap;src:url(${SITE_FONTS}jetbrains-mono.woff2) format('woff2')}
+@font-face{font-family:'Silkscreen';font-style:normal;font-weight:400;font-display:swap;src:url(${SITE_FONTS}silkscreen-400.woff2) format('woff2')}
+@font-face{font-family:'Silkscreen';font-style:normal;font-weight:700;font-display:swap;src:url(${SITE_FONTS}silkscreen-700.woff2) format('woff2')}
+@font-face{font-family:'VT323';font-style:normal;font-weight:400;font-display:swap;src:url(${SITE_FONTS}vt323-400.woff2) format('woff2')}`
+const PRECONNECT = `<link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin><link rel="preload" as="font" type="font/woff2" href="${SITE_FONTS}inter.woff2" crossorigin><link rel="preload" as="font" type="font/woff2" href="${SITE_FONTS}silkscreen-700.woff2" crossorigin>`
+
+function head(options: ShellOptions): string {
+  const url = options.path === undefined ? null : `${SITE_ORIGIN}${options.path}`
+  const description = options.description ?? ''
+  const image = options.image ?? `${SITE_FRAMES}og-site.jpg`
+  return [
+    `<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">`,
+    `<title>${esc(options.title)}</title>`,
+    description ? `<meta name="description" content="${esc(description)}">` : '',
+    options.noindex ? `<meta name="robots" content="noindex">` : '',
+    url ? `<link rel="canonical" href="${esc(url)}">` : '',
+    `<meta property="og:site_name" content="Cookrew"><meta property="og:type" content="website">`,
+    `<meta property="og:title" content="${esc(options.title)}">`,
+    description ? `<meta property="og:description" content="${esc(description)}">` : '',
+    url ? `<meta property="og:url" content="${esc(url)}">` : '',
+    `<meta property="og:image" content="${esc(image)}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">`,
+    `<meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${esc(options.title)}">`,
+    description ? `<meta name="twitter:description" content="${esc(description)}">` : '',
+    `<meta name="twitter:image" content="${esc(image)}">`,
+    `<meta name="theme-color" content="#ffd600">`,
+    `<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="manifest" href="/site.webmanifest">`,
+    `<link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt">`,
+    PRECONNECT,
+    (options.preload ?? []).map((href) => `<link rel="preload" as="image" href="${esc(href)}">`).join(''),
+    options.jsonLd && options.jsonLd.length > 0
+      ? `<script type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', '@graph': options.jsonLd }).replace(/</g, '\\u003c')}</script>`
+      : ''
+  ].join('')
+}
 
 function shell(options: ShellOptions, main: string): string {
   const nav = [
     ['/market', 'Marketplace', 'market'],
-    ['/#download', 'Download', 'download'],
+    ['/features', 'Features', 'features'],
+    ['/start', 'Get started', 'start'],
+    ['/download', 'Download', 'download'],
     [GITHUB_REPO, 'GitHub', 'github']
   ]
     .map(
@@ -128,8 +184,7 @@ function shell(options: ShellOptions, main: string): string {
     .map((s) => `<link rel="stylesheet" href="/assets/${esc(s)}?v=${ASSET_VERSION}">`)
     .join('')
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(options.title)}</title>${FONTS}${styles}<style>${SITE_STYLE}</style>${scripts}</head>
+<html lang="en"><head>${head(options)}${styles}<style>${FONT_FACES}${SITE_STYLE}</style>${scripts}</head>
 <body>
 <header class="hdr"><div class="wrap">
 <a class="mark" href="/">${LOGO}<span>COOK<b>REW</b></span></a>
@@ -137,10 +192,10 @@ function shell(options: ShellOptions, main: string): string {
 <nav class="top">${nav}${account}</nav>
 </div></header>
 ${main}
-<footer><div class="wrap"><div class="row">
-<span>cookrew.dev · <a href="/v1/doors">the directory, as data</a> · <a href="${GITHUB_REPO}/releases">releases</a> · <a href="${GITHUB_REPO}">source</a></span>
-<span>Generated from the registry's live directory.</span>
-</div></div></footer>
+<footer><div class="wrap">
+<nav class="row" aria-label="Site"><a href="/market">Marketplace</a><a href="/features">Features</a><a href="/start">Get started</a><a href="/download">Download</a><a href="${GITHUB_REPO}">Source</a><a href="${GITHUB_REPO}/releases">Releases</a><a href="/v1/doors">Directory as data</a><a href="/sitemap.xml">Sitemap</a><a href="/llms.txt">llms.txt</a></nav>
+<p class="meta" style="margin-top:12px">Cookrew is open source under the MIT license. Every page here is generated from the registry's live directory; nothing is staged, and every number carries its date.</p>
+</div></footer>
 <div class="toast" id="toast" hidden></div>
 </body></html>`
 }
@@ -218,8 +273,8 @@ ul.doors li:last-child{border-bottom:none}
 .price{font:600 12px var(--font-mono);border:1.5px solid var(--line);padding:2px 9px;color:var(--ink-soft)}
 .star{font:600 12px var(--font-mono);border:2px solid var(--line);background:var(--cream-hi);box-shadow:2px 2px 0 var(--line);padding:4px 9px;cursor:pointer;display:inline-flex;gap:6px;align-items:center;color:var(--ink)}
 .star.on{background:var(--amber);color:#2d2a20}.star:active{transform:translate(2px,2px);box-shadow:none}
-footer{padding:36px 0 60px;color:var(--muted);font-size:13.5px}
-footer .row{justify-content:space-between}
+footer{padding:36px 0 60px;color:var(--muted);font-size:13.5px;border-top:2px solid var(--line-soft)}
+footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:uppercase;text-decoration:none;border:1.5px solid var(--line-soft);padding:3px 7px}
 .stats{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
 .stat{border:2px solid var(--line);background:var(--cream-hi);box-shadow:3px 3px 0 var(--line);padding:14px}
 .stat b{display:block;font:700 30px/1 var(--font-pixel);letter-spacing:-.02em;margin-bottom:6px;color:var(--amber-deep)}
@@ -287,6 +342,24 @@ footer .row{justify-content:space-between}
 .hero .wrap{display:grid;gap:40px;grid-template-columns:minmax(0,6fr) minmax(0,6fr);align-items:center}
 @media (max-width:900px){.hero .wrap{grid-template-columns:1fr}}
 .tagline{display:inline-block;background:var(--amber);color:#2d2a20;font:700 9.5px var(--font-pixel);letter-spacing:.14em;padding:4px 10px;border:2px solid var(--line);transform:rotate(-1deg);margin-bottom:18px}
+.faq details{border:2px solid var(--line);background:var(--cream-hi);margin:8px 0;box-shadow:3px 3px 0 var(--line)}
+.faq summary{cursor:pointer;padding:10px 14px;font-weight:600}.faq details>p{padding:0 16px 14px;margin:0;color:var(--muted)}
+.commits{list-style:none;padding:0;margin:14px 0;border:2px solid var(--line);background:var(--cream-hi);box-shadow:4px 4px 0 var(--line)}
+.commits li{padding:9px 14px;border-bottom:1.5px solid var(--line-soft);font-size:14px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}.commits li:last-child{border-bottom:none}
+.commits time{font:600 12px var(--font-mono);color:var(--ink-soft)}
+table.cmp{border-collapse:collapse;width:100%;font-size:14px;background:var(--cream-hi);border:2px solid var(--line);box-shadow:4px 4px 0 var(--line);margin:14px 0}
+table.cmp caption{caption-side:bottom;font-size:12.5px;color:var(--muted);padding:8px 0;text-align:left}
+table.cmp th,table.cmp td{text-align:left;padding:9px 11px;border-bottom:1.5px solid var(--line-soft);vertical-align:top}
+table.cmp thead th{font:700 9px var(--font-pixel);letter-spacing:.1em;text-transform:uppercase;background:var(--cream-md);color:var(--ink-soft)}
+table.cmp tbody th{font-weight:600;color:var(--ink)}table.cmp td:last-child{background:var(--amber-soft)}
+ol.steps{list-style:none;padding:0;margin:14px 0;display:grid;gap:26px}
+ol.steps .step{display:grid;grid-template-columns:44px 1fr;gap:14px;align-items:start}
+ol.steps .step-no{font:700 16px var(--font-pixel);background:var(--amber);border:2px solid var(--line);box-shadow:2px 2px 0 var(--line);width:40px;height:40px;display:grid;place-items:center}
+ol.howto{padding-left:0;list-style:none;counter-reset:h;display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));margin:14px 0}
+ol.howto li{counter-increment:h;background:var(--cream-hi);border:2px solid var(--line);box-shadow:3px 3px 0 var(--line);padding:14px 16px}
+ol.howto li h3::before{content:counter(h) ' · ';color:var(--amber-deep);font-family:var(--font-pixel);font-size:11px}
+ol.howto li p{margin:0;color:var(--muted);font-size:14px}
+.rec-chip{background:var(--hp);color:#14110a}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--cream-hi);border:2px solid var(--line);box-shadow:4px 4px 0 var(--line);padding:10px 14px;font-size:14px;display:none;z-index:99;max-width:90vw}
 .toast.on{display:block}
 `

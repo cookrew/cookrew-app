@@ -66,6 +66,8 @@ export function createRelayHttp(deps: {
   pulseMs?: number
   /** How long without a pong before the door is declared gone. */
   pulseDeadlineMs?: number
+  /** A call carried to a door — its name, method and path; never its bytes. The site's pulse. */
+  onCall?: (name: string, method: string, path: string) => void
 }): RelayHttp {
   const now = deps.now ?? ((): number => Date.now())
   const log = deps.log ?? ((): void => undefined)
@@ -382,6 +384,7 @@ export function createRelayHttp(deps: {
       }
       write = openNdjson(response)
       log(`relay: ${name} ← ${op.method} ${op.path} as ${opened.id}${body.length > 0 ? ' +body' : ''}`)
+      deps.onCall?.(name, op.method, op.path)
       // The hub told the door about this exchange the moment it opened; the
       // body follows as its own frame, exactly as the frame protocol says.
       if (body.length > 0) {

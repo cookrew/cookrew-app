@@ -1,6 +1,7 @@
 import type { ListedDoor } from './site'
 import { priceChip } from './site-home'
 import { esc, page, type Page } from './site-shell'
+import { breadcrumbs, organization, teamProduct, webPage } from './site-seo'
 
 /**
  * A SERVED TEAM'S PAGE — the door's own terminal, on the web.
@@ -36,7 +37,7 @@ export function teamPage(input: TeamInput): Page {
   const { door } = input
   if (!door) {
     return page(
-      { title: 'Not serving — Cookrew', kind: 'document', active: 'market', cache: 0, status: 404 },
+      { title: 'Not serving — Cookrew', kind: 'document', active: 'market', cache: 0, status: 404, noindex: true },
       `<div class="wrap" style="padding-top:44px"><h1>Not serving</h1>
 <p class="lede">No team is taking calls at that address.</p>
 <p class="meta">It may have been withdrawn, or it may never have existed. Those
@@ -61,7 +62,15 @@ answer the same, so the directory cannot be used to enumerate what is here.</p><
       active: 'market',
       scripts: ['xterm.js', 'addon-fit.js', 'site.js', 'seal.js', 'line.js'],
       styles: ['xterm.css'],
-      cache: 0
+      cache: 0,
+      description: `${door.title}: ${door.door} answers on behalf of ${door.agents} agent${door.agents === 1 ? '' : 's'} served by @${door.handle} on Cookrew. ${door.summary ?? 'Open a live, sandboxed session from your browser or the Cookrew app.'}`.slice(0, 158),
+      path: `/${door.handle}/${door.name}`,
+      jsonLd: [
+        organization(),
+        webPage({ path: `/${door.handle}/${door.name}`, name: door.title, description: door.summary ?? `${door.title}, a served AI agent team on Cookrew.` }),
+        breadcrumbs([{ name: 'Cookrew', path: '/' }, { name: 'Marketplace', path: '/market' }, { name: `@${door.handle}`, path: `/${door.handle}` }, { name: door.title, path: `/${door.handle}/${door.name}` }]),
+        teamProduct(door, input.stars)
+      ]
     },
     `<div class="wrap" style="padding-top:36px" id="team" data-door="${esc(name)}" data-seal-key="${esc(door.sealKey ?? '')}" data-live="${off ? '0' : '1'}" data-access="${esc(door.access)}" data-price="${esc(door.priceUsd ?? '')}" data-orch="${esc(door.door)}" data-relayed="${relayed ? '1' : '0'}">
 <p class="meta"><a href="/market">Marketplace</a> / <a href="/${esc(door.handle)}">@${esc(door.handle)}</a> / ${esc(door.name)}</p>

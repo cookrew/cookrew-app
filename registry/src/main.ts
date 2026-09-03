@@ -36,6 +36,8 @@ import { ReceiptStore } from './receipts'
 import { DoorStore } from './doors'
 import { StarStore } from './stars'
 import { ReleaseCache } from './releases'
+import { CommitsCache } from './github-commits'
+import { Pulse } from './pulse'
 import { buildManifest, signManifest } from '../../src/main/preset-publish'
 import { scrubForPublish } from '../../src/main/preset-scrub'
 import type { TeamSnapshot } from '../../src/main/teams'
@@ -210,6 +212,8 @@ createRegistry({
   // stars are a file beside the doors, the build is whatever GitHub says.
   stars: new StarStore(DATA),
   releases: new ReleaseCache(),
+  commits: new CommitsCache(),
+  pulse: new Pulse(DATA),
   note: (message) => console.error(message),
   authorize: makeAuthorize(store, identity, pricing)
 }).listen(PORT, () => {
