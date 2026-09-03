@@ -15,11 +15,11 @@ export function serveAsset(response: ServerResponse, name: string): boolean {
   // prototype member here is an unauthenticated crash.
   const asset = Object.prototype.hasOwnProperty.call(ASSETS, name) ? ASSETS[name] : undefined
   if (!asset) return false
-  const payload = Buffer.from(asset.body, 'utf8')
+  const payload = Buffer.from(asset.body, asset.encoding === 'base64' ? 'base64' : 'utf8')
   response.writeHead(200, {
     'content-type': asset.type,
     'content-length': String(payload.byteLength),
-    'cache-control': 'public, max-age=3600',
+    'cache-control': 'public, max-age=31536000, immutable',
     'x-content-type-options': 'nosniff'
   })
   response.end(payload)

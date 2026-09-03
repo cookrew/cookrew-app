@@ -2,6 +2,8 @@ import type { ListedDoor } from './site'
 import type { PresetSummary } from './store'
 import { priceChip } from './site-home'
 import { esc, page, type Page } from './site-shell'
+import { MARKET_DEFINITION } from './site-content'
+import { breadcrumbs, organization, teamList, webPage } from './site-seo'
 
 /**
  * THE MARKET — doors first, presets second, stars as the sort key.
@@ -140,11 +142,21 @@ export function marketPage(input: MarketInput): Page {
           : `<div class="empty">No team matches. Widen the filters, or serve one yourself.</div>`
 
   return page(
-    { title: 'Marketplace — served agent teams · Cookrew', kind: 'app', active: 'market', scripts: ['site.js'], cache: 0 },
+    {
+      title: 'Marketplace — served AI agent teams you can open from a browser · Cookrew',
+      kind: 'app',
+      active: 'market',
+      scripts: ['site.js'],
+      cache: 0,
+      description: MARKET_DEFINITION.slice(0, 158),
+      path: '/market',
+      noindex: query.tab === 'starred',
+      jsonLd: [organization(), webPage({ path: '/market', name: 'Cookrew marketplace', description: MARKET_DEFINITION }), breadcrumbs([{ name: 'Cookrew', path: '/' }, { name: 'Marketplace', path: '/market' }]), teamList(query.tab === 'teams' ? doors : [])]
+    },
     `<div class="wrap" style="padding-top:44px">
 <p class="kicker"><span class="no">MARKET</span>doors, not copies</p>
 <h1 style="font-size:clamp(28px,3.6vw,40px)">Find a crew. Star it. Open it in Cookrew.</h1>
-<p class="lede">Every listing is a team somebody is serving from their own machine. Opening one gives you a live, sandboxed session of your own, on their hardware, at their price. Nothing to install on your side but Cookrew.</p>
+<p class="lede">${esc(MARKET_DEFINITION)}</p>
 <div class="tabs">${tab('teams', 'Served teams')}${tab('presets', 'Presets to download')}${tab('starred', '★ Starred')}</div>
 <form class="card soft" style="padding:14px 16px" method="get" action="/market" id="filters">
 ${hidden('tab', query.tab === 'teams' ? '' : query.tab)}${hidden('owner', query.owner)}

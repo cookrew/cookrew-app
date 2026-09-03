@@ -13,10 +13,12 @@ import type { PaymentFailure } from './payment'
 import { DoorStore, doorPath, type DoorInput, type DoorRecord } from './doors'
 import { createRelayHttp, type RelayHttp } from './relay-http'
 import { RESERVED_HANDLES, handlePage, homePage, marketPage, marketQuery, teamPage } from './site'
+import { handleSiteRoute } from './site-routes'
+import type { Pulse } from './pulse'
+import type { CommitsCache } from './github-commits'
 import { respondPage } from './site-shell'
-import { serveAsset } from './assets'
 import type { StarStore } from './stars'
-import { RELEASES_PAGE, pickAsset, type Release, type ReleaseCache } from './releases'
+import type { Release, ReleaseCache } from './releases'
 
 /**
  * REGISTRY SERVER (P2-A1) — routes only. Every answer is chosen by a decision
@@ -98,6 +100,10 @@ export interface RegistryDeps {
   stars?: StarStore
   /** The current build, from GitHub — the homepage's download buttons and /download. */
   releases?: ReleaseCache
+  /** Today's counts — lines opened per door, pages viewed. Never who. */
+  pulse?: Pulse
+  /** The dev branch's latest commits, for the homepage's built-in-the-open feed. */
+  commits?: CommitsCache
 }
 
 /** An account name: the same shape a handle has everywhere else on this site. */
@@ -149,7 +155,14 @@ export function createRegistry(deps: RegistryDeps): Server {
   }
 
   const relay: RelayHttp | null = deps.relay
-    ? createRelayHttp({ identity: deps.identity, log: deps.note })
+    ? createRelayHttp({
+        identity: deps.identity,
+        log: deps.note,
+        onAnswer: (name, method, path, status) => {
+          if (status >= 400) return
+          deps.pulse?.door(name, method === 'GET' && status === 200 && (path === '/line' || path.startsWith('/line?')) ? 'line' : 'call')
+        }
+      })
     : null
 
   /**
@@ -171,10 +184,13 @@ export function createRegistry(deps: RegistryDeps): Server {
     ...door,
     live: live(door.handle, door.name)
   })
-  const withStars = (door: DoorRecord): DoorRecord & { live: boolean; stars: number } => ({
+  const withStars = (door: DoorRecord): DoorRecord & { live: boolean; stars: number; today: { lines: number; calls: number } } => ({
     ...withLive(door),
-    stars: deps.stars?.count(door.handle, door.name) ?? 0
+    stars: deps.stars?.count(door.handle, door.name) ?? 0,
+    today: deps.pulse?.doorToday(`@${door.handle}/${door.name}`) ?? { lines: 0, calls: 0 }
   })
+  const pulseOf = (handle: string, name: string): { lines: number; calls: number } =>
+    deps.pulse?.doorToday(`@${handle}/${name}`) ?? { lines: 0, calls: 0 }
 
   // NO REQUEST TIMEOUT. Node's default (300s) sends 408 to any request whose
   // body has not finished — and a door's uplink is a POST whose body never
@@ -663,27 +679,22 @@ export function createRegistry(deps: RegistryDeps): Server {
       return
     }
 
-    // ── STATIC ASSETS and /download — named, never walked ─────────────────
-    if (method === 'GET' && parts.length === 2 && parts[0] === 'assets') {
-      if (serveAsset(response, parts[1])) return
-      json(response, 404, { error: 'not_found' })
+    // ── THE SITE'S OWN ROUTES — crawl files, features, start, assets, /download ──
+    if (
+      handleSiteRoute({
+        method,
+        parts,
+        url,
+        request,
+        response,
+        decode,
+        doors: () => (deps.doors?.list() ?? []).map(withLive),
+        release: () => (deps.releases?.latest() ?? Promise.resolve<Release | null>(null)).catch(() => null),
+        pulse: deps.pulse,
+        note: deps.note
+      })
+    )
       return
-    }
-    // GET /download[?platform=mac|windows] — the current build for the reader's
-    // platform, or the release page when there is no build for it (or GitHub
-    // has not answered yet). A redirect, so the link people share is ours and
-    // keeps working when the version moves on.
-    if (method === 'GET' && parts.length === 1 && parts[0] === 'download') {
-      void (deps.releases?.latest() ?? Promise.resolve<Release | null>(null))
-        .catch(() => null)
-        .then((release) => {
-          const platform = url.searchParams.get('platform') ?? request.headers['user-agent'] ?? ''
-          const asset = release ? pickAsset(release, platform) : null
-          response.writeHead(302, { location: asset?.url ?? release?.url ?? RELEASES_PAGE, 'cache-control': 'no-store' })
-          response.end()
-        })
-      return
-    }
 
     // ── THE PUBLIC FACE, last ────────────────────────────────────────────
     //
@@ -698,14 +709,32 @@ export function createRegistry(deps: RegistryDeps): Server {
       const bare = (value: string): string => (decode(value) ?? '').replace(/^@/, '')
 
       if (parts.length === 0) {
-        void (deps.releases?.latest() ?? Promise.resolve<Release | null>(null))
-          .catch(() => null)
-          .then((release) => {
-            respondPage(response, homePage({ doors: site.list().map(withLive), release, stars: starsOf }))
+        deps.pulse?.page('/')
+        void Promise.all([
+          (deps.releases?.latest() ?? Promise.resolve<Release | null>(null)).catch(() => null),
+          (deps.commits?.latest() ?? Promise.resolve(null)).catch(() => null)
+        ])
+          .then(([release, commits]) => {
+            respondPage(
+              response,
+              homePage({
+                doors: site.list().map(withLive),
+                release,
+                stars: starsOf,
+                pulse: pulseOf,
+                linesToday: deps.pulse?.linesToday() ?? 0,
+                commits
+              })
+            )
+          })
+          .catch((error: unknown) => {
+            deps.note?.(`render failed: ${error instanceof Error ? error.message : String(error)}`)
+            if (!response.headersSent) json(response, 500, { error: 'server' })
           })
         return
       }
       if (parts.length === 1 && parts[0] === 'market') {
+        deps.pulse?.page('/market')
         const account = accountOf(request)
         respondPage(
           response,
@@ -734,6 +763,7 @@ export function createRegistry(deps: RegistryDeps): Server {
         const name = bare(parts[1])
         const found = site.get(handle, name)
         const account = accountOf(request)
+        if (found) deps.pulse?.page(`/${handle}/${name}`)
         respondPage(
           response,
           teamPage({

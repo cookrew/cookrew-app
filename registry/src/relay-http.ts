@@ -66,6 +66,12 @@ export function createRelayHttp(deps: {
   pulseMs?: number
   /** How long without a pong before the door is declared gone. */
   pulseDeadlineMs?: number
+  /**
+   * A call the door ANSWERED — name, method, path and the door's status; never
+   * its bytes. Fired on the head frame, not at open: anyone can open a stream
+   * to a served name, only the door decides whether it was a line.
+   */
+  onAnswer?: (name: string, method: string, path: string, status: number) => void
 }): RelayHttp {
   const now = deps.now ?? ((): number => Date.now())
   const log = deps.log ?? ((): void => undefined)
@@ -369,6 +375,7 @@ export function createRelayHttp(deps: {
           // a finished call would hold a connection open on both machines for
           // as long as the caller stayed running.
           const frame = decodeFrame(line)
+          if (frame?.t === 'head') deps.onAnswer?.(name, op.method, op.path, frame.status)
           if (frame && (frame.t === 'end' || frame.t === 'abort')) finish()
         },
         close: finish

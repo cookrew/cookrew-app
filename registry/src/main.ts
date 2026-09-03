@@ -36,10 +36,18 @@ import { ReceiptStore } from './receipts'
 import { DoorStore } from './doors'
 import { StarStore } from './stars'
 import { ReleaseCache } from './releases'
+import { CommitsCache } from './github-commits'
+import { Pulse } from './pulse'
 import { buildManifest, signManifest } from '../../src/main/preset-publish'
 import { scrubForPublish } from '../../src/main/preset-scrub'
 import type { TeamSnapshot } from '../../src/main/teams'
 import type { CanvasNode } from '../../src/shared/model'
+
+// This process holds every served door's downlink. A promise nobody awaited
+// must be a log line, never the end of the process.
+process.on('unhandledRejection', (reason) => {
+  console.error(`unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`)
+})
 
 const args = process.argv.slice(2)
 const flag = (name: string, fallback: string): string => {
@@ -210,6 +218,8 @@ createRegistry({
   // stars are a file beside the doors, the build is whatever GitHub says.
   stars: new StarStore(DATA),
   releases: new ReleaseCache(),
+  commits: new CommitsCache(),
+  pulse: new Pulse(DATA),
   note: (message) => console.error(message),
   authorize: makeAuthorize(store, identity, pricing)
 }).listen(PORT, () => {

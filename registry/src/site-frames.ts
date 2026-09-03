@@ -13,9 +13,40 @@ export interface Frame {
   file: string
   alt: string
   caption: string
+  width: number
+  height: number
 }
 
-const frame = (file: string, alt: string, caption: string): Frame => ({ file, alt, caption })
+/** Pixel size of every 1400-wide frame in registry/assets/site (an 800-wide twin exists for each). */
+const SIZES: Record<string, [number, number]> = {
+  'intro-1.jpg': [1400, 1112],
+  'intro-2.jpg': [1400, 887],
+  'intro-3.jpg': [996, 1400],
+  'intro-4.jpg': [1400, 887],
+  'intro-5.jpg': [647, 1400],
+  'intro-6.jpg': [1400, 887],
+  'qa-board.jpg': [1400, 875],
+  'qa-canvas.jpg': [1400, 875],
+  'qa-history-trace.jpg': [1400, 875],
+  'qa-marketplace.jpg': [1400, 875],
+  'qa-mobile.jpg': [700, 1400],
+  'qa-terminal-rail.jpg': [1400, 875]
+}
+
+const frame = (file: string, alt: string, caption: string): Frame => {
+  const [width, height] = SIZES[file] ?? [1400, 875]
+  return { file, alt, caption, width, height }
+}
+
+/** An <img> with its size known up front (no layout shift) and a smaller twin for narrow screens. */
+export function frameImg(frame: Frame, options: { eager?: boolean; sizes?: string } = {}): string {
+  // The hero column is under 600px on a desktop, so the 800px twin is the
+  // right file there; only a feature page's wide figure needs the 1400.
+  const small = `${SITE_FRAMES}${frame.file.replace(/\.jpg$/, '-800.jpg')}`
+  const large = frameUrl(frame)
+  const esc = (v: string): string => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+  return `<img src="${esc(large)}" srcset="${esc(small)} 800w, ${esc(large)} ${frame.width}w" sizes="${esc(options.sizes ?? '(max-width: 860px) 100vw, 60vw')}" width="${frame.width}" height="${frame.height}" alt="${esc(frame.alt)}"${options.eager ? ' fetchpriority="high"' : ' loading="lazy" decoding="async"'}>`
+}
 
 export const FRAMES = {
   canvas: frame(
