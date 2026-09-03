@@ -215,14 +215,26 @@ export const FEATURES: FeatureSpec[] = [
   }
 ]
 
-/** The six steps on /start, and the questions asked there and nowhere else. */
-export const START_HOWTO: { name: string; text: string }[] = [
-  { name: 'Install Cookrew', text: 'Download the build for your platform, or clone the repository and run npm install && npm run dev. Cookrew needs Node 20 or newer and tmux or herdr to host terminals.' },
-  { name: 'Place your first agent', text: 'Pick a preset in the dock — Claude Code, Codex, OpenCode, Pi or Shell — and click the canvas. The teammate boots in its own terminal and the card opens.' },
-  { name: 'Recruit a crew from the CLI', text: 'From any terminal: cookrew recruit "Forge" --preset "Claude Code" --role "builder", then cookrew connect to wire teammates, and cookrew orch to name the door.' },
-  { name: 'Ask, and read the reply', text: 'cookrew ask "Forge" "…" waits for the turn to end and returns the reply; cookrew status reports thinking, waiting, replied or idle. Every turn lands on the card’s rail as a checkpoint.' },
-  { name: 'Save the team', text: 'cookrew team save "MY CREW" snapshots nodes, wires and turn histories. cookrew workspace create "New project" --team "MY CREW" puts the formation to work in a new directory.' },
-  { name: 'Serve it, or open someone’s', text: 'SERVE lists a saved team at cookrew.dev/@you/team; anyone with the link opens a sandboxed session from a browser or the app. Or paste an address into Import a team, or click Open in Cookrew on a team page.' }
+/** The two steps on /start. Orchestration is the orch's work; a person places one agent and asks. */
+export const START_HOWTO: { name: string; text: string; detail: string[] }[] = [
+  {
+    name: 'Place an agent, and let it orchestrate your workflow',
+    text: 'Install Cookrew, pick a preset in the dock — Claude Code, Codex, OpenCode or Pi — and click the canvas. Make that agent the orch and tell it what you want done. It recruits teammates, drops notes and opens browsers with the same CLI you have; you read the replies on the rail.',
+    detail: [
+      'cookrew orch "Forge" — one agent is the door; the rest is its crew',
+      'Ask it: "recruit a reviewer on Codex, a note with the spec, a browser on the docs" — it runs cookrew recruit, connect, note create, browser create',
+      'Every turn lands on the card’s rail as a checkpoint; cookrew status says thinking, waiting or replied'
+    ]
+  },
+  {
+    name: 'Save the team as a preset, and choose to publish it',
+    text: 'Select the cards and save the team: nodes, wires and turn histories in one file, the original session untouched. Keep it as a preset for your next workspace, or press SERVE to publish it at cookrew.dev/@you/team — free or priced, with a one-sentence summary and tags — where anyone can open a sandboxed session from a browser or the app.',
+    detail: [
+      'cookrew team save "MY CREW" · cookrew workspace create "Next project" --team "MY CREW"',
+      'SERVE: your cookrew.dev account signs the listing; it is live while your relay connection is up',
+      'You can end any caller’s session at any time; money, when priced, goes straight to you'
+    ]
+  }
 ]
 
 export const START_FAQ: Faq[] = [
