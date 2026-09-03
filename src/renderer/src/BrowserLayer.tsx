@@ -23,7 +23,7 @@ import type { ScreenRect } from './zoom-lod'
 import type { LodLayout } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
 import { CrIcon } from './icons'
-import { browserRenderMode, type StreamClient } from './browser-stream'
+import { browserRenderMode, nextCapability, type StreamClient } from './browser-stream'
 import { browserHostsToRender } from './browser-host-policy'
 
 const THUMB_INTERVAL_MS = 5000
@@ -99,29 +99,66 @@ export function useInteractiveBrowserCapability(): InteractiveBrowserCapability 
   const [capability, setCapability] = useState<InteractiveBrowserCapability | null>(null)
   useEffect(() => {
     let disposed = false
+    let latest = 0
     const api = cookrew()
-    void api
-      .interactiveBrowserEnabled()
-      .then(async (enabled) => {
-        if (!enabled || !hasNativeWebview()) {
-          if (!disposed) setCapability({ enabled, desktopToken: null })
-          return
-        }
-        let desktopToken: string | null = null
-        try {
-          desktopToken = await api.browserStreamToken()
-        } catch (error) {
-          console.error('[browser-stream] failed to resolve the desktop stream credential:', error)
-        }
-        if (!disposed) setCapability({ enabled, desktopToken })
+    const adopt = (enabled: boolean, desktopToken: string | null): void => {
+      if (disposed) return
+      setCapability((prev) => {
+        // Never DOWNGRADE the surface that can mount a webview: main's flag
+        // is fixed per launch so this cannot fire today, and if that ever
+        // changes, this is the line that keeps a legacy webview from opening
+        // a second page beside a live headless one.
+        if (hasNativeWebview() && prev?.enabled === true && !enabled) return prev
+        return nextCapability(prev, { enabled, desktopToken })
       })
-      .catch((error) => {
-        // Fail closed: without an ownership answer, mounting a webview could
-        // create a second page/profile while headless mode is actually on.
-        console.error('[browser-stream] failed to resolve browser ownership:', error)
-      })
+    }
+    const resolve = (): void => {
+      const seq = ++latest
+      void api
+        .interactiveBrowserEnabled()
+        .then(async (enabled) => {
+          // Latest wins: rapid foreground flips on a slow link put two
+          // answers in flight, and the older one must never overwrite.
+          if (seq !== latest) return
+          // No answer is not an answer (a captive portal's 200, a stranger
+          // on the port): keep what we know rather than adopting undefined.
+          if (typeof enabled !== 'boolean') return
+          if (!enabled || !hasNativeWebview()) {
+            adopt(enabled, null)
+            return
+          }
+          let desktopToken: string | null = null
+          try {
+            desktopToken = await api.browserStreamToken()
+          } catch (error) {
+            console.error('[browser-stream] failed to resolve the desktop stream credential:', error)
+          }
+          if (seq !== latest) return
+          adopt(enabled, desktopToken)
+        })
+        .catch((error) => {
+          // Fail closed: without an ownership answer, mounting a webview could
+          // create a second page/profile while headless mode is actually on.
+          // A previously-resolved answer is kept — staleness beats a null.
+          console.error('[browser-stream] failed to resolve browser ownership:', error)
+        })
+    }
+    resolve()
+    // "Fixed at launch" means the SERVER's launch, not this page's. A phone
+    // tab outlives app restarts — the shared stream heals and the canvas
+    // repopulates — but a capability frozen at first mount left the phone
+    // rendering the dead thumb fallback ("BROWSER PREVIEW" on black) against
+    // a server that had long since gone headless. Re-ask on foreground and
+    // network return, the same pair the canvas resync listens to.
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') resolve()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('online', resolve)
     return () => {
       disposed = true
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('online', resolve)
     }
   }, [])
   return capability
