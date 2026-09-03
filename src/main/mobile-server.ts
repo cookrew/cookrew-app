@@ -41,7 +41,7 @@ import {
 import { ASK_HTTP_STATUS, ASK_REMEDY } from '../shared/ask-outcome'
 import { ensureCert, missingHosts, sansOf } from './cert'
 import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps, type ServeOps } from './mobile-api'
-import { readJson, respondJson } from './mobile-http'
+import { holdSocketsOpen, readJson, respondJson } from './mobile-http'
 import { handleCallRoutes, type CallEndpointDeps } from './call-endpoints'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
 import { sendBody } from './http-compress'
@@ -218,6 +218,7 @@ export function startMobileServer(deps: MobileServerDeps): void {
   // Plain HTTP: fine for the Mac's own localhost (a secure context) and as a
   // no-mic fallback on the LAN.
   const plain = http.createServer(requestHandler)
+  holdSocketsOpen(plain)
   attachUpgrade(plain)
   listenWithRetry(plain, MOBILE_PORT)
 
@@ -229,6 +230,9 @@ export function startMobileServer(deps: MobileServerDeps): void {
   if (cert) {
     certSans = sansOf(new X509Certificate(cert.cert).subjectAltName)
     const secure = https.createServer({ key: cert.key, cert: cert.cert }, requestHandler)
+    // Long keep-alive matters MOST here: this is the server the phone reaches
+    // over the tailnet, where a re-handshake is a visible typing stall.
+    holdSocketsOpen(secure)
     attachUpgrade(secure)
     // The TLS server does not bind the port itself — the gate does, and hands
     // it the connections that are actually TLS. See tls-port-gate.ts: a phone
