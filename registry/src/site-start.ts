@@ -20,7 +20,7 @@ export function startPage(release: Release | null): Page {
       kind: 'app',
       active: 'start',
       scripts: ['site.js'],
-      description: 'Install Cookrew on macOS or Windows, place your first agent from the dock, recruit a crew from the CLI, save the team, and serve it at cookrew.dev — with a crew builder that writes the commands for you.',
+      description: 'Two steps: place an agent and let it orchestrate your workflow teammates, then save the team as a preset and choose to publish it at cookrew.dev — with a crew builder that writes the commands.',
       path: '/start',
       jsonLd: [
         organization(),
@@ -29,24 +29,24 @@ export function startPage(release: Release | null): Page {
         {
           '@type': 'HowTo',
           name: 'Get started with Cookrew',
-          description: 'Install Cookrew and run your first team of AI coding agents.',
+          description: 'Place an agent and let it orchestrate your workflow; save the team as a preset and choose to publish it.',
           step: HOWTO.map((s, i) => ({ '@type': 'HowToStep', position: i + 1, name: s.name, text: s.text }))
         },
         faqPage(START_FAQ)
       ]
     },
     `<div class="wrap" style="padding-top:44px">
-<p class="kicker"><span class="no">START</span>ten minutes to a working crew</p>
+<p class="kicker"><span class="no">START</span>two steps to a working crew</p>
 <h1>Get started with Cookrew</h1>
 <p class="lede">${esc(DEFINITION)}</p>
 <p class="row">${mac ? `<a class="btn primary lg" href="${esc(mac.url)}">⬇ Download for macOS</a>` : `<a class="btn primary lg" href="${RELEASES_PAGE}">Latest release ↗</a>`}${win ? `<a class="btn lg" href="${esc(win.url)}">Windows preview</a>` : ''}<a class="btn lg" href="${GITHUB_REPO}" target="_blank" rel="noopener">Source ↗</a></p>
 <p class="meta">${release ? `v${esc(release.version)} · ${esc(release.publishedAt.slice(0, 10))}` : ''} · ${FACTS.license} · Node 20+ · tmux or herdr</p>
 
-<h2>Six steps</h2>
-<ol class="howto">${HOWTO.map((s) => `<li><h3>${esc(s.name)}</h3><p>${esc(s.text)}</p></li>`).join('')}</ol>
+<h2>Two steps</h2>
+<ol class="howto two">${HOWTO.map((s, i) => `<li${i === 1 ? ' id="serve"' : ''}><h3>${esc(s.name)}</h3><p>${esc(s.text)}</p><ul class="pts">${s.detail.map((d) => `<li>${esc(d)}</li>`).join('')}</ul></li>`).join('')}</ol>
 
-<h2 id="build">Build your crew</h2>
-<p>Pick the harnesses and give each a role. The commands below are exactly what you paste into a terminal after Cookrew is running; the orchestrator is the door a served team answers through.</p>
+<h2 id="build">What your orch runs</h2>
+<p>Pick the harnesses and give each a role. These are the commands the orchestrator runs when you ask it for teammates — or paste them yourself into any terminal with Cookrew running.</p>
 <div class="card soft" id="crew-builder">
 <div class="filters" id="crew-harnesses">${FACTS.harnesses.filter((h) => h !== 'Shell').map((h) => `<label><input type="checkbox" name="h" value="${esc(h)}"${h === 'Claude Code' ? ' checked' : ''}><span class="chip">${esc(h)}</span></label>`).join('')}</div>
 <div class="row" style="margin-top:12px"><label class="meta">Roles, comma separated <input id="crew-roles" value="builder, reviewer" style="font:13px var(--font-mono);padding:6px 8px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);min-width:240px"></label><label class="meta"><input type="checkbox" id="crew-orch" checked> the first one is the orchestrator</label></div>
@@ -56,14 +56,6 @@ $ cookrew connect "Forge" "Bench"
 $ cookrew orch "Forge"</code>
 <p class="row"><button class="btn primary" id="crew-copy">Copy the commands</button><span class="meta" id="crew-note">Names are placeholders; rename them on the canvas.</span></p>
 </div>
-
-<h2 id="serve">Serve a team at cookrew.dev</h2>
-<ol class="howto">
-<li><h3>Save the team</h3><p>Select the cards, name the team, save. A saved team is nodes, wires and turn histories in one file; the original session is never touched.</p></li>
-<li><h3>Press SERVE and write the face</h3><p>Choose free or priced, add a one-sentence summary and a few tags. The harness names behind the door are derived from the roster; the roster itself is never listed.</p></li>
-<li><h3>Sign the registration</h3><p>Your cookrew.dev account signs it; the registry lists the address verbatim and marks the team live only while your relay connection is up.</p></li>
-<li><h3>Share the address</h3><p>cookrew.dev/@you/team works in a browser (the team’s own terminal) and in the app (the card with its rail). You can end any caller’s session at any time.</p></li>
-</ol>
 
 <section id="faq" style="border:none;padding:24px 0 0"><h2>Questions</h2><div class="faq">${START_FAQ.map((f) => `<details open><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`).join('')}</div></section>
 </div>`
