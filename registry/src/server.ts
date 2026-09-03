@@ -690,6 +690,7 @@ export function createRegistry(deps: RegistryDeps): Server {
         decode,
         doors: () => (deps.doors?.list() ?? []).map(withLive),
         release: () => (deps.releases?.latest() ?? Promise.resolve<Release | null>(null)).catch(() => null),
+        commits: () => (deps.commits?.latest() ?? Promise.resolve(null)).catch(() => null),
         pulse: deps.pulse,
         note: deps.note
       })
@@ -710,20 +711,18 @@ export function createRegistry(deps: RegistryDeps): Server {
 
       if (parts.length === 0) {
         deps.pulse?.page('/')
-        void Promise.all([
-          (deps.releases?.latest() ?? Promise.resolve<Release | null>(null)).catch(() => null),
-          (deps.commits?.latest() ?? Promise.resolve(null)).catch(() => null)
-        ])
-          .then(([release, commits]) => {
+        void (deps.releases?.latest() ?? Promise.resolve<Release | null>(null))
+          .catch(() => null)
+          .then((release) => {
             respondPage(
               response,
               homePage({
                 doors: site.list().map(withLive),
+                presets: store.list(),
                 release,
                 stars: starsOf,
                 pulse: pulseOf,
-                linesToday: deps.pulse?.linesToday() ?? 0,
-                commits
+                linesToday: deps.pulse?.linesToday() ?? 0
               })
             )
           })

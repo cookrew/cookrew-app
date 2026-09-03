@@ -371,6 +371,10 @@ ol.howto li{counter-increment:h;background:var(--cream-hi);border:2px solid var(
 ol.howto li h3::before{content:counter(h) ' · ';color:var(--amber-deep);font-family:var(--font-pixel);font-size:11px}
 ol.howto li p{margin:0;color:var(--muted);font-size:14px}
 .rec-chip{background:var(--hp);color:#14110a}
+ul.one-liners{list-style:none;padding:0;margin:14px 0;border:2px solid var(--line);background:var(--cream-hi);box-shadow:4px 4px 0 var(--line)}
+ul.one-liners li{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr);gap:6px 18px;padding:10px 14px;border-bottom:1.5px solid var(--line-soft);font-size:14.5px}
+ul.one-liners li:last-child{border-bottom:none}ul.one-liners a{text-decoration:none}ul.one-liners span{color:var(--muted)}
+@media (max-width:700px){ul.one-liners li{grid-template-columns:1fr}}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--cream-hi);border:2px solid var(--line);box-shadow:4px 4px 0 var(--line);padding:10px 14px;font-size:14px;display:none;z-index:99;max-width:90vw}
 .toast.on{display:block}
 `
