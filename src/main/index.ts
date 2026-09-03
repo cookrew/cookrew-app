@@ -1162,6 +1162,10 @@ function terminalIdForSessionName(sessionName: string): string | null {
 const lazyTerminals = new LazyTerminalAttachments({
   attach: (terminalId) => ensureTerminalMirror(terminalId),
   detach: (terminalId) => detachTerminalMirror(terminalId),
+  // Only a resident mirror can be kept alive — trim() is reached for every
+  // terminal at boot and on every status event, and a linger armed for a
+  // terminal with no mirror would defer its watch/tracker release for nothing.
+  resident: (terminalId) => ptys.isLive(terminalId),
   isWorking: (terminalId) =>
     agentStatus(sessionNameFor(terminalId)) === 'working' || turns.inTurn(terminalId),
   watchWorking: (terminalId) => {
@@ -2551,6 +2555,9 @@ function retireTerminal(id: string, why: string): void {
   // A dead generation's lease holder becomes invisible and its late release
   // a no-op — a reborn id must never inherit a stranded submission window.
   defaultProducerLease().retire(id)
+  // Same rule for the mirror's linger window: an armed one belongs to the
+  // dead generation and would detach a reborn id's fresh mirror.
+  lazyTerminals.forget(id)
   sessionSync.unwatch(id)
   turns.untrack(id)
 }
@@ -4078,6 +4085,7 @@ app.on('before-quit', (event) => {
   store.flush()
   events.flush()
   sessionSync.dispose()
+  lazyTerminals.dispose()
   latestWatch.dispose()
   doorWatch.dispose()
   turns.flushHistories()

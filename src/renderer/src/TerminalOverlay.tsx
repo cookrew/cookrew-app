@@ -595,12 +595,44 @@ function TerminalOverlay({
       // Remote only: desktop WebKit shapes these fine.
       const detoxify = (raw: string): string =>
         isRemoteMode() ? raw.replace(/[\u23E9-\u23FA]/g, (m) => `${m}\uFE0E`) : raw
+      /** SIGWINCH: make the TUI repaint its real screen at this size. */
+      let settleTimer: ReturnType<typeof setTimeout> | null = null
+      let lastKickAt = 0
+      const repaintKick = (): void => {
+        if (disposed || term.cols < 21) return
+        lastKickAt = Date.now()
+        cookrew().ptyResize(node.id, term.cols - 1, term.rows)
+        if (settleTimer) clearTimeout(settleTimer)
+        settleTimer = setTimeout(() => {
+          if (!disposed) cookrew().ptyResize(node.id, term.cols, term.rows)
+        }, 60)
+      }
+      /**
+       * A RE-hello is a reconnect, and a reconnect may have found a mirror
+       * that was rebuilt while the link was down — whose replay frame is an
+       * empty screen an idle agent never repaints (the phone's black live
+       * pane). The mount kick below cannot help: nothing remounted. So kick
+       * again on a later hello — COALESCED, because every kick resizes the
+       * SHARED mirror and repaints it for every other viewer too, and a
+       * flapping link reconnects several times a second.
+       */
+      let helloSeen = false
+      let rekickTimer: ReturnType<typeof setTimeout> | null = null
+      cleanups.push(() => {
+        if (settleTimer) clearTimeout(settleTimer)
+        if (rekickTimer) clearTimeout(rekickTimer)
+      })
       const detach = cookrew().ptyAttach(
         node.id,
         (chunk) => term.write(detoxify(chunk)),
         ({ cols, rows }) => {
           if (disposed || cols <= 0 || rows <= 0) return
           term.resize(cols, rows)
+          if (helloSeen && Date.now() - lastKickAt > 2000) {
+            if (rekickTimer) clearTimeout(rekickTimer)
+            rekickTimer = setTimeout(repaintKick, 120)
+          }
+          helloSeen = true
           if (document.visibilityState !== 'visible' || !document.hasFocus()) return
           if (reassertTimer) clearTimeout(reassertTimer)
           reassertTimer = setTimeout(() => {
@@ -636,13 +668,7 @@ function TerminalOverlay({
       // internal screen state — incremental redraws (ink/Claude Code) then
       // land on a wrong baseline and scatter. A double resize (SIGWINCH)
       // forces the app to repaint its real screen at the overlay size.
-      const kickTimer = setTimeout(() => {
-        if (disposed || term.cols < 21) return
-        cookrew().ptyResize(node.id, term.cols - 1, term.rows)
-        setTimeout(() => {
-          if (!disposed) cookrew().ptyResize(node.id, term.cols, term.rows)
-        }, 60)
-      }, 200)
+      const kickTimer = setTimeout(repaintKick, 200)
       cleanups.push(() => clearTimeout(kickTimer))
 
       // Touch scrolling: tmux runs with `mouse on`, so xterm sits in

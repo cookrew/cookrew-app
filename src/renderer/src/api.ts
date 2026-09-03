@@ -257,11 +257,18 @@ export interface CookrewApi {
   /** Acknowledge-on-view: user is looking at this terminal's result. */
   turnSeen: (terminalId: string) => void;
   /**
-   * Stream a terminal's output. `onHello` (optional) fires ONCE, before the
-   * first byte, with the mirror's geometry: the replay frame's wrapping is
-   * baked in at those columns, and herdr's deltas address the cursor
-   * absolutely against them, so a viewer must adopt that size before applying
-   * anything. Transports that cannot report it simply never call it.
+   * Stream a terminal's output. `onHello` (optional) fires once PER ATTACH,
+   * before that attach's first byte, with the mirror's geometry: the replay
+   * frame's wrapping is baked in at those columns, and herdr's deltas address
+   * the cursor absolutely against them, so a viewer must adopt that size
+   * before applying anything. Transports that cannot report it simply never
+   * call it.
+   *
+   * Per attach, not per call: a self-healing transport reconnects under a
+   * live viewer and says hello again, and callers READ that repeat — it is
+   * how the overlay knows to force a repaint of a mirror that may have been
+   * rebuilt while the link was down. A transport that reconnects silently
+   * would leave that viewer looking at an empty screen.
    */
   ptyAttach: (
     terminalId: string,
