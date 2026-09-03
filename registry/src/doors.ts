@@ -86,6 +86,17 @@ export interface DoorRecord {
    * in the middle. Public by nature — it is the half meant to be handed out.
    */
   sealKey?: string
+  /**
+   * THE FACE — what the owner chose to say about the team, bounded.
+   *
+   * A sentence, a few tags, and the harness NAMES behind the door (never the
+   * roster: names of products, not names of agents). All optional, all
+   * recorded verbatim, all the market has to search and show. The registry
+   * never writes any of them.
+   */
+  summary?: string
+  tags?: readonly string[]
+  harnesses?: readonly string[]
   /** Epoch ms of the last registration. A door nobody refreshes goes stale. */
   seenAt: number
 }
@@ -177,7 +188,36 @@ function validFace(input: DoorInput, allowPrivate: boolean): boolean {
   if (!Number.isInteger(input.agents) || input.agents < 0 || input.agents > 999) return false
   if (input.access !== 'account' && input.access !== 'paid') return false
   if (input.access === 'paid' && !/^\d+(\.\d{1,2})?$/.test(input.priceUsd ?? '')) return false
+  if (!validFaceWords(input)) return false
   return input.rails.every((rail) => rail === 'x402' || rail === 'stripe')
+}
+
+const TAG = /^[a-z0-9](?:[a-z0-9-]{0,22}[a-z0-9])?$/
+const PLAIN = /^[^\p{Cc}]*$/u
+
+/**
+ * The optional words on a face. Absent is fine; present means bounded: one
+ * summary of at most 160 characters with no control characters, at most five
+ * tags in slug shape, at most eight harness names of at most 32 characters.
+ */
+function validFaceWords(input: DoorInput): boolean {
+  if (input.summary !== undefined) {
+    if (typeof input.summary !== 'string' || input.summary.length > 160 || !PLAIN.test(input.summary)) return false
+  }
+  if (input.tags !== undefined) {
+    if (!Array.isArray(input.tags) || input.tags.length > 5) return false
+    if (!input.tags.every((tag) => typeof tag === 'string' && TAG.test(tag))) return false
+  }
+  if (input.harnesses !== undefined) {
+    if (!Array.isArray(input.harnesses) || input.harnesses.length > 8) return false
+    if (
+      !input.harnesses.every(
+        (h) => typeof h === 'string' && h.trim().length > 0 && h.length <= 32 && PLAIN.test(h)
+      )
+    )
+      return false
+  }
+  return true
 }
 
 /**
@@ -248,7 +288,23 @@ export class DoorStore {
         : validDoorAddress(input.address)
     if (!addressed) return { ok: false, reason: 'bad-address' }
     if (!validFace(input, this.allowPrivate)) return { ok: false, reason: 'bad-face' }
-    const door: DoorRecord = { ...input, rails: [...input.rails], seenAt: Date.now() }
+    const door: DoorRecord = {
+      handle: input.handle,
+      name: input.name,
+      title: input.title,
+      door: input.door,
+      agents: input.agents,
+      address: input.address,
+      transport: input.transport,
+      access: input.access,
+      ...(input.priceUsd === undefined ? {} : { priceUsd: input.priceUsd }),
+      rails: [...input.rails],
+      ...(input.sealKey === undefined ? {} : { sealKey: input.sealKey }),
+      ...(input.summary === undefined ? {} : { summary: input.summary.trim() }),
+      ...(input.tags === undefined ? {} : { tags: [...input.tags] }),
+      ...(input.harnesses === undefined ? {} : { harnesses: input.harnesses.map((h) => h.trim()) }),
+      seenAt: Date.now()
+    }
     this.doors.set(doorPath(door.handle, door.name), door)
     this.flush()
     return { ok: true, door }
@@ -275,7 +331,10 @@ export class DoorStore {
       .filter((door) =>
         needle.length === 0
           ? true
-          : `${door.title} ${door.handle} ${door.name}`.toLowerCase().includes(needle)
+          : [door.title, door.handle, door.name, door.door, door.summary ?? '', ...(door.tags ?? []), ...(door.harnesses ?? [])]
+              .join(' ')
+              .toLowerCase()
+              .includes(needle)
       )
       // Newest refresh first, then by canonical path. The tiebreak is not
       // decoration: two doors registered in the same millisecond would
