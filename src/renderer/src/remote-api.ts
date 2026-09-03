@@ -5,6 +5,7 @@ import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../s
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
 import { apiPath } from './api-base'
+import { createRawInputQueue } from './raw-input-queue'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -113,6 +114,15 @@ async function mapLimited<T, R>(
 function post(path: string, body: unknown): void {
   void req(path, 'POST', body).catch(() => undefined)
 }
+
+/**
+ * Keystrokes for the terminal, ordered and coalesced (raw-input-queue.ts).
+ * req() has already reported any auth failure to the store by the time the
+ * queue swallows the rejection — same contract as post() above.
+ */
+const rawInput = createRawInputQueue((terminalId, data) =>
+  req(apiPath(`/api/terminal/${terminalId}/raw`), 'POST', { data })
+)
 
 /**
  * Ask the server what the current credential is worth. Used to verify a
@@ -256,7 +266,11 @@ export function createRemoteApi(): CookrewApi {
       upload(name, new Blob([new Uint8Array(bytes).slice().buffer])),
     pickFiles: () => Promise.resolve([]),
 
-    ptyInput: (terminalId, data) => post(apiPath(`/api/terminal/${terminalId}/raw`), { data }),
+    // Ordered and coalesced — see raw-input-queue.ts: one request in flight
+    // per terminal, later bytes ride the next request as a single batch.
+    // Parallel per-keystroke fetches could land REORDERED, and each paid its
+    // own headers and round trip on the link where round trips are scarce.
+    ptyInput: rawInput,
     ptyJump: (terminalId, text) => post(apiPath(`/api/terminal/${terminalId}/jump`), { text }),
     // Same contract as the desktop's IPC call: never rejects, the failure
     // reason comes back as data so the reader is told what to fix.
