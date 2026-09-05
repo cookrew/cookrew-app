@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
+let deepLinkSubscriber: ((link: unknown) => void) | null = null
+let heldDeepLinks: readonly unknown[] = []
+ipcRenderer.on('app:deep-link', (_e, link: unknown) => {
+  if (deepLinkSubscriber) deepLinkSubscriber(link)
+  else heldDeepLinks = [...heldDeepLinks, link]
+})
+
 const api = {
   getWorkspace: () => ipcRenderer.invoke('workspace:get'),
   // The owner's grant surface. Main refuses any sender that is not the owner
@@ -37,19 +44,6 @@ const api = {
   disconnect: (connId: string) => ipcRenderer.invoke('node:disconnect', connId),
   listPresets: () => ipcRenderer.invoke('preset:list'),
   createTerminal: (opts: unknown) => ipcRenderer.invoke('terminal:create', opts),
-  // NOT `preset:list` — that is the HARNESS preset list, a different shape.
-  // Aliasing them made listInstalledPresets return {name, command}[], which
-  // the chip model reads as `members.length` and crashes the dock on.
-  listInstalledPresets: () => ipcRenderer.invoke('preset:installed:list'),
-  placeInstalledPreset: (id: string, position: unknown, orch: boolean) =>
-    ipcRenderer.invoke('preset:installed:place', id, position, orch),
-  uninstallPreset: (id: string) => ipcRenderer.invoke('preset:installed:uninstall', id),
-  // R20: dismissing the rotation sheet and accepting the new key are two
-  // different decisions, so they are two channels. Collapsing them would make
-  // "I have read this" mean "I trust this".
-  markPresetRotationSeen: (id: string) => ipcRenderer.invoke('preset:installed:rotation:seen', id),
-  trustPresetAuthorKey: (id: string, newKeyId: string) =>
-    ipcRenderer.invoke('preset:installed:rotation:trust', id, newKeyId),
   listPins: (terminalId: string) => ipcRenderer.invoke('pins:list', terminalId),
 
   /** Translate a checkpoint body with Sous. Never rejects; see main. */
@@ -64,8 +58,13 @@ const api = {
     ipcRenderer.invoke('template:import', team, position),
 
   // ── R30 share-on-save (export side) ──
-  servingServe: (input: { templateId: string; access: 'account' | 'paid'; priceUsd?: string }) =>
-    ipcRenderer.invoke('serving:serve', input),
+  servingServe: (input: {
+    templateId: string
+    access: 'account' | 'paid'
+    priceUsd?: string
+    summary?: string
+    tags?: readonly string[]
+  }) => ipcRenderer.invoke('serving:serve', input),
   servingStop: (serviceId: string) => ipcRenderer.invoke('serving:stop', serviceId),
   servingPaymentStatus: () => ipcRenderer.invoke('serving:payment-status'),
   servingSetPayTo: (payTo: string) => ipcRenderer.invoke('serving:payment-pay-to', payTo),
@@ -77,13 +76,19 @@ const api = {
   servingSessions: () => ipcRenderer.invoke('serving:sessions'),
   servingEnd: (sessionId: string) => ipcRenderer.invoke('serving:end', sessionId),
 
-  // ── the dock's crews (import side) ──
-  crewList: () => ipcRenderer.invoke('crew:list'),
-  crewAdd: (link: string) => ipcRenderer.invoke('crew:add', link),
-  crewRemove: (id: string) => ipcRenderer.invoke('crew:remove', id),
-  crewUnlock: (id: string, payRef: string) => ipcRenderer.invoke('crew:unlock', id, payRef),
-  crewPlace: (id: string, position?: { x: number; y: number }) =>
-    ipcRenderer.invoke('crew:place', id, position),
+  // ── import a served team (caller side) ──
+  serveInspect: (link: string) => ipcRenderer.invoke('serve:inspect', link),
+  serveBrowse: (link: string) => ipcRenderer.invoke('serve:browse', link),
+  serveGate: (link: string) => ipcRenderer.invoke('serve:gate', link),
+  serveCheckout: (link: string) => ipcRenderer.invoke('serve:checkout', link),
+  serveSettle: (link: string, rail: 'x402' | 'stripe', session?: string) =>
+    ipcRenderer.invoke('serve:settle', link, rail, session),
+  serveImport: (
+    link: string,
+    position?: { x: number; y: number },
+    paid?: { price: string; asset: string; rail: 'x402' | 'stripe' }
+  ) => ipcRenderer.invoke('serve:import', link, position, paid),
+
   switchWorkspace: (id: string) => ipcRenderer.invoke('workspace:switch', id),
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),
@@ -181,6 +186,8 @@ const api = {
     } | null>,
   // T4 push: subscribe/unsubscribe a card's file watch, and listen for the
   // "your checkpoint changed" nudge (payload = terminalId).
+  // Why a remote card's record is empty or stale — null for every local card.
+  traceStatus: (terminalId: string) => ipcRenderer.invoke('trace:status', terminalId),
   watchLatest: (terminalId: string) => ipcRenderer.invoke('trace:latest-watch', terminalId),
   unwatchLatest: (terminalId: string) => ipcRenderer.invoke('trace:latest-unwatch', terminalId),
   onLatestChanged: (cb: (terminalId: string) => void) => {
@@ -238,6 +245,20 @@ const api = {
     return () => ipcRenderer.removeListener('app:cmd-w', listener)
   },
   quitApp: () => ipcRenderer.send('app:quit'),
+  // A `cookrew://` link, already parsed by main (src/main/deep-link.ts) —
+  // the renderer only ever sees one of the three verbs, never a raw URL.
+  // Held here until App subscribes: main sends on did-finish-load, and React's
+  // effects can run a beat after that, so a link the app was LAUNCHED with
+  // would otherwise land on nobody.
+  onDeepLink: (cb: (link: unknown) => void) => {
+    deepLinkSubscriber = cb
+    const held = heldDeepLinks
+    heldDeepLinks = []
+    held.forEach(cb)
+    return () => {
+      if (deepLinkSubscriber === cb) deepLinkSubscriber = null
+    }
+  },
   onBrowserOpenTab: (cb: (req: { webContentsId: number; url: string }) => void) => {
     const listener = (_e: unknown, req: { webContentsId: number; url: string }): void => cb(req)
     ipcRenderer.on('browser:open-tab', listener)

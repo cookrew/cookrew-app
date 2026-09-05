@@ -1,3 +1,4 @@
+import type { DeepLink } from '../../shared/deep-link'
 import type { TranslateResult } from '../../shared/translate'
 import type {
   AgentRole,
@@ -17,10 +18,11 @@ import type {
 import type { TerminalActivity, TurnRecord } from "../../shared/turn";
 import type { TurnMatch } from "../../shared/turn-search";
 import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
+import type { DoorTranscriptState } from "../../shared/door-transcript-state";
 import type { BoardRow, BoardSummary } from "../../shared/board";
-import type { InstalledPreset } from "../../shared/preset-chip";
 import type { VersionPinRecord } from "../../shared/version-pin";
 import type { ServedPaymentRail } from "../../shared/served-payment-rails";
+import type { ServeTransport } from "../../shared/serve-transport";
 import type {
   PaymentConfigReply,
   ServedPaymentStatus,
@@ -37,21 +39,50 @@ export interface BoardSnapshotLike {
   activeWorkspaceId: string;
 }
 
-/** A crew added to the dock by link — the import side's chip. */
-export interface RemoteCrewView {
-  id: string;
-  origin: string;
-  slug: string;
+/** A served door's public face, as the import sheet previews it. */
+/** One team in an owner's list. `link` is what Import takes, built by main. */
+export interface BrowsedTeam {
+  title: string;
+  door: string;
+  agents: number;
+  access: 'account' | 'paid';
+  priceUsd?: string;
+  live: boolean;
+  link: string;
+}
+
+export interface ServeFacePreview {
   name: string;
+  serviceId: string;
+  slug: string;
   door: string;
   access: 'account' | 'paid';
   priceUsd?: string;
   version: number;
   agents: number;
-  addedAt: number;
-  payRef?: string;
-  ended?: boolean;
+  /** Which rails this door takes money on. Empty means it cannot sell today. */
+  paymentRails: readonly ('x402' | 'stripe')[];
 }
+
+/** One way a door will take money, with the terms it quoted for that rail. */
+export type ServeRail =
+  | {
+      rail: 'x402';
+      price: string;
+      asset: string;
+      chain: string;
+      payTo: string;
+      expiry: number;
+    }
+  | { rail: 'stripe'; price: string; asset: 'USD'; chain: 'Stripe'; expiry: number };
+
+/** What a door is saying, in the gate sheet's vocabulary. */
+export type ServePhase =
+  | { kind: 'open' }
+  | { kind: 'pay'; rails: ServeRail[] }
+  | { kind: 'denied'; reason: string; retryable: boolean }
+  | { kind: 'gone' }
+  | { kind: 'error'; status: number };
 
 export interface CookrewApi {
   getWorkspace: () => Promise<WorkspaceState>;
@@ -83,6 +114,9 @@ export interface CookrewApi {
     templateId: string;
     access: 'account' | 'paid';
     priceUsd?: string;
+    /** The face's words — see shared/served-face-shape.ts for the bounds. */
+    summary?: string;
+    tags?: readonly string[];
   }) => Promise<
     | { ok: true; serviceId: string; slug: string; address: string }
     | { ok: false; reason: string }
@@ -99,6 +133,8 @@ export interface CookrewApi {
       access: 'account' | 'paid';
       priceUsd?: string;
       address: string;
+      /** How far that address carries — see shared/serve-transport. */
+      transport: ServeTransport;
       paymentRails: readonly ServedPaymentRail[];
     }[]
   >;
@@ -112,20 +148,64 @@ export interface CookrewApi {
     }[]
   >;
   servingEnd: (sessionId: string) => Promise<{ stopped: number }>;
-  /** The dock's crews (import side). Adding is free and inert. */
-  crewList: () => Promise<readonly RemoteCrewView[]>;
-  crewAdd: (
+  /** Read a served door's public face — free, commits nothing. */
+  serveInspect: (
     link: string,
-  ) => Promise<{ ok: true; crew: RemoteCrewView } | { ok: false; reason: string }>;
-  crewRemove: (id: string) => Promise<{ ok: boolean }>;
-  crewUnlock: (
-    id: string,
-    payRef: string,
-  ) => Promise<{ ok: true; crew: RemoteCrewView } | { ok: false; reason: string }>;
-  crewPlace: (
-    id: string,
+  ) => Promise<
+    | { ok: true; target: { origin: string; slug: string }; face: ServeFacePreview }
+    | { ok: false; reason: string }
+  >;
+  /**
+   * Browse an OWNER — the teams one account is serving.
+   *
+   * The sheet takes a team's address, which assumes you already have one. A
+   * person is handed a name at least as often, and this is the path from one
+   * to the other without copying a second address out of a web page by hand.
+   */
+  serveBrowse: (
+    link: string,
+  ) => Promise<
+    | { ok: true; handle: string; teams: BrowsedTeam[] }
+    | { ok: false; reason: string }
+  >;
+  /** Import: place ONE orch interface card for the served team. */
+  serveImport: (
+    link: string,
     position?: { x: number; y: number },
-  ) => Promise<{ ok: true; node: unknown } | { ok: false; reason: string }>;
+    /** What was paid at the gate, so the card can say so and the close
+     *  prompt can quote it back. Absent on a free door. */
+    paid?: { price: string; asset: string; rail: 'x402' | 'stripe' },
+    // `node` is narrowed to what the canvas needs to go and FRAME it: the
+    // card is placed at coordinates unrelated to where the person is looking,
+    // and a placement they cannot see reads as a failure.
+  ) => Promise<
+    | {
+        ok: true;
+        node: { id: string; position: { x: number; y: number }; size?: { width: number; height: number } };
+      }
+    | { ok: false; reason: string }
+  >;
+  /** Sign in to the door and ask what it wants. The Bearer stays in main. */
+  serveGate: (
+    link: string,
+  ) => Promise<
+    | { ok: true; phase: ServePhase; wallet: { address: string } | null }
+    | { ok: false; reason: string; detail?: string }
+  >;
+  /** Start a card payment: opens hosted Checkout in the real browser. */
+  serveCheckout: (
+    link: string,
+  ) => Promise<
+    { ok: true; session: string; url: string } | { ok: false; reason: string; detail?: string }
+  >;
+  /** Present a payment on one rail and be admitted. */
+  serveSettle: (
+    link: string,
+    rail: 'x402' | 'stripe',
+    session?: string,
+  ) => Promise<
+    { ok: true; phase: ServePhase } | { ok: false; reason: string; detail?: string }
+  >;
   switchWorkspace: (id: string) => Promise<WorkspaceList>;
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>;
   /** Workspace v2: remove workspace, multi-directory, per-terminal cwd, git. */
@@ -148,35 +228,6 @@ export interface CookrewApi {
   connectNodes: (a: string, b: string) => Promise<Connection>;
   disconnect: (connId: string) => Promise<void>;
   listPresets: () => Promise<{ name: string; command: string }[]>;
-  /**
-   * Marketplace presets installed on this machine — the dock's third chip
-   * family (§8). Named apart from `listPresets`, which is the HARNESS presets.
-   */
-  listInstalledPresets: () => Promise<InstalledPreset[]>;
-  /**
-   * Place an installed preset at a point on the canvas. R2: the canvas click
-   * IS the confirm, so this both aims and commits — a single agent lands as a
-   * plain terminal, a team pastes through copyTeam.
-   */
-  placeInstalledPreset: (
-    id: string,
-    position: { x: number; y: number },
-    orch: boolean,
-  ) => Promise<void>;
-  /** Remove a preset from the dock. Placed agents are untouched (A2). */
-  uninstallPreset: (id: string) => Promise<void>;
-  /**
-   * R20: the rotation sheet has been shown. Retires the SHEET only — the chip
-   * keeps its KEY CHANGED badge until the buyer trusts the new key or removes
-   * the preset, because a rotation announced once and then forgotten leaves a
-   * preset silently un-updatable.
-   */
-  markPresetRotationSeen: (id: string) => Promise<void>;
-  /**
-   * R20's one forward action. `newKeyId` must be the key main itself recorded
-   * as refused; main re-checks it rather than trusting what the sheet passes.
-   */
-  trustPresetAuthorKey: (id: string, newKeyId: string) => Promise<void>;
   /**
    * Version pins for a terminal (§10) — the rail's third marker class. Asked
    * per terminal because a pin belongs to a transcript, not to a workspace.
@@ -206,11 +257,18 @@ export interface CookrewApi {
   /** Acknowledge-on-view: user is looking at this terminal's result. */
   turnSeen: (terminalId: string) => void;
   /**
-   * Stream a terminal's output. `onHello` (optional) fires ONCE, before the
-   * first byte, with the mirror's geometry: the replay frame's wrapping is
-   * baked in at those columns, and herdr's deltas address the cursor
-   * absolutely against them, so a viewer must adopt that size before applying
-   * anything. Transports that cannot report it simply never call it.
+   * Stream a terminal's output. `onHello` (optional) fires once PER ATTACH,
+   * before that attach's first byte, with the mirror's geometry: the replay
+   * frame's wrapping is baked in at those columns, and herdr's deltas address
+   * the cursor absolutely against them, so a viewer must adopt that size
+   * before applying anything. Transports that cannot report it simply never
+   * call it.
+   *
+   * Per attach, not per call: a self-healing transport reconnects under a
+   * live viewer and says hello again, and callers READ that repeat — it is
+   * how the overlay knows to force a repaint of a mirror that may have been
+   * rebuilt while the link was down. A transport that reconnects silently
+   * would leave that viewer looking at an empty screen.
    */
   ptyAttach: (
     terminalId: string,
@@ -321,6 +379,13 @@ export interface CookrewApi {
     terminalId: string,
   ) => Promise<{ sessionId: string; count: number; entries: { index: number; title: string; id?: string }[] }[]>;
   /**
+   * What the record behind a REMOTE card is doing (remote-card parity P10):
+   * null for a local card, a named state for an imported one so the rail can
+   * say why it is empty or stale instead of just being so. Optional: an older
+   * main or the phone bridge has no remote cards.
+   */
+  traceStatus?: (terminalId: string) => Promise<DoorTranscriptState | null>;
+  /**
    * The LATEST checkpoint for a card, from a bounded tail read of the session
    * file — no PTY, O(tail) (trace-perf-architecture T1). Lets a visible-but-
    * unzoomed agent card show its last turn without spawning a mirror. Optional
@@ -394,6 +459,11 @@ export interface CookrewApi {
   onBrowserPhoneViewing: (cb: (browserId: string) => void) => () => void;
   /** Main routes ⌘W here so the renderer can close the topmost layer first. */
   onCmdW: (cb: () => void) => () => void;
+  /**
+   * A `cookrew://` link the OS handed to the app, already parsed by main —
+   * one of three verbs, never a raw URL (shared/deep-link.ts).
+   */
+  onDeepLink: (cb: (link: DeepLink) => void) => () => void;
   /**
    * Open a WEB URL in the system's default browser. Desktop bridge only —
    * the phone/demo fallbacks render a real anchor instead (see OpenExternal:

@@ -1,7 +1,5 @@
 // Shared data model between main, renderer and CLI protocol.
 
-import type { ServedTranscriptTarget } from './served-transcript'
-
 export type NodeKind = 'terminal' | 'note' | 'browser'
 
 export interface CanvasPosition {
@@ -41,6 +39,27 @@ export function restorePointIndex(point: RestorePoint): number {
   return point.rewoundToIndex ?? point.fromIndex ?? 0
 }
 
+/** What a caller was told, and paid, when a served session was admitted. */
+export interface ServedSessionFacts {
+  /** The door's public origin and slug — the address, never a credential. */
+  origin: string
+  slug: string
+  /** Epoch ms the session was admitted. */
+  openedAt: number
+  /**
+   * What was paid, verbatim from the quote the caller approved. Absent on a
+   * free door — and absent is not zero: "free" and "nothing yet" are
+   * different statements, and only one of them is true here.
+   */
+  paid?: { price: string; asset: string; rail: 'x402' | 'stripe' }
+  /**
+   * The published `@handle/team` name, when the door is reached THROUGH THE
+   * RELAY rather than dialled. The record behind the card is read from this
+   * name's loopback end; a dialled door's record is read at `origin`.
+   */
+  door?: string
+}
+
 export interface TerminalNodeData {
   kind: 'terminal'
   id: string
@@ -51,10 +70,18 @@ export interface TerminalNodeData {
   orch: boolean
   role: string | null
   /**
-   * Public served address for a placed crew card. The main process uses it to
-   * resolve the caller-scoped transcript; credentials never enter node data.
+   * WHAT THIS CARD WAS ADMITTED WITH — a placed orch card only.
+   *
+   * A caller pays once, at admission, for a session; after that the product
+   * used to say nothing, and closing the card threw the session away in
+   * silence. These are the facts they were shown at the gate, kept so the card
+   * can state them and so the close prompt can quote a real price rather than
+   * re-deriving one (a re-derived price would drift from what was charged).
+   *
+   * NO CREDENTIAL LIVES HERE. The Bearer and the account key stay in the main
+   * process; this is the receipt, not the key.
    */
-  servedTranscript?: ServedTranscriptTarget | null
+  servedSession?: ServedSessionFacts | null
   /** Set when this agent was forked from another agent's turn. */
   forkOf?: ForkOrigin | null
   /**

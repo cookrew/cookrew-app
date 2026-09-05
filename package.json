@@ -11,10 +11,13 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "registry:assets": "node scripts/registry-assets.mjs",
+    "registry:build": "node scripts/registry-assets.mjs && esbuild --bundle registry/src/main.ts --format=esm --platform=node --define:__SITE_REF__=\\\"$(git rev-parse HEAD)\\\" --outfile=/tmp/registry.mjs",
     "start": "electron-vite preview",
     "postinstall": "electron-rebuild -f -w node-pty; node scripts/ensure-node-pty.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
+    "gate:checkpoints": "node scripts/checkpoint-live-gate.mjs",
     "dist": "electron-vite build && electron-builder",
     "dist:win": "electron-vite build && electron-builder --win",
     "dist:mac": "electron-vite build && electron-builder --mac",
@@ -30,7 +33,8 @@
     "@xyflow/react": "^12.3.0",
     "marked": "^15.0.0",
     "node-pty": "^1.0.0",
-    "qrcode-terminal": "^0.12.0"
+    "qrcode-terminal": "^0.12.0",
+    "viem": "^2.55.19"
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.0",
@@ -44,7 +48,6 @@
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "typescript": "^5.7.0",
-    "viem": "^2.55.19",
     "vitest": "^2.1.0"
   }
 }

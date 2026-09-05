@@ -152,3 +152,40 @@ export class ReconnectingStream {
     }, wait)
   }
 }
+
+/**
+ * A terminal's live stream, healing. The desktop preload retries a cold
+ * pty:attach with backoff because ignoring the miss "left the live pane BLACK
+ * forever"; this transport's version of that miss is an HTTP 404 on the
+ * stream URL while the mirror boots — FATAL to a bare EventSource (a non-2xx
+ * never browser-retries) — so the first open of an idle card stayed black
+ * until a second open found the mirror the first one had booted. Every
+ * (re)connect replays hello + a fresh CLEAR_SCREEN-prefixed frame, so the
+ * eventual attach paints whole. Unlike the preload's 8 tries, this retries
+ * for as long as the overlay is open: the phone's link genuinely flaps
+ * (tailnet, backgrounding) and a capped stream would go silent exactly when
+ * it matters. The server's `exit` event ends it — a session that is GONE is
+ * not a session to keep dialling.
+ */
+export interface TerminalStreamHandle {
+  close(): void
+  /** Reconnect NOW if the link is down — foreground return, network back. */
+  revive(): void
+}
+
+export const TERMINAL_STREAM_BACKOFF = [400, 800, 1500, 3000, 5000] as const
+
+export function attachTerminalStream(
+  deps: ReconnectingStreamDeps,
+  onData: (chunk: string) => void,
+  onHello?: (size: { cols: number; rows: number }) => void
+): TerminalStreamHandle {
+  const stream = new ReconnectingStream({ backoffMs: TERMINAL_STREAM_BACKOFF, ...deps })
+  // hello arrives before the first frame; sizing the xterm from it is what
+  // keeps a 45x24 phone from re-wrapping a frame serialized at the pane's
+  // 100x30 and then misplacing every absolute-addressed delta.
+  stream.on('hello', (e) => onHello?.(JSON.parse(e.data as string) as { cols: number; rows: number }))
+  stream.on('data', (e) => onData(JSON.parse(e.data as string) as string))
+  stream.on('exit', () => stream.close())
+  return { close: () => stream.close(), revive: () => stream.revive() }
+}

@@ -4,6 +4,7 @@ import {
   agentKind,
   bootCommand,
   envArgs,
+  herdrServerSpawnSpec,
   parseEnvelope,
   parsePaneList,
   parsePaneListStrict,
@@ -89,6 +90,19 @@ describe('capabilities — the two that were previously recorded as false', () =
     // The one thing tmux does that herdr does not. Declaring it false lets the
     // UI hide the affordance rather than silently no-op.
     expect(mux().capabilities.copyModeSearch).toBe(false)
+  })
+})
+
+describe('server launch resource floor', () => {
+  it('raises the descriptor limit before a long-lived Unix server starts', () => {
+    expect(herdrServerSpawnSpec('darwin')).toEqual({
+      file: '/bin/sh',
+      args: ['-c', 'ulimit -n 4096 2>/dev/null || true; exec "$0" server', 'herdr']
+    })
+  })
+
+  it('keeps the direct launch on Windows, where /bin/sh is absent', () => {
+    expect(herdrServerSpawnSpec('win32')).toEqual({ file: 'herdr', args: ['server'] })
   })
 })
 
@@ -584,6 +598,62 @@ describe('selection', () => {
     const roles = selectMultiplexers({ candidates: [unavailableTmux, mux()] })
     expect(roles.host.id).toBe('herdr')
     expect(roles.host.capabilities.persistsAcrossRestart).toBe(true)
+  })
+})
+
+describe('attach recovery server lifecycle', () => {
+  const livePane = PANE_LIST([
+    { pane_id: 'w1:p1', label: 'cookrew_abc', agent: 'claude', agent_status: 'idle' }
+  ])
+  const replies = {
+    'pane list': livePane,
+    'pane process-info': JSON.stringify({
+      result: { process_info: { shell_pid: 7, foreground_processes: [] } }
+    }),
+    '-o args=': 'claude --permission-mode bypassPermissions',
+    'agent get': JSON.stringify({ result: { agent: { pane_id: 'w1:p1' } } })
+  }
+
+  function recoveryBackend(initiallyRunning: boolean): {
+    backend: HerdrHostMultiplexer
+    starts: () => number
+  } {
+    const runner = fakeRunner(replies)
+    let running = initiallyRunning
+    let startCount = 0
+    runner.probe = (file, args) => {
+      runner.calls.push({ file, args })
+      if (args[0] === '--version') return true
+      if (args[0] === 'pane' && args[1] === 'list') return running
+      return true
+    }
+    return {
+      backend: new HerdrHostMultiplexer({
+        session: 'cookrewtest',
+        configPath: '/c',
+        runner,
+        startServer: () => {
+          startCount += 1
+          running = true
+        },
+        waitForServerMs: 50,
+        settleMs: 0
+      }),
+      starts: () => startCount
+    }
+  }
+
+  it('keeps a healthy server and only refreshes the attach path', () => {
+    const { backend, starts } = recoveryBackend(true)
+    backend.recoverAttach(SPEC)
+    expect(starts()).toBe(0)
+  })
+
+  it('starts the Cookrew herdr server when it is actually unavailable', () => {
+    const { backend, starts } = recoveryBackend(false)
+    backend.recoverAttach(SPEC)
+    expect(starts()).toBe(1)
+    expect(backend.serverAlive()).toBe(true)
   })
 })
 

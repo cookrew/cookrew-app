@@ -51,6 +51,8 @@ export interface ServedSpawnContext {
   ownerEnv: Readonly<Record<string, string | undefined>>
   /** Names the owner lent this service; absent ones stay absent. */
   grantedKeys?: readonly string[]
+  /** The app's CLI command socket, denied in the profile. See seatbeltProfile. */
+  controlSocketPath?: string
 }
 
 /** A confined spawn: the wrapped command, the scrubbed env, and the profile it uses. */
@@ -110,7 +112,9 @@ export function servedConfinement(
     sessionsRoot: sessionsRootOf(ctx.base),
     // What the owner did NOT lend, made unreachable. Without this the grant in
     // service-grants.ts is a formality — the agent could read the originals.
-    secretPaths: ownerSecretPaths(ctx.base)
+    secretPaths: ownerSecretPaths(ctx.base),
+    // The owner's canvas control plane, denied from the other side of the env.
+    ...(ctx.controlSocketPath ? { controlSocketPath: ctx.controlSocketPath } : {})
   })
   // Inside the sandbox (so END's cleanup removes it); the per-session SANDBOX
   // dir is what keeps two sessions' profiles apart, not this constant filename.

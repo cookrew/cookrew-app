@@ -62,11 +62,118 @@ const READ_CHUNK_BYTES = 256 * 1024
 /** M8: cap on per-file memoized trace state (block cache + segmentMemo). */
 const TRACE_FILE_MEMO_CAP = 128
 
-/** Async chunked read of [start, start+length) — never the whole file at once. */
-async function readWindow(file: string, start: number, length: number): Promise<Buffer> {
+/**
+ * M8b: byte budget across cached files. A CacheEntry retains the parsed
+ * LINES of the whole file (the parsers re-run over them on every append —
+ * incremental I/O, not incremental parse), so its heap cost scales with FILE
+ * bytes — and session files run to 90MB. A count cap alone let a reader who
+ * browsed a dozen heavyweight transcripts pin gigabytes that nothing
+ * released: the "application memory" exhaustion. bytesRead is the honest
+ * proxy for what an entry retains.
+ */
+const TRACE_MEMO_BYTE_BUDGET = 256 * 1024 * 1024
+/**
+ * The newest entries always survive the budget. NOTE the honest bound: this
+ * floor is unconditional, so worst-case retention is
+ * max(TRACE_MEMO_BYTE_BUDGET, keepNewest × largest file) of FILE bytes —
+ * and heap is a multiple of that (the lines plus the blocks derived from
+ * them). Measured on this machine the eight largest session files are 736MB
+ * TOGETHER, so a floor of 8 quietly licensed a gigabyte the budget could not
+ * touch. Three is the floor now: the residency pin, not this number, is what
+ * keeps a polled file from being evicted underneath the poll.
+ * The budget binds in the typical case; the floor exists because evicting a
+ * live polled file would turn every rail tick into a full re-read of the
+ * biggest file on the machine, the exact O(n²) this cache prevents.
+ */
+const TRACE_MEMO_KEEP_NEWEST = 3
+/**
+ * The anti-thrash guard. Round-robin polling is precisely anti-LRU: with a
+ * polled set over budget, reading f0 evicts f1..fk — the files the SAME
+ * tick is about to poll — and every poll becomes a full re-read (measured
+ * in review: 20×30MB files, 100 full reads in 5 ticks, zero cache hits).
+ * An entry touched within this window is not an eviction candidate; the
+ * budget goes soft (an overrun) instead of converting into main-process
+ * stalls, and browsed-then-abandoned transcripts still age out.
+ *
+ * Kept ABOVE the slowest poll that depends on it — PUSH_BACKSTOP_MS in
+ * use-latest-checkpoint.ts is 10s, and a pin equal to the poll expires the
+ * instant before the poll needs it. Move one, move the other.
+ */
+const TRACE_MEMO_MIN_RESIDENCY_MS = 15_000
+
+export interface MemoEvictionPolicy {
+  maxCount: number
+  maxBytes: number
+  keepNewest: number
+}
+
+/**
+ * Evict oldest-first (Map insertion order is the recency order — setters
+ * refresh by delete+set) until the map fits both the count cap and the byte
+ * budget, but never below keepNewest entries and never past a pinned entry:
+ * order IS recency, so a pinned oldest means everything newer is pinned
+ * harder — stop and accept the overrun. Pure — unit-tested.
+ */
+export function evictOverBudget<V>(
+  map: Map<string, V>,
+  sizeOf: (value: V) => number,
+  policy: MemoEvictionPolicy,
+  pinned?: (value: V) => boolean
+): void {
+  let total = 0
+  for (const value of map.values()) total += sizeOf(value)
+  while (
+    (map.size > policy.maxCount || total > policy.maxBytes) &&
+    map.size > policy.keepNewest
+  ) {
+    const oldest = map.keys().next()
+    if (oldest.done === true) break
+    const value = map.get(oldest.value) as V
+    if (pinned?.(value) === true) break
+    total -= sizeOf(value)
+    map.delete(oldest.value)
+  }
+}
+
+/**
+ * Read [start, start+length) and hand over COMPLETE LINES as they arrive,
+ * returning the trailing partial line as bytes.
+ *
+ * The window used to be materialised whole and then split: for a 90MB
+ * session file that is the file as chunks, again as one concatenated Buffer,
+ * again concatenated with the carry, again as one ~90MB string, and finally
+ * as the split array — four copies alive at once. Measured on a 90MB file:
+ * a 509MB peak becomes 307MB, and on this machine's 120MB worst case 651MB
+ * becomes 362MB, for ONE cold read, several of which run while a canvas warms up. That is
+ * the spike that ends in "your system has run out of application memory",
+ * and it is spent before a single byte is retained.
+ *
+ * Chunk-at-a-time costs one 256KB buffer plus the carry, whatever the file's
+ * size. The carry stays BYTES so a multibyte character never tears across a
+ * chunk boundary — the property the old single toString() got for free (0x0A
+ * cannot occur inside a UTF-8 multibyte sequence, so cutting at a newline
+ * never cuts a character). The returned remainder is safe to RETAIN: it is a
+ * fresh exact-size copy, never a subarray that would pin its 256KB parent
+ * inside a long-lived cache entry. A zero-length window returns the seed
+ * untouched, which is a no-op by the same no-newline-in-a-remainder invariant.
+ */
+async function readLines(
+  file: string,
+  start: number,
+  length: number,
+  seed: Buffer,
+  push: (line: string) => void
+): Promise<Buffer> {
   const handle = await open(file, 'r')
   try {
-    const chunks: Buffer[] = []
+    // The carry is a LIST, and only the chunk is searched. Concatenating the
+    // accumulated carry per chunk is O(line²): measured, one unbroken 80MB
+    // line cost 3.1GB and 10s — a worse spike than the one this function
+    // exists to remove. Searching the chunk alone is sound because a carry
+    // never contains 0x0A (it is by definition the bytes AFTER a newline),
+    // so the last newline of carry+chunk is always the chunk's own.
+    let carry: Buffer[] = seed.length > 0 ? [seed] : []
+    let carryBytes = seed.length
     let position = start
     let remaining = length
     while (remaining > 0) {
@@ -74,11 +181,29 @@ async function readWindow(file: string, start: number, length: number): Promise<
       const buffer = Buffer.alloc(size)
       const { bytesRead } = await handle.read(buffer, 0, size, position)
       if (bytesRead === 0) break
-      chunks.push(buffer.subarray(0, bytesRead))
       position += bytesRead
       remaining -= bytesRead
+      const chunk = buffer.subarray(0, bytesRead)
+      const lastNewline = chunk.lastIndexOf(0x0a)
+      if (lastNewline === -1) {
+        // The whole chunk is carry; holding it pins nothing extra.
+        carry.push(chunk)
+        carryBytes += bytesRead
+        continue
+      }
+      const head = chunk.subarray(0, lastNewline + 1)
+      const complete =
+        carryBytes > 0 ? Buffer.concat([...carry, head], carryBytes + head.length) : head
+      for (const line of complete.toString('utf8').split('\n')) {
+        if (line.length > 0) push(line)
+      }
+      // COPIED, never a subarray: a retained tail that pointed into its
+      // 256KB parent would pin the whole chunk inside a cache entry.
+      const tail = chunk.subarray(lastNewline + 1)
+      carry = tail.length > 0 ? [Buffer.from(tail)] : []
+      carryBytes = tail.length
     }
-    return Buffer.concat(chunks)
+    return Buffer.concat(carry, carryBytes)
   } finally {
     await handle.close()
   }
@@ -88,6 +213,8 @@ interface CacheEntry {
   file: string
   /** Bytes consumed from the file (complete + partial lines). */
   bytesRead: number
+  /** Last read or ingest — the min-residency eviction pin reads this. */
+  touchedAt: number
   /** Trailing partial line, kept as BYTES so multibyte chars never tear. */
   remainder: Buffer
   lines: string[]
@@ -147,7 +274,11 @@ export class TraceReader {
     const blocks = await this.blocksOf(file, kind)
     const memo = this.indexCache.get(terminalId)
     const entries = memo && memo.blocks === blocks ? memo.entries : traceIndexOf(blocks)
-    if (!memo || memo.blocks !== blocks) this.indexCache.set(terminalId, { blocks, entries })
+    // cappedSet, not a bare set: this map held blocks for every terminal
+    // ever indexed and was the one memo M8 forgot to bound.
+    if (!memo || memo.blocks !== blocks) {
+      TraceReader.cappedSet(this.indexCache, terminalId, { blocks, entries })
+    }
     const afterIndex = request.afterIndex
     return afterIndex === undefined ? entries : entries.filter((entry) => entry.index > afterIndex)
   }
@@ -308,19 +439,36 @@ export class TraceReader {
    *  repeat calls within one poll are cache hits. */
   private segmentMemo = new Map<string, { blocks: TraceBlock[]; refs: { index: number; id: string }[]; markers: TraceBoundaryMarker[] }>()
 
-  /** M8: both per-file maps (block cache + segmentMemo) are insertion-order
-   *  capped — otherwise they grew one entry per session file for the whole
-   *  process lifetime. FIFO suffices: a polled LIVE file is re-touched
-   *  constantly so it never reaches the eviction tail; an evicted file just
-   *  re-reads fully once on next access, then goes incremental again. */
+  /** M8: the per-file memo maps are insertion-order capped — otherwise they
+   *  grew one entry per session file for the whole process lifetime. An
+   *  evicted file just re-reads fully once on next access, then goes
+   *  incremental again. */
   private static cappedSet<V>(map: Map<string, V>, key: string, value: V): void {
     if (map.has(key)) map.delete(key) // refresh recency
     map.set(key, value)
-    while (map.size > TRACE_FILE_MEMO_CAP) {
-      const oldest = map.keys().next().value
-      if (oldest === undefined) break
-      map.delete(oldest)
-    }
+    evictOverBudget(map, () => 0, {
+      maxCount: TRACE_FILE_MEMO_CAP,
+      maxBytes: Infinity,
+      keepNewest: 1
+    })
+  }
+
+  /** M8b: the BLOCK cache is additionally byte-budgeted — see
+   *  TRACE_MEMO_BYTE_BUDGET — with the min-residency pin against poll
+   *  round-robins (see TRACE_MEMO_MIN_RESIDENCY_MS). */
+  private static cappedSetSized(map: Map<string, CacheEntry>, key: string, value: CacheEntry): void {
+    if (map.has(key)) map.delete(key) // refresh recency
+    map.set(key, value)
+    evictOverBudget(
+      map,
+      (entry) => entry.bytesRead,
+      {
+        maxCount: TRACE_FILE_MEMO_CAP,
+        maxBytes: TRACE_MEMO_BYTE_BUDGET,
+        keepNewest: TRACE_MEMO_KEEP_NEWEST
+      },
+      (entry) => Date.now() - entry.touchedAt < TRACE_MEMO_MIN_RESIDENCY_MS
+    )
   }
 
   /**
@@ -400,7 +548,9 @@ export class TraceReader {
     const remember = (
       value: { prompt: string; reply: string; title?: string } | null
     ): { prompt: string; reply: string; title?: string } | null => {
-      this.latestCache.set(terminalId, { file: spec.file, size, mtimeMs, value })
+      // cappedSet: a turn's prompt+reply can run hundreds of KB, keyed by
+      // every terminal ever polled — the OTHER map M8 forgot.
+      TraceReader.cappedSet(this.latestCache, terminalId, { file: spec.file, size, mtimeMs, value })
       return value
     }
     // Escalate the window until it holds a COMPLETE turn. A turn only parses
@@ -521,58 +671,58 @@ export class TraceReader {
       const info = await stat(file)
       const cached = this.cache.get(file)
       if (cached && info.size === cached.bytesRead) {
-        return cached.blocks // unchanged: zero I/O
+        // Unchanged: zero I/O — but still a TOUCH. The old FIFO only
+        // refreshed recency on growth, so an idle-but-viewed file aged
+        // toward the eviction tail exactly as if nobody was looking at it.
+        const touched = { ...cached, touchedAt: Date.now() }
+        this.cache.delete(file)
+        this.cache.set(file, touched)
+        return touched.blocks
       }
       if (cached && info.size > cached.bytesRead) {
         // Append-only growth: read ONLY the new bytes.
-        const appended = await readWindow(file, cached.bytesRead, info.size - cached.bytesRead)
-        return this.ingest(file, kind, cached, appended, info.size)
+        const lines = [...cached.lines]
+        const remainder = await readLines(
+          file,
+          cached.bytesRead,
+          info.size - cached.bytesRead,
+          cached.remainder,
+          (line) => lines.push(line)
+        )
+        return this.ingest(file, kind, lines, remainder, info.size)
       }
-      // First read or a shrink (/rewind truncation): reload.
-      const whole = await readWindow(file, 0, info.size)
-      const fresh: CacheEntry = {
-        file,
-        bytesRead: 0,
-        remainder: Buffer.alloc(0),
-        lines: [],
-        blocks: [],
-        compactMarkers: []
-      }
-      return this.ingest(file, kind, fresh, whole, info.size)
+      // First read or a shrink (/rewind truncation): reload — streamed, so a
+      // 90MB session file is never four copies of itself in flight.
+      const lines: string[] = []
+      const remainder = await readLines(file, 0, info.size, Buffer.alloc(0), (line) =>
+        lines.push(line)
+      )
+      return this.ingest(file, kind, lines, remainder, info.size)
     } catch (error) {
       console.error('Trace read failed:', error)
       return []
     }
   }
 
-  /** Fold new bytes into the cache: complete lines parse, the tail waits. */
+  /** Parse the lines the reader gathered and cache them; the tail waits. */
   private ingest(
     file: string,
     kind: 'claude' | 'codex' | 'pi',
-    entry: CacheEntry,
-    incoming: Buffer,
+    lines: string[],
+    remainder: Buffer,
     bytesRead: number
   ): TraceBlock[] {
-    const pending = Buffer.concat([entry.remainder, incoming])
-    const lastNewline = pending.lastIndexOf(0x0a)
-    const complete = lastNewline === -1 ? Buffer.alloc(0) : pending.subarray(0, lastNewline + 1)
-    const remainder = lastNewline === -1 ? pending : pending.subarray(lastNewline + 1)
-    const lines = [...entry.lines]
-    if (complete.length > 0) {
-      for (const line of complete.toString('utf8').split('\n')) {
-        if (line.length > 0) lines.push(line)
-      }
-    }
     const parsedClaude = kind === 'claude' ? parseClaudeTraceDocument(lines) : null
     const blocks = parsedClaude
       ? parsedClaude.blocks
       : kind === 'codex'
         ? parseCodexTrace(lines)
         : parsePiTrace(lines)
-    TraceReader.cappedSet(this.cache, file, {
+    TraceReader.cappedSetSized(this.cache, file, {
       file,
       bytesRead,
-      remainder: Buffer.from(remainder),
+      touchedAt: Date.now(),
+      remainder,
       lines,
       blocks,
       compactMarkers: parsedClaude?.markers ?? []

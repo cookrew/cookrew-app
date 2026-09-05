@@ -8,7 +8,19 @@
 // fall back to matching their scraped turn history against candidate files.
 
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import type { TurnRecord } from '../shared/turn'
@@ -157,10 +169,12 @@ function findExistingClaudeSession(options: ResolveSessionOptions): string | nul
       SESSION_UUID_RE.test(storedId) &&
       existsSync(claudeSessionFile(cwd, storedId, projectsDir))
     ) {
-      return storedId
+      return followContinuedIn(cwd, storedId, projectsDir)
     }
     const flagged = extractSessionFlag(command)
-    if (flagged && existsSync(claudeSessionFile(cwd, flagged, projectsDir))) return flagged
+    if (flagged && existsSync(claudeSessionFile(cwd, flagged, projectsDir))) {
+      return followContinuedIn(cwd, flagged, projectsDir)
+    }
     const dir = claudeProjectDir(cwd, projectsDir)
     if (turns.length > 0 && existsSync(dir)) {
       // readCandidates sorts newest-first; the strict-greater reduce keeps the
@@ -175,6 +189,98 @@ function findExistingClaudeSession(options: ResolveSessionOptions): string | nul
     console.error('Claude session resolution failed:', error)
   }
   return null
+}
+
+/**
+ * How far back a session file is searched for claude's continuation marker.
+ * Not just the last few KB: a file that was RESUMED after its marker (the
+ * exact accident this exists to end) carries megabytes of a stray branch
+ * past it — Conductor's sat 520 KB from the end after one such resume.
+ */
+const CONTINUED_IN_SCAN_BYTES = 16 * 1024 * 1024
+const CONTINUED_IN_CHUNK_BYTES = 256 * 1024
+const CONTINUED_IN_MAX_HOPS = 8
+
+/**
+ * Claude's OWN statement that a conversation moved to another file.
+ *
+ * `{"type":"continued-in","continuedInSessionId":"…"}` is appended to a
+ * session file when claude carries the conversation on in a new one (the
+ * continuation after a compaction). From that line on, the old file is
+ * history and every new turn lands in the named successor.
+ *
+ * The rotation scan in claude-rotation.ts could not see this shape: it looks
+ * for a NEWER file whose head names the old one, and a continuation file was
+ * created hours earlier (at the compaction) with a head that names nothing —
+ * so the node stayed bound to the old id, and a recover resumed a
+ * conversation that had ended at the marker (Conductor, 2026-09-02 21:36:
+ * 74 minutes of turns "disappeared" into a file nothing was reading).
+ */
+export function continuedInOf(lines: readonly string[]): string | null {
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]
+    if (!line.includes('"continued-in"')) continue
+    try {
+      const entry = JSON.parse(line) as { type?: unknown; continuedInSessionId?: unknown }
+      if (entry.type !== 'continued-in') continue
+      const next = entry.continuedInSessionId
+      return typeof next === 'string' && SESSION_UUID_RE.test(next) ? next : null
+    } catch {
+      continue
+    }
+  }
+  return null
+}
+
+/**
+ * The LAST continuation marker in a file, searching backwards in chunks and
+ * stopping at the first chunk that holds one — a file with no marker (the
+ * common case) costs at most the scan budget, a file with one costs little.
+ * Sync, because the spawn path is.
+ */
+function lastContinuedInSync(file: string): string | null {
+  let fd: number | null = null
+  try {
+    fd = openSync(file, 'r')
+    const size = fstatSync(fd).size
+    const floor = Math.max(0, size - CONTINUED_IN_SCAN_BYTES)
+    let end = size
+    let carry = ''
+    while (end > floor) {
+      const start = Math.max(floor, end - CONTINUED_IN_CHUNK_BYTES)
+      const buffer = Buffer.alloc(end - start)
+      readSync(fd, buffer, 0, end - start, start)
+      const lines = (buffer.toString('utf8') + carry).split('\n')
+      // The first piece may be a fragment of a line that began in the chunk
+      // before; it is carried into that chunk's read rather than parsed here.
+      carry = start > floor ? (lines.shift() ?? '') : ''
+      const found = continuedInOf(lines)
+      if (found) return found
+      end = start
+    }
+    return null
+  } catch {
+    return null
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
+}
+
+/**
+ * Follow `continued-in` markers from a session to the file claude is actually
+ * writing now — bounded, and only onto files that exist here. Returns the
+ * starting id when there is nothing to follow.
+ */
+export function followContinuedIn(cwd: string, sessionId: string, projectsDir?: string): string {
+  let current = sessionId
+  const seen = new Set<string>([current])
+  for (let hop = 0; hop < CONTINUED_IN_MAX_HOPS; hop += 1) {
+    const next = lastContinuedInSync(claudeSessionFile(cwd, current, projectsDir))
+    if (!next || seen.has(next) || !existsSync(claudeSessionFile(cwd, next, projectsDir))) break
+    seen.add(next)
+    current = next
+  }
+  return current
 }
 
 export function resolveClaudeSessionId(options: ResolveSessionOptions): string {

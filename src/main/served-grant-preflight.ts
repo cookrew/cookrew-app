@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { harnessFor, type HarnessId } from './harness'
 import { seedClaudeOnboarding } from './served-onboarding'
@@ -116,21 +116,31 @@ export function completionRequest(
         env,
         files
       }
-    case 'pi':
+    case 'pi': {
+      const provider = commandOption(command, '--provider')
       return {
         harness: 'pi',
-        file: 'pi',
+        // THE WRAPPER IS THE HARNESS. A team whose orch runs
+        // ~/.cookrew/bin/qwen-pi (`exec pi --provider qwen-local --model …`)
+        // was probed here as bare `pi`, which went to pi's DEFAULT provider
+        // with the wrapper's key — a 401 — and every serve of that team was
+        // refused as 'grant-unusable' while the same team ran fine on the
+        // canvas. The probe runs what the orch runs; the flags it carries in
+        // its own body come along for free.
+        file: piExecutable(command),
         args: [
           '--print',
           '--no-tools',
           '--no-session',
           '--no-context-files',
+          ...(provider ? ['--provider', provider] : []),
           ...(model ? ['--model', model] : []),
           PREFLIGHT_PROMPT
         ],
         env,
         files
       }
+    }
     case 'codex':
       return {
         harness: 'codex',
@@ -156,6 +166,21 @@ export function completionRequest(
         files
       }
   }
+}
+
+/**
+ * The pi executable a saved command names: bare `pi`, or an absolute path to
+ * a `*-pi` wrapper (isPiCommand's own rule). Only a path with no shell
+ * metacharacters qualifies — anything else is probed as `pi`, never replayed.
+ */
+function piExecutable(command: string): string {
+  const first = command.trim().split(/\s+/)[0] ?? ''
+  // `~` is the shell's; execFile does not expand it, and the one wrapper this
+  // exists for is written that way in some snapshots.
+  const expanded = first.startsWith('~/') ? path.join(homedir(), first.slice(2)) : first
+  const absolute = path.isAbsolute(expanded) && !expanded.split('/').includes('..')
+  const clean = /^[A-Za-z0-9._/-]+$/.test(expanded) && /-pi$/.test(path.basename(expanded))
+  return absolute && clean ? expanded : 'pi'
 }
 
 /** Accept only a closed model token; never replay a saved shell command. */
@@ -210,7 +235,7 @@ export function createHarnessCompletionRequester(
 
 const runHarnessCompletion: HarnessCompletionRunner = (request, context) =>
   new Promise<boolean>((resolve) => {
-    execFile(
+    const child = execFile(
       request.file,
       [...request.args],
       {
@@ -222,6 +247,12 @@ const runHarnessCompletion: HarnessCompletionRunner = (request, context) =>
       },
       (error, stdout) => resolve(error === null && String(stdout).trim().length > 0)
     )
+    // EVERY SHIPPED HARNESS READS A PIPED STDIN TO EOF before it answers, and
+    // execFile hands the child an open pipe. The probe therefore sat at its
+    // 60s timeout and every serve was refused as 'grant-unusable' — with the
+    // wrapper, the key and the provider all correct. Nothing is ever written
+    // here; the pipe is closed so the prompt on argv is the whole input.
+    child.stdin?.end()
   })
 
 export const requestHarnessCompletion: HarnessCompletionRequester =

@@ -11,7 +11,7 @@ import type { ServedTemplate } from './session-served'
  * 404ing with no signal on either side. An owner stops serving by SAYING stop,
  * never by rebooting.
  *
- * Same shape and file discipline as RemoteCrewStore next door: JSON under
+ * File discipline: JSON under
  * ~/.cookrew, atomic tmp+rename writes. Sessions are deliberately NOT here — a
  * minted session's terminals die with the app, so on reboot a caller starts a
  * fresh session (and on a paid door is quoted again, for a session they will
@@ -36,7 +36,9 @@ const isServedTemplate = (v: unknown): v is ServedTemplate => {
     typeof t.templateId === 'string' &&
     typeof t.slug === 'string' &&
     isServeAccess(t.access) &&
-    (t.priceUsd === undefined || typeof t.priceUsd === 'string')
+    (t.priceUsd === undefined || typeof t.priceUsd === 'string') &&
+    (t.summary === undefined || typeof t.summary === 'string') &&
+    (t.tags === undefined || (Array.isArray(t.tags) && t.tags.every((tag) => typeof tag === 'string')))
   )
 }
 

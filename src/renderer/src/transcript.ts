@@ -667,6 +667,23 @@ export function isAtBottom(scrollTop: number, scrollHeight: number, clientHeight
 }
 
 /**
+ * Should the pin-keeper re-stick the bottom? Growth the React effects cannot
+ * see (a content-visibility block rendering to its real height, the live seam
+ * growing under an xterm fit, placeholders inserted above the viewport) opens
+ * a gap while the reader is still notionally pinned. Shares isAtBottom's
+ * slack so a reader resting a few px off the bottom is never snapped.
+ * Pure — unit-tested.
+ */
+export function shouldStick(
+  pinned: boolean,
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number
+): boolean {
+  return pinned && !isAtBottom(scrollTop, scrollHeight, clientHeight)
+}
+
+/**
  * Rail drag → fraction (unified-scroll item 4): where a pointer sits along the
  * rail track as a fraction (0 top → 1 bottom). The track is the rail height
  * minus an equal inset top and bottom (the marker's own padding), so a drag to
@@ -696,4 +713,43 @@ export function railPointerFraction(
 export function tailClipRows(phase: TurnPhase, tailLines: number | null): number | null {
   if (tailLines === null || tailLines <= 0) return null
   return phase === 'idle' || phase === 'replied' ? tailLines : null
+}
+
+/**
+ * WHERE A WHEEL OVER THE LIVE LAYER GOES — the one combined scroll space, or
+ * xterm.
+ *
+ * While a turn RUNS, the live layer is the thing to read and the wheel drives
+ * xterm (tmux copy-mode) as it always has. At REST the live layer is a tail:
+ * scrolling it should move through the transcript above it. That used to be
+ * true only when a tail clip had been found, and a clip is found by scraping
+ * the PTY for a reply boundary — which a TUI never shows. An imported card
+ * mirrors pi's full-screen TUI, so no clip was ever found, the wheel went to
+ * xterm, xterm turned it into arrow keys for a remote alt-screen, and the
+ * transcript above a finished reply could not be reached at all. Rest is the
+ * rule now; the clip is only how the tail is drawn.
+ *
+ * NESTED, like any scroller inside a scroller: the live layer's OWN
+ * scrollback comes first. An upward wheel scrolls the terminal until its
+ * viewport is at the top of its buffer, and only then moves the transcript
+ * above; a downward one scrolls the terminal back until it is at its bottom,
+ * and only then the transcript. The live transcript — the reply as the
+ * terminal drew it — is therefore always readable in place after a reply,
+ * which it was not while the clip rule took every wheel at rest for the
+ * checkpoint blocks. `live` is the terminal's edges; absent (no terminal yet)
+ * it is treated as having none, so the transcript takes the wheel.
+ */
+export function wheelGoesToTranscript(input: {
+  atRest: boolean
+  clipped: boolean
+  deltaY: number
+  scrollTop: number
+  atBottom: boolean
+  live?: { atTop: boolean; atBottom: boolean }
+}): boolean {
+  if (!input.atRest && !input.clipped) return false
+  const live = input.live ?? { atTop: true, atBottom: true }
+  if (input.deltaY < 0) return live.atTop && input.scrollTop > 0
+  if (input.deltaY > 0) return live.atBottom && !input.atBottom
+  return false
 }

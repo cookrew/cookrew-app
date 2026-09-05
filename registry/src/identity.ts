@@ -89,7 +89,20 @@ export function identityConfigFor(input: {
     return { ok: false, reason: `--origin ${raw} must be scheme://host[:port] with no path` }
   }
   const statedPort = url.port === '' ? (url.protocol === 'https:' ? 443 : 80) : Number(url.port)
-  if (statedPort !== input.port) {
+  /**
+   * The port check applies ONLY when the origin names this machine.
+   *
+   * It exists to catch `--origin http://localhost:8790 --port 8791`: a typo
+   * that turns every ceremony into a blanket 401 reading like a broken
+   * passkey. But behind a reverse proxy the two ports differ on purpose —
+   * the process binds 8791 while the world reaches https://cookrew.dev — and
+   * refusing that made the only real deployment shape unbootable.
+   *
+   * A non-local hostname means something else is terminating the connection,
+   * so the bound port says nothing about what a browser will send.
+   */
+  const localOrigin = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)
+  if (localOrigin && statedPort !== input.port) {
     return {
       ok: false,
       reason: `--origin ${raw} names port ${statedPort} but --port is ${input.port}; a browser would be refused on both`
@@ -113,13 +126,23 @@ export function identityConfigFor(input: {
  * spec §6 requires a fresh ceremony per manifest, so a stolen download token
  * must not be a publishing credential.
  */
-export type TokenScope = 'download' | 'publish'
+export type TokenScope = 'download' | 'publish' | 'call'
 
 export interface TokenClaims {
   sub: string
   scope: TokenScope
   exp: number
+  /**
+   * A `call` token is minted for ONE door — `@handle/team` — and a door checks
+   * this against its own name before it seats the caller. Without it a token
+   * minted to knock on one door would open every door that trusts this
+   * registry; with it a stolen token is worth exactly one address.
+   */
+  aud?: string
 }
+
+/** The shape a call token's audience must have: a door's canonical name. */
+const AUDIENCE = /^@[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
 
 export type AssertFailure =
   | 'unknown_credential'
@@ -273,15 +296,34 @@ export class IdentityService {
    * a failure says which invariant broke — but the REASON is for the log and
    * the tests, never for the wire: a client learns only that it must try again.
    */
-  assert(input: AssertionInput, scope: TokenScope = 'download'):
+  assert(input: AssertionInput, scope: TokenScope = 'download', aud?: string):
     | { ok: true; token: string; sub: string }
-    | { ok: false; reason: AssertFailure } {
+    | { ok: false; reason: AssertFailure | 'bad_audience' } {
+    // A call token without a door, or with a malformed one, is refused rather
+    // than minted broad: the audience is what confines it.
+    if (scope === 'call' && (typeof aud !== 'string' || !AUDIENCE.test(aud))) {
+      return { ok: false, reason: 'bad_audience' }
+    }
     // Binding null: a login ceremony completes only a login nonce. A
     // countersign nonce presented here is `wrong_binding`, so a publish
     // ceremony can never be spent as a session instead.
     const out = this.verifyAssertion(input, null)
     if (!out.ok) return out
-    return { ok: true, sub: out.credentialId, token: this.mint(out.credentialId, scope) }
+    return {
+      ok: true,
+      sub: out.credentialId,
+      token: this.mint(out.credentialId, scope, scope === 'call' ? aud : undefined)
+    }
+  }
+
+  /**
+   * THE TOKEN KEY'S PUBLIC HALF, as a JWK — for a DOOR to verify a call token
+   * without asking this registry on every knock. Public by nature: it is the
+   * half meant to be handed out, and handing it out is what lets a door seat a
+   * caller while the registry is unreachable.
+   */
+  publicKeyJwk(): Record<string, unknown> {
+    return this.keys().publicKey.export({ format: 'jwk' }) as Record<string, unknown>
   }
 
   /**
@@ -378,8 +420,13 @@ export class IdentityService {
     return pair
   }
 
-  private mint(sub: string, scope: TokenScope): string {
-    const claims: TokenClaims = { sub, scope, exp: this.now() + this.config.tokenTtlMs }
+  private mint(sub: string, scope: TokenScope, aud?: string): string {
+    const claims: TokenClaims = {
+      sub,
+      scope,
+      exp: this.now() + this.config.tokenTtlMs,
+      ...(aud === undefined ? {} : { aud })
+    }
     const body = b64url(Buffer.from(JSON.stringify(claims), 'utf8'))
     const signature = sign(null, Buffer.from(body, 'utf8'), this.keys().privateKey)
     return `${body}.${b64url(signature)}`
@@ -391,14 +438,17 @@ export class IdentityService {
    */
   verifyToken(token: string): TokenClaims | null {
     try {
-      const [body, signature] = token.split('.')
+      const parts = token.split('.')
+      if (parts.length !== 2) return null
+      const [body, signature] = parts
       if (!body || !signature) return null
       if (!verify(null, Buffer.from(body, 'utf8'), this.keys().publicKey, fromB64url(signature))) {
         return null
       }
       const claims = JSON.parse(fromB64url(body).toString('utf8')) as TokenClaims
       if (typeof claims.exp !== 'number' || claims.exp < this.now()) return null
-      if (claims.scope !== 'download' && claims.scope !== 'publish') return null
+      if (claims.scope !== 'download' && claims.scope !== 'publish' && claims.scope !== 'call') return null
+      if (claims.scope === 'call' && (typeof claims.aud !== 'string' || !AUDIENCE.test(claims.aud))) return null
       return claims
     } catch {
       return null

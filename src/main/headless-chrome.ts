@@ -12,6 +12,7 @@ import http from 'node:http'
 import path from 'node:path'
 import { shareInstallationDirs } from './browser-scope'
 import type { BrowserTab } from '../shared/model'
+import { observedBrowserUrl } from '../shared/browser-navigation'
 import type { CdpInputCommand } from '../shared/cast-input'
 import type { ViewportMetrics } from '../shared/cast-viewport'
 import {
@@ -458,7 +459,7 @@ export class HeadlessInstance {
     const tabId = this.targetToTab.get(info.targetId)
     const page = tabId ? this.pages.get(tabId) : undefined
     if (!page) return
-    const url = info.url || page.url
+    const url = observedBrowserUrl(page.url, info.url || page.url)
     const title = typeof info.title === 'string' ? info.title : page.title
     if (url === page.url && title === page.title) return
     page.url = url
@@ -619,7 +620,10 @@ export class HeadlessInstance {
       )
       if (typeof value === 'object' && value !== null) {
         const state = value as { url?: unknown; title?: unknown }
-        const url = typeof state.url === 'string' ? state.url : page.url
+        const url = observedBrowserUrl(
+          page.url,
+          typeof state.url === 'string' ? state.url : page.url
+        )
         const title = typeof state.title === 'string' ? state.title : page.title
         if (url !== page.url || title !== page.title) {
           page.url = url

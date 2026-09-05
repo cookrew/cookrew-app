@@ -76,33 +76,21 @@ describe('every preload invoke has a main handler', () => {
   })
 })
 
-describe('the harness and marketplace preset lists stay separate channels', () => {
+describe('the harness preset list keeps its own channel', () => {
   it('keeps preset:list for harness presets only', () => {
     expect(handled().filter((c) => c === 'preset:list')).toHaveLength(1)
   })
 
-  it('gives installed marketplace presets their own namespace', () => {
-    for (const channel of [
-      'preset:installed:list',
-      'preset:installed:place',
-      'preset:installed:uninstall',
-      // R20's two decisions, deliberately separate: reading the rotation sheet
-      // is not accepting the key it describes.
-      'preset:installed:rotation:seen',
-      'preset:installed:rotation:trust'
-    ]) {
-      expect(handled()).toContain(channel)
-    }
-  })
-
-  it('does not let the preload point two methods at one channel', () => {
-    // The specific aliasing bug: listPresets and listInstalledPresets both
-    // invoked preset:list, so the marketplace method returned harness rows.
+  // The installed-marketplace namespace (preset:installed:*) was removed with
+  // the lane it served — the store it read had no way to install anything and
+  // the three chips on it were a QA fixture on disk. What this now guards is
+  // that nothing reintroduces a SECOND meaning for preset:list: the aliasing
+  // bug it was written for made one method return the other list's rows.
+  it('never points two preload methods at preset:list', () => {
     const listChannels = matchAll(
       preloadSrc,
-      /(?:listPresets|listInstalledPresets):\s*\(\)\s*=>\s*ipcRenderer\.invoke\(\s*['"]([^'"]+)['"]/g
+      /(\w+):\s*\(\)\s*=>\s*ipcRenderer\.invoke\(\s*['"]preset:list['"]/g
     )
-    expect(listChannels).toHaveLength(2)
-    expect(new Set(listChannels).size).toBe(2)
+    expect(listChannels).toHaveLength(1)
   })
 })

@@ -23,6 +23,7 @@ import {
   railPointerFraction,
   refineEstimate,
   tailClipRows,
+  wheelGoesToTranscript,
   traceRowLabel,
   warnAbsentBridge,
   type TraceBlock
@@ -576,5 +577,41 @@ describe('fanLayout (focus anchored, neighbors fan up/down; clip keeps alignment
     expect(focused?.index).toBe(2) // the anchor is the focus, unchanged
     // the anchor is a SINGLE row (not the geometric middle of the 6-row window)
     expect(above.length + 1 + below.length).toBe(w.length)
+  })
+})
+
+describe('wheelGoesToTranscript — the live layer at rest is a pass-through scroller', () => {
+  const at = (over: Partial<Parameters<typeof wheelGoesToTranscript>[0]>) =>
+    wheelGoesToTranscript({ atRest: true, clipped: false, deltaY: -40, scrollTop: 300, atBottom: false, ...over })
+
+  it('a running turn keeps the wheel on xterm unless a clip was found', () => {
+    expect(at({ atRest: false })).toBe(false)
+    expect(at({ atRest: false, clipped: true })).toBe(true)
+  })
+
+  it('at rest, up scrolls the transcript while there is anything above — clip or no clip', () => {
+    // The imported card: pi's full-screen TUI mirrored, no reply boundary to
+    // scrape, no clip — and a finished reply above that could not be reached.
+    expect(at({ clipped: false })).toBe(true)
+    expect(at({ clipped: false, scrollTop: 0 })).toBe(false)
+  })
+
+  it('at rest, down scrolls the transcript until it is at the bottom, then xterm has it', () => {
+    expect(at({ deltaY: 40, atBottom: false })).toBe(true)
+    expect(at({ deltaY: 40, atBottom: true })).toBe(false)
+    expect(at({ deltaY: 0 })).toBe(false)
+  })
+
+  it('NESTED: the live terminal scrolls its own scrollback first; the transcript only at its edges', () => {
+    // The live transcript after a reply — the reply as the terminal drew it —
+    // must be readable in place. While the terminal can still scroll up, an
+    // upward wheel is the terminal's; at its top, the transcript's.
+    expect(at({ live: { atTop: false, atBottom: true } })).toBe(false)
+    expect(at({ live: { atTop: true, atBottom: true } })).toBe(true)
+    // Coming back down: the terminal first until it is at its bottom.
+    expect(at({ deltaY: 40, live: { atTop: true, atBottom: false } })).toBe(false)
+    expect(at({ deltaY: 40, live: { atTop: true, atBottom: true }, atBottom: false })).toBe(true)
+    // A clipped tail with a terminal scrolled up still belongs to the terminal.
+    expect(at({ clipped: true, atRest: false, live: { atTop: false, atBottom: true } })).toBe(false)
   })
 })

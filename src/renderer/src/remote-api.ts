@@ -1,10 +1,11 @@
 import { AuthError, authStore, tokenParam, type AuthScope } from './auth-gate'
-import { ReconnectingStream } from './live-stream'
+import { ReconnectingStream, attachTerminalStream } from './live-stream'
 import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
 import { apiPath } from './api-base'
+import { createRawInputQueue } from './raw-input-queue'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -113,6 +114,15 @@ async function mapLimited<T, R>(
 function post(path: string, body: unknown): void {
   void req(path, 'POST', body).catch(() => undefined)
 }
+
+/**
+ * Keystrokes for the terminal, ordered and coalesced (raw-input-queue.ts).
+ * req() has already reported any auth failure to the store by the time the
+ * queue swallows the rejection — same contract as post() above.
+ */
+const rawInput = createRawInputQueue((terminalId, data) =>
+  req(apiPath(`/api/terminal/${terminalId}/raw`), 'POST', { data })
+)
 
 /**
  * Ask the server what the current credential is worth. Used to verify a
@@ -237,17 +247,6 @@ export function createRemoteApi(): CookrewApi {
     connectNodes: (a, b) => req(apiPath('/api/connections'), 'POST', { a, b }),
     disconnect: (connId) => req(apiPath(`/api/connections/${connId}`), 'DELETE'),
     listPresets: () => req(apiPath('/api/presets')),
-    // The phone's marketplace surface is the canvas BROWSER card (R1), not a
-    // native chip row — and installing is a desktop act, since the store lives
-    // on the machine that runs the agents. Empty and inert here until the
-    // companion has a reason to differ.
-    listInstalledPresets: () => Promise.resolve([]),
-    placeInstalledPreset: () => Promise.resolve(),
-    uninstallPreset: () => Promise.resolve(),
-    // Trusting a signing key is a decision about the machine that holds the
-    // store, so the phone does not get to make it either.
-    markPresetRotationSeen: () => Promise.resolve(),
-    trustPresetAuthorKey: () => Promise.resolve(),
     // The rail's third marker class travels to the phone now — same store the
     // desktop reads, over the scoped route, so the two rails cannot disagree.
     listPins: (terminalId) => req<VersionPinRecord[]>(apiPath(`/api/terminal/${terminalId}/pins`)),
@@ -267,7 +266,11 @@ export function createRemoteApi(): CookrewApi {
       upload(name, new Blob([new Uint8Array(bytes).slice().buffer])),
     pickFiles: () => Promise.resolve([]),
 
-    ptyInput: (terminalId, data) => post(apiPath(`/api/terminal/${terminalId}/raw`), { data }),
+    // Ordered and coalesced — see raw-input-queue.ts: one request in flight
+    // per terminal, later bytes ride the next request as a single batch.
+    // Parallel per-keystroke fetches could land REORDERED, and each paid its
+    // own headers and round trip on the link where round trips are scarce.
+    ptyInput: rawInput,
     ptyJump: (terminalId, text) => post(apiPath(`/api/terminal/${terminalId}/jump`), { text }),
     // Same contract as the desktop's IPC call: never rejects, the failure
     // reason comes back as data so the reader is told what to fix.
@@ -278,16 +281,25 @@ export function createRemoteApi(): CookrewApi {
     ptyResize: (terminalId, cols, rows) =>
       post(apiPath(`/api/terminal/${terminalId}/resize`), { cols, rows }),
     ptyAttach: (terminalId, onData, onHello) => {
-      const stream = new EventSource(tokenParam(apiPath(`/api/terminal/${terminalId}/stream`)))
-      const listener = (e: MessageEvent): void => onData(JSON.parse(e.data) as string)
-      // The server sends this before the first frame; sizing the xterm from it
-      // is what keeps a 45x24 phone from re-wrapping a frame serialized at the
-      // pane's 100x30 and then misplacing every absolute-addressed delta.
-      const helloListener = (e: MessageEvent): void =>
-        onHello?.(JSON.parse(e.data) as { cols: number; rows: number })
-      stream.addEventListener('hello', helloListener)
-      stream.addEventListener('data', listener)
-      return () => stream.close()
+      // Healing, not hoping — see attachTerminalStream for why a bare
+      // EventSource left the live pane black on the first open of an idle
+      // card. iOS also reaps a backgrounded page's connections and leaves the
+      // corpse in CONNECTING, which the backoff deliberately leaves alone —
+      // so a foreground return revives the link the way the canvas stream's
+      // resync does.
+      const stream = attachTerminalStream(
+        { open: () => new EventSource(tokenParam(apiPath(`/api/terminal/${terminalId}/stream`))) },
+        onData,
+        onHello
+      )
+      const onVisible = (): void => {
+        if (document.visibilityState === 'visible') stream.revive()
+      }
+      document.addEventListener('visibilitychange', onVisible)
+      return () => {
+        document.removeEventListener('visibilitychange', onVisible)
+        stream.close()
+      }
     },
 
     listActivity: () => req<TerminalActivity[]>(apiPath('/api/activity')),
@@ -386,10 +398,13 @@ export function createRemoteApi(): CookrewApi {
     onBrowserOpenTab: () => () => undefined,
     onBrowserPhoneViewing: () => () => undefined,
     onCmdW: () => () => undefined,
+    // No OS hands this surface a link: the phone and the demo are reached by
+    // one, never launched by one.
+    onDeepLink: () => () => undefined,
 
-    // R30 serving + the dock's crews. Owner-desktop surfaces: this transport
-    // cannot mount them, and a stub that pretended to succeed would publish
-    // nothing while telling the user it had. It refuses, visibly.
+    // R30 serving. Owner-desktop surfaces: this transport cannot mount them,
+    // and a stub that pretended to succeed would publish nothing while telling
+    // the user it had. It refuses, visibly.
     servingServe: async () => ({ ok: false as const, reason: 'desktop-only' }),
     servingStop: async () => ({ ok: false }),
     servingPaymentStatus: async () => ({ x402: { ready: false }, stripe: { ready: false } }),
@@ -398,11 +413,28 @@ export function createRemoteApi(): CookrewApi {
     servingList: async () => [],
     servingSessions: async () => [],
     servingEnd: async () => ({ stopped: 0 }),
-    crewList: async () => [],
-    crewAdd: async () => ({ ok: false as const, reason: 'desktop-only' }),
-    crewRemove: async () => ({ ok: false }),
-    crewUnlock: async () => ({ ok: false as const, reason: 'desktop-only' }),
-    crewPlace: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    // IMPORTING A SERVED TEAM FROM THE PHONE. These used to refuse with
+    // "desktop-only" on the reasoning that a phone has no terminal to place —
+    // but the card is placed and spawned at the desktop this phone is a view
+    // of, exactly as placing a preset from here already works. The desktop
+    // does the work; the phone asks for it over the same API as everything
+    // else. Every Bearer and key stays at the desktop.
+    serveInspect: (link) => req(apiPath('/api/serve/inspect'), 'POST', { link }),
+    serveBrowse: (link) => req(apiPath('/api/serve/browse'), 'POST', { link }),
+    serveImport: (link, position, paid) =>
+      req(apiPath('/api/serve/import'), 'POST', { link, position, paid }),
+    serveGate: (link) => req(apiPath('/api/serve/gate'), 'POST', { link }),
+    serveCheckout: async (link) => {
+      const checkout = await req<
+        { ok: true; session: string; url: string } | { ok: false; reason: string; detail?: string }
+      >(apiPath('/api/serve/checkout'), 'POST', { link })
+      // The hosted page opens HERE, on the phone — the desktop must not raise
+      // a browser on a machine the person is not sitting at.
+      if (checkout.ok) window.open(checkout.url, '_blank', 'noopener')
+      return checkout
+    },
+    serveSettle: (link, rail, session) =>
+      req(apiPath('/api/serve/settle'), 'POST', { link, rail, session }),
     quitApp: () => undefined
   }
 }

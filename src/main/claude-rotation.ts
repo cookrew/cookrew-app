@@ -35,8 +35,9 @@
 // then ask the directory whether some other file claims to continue it.
 //
 // THE PROBE IS ASYNCHRONOUS, THE COMMIT IS NOT. Reading up to
-// ROTATION_CANDIDATE_CAP heads of ROTATION_HEAD_BYTES each is up to ~16MB of
-// file I/O, and this runs on the Electron MAIN thread — the one that also
+// ROTATION_CANDIDATE_CAP heads of ROTATION_HEAD_BYTES each is up to ~64MB of
+// file I/O in the worst case (the line cap usually ends a read far earlier;
+// see ROTATION_HEAD_BYTES), and this runs on the Electron MAIN thread — the one that also
 // serves every IPC call, every PTY write and the window's own compositing. So
 // every byte here goes through node:fs/promises (libuv's threadpool, with a
 // real yield point at each await), while the decision it feeds is committed
@@ -55,10 +56,21 @@
 
 import { open, readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
-import { claudeProjectDir, isSessionUuid, realCwd } from './claude-fork'
+import { claudeProjectDir, continuedInOf, isSessionUuid, realCwd } from './claude-fork'
 
-/** Head window per candidate file, in bytes and in lines (first hit wins). */
-export const ROTATION_HEAD_BYTES = 1024 * 1024
+/**
+ * Head window per candidate file, in bytes and in lines (first hit wins).
+ *
+ * 4 MB, not 1: a long-lived session's head is mostly `file-history-snapshot`
+ * records, and on a rotated conversation they run past a megabyte before the
+ * first message. Measured 2026-09-05 across the sixteen newest files of this
+ * project: the eighth message record (ROTATION_RESUME_MIN_UUIDS) sat at
+ * 1.5–1.9 MB in every file that had ever rotated, and at 50–850 KB in the
+ * rest. A 1 MB window saw ZERO uuids in the live successor and the scan
+ * refused with nothing to refuse on. The line cap still ends the read early
+ * on ordinary heads, so the extra budget is only spent where it is needed.
+ */
+export const ROTATION_HEAD_BYTES = 4 * 1024 * 1024
 export const ROTATION_HEAD_LINES = 24
 /**
  * Head window for the REPLAY shape, which needs conversation records rather
@@ -180,6 +192,50 @@ export function rotationEdgeOf(headLines: readonly string[]): RotationEdge | nul
 }
 
 /**
+ * The moment a head's compaction pair was written — the summary's timestamp.
+ *
+ * A resume REPLAYS the predecessor verbatim, and the replay includes the
+ * predecessor's own compaction pair with only `sessionId` rewritten to the
+ * new file (measured on f16cf111, 2026-09-05: lines 19–20 are 5a4cdb91's
+ * boundary and summary, same timestamps to the millisecond, naming
+ * 5a4cdb91's predecessor). Read as a declaration, that pair says the new
+ * file continues the GRANDPARENT, and the real edge is missed. The stamp is
+ * how an inherited pair is told from an own one: claude never writes two
+ * compactions at the same millisecond, so equal stamps mean the same event.
+ */
+export function compactStampOf(headLines: readonly string[]): string | null {
+  for (const line of headLines) {
+    if (!ROTATION_MARKER_RE.test(line)) continue
+    try {
+      const record = JSON.parse(line) as HeadRecord & { timestamp?: unknown }
+      if (record.isCompactSummary === true) {
+        return typeof record.timestamp === 'string' ? record.timestamp : null
+      }
+    } catch {
+      continue
+    }
+  }
+  return null
+}
+
+/**
+ * Does `candidateHead` carry the SAME compaction pair `predecessorHead` does —
+ * inherited by replay rather than declared by its own compaction? True only
+ * when both declare an edge to the same session at the same stamp.
+ */
+export function inheritsCompactionOf(
+  candidateHead: readonly string[],
+  predecessorHead: readonly string[]
+): boolean {
+  const own = rotationEdgeOf(candidateHead)
+  const inherited = rotationEdgeOf(predecessorHead)
+  if (!own || !inherited) return false
+  if (own.predecessorId !== inherited.predecessorId) return false
+  const stamp = compactStampOf(candidateHead)
+  return stamp !== null && stamp === compactStampOf(predecessorHead)
+}
+
+/**
  * THE SECOND PROVENANCE SHAPE: a RESUME rotation.
  *
  * A compaction announces itself. A crash recovery does not. `claude --resume`
@@ -294,6 +350,12 @@ export interface RotationFs {
    * existing fakes keep passing.
    */
   readHead(file: string, maxLines?: number): Promise<string[]>
+  /**
+   * Complete lines from the TAIL of a file, where claude appends its own
+   * `continued-in` marker. Optional so existing fakes keep passing; without
+   * it the scan has only the heuristic shapes.
+   */
+  readTail?(file: string, maxBytes?: number): Promise<string[]>
 }
 
 export interface RotationScanOptions {
@@ -347,10 +409,32 @@ export async function resolveRotationChain(
 
   const entries = await fs.listSessions(dir)
   const stale = entries.find((entry) => entry.sessionId === options.sessionId)
-  // No stale file at all means there is no rotation to follow — a missing
-  // binding is a different repair (resolveClaudeSessionId owns that one).
   if (!stale) return null
 
+  // CLAUDE'S OWN STATEMENT FIRST. A `continued-in` marker at the tail of the
+  // bound file names the successor outright, and it is the one shape the
+  // heuristics below cannot see: a continuation file is created at the
+  // compaction, hours before the switch, with a head that names nothing —
+  // so it is neither newer than the stale file nor a declared successor.
+  if (fs.readTail) {
+    const byId = new Map(entries.map((entry) => [entry.sessionId, entry]))
+    const declared: string[] = []
+    const seen = new Set<string>([options.sessionId])
+    let at: SessionFileEntry | undefined = stale
+    while (at && declared.length <= ROTATION_MAX_HOPS) {
+      const next = continuedInOf(await fs.readTail(at.file))
+      if (!next || seen.has(next)) break
+      const file = byId.get(next)
+      if (!file) break
+      if (options.claimed?.has(next)) return null // another node owns it
+      seen.add(next)
+      declared.push(next)
+      at = file
+    }
+    if (declared.length > 0) return declared
+  }
+  // No stale file at all means there is no rotation to follow — a missing
+  // binding is a different repair (resolveClaudeSessionId owns that one).
   const candidates = entries
     .filter(
       (entry) =>
@@ -372,7 +456,31 @@ export async function resolveRotationChain(
   // still binds first on the big heads) — while a second narrow pass would
   // have doubled the opens for every probe that falls through to the replay.
   const heads = new Map<string, string[]>()
-  const edges = await readEdgesBounded(fs, candidates, heads)
+  const declaredEdges = await readEdgesBounded(fs, candidates, heads)
+
+  // AN INHERITED PAIR DECLARES NOTHING. The bound file's own head is read once
+  // here (the replay scan would read it anyway) so a candidate whose
+  // compaction pair is the bound file's pair — same predecessor, same stamp —
+  // is judged as a replay of the bound file, not as a declared successor of
+  // its grandparent. Without this, the real successor of a rotated session was
+  // excluded from the replay scan for "declaring" an edge it merely copied.
+  //
+  // Read LAZILY: an inherited pair can only name a session other than the
+  // bound one (the bound file's pair names its own predecessor), so the extra
+  // head is paid for only when some candidate declares such an edge. A fleet
+  // whose rotations all declare the bound session pays nothing here.
+  const suspect = declaredEdges.some(
+    ({ edge }) => edge !== null && edge.predecessorId !== options.sessionId
+  )
+  const staleHead = suspect ? await fs.readHead(stale.file, ROTATION_RESUME_HEAD_LINES) : null
+  if (staleHead) heads.set(stale.file, staleHead)
+  const edges = declaredEdges.map(({ candidate, edge }) =>
+    edge !== null &&
+    staleHead !== null &&
+    inheritsCompactionOf(heads.get(candidate.file) ?? [], staleHead)
+      ? { candidate, edge: null }
+      : { candidate, edge }
+  )
 
   // predecessor id → successor ids claiming it.
   const claimants = new Map<string, string[]>()
@@ -661,5 +769,39 @@ const defaultRotationFs: RotationFs = {
     })
     return entries.flat()
   },
-  readHead: (file, maxLines) => readHeadLines(file, maxLines)
+  readHead: (file, maxLines) => readHeadLines(file, maxLines),
+  readTail: (file, maxBytes) => readTailLines(file, maxBytes ?? 16 * 1024 * 1024)
+}
+
+/**
+ * Lines from the tail of a file that hold a continuation marker, searching
+ * backwards in chunks and stopping at the first chunk that has one — a file
+ * resumed after its marker carries a stray branch past it (520 KB on the
+ * day this was written), so the last few KB are not enough.
+ */
+export async function readTailLines(file: string, maxBytes: number): Promise<string[]> {
+  let handle: Awaited<ReturnType<typeof open>> | null = null
+  try {
+    handle = await open(file, 'r')
+    const size = (await handle.stat()).size
+    const floor = Math.max(0, size - maxBytes)
+    const chunk = 256 * 1024
+    let end = size
+    let carry = ''
+    while (end > floor) {
+      const start = Math.max(floor, end - chunk)
+      const buffer = Buffer.alloc(end - start)
+      await handle.read(buffer, 0, end - start, start)
+      const lines = (buffer.toString('utf8') + carry).split('\n')
+      carry = start > floor ? (lines.shift() ?? '') : ''
+      const whole = lines.filter((line) => line.length > 0)
+      if (whole.some((line) => line.includes('"continued-in"'))) return whole
+      end = start
+    }
+    return []
+  } catch {
+    return []
+  } finally {
+    await handle?.close()
+  }
 }

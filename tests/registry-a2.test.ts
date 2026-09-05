@@ -451,6 +451,23 @@ describe('identityConfigFor — the two values that must never silently disagree
     expect(out.reason).toContain('8803')
   })
 
+  it('allows a public origin on a different port — that is what a proxy IS', () => {
+    // Behind a reverse proxy the two ports differ on purpose: the process binds
+    // 8791 while the world reaches https://cookrew.dev. Refusing that made the
+    // only real deployment shape unbootable, for a check aimed at a typo.
+    const out = identityConfigFor({ port: 8791, origin: 'https://cookrew.dev' })
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.config.origin).toBe('https://cookrew.dev')
+    expect(out.config.rpId).toBe('cookrew.dev')
+  })
+
+  it('still refuses a LOCAL origin naming a port nothing is bound to', () => {
+    // The typo this check exists for is unchanged: nothing is terminating a
+    // connection in front of localhost, so the bound port is the whole story.
+    expect(identityConfigFor({ port: 8803, origin: 'http://127.0.0.1:8790' }).ok).toBe(false)
+  })
+
   it('takes the rpId from the origin host, because localhost and 127.0.0.1 are different RPs', () => {
     // The other half of the same trap: the old boot banner advertised
     // 127.0.0.1 while identity accepted only localhost, so the server printed

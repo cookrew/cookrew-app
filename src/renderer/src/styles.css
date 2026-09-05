@@ -657,9 +657,9 @@ a.cr-btn {
   align-items: center;
   gap: 6px;
   /* The row WRAPS on desktop: with enough presets + saved teams the tail —
-     which is exactly where the CREWS family and + ADD BY LINK live — used to
-     run off the screen edge with no scroll, making the import entry
-     undiscoverable. The dock grows upward instead; chips stay tappable. */
+     which is exactly where + IMPORT lives — used to run off the screen edge
+     with no scroll, making the import entry undiscoverable. The dock grows
+     upward instead; chips stay tappable. */
   flex-wrap: wrap;
   min-width: 0;
   max-height: 30vh;
@@ -690,12 +690,17 @@ a.cr-btn {
 
 /* ---- selection bar (Figma model: selected elements grow actions) ---- */
 
-/* Floats over the canvas just above the dock, centered. */
+/* Floats over the canvas just above the dock, centered — by auto margins,
+   NEVER by transform: the payment sheet renders inside this bar with a
+   position: fixed scrim, and a transform here becomes its containing block,
+   gluing the "viewport-covering" scrim to the bar instead of the screen. */
 .cr-selbar {
   position: absolute;
   bottom: 14px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: fit-content;
   z-index: 20;
   display: flex;
   align-items: center;
@@ -706,6 +711,20 @@ a.cr-btn {
   border: 2px solid var(--line);
   box-shadow: 3px 3px 0 var(--line);
   animation: cr-fadein 160ms ease-out;
+}
+
+/* The in-flow controls, boxed as their own row: narrow screens put the
+   sideways scroll HERE, never on .cr-selbar itself. The bar is the containing
+   block of the popovers floated above it (.cr-selbar-share, .cr-selbar-tray,
+   the served receipt) — overflow on the bar clips them all, which is exactly
+   how the share sheet vanished on phones. This row must stay UNPOSITIONED:
+   give it position/transform and it becomes the popovers' containing block,
+   and its narrow-screen overflow clips them all over again. */
+.cr-selbar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .cr-selbar-count {
@@ -1045,27 +1064,42 @@ a.cr-btn {
   outline-style: solid;
 }
 
-/* Narrow screens: the bar hugs the width and scrolls sideways rather than
-   overflowing the stage (same strip treatment as the dock rows). */
+/* Narrow screens: the bar hugs the width and its ROW scrolls sideways rather
+   than overflowing the stage (same strip treatment as the dock rows). The
+   overflow must not sit on .cr-selbar — see .cr-selbar-row. */
 @media (max-width: 700px) {
   .cr-selbar {
     bottom: 10px;
     gap: 8px;
+  }
+  .cr-selbar-row {
+    gap: 8px;
     overflow-x: auto;
     scrollbar-width: none;
+    /* The bar's padding used to give focus rings their slack; the scroll box
+       (overflow-y computes to auto here) would eat it — carve it back. */
+    padding-block: 2px;
+    margin-block: -2px;
   }
-  .cr-selbar::-webkit-scrollbar {
+  .cr-selbar-row::-webkit-scrollbar {
     display: none;
   }
-  .cr-selbar > * {
+  .cr-selbar-row > * {
     flex: 0 0 auto;
   }
   .cr-selbar-name {
     width: 110px;
   }
+  /* A refusal must be readable, not an ellipsis whose full text hides behind
+     a hover title no finger can reach — wrap it, up to three lines. */
   .cr-selbar-flash,
   .cr-selbar-error {
-    max-width: 40vw;
+    max-width: 60vw;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 }
 
@@ -1732,102 +1766,6 @@ a.cr-btn {
 .ctx-live .popout-terminal {
   flex: 1;
   min-height: 0;
-}
-
-.ctx-live.served {
-  flex-grow: 1;
-}
-
-/* Placed crews keep crew-line as transport, never as pixels. The streamed
-   remote trace stays in ctx-blocks; this is only the LIVE status + composer. */
-.served-live-turn {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px 16px 12px;
-  color: var(--phos);
-}
-
-.served-live-prompt,
-.served-live-reply {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-.served-live-prompt {
-  color: var(--phos-glow);
-}
-
-.served-live-prompt::before {
-  content: '❯ ';
-  color: var(--amber);
-}
-
-.served-live-state {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--vi-done);
-  font-family: var(--font-pixel);
-  font-size: 8px;
-}
-
-.served-live-dot {
-  width: 7px;
-  height: 7px;
-  background: currentColor;
-  border-radius: 50%;
-}
-
-.served-live-state.busy .served-live-dot {
-  animation: vi-pulse 1.2s ease-in-out infinite;
-}
-
-.served-live-input {
-  flex: 1;
-  width: 100%;
-  min-height: 72px;
-  resize: none;
-  border: 1px solid var(--phos-dim);
-  border-radius: 2px;
-  background: rgba(0, 0, 0, 0.22);
-  color: var(--phos-glow);
-  padding: 9px 10px;
-  font: 12px/1.45 var(--font-mono);
-  outline: none;
-}
-
-.served-live-input:focus {
-  border-color: var(--amber);
-}
-
-.served-live-send {
-  width: 36px;
-  height: 32px;
-}
-
-.served-live-compose-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  margin-top: auto;
-}
-
-.cr-ckpt-warming-label {
-  position: absolute;
-  right: 14px;
-  bottom: 10px;
-  width: max-content;
-  color: var(--vi-waiting);
-  font-family: var(--font-pixel);
-  font-size: 7px;
-  pointer-events: none;
-  transform: rotate(-90deg);
-  transform-origin: right bottom;
 }
 
 .turn {
@@ -4043,6 +3981,17 @@ body.cookrew-mobile .cookrew-minimap {
   animation: cr-ckpt-pulse 1.6s ease-in-out infinite;
 }
 
+/* The session behind the rail is over. Still, not pulsing, not green — a dot
+   that keeps glowing after the door said 402 is a lie (remote-card P10c). */
+.cr-ckpt-livedot.ended {
+  background: var(--dim);
+  animation: none;
+}
+.cr-ckpt-row.live.ended .cr-ckpt-dot i {
+  background: var(--dim);
+  animation: none;
+}
+
 @keyframes cr-ckpt-pulse {
   0%,
   100% {
@@ -5244,28 +5193,83 @@ body.cookrew-mobile .cr-dock .voice-ghost {
 .ctx-block-reply[data-translated] {
   border-left: 2px solid var(--amber-deep);
   padding-left: 8px;
-/* ── CREWS: the dock's fourth chip family (R30 import side) ──
-   Someone else's team, reached through its orch. Violet marks "not yours". */
-.cr-chip.crew-chip { border-color: var(--violet); }
-.cr-chip.crew-chip.locked { border-style: dashed; }
-.cr-chip.crew-chip.ended { opacity: 0.45; border-style: dashed; cursor: default; }
-.crew-chip-dot {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--violet); display: inline-block; margin-right: 5px;
 }
-.crew-chip-price {
-  font-size: 7px; margin-left: 5px; padding: 0 3px;
-  background: var(--amber-soft); border: 1px solid var(--line); color: var(--ink);
+
+/* ── A PLACED ORCH CARD'S SESSION LINE ──
+   The facts of an admission, kept quiet: one dim strip under the header, in
+   the terminal's own voice rather than the canvas's. It must read as a note
+   about the card, never as a control on it — so no border box, no hover, and
+   it is out of the tab order. */
+.popout-session {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 12px 6px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--cream-md);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.45;
 }
-.cr-chip.crew-add { border-style: dashed; border-color: var(--dim); color: var(--muted); }
-/* The add sheet's preview of a crew's public face. */
-.acs-face {
+.popout-session .k {
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.07em;
+  color: var(--dim);
+}
+.popout-session .sep { color: var(--line-soft); }
+/* A sentence about the record — why the rail is empty or stale, or why a
+   drop did nothing. Same voice as the strip, not an alert. */
+.popout-session .popout-session-note { color: var(--ink); }
+
+/* ── THE DOCK ROW'S FAMILIES ──
+   A quiet caption before each run of chips. It is a label, not a control:
+   no border, no hover, and it never takes a click — the chips are the row's
+   only targets. `flex-basis:100%` would break the row; these sit inline so a
+   short family costs one label's width, not a whole line. */
+.cr-dock-family {
+  align-self: center;
+  padding: 0 2px 0 6px;
+  color: var(--dim);
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  user-select: none;
+}
+.cr-dock-family:first-child { padding-left: 0; }
+/* The two acts that are always available, parked at the end so saving a team
+   never moves them. `margin-left:auto` pushes them to the row's far edge when
+   there is room, and they wrap together when there is not. */
+.cr-dock-tail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding-left: 10px;
+  border-left: 1px solid var(--line-soft);
+}
+/* A saved team is not a harness: placing it opens a whole session. Violet
+   marks "not a plain agent", the same way the rail marks a version pin. */
+.cr-chip.team-chip { border-color: var(--violet); }
+
+/* ── IMPORT A SERVED TEAM: the import side's one entry ── */
+.cr-chip.import-served {
+  border-style: dashed;
+  border-color: var(--amber);
+  color: var(--ink);
+  font-weight: 600;
+}
+/* The import sheet's preview of a team's public face. */
+.isv-face {
   border: 1.5px solid var(--line-soft); background: var(--cr-panel, transparent);
   padding: 9px 11px; margin-top: 10px; display: flex; flex-direction: column; gap: 4px;
 }
-.acs-row { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11.5px; }
-.acs-name { font-weight: 600; }
-.acs-dim { color: var(--cr-dim, #a8a29e); font-size: 10.5px; }
+.isv-row { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11.5px; }
+.isv-name { font-weight: 600; }
+.isv-dim { color: var(--cr-dim, #a8a29e); font-size: 10.5px; }
 
 /* Share-on-save inside the selection bar's naming step: the bar is a row, so
    the section lifts into a popover above it rather than stretching it. */
@@ -5277,10 +5281,9 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   max-height: 60vh;
   overflow: auto;
   padding: 10px 12px;
-  background: var(--cr-panel, #1c1a16);
-  border: 1.5px solid var(--cr-line-hard, #4c463a);
-  border-radius: 8px;
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 3px 3px 0 var(--line);
   z-index: 40;
 }
 
@@ -5291,7 +5294,6 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   gap: 6px;
   background: var(--cream-hi);
   border: 2px solid var(--violet);
-  border-radius: 0;
   box-shadow: 3px 3px 0 var(--line);
 }
 .cr-selbar-served .sos-note {
