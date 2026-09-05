@@ -11,7 +11,10 @@ import { IdentityService, type IdentityConfig } from '../registry/src/identity'
 import { jwkThumbprint as registryThumbprint } from '../registry/src/jwk'
 import { mintAccount, openAccount, type AccountSession } from '../src/main/account'
 import { bindPairedDevice } from '../src/main/pair-device'
-import { buildRegistryAssertion, jwkThumbprint as appThumbprint } from '../src/main/registry-assertion'
+import {
+  buildRegistryAssertion,
+  jwkThumbprint as appThumbprint
+} from '../src/main/registry-assertion'
 import { createRegistryTokenVerifier, registryKeyOverHttp } from '../src/main/registry-token'
 
 /**
@@ -42,6 +45,7 @@ let base = ''
 let home = ''
 let url = ''
 let close: () => void = () => {}
+let identity: IdentityService
 
 beforeEach(async () => {
   base = mkdtempSync(path.join(tmpdir(), 'identity-e2e-registry-'))
@@ -55,7 +59,7 @@ beforeEach(async () => {
     challengeTtlMs: 90 * 1000,
     linkTtlMs: 2 * 60 * 1000
   }
-  const identity = new IdentityService(base, config)
+  identity = new IdentityService(base, config)
   const server = createRegistry({
     store: new RegistryStore(base),
     log: new TransparencyLog(base),
@@ -98,7 +102,10 @@ describe('the app and the registry agree on one account', () => {
   })
 
   it('the thumbprint both sides name a device by is the same bytes', () => {
-    const okp = generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }) as Record<string, unknown>
+    const okp = generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }) as Record<
+      string,
+      unknown
+    >
     const ec = generateKeyPairSync('ec', { namedCurve: 'P-256' }).publicKey.export({
       format: 'jwk'
     }) as Record<string, unknown>
@@ -192,5 +199,50 @@ describe('the phone is a device of the account, bound at pairing', () => {
       })
     })
     expect([404, 410]).toContain(replay.status)
+  })
+})
+
+describe('an app that registered a key before accounts existed adopts it', () => {
+  it('signs in with the old key, learns its device id, and serves as the same handle', async () => {
+    const { adoptLegacyAccount } = await import('../src/main/account')
+    // What the registry held before accounts: one credential named by the handle.
+    const legacyKeys = generateKeyPairSync('ed25519')
+    const legacy = {
+      handle: HANDLE,
+      privateKeyJwk: legacyKeys.privateKey.export({ format: 'jwk' }) as Record<string, unknown>,
+      publicKeyJwk: legacyKeys.publicKey.export({ format: 'jwk' }) as Record<string, unknown>
+    }
+    expect(identity.register(HANDLE, legacy.publicKeyJwk).ok).toBe(true)
+    // Minting again is refused: the name is taken by the migrated account.
+    await expect(mintAccount({ handle: HANDLE, registry: url, baseDir: home })).rejects.toThrow(
+      /taken/
+    )
+    // Adoption instead: no ceremony, the old key is the first device.
+    const adopted = await adoptLegacyAccount({ registry: url, legacy, baseDir: home })
+    expect(adopted?.handle).toBe(HANDLE)
+    expect(adopted?.publicKeyJwk).toEqual(legacy.publicKeyJwk)
+    const session = openAccount(adopted!, { baseDir: home })
+    expect((await session.listDevices()).map((d) => d.id)).toEqual([adopted!.deviceId])
+    const door = createRegistryTokenVerifier({ keys: registryKeyOverHttp(url) })
+    expect(await door.verify(await session.token('call', DOOR), DOOR)).toEqual({
+      sub: HANDLE,
+      dev: adopted!.deviceId
+    })
+  })
+
+  it('is null when the registry does not know the key as that handle', async () => {
+    const { adoptLegacyAccount } = await import('../src/main/account')
+    await mintedSession() // @drej exists, with a different key
+    const stranger = generateKeyPairSync('ed25519')
+    const adopted = await adoptLegacyAccount({
+      registry: url,
+      legacy: {
+        handle: HANDLE,
+        privateKeyJwk: stranger.privateKey.export({ format: 'jwk' }) as Record<string, unknown>,
+        publicKeyJwk: stranger.publicKey.export({ format: 'jwk' }) as Record<string, unknown>
+      },
+      baseDir: mkdtempSync(path.join(tmpdir(), 'identity-e2e-stranger-'))
+    })
+    expect(adopted).toBeNull()
   })
 })

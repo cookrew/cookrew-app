@@ -60,11 +60,7 @@ export interface AccountFile {
   mintedAt: string
 }
 
-export type AccountFailure =
-  | 'handle-taken'
-  | 'handle-shape'
-  | 'registry-unreachable'
-  | 'refused'
+export type AccountFailure = 'handle-taken' | 'handle-shape' | 'registry-unreachable' | 'refused'
 
 /** A failure with a name the UI can branch on and a sentence it can show. */
 export class AccountError extends Error {
@@ -225,9 +221,7 @@ export async function mintAccount(
   const name = input.name ?? 'this computer'
   // The device id is the registry's to assign; a proposal rides along so a
   // registry that echoes rather than mints still returns something usable.
-  const proposed = uuidFromDigest(
-    createHash('sha256').update(jwkThumbprint(publicKeyJwk)).digest()
-  )
+  const proposed = uuidFromDigest(createHash('sha256').update(jwkThumbprint(publicKeyJwk)).digest())
 
   let answer: Response
   try {
@@ -274,7 +268,11 @@ export interface AccountSession {
   readonly deviceId: string
   readonly registry: string
   /** The flat assert body the registry verifies: assertion ‖ scope ‖ device. */
-  assertion(challenge: string, scope: string, aud?: string): RegistryAssertion & {
+  assertion(
+    challenge: string,
+    scope: string,
+    aud?: string
+  ): RegistryAssertion & {
     scope: string
     device: string
     aud?: string
@@ -287,6 +285,86 @@ export interface AccountSession {
   listDevices(): Promise<readonly DeviceRecord[]>
   revokeDevice(id: string): Promise<boolean>
   linkCode(): Promise<{ code: string; exp: number }>
+}
+
+/** The `dev` claim of a registry token, or null. Claims are the first segment. */
+function deviceOf(token: string): string | null {
+  try {
+    const claims = JSON.parse(Buffer.from(token.split('.')[0] ?? '', 'base64url').toString('utf8'))
+    return typeof claims.dev === 'string' && claims.dev.length > 0 ? claims.dev : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * ADOPT the key this app registered before accounts existed.
+ *
+ * The registry's migration turned every legacy credential into a one-device
+ * account, so `@drej` already exists there with THIS machine's old key as its
+ * first device. Minting again would be refused as taken; the right move is to
+ * sign in with the old key, read which device id the registry gave it, and
+ * write that as the account file. Nothing is created at the registry.
+ *
+ * Null when the registry does not know this key for this handle (someone
+ * else holds the name, or the registry is older than accounts and answers
+ * without a `dev`) — the caller then falls back to minting or to the sheet.
+ */
+export async function adoptLegacyAccount(
+  input: {
+    registry: string
+    legacy: {
+      handle: string
+      privateKeyJwk: Record<string, unknown>
+      publicKeyJwk: Record<string, unknown>
+    }
+    name?: string
+  } & AccountOptions
+): Promise<AccountFile | null> {
+  const doFetch = input.fetch ?? globalThis.fetch
+  const origin = new URL(input.registry).origin
+  const handle = normaliseHandle(input.legacy.handle)
+  if (!HANDLE_SHAPE.test(handle)) return null
+  const post = (at: string, body: unknown): Promise<Response> =>
+    doFetch(new URL(at, origin), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10_000)
+    })
+  try {
+    const asked = await post('/v1/identity/challenge', {})
+    const offered = (await asked.json().catch(() => ({}))) as { challenge?: string }
+    if (!asked.ok || typeof offered.challenge !== 'string') return null
+    const minted = await post('/v1/identity/assert', {
+      ...buildRegistryAssertion({
+        origin,
+        credentialId: handle,
+        privateKeyJwk: input.legacy.privateKeyJwk,
+        challenge: offered.challenge
+      }),
+      scope: 'account'
+    })
+    const out = (await minted.json().catch(() => ({}))) as { token?: string }
+    if (!minted.ok || typeof out.token !== 'string') return null
+    const deviceId = deviceOf(out.token)
+    if (deviceId === null) return null
+    return writeAccount(
+      {
+        handle,
+        deviceId,
+        kind: 'desktop',
+        name: input.name ?? 'this computer',
+        privateKeyJwk: input.legacy.privateKeyJwk,
+        publicKeyJwk: input.legacy.publicKeyJwk,
+        registry: origin,
+        mintedAt: new Date(input.now?.() ?? Date.now()).toISOString()
+      },
+      input.baseDir
+    )
+  } catch {
+    return null
+  }
 }
 
 /** A token is reused while it has time on it; 15s of slack for the round trip. */
@@ -437,9 +515,7 @@ export function currentAccount(options: AccountOptions = {}): AccountSession | n
   return stored === null ? null : openAccount(stored, options)
 }
 
-export type ServingHandle =
-  | { ok: true; handle: string }
-  | { ok: false; reason: string }
+export type ServingHandle = { ok: true; handle: string } | { ok: false; reason: string }
 
 /**
  * WHICH HANDLE THIS APP SERVES AND CALLS AS.

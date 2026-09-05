@@ -80,6 +80,16 @@ export function registryAccount(origin: string, handle: string): RegistryAccount
   }
 }
 
+/**
+ * The key this app registered at a registry BEFORE accounts existed, if any.
+ * The registry's migration made that key the account's first device, so the
+ * account file adopts it (account.ts adoptLegacyAccount) rather than minting
+ * a second name the registry would refuse as taken.
+ */
+export function loadLegacyRegistryAccount(origin: string): Stored | null {
+  return load(accountFile(origin))
+}
+
 function load(file: string): Stored | null {
   if (!existsSync(file)) return null
   try {

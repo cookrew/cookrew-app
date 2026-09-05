@@ -38,6 +38,8 @@ import {
   suggestHandle,
   AccountError
 } from './account'
+import { adoptLegacyAccount } from './account'
+import { loadLegacyRegistryAccount } from './registry-account'
 import { faceWords, harnessesOf } from './served-face'
 import { askTerminal, beginShutdown, cancelAllAsks, ownerSubmit, pasteAndSubmit } from './ask'
 import { defaultProducerLease } from './producer-lease'
@@ -3824,6 +3826,7 @@ if (selfHosted) {
 }
 
 app.whenReady().then(() => {
+  void ensureAccountAtBoot()
   // Dock icon must be set at runtime in dev; packaged builds also bundle
   // resources/icon.icns via the packager config when one is added.
   if (process.platform === 'darwin' && app.dock) {
@@ -5019,4 +5022,38 @@ function registerIpc(handlers: RestoreHandlers): void {
     if (ok) waiter.resolve(output)
     else waiter.reject(new Error(output))
   })
+}
+
+/**
+ * THE ACCOUNT, AT BOOT, WITHOUT A CEREMONY WHERE NONE IS NEEDED.
+ *
+ * An app that already registered a key at the registry before accounts
+ * existed (registry-account.ts) is that account's first device after the
+ * registry's migration: adopt it, and the setup sheet never shows. Failing
+ * that, a `COOKREW_HANDLE` override mints under that name so a developer's
+ * env keeps meaning what it meant. Anything else is the setup sheet's job —
+ * and every refusal here is a sentence in the log, never a silent fallback.
+ */
+async function ensureAccountAtBoot(): Promise<void> {
+  if (loadAccount() !== null) return
+  const legacy = loadLegacyRegistryAccount(ACCOUNT_REGISTRY)
+  if (legacy !== null) {
+    const adopted = await adoptLegacyAccount({ registry: ACCOUNT_REGISTRY, legacy })
+    if (adopted !== null) {
+      console.log(`account: adopted @${adopted.handle} from the key this app already held`)
+      return
+    }
+    console.error(
+      `account: the registry does not know this app's old key as @${legacy.handle} — the setup sheet will ask for a username`
+    )
+  }
+  const override = normaliseHandle(process.env.COOKREW_HANDLE ?? '')
+  if (override.length === 0) return
+  try {
+    const minted = await mintAccount({ handle: override, registry: ACCOUNT_REGISTRY })
+    console.log(`account: minted @${minted.handle} from COOKREW_HANDLE`)
+  } catch (error) {
+    const reason = error instanceof AccountError ? error.message : String(error)
+    console.error(`account: COOKREW_HANDLE=@${override} could not be minted — ${reason}`)
+  }
 }

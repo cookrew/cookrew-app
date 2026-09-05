@@ -3,7 +3,13 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { generateKeyPairSync } from 'node:crypto'
-import { accountFile, checkHandle, handleIsMintable, mintAccount, writeAccount } from '../src/main/account'
+import {
+  accountFile,
+  checkHandle,
+  handleIsMintable,
+  mintAccount,
+  writeAccount
+} from '../src/main/account'
 import { bindPairedDevice } from '../src/main/pair-device'
 import { createSeatStore, seatsFile } from '../src/main/session-seats'
 
@@ -14,12 +20,18 @@ import { createSeatStore, seatsFile } from '../src/main/session-seats'
  * the door's reserved `acct-` namespace is not mintable.
  */
 
-const jwkOf = (pair: { publicKey: { export: (o: { format: 'jwk' }) => unknown } }): Record<string, unknown> =>
-  pair.publicKey.export({ format: 'jwk' }) as Record<string, unknown>
+const jwkOf = (pair: {
+  publicKey: { export: (o: { format: 'jwk' }) => unknown }
+}): Record<string, unknown> => pair.publicKey.export({ format: 'jwk' }) as Record<string, unknown>
 
 describe('the pairing bind admits only a phone-shaped key', () => {
   const noAccount = (): null => null
-  const claim = (jwk: unknown): unknown => ({ id: 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d', jwk, kind: 'phone', name: 'iPhone' })
+  const claim = (jwk: unknown): unknown => ({
+    id: 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d',
+    jwk,
+    kind: 'phone',
+    name: 'iPhone'
+  })
 
   it('accepts Ed25519 and P-256 public keys (then reaches the account check)', async () => {
     const ed = await bindPairedDevice(claim(jwkOf(generateKeyPairSync('ed25519'))), noAccount)
