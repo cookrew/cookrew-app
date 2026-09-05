@@ -230,7 +230,9 @@ createRegistry({
   // key identity.ts already writes there, so one key signs every token this
   // registry mints. A torn account file refuses at boot rather than starting
   // with every name looking free.
-  v2: createV2(DATA),
+  // The origin a browser sees, which is what WebAuthn compares an assertion
+  // against — the same string /v1 identity is configured with.
+  v2: createV2(DATA, { origin: resolved.config.origin }),
   note: (message) => console.error(message),
   authorize: makeAuthorize(store, identity, pricing)
 }).listen(PORT, () => {

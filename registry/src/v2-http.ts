@@ -4,6 +4,7 @@ import { V2Seats } from './v2-seats'
 import { SESSION_TTL_MS, V2Tokens, type V2Claims } from './v2-tokens'
 import { Limiter, callerAddress } from './v2-limiter'
 import { passwordGate } from './v2-hash-gate'
+import { createFactorState, type FactorState } from './v2-factor-state'
 import { v2Error, type V2Error } from './v2-copy'
 import type { DoorRecord } from './doors'
 
@@ -40,6 +41,14 @@ export interface V2Identity {
   limits: { accounts: Limiter; sessions: Limiter; lookups: Limiter; hello: Limiter }
   /** Addresses whose X-Forwarded-For may be believed. Empty by default. */
   trustedProxies: readonly string[]
+  /** Phase 4: passkeys, authenticators, pending sign-ins and approvals. */
+  factors: FactorState
+  /**
+   * The canonical public origin, when the deployment knows it. WebAuthn
+   * compares an assertion's origin and rpId against a string; null means
+   * "use the Host", which is what a dev binary and a test do.
+   */
+  origin: string | null
 }
 
 export interface V2Options {
@@ -51,6 +60,8 @@ export interface V2Options {
   }
   trustedProxies?: readonly string[]
   now?: () => number
+  /** The origin a browser sees — https://cookrew.dev in production. */
+  origin?: string
 }
 
 /**
@@ -78,7 +89,9 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
       // asking the registry to verify signatures for sport.
       hello: new Limiter(options.limits?.helloPerMinute ?? 60, 60_000, options.now)
     },
-    trustedProxies: options.trustedProxies ?? []
+    trustedProxies: options.trustedProxies ?? [],
+    factors: createFactorState(base, { now: options.now }),
+    origin: options.origin ?? null
   }
 }
 

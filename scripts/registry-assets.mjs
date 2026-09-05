@@ -22,6 +22,7 @@ const FILES = [
   ['device-id.js', 'device-id.js', 'text/javascript; charset=utf-8'],
   ['site.js', 'site.js', 'text/javascript; charset=utf-8'],
   ['reach.js', 'reach.js', 'text/javascript; charset=utf-8'],
+  ['factors.js', 'factors.js', 'text/javascript; charset=utf-8'],
   ['seal.js', 'seal.js', 'text/javascript; charset=utf-8'],
   ['line.js', 'line.js', 'text/javascript; charset=utf-8'],
   ['inter.woff2', 'fonts/inter.woff2', 'font/woff2', 'base64'],

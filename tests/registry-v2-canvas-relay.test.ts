@@ -223,7 +223,7 @@ async function claim(name: string, kind: 'desktop' | 'phone'): Promise<{ id: str
   return { id, token: ((await res.json()) as { session: { token: string } }).session.token }
 }
 
-async function attach(name: string, kind: 'phone' | 'browser'): Promise<string> {
+async function attach(name: string, kind: 'phone' | 'browser', approver: string): Promise<string> {
   const res = await fetch(`${site.origin}/v2/sessions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -233,8 +233,22 @@ async function attach(name: string, kind: 'phone' | 'browser'): Promise<string> 
       device: { id: randomUUID(), kind, name: 'A phone', jwk: jwkOf() }
     })
   })
-  expect(res.status).toBe(201)
-  return ((await res.json()) as { token: string }).token
+  // Phase 4: a device the account has never seen climbs one rung — the first
+  // device approves it, driven over the wire here.
+  expect(res.status).toBe(401)
+  const asked = (await res.json()) as { pending: string }
+  const request = await fetch(`${site.origin}/v2/sessions/${asked.pending}/approve`, { method: 'POST' })
+  expect(request.status).toBe(202)
+  const { approval } = (await request.json()) as { approval: string }
+  const decided = await fetch(`${site.origin}/v2/me/approvals/${approval}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${approver}` },
+    body: JSON.stringify({ decision: 'approve' })
+  })
+  expect(decided.status).toBe(204)
+  const done = await fetch(`${site.origin}/v2/sessions/${asked.pending}`)
+  expect(done.status).toBe(201)
+  return ((await done.json()) as { token: string }).token
 }
 
 beforeAll(async () => {
@@ -260,9 +274,9 @@ beforeAll(async () => {
     headers: { authorization: `Bearer ${desktopToken}`, 'content-type': 'application/json' },
     body: JSON.stringify({ name: 'This Mac', workspaces: [{ id: 'w1', name: 'Cookrew Dev' }] })
   })
-  phoneSession = await attach(username, 'phone')
-  await claim('stranger', 'desktop')
-  strangerSession = await attach('stranger', 'phone')
+  phoneSession = await attach(username, 'phone', desktopToken)
+  const stranger = await claim('stranger', 'desktop')
+  strangerSession = await attach('stranger', 'phone', stranger.token)
 
   desktop = linkDesktop(site.origin, desktopToken, deviceId, mobile.origin)
   await desktop.ready
@@ -396,7 +410,7 @@ describe('/relay/@user/desktop/:id — who is admitted to the prefix', () => {
 
   it('says so plainly when the Mac is holding no line', async () => {
     const asleep = await claim('sleeper', 'desktop')
-    const session = await attach('sleeper', 'phone')
+    const session = await attach('sleeper', 'phone', asleep.token)
     const res = await fetch(`${site.origin}/relay/@sleeper/desktop/${asleep.id}/`, {
       headers: { accept: 'text/html', cookie: `cr_session=${session}` }
     })

@@ -125,6 +125,29 @@ async function claim(kind: 'desktop' | 'phone' | 'browser' = 'desktop'): Promise
   return { username, deviceId: body.deviceId, token: body.session.token }
 }
 
+/**
+ * PHASE 4 CHANGED WHAT A PASSWORD BUYS on a device the account has never
+ * seen: one more step, not a session. These tests are about what happens
+ * AFTER a second device is attached, so they climb the shortest rung — the
+ * account's own first device approves — and carry on. The ladder itself is
+ * proved in registry-v2-ladder-http.test.ts.
+ */
+async function joinWithApproval(owner: Claimed, joining: ReturnType<typeof device>): Promise<Response> {
+  const first = await call('POST', '/v2/sessions', {
+    username: owner.username,
+    password: PASSWORD,
+    device: joining
+  })
+  if (first.status !== 401) return first
+  const { pending } = (await first.json()) as { pending: string }
+  const asked = await call('POST', `/v2/sessions/${pending}/approve`)
+  const { approval } = (await asked.json()) as { approval: string }
+  expect(
+    (await call('POST', `/v2/me/approvals/${approval}`, { decision: 'approve' }, bearer(owner.token))).status
+  ).toBe(204)
+  return call('GET', `/v2/sessions/${pending}`)
+}
+
 describe('POST /v2/accounts — claiming a name', () => {
   it('mints the account, the first device and a session, and sets an HttpOnly cookie', async () => {
     const d = device()
@@ -194,16 +217,19 @@ describe('HEAD|GET /v2/accounts/:username — is this name free', () => {
 })
 
 describe('POST /v2/sessions — signing in', () => {
-  it('attaches a new device and mints a session for it', async () => {
+  it('attaches a device the account approved, and lets it back in on the password alone', async () => {
+    const owner = await claim()
     const phone = device('phone', 'iPhone')
-    const res = await call('POST', '/v2/sessions', { username: 'drej', password: PASSWORD, device: phone })
+    const res = await joinWithApproval(owner, phone)
     expect(res.status).toBe(201)
     const body = (await res.json()) as { token: string; exp: number; deviceId: string }
     expect(body.deviceId).toBe(phone.id)
     expect(res.headers.get('set-cookie')).toContain('HttpOnly')
 
-    // The same device again is the SAME device, not a twin on the profile.
-    const again = await call('POST', '/v2/sessions', { username: 'drej', password: PASSWORD, device: phone })
+    // A device the account already knows needs no second step, and is the
+    // SAME device rather than a twin on the profile.
+    const again = await call('POST', '/v2/sessions', { username: owner.username, password: PASSWORD, device: phone })
+    expect(again.status).toBe(201)
     expect(((await again.json()) as { deviceId: string }).deviceId).toBe(phone.id)
     const me = (await (await call('GET', '/v2/me', undefined, bearer(body.token))).json()) as {
       devices: { id: string }[]
@@ -228,7 +254,7 @@ describe('GET /v2/keys — what a door verifies with', () => {
   it('publishes the token key and the revoked device ids', async () => {
     const owner = await claim()
     const phone = device('phone', 'iPhone')
-    await call('POST', '/v2/sessions', { username: owner.username, password: PASSWORD, device: phone })
+    await joinWithApproval(owner, phone)
     await call('DELETE', `/v2/me/devices/${phone.id}`, undefined, bearer(owner.token))
 
     const res = await call('GET', '/v2/keys')
@@ -293,7 +319,7 @@ describe('devices', () => {
   it('lists them, revokes one, and refuses to revoke the last', async () => {
     const owner = await claim()
     const phone = device('phone', 'iPhone')
-    await call('POST', '/v2/sessions', { username: owner.username, password: PASSWORD, device: phone })
+    await joinWithApproval(owner, phone)
 
     const listed = (await (await call('GET', '/v2/me/devices', undefined, bearer(owner.token))).json()) as {
       devices: { id: string }[]
@@ -312,9 +338,7 @@ describe('devices', () => {
   it('lets a device revoke ITSELF, which ends that session on the spot', async () => {
     const owner = await claim()
     const phone = device('phone', 'iPhone')
-    const signedIn = (await (
-      await call('POST', '/v2/sessions', { username: owner.username, password: PASSWORD, device: phone })
-    ).json()) as { token: string }
+    const signedIn = (await (await joinWithApproval(owner, phone)).json()) as { token: string }
 
     const gone = await call('DELETE', `/v2/me/devices/${phone.id}`, undefined, bearer(signedIn.token))
     expect(gone.status).toBe(204)
@@ -337,8 +361,15 @@ describe('POST /v2/me/password', () => {
 
     const old = await call('POST', '/v2/sessions', { username: owner.username, password: PASSWORD, device: device('browser') })
     expect(old.status).toBe(401)
-    const now = await call('POST', '/v2/sessions', { username: owner.username, password: 'a longer new password', device: device('browser') })
-    expect(now.status).toBe(201)
+    // A new browser on an account that has a device is the ladder's own case:
+    // the password is right, and it buys one more step.
+    const now = await call('POST', '/v2/sessions', {
+      username: owner.username,
+      password: 'a longer new password',
+      device: device('browser')
+    })
+    expect(now.status).toBe(401)
+    expect(((await now.json()) as { error: string }).error).toBe('second_factor')
   })
 })
 
@@ -368,9 +399,7 @@ describe('PUT /v2/me/desktops/:deviceId', () => {
   it('is written by that desktop and by nobody else', async () => {
     const owner = await claim()
     const phone = device('phone', 'iPhone')
-    const onPhone = (await (
-      await call('POST', '/v2/sessions', { username: owner.username, password: PASSWORD, device: phone })
-    ).json()) as { token: string }
+    const onPhone = (await (await joinWithApproval(owner, phone)).json()) as { token: string }
 
     const mine = await call(
       'PUT',
@@ -548,9 +577,7 @@ describe('the security review’s findings, over HTTP', () => {
   it('ends every other session when the password changes, keeping the caller’s', async () => {
     const owner = await claim()
     const phone = device('phone', 'iPhone')
-    const onPhone = (await (
-      await call('POST', '/v2/sessions', { username: owner.username, password: PASSWORD, device: phone })
-    ).json()) as { token: string }
+    const onPhone = (await (await joinWithApproval(owner, phone)).json()) as { token: string }
     expect((await call('GET', '/v2/me', undefined, bearer(onPhone.token))).status).toBe(200)
 
     const changed = await call('POST', '/v2/me/password', { current: PASSWORD, next: 'a longer new password' }, bearer(owner.token))
@@ -572,9 +599,7 @@ describe('the security review’s findings, over HTTP', () => {
   it('ends every other session when a new sheet of recovery codes is taken', async () => {
     const owner = await claim()
     const phone = device('phone', 'iPhone')
-    const onPhone = (await (
-      await call('POST', '/v2/sessions', { username: owner.username, password: PASSWORD, device: phone })
-    ).json()) as { token: string }
+    const onPhone = (await (await joinWithApproval(owner, phone)).json()) as { token: string }
     expect((await call('POST', '/v2/me/recovery-codes', {}, bearer(owner.token))).status).toBe(201)
     expect((await call('GET', '/v2/me', undefined, bearer(owner.token))).status).toBe(200)
     expect((await call('GET', '/v2/me', undefined, bearer(onPhone.token))).status).toBe(401)

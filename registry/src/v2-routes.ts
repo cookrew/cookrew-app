@@ -17,6 +17,10 @@ import type { V2Account, V2Desktop } from './v2-accounts'
 import { readReach, verifyHello } from './v2-reach'
 import { callerAddress } from './v2-limiter'
 import { passwordGate } from './v2-hash-gate'
+import { v2Error, type V2Error } from './v2-copy'
+import { factorError } from './v2-factor-copy'
+import { createFactorState, type FactorState } from './v2-factor-state'
+import { handleFactorRoute, signInWithLadder } from './v2-factor-routes'
 
 /**
  * IDENTITY v2 — THE ACCOUNT ROUTES.
@@ -58,6 +62,11 @@ export function handleV2Route(ctx: V2Context): boolean {
     return true
   }
   const rest = parts.slice(1)
+
+  // PHASE 4, in one line and ahead of everything: the ladder's routes live
+  // under /v2/sessions/… and /v2/me/… , and `/v2/me` below would swallow the
+  // second half of them. It answers false for every path it does not own.
+  if (handleFactorRoute(ctx)) return true
 
   if (rest.length === 1 && rest[0] === 'keys' && method === 'GET') {
     v2Json(response, 200, { jwk: ctx.v2.tokens.publicKeyJwk(), revoked: ctx.v2.accounts.revokedIds() })
@@ -186,38 +195,17 @@ async function openSession(ctx: V2Context): Promise<void> {
     refuse(response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
     return
   }
-  const out = await v2.accounts.signIn({
-    username: body.value.username,
-    password: body.value.password,
-    device: body.value.device
-  })
-  if (!out.ok) {
-    refuse(response, out.reason === 'bad_device' ? 400 : 401, out.reason)
-    return
-  }
   /**
-   * PHASE 4'S SEAM. When an account has a passkey or an authenticator this is
-   * where the ladder starts: the answer becomes a 401 naming the factors
-   * instead of a session. Today every account answers null, and the route is
-   * written so that adding factors is a branch here rather than a new route.
+   * PHASE 4'S SEAM, filled. The password is checked and then the ladder
+   * decides: a session for an account with no factors on a device it knows,
+   * and otherwise a 401 naming the ways this account can finish.
+   *
+   * The device is NOT attached here any more. It travels with the pending
+   * record and is attached only when a rung is climbed — a password alone
+   * putting a new device on an account is the thing the ladder exists to
+   * stop.
    */
-  const factor = v2.accounts.nextFactorFor(out.account)
-  if (factor !== null) {
-    refuse(response, 401, 'unauthenticated')
-    return
-  }
-  const session = v2.accounts.startSession(out.account.username, out.device.id)
-  if (session === null) {
-    refuse(response, 500, 'malformed')
-    return
-  }
-  const minted = v2.tokens.mintSession(out.account.username, out.device.id, session.jti)
-  v2Json(
-    response,
-    201,
-    { token: minted.token, exp: minted.exp, deviceId: out.device.id },
-    { 'set-cookie': cookie(minted.token, ctx.secure) }
-  )
+  await signInWithLadder(ctx, body.value)
 }
 
 function signOut(ctx: V2Context): void {
@@ -240,6 +228,19 @@ async function redeemRecovery(ctx: V2Context): Promise<void> {
   const named = typeof body.value.username === 'string' ? body.value.username.trim().toLowerCase() : ''
   if (!v2.limits.sessions.take(`signin|${named}|${who}`)) {
     refuse(response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
+    return
+  }
+  /**
+   * "NOT ME" LOCKS THIS DOOR TOO.
+   *
+   * Phase 4's ladder refuses the password until it changes; this route is a
+   * code and a device with no password at all, and the codes usually come off
+   * the same screen the password was phished from. Leaving it open would
+   * leave the alarm with a door beside it. The owner is not stranded: they
+   * still hold the sitting they answered "not me" from.
+   */
+  if (v2.factors.store.mustChangePassword(named)) {
+    v2Json(response, 403, factorError('password_change_required'))
     return
   }
   // Spent BEFORE the device is looked at: a code that was read out is gone
@@ -416,6 +417,9 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
       refuse(response, out.reason === 'bad_credentials' ? 401 : 400, out.reason)
       return
     }
+    // The change is what "not me" was waiting for: the old password is gone,
+    // so the lock it put on signing in comes off.
+    v2.factors.store.setMustChangePassword(account.username, false)
     noContent(response)
     return
   }

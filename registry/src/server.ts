@@ -775,7 +775,17 @@ export function createRegistry(deps: RegistryDeps): Server {
       const signed = signedIn(request, deps.v2)
       respondPage(
         response,
-        mePage(signed === null ? null : { account: signed.account, currentDeviceId: signed.claims.dev })
+        mePage(
+          signed === null
+            ? null
+            : {
+                account: signed.account,
+                currentDeviceId: signed.claims.dev,
+                // Phase 4's posture: which passkeys, and whether an
+                // authenticator is active. Never a secret.
+                factors: deps.v2.factors.store.summary(signed.account.username)
+              }
+        )
       )
       return
     }

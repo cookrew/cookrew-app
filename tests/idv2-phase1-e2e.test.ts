@@ -157,9 +157,8 @@ describe('phase 1 — claim, unlock, profile, devices', () => {
     const otherHome = mkdtempSync(path.join(tmpdir(), 'idv2-e2e-home2-'))
     const second = new Accounts({ base: otherHome, origin, deviceName: 'Mac mini' })
     const resumed = await second.resume(PASSWORD)
-    // Phase 1: a second device signs in with the password alone (the ladder is phase 4).
     // resume() on a machine with no account file cannot know the username; claim() refuses
-    // 'taken'. So the second device signs in through the wire the way the sheet will:
+    // 'taken'. So the second device signs in through the wire the way the sheet does:
     expect(resumed.ok).toBe(false)
     const signIn = await fetch(`${origin}/v2/sessions`, {
       method: 'POST',
@@ -175,7 +174,29 @@ describe('phase 1 — claim, unlock, profile, devices', () => {
         }
       })
     })
-    expect(signIn.status).toBe(201)
+    /**
+     * PHASE 4: a device the account has never seen no longer joins on the
+     * password alone. It is offered one more step, and the Mac already signed
+     * in approves it — driven over the wire here, since the app's own D6
+     * prompt is phase 4's app half.
+     */
+    expect(signIn.status).toBe(401)
+    const asked = (await signIn.json()) as { error: string; next: string[]; pending: string }
+    expect(asked.error).toBe('second_factor')
+    expect(asked.next).toEqual(['approve'])
+    const request = await fetch(`${origin}/v2/sessions/${asked.pending}/approve`, { method: 'POST' })
+    expect(request.status).toBe(202)
+    const { approval } = (await request.json()) as { approval: string }
+    const onFirstMac = loadAccount(home)?.session?.token ?? ''
+    const decided = await fetch(`${origin}/v2/me/approvals/${approval}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${onFirstMac}` },
+      body: JSON.stringify({ decision: 'approve' })
+    })
+    expect(decided.status).toBe(204)
+    // The waiting Mac collects its own session from its own poll.
+    expect((await fetch(`${origin}/v2/sessions/${asked.pending}`)).status).toBe(201)
+
     const devices = await first.devices()
     expect(devices.ok).toBe(true)
     if (devices.ok) expect(devices.value.map((d) => d.name).sort()).toEqual(['Mac mini', 'MacBook Pro'])
