@@ -391,7 +391,9 @@ describe('approve on a trusted device', () => {
     const owner = await claim()
     const step = await askForStep(owner)
     const first = await bodyOf<{ approval: string }>(await call('POST', `/v2/sessions/${step.pending}/approve`))
-    const second = await bodyOf<{ approval: string }>(await call('POST', `/v2/sessions/${step.pending}/approve`))
+    // With a body and without: the route reads neither, and a sheet that
+    // posts an empty object must not be answered differently.
+    const second = await bodyOf<{ approval: string }>(await call('POST', `/v2/sessions/${step.pending}/approve`, {}))
     expect(second.approval).toBe(first.approval)
     expect(
       (await call('POST', `/v2/me/approvals/${first.approval}`, { decision: 'deny' }, bearer(owner.token))).status

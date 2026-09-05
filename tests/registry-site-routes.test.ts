@@ -130,7 +130,7 @@ describe('the pages', () => {
     const body = await team.text()
     expect(body).toContain('data-door="@drej/cookrew-alpha"')
     expect(body).toContain('https://cookrew.dev/drej/cookrew-alpha')
-    for (const asset of ['xterm.js', 'xterm.css', 'addon-fit.js', 'site.js', 'seal.js', 'line.js', 'inter.woff2', 'silkscreen-700.woff2']) {
+    for (const asset of ['xterm.js', 'xterm.css', 'addon-fit.js', 'site.js', 'factors.js', 'seal.js', 'line.js', 'inter.woff2', 'silkscreen-700.woff2']) {
       const got = await get(`/assets/${asset}`)
       expect(got.status, asset).toBe(200)
       expect(got.headers.get('content-type')).toContain(asset.endsWith('.css') ? 'text/css' : asset.endsWith('.woff2') ? 'font/woff2' : 'text/javascript')
