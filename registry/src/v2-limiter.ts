@@ -48,13 +48,35 @@ export class Limiter {
 /**
  * WHO IS ASKING, for the limiter only.
  *
- * The forwarded address when there is one — this runs behind a proxy in the
- * only deployment that matters — and the socket's otherwise. Never trusted for
- * anything but counting: a header a caller controls cannot be an identity.
+ * THE SOCKET, not a header. `X-Forwarded-For` is set by whoever is talking to
+ * us, so trusting it unconditionally meant a caller could mint a fresh
+ * limiter key per request by changing one string — the limiter was decoration.
+ * Nothing else in this registry derives a client address from a header, and
+ * this now matches: the peer's own address, or nothing.
+ *
+ * A deployment that really is behind an ingress may name it in
+ * `trustedProxies`; only then is the forwarded chain read, and only its LAST
+ * entry — the one the trusted hop wrote — rather than the first, which is
+ * whatever the client sent.
  */
-export function callerAddress(headers: Record<string, string | string[] | undefined>, socket: string | undefined): string {
-  const forwarded = headers['x-forwarded-for']
-  const first = Array.isArray(forwarded) ? forwarded[0] : forwarded
-  const address = (first ?? '').split(',')[0].trim()
-  return address !== '' ? address : (socket ?? 'unknown')
+export function callerAddress(
+  headers: Record<string, string | string[] | undefined>,
+  socket: string | undefined,
+  trustedProxies: readonly string[] = []
+): string {
+  const peer = normalise(socket)
+  if (peer !== 'unknown' && trustedProxies.some((proxy) => normalise(proxy) === peer)) {
+    const forwarded = headers['x-forwarded-for']
+    const chain = (Array.isArray(forwarded) ? forwarded.join(',') : (forwarded ?? '')).split(',')
+    const written = normalise(chain[chain.length - 1]?.trim())
+    if (written !== 'unknown') return written
+  }
+  return peer
+}
+
+/** `::ffff:1.2.3.4` and `1.2.3.4` are one address; two keys would be two limits. */
+function normalise(address: string | undefined): string {
+  const value = (address ?? '').trim()
+  if (value === '') return 'unknown'
+  return value.startsWith('::ffff:') ? value.slice(7) : value
 }

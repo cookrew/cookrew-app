@@ -3,6 +3,7 @@ import { readJsonBody } from './http'
 import { V2Accounts, type V2Account, type V2Device } from './v2-accounts'
 import { SESSION_TTL_MS, V2Tokens, type V2Claims } from './v2-tokens'
 import { Limiter, callerAddress } from './v2-limiter'
+import { passwordGate } from './v2-hash-gate'
 import { v2Error, type V2Error } from './v2-copy'
 
 /**
@@ -32,12 +33,18 @@ export interface V2Identity {
   accounts: V2Accounts
   tokens: V2Tokens
   /** Per-IP on claiming, per username+IP on signing in. The contract's numbers. */
-  limits: { accounts: Limiter; sessions: Limiter }
+  limits: { accounts: Limiter; sessions: Limiter; lookups: Limiter }
+  /**
+   * Addresses whose `X-Forwarded-For` may be believed. Empty by default: a
+   * header the caller writes is not a caller's address.
+   */
+  trustedProxies: readonly string[]
 }
 
 export interface V2Options {
-  limits?: { accountsPerMinute: number; sessionsPerMinute: number }
+  limits?: { accountsPerMinute: number; sessionsPerMinute: number; lookupsPerMinute?: number }
   now?: () => number
+  trustedProxies?: readonly string[]
 }
 
 /**
@@ -49,7 +56,7 @@ export interface V2Options {
 export function createV2(base: string, options: V2Options = {}): V2Identity {
   const accounts = new V2Accounts(base, options.now)
   const tokens = new V2Tokens(base, {
-    revoked: () => new Set(accounts.revokedDevices()),
+    revoked: () => new Set(accounts.revokedIds()),
     now: options.now
   })
   return {
@@ -57,8 +64,13 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
     tokens,
     limits: {
       accounts: new Limiter(options.limits?.accountsPerMinute ?? 10, 60_000, options.now),
-      sessions: new Limiter(options.limits?.sessionsPerMinute ?? 5, 60_000, options.now)
-    }
+      sessions: new Limiter(options.limits?.sessionsPerMinute ?? 5, 60_000, options.now),
+      // The register sheet asks on every keystroke, so this is loose — but it
+      // is a bound: without one, the free/taken answer is a way to walk the
+      // whole directory of who has an account here.
+      lookups: new Limiter(options.limits?.lookupsPerMinute ?? 60, 60_000, options.now)
+    },
+    trustedProxies: options.trustedProxies ?? []
   }
 }
 
@@ -158,12 +170,31 @@ export function v2AccountOf(request: IncomingMessage, v2: V2Identity, mode: 'any
  */
 function sameOrigin(request: IncomingMessage): boolean {
   const origin = request.headers.origin
-  if (typeof origin !== 'string' || origin === '' || origin === 'null') return true
+  // A literal `null` origin is NOT "no origin": it is a sandboxed frame, a
+  // data: document or a file:// page — every one of them a context that
+  // should not be able to spend somebody's cookie.
+  if (origin === 'null') return false
+  if (typeof origin !== 'string' || origin === '') return true
   try {
     return new URL(origin).host === request.headers.host
   } catch {
     return false
   }
+}
+
+/** The address the limiter counts by. Never an identity — see v2-limiter.ts. */
+const asking = (ctx: V2Context): string =>
+  callerAddress(ctx.request.headers, ctx.request.socket.remoteAddress, ctx.v2.trustedProxies)
+
+/**
+ * IS THE HASHER FULL? Asked before a password route does anything, so an
+ * overload is a 503 a client can retry rather than a request that waits
+ * behind thirty others for a stretch it will time out on.
+ */
+function overloaded(response: ServerResponse): boolean {
+  if (!passwordGate.overloaded) return false
+  refuse(response, 503, 'busy', undefined, { 'retry-after': '5' })
+  return true
 }
 
 // ── the router ───────────────────────────────────────────────────────────
@@ -180,7 +211,7 @@ export function handleV2Route(ctx: V2Context): boolean {
   const rest = parts.slice(1)
 
   if (rest.length === 1 && rest[0] === 'keys' && method === 'GET') {
-    v2Json(response, 200, { jwk: ctx.v2.tokens.publicKeyJwk(), revoked: ctx.v2.accounts.revokedDevices() })
+    v2Json(response, 200, { jwk: ctx.v2.tokens.publicKeyJwk(), revoked: ctx.v2.accounts.revokedIds() })
     return true
   }
   if (rest.length === 1 && rest[0] === 'accounts' && method === 'POST') {
@@ -215,7 +246,8 @@ export function handleV2Route(ctx: V2Context): boolean {
 
 async function claimAccount(ctx: V2Context): Promise<void> {
   const { response, v2 } = ctx
-  const who = callerAddress(ctx.request.headers, ctx.request.socket.remoteAddress)
+  if (overloaded(response)) return
+  const who = asking(ctx)
   if (!v2.limits.accounts.take(`claim|${who}`)) {
     refuse(response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
     return
@@ -225,7 +257,7 @@ async function claimAccount(ctx: V2Context): Promise<void> {
     refuse(response, body.reason === 'too_large' ? 413 : 400, 'malformed')
     return
   }
-  const out = v2.accounts.create({
+  const out = await v2.accounts.create({
     username: body.value.username,
     password: body.value.password,
     device: body.value.device
@@ -260,6 +292,14 @@ async function claimAccount(ctx: V2Context): Promise<void> {
  * signs in with is not a public fact about them.
  */
 function lookUpAccount(ctx: V2Context, username: string): void {
+  if (!ctx.v2.limits.lookups.take(`look|${asking(ctx)}`)) {
+    if (ctx.method === 'HEAD') {
+      head(ctx.response, 429)
+      return
+    }
+    refuse(ctx.response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
+    return
+  }
   const profile = ctx.v2.accounts.publicProfile(username)
   if (ctx.method === 'HEAD') {
     head(ctx.response, profile === null ? 404 : 200)
@@ -276,12 +316,13 @@ function lookUpAccount(ctx: V2Context, username: string): void {
 
 async function openSession(ctx: V2Context): Promise<void> {
   const { response, v2 } = ctx
+  if (overloaded(response)) return
   const body = await readJsonBody(ctx.request, SMALL_BODY)
   if (!body.ok) {
     refuse(response, body.reason === 'too_large' ? 413 : 400, 'malformed')
     return
   }
-  const who = callerAddress(ctx.request.headers, ctx.request.socket.remoteAddress)
+  const who = asking(ctx)
   const named = typeof body.value.username === 'string' ? body.value.username.trim().toLowerCase() : ''
   // Keyed by name AND address: one person fumbling their own password must not
   // be able to lock a stranger out of theirs, and a burst from one machine
@@ -290,7 +331,7 @@ async function openSession(ctx: V2Context): Promise<void> {
     refuse(response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
     return
   }
-  const out = v2.accounts.signIn({
+  const out = await v2.accounts.signIn({
     username: body.value.username,
     password: body.value.password,
     device: body.value.device
@@ -334,12 +375,13 @@ function signOut(ctx: V2Context): void {
 
 async function redeemRecovery(ctx: V2Context): Promise<void> {
   const { response, v2 } = ctx
+  if (overloaded(response)) return
   const body = await readJsonBody(ctx.request, SMALL_BODY)
   if (!body.ok) {
     refuse(response, body.reason === 'too_large' ? 413 : 400, 'malformed')
     return
   }
-  const who = callerAddress(ctx.request.headers, ctx.request.socket.remoteAddress)
+  const who = asking(ctx)
   const named = typeof body.value.username === 'string' ? body.value.username.trim().toLowerCase() : ''
   if (!v2.limits.sessions.take(`signin|${named}|${who}`)) {
     refuse(response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
@@ -446,12 +488,19 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     return
   }
   if (rest.length === 1 && rest[0] === 'password' && method === 'POST') {
+    if (overloaded(response)) return
     const body = await readJsonBody(ctx.request, SMALL_BODY)
     if (!body.ok) {
       refuse(response, body.reason === 'too_large' ? 413 : 400, 'malformed')
       return
     }
-    const out = v2.accounts.changePassword(account.username, body.value.current, body.value.next)
+    // The caller's own sitting is kept; every other one ends with the change.
+    const out = await v2.accounts.changePassword(
+      account.username,
+      body.value.current,
+      body.value.next,
+      claims.jti
+    )
     if (!out.ok) {
       refuse(response, out.reason === 'bad_credentials' ? 401 : 400, out.reason)
       return
@@ -460,7 +509,7 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     return
   }
   if (rest.length === 1 && rest[0] === 'recovery-codes' && method === 'POST') {
-    const codes = v2.accounts.mintRecoveryCodes(account.username)
+    const codes = v2.accounts.mintRecoveryCodes(account.username, claims.jti)
     // Shown ONCE. They are stored hashed, so this is the only moment they
     // exist in readable form anywhere.
     v2Json(response, 201, { codes })

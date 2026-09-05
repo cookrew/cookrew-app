@@ -52,7 +52,13 @@ export const CALL_TTL_MS = 10 * 60 * 1000
 const AUDIENCE = /^@[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
 
 export interface V2TokensOptions {
-  /** Device ids whose tokens are refused however well they verify. */
+  /**
+   * Ids whose tokens are refused however well they verify — device ids and
+   * session ids alike. Both, because this is the ONLY revocation channel a
+   * door verifying offline can see: it has our published list and nothing
+   * else. A password change ends other sittings by putting their session ids
+   * here, which stops their tokens without detaching the phone they were on.
+   */
   revoked?: () => ReadonlySet<string>
   now?: () => number
 }
@@ -109,7 +115,8 @@ export class V2Tokens {
       if (typeof claims.exp !== 'number' || claims.exp < this.now()) return null
       if (claims.scope !== expect) return null
       if (claims.scope === 'call' && (typeof claims.aud !== 'string' || !AUDIENCE.test(claims.aud))) return null
-      if (this.revoked().has(claims.dev)) return null
+      const revoked = this.revoked()
+      if (revoked.has(claims.dev) || revoked.has(claims.jti)) return null
       return claims
     } catch {
       return null

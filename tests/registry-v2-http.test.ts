@@ -38,7 +38,11 @@ interface Up {
 }
 
 /** A registry with v2 mounted. `limits` left out means the contract's own. */
-async function up(limits?: { accountsPerMinute: number; sessionsPerMinute: number }): Promise<Up> {
+async function up(limits?: {
+  accountsPerMinute: number
+  sessionsPerMinute: number
+  lookupsPerMinute?: number
+}): Promise<Up> {
   const dir = mkdtempSync(path.join(tmpdir(), 'v2-http-'))
   const v2 = createV2(dir, limits === undefined ? {} : { limits })
   const doors = new DoorStore(dir, { allowPrivate: true })
@@ -503,5 +507,86 @@ describe('every /v2 answer', () => {
       expect(res.headers.get('cache-control'), p).toBe('private, no-store')
       expect(res.headers.get('content-type'), p).toContain('application/json')
     }
+  })
+})
+
+describe('the security review’s findings, over HTTP', () => {
+  it('does not let a forwarded header buy a fresh limiter window', async () => {
+    const limited = await up()
+    try {
+      const codes: number[] = []
+      for (let i = 0; i < 11; i++) {
+        const res = await callOn(limited, 'POST', '/v2/accounts', {
+          username: `spoof${i}`,
+          password: PASSWORD,
+          device: device()
+        }, { 'x-forwarded-for': `198.51.100.${i}` })
+        codes.push(res.status)
+      }
+      // A new address per request, and the eleventh is still refused: the key
+      // is the socket, not a string the caller wrote.
+      expect(codes[10]).toBe(429)
+    } finally {
+      await limited.close()
+    }
+  }, 20_000)
+
+  it('bounds the free/taken lookup, so it cannot be walked', async () => {
+    const limited = await up({ accountsPerMinute: 1000, sessionsPerMinute: 1000, lookupsPerMinute: 3 })
+    try {
+      const codes: number[] = []
+      for (let i = 0; i < 4; i++) {
+        codes.push((await callOn(limited, 'HEAD', `/v2/accounts/who${i}`)).status)
+      }
+      expect(codes.slice(0, 3)).toEqual([404, 404, 404])
+      expect(codes[3]).toBe(429)
+    } finally {
+      await limited.close()
+    }
+  })
+
+  it('ends every other session when the password changes, keeping the caller’s', async () => {
+    const owner = await claim()
+    const phone = device('phone', 'iPhone')
+    const onPhone = (await (
+      await call('POST', '/v2/sessions', { username: owner.username, password: PASSWORD, device: phone })
+    ).json()) as { token: string }
+    expect((await call('GET', '/v2/me', undefined, bearer(onPhone.token))).status).toBe(200)
+
+    const changed = await call('POST', '/v2/me/password', { current: PASSWORD, next: 'a longer new password' }, bearer(owner.token))
+    expect(changed.status).toBe(204)
+    // The caller keeps working; the other sitting does not.
+    expect((await call('GET', '/v2/me', undefined, bearer(owner.token))).status).toBe(200)
+    expect((await call('GET', '/v2/me', undefined, bearer(onPhone.token))).status).toBe(401)
+
+    // And a door verifying offline can see it: the ended session is published.
+    const keys = (await (await call('GET', '/v2/keys')).json()) as { revoked: string[] }
+    expect(keys.revoked.length).toBeGreaterThan(0)
+    // The phone is still attached — the password changed, not the device.
+    const me = (await (await call('GET', '/v2/me', undefined, bearer(owner.token))).json()) as {
+      devices: { id: string }[]
+    }
+    expect(me.devices.map((d) => d.id)).toContain(phone.id)
+  })
+
+  it('ends every other session when a new sheet of recovery codes is taken', async () => {
+    const owner = await claim()
+    const phone = device('phone', 'iPhone')
+    const onPhone = (await (
+      await call('POST', '/v2/sessions', { username: owner.username, password: PASSWORD, device: phone })
+    ).json()) as { token: string }
+    expect((await call('POST', '/v2/me/recovery-codes', {}, bearer(owner.token))).status).toBe(201)
+    expect((await call('GET', '/v2/me', undefined, bearer(owner.token))).status).toBe(200)
+    expect((await call('GET', '/v2/me', undefined, bearer(onPhone.token))).status).toBe(401)
+  })
+
+  it('treats a null Origin as another site, not as no site', async () => {
+    const owner = await claim()
+    const res = await call('PATCH', '/v2/me', { displayName: 'From a sandbox' }, {
+      cookie: `cr_session=${owner.token}`,
+      origin: 'null'
+    })
+    expect(res.status).toBe(403)
+    expect(((await res.json()) as { error: string }).error).toBe('bad_origin')
   })
 })
