@@ -11,6 +11,7 @@ import type { IdentityService, TokenScope } from './identity'
 import type { Terms } from './terms'
 import type { PaymentFailure } from './payment'
 import { DoorStore, doorPath, type DoorInput, type DoorRecord } from './doors'
+import type { V2Seat } from './v2-seats'
 import { createRelayHttp, type RelayHttp } from './relay-http'
 import { RESERVED_HANDLES, handlePage, homePage, marketPage, marketQuery, teamPage } from './site'
 import { handleSiteRoute } from './site-routes'
@@ -19,6 +20,10 @@ import type { CommitsCache } from './github-commits'
 import { respondPage } from './site-shell'
 import type { StarStore } from './stars'
 import type { Release, ReleaseCache } from './releases'
+import { handleV2Route, signedIn, v2AccountOf, type V2Identity } from './v2-routes'
+import { teamAddress } from './v2-seats'
+import { mePage } from './site-account'
+import { createCanvasRelay, type CanvasRelay } from './v2-canvas-relay'
 
 /**
  * REGISTRY SERVER (P2-A1) — routes only. Every answer is chosen by a decision
@@ -104,6 +109,15 @@ export interface RegistryDeps {
   pulse?: Pulse
   /** The dev branch's latest commits, for the homepage's built-in-the-open feed. */
   commits?: CommitsCache
+  /**
+   * IDENTITY v2 — accounts a PERSON holds: a username, a password, and the
+   * devices attached to them. Present → everything under /v2 is served and a
+   * v2 session counts as a reader everywhere v1's token already did. Absent →
+   * /v2 does not exist and this deployment is byte-identical to before, which
+   * is what keeps every earlier test meaningful rather than merely still
+   * passing.
+   */
+  v2?: V2Identity
 }
 
 /** An account name: the same shape a handle has everywhere else on this site. */
@@ -153,6 +167,18 @@ export function createRegistry(deps: RegistryDeps): Server {
       }
     }
   }
+
+  /**
+   * THE OWNER'S OWN CANVAS, through cookrew.dev (identity v2, phase 3).
+   *
+   * A separate hub from the doors', under its own namespace and its own gate:
+   * a door is opened by whoever the door admits, and this is opened only by a
+   * device attached to the account whose desktop holds the line. Present
+   * wherever v2 is, because it is part of what an account is FOR.
+   */
+  const canvas: CanvasRelay | null = deps.v2
+    ? createCanvasRelay({ v2: deps.v2, ...(deps.note === undefined ? {} : { log: deps.note }) })
+    : null
 
   const relay: RelayHttp | null = deps.relay
     ? createRelayHttp({
@@ -207,11 +233,19 @@ export function createRegistry(deps: RegistryDeps): Server {
    */
   const accountOf = (request: IncomingMessage, mode: 'any' | 'bearer' = 'any'): string | null => {
     const identity = deps.identity
-    if (!identity) return null
     const auth = request.headers.authorization ?? ''
     const cookie =
       mode === 'bearer' ? undefined : /(?:^|;\s*)cr_account=([A-Za-z0-9_.-]+)/.exec(request.headers.cookie ?? '')?.[1]
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : cookie
+    // A V2 SESSION IS A READER TOO. Checked first because it is the account
+    // system people are signing into now; a v1 token still answers for the
+    // handles that already exist, so stars and publishing keep working for
+    // both without either knowing about the other.
+    if (deps.v2) {
+      const v2 = v2AccountOf(request, deps.v2, mode)
+      if (v2 !== null) return v2
+    }
+    if (!identity) return null
     if (!token) return null
     const claims = identity.verifyToken(token)
     if (!claims || claims.scope === 'call') return null
@@ -254,6 +288,45 @@ export function createRegistry(deps: RegistryDeps): Server {
     // must not be delayed behind anything, and because it owns its whole path
     // prefix: nothing under /v1/relay is served by the rest of this file.
     if (relay && relay.handle(request, response, parts, url)) return
+
+    // ── THE PRIVATE RELAY SESSION, beside it ─────────────────────────────
+    //
+    // Owns /v2/canvas, /v2/me/desktops/:id/relay-status and the whole of
+    // /relay/@user/desktop/:id — a canvas arriving through one address is a
+    // whole origin's worth of app, so the prefix is claimed here rather than
+    // route by route below.
+    if (canvas && canvas.handle(request, response, parts, url)) return
+
+    // ── IDENTITY v2 ──────────────────────────────────────────────────────
+    //
+    // Owns its whole prefix: nothing under /v2 is served by the rest of this
+    // file, and nothing above it answers a /v2 path. Mounted early so a
+    // future top-level page can never shadow a sign-in.
+    if (
+      deps.v2 &&
+      handleV2Route({
+        method,
+        parts,
+        request,
+        response,
+        v2: deps.v2,
+        // Whether the BROWSER reached us over https, which is what decides
+        // the Secure flag on the session cookie. Taken from the proxy's
+        // header or from the configured origin — never from the bound port,
+        // which says nothing behind a terminator.
+        secure:
+          request.headers['x-forwarded-proto'] === 'https' || (deps.origin?.startsWith('https://') ?? false),
+        decode,
+        // The directory, for the seat routes: a seat is held at a TEAM, and
+        // the team's own terms (free or priced, and on which rails) are the
+        // door's to state, never the seat's.
+        ...(deps.doors === undefined ? {} : { doors: deps.doors }),
+        // The v1 credentials, for the migration route: which handles are
+        // spoken for by a key that has no password yet (phase 6).
+        ...(deps.identity === undefined ? {} : { legacy: deps.identity })
+      })
+    )
+      return
 
     // GET /install/:presetId — R21 Option A, the page for a reader with no app.
     //
@@ -697,6 +770,29 @@ export function createRegistry(deps: RegistryDeps): Server {
     )
       return
 
+    // GET /me — the reader's own account: devices, security, desktops. A page
+    // rather than a JSON route because it is where a person GOES; signed out
+    // it is a 401 that is still a page, since somebody following a link
+    // deserves a sentence and a way in.
+    if (deps.v2 && method === 'GET' && parts.length === 1 && parts[0] === 'me') {
+      const signed = signedIn(request, deps.v2)
+      respondPage(
+        response,
+        mePage(
+          signed === null
+            ? null
+            : {
+                account: signed.account,
+                currentDeviceId: signed.claims.dev,
+                // Phase 4's posture: which passkeys, and whether an
+                // authenticator is active. Never a secret.
+                factors: deps.v2.factors.store.summary(signed.account.username)
+              }
+        )
+      )
+      return
+    }
+
     // ── THE PUBLIC FACE, last ────────────────────────────────────────────
     //
     // Last because an owner's page lives at /<handle>, which would otherwise
@@ -770,7 +866,10 @@ export function createRegistry(deps: RegistryDeps): Server {
             origin: at,
             stars: starsOf(handle, name),
             starred: account !== null && (deps.stars?.starred(account, handle, name) ?? false),
-            account
+            account,
+            // W2: the page's state is decided HERE, by what the request holds.
+            // A seated guest may see the room; only the owner sees the list.
+            ...seatState(deps.v2, found, account, url.searchParams.get('ask'))
           })
         )
         return
@@ -781,6 +880,42 @@ export function createRegistry(deps: RegistryDeps): Server {
   }
 }
 
+
+/**
+ * WHAT A TEAM PAGE MAY SAY TO THIS READER (W2).
+ *
+ * One function so the five states cannot drift apart: signed out holds
+ * nothing; a signed-in stranger holds no seat; a seated guest holds a seat and
+ * may see the room; the owner holds the list and the grant form. The `?ask=`
+ * on the link a guest copied is only ever read back as a username, and only
+ * for the owner — it is a prefill, never an instruction.
+ */
+function seatState(
+  v2: V2Identity | undefined,
+  door: DoorRecord | null,
+  account: string | null,
+  ask: string | null
+): {
+  seat: V2Seat | null
+  seated: readonly string[]
+  seats: readonly V2Seat[]
+  owner: boolean
+  ask: string | null
+} {
+  const none = { seat: null, seated: [], seats: [], owner: false, ask: null }
+  if (!v2 || door === null || account === null) return none
+  const team = teamAddress(door.handle, door.name)
+  const owner = account === door.handle
+  const seat = v2.seats.activeFor(team, account)
+  const asked = typeof ask === 'string' && /^@?[a-z0-9][a-z0-9-]{0,31}$/.test(ask) ? ask.replace(/^@/, '') : null
+  return {
+    seat,
+    seated: owner || seat !== null ? v2.seats.seatedAt(team) : [],
+    seats: owner ? v2.seats.forTeam(team) : [],
+    owner,
+    ask: owner ? asked : null
+  }
+}
 
 /**
  * REGISTERING A DOOR — the write side of the directory.

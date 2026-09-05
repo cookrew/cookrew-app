@@ -1,0 +1,186 @@
+import type { AccountFile } from './account-v2'
+import type { AdmittedDevice, AdmittedDeviceStore } from './admitted-devices'
+import type { CanvasTokenResult, RegistryKeys } from './canvas-token'
+import { verifyCanvasToken } from './canvas-token'
+import { PAIRING_COPY } from '../shared/pairing-qr'
+
+/**
+ * LETTING A PHONE IN, ONCE, WITHOUT A URL.
+ *
+ * `GET /?open=<canvasToken>&key=<KEY>&device=<phoneDeviceId>` is the whole
+ * ceremony. Two independent facts have to hold, and they answer two different
+ * questions (architecture P3):
+ *
+ *   MAY this person — the canvas token, signed by cookrew.dev, naming this
+ *   account, this desktop and that phone. Checked offline.
+ *
+ *   IS this person here — the six-character key off the popout, OR a prior
+ *   admission recorded on this Mac. The second is what makes the first
+ *   pairing the only one; a phone already admitted never types a key again.
+ *
+ * Neither alone is enough. A token without presence is a stolen token opening
+ * a Mac its holder has never stood in front of; a key without a token is the
+ * old world, where reading six characters made you the owner.
+ */
+
+export type AdmissionRequest = {
+  readonly token: string | null
+  readonly key: string | null
+  readonly phoneDeviceId: string | null
+  readonly phoneName?: string | null
+}
+
+export type AdmissionRefusal =
+  /** The token is not for this Mac, this account, this phone, or this hour. */
+  | { readonly kind: 'token'; readonly reason: string; readonly sentence: string }
+  /** The token is good but nobody proved they are standing here. */
+  | { readonly kind: 'key'; readonly sentence: string }
+  /**
+   * `device` named THIS DESKTOP rather than the phone.
+   *
+   * Its own refusal because it is its own mistake, and a bare 401 buried it:
+   * the link is well-formed, signed, in date and for this Mac — the only thing
+   * wrong is which device id the page put in one query parameter, which is
+   * something the person holding the phone can neither see nor fix. So it goes
+   * back to the page that built the link, the way a wrong key does, with a
+   * sentence that names the actual error.
+   */
+  | { readonly kind: 'device'; readonly sentence: string }
+  /**
+   * This exact token already admitted somebody.
+   *
+   * A canvas token is good for ten minutes and says nothing about how many
+   * times it may be spent, so a recorded admission replayed inside that window
+   * opened the Mac again for whoever had the recording. Verifying a signature
+   * proves the registry wrote it; only this Mac can know it has been used.
+   */
+  | { readonly kind: 'replay'; readonly sentence: string }
+
+export type AdmissionOutcome =
+  | {
+      readonly ok: true
+      readonly device: AdmittedDevice
+      readonly firstTime: boolean
+      /** THIS PHONE'S OWN credential. Handed over once, in the redirect. */
+      readonly token: string
+    }
+  | { readonly ok: false; readonly refusal: AdmissionRefusal }
+
+export type AdmissionDeps = {
+  readonly account: () => AccountFile | null
+  readonly keys: () => Promise<RegistryKeys | null>
+  /** One retry with a fresh key, and only after a signature failed. */
+  readonly refreshKeys: () => Promise<RegistryKeys | null>
+  readonly admitted: AdmittedDeviceStore
+  readonly acceptsPairingKey: (key: string) => boolean
+  /**
+   * Burn the token's jti. False means it has already admitted somebody.
+   * Optional so a caller that has not wired the store still verifies claims —
+   * but index.ts wires it, and the test says so.
+   */
+  readonly spend?: (jti: string, exp: number) => boolean
+  readonly now: () => number
+}
+
+const tokenRefusal = (reason: string): AdmissionRefusal => ({
+  kind: 'token',
+  reason,
+  sentence: PAIRING_COPY.NOT_THIS_MAC
+})
+
+const KEY_REFUSAL: AdmissionRefusal = { kind: 'key', sentence: PAIRING_COPY.WRONG_KEY }
+
+const REPLAY_REFUSAL: AdmissionRefusal = {
+  kind: 'replay',
+  sentence: PAIRING_COPY.ALREADY_USED
+}
+
+const DEVICE_REFUSAL: AdmissionRefusal = {
+  kind: 'device',
+  sentence: PAIRING_COPY.NAMED_THE_MAC
+}
+
+/** True when the query looks like an admission attempt at all. */
+export const isAdmissionRequest = (request: AdmissionRequest): boolean =>
+  request.token !== null
+
+export const admit = async (
+  request: AdmissionRequest,
+  deps: AdmissionDeps
+): Promise<AdmissionOutcome> => {
+  const account = deps.account()
+  if (!account) return { ok: false, refusal: tokenRefusal('no_account') }
+  if (!request.token) return { ok: false, refusal: tokenRefusal('malformed') }
+  if (!request.phoneDeviceId) return { ok: false, refusal: tokenRefusal('no_device') }
+  /**
+   * THE PHONE IS NOT THE MAC. A page that sends this desktop's own id as
+   * `device` would otherwise fail the `dev` claim and read as a forged token,
+   * which sends the owner looking in entirely the wrong place. The strict
+   * check below is unchanged for every other id; this only names the one
+   * confusion worth naming.
+   */
+  if (request.phoneDeviceId === account.deviceId) {
+    return { ok: false, refusal: DEVICE_REFUSAL }
+  }
+
+  const expectation = {
+    username: account.username,
+    deviceId: account.deviceId,
+    phoneDeviceId: request.phoneDeviceId,
+    now: deps.now()
+  }
+  const check = async (): Promise<CanvasTokenResult> => {
+    const keys = await deps.keys()
+    if (!keys) return { ok: false, reason: 'bad_signature' }
+    const first = verifyCanvasToken(request.token as string, keys, expectation)
+    // A signature that fails against a cached key is the one case worth one
+    // more round trip: the registry may have rotated since the cache warmed.
+    if (first.ok || first.reason !== 'bad_signature') return first
+    const fresh = await deps.refreshKeys()
+    if (!fresh || fresh.jwk === keys.jwk) return first
+    return verifyCanvasToken(request.token as string, fresh, expectation)
+  }
+
+  const verified = await check()
+  if (!verified.ok) return { ok: false, refusal: tokenRefusal(verified.reason) }
+
+  const already = deps.admitted.has(request.phoneDeviceId)
+  if (!already && !(request.key !== null && deps.acceptsPairingKey(request.key))) {
+    return { ok: false, refusal: KEY_REFUSAL }
+  }
+
+  /**
+   * BURNED ON SUCCESS, and only on success.
+   *
+   * The attack is a recorded admission that WORKED, replayed inside the
+   * token's ten minutes; burning at that moment closes it. Burning earlier —
+   * the instant the signature verified — would close it too, and would also
+   * mean a mistyped six-character key spent the token, so the page that sent
+   * the person here would have to mint another one before they could try
+   * again. A wrong key is the ordinary case, not the attack.
+   */
+  if (deps.spend && !deps.spend(verified.claims.jti, verified.claims.exp)) {
+    return { ok: false, refusal: REPLAY_REFUSAL }
+  }
+
+  const admitted = deps.admitted.admit({
+    deviceId: request.phoneDeviceId,
+    ...(request.phoneName ? { name: request.phoneName } : {})
+  })
+  return { ok: true, firstTime: !already, device: admitted.device, token: admitted.token }
+}
+
+/**
+ * Where a refused phone is sent back to.
+ *
+ * A wrong key is a mistake, not an attack, and the person holding the phone is
+ * looking at the page that sent them here — so they go back to it with the
+ * reason in the query and the desktop named, and the page tells them the key
+ * moved on. A bad token gets no redirect: it names no page we should trust.
+ */
+export const refusedRedirect = (
+  registryOrigin: string,
+  deviceId: string,
+  refused: 'key' | 'device' = 'key'
+): string =>
+  `${registryOrigin.replace(/\/+$/, '')}/me?refused=${refused}&desktop=${encodeURIComponent(deviceId)}`

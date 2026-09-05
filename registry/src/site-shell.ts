@@ -44,6 +44,32 @@ export const SITE_FRAMES = `${SITE_ASSETS}site/`
 export const SITE_FONTS = '/assets/'
 export { GITHUB_REPO, SITE_ORIGIN } from './site-content'
 
+/** W1 — one sheet, two tabs. Register is sign-in plus a confirmation. */
+export const ACCOUNT_SHEET = `<dialog id="account-sheet" class="card acct" aria-label="Your cookrew.dev account">
+<form method="dialog" id="account-form">
+<div class="acct-tabs" role="tablist">
+<button class="btn sm primary" type="button" role="tab" aria-selected="true" data-acct-tab="signin">Sign in</button>
+<button class="btn sm" type="button" role="tab" aria-selected="false" data-acct-tab="register">Register</button>
+</div>
+<p class="meta" id="acct-lede">A username and a password. The site never asks for an email.</p>
+<label class="acct-row"><span>Username</span>
+<input id="acct-username" name="username" autocomplete="username" spellcheck="false" maxlength="32" placeholder="mira">
+<em class="chip" id="acct-username-note" hidden></em></label>
+<label class="acct-row"><span>Password</span>
+<input id="acct-password" name="password" type="password" autocomplete="current-password" maxlength="256">
+<em class="chip" id="acct-password-note" hidden></em></label>
+<label class="acct-row" id="acct-confirm-row" hidden><span>Confirm</span>
+<input id="acct-confirm" name="confirm" type="password" autocomplete="new-password" maxlength="256">
+<em class="chip" id="acct-confirm-note" hidden></em></label>
+<p class="meta" id="acct-message" role="status"></p>
+<div class="row">
+<button class="btn primary" id="acct-submit" value="go">Continue</button>
+<button class="btn" value="cancel" formnovalidate>Cancel</button>
+</div>
+<p class="meta" id="acct-foot">Forgot it? Any of your devices can let you in; or a recovery code.</p>
+</form>
+</dialog>`
+
 export type PageKind = 'document' | 'app'
 
 const CSP: Record<PageKind, string> = {
@@ -51,11 +77,27 @@ const CSP: Record<PageKind, string> = {
   app: `default-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self'; manifest-src 'self'; img-src 'self' ${SITE_FRAMES} data:; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
 }
 
+/**
+ * A HANDFUL OF NAMED ORIGINS, and never a wildcard.
+ *
+ * /me probes the addresses one reader's own desktops published, which are not
+ * this origin — so `connect-src 'self'` alone would block the probe. They are
+ * spelled out rather than opened with `https:` because the page is rendered
+ * for one reader and we know exactly which addresses it will try; a wildcard
+ * would let anything that ever gets a script onto this page reach anywhere.
+ */
+const withConnect = (policy: string, connect: readonly string[]): string =>
+  connect.length === 0 ? policy : policy.replace("connect-src 'self'", `connect-src 'self' ${connect.join(' ')}`)
+
 export interface Page {
   status: number
   headers: Record<string, string>
   body: string
 }
+
+/** "5 Sep 2026" — a date a person reads, in the site's one format. */
+export const day = (at: number): string =>
+  new Date(at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
 
 /** Escape for HTML text AND for a double-quoted attribute — one function. */
 export function esc(value: string | number): string {
@@ -88,6 +130,8 @@ export interface ShellOptions {
   scripts?: string[]
   /** Stylesheets from /assets, app pages only. */
   styles?: string[]
+  /** Extra origins this page's script may fetch — app pages only, spelled out. */
+  connect?: readonly string[]
   /**
    * Cache lifetime in seconds; 0 for pages that must not be cached. A page
    * rendered for a signed-in reader is never shared: 0 means private/no-store.
@@ -101,7 +145,8 @@ export function page(options: ShellOptions, main: string): Page {
     status: options.status ?? 200,
     headers: {
       'content-type': 'text/html; charset=utf-8',
-      'content-security-policy': CSP[options.kind],
+      'content-security-policy':
+        options.kind === 'app' ? withConnect(CSP.app, options.connect ?? []) : CSP.document,
       'x-content-type-options': 'nosniff',
       'referrer-policy': 'no-referrer',
       // Everything here describes mutable state — a team can be served or
@@ -187,14 +232,17 @@ function shell(options: ShellOptions, main: string): string {
     options.kind === 'app'
       ? `<button class="btn sm" id="signin" data-signin>🔑 Sign in</button>`
       : `<a class="btn sm" href="/market#account">🔑 Sign in</a>`
+  // The ladder's screens travel with the account sheet: every page that
+  // carries site.js is a page a second factor can be asked on.
   const scripts = (options.kind === 'app' ? options.scripts ?? [] : [])
+    .flatMap((s) => (s === 'site.js' ? [s, 'factors.js'] : [s]))
     .map((s) => `<script src="/assets/${esc(s)}?v=${ASSET_VERSION}" defer></script>`)
     .join('')
   const styles = (options.kind === 'app' ? options.styles ?? [] : [])
     .map((s) => `<link rel="stylesheet" href="/assets/${esc(s)}?v=${ASSET_VERSION}">`)
     .join('')
   return `<!doctype html>
-<html lang="en"><head>${head(options)}${styles}<style>${FONT_FACES}${SITE_STYLE}</style>${scripts}</head>
+<html lang="en"><head>${head(options)}${styles}<style>${FONT_FACES}${SITE_STYLE}${ACCOUNT_STYLE}</style>${scripts}</head>
 <body>
 <header class="hdr"><div class="wrap">
 <a class="mark" href="/">${LOGO}<span>COOK<b>REW</b></span></a>
@@ -207,6 +255,7 @@ ${main}
 <p class="meta" style="margin-top:12px">Cookrew is open source under the MIT license. Every page here is generated from the registry's live directory; nothing is staged, and every number carries its date.</p>
 </div></footer>
 <div class="toast" id="toast" hidden></div>
+${options.kind === 'app' ? ACCOUNT_SHEET : ''}
 </body></html>`
 }
 
@@ -378,4 +427,41 @@ ul.one-liners li:last-child{border-bottom:none}ul.one-liners a{text-decoration:n
 @media (max-width:700px){ul.one-liners li{grid-template-columns:1fr}}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--cream-hi);border:2px solid var(--line);box-shadow:4px 4px 0 var(--line);padding:10px 14px;font-size:14px;display:none;z-index:99;max-width:90vw}
 .toast.on{display:block}
+`
+/** The sheet's and /me's own dress, appended to the site's one stylesheet. */
+export const ACCOUNT_STYLE = `
+dialog.acct{max-width:420px;width:calc(100vw - 32px);border:2px solid var(--line);box-shadow:6px 6px 0 var(--line);background:var(--cream-hi);color:var(--ink);padding:20px}
+dialog.acct::backdrop{background:rgba(20,17,10,.55)}
+.acct-tabs{display:flex;gap:6px;margin-bottom:12px}
+.acct-row{display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:center;margin:10px 0}
+.acct-row>span{grid-column:1/-1;font:9px var(--font-pixel);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft)}
+.acct-row input{font:14px var(--font-mono);padding:9px 11px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);outline:none;width:100%}
+.acct-row input:focus{background:var(--amber-soft)}
+.acct-row .chip{justify-self:end}
+.acct-row .chip.ok{background:var(--hp);color:#14110a}.acct-row .chip.no{background:var(--rose);color:#fffef5}
+.me-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.avatar{width:56px;height:56px;display:grid;place-items:center;border:2px solid var(--line);box-shadow:3px 3px 0 var(--line);background:var(--amber);color:#2d2a20;font:700 18px var(--font-pixel);object-fit:cover}
+ul.me-list li{grid-template-columns:auto 1fr auto}
+.seat{margin:20px 0 4px}
+.seat h2{margin:0 0 6px;font:11px var(--font-pixel);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft)}
+.seat .row{gap:10px;flex-wrap:wrap;align-items:center}
+.seat input{font:14px var(--font-mono);padding:8px 10px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);min-width:220px;outline:none}
+.seat input:focus{background:var(--amber-soft)}
+.seat ul.me-list{margin-top:12px}
+li.desktop .reach-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+li.desktop .chip[data-badge]{min-width:78px;justify-content:center}
+li.desktop .pair-key{display:inline-flex;align-items:center;gap:6px}
+li.desktop .pair-input{font:700 14px var(--font-mono);letter-spacing:.22em;text-transform:uppercase;width:8.5ch;
+padding:6px 8px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);outline:none;text-align:center}
+li.desktop .pair-input:focus{background:var(--amber-soft)}
+li.desktop [data-key-note]{grid-column:1/-1;color:var(--rose)}
+/* phase 4 — the ladder in the sheet, and the Security rows */
+.acct-passkey{width:100%;margin:0 0 8px}
+.acct-ladder{margin-top:8px}
+.acct-rung{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line-soft)}
+.acct-rung .sp{flex:1;font-size:14px}
+.acct-code{font:16px var(--font-mono);letter-spacing:.12em;padding:9px 11px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);outline:none;flex:1;min-width:0}
+.acct-code:focus{background:var(--amber-soft)}
+.acct-asked{font:700 12px var(--font-pixel);letter-spacing:.06em;text-transform:uppercase;margin:2px 0 6px}
+ul.me-list li .btn.sm+.btn.sm{margin-left:6px}
 `

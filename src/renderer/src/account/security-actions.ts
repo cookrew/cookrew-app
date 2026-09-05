@@ -1,0 +1,51 @@
+import type { AccountStatus } from '../../../shared/account-v2'
+import { cookrew } from '../api'
+
+/**
+ * The three things the security card DOES, wired once.
+ *
+ * The card appears twice — once right after claiming and again in the profile
+ * sheet's SECURITY tab — and both need the same three calls. Written twice they
+ * are two chances for the lock delay to persist in one place and not the other,
+ * which is the sort of drift a person only finds after their Mac failed to
+ * lock. So it is a factory, not a copied block.
+ *
+ * Every call is best-effort: a refusal leaves the status as it was rather than
+ * throwing into a render, and the card's own error line covers what a person
+ * can act on.
+ */
+export function securityActions(
+  onStatus: (next: AccountStatus) => void,
+  after?: () => void,
+): {
+  onLockAfterMs: (ms: number) => void
+  onLockNow: () => void
+  onCodesSaved: () => void
+} {
+  return {
+    onLockAfterMs: (ms) => {
+      void cookrew()
+        .accountSetLock?.(ms)
+        .then(onStatus)
+        .catch(() => undefined)
+    },
+    /**
+     * LOCK NOW. `after` closes the sheet the button was pressed in: the lock
+     * covers it either way, but leaving a dialog open underneath means the
+     * unlock drops you back into a settings screen you had finished with.
+     */
+    onLockNow: () => {
+      after?.()
+      void cookrew()
+        .accountLock?.()
+        .then(onStatus)
+        .catch(() => undefined)
+    },
+    onCodesSaved: () => {
+      void cookrew()
+        .accountCodesSaved?.()
+        .then(onStatus)
+        .catch(() => undefined)
+    },
+  }
+}

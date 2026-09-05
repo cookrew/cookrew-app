@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron'
 import path from 'node:path'
-import { existsSync, statSync } from 'node:fs'
+import { chmodSync, existsSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
@@ -54,7 +54,8 @@ import {
   mobileUrls,
   mobileEndpointList,
   uncoveredCertHosts,
-  rotateActivePairingToken
+  rotateActivePairingToken,
+  activeCertFingerprint
 } from './mobile-server'
 import {
   activeBrowserTab,
@@ -80,6 +81,29 @@ import { forkContextReady, forkTerminal as forkTerminalOp, injectWhenReady } fro
 import { AgentRegistry } from './agent-registry'
 import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerSender } from './owner-grant'
+import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin } from './account-v2'
+import { relayHandle } from './legacy-identity'
+import { createAdmittedDeviceStore } from './admitted-devices'
+import { createPairingKeyRing } from './pairing-key'
+import { createRegistryKeyCache } from './registry-keys'
+import { createSpentTokenStore } from './spent-tokens'
+import { createReachPublisher, type ReachPublisher } from './reach'
+import { createCanvasLink } from './canvas-link'
+import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
+import { IdleLock } from './lock'
+import { registerAccountIpc } from './account-ipc'
+import { Approvals } from './approvals'
+import {
+  DoorCallers,
+  DoorSeats,
+  seatedCallersFor,
+  seatsApiOverAccounts,
+  type ServedTeamRef
+} from './door-seats'
+import { Factors } from './factors'
+import { SeatSettleQueue } from './seat-settle'
+import { createV2CallTokenVerifier, v2KeysOverHttp } from './v2-call-token'
+import type { ServedCallersRow } from '../shared/seats'
 import { buildGrantRoster } from './grant-roster'
 import { CallCredentialService } from './call-credential'
 import { makeCallCeremony } from './call-ceremony'
@@ -160,13 +184,13 @@ import { DoorWatch } from './door-watch'
 import { doorNameOf, transcriptSourceFor } from './transcript-source'
 import { readJson, respondJson } from './mobile-http'
 import { deriveSlug, uniqueSlug } from './workspace-slug'
-import { networkInterfaces } from 'node:os'
+import { hostname, networkInterfaces } from 'node:os'
 import { wireServing, type Serving } from './session-serving'
 import { servedTemplateFile } from './served-persist'
 import { bootWorkspaceInPlace } from './session-boot'
 import { servedConfinement } from './session-spawn'
 import { makeEntryTerminalLookup, rmSandbox } from './session-instantiator-mount'
-import { ServedCallers } from './served-callers'
+import { ACCOUNT_SUB_PREFIX, ServedCallers } from './served-callers'
 import { serviceGrants } from './service-grants-store'
 import { requestHarnessCompletion, servedGrantPreflight } from './served-grant-preflight'
 import { servedSessionProvisioner } from './served-onboarding'
@@ -558,7 +582,41 @@ const servedCallers = new ServedCallers()
  * existing test about reach meaningful rather than merely still-passing.
  */
 const RELAY_ORIGIN = process.env.COOKREW_REGISTRY ?? ''
-const RELAY_HANDLE = process.env.COOKREW_HANDLE ?? ''
+/** COOKREW_HANDLE as the environment set it — a development override now. */
+const ENV_HANDLE = process.env.COOKREW_HANDLE ?? ''
+
+/**
+ * THE OWNER'S ACCOUNT (identity v2, phase 1) — one file, one lock.
+ *
+ * Local-only is a complete state (architecture P4): no account.json means the
+ * app boots, works and serves nothing, and every call below answers rather
+ * than throws. Nothing here is on the serving path.
+ */
+const accounts = new Accounts({ deviceName: hostname() })
+
+/** The handle the key in ~/.cookrew/registry holds, if this Mac ever served. */
+const LEGACY_HANDLE = accounts.legacyHandle()
+
+/**
+ * WHICH NAME THIS MAC SERVES UNDER (identity v2, phase 6).
+ *
+ * THE ENVIRONMENT IS RETIRED AS IDENTITY. The account decides, then the key
+ * this Mac already holds — which wins over a disagreeing account because a v1
+ * door registration is signed with that key and the registry takes the handle
+ * from the signature, so serving under a name we cannot sign for would refuse
+ * the dial rather than rename the door. COOKREW_HANDLE decides only on a
+ * machine that has neither, and is told what it is. The whole table is a pure
+ * function (legacy-identity.ts) with a test per row.
+ */
+const RELAY_IDENTITY = relayHandle({
+  account: accounts.account()?.username ?? null,
+  legacy: LEGACY_HANDLE,
+  env: ENV_HANDLE
+})
+const RELAY_HANDLE = RELAY_IDENTITY.handle
+// ONCE, at boot: a fact about how this process resolved its own name.
+if (RELAY_IDENTITY.note !== null) console.error(RELAY_IDENTITY.note)
+
 const relayServing =
   RELAY_ORIGIN && RELAY_HANDLE
     ? createRelayServing({
@@ -569,6 +627,158 @@ const relayServing =
     : null
 
 /**
+ * IDENTITY V2, PHASE 2 — pairing through cookrew.dev, and the reach card.
+ *
+ * The pairing key ring, the admitted-phone list and the registry's signing key
+ * are all created here, before the mobile server starts, because the server
+ * needs the first two to answer `/?open=` and the reach publisher needs the
+ * account to sign. Every one of them is inert without an account: no username,
+ * no admission route, no hello, nothing published.
+ */
+const pairingKeys = createPairingKeyRing()
+const admittedDevices = createAdmittedDeviceStore()
+/**
+ * Canvas tokens already spent. Persisted because a restart that forgot them
+ * would reopen the replay window this closes, and a Mac restarts far more
+ * often than a token's ten minutes.
+ */
+const spentCanvasTokens = createSpentTokenStore()
+const registryKeyCache = createRegistryKeyCache({ origin: registryOrigin() })
+let reachPublisher: ReachPublisher | null = null
+
+/**
+ * The owner's display name and avatar, as of the last time anything read the
+ * profile. A snapshot rather than a cache with a policy: nothing here expires
+ * it, because a stale display name on a phone is not a fault worth a refresh
+ * loop, and the username underneath it is always current.
+ */
+let profileFace: { displayName?: string; avatar?: string | null } | null = null
+export const rememberProfileFace = (face: {
+  displayName?: string
+  avatar?: string | null
+}): void => {
+  profileFace = face
+}
+
+/**
+ * THE DESKTOP'S OWN LINE AT cookrew.dev — the picker's third path.
+ *
+ * A phone on LTE cannot dial this Mac, so this Mac dials out and holds a line
+ * for its OWN CANVAS; the phone's request travels down it backwards and lands
+ * on the companion's own loopback listener, where the admission ceremony and
+ * the pairing gate answer exactly as they do on the LAN. The relay adds no
+ * authority — see canvas-bridge.ts.
+ *
+ * The credential is re-asked on every dial and every redial, so no account, an
+ * expired session, or reachability switched off all mean the same thing: no
+ * line. Both of the last two are the owner saying no, and neither is an error.
+ */
+const canvasLink = createCanvasLink({
+  origin: () => registryOrigin(),
+  credential: () => {
+    const account = accounts.account()
+    if (!account || !account.workspacesReachable) return null
+    const session = account.session
+    if (!session || session.exp <= Date.now()) return null
+    return { token: session.token, deviceId: account.deviceId }
+  },
+  log: (message) => console.error(`[cookrew] ${message}`)
+})
+const canvasBridge = createCanvasBridge({
+  send: (line) => canvasLink.send(line),
+  dial: loopbackDialer(MOBILE_PORT),
+  log: (message) => console.error(`[cookrew] ${message}`)
+})
+canvasLink.onFrame(canvasBridge.frame)
+// A line that ended takes every exchange riding it with it; a local request
+// left running would be an event stream nobody will ever read again.
+canvasLink.onDrop(canvasBridge.reset)
+
+/**
+ * The idle lock covers the OWNER'S RENDERER and nothing else: agents keep
+ * running, doors keep answering, the phone keeps its session.
+ */
+const ownerLock = new IdleLock({
+  lockAfterMs: accounts.account()?.lockAfterMs ?? DEFAULT_LOCK_AFTER_MS,
+  verify: (password) => accounts.verifyUnlock(password),
+  onChange: (locked) => {
+    if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send('account:locked', locked)
+    }
+  }
+})
+/** Idleness is a question about a clock, so something has to ask it. */
+setInterval(() => ownerLock.tick(), 15_000).unref()
+
+/**
+ * D7's row, kept honest by a slow poll.
+ *
+ * It is PUSHED at the two moments that matter (a session minted, a session
+ * ended), and this is the backstop for every other way a session can start or
+ * stop — the caller's own PTY line admits without passing through the /ask
+ * seam, and a workspace the owner deletes ends a session from the far side.
+ * The publish diffs before it sends, so an idle desktop sends nothing.
+ */
+setInterval(() => {
+  if (serving.served.list().length > 0) publishServedCallers()
+}, 15_000).unref()
+
+/**
+ * THE APPROVAL QUEUE (D6) AND THE FACTOR LADDER (D3).
+ *
+ * A waiting device is announced as a SYSTEM NOTIFICATION and as the avatar's
+ * rose badge — never as a modal over the canvas. Clicking the notification
+ * brings the window forward and opens the profile sheet on the request, which
+ * is the same place the badge leads: one destination, so a person who saw the
+ * toast and a person who saw the badge end up looking at the same card.
+ */
+const approvals = new Approvals({
+  accounts,
+  hasSecondFactor: () => accountHasFactor,
+  notify: ({ title, body, request }) => {
+    const note = new Notification({ title, body })
+    note.on('click', () => {
+      if (!mainWindow || mainWindow.webContents.isDestroyed()) return
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+      mainWindow.webContents.send('account:requests', request.id)
+    })
+    note.show()
+  },
+  onChange: () => {
+    if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send('account:requests', null)
+    }
+  }
+})
+const factors = new Factors({ accounts, registry: registryOrigin() })
+
+/**
+ * Only the SENTENCE depends on this, so it is cached rather than fetched.
+ *
+ * The D6 line ends "no second factor on the account yet" when there is none.
+ * Asking the registry for the factor list inside the poll would double every
+ * request for one clause, so it is read at boot and every five minutes after
+ * — a factor is added once in the life of an account, and the clause it
+ * changes is the third one in a sentence about a device that is still waiting.
+ */
+const FACTOR_CACHE_MS = 300_000
+let accountHasFactor = false
+const readFactors = (): void => {
+  void factors
+    .view()
+    .then((result) => {
+      if (result.ok) accountHasFactor = result.value.totp || result.value.passkeys.length > 0
+    })
+    .catch(() => undefined)
+}
+if (accounts.account()) {
+  readFactors()
+  setInterval(readFactors, FACTOR_CACHE_MS).unref()
+  approvals.start()
+}
+
+/**
  * Sign-in with a cookrew.dev token needs the registry's public key, and only
  * a door on the relay has a name a token could be minted for — so the verifier
  * exists exactly when the relay does. See registry-token.ts.
@@ -576,6 +786,19 @@ const relayServing =
 const registryTokens = RELAY_ORIGIN
   ? createRegistryTokenVerifier({ keys: registryKeyOverHttp(RELAY_ORIGIN) })
   : null
+
+/**
+ * IDENTITY v2 AT THE DOOR (phase 5). Beside the v1 verifier, never replacing
+ * it: both wire contracts are live until phase 6 retires the older one, and
+ * which body arrives decides which is asked (served-endpoints.handleServedRoute).
+ */
+const v2CallTokens = RELAY_ORIGIN
+  ? createV2CallTokenVerifier({ keys: v2KeysOverHttp(RELAY_ORIGIN) })
+  : null
+/** Who has signed in at each served door — the memory behind D7's avatars. */
+const doorCallers = new DoorCallers()
+/** The owner's seat routes at cookrew.dev, spoken with the owner's session. */
+const doorSeats = new DoorSeats(seatsApiOverAccounts(accounts))
 
 function servedReach(slug: string): { address: string; transport: ServeTransport } {
   // THE RELAY WINS when it is carrying this door, because it is the only
@@ -635,6 +858,79 @@ async function joinRelayFor(template: ServedTemplate): Promise<void> {
     }
   })
   if (!joined.ok) console.error(`serving ${template.slug}: not on the relay (${joined.reason})`)
+}
+
+/**
+ * The teams this desktop is serving, named the way cookrew.dev names them.
+ *
+ * `team` is null for a door that is not on the relay: a seat names a `@handle/
+ * team`, and a door with no published name cannot hold one. The Seats tab
+ * shows those rows anyway and says so — serving is a fact this Mac knows on
+ * its own, and hiding a team because it is LAN-only would read as "stopped".
+ */
+function servedTeamRefs(): readonly ServedTeamRef[] {
+  return serving.served.list().map((template) => {
+    const snapshot = teams.load(template.templateId)
+    return {
+      serviceId: template.serviceId,
+      slug: template.slug,
+      team: relayServing?.addressFor(template.slug)?.name ?? null,
+      title: snapshot?.name ?? template.templateId,
+      access: template.access,
+      ...(template.priceUsd === undefined ? {} : { priceUsd: template.priceUsd })
+    }
+  })
+}
+
+/**
+ * A PAID SEAT IS REPORTED TO cookrew.dev, and never lost to an outage.
+ *
+ * The door took the money at its own checkout; the registry only records who
+ * ended up paying. The queue writes the receipt to disk before its first
+ * attempt and drains at boot, so a registry that is down while somebody buys a
+ * seat costs a retry rather than a dollar (seat-settle.ts).
+ */
+const seatSettles = new SeatSettleQueue({
+  seats: doorSeats,
+  onStuck: (entry) =>
+    console.error(
+      `[cookrew] seat for @${entry.username} at ${entry.team} is not recorded at cookrew.dev ` +
+        `(receipt ${entry.receipt}) — grant it by hand from Seats & Teams`
+    )
+})
+
+/** D7's rows: every served door, its orch card's NAME, and who is at it. */
+function servedCallerRows(): readonly ServedCallersRow[] {
+  const sessions = serving.instantiator.sessions().map((session) => ({
+    serviceId: session.serviceId,
+    sessionId: session.identity.sessionId,
+    caller: session.accountId,
+    conductorId: serving.instantiator.conductorFor(session.identity.sessionId),
+    openedAt: doorCallers.since(session.serviceId, session.accountId) ?? 0
+  }))
+  return serving.served.list().map((template) => {
+    const snapshot = teams.load(template.templateId)
+    return {
+      serviceId: template.serviceId,
+      slug: template.slug,
+      // The orch's name in the SAVED team — the card the owner recognises as
+      // the door. The renderer matches on it (CallerAvatars.callersForCard).
+      orchName: (snapshot ? orchAgentOf(snapshot) : null) ?? null,
+      callers: seatedCallersFor(template.serviceId, sessions, doorCallers)
+    }
+  })
+}
+
+/** Push the caller rows to the owner's canvas. Cheap, and only on a change. */
+let lastCallerRows = ''
+function publishServedCallers(): void {
+  const rows = servedCallerRows()
+  const encoded = JSON.stringify(rows)
+  if (encoded === lastCallerRows) return
+  lastCallerRows = encoded
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('serving:callers', rows)
+  }
 }
 
 function servedPaymentReturn(slug: string): string {
@@ -767,8 +1063,36 @@ async function handleServedSlug(
       // on the relay has none, and refuses every such token.
       doorName: (template) => relayServing?.addressFor(template.slug)?.name ?? null,
       ...(registryTokens ? { registryTokens } : {}),
+      ...(v2CallTokens ? { v2Tokens: v2CallTokens } : {}),
+      // A v2 sign-in is the ONLY moment this door learns a caller's username;
+      // after it every route works from `acct-<username>`. Recorded so the
+      // owner's canvas can put a face on them (D7).
+      onV2Seated: (entry) => {
+        doorCallers.seated(entry)
+        publishServedCallers()
+      },
+      // The money moved. Report it to cookrew.dev as a bought seat, through
+      // the queue that survives the registry being down (seat-settle.ts).
+      onPaid: (payment) => {
+        const template = serving.served.byService(payment.serviceId)
+        const team = template ? (relayServing?.addressFor(template.slug)?.name ?? null) : null
+        const username = payment.sub.startsWith(ACCOUNT_SUB_PREFIX)
+          ? payment.sub.slice(ACCOUNT_SUB_PREFIX.length)
+          : null
+        // A key-based caller has no account for a seat to land on, and a door
+        // with no published name has no team for one to be at. Both are
+        // ordinary states, not failures — the caller is still admitted.
+        if (team === null || username === null || username.length === 0) return
+        void seatSettles
+          .record({ team, username, by: payment.by, receipt: payment.receipt })
+          .catch(() => undefined)
+      },
       admit: async (serviceId, sub) => {
         const { session, created } = await serving.instantiator.admit(serviceId, sub)
+        // A face appears when the SESSION does, not when the token was
+        // checked: sign-in is a credential, an open session is a person in
+        // the room, and the avatars are about the room.
+        if (created) publishServedCallers()
         return { workspaceId: session.workspaceId, sessionId: session.identity.sessionId, created }
       },
       hasOpenSession: (serviceId, sub) =>
@@ -2251,6 +2575,10 @@ function endServedSession(sessionId: string): { stopped: number } {
       console.error(`ending ${sessionId}: its workspace could not be removed: ${String(error)}`)
     }
   }
+  // The face goes with the session. What we remember of a caller is about a
+  // LIVE session, so a record that outlived one would draw somebody who left.
+  if (record) doorCallers.forget(record.serviceId, record.accountId)
+  publishServedCallers()
   return stopped
 }
 
@@ -3705,6 +4033,13 @@ function createWindow(): void {
   }
   mainWindow.webContents.on('before-input-event', appShortcuts)
 
+  // Focus is presence, for the same reason a keystroke is. Without it, coming
+  // back to a window left open for twenty minutes locks a second later.
+  mainWindow.on('focus', () => ownerLock.focus())
+  // And it is the moment the owner can actually answer a waiting device, so
+  // the queue is re-read then rather than waiting out the poll (D6).
+  mainWindow.on('focus', () => void approvals.refresh())
+
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -3806,6 +4141,18 @@ app.whenReady().then(() => {
   // Push the current tmux config to sessions that survived a previous run,
   // so reattached terminals show the (possibly updated) status bar.
   ptys.reloadTmuxConfig()
+
+  // ANY SEAT SOMEBODY PAID FOR THAT cookrew.dev NEVER HEARD ABOUT. Deferred
+  // rather than awaited: it is a network round trip per receipt and there is
+  // almost never one, so it must not sit between the owner and a window.
+  setTimeout(() => {
+    void seatSettles
+      .drain()
+      .then((settled) => {
+        if (settled > 0) console.error(`[cookrew] recorded ${settled} seat(s) at cookrew.dev`)
+      })
+      .catch(() => undefined)
+  }, 5_000)
 
   // Reclaim what the stores leaked. Deferred rather than awaited: it walks
   // ~/.cookrew and must never sit between the user and a window. It is also
@@ -4018,6 +4365,25 @@ app.whenReady().then(() => {
     unsubscribeTerminal: (terminalId) => sessionSync.unsubscribe(terminalId),
     wallToken,
     pairingToken,
+    // Identity v2: `/api/hello` and the `?open=` admission. Both answer above
+    // the pairing-token gate because both exist for a phone that has not got
+    // the token yet; both go silent the moment there is no account.
+    identity: {
+      account: () => accounts.account(),
+      registryOrigin: () => registryOrigin(),
+      keys: () => registryKeyCache.keys(),
+      refreshKeys: () => registryKeyCache.refresh(),
+      admitted: admittedDevices,
+      acceptsPairingKey: (key: string) => pairingKeys.accepts(key),
+      spend: (jti: string, exp: number) => spentCanvasTokens.spend(jti, exp),
+      pairingToken: () => pairingToken,
+      // Whatever the last successful profile read left behind. Never fetched
+      // on the request path: the avatar must draw a letter immediately, and a
+      // phone waiting on cookrew.dev to learn the owner's initials is a phone
+      // showing "?" every time the WAN is slow.
+      profileFace: () => profileFace,
+      log: (message: string) => console.error(`[cookrew] ${message}`)
+    },
     recoverAgent,
     restoreCheckpoint,
     undoRestore,
@@ -4130,6 +4496,37 @@ app.whenReady().then(() => {
   // agents are observed through their session files without opening mirrors.
   reportWorkspaceBinding()
 
+  // File this Mac's workspaces under the account, by NAME AND ID only (P1).
+  // Best effort and never awaited: a registry that is down must not delay a
+  // boot, and a desktop with no account has nothing to file.
+  // The reach card rides with them: the addresses this Mac answers on, the
+  // fingerprint of the certificate it serves, and whether the relay is up —
+  // signed by the device key, so cookrew.dev is a repeater and not an
+  // authority about where to find this machine.
+  reachPublisher = createReachPublisher({
+    account: () => accounts.account(),
+    endpoints: () => mobileEndpointList(),
+    certFp: () => activeCertFingerprint(),
+    // TRUE ONLY WHILE THE LINE IS ACTUALLY HELD. `held()` is ready-received
+    // and neither aborted nor closed — a card claiming a relay that is not
+    // carrying sends a phone down a path that receives every request and
+    // answers none. (The door relay is a different thing entirely: it carries
+    // a served team, not this Mac's canvas.)
+    relay: () => canvasLink.held(),
+    workspaces: () => store.list().workspaces.map((w) => ({ id: w.id, name: w.name })),
+    register: (workspaces, reach) => accounts.registerDesktop(workspaces, reach),
+    log: (message) => console.error(`[cookrew] ${message}`)
+  })
+  // The line's state IS half the card, so a line that comes up or goes down
+  // republishes: without this a Mac that dialled out after boot would sit
+  // advertising `relay: false` until the next network change.
+  canvasLink.onChange(() => void reachPublisher?.republish('relay link').catch(() => undefined))
+  canvasLink.start()
+  void reachPublisher.republish('boot').catch(() => undefined)
+  // The addresses move without anyone asking: a laptop lid, a new Wi-Fi, a
+  // Tailscale that finally came up. Polling is the only honest way to notice.
+  reachPublisher.watch()
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
@@ -4163,6 +4560,11 @@ app.on('before-quit', (event) => {
   // deliveries) and await the bounded TERM→KILL settlements (Sol r10).
   defaultProducerLease().retireAll()
   browserCast.shutdown()
+  // The line goes down BEFORE the app does, so the registry stops handing the
+  // owner's phone a name whose Mac is quitting — a downlink the process drops
+  // silently is a relay that claims this desktop for as long as it takes the
+  // pulse to notice.
+  canvasLink.stop()
   store.flush()
   events.flush()
   sessionSync.dispose()
@@ -4274,6 +4676,62 @@ function registerIpc(handlers: RestoreHandlers): void {
       }
       return op(...args)
     }
+
+  // ---- the owner's account (identity v2) ----
+  //
+  // Registered through the SAME ownerOnly wrapper, by construction: the module
+  // hands over a table and this is the only place a guard could be forgotten.
+  registerAccountIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
+    accounts,
+    lock: ownerLock,
+    approvals,
+    factors,
+    envUsername: ENV_HANDLE || null,
+    // Phase 6: a Mac that already serves under a handle opens the claim sheet
+    // on a password, not on a name. Read at boot, and null once it has crossed.
+    legacy: LEGACY_HANDLE === null ? null : { handle: LEGACY_HANDLE },
+    workspaces: () => store.list().workspaces.map((w) => ({ id: w.id, name: w.name })),
+    pairing: pairingKeys,
+    admitted: {
+      list: () => admittedDevices.list(),
+      forget: (deviceId) => admittedDevices.forget(deviceId)
+    },
+    publishReach: (reason) => {
+      // The reachability toggle and a fresh claim both land here, and both
+      // change whether there is a line to hold at all.
+      canvasLink.refresh()
+      void reachPublisher?.republish(reason).catch(() => undefined)
+    },
+    // SAVE AS FILE. The dialog lives here because account-ipc.ts must stay
+    // free of Electron; the CODES come from main's own memory, never from the
+    // call, so the renderer chooses the file and nothing else. 0600, because
+    // eight of these open the account.
+    saveCodes: async (codes) => {
+      if (!mainWindow) return { ok: false, reason: 'no_window' }
+      const picked = await dialog.showSaveDialog(mainWindow, {
+        title: 'Save your recovery codes',
+        defaultPath: path.join(app.getPath('downloads'), 'cookrew-recovery-codes.txt'),
+        filters: [{ name: 'Text', extensions: ['txt'] }]
+      })
+      if (picked.canceled || !picked.filePath) return { ok: false, reason: 'cancelled' }
+      try {
+        writeFileSync(picked.filePath, `${codes.join('\n')}\n`, {
+          encoding: 'utf8',
+          mode: 0o600
+        })
+        chmodSync(picked.filePath, 0o600)
+        return { ok: true }
+      } catch (error) {
+        // The path, never the codes — an error line is the one place a secret
+        // reaches a log by accident.
+        console.error('Could not save the recovery codes:', error)
+        return { ok: false, reason: 'write_failed' }
+      }
+    },
+    // Seats & Teams (phase 5). The door is wired even with no account on this
+    // Mac — `Accounts.authed` answers `no_account` and the tab says so.
+    seats: { door: doorSeats, serving: servedTeamRefs, origin: registryOrigin() }
+  })
 
   ipcMain.handle(
     'grant:enrol',
@@ -4451,6 +4909,15 @@ function registerIpc(handlers: RestoreHandlers): void {
       conductorId: serving.instantiator.conductorFor(s.identity.sessionId)
     }))
   )
+  /**
+   * D7: who is at each served door, for the avatars on the door's card.
+   *
+   * OWNER-ONLY, unlike its older neighbours on this seam, because this is the
+   * one that carries USERNAMES. A page the owner merely browsed to must not be
+   * able to enumerate the people at their doors, and a channel that names
+   * strangers is exactly the kind the account IPC's guard exists for.
+   */
+  ipcMain.handle('serving:callers', ownerOnly(() => servedCallerRows()))
   /** END destroys someone else's workspace, so it is the owner's act alone. */
   ipcMain.handle('serving:end', (_e, sessionId: string) => endServedSession(sessionId))
 

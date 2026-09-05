@@ -3,6 +3,7 @@ import { NodeHandles } from './NodeHandles'
 import { CardPick } from './CardPick'
 import { CardClose } from './CardClose'
 import { AgentAvatar, StatusCoin } from './AgentAvatar'
+import { CardCallerAvatars } from './CallerAvatars'
 import { GitChip } from '../GitChip'
 import { CrIcon } from '../icons'
 import { cardTypeScale, cardZoomMode } from './card-zoom'
@@ -140,6 +141,9 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
         {phase === 'idle' && activity && (
           <span className="vi-chip dim">{agoLabel(activity.updatedAt)}</span>
         )}
+        {/* D7: the people at this door, at the head's right end. Renders
+            nothing at all unless this card IS a served team's orch. */}
+        <CardCallerAvatars card={{ id: node.id, name: node.name, orch: node.orch }} />
         <CardClose nodeId={node.id} dark />
       </div>
       <div className="card-body vi-card-body nodrag nowheel" onClick={open}>

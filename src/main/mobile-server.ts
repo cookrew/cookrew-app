@@ -48,6 +48,10 @@ import { sendBody } from './http-compress'
 import { rendererSourceFor, staleBuildNotice } from './renderer-choice'
 import { fetchRendererDevResource, rendererDevPathAllowed } from './renderer-dev-proxy'
 import { isViteHmrUpgrade, proxyViteHmrUpgrade } from './hmr-proxy'
+import { handleIdentityRoutes, type MobileIdentityDeps } from './mobile-identity-routes'
+import { companionAccount } from './companion-account'
+import { RELAY_MARKER } from './canvas-bridge'
+import { certFingerprint, reachCard } from './reach'
 
 // Re-exported so existing importers keep their import path; the constants
 // themselves live in an Electron-free module so pure code can use them.
@@ -73,6 +77,17 @@ let activeWallToken: string | null = null
 
 /** SAN list of the cert actually in use; empty until HTTPS starts. */
 let certSans: string[] = []
+
+/**
+ * SHA-256 of the DER of the cert actually in use, null until HTTPS starts.
+ *
+ * Kept at module scope because the cert Buffer was function-local and the
+ * reach card needs the fingerprint of the cert BEING SERVED, not of whatever
+ * ensureCert would return if asked again. watchTailnetCert can swap the
+ * context mid-run, and a published pin that outlives the cert it names turns
+ * every direct path into a refusal.
+ */
+let activeCertFp: string | null = null
 
 /** Active power-save-blocker id, boxed so tests can reset it. */
 const powerBlockerId: { current: number | null } = { current: null }
@@ -128,6 +143,12 @@ export interface MobileServerDeps {
   browserThumb: (browserId: string) => ThumbFrame | undefined
   /** Whether browser nodes are backed by the node-owned headless runtime. */
   interactiveBrowserEnabled: () => boolean
+  /**
+   * Identity v2: `/api/hello` and the `?open=` admission. Absent = neither
+   * route exists and the legacy `?token=` pairing is the only way in, which
+   * is exactly the state of a desktop with no account.
+   */
+  identity?: MobileIdentityDeps
   /**
    * Whether workspace sessions are multi-instance. Gates slug routing: off,
    * /<slug>/... is not a route and every path keeps its existing meaning.
@@ -193,6 +214,14 @@ export function startMobileServer(deps: MobileServerDeps): void {
   // route on this server requires it (see handleMobileApi's gate). The
   // fallback is the PERSISTED token: a per-run UUID silently unpaired every
   // phone on each restart, and the renderer swallowed the resulting 401s.
+  //
+  // PHASE 6 KEEPS THIS EXACTLY AS IT IS. New phones pair through cookrew.dev
+  // — the phone signs in there and scans the desktop's device id and rotating
+  // six-character key (`?open=` above, pairing-key.ts) — but a phone paired
+  // the old way holds a `?token=` URL that `cookrew mobile` printed as a QR,
+  // and taking that away would unpair every one of them at once to tidy up a
+  // credential. It stays until a phone has re-paired, which is a thing that
+  // happens by itself.
   activePairingToken = deps.pairingToken ?? loadOrCreatePairingToken()
   activeWallToken = deps.wallToken ?? randomUUID()
 
@@ -229,6 +258,7 @@ export function startMobileServer(deps: MobileServerDeps): void {
   const cert = ensureCert(advertisedCertHosts())
   if (cert) {
     certSans = sansOf(new X509Certificate(cert.cert).subjectAltName)
+    activeCertFp = certFingerprint(cert.cert)
     const secure = https.createServer({ key: cert.key, cert: cert.cert }, requestHandler)
     // Long keep-alive matters MOST here: this is the server the phone reaches
     // over the tailnet, where a re-handshake is a visible typing stall.
@@ -320,6 +350,7 @@ function watchTailnetCert(secure: https.Server): void {
         const reissued = ensureCert(hosts)
         if (!reissued) return
         certSans = sansOf(new X509Certificate(reissued.cert).subjectAltName)
+        activeCertFp = certFingerprint(reissued.cert)
         secure.setSecureContext({ key: reissued.key, cert: reissued.cert })
         console.error(`Mobile cert reissued for ${missing.join(', ')} — no restart needed`)
       })
@@ -444,6 +475,42 @@ export function mobileEndpointList(): MobileEndpoint[] {
 
 export function mobileUrls(): string[] {
   return mobileEndpointList().map((endpoint) => endpoint.url)
+}
+
+/**
+ * The origins this server answers on, WITHOUT the token that rides the URLs.
+ *
+ * Two callers, both phase 3: the CORS allow-list on `/api/hello`, so a
+ * companion on one of these addresses may ask another whether it is the same
+ * Mac; and `/api/reach`, which hands the companion the candidates to race. A
+ * `?token=` in either would be the pairing credential leaving on a route that
+ * is not the pairing URL, so it is stripped rather than trusted not to matter.
+ */
+export function mobileSelfOrigins(): string[] {
+  const seen = new Set<string>()
+  for (const endpoint of mobileEndpointList()) {
+    try {
+      const url = new URL(endpoint.url)
+      seen.add(`${url.protocol}//${url.host}`)
+    } catch {
+      // An endpoint that is not a URL cannot be an origin either.
+    }
+  }
+  return [...seen]
+}
+
+/**
+ * The fingerprint a phone will see on the TLS handshake, or null when HTTPS
+ * never came up. This is what the reach card pins, so a direct connection is
+ * never trust-on-first-use.
+ */
+export function activeCertFingerprint(): string | null {
+  return httpsReady ? activeCertFp : null
+}
+
+/** The credential a paired phone holds; null before the server starts. */
+export function activePairingTokenValue(): string | null {
+  return activePairingToken
 }
 
 /**
@@ -679,8 +746,34 @@ function rendererSource(
     remoteAddress: request.socket.remoteAddress,
     devAvailable: !!deps.rendererDevUrl,
     builtAvailable: existsSync(path.join(deps.rendererDir, 'index.html')),
-    requested: raw === 'dev' || raw === 'built' ? raw : null
+    requested: raw === 'dev' || raw === 'built' ? raw : null,
+    // The relay bridge dials this server from loopback on behalf of the most
+    // remote client there is. See canvas-bridge.ts.
+    viaRelay: request.headers[RELAY_MARKER] === '1'
   })
+}
+
+/**
+ * The identity deps, plus the two facts only this module holds: whether the
+ * TLS listener is up, and where it is. Both exist so a pairing that arrived on
+ * the plaintext port is sent to the secure one rather than completing there.
+ */
+function identityRouteDeps(deps: MobileServerDeps): MobileIdentityDeps | undefined {
+  if (!deps.identity) return undefined
+  return {
+    ...deps.identity,
+    httpsReady: () => httpsReady,
+    secureLocation: (request, url) =>
+      httpsRedirectTarget({
+        hostHeader: request.headers.host,
+        // The WHOLE query travels, so the ceremony completes over TLS rather
+        // than arriving at a bare page with the token stripped off it.
+        target: `${url.pathname}${url.search}`,
+        localAddress: request.socket.localAddress,
+        advertisedHosts: mobileEndpointList().map((endpoint) => endpoint.host),
+        port: MOBILE_HTTPS_PORT
+      })
+  }
 }
 
 async function handle(
@@ -785,6 +878,26 @@ async function handle(
     )
   }
 
+  // Identity v2, ABOVE the pairing gate on purpose: both routes exist for a
+  // phone that does not hold the pairing token yet. `/api/hello` proves this
+  // Mac is the device the registry named; `/?open=` admits a phone that
+  // arrived from cookrew.dev and hands it the same session a legacy pairing
+  // would. Neither answers without an account, so nothing changes for a
+  // desktop that has not claimed a username.
+  if (
+    await handleIdentityRoutes(
+      request,
+      response,
+      url,
+      // The origins are the SERVER's, not the account's, so they are threaded
+      // in here rather than asked of index.ts — which would have to learn
+      // about listeners it deliberately knows nothing about.
+      deps.identity && { ...deps.identity, selfOrigins: mobileSelfOrigins }
+    )
+  ) {
+    return
+  }
+
   if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
     // Loopback (and ?renderer=dev) uses Vite's current transforms; every
     // other client gets the build — see rendererSource.
@@ -819,6 +932,10 @@ async function handle(
     // this server already holds — tail-read, no PTY.
     latestCheckpoint: (terminalId: string) => deps.traces.latestCheckpoint(terminalId),
     pairingToken: activePairingToken ?? deps.pairingToken,
+    // The second door: each admitted phone's own companion token. Checked by
+    // the same gate as the global one, so a per-device credential is not a
+    // phone that half works.
+    companionToken: (candidate: string) => deps.identity?.admitted.accepts(candidate) ?? false,
     wallToken: activeWallToken ?? deps.wallToken
   }
   if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return
@@ -834,6 +951,69 @@ async function handle(
   // property that made the read hole findable in the first place.
   if (request.method === 'GET' && url.pathname === '/api/browser/capabilities') {
     respondJson(response, 200, { interactive: deps.interactiveBrowserEnabled() })
+    return
+  }
+
+  /**
+   * WHERE ELSE THIS MAC ANSWERS — the companion's own copy of the reach card.
+   *
+   * A phone reached over the relay has no way to discover that the Mac is on
+   * the Wi-Fi it just joined: its origin is cookrew.dev and cookrew.dev is the
+   * long way round. So the desktop tells it, over whatever path it is already
+   * on, and the phone races what it is told (path/switch.ts).
+   *
+   * THE SAME CARD IT PUBLISHES, built by the same function — a second
+   * classification here would be a second chance to call a tailnet address a
+   * LAN one and switch a phone onto a path that cannot carry it.
+   *
+   * BELOW handleMobileApi ON PURPOSE, which is what gates it: the addresses of
+   * someone's Mac and the fingerprint of its certificate are not for anyone who
+   * can reach the port. `relay` is absent because this route cannot know it —
+   * the link is index.ts's, and a phone reading this is not looking for the
+   * path it is already on.
+   */
+  if (request.method === 'GET' && url.pathname === '/api/reach') {
+    const account = deps.identity?.account() ?? null
+    if (!account) {
+      respondJson(response, 404, { error: 'no account on this desktop' })
+      return
+    }
+    const card = reachCard({
+      deviceId: account.deviceId,
+      endpoints: mobileEndpointList(),
+      certFp: activeCertFingerprint(),
+      relay: false,
+      at: Date.now()
+    })
+    respondJson(response, 200, { deviceId: card.deviceId, lan: card.lan, tailnet: card.tailnet })
+    return
+  }
+
+  /**
+   * THE OWNER'S PUBLIC FACE, for the companion's avatar and its path sheet.
+   *
+   * Beside /api/reach and gated the same way — below handleMobileApi, so it
+   * needs the pairing token. A phone that holds that token is an admitted
+   * device of this account and may see what any of the account's devices see:
+   * a name, two initials, an avatar. companion-account.ts builds the answer
+   * member by member; nothing here may grow a field by accident.
+   *
+   * The registry origin is in it because the companion cannot work it out.
+   * Its own origin is this Mac or the relay, so "Switch desktop" had been a
+   * hard-coded cookrew.dev — wrong for anyone self-hosting, and wrong in every
+   * test environment.
+   */
+  if (request.method === 'GET' && url.pathname === '/api/account') {
+    const face = companionAccount(
+      deps.identity?.account() ?? null,
+      deps.identity?.registryOrigin() ?? '',
+      deps.identity?.profileFace?.() ?? null
+    )
+    if (!face) {
+      respondJson(response, 404, { error: 'no account on this desktop' })
+      return
+    }
+    respondJson(response, 200, face)
     return
   }
 

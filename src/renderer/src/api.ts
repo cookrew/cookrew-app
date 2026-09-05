@@ -27,6 +27,39 @@ import type {
   PaymentConfigReply,
   ServedPaymentStatus,
 } from "../../shared/served-payment-config";
+import type {
+  AccountDevice,
+  AccountProfile,
+  AccountResult,
+  AccountStatus,
+  AdmittedPhone,
+  PairingKeyHandout,
+  UsernameCheck,
+} from "../../shared/account-v2";
+import type {
+  ApprovalDecision,
+  ApprovalRequest,
+  FactorsView,
+  PasskeySummary,
+  TotpEnrolment,
+} from "../../shared/account-approvals";
+import type {
+  SeatFace,
+  SeatsSurface,
+  ServedCallersRow,
+} from "../../shared/seats";
+
+/**
+ * What `accountUnlock` answers. The lock's own outcome, plus whether the
+ * password it was given also bought a fresh session — see account-ipc.ts,
+ * where the fold is argued.
+ */
+export type UnlockAnswer =
+  | { ok: true; sessionRenewed?: boolean }
+  | { ok: false; reason: "wrong"; triesLeft: number }
+  | { ok: false; reason: "paused"; pausedForMs: number }
+  | { ok: false; reason: "no-account" };
+
 
 /**
  * GET /api/board's payload, mirrored here rather than imported from main —
@@ -473,6 +506,86 @@ export interface CookrewApi {
   /** Still of a headless browser page for its card thumbnail; null when the
    *  flag is off or the page cannot be captured right now. */
   browserSnapshot?: (browserId: string) => Promise<string | null>;
+  // ── the owner's account (identity v2, phase 1) ──
+  //
+  // ALL OPTIONAL, and the surface feature-detects rather than branching on
+  // isRemoteMode(): main is the only bridge that has them, so an absent
+  // `accountStatus` IS the statement "no account surface here". The phone
+  // gets its own in phase 2.
+  accountStatus?: () => Promise<AccountStatus>;
+  accountActivity?: () => Promise<boolean>;
+  accountCheck?: (username: string) => Promise<UsernameCheck>;
+  accountClaim?: (input: {
+    username: string;
+    password: string;
+    name?: string;
+  }) => Promise<AccountResult<AccountStatus>>;
+  /** Phase 6: set a password on the handle this Mac held before them. */
+  accountMigrate?: (input: {
+    password: string;
+    name?: string;
+  }) => Promise<AccountResult<AccountStatus>>;
+  accountLock?: () => Promise<AccountStatus>;
+  accountUnlock?: (password: string) => Promise<UnlockAnswer>;
+  accountProfile?: () => Promise<AccountResult<AccountProfile>>;
+  accountDevices?: () => Promise<AccountResult<readonly AccountDevice[]>>;
+  accountRevoke?: (deviceId: string) => Promise<AccountResult<void>>;
+  accountRecoveryCodes?: () => Promise<AccountResult<readonly string[]>>;
+  accountSaveRecoveryCodes?: () => Promise<{ ok: boolean; reason?: string }>;
+  accountCodesSaved?: () => Promise<AccountStatus>;
+  accountSetLock?: (ms: number) => Promise<AccountStatus>;
+  accountSetProfile?: (patch: {
+    displayName?: string;
+    avatar?: string | null;
+  }) => Promise<AccountResult<AccountProfile>>;
+  accountWorkspacesReachable?: (on: boolean) => Promise<AccountStatus>;
+  /** The popout's rotating key, or null when this Mac has no account. */
+  accountPairingKey?: () => Promise<PairingKeyHandout | null>;
+  /** Phones this Mac has let in, listed beside the registry's devices. */
+  accountAdmittedDevices?: () => Promise<readonly AdmittedPhone[]>;
+  /** Drops the admission HERE. Does not revoke the phone at cookrew.dev. */
+  accountForgetAdmitted?: (deviceId: string) => Promise<boolean>;
+  // ── seats & teams (identity v2, phase 5) ──
+  //
+  // Optional for the same reason as the rest: main is the only bridge that
+  // serves teams, so an absent `accountSeats` IS "no seats surface here".
+  accountSeats?: () => Promise<AccountResult<SeatsSurface>>;
+  accountTeamSeats?: (slug: string) => Promise<AccountResult<readonly SeatFace[]>>;
+  accountGrantSeat?: (input: {
+    slug: string;
+    username: string;
+  }) => Promise<AccountResult<SeatFace>>;
+  accountEndSeat?: (input: { slug: string; id: string }) => Promise<AccountResult<void>>;
+  /** The owner's canvas, told who is at its doors. */
+  servingCallers?: () => Promise<readonly ServedCallersRow[]>;
+  onServingCallers?: (cb: (rows: readonly ServedCallersRow[]) => void) => () => void;
+  onAccountLocked?: (cb: (locked: boolean) => void) => () => void;
+  // ── phase 4: the approval prompt (D6) and the factor ladder (D3) ──
+  //
+  // The list is what main's poll last saw, so the sheet and the avatar's
+  // badge are drawing the same queue. A decision answers with the STATUS, so
+  // the badge is right the instant the button is released.
+  accountApprovals?: () => Promise<readonly ApprovalRequest[]>;
+  accountDecide?: (input: {
+    id: string;
+    decision: ApprovalDecision;
+  }) => Promise<AccountResult<AccountStatus>>;
+  accountSetPassword?: (input: {
+    current: string;
+    next: string;
+  }) => Promise<AccountResult<void>>;
+  accountFactors?: () => Promise<AccountResult<FactorsView>>;
+  accountTotpEnrol?: () => Promise<AccountResult<TotpEnrolment>>;
+  accountTotpConfirm?: (code: string) => Promise<AccountResult<void>>;
+  accountTotpRemove?: (current: string) => Promise<AccountResult<void>>;
+  accountPasskeys?: () => Promise<AccountResult<readonly PasskeySummary[]>>;
+  accountPasskeyOptions?: () => Promise<AccountResult<Record<string, unknown>>>;
+  accountPasskeyAdd?: (input: {
+    name: string;
+    credential: Record<string, unknown>;
+  }) => Promise<AccountResult<PasskeySummary>>;
+  accountPasskeyRemove?: (id: string, current: string) => Promise<AccountResult<void>>;
+  onAccountRequests?: (cb: (requestId: string | null) => void) => () => void;
   /**
    * Re-establish the push channel if it has died. Remote clients only: a
    * desktop renderer talks to main over IPC, which cannot go down while the

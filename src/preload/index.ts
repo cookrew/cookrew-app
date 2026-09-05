@@ -32,6 +32,102 @@ const api = {
   grantRestore: (workspaceId: string, sub: string) =>
     ipcRenderer.invoke('grant:restore', workspaceId, sub),
   grantList: (workspaceId: string) => ipcRenderer.invoke('grant:list', workspaceId),
+
+  // ── the owner's account (identity v2, phase 1) ──
+  //
+  // Every one of these is refused by main unless the sender IS the owner
+  // window's top frame (account-ipc.ts, isOwnerSender), so exposing them here
+  // does not hand a claim or a recovery code to a browser card. The renderer
+  // FEATURE-DETECTS them: the phone bridge and the demo api have none of this,
+  // and the avatar simply does not appear there in this phase.
+  accountStatus: () => ipcRenderer.invoke('account:status'),
+  /** Presence ping for the idle lock. Throttled by the renderer, not here. */
+  accountActivity: () => ipcRenderer.invoke('account:activity'),
+  accountCheck: (username: string) => ipcRenderer.invoke('account:check', username),
+  accountClaim: (input: { username: string; password: string; name?: string }) =>
+    ipcRenderer.invoke('account:claim', input),
+  /** Phase 6: a password for the name this Mac already holds a key for. The
+   *  name is main's to know, so this takes only the password. */
+  accountMigrate: (input: { password: string; name?: string }) =>
+    ipcRenderer.invoke('account:migrate', input),
+  accountLock: () => ipcRenderer.invoke('account:lock'),
+  /** Also renews a session that died, since the password is in hand once. */
+  accountUnlock: (password: string) => ipcRenderer.invoke('account:unlock', password),
+  accountProfile: () => ipcRenderer.invoke('account:profile'),
+  accountDevices: () => ipcRenderer.invoke('account:devices'),
+  accountRevoke: (deviceId: string) => ipcRenderer.invoke('account:revoke', deviceId),
+  accountRecoveryCodes: () => ipcRenderer.invoke('account:recoveryCodes'),
+  /** SAVE AS FILE. Takes nothing: main writes the batch IT minted, never the
+   *  renderer's copy, so this cannot be talked into writing chosen bytes. */
+  accountSaveRecoveryCodes: () => ipcRenderer.invoke('account:saveRecoveryCodes'),
+  /** I SAVED THEM — recorded locally so the RESCUE row stops saying NOT SAVED. */
+  accountCodesSaved: () => ipcRenderer.invoke('account:codesSaved'),
+  accountSetLock: (ms: number) => ipcRenderer.invoke('account:setLock', ms),
+  accountSetProfile: (patch: { displayName?: string; avatar?: string | null }) =>
+    ipcRenderer.invoke('account:setProfile', patch),
+  accountWorkspacesReachable: (on: boolean) =>
+    ipcRenderer.invoke('account:workspacesReachable', on),
+  // ── pairing a phone through cookrew.dev (identity v2, phase 2) ──
+  //
+  // The key is a live credential for two minutes, which is exactly why it goes
+  // through the same owner-only gate as a recovery code: a page that could
+  // read it could pair itself to this Mac.
+  accountPairingKey: () => ipcRenderer.invoke('account:pairingKey'),
+  accountAdmittedDevices: () => ipcRenderer.invoke('account:admittedDevices'),
+  accountForgetAdmitted: (deviceId: string) =>
+    ipcRenderer.invoke('account:forgetAdmitted', deviceId),
+
+  // ── phase 4: the approval prompt (D6) and the factor ladder (D3) ──
+  //
+  // Same guard, same reasoning: these can approve a device onto the account,
+  // sign every other device out, and add a way in. Owner window's top frame
+  // or nothing.
+  accountApprovals: () => ipcRenderer.invoke('account:approvals'),
+  accountDecide: (input: { id: string; decision: 'approve' | 'deny' | 'not-me' }) =>
+    ipcRenderer.invoke('account:decide', input),
+  accountSetPassword: (input: { current: string; next: string }) =>
+    ipcRenderer.invoke('account:setPassword', input),
+  accountFactors: () => ipcRenderer.invoke('account:factors'),
+  /** The secret and its QR, for the moment the sheet draws them. */
+  accountTotpEnrol: () => ipcRenderer.invoke('account:totpEnrol'),
+  accountTotpConfirm: (code: string) => ipcRenderer.invoke('account:totpConfirm', code),
+  /** Both removals carry the password: the registry gates them on it. */
+  accountTotpRemove: (current: string) => ipcRenderer.invoke('account:totpRemove', current),
+  accountPasskeys: () => ipcRenderer.invoke('account:passkeys'),
+  accountPasskeyOptions: () => ipcRenderer.invoke('account:passkeyOptions'),
+  accountPasskeyAdd: (input: { name: string; credential: Record<string, unknown> }) =>
+    ipcRenderer.invoke('account:passkeyAdd', input),
+  accountPasskeyRemove: (id: string, current: string) =>
+    ipcRenderer.invoke('account:passkeyRemove', id, current),
+  /**
+   * The queue changed, or a notification was clicked (then with the request's
+   * id, so the sheet opens on the one the owner was told about).
+   */
+  onAccountRequests: (cb: (requestId: string | null) => void) => {
+    const listener = (_e: unknown, requestId: string | null): void => cb(requestId)
+    ipcRenderer.on('account:requests', listener)
+    return () => ipcRenderer.removeListener('account:requests', listener)
+  },
+  // ── seats & teams (identity v2, phase 5) ──
+  accountSeats: () => ipcRenderer.invoke('account:seats'),
+  accountTeamSeats: (slug: string) => ipcRenderer.invoke('account:teamSeats', slug),
+  accountGrantSeat: (input: { slug: string; username: string }) =>
+    ipcRenderer.invoke('account:grantSeat', input),
+  accountEndSeat: (input: { slug: string; id: string }) =>
+    ipcRenderer.invoke('account:endSeat', input),
+  /** Who is at this desktop's served doors right now (D7's avatars). */
+  onServingCallers: (cb: (rows: unknown) => void) => {
+    const listener = (_e: unknown, rows: unknown): void => cb(rows)
+    ipcRenderer.on('serving:callers', listener)
+    return () => ipcRenderer.removeListener('serving:callers', listener)
+  },
+  servingCallers: () => ipcRenderer.invoke('serving:callers'),
+  /** Main locked or unlocked the owner's view; the overlay follows this. */
+  onAccountLocked: (cb: (locked: boolean) => void) => {
+    const listener = (_e: unknown, locked: boolean): void => cb(locked)
+    ipcRenderer.on('account:locked', listener)
+    return () => ipcRenderer.removeListener('account:locked', listener)
+  },
   onWorkspaceState: (cb: (state: unknown) => void) => {
     const listener = (_e: unknown, state: unknown): void => cb(state)
     ipcRenderer.on('workspace:state', listener)

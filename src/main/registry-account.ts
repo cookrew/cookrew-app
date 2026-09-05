@@ -47,10 +47,15 @@ interface Stored {
 
 const B64 = 'base64url' as const
 
-/** Where accounts live. Beside the other secrets the app keeps, and as private. */
-function accountFile(origin: string): string {
+/**
+ * Where accounts live. Beside the other secrets the app keeps, and as private.
+ *
+ * `base` is ~/.cookrew unless a caller names another one — which only tests
+ * and the migration's own reader do, so neither has to touch a real home.
+ */
+function accountFile(origin: string, base?: string): string {
   const host = new URL(origin).host.replace(/[^a-z0-9.-]/gi, '_')
-  return path.join(homedir(), '.cookrew', 'registry', `${host}.json`)
+  return path.join(base ?? path.join(homedir(), '.cookrew'), 'registry', `${host}.json`)
 }
 
 /**
@@ -60,8 +65,8 @@ function accountFile(origin: string): string {
  * handle it was enrolled under, because that handle is what the registry has
  * bound its doors to and changing it locally would silently orphan them.
  */
-export function registryAccount(origin: string, handle: string): RegistryAccount {
-  const file = accountFile(origin)
+export function registryAccount(origin: string, handle: string, base?: string): RegistryAccount {
+  const file = accountFile(origin, base)
   const stored = load(file) ?? create(file, handle)
   const rpId = new URL(origin).hostname
   const exact = new URL(origin).origin
@@ -100,6 +105,19 @@ export function registryAccount(origin: string, handle: string): RegistryAccount
   }
 }
 
+/**
+ * THE ACCOUNT ALREADY ON DISK, or null — and it never creates one.
+ *
+ * `registryAccount` mints a key when there is none, which is right for
+ * serving (a door has to be able to prove itself the first time) and wrong
+ * for every question phase 6 asks: "does this Mac hold a handle from before
+ * passwords" must not be the act that gives it one.
+ */
+export function existingRegistryAccount(origin: string, base?: string): RegistryAccount | null {
+  const stored = load(accountFile(origin, base))
+  return stored === null ? null : registryAccount(origin, stored.handle, base)
+}
+
 function load(file: string): Stored | null {
   if (!existsSync(file)) return null
   try {
@@ -120,7 +138,10 @@ function create(file: string, handle: string): Stored {
     privateKeyJwk: privateKey.export({ format: 'jwk' }) as Record<string, unknown>,
     publicKeyJwk: publicKey.export({ format: 'jwk' }) as Record<string, unknown>
   }
-  mkdirSync(path.dirname(file), { recursive: true })
+  // 0700 like every other directory this app makes under ~/.cookrew: the
+  // file inside is 0600, and a world-readable parent is a listing of which
+  // accounts this Mac holds.
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   writeFileSync(file, JSON.stringify(stored, null, 2), { mode: 0o600 })
   // Set explicitly as well as at creation: an existing file keeps its old mode.
   chmodSync(file, 0o600)

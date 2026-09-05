@@ -5359,3 +5359,524 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
      LOD pane measurements read it — while every heavy inner layer drops. */
   display: none;
 }
+
+/* ---- identity v2: the account surface (D1–D5) ----
+   The avatar lives in the header's brand group and must not change the bar's
+   height, so it is the mark's own 24 px. Everything else here rides the gs-*
+   sheet primitives (grant-surface.css) — this file adds only what identity
+   itself needs, under one prefix. */
+
+.cr-acct-avatar {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  background: var(--amber);
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+  cursor: pointer;
+  overflow: visible;
+}
+
+/* NOBODY YET. Dashed reads as a slot waiting to be filled; it never pulses
+   and never nags, because everything here works without an account. */
+.cr-acct-none {
+  border-style: dashed;
+  background: transparent;
+  color: var(--muted);
+}
+
+.cr-acct-face {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+
+/* The same rose badge the BOARD button wears for attention, offset onto the
+   avatar's shoulder. Two badge styles for "something needs you" would make
+   neither mean anything. */
+.cr-acct-badge {
+  position: absolute;
+  top: -6px;
+  right: -8px;
+}
+
+/* The sheets' larger avatar: the profile head and the lock card. */
+.cr-acct-big {
+  width: 44px;
+  height: 44px;
+  font-size: 15px;
+  cursor: default;
+}
+
+.cr-acct-sheet .cr-acct-who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* A field and its verdict on one line — the reason is always beside it. */
+.cr-acct-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cr-acct-tag {
+  flex: 0 0 auto;
+  min-width: 62px;
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.cr-acct-good { color: var(--hp); }
+.cr-acct-bad { color: var(--rose); }
+.cr-acct-dim { color: var(--muted); }
+
+.cr-acct-tabs {
+  display: flex;
+  margin: 16px 0 4px;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  overflow: hidden;
+}
+
+.cr-acct-tab {
+  flex: 1 1 auto;
+  border: none;
+  border-right: 2px solid var(--line);
+  background: none;
+  padding: 6px 8px;
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cr-acct-tab:last-child { border-right: none; }
+.cr-acct-tab[aria-selected='true'] { background: var(--amber); color: var(--ink); }
+
+.cr-acct-pane { margin-top: 14px; }
+
+.cr-acct-card { margin-top: 6px; }
+.cr-acct-cardhead { margin: 0 0 10px; font-size: 15px; }
+
+.cr-acct-secrows,
+.cr-acct-devices,
+.cr-acct-workspaces {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.cr-acct-secrow,
+.cr-acct-device {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--cr-line, #332f27);
+}
+
+.cr-acct-kind {
+  flex: 0 0 auto;
+  min-width: 58px;
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.cr-acct-seclabel { flex: 1 1 auto; font-size: 13px; }
+
+.cr-acct-secstate {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.cr-acct-workspaces li { padding: 6px 0; font-size: 13px; }
+
+.cr-acct-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+/* Shown once. Monospaced so a code read off the screen is unambiguous. */
+.cr-acct-codes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 18px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+/* THE LOCK COVERS EVERYTHING, including the sheets — z-index above .gs-scrim
+   (60), because a lock drawn under a dialog is not a lock. */
+.cr-acct-lock {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.cr-acct-lockcard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(340px, 90vw);
+  padding: 26px 24px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 4px 4px 0 var(--line);
+  text-align: center;
+}
+
+.cr-acct-lockcard h2 {
+  margin: 0;
+  font-family: var(--font-pixel);
+  font-size: 14px;
+  letter-spacing: 0.06em;
+}
+
+/* ---- the path badge (identity v2, M3) ----
+   Top-left of the companion bar, in the hand mark's slot. Same box as the
+   CANVAS ⇄ BOARD switch on purpose: it is the same kind of thing, a small
+   hard-edged control that says which of a few states you are in, and the two
+   sit within a few pixels of each other on a phone. 24 px tall to match the
+   mark it replaces, so nothing else in the bar moves. */
+
+.cr-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 8px;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--cream-hi);
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cr-path-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--muted);
+}
+
+/* The colours are the badge's whole vocabulary: green is direct and local,
+   blue is direct and elsewhere, amber is somebody else's wire, grey is not
+   reachable. Nothing here is decorative. */
+.cr-path-lan .cr-path-dot { background: var(--green, #3f8f4f); }
+.cr-path-tailnet .cr-path-dot { background: var(--blue, #3a6ea5); }
+.cr-path-relay .cr-path-dot { background: var(--amber); }
+.cr-path-offline .cr-path-dot { background: var(--muted); }
+
+/* Probing pulses, which is the one animation on this bar: a still grey dot
+   and a still probing dot would be the same picture, and they mean opposite
+   things about whether to wait. */
+.cr-path-probing .cr-path-dot {
+  background: var(--muted);
+  animation: cr-path-pulse 1.2s ease-in-out infinite;
+}
+
+.cr-path-offline {
+  color: var(--muted);
+}
+
+@keyframes cr-path-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cr-path-probing .cr-path-dot { animation: none; }
+}
+
+.cr-path-latency {
+  margin: 0 0 12px;
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.cr-path-switch {
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+/* ---- admitted phones in the Devices tab ---- */
+.cr-acct-devices .cr-acct-local {
+  border-left: 2px solid var(--amber);
+}
+
+.cr-acct-devices-heading {
+  margin: 14px 0 6px;
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---- pair a phone popout (identity v2, M1) ---- */
+.cr-pair-qr {
+  display: block;
+  width: min(220px, 60vw);
+  height: auto;
+  margin: 4px auto 12px;
+  image-rendering: pixelated;
+  background: var(--cream-hi);
+  border: 8px solid var(--cream-hi);
+  outline: 2px solid var(--line);
+}
+
+.cr-pair-key {
+  font-family: var(--font-pixel);
+  font-size: 22px;
+  letter-spacing: 0.22em;
+  text-align: center;
+  margin: 0 0 4px;
+  color: var(--ink);
+}
+
+.cr-pair-renews,
+.cr-pair-desktop {
+  margin: 0 0 8px;
+  text-align: center;
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+/* ── D7 · callers at a served door ──────────────────────────────────────
+   The only place another person appears on the owner's canvas. Sized off
+   the card's inverse-zoom var so a face reads the same at 30% as at 100%,
+   like every other chip in the head. */
+.cr-callers {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  position: relative;
+}
+
+.cr-caller {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  border-radius: 50%;
+  background: hsl(var(--caller-hue, 40) 46% 44%);
+  color: #fff;
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.cr-caller-more {
+  background: var(--cr-line, #332f27);
+  color: var(--muted);
+  cursor: default;
+}
+
+.cr-caller-menu {
+  position: absolute;
+  top: 22px;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 220px;
+  padding: 10px;
+  border: 1px solid var(--cr-line, #332f27);
+  border-radius: 6px;
+  background: var(--cr-panel, #1b1916);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+
+.cr-caller-why { font-size: 12px; line-height: 1.4; }
+
+/* The grant field in Seats & Teams: a username, and nothing else fits. */
+.cr-acct-grant-name {
+  width: 160px;
+  padding: 4px 6px;
+  border: 1px solid var(--cr-line, #332f27);
+  border-radius: 4px;
+  background: var(--cr-panel, #1b1916);
+  color: var(--cr-ink, #ece6d8);
+  font-size: 12.5px;
+}
+
+.cr-acct-seats {
+  flex: 1 0 100%;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0 0 0 58px;
+}
+
+.cr-acct-seat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 12.5px;
+}
+
+/* A row whose action is phase 4 must not read like the live ones. Muted text
+   and a DASHED badge — the same "not filled in yet" the empty avatar wears —
+   so nobody spends a click finding out the button does nothing. */
+.cr-acct-coming .cr-acct-kind,
+.cr-acct-coming .cr-acct-seclabel {
+  color: var(--dim);
+}
+
+.cr-acct-coming button {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.cr-acct-soon {
+  padding: 1px 6px;
+  border: 1px dashed var(--line-soft);
+  border-radius: 9px;
+  color: var(--dim);
+}
+
+/* The idle delay is a closed list, so it is a select, sized like the row's
+   other controls rather than like a form field. */
+.cr-acct-select {
+  flex: 0 0 auto;
+  border: 2px solid var(--line);
+  background: var(--cream-hi);
+  color: var(--ink);
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+/* ---- identity v2, phase 4: the approval card (D6) and the factor ladder ----
+   The request card sits at the top of the profile sheet and has to read as a
+   claim about the world, not as a control panel: the sentence is the biggest
+   thing in it and the three answers sit under it in the order the design
+   weights them. */
+
+.cr-acct-request {
+  border: 2px solid var(--rose);
+  box-shadow: 3px 3px 0 var(--line);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+
+.cr-acct-asklead {
+  margin: 0 0 4px;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.cr-acct-askdetail {
+  margin: 0;
+  font-size: 12px;
+}
+
+.cr-acct-askfoot {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* The passkey row's fallback, when this build has no platform authenticator. */
+.cr-acct-elsewhere .cr-acct-seclabel {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.cr-acct-mustchange {
+  border: 2px solid var(--amber);
+  box-shadow: 3px 3px 0 var(--line);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+/* BLACK ON WHITE IN BOTH THEMES: this one is read by a camera, not by a
+   person, and a themed QR is a QR that does not scan. */
+.cr-acct-qr {
+  display: block;
+  width: min(200px, 60vw);
+  height: auto;
+  margin: 12px auto 6px;
+  background: #ffffff;
+  border: 2px solid var(--line);
+}
+
+/* The same secret as the QR, for the phone that cannot scan this screen. */
+.cr-acct-secret {
+  margin: 0 0 10px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-align: center;
+  word-break: break-all;
+}
+
+/* Taking a factor off costs the password (registry: removeFactor), so the row
+   opens a field rather than firing a DELETE that comes back refused. It wraps:
+   a label, an input and two answers do not fit a row at sheet width. */
+.cr-acct-removefactor {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cr-acct-removefactor .gs-label {
+  flex: 1 0 100%;
+  margin: 0;
+}
+
+.cr-acct-removefactor .gs-input {
+  flex: 1 1 160px;
+}
