@@ -1,5 +1,6 @@
 import { AuthError, authStore, tokenParam, type AuthScope } from './auth-gate'
 import { ReconnectingStream, attachTerminalStream } from './live-stream'
+import { recordLatency, setPathLink } from './path-link'
 import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
@@ -51,7 +52,14 @@ async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> 
     options.body = JSON.stringify(body)
   }
   if (Object.keys(headers).length > 0) options.headers = headers
-  return parse<T>(await fetch(path, options))
+  // The path badge's latency is the round trip of a request the companion was
+  // making anyway. A synthetic ping would measure a path nobody is using.
+  const started = Date.now()
+  try {
+    return parse<T>(await fetch(path, options))
+  } finally {
+    recordLatency(Date.now() - started)
+  }
 }
 
 /**
@@ -157,7 +165,11 @@ function sharedEvents(): ReconnectingStream {
   // tokenless stream is a 401 the client would retry forever.
   if (!events)
     events = new ReconnectingStream({
-      open: () => new EventSource(tokenParam(apiPath('/api/events')))
+      open: () => new EventSource(tokenParam(apiPath('/api/events'))),
+      // The one place the companion learns its link is down. Without this the
+      // badge would report the address bar forever, which is a memory rather
+      // than a fact the moment the channel dies.
+      onState: setPathLink
     })
   return events
 }

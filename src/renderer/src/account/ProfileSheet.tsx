@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import type { AccountProfile, AccountStatus } from '../../../shared/account-v2'
+import type { AccountProfile, AccountStatus, AdmittedPhone } from '../../../shared/account-v2'
 import type { WorkspaceMeta } from '../../../shared/model'
 import { cookrew } from '../api'
 import { ACCOUNT_COPY, initialsOf, refusalSentence, revokeSentence } from './account-store'
+import { PairPhoneSheet } from './PairPhoneSheet'
 import { SecurityCard } from './SecurityCard'
 import '../grant-surface.css'
 
@@ -62,6 +63,8 @@ export function ProfileSheet({
   const [profile, setProfile] = useState<AccountProfile | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<string | null>(null)
+  const [admitted, setAdmitted] = useState<readonly AdmittedPhone[]>([])
+  const [pairing, setPairing] = useState(false)
   const username = status.username ?? ''
 
   useEffect(() => {
@@ -84,6 +87,28 @@ export function ProfileSheet({
         setError('Something went wrong on this side. Try again.')
       })
   }, [username])
+
+  useEffect(() => {
+    const call = cookrew().accountAdmittedDevices
+    if (!call) return
+    void call()
+      .then(setAdmitted)
+      .catch(() => undefined)
+  }, [pairing])
+
+  /**
+   * FORGET, and why it is not REVOKE. This drops the admission on this Mac —
+   * the phone has to be admitted here again — and leaves the account's device
+   * list alone. Revoking a device at cookrew.dev is a heavier act with its own
+   * button a few rows up, and conflating the two would mean one tap doing
+   * something the label did not say.
+   */
+  const forget = (deviceId: string): void => {
+    const call = cookrew().accountForgetAdmitted
+    if (!call) return
+    setAdmitted((prior) => prior.filter((phone) => phone.deviceId !== deviceId))
+    void call(deviceId).catch((err: unknown) => console.error('forget admitted:', err))
+  }
 
   const revoke = (id: string): void => {
     const call = cookrew().accountRevoke
@@ -186,6 +211,9 @@ export function ProfileSheet({
 
         {tab === 'DEVICES' && (
           <section className="cr-acct-pane" aria-label="Devices">
+            <button className="gs-revoke" onClick={() => setPairing(true)}>
+              PAIR A PHONE
+            </button>
             <ul className="cr-acct-devices">
               {(profile?.devices ?? []).map((device) => (
                 <li key={device.id} className="cr-acct-device">
@@ -217,6 +245,36 @@ export function ProfileSheet({
                 <li className="gs-dim">No devices listed yet.</li>
               )}
             </ul>
+            {/* ADMITTED PHONES ARE A DIFFERENT KIND OF FACT and get their own
+                heading rather than being mixed in. The list above is the
+                ACCOUNT's devices, known to cookrew.dev and revocable there;
+                this list is local — phones THIS Mac opens for. FORGET drops
+                the admission here and nothing else, which is why it is not
+                called REVOKE. */}
+            {admitted.length > 0 && (
+              <>
+                <p className="cr-acct-devices-heading">Admitted on this Mac</p>
+                <ul className="cr-acct-devices">
+                  {admitted.map((phone) => (
+                    <li key={phone.deviceId} className="cr-acct-device cr-acct-local">
+                      <span className="cr-acct-kind">PHONE</span>
+                      <span className="cr-acct-seclabel">{phone.name ?? phone.deviceId}</span>
+                      <span className="cr-acct-secstate">
+                        LAST SEEN {ago(phone.lastSeenAt, now)}
+                      </span>
+                      <button className="gs-revoke" onClick={() => forget(phone.deviceId)}>
+                        FORGET
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <p className="gs-hint">
+                  Forgetting is local: the phone stays on the account and has to be admitted
+                  here again.
+                </p>
+              </>
+            )}
+            {pairing && <PairPhoneSheet onClose={() => setPairing(false)} />}
           </section>
         )}
 

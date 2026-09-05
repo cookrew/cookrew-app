@@ -5566,3 +5566,127 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   font-size: 14px;
   letter-spacing: 0.06em;
 }
+
+/* ---- the path badge (identity v2, M3) ----
+   Top-left of the companion bar, in the hand mark's slot. Same box as the
+   CANVAS ⇄ BOARD switch on purpose: it is the same kind of thing, a small
+   hard-edged control that says which of a few states you are in, and the two
+   sit within a few pixels of each other on a phone. 24 px tall to match the
+   mark it replaces, so nothing else in the bar moves. */
+
+.cr-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 8px;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--cream-hi);
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cr-path-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--muted);
+}
+
+/* The colours are the badge's whole vocabulary: green is direct and local,
+   blue is direct and elsewhere, amber is somebody else's wire, grey is not
+   reachable. Nothing here is decorative. */
+.cr-path-lan .cr-path-dot { background: var(--green, #3f8f4f); }
+.cr-path-tailnet .cr-path-dot { background: var(--blue, #3a6ea5); }
+.cr-path-relay .cr-path-dot { background: var(--amber); }
+.cr-path-offline .cr-path-dot { background: var(--muted); }
+
+/* Probing pulses, which is the one animation on this bar: a still grey dot
+   and a still probing dot would be the same picture, and they mean opposite
+   things about whether to wait. */
+.cr-path-probing .cr-path-dot {
+  background: var(--muted);
+  animation: cr-path-pulse 1.2s ease-in-out infinite;
+}
+
+.cr-path-offline {
+  color: var(--muted);
+}
+
+@keyframes cr-path-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cr-path-probing .cr-path-dot { animation: none; }
+}
+
+.cr-path-latency {
+  margin: 0 0 12px;
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.cr-path-switch {
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+/* ---- admitted phones in the Devices tab ---- */
+.cr-acct-devices .cr-acct-local {
+  border-left: 2px solid var(--amber);
+}
+
+.cr-acct-devices-heading {
+  margin: 14px 0 6px;
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---- pair a phone popout (identity v2, M1) ---- */
+.cr-pair-qr {
+  display: block;
+  width: min(220px, 60vw);
+  height: auto;
+  margin: 4px auto 12px;
+  image-rendering: pixelated;
+  background: var(--cream-hi);
+  border: 8px solid var(--cream-hi);
+  outline: 2px solid var(--line);
+}
+
+.cr-pair-key {
+  font-family: var(--font-pixel);
+  font-size: 22px;
+  letter-spacing: 0.22em;
+  text-align: center;
+  margin: 0 0 4px;
+  color: var(--ink);
+}
+
+.cr-pair-renews,
+.cr-pair-desktop {
+  margin: 0 0 8px;
+  text-align: center;
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}

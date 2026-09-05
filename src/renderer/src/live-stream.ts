@@ -31,6 +31,13 @@ export const STREAM_CLOSED = 2
 
 export interface ReconnectingStreamDeps {
   open: () => EventStreamLike
+  /**
+   * Told whenever the link's state changes, so something outside can SHOW it.
+   * This stream used to keep its health entirely to itself — `alive` was read
+   * nowhere — which is why the phone could sit on a dead channel with nothing
+   * on screen saying so.
+   */
+  onState?: (state: 'live' | 'reconnecting' | 'failed') => void
   /** Timer injection, so the backoff is testable without waiting it out. */
   schedule?: (run: () => void, ms: number) => unknown
   cancel?: (handle: unknown) => void
@@ -66,10 +73,16 @@ export class ReconnectingStream {
     // A browser that is retrying by itself (CONNECTING) is left alone —
     // racing it would open a second stream for the same client.
     this.onError = () => {
-      if (this.source && this.source.readyState === STREAM_CLOSED) this.reconnect()
+      if (this.source && this.source.readyState === STREAM_CLOSED) {
+        // Down and coming back is PROBING; down and out of patience is
+        // OFFLINE. The line between them is the backoff running to its end.
+        this.deps.onState?.(this.retry >= this.backoff.length ? 'failed' : 'reconnecting')
+        this.reconnect()
+      }
     }
     this.onOpen = () => {
       this.retry = 0
+      this.deps.onState?.('live')
     }
   }
 

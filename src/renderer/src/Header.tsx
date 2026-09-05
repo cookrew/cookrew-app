@@ -1,5 +1,6 @@
 import { isDemoMode, isRemoteMode } from './api'
 import { CrLogoMark } from './CrLogoMark'
+import { CompanionAvatar, PathBadge } from './PathBadge'
 import { CrIcon } from './icons'
 import { StatusCoin } from './nodes/AgentAvatar'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
@@ -78,15 +79,24 @@ export function Header({
   return (
     <header className="cr-header">
       <div className="cr-header-brand">
-        <button
-          type="button"
-          style={RESYNC_BUTTON}
-          title="Refresh — pull the canvas from the desktop again"
-          aria-label="Refresh the canvas"
-          onClick={onResync}
-        >
-          <CrLogoMark />
-        </button>
+        {/* ON THE PHONE THE BADGE IS THE MARK (M3). It replaces the hand rather
+            than joining it: the group holds one 24 px thing at phone width,
+            and the two do the same job — the mark was the always-visible "ask
+            again" and the badge is the always-visible "this is how I am
+            asking, and it still works". Tapping it still refreshes. */}
+        {isRemoteMode() ? (
+          <PathBadge onRefresh={onResync} />
+        ) : (
+          <button
+            type="button"
+            style={RESYNC_BUTTON}
+            title="Refresh — pull the canvas from the desktop again"
+            aria-label="Refresh the canvas"
+            onClick={onResync}
+          >
+            <CrLogoMark />
+          </button>
+        )}
         <span className="cr-logo">COOKREW</span>
         {/* IDENTITY LIVES IN THE BRAND GROUP (D1), right after the wordmark and
             at the mark's own 24 px, so the group stays one line. */}
@@ -96,11 +106,10 @@ export function Header({
             <CrIcon name="demo" />
           </span>
         )}
-        {isRemoteMode() && (
-          <span className="cr-mode-icon" title="Mobile companion">
-            <CrIcon name="mobile" />
-          </span>
-        )}
+        {/* The violet handset's slot becomes the avatar (M3). It was only ever
+            a mode marker with no action; the badge beside it now says the mode
+            more usefully, and the account is worth the pixels. */}
+        {isRemoteMode() && <CompanionAvatar />}
       </div>
 
       <div className="cr-viewseg" role="group" aria-label="View">
