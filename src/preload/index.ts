@@ -53,11 +53,46 @@ const api = {
   accountDevices: () => ipcRenderer.invoke('account:devices'),
   accountRevoke: (deviceId: string) => ipcRenderer.invoke('account:revoke', deviceId),
   accountRecoveryCodes: () => ipcRenderer.invoke('account:recoveryCodes'),
+  /** SAVE AS FILE. Takes nothing: main writes the batch IT minted, never the
+   *  renderer's copy, so this cannot be talked into writing chosen bytes. */
+  accountSaveRecoveryCodes: () => ipcRenderer.invoke('account:saveRecoveryCodes'),
+  /** I SAVED THEM — recorded locally so the RESCUE row stops saying NOT SAVED. */
+  accountCodesSaved: () => ipcRenderer.invoke('account:codesSaved'),
   accountSetLock: (ms: number) => ipcRenderer.invoke('account:setLock', ms),
   accountSetProfile: (patch: { displayName?: string; avatar?: string | null }) =>
     ipcRenderer.invoke('account:setProfile', patch),
   accountWorkspacesReachable: (on: boolean) =>
     ipcRenderer.invoke('account:workspacesReachable', on),
+
+  // ── phase 4: the approval prompt (D6) and the factor ladder (D3) ──
+  //
+  // Same guard, same reasoning: these can approve a device onto the account,
+  // sign every other device out, and add a way in. Owner window's top frame
+  // or nothing.
+  accountApprovals: () => ipcRenderer.invoke('account:approvals'),
+  accountDecide: (input: { id: string; decision: 'approve' | 'deny' | 'not-me' }) =>
+    ipcRenderer.invoke('account:decide', input),
+  accountSetPassword: (input: { current: string; next: string }) =>
+    ipcRenderer.invoke('account:setPassword', input),
+  accountFactors: () => ipcRenderer.invoke('account:factors'),
+  /** The secret and its QR, for the moment the sheet draws them. */
+  accountTotpEnrol: () => ipcRenderer.invoke('account:totpEnrol'),
+  accountTotpConfirm: (code: string) => ipcRenderer.invoke('account:totpConfirm', code),
+  accountTotpRemove: () => ipcRenderer.invoke('account:totpRemove'),
+  accountPasskeys: () => ipcRenderer.invoke('account:passkeys'),
+  accountPasskeyOptions: () => ipcRenderer.invoke('account:passkeyOptions'),
+  accountPasskeyAdd: (input: { name: string; credential: Record<string, unknown> }) =>
+    ipcRenderer.invoke('account:passkeyAdd', input),
+  accountPasskeyRemove: (id: string) => ipcRenderer.invoke('account:passkeyRemove', id),
+  /**
+   * The queue changed, or a notification was clicked (then with the request's
+   * id, so the sheet opens on the one the owner was told about).
+   */
+  onAccountRequests: (cb: (requestId: string | null) => void) => {
+    const listener = (_e: unknown, requestId: string | null): void => cb(requestId)
+    ipcRenderer.on('account:requests', listener)
+    return () => ipcRenderer.removeListener('account:requests', listener)
+  },
   // ── seats & teams (identity v2, phase 5) ──
   accountSeats: () => ipcRenderer.invoke('account:seats'),
   accountTeamSeats: (slug: string) => ipcRenderer.invoke('account:teamSeats', slug),

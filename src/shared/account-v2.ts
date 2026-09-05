@@ -40,6 +40,8 @@ export interface AccountProfile {
   claimedAt: number
   devices: readonly AccountDevice[]
   desktops: readonly AccountDesktop[]
+  /** Codes minted and not yet spent, when the registry reports it. */
+  recoveryCodesLeft?: number
 }
 
 /**
@@ -67,10 +69,27 @@ export interface AccountStatus {
   sessionExpired: boolean
   /** Workspaces of THIS Mac may be offered to the account's other devices. */
   workspacesReachable: boolean
+  /**
+   * When the owner said they had saved their recovery codes, or null.
+   *
+   * LOCAL, and it has to be: cookrew.dev cannot know whether a person wrote
+   * eight codes down, and a card that keeps saying NOT SAVED after they did is
+   * a card that is wrong about the one thing it was asked to track.
+   */
+  recoveryCodesSavedAt: number | null
+  /** From /v2/me when the registry reports it — codes not yet spent. */
+  recoveryCodesLeft: number | null
 }
 
-/** HEAD /v2/accounts/:username, never optimistically. */
-export type UsernameCheck = 'free' | 'taken' | 'invalid' | 'unknown'
+/**
+ * HEAD /v2/accounts/:username, never optimistically.
+ *
+ * 'reserved' is decided HERE, before the socket. The registry refuses a
+ * reserved prefix as `bad_username`, and relaying that as the lowercase-and-
+ * dashes sentence tells a person their well-formed name is malformed — they
+ * retype it in lowercase, are refused again, and have no way to learn why.
+ */
+export type UsernameCheck = 'free' | 'taken' | 'invalid' | 'reserved' | 'unknown'
 
 /** The password meter's three words. */
 export type PasswordStrength = 'weak' | 'ok' | 'strong'
@@ -84,11 +103,43 @@ export type PasswordStrength = 'weak' | 'ok' | 'strong'
  */
 export const DEFAULT_LOCK_AFTER_MS = 900_000
 
+/**
+ * What the idle-lock delay may be set to.
+ *
+ * A CLOSED LIST, not a number field: the setting is a security posture, and
+ * "how many minutes" typed free-hand invites both a 0 that silently means off
+ * and a 600 nobody meant. Off is one of the choices, spelled, so turning it off
+ * is a thing you PICK rather than a value you clear.
+ */
+export const LOCK_CHOICES = [
+  { ms: 60_000, label: '1 min' },
+  { ms: 300_000, label: '5 min' },
+  { ms: DEFAULT_LOCK_AFTER_MS, label: '15 min' },
+  { ms: 1_800_000, label: '30 min' },
+  { ms: 0, label: 'off' },
+] as const
+
 /** The floor. Twelve, stated once, read by the field and by the claim. */
 export const MIN_PASSWORD = 12
 
 /** Lowercase letters, digits and dashes, 1–32. */
 const USERNAME = /^[a-z0-9-]{1,32}$/
+
+/**
+ * Prefixes the registry keeps for itself.
+ *
+ * `acct-` names doors, so an account under it would collide with an address.
+ * Listed here rather than only server-side so the claim sheet can say the real
+ * reason while the person is still typing.
+ */
+export const RESERVED_PREFIXES = ['acct-'] as const
+
+/** What is wrong with this name, if anything — the shape, or who owns it. */
+export function usernameProblem(raw: string): 'ok' | 'shape' | 'reserved' {
+  const username = normaliseUsername(raw)
+  if (!USERNAME.test(username)) return 'shape'
+  return RESERVED_PREFIXES.some((prefix) => username.startsWith(prefix)) ? 'reserved' : 'ok'
+}
 
 /**
  * A username as typed becomes a username as claimed.
@@ -106,8 +157,7 @@ export function normaliseUsername(raw: string): string {
 const RESERVED = /^acct-/
 
 export function isValidUsername(raw: string): boolean {
-  const name = normaliseUsername(raw)
-  return USERNAME.test(name) && !RESERVED.test(name)
+  return usernameProblem(raw) === 'ok'
 }
 
 /** How many of lower / upper / digit / other the password draws on. */

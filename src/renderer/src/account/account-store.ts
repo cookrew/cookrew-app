@@ -1,13 +1,22 @@
 import {
+  LOCK_CHOICES,
   MIN_PASSWORD,
   isValidUsername,
   normaliseUsername,
   passwordStrength,
+  usernameProblem,
   type AccountRefusal,
   type AccountStatus,
   type PasswordStrength,
   type UsernameCheck,
 } from '../../../shared/account-v2'
+import {
+  APPROVAL_COPY,
+  approvalDetail,
+  approvalLead,
+  type ApprovalRequest,
+  type FactorsView,
+} from '../../../shared/account-approvals'
 
 /**
  * THE ACCOUNT SURFACE'S VIEW-MODEL — every decision the screens make, and none
@@ -45,6 +54,14 @@ export const ACCOUNT_COPY = {
   USERNAME_FREE: 'Yours to take. Lowercase letters, digits and dashes, 1–32.',
   /** D2, a name that is not a name. */
   USERNAME_INVALID: 'A username is lowercase letters, digits and dashes.',
+  /**
+   * D2, a name whose SHAPE is fine and whose prefix is not ours to give.
+   *
+   * The lowercase-and-dashes sentence was being shown for this, about a name
+   * that was already lowercase — so the person retyped it, was refused again,
+   * and had no way to learn the real rule.
+   */
+  USERNAME_RESERVED: 'acct- is reserved for the doors — pick another name.',
   /** D2, weak. */
   PASSWORD_WEAK: 'Too easy to guess. Use 12 characters or more; a sentence works.',
   /** D2, the second field. */
@@ -61,6 +78,8 @@ export const ACCOUNT_COPY = {
     'Names and ids only leave this Mac. "Reachable" is what cookrew.dev will offer your phone.',
   /** D4, the Seats tab, this phase. */
   NO_SEATS: 'No seats yet.',
+  /** The LOCK NOW row, under the delay. */
+  LOCK_NOW_WHY: 'Locking hides your canvas behind your password. Your agents keep working.',
   /** D5. */
   LOCKED_WHY: 'Locked while you were away. Your agents kept working.',
   /** The registry is not answering. */
@@ -207,8 +226,14 @@ function usernameField(raw: string, check: ClaimFields['check']): FieldView {
   if (username.length === 0) {
     return { tone: 'dim', tag: '', note: ACCOUNT_COPY.USERNAME_FREE }
   }
-  if (!isValidUsername(username)) {
+  const problem = usernameProblem(username)
+  if (problem === 'shape') {
     return { tone: 'bad', tag: 'invalid', note: ACCOUNT_COPY.USERNAME_INVALID }
+  }
+  if (problem === 'reserved') {
+    // Judged locally and named, rather than waiting for the registry to answer
+    // `bad_username` and rendering it as a sentence about lowercase.
+    return { tone: 'bad', tag: 'reserved', note: ACCOUNT_COPY.USERNAME_RESERVED }
   }
   switch (check) {
     case 'free':
@@ -219,6 +244,8 @@ function usernameField(raw: string, check: ClaimFields['check']): FieldView {
       // NEVER OPTIMISTIC. The primary stays down, and the reason is the
       // registry's, not the person's.
       return { tone: 'bad', tag: 'unknown', note: ACCOUNT_COPY.REGISTRY_DOWN }
+    case 'reserved':
+      return { tone: 'bad', tag: 'reserved', note: ACCOUNT_COPY.USERNAME_RESERVED }
     case 'invalid':
       return { tone: 'bad', tag: 'invalid', note: ACCOUNT_COPY.USERNAME_INVALID }
     case 'checking':
@@ -285,4 +312,167 @@ export function lockNote(
   if (outcome.reason === 'wrong') return wrongPasswordSentence(outcome.triesLeft)
   if (outcome.reason === 'paused') return pausedSentence(outcome.pausedForMs)
   return 'There is no account on this Mac to unlock.'
+}
+
+/**
+ * THE APPROVAL CARD (D6), decided.
+ *
+ * The two lines come from the SHARED sentence builders, which is the whole
+ * point of them living in shared/: main says the same words in the system
+ * notification, and a person who acts on the toast and a person who acts on
+ * the card must be acting on the same claim about who is asking.
+ */
+export interface ApprovalView {
+  lead: string
+  detail: string
+  /** What NOT ME does, said before it is done. */
+  confirm: string
+}
+
+export function approvalView(
+  request: ApprovalRequest,
+  input: { username: string; hasSecondFactor: boolean; now: number },
+): ApprovalView {
+  return {
+    lead: approvalLead(request, input.username),
+    detail: approvalDetail(request, input),
+    confirm: APPROVAL_COPY.NOT_ME_CONFIRM,
+  }
+}
+
+/** One row of the security card's factor ladder (D3). */
+export interface FactorRow {
+  /** A stable key, and what the row acts on when it is a REMOVE. */
+  id: string
+  label: string
+  /** The small word on the right: RECOMMENDED, ACTIVE, or nothing. */
+  state: string
+  action: 'add' | 'remove'
+  /** Which factor this row belongs to, so the card knows what to call. */
+  factor: 'passkey' | 'totp'
+}
+
+/**
+ * The two factor rows, in the order the ruling fixed: PASSKEY FIRST.
+ *
+ * A passkey is recommended only while there is none — an account that already
+ * has one does not need to be nagged towards a second, and RECOMMENDED next
+ * to a row that is already done is how a card stops being read at all. Each
+ * enrolled passkey gets its OWN row so it can be removed by name; the
+ * authenticator is one row because an account has one secret.
+ */
+export function factorRows(factors: FactorsView | null): readonly FactorRow[] {
+  const passkeys = factors?.passkeys ?? []
+  const passkeyRows: readonly FactorRow[] =
+    passkeys.length > 0
+      ? passkeys.map((passkey) => ({
+          id: passkey.id,
+          label: passkey.name,
+          state: 'FACTOR',
+          action: 'remove' as const,
+          factor: 'passkey' as const,
+        }))
+      : [
+          {
+            id: 'passkey',
+            label: 'Add a passkey (Touch ID)',
+            state: 'RECOMMENDED',
+            action: 'add' as const,
+            factor: 'passkey' as const,
+          },
+        ]
+  const totp: FactorRow = factors?.totp
+    ? {
+        id: 'totp',
+        label: 'Authenticator app',
+        state: 'ACTIVE',
+        action: 'remove',
+        factor: 'totp',
+      }
+    : {
+        id: 'totp',
+        label: 'Add an authenticator app',
+        state: '',
+        action: 'add',
+        factor: 'totp',
+      }
+  return [...passkeyRows, totp]
+}
+
+/**
+ * The banner after "not me" — or null, which is the normal state.
+ *
+ * It is a SENTENCE ABOUT WHAT HAPPENED, not an instruction: the person is
+ * being told that every other device was signed out, which is the fact that
+ * explains why they are being asked for a new password at all.
+ */
+export function mustChangeBanner(factors: FactorsView | null): string | null {
+  return factors?.mustChangePassword === true ? APPROVAL_COPY.MUST_CHANGE : null
+}
+
+/**
+ * What the passkey row says when THIS Electron cannot make one.
+ *
+ * Not an apology and not a dead end: a passkey added in a browser is a
+ * passkey on the account, so the row hands over the one place it does work.
+ * The alternative — a button that throws a WebAuthn error into a console the
+ * owner will never open — is the same row lying about what it does.
+ */
+export function passkeyElsewhere(registry: string): { note: string; url: string } {
+  return { note: APPROVAL_COPY.PASSKEY_ELSEWHERE, url: `${registry}/me#security` }
+}
+
+/**
+ * The idle delay, said the way the card says it.
+ *
+ * A delay nobody set is not 'off' — an unrecognised number means the setting
+ * came from somewhere this build does not know about, and calling it off would
+ * be the one wrong answer a security card can give.
+ */
+export function lockLabel(ms: number): string {
+  if (ms <= 0) return 'off'
+  return LOCK_CHOICES.find((choice) => choice.ms === ms)?.label ?? `${Math.round(ms / 60_000)} min`
+}
+
+/** The LOCK row's label, which names the delay it will actually wait. */
+export function lockRowLabel(ms: number): string {
+  return ms > 0 ? `Lock Cookrew after ${lockLabel(ms)} idle` : 'Lock Cookrew when idle'
+}
+
+/**
+ * The RESCUE row's state.
+ *
+ * Saved wins over a count: the owner told us they wrote the codes down, and a
+ * row that keeps saying NOT SAVED afterwards is wrong about the only thing it
+ * tracks. The registry's remaining count is shown beside it when it sent one —
+ * it is the fact the local flag cannot know (a code that has been spent).
+ */
+export function rescueState(
+  savedAt: number | null | undefined,
+  codesLeft: number | null | undefined,
+  format: (at: number) => string = (at) =>
+    new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }),
+): { saved: boolean; label: string } {
+  // Nullish, not `=== null`: a status from an older main has the field absent,
+  // and "undefined" taking the saved branch is how a card ends up announcing
+  // "Saved Invalid Date".
+  const saved = savedAt ?? null
+  const left = codesLeft ?? null
+  if (saved === null && (left === null || left === 0)) {
+    return { saved: false, label: 'NOT SAVED' }
+  }
+  if (saved === null) return { saved: true, label: `${left} LEFT` }
+  const note = `Saved ${format(saved)}`
+  return { saved: true, label: left === null ? note : `${note} · ${left} left` }
+}
+
+/**
+ * A device name as a person calls it.
+ *
+ * macOS hands out "Drej's MacBook Pro.local"; the ".local" is mDNS plumbing
+ * and reads, in a list of devices, as part of the name someone chose. Only the
+ * suffix goes — the rest is theirs.
+ */
+export function deviceName(raw: string): string {
+  return raw.replace(/\.local$/i, '').trim() || raw
 }

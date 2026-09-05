@@ -137,7 +137,7 @@ export function marketPage(input: MarketInput): Page {
       title: 'Marketplace — served AI agent teams you can open from a browser · Cookrew',
       kind: 'app',
       active: 'market',
-      scripts: ['site.js'],
+      scripts: ['device-id.js', 'site.js'],
       cache: 0,
       description: MARKET_DEFINITION.slice(0, 158),
       path: '/market',

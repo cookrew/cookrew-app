@@ -35,6 +35,13 @@ import type {
   UsernameCheck,
 } from "../../shared/account-v2";
 import type {
+  ApprovalDecision,
+  ApprovalRequest,
+  FactorsView,
+  PasskeySummary,
+  TotpEnrolment,
+} from "../../shared/account-approvals";
+import type {
   SeatFace,
   SeatsSurface,
   ServedCallersRow,
@@ -517,6 +524,8 @@ export interface CookrewApi {
   accountDevices?: () => Promise<AccountResult<readonly AccountDevice[]>>;
   accountRevoke?: (deviceId: string) => Promise<AccountResult<void>>;
   accountRecoveryCodes?: () => Promise<AccountResult<readonly string[]>>;
+  accountSaveRecoveryCodes?: () => Promise<{ ok: boolean; reason?: string }>;
+  accountCodesSaved?: () => Promise<AccountStatus>;
   accountSetLock?: (ms: number) => Promise<AccountStatus>;
   accountSetProfile?: (patch: {
     displayName?: string;
@@ -538,6 +547,32 @@ export interface CookrewApi {
   servingCallers?: () => Promise<readonly ServedCallersRow[]>;
   onServingCallers?: (cb: (rows: readonly ServedCallersRow[]) => void) => () => void;
   onAccountLocked?: (cb: (locked: boolean) => void) => () => void;
+  // ── phase 4: the approval prompt (D6) and the factor ladder (D3) ──
+  //
+  // The list is what main's poll last saw, so the sheet and the avatar's
+  // badge are drawing the same queue. A decision answers with the STATUS, so
+  // the badge is right the instant the button is released.
+  accountApprovals?: () => Promise<readonly ApprovalRequest[]>;
+  accountDecide?: (input: {
+    id: string;
+    decision: ApprovalDecision;
+  }) => Promise<AccountResult<AccountStatus>>;
+  accountSetPassword?: (input: {
+    current: string;
+    next: string;
+  }) => Promise<AccountResult<void>>;
+  accountFactors?: () => Promise<AccountResult<FactorsView>>;
+  accountTotpEnrol?: () => Promise<AccountResult<TotpEnrolment>>;
+  accountTotpConfirm?: (code: string) => Promise<AccountResult<void>>;
+  accountTotpRemove?: () => Promise<AccountResult<void>>;
+  accountPasskeys?: () => Promise<AccountResult<readonly PasskeySummary[]>>;
+  accountPasskeyOptions?: () => Promise<AccountResult<Record<string, unknown>>>;
+  accountPasskeyAdd?: (input: {
+    name: string;
+    credential: Record<string, unknown>;
+  }) => Promise<AccountResult<PasskeySummary>>;
+  accountPasskeyRemove?: (id: string) => Promise<AccountResult<void>>;
+  onAccountRequests?: (cb: (requestId: string | null) => void) => () => void;
   /**
    * Re-establish the push channel if it has died. Remote clients only: a
    * desktop renderer talks to main over IPC, which cannot go down while the

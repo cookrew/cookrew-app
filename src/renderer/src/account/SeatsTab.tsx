@@ -141,7 +141,15 @@ export function SeatsTab({ username }: { username: string }): React.JSX.Element 
 
   const serving = surface?.serving ?? []
   const held = surface?.held ?? []
-  const empty = surface !== null && serving.length === 0 && held.length === 0
+  /**
+   * "No seats yet." holds the tab from the FIRST PAINT, not only after the
+   * answer lands. Phase 1 put that sentence here as a promise about where a
+   * seat would appear, and a tab that renders blank while it waits breaks the
+   * promise in the one second a person is actually looking at it. It is also
+   * true: with nothing loaded, no seats is what this account has been told it
+   * has. Rows replace it the moment there are any.
+   */
+  const empty = serving.length === 0 && held.length === 0
 
   return (
     <section className="cr-acct-pane" aria-label="Seats and teams">

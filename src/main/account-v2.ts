@@ -11,8 +11,9 @@ import path from 'node:path'
 import {
   DEFAULT_LOCK_AFTER_MS,
   MIN_PASSWORD,
-  isValidUsername,
+  RESERVED_PREFIXES,
   normaliseUsername,
+  usernameProblem,
   type AccountDevice,
   type AccountProfile,
   type AccountRefusal,
@@ -42,6 +43,15 @@ export { DEFAULT_LOCK_AFTER_MS }
  * `no_account` rather than throwing, so a caller that never claims never sees
  * an error path.
  */
+
+/**
+ * The reserved-prefix refusal, in the owner's voice.
+ *
+ * Exported so the renderer's copy table can carry the same words rather than a
+ * second wording of the same rule.
+ */
+export const RESERVED_SENTENCE = (username: string): string =>
+  `${RESERVED_PREFIXES.find((prefix) => username.startsWith(prefix)) ?? 'That prefix'} is reserved for the doors — pick another name.`
 
 /** Where the account lives. `base` exists so tests never touch a real home. */
 export function accountFilePath(base?: string): string {
@@ -81,6 +91,14 @@ export interface AccountFile {
   claimedAt: number
   /** May cookrew.dev offer this Mac's workspaces to the account's phones? */
   workspacesReachable: boolean
+  /**
+   * When the owner said they had saved their recovery codes, or null.
+   *
+   * LOCAL by necessity: cookrew.dev cannot know whether eight codes were
+   * written down. Kept in this file rather than in a setting so it travels
+   * with the account it is about — a reset account has not saved anything.
+   */
+  recoveryCodesSavedAt: number | null
 }
 
 /** scrypt cost. Node's default N=16384; stated so a re-derive cannot drift. */
@@ -181,7 +199,11 @@ export function loadAccount(base?: string): AccountFile | null {
   try {
     const parsed: unknown = JSON.parse(readFileSync(accountFilePath(base), 'utf8'))
     if (!looksLikeAccount(parsed)) return null
-    return { ...parsed, workspacesReachable: parsed.workspacesReachable !== false }
+    return {
+      ...parsed,
+      workspacesReachable: parsed.workspacesReachable !== false,
+      recoveryCodesSavedAt: parsed.recoveryCodesSavedAt ?? null,
+    }
   } catch {
     return null
   }
@@ -271,6 +293,8 @@ export class Accounts {
   private readonly origin: string
   private readonly deviceName: string
   private cached: AccountFile | null
+  /** The last minted batch, in memory only — never written, never logged. */
+  private freshCodes: readonly string[] | null = null
 
   constructor(deps: AccountsDeps = {}) {
     this.base = deps.base
@@ -302,7 +326,12 @@ export class Accounts {
    */
   async checkUsername(raw: string): Promise<UsernameCheck> {
     const username = normaliseUsername(raw)
-    if (!isValidUsername(username)) return 'invalid'
+    const problem = usernameProblem(username)
+    if (problem === 'shape') return 'invalid'
+    // Refused HERE, and named. The registry answers `bad_username` for a
+    // reserved prefix, which the sheet would otherwise render as the
+    // lowercase-and-dashes sentence about a name that is already lowercase.
+    if (problem === 'reserved') return 'reserved'
     try {
       const response = await this.http(
         `${this.origin}/v2/accounts/${encodeURIComponent(username)}`,
@@ -330,7 +359,13 @@ export class Accounts {
     name?: string
   }): Promise<AccountResult<AccountFile>> {
     const username = normaliseUsername(input.username)
-    if (!isValidUsername(username)) return { ok: false, reason: 'bad_username' }
+    const problem = usernameProblem(username)
+    if (problem === 'reserved') {
+      // The message is carried so the surface says the REAL reason; the reason
+      // stays `bad_username` because that is what the registry would answer.
+      return { ok: false, reason: 'bad_username', message: RESERVED_SENTENCE(username) }
+    }
+    if (problem === 'shape') return { ok: false, reason: 'bad_username' }
     if (input.password.length < MIN_PASSWORD) return { ok: false, reason: 'weak_password' }
 
     const { privateKeyJwk, publicKeyJwk } = mintDeviceKey()
@@ -376,6 +411,7 @@ export class Accounts {
         lockAfterMs: DEFAULT_LOCK_AFTER_MS,
         claimedAt: this.now(),
         workspacesReachable: true,
+        recoveryCodesSavedAt: null,
       }),
     }
   }
@@ -505,7 +541,15 @@ export class Accounts {
     })
   }
 
-  /** Eight codes, shown once (D3). Never logged, here or anywhere. */
+  /**
+   * Eight codes, shown once (D3). Never logged, here or anywhere.
+   *
+   * The batch is held IN MEMORY so SAVE AS FILE can write it without the
+   * renderer handing the codes back over the bridge — a channel that took
+   * arbitrary text and a path is a channel that writes chosen bytes wherever
+   * the owner clicks. It reaches disk only through that save, and it dies with
+   * the process.
+   */
   async recoveryCodes(): Promise<AccountResult<readonly string[]>> {
     const result = await this.authed<{ codes?: readonly string[] }>('/v2/me/recovery-codes', {
       method: 'POST',
@@ -513,7 +557,29 @@ export class Accounts {
     if (!result.ok) return result
     const codes = result.value.codes
     if (!Array.isArray(codes)) return { ok: false, reason: 'unknown' }
+    this.freshCodes = codes
     return { ok: true, value: codes }
+  }
+
+  /** The batch just minted, for the save dialog. Null once it is put away. */
+  pendingRecoveryCodes(): readonly string[] | null {
+    return this.freshCodes
+  }
+
+  /**
+   * The owner says the codes are safe.
+   *
+   * Recorded locally and the in-memory batch dropped, so the RESCUE row stops
+   * saying NOT SAVED about something that was saved — the one fact this card
+   * exists to track, and the one it was getting wrong.
+   */
+  markRecoveryCodesSaved(at?: number): number | null {
+    const account = this.cached
+    this.freshCodes = null
+    if (!account) return null
+    const saved = at ?? this.now()
+    this.save({ ...account, recoveryCodesSavedAt: saved })
+    return saved
   }
 
   /**
@@ -564,6 +630,23 @@ export class Accounts {
     if (!account) return false
     this.save({ ...account, workspacesReachable: on })
     return on
+  }
+
+  /**
+   * ONE AUTHENTICATED CALL, for the modules that came after this one.
+   *
+   * Approvals (D6) and the factor ladder (D3) are their own modules — they
+   * are their own problem, and this file is long enough — but they need the
+   * session, which lives here and only here. So they are given the CALL, not
+   * the token: nothing outside this class ever holds the bearer, and the
+   * expiry check, the refusal mapping and the offline answer stay in one
+   * place rather than being re-implemented per feature.
+   */
+  call<T>(
+    pathname: string,
+    init: RequestInit & { parse?: boolean } = {},
+  ): Promise<AccountResult<T>> {
+    return this.authed<T>(pathname, init)
   }
 
   /** The idle-lock setting, 0 meaning off. Persisted beside the account. */

@@ -1,4 +1,5 @@
 import { day, esc, page, type Page } from './site-shell'
+import { desktopsSection, reachOrigins } from './site-reach'
 import type { V2Account, V2Device } from './v2-accounts'
 
 /**
@@ -31,12 +32,6 @@ function deviceRow(device: V2Device, current: boolean): string {
 ${action}</li>`
 }
 
-function desktopRow(name: string, workspaces: readonly { id: string; name: string }[]): string {
-  const list = workspaces.length === 0 ? 'No workspaces registered yet' : workspaces.map((w) => esc(w.name)).join(' · ')
-  return `<li><span class="chip">Mac</span><span><b>${esc(name)}</b><br><span class="meta">${list}</span></span>
-<span class="chip">Reachable</span></li>`
-}
-
 /**
  * /me — WHO YOU ARE, WHAT IS ATTACHED, AND HOW TO TAKE IT BACK.
  *
@@ -47,7 +42,14 @@ function desktopRow(name: string, workspaces: readonly { id: string; name: strin
 export function mePage(input: { account: V2Account; currentDeviceId: string } | null): Page {
   if (input === null) {
     return page(
-      { title: 'Your account — Cookrew', kind: 'app', cache: 0, status: 401, noindex: true, scripts: ['site.js'] },
+      {
+        title: 'Your account — Cookrew',
+        kind: 'app',
+        cache: 0,
+        status: 401,
+        noindex: true,
+        scripts: ['device-id.js', 'site.js']
+      },
       `<div class="wrap" style="padding-top:44px"><h1>Your account</h1>
 <p class="lede">A seat is yours, not a browser's. Sign in so it follows you.</p>
 <p class="row"><button class="btn primary lg" data-signin>Sign in or register</button><a class="btn lg" href="/market">Marketplace</a></p></div>`
@@ -62,13 +64,16 @@ export function mePage(input: { account: V2Account; currentDeviceId: string } | 
     .sort((a, b) => (a.id === currentDeviceId ? -1 : b.id === currentDeviceId ? 1 : b.lastSeenAt - a.lastSeenAt))
     .map((d) => deviceRow(d, d.id === currentDeviceId))
     .join('')
-  const desktops =
-    account.desktops.length === 0
-      ? `<li><span class="meta">No desktop has registered its workspaces yet. Claim this username in the app and they appear here.</span></li>`
-      : account.desktops.map((d) => desktopRow(d.name, d.workspaces)).join('')
   const codes = account.recovery.length
   return page(
-    { title: `@${account.username} — Cookrew`, kind: 'app', cache: 0, noindex: true, scripts: ['site.js'] },
+    {
+      title: `@${account.username} — Cookrew`,
+      kind: 'app',
+      cache: 0,
+      noindex: true,
+      scripts: ['device-id.js', 'site.js', 'reach.js'],
+      connect: reachOrigins(account.desktops)
+    },
     `<div class="wrap" style="padding-top:44px" id="me" data-username="${esc(account.username)}">
 <div class="me-head">${face}<div><h1 style="margin:0">@${esc(account.username)}</h1>
 <p class="meta" id="me-display">${esc(account.displayName || 'No display name yet')} · member since ${esc(day(account.claimedAt))}</p></div>
@@ -89,9 +94,7 @@ export function mePage(input: { account: V2Account; currentDeviceId: string } | 
 </ul>
 <pre class="cmd" id="me-codes" hidden></pre>
 
-<h2 style="margin-top:30px">Your desktops</h2>
-<p class="meta">Names and ids only — cookrew.dev never holds what is on a canvas.</p>
-<ul class="doors me-list" id="me-desktops">${desktops}</ul>
+${desktopsSection(account.desktops)}
 </div>`
   )
 }

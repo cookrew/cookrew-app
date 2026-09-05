@@ -1,13 +1,22 @@
 import type { AccountStatus, AccountResult, UsernameCheck } from '../shared/account-v2'
 import type { AccountDevice, AccountProfile } from '../shared/account-v2'
+import type {
+  ApprovalDecision,
+  ApprovalRequest,
+  FactorsView,
+  PasskeySummary,
+  TotpEnrolment,
+} from '../shared/account-approvals'
 import type { SeatFace, SeatsSurface } from '../shared/seats'
 import type { Accounts } from './account-v2'
+import type { Approvals } from './approvals'
 import {
   seatsSurface,
   teamForSlug,
   type DoorSeats,
   type ServedTeamRef
 } from './door-seats'
+import type { Factors } from './factors'
 import type { IdleLock, UnlockOutcome } from './lock'
 
 /**
@@ -32,10 +41,24 @@ import type { IdleLock, UnlockOutcome } from './lock'
 export interface AccountIpcDeps {
   accounts: Accounts
   lock: IdleLock
+  /** The waiting sign-in requests (D6) — the producer of `status.requests`. */
+  approvals: Approvals
+  /** The second-factor ladder (D3): passkeys, the authenticator app. */
+  factors: Factors
   /** COOKREW_HANDLE, when serving was pointed at a name by the environment. */
   envUsername: string | null
   /** This Mac's workspaces, by id and name — never their content (P1). */
   workspaces: () => readonly { id: string; name: string }[]
+  /**
+   * Put the pending recovery codes on disk, behind a save dialog.
+   *
+   * Injected because this module must stay free of Electron — it is the one
+   * account surface a rendered page could try to reach, and the guard test's
+   * whole premise is that it never touches ipcMain or a dialog itself. Main
+   * supplies the dialog; the CODES come from the account, never from the
+   * renderer, so nothing here can be talked into writing chosen bytes.
+   */
+  saveCodes: (codes: readonly string[]) => Promise<{ ok: boolean; reason?: string }>
   /**
    * SEATS (phase 5). Optional because a desktop that never claimed a name has
    * no seats to read and no team to grant one at — and because the four seat
@@ -75,9 +98,23 @@ export const ACCOUNT_CHANNELS = [
   'account:devices',
   'account:revoke',
   'account:recoveryCodes',
+  'account:saveRecoveryCodes',
+  'account:codesSaved',
   'account:setLock',
   'account:setProfile',
   'account:workspacesReachable',
+  // ── phase 4: the approval prompt (D6) and the factor ladder (D3) ──
+  'account:approvals',
+  'account:decide',
+  'account:setPassword',
+  'account:factors',
+  'account:totpEnrol',
+  'account:totpConfirm',
+  'account:totpRemove',
+  'account:passkeys',
+  'account:passkeyOptions',
+  'account:passkeyAdd',
+  'account:passkeyRemove',
   // ── seats (phase 5) — owner-only like every other channel here ──
   'account:seats',
   'account:teamSeats',
@@ -89,6 +126,13 @@ export type AccountChannel = (typeof ACCOUNT_CHANNELS)[number]
 
 const asString = (value: unknown): string => (typeof value === 'string' ? value : '')
 
+const asRecord = (value: unknown): Record<string, unknown> =>
+  typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
+
+/** Three words and no fourth: an unknown decision is refused, never guessed. */
+const isDecision = (value: unknown): value is ApprovalDecision =>
+  value === 'approve' || value === 'deny' || value === 'not-me'
+
 /** The status, rebuilt from main's own state on every ask. */
 export function accountStatus(deps: AccountIpcDeps): AccountStatus {
   const account = deps.accounts.account()
@@ -98,11 +142,13 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
     avatar: null,
     locked: deps.lock.locked,
     lockAfterMs: deps.lock.lockAfterMs,
-    // D6 IS PHASE 4. The count is real in the view-model and in the badge; the
-    // producer that could raise it above zero is the approval prompt, which
-    // this phase deliberately does not build.
-    requests: 0,
+    // THE PRODUCER, at last (phase 4): the polled queue of devices asking to
+    // sign in. The seam phase 1 left is now live, and the avatar's rose badge
+    // and the profile sheet's card read this one number.
+    requests: deps.approvals.count,
     envUsername: deps.envUsername,
+    recoveryCodesSavedAt: account?.recoveryCodesSavedAt ?? null,
+    recoveryCodesLeft: null,
     sessionExpired: account !== null && !deps.accounts.sessionLive(),
     workspacesReachable: account?.workspacesReachable ?? false,
   }
@@ -256,6 +302,23 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
       deps.accounts.revokeDevice(asString(id)),
     'account:recoveryCodes': (): Promise<AccountResult<readonly string[]>> =>
       deps.accounts.recoveryCodes(),
+    /**
+     * SAVE AS FILE. The codes are read from main's own memory, never from the
+     * call — the renderer already has them on screen, and a channel that took
+     * text plus a path would write whatever it was handed.
+     */
+    'account:saveRecoveryCodes': async (): Promise<{ ok: boolean; reason?: string }> => {
+      const codes = deps.accounts.pendingRecoveryCodes()
+      if (!codes) return { ok: false, reason: 'nothing_to_save' }
+      const saved = await deps.saveCodes(codes)
+      if (saved.ok) deps.accounts.markRecoveryCodesSaved()
+      return saved
+    },
+    /** I SAVED THEM — recorded, so the RESCUE row stops saying NOT SAVED. */
+    'account:codesSaved': () => {
+      deps.accounts.markRecoveryCodesSaved()
+      return accountStatus(deps)
+    },
     'account:setLock': (ms: unknown) => {
       const value = typeof ms === 'number' ? ms : 0
       deps.accounts.setLockAfterMs(value)
@@ -274,6 +337,52 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
           : {}),
       })
     },
+    // ── phase 4 ──
+    //
+    // The list is the POLL'S list, not a fresh call: the queue is refreshed on
+    // a timer and on window focus, so a sheet that opened a socket of its own
+    // would just be a third clock disagreeing with the other two.
+    'account:approvals': (): readonly ApprovalRequest[] => deps.approvals.list(),
+    // A DECISION ANSWERS WITH THE STATUS, so the badge is right the instant
+    // the button is released — the alternative is a card that vanishes while
+    // the avatar still wears a 1 until the next poll.
+    'account:decide': async (input: unknown): Promise<AccountResult<AccountStatus>> => {
+      const record = asRecord(input)
+      const decision = record.decision
+      if (!isDecision(decision)) return { ok: false, reason: 'unknown' }
+      const result = await deps.approvals.decide(asString(record.id), decision)
+      if (!result.ok) return result
+      return { ok: true, value: accountStatus(deps) }
+    },
+    // The password change the registry demands after "not me" (D6). It is the
+    // same call phase 1 built; this is the channel the form needed.
+    'account:setPassword': (input: unknown): Promise<AccountResult<void>> => {
+      const record = asRecord(input)
+      return deps.accounts.setPassword({
+        current: asString(record.current),
+        next: asString(record.next),
+      })
+    },
+    'account:factors': (): Promise<AccountResult<FactorsView>> => deps.factors.view(),
+    // THE SECRET CROSSES THE BRIDGE ONCE, to be drawn. It is never logged on
+    // either side, and the sheet holds it only while it is on screen.
+    'account:totpEnrol': (): Promise<AccountResult<TotpEnrolment>> => deps.factors.enrolTotp(),
+    'account:totpConfirm': (code: unknown): Promise<AccountResult<void>> =>
+      deps.factors.confirmTotp(asString(code)),
+    'account:totpRemove': (): Promise<AccountResult<void>> => deps.factors.removeTotp(),
+    'account:passkeys': (): Promise<AccountResult<readonly PasskeySummary[]>> =>
+      deps.factors.passkeys(),
+    'account:passkeyOptions': (): Promise<AccountResult<Record<string, unknown>>> =>
+      deps.factors.passkeyOptions(),
+    'account:passkeyAdd': (input: unknown): Promise<AccountResult<PasskeySummary>> => {
+      const record = asRecord(input)
+      return deps.factors.addPasskey({
+        name: asString(record.name),
+        credential: asRecord(record.credential),
+      })
+    },
+    'account:passkeyRemove': (id: unknown): Promise<AccountResult<void>> =>
+      deps.factors.removePasskey(asString(id)),
     'account:seats': () => seats(deps),
     'account:teamSeats': (slug: unknown) => teamSeats(deps, slug),
     'account:grantSeat': (input: unknown) => grantSeat(deps, input),
@@ -292,9 +401,9 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
  * Register every channel through `register`.
  *
  * Main passes a `register` that wraps each handler in `ownerOnly`, so the
- * guard is applied by construction to every one of them rather than
- * remembered once per channel. The seat channels grant and end other people's
- * access to this Mac, so they need the guard at least as much as the rest.
+ * guard is applied by construction to every channel rather than remembered
+ * once per channel. The seat channels grant and end other people's access to
+ * this Mac's doors, so they need it at least as much as the rest.
  */
 export function registerAccountIpc(
   register: (channel: AccountChannel, handler: AccountHandler) => void,

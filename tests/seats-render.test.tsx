@@ -143,11 +143,10 @@ describe('the SEATS & TEAMS tab', () => {
     return renderToStaticMarkup(<SeatsTab username="drej" />)
   }
 
-  it('says where a seat will appear when there is nothing yet', () => {
+  it('says where a seat will appear, from the first paint — phase 1\'s promise', () => {
     const html = paint({ serving: [], held: [] })
-    // The empty state only lands after the effect resolves; the first paint is
-    // honest silence rather than a premature "no seats".
     expect(html).toContain('Seats and teams')
+    expect(html).toContain('No seats yet.')
     expect(html).not.toContain('SERVING')
   })
 
