@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { safeSegment } from './session-sandbox'
@@ -93,8 +93,12 @@ export function createSeatStore(baseDir?: string): SeatStore {
       const body: SeatFile = { version: 1, seats: [...seats] }
       try {
         mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-        writeFileSync(file, JSON.stringify(body, null, 2), { mode: 0o600 })
-        chmodSync(file, 0o600)
+        // Whole or not at all: a seat file torn by a crash mid-write would
+        // read as "no seats" and hand every returning caller a fresh session.
+        const tmp = `${file}.tmp`
+        writeFileSync(tmp, JSON.stringify(body, null, 2), { mode: 0o600 })
+        chmodSync(tmp, 0o600)
+        renameSync(tmp, file)
       } catch (error) {
         console.error(`seats: could not persist ${file}:`, error)
       }

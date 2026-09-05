@@ -67,6 +67,24 @@ export async function bindPairedDevice(
   }
 }
 
+/** A base64url coordinate of a 32-byte key is 43 characters; P-256 has two. */
+const COORD = /^[A-Za-z0-9_-]{43}$/
+
+function phoneKeyLooksRight(jwk: Record<string, unknown>): boolean {
+  if (Object.keys(jwk).length > 8) return false
+  if (jwk.kty === 'OKP') return jwk.crv === 'Ed25519' && typeof jwk.x === 'string' && COORD.test(jwk.x)
+  if (jwk.kty === 'EC') {
+    return (
+      jwk.crv === 'P-256' &&
+      typeof jwk.x === 'string' &&
+      COORD.test(jwk.x) &&
+      typeof jwk.y === 'string' &&
+      COORD.test(jwk.y)
+    )
+  }
+  return false
+}
+
 function readDevice(value: unknown): DeviceInput | null {
   if (typeof value !== 'object' || value === null) return null
   const body = value as Record<string, unknown>
@@ -78,11 +96,14 @@ function readDevice(value: unknown): DeviceInput | null {
   if (typeof body.id !== 'string' || !DEVICE_ID.test(body.id)) return null
   if (typeof body.jwk !== 'object' || body.jwk === null || Array.isArray(body.jwk)) return null
   const jwk = body.jwk as Record<string, unknown>
-  if (typeof jwk.kty !== 'string') return null
   // A PRIVATE HALF IS A REFUSAL, not something to strip. A body carrying `d`
   // means the phone exported a key it was supposed to keep, and quietly
   // accepting the public part would leave that mistake unreported.
   if (jwk.d !== undefined) return null
+  // Only the keys a phone can mint (phone-device.ts): Ed25519, or P-256 where
+  // the browser lacks it. Anything else is not a phone's key, and an RSA-sized
+  // blob is not worth hashing, let alone forwarding to the registry.
+  if (!phoneKeyLooksRight(jwk)) return null
   const name = typeof body.name === 'string' ? body.name.trim().slice(0, 64) : ''
   return {
     id: body.id,

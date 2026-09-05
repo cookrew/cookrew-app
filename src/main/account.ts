@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { uuidFromDigest } from '../shared/device-id'
 import { createPrivateKey } from 'node:crypto'
@@ -79,6 +79,11 @@ export class AccountError extends Error {
 
 /** A cookrew.dev handle. Same shape the registry and registry-token.ts hold. */
 export const HANDLE_SHAPE = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/
+/** `acct-` is the door-side namespace for registry callers (served-callers.ts);
+ *  a handle that starts with it could never sign in by key. Not mintable. */
+export const RESERVED_HANDLE = /^acct-/
+export const handleIsMintable = (handle: string): boolean =>
+  HANDLE_SHAPE.test(handle) && !RESERVED_HANDLE.test(handle)
 
 export type Fetch = typeof globalThis.fetch
 
@@ -134,8 +139,13 @@ export function loadAccount(baseDir?: string): AccountFile | null {
 export function writeAccount(account: AccountFile, baseDir?: string): AccountFile {
   const file = accountFile(baseDir)
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  writeFileSync(file, JSON.stringify(account, null, 2), { mode: 0o600 })
-  chmodSync(file, 0o600)
+  // Whole or not at all: a crash mid-write must not leave a half key on disk
+  // that loads as "no account" and sends the owner back to a sheet whose
+  // handle the registry already says is taken.
+  const tmp = `${file}.tmp`
+  writeFileSync(tmp, JSON.stringify(account, null, 2), { mode: 0o600 })
+  chmodSync(tmp, 0o600)
+  renameSync(tmp, file)
   return account
 }
 
@@ -175,7 +185,7 @@ export async function checkHandle(
   options: AccountOptions & { registry: string }
 ): Promise<HandleAvailability> {
   const clean = normaliseHandle(handle)
-  if (!HANDLE_SHAPE.test(clean)) return 'invalid'
+  if (!handleIsMintable(clean)) return 'invalid'
   const doFetch = options.fetch ?? globalThis.fetch
   try {
     const answer = await doFetch(new URL(`/v1/accounts/${clean}`, options.registry), {
@@ -202,7 +212,7 @@ export async function mintAccount(
   input: { handle: string; registry: string; name?: string } & AccountOptions
 ): Promise<AccountFile> {
   const handle = normaliseHandle(input.handle)
-  if (!HANDLE_SHAPE.test(handle)) {
+  if (!handleIsMintable(handle)) {
     throw new AccountError(
       'handle-shape',
       'a username is 1–32 lowercase letters, digits or dashes, and cannot start or end with a dash'
