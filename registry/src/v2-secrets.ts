@@ -1,4 +1,5 @@
-import { randomBytes, randomInt, scryptSync, createHash, timingSafeEqual } from 'node:crypto'
+import { randomBytes, randomInt, scrypt, createHash, timingSafeEqual } from 'node:crypto'
+import { promisify } from 'node:util'
 
 /**
  * IDENTITY v2 — THE SECRETS, and nothing else.
@@ -15,10 +16,22 @@ import { randomBytes, randomInt, scryptSync, createHash, timingSafeEqual } from 
  * N=2^15 is the strongest thing available without that trade, and it is stated
  * here rather than in a commit message because a later reader deserves to know
  * it was a choice.
+ *
+ * ASYNC, NOT scryptSync. This process holds the downlink of every door being
+ * served, and scryptSync at these parameters stops the event loop for tens of
+ * milliseconds at a time — so a burst of sign-ins was a burst of stalled
+ * doors. The threadpool version keeps the loop turning; `v2-hash-gate.ts`
+ * bounds how much of the pool a stranger may take.
  */
 
 /** N=2^15, r=8, p=1 — and the memory ceiling scrypt needs to be allowed to use it. */
 const SCRYPT = { N: 1 << 15, r: 8, p: 1, maxmem: 96 * 1024 * 1024 } as const
+const stretch = promisify(scrypt) as (
+  password: string,
+  salt: Buffer,
+  keylen: number,
+  options: typeof SCRYPT
+) => Promise<Buffer>
 const KEY_LEN = 32
 const SALT_LEN = 16
 
@@ -36,12 +49,10 @@ export function passwordIsAcceptable(password: unknown): password is string {
   return typeof password === 'string' && password.length >= MIN_PASSWORD && password.length <= MAX_PASSWORD
 }
 
-export function hashPassword(password: string): Hashed {
+export async function hashPassword(password: string): Promise<Hashed> {
   const salt = randomBytes(SALT_LEN)
-  return {
-    salt: salt.toString('base64url'),
-    hash: scryptSync(password, salt, KEY_LEN, SCRYPT).toString('base64url')
-  }
+  const hash = await stretch(password, salt, KEY_LEN, SCRYPT)
+  return { salt: salt.toString('base64url'), hash: hash.toString('base64url') }
 }
 
 /**
@@ -51,10 +62,14 @@ export function hashPassword(password: string): Hashed {
  * `null` means "no such account": it is still stretched, against a salt that
  * belongs to nobody.
  */
-const DECOY: Hashed = hashPassword(randomBytes(24).toString('base64url'))
+let decoy: Promise<Hashed> | null = null
+const decoyHash = (): Promise<Hashed> => {
+  decoy ??= hashPassword(randomBytes(24).toString('base64url'))
+  return decoy
+}
 
-export function verifyPassword(stored: Hashed | null, password: string): boolean {
-  const against = stored ?? DECOY
+export async function verifyPassword(stored: Hashed | null, password: string): Promise<boolean> {
+  const against = stored ?? (await decoyHash())
   let salt: Buffer
   let expected: Buffer
   try {
@@ -66,7 +81,7 @@ export function verifyPassword(stored: Hashed | null, password: string): boolean
   if (expected.byteLength !== KEY_LEN) return false
   let computed: Buffer
   try {
-    computed = scryptSync(password, salt, KEY_LEN, SCRYPT)
+    computed = await stretch(password, salt, KEY_LEN, SCRYPT)
   } catch {
     return false
   }

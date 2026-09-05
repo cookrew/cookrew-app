@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { passwordGate } from './v2-hash-gate'
 import {
   hashPassword,
   hashRecoveryCode,
@@ -40,7 +41,16 @@ const WORKSPACE_NAME_MAX = 64
 const WORKSPACES_MAX = 64
 /** Sessions per account. Fifty devices' worth of open tabs, then the oldest goes. */
 const SESSIONS_MAX = 50
-const REVOKED_MAX = 500
+/**
+ * Revoked ids kept PER ACCOUNT.
+ *
+ * It was one 500-long ring across the whole registry, which meant a busy
+ * account's revocations quietly evicted a quiet account's — so a phone
+ * somebody revoked in March could come back because a stranger cycled five
+ * hundred devices in April. A cap per account cannot be spent by anyone but
+ * its owner.
+ */
+const REVOKED_MAX = 200
 const RECOVERY_CODES = 8
 
 export type DeviceKind = 'desktop' | 'phone' | 'browser'
@@ -89,12 +99,21 @@ export interface V2Account {
   desktops: readonly V2Desktop[]
   sessions: readonly V2Session[]
   recovery: readonly Hashed[]
+  /**
+   * Ids this account has taken back: device ids AND session ids.
+   *
+   * Both, and published together, because a door verifies a token OFFLINE
+   * against /v2/keys — it can see neither our session list nor our device
+   * list. A device id here means "this device is gone"; a session id means
+   * "this one sitting was ended" (a password change ends the others without
+   * detaching the phone they were on, which taking the device away would).
+   */
+  revoked?: readonly { id: string; at: number }[]
 }
 
 interface Persisted {
   version: 2
   accounts: V2Account[]
-  revoked: { id: string; at: number }[]
 }
 
 export type CreateRefusal = 'taken' | 'bad_username' | 'weak_password' | 'bad_device'
@@ -105,7 +124,8 @@ export class V2Accounts {
   private readonly file: string
   private readonly now: () => number
   private accounts: readonly V2Account[] = []
-  private revoked: readonly { id: string; at: number }[] = []
+  /** Names being claimed right now — see `create`, which awaits a hash midway. */
+  private readonly claiming = new Set<string>()
 
   constructor(base: string, now: () => number = Date.now) {
     mkdirSync(base, { recursive: true })
@@ -145,16 +165,11 @@ export class V2Accounts {
       }
     }
     this.accounts = held.accounts as V2Account[]
-    this.revoked = Array.isArray(held.revoked) ? (held.revoked as { id: string; at: number }[]) : []
   }
 
   /** Temp file then rename: a reader never sees half a write, whatever happens. */
   private save(): void {
-    const body: Persisted = {
-      version: 2,
-      accounts: [...this.accounts],
-      revoked: [...this.revoked]
-    }
+    const body: Persisted = { version: 2, accounts: [...this.accounts] }
     const temp = `${this.file}.${process.pid}.tmp`
     try {
       writeFileSync(temp, JSON.stringify(body), { mode: 0o600 })
@@ -198,12 +213,27 @@ export class V2Accounts {
     }
   }
 
-  verifyPassword(username: string, password: string): boolean {
-    return verifyPassword(this.get(username)?.password ?? null, password)
+  verifyPassword(username: string, password: string): Promise<boolean> {
+    return passwordGate.run(() => verifyPassword(this.get(username)?.password ?? null, password))
   }
 
-  revokedDevices(): string[] {
-    return this.revoked.map((r) => r.id)
+  /**
+   * Every id this registry has taken back, flat. Device ids and session ids
+   * are both opaque to a door: it refuses a token naming either.
+   */
+  revokedIds(): string[] {
+    return this.accounts.flatMap((a) => (a.revoked ?? []).map((r) => r.id))
+  }
+
+  /** The ids one account has taken back — for tests and for a person's own page. */
+  revokedFor(username: string): string[] {
+    return (this.get(username)?.revoked ?? []).map((r) => r.id)
+  }
+
+  private withRevoked(account: V2Account, ids: readonly string[]): V2Account {
+    const at = this.now()
+    const held = (account.revoked ?? []).filter((r) => !ids.includes(r.id))
+    return { ...account, revoked: [...held, ...ids.map((id) => ({ id, at }))].slice(-REVOKED_MAX) }
   }
 
   /**
@@ -220,11 +250,11 @@ export class V2Accounts {
 
   // ── claiming and signing in ────────────────────────────────────────────
 
-  create(input: {
+  async create(input: {
     username: unknown
     password: unknown
     device: unknown
-  }): Attached | Refused<CreateRefusal> {
+  }): Promise<Attached | Refused<CreateRefusal>> {
     // STRICT ON THE WAY IN, forgiving on the way back: `@Drej` is refused with
     // the sentence the sheet shows rather than quietly becoming `@drej`, but
     // signing in later with any casing finds the account (see `get`).
@@ -240,16 +270,34 @@ export class V2Accounts {
     // whatever it claims: one key, one place it is attached.
     if (this.ownerOfDevice(device.id) !== null) return { ok: false, reason: 'bad_device' }
 
+    /**
+     * THE NAME IS HELD ACROSS THE HASH. Stretching a password takes long
+     * enough that two requests could both pass the "is it taken" check above
+     * and both write; the name is reserved for the duration and checked once
+     * more after, because a username minted twice is the one thing this store
+     * exists to make impossible.
+     */
+    if (this.claiming.has(username)) return { ok: false, reason: 'taken' }
+    this.claiming.add(username)
+    let hashed: Hashed
+    try {
+      hashed = await passwordGate.run(() => hashPassword(input.password as string))
+    } finally {
+      this.claiming.delete(username)
+    }
+    if (this.has(username)) return { ok: false, reason: 'taken' }
+
     const account: V2Account = {
       username,
-      password: hashPassword(input.password),
+      password: hashed,
       displayName: '',
       avatar: null,
       claimedAt: this.now(),
       devices: [device],
       desktops: [],
       sessions: [],
-      recovery: []
+      recovery: [],
+      revoked: []
     }
     this.accounts = [...this.accounts, account]
     this.save()
@@ -261,10 +309,15 @@ export class V2Accounts {
    * and a password that is wrong — see verifyPassword, which stretches against
    * a decoy rather than returning early.
    */
-  signIn(input: { username: unknown; password: unknown; device: unknown }): Attached | Refused<'bad_credentials' | 'bad_device'> {
+  async signIn(input: {
+    username: unknown
+    password: unknown
+    device: unknown
+  }): Promise<Attached | Refused<'bad_credentials' | 'bad_device'>> {
     const password = typeof input.password === 'string' ? input.password : ''
     const account = this.get(input.username)
-    if (!verifyPassword(account?.password ?? null, password) || !account) {
+    const right = await passwordGate.run(() => verifyPassword(account?.password ?? null, password))
+    if (!right || !account) {
       return { ok: false, reason: 'bad_credentials' }
     }
     return this.attachDevice(account.username, input.device)
@@ -285,7 +338,7 @@ export class V2Accounts {
     const owner = this.ownerOfDevice(device.id)
     if (owner !== null && owner !== account.username) return { ok: false, reason: 'bad_device' }
     // A device that was revoked here cannot walk back in under its old id.
-    if (this.revoked.some((r) => r.id === device.id)) return { ok: false, reason: 'bad_device' }
+    if ((account.revoked ?? []).some((r) => r.id === device.id)) return { ok: false, reason: 'bad_device' }
 
     const known = account.devices.find((d) => d.id === device.id)
     const attached: V2Device = known
@@ -380,16 +433,20 @@ export class V2Accounts {
     if (!account) return { ok: false, reason: 'not_found' }
     if (!account.devices.some((d) => d.id === deviceId)) return { ok: false, reason: 'not_found' }
     if (account.devices.length <= 1) return { ok: false, reason: 'last_device' }
-    this.replace({
-      ...account,
-      devices: account.devices.filter((d) => d.id !== deviceId),
-      desktops: account.desktops.filter((d) => d.deviceId !== deviceId),
-      sessions: account.sessions.filter((s) => s.dev !== deviceId)
-    })
-    this.revoked = [...this.revoked.filter((r) => r.id !== deviceId), { id: deviceId, at: this.now() }].slice(
-      -REVOKED_MAX
+    // The device AND every sitting it opened: a door checking offline sees
+    // both in the published list, so neither outlives the revocation.
+    const ended = account.sessions.filter((s) => s.dev === deviceId).map((s) => s.jti)
+    this.replace(
+      this.withRevoked(
+        {
+          ...account,
+          devices: account.devices.filter((d) => d.id !== deviceId),
+          desktops: account.desktops.filter((d) => d.deviceId !== deviceId),
+          sessions: account.sessions.filter((s) => s.dev !== deviceId)
+        },
+        [deviceId, ...ended]
+      )
     )
-    this.save()
     return { ok: true }
   }
 
@@ -460,29 +517,69 @@ export class V2Accounts {
     return { ok: true }
   }
 
-  changePassword(
+  /**
+   * CHANGING A PASSWORD ENDS EVERY OTHER SITTING.
+   *
+   * Somebody changes their password because they think someone else has it.
+   * Leaving the other sessions open would mean the change did nothing to the
+   * only thing they were worried about. The caller's own session survives —
+   * being signed out of the browser you just used reads as a failure — and
+   * the ended session ids join the published revoked list, so a door refuses
+   * them without asking us.
+   */
+  async changePassword(
     username: string,
     current: unknown,
-    next: unknown
-  ): { ok: true } | Refused<'bad_credentials' | 'weak_password'> {
+    next: unknown,
+    keepJti?: string
+  ): Promise<{ ok: true } | Refused<'bad_credentials' | 'weak_password'>> {
     const account = this.get(username)
-    if (!verifyPassword(account?.password ?? null, typeof current === 'string' ? current : '') || !account) {
-      return { ok: false, reason: 'bad_credentials' }
-    }
+    const right = await passwordGate.run(() =>
+      verifyPassword(account?.password ?? null, typeof current === 'string' ? current : '')
+    )
+    if (!right || !account) return { ok: false, reason: 'bad_credentials' }
     if (!passwordIsAcceptable(next)) return { ok: false, reason: 'weak_password' }
-    this.replace({ ...account, password: hashPassword(next) })
+    const hashed = await passwordGate.run(() => hashPassword(next))
+    // Re-read: stretching took long enough that a device may have signed in
+    // meanwhile, and that sitting must be ended by this change too.
+    const fresh = this.get(username) ?? account
+    this.replace(
+      this.withRevoked(
+        { ...fresh, password: hashed, sessions: this.keptSessions(fresh, keepJti) },
+        this.otherSessions(fresh, keepJti)
+      )
+    )
     return { ok: true }
+  }
+
+  private otherSessions(account: V2Account, keepJti?: string): string[] {
+    return account.sessions.filter((s) => s.jti !== keepJti).map((s) => s.jti)
+  }
+  private keptSessions(account: V2Account, keepJti?: string): V2Session[] {
+    return account.sessions.filter((s) => s.jti === keepJti)
   }
 
   /**
    * Eight codes, shown once, REPLACING any previous set — so an old sheet
    * found in a drawer opens nothing. Only their hashes are kept.
    */
-  mintRecoveryCodes(username: string): string[] {
+  mintRecoveryCodes(username: string, keepJti?: string): string[] {
     const account = this.get(username)
     if (!account) return []
     const codes = Array.from({ length: RECOVERY_CODES }, () => mintRecoveryCode())
-    this.replace({ ...account, recovery: codes.map((code) => hashRecoveryCode(code)) })
+    // Same reasoning as a password change: a new sheet of codes is what a
+    // person does when they think someone else is in, so the other sittings
+    // end with it and their ids are published as revoked.
+    this.replace(
+      this.withRevoked(
+        {
+          ...account,
+          recovery: codes.map((code) => hashRecoveryCode(code)),
+          sessions: this.keptSessions(account, keepJti)
+        },
+        this.otherSessions(account, keepJti)
+      )
+    )
     return codes
   }
 

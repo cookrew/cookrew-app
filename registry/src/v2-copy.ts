@@ -28,6 +28,7 @@ export type V2Error =
   | 'bad_origin'
   | 'malformed'
   | 'method_not_allowed'
+  | 'busy'
 
 const SENTENCES: Record<V2Error, string> = {
   taken: 'That name is someone else’s. Try another.',
@@ -44,7 +45,8 @@ const SENTENCES: Record<V2Error, string> = {
   not_this_device: 'Only that desktop can say what is on it.',
   bad_origin: 'That request came from another site, so it was not carried out.',
   malformed: 'That request was not something this registry could read.',
-  method_not_allowed: 'That address does not answer to this method.'
+  method_not_allowed: 'That address does not answer to this method.',
+  busy: 'cookrew.dev is checking more passwords than it can right now. Try again in a few seconds.'
 }
 
 export function sentenceFor(error: V2Error, subject?: string): string {
