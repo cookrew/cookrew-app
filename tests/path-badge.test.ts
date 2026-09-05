@@ -92,10 +92,15 @@ describe('path badge view model', () => {
     expect(view.pulsing).toBe(true)
   })
 
-  it('offers switch desktop at the registry, with no double slash', () => {
-    expect(pathBadgeView(live).switchDesktopUrl).toBe('https://cookrew.dev/me')
+  it('offers switch desktop only once it has been TOLD where the registry is', () => {
+    // Classifying an origin can guess at the relay's host and be wrong by one
+    // word on a badge. Sending somebody to "switch desktop" has to be a fact —
+    // a guess sends a self-hosting owner to a site that never heard of them.
+    expect(pathBadgeView(live).switchDesktopUrl).toBeNull()
     expect(pathBadgeView({ ...live, registryOrigin: 'https://reg.test/' }).switchDesktopUrl)
       .toBe('https://reg.test/me')
+    expect(pathBadgeView({ ...live, registryOrigin: 'https://cookrew.dev' }).switchDesktopUrl)
+      .toBe('https://cookrew.dev/me')
   })
 
   it('reports no latency as null rather than zero', () => {

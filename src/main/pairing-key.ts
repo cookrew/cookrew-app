@@ -84,9 +84,19 @@ export const createPairingKeyRing = (deps: PairingKeyRingDeps = {}): PairingKeyR
       const at = now()
       const typed = normalizePairingKey(raw)
       if (typed.length !== PAIRING_KEY_LENGTH) return false
-      if (current && typed === current.key && at < current.expiresAt) return true
-      // The replaced key lives exactly as long as its replacement does.
-      return !!previous && typed === previous.key && at < previous.expiresAt + PAIRING_KEY_TTL_MS
+      if (!current || at >= current.expiresAt) {
+        // An expired current is nobody's key, and it does not promote the one
+        // before it either — see the rotation note above.
+        return !!current && typed === current.key && at < current.expiresAt
+      }
+      if (typed === current.key) return true
+      // THE REPLACED KEY LIVES EXACTLY AS LONG AS ITS REPLACEMENT, measured
+      // from the replacement rather than from itself. Those are the same
+      // instant only when rotation happened the moment the old key ran out —
+      // and it does not, because rotation is lazy: a popout reopened three
+      // minutes later mints then, and `previous.expiresAt + TTL` would have
+      // been in the past while the docblock promised the window was open.
+      return !!previous && typed === previous.key && at < current.expiresAt
     },
     reset: () => {
       current = null

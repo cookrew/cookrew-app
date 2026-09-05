@@ -186,6 +186,8 @@ export interface MobileApiDeps {
    * unauthenticated (loopback-only embedders, tests).
    */
   pairingToken?: string;
+  /** Does this bearer belong to a phone this Mac still admits? */
+  companionToken?: (candidate: string) => boolean;
   /**
    * Attach-free dispatch engine (v4 §3). Optional so this module compiles and
    * serves before it is wired; absent = the two dispatch routes answer 503
@@ -302,8 +304,13 @@ export async function handleMobileApi(
   // Two SCOPES over one set of routes (there is no second, degraded API):
   //   pairing   → read + write
   //   read-only → GET only; any other method is refused even with a valid token
+  // The global pairing token, OR this phone's own companion token. Both are
+  // "pairing" scope: an admitted phone is a paired phone, and the per-device
+  // credential exists so forgetting one device ends that device's access
+  // rather than nobody's.
   const hasPairing =
-    !!deps.pairingToken && pairingAuthorized(request, url, deps.pairingToken);
+    !!deps.pairingToken &&
+    pairingAuthorized(request, url, deps.pairingToken, deps.companionToken);
   const hasReadOnly =
     !!deps.wallToken && pairingAuthorized(request, url, deps.wallToken);
   /** Cleared for a read: either scope. */

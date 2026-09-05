@@ -9,6 +9,7 @@ import {
   setDesktopName,
   setPathLink,
   setProbing,
+  setRegistryOrigin,
   subscribePathLink
 } from '../src/renderer/src/path-link'
 
@@ -173,5 +174,55 @@ describe('the stream reports its own health', () => {
     const stream = new ReconnectingStream({ open: () => fake.source })
     stream.on('workspace', () => undefined)
     expect(() => fake.fire('open')).not.toThrow()
+  })
+})
+
+describe('where "Switch desktop" points', () => {
+  it('is NOTHING until the desktop says where its account lives', () => {
+    // It was a hard-coded https://cookrew.dev/me, which is wrong for anyone
+    // self-hosting and wrong in every test environment. The companion cannot
+    // work it out: its own origin is the Mac, or the relay.
+    expect(currentPathBadge().switchDesktopUrl).toBeNull()
+  })
+
+  it('follows the origin /api/account reported', () => {
+    setRegistryOrigin('https://reg.example.test/')
+    expect(currentPathBadge().switchDesktopUrl).toBe('https://reg.example.test/me')
+  })
+
+  it('goes back to nothing when the origin is withdrawn', () => {
+    setRegistryOrigin('https://reg.example.test')
+    setRegistryOrigin(null)
+    expect(currentPathBadge().switchDesktopUrl).toBeNull()
+  })
+
+  it('wakes subscribers, so an open sheet gains the link', () => {
+    let calls = 0
+    subscribePathLink(() => calls++)
+    setRegistryOrigin('https://reg.example.test')
+    expect(calls).toBe(1)
+    setRegistryOrigin('https://reg.example.test/')
+    expect(calls).toBe(1)
+  })
+
+  it('still recognises the relay by that origin', () => {
+    stubWindow('https://reg.example.test')
+    setRegistryOrigin('https://reg.example.test')
+    expect(currentPathBadge().state).toBe('RELAY')
+  })
+
+  it('is forgotten by the reset seam, so one test cannot leak into the next', () => {
+    setRegistryOrigin('https://reg.example.test')
+    resetPathLink()
+    stubWindow('https://192.168.1.24:8643')
+    expect(currentPathBadge().switchDesktopUrl).toBeNull()
+  })
+})
+
+describe('the path sheet knows which Mac it is talking about', () => {
+  it('says the desktop name once /api/account has answered', () => {
+    expect(currentPathBadge().desktopName).toBeNull()
+    setDesktopName('MacBook Pro')
+    expect(currentPathBadge().desktopName).toBe('MacBook Pro')
   })
 })

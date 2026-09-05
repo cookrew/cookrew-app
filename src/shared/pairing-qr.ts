@@ -46,6 +46,9 @@ export const PAIRING_COPY = {
   NO_ACCOUNT:
     'Claim a username to pair through cookrew.dev; this QR pairs on this Wi-Fi only.',
   WRONG_KEY: "Not this Mac's key — it changes every two minutes.",
+  NAMED_THE_MAC: 'That link named the Mac, not the phone — open it again from cookrew.dev.',
+  ALREADY_USED: 'That link was already used — open it again from cookrew.dev.',
+  INSECURE: 'Pair over the secure address — open it again from cookrew.dev.',
   NOT_THIS_MAC: 'This sign-in is not for this Mac — open it again from cookrew.dev.',
   TYPED_KEY: 'Six characters, valid two minutes.'
 } as const

@@ -44,20 +44,39 @@ export function respondJson(
  * cannot set headers. Compared constant-time; a missing/short candidate
  * never matches.
  */
-export function pairingAuthorized(
+/** The credential this request is presenting, header first, then the query. */
+export function presentedToken(
   request: Pick<http.IncomingMessage, 'headers'>,
-  url: URL,
-  token: string
-): boolean {
+  url: URL
+): string | null {
   const header = request.headers.authorization
   const bearer = typeof header === 'string' && header.startsWith('Bearer ')
     ? header.slice('Bearer '.length)
     : null
-  const candidate = bearer ?? url.searchParams.get('token')
+  return bearer ?? url.searchParams.get('token')
+}
+
+/**
+ * Is this request carrying the pairing credential?
+ *
+ * `extra` is the SECOND door: each admitted phone now holds its own companion
+ * token rather than a copy of the one global one. Both are checked here so
+ * every route that was gated stays gated by the same call — a per-device token
+ * that only worked on some routes would be a phone that half works, which is
+ * harder to diagnose than one that does not work at all.
+ */
+export function pairingAuthorized(
+  request: Pick<http.IncomingMessage, 'headers'>,
+  url: URL,
+  token: string,
+  extra?: (candidate: string) => boolean
+): boolean {
+  const candidate = presentedToken(request, url)
   if (!candidate) return false
   const a = Buffer.from(candidate)
   const b = Buffer.from(token)
-  return a.length === b.length && timingSafeEqual(a, b)
+  if (a.length === b.length && timingSafeEqual(a, b)) return true
+  return extra?.(candidate) ?? false
 }
 
 export function readBody(request: http.IncomingMessage, limit = 1_000_000): Promise<string> {

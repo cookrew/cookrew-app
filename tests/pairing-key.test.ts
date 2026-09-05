@@ -169,3 +169,37 @@ describe('pairing key acceptance', () => {
     expect(ring.accepts(second)).toBe(false)
   })
 })
+
+describe('the previous key window is measured from its replacement', () => {
+  it('stays open until the CURRENT key expires, even when rotation was late', () => {
+    // Rotation is lazy: a popout that closes and reopens three minutes later
+    // mints then. Measuring the old key's grace from its own expiry would put
+    // the window in the past while the docblock promised it was open.
+    const c = clock()
+    const ring = createPairingKeyRing({ now: c.now })
+    const first = ring.current().key
+
+    // Nobody asks for two and a half minutes; the key is dead and stays dead.
+    c.tick(PAIRING_KEY_TTL_MS + 30_000)
+    expect(ring.accepts(first)).toBe(false)
+
+    // The popout reopens and mints. The one it replaced is live again for as
+    // long as the replacement is — and not one second past it.
+    const second = ring.current().key
+    expect(ring.accepts(first)).toBe(true)
+    c.tick(PAIRING_KEY_TTL_MS - 1)
+    expect(ring.accepts(first)).toBe(true)
+    expect(ring.accepts(second)).toBe(true)
+    c.tick(1)
+    expect(ring.accepts(first)).toBe(false)
+    expect(ring.accepts(second)).toBe(false)
+  })
+
+  it('never lets an expired current be typed, however late the rotation', () => {
+    const c = clock()
+    const ring = createPairingKeyRing({ now: c.now })
+    const only = ring.current().key
+    c.tick(PAIRING_KEY_TTL_MS + 60_000)
+    expect(ring.accepts(only)).toBe(false)
+  })
+})
