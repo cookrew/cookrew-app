@@ -142,8 +142,22 @@ beforeAll(async () => {
       device: { id: randomUUID(), kind: 'phone', name: 'A phone', jwk: jwkOf() }
     })
   })
-  expect(attached.status).toBe(201)
-  phoneSession = ((await attached.json()) as { token: string }).token
+  // Phase 4: a device the account has never seen climbs one rung; the Mac
+  // that claimed the name approves it over the wire.
+  expect(attached.status).toBe(401)
+  const asked = (await attached.json()) as { pending: string }
+  const request = await fetch(`${site.origin}/v2/sessions/${asked.pending}/approve`, { method: 'POST' })
+  expect(request.status).toBe(202)
+  const { approval } = (await request.json()) as { approval: string }
+  const decided = await fetch(`${site.origin}/v2/me/approvals/${approval}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${desktopToken}` },
+    body: JSON.stringify({ decision: 'approve' })
+  })
+  expect(decided.status).toBe(204)
+  const done = await fetch(`${site.origin}/v2/sessions/${asked.pending}`)
+  expect(done.status).toBe(201)
+  phoneSession = ((await done.json()) as { token: string }).token
 
   // The app half, as it is wired in index.ts.
   const port = Number(new URL(phone.origin).port)
