@@ -83,6 +83,10 @@ export interface Page {
   body: string
 }
 
+/** "5 Sep 2026" — a date a person reads, in the site's one format. */
+export const day = (at: number): string =>
+  new Date(at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+
 /** Escape for HTML text AND for a double-quoted attribute — one function. */
 export function esc(value: string | number): string {
   return String(value)
@@ -420,4 +424,10 @@ dialog.acct::backdrop{background:rgba(20,17,10,.55)}
 .me-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .avatar{width:56px;height:56px;display:grid;place-items:center;border:2px solid var(--line);box-shadow:3px 3px 0 var(--line);background:var(--amber);color:#2d2a20;font:700 18px var(--font-pixel);object-fit:cover}
 ul.me-list li{grid-template-columns:auto 1fr auto}
+.seat{margin:20px 0 4px}
+.seat h2{margin:0 0 6px;font:11px var(--font-pixel);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft)}
+.seat .row{gap:10px;flex-wrap:wrap;align-items:center}
+.seat input{font:14px var(--font-mono);padding:8px 10px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);min-width:220px;outline:none}
+.seat input:focus{background:var(--amber-soft)}
+.seat ul.me-list{margin-top:12px}
 `

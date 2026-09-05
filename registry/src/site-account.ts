@@ -1,4 +1,4 @@
-import { esc, page, type Page } from './site-shell'
+import { day, esc, page, type Page } from './site-shell'
 import type { V2Account, V2Device } from './v2-accounts'
 
 /**
@@ -20,10 +20,6 @@ const KIND_LABEL: Record<V2Device['kind'], string> = { desktop: 'Desktop', phone
 
 const initials = (account: V2Account): string =>
   (account.displayName.trim() || account.username).slice(0, 2).toUpperCase()
-
-/** "5 Sep 2026" — a date a person reads, in the site's one format. */
-const day = (at: number): string =>
-  new Date(at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
 
 function deviceRow(device: V2Device, current: boolean): string {
   const seen = current ? 'This device' : `Last seen ${day(device.lastSeenAt)}`

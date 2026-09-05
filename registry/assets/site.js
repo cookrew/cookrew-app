@@ -572,6 +572,78 @@
     })
   }
 
+  /* ── seats on a team page (W2) ──────────────────────────────────────────
+   *
+   * The page is already rendered for whoever asked: signed out, unseated,
+   * seated, or the owner's own view. These are only the VERBS — copy the ask
+   * link, grant a seat, end one, and press the line's own entry. Nothing here
+   * re-renders a state the server decided, so the two can never disagree.
+   */
+  const seatbar = $('seatbar')
+  if (seatbar) {
+    const team = seatbar.dataset.team ?? ''
+    /** The line's own gate button. Buying and opening are its ceremony, unchanged. */
+    const pressTheLine = () => {
+      const open = $('btn-open')
+      if (!open) return toast('This team is not on the relay — open it in Cookrew.')
+      open.scrollIntoView({ block: 'center' })
+      // A disabled entry swallows a click silently, and silence reads as a
+      // broken button rather than as "nobody is serving this right now".
+      if (open.disabled) return toast('Nobody is serving this team right now — the address stays valid.', 5000)
+      open.click()
+    }
+
+    /**
+     * COPY THE ASK LINK. navigator.clipboard is absent over plain http and on
+     * an older browser, so the link is put on the page instead of being lost:
+     * a person can always copy what they can see.
+     */
+    const copyAsk = async (link) => {
+      try {
+        await navigator.clipboard.writeText(link)
+        toast('Link copied. Send it to the owner; it names you.')
+      } catch {
+        const shown = $('seat-ask-link')
+        if (shown) {
+          shown.hidden = false
+          shown.textContent = link
+          const range = document.createRange()
+          range.selectNodeContents(shown)
+          getSelection()?.removeAllRanges()
+          getSelection()?.addRange(range)
+        }
+        toast('This browser would not take the clipboard — the link is on the page, ready to copy.', 6000)
+      }
+    }
+
+    const seatCall = (method, path, body) =>
+      v2(method, `/v2/teams/${team}${path}`, body).then((out) => {
+        if (out.status === 201 || out.status === 204) return location.reload()
+        toast(out.body?.message ?? 'That did not go through. Try again in a moment.', 6000)
+      })
+
+    seatbar.addEventListener('click', (event) => {
+      const el = event.target.closest('[data-seat-ask],[data-seat-buy],[data-seat-open],[data-seat-grant],[data-seat-end]')
+      if (!el) return
+      event.preventDefault()
+      if (el.dataset.seatAsk !== undefined) void copyAsk(el.dataset.seatAsk)
+      else if (el.dataset.seatBuy !== undefined || el.dataset.seatOpen !== undefined) pressTheLine()
+      else if (el.dataset.seatGrant !== undefined) {
+        const username = ($('seat-username')?.value ?? '').trim().toLowerCase().replace(/^@/, '')
+        if (!USERNAME.test(username)) return toast('A username is lowercase letters, digits and dashes.')
+        void seatCall('POST', '/seats', { username })
+      } else if (el.dataset.seatEnd !== undefined) {
+        if (!confirm('This person stops opening the team at their next call. Their session ends when they close it. End the seat?')) return
+        void seatCall('DELETE', `/seats/${encodeURIComponent(el.dataset.seatEnd)}`)
+      }
+    })
+    $('seat-username')?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return
+      event.preventDefault()
+      seatbar.querySelector('[data-seat-grant]')?.click()
+    })
+  }
+
   /** Who the header should name: a v2 session first, then the v1 key. */
   void v2('GET', '/v2/me').then((out) => {
     if (out.status !== 200 || !out.body?.username) return
