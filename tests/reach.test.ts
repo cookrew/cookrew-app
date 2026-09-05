@@ -15,6 +15,7 @@ import {
   type SignedReach
 } from '../src/main/reach'
 import { canonicalJson } from '../src/shared/canonical-json'
+import { canonicalJson as registryCanonicalJson, readReach, reachHostKind } from '../registry/src/v2-reach'
 import { fakeAccount, tempBase } from './support/idv2'
 
 const AT = 1_800_000_000_000
@@ -293,11 +294,13 @@ describe('when reach is published', () => {
     let addresses = lan
     const { publisher: p } = publisher({
       endpoints: () => addresses,
+      setTimeout: () => ({ unref: () => undefined }),
       register: async () => {
         if (fail) throw new Error('offline')
+        return { ok: true }
       }
     })
-    expect(await p.publish('boot')).toBe('skipped')
+    expect(await p.publish('boot')).toBe('refused')
     expect(p.last()).toBeNull()
     fail = false
     addresses = [endpoint('https://10.0.0.9:8643/', 'lan', '10.0.0.9')]
@@ -340,11 +343,208 @@ describe('reach comparison', () => {
   const card = reachCard({ deviceId: 'd', endpoints: [], certFp: FP, relay: true, at: AT })
 
   it('ignores the timestamp, so a quiet minute is not a change', () => {
-    expect(sameReach(card, { ...card, at: AT + 60_000 })).toBe(true)
+    expect(sameReach(card, { ...card, at: new Date(AT + 60_000).toISOString() })).toBe(true)
   })
 
   it('sees a real difference', () => {
     expect(sameReach(card, { ...card, relay: false })).toBe(false)
     expect(sameReach(null, card)).toBe(false)
+  })
+})
+
+describe('the two sides of the reach card agree', () => {
+  const account = fakeAccount()
+  const jwk = account.publicKeyJwk as Record<string, string>
+
+  /** Exactly what the publisher sends: the card, and the signature over it. */
+  const signedCard = (over: Partial<Parameters<typeof reachCard>[0]> = {}) => {
+    const card = reachCard({
+      deviceId: account.deviceId,
+      endpoints: [
+        endpoint('https://192.168.1.24:8643/?token=t', 'lan', '192.168.1.24'),
+        endpoint('https://mac.tail1.ts.net:8643/', 'tailscale', 'mac.tail1.ts.net')
+      ],
+      certFp: FP,
+      relay: true,
+      at: AT,
+      ...over
+    })
+    return signReach(account, card)
+  }
+
+  it('THE REGISTRY ACCEPTS WHAT THIS DESKTOP SIGNS', () => {
+    // The whole point of this file. `at` was a number here and the registry
+    // wants ISO 8601 — proven live as 400 bad_reach — and nothing on this side
+    // could see it, because registerDesktop ANSWERS a refusal rather than
+    // throwing one. This test is the thing that would have caught it.
+    const { reach, sig } = signedCard()
+    const read = readReach(account.deviceId, jwk, { reach, sig })
+    expect(read).not.toBeNull()
+    expect(read?.lan).toEqual([{ url: 'https://192.168.1.24:8643', certFp: FP }])
+    expect(read?.tailnet).toEqual({ url: 'https://mac.tail1.ts.net:8643', certFp: FP })
+    expect(read?.relay).toBe(true)
+  })
+
+  it('writes `at` as ISO 8601 to the millisecond, which is what the registry parses', () => {
+    const { reach } = signedCard()
+    expect(reach.at).toBe(new Date(AT).toISOString())
+    expect(reach.at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/)
+    expect(Number.isFinite(Date.parse(reach.at))).toBe(true)
+  })
+
+  it('a number for `at` is what the registry refused — and can no longer be built', () => {
+    const { reach, sig } = signedCard()
+    const asNumber = { ...reach, at: AT as unknown as string }
+    expect(readReach(account.deviceId, jwk, { reach: asNumber, sig })).toBeNull()
+  })
+
+  it('computes the same canonical bytes as the registry does', () => {
+    const { reach } = signedCard()
+    const card = {
+      deviceId: account.deviceId,
+      lan: reach.lan.map((a) => ({ url: a.url, certFp: a.certFp })),
+      tailnet: reach.tailnet,
+      relay: reach.relay,
+      at: reach.at
+    }
+    expect(canonicalJson(card)).toBe(registryCanonicalJson(card))
+  })
+
+  it('names only hosts the registry allows', () => {
+    const { reach } = signedCard()
+    for (const address of reach.lan) expect(reachHostKind(address.url)).toBe('lan')
+    expect(reachHostKind(reach.tailnet?.url)).toBe('tailnet')
+  })
+
+  it('is refused when another device signs it', () => {
+    const card = reachCard({ deviceId: account.deviceId, endpoints: [], certFp: FP, relay: true, at: AT })
+    const { sig } = signReach(fakeAccount(), card)
+    expect(readReach(account.deviceId, jwk, { reach: card, sig })).toBeNull()
+  })
+
+  it('never sends more addresses than the registry will read', () => {
+    const many = Array.from({ length: 12 }, (_, i) =>
+      endpoint(`https://192.168.1.${i + 2}:8643/`, 'lan', `192.168.1.${i + 2}`)
+    )
+    const { reach, sig } = signedCard({ endpoints: many })
+    expect(reach.lan).toHaveLength(8)
+    expect(readReach(account.deviceId, jwk, { reach, sig })).not.toBeNull()
+  })
+})
+
+describe('a refused publish is not a published one', () => {
+  const account = fakeAccount()
+  const lan = [endpoint('https://192.168.1.24:8643/?token=t', 'lan', '192.168.1.24')]
+
+  const publisher = (register: ReachPublisherDeps['register'], over: Partial<ReachPublisherDeps> = {}) => {
+    const waits: number[] = []
+    const logs: string[] = []
+    const p = createReachPublisher({
+      account: () => account,
+      endpoints: () => lan,
+      certFp: () => FP,
+      relay: () => false,
+      workspaces: () => [],
+      register,
+      now: () => AT,
+      log: (message) => logs.push(message),
+      setTimeout: (_fn, ms) => {
+        waits.push(ms)
+        return { unref: () => undefined }
+      },
+      ...over
+    })
+    return { p, waits, logs }
+  }
+
+  it('DOES NOT CACHE a card the registry refused, so the next publish retries', async () => {
+    let refuse = true
+    const { p } = publisher(async () => (refuse ? { ok: false, reason: 'bad_reach' } : { ok: true }))
+    expect(await p.publish('boot')).toBe('refused')
+    expect(p.last()).toBeNull()
+    // Nothing about the machine changed, and it must try again anyway.
+    expect(await p.publish('poll')).toBe('refused')
+    refuse = false
+    expect(await p.publish('poll')).toBe('published')
+    expect(p.last()).not.toBeNull()
+  })
+
+  it('says the registry\'s own sentence, once', async () => {
+    const { p, logs } = publisher(async () => ({
+      ok: false,
+      reason: 'bad_reach',
+      message: 'at must be ISO 8601'
+    }))
+    await p.publish('boot')
+    await p.publish('poll')
+    await p.publish('poll')
+    const refusals = logs.filter((line) => line.includes('bad_reach'))
+    expect(refusals).toHaveLength(1)
+    expect(refusals[0]).toContain('at must be ISO 8601')
+    expect(refusals[0]).toContain('retrying')
+  })
+
+  it('backs off 30 s, then a minute, then two, then five and stays there', async () => {
+    // ONE retry is pending at a time, by design — a Mac that stacked a timer
+    // per failure would hammer a recovering registry. So the test fires the
+    // pending one to earn the next, which is exactly what the clock does.
+    const waits: number[] = []
+    const pending: (() => void)[] = []
+    const p = createReachPublisher({
+      account: () => account,
+      endpoints: () => lan,
+      certFp: () => FP,
+      relay: () => false,
+      workspaces: () => [],
+      register: async () => ({ ok: false, reason: 'bad_reach' }),
+      now: () => AT,
+      setTimeout: (fn, ms) => {
+        waits.push(ms)
+        pending.push(fn)
+        return { unref: () => undefined }
+      }
+    })
+    await p.republish('boot')
+    for (let i = 0; i < 5; i++) {
+      pending.shift()?.()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    expect(waits.slice(0, 5)).toEqual([30_000, 60_000, 120_000, 300_000, 300_000])
+  })
+
+  it('reports how long until the retry, and forgets it once one lands', async () => {
+    let refuse = true
+    const { p } = publisher(async () => (refuse ? { ok: false, reason: 'x' } : { ok: true }))
+    await p.publish('boot')
+    expect(p.retryInMs()).toBe(30_000)
+    refuse = false
+    await p.republish('manual')
+    expect(p.retryInMs()).toBeNull()
+  })
+
+  it('fires the scheduled retry, and publishes when the registry recovers', async () => {
+    let refuse = true
+    let fire: (() => void) | null = null
+    const { p } = publisher(
+      async () => (refuse ? { ok: false, reason: 'x' } : { ok: true }),
+      { setTimeout: (fn) => {
+        fire = fn
+        return { unref: () => undefined }
+      } }
+    )
+    await p.publish('boot')
+    refuse = false
+    ;(fire as unknown as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(p.last()).not.toBeNull()
+  })
+
+  it('treats a thrown network error the same as a refusal', async () => {
+    const { p, waits } = publisher(async () => {
+      throw new Error('ECONNREFUSED')
+    })
+    expect(await p.publish('boot')).toBe('refused')
+    expect(p.last()).toBeNull()
+    expect(waits[0]).toBe(30_000)
   })
 })

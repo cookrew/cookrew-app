@@ -35,9 +35,35 @@ export type AdmissionRefusal =
   | { readonly kind: 'token'; readonly reason: string; readonly sentence: string }
   /** The token is good but nobody proved they are standing here. */
   | { readonly kind: 'key'; readonly sentence: string }
+  /**
+   * `device` named THIS DESKTOP rather than the phone.
+   *
+   * Its own refusal because it is its own mistake, and a bare 401 buried it:
+   * the link is well-formed, signed, in date and for this Mac — the only thing
+   * wrong is which device id the page put in one query parameter, which is
+   * something the person holding the phone can neither see nor fix. So it goes
+   * back to the page that built the link, the way a wrong key does, with a
+   * sentence that names the actual error.
+   */
+  | { readonly kind: 'device'; readonly sentence: string }
+  /**
+   * This exact token already admitted somebody.
+   *
+   * A canvas token is good for ten minutes and says nothing about how many
+   * times it may be spent, so a recorded admission replayed inside that window
+   * opened the Mac again for whoever had the recording. Verifying a signature
+   * proves the registry wrote it; only this Mac can know it has been used.
+   */
+  | { readonly kind: 'replay'; readonly sentence: string }
 
 export type AdmissionOutcome =
-  | { readonly ok: true; readonly device: AdmittedDevice; readonly firstTime: boolean }
+  | {
+      readonly ok: true
+      readonly device: AdmittedDevice
+      readonly firstTime: boolean
+      /** THIS PHONE'S OWN credential. Handed over once, in the redirect. */
+      readonly token: string
+    }
   | { readonly ok: false; readonly refusal: AdmissionRefusal }
 
 export type AdmissionDeps = {
@@ -47,6 +73,12 @@ export type AdmissionDeps = {
   readonly refreshKeys: () => Promise<RegistryKeys | null>
   readonly admitted: AdmittedDeviceStore
   readonly acceptsPairingKey: (key: string) => boolean
+  /**
+   * Burn the token's jti. False means it has already admitted somebody.
+   * Optional so a caller that has not wired the store still verifies claims —
+   * but index.ts wires it, and the test says so.
+   */
+  readonly spend?: (jti: string, exp: number) => boolean
   readonly now: () => number
 }
 
@@ -57,6 +89,16 @@ const tokenRefusal = (reason: string): AdmissionRefusal => ({
 })
 
 const KEY_REFUSAL: AdmissionRefusal = { kind: 'key', sentence: PAIRING_COPY.WRONG_KEY }
+
+const REPLAY_REFUSAL: AdmissionRefusal = {
+  kind: 'replay',
+  sentence: PAIRING_COPY.ALREADY_USED
+}
+
+const DEVICE_REFUSAL: AdmissionRefusal = {
+  kind: 'device',
+  sentence: PAIRING_COPY.NAMED_THE_MAC
+}
 
 /** True when the query looks like an admission attempt at all. */
 export const isAdmissionRequest = (request: AdmissionRequest): boolean =>
@@ -70,6 +112,16 @@ export const admit = async (
   if (!account) return { ok: false, refusal: tokenRefusal('no_account') }
   if (!request.token) return { ok: false, refusal: tokenRefusal('malformed') }
   if (!request.phoneDeviceId) return { ok: false, refusal: tokenRefusal('no_device') }
+  /**
+   * THE PHONE IS NOT THE MAC. A page that sends this desktop's own id as
+   * `device` would otherwise fail the `dev` claim and read as a forged token,
+   * which sends the owner looking in entirely the wrong place. The strict
+   * check below is unchanged for every other id; this only names the one
+   * confusion worth naming.
+   */
+  if (request.phoneDeviceId === account.deviceId) {
+    return { ok: false, refusal: DEVICE_REFUSAL }
+  }
 
   const expectation = {
     username: account.username,
@@ -97,14 +149,25 @@ export const admit = async (
     return { ok: false, refusal: KEY_REFUSAL }
   }
 
-  return {
-    ok: true,
-    firstTime: !already,
-    device: deps.admitted.admit({
-      deviceId: request.phoneDeviceId,
-      ...(request.phoneName ? { name: request.phoneName } : {})
-    })
+  /**
+   * BURNED ON SUCCESS, and only on success.
+   *
+   * The attack is a recorded admission that WORKED, replayed inside the
+   * token's ten minutes; burning at that moment closes it. Burning earlier —
+   * the instant the signature verified — would close it too, and would also
+   * mean a mistyped six-character key spent the token, so the page that sent
+   * the person here would have to mint another one before they could try
+   * again. A wrong key is the ordinary case, not the attack.
+   */
+  if (deps.spend && !deps.spend(verified.claims.jti, verified.claims.exp)) {
+    return { ok: false, refusal: REPLAY_REFUSAL }
   }
+
+  const admitted = deps.admitted.admit({
+    deviceId: request.phoneDeviceId,
+    ...(request.phoneName ? { name: request.phoneName } : {})
+  })
+  return { ok: true, firstTime: !already, device: admitted.device, token: admitted.token }
 }
 
 /**
@@ -117,6 +180,7 @@ export const admit = async (
  */
 export const refusedRedirect = (
   registryOrigin: string,
-  deviceId: string
+  deviceId: string,
+  refused: 'key' | 'device' = 'key'
 ): string =>
-  `${registryOrigin.replace(/\/+$/, '')}/me?refused=key&desktop=${encodeURIComponent(deviceId)}`
+  `${registryOrigin.replace(/\/+$/, '')}/me?refused=${refused}&desktop=${encodeURIComponent(deviceId)}`

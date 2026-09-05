@@ -138,7 +138,10 @@ function create(file: string, handle: string): Stored {
     privateKeyJwk: privateKey.export({ format: 'jwk' }) as Record<string, unknown>,
     publicKeyJwk: publicKey.export({ format: 'jwk' }) as Record<string, unknown>
   }
-  mkdirSync(path.dirname(file), { recursive: true })
+  // 0700 like every other directory this app makes under ~/.cookrew: the
+  // file inside is 0600, and a world-readable parent is a listing of which
+  // accounts this Mac holds.
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   writeFileSync(file, JSON.stringify(stored, null, 2), { mode: 0o600 })
   // Set explicitly as well as at creation: an existing file keeps its old mode.
   chmodSync(file, 0o600)

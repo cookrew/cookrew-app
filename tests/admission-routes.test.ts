@@ -2,6 +2,7 @@ import type http from 'node:http'
 import { createPrivateKey, generateKeyPairSync, sign } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createAdmittedDeviceStore } from '../src/main/admitted-devices'
+import { companionAccount, initialsOf } from '../src/main/companion-account'
 import type { RegistryKeys } from '../src/main/canvas-token'
 import {
   admittedRedirect,
@@ -9,6 +10,7 @@ import {
   type MobileIdentityDeps
 } from '../src/main/mobile-identity-routes'
 import { createPairingKeyRing } from '../src/main/pairing-key'
+import { createSpentTokenStore } from '../src/main/spent-tokens'
 import { fakeAccount, tempBase } from './support/idv2'
 
 const NOW = 1_800_000_000_000
@@ -35,8 +37,27 @@ const recorder = () => {
   return { written, response: response as unknown as http.ServerResponse }
 }
 
+/**
+ * A request over TLS by default, because that is what a phone actually makes:
+ * the companion is served on https and the admission ceremony is now refused
+ * on the plaintext listener. `plain()` is the other case, tested on purpose.
+ */
 const request = (over: Partial<http.IncomingMessage> = {}): http.IncomingMessage =>
-  ({ method: 'GET', headers: {}, ...over }) as http.IncomingMessage
+  ({
+    method: 'GET',
+    headers: {},
+    socket: { encrypted: true, remoteAddress: '192.168.1.9', localAddress: '192.168.1.24' },
+    ...over
+  }) as unknown as http.IncomingMessage
+
+/** The same request arriving in the clear on 8639. */
+const plain = (over: Partial<http.IncomingMessage> = {}): http.IncomingMessage =>
+  ({
+    method: 'GET',
+    headers: { host: '192.168.1.24:8639' },
+    socket: { remoteAddress: '192.168.1.9', localAddress: '192.168.1.24' },
+    ...over
+  }) as unknown as http.IncomingMessage
 
 const registry = () => {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519')
@@ -194,7 +215,10 @@ describe('GET /?open= admission over the wire', () => {
     )
     expect(handled).toBe(true)
     expect(written.status).toBe(303)
-    expect(written.headers.location).toBe('/?token=the-pairing-token')
+    // THIS PHONE'S token, not the global one — the whole point of minting per
+    // device is that the credential in this URL belongs to one phone.
+    expect(written.headers.location).toMatch(/^\/\?token=[A-Za-z0-9_%-]{32,}$/)
+    expect(written.headers.location).not.toContain('the-pairing-token')
     expect(written.headers['cache-control']).toBe('no-store')
   })
 
@@ -207,7 +231,7 @@ describe('GET /?open= admission over the wire', () => {
       open(`?open=${reg.mint(claims)}&key=${ring.current().key}&device=${PHONE}&name=iPhone`),
       deps({ admitted: store })
     )
-    expect(store.list()).toEqual([
+    expect(store.list()).toMatchObject([
       { deviceId: PHONE, name: 'iPhone', admittedAt: NOW, lastSeenAt: NOW }
     ])
   })
@@ -276,5 +300,321 @@ describe('GET /?open= admission over the wire', () => {
   it('redirects to a bare / when there is somehow no pairing token to hand over', () => {
     expect(admittedRedirect('/', null)).toBe('/')
     expect(admittedRedirect('/', 'a b')).toBe('/?token=a%20b')
+  })
+})
+
+describe('a link that named the Mac goes back to the page, not to a 401', () => {
+  const account = fakeAccount()
+  const reg = registry()
+  let temp: { base: string; clean: () => void }
+  let ring: ReturnType<typeof createPairingKeyRing>
+
+  const deps = (): MobileIdentityDeps => ({
+    account: () => account,
+    registryOrigin: () => REGISTRY,
+    keys: async () => reg.keys,
+    refreshKeys: async () => reg.keys,
+    admitted: createAdmittedDeviceStore({ base: temp.base, now: () => NOW }),
+    acceptsPairingKey: (key) => ring.accepts(key),
+    pairingToken: () => 'the-pairing-token',
+    now: () => NOW
+  })
+
+  beforeEach(() => {
+    temp = tempBase()
+    ring = createPairingKeyRing({ now: () => NOW })
+  })
+  afterEach(() => temp.clean())
+
+  it('redirects with ?refused=device rather than answering 401', async () => {
+    const token = reg.mint({
+      sub: account.username,
+      scope: 'canvas',
+      aud: account.deviceId,
+      dev: account.deviceId,
+      exp: NOW + 60_000,
+      jti: 'j1'
+    })
+    const { written, response } = recorder()
+    await handleIdentityRoutes(
+      request(),
+      response,
+      new URL(
+        `https://mac.local:8643/?open=${token}&key=${ring.current().key}&device=${account.deviceId}`
+      ),
+      deps()
+    )
+    expect(written.status).toBe(303)
+    expect(written.headers.location).toBe(
+      `https://cookrew.dev/me?refused=device&desktop=${encodeURIComponent(account.deviceId)}`
+    )
+    expect(written.body).toBe('')
+  })
+})
+
+describe('GET /api/account — the owner face the phone is shown', () => {
+  const account = fakeAccount()
+
+  it('carries the public face, the desktop name and the registry origin', () => {
+    const face = companionAccount(account, 'https://reg.test/', {
+      displayName: 'Andrej Dot',
+      avatar: null
+    })
+    expect(face).toEqual({
+      username: 'drej',
+      displayName: 'Andrej Dot',
+      initials: 'AD',
+      avatar: null,
+      desktopName: 'MacBook Pro',
+      deviceId: account.deviceId,
+      registryOrigin: 'https://reg.test'
+    })
+  })
+
+  it('CARRIES NO KEY, NO SESSION AND NO UNLOCK VERIFIER', () => {
+    // The account file holds the device private key beside the name. This is
+    // built member by member for exactly this reason, and the test spells out
+    // what "member by member" was protecting.
+    const serialised = JSON.stringify(companionAccount(account, 'https://cookrew.dev'))
+    for (const secret of ['privateKeyJwk', 'publicKeyJwk', 'unlock', 'session', 'claimedAt', 'd']) {
+      expect(serialised, secret).not.toContain(`"${secret}"`)
+    }
+    expect(serialised).not.toContain(String(account.session?.token))
+  })
+
+  it('draws initials from the username when there is no display name yet', () => {
+    // The phone must show a letter immediately; the display name lives on the
+    // registry profile and may never have been read.
+    expect(companionAccount(account, 'https://cookrew.dev')?.initials).toBe('DR')
+    expect(initialsOf('drej')).toBe('DR')
+    expect(initialsOf('Andrej Dot')).toBe('AD')
+    expect(initialsOf('mira-lee')).toBe('ML')
+    expect(initialsOf('   ')).toBe('?')
+  })
+
+  it('passes a data-URL avatar through and refuses a remote one', () => {
+    const data = 'data:image/png;base64,iVBORw0KGgo='
+    expect(companionAccount(account, 'x', { avatar: data })?.avatar).toBe(data)
+    // An http(s) avatar would be a beacon fired on every companion load.
+    expect(companionAccount(account, 'x', { avatar: 'https://evil.example/a.png' })?.avatar)
+      .toBeNull()
+    expect(companionAccount(account, 'x', { avatar: 'javascript:alert(1)' })?.avatar).toBeNull()
+  })
+
+  it('is nothing at all when this Mac has no account', () => {
+    expect(companionAccount(null, 'https://cookrew.dev')).toBeNull()
+  })
+})
+
+describe('the ceremony refuses to happen in the clear', () => {
+  const account = fakeAccount()
+  const reg = registry()
+  const claims = {
+    sub: account.username,
+    scope: 'canvas',
+    aud: account.deviceId,
+    dev: PHONE,
+    exp: NOW + 60_000,
+    jti: 'j-clear'
+  }
+  let temp: { base: string; clean: () => void }
+  let ring: ReturnType<typeof createPairingKeyRing>
+
+  const deps = (over: Partial<MobileIdentityDeps> = {}): MobileIdentityDeps => ({
+    account: () => account,
+    registryOrigin: () => REGISTRY,
+    keys: async () => reg.keys,
+    refreshKeys: async () => reg.keys,
+    admitted: createAdmittedDeviceStore({ base: temp.base, now: () => NOW }),
+    acceptsPairingKey: (key) => ring.accepts(key),
+    pairingToken: () => 'the-pairing-token',
+    httpsReady: () => true,
+    secureLocation: (_request, url) => `https://192.168.1.24:8643${url.pathname}${url.search}`,
+    now: () => NOW,
+    ...over
+  })
+
+  beforeEach(() => {
+    temp = tempBase()
+    ring = createPairingKeyRing({ now: () => NOW })
+  })
+  afterEach(() => temp.clean())
+
+  const admissionUrl = (): URL =>
+    new URL(
+      `https://mac.local:8643/?open=${reg.mint(claims)}&key=${ring.current().key}&device=${PHONE}`
+    )
+
+  it('sends a plaintext admission to the secure address, query intact', async () => {
+    const { written, response } = recorder()
+    const url = admissionUrl()
+    const handled = await handleIdentityRoutes(plain(), response, url, deps())
+    expect(handled).toBe(true)
+    expect(written.status).toBe(307)
+    expect(written.headers.location).toBe(`https://192.168.1.24:8643/${url.search}`)
+    // The whole query travels, or the ceremony dead-ends at a bare page.
+    expect(written.headers.location).toContain('open=')
+    expect(written.headers.location).toContain('key=')
+  })
+
+  it('NEVER HANDS A SESSION OVER PLAINTEXT, even for a perfect admission', async () => {
+    const { written, response } = recorder()
+    await handleIdentityRoutes(plain(), response, admissionUrl(), deps())
+    expect(written.status).not.toBe(303)
+    expect(written.headers.location).not.toContain('token=')
+    // And nothing was admitted: the phone has not proved anything yet.
+    expect(createAdmittedDeviceStore({ base: temp.base }).list()).toEqual([])
+  })
+
+  it('answers 426 with the sentence when there is no secure address to offer', async () => {
+    const { written, response } = recorder()
+    await handleIdentityRoutes(
+      plain(),
+      response,
+      admissionUrl(),
+      deps({ httpsReady: () => false })
+    )
+    expect(written.status).toBe(426)
+    expect(JSON.parse(written.body).error).toBe(
+      'Pair over the secure address — open it again from cookrew.dev.'
+    )
+  })
+
+  it('refuses when TLS is up but no address can be named', async () => {
+    const { written, response } = recorder()
+    await handleIdentityRoutes(
+      plain(),
+      response,
+      admissionUrl(),
+      deps({ secureLocation: () => null })
+    )
+    expect(written.status).toBe(426)
+  })
+
+  it('LETS THE LOOPBACK RELAY BRIDGE THROUGH — that hop never leaves the Mac', async () => {
+    const { written, response } = recorder()
+    const bridged = plain({
+      headers: { 'x-cookrew-relay': '1', host: '127.0.0.1:8639' },
+      socket: { remoteAddress: '127.0.0.1' }
+    } as never)
+    await handleIdentityRoutes(bridged, response, admissionUrl(), deps())
+    expect(written.status).toBe(303)
+    expect(written.headers.location).toContain('token=')
+  })
+
+  it('does not take the marker alone — a header is something a caller writes', async () => {
+    const { written, response } = recorder()
+    const forged = plain({
+      headers: { 'x-cookrew-relay': '1', host: '192.168.1.24:8639' },
+      socket: { remoteAddress: '192.168.1.99' }
+    } as never)
+    await handleIdentityRoutes(forged, response, admissionUrl(), deps())
+    expect(written.status).toBe(307)
+  })
+
+  it('does not take loopback alone either', async () => {
+    const { written, response } = recorder()
+    const local = plain({ socket: { remoteAddress: '127.0.0.1' } } as never)
+    await handleIdentityRoutes(local, response, admissionUrl(), deps())
+    expect(written.status).toBe(307)
+  })
+
+  it('completes normally over TLS', async () => {
+    const { written, response } = recorder()
+    await handleIdentityRoutes(request(), response, admissionUrl(), deps())
+    expect(written.status).toBe(303)
+  })
+})
+
+describe('a recorded admission cannot be replayed', () => {
+  const account = fakeAccount()
+  const reg = registry()
+  let temp: { base: string; clean: () => void }
+  let ring: ReturnType<typeof createPairingKeyRing>
+  let spent: ReturnType<typeof createSpentTokenStore>
+
+  const claims = {
+    sub: account.username,
+    scope: 'canvas',
+    aud: account.deviceId,
+    dev: PHONE,
+    exp: NOW + 600_000,
+    jti: 'j-once'
+  }
+
+  const deps = (): MobileIdentityDeps => ({
+    account: () => account,
+    registryOrigin: () => REGISTRY,
+    keys: async () => reg.keys,
+    refreshKeys: async () => reg.keys,
+    admitted: createAdmittedDeviceStore({ base: temp.base, now: () => NOW }),
+    acceptsPairingKey: (key) => ring.accepts(key),
+    pairingToken: () => 'the-pairing-token',
+    httpsReady: () => true,
+    spend: (jti, exp) => spent.spend(jti, exp),
+    now: () => NOW
+  })
+
+  beforeEach(() => {
+    temp = tempBase()
+    ring = createPairingKeyRing({ now: () => NOW })
+    spent = createSpentTokenStore({ base: temp.base, now: () => NOW })
+  })
+  afterEach(() => temp.clean())
+
+  it('admits once and refuses the same link the second time', async () => {
+    const token = reg.mint(claims)
+    const url = new URL(
+      `https://mac.local:8643/?open=${token}&key=${ring.current().key}&device=${PHONE}`
+    )
+    const first = recorder()
+    await handleIdentityRoutes(request(), first.response, url, deps())
+    expect(first.written.status).toBe(303)
+
+    // The exact bytes, captured off the wire, inside the token's ten minutes.
+    const second = recorder()
+    await handleIdentityRoutes(request(), second.response, url, deps())
+    expect(second.written.status).toBe(401)
+    expect(JSON.parse(second.written.body).error).toBe(
+      'That link was already used — open it again from cookrew.dev.'
+    )
+  })
+
+  it('SURVIVES A RESTART — the spent list is on disk, not in a process', async () => {
+    const url = new URL(
+      `https://mac.local:8643/?open=${reg.mint(claims)}&key=${ring.current().key}&device=${PHONE}`
+    )
+    await handleIdentityRoutes(request(), recorder().response, url, deps())
+    // A brand-new store over the same directory is what a restart looks like.
+    spent = createSpentTokenStore({ base: temp.base, now: () => NOW })
+    const after = recorder()
+    await handleIdentityRoutes(request(), after.response, url, deps())
+    expect(after.written.status).toBe(401)
+  })
+
+  it('does not burn the token when the key was simply mistyped', async () => {
+    // A wrong six characters is the ordinary case, not the attack. Spending
+    // the token there would force the page to mint another before the person
+    // could try again.
+    const token = reg.mint(claims)
+    const wrong = recorder()
+    await handleIdentityRoutes(
+      request(),
+      wrong.response,
+      new URL(`https://mac.local:8643/?open=${token}&key=ZZZZZZ&device=${PHONE}`),
+      deps()
+    )
+    expect(wrong.written.status).toBe(303)
+    expect(wrong.written.headers.location).toContain('refused=key')
+
+    const retry = recorder()
+    await handleIdentityRoutes(
+      request(),
+      retry.response,
+      new URL(`https://mac.local:8643/?open=${token}&key=${ring.current().key}&device=${PHONE}`),
+      deps()
+    )
+    expect(retry.written.status).toBe(303)
+    expect(retry.written.headers.location).toContain('token=')
   })
 })

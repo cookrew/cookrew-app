@@ -88,6 +88,7 @@ export const subscribePathLink = (listener: (next: PathLinkState) => void): (() 
 /** Test seam: the module is a singleton, and a test needs a clean one. */
 export const resetPathLink = (): void => {
   state = IDLE
+  registryOrigin = null
   listeners.clear()
 }
 
@@ -99,7 +100,26 @@ const originOf = (): string => {
   }
 }
 
+/**
+ * WHERE THIS ACCOUNT'S REGISTRY IS — told by the desktop, never assumed.
+ *
+ * "Switch desktop" was a hard-coded https://cookrew.dev/me, which is wrong for
+ * anyone self-hosting and wrong in every test environment: the companion's own
+ * origin is the Mac or the relay, so it cannot work this out for itself. The
+ * desktop answers it on /api/account, and until it has, the link is simply not
+ * offered — an honest absence beats a confident wrong address.
+ */
+let registryOrigin: string | null = null
+
+export const setRegistryOrigin = (origin: string | null): void => {
+  const next = origin && origin.length > 0 ? origin.replace(/\/+$/, '') : null
+  if (registryOrigin === next) return
+  registryOrigin = next
+  announce()
+}
+
 const registryOf = (): string | undefined => {
+  if (registryOrigin) return registryOrigin
   const configured = (window as unknown as { COOKREW_REGISTRY?: string }).COOKREW_REGISTRY
   return typeof configured === 'string' && configured.length > 0 ? configured : undefined
 }

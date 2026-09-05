@@ -74,9 +74,14 @@ export function PathSheet({
           {view.latencyMs === null ? 'Latency not measured yet.' : `${view.latencyMs} ms round trip`}
         </p>
         <footer className="gs-sheet-foot">
-          <a className="cr-path-switch" href={view.switchDesktopUrl} rel="noreferrer">
-            Switch desktop
-          </a>
+          {/* Offered only once the desktop has said where its account lives.
+              A hard-coded cookrew.dev sends a self-hosting owner somewhere
+              that has never heard of them. */}
+          {view.switchDesktopUrl && (
+            <a className="cr-path-switch" href={view.switchDesktopUrl} rel="noreferrer">
+              Switch desktop
+            </a>
+          )}
         </footer>
       </div>
     </div>

@@ -86,6 +86,7 @@ import { relayHandle } from './legacy-identity'
 import { createAdmittedDeviceStore } from './admitted-devices'
 import { createPairingKeyRing } from './pairing-key'
 import { createRegistryKeyCache } from './registry-keys'
+import { createSpentTokenStore } from './spent-tokens'
 import { createReachPublisher, type ReachPublisher } from './reach'
 import { createCanvasLink } from './canvas-link'
 import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
@@ -636,8 +637,28 @@ const relayServing =
  */
 const pairingKeys = createPairingKeyRing()
 const admittedDevices = createAdmittedDeviceStore()
+/**
+ * Canvas tokens already spent. Persisted because a restart that forgot them
+ * would reopen the replay window this closes, and a Mac restarts far more
+ * often than a token's ten minutes.
+ */
+const spentCanvasTokens = createSpentTokenStore()
 const registryKeyCache = createRegistryKeyCache({ origin: registryOrigin() })
 let reachPublisher: ReachPublisher | null = null
+
+/**
+ * The owner's display name and avatar, as of the last time anything read the
+ * profile. A snapshot rather than a cache with a policy: nothing here expires
+ * it, because a stale display name on a phone is not a fault worth a refresh
+ * loop, and the username underneath it is always current.
+ */
+let profileFace: { displayName?: string; avatar?: string | null } | null = null
+export const rememberProfileFace = (face: {
+  displayName?: string
+  avatar?: string | null
+}): void => {
+  profileFace = face
+}
 
 /**
  * THE DESKTOP'S OWN LINE AT cookrew.dev — the picker's third path.
@@ -4354,7 +4375,13 @@ app.whenReady().then(() => {
       refreshKeys: () => registryKeyCache.refresh(),
       admitted: admittedDevices,
       acceptsPairingKey: (key: string) => pairingKeys.accepts(key),
+      spend: (jti: string, exp: number) => spentCanvasTokens.spend(jti, exp),
       pairingToken: () => pairingToken,
+      // Whatever the last successful profile read left behind. Never fetched
+      // on the request path: the avatar must draw a letter immediately, and a
+      // phone waiting on cookrew.dev to learn the owner's initials is a phone
+      // showing "?" every time the WAN is slow.
+      profileFace: () => profileFace,
       log: (message: string) => console.error(`[cookrew] ${message}`)
     },
     recoverAgent,

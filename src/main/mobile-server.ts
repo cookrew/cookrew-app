@@ -49,6 +49,7 @@ import { rendererSourceFor, staleBuildNotice } from './renderer-choice'
 import { fetchRendererDevResource, rendererDevPathAllowed } from './renderer-dev-proxy'
 import { isViteHmrUpgrade, proxyViteHmrUpgrade } from './hmr-proxy'
 import { handleIdentityRoutes, type MobileIdentityDeps } from './mobile-identity-routes'
+import { companionAccount } from './companion-account'
 import { RELAY_MARKER } from './canvas-bridge'
 import { certFingerprint, reachCard } from './reach'
 
@@ -752,6 +753,29 @@ function rendererSource(
   })
 }
 
+/**
+ * The identity deps, plus the two facts only this module holds: whether the
+ * TLS listener is up, and where it is. Both exist so a pairing that arrived on
+ * the plaintext port is sent to the secure one rather than completing there.
+ */
+function identityRouteDeps(deps: MobileServerDeps): MobileIdentityDeps | undefined {
+  if (!deps.identity) return undefined
+  return {
+    ...deps.identity,
+    httpsReady: () => httpsReady,
+    secureLocation: (request, url) =>
+      httpsRedirectTarget({
+        hostHeader: request.headers.host,
+        // The WHOLE query travels, so the ceremony completes over TLS rather
+        // than arriving at a bare page with the token stripped off it.
+        target: `${url.pathname}${url.search}`,
+        localAddress: request.socket.localAddress,
+        advertisedHosts: mobileEndpointList().map((endpoint) => endpoint.host),
+        port: MOBILE_HTTPS_PORT
+      })
+  }
+}
+
 async function handle(
   request: http.IncomingMessage,
   response: http.ServerResponse,
@@ -908,6 +932,10 @@ async function handle(
     // this server already holds — tail-read, no PTY.
     latestCheckpoint: (terminalId: string) => deps.traces.latestCheckpoint(terminalId),
     pairingToken: activePairingToken ?? deps.pairingToken,
+    // The second door: each admitted phone's own companion token. Checked by
+    // the same gate as the global one, so a per-device credential is not a
+    // phone that half works.
+    companionToken: (candidate: string) => deps.identity?.admitted.accepts(candidate) ?? false,
     wallToken: activeWallToken ?? deps.wallToken
   }
   if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return
@@ -958,6 +986,34 @@ async function handle(
       at: Date.now()
     })
     respondJson(response, 200, { deviceId: card.deviceId, lan: card.lan, tailnet: card.tailnet })
+    return
+  }
+
+  /**
+   * THE OWNER'S PUBLIC FACE, for the companion's avatar and its path sheet.
+   *
+   * Beside /api/reach and gated the same way — below handleMobileApi, so it
+   * needs the pairing token. A phone that holds that token is an admitted
+   * device of this account and may see what any of the account's devices see:
+   * a name, two initials, an avatar. companion-account.ts builds the answer
+   * member by member; nothing here may grow a field by accident.
+   *
+   * The registry origin is in it because the companion cannot work it out.
+   * Its own origin is this Mac or the relay, so "Switch desktop" had been a
+   * hard-coded cookrew.dev — wrong for anyone self-hosting, and wrong in every
+   * test environment.
+   */
+  if (request.method === 'GET' && url.pathname === '/api/account') {
+    const face = companionAccount(
+      deps.identity?.account() ?? null,
+      deps.identity?.registryOrigin() ?? '',
+      deps.identity?.profileFace?.() ?? null
+    )
+    if (!face) {
+      respondJson(response, 404, { error: 'no account on this desktop' })
+      return
+    }
+    respondJson(response, 200, face)
     return
   }
 

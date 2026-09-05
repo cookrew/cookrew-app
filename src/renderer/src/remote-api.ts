@@ -1,6 +1,8 @@
 import { AuthError, authStore, tokenParam, type AuthScope } from './auth-gate'
 import { ReconnectingStream, attachTerminalStream } from './live-stream'
-import { recordLatency, setPathLink } from './path-link'
+import { recordLatency, setDesktopName, setPathLink, setRegistryOrigin } from './path-link'
+import type { CompanionAccount } from '../../main/companion-account'
+import type { AccountStatus } from '../../shared/account-v2'
 import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
@@ -406,6 +408,43 @@ export function createRemoteApi(): CookrewApi {
       return result.interactive
     },
     browserStreamToken: () => Promise.resolve(null),
+    /**
+     * THE OWNER'S ACCOUNT, READ-ONLY, OVER HTTP.
+     *
+     * This surface had no `accountStatus` at all, so the companion's avatar
+     * feature-detected to nothing and drew a dashed "?" forever. The phone is
+     * an attached device of the same account (P6) and may see the same public
+     * face the desktop shows; /api/account is that face and nothing else.
+     *
+     * The answer also seeds the path sheet — the desktop's name, so it stops
+     * calling itself "This desktop", and the registry origin, so "Switch
+     * desktop" points where this Mac's account actually lives.
+     */
+    accountStatus: async () => {
+      const face = await req<CompanionAccount>(apiPath('/api/account'))
+      setDesktopName(face.desktopName)
+      setRegistryOrigin(face.registryOrigin)
+      // The fields the phone has no business knowing are stated as their
+      // "nothing to report" value rather than guessed at: the lock, the
+      // request queue and the recovery codes are all the DESKTOP's business,
+      // and a companion that claimed to know them would be inventing them.
+      const status: AccountStatus = {
+        username: face.username,
+        displayName: face.displayName,
+        avatar: face.avatar,
+        locked: false,
+        lockAfterMs: 0,
+        requests: 0,
+        envUsername: null,
+        sessionExpired: false,
+        workspacesReachable: true,
+        recoveryCodesSavedAt: null,
+        recoveryCodesLeft: 0,
+        // A name from before passwords is the desktop's to migrate, not the phone's.
+        legacy: null
+      }
+      return status
+    },
     reconnect: () => sharedEvents().revive(),
     onBrowserOpenTab: () => () => undefined,
     onBrowserPhoneViewing: () => () => undefined,

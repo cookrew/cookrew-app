@@ -74,6 +74,11 @@ export interface AccountIpcDeps {
   /** Republish the reach card — the reachability toggle's other half. */
   publishReach?: (reason: string) => void
   /**
+   * Keep the owner's display name and avatar where the mobile server can
+   * reach them. The profile is a network read; the phone's avatar must not be.
+   */
+  rememberFace?: (face: { displayName?: string; avatar?: string | null }) => void
+  /**
    * Put the pending recovery codes on disk, behind a save dialog.
    *
    * Injected because this module must stay free of Electron — it is the one
@@ -351,7 +356,16 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
       return accountStatus(deps)
     },
     'account:unlock': (password: unknown) => unlock(deps, asString(password)),
-    'account:profile': (): Promise<AccountResult<AccountProfile>> => deps.accounts.profile(),
+    'account:profile': async (): Promise<AccountResult<AccountProfile>> => {
+      const result = await deps.accounts.profile()
+      // Every successful read refreshes what the phone will be shown. This is
+      // the only place the face is learned, so it is the only place it is
+      // remembered.
+      if (result.ok) {
+        deps.rememberFace?.({ displayName: result.value.displayName, avatar: result.value.avatar })
+      }
+      return result
+    },
     'account:devices': (): Promise<AccountResult<readonly AccountDevice[]>> =>
       deps.accounts.devices(),
     'account:revoke': (id: unknown): Promise<AccountResult<void>> =>
@@ -381,17 +395,21 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
       deps.lock.setLockAfterMs(value)
       return accountStatus(deps)
     },
-    'account:setProfile': (patch: unknown): Promise<AccountResult<AccountProfile>> => {
+    'account:setProfile': async (patch: unknown): Promise<AccountResult<AccountProfile>> => {
       const record = (typeof patch === 'object' && patch !== null ? patch : {}) as Record<
         string,
         unknown
       >
-      return deps.accounts.setProfile({
+      const result = await deps.accounts.setProfile({
         ...(typeof record.displayName === 'string' ? { displayName: record.displayName } : {}),
         ...(typeof record.avatar === 'string' || record.avatar === null
           ? { avatar: record.avatar as string | null }
           : {}),
       })
+      if (result.ok) {
+        deps.rememberFace?.({ displayName: result.value.displayName, avatar: result.value.avatar })
+      }
+      return result
     },
     // ── phase 4 ──
     //

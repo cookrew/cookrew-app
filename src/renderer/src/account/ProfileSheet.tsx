@@ -139,8 +139,18 @@ export function ProfileSheet({
   const forget = (deviceId: string): void => {
     const call = cookrew().accountForgetAdmitted
     if (!call) return
-    setAdmitted((prior) => prior.filter((phone) => phone.deviceId !== deviceId))
-    void call(deviceId).catch((err: unknown) => console.error('forget admitted:', err))
+    // The row goes when MAIN says it is gone, not when the tap happens. An
+    // optimistic removal here is how a failed write reads as a success: the
+    // phone vanishes from the list and keeps opening the Mac.
+    void call(deviceId)
+      .then((forgotten) => {
+        if (forgotten) setAdmitted((prior) => prior.filter((p) => p.deviceId !== deviceId))
+        else setError('That phone could not be forgotten. Try again.')
+      })
+      .catch((err: unknown) => {
+        console.error('forget admitted:', err)
+        setError('Something went wrong on this side. Try again.')
+      })
   }
 
   const revoke = (id: string): void => {

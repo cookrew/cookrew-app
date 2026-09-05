@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { cookrew } from '../api'
 import { qrMatrix, qrPath } from '../../../shared/qr'
 import {
@@ -6,7 +6,7 @@ import {
   pairingPopoutView,
   type PairingPopoutView
 } from '../../../shared/pairing-qr'
-import type { PairingKeyHandout } from '../../../shared/account-v2'
+import { startPairingPoll, type PairingPollState } from './pairing-poll'
 import '../grant-surface.css'
 
 /**
@@ -23,55 +23,56 @@ import '../grant-surface.css'
  * rather than silently degrading.
  */
 
-const POLL_MS = 1000
+/**
+ * The clock, as a module-level default.
+ *
+ * It was `now = () => Date.now()` in the parameter list, which makes a NEW
+ * function every render — and that function was in the effect's dependency
+ * array. See pairing-poll.ts for what that cost. One stable reference, and a
+ * loop that lives outside React where it can be tested.
+ */
+const wallClock = (): number => Date.now()
 
 export function PairPhoneSheet({
   onClose,
   legacyUrl = null,
-  now = () => Date.now()
+  now = wallClock
 }: {
   onClose: () => void
   legacyUrl?: string | null
   now?: () => number
 }): React.JSX.Element {
-  const [handout, setHandout] = useState<PairingKeyHandout | null>(null)
-  const [asked, setAsked] = useState(false)
-  const [tick, setTick] = useState(now())
+  const [poll, setPoll] = useState<PairingPollState>(() => ({
+    handout: null,
+    asked: false,
+    tick: now()
+  }))
 
-  useEffect(() => {
-    const load = cookrew().accountPairingKey
-    if (!load) {
-      setAsked(true)
-      return
-    }
-    let live = true
-    const pull = (): void => {
-      void load()
-        .then((next) => {
-          if (!live) return
-          setHandout(next)
-          setAsked(true)
-        })
-        .catch(() => live && setAsked(true))
-    }
-    pull()
-    // Polling once a second is what draws the countdown AND what rotates the
-    // key: main mints lazily, so the popout asking is the thing that renews.
-    const timer = setInterval(() => {
-      setTick(now())
-      pull()
-    }, POLL_MS)
-    return () => {
-      live = false
-      clearInterval(timer)
-    }
-  }, [now])
+  // Held in a ref so a caller that passes an inline `now` still gets ONE
+  // interval for the life of the sheet rather than one per render.
+  const clock = useRef(now)
+  clock.current = now
 
+  useEffect(
+    () =>
+      startPairingPoll({
+        load: () => cookrew().accountPairingKey?.() ?? Promise.resolve(null),
+        now: () => clock.current(),
+        onState: setPoll
+      }),
+    // Empty on purpose: nothing in here may change while the sheet is open.
+    []
+  )
+
+  const { handout } = poll
   const view = pairingPopoutView({
     desktopName: handout?.desktopName ?? 'This Mac',
-    key: handout ? { deviceId: handout.deviceId, key: handout.key, expiresAt: handout.expiresAt } : null,
+    key: handout
+      ? { deviceId: handout.deviceId, key: handout.key, expiresAt: handout.expiresAt }
+      : null,
     legacyUrl,
-    now: tick
+    // Derived from the live clock every tick, so the countdown cannot freeze.
+    now: poll.tick
   })
 
   return (
@@ -89,7 +90,11 @@ export function PairPhoneSheet({
             ✕
           </button>
         </header>
-        {!asked ? <p className="gs-sub">Reading this Mac&rsquo;s key&hellip;</p> : <PairBody view={view} />}
+        {!poll.asked ? (
+          <p className="gs-sub">Reading this Mac&rsquo;s key&hellip;</p>
+        ) : (
+          <PairBody view={view} />
+        )}
       </div>
     </div>
   )

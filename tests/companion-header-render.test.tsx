@@ -159,9 +159,19 @@ describe('the badge sheet', () => {
     expect(html).toContain('Via cookrew.dev relay — your Mac is not on this network.')
   })
 
-  it('offers a way to another desktop', () => {
-    const html = paint({ origin: 'https://cookrew.dev', link: 'live' })
+  it('offers a way to another desktop, once the desktop has said where', () => {
+    const html = paint({
+      origin: 'https://cookrew.dev',
+      link: 'live',
+      registryOrigin: 'https://cookrew.dev'
+    })
     expect(html).toContain('href="https://cookrew.dev/me"')
     expect(html).toContain('Switch desktop')
+  })
+
+  it('offers NOTHING rather than a guessed address', () => {
+    const html = paint({ origin: 'https://cookrew.dev', link: 'live' })
+    expect(html).not.toContain('Switch desktop')
+    expect(html).not.toContain('href=')
   })
 })
