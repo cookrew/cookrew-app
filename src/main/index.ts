@@ -115,6 +115,13 @@ import { isPiCommand, piAdoptableSession, piLaunchBinding, resolvePiSessionByPan
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
 import { blocksResume, holderOf, liveSessionHolders, planHeldSessionFork } from './claude-live-session'
+import {
+  liveSessionOfPane,
+  oracleVerdict,
+  ORACLE_BOOT_DELAYS_MS,
+  ORACLE_SWEEP_MS,
+  PanePidCache
+} from './claude-session-oracle'
 import { createRestoreHandlers, registerRestoreIpc, RestoreHandlers } from './restore'
 import { withSessionLineage } from './session-lineage'
 import { buildManifest, loadPublishingKey, signManifest } from './preset-publish'
@@ -1628,6 +1635,13 @@ function spawnTracked(t: {
   // hop and refuses on every doubt, exactly as when a watcher raises it.
   if (isClaudeCommand(command) && t.claudeSessionId) {
     void rebindRotatedClaudeSession(t.id)
+    // The process's own statement arrives once claude has booted and written
+    // ~/.claude/sessions/<pid>.json — seconds after the pane exists. Ask on a
+    // short schedule so a resume that minted a new id is bound before the
+    // first turn, not at the next sweep.
+    for (const delay of ORACLE_BOOT_DELAYS_MS) {
+      setTimeout(() => void rebindRotatedClaudeSession(t.id, 'oracle'), delay).unref()
+    }
   }
   if (isCodexCommand(command) && !t.codexSessionRef) {
     // DETERMINISTIC bind (EXACT-CONTEXT gate): the rollout is the file the
@@ -1763,13 +1777,49 @@ function claimedClaudeSessions(selfId: string): ReadonlySet<string> {
 }
 
 const rotationProbes = new Set<string>()
+/** Cross-wire refusals already logged: terminal → the live session refused. */
+const claimedReported = new Map<string, string>()
 
-async function rebindRotatedClaudeSession(terminalId: string): Promise<void> {
-  // Single-flight per terminal: never stack probes. The sync reports once per
-  // stale window, but a window can close while the previous probe's bytes are
-  // still in flight, and two probes racing to commit the same chain is a race
-  // with nothing to win.
-  if (rotationProbes.has(terminalId)) return
+/** Pane pids, one herdr lookup per pane lifetime (claude-session-oracle.ts). */
+const panePids = new PanePidCache((terminalId) => ptys.panePid(terminalId))
+
+/**
+ * THE CHECKPOINT ⇔ LIVE-TRANSCRIPT SWEEP. Every live Claude card is held to
+ * the invariant in claude-session-oracle.ts on a slow clock: the binding the
+ * rail reads from is the session the pane's process reports. Oracle only —
+ * no directory scan — so a fleet of quiet cards costs one readdir and a few
+ * tiny reads per sweep, and a card whose process has moved house is rebound
+ * within ORACLE_SWEEP_MS instead of the 33 hours measured on 2026-09-05.
+ */
+const oracleSweep = setInterval(() => {
+  // A cold pane-pid lookup is a synchronous herdr child process, so at most
+  // ONE per tick: a fleet that all boots at once warms up over a few sweeps
+  // instead of stalling the main thread for the whole fleet in one go.
+  let coldLookups = 0
+  for (const node of store.terminalsAcross()) {
+    if (!isClaudeCommand(node.command) || !node.claudeSessionId) continue
+    if (!ptys.get(node.id)) continue
+    if (!panePids.isWarm(node.id) && coldLookups++ > 0) continue
+    void rebindRotatedClaudeSession(node.id, 'oracle')
+  }
+}, ORACLE_SWEEP_MS)
+oracleSweep.unref()
+
+/**
+ * Bring a Claude card's binding back to the session its pane is writing.
+ *
+ * ORACLE FIRST: the pane's process says which session it holds
+ * (~/.claude/sessions/<pid>.json). When it agrees with the binding there is
+ * nothing to scan; when it names another session, that is the answer and it
+ * lands synchronously — no head reads, no inference. Only when the process
+ * has no statement (older claude, no pane yet, a pane that died) does the
+ * directory scan run, and only in 'scan' mode: the sweep and the boot
+ * retries never pay for a scan on a card that is merely quiet.
+ */
+async function rebindRotatedClaudeSession(
+  terminalId: string,
+  mode: 'scan' | 'oracle' = 'scan'
+): Promise<void> {
   try {
     const hit = store.nodeAcrossWorkspaces(terminalId)
     if (!hit || hit.node.kind !== 'terminal') return
@@ -1777,6 +1827,37 @@ async function rebindRotatedClaudeSession(terminalId: string): Promise<void> {
     if (!isClaudeCommand(node.command)) return
     const bound = node.claudeSessionId
     if (!bound) return
+    // The oracle is NOT behind the single-flight guard: it answers in this
+    // same JS turn, and an answer must be free to land while a slow scan for
+    // the same card is still reading heads — the scan's own commit is then
+    // refused as 'binding-moved', which is the right outcome.
+    const live = liveSessionOfPane(panePids.pidOf(terminalId), liveSessionHolders(), node.cwd)
+    const verdict = oracleVerdict(bound, live, claimedClaudeSessions(terminalId))
+    if (verdict === 'agree') return
+    if (verdict === 'claimed' && live) {
+      // Once per (card, session) pair, not once per sweep tick.
+      if (claimedReported.get(terminalId) !== live.sessionId) {
+        claimedReported.set(terminalId, live.sessionId)
+        console.error(
+          `Claude card ${node.name} (${terminalId.slice(0, 8)}) writes session ${live.sessionId.slice(0, 8)} that another card owns; binding left on ${bound.slice(0, 8)}`
+        )
+      }
+      return
+    }
+    if (verdict === 'rebind' && live) {
+      // Bind only a file that exists: the record precedes the first write by
+      // a moment, and a watch on a name with no file behind it is the bug the
+      // fork path already fixed once. The next sweep lands it.
+      if (!existsSync(claudeSessionFile(node.cwd, live.sessionId))) return
+      commitRotatedClaudeSession(terminalId, bound, [live.sessionId])
+      return
+    }
+    if (mode === 'oracle') return
+    // Single-flight per terminal for the SCAN: never stack probes. The sync
+    // reports once per stale window, but a window can close while the
+    // previous probe's bytes are still in flight, and two probes racing to
+    // commit the same chain is a race with nothing to win.
+    if (rotationProbes.has(terminalId)) return
     rotationProbes.add(terminalId)
     let chain: string[] | null
     try {

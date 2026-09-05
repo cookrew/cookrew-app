@@ -17,6 +17,7 @@
     "postinstall": "electron-rebuild -f -w node-pty; node scripts/ensure-node-pty.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
+    "gate:checkpoints": "node scripts/checkpoint-live-gate.mjs",
     "dist": "electron-vite build && electron-builder",
     "dist:win": "electron-vite build && electron-builder --win",
     "dist:mac": "electron-vite build && electron-builder --mac",
