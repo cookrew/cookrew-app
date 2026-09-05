@@ -10,9 +10,13 @@ import {
   ACCOUNT_COPY,
   avatarView,
   claimView,
+  deviceName,
   initialsOf,
+  lockLabel,
   lockNote,
+  lockRowLabel,
   refusalSentence,
+  rescueState,
   revokeSentence,
   takenSentence,
   wrongPasswordSentence,
@@ -20,7 +24,9 @@ import {
 
 const STRONG = 'correct-horse-battery'
 
-const status = (over: Partial<AccountStatus> = {}): AccountStatus => ({
+/** A complete status; `over` is spread over it so the result stays AccountStatus
+ *  rather than every field widening to include undefined. */
+const BASE: AccountStatus = {
   username: 'drej',
   displayName: '',
   avatar: null,
@@ -30,8 +36,11 @@ const status = (over: Partial<AccountStatus> = {}): AccountStatus => ({
   envUsername: null,
   sessionExpired: false,
   workspacesReachable: true,
-  ...over,
-})
+  recoveryCodesSavedAt: null,
+  recoveryCodesLeft: null,
+}
+
+const status = (over: Partial<AccountStatus> = {}): AccountStatus => ({ ...BASE, ...over })
 
 describe('the avatar, in three states (D1)', () => {
   it('reads as NOBODY YET before an account, and never nags', () => {
@@ -130,6 +139,87 @@ describe('the claim sheet decides, and always says why (D2)', () => {
     expect(view.confirm.tone).toBe('bad')
     expect(view.confirm.note).toBe(ACCOUNT_COPY.CONFIRM_MISMATCH)
     expect(fields({ password: STRONG, confirm: STRONG }).confirm.tag).toBe('matches ✓')
+  })
+})
+
+describe('a reserved prefix gets the REAL reason', () => {
+  const fields = (over: Partial<Parameters<typeof claimView>[0]> = {}) =>
+    claimView({ username: '', check: 'invalid', password: '', confirm: '', ...over })
+
+  it('names the prefix instead of the lowercase-and-dashes rule', () => {
+    // The lie this replaces: `acct-x` is already lowercase, so being told to
+    // use lowercase left the person retyping a name that could never work.
+    const view = fields({ username: 'acct-x', check: 'free' })
+    expect(view.username.tag).toBe('reserved')
+    expect(view.username.note).toBe('acct- is reserved for the doors — pick another name.')
+    expect(view.username.note).not.toBe(ACCOUNT_COPY.USERNAME_INVALID)
+    expect(view.canClaim).toBe(false)
+  })
+
+  it('still says the shape rule for a name that really is malformed', () => {
+    expect(fields({ username: 'Drej', check: 'free' }).username.note).toBe(
+      ACCOUNT_COPY.USERNAME_INVALID,
+    )
+  })
+
+  it('refuses a reserved name even if the registry answered "free"', () => {
+    expect(
+      fields({ username: 'acct-x', check: 'free', password: STRONG, confirm: STRONG }).canClaim,
+    ).toBe(false)
+  })
+})
+
+describe('the lock delay is a closed list, said in words', () => {
+  it('names each choice, and off', () => {
+    expect(lockLabel(60_000)).toBe('1 min')
+    expect(lockLabel(900_000)).toBe('15 min')
+    expect(lockLabel(1_800_000)).toBe('30 min')
+    expect(lockLabel(0)).toBe('off')
+  })
+
+  it('never calls an unrecognised delay OFF', () => {
+    // The one wrong answer a security card can give: a lock that IS armed,
+    // described as off.
+    expect(lockLabel(120_000)).toBe('2 min')
+  })
+
+  it('labels the row with the delay it will actually wait', () => {
+    expect(lockRowLabel(300_000)).toBe('Lock Cookrew after 5 min idle')
+    expect(lockRowLabel(0)).toBe('Lock Cookrew when idle')
+  })
+})
+
+describe('the RESCUE row stops saying NOT SAVED once they are saved', () => {
+  /** A fixed formatter: the date's rendering is the locale's business. */
+  const on = (): string => 'X'
+
+  it('says NOT SAVED before anything happened', () => {
+    expect(rescueState(null, null)).toEqual({ saved: false, label: 'NOT SAVED' })
+    expect(rescueState(undefined, undefined)).toEqual({ saved: false, label: 'NOT SAVED' })
+  })
+
+  it('says when they were saved, with a check', () => {
+    expect(rescueState(1_757_116_800_000, null, on)).toEqual({ saved: true, label: 'Saved X' })
+  })
+
+  it('adds the registry’s remaining count when it sent one', () => {
+    expect(rescueState(1_757_116_800_000, 6, on).label).toBe('Saved X · 6 left')
+  })
+
+  it('counts as saved on the registry’s count alone', () => {
+    // Codes exist on the account even if this Mac never recorded saving them.
+    expect(rescueState(null, 8)).toEqual({ saved: true, label: '8 LEFT' })
+    expect(rescueState(null, 0).saved).toBe(false)
+  })
+})
+
+describe('a device is named the way its owner named it', () => {
+  it('drops the mDNS .local suffix and nothing else', () => {
+    expect(deviceName("Drej's MacBook Pro.local")).toBe("Drej's MacBook Pro")
+    expect(deviceName('studio.local')).toBe('studio')
+    expect(deviceName('MacBook Pro')).toBe('MacBook Pro')
+    // Not a suffix — a name that merely contains it keeps every character.
+    expect(deviceName('local.thing')).toBe('local.thing')
   })
 })
 

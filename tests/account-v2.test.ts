@@ -108,6 +108,32 @@ describe('the name and password rules, shared by the field and the claim', () =>
   })
 })
 
+describe('a reserved prefix is refused HERE, and named', () => {
+  it('answers "reserved" without opening a socket', async () => {
+    // The registry answers `bad_username`, which the sheet would render as the
+    // lowercase-and-dashes sentence about a name that IS lowercase.
+    const script = accounts(scratch(), [{ status: 404 }])
+    expect(await script.it.checkUsername('acct-x')).toBe('reserved')
+    expect(script.urls).toHaveLength(0)
+  })
+
+  it('carries the real reason as the message when a claim is attempted', async () => {
+    const base = scratch()
+    const script = accounts(base, [{ status: 201, body: CLAIMED }])
+    const result = await script.it.claim({ username: 'acct-x', password: PASSWORD })
+    expect(result).toMatchObject({ ok: false, reason: 'bad_username' })
+    expect(result.ok === false && result.message).toBe(
+      'acct- is reserved for the doors — pick another name.',
+    )
+    expect(script.urls).toHaveLength(0)
+    expect(loadAccount(base)).toBeNull()
+  })
+
+  it('still refuses a malformed name as a shape problem', async () => {
+    expect(await accounts(scratch()).it.checkUsername('Drej Smith')).toBe('invalid')
+  })
+})
+
 describe('the device id is a pure function of the key', () => {
   const key = mintDeviceKey()
 
@@ -145,6 +171,7 @@ describe('the file: 0600, atomic, and forgiving of a corrupt one', () => {
       lockAfterMs: DEFAULT_LOCK_AFTER_MS,
       claimedAt: 1,
       workspacesReachable: true,
+      recoveryCodesSavedAt: null,
       ...(base ? {} : {}),
     }
   }
@@ -401,6 +428,28 @@ describe('what a desktop registers, and what it never does', () => {
     expect(await local.profile()).toMatchObject({ ok: false, reason: 'no_account' })
     expect(await local.registerDesktop([])).toMatchObject({ ok: false, reason: 'no_account' })
     expect(local.verifyUnlock(PASSWORD)).toBe(false)
+  })
+
+  it('holds the minted batch in memory for the save dialog, and drops it after', async () => {
+    const eight = ['A-1', 'B-2', 'C-3', 'D-4', 'E-5', 'F-6', 'G-7', 'H-8']
+    const base = scratch()
+    const { it } = await live(base, [{ status: 201, body: { codes: eight } }])
+    expect(it.pendingRecoveryCodes()).toBeNull()
+    await it.recoveryCodes()
+    expect(it.pendingRecoveryCodes()).toEqual(eight)
+    it.markRecoveryCodesSaved(1_757_000_000_000)
+    // Dropped, so nothing can save a batch the owner already put away.
+    expect(it.pendingRecoveryCodes()).toBeNull()
+    expect(loadAccount(base)?.recoveryCodesSavedAt).toBe(1_757_000_000_000)
+  })
+
+  it('NEVER writes the codes to the account file', async () => {
+    const eight = ['A-1', 'B-2', 'C-3', 'D-4', 'E-5', 'F-6', 'G-7', 'H-8']
+    const base = scratch()
+    const { it } = await live(base, [{ status: 201, body: { codes: eight } }])
+    await it.recoveryCodes()
+    it.markRecoveryCodesSaved()
+    expect(readFileSync(accountFilePath(base), 'utf8')).not.toContain('A-1')
   })
 
   it('never writes the password into the file', async () => {

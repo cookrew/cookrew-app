@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron'
 import path from 'node:path'
-import { existsSync, statSync } from 'node:fs'
+import { chmodSync, existsSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
@@ -4336,7 +4336,33 @@ function registerIpc(handlers: RestoreHandlers): void {
     accounts,
     lock: ownerLock,
     envUsername: RELAY_HANDLE || null,
-    workspaces: () => store.list().workspaces.map((w) => ({ id: w.id, name: w.name }))
+    workspaces: () => store.list().workspaces.map((w) => ({ id: w.id, name: w.name })),
+    // SAVE AS FILE. The dialog lives here because account-ipc.ts must stay
+    // free of Electron; the CODES come from main's own memory, never from the
+    // call, so the renderer chooses the file and nothing else. 0600, because
+    // eight of these open the account.
+    saveCodes: async (codes) => {
+      if (!mainWindow) return { ok: false, reason: 'no_window' }
+      const picked = await dialog.showSaveDialog(mainWindow, {
+        title: 'Save your recovery codes',
+        defaultPath: path.join(app.getPath('downloads'), 'cookrew-recovery-codes.txt'),
+        filters: [{ name: 'Text', extensions: ['txt'] }]
+      })
+      if (picked.canceled || !picked.filePath) return { ok: false, reason: 'cancelled' }
+      try {
+        writeFileSync(picked.filePath, `${codes.join('\n')}\n`, {
+          encoding: 'utf8',
+          mode: 0o600
+        })
+        chmodSync(picked.filePath, 0o600)
+        return { ok: true }
+      } catch (error) {
+        // The path, never the codes — an error line is the one place a secret
+        // reaches a log by accident.
+        console.error('Could not save the recovery codes:', error)
+        return { ok: false, reason: 'write_failed' }
+      }
+    }
   })
 
   ipcMain.handle(
