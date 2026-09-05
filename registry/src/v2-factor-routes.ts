@@ -217,13 +217,16 @@ function attemptOn(ctx: V2Context, id: string, factor: Factor): Pending | null {
     refuseFactor(ctx.response, 400, 'not_offered')
     return null
   }
-  const pending = ctx.v2.factors.pending.attempt(id)
-  if (pending === null) {
-    // Gone, expired or spent — one answer, because telling a caller which is
-    // telling them whether the id was ever real.
-    refuseFactor(ctx.response, 410, 'expired')
+  const tried = ctx.v2.factors.pending.attempt(id)
+  if (!tried.ok) {
+    // An id that was never real and one that went cold read the same — but a
+    // BUDGET that has run out is a different thing to do about it, and saying
+    // "this took too long" to somebody who has just typed five wrong codes
+    // sends them looking for a clock problem they do not have.
+    refuseFactor(ctx.response, 410, tried.reason)
     return null
   }
+  const pending = tried.pending
   if (ctx.v2.factors.pending.refused(pending)) {
     ctx.v2.factors.pending.close(id)
     refuseFactor(ctx.response, 410, 'denied')

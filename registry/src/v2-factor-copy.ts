@@ -43,7 +43,7 @@ const SENTENCES: Record<FactorError, string> = {
   password_required: 'Type your password to take a factor off the account.',
   expired: 'That sign-in took too long, so it was dropped. Start again with your password.',
   denied: 'That sign-in was denied on your other device. Nothing was attached.',
-  too_many_attempts: 'Too many tries on this sign-in. Start again with your password.',
+  too_many_attempts: 'Too many tries on this sign-in. Start again.',
   no_approval: 'There is no such request — it may already have been answered.',
   bad_decision: 'A request is approved, denied, or “not me”.',
   totp_not_started: 'Ask for a secret first, then confirm it with a code from the app.',

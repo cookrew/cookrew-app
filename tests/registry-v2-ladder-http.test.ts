@@ -253,7 +253,12 @@ describe('POST /v2/sessions/:pending/totp', () => {
     }
     const done = await call('POST', `/v2/sessions/${step.pending}/totp`, { code: codeFor(secret) })
     expect(done.status).toBe(410)
-    expect((await bodyOf<{ error: string; message: string }>(done)).error).toBe('expired')
+    // NOT "expired": a budget that has run out is a different thing to do
+    // about it than a sign-in that went cold, and the sheet shows whichever
+    // sentence this names.
+    const said = await bodyOf<{ error: string; message: string }>(done)
+    expect(said.error).toBe('too_many_attempts')
+    expect(said.message).toBe('Too many tries on this sign-in. Start again.')
     // Even the right code, even from the same browser: the sign-in is over.
     expect((await call('GET', `/v2/sessions/${step.pending}`)).status).toBe(410)
   })
@@ -780,6 +785,46 @@ describe('POST /v2/me/passkeys', () => {
     const refused = await call('POST', '/v2/me/passkeys', { name: '   ', credential: nameless }, bearer(owner.token))
     expect(refused.status).toBe(400)
     expect((await bodyOf<{ error: string }>(refused)).error).toBe('bad_name')
+  })
+})
+
+describe('GET /v2/me carries the posture', () => {
+  /**
+   * The desktop's Security card reads /v2/me and nothing else. A body without
+   * `factors` can only be read as "an older registry, so nothing is enrolled"
+   * — which is what real-UI QA saw: an account with a live authenticator and
+   * a passkey, showing neither, for ever.
+   */
+  it('says what is enrolled, and follows every enrol and removal', async () => {
+    const owner = await claim()
+    const posture = async (): Promise<{ passkeys: { name: string }[]; totp: boolean; mustChangePassword: boolean }> =>
+      (await bodyOf<{ factors: { passkeys: { name: string }[]; totp: boolean; mustChangePassword: boolean } }>(
+        await call('GET', '/v2/me', undefined, bearer(owner.token))
+      )).factors
+
+    expect(await posture()).toEqual({ passkeys: [], totp: false, mustChangePassword: false })
+
+    await addTotp(owner)
+    expect((await posture()).totp).toBe(true)
+
+    await addPasskey(owner, p256())
+    const after = await posture()
+    expect(after.passkeys.map((p) => p.name)).toEqual(['This Mac'])
+    expect(JSON.stringify(after)).not.toContain('credentialId')
+    expect(JSON.stringify(after)).not.toContain('secret')
+
+    expect((await call('DELETE', '/v2/me/totp', { current: PASSWORD }, bearer(owner.token))).status).toBe(204)
+    expect((await posture()).totp).toBe(false)
+    expect((await posture()).passkeys).toHaveLength(1)
+  })
+
+  it('is on the body a profile edit answers with too, so nothing has to re-ask', async () => {
+    const owner = await claim()
+    await addTotp(owner)
+    const patched = await bodyOf<{ factors: { totp: boolean } }>(
+      await call('PATCH', '/v2/me', { displayName: 'Mira' }, bearer(owner.token))
+    )
+    expect(patched.factors.totp).toBe(true)
   })
 })
 
