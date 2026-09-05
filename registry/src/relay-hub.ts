@@ -34,7 +34,10 @@ export interface HubSocket {
 /** Why a connection was turned away. For the log; never a rendered sentence. */
 export type HubRefusal = 'name-taken' | 'no-such-door' | 'bad-name' | 'id-in-use'
 
-const NAME = /^@[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
+const DOOR_NAME = /^@[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
+
+/** `@handle/team` — a door somebody publishes. The hub's own default. */
+export const isDoorName = (name: string): boolean => DOOR_NAME.test(name)
 
 export interface HubDoor {
   name: string
@@ -69,7 +72,20 @@ export class RelayHub {
   private readonly theirIds = new WeakMap<HubSocket, Map<StreamId, StreamId>>()
   private nextId = 1
 
-  constructor(private readonly log: (message: string) => void = () => undefined) {}
+  /**
+   * `accepts` is WHICH NAMES THIS HUB IS FOR, and it is the only thing about
+   * this class that was ever door-shaped.
+   *
+   * A second namespace lives beside the doors — `@user/desktop/<deviceId>`,
+   * the owner's own canvas — and it needed the same pairing, the same stream
+   * ids and the same teardown. Duplicating them would have been duplicating
+   * the id-collision rule that keeps two people's sessions apart, which is the
+   * last piece of code that should exist twice.
+   */
+  constructor(
+    private readonly log: (message: string) => void = () => undefined,
+    private readonly accepts: (name: string) => boolean = isDoorName
+  ) {}
 
   /**
    * A door arrives and claims its name.
@@ -81,7 +97,7 @@ export class RelayHub {
    * and it does, since a laptop that lost the line has no old connection.
    */
   openDoor(name: string, socket: HubSocket): { ok: true; door: HubDoor } | { ok: false; reason: HubRefusal } {
-    if (!NAME.test(name)) return { ok: false, reason: 'bad-name' }
+    if (!this.accepts(name)) return { ok: false, reason: 'bad-name' }
     if (this.doors.has(name)) return { ok: false, reason: 'name-taken' }
     const door: HubDoor = { name, socket, streams: new Set() }
     this.doors.set(name, door)

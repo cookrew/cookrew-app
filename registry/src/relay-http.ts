@@ -2,7 +2,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { json, readJsonBody } from './http'
 import { RelayHub, type HubSocket } from './relay-hub'
-import { decodeFrame, encodeFrame, MAX_FRAME_BYTES } from '../../src/shared/relay-frame'
+import { HEARTBEAT_MS, LinkPulse, openNdjson, readFrameLines } from './relay-link'
+import { decodeFrame, encodeFrame } from '../../src/shared/relay-frame'
 import type { IdentityService } from './identity'
 
 /**
@@ -30,13 +31,6 @@ import type { IdentityService } from './identity'
  * question of who may call is answered at the door, on the author's machine.
  */
 
-/**
- * How often a quiet stream says something.
- *
- * Well under the minute-or-two an idle connection typically survives at a CDN,
- * and far too rare to be a cost: one byte.
- */
-const HEARTBEAT_MS = 25_000
 /** How long a ticket stands between being minted and being used. */
 const TICKET_TTL_MS = 60_000
 /** A caller's whole request body. The gate takes small JSON posts. */
@@ -79,34 +73,28 @@ export function createRelayHttp(deps: {
   const pulseDeadlineMs = deps.pulseDeadlineMs ?? pulseMs * 3
   const hub = new RelayHub(log)
   const tickets = new Map<string, Ticket>()
-  /** Which door name each live downlink serves, so an uplink can find it. */
-  const live = new Map<string, HubSocket>()
   /**
-   * When each live door last PROVED both its halves: the moment its pong
-   * arrived on the uplink. A door is dropped after pulseDeadlineMs without
-   * one, whatever its sockets look like — through a proxy they look open long
-   * after they stopped carrying anything (the third zombie door, 2026-09-02:
-   * both ends held open sockets, every call hung, nothing was logged).
+   * WHICH DOORS ARE REALLY THERE — the downlink each name is held by, and when
+   * that name last PROVED both its halves by answering a ping on its uplink.
+   * The rule and its scar tissue live in relay-link.ts, because the owner's
+   * own canvas is held open the same way.
    */
-  const pulse = new Map<string, number>()
+  const live: LinkPulse = new LinkPulse({
+    now,
+    pulseMs,
+    deadlineMs: pulseDeadlineMs,
+    drop: (name, why) => dropDoor(name, why)
+  })
 
   const dropDoor = (name: string, why: string): void => {
-    const socket = live.get(name)
-    live.delete(name)
-    pulse.delete(name)
+    const socket = live.socketOf(name)
+    live.release(name)
     hub.closeDoor(name)
     // The downlink is ended too, so the door LEARNS: a response ending is the
     // one signal a client reliably observes, and it is what makes it redial.
     socket?.close()
     log(`relay: ${name} ${why}`)
   }
-  const pulseCheck = setInterval(() => {
-    const at = now()
-    for (const [name, last] of pulse) {
-      if (at - last > pulseDeadlineMs) dropDoor(name, 'lost its pulse')
-    }
-  }, pulseMs)
-  pulseCheck.unref?.()
 
   const sweep = (): void => {
     const at = now()
@@ -179,37 +167,6 @@ export function createRelayHttp(deps: {
     return found
   }
 
-  /** A stream of frames, one JSON object per line. */
-  const openNdjson = (response: ServerResponse): ((line: string) => void) => {
-    response.writeHead(200, {
-      'content-type': 'application/x-ndjson; charset=utf-8',
-      'cache-control': 'no-cache, no-transform',
-      connection: 'keep-alive',
-      // Nginx and friends buffer a response until it ends unless told not to,
-      // which would hold a terminal's output until the session was over.
-      'x-accel-buffering': 'no'
-    })
-    /**
-     * A HEARTBEAT, because the streams here are quiet for long stretches.
-     *
-     * An agent that is thinking says nothing, and a door with no callers says
-     * nothing at all — while every CDN and load balancer between here and them
-     * drops an idle connection after a minute or two. That drop would read as
-     * the team having gone away, moments after someone paid to reach it.
-     *
-     * An empty line, because the parsers on both ends already skip one: the
-     * heartbeat needs no place in the protocol.
-     */
-    const beat = setInterval(() => {
-      if (!response.writableEnded) response.write('\n')
-    }, HEARTBEAT_MS)
-    beat.unref?.()
-    response.on('close', () => clearInterval(beat))
-    return (line) => {
-      if (!response.writableEnded) response.write(`${line}\n`)
-    }
-  }
-
   /** THE DOOR'S DOWNLINK — held open for the life of the door. */
   const doorDownlink = (
     request: IncomingMessage,
@@ -236,23 +193,15 @@ export function createRelayHttp(deps: {
       response.end()
       return
     }
-    live.set(ticket.name, socket)
     // The door has until the first deadline to answer its first ping; a door
     // that never opens an uplink at all is dropped by the same rule.
-    pulse.set(ticket.name, now())
-    const ping = setInterval(() => {
-      if (live.get(ticket.name) === socket) write(encodeFrame({ t: 'ping', at: now() }))
-      else clearInterval(ping)
-    }, pulseMs)
-    ping.unref?.()
+    live.hold(ticket.name, socket)
     // THE RESPONSE, not the request. A GET's request stream completes the
     // moment its (empty) body has arrived, so listening there would drop the
     // door immediately — see the same trap, and the same fix, in `call`.
     response.on('close', () => {
-      clearInterval(ping)
-      if (live.get(ticket.name) === socket) {
-        live.delete(ticket.name)
-        pulse.delete(ticket.name)
+      if (live.holds(ticket.name, socket)) {
+        live.release(ticket.name)
         hub.closeDoor(ticket.name)
       }
     })
@@ -267,36 +216,17 @@ export function createRelayHttp(deps: {
    */
   const doorUplink = (request: IncomingMessage, response: ServerResponse, url: URL): void => {
     const ticket = redeem(url.searchParams.get('ticket'))
-    if (!ticket || !live.has(ticket.name)) {
+    if (!ticket || live.socketOf(ticket.name) === undefined) {
       json(response, 401, { error: 'no_ticket' })
       return
     }
     const name = ticket.name
     /** The downlink this uplink belongs to, so ending one ends the pair. */
-    const socket = live.get(name)
-    let buffer = ''
-    request.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8')
-      let at = buffer.indexOf('\n')
-      while (at >= 0) {
-        const line = buffer.slice(0, at)
-        buffer = buffer.slice(at + 1)
-        if (line.length > 0) {
-          // The pong is for the relay, not for any caller.
-          if (line.startsWith('{"t":"pong"')) {
-            if (live.has(name)) pulse.set(name, now())
-          } else {
-            hub.fromDoor(name, line)
-          }
-        }
-        at = buffer.indexOf('\n')
-      }
-      // A line that never ends is not a frame, it is someone making us
-      // allocate. The connection is the right thing to lose here.
-      if (buffer.length > MAX_FRAME_BYTES) {
-        buffer = ''
-        request.destroy()
-      }
+    const socket = live.socketOf(name)
+    readFrameLines(request, (line) => {
+      // The pong is for the relay, not for any caller.
+      if (line.startsWith('{"t":"pong"')) live.beat(name)
+      else hub.fromDoor(name, line)
     })
     /**
      * NO UPLINK MEANS NOT SERVING, and the door must stop being listed as
@@ -309,7 +239,7 @@ export function createRelayHttp(deps: {
      * which is the only version of this that is true.
      */
     const gone = (): void => {
-      if (live.get(name) === socket) dropDoor(name, 'lost its uplink')
+      if (live.socketOf(name) === socket) dropDoor(name, 'lost its uplink')
     }
     // NOT request.on('close'). THE SAME TRAP AS THE CALLER SIDE, and it bit
     // twice: on a streaming request that event does not mean "the client went
