@@ -1,3 +1,4 @@
+import { uuidFromDigest } from '../../shared/device-id'
 /**
  * THE PHONE'S OWN KEY, and the one moment it is bound (D2).
  *
@@ -72,7 +73,9 @@ export function base64url(bytes: ArrayBuffer | Uint8Array): string {
  * the second bind is the same device.
  */
 export function deviceIdFromDigest(digest: ArrayBuffer | Uint8Array): string {
-  return `d_${base64url(digest).slice(0, 16)}`
+  // UUID-shaped, because that is the only shape the registry admits — and
+  // still a pure function of the key (src/shared/device-id.ts).
+  return uuidFromDigest(digest)
 }
 
 /**

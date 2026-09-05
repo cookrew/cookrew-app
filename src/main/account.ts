@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { generateKeyPairSync, sign } from 'node:crypto'
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
+import { uuidFromDigest } from '../shared/device-id'
 import { createPrivateKey } from 'node:crypto'
 import { homedir, userInfo } from 'node:os'
 import path from 'node:path'
@@ -214,7 +215,9 @@ export async function mintAccount(
   const name = input.name ?? 'this computer'
   // The device id is the registry's to assign; a proposal rides along so a
   // registry that echoes rather than mints still returns something usable.
-  const proposed = `d_${jwkThumbprint(publicKeyJwk).slice(0, 16)}`
+  const proposed = uuidFromDigest(
+    createHash('sha256').update(jwkThumbprint(publicKeyJwk)).digest()
+  )
 
   let answer: Response
   try {
