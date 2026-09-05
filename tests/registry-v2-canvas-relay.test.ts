@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { createServer, request as httpRequest, type Server } from 'node:http'
+import { createServer, request as httpRequest, type IncomingMessage, type Server } from 'node:http'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -16,6 +16,7 @@ import {
   allowedRequestHeaders,
   canvasName,
   createCanvasRelay,
+  crossSite,
   forwardableCookies,
   isCanvasName,
   rewriteCookiePath,
@@ -70,6 +71,15 @@ const mobileServer = (): Server =>
       response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
       response.write('data: one\n\n')
       setTimeout(() => response.write('data: two\n\n'), 30)
+      return
+    }
+    if (url.pathname === '/hang') {
+      // Never answers. A desktop that has stopped without closing anything.
+      return
+    }
+    if (url.pathname === '/stall') {
+      response.writeHead(200, { 'content-type': 'text/plain' })
+      response.write('first')
       return
     }
     if (url.pathname === '/bytes') {
@@ -223,14 +233,19 @@ async function claim(name: string, kind: 'desktop' | 'phone'): Promise<{ id: str
   return { id, token: ((await res.json()) as { session: { token: string } }).session.token }
 }
 
-async function attach(name: string, kind: 'phone' | 'browser', approver: string): Promise<string> {
+async function attach(
+  name: string,
+  kind: 'phone' | 'browser' | 'desktop',
+  approver: string
+): Promise<{ id: string; token: string }> {
+  const id = randomUUID()
   const res = await fetch(`${site.origin}/v2/sessions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       username: name,
       password: PASSWORD,
-      device: { id: randomUUID(), kind, name: 'A phone', jwk: jwkOf() }
+      device: { id, kind, name: 'Another machine', jwk: jwkOf() }
     })
   })
   // Phase 4: a device the account has never seen climbs one rung — the first
@@ -248,7 +263,7 @@ async function attach(name: string, kind: 'phone' | 'browser', approver: string)
   expect(decided.status).toBe(204)
   const done = await fetch(`${site.origin}/v2/sessions/${asked.pending}`)
   expect(done.status).toBe(201)
-  return ((await done.json()) as { token: string }).token
+  return { id, token: ((await done.json()) as { token: string }).token }
 }
 
 beforeAll(async () => {
@@ -274,9 +289,9 @@ beforeAll(async () => {
     headers: { authorization: `Bearer ${desktopToken}`, 'content-type': 'application/json' },
     body: JSON.stringify({ name: 'This Mac', workspaces: [{ id: 'w1', name: 'Cookrew Dev' }] })
   })
-  phoneSession = await attach(username, 'phone', desktopToken)
+  phoneSession = (await attach(username, 'phone', desktopToken)).token
   const stranger = await claim('stranger', 'desktop')
-  strangerSession = await attach('stranger', 'phone', stranger.token)
+  strangerSession = (await attach('stranger', 'phone', stranger.token)).token
 
   desktop = linkDesktop(site.origin, desktopToken, deviceId, mobile.origin)
   await desktop.ready
@@ -410,7 +425,7 @@ describe('/relay/@user/desktop/:id — who is admitted to the prefix', () => {
 
   it('says so plainly when the Mac is holding no line', async () => {
     const asleep = await claim('sleeper', 'desktop')
-    const session = await attach('sleeper', 'phone', asleep.token)
+    const session = (await attach('sleeper', 'phone', asleep.token)).token
     const res = await fetch(`${site.origin}/relay/@sleeper/desktop/${asleep.id}/`, {
       headers: { accept: 'text/html', cookie: `cr_session=${session}` }
     })
@@ -541,6 +556,175 @@ describe('a phone of the account, reaching its own canvas', () => {
     expect(seen.join('')).toContain('data: one')
     expect(seen.join('')).toContain('data: two')
     control.abort()
+  })
+})
+
+// ── the bounds, because anyone can claim a username ──────────────────────
+
+/**
+ * A relay of its own, with the bounds turned down far enough to reach in a
+ * test. Everything else is the shipping code: the same hub, the same gate.
+ */
+async function standBare(
+  bounds: Partial<Parameters<typeof createCanvasRelay>[0]> = {}
+): Promise<{ origin: string; relay: CanvasRelay; desktop: Linked; close: () => Promise<void> }> {
+  const relay = createCanvasRelay({
+    v2: createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } }),
+    ...bounds
+  })
+  const up = await listen(
+    createServer((request, response) => {
+      const url = new URL(request.url ?? '/', 'http://relay.local')
+      const parts = url.pathname.split('/').filter(Boolean)
+      if (relay.handle(request, response, parts, url)) return
+      response.writeHead(404).end()
+    })
+  )
+  const linked = linkDesktop(up.origin, desktopToken, deviceId, mobile.origin)
+  await linked.ready
+  return {
+    origin: up.origin,
+    relay,
+    desktop: linked,
+    close: async () => {
+      linked.close()
+      relay.stop()
+      await up.close()
+    }
+  }
+}
+
+describe('what one account may make this process hold', () => {
+  it('carries only so many exchanges on one line, and says so in a sentence', async () => {
+    const bare = await standBare({ exchangesPerLink: 2 })
+    const stop = new AbortController()
+    // Two that never come back, which is what a stopped Mac looks like.
+    const held = [1, 2].map(() =>
+      fetch(`${bare.origin}${prefix()}/hang`, { headers: asPhone(), signal: stop.signal }).catch(() => null)
+    )
+    await until(() => bare.relay.stats().open === 2, 'both exchanges to be in flight')
+    const third = await fetch(`${bare.origin}${prefix()}/hang`, { headers: asPhone({ accept: 'application/json' }) })
+    expect(third.status).toBe(503)
+    const body = (await third.json()) as { error: string; message: string }
+    expect(body.error).toBe('too_many_exchanges')
+    expect(body.message).toContain('2 requests')
+    stop.abort()
+    await Promise.all(held)
+    await bare.close()
+  })
+
+  it('holds only so many lines for one account, whatever device ids it invents', async () => {
+    // Attached BEFORE the relay stands up: it reads the account file once, as
+    // a deployment does at boot.
+    const second = await attach(username, 'desktop', desktopToken)
+    const bare = await standBare({ linksPerAccount: 1 })
+    const res = await fetch(`${bare.origin}/v2/canvas/link/${second.id}`, {
+      headers: { authorization: `Bearer ${second.token}` }
+    })
+    expect(res.status).toBe(429)
+    const body = (await res.json()) as { error: string; message: string }
+    expect(body.error).toBe('too_many_links')
+    expect(body.message).toMatch(/[.!]$/)
+    // The line that was already there is untouched.
+    expect(bare.relay.live(username, deviceId)).toBe(true)
+    await bare.close()
+  })
+
+  it('gives up on an exchange the Mac never answers, and lets it go', async () => {
+    const bare = await standBare({ headDeadlineMs: 80 })
+    const res = await fetch(`${bare.origin}${prefix()}/hang`, { headers: asPhone({ accept: 'application/json' }) })
+    expect(res.status).toBe(504)
+    expect(((await res.json()) as { error: string }).error).toBe('timed_out')
+    await until(() => bare.relay.stats().open === 0, 'the exchange to be released')
+    await bare.close()
+  })
+
+  it('gives up on an answer that stopped mid-body, and ends the stream', async () => {
+    const bare = await standBare({ idleDeadlineMs: 120 })
+    const res = await fetch(`${bare.origin}${prefix()}/stall`, { headers: asPhone() })
+    expect(res.status).toBe(200)
+    // The head and the first chunk arrived; the stream then ends by itself
+    // rather than being held open for as long as the desktop stays quiet.
+    expect(await res.text()).toBe('first')
+    await until(() => bare.relay.stats().open === 0, 'the stalled exchange to be released')
+    await bare.close()
+  })
+
+  it('refuses a body when the whole relay is already holding as much as it will', async () => {
+    const bare = await standBare({ bodyBudget: 1024 })
+    const res = await fetch(`${bare.origin}${prefix()}/upload`, {
+      method: 'POST',
+      headers: asPhone({ 'content-type': 'application/octet-stream' }),
+      body: Buffer.alloc(64 * 1024)
+    })
+    expect(res.status).toBe(503)
+    expect(((await res.json()) as { error: string }).error).toBe('busy')
+    // Given back: the next ordinary request is not refused for ever after.
+    const after = await fetch(`${bare.origin}${prefix()}/`, { headers: asPhone() })
+    expect(after.status).toBe(200)
+    await after.text()
+    await bare.close()
+  })
+})
+
+// ── requests another site caused ─────────────────────────────────────────
+
+describe('the cross-site gate on both prefixes', () => {
+  it('reads the browser’s own account of where a request came from', () => {
+    const asked = (headers: Record<string, string>): boolean =>
+      crossSite({ headers } as unknown as IncomingMessage)
+    expect(asked({ 'sec-fetch-site': 'same-origin' })).toBe(false)
+    expect(asked({ 'sec-fetch-site': 'none' })).toBe(false)
+    expect(asked({ 'sec-fetch-site': 'cross-site' })).toBe(true)
+    expect(asked({ 'sec-fetch-site': 'same-site' })).toBe(true)
+    // No such header: the Origin rule the rest of /v2 uses.
+    expect(asked({ origin: 'https://evil.example', host: 'cookrew.dev' })).toBe(true)
+    expect(asked({ host: 'cookrew.dev' })).toBe(false)
+  })
+
+  it('refuses a cross-site GET at the downlink, which would otherwise squat a name', async () => {
+    const res = await fetch(`${site.origin}/v2/canvas/link/${randomUUID()}`, {
+      headers: { cookie: `cr_session=${phoneSession}`, 'sec-fetch-site': 'cross-site' }
+    })
+    expect(res.status).toBe(403)
+    expect(((await res.json()) as { error: string }).error).toBe('bad_origin')
+  })
+
+  it('leaves the app’s Bearer path alone, which is not a browser', async () => {
+    // The phone's token against the Mac's id: past the origin gate, and
+    // refused by the rule that actually decides whose line this is.
+    const res = await fetch(`${site.origin}/v2/canvas/link/${deviceId}`, {
+      headers: { authorization: `Bearer ${phoneSession}`, 'sec-fetch-site': 'cross-site' }
+    })
+    expect(res.status).toBe(403)
+    expect(((await res.json()) as { error: string }).error).toBe('not_this_device')
+  })
+
+  it('refuses a cross-site navigation into the canvas, with a sentence', async () => {
+    const res = await fetch(`${site.origin}${prefix()}/`, {
+      headers: asPhone({ accept: 'text/html', 'sec-fetch-site': 'cross-site' })
+    })
+    expect(res.status).toBe(403)
+    expect(res.headers.get('content-type')).toContain('text/html')
+    expect(await res.text()).toContain('Not from here')
+  })
+
+  it('refuses a cross-site write, and answers a script in JSON', async () => {
+    const res = await fetch(`${site.origin}${prefix()}/api/thing`, {
+      method: 'POST',
+      headers: asPhone({ accept: 'application/json', 'sec-fetch-site': 'cross-site' }),
+      body: '{}'
+    })
+    expect(res.status).toBe(403)
+    expect(((await res.json()) as { error: string }).error).toBe('bad_origin')
+  })
+
+  it('lets the picker’s own navigation through — same-origin, and a typed address too', async () => {
+    for (const site_ of ['same-origin', 'none']) {
+      const { res, body } = await echo('/', { headers: asPhone({ 'sec-fetch-site': site_ }) })
+      expect(res.status, site_).toBe(200)
+      expect(body.method).toBe('GET')
+    }
   })
 })
 

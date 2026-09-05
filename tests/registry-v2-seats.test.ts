@@ -211,3 +211,69 @@ describe('the file under it', () => {
     expect(() => new V2Seats(dir)).toThrow(/refusing to start/)
   })
 })
+
+/**
+ * THE CAP, AND WHOSE SEAT IT MAY NOT TAKE (security review, LOW).
+ *
+ * The file is bounded so it always loads. It used to be bounded by insertion
+ * order — `slice(-SEATS_MAX)` — which drops the OLDEST rows, and the oldest
+ * rows are the long-standing paid seats. A person who bought a seat a year
+ * ago would have arrived at the door a stranger, with nothing anywhere saying
+ * why. History is what gets trimmed now; a live seat never is.
+ */
+describe('the seat file’s cap', () => {
+  const CAP = 20_000
+  const seed = (live: number, ended: number): { dir: string; said: string[] } => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'v2-seats-cap-'))
+    dirs.push(dir)
+    const seats = [
+      ...Array.from({ length: live }, (_, at) => ({
+        id: `live-${at}`,
+        team: TEAM,
+        account: `holder${at}`,
+        source: 'bought',
+        by: 'stripe',
+        createdAt: 1_700_000_000_000 + at
+      })),
+      ...Array.from({ length: ended }, (_, at) => ({
+        id: `ended-${at}`,
+        team: OTHER,
+        account: `past${at}`,
+        source: 'granted',
+        by: 'drej',
+        createdAt: 1_700_000_000_000 + at,
+        endedAt: 1_700_000_100_000 + at
+      }))
+    ]
+    writeFileSync(path.join(dir, SEATS_FILE), JSON.stringify({ version: 2, seats }))
+    return { dir, said: [] }
+  }
+
+  it('drops the oldest ENDED seat to make room, and never a live one', () => {
+    const { dir } = seed(1, CAP - 1)
+    const seats = new V2Seats(dir, () => 1_757_000_000_000)
+    expect(granted(seats, 'newcomer', OTHER).ok).toBe(true)
+
+    const kept = new V2Seats(dir, () => 1_757_000_000_000)
+    expect(kept.forTeam(TEAM).map((seat) => seat.id)).toEqual(['live-0'])
+    const history = kept.forTeam(OTHER)
+    expect(history).toHaveLength(CAP - 1)
+    // The oldest ended row made way; the newest ones and the new seat stayed.
+    expect(history.some((seat) => seat.id === 'ended-0')).toBe(false)
+    expect(history.some((seat) => seat.account === 'newcomer')).toBe(true)
+  })
+
+  it('keeps every live seat past the cap and says so, rather than revoking one silently', () => {
+    const { dir } = seed(CAP, 0)
+    const said: string[] = []
+    const seats = new V2Seats(dir, () => 1_757_000_000_000, (line) => said.push(line))
+    expect(granted(seats, 'newcomer', OTHER).ok).toBe(true)
+
+    const kept = new V2Seats(dir, () => 1_757_000_000_000)
+    expect(kept.forTeam(TEAM)).toHaveLength(CAP)
+    expect(kept.activeFor(TEAM, 'holder0')).not.toBeNull()
+    expect(said).toHaveLength(1)
+    expect(said[0]).toContain('20001 seats are live')
+    expect(said[0]).toMatch(/[.!]$/)
+  })
+})
