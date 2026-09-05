@@ -13,6 +13,7 @@ import {
 import { ApprovalCard } from './ApprovalCard'
 import { PairPhoneSheet } from './PairPhoneSheet'
 import { SecurityCard } from './SecurityCard'
+import { SeatsTab } from './SeatsTab'
 import { securityActions } from './security-actions'
 import '../grant-surface.css'
 
@@ -24,11 +25,12 @@ import '../grant-surface.css'
  * NAME. No canvas content leaves the desktop, and the Workspaces tab says so
  * in its own words rather than leaving the reader to assume it.
  *
- * WHAT IS NOT HERE, deliberately: nothing in this phase can approve a device
- * (D6, phase 4), buy a seat (phase 5) or reach another desktop (phase 3). The
- * tabs for those exist and are honest about being empty. An empty tab that
- * says "No seats yet." is a promise about where the thing will appear; a tab
- * that is missing is a feature the person cannot find later.
+ * WHAT IS NOT HERE, deliberately: nothing in this sheet can approve a device
+ * (D6, phase 4) or reach another desktop (phase 3). The tabs for those exist
+ * and are honest about being empty. An empty tab that says "No seats yet." is
+ * a promise about where the thing will appear; a tab that is missing is a
+ * feature the person cannot find later. SEATS & TEAMS is filled in by
+ * SeatsTab.tsx (phase 5).
  */
 
 export const PROFILE_TABS = [
@@ -382,13 +384,7 @@ export function ProfileSheet({
           </section>
         )}
 
-        {tab === 'SEATS & TEAMS' && (
-          <section className="cr-acct-pane" aria-label="Seats and teams">
-            {/* Phase 5 fills this. The tab exists so the person knows where a
-                seat will appear, rather than looking for it and finding no tab. */}
-            <p className="gs-dim">{ACCOUNT_COPY.NO_SEATS}</p>
-          </section>
-        )}
+        {tab === 'SEATS & TEAMS' && <SeatsTab username={username} />}
       </div>
     </div>
   )

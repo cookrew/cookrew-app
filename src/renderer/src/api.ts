@@ -43,6 +43,11 @@ import type {
   PasskeySummary,
   TotpEnrolment,
 } from "../../shared/account-approvals";
+import type {
+  SeatFace,
+  SeatsSurface,
+  ServedCallersRow,
+} from "../../shared/seats";
 
 /**
  * What `accountUnlock` answers. The lock's own outcome, plus whether the
@@ -535,6 +540,20 @@ export interface CookrewApi {
   accountAdmittedDevices?: () => Promise<readonly AdmittedPhone[]>;
   /** Drops the admission HERE. Does not revoke the phone at cookrew.dev. */
   accountForgetAdmitted?: (deviceId: string) => Promise<boolean>;
+  // ── seats & teams (identity v2, phase 5) ──
+  //
+  // Optional for the same reason as the rest: main is the only bridge that
+  // serves teams, so an absent `accountSeats` IS "no seats surface here".
+  accountSeats?: () => Promise<AccountResult<SeatsSurface>>;
+  accountTeamSeats?: (slug: string) => Promise<AccountResult<readonly SeatFace[]>>;
+  accountGrantSeat?: (input: {
+    slug: string;
+    username: string;
+  }) => Promise<AccountResult<SeatFace>>;
+  accountEndSeat?: (input: { slug: string; id: string }) => Promise<AccountResult<void>>;
+  /** The owner's canvas, told who is at its doors. */
+  servingCallers?: () => Promise<readonly ServedCallersRow[]>;
+  onServingCallers?: (cb: (rows: readonly ServedCallersRow[]) => void) => () => void;
   onAccountLocked?: (cb: (locked: boolean) => void) => () => void;
   // ── phase 4: the approval prompt (D6) and the factor ladder (D3) ──
   //

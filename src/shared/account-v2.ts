@@ -193,6 +193,12 @@ export type AccountRefusal =
   | 'no_account'
   | 'session-expired'
   | 'offline'
+  // Seats (phase 5). A seat operation refuses for reasons an account one
+  // cannot, and they are two different things to say to a person: 'not_found'
+  // is a username nobody has claimed, 'already_seated' is a seat that already
+  // exists — which a SETTLE reads as success, because it is what it asked for.
+  | 'not_found'
+  | 'already_seated'
   | 'unknown'
 
 /**

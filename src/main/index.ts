@@ -89,7 +89,17 @@ import { createReachPublisher, type ReachPublisher } from './reach'
 import { IdleLock } from './lock'
 import { registerAccountIpc } from './account-ipc'
 import { Approvals } from './approvals'
+import {
+  DoorCallers,
+  DoorSeats,
+  seatedCallersFor,
+  seatsApiOverAccounts,
+  type ServedTeamRef
+} from './door-seats'
 import { Factors } from './factors'
+import { SeatSettleQueue } from './seat-settle'
+import { createV2CallTokenVerifier, v2KeysOverHttp } from './v2-call-token'
+import type { ServedCallersRow } from '../shared/seats'
 import { buildGrantRoster } from './grant-roster'
 import { CallCredentialService } from './call-credential'
 import { makeCallCeremony } from './call-ceremony'
@@ -176,7 +186,7 @@ import { servedTemplateFile } from './served-persist'
 import { bootWorkspaceInPlace } from './session-boot'
 import { servedConfinement } from './session-spawn'
 import { makeEntryTerminalLookup, rmSandbox } from './session-instantiator-mount'
-import { ServedCallers } from './served-callers'
+import { ACCOUNT_SUB_PREFIX, ServedCallers } from './served-callers'
 import { serviceGrants } from './service-grants-store'
 import { requestHarnessCompletion, servedGrantPreflight } from './served-grant-preflight'
 import { servedSessionProvisioner } from './served-onboarding'
@@ -632,6 +642,19 @@ const ownerLock = new IdleLock({
 setInterval(() => ownerLock.tick(), 15_000).unref()
 
 /**
+ * D7's row, kept honest by a slow poll.
+ *
+ * It is PUSHED at the two moments that matter (a session minted, a session
+ * ended), and this is the backstop for every other way a session can start or
+ * stop — the caller's own PTY line admits without passing through the /ask
+ * seam, and a workspace the owner deletes ends a session from the far side.
+ * The publish diffs before it sends, so an idle desktop sends nothing.
+ */
+setInterval(() => {
+  if (serving.served.list().length > 0) publishServedCallers()
+}, 15_000).unref()
+
+/**
  * THE APPROVAL QUEUE (D6) AND THE FACTOR LADDER (D3).
  *
  * A waiting device is announced as a SYSTEM NOTIFICATION and as the avatar's
@@ -695,6 +718,19 @@ const registryTokens = RELAY_ORIGIN
   ? createRegistryTokenVerifier({ keys: registryKeyOverHttp(RELAY_ORIGIN) })
   : null
 
+/**
+ * IDENTITY v2 AT THE DOOR (phase 5). Beside the v1 verifier, never replacing
+ * it: both wire contracts are live until phase 6 retires the older one, and
+ * which body arrives decides which is asked (served-endpoints.handleServedRoute).
+ */
+const v2CallTokens = RELAY_ORIGIN
+  ? createV2CallTokenVerifier({ keys: v2KeysOverHttp(RELAY_ORIGIN) })
+  : null
+/** Who has signed in at each served door — the memory behind D7's avatars. */
+const doorCallers = new DoorCallers()
+/** The owner's seat routes at cookrew.dev, spoken with the owner's session. */
+const doorSeats = new DoorSeats(seatsApiOverAccounts(accounts))
+
 function servedReach(slug: string): { address: string; transport: ServeTransport } {
   // THE RELAY WINS when it is carrying this door, because it is the only
   // address that works for the person an owner is most likely to send it to.
@@ -753,6 +789,79 @@ async function joinRelayFor(template: ServedTemplate): Promise<void> {
     }
   })
   if (!joined.ok) console.error(`serving ${template.slug}: not on the relay (${joined.reason})`)
+}
+
+/**
+ * The teams this desktop is serving, named the way cookrew.dev names them.
+ *
+ * `team` is null for a door that is not on the relay: a seat names a `@handle/
+ * team`, and a door with no published name cannot hold one. The Seats tab
+ * shows those rows anyway and says so — serving is a fact this Mac knows on
+ * its own, and hiding a team because it is LAN-only would read as "stopped".
+ */
+function servedTeamRefs(): readonly ServedTeamRef[] {
+  return serving.served.list().map((template) => {
+    const snapshot = teams.load(template.templateId)
+    return {
+      serviceId: template.serviceId,
+      slug: template.slug,
+      team: relayServing?.addressFor(template.slug)?.name ?? null,
+      title: snapshot?.name ?? template.templateId,
+      access: template.access,
+      ...(template.priceUsd === undefined ? {} : { priceUsd: template.priceUsd })
+    }
+  })
+}
+
+/**
+ * A PAID SEAT IS REPORTED TO cookrew.dev, and never lost to an outage.
+ *
+ * The door took the money at its own checkout; the registry only records who
+ * ended up paying. The queue writes the receipt to disk before its first
+ * attempt and drains at boot, so a registry that is down while somebody buys a
+ * seat costs a retry rather than a dollar (seat-settle.ts).
+ */
+const seatSettles = new SeatSettleQueue({
+  seats: doorSeats,
+  onStuck: (entry) =>
+    console.error(
+      `[cookrew] seat for @${entry.username} at ${entry.team} is not recorded at cookrew.dev ` +
+        `(receipt ${entry.receipt}) — grant it by hand from Seats & Teams`
+    )
+})
+
+/** D7's rows: every served door, its orch card's NAME, and who is at it. */
+function servedCallerRows(): readonly ServedCallersRow[] {
+  const sessions = serving.instantiator.sessions().map((session) => ({
+    serviceId: session.serviceId,
+    sessionId: session.identity.sessionId,
+    caller: session.accountId,
+    conductorId: serving.instantiator.conductorFor(session.identity.sessionId),
+    openedAt: doorCallers.since(session.serviceId, session.accountId) ?? 0
+  }))
+  return serving.served.list().map((template) => {
+    const snapshot = teams.load(template.templateId)
+    return {
+      serviceId: template.serviceId,
+      slug: template.slug,
+      // The orch's name in the SAVED team — the card the owner recognises as
+      // the door. The renderer matches on it (CallerAvatars.callersForCard).
+      orchName: (snapshot ? orchAgentOf(snapshot) : null) ?? null,
+      callers: seatedCallersFor(template.serviceId, sessions, doorCallers)
+    }
+  })
+}
+
+/** Push the caller rows to the owner's canvas. Cheap, and only on a change. */
+let lastCallerRows = ''
+function publishServedCallers(): void {
+  const rows = servedCallerRows()
+  const encoded = JSON.stringify(rows)
+  if (encoded === lastCallerRows) return
+  lastCallerRows = encoded
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('serving:callers', rows)
+  }
 }
 
 function servedPaymentReturn(slug: string): string {
@@ -885,8 +994,36 @@ async function handleServedSlug(
       // on the relay has none, and refuses every such token.
       doorName: (template) => relayServing?.addressFor(template.slug)?.name ?? null,
       ...(registryTokens ? { registryTokens } : {}),
+      ...(v2CallTokens ? { v2Tokens: v2CallTokens } : {}),
+      // A v2 sign-in is the ONLY moment this door learns a caller's username;
+      // after it every route works from `acct-<username>`. Recorded so the
+      // owner's canvas can put a face on them (D7).
+      onV2Seated: (entry) => {
+        doorCallers.seated(entry)
+        publishServedCallers()
+      },
+      // The money moved. Report it to cookrew.dev as a bought seat, through
+      // the queue that survives the registry being down (seat-settle.ts).
+      onPaid: (payment) => {
+        const template = serving.served.byService(payment.serviceId)
+        const team = template ? (relayServing?.addressFor(template.slug)?.name ?? null) : null
+        const username = payment.sub.startsWith(ACCOUNT_SUB_PREFIX)
+          ? payment.sub.slice(ACCOUNT_SUB_PREFIX.length)
+          : null
+        // A key-based caller has no account for a seat to land on, and a door
+        // with no published name has no team for one to be at. Both are
+        // ordinary states, not failures — the caller is still admitted.
+        if (team === null || username === null || username.length === 0) return
+        void seatSettles
+          .record({ team, username, by: payment.by, receipt: payment.receipt })
+          .catch(() => undefined)
+      },
       admit: async (serviceId, sub) => {
         const { session, created } = await serving.instantiator.admit(serviceId, sub)
+        // A face appears when the SESSION does, not when the token was
+        // checked: sign-in is a credential, an open session is a person in
+        // the room, and the avatars are about the room.
+        if (created) publishServedCallers()
         return { workspaceId: session.workspaceId, sessionId: session.identity.sessionId, created }
       },
       hasOpenSession: (serviceId, sub) =>
@@ -2369,6 +2506,10 @@ function endServedSession(sessionId: string): { stopped: number } {
       console.error(`ending ${sessionId}: its workspace could not be removed: ${String(error)}`)
     }
   }
+  // The face goes with the session. What we remember of a caller is about a
+  // LIVE session, so a record that outlived one would draw somebody who left.
+  if (record) doorCallers.forget(record.serviceId, record.accountId)
+  publishServedCallers()
   return stopped
 }
 
@@ -3932,6 +4073,18 @@ app.whenReady().then(() => {
   // so reattached terminals show the (possibly updated) status bar.
   ptys.reloadTmuxConfig()
 
+  // ANY SEAT SOMEBODY PAID FOR THAT cookrew.dev NEVER HEARD ABOUT. Deferred
+  // rather than awaited: it is a network round trip per receipt and there is
+  // almost never one, so it must not sit between the owner and a window.
+  setTimeout(() => {
+    void seatSettles
+      .drain()
+      .then((settled) => {
+        if (settled > 0) console.error(`[cookrew] recorded ${settled} seat(s) at cookrew.dev`)
+      })
+      .catch(() => undefined)
+  }, 5_000)
+
   // Reclaim what the stores leaked. Deferred rather than awaited: it walks
   // ~/.cookrew and must never sit between the user and a window. It is also
   // deliberately quiet on the happy path — a sweep that frees nothing is the
@@ -4478,7 +4631,10 @@ function registerIpc(handlers: RestoreHandlers): void {
         console.error('Could not save the recovery codes:', error)
         return { ok: false, reason: 'write_failed' }
       }
-    }
+    },
+    // Seats & Teams (phase 5). The door is wired even with no account on this
+    // Mac — `Accounts.authed` answers `no_account` and the tab says so.
+    seats: { door: doorSeats, serving: servedTeamRefs, origin: registryOrigin() }
   })
 
   ipcMain.handle(
@@ -4657,6 +4813,15 @@ function registerIpc(handlers: RestoreHandlers): void {
       conductorId: serving.instantiator.conductorFor(s.identity.sessionId)
     }))
   )
+  /**
+   * D7: who is at each served door, for the avatars on the door's card.
+   *
+   * OWNER-ONLY, unlike its older neighbours on this seam, because this is the
+   * one that carries USERNAMES. A page the owner merely browsed to must not be
+   * able to enumerate the people at their doors, and a channel that names
+   * strangers is exactly the kind the account IPC's guard exists for.
+   */
+  ipcMain.handle('serving:callers', ownerOnly(() => servedCallerRows()))
   /** END destroys someone else's workspace, so it is the owner's act alone. */
   ipcMain.handle('serving:end', (_e, sessionId: string) => endServedSession(sessionId))
 

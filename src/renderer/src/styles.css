@@ -5689,6 +5689,85 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   font-size: 9px;
   letter-spacing: 0.08em;
   color: var(--muted);
+/* ── D7 · callers at a served door ──────────────────────────────────────
+   The only place another person appears on the owner's canvas. Sized off
+   the card's inverse-zoom var so a face reads the same at 30% as at 100%,
+   like every other chip in the head. */
+.cr-callers {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  position: relative;
+}
+
+.cr-caller {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  border-radius: 50%;
+  background: hsl(var(--caller-hue, 40) 46% 44%);
+  color: #fff;
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.cr-caller-more {
+  background: var(--cr-line, #332f27);
+  color: var(--muted);
+  cursor: default;
+}
+
+.cr-caller-menu {
+  position: absolute;
+  top: 22px;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 220px;
+  padding: 10px;
+  border: 1px solid var(--cr-line, #332f27);
+  border-radius: 6px;
+  background: var(--cr-panel, #1b1916);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+
+.cr-caller-why { font-size: 12px; line-height: 1.4; }
+
+/* The grant field in Seats & Teams: a username, and nothing else fits. */
+.cr-acct-grant-name {
+  width: 160px;
+  padding: 4px 6px;
+  border: 1px solid var(--cr-line, #332f27);
+  border-radius: 4px;
+  background: var(--cr-panel, #1b1916);
+  color: var(--cr-ink, #ece6d8);
+  font-size: 12.5px;
+}
+
+.cr-acct-seats {
+  flex: 1 0 100%;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0 0 0 58px;
+}
+
+.cr-acct-seat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 12.5px;
+}
+
 /* A row whose action is phase 4 must not read like the live ones. Muted text
    and a DASHED badge — the same "not filled in yet" the empty avatar wears —
    so nobody spends a click finding out the button does nothing. */

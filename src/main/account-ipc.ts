@@ -10,8 +10,15 @@ import type {
   PasskeySummary,
   TotpEnrolment,
 } from '../shared/account-approvals'
+import type { SeatFace, SeatsSurface } from '../shared/seats'
 import type { Accounts } from './account-v2'
 import type { Approvals } from './approvals'
+import {
+  seatsSurface,
+  teamForSlug,
+  type DoorSeats,
+  type ServedTeamRef
+} from './door-seats'
 import type { Factors } from './factors'
 import type { IdleLock, UnlockOutcome } from './lock'
 
@@ -68,6 +75,23 @@ export interface AccountIpcDeps {
    * renderer, so nothing here can be talked into writing chosen bytes.
    */
   saveCodes: (codes: readonly string[]) => Promise<{ ok: boolean; reason?: string }>
+  /**
+   * SEATS (phase 5). Optional because a desktop that never claimed a name has
+   * no seats to read and no team to grant one at — and because the four seat
+   * channels must still EXIST and still refuse in that state, rather than
+   * being absent and looking like a feature that was never built.
+   */
+  seats?: SeatsIpcDeps
+}
+
+/** What the four seat channels are wired to. */
+export interface SeatsIpcDeps {
+  /** Null on a desktop with no account. */
+  door: DoorSeats | null
+  /** The teams this desktop is serving right now. */
+  serving: () => readonly ServedTeamRef[]
+  /** Where a held seat's OPEN goes — the registry origin. */
+  origin: string
 }
 
 /** An IPC handler as this module writes them: args in, a value or promise out. */
@@ -110,6 +134,11 @@ export const ACCOUNT_CHANNELS = [
   'account:passkeyOptions',
   'account:passkeyAdd',
   'account:passkeyRemove',
+  // ── seats (phase 5) — owner-only like every other channel here ──
+  'account:seats',
+  'account:teamSeats',
+  'account:grantSeat',
+  'account:endSeat',
 ] as const
 
 export type AccountChannel = (typeof ACCOUNT_CHANNELS)[number]
@@ -188,6 +217,82 @@ async function claim(deps: AccountIpcDeps, input: unknown): Promise<AccountResul
   // it is an account whose Workspaces tab is empty until the next boot.
   void deps.accounts.registerDesktop(deps.workspaces()).catch(() => undefined)
   return { ok: true, value: accountStatus(deps) }
+}
+
+
+/**
+ * A SEAT CHANNEL WITH NO ACCOUNT BEHIND IT REFUSES; it does not disappear.
+ *
+ * `no_account` is the same refusal every other call in this file gives on a
+ * local-only desktop, so the tab shows one sentence for one state instead of
+ * an empty pane that could equally mean "no seats yet".
+ */
+function seatDeps(deps: AccountIpcDeps): SeatsIpcDeps | null {
+  return deps.seats?.door ? deps.seats : null
+}
+
+/** The team a slug publishes as, or the refusal that says why there is none. */
+function teamOf(
+  seats: SeatsIpcDeps,
+  slug: unknown
+): { ok: true; team: string } | { ok: false; reason: 'no_account' | 'not_found' } {
+  const team = teamForSlug(seats.serving(), asString(slug))
+  // A door that is not on the relay has no published name, so it has no seats
+  // — the same absence as a slug nobody is serving, and told the same way.
+  return team === null ? { ok: false, reason: 'not_found' } : { ok: true, team }
+}
+
+const record = (value: unknown): Record<string, unknown> =>
+  (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>
+
+/** The whole SEATS & TEAMS tab, in one ask. */
+async function seats(deps: AccountIpcDeps): Promise<AccountResult<SeatsSurface>> {
+  const wired = seatDeps(deps)
+  if (wired === null) return { ok: false, reason: 'no_account' }
+  return {
+    ok: true,
+    value: await seatsSurface({ seats: wired.door, serving: wired.serving, origin: wired.origin }),
+  }
+}
+
+/** One team's seats — what a SERVING row redraws after a grant or an END. */
+async function teamSeats(
+  deps: AccountIpcDeps,
+  slug: unknown,
+): Promise<AccountResult<readonly SeatFace[]>> {
+  const wired = seatDeps(deps)
+  if (wired === null || wired.door === null) return { ok: false, reason: 'no_account' }
+  const team = teamOf(wired, slug)
+  if (!team.ok) return team
+  return wired.door.forTeam(team.team)
+}
+
+async function grantSeat(
+  deps: AccountIpcDeps,
+  input: unknown,
+): Promise<AccountResult<SeatFace>> {
+  const wired = seatDeps(deps)
+  if (wired === null || wired.door === null) return { ok: false, reason: 'no_account' }
+  const fields = record(input)
+  const team = teamOf(wired, fields.slug)
+  if (!team.ok) return team
+  // Trimmed HERE as well as at the registry: an empty field must not become a
+  // POST that the registry answers 404 to, which reads as "no such person"
+  // when the truth is that nobody typed one.
+  const username = asString(fields.username).trim()
+  if (username.length === 0) return { ok: false, reason: 'bad_username' }
+  return wired.door.grant(team.team, username)
+}
+
+async function endSeat(deps: AccountIpcDeps, input: unknown): Promise<AccountResult<void>> {
+  const wired = seatDeps(deps)
+  if (wired === null || wired.door === null) return { ok: false, reason: 'no_account' }
+  const fields = record(input)
+  const team = teamOf(wired, fields.slug)
+  if (!team.ok) return team
+  const id = asString(fields.id).trim()
+  if (id.length === 0) return { ok: false, reason: 'not_found' }
+  return wired.door.end(team.team, id)
 }
 
 /** The table. Pure in, promise or value out; no Electron types anywhere. */
@@ -297,6 +402,10 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     },
     'account:passkeyRemove': (id: unknown): Promise<AccountResult<void>> =>
       deps.factors.removePasskey(asString(id)),
+    'account:seats': () => seats(deps),
+    'account:teamSeats': (slug: unknown) => teamSeats(deps, slug),
+    'account:grantSeat': (input: unknown) => grantSeat(deps, input),
+    'account:endSeat': (input: unknown) => endSeat(deps, input),
     'account:workspacesReachable': (on: unknown) => {
       deps.accounts.setWorkspacesReachable(on === true)
       // Re-file the desktop so the change reaches cookrew.dev now rather than
@@ -345,7 +454,8 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
  *
  * Main passes a `register` that wraps each handler in `ownerOnly`, so the
  * guard is applied by construction to every channel rather than remembered
- * once per channel.
+ * once per channel. The seat channels grant and end other people's access to
+ * this Mac's doors, so they need it at least as much as the rest.
  */
 export function registerAccountIpc(
   register: (channel: AccountChannel, handler: AccountHandler) => void,
