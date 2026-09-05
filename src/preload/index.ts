@@ -91,12 +91,14 @@ const api = {
   /** The secret and its QR, for the moment the sheet draws them. */
   accountTotpEnrol: () => ipcRenderer.invoke('account:totpEnrol'),
   accountTotpConfirm: (code: string) => ipcRenderer.invoke('account:totpConfirm', code),
-  accountTotpRemove: () => ipcRenderer.invoke('account:totpRemove'),
+  /** Both removals carry the password: the registry gates them on it. */
+  accountTotpRemove: (current: string) => ipcRenderer.invoke('account:totpRemove', current),
   accountPasskeys: () => ipcRenderer.invoke('account:passkeys'),
   accountPasskeyOptions: () => ipcRenderer.invoke('account:passkeyOptions'),
   accountPasskeyAdd: (input: { name: string; credential: Record<string, unknown> }) =>
     ipcRenderer.invoke('account:passkeyAdd', input),
-  accountPasskeyRemove: (id: string) => ipcRenderer.invoke('account:passkeyRemove', id),
+  accountPasskeyRemove: (id: string, current: string) =>
+    ipcRenderer.invoke('account:passkeyRemove', id, current),
   /**
    * The queue changed, or a notification was clicked (then with the request's
    * id, so the sheet opens on the one the owner was told about).

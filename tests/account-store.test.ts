@@ -19,6 +19,8 @@ import {
   lockRowLabel,
   mustChangeBanner,
   passkeyElsewhere,
+  profileKey,
+  removeFactorPrompt,
   refusalSentence,
   rescueState,
   revokeSentence,
@@ -415,5 +417,35 @@ describe('the passkey a desktop cannot make', () => {
       'Add a passkey on cookrew.dev in your browser — it works from any device',
     )
     expect(elsewhere.url).toBe('https://registry.test/me#security')
+  })
+})
+
+describe('taking a factor off', () => {
+  it('names what is being removed, so the field is not a mystery', () => {
+    const [passkey, totp] = factorRows(factorsView({ totp: true, passkeys: [] }))
+    expect(removeFactorPrompt(passkey)).toBe('Your password, to remove this passkey')
+    expect(removeFactorPrompt(totp)).toBe('Your password, to remove the authenticator')
+  })
+})
+
+describe('what makes the DEVICES tab re-read itself', () => {
+  it('changes when a waiting request is answered', () => {
+    // Approving attaches the device at the registry; the count dropping is
+    // the moment the list on screen went stale.
+    expect(profileKey({ username: 'drej', requests: 1 })).not.toBe(
+      profileKey({ username: 'drej', requests: 0 }),
+    )
+  })
+
+  it('is stable while nothing has happened, so the sheet does not thrash', () => {
+    expect(profileKey({ username: 'drej', requests: 0 })).toBe(
+      profileKey({ username: 'drej', requests: 0 }),
+    )
+  })
+
+  it('changes with the account, so a claim redraws the tab', () => {
+    expect(profileKey({ username: null, requests: 0 })).not.toBe(
+      profileKey({ username: 'drej', requests: 0 }),
+    )
   })
 })

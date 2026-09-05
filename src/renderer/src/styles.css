@@ -5863,3 +5863,20 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   text-align: center;
   word-break: break-all;
 }
+
+/* Taking a factor off costs the password (registry: removeFactor), so the row
+   opens a field rather than firing a DELETE that comes back refused. It wraps:
+   a label, an input and two answers do not fit a row at sheet width. */
+.cr-acct-removefactor {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cr-acct-removefactor .gs-label {
+  flex: 1 0 100%;
+  margin: 0;
+}
+
+.cr-acct-removefactor .gs-input {
+  flex: 1 1 160px;
+}

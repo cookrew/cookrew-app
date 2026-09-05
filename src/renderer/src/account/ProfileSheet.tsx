@@ -8,6 +8,7 @@ import {
   deviceName,
   envIgnoredSentence,
   initialsOf,
+  profileKey,
   refusalSentence,
   revokeSentence,
 } from './account-store'
@@ -107,6 +108,11 @@ export function ProfileSheet({
       .catch(() => undefined)
   }, [])
 
+  // RE-READ WHEN A REQUEST IS ANSWERED, not only when the sheet is opened.
+  // Approving attaches the device at the registry, so the moment the waiting
+  // count drops is the moment this list is stale — and a DEVICES tab that
+  // only catches up on the next open reads as an approval that did nothing.
+  const key = profileKey(status)
   useEffect(() => {
     const call = cookrew().accountProfile
     if (!call) return
@@ -119,7 +125,7 @@ export function ProfileSheet({
         console.error('profile sheet:', err)
         setError('Something went wrong on this side. Try again.')
       })
-  }, [username])
+  }, [username, key])
 
   useEffect(() => {
     const call = cookrew().accountAdmittedDevices

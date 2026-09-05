@@ -487,6 +487,31 @@ export function mustChangeBanner(factors: FactorsView | null): string | null {
 }
 
 /**
+ * "Your password, to remove the authenticator."
+ *
+ * The prompt names WHAT is being taken off, because a password field that
+ * appears with no subject reads as a session having expired — and the two
+ * call for opposite reactions from the person looking at it.
+ */
+export function removeFactorPrompt(row: FactorRow): string {
+  return row.factor === 'totp'
+    ? 'Your password, to remove the authenticator'
+    : 'Your password, to remove this passkey'
+}
+
+/**
+ * WHAT MAKES THE DEVICES TAB RE-READ ITSELF.
+ *
+ * The username, and the number of devices still waiting. An approval attaches
+ * a device at the registry, so the moment that count drops is the moment the
+ * list on screen is out of date — and a tab that only refreshes when the
+ * sheet is closed and reopened tells an owner their approval did nothing.
+ */
+export function profileKey(status: { username: string | null; requests: number }): string {
+  return `${status.username ?? ''}#${status.requests}`
+}
+
+/**
  * What the passkey row says when THIS Electron cannot make one.
  *
  * Not an apology and not a dead end: a passkey added in a browser is a

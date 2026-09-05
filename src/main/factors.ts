@@ -1,5 +1,10 @@
 import type { AccountResult } from '../shared/account-v2'
-import type { FactorsView, PasskeySummary, TotpEnrolment } from '../shared/account-approvals'
+import {
+  APPROVAL_COPY,
+  type FactorsView,
+  type PasskeySummary,
+  type TotpEnrolment,
+} from '../shared/account-approvals'
 import { qrMatrix } from './qr-matrix'
 
 /**
@@ -19,9 +24,16 @@ import { qrMatrix } from './qr-matrix'
  * and offers the browser (D3's sentence). It never files a passkey the
  * registry did not accept.
  *
- * NOTHING IS LOGGED. The TOTP secret and the enrolment URI are handed to the
- * sheet that draws them and nowhere else; a console.error carrying an otpauth
- * URI is the second factor, in a log file.
+ * TAKING A FACTOR OFF COSTS THE PASSWORD, and the app has to know that before
+ * the socket. The registry gates both removals on `{current}` — deleting the
+ * thing that protects a password must not be cheaper than changing it — so a
+ * body-less DELETE is not a stricter server refusing a legal request, it is
+ * this app sending an incomplete one and then showing the owner a refusal
+ * they cannot act on.
+ *
+ * NOTHING IS LOGGED. The TOTP secret, the enrolment URI and the password that
+ * removes a factor are handed to the call that needs them and nowhere else; a
+ * console.error carrying an otpauth URI is the second factor, in a log file.
  */
 
 /** The one thing this module needs from `Accounts`: an authenticated call. */
@@ -39,14 +51,31 @@ export interface FactorsDeps {
 const CODE = /^[0-9]{6}$/
 const BAD_CODE = 'That is not a code from the app. Six digits, and they change every 30 seconds.'
 
-/** GET /v2/me carries the factors; this is the slice of it we read. */
-interface MeFactors {
-  factors?: {
-    totp?: boolean
-    passkeys?: readonly PasskeySummary[]
-    mustChangePassword?: boolean
-  }
+/** The posture, however it arrived: inside /v2/me, or from /v2/me/factors. */
+interface FactorSummary {
+  totp?: boolean
+  passkeys?: readonly PasskeySummary[]
+  mustChangePassword?: boolean
 }
+
+/** GET /v2/me carries the factors when the registry is new enough. */
+interface MeFactors {
+  factors?: FactorSummary
+}
+
+const summaryOf = (summary: FactorSummary | undefined, registry: string): FactorsView => ({
+  totp: summary?.totp === true,
+  passkeys: Array.isArray(summary?.passkeys) ? summary.passkeys : [],
+  mustChangePassword: summary?.mustChangePassword === true,
+  registry,
+})
+
+/** The refusal for a removal with no password — the registry's own sentence. */
+const needsPassword = (): AccountResult<void> => ({
+  ok: false,
+  reason: 'bad_credentials',
+  message: APPROVAL_COPY.REMOVE_NEEDS_PASSWORD,
+})
 
 export class Factors {
   private readonly accounts: FactorsCaller
@@ -60,23 +89,29 @@ export class Factors {
   /**
    * What the Security tab draws itself from.
    *
-   * A profile whose `factors` the registry did not send reads as NOTHING
-   * ENROLLED rather than as an error: an older registry is a reason to offer
-   * the ADD rows, not a reason for the tab to refuse to paint.
+   * TWO PLACES, ONE ANSWER. /v2/me carries `factors` on a registry that is
+   * new enough; where it does not, the posture lives at /v2/me/factors and is
+   * ASKED FOR rather than assumed away. Reading an absent field as "nothing
+   * enrolled" is the failure this method exists to avoid: a card that offers
+   * ADD AN AUTHENTICATOR to an account that already has one, and stays silent
+   * about a password the registry is demanding be changed.
+   *
+   * Only a registry with no phase 4 at all — a 404 on the dedicated route —
+   * reads as nothing enrolled, because for that one there is nothing to
+   * enrol yet, and an empty ladder is the truth rather than a guess.
    */
   async view(): Promise<AccountResult<FactorsView>> {
     const result = await this.accounts.call<MeFactors>('/v2/me')
     if (!result.ok) return result
-    const factors = result.value.factors
-    return {
-      ok: true,
-      value: {
-        totp: factors?.totp === true,
-        passkeys: Array.isArray(factors?.passkeys) ? factors.passkeys : [],
-        mustChangePassword: factors?.mustChangePassword === true,
-        registry: this.registry,
-      },
+    if (result.value.factors !== undefined) {
+      return { ok: true, value: summaryOf(result.value.factors, this.registry) }
     }
+    const summary = await this.accounts.call<FactorSummary>('/v2/me/factors')
+    if (summary.ok) return { ok: true, value: summaryOf(summary.value, this.registry) }
+    if (summary.reason === 'unknown') {
+      return { ok: true, value: summaryOf(undefined, this.registry) }
+    }
+    return summary
   }
 
   async passkeys(): Promise<AccountResult<readonly PasskeySummary[]>> {
@@ -115,8 +150,17 @@ export class Factors {
     })
   }
 
-  removeTotp(): Promise<AccountResult<void>> {
-    return this.accounts.call<void>('/v2/me/totp', { method: 'DELETE', parse: false })
+  /**
+   * Take the authenticator off — with the password, which the registry gates
+   * this on. A DELETE with a body is unusual and it is the contract.
+   */
+  removeTotp(current: string): Promise<AccountResult<void>> {
+    if (current.length === 0) return Promise.resolve(needsPassword())
+    return this.accounts.call<void>('/v2/me/totp', {
+      method: 'DELETE',
+      body: JSON.stringify({ current }),
+      parse: false,
+    })
   }
 
   /**
@@ -150,10 +194,12 @@ export class Factors {
     })
   }
 
-  removePasskey(id: string): Promise<AccountResult<void>> {
+  removePasskey(id: string, current: string): Promise<AccountResult<void>> {
     if (id.length === 0) return Promise.resolve({ ok: false, reason: 'unknown' })
+    if (current.length === 0) return Promise.resolve(needsPassword())
     return this.accounts.call<void>(`/v2/me/passkeys/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+      body: JSON.stringify({ current }),
       parse: false,
     })
   }

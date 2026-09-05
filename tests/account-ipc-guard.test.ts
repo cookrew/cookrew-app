@@ -189,6 +189,33 @@ describe('the phase 4 handlers', () => {
     await expect(handlers['account:setPassword'](null)).resolves.toMatchObject({ ok: false })
   })
 
+  it('carries the password through to BOTH factor removals', async () => {
+    // The registry refuses a body-less DELETE with a sentence about a field
+    // the card would never have shown. The channel has to be able to carry it.
+    const shared = deps()
+    const totp = vi.spyOn(shared.factors, 'removeTotp').mockResolvedValue({
+      ok: true,
+      value: undefined,
+    })
+    const passkey = vi.spyOn(shared.factors, 'removePasskey').mockResolvedValue({
+      ok: true,
+      value: undefined,
+    })
+    const handlers = accountHandlers(shared)
+    await handlers['account:totpRemove']('correct-horse-battery')
+    await handlers['account:passkeyRemove']('pk-1', 'correct-horse-battery')
+    expect(totp).toHaveBeenCalledWith('correct-horse-battery')
+    expect(passkey).toHaveBeenCalledWith('pk-1', 'correct-horse-battery')
+  })
+
+  it('a removal with no password never reaches the registry', async () => {
+    const handlers = accountHandlers(deps())
+    await expect(handlers['account:totpRemove'](undefined)).resolves.toMatchObject({ ok: false })
+    await expect(handlers['account:passkeyRemove']('pk-1', null)).resolves.toMatchObject({
+      ok: false,
+    })
+  })
+
   it('the approvals channel answers the polled list, opening no socket', () => {
     const shared = deps()
     expect(accountHandlers(shared)['account:approvals']()).toEqual([])

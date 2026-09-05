@@ -577,14 +577,14 @@ export interface CookrewApi {
   accountFactors?: () => Promise<AccountResult<FactorsView>>;
   accountTotpEnrol?: () => Promise<AccountResult<TotpEnrolment>>;
   accountTotpConfirm?: (code: string) => Promise<AccountResult<void>>;
-  accountTotpRemove?: () => Promise<AccountResult<void>>;
+  accountTotpRemove?: (current: string) => Promise<AccountResult<void>>;
   accountPasskeys?: () => Promise<AccountResult<readonly PasskeySummary[]>>;
   accountPasskeyOptions?: () => Promise<AccountResult<Record<string, unknown>>>;
   accountPasskeyAdd?: (input: {
     name: string;
     credential: Record<string, unknown>;
   }) => Promise<AccountResult<PasskeySummary>>;
-  accountPasskeyRemove?: (id: string) => Promise<AccountResult<void>>;
+  accountPasskeyRemove?: (id: string, current: string) => Promise<AccountResult<void>>;
   onAccountRequests?: (cb: (requestId: string | null) => void) => () => void;
   /**
    * Re-establish the push channel if it has died. Remote clients only: a
