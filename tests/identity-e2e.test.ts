@@ -219,14 +219,16 @@ describe('an app that registered a key before accounts existed adopts it', () =>
     )
     // Adoption instead: no ceremony, the old key is the first device.
     const adopted = await adoptLegacyAccount({ registry: url, legacy, baseDir: home })
-    expect(adopted?.handle).toBe(HANDLE)
-    expect(adopted?.publicKeyJwk).toEqual(legacy.publicKeyJwk)
-    const session = openAccount(adopted!, { baseDir: home })
-    expect((await session.listDevices()).map((d) => d.id)).toEqual([adopted!.deviceId])
+    if (adopted.state !== 'adopted') throw new Error(`expected adoption, got `)
+    const account = adopted.account
+    expect(account.handle).toBe(HANDLE)
+    expect(account.publicKeyJwk).toEqual(legacy.publicKeyJwk)
+    const session = openAccount(account, { baseDir: home })
+    expect((await session.listDevices()).map((d) => d.id)).toEqual([account.deviceId])
     const door = createRegistryTokenVerifier({ keys: registryKeyOverHttp(url) })
     expect(await door.verify(await session.token('call', DOOR), DOOR)).toEqual({
       sub: HANDLE,
-      dev: adopted!.deviceId
+      dev: account.deviceId
     })
   })
 
@@ -243,6 +245,6 @@ describe('an app that registered a key before accounts existed adopts it', () =>
       },
       baseDir: mkdtempSync(path.join(tmpdir(), 'identity-e2e-stranger-'))
     })
-    expect(adopted).toBeNull()
+    expect(adopted).toEqual({ state: 'unknown' })
   })
 })
