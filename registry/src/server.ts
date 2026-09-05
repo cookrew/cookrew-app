@@ -19,6 +19,7 @@ import type { CommitsCache } from './github-commits'
 import { respondPage } from './site-shell'
 import type { StarStore } from './stars'
 import type { Release, ReleaseCache } from './releases'
+import { handleV2Route, v2AccountOf, type V2Identity } from './v2-routes'
 
 /**
  * REGISTRY SERVER (P2-A1) — routes only. Every answer is chosen by a decision
@@ -104,6 +105,15 @@ export interface RegistryDeps {
   pulse?: Pulse
   /** The dev branch's latest commits, for the homepage's built-in-the-open feed. */
   commits?: CommitsCache
+  /**
+   * IDENTITY v2 — accounts a PERSON holds: a username, a password, and the
+   * devices attached to them. Present → everything under /v2 is served and a
+   * v2 session counts as a reader everywhere v1's token already did. Absent →
+   * /v2 does not exist and this deployment is byte-identical to before, which
+   * is what keeps every earlier test meaningful rather than merely still
+   * passing.
+   */
+  v2?: V2Identity
 }
 
 /** An account name: the same shape a handle has everywhere else on this site. */
@@ -207,11 +217,19 @@ export function createRegistry(deps: RegistryDeps): Server {
    */
   const accountOf = (request: IncomingMessage, mode: 'any' | 'bearer' = 'any'): string | null => {
     const identity = deps.identity
-    if (!identity) return null
     const auth = request.headers.authorization ?? ''
     const cookie =
       mode === 'bearer' ? undefined : /(?:^|;\s*)cr_account=([A-Za-z0-9_.-]+)/.exec(request.headers.cookie ?? '')?.[1]
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : cookie
+    // A V2 SESSION IS A READER TOO. Checked first because it is the account
+    // system people are signing into now; a v1 token still answers for the
+    // handles that already exist, so stars and publishing keep working for
+    // both without either knowing about the other.
+    if (deps.v2) {
+      const v2 = v2AccountOf(request, deps.v2, mode)
+      if (v2 !== null) return v2
+    }
+    if (!identity) return null
     if (!token) return null
     const claims = identity.verifyToken(token)
     if (!claims || claims.scope === 'call') return null
@@ -254,6 +272,30 @@ export function createRegistry(deps: RegistryDeps): Server {
     // must not be delayed behind anything, and because it owns its whole path
     // prefix: nothing under /v1/relay is served by the rest of this file.
     if (relay && relay.handle(request, response, parts, url)) return
+
+    // ── IDENTITY v2 ──────────────────────────────────────────────────────
+    //
+    // Owns its whole prefix: nothing under /v2 is served by the rest of this
+    // file, and nothing above it answers a /v2 path. Mounted early so a
+    // future top-level page can never shadow a sign-in.
+    if (
+      deps.v2 &&
+      handleV2Route({
+        method,
+        parts,
+        request,
+        response,
+        v2: deps.v2,
+        // Whether the BROWSER reached us over https, which is what decides
+        // the Secure flag on the session cookie. Taken from the proxy's
+        // header or from the configured origin — never from the bound port,
+        // which says nothing behind a terminator.
+        secure:
+          request.headers['x-forwarded-proto'] === 'https' || (deps.origin?.startsWith('https://') ?? false),
+        decode
+      })
+    )
+      return
 
     // GET /install/:presetId — R21 Option A, the page for a reader with no app.
     //
