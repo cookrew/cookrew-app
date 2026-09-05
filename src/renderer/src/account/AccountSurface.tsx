@@ -35,6 +35,8 @@ export function useAccountSurface(): AccountSurface {
   const [status, setStatus] = useState<AccountStatus | null>(null)
   const [sheet, setSheet] = useState<'none' | 'claim' | 'profile' | 'security'>('none')
   const [tab, setTab] = useState<ProfileTab>('PROFILE')
+  /** The request a system notification was clicked for (D6). */
+  const [focusRequest, setFocusRequest] = useState<string | null>(null)
 
   const refresh = useCallback(() => {
     const call = cookrew().accountStatus
@@ -48,6 +50,21 @@ export function useAccountSurface(): AccountSurface {
     if (!supported) return
     refresh()
     const off = cookrew().onAccountLocked?.(() => refresh())
+    return off
+  }, [supported, refresh])
+
+  // A DEVICE IS ASKING (D6). The queue changed, or the owner clicked the
+  // system notification — in which case main names the request and the sheet
+  // opens on it. Never a modal: this is the same destination the rose badge
+  // leads to, so both routes land a person on one card.
+  useEffect(() => {
+    if (!supported) return
+    const off = cookrew().onAccountRequests?.((requestId) => {
+      refresh()
+      if (requestId === null) return
+      setFocusRequest(requestId)
+      setSheet('profile')
+    })
     return off
   }, [supported, refresh])
 
@@ -122,7 +139,11 @@ export function useAccountSurface(): AccountSurface {
         <ProfileSheet
           status={status}
           initialTab={tab}
-          onClose={() => setSheet('none')}
+          focusRequestId={focusRequest}
+          onClose={() => {
+            setFocusRequest(null)
+            setSheet('none')
+          }}
           onStatus={setStatus}
         />
       )}

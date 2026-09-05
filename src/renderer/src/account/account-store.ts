@@ -8,6 +8,13 @@ import {
   type PasswordStrength,
   type UsernameCheck,
 } from '../../../shared/account-v2'
+import {
+  APPROVAL_COPY,
+  approvalDetail,
+  approvalLead,
+  type ApprovalRequest,
+  type FactorsView,
+} from '../../../shared/account-approvals'
 
 /**
  * THE ACCOUNT SURFACE'S VIEW-MODEL — every decision the screens make, and none
@@ -285,4 +292,112 @@ export function lockNote(
   if (outcome.reason === 'wrong') return wrongPasswordSentence(outcome.triesLeft)
   if (outcome.reason === 'paused') return pausedSentence(outcome.pausedForMs)
   return 'There is no account on this Mac to unlock.'
+}
+
+/**
+ * THE APPROVAL CARD (D6), decided.
+ *
+ * The two lines come from the SHARED sentence builders, which is the whole
+ * point of them living in shared/: main says the same words in the system
+ * notification, and a person who acts on the toast and a person who acts on
+ * the card must be acting on the same claim about who is asking.
+ */
+export interface ApprovalView {
+  lead: string
+  detail: string
+  /** What NOT ME does, said before it is done. */
+  confirm: string
+}
+
+export function approvalView(
+  request: ApprovalRequest,
+  input: { username: string; hasSecondFactor: boolean; now: number },
+): ApprovalView {
+  return {
+    lead: approvalLead(request, input.username),
+    detail: approvalDetail(request, input),
+    confirm: APPROVAL_COPY.NOT_ME_CONFIRM,
+  }
+}
+
+/** One row of the security card's factor ladder (D3). */
+export interface FactorRow {
+  /** A stable key, and what the row acts on when it is a REMOVE. */
+  id: string
+  label: string
+  /** The small word on the right: RECOMMENDED, ACTIVE, or nothing. */
+  state: string
+  action: 'add' | 'remove'
+  /** Which factor this row belongs to, so the card knows what to call. */
+  factor: 'passkey' | 'totp'
+}
+
+/**
+ * The two factor rows, in the order the ruling fixed: PASSKEY FIRST.
+ *
+ * A passkey is recommended only while there is none — an account that already
+ * has one does not need to be nagged towards a second, and RECOMMENDED next
+ * to a row that is already done is how a card stops being read at all. Each
+ * enrolled passkey gets its OWN row so it can be removed by name; the
+ * authenticator is one row because an account has one secret.
+ */
+export function factorRows(factors: FactorsView | null): readonly FactorRow[] {
+  const passkeys = factors?.passkeys ?? []
+  const passkeyRows: readonly FactorRow[] =
+    passkeys.length > 0
+      ? passkeys.map((passkey) => ({
+          id: passkey.id,
+          label: passkey.name,
+          state: 'FACTOR',
+          action: 'remove' as const,
+          factor: 'passkey' as const,
+        }))
+      : [
+          {
+            id: 'passkey',
+            label: 'Add a passkey (Touch ID)',
+            state: 'RECOMMENDED',
+            action: 'add' as const,
+            factor: 'passkey' as const,
+          },
+        ]
+  const totp: FactorRow = factors?.totp
+    ? {
+        id: 'totp',
+        label: 'Authenticator app',
+        state: 'ACTIVE',
+        action: 'remove',
+        factor: 'totp',
+      }
+    : {
+        id: 'totp',
+        label: 'Add an authenticator app',
+        state: '',
+        action: 'add',
+        factor: 'totp',
+      }
+  return [...passkeyRows, totp]
+}
+
+/**
+ * The banner after "not me" — or null, which is the normal state.
+ *
+ * It is a SENTENCE ABOUT WHAT HAPPENED, not an instruction: the person is
+ * being told that every other device was signed out, which is the fact that
+ * explains why they are being asked for a new password at all.
+ */
+export function mustChangeBanner(factors: FactorsView | null): string | null {
+  return factors?.mustChangePassword === true ? APPROVAL_COPY.MUST_CHANGE : null
+}
+
+/**
+ * What the passkey row says when THIS Electron cannot make one.
+ *
+ * Not an apology and not a dead end: a passkey added in a browser is a
+ * passkey on the account, so the row hands over the one place it does work.
+ * The alternative — a button that throws a WebAuthn error into a console the
+ * owner will never open — is the same row lying about what it does.
+ */
+export function passkeyElsewhere(registry: string): { note: string; url: string } {
+  return { note: APPROVAL_COPY.PASSKEY_ELSEWHERE, url: `${registry}/me#security` }
 }

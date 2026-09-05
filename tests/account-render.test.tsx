@@ -154,16 +154,22 @@ describe('the claim sheet paints, and refuses in sentences (D2)', () => {
   })
 })
 
-describe('the security card is honest about what is coming (D3)', () => {
+describe('the security card offers the whole ladder (D3)', () => {
   const html = renderToStaticMarkup(
     <SecurityCard username="drej" lockAfterMs={900_000} onLockAfterMs={() => undefined} />,
   )
 
-  it('offers passkey and authenticator as COMING, and inert', () => {
+  it('offers passkey first and RECOMMENDED, then the authenticator — both live', () => {
     expect(html).toContain('Add a passkey (Touch ID)')
     expect(html).toContain('Add an authenticator app')
-    expect(html.match(/COMING/g)).toHaveLength(2)
-    expect(html.match(/disabled=""/g)).toHaveLength(2)
+    expect(html.indexOf('passkey')).toBeLessThan(html.indexOf('authenticator'))
+    // The ruling puts the passkey first and recommends only that one.
+    expect(html.match(/RECOMMENDED/g)).toHaveLength(1)
+    // PHASE 4 TURNED THESE ON. Nothing on this card is inert any more, so a
+    // disabled attribute here would mean a row that cannot do what it says.
+    expect(html).not.toContain('COMING')
+    expect(html).not.toContain('disabled=""')
+    expect(html.match(/>ADD</g)).toHaveLength(2)
   })
 
   it('offers the one factor it can give, and the one lock it can enforce', () => {
