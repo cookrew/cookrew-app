@@ -45,7 +45,8 @@ const token = (claims: Record<string, unknown>): string =>
   `${Buffer.from(JSON.stringify(claims), 'utf8').toString('base64url')}.sig`
 
 function fakeRegistry(
-  bindAnswer: (body: Record<string, unknown>) => Response
+  bindAnswer: (body: Record<string, unknown>) => Response,
+  listed: readonly Record<string, unknown>[] = []
 ): { session: AccountSession; bound: Record<string, unknown>[] } {
   const bound: Record<string, unknown>[] = []
   const fetchStub = (async (input: URL | RequestInfo, init?: RequestInit): Promise<Response> => {
@@ -59,6 +60,7 @@ function fakeRegistry(
       return Response.json({ token: token({ sub: 'mira', dev: 'd_desktop', exp: 2e12 }) })
     }
     if (url.pathname === '/v1/accounts/@mira/devices') {
+      if ((init?.method ?? 'GET') === 'GET') return Response.json({ devices: listed })
       bound.push(body)
       return bindAnswer(body)
     }
@@ -70,6 +72,32 @@ function fakeRegistry(
 const good = { id: 'd_phone_001', jwk: phoneJwk, kind: 'phone', name: 'iPhone' }
 
 describe('bindPairedDevice', () => {
+  it('confirms a phone the account already lists without binding it again', async () => {
+    const { session, bound } = fakeRegistry(
+      () => new Response('{}', { status: 500 }),
+      [{ id: 'd_phone_001', kind: 'phone', name: 'iPhone', jwk: phoneJwk }]
+    )
+    const out = await bindPairedDevice(
+      { ...good, known: { handle: 'mira', deviceId: 'd_phone_001' } },
+      () => session
+    )
+    expect(out).toEqual({ status: 200, body: { handle: 'mira', deviceId: 'd_phone_001' } })
+    expect(bound).toEqual([])
+  })
+
+  it('rebinds a phone whose device the account no longer lists (re-minted account)', async () => {
+    const { session, bound } = fakeRegistry(
+      () => Response.json({ handle: 'mira', deviceId: 'd_phone_001' }, { status: 201 }),
+      [{ id: 'd_phone_001', kind: 'phone', name: 'iPhone', jwk: phoneJwk, revokedAt: '2026-09-05' }]
+    )
+    const out = await bindPairedDevice(
+      { ...good, known: { handle: 'mira', deviceId: 'gone' } },
+      () => session
+    )
+    expect(out.status).toBe(200)
+    expect(bound).toHaveLength(1)
+  })
+
   it('binds the phone and answers with the account it joined', async () => {
     const { session, bound } = fakeRegistry(() =>
       Response.json({ deviceId: 'd_phone_001' }, { status: 201 })
@@ -218,22 +246,55 @@ describe('the phone half — bind once, and repeat the desktop verbatim', () => 
     expect(remembered).toEqual([{ handle: 'mira', deviceId: 'd_phone_001' }])
   })
 
-  it('does NOT re-post once bound — pairing happens on every boot', async () => {
-    let posts = 0
+  it('re-announces once bound; an unchanged answer is "already", nothing is re-remembered', async () => {
+    const posted: unknown[] = []
+    const remembered: PhoneBinding[] = []
+    const outcome = await bindPhoneDevice({
+      device,
+      known: { handle: 'mira', deviceId: 'd_phone_001' },
+      remember: (bound) => {
+        remembered.push(bound)
+      },
+      post: async (body) => {
+        posted.push(body)
+        return { status: 200, body: { handle: 'mira', deviceId: 'd_phone_001' } }
+      }
+    })
+    expect(outcome).toEqual({ state: 'already', handle: 'mira' })
+    expect((posted[0] as { known?: unknown }).known).toEqual({
+      handle: 'mira',
+      deviceId: 'd_phone_001'
+    })
+    expect(remembered).toEqual([])
+  })
+
+  it('a stale binding (account re-minted) is replaced by what the desktop answers', async () => {
+    const remembered: PhoneBinding[] = []
+    const outcome = await bindPhoneDevice({
+      device,
+      known: { handle: 'mira', deviceId: 'd_phone_001' },
+      remember: (bound) => {
+        remembered.push(bound)
+      },
+      post: async () => ({ status: 200, body: { handle: 'mira2', deviceId: 'd_phone_001' } })
+    })
+    expect(outcome).toEqual({ state: 'bound', handle: 'mira2', deviceId: 'd_phone_001' })
+    expect(remembered).toEqual([{ handle: 'mira2', deviceId: 'd_phone_001' }])
+  })
+
+  it('keeps a known binding when the desktop cannot be reached', async () => {
     const outcome = await bindPhoneDevice({
       device,
       known: { handle: 'mira', deviceId: 'd_phone_001' },
       remember: () => undefined,
       post: async () => {
-        posts += 1
-        return { status: 200, body: {} }
+        throw new Error('offline')
       }
     })
     expect(outcome).toEqual({ state: 'already', handle: 'mira' })
-    expect(posts).toBe(0)
   })
 
-  it('shows the DESKTOP\'s sentence for a 409, not a sentence of its own', async () => {
+  it("shows the DESKTOP's sentence for a 409, not a sentence of its own", async () => {
     const said = 'this Cookrew has not picked a username yet — open it on the desktop'
     const outcome = await bindPhoneDevice({
       device,
@@ -277,7 +338,9 @@ describe('the phone half — bind once, and repeat the desktop verbatim', () => 
 
   it('derives one id from one key — a lost id is not a second device', () => {
     // Same key, same canonical JSON, same digest, same id.
-    expect(canonicalJwk(phoneJwk)).toBe(canonicalJwk({ ...phoneJwk, ext: true, key_ops: ['verify'] }))
+    expect(canonicalJwk(phoneJwk)).toBe(
+      canonicalJwk({ ...phoneJwk, ext: true, key_ops: ['verify'] })
+    )
     const digest = new Uint8Array(32).fill(7)
     expect(deviceIdFromDigest(digest)).toBe(deviceIdFromDigest(digest))
     // And it survives the desktop's own shape check.
@@ -288,7 +351,9 @@ describe('the phone half — bind once, and repeat the desktop verbatim', () => 
     // The phone hashes canonicalJwk(); the desktop hashes RFC 7638 members.
     // If these ever disagree the vouch names a key the registry cannot find.
     const { createHash } = await import('node:crypto')
-    const phoneSide = createHash('sha256').update(canonicalJwk(phoneJwk), 'utf8').digest('base64url')
+    const phoneSide = createHash('sha256')
+      .update(canonicalJwk(phoneJwk), 'utf8')
+      .digest('base64url')
     expect(phoneSide).toBe(jwkThumbprint(phoneJwk))
   })
 })
