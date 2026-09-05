@@ -30,6 +30,9 @@ interface Node {
   cls: string
   dataset: Record<string, string>
   hidden: boolean
+  value: string
+  focused: boolean
+  focus(): void
   children: Node[]
   querySelectorAll(selector: string): Node[]
   querySelector(selector: string): Node | null
@@ -58,6 +61,11 @@ function node(tag: string, cls = '', dataset: Record<string, string> = {}): Node
     cls,
     dataset,
     hidden: false,
+    value: '',
+    focused: false,
+    focus: () => {
+      made.focused = true
+    },
     children: [],
     querySelectorAll: (selector) => made.children.filter((child) => matches(child, selector)),
     querySelector: (selector) => made.children.find((child) => matches(child, selector)) ?? null,
@@ -82,16 +90,31 @@ interface Scene {
   hangProbes?: boolean
   /** What is already in localStorage under cr_path:<id>. */
   remembered?: { kind: string; url: string | null; at: number }
+  /** `?refused=…` on the way back from a desktop that would not take it. */
+  refused?: string
+  /** No key held for this Mac: the NEEDS PAIRING row, with its field. */
+  unpaired?: boolean
 }
 
 interface Mounted {
   deviceId: string
+  /** The device READING the page — the phone, which is not the Mac. */
+  phoneId: string
   badge: () => string
   stored: (key: string) => string | null
   assigned: string[]
   asked: string[]
   fire: (type: 'window:online' | 'document:visibilitychange') => void
   openDesktop: () => void
+  /** The row's own six-character field, as a reader meets it. */
+  keyField: () => Node
+  keyNote: () => Node
+  keyForm: () => Node
+  typeKeyButton: () => Node
+  pressTypeKey: () => void
+  pressLink: () => void
+  pressEnter: () => void
+  shown: (id: string) => boolean
 }
 
 function mount(scene: Scene): Mounted {
@@ -108,13 +131,24 @@ function mount(scene: Scene): Mounted {
   for (const state of BADGES) row.children.push(node('span', 'chip', { badge: state }))
   const openButton = node('button', 'btn', { openDesktop: deviceId })
   row.children.push(openButton, node('button', 'btn', { forgetPair: deviceId }))
-  row.children.push(node('span', 'meta', { pairNote: '' }), node('button', 'btn', { typeKey: deviceId }))
+  const typeKeyButton = node('button', 'btn', { typeKey: deviceId })
+  row.children.push(node('span', 'meta', { pairNote: '' }), typeKeyButton)
   row.children.push(node('button', 'btn', { scan: deviceId }))
+  // The six-character field, as site-reach.ts renders it: in the row, hidden.
+  const keyForm = node('span', 'pair-key', { keyForm: deviceId })
+  keyForm.hidden = true
+  const keyInput = node('input', 'pair-input', { keyInput: deviceId })
+  const linkButton = node('button', 'btn', { keyLink: deviceId })
+  const keyNote = node('span', 'meta', { keyNote: '' })
+  keyNote.hidden = true
+  row.children.push(keyForm, keyInput, linkButton, keyNote)
+
   const list = node('ul', 'doors')
   list.children.push(row)
-  const me = node('div', '', { username })
+  const phoneId = randomUUID()
+  const me = node('div', '', { username, device: phoneId, deviceName: 'iPhone' })
 
-  const store = new Map<string, string>([[`cr_pair:${deviceId}`, 'A2B3C4']])
+  const store = new Map<string, string>(scene.unpaired === true ? [] : [[`cr_pair:${deviceId}`, 'A2B3C4']])
   if (scene.remembered) store.set(`cr_path:${deviceId}`, JSON.stringify(scene.remembered))
   const assigned: string[] = []
   const asked: string[] = []
@@ -138,6 +172,18 @@ function mount(scene: Scene): Mounted {
     return answer(404, {})
   }
 
+  // The two refusal sentences the server renders once, above the list.
+  const refusedKey = node('p', 'meta')
+  refusedKey.hidden = true
+  const refusedDevice = node('p', 'meta')
+  refusedDevice.hidden = true
+  const byId = new Map<string, Node>([
+    ['me-desktops', list],
+    ['me', me],
+    ['reach-refused', refusedKey],
+    ['reach-refused-device', refusedDevice]
+  ])
+
   const sandbox: Record<string, unknown> = {
     crypto: globalThis.crypto,
     btoa: globalThis.btoa,
@@ -157,14 +203,17 @@ function mount(scene: Scene): Mounted {
       setItem: (key: string, value: string) => store.set(key, value),
       removeItem: (key: string) => store.delete(key)
     },
-    location: { search: '', assign: (url: string) => assigned.push(url) },
+    location: {
+      search: scene.refused === undefined ? '' : `?refused=${scene.refused}`,
+      assign: (url: string) => assigned.push(url)
+    },
     navigator: {},
     addEventListener: (type: string, handler: (event: unknown) => void) => {
       handlers.set(`window:${type}`, handler)
     },
     document: {
       hidden: false,
-      getElementById: (id: string) => (id === 'me-desktops' ? list : id === 'me' ? me : null),
+      getElementById: (id: string) => byId.get(id) ?? null,
       addEventListener: (type: string, handler: (event: unknown) => void) => {
         handlers.set(`document:${type}`, handler)
       },
@@ -176,15 +225,28 @@ function mount(scene: Scene): Mounted {
   sandbox.window = sandbox
   vm.runInNewContext(source, sandbox)
 
+  const click = (target: Node): void => {
+    handlers.get('ul:click')?.({ target, preventDefault: () => undefined })
+  }
+
   return {
     deviceId,
+    phoneId,
     badge: () => row.querySelectorAll('[data-badge]').find((chip) => !chip.hidden)?.dataset.badge ?? 'none',
     stored: (key) => store.get(key) ?? null,
     assigned,
     asked,
     fire: (type) => handlers.get(type)?.({}),
-    openDesktop: () =>
-      handlers.get('ul:click')?.({ target: openButton, preventDefault: () => undefined })
+    openDesktop: () => click(openButton),
+    keyField: () => keyInput,
+    keyNote: () => keyNote,
+    keyForm: () => keyForm,
+    typeKeyButton: () => typeKeyButton,
+    pressTypeKey: () => click(typeKeyButton),
+    pressLink: () => click(linkButton),
+    pressEnter: () =>
+      handlers.get('ul:keydown')?.({ target: keyInput, key: 'Enter', preventDefault: () => undefined }),
+    shown: (id) => byId.get(id)?.hidden === false
   }
 }
 
@@ -294,15 +356,23 @@ describe('re-probing, because the network moves under the page', () => {
 // ── opening ──────────────────────────────────────────────────────────────
 
 describe('OPEN', () => {
-  it('sends a direct path the admission on the query', async () => {
+  /**
+   * THE ONE THAT KILLED EVERY HAND-OFF. A canvas token names both ends, and
+   * the desktop matches `device` on the query against the token's `dev`
+   * claim — the DEVICE THAT ASKED, which is this phone. Naming the Mac there
+   * is a hard 401 on a signature that was perfectly good, and it looks from
+   * the outside like a pairing problem.
+   */
+  it('names the PHONE on the query, never the Mac', async () => {
     const picker = mount({ lanAnswers: true })
     await settle()
     picker.openDesktop()
     await settle()
     expect(picker.assigned).toHaveLength(1)
     expect(picker.assigned[0]).toBe(
-      `https://192.168.1.24:8643/?open=CANVAS-TOKEN&key=A2B3C4&device=${picker.deviceId}`
+      `https://192.168.1.24:8643/?open=CANVAS-TOKEN&key=A2B3C4&device=${picker.phoneId}&name=iPhone`
     )
+    expect(picker.assigned[0]).not.toContain(picker.deviceId)
   })
 
   it('sends the relay path the SAME admission, unchanged, on cookrew.dev', async () => {
@@ -311,7 +381,7 @@ describe('OPEN', () => {
     picker.openDesktop()
     await settle()
     expect(picker.assigned[0]).toBe(
-      `/relay/@owner/desktop/${picker.deviceId}/?open=CANVAS-TOKEN&key=A2B3C4&device=${picker.deviceId}`
+      `/relay/@owner/desktop/${picker.deviceId}/?open=CANVAS-TOKEN&key=A2B3C4&device=${picker.phoneId}&name=iPhone`
     )
   })
 
@@ -340,5 +410,83 @@ describe('the server-rendered states', () => {
     for (const state of BADGES) expect(html).toContain(`data-badge="${state}"`)
     expect(html).toContain('RELAY')
     expect(html).toContain('OFFLINE')
+  })
+})
+
+// ── coming back refused ──────────────────────────────────────────────────
+
+describe('a desktop that would not take it', () => {
+  it('says the key moved on when it was the key', async () => {
+    const picker = mount({ lanAnswers: true, refused: 'key' })
+    await settle()
+    expect(picker.shown('reach-refused')).toBe(true)
+    expect(picker.shown('reach-refused-device')).toBe(false)
+  })
+
+  it('says the LINK named the Mac when it was the device', async () => {
+    const picker = mount({ lanAnswers: true, refused: 'device' })
+    await settle()
+    expect(picker.shown('reach-refused-device')).toBe(true)
+    expect(picker.shown('reach-refused')).toBe(false)
+  })
+
+  it('says nothing at all on an ordinary visit', async () => {
+    const picker = mount({ lanAnswers: true })
+    await settle()
+    expect(picker.shown('reach-refused')).toBe(false)
+    expect(picker.shown('reach-refused-device')).toBe(false)
+  })
+})
+
+// ── the six characters, in the page ──────────────────────────────────────
+
+describe('TYPE KEY, which is a field and not a prompt', () => {
+  it('opens the row\u2019s own field and puts the cursor in it', async () => {
+    const picker = mount({ unpaired: true })
+    await settle()
+    expect(picker.badge()).toBe('pairing')
+    expect(picker.keyForm().hidden).toBe(true)
+    picker.pressTypeKey()
+    expect(picker.keyForm().hidden).toBe(false)
+    expect(picker.keyField().focused).toBe(true)
+    expect(picker.typeKeyButton().hidden).toBe(true)
+  })
+
+  it('takes six characters from LINK, uppercased, and races the paths', async () => {
+    const picker = mount({ unpaired: true, lanAnswers: true })
+    await settle()
+    picker.pressTypeKey()
+    picker.keyField().value = ' a2b3c4 '
+    picker.pressLink()
+    await settle()
+    expect(picker.stored(`cr_pair:${picker.deviceId}`)).toBe('A2B3C4')
+    expect(picker.badge()).toBe('lan')
+    expect(picker.keyField().value).toBe('')
+  })
+
+  it('takes them from ENTER as well', async () => {
+    const picker = mount({ unpaired: true, lanAnswers: true })
+    await settle()
+    picker.pressTypeKey()
+    picker.keyField().value = 'A2B3C4'
+    picker.pressEnter()
+    await settle()
+    expect(picker.stored(`cr_pair:${picker.deviceId}`)).toBe('A2B3C4')
+  })
+
+  it('shows the page\u2019s own sentence for something that is not a key, and keeps nothing', async () => {
+    const picker = mount({ unpaired: true })
+    await settle()
+    picker.pressTypeKey()
+    picker.keyField().value = 'oops'
+    picker.pressLink()
+    await settle()
+    expect(picker.keyNote().hidden).toBe(false)
+    expect(picker.stored(`cr_pair:${picker.deviceId}`)).toBeNull()
+    // The ambiguous characters are not in the alphabet the Mac draws from.
+    picker.keyField().value = 'A2B3CO'
+    picker.pressLink()
+    await settle()
+    expect(picker.stored(`cr_pair:${picker.deviceId}`)).toBeNull()
   })
 })

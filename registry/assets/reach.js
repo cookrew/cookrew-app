@@ -26,8 +26,12 @@
  *   reads NEEDS PAIRING and offers to scan or to be told.
  *
  *   OPENS. A canvas token from the registry, then the desktop, with the token,
- *   the key and the device id on the query. If the desktop says 401 it sends
- *   the reader back with ?refused=key and the page says which key was wrong.
+ *   the pairing key, and THIS PHONE's device id and name on the query — the
+ *   token names both ends and the desktop matches `device` against the `dev`
+ *   claim, so naming the Mac there refuses a hand-off whose signature was
+ *   fine. Refused, the reader comes back with ?refused=key (the six
+ *   characters moved on) or ?refused=device (the link named the Mac), and the
+ *   page shows the one sentence that says what to do next.
  */
 ;(() => {
   'use strict'
@@ -41,8 +45,29 @@
   const REPROBE_MS = 60000
   /** How long a remembered path is worth showing before it is only a guess. */
   const PATH_TTL_MS = 5 * 60 * 1000
-  const username = document.getElementById('me')?.dataset.username ?? ''
+  const me = document.getElementById('me')
+  const username = me?.dataset.username ?? ''
   const toast = (text, ms) => window.cookrewAccount?.toast?.(text, ms ?? 5000)
+
+  /**
+   * WHO IS ASKING — this phone, never the Mac.
+   *
+   * A canvas token names both ends: `aud` is the desktop it opens and `dev`
+   * is the device that asked for it. The desktop checks `dev` against the
+   * `device` on the query, so handing it the DESKTOP's id refuses every
+   * hand-off with a signature that was perfectly good.
+   *
+   * The id comes from the page, because the page was rendered for THIS
+   * session and the token is minted against that same session's device. The
+   * browser's own store is the fallback, for a page that predates the
+   * attribute; it holds the same value, having derived it from the same key.
+   */
+  async function asking() {
+    const fromPage = me?.dataset.device ?? ''
+    if (fromPage !== '') return { id: fromPage, name: me?.dataset.deviceName ?? '' }
+    const held = await window.cookrewAccount?.device?.()
+    return held ? { id: held.id, name: held.name ?? '' } : null
+  }
 
   /* ── the pairing key, which is this browser's and nobody else's ────────── */
   const keyFor = (id) => {
@@ -112,6 +137,13 @@
     // No BarcodeDetector, no button: an action that cannot work is worse than
     // an action that is not offered.
     show('[data-scan]', !paired && typeof window.BarcodeDetector === 'function')
+    if (paired) {
+      // Paired closes the field. Unpaired LEAVES IT ALONE: the picker re-races
+      // every minute, and a refresh that swept away half-typed characters
+      // would be a field nobody can finish filling in on a slow network.
+      show('[data-key-form]', false)
+      show('[data-key-note]', false)
+    }
   }
 
   /* ── talking to cookrew.dev ────────────────────────────────────────────── */
@@ -261,10 +293,20 @@
       toast(out.body?.message ?? 'That Mac could not be opened just now.')
       return
     }
+    const phone = await asking()
+    if (phone === null) {
+      toast('This browser could not name itself. Sign in again and open the Mac from here.')
+      return
+    }
     // THE SAME ADMISSION EITHER WAY. Direct or relayed, the desktop is asked
     // the same question on the same query — the relay forwards it untouched,
-    // so there is one ceremony rather than two that drift.
-    const carried = `open=${encodeURIComponent(out.body.token)}&key=${encodeURIComponent(key)}&device=${encodeURIComponent(deviceId)}`
+    // so there is one ceremony rather than two that drift. `device` and `name`
+    // are the PHONE's: they are what the desktop matches the token's `dev`
+    // against and what it writes into its admitted list.
+    const carried =
+      `open=${encodeURIComponent(out.body.token)}&key=${encodeURIComponent(key)}` +
+      `&device=${encodeURIComponent(phone.id)}` +
+      (phone.name === '' ? '' : `&name=${encodeURIComponent(phone.name)}`)
     // A direct address is an ORIGIN and the relay path already ends in a
     // slash; both become `…/?open=…`.
     location.assign(`${found.state === 'relay' ? found.url : `${found.url}/`}?${carried}`)
@@ -338,30 +380,67 @@
     }
   }
 
+  /**
+   * TYPE KEY opens a field in the row, not a native prompt.
+   *
+   * A `prompt()` is a chrome dialog with the browser's own typography sitting
+   * on top of a page that has spent some care on its own; it cannot be styled,
+   * cannot say why six characters were refused without a second dialog, and on
+   * a phone it covers the QR the person is reading the key off. The field is
+   * in the markup the server sent, so it is one `hidden` away.
+   */
   function typeKey(deviceId) {
-    const typed = prompt('The six characters beside the QR on the Mac')
-    if (typed === null) return
-    const key = typed.trim().toUpperCase()
+    const row = rowFor(deviceId)
+    if (!row) return
+    const form = row.querySelector('[data-key-form]')
+    const note = row.querySelector('[data-key-note]')
+    const button = row.querySelector('[data-type-key]')
+    if (note) note.hidden = true
+    if (form) form.hidden = false
+    if (button) button.hidden = true
+    row.querySelector('[data-key-input]')?.focus?.()
+  }
+
+  /** ENTER, or LINK: the six characters become this browser's key for that Mac. */
+  function linkKey(deviceId) {
+    const row = rowFor(deviceId)
+    if (!row) return
+    const input = row.querySelector('[data-key-input]')
+    const note = row.querySelector('[data-key-note]')
+    const key = String(input?.value ?? '')
+      .trim()
+      .toUpperCase()
     if (!PAIR_KEY.test(key)) {
-      toast('Six characters, letters and digits — the ones shown beside the QR.')
+      // The sentence is already in the page; showing it is all there is to do.
+      if (note) note.hidden = false
+      input?.focus?.()
       return
     }
     if (!rememberKey(deviceId, key)) {
       toast('This browser would not remember the key. Allow storage for cookrew.dev and try again.')
       return
     }
-    const row = rowFor(deviceId)
-    if (row) void refresh(row)
+    if (input) input.value = ''
+    if (note) note.hidden = true
+    void refresh(row)
   }
 
   /* ── wiring ────────────────────────────────────────────────────────────── */
+  list.addEventListener('keydown', (event) => {
+    const el = event.target.closest?.('[data-key-input]')
+    if (!el || event.key !== 'Enter') return
+    event.preventDefault()
+    linkKey(el.dataset.keyInput)
+  })
+
   list.addEventListener('click', (event) => {
-    const el = event.target.closest('[data-open-desktop],[data-scan],[data-type-key],[data-forget-pair]')
+    const el = event.target.closest('[data-open-desktop],[data-scan],[data-type-key],[data-key-link],[data-forget-pair]')
     if (!el) return
     event.preventDefault()
     if (el.dataset.openDesktop !== undefined) void open(el.dataset.openDesktop)
     else if (el.dataset.scan !== undefined) void scan(el.dataset.scan)
     else if (el.dataset.typeKey !== undefined) typeKey(el.dataset.typeKey)
+    else if (el.dataset.keyLink !== undefined) linkKey(el.dataset.keyLink)
     else if (el.dataset.forgetPair !== undefined) {
       forgetKey(el.dataset.forgetPair)
       const row = rowFor(el.dataset.forgetPair)
@@ -373,8 +452,12 @@
   // minutes, so the answer is almost always "scan it again", not "you are not
   // allowed" — and the sentence says which.
   const refused = new URLSearchParams(location.search).get('refused')
-  if (refused === 'key') {
-    const note = document.getElementById('reach-refused')
+  // Two different mistakes with two different fixes: a key that moved on is
+  // retyped, a link that named the Mac is thrown away and the Mac opened from
+  // here again. One sentence for each, and never the other one's.
+  const refusalNote = refused === 'key' ? 'reach-refused' : refused === 'device' ? 'reach-refused-device' : null
+  if (refusalNote !== null) {
+    const note = document.getElementById(refusalNote)
     if (note) note.hidden = false
   }
 

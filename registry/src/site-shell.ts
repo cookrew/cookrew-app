@@ -450,6 +450,11 @@ ul.me-list li{grid-template-columns:auto 1fr auto}
 .seat ul.me-list{margin-top:12px}
 li.desktop .reach-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 li.desktop .chip[data-badge]{min-width:78px;justify-content:center}
+li.desktop .pair-key{display:inline-flex;align-items:center;gap:6px}
+li.desktop .pair-input{font:700 14px var(--font-mono);letter-spacing:.22em;text-transform:uppercase;width:8.5ch;
+padding:6px 8px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);outline:none;text-align:center}
+li.desktop .pair-input:focus{background:var(--amber-soft)}
+li.desktop [data-key-note]{grid-column:1/-1;color:var(--rose)}
 /* phase 4 — the ladder in the sheet, and the Security rows */
 .acct-passkey{width:100%;margin:0 0 8px}
 .acct-ladder{margin-top:8px}

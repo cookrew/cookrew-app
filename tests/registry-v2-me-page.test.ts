@@ -149,6 +149,31 @@ describe('the NEEDS PAIRING state', () => {
     const { html } = await mePage()
     expect(html).toContain('Not this Mac’s key — it changes every two minutes.')
   })
+
+  it('carries the other refusal too — the link that named the Mac', async () => {
+    const { html } = await mePage()
+    expect(html).toContain('id="reach-refused-device"')
+    expect(html).toContain('That link named the Mac, not the phone — open it again from cookrew.dev.')
+  })
+
+  it('gives the six characters a field in the row rather than a native prompt', async () => {
+    const { html } = await mePage()
+    expect(html).toContain(`data-key-form="${deviceId}"`)
+    expect(html).toContain(`data-key-input="${deviceId}"`)
+    expect(html).toContain(`data-key-link="${deviceId}"`)
+    expect(html).toContain('maxlength="6"')
+    expect(html).toContain('Six characters, letters and digits — the ones shown beside the QR.')
+  })
+
+  it('names the device READING the page, which an admission has to carry', async () => {
+    const { html } = await mePage()
+    // From the SESSION, not from the row: whoever is reading is the device an
+    // admission names, and here that happens to be the Mac itself. The picker
+    // reads this attribute rather than the row's, which is the whole fix.
+    expect(html).toContain(`id="me" data-username="picker"`)
+    expect(html).toContain(`data-device="${deviceId}"`)
+    expect(html).toContain('data-device-name="MacBook Pro"')
+  })
 })
 
 describe('the page stays inert', () => {
