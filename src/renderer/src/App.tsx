@@ -60,6 +60,7 @@ import { RosterPanel } from './RosterPanel'
 import { MetricsPanel } from './MetricsPanel'
 import { GateSheet } from './GateSheet'
 import { ImportServedSheet } from './ImportServedSheet'
+import { useAccountSurface } from './account/AccountSurface'
 import { SelectionBar } from './SelectionBar'
 import { ConfirmClose } from './ConfirmClose'
 import { apiPath } from './api-base'
@@ -317,6 +318,13 @@ function Canvas(): React.JSX.Element {
         }),
     []
   )
+
+  /**
+   * IDENTITY (v2, phase 1). One hook: the avatar for the header's brand group
+   * and the sheets/lock overlay. Feature-detected — on the phone companion and
+   * in a demo tab both are null and nothing about the canvas changes.
+   */
+  const account = useAccountSurface()
 
   /**
    * Bring a stale client back in step — the push channel is re-established
@@ -1147,6 +1155,7 @@ function Canvas(): React.JSX.Element {
           onViewChange={setView}
           onActivity={() => setMetricsOpen(true)}
           onResync={resync}
+          avatar={account.avatar}
         />
         <div className="cr-stage" ref={stageRef}>
           <ReactFlow
@@ -1390,6 +1399,9 @@ function Canvas(): React.JSX.Element {
           interactiveCapability={interactiveCapability}
         />
         <EventToastLayer />
+        {/* Identity: the sheets and the lock. Mounted here, after everything
+            else, so the lock screen is drawn over the canvas it covers. */}
+        {account.overlays}
         <ReauthOverlay />
       </div>
     </CanvasUiContext.Provider>

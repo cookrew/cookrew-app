@@ -20,6 +20,13 @@ interface HeaderProps {
   onActivity: () => void
   /** Re-pull the canvas and re-establish the push channel (the brand mark). */
   onResync: () => void
+  /**
+   * The account avatar (identity v2, D1), or null where there is no account
+   * surface — the phone companion and the demo tab feature-detect to nothing.
+   * Passed in rather than rendered here so the header stays a bar and the
+   * identity state lives in src/renderer/src/account.
+   */
+  avatar?: React.ReactNode
 }
 
 /**
@@ -65,7 +72,8 @@ export function Header({
   view,
   onViewChange,
   onActivity,
-  onResync
+  onResync,
+  avatar
 }: HeaderProps): React.JSX.Element {
   return (
     <header className="cr-header">
@@ -80,6 +88,9 @@ export function Header({
           <CrLogoMark />
         </button>
         <span className="cr-logo">COOKREW</span>
+        {/* IDENTITY LIVES IN THE BRAND GROUP (D1), right after the wordmark and
+            at the mark's own 24 px, so the group stays one line. */}
+        {avatar}
         {isDemoMode() && (
           <span className="cr-chip violet icon" title="Demo data">
             <CrIcon name="demo" />

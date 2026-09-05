@@ -80,6 +80,9 @@ import { forkContextReady, forkTerminal as forkTerminalOp, injectWhenReady } fro
 import { AgentRegistry } from './agent-registry'
 import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerSender } from './owner-grant'
+import { Accounts, DEFAULT_LOCK_AFTER_MS } from './account-v2'
+import { IdleLock } from './lock'
+import { registerAccountIpc } from './account-ipc'
 import { buildGrantRoster } from './grant-roster'
 import { CallCredentialService } from './call-credential'
 import { makeCallCeremony } from './call-ceremony'
@@ -160,7 +163,7 @@ import { DoorWatch } from './door-watch'
 import { doorNameOf, transcriptSourceFor } from './transcript-source'
 import { readJson, respondJson } from './mobile-http'
 import { deriveSlug, uniqueSlug } from './workspace-slug'
-import { networkInterfaces } from 'node:os'
+import { hostname, networkInterfaces } from 'node:os'
 import { wireServing, type Serving } from './session-serving'
 import { servedTemplateFile } from './served-persist'
 import { bootWorkspaceInPlace } from './session-boot'
@@ -567,6 +570,45 @@ const relayServing =
         log: (message) => console.error(message)
       })
     : null
+
+/**
+ * THE OWNER'S ACCOUNT (identity v2, phase 1) — one file, one lock.
+ *
+ * Local-only is a complete state (architecture P4): no account.json means the
+ * app boots, works and serves nothing, and every call below answers rather
+ * than throws. Nothing here is on the serving path.
+ */
+const accounts = new Accounts({ deviceName: hostname() })
+
+/**
+ * SERVING STILL PICKS ITS HANDLE FROM THE ENVIRONMENT. Phase 6 migrates
+ * identity onto the account; until then the live door must keep working
+ * exactly as it does now, so a claimed username that disagrees with
+ * COOKREW_HANDLE is REPORTED and then ignored. Changing which name serves
+ * would take a door down to make a log line consistent.
+ */
+if (RELAY_HANDLE && accounts.account() && accounts.account()?.username !== RELAY_HANDLE) {
+  console.error(
+    `[cookrew] account @${accounts.account()?.username} differs from COOKREW_HANDLE ` +
+      `@${RELAY_HANDLE}; serving keeps the environment's handle until phase 6.`
+  )
+}
+
+/**
+ * The idle lock covers the OWNER'S RENDERER and nothing else: agents keep
+ * running, doors keep answering, the phone keeps its session.
+ */
+const ownerLock = new IdleLock({
+  lockAfterMs: accounts.account()?.lockAfterMs ?? DEFAULT_LOCK_AFTER_MS,
+  verify: (password) => accounts.verifyUnlock(password),
+  onChange: (locked) => {
+    if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send('account:locked', locked)
+    }
+  }
+})
+/** Idleness is a question about a clock, so something has to ask it. */
+setInterval(() => ownerLock.tick(), 15_000).unref()
 
 /**
  * Sign-in with a cookrew.dev token needs the registry's public key, and only
@@ -3705,6 +3747,10 @@ function createWindow(): void {
   }
   mainWindow.webContents.on('before-input-event', appShortcuts)
 
+  // Focus is presence, for the same reason a keystroke is. Without it, coming
+  // back to a window left open for twenty minutes locks a second later.
+  mainWindow.on('focus', () => ownerLock.focus())
+
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -4130,6 +4176,13 @@ app.whenReady().then(() => {
   // agents are observed through their session files without opening mirrors.
   reportWorkspaceBinding()
 
+  // File this Mac's workspaces under the account, by NAME AND ID only (P1).
+  // Best effort and never awaited: a registry that is down must not delay a
+  // boot, and a desktop with no account has nothing to file.
+  void accounts
+    .registerDesktop(store.list().workspaces.map((w) => ({ id: w.id, name: w.name })))
+    .catch(() => undefined)
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
@@ -4274,6 +4327,17 @@ function registerIpc(handlers: RestoreHandlers): void {
       }
       return op(...args)
     }
+
+  // ---- the owner's account (identity v2) ----
+  //
+  // Registered through the SAME ownerOnly wrapper, by construction: the module
+  // hands over a table and this is the only place a guard could be forgotten.
+  registerAccountIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
+    accounts,
+    lock: ownerLock,
+    envUsername: RELAY_HANDLE || null,
+    workspaces: () => store.list().workspaces.map((w) => ({ id: w.id, name: w.name }))
+  })
 
   ipcMain.handle(
     'grant:enrol',

@@ -1,0 +1,192 @@
+// THE VIEW-MODEL BEHIND THE ACCOUNT SURFACE — the states, and the sentences.
+//
+// The copy IS the product here: every refusal is a sentence from the UI/UX
+// design's copy table, and a screen that says "409" is the failure the design
+// exists to prevent. So these tests assert the words, not just the branch.
+
+import { describe, expect, it } from 'vitest'
+import type { AccountStatus } from '../src/shared/account-v2'
+import {
+  ACCOUNT_COPY,
+  avatarView,
+  claimView,
+  initialsOf,
+  lockNote,
+  refusalSentence,
+  revokeSentence,
+  takenSentence,
+  wrongPasswordSentence,
+} from '../src/renderer/src/account/account-store'
+
+const STRONG = 'correct-horse-battery'
+
+const status = (over: Partial<AccountStatus> = {}): AccountStatus => ({
+  username: 'drej',
+  displayName: '',
+  avatar: null,
+  locked: false,
+  lockAfterMs: 900_000,
+  requests: 0,
+  envUsername: null,
+  sessionExpired: false,
+  workspacesReachable: true,
+  ...over,
+})
+
+describe('the avatar, in three states (D1)', () => {
+  it('reads as NOBODY YET before an account, and never nags', () => {
+    const view = avatarView(null)
+    expect(view.state).toBe('none')
+    expect(view.initials).toBe('?')
+    expect(view.badge).toBeNull()
+    // The hover explains what an account buys AND that nothing here needs one.
+    expect(view.title).toBe(ACCOUNT_COPY.NO_ACCOUNT)
+    expect(view.title).toContain('Everything here works without one.')
+  })
+
+  it('wears initials once claimed', () => {
+    expect(avatarView(status()).initials).toBe('DR')
+    expect(avatarView(status({ displayName: 'Drej Smith' })).initials).toBe('DS')
+    expect(initialsOf('a')).toBe('A')
+    expect(initialsOf(null)).toBe('?')
+  })
+
+  it('carries an uploaded picture rather than the initials', () => {
+    expect(avatarView(status({ avatar: 'data:image/png;base64,x' })).avatar).toBe(
+      'data:image/png;base64,x',
+    )
+  })
+
+  it('shows the rose badge when a device is waiting (the D6 seam)', () => {
+    const view = avatarView(status({ requests: 2 }))
+    expect(view.badge).toBe(2)
+    expect(view.title).toContain('2 devices waiting')
+    // Zero is not a badge — an empty rose dot would be a permanent alarm.
+    expect(avatarView(status({ requests: 0 })).badge).toBeNull()
+  })
+})
+
+describe('the claim sheet decides, and always says why (D2)', () => {
+  const fields = (over: Partial<Parameters<typeof claimView>[0]> = {}) =>
+    claimView({ username: '', check: 'invalid', password: '', confirm: '', ...over })
+
+  it('keeps the primary DOWN until both lines are green', () => {
+    expect(fields().canClaim).toBe(false)
+    expect(fields({ username: 'drej', check: 'free' }).canClaim).toBe(false)
+    expect(
+      fields({ username: 'drej', check: 'free', password: STRONG, confirm: STRONG }).canClaim,
+    ).toBe(true)
+  })
+
+  it('names the act on the button', () => {
+    expect(fields({ username: '@drej', check: 'free' }).primary).toBe('CLAIM @DREJ')
+    expect(fields().primary).toBe('CLAIM')
+  })
+
+  it('refuses a taken name in the copy table’s words', () => {
+    const view = fields({ username: 'anvz', check: 'taken' })
+    expect(view.username.tone).toBe('bad')
+    expect(view.username.note).toBe("@anvz is someone else's. Try another.")
+    expect(view.canClaim).toBe(false)
+  })
+
+  it('refuses a name that is not a name, with the rule', () => {
+    const view = fields({ username: 'Drej Smith', check: 'free' })
+    expect(view.username.note).toBe('A username is lowercase letters, digits and dashes.')
+    // Even a "free" answer cannot enable a name the rules refuse.
+    expect(view.canClaim).toBe(false)
+  })
+
+  it('NEVER lets an unchecked name through — the registry-down sentence', () => {
+    const view = fields({
+      username: 'drej',
+      check: 'unknown',
+      password: STRONG,
+      confirm: STRONG,
+    })
+    expect(view.username.note).toBe(ACCOUNT_COPY.REGISTRY_DOWN)
+    expect(view.username.note).toContain('Nothing local stops.')
+    expect(view.canClaim).toBe(false)
+  })
+
+  it('waits, visibly, while the check is in flight', () => {
+    const view = fields({ username: 'drej', check: 'checking' })
+    expect(view.username.tag).toBe('checking…')
+    expect(view.canClaim).toBe(false)
+  })
+
+  it('meters the password and states the rule under it', () => {
+    expect(fields({ password: 'short' }).password.tone).toBe('bad')
+    expect(fields({ password: 'short' }).password.note).toBe(ACCOUNT_COPY.PASSWORD_WEAK)
+    expect(fields({ password: STRONG }).password.tag).toBe('strong')
+    expect(fields({ password: STRONG }).password.note).toBe(ACCOUNT_COPY.PASSWORD_RULE)
+    // The rule names the floor, what it does, and where it goes.
+    expect(ACCOUNT_COPY.PASSWORD_RULE).toContain('At least 12 characters')
+    expect(ACCOUNT_COPY.PASSWORD_RULE).toContain('only to cookrew.dev')
+  })
+
+  it('says the two do not match yet, rather than going quiet', () => {
+    const view = fields({ password: STRONG, confirm: 'other-password' })
+    expect(view.confirm.tone).toBe('bad')
+    expect(view.confirm.note).toBe(ACCOUNT_COPY.CONFIRM_MISMATCH)
+    expect(fields({ password: STRONG, confirm: STRONG }).confirm.tag).toBe('matches ✓')
+  })
+})
+
+describe('refusals arrive as sentences', () => {
+  it('prefers the registry’s own message, verbatim', () => {
+    expect(refusalSentence('taken', 'Reserved for a system account.', 'root')).toBe(
+      'Reserved for a system account.',
+    )
+  })
+
+  it('falls back to the copy table when there is no message', () => {
+    expect(refusalSentence('taken', undefined, '@anvz')).toBe(takenSentence('anvz'))
+    expect(refusalSentence('weak_password')).toBe(ACCOUNT_COPY.PASSWORD_WEAK)
+    expect(refusalSentence('offline')).toBe(ACCOUNT_COPY.REGISTRY_DOWN)
+    expect(refusalSentence('last_device')).toContain('last device')
+  })
+
+  it('never leaks a code to a person', () => {
+    for (const reason of ['unknown', 'bad_device', 'rate_limited', 'session-expired'] as const) {
+      const sentence = refusalSentence(reason)
+      expect(sentence).not.toContain(reason)
+      expect(sentence).toMatch(/[.!]$/)
+    }
+  })
+})
+
+describe('the lock screen’s line (D5)', () => {
+  it('opens with why it is locked and what kept running', () => {
+    expect(lockNote(null)).toBe('Locked while you were away. Your agents kept working.')
+  })
+
+  it('counts the tries down in the design’s words', () => {
+    expect(lockNote({ ok: false, reason: 'wrong', triesLeft: 4 })).toBe(
+      'Not it. 4 tries left before a 1-minute pause.',
+    )
+    expect(wrongPasswordSentence(1)).toBe('Not it. 1 try left before a 1-minute pause.')
+  })
+
+  it('says how long the pause has left', () => {
+    expect(lockNote({ ok: false, reason: 'paused', pausedForMs: 60_000 })).toContain('60 seconds')
+  })
+})
+
+describe('the revoke confirmation names the device and its consequence', () => {
+  it('is one sentence, in the table’s words', () => {
+    expect(revokeSentence('iPhone')).toBe(
+      'The iPhone stops opening this account within a minute. It keeps working on this Wi-Fi until re-paired.',
+    )
+  })
+})
+
+describe('the tabs this phase leaves empty are honest about it', () => {
+  it('says No seats yet., not nothing at all', () => {
+    expect(ACCOUNT_COPY.NO_SEATS).toBe('No seats yet.')
+  })
+
+  it('says what leaves this Mac in the Workspaces tab', () => {
+    expect(ACCOUNT_COPY.WORKSPACES_NOTE).toContain('Names and ids only leave this Mac')
+  })
+})
