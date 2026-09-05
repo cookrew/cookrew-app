@@ -36,6 +36,16 @@ export interface V2Claims {
   jti: string
   /** A call token names ONE door; a session token names none. */
   aud?: string
+  /**
+   * THE SEAT THIS TOKEN WAS MINTED FOR, when there is one.
+   *
+   * A door verifies the signature offline and learns the account from `sub`;
+   * `seat` is what lets it say WHICH fact admitted this person, so an owner
+   * ending a seat and a caller holding a ten-minute token are traceable to
+   * each other. Absent for the owner of the door and for a team that charges
+   * nothing — neither is admitted by a seat, so neither may claim one.
+   */
+  seat?: string
 }
 
 export interface Minted {
@@ -82,11 +92,15 @@ export class V2Tokens {
    * Minted here in phase 1 so the audience rule lives with the format rather
    * than being invented again later beside the gate that needs it.
    */
-  mintCallToken(sub: string, dev: string, aud: string): Minted {
+  mintCallToken(sub: string, dev: string, aud: string, seat?: string): Minted {
     if (!AUDIENCE.test(aud)) throw new Error(`"${aud}" is not a door — a call token names @handle/team`)
     const exp = this.now() + CALL_TTL_MS
     const jti = randomUUID()
-    return { token: this.mint({ sub, dev, scope: 'call', exp, jti, aud }), exp, jti }
+    return {
+      token: this.mint({ sub, dev, scope: 'call', exp, jti, aud, ...(seat === undefined ? {} : { seat }) }),
+      exp,
+      jti
+    }
   }
 
   /**
@@ -109,6 +123,9 @@ export class V2Tokens {
       if (typeof claims.exp !== 'number' || claims.exp < this.now()) return null
       if (claims.scope !== expect) return null
       if (claims.scope === 'call' && (typeof claims.aud !== 'string' || !AUDIENCE.test(claims.aud))) return null
+      // A seat claim is an id or it is not there; anything else is a token
+      // somebody shaped by hand and a door must not read it as a seat.
+      if (claims.seat !== undefined && (typeof claims.seat !== 'string' || claims.seat === '')) return null
       if (this.revoked().has(claims.dev)) return null
       return claims
     } catch {

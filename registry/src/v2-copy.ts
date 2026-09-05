@@ -26,6 +26,10 @@ export type V2Error =
   | 'bad_desktop'
   | 'not_this_device'
   | 'bad_origin'
+  | 'no_seat'
+  | 'not_owner'
+  | 'already_seated'
+  | 'bad_seat'
   | 'malformed'
   | 'method_not_allowed'
 
@@ -43,14 +47,31 @@ const SENTENCES: Record<V2Error, string> = {
   bad_desktop: 'A desktop registers its own name and up to 64 workspaces, each by name and id.',
   not_this_device: 'Only that desktop can say what is on it.',
   bad_origin: 'That request came from another site, so it was not carried out.',
+  no_seat: 'No seat here yet. Buy one, or ask the owner for one.',
+  not_owner: 'Only the owner of this team can seat people at it.',
+  already_seated: 'That account already has a seat here.',
+  bad_seat: 'A seat names a username, and a receipt is one short line of text.',
   malformed: 'That request was not something this registry could read.',
   method_not_allowed: 'That address does not answer to this method.'
 }
 
+/**
+ * The subject is who or what the refusal is ABOUT — a username being typed, a
+ * team being knocked on, the owner who could seat you. A sentence that can
+ * name it says something a person can act on; the same sentence without it is
+ * a shrug, so these four are written twice rather than once.
+ */
 export function sentenceFor(error: V2Error, subject?: string): string {
+  if (subject === undefined) return SENTENCES[error]
   // The one refusal that is worth naming its subject: "taken" is the sentence
   // a person reads while typing, and "that name" is a worse answer than theirs.
-  if (error === 'taken' && subject !== undefined) return `@${subject} is someone else’s. Try another.`
+  if (error === 'taken') return `@${subject} is someone else’s. Try another.`
+  // At a door the 401 is not "sign in to see this" — it is the reason a seat
+  // is worth signing in for at all (the copy table's own sentence).
+  if (error === 'unauthenticated') return 'A seat is yours, not a browser’s. Sign in so it follows you.'
+  if (error === 'no_seat') return `No seat here yet. Buy one, or ask @${subject} for one.`
+  if (error === 'not_owner') return `Only @${subject} can seat people at this team.`
+  if (error === 'already_seated') return `@${subject} already has a seat here.`
   return SENTENCES[error]
 }
 

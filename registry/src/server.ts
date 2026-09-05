@@ -293,7 +293,11 @@ export function createRegistry(deps: RegistryDeps): Server {
         // which says nothing behind a terminator.
         secure:
           request.headers['x-forwarded-proto'] === 'https' || (deps.origin?.startsWith('https://') ?? false),
-        decode
+        decode,
+        // The directory, for the seat routes: a seat is held at a TEAM, and
+        // the team's own terms (free or priced, and on which rails) are the
+        // door's to state, never the seat's.
+        ...(deps.doors === undefined ? {} : { doors: deps.doors })
       })
     )
       return
