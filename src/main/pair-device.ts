@@ -56,14 +56,6 @@ export async function bindPairedDevice(
     )
   }
   try {
-    // ANNOUNCED, NOT ASSUMED. The phone posts on every pairing, whether or
-    // not it believes it is bound, because what it believes can be stale: an
-    // account deleted and minted again keeps the handle and loses every
-    // device, and a phone that stayed silent would be signed in to nothing.
-    // A device the account already lists is confirmed without a second bind.
-    if (await alreadyListed(session, device.id)) {
-      return { status: 200, body: { handle: session.handle, deviceId: device.id } }
-    }
     const bound = await session.bindDevice(device)
     return { status: 200, body: { handle: bound.handle, deviceId: bound.deviceId } }
   } catch (error) {
@@ -75,29 +67,12 @@ export async function bindPairedDevice(
   }
 }
 
-/**
- * Is this device already an unrevoked device of the account? A registry that
- * cannot be asked answers "no" and the bind decides — the registry refuses a
- * duplicate id itself, so the worst case is one refused round trip.
- */
-async function alreadyListed(session: AccountSession, deviceId: string): Promise<boolean> {
-  try {
-    const devices = (await session.listDevices()) as readonly (DeviceInput & {
-      revokedAt?: unknown
-    })[]
-    return devices.some((d) => d.id === deviceId && d.revokedAt === undefined)
-  } catch {
-    return false
-  }
-}
-
 /** A base64url coordinate of a 32-byte key is 43 characters; P-256 has two. */
 const COORD = /^[A-Za-z0-9_-]{43}$/
 
 function phoneKeyLooksRight(jwk: Record<string, unknown>): boolean {
   if (Object.keys(jwk).length > 8) return false
-  if (jwk.kty === 'OKP')
-    return jwk.crv === 'Ed25519' && typeof jwk.x === 'string' && COORD.test(jwk.x)
+  if (jwk.kty === 'OKP') return jwk.crv === 'Ed25519' && typeof jwk.x === 'string' && COORD.test(jwk.x)
   if (jwk.kty === 'EC') {
     return (
       jwk.crv === 'P-256' &&

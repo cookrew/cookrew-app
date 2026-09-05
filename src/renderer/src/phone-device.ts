@@ -53,9 +53,7 @@ export function canonicalJwk(jwk: Record<string, unknown>): string {
         : { e: jwk.e, kty: jwk.kty, n: jwk.n }
   return `{${Object.keys(members)
     .sort()
-    .map(
-      (key) => `${JSON.stringify(key)}:${JSON.stringify((members as Record<string, unknown>)[key])}`
-    )
+    .map((key) => `${JSON.stringify(key)}:${JSON.stringify((members as Record<string, unknown>)[key])}`)
     .join(',')}}`
 }
 
@@ -97,38 +95,21 @@ export async function bindPhoneDevice(input: {
   remember: (bound: PhoneBinding) => void | Promise<void>
   name?: string
 }): Promise<BindOutcome> {
-  // ANNOUNCED ON EVERY PAIRING, bound or not. A phone that stayed silent once
-  // bound was signed in to nothing after the owner deleted and re-minted the
-  // account: the handle came back, the devices did not, and the phone kept a
-  // binding to a device that no longer existed. The desktop confirms a device
-  // its account still lists without binding it again, so the cost of
-  // announcing is one read; and it rebinds one that is missing.
+  if (input.known !== null) return { state: 'already', handle: input.known.handle }
   let answer: { status: number; body: unknown }
   try {
     answer = await input.post({
       id: input.device.id,
       jwk: input.device.jwk,
       kind: 'phone',
-      name: input.name ?? 'a phone',
-      ...(input.known === null ? {} : { known: input.known })
+      name: input.name ?? 'a phone'
     })
   } catch {
-    return input.known === null
-      ? { state: 'refused', reason: 'the desktop did not answer — try again in a moment' }
-      : { state: 'already', handle: input.known.handle }
+    return { state: 'refused', reason: 'the desktop did not answer — try again in a moment' }
   }
   const body = (answer.body ?? {}) as { handle?: unknown; deviceId?: unknown; error?: unknown }
-  if (
-    answer.status === 200 &&
-    typeof body.handle === 'string' &&
-    typeof body.deviceId === 'string'
-  ) {
+  if (answer.status === 200 && typeof body.handle === 'string' && typeof body.deviceId === 'string') {
     const bound: PhoneBinding = { handle: body.handle, deviceId: body.deviceId }
-    const unchanged =
-      input.known !== null &&
-      input.known.handle === bound.handle &&
-      input.known.deviceId === bound.deviceId
-    if (unchanged) return { state: 'already', handle: bound.handle }
     await input.remember(bound)
     return { state: 'bound', ...bound }
   }
@@ -164,10 +145,11 @@ export async function mintDeviceKeys(): Promise<{ alg: DeviceAlg; keys: CryptoKe
     ])) as CryptoKeyPair
     return { alg: 'Ed25519', keys }
   } catch {
-    const keys = (await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, [
-      'sign',
-      'verify'
-    ])) as CryptoKeyPair
+    const keys = (await crypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      false,
+      ['sign', 'verify']
+    )) as CryptoKeyPair
     return { alg: 'P-256', keys }
   }
 }
