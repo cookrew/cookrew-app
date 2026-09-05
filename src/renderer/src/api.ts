@@ -520,6 +520,11 @@ export interface CookrewApi {
     password: string;
     name?: string;
   }) => Promise<AccountResult<AccountStatus>>;
+  /** Phase 6: set a password on the handle this Mac held before them. */
+  accountMigrate?: (input: {
+    password: string;
+    name?: string;
+  }) => Promise<AccountResult<AccountStatus>>;
   accountLock?: () => Promise<AccountStatus>;
   accountUnlock?: (password: string) => Promise<UnlockAnswer>;
   accountProfile?: () => Promise<AccountResult<AccountProfile>>;

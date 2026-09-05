@@ -24,6 +24,8 @@ import {
   type AccountResult,
   type UsernameCheck,
 } from '../shared/account-v2'
+import { legacyKey, migrateAtRegistry } from './legacy-identity'
+import type { RegistryAccount } from './registry-account'
 
 export { DEFAULT_LOCK_AFTER_MS }
 
@@ -283,6 +285,15 @@ export interface AccountsDeps {
   origin?: string
   /** This Mac's name, for the Devices tab. */
   deviceName?: string
+  /**
+   * The key this Mac held at that registry before passwords (phase 6).
+   *
+   * A function rather than a value because it is read lazily and because a
+   * test has to be able to answer it without a home directory. It NEVER
+   * creates a key: asking whether this Mac was already somebody must not be
+   * the act that makes it somebody.
+   */
+  legacy?: () => RegistryAccount | null
 }
 
 interface WireError {
@@ -292,6 +303,8 @@ interface WireError {
 
 const REFUSALS: Record<string, AccountRefusal> = {
   taken: 'taken',
+  legacy: 'legacy',
+  no_passwords_yet: 'no_passwords_yet',
   bad_username: 'bad_username',
   weak_password: 'weak_password',
   bad_device: 'bad_device',
@@ -333,6 +346,7 @@ export class Accounts {
   private cached: AccountFile | null
   /** The last minted batch, in memory only — never written, never logged. */
   private freshCodes: readonly string[] | null = null
+  private readonly legacy: () => RegistryAccount | null
 
   constructor(deps: AccountsDeps = {}) {
     this.base = deps.base
@@ -341,6 +355,20 @@ export class Accounts {
     this.origin = deps.origin ?? registryOrigin()
     this.deviceName = deps.deviceName ?? 'This Mac'
     this.cached = loadAccount(deps.base)
+    this.legacy = deps.legacy ?? ((): RegistryAccount | null => legacyKey(this.origin, this.base))
+  }
+
+  /**
+   * The handle the key on this Mac holds at that registry, or null.
+   *
+   * Reported whether or not there is an account, because the two can
+   * disagree and the disagreement is the interesting case: it is the key,
+   * not the account, that a v1 door registration is signed with. Whether the
+   * claim sheet should OFFER a crossing is a different question, answered by
+   * `legacyIdentity`.
+   */
+  legacyHandle(): string | null {
+    return this.legacy()?.handle ?? null
   }
 
   /** The account file as it stands, or null for a local-only desktop. */
@@ -431,25 +459,100 @@ export class Accounts {
     } catch {
       return { ok: false, reason: 'unknown' }
     }
-    const session = body.session ?? null
     return {
       ok: true,
-      value: this.save({
+      value: this.saveClaimed({
         username: body.username ?? username,
         // The registry names the device it filed; ours is derived from the key
         // it was sent, so the two agree — but its answer is the record.
         deviceId: body.deviceId ?? deviceId,
-        kind: 'desktop',
         name,
-        privateKeyJwk,
-        publicKeyJwk,
-        registry: this.origin,
-        session,
-        unlock: unlockVerifierFor(input.password),
-        lockAfterMs: DEFAULT_LOCK_AFTER_MS,
-        claimedAt: this.now(),
-        workspacesReachable: true,
-        recoveryCodesSavedAt: null,
+        password: input.password,
+        keys: { privateKeyJwk, publicKeyJwk },
+        session: body.session ?? null,
+      }),
+    }
+  }
+
+  /**
+   * THE FILE A NAME LEAVES BEHIND, written in ONE place.
+   *
+   * A username reaches this Mac two ways now — claimed fresh, or migrated
+   * from the key it already held (phase 6) — and both produce the same
+   * account: the same device key, the same offline unlock verifier, the same
+   * defaults. Two copies of this block would be two accounts that differ in
+   * whichever field the second one forgot.
+   */
+  private saveClaimed(input: {
+    username: string
+    deviceId: string
+    name: string
+    password: string
+    keys: { privateKeyJwk: Record<string, unknown>; publicKeyJwk: Record<string, unknown> }
+    session: AccountSession | null
+  }): AccountFile {
+    return this.save({
+      username: input.username,
+      deviceId: input.deviceId,
+      kind: 'desktop',
+      name: input.name,
+      privateKeyJwk: input.keys.privateKeyJwk,
+      publicKeyJwk: input.keys.publicKeyJwk,
+      registry: this.origin,
+      session: input.session,
+      unlock: unlockVerifierFor(input.password),
+      lockAfterMs: DEFAULT_LOCK_AFTER_MS,
+      claimedAt: this.now(),
+      workspacesReachable: true,
+      recoveryCodesSavedAt: null,
+    })
+  }
+
+  /**
+   * SET A PASSWORD ON THE NAME THIS MAC ALREADY HAS (phase 6).
+   *
+   * The username is not an argument: it is the handle the key on this Mac
+   * holds, and offering to type one would offer a choice that does not exist
+   * — the registry will only take the name that key can sign for.
+   *
+   * THE FILE IS WRITTEN ONLY ON 201, exactly as `claim` writes it. Every
+   * other outcome — a registry with no /v2 yet, a key that is not the one
+   * that holds the name, a socket that never answered — leaves this Mac
+   * serving precisely as it was, which is the promise this phase makes.
+   */
+  async migrate(input: { password: string; name?: string }): Promise<AccountResult<AccountFile>> {
+    const held = this.cached
+    if (held !== null) {
+      return {
+        ok: false,
+        reason: 'taken',
+        message: `This Mac is already @${held.username}.`,
+      }
+    }
+    const legacy = this.legacy()
+    if (legacy === null) return { ok: false, reason: 'no_account' }
+    if (input.password.length < MIN_PASSWORD) return { ok: false, reason: 'weak_password' }
+
+    const { privateKeyJwk, publicKeyJwk } = mintDeviceKey()
+    const deviceId = deviceIdFor(publicKeyJwk)
+    const name = input.name?.trim() || this.deviceName
+    const out = await migrateAtRegistry({
+      origin: this.origin,
+      http: this.http,
+      legacy,
+      password: input.password,
+      device: { id: deviceId, kind: 'desktop', name, jwk: publicKeyJwk },
+    })
+    if (!out.ok) return out
+    return {
+      ok: true,
+      value: this.saveClaimed({
+        username: out.value.username,
+        deviceId: out.value.deviceId,
+        name,
+        password: input.password,
+        keys: { privateKeyJwk, publicKeyJwk },
+        session: out.value.session,
       }),
     }
   }

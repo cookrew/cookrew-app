@@ -11,8 +11,15 @@
  * is exactly how a field that says STRONG comes back refused.
  */
 
-/** What kind of thing holds a key on the account. */
-export type DeviceKind = 'desktop' | 'phone' | 'browser'
+/**
+ * What kind of thing holds a key on the account.
+ *
+ * `legacy` is the key a handle held BEFORE passwords (phase 6). No device
+ * ever calls itself that: the registry files one when a handle crosses, and
+ * it is listed and revoked like any other — revoking it is how the
+ * pre-password world ends on that account.
+ */
+export type DeviceKind = 'desktop' | 'phone' | 'browser' | 'legacy'
 
 /** One attached device, as the registry lists it. */
 export interface AccountDevice {
@@ -60,11 +67,22 @@ export interface AccountStatus {
   lockAfterMs: number
   requests: number
   /**
-   * COOKREW_HANDLE, when the env sets one. Phase 6 migrates identity onto the
-   * account; until then serving keeps using the env and this exists only so a
-   * surface can say the two names differ.
+   * COOKREW_HANDLE, when the env sets one.
+   *
+   * RETIRED AS IDENTITY (phase 6): serving prefers the account, then the key
+   * this Mac already holds, and only then this. It stays on the status so a
+   * surface can say that the environment names something else.
    */
   envUsername: string | null
+  /**
+   * THE HANDLE THIS MAC HELD BEFORE PASSWORDS, when there is one and no
+   * account yet (phase 6).
+   *
+   * The claim sheet reads it and becomes a migration: the name is already
+   * decided and only a password is missing. Null on a Mac that never served,
+   * and null the moment the crossing is done.
+   */
+  legacy: { handle: string } | null
   /** The session died of old age; the next authed action needs the password. */
   sessionExpired: boolean
   /** Workspaces of THIS Mac may be offered to the account's other devices. */
@@ -199,6 +217,11 @@ export type AccountRefusal =
   // exists — which a SETTLE reads as success, because it is what it asked for.
   | 'not_found'
   | 'already_seated'
+  // Phase 6. 'legacy' is a name held by a key with no password yet — not free
+  // and not somebody else's; 'no_passwords_yet' is a cookrew.dev that predates
+  // accounts, where the honest answer is that nothing changes.
+  | 'legacy'
+  | 'no_passwords_yet'
   | 'unknown'
 
 /**

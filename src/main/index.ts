@@ -82,6 +82,7 @@ import { AgentRegistry } from './agent-registry'
 import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerSender } from './owner-grant'
 import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin } from './account-v2'
+import { relayHandle } from './legacy-identity'
 import { createAdmittedDeviceStore } from './admitted-devices'
 import { createPairingKeyRing } from './pairing-key'
 import { createRegistryKeyCache } from './registry-keys'
@@ -578,15 +579,8 @@ const servedCallers = new ServedCallers()
  * existing test about reach meaningful rather than merely still-passing.
  */
 const RELAY_ORIGIN = process.env.COOKREW_REGISTRY ?? ''
-const RELAY_HANDLE = process.env.COOKREW_HANDLE ?? ''
-const relayServing =
-  RELAY_ORIGIN && RELAY_HANDLE
-    ? createRelayServing({
-        origin: RELAY_ORIGIN,
-        loopbackPort: () => MOBILE_PORT,
-        log: (message) => console.error(message)
-      })
-    : null
+/** COOKREW_HANDLE as the environment set it — a development override now. */
+const ENV_HANDLE = process.env.COOKREW_HANDLE ?? ''
 
 /**
  * THE OWNER'S ACCOUNT (identity v2, phase 1) — one file, one lock.
@@ -596,6 +590,38 @@ const relayServing =
  * than throws. Nothing here is on the serving path.
  */
 const accounts = new Accounts({ deviceName: hostname() })
+
+/** The handle the key in ~/.cookrew/registry holds, if this Mac ever served. */
+const LEGACY_HANDLE = accounts.legacyHandle()
+
+/**
+ * WHICH NAME THIS MAC SERVES UNDER (identity v2, phase 6).
+ *
+ * THE ENVIRONMENT IS RETIRED AS IDENTITY. The account decides, then the key
+ * this Mac already holds — which wins over a disagreeing account because a v1
+ * door registration is signed with that key and the registry takes the handle
+ * from the signature, so serving under a name we cannot sign for would refuse
+ * the dial rather than rename the door. COOKREW_HANDLE decides only on a
+ * machine that has neither, and is told what it is. The whole table is a pure
+ * function (legacy-identity.ts) with a test per row.
+ */
+const RELAY_IDENTITY = relayHandle({
+  account: accounts.account()?.username ?? null,
+  legacy: LEGACY_HANDLE,
+  env: ENV_HANDLE
+})
+const RELAY_HANDLE = RELAY_IDENTITY.handle
+// ONCE, at boot: a fact about how this process resolved its own name.
+if (RELAY_IDENTITY.note !== null) console.error(RELAY_IDENTITY.note)
+
+const relayServing =
+  RELAY_ORIGIN && RELAY_HANDLE
+    ? createRelayServing({
+        origin: RELAY_ORIGIN,
+        loopbackPort: () => MOBILE_PORT,
+        log: (message) => console.error(message)
+      })
+    : null
 
 /**
  * IDENTITY V2, PHASE 2 — pairing through cookrew.dev, and the reach card.
@@ -610,20 +636,6 @@ const pairingKeys = createPairingKeyRing()
 const admittedDevices = createAdmittedDeviceStore()
 const registryKeyCache = createRegistryKeyCache({ origin: registryOrigin() })
 let reachPublisher: ReachPublisher | null = null
-
-/**
- * SERVING STILL PICKS ITS HANDLE FROM THE ENVIRONMENT. Phase 6 migrates
- * identity onto the account; until then the live door must keep working
- * exactly as it does now, so a claimed username that disagrees with
- * COOKREW_HANDLE is REPORTED and then ignored. Changing which name serves
- * would take a door down to make a log line consistent.
- */
-if (RELAY_HANDLE && accounts.account() && accounts.account()?.username !== RELAY_HANDLE) {
-  console.error(
-    `[cookrew] account @${accounts.account()?.username} differs from COOKREW_HANDLE ` +
-      `@${RELAY_HANDLE}; serving keeps the environment's handle until phase 6.`
-  )
-}
 
 /**
  * The idle lock covers the OWNER'S RENDERER and nothing else: agents keep
@@ -4598,7 +4610,10 @@ function registerIpc(handlers: RestoreHandlers): void {
     lock: ownerLock,
     approvals,
     factors,
-    envUsername: RELAY_HANDLE || null,
+    envUsername: ENV_HANDLE || null,
+    // Phase 6: a Mac that already serves under a handle opens the claim sheet
+    // on a password, not on a name. Read at boot, and null once it has crossed.
+    legacy: LEGACY_HANDLE === null ? null : { handle: LEGACY_HANDLE },
     workspaces: () => store.list().workspaces.map((w) => ({ id: w.id, name: w.name })),
     pairing: pairingKeys,
     admitted: {

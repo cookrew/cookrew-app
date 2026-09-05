@@ -6,6 +6,7 @@ import { cookrew } from '../api'
 import {
   ACCOUNT_COPY,
   deviceName,
+  envIgnoredSentence,
   initialsOf,
   refusalSentence,
   revokeSentence,
@@ -46,6 +47,10 @@ const KIND_LABEL: Record<string, string> = {
   desktop: 'DESKTOP',
   phone: 'PHONE',
   browser: 'BROWSER',
+  // The key this name held before passwords (phase 6). It is listed like any
+  // other device because that is what it now is — and revoking it is how the
+  // pre-password world ends on this account.
+  legacy: 'KEY',
 }
 
 function ago(at: number, now: number): string {
@@ -275,12 +280,9 @@ export function ProfileSheet({
               </div>
             )}
             {status.envUsername && status.envUsername !== username && (
-              /* Phase 6 migrates identity; today's door keeps the env handle,
-                 and saying so is better than two names and no explanation. */
-              <p className="gs-foot-note">
-                This Mac serves as @{status.envUsername} (from COOKREW_HANDLE). Serving moves onto
-                your account in a later phase.
-              </p>
+              /* Phase 6: the account decides now, so the row says which name
+                 won rather than promising that one day one will. */
+              <p className="gs-foot-note">{envIgnoredSentence(status.envUsername, username)}</p>
             )}
           </section>
         )}

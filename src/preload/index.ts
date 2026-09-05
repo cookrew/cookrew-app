@@ -46,6 +46,10 @@ const api = {
   accountCheck: (username: string) => ipcRenderer.invoke('account:check', username),
   accountClaim: (input: { username: string; password: string; name?: string }) =>
     ipcRenderer.invoke('account:claim', input),
+  /** Phase 6: a password for the name this Mac already holds a key for. The
+   *  name is main's to know, so this takes only the password. */
+  accountMigrate: (input: { password: string; name?: string }) =>
+    ipcRenderer.invoke('account:migrate', input),
   accountLock: () => ipcRenderer.invoke('account:lock'),
   /** Also renews a session that died, since the password is in hand once. */
   accountUnlock: (password: string) => ipcRenderer.invoke('account:unlock', password),
