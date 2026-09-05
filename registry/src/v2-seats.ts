@@ -80,11 +80,13 @@ const asUsername = (value: unknown): string | null => {
 export class V2Seats {
   private readonly file: string
   private readonly now: () => number
+  private readonly log: (message: string) => void
   private seats: readonly V2Seat[] = []
 
-  constructor(base: string, now: () => number = Date.now) {
+  constructor(base: string, now: () => number = Date.now, log: (message: string) => void = () => undefined) {
     mkdirSync(base, { recursive: true })
     this.now = now
+    this.log = log
     this.file = path.join(base, SEATS_FILE)
     if (existsSync(this.file)) this.load()
   }
@@ -240,11 +242,38 @@ export class V2Seats {
       ...(until === undefined ? {} : { expiresAt: until as number }),
       ...(rest.receipt === undefined ? {} : { receipt: rest.receipt })
     }
-    // Bounded, oldest ENDED seats first: a room's history is worth keeping,
-    // but never at the price of a file the registry cannot load.
-    this.seats = [...this.seats, seat].slice(-SEATS_MAX)
+    this.seats = this.bounded([...this.seats, seat])
     this.save()
     return { ok: true, seat }
+  }
+
+  /**
+   * BOUNDED, AND NEVER BY DROPPING SOMEBODY WHO IS SEATED.
+   *
+   * The cap used to be `slice(-SEATS_MAX)` — insertion order, oldest first —
+   * so a registry that reached it evicted the OLDEST seats, which are exactly
+   * the long-standing paid ones. A person who bought a seat a year ago would
+   * have arrived at the door a stranger, with nothing in any log to say why.
+   *
+   * So the history is what gets trimmed: ended and expired seats, oldest
+   * first, down to whatever room the live ones leave. A room's history is
+   * worth keeping, but never at the price of a live fact — and if the live
+   * seats alone are past the cap, they are ALL kept and a sentence is written,
+   * because the alternative is a silent revocation nobody asked for.
+   */
+  private bounded(seats: readonly V2Seat[]): readonly V2Seat[] {
+    if (seats.length <= SEATS_MAX) return seats
+    const live = seats.filter((seat) => this.live(seat))
+    const ended = seats.filter((seat) => !this.live(seat))
+    if (live.length >= SEATS_MAX) {
+      this.log(
+        `seats: ${live.length} seats are live, at or past the ${SEATS_MAX} this file is capped at. ` +
+          'Every live seat is kept and only ended ones were dropped — raise the cap before this file stops loading.'
+      )
+      return live
+    }
+    // Oldest ended first, which is what `slice(-n)` keeps: the tail.
+    return [...ended.slice(-(SEATS_MAX - live.length)), ...live]
   }
 
   /**

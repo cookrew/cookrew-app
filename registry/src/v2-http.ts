@@ -53,6 +53,8 @@ export interface V2Identity {
 }
 
 export interface V2Options {
+  /** Where a store's own sentence goes — a seat cap reached, and the like. */
+  log?: (message: string) => void
   limits?: {
     accountsPerMinute: number
     sessionsPerMinute: number
@@ -80,7 +82,7 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
   return {
     accounts,
     tokens,
-    seats: new V2Seats(base, options.now),
+    seats: new V2Seats(base, options.now, options.log),
     limits: {
       accounts: new Limiter(options.limits?.accountsPerMinute ?? 10, 60_000, options.now),
       sessions: new Limiter(options.limits?.sessionsPerMinute ?? 5, 60_000, options.now),

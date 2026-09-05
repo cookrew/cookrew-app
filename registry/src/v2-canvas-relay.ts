@@ -2,8 +2,13 @@ import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:
 import { decodeFrame, encodeFrame } from '../../src/shared/relay-frame'
 import { RelayHub, type HubSocket } from './relay-hub'
 import { LinkPulse, openNdjson, readFrameLines } from './relay-link'
-import { PRIVATE, refuse, signedIn, v2Json, type V2Identity } from './v2-http'
-import { relayNotYoursPage, relayOfflinePage, relaySignInPage } from './site-relay'
+import { PRIVATE, refuse, sameOrigin, signedIn, v2Json, type V2Identity } from './v2-http'
+import {
+  relayCrossSitePage,
+  relayNotYoursPage,
+  relayOfflinePage,
+  relaySignInPage
+} from './site-relay'
 import { respondPage } from './site-shell'
 
 /**
@@ -76,6 +81,33 @@ export const CANVAS_BODY_MAX = 4 * 1024 * 1024
  * than one frame is simply several, the last one carrying `done`.
  */
 export const CANVAS_CHUNK = 384 * 1024
+
+/**
+ * WHAT ONE ACCOUNT MAY MAKE THIS PROCESS HOLD.
+ *
+ * Anyone can claim a username, so "a registered stranger" is the threat model
+ * here, not an accident. Without these a single account could open lines and
+ * exchanges without limit and make the registry buffer four megabytes for each
+ * — the doors would go down with the canvases, since they share a process.
+ *
+ * The arithmetic is the point: 8 lines × 16 exchanges × 4 MB is 512 MB per
+ * account, which is why the LAST of these is a budget across the whole relay
+ * rather than another per-account number. A cap that multiplies is not a cap.
+ */
+/** Exchanges one desktop's line carries at once. A canvas opens a handful. */
+export const EXCHANGES_PER_LINK = 16
+/** Lines one account may hold: one per desktop, and nobody has eight Macs. */
+export const LINKS_PER_ACCOUNT = 8
+/** How long an exchange may wait for its first head frame before it is given up on. */
+export const HEAD_DEADLINE_MS = 30_000
+/**
+ * How long a headed exchange may go silent. Generous because the line is an
+ * SSE stream that is quiet while an agent thinks — its own keepalive is a
+ * chunk, and every chunk resets this.
+ */
+export const IDLE_DEADLINE_MS = 120_000
+/** Request bodies being buffered across the WHOLE relay at once. */
+export const BODY_BUDGET = 64 * 1024 * 1024
 
 /**
  * THE REQUEST HEADERS THAT CROSS. An allow-list, because the opposite is a
@@ -190,6 +222,12 @@ export interface CanvasRelayDeps {
   now?: () => number
   pulseMs?: number
   pulseDeadlineMs?: number
+  /** The bounds above, lowered by a test so a cap can be reached in a second. */
+  exchangesPerLink?: number
+  linksPerAccount?: number
+  headDeadlineMs?: number
+  idleDeadlineMs?: number
+  bodyBudget?: number
 }
 
 /** A refusal this file words itself, for the routes only a desktop calls. */
@@ -218,6 +256,34 @@ const decode = (value: string): string | null => {
 const cookieSignedIn = (request: IncomingMessage, v2: V2Identity): ReturnType<typeof signedIn> =>
   signedIn({ headers: { cookie: request.headers.cookie ?? '' } } as IncomingMessage, v2)
 
+/**
+ * A REQUEST ANOTHER SITE CAUSED, WHICH IS NEVER THIS PERSON'S WISH.
+ *
+ * Both prefixes here are state-changing in ways a `GET` usually is not: the
+ * downlink CLAIMS A NAME, and a claim someone else's page can cause is a name
+ * someone else's page can squat — the real desktop then finds its own line
+ * taken. So the browser's own account of where the request came from is what
+ * decides, and only `same-origin` (the picker's `location.assign`) and `none`
+ * (a typed address or a bookmark) are this person's.
+ *
+ * `sec-fetch-site` is absent on old browsers and on curl; there the Origin
+ * check that the rest of /v2 uses is the fallback, so the posture never gets
+ * weaker than the routes next door.
+ */
+export function crossSite(request: IncomingMessage): boolean {
+  const site = request.headers['sec-fetch-site']
+  if (typeof site === 'string' && site !== '') return site !== 'same-origin' && site !== 'none'
+  return !sameOrigin(request)
+}
+
+/**
+ * The desktop app's own path, which is not a browser and carries no cookie.
+ * A browser cannot forge it: a cross-site fetch that sets `Authorization` is
+ * preflighted, and this origin answers no preflight.
+ */
+const bearing = (request: IncomingMessage): boolean =>
+  (request.headers.authorization ?? '').startsWith('Bearer ')
+
 /** Is the reader a browser following a link, or a script? Decides page vs JSON. */
 const wantsPage = (request: IncomingMessage): boolean =>
   (request.headers.accept ?? '').includes('text/html')
@@ -226,6 +292,33 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   const log = deps.log ?? ((): void => undefined)
   const hub = new RelayHub(log, isCanvasName)
   const counts = { open: 0, opened: 0, closed: 0, bytesUp: 0, bytesDown: 0 }
+  const perLink = deps.exchangesPerLink ?? EXCHANGES_PER_LINK
+  const perAccount = deps.linksPerAccount ?? LINKS_PER_ACCOUNT
+  const headMs = deps.headDeadlineMs ?? HEAD_DEADLINE_MS
+  const idleMs = deps.idleDeadlineMs ?? IDLE_DEADLINE_MS
+  const budget = deps.bodyBudget ?? BODY_BUDGET
+  /** Exchanges in flight per line, so one desktop cannot be made to hold many. */
+  const exchanges = new Map<string, number>()
+  /** The lines each account holds, so one account cannot hold many. */
+  const holding = new Map<string, Set<string>>()
+  /** Request bytes buffered right now, across every exchange. */
+  let buffering = 0
+
+  /** The account a canvas name belongs to. The name is built from a token. */
+  const ownerOf = (name: string): string => name.slice(1, name.indexOf('/'))
+  const holdsLine = (name: string): void => {
+    const owner = ownerOf(name)
+    const mine = holding.get(owner) ?? new Set<string>()
+    mine.add(name)
+    holding.set(owner, mine)
+  }
+  const releasesLine = (name: string): void => {
+    const owner = ownerOf(name)
+    const mine = holding.get(owner)
+    if (mine === undefined) return
+    mine.delete(name)
+    if (mine.size === 0) holding.delete(owner)
+  }
 
   const live: LinkPulse = new LinkPulse({
     ...(deps.now === undefined ? {} : { now: deps.now }),
@@ -237,6 +330,7 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   const dropLink = (name: string, why: string): void => {
     const socket = live.socketOf(name)
     live.release(name)
+    releasesLine(name)
     hub.closeDoor(name)
     // The downlink ends too, so the desktop LEARNS and redials: a response
     // ending is the one signal a client reliably observes.
@@ -277,6 +371,21 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   const downlink = (request: IncomingMessage, response: ServerResponse, raw: string): void => {
     const name = lineFor(request, response, raw)
     if (name === null) return
+    // BEFORE THE HEAD GOES OUT, so a refusal is a status a client can read
+    // rather than an abort frame it has to parse. One line per desktop is the
+    // hub's own rule (a second claim on a name is refused); this is the other
+    // half of it — an account with a hundred device ids may still only hold a
+    // handful of lines at once.
+    const mine = holding.get(ownerOf(name))
+    if (mine !== undefined && !mine.has(name) && mine.size >= perAccount) {
+      deny(
+        response,
+        429,
+        'too_many_links',
+        `That account is already holding ${perAccount} canvas lines. Close Cookrew on a Mac you are not using.`
+      )
+      return
+    }
     const write = openNdjson(response)
     const socket: HubSocket = {
       send: write,
@@ -297,12 +406,14 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
     // A desktop that opens a downlink and never an uplink is dropped by the
     // same deadline as one whose uplink died.
     live.hold(name, socket)
+    holdsLine(name)
     log(`canvas relay: ${name} opened a line`)
     // THE RESPONSE, not the request: a GET's request stream completes as soon
     // as its empty body has arrived, so listening there drops the line at once.
     response.on('close', () => {
       if (live.holds(name, socket)) {
         live.release(name)
+        releasesLine(name)
         hub.closeDoor(name)
         log(`canvas relay: ${name} closed its line`)
       }
@@ -406,21 +517,42 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
     const method = (request.method ?? 'GET').toUpperCase()
     const chunks: Buffer[] = []
     let size = 0
-    let tooBig = false
+    /** This request's share of the shared budget, so it can be given back. */
+    let counted = 0
+    let refusal: 'too_large' | 'busy' | null = null
+    const release = (): void => {
+      buffering -= counted
+      counted = 0
+    }
     request.on('data', (chunk: Buffer) => {
-      if (tooBig) return
+      if (refusal !== null) return
       size += chunk.byteLength
-      if (size > CANVAS_BODY_MAX) {
-        tooBig = true
+      // Two different noes: this body is too big for the path, or the process
+      // is already holding as much as it will hold for everybody at once.
+      if (size > CANVAS_BODY_MAX) refusal = 'too_large'
+      else if (buffering + chunk.byteLength > budget) refusal = 'busy'
+      if (refusal !== null) {
         chunks.length = 0
+        release()
         request.resume()
         return
       }
+      buffering += chunk.byteLength
+      counted += chunk.byteLength
       chunks.push(chunk)
     })
+    // Whatever ends this request — an end, an abort, a dropped network — the
+    // budget is given back. A leak here is a relay that refuses everybody
+    // after a while and cannot say why.
+    request.on('close', release)
     request.on('end', () => {
-      if (tooBig) {
+      release()
+      if (refusal === 'too_large') {
         deny(response, 413, 'too_large', 'That was larger than this path carries. Four megabytes is the limit.')
+        return
+      }
+      if (refusal === 'busy') {
+        deny(response, 503, 'busy', 'cookrew.dev is carrying more than it can right now. Try again in a moment.')
         return
       }
       const body = Buffer.concat(chunks)
@@ -449,10 +581,44 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
       body: Buffer
     }
   ): void => {
+    // THE LINE IS SOMEBODY'S LAPTOP. It answers a handful of things at once,
+    // and a caller opening a thousand exchanges against it is not using it —
+    // it is making this process and that machine hold a thousand of anything.
+    const inFlight = exchanges.get(exchange.name) ?? 0
+    if (inFlight >= perLink) {
+      deny(
+        response,
+        503,
+        'too_many_exchanges',
+        `That Mac is already carrying ${perLink} requests through the relay. Try again in a moment.`
+      )
+      return
+    }
     let headed = false
     let down = 0
     const finish = (): void => {
       if (!response.writableEnded) response.end()
+    }
+    /**
+     * TWO CLOCKS, because there are two ways a relayed exchange dies quietly.
+     *
+     * A desktop that never answers at all would otherwise hold this request,
+     * its buffered body and a stream id forever — no socket closes, because
+     * both ends are still perfectly connected to a relay that is waiting. And
+     * a stream that was answered and then stopped mid-body looks, from here,
+     * exactly like an SSE line with nothing to say. So: a wall-clock deadline
+     * until the first head frame, and an idle deadline between chunks after
+     * it, which every chunk — including the line's own keepalive — resets.
+     */
+    let clock: NodeJS.Timeout | null = null
+    const stopClock = (): void => {
+      if (clock !== null) clearTimeout(clock)
+      clock = null
+    }
+    const startClock = (ms: number, why: string): void => {
+      stopClock()
+      clock = setTimeout(() => expire(why), ms)
+      clock.unref?.()
     }
     const socket: HubSocket = {
       send: (line) => {
@@ -460,10 +626,12 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
         if (!frame) return
         if (frame.t === 'head' && !headed) {
           headed = true
+          startClock(idleMs, 'went silent after its head')
           response.writeHead(frame.status, answerHeaders(frame.headers, exchange.cookiePath))
           return
         }
         if (frame.t === 'chunk') {
+          startClock(idleMs, 'went silent mid-answer')
           const bytes = Buffer.from(frame.data, 'base64')
           down += bytes.byteLength
           counts.bytesDown += bytes.byteLength
@@ -471,10 +639,12 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
           return
         }
         if (frame.t === 'end') {
+          stopClock()
           finish()
           return
         }
         if (frame.t === 'abort') {
+          stopClock()
           // Nothing has been said yet: a status is still possible, and it is
           // kinder than an empty 200.
           if (!headed) {
@@ -497,6 +667,8 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
     }
     counts.open += 1
     counts.opened += 1
+    exchanges.set(exchange.name, inFlight + 1)
+    startClock(headMs, 'was never answered')
     // THE BODY IS NOT LOGGED AND NOT READ. Only that a session opened, under
     // which name, and — when it ends — how much crossed.
     log(`canvas relay: ${exchange.name} session ${opened.id} opened`)
@@ -520,9 +692,30 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
     const settle = (): void => {
       if (accounted) return
       accounted = true
+      stopClock()
       counts.open -= 1
       counts.closed += 1
+      const left = (exchanges.get(exchange.name) ?? 1) - 1
+      if (left <= 0) exchanges.delete(exchange.name)
+      else exchanges.set(exchange.name, left)
       log(`canvas relay: ${exchange.name} session ${opened.id} closed, ${exchange.body.byteLength}b up, ${down}b down`)
+    }
+    /**
+     * A deadline passed. The desktop is told to stop (so it does not go on
+     * writing into a stream nobody is reading), the reader is given a status
+     * if none has gone out yet, and the exchange is released — the whole point
+     * of a bound is that the thing it bounds is actually let go of.
+     */
+    const expire = (why: string): void => {
+      stopClock()
+      log(`canvas relay: ${exchange.name} session ${opened.id} ${why}`)
+      hub.closeCaller(opened.id)
+      if (!headed) {
+        headed = true
+        deny(response, 504, 'timed_out', 'That Mac did not answer in time. Try again, or open it directly.')
+      }
+      finish()
+      settle()
     }
     response.on('close', () => {
       // THE READER HUNG UP — a closed tab, a lost network, a killed app. The
@@ -545,6 +738,16 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
       // The desktop's own pair of halves, under one name: GET is the downlink,
       // POST the uplink, and neither exists without the other.
       if (parts.length === 4 && parts[0] === 'v2' && parts[1] === 'canvas' && parts[2] === 'link') {
+        // THE GET IS GATED TOO, and that is the unusual part: it is a read by
+        // its method and a WRITE by its effect, because it claims a name. A
+        // cross-site page that could cause one could take a desktop's own line
+        // before the desktop asks for it, and the owner would find their Mac
+        // unreachable with nothing to look at. The app's Bearer path is not a
+        // browser and is unaffected.
+        if (!bearing(request) && crossSite(request)) {
+          refuse(response, 403, 'bad_origin')
+          return true
+        }
         if (method === 'GET') downlink(request, response, parts[3])
         else if (method === 'POST') uplink(request, response, parts[3])
         else refuse(response, 405, 'method_not_allowed')
@@ -564,6 +767,15 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
       // EVERYTHING under the prefix, whatever the method: this is a whole
       // origin's worth of app arriving through one address.
       if (parts.length >= 4 && parts[0] === 'relay' && parts[2] === 'desktop') {
+        // Admitted by the cookie, so a request another site caused would be a
+        // request spent on this person's behalf without them. The picker's own
+        // `location.assign` from /me is same-origin and passes; every method
+        // is held to it, since a GET here reaches a whole app.
+        if (crossSite(request)) {
+          if (wantsPage(request)) respondPage(response, relayCrossSitePage())
+          else refuse(response, 403, 'bad_origin')
+          return true
+        }
         proxy(request, response, url)
         return true
       }

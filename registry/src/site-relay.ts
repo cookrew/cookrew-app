@@ -50,6 +50,20 @@ export const relayNotYoursPage = (): Page =>
     404
   )
 
+/**
+ * ANOTHER SITE CAUSED THIS. Said as a page rather than a bare 403 because the
+ * one person who ever sees it honestly is someone whose browser sent no
+ * `Sec-Fetch-Site` and no `Origin` — and they deserve the way back.
+ */
+export const relayCrossSitePage = (): Page =>
+  wrap(
+    'Not from here',
+    'Not from here',
+    'That request came from another site, so it was not carried out.',
+    'Open your Mac from your own account page, where the picker chooses the path for you.',
+    403
+  )
+
 /** The desktop is not holding a line. Asleep, offline, or the app is not running. */
 export const relayOfflinePage = (): Page =>
   wrap(
