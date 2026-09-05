@@ -259,10 +259,16 @@ export function SelectionBar({
    * to a zsh prompt. The backend's matching fallback is gone too; both sides
    * now agree that no orch means no door (owner ruling, 2026-08-26).
    */
+  //
+  // THE LEADER (owner ruling, 2026-09-05): the first agent terminal the owner
+  // SELECTED leads the exported team — no orch node needed. `picked` is a Set
+  // kept in click order, and main's TeamStore.save reads the same order from
+  // the ids this bar sends it, so the name shown here is the door that will
+  // be saved. Null only when no terminal is in the selection.
   const orchName =
-    workspace.nodes.find(
-      (n) => picked.has(n.id) && n.kind === 'terminal' && (n as { orch?: boolean }).orch
-    )?.name ?? null
+    [...picked]
+      .map((id) => workspace.nodes.find((n) => n.id === id))
+      .find((n) => n?.kind === 'terminal')?.name ?? null
   const submittable =
     canSubmitShare(access, priceUsd, orchName, paymentRails) &&
     faceWordsLookGood(access, faceSummary, tagsRaw)
