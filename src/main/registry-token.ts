@@ -21,17 +21,70 @@ export interface RegistryClaims {
   scope: 'call'
   exp: number
   aud: string
+  /**
+   * WHICH DEVICE of that account signed. New with accounts, and optional
+   * because a token minted before the registry carried it is still a valid
+   * token — refusing those would lock out every caller mid-rollout for a claim
+   * that only ever ADDS a reason to say no.
+   */
+  dev?: string
+}
+
+/**
+ * What `GET /v1/identity/key` publishes: the token key, and the devices whose
+ * tokens are dead before their TTL.
+ *
+ * The revoked list rides with the key rather than on a route of its own for
+ * one reason: a door that fetches the key already refreshes it, so revocation
+ * inherits an existing cache and an existing refresh, and there is no second
+ * thing to forget to poll.
+ */
+export interface RegistryKeyDocument {
+  jwk: Record<string, unknown>
+  revoked: readonly string[]
 }
 
 /** Where the registry's public JWK comes from. Injected so a test needs no registry. */
 export interface RegistryKeySource {
-  /** The current key, or null when the registry cannot give one. */
-  fetch(): Promise<Record<string, unknown> | null>
+  /**
+   * The current key document, or null when the registry cannot give one. A
+   * bare JWK is accepted too — that is what this source returned before
+   * revocation existed, and a stub that still does is not wrong, just older.
+   */
+  fetch(): Promise<RegistryKeyDocument | Record<string, unknown> | null>
+}
+
+/** What a door learns about a caller: the account, and the device that signed. */
+export interface RegistryCaller {
+  sub: string
+  dev?: string
 }
 
 export interface RegistryTokenVerifier {
   /** The caller's handle, or null. `aud` is THIS door's published name. */
-  verify(token: string, aud: string): Promise<{ sub: string } | null>
+  verify(token: string, aud: string): Promise<RegistryCaller | null>
+}
+
+/**
+ * Read either shape as a document. An answer with no `revoked` array means
+ * "this registry does not publish revocations", NOT "nothing is revoked
+ * forever" — but the two are the same refusal set today, and inventing a
+ * failure here would take down every door talking to an older registry.
+ */
+export function asKeyDocument(
+  value: RegistryKeyDocument | Record<string, unknown> | null
+): RegistryKeyDocument | null {
+  if (value === null) return null
+  const record = value as Record<string, unknown>
+  if (isEd25519Jwk(record.jwk)) {
+    return {
+      jwk: record.jwk,
+      revoked: Array.isArray(record.revoked)
+        ? record.revoked.filter((id): id is string => typeof id === 'string')
+        : []
+    }
+  }
+  return isEd25519Jwk(record) ? { jwk: record, revoked: [] } : null
 }
 
 /** A cookrew.dev handle — the only sub a registry token may carry. */
@@ -48,8 +101,8 @@ export function registryKeyOverHttp(origin: string): RegistryKeySource {
         signal: AbortSignal.timeout(5000)
       })
       if (!answer.ok) return null
-      const body = (await answer.json()) as { jwk?: unknown }
-      return isEd25519Jwk(body.jwk) ? body.jwk : null
+      const body = (await answer.json()) as { jwk?: unknown; revoked?: unknown }
+      return asKeyDocument(body as Record<string, unknown>)
     }
   }
 }
@@ -93,19 +146,37 @@ export function registryClaimsFor(token: string, aud: string, now: number): Regi
   if (typeof claims.exp !== 'number' || !Number.isFinite(claims.exp) || claims.exp <= now) return null
   if (typeof claims.aud !== 'string' || claims.aud !== aud) return null
   if (typeof claims.sub !== 'string' || !HANDLE.test(claims.sub)) return null
-  return { sub: claims.sub, scope: 'call', exp: claims.exp, aud: claims.aud }
+  return {
+    sub: claims.sub,
+    scope: 'call',
+    exp: claims.exp,
+    aud: claims.aud,
+    ...(typeof claims.dev === 'string' && claims.dev.length > 0 ? { dev: claims.dev } : {})
+  }
 }
 
-/** The pure check: signature under `jwk`, then the claims, for `aud`, at `now`. */
+/**
+ * The pure check: signature under `jwk`, then the claims, for `aud`, at `now`,
+ * then the device.
+ *
+ * A REVOKED DEVICE IS REFUSED EVEN THOUGH ITS TOKEN IS VALID. That is the
+ * whole point of carrying `dev`: a stolen laptop's key holds a token good for
+ * ten more minutes, and ten minutes is a session. The door does not ask the
+ * registry per knock — it already holds the list.
+ */
 export function verifyRegistryToken(
   token: string,
-  jwk: Record<string, unknown>,
+  key: RegistryKeyDocument | Record<string, unknown>,
   aud: string,
   now: number
-): { sub: string } | null {
-  if (!registrySignatureHolds(token, jwk)) return null
+): RegistryCaller | null {
+  const document = asKeyDocument(key)
+  if (document === null) return null
+  if (!registrySignatureHolds(token, document.jwk)) return null
   const claims = registryClaimsFor(token, aud, now)
-  return claims === null ? null : { sub: claims.sub }
+  if (claims === null) return null
+  if (claims.dev !== undefined && document.revoked.includes(claims.dev)) return null
+  return claims.dev === undefined ? { sub: claims.sub } : { sub: claims.sub, dev: claims.dev }
 }
 
 /**
@@ -121,14 +192,14 @@ export function createRegistryTokenVerifier(options: {
 }): RegistryTokenVerifier {
   const now = options.now ?? ((): number => Date.now())
   const ttl = options.ttlMs ?? REGISTRY_KEY_TTL_MS
-  let cached: { jwk: Record<string, unknown>; at: number } | null = null
+  let cached: { document: RegistryKeyDocument; at: number } | null = null
 
-  const currentKey = async (force: boolean): Promise<Record<string, unknown> | null> => {
-    if (!force && cached !== null && now() - cached.at < ttl) return cached.jwk
+  const currentKey = async (force: boolean): Promise<RegistryKeyDocument | null> => {
+    if (!force && cached !== null && now() - cached.at < ttl) return cached.document
     try {
-      const jwk = await options.keys.fetch()
-      cached = jwk === null ? null : { jwk, at: now() }
-      return jwk
+      const document = asKeyDocument(await options.keys.fetch())
+      cached = document === null ? null : { document, at: now() }
+      return document
     } catch {
       cached = null
       return null
@@ -139,11 +210,23 @@ export function createRegistryTokenVerifier(options: {
     verify: async (token, aud) => {
       if (typeof token !== 'string' || token.length === 0) return null
       const first = await currentKey(false)
-      const holds = first !== null && registrySignatureHolds(token, first)
-      const key = holds ? first : await currentKey(true)
-      if (key === null || !registrySignatureHolds(token, key)) return null
+      const holds = first !== null && registrySignatureHolds(token, first.jwk)
+      const document = holds ? first : await currentKey(true)
+      if (document === null || !registrySignatureHolds(token, document.jwk)) return null
       const claims = registryClaimsFor(token, aud, now())
-      return claims === null ? null : { sub: claims.sub }
+      if (claims === null) return null
+      if (claims.dev === undefined) return { sub: claims.sub }
+      // A REVOKED-MISS REFETCHES ONCE. The cached list is up to an hour old,
+      // and it is the only thing standing between a caller and their session:
+      // refusing a good device because a stale list still names it would be a
+      // lockout nobody can diagnose from the outside (every refusal is the
+      // same 401). One extra round trip, only for a caller we are about to
+      // turn away, is the cheapest place to be sure.
+      if (!document.revoked.includes(claims.dev)) return { sub: claims.sub, dev: claims.dev }
+      const fresh = (await currentKey(true)) ?? document
+      if (fresh.revoked.includes(claims.dev)) return null
+      if (!registrySignatureHolds(token, fresh.jwk)) return null
+      return { sub: claims.sub, dev: claims.dev }
     }
   }
 }
