@@ -5,6 +5,7 @@ import { json, readJsonBody } from './http'
 import { bindStatement, type IdentityService, type TokenClaims } from './identity'
 import { jwkThumbprint, publicJwk, verifyDetached } from './jwk'
 import { parseAttestationObject } from './passkey'
+import { clientAddress } from './rate-limit'
 
 /**
  * ACCOUNT ROUTES — minting a username, binding devices to it, taking them away.
@@ -185,6 +186,33 @@ export function handleAccountRoutes(
   }
 
   if (parts.length === 4 && parts[3] === 'link' && method === 'POST') {
+    /**
+     * THE ONE ROUTE WITH NO CREDENTIAL, so the one route with a limit.
+     *
+     * Counted per (handle, caller address) and taken BEFORE the body is read:
+     * a refused attempt must cost the registry a map lookup, not sixteen
+     * kilobytes of parsing. The limiter is the second line — the wrong-guess
+     * counter inside `LinkCodes` is the first, because it counts guesses
+     * against the secret rather than against whoever made them, and behind a
+     * reverse proxy every caller shares one address.
+     */
+    const verdict = identity.linkAttempts.take(`${handle}|${clientAddress(request)}`)
+    if (!verdict.ok) {
+      json(
+        response,
+        429,
+        {
+          error: 'too_many_attempts',
+          message:
+            'Too many link attempts. Wait a moment, then ask the device that holds this account for a fresh code.'
+        },
+        { ...PRIVATE, 'retry-after': String(verdict.retryAfter) }
+      )
+      // Drained rather than left unread: an unanswered body keeps the socket
+      // busy, and the point of a limit is to stop paying for the attempt.
+      request.resume()
+      return true
+    }
     run(response, link(identity, request, response, handle))
     return true
   }

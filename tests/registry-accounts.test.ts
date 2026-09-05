@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createHash, generateKeyPairSync, randomUUID, sign, type KeyObject } from 'node:crypto'
 import { AccountStore, LinkCodes, readDevice, presentable } from '../registry/src/accounts'
+import { LINK_LIMIT, RateLimiter, clientAddress } from '../registry/src/rate-limit'
 import { IdentityService, bindStatement, type IdentityConfig } from '../registry/src/identity'
 import { jwkThumbprint } from '../registry/src/jwk'
+import { parseAttestationObject } from '../registry/src/passkey'
+import { platformAuthenticator } from './support/webauthn'
 
 /**
  * ACCOUNTS — a username with devices, and the ceremony that speaks for it.
@@ -33,6 +36,7 @@ const CONFIG: IdentityConfig = {
 }
 
 const b64 = (b: Buffer): string => b.toString('base64url')
+const existsSyncSafe = (file: string): boolean => existsSync(file)
 
 const jwkOf = (keys: { publicKey: KeyObject }): Record<string, unknown> =>
   keys.publicKey.export({ format: 'jwk' }) as Record<string, unknown>
@@ -182,13 +186,35 @@ describe('AccountStore', () => {
     expect(s.revoke('drej', randomUUID())).toEqual({ ok: false, reason: 'no_device' })
   })
 
-  it('survives a restart, and a hand-mangled file', () => {
+  it('survives a restart', () => {
     const s = store()
     const laptop = device()
     s.mint('drej', laptop.wire)
     expect(new AccountStore(base, () => now).device('drej', laptop.wire.id)?.name).toBe('MacBook')
-    writeFileSync(path.join(base, 'accounts.json'), '{ not json')
+  })
+
+  it('is an EMPTY store when there is no file, and REFUSES TO START on a torn one', () => {
+    // The two must not look the same. No file is a new deployment; a file that
+    // will not parse is a deployment whose every revocation would silently
+    // revert if it came up empty, and somebody re-minting a handle that
+    // already has an owner is not a failure anyone notices in time.
     expect(new AccountStore(base, () => now).handles()).toEqual([])
+    const file = path.join(base, 'accounts.json')
+    store().mint('drej', device().wire)
+    writeFileSync(file, '{ "drej": { "devi')
+    expect(() => new AccountStore(base, () => now)).toThrow(/accounts\.json exists but is not readable JSON/)
+    // And the sentence names the file, so the page it produces is actionable.
+    expect(() => new AccountStore(base, () => now)).toThrow(file)
+  })
+
+  it('writes whole, 0600, and leaves no sibling behind', () => {
+    const s = store()
+    s.mint('drej', device().wire)
+    const file = path.join(base, 'accounts.json')
+    // 0600: this file decides who may act for an account, and the default
+    // 0644 puts that in front of every other user on the host.
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expect(existsSyncSafe(`${file}.tmp`)).toBe(false)
   })
 
   it('drops entries a hand edit made nonsense of, and keeps the rest', () => {
@@ -219,6 +245,25 @@ describe('AccountStore', () => {
     expect(s.devices('drej')).toHaveLength(2)
     // A credential id that could never be a handle is left where it was.
     expect(s.migrate([{ credentialId: 'NOT A HANDLE', jwk: jwkOf(keys) }])).toBe(0)
+  })
+
+  it('advances a passkey counter upward only', () => {
+    const s = store()
+    const laptop = device()
+    s.mint('drej', laptop.wire)
+    const passkey = { ...device('browser').wire, kind: 'passkey' as const }
+    s.bind('drej', passkey, laptop.wire.id, { credentialId: 'cred-abc', signCount: 4 })
+    expect(s.device('drej', passkey.id)?.signCount).toBe(4)
+    s.recordSignCount('drej', passkey.id, 9)
+    expect(s.device('drej', passkey.id)?.signCount).toBe(9)
+    // A request that lost a race must not roll the ceiling back and re-open
+    // the replay it was meant to close.
+    s.recordSignCount('drej', passkey.id, 5)
+    s.recordSignCount('drej', passkey.id, -1)
+    s.recordSignCount('nobody', passkey.id, 100)
+    expect(s.device('drej', passkey.id)?.signCount).toBe(9)
+    // And it survives the round trip through the file.
+    expect(new AccountStore(base, () => now).device('drej', passkey.id)?.signCount).toBe(9)
   })
 
   it('finds a passkey by the credential id its authenticator chose', () => {
@@ -295,6 +340,94 @@ describe('LinkCodes', () => {
     const { code } = codes.issue('drej', 'dev-1')
     expect(codes.spend(code, 'mira')).toEqual({ ok: false, reason: 'wrong_handle' })
     expect(codes.spend(code, 'drej')).toEqual({ ok: false, reason: 'unknown' })
+  })
+})
+
+describe('LinkCodes under guessing', () => {
+  it('THROWS THE CODE AWAY after ten wrong guesses at the same account', () => {
+    // A wrong guess cannot be counted against the code that was guessed at —
+    // there isn't one — so it is counted against the codes outstanding for the
+    // account being guessed at. Ten is far more than a person mistypes and far
+    // fewer than a script needs.
+    const codes = new LinkCodes(2 * 60 * 1000, () => now)
+    const { code } = codes.issue('drej', 'dev-1')
+    for (let i = 0; i < 9; i++) {
+      expect(codes.spend('AAAAAA', 'drej')).toEqual({ ok: false, reason: 'unknown' })
+    }
+    expect(codes.wrongGuesses(code)).toBe(9)
+    // The real code still works at nine.
+    const survivor = new LinkCodes(2 * 60 * 1000, () => now)
+    const alive = survivor.issue('drej', 'dev-1')
+    for (let i = 0; i < 9; i++) survivor.spend('AAAAAA', 'drej')
+    expect(survivor.spend(alive.code, 'drej')).toEqual({ ok: true, by: 'dev-1' })
+    // At ten it is gone, and the person who was waiting has to ask for
+    // another — which is a thing they notice.
+    codes.spend('AAAAAA', 'drej')
+    expect(codes.wrongGuesses(code)).toBeNull()
+    expect(codes.spend(code, 'drej')).toEqual({ ok: false, reason: 'unknown' })
+  })
+
+  it('does not let guesses at one account burn another account’s codes', () => {
+    const codes = new LinkCodes(2 * 60 * 1000, () => now)
+    const drej = codes.issue('drej', 'dev-1')
+    const mira = codes.issue('mira', 'dev-2')
+    for (let i = 0; i < 12; i++) codes.spend('AAAAAA', 'drej')
+    expect(codes.outstanding('drej')).toBe(0)
+    expect(codes.outstanding('mira')).toBe(1)
+    expect(codes.spend(mira.code, 'mira')).toEqual({ ok: true, by: 'dev-2' })
+    expect(codes.spend(drej.code, 'drej').ok).toBe(false)
+  })
+})
+
+describe('RateLimiter', () => {
+  const limiter = (): RateLimiter => new RateLimiter({ ...LINK_LIMIT, longMs: 2 * 60 * 1000 }, () => now)
+
+  it('allows the burst and refuses the one after it, with a retry-after', () => {
+    const l = limiter()
+    for (let i = 0; i < 10; i++) expect(l.take('drej|1.2.3.4').ok).toBe(true)
+    const refused = l.take('drej|1.2.3.4')
+    expect(refused.ok).toBe(false)
+    expect(refused.retryAfter).toBeGreaterThan(0)
+  })
+
+  it('COUNTS a refused attempt, so the limit is not its own reset', () => {
+    const l = limiter()
+    for (let i = 0; i < 15; i++) l.take('drej|1.2.3.4')
+    now += 30 * 1000
+    // Half a minute later the window still holds those fifteen.
+    expect(l.take('drej|1.2.3.4').ok).toBe(false)
+  })
+
+  it('lets the short window roll, and still holds the lifetime cap', () => {
+    const l = limiter()
+    for (let i = 0; i < 10; i++) l.take('drej|1.2.3.4')
+    now += 61 * 1000
+    // The burst has aged out — but only ten of the twenty are spent.
+    for (let i = 0; i < 10; i++) expect(l.take('drej|1.2.3.4').ok).toBe(true)
+    expect(l.take('drej|1.2.3.4').ok).toBe(false)
+    now += 61 * 1000
+    // Past the code's whole lifetime, everything is forgotten.
+    expect(l.take('drej|1.2.3.4').ok).toBe(true)
+  })
+
+  it('keeps one caller’s attempts off another’s bucket', () => {
+    const l = limiter()
+    for (let i = 0; i < 25; i++) l.take('drej|1.2.3.4')
+    expect(l.take('drej|5.6.7.8').ok).toBe(true)
+    expect(l.take('mira|1.2.3.4').ok).toBe(true)
+  })
+})
+
+describe('clientAddress', () => {
+  it('reads the socket, normalises IPv4-mapped IPv6, and IGNORES the header', () => {
+    const request = {
+      socket: { remoteAddress: '::ffff:10.0.0.7' },
+      headers: { 'x-forwarded-for': '9.9.9.9' }
+    } as never
+    // Trusting the header would let any caller pick its own bucket by sending
+    // one, which is the same as having no limiter at all.
+    expect(clientAddress(request)).toBe('10.0.0.7')
+    expect(clientAddress({ socket: {}, headers: {} } as never)).toBe('unknown')
   })
 })
 
@@ -605,6 +738,123 @@ describe('IdentityService.assertPasskey', () => {
       ok: false,
       reason: 'bad_signature'
     })
+  })
+})
+
+describe('the signature counter', () => {
+  /** Enrol a platform authenticator, exactly as the passkey route would. */
+  const enrol = (signCount = 1) => {
+    const identity = new IdentityService(base, CONFIG, () => now)
+    const laptop = device()
+    identity.accounts.mint('drej', laptop.wire)
+    const auth = platformAuthenticator({ rpId: CONFIG.rpId, origin: CONFIG.origin, signCount })
+    const parsed = parseAttestationObject(
+      Buffer.from(auth.create(identity.challenge()).response.attestationObject, 'base64url')
+    )
+    if (!parsed.ok) throw new Error('the fixture did not parse')
+    const deviceId = randomUUID()
+    identity.accounts.bind(
+      'drej',
+      { id: deviceId, jwk: parsed.passkey.jwk, kind: 'passkey', name: 'Touch ID' },
+      laptop.wire.id,
+      { credentialId: parsed.passkey.credentialId, signCount: parsed.passkey.signCount }
+    )
+    return { identity, auth, deviceId }
+  }
+
+  it('accepts assertions whose count advances, and records the ceiling', () => {
+    const { identity, auth, deviceId } = enrol()
+    expect(identity.accounts.device('drej', deviceId)?.signCount).toBe(1)
+    for (const expected of [2, 3, 4]) {
+      expect(identity.assertPasskey(auth.get(identity.challenge())).ok).toBe(true)
+      expect(identity.accounts.device('drej', deviceId)?.signCount).toBe(expected)
+    }
+  })
+
+  it('REFUSES a count that did not move, and one that went backwards', () => {
+    // The only signal WebAuthn gives that a credential has been cloned or an
+    // assertion replayed from a capture.
+    const { identity, auth, deviceId } = enrol()
+    expect(identity.assertPasskey(auth.get(identity.challenge())).ok).toBe(true)
+    expect(identity.accounts.device('drej', deviceId)?.signCount).toBe(2)
+    expect(identity.assertPasskey(auth.get(identity.challenge(), { signCount: 2 }))).toEqual({
+      ok: false,
+      reason: 'sign_count'
+    })
+    expect(identity.assertPasskey(auth.get(identity.challenge(), { signCount: 1 }))).toEqual({
+      ok: false,
+      reason: 'sign_count'
+    })
+    // A refused assertion must not move the ceiling, or a failed replay would
+    // lock the real device out.
+    expect(identity.accounts.device('drej', deviceId)?.signCount).toBe(2)
+    expect(identity.assertPasskey(auth.get(identity.challenge())).ok).toBe(true)
+  })
+
+  it('leaves an authenticator that does not count alone, forever', () => {
+    // Zero is what the specification says an authenticator without a counter
+    // reports, and refusing those would refuse most security keys.
+    const { identity, auth, deviceId } = enrol(0)
+    for (let i = 0; i < 3; i++) {
+      expect(identity.assertPasskey(auth.get(identity.challenge())).ok).toBe(true)
+    }
+    expect(identity.accounts.device('drej', deviceId)?.signCount).toBe(0)
+  })
+
+  it('does not apply to the software ceremony, which writes a constant', () => {
+    // The site's own key signs a fixed counter every time; enforcing there
+    // would refuse every second sign-in.
+    const identity = new IdentityService(base, CONFIG, () => now)
+    const held = device()
+    identity.accounts.mint('drej', held.wire)
+    for (let i = 0; i < 3; i++) {
+      expect(identity.assert(ceremony(held.keys, 'drej')(identity.challenge())).ok).toBe(true)
+    }
+  })
+})
+
+describe('IdentityService.register', () => {
+  it('narrows the key it is handed, and never writes a private half', () => {
+    const identity = new IdentityService(base, CONFIG, () => now)
+    const keys = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+    const careless = keys.privateKey.export({ format: 'jwk' }) as Record<string, unknown>
+    expect(careless.d).toBeTypeOf('string')
+    expect(identity.register('drej', careless)).toEqual({ ok: true })
+    const stored = readFileSync(path.join(base, 'credentials.json'), 'utf8')
+    expect(stored).not.toContain(String(careless.d))
+    expect(JSON.parse(stored)[0].jwk.d).toBeUndefined()
+    // Written 0600, whole: it is the file that says which key owns a handle.
+    expect(statSync(path.join(base, 'credentials.json')).mode & 0o777).toBe(0o600)
+    // And the key still verifies, because narrowing kept the public half.
+    expect(identity.assert(ceremony(keys, 'drej')(identity.challenge())).ok).toBe(true)
+  })
+
+  it('refuses a key nothing here can verify, rather than storing a dead one', () => {
+    const identity = new IdentityService(base, CONFIG, () => now)
+    expect(identity.register('drej', { kty: 'RSA', n: 'a', e: 'b' })).toEqual({
+      ok: false,
+      reason: 'bad_key'
+    })
+    expect(identity.accounts.exists('drej')).toBe(false)
+  })
+
+  it('is idempotent for the same key however it was spelled', () => {
+    const identity = new IdentityService(base, CONFIG, () => now)
+    const keys = generateKeyPairSync('ed25519')
+    const jwk = jwkOf(keys)
+    expect(identity.register('drej', jwk).ok).toBe(true)
+    // Members in another order — the same key, and not an attempted takeover.
+    expect(identity.register('drej', { x: jwk.x, kty: jwk.kty, crv: jwk.crv }).ok).toBe(true)
+    expect(identity.register('drej', jwkOf(generateKeyPairSync('ed25519')))).toEqual({
+      ok: false,
+      reason: 'credential_exists'
+    })
+  })
+
+  it('writes the token key 0600, because it is a private key', () => {
+    const identity = new IdentityService(base, CONFIG, () => now)
+    identity.publicKeyJwk()
+    expect(statSync(path.join(base, 'token-key.jwk')).mode & 0o777).toBe(0o600)
   })
 })
 
