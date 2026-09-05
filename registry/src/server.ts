@@ -21,6 +21,7 @@ import type { StarStore } from './stars'
 import type { Release, ReleaseCache } from './releases'
 import { handleV2Route, signedIn, v2AccountOf, type V2Identity } from './v2-routes'
 import { mePage } from './site-account'
+import { relayStubPage } from './site-reach'
 
 /**
  * REGISTRY SERVER (P2-A1) — routes only. Every answer is chosen by a decision
@@ -750,6 +751,18 @@ export function createRegistry(deps: RegistryDeps): Server {
         response,
         mePage(signed === null ? null : { account: signed.account, currentDeviceId: signed.claims.dev })
       )
+      return
+    }
+
+    // GET /relay/@<username>/desktop/<deviceId> — the picker's relay path.
+    // PHASE 3 builds the private session behind it; until then this is a page
+    // that says so, because the picker sends a PERSON here and a person needs
+    // a sentence, not a 404 that reads as "you mistyped".
+    if (deps.v2 && method === 'GET' && parts.length === 4 && parts[0] === 'relay' && parts[2] === 'desktop') {
+      // The name comes from the SESSION, never from the path: a page that
+      // echoed whatever a link put in the URL is a page a link can write.
+      const signed = signedIn(request, deps.v2)
+      respondPage(response, relayStubPage(signed?.account.username ?? null))
       return
     }
 

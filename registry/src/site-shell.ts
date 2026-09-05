@@ -77,6 +77,18 @@ const CSP: Record<PageKind, string> = {
   app: `default-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self'; manifest-src 'self'; img-src 'self' ${SITE_FRAMES} data:; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
 }
 
+/**
+ * A HANDFUL OF NAMED ORIGINS, and never a wildcard.
+ *
+ * /me probes the addresses one reader's own desktops published, which are not
+ * this origin — so `connect-src 'self'` alone would block the probe. They are
+ * spelled out rather than opened with `https:` because the page is rendered
+ * for one reader and we know exactly which addresses it will try; a wildcard
+ * would let anything that ever gets a script onto this page reach anywhere.
+ */
+const withConnect = (policy: string, connect: readonly string[]): string =>
+  connect.length === 0 ? policy : policy.replace("connect-src 'self'", `connect-src 'self' ${connect.join(' ')}`)
+
 export interface Page {
   status: number
   headers: Record<string, string>
@@ -114,6 +126,8 @@ export interface ShellOptions {
   scripts?: string[]
   /** Stylesheets from /assets, app pages only. */
   styles?: string[]
+  /** Extra origins this page's script may fetch — app pages only, spelled out. */
+  connect?: readonly string[]
   /**
    * Cache lifetime in seconds; 0 for pages that must not be cached. A page
    * rendered for a signed-in reader is never shared: 0 means private/no-store.
@@ -127,7 +141,8 @@ export function page(options: ShellOptions, main: string): Page {
     status: options.status ?? 200,
     headers: {
       'content-type': 'text/html; charset=utf-8',
-      'content-security-policy': CSP[options.kind],
+      'content-security-policy':
+        options.kind === 'app' ? withConnect(CSP.app, options.connect ?? []) : CSP.document,
       'x-content-type-options': 'nosniff',
       'referrer-policy': 'no-referrer',
       // Everything here describes mutable state — a team can be served or
@@ -420,4 +435,6 @@ dialog.acct::backdrop{background:rgba(20,17,10,.55)}
 .me-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .avatar{width:56px;height:56px;display:grid;place-items:center;border:2px solid var(--line);box-shadow:3px 3px 0 var(--line);background:var(--amber);color:#2d2a20;font:700 18px var(--font-pixel);object-fit:cover}
 ul.me-list li{grid-template-columns:auto 1fr auto}
+li.desktop .reach-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+li.desktop .chip[data-badge]{min-width:78px;justify-content:center}
 `

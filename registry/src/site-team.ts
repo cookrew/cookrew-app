@@ -60,7 +60,7 @@ answer the same, so the directory cannot be used to enumerate what is here.</p><
       title: `${door.title} — @${door.handle} · Cookrew`,
       kind: 'app',
       active: 'market',
-      scripts: ['xterm.js', 'addon-fit.js', 'site.js', 'seal.js', 'line.js'],
+      scripts: ['xterm.js', 'addon-fit.js', 'device-id.js', 'site.js', 'seal.js', 'line.js'],
       styles: ['xterm.css'],
       cache: 0,
       description: `${door.title}: ${door.door} answers on behalf of ${door.agents} agent${door.agents === 1 ? '' : 's'} served by @${door.handle} on Cookrew. ${door.summary ?? 'Open a live, sandboxed session from your browser or the Cookrew app.'}`.slice(0, 158),

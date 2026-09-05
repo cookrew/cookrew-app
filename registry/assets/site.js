@@ -355,25 +355,71 @@
    * /v2/sessions and the SERVER sets `cr_session` HttpOnly; a token a script
    * can read is a token a script can leak.
    */
-  const loadDevice = () => idb('readonly', (s) => s.get('device'))
-  const saveDevice = (value) => idb('readwrite', (s) => s.put(value, 'device'))
+  /**
+   * The device key has its OWN database (`cookrew-device`), beside the v1
+   * account key's. Two stores rather than one because the two are forgotten
+   * for different reasons: "forget this browser's key" drops the v1 handle and
+   * must not silently detach the device from a v2 account.
+   */
+  const DEVICE_DB = 'cookrew-device'
+  const openDeviceDb = () =>
+    new Promise((resolve, reject) => {
+      const req = indexedDB.open(DEVICE_DB, 1)
+      req.onupgradeneeded = () => req.result.createObjectStore('keys')
+      req.onsuccess = () => resolve(req.result)
+      req.onerror = () => reject(req.error)
+    })
+  const deviceIdb = async (mode, fn) => {
+    const db = await openDeviceDb()
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('keys', mode)
+      const req = fn(tx.objectStore('keys'))
+      req.onsuccess = () => resolve(req.result)
+      req.onerror = () => reject(req.error)
+      tx.oncomplete = () => db.close()
+    })
+  }
+  const loadDevice = () => deviceIdb('readonly', (s) => s.get('device'))
+  const saveDevice = (value) => deviceIdb('readwrite', (s) => s.put(value, 'device'))
 
-  /** "Chrome on macOS" — what the Devices list will call this browser. */
-  function browserName() {
+  /**
+   * A PHONE IS A DEVICE, and so is a browser (P2). Which one this is comes
+   * from the user agent, because the two are the same code and only the
+   * Devices list and the pairing sheet care about the difference: "iPhone"
+   * reads as a thing in a pocket, "Chrome on macOS" as a window on a desk.
+   */
+  const MOBILE = /iPhone|iPad|Android/
+  const deviceKind = () => (MOBILE.test(navigator.userAgent) ? 'phone' : 'browser')
+
+  /** "iPhone", "Android phone", "Chrome on macOS" — what Devices will call it. */
+  function deviceName() {
     const ua = navigator.userAgent
+    if (/iPad/.test(ua)) return 'iPad'
+    if (/iPhone/.test(ua)) return 'iPhone'
+    if (/Android/.test(ua)) return 'Android phone'
     const engine = /Firefox\//.test(ua) ? 'Firefox' : /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser'
-    const os = /Mac OS X/.test(ua) ? 'macOS' : /Windows/.test(ua) ? 'Windows' : /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Linux/.test(ua) ? 'Linux' : 'this computer'
+    const os = /Mac OS X/.test(ua) ? 'macOS' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : 'this computer'
     return `${engine} on ${os}`
   }
 
-  /** This browser's device: a uuid and a non-extractable key, minted once. */
+  /**
+   * This browser's device: a non-extractable key minted once, and an id
+   * DERIVED FROM IT rather than a fresh uuid.
+   *
+   * Derived because the id must not be able to drift from the key it names —
+   * the desktop computes the same value from the same public key
+   * (device-id.js says how), so one key is one device wherever it is seen. A
+   * random uuid would have made a re-mint after a cleared store a second
+   * device on the account for the same person on the same phone.
+   */
   async function deviceIdentity() {
     const held = await loadDevice()
     if (held) return held
     const key = await mintKey()
     const full = await crypto.subtle.exportKey('jwk', key.pair.publicKey)
     const jwk = key.alg === 'Ed25519' ? { kty: full.kty, crv: full.crv, x: full.x } : { kty: full.kty, crv: full.crv, x: full.x, y: full.y }
-    const device = { id: crypto.randomUUID(), kind: 'browser', name: browserName(), jwk, pair: key.pair }
+    const id = await globalThis.cookrewDeviceId.deviceIdFrom(jwk)
+    const device = { id, kind: deviceKind(), name: deviceName(), jwk, pair: key.pair }
     await saveDevice(device)
     return device
   }
