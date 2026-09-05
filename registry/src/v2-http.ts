@@ -37,13 +37,18 @@ export interface V2Identity {
   seats: V2Seats
   /** Per-IP on claiming, per username+IP on signing in. The contract's numbers. */
   /** Per-IP on claiming, per username+IP on signing in, loose on lookups. */
-  limits: { accounts: Limiter; sessions: Limiter; lookups: Limiter }
+  limits: { accounts: Limiter; sessions: Limiter; lookups: Limiter; hello: Limiter }
   /** Addresses whose X-Forwarded-For may be believed. Empty by default. */
   trustedProxies: readonly string[]
 }
 
 export interface V2Options {
-  limits?: { accountsPerMinute: number; sessionsPerMinute: number; lookupsPerMinute?: number }
+  limits?: {
+    accountsPerMinute: number
+    sessionsPerMinute: number
+    lookupsPerMinute?: number
+    helloPerMinute?: number
+  }
   trustedProxies?: readonly string[]
   now?: () => number
 }
@@ -67,7 +72,11 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
     limits: {
       accounts: new Limiter(options.limits?.accountsPerMinute ?? 10, 60_000, options.now),
       sessions: new Limiter(options.limits?.sessionsPerMinute ?? 5, 60_000, options.now),
-      lookups: new Limiter(options.limits?.lookupsPerMinute ?? 60, 60_000, options.now)
+      lookups: new Limiter(options.limits?.lookupsPerMinute ?? 60, 60_000, options.now),
+      // A light one: the /me page checks a hello per candidate address per
+      // desktop; sixty a minute leaves that alone and still caps a client
+      // asking the registry to verify signatures for sport.
+      hello: new Limiter(options.limits?.helloPerMinute ?? 60, 60_000, options.now)
     },
     trustedProxies: options.trustedProxies ?? []
   }

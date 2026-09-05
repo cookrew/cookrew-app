@@ -24,6 +24,7 @@ export type V2Error =
   | 'last_device'
   | 'bad_profile'
   | 'bad_desktop'
+  | 'bad_reach'
   | 'not_this_device'
   | 'bad_origin'
   | 'no_seat'
@@ -46,6 +47,8 @@ const SENTENCES: Record<V2Error, string> = {
   last_device: 'This is the last device on the account. Add another before you revoke this one.',
   bad_profile: 'A display name is up to 40 characters, and a picture is a PNG, JPEG or WebP under 64 KB.',
   bad_desktop: 'A desktop registers its own name and up to 64 workspaces, each by name and id.',
+  bad_reach:
+    'That address card is not this Mac’s. A desktop signs its own addresses, and they must be on your own network, your tailnet or a .local name.',
   not_this_device: 'Only that desktop can say what is on it.',
   bad_origin: 'That request came from another site, so it was not carried out.',
   no_seat: 'No seat here yet. Buy one, or ask the owner for one.',

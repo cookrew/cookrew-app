@@ -26,7 +26,7 @@ import path from 'node:path'
  * a stateless token cannot do for itself.
  */
 
-export type V2Scope = 'session' | 'call'
+export type V2Scope = 'session' | 'call' | 'canvas'
 
 export interface V2Claims {
   sub: string
@@ -34,7 +34,23 @@ export interface V2Claims {
   scope: V2Scope
   exp: number
   jti: string
-  /** A call token names ONE door; a session token names none. */
+  /** The seat a call token was minted under, when the door is paid. */
+  seat?: string
+  /**
+   * A call token names ONE door and a canvas token ONE desktop; a session
+   * token names neither. Two shapes, because the two things being named are
+   * different kinds of thing: `@handle/team` and a device id.
+   */
+  aud?: string
+}
+
+/**
+ * What a verifier is asking for. A bare scope is the whole question for a
+ * session; a canvas token has to be checked against the desktop it was minted
+ * FOR, or one desktop's token opens another.
+ */
+export interface V2Expected {
+  scope: V2Scope
   aud?: string
   /**
    * THE SEAT THIS TOKEN WAS MINTED FOR, when there is one.
@@ -58,8 +74,18 @@ export interface Minted {
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
 /** Ten minutes: a call token is carried to one door and spent. */
 export const CALL_TTL_MS = 10 * 60 * 1000
+/** Ten minutes: a canvas token is carried to one desktop and spent, the same way. */
+export const CANVAS_TTL_MS = 10 * 60 * 1000
 
 const AUDIENCE = /^@[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
+/** A canvas token's audience is a device id, which is a uuid and nothing else. */
+const DEVICE_AUDIENCE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+const audienceFits = (scope: V2Scope, aud: unknown): boolean => {
+  if (scope === 'call') return typeof aud === 'string' && AUDIENCE.test(aud)
+  if (scope === 'canvas') return typeof aud === 'string' && DEVICE_AUDIENCE.test(aud)
+  return true
+}
 
 export interface V2TokensOptions {
   /**
@@ -110,12 +136,26 @@ export class V2Tokens {
   }
 
   /**
+   * A CANVAS TOKEN — what a signed-in phone or browser carries to the owner's
+   * OWN desktop. It names the desktop it may open (`aud`) and the device
+   * asking (`dev`), so the desktop can verify it offline against /v2/keys and
+   * still know which of the account's devices is at the door.
+   */
+  mintCanvasToken(sub: string, dev: string, aud: string): Minted {
+    if (!DEVICE_AUDIENCE.test(aud)) throw new Error('a canvas token names one desktop, by its device id')
+    const exp = this.now() + CANVAS_TTL_MS
+    const jti = randomUUID()
+    return { token: this.mint({ sub, dev, scope: 'canvas', exp, jti, aud }), exp, jti }
+  }
+
+  /**
    * Claims, or null. Null for malformed, mis-signed, expired, out-of-scope and
    * revoked alike: a caller must not be able to tell those apart and act
    * differently on the difference.
    */
-  verify(token: unknown, expect: V2Scope): V2Claims | null {
+  verify(token: unknown, expect: V2Scope | V2Expected): V2Claims | null {
     if (typeof token !== 'string') return null
+    const want: V2Expected = typeof expect === 'string' ? { scope: expect } : expect
     try {
       const [body, signature, ...rest] = token.split('.')
       if (!body || !signature || rest.length > 0) return null
@@ -127,8 +167,11 @@ export class V2Tokens {
       if (typeof claims.dev !== 'string' || claims.dev === '') return null
       if (typeof claims.jti !== 'string' || claims.jti === '') return null
       if (typeof claims.exp !== 'number' || claims.exp < this.now()) return null
-      if (claims.scope !== expect) return null
-      if (claims.scope === 'call' && (typeof claims.aud !== 'string' || !AUDIENCE.test(claims.aud))) return null
+      if (claims.scope !== want.scope) return null
+      if (!audienceFits(claims.scope, claims.aud)) return null
+      // A token minted for another audience is not this one's, however well
+      // it verifies: one desktop's open must never open the next.
+      if (want.aud !== undefined && claims.aud !== want.aud) return null
       // A seat claim is an id or it is not there; anything else is a token
       // somebody shaped by hand and a door must not read it as a seat.
       if (claims.seat !== undefined && (typeof claims.seat !== 'string' || claims.seat === '')) return null
