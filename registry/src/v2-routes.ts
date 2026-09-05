@@ -1,9 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readJsonBody } from './http'
-import { V2Accounts, type V2Account, type V2Device } from './v2-accounts'
+import { V2Accounts, type V2Account, type V2Desktop, type V2Device } from './v2-accounts'
 import { SESSION_TTL_MS, V2Tokens, type V2Claims } from './v2-tokens'
 import { Limiter, callerAddress } from './v2-limiter'
 import { v2Error, type V2Error } from './v2-copy'
+import { readReach, verifyHello } from './v2-reach'
 
 /**
  * IDENTITY v2 — THE ROUTES.
@@ -31,12 +32,12 @@ const PROFILE_BODY = 192 * 1024
 export interface V2Identity {
   accounts: V2Accounts
   tokens: V2Tokens
-  /** Per-IP on claiming, per username+IP on signing in. The contract's numbers. */
-  limits: { accounts: Limiter; sessions: Limiter }
+  /** Per-IP on claiming, per username+IP on signing in, per-IP on a hello. */
+  limits: { accounts: Limiter; sessions: Limiter; hello: Limiter }
 }
 
 export interface V2Options {
-  limits?: { accountsPerMinute: number; sessionsPerMinute: number }
+  limits?: { accountsPerMinute: number; sessionsPerMinute: number; helloPerMinute?: number }
   now?: () => number
 }
 
@@ -57,7 +58,12 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
     tokens,
     limits: {
       accounts: new Limiter(options.limits?.accountsPerMinute ?? 10, 60_000, options.now),
-      sessions: new Limiter(options.limits?.sessionsPerMinute ?? 5, 60_000, options.now)
+      sessions: new Limiter(options.limits?.sessionsPerMinute ?? 5, 60_000, options.now),
+      // A LIGHT one: the /me page checks a hello per candidate address per
+      // desktop, so a person with three Macs on two networks spends a handful
+      // per refresh. Sixty a minute leaves that alone and still puts a ceiling
+      // on a client asking the registry to verify signatures for sport.
+      hello: new Limiter(options.limits?.helloPerMinute ?? 60, 60_000, options.now)
     }
   }
 }
@@ -201,6 +207,10 @@ export function handleV2Route(ctx: V2Context): boolean {
   }
   if (rest.length === 1 && rest[0] === 'recovery' && method === 'POST') {
     void redeemRecovery(ctx)
+    return true
+  }
+  if (rest.length === 1 && rest[0] === 'verify-hello' && method === 'POST') {
+    void checkHello(ctx)
     return true
   }
   if (rest[0] === 'me') {
@@ -370,7 +380,62 @@ async function redeemRecovery(ctx: V2Context): Promise<void> {
   )
 }
 
+// ── /v2/verify-hello ─────────────────────────────────────────────────────
+
+/**
+ * DID THAT REPLY COME FROM MY MAC?
+ *
+ * The page probes an address and gets back `{deviceId, nonce, sig}`. It cannot
+ * check that signature itself — the device's public key is a fact the registry
+ * holds — so it asks here, and gets one bit back.
+ *
+ * ONE BIT, AND ALWAYS THE SAME SHAPE. A device this account does not have, a
+ * nonce that is not the one asked about, a signature by another key: all
+ * `{ok:false}`. Anything richer would let a signed-in caller use this to learn
+ * which device ids exist on other accounts.
+ */
+async function checkHello(ctx: V2Context): Promise<void> {
+  const { response, v2 } = ctx
+  const who = callerAddress(ctx.request.headers, ctx.request.socket.remoteAddress)
+  if (!v2.limits.hello.take(`hello|${who}`)) {
+    refuse(response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
+    return
+  }
+  const signed = signedIn(ctx.request, v2)
+  if (signed === null) {
+    refuse(response, 401, 'unauthenticated')
+    return
+  }
+  const body = await readJsonBody(ctx.request, SMALL_BODY)
+  if (!body.ok) {
+    refuse(response, body.reason === 'too_large' ? 413 : 400, 'malformed')
+    return
+  }
+  const deviceId = typeof body.value.deviceId === 'string' ? body.value.deviceId.toLowerCase() : ''
+  const device = signed.account.devices.find((d) => d.id === deviceId) ?? null
+  const ok = device !== null && verifyHello(device.jwk, { deviceId, nonce: body.value.nonce, sig: body.value.sig })
+  v2Json(response, 200, { ok })
+}
+
 // ── /v2/me ───────────────────────────────────────────────────────────────
+
+/**
+ * A DESKTOP, AS ITS OWN ACCOUNT SEES IT — name, workspaces and reach card.
+ *
+ * The reach card is the whole difference between this and the public profile,
+ * which carries neither: an address is a fact about a machine that only the
+ * person who owns it may read. `publicProfile` never touches this shape, and
+ * that is on purpose rather than by omission.
+ */
+export function desktopBody(desktop: V2Desktop): Record<string, unknown> {
+  return {
+    deviceId: desktop.deviceId,
+    name: desktop.name,
+    workspaces: desktop.workspaces,
+    reach: desktop.reach ?? null,
+    updatedAt: desktop.updatedAt
+  }
+}
 
 export function meBody(account: V2Account, currentDeviceId: string): Record<string, unknown> {
   return {
@@ -386,12 +451,7 @@ export function meBody(account: V2Account, currentDeviceId: string): Record<stri
       lastSeenAt: d.lastSeenAt,
       current: d.id === currentDeviceId
     })),
-    desktops: account.desktops.map((d) => ({
-      deviceId: d.deviceId,
-      name: d.name,
-      workspaces: d.workspaces,
-      updatedAt: d.updatedAt
-    })),
+    desktops: account.desktops.map(desktopBody),
     recoveryCodesLeft: account.recovery.length
   }
 }
@@ -466,6 +526,26 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     v2Json(response, 201, { codes })
     return
   }
+  if (rest.length === 1 && rest[0] === 'desktops' && method === 'GET') {
+    // ONLY THIS ACCOUNT'S. Any device of it may read them — that is the whole
+    // point of the picker — but the answer is built from the signed-in
+    // account and never from anything the caller named.
+    v2Json(response, 200, account.desktops.map(desktopBody))
+    return
+  }
+  if (rest.length === 3 && rest[0] === 'desktops' && rest[2] === 'open' && method === 'POST') {
+    const deviceId = (ctx.decode(rest[1]) ?? '').toLowerCase()
+    if (!account.desktops.some((d) => d.deviceId === deviceId)) {
+      refuse(response, 404, 'not_found')
+      return
+    }
+    // NAMES BOTH ENDS: the desktop it opens and the device asking. The desktop
+    // verifies it offline against /v2/keys, so this is the only moment the
+    // registry is in the path of somebody opening their own canvas.
+    const minted = v2.tokens.mintCanvasToken(account.username, claims.dev, deviceId)
+    v2Json(response, 201, { token: minted.token, exp: minted.exp })
+    return
+  }
   if (rest.length === 2 && rest[0] === 'desktops' && method === 'PUT') {
     const deviceId = (ctx.decode(rest[1]) ?? '').toLowerCase()
     // Only that desktop may describe itself: another device of the same
@@ -480,9 +560,20 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
       refuse(response, body.reason === 'too_large' ? 413 : 400, 'malformed')
       return
     }
+    // A card is REFUSED, not ignored: a desktop that signed the wrong bytes
+    // would otherwise keep publishing workspaces and quietly stay unreachable.
+    let reach: ReturnType<typeof readReach> | undefined
+    if (body.value.reach !== undefined) {
+      reach = readReach(deviceId, signed.device.jwk, { reach: body.value.reach, sig: body.value.sig })
+      if (reach === null) {
+        refuse(response, 400, 'bad_reach')
+        return
+      }
+    }
     const out = v2.accounts.putDesktop(account.username, deviceId, {
       name: body.value.name,
-      workspaces: body.value.workspaces
+      workspaces: body.value.workspaces,
+      ...(reach === undefined ? {} : { reach })
     })
     if (!out.ok) {
       refuse(response, out.reason === 'not_found' ? 404 : 400, out.reason)

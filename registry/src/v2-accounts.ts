@@ -11,6 +11,7 @@ import {
   verifyPassword,
   type Hashed
 } from './v2-secrets'
+import type { V2Reach } from './v2-reach'
 
 /**
  * IDENTITY v2 — THE ACCOUNT STORE.
@@ -70,6 +71,12 @@ export interface V2Desktop {
   deviceId: string
   name: string
   workspaces: readonly V2Workspace[]
+  /**
+   * WHERE THIS MACHINE CAN BE FOUND, as it signed it. Absent until the
+   * desktop has published one, and readable only by the account's own devices
+   * — an address is a directory fact about a machine, not a public one.
+   */
+  reach: V2Reach | null
   updatedAt: number
 }
 
@@ -428,7 +435,7 @@ export class V2Accounts {
   putDesktop(
     username: string,
     deviceId: string,
-    input: { name: unknown; workspaces: unknown }
+    input: { name: unknown; workspaces: unknown; reach?: V2Reach | null }
   ): { ok: true } | Refused<'not_found' | 'bad_desktop'> {
     const account = this.get(username)
     if (!account) return { ok: false, reason: 'not_found' }
@@ -451,8 +458,14 @@ export class V2Accounts {
       }
       workspaces.push({ id, name: label })
     }
-    const desktop: V2Desktop = { deviceId, name, workspaces, updatedAt: this.now() }
-    const known = account.desktops.some((d) => d.deviceId === deviceId)
+    // A PUT with no reach keeps the one already stored: a desktop that is
+    // only renaming a workspace has not forgotten where it lives, and making
+    // it re-sign a card to say so would mean the address disappears whenever
+    // the two writes are not made together.
+    const held = account.desktops.find((d) => d.deviceId === deviceId) ?? null
+    const reach = input.reach === undefined ? (held?.reach ?? null) : input.reach
+    const desktop: V2Desktop = { deviceId, name, workspaces, reach, updatedAt: this.now() }
+    const known = held !== null
     this.replace({
       ...account,
       desktops: known ? account.desktops.map((d) => (d.deviceId === deviceId ? desktop : d)) : [...account.desktops, desktop]
