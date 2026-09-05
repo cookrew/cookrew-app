@@ -10,7 +10,14 @@
  *   refusal or a TLS failure is "NOT THIS PATH", never "desktop down" — the
  *   system proxy on this machine does not bypass 100.64/10 or *.ts.net, so a
  *   browser fails where curl succeeds, and reading that as "offline" would
- *   send everybody to the relay for no reason.
+ *   send everybody to the relay for no reason. The relay is the LAST
+ *   candidate and it is not probed but ASKED: only cookrew.dev knows whether
+ *   that Mac is holding a line, and it answers in one cheap request.
+ *
+ *   REMEMBERS THE WINNER, per desktop, and re-races it. The path is a fact
+ *   about THIS network and a phone changes network in a pocket, so the memory
+ *   is a hint that fills the badge instantly and is overwritten by every
+ *   probe — on `online`, when the tab comes forward, and once a minute.
  *
  *   HOLDS THE PAIRING KEY. Six characters from the Mac's popout, in
  *   localStorage under `cr_pair:<deviceId>`. It never goes to cookrew.dev:
@@ -30,6 +37,10 @@
   const PAIR_KEY = /^[2-9A-HJ-NP-Z]{6}$/
   const QR = /^cookrew-pair:([0-9a-f-]{36}):([2-9A-HJ-NP-Z]{6})$/
   const PROBE_MS = 800
+  /** How often the paths are raced again while the picker is on screen. */
+  const REPROBE_MS = 60000
+  /** How long a remembered path is worth showing before it is only a guess. */
+  const PATH_TTL_MS = 5 * 60 * 1000
   const username = document.getElementById('me')?.dataset.username ?? ''
   const toast = (text, ms) => window.cookrewAccount?.toast?.(text, ms ?? 5000)
 
@@ -54,6 +65,31 @@
       localStorage.removeItem(`cr_pair:${id}`)
     } catch {
       /* A browser with no storage simply pairs again; nothing to repair. */
+    }
+  }
+
+  /* ── the path this browser last got through on ─────────────────────────
+   *
+   * Per desktop, so the second open does not start from an empty PROBING
+   * badge. A HINT AND NEVER AN AUTHORITY: every refresh re-races the addresses
+   * and overwrites it, because the thing it describes — which network this
+   * phone is on — changes without telling anybody.
+   */
+  const rememberPath = (id, found) => {
+    try {
+      localStorage.setItem(`cr_path:${id}`, JSON.stringify({ kind: found.state, url: found.url, at: Date.now() }))
+    } catch {
+      /* A browser with no storage simply probes every time. Slower, not wrong. */
+    }
+  }
+  const rememberedPath = (id) => {
+    try {
+      const held = JSON.parse(localStorage.getItem(`cr_path:${id}`) ?? 'null')
+      if (!held || typeof held.kind !== 'string' || typeof held.at !== 'number') return null
+      if (Date.now() - held.at > PATH_TTL_MS) return null
+      return { state: held.kind, url: typeof held.url === 'string' ? held.url : null }
+    } catch {
+      return null
     }
   }
 
@@ -103,6 +139,32 @@
     return btoa(text).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
   }
 
+  /** Where this desktop is reached through cookrew.dev, when nothing else works. */
+  const relayUrl = (deviceId) =>
+    `/relay/@${encodeURIComponent(username)}/desktop/${encodeURIComponent(deviceId)}/`
+
+  /**
+   * IS cookrew.dev HOLDING A LINE FOR THAT MAC?
+   *
+   * The one question this page cannot answer for itself: a relay session is
+   * not something a browser can probe without opening one, and opening one to
+   * draw a badge would be a cost with no answer in it. So the registry is
+   * asked, and it knows because it is the thing holding the line.
+   */
+  async function relayLive(deviceId) {
+    try {
+      const res = await fetch(`/v2/me/desktops/${encodeURIComponent(deviceId)}/relay-status`, {
+        credentials: 'same-origin',
+        cache: 'no-store'
+      })
+      if (!res.ok) return false
+      const body = await res.json()
+      return body?.live === true
+    } catch {
+      return false
+    }
+  }
+
   /**
    * One address, one answer. False for every kind of no — a timeout, a proxy,
    * a certificate this browser will not take, a reply from a different Mac —
@@ -142,14 +204,17 @@
     if (direct) return { state: 'lan', url: direct.url }
     const over = winner(tailnet)
     if (over) return { state: 'tailnet', url: over.url }
-    // The relay is not probed: it is available or it is not, and asking
-    // cookrew.dev to hold a connection open just to draw a badge is a cost
-    // with no answer in it.
-    if (reach.relay === true) return { state: 'relay', url: null }
+    // Last, and only when the desktop said it keeps a line at all: a card that
+    // never claimed the relay is not worth a request about it.
+    if (reach.relay === true && (await relayLive(deviceId))) {
+      return { state: 'relay', url: relayUrl(deviceId) }
+    }
     return { state: 'offline', url: null }
   }
 
   const chosen = new Map()
+  /** Rows whose race is still running, so a re-probe never starts a second one. */
+  const racing = new Set()
 
   async function refresh(row) {
     const deviceId = row.dataset.desktop
@@ -159,23 +224,34 @@
       badge(row, 'pairing')
       return
     }
-    badge(row, 'probing')
+    if (racing.has(deviceId)) return
+    racing.add(deviceId)
+    // The remembered path fills the badge NOW rather than after a race the
+    // reader has to watch. It is replaced the moment the race answers.
+    const remembered = rememberedPath(deviceId)
+    if (remembered !== null && !chosen.has(deviceId)) chosen.set(deviceId, remembered)
+    badge(row, remembered === null ? 'probing' : remembered.state)
     let reach = {}
     try {
       reach = JSON.parse(row.dataset.reach ?? '{}')
     } catch {
       reach = {}
     }
-    const found = await pathFor(deviceId, reach)
-    chosen.set(deviceId, found)
-    badge(row, found.state)
+    try {
+      const found = await pathFor(deviceId, reach)
+      chosen.set(deviceId, found)
+      rememberPath(deviceId, found)
+      badge(row, found.state)
+    } finally {
+      racing.delete(deviceId)
+    }
   }
 
   /* ── opening ───────────────────────────────────────────────────────────── */
   async function open(deviceId) {
     const key = keyFor(deviceId)
     if (key === null) return
-    const found = chosen.get(deviceId) ?? { state: 'offline', url: null }
+    const found = chosen.get(deviceId) ?? rememberedPath(deviceId) ?? { state: 'offline', url: null }
     if (found.state === 'offline') {
       toast('That Mac did not answer on any address it published. It may be asleep.')
       return
@@ -185,12 +261,13 @@
       toast(out.body?.message ?? 'That Mac could not be opened just now.')
       return
     }
-    const carried = `open=${encodeURIComponent(out.body.token)}&key=${encodeURIComponent(key)}`
-    if (found.url !== null) {
-      location.assign(`${found.url}/?${carried}&device=${encodeURIComponent(deviceId)}`)
-      return
-    }
-    location.assign(`/relay/@${encodeURIComponent(username)}/desktop/${encodeURIComponent(deviceId)}?${carried}`)
+    // THE SAME ADMISSION EITHER WAY. Direct or relayed, the desktop is asked
+    // the same question on the same query — the relay forwards it untouched,
+    // so there is one ceremony rather than two that drift.
+    const carried = `open=${encodeURIComponent(out.body.token)}&key=${encodeURIComponent(key)}&device=${encodeURIComponent(deviceId)}`
+    // A direct address is an ORIGIN and the relay path already ends in a
+    // slash; both become `…/?open=…`.
+    location.assign(`${found.state === 'relay' ? found.url : `${found.url}/`}?${carried}`)
   }
 
   /* ── pairing: scan the Mac's QR, or be told its six characters ─────────── */
@@ -301,5 +378,26 @@
     if (note) note.hidden = false
   }
 
-  for (const row of rows()) void refresh(row)
+  /* ── re-probing, because the network moves under the page ──────────────
+   *
+   * The winner is a fact about the network this phone is on right now. So the
+   * race runs again when the browser says it is back online, when the tab
+   * comes forward, and on a slow timer for the case neither fires — a Wi-Fi
+   * that swaps bands, a VPN that comes up.
+   *
+   * SWITCHING A SESSION THAT IS ALREADY OPEN IS NOT THIS PAGE'S JOB, and could
+   * not be: the moment a canvas opens it is running on the desktop's own
+   * origin, or under the relay prefix, and this picker is no longer on screen.
+   * The companion switches its own live session; that is the app half.
+   */
+  const reprobe = () => {
+    for (const row of rows()) void refresh(row)
+  }
+  window.addEventListener('online', reprobe)
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) reprobe()
+  })
+  setInterval(reprobe, REPROBE_MS)
+
+  reprobe()
 })()
