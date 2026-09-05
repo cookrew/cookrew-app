@@ -253,6 +253,25 @@ describe('when reach is published', () => {
     expect(sent[0].reach).toMatchObject({ lan: [], tailnet: null, relay: true })
   })
 
+  it('publishes again the moment the relay line comes up, and again when it drops', async () => {
+    // The line is half the card, and it goes up long after boot. Without a
+    // republish on the change a Mac that dialled out would sit advertising
+    // `relay: false` until the next network poll — a phone off the LAN would
+    // be told there is no way home while the way home was open.
+    let held = false
+    const { sent, publisher: p } = publisher({ relay: () => held })
+    await p.publish('boot')
+    held = true
+    expect(await p.publish('relay link')).toBe('published')
+    expect(sent[1].reach.relay).toBe(true)
+    held = false
+    expect(await p.publish('relay link')).toBe('published')
+    expect(sent[2].reach.relay).toBe(false)
+    // And a line that is simply still up is not news.
+    expect(await p.publish('relay link')).toBe('unchanged')
+    expect(sent).toHaveLength(3)
+  })
+
   it('republishes on demand even when nothing changed — boot and the toggle', async () => {
     const { sent, publisher: p } = publisher()
     await p.publish('boot')
