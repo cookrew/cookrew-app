@@ -98,17 +98,43 @@
       if (stop) clearInterval(stop)
       stop = null
     }
+    /**
+     * THE LADDER CARRIES ITS OWN PLACE TO SPEAK.
+     *
+     * `show()` replaces the form's children, which DETACHES site.js's
+     * `#acct-message` — so every refusal written there after the first screen
+     * went into a node the document no longer held, and a wrong code looked
+     * exactly like a button that did nothing. This line is part of the panel,
+     * so it is on screen for as long as the ladder is; site.js's own line is
+     * still used for the moment before the first screen is drawn.
+     */
+    const message = el('p', 'meta acct-said')
+    message.setAttribute('role', 'status')
     const say = (text) => {
-      const note = $('acct-message')
+      const note = message.isConnected ? message : $('acct-message')
       if (note) note.textContent = text
+    }
+
+    /**
+     * What the sheet was before the ladder took it over. Put back when the
+     * dialog closes, so the next open is a sign-in form rather than the last
+     * screen of a sign-in somebody walked away from — and so site.js's own
+     * handlers find their fields again.
+     */
+    const original = [...form.children]
+    const restore = () => {
+      done()
+      if (original.length > 0) form.replaceChildren(...original)
     }
 
     const panel = el('div', 'acct-ladder')
     const show = (nodes, lede) => {
       done()
+      message.textContent = ''
       panel.replaceChildren()
       panel.append(el('p', 'meta', lede))
       for (const node of nodes) panel.append(node)
+      panel.append(message)
       form.replaceChildren(panel)
     }
 
@@ -224,6 +250,17 @@
         return
       }
       const until = asked.body.expiresAt ?? step.expiresAt
+      /**
+       * "ASKED YOUR OTHER DEVICE", not the mock's "ASKED YOUR MAC" — a
+       * decision, recorded here where the copy lives.
+       *
+       * Naming the device would mean the registry telling a caller which
+       * devices an account has BEFORE that caller has proved anything but a
+       * password. Somebody who has phished a password would read back the
+       * shape of the person's life ("MacBook Pro", "Mira's iPhone") from a
+       * screen designed to protect them. The owner sees the name on their own
+       * side, where they are signed in and it is theirs to see.
+       */
       const head = el('p', 'acct-asked', 'ASKED YOUR OTHER DEVICE')
       const line = el('p', 'meta')
       const back = button('Try another way')
@@ -248,10 +285,12 @@
       else typed(factor)
     }
 
-    say(step.message ?? '')
-    list()
-    // The sheet closing ends the polling with it.
-    dialog.addEventListener('close', done, { once: true })
+    // The registry's own sentence is the first thing on the screen — "One more
+    // step. Prove it is you." — rather than a line written under a heading
+    // that says the same thing twice.
+    list(step.message ?? undefined)
+    // The sheet closing ends the polling with it, and gives the form back.
+    dialog.addEventListener('close', restore, { once: true })
   }
 
   /** What the registry is handed for an assertion — bytes as base64url. */

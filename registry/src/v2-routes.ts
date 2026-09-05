@@ -335,7 +335,29 @@ export function desktopBody(desktop: V2Desktop): Record<string, unknown> {
   }
 }
 
-export function meBody(account: V2Account, currentDeviceId: string): Record<string, unknown> {
+/**
+ * WHAT AN ACCOUNT HAS, on the body every client already reads.
+ *
+ * The desktop's Security card asks /v2/me and nothing else, so a body without
+ * this could only be read as "an older registry, nothing enrolled" — and an
+ * account with a live authenticator showed as having none, for ever. It is a
+ * posture and never a secret: a passkey's name and when it arrived, whether an
+ * authenticator is active, and whether "not me" is still waiting on a password
+ * change.
+ */
+export interface FactorPosture {
+  passkeys: readonly { id: string; name: string; addedAt: number }[]
+  totp: boolean
+  mustChangePassword: boolean
+}
+
+export const NO_FACTORS: FactorPosture = { passkeys: [], totp: false, mustChangePassword: false }
+
+export function meBody(
+  account: V2Account,
+  currentDeviceId: string,
+  factors: FactorPosture = NO_FACTORS
+): Record<string, unknown> {
   return {
     username: account.username,
     displayName: account.displayName,
@@ -350,7 +372,8 @@ export function meBody(account: V2Account, currentDeviceId: string): Record<stri
       current: d.id === currentDeviceId
     })),
     desktops: account.desktops.map(desktopBody),
-    recoveryCodesLeft: account.recovery.length
+    recoveryCodesLeft: account.recovery.length,
+    factors
   }
 }
 
@@ -366,7 +389,7 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
   if (rest.length === 0 && method === 'GET') {
     v2.accounts.touch(account.username, claims.dev)
     const fresh = v2.accounts.get(account.username) ?? account
-    v2Json(response, 200, meBody(fresh, claims.dev))
+    v2Json(response, 200, meBody(fresh, claims.dev, v2.factors.store.summary(account.username)))
     return
   }
   if (rest.length === 0 && method === 'PATCH') {
@@ -383,7 +406,11 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
       refuse(response, out.reason === 'not_found' ? 404 : 400, out.reason)
       return
     }
-    v2Json(response, 200, meBody(v2.accounts.get(account.username) ?? account, claims.dev))
+    v2Json(
+      response,
+      200,
+      meBody(v2.accounts.get(account.username) ?? account, claims.dev, v2.factors.store.summary(account.username))
+    )
     return
   }
   // The seats this person holds, anywhere — rendered by the seat routes so

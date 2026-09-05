@@ -442,6 +442,18 @@
   }
 
   const USERNAME = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/
+  /**
+   * THE SHEET'S MESSAGE LINE, WHICH MAY NOT BE THERE.
+   *
+   * Phase 4's ladder replaces the form's children the moment a password is
+   * accepted, and that detaches `#acct-message` along with the rest. Writing
+   * to it unguarded threw — and the throw landed in a `finally`, so the
+   * refusal a person was waiting for became nothing at all on the screen.
+   */
+  const note = (text) => {
+    const line = $('acct-message')
+    if (line) line.textContent = text
+  }
   const chip = (id, text, tone) => {
     const el = $(id)
     if (!el) return
@@ -481,7 +493,7 @@
           : next === 'legacy'
             ? `Set a password for @${$('acct-username').value.trim().toLowerCase()}. This browser holds the key that owns it.`
             : 'A username and a password. The site never asks for an email.'
-      $('acct-message').textContent = ''
+      note('')
       chip('acct-username-note', '')
       chip('acct-confirm-note', '')
     }
@@ -502,14 +514,25 @@
       $('acct-submit').disabled = !holds
       $('acct-password').disabled = !holds
       $('acct-confirm').disabled = !holds
-      $('acct-message').textContent = holds
-        ? (message ?? `@${username} already exists from before passwords. Set one and it stays yours.`)
-        : 'This name belongs to a key on another device — set the password there, or use that device to link this one.'
-      if (holds) $('acct-password').focus()
+      note(
+        holds
+          ? (message ?? `@${username} already exists from before passwords. Set one and it stays yours.`)
+          : 'This name belongs to a key on another device — set the password there, or use that device to link this one.'
+      )
+      if (holds) $('acct-password')?.focus()
     }
 
     const checkName = async () => {
-      const name = $('acct-username').value.trim().toLowerCase()
+      /**
+       * THE FIELD MAY BE GONE. This is debounced by 280 ms and the ladder
+       * replaces the form as soon as a password is accepted, so it can land on
+       * a sheet that has moved on. A browser reports that as a red console
+       * line nobody sees, and the check stops working for the rest of the
+       * page's life.
+       */
+      const field = $('acct-username')
+      if (!field) return
+      const name = field.value.trim().toLowerCase()
       if (mode !== 'register' || name === '') return chip('acct-username-note', '')
       if (!USERNAME.test(name)) return chip('acct-username-note', 'invalid', 'no')
       const mine = ++checking
@@ -517,24 +540,26 @@
         const res = await fetch(`/v2/accounts/${encodeURIComponent(name)}`, { method: 'HEAD' })
         if (mine !== checking) return
         chip('acct-username-note', res.status === 200 ? 'taken' : 'free', res.status === 200 ? 'no' : 'ok')
-        $('acct-message').textContent =
-          res.status === 200 ? `@${name} is someone else’s. Try another.` : 'Yours to take.'
+        note(res.status === 200 ? `@${name} is someone else’s. Try another.` : 'Yours to take.')
       } catch {
         if (mine !== checking) return
         chip('acct-username-note', 'unknown')
-        $('acct-message').textContent = 'cookrew.dev did not answer, so this name cannot be checked yet.'
+        note('cookrew.dev did not answer, so this name cannot be checked yet.')
       }
     }
 
     const checkPassword = () => {
-      const value = $('acct-password').value
+      const field = $('acct-password')
+      const confirm = $('acct-confirm')
+      if (!field) return
+      const value = field.value
       if (value === '') return chip('acct-password-note', '')
       chip('acct-password-note', value.length < 12 ? 'weak' : 'strong', value.length < 12 ? 'no' : 'ok')
       if (mode !== 'signin' && value.length < 12) {
-        $('acct-message').textContent = 'Too easy to guess. Use 12 characters or more; a sentence works.'
+        note('Too easy to guess. Use 12 characters or more; a sentence works.')
       }
-      if ($('acct-confirm').value !== '') {
-        const same = $('acct-confirm').value === value
+      if (confirm && confirm.value !== '') {
+        const same = confirm.value === value
         chip('acct-confirm-note', same ? 'matches' : 'no match', same ? 'ok' : 'no')
       }
     }
@@ -561,12 +586,15 @@
     })
 
     async function submit() {
-      const username = $('acct-username').value.trim().toLowerCase()
-      const password = $('acct-password').value
-      const say = (text) => ($('acct-message').textContent = text)
+      const field = $('acct-username')
+      const secret = $('acct-password')
+      if (!field || !secret) return
+      const username = field.value.trim().toLowerCase()
+      const password = secret.value
+      const say = note
       if (!USERNAME.test(username)) return say('A username is lowercase letters, digits and dashes, up to 32 of them.')
       if (password.length < 12) return say('Too easy to guess. Use 12 characters or more; a sentence works.')
-      if (mode !== 'signin' && $('acct-confirm').value !== password) return say('The two passwords are not the same.')
+      if (mode !== 'signin' && $('acct-confirm')?.value !== password) return say('The two passwords are not the same.')
       $('acct-submit').disabled = true
       say(mode === 'register' ? `Claiming @${username}…` : mode === 'legacy' ? `Setting a password for @${username}…` : 'Signing in…')
       // Set when this attempt ENDED in the legacy step, which decides for
@@ -611,7 +639,11 @@
       } catch (error) {
         say('This browser could not reach cookrew.dev. Nothing local stops.')
       } finally {
-        if (!crossed) $('acct-submit').disabled = false
+        // The ladder may have taken the button away between the click and
+        // here — a sign-in that SUCCEEDED into a second step must not end in a
+        // TypeError that swallows everything after it.
+        const button = $('acct-submit')
+        if (!crossed && button) button.disabled = false
       }
     }
 

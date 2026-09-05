@@ -155,17 +155,23 @@ export class PendingSignIns {
    * pending is dropped, and the person starts from the password again. A
    * limiter keyed by the pending rather than by an address, because the thing
    * being guessed is six digits belonging to one sign-in.
+   *
+   * AND IT SAYS WHICH. "Too many tries" and "this went cold" are the same
+   * status and a different thing to do about it; a person told the wrong one
+   * goes looking for a clock problem they do not have. Real-UI QA read the
+   * timeout sentence after five wrong codes, which is how this came back
+   * carrying a reason.
    */
-  attempt(id: string): Pending | null {
+  attempt(id: string): { ok: true; pending: Pending } | { ok: false; reason: 'expired' | 'too_many_attempts' } {
     const held = this.get(id)
-    if (held === null) return null
+    if (held === null) return { ok: false, reason: 'expired' }
     const next: Pending = { ...held, attempts: held.attempts + 1 }
     if (next.attempts > this.attemptsMax) {
       this.pendings.delete(id)
-      return null
+      return { ok: false, reason: 'too_many_attempts' }
     }
     this.pendings.set(id, next)
-    return next
+    return { ok: true, pending: next }
   }
 
   close(id: string): void {
